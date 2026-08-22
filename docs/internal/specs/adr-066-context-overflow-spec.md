@@ -2,7 +2,7 @@
 
 - **Source ADR:** `docs/internal/architecture/ADR-066-context-budget-and-tool-result-routing.md` (Proposed, restructured 2026-08-22; pass-2 findings resolved in §16a; amended 2026-08-22 from the spec review — commit `docs(adr): ADR-066 amendments from spec review`). Review records: `…-review-pass2.md` (ADR), `docs/internal/specs/adr-066-context-overflow-spec-review.md` (this spec, verdict BLOCK — every finding resolved in this revision; see §13).
 - **Status:** Draft (plan-spec) — revision 2, 2026-08-22, branch `feat/context-budget-and-tool-result-routing`. The ADR is the confirmed requirements brief. Where the ADR was silent the §10 table records the operator's resolutions; every item is closed (A-18/A-19 accepted by the coordinator 2026-08-22; register #3 confirmed).
-- **Scope:** ADR-066 only — D2, D3, D4, D5 (+ recall-by-`tool_call_id`), D6, D7, D9, D10, §16a, and ADR §15 task 1 (bounding parameters for `list_directory`, `inspect_session`, `recall_conversation` search modes — kept as FR-038…FR-040). **D1 (the catalog) is ADR-067 — referenced, not specified.** **D8 is NOT ADOPTED** (ADR-066 commits `ec2e022d`, `80aef474`, `06e6cc17`). Subscriptions / provider deletion / provider UX are ADR-068.
+- **Scope:** ADR-066 only — D2, D3, D4, D5 (+ recall-by-`tool_call_id`), D6, D7, D9, D10, §16a, ADR §15 task 1 (bounding parameters — FR-038…FR-040), and the two **P0 preconditions for D5** added 2026-08-22 — **D5.4 recall injection at the tool-result site** and **D5.5 hydration must not overwrite the archive** (US-14, US-15; both ship as a hotfix first, then this branch inherits them). **D1 (the catalog) is ADR-067 — referenced, not specified.** **D8 is NOT ADOPTED** (ADR-066 commits `ec2e022d`, `80aef474`, `06e6cc17`). Subscriptions / provider deletion / provider UX are ADR-068.
 - **Greenfield rule (operator, 2026-08-22):** no backward compatibility, no migration, no aliasing. Pre-existing state that does not match simply does not work: a `config.json` still carrying `summarize_token_percent` or `agents.defaults.context_window` has those keys silently ignored (`LoadConfig` has no `DisallowUnknownFields`) — no boot notice, no rejection; session meta without projection state loads as an empty set (a zero value, not a compatibility path).
 - **Cross-spec seams (cross-spec review 2026-08-22, `docs/internal/specs/cross-spec-review-adr-066-067-068.md`):** this spec **requires ADR-067's spec (S67) merged first** — it consumes `pkg/providers/catalog.Resolve(provider, model).Window()`, the `locality` predicate, the `cli_driver` field, and the coordinated contract commit that S67 owns (`Agent.yaml`, the four `LLMError` copies). It depends on ADR-068's spec (S68) only for the UI tail (row/picker refusal state, default-model card). Landing order S67 → S68 → S66 backend → S66 UI tail. Grep gates (tests 6, 11 and S67/S68's) are evaluated on the **merged** branch; S68's removed-provider gate allow-lists the spec/ADR files, but this spec does not rely on that: the deleted id `claude-cli` appears in this document only in this sentence, and in no test literal.
 - **Tech:** Go (`pkg/agent`, `pkg/memory`, `pkg/tools`, `pkg/mcp`, `pkg/gateway`, `pkg/providers`) · React 19 + Vite (SPA) · contract-first (`contracts/*`, Constraint #8).
@@ -49,7 +49,11 @@ Nothing is summarised, nothing is deleted from disk. One new cache file (`$OMNIP
 | `pkg/agent/turn.go::refreshRestorePointFromSession`, `turnState.restorePointHistory` | **deleted** | Verified dead: `restorePointHistory` is written (`turn.go::refreshRestorePointFromSession`) and read nowhere. Greenfield (CRIT-003). |
 | `pkg/memory/store.go::Store.RollbackAppended(ctx, key, targetLines, targetSkip)` | **modifies (interface)** | Gains the turn-start emptied-set; `pkg/agent/subturn.go::ephemeralSessionStore.RollbackAppended` implements it as a no-op parameter (in-memory projection state). |
 | `pkg/memory/jsonl.go::sessionMeta` (`skip`, `count`), `::GetHistory`, `::ReadArchive`, `maxLineSize = 10 MB` | **extends** | Meta gains per-result projection state keyed `(tool_call_id, archive line index)`; scanner buffer is `maxLineSize` — a longer line breaks the rest of the session read, hence the encoded-line bound. |
-| `pkg/agent/recall_conversation.go::RecallConversationTool` (`recallDefaultTokens = 4000`, `recallRangeTokens = 8000`, id remap) | **extends** | `tool_call_id` (+ `archive_line`) paged mode; search-mode `max_results` bound (FR-040). |
+| `pkg/agent/recall_conversation.go::RecallConversationTool` (`recallDefaultTokens = 4000`, `recallRangeTokens = 8000`, id remap; `Execute` → `setRecallSpan` → receipt *"Recalled N turn(s) … into context."*) | **extends / modifies** | `tool_call_id` (+ `archive_line`) paged mode; `max_results` (FR-040); **D5.4:** receipt rewritten to the real outcome; non-fit message. Verified: the span is read only by `loop.go::assembleMessages` and `loop.go::windowTrim`; mid-turn `callMessages` is built from `repairedHistory := messages` and never consults `activeRecallSpan`. |
+| `pkg/agent/loop.go` tool loop (recall tool-result site), `turnState.injectedRecallSpan` (new), `pkg/agent/context.go::BuildMessages`, `::sanitizeHistoryForProvider` | **modifies / adds** | **D5.4:** splice the span into the in-memory slice right after the recall result is appended; budget check first; `assembleMessages` skips an injected span. |
+| `pkg/agent/attach_hydrate.go::HydrateAgentHistoryFromTranscript` (callers: `pkg/gateway/websocket.go` attach_session — unconditional; `loop.go` self-heal — when history has no assistant/tool) | **modifies** | **D5.5:** attach path skips when the archive has ≥ 1 line; hydration emits tool results from the transcript's bounded `result`; meta `hydrated: true` until the transcript field lands. |
+| `pkg/memory/jsonl.go::SetHistory` (rewrites the file, `meta.Skip = 0`) | **modifies** | **D5.5:** refuses when the file is non-empty; never resets `Skip` on an existing archive. |
+| `contracts/components/schemas/ToolCall.yaml` `result` (transcript) | **extends** | **D5.5:** bounded `result` content written by the D4 choke point so hydration is not lossy (coordinate with S67's contract commit). |
 | `pkg/agent/translate_error.go::contextOverflowSubstrings`, `::classifyByMessage`, `CodeContextTooLong`, `CodeUnknown` | **extends** | D7 codes only; classification job unchanged (D8 not adopted). |
 | `LLMError` — **four copies**: `contracts/components/schemas/LLMError.yaml`, `LLMErrorReplay.yaml`, and the inline `components.schemas.LLMError` / `LLMErrorReplay` blocks in `contracts/asyncapi.yaml` (the generators read asyncapi) | **extends (semantics and copy owned here; file edit in S67's coordinated contract commit)** | `turn_canceled` (attribution `user` — new vocabulary value in all four `x-user-message-attributions`), `turn_timed_out` (`provider`), `context_unrecoverable` (`product`), `context_window_unknown` (`config`, the D3 refusal — X-09; `model_unavailable` is NOT reused, its copy describes a fallback). Guarded by `pkg/api/generated/llm_error_codes_test.go::TestContract_LLMError_AllClassifierCodesRoundTrip` and `llm_error_catalogue_test.go::TestContract_LLMErrorCatalogue_AllFourCopiesAgree`. |
 | `contracts/components/schemas/ToolCall.yaml` | **extends** | `content_state: full \| capped \| emptied`. |
@@ -227,6 +231,32 @@ As a user on any channel who pastes a huge document, I get a non-fatal refusal b
 ### US-13 — Bounding parameters for three Tier-1 tools (ADR §15 task 1) — **P2**
 - **Acceptance:** `list_directory` gains `offset`/`limit` (entries); `inspect_session` gains `offset`/`limit` (entries); `recall_conversation`'s `query`/`turn_range` modes gain `max_results` (turns) — parameter names and semantics consistent with `read_file`'s existing `offset`/`length` interface; each validated (`offset ≥ 0`, `limit`/`max_results ≥ 1`) and documented in the tool schema. *(A-19 accepted.)*
 
+### US-14 — Recall content reaches the model in the same turn (D5.4) — **P0, hotfix first**
+As the model, when I call `recall_conversation`, the recalled text is in my very next request — or the tool result tells me it did not fit — so emptied content really does come back via recall.
+- **Why P0:** verified bug: the span is only read at assembly/trim sites; mid-turn requests are built from the in-memory slice, so 25 live recalls reached the model as a receipt string only. D5 is false without this.
+- **Independent test:** loop-level, fake recording provider: nonce in turn 1 evicted past `Skip`; provider's first response calls `recall_conversation(turn_range:"1-1")`; the provider's **second** request contains the nonce and the recall marker.
+- **Acceptance:**
+  1. **Given** a recall result is appended to `messages` mid-turn, **When** the span fits the one budget B, **Then** `span.Messages()` is spliced at the position `BuildMessages` uses (after the pinned core, before the window), the combined slice is sanitised for the provider, and the next request contains the recalled text and marker.
+  2. **Given** the span does not fit B, **Then** nothing is spliced, nothing is dropped silently, and the tool result reads *"N turn(s) found (X estimator tokens) but they do not fit the current window; narrow with turn_range or query"*; the next request lacks the recalled text.
+  3. **Given** an injected span, **Then** the receipt reads *"Recalled N turn(s) (turns A–B); their text is now in your context"*; a non-injected one never says "into context".
+  4. **Given** a later reassembly (trim site, reload), **Then** an already-injected span (`ts.injectedRecallSpan`, by identity) is not doubled.
+  5. **Given** the `tool_call_id` mode, **Then** each page is injected the same way.
+  6. **Given** any span event (set / injected / refused / dropped), **Then** one INFO line with sizes.
+  7. **Given** an injected span, **Then** it is subject to D5 emptying and D6 like any tool result.
+  8. **Given** a delegated sub-turn calls recall, **Then** (known limitation, pinned by a test, not fixed here) it reads the parent store under the child's ephemeral key and returns nothing; the test asserts the empty outcome and the INFO line naming it.
+
+### US-15 — Opening a session must not destroy the agent archive (D5.5) — **P0, hotfix first**
+As an operator, opening a session in the browser must never rewrite the per-agent archive, so tool results persist, `Skip` is stable, and ADR-028's append-only invariant holds.
+- **Why P0:** verified on the operator's data: attach rebuilds the archive from the transcript via `SetHistory` (21/53/36 lines → 22/42/0, `skip` 0). D5's "full result stays in the archive" is false until fixed.
+- **Independent test:** attach the same session twice → archive bytes and `meta.skip` unchanged; attach to an empty archive → hydrated once, with tool results.
+- **Acceptance:**
+  1. **Given** an agent archive with ≥ 1 line, **When** `attach_session` runs, **Then** hydration is skipped; file bytes and `skip` unchanged.
+  2. **Given** an empty archive, **When** attached, **Then** hydration runs once and the rebuilt archive contains one `role: "tool"` line per recorded tool call with the transcript's bounded `result` content.
+  3. **Given** the self-heal path, **Then** its existing emptiness condition is unchanged.
+  4. **Given** the transcript `tool_call.result` field (bounded by D4, written by the choke point) has not landed, **Then** a hydrated archive carries meta `hydrated: true` and recall by `tool_call_id` answers *"not available — session was rebuilt from the transcript"*.
+  5. **Given** a non-empty archive, **When** `SetHistory` is called, **Then** it refuses (error logged) and `Skip` is untouched.
+  6. **Given** the ADR-028 append-only invariant test, **Then** it includes an attach step and still passes.
+
 ### Edge Cases
 - E1: exactly at cap → unmodified; +1 → capped.
 - E2: a capped result later emptied → mark replaces the capped form; recall still reaches full content.
@@ -245,6 +275,9 @@ As a user on any channel who pastes a huge document, I get a non-fatal refusal b
 - E15: delegated sub-turn → ephemeral store keeps projection state in memory; rollback parameter no-op; child's report capped at 64,000 as the parent's tool result.
 - E16: a previous oversized turn kept by the pre-turn floor → its results are eligible for emptying (pre-turn, after the cut fails to fit).
 - E17: a tampered `model_limits.json` can only lower the window (clamp) — accepted.
+- E19: recall of a span larger than B on a small window → non-fit message, no splice (US-14.AC2).
+- E20: two recalls in one turn → the second replaces the first (existing `TestRecallSpan_ReplacedOnNextRecall`), and the replaced span is removed from the in-memory slice before the new one is spliced.
+- E21: attach while a turn is in flight → hydration skipped (archive non-empty).
 - E18: `max_tokens ≥ W` (so `B ≤ 0`) → `max_tokens` is clamped to `floor(W/4)` with a WARN naming the model; B is then positive and the cap clamp holds. *(A-18 accepted.)*
 
 ---
@@ -260,6 +293,8 @@ As a user on any channel who pastes a huge document, I get a non-fatal refusal b
 - When `total > B` or `share > 160,000` after a result, the system empties eligible results oldest-first to 80 % of the fired condition, never the floor set, never advancing `Skip` mid-turn, persisting `(id, line) → emptied`, emitting the projection frame.
 - When a turn aborts, the system restores archive length, `Skip` and emptied-set to turn start.
 - When the model recalls by id, the system returns contiguous pages ≤ the cap after framing.
+- When a recall result is appended mid-turn, the system splices the span into the next request if it fits B, otherwise tells the model it did not fit.
+- When a session is attached, the system hydrates only an empty archive and never rewrites an existing one.
 - When a turn is cancelled, times out, or trips the guard, the system ends it with the typed code and three artefacts.
 - When settings or overrides are written, the system validates, persists, and triggers a reload.
 - When a read exceeds the ingest bound, the system aborts it on the transport and fails the tool.
@@ -282,6 +317,8 @@ As a user on any channel who pastes a huge document, I get a non-fatal refusal b
 - Must not add a second budget formula, a spill store, a reducer, or refetch recipes (ADR §14); must not keep a `0.9 × window` haircut.
 - Must not keep `refreshRestorePointFromSession`/`restorePointHistory`, `agents.defaults.context_window`, its env var, or `summarize_token_percent`.
 - Must not render the mark in the thread unless Verbose chat is on.
+- Must not report a recall as "into context" unless the text is in the next request; must not drop a non-fitting span silently.
+- Must not call `SetHistory` on a non-empty archive; must not reset `Skip` on attach.
 
 #### Machine-Verifiable Constraints
 
@@ -470,6 +507,24 @@ head/tail 50/50; mark length counted toward the cap; no rune split
 
 **B-47 (HP, outline)** — US-13. `list_directory(offset, limit)`, `inspect_session(offset, limit)`, `recall_conversation(query, max_results)` bound their output; invalid values → tool error.
 
+### Feature: Recall injection (D5.4)
+
+**B-48 (HP)** nonce returns in the second request — US-14.AC1, AC3. Turn 1 holds nonce `N-7f3a`; Skip advanced past it; provider call 1 returns `recall_conversation(turn_range:"1-1")` → provider request 2 contains `N-7f3a` and the recall marker; tool result says "their text is now in your context".
+**B-49 (EP)** span does not fit — US-14.AC2. Window too small → request 2 lacks the nonce; tool result states the non-fit with N and X tokens.
+**B-50 (EC)** no double injection — US-14.AC4. A trim-site reassembly after injection → the marker appears once.
+**B-50b (HP)** paged `tool_call_id` recall injects — US-14.AC5.
+**B-50c (HP)** observability — US-14.AC6.
+**B-50d (EC)** injected span emptied by D5 under pressure — US-14.AC7.
+**B-51 (EC)** sub-turn limitation pinned — US-14.AC8. Child recall → empty result + INFO line.
+
+### Feature: Hydration (D5.5)
+
+**B-52 (HP)** attach twice, archive untouched — US-15.AC1. Archive with 21/53/36 lines → after two attaches bytes identical, `skip` unchanged.
+**B-53 (HP)** empty archive hydrates once with tool results — US-15.AC2, AC3.
+**B-53b (AP)** hydrated flag until the transcript field lands — US-15.AC4. `hydrated: true`; recall by id → "not available — session was rebuilt from the transcript".
+**B-53c (EP)** `SetHistory` on a non-empty archive refused — US-15.AC5.
+**B-53d (HP)** append-only invariant with an attach step — US-15.AC6.
+
 ---
 
 ## 7. TDD Plan
@@ -536,6 +591,16 @@ head/tail 50/50; mark length counted toward the cap; no rune split
 | 46b | row/picker `window_unknown` state + default-model card window/source (**after S68's components land**) | E2E | B-09, B-04b | S66 UI tail |
 | 47 | `toolVisibility.test.ts` + projection-frame zod test | E2E | B-26 | |
 | 48 | `llm-error.test.ts` | E2E | B-41 | `user` attribution renders as notice |
+| 49 | `TestRunTurn_RecallInjected_NonceInSecondRequest` | Integration | B-48, B-50c | fake recording provider; nonce + marker in request 2; INFO lines |
+| 50 | `TestRunTurn_RecallNonFit_ToolResultStatesIt` | Integration | B-49 | no splice; message text |
+| 51 | `TestRunTurn_RecallNotDoubledOnReassembly` | Integration | B-50 | marker count = 1 |
+| 52 | `TestRunTurn_RecallByIdPageInjected` | Integration | B-50b | |
+| 53 | `TestRunTurn_InjectedSpanSubjectToD5` | Integration | B-50d | |
+| 54 | `TestSubTurn_RecallReadsParentStore_KnownLimitation` | Integration | B-51 | pins the empty outcome |
+| 55 | `TestAttach_TwiceArchiveByteIdentical` (pkg/gateway, scoped) | Integration | B-52 | bytes + skip |
+| 56 | `TestAttach_EmptyArchiveHydratesOnceWithToolResults` | Integration | B-53, B-53b | |
+| 57 | `TestSetHistory_RefusesNonEmptyArchive` (pkg/memory) | Unit | B-53c | |
+| 58 | `TestArchive_AppendOnlyWithAttachStep` | Integration | B-53d | extends the ADR-028 invariant test |
 
 ### Test Datasets
 
@@ -638,6 +703,18 @@ head/tail 50/50; mark length counted toward the cap; no rune split
 | 5 | partial body (only one field) | — | others unchanged; reload triggered | B-44 |
 | 6 | agent context_window_override | 2,000,000 vs capability 1,048,576 | 200; effective 1,048,576 clamped; reload | B-45 |
 
+#### DS-10: Recall injection / hydration
+| # | Setup | Expected | Traces |
+|---|---|---|---|
+| 1 | span 2,000 tokens, B 100,000 | injected; receipt "now in your context" | B-48 |
+| 2 | span 90,000 tokens, B 10,000 | not injected; non-fit message names N and 90,000 | B-49 |
+| 3 | span exactly fits (total == B) | injected | B-48 |
+| 4 | two recalls in one turn | second replaces first; one marker | B-50 / E20 |
+| 5 | archive 110 lines, attach ×2 | identical bytes; skip unchanged | B-52 |
+| 6 | archive 0 lines, transcript with 3 tool calls | 3 `role: tool` lines with result content | B-53 |
+| 7 | archive 0 lines, transcript `result` absent (pre-field) | `hydrated: true`; recall by id → "not available…" | B-53b |
+| 8 | `SetHistory` on 1-line archive | refused; skip unchanged | B-53c |
+
 #### DS-9: Tier-1 bounding params
 | # | Tool | Params | Expected | Traces |
 |---|---|---|---|---|
@@ -664,6 +741,9 @@ head/tail 50/50; mark length counted toward the cap; no rune split
 | `AgentDefaults` / `defaults.go` edited by three specs (X-29) | `config_test.go` | S67's `TestSeeds_CanonicalProviderIDs` and S68's `TestDefaultsSeed_NoRemovedProvider` must pass after merge; land S67 → S68 → S66 | struct shrinks monotonically |
 | `LLMError` four-copy agreement (X-01) | `llm_error_codes_test.go`, `llm_error_catalogue_test.go` | must pass with the four new codes + `user` | file edit in S67's contract commit |
 | Grep gates (X-34) | tests 6, 11; S67 T29; S68 gate | evaluated on the merged branch | no deleted-provider id literal in this spec's tests |
+| Recall span state + tool result string | `TestRecallConversation_*`, `TestRecallSpan_ReinjectedProviderValid`, `_ReplacedOnNextRecall`, `_NotPersistedToArchive` | **gap closed**: none asserted the next LLM request — tests 49–53 | receipt text changes (D5.4 d) → update string assertions |
+| Attach hydration | `webchat_channel_test.go`, attach tests | tests 55–58 | `SetHistory` callers in tests must use empty stores |
+| ADR-028 append-only archive | `TestArchive_*`, `TestWindowTrim_SetHistoryNeverCalled` | test 58 adds an attach step | |
 | Replay `turn_canceled` role | replay tests | unchanged; `turn_canceled` LLMError is additional | |
 
 ---
@@ -731,6 +811,18 @@ head/tail 50/50; mark length counted toward the cap; no rune split
 **D10 — ingest**
 - **FR-038**: Ingest bound default 8,000,000 bytes, setting < 8,388,608; MCP enforced on the transport read (stdio reader bound in `sandboxedStdioConn`; `http.MaxBytesReader` for HTTP/SSE); all five search providers bounded (the two 1 MiB sites raised); `fetch_url` fallback 8 MB; exceeding → tool failure, never truncation.
 
+**D5.4 — recall injection (P0 hotfix, inherited)**
+- **FR-041**: Immediately after a recall tool result is appended to `messages` mid-turn, the system MUST run the D6 fit check (budget B) and, if the span fits, splice `span.Messages()` at the `BuildMessages` position and run `sanitizeHistoryForProvider` on the combined slice.
+- **FR-042**: If the span does not fit, the system MUST NOT splice and MUST NOT drop silently; the tool result MUST read *"N turn(s) found (X estimator tokens) but they do not fit the current window; narrow with turn_range or query"*.
+- **FR-043**: The receipt MUST read *"Recalled N turn(s) (turns A–B); their text is now in your context"* only when injected; `assembleMessages` MUST skip a span already marked injected (`ts.injectedRecallSpan`, by identity); the `tool_call_id` mode MUST inject per page; set/injected/refused/dropped MUST log at INFO with sizes; an injected span is subject to D5/D6.
+- **FR-044**: The sub-turn limitation (child recall reads the parent store under the ephemeral key → empty) MUST be pinned by a test and logged; it is not fixed here.
+
+**D5.5 — hydration (P0 hotfix, inherited)**
+- **FR-045**: The attach path MUST skip hydration when the agent archive has ≥ 1 line; the self-heal path keeps its emptiness condition.
+- **FR-046**: When hydration runs, the rebuilt archive MUST contain a `role: "tool"` line per recorded tool call carrying the transcript's bounded `result` (D4-capped, written by the choke point); until that field lands, meta MUST carry `hydrated: true` and recall by id MUST answer *"not available — session was rebuilt from the transcript"*.
+- **FR-047**: `SetHistory` MUST refuse a non-empty archive and MUST never reset `Skip` on an existing one.
+- **FR-048**: The ADR-028 append-only invariant test MUST include an attach step.
+
 **ADR §15 task 1**
 - **FR-039**: `list_directory` and `inspect_session` MUST gain `offset`/`limit` (entries; `offset ≥ 0`, `limit ≥ 1`), named consistently with `read_file`'s interface.
 - **FR-040**: `recall_conversation`'s `query`/`turn_range` modes MUST gain `max_results` (turns, ≥ 1).
@@ -743,6 +835,8 @@ head/tail 50/50; mark length counted toward the cap; no rune split
 - **SC-005**: 64,001-char user message on WS, SSE and a channel → 0 transcript entries, 0 turns, 0 error frames; 64,001-char arguments → refusal then a further LLM call; the guard is reached only under an injected fault and then produces `context_unrecoverable` with 0 further provider calls (§17.4).
 - **SC-006**: Each of the four silent returns → ≥1 log line, 1 turn-end event, 1 transcript entry; never `unknown` (§17.5).
 - **SC-007**: `locality: local` endpoint with no window → `context_window_unknown`, `window_unknown: true` in the projection, never 128,000; override write → reload → next turn runs (§17.6).
+- **SC-014**: After `recall_conversation(turn_range:"1-1")` of an evicted turn, the provider's second request contains the nonce and marker; with a too-small window it does not and the tool result states the non-fit (§17.8).
+- **SC-015**: Attaching a session twice leaves the archive byte-identical with `skip` unchanged; an empty archive hydrates once with tool results; `SetHistory` on a non-empty archive is refused (§17.9).
 - **SC-013**: `ResolveWindow(provider, model)` without an agent returns the rung-2–6 window + source; exempt → 0/no source (§17.7).
 - **SC-008**: On an 8,192-token model: a 200,000-char result enters ≤ 0.5 B; a 3-call step fits; no guard (§17.4b).
 - **SC-009**: `grep -rn 'maxTokens \* 4\|contextWindow = 128000\|newContextWindow = 128000\|SummarizeTokenPercent\|refreshRestorePointFromSession\|restorePointHistory' pkg/agent pkg/config` → empty; exactly one `cloudWindowFloor`.
@@ -795,6 +889,14 @@ head/tail 50/50; mark length counted toward the cap; no rune split
 | FR-038 | US-12 | B-46 | 23, 24, 25 |
 | FR-039 | US-13 | B-47 | 45 |
 | FR-040 | US-13 | B-47 | 45 |
+| FR-041 | US-14 | B-48, B-50b | 49, 52 |
+| FR-042 | US-14 | B-49 | 50 |
+| FR-043 | US-14 | B-48, B-50, B-50c, B-50d | 49, 51, 53 |
+| FR-044 | US-14 | B-51 | 54 |
+| FR-045 | US-15 | B-52 | 55 |
+| FR-046 | US-15 | B-53, B-53b | 56 |
+| FR-047 | US-15 | B-53c | 57 |
+| FR-048 | US-15 | B-53d | 58 |
 
 **Completeness:** every FR has ≥1 scenario and ≥1 test; every scenario above appears in a row (B-23 via test 31's archive-bytes assertion; B-42/B-43 withdrawn with D8).
 
@@ -813,6 +915,8 @@ head/tail 50/50; mark length counted toward the cap; no rune split
 | 5 | FR-034 | B-40 | 20, 36 | SC-006 |
 | 6 | FR-007, FR-008 | B-09, B-10, B-10b | 4, 37 | SC-007 |
 | 7 | FR-001, FR-037 | B-04b | 3c | SC-013 |
+| 8 | FR-041–044 | B-48, B-49, B-51 | 49, 50, 54 | SC-014 |
+| 9 | FR-045–048 | B-52, B-53, B-53c | 55, 56, 57 | SC-015 |
 
 ---
 
@@ -861,6 +965,8 @@ head/tail 50/50; mark length counted toward the cap; no rune split
 7. **(Edge)** Ollama model with no reported context length → refusal message names Settings → Models → Model overrides; the provider row shows the state; setting it works without restart.
 8. **(Edge)** 8k Ollama model, a tool returning 200 KB → turn completes; result visibly capped.
 9. **(Edge)** Abort right after results were emptied → new turn sees un-emptied (capped/full) results.
+11. **(Happy)** Ask the agent to recall a specific earlier turn by number and quote a phrase from it → the quote is correct in the same reply (not "the text isn't appearing").
+12. **(Edge)** Open an old session in the browser, then ask the agent about a tool result from that session → it can recall it; the archive file size did not shrink on open.
 10. **(Edge)** Live-equals-reload through the embedded binary against a real provider adapter (Anthropic and an OpenAI-compatible one): provider request bytes for an emptied message equal the reload assembly.
 
 ---
@@ -882,10 +988,10 @@ All 37 findings verified against the branch; none refuted. CRIT-001…004 per th
 
 ### Summary
 
-- User stories: **12** (US-1…US-9, US-11, US-12, US-13; US-10 withdrawn)
-- BDD scenarios: **60** (HP 31 · AP 9 · EP 10 · EC 10; 10 outlines)
-- Test datasets: **9**, **75** rows
-- Functional requirements: **41** (incl. FR-005b; FR-035 is the D8 non-behaviour)
-- Success criteria: **13**
-- Tests planned: **51** (27 unit, 20 integration, 4 E2E)
+- User stories: **14** (US-1…US-9, US-11…US-15; US-10 withdrawn) — US-14/US-15 are P0 hotfixes inherited by this branch
+- BDD scenarios: **72** (HP 37 · AP 10 · EP 12 · EC 13; 10 outlines)
+- Test datasets: **10**, **83** rows
+- Functional requirements: **49** (incl. FR-005b; FR-035 is the D8 non-behaviour; FR-041…048 are the D5.4/D5.5 preconditions)
+- Success criteria: **15**
+- Tests planned: **61** (28 unit, 29 integration, 4 E2E)
 - Ambiguities: **19** — **all closed**
