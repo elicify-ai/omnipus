@@ -559,6 +559,14 @@ types therefore require wiring a type source into the Library handler.
 
 Audio extensions in scope: `.mp3`, `.m4a`, `.aac`, `.ogg`, `.opus`, `.wav`, `.flac`.
 
+> **Size, corrected by measurement.** D15.3's "~1.6 MB" counts the JavaScript only. PDF.js also
+> fetches `cmaps/` (1.6 MB), `standard_fonts/` (800 KB), `wasm/` (1.5 MB) and `iccs/` (20 KB)
+> **per document** at runtime. All of it must be embedded under hard constraint #1, so the real
+> cost is **roughly 5.5 MB**. Omitting any of it degrades **silently** — a CJK PDF renders
+> blank, a PDF that does not embed its fonts renders with wrong metrics, a scanned PDF loses its
+> images — and `newSPAHandler` makes it worse by answering a missing path with `index.html` and
+> **HTTP 200** rather than a 404. See spec FR-018a/b/c.
+
 **Untrusted-content chrome** remains required for HTML: a persistent, non-spoofable boundary
 in Omnipus chrome outside the frame.
 
@@ -568,9 +576,9 @@ Rendering PDFs in the SPA moves **untrusted parsing onto the authenticated origi
 the session cookie. Revision 3 stated the isolation question "disappears"; that is true of the
 *document* question and false of the *parser* question. Required:
 
-- **`isEvalSupported: false`** — PDF.js otherwise uses `eval` for some font programs.
+- **No `eval` path in the shipped bundle.** *Corrected 2026-08-22 by measurement:* this line previously required `isEvalSupported: false`. **That option no longer exists** — verified against `pdfjs-dist` 6.2.108, the version D15.3 names: **zero** occurrences of `isEvalSupported` in `build/pdf.mjs`, in `build/pdf.worker.mjs` or in any published type definition, and **zero** occurrences of `new Function(` in the minified worker. Upstream removed the path. Passing the flag now sets a key PDF.js ignores, so AC-15.10's "asserted at the call site" would have passed forever while proving nothing — a security requirement that could not fail. The property must instead be asserted against the **shipped artefact** (no `eval` / `new Function` in the vendored bundle) and enforced at runtime by a CSP without `unsafe-eval`, so a future version that reintroduces it fails loudly.
 - **XFA disabled** — unsupported anyway (D15.3), and it is a scripting surface.
-- **PDF scripting disabled** — `enableScripting` off. A PDF's own JavaScript must never run.
+- **PDF scripting disabled, and its interpreter not shipped at all** — `enableScripting` off, **and `pdf.sandbox*.mjs` excluded from the bundle**. Verified: that file ships in the `pdfjs-dist` package. It is the engine that executes a PDF's own JavaScript; shipping it beside a flag that turns it off leaves the control one edit away from being undone. Absence is a stronger guarantee than configuration.
 - **Worker isolation kept** — parsing stays off the main thread; never fall back to the
   fake-worker path silently.
 - **Version pinned and updated deliberately** — this is a parser exposed to hostile input.
