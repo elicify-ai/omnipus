@@ -54,7 +54,18 @@ import (
 const spaContentSecurityPolicy = "default-src 'self'; script-src 'self'; " +
 	"worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; " +
 	"img-src 'self' data: blob:; font-src 'self' data:; media-src 'self' blob:; " +
-	"connect-src 'self'; frame-src 'self'; object-src 'none'; base-uri 'none'; " +
+	// connect-src carries the ICE SCHEMES as well as 'self'. Not a wildcard:
+	// ordinary HTTP and WebSocket egress stays pinned to the gateway, and only
+	// stun:/turn:/turns: are opened — schemes that cannot carry a document or
+	// a fetch, so this costs none of what the policy is for.
+	//
+	// It is here because `connect-src 'self'` alone shipped once and broke the
+	// live browser view: browserWebRTC.ts configures stun:stun.l.google.com
+	// unconditionally in both peer-connection factories, and ADR-062 tier 3
+	// adds gateway-minted turn:/turns: relays. See §10.7's 2026-08-23
+	// amendment for the measurement — note the symptom was a SERVER-side
+	// "capture/encoder/ICE" error frame, with nothing anywhere naming CSP.
+	"connect-src 'self' stun: turn: turns:; frame-src 'self'; object-src 'none'; base-uri 'none'; " +
 	"form-action 'self'; frame-ancestors 'none'"
 
 // pdfJSAssetPathPrefix is the SPA-relative prefix PDF.js's runtime assets and

@@ -950,7 +950,7 @@ not once it parses arbitrary PDFs from disk and from agents, next to the session
 Starting list, on every SPA shell response:
 
 ```
-default-src 'self'; script-src 'self'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; media-src 'self' blob:; connect-src 'self'; frame-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'
+default-src 'self'; script-src 'self'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; media-src 'self' blob:; connect-src 'self' stun: turn: turns:; frame-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'
 ```
 
 **This is a proposal, not a measurement.** Unlike §10.3, no experiment stands behind it. Its
@@ -959,6 +959,28 @@ assumptions, each with the symptom if wrong: no inline bootstrap script (white s
 need inline styles (broken layout); same-origin WebSocket matches `'self'` (the live connection
 silently fails); Shiki needs no WebAssembly (code blocks stop highlighting); nothing embeds the
 SPA (any embedding surface goes blank).
+
+**AMENDED 2026-08-23 — the first real measurement, and it was a failure.** `connect-src 'self'`
+shipped as written and broke the live browser view. Evidence: `E2E — ui-heavy`
+(`browser-live-video.spec.ts`) passed on this branch at CI run 32584338562 with **no** SPA policy,
+then failed **4 of 4 attempts** at run 32595538468 once this policy shipped, with the gateway
+sending `BrowserWebRTCStateFrame` reason `error` — whose contract text is *"a runtime failure
+(capture/encoder/ICE)"*.
+
+The assumption list above named the WebSocket and missed the one that actually bit: **ICE servers
+are not `'self'`.** `src/lib/browserWebRTC.ts` configures `stun:stun.l.google.com:19302`
+unconditionally in **both** peer-connection factories, and ADR-062 tier 3 adds gateway-minted
+`turn:`/`turns:` relay URLs on top. A policy that permits only `'self'` cannot express any of them.
+
+The fix is scheme sources — `stun: turn: turns:` — not a wildcard: ordinary HTTP and WebSocket
+egress stays pinned to `'self'`, and only the ICE schemes are opened. Those schemes cannot carry a
+document or a fetch, so widening them costs none of what this policy is for.
+
+Note the failure shape, because it is the one this spec keeps warning about: the browser blocked a
+client-side connection and the symptom surfaced as a **server-side** error frame. Nothing anywhere
+said "CSP". That is why the headed three-engine run below is a requirement and not a formality —
+and it is still outstanding: this amendment is one measurement of one directive on one engine, not
+the freeze.
 
 **Non-negotiable regardless:** **no `'unsafe-eval'`.** If a bundled library needs it, the library
 is reconfigured or replaced — FR-019a is exactly that move for PDF.js.
