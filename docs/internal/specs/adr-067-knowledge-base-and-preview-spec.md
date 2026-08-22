@@ -11,6 +11,34 @@ Structured by ADR-067 D20's four stages. Every acceptance criterion in the ADR
 
 ---
 
+## 0. Measured ground truth
+
+This spec's security requirements are not proposals. They were **measured** on 2026-08-22 and
+are recorded in
+[the preview isolation experiment](adr-067-preview-isolation-experiment-2026-08-22.md) —
+5 candidate policies × 2 load modes × 3 engines (Chromium 151, Firefox 153, WebKit 26.5),
+twice each, with **server-side request logs as ground truth** rather than in-page reports.
+24 of 25 compared rows were identical across engines.
+
+| Claim | Status |
+|---|---|
+| `sandbox allow-scripts` (no `allow-same-origin`) + source directives blocks **all seven** egress vectors (image, fetch, beacon, WebSocket, iframe, form, popup) | **Measured** |
+| Under that policy `document.cookie` and `localStorage` **throw `SecurityError`** — they do not return empty | **Measured.** Any test asserting "empty" is a false-green: it also passes when the page failed to load |
+| CSP `'self'` **does** match under an opaque origin | **Measured.** The ADR's original warning was wrong; the distinct-origin fallback is retired |
+| An explicit origin behaves identically to `'self'` and additionally breaks behind a reverse proxy | **Measured** |
+| Both mechanisms are required — `window.open` escapes source directives alone; five of seven vectors escape `sandbox` alone | **Measured** |
+| Webfonts need `Access-Control-Allow-Origin`; CORS is definitively the blocker | **Measured**, with a rendered-width oracle. `document.fonts.status` reports `"loaded"` on failure and **must not** be used |
+| An HTML file named `.pdf` does not execute — blocked by content-type dispatch, **even with no CSP** | **Measured**, with a positive control proving the detection was not blind |
+| PDF.js writes form values and ink signatures correctly, rendered by macOS PDFKit | **Measured** |
+| Adobe Acrobat compatibility; complex real-world forms; Safari headful PDF; PDF size threshold | **NOT verified** — see AW-10/11/12. Nothing in this spec may assume them |
+| A sandboxed preview can authenticate | **DISPROVED** — the experiment harness was an unauthenticated static server, which hid this. See FR-003a |
+
+**Test rule that follows:** PDF and preview end-to-end tests **must run headed**. Headless
+Chromium has no PDF viewer and headless WebKit renders no PDFs at all; both previously
+produced false negatives.
+
+---
+
 ## 1. Available Reference Patterns
 
 **N/A.** `docs/reference/go-implementation/` does not exist in this repository. The
@@ -752,14 +780,14 @@ Scenario Outline: Documents and media render natively
 Scenario: A previewed page cannot read the session cookie in a top-level tab
   Given a workspace contains an HTML file that reads document.cookie and displays it
   When the operator opens that file's Library URL as a top-level browser tab
-  Then the displayed cookie value is empty
+  Then reading the cookie THROWS a SecurityError (it does not return an empty string — asserting "empty" also passes when the page failed to load)
   And the document's origin is opaque
 # Traces to: US-2, AS-1
 
 Scenario: A previewed page cannot read the session cookie when embedded
   Given the same HTML file
   When it renders inside the Library preview pane
-  Then the displayed cookie value is empty
+  Then reading the cookie THROWS a SecurityError (it does not return an empty string — asserting "empty" also passes when the page failed to load)
 # Traces to: US-2, AS-2
 
 Scenario: A previewed page cannot reach the network
@@ -1111,6 +1139,11 @@ come last within their stage because they are slowest and most environment-depen
 | 59 | `TestInlineAllowList_RequiresTypeConfusionTest` | Unit (build gate) | FR-016, AC-15.7 | Adding an extension without a test fails CI |
 | 60 | `E2E_FontAppliesWithCorsHeader` | E2E (browser) | AC-15.1, FR-019 | Real font covering the measured glyphs, on an inline element, asserted by **rendered width**. `document.fonts.status` is NOT the oracle — it reports "loaded" on failure |
 | 61 | `TestPdfJsBundleLazyLoaded` | Unit (build) | AC-15.6, FR-018 | PDF.js absent from the initial SPA payload |
+| 64 | `E2E_BundleLoadsViaTokenPath` | E2E (browser, HEADED) | FR-003a | **Against the real authenticated gateway**, not a static server — the gap that hid this |
+| 65 | `TestPreviewToken_ScopeAndExpiry` | Integration | FR-003b | Token outside its path/workspace is refused; expired token is refused |
+| 66 | `TestPreviewResponse_NoReferrerAndVisibleExpiry` | Integration | FR-003c | |
+| 67 | `TestPdfJs_HardeningFlagsAtCallSite` | Unit | FR-019a, FR-019c | Asserts the configuration object, not a comment |
+| 68 | `TestSpaServedWithCSP` | Integration | FR-019b | |
 | 62 | `TestIndex_LargeNoteChunkedNotSkipped` | Integration | FR-034a | A 200 MB note is fully indexed with bounded peak memory — never skipped, never capped |
 | 63 | `TestOutline_PlainMarkdownOutsideKB` | Integration | FR-062 | An ordinary .md file gets an outline; it does NOT get search or backlinks |
 | **Stage 2** |
@@ -1253,7 +1286,10 @@ explicit seam tests: items 4 and 26.
 **Preview (stage 1)**
 - **FR-001** The system MUST render HTML, PDF and audio files in the preview pane instead of their source or a download card.
 - **FR-002** The system MUST show a file's source only after the reader chooses Edit.
-- **FR-003** The system MUST load relative subresources of an HTML bundle.
+- **FR-003** The system MUST load relative subresources of an HTML bundle (stylesheets, scripts, fonts, media).
+- **FR-003a** The system MUST serve preview bytes from a **token-bearing path**, because a sandboxed document has an opaque origin and can send neither the `SameSite=Strict` session cookie nor an `Authorization` header on `<link>`/`<script>`. Verified: `/api/v1/library/` is behind `withUploadAuth`, so FR-003 is otherwise unsatisfiable.
+- **FR-003b** A preview token MUST be minted only by an authenticated request, MUST be scoped to one workspace and one Library path (a file, or one bundle root and its descendants), MUST be short-lived, and MUST NOT grant access the caller does not already have.
+- **FR-003c** Preview responses MUST carry `Referrer-Policy: no-referrer`, and token expiry MUST surface as a visible error rather than a blank frame.
 - **FR-004** The system MUST execute scripts in a previewed HTML document.
 - **FR-005** The system MUST bind every inline-previewed document to an opaque origin, established by the response and not by the embedder.
 - **FR-006** The system MUST block network egress from a previewed document.
@@ -1269,7 +1305,10 @@ explicit seam tests: items 4 and 26.
 - **FR-016** The system MUST fail its build if an extension is added to the inline allow-list without a corresponding type-confusion test.
 - **FR-017** The system MUST describe the isolation rule accurately: only content the browser executes is sandboxed. It MUST NOT imply that formats Omnipus renders itself are sandboxed, nor that HTML is not.
 - **FR-018** The system MUST render PDFs with PDF.js inside the SPA, as a component alongside the existing image and video previews, and MUST load that bundle lazily rather than in the initial payload.
-- **FR-019** The system MUST serve font responses with `Access-Control-Allow-Origin` so webfonts in sandboxed HTML bundles resolve; it MUST NOT rely on `document.fonts.status` as a success signal.
+- **FR-019** The system MUST serve font responses with `Access-Control-Allow-Origin` so webfonts in sandboxed HTML bundles resolve; it MUST NOT rely on `document.fonts.status` as a success signal. *(The experiment measured CORS as the blocker and the header as the fix; re-assert against the real handler.)*
+- **FR-019a** The system MUST configure PDF.js with `eval` support disabled, XFA disabled and PDF scripting disabled, asserted at the call site. Rendering PDFs moves untrusted parsing onto the authenticated SPA origin.
+- **FR-019b** The system MUST serve the SPA with a Content-Security-Policy. Verified: it is served with none today, which was tolerable when the SPA rendered only its own code and is not once it parses arbitrary PDFs.
+- **FR-019c** The system MUST keep PDF parsing on a worker and MUST NOT silently fall back to main-thread parsing.
 
 **Detection and identity (stage 2)**
 - **FR-020** The system MUST treat a folder as a knowledge base if its root contains `.omnipus-vault/` or `.obsidian/`.
@@ -1378,6 +1417,9 @@ explicit seam tests: items 4 and 26.
 | FR-001 | US-1 | HTML page renders / Documents and media render | 2, 9 |
 | FR-002 | US-1 | Source is available behind Edit | 9 |
 | FR-003 | US-1 | A complete bundle loads all of its assets | 9 |
+| FR-003a | US-1 | (token-bearing preview path) | 64 |
+| FR-003b | US-2 | (token scope and lifetime) | 65 |
+| FR-003c | US-2 | (referrer policy, visible expiry) | 66 |
 | FR-004 | US-1 | Scripts in a previewed page execute | 9 |
 | FR-005 | US-2 | Cannot read the session cookie (both contexts) | 5, 10, 12 |
 | FR-006 | US-2 | Cannot reach the network | 11 |
@@ -1394,6 +1436,9 @@ explicit seam tests: items 4 and 26.
 | FR-017 | US-2 | (documentation) | — doc review |
 | FR-018 | US-1 | A PDF renders in the preview pane | 57, 61 |
 | FR-019 | US-1 | A complete bundle loads all of its assets | 60 |
+| FR-019a | US-2 | (PDF.js hardened) | 67 |
+| FR-019b | US-2 | (SPA CSP) | 68 |
+| FR-019c | US-1 | (worker isolation) | 67 |
 | FR-020 | US-4 | Marker presence decides status | 13 |
 | FR-021 | US-4 | Detection reads no file contents | 14 |
 | FR-022 | US-4 | Creating writes only the Omnipus marker | 15 |

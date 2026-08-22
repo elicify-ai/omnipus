@@ -518,24 +518,72 @@ execution question — but the extension→type mapping is still what routes it.
 - **PDF.js is single-threaded in the main context for some work**; very large or complex
   PDFs can be slow. A page-count or size threshold may be needed — unmeasured.
 
-#### D15.6 — Delivery
+#### D15.6 — Delivery: a sandboxed preview cannot authenticate, so the URL carries the grant
 
-Bytes are served by an inline mode on `/api/v1/library/` (already behind `withUploadAuth`
-and rate limiting), **not** `/preview/` — whose `ServedSubdirs` registration is agent-scoped
-with a one-registration cap that would evict live `web_serve` tokens, and which is
-token-only unauthenticated by design.
+**Found by the round-2 review, verified against the code, and it invalidates the naive
+design.** `/api/v1/library/` sits behind `withUploadAuth` (`rest.go:5216`). A sandboxed
+document has an **opaque origin**, so:
+
+- the `omnipus-session` cookie is **not sent** — `SameSite=Strict`, and the experiment
+  logged Firefox refusing it as *"cross-site context"* for the page's own subresources;
+- `<link>` and `<script>` **cannot carry an `Authorization` header**.
+
+So a sandboxed HTML bundle cannot fetch its own stylesheet or script from the authenticated
+endpoint. The 2026-08-22 experiment did not surface this because its harness was an
+**unauthenticated static server** — a genuine gap in that measurement, recorded rather than
+glossed.
+
+**Decision: preview bytes are served from a token-bearing path.** The token is in the URL, so
+relative subresources inherit it automatically — the only mechanism that works when neither
+cookies nor headers can travel.
+
+| Property | Rule |
+|---|---|
+| **Minting** | Only by an authenticated request from the SPA, for a path the caller may already read. A token never widens access |
+| **Scope** | One workspace, one Library path — a single file, or one bundle root and its descendants. Never a whole workspace |
+| **Shape** | 32 random bytes, base64url — matching the in-tree precedent in `pkg/agent/served_subdirs.go` |
+| **Lifetime** | Short and bounded, well under that file's `maxTokenLifetime = 24h` ceiling. Expiry must surface as a visible error, never a blank frame |
+| **Revocation** | Expiry, plus invalidation on logout |
+| **Not reused** | **Not** `ServedSubdirs` — its registration is agent-scoped with a one-per-agent cap that would evict a live `web_serve` token, and its path is unauthenticated by design for a different purpose |
+
+> **Accepted residual: a URL-borne token appears in logs, history and `Referer`.** Mitigated by
+> short lifetime, narrow scope, and `Referrer-Policy: no-referrer` on preview responses. It is
+> not eliminated. This is the cost of the sandbox, and it is the cost every equivalent design
+> pays — ADR-044's existing preview path made the same trade.
 
 `rest_library.go` hard-codes `Content-Disposition: attachment`; an inline mode is required.
 **The MIME table lives in `rest_workspace.go` and is unreachable from `rest_library.go`** —
-the download handler serves via `http.ServeContent` and never calls it. Audio and PDF
-content types therefore require wiring a type source into the Library handler, not editing a
-table it does not consult.
+the download handler serves via `http.ServeContent`, which also **sniffs**, so the inline path
+must set the type explicitly from the extension rather than delegate. Audio and PDF content
+types therefore require wiring a type source into the Library handler.
 
 Audio extensions in scope: `.mp3`, `.m4a`, `.aac`, `.ogg`, `.opus`, `.wav`, `.flac`.
 
 **Untrusted-content chrome** remains required for HTML: a persistent, non-spoofable boundary
-in Omnipus chrome outside the frame. An opaque origin stops a page reading the session; it
-does not stop it drawing a convincing login prompt.
+in Omnipus chrome outside the frame.
+
+#### D15.7 — PDF.js hardening: the parser runs on our origin
+
+Rendering PDFs in the SPA moves **untrusted parsing onto the authenticated origin**, next to
+the session cookie. Revision 3 stated the isolation question "disappears"; that is true of the
+*document* question and false of the *parser* question. Required:
+
+- **`isEvalSupported: false`** — PDF.js otherwise uses `eval` for some font programs.
+- **XFA disabled** — unsupported anyway (D15.3), and it is a scripting surface.
+- **PDF scripting disabled** — `enableScripting` off. A PDF's own JavaScript must never run.
+- **Worker isolation kept** — parsing stays off the main thread; never fall back to the
+  fake-worker path silently.
+- **Version pinned and updated deliberately** — this is a parser exposed to hostile input.
+- **A Content-Security-Policy on the SPA itself.** Verified: the SPA is served today with
+  **no CSP at all**. That was tolerable when it rendered only its own code; it is not once it
+  parses arbitrary PDFs from the operator's disk and from agents.
+
+> **AC-15.8** A malformed or hostile PDF fails to render **without** executing script,
+> navigating, or issuing a network request.
+> **AC-15.9** The SPA is served with a Content-Security-Policy, asserted in an integration test.
+> **AC-15.10** PDF.js is configured with `eval`, XFA and PDF scripting all disabled, asserted
+> at the call site rather than by comment.
+
 
 > **AC-15.1** A fixture bundle — `index.html` + external `.css` + external `.js` + a **real**
 > webfont served with `Access-Control-Allow-Origin` — renders with all subresources applied,
