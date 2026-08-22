@@ -1,0 +1,1051 @@
+// Omnipus — knowledge base full-text index (ADR-067 stage 2, unit B2).
+//
+// A bleve scorch index over a mounted collection of markdown notes. The engine
+// choice, the rebuild-on-corruption behaviour and the reference-counted
+// process-wide registry are copied from pkg/memrooms/index, which proved them.
+// Four things here deliberately differ from that precedent, and each difference
+// is a requirement rather than a preference:
+//
+//  1. WHERE IT LIVES (FR-030). pkg/memrooms/index writes to <root>/.index/bleve
+//     — inside the corpus. That is exactly wrong for a knowledge base: the
+//     corpus is the operator's own folder, very likely inside iCloud, Dropbox or
+//     git. We do not leave our database in it. The index lives under
+//     $OMNIPUS_HOME and the collection is left byte-for-byte untouched.
+//
+//  2. HOW IT IS IDENTIFIED (FR-031). The key is the collection root's resolved
+//     REAL path, not a workspace or mount id. One host folder mounted into three
+//     workspaces is one corpus and gets one index, shared and reference-counted;
+//     the last release closes it, and no earlier release may.
+//
+//  3. WHAT A DOCUMENT IS (FR-034a) — the deviation most likely to be got wrong.
+//     pkg/memrooms/index indexes ONE DOCUMENT PER FILE. Copying that shape here
+//     would make peak memory a property of the single largest note in the
+//     operator's collection, so a 200 MB note would either OOM the gateway or
+//     have to be refused — and refusing is forbidden. Reading the file in chunks
+//     does not fix it: chunked reading bounds the read buffer, while the index's
+//     unit of work is the DOCUMENT, and a whole-note document is analysed whole
+//     no matter how its bytes arrived. So a note over IndexSegmentSize becomes
+//     several consecutive documents, each carrying the note's path and the
+//     ABSOLUTE byte offset of its start. Search then collapses the segments of
+//     one note back into ONE result, scored by its best segment. No note is ever
+//     refused, skipped or truncated.
+//
+//  4. WHAT IS STORED (FR-050a). Note bodies are indexed but NOT stored, and
+//     term vectors are off. Excerpts are produced by re-reading the file at
+//     query time so they always match disk; an excerpt cached in the index would
+//     be a copy that silently goes stale. The absolute offsets in (3) are what
+//     let that re-read land in the right place.
+//
+// Attachments (FR-039a) are indexed by filename and path ONLY. The indexer never
+// opens one, for any reason — not to hash it, not to sniff it, not to size it
+// beyond the Lstat the walk already did. Every content read in this package goes
+// through the single openFileForRead seam below, so "zero content reads from
+// attachments" is a property a test can count rather than a claim a comment can
+// make.
+//
+// License: MIT
+// Copyright (c) 2026 Omnipus contributors
+package knowledge
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"hash"
+	"io"
+	"io/fs"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
+
+	"github.com/blevesearch/bleve/v2"
+	"github.com/blevesearch/bleve/v2/index/scorch"
+	bleveMapping "github.com/blevesearch/bleve/v2/mapping"
+	bleveQuery "github.com/blevesearch/bleve/v2/search/query"
+)
+
+const (
+	// IndexSegmentSize is the size of ONE index document cut from a note
+	// (FR-034a). It is a segmentation unit, NOT a size limit: a note of any size
+	// is indexed in full, as ceil(size/this) consecutive segments.
+	//
+	// FR-034a states the requirement as "a note over 8 MB is indexed as
+	// consecutive segments". This constant is deliberately SMALLER than that
+	// 8 MB threshold. That satisfies the requirement a fortiori — every note
+	// over 8 MB is certainly segmented — and it is smaller for a measured
+	// reason rather than a cautious one.
+	//
+	// bleve's analysis-and-build path costs on the order of NINETY TIMES the
+	// size of the document it is handed. Measured through this package, in a
+	// fresh process, as heap obtained from the OS:
+	//
+	//	48 MiB note:   1 MiB segments →  96 MB    4 MiB → 377 MB
+	//	               2 MiB segments → 192 MB    8 MiB → 721 MB
+	//	200 MiB note:  512 KiB segments → 66 MB   1 MiB → 125 MB
+	//
+	// The dominant term is linear in the SEGMENT size and near-flat in the FILE
+	// size — which is precisely the property FR-034a exists to produce. But the
+	// constant of proportionality means an 8 MiB document peaks at 721 MB, which
+	// blows both MV-2's 512 MB initial-index budget and spec test 62's 128 MB
+	// ceiling. 512 KiB lands at 66 MB for a 200 MiB note: comfortably inside the
+	// budget rather than 2% under it, which is the difference between a bound
+	// and a coincidence.
+	//
+	// The practical effect on an ordinary collection is nil. A note has to exceed
+	// half a million characters before it becomes more than one document at all.
+	IndexSegmentSize = 512 << 10 // 512 KiB
+
+	// IndexSegmentThreshold is the size FR-034a names as the point past which a
+	// note MUST be segmented. It is kept as its own named constant so the
+	// requirement stays testable independently of IndexSegmentSize, which is
+	// smaller: any note larger than this must produce more than one index
+	// document, whatever the segment size happens to be.
+	IndexSegmentThreshold = 8 << 20 // 8 MiB
+
+	// indexBatchMaxDocs and indexBatchMaxBytes bound one batch commit
+	// (FR-034). Indexing NEVER accumulates a single whole-collection batch —
+	// that is the shape ADR-067 §1.2 criticises Obsidian for, and it is what
+	// pkg/memrooms/index's rebuildLocked does.
+	indexBatchMaxDocs  = 128
+	indexBatchMaxBytes = IndexSegmentSize
+
+	// indexDirMode and indexFileMode are FR-032. bleve already creates its own
+	// directories 0700 and its zap/bolt files 0600, but its index_meta.json is
+	// created 0666&umask — so the modes are re-asserted rather than assumed.
+	indexDirMode  fs.FileMode = 0o700
+	indexFileMode fs.FileMode = 0o600
+
+	// indexHomeSubdir is the directory under $OMNIPUS_HOME that holds every
+	// collection index. Derived data: safe to delete, rebuilt on next open.
+	indexHomeSubdir = "knowledge"
+
+	// indexBleveSubdir separates the bleve index from the manifest that sits
+	// beside it, so removing a corrupt index never removes its own record of
+	// what to rebuild from.
+	indexBleveSubdir = "bleve"
+
+	// boltOpenTimeout bounds the wait for scorch's process-exclusive root.bolt
+	// lock. The registry means we open each index once, so this only ever fires
+	// on a genuinely stuck or stale lock — where an error beats a hang.
+	boltOpenTimeout = "5s"
+
+	// segmentIDSeparator joins a note's path and its segment ordinal into a
+	// bleve document id. U+001F (unit separator) cannot occur in a filename
+	// this package will accept.
+	segmentIDSeparator = "\x1f"
+
+	fieldPath   = "path"
+	fieldName   = "name"
+	fieldKind   = "kind"
+	fieldOffset = "offset"
+	fieldBody   = "body"
+)
+
+// openFileForRead is the SINGLE seam through which this package reads file
+// contents. It exists so a test can count content reads by path and prove
+// FR-039a/MV-19 — "indexing 100,000 attachments reads zero content bytes from
+// them" — instead of asserting the absence of a behaviour, which no ordinary
+// test can do. Production always uses os.Open.
+var openFileForRead = func(path string) (*os.File, error) { return os.Open(path) } //nolint:gosec // collection paths are operator-owned and contained by the caller
+
+// IndexHit is one search result: exactly one per NOTE (or attachment), never
+// one per segment.
+type IndexHit struct {
+	// Path is the collection-relative, slash-separated path.
+	Path string
+	// Kind is note or attachment.
+	Kind ScanKind
+	// Score is the BM25 score of the file's BEST segment.
+	Score float64
+	// Offset is the absolute byte offset, within the file, of the start of the
+	// best-scoring segment. FR-050a's query-time excerpt re-read starts here;
+	// it is absolute precisely so segmentation cannot misdirect it.
+	Offset int64
+	// Segment is the ordinal of the best-scoring segment (0 for any file that
+	// produced a single document).
+	Segment int
+}
+
+// SyncStats reports what one reconcile actually did. Every field is a count a
+// test can assert on; "it worked" is not an oracle.
+type SyncStats struct {
+	// Scanned is every file the walk found.
+	Scanned int
+	// Indexed is the files that were (re-)parsed into index documents.
+	Indexed int
+	// Unchanged is the files skipped because nothing changed (FR-033).
+	Unchanged int
+	// Removed is the files that were in the manifest but no longer on disk.
+	Removed int
+	// Segments is the total number of index documents written this run. It
+	// exceeds Indexed exactly when some note was larger than IndexSegmentSize.
+	Segments int
+	// BatchCommits is how many bounded batches were committed (FR-034). One
+	// commit for a large collection would mean a single whole-collection batch.
+	BatchCommits int
+	// Problems carries the walk's skipped symlinks and unreadable paths.
+	Problems []ScanProblem
+}
+
+// SyncOptions tunes one reconcile.
+type SyncOptions struct {
+	// Deep makes the reconcile verify NOTE contents by hash rather than trust
+	// size and mtime — FR-033's third criterion, for the drift check. It costs
+	// a full read of every note, so it is never the default path.
+	//
+	// It does NOT read attachments. FR-039a has no exception for verification.
+	Deep bool
+}
+
+// Index is an open scorch index over one collection.
+//
+// A single *Index is SHARED process-wide by every mount naming the same
+// resolved real path (FR-031) and reference counted; Close releases this
+// holder's reference and physically closes the handle only when the last holder
+// lets go.
+type Index struct {
+	idx          bleve.Index
+	dir          string // <home>/knowledge/<key>
+	blevePath    string // <dir>/bleve
+	manifestPath string // <dir>/manifest.json
+	root         string // collection root, resolved real path
+
+	mu sync.Mutex // serializes writes (Sync); scorch is read-safe concurrently
+
+	// regKey is the registry key (the resolved real root) this handle is shared
+	// under. Empty for a handle the registry does not manage.
+	regKey string
+}
+
+// IndexDirFor returns the directory under $OMNIPUS_HOME that holds the index and
+// manifest for a collection root — FR-030's "outside the collection". The name
+// is derived from the root's resolved real path, so two mounts of one folder
+// name one directory (FR-031) and two different folders can never collide.
+func IndexDirFor(home, collectionRoot string) (string, error) {
+	if strings.TrimSpace(home) == "" {
+		return "", errors.New("knowledge: omnipus home is empty")
+	}
+	realRoot, err := ResolveCollectionRoot(collectionRoot)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, indexHomeSubdir, indexKeyFor(realRoot)), nil
+}
+
+// indexKeyFor is the stable directory name for a resolved collection root.
+func indexKeyFor(realRoot string) string {
+	sum := sha256.Sum256([]byte(realRoot))
+	return hex.EncodeToString(sum[:])[:32]
+}
+
+// OpenIndex opens (or creates) the shared index for a collection root.
+//
+// The returned *Index is reference counted: opening the same collection twice —
+// including by two different paths that resolve to it — returns the SAME handle
+// with a second reference, and only the last Close closes it. That is FR-031,
+// and it is also what stops the second open from deadlocking on scorch's
+// process-exclusive bolt lock.
+//
+// A corrupt index is removed and recreated. Its manifest is removed with it, so
+// the following Sync rebuilds from the collection rather than trusting a record
+// of an index that no longer exists.
+func OpenIndex(home, collectionRoot string) (*Index, error) {
+	realRoot, err := ResolveCollectionRoot(collectionRoot)
+	if err != nil {
+		return nil, err
+	}
+	dir, err := IndexDirFor(home, realRoot)
+	if err != nil {
+		return nil, err
+	}
+
+	return acquireSharedIndex(realRoot, func() (*Index, error) {
+		ix := &Index{
+			dir:          dir,
+			blevePath:    filepath.Join(dir, indexBleveSubdir),
+			manifestPath: filepath.Join(dir, ManifestFileName),
+			root:         realRoot,
+		}
+		if mkErr := os.MkdirAll(dir, indexDirMode); mkErr != nil {
+			return nil, fmt.Errorf("knowledge: create index dir %s: %w", dir, mkErr)
+		}
+
+		bidx, openErr := openOrCreateBleve(ix.blevePath)
+		if openErr != nil {
+			slog.Warn("knowledge: index open failed; removing and rebuilding",
+				"path", ix.blevePath, "error", openErr)
+			if rmErr := os.RemoveAll(ix.blevePath); rmErr != nil {
+				return nil, fmt.Errorf("knowledge: remove corrupt index %s: %w", ix.blevePath, rmErr)
+			}
+			// The manifest describes an index that no longer exists; keeping it
+			// would make the next Sync skip every file as "unchanged" against a
+			// record of documents that are gone.
+			if rmErr := os.Remove(ix.manifestPath); rmErr != nil && !errors.Is(rmErr, fs.ErrNotExist) {
+				return nil, fmt.Errorf("knowledge: remove stale manifest %s: %w", ix.manifestPath, rmErr)
+			}
+			bidx, openErr = openOrCreateBleve(ix.blevePath)
+			if openErr != nil {
+				return nil, fmt.Errorf("knowledge: create fresh index %s: %w", ix.blevePath, openErr)
+			}
+		}
+		ix.idx = bidx
+
+		if permErr := enforceIndexPermissions(dir); permErr != nil {
+			_ = bidx.Close()
+			return nil, permErr
+		}
+		return ix, nil
+	})
+}
+
+// openOrCreateBleve opens the scorch index at path, creating it if absent.
+func openOrCreateBleve(path string) (bleve.Index, error) {
+	cfg := map[string]any{"bolt_timeout": boltOpenTimeout}
+	if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
+		if mkErr := os.MkdirAll(filepath.Dir(path), indexDirMode); mkErr != nil {
+			return nil, fmt.Errorf("create index parent dir: %w", mkErr)
+		}
+		return bleve.NewUsing(path, buildIndexMapping(), scorch.Name, scorch.Name, cfg)
+	}
+	return bleve.OpenUsing(path, cfg)
+}
+
+// enforceIndexPermissions asserts FR-032 over the whole index directory:
+// directories 0700, files 0600. bleve gets most of this right on its own, but
+// its index_meta.json is created 0666 and would otherwise be world-readable
+// under a typical umask — and the index holds the full text of every note.
+func enforceIndexPermissions(dir string) error {
+	if err := filepath.WalkDir(dir, enforceEntryPermissions); err != nil {
+		return fmt.Errorf("knowledge: enforce index permissions on %s: %w", dir, err)
+	}
+	return nil
+}
+
+// enforceEntryPermissions is the per-entry half of enforceIndexPermissions,
+// split out so the vanished-file path below can be tested deterministically —
+// the race that motivates it cannot be triggered on demand.
+//
+// A FILE THAT NO LONGER EXISTS IS NOT AN ERROR HERE, and that is the whole
+// point of this function. The walk runs over a LIVE scorch index — SyncWith
+// calls it immediately after batch.commit(), which is exactly when scorch's
+// background merger fires and DELETES the segments it just merged away. So
+// there are three moments where a .zap file can vanish underneath us:
+//
+//  1. walkErr — WalkDir could not stat an entry it had already enumerated.
+//  2. d.Info() — DirEntry.Info lstats LAZILY, so the entry came from an
+//     earlier ReadDir and the file may be gone by the time we ask.
+//  3. os.Chmod — gone in the window between Info and the chmod itself.
+//
+// Before this, any one of them aborted the walk and failed the whole Sync for
+// no real reason. Observed once for real (lstat .../000000000005.zap: no such
+// file or directory) on a 500-note fixture; on a 100k-note collection the
+// merger is not an edge case, it is the normal path.
+//
+// This does NOT weaken FR-032: a file that is not there cannot have the wrong
+// permissions, and every file still present is still checked and chmod'ed.
+func enforceEntryPermissions(path string, d fs.DirEntry, walkErr error) error {
+	if walkErr != nil {
+		if errors.Is(walkErr, fs.ErrNotExist) {
+			return nil
+		}
+		return walkErr
+	}
+	want := indexFileMode
+	if d.IsDir() {
+		want = indexDirMode
+	}
+	info, statErr := d.Info()
+	if statErr != nil {
+		if errors.Is(statErr, fs.ErrNotExist) {
+			return nil
+		}
+		return statErr
+	}
+	if info.Mode().Perm() == want {
+		return nil
+	}
+	if err := os.Chmod(path, want); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
+// buildIndexMapping defines the document shape.
+//
+// Body is INDEXED BUT NOT STORED and carries no term vectors: FR-050a requires
+// excerpts to be re-read from disk at query time, so an index that could hand
+// back note text would be a stale copy waiting to happen — and storing 100,000
+// note bodies twice is the memory budget MV-2/MV-3 do not have.
+//
+// IncludeInAll is off on every field. The composite _all field would double the
+// indexing cost to serve queries this package never issues: like
+// pkg/memrooms/index, we query the real fields explicitly, because a match
+// query against _all silently returns nothing when the field analyzers differ.
+func buildIndexMapping() *bleveMapping.IndexMappingImpl {
+	m := bleve.NewIndexMapping()
+
+	body := bleve.NewTextFieldMapping()
+	body.Analyzer = "en"
+	body.Store = false
+	body.IncludeTermVectors = false
+	body.IncludeInAll = false
+	body.DocValues = false
+
+	name := bleve.NewTextFieldMapping()
+	name.Analyzer = "en"
+	name.Store = false
+	name.IncludeTermVectors = false
+	name.IncludeInAll = false
+	name.DocValues = false
+
+	pathField := bleve.NewTextFieldMapping()
+	pathField.Analyzer = "keyword"
+	pathField.Store = true
+	pathField.IncludeTermVectors = false
+	pathField.IncludeInAll = false
+	pathField.DocValues = false
+
+	kind := bleve.NewTextFieldMapping()
+	kind.Analyzer = "keyword"
+	kind.Store = true
+	kind.IncludeTermVectors = false
+	kind.IncludeInAll = false
+	kind.DocValues = false
+
+	offset := bleve.NewNumericFieldMapping()
+	offset.Store = true
+	offset.Index = false
+	offset.IncludeInAll = false
+	offset.DocValues = false
+
+	doc := bleve.NewDocumentMapping()
+	doc.AddFieldMappingsAt(fieldPath, pathField)
+	doc.AddFieldMappingsAt(fieldName, name)
+	doc.AddFieldMappingsAt(fieldKind, kind)
+	doc.AddFieldMappingsAt(fieldOffset, offset)
+	doc.AddFieldMappingsAt(fieldBody, body)
+	doc.Dynamic = false
+
+	m.DefaultMapping = doc
+	m.IndexDynamic = false
+	m.StoreDynamic = false
+	return m
+}
+
+// indexDoc is one index document — one SEGMENT of a note, or one attachment.
+type indexDoc struct {
+	Path   string  `json:"path"`
+	Name   string  `json:"name"`
+	Kind   string  `json:"kind"`
+	Offset float64 `json:"offset"`
+	Body   string  `json:"body"`
+}
+
+// segmentDocID is the bleve document id for one segment of one file. The
+// ordinal (not the byte offset) is what makes deletion possible: a file's
+// documents are ids 0..segments-1, and the manifest remembers how many there
+// were.
+func segmentDocID(relPath string, ordinal int) string {
+	return relPath + segmentIDSeparator + strconv.Itoa(ordinal)
+}
+
+// splitSegmentDocID recovers the path and ordinal from a document id.
+func splitSegmentDocID(id string) (string, int) {
+	i := strings.LastIndex(id, segmentIDSeparator)
+	if i < 0 {
+		return id, 0
+	}
+	ord, err := strconv.Atoi(id[i+1:])
+	if err != nil {
+		return id[:i], 0
+	}
+	return id[:i], ord
+}
+
+// Dir returns the index directory under $OMNIPUS_HOME.
+func (ix *Index) Dir() string { return ix.dir }
+
+// Root returns the collection root's resolved real path.
+func (ix *Index) Root() string { return ix.root }
+
+// ManifestPath returns the path of the freshness manifest.
+func (ix *Index) ManifestPath() string { return ix.manifestPath }
+
+// DocCount returns the number of index documents — segments, not files.
+func (ix *Index) DocCount() (uint64, error) { return ix.idx.DocCount() }
+
+// Close releases THIS holder's reference. The underlying handle is closed only
+// when the last holder releases it, so one revoked mount can never close an
+// index another workspace is still searching.
+func (ix *Index) Close() error {
+	if ix.regKey == "" {
+		return ix.closeUnderlying()
+	}
+	return releaseSharedIndex(ix.regKey)
+}
+
+func (ix *Index) closeUnderlying() error {
+	ix.mu.Lock()
+	defer ix.mu.Unlock()
+	if err := ix.idx.Close(); err != nil {
+		return fmt.Errorf("knowledge: close index %s: %w", ix.blevePath, err)
+	}
+	return nil
+}
+
+// batchState accumulates index documents into bounded batches (FR-034).
+type batchState struct {
+	ix      *Index
+	batch   *bleve.Batch
+	docs    int
+	bytes   int
+	commits int
+}
+
+func newBatchState(ix *Index) *batchState {
+	return &batchState{ix: ix, batch: ix.idx.NewBatch()}
+}
+
+// add appends one document and commits the batch if either bound is reached.
+// Because indexBatchMaxBytes equals IndexSegmentSize, a full-size note segment
+// forces a commit as soon as it is added — which is what keeps peak memory a
+// property of the SEGMENT size rather than of the largest file in the corpus.
+func (b *batchState) add(id string, doc indexDoc) error {
+	if err := b.batch.Index(id, doc); err != nil {
+		return fmt.Errorf("knowledge: batch index %s: %w", id, err)
+	}
+	b.docs++
+	b.bytes += len(doc.Body)
+	if b.docs >= indexBatchMaxDocs || b.bytes >= indexBatchMaxBytes {
+		return b.commit()
+	}
+	return nil
+}
+
+func (b *batchState) delete(id string) error {
+	b.batch.Delete(id)
+	b.docs++
+	if b.docs >= indexBatchMaxDocs {
+		return b.commit()
+	}
+	return nil
+}
+
+func (b *batchState) commit() error {
+	if b.docs == 0 {
+		return nil
+	}
+	if err := b.ix.idx.Batch(b.batch); err != nil {
+		return fmt.Errorf("knowledge: commit batch: %w", err)
+	}
+	b.commits++
+	b.batch = b.ix.idx.NewBatch()
+	b.docs = 0
+	b.bytes = 0
+	return nil
+}
+
+// Sync reconciles the index with the collection on disk using the default
+// (stat-based) freshness check.
+func (ix *Index) Sync(ctx context.Context) (SyncStats, error) {
+	return ix.SyncWith(ctx, SyncOptions{})
+}
+
+// SyncWith reconciles the index with the collection on disk.
+//
+// It re-parses ONLY files whose recorded size, modification time or content hash
+// changed (FR-033), deletes the documents of files that are gone, indexes in
+// bounded batches (FR-034), segments oversized notes (FR-034a), never opens an
+// attachment (FR-039a), and persists the manifest so the next open — after a
+// restart or not — repeats none of the work (FR-039).
+func (ix *Index) SyncWith(ctx context.Context, opts SyncOptions) (SyncStats, error) {
+	ix.mu.Lock()
+	defer ix.mu.Unlock()
+
+	var stats SyncStats
+
+	scan, err := Scan(ix.root)
+	if err != nil {
+		return stats, err
+	}
+	stats.Scanned = len(scan.Entries)
+	stats.Problems = scan.Problems
+
+	manifest, loadErr := LoadManifest(ix.manifestPath, ix.root)
+	if loadErr != nil {
+		// Not fatal: an unusable manifest costs a full rebuild, never a wrong
+		// answer. It is logged rather than swallowed.
+		slog.Warn("knowledge: manifest unusable; indexing from scratch",
+			"path", ix.manifestPath, "error", loadErr)
+	}
+
+	batch := newBatchState(ix)
+	seen := make(map[string]struct{}, len(scan.Entries))
+
+	for _, entry := range scan.Entries {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return stats, ctxErr
+		}
+		seen[entry.RelPath] = struct{}{}
+
+		rec, hadRec := manifest.Get(entry.RelPath)
+
+		if !opts.Deep && manifest.StatUnchanged(entry) {
+			stats.Unchanged++
+			continue
+		}
+
+		if opts.Deep && hadRec && rec.Kind == entry.Kind && entry.Kind == ScanKindNote {
+			// FR-033's third criterion, and the only place it can be applied
+			// without a stat change to trigger it: hash the note and skip it if
+			// the bytes are identical after all. Attachments are excluded by
+			// construction — hashing one would mean opening it (FR-039a).
+			sum, hashErr := ix.hashFile(entry.RelPath)
+			if hashErr == nil && sum == rec.Hash && rec.Hash != "" {
+				stats.Unchanged++
+				rec.Size = entry.Size
+				rec.ModTimeNanos = entry.ModTimeNanos
+				manifest.Put(rec)
+				continue
+			}
+		}
+
+		// The file changed (or is new). Remove whatever documents it produced
+		// last time before writing the new ones: a note that shrank from five
+		// segments to two would otherwise leave three orphans behind, findable
+		// forever.
+		if hadRec {
+			for ord := 0; ord < rec.Segments; ord++ {
+				if delErr := batch.delete(segmentDocID(entry.RelPath, ord)); delErr != nil {
+					return stats, delErr
+				}
+			}
+		}
+
+		newRec, segErr := ix.indexEntry(batch, entry)
+		if segErr != nil {
+			// One unreadable file must not abort the collection. It is reported
+			// and left OUT of the index — never indexed as empty, which would
+			// be a confidently wrong answer.
+			slog.Error("knowledge: indexing file failed",
+				"collection", ix.root, "path", entry.RelPath, "error", segErr)
+			stats.Problems = append(stats.Problems, ScanProblem{
+				RelPath: entry.RelPath, Reason: ScanProblemUnreadable, Detail: segErr.Error(),
+			})
+			manifest.Remove(entry.RelPath)
+			continue
+		}
+		manifest.Put(newRec)
+		stats.Indexed++
+		stats.Segments += newRec.Segments
+	}
+
+	// Files the manifest knows and the walk did not find are gone from disk.
+	for relPath, rec := range manifest.Entries {
+		if _, ok := seen[relPath]; ok {
+			continue
+		}
+		for ord := 0; ord < rec.Segments; ord++ {
+			if delErr := batch.delete(segmentDocID(relPath, ord)); delErr != nil {
+				return stats, delErr
+			}
+		}
+		manifest.Remove(relPath)
+		stats.Removed++
+	}
+
+	if err := batch.commit(); err != nil {
+		return stats, err
+	}
+	stats.BatchCommits = batch.commits
+
+	if err := manifest.Save(ix.manifestPath); err != nil {
+		return stats, err
+	}
+	if err := enforceIndexPermissions(ix.dir); err != nil {
+		return stats, err
+	}
+	return stats, nil
+}
+
+// indexEntry writes the index documents for one file and returns its manifest
+// record.
+func (ix *Index) indexEntry(batch *batchState, entry ScanEntry) (ManifestEntry, error) {
+	if entry.Kind == ScanKindAttachment {
+		return ix.indexAttachment(batch, entry)
+	}
+	return ix.indexNote(batch, entry)
+}
+
+// indexAttachment records an attachment by filename and path ONLY (FR-039a).
+//
+// There is no read here and there must never be one: no body, no hash, no
+// content type sniff. `diagram-v3.png` is findable because its NAME is indexed.
+func (ix *Index) indexAttachment(batch *batchState, entry ScanEntry) (ManifestEntry, error) {
+	doc := indexDoc{
+		Path:   entry.RelPath,
+		Name:   nameTokensFor(entry.RelPath),
+		Kind:   string(ScanKindAttachment),
+		Offset: 0,
+		Body:   "",
+	}
+	if err := batch.add(segmentDocID(entry.RelPath, 0), doc); err != nil {
+		return ManifestEntry{}, err
+	}
+	return ManifestEntry{
+		Path:         entry.RelPath,
+		Kind:         ScanKindAttachment,
+		Size:         entry.Size,
+		ModTimeNanos: entry.ModTimeNanos,
+		Hash:         "", // never read, therefore never hashed
+		Segments:     1,
+	}, nil
+}
+
+// indexNote streams a note into consecutive segment documents (FR-034a).
+//
+// One pass over the file does three things: it hashes the bytes, it cuts them
+// into segments of at most IndexSegmentSize, and it hands each segment to the
+// bounded batch. Peak memory is a function of IndexSegmentSize, not of the
+// file's size — which is the whole point, and the reason this does not simply
+// read the note and index it as one document the way pkg/memrooms/index does.
+//
+// A note of ANY size is indexed in full. Nothing is refused, skipped or
+// truncated.
+func (ix *Index) indexNote(batch *batchState, entry ScanEntry) (ManifestEntry, error) {
+	absPath := filepath.Join(ix.root, filepath.FromSlash(entry.RelPath))
+	f, err := openFileForRead(absPath)
+	if err != nil {
+		return ManifestEntry{}, fmt.Errorf("open note %s: %w", entry.RelPath, err)
+	}
+	defer func() { _ = f.Close() }()
+
+	hasher := sha256.New()
+	name := nameTokensFor(entry.RelPath)
+
+	buf := make([]byte, IndexSegmentSize)
+	carry := 0        // bytes held over from the previous read (a partial line)
+	var offset int64  // absolute byte offset of the current segment's start
+	ordinal := 0      // segment ordinal
+	eof := false      // the reader reported io.EOF
+	wroteAny := false // at least one document was written for this file
+
+	for !eof {
+		n, readErr := io.ReadFull(f, buf[carry:])
+		if readErr != nil && !errors.Is(readErr, io.EOF) && !errors.Is(readErr, io.ErrUnexpectedEOF) {
+			return ManifestEntry{}, fmt.Errorf("read note %s: %w", entry.RelPath, readErr)
+		}
+		if readErr != nil {
+			eof = true
+		}
+		// Hash exactly the bytes just read, in file order, so the hash is over
+		// the file's true contents regardless of how they were segmented.
+		hasher.Write(buf[carry : carry+n])
+		filled := carry + n
+
+		if filled == 0 {
+			break
+		}
+
+		cut := filled
+		if !eof {
+			// Prefer to end a segment on a line boundary so a term is not split
+			// across two documents and lost from both. If a single line is
+			// longer than a whole segment there is no boundary to use, and the
+			// hard cut stands — the note is still indexed in full.
+			if nl := lastIndexByte(buf[:filled], '\n'); nl > 0 {
+				cut = nl + 1
+			}
+		}
+
+		if err := batch.add(segmentDocID(entry.RelPath, ordinal), indexDoc{
+			Path:   entry.RelPath,
+			Name:   name,
+			Kind:   string(ScanKindNote),
+			Offset: float64(offset),
+			Body:   string(buf[:cut]),
+		}); err != nil {
+			return ManifestEntry{}, err
+		}
+		wroteAny = true
+		ordinal++
+		offset += int64(cut)
+
+		carry = filled - cut
+		if carry > 0 {
+			copy(buf, buf[cut:filled])
+		}
+	}
+
+	if !wroteAny {
+		// An empty note is still a note: it must be addressable, carry an
+		// outline and appear in the graph. It gets one empty document.
+		if err := batch.add(segmentDocID(entry.RelPath, 0), indexDoc{
+			Path:   entry.RelPath,
+			Name:   name,
+			Kind:   string(ScanKindNote),
+			Offset: 0,
+			Body:   "",
+		}); err != nil {
+			return ManifestEntry{}, err
+		}
+		ordinal = 1
+	}
+
+	return ManifestEntry{
+		Path:         entry.RelPath,
+		Kind:         ScanKindNote,
+		Size:         entry.Size,
+		ModTimeNanos: entry.ModTimeNanos,
+		Hash:         hex.EncodeToString(hasher.Sum(nil)),
+		Segments:     ordinal,
+	}, nil
+}
+
+// hashFile streams a note through SHA-256 without holding it in memory. Used
+// only by a deep reconcile; never called for an attachment.
+func (ix *Index) hashFile(relPath string) (string, error) {
+	absPath := filepath.Join(ix.root, filepath.FromSlash(relPath))
+	f, err := openFileForRead(absPath)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = f.Close() }()
+
+	var h hash.Hash = sha256.New()
+	buf := make([]byte, 1<<20)
+	if _, err := io.CopyBuffer(h, f, buf); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// lastIndexByte returns the index of the last occurrence of c, or -1.
+func lastIndexByte(b []byte, c byte) int {
+	for i := len(b) - 1; i >= 0; i-- {
+		if b[i] == c {
+			return i
+		}
+	}
+	return -1
+}
+
+// nameTokensFor turns a path into text that makes a file findable by NAME.
+// `img/diagram-v3.png` becomes "img diagram-v3.png diagram v3 png", so a search
+// for `diagram-v3` finds the attachment whether the query is analysed as one
+// token or three.
+func nameTokensFor(relPath string) string {
+	base := filepath.Base(relPath)
+	stem := strings.TrimSuffix(base, filepath.Ext(base))
+	dir := strings.TrimSuffix(filepath.Dir(relPath), ".")
+	parts := []string{base, stem}
+	if dir != "" {
+		parts = append(parts, strings.ReplaceAll(dir, "/", " "))
+	}
+	return strings.Join(parts, " ")
+}
+
+// indexSearchMaxFetch bounds how many raw segment hits one Search may pull while
+// collapsing segments back into files. Without a bound, a query matching every
+// segment of a very large note could pull the whole index into memory.
+const indexSearchMaxFetch = 2048
+
+// Search runs a BM25 query and returns at most limit results, ONE PER FILE.
+//
+// FR-034a's segments are an implementation detail of bounded memory and must
+// never reach the caller: a term appearing in three segments of one note is one
+// result, scored by its best segment, carrying that segment's absolute byte
+// offset so FR-050a's query-time excerpt re-read lands in the right place. The
+// naive implementation returns three rows for one note and ranks them as three
+// notes.
+//
+// limit is honoured as given — this layer does not silently clamp. FR-037's cap
+// belongs to the tool/API layer, which must clamp AND report the clamping.
+func (ix *Index) Search(query string, limit int) ([]IndexHit, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+
+	fetch := limit * 4
+	if fetch < 20 {
+		fetch = 20
+	}
+
+	for {
+		if fetch > indexSearchMaxFetch {
+			fetch = indexSearchMaxFetch
+		}
+		hits, total, err := ix.searchRaw(query, fetch)
+		if err != nil {
+			return nil, err
+		}
+		collapsed := collapseSegmentHits(hits)
+		// Stop when we have enough distinct files, when we have already seen
+		// every matching segment, or when the fetch bound is reached.
+		if len(collapsed) >= limit || uint64(fetch) >= total || fetch >= indexSearchMaxFetch {
+			if len(collapsed) > limit {
+				collapsed = collapsed[:limit]
+			}
+			return collapsed, nil
+		}
+		fetch *= 4
+	}
+}
+
+// searchRaw executes one bleve query and returns the raw per-SEGMENT hits.
+func (ix *Index) searchRaw(query string, size int) ([]IndexHit, uint64, error) {
+	var req *bleve.SearchRequest
+	if strings.TrimSpace(query) == "" {
+		req = bleve.NewSearchRequestOptions(bleve.NewMatchAllQuery(), size, 0, false)
+	} else {
+		// Explicit per-field match queries, for the reason pkg/memrooms/index
+		// documents: a plain match query targets the composite _all field,
+		// whose analyzer does not match the field-level mapping, and returns
+		// nothing even when the terms are present.
+		qs := make([]bleveQuery.Query, 0, 3)
+		for _, field := range []string{fieldName, fieldPath, fieldBody} {
+			mq := bleveQuery.NewMatchQuery(query)
+			mq.SetField(field)
+			qs = append(qs, mq)
+		}
+		req = bleve.NewSearchRequestOptions(bleve.NewDisjunctionQuery(qs...), size, 0, false)
+	}
+	req.Fields = []string{fieldPath, fieldKind, fieldOffset}
+	req.SortBy([]string{"-_score", "_id"}) // deterministic ties (FR-046)
+
+	res, err := ix.idx.Search(req)
+	if err != nil {
+		return nil, 0, fmt.Errorf("knowledge: search %q: %w", query, err)
+	}
+	out := make([]IndexHit, 0, len(res.Hits))
+	for _, h := range res.Hits {
+		relPath, ordinal := splitSegmentDocID(h.ID)
+		hit := IndexHit{Path: relPath, Score: h.Score, Segment: ordinal, Kind: ScanKindNote}
+		if v, ok := h.Fields[fieldPath].(string); ok && v != "" {
+			hit.Path = v
+		}
+		if v, ok := h.Fields[fieldKind].(string); ok && v != "" {
+			hit.Kind = ScanKind(v)
+		}
+		if v, ok := h.Fields[fieldOffset].(float64); ok {
+			hit.Offset = int64(v)
+		}
+		out = append(out, hit)
+	}
+	return out, res.Total, nil
+}
+
+// collapseSegmentHits folds every segment of a file into ONE result, keeping the
+// best-scoring segment's score and offset, and preserves descending score order.
+func collapseSegmentHits(hits []IndexHit) []IndexHit {
+	best := make(map[string]IndexHit, len(hits))
+	order := make([]string, 0, len(hits))
+	for _, h := range hits {
+		prev, seen := best[h.Path]
+		if !seen {
+			best[h.Path] = h
+			order = append(order, h.Path)
+			continue
+		}
+		if h.Score > prev.Score || (h.Score == prev.Score && h.Segment < prev.Segment) {
+			best[h.Path] = h
+		}
+	}
+	out := make([]IndexHit, 0, len(order))
+	for _, p := range order {
+		out = append(out, best[p])
+	}
+	return out
+}
+
+// ---------------------------------------------------------------------------
+// Process-global, reference-counted registry of open collection indexes.
+//
+// WHY IT EXISTS — the same reason pkg/memrooms/index has one, plus one more.
+//
+// scorch keeps its root metadata in a bbolt file opened with a
+// PROCESS-EXCLUSIVE, INFINITE-WAIT file lock. A second open of the same file
+// blocks forever. And FR-031 makes a second open the NORMAL case here: one host
+// folder can be mounted into several workspaces, and twice into one — CreateMount
+// checks name collisions, never HostPath. So the same corpus is opened by
+// several holders as a matter of routine, and each must get the one live handle.
+//
+// The key is the collection root's RESOLVED REAL PATH, not the index directory
+// and not a workspace/mount id: two mounts naming the folder by different routes
+// are the same corpus and must share the same index and the same refcount.
+//
+// Reference counting is the second half of FR-031: revoking one of two mounts
+// must leave the other workspace's search working, so a Close that is not the
+// last Close is pure bookkeeping.
+// ---------------------------------------------------------------------------
+
+var indexRegistry = struct {
+	mu      sync.Mutex
+	entries map[string]*indexRegistryEntry
+}{entries: make(map[string]*indexRegistryEntry)}
+
+type indexRegistryEntry struct {
+	ix   *Index
+	refs int
+}
+
+// acquireSharedIndex returns the shared *Index for key, calling open exactly
+// once per key. open runs under the registry mutex so two concurrent first
+// acquirers cannot both race into a bbolt open of the same file — which is the
+// deadlock being avoided, not merely wasted work.
+func acquireSharedIndex(key string, open func() (*Index, error)) (*Index, error) {
+	indexRegistry.mu.Lock()
+	defer indexRegistry.mu.Unlock()
+
+	if e, ok := indexRegistry.entries[key]; ok {
+		e.refs++
+		return e.ix, nil
+	}
+	ix, err := open()
+	if err != nil {
+		return nil, err
+	}
+	ix.regKey = key
+	indexRegistry.entries[key] = &indexRegistryEntry{ix: ix, refs: 1}
+	return ix, nil
+}
+
+// releaseSharedIndex drops one reference and closes the underlying handle only
+// when the last one goes. Releasing an unknown key is a safe no-op (a double
+// close, or a handle the registry never managed).
+func releaseSharedIndex(key string) error {
+	indexRegistry.mu.Lock()
+	e, ok := indexRegistry.entries[key]
+	if !ok {
+		indexRegistry.mu.Unlock()
+		return nil
+	}
+	e.refs--
+	if e.refs > 0 {
+		indexRegistry.mu.Unlock()
+		return nil
+	}
+	delete(indexRegistry.entries, key)
+	indexRegistry.mu.Unlock()
+
+	return e.ix.closeUnderlying()
+}
+
+// indexRegistryRefs reports the live holder count for a resolved collection
+// root, or 0 when no handle is open. Test seam for FR-031's reference counting.
+func indexRegistryRefs(key string) int {
+	indexRegistry.mu.Lock()
+	defer indexRegistry.mu.Unlock()
+	if e, ok := indexRegistry.entries[key]; ok {
+		return e.refs
+	}
+	return 0
+}
