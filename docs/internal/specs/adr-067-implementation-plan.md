@@ -1,0 +1,200 @@
+# ADR-067 — implementation plan
+
+- **Date:** 2026-08-22
+- **Delivers:** [the spec](adr-067-knowledge-base-and-preview-spec.md) — 117 requirements, ~130 tests, five stages
+- **Branch:** `feat/library-improvements`
+- **Status:** plan, not started
+
+---
+
+## 1. What actually limits parallelism
+
+**Six concurrent agents per workflow** on this machine — `min(16, cores − 2)`, and there are 8
+logical cores (4 physical). Excess agents queue rather than fail. Total agents per workflow is a
+separate, configurable guideline (`/config` → Dynamic workflow size, currently "medium" ≈ 15).
+
+**But the six is rarely the binding constraint, and it is important to know which constraint is
+biting**, because the answer changes what to parallelise:
+
+| Work | Bound by | Parallelises? |
+|---|---|---|
+| Reading, reasoning, writing code | **Model latency** — the agent is waiting, not computing | **Yes, well.** Several workflows at six each is fine |
+| Go build / test | **CPU and RAM.** This project's own notes warn the suite can exhaust memory and say CI is the authority | **No.** Serialise. One at a time, or push and let CI run it |
+| Browser install / Playwright runs | CPU, disk, network | **No.** Today five agents each installed their own browser copy; that, not the agent cap, is why it felt slow |
+
+**So: many code-writing agents in parallel, one build at a time.** Load average was 7.12 on 8
+cores while browser agents ran — saturated. The same six agents editing files would barely
+register.
+
+### The constraint that actually bit, twice
+
+**Two agents editing one file collide.** It happened twice in a single session — two agents
+independently claiming the same test numbers, and one edit block applied twice. Neither was
+caught by the tooling; both were caught by reading.
+
+**Every wave below therefore partitions by *file ownership*, not by subject.** No two agents in
+a wave may write the same file. Where a stage's work spans a file another stage owns, the stages
+are sequenced rather than the file shared.
+
+---
+
+## 2. Dependency reality
+
+The spec's five stages are not five independent parcels.
+
+```
+Wave 1  Foundations ─────────────► everything
+                                    │
+Wave 2  Stage 0 backend ───┐        │  (pkg/pathsafe, pkg/library, rest_library create paths)
+        Stage 1 frontend ──┤        │  (src/ only — file-disjoint from Stage 0)
+                           ▼        ▼
+Wave 3  Stage 1 backend ───┐   (rest_library inline mode — needs Stage 0 to release the file)
+        Stage 2 backend ───┤   (pkg/knowledge — new package, disjoint)
+                           ▼
+Wave 4  Stage 2 frontend ──┐   (reading surface)
+        Stage 3 backend ───┤   (write path, concurrency)
+                           ▼
+Wave 5  Quality gates → fixes → re-review
+```
+
+**Stage 4 (`ev` lock interoperation) is not in this plan.** It gates on a contract that has to be
+agreed on another project's side. It ships separately or not at all.
+
+### Why Foundations must be first, and is not optional
+
+Three things in Wave 1 are the difference between a green suite and a *meaningful* green suite:
+
+1. **`src/components/library/` matches no vitest group.** Eleven existing test files there run
+   nowhere in CI, and it is the exact directory this feature modifies. Every frontend test
+   written before this is fixed would report green without executing.
+2. **Contracts before code** is a hard project constraint. Wire types written after the handler
+   fail the lint gate and get retrofitted badly.
+3. **Tool-policy seeding.** The knowledge tools must be enumerated explicitly or they arrive
+   *silently denied* — boot succeeds, the feature is dead, and a log line is the only evidence.
+
+Building anything before these three is building on an instrument that cannot read.
+
+---
+
+## 3. The waves
+
+Each wave is one workflow. Agents inside a wave run concurrently, up to six.
+
+### Wave 1 — Foundations (6 agents)
+
+| # | Agent | Owns | Done when |
+|---|---|---|---|
+| 1 | vitest coverage | `.github/workflows/pr.yml` (vitest matrix), `scripts/check-vitest-coverage.mjs` | Tests 97, 98 pass; the 11 library files run |
+| 2 | Playwright matrix | `playwright.config.ts`, `tests/e2e/shards.json`, CI install lines | Test 120 passes; five projects at `retries: 0`; **every** spec on disk matched |
+| 3 | Windows CI | `.github/workflows/`, `Makefile` | Windows job runs `pathsafe` tests; `GOOS=windows go vet` on the Linux leg; the false `cross-platform-extra.yml` comment corrected |
+| 4 | Contracts | `contracts/**`, generated artefacts | `make verify-contracts` clean; all wire types from the spec's contract table exist |
+| 5 | Tool policy | `pkg/config/defaults.go`, `pkg/coreagent/core.go` | Tests 34, 35 pass **including 35's positive control** |
+| 6 | **Verifier** | nothing — read-only | Each of 1–5 checked against its acceptance criteria, independently |
+
+> **Agent 2 carries a trap.** Adding a `projects` array makes any spec *not matched by a project*
+> stop running. A shard with five specs where four match runs four and reports green — the same
+> false-green as the vitest gap, arriving inside its own fix. Test 120 asserts every spec on disk
+> is matched by exactly one project.
+
+### Wave 2 — Stage 0 backend ∥ Stage 1 frontend (two workflows, 6 + 6)
+
+File-disjoint by construction: **2A is `pkg/`, 2B is `src/`.**
+
+**Workflow 2A — Stage 0 (CRITICAL-risk).** `pathsafe.ValidateComponent` has 17 dependents.
+
+| # | Agent | Owns |
+|---|---|---|
+| 1 | Rule-set value + `GOOS` selection files | `pkg/pathsafe/rules*.go` |
+| 2 | Split control-chars from Windows-shape in **both** the validating and sanitising paths | `pkg/pathsafe/pathsafe.go` |
+| 3 | `.` / `..` rejected independently, surfacing the empty-name sentinel | same file — **sequenced after 2, not concurrent** |
+| 4 | `ValidateCreateName` on the resolved root + the five create/rename handlers | `pkg/library/root.go`, `pkg/gateway/rest_library.go` |
+| 5 | RFC 6266 disposition + length-by-unit | `pkg/gateway/rest_library.go` — **sequenced after 4** |
+| 6 | **Verifier** — runs each named mutation and confirms the guard dies | read-only |
+
+> Agents 2/3 and 4/5 share a file, so they run as two sequenced pairs. Effective concurrency here
+> is **4**, not 6. Claiming 6 would be a number, not a plan.
+
+**Workflow 2B — Stage 1 frontend.** Entirely `src/`.
+
+| # | Agent | Owns |
+|---|---|---|
+| 1 | PDF.js component + lazy chunk + hardening options | `src/components/library/preview/LibraryPdfPreview.tsx`, `vite.config.ts` |
+| 2 | `classifyLibraryEntry` — **HIGH risk**, purely additive | `src/components/library/preview/libraryPreviewKind.ts` |
+| 3 | Preview pane wiring, untrusted-content chrome | `src/components/library/LibraryPreviewPane.tsx` |
+| 4 | Deep-linking `?path=` | `src/routes/_app/library.tsx`, `LibraryExplorer.tsx` |
+| 5 | KB markdown composition (second composition, **not** a second pipeline) | `src/components/library/preview/LibraryMarkdownPreview.tsx` |
+| 6 | **Verifier** | read-only |
+
+### Wave 3 — Stage 1 backend ∥ Stage 2 backend (6 + 6)
+
+**3A — Stage 1 backend:** inline disposition mode, the Library type table, the preview-token
+store and route, the redaction helper, and **every** inline-serving route brought under one
+policy — including the third one nobody had enumerated.
+
+**3B — Stage 2 backend:** the new `pkg/knowledge` package — detection, index (scorch, keyed by
+realpath, stored outside the vault), manifest and incremental scan, link resolution with
+containment, `knowledge_search` / `knowledge_graph` scoped to the caller's workspace.
+
+Disjoint: 3A is `pkg/gateway`, 3B is a new package.
+
+### Wave 4 — Stage 2 frontend ∥ Stage 3 backend (6 + 6)
+
+**4A:** search box, outline, backlinks rail, adaptive reading layout, empty-state first run.
+**4B:** authoring tools, templates, link rewriting with the journal, version-token concurrency,
+audit events, lifecycle (revoke refcount, broken mount, evicted files).
+
+### Wave 5 — Quality gates
+
+Sequential, because each depends on the last.
+
+1. **`/code-review max`** over the whole branch diff. *(Note: `large` is not a level — the ladder
+   is low, medium, high, max, ultra. `ultra` is the cloud multi-agent review and is
+   user-triggered only; I cannot launch it.)*
+2. **`test-integrity-auditor`** — audits the suite for assertion weakening, over-mocking,
+   suppressed tests, oracles adapted to the implementation, and stale green. Returns a weakening
+   score and a block/warn/pass verdict.
+3. **Fix wave** — up to 6 agents, partitioned by file, one finding-cluster each.
+4. **Re-review** — `/code-review max` again on the fix diff only. A fix wave that is never
+   re-reviewed is where regressions enter.
+
+---
+
+## 4. Quality gates that run *inside* every wave
+
+Not only at the end.
+
+**Every workflow's last agent is a verifier, and it is read-only.** It does not fix; it reports.
+Its job is to answer one question per implementing agent: *does the acceptance criterion actually
+hold, and does the test actually fail when the feature is removed?*
+
+**Every test must name the mutation it dies on.** The spec already does this for most tests. A
+test that survives deleting the thing it guards is worse than no test, because it reports safety.
+The verifier runs the named mutation and confirms the red.
+
+**No agent marks its own work done.** The verifier is a different agent with no stake in the
+implementation.
+
+**CI is the authority for Go tests.** Agents push and read the checks rather than running the
+suite locally — this project's notes are explicit that the full suite can exhaust memory here.
+
+---
+
+## 5. Risks, and what each would cost
+
+| Risk | Why it is real | Mitigation |
+|---|---|---|
+| **Two agents, one file** | Happened twice in one session | Ownership table per wave; no file has two owners; shared files sequence |
+| **A wave reports green having run nothing** | Happened: 11 test files run nowhere today | Wave 1 first, and its verifier checks the gates themselves |
+| **CRITICAL-rated change breaks the gateway** | `ValidateComponent` has 17 dependents across Gateway and Agent | Signature unchanged, behaviour behind a value; mutation-tested by the verifier |
+| **Memory exhaustion from parallel builds** | Project notes warn the suite OOMs here | One build at a time; CI is the authority |
+| **The unverified parts ship as though measured** | Three are labelled reasoned-not-measured: SVG, the SPA policy, Safari | Each is gated on a named test before its stage ships |
+| **Fix wave introduces regressions** | Standard | Step 4 re-reviews the fix diff |
+
+---
+
+## 6. What this plan does not cover
+
+- **Stage 4** (`ev` lock interoperation) — gated on another project's contract.
+- **Form filling and signing** — proven feasible, deliberately out of scope for this release.
+- **The vault design note** — the project's own design-first rule wants it before the ADR is
+  ratified. This plan builds against a `Proposed` ADR.
