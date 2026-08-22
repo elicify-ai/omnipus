@@ -1339,6 +1339,10 @@ explicit seam tests: items 4 and 26.
 
 | Requirement | User story | BDD scenario | Test |
 |---|---|---|---|
+| FR-0001 | US-0 | (platform filename matrix) | 0a, 0e |
+| FR-0002 | US-0 | Traversal still refused | 0b |
+| FR-0003 | US-0 | Quote in filename header-safe | 0c |
+| FR-0004 | US-0 | Long filename opens | 0d |
 | FR-001 | US-1 | HTML page renders / Documents and media render | 2, 9 |
 | FR-002 | US-1 | Source is available behind Edit | 9 |
 | FR-003 | US-1 | A complete bundle loads all of its assets | 9 |
