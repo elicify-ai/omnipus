@@ -836,11 +836,22 @@ func TestWorkspaceLibrary_AuditEventShape(t *testing.T) {
 	if _, ok := cascadeRecord.Details["media_id"]; ok {
 		t.Errorf("media.cascade_delete should NOT carry media_id (cascade shape)")
 	}
-	mediaIDs := cascadeRecord.Details["media_ids"].([]any)
+	mediaIDs, ok := cascadeRecord.Details["media_ids"].([]any)
+	if !ok {
+		t.Fatalf("media.cascade_delete media_ids has unexpected type %T, want []any", cascadeRecord.Details["media_ids"])
+	}
 	if len(mediaIDs) != 2 {
 		t.Fatalf("media.cascade_delete media_ids length = %d, want 2", len(mediaIDs))
 	}
-	gotIDs := []string{mediaIDs[0].(string), mediaIDs[1].(string)}
+	mediaID0, ok := mediaIDs[0].(string)
+	if !ok {
+		t.Fatalf("media.cascade_delete media_ids[0] has unexpected type %T, want string", mediaIDs[0])
+	}
+	mediaID1, ok := mediaIDs[1].(string)
+	if !ok {
+		t.Fatalf("media.cascade_delete media_ids[1] has unexpected type %T, want string", mediaIDs[1])
+	}
+	gotIDs := []string{mediaID0, mediaID1}
 	sortStrings(gotIDs)
 	wantIDs := []string{aID, bID}
 	sortStrings(wantIDs)
@@ -849,7 +860,10 @@ func TestWorkspaceLibrary_AuditEventShape(t *testing.T) {
 			t.Errorf("media.cascade_delete media_ids[%d] = %q, want %q", i, got, wantIDs[i])
 		}
 	}
-	filenames := cascadeRecord.Details["filenames"].([]any)
+	filenames, ok := cascadeRecord.Details["filenames"].([]any)
+	if !ok {
+		t.Fatalf("media.cascade_delete filenames has unexpected type %T, want []any", cascadeRecord.Details["filenames"])
+	}
 	if len(filenames) != 2 {
 		t.Fatalf("media.cascade_delete filenames length = %d, want 2", len(filenames))
 	}

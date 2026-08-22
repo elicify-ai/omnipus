@@ -201,7 +201,11 @@ func TestExecLoad_MixedBatch_DenialNotSilenced(t *testing.T) {
 	loadedRaw, _ := result["loaded"].([]any)
 	loadedSet := make(map[string]bool, len(loadedRaw))
 	for _, v := range loadedRaw {
-		loadedSet[v.(string)] = true
+		s, ok := v.(string)
+		if !ok {
+			t.Fatalf("MixedBatch: unexpected type %T in loaded, want string", v)
+		}
+		loadedSet[s] = true
 	}
 	if !loadedSet[allowedLazy] {
 		t.Errorf("MixedBatch: %s (allowed lazy) must be in loaded; got loaded=%v", allowedLazy, loadedRaw)
@@ -211,7 +215,11 @@ func TestExecLoad_MixedBatch_DenialNotSilenced(t *testing.T) {
 	rejectedRaw, _ := result["rejected"].([]any)
 	foundDenied := false
 	for _, v := range rejectedRaw {
-		if strings.Contains(v.(string), deniedFull) && strings.Contains(v.(string), "denied") {
+		s, ok := v.(string)
+		if !ok {
+			t.Fatalf("MixedBatch: unexpected type %T in rejected, want string", v)
+		}
+		if strings.Contains(s, deniedFull) && strings.Contains(s, "denied") {
 			foundDenied = true
 		}
 	}
@@ -227,7 +235,11 @@ func TestExecLoad_MixedBatch_DenialNotSilenced(t *testing.T) {
 	alreadyRaw, _ := result["already_available"].([]any)
 	foundAvail := false
 	for _, v := range alreadyRaw {
-		if strings.Contains(v.(string), allowedFull) {
+		s, ok := v.(string)
+		if !ok {
+			t.Fatalf("MixedBatch: unexpected type %T in already_available, want string", v)
+		}
+		if strings.Contains(s, allowedFull) {
 			foundAvail = true
 		}
 	}

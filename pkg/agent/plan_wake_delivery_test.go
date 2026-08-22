@@ -316,7 +316,11 @@ func (h *planWakeHarness) parkPlanAtSupervision(t *testing.T, planID string, p *
 	mustCreateTask(t, h.tasks, &task.Task{
 		Title: "member", WorkspaceID: "ws", PlanID: planID, Status: task.StatusDone,
 	})
-	h.pe.judge.(*fakePlanJudge).resultFn = func(in JudgeCriteriaInput) JudgeCriteriaResult {
+	fakeJudge, ok := h.pe.judge.(*fakePlanJudge)
+	if !ok {
+		t.Fatalf("unexpected type %T for h.pe.judge, want *fakePlanJudge", h.pe.judge)
+	}
+	fakeJudge.resultFn = func(in JudgeCriteriaInput) JudgeCriteriaResult {
 		return JudgeCriteriaResult{Verdict: &task.JudgeVerdict{
 			Met:          false,
 			PerCriterion: []task.CriterionVerdict{{CriterionID: in.Criteria[0].ID, Met: false, Reason: "not yet"}},
@@ -626,7 +630,11 @@ func TestMetSynthesisWake_StaysOnTheOwner(t *testing.T) {
 	mustCreateTask(t, h.tasks, &task.Task{
 		Title: "member", WorkspaceID: "ws", PlanID: "p1", Status: task.StatusDone, Result: "all good",
 	})
-	h.pe.judge.(*fakePlanJudge).resultFn = func(in JudgeCriteriaInput) JudgeCriteriaResult {
+	fakeJudge, ok := h.pe.judge.(*fakePlanJudge)
+	if !ok {
+		t.Fatalf("unexpected type %T for h.pe.judge, want *fakePlanJudge", h.pe.judge)
+	}
+	fakeJudge.resultFn = func(in JudgeCriteriaInput) JudgeCriteriaResult {
 		return JudgeCriteriaResult{Verdict: &task.JudgeVerdict{
 			Met:          true,
 			PerCriterion: []task.CriterionVerdict{{CriterionID: in.Criteria[0].ID, Met: true, Reason: "confirmed"}},

@@ -90,7 +90,9 @@ func newQAInputHarness(t *testing.T, dcRecorder func(viewerID string, raw []byte
 	// TestWebRTCEndToEndInProcess's identical comment for why.
 	lst, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	port := lst.Addr().(*net.TCPAddr).Port
+	addr, ok := lst.Addr().(*net.TCPAddr)
+	require.Truef(t, ok, "listener address is %T, want *net.TCPAddr", lst.Addr())
+	port := addr.Port
 
 	tmpDir := t.TempDir()
 	handler, al := newBrowserWSTestHandler(t, func(cfg *config.Config) {

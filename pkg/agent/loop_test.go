@@ -711,8 +711,14 @@ func TestToolRegistry_ToolRegistration(t *testing.T) {
 	// Verify tool is registered by checking it doesn't panic on GetStartupInfo
 	// (actual tool retrieval is tested in tools package tests)
 	info := al.GetStartupInfo()
-	toolsInfo := info["tools"].(map[string]any)
-	toolsList := toolsInfo["names"].([]string)
+	toolsInfo, ok := info["tools"].(map[string]any)
+	if !ok {
+		t.Fatalf("unexpected type %T for info[\"tools\"], want map[string]any", info["tools"])
+	}
+	toolsList, ok := toolsInfo["names"].([]string)
+	if !ok {
+		t.Fatalf("unexpected type %T for toolsInfo[\"names\"], want []string", toolsInfo["names"])
+	}
 
 	// Check that our custom tool name is in the list
 	found := slices.Contains(toolsList, "mock_custom")
@@ -776,8 +782,14 @@ func TestToolRegistry_GetDefinitions(t *testing.T) {
 	al.RegisterTool(testTool)
 
 	info := al.GetStartupInfo()
-	toolsInfo := info["tools"].(map[string]any)
-	toolsList := toolsInfo["names"].([]string)
+	toolsInfo, ok := info["tools"].(map[string]any)
+	if !ok {
+		t.Fatalf("unexpected type %T for info[\"tools\"], want map[string]any", info["tools"])
+	}
+	toolsList, ok := toolsInfo["names"].([]string)
+	if !ok {
+		t.Fatalf("unexpected type %T for toolsInfo[\"names\"], want []string", toolsInfo["names"])
+	}
 
 	// Check that our custom tool name is in the list
 	found := slices.Contains(toolsList, "mock_custom")
@@ -1095,7 +1107,11 @@ func TestAgentLoop_GetStartupInfo(t *testing.T) {
 	}
 
 	// Should have default tools registered
-	if count.(int) == 0 {
+	countInt, ok := count.(int)
+	if !ok {
+		t.Fatalf("unexpected type %T for tools count, want int", count)
+	}
+	if countInt == 0 {
 		t.Error("Expected at least some tools to be registered")
 	}
 }

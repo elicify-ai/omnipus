@@ -334,7 +334,11 @@ func StartTestGateway(t *testing.T, opts ...Option) *TestGateway {
 	if err != nil {
 		t.Fatalf("testutil.StartTestGateway: allocate port: %v", err)
 	}
-	port := ln.Addr().(*net.TCPAddr).Port
+	tcpAddr, ok := ln.Addr().(*net.TCPAddr)
+	if !ok {
+		t.Fatalf("testutil.StartTestGateway: unexpected listener address type %T (want *net.TCPAddr)", ln.Addr())
+	}
+	port := tcpAddr.Port
 	if err = ln.Close(); err != nil {
 		t.Fatalf("testutil.StartTestGateway: close ephemeral listener: %v", err)
 	}

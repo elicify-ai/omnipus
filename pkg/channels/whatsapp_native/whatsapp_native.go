@@ -364,12 +364,12 @@ func (c *WhatsAppNativeChannel) Stop(ctx context.Context) error {
 }
 
 func (c *WhatsAppNativeChannel) eventHandler(evt any) {
-	switch evt.(type) {
+	switch ev := evt.(type) {
 	case *events.Message:
-		c.handleIncoming(evt.(*events.Message))
+		c.handleIncoming(ev)
 	case *events.LoggedOut:
 		logger.WarnCF("whatsapp", "WhatsApp session logged out by server; re-pairing required", map[string]any{
-			"on_connect": evt.(*events.LoggedOut).OnConnect,
+			"on_connect": ev.OnConnect,
 		})
 		c.reconnectMu.Lock()
 		if c.stopping.Load() || c.reconnecting {

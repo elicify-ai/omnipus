@@ -601,7 +601,11 @@ func TestConformance_t0_ChatGoal_Design(t *testing.T) {
 	al.checkGoalLoopAfterTurn(context.Background(), agentInst, opts, &turnResult{
 		finalContent: "Which schema version should I target?\nGOAL_STATUS: waiting_on_user",
 	})
-	if judgeInst.Provider.(*fakeJudgeProvider).callCount() != 0 {
+	fakeJudge2, ok := judgeInst.Provider.(*fakeJudgeProvider)
+	if !ok {
+		t.Fatalf("unexpected type %T for judgeInst.Provider, want *fakeJudgeProvider", judgeInst.Provider)
+	}
+	if fakeJudge2.callCount() != 0 {
 		t.Fatal("(2) a waiting_on_user turn must NOT invoke the Judge (G-5: no verdict)")
 	}
 	after2, _ := store.GetMeta(sid)
@@ -624,7 +628,11 @@ func TestConformance_t0_ChatGoal_Design(t *testing.T) {
 	al.checkGoalLoopAfterTurn(context.Background(), agentInst, opts, &turnResult{
 		finalContent: "[goal:evidence] generated types + lint green\nGOAL_STATUS: met",
 	})
-	if got := judgeInst.Provider.(*fakeJudgeProvider).callCount(); got != 1 {
+	fakeJudge4, ok := judgeInst.Provider.(*fakeJudgeProvider)
+	if !ok {
+		t.Fatalf("unexpected type %T for judgeInst.Provider, want *fakeJudgeProvider", judgeInst.Provider)
+	}
+	if got := fakeJudge4.callCount(); got != 1 {
 		t.Fatalf("(4) the claim must invoke the Judge exactly once (G-1), got %d", got)
 	}
 	after4, _ := store.GetMeta(sid)
@@ -776,7 +784,11 @@ func TestConformance_t1_StandaloneTask_Design(t *testing.T) {
 	if after2.AttemptCount != 0 {
 		t.Fatalf("(2) 1st bare claim consumed an attempt (%d), want 0 (G-4 free bounce)", after2.AttemptCount)
 	}
-	if judgeInst.Provider.(*fakeJudgeProvider).callCount() != 0 {
+	fakeJudgeB2, ok := judgeInst.Provider.(*fakeJudgeProvider)
+	if !ok {
+		t.Fatalf("unexpected type %T for judgeInst.Provider, want *fakeJudgeProvider", judgeInst.Provider)
+	}
+	if fakeJudgeB2.callCount() != 0 {
 		t.Fatal("(2) 1st bare claim must NOT reach the Judge (evidence-gate rejects pre-Judge)")
 	}
 
@@ -792,7 +804,11 @@ func TestConformance_t1_StandaloneTask_Design(t *testing.T) {
 	if after3.AttemptCount != 1 {
 		t.Fatalf("(3) 2nd bare claim: attempt_count = %d, want 1 (G-4: 2nd costs an attempt)", after3.AttemptCount)
 	}
-	if judgeInst.Provider.(*fakeJudgeProvider).callCount() != 0 {
+	fakeJudgeB3, ok := judgeInst.Provider.(*fakeJudgeProvider)
+	if !ok {
+		t.Fatalf("unexpected type %T for judgeInst.Provider, want *fakeJudgeProvider", judgeInst.Provider)
+	}
+	if fakeJudgeB3.callCount() != 0 {
 		t.Fatal("(3) 2nd bare claim must still NOT reach the Judge (no evidence to judge)")
 	}
 
@@ -805,8 +821,12 @@ func TestConformance_t1_StandaloneTask_Design(t *testing.T) {
 	if redis := al.taskExecutor.finishTaskRun(context.Background(), current, taskSessionID, withEvidence, nil, "", nil); redis != "" {
 		t.Fatalf("(4) a met claim must NOT re-dispatch, got redispatch=%q", redis)
 	}
-	if judgeInst.Provider.(*fakeJudgeProvider).callCount() != 1 {
-		t.Fatalf("(4) a claim WITH evidence must reach the Judge exactly once, got %d", judgeInst.Provider.(*fakeJudgeProvider).callCount())
+	fakeJudgeB4, ok := judgeInst.Provider.(*fakeJudgeProvider)
+	if !ok {
+		t.Fatalf("unexpected type %T for judgeInst.Provider, want *fakeJudgeProvider", judgeInst.Provider)
+	}
+	if fakeJudgeB4.callCount() != 1 {
+		t.Fatalf("(4) a claim WITH evidence must reach the Judge exactly once, got %d", fakeJudgeB4.callCount())
 	}
 	after4, _ := taskStore.Get(tk.ID)
 	if after4.Status != task.StatusDone {

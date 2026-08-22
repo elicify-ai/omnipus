@@ -97,7 +97,18 @@ func workspaceRunLockChan(workDir string) chan struct{} {
 	fresh := make(chan struct{}, 1)
 	fresh <- struct{}{}
 	chAny, _ := workspaceRunLocks.LoadOrStore(key, fresh)
-	return chAny.(chan struct{})
+	ch, ok := chAny.(chan struct{})
+	if !ok {
+		// workspaceRunLocks is populated exclusively by this function with
+		// chan struct{} tokens; a different type under this key means the
+		// map invariant was corrupted by a programming error elsewhere.
+		// Continuing with the wrong type would silently bypass the
+		// mutual-exclusion lock and reintroduce the undetectable
+		// concurrent-workspace-write race this map exists to prevent, so
+		// abort loudly rather than hand back an unusable lock.
+		panic(fmt.Sprintf("workspaceRunLocks: invariant violated for key %q: got %T, want chan struct{}", key, chAny))
+	}
+	return ch
 }
 
 // acquireWorkspaceRunLockCtx acquires the workDir run lock in a cancel-aware

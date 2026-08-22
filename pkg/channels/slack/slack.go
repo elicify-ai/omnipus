@@ -150,8 +150,14 @@ func (c *SlackChannel) Send(ctx context.Context, msg bus.OutboundMessage) error 
 	}
 
 	if ref, ok := c.pendingAcks.LoadAndDelete(msg.ChatID); ok {
-		msgRef := ref.(slackMessageRef)
-		if err := c.api.AddReaction("white_check_mark", slack.ItemRef{
+		msgRef, ok := ref.(slackMessageRef)
+		if !ok {
+			logger.DebugCF(
+				"slack",
+				"pendingAcks: unexpected value type, skipping ack reaction",
+				map[string]any{"chat_id": msg.ChatID, "got_type": fmt.Sprintf("%T", ref)},
+			)
+		} else if err := c.api.AddReaction("white_check_mark", slack.ItemRef{
 			Channel:   msgRef.ChannelID,
 			Timestamp: msgRef.Timestamp,
 		}); err != nil {

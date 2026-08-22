@@ -63,7 +63,10 @@ func TestPlanBounds_SupervisionOverrides_JSONKeys(t *testing.T) {
 	if _, ok := decoded["supervision_turn_timeout_seconds"]; ok {
 		t.Errorf("an unset override must be omitted, got %s", raw)
 	}
-	if v, ok := decoded["supervision_max_attempts"]; !ok || v.(float64) != 2 {
+	v, ok := decoded["supervision_max_attempts"]
+	if !ok {
+		t.Errorf("supervision_max_attempts key missing or wrong: %s", raw)
+	} else if vFloat, ok := v.(float64); !ok || vFloat != 2 {
 		t.Errorf("supervision_max_attempts key missing or wrong: %s", raw)
 	}
 }

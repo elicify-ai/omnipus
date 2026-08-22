@@ -82,7 +82,11 @@ func startPerfGateway(tb testing.TB, _ *testutil.ScenarioProvider) *perfGateway 
 	if err != nil {
 		tb.Fatalf("startPerfGateway: allocate port: %v", err)
 	}
-	port := ln.Addr().(*net.TCPAddr).Port
+	tcpAddr, ok := ln.Addr().(*net.TCPAddr)
+	if !ok {
+		tb.Fatalf("startPerfGateway: listener address has unexpected type %T, want *net.TCPAddr", ln.Addr())
+	}
+	port := tcpAddr.Port
 	if err = ln.Close(); err != nil {
 		tb.Fatalf("startPerfGateway: close ephemeral listener: %v", err)
 	}

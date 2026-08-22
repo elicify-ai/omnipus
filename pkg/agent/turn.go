@@ -715,7 +715,13 @@ func (al *AgentLoop) clearActiveTurnStateEntry(sessionKey string, ts *turnState)
 
 func (al *AgentLoop) getActiveTurnState(sessionKey string) *turnState {
 	if val, ok := al.activeTurnStates.Load(sessionKey); ok {
-		return val.(*turnState)
+		ts, ok := val.(*turnState)
+		if !ok {
+			logger.ErrorCF("agent", "activeTurnStates: invariant violated — unexpected value type",
+				map[string]any{"session_key": sessionKey, "got_type": fmt.Sprintf("%T", val)})
+			return nil
+		}
+		return ts
 	}
 	return nil
 }
@@ -724,7 +730,13 @@ func (al *AgentLoop) getActiveTurnState(sessionKey string) *turnState {
 func (al *AgentLoop) getAnyActiveTurnState() *turnState {
 	var firstTS *turnState
 	al.activeTurnStates.Range(func(key, value any) bool {
-		firstTS = value.(*turnState)
+		ts, ok := value.(*turnState)
+		if !ok {
+			logger.ErrorCF("agent", "activeTurnStates: invariant violated — unexpected value type, skipping entry",
+				map[string]any{"key": key, "got_type": fmt.Sprintf("%T", value)})
+			return true // keep scanning for a valid entry
+		}
+		firstTS = ts
 		return false // stop after first
 	})
 	return firstTS
@@ -735,7 +747,13 @@ func (al *AgentLoop) GetActiveTurn() *ActiveTurnInfo {
 	// In the new architecture, there can be multiple concurrent turns
 	var firstTS *turnState
 	al.activeTurnStates.Range(func(key, value any) bool {
-		firstTS = value.(*turnState)
+		ts, ok := value.(*turnState)
+		if !ok {
+			logger.ErrorCF("agent", "activeTurnStates: invariant violated — unexpected value type, skipping entry",
+				map[string]any{"key": key, "got_type": fmt.Sprintf("%T", value)})
+			return true // keep scanning for a valid entry
+		}
+		firstTS = ts
 		return false // stop after first
 	})
 	if firstTS == nil {
@@ -750,7 +768,12 @@ func (al *AgentLoop) GetActiveTurn() *ActiveTurnInfo {
 func (al *AgentLoop) GetActiveAgentIDs() []string {
 	seen := make(map[string]struct{})
 	al.activeTurnStates.Range(func(_, value any) bool {
-		ts := value.(*turnState)
+		ts, ok := value.(*turnState)
+		if !ok {
+			logger.ErrorCF("agent", "activeTurnStates: invariant violated — unexpected value type, skipping entry",
+				map[string]any{"got_type": fmt.Sprintf("%T", value)})
+			return true
+		}
 		ts.mu.RLock()
 		id := ts.agentID
 		ts.mu.RUnlock()
@@ -838,7 +861,12 @@ func (al *AgentLoop) GetActiveTurnHookForSession(sessionID string) TurnCancelHoo
 	var rootMatch *turnState
 	var anyMatch *turnState
 	al.activeTurnStates.Range(func(_, value any) bool {
-		ts := value.(*turnState)
+		ts, ok := value.(*turnState)
+		if !ok {
+			logger.ErrorCF("agent", "activeTurnStates: invariant violated — unexpected value type, skipping entry",
+				map[string]any{"got_type": fmt.Sprintf("%T", value)})
+			return true
+		}
 		if string(ts.routingSessionID) != sessionID {
 			return true
 		}
@@ -942,7 +970,12 @@ func (al *AgentLoop) ProgressForSession(sessionKey string) (tools.ToolCallProgre
 func (al *AgentLoop) resolveSessionIDByChannelChat(channel, chatID string) string {
 	var rootTS *turnState
 	al.activeTurnStates.Range(func(_, value any) bool {
-		ts := value.(*turnState)
+		ts, ok := value.(*turnState)
+		if !ok {
+			logger.ErrorCF("agent", "activeTurnStates: invariant violated — unexpected value type, skipping entry",
+				map[string]any{"got_type": fmt.Sprintf("%T", value)})
+			return true
+		}
 		ts.mu.RLock()
 		ch := ts.channel
 		cid := ts.chatID
@@ -1008,7 +1041,12 @@ func (al *AgentLoop) claimAnyTurnForSession(sessionID string) TurnCancelHook {
 	}
 	var claimed *turnState
 	al.activeTurnStates.Range(func(_, value any) bool {
-		ts := value.(*turnState)
+		ts, ok := value.(*turnState)
+		if !ok {
+			logger.ErrorCF("agent", "activeTurnStates: invariant violated — unexpected value type, skipping entry",
+				map[string]any{"got_type": fmt.Sprintf("%T", value)})
+			return true
+		}
 		// ADR-057 merge rebase: release wrote this predicate pre-identity-split,
 		// matching transcriptSessionID. Post-D1 a delegated child's
 		// transcriptSessionID is its OWN id, so that match can never find the
@@ -1067,7 +1105,12 @@ func (al *AgentLoop) claimAnyTurnForSession(sessionID string) TurnCancelHook {
 func (al *AgentLoop) getActiveRootTurnStateForSession(sessionID string) *turnState {
 	var root *turnState
 	al.activeTurnStates.Range(func(_, value any) bool {
-		ts := value.(*turnState)
+		ts, ok := value.(*turnState)
+		if !ok {
+			logger.ErrorCF("agent", "activeTurnStates: invariant violated — unexpected value type, skipping entry",
+				map[string]any{"got_type": fmt.Sprintf("%T", value)})
+			return true
+		}
 		if string(ts.routingSessionID) != sessionID {
 			return true
 		}
@@ -2049,7 +2092,13 @@ func (ts *turnState) Finish(isHardAbort bool) {
 		ts.mu.RUnlock()
 		for _, childID := range children {
 			if val, ok := ts.al.activeTurnStates.Load(childID); ok {
-				val.(*turnState).Finish(true)
+				childTS, ok := val.(*turnState)
+				if !ok {
+					logger.ErrorCF("agent", "activeTurnStates: invariant violated — unexpected value type, skipping child hard-abort cascade",
+						map[string]any{"child_turn_id": childID, "got_type": fmt.Sprintf("%T", val)})
+					continue
+				}
+				childTS.Finish(true)
 			}
 		}
 	}

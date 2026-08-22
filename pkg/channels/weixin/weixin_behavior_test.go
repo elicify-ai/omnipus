@@ -89,7 +89,15 @@ func TestHandleInboundMessage_TextDispatchesAndStoresContextToken(t *testing.T) 
 		t.Fatalf("message_id=%q", inbound.MessageID)
 	}
 	// context_token must be cached so an outbound reply can be associated.
-	if v, ok := ch.contextTokens.Load("user-1"); !ok || v.(string) != "ctx-1" {
+	v, ok := ch.contextTokens.Load("user-1")
+	if !ok {
+		t.Fatalf("context token not stored: %v ok=%v", v, ok)
+	}
+	vStr, ok := v.(string)
+	if !ok {
+		t.Fatalf("context token has unexpected type %T, want string", v)
+	}
+	if vStr != "ctx-1" {
 		t.Fatalf("context token not stored: %v ok=%v", v, ok)
 	}
 }

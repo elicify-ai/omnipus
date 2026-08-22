@@ -531,13 +531,21 @@ func (c *LINEChannel) Send(ctx context.Context, msg bus.OutboundMessage) error {
 	// Load and consume quote token for this chat
 	var quoteToken string
 	if qt, ok := c.quoteTokens.LoadAndDelete(msg.ChatID); ok {
-		quoteToken = qt.(string)
+		if s, ok := qt.(string); ok {
+			quoteToken = s
+		} else {
+			logger.WarnCF("line", "quoteTokens: unexpected value type, dropping quote token",
+				map[string]any{"chat_id": msg.ChatID, "got_type": fmt.Sprintf("%T", qt)})
+		}
 	}
 
 	// Try reply token first (free, valid for ~25 seconds)
 	if entry, ok := c.replyTokens.LoadAndDelete(msg.ChatID); ok {
-		tokenEntry := entry.(replyTokenEntry)
-		if time.Since(tokenEntry.timestamp) < lineReplyTokenMaxAge {
+		tokenEntry, ok := entry.(replyTokenEntry)
+		if !ok {
+			logger.WarnCF("line", "replyTokens: unexpected value type, falling back to Push API",
+				map[string]any{"chat_id": msg.ChatID, "got_type": fmt.Sprintf("%T", entry)})
+		} else if time.Since(tokenEntry.timestamp) < lineReplyTokenMaxAge {
 			if err := c.sendReply(ctx, tokenEntry.token, msg.Content, quoteToken); err == nil {
 				logger.DebugCF("line", "Message sent via Reply API", map[string]any{
 					"chat_id": msg.ChatID,

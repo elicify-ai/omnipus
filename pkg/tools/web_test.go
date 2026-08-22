@@ -1488,7 +1488,10 @@ func TestWebTool_TavilySearch_Failover(t *testing.T) {
 			t.Fatalf("failed to decode payload: %v", err)
 		}
 
-		apiKey := payload["api_key"].(string)
+		apiKey, ok := payload["api_key"].(string)
+		if !ok {
+			t.Fatalf("unexpected type %T for payload[\"api_key\"], want string", payload["api_key"])
+		}
 
 		if apiKey == "key1" {
 			w.WriteHeader(http.StatusTooManyRequests)

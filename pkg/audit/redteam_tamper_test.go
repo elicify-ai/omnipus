@@ -127,7 +127,9 @@ func TestRedteam_AuditLog_TruncationDetected(t *testing.T) {
 	if res == nil || res.IsValid() {
 		t.Errorf("C2-AUDIT (truncation): verifier reported the chain VALID after truncate+forge — fix is broken")
 	} else {
-		t.Logf("closed: tamper detected via HMAC chain at %s", res.(interface{ String() string }).String())
+		stringer, ok := res.(interface{ String() string })
+		require.True(t, ok, "expected chainVerificationResult %T to implement fmt.Stringer", res)
+		t.Logf("closed: tamper detected via HMAC chain at %s", stringer.String())
 	}
 }
 
@@ -213,7 +215,9 @@ func TestRedteam_AuditLog_RewriteDetected(t *testing.T) {
 	if res == nil || res.IsValid() {
 		t.Errorf("C2-AUDIT (rewrite): verifier reported the chain VALID after rewriting entry #1 — fix is broken")
 	} else {
-		t.Logf("closed: tamper detected via HMAC chain at %s", res.(interface{ String() string }).String())
+		stringer, ok := res.(interface{ String() string })
+		require.True(t, ok, "expected chainVerificationResult %T to implement fmt.Stringer", res)
+		t.Logf("closed: tamper detected via HMAC chain at %s", stringer.String())
 	}
 }
 

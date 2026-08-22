@@ -226,7 +226,11 @@ func TestCronService_ExecutionFlow(t *testing.T) {
 
 	// check that the job is removed after execution (DeleteAfterRun = true)
 	status := cs.Status()
-	if status["jobs"].(int) != 0 {
+	jobsCount, ok := status["jobs"].(int)
+	if !ok {
+		t.Fatalf("status[\"jobs\"] has unexpected type %T, want int", status["jobs"])
+	}
+	if jobsCount != 0 {
 		t.Errorf("Job should be deleted after run, got count: %v", status["jobs"])
 	}
 }

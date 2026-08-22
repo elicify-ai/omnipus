@@ -53,6 +53,7 @@ package browser
 // metadata, and single-flights concurrent misses.
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -603,7 +604,19 @@ func cachedVerifyChromeSHA256(binaryPath, shaPath string) error {
 	flight := &shaVerifyFlight{done: make(chan struct{})}
 	actual, loaded := globalSHAVerifyFlights.LoadOrStore(key, flight)
 	if loaded {
-		<-actual.(*shaVerifyFlight).done
+		other, ok := actual.(*shaVerifyFlight)
+		if !ok {
+			// globalSHAVerifyFlights is populated exclusively by this
+			// function with *shaVerifyFlight values; a different type
+			// under this key means the map invariant was corrupted by a
+			// programming error elsewhere. This coordinates concurrent
+			// Chrome SHA256 integrity verification, so silently
+			// proceeding without waiting on the in-flight verification
+			// could let a caller treat an unverified binary as verified.
+			// Abort loudly instead.
+			panic(fmt.Sprintf("globalSHAVerifyFlights: invariant violated for key %v: got %T, want *shaVerifyFlight", key, actual))
+		}
+		<-other.done
 		if _, hit, fresh := shaVerifyCacheHit(binaryPath, shaPath); hit && fresh {
 			entry, _, _ := shaVerifyCacheLookup(binaryPath, shaPath)
 			return entry.err

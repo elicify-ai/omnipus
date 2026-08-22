@@ -1127,7 +1127,13 @@ func (al *AgentLoop) ContextBuilderRegistry() *ContextBuilderRegistry {
 // one was found. Used by the WebSocket lazy-CAS logic (FR-024).
 func (al *AgentLoop) GetCurrentSession(agentID string) (string, bool) {
 	if v, ok := al.agentCurrentSession.Load(agentID); ok {
-		return v.(string), true
+		s, ok := v.(string)
+		if !ok {
+			logger.ErrorCF("agent", "agentCurrentSession: invariant violated — unexpected value type",
+				map[string]any{"agent_id": agentID, "got_type": fmt.Sprintf("%T", v)})
+			return "", false
+		}
+		return s, true
 	}
 	return "", false
 }
@@ -1149,7 +1155,13 @@ func (al *AgentLoop) RegisterIdleTicker(sessionID string, cancel context.CancelF
 // No-op if no ticker is registered.
 func (al *AgentLoop) cancelIdleTicker(sessionID string) {
 	if v, ok := al.idleTickers.LoadAndDelete(sessionID); ok {
-		v.(context.CancelFunc)()
+		cancel, ok := v.(context.CancelFunc)
+		if !ok {
+			logger.ErrorCF("agent", "idleTickers: invariant violated — unexpected value type",
+				map[string]any{"session_id": sessionID, "got_type": fmt.Sprintf("%T", v)})
+			return
+		}
+		cancel()
 	}
 }
 
@@ -3512,11 +3524,16 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 			// drained. When exiting=true we fall through to the spawn path
 			// below, which will create a fresh worker.
 			if existing, ok := al.sessionWorkers.Load(scope); ok {
-				if w := existing.(*sessionWorker); !w.exiting.Load() {
+				w, ok := existing.(*sessionWorker)
+				if !ok {
+					logger.ErrorCF("agent", "sessionWorkers: invariant violated — unexpected value type",
+						map[string]any{"scope": scope, "got_type": fmt.Sprintf("%T", existing)})
+					// Fall through to spawn a replacement, same as a dying worker.
+				} else if !w.exiting.Load() {
 					w.enqueue(msg)
 					continue
 				}
-				// Dying worker — fall through to spawn replacement.
+				// Dying worker (or corrupted entry) — fall through to spawn replacement.
 			}
 
 			// No worker yet — atomically claim an admission slot for this scope.
@@ -3567,8 +3584,14 @@ func (al *AgentLoop) stopSessionWorkers() {
 	// Collect first, then cancel — avoids holding sync.Map's range lock
 	// while canceling (which could deadlock against concurrent Store calls).
 	var workers []*sessionWorker
-	al.sessionWorkers.Range(func(_, v any) bool {
-		workers = append(workers, v.(*sessionWorker))
+	al.sessionWorkers.Range(func(k, v any) bool {
+		w, ok := v.(*sessionWorker)
+		if !ok {
+			logger.ErrorCF("agent", "sessionWorkers: invariant violated — unexpected value type, skipping shutdown for this entry",
+				map[string]any{"scope": k, "got_type": fmt.Sprintf("%T", v)})
+			return true
+		}
+		workers = append(workers, w)
 		return true
 	})
 
@@ -3914,7 +3937,13 @@ func (al *AgentLoop) Close() {
 
 	// Lane S (FR-025): cancel all outstanding idle tickers on shutdown.
 	al.idleTickers.Range(func(k, v any) bool {
-		v.(context.CancelFunc)()
+		cancel, ok := v.(context.CancelFunc)
+		if !ok {
+			logger.ErrorCF("agent", "idleTickers: invariant violated — unexpected value type, skipping cancel for this entry",
+				map[string]any{"session_id": k, "got_type": fmt.Sprintf("%T", v)})
+		} else {
+			cancel()
+		}
 		al.idleTickers.Delete(k)
 		return true
 	})
@@ -4790,7 +4819,13 @@ func (al *AgentLoop) GetSessionActiveAgent(sessionID string) (string, bool) {
 		return "", false
 	}
 	if v, ok := al.sessionActiveAgent.Load("session:" + sessionID); ok {
-		return v.(string), true
+		s, ok := v.(string)
+		if !ok {
+			logger.ErrorCF("agent", "sessionActiveAgent: invariant violated — unexpected value type",
+				map[string]any{"session_id": sessionID, "got_type": fmt.Sprintf("%T", v)})
+			return "", false
+		}
+		return s, true
 	}
 	return "", false
 }
@@ -5540,7 +5575,11 @@ func (al *AgentLoop) resolveOrCreateChannelSession(
 	}
 	key := indexID + "/" + chatID
 	if v, ok := al.channelSessionIdx.Load(key); ok {
-		return v.(string)
+		if s, ok := v.(string); ok {
+			return s
+		}
+		logger.ErrorCF("agent", "channelSessionIdx: invariant violated — unexpected value type, treating as cache miss",
+			map[string]any{"key": key, "got_type": fmt.Sprintf("%T", v)})
 	}
 	title := displayName
 	if title == "" {
@@ -7067,7 +7106,16 @@ func (al *AgentLoop) resolveMessageRoute(msg bus.InboundMessage) (routing.Resolv
 				// Clear stale handoff override only when the explicit target differs from
 				// the current override. If the user selects the same agent that the handoff
 				// already set, clearing the override would incorrectly reset routing state.
-				if cur, ok := al.sessionActiveAgent.Load(sessionScopeKey(msg)); !ok || cur.(string) != explicitID {
+				curStr, curOK := "", false
+				cur, ok := al.sessionActiveAgent.Load(sessionScopeKey(msg))
+				if ok {
+					curStr, curOK = cur.(string)
+					if !curOK {
+						logger.ErrorCF("agent", "sessionActiveAgent: invariant violated — unexpected value type, clearing stale entry",
+							map[string]any{"session_id": msg.SessionID, "got_type": fmt.Sprintf("%T", cur)})
+					}
+				}
+				if !ok || !curOK || curStr != explicitID {
 					al.sessionActiveAgent.Delete(sessionScopeKey(msg))
 				}
 				logger.InfoCF("agent", "Routed to explicit agent (dropdown)", map[string]any{
@@ -7093,8 +7141,13 @@ func (al *AgentLoop) resolveMessageRoute(msg bus.InboundMessage) (routing.Resolv
 	{
 		scopeKey := sessionScopeKey(msg)
 		if activeAgent, ok := al.sessionActiveAgent.Load(scopeKey); ok {
-			agentID := activeAgent.(string)
-			if agentID != "" {
+			agentID, agentIDOK := activeAgent.(string)
+			if !agentIDOK {
+				logger.ErrorCF("agent", "sessionActiveAgent: invariant violated — unexpected value type, clearing stale entry",
+					map[string]any{"session_id": msg.SessionID, "got_type": fmt.Sprintf("%T", activeAgent)})
+				al.sessionActiveAgent.Delete(scopeKey)
+			}
+			if agentIDOK && agentID != "" {
 				if agent, ok := registry.GetAgent(agentID); ok {
 					// A worker must never be a live chat target. A pin that points at
 					// a worker is stale/illegitimate (handoff now rejects worker

@@ -233,8 +233,10 @@ func GlobalNormalizeCache() NormalizeCache {
 // and regression tests; not on the NormalizeCache interface (the hot
 // path is branch-free).
 func GlobalNormalizeCacheStats() NormalizeCacheStats {
-	c := GlobalNormalizeCache().(*lruCache)
-	return c.stats()
+	globalNormalizeCacheOnce.Do(func() {
+		globalNormalizeCache = newLRUCache(normalizeCacheCapacity)
+	})
+	return globalNormalizeCache.stats()
 }
 
 // HashRawBytes returns the sha256 of raw bytes — a small helper so the

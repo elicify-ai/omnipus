@@ -224,7 +224,10 @@ func TestStripAgentsListOnDisk_SplitsCoreAndCustomIDs(t *testing.T) {
 	if unmarshalErr := json.Unmarshal(written, &m); unmarshalErr != nil {
 		t.Fatalf("unmarshal written bytes: %v", unmarshalErr)
 	}
-	agents := m["agents"].(map[string]any)
+	agents, ok := m["agents"].(map[string]any)
+	if !ok {
+		t.Fatalf("m[\"agents\"] has unexpected type %T, want map[string]any", m["agents"])
+	}
 	if _, hasList := agents["list"]; hasList {
 		t.Error("written bytes must not contain agents.list")
 	}

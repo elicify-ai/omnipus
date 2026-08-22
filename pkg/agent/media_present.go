@@ -15,6 +15,7 @@ package agent
 // gate, manifest refcount lifecycle) are first-class types in this file.
 
 import (
+	"fmt"
 	"sync"
 
 	"github.com/elicify-ai/omnipus/pkg/logger"
@@ -237,7 +238,19 @@ func (al *AgentLoop) getWorkspaceLibrary(workspaceID string) *library.Library {
 	// for this workspace wins deterministically — both are valid, but we
 	// keep exactly one to avoid split refcount state.
 	actual, _ := al.workspaceLibCache.LoadOrStore(workspaceID, lib)
-	return actual.(*library.Library)
+	loaded, ok := actual.(*library.Library)
+	if !ok {
+		logger.ErrorCF(
+			"agent",
+			"media library: workspaceLibCache invariant violated — unexpected value type, refcount tracking disabled",
+			map[string]any{
+				"workspace_id": workspaceID,
+				"got_type":     fmt.Sprintf("%T", actual),
+			},
+		)
+		return nil
+	}
+	return loaded
 }
 
 // decrementSessionMediaRefcounts is the FR-007a decrement call-site: when

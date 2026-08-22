@@ -801,28 +801,32 @@ func TestBuildInputAction_KeyDown_EnterPerformsDefaultAction(t *testing.T) {
 	// Enter with no client-supplied text: synthesized "\r", type keyDown.
 	action, err := buildInputAction(LiveInput{Kind: "key_down", Key: "Enter", Code: "Enter", KeyCode: 13})
 	require.NoError(t, err)
-	p := action.(*input.DispatchKeyEventParams)
+	p, ok := action.(*input.DispatchKeyEventParams)
+	require.True(t, ok, "Enter key_down must build a *input.DispatchKeyEventParams")
 	require.Equal(t, input.KeyDown, p.Type, "Enter must dispatch as keyDown, not rawKeyDown")
 	require.Equal(t, "\r", p.Text, "Enter must carry the CR text that triggers default actions")
 
 	// Client-supplied text also upgrades to keyDown, verbatim.
 	action, err = buildInputAction(LiveInput{Kind: "key_down", Key: "a", Code: "KeyA", KeyCode: 65, Text: "a"})
 	require.NoError(t, err)
-	p = action.(*input.DispatchKeyEventParams)
+	p, ok = action.(*input.DispatchKeyEventParams)
+	require.True(t, ok, "key_down with client-supplied text must build a *input.DispatchKeyEventParams")
 	require.Equal(t, input.KeyDown, p.Type)
 	require.Equal(t, "a", p.Text)
 
 	// A textless non-Enter key stays rawKeyDown (no text processing to run).
 	action, err = buildInputAction(LiveInput{Kind: "key_down", Key: "ArrowDown", Code: "ArrowDown", KeyCode: 40})
 	require.NoError(t, err)
-	p = action.(*input.DispatchKeyEventParams)
+	p, ok = action.(*input.DispatchKeyEventParams)
+	require.True(t, ok, "textless key_down must build a *input.DispatchKeyEventParams")
 	require.Equal(t, input.KeyRawDown, p.Type)
 	require.Empty(t, p.Text)
 
 	// key_up never synthesizes text, even for Enter.
 	action, err = buildInputAction(LiveInput{Kind: "key_up", Key: "Enter", Code: "Enter", KeyCode: 13})
 	require.NoError(t, err)
-	p = action.(*input.DispatchKeyEventParams)
+	p, ok = action.(*input.DispatchKeyEventParams)
+	require.True(t, ok, "Enter key_up must build a *input.DispatchKeyEventParams")
 	require.Equal(t, input.KeyUp, p.Type)
 	require.Empty(t, p.Text)
 }
@@ -1402,7 +1406,8 @@ func TestLiveView_RescaleToCSSViewport(t *testing.T) {
 				calls++
 				require.Equal(t, viewportInputFetchTimeout, timeout,
 					"the input-path fetch must use the short viewportInputFetchTimeout, not viewportSetTimeout")
-				lm := actions[0].(layoutMetricsAction)
+				lm, ok := actions[0].(layoutMetricsAction)
+				require.True(t, ok, "runCDP action must be a layoutMetricsAction")
 				*lm.w, *lm.h = 1280, 720
 				return nil
 			},

@@ -177,8 +177,12 @@ func TestOnChatBotMessageReceived_StoresSessionWebhookForReply(t *testing.T) {
 	if !ok {
 		t.Fatal("expected session webhook stored under conversation id")
 	}
-	if got.(string) != "https://example.com/reply-22" {
-		t.Fatalf("stored webhook=%q", got)
+	gotStr, ok := got.(string)
+	if !ok {
+		t.Fatalf("stored webhook has unexpected type %T, want string", got)
+	}
+	if gotStr != "https://example.com/reply-22" {
+		t.Fatalf("stored webhook=%q", gotStr)
 	}
 }
 

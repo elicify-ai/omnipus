@@ -104,7 +104,8 @@ func TestAuditFieldRedact_SensitiveFieldAliases(t *testing.T) {
 			var decoded map[string]any
 			require.NoError(t, json.Unmarshal(written, &decoded))
 
-			params := decoded["parameters"].(map[string]any)
+			params, paramsOk := decoded["parameters"].(map[string]any)
+			require.True(t, paramsOk, "decoded[\"parameters\"] must be a map[string]any, got %T", decoded["parameters"])
 			redactedVal, ok := params[tc.fieldName]
 			require.True(t, ok,
 				"field %q must still be present in output (just redacted)", tc.fieldName)
@@ -158,7 +159,8 @@ func TestAuditFieldRedact_NestedStructure(t *testing.T) {
 	var decoded map[string]any
 	require.NoError(t, json.Unmarshal(written, &decoded))
 
-	params := decoded["parameters"].(map[string]any)
+	params, paramsOk := decoded["parameters"].(map[string]any)
+	require.True(t, paramsOk, "decoded[\"parameters\"] must be a map[string]any, got %T", decoded["parameters"])
 
 	// Outer field must still be a map (not redacted at top level)
 	outer, ok := params["outer"].(map[string]any)
@@ -214,22 +216,27 @@ func TestAuditFieldRedact_ArrayWithSensitiveObjects(t *testing.T) {
 	var decoded map[string]any
 	require.NoError(t, json.Unmarshal(written, &decoded))
 
-	details := decoded["details"].(map[string]any)
-	list := details["list"].([]any)
+	details, detailsOk := decoded["details"].(map[string]any)
+	require.True(t, detailsOk, "decoded[\"details\"] must be a map[string]any, got %T", decoded["details"])
+	list, listOk := details["list"].([]any)
+	require.True(t, listOk, "details[\"list\"] must be a []any, got %T", details["list"])
 	require.Len(t, list, 3, "array must retain all elements after redaction")
 
 	// First element: token must be redacted
-	first := list[0].(map[string]any)
+	first, firstOk := list[0].(map[string]any)
+	require.True(t, firstOk, "list[0] must be a map[string]any, got %T", list[0])
 	assert.Equal(t, "[REDACTED]", first["token"],
 		"token in first array element must be redacted")
 
 	// Second element: safe field must pass through
-	second := list[1].(map[string]any)
+	second, secondOk := list[1].(map[string]any)
+	require.True(t, secondOk, "list[1] must be a map[string]any, got %T", list[1])
 	assert.Equal(t, "ok", second["safe"],
 		"safe field in second array element must be preserved")
 
 	// Third element: password redacted, name preserved
-	third := list[2].(map[string]any)
+	third, thirdOk := list[2].(map[string]any)
+	require.True(t, thirdOk, "list[2] must be a map[string]any, got %T", list[2])
 	assert.Equal(t, "[REDACTED]", third["password"],
 		"password in third array element must be redacted")
 	assert.Equal(t, "alice", third["name"],
@@ -270,7 +277,8 @@ func TestAuditFieldRedact_ValuePatternBearerString(t *testing.T) {
 	var decoded map[string]any
 	require.NoError(t, json.Unmarshal(written, &decoded))
 
-	details := decoded["details"].(map[string]any)
+	details, detailsOk := decoded["details"].(map[string]any)
+	require.True(t, detailsOk, "decoded[\"details\"] must be a map[string]any, got %T", decoded["details"])
 
 	// Value-pattern layer must redact the Bearer token in the "debug" field
 	// even though "debug" is not a sensitive field name.
@@ -313,8 +321,10 @@ func TestAuditFieldRedact_AlreadyRedacted(t *testing.T) {
 	var decoded map[string]any
 	require.NoError(t, json.Unmarshal(written, &decoded))
 
-	params := decoded["parameters"].(map[string]any)
-	tokenVal := params["token"].(string)
+	params, paramsOk := decoded["parameters"].(map[string]any)
+	require.True(t, paramsOk, "decoded[\"parameters\"] must be a map[string]any, got %T", decoded["parameters"])
+	tokenVal, tokenOk := params["token"].(string)
+	require.True(t, tokenOk, "params[\"token\"] must be a string, got %T", params["token"])
 
 	// Must remain exactly "[REDACTED]" — no double-wrapping
 	assert.Equal(t, "[REDACTED]", tokenVal,
@@ -365,7 +375,8 @@ func TestAuditFieldRedact_EdgeCases_NilEmptyNumberBool(t *testing.T) {
 	require.NoError(t, json.Unmarshal(written, &decoded),
 		"log entry with primitive sensitive values must produce valid JSON")
 
-	params := decoded["parameters"].(map[string]any)
+	params, paramsOk := decoded["parameters"].(map[string]any)
+	require.True(t, paramsOk, "decoded[\"parameters\"] must be a map[string]any, got %T", decoded["parameters"])
 
 	// Sensitive fields must be handled (either [REDACTED] or nil — no crash)
 	// The exact output for nil/number/bool is implementation-defined per

@@ -198,20 +198,21 @@ func (t *MCPAddTool) Execute(ctx context.Context, args map[string]any) *tools.To
 		"transport": transport,
 		"enabled":   true,
 	}
+	var note string
 	if t.deps.MCPStatus != nil {
 		status, toolCount, errMsg := t.deps.MCPStatus(name)
 		result["status"] = status
 		switch status {
 		case "connected":
 			result["tool_count"] = toolCount
-			result["note"] = fmt.Sprintf(
+			note = fmt.Sprintf(
 				"Server connected; %d tool(s) registered and awaiting tool-policy assignment.", toolCount)
 		case "error":
 			// The config write DID succeed — only the live connection failed.
-			result["note"] = fmt.Sprintf(
+			note = fmt.Sprintf(
 				"Server saved but connection failed: %s. Fix the config and try again.", errMsg)
 		default: // "disconnected"
-			result["note"] = "Server saved but not currently connected " +
+			note = "Server saved but not currently connected " +
 				"(server disabled, or live reconciliation is unavailable)."
 		}
 	} else if reconcileAttempted && reconcileErr != nil {
@@ -219,7 +220,7 @@ func (t *MCPAddTool) Execute(ctx context.Context, args map[string]any) *tools.To
 		// readback to report a live status from. Say so explicitly rather
 		// than falling back to the "connects on next reload" note below,
 		// which would silently swallow a real reconcile error.
-		result["note"] = fmt.Sprintf(
+		note = fmt.Sprintf(
 			"Server saved but live reconciliation failed: %s. Connection status is unknown.", reconcileErr)
 	} else {
 		// Either live reconciliation isn't wired at all (tests, or a
@@ -227,7 +228,7 @@ func (t *MCPAddTool) Execute(ctx context.Context, args map[string]any) *tools.To
 		// MCPStatus readback available. Reload now actually connects MCP
 		// servers (see AgentLoop.ReconcileMCP), so this note remains
 		// accurate even without a live status readback.
-		result["note"] = "Server added to config. It connects on the next agent-loop reload."
+		note = "Server added to config. It connects on the next agent-loop reload."
 	}
 
 	// Surface the global-kill-switch outcome honestly: an operator reading
@@ -236,11 +237,11 @@ func (t *MCPAddTool) Execute(ctx context.Context, args map[string]any) *tools.To
 	// nothing was even attempted."
 	switch {
 	case flippedGlobalEnable:
-		result["note"] = result["note"].(string) + " Global MCP enable was off — turned on."
+		note += " Global MCP enable was off — turned on."
 	case gatedGlobalDisabled:
-		result["note"] = result["note"].(string) +
-			" MCP is globally disabled — an operator must enable tools.mcp.enabled for this server to connect."
+		note += " MCP is globally disabled — an operator must enable tools.mcp.enabled for this server to connect."
 	}
+	result["note"] = note
 
 	return tools.NewToolResult(successJSON(result))
 }

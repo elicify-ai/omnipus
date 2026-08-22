@@ -31,18 +31,30 @@ import (
 // pkg/ or cmd/ — the FR-001 regression this guard exists to catch.
 //
 // It deliberately does NOT flag:
+//
 //   - pkg/workspace/ (skipped entirely) and any `workspace.Workspace` /
 //     `workspacepkg.Workspace` / `gen.Workspace`-qualified reference — the
 //     UNRELATED, still-live pkg/workspace.Workspace multi-agent Workspace
 //     feature (CoreTeam, REST-CRUD, delegation graph). The two concepts
 //     share an English word by historical accident, not by design.
+//
 //   - pkg/api/generated/ — machine-generated from contracts/*.yaml; never
 //     hand-edited, and regenerating it is outside the scope of a pure Go
 //     identifier rename (no wire-shape/schema change is involved here).
+//
 //   - env:"..."/json:"..." struct-tag strings — the persisted wire/env
 //     format is deliberately frozen (existing config.json files must keep
 //     parsing), so e.g. Home string with tag json:"workspace,omitempty" is
 //     correct and must never be flagged.
+//     NOTE ON FRAGILITY: the allowlist pins absolute LINE NUMBERS, so ANY edit
+//     that adds or removes lines above an entry in the same file shifts it and
+//     makes this guard report the same, unchanged code as a fresh violation.
+//     That is exactly what happened when dead exports were removed from
+//     openclaw_config.go: all seven entries moved by a uniform -22. If this test
+//     fails with a uniform offset across every entry in one file, the code did
+//     not regress — re-point the entries. A content-based anchor would be more
+//     robust, but line numbers keep the allowlist reviewable at a glance.
+//
 //   - a documented, reviewed file:line allowlist (allowedWorkspaceIdentifierLines
 //     below) for the two unrelated types that happen to share the field
 //     name "Workspace" by coincidence, plus one comment heading — see the
@@ -163,7 +175,7 @@ func TestNoAgentConfigWorkspaceIdentifier(t *testing.T) {
 //     declared later in the SAME file are a package-private staging format
 //     used only to shuttle data between the two schemas before
 //     ToStandardConfig() writes the REAL config.AgentConfig/AgentDefaults —
-//     which correctly uses .Home (openclaw_config.go:911,938 — NOT
+//     which correctly uses .Home (openclaw_config.go:889,916 — NOT
 //     allowlisted, and must never be added here).
 //   - (retired) pkg/sandbox/sandbox.go's comment heading ("// Workspace: full
 //     RWX ...", a prose label), not a struct field or composite literal.
@@ -195,13 +207,13 @@ var allowedWorkspaceIdentifierLines = map[string]bool{
 	"pkg/skills/github_registry_test.go:238": true,
 	"pkg/skills/github_registry_test.go:321": true,
 
-	"pkg/migrate/sources/openclaw/openclaw_config.go:396": true,
-	"pkg/migrate/sources/openclaw/openclaw_config.go:399": true,
-	"pkg/migrate/sources/openclaw/openclaw_config.go:438": true,
-	"pkg/migrate/sources/openclaw/openclaw_config.go:884": true,
-	"pkg/migrate/sources/openclaw/openclaw_config.go:885": true,
-	"pkg/migrate/sources/openclaw/openclaw_config.go:911": true,
-	"pkg/migrate/sources/openclaw/openclaw_config.go:938": true,
+	"pkg/migrate/sources/openclaw/openclaw_config.go:374": true,
+	"pkg/migrate/sources/openclaw/openclaw_config.go:377": true,
+	"pkg/migrate/sources/openclaw/openclaw_config.go:416": true,
+	"pkg/migrate/sources/openclaw/openclaw_config.go:862": true,
+	"pkg/migrate/sources/openclaw/openclaw_config.go:863": true,
+	"pkg/migrate/sources/openclaw/openclaw_config.go:889": true,
+	"pkg/migrate/sources/openclaw/openclaw_config.go:916": true,
 
 	"pkg/migrate/sources/openclaw/openclaw_config_test.go:248": true,
 	"pkg/migrate/sources/openclaw/openclaw_config_test.go:249": true,

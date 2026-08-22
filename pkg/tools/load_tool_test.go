@@ -83,7 +83,11 @@ func loadedNames(t *testing.T, m map[string]any) []string {
 	}
 	names := make([]string, len(sl))
 	for i, v := range sl {
-		names[i] = v.(string)
+		s, ok := v.(string)
+		if !ok {
+			t.Fatalf("'loaded' element %d is not a string, got %T", i, v)
+		}
+		names[i] = s
 	}
 	return names
 }
@@ -100,7 +104,11 @@ func rejectedNames(t *testing.T, m map[string]any) []string {
 	}
 	names := make([]string, len(sl))
 	for i, v := range sl {
-		names[i] = v.(string)
+		s, ok := v.(string)
+		if !ok {
+			t.Fatalf("'rejected' element %d is not a string, got %T", i, v)
+		}
+		names[i] = s
 	}
 	return names
 }

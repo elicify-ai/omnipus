@@ -523,7 +523,8 @@ func TestProcessScheduled_AskToolAutoDenied_EmitsScheduledAudit(t *testing.T) {
 		"audit.jsonl must contain a %q record with reason=%q; all records: %v",
 		audit.EventToolPolicyAskDenied, audit.AskDenyReasonScheduled, records)
 
-	askFields := (*askDenied)["fields"].(map[string]any)
+	askFields, ok := (*askDenied)["fields"].(map[string]any)
+	require.True(t, ok, "ask.denied record's \"fields\" must be a map[string]any, got %T", (*askDenied)["fields"])
 	assert.Equal(t, "dangerous_tool", askFields["tool_name"],
 		"ask.denied entry must name the denied tool")
 	assert.Equal(t, "INFO", (*askDenied)["severity"],
@@ -538,8 +539,8 @@ func TestProcessScheduled_AskToolAutoDenied_EmitsScheduledAudit(t *testing.T) {
 			continue
 		}
 		// Entry flat format: "details" is a top-level map.
-		details, ok := rec["details"].(map[string]any)
-		if !ok {
+		details, detailsOK := rec["details"].(map[string]any)
+		if !detailsOK {
 			continue
 		}
 		if details["schedule_job_id"] == wantJobID {
@@ -551,7 +552,8 @@ func TestProcessScheduled_AskToolAutoDenied_EmitsScheduledAudit(t *testing.T) {
 		"audit.jsonl must contain a %q record with details.schedule_job_id=%q; all records: %v",
 		audit.EventToolPolicyDenyAttempted, wantJobID, records)
 
-	denyDetails := (*denyAttempted)["details"].(map[string]any)
+	denyDetails, ok := (*denyAttempted)["details"].(map[string]any)
+	require.True(t, ok, "deny.attempted record's \"details\" must be a map[string]any, got %T", (*denyAttempted)["details"])
 	assert.Equal(t, wantJobID, denyDetails["schedule_job_id"],
 		"deny.attempted entry must carry the schedule job id")
 	assert.Equal(t, wantJobName, denyDetails["schedule_job_name"],

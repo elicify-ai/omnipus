@@ -305,7 +305,11 @@ func TestBash_TimeoutOutOfBoundsRejected(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := resolveTimeoutSeconds(map[string]any{"timeout_seconds": float64(tc.value.(int))})
+			intVal, ok := tc.value.(int)
+			if !ok {
+				t.Fatalf("unexpected type %T for tc.value, want int", tc.value)
+			}
+			_, err := resolveTimeoutSeconds(map[string]any{"timeout_seconds": float64(intVal)})
 			if tc.wantErr {
 				assert.Error(t, err, "timeout_seconds=%v must be rejected", tc.value)
 			} else {

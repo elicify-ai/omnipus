@@ -449,7 +449,11 @@ func TestOwnerWake_DeliveryFailureStillRunsTheSynthesisTurn(t *testing.T) {
 	mustCreateTask(t, h.tasks, &task.Task{
 		Title: "member", WorkspaceID: "ws", PlanID: "p1", Status: task.StatusDone,
 	})
-	h.pe.judge.(*fakePlanJudge).resultFn = func(in JudgeCriteriaInput) JudgeCriteriaResult {
+	fakeJudge, ok := h.pe.judge.(*fakePlanJudge)
+	if !ok {
+		t.Fatalf("unexpected type %T for h.pe.judge, want *fakePlanJudge", h.pe.judge)
+	}
+	fakeJudge.resultFn = func(in JudgeCriteriaInput) JudgeCriteriaResult {
 		return JudgeCriteriaResult{Verdict: &task.JudgeVerdict{
 			Met:          true,
 			PerCriterion: []task.CriterionVerdict{{CriterionID: in.Criteria[0].ID, Met: true, Reason: "done"}},
@@ -496,7 +500,11 @@ func TestZeroMemberPlan_StaysOnTheEscalationLadder(t *testing.T) {
 		State: plan.StateRunning,
 		DoD:   []task.AcceptanceCriterion{planProseCriterion("the plan is done")},
 	})
-	h.pe.judge.(*fakePlanJudge).resultFn = func(in JudgeCriteriaInput) JudgeCriteriaResult {
+	fakeJudge, ok := h.pe.judge.(*fakePlanJudge)
+	if !ok {
+		t.Fatalf("unexpected type %T for h.pe.judge, want *fakePlanJudge", h.pe.judge)
+	}
+	fakeJudge.resultFn = func(in JudgeCriteriaInput) JudgeCriteriaResult {
 		return JudgeCriteriaResult{Verdict: &task.JudgeVerdict{
 			Met:          false,
 			PerCriterion: []task.CriterionVerdict{{CriterionID: in.Criteria[0].ID, Met: false, Reason: "no evidence"}},
@@ -724,7 +732,11 @@ func TestOwnerWake_UnresolvableOwnerIsNotAuthoredByAnotherAgent(t *testing.T) {
 	mustCreateTask(t, h.tasks, &task.Task{
 		Title: "member", WorkspaceID: "ws", PlanID: "p1", Status: task.StatusDone,
 	})
-	h.pe.judge.(*fakePlanJudge).resultFn = func(in JudgeCriteriaInput) JudgeCriteriaResult {
+	fakeJudge, ok := h.pe.judge.(*fakePlanJudge)
+	if !ok {
+		t.Fatalf("unexpected type %T for h.pe.judge, want *fakePlanJudge", h.pe.judge)
+	}
+	fakeJudge.resultFn = func(in JudgeCriteriaInput) JudgeCriteriaResult {
 		return JudgeCriteriaResult{Verdict: &task.JudgeVerdict{
 			Met:          true,
 			PerCriterion: []task.CriterionVerdict{{CriterionID: in.Criteria[0].ID, Met: true, Reason: "done"}},

@@ -446,7 +446,9 @@ func TestExecute_OpenTab_RealChromium_NavigatesToURL(t *testing.T) {
 	require.False(t, openRes.IsError, "browser_open_tab{url} must succeed; got: %s", openRes.ForLLM)
 	openData := decodeJSON(t, openRes.ForLLM)
 	assert.Equal(t, "Booked", openData["title"])
-	assert.True(t, strings.Contains(openData["url"].(string), "/booked"))
+	openURL, ok := openData["url"].(string)
+	require.True(t, ok, "openData[\"url\"] must be a string, got %T", openData["url"])
+	assert.True(t, strings.Contains(openURL, "/booked"))
 
 	tabs, activeIdx, err := mgr.ListTabs(defaultSessionID)
 	require.NoError(t, err)

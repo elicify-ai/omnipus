@@ -505,7 +505,11 @@ func TestWorkspaceList_Populated(t *testing.T) {
 	names := map[string]bool{}
 	for _, w := range ws {
 		wm, _ := w.(map[string]any)
-		names[wm["name"].(string)] = true
+		name, ok := wm["name"].(string)
+		if !ok {
+			t.Fatalf("wm[\"name\"] has unexpected type %T, want string", wm["name"])
+		}
+		names[name] = true
 	}
 	if !names["First Workspace"] || !names["Second Workspace"] {
 		t.Errorf("expected both workspace names in list, got: %v", names)

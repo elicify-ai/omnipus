@@ -1520,7 +1520,10 @@ func TestConcurrencySemaphore_Timeout(t *testing.T) {
 // TestEphemeralSession_AutoTruncate verifies that ephemeral sessions automatically
 // truncate their history to prevent memory accumulation.
 func TestEphemeralSession_AutoTruncate(t *testing.T) {
-	store := newEphemeralSession(nil).(*ephemeralSessionStore)
+	store, ok := newEphemeralSession(nil).(*ephemeralSessionStore)
+	if !ok {
+		t.Fatalf("unexpected type from newEphemeralSession, want *ephemeralSessionStore")
+	}
 
 	// Add more messages than the limit
 	for i := 0; i < maxEphemeralHistorySize+20; i++ {

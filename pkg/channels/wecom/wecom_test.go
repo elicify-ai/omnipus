@@ -142,11 +142,19 @@ func TestBeginStream_UpdateAndFinalize(t *testing.T) {
 			t.Fatalf("command[%d] finish = %v, want %v", i, body.Stream.Finish, wantFinish)
 		}
 	}
-	if body := commands[0].Body.(wecomRespondMsgBody); body.Stream.Content != "draft" {
-		t.Fatalf("update content = %q, want draft", body.Stream.Content)
+	body0, ok := commands[0].Body.(wecomRespondMsgBody)
+	if !ok {
+		t.Fatalf("commands[0].Body has unexpected type %T, want wecomRespondMsgBody", commands[0].Body)
 	}
-	if body := commands[1].Body.(wecomRespondMsgBody); body.Stream.Content != "final" {
-		t.Fatalf("final content = %q, want final", body.Stream.Content)
+	if body0.Stream.Content != "draft" {
+		t.Fatalf("update content = %q, want draft", body0.Stream.Content)
+	}
+	body1, ok := commands[1].Body.(wecomRespondMsgBody)
+	if !ok {
+		t.Fatalf("commands[1].Body has unexpected type %T, want wecomRespondMsgBody", commands[1].Body)
+	}
+	if body1.Stream.Content != "final" {
+		t.Fatalf("final content = %q, want final", body1.Stream.Content)
 	}
 	if _, ok := ch.getTurn("chat-1"); ok {
 		t.Fatal("expected turn to be consumed after Finalize")

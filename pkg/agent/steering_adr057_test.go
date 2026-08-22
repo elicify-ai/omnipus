@@ -16,6 +16,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -461,7 +462,10 @@ func TestInterrupt_SelfOnlyPreservesIssue577Property(t *testing.T) {
 func naiveResolveBySharedRoutingIDOnly(al *AgentLoop, id string) []*turnState {
 	var anchors []*turnState
 	al.activeTurnStates.Range(func(_, value any) bool {
-		ts := value.(*turnState)
+		ts, ok := value.(*turnState)
+		if !ok {
+			panic(fmt.Sprintf("naiveResolveBySharedRoutingIDOnly: unexpected type %T in activeTurnStates, want *turnState", value))
+		}
 		if string(ts.routingSessionID) == id {
 			anchors = append(anchors, ts)
 		}

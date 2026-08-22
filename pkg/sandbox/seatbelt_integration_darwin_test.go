@@ -155,7 +155,9 @@ func TestSeatbelt_RealChild_NetworkDefaultDeny(t *testing.T) {
 		}
 	}()
 
-	port := ln.Addr().(*net.TCPAddr).Port
+	tcpAddr, ok := ln.Addr().(*net.TCPAddr)
+	require.True(t, ok, "listener address has unexpected type %T, want *net.TCPAddr", ln.Addr())
+	port := tcpAddr.Port
 	probe := fmt.Sprintf("exec 3<>/dev/tcp/127.0.0.1/%d && echo CONNECTED", port)
 
 	// No ConnectPortRules → every outbound connection is denied.
@@ -438,7 +440,9 @@ func TestSeatbelt_RealChild_UDPFollowsThePortAllowList(t *testing.T) {
 		}
 	}()
 
-	port := conn.LocalAddr().(*net.UDPAddr).Port
+	udpAddr, ok := conn.LocalAddr().(*net.UDPAddr)
+	require.True(t, ok, "listener address has unexpected type %T, want *net.UDPAddr", conn.LocalAddr())
+	port := udpAddr.Port
 	probe := fmt.Sprintf("echo ping | nc -u -w2 127.0.0.1 %d", port)
 
 	// Control: the port is NOT allow-listed, so UDP must be denied. Without

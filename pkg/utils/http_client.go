@@ -12,14 +12,15 @@ import (
 // If proxyURL is empty, it uses the system environment proxy settings.
 // Supported proxy schemes: http, https, socks5, socks5h.
 func CreateHTTPClient(proxyURL string, timeout time.Duration) (*http.Client, error) {
+	transport := &http.Transport{
+		MaxIdleConns:        10,
+		IdleConnTimeout:     30 * time.Second,
+		DisableCompression:  false,
+		TLSHandshakeTimeout: 15 * time.Second,
+	}
 	client := &http.Client{
-		Timeout: timeout,
-		Transport: &http.Transport{
-			MaxIdleConns:        10,
-			IdleConnTimeout:     30 * time.Second,
-			DisableCompression:  false,
-			TLSHandshakeTimeout: 15 * time.Second,
-		},
+		Timeout:   timeout,
+		Transport: transport,
 	}
 
 	if proxyURL != "" {
@@ -39,9 +40,9 @@ func CreateHTTPClient(proxyURL string, timeout time.Duration) (*http.Client, err
 		if proxy.Host == "" {
 			return nil, fmt.Errorf("invalid proxy URL: missing host")
 		}
-		client.Transport.(*http.Transport).Proxy = http.ProxyURL(proxy)
+		transport.Proxy = http.ProxyURL(proxy)
 	} else {
-		client.Transport.(*http.Transport).Proxy = http.ProxyFromEnvironment
+		transport.Proxy = http.ProxyFromEnvironment
 	}
 
 	return client, nil

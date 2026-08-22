@@ -447,8 +447,13 @@ func (al *AgentLoop) InterruptGraceful(hint string) error {
 // sync.Map. Returns nil (not an error) when no matching turns are found.
 func (al *AgentLoop) collectDescendantTurnIDs(sessionID string) []string {
 	var ids []string
-	al.activeTurnStates.Range(func(_, value any) bool {
-		ts := value.(*turnState)
+	al.activeTurnStates.Range(func(key, value any) bool {
+		ts, ok := value.(*turnState)
+		if !ok {
+			slog.Error("activeTurnStates contains non-*turnState value",
+				"session_key", key, "value_type", fmt.Sprintf("%T", value))
+			return true
+		}
 		if string(ts.routingSessionID) == sessionID {
 			ids = append(ids, ts.turnID)
 		}
@@ -553,8 +558,13 @@ func (al *AgentLoop) resolveInterruptAnchors(id string) []*turnState {
 		return []*turnState{ts}
 	}
 	var anchors []*turnState
-	al.activeTurnStates.Range(func(_, value any) bool {
-		ts := value.(*turnState)
+	al.activeTurnStates.Range(func(key, value any) bool {
+		ts, ok := value.(*turnState)
+		if !ok {
+			slog.Error("activeTurnStates contains non-*turnState value",
+				"session_key", key, "value_type", fmt.Sprintf("%T", value))
+			return true
+		}
 		if string(ts.routingSessionID) == id {
 			anchors = append(anchors, ts)
 		}
@@ -858,8 +868,13 @@ func (al *AgentLoop) sessionTurnsStillAlive(sessionID string) []*turnState {
 		return nil
 	}
 	var alive []*turnState
-	al.activeTurnStates.Range(func(_, value any) bool {
-		ts := value.(*turnState)
+	al.activeTurnStates.Range(func(key, value any) bool {
+		ts, ok := value.(*turnState)
+		if !ok {
+			slog.Error("activeTurnStates contains non-*turnState value",
+				"session_key", key, "value_type", fmt.Sprintf("%T", value))
+			return true
+		}
 		if string(ts.routingSessionID) == sessionID && ts.IsAlive() {
 			alive = append(alive, ts)
 		}
@@ -900,8 +915,13 @@ func (al *AgentLoop) hasLiveCriticalDelegate(sessionID string) bool {
 		return false
 	}
 	found := false
-	al.activeTurnStates.Range(func(_, value any) bool {
-		ts := value.(*turnState)
+	al.activeTurnStates.Range(func(key, value any) bool {
+		ts, ok := value.(*turnState)
+		if !ok {
+			slog.Error("activeTurnStates contains non-*turnState value",
+				"session_key", key, "value_type", fmt.Sprintf("%T", value))
+			return true
+		}
 		if string(ts.routingSessionID) != sessionID {
 			return true
 		}

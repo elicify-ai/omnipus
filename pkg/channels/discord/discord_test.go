@@ -23,7 +23,11 @@ func TestApplyDiscordProxy_CustomProxy(t *testing.T) {
 		t.Fatalf("http.NewRequest() error: %v", err)
 	}
 
-	restProxy := session.Client.Transport.(*http.Transport).Proxy
+	transport, ok := session.Client.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("session.Client.Transport has unexpected type %T, want *http.Transport", session.Client.Transport)
+	}
+	restProxy := transport.Proxy
 	restProxyURL, err := restProxy(req)
 	if err != nil {
 		t.Fatalf("rest proxy func error: %v", err)

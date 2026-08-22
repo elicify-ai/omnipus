@@ -226,7 +226,13 @@ func chromeMajorVersion(ctx context.Context, path string) string {
 		return ""
 	}
 	if cached, ok := chromeMajorCache.Load(path); ok {
-		return cached.(string)
+		if s, ok := cached.(string); ok {
+			return s
+		}
+		// chromeMajorCache is populated exclusively by this function with
+		// string values; treat an unexpected type the same as a cache
+		// miss rather than panicking, matching this function's documented
+		// "never fatal" contract.
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, chromiumProbeTimeout)
 	defer cancel()

@@ -90,7 +90,11 @@ func resolveStuckMemberForUnmetRound(t *testing.T, h *planWakeHarness, fx stalle
 	if _, err := h.tasks.Update(fx.stuck.ID, task.Patch{Status: &done}); err != nil {
 		t.Fatalf("complete the now-unblocked member: %v", err)
 	}
-	h.pe.judge.(*fakePlanJudge).resultFn = unmetJudgeResultFn
+	fakeJudge, ok := h.pe.judge.(*fakePlanJudge)
+	if !ok {
+		t.Fatalf("unexpected type %T for h.pe.judge, want *fakePlanJudge", h.pe.judge)
+	}
+	fakeJudge.resultFn = unmetJudgeResultFn
 }
 
 // --- #1: the race, reproduced ----------------------------------------------

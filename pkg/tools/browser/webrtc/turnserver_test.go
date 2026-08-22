@@ -66,7 +66,9 @@ func TestStartTURN_MintsScopedShortLivedCredentials(t *testing.T) {
 	// Bind on an ephemeral port so the test never collides with a real deploy.
 	probe, err := net.ListenPacket("udp", "127.0.0.1:0")
 	require.NoError(t, err)
-	port := probe.LocalAddr().(*net.UDPAddr).Port
+	udpAddr, ok := probe.LocalAddr().(*net.UDPAddr)
+	require.True(t, ok, "unexpected type %T for probe.LocalAddr(), want *net.UDPAddr", probe.LocalAddr())
+	port := udpAddr.Port
 	require.NoError(t, probe.Close())
 
 	srv, err = StartTURN(TURNConfig{UDPPort: port, BindAddress: "127.0.0.1", PublicIP: "203.0.113.9"})
@@ -97,7 +99,9 @@ func TestStartTURN_MintsScopedShortLivedCredentials(t *testing.T) {
 func TestTURNServer_CloseIsIdempotent(t *testing.T) {
 	probe, err := net.ListenPacket("udp", "127.0.0.1:0")
 	require.NoError(t, err)
-	port := probe.LocalAddr().(*net.UDPAddr).Port
+	udpAddr, ok := probe.LocalAddr().(*net.UDPAddr)
+	require.True(t, ok, "unexpected type %T for probe.LocalAddr(), want *net.UDPAddr", probe.LocalAddr())
+	port := udpAddr.Port
 	require.NoError(t, probe.Close())
 
 	srv, err := StartTURN(TURNConfig{UDPPort: port, BindAddress: "127.0.0.1", PublicIP: "203.0.113.9"})

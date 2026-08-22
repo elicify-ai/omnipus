@@ -1883,7 +1883,10 @@ func TestInterruptSession_CascadeToSubTurns(t *testing.T) {
 		if !ok {
 			t.Fatalf("turn %d (%s) not found in activeTurnStates", i, key)
 		}
-		ts := raw.(*turnState)
+		ts, ok := raw.(*turnState)
+		if !ok {
+			t.Fatalf("turn %d (%s): unexpected type %T in activeTurnStates, want *turnState", i, key, raw)
+		}
 		interrupted, _ := ts.gracefulInterruptRequested()
 		if !interrupted {
 			t.Errorf("turn %d (%s): gracefulInterrupt not set after cascade", i, key)
@@ -2053,7 +2056,10 @@ func TestInterruptSessionHard_CascadesAcrossSession(t *testing.T) {
 		if !ok {
 			t.Fatalf("turn %d (%s) not found in activeTurnStates", i, key)
 		}
-		ts := raw.(*turnState)
+		ts, ok := raw.(*turnState)
+		if !ok {
+			t.Fatalf("turn %d (%s): unexpected type %T in activeTurnStates, want *turnState", i, key, raw)
+		}
 		ts.mu.RLock()
 		ha := ts.hardAbort
 		ts.mu.RUnlock()

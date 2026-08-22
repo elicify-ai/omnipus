@@ -67,7 +67,8 @@ func TestEncodeImageToDataURL_AnimatedGIFToStaticPNG(t *testing.T) {
 
 	dataURL := encodeImageFixture(t, "animated.gif", "image/gif", source.Bytes(), 1<<20)
 	decoded := decodePNGDataURL(t, dataURL)
-	got := color.NRGBAModel.Convert(decoded.At(0, 0)).(color.NRGBA)
+	got, ok := color.NRGBAModel.Convert(decoded.At(0, 0)).(color.NRGBA)
+	require.True(t, ok, "expected color.NRGBAModel.Convert to return color.NRGBA")
 	require.Equal(t, uint8(255), got.R)
 	require.Equal(t, uint8(0), got.B)
 }

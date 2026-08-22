@@ -152,9 +152,21 @@ func TestGetUsage_AgentIDFilter(t *testing.T) {
 	if totalRaw == nil {
 		t.Fatalf("expected total field in response: %s", res.ForLLM)
 	}
-	gotIn := int(totalRaw["in"].(float64))
-	gotOut := int(totalRaw["out"].(float64))
-	gotTotal := int(totalRaw["total"].(float64))
+	inVal, ok := totalRaw["in"].(float64)
+	if !ok {
+		t.Fatalf("expected total.in to be a number, got %T: %s", totalRaw["in"], res.ForLLM)
+	}
+	outVal, ok := totalRaw["out"].(float64)
+	if !ok {
+		t.Fatalf("expected total.out to be a number, got %T: %s", totalRaw["out"], res.ForLLM)
+	}
+	totalVal, ok := totalRaw["total"].(float64)
+	if !ok {
+		t.Fatalf("expected total.total to be a number, got %T: %s", totalRaw["total"], res.ForLLM)
+	}
+	gotIn := int(inVal)
+	gotOut := int(outVal)
+	gotTotal := int(totalVal)
 	if gotIn != 100 || gotOut != 50 || gotTotal != 150 {
 		t.Errorf("agent_id filter: got in=%d out=%d total=%d, want in=100 out=50 total=150; resp=%s",
 			gotIn, gotOut, gotTotal, res.ForLLM)
@@ -196,8 +208,16 @@ func TestGetUsage_SessionIDFilter(t *testing.T) {
 
 	m := parseSuccess(t, res.ForLLM)
 	totalRaw, _ := m["total"].(map[string]any)
-	gotIn := int(totalRaw["in"].(float64))
-	gotOut := int(totalRaw["out"].(float64))
+	inVal, ok := totalRaw["in"].(float64)
+	if !ok {
+		t.Fatalf("expected total.in to be a number, got %T: %s", totalRaw["in"], res.ForLLM)
+	}
+	outVal, ok := totalRaw["out"].(float64)
+	if !ok {
+		t.Fatalf("expected total.out to be a number, got %T: %s", totalRaw["out"], res.ForLLM)
+	}
+	gotIn := int(inVal)
+	gotOut := int(outVal)
 	if gotIn != 10 || gotOut != 5 {
 		t.Errorf("session_id filter: got in=%d out=%d, want in=10 out=5; resp=%s", gotIn, gotOut, res.ForLLM)
 	}
@@ -257,7 +277,11 @@ func TestGetUsage_ExcludesSubagent3p(t *testing.T) {
 	if totalRaw == nil {
 		t.Fatalf("expected total field: %s", res.ForLLM)
 	}
-	gotTotal := int(totalRaw["total"].(float64))
+	totalVal, ok := totalRaw["total"].(float64)
+	if !ok {
+		t.Fatalf("expected total.total to be a number, got %T: %s", totalRaw["total"], res.ForLLM)
+	}
+	gotTotal := int(totalVal)
 	if gotTotal != 150 {
 		t.Errorf("total.total = %d, want 150 (ext-agent tokens must be excluded); resp=%s", gotTotal, res.ForLLM)
 	}
@@ -328,7 +352,11 @@ func TestGetUsage_PartialErrors(t *testing.T) {
 	if totalRaw == nil {
 		t.Fatalf("expected total field even with partial data: %s", res.ForLLM)
 	}
-	gotIn := int(totalRaw["in"].(float64))
+	inVal, ok := totalRaw["in"].(float64)
+	if !ok {
+		t.Fatalf("expected total.in to be a number, got %T: %s", totalRaw["in"], res.ForLLM)
+	}
+	gotIn := int(inVal)
 	if gotIn != 50 {
 		t.Errorf("total.in = %d, want 50; resp=%s", gotIn, res.ForLLM)
 	}

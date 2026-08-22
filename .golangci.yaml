@@ -52,7 +52,6 @@ linters:
     - errorlint
     - exhaustive
     - forbidigo
-    - forcetypeassert
     - funlen
     - gochecknoinits
     - gocognit

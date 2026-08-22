@@ -159,7 +159,11 @@ func TestChannelTest_ReportsNotConfigured(t *testing.T) {
 	if out["success"] != false {
 		t.Errorf("test of unconfigured channel: success = %v; want false", out["success"])
 	}
-	if !strings.Contains(out["message"].(string), "not configured") {
+	message, ok := out["message"].(string)
+	if !ok {
+		t.Fatalf("out[\"message\"] has unexpected type %T, want string", out["message"])
+	}
+	if !strings.Contains(message, "not configured") {
 		t.Errorf("message should say 'not configured'; got %q", out["message"])
 	}
 }
@@ -177,7 +181,11 @@ func TestChannelTest_ReportsNoCredentials(t *testing.T) {
 	if out["success"] != false {
 		t.Errorf("test of credential-less channel: success = %v; want false", out["success"])
 	}
-	if !strings.Contains(out["message"].(string), "credentials") {
+	message, ok := out["message"].(string)
+	if !ok {
+		t.Fatalf("out[\"message\"] has unexpected type %T, want string", out["message"])
+	}
+	if !strings.Contains(message, "credentials") {
 		t.Errorf("message should mention credentials; got %q", out["message"])
 	}
 }

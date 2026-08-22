@@ -115,8 +115,19 @@ func (c *seatbeltProfileCache) lookup(key string) (string, bool) {
 	if !ok {
 		return "", false
 	}
+	entry, ok := el.Value.(*seatbeltCacheEntry)
+	if !ok {
+		// The list is populated exclusively by insert() with
+		// *seatbeltCacheEntry values; a different type means the cache
+		// invariant was corrupted. This is a security-relevant sandbox
+		// profile cache, so treat it as a miss (drop the bad entry) rather
+		// than returning a profile string we cannot trust.
+		delete(c.items, key)
+		c.order.Remove(el)
+		return "", false
+	}
 	c.order.MoveToFront(el)
-	return el.Value.(*seatbeltCacheEntry).profile, true
+	return entry.profile, true
 }
 
 func (c *seatbeltProfileCache) insert(key, profile string) {
@@ -141,7 +152,13 @@ func (c *seatbeltProfileCache) insert(key, profile string) {
 			break
 		}
 		c.order.Remove(oldest)
-		delete(c.items, oldest.Value.(*seatbeltCacheEntry).key)
+		entry, ok := oldest.Value.(*seatbeltCacheEntry)
+		if !ok {
+			// Corrupted entry (see lookup's comment); already unreachable
+			// via the list, so nothing left to key the map deletion by.
+			continue
+		}
+		delete(c.items, entry.key)
 	}
 }
 
