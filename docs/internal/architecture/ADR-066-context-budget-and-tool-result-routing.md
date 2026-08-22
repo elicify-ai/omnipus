@@ -228,7 +228,7 @@ First-class surfaces per Constraint #8 (schema, generated types, REST, SPA): the
 **Onboarding — step 3.**
 - The picker shows the **Popular** set first; *"Show all providers"* expands to the full registry (~190), grouped by company, searchable. The cloud-IAM exclusions are listed but not selectable, with the reason.
 - Plan and region selectors stay; they now map to registry variants (`zai` / `zai-coding-plan` / `zhipuai` …). The endpoint-format toggle stays only for providers the override file marks dual-protocol.
-- **Onboarding offers API keys only.** Subscription sign-ins (Copilot, xAI, OpenAI) live in Settings; a first-run flow should not branch into three vendors' OAuth.
+- **Subscription sign-in is offered in onboarding too** (operator decision 2026-08-22, reversing the first draft of this section): for the providers whose vendor permits it — xAI, OpenAI, GitHub Copilot — step 3 presents *Sign in* and *Use an API key* as a choice **per provider**, not as an extra step, so the flow stays three steps. Anthropic and Google present the key path only.
 - The step ends with a *working* (provider, model) pair: model picked from the catalog (no live list), validated by the probe, which now chooses its probe model from the catalog. **No default model is pre-selected** — the old `antigravity/gemini-3-flash` seed is gone and nothing replaces it silently; the user picks.
 
 **Settings → Providers.**
@@ -239,6 +239,12 @@ First-class surfaces per Constraint #8 (schema, generated types, REST, SPA): the
 **Settings → Models** (D9): the global default context window with its source, and the override; **Agent form**: the per-agent override field, clamped to the model's capability (D2), shown with the clamp when it bites.
 
 **Chat**: the emptied-result mark renders only with Verbose chat on (§12) — no other change.
+
+**Provider deletion and the default model — a new requirement, grounded.** Verified on this branch 2026-08-22:
+- **No provider can be deleted.** The REST surface is `GET /providers`, `PUT /providers/{id}`, `POST …/test`, `POST …/refresh-models`, `GET …/model-capabilities` — **no `DELETE`** (searched routes and `contracts/openapi.yaml`). `ProvidersSection.tsx` documents that `GET /providers` *"reports ALL of them forever as status: 'disconnected'"*; the only "Remove" control (`ProvidersSection.tsx` ~L550) removes a model slug from a manual list, not the provider.
+- **The default model cannot be switched after onboarding.** `agents.defaults.model_name` is written at onboarding completion and only if empty (`pkg/gateway/gateway.go::…` at the two `ModelName == ""` guards); `agents.defaults.provider` is empty on the operator's install. No Settings control exists (searched `src/components/settings`, `src/lib/api.ts`). Removing the provider that default points at would fail at `instance.go` — *"provider %q not found in configured providers"* — with no UI path to fix it.
+
+**Decision (D14).** A provider configuration **can be deleted** (`DELETE /providers/{id}`, Constraint #8), which clears its key and removes its row — the catalog entry remains available in the picker. **The default model is a first-class Settings control** (Settings → Models, and reachable from the provider row), switchable at any time, with the current default shown on its provider's row. Deleting the provider the default depends on is allowed only after choosing a new default in the same dialog — the action is blocked, not silently broken. The exact affordances follow the UX review in §10.2.
 
 **Two wire consequences (Constraint #8), corrected.**
 1. `src/lib/generated/providerCatalog.ts` — a build-time file — **goes**. A catalog refreshed daily cannot be baked into the SPA bundle; the SPA reads the **`GET` providers-catalog endpoint** (already listed in §12) and caches it. The `gen/main.go` TS emission is deleted with it.
