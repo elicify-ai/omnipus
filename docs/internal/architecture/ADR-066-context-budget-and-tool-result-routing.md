@@ -222,7 +222,9 @@ D4 protects the window; it cannot protect the process — by the time a result i
 
 ### 11a.1 Where provider identity lives in Omnipus today
 
-- One `switch` in `pkg/providers/factory_provider.go` (~40 `case` labels) is the only registry; aliases are ad hoc (`"z-ai", "z.ai", "zai"`). **1,241 string literals across 36 distinct ids** in non-test Go (searched), including three spellings of one thing — `qwen-intl`, `qwen-us`, `qwen-international`.
+**[CORRECTED 2026-08-22]** An earlier version of this section said the factory switch was the only registry. It is not. **`pkg/providers/catalog` already exists** and describes itself as *"the backend-owned single source of truth for the 23 user-facing LLM provider variants available in the Omnipus picker"* — hand-authored `Entries`, one per billable endpoint keyed by **company × plan × region**, with the Anthropic-compatible sibling folded into `AnthropicId` rather than a separate row (FIX-5, `provider-ux-fixes-plan.md`). Entry fields: `id, company, label, plan, wire, endpointHint, subtitle, logoSlug` (+ `anthropicId`). `gen/main.go` emits `data/providers_catalog.json` **and** a generated TypeScript file for the SPA picker from that Go slice (*"Source of truth: pkg/providers/catalog/catalog.go → Entries"*). So the picker is already data-driven — from a hand-typed Go slice of 23. **D11 therefore replaces the data source of an existing catalog; it does not introduce one.** The 23 ids today: `openai anthropic google openrouter groq mistral nvidia cerebras ollama azure z-ai zhipu z-ai-coding zhipu-coding moonshot moonshot-cn minimax minimax-cn deepseek qwen qwen-intl qwen-us coding-plan`.
+
+- Transport dispatch is one `switch` in `pkg/providers/factory_provider.go` (~40 `case` labels) is the only registry; aliases are ad hoc (`"z-ai", "z.ai", "zai"`). **1,241 string literals across 36 distinct ids** in non-test Go (searched), including three spellings of one thing — `qwen-intl`, `qwen-us`, `qwen-international`.
 - Wire protocol is encoded as a *suffix on the provider id* (`z-ai-anthropic`, `moonshot-cn-anthropic`, `alibaba-coding-anthropic`), so every provider that offers two protocols exists twice.
 - The wire `provider` field is a **free string** (`contracts/components/schemas/Agent.yaml` gives `"openrouter"` as an *example*, not an enum) — so renaming ids needs no contract enum change.
 - Credential refs are data: `api_key_ref` in `config.json` (`openrouter_API_KEY`, `z-ai-coding_API_KEY`). Renaming a provider must not touch them.
@@ -233,7 +235,7 @@ D4 protects the window; it cannot protect the process — by the time a result i
 1. **Canonical provider ids are models.dev's.** `zai`, `zhipuai`, `zai-coding-plan`, `moonshotai`, `moonshotai-cn`, `alibaba`, `alibaba-cn`, `alibaba-coding-plan`, `google`, … One vocabulary shared with OpenCode, Cline, Hermes and Goose; new plans and regions appear without anyone in Omnipus typing anything.
 2. **Protocol becomes a field, not a suffix.** The provider table carries `protocol` from the catalog (`npm`); the `-anthropic` ids collapse into `(id, protocol=anthropic)`. Where models.dev records one protocol but the vendor also serves the other (Z.ai, Moonshot, DeepSeek all expose Anthropic-compatible endpoints alongside OpenAI-compatible ones), the override file in the assembly repo adds the second endpoint — the registry is the default, not the ceiling.
 3. **The factory switch dispatches on protocol, not on provider name.** ~40 cases become ~5 (`openai-compatible`, `anthropic`, `google`, `ollama`, `cli`); base URL, key variable and defaults come from the table. A provider unknown to the table but with an explicit endpoint is still accepted as `custom` (the existing `rest_onboarding.go` path).
-4. **The assembly repo publishes the provider table** next to the model table, from the same feed, with the same signing. Providers with no registry entry stay in a local file shipped with the feed: `ollama`, `vllm`, `litellm`, `custom`, `claude-cli`, `codex-cli`, `antigravity`, `shengsuanyun`, `volcengine`, `avian`, `mimo`. (`novita` → registry id `novita-ai`; added to the rename table.)
+4. **The assembly repo publishes the provider table** next to the model table, from the same feed, with the same signing. **`pkg/providers/catalog` keeps its role and its entry shape; `Entries` stops being a hand-typed Go slice and is loaded from the feed** (embedded snapshot + refreshed copy, exactly as D1 does for models). `gen/main.go` inverts: it generates the SPA file *from the feed*, not from Go. Providers with no registry entry stay in a local file shipped with the feed: `ollama`, `vllm`, `litellm`, `custom`, `claude-cli`, `codex-cli`, `antigravity`, `shengsuanyun`, `volcengine`, `avian`, `mimo`. (`novita` → registry id `novita-ai`; added to the rename table.)
 
 **Aggregators are in the registry as providers in their own right** — `openrouter` (359 models, 60 upstream vendors), `vercel`, `requesty`, `amazon-bedrock`, `nvidia`, `novita-ai`, `kilo`, and ~100 more hosts and gateways; 102 of the 193 providers are aggregators or hosts rather than first-party vendors (read live 2026-08-22). Their models are keyed with the vendor prefix (`openrouter` → `z-ai/glm-5.2`), and their **limits are the aggregator's, not the vendor's** — `z-ai/glm-5.2` is 1,048,576 via `openrouter` and 1,000,000 via `zai`. That is exactly the provider+model key this ADR requires, and why the key cannot be model-only.
 5. **Settings lists providers from the table**, grouped by vendor → region → plan, with protocol shown. That is a new read-only wire surface (`GET` providers catalog) and goes through Constraint #8.
@@ -318,20 +320,42 @@ Omnipus speaks exactly two wire protocols today — **OpenAI-compatible HTTP** (
 
 Verified in `pkg/providers` on this branch:
 
-- **`claude-cli`** — `exec.CommandContext(ctx, "claude", …)`; the file handles no token, credential or keychain (searched). This is the permitted shape: unmodified binary, user signs in inside it, harness never intermediates. **Keep, opt-in, with the post-2026-04-04 "unclear whether this draws on the subscription" caveat shown in the UI.**
+- **`claude-cli`** — `exec.CommandContext(ctx, "claude", …)`; the file handles no token, credential or keychain (searched). This is the shape Anthropic permits — but it is a *subscription* path, and the operator descoped all Anthropic subscription paths (§11c.3 item 2). **Descoped.**
 - **`codex-cli`** — despite the name, **not** a subprocess: `factory_provider.go` case `"codex-cli"` → `NewCodexProviderWithTokenSource(CreateCodexCliTokenSource())`, which `ReadCodexCliCredentials` from the Codex CLI's `auth.json` and calls `https://chatgpt.com/backend-api/codex` directly. That is token reuse. OpenAI tolerates and publicly encourages it, but the ToS text does not. **Keep, documented as resting on practice; prefer the `codex_cli_provider.go` subprocess path where both exist.**
-- **`antigravity`** — Google OAuth (`auth.GoogleAntigravityOAuthConfig`, `RefreshAccessToken`) against the Antigravity backend. **This is the practice Google's §6 names and suspends accounts for — and it is the seeded default model on a fresh install (`pkg/config/defaults.go` → `antigravity/gemini-3-flash`).** Hermes removed the equivalent (PR #50492: *"Google now actively bans accounts … a ban can extend to the entire Google account"*); Goose deprecated it.
+- **`antigravity`** — Google OAuth (`auth.GoogleAntigravityOAuthConfig`, `RefreshAccessToken`) against the Antigravity backend. **Deleted, no trace — §11c.4.** **This is the practice Google's §6 names and suspends accounts for — and it is the seeded default model on a fresh install (`pkg/config/defaults.go` → `antigravity/gemini-3-flash`).** Hermes removed the equivalent (PR #50492: *"Google now actively bans accounts … a ban can extend to the entire Google account"*); Goose deprecated it.
 
-**Decision: remove the `antigravity` OAuth provider, and change the fresh-install default model to a tier-1 API-key provider.** Google's sanctioned route for third-party tools is the Gemini API or Vertex key, which stays. This is the one finding in this ADR that bears on the running release rather than the design, and it is flagged as such in §13.
+**Decision: delete the `antigravity` OAuth provider entirely (§11c.4), and change the fresh-install default model to a Popular-tier API-key provider.** Google's sanctioned route for third-party tools is the Gemini API or Vertex key, which stays. This is the one finding in this ADR that bears on the running release rather than the design, and it is flagged as such in §13.
 
-### 11c.3 The policy
+### 11c.3 The policy — as decided
 
-1. **Subscription login is offered only where the vendor's own terms or an official vendor statement permit it**, and the ADR cites the source. Today that is: **GitHub Copilot** via the official SDK/CLI; **xAI** via the published OAuth flow (and Omnipus should ask xAI to list it, as the named agents are); **OpenAI** via ChatGPT login, documented as practice-based.
-2. **Never collect, store, proxy or refresh a vendor's consumer credential** where the vendor prohibits it. Anthropic and Google: API key only.
-3. **Prefer driving the vendor's own CLI as a subprocess over borrowing its token** wherever both exist — it is the shape that survives policy changes, and it is what `claude-cli` already does.
-4. The table in §11c.1 is re-verified each release; a vendor that changes position moves between tiers, with the retired-provider list (D12) giving users a named reason.
+*(Operator decisions 2026-08-22.)*
 
-### 11c.4 Not adopted
+1. **API keys stay for every vendor, Anthropic and Google included.** That is the route both vendors name as the sanctioned one for third-party tools (`anthropic` via the Console key; `google` via the Gemini API key through the OpenAI-compatible endpoint already in use).
+2. **Every Anthropic and Google *subscription* path is descoped.** Google: the `antigravity` OAuth provider — deleted, §11c.4. Anthropic: no OAuth path ever existed; **`claude-cli` is descoped with the rest** — it exists to use a Claude subscription through the official binary, and since 2026-04-04 that login no longer draws on the subscription for third-party tools, so its reason to exist is gone. (It can return later as a plain "drive the vendor CLI" integration if there is a non-subscription case for it; that would be a new decision.)
+3. **Subscription login is offered only where the vendor's own terms or an official vendor statement permit it**, cited in §11c.1: **GitHub Copilot** via the official SDK/CLI; **xAI** via the published OAuth flow (ask xAI to list Omnipus, as the five named agents are); **OpenAI** via ChatGPT login, documented as practice-based.
+4. **Never collect, store, proxy or refresh a vendor's consumer credential where the vendor prohibits it.**
+5. **Prefer driving the vendor's own CLI as a subprocess over borrowing its token** wherever both exist.
+6. The table in §11c.1 is re-verified each release; a vendor that changes position moves tier, with the retired-provider list (D12) giving users a named reason.
+
+### 11c.4 `antigravity` — deleted, no trace, no backward compatibility
+
+**Inventory (this branch, 2026-08-22): 33 files reference it.** Everything below is removed in one commit; nothing is aliased, shimmed, or migrated.
+
+| Area | What goes |
+|---|---|
+| **Provider code** | `pkg/providers/antigravity_provider.go` (105 refs) + `_test.go`; the `case "antigravity"` in `factory_provider.go` and its test rows; `AntigravityModelInfo`, `FetchAntigravityModels` |
+| **OAuth config** | `pkg/auth/oauth.go::GoogleAntigravityOAuthConfig` and the `OMNIPUS_GOOGLE_CLIENT_ID` / `OMNIPUS_GOOGLE_CLIENT_SECRET` env reads. **The file stays** — `OpenAIOAuthConfig`, `RequestDeviceCode`, `RefreshAccessToken` are used by `codex_provider.go` (verified). |
+| **Default model** | `pkg/config/defaults.go` → `antigravity/gemini-3-flash` replaced by a Popular-tier API-key model; `config.go` protocol comment; `config/config.example.json` |
+| **Wire contract (Constraint #8)** | the `antigravity` enum value in `contracts/components/schemas/ProbeProviderRequest.yaml` and its inbound copy `pkg/gateway/inboundschemas/ProbeProviderRequest.yaml`; regenerate `pkg/api/generated/openapi_types.gen.go`, `src/lib/api/generated/openapi-types.ts`, `schemas.ts`; commit spec + generated artifacts atomically |
+| **Catalog allow-list** | `pkg/providers/catalog/catalog_test.go` "CLI executor / non-API-key ids" entry |
+| **Docs** | `docs/ANTIGRAVITY_USAGE.md` deleted; mentions removed from `docs/providers.md`, `docs/configuration.md`, `docs/README.md`, `docs/migration/model-list-migration.md`, `docs/internal/provider-endpoint-audit-2026-06.md`, `docs/internal/design/provider-refactoring*.md` |
+| **Kept deliberately** | historical decision records that mention it as history (ADR-031 and its review, ADR-059 spec reviews, the cli-minimization and workspace-rename specs, the turn-truncation root-cause note, this ADR and its review). Rewriting a past decision's text to erase a name is falsifying the record, not removing a trace. |
+
+**Backward compatibility: none.** A `config.json` or agent entity naming `antigravity` fails at boot through the retired-provider list with the named reason (*"removed: Google's Antigravity terms §6 prohibit third-party OAuth access"*) and a pointer to the Gemini API key route. No alias, no silent remap, no one-release grace — the grace period in D11 is for *renames*, and this is not a rename.
+
+**Exit proof:** `grep -ri antigravity` over the tree returns only the historical records listed above; `make verify-contracts` passes after regeneration; a config naming `antigravity` produces the named boot error.
+
+### 11c.5 Not adopted
 
 - **"Support everything that technically works, user's risk."** Google's remedy is account termination that can extend to the whole Google account; Omnipus would be the tool that caused it.
 - **"API keys only."** Removes three shipped paths, two of which are sanctioned or tolerated.
