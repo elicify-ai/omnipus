@@ -89,7 +89,13 @@ func SpawnBackgroundChild(
 		return nil, fmt.Errorf("SpawnBackgroundChild: empty command parts")
 	}
 
-	cmd := exec.Command(parts[0], parts[1:]...) //nolint:gosec // caller validates command
+	// #nosec G204 -- parts is the sandboxed dev-server tool's command-line
+	// (pkg/tools/web_serve.go's spawnDevChild), authorized upstream by the
+	// agent's explicit tool policy (Hard Constraint #6), not shell-interpolated
+	// (exec.Command takes argv directly, no shell involved). The security
+	// boundary is ApplyChildHardening/ApplyChildPostStartHardening below plus
+	// Limits confinement, not argv validation.
+	cmd := exec.Command(parts[0], parts[1:]...)
 	if workspaceDir != "" {
 		cmd.Dir = workspaceDir
 	}
@@ -134,6 +140,11 @@ func SpawnBackgroundChild(
 		var logSink io.Writer = io.Discard
 		if workspaceDir != "" {
 			logPath := filepath.Join(workspaceDir, ".dev-server.log")
+			// #nosec G304 -- workspaceDir is the dev-server tool's own
+			// sandboxed workspace directory (SpawnBackgroundChild's
+			// workspaceDir param, sourced from web_serve.go's spawnDevChild
+			// workDir), not an arbitrary external path; ".dev-server.log" is
+			// a hardcoded literal.
 			if f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600); err == nil {
 				logSink = f
 				logFile = f

@@ -1364,7 +1364,7 @@ func (t *ExecTool) runBackground(
 	}
 
 	argv := buildShellArgv(command)
-	cmd := exec.Command(argv[0], argv[1:]...) //nolint:gosec // command is agent-supplied by design; guarded above
+	cmd := exec.Command(argv[0], argv[1:]...) // gosec rationale (out of gosec scope; kept as documentation): command is agent-supplied by design; guarded above
 	if cwd != "" {
 		cmd.Dir = cwd
 	}

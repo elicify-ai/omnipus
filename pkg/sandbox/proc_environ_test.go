@@ -57,7 +57,7 @@ func TestChildCannotReadGatewayProcEnviron(t *testing.T) {
 
 	parentPID := os.Getpid()
 
-	//nolint:gosec // intentional test-binary self-exec
+	// gosec rationale (out of gosec scope; kept as documentation): intentional test-binary self-exec
 	cmd := exec.Command(os.Args[0],
 		"-test.run=TestChildCannotReadGatewayProcEnviron",
 		"-test.count=1",

@@ -160,7 +160,7 @@ func TestRedteam_MasterKey_Exfil_Blocked(t *testing.T) {
 		t.Fatalf("seed master.key: %v", err)
 	}
 
-	//nolint:gosec // intentional self-exec
+	// gosec rationale (out of gosec scope; kept as documentation): intentional self-exec
 	cmd := exec.Command(os.Args[0],
 		"-test.run=TestRedteam_MasterKey_Exfil_Blocked",
 		"-test.count=1",
@@ -238,7 +238,7 @@ func TestRedteam_Credentials_Exfil_Blocked(t *testing.T) {
 		t.Fatalf("seed credentials.json: %v", err)
 	}
 
-	//nolint:gosec // intentional self-exec
+	// gosec rationale (out of gosec scope; kept as documentation): intentional self-exec
 	cmd := exec.Command(os.Args[0],
 		"-test.run=TestRedteam_Credentials_Exfil_Blocked",
 		"-test.count=1",

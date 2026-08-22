@@ -151,6 +151,12 @@ func VerifyFile(ctx context.Context, path string, key []byte, seedHMAC []byte) (
 		seedHMAC = GenesisSeed()
 	}
 
+	// #nosec G304 -- VerifyFile is a public library function for verifying
+	// any HMAC-chained JSONL file (this package's own internal callers, e.g.
+	// VerifyDir below, only ever pass paths from directory enumeration
+	// within a configured audit dir). Path-safety of the argument is the
+	// caller's responsibility, same as os.Open itself; this is a read-only
+	// verification utility, not a request handler.
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("audit: open %s: %w", path, err)
@@ -476,6 +482,9 @@ func determineFileSeed(dir string, key []byte, targetPath string) []byte {
 // newline, we treat the trailing fragment as a write that crashed mid-row
 // and skip it (returning the previous complete entry's hmac).
 func readChainSeedFromFile(path string) ([]byte, bool) {
+	// #nosec G304 -- path is always files[targetIdx-1] from directory
+	// enumeration within the deployment-configured audit dir (see the sole
+	// caller above), never request-derived.
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, false

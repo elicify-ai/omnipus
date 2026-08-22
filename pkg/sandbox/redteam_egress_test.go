@@ -173,7 +173,7 @@ func TestRedteam_RawTCP_Egress_Blocked(t *testing.T) {
 	_ = backend
 
 	home := t.TempDir()
-	//nolint:gosec // intentional self-exec
+	// gosec rationale (out of gosec scope; kept as documentation): intentional self-exec
 	cmd := exec.Command(os.Args[0],
 		"-test.run=TestRedteam_RawTCP_Egress_Blocked",
 		"-test.count=1",

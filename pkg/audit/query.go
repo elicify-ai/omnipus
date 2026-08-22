@@ -156,6 +156,9 @@ func mostRecentRotatedFile(dir string) (string, bool) {
 // error encountered (wrapped with "read:"/"scan:" so the caller's log line
 // distinguishes the two failure classes without needing separate call sites).
 func scanFileForLastWriter(filePath, event, path string) (agentID string, found bool, err error) {
+	// #nosec G304 -- filePath is always either l.auditPath() or the result of
+	// mostRecentRotatedFile(l.dir) (see LastWriterForPath above), both rooted
+	// in the deployment-configured audit directory, never request-derived.
 	data, err := os.ReadFile(filePath)
 	if err != nil {
 		return "", false, fmt.Errorf("read: %w", err)

@@ -197,6 +197,9 @@ func writeChainCheckpoint(dir, appliesToFile string, finalHMAC, key []byte) erro
 //     surviving file before trusting cp.FinalHMAC as a seed — see VerifyDir.
 func readChainCheckpoint(dir string, key []byte) (*chainCheckpoint, error) {
 	path := checkpointPath(dir)
+	// #nosec G304 -- dir is the same deployment-configured audit directory as
+	// audit.go's l.dir (passed down from LoggerConfig.Dir at construction,
+	// never request-derived); checkpointFileName is a hardcoded literal.
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {

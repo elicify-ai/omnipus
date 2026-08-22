@@ -400,7 +400,7 @@ func TestReadCurrentUserNProc_CountsOtherProcessesThreads(t *testing.T) {
 		t.Skip("/proc unreadable in this environment")
 	}
 
-	//nolint:gosec // intentional test-binary self-exec, same pattern as backend_linux_subprocess_test.go
+	// gosec rationale (out of gosec scope; kept as documentation): intentional test-binary self-exec, same pattern as backend_linux_subprocess_test.go
 	child := exec.Command(os.Args[0],
 		"-test.run=^TestReadCurrentUserNProc_CountsOtherProcessesThreads$",
 		"-test.count=1",

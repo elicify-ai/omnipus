@@ -312,6 +312,10 @@ func (p *EgressProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		http.Error(rw, "egress_proxy: upstream unavailable", http.StatusBadGateway)
 	}
+	// #nosec G704 -- host was already gated by p.hostAllowed(host) above
+	// (this function's only path here), and rp.Transport is p.ssrfTransport
+	// when set, which re-validates the resolved IP at dial time against
+	// DNS-rebinding. This is the SSRF enforcement point itself, not a bypass.
 	rp.ServeHTTP(w, r)
 }
 
@@ -367,9 +371,16 @@ func (p *EgressProxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 			upstream = conn
 		}
 	} else {
+		// #nosec G704 -- fallback path when p.ssrfTransport is nil
+		// (Tier2/Tier3 proxy modes, see the comment block above). host was
+		// already gated by p.hostAllowed(host) earlier in handleConnect
+		// (the sole caller) before this dial is reached.
 		upstream, err = net.DialTimeout("tcp", hostPort, 10*time.Second)
 	}
 	if err != nil {
+		// #nosec G706 -- host/err are discrete slog fields; escaped by both
+		// log sinks (see the sink detail noted on execproxy.go's SSRF-blocked
+		// log lines), no forgery surface.
 		slog.Warn("egress_proxy: connect dial failed",
 			"host", host, "error", err)
 		if p.audit != nil {
@@ -467,6 +478,9 @@ func (p *EgressProxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 // reason}. Falls back to slog.Warn when no closure is wired so denials are
 // always visible in logs even in tests/development.
 func (p *EgressProxy) deny(w http.ResponseWriter, host string) {
+	// #nosec G706 -- host/p.allowList are discrete slog fields; escaped by
+	// both log sinks (see the sink detail noted on execproxy.go's
+	// SSRF-blocked log lines), no forgery surface.
 	slog.Info("egress_proxy: denied", "host", host, "allow_list", p.allowList)
 	if p.audit != nil {
 		p.audit(&audit.Entry{
@@ -479,6 +493,7 @@ func (p *EgressProxy) deny(w http.ResponseWriter, host string) {
 			},
 		})
 	} else {
+		// #nosec G706 -- same as the Info call above.
 		slog.Warn("egress_proxy: deny without audit hook (audit logger unavailable)",
 			"host", host, "allow_list", p.allowList)
 	}
@@ -490,6 +505,9 @@ func (p *EgressProxy) deny(w http.ResponseWriter, host string) {
 // denials from allow-list denials and upstream errors. Falls back to slog.Warn
 // when no audit hook is wired.
 func (p *EgressProxy) denySSRF(w http.ResponseWriter, host string, err error) {
+	// #nosec G706 -- host/err are discrete slog fields; escaped by both log
+	// sinks (see the sink detail noted on execproxy.go's SSRF-blocked log
+	// lines), no forgery surface.
 	slog.Info("egress_proxy: SSRF blocked", "host", host, "error", err)
 	if p.audit != nil {
 		p.audit(&audit.Entry{

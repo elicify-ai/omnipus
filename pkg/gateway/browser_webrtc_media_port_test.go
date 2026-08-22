@@ -213,7 +213,7 @@ func TestMediaPortFallbackNotice_FitsContractMaxLength(t *testing.T) {
 func browserStatusMessageMaxLength(t *testing.T) int {
 	t.Helper()
 	path := filepath.Join("..", "..", "contracts", "components", "schemas", "BrowserStatusFrame.yaml")
-	raw, err := os.ReadFile(path) //nolint:gosec // fixed, repo-relative contract path
+	raw, err := os.ReadFile(path) // gosec rationale (out of gosec scope; kept as documentation): fixed, repo-relative contract path
 	require.NoError(t, err, "the contract must be readable — it is the authority on this limit")
 
 	re := regexp.MustCompile(`(?m)^  message:\n    type: string\n    maxLength: (\d+)`)

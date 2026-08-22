@@ -701,6 +701,11 @@ func (l *Logger) auditPath() string {
 
 func (l *Logger) openCurrentFile() error {
 	path := l.auditPath()
+	// #nosec G304 -- path is filepath.Join(l.dir, "audit.jsonl"): l.dir is the
+	// deployment-configured audit directory set once at NewLogger construction
+	// (LoggerConfig.Dir, from operator/config.json, never from a request), and
+	// "audit.jsonl" is a hardcoded literal. No externally-controlled input
+	// reaches this path.
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return fmt.Errorf("audit: open %s: %w", path, err)
@@ -883,6 +888,8 @@ func (l *Logger) recoverCorruption() {
 	defer l.mu.Unlock()
 
 	path := l.auditPath()
+	// #nosec G304 -- same l.auditPath() as openCurrentFile above: l.dir is the
+	// deployment-configured audit directory, never request-derived.
 	f, err := os.OpenFile(path, os.O_RDWR, 0o600)
 	if err != nil {
 		// File doesn't exist yet (fresh install) or unreadable — both fine.
@@ -932,11 +939,17 @@ func (l *Logger) recoverCorruption() {
 		return
 	}
 
+	// #nosec G706 -- path is l.auditPath() (deployment-controlled, see the
+	// nosec above openCurrentFile); lastLineStart is an int64 offset. Both are
+	// passed as discrete slog fields, escaped by both log sinks (see the
+	// justification on execproxy.go's SSRF-blocked log lines for the sink
+	// detail) — no injection surface either way.
 	slog.Warn("Audit log: truncating malformed last line", "path", path, "truncate_at", lastLineStart)
 	if err := f.Truncate(lastLineStart); err != nil {
 		// Truncate failure is rare (read-only mount, EPERM). Log and move on
 		// — the malformed line stays, but the next write appends after it
 		// and the file remains usable. Better than a startup hard-fail.
+		// #nosec G706 -- same as above: structured fields, escaped at both sinks.
 		slog.Error("audit: truncate of malformed last line failed",
 			"path", path, "truncate_at", lastLineStart, "error", err)
 	}
@@ -968,6 +981,8 @@ func readLastLine(r io.ReadSeeker, size int64) (string, int64, bool) {
 	for {
 		offset := size - bufSize
 		if _, err := r.Seek(offset, io.SeekStart); err != nil {
+			// #nosec G706 -- offset is an int64 byte offset (not a string),
+			// passed as a discrete slog field; no injection surface.
 			slog.Warn("audit: seek failed during corruption recovery", "error", err, "offset", offset)
 			return "", size, false
 		}

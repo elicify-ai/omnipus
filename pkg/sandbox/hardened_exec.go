@@ -729,6 +729,13 @@ func runOnCurrentThread(ctx context.Context, argv []string, env []string, lim Li
 		defer cancel()
 	}
 
+	// #nosec G204 -- argv is the sandboxed exec/dev-server tool's command-line,
+	// authorized upstream by the agent's explicit tool policy (Hard Constraint
+	// #6). This function is the hardened enforcement point itself: argv reaches
+	// exec.CommandContext directly (no shell, no interpolation) and is confined
+	// by kernel Landlock/seccomp (restrictCurrentThreadIfNeeded below) plus the
+	// Limits (workspace/timeout/memory) applied in this same function — the
+	// security boundary is process confinement, not argv validation/escaping.
 	cmd := exec.CommandContext(runCtx, argv[0], argv[1:]...)
 	if lim.WorkspaceDir != "" {
 		cmd.Dir = lim.WorkspaceDir

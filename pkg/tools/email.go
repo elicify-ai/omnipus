@@ -385,6 +385,16 @@ func (t *ReplyTool) Execute(ctx context.Context, args map[string]any) *ToolResul
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("reply: could not load original message: %v", err))
 	}
+	// Transport is an INTERFACE: the "non-nil message or non-nil error"
+	// contract is a convention, not something the type system enforces. The
+	// bundled *email.Client honours it on every path, but a second
+	// implementation returning (nil, nil) would nil-panic on orig.From below —
+	// and the package's own test double did exactly that until it was
+	// corrected, which is how close this is to being reachable. Guard at the
+	// boundary rather than trusting every present and future implementer.
+	if orig == nil {
+		return ErrorResult(fmt.Sprintf("reply: transport returned no message and no error for uid %d", uid))
+	}
 	if orig.From == "" {
 		return ErrorResult("reply: original message has no sender to reply to")
 	}

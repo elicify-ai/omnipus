@@ -16,9 +16,16 @@ import (
 )
 
 type OAuthProviderConfig struct {
-	Issuer       string
-	ClientID     string
-	ClientSecret string // Required for Google OAuth (confidential client)
+	Issuer   string
+	ClientID string
+	// ClientSecret is required for Google OAuth (confidential client). Field
+	// name matches gosec's secret-name pattern by design: it holds the
+	// actual OAuth client secret, sourced from an env var (see
+	// GoogleAntigravityOAuthConfig), never a literal; never serialized to
+	// any gateway/API response (grep confirms no pkg/gateway reference to
+	// OAuthProviderConfig).
+	// #nosec G117 -- see comment above
+	ClientSecret string
 	TokenURL     string // Override token endpoint (Google uses a different URL than issuer)
 	Scopes       string
 	Originator   string
@@ -41,6 +48,9 @@ func GoogleAntigravityOAuthConfig() OAuthProviderConfig {
 	// Google OAuth credentials must be configured via environment variables.
 	clientID := os.Getenv("OMNIPUS_GOOGLE_CLIENT_ID")
 	clientSecret := os.Getenv("OMNIPUS_GOOGLE_CLIENT_SECRET")
+	// #nosec G101 -- ClientID/ClientSecret below are the clientID/clientSecret
+	// locals read from os.Getenv two lines up, not hardcoded literals; gosec's
+	// pattern match fires on the struct field names alone.
 	return OAuthProviderConfig{
 		Issuer:       "https://accounts.google.com/o/oauth2/v2",
 		TokenURL:     "https://oauth2.googleapis.com/token",
@@ -250,6 +260,10 @@ func RefreshAccessToken(cred *AuthCredential, cfg OAuthProviderConfig) (*AuthCre
 		tokenURL = cfg.TokenURL
 	}
 
+	// #nosec G107 -- tokenURL is derived from cfg.Issuer/cfg.TokenURL, and cfg
+	// is only ever constructed by the two hardcoded factories in this file
+	// (OpenAIOAuthConfig, GoogleAntigravityOAuthConfig) with fixed literal
+	// Issuer/TokenURL strings — never request-derived.
 	resp, err := http.PostForm(tokenURL, data)
 	if err != nil {
 		return nil, fmt.Errorf("refreshing token: %w", err)
@@ -353,6 +367,8 @@ func ExchangeCodeForTokens(cfg OAuthProviderConfig, code, codeVerifier, redirect
 		provider = "google-antigravity"
 	}
 
+	// #nosec G107 -- same as RefreshAccessToken above: tokenURL comes only
+	// from the two hardcoded provider-config factories in this file.
 	resp, err := http.PostForm(tokenURL, data)
 	if err != nil {
 		return nil, fmt.Errorf("exchanging code for tokens: %w", err)
@@ -378,9 +394,14 @@ func ExchangeCodeForTokens(cfg OAuthProviderConfig, code, codeVerifier, redirect
 }
 
 func parseTokenResponse(body []byte, provider string) (*AuthCredential, error) {
+	// tokenResp is a local, anonymous struct used only to json.Unmarshal the
+	// OAuth provider's own token-endpoint response (incoming deserialization,
+	// never marshaled back out); it is not part of any package API and never
+	// crosses the gateway/API boundary. Each field below is annotated
+	// individually since gosec's G117 fires per struct field.
 	var tokenResp struct {
-		AccessToken  string `json:"access_token"`
-		RefreshToken string `json:"refresh_token"`
+		AccessToken  string `json:"access_token"`  // #nosec G117 -- incoming-only, see comment above
+		RefreshToken string `json:"refresh_token"` // #nosec G117 -- incoming-only, see comment above
 		ExpiresIn    int    `json:"expires_in"`
 		IDToken      string `json:"id_token"`
 	}

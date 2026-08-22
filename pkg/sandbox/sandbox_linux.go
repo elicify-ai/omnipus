@@ -270,7 +270,7 @@ func (lb *LinuxBackend) ApplyWithMode(policy SandboxPolicy, mode Mode) error {
 	}
 	rulesetFd, _, errno := unix.Syscall(
 		sysLandlockCreateRuleset,
-		uintptr(unsafe.Pointer(&attr)),
+		uintptr(unsafe.Pointer(&attr)), // #nosec G103 -- landlock_create_ruleset(2): attr is a stack-allocated landlockRulesetAttr passed by pointer only for this synchronous syscall; the kernel copies the fields it needs and does not retain the pointer past the call.
 		unsafe.Sizeof(attr),
 		0,
 	)
@@ -529,14 +529,14 @@ func addLandlockPathRule(rulesetFd int, path string, rights uint64) error {
 
 	pathAttr := landlockPathBeneathAttr{
 		allowedAccess: rights,
-		parentFd:      int32(fd),
+		parentFd:      int32(fd), // #nosec G115 -- fd is a process file descriptor from unix.Open above; fd numbers are bounded by RLIMIT_NOFILE (a few thousand in practice, at most a few million even on a very permissive host), far below int32's ~2.1 billion range.
 	}
 
 	_, _, errno := unix.Syscall6(
 		sysLandlockAddRule,
 		uintptr(rulesetFd),
 		landlockRulePathBeneath,
-		uintptr(unsafe.Pointer(&pathAttr)),
+		uintptr(unsafe.Pointer(&pathAttr)), // #nosec G103 -- landlock_add_rule(2), LANDLOCK_RULE_PATH_BENEATH: pathAttr is a stack-allocated landlockPathBeneathAttr passed by pointer only for this synchronous syscall; not retained by the kernel past the call.
 		0, 0, 0,
 	)
 	if errno != 0 {
@@ -560,7 +560,7 @@ func addLandlockNetPortRule(rulesetFd int, port uint16, rights uint64) error {
 		sysLandlockAddRule,
 		uintptr(rulesetFd),
 		landlockRuleNetPort,
-		uintptr(unsafe.Pointer(&attr)),
+		uintptr(unsafe.Pointer(&attr)), // #nosec G103 -- landlock_add_rule(2), LANDLOCK_RULE_NET_PORT: attr is a stack-allocated landlockNetPortAttr passed by pointer only for this synchronous syscall; not retained by the kernel past the call.
 		0, 0, 0,
 	)
 	if errno != 0 {
@@ -687,7 +687,7 @@ func (lb *LinuxBackend) RestrictCurrentThreadWithPolicy(policy *SandboxPolicy) e
 	}
 	rulesetFd, _, errno := unix.Syscall(
 		sysLandlockCreateRuleset,
-		uintptr(unsafe.Pointer(&attr)),
+		uintptr(unsafe.Pointer(&attr)), // #nosec G103 -- landlock_create_ruleset(2): attr is a stack-allocated landlockRulesetAttr passed by pointer only for this synchronous syscall; the kernel copies the fields it needs and does not retain the pointer past the call.
 		unsafe.Sizeof(attr),
 		0,
 	)

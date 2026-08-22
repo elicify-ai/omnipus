@@ -49,7 +49,7 @@ func BenchmarkMediaStoreResolve(b *testing.B) {
 	}
 
 	b.ResetTimer()
-	rng := rand.New(rand.NewSource(42)) //nolint:gosec // deterministic seed for reproducibility
+	rng := rand.New(rand.NewSource(42)) // gosec rationale (out of gosec scope; kept as documentation): deterministic seed for reproducibility
 	for i := 0; i < b.N; i++ {
 		ref := refs[rng.Intn(len(refs))]
 		path, err := store.Resolve(ref)
@@ -103,7 +103,7 @@ func TestMediaResolveSLO(t *testing.T) {
 	}
 
 	latenciesMs := make([]float64, 0, lookups)
-	rng := rand.New(rand.NewSource(42)) //nolint:gosec
+	rng := rand.New(rand.NewSource(42))
 
 	for i := 0; i < lookups; i++ {
 		ref := refs[rng.Intn(len(refs))]

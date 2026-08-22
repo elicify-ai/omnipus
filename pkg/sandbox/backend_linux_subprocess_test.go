@@ -54,7 +54,7 @@ func TestLandlock_ApplySubprocess(t *testing.T) {
 	workspace := t.TempDir()
 
 	// Re-exec the test binary with the child sentinel env var set.
-	//nolint:gosec // intentional test-binary self-exec
+	// gosec rationale (out of gosec scope; kept as documentation): intentional test-binary self-exec
 	cmd := exec.Command(os.Args[0],
 		"-test.run=TestLandlock_ApplySubprocess",
 		"-test.count=1",
@@ -168,7 +168,7 @@ func runLandlockChild() {
 func runLandlockBindSubprocess(t *testing.T, childEnvVar, testRunName, successMsg string, wantCode int) {
 	t.Helper()
 	workspace := t.TempDir()
-	//nolint:gosec // intentional test-binary self-exec
+	// gosec rationale (out of gosec scope; kept as documentation): intentional test-binary self-exec
 	cmd := exec.Command(os.Args[0],
 		"-test.run="+testRunName,
 		"-test.count=1",

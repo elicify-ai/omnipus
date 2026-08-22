@@ -195,7 +195,7 @@ func TestSortOrder_TotalOnEmptyStartedAt(t *testing.T) {
 	reference := append([]jobRow(nil), base...)
 	sortJobRows(reference)
 
-	rng := rand.New(rand.NewSource(1)) //nolint:gosec // deterministic shuffle, not crypto
+	rng := rand.New(rand.NewSource(1)) // gosec rationale (out of gosec scope; kept as documentation): deterministic shuffle, not crypto
 	for trial := 0; trial < 50; trial++ {
 		shuffled := append([]jobRow(nil), base...)
 		rng.Shuffle(len(shuffled), func(i, j int) { shuffled[i], shuffled[j] = shuffled[j], shuffled[i] })

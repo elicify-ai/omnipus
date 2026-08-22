@@ -106,7 +106,7 @@ const (
 // the named test (which must itself branch into child-mode based on an env
 // var in env), bounded by childContextTimeout/childTestTimeoutFlag per GAP 3.
 func newChildCmd(ctx context.Context, testName string, env []string) *exec.Cmd {
-	//nolint:gosec // intentional test-binary self-exec, mirrors the
+	// gosec rationale (out of gosec scope; kept as documentation): intentional test-binary self-exec, mirrors the
 	// pkg/sandbox/*_subprocess_test.go convention.
 	cmd := exec.CommandContext(ctx, os.Args[0],
 		"-test.run=^"+testName+"$",

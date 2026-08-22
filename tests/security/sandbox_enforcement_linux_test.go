@@ -123,7 +123,7 @@ func TestSandboxEnforcement(t *testing.T) {
 				t.Fatalf("failed to create out-of-workspace canary file: %v", err)
 			}
 
-			//nolint:gosec // intentional test-binary self-exec; no user input
+			// gosec rationale (out of gosec scope; kept as documentation): intentional test-binary self-exec; no user input
 			cmd := exec.Command(os.Args[0],
 				"-test.run=^TestSandboxEnforcement$",
 				"-test.count=1",

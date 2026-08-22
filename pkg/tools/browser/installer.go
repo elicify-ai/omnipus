@@ -4,7 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
-	"crypto/md5" //nolint:gosec // integrity check only (matches the GCS-published Content-MD5), not a security signature — see verifyGoogHashMD5.
+	"crypto/md5" // gosec rationale (out of gosec scope; kept as documentation): integrity check only (matches the GCS-published Content-MD5), not a security signature — see verifyGoogHashMD5.
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -673,7 +673,7 @@ func downloadFile(ctx context.Context, url, dest string) error {
 	}
 	tmpPath := tmp.Name()
 
-	hasher := md5.New() //nolint:gosec // see the import comment: integrity check, not a security signature.
+	hasher := md5.New() // gosec rationale (out of gosec scope; kept as documentation): see the import comment: integrity check, not a security signature.
 	if _, err := io.Copy(io.MultiWriter(tmp, hasher), resp.Body); err != nil {
 		tmp.Close()
 		_ = os.Remove(tmpPath)

@@ -105,7 +105,7 @@ const childNProcSlack uint64 = 128
 // hardened-exec spawn so kept allocation-light. Tolerant of races: a process
 // or thread exiting mid-walk is skipped (counted as 1 for the leader).
 func readCurrentUserNProc() uint64 {
-	uid := uint64(os.Getuid())
+	uid := uint64(os.Getuid()) // #nosec G115 -- os.Getuid() on Linux wraps getuid(2), which returns the kernel's uid_t (32-bit unsigned) and never fails or returns negative; converting a value bounded to [0, 4294967295] into uint64 cannot overflow.
 	dir, err := os.Open("/proc")
 	if err != nil {
 		return 0

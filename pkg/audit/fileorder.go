@@ -88,6 +88,10 @@ func sortAuditFilesChronologically(paths []string) {
 // unreadable, its first non-blank line fails to parse as JSON, or that line
 // lacks (or has a zero) "timestamp" field.
 func firstEntryTimestamp(path string) (time.Time, bool) {
+	// #nosec G304 -- path is always an element of filepath.Glob(l.dir +
+	// "audit-*.jsonl") (see audit.go/query.go/verify.go callers of
+	// sortAuditFilesChronologically) — enumerated from the deployment-
+	// configured audit directory, never request-derived.
 	f, err := os.Open(path)
 	if err != nil {
 		return time.Time{}, false

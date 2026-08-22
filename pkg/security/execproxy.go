@@ -66,7 +66,10 @@ func (p *ExecProxy) Start() error {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", p.handleProxy)
-	srv := &http.Server{Handler: mux}
+	srv := &http.Server{
+		Handler:           mux,
+		ReadHeaderTimeout: 10 * time.Second,
+	}
 	p.server = srv
 	p.running.Store(true)
 	p.mu.Unlock()
@@ -209,6 +212,12 @@ func (p *ExecProxy) handleProxy(w http.ResponseWriter, r *http.Request) {
 
 	// CheckHost handles both raw IPs and hostnames with DNS resolution
 	if _, err := p.ssrf.CheckHost(r.Context(), hostOnly); err != nil {
+		// #nosec G706 -- hostOnly/err.Error() are passed as discrete slog
+		// key/value fields, never concatenated into the message string. Both
+		// log sinks (pkg/logger's JSON file writer and zerolog ConsoleWriter's
+		// needsQuote/strconv.Quote path for values containing control bytes)
+		// escape embedded newlines, so a crafted Host header cannot forge a
+		// fake log line in either the persisted audit trail or the terminal.
 		slog.Warn("execproxy: SSRF blocked", "host", hostOnly, "reason", err.Error())
 		http.Error(w, "SSRF: "+err.Error(), http.StatusForbidden)
 		return
@@ -223,6 +232,14 @@ func (p *ExecProxy) handleProxy(w http.ResponseWriter, r *http.Request) {
 
 func (p *ExecProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	r.RequestURI = ""
+	// #nosec G704 -- constructing outReq here is not the dispatch point: the
+	// host it targets is already gated by p.ssrf.CheckHost in handleProxy
+	// (the sole caller of handleHTTP) before we ever reach this line, and the
+	// actual network dispatch below goes through SafeClient(), an SSRF-safe
+	// client that re-validates the resolved IP at dial time (defends against
+	// DNS-rebinding between the check and the dial). That call, not this
+	// one, is the real enforcement point; this constructor call is inert
+	// until then.
 	outReq, err := http.NewRequestWithContext(r.Context(), r.Method, r.URL.String(), r.Body)
 	if err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
@@ -230,6 +247,13 @@ func (p *ExecProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	outReq.Header = r.Header.Clone()
 
+	// #nosec G704 -- this is the actual dispatch: outReq's host was gated by
+	// p.ssrf.CheckHost in handleProxy (the sole caller of handleHTTP) before
+	// we ever got here, and SafeClient() is itself an SSRF-safe client that
+	// re-validates the resolved IP at dial time (defends against
+	// DNS-rebinding between that check and this dial). This is the
+	// enforcement point gosec's taint analysis is (correctly) flagging as
+	// the sink; it is not a bypass of it.
 	resp, err := p.ssrf.SafeClient().Do(outReq)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
@@ -267,6 +291,8 @@ func (p *ExecProxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 	// cannot swap the DNS answer between our SSRF check and the actual dial.
 	addrs, err := p.ssrf.CheckHost(r.Context(), host)
 	if err != nil {
+		// #nosec G706 -- see the identical justification on the handleProxy
+		// slog.Warn above: structured k/v fields, escaped at both log sinks.
 		slog.Warn("execproxy: SSRF blocked in CONNECT", "host", host, "reason", err.Error())
 		http.Error(w, "SSRF: "+err.Error(), http.StatusForbidden)
 		return

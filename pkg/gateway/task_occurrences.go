@@ -649,7 +649,7 @@ dayLoop:
 					// window (delta-review HIGH fix: the wire value must equal
 					// the tally window exactly, not a fixed-24h client guess).
 					DayEndMs:   next,
-					Count:      int32(dr.count), //nolint:gosec // dr.count is bounded by perTaskIterationBudget (10000), well within int32 range
+					Count:      int32(dr.count), // gosec rationale (out of gosec scope; kept as documentation): dr.count is bounded by perTaskIterationBudget (10000), well within int32 range
 					FirstMs:    dr.firstMs,
 					IntervalMs: intervalMs,
 				})

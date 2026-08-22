@@ -12,9 +12,14 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/fileutil"
 )
 
+// AuthCredential is the designed on-disk credential record, persisted to
+// auth.json via SaveStore with fileutil.WriteFileAtomic(path, data, 0o600) —
+// AccessToken/RefreshToken are annotated individually since gosec's G117
+// fires per struct field; holding these fields IS this type's purpose, and
+// the file is written with owner-only permissions.
 type AuthCredential struct {
-	AccessToken  string    `json:"access_token"`
-	RefreshToken string    `json:"refresh_token,omitempty"`
+	AccessToken  string    `json:"access_token"`            // #nosec G117 -- designed credential field, see comment above
+	RefreshToken string    `json:"refresh_token,omitempty"` // #nosec G117 -- designed credential field, see comment above
 	AccountID    string    `json:"account_id,omitempty"`
 	ExpiresAt    time.Time `json:"expires_at,omitempty"`
 	Provider     string    `json:"provider"`
@@ -56,6 +61,9 @@ func authFilePath() string {
 
 func LoadStore() (*AuthStore, error) {
 	path := authFilePath()
+	// #nosec G304 -- authFilePath() joins $OMNIPUS_HOME (or os.UserHomeDir())
+	// with the hardcoded literal "auth.json" — deployment/environment
+	// controlled, never request-derived.
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {

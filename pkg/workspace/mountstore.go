@@ -159,7 +159,7 @@ func loadMountStore(home, id string) ([]Mount, bool) {
 		})
 		return nil, false
 	}
-	data, err := os.ReadFile(path) //nolint:gosec // path is built from a safeID-checked id under the store dir
+	data, err := os.ReadFile(path) // gosec rationale (out of gosec scope; kept as documentation): path is built from a safeID-checked id under the store dir
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, true

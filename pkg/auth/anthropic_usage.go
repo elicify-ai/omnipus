@@ -34,6 +34,9 @@ func FetchAnthropicUsage(token string) (*AnthropicUsage, error) {
 	req.Header.Set("Anthropic-Beta", anthropicBetaHeader)
 
 	client := &http.Client{Timeout: 10 * time.Second}
+	// #nosec G704 -- req targets anthropicUsageURL, a hardcoded first-party
+	// API endpoint constant (only ever overridden by setAnthropicUsageURL in
+	// tests); no externally-controlled URL reaches this call.
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err

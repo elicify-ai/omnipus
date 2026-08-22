@@ -79,6 +79,10 @@ func Unlock(store *Store) error {
 		if err := store.UnlockWithKey(key); err != nil {
 			return err
 		}
+		// #nosec G706 -- keyFile is passed as a discrete slog field (operator-
+		// set env var, not attacker input either way); both log sinks escape
+		// control bytes in string field values (see the sink detail noted on
+		// execproxy.go's SSRF-blocked log lines), so no forgery surface.
 		slog.Debug("credentials: unlocked via OMNIPUS_KEY_FILE", "path", keyFile)
 		return nil
 	}
@@ -120,6 +124,10 @@ func Unlock(store *Store) error {
 	// Mode 5: Interactive passphrase (requires TTY). Return an error when no TTY is
 	// available — a silent nil would leave the store locked and cause confusing downstream
 	// failures. Callers that allow a locked store should check before calling Unlock.
+	// #nosec G115 -- os.Stdin.Fd() is a small, kernel-assigned file descriptor
+	// number (bounded by the process's open-file-descriptor limit, orders of
+	// magnitude below MaxInt); the uintptr->int conversion cannot overflow in
+	// practice. Standard idiom, matches golang.org/x/term's own examples.
 	if !term.IsTerminal(int(os.Stdin.Fd())) {
 		return fmt.Errorf("credentials: no master key available and no TTY — "+
 			"set OMNIPUS_MASTER_KEY, OMNIPUS_KEY_FILE, or provide %s for headless operation",
@@ -163,6 +171,9 @@ func generateAndPersistMasterKey(path string) ([]byte, error) {
 	// O_EXCL guarantees atomic creation — if two processes race, one gets
 	// an error and re-probes via mode 3 on the next Unlock call.
 	hexKey := hex.EncodeToString(key)
+	// #nosec G304 -- generateAndPersistMasterKey has exactly one caller
+	// (Unlock, mode 4), which always passes defaultKeyPath — a fixed
+	// $OMNIPUS_HOME-derived constant, never request-derived.
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("create key file %q: %w", path, err)
@@ -267,9 +278,17 @@ func hexToKey(hexKey string) ([]byte, error) {
 //
 // Returns a clear error mentioning the actual mode so operators can fix it
 // with a single chmod 600.
+// loadKeyFile has exactly two callers (Unlock modes 2 and 3): OMNIPUS_KEY_FILE
+// (an operator-set env var) and defaultKeyPath (a fixed $OMNIPUS_HOME
+// constant) — path is never request-derived. path.Lstat/Stat below are the
+// deliberate symlink-aware target-permission check described in the doc
+// comment above (not a traversal bug: this function's whole purpose is to
+// resolve and validate whatever path an operator configured).
 func loadKeyFile(path string) ([]byte, error) {
 	// Lstat first to detect symlinks. A symlink's own perms are usually 0o777
 	// on Linux and irrelevant to security; what matters is the target.
+	// #nosec G703 -- see the func doc comment above: path is operator-
+	// configured (env var or fixed default), not request-derived.
 	lInfo, lErr := os.Lstat(path)
 	if lErr != nil {
 		emitMasterKeyAudit(path, false, fmt.Sprintf("lstat: %v", lErr))
@@ -278,6 +297,7 @@ func loadKeyFile(path string) ([]byte, error) {
 	isSymlink := lInfo.Mode()&os.ModeSymlink != 0
 
 	// Stat (follows symlinks) for the authoritative perm check on the target.
+	// #nosec G703 -- same as the Lstat above.
 	info, err := os.Stat(path)
 	if err != nil {
 		emitMasterKeyAudit(path, false, fmt.Sprintf("stat: %v", err))
@@ -298,6 +318,9 @@ func loadKeyFile(path string) ([]byte, error) {
 		return nil, fmt.Errorf("master key file %q must have mode 0600 (got %04o); refusing to load", path, perm)
 	}
 
+	// #nosec G304,G703 -- same path as the Lstat/Stat calls above: operator-
+	// configured (env var or fixed default), already permission-validated
+	// (strict 0600 check above this line) before this read.
 	data, err := os.ReadFile(path)
 	if err != nil {
 		emitMasterKeyAudit(path, false, fmt.Sprintf("read: %v", err))
@@ -341,6 +364,11 @@ func emitMasterKeyAudit(path string, success bool, detail string) {
 	// attention required). Both go through the same slog handler so the audit
 	// hook (when wired by the gateway) can pick them up.
 	if success {
+		// #nosec G706 -- `event` is the "credentials.master_key_load" local
+		// constant two lines up (used as both message and message struct's
+		// slog.Info first-arg by convention), not tainted; path/detail are
+		// discrete slog fields, escaped by both log sinks (see the sink
+		// detail noted on execproxy.go's SSRF-blocked log lines).
 		slog.Info(event,
 			"event", event,
 			"decision", decision,
@@ -349,6 +377,8 @@ func emitMasterKeyAudit(path string, success bool, detail string) {
 		)
 		return
 	}
+	// #nosec G706 -- see the Info branch above; same event constant, same
+	// structured-field reasoning.
 	slog.Warn(event,
 		"event", event,
 		"decision", decision,
@@ -360,6 +390,8 @@ func emitMasterKeyAudit(path string, success bool, detail string) {
 
 // promptPassphrase reads a passphrase from the terminal without echo.
 func promptPassphrase(prompt string) (string, error) {
+	// #nosec G115 -- same as the Unlock TTY check above: os.Stdin.Fd() is a
+	// small kernel-assigned FD, cannot overflow int in practice.
 	fd := int(os.Stdin.Fd())
 	fmt.Fprint(os.Stderr, prompt)
 	raw, err := term.ReadPassword(fd)

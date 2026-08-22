@@ -72,7 +72,7 @@ type loopStatusFrameYAMLLoader struct{}
 
 func (loopStatusFrameYAMLLoader) Load(url string) (any, error) {
 	path := strings.TrimPrefix(url, "file://")
-	data, err := os.ReadFile(path) //nolint:gosec // test-only, path built from runtime.Caller
+	data, err := os.ReadFile(path) // gosec rationale (out of gosec scope; kept as documentation): test-only, path built from runtime.Caller
 	if err != nil {
 		return nil, err
 	}

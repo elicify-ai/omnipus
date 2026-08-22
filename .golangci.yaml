@@ -38,6 +38,13 @@ linters:
     #   errcheck   1073 -> 412 production / 661 test
     #   gosec      2258 -> G304 621, G104 584, G306 365, G301 270
     # Re-measure before enabling any of the above; do not guess.
+    #
+    # gosec: ENABLED (removed from this list) 2026-08-21, but SCOPED to
+    # production files in the six security-critical packages only
+    # (pkg/security, pkg/sandbox, pkg/audit, pkg/policy, pkg/credentials,
+    # pkg/auth) via the path-except exclusion rule below — silent everywhere
+    # else in the repo (still 2258 findings project-wide, untriaged). Full
+    # repo-wide enablement is separate follow-up work.
     - contextcheck
     - embeddedstructfieldcheck
     - errcheck
@@ -53,7 +60,6 @@ linters:
     - gocritic
     - gocyclo
     - godox
-    - gosec
     - lll
     - maintidx
     - mnd
@@ -163,10 +169,27 @@ linters:
           # are normal and expected in tests.
           - dupl
           - gosmopolitan
+          # gosec: test-file findings (124 measured 2026-08-21 across the six
+          # security-critical packages: G304 56, G301 17, G306 15, G204 12,
+          # G302 7, G101 5, G115 4, G104 4, G112 2, G703 1, G102 1) are
+          # test-fixture noise — temp dirs/files created and chmod'd by the
+          # tests themselves to exercise the permission checks under test,
+          # not production code paths. Excluded by path, not disabled.
+          - gosec
         path: _test\.go$
       - linters:
           - golines
         path: ^pkg/api/generated/
+      # gosec: scope to production files in the six security-critical
+      # packages only (Constraint #6 packages: pkg/security, pkg/sandbox,
+      # pkg/audit, pkg/policy, pkg/credentials, pkg/auth). path-except
+      # excludes issues for files that do NOT match the pattern, i.e. keeps
+      # gosec issues only inside this path — silent everywhere else in the
+      # repo (2258 findings measured 2026-08-20, untriaged, tracked as
+      # separate follow-up work, not this sweep's scope).
+      - linters:
+          - gosec
+        path-except: ^pkg/(security|sandbox|audit|policy|credentials|auth)/
 issues:
   max-issues-per-linter: 0
   max-same-issues: 0

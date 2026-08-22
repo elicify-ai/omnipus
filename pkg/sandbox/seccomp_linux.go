@@ -92,7 +92,7 @@ func (sp *SeccompProgram) Install() error {
 	}
 
 	prog := unix.SockFprog{
-		Len:    uint16(len(filter)),
+		Len:    uint16(len(filter)), // #nosec G115 -- len(filter) tracks blockedSyscallNames (sandbox.go), a fixed compile-time list currently 15 entries plus a handful of fixed arch/x32-check instructions (~20 total); assembleBPFMode's own uint8-jump bounds check above already fails closed long before this could approach uint16's 65535 range.
 		Filter: &filter[0],
 	}
 
@@ -101,7 +101,7 @@ func (sp *SeccompProgram) Install() error {
 		unix.SYS_SECCOMP,
 		uintptr(unix.SECCOMP_SET_MODE_FILTER),
 		uintptr(unix.SECCOMP_FILTER_FLAG_TSYNC),
-		uintptr(unsafe.Pointer(&prog)),
+		uintptr(unsafe.Pointer(&prog)), // #nosec G103 -- seccomp(2), SECCOMP_SET_MODE_FILTER: prog is a stack-allocated unix.SockFprog passed by pointer only for this synchronous syscall; its Filter slice stays reachable via the still-in-scope `filter` local for the syscall's duration, and the kernel copies the program rather than retaining either pointer.
 	)
 	if errno != 0 {
 		return fmt.Errorf("seccomp: SYS_SECCOMP install failed: %w", errno)
@@ -241,6 +241,29 @@ func assembleBPFMode(blockedNrs []uint32, mode Mode) []unix.SockFilter {
 	allowIdx := base + n + 1
 	denyIdx := allowIdx + 1
 
+	// Classic BPF's sock_filter.{Jt,Jf} fields are a single byte each
+	// (uint8) — see struct sock_filter in linux/filter.h; the kernel ABI
+	// cannot express a jump distance above 255. Every Jt/Jf value computed
+	// below (denyIdx-2, and on amd64 also denyIdx-base, plus each
+	// per-syscall "remaining" jump whose largest value is n) is a
+	// truncating int -> uint8 conversion. blockedSyscallNames
+	// (pkg/sandbox/sandbox.go) is a fixed, hand-maintained list — 15
+	// entries today — but nothing previously stopped it from growing past
+	// this program's jump-encoding ceiling. If it ever did, these
+	// conversions would silently wrap and produce a MALFORMED-BUT-ACCEPTED
+	// BPF program: a jump could land on the wrong instruction and turn a
+	// syscall meant to be blocked into one that falls through to RET
+	// ALLOW, weakening seccomp confinement with no error anywhere in the
+	// boot path. Fail closed instead: return an empty program, which
+	// Install already treats as a hard boot error ("seccomp: empty BPF
+	// program").
+	const maxBPFJump = 255 // math.MaxUint8, per struct sock_filter's Jt/Jf width
+	if denyIdx-2 > maxBPFJump || (x32Check && denyIdx-base > maxBPFJump) || n > maxBPFJump {
+		slog.Error("seccomp: blocked syscall list too large for classic BPF's uint8 jump encoding",
+			"blocked_count", n, "deny_idx", denyIdx, "max_jump", maxBPFJump)
+		return nil
+	}
+
 	prog := make([]unix.SockFilter, 0, denyIdx+1)
 
 	// Instruction 0: Load syscall arch
@@ -256,7 +279,7 @@ func assembleBPFMode(blockedNrs []uint32, mode Mode) []unix.SockFilter {
 	prog = append(prog, unix.SockFilter{
 		Code: uint16(bpfJMP | bpfJEQ | bpfK),
 		Jt:   0,
-		Jf:   uint8(denyIdx - 2),
+		Jf:   uint8(denyIdx - 2), // #nosec G115 -- bounds-checked above: assembleBPFMode returns early (empty program) unless denyIdx-2 <= maxBPFJump (255), the classic-BPF Jf width.
 		K:    nativeAuditArch,
 	})
 
@@ -286,7 +309,7 @@ func assembleBPFMode(blockedNrs []uint32, mode Mode) []unix.SockFilter {
 		// reload), so Jt = denyIdx - base.
 		prog = append(prog, unix.SockFilter{
 			Code: uint16(bpfJMP | bpfJEQ | bpfK),
-			Jt:   uint8(denyIdx - base),
+			Jt:   uint8(denyIdx - base), // #nosec G115 -- bounds-checked above: assembleBPFMode returns early (empty program) unless denyIdx-base <= maxBPFJump (255), the classic-BPF Jt width.
 			Jf:   0,
 			K:    x32SyscallBit,
 		})
@@ -308,7 +331,7 @@ func assembleBPFMode(blockedNrs []uint32, mode Mode) []unix.SockFilter {
 		remaining := n - i // instructions left after this one before allow
 		prog = append(prog, unix.SockFilter{
 			Code: uint16(bpfJMP | bpfJEQ | bpfK),
-			Jt:   uint8(remaining), // jump to deny (skip remaining JEQs + allow)
+			Jt:   uint8(remaining), // jump to deny (skip remaining JEQs + allow) // #nosec G115 -- bounds-checked above: remaining <= n, and assembleBPFMode returns early (empty program) unless n <= maxBPFJump (255), the classic-BPF Jt width.
 			Jf:   0,                // fall through to next JEQ
 			K:    nr,
 		})

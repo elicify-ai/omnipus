@@ -48,7 +48,7 @@ func TestApplyOnABI4_EINVAL_HardFails(t *testing.T) {
 	}
 
 	workspace := t.TempDir()
-	//nolint:gosec // intentional test-binary self-exec
+	// gosec rationale (out of gosec scope; kept as documentation): intentional test-binary self-exec
 	cmd := exec.Command(os.Args[0],
 		"-test.run=TestApplyOnABI4_EINVAL_HardFails",
 		"-test.count=1",

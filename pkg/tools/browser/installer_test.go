@@ -4,7 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
-	"crypto/md5" //nolint:gosec // test fixture only — computing the same X-Goog-Hash the production verifier checks.
+	"crypto/md5" // gosec rationale (out of gosec scope; kept as documentation): test fixture only — computing the same X-Goog-Hash the production verifier checks.
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -69,7 +69,7 @@ func buildZipFixture(t *testing.T, build chromiumBuild, platform string, content
 // content's real MD5 digest — the header verifyGoogHashMD5 checks in
 // production.
 func googHashMD5Header(content []byte) string {
-	sum := md5.Sum(content) //nolint:gosec // see import comment.
+	sum := md5.Sum(content) // gosec rationale (out of gosec scope; kept as documentation): see import comment.
 	return "md5=" + base64.StdEncoding.EncodeToString(sum[:])
 }
 
@@ -110,7 +110,7 @@ func withManifestURL(t *testing.T, url string) {
 
 func TestVerifyGoogHashMD5_MultipleHeaderLines(t *testing.T) {
 	content := []byte("chrome-headless-shell.zip contents")
-	sum := md5.Sum(content) //nolint:gosec // test fixture — mirrors the server's published md5.
+	sum := md5.Sum(content) // gosec rationale (out of gosec scope; kept as documentation): test fixture — mirrors the server's published md5.
 	md5Hdr := googHashMD5Header(content)
 
 	t.Run("crc32c line first then md5 line (real GCS order) -> accepted", func(t *testing.T) {
@@ -142,7 +142,7 @@ func TestVerifyGoogHashMD5_MultipleHeaderLines(t *testing.T) {
 		h := http.Header{}
 		h.Add("X-Goog-Hash", "crc32c=XqmS2Q==")
 		h.Add("X-Goog-Hash", md5Hdr)
-		wrong := md5.Sum([]byte("different content")) //nolint:gosec // test fixture.
+		wrong := md5.Sum([]byte("different content")) // gosec rationale (out of gosec scope; kept as documentation): test fixture.
 		if err := verifyGoogHashMD5(h, wrong[:]); err == nil {
 			t.Fatal("expected a checksum-mismatch rejection")
 		}

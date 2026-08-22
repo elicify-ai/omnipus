@@ -81,7 +81,7 @@ func TestLandlock_WorkspaceReroot_StaysInsideBootGrant(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(outside) })
 
-	//nolint:gosec // intentional test-binary self-exec
+	// gosec rationale (out of gosec scope; kept as documentation): intentional test-binary self-exec
 	cmd := exec.Command(os.Args[0],
 		"-test.run=^TestLandlock_WorkspaceReroot_StaysInsideBootGrant$",
 		"-test.count=1",
