@@ -1,3 +1,10 @@
+//go:build !windows
+
+// Not built on Windows: process GROUPS are a POSIX concept. These tests set
+// SysProcAttr.Setpgid and signal the group with syscall.Kill, neither of
+// which exists in the Windows syscall package. The Windows equivalent is a
+// Job Object (pkg/sandbox/hardened_exec_windows.go) and needs its own test.
+
 // procgroup_adr057_test.go — ADR-057 U22 (W9c, FR-029, BDD-86, test #68a).
 //
 // Regression coverage for the process-group gap procgroup_unix.go closes: a

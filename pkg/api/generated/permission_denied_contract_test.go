@@ -1,3 +1,8 @@
+//go:build !windows
+
+// Must match contract_test.go's constraint — see the note in
+// file_exists_refusal_contract_test.go. Same helpers, same tag.
+
 package generated
 
 import "testing"
