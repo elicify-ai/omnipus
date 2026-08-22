@@ -400,121 +400,162 @@ another package's tests does not transfer the guarantee.
 > **AC-14.2** A write whose version token is stale is refused, and the refusal is audited.
 > **AC-14.3** Lock-wait expiry produces an error within the bound, never a hang.
 
-### D15 — Render-first preview, with isolation matched to the format
+### D15 — Render-first preview: Omnipus renders documents; only active content is sandboxed
 
-**Revised 2026-08-22 after measurement.** See
-[preview isolation experiment](../specs/adr-067-preview-isolation-experiment-2026-08-22.md)
-— 5 policies × 2 load modes × 3 engines (Chromium 151, Firefox 153, WebKit 26.5),
-twice each, with server-side request logs as ground truth. 24 of 25 compared rows
-agreed across engines.
+**Revision 3, 2026-08-22.** Supersedes revision 2's per-format isolation split, which is
+withdrawn. Grounded in two measured experiments, both recorded in
+[the preview isolation experiment](../specs/adr-067-preview-isolation-experiment-2026-08-22.md).
 
 The preview pane renders the artifact; **source appears only after pressing Edit**.
 
-#### D15.1 — One policy per format, not one policy for everything
+#### D15.1 — The dividing line is "who renders it", not "what format is it"
 
-Revision 1 applied a single sandboxing policy to every inline file. The experiment
-showed that policy **breaks PDF rendering on all three engines** while being
-necessary for HTML. The error was treating "inline preview" as one thing.
+Revision 1 sandboxed every inline file — which **broke PDF**. Revision 2 answered with a
+per-format isolation split — relaxing protection for "passive" formats. Both are wrong,
+and revision 2 was wrong in the dangerous direction: it traded away isolation.
 
-**The protection matches what the format can execute:**
+The actual line is simpler:
 
-| Class | Formats | Isolation | Rationale |
+| Class | Formats | How it reaches the screen | Isolation |
 |---|---|---|---|
-| **Active** | `.html`, `.htm`, and bundles | `sandbox allow-scripts` (no `allow-same-origin`) **plus** source directives | Arbitrary agent- or web-authored code executing inside the operator's session |
-| **Passive** | `.pdf`, audio, images, video | **No `sandbox`.** Strict source directives, exact `Content-Type`, `X-Content-Type-Options: nosniff` | Not scriptable against our DOM. A PDF's own scripts run inside the browser's PDF viewer, which is itself an isolation boundary |
-| **Everything else** | all other extensions | Unchanged — `Content-Disposition: attachment` | Not on the inline allow-list |
+| **Omnipus renders it** | images, video, audio, markdown, Mermaid, code, **and now PDF** | A React component in our own SPA draws it. No document, no origin, nothing to sandbox | **Not applicable** — the bytes are parsed and drawn by us, exactly as `LibraryImagePreview` (`<img>`) and `LibraryVideoPreview` (`<video>`) already do |
+| **The browser renders it** | `.html`, `.htm`, bundles | Arbitrary agent- or web-authored code executing as its own document | **`sandbox allow-scripts` (no `allow-same-origin`) plus source directives** |
+| **Neither** | everything else | Download card, unchanged | `Content-Disposition: attachment` |
 
-> **The guarantee is deliberately NOT uniform, and must never be described as if it
-> were.** "Previews are sandboxed" is false as of this revision. The true statement is
-> "HTML previews are sandboxed; document formats are served as documents." Every
-> addition to the passive list is a security decision requiring the same scrutiny as
-> the first — FR-016 exists to stop that list growing silently.
+**PDF moves into the first class by rendering it with PDF.js.** It stops being a document
+the browser opens and becomes bytes a component draws — which is why the isolation
+question disappears rather than being traded away.
 
-#### D15.2 — The active-content policy (measured)
+**Consequence: the isolation guarantee is uniform again.** "Only HTML is sandboxed, because
+only HTML is executed by the browser" is a statement that is both true and simple. Revision
+2's warning that the guarantee is non-uniform is withdrawn along with the split.
 
-For HTML: `sandbox allow-scripts` **without** `allow-same-origin`, combined with
-source directives. Measured outcome, identical on all three engines, in both
-top-level navigation and embedded modes:
+#### D15.2 — Active content: the measured policy
+
+For HTML: `sandbox allow-scripts` **without** `allow-same-origin`, plus source directives.
+Measured across Chromium 151, Firefox 153 and WebKit 26.5, twice each, in both top-level
+and embedded modes, with server-side request logs as ground truth — 24 of 25 compared rows
+identical across engines:
 
 - **Zero of seven egress vectors** reached an external origin (image, fetch, beacon,
   WebSocket, iframe, form, popup).
-- `document.cookie` and `localStorage` **threw `SecurityError`** — not empty strings.
-  Meaningful, because the same page without `sandbox` read back the session cookie.
+- `document.cookie` and `localStorage` **threw `SecurityError`** — meaningful, because the
+  same page without `sandbox` read back the session cookie.
 - External stylesheet, external script and audio all loaded and worked.
 
-**`'self'` is used, not an explicit origin.** ADR revision 1 warned that `'self'`
-might not match under an opaque origin. **That warning was wrong** — measured false on
-all three engines. `'self'` resolves against the URL the resource was served from, not
-the document's opaque origin. The two policies were indistinguishable on every field,
-and an explicit origin additionally hardcodes a hostname that breaks behind a reverse
+**`'self'` is used, not an explicit origin.** Revision 1 warned `'self'` might not match
+under an opaque origin. **Measured false on all three engines** — `'self'` resolves against
+the URL the resource was served from, not the document's opaque origin. An explicit origin
+behaved identically and additionally hardcodes a hostname that breaks behind a reverse
 proxy (`gateway.public_url`).
 
-**Both mechanisms are required; neither alone suffices.** Measured: with source
-directives but no `sandbox`, `window.open` still reached the external origin on every
-engine — no CSP directive covers popup navigation. With `sandbox` but no source
-directives, five of seven vectors escaped.
+**Both mechanisms are required.** Measured: with source directives but no `sandbox`,
+`window.open` still reached the external origin on every engine — no CSP directive covers
+popup navigation. With `sandbox` but no source directives, five of seven vectors escaped.
 
-#### D15.3 — The type-confusion defence is the critical control
+**Webfonts in bundles need `Access-Control-Allow-Origin` on font responses.** Under an
+opaque origin a page is cross-origin to its own server, so its own font is CORS-refused.
+Measured: with the header, the font applies; without it, it does not. The blocker is
+definitively CORS, established with a rendered-width oracle — `document.fonts.status`
+reports `"loaded"` even on failure and **must not be used as a success check**.
 
-Relaxing sandbox for passive formats creates exactly one serious attack: **an HTML
-document named `report.pdf`**. It is blocked by two properties that must both hold and
-must be tested together:
+#### D15.3 — PDF via PDF.js, in the SPA
 
-1. `Content-Type` is derived from the **file extension**, never sniffed from content.
-2. `X-Content-Type-Options: nosniff` forbids the browser from overriding it.
+`pdfjs-dist` — Mozilla's renderer, the one Firefox uses for every PDF. **Apache-2.0**,
+compatible with this project's MIT licence. Shipped size **~1.6 MB** (0.43 MB core +
+1.20 MB worker), lazy-loaded only when a PDF is opened, against an SPA that already carries
+70 dependencies including Mermaid and Shiki.
 
-**This is the single most important test in stage 1.** A regression here turns the
-passive path into an unsandboxed HTML execution path.
+Renders to canvas with text selection, search, zoom, rotation, thumbnails and outline.
 
-#### D15.4 — Known limits
+**Form filling and signing are supported, and this was measured rather than assumed** —
+because vendor sources (all sellers of competing paid libraries) claim PDF.js annotations
+*"may not save properly into the PDF binary"*. Tested with `pdfjs-dist` 6.2.108 against a
+hand-built AcroForm PDF, saved through the same `annotationStorage` path the viewer uses,
+then **rendered by macOS Quartz/PDFKit — an engine unrelated to PDF.js**:
 
-- **A sandboxed preview cannot call back to Omnipus.** `connect-src 'none'` blocks
+- **Form fill** produced a well-formed incremental update carrying both `/V (…)` and an
+  appearance stream. macOS renders the filled value.
+- **Drawn signature** produced `/Subtype /Ink` with `/InkList`, registered on the page, plus
+  an appearance stream. macOS renders the stroke.
+
+Both halves matter: the semantic entry for readers that understand the annotation, and the
+appearance stream for those that do not. **The vendor claim is refuted for both cases.**
+
+**Not supported, and MUST NOT be promised:** XFA forms; cryptographic (PKI) signatures —
+a drawn signature is an image of intent, not a verifiable one, and belongs in its own ADR;
+agent-driven form filling — the supported surface is a human filling fields.
+**Not tested:** Adobe Acrobat specifically; complex real-world forms (checkboxes, radio
+groups, inherited appearances). The fixture was a single text field.
+
+**Scope for this ADR: rendering only.** Form filling and signing are recorded as *proven
+feasible* so the choice of library is made with them in view. Shipping them is a later
+decision with its own user stories.
+
+#### D15.4 — Type confusion remains a required control
+
+Every inline response derives `Content-Type` from the **file extension**, never from content
+sniffing, and carries `X-Content-Type-Options: nosniff`.
+
+**Measured:** an HTML document named `report.pdf` did **not** execute in Chromium — no
+script ran, no beacon reached the external origin — and it was blocked **even with no CSP
+at all**. Content-type dispatch is what does the work; CSP contributed nothing. A positive
+control (the same payload served as `text/html`) executed fully, proving the detection was
+not blind.
+
+This control is now *more* important, not less: with PDF.js, a `.pdf` is fetched and parsed
+by our own SPA code, so a mislabelled file is a parser-input question rather than an
+execution question — but the extension→type mapping is still what routes it.
+
+#### D15.5 — Known limits
+
+- **A sandboxed HTML preview cannot call back to Omnipus.** `connect-src 'none'` blocks
   same-origin fetch, and a request from `origin: null` is cross-origin to the gateway
-  regardless. Static artifacts only. **A preview needing live data belongs on the
-  existing `/preview/` dev-server route** — a different mechanism for a different job.
-- **Cookies are not sent to the page's own subresources** under `sandbox` (observed:
-  *"Cookie has been rejected because it is in a cross-site context"*). Any
-  authenticated same-origin subresource loses its cookie.
-- **`document.cookie` throws** rather than returning empty; an unguarded read
-  hard-errors.
-- **Webfonts in HTML bundles are CORS-rejected** from an opaque origin. Likely fixed by
-  emitting `Access-Control-Allow-Origin` on font responses — **unverified**; the test
-  fixture used an invalid font, and `document.fonts.status` was shown to report
-  `"loaded"` even on failure, so it is not a success oracle.
+  regardless. Static artifacts only. **A preview needing live data belongs on the existing
+  `/preview/` dev-server route** — a different mechanism for a different job.
+- **Cookies are not sent to a sandboxed page's own subresources.**
+- **`document.cookie` throws** rather than returning empty.
+- **PDF.js is single-threaded in the main context for some work**; very large or complex
+  PDFs can be slow. A page-count or size threshold may be needed — unmeasured.
 
-#### D15.5 — Delivery path and headers
+#### D15.6 — Delivery
 
-Bytes are served by a new inline mode on `/api/v1/library/` (already behind
-`withUploadAuth` and rate limiting), **not** `/preview/` — whose `ServedSubdirs`
-registration is agent-scoped with a one-registration cap that would evict live
-`web_serve` tokens, and which is token-only unauthenticated by design.
+Bytes are served by an inline mode on `/api/v1/library/` (already behind `withUploadAuth`
+and rate limiting), **not** `/preview/` — whose `ServedSubdirs` registration is agent-scoped
+with a one-registration cap that would evict live `web_serve` tokens, and which is
+token-only unauthenticated by design.
 
-`rest_library.go` hard-codes `Content-Disposition: attachment`; an inline mode is
-required. **The MIME table lives in `rest_workspace.go` and is not reachable from
-`rest_library.go`** — the download handler serves via `http.ServeContent` and never
-calls it. Audio support therefore requires wiring a content-type source into the
-Library handler, not editing a table it does not consult.
+`rest_library.go` hard-codes `Content-Disposition: attachment`; an inline mode is required.
+**The MIME table lives in `rest_workspace.go` and is unreachable from `rest_library.go`** —
+the download handler serves via `http.ServeContent` and never calls it. Audio and PDF
+content types therefore require wiring a type source into the Library handler, not editing a
+table it does not consult.
 
 Audio extensions in scope: `.mp3`, `.m4a`, `.aac`, `.ogg`, `.opus`, `.wav`, `.flac`.
 
-**Untrusted-content chrome** remains required for active content: a persistent,
-non-spoofable boundary in Omnipus chrome outside the frame. An opaque origin stops a
-page reading the session; it does not stop it drawing a convincing login prompt.
+**Untrusted-content chrome** remains required for HTML: a persistent, non-spoofable boundary
+in Omnipus chrome outside the frame. An opaque origin stops a page reading the session; it
+does not stop it drawing a convincing login prompt.
 
-> **AC-15.1** A fixture bundle — `index.html` + external `.css` + external `.js` +
-> a real webfont — renders with all subresources loaded, in a real browser.
+> **AC-15.1** A fixture bundle — `index.html` + external `.css` + external `.js` + a **real**
+> webfont served with `Access-Control-Allow-Origin` — renders with all subresources applied,
+> asserted by a rendered-width oracle in a real browser. `document.fonts.status` is not an
+> acceptable oracle.
 > **AC-15.2** A top-level GET of an inline `.html` yields a document that cannot read
-> `document.cookie` and cannot reach any external origin. *(Met by the 2026-08-22
-> experiment; re-assert against the real handler.)*
-> **AC-15.3** Each audio extension returns a playable `Content-Type`, asserted against
-> the Library handler — not the workspace MIME table.
-> **AC-15.4** A `.pdf` renders inline in Chrome, Firefox and Safari. **Safari must be
-> verified headful** — headless WebKit failed to render PDFs even unprotected, so that
-> result is confounded and proves nothing.
-> **AC-15.5** An HTML document named `.pdf` does **not** execute: served as
-> `application/pdf`, `nosniff` present, no script runs. Required.
-> **AC-15.6** Adding an extension to the passive list fails CI unless the change also
-> updates the security note and adds an AC-15.5-style test for it.
+> `document.cookie` and cannot reach any external origin. *(Met 2026-08-22; re-assert against
+> the real handler.)*
+> **AC-15.3** Each audio extension returns a playable `Content-Type`, asserted against the
+> **Library** handler, not the workspace MIME table.
+> **AC-15.4** A `.pdf` renders in the preview pane via PDF.js in Chrome, Firefox and Safari.
+> **Tests MUST run headed** — headless Chromium has no PDF viewer and headless WebKit failed
+> to render PDFs even unprotected, which previously produced a false negative.
+> **AC-15.5** An HTML document named `.pdf` does not execute: served `application/pdf`,
+> `nosniff` present, no script runs, nothing reaches an external origin. Required, with a
+> positive control proving the detection is not blind.
+> **AC-15.6** Opening a PDF loads the PDF.js bundle lazily; it is absent from the initial
+> SPA payload.
+> **AC-15.7** Adding an extension to the inline allow-list fails CI unless the change also
+> adds an AC-15.5-style test for it.
 
 
 ### D16 — Deep-linking, and two markdown defects
@@ -616,9 +657,13 @@ sequencing is now the main lever left"* — was dropped in revision 1. Reinstate
 | A12 | Read-only in mounted KBs | Removes the authoring tools from the KB they were designed for |
 | A13 | Create KBs at arbitrary host paths | A new broad capability, when workspace-first plus the existing move covers the need |
 | A14 | **Serve preview content from a distinct origin** (separate port or host) | **Rejected on evidence, 2026-08-22.** It existed only as a fallback if `'self'` failed under an opaque origin; measurement on three engines showed `'self'` works, so the fallback is unnecessary and ADR-044's single listener stands |
-| A17 | **One sandboxing policy for every inline format** (revision 1's design) | Measured: breaks PDF rendering on all three engines while being necessary for HTML. Isolation is now matched to the format (D15.1) |
-| A18 | **Add `allow-downloads` to the sandbox so PDFs render** | Keeps one uniform policy, but is unverified and plausibly turns a failed render into a download prompt rather than a viewer. Also weakens the sandbox for active content, where downloads are an exfiltration route. Superseded by D15.1's per-format split |
-| A19 | **Drop inline PDF entirely, keep the download card** | Honest and zero-risk, but loses the format the operator most wants to read in place — and D15.1 delivers it without the risk that motivated dropping it |
+| A17 | **One sandboxing policy for every inline format** (revision 1) | Measured: breaks a framed PDF on all three engines. Superseded — with PDF.js there is no framed PDF to break, and the uniform policy returns for the one class that needs it |
+| A18 | **Add `allow-downloads` to the sandbox so PDFs render** | Unverified, and it weakens the sandbox for active content where downloads are an exfiltration route. Unnecessary once PDF is not rendered by the browser at all |
+| A19 | **Drop inline PDF entirely, keep the download card** | Honest and zero-risk, but loses the format the operator most wants to read in place |
+| **A20** | **Per-format isolation split** — relax `sandbox` for "passive" formats (revision 2, briefly accepted) | **Withdrawn 2026-08-22.** It bought PDF rendering by *trading away isolation*, and made the security guarantee non-uniform and therefore easy to erode. PDF.js delivers the same outcome with no trade. Retained here because it was committed and must not be re-proposed as new |
+| **A21** | **Render PDF server-side in Go** | No mature pure-Go rasteriser exists. `pdfcpu`/`gopdf` create and manipulate but cannot draw a page; `ledongthuc/pdf` (in tree) extracts text only; `go-fitz` renders but is **AGPL** and needs CGo — both disqualifying. The only pure-Go option embeds PDFium as a multi-megabyte WASM blob. It would also ship *images* instead of a document, losing text selection, search and zoom crispness, and put page rasterisation on the gateway's CPU |
+| **A22** | **Use the browser's built-in PDF viewer** (revision 1/2's mechanism) | Three different viewers with three behaviours, broken inside a sandboxed frame, no control over text selection or search integration, and no path to form filling or signing. PDF.js is one implementation everywhere |
+| **A23** | **A commercial PDF SDK** (PDF.js Express, Apryse, Nutrient) | Richer annotation and real digital signatures out of the box, but proprietary and paid — a poor fit for a community MIT project, and it would be the only non-open component in the stack |
 | A15 | **Index keyed by workspace+mount** | Would produce N indexes over one corpus and make D13's revoke destroy a sibling workspace's index |
 | A16 | **Blanket relative-link fix across all markdown** | Would make model-authored relative hrefs live links on the gateway origin (D16) |
 

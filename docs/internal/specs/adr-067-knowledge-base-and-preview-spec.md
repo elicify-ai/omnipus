@@ -143,7 +143,7 @@ All render; the HTML page's script runs; Edit reveals source for the HTML only.
 2. **Given** a rendered HTML page, **When** I press Edit, **Then** the pane shows the file's source in an editor.
 3. **Given** an HTML page whose script writes into the DOM, **When** it renders, **Then** the script's effect is visible.
 4. **Given** a folder containing `index.html`, an external `.css`, an external `.js` and a webfont, **When** I open `index.html`, **Then** all four load and the page appears styled, scripted and correctly typeset.
-5. **Given** a `.pdf`, **When** I select it, **Then** the browser's PDF viewer displays it inside the pane (served WITHOUT `sandbox`, per ADR-067 D15.1).
+5. **Given** a `.pdf`, **When** I select it, **Then** it is displayed inside the pane by Omnipus's own renderer, with selectable text — not handed to the browser's viewer and not downloaded.
 6. **Given** an `.mp3`, **When** I select it, **Then** an audio player appears and plays it.
 7. **Given** an unsupported binary (`.zip`), **When** I select it, **Then** the existing download card appears unchanged.
 
@@ -542,7 +542,9 @@ documented, stable contract.
 ### 10.1 Qualitative prohibitions
 
 - **NB-1** The system must not create `.obsidian/` in any folder, because fabricating another application's configuration directory makes Omnipus responsible for a format it does not own.
-- **NB-2** The system must not render Office documents, because no browser renders them natively and every accurate route requires a runtime dependency this project forbids.
+- **NB-2** The system must not render Office documents, because no browser renders them natively and every accurate route requires a runtime dependency this project forbids. (PDF is different: PDF.js is a pure client-side library under a compatible licence, measured to work.)
+- **NB-13** The system must not promise cryptographic or legally-verifiable signatures. A drawn signature is an image of intent. PKI signing is a separate decision with its own ADR.
+- **NB-14** The system must not claim XFA form support, nor agent-driven form filling; neither is supported by the chosen renderer.
 - **NB-3** The system must not build a whole-collection graph visualisation, because it is the surface that fails at scale in every comparable tool.
 - **NB-4** The system must not change relative-link handling outside the knowledge-base reader, because the shared helper is consumed by chat markdown, which renders untrusted model output. **The Go/TS divergence in §2.4 is recorded, not resolved.**
 - **NB-5** The system must not call a language model anywhere in the indexing, resolution or link-rewriting path, because derived data must be reproducible.
@@ -1014,10 +1016,11 @@ come last within their stage because they are slowest and most environment-depen
 | 10 | `E2E_PreviewIsolation_TopLevelNavigation` | E2E (browser) | US-2 AS-1 | Cookie unreadable, origin opaque |
 | 11 | `E2E_PreviewIsolation_NetworkBlocked` | E2E (browser) | US-2 AS-3 | Egress blocked |
 | 12 | `E2E_PreviewIsolation_BrowserMatrix` | E2E (browser) | MV-13 | Chrome + Firefox + Safari |
-| 57 | `E2E_PassivePdfRendersUnsandboxed` | E2E (browser) | US-1 AS-5 | **Real browser, 3 engines.** PDF renders under the passive policy |
-| 58 | `TestTypeConfusion_HtmlNamedPdfDoesNotExecute` | Integration + E2E | FR-015 | **The critical control.** Served `application/pdf`, `nosniff` present, no script runs |
-| 59 | `TestPassiveAllowList_RequiresTypeConfusionTest` | Unit (build gate) | FR-016 | Adding an extension without a test fails CI |
-| 60 | `E2E_FontLoadsWithCorsHeader` | E2E (browser) | AC-15.1 | Real font + `Access-Control-Allow-Origin`; `document.fonts.status` is NOT the oracle |
+| 57 | `E2E_PdfRendersViaPdfJs` | E2E (browser) | US-1 AS-5, AC-15.4 | **Real browser, 3 engines, HEADED.** Headless has no PDF viewer and previously produced a false negative |
+| 58 | `TestTypeConfusion_HtmlNamedPdfDoesNotExecute` | Integration + E2E | FR-015, AC-15.5 | **The critical control.** Served `application/pdf`, `nosniff` present, no script runs, nothing reaches an external origin. Requires a **positive control** (same payload as `text/html`) proving the detection is not blind |
+| 59 | `TestInlineAllowList_RequiresTypeConfusionTest` | Unit (build gate) | FR-016, AC-15.7 | Adding an extension without a test fails CI |
+| 60 | `E2E_FontAppliesWithCorsHeader` | E2E (browser) | AC-15.1, FR-019 | Real font covering the measured glyphs, on an inline element, asserted by **rendered width**. `document.fonts.status` is NOT the oracle — it reports "loaded" on failure |
+| 61 | `TestPdfJsBundleLazyLoaded` | Unit (build) | AC-15.6, FR-018 | PDF.js absent from the initial SPA payload |
 | **Stage 2** |
 | 13 | `TestDetectKnowledgeBase_MarkerMatrix` | Unit | US-4 AS-1,2,3 | Both markers, neither |
 | 14 | `TestDetectKnowledgeBase_NoContentReads` | Unit | US-4 AS-4 | Read-counting fake |
@@ -1168,10 +1171,12 @@ explicit seam tests: items 4 and 26.
 - **FR-011** The system MUST hide `%%…%%` comments when rendering markdown.
 - **FR-012** The system MUST make the selected file addressable by URL.
 - **FR-013** The system MUST NOT alter relative-link handling outside the knowledge-base reader.
-- **FR-014** The system MUST apply `sandbox` isolation to active content (HTML) and MUST NOT apply it to passive document formats (PDF, audio, images, video).
+- **FR-014** The system MUST sandbox content the **browser** executes (HTML and bundles). Formats Omnipus renders itself — images, video, audio, markdown, Mermaid, code and PDF — are drawn by SPA components, never become browser documents, and therefore have no sandbox to apply.
 - **FR-015** The system MUST derive `Content-Type` from the file extension, never from content sniffing, and MUST send `X-Content-Type-Options: nosniff` on every inline response.
-- **FR-016** The system MUST fail its build if an extension is added to the passive inline allow-list without a corresponding type-confusion test.
-- **FR-017** The system MUST NOT describe previews as uniformly sandboxed in any operator-facing text; the isolation class is per format.
+- **FR-016** The system MUST fail its build if an extension is added to the inline allow-list without a corresponding type-confusion test.
+- **FR-017** The system MUST describe the isolation rule accurately: only content the browser executes is sandboxed. It MUST NOT imply that formats Omnipus renders itself are sandboxed, nor that HTML is not.
+- **FR-018** The system MUST render PDFs with PDF.js inside the SPA, as a component alongside the existing image and video previews, and MUST load that bundle lazily rather than in the initial payload.
+- **FR-019** The system MUST serve font responses with `Access-Control-Allow-Origin` so webfonts in sandboxed HTML bundles resolve; it MUST NOT rely on `document.fonts.status` as a success signal.
 
 **Detection and identity (stage 2)**
 - **FR-020** The system MUST treat a folder as a knowledge base if its root contains `.omnipus-vault/` or `.obsidian/`.
@@ -1286,6 +1291,8 @@ explicit seam tests: items 4 and 26.
 | FR-015 | US-2 | An HTML file named .pdf does not execute | 58 |
 | FR-016 | US-2 | (build gate) | 59 |
 | FR-017 | US-2 | (documentation) | — doc review |
+| FR-018 | US-1 | A PDF renders in the preview pane | 57, 61 |
+| FR-019 | US-1 | A complete bundle loads all of its assets | 60 |
 | FR-020 | US-4 | Marker presence decides status | 13 |
 | FR-021 | US-4 | Detection reads no file contents | 14 |
 | FR-022 | US-4 | Creating writes only the Omnipus marker | 15 |
