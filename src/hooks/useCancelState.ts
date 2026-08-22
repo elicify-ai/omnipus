@@ -95,7 +95,10 @@ export function useCancelState(isStreaming: boolean, cancelStream: () => void): 
       }
       setStopLabel('stop')
     }
-     
+    // No cleanup needed on this path (isStreaming, or the min-display
+    // window already elapsed) — explicit return so every path is typed
+    // consistently as `void | (() => void)` under noImplicitReturns.
+    return undefined
   }, [isStreaming])
 
   const cancelIfStreaming = useCallback(() => {

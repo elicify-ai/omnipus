@@ -177,6 +177,11 @@ export default defineConfig({
           if (id.includes('node_modules/@phosphor-icons/react')) {
             return 'icons'
           }
+          // No manual chunk for anything else — falls back to Vite's
+          // automatic dynamic-import splitting (explicit for
+          // noImplicitReturns; matches Rollup's own `string | void` return
+          // type for this hook).
+          return undefined
         },
       },
     },
