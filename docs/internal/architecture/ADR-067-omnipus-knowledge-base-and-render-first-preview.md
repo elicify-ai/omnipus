@@ -659,7 +659,14 @@ Absent from revision 1, and a boot-blocker: `config.ValidateToolPolicyCoverage` 
   the same posture as a fresh install, and the upgrade must surface what changed.
 
 > **AC-17.1** Boot with the new tools registered produces **zero** coverage gaps.
-> **AC-17.2** Loading a config written before this ADR yields the seeded posture, not `deny`.
+> **AC-17.2** The seed, never the deny-backfill, is the source of every `knowledge_*` posture:
+> loading a seeded config produces **zero** backfilled `knowledge_*` entries, and deliberately
+> removing one seeded entry produces **exactly one**. *Amended 2026-08-22:* this read *"Loading a
+> config written before this ADR yields the seeded posture"* — a back-compat premise with no
+> referent, since the tools are new and no earlier config carries a posture for them. It could
+> only ever have been satisfied vacuously. The positive control is what makes the replacement
+> falsifiable: coverage validation returns nothing when the tool registry is empty, so a test
+> that never populates it reports green with the seeding entirely absent.
 
 ### D18 — Contract-first wire types (Hard Constraint #8)
 
