@@ -134,3 +134,107 @@ jobs:
             --latest=false \
             "${ASSETS[@]}"
 
+
+  dead-code-scan:
+    name: Dead Code Scan (report only, not a gate)
+    # This job is deliberately independent of the `nightly` release job above:
+    # separate permissions (read-only, no release/package scopes), separate
+    # runner, and its own pass/fail semantics. It is REPORT-ONLY by
+    # construction, not by a `continue-on-error` override — see the step
+    # below. Both tools currently have a real backlog (~35 Go, ~200 SPA) that
+    # nobody is actioning yet, so making this step fail would just make it
+    # permanently red for reasons nobody acts on — exactly the ignored-signal
+    # failure mode that let a real path-traversal finding (#635) go unnoticed
+    # for days behind an already-red cross-platform.yml. This job's honest
+    # job is surfacing the count where a human will see it (the run summary),
+    # not gating anything.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Go from go.mod
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+
+      - name: Install deadcode
+        run: go install golang.org/x/tools/cmd/deadcode@latest
+
+      - name: Install npm deps
+        run: npm ci
+
+      - name: Go dead-code scan (x/tools/cmd/deadcode)
+        # scripts/check-dead-code.sh never propagates deadcode's own findings
+        # as a failure — it only exits non-zero (2) if the `deadcode` binary
+        # itself is missing, which is a real infra problem worth failing on.
+        # A findings backlog existing is not a script failure, so this step
+        # is allowed to fail loudly if the tool can't run, and only that.
+        run: |
+          set -uo pipefail
+          GOBIN_PATH="$(go env GOPATH)/bin"
+          export PATH="$PATH:$GOBIN_PATH"
+
+          OUT_FILE="$(mktemp)"
+          bash scripts/check-dead-code.sh > "$OUT_FILE" 2>&1
+          STATUS=$?
+          cat "$OUT_FILE"
+
+          {
+            echo "## Dead code scan — informational, not a merge/nightly gate"
+            echo
+            echo "### Go: \`x/tools/cmd/deadcode\` (via \`scripts/check-dead-code.sh\`)"
+            if [ "$STATUS" -ne 0 ]; then
+              echo
+              echo "**Scanner failed to run (exit ${STATUS})** — this is a tooling problem, not a findings count. See job log above."
+            else
+              COUNT="$(grep -c 'unreachable func:' "$OUT_FILE" || true)"
+              echo
+              echo "**${COUNT} unreachable functions reported.**"
+              echo
+              echo "\"Unreachable\" means unreachable-by-whole-program-call-graph from"
+              echo "main/test entry points (Rapid Type Analysis) — it is NOT the same as"
+              echo "\"unused\". Exported symbols on exported types are excluded by design"
+              echo "(reachable in principle from outside the module), and results change"
+              echo "materially with/without \`-test\`. Read \`scripts/check-dead-code.sh\`'s"
+              echo "header before treating any finding as a delete-list — it documents a"
+              echo "real case (\`SecureString.UnmarshalYAML\`) where a naive scanner got this"
+              echo "wrong and a correct one didn't."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          exit "$STATUS"
+
+      - name: SPA dead-code scan (knip)
+        # --no-exit-code is knip's own built-in flag for exactly this case:
+        # it makes the step's exit code genuinely always 0 by construction
+        # (per knip's docs), not a masked/overridden failure via
+        # `continue-on-error`. The finding count is still captured and
+        # surfaced honestly in the summary below.
+        if: always()
+        run: |
+          set -uo pipefail
+
+          npx knip --no-exit-code | tee /tmp/knip-report.txt
+          COUNT="$(npx knip --no-exit-code --reporter json 2>/dev/null \
+            | jq '[.issues[] | to_entries[] | select(.value | type == "array") | .value | length] | add // 0')"
+
+          {
+            echo
+            echo "### SPA: \`knip\`"
+            echo
+            echo "**${COUNT} findings reported.** Run with \`--no-exit-code\` — knip's own"
+            echo "docs describe this flag as always exiting 0, which is why this step is"
+            echo "never a gate rather than a suppressed failure."
+            echo
+            echo "Scope is \`src/**\` / \`tests/**\` only, per \`knip.jsonc\`'s ownership-boundary"
+            echo "comment — \`pkg/**\`, \`docs/**\`, \`scripts/**\`, \`spikes/**\`, \`packages/**\` are"
+            echo "deliberately out of scope for this tool, not silently clean."
+          } >> "$GITHUB_STEP_SUMMARY"
