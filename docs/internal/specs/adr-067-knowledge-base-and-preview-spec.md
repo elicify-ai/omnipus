@@ -1142,8 +1142,9 @@ come last within their stage because they are slowest and most environment-depen
 | 64 | `E2E_BundleLoadsViaTokenPath` | E2E (browser, HEADED) | FR-003a | **Against the real authenticated gateway**, not a static server — the gap that hid this |
 | 65 | `TestPreviewToken_ScopeAndExpiry` | Integration | FR-003b | Token outside its path/workspace is refused; expired token is refused |
 | 66 | `TestPreviewResponse_NoReferrerAndVisibleExpiry` | Integration | FR-003c | |
-| 67 | `TestPdfJs_HardeningFlagsAtCallSite` | Unit | FR-019a, FR-019c | Asserts the configuration object, not a comment |
-| 68 | `TestSpaServedWithCSP` | Integration | FR-019b | |
+| 67 | `TestPdfJs_HardeningFlagsAtCallSite` | Unit | FR-019a, FR-019c, AC-15.10 | Asserts the configuration object, not a comment |
+| 67a | `E2E_HostilePdfFailsInert` | E2E (browser, HEADED) | AC-15.8 | A malformed/hostile PDF fails to render **without** executing script, navigating, or issuing a network request |
+| 68 | `TestSpaServedWithCSP` | Integration | FR-019b, AC-15.9 | |
 | 62 | `TestIndex_LargeNoteChunkedNotSkipped` | Integration | FR-034a | A 200 MB note is fully indexed with bounded peak memory — never skipped, never capped |
 | 63 | `TestOutline_PlainMarkdownOutsideKB` | Integration | FR-062 | An ordinary .md file gets an outline; it does NOT get search or backlinks |
 | **Stage 2** |
