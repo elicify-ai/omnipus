@@ -127,14 +127,15 @@ linux and mac."*
 
 ### US-0 — My own filenames are not refused (Priority: P1)
 
-As an operator on macOS or Linux I want Omnipus to open the files I already have, including
-ones whose names contain characters Windows dislikes, because refusing them protects an
-operating system I am not using.
+As an operator I want Omnipus to open **the documents already sitting on my disk**, whatever
+they are called. I did not name them for Omnipus's convenience, and a tool that reads my
+folder should show me what is in it.
 
 **Why P1:** it gates the knowledge-base work. A collection Omnipus cannot fully address is a
-collection it cannot fully index, search or link. Measured on the reference vault: **3 of 748
-notes are currently unreachable** — one for an illegal character, two for exceeding a
-100-character name limit (longest is 106).
+collection it cannot fully index, search or link — and the operator is never told which files
+are missing. Measured on the reference vault: **3 of 748 notes are currently unreachable** —
+one for an illegal character, two for exceeding a 100-character component limit (longest is
+106 runes). None of those three was named by Omnipus.
 
 > ⚠️ **CRITICAL-risk change.** Impact analysis rates `pathsafe.ValidateComponent` **CRITICAL**
 > — 17 dependent symbols, 2 direct, spanning Gateway (13, direct) and Agent (4, direct), with
@@ -142,26 +143,47 @@ notes are currently unreachable** — one for an illegal character, two for exce
 > forbids proceeding past a CRITICAL rating without explicit acknowledgement; this section is
 > that acknowledgement.
 
-**What is traded away, stated plainly:** the current rule exists so a workspace created on one
-OS opens on another. Relaxing it means a workspace containing `Meeting: notes.md` is not
-openable on Windows. That is accepted for **mounted folders**, which are the operator's own
-files on their own machine.
+#### The rule is being applied to files Omnipus does not own
 
-**Independent test:** on macOS, mount a folder containing `Meeting: 2026-01-01.md`, `Why?.md`
-and a 106-character filename. All three list, open, index and link.
+This is a category error, not a trade-off. There are two populations of file and only one of
+them is ours:
+
+| | Who named it | Who owns it | Naming rules |
+|---|---|---|---|
+| **Mounted folders** | The operator, long before Omnipus existed | The operator | **None of ours.** Omnipus is a reader of these files. It reports what is on disk |
+| **Workspace storage** (`workspaces/<id>/work/`) | Omnipus, or an agent | Omnipus | Windows-safe naming **in Windows builds only**, per the founder decision |
+
+Revision 1 of this section framed the change as trading portability for access. **That framing
+was wrong.** The portability argument does not apply to mounted content at all:
+
+- A mount stores an **absolute host path**, realpath-resolved and **immutable** — `pkg/workspace/mount_test.go` asserts *"HostPath must NEVER change on its own — FR-8.5 forbids silent re-binding."*
+- That path is meaningful only on the machine it was created on. Copying `$OMNIPUS_HOME` to another OS breaks the mount regardless of filenames, because the path does not exist there.
+
+**So there is no Windows scenario in which a mounted file's name matters.** Refusing to open
+`Meeting: notes.md` protects nothing; it just makes the operator's own documents invisible
+inside a feature whose entire purpose is reading their existing documents.
+
+What genuinely must not change, on any platform, is **containment** — traversal, root
+confinement, symlink escape. Those are unrelated to whether a name is Windows-legal, and
+FR-0002 keeps them unconditional.
+
+**Independent test:****Independent test:** mount an existing folder containing `Meeting: 2026-01-01.md`, `Why?.md`
+and a 106-character filename. All three list, open, index and link — and a traversal attempt
+in the same folder is still refused.
 
 **Acceptance scenarios**
 
-1. **Given** macOS or Linux, **When** a file named `Meeting: notes.md` is listed, **Then** it appears and can be opened.
+1. **Given** a mounted folder containing `Meeting: notes.md`, **When** it is listed, **Then** the file appears and can be opened — on every platform.
 2. **Given** the same file, **When** it is indexed, **Then** it is searchable and linkable.
-3. **Given** a Windows build, **When** the same name is validated, **Then** it is rejected as it is today.
+3. **Given** a Windows build, **When** Omnipus **creates** a file in workspace storage, **Then** Windows-safe naming is enforced as it is today — the restriction applies to what Omnipus writes, not to what the operator already has.
 4. **Given** a filename of 106 characters, **When** it is opened on macOS, **Then** it works.
 5. **Given** a filename containing a double quote, **When** it is downloaded, **Then** the response headers are correctly quoted and not malformed.
 6. **Given** any platform, **When** a path attempts traversal (`..`), **Then** it is refused — **traversal defence is unchanged and unconditional**.
 
 ### Requirements — Stage 0
 
-- **FR-0001** The system MUST apply Windows-specific filename restrictions (illegal characters, reserved device names, trailing dot or space) **only in Windows builds**, via build tags.
+- **FR-0001** The system MUST NOT apply Omnipus filename-shape rules (illegal characters, reserved device names, trailing dot or space, component length) to files inside **mounted folders** on any platform. Those files are the operator's, and Omnipus reads what is on disk.
+- **FR-0001a** The system MAY apply Windows-safe naming to files it **creates in workspace storage**, and MUST do so only in Windows builds, via build tags.
 - **FR-0002** The system MUST NOT relax path-traversal, containment or root-confinement checks on any platform.
 - **FR-0003** The system MUST correctly encode filenames in HTTP headers, including names containing quotes.
 - **FR-0004** The system MUST NOT apply the component-length limit on platforms whose filesystem does not require it.
@@ -174,7 +196,8 @@ and a 106-character filename. All three list, open, index and link.
 | 0b | `TestPathsafe_TraversalStillRefused` | Unit | AS-6, FR-0002 | **The guard that must not regress** |
 | 0c | `TestLibrary_QuoteInFilenameHeaderSafe` | Integration | AS-5, FR-0003 | Header injection via filename |
 | 0d | `TestLibrary_LongFilenameOpens` | Integration | AS-4 | 106-character basename |
-| 0e | `TestPathsafeRegression_WindowsUnchanged` | Unit | AS-3 | The 29 existing assertions still hold under the Windows tag |
+| 0e | `TestPathsafeRegression_WindowsUnchanged` | Unit | AS-3 | The 29 existing assertions still hold under the Windows tag, for **workspace storage** |
+| 0f | `TestMountedFile_NoNameShapeValidation` | Integration | FR-0001 | A mounted file with any OS-legal name lists, opens and indexes — on every platform, including Windows builds |
 
 ---
 
@@ -1339,7 +1362,8 @@ explicit seam tests: items 4 and 26.
 
 | Requirement | User story | BDD scenario | Test |
 |---|---|---|---|
-| FR-0001 | US-0 | (platform filename matrix) | 0a, 0e |
+| FR-0001 | US-0 | (mounted files are read as-is) | 0a, 0f |
+| FR-0001a | US-0 | (workspace naming, Windows builds) | 0a, 0e |
 | FR-0002 | US-0 | Traversal still refused | 0b |
 | FR-0003 | US-0 | Quote in filename header-safe | 0c |
 | FR-0004 | US-0 | Long filename opens | 0d |
