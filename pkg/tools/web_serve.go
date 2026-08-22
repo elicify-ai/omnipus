@@ -670,8 +670,11 @@ func (t *WebServeTool) executeDev(ctx context.Context, rawPath, command string, 
 		exitCode := -1
 		if waitErr == nil {
 			exitCode = 0
-		} else if ee, ok := waitErr.(*exec.ExitError); ok {
-			exitCode = ee.ExitCode()
+		} else {
+			var ee *exec.ExitError
+			if errors.As(waitErr, &ee) {
+				exitCode = ee.ExitCode()
+			}
 		}
 		slog.Info("web_serve: dev server exited",
 			"agent_id", agentID, "pid", bgPid, "token", token,

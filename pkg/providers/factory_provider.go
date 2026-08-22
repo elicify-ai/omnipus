@@ -7,11 +7,13 @@ package providers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/auth"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	anthropicmessages "github.com/elicify-ai/omnipus/pkg/providers/anthropic_messages"
 	"github.com/elicify-ai/omnipus/pkg/providers/azure"
@@ -21,13 +23,13 @@ import (
 // createClaudeAuthProvider creates a Claude provider using OAuth credentials from auth store.
 func createClaudeAuthProvider() (LLMProvider, error) {
 	cred, err := getCredential("anthropic")
-	if err != nil {
-		return nil, fmt.Errorf("loading auth credentials: %w", err)
-	}
-	if cred == nil {
+	if errors.Is(err, auth.ErrCredentialNotFound) {
 		return nil, fmt.Errorf(
 			"no credentials for anthropic. Run: omnipus credentials set ANTHROPIC_API_KEY <your-key>",
 		)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("loading auth credentials: %w", err)
 	}
 	return NewClaudeProviderWithTokenSource(cred.AccessToken, createClaudeTokenSource()), nil
 }
@@ -35,13 +37,13 @@ func createClaudeAuthProvider() (LLMProvider, error) {
 // createCodexAuthProvider creates a Codex provider using OAuth credentials from auth store.
 func createCodexAuthProvider() (LLMProvider, error) {
 	cred, err := getCredential("openai")
-	if err != nil {
-		return nil, fmt.Errorf("loading auth credentials: %w", err)
-	}
-	if cred == nil {
+	if errors.Is(err, auth.ErrCredentialNotFound) {
 		return nil, fmt.Errorf(
 			"no credentials for openai. Run: omnipus credentials set OPENAI_API_KEY <your-key>",
 		)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("loading auth credentials: %w", err)
 	}
 	return NewCodexProviderWithTokenSource(
 		cred.AccessToken,

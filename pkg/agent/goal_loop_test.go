@@ -468,7 +468,7 @@ func TestGoalLoop_ScheduledTurn_DoesNotAdvanceGoal(t *testing.T) {
 	// turn must never reach the judge at all.
 	judgeFake := &fakeJudgeProvider{chatFn: func(int) (*providers.LLMResponse, error) {
 		t.Fatal("judge must NOT be called for a scheduled/loop turn on a goal-bearing session")
-		return nil, nil
+		return &providers.LLMResponse{}, nil
 	}}
 	judgeInst.Provider = judgeFake
 

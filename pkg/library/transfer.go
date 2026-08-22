@@ -292,7 +292,7 @@ func MoveInto(fromRoot, toRoot *Root, fromRel, toRel string) (os.FileInfo, error
 		return nil, err
 	}
 	if delErr := fromRoot.Delete(fromRel); delErr != nil {
-		return fi, fmt.Errorf("%w: %v", errSourceCleanupFailed, delErr)
+		return fi, fmt.Errorf("%w: %w", errSourceCleanupFailed, delErr)
 	}
 	return fi, nil
 }

@@ -2,6 +2,7 @@ package auth
 
 import (
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -98,6 +99,13 @@ func SaveStore(store *AuthStore) error {
 	return fileutil.WriteFileAtomic(path, data, 0o600)
 }
 
+// ErrCredentialNotFound is returned by GetCredential when no credential is
+// stored for the given provider. Callers use errors.Is to distinguish this
+// normal "not configured" outcome from a real I/O or parse failure —
+// GetCredential used to signal "not found" with (nil, nil), which a caller
+// could not tell apart from a bug that silently dropped the lookup.
+var ErrCredentialNotFound = errors.New("auth: credential not found")
+
 func GetCredential(provider string) (*AuthCredential, error) {
 	store, err := LoadStore()
 	if err != nil {
@@ -105,7 +113,7 @@ func GetCredential(provider string) (*AuthCredential, error) {
 	}
 	cred, ok := store.Credentials[provider]
 	if !ok {
-		return nil, nil
+		return nil, ErrCredentialNotFound
 	}
 	return cred, nil
 }

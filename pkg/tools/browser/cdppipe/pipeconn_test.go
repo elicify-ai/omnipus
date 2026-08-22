@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -235,18 +236,18 @@ func TestFrame_RoundTripAndNULRejection(t *testing.T) {
 		}
 	}
 	// Clean EOF at the boundary.
-	if _, err := readFrame(r); err != io.EOF {
+	if _, err := readFrame(r); !errors.Is(err, io.EOF) {
 		t.Fatalf("readFrame at EOF = %v, want io.EOF", err)
 	}
 
 	// Truncated final frame (no delimiter) => ErrUnexpectedEOF.
 	tr := bufio.NewReader(bytes.NewReader([]byte(`{"id":9}`)))
-	if _, err := readFrame(tr); err != io.ErrUnexpectedEOF {
+	if _, err := readFrame(tr); !errors.Is(err, io.ErrUnexpectedEOF) {
 		t.Fatalf("truncated readFrame = %v, want io.ErrUnexpectedEOF", err)
 	}
 
 	// A payload with an embedded NUL must be rejected, not silently corrupt framing.
-	if err := writeFrame(io.Discard, []byte("a\x00b")); err != errNULInPayload {
+	if err := writeFrame(io.Discard, []byte("a\x00b")); !errors.Is(err, errNULInPayload) {
 		t.Fatalf("writeFrame(NUL payload) = %v, want errNULInPayload", err)
 	}
 }

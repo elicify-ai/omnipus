@@ -153,7 +153,7 @@ func TestLifecycleStore_TerminalImmutability(t *testing.T) {
 func TestLifecycleStore_LoadNotFound(t *testing.T) {
 	s := newTestLifecycleStore(t)
 	_, err := s.Load("does-not-exist")
-	if err != ErrLifecycleNotFound {
+	if !errors.Is(err, ErrLifecycleNotFound) {
 		t.Errorf("expected ErrLifecycleNotFound, got: %v", err)
 	}
 }
@@ -266,7 +266,7 @@ func TestLifecycleStore_Mutate_NotFoundFnReceivesNil(t *testing.T) {
 		saw = rec
 		return ErrLifecycleNotFound
 	})
-	if err != ErrLifecycleNotFound {
+	if !errors.Is(err, ErrLifecycleNotFound) {
 		t.Fatalf("expected ErrLifecycleNotFound propagated, got: %v", err)
 	}
 	if saw != nil {

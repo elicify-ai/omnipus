@@ -2,6 +2,7 @@ package utils
 
 import (
 	"archive/zip"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -108,7 +109,7 @@ func extractSingleFile(f *zip.File, destPath string) error {
 
 	// Streamed size check: prevent overruns and malicious/corrupt headers.
 	written, err := io.CopyN(outFile, rc, maxFileSize+1)
-	if err != nil && err != io.EOF {
+	if err != nil && !errors.Is(err, io.EOF) {
 		_ = os.Remove(destPath)
 		return fmt.Errorf("failed to extract %q: %w", f.Name, err)
 	}

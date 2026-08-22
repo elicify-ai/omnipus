@@ -171,7 +171,7 @@ func TestLifecycleStore_PruneTerminal_ReopenDuringPruneWindow(t *testing.T) {
 		t.Fatalf("reopen Mutate returned an unexpected error: %v", boxed.err)
 	}
 
-	finalTail, tailErr := s.tail(id)
+	finalTail, _, tailErr := s.tail(id)
 	if tailErr != nil {
 		t.Fatalf("final tail read failed: %v", tailErr)
 	}

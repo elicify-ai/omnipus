@@ -218,9 +218,9 @@ func (r *LastMemberCommitResolver) ResetMemberCheckout(planID, taskID, hash stri
 // evidence recorded) rather than nil-dereferencing.
 type evidenceCommitter interface {
 	// CommitTaskBoundary commits t's declared WriteSet into its workspace's
-	// evidence repo. A nil CommitResult with a nil error means "nothing to
+	// evidence repo. recorded=false with a nil error means "nothing to
 	// record" (not a failure) — see WorkspaceEvidenceCommitter for the cases.
-	CommitTaskBoundary(t *task.Task) (*gitevidence.CommitResult, error)
+	CommitTaskBoundary(t *task.Task) (result *gitevidence.CommitResult, recorded bool, err error)
 }
 
 // WorkspaceEvidenceCommitter is the gitevidence-backed evidenceCommitter. It
@@ -248,43 +248,48 @@ func NewWorkspaceEvidenceCommitter(home string, scanner *audit.SecretScanner) *W
 	return &WorkspaceEvidenceCommitter{home: home, scanner: scanner}
 }
 
-// CommitTaskBoundary implements evidenceCommitter. It returns (nil, nil) for
-// every legitimate "nothing to record" case: nil receiver/task, unwired
-// home/scanner, a task with no workspace, a task that declared no write set
-// (the overwhelmingly common case — only plan MEMBERS carry one), or a
-// workspace whose work dir was never materialized. A nested-repo workspace
-// (FR-155/MIN-6) degrades the same way the resolver's read path does.
+// CommitTaskBoundary implements evidenceCommitter. It returns recorded=false
+// (with a nil result and a nil error) for every legitimate "nothing to
+// record" case: nil receiver/task, unwired home/scanner, a task with no
+// workspace, a task that declared no write set (the overwhelmingly common
+// case — only plan MEMBERS carry one), or a workspace whose work dir was
+// never materialized. A nested-repo workspace (FR-155/MIN-6) degrades the
+// same way the resolver's read path does.
 //
 // Errors are returned, not swallowed: the caller logs them and continues, so a
 // broken evidence repo never fails an otherwise-successful task.
-func (c *WorkspaceEvidenceCommitter) CommitTaskBoundary(t *task.Task) (*gitevidence.CommitResult, error) {
+func (c *WorkspaceEvidenceCommitter) CommitTaskBoundary(t *task.Task) (result *gitevidence.CommitResult, recorded bool, err error) {
 	if c == nil || c.home == "" || c.scanner == nil || t == nil {
-		return nil, nil
+		return nil, false, nil
 	}
 	if t.WorkspaceID == "" || len(t.WriteSet) == 0 {
-		return nil, nil
+		return nil, false, nil
 	}
 	dir := workspace.WorkDir(c.home, t.WorkspaceID)
 	if _, statErr := os.Stat(dir); statErr != nil {
 		if errors.Is(statErr, os.ErrNotExist) {
 			// Work dir never materialized — nothing to snapshot. Play will
 			// take the documented fresh-attempt path.
-			return nil, nil
+			return nil, false, nil
 		}
-		return nil, fmt.Errorf("evidence commit: stat work dir %s: %w", dir, statErr)
+		return nil, false, fmt.Errorf("evidence commit: stat work dir %s: %w", dir, statErr)
 	}
-	repo, err := gitevidence.Open(dir, gitevidence.WithSecretScanner(c.scanner))
-	if err != nil {
-		if errors.Is(err, gitevidence.ErrNestedRepo) {
+	repo, openErr := gitevidence.Open(dir, gitevidence.WithSecretScanner(c.scanner))
+	if openErr != nil {
+		if errors.Is(openErr, gitevidence.ErrNestedRepo) {
 			logger.WarnCF("task_executor", "evidence commit: nested-repo degrade — no boundary commit",
 				map[string]any{"task_id": t.ID, "dir": dir})
-			return nil, nil
+			return nil, false, nil
 		}
-		return nil, fmt.Errorf("evidence commit: open %s: %w", dir, err)
+		return nil, false, fmt.Errorf("evidence commit: open %s: %w", dir, openErr)
 	}
-	return repo.Commit(gitevidence.BoundaryTask, gitevidence.CommitMeta{
+	res, commitErr := repo.Commit(gitevidence.BoundaryTask, gitevidence.CommitMeta{
 		TaskID:    t.ID,
 		AttemptID: strconv.Itoa(t.AttemptCount),
 		AgentID:   t.AgentID,
 	}, t.WriteSet)
+	if commitErr != nil {
+		return nil, false, commitErr
+	}
+	return res, true, nil
 }

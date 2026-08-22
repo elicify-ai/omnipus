@@ -170,7 +170,7 @@ func (si *SkillInstaller) InstallFromGitHub(ctx context.Context, repo string) er
 			// Remove the partially-installed bundle so a bad manifest never
 			// leaves a half-installed directory behind.
 			if rmErr := os.RemoveAll(skillDirectory); rmErr != nil {
-				return fmt.Errorf("%w (cleanup failed: %v)", mErr, rmErr)
+				return fmt.Errorf("%w (cleanup failed: %w)", mErr, rmErr)
 			}
 			return mErr
 		}

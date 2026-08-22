@@ -2,8 +2,10 @@ package providers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
+	"github.com/elicify-ai/omnipus/pkg/auth"
 	anthropicprovider "github.com/elicify-ai/omnipus/pkg/providers/anthropic"
 )
 
@@ -80,13 +82,13 @@ func (p *ClaudeProvider) GetDefaultModel() string {
 func createClaudeTokenSource() func() (string, error) {
 	return func() (string, error) {
 		cred, err := getCredential("anthropic")
-		if err != nil {
-			return "", fmt.Errorf("loading auth credentials: %w", err)
-		}
-		if cred == nil {
+		if errors.Is(err, auth.ErrCredentialNotFound) {
 			return "", fmt.Errorf(
 				"no credentials for anthropic. Run: omnipus credentials set ANTHROPIC_API_KEY <your-key>",
 			)
+		}
+		if err != nil {
+			return "", fmt.Errorf("loading auth credentials: %w", err)
 		}
 		return cred.AccessToken, nil
 	}

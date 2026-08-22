@@ -158,11 +158,11 @@ func peekEnvelope(msg generated.SessionMessage) (envelopePeek, []byte, error) {
 	messageInboxPeekEnvelopeCalls.Add(1)
 	data, err := msg.MarshalJSON()
 	if err != nil {
-		return envelopePeek{}, nil, fmt.Errorf("%w: %v", ErrInboxBadMessage, err)
+		return envelopePeek{}, nil, fmt.Errorf("%w: %w", ErrInboxBadMessage, err)
 	}
 	var p envelopePeek
 	if err := json.Unmarshal(data, &p); err != nil {
-		return envelopePeek{}, nil, fmt.Errorf("%w: %v", ErrInboxBadMessage, err)
+		return envelopePeek{}, nil, fmt.Errorf("%w: %w", ErrInboxBadMessage, err)
 	}
 	if p.MessageID == "" || p.SessionID == "" || p.Kind == "" {
 		return envelopePeek{}, nil, fmt.Errorf("%w: message_id/session_id/kind required", ErrInboxBadMessage)

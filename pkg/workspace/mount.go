@@ -197,7 +197,7 @@ func resolveExistingDir(path string) (string, error) {
 	}
 	fi, statErr := os.Stat(abs)
 	if statErr != nil {
-		return "", fmt.Errorf("%w: %q: %v", ErrMountTargetInvalid, abs, statErr)
+		return "", fmt.Errorf("%w: %q: %w", ErrMountTargetInvalid, abs, statErr)
 	}
 	if !fi.IsDir() {
 		return "", fmt.Errorf("%w: %q is not a directory", ErrMountTargetInvalid, abs)

@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -190,8 +191,8 @@ func TestDeleteCredential(t *testing.T) {
 	}
 
 	loaded, err := GetCredential("openai")
-	if err != nil {
-		t.Fatalf("GetCredential() error: %v", err)
+	if !errors.Is(err, ErrCredentialNotFound) {
+		t.Fatalf("GetCredential() error = %v, want ErrCredentialNotFound", err)
 	}
 	if loaded != nil {
 		t.Error("expected nil after delete")

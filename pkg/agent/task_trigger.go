@@ -669,15 +669,15 @@ func (s *TaskTriggerScheduler) RunScheduled(ctx context.Context, job *cron.CronJ
 			// (task-run-history-spec.md, TaskRun.status=skipped) — this is a
 			// "nice to have," never allowed to block the re-arm below: a
 			// failure to record the skip must not stall the scheduler's
-			// forward progress. RecordSkippedOccurrence returns (nil, nil)
+			// forward progress. RecordSkippedOccurrence returns recorded=false
 			// when it correctly suppressed a duplicate/misleading skip (a run
 			// already exists for this exact occurrence, e.g. RD8 Run-now) —
 			// nothing to emit in that case, and that is not a failure.
-			skippedRun, recErr := s.store.RecordSkippedOccurrence(taskID, occurrenceMs)
+			skippedRun, recorded, recErr := s.store.RecordSkippedOccurrence(taskID, occurrenceMs)
 			if recErr != nil {
 				slog.Warn("task_trigger: failed to record skipped-occurrence run, continuing anyway",
 					"task_id", taskID, "job_id", job.ID, "error", recErr)
-			} else if skippedRun != nil && s.emitRunStatus != nil {
+			} else if recorded && s.emitRunStatus != nil {
 				s.emitRunStatus(taskID, skippedRun.RunID, skippedRun.OccurrenceMs, skippedRun.Status)
 			}
 			if isRrule {

@@ -3,6 +3,7 @@ package email
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -46,8 +47,22 @@ func (f *fakeTransport) ReadInbox(_ context.Context, opts InboxOptions) ([]Messa
 func (f *fakeTransport) Search(context.Context, string, SearchOptions) (SearchResult, error) {
 	return SearchResult{}, nil
 }
-func (f *fakeTransport) ReadMessage(context.Context, uint32) (*Message, error) { return nil, nil }
-func (f *fakeTransport) Send(context.Context, SendRequest) error               { return nil }
+
+// ReadMessage mirrors the real Client.ReadMessage contract (transport.go):
+// it never returns (nil, nil) — a UID present in msgs yields that message, an
+// absent one yields a "not found" error, matching production exactly so any
+// test that starts exercising this path can't be fooled by a fake with a
+// looser contract than the real transport.
+func (f *fakeTransport) ReadMessage(_ context.Context, uid uint32) (*Message, error) {
+	for i := range f.msgs {
+		if f.msgs[i].UID == uid {
+			m := f.msgs[i]
+			return &m, nil
+		}
+	}
+	return nil, fmt.Errorf("fakeTransport: message uid %d not found", uid)
+}
+func (f *fakeTransport) Send(context.Context, SendRequest) error { return nil }
 func (f *fakeTransport) MarkSeen(_ context.Context, uid uint32) error {
 	f.seen[uid] = true
 	return nil

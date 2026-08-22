@@ -256,13 +256,13 @@ func buildCodexParams(
 func createCodexTokenSource() func() (string, string, error) {
 	return func() (string, string, error) {
 		cred, err := auth.GetCredential("openai")
-		if err != nil {
-			return "", "", fmt.Errorf("loading auth credentials: %w", err)
-		}
-		if cred == nil {
+		if errors.Is(err, auth.ErrCredentialNotFound) {
 			return "", "", fmt.Errorf(
 				"no credentials for openai. Run: omnipus credentials set OPENAI_API_KEY <your-key>",
 			)
+		}
+		if err != nil {
+			return "", "", fmt.Errorf("loading auth credentials: %w", err)
 		}
 
 		if cred.AuthMethod == "oauth" && cred.NeedsRefresh() && cred.RefreshToken != "" {

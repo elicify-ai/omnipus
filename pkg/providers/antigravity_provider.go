@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand"
@@ -574,13 +575,13 @@ func sanitizeSchemaForGemini(schema map[string]any) map[string]any {
 func createAntigravityTokenSource() func() (string, string, error) {
 	return func() (string, string, error) {
 		cred, err := auth.GetCredential("google-antigravity")
-		if err != nil {
-			return "", "", fmt.Errorf("loading auth credentials: %w", err)
-		}
-		if cred == nil {
+		if errors.Is(err, auth.ErrCredentialNotFound) {
 			return "", "", fmt.Errorf(
 				"no credentials for google-antigravity. Complete onboarding at http://localhost:5000/onboarding or run: omnipus onboard",
 			)
+		}
+		if err != nil {
+			return "", "", fmt.Errorf("loading auth credentials: %w", err)
 		}
 
 		// Refresh if needed

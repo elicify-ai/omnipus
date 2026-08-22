@@ -67,11 +67,11 @@ func TestEvidenceCommitter_RoundTrip_ProducerFeedsResolver(t *testing.T) {
 	}
 
 	committer := NewWorkspaceEvidenceCommitter(home, testSecretScanner(t))
-	res, err := committer.CommitTaskBoundary(tk)
+	res, recorded, err := committer.CommitTaskBoundary(tk)
 	if err != nil {
 		t.Fatalf("CommitTaskBoundary: %v", err)
 	}
-	if res == nil {
+	if !recorded || res == nil {
 		t.Fatal("CommitTaskBoundary returned no result — the producer recorded nothing, " +
 			"which is the exact E.4 defect (Play would silently take the fresh-attempt path)")
 	}
@@ -125,12 +125,12 @@ func TestEvidenceCommitter_GracefulDegrades(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			res, err := tc.committer.CommitTaskBoundary(tc.task)
+			res, recorded, err := tc.committer.CommitTaskBoundary(tc.task)
 			if err != nil {
-				t.Fatalf("expected a graceful (nil, nil) degrade, got error: %v", err)
+				t.Fatalf("expected a graceful (nil, false, nil) degrade, got error: %v", err)
 			}
-			if res != nil {
-				t.Fatalf("expected no commit result, got %+v", res)
+			if recorded || res != nil {
+				t.Fatalf("expected no commit result, got recorded=%v res=%+v", recorded, res)
 			}
 		})
 	}

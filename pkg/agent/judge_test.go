@@ -671,7 +671,7 @@ func TestJudge_AllMachineCriteria_NeverCallsJudgeLLM(t *testing.T) {
 	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	fake := &fakeJudgeProvider{chatFn: func(int) (*providers.LLMResponse, error) {
 		t.Fatal("the Judge LLM must never be called when all criteria are machine-checkable")
-		return nil, nil
+		return &providers.LLMResponse{}, nil
 	}}
 	judgeInst.Provider = fake
 
@@ -704,7 +704,7 @@ func TestJudge_UnknownCriterionKind_FailsClosed(t *testing.T) {
 	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	fake := &fakeJudgeProvider{chatFn: func(int) (*providers.LLMResponse, error) {
 		t.Fatal("the Judge LLM must never be called for an unknown-kind criterion (nothing to prose-judge)")
-		return nil, nil
+		return &providers.LLMResponse{}, nil
 	}}
 	judgeInst.Provider = fake
 
@@ -785,7 +785,7 @@ func TestJudgeCriteria_InvalidInput_FailsClosedNotUnavailable(t *testing.T) {
 	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	fake := &fakeJudgeProvider{chatFn: func(int) (*providers.LLMResponse, error) {
 		t.Fatal("the Judge LLM must never be called for an invalid JudgeCriteriaInput")
-		return nil, nil
+		return &providers.LLMResponse{}, nil
 	}}
 	judgeInst.Provider = fake
 

@@ -188,7 +188,7 @@ func systemAgentHomeDir(agentID, agentHome string) (string, error) {
 		return "", fmt.Errorf("%w: agent_id=%s", ErrAgentHomeUnavailable, agentID)
 	}
 	if mkErr := os.MkdirAll(agentHome, 0o700); mkErr != nil {
-		return "", fmt.Errorf("%w: agent_id=%s: %v", ErrAgentHomeUnavailable, agentID, mkErr)
+		return "", fmt.Errorf("%w: agent_id=%s: %w", ErrAgentHomeUnavailable, agentID, mkErr)
 	}
 	return agentHome, nil
 }

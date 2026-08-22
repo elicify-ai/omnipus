@@ -350,7 +350,7 @@ func ResolvePath(
 	}
 
 	if err := policy.Validate(); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrPathInvalid, err)
+		return nil, fmt.Errorf("%w: %w", ErrPathInvalid, err)
 	}
 
 	// realWorkDir is policy.WorkDir resolved through the exact same
@@ -373,12 +373,12 @@ func ResolvePath(
 	// resolved WorkDir, and closes the gap when it didn't.
 	realWorkDir, err := resolveRealpathUnderWorkDir(policy.WorkDir, "")
 	if err != nil {
-		return nil, fmt.Errorf("%w: resolve working directory %q: %v", ErrPathInvalid, policy.WorkDir, err)
+		return nil, fmt.Errorf("%w: resolve working directory %q: %w", ErrPathInvalid, policy.WorkDir, err)
 	}
 
 	realAbs, err := resolveRealpathUnderWorkDir(rawPath, policy.WorkDir)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrPathInvalid, err)
+		return nil, fmt.Errorf("%w: %w", ErrPathInvalid, err)
 	}
 
 	if fspolicy.IsCarveOut(realAbs, policy) {
@@ -588,7 +588,7 @@ func matchedAllowedRoot(candidate string, roots []string) (string, bool) {
 func newMountRootHandle(mountRoot, rawPath, realAbs string, policy fspolicy.FSPolicy) (*PathHandle, error) {
 	lexicalAbs, err := lexicalAbsPath(rawPath, policy.WorkDir)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrPathInvalid, err)
+		return nil, fmt.Errorf("%w: %w", ErrPathInvalid, err)
 	}
 
 	var rel string
@@ -910,11 +910,11 @@ func safeRelPath(workDir, rawPath string) (string, error) {
 	if filepath.IsAbs(rel) {
 		resolvedDir, remainder, err := resolveAncestorRealpath(rel)
 		if err != nil {
-			return "", fmt.Errorf("%w: %v", ErrPathInvalid, err)
+			return "", fmt.Errorf("%w: %w", ErrPathInvalid, err)
 		}
 		relDir, err := filepath.Rel(workDir, resolvedDir)
 		if err != nil {
-			return "", fmt.Errorf("%w: %v", ErrPathInvalid, err)
+			return "", fmt.Errorf("%w: %w", ErrPathInvalid, err)
 		}
 		rel = filepath.Join(relDir, remainder)
 	}

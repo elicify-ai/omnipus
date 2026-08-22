@@ -1788,12 +1788,12 @@ func (te *TaskExecutor) recordEvidenceBoundary(t *task.Task) {
 	if evidence == nil || t == nil {
 		return
 	}
-	res, err := evidence.CommitTaskBoundary(t)
+	res, recorded, err := evidence.CommitTaskBoundary(t)
 	switch {
 	case err != nil:
 		logger.WarnCF("task_executor", "evidence boundary commit failed — Play will fall back to a fresh attempt",
 			map[string]any{"task_id": t.ID, "workspace_id": t.WorkspaceID, "error": err.Error()})
-	case res == nil:
+	case !recorded:
 		// Nothing to record (no workspace, no write set, unmaterialized work
 		// dir). Normal for every non-plan-member task — stay quiet at debug.
 		logger.DebugCF("task_executor", "evidence boundary: nothing to record",
@@ -2938,7 +2938,7 @@ func (te *TaskExecutor) requirePlanExecuting(t *task.Task) error {
 	if err != nil {
 		logger.WarnCF("task_executor", "plan-state gate: could not resolve parent plan, failing closed",
 			map[string]any{"task_id": t.ID, "plan_id": t.PlanID, "error": err.Error()})
-		return fmt.Errorf("%w: plan %q: %v", ErrPlanStateUnresolvable, t.PlanID, err)
+		return fmt.Errorf("%w: plan %q: %w", ErrPlanStateUnresolvable, t.PlanID, err)
 	}
 	if !p.PermitsMemberDispatch() {
 		logger.DebugCF("task_executor", "plan-state gate: refusing dispatch, parent plan not in a dispatchable state",

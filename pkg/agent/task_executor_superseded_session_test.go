@@ -136,7 +136,7 @@ func TestRejectBareEvidenceClaim_SupersededSessionTransitionsToInterrupted(t *te
 	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	judgeInst.Provider = &fakeJudgeProvider{chatFn: func(int) (*providers.LLMResponse, error) {
 		t.Fatal("the verifier must NEVER be dispatched for a bare (evidence-free) completion claim")
-		return nil, nil
+		return &providers.LLMResponse{}, nil
 	}}
 
 	taskStore := GetTaskStore(al)

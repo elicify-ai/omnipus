@@ -5,6 +5,7 @@
 package agent
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"sync"
@@ -30,7 +31,7 @@ func TestVerifierSessionRegistry_RegisterLookupUnregister(t *testing.T) {
 	// session id against a LIVE entry must be REJECTED — the existing live
 	// session is preserved, not clobbered (G-1 exactly-once). This is the
 	// behavior change from the old blind-upsert.
-	if err := r.Register("plan-1", "verifier-sess-2"); err != ErrVerifierSessionHeld {
+	if err := r.Register("plan-1", "verifier-sess-2"); !errors.Is(err, ErrVerifierSessionHeld) {
 		t.Fatalf("Register(plan-1, verifier-sess-2) over a live different session = err=%v, want ErrVerifierSessionHeld", err)
 	}
 	got, ok = r.Lookup("plan-1")

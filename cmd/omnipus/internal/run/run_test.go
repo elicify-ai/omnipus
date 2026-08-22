@@ -348,7 +348,7 @@ func TestRun_GatewayDown(t *testing.T) {
 	}
 
 	err := run.Run(context.Background(), opts)
-	if err != run.ErrGatewayDown {
+	if !errors.Is(err, run.ErrGatewayDown) {
 		t.Errorf("Run returned %v, want ErrGatewayDown", err)
 	}
 }
@@ -377,7 +377,7 @@ func TestRun_AuthRejected(t *testing.T) {
 	}
 
 	err := run.Run(context.Background(), opts)
-	if err != run.ErrKeyInvalid {
+	if !errors.Is(err, run.ErrKeyInvalid) {
 		t.Errorf("Run returned %v, want ErrKeyInvalid", err)
 	}
 }
@@ -399,7 +399,7 @@ func TestRun_RemoteUnsupported(t *testing.T) {
 	}
 
 	err := run.Run(context.Background(), opts)
-	if err != run.ErrRemoteUnsupported {
+	if !errors.Is(err, run.ErrRemoteUnsupported) {
 		t.Errorf("Run returned %v, want ErrRemoteUnsupported", err)
 	}
 }
@@ -589,7 +589,7 @@ func TestRun_TimeoutDuringKeepalive(t *testing.T) {
 	})
 
 	elapsed := time.Since(start)
-	if err != run.ErrTimeout {
+	if !errors.Is(err, run.ErrTimeout) {
 		t.Errorf("Run returned %v, want ErrTimeout", err)
 	}
 	// Allow up to 3× the budget for scheduling jitter; must not exceed 10×.
@@ -712,7 +712,7 @@ func TestRun_ApprovalPostFailure(t *testing.T) {
 	}
 
 	err := run.Run(context.Background(), opts)
-	if err != run.ErrApprovalFailed {
+	if !errors.Is(err, run.ErrApprovalFailed) {
 		t.Errorf("Run returned %v, want ErrApprovalFailed", err)
 	}
 

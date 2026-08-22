@@ -23,6 +23,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"net/smtp"
@@ -586,7 +587,7 @@ func decodeBody(raw []byte) string {
 
 	for {
 		part, perr := mr.NextPart()
-		if perr == io.EOF {
+		if errors.Is(perr, io.EOF) {
 			break
 		}
 		if perr != nil {

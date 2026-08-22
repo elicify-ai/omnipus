@@ -172,7 +172,7 @@ func VerifyChromeSHA256(binaryPath, shaPath string) error {
 		// Any error here — IsNotExist, EACCES, EIO, ... — is a refusal.
 		// Per SEC-ADR052-001, a manifest we can't read is the same as a
 		// manifest we can't trust.
-		return fmt.Errorf("%w: %s: %v", ErrSHA256ManifestMissing, shaPath, lerr)
+		return fmt.Errorf("%w: %s: %w", ErrSHA256ManifestMissing, shaPath, lerr)
 	}
 	if info.Mode()&os.ModeSymlink != 0 {
 		return fmt.Errorf("%w: %s is a symlink", ErrSHA256ManifestMissing, shaPath)
@@ -183,18 +183,18 @@ func VerifyChromeSHA256(binaryPath, shaPath string) error {
 
 	raw, readErr := os.ReadFile(shaPath)
 	if readErr != nil {
-		return fmt.Errorf("%w: read %s: %v", ErrSHA256ManifestMissing, shaPath, readErr)
+		return fmt.Errorf("%w: read %s: %w", ErrSHA256ManifestMissing, shaPath, readErr)
 	}
 
 	want, parseErr := ParseChromeSHA256Manifest(raw)
 	if parseErr != nil {
-		return fmt.Errorf("%w: %s: %v", ErrSHA256ManifestMalformed, shaPath, parseErr)
+		return fmt.Errorf("%w: %s: %w", ErrSHA256ManifestMalformed, shaPath, parseErr)
 	}
 
 	// SEC-ADR052-005: refuse a symlinked binary at the leaf.
 	binInfo, lerr := os.Lstat(binaryPath)
 	if lerr != nil {
-		return fmt.Errorf("%w: lstat binary %s: %v", ErrSHA256VerificationFailed, binaryPath, lerr)
+		return fmt.Errorf("%w: lstat binary %s: %w", ErrSHA256VerificationFailed, binaryPath, lerr)
 	}
 	if binInfo.Mode()&os.ModeSymlink != 0 {
 		return fmt.Errorf("%w at %s", ErrSHA256BinarySymlink, binaryPath)
@@ -205,12 +205,12 @@ func VerifyChromeSHA256(binaryPath, shaPath string) error {
 
 	f, openErr := os.Open(binaryPath)
 	if openErr != nil {
-		return fmt.Errorf("%w: open binary %s: %v", ErrSHA256VerificationFailed, binaryPath, openErr)
+		return fmt.Errorf("%w: open binary %s: %w", ErrSHA256VerificationFailed, binaryPath, openErr)
 	}
 	defer f.Close()
 	hasher := sha256.New()
 	if _, copyErr := io.Copy(hasher, f); copyErr != nil {
-		return fmt.Errorf("%w: hash binary %s: %v", ErrSHA256VerificationFailed, binaryPath, copyErr)
+		return fmt.Errorf("%w: hash binary %s: %w", ErrSHA256VerificationFailed, binaryPath, copyErr)
 	}
 	got := hex.EncodeToString(hasher.Sum(nil))
 

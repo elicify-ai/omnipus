@@ -603,10 +603,11 @@ func (s *Store) occurrenceAlreadyHasRunLocked(taskID string, occurrenceMs *int64
 // skip would permanently out-rank the real (possibly successful) manual run
 // once it closes. Before writing anything, this checks whether a run for the
 // EXACT same OccurrenceMs already exists (open or closed) and no-ops if so —
-// returning (nil, nil), not an error, since "correctly declining to record a
-// misleading duplicate" is success, not failure.
+// returning recorded=false, not an error, since "correctly declining to
+// record a misleading duplicate" is success, not failure.
 //
-// Returns the TaskRun that was written, or nil if the skip was suppressed.
+// Returns the TaskRun that was written when recorded is true; run is nil when
+// the skip was suppressed.
 //
 // Uses the same per-task StripedLock domain and appendRunRecord write path
 // as OpenRun/CloseRun (s.lock, one appendRunRecord call), so this skip record
@@ -614,9 +615,9 @@ func (s *Store) occurrenceAlreadyHasRunLocked(taskID string, occurrenceMs *int64
 // and the suppression check above runs inside the SAME locked section as the
 // write, so the check-then-write is atomic with respect to any concurrent
 // OpenRun/CloseRun/RecordSkippedOccurrence call for this task.
-func (s *Store) RecordSkippedOccurrence(taskID string, occurrenceMs *int64) (*TaskRun, error) {
-	if err := validateID(taskID); err != nil {
-		return nil, err
+func (s *Store) RecordSkippedOccurrence(taskID string, occurrenceMs *int64) (run *TaskRun, recorded bool, err error) {
+	if idErr := validateID(taskID); idErr != nil {
+		return nil, false, idErr
 	}
 
 	mu := s.lock.Get(taskID)
@@ -625,19 +626,19 @@ func (s *Store) RecordSkippedOccurrence(taskID string, occurrenceMs *int64) (*Ta
 
 	alreadyRecorded, err := s.occurrenceAlreadyHasRunLocked(taskID, occurrenceMs)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if alreadyRecorded {
 		slog.Info("task: suppressing skipped-occurrence record — a run already exists for this exact occurrence "+
 			"(e.g. manually Run-now'd ahead of its natural schedule, RD8); recording a skip here would mislabel a "+
 			"real run",
 			"task_id", taskID, "occurrence_ms", *occurrenceMs)
-		return nil, nil
+		return nil, false, nil
 	}
 
 	runID, err := newRunID()
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	var occCopy *int64
 	if occurrenceMs != nil {
@@ -646,7 +647,7 @@ func (s *Store) RecordSkippedOccurrence(taskID string, occurrenceMs *int64) (*Ta
 	}
 	now := time.Now().UTC()
 	ts := now.Format(time.RFC3339)
-	run := TaskRun{
+	newRun := TaskRun{
 		RunID:        runID,
 		TaskID:       taskID,
 		OccurrenceMs: occCopy,
@@ -656,10 +657,10 @@ func (s *Store) RecordSkippedOccurrence(taskID string, occurrenceMs *int64) (*Ta
 		StartedAt:    ts,
 		EndedAt:      &ts,
 	}
-	if err := s.appendRunRecord(taskID, run, now); err != nil {
-		return nil, err
+	if err := s.appendRunRecord(taskID, newRun, now); err != nil {
+		return nil, false, err
 	}
-	return &run, nil
+	return &newRun, true, nil
 }
 
 // parseRunTime parses an RFC 3339 timestamp, falling back to the zero time on

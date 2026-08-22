@@ -804,7 +804,7 @@ func runOnCurrentThread(ctx context.Context, argv []string, env []string, lim Li
 				_ = err
 			}
 			return Result{}, fmt.Errorf(
-				"hardened_exec: post-start hardening: %w; kill also failed: %v",
+				"hardened_exec: post-start hardening: %w; kill also failed: %w",
 				hardeningErr,
 				killErr,
 			)

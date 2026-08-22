@@ -61,7 +61,7 @@ func (s *Store) validateBlockedByLocked(taskID string, newBlockedBy []string) er
 			return ErrBlockedBySelfEdge
 		}
 		if err := validateID(dep); err != nil {
-			return fmt.Errorf("%w: blocked_by contains invalid ID %q: %v", ErrValidation, dep, err)
+			return fmt.Errorf("%w: blocked_by contains invalid ID %q: %w", ErrValidation, dep, err)
 		}
 		if _, err := s.load(dep); err != nil {
 			if errors.Is(err, ErrNotFound) {

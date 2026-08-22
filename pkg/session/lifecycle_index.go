@@ -19,6 +19,7 @@
 package session
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -171,7 +172,7 @@ func (idx *lifecycleParentIndex) ensureWarm(s *LifecycleStore) error {
 	for _, id := range ids {
 		rec, loadErr := s.Load(id)
 		if loadErr != nil {
-			if loadErr == ErrLifecycleNotFound {
+			if errors.Is(loadErr, ErrLifecycleNotFound) {
 				continue
 			}
 			// A single corrupt/unreadable record must not fail warm-up

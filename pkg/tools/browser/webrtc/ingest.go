@@ -3,6 +3,7 @@
 package webrtc
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"sync/atomic"
@@ -397,7 +398,7 @@ func (s *Session) attachIngestTrack(prefix string, remote *webrtc.TrackRemote, r
 	for {
 		n, _, err := remote.Read(buf)
 		if err != nil {
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				s.logf("%s ingest track ended (EOF): kind=%s", prefix, kind)
 			} else {
 				s.logf("%s ingest track read error, stopping forward: kind=%s err=%v", prefix, kind, err)
@@ -440,7 +441,7 @@ func (s *Session) attachIngestTrack(prefix string, remote *webrtc.TrackRemote, r
 		if err := local.WriteRTP(&pkt); err != nil {
 			// ErrClosedPipe just means no viewer is bound to this local
 			// track yet -- not worth logging per-packet.
-			if err != io.ErrClosedPipe {
+			if !errors.Is(err, io.ErrClosedPipe) {
 				s.logf("%s forward write failed: kind=%s err=%v", prefix, kind, err)
 			}
 			continue

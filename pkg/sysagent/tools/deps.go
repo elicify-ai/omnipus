@@ -312,7 +312,7 @@ func (d *Deps) WithConfig(fn func(*config.Config) error) error {
 		if fnErr := fn(cfg); fnErr != nil {
 			// Roll back in-memory state to pre-mutation snapshot.
 			if restoreErr := restoreConfig(cfg, snapshotJSON); restoreErr != nil {
-				return fmt.Errorf("fn error: %w; also: restore failed: %v", fnErr, restoreErr)
+				return fmt.Errorf("fn error: %w; also: restore failed: %w", fnErr, restoreErr)
 			}
 			return fnErr
 		}
@@ -328,7 +328,7 @@ func (d *Deps) WithConfig(fn func(*config.Config) error) error {
 		if saveErr != nil {
 			// Roll back in-memory state on disk write failure.
 			if restoreErr := restoreConfig(cfg, snapshotJSON); restoreErr != nil {
-				return fmt.Errorf("save error: %w; also: restore failed: %v", saveErr, restoreErr)
+				return fmt.Errorf("save error: %w; also: restore failed: %w", saveErr, restoreErr)
 			}
 			return saveErr
 		}

@@ -188,7 +188,7 @@ func TestSpawnSubTurn(t *testing.T) {
 
 			// Assert errors
 			if tt.wantErr != nil {
-				if err == nil || err != tt.wantErr {
+				if err == nil || !errors.Is(err, tt.wantErr) {
 					t.Errorf("expected error %v, got %v", tt.wantErr, err)
 				}
 				return

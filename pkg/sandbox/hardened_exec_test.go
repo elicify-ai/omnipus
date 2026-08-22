@@ -5,6 +5,7 @@ package sandbox
 
 import (
 	"context"
+	"errors"
 	"runtime"
 	"strings"
 	"testing"
@@ -18,7 +19,7 @@ func TestRun_EmptyArgvReturnsError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for empty argv, got nil")
 	}
-	if err != ErrEmptyArgv {
+	if !errors.Is(err, ErrEmptyArgv) {
 		t.Errorf("err = %v; want ErrEmptyArgv", err)
 	}
 }

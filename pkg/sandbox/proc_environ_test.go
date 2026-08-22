@@ -15,6 +15,7 @@
 package sandbox_test
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -74,7 +75,7 @@ func TestChildCannotReadGatewayProcEnviron(t *testing.T) {
 	var exitCode int
 	if err == nil {
 		exitCode = 0
-	} else if exitErr, ok := err.(*exec.ExitError); ok {
+	} else if exitErr := (*exec.ExitError)(nil); errors.As(err, &exitErr) {
 		exitCode = exitErr.ExitCode()
 	} else {
 		t.Fatalf("child process failed to run: %v\n%s", err, out)

@@ -356,19 +356,19 @@ func (s *LifecycleStore) Lock(sessionID string) *sync.Mutex {
 }
 
 // tail reads every line of sessionID's JSONL file and returns the last
-// successfully-parsed record (the current state). Returns nil, nil when the
-// file does not exist (no record yet — a fresh session_id). A malformed
-// trailing line (a torn write from a crash mid-append) is skipped with a
-// fall-back to the last GOOD line rather than failing the read outright —
-// crash-safety mirrors fileutil.WriteFileAtomic's own "never worse than the
-// last durable write" guarantee.
-func (s *LifecycleStore) tail(sessionID string) (*LifecycleRecord, error) {
+// successfully-parsed record (the current state). Returns found=false when
+// the file does not exist (no record yet — a fresh session_id) or every line
+// was unparsable. A malformed trailing line (a torn write from a crash
+// mid-append) is skipped with a fall-back to the last GOOD line rather than
+// failing the read outright — crash-safety mirrors fileutil.WriteFileAtomic's
+// own "never worse than the last durable write" guarantee.
+func (s *LifecycleStore) tail(sessionID string) (rec *LifecycleRecord, found bool, err error) {
 	f, err := os.Open(s.path(sessionID))
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			return nil, false, nil
 		}
-		return nil, fmt.Errorf("session: lifecycle: open %q: %w", sessionID, err)
+		return nil, false, fmt.Errorf("session: lifecycle: open %q: %w", sessionID, err)
 	}
 	defer f.Close()
 
@@ -380,19 +380,19 @@ func (s *LifecycleStore) tail(sessionID string) (*LifecycleRecord, error) {
 		if line == "" {
 			continue
 		}
-		var rec LifecycleRecord
-		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+		var r LifecycleRecord
+		if err := json.Unmarshal([]byte(line), &r); err != nil {
 			// Skip a torn/corrupt line; keep the last good record. This is
 			// deliberately non-fatal — see the doc comment above.
 			continue
 		}
-		r := rec
-		last = &r
+		rc := r
+		last = &rc
 	}
 	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("session: lifecycle: scan %q: %w", sessionID, err)
+		return nil, false, fmt.Errorf("session: lifecycle: scan %q: %w", sessionID, err)
 	}
-	return last, nil
+	return last, last != nil, nil
 }
 
 // Load returns the current (tail) LifecycleRecord for sessionID.
@@ -405,11 +405,11 @@ func (s *LifecycleStore) Load(sessionID string) (*LifecycleRecord, error) {
 	mu.Lock()
 	defer mu.Unlock()
 
-	rec, err := s.tail(sessionID)
+	rec, found, err := s.tail(sessionID)
 	if err != nil {
 		return nil, err
 	}
-	if rec == nil {
+	if !found {
 		return nil, ErrLifecycleNotFound
 	}
 	return rec, nil
@@ -481,14 +481,14 @@ func (s *LifecycleStore) persistLocked(rec *LifecycleRecord) error {
 		return fmt.Errorf("session: lifecycle: invalid launch_profile %q", rec.LaunchProfile)
 	}
 
-	prev, err := s.tail(rec.SessionID)
+	prev, found, err := s.tail(rec.SessionID)
 	if err != nil {
 		return err
 	}
 
 	now := time.Now().UTC()
 	switch {
-	case prev == nil:
+	case !found:
 		if rec.CreatedAt.IsZero() {
 			rec.CreatedAt = now
 		}
@@ -558,12 +558,12 @@ func (s *LifecycleStore) Mutate(sessionID string, fn func(*LifecycleRecord) erro
 	mu.Lock()
 	defer mu.Unlock()
 
-	cur, err := s.tail(sessionID)
+	cur, found, err := s.tail(sessionID)
 	if err != nil {
 		return err
 	}
 	var next *LifecycleRecord
-	if cur != nil {
+	if found {
 		c := *cur // copy so fn mutates the copy, not the tail record
 		next = &c
 	}
@@ -829,12 +829,12 @@ func (s *LifecycleStore) pruneTerminalOne(id string, cutoff time.Time) bool {
 	mu.Lock()
 	defer mu.Unlock()
 
-	rec, err := s.tail(id)
+	rec, found, err := s.tail(id)
 	if err != nil {
 		slog.Warn("session: lifecycle: prune_terminal: load failed, skipping", "session_id", id, "error", err)
 		return false
 	}
-	if rec == nil {
+	if !found {
 		// No record for this id (already removed, or never had one) —
 		// mirrors the ErrLifecycleNotFound "continue" the old Load-based
 		// code silently handled the same way.

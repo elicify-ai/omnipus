@@ -1874,7 +1874,7 @@ func ensureJSONEOF(decoder *json.Decoder) error {
 		if err == nil {
 			return fmt.Errorf("%w: trailing JSON value", ErrInvalidManifest)
 		}
-		return fmt.Errorf("%w: trailing data: %v", ErrInvalidManifest, err)
+		return fmt.Errorf("%w: trailing data: %w", ErrInvalidManifest, err)
 	}
 	return nil
 }

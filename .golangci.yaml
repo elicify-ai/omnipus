@@ -49,7 +49,6 @@ linters:
     - embeddedstructfieldcheck
     - errcheck
     - errchkjson
-    - errorlint
     - exhaustive
     - forbidigo
     - funlen
@@ -64,7 +63,6 @@ linters:
     - mnd
     - modernize
     - nestif
-    - nilnil
     - paralleltest
     - perfsprint
     - revive
@@ -153,8 +151,63 @@ linters:
         - name: unused-receiver
           disabled: true
   exclusions:
+    paths:
+      # node_modules is a JS dependency tree; the flatted package happens to
+      # ship Go sample code. It is not our source and must never be linted.
+      - node_modules
     generated: lax
     rules:
+      # errorlint: ten test-file assertions that deliberately check EXACT
+      # error identity/type — not "matches or wraps" — because the identity
+      # itself IS the behavior under test (proving a function returns an
+      # error UNWRAPPED, or proving Unwrap()/a passthrough field returns the
+      # very same value). Converting these to errors.Is/errors.As would
+      # silently accept a future regression to wrapping as still-passing.
+      # Verified against each function's real implementation 2026-08-21.
+      - linters:
+          - errorlint
+        path: ^pkg/channels/errutil_test\.go$
+        source: 'if err != raw '
+      - linters:
+          - errorlint
+        path: ^pkg/providers/error_classifier_test\.go$
+        source: 'fe\.Unwrap\(\) != inner'
+      - linters:
+          - errorlint
+        path: ^pkg/tools/message_test\.go$
+        source: 'result\.Err != sendErr'
+      - linters:
+          - errorlint
+        path: ^pkg/providers/fallback_multikey_test\.go$
+        source: 'err\.\(\*(FallbackExhaustedError|FailoverError)\)'
+      - linters:
+          - errorlint
+        path: ^pkg/providers/fallback_test\.go$
+        source: 'err\.\(\*(FallbackExhaustedError|FailoverError)\)'
+      - linters:
+          - errorlint
+        path: ^pkg/sandbox/dev_servers_reserve_test\.go$
+        source: 'err\.\(GatewayCapError\)'
+      - linters:
+          - errorlint
+        path: ^pkg/sandbox/dev_servers_test\.go$
+        source: 'err\.\(GatewayCapError\)'
+      # nilnil: three deliberate "callable unconditionally; a nil result means
+      # no per-turn override, so fall back to the boot/global policy" contracts.
+      # Each is documented at its declaration and every caller assigns the
+      # result unconditionally. Converting them to a sentinel or a bool third
+      # return would not fix a bug — it would rename "nil" to a different
+      # meaningless-alone value, since nil here already IS the zero value the
+      # callers expect.
+      - linters:
+          - nilnil
+        path: ^pkg/sandbox/turn_policy\.go$
+      - linters:
+          - nilnil
+        path: ^pkg/tools/shell\.go$
+      - linters:
+          - nilnil
+        path: ^pkg/tools/browser/webrtc/turnserver(_stub)?\.go$
       - linters:
           - lll
         source: '^//go:generate '

@@ -223,7 +223,7 @@ func SpawnBackgroundChild(
 					hardeningErr,
 				)
 				return nil, fmt.Errorf(
-					"SpawnBackgroundChild: post-start hardening: %w; kill also failed: %v",
+					"SpawnBackgroundChild: post-start hardening: %w; kill also failed: %w",
 					hardeningErr,
 					killErr,
 				)

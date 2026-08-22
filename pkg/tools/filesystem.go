@@ -521,7 +521,7 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 	// FIX: io.ReadFull returns io.ErrUnexpectedEOF for partial reads (0 < n < len),
 	// and io.EOF only when n == 0. Both are normal terminal conditions — only
 	// other errors are genuine failures.
-	if err != nil && err != io.EOF && !errors.Is(err, io.ErrUnexpectedEOF) {
+	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
 		return ErrorResult(fmt.Sprintf("failed to read file content: %v", err))
 	}
 

@@ -766,7 +766,7 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *tool
 
 // isTaskNotFound reports whether err wraps task.ErrNotFound.
 func isTaskNotFound(err error) bool {
-	return err != nil && (err == task.ErrNotFound || fmt.Sprintf("%v", err) == task.ErrNotFound.Error())
+	return errors.Is(err, task.ErrNotFound)
 }
 
 // ---- delete_task_in_workspace ----

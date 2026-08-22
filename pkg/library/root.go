@@ -179,7 +179,7 @@ type mountRoot struct {
 func OpenRoot(home, workspaceID string) (*Root, error) {
 	dir, err := workspace.SafeWorkDir(home, workspaceID)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrInvalidPath, err)
+		return nil, fmt.Errorf("%w: %w", ErrInvalidPath, err)
 	}
 	if mkErr := os.MkdirAll(dir, 0o700); mkErr != nil {
 		return nil, fmt.Errorf("library: create work directory: %w", mkErr)
@@ -396,11 +396,11 @@ func CleanRelPath(raw string) (string, error) {
 		// than only when actually running on Windows — a workspace must
 		// behave identically whichever OS opens it.
 		if err := pathsafe.ValidateComponent(seg); err != nil {
-			return "", fmt.Errorf("%w: %v", ErrInvalidPath, err)
+			return "", fmt.Errorf("%w: %w", ErrInvalidPath, err)
 		}
 	}
 	if err := pathsafe.ValidateRelPathLength(cleaned); err != nil {
-		return "", fmt.Errorf("%w: %v", ErrInvalidPath, err)
+		return "", fmt.Errorf("%w: %w", ErrInvalidPath, err)
 	}
 	return cleaned, nil
 }
@@ -418,7 +418,7 @@ func CleanRelPath(raw string) (string, error) {
 func CountVisibleRootEntries(home, workspaceID string) (int, error) {
 	dir, err := workspace.SafeWorkDir(home, workspaceID)
 	if err != nil {
-		return 0, fmt.Errorf("%w: %v", ErrInvalidPath, err)
+		return 0, fmt.Errorf("%w: %w", ErrInvalidPath, err)
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {

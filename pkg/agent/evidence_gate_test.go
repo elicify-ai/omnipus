@@ -36,7 +36,7 @@ func TestEvidenceGate_BareClaimRejectedWithoutConsumingAttempt(t *testing.T) {
 	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	fake := &fakeJudgeProvider{chatFn: func(int) (*providers.LLMResponse, error) {
 		t.Fatal("the verifier must NEVER be dispatched for a bare (evidence-free) completion claim")
-		return nil, nil
+		return &providers.LLMResponse{}, nil
 	}}
 	judgeInst.Provider = fake
 
@@ -128,7 +128,7 @@ func TestEvidenceGate_ScratchpadTaskExempt(t *testing.T) {
 	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	fake := &fakeJudgeProvider{chatFn: func(int) (*providers.LLMResponse, error) {
 		t.Fatal("a Scratchpad task must never dispatch the verifier")
-		return nil, nil
+		return &providers.LLMResponse{}, nil
 	}}
 	judgeInst.Provider = fake
 
