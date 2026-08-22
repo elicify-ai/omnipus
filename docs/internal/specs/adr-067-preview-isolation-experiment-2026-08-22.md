@@ -136,3 +136,83 @@ python3 server.py <MAIN_PORT> <EXT_PORT>
 Policies: `self`, `origin`, `nosandbox`, `sandboxonly`, `none`. The `none` control **must** show all seven vectors reaching the second origin; if it does not, the harness is broken and no other row means anything.
 
 **Known harness defect:** with no policy, the form-submit probe navigates the document away before the in-page report runs, so the `none` row has no report and a racy egress list. This affects the control only. It does not affect any policy that blocks form submission — i.e. every policy under consideration.
+
+---
+
+## 7. Addendum — PDF.js form filling and signature (measured 2026-08-22)
+
+Tested because the proposal to render PDFs in the SPA with **PDF.js** (rather than the
+browser's built-in viewer) hinges on whether it can also *edit*. Third-party sources —
+all vendors of competing paid libraries — claim PDF.js annotations *"may not save
+properly into the PDF binary for compatibility with other PDF readers."*
+
+**That claim is refuted for both cases tested.**
+
+Method: `pdfjs-dist` 6.2.108; a hand-built AcroForm PDF (828 bytes, one text field),
+validated first by the in-tree Go reader `ledongthuc/pdf`. Values set through
+`annotationStorage` — the same path the viewer uses — then `saveDocument()`. Output
+inspected byte-wise, then **rendered by macOS Quartz/PDFKit**, an engine with no
+relationship to PDF.js.
+
+### 7.1 Form filling — works, and writes correctly
+
+Saved output is a **proper incremental update** (two `%%EOF`), containing both halves:
+
+- **The value**: object 5 re-emitted as `/V (Daniel Piatkowski)`
+- **The appearance stream**: a new object — `/Tx BMC q BT /Helv 12 Tf 0 g … (Daniel Piatkowski) Tj ET Q EMC`
+
+The appearance stream is what makes other readers *display* the value rather than
+merely store it. Both are present; the xref and `/Prev` trailer are well-formed.
+
+**Independently rendered by macOS: the filled name appears in the field.**
+
+### 7.2 Drawn signature (ink annotation) — works, and writes correctly
+
+Saved output contains:
+
+- Page object re-emitted with `/Annots [5 0 R 7 0 R]` — the annotation is registered
+- `/Subtype /Ink` with `/InkList [[60 120 75 145 …]]` — the stroke, semantically
+- An appearance stream with real operators — `2 w 1 J 1 j / 0 G / 60 120 m / 75 145 l … S`
+
+Again both halves: a reader that understands ink annotations gets the structure, and one
+that doesn't still draws the stroke.
+
+**Independently rendered by macOS: the signature stroke appears.**
+
+### 7.3 What this does and does not establish
+
+**Established by measurement:** PDF.js fills AcroForm fields and adds ink annotations,
+saves both correctly into the PDF binary as standards-compliant incremental updates
+with appearance streams, and a wholly independent engine renders both.
+
+**NOT established, and must not be claimed:**
+- **XFA forms** — unsupported by PDF.js. Untested here.
+- **Cryptographic signatures** — PDF.js has no PKI signing. A drawn signature is an
+  image of intent, not a verifiable one. Separate project, separate ADR.
+- **Programmatic filling by an agent** — the storage API worked from Node here, but the
+  supported product surface is a human filling fields in the viewer. An agent-driven
+  fill is not a documented capability.
+- **Adobe Acrobat specifically** — macOS PDFKit and the in-tree Go reader were the
+  independent checks. Acrobat was not tested.
+- **Complex real-world forms** — the fixture was a single text field, hand-built. Radio
+  groups, checkboxes, appearance-inheriting fields and pre-existing appearance streams
+  are untested.
+
+### 7.4 Consequence for D15
+
+Rendering PDFs via PDF.js **inside the SPA** — as a component, like the existing
+`LibraryImagePreview` and `LibraryVideoPreview` — means a PDF never becomes a browser
+document with an origin at all. It is bytes we parse and draw.
+
+That **removes the need for D15.1's per-format isolation split**: the "passive" class
+existed only for PDF, since images, audio and video are already plain elements in the
+SPA. A uniform `sandbox` policy for the one thing that needs it (HTML) becomes possible
+again — a stricter and simpler posture than the split.
+
+**Also corrected by measurement, and important:** the earlier finding that PDFs fail
+under sandbox on all engines was **partly a headless artifact**. Headless Chromium has
+no PDF viewer at all, so every PDF became a download regardless of policy. Run headed,
+a **top-level** PDF renders even under `sandbox` (the directive does not apply to a
+top-level PDF navigation), while a PDF **in a frame** is blocked. The Library case is
+the framed one, so the conclusion stands — but the reasoning behind it was wrong, and
+any future test of this MUST run headed.
