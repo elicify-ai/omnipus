@@ -24,6 +24,7 @@ import (
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/pathsafe"
 )
 
 // buildLibraryTestAPI creates a minimal restAPI plus one pre-seeded
@@ -434,18 +435,48 @@ func TestLibraryContent_InboundSchemaValidation_MissingField(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
 }
 
-// TestLibraryContent_ReservedDeviceNameOrIllegalChar_400 proves the
-// pkg/pathsafe cross-platform filename-safety checks reach PUT
-// .../content via CleanRelPath, not only the mkdir endpoint.
-func TestLibraryContent_ReservedDeviceNameOrIllegalChar_400(t *testing.T) {
+// TestLibraryContent_ReservedDeviceNameFollowsActiveRules proves the
+// pkg/pathsafe name-shape checks reach PUT .../content, and that they
+// follow the BUILD TARGET's rule set rather than applying everywhere.
+//
+// This test previously asserted a flat 400 on every OS. ADR-067 Stage 0
+// changed that deliberately: these are Windows-shape rules, and on Linux or
+// macOS a file may legitimately be called "CON.txt" or "bad|name.txt". A
+// flat 400 took away a naming freedom the host filesystem grants, for a
+// portability scenario that does not exist — a mount stores an immutable
+// absolute host path, so a workspace moved to another OS is broken by the
+// path, not by the filenames.
+//
+// The expectation is derived from ActiveRules rather than hardcoded, because
+// hardcoding either answer makes the test wrong on half the CI matrix.
+func TestLibraryContent_ReservedDeviceNameFollowsActiveRules(t *testing.T) {
 	api, id := buildLibraryTestAPI(t)
-	for _, body := range []string{
-		`{"path":"CON.txt","content":"x"}`,
-		`{"path":"bad|name.txt","content":"x"}`,
-		`{"path":"trailing.space ","content":"x"}`,
+	for _, tc := range []struct{ path, body string }{
+		{"CON.txt", `{"path":"CON.txt","content":"x"}`},
+		{"bad|name.txt", `{"path":"bad|name.txt","content":"x"}`},
+		{"trailing.space ", `{"path":"trailing.space ","content":"x"}`},
 	} {
-		w := libPutJSON(t, api, "/api/v1/library/"+id+"/content", body)
-		assert.Equal(t, http.StatusBadRequest, w.Code, "body=%s resp=%s", body, w.Body.String())
+		t.Run(tc.path, func(t *testing.T) {
+			w := libPutJSON(t, api, "/api/v1/library/"+id+"/content", tc.body)
+			if pathsafe.ActiveRules().ValidateComponent(tc.path) != nil {
+				assert.Equal(t, http.StatusBadRequest, w.Code,
+					"the active rule set rejects %q, so the endpoint must 400: %s", tc.path, w.Body.String())
+			} else {
+				assert.NotEqual(t, http.StatusBadRequest, w.Code,
+					"the active rule set allows %q, so the endpoint must not 400: %s", tc.path, w.Body.String())
+			}
+		})
+	}
+}
+
+// TestLibraryContent_WindowsRulesStillRejectThoseNames pins the other half:
+// the rules did not disappear, they became conditional. Asserted against the
+// rule set as a VALUE so it holds on every runner — without it, deleting the
+// Windows rules entirely would leave this file green on Linux and macOS.
+func TestLibraryContent_WindowsRulesStillRejectThoseNames(t *testing.T) {
+	for _, name := range []string{"CON.txt", "bad|name.txt", "trailing.space "} {
+		require.Error(t, pathsafe.WindowsRules.ValidateComponent(name),
+			"WindowsRules must still reject %q", name)
 	}
 }
 
@@ -589,23 +620,30 @@ func TestLibraryMkdir_InvalidPath_400(t *testing.T) {
 	}
 }
 
-// TestLibraryMkdir_ReservedDeviceNameOrIllegalChar_400 proves the app-wide
-// cross-platform filename-safety fix (pkg/pathsafe) is wired all the way
-// through to this endpoint: a Windows reserved device name or an
-// NTFS-illegal character is rejected with 400 on every OS, not only
-// Windows — a workspace created on this (Linux) test/CI machine must never
-// contain a name that would be unusable the moment it is opened on Windows.
-func TestLibraryMkdir_ReservedDeviceNameOrIllegalChar_400(t *testing.T) {
+// TestLibraryMkdir_ReservedDeviceNameFollowsActiveRules is the mkdir half of
+// the same contract — see the note on the content test above for why a flat
+// 400 on every OS was wrong. Note "notes/COM1": the endpoint checks EVERY
+// segment, not just the leaf, so an illegal intermediate directory is caught
+// where the active rule set has one.
+func TestLibraryMkdir_ReservedDeviceNameFollowsActiveRules(t *testing.T) {
 	api, id := buildLibraryTestAPI(t)
-	for _, body := range []string{
-		`{"path":"CON"}`,
-		`{"path":"nul.txt"}`,
-		`{"path":"notes/COM1"}`,
-		`{"path":"bad<name"}`,
-		`{"path":"trailing."}`,
+	for _, tc := range []struct{ path, seg string }{
+		{"CON", "CON"},
+		{"nul.txt", "nul.txt"},
+		{"notes/COM1", "COM1"},
+		{"bad<name", "bad<name"},
+		{"trailing.", "trailing."},
 	} {
-		w := libPostJSON(t, api, "/api/v1/library/"+id+"/mkdir", body)
-		assert.Equal(t, http.StatusBadRequest, w.Code, "body=%s resp=%s", body, w.Body.String())
+		t.Run(tc.path, func(t *testing.T) {
+			w := libPostJSON(t, api, "/api/v1/library/"+id+"/mkdir", `{"path":"`+tc.path+`"}`)
+			if pathsafe.ActiveRules().ValidateComponent(tc.seg) != nil {
+				assert.Equal(t, http.StatusBadRequest, w.Code,
+					"the active rule set rejects %q, so mkdir must 400: %s", tc.seg, w.Body.String())
+			} else {
+				assert.NotEqual(t, http.StatusBadRequest, w.Code,
+					"the active rule set allows %q, so mkdir must not 400: %s", tc.seg, w.Body.String())
+			}
+		})
 	}
 }
 
