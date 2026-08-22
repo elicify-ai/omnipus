@@ -194,6 +194,40 @@ func (a *restAPI) openLibraryRoot(w http.ResponseWriter, workspaceID, label stri
 	return root, true
 }
 
+// checkCreateName applies the DESTINATION root's name-shape rules to rel and
+// writes the 400 itself when they refuse, returning ok=false (ADR-067
+// FR-0001a). Every create/rename handler calls it on its destination path,
+// after the root is open.
+//
+// Why a helper rather than the method inline five times: FR-0001a names
+// exactly five handlers that create or rename — content-put, upload, mkdir,
+// rename, transfer — and observes that "the one that forgot would silently
+// accept what the other four refuse". A one-line call is the smallest thing a
+// sixth handler's author can copy correctly.
+//
+// Two properties this signature is deliberately shaped for:
+//
+//   - root is the DESTINATION's root, not the caller's convenient one. For a
+//     cross-workspace move or copy that is toRoot, because population
+//     (workspace storage vs. mount) is a property of where the file lands.
+//   - The error goes through mapLibraryErr, not a bespoke jsonErr. Root's
+//     ValidateCreateName wraps ErrInvalidPath precisely so the existing 400
+//     mapping covers it with no new branch; routing it anywhere else would
+//     re-invent that mapping and let the two drift.
+//
+// Nothing on the READ path may call this. Listing, opening, downloading and
+// deleting an existing file are reads of the operator's disk, and FR-0001
+// removes name shape from them entirely: a file already on disk is, by
+// construction, inside its own filesystem's limits, and Omnipus did not name
+// it.
+func checkCreateName(w http.ResponseWriter, root *library.Root, rel, op, workspaceID string) bool {
+	if err := root.ValidateCreateName(rel); err != nil {
+		mapLibraryErr(w, op, workspaceID, err)
+		return false
+	}
+	return true
+}
+
 // --- GET /library/workspaces ---
 
 func (a *restAPI) handleLibraryWorkspaces(w http.ResponseWriter, r *http.Request) {
@@ -367,6 +401,10 @@ func (a *restAPI) handleLibraryContentPut(w http.ResponseWriter, r *http.Request
 	}
 	defer root.Close()
 
+	if !checkCreateName(w, root, rel, "put content", workspaceID) {
+		return
+	}
+
 	fi, err := root.WriteContent(rel, []byte(req.Content))
 	if err != nil {
 		mapLibraryErr(w, "put content", workspaceID, err)
@@ -452,6 +490,21 @@ func (a *restAPI) handleLibraryUpload(w http.ResponseWriter, r *http.Request, wo
 		destRel := sanitized
 		if targetDir != "" {
 			destRel = targetDir + "/" + sanitized
+		}
+
+		// The full destination, not just the leaf. SanitizeUploadFilename above
+		// already judged the leaf, so on a POSIX build this adds nothing a
+		// caller can observe — every POSIX shape rule is a per-component byte
+		// budget the host filesystem enforces anyway. What it adds on a Windows
+		// build is the two rules the leaf check cannot see: targetDir's own
+		// segments, and the whole-path MAX_PATH budget that a short filename in
+		// a deep directory blows without any single component coming close.
+		// FR-0001a names upload as one of the five for that reason.
+		if nameErr := root.ValidateCreateName(destRel); nameErr != nil {
+			part.Close()
+			rollback()
+			mapLibraryErr(w, "upload", workspaceID, nameErr)
+			return
 		}
 
 		finalRel, f, createErr := root.CreateUnique(destRel)
@@ -542,6 +595,10 @@ func (a *restAPI) handleLibraryMkdir(w http.ResponseWriter, r *http.Request, wor
 	}
 	defer root.Close()
 
+	if !checkCreateName(w, root, rel, "mkdir", workspaceID) {
+		return
+	}
+
 	fi, created, err := root.Mkdir(rel)
 	if err != nil {
 		mapLibraryErr(w, "mkdir", workspaceID, err)
@@ -554,6 +611,105 @@ func (a *restAPI) handleLibraryMkdir(w http.ResponseWriter, r *http.Request, wor
 	} else {
 		jsonOK(w, entry)
 	}
+}
+
+// rfc5987AttrChars is the punctuation RFC 5987 §3.2.1 lets an ext-value carry
+// unencoded, alongside ALPHA and DIGIT. Everything else — space, "%", "(",
+// every non-ASCII byte — is percent-encoded. Kept as an explicit allow-list
+// rather than a "deny these" test so a character nobody thought about is
+// encoded, not emitted.
+const rfc5987AttrChars = "!#$&+-.^_`|~"
+
+// percentEncodeRFC5987 percent-encodes s (already UTF-8, as every Go string
+// from a filesystem name is) into an RFC 5987 ext-value body — the part after
+// the charset-and-language prefix of a filename* parameter. Byte-wise, not
+// rune-wise: the encoding is defined over the octets of the charset, so a
+// multi-byte rune becomes several %XX escapes.
+func percentEncodeRFC5987(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c >= 'A' && c <= 'Z', c >= 'a' && c <= 'z', c >= '0' && c <= '9',
+			strings.IndexByte(rfc5987AttrChars, c) >= 0:
+			b.WriteByte(c)
+		default:
+			b.WriteString(fmt.Sprintf("%%%02X", c))
+		}
+	}
+	return b.String()
+}
+
+// asciiFallbackFilename reduces name to something safe inside an HTTP
+// quoted-string: printable US-ASCII only, with `"` and `\` backslash-escaped.
+// Any other byte — non-ASCII, DEL, or a control character that somehow got
+// this far — becomes "_".
+//
+// This is the RFC 6266 §4.3 fallback, read only by a client too old to
+// understand filename*. It is allowed to be lossy; the exact name travels in
+// filename*.
+func asciiFallbackFilename(name string) string {
+	var b strings.Builder
+	for _, r := range name {
+		switch {
+		case r == '"' || r == '\\':
+			b.WriteByte('\\')
+			b.WriteRune(r)
+		case r >= 0x20 && r < 0x7F:
+			b.WriteRune(r)
+		default:
+			b.WriteByte('_')
+		}
+	}
+	if b.Len() == 0 {
+		return "download"
+	}
+	return b.String()
+}
+
+// contentDispositionAttachment builds an RFC 6266 Content-Disposition value
+// for a download of filename (ADR-067 FR-0003).
+//
+// What was wrong with the previous fmt.Sprintf("attachment; filename=%q", …),
+// and what was not: header injection was NOT the problem. %q escapes CR, LF,
+// NUL and the double quote, and CleanRelPath refuses control characters
+// upstream besides — verified by running it, and the injection cases are kept
+// as regression controls in the tests rather than presented as new coverage.
+//
+// The real defect is non-ASCII. %q leaves a rune like "ü" as its raw UTF-8
+// bytes inside a quoted-string, and a quoted-string carries no charset
+// declaration, so a client is free to read those bytes as Latin-1 and save
+// "Ãœnï…". Stage 0 makes non-ASCII names strictly more common — that is the
+// point of it — so the fix ships with it.
+//
+// The output for a pure-ASCII name is byte-identical to the old construction,
+// which is deliberate: the overwhelming majority of downloads must not change
+// their headers because of this.
+//
+// mime.FormatMediaType is not used. It emits filename* ALONE with no ASCII
+// fallback (FR-0003 requires both), and it returns the empty string on failure
+// — which, written into a header unchecked, produces a bare
+// "Content-Disposition:" and a browser that renders the file inline instead of
+// downloading it. A silent downgrade from attachment to inline is exactly the
+// class of failure this handler must not have.
+func contentDispositionAttachment(filename string) string {
+	ascii := asciiFallbackFilename(filename)
+	needsExtended := false
+	for i := 0; i < len(filename); i++ {
+		if filename[i] >= 0x80 {
+			needsExtended = true
+			break
+		}
+	}
+	if !needsExtended {
+		return `attachment; filename="` + ascii + `"`
+	}
+	// filename first, filename* second: RFC 6266 §4.3 says a recipient that
+	// understands both MUST prefer filename*, and Go's own mime.ParseMediaType
+	// does, so ordering is a courtesy to lenient parsers rather than a
+	// correctness requirement — but it costs nothing to put the fallback where
+	// a strictly-first-wins parser finds the safe one.
+	return `attachment; filename="` + ascii + `"; filename*=UTF-8''` + percentEncodeRFC5987(filename)
 }
 
 // --- GET /library/{workspace_id}/download ---
@@ -589,7 +745,7 @@ func (a *restAPI) handleLibraryDownload(w http.ResponseWriter, r *http.Request, 
 
 	filename := path.Base(rel)
 	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
+	w.Header().Set("Content-Disposition", contentDispositionAttachment(filename))
 	http.ServeContent(w, r, filename, fi.ModTime(), f)
 }
 
@@ -622,6 +778,14 @@ func (a *restAPI) handleLibraryRename(w http.ResponseWriter, r *http.Request, wo
 		return
 	}
 	defer root.Close()
+
+	// The DESTINATION only. fromRel names something that already exists —
+	// judging its shape would be judging a name Omnipus is not creating, and
+	// would make an operator's existing file un-renameable precisely because
+	// its current name is the thing they want to fix.
+	if !checkCreateName(w, root, toRel, "rename", workspaceID) {
+		return
+	}
 
 	fi, err := root.Rename(fromRel, toRel)
 	if err != nil {
@@ -691,6 +855,16 @@ func (a *restAPI) handleLibraryTransfer(w http.ResponseWriter, r *http.Request, 
 			return
 		}
 		defer toRoot.Close()
+	}
+
+	// toRoot, never fromRoot: for a cross-workspace transfer the two are
+	// different roots with different mount tables, and the question
+	// ValidateCreateName answers — "is Omnipus about to create this name in
+	// storage it owns?" — is a property of where the file LANDS. Asking
+	// fromRoot would consult the wrong workspace's mounts and, for a copy out
+	// of a mount into workspace storage, would skip the check entirely.
+	if !checkCreateName(w, toRoot, toRel, string(mode), req.ToWorkspaceId) {
+		return
 	}
 
 	var fi os.FileInfo

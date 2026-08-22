@@ -49,8 +49,12 @@ import (
 var (
 	// ErrInvalidPath marks a structural path violation caught before any
 	// filesystem access: absolute, contains a literal ".." segment, empty
-	// where a concrete path is required, an embedded NUL byte, or a
-	// backslash (Library paths are always forward-slash per contract).
+	// where a concrete path is required, an embedded C0 control character
+	// (NUL, CR, LF …), or a backslash (Library paths are always
+	// forward-slash per contract). Since ADR-067 Stage 0 it ALSO marks a
+	// name-shape violation from (*Root).ValidateCreateName, which runs only
+	// on the create/rename path — so the REST layer's 400 mapping covers
+	// both without change.
 	ErrInvalidPath = errors.New("library: invalid path")
 	// ErrOutsideRoot marks a path that is lexically valid but whose
 	// resolution — via a symlink — would leave the workspace's work tree.
@@ -347,12 +351,49 @@ func (r *Root) Close() error {
 // elements ["a","..","b"]) or empty, and rejects a leading/trailing slash —
 // exactly the "unrooted, slash-separated, no dot-segments" shape the
 // Library contract requires, with no need to hand-roll segment-walking.
+//
+// # What this function does NOT check any more (ADR-067 Stage 0)
+//
+// It used to run pathsafe.ValidateComponent over every segment and
+// pathsafe.ValidateRelPathLength over the whole path. Those are NAME-SHAPE
+// rules — Windows-illegal characters, reserved device names, a trailing
+// dot/space, and the two MAX_PATH-derived length caps — and they were being
+// applied to a path that, on the read side, names a file ALREADY ON DISK.
+// A mounted folder is the operator's own disk: they named those files years
+// before Omnipus existed, and refusing to open "Meeting: notes.md" protects
+// a Windows installation they are not running (ADR-067 FR-0001, US-0; the
+// reference vault has 3 of 748 notes unreachable for exactly this reason,
+// none of them named by Omnipus).
+//
+// Name shape is now checked only where Omnipus CREATES a name, by
+// (*Root).ValidateCreateName — after root resolution, where the destination's
+// population (workspace storage vs. a mount) is actually known. CleanRelPath
+// is a package-level function with no receiver and every REST caller invokes
+// it BEFORE openLibraryRoot, so the mount context does not exist here and the
+// distinction cannot be drawn at this layer at all.
+//
+// Everything below is ADDRESSING safety, not name shape, and stays
+// unconditional on every platform and in every build (ADR-067 FR-0002):
+// absolute paths, backslashes, C0 control characters (NUL, CR, LF …),
+// fs.ValidPath's dot-segment rejection, and any segment beginning "..".
+// os.Root's own runtime containment check then backstops all of it at I/O
+// time. Note that pkg/pathsafe explicitly disclaims this job — its
+// ValidateComponent doc says "callers remain responsible for rejecting
+// separators, '.', '..', NUL, and absolute paths themselves" — so removing
+// the pathsafe calls removes nothing that was defending against traversal.
 func CleanRelPath(raw string) (string, error) {
 	if raw == "" || raw == "." {
 		return "", nil
 	}
-	if strings.IndexByte(raw, 0) != -1 {
-		return "", ErrInvalidPath
+	// C0 control characters (0x00-0x1F, NUL included). Kept here, in the
+	// unconditional addressing-safety block, precisely because it used to
+	// ride along inside pathsafe.ValidateComponent's fused
+	// illegal-character predicate — where the Stage 0 rule-set split would
+	// have quietly made it platform-dependent (ADR-067 FR-0002a). A CR or
+	// LF in a path reaches HTTP response headers and log lines; it is never
+	// acceptable, on any OS, on either side of the read/create split.
+	if r, ok := firstControlRune(raw); ok {
+		return "", fmt.Errorf("%w: control character %#U", ErrInvalidPath, r)
 	}
 	if strings.ContainsRune(raw, '\\') {
 		return "", ErrInvalidPath
@@ -387,22 +428,94 @@ func CleanRelPath(raw string) (string, error) {
 		if strings.HasPrefix(seg, "..") {
 			return "", ErrInvalidPath
 		}
-		// Cross-platform filename safety (pkg/pathsafe), applied to EVERY
-		// segment — not just the leaf name — so a reserved Windows device
-		// name, an NTFS-illegal character, or a trailing dot/space can
-		// never enter the Library via an intermediate directory either
-		// (e.g. mkdir-ing "CON/report.txt" in one call). See pathsafe's
-		// package doc for why these rules apply unconditionally rather
-		// than only when actually running on Windows — a workspace must
-		// behave identically whichever OS opens it.
-		if err := pathsafe.ValidateComponent(seg); err != nil {
-			return "", fmt.Errorf("%w: %v", ErrInvalidPath, err)
-		}
-	}
-	if err := pathsafe.ValidateRelPathLength(cleaned); err != nil {
-		return "", fmt.Errorf("%w: %v", ErrInvalidPath, err)
 	}
 	return cleaned, nil
+}
+
+// firstControlRune reports the first C0 control character (0x00-0x1F,
+// including NUL) in s, if any.
+//
+// Deliberately duplicated here rather than reached through pkg/pathsafe:
+// this is ADDRESSING safety, which pathsafe's own package doc disclaims,
+// and it must not become platform-dependent when pathsafe's rule set does
+// (ADR-067 FR-0002a). Ranging over the string yields runes; a byte-level
+// scan would be equivalent for this range since every C0 byte is its own
+// single-byte rune and no continuation byte of a multi-byte sequence can
+// be <= 0x1F.
+func firstControlRune(s string) (rune, bool) {
+	for _, r := range s {
+		if r <= 0x1F {
+			return r, true
+		}
+	}
+	return 0, false
+}
+
+// ValidateCreateName applies NAME-SHAPE rules to a path Omnipus is about to
+// CREATE or RENAME TO — and only then (ADR-067 FR-0001a). rel must already
+// have passed CleanRelPath; this adds the portability rules on top of that
+// addressing check, it does not repeat it.
+//
+// Why it is a method on the resolved root rather than a step inside
+// CleanRelPath: the answer depends on which POPULATION the destination
+// belongs to, and that is only knowable after the root is open.
+//
+//   - Workspace storage (workspaces/<id>/work/) is named BY Omnipus. What
+//     Omnipus writes there should stay portable, so the active pkg/pathsafe
+//     rule set applies (FR-0001c).
+//   - A mounted folder is the operator's own disk (ADR-063 D4), reached
+//     through an immutable realpath that only exists on this machine. There
+//     is no scenario in which such a folder is later opened on Windows via
+//     this workspace, so a Windows-portability rule buys nothing there and
+//     costs the operator the ability to name their own files (FR-0001b).
+//     The host filesystem remains the authority on what it will accept, and
+//     it says so in its own error.
+//
+// Population is decided by mountFor — the same first-segment predicate
+// resolve already uses — so "what counts as inside a mount" is stated once
+// in this package. A mount whose target could not be opened (mountRoot.root
+// == nil) is still a mount for this purpose: its files are still the
+// operator's, and the create will fail at I/O time for the honest reason
+// (the target is gone) rather than for a naming reason that was never ours
+// to enforce.
+//
+// The rules themselves are NOT decided here. This method delegates to the
+// exported pkg/pathsafe functions, which select the build target's active
+// rule set internally — so this call site needs no build tags, no GOOS
+// switch, and no edit when that selection changes.
+//
+// Returns nil for "" / "." (the work-tree root itself is never created by a
+// caller-supplied name). Any violation wraps ErrInvalidPath, so the REST
+// layer's existing errors.Is mapping produces the same 400 it always did.
+func (r *Root) ValidateCreateName(rel string) error {
+	if rel == "" || rel == "." {
+		return nil
+	}
+	if r.mountFor(rel) != nil {
+		return nil
+	}
+	// Every segment, not just the leaf: a single mkdir("CON/report.txt")
+	// would otherwise create an unportable intermediate directory that no
+	// later per-leaf check would ever look at again.
+	for _, seg := range strings.Split(rel, "/") {
+		if err := pathsafe.ValidateComponent(seg); err != nil {
+			// Double-%w deliberately: errors.Is(err, ErrInvalidPath) keeps the
+			// existing 400 mapping working unchanged, and the pathsafe
+			// sentinel stays reachable too, so a caller (or a test) can tell
+			// "too long" from "illegal character" without parsing the message.
+			// CleanRelPath's older %v wrapping could not do that.
+			return fmt.Errorf("%w: %w", ErrInvalidPath, err)
+		}
+	}
+	// The whole-path cap is a Windows MAX_PATH budget (many individually
+	// short segments still sum past it), which makes it name shape and
+	// therefore create-only. A per-component cap cannot substitute: twelve
+	// nested folders with ordinary short names reach 200 runes while no
+	// single component comes near 100.
+	if err := pathsafe.ValidateRelPathLength(rel); err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalidPath, err)
+	}
+	return nil
 }
 
 // CountVisibleRootEntries returns the number of direct, non-hidden entries
