@@ -171,6 +171,13 @@ Provider picker (shared)                 Settings → Providers
 7. Draft-key preservation on sheet close (§5 item 7); `signed-in` / `expired` row states and `ReAuthDialog` for OAuth expiry (§5 item 8).
 8. Per-model effective limits and window source on the provider row (§4).
 
+## 8a. Pass-2 review resolutions (2026-08-22)
+
+- **MAJ-011 — dependents of a deleted provider.** Agents whose model used the deleted provider are left **without a model**: listed in the confirm dialog, shown as *"needs a model"* in the agent list, and refusing to run with a typed error until reassigned. Nothing is re-pointed silently.
+- **MAJ-012 — D13 rules 3 and 4 reconciled; xAI gated.** Rule 4 reads *"never collect, store, proxy or refresh a consumer credential **where the vendor prohibits it**"* — OpenAI does not, so rule 3's ChatGPT login is consistent with it. **xAI sign-in ships only once xAI lists Omnipus** as it has the five named agents (request filed as a task); until then the xAI row is API-key only. No fallback flow that depends on tolerance.
+- **MAJ-013 — `codex-cli` is a dispatch rule, not a preference.** Greenfield: the `codex-cli` provider means **the official `codex` CLI driven as a subprocess** (`codex_cli_provider.go`). The token-reuse HTTP path — reading the CLI's `auth.json` and calling `chatgpt.com/backend-api/codex` directly (`codex_cli_credentials.go`, `codex_provider.go`) — **is deleted**: it rests on practice, not text, and "prefer subprocess" is only a rule if the other path does not exist. Operator to confirm.
+- **MAJ-015** — own exit proof below.
+
 ## 9. Release flag and exit proof
 
 **Bears on the running release:** the shipped `antigravity` OAuth provider is the practice Google's Antigravity terms §6 name and enforce with account suspension, and it is the fresh-install default model. Its removal (§2.4) precedes shipping the branch that carries ADR-066.

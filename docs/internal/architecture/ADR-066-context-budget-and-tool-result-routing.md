@@ -103,7 +103,7 @@ Three changes to things that already exist. **D4** — a cap at the door: no sin
 | Surface | Cap | Claude Code equivalent |
 |---|---|---|
 | MCP result | **62,500 chars** | 25,000 tokens |
-| Builtin result, success | **30,000 chars** | Bash inline limit |
+| Builtin result, success | **64,000 chars** | Bash inline limit is 30,000; see pass-2 resolution MAJ-007 |
 | Builtin result, failure | **10,000 chars**, head-and-tail | Bash failure path |
 | Warn threshold (metric) | **25,000 chars** | 10,000-token warning |
 | Operator ceiling | **150,000 chars** | `BASH_MAX_OUTPUT_LENGTH` ceiling |
@@ -255,6 +255,19 @@ Catalog from the per-agent policy map (Constraint #6 requires it to enumerate ev
 
 - **[UNVERIFIED]** That the Anthropic Messages API rejects a window whose first message is not `user` (the reason D6 empties rather than cuts mid-turn). Not found in `pkg/providers/claude_provider.go` (searched); design is safe either way, since emptying is valid for every provider.
 - **[UNVERIFIED]** Ollama's `/api/show` context field name (daemon not running when checked); D3 depends on the *existence* of a live answer, verified by survey, not on the field name.
+
+## 16a. Pass-2 review resolutions (2026-08-22)
+
+Each item names the pass-2 finding it closes (`ADR-066-…-review-pass2.md`).
+
+- **MAJ-001 — one budget, one unit.** `windowTrim` already computes the budget in estimated tokens as `window − max_tokens − 5% headroom − pinnedCoreOverhead`. D6 does **not** add a second formula: the mid-turn check calls the same `isOverContextBudget` with the same budget, and the 400,000-char `absoluteBudget` is expressed through the estimator's 2.5 chars/token ratio (≈160,000 tokens) as a *ceiling on the tool-result share* of that one budget. The `SummarizeTokenPercent` scaling in timeout recovery is a leftover of the deleted summariser and is removed; timeout recovery uses the same budget.
+- **MAJ-003 — the ratchets reset.** A learned window (D8) and the clamp derived from it are keyed to the catalog entry's version for that (provider, model); a new catalog release for that entry clears them. An operator override never expires.
+- **MAJ-007 — cap alignment corrected.** Aligning the builtin success cap to Claude Code's 30,000 would have *halved* `read_file` (64 KB) and `fetch_url` (50,000) while citing `read_file`'s 64 KB as corroboration — contradictory. The builtin success cap is **64,000 chars** (= `read_file`'s existing, independently chosen limit; within 2 % of the MCP cap); `browser_get_text` (100 KiB) is lowered to it; shell's 10,000 stays as its *failure-path* value and rises to 64,000 on success. Operator to confirm this deviation from "Claude Code's numbers exactly".
+- **MAJ-008 — D10 has numbers.** Ingest bound default **10 MB** per response, operator-settable, matching `fetch_url`'s existing "Security Fallback" and the archive reader's `maxLineSize = 10 MB` — so anything ingested is archivable. §17.1's 2 MB test fits under it.
+- **MAJ-009 — prompt caching is acknowledged.** Emptying a result changes the request prefix, which invalidates the provider's cached prefix for the next call. Accepted, and bounded: D5 empties **down to the target in one pass per trigger** (not one result per call), so the prefix changes once per trigger rather than once per iteration; the cache is then warm again for the following calls.
+- **MAJ-016 — the floor is the whole last step.** "The most recent tool result is never emptied" means **every result of the most recent assistant message** (a parallel call has N); the floor is that set, not one entry.
+- **MAJ-017 — restore point carries the emptied-set.** The turn-start restore point records `Skip` *and* the emptied-set; `restoreSession` → `RollbackAppended` restores both (new parameter, written atomically with `Skip` in the meta file). `refreshRestorePointFromSession` runs after each empty exactly as after each trim.
+- **MAJ-002, MAJ-004, MAJ-015** — resolved by the local-endpoint rule in D3, the 2.0.0 schema, and the three-way split.
 
 ## 17. Exit proof
 

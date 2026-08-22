@@ -174,6 +174,14 @@ Omnipus speaks exactly two wire protocols today — **OpenAI-compatible HTTP** (
 - **[UNVERIFIED]** The "OpenAI-compatible on the wire" claim for ~16 of the ~20 dedicated-SDK providers (§4.1 caveat); established for the four Omnipus already ships.
 - **[UNVERIFIED]** Whether the assembly feed can be consumed by the existing `GHReleasePuller` without change beyond owner/repo — asset name and `.sha256` sidecar are unchanged by design.
 
+## 8a. Pass-2 review resolutions (2026-08-22)
+
+- **MAJ-005 — hermetic builds.** The embedded snapshot is **not** fetched at build time. It is a committed file in the Omnipus repo, refreshed by a scheduled pull request opened by the assembly repo's job (reviewed and merged like any change). `go build` reads only the tree.
+- **MAJ-006 — signing** — decided: not adopted; see D1.
+- **MAJ-010 — a provider id the binary does not know must not abort boot.** A config or agent entity naming an unknown provider degrades **per provider / per agent**: the provider row shows *"unknown provider — not in the catalog"*, agents bound to it show *"needs a provider"* and refuse to run with a typed error; the gateway and every other agent start normally. The current `instance.go` *"provider %q not found in configured providers"* path must be confirmed per-agent rather than registry-fatal at implementation (task).
+- **MAJ-014 — disagreement handling.** While an issue is open for a field, the job publishes the **previously published value** for that field (last known good); if none exists, models.dev's value (the primary). A disagreement never blocks a release and never silently adopts the newer number.
+- **MAJ-004, MAJ-015** — schema 2.0.0 everywhere; own exit proof below.
+
 ## 9. Exit proof
 
 1. **Exact resolution** — `Resolve(provider, model)` returns the route's own limits: `(openrouter, z-ai/glm-5.2)` → 1,048,576 and `(zai, glm-5.2)` → 1,000,000; `(openrouter, glm-5.2)` is a miss, not a prefix-stripped hit.
