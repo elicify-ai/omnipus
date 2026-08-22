@@ -106,7 +106,7 @@ Verified in `pkg/providers` on this branch:
 - Rows for Anthropic and Google show **API key only** — no sign-in option exists for them (§2.3). Copilot, xAI and OpenAI rows gain a *Sign in* alternative to the key, each with the vendor's own flow.
 - Each configured provider row shows its **effective limits per model** on expand (window · output · image · PDF), with the source of the window (`operator | live | catalog | floor` — ADR-066 D8 "learned" was not adopted; `ContextWindowSource.yaml` is owned by ADR-066's spec) — the ADR-066 D9 visibility requirement, placed where the operator already looks.
 
-**Settings → Context** (ADR-066 D9; the canonical user-facing name — ADR-066's spec adopts it and bakes the path *Settings → Context → Model overrides* into its refusal copy; cross-spec X-37): the global default context window with its source, and the override. The **default-model control lives on Settings → Providers only** (§5 item 5) — not duplicated here. **Agent form**: the per-agent override field, clamped to the model's capability (ADR-066 D2), shown with the clamp when it bites.
+**Settings → Models** (ADR-066 D9; the canonical user-facing name — ADR-066's spec adopts it and bakes the path *Settings → Models → Model overrides* into its refusal copy; cross-spec X-37): the global default context window with its source, and the override. The **default-model control lives on Settings → Providers only** (§5 item 5) — not duplicated here. **Agent form**: the per-agent override field, clamped to the model's capability (ADR-066 D2), shown with the clamp when it bites.
 
 **Chat**: the emptied-result mark renders only with Verbose chat on (ADR-066 §12) — no other change.
 
