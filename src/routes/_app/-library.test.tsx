@@ -3,16 +3,24 @@
 // createFileRoute is stubbed with a fixed `useSearch`, and LibraryExplorer
 // itself is mocked (its own behaviour lives in LibraryExplorer.test.tsx).
 //
-// Covers: the `workspace` search param is threaded through as
-// `initialWorkspaceId` (undefined → virtual root, same contract as
-// LibraryPanel's docked opener), and closing the tab (pagehide) announces the
-// library pop-out-closed handoff signal.
+// Covers: the `workspace` + `path` search params are threaded through as
+// LibraryExplorer's `address` (both undefined → virtual root with nothing
+// selected, the same contract as LibraryPanel's docked opener), every address
+// change from the explorer is written back to the URL as a PUSH so the back
+// button returns to the previously selected file (ADR-067 FR-012 / US-3),
+// unsaved Library edits block a back-button navigation, and closing the tab
+// (pagehide) announces the library pop-out-closed handoff signal.
 
 import React from 'react'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen } from '@testing-library/react'
 
-let mockSearch: { workspace?: string } = {}
+let mockSearch: { workspace?: string; path?: string } = {}
+
+const { mockNavigate, mockUseBlocker } = vi.hoisted(() => ({
+  mockNavigate: vi.fn(),
+  mockUseBlocker: vi.fn(),
+}))
 
 vi.mock('@tanstack/react-router', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@tanstack/react-router')>()
@@ -22,6 +30,10 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
       ...opts,
       useSearch: () => mockSearch,
     }),
+    useNavigate: () => mockNavigate,
+    // The real useBlocker needs a live router; capturing the options is what
+    // lets the guard test call shouldBlockFn the way the router would.
+    useBlocker: (opts: unknown) => mockUseBlocker(opts),
   }
 })
 
@@ -41,6 +53,8 @@ vi.mock('@/lib/libraryHandoff', () => ({
 vi.mock('@/components/library/LibraryExplorer', () => ({
   LibraryExplorer: (props: {
     initialWorkspaceId?: string
+    address?: { workspaceId?: string; path?: string }
+    onAddressChange?: (next: { workspaceId?: string; path?: string }) => void
     className?: string
     onWorkspaceChange?: (workspaceId: string | null) => void
   }) => {
@@ -49,6 +63,7 @@ vi.mock('@/components/library/LibraryExplorer', () => ({
   },
 }))
 
+import { setLibraryEditorDirty } from '@/components/library/preview/unsavedGuard'
 import { Route } from './library'
 
 // Route.component is the React component created by createFileRoute — cast
@@ -63,8 +78,21 @@ beforeEach(() => {
   mockAnnounceLibraryPopoutClosed.mockClear()
   mockAnnounceLibraryWorkspaceChanged.mockClear()
   mockLibraryExplorerProps.mockClear()
+  mockNavigate.mockClear()
+  mockUseBlocker.mockClear()
   mockSearch = {}
+  setLibraryEditorDirty(false)
 })
+
+/** The props the route most recently handed LibraryExplorer. */
+function explorerProps() {
+  const calls = mockLibraryExplorerProps.mock.calls
+  return calls[calls.length - 1][0] as {
+    address?: { workspaceId?: string; path?: string }
+    onAddressChange?: (next: { workspaceId?: string; path?: string }) => void
+    onWorkspaceChange?: (workspaceId: string | null) => void
+  }
+}
 
 describe('/library pop-out route', () => {
   it('renders LibraryExplorer scoped to the workspace search param when present', () => {
@@ -73,7 +101,10 @@ describe('/library pop-out route', () => {
 
     expect(screen.getByTestId('mock-library-explorer')).toBeInTheDocument()
     expect(mockLibraryExplorerProps).toHaveBeenCalledWith(
-      expect.objectContaining({ initialWorkspaceId: 'ws-1', className: 'absolute inset-0' }),
+      expect.objectContaining({
+        address: { workspaceId: 'ws-1', path: undefined },
+        className: 'absolute inset-0',
+      }),
     )
   })
 
@@ -82,7 +113,7 @@ describe('/library pop-out route', () => {
     render(<LibraryRoute />)
 
     expect(mockLibraryExplorerProps).toHaveBeenCalledWith(
-      expect.objectContaining({ initialWorkspaceId: undefined }),
+      expect.objectContaining({ address: { workspaceId: undefined, path: undefined } }),
     )
   })
 
@@ -104,13 +135,15 @@ describe('/library pop-out route', () => {
     expect(mockAnnounceLibraryPopoutClosed).toHaveBeenCalledWith(undefined)
   })
 
-  // UAT fix: the `workspace` search param only reflects what the tab was
-  // OPENED with — LibraryExplorer's in-tab navigation (e.g. drilling from
-  // the virtual root into a different workspace) is its own internal state,
-  // never synced back to the URL. Before this fix, `handlePageHide` closed
-  // over the initial `workspace` value, so closing the tab after navigating
-  // elsewhere announced the STALE original workspace and the docked panel
-  // re-docked to the wrong place.
+  // UAT fix: `handlePageHide` used to close over the `workspace` value the
+  // tab was opened with, so closing the tab after navigating elsewhere
+  // announced the STALE original workspace and the docked panel re-docked to
+  // the wrong place. Deep-linking now also writes the param on every
+  // workspace change, but the announcement deliberately still comes from
+  // `onWorkspaceChange` and not from the param — a router navigation settles
+  // a tick after the navigation itself, and at `pagehide` there is no later
+  // tick. This test therefore drives `onWorkspaceChange` WITHOUT touching
+  // `mockSearch`, which is exactly the case reading the URL would get wrong.
   it('announces the CURRENTLY-VIEWED workspace at pagehide time, even after in-tab navigation changed it since mount', () => {
     mockSearch = { workspace: 'ws-7' }
     render(<LibraryRoute />)
@@ -195,6 +228,110 @@ describe('/library pop-out route', () => {
       onWorkspaceChange?.(null)
 
       expect(mockAnnounceLibraryWorkspaceChanged).toHaveBeenCalledWith(undefined)
+    })
+  })
+
+  // ── Deep-linking (ADR-067 FR-012 / US-3) ────────────────────────────────
+  // The route is the only place that knows about URLs, so it is the only
+  // place these can be asserted. LibraryExplorer's half — what it does with
+  // an address it is handed — lives in LibraryExplorer.test.tsx.
+  describe('deep-linking: the selected file is in the URL', () => {
+    it('threads BOTH search params through as the explorer address, so a fresh load opens that file', () => {
+      mockSearch = { workspace: 'ws-1', path: 'notes/plan.md' }
+      render(<LibraryRoute />)
+
+      expect(explorerProps().address).toEqual({ workspaceId: 'ws-1', path: 'notes/plan.md' })
+    })
+
+    it('writes a selected file back to the URL, keeping the workspace alongside it', () => {
+      mockSearch = { workspace: 'ws-1' }
+      render(<LibraryRoute />)
+
+      explorerProps().onAddressChange?.({ workspaceId: 'ws-1', path: 'notes/plan.md' })
+
+      expect(mockNavigate).toHaveBeenCalledWith({
+        to: '/library',
+        search: { workspace: 'ws-1', path: 'notes/plan.md' },
+      })
+    })
+
+    it('drops the path param when the selection is cleared, rather than leaving a URL pointing at a closed file', () => {
+      mockSearch = { workspace: 'ws-1', path: 'notes/plan.md' }
+      render(<LibraryRoute />)
+
+      explorerProps().onAddressChange?.({ workspaceId: 'ws-1', path: undefined })
+
+      expect(mockNavigate).toHaveBeenCalledWith({
+        to: '/library',
+        search: { workspace: 'ws-1', path: undefined },
+      })
+    })
+
+    it('does NOT pass replace, so each selected file is a back-button stop (US-3 AS-4)', () => {
+      mockSearch = { workspace: 'ws-1' }
+      render(<LibraryRoute />)
+
+      explorerProps().onAddressChange?.({ workspaceId: 'ws-1', path: 'a.md' })
+
+      const [[arg]] = mockNavigate.mock.calls as [[Record<string, unknown>]]
+      // `replace: true` here would overwrite the current history entry, and
+      // pressing back would skip past the previous file to whatever came
+      // before the Library.
+      expect(arg.replace).toBeUndefined()
+    })
+
+    it('stops passing initialWorkspaceId — two answers to "which workspace" is how the URL and the pane drift apart', () => {
+      mockSearch = { workspace: 'ws-1' }
+      render(<LibraryRoute />)
+
+      expect(mockLibraryExplorerProps).not.toHaveBeenCalledWith(
+        expect.objectContaining({ initialWorkspaceId: expect.anything() }),
+      )
+    })
+  })
+
+  // The explorer's own handlers guard in-app clicks; they cannot see the
+  // browser's back button, which is a new way to lose an unsaved edit that
+  // deep-linking itself introduces. The route blocks it.
+  describe('unsaved-edit guard on browser navigation', () => {
+    function shouldBlock(): boolean {
+      const [[opts]] = mockUseBlocker.mock.calls as [[{ shouldBlockFn: () => boolean }]]
+      return opts.shouldBlockFn()
+    }
+
+    it('does not block, and does not prompt, when nothing is unsaved', () => {
+      const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
+      render(<LibraryRoute />)
+
+      expect(shouldBlock()).toBe(false)
+      expect(confirmSpy).not.toHaveBeenCalled()
+      confirmSpy.mockRestore()
+    })
+
+    it('blocks the navigation when the Library editor has unsaved edits and the operator chooses to stay', () => {
+      const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
+      render(<LibraryRoute />)
+      setLibraryEditorDirty(true)
+
+      expect(shouldBlock()).toBe(true)
+      expect(confirmSpy).toHaveBeenCalled()
+      confirmSpy.mockRestore()
+    })
+
+    it('lets the navigation through once the operator agrees to discard', () => {
+      const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
+      render(<LibraryRoute />)
+      setLibraryEditorDirty(true)
+
+      expect(shouldBlock()).toBe(false)
+      confirmSpy.mockRestore()
+    })
+
+    it('leaves beforeunload to unsavedGuard.ts, so a reload prompts once and not twice', () => {
+      render(<LibraryRoute />)
+
+      const [[opts]] = mockUseBlocker.mock.calls as [[{ enableBeforeUnload?: boolean }]]
+      expect(opts.enableBeforeUnload).toBe(false)
     })
   })
 })

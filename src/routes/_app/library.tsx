@@ -8,10 +8,16 @@
 // HttpOnly cookie (ADR-044), which a same-origin `window.open`'d tab inherits
 // automatically — no token hand-off needed.
 //
-// `workspace` omitted → the virtual root (mirrors LibraryExplorer's own
-// `initialWorkspaceId` contract exactly — undefined means "start at the
+// Search params (ADR-067 FR-012 — deep-linking): `workspace` scopes the tab
+// to one workspace (omitted → the virtual root, which mirrors
+// LibraryExplorer's own contract exactly: undefined means "start at the
 // virtual root", not an error state, unlike /browser-live's session/agent
-// params which ARE required).
+// params which ARE required), and `path` names the SELECTED FILE inside it.
+// Together they are LibraryExplorer's `address`, and this route is the thing
+// that turns that address into a URL and back. That makes the selected file
+// bookmarkable, shareable and reachable by the back button — and it is the
+// same mechanism later waves point wikilink clicks, search results, backlinks
+// and agent-supplied links at, so those need no navigation of their own.
 //
 // UAT fix (2026-07, v1): the `workspace` search param only reflects what this
 // TAB WAS OPENED WITH — LibraryExplorer manages in-tab navigation (drilling
@@ -36,15 +42,28 @@
 // ever closes. The `pagehide` → `announceLibraryPopoutClosed` call stays as
 // the trigger signal (and a same-payload fallback), but is no longer the
 // only carrier of the workspace itself.
+//
+// IMPORTANT — deep-linking (2026-08) changed the FIRST half of the v1 note — the
+// `workspace` param is now written on every in-tab workspace change, so it
+// is no longer merely what the tab was opened with. It did NOT change what
+// v1 and v2 fixed, and must not: the pop-out still announces its workspace
+// from `currentWorkspaceRef` (fed by `onWorkspaceChange`) and still
+// announces CONTINUOUSLY, never from the search param and never only at
+// `pagehide`. Reading the announcement off the URL instead would reintroduce
+// exactly the v2 failure — the param is written by a router navigation that
+// settles a tick later than the navigation itself, and at `pagehide` there
+// is no later tick.
 
 import { useEffect, useRef } from 'react'
-import { createFileRoute } from '@tanstack/react-router'
+import { createFileRoute, useBlocker, useNavigate } from '@tanstack/react-router'
 import { z } from 'zod'
 import { LibraryExplorer } from '@/components/library/LibraryExplorer'
+import { confirmDiscardLibraryEdits } from '@/components/library/preview/unsavedGuard'
 import { announceLibraryPopoutClosed, announceLibraryWorkspaceChanged } from '@/lib/libraryHandoff'
 
 const librarySearchSchema = z.object({
   workspace: z.string().min(1).optional(),
+  path: z.string().min(1).optional(),
 })
 
 export const Route = createFileRoute('/_app/library')({
@@ -53,8 +72,26 @@ export const Route = createFileRoute('/_app/library')({
 })
 
 function LibraryRoute() {
-  const { workspace } = Route.useSearch()
+  const { workspace, path } = Route.useSearch()
+  const navigate = useNavigate()
   const currentWorkspaceRef = useRef<string | undefined>(workspace)
+
+  // The unsaved-edits guard, extended to the one navigation LibraryExplorer's
+  // own handlers cannot see: the browser's back/forward buttons. In-app
+  // clicks still call confirmDiscardLibraryEdits() inside the explorer, and
+  // that call CLEARS the dirty flag when the user agrees to discard — so by
+  // the time the resulting navigation reaches this blocker there is nothing
+  // left to prompt about, and the operator is never asked twice for one
+  // action. Reacting after the fact instead (an effect watching the search
+  // params) could not work: React has already unmounted the editor by then,
+  // and the editor clears the dirty flag as it goes, so the guard would find
+  // nothing unsaved every time.
+  useBlocker({
+    shouldBlockFn: () => !confirmDiscardLibraryEdits(),
+    // unsavedGuard.ts registers its own `beforeunload` for tab close/reload;
+    // a second one here would be a second native prompt for one event.
+    enableBeforeUnload: false,
+  })
 
   // Tell the main app's docked panel (LibraryPanel.tsx) this pop-out went
   // away, so it can re-dock itself IF nothing is currently docked (see
@@ -73,8 +110,20 @@ function LibraryRoute() {
 
   return (
     <LibraryExplorer
-      key={workspace ?? 'root'}
-      initialWorkspaceId={workspace}
+      // No `key` here, deliberately. It used to be `key={workspace ?? 'root'}`
+      // — a remount to re-seed `initialWorkspaceId` whenever the param
+      // changed. With the address controlled, a param change IS the state
+      // change, and remounting on every navigation would throw away the
+      // browsed folder, the loaded listing and the open preview each time.
+      address={{ workspaceId: workspace, path }}
+      onAddressChange={(next) => {
+        // Pushed, not replaced: each selected file is a place the back button
+        // should return to (US-3 AS-4).
+        void navigate({
+          to: '/library',
+          search: { workspace: next.workspaceId, path: next.path },
+        })
+      }}
       // Side-by-side here, stacked in the docked aside (operator direction,
       // 2026-08-04). A standalone tab has the width for a real split, and 60%
       // of it beats a half-height strip for reading and editing a file; the

@@ -827,3 +827,271 @@ describe('LibraryExplorer — list/preview split and inline media', () => {
     expect(screen.getByTestId('library-row-broken.png')).toBeInTheDocument()
   })
 })
+
+// ── Deep-linking (ADR-067 FR-012 / US-3) ──────────────────────────────────
+// The explorer's half of it: what it does with an address it is HANDED, and
+// what it reports back. Turning that address into a URL is the /library
+// route's job and is tested in routes/_app/-library.test.tsx.
+//
+// The point of the addressed mode is that there is no second copy of "which
+// workspace, which file" living in this component — so most of these tests
+// assert an absence (nothing selected locally, no remount, no stale entry)
+// rather than a presence, because a component keeping its own copy would pass
+// the presence assertions just as well.
+describe('LibraryExplorer — deep-linking (addressed mode)', () => {
+  function entriesByDir(map: Record<string, LibraryEntry[]>) {
+    mockedFetchEntries.mockImplementation(async (_wsId: string, dir?: string, includeHidden?: boolean) => {
+      const all = map[dir ?? ''] ?? []
+      // Mirrors the server: hidden entries are filtered OUT of the listing
+      // unless asked for, which is why a dot-prefixed deep-link target needs
+      // its own wording rather than "not found".
+      return includeHidden ? all : all.filter((e) => !e.name.startsWith('.'))
+    })
+  }
+
+  function renderAddressed(address: { workspaceId?: string; path?: string }) {
+    const client = makeClient()
+    const onAddressChange = vi.fn()
+    const tree = (a: { workspaceId?: string; path?: string }) => (
+      <QueryClientProvider client={client}>
+        <LibraryExplorer address={a} onAddressChange={onAddressChange} />
+      </QueryClientProvider>
+    )
+    const utils = render(tree(address))
+    return {
+      ...utils,
+      onAddressChange,
+      /** Simulates the URL changing under the component — back button, a
+       *  pasted link, or a link a later wave hands it. */
+      navigateTo: (next: { workspaceId?: string; path?: string }) => utils.rerender(tree(next)),
+    }
+  }
+
+  it('opens the addressed file selected, listing the folder that contains it (US-3 AS-3)', async () => {
+    mockedFetchWorkspaces.mockResolvedValue([makeWorkspaceNode({ id: 'ws-1' })])
+    entriesByDir({ notes: [makeEntry({ name: 'plan.md', path: 'notes/plan.md' })] })
+
+    renderAddressed({ workspaceId: 'ws-1', path: 'notes/plan.md' })
+
+    // The containing folder is on screen...
+    await waitFor(() => expect(screen.getByTestId('library-row-notes/plan.md')).toBeInTheDocument())
+    // ...and the file itself is open, not merely highlighted.
+    expect(await screen.findByTestId('library-preview-pane')).toBeInTheDocument()
+    expect(mockedFetchContent).toHaveBeenCalledWith('ws-1', 'notes/plan.md')
+    expect(mockedFetchEntries).toHaveBeenCalledWith('ws-1', 'notes', false)
+    // No "not found" while the address is being resolved against the WRONG
+    // folder: the first listing this component fetches is the workspace root,
+    // which of course does not contain notes/plan.md.
+    expect(screen.queryByTestId('library-deeplink-unresolved')).toBeNull()
+  })
+
+  it('keeps the open file open across a Show-hidden toggle, which swaps the listing out from under it', async () => {
+    mockedFetchWorkspaces.mockResolvedValue([])
+    entriesByDir({ '': [makeEntry({ name: 'report.md', path: 'report.md' })] })
+
+    renderAddressed({ workspaceId: 'ws-1', path: 'report.md' })
+    await screen.findByTestId('library-preview-pane')
+
+    fireEvent.click(screen.getByTestId('library-show-hidden-toggle'))
+
+    // Synchronously after the toggle the listing for the new query key has
+    // not arrived. Resolving the entry from the listing alone would drop the
+    // pane here — and take an unsaved edit with it.
+    expect(screen.getByTestId('library-preview-pane')).toBeInTheDocument()
+    await waitFor(() => expect(mockedFetchEntries).toHaveBeenCalledWith('ws-1', '', true))
+    expect(screen.getByTestId('library-preview-pane')).toBeInTheDocument()
+  })
+
+  it('reports a clicked file to the caller and selects NOTHING itself — the address is the only copy', async () => {
+    mockedFetchWorkspaces.mockResolvedValue([])
+    entriesByDir({ '': [makeEntry({ name: 'report.md', path: 'report.md' })] })
+
+    const { onAddressChange } = renderAddressed({ workspaceId: 'ws-1' })
+
+    await waitFor(() => expect(screen.getByTestId('library-row-report.md')).toBeInTheDocument())
+    fireEvent.click(screen.getByTestId('library-row-report.md'))
+
+    expect(onAddressChange).toHaveBeenCalledWith({ workspaceId: 'ws-1', path: 'report.md' })
+    // The caller has not yet handed a new address back, so nothing opened.
+    // A component that also kept the selection locally would show the pane
+    // here and would go on showing it even if the URL never changed.
+    expect(screen.queryByTestId('library-preview-pane')).toBeNull()
+  })
+
+  it('follows an address change to a different file without remounting — the back-button path (US-3 AS-4)', async () => {
+    mockedFetchWorkspaces.mockResolvedValue([])
+    entriesByDir({
+      notes: [
+        makeEntry({ name: 'first.md', path: 'notes/first.md' }),
+        makeEntry({ name: 'second.md', path: 'notes/second.md' }),
+      ],
+    })
+
+    const { navigateTo } = renderAddressed({ workspaceId: 'ws-1', path: 'notes/first.md' })
+    await waitFor(() => expect(screen.getByTestId('library-preview-title')).toHaveTextContent('first.md'))
+
+    navigateTo({ workspaceId: 'ws-1', path: 'notes/second.md' })
+    await waitFor(() => expect(screen.getByTestId('library-preview-title')).toHaveTextContent('second.md'))
+
+    // Back to the first file, which is what pressing back actually does. The
+    // open pane is the oracle rather than a re-fetch: the content query is
+    // cached by path, so a component that ignored the address change entirely
+    // would also issue no new fetch.
+    navigateTo({ workspaceId: 'ws-1', path: 'notes/first.md' })
+    await waitFor(() => expect(screen.getByTestId('library-preview-title')).toHaveTextContent('first.md'))
+  })
+
+  it('drops the selection but stays in its folder when the address loses its path', async () => {
+    mockedFetchWorkspaces.mockResolvedValue([])
+    entriesByDir({ 'a/b': [makeEntry({ name: 'deep.md', path: 'a/b/deep.md' })] })
+
+    const { onAddressChange, navigateTo } = renderAddressed({ workspaceId: 'ws-1', path: 'a/b/deep.md' })
+    const closeButton = await screen.findByTestId('library-preview-close')
+    fireEvent.click(closeButton)
+
+    expect(onAddressChange).toHaveBeenCalledWith({ workspaceId: 'ws-1', path: undefined })
+
+    navigateTo({ workspaceId: 'ws-1', path: undefined })
+    await waitFor(() => expect(screen.queryByTestId('library-preview-pane')).toBeNull())
+    // Still in a/b — closing a file must not throw you back to the workspace
+    // root, which is what deriving the folder from the address alone would do.
+    expect(mockedFetchEntries).toHaveBeenLastCalledWith('ws-1', 'a/b', false)
+    expect(screen.getByTestId('library-row-a/b/deep.md')).toBeInTheDocument()
+  })
+
+  it('opens the containing folder with a message naming the missing path, not an error state (US-3 AS-5)', async () => {
+    mockedFetchWorkspaces.mockResolvedValue([])
+    entriesByDir({ notes: [makeEntry({ name: 'kept.md', path: 'notes/kept.md' })] })
+
+    renderAddressed({ workspaceId: 'ws-1', path: 'notes/gone.md' })
+
+    const banner = await screen.findByTestId('library-deeplink-unresolved')
+    expect(banner).toHaveTextContent('notes/gone.md')
+    expect(banner).toHaveTextContent(/not found/i)
+    // The folder is browsable, not replaced by a failure screen or left blank.
+    expect(screen.getByTestId('library-row-notes/kept.md')).toBeInTheDocument()
+    expect(screen.queryByTestId('library-entries-error')).toBeNull()
+    expect(screen.queryByTestId('library-preview-pane')).toBeNull()
+  })
+
+  it('withdraws the not-found message once you browse away from the folder it was about', async () => {
+    mockedFetchWorkspaces.mockResolvedValue([])
+    entriesByDir({
+      notes: [makeEntry({ name: 'other', path: 'notes/other', is_dir: true })],
+      'notes/other': [makeEntry({ name: 'unrelated.md', path: 'notes/other/unrelated.md' })],
+    })
+
+    renderAddressed({ workspaceId: 'ws-1', path: 'notes/gone.md' })
+    expect(await screen.findByTestId('library-deeplink-unresolved')).toHaveTextContent('notes/gone.md')
+
+    // Opening a folder clears the selection, but until the caller hands a new
+    // address back the address still names a file in a DIFFERENT folder from
+    // the one now listed. The message reads "showing the folder that would
+    // contain it" — leaving it up over an unrelated folder makes it a false
+    // statement about what is on screen, and the operator has no way to tell.
+    fireEvent.click(screen.getByTestId('library-row-notes/other'))
+
+    await waitFor(() =>
+      expect(screen.getByTestId('library-row-notes/other/unrelated.md')).toBeInTheDocument(),
+    )
+    expect(screen.queryByTestId('library-deeplink-unresolved')).toBeNull()
+  })
+
+  it('stays silent when navigation leaves the address unchanged, so the back button is not padded with duplicates', async () => {
+    mockedFetchWorkspaces.mockResolvedValue([])
+    entriesByDir({
+      '': [makeEntry({ name: 'notes', path: 'notes', is_dir: true })],
+      notes: [makeEntry({ name: 'plan.md', path: 'notes/plan.md' })],
+    })
+
+    // Nothing selected: opening a folder does not change which file the URL
+    // names, so there is nothing to report.
+    const { onAddressChange } = renderAddressed({ workspaceId: 'ws-1' })
+    await waitFor(() => expect(screen.getByTestId('library-row-notes')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByTestId('library-row-notes'))
+
+    // The folder DID open — this is silence, not inaction.
+    await waitFor(() => expect(screen.getByTestId('library-row-notes/plan.md')).toBeInTheDocument())
+    expect(onAddressChange).not.toHaveBeenCalled()
+  })
+
+  it('says a hidden target is hidden rather than missing — it is in the folder, just filtered out', async () => {
+    mockedFetchWorkspaces.mockResolvedValue([])
+    entriesByDir({ notes: [makeEntry({ name: '.secret.md', path: 'notes/.secret.md', is_hidden: true })] })
+
+    renderAddressed({ workspaceId: 'ws-1', path: 'notes/.secret.md' })
+
+    const banner = await screen.findByTestId('library-deeplink-unresolved')
+    expect(banner).toHaveTextContent('notes/.secret.md')
+    expect(banner).toHaveTextContent(/show hidden/i)
+    expect(banner).not.toHaveTextContent(/not found/i)
+  })
+
+  it('says nothing at all while the folder listing is still in flight — "missing" is a claim, not a default', async () => {
+    mockedFetchWorkspaces.mockResolvedValue([])
+    // Never settles: the listing that would prove the file absent has not
+    // arrived, so no verdict is available yet.
+    mockedFetchEntries.mockImplementation(() => new Promise<LibraryEntry[]>(() => {}))
+
+    renderAddressed({ workspaceId: 'ws-1', path: 'notes/plan.md' })
+
+    await waitFor(() => expect(screen.getByTestId('library-loading-skeleton')).toBeInTheDocument())
+    expect(screen.queryByTestId('library-deeplink-unresolved')).toBeNull()
+  })
+
+  it('keeps its own retryable error state when the FOLDER fails to load — it cannot know the file is missing', async () => {
+    mockedFetchWorkspaces.mockResolvedValue([])
+    mockedFetchEntries.mockRejectedValue(new Error('boom'))
+
+    renderAddressed({ workspaceId: 'ws-1', path: 'notes/plan.md' })
+
+    await waitFor(() => expect(screen.getByTestId('library-entries-error')).toBeInTheDocument())
+    expect(screen.queryByTestId('library-deeplink-unresolved')).toBeNull()
+  })
+
+  it('still asks before discarding unsaved edits, and reports no address change when the operator stays', async () => {
+    mockedFetchWorkspaces.mockResolvedValue([])
+    entriesByDir({
+      '': [
+        makeEntry({ name: 'report.md', path: 'report.md' }),
+        makeEntry({ name: 'draft.md', path: 'draft.md' }),
+      ],
+    })
+
+    const { onAddressChange } = renderAddressed({ workspaceId: 'ws-1', path: 'report.md' })
+    await screen.findByTestId('library-preview-pane')
+
+    const { setLibraryEditorDirty } = await import('./preview/unsavedGuard')
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    setLibraryEditorDirty(true)
+
+    fireEvent.click(screen.getByTestId('library-row-draft.md'))
+
+    expect(confirmSpy).toHaveBeenCalled()
+    // The URL must not move either — a blocked navigation that still rewrote
+    // the address would leave the address pointing at a file the pane never
+    // opened.
+    expect(onAddressChange).not.toHaveBeenCalled()
+
+    confirmSpy.mockRestore()
+    setLibraryEditorDirty(false)
+  })
+
+  it('falls back to local selection when given an address it has no way to report back — never a frozen pane', async () => {
+    mockedFetchWorkspaces.mockResolvedValue([])
+    entriesByDir({ '': [makeEntry({ name: 'report.md', path: 'report.md' })] })
+
+    render(
+      <QueryClientProvider client={makeClient()}>
+        {/* onAddressChange deliberately omitted. */}
+        <LibraryExplorer address={{ workspaceId: 'ws-1' }} />
+      </QueryClientProvider>,
+    )
+
+    await waitFor(() => expect(screen.getByTestId('library-row-report.md')).toBeInTheDocument())
+    fireEvent.click(screen.getByTestId('library-row-report.md'))
+
+    expect(await screen.findByTestId('library-preview-pane')).toBeInTheDocument()
+  })
+})

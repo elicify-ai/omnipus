@@ -93,6 +93,7 @@
     "immer": "^11.1.15",
     "katex": "^0.18.1",
     "mermaid": "^11.16.0",
+    "pdfjs-dist": "6.2.108",
     "qrcode.react": "^4.2.0",
     "react-day-picker": "^9.14.0",
     "react-markdown": "^10.1.0",
