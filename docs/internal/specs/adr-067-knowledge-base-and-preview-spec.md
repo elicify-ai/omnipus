@@ -117,6 +117,67 @@ New dependencies: **none**. `bleve/v2` is already direct.
 
 ---
 
+# STAGE 0 — Platform-correct filenames (gates nothing; everything else depends on it)
+
+Founder decision, 2026-08-22: *"we need something like a build flag — for linux and mac we
+support all filenames; windows specifics need only go into a windows build and not limit
+linux and mac."*
+
+## 4A. User Story — Stage 0
+
+### US-0 — My own filenames are not refused (Priority: P1)
+
+As an operator on macOS or Linux I want Omnipus to open the files I already have, including
+ones whose names contain characters Windows dislikes, because refusing them protects an
+operating system I am not using.
+
+**Why P1:** it gates the knowledge-base work. A collection Omnipus cannot fully address is a
+collection it cannot fully index, search or link. Measured on the reference vault: **3 of 748
+notes are currently unreachable** — one for an illegal character, two for exceeding a
+100-character name limit (longest is 106).
+
+> ⚠️ **CRITICAL-risk change.** Impact analysis rates `pathsafe.ValidateComponent` **CRITICAL**
+> — 17 dependent symbols, 2 direct, spanning Gateway (13, direct) and Agent (4, direct), with
+> 29 assertions in `pkg/pathsafe/pathsafe_test.go` locking in current behaviour. CLAUDE.md
+> forbids proceeding past a CRITICAL rating without explicit acknowledgement; this section is
+> that acknowledgement.
+
+**What is traded away, stated plainly:** the current rule exists so a workspace created on one
+OS opens on another. Relaxing it means a workspace containing `Meeting: notes.md` is not
+openable on Windows. That is accepted for **mounted folders**, which are the operator's own
+files on their own machine.
+
+**Independent test:** on macOS, mount a folder containing `Meeting: 2026-01-01.md`, `Why?.md`
+and a 106-character filename. All three list, open, index and link.
+
+**Acceptance scenarios**
+
+1. **Given** macOS or Linux, **When** a file named `Meeting: notes.md` is listed, **Then** it appears and can be opened.
+2. **Given** the same file, **When** it is indexed, **Then** it is searchable and linkable.
+3. **Given** a Windows build, **When** the same name is validated, **Then** it is rejected as it is today.
+4. **Given** a filename of 106 characters, **When** it is opened on macOS, **Then** it works.
+5. **Given** a filename containing a double quote, **When** it is downloaded, **Then** the response headers are correctly quoted and not malformed.
+6. **Given** any platform, **When** a path attempts traversal (`..`), **Then** it is refused — **traversal defence is unchanged and unconditional**.
+
+### Requirements — Stage 0
+
+- **FR-0001** The system MUST apply Windows-specific filename restrictions (illegal characters, reserved device names, trailing dot or space) **only in Windows builds**, via build tags.
+- **FR-0002** The system MUST NOT relax path-traversal, containment or root-confinement checks on any platform.
+- **FR-0003** The system MUST correctly encode filenames in HTTP headers, including names containing quotes.
+- **FR-0004** The system MUST NOT apply the component-length limit on platforms whose filesystem does not require it.
+
+### Tests — Stage 0
+
+| Order | Test | Level | Traces to | Notes |
+|---|---|---|---|---|
+| 0a | `TestPathsafe_PlatformMatrix` | Unit | AS-1, AS-3 | Same input, opposite verdicts per build tag |
+| 0b | `TestPathsafe_TraversalStillRefused` | Unit | AS-6, FR-0002 | **The guard that must not regress** |
+| 0c | `TestLibrary_QuoteInFilenameHeaderSafe` | Integration | AS-5, FR-0003 | Header injection via filename |
+| 0d | `TestLibrary_LongFilenameOpens` | Integration | AS-4 | 106-character basename |
+| 0e | `TestPathsafeRegression_WindowsUnchanged` | Unit | AS-3 | The 29 existing assertions still hold under the Windows tag |
+
+---
+
 # STAGE 1 — Render-first preview (gates on nothing)
 
 ## 5. User Stories — Stage 1
@@ -545,6 +606,7 @@ documented, stable contract.
 - **NB-2** The system must not render Office documents, because no browser renders them natively and every accurate route requires a runtime dependency this project forbids. (PDF is different: PDF.js is a pure client-side library under a compatible licence, measured to work.)
 - **NB-13** The system must not promise cryptographic or legally-verifiable signatures. A drawn signature is an image of intent. PKI signing is a separate decision with its own ADR.
 - **NB-14** The system must not claim XFA form support, nor agent-driven form filling; neither is supported by the chosen renderer.
+- **NB-15** The system must not include the **Librarian** — the judgement layer that proposes links, spots duplicates and flags orphans (founder decision 2026-08-22: keep it out for now). It is the one component allowed to be wrong, and it is far easier to design once the collection data is visible. No part of graph correctness may ever depend on it.
 - **NB-3** The system must not build a whole-collection graph visualisation, because it is the surface that fails at scale in every comparable tool.
 - **NB-4** The system must not change relative-link handling outside the knowledge-base reader, because the shared helper is consumed by chat markdown, which renders untrusted model output. **The Go/TS divergence in §2.4 is recorded, not resolved.**
 - **NB-5** The system must not call a language model anywhere in the indexing, resolution or link-rewriting path, because derived data must be reproducible.
@@ -1021,6 +1083,8 @@ come last within their stage because they are slowest and most environment-depen
 | 59 | `TestInlineAllowList_RequiresTypeConfusionTest` | Unit (build gate) | FR-016, AC-15.7 | Adding an extension without a test fails CI |
 | 60 | `E2E_FontAppliesWithCorsHeader` | E2E (browser) | AC-15.1, FR-019 | Real font covering the measured glyphs, on an inline element, asserted by **rendered width**. `document.fonts.status` is NOT the oracle — it reports "loaded" on failure |
 | 61 | `TestPdfJsBundleLazyLoaded` | Unit (build) | AC-15.6, FR-018 | PDF.js absent from the initial SPA payload |
+| 62 | `TestIndex_LargeNoteChunkedNotSkipped` | Integration | FR-034a | A 200 MB note is fully indexed with bounded peak memory — never skipped, never capped |
+| 63 | `TestOutline_PlainMarkdownOutsideKB` | Integration | FR-062 | An ordinary .md file gets an outline; it does NOT get search or backlinks |
 | **Stage 2** |
 | 13 | `TestDetectKnowledgeBase_MarkerMatrix` | Unit | US-4 AS-1,2,3 | Both markers, neither |
 | 14 | `TestDetectKnowledgeBase_NoContentReads` | Unit | US-4 AS-4 | Read-counting fake |
@@ -1192,6 +1256,7 @@ explicit seam tests: items 4 and 26.
 - **FR-032** The system MUST create index directories 0700 and index files 0600.
 - **FR-033** The system MUST re-parse only files whose recorded size, modification time or content hash changed.
 - **FR-034** The system MUST index in bounded-memory batches, never a single whole-collection batch.
+- **FR-034a** The system MUST NOT impose a maximum note size. Obsidian imposes none; memory safety comes from reading files in bounded chunks, never from refusing to index a large file.
 - **FR-035** The system MUST return partial results with an incompleteness statement in the same response.
 - **FR-036** The system MUST report an indeterminate state while the total is unknown.
 - **FR-037** The system MUST clamp result counts above the cap and report the clamping.
@@ -1218,7 +1283,7 @@ explicit seam tests: items 4 and 26.
 **Reading surface (stage 2)**
 - **FR-060** The system MUST render wikilinks, aliased links, heading links, path links and embeds.
 - **FR-061** The system MUST render callouts and highlights, and MUST NOT render frontmatter as body content.
-- **FR-062** The system MUST show an outline of a note's headings.
+- **FR-062** The system MUST show an outline of headings for **any** markdown file, whether or not it belongs to a knowledge base. Search and backlinks remain knowledge-base-only, because only those require an index.
 - **FR-063** The system MUST show inbound links for the open note.
 - **FR-064** The system MUST collapse the reading rail to toggles when docked.
 - **FR-065** The system MUST mark unresolved links visibly and MUST NOT navigate on click.
@@ -1304,6 +1369,7 @@ explicit seam tests: items 4 and 26.
 | FR-032 | US-5 | (permissions) | 23 |
 | FR-033 | US-5 | (incremental) | 25 |
 | FR-034 | US-5 | (bounded memory) | 38 |
+| FR-034a | US-5 | (no size cap, chunked) | 38, 62 |
 | FR-035 | US-6 | Partial results are labelled as partial | 30 |
 | FR-036 | US-6 | An unknown total is not shown as a ratio | 29 |
 | FR-037 | US-8 | Counts above the cap are clamped | 28 |
@@ -1323,6 +1389,7 @@ explicit seam tests: items 4 and 26.
 | FR-054 | US-8 | (bounds) | 28 |
 | FR-055 | US-8 | (rate limit) | 28 |
 | FR-060 | US-7 | Every wikilink form resolves | 17 |
+| FR-062 | US-7 | (outline for any markdown) | 63 |
 | FR-061 | US-7 | Every wikilink form resolves | 17 |
 | FR-062 | US-7 | Every wikilink form resolves | 17 |
 | FR-063 | US-7 | Every wikilink form resolves | 17 |
@@ -1374,23 +1441,29 @@ explicit seam tests: items 4 and 26.
 
 ---
 
-## 17. Ambiguity Warnings
+## 17. Ambiguity Warnings — resolved in interview 2026-08-22
 
-Unresolved points where an implementer would otherwise guess.
+All nine were put to the founder and answered. Recorded as decisions, not assumptions.
 
-| # | What is ambiguous | Likely assumption | Question to resolve |
-|---|---|---|---|
-| **AW-1** | Excerpt source — highlighting from the index, or re-reading the file at query time | Index highlighting, because it is nearer to hand | Which? Highlighting needs stored fields and grows the index materially at 100k notes; re-reading needs a match locator and costs query latency (ADR O-5) |
-| **AW-2** | Whether attachments are indexed as metadata | Skip them entirely | Are image and PDF attachments discoverable by name? The reference 104k-file collection was roughly half images, so this changes the scale target's meaning (ADR O-6) |
-| **AW-3** | How unaddressable filenames are surfaced | A line in the drift report only | Should they also appear in the Library with an explanatory state? FR-112 has no UI home yet |
-| **AW-4** | Rename link-rewriting default | Automatic, matching Obsidian | Automatic, or confirm first? (ADR O-4) |
-| **AW-5** | Whether one knowledge base may span several mounts | One collection = one mounted folder | Confirm (ADR O-7) |
-| **AW-6** | Where the drift check is invoked from | A button in the Library | REST, SPA, CLI, or all three? A CLI check cannot open the index while the gateway holds it (ADR O-8) |
-| **AW-7** | Body-size cap for a single note | 1 MB | What is the cap, and is an oversized note truncated-and-reported or skipped-and-reported? |
-| **AW-8** | Grace period before index deletion | 7 days, as the ADR states | Confirm; it trades disk against rebuild cost |
-| **AW-9** | Whether the reading rail appears for markdown outside a knowledge base | No — knowledge bases only | Should an ordinary `.md` file get an outline too? Cheap, and arguably expected |
+| # | Question | **Decision** |
+|---|---|---|
+| **AW-1** | Excerpt source | **Re-read the file at query time.** Keeps the index small at 100k notes and the excerpt always matches disk. Costs a little query latency on files that are usually small. Closes ADR O-5 |
+| **AW-2** | Are attachments indexed | **Yes — filenames only, never contents.** `diagram-v3.png` is findable by name; nothing reads inside it. Closes ADR O-6 |
+| **AW-3** | How unaddressable filenames surface | **Superseded by Stage 0.** The filename rules become platform-specific, so most such files stop being unaddressable on macOS and Linux. Whatever remains is reported by the health check |
+| **AW-4** | Rename link-rewriting default | **Automatic**, matching Obsidian, with the journal as the safety net. Closes ADR O-4 |
+| **AW-5** | May one KB span several mounts | **No — exactly one mounted folder**, as an Obsidian vault is one folder. Links across separate collections have no meaning in the format. Closes ADR O-7 |
+| **AW-6** | Where the health check runs | **Automatically, no button.** Runs on a schedule and reports only when something is wrong. Closes ADR O-8 — note this rules out a CLI check, which could not open the index while the gateway holds it |
+| **AW-7** | Note size cap | **No cap.** Obsidian has none (*"There is no hard limit"* — its forum); a cap would be a restriction we invent. Memory safety comes from **reading files in chunks**, not from refusing to index them |
+| **AW-8** | Index grace period after detach | **7 days**, then delete. Re-attaching within the week skips a full rebuild |
+| **AW-9** | Outline for markdown outside a KB | **Yes — any `.md` file gets the heading outline and reading layout.** Only search and backlinks require a real collection, because only those need an index. The outline costs nothing extra once built, and a reader who gets it in one folder but not another reads that as a bug |
 
----
+**Remaining open — genuinely undecided, not deferred by omission:**
+
+| # | Question | Why still open |
+|---|---|---|
+| **AW-10** | Does Adobe Acrobat display PDF.js-written form values and signatures? | Verified against macOS PDFKit and the in-tree Go reader; Acrobat untested. Blocks *promising* form filling, not rendering |
+| **AW-11** | Do complex real forms (checkboxes, radio groups, inherited appearances) round-trip? | The tested fixture was one text field |
+| **AW-12** | PDF page-count or size threshold before PDF.js becomes slow | Unmeasured |
 
 ## 18. Evaluation Scenarios (Holdout)
 
