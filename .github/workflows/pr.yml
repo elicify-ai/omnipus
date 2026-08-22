@@ -19,6 +19,62 @@ defaults:
     shell: bash
 
 jobs:
+  changes:
+    name: Detect changed paths
+    # Feeds the `code` output every other job in this workflow gates on
+    # (path filtering). Conservative by design: `code` is only 'false' when
+    # EVERY changed file in a pull_request is a doc/markdown/license file
+    # (docs/**, **/*.md, LICENSE, NOTICE, .preview-doc/**) — none of which
+    # any job in this workflow reads (see docs/internal/false-green-patterns.md
+    # and CLAUDE.md's record of file-scoped changes breaking a DIFFERENT
+    # package's tests, which rules out any narrower, package-level filter —
+    # see that doc for the two concrete incidents). Any doubt defaults to
+    # running everything: non-pull_request events (workflow_dispatch has no
+    # PR diff to filter against) always get code=true, and if the filter
+    # step below doesn't run or doesn't succeed, the fallback step still
+    # defaults to code=true — fail open, never fail closed into a silent
+    # skip.
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.decide.outputs.code }}
+    steps:
+      - name: Filter changed paths (pull_request only)
+        # dorny/paths-filter's GitHub-API mode needs no checkout for
+        # pull_request events. workflow_dispatch has no PR to diff against,
+        # so this step is skipped for that event and the fail-open default
+        # in "Decide" below applies.
+        id: filter
+        if: github.event_name == 'pull_request'
+        uses: dorny/paths-filter@v4
+        with:
+          # 'every' quantifier + all-negated patterns: a changed file only
+          # satisfies ALL of these negations if it is NOT under docs/**,
+          # NOT a .md file, and NOT LICENSE/NOTICE/.preview-doc/**. The
+          # non_docs output is then 'true' iff at least one changed file is
+          # a real (non-doc) file — dorny/paths-filter's documented recipe
+          # for an "anything-but-docs" check.
+          predicate-quantifier: 'every'
+          filters: |
+            non_docs:
+              - '!docs/**'
+              - '!**/*.md'
+              - '!LICENSE'
+              - '!NOTICE'
+              - '!.preview-doc/**'
+
+      - name: Decide whether the full job set must run
+        id: decide
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "pull_request" ] \
+             && [ "${{ steps.filter.outcome }}" = "success" ] \
+             && [ "${{ steps.filter.outputs.non_docs }}" = "false" ]; then
+            echo "code=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "code=true" >> "$GITHUB_OUTPUT"
+          fi
+
   e2e-shard-check:
     name: E2E shard plan check
     # Fast, dependency-free drift guard that runs on EVERY PR (not just e2e-triggering
@@ -27,6 +83,8 @@ jobs:
     # e2e-plan job runs before building the matrix, but with no `needs:` so it gives
     # immediate feedback and still covers PRs whose paths skip the heavy e2e chain.
     runs-on: ubuntu-latest
+    needs: [changes]
+    if: success() && needs.changes.outputs.code == 'true'
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -44,6 +102,8 @@ jobs:
     #   removed: agent auth status cron migrate model skills
     #   kept:    start gateway credentials audit doctor version onboard
     runs-on: ubuntu-latest
+    needs: [changes]
+    if: success() && needs.changes.outputs.code == 'true'
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -81,6 +141,12 @@ jobs:
     # why a comparator was the wrong fix): there is no longer a second copy
     # for a lockstep checker to compare against.
     runs-on: ubuntu-latest
+    # Not gated behind fast-tier: this is itself a fast, dependency-free
+    # structural guard (same character as e2e-shard-check/cli-verb-guard
+    # above) with nothing expensive downstream of it, so there is nothing
+    # for it to short-circuit. Still path-filtered like every other job.
+    needs: [changes]
+    if: success() && needs.changes.outputs.code == 'true'
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -107,6 +173,8 @@ jobs:
     # test matrix for a reason unrelated to the code under review — the
     # missing-browser false-RED trap documented in deploy/ci-worker/CLAUDE.md.
     runs-on: ubuntu-latest
+    needs: [changes, fast-tier]
+    if: success() && needs.changes.outputs.code == 'true'
     env:
       CGO_ENABLED: "0"
       # Opts past skipIfNoBrowser's CI branch. Set ONLY here.
@@ -183,6 +251,8 @@ jobs:
     # `-b` flag is required to actually type-check the referenced sub-projects.
     # See F6 in the Phase 7 review findings.
     runs-on: ubuntu-latest
+    needs: [changes]
+    if: success() && needs.changes.outputs.code == 'true'
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -211,6 +281,8 @@ jobs:
     # must be visible as red on every PR, same as every other lint job in
     # this workflow.
     runs-on: ubuntu-latest
+    needs: [changes]
+    if: success() && needs.changes.outputs.code == 'true'
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -229,6 +301,8 @@ jobs:
   vitest:
     name: Vitest — ${{ matrix.group }}
     runs-on: ubuntu-latest
+    needs: [changes, fast-tier]
+    if: success() && needs.changes.outputs.code == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -297,6 +371,8 @@ jobs:
     #   Go:  add `// not-wire-format` on the `type Foo struct {` line
     #   TS:  add `// not-wire-format` on the `export interface Foo` line
     runs-on: ubuntu-latest
+    needs: [changes]
+    if: success() && needs.changes.outputs.code == 'true'
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -334,6 +410,8 @@ jobs:
     # per-line annotation. If this fires, read the real outcome instead — see
     # the script's header comment for the correct pattern.
     runs-on: ubuntu-latest
+    needs: [changes]
+    if: success() && needs.changes.outputs.code == 'true'
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -359,6 +437,8 @@ jobs:
     # or edited a generated file directly. Fix: run `make gen-contracts` locally
     # and commit the regenerated diff.
     runs-on: ubuntu-latest
+    needs: [changes]
+    if: success() && needs.changes.outputs.code == 'true'
     env:
       CGO_ENABLED: "0"
     steps:
@@ -401,6 +481,8 @@ jobs:
   lint:
     name: Linter
     runs-on: ubuntu-latest
+    needs: [changes]
+    if: success() && needs.changes.outputs.code == 'true'
     env:
       # Omnipus ships a pure-Go binary (CLAUDE.md hard constraint #2), so tests
       # run with cgo disabled to match the release build. This is the
@@ -442,9 +524,38 @@ jobs:
           version: v2.10.1
           args: --build-tags=goolm,stdjson
 
+  fast-tier:
+    name: Fast tier checks passed
+    # Aggregator (Task B tiering): every SLOW-tier job below needs this
+    # instead of listing all 8 fast jobs individually. It has no work of
+    # its own — it exists purely so a cheap failure (e.g. a lint typo)
+    # short-circuits the expensive tier (full Go suite, Playwright, ...)
+    # instead of both running concurrently and burning 15+ minutes for
+    # nothing. If any of its needs failed, or was skipped by the path
+    # filter, this job is itself skipped too (default `success()` semantics
+    # on `needs:`), which cascades the skip down through every SLOW job's
+    # own needs on it.
+    runs-on: ubuntu-latest
+    needs:
+      - changes
+      - e2e-shard-check
+      - cli-verb-guard
+      - typecheck
+      - lint-spa
+      - wire-types-lint
+      - tool-error-status-lint
+      - verify-contracts
+      - lint
+    if: success() && needs.changes.outputs.code == 'true'
+    steps:
+      - name: Fast tier green
+        run: echo "All fast-tier checks passed — slow tier is cleared to run."
+
   vuln_check:
     name: Security Check
     runs-on: ubuntu-latest
+    needs: [changes, fast-tier]
+    if: success() && needs.changes.outputs.code == 'true'
     env:
       GOFLAGS: -tags=goolm,stdjson
       # See comment on the lint job above.
@@ -494,6 +605,8 @@ jobs:
     # loudly and early — independent of the test job. Among other things this
     # protects bleve's pure-Go scorch backend (no leveldb/rocksdb CGo kvstore).
     runs-on: ubuntu-latest
+    needs: [changes, fast-tier]
+    if: success() && needs.changes.outputs.code == 'true'
     env:
       CGO_ENABLED: "0"
     steps:
@@ -551,6 +664,8 @@ jobs:
   test:
     name: Tests
     runs-on: ubuntu-latest
+    needs: [changes, fast-tier]
+    if: success() && needs.changes.outputs.code == 'true'
     env:
       # See comment on the lint job above.
       CGO_ENABLED: "0"
@@ -838,7 +953,8 @@ jobs:
   security:
     name: Security Tests
     runs-on: ubuntu-latest
-    needs: [test]
+    needs: [changes, fast-tier, test]
+    if: success() && needs.changes.outputs.code == 'true'
     timeout-minutes: 15
     env:
       CGO_ENABLED: "0"
@@ -896,7 +1012,8 @@ jobs:
   perf-smoke:
     name: Perf Smoke
     runs-on: ubuntu-latest
-    needs: [test]
+    needs: [changes, fast-tier, test]
+    if: success() && needs.changes.outputs.code == 'true'
     timeout-minutes: 10
     env:
       CGO_ENABLED: "0"
@@ -939,7 +1056,12 @@ jobs:
   e2e-plan:
     name: E2E shard plan
     runs-on: ubuntu-latest
-    needs: [test]
+    # Not listed in either named tier — it's a cheap script eval, not part of
+    # the expensive tier fast-tier exists to protect. Its needs on `test`
+    # (unchanged from before this change) already short-circuits it whenever
+    # fast-tier fails, since `test` itself needs fast-tier below.
+    needs: [changes, test]
+    if: success() && needs.changes.outputs.code == 'true'
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
     steps:
@@ -955,7 +1077,8 @@ jobs:
   playwright:
     name: E2E — ${{ matrix.group }}
     runs-on: ubuntu-latest
-    needs: [test, e2e-plan]
+    needs: [changes, fast-tier, test, e2e-plan]
+    if: success() && needs.changes.outputs.code == 'true'
     strategy:
       fail-fast: false
       # Groups, key slots, and spec lists come from tests/e2e/shards.json via the e2e-plan
