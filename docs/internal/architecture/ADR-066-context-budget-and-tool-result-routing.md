@@ -246,6 +246,46 @@ First-class surfaces per Constraint #8 (schema, generated types, REST, SPA): the
 
 **Decision (D14).** A provider configuration **can be deleted** (`DELETE /providers/{id}`, Constraint #8), which clears its key and removes its row — the catalog entry remains available in the picker. **The default model is a first-class Settings control** (Settings → Models, and reachable from the provider row), switchable at any time, with the current default shown on its provider's row. Deleting the provider the default depends on is allowed only after choosing a new default in the same dialog — the action is blocked, not silently broken. The exact affordances follow the UX review in §10.2.
 
+### 10.2 UX review at 190 providers — verdict FAIL as-is; what changes
+
+*Review run 2026-08-22 with the `elicify-ui-ux-design` checklist (cognitive load, hierarchy, accessibility, happy-path friction, onboarding, forms, settings, empty/error states) against `onboarding.tsx`, `ProvidersSection.tsx`, `ProviderPickerSheet.tsx`, `ProviderRow.tsx`, `ReAuthDialog.tsx`, `model-selector.tsx`. Findings carry the threshold or law they violate; file:line in the review transcript.*
+
+**Why it fails at 190.** Three assumptions built for 23: (1) the onboarding company picker is a **flat tile grid of every company** (`onboarding.tsx` ~L1249), ordered only by a three-name priority list — at ~200 companies that is 60+ rows of tiles before search (Hick's law; happy-path rule: >25 options → searchable, not visible selectors); (2) the Settings picker sheet renders **every entry as one button in one scroll** (`ProviderPickerSheet.tsx` ~L89), no virtualisation, no Popular, no letter jump — ~215 buttons in a `max-w-lg` sheet; (3) **no concept of Popular vs everything** anywhere. Plus the two capability gaps: no delete (config sheet footer is Refresh / Test / Cancel / Save), no default-model control.
+
+**Decisions.**
+
+1. **One shared provider picker** (onboarding step 3 and the Settings sheet use the same component): a stable band of **8 Popular tiles**, then *Recently used*, then one search field over company / plan / region / alias, then *All providers* **collapsed until search has text or the user expands it** — a virtualised, letter-grouped list (row = company → variant subtitle → protocol chip). **Unsupported providers are shown disabled with the reason**, never hidden (hidden options generate "where is Bedrock?" tickets). *Custom endpoint* is the permanent last row (serial-position). Built on cmdk `Command` like the existing `ModelSelector`, so typeahead and arrow keys come free (WCAG 2.1.1).
+2. **Auth method is a per-provider segmented control inside the existing second-level panel** (where plan and region already are): `[ Sign in with xAI ] [ API key ]`, defaulting to *Sign in* where the vendor sanctions it, absent for Anthropic and Google. No fourth step; the three-step tracker stays. The probe runs identically after either.
+3. **Plan / region selectors stay** (they are correct `aria-pressed` groups); region **defaults to the value inferred from browser locale**, stated in copy (*"Detected: International — change"*), so a Chinese vendor's 3 plans × 3 regions does not present nine equal buttons cold.
+4. **Model selection** (no pre-selection, per operator): the catalog list is ordered **by vendor group, then release date descending**; ≤3 models per provider carry a *Recommended for chat* chip (tool-calling, ≥128k window) — a hint, not a selection; `ModelSelector` gains virtualisation above 100 items (OpenRouter lists 359). The field is labelled *"Model for your first agent"* — "default model" is a system concept the user has not met yet.
+5. **Default model card** is the first thing on Settings → Providers: `provider · model · window · source`, with *Change* opening the selector filtered to **connected** providers. Also reachable from the provider row. (Backed by a `PUT` on the default — Constraint #8.)
+6. **Remove provider**: a text-tier destructive button at the config sheet's footer-left, backed by `DELETE /providers/{id}`. **Confirm only when the provider is in use** — *"3 agents and the default model use OpenRouter. Remove anyway?"* listing the agents — otherwise remove immediately with a 5-second **Undo** toast ("the computer that cried Confirm"). When the provider backs the default model, the dialog **requires picking a new default inline** before removal proceeds (D14).
+7. **Sheet close must not discard a typed key** (`handleClose` clears the draft on Esc/overlay today): keep the draft until explicit Cancel; on Esc/overlay with a dirty draft, stay open with inline *"Discard key?"*.
+8. **Row states** gain `signed-in as …` and `session expired` alongside Connected / Error / Not configured; the row's *Edit* reads *Manage* for sign-in providers; `ReAuthDialog` extends to OAuth expiry.
+
+Already correct and kept: probe and finish errors as `role="alert" aria-live="assertive"` with the raw upstream error shown under the friendly one; key input autofocus; Radix `Dialog`/`Sheet` focus trap and Esc; company group headers only when a company has ≥2 configured variants (the configured list stays short at 190 — the picker is the problem, not the rows).
+
+**Proposed information architecture.**
+
+```
+Provider picker (shared)                 Settings → Providers
+┌ Connect a provider ──────────────┐     ┌ Providers          [+ Connect a provider] ┐
+│ POPULAR                           │     │ ┌ Default model ───────────────────────┐ │
+│ [OpenAI][Anthropic][OpenRouter]   │     │ │ OpenRouter · z-ai/glm-5.2            │ │
+│ [Google][xAI][Groq][Mistral][…]   │     │ │ 1,048,576 · catalog         [Change] │ │
+│ RECENT · Z.ai Coding Plan         │     │ └──────────────────────────────────────┘ │
+│ [🔍 Search 190 providers…      ]  │     │ OpenRouter  ● Connected · live   [Edit] │
+│ ▸ All providers (182)             │     │ xAI         ● Signed in as …   [Manage] │
+│   A  Alibaba · Coding Plan · CN   │     │ Z.ai ── Coding Plan · Intl       [Edit] │
+│      Amazon Bedrock — needs       │     │      ── Pay-as-you-go · China    [Edit] │
+│      request signing ⓘ (disabled) │     │ sheet footer:                           │
+│   …                               │     │ [Remove provider]      [Cancel] [Save]  │
+│   Custom endpoint             →   │     └─────────────────────────────────────────┘
+└───────────────────────────────────┘
+```
+
+**Top three by impact:** the Popular-first / search-everything picker (one component, both surfaces); the default-model card plus Remove provider with the in-use guard; the auth-method control inside the onboarding panel. `ModelSelector` is shared with the agent form, so its virtualisation benefits both.
+
 **Two wire consequences (Constraint #8), corrected.**
 1. `src/lib/generated/providerCatalog.ts` — a build-time file — **goes**. A catalog refreshed daily cannot be baked into the SPA bundle; the SPA reads the **`GET` providers-catalog endpoint** (already listed in §12) and caches it. The `gen/main.go` TS emission is deleted with it.
 2. **`ProbeProviderRequest.yaml` carries a provider *enum* today** (it is where `antigravity` appears as a value). §12 had said the provider field "stays a free string — no enum"; that was true of `Agent.yaml` but not of the probe request. With ~190 providers the enum cannot stand: **it becomes a free string validated at runtime against the catalog**, and the schema + generated Go/TS are regenerated in the same commit that deletes the `antigravity` value.
