@@ -2,7 +2,7 @@
 
 - **Source ADR:** `docs/internal/architecture/ADR-066-context-budget-and-tool-result-routing.md` (Proposed, restructured 2026-08-22; pass-2 review findings resolved in §16a). Review record: `docs/internal/architecture/ADR-066-context-budget-and-tool-result-routing-review-pass2.md`.
 - **Status:** Draft (plan-spec) — written 2026-08-22 against branch `feat/context-budget-and-tool-result-routing`. Phase 1 gate: the ADR is treated as the confirmed requirements brief (reviewed twice, every finding resolved). Where the ADR is silent this spec does **not** decide — it records the gap in §10 (Ambiguity Self-Audit) with the assumption it proceeds under, clearly labelled **[A-n]** wherever that assumption is used.
-- **Scope:** ADR-066 only — D2, D3, D4, D5 (+ recall-by-`tool_call_id`), D6, D7, D8, D9, D10, and the §16a pass-2 resolutions. **D1 (the registry-fed catalog) is ADR-067 and is referenced, not specified.** Subscriptions / provider deletion / provider UX are ADR-068 and are out of scope.
+- **Scope:** ADR-066 only — D2, D3, D4, D5 (+ recall-by-`tool_call_id`), D6, D7, D9, D10, and the §16a pass-2 resolutions. **D8 (learn the window from provider error text) is NOT ADOPTED** (operator decision, ADR-066 commits `ec2e022d`, `80aef474`, `06e6cc17`) — nothing here learns limits from provider errors. **D1 (the registry-fed catalog) is ADR-067 and is referenced, not specified.** Subscriptions / provider deletion / provider UX are ADR-068 and are out of scope.
 - **Greenfield rule (operator, 2026-08-22):** no backward compatibility, no migration, no aliasing of old names, no grace periods. Pre-existing state that does not match this design simply does not work. Designed runtime fallbacks (conservative floor for an unknown cloud model) are not compatibility mechanisms.
 - **Tech:** Go (`pkg/agent`, `pkg/memory`, `pkg/tools`, `pkg/mcp`, `pkg/gateway`, `pkg/providers`) · React 19 + Vite (SPA) · contract-first (`contracts/*`, Constraint #8).
 - **Citation rule:** `pkg/agent/loop.go` and `pkg/agent/turn.go` are cited as `file::symbol` only — never by line number (they churn).
@@ -14,7 +14,7 @@
 
 On 2026-08-21 a production turn died silently after two MCP tool results (1.18 MB and 0.82 MB) entered the context in one turn. Four defects were diagnosed (ADR-066 §1): the context window was resolved from `max_tokens × 4` (wrong by 8×); the MCP path admits results of any size; the sliding window is consulted only before the first LLM call of a turn and can only cut at user-message boundaries; and four turn exits emit no log, event or transcript entry.
 
-This spec covers the incident fix: resolve the window from a ladder with a lower-only clamp and a loud floor (D2–D3); cap every tool result at one choke point, bound user messages at the gateway and tool-call arguments as a structured refusal (D4); when the window is over budget mid-turn, empty the oldest eligible tool result in place and leave a recall mark that `recall_conversation` can resolve by `tool_call_id`, in pages (D5); run the window check after every tool result with a floor of the whole last assistant step and a thrash guard (D6); give every turn exit a typed code (D7); learn a lower window from provider errors, reset on catalog version (D8); expose caps, trigger and the effective window with its source in Settings (D9); bound ingest at 8 MB, strictly below the archive line ceiling (D10).
+This spec covers the incident fix: resolve the window from a ladder with a lower-only clamp and a loud floor (D2–D3); cap every tool result at one choke point, bound user messages at the gateway and tool-call arguments as a structured refusal (D4); when the window is over budget mid-turn, empty the oldest eligible tool result in place and leave a recall mark that `recall_conversation` can resolve by `tool_call_id`, in pages (D5); run the window check after every tool result with a floor of the whole last assistant step and a thrash guard (D6); give every turn exit a typed code (D7); expose caps, trigger and the effective window with its source in Settings (D9); bound ingest at 8 MB, strictly below the archive line ceiling (D10).
 
 Nothing is summarised, nothing is deleted from disk, no new storage is introduced. `windowTrim` remains the only compaction path (ADR-028, extended not superseded).
 
@@ -44,7 +44,7 @@ Nothing is summarised, nothing is deleted from disk, no new storage is introduce
 | `pkg/memory/store.go::Store.RollbackAppended(ctx, key, targetLines, targetSkip)` | **modifies (interface)** | Gains an emptied-set target, written atomically with `Skip`. |
 | `pkg/memory/jsonl.go::sessionMeta` (`skip`, `count`), `::GetHistory`, `::ReadArchive`, `maxLineSize = 10 MB` | **extends** | Meta gains a per-`tool_call_id` projection state; archive lines are `ArchivedMessage{providers.Message; TS}` so `ToolCallID` is on disk. |
 | `pkg/agent/recall_conversation.go::RecallConversationTool` (`recallDefaultTokens = 4000`, `recallRangeTokens = 8000`, `buildRecallSpanMessages` id remap) | **extends** | Gains the `tool_call_id` mode with `offset`/`length`. |
-| `pkg/agent/translate_error.go::contextOverflowSubstrings`, `::classifyByMessage`, `CodeContextTooLong`, `CodeUnknown`, generated `LLMErrorUserAttributions` | **extends** | D7 new codes; D8 numeric extraction feeds back a learned window. |
+| `pkg/agent/translate_error.go::contextOverflowSubstrings`, `::classifyByMessage`, `CodeContextTooLong`, `CodeUnknown`, generated `LLMErrorUserAttributions` | **extends** | D7 new codes only. `contextOverflowSubstrings` keeps its classification job; no numeric extraction, no feedback (D8 not adopted). |
 | `contracts/components/schemas/LLMError.yaml` (`x-user-messages` catalogue) | **extends** | New codes + copy + attribution (both Go/TS catalogues generated). |
 | `pkg/mcp/manager.go::Manager.CallTool` | **modifies** | No truncation, no ingest bound today. |
 | `pkg/tools/web.go` (`io.ReadAll(resp.Body)` at the Brave/DuckDuckGo/Perplexity search providers; two `LimitReader(…, 1<<20)` sites; `fetch_url` `MaxBytesReader` 10 MB) | **modifies** | D10 bounds the three unbounded reads and aligns `fetch_url`'s fallback to 8 MB. |
@@ -53,7 +53,7 @@ Nothing is summarised, nothing is deleted from disk, no new storage is introduce
 | `pkg/gateway/websocket.go::handleChatMessage` (and the webchat/SSE intake) | **modifies** | D4 user-message bound, before a turn is registered. |
 | `contracts/openapi.yaml` `/settings/memory` + `MemorySettings.yaml` | **pattern for** | D9 `ContextSettings` endpoint. |
 | `src/lib/toolVisibility.ts::shouldRenderToolCall`; `src/components/settings/ChatSection.tsx`, `MemorySection.tsx` | **extends** | Mark rendered only under Verbose chat; new Context settings section. |
-| `pkg/providers/capabilities` (`Catalog.Resolve`, `optimistic`) — being folded into `pkg/providers/catalog` by ADR-067 | **calls** | D2 catalog rung reads `Resolve(provider, model).context_window` and the entry's catalog version (ADR-067 D1). |
+| `pkg/providers/capabilities` (`Catalog.Resolve`, `optimistic`) — being folded into `pkg/providers/catalog` by ADR-067 | **calls** | D2 catalog rung reads `Resolve(provider, model).context_window` (ADR-067 D1). |
 
 ### Impact Assessment
 
@@ -79,12 +79,12 @@ Nothing is summarised, nothing is deleted from disk, no new storage is introduce
 | Tool loop: execute tool → filter sensitive data → build `role: "tool"` message → append → next LLM call | Becomes: ingest bound → filter → **D4 cap at the single choke point** → append full to archive + record cap state → **D6 check** → **D5 empty to target** → refresh restore point → assemble → call. |
 | Turn abort → `restoreSession` → `RollbackAppended` | Restores line count, `Skip` **and the emptied-set**. |
 | `recall_conversation` → `ReadArchive` → span re-injection with id remap | Gains `tool_call_id` paged mode, exempt from span token budgets. |
-| Provider error → `TranslateTurnError` → `LLMError` frame | D7 typed exits; D8 numeric window extraction. |
+| Provider error → `TranslateTurnError` → `LLMError` frame | D7 typed exits; overflow classifies to `context_too_long` as today. |
 | Gateway chat intake → turn registration | D4 user-message bound refuses before registration. |
 
 ### Cluster Placement
 
-Primarily the **agent loop / context paging** cluster (`pkg/agent`, `pkg/memory`); touches **tools** (`pkg/tools`, `pkg/mcp`) for D4/D10, **gateway + contracts** for D7/D9 and the user-message bound, **providers** for D2/D3/D8, and the **SPA Settings** cluster for D9. Cross-cluster by necessity; the single choke point (D4) and the single projection function (D5) are the two seams that keep it coherent.
+Primarily the **agent loop / context paging** cluster (`pkg/agent`, `pkg/memory`); touches **tools** (`pkg/tools`, `pkg/mcp`) for D4/D10, **gateway + contracts** for D7/D9 and the user-message bound, **providers** for D2/D3, and the **SPA Settings** cluster for D9. Cross-cluster by necessity; the single choke point (D4) and the single projection function (D5) are the two seams that keep it coherent.
 
 ---
 
@@ -93,9 +93,9 @@ Primarily the **agent loop / context paging** cluster (`pkg/agent`, `pkg/memory`
 Priorities: P0 = incident fix cannot ship without it; P1 = required for the ADR's exit proof; P2 = required by the ADR but not on the exit-proof path.
 
 ### US-1 — Resolve the context window from a ladder with a lower-only clamp (D2) — **P0**
-As an operator, I want each agent's context window resolved from the best available source — per-agent override → global default → live provider query → catalog → learned → floor — with overrides only able to lower the result, so the window record is never larger than the model's real capability.
+As an operator, I want each agent's context window resolved from the best available source — per-agent override → global default → live provider query → catalog → floor — with overrides only able to lower the result, so the window record is never larger than the model's real capability.
 - **Why P0:** §1.1 — the 8× error is the first diagnosed defect; every other decision computes against this number.
-- **Independent test:** for a fixed model with known catalog/live/learned values and various overrides, the resolved window equals the expected rung's value, clamped to the minimum of override and catalog-or-learned, and the resolution is reported with its source.
+- **Independent test:** for a fixed model with known catalog/live values and various overrides, the resolved window equals the expected rung's value, clamped to the minimum of override and catalog-or-live, and the resolution is reported with its source.
 - **Acceptance:**
   1. **Given** no override and a catalog entry of 1,048,576 for (provider, model), **When** the agent is built, **Then** the effective window is 1,048,576 with source `catalog`.
   2. **Given** a per-agent override of 100,000 and a catalog value of 1,048,576, **When** resolved, **Then** the effective window is 100,000 with source `operator`.
@@ -109,7 +109,7 @@ As an operator running a hosted model the catalog does not know, I want a conser
 - **Why P0:** a 128,000 guess on an 8k Ollama model is the incident again on the operator's own machine (pass-2 MAJ-002).
 - **Independent test:** an unknown cloud model resolves to 128,000 with source `floor` + WARN; a local endpoint that reports no window yields the "set the context length" state; setting the per-model override makes it usable without restart.
 - **Acceptance:**
-  1. **Given** a cloud model of a known vendor absent from catalog, live and learned sources, **When** resolved, **Then** the window is 128,000, source `floor`, and one WARN names the model.
+  1. **Given** a cloud model of a known vendor absent from catalog and live sources, **When** resolved, **Then** the window is 128,000, source `floor`, and one WARN names the model.
   2. **Given** an `ollama` model whose endpoint reports a loaded window of 8,192, **When** resolved, **Then** the window is 8,192 with source `live` and the 128,000 floor is never applied.
   3. **Given** a `vllm`/LM Studio/`custom` endpoint whose live query fails or reports no window, **When** the model is selected or an agent bound to it starts a turn, **Then** the model is not usable and the provider row and model picker show: *"This endpoint did not report a context length for <model>. Set it under Settings → Models → <provider> → <model> → Context length (per-model override, D2 rung 1) and try again."*
   4. **Given** that state, **When** the operator sets the per-model override, **Then** the model is usable immediately (no restart) and the override is clamped like every other.
@@ -126,7 +126,7 @@ As the harness, I must ensure no single tool result enters the window above a fi
   5. **Given** a result over 25,000 chars but under its cap, **When** it enters, **Then** it is unmodified and a warn-threshold log line and counter fire.
   6. **Given** any operator cap setting above 150,000, **When** saved, **Then** it is rejected (ceiling).
   7. **Given** the shipped per-tool caps, **Then** `read_file` stays at 64 KB, `browser_get_text` is lowered to 64,000, shell output is 64,000 on success and 10,000 on failure, and there is no per-server or per-tool opt-out.
-  8. **Given** the sensitive-data filter is enabled, **Then** it runs on the full content before the cap is applied, and the archive copy is the filtered full content. **[A-6]**
+  8. **Given** the sensitive-data filter is enabled, **Then** it runs on the full content before the cap is applied, and the archive copy is the filtered full content. *(A-6 accepted.)*
 
 ### US-4 — Bound user messages at the gateway (D4) — **P1**
 As a user who pastes a huge document, I want a clear, non-fatal refusal before a turn starts, so the thrash guard is never reachable through a user message.
@@ -191,20 +191,9 @@ As a user and an operator, when a turn is cancelled, times out, or hits the thra
 - **Acceptance:**
   1. **Given** the provider call is cancelled, **Then** the turn ends with code `turn_canceled` (new), a log line, an event and a transcript entry.
   2. **Given** the provider call exceeds the deadline, **Then** code `turn_timed_out` (new), same three artefacts.
-  3. **Given** the thrash guard fires, **Then** a size-related code distinct from `context_too_long` **[A-4]**, same artefacts.
+  3. **Given** the thrash guard fires, **Then** the code `context_unrecoverable` (attribution `product`), distinct from `context_too_long`, same artefacts. *(A-4 accepted.)*
   4. **Given** any new code, **Then** it exists in the `LLMError` schema with user copy and an attribution, and both generated catalogues are regenerated in the same commit.
   5. **Given** D4–D6 in place, **Then** the only remaining turn-fatal conditions are provider auth rejected, provider unreachable after retries, workspace unavailable, and the thrash guard (reachable only by an injected fault).
-
-### US-10 — Learn the window from provider errors, lower-only, reset on catalog version (D8) — **P2**
-As the harness, when a provider states its real limit numerically in an overflow error, I record it as a learned window that can only lower the current belief, keyed to the catalog entry version so a new catalog release clears it; operator overrides never expire.
-- **Why P2:** improves the ladder; not on the incident path.
-- **Independent test:** an overflow error stating 200,000 against a belief of 1,048,576 lowers the effective window to 200,000 with source `learned`; a stated 2,000,000 does not raise it; a new catalog version for the entry clears it.
-- **Acceptance:**
-  1. **Given** `"prompt is too long: 208310 tokens > 200000 maximum"` and a current belief of 1,048,576, **When** classified, **Then** the learned window for (provider, model) becomes 200,000 and the next turn uses it.
-  2. **Given** a stated number above the current belief, **Then** nothing changes.
-  3. **Given** a learned value keyed to catalog entry version V, **When** the catalog entry becomes version V+1, **Then** the learned value and any clamp derived from it are cleared.
-  4. **Given** an operator override, **Then** it is never cleared by a catalog change.
-  5. **Given** a provider reply with `prompt_tokens`, **Then** the value is recorded for estimator calibration (no behaviour change in this ADR).
 
 ### US-11 — Controls in Settings: caps, trigger, effective window with source, override (D9) — **P1**
 As an operator, I can see and set the per-surface caps (ceiling 150,000), the D6 absolute trigger, the effective context window per agent read-only with its source, and a lower-only override — as first-class contract types.
@@ -213,7 +202,7 @@ As an operator, I can see and set the per-surface caps (ceiling 150,000), the D6
 - **Acceptance:**
   1. **Given** Settings, **When** I read the context settings, **Then** I see MCP cap, builtin success cap, builtin failure cap, absolute trigger, ingest bound, and the global default window, with their defaults (62,500 / 64,000 / 10,000 / 400,000 chars / 8 MB / unset).
   2. **Given** a cap value of 150,001, **When** saved, **Then** HTTP 400 names the ceiling; 150,000 is accepted.
-  3. **Given** an agent, **When** I view it, **Then** I see its effective window and its source (`operator` / `live` / `catalog` / `learned` / `floor`) read-only, plus an override field.
+  3. **Given** an agent, **When** I view it, **Then** I see its effective window and its source (`operator` / `live` / `catalog` / `floor`) read-only, plus a `clamped` flag, plus an override field.
   4. **Given** an override above the catalog value, **When** saved, **Then** it is accepted and the effective window shows the clamped value with a clamp indicator.
   5. **Given** every one of these fields, **Then** it is defined in `contracts/` and crosses the boundary only as generated types.
 
@@ -233,13 +222,13 @@ As the process, every network or subprocess read is bounded at 8 MB by default (
 - E3: the window is over budget and the only candidates are the last assistant step's results → nothing emptied; if still over budget → thrash guard (reachable only by injected fault once D4 and the user/argument bounds exist).
 - E4: parallel tool calls (N results for one assistant message) → the floor is all N; emptying order among older steps is oldest-first.
 - E5: multibyte content — caps and bounds are measured in characters (runes) for caps, bytes for ingest; head-and-tail truncation never splits a rune.
-- E6: an MCP tool name containing instruction-like text → the mark renders it sanitised and length-limited. **[A-7]**
+- E6: an MCP tool name containing instruction-like text → the mark renders it sanitised: ≤ 64 chars, non-printables stripped. *(A-7 accepted.)*
 - E7: `recall_conversation(tool_call_id)` for a result of a turn that aborted → not found (rolled back), by design.
 - E8: paging past the end, negative `offset`, `length` > page size → empty page / error / clamped to the page size respectively.
-- E9: live provider query cache expired and the endpoint is down → cloud: next rung (catalog → learned → floor); local: "set the context length" state, never a guess.
+- E9: live provider query cache expired and the endpoint is down → cloud: next rung (catalog → floor); local: "set the context length" state, never a guess.
 - E10: override set while the "set the context length" state is shown → usable without restart.
-- E11: a learned value recorded, then the operator sets a higher override → effective = min(override, learned) = learned (override cannot raise).
-- E12: the user message bound and attachments — attachments are not counted toward the character bound (they are media refs). **[A-3]**
+- E11: the catalog entry for a model is lowered in a new catalog release → the capability clamp is recomputed from the catalog on the next resolution; an operator override above it is clamped to the new value (overrides never expire, they are re-clamped).
+- E12: the user message bound and attachments — attachments are not counted toward the character bound (they are media refs). *(A-3 accepted.)*
 - E13: an abort between a mid-turn empty and the restore-point refresh → rollback to the last refreshed restore point (consistent, since refresh happens immediately after each empty).
 - E14: `claude-cli`/`codex-cli` agents → D2–D3, D6 and D9's window fields do not apply; D4/D10 still apply to their tool results if any pass through the loop.
 - E15: a delegated sub-turn → runs the same loop; its own session's emptied-set and restore point are independent of the parent's.
@@ -249,7 +238,7 @@ As the process, every network or subprocess read is bounded at 8 MB by default (
 ## 5. Behavioral Contract & Boundaries
 
 ### Behavioral Contract
-- When an agent instance is built, the system resolves its window from override → global default → live (cached) → catalog → learned → floor, clamps any override to the catalog-or-learned value, and records the source.
+- When an agent instance is built, the system resolves its window from override → global default → live (cached) → catalog → floor, clamps any override to the catalog-or-live value (recomputed on every resolution), and records the source.
 - When a local/self-hosted endpoint reports no window, the system marks the model unusable with the actionable message and never assigns a guessed number.
 - When any tool result becomes a context message, the system passes it through one choke point that caps it per surface, marks over-cap results, and archives the full content.
 - When a user message exceeds the bound, the system refuses it before a turn starts, with the size and the limit, persisting nothing.
@@ -258,7 +247,7 @@ As the process, every network or subprocess read is bounded at 8 MB by default (
 - When the model calls `recall_conversation` with a `tool_call_id`, the system returns the archived result in pages under the builtin cap, exempt from the span budgets.
 - When a turn aborts, the system restores archive length, `Skip` and the emptied-set to their turn-start values.
 - When a turn is cancelled, times out, or trips the thrash guard, the system ends it with a typed code, a log line, an event and a transcript entry.
-- When a provider overflow error states a numeric limit lower than the current belief, the system records it as learned, keyed to the catalog entry version.
+- When a provider rejects a request for exceeding its window, the system classifies it as `context_too_long` (D7 typed) and changes no window record.
 - When an operator reads or writes context settings, the system serves them via generated contract types, rejecting caps above 150,000.
 - When any network/subprocess read exceeds the ingest bound, the system fails the tool call rather than truncating.
 
@@ -269,7 +258,8 @@ As the process, every network or subprocess read is bounded at 8 MB by default (
 - The system must not delete or modify any archive line when capping or emptying — append-only; the full result is always recallable for completed turns.
 - The system must not cut the window mid-turn (separate an assistant tool call from its `role: "tool"` answer) — provider ordering rules; only empty in place.
 - The system must not empty any result of the most recent assistant message — the model is reasoning about it.
-- The system must not apply an override, learned value or any other source that raises the window above the catalog-or-learned value — the incident by another route.
+- The system must not apply an override or any other source that raises the window above the catalog-or-live value — the incident by another route.
+- The system must not learn, infer or cache a context window from provider error text (D8 not adopted) — `contextOverflowSubstrings` classifies only. **Accepted cost, stated:** a model not yet in the catalog, or a plan-specific cap below the catalog value, overflows with a typed D7 `context_too_long` error until the catalog or the operator (override) corrects it.
 - The system must not fall back to `max_tokens × 4`, a flat `128000`, or any window not produced by the ladder — three paths giving three answers was the defect.
 - The system must not assign a floor to a local/self-hosted endpoint — ask or refuse.
 - The system must not add a per-server or per-tool opt-out from the cap.
@@ -285,18 +275,24 @@ As the process, every network or subprocess read is bounded at 8 MB by default (
 **Sizes (characters = Unicode runes unless stated):**
 - MCP result cap default **62,500**; builtin success cap **64,000**; builtin failure cap **10,000** (head-and-tail); warn threshold **25,000** (log + counter, no modification); operator ceiling **150,000** on every cap.
 - User-message bound = the builtin success cap (**64,000**); not a separate setting — it tracks the builtin cap; the gateway reply quotes the live value. *(A-2 resolved.)*
-- Tool-call argument cap = the builtin success cap (**64,000**) measured on the serialised arguments string **[A-3]**.
+- Tool-call argument cap = the builtin success cap (**64,000**) measured on the serialised arguments string; media refs are not counted toward the user-message bound. *(A-3 accepted.)*
 - Recall page size = the builtin success cap (**64,000**). *(A-1 resolved.)*
-- D6 `absoluteBudget` default **400,000 chars** (≈ **160,000** estimator tokens at 2.5 chars/token); trigger = `min(absoluteBudget, 0.9 × resolvedWindow)`; target = **80 % of the trigger** **[A-5]**.
+- D6 budget formula *(A-5 accepted; machine-verifiable)*, all quantities in estimator tokens (`chars × 2/5`):
+  - `W` = resolved window; `Wc = min(W, 0.9 × W)` (the 0.9 ceiling applied **before** subtraction);
+  - `budget = Wc − maxTokens − ceil(0.05 × W) − pinnedCoreOverhead` (the same formula `windowTrim` uses, with `Wc` in place of `W`);
+  - `absoluteShare = 160,000` tokens (= 400,000 chars ÷ 2.5), a ceiling on the **tool-result share** `Σ tokens(role == "tool" messages in the window)`;
+  - **over budget** ⇔ `Σ tokens(messages) + toolDefsTokens + recallSpanTokens > budget` **or** `toolResultShare > absoluteShare`;
+  - **target** = 80 % of the binding trigger: emptying proceeds oldest-first (floor excluded) until `toolResultShare ≤ 0.8 × absoluteShare` **and** `Σ tokens(messages) + toolDefsTokens + recallSpanTokens ≤ 0.8 × budget`;
+  - `absoluteShare` is operator-settable via the `absolute_trigger_chars` setting (default 400,000 chars).
 - Ingest bound default **8 MB (8,000,000 bytes)** per response, operator-settable; the setting's ceiling is enforced as **< `maxLineSize` × 0.8 = 8,388,608 bytes** (`maxLineSize` stays 10 MB = 10,485,760 bytes); `fetch_url`'s own fallback is aligned to 8 MB. *(A-8 resolved.)*
 - Cloud floor **128,000 tokens**; local/self-hosted floor: none.
-- Live-query cache TTL **24 h** **[A-9]**.
+- Live-query cache TTL **24 h**, on disk at `$OMNIPUS_HOME/cache/model_limits.json`. *(A-9 accepted.)*
 
 **HTTP / wire:**
 - `PUT` context settings with any cap > 150,000 → **HTTP 400**, body an `ErrorResponse` whose message names the field and the ceiling `150000`.
 - `PUT` with a negative or zero cap/trigger/bound → **HTTP 400**.
-- Agent view exposes `context_window_effective` (integer) and `context_window_source` (enum `operator | live | catalog | learned | floor`) and `context_window_override` (integer, optional); source value set is **[A-10]**.
-- New `LLMError` codes `turn_canceled`, `turn_timed_out`, and one thrash-guard code **[A-4]**, each with `x-user-messages` copy and attribution; generated Go and TS catalogues regenerated in the same commit (`make verify-contracts` exit 0).
+- Agent view exposes `context_window_effective` (integer) and `context_window_source` (enum `operator | live | catalog | floor`), `context_window_clamped` (boolean) and `context_window_override` (integer, optional). *(A-10 accepted.)*
+- New `LLMError` codes `turn_canceled`, `turn_timed_out`, and the thrash-guard code `context_unrecoverable` (attribution `product`), each with `x-user-messages` copy and attribution; generated Go and TS catalogues regenerated in the same commit (`make verify-contracts` exit 0).
 - The recall mark and the argument refusal each have an inline asyncapi schema with `additionalProperties: false` and a `const` discriminator, an exported `*Code`, a single producer through `marshalWithinBudget`, and an entry in the family register (ADR-060 D1 checklist).
 
 **Tool interface:**
@@ -310,7 +306,7 @@ As the process, every network or subprocess read is bounded at 8 MB by default (
 **Logging / events:**
 - Clamp: one WARN per agent build naming agent id, override, clamped value.
 - Floor: one WARN per agent build naming the model.
-- Warn threshold: one log line per result over 25,000 chars naming tool, size; counter `tool_result_large_total` **[A-11]**.
+- Warn threshold: one log line per result over 25,000 chars naming tool, size; counter `tool_result_large_total`. *(A-11 accepted.)*
 - Thrash guard: one ERROR line with session key, window, budget, emptied count.
 - Each of the four typed exits: log line with the raw cause, `EventKindTurnEnd` with the code, transcript entry.
 
@@ -319,9 +315,9 @@ As the process, every network or subprocess read is bounded at 8 MB by default (
 | System | In / Out | Contract | On failure | Development |
 |---|---|---|---|---|
 | Provider limits endpoints (Anthropic `/v1/models`, Google, OpenRouter, Mistral, Groq, xAI, Ollama `/api/show` + `/api/ps`, vLLM `max_model_len`) | out: model id; in: input/output token limits | HTTPS JSON per vendor; cached on disk with TTL; off the turn path | cloud: next rung; local: "set the context length" state | mocked HTTP servers in Go tests; real endpoints in holdout |
-| Catalog (ADR-067 `Resolve(provider, model)` + entry version) | in: `context_window`, entry version | in-process Go API | miss → learned → floor (cloud) / refuse (local) | real package with a test fixture catalog |
+| Catalog (ADR-067 `Resolve(provider, model)`) | in: `context_window` | in-process Go API | miss → floor (cloud) / refuse (local); clamp recomputed from the catalog on every resolution | real package with a test fixture catalog |
 | MCP servers (`pkg/mcp`) | in: `CallToolResult` content | MCP over stdio/HTTP via Go SDK | over ingest bound → tool failure; over cap → capped | fake server in tests |
-| Provider chat completion | out: assembled messages (projected); in: response, `prompt_tokens`, overflow errors | provider adapters | overflow → `context_too_long` + D8 learn; cancel/deadline → typed exits | fake provider in `pkg/agent` tests |
+| Provider chat completion | out: assembled messages (projected); in: response, overflow errors | provider adapters | overflow → `context_too_long` (no learning); cancel/deadline → typed exits | fake provider in `pkg/agent` tests |
 | Session archive (`pkg/memory`) | out: full results, meta (`skip`, `count`, projection state); in: history, archive | JSONL + meta JSON, atomic writes | write failure → logged, trim reported as failed (existing M4 guard) | real temp-dir store |
 | SPA ↔ gateway | context settings, agent effective window/source, new `LLMError` codes, recall-mark frame under Verbose chat | generated types + zod (Constraint #8) | zod drop + counter on mismatch | generated + zod |
 
@@ -370,7 +366,7 @@ Then it uses `<window>`.
 | 200,000 | model-switch re-window |
 
 **Scenario (AP) B-07: unknown cloud model floors at 128,000** — Traces to US-2.AC1
-Given a model absent from catalog, live and learned sources, on a known cloud vendor
+Given a model absent from catalog and live sources, on a known cloud vendor
 When resolved
 Then the window is 128,000, source `floor`, one WARN names the model.
 
@@ -429,7 +425,7 @@ Then they are capped at 64,000 / 64,000 / 64,000 / 10,000 respectively.
 **Scenario (HP) B-16: filter before cap** — Traces to US-3.AC8
 Given a 100,000-char result containing an API key at position 63,990–64,030
 When it enters with the sensitive filter enabled
-Then the archive copy and the capped copy both contain the redaction and never a fragment of the key. **[A-6]**
+Then the archive copy and the capped copy both contain the redaction and never a fragment of the key.
 
 **Scenario (EP) B-17: oversized user message refused at the gateway** — Traces to US-4.AC1
 Given a chat message of 64,001 chars
@@ -564,23 +560,11 @@ Then the code is `<code>`, and a log line, a turn-end event and a transcript ent
 |---|---|
 | context cancelled | turn_canceled |
 | deadline exceeded | turn_timed_out |
-| thrash guard | [A-4] code |
+| thrash guard | context_unrecoverable |
 
 **Scenario (HP) B-41: codes are contract-defined** — Traces to US-9.AC4
 When `make verify-contracts` runs
 Then it exits 0 and both generated catalogues contain the new codes with copy and attribution.
-
-### Feature: Learn from provider errors (D8)
-
-**Scenario (HP) B-42: lower-only learn** — Traces to US-10.AC1, AC2
-Given belief 1,048,576 and an overflow error stating 200,000
-When classified
-Then learned = 200,000 for (provider, model) and the next turn uses 200,000 with source `learned`; a later error stating 2,000,000 changes nothing.
-
-**Scenario (HP) B-43: reset on catalog version** — Traces to US-10.AC3, AC4
-Given learned keyed to version V and an override of 150,000
-When the catalog entry becomes V+1
-Then learned is cleared and the override remains.
 
 ### Feature: Settings (D9)
 
@@ -644,8 +628,8 @@ All Go tests: `CGO_ENABLED=0 go test -tags goolm,stdjson -count=1 -run '^TestNam
 | 18 | `TestMidTurnBudget_TriggerAndTarget` | Unit | B-34, B-25 | `min(absolute, 0.9W)`; one pass to target |
 | 19 | `TestMidTurnBudget_SameBudgetAsWindowTrim` | Unit | B-38 | one formula; `SummarizeTokenPercent` absent |
 | 20 | `TestTranslateError_TypedExits` | Unit | B-40 | cancel / deadline / thrash → codes, never `unknown` |
-| 21 | `TestTranslateError_LearnWindowLowerOnly` | Unit | B-42 | numeric extraction for 7 vendors; lower-only |
-| 22 | `TestLearnedWindow_ResetOnCatalogVersion` | Unit | B-43 | keyed to entry version; override survives |
+| 21 | `TestTranslateError_NoWindowLearning` | Unit | B-07 (non-behaviour) | an overflow error with a numeric limit classifies to `context_too_long` and changes no window record (D8 not adopted) |
+| 22 | `TestResolveContextWindow_ClampRecomputedFromCatalog` | Unit | B-03 / E11 | catalog value lowered → override re-clamped on next resolution; override itself persists |
 | 23 | `TestIngestBound_MCP` (pkg/mcp) | Unit | B-46 | bound ± 1 |
 | 24 | `TestIngestBound_SearchProviders` (pkg/tools) | Unit | B-46 | Brave / DDG / Perplexity |
 | 25 | `TestIngestBound_BelowArchiveLineCeiling` | Unit | US-12.AC4 | bound ≤ `maxLineSize` |
@@ -696,7 +680,7 @@ All Go tests: `CGO_ENABLED=0 go test -tags goolm,stdjson -count=1 -run '^TestNam
 | 3 | 64,000 | max | turn starts | B-18 |
 | 4 | 64,001 | max+1 | refused; nothing persisted | B-17 |
 | 5 | 500,000 | huge | refused | B-17 |
-| 6 | 1,000 + 3 media refs | media | turn starts (media not counted) [A-3] | B-18 |
+| 6 | 1,000 + 3 media refs | media | turn starts (media not counted) | B-18 |
 
 #### Dataset DS-3: Argument cap
 
@@ -708,32 +692,20 @@ All Go tests: `CGO_ENABLED=0 go test -tags goolm,stdjson -count=1 -run '^TestNam
 
 #### Dataset DS-4: Window resolution
 
-| # | Override | Global default | Live | Catalog | Learned | Provider class | Expected (value, source) | Traces to |
-|---|---|---|---|---|---|---|---|---|
-| 1 | — | — | — | 1,048,576 | — | cloud | 1,048,576 catalog | B-01 |
-| 2 | 100,000 | — | — | 1,048,576 | — | cloud | 100,000 operator | B-02 |
-| 3 | 2,000,000 | — | — | 1,048,576 | — | cloud | 1,048,576 operator-clamped + WARN | B-03 |
-| 4 | — | 150,000 | — | 1,048,576 | — | cloud | 150,000 operator | B-02 |
-| 5 | — | — | 200,000 | 1,048,576 | — | cloud | 200,000 live | B-04 |
-| 6 | — | — | — | 1,048,576 | 200,000 | cloud | 200,000 learned | B-42 |
-| 7 | — | — | — | — | — | cloud | 128,000 floor + WARN | B-07 |
-| 8 | — | — | 8,192 | — | — | ollama | 8,192 live | B-08 |
-| 9 | — | — | none | — | — | vllm | unusable, message | B-09 |
-| 10 | 32,768 | — | none | — | — | vllm | 32,768 operator | B-10 |
-| 11 | 150,000 | — | — | 1,048,576 | 100,000 | cloud | 100,000 learned (E11) | B-42 |
-| 12 | — | — | — | — | — | claude-cli | exempt | B-05 |
+| # | Override | Global default | Live | Catalog | Provider class | Expected (value, source) | Traces to |
+|---|---|---|---|---|---|---|---|
+| 1 | — | — | — | 1,048,576 | cloud | 1,048,576 catalog | B-01 |
+| 2 | 100,000 | — | — | 1,048,576 | cloud | 100,000 operator | B-02 |
+| 3 | 2,000,000 | — | — | 1,048,576 | cloud | 1,048,576 operator-clamped + WARN | B-03 |
+| 4 | — | 150,000 | — | 1,048,576 | cloud | 150,000 operator | B-02 |
+| 5 | — | — | 200,000 | 1,048,576 | cloud | 200,000 live | B-04 |
+| 6 | — | — | — | — | cloud | 128,000 floor + WARN | B-07 |
+| 7 | — | — | 8,192 | — | ollama | 8,192 live | B-08 |
+| 8 | — | — | none | — | vllm | unusable, message | B-09 |
+| 9 | 32,768 | — | none | — | vllm | 32,768 operator | B-10 |
+| 10 | — | — | — | — | claude-cli | exempt | B-05 |
 
-#### Dataset DS-5: Provider overflow messages (D8)
-
-| # | Message | Belief | Expected learned | Traces to |
-|---|---|---|---|---|
-| 1 | `This model's maximum context length is 16385 tokens. However, your messages resulted in 16648` | 128,000 | 16,385 | B-42 |
-| 2 | `prompt is too long: 208310 tokens > 200000 maximum` | 1,048,576 | 200,000 | B-42 |
-| 3 | `prompt is too long: 208310 tokens > 2000000 maximum` | 1,048,576 | unchanged | B-42 |
-| 4 | `maximum context length exceeded` (no number; Groq/Z.ai/MiniMax) | 128,000 | unchanged | B-42 |
-| 5 | `… 0 tokens maximum` | 128,000 | unchanged (non-positive ignored) | B-42 |
-
-#### Dataset DS-6: Mid-turn budget positions
+#### Dataset DS-5: Mid-turn budget positions
 
 | # | Window composition (oldest → newest) | Over budget by | Expected | Traces to |
 |---|---|---|---|---|
@@ -743,7 +715,7 @@ All Go tests: `CGO_ENABLED=0 go test -tags goolm,stdjson -count=1 -run '^TestNam
 | 4 | [U][A(R1)][R1]…[A(R5)][R5], target needs 3 | — | R1,R2,R3 emptied in one pass | B-25 |
 | 5 | [U(oversized via fault)][A(R1)][R1] | U | thrash guard typed error | B-37 |
 
-#### Dataset DS-7: Recall paging (total 1,178,522 chars, page 64,000)
+#### Dataset DS-6: Recall paging (total 1,178,522 chars, page 64,000)
 
 | # | offset | length | Expected | Traces to |
 |---|---|---|---|---|
@@ -754,7 +726,7 @@ All Go tests: `CGO_ENABLED=0 go test -tags goolm,stdjson -count=1 -run '^TestNam
 | 5 | 0 | 70,000 | clamped to 64,000 | E8 |
 | 6 | 0 | 0 | tool error | E8 |
 
-#### Dataset DS-8: Ingest bound (bytes)
+#### Dataset DS-7: Ingest bound (bytes)
 
 | # | Source | Bytes | Expected | Traces to |
 |---|---|---|---|---|
@@ -766,7 +738,7 @@ All Go tests: `CGO_ENABLED=0 go test -tags goolm,stdjson -count=1 -run '^TestNam
 | 6 | Perplexity | 8,000,001 | tool failure | B-46 |
 | 7 | fetch_url (fallback) | 8,000,001 | tool failure (fallback aligned to 8 MB) | B-46 |
 
-#### Dataset DS-9: Settings validation
+#### Dataset DS-8: Settings validation
 
 | # | Field | Value | Expected | Traces to |
 |---|---|---|---|---|
@@ -804,8 +776,8 @@ This feature **modifies existing functionality**.
 ### Functional Requirements
 
 **D2 — resolution**
-- **FR-001**: The system MUST resolve an agent's context window in the order per-agent override → global default → live provider query (cached) → catalog (ADR-067) → learned → floor, and record the winning source.
-- **FR-002**: The effective window MUST be `min(override-or-default, catalog-or-learned-or-live value)`; a clamp MUST log one WARN naming the agent and both values.
+- **FR-001**: The system MUST resolve an agent's context window in the order per-agent override → global default → live provider query (cached) → catalog (ADR-067) → floor, and record the winning source.
+- **FR-002**: The effective window MUST be `min(override-or-default, live-or-catalog value)`, recomputed on every resolution; a clamp MUST log one WARN naming the agent and both values.
 - **FR-003**: The live query MUST be served from an on-disk cache with a TTL **[A-9: 24 h]** and MUST NOT be performed on the turn path.
 - **FR-004**: The `max_tokens × 4` heuristic and both flat `128000` fallbacks MUST NOT exist; pre-turn, mid-turn, timeout-recovery and model-switch paths MUST read the one resolved value.
 - **FR-005**: Agents on `claude-cli` and `codex-cli` MUST be exempt from window resolution and enforcement.
@@ -818,15 +790,15 @@ This feature **modifies existing functionality**.
 **D4 — caps and bounds**
 - **FR-009**: Every tool result (builtin success, builtin failure, denied, MCP) MUST become a context message through exactly one function; no other site MUST construct a `role: "tool"` message.
 - **FR-010**: Caps MUST default to 62,500 (MCP) / 64,000 (builtin success) / 10,000 (builtin failure, head-and-tail) chars; a warn threshold of 25,000 chars MUST log and count without modifying; every cap MUST be operator-settable with a 150,000 ceiling; there MUST be no per-server or per-tool opt-out.
-- **FR-011**: An over-cap result MUST enter the window head-and-tail truncated with the recall mark; the full (filtered) content MUST be appended to the archive; the meta MUST record the id's cap state so reload renders the capped form.
+- **FR-011**: An over-cap result MUST enter the window head-and-tail truncated (50/50 split, the mark's length counted toward the cap) with the recall mark; the full (filtered) content MUST be appended to the archive; the meta MUST record the id's state (`capped`) so reload renders the capped form; the per-id states in window meta are exactly `capped | emptied`.
 - **FR-012**: Shipped per-tool caps MUST be aligned: `read_file` 64 KB unchanged; `browser_get_text` lowered to 64,000; shell 64,000 on success, 10,000 on failure.
-- **FR-013**: The sensitive-data filter MUST run on the full content before the cap, and the archive copy MUST be the filtered content **[A-6]**.
+- **FR-013**: The sensitive-data filter MUST run on the full content before the cap, and the archive copy MUST be the filtered content.
 - **FR-014**: A user message over the bound **[A-2: 64,000 chars]** MUST be refused at the gateway before a turn is registered, with a reply stating the size and the limit; nothing MUST be persisted and no error frame emitted.
 - **FR-015**: Tool-call arguments over the cap **[A-3: 64,000 chars, serialised]** MUST yield a structured refusal as the tool result (ADR-060 family: inline schema, `*Code`, single producer via `marshalWithinBudget`, register entry); the tool MUST NOT execute; the turn MUST continue.
 
 **D5 — empty in place**
 - **FR-016**: When the mid-turn check is over budget and the oldest over-budget content is a tool result of the current turn, the system MUST replace that message's content with the recall mark in the in-memory messages before the next LLM call, leaving role and `tool_call_id` intact.
-- **FR-017**: The recall mark MUST be produced by a single typed producer, MUST state tool name (sanitised, length-limited **[A-7]**), full size in chars, turn number **[A-12]**, `tool_call_id`, and the recall hint, and MUST NOT be assembled with ad-hoc formatting.
+- **FR-017**: The recall mark MUST be produced by a single typed producer, MUST state tool name (≤ 64 chars, non-printables stripped), full size in chars, turn number (index into `parseTurnBoundaries` of the current window plus the archive offset), `tool_call_id`, and the recall hint, and MUST NOT be assembled with ad-hoc formatting.
 - **FR-018**: The emptied-set MUST be persisted in the session meta alongside `skip`/`count`; the same pure projection function MUST be applied to the in-memory slice mid-turn and by history assembly at turn start, post-trim and reload, so the two views agree byte-for-byte.
 - **FR-019**: Emptying MUST NOT modify any archive line.
 - **FR-020**: The turn restore point MUST carry the emptied-set; rollback MUST restore archive length, `Skip` and the emptied-set atomically; the restore point MUST be refreshed after every mid-turn empty.
@@ -834,13 +806,13 @@ This feature **modifies existing functionality**.
 - **FR-022**: The mark MUST be rendered in the chat thread only when Verbose chat is on.
 
 **D5 §6.3 — recall**
-- **FR-023**: `recall_conversation` MUST accept a `tool_call_id` mode with optional `offset`/`length` (chars), returning one re-paired `role: "tool"` page of at most the page size **[A-1: 64,000]** stating the total size and next offset; pages MUST be contiguous and reach the last byte.
+- **FR-023**: `recall_conversation` MUST accept a `tool_call_id` mode (existing tool, new parameters — no Constraint #6 policy change) with optional `offset`/`length` (chars), returning one re-paired `role: "tool"` page of at most the page size **[A-1: 64,000]** stating the total size and next offset; pages MUST be contiguous and reach the last byte.
 - **FR-024**: The `tool_call_id` mode MUST be exempt from the 4,000/8,000-token span budgets, MUST pass the D4 choke point, MUST count toward the D6 total, and MAY itself be emptied later.
 - **FR-025**: Exactly one mode MUST be given; an unknown id MUST return a tool error containing the id.
 
 **D6 — mid-turn check**
 - **FR-026**: The budget check MUST run after every tool result is appended and before the next LLM call, in addition to the pre-turn site, using the same budget formula as `windowTrim`.
-- **FR-027**: The trigger MUST be `min(absoluteBudget, 0.9 × resolvedWindow)` with `absoluteBudget` defaulting to 400,000 chars (≈160,000 estimator tokens), expressed through the estimator as a ceiling on the tool-result share of the one budget; emptying MUST run to a target below the trigger **[A-5]**.
+- **FR-027**: The trigger MUST be `min(absoluteBudget, 0.9 × resolvedWindow)` with `absoluteBudget` defaulting to 400,000 chars (≈160,000 estimator tokens), expressed through the estimator as a ceiling on the tool-result share of the one budget, composed exactly as the D6 formula in §5 (Machine-Verifiable Constraints); emptying MUST run to the target (80 % of the binding trigger).
 - **FR-028**: By position: an earlier complete turn → advance `Skip` (unchanged); a current-turn tool result from an older step → empty; any result of the most recent assistant message → never.
 - **FR-029**: Mid-turn the system MUST NOT cut; `parseTurnBoundaries` MUST be unchanged.
 - **FR-030**: If still over budget after every eligible result is emptied, the system MUST stop, log one ERROR and end the turn with a typed code — never loop.
@@ -848,14 +820,14 @@ This feature **modifies existing functionality**.
 - **FR-032**: Order for one result MUST be ingest bound → cap → archive append → budget check → empty → assemble → LLM call.
 
 **D7 — typed exits**
-- **FR-033**: The four cancel/timeout returns MUST produce a log line with the raw cause, a turn-end event with the code, and a transcript entry; codes `turn_canceled` and `turn_timed_out` MUST be added to `LLMError.yaml` with copy and attribution; the thrash guard MUST have its own code **[A-4]**; generated catalogues MUST be regenerated in the same commit.
+- **FR-033**: The four cancel/timeout returns MUST produce a log line with the raw cause, a turn-end event with the code, and a transcript entry; codes `turn_canceled` and `turn_timed_out` MUST be added to `LLMError.yaml` with copy and attribution; the thrash guard MUST use `context_unrecoverable` (attribution `product`, never `context_too_long`); generated catalogues MUST be regenerated in the same commit.
 
-**D8 — learn**
-- **FR-034**: When an overflow error states a numeric limit below the current belief, the system MUST record it as learned for (provider, model), keyed to the catalog entry version; a higher number MUST be ignored; a new entry version MUST clear learned values and derived clamps; overrides MUST never expire.
-- **FR-035**: Reported `prompt_tokens` MUST be recorded for estimator calibration (no behaviour change).
+**D8 — NOT ADOPTED**
+- **FR-034**: The system MUST NOT learn, infer or persist a context window from provider error text; `contextOverflowSubstrings` MUST only classify (→ `context_too_long`). Operator overrides MUST never expire; the capability clamp MUST be recomputed from the catalog on every resolution.
+- *(FR-035 withdrawn — `prompt_tokens` calibration is not adopted.)*
 
 **D9 — settings**
-- **FR-036**: Per-surface caps, the absolute trigger, the ingest bound and the global default window MUST be first-class contract types on a settings endpoint **[A-13]**; each agent MUST expose effective window, source and override **[A-10]**; all MUST cross the boundary as generated types.
+- **FR-036**: Per-surface caps, the absolute trigger, the ingest bound and the global default window MUST be first-class contract types on `GET/PUT /api/v1/settings/context` (`contracts/components/schemas/ContextSettings.yaml`); each agent MUST expose `context_window_effective`, `context_window_source` (`operator | live | catalog | floor`), `context_window_clamped` and `context_window_override` on `Agent.yaml` / `AgentUpdateRequest.yaml` (the ADR-068 `/api/v1/providers/default-model` route is a separate concern and stays separate); all MUST cross the boundary as generated types.
 
 **D10 — ingest**
 - **FR-037**: Every network/subprocess read (MCP results, Brave/DuckDuckGo/Perplexity) MUST be bounded at ingest, default 8 MB (8,000,000 bytes), operator-settable; exceeding it MUST be a tool failure naming the bound, never a truncation; the setting's ceiling MUST be enforced as strictly below `maxLineSize` × 0.8 (`maxLineSize` stays 10 MB); `fetch_url`'s own fallback MUST be aligned to 8 MB.
@@ -909,12 +881,11 @@ This feature **modifies existing functionality**.
 | FR-031 | US-8 | B-38 | 19, 6 |
 | FR-032 | US-8 | B-39 | 30 |
 | FR-033 | US-9 | B-40, B-41 | 20, 36, 41, 44 |
-| FR-034 | US-10 | B-42, B-43 | 21, 22 |
-| FR-035 | US-10 | B-42 | 21 |
+| FR-034 | US-1 (non-behaviour) | B-07, B-03 | 21, 22 |
 | FR-036 | US-11 | B-44, B-45, B-14 | 39, 40, 41, 42 |
 | FR-037 | US-12 | B-46 | 23, 24, 25 |
 
-**Completeness check:** every FR has ≥1 scenario and ≥1 test; every scenario B-01…B-46 appears above.
+**Completeness check:** every FR has ≥1 scenario and ≥1 test; every scenario B-01…B-41 and B-44…B-46 appears above (B-42/B-43 withdrawn with D8).
 
 ### Exit-proof traceability (ADR-066 §17 → this spec)
 
@@ -936,33 +907,33 @@ This feature **modifies existing functionality**.
 - **Prerequisites:** Go 1.26.4 toolchain (targets 1.22+), Node 20+, `golangci-lint`, `govulncheck`; no new runtime dependencies (Constraint #1). No external accounts for tests (provider endpoints mocked); real endpoints only in holdout.
 - **Development setup:** standard checkout; `make gen-contracts` after editing `contracts/`; `npm run build && rm -rf pkg/gateway/spa && cp -r dist/spa/* pkg/gateway/spa/` before an embedded-binary check. Push for CI; do not run the full Go suite locally.
 - **Tech stack:** unchanged (Go single binary; React 19 SPA; JSONL sessions).
-- **Runtime:** no new files except the learned-window cache **[A-14]** and the live-limit cache **[A-9]** under `$OMNIPUS_HOME`; no new listeners; logs in `$OMNIPUS_HOME/logs/gateway.log`.
+- **Runtime:** no new files except the live-limit cache `$OMNIPUS_HOME/cache/model_limits.json` (A-9); no new listeners; logs in `$OMNIPUS_HOME/logs/gateway.log`.
 
 ---
 
 ## 10. Ambiguity Self-Audit
 
-The ADR is the confirmed brief; the operator cannot be asked during this phase. A-1, A-2 and A-8 were resolved by ADR commit `f01d5278` (2026-08-22) and the spec body now reflects them; the remaining 14 stay open for the operator. Each row states what the ADR leaves open, the assumption this spec proceeds under (labelled **[A-n]** where used), and the question for the operator to resolve afterwards.
+The ADR is the confirmed brief; the operator cannot be asked during this phase. A-1, A-2 and A-8 were resolved by ADR commit `f01d5278` (2026-08-22) and the spec body now reflects them; the remaining rows were resolved by the operator on 2026-08-22 (A-3…A-13 and A-15…A-17 accepted as stated; A-14 moot because D8 is not adopted) and the spec body reflects every acceptance. The table is kept as the record.
 
 | # | What's ambiguous | Likely agent assumption (used above) | Question to resolve |
 |---|---|---|---|
 | A-1 | **RESOLVED** (ADR f01d5278) — §6.3 now states 64,000. | Recall page = builtin success cap = **64,000** chars. | — |
 | A-2 | **RESOLVED** (ADR f01d5278) — §5 now says 64,000. | User-message bound = builtin success cap = **64,000**; the gateway reply quotes the live value; it is not a separate setting — it tracks the builtin cap. | — |
-| A-3 | Tool-argument cap: "over the cap" — which cap, measured on what? Media in user messages: counted? | Cap = builtin success cap (64,000) on the serialised arguments string; media refs are not counted toward the user-message bound. | Confirm the cap and the measurement basis. |
-| A-4 | D7 names `turn canceled`/`turn timed out` codes but not the thrash-guard code name, nor whether the existing `context_too_long` is reused. | New codes `turn_canceled`, `turn_timed_out`, and a distinct thrash code (e.g. `context_unrecoverable`, attribution `product`). | Name the thrash-guard code; confirm it is not `context_too_long`. |
-| A-5 | D6 "run down to a target below the trigger" — the target value is unspecified; and how the 400,000-char absolute composes with `windowTrim`'s existing budget is described in prose only. | Target = 80 % of the trigger; composition: total check uses `windowTrim`'s budget with `min(W, 0.9W)` ceiling applied before subtraction, and the absolute term caps the tool-result share in estimator tokens (160,000). | State the target and the exact composition formula. |
-| A-6 | Order of the sensitive-data filter relative to the cap (pass-2 MIN-002, not in §16a). | Filter first, then cap; archive holds the filtered full content. | Confirm. |
-| A-7 | Sanitising/length-limiting the MCP tool name inside the mark (MIN-005). | Name limited to 64 chars, non-printables stripped. | Confirm the rule. |
+| A-3 | **ACCEPTED** | Cap = builtin success cap (64,000) on the serialised arguments string; media refs are not counted toward the user-message bound. | — |
+| A-4 | **ACCEPTED** | New codes `turn_canceled`, `turn_timed_out`, thrash `context_unrecoverable` (attribution `product`); not `context_too_long`. | — |
+| A-5 | **ACCEPTED** | Target = 80 % of the trigger; `windowTrim`'s budget with the `min(W, 0.9W)` ceiling; the absolute term caps the tool-result share at 160,000 estimator tokens. Written as a machine-verifiable constraint in §5. | — |
+| A-6 | **ACCEPTED** | Filter first, then cap; archive holds the filtered full content. | — |
+| A-7 | **ACCEPTED** | Tool name in the mark ≤ 64 chars, non-printables stripped. | — |
 | A-8 | **RESOLVED** (ADR f01d5278, §16a MAJ-008). | Ingest bound default **8 MB** (8,000,000 bytes), operator-settable; ceiling enforced as `< maxLineSize × 0.8` (8,388,608; `maxLineSize` stays 10 MB); `fetch_url` fallback aligned to 8 MB. Note: 8 MB is read as decimal (8,000,000) — 8 MiB (8,388,608) would sit exactly at the ceiling and fail the strict `<`. | — |
-| A-9 | Live provider query cache TTL and location are unspecified. | 24 h; `$OMNIPUS_HOME/cache/model_limits.json`. | Confirm TTL and path. |
-| A-10 | D9 lists sources "operator / catalog / learned / floor"; D2's ladder also has `live`. How is a clamped override reported? | Enum `operator \| live \| catalog \| learned \| floor`, plus a boolean `clamped`. | Confirm the enum and clamp representation. |
-| A-11 | Warn-threshold "metric" sink unnamed (MIN-007). | WARN log line + in-process counter `tool_result_large_total` exposed where existing counters are. | Name the sink or drop the row. |
-| A-12 | "turn 6" in the mark — turn-number source undefined (MIN-001). | Index into `parseTurnBoundaries` of the current window + archive offset (stable across evictions). | Name the source. |
-| A-13 | D9 endpoint shape: new `/settings/context` vs fields on `/performance` or `/settings/memory`. | New `GET/PUT /api/v1/settings/context` with schema `ContextSettings.yaml`; agent fields added to `Agent.yaml`/`AgentUpdateRequest.yaml`. | Confirm the route and schema names. |
-| A-14 | Where learned windows and `prompt_tokens` samples persist. | `$OMNIPUS_HOME/context_windows_learned.json`, keyed `provider/model` → `{window, catalog_version, raw_error, ts}`. | Confirm path and whether a Settings "clear learned" action is wanted (MAJ-003 reset is version-based only). |
-| A-15 | Whether D4's cap state for a capped (not emptied) result is a distinct meta state or reuses the emptied-set. | Per-id state `capped \| emptied` in meta (pass-2 CRIT-001 recommendation, consistent with §6.1 "meta file records the id so reload shows the capped form"). | Confirm two states. |
-| A-16 | Whether the head-and-tail split is 50/50 and whether the mark counts toward the cap. | 50/50 split; the mark's length is included in the cap so the message never exceeds it. | Confirm. |
-| A-17 | The `tool_call_id` recall mode's effect on Constraint #6 seeding: new parameters on an existing tool need no new policy entry. | No policy change. | Confirm. |
+| A-9 | **ACCEPTED** | 24 h; `$OMNIPUS_HOME/cache/model_limits.json`. | — |
+| A-10 | **ACCEPTED** (without `learned` — D8 not adopted) | Enum `operator \| live \| catalog \| floor`, plus boolean `clamped`. | — |
+| A-11 | **ACCEPTED** | WARN log line + in-process counter `tool_result_large_total`. | — |
+| A-12 | **ACCEPTED** | Index into `parseTurnBoundaries` of the current window + archive offset (stable across evictions). | — |
+| A-13 | **ACCEPTED** | `GET/PUT /api/v1/settings/context` with `ContextSettings.yaml`; agent override fields on `Agent.yaml` / `AgentUpdateRequest.yaml`. The ADR-068 spec's `/api/v1/providers/default-model` is a different concern and stays separate. | — |
+| A-14 | **MOOT** — D8 not adopted; no learned windows, no `prompt_tokens` samples, no persistence file. | — | — |
+| A-15 | **ACCEPTED** | Two per-id states `capped \| emptied` in window meta. | — |
+| A-16 | **ACCEPTED** | 50/50 head-and-tail; the mark's length counts toward the cap. | — |
+| A-17 | **ACCEPTED** | No policy change (existing tool, new parameters). | — |
 
 ---
 
@@ -982,15 +953,15 @@ The ADR is the confirmed brief; the operator cannot be asked during this phase. 
 
 - Assumptions are the **[A-n]** rows in §10; each is used as labelled and is reversible by the operator's answer.
 - ADR-067 supplies `Resolve(provider, model)` with `context_window` and an entry version; this spec consumes both and specifies neither.
-- The existing estimator (2.5 chars/token) remains the unit of all token arithmetic until D8 calibration data justifies a change (out of scope).
+- The existing estimator (2.5 chars/token) remains the unit of all token arithmetic (no calibration path — D8 not adopted).
 
 ### Summary
 
-- User stories: **12** (P0: 6, P1: 5, P2: 1)
-- BDD scenarios: **46** (Happy Path 26 · Alternate Path 4 · Error Path 10 · Edge Case 6; 7 are outlines with 39 example rows)
-- Test datasets: **9**, **66** rows
-- Functional requirements: **37**
+- User stories: **11** (P0: 6, P1: 5) — US-10 (D8) withdrawn: not adopted
+- BDD scenarios: **44** (Happy Path 24 · Alternate Path 4 · Error Path 10 · Edge Case 6; 7 are outlines with 39 example rows) — B-42/B-43 withdrawn
+- Test datasets: **8**, **61** rows (DS-5 provider-overflow messages withdrawn; DS-4 learned column and two rows removed)
+- Functional requirements: **36** active (FR-034 re-stated as the D8 non-behaviour; FR-035 withdrawn)
 - Success criteria: **10**
-- Tests planned: **44** (25 unit, 16 integration, 3 E2E)
-- Ambiguities for the operator: **17** listed in §10 — **3 resolved** (A-1, A-2, A-8 per ADR commit f01d5278), **14 open**, all proceeding under labelled assumptions
+- Tests planned: **44** (25 unit, 16 integration, 3 E2E) — tests 21/22 re-pointed from learning to the non-behaviour and the clamp recompute
+- Ambiguities: **17** listed in §10 — **all closed** (A-1/A-2/A-8 resolved per ADR f01d5278; A-3…A-13, A-15…A-17 accepted by the operator 2026-08-22; A-14 moot with D8)
 - Gaps: GitNexus impact analysis must be re-run on `runTurn`, `windowTrim`, `RollbackAppended` and `NewAgentInstance` before editing (tools unavailable when this spec was written).
