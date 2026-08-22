@@ -809,7 +809,6 @@ func TestGenericTools_PassDocumentedFSOp(t *testing.T) {
 	}
 	toolsDir := filepath.Dir(thisFile)
 	browserDir := filepath.Join(toolsDir, "browser")
-	gatewayDir := filepath.Join(filepath.Dir(toolsDir), "gateway")
 
 	cases := []struct {
 		dir     string
@@ -853,10 +852,16 @@ func TestGenericTools_PassDocumentedFSOp(t *testing.T) {
 			browserDir, "tools.go", "browser_screenshot",
 			`tools.ResolvePath(ctx, policy, "browser_screenshot", "", tools.FSOpWrite, filename)`,
 		},
-		{
-			gatewayDir, "rest_workspace.go", "workspace_read (REST handler)",
-			`tools.ResolvePath(r.Context(), policy, "workspace_read", "", tools.FSOpRead, filePath)`,
-		},
+		// "workspace_read (REST handler)" (pkg/gateway/rest_workspace.go
+		// HandleWorkspace, FR-2.3c) is deliberately NOT pinned here anymore.
+		// HandleWorkspace was deleted in commit 7cbe692b ("refactor: remove
+		// 40 unreachable functions") as confirmed dead code — it was built
+		// but never registered on any mux (issue #470) and was superseded
+		// by ADR-044's `/preview/` mechanism. There is now no ResolvePath
+		// call site anywhere in pkg/gateway for this test to pin: grep
+		// confirms zero non-test callers of tools.ResolvePath /
+		// tools.ResolvePathAllowingPatterns under pkg/gateway. Re-add a case
+		// here if a gateway-side ResolvePath call site is introduced again.
 	}
 
 	for _, tc := range cases {
