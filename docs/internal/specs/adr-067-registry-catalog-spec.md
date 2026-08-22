@@ -1082,7 +1082,7 @@ Every BDD scenario above maps to ≥1 FR via its US; assembly-side scenario US-2
 ### Summary
 - **Gate status:** Phase 1 treated as confirmed (ADR = brief); Phase 5.5 PASSED; **grill findings 3C/14M/11m/6O all dispositioned in §1.1** (33 applied, 1 kept by operator decision (F-30), 1 follow-up noted (F-32); ADR-067 §8b amended).
 - **User stories:** 11 (P0: US-1,2,3,4,5,6,7,10,11 · P1: US-8,9)
-- **BDD scenarios:** 73 (HP 28 · AP 17 · EP 18 · EC 10), including 8 scenario outlines (9 + 4 + 5 + 4 + 8 + 6 + 6 example rows)
+- **BDD scenarios:** 72 (HP 25 · AP 13 · EP 21 · EC 11 · mixed 2), including 6 scenario outlines (9 + 4 + 5 + 8 + 6 + 6 example rows)
 - **Test datasets:** 8 (DS-1: 26 · DS-2: 10 · DS-3: 15 · DS-4: 9 · DS-5: 22 · DS-6: 78 generated · DS-7: 6 · DS-8: 6) = 172 data rows
 - **Functional requirements:** 37 · **Success criteria:** 15
 - **Tests planned:** 61 (38 unit · 3 agent-unit · 15 integration · 2 vitest · 3 CI gates)
