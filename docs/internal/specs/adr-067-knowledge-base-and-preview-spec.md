@@ -193,6 +193,30 @@ one for an illegal character, two for exceeding a 100-character component limit 
 > forbids proceeding past a CRITICAL rating without explicit acknowledgement; this section is
 > that acknowledgement.
 
+#### Which call sites this touches, and who supplies the input
+
+The acknowledgement above is not enough on its own, because Stage 0's argument is *"these are the
+operator's own files"* — and that is true of **one** of the four places these functions are
+called. Enumerated from source; there are no others outside tests.
+
+| Call site | Where the name comes from | Trust | What Stage 0 may do |
+|---|---|---|---|
+| `library.CleanRelPath` | the `?path=` of a Library call, naming a file already on disk | **Operator-controlled, authenticated** — the justified case | Name-shape rules stop applying. Containment untouched (FR-0002) |
+| `agent.SanitizeUploadFilename` | the `filename` field of a browser upload | **Semi-trusted** — caller authenticated, value not validated | **Nothing.** A create, so shape rules stay on |
+| `utils.SanitizeFilename` | the filename an attachment carries from **Discord, Telegram, Feishu, QQ** | **Untrusted and remote — attacker-chosen** | **Nothing, on any platform.** Its own doc says it *"genuinely CANNOT reject"* — only rewrite, since there is nobody to error to |
+| `notifications.sanitize` | an authenticated recipient's username | **Trusted, and structurally immune** — allow-listed to `[A-Za-z0-9._-]` before pathsafe sees it | **Nothing** |
+
+**So the relaxation applies to exactly one of the four**, and the machine agrees: the upstream
+impact of the sanitising function names four chat channels — which is what "this is the remote
+input path" looks like when measured rather than asserted.
+
+- **FR-0001d** Any relaxation MUST be scoped to the **validating** read path. The sanitising
+  function's behaviour MUST be unchanged for every caller on every platform. *Why this needs
+  saying:* the most natural implementation — making the illegal-character set build-tag-dependent
+  — changes **both**, because the validating and sanitising functions share one predicate. That
+  would relax the remote-attachment path as a side effect of relaxing the operator's read path,
+  which is the opposite of the intent.
+
 #### The rule is being applied to files Omnipus does not own
 
 This is a category error, not a trade-off. There are two populations of file and only one of
@@ -250,6 +274,38 @@ in the same folder is still refused.
 |---|---|---|---|
 | **Addressing safety** — `..`, traversal, control characters, root confinement | Every path, read or write | `CleanRelPath`, unchanged position | **Never.** Every platform, every build |
 | **Name shape** — Windows characters, reserved device names, trailing dot/space, length | Only names Omnipus **creates** | **After root resolution**, where mount context exists | Workspace storage only; skipped inside mounts |
+
+#### The mechanism, and what CI actually executes
+
+The split must be a **parameter, not a compile-time fork of behaviour** — otherwise half of
+Stage 0 ships with zero executed assertions while CI reports green.
+
+**Verified: no CI job runs Go tests on Windows.** All nineteen workflows run on Ubuntu or macOS.
+The only Windows exposure is cross-compilation, which proves the code **compiles** and asserts
+nothing about what it does. Worse, `cross-platform.yml`'s own header says Windows is *"covered by
+cross-platform-extra.yml"* — **a file that has never existed in this repository**, not in the
+tree and not in its history. The one place a reader would look for Windows coverage points at
+nothing. Correcting that comment is part of this stage.
+
+**Mechanism.** `pathsafe` gains a rule-set **value** with two instances, differing only in whether
+the Windows-shape rules are active. Every rule function takes the set as an argument; the existing
+exported functions keep their signatures and delegate to the active set, so none of the seventeen
+dependent symbols changes and the critical blast radius stays at zero call-site edits. The active
+set is chosen by `GOOS` in a pair of one-line files — **not** a custom build tag, which would be a
+runtime footgun in platform clothing: an operator running the Linux binary with the tag set would
+get Windows rules on a filesystem that never needed them, the exact behaviour Stage 0 removes.
+
+**Consequence for testing:** because the rule set is a value, *both* verdicts are exercised on one
+Linux runner by a table that passes each set explicitly. Only one fact needs a Windows machine —
+that the right set is selected there.
+
+**CI changes required, each a gate:** a narrow `windows-latest` job building `pathsafe` and
+`library` and running `pathsafe`'s tests; `GOOS=windows go vet` on the Linux leg to catch the
+selection file failing to compile; and correcting that workflow comment.
+
+> **Residual, stated rather than implied:** `pkg/library`'s Windows *runtime* behaviour stays
+> unexecuted — its symlink-escape tests need a privilege Windows withholds by default. The
+> Windows job builds that package and does not run it.
 
 ### Requirements — Stage 0
 
@@ -797,6 +853,119 @@ contains the page is the opaque origin plus zero egress.
 **Both mechanisms are required.** `sandbox` alone let five of seven vectors out; source directives
 alone let `window.open` out. An implementation shipping either half satisfies neither FR-005 nor
 FR-006 — and would pass any requirement that merely asks for "a policy".
+
+### 10.4 The inline allow-list
+
+Five requirements refer to "the allow-list" and until now it was never written down. This is it.
+**Inline** means one thing: the preview-token path serves these extensions *without*
+`Content-Disposition: attachment`, and every one of those responses carries the §10.3 policy.
+
+| Group | Extensions | Why safe inline |
+|---|---|---|
+| **Active documents** | `.html`, `.htm` | Sandboxed by §10.3. The class the policy exists for |
+| **Bundle code** | `.css`, `.js` | Subresources of an already-sandboxed document; they inherit its opaque origin |
+| **Fonts** | `.woff2`, `.woff`, `.ttf`, `.otf` | Not executable. Needs `Access-Control-Allow-Origin` to load at all (FR-019). **None of these four is in the workspace MIME map today**, so adding them is part of this work |
+| **Images** | `.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.avif`, `.ico`, `.bmp` | Raster formats; not documents in any context |
+| **`.svg`** | `.svg` | **On the list — see below** |
+| **Media** | `.mp3`, `.m4a`, `.aac`, `.ogg`, `.opus`, `.wav`, `.flac`, `.mp4`, `.webm`, `.mov` | Not documents |
+| **Inert text** | `.txt`, `.md`, `.json` | Rendered as text; no script host |
+| **Everything else, `.pdf` included** | — | **Attachment** |
+
+**`.pdf` is deliberately absent.** PDF.js fetches the bytes from the *authenticated* Library
+endpoint, where `attachment` stays exactly as today — a disposition header affects navigation,
+not `fetch()`. A PDF therefore never becomes a browser document at all, which is the point of
+FR-018.
+
+**Why `.svg` is on the list.** SVG **is** scriptable, and opened at its own URL it is a document
+that runs its own `<script>`. It is included anyway because the token path applies **one policy
+to every byte it serves** — so an SVG there gets the same containment `.html` gets: opaque
+origin, zero egress. Excluding it would break `<img src="logo.svg">` inside ordinary bundles.
+Inside the SPA it never becomes a document either: it is classified as an image and drawn in an
+`<img>`, which never runs an SVG's scripts, and fetched over the authenticated path, which serves
+attachments. **Both URLs are closed, by different means.**
+
+> **This is reasoned from the measured HTML result, not separately measured.** An SVG document
+> under the §10.3 policy was never run. Test 94 exists to close that gap and must pass before
+> `.svg` ships inline.
+
+**Adding to this table requires a type-confusion test in the same commit** (FR-016). Test 59
+reads this table as its source of truth.
+
+### 10.5 The preview token's envelope
+
+| Property | Rule |
+|---|---|
+| **Minting** | Only by an authenticated request, for a workspace and path the caller may already read. A token never widens access |
+| **Scope** | One workspace, one path — a single file, or one bundle root and its descendants. Never a whole workspace |
+| **Shape** | 32 random bytes from a cryptographic source, base64url — matching `pkg/agent/served_subdirs.go` |
+| **Lifetime** | **15 minutes.** Long enough to load and read a bundle; short enough that a token found later in a log is already dead. 96× below the 24-hour ceiling a copy-paste implementation would inherit |
+| **Renewal** | If a preview outlives its token, the SPA re-mints (an authenticated request, so no widening) and reloads the frame. FR-003c's visible error is the fallback when re-minting fails |
+| **Revocation** | Expiry, **plus** logout of the minting session, mount revoke, and deletion or move of the named path |
+| **Storage** | In-memory, keyed by token. A gateway restart invalidates every live preview — accepted, since a restart also drops the page holding them |
+| **Route** | `POST /api/v1/library/preview-token` mints; `/library-preview/<token>/<path>` serves, **GET and HEAD only** |
+| **Not reused** | **Not** `ServedSubdirs` — agent-scoped, one registration per agent, so it would evict a live `web_serve` token |
+
+**Two URLs, deliberately different:**
+
+| URL | Auth | Disposition | Carries §10.3? | Used by |
+|---|---|---|---|---|
+| `/api/v1/library/…?path=` | session cookie | **`attachment`, unchanged** | No | The SPA — PDF byte fetches, text reads, `<img>`/`<audio>`, downloads |
+| `/library-preview/<token>/…` | token in the path | **inline**, allow-list only | **Yes, every response** | Sandboxed documents and their subresources |
+
+### 10.6 How the document is embedded
+
+**`<iframe src="<token URL>">`. Never `srcdoc`.** Three reasons, the first fatal on its own:
+
+1. **`srcdoc` breaks FR-003** — its relative URLs resolve against the *embedder*, so no bundle
+   stylesheet, script, font or media would load.
+2. **`srcdoc` has no response**, so nothing carries the §10.3 policy — which is exactly what
+   FR-005 requires the origin to come from.
+3. It inherits its parent's context in engine-specific ways; a real URL does not.
+
+The frame also carries `sandbox="allow-scripts"` (defence in depth if the header is ever stripped
+by a proxy), `referrerpolicy="no-referrer"` (the token must not leave in a `Referer`), and an
+empty `allow=""` (delegates no camera, microphone or anything added to Permissions Policy later).
+
+> **Composition rule, and it is the opposite of intuition.** With a `sandbox` attribute *and* a
+> `sandbox` directive, the effective sandbox is the **intersection** — a capability exists only
+> if **both** grant it. Adding a token to one side alone grants nothing. Worth knowing before
+> someone "fixes" a broken preview by editing one of them.
+
+**Relationship to ADR-044.** Reused: the shape — a bare, path-token-authenticated prefix on the
+*main* listener. ADR-044 removed the separate preview listener deliberately and this does not
+bring it back. Also reused: the accepted trade that a URL-borne credential appears in logs and
+history. Not reused: `ServedSubdirs`, and not the `/preview/` prefix, which keeps its meaning.
+
+### 10.7 The SPA's own policy
+
+The SPA is served with **no policy at all** today. Tolerable while it rendered only its own code;
+not once it parses arbitrary PDFs from disk and from agents, next to the session cookie.
+
+Starting list, on every SPA shell response:
+
+```
+default-src 'self'; script-src 'self'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; media-src 'self' blob:; connect-src 'self'; frame-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'
+```
+
+**This is a proposal, not a measurement.** Unlike §10.3, no experiment stands behind it. Its
+assumptions, each with the symptom if wrong: no inline bootstrap script (white screen at boot);
+`worker-src` covers however the PDF.js worker URL resolves (**see below**); Tailwind and Radix
+need inline styles (broken layout); same-origin WebSocket matches `'self'` (the live connection
+silently fails); Shiki needs no WebAssembly (code blocks stop highlighting); nothing embeds the
+SPA (any embedding surface goes blank).
+
+**Non-negotiable regardless:** **no `'unsafe-eval'`.** If a bundled library needs it, the library
+is reconfigured or replaced — FR-019a is exactly that move for PDF.js.
+
+> **FR-019b and FR-019c can silently defeat each other.** PDF.js loads its parser as a separate
+> worker. If `worker-src` does not permit the URL the built worker resolves to, **PDF.js does not
+> fail — it falls back to parsing on the main thread**, which is what FR-019c forbids, reached by
+> satisfying FR-019b, with a console warning as the only symptom. Validate them together; test 96
+> asserts the *thread*, not the configuration.
+
+**Frozen only after** a headed run in Chromium, Firefox and Safari with zero policy violations,
+while exercising initial load, the WebSocket, a Mermaid diagram, a highlighted code block, and a
+PDF. Until then FR-019b's string is a proposal and this spec says so.
 
 ---
 
@@ -1404,6 +1573,34 @@ This feature **modifies existing functionality**. Behaviour that must be preserv
 `pkg/workspace` is called in a new way (mount → knowledge-base resolution). Both get
 explicit seam tests: items 4 and 26.
 
+### 13.4 The browser matrix, and why retries are dangerous here
+
+None of this exists today. Verified: `playwright.config.ts` declares **no** `projects` (Chromium
+only), CI installs Chromium alone, `retries: process.env.CI ? 3 : 2` applies to every spec, and
+nothing runs headed.
+
+**Retries are the dangerous half.** "The cookie was not readable" and "nothing reached the
+external origin" are not properties a fourth attempt establishes. A security assertion allowed to
+retry reports identically to one that passed first time — and those three retries were added for
+an unrelated reason (real-LLM latency under suite load), so nobody weighing that trade ever
+considered these tests.
+
+Required, each a named piece of work:
+
+1. **Three projects.** `isolation-chromium`, `isolation-firefox`, `isolation-webkit`, each with
+   `testMatch` limited to the two isolation spec files and **`retries: 0`** set at project level.
+   Scoping is not cosmetic — an unscoped Firefox project would run all ~50 existing specs, most
+   of them real-LLM, a second and third time.
+2. **Install the engines** in CI and in the worker image.
+3. **Assign the new specs to a shard.** `scripts/e2e-shards.sh check` already fails CI on a spec
+   assigned to no shard, so a spec that would silently never run cannot merge.
+4. **Headed only where §0's derivation earns it** — the top-level `.pdf` case and the
+   browser-viewer control. The rest stays headless.
+5. **Assert the configuration itself** — a test importing `playwright.config.ts` that asserts the
+   three projects exist and each has `retries === 0`. **Catches** deleting the Firefox project or
+   raising isolation retries to 1; without it the matrix silently collapses back to one
+   retry-tolerant engine while every gate stays green, which is the state we are in now.
+
 ---
 
 ## 14. Functional Requirements
@@ -1560,6 +1757,7 @@ explicit seam tests: items 4 and 26.
 | FR-0001a | US-0 | (shape checked after root resolution) | 0a |
 | FR-0001b | US-0 | (no shape rules inside mounts) | 0f |
 | FR-0001c | US-0 | (workspace naming, Windows builds) | 0e |
+| FR-0001d | US-0 | (sanitiser unchanged at remote ingest) | 0l |
 | FR-0002 | US-0 | Traversal still refused | 0b |
 | FR-0002a | US-0 | (control chars kept on all platforms) | 0g |
 | FR-0002b | US-0 | (`..` rejected independently) | 0h |
