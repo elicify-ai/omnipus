@@ -400,78 +400,122 @@ another package's tests does not transfer the guarantee.
 > **AC-14.2** A write whose version token is stale is refused, and the refusal is audited.
 > **AC-14.3** Lock-wait expiry produces an error within the bound, never a hang.
 
-### D15 — Render-first preview
+### D15 — Render-first preview, with isolation matched to the format
+
+**Revised 2026-08-22 after measurement.** See
+[preview isolation experiment](../specs/adr-067-preview-isolation-experiment-2026-08-22.md)
+— 5 policies × 2 load modes × 3 engines (Chromium 151, Firefox 153, WebKit 26.5),
+twice each, with server-side request logs as ground truth. 24 of 25 compared rows
+agreed across engines.
 
 The preview pane renders the artifact; **source appears only after pressing Edit**.
 
-| Format | Behaviour |
-|---|---|
-| HTML, and self-contained bundles (`index.html` + assets) | Rendered as a live page |
-| PDF | Rendered by the browser's native viewer, via `<iframe src>` |
-| Audio | Native `<audio>` |
-| Office (DOCX/PPTX/XLSX) | **Out of scope** — unchanged Download card |
+#### D15.1 — One policy per format, not one policy for everything
 
-**Delivery path: the Library endpoint, not `/preview/`.** Revision 1 named both, which is
-undecided rather than specified. `/preview/` is unusable here:
-`ServedSubdirs.Register` is agent-scoped with a **one-registration-per-agent cap** that
-"invalidates its token" on re-registration — so previewing a Library file would kill whatever
-live `web_serve` preview that agent had handed the operator — and the path is **token-only,
-unauthenticated by design**, so minting tokens for mount paths would open an unauthenticated
-read channel onto the operator's real disk. A new inline mode on `/api/v1/library/` (already
-behind `withUploadAuth` + rate limiting) carries the bytes.
+Revision 1 applied a single sandboxing policy to every inline file. The experiment
+showed that policy **breaks PDF rendering on all three engines** while being
+necessary for HTML. The error was treating "inline preview" as one thing.
 
-**The defence must travel with the response, not the embedder.** Revision 1 relied on a
-sandboxed iframe without `allow-same-origin`. That is an *embedder* attribute: a top-level
-navigation to the URL (operator "open in new tab", a link in another rendered page, a URL an
-agent puts in chat) loads the document first-party, with the `omnipus-session` cookie — which
-is `SameSite=Strict` and therefore **sent** on that same-site navigation. Removing
-`Content-Disposition: attachment` without a response-borne control is stored XSS on the
-gateway origin.
+**The protection matches what the format can execute:**
 
-**The inline response therefore carries its own CSP with the `sandbox` directive**, which
-binds the document however it is loaded. Required properties, stated behaviourally because the
-exact directive string must be verified in real browsers before it is fixed (see AC-15.4):
+| Class | Formats | Isolation | Rationale |
+|---|---|---|---|
+| **Active** | `.html`, `.htm`, and bundles | `sandbox allow-scripts` (no `allow-same-origin`) **plus** source directives | Arbitrary agent- or web-authored code executing inside the operator's session |
+| **Passive** | `.pdf`, audio, images, video | **No `sandbox`.** Strict source directives, exact `Content-Type`, `X-Content-Type-Options: nosniff` | Not scriptable against our DOM. A PDF's own scripts run inside the browser's PDF viewer, which is itself an isolation boundary |
+| **Everything else** | all other extensions | Unchanged — `Content-Disposition: attachment` | Not on the inline allow-list |
 
-- The document has an **opaque origin** — `sandbox` **without** `allow-same-origin`.
-- **Scripts execute** — `sandbox allow-scripts` — so an agent-built dashboard works. A page
-  whose JS is silently inert looks broken indistinguishably from a genuinely broken page (the
-  ADR-061 failure class).
-- **Same-origin subresources load**: external `<script src>`, `<link rel=stylesheet>`, fonts
-  and media from the bundle must all fetch. The existing `buildWorkspaceCSP` does **not**
-  permit this — it emits `script-src 'unsafe-inline'; style-src 'unsafe-inline'` with no
-  `'self'`, and no `font-src`/`media-src` at all, so they fall to `default-src 'none'`. A
-  bundle served under that policy renders broken and silent. The inline route needs its own
-  policy.
-- **No network egress** from the document: `connect-src 'none'`, `form-action 'none'`,
-  `base-uri 'none'`, `object-src 'none'`.
+> **The guarantee is deliberately NOT uniform, and must never be described as if it
+> were.** "Previews are sandboxed" is false as of this revision. The true statement is
+> "HTML previews are sandboxed; document formats are served as documents." Every
+> addition to the passive list is a security decision requiring the same scrutiny as
+> the first — FR-016 exists to stop that list growing silently.
 
-> ⚠️ **Known interaction requiring empirical verification:** under an opaque origin, CSP
-> `'self'` does not match the serving origin. A policy combining `sandbox` with `'self'`
-> source expressions may therefore block the very subresources it intends to allow. The spec
-> round MUST determine the working directive set in real browsers before it is frozen; if no
-> single-origin policy satisfies both properties, fall back to the recorded alternative
-> (serving preview content from a distinct origin — see A14).
+#### D15.2 — The active-content policy (measured)
 
-**Untrusted-content chrome.** Rendering agent-authored or web-downloaded HTML inside the
-application shell is a phishing surface: an opaque origin stops the page reading the session,
-but does not stop the operator typing credentials into a convincing fake prompt. The preview
-frame MUST carry a persistent, non-spoofable "untrusted content" boundary in Omnipus chrome
-outside the frame.
+For HTML: `sandbox allow-scripts` **without** `allow-same-origin`, combined with
+source directives. Measured outcome, identical on all three engines, in both
+top-level navigation and embedded modes:
 
-**Audio requires a MIME-table change, not a format claim.** `workspaceContentType`
-(`pkg/gateway/rest_workspace.go`) maps 14 extensions and contains **no audio types**; unknown
-extensions return `application/octet-stream`, and with `X-Content-Type-Options: nosniff` an
-`<audio>` element will not play that. The table and the policy's media source must both be
-extended. In scope: `.mp3`, `.m4a`, `.aac`, `.ogg`, `.opus`, `.wav`, `.flac`.
+- **Zero of seven egress vectors** reached an external origin (image, fetch, beacon,
+  WebSocket, iframe, form, popup).
+- `document.cookie` and `localStorage` **threw `SecurityError`** — not empty strings.
+  Meaningful, because the same page without `sandbox` read back the session cookie.
+- External stylesheet, external script and audio all loaded and worked.
 
-> **AC-15.1** A fixture bundle — `index.html` + external `.css` + external `.js` + a webfont +
-> an audio file — renders with **all five** subresources loaded. Asserted in a real browser,
-> not by reading the CSP string.
+**`'self'` is used, not an explicit origin.** ADR revision 1 warned that `'self'`
+might not match under an opaque origin. **That warning was wrong** — measured false on
+all three engines. `'self'` resolves against the URL the resource was served from, not
+the document's opaque origin. The two policies were indistinguishable on every field,
+and an explicit origin additionally hardcodes a hostname that breaks behind a reverse
+proxy (`gateway.public_url`).
+
+**Both mechanisms are required; neither alone suffices.** Measured: with source
+directives but no `sandbox`, `window.open` still reached the external origin on every
+engine — no CSP directive covers popup navigation. With `sandbox` but no source
+directives, five of seven vectors escaped.
+
+#### D15.3 — The type-confusion defence is the critical control
+
+Relaxing sandbox for passive formats creates exactly one serious attack: **an HTML
+document named `report.pdf`**. It is blocked by two properties that must both hold and
+must be tested together:
+
+1. `Content-Type` is derived from the **file extension**, never sniffed from content.
+2. `X-Content-Type-Options: nosniff` forbids the browser from overriding it.
+
+**This is the single most important test in stage 1.** A regression here turns the
+passive path into an unsandboxed HTML execution path.
+
+#### D15.4 — Known limits
+
+- **A sandboxed preview cannot call back to Omnipus.** `connect-src 'none'` blocks
+  same-origin fetch, and a request from `origin: null` is cross-origin to the gateway
+  regardless. Static artifacts only. **A preview needing live data belongs on the
+  existing `/preview/` dev-server route** — a different mechanism for a different job.
+- **Cookies are not sent to the page's own subresources** under `sandbox` (observed:
+  *"Cookie has been rejected because it is in a cross-site context"*). Any
+  authenticated same-origin subresource loses its cookie.
+- **`document.cookie` throws** rather than returning empty; an unguarded read
+  hard-errors.
+- **Webfonts in HTML bundles are CORS-rejected** from an opaque origin. Likely fixed by
+  emitting `Access-Control-Allow-Origin` on font responses — **unverified**; the test
+  fixture used an invalid font, and `document.fonts.status` was shown to report
+  `"loaded"` even on failure, so it is not a success oracle.
+
+#### D15.5 — Delivery path and headers
+
+Bytes are served by a new inline mode on `/api/v1/library/` (already behind
+`withUploadAuth` and rate limiting), **not** `/preview/` — whose `ServedSubdirs`
+registration is agent-scoped with a one-registration cap that would evict live
+`web_serve` tokens, and which is token-only unauthenticated by design.
+
+`rest_library.go` hard-codes `Content-Disposition: attachment`; an inline mode is
+required. **The MIME table lives in `rest_workspace.go` and is not reachable from
+`rest_library.go`** — the download handler serves via `http.ServeContent` and never
+calls it. Audio support therefore requires wiring a content-type source into the
+Library handler, not editing a table it does not consult.
+
+Audio extensions in scope: `.mp3`, `.m4a`, `.aac`, `.ogg`, `.opus`, `.wav`, `.flac`.
+
+**Untrusted-content chrome** remains required for active content: a persistent,
+non-spoofable boundary in Omnipus chrome outside the frame. An opaque origin stops a
+page reading the session; it does not stop it drawing a convincing login prompt.
+
+> **AC-15.1** A fixture bundle — `index.html` + external `.css` + external `.js` +
+> a real webfont — renders with all subresources loaded, in a real browser.
 > **AC-15.2** A top-level GET of an inline `.html` yields a document that cannot read
-> `document.cookie` and cannot reach the API. Required test.
-> **AC-15.3** Each audio extension returns a playable `Content-Type`, not `octet-stream`.
-> **AC-15.4** The shipped CSP is verified against AC-15.1 and AC-15.2 **in Chrome, Firefox and
-> Safari** before the directive string is frozen.
+> `document.cookie` and cannot reach any external origin. *(Met by the 2026-08-22
+> experiment; re-assert against the real handler.)*
+> **AC-15.3** Each audio extension returns a playable `Content-Type`, asserted against
+> the Library handler — not the workspace MIME table.
+> **AC-15.4** A `.pdf` renders inline in Chrome, Firefox and Safari. **Safari must be
+> verified headful** — headless WebKit failed to render PDFs even unprotected, so that
+> result is confounded and proves nothing.
+> **AC-15.5** An HTML document named `.pdf` does **not** execute: served as
+> `application/pdf`, `nosniff` present, no script runs. Required.
+> **AC-15.6** Adding an extension to the passive list fails CI unless the change also
+> updates the security note and adds an AC-15.5-style test for it.
+
 
 ### D16 — Deep-linking, and two markdown defects
 
@@ -571,7 +615,10 @@ sequencing is now the main lever left"* — was dropped in revision 1. Reinstate
 | A11 | Last-write-wins on KB files | With Syncthing replicating and agents writing unattended, a silently lost note is inevitable |
 | A12 | Read-only in mounted KBs | Removes the authoring tools from the KB they were designed for |
 | A13 | Create KBs at arbitrary host paths | A new broad capability, when workspace-first plus the existing move covers the need |
-| A14 | **Serve preview content from a distinct origin** (separate port or host) | Strongest isolation and immune to the `'self'`-under-opaque-origin problem in D15 — but it reintroduces the second listener ADR-044 deliberately removed. **Held as the fallback if AC-15.4 fails** |
+| A14 | **Serve preview content from a distinct origin** (separate port or host) | **Rejected on evidence, 2026-08-22.** It existed only as a fallback if `'self'` failed under an opaque origin; measurement on three engines showed `'self'` works, so the fallback is unnecessary and ADR-044's single listener stands |
+| A17 | **One sandboxing policy for every inline format** (revision 1's design) | Measured: breaks PDF rendering on all three engines while being necessary for HTML. Isolation is now matched to the format (D15.1) |
+| A18 | **Add `allow-downloads` to the sandbox so PDFs render** | Keeps one uniform policy, but is unverified and plausibly turns a failed render into a download prompt rather than a viewer. Also weakens the sandbox for active content, where downloads are an exfiltration route. Superseded by D15.1's per-format split |
+| A19 | **Drop inline PDF entirely, keep the download card** | Honest and zero-risk, but loses the format the operator most wants to read in place — and D15.1 delivers it without the risk that motivated dropping it |
 | A15 | **Index keyed by workspace+mount** | Would produce N indexes over one corpus and make D13's revoke destroy a sibling workspace's index |
 | A16 | **Blanket relative-link fix across all markdown** | Would make model-authored relative hrefs live links on the gateway origin (D16) |
 

@@ -143,7 +143,7 @@ All render; the HTML page's script runs; Edit reveals source for the HTML only.
 2. **Given** a rendered HTML page, **When** I press Edit, **Then** the pane shows the file's source in an editor.
 3. **Given** an HTML page whose script writes into the DOM, **When** it renders, **Then** the script's effect is visible.
 4. **Given** a folder containing `index.html`, an external `.css`, an external `.js` and a webfont, **When** I open `index.html`, **Then** all four load and the page appears styled, scripted and correctly typeset.
-5. **Given** a `.pdf`, **When** I select it, **Then** the browser's PDF viewer displays it inside the pane.
+5. **Given** a `.pdf`, **When** I select it, **Then** the browser's PDF viewer displays it inside the pane (served WITHOUT `sandbox`, per ADR-067 D15.1).
 6. **Given** an `.mp3`, **When** I select it, **Then** an audio player appears and plays it.
 7. **Given** an unsupported binary (`.zip`), **When** I select it, **Then** the existing download card appears unchanged.
 
@@ -1014,6 +1014,10 @@ come last within their stage because they are slowest and most environment-depen
 | 10 | `E2E_PreviewIsolation_TopLevelNavigation` | E2E (browser) | US-2 AS-1 | Cookie unreadable, origin opaque |
 | 11 | `E2E_PreviewIsolation_NetworkBlocked` | E2E (browser) | US-2 AS-3 | Egress blocked |
 | 12 | `E2E_PreviewIsolation_BrowserMatrix` | E2E (browser) | MV-13 | Chrome + Firefox + Safari |
+| 57 | `E2E_PassivePdfRendersUnsandboxed` | E2E (browser) | US-1 AS-5 | **Real browser, 3 engines.** PDF renders under the passive policy |
+| 58 | `TestTypeConfusion_HtmlNamedPdfDoesNotExecute` | Integration + E2E | FR-015 | **The critical control.** Served `application/pdf`, `nosniff` present, no script runs |
+| 59 | `TestPassiveAllowList_RequiresTypeConfusionTest` | Unit (build gate) | FR-016 | Adding an extension without a test fails CI |
+| 60 | `E2E_FontLoadsWithCorsHeader` | E2E (browser) | AC-15.1 | Real font + `Access-Control-Allow-Origin`; `document.fonts.status` is NOT the oracle |
 | **Stage 2** |
 | 13 | `TestDetectKnowledgeBase_MarkerMatrix` | Unit | US-4 AS-1,2,3 | Both markers, neither |
 | 14 | `TestDetectKnowledgeBase_NoContentReads` | Unit | US-4 AS-4 | Read-counting fake |
@@ -1164,6 +1168,10 @@ explicit seam tests: items 4 and 26.
 - **FR-011** The system MUST hide `%%…%%` comments when rendering markdown.
 - **FR-012** The system MUST make the selected file addressable by URL.
 - **FR-013** The system MUST NOT alter relative-link handling outside the knowledge-base reader.
+- **FR-014** The system MUST apply `sandbox` isolation to active content (HTML) and MUST NOT apply it to passive document formats (PDF, audio, images, video).
+- **FR-015** The system MUST derive `Content-Type` from the file extension, never from content sniffing, and MUST send `X-Content-Type-Options: nosniff` on every inline response.
+- **FR-016** The system MUST fail its build if an extension is added to the passive inline allow-list without a corresponding type-confusion test.
+- **FR-017** The system MUST NOT describe previews as uniformly sandboxed in any operator-facing text; the isolation class is per format.
 
 **Detection and identity (stage 2)**
 - **FR-020** The system MUST treat a folder as a knowledge base if its root contains `.omnipus-vault/` or `.obsidian/`.
@@ -1274,6 +1282,10 @@ explicit seam tests: items 4 and 26.
 | FR-011 | US-3 | Private comments do not render | 6 |
 | FR-012 | US-3 | A selected file is addressable by URL | 7, 8 |
 | FR-013 | — (NB-4) | (regression) | Existing chat suites |
+| FR-014 | US-1, US-2 | Documents and media render natively | 57 |
+| FR-015 | US-2 | An HTML file named .pdf does not execute | 58 |
+| FR-016 | US-2 | (build gate) | 59 |
+| FR-017 | US-2 | (documentation) | — doc review |
 | FR-020 | US-4 | Marker presence decides status | 13 |
 | FR-021 | US-4 | Detection reads no file contents | 14 |
 | FR-022 | US-4 | Creating writes only the Omnipus marker | 15 |
