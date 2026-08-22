@@ -258,14 +258,35 @@ func TestSpaCsp_DirectiveFloor(t *testing.T) {
 // get index.html and 200, or a handler that 404'd everything would pass the
 // first assertion and break the whole application.
 func TestSpaEmbed_PdfJsAssetMissingIs404(t *testing.T) {
+	// The names below are deliberately IMPOSSIBLE, not merely plausible.
+	//
+	// An earlier version listed the REAL asset names (cmaps/Adobe-Japan1-UCS2.bcmap,
+	// wasm/openjpeg.wasm, pdf.worker.min.mjs). That passed on a developer
+	// machine, where pkg/gateway/spa holds only the placeholder index.html, and
+	// FAILED IN CI — because CI's test job runs `npm run build` and copies
+	// dist/spa into the embed dir, so those assets genuinely ARE embedded there
+	// and 200 was the correct answer. The test was asserting "this file is
+	// missing" while never establishing that it was missing; it measured which
+	// machine it ran on.
+	//
+	// A name that cannot be produced by any build is absent in both worlds, so
+	// this now tests the handler instead of the environment.
 	missing := []string{
-		"/pdfjs/cmaps/Adobe-Japan1-UCS2.bcmap",
-		"/pdfjs/standard_fonts/FoxitSans.pfb",
-		"/pdfjs/wasm/openjpeg.wasm",
-		"/pdfjs/iccs/CGATS001Compat-v2-micro.icc",
-		"/pdfjs/pdf.worker.min.mjs",
-		"/pdfjs/asset-manifest.json",
+		"/pdfjs/cmaps/__omnipus_absent_test_asset__.bcmap",
+		"/pdfjs/standard_fonts/__omnipus_absent_test_asset__.pfb",
+		"/pdfjs/wasm/__omnipus_absent_test_asset__.wasm",
+		"/pdfjs/iccs/__omnipus_absent_test_asset__.icc",
+		"/pdfjs/__omnipus_absent_test_asset__.mjs",
+		"/pdfjs/nested/deeper/__omnipus_absent_test_asset__.json",
 	}
+
+	// No runtime "is it really absent?" guard is needed: the sentinel component
+	// cannot be produced by vite, by pdfjs-dist, or by the asset-copy plugin, so
+	// absence is guaranteed by the name rather than by the environment. The
+	// vacuity risk that remains — a handler that 404s EVERYTHING would satisfy
+	// every assertion above — is covered by the positive control subtest below,
+	// which requires an ordinary client-side route to still get the shell.
+
 	for _, target := range missing {
 		t.Run(target, func(t *testing.T) {
 			rec := spaResponse(t, target)

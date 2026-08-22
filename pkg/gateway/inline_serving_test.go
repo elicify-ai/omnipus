@@ -625,8 +625,16 @@ func TestInlineServingRoutes_PolicyTypeAndDisposition(t *testing.T) {
 				policy := h.Values("Content-Security-Policy")
 
 				if wantInline {
-					assert.Equal(t, "inline", disposition,
-						"§10.4 lists %q as inline", filepath.Ext(fx.name))
+					// The filename is KEPT on inline responses. A bare "inline"
+					// is not a hardening measure — the type comes from the
+					// extension table plus nosniff, never from the name — and
+					// dropping it changes what the browser offers when the
+					// reader saves from an inline view. serveMedia sent
+					// `inline; filename="…"` before this helper existed, and
+					// tests/integration/media_store_swap_test.go asserts it
+					// still does.
+					assert.Equal(t, `inline; filename="`+fx.name+`"`, disposition,
+						"§10.4 lists %q as inline, and the filename survives", filepath.Ext(fx.name))
 					require.Len(t, policy, 1,
 						"FR-008b: an inline response carries exactly one Content-Security-Policy")
 					assert.Equal(t, inlinePolicyFromSpec, policy[0],
@@ -701,7 +709,7 @@ func TestApplyLibraryPreviewByteHeaders_PolicyOnEveryResponse(t *testing.T) {
 		got := applyLibraryPreviewByteHeaders(rec, "index.html")
 
 		assert.Equal(t, gen.LibraryInlineDispositionDispositionInline, got)
-		assert.Equal(t, "inline", rec.Header().Get("Content-Disposition"))
+		assert.Equal(t, `inline; filename="index.html"`, rec.Header().Get("Content-Disposition"))
 		assert.Equal(t, inlinePolicyFromSpec, rec.Header().Get("Content-Security-Policy"))
 		assert.Equal(t, "text/html; charset=utf-8", rec.Header().Get("Content-Type"))
 		assert.Equal(t, "nosniff", rec.Header().Get("X-Content-Type-Options"))

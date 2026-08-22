@@ -157,7 +157,7 @@ func applyLibraryByteHeaders(
 	h.Set(headerContentTypeOptions, nosniffValue)
 
 	if disposition == gen.LibraryInlineDispositionDispositionInline {
-		h.Set(headerContentDisposition, "inline")
+		h.Set(headerContentDisposition, contentDispositionInline(displayName))
 		// FR-008b / MV-13: every inline response, whatever the file's type.
 		h.Set(headerContentSecurityPolicy, libraryIsolationPolicy)
 		return disposition

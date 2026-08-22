@@ -504,7 +504,7 @@ func TestLibraryPreview_MintRoundTrip(t *testing.T) {
 	rec := f.serve(t, http.MethodGet, minted.Url)
 	require.Equal(t, http.StatusOK, rec.Code)
 	assert.Equal(t, "text/html; charset=utf-8", rec.Header().Get("Content-Type"))
-	assert.Equal(t, "inline", rec.Header().Get("Content-Disposition"),
+	assertInlineDisposition(t, rec.Header().Get("Content-Disposition"), "",
 		"§10.4: an allow-listed type is served INLINE on the token path, never as an attachment")
 	assert.Contains(t, rec.Body.String(), "bundle entry")
 
@@ -721,7 +721,7 @@ func TestLibraryPreview_DispositionFollowsTheAllowList(t *testing.T) {
 		assert.Equal(t, tc.contentType, rec.Header().Get("Content-Type"),
 			"%s: FR-015b — the type comes from the compiled-in table", tc.rel)
 		if tc.inline {
-			assert.Equal(t, "inline", rec.Header().Get("Content-Disposition"),
+			assertInlineDisposition(t, rec.Header().Get("Content-Disposition"), "",
 				"%s: §10.4 allow-listed types are served inline", tc.rel)
 		} else {
 			assert.Contains(t, rec.Header().Get("Content-Disposition"), "attachment",

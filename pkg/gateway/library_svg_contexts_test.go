@@ -96,7 +96,7 @@ func TestSvgInSpa_ImageNotDocument(t *testing.T) {
 		rec := serveViaLibraryPreviewRoute(t, "logo.svg", []byte(scriptedSVG))
 
 		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-		assert.Equal(t, "inline", rec.Header().Get("Content-Disposition"),
+		assertInlineDisposition(t, rec.Header().Get("Content-Disposition"), "logo.svg",
 			"§10.4 lists .svg as inline on the token path")
 		assert.Equal(t, "image/svg+xml", rec.Header().Get("Content-Type"))
 		assert.Equal(t, "nosniff", rec.Header().Get("X-Content-Type-Options"))

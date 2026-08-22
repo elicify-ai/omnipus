@@ -703,7 +703,17 @@ func asciiFallbackFilename(name string) string {
 // "Content-Disposition:" and a browser that renders the file inline instead of
 // downloading it. A silent downgrade from attachment to inline is exactly the
 // class of failure this handler must not have.
-func contentDispositionAttachment(filename string) string {
+// contentDispositionDisposition builds an RFC 6266 Content-Disposition value
+// for either disposition, sharing one encoder so the two can never disagree
+// about how a name is escaped.
+//
+// The inline form KEEPS the filename. Dropping it (a bare "inline") is not a
+// hardening measure — the type comes from the extension table plus nosniff,
+// never from the name — and it silently changes what the browser offers when
+// the reader saves from an inline view. Unifying the two routes on the shared
+// helper did exactly that to the media route, and only the integration test
+// noticed.
+func contentDispositionWith(kind, filename string) string {
 	ascii := asciiFallbackFilename(filename)
 	needsExtended := false
 	for i := 0; i < len(filename); i++ {
@@ -713,14 +723,27 @@ func contentDispositionAttachment(filename string) string {
 		}
 	}
 	if !needsExtended {
-		return `attachment; filename="` + ascii + `"`
+		return kind + `; filename="` + ascii + `"`
 	}
 	// filename first, filename* second: RFC 6266 §4.3 says a recipient that
 	// understands both MUST prefer filename*, and Go's own mime.ParseMediaType
 	// does, so ordering is a courtesy to lenient parsers rather than a
 	// correctness requirement — but it costs nothing to put the fallback where
 	// a strictly-first-wins parser finds the safe one.
-	return `attachment; filename="` + ascii + `"; filename*=UTF-8''` + percentEncodeRFC5987(filename)
+	return kind + `; filename="` + ascii + `"; filename*=UTF-8''` + percentEncodeRFC5987(filename)
+}
+
+// contentDispositionInline is the inline half. An empty name yields a bare
+// "inline", which is the correct value when there is no name to offer.
+func contentDispositionInline(filename string) string {
+	if filename == "" {
+		return "inline"
+	}
+	return contentDispositionWith("inline", filename)
+}
+
+func contentDispositionAttachment(filename string) string {
+	return contentDispositionWith("attachment", filename)
 }
 
 // --- GET /library/{workspace_id}/download ---

@@ -19,6 +19,7 @@ package gateway
 
 import (
 	"encoding/json"
+	"mime"
 	"net/http"
 	"net/url"
 	"os"
@@ -167,7 +168,15 @@ func TestLibraryInlineDisposition_AgreesWithWhatIsActuallyServed(t *testing.T) {
 				"the announced Content-Type must be the one the bytes actually arrive with")
 
 			wantInline := answer.Disposition == gen.LibraryInlineDispositionDispositionInline
-			gotInline := served.Header().Get("Content-Disposition") == "inline"
+			// Parse the disposition TYPE rather than string-comparing the
+			// whole header: an inline response carries the filename too
+			// (`inline; filename="report.html"`), so `== "inline"` silently
+			// answered false for every case once the shared helper started
+			// preserving it — which made the endpoint look like it disagreed
+			// with what was actually served.
+			gotType, _, parseErr := mime.ParseMediaType(served.Header().Get("Content-Disposition"))
+			require.NoError(t, parseErr, "Content-Disposition must be a well-formed RFC 6266 value")
+			gotInline := gotType == "inline"
 			assert.Equal(t, wantInline, gotInline,
 				"the announced disposition must be the one the serving route chooses")
 		})
