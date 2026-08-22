@@ -84,9 +84,6 @@ import {
   CliDetect as CliDetectSchema,
   // external-executor-cli-path-detection spec (ADR-030): create-time validate.
   CliValidateResponse as CliValidateResponseSchema,
-  // Agent System P0 fix: real auto-applied CLI flags (replaces misleading
-  // placeholder ghost-text in the executor cli_args field).
-  ExecutorDefaults as ExecutorDefaultsSchema,
   // Real, live command-line preview for a subagent_3p executor's current
   // settings (replaces the static AutoAppliedFlags description with the
   // ACTUAL computed argv/command_line for what the operator has typed).
@@ -2319,32 +2316,11 @@ export function fetchCliValidate(
   )
 }
 
-// fetchExecutorDefaults returns the static reference list of CLI flags
-// Omnipus automatically applies to a subagent_3p executor invocation, one
-// entry per supported CLI (claude-code / codex / opencode) — e.g. the
-// non-interactive-posture flags each driver's `buildArgs` always sets itself
-// (`pkg/agent/runner/driver_*.go`) and that `argsafety.go`
-// (`filterDangerousCLIArgs`) prevents an operator's `executor_cli_args`
-// free-text field from silently overriding. Rendered read-only in both the
-// create wizard (Step1Identity → ExecutorInputs) and the edit form
-// (AgentProfile) so operators see the REAL applied config instead of
-// misleading placeholder ghost-text (Agent System P0 fix). Not agent-scoped
-// and not filterable server-side — the endpoint always returns all three
-// entries; callers select the one matching the currently-chosen CLI
-// (`useExecutorDefaults`).
-export function fetchExecutorDefaults(): Promise<ExecutorDefaults[]> {
-  return request<ExecutorDefaults[]>(
-    '/agents/executor-defaults',
-    undefined,
-    z.array(ExecutorDefaultsSchema) as ZodType<ExecutorDefaults[]>,
-  )
-}
-
 // fetchExecutorPreview computes the REAL command line Omnipus would spawn for
 // a subagent_3p external-CLI worker with the given settings — argv sourced
 // from the same buildArgs() logic each driver (claude/codex/opencode) uses at
-// real dispatch time, not a hand-maintained description like
-// fetchExecutorDefaults above. Stateless and body-driven (mirrors
+// real dispatch time, not a hand-maintained static description. Stateless and
+// body-driven (mirrors
 // fetchCliValidate) so it works both from the create wizard, where no agent
 // id exists yet, and from an existing agent's edit form. Any cli_args token
 // the safety filter would strip at real dispatch time is excluded from the

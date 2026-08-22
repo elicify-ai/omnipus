@@ -1,0 +1,76 @@
+{
+  // Dead-code / unused-export/dependency detector (issue: replace-Go-scanner
+  // follow-up for the frontend). Scope mirrors eslint.config.js's ownership
+  // boundary comment: the root package.json (@omnipus/ui) owns src/ + tests/
+  // only. pkg/**, docs/**, scripts/**, spikes/**, packages/** belong to other
+  // tooling (Go backend, ad-hoc/prototype scripts, a separately-versioned
+  // component-library re-export package) and are deliberately out of scope
+  // here, not silently "clean".
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  // src/main.tsx, vite.config.ts, vite.lib.config.ts, playwright.config.ts,
+  // eslint.config.js, src/test/setup.ts, tests/e2e/global-{setup,teardown}.ts
+  // and tests/e2e/**/*.spec.ts are all picked up automatically by knip's
+  // vite/playwright/eslint/vitest plugins (confirmed via `knip`'s own
+  // "Configuration hints" — each one flagged as a redundant entry when
+  // listed explicitly). src/index.ts is NOT redundant: it's vite.lib.config.ts's
+  // library build entry (@omnipus/ui's dist/lib output) and nothing else
+  // in src/ imports it, so it needs to stay explicit.
+  "entry": [
+    "src/index.ts",
+    "src/**/*.test.{ts,tsx}",
+    "tests/**/*.test.{ts,tsx}",
+    // Deliberately node:test, not a Playwright spec — its own header says
+    // "Run directly: node --experimental-strip-types --test
+    // tests/e2e/setup.poll.selfcheck.ts", named so Playwright's testMatch
+    // skips it. Nothing imports it, so it's a real, standalone entry point,
+    // not dead code — without this it re-appears as a false-positive
+    // "unused file" on every run.
+    "tests/e2e/setup.poll.selfcheck.ts"
+  ],
+  "project": [
+    "src/**/*.{ts,tsx}",
+    // .css is needed too, not just ts/tsx: src/styles/globals.css @imports
+    // @fontsource/* and 'tailwindcss' by CSS import, not a JS import — without
+    // scanning it those packages read as unused dependencies (verified: they
+    // disappeared from the findings the moment this glob was narrowed to
+    // ts/tsx only, then reappeared as false positives).
+    "src/**/*.css",
+    "tests/**/*.{ts,tsx}"
+  ],
+  "ignore": [
+    // Regenerated from contracts/ via scripts/gen-contracts.sh — legitimately
+    // exports types nothing in the app imports yet (Constraint #8, CLAUDE.md).
+    // Never hand-edited; never treated as a dead-code source.
+    "src/lib/api/generated/**",
+    // shadcn/Radix UI primitives re-export every sub-part of the underlying
+    // Radix component (Portal/Overlay/Group/Separator/...) by convention,
+    // even when the app currently only consumes a subset. That's the
+    // intended shape of a component library, not dead code.
+    "src/components/ui/**"
+  ],
+  "ignoreDependencies": [
+    // Invoked as CLI binaries from scripts/gen-contracts.sh and
+    // scripts/_gen-ts.sh (shell scripts, not package.json "scripts" entries
+    // or JS imports) — knip cannot trace shell-script CLI usage, so these
+    // read as unused even though `make gen-contracts` depends on them.
+    "@asyncapi/parser",
+    "@redocly/cli",
+    "openapi-typescript",
+    "openapi-zod-client",
+    // Confirmed real usage in src/components/library/preview/libraryLanguages.ts:
+    // `import(\`@codemirror/legacy-modes/mode/${modeExport}\`)` — a dynamic
+    // subpath import built from a template literal. Knip's static resolver
+    // can't follow the interpolated specifier, so this reads as unused even
+    // though it demonstrably isn't.
+    "@codemirror/legacy-modes"
+  ],
+  "vite": {
+    "config": ["vite.config.ts", "vite.lib.config.ts"]
+  },
+  "playwright": {
+    "config": "playwright.config.ts"
+  },
+  "eslint": {
+    "config": "eslint.config.js"
+  }
+}
