@@ -221,6 +221,29 @@ The four returns in §1.4 gain a typed code, a log line with the raw cause, and 
 
 First-class surfaces per Constraint #8 (schema, generated types, REST, SPA): the per-surface caps from D4 with the 150,000 ceiling; the D6 trigger; and the **effective context window shown read-only with its source** (operator / catalog / learned / floor) plus an override. That number is currently unreachable from the UI and the API, which is half of why the 8× error stayed invisible.
 
+### 10.1 UI surfaces, walked through (added 2026-08-22)
+
+*Grounding.* Onboarding is three steps — name → password → **model key** (`src/routes/onboarding.tsx`, Spec-6 FR-12.3). Its provider picker already groups by **company → plan → region** from `src/lib/generated/providerCatalog.ts` (23 entries, emitted by `pkg/providers/catalog/gen`). Settings → Providers (`ProvidersSection.tsx`, `ProviderPickerSheet.tsx`, `ProviderRow.tsx`) holds exactly one config per catalog entry, a search-and-group picker sheet, a test-validation banner per row, an "Anthropic endpoint" chip for dual-protocol entries, and a *refresh models* action that calls the provider live. **The screens are the right shape already; what changes is what feeds them and five specific behaviours.**
+
+**Onboarding — step 3.**
+- The picker shows the **Popular** set first; *"Show all providers"* expands to the full registry (~190), grouped by company, searchable. The cloud-IAM exclusions are listed but not selectable, with the reason.
+- Plan and region selectors stay; they now map to registry variants (`zai` / `zai-coding-plan` / `zhipuai` …). The endpoint-format toggle stays only for providers the override file marks dual-protocol.
+- **Onboarding offers API keys only.** Subscription sign-ins (Copilot, xAI, OpenAI) live in Settings; a first-run flow should not branch into three vendors' OAuth.
+- The step ends with a *working* (provider, model) pair: model picked from the catalog (no live list), validated by the probe, which now chooses its probe model from the catalog. **No default model is pre-selected** — the old `antigravity/gemini-3-flash` seed is gone and nothing replaces it silently; the user picks.
+
+**Settings → Providers.**
+- *Refresh models* becomes **"Check with my account"** (§11b.3): intersects the live `/models` with the catalog, greys out models this key cannot use, and flags catalog-unknown models with *limits unknown*.
+- Rows for Anthropic and Google show **API key only** — no sign-in option exists for them (§11c.3). Copilot, xAI and OpenAI rows gain a *Sign in* alternative to the key, each with the vendor's own flow.
+- Each configured provider row shows its **effective limits per model** on expand (window · output · image · PDF), with the source of the window (override / live / catalog / learned / floor) — the D9 visibility requirement, placed where the operator already looks.
+
+**Settings → Models** (D9): the global default context window with its source, and the override; **Agent form**: the per-agent override field, clamped to the model's capability (D2), shown with the clamp when it bites.
+
+**Chat**: the emptied-result mark renders only with Verbose chat on (§12) — no other change.
+
+**Two wire consequences (Constraint #8), corrected.**
+1. `src/lib/generated/providerCatalog.ts` — a build-time file — **goes**. A catalog refreshed daily cannot be baked into the SPA bundle; the SPA reads the **`GET` providers-catalog endpoint** (already listed in §12) and caches it. The `gen/main.go` TS emission is deleted with it.
+2. **`ProbeProviderRequest.yaml` carries a provider *enum* today** (it is where `antigravity` appears as a value). §12 had said the provider field "stays a free string — no enum"; that was true of `Agent.yaml` but not of the probe request. With ~190 providers the enum cannot stand: **it becomes a free string validated at runtime against the catalog**, and the schema + generated Go/TS are regenerated in the same commit that deletes the `antigravity` value.
+
 ## 11. D10 — Bound what enters memory
 
 D4 protects the window; it cannot protect the process — by the time a result is measured it has been received, held and parsed. Every network or subprocess read is bounded at ingest. `fetch_url` is already correct (`http.MaxBytesReader`, configurable, 10 MB *"Security Fallback"*). Three search providers read unbounded (`BraveSearchProvider.Search`, `DuckDuckGoSearchProvider.Search`, `PerplexitySearchProvider.Search` — `io.ReadAll(resp.Body)` directly after `client.Do`), while two other sites in the same file use `io.LimitReader(…, 1<<20)`. The MCP path has none; the Go SDK's `MaxBytes` is `MemoryEventStore` SSE resumability, not a response cap, and Omnipus never sets it. Exceeding the ingest bound is a tool failure, not a truncation — half a JSON document is not partially useful.
