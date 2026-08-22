@@ -262,6 +262,61 @@ The rename table, computed against the live registry (every target verified pres
 - Keeping Omnipus's own names and maintaining a mapping to the registry forever: two vocabularies, permanently, for no gain.
 - Treating protocol as a suffix in the canonical ids: models.dev does not, and it is what produced the duplicate-provider sprawl.
 
+## 11b. D12 — Provider tiers: declare the two that already exist
+
+*(Operator direction 2026-08-22: review what ships today and what OpenCode and Hermes ship.)*
+
+**Today, undeclared.** The factory switch accepts **36 distinct ids**; **~10** have a display name and a validation probe (`pkg/providers/displayname.go::knownDisplayNames`, `validate.go::probeModelDefaults`: `openrouter openai anthropic google/gemini groq deepseek zhipu/z-ai moonshot azure`); **4** have onboarding key-format hints (`src/lib/constants.ts`: `anthropic openai groq openrouter`). `azure` has a name but no factory case; `xai`, `mistral`, `ollama`, `minimax` have factory cases but no name or probe. The tiers exist; nobody decided them.
+
+**The field** (research 2026-08-22, pinned commits): OpenCode exposes all 193 models.dev providers but pins **6** as "Popular" in its picker, documents 50, bundles code for 23. Hermes ships 37 plugins split into "First-Class API-Key Providers" (~13) and "Other Compatible Providers". Goose: 34 coded + 42 declarative. Crush/Catwalk: 41. Roo: 28, and it retired 9 in one PR as "low-usage". **Typical tier 1 is 5–15; the tail is 40 to unbounded.** Every harness but Gemini CLI offers a custom OpenAI-compatible endpoint.
+
+**Decision.**
+
+- **Tier 1 (~15) — named, probed, guided, tested, in the picker by default:** the current ten, plus `xai`, `mistral`, `ollama`, `minimax`, and the regional/coding-plan variants of vendors already in tier 1 (`zhipuai`, `zai-coding-plan`, `moonshotai-cn`, `alibaba-coding-plan`). Membership is a list in the assembly repo's provider table (`tier: 1`), not code.
+- **Tier 2 — everything else in the registry:** reachable through the protocol dispatch of D11 with URL, key variable and limits from the table; shown behind a "show all providers" toggle; labelled best-effort; no probe, no onboarding hint, no test matrix.
+- **Custom endpoint stays** (`custom`, any OpenAI- or Anthropic-compatible URL) — the one thing every harness offers.
+- **A retired-provider list**, as Hermes and Roo keep, so a config naming a removed provider fails with a named reason instead of silently (this also carries D11's one-release aliases).
+- Tier 1 membership is reviewed per release against usage; Roo's "low-usage" pruning is the model.
+
+## 11c. D13 — Subscription login: only where the vendor permits it, verified from the vendor's own terms
+
+*(Operator direction 2026-08-22: "only where the vendor does not forbid it". The operator's recollection — Anthropic and Google forbid, others tolerate — was checked against each vendor's own published terms on 2026-08-22 and is confirmed, with one material consequence for code Omnipus ships today.)*
+
+### 11c.1 Vendor by vendor — primary sources
+
+| Vendor | Borrowing the subscription token in a third-party tool | Driving the vendor's own CLI as a subprocess | Source |
+|---|---|---|---|
+| **Anthropic** | **Prohibited.** *"Anthropic does not permit third-party developers to offer Claude.ai login into their own applications, or to route requests through Free, Pro, or Max plan credentials on behalf of their users. Moreover, developers may not collect, store, or intermediate Claude.ai credentials or session tokens."* Since 2026-04-04 a Claude login in a third-party tool no longer draws on subscription limits at all (Boris Cherny, Head of Claude Code). | **Permitted only if** the `claude` binary is unmodified and the end user signs in inside it themselves: *"Nor does it prevent an end user from signing in to the unmodified Claude Code binary with their own Claude subscription, including where a platform hosts Claude Code."* Whether a harness-driven subprocess is "ordinary use" after 2026-04-04 is **unclear**. | code.claude.com/docs/en/legal-and-compliance; anthropic.com/legal/consumer-terms §3(7) |
+| **Google** | **Prohibited, explicitly, naming the practice.** Antigravity Additional Terms §6: *"Using third party software, tools, or services to access the Service (e.g. using OpenClaw with Antigravity OAuth) is a breach of this Agreement"* and *"may be grounds for suspension or termination of your account."* Gemini CLI ToS: *"Directly accessing the services powering Gemini CLI … using third-party software … is a violation."* **Enforced:** Antigravity accounts of OpenClaw-OAuth users suspended, Feb 2026; Google staff cite §6 on the official forum. | Not addressed by the text — **unclear**. | antigravity.google/terms §6; geminicli.com/docs/resources/tos-privacy; discuss.ai.google.dev thread 126426 |
+| **OpenAI** | **Permitted in practice, not in text.** Sam Altman, 2026-05-01: *"you can sign in to openclaw with your chatgpt account now and use your subscription there!"* No enforcement found. The ToS still prohibits *"Automatically or programmatically extract data or Output"* with no carve-out. | Fits the Help Center's supported-client list (Codex CLI / app-server). Lowest risk. | help.openai.com "Using Codex with your ChatGPT plan"; openai.com/policies/terms-of-use; x.com/sama/status/2050357911915028689 |
+| **xAI** | **Permitted and vendor-sanctioned** for named agents: xAI published first-party OAuth integrations for Hermes (2026-05-18), OpenClaw (05-19), OpenCode (05-21), Kilo (05-29), Warp (06-15) — *"Use your SuperGrok or X Premium subscription inside OpenCode … More open-source agents and integrations are coming soon."* The AUP still bans unauthorised bots, so an unlisted harness is **medium** confidence. | Not addressed. | x.ai/news/grok-opencode, grok-openclaw, grok-hermes; x.ai/legal/acceptable-use-policy |
+| **GitHub Copilot** | Raw token to `api.githubcopilot.com`: **not prohibited, not sanctioned** — unclear. | **Permitted via the official Copilot SDK / CLI**, billed to the subscription: *"A GitHub Copilot subscription is required to use the GitHub Copilot SDK … each prompt being counted towards your usage allowance."* | github.com/github/copilot-sdk; GitHub changelog 2026-06-02 |
+| Kilo | Permitted (Gateway API offered for third-party apps). | — | kilo.ai/terms |
+| Mistral (consumer) | Prohibited without written authorisation; the API is a separate business product. | — | legal.mistral.ai EU consumer terms |
+| Cursor, Windsurf | No sanctioned consumer-credential path — skip. | — | — |
+
+### 11c.2 What Omnipus ships today, against that table
+
+Verified in `pkg/providers` on this branch:
+
+- **`claude-cli`** — `exec.CommandContext(ctx, "claude", …)`; the file handles no token, credential or keychain (searched). This is the permitted shape: unmodified binary, user signs in inside it, harness never intermediates. **Keep, opt-in, with the post-2026-04-04 "unclear whether this draws on the subscription" caveat shown in the UI.**
+- **`codex-cli`** — despite the name, **not** a subprocess: `factory_provider.go` case `"codex-cli"` → `NewCodexProviderWithTokenSource(CreateCodexCliTokenSource())`, which `ReadCodexCliCredentials` from the Codex CLI's `auth.json` and calls `https://chatgpt.com/backend-api/codex` directly. That is token reuse. OpenAI tolerates and publicly encourages it, but the ToS text does not. **Keep, documented as resting on practice; prefer the `codex_cli_provider.go` subprocess path where both exist.**
+- **`antigravity`** — Google OAuth (`auth.GoogleAntigravityOAuthConfig`, `RefreshAccessToken`) against the Antigravity backend. **This is the practice Google's §6 names and suspends accounts for — and it is the seeded default model on a fresh install (`pkg/config/defaults.go` → `antigravity/gemini-3-flash`).** Hermes removed the equivalent (PR #50492: *"Google now actively bans accounts … a ban can extend to the entire Google account"*); Goose deprecated it.
+
+**Decision: remove the `antigravity` OAuth provider, and change the fresh-install default model to a tier-1 API-key provider.** Google's sanctioned route for third-party tools is the Gemini API or Vertex key, which stays. This is the one finding in this ADR that bears on the running release rather than the design, and it is flagged as such in §13.
+
+### 11c.3 The policy
+
+1. **Subscription login is offered only where the vendor's own terms or an official vendor statement permit it**, and the ADR cites the source. Today that is: **GitHub Copilot** via the official SDK/CLI; **xAI** via the published OAuth flow (and Omnipus should ask xAI to list it, as the named agents are); **OpenAI** via ChatGPT login, documented as practice-based.
+2. **Never collect, store, proxy or refresh a vendor's consumer credential** where the vendor prohibits it. Anthropic and Google: API key only.
+3. **Prefer driving the vendor's own CLI as a subprocess over borrowing its token** wherever both exist — it is the shape that survives policy changes, and it is what `claude-cli` already does.
+4. The table in §11c.1 is re-verified each release; a vendor that changes position moves between tiers, with the retired-provider list (D12) giving users a named reason.
+
+### 11c.4 Not adopted
+
+- **"Support everything that technically works, user's risk."** Google's remedy is account termination that can extend to the whole Google account; Omnipus would be the tool that caused it.
+- **"API keys only."** Removes three shipped paths, two of which are sanctioned or tolerated.
+
 ## 12. Contract impact (Constraint #8)
 
 - Seed `schema_version` 1.0.0 → 1.1.0; mixed-fleet tolerance (old binary ignores new fields; new binary falls to rung 4 on an old seed).
@@ -275,6 +330,8 @@ The rename table, computed against the live registry (every target verified pres
 **Positive.** No single result exceeds the budget (D4); no turn exceeds the window regardless of length (D5+D6); the window record is right (D1–D3) and visible (D9); failures are diagnosable (D7). Nothing is summarised or deleted; every result of a completed turn remains recallable, in pages. No new storage, no new retention policy, no new file surface. Per-turn token cost falls by the quadratic argument. The change is three focused edits to existing mechanisms.
 
 **Negative / accepted.** The seed acquires two fields to maintain. A stale seed under-reports a new model until refreshed (mitigated by D8). The conservative floor over-trims for unseeded models — visible, harmless. Emptied results cost a recall round-trip when the model does need them. The per-result budget check adds linear work per tool call.
+
+**Bears on the running release, not only the design (D13):** the shipped `antigravity` OAuth provider is the practice Google's Antigravity terms §6 name and enforce with account suspension, and it is the fresh-install default model. Removal and a new default precede shipping this branch.
 
 **All four diagnosed defects have a decision:** §1.1 → D1–D3, §1.2 → D4 (+D10), §1.3 → D5+D6, §1.4 → D7.
 
