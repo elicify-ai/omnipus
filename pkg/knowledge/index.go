@@ -870,6 +870,22 @@ const indexSearchMaxFetch = 2048
 // limit is honoured as given — this layer does not silently clamp. FR-037's cap
 // belongs to the tool/API layer, which must clamp AND report the clamping.
 func (ix *Index) Search(query string, limit int) ([]IndexHit, error) {
+	return ix.SearchFiltered(query, limit, nil)
+}
+
+// SearchFiltered is Search restricted to the paths keep returns true for. A nil
+// keep is the whole collection and makes this identical to Search.
+//
+// The filter is applied to the RAW segment hits, inside the escalating-fetch
+// loop and before the limit is applied — so "the best `limit` matches inside
+// this folder" is what comes back, not "whichever of the best `limit` matches
+// in the collection happen to be in this folder". Those two differ the moment
+// the collection has more matches than the limit, and the second silently
+// returns a subset. The loop keeps widening its fetch until it has `limit`
+// surviving files or bleve reports there are no more matching segments to see,
+// so a narrow folder in a large collection is answered fully rather than
+// emptily.
+func (ix *Index) SearchFiltered(query string, limit int, keep func(relPath string) bool) ([]IndexHit, error) {
 	if limit <= 0 {
 		limit = 20
 	}
@@ -886,6 +902,15 @@ func (ix *Index) Search(query string, limit int) ([]IndexHit, error) {
 		hits, total, err := ix.searchRaw(query, fetch)
 		if err != nil {
 			return nil, err
+		}
+		if keep != nil {
+			kept := hits[:0]
+			for _, h := range hits {
+				if keep(h.Path) {
+					kept = append(kept, h)
+				}
+			}
+			hits = kept
 		}
 		collapsed := collapseSegmentHits(hits)
 		// Stop when we have enough distinct files, when we have already seen
