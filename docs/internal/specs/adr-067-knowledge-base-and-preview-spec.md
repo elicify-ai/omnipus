@@ -185,6 +185,8 @@ in the same folder is still refused.
 - **FR-0001** The system MUST NOT apply Omnipus filename-shape rules (illegal characters, reserved device names, trailing dot or space, component length) to files inside **mounted folders** on any platform. Those files are the operator's, and Omnipus reads what is on disk.
 - **FR-0001a** The system MAY apply Windows-safe naming to files it **creates in workspace storage**, and MUST do so only in Windows builds, via build tags.
 - **FR-0002** The system MUST NOT relax path-traversal, containment or root-confinement checks on any platform.
+- **FR-0002a** The system MUST separate **control-character rejection** (`r <= 0x1F`) from Windows-shape rejection before any build-tag split. They are fused in `pathsafe.firstIllegalRune` today; relaxing the fused predicate would drop NUL/CR/LF rejection at untrusted ingest points (`pkg/utils/media.go` remote chat attachments, `upload_workpath.go`), which are not "the operator's own files".
+- **FR-0002b** The system MUST reject a `..` component **independently of the trailing-dot rule**. Verified: `ValidateComponent("..")` currently fails *only* via `hasTrailingDotOrSpace`; build-tagging that rule away makes `..` valid. `library.CleanRelPath` has its own `..` check, but the guarantee MUST NOT depend on every caller repeating it.
 - **FR-0003** The system MUST correctly encode filenames in HTTP headers, including names containing quotes.
 - **FR-0004** The system MUST NOT apply the component-length limit on platforms whose filesystem does not require it.
 
@@ -198,6 +200,8 @@ in the same folder is still refused.
 | 0d | `TestLibrary_LongFilenameOpens` | Integration | AS-4 | 106-character basename |
 | 0e | `TestPathsafeRegression_WindowsUnchanged` | Unit | AS-3 | The 29 existing assertions still hold under the Windows tag, for **workspace storage** |
 | 0f | `TestMountedFile_NoNameShapeValidation` | Integration | FR-0001 | A mounted file with any OS-legal name lists, opens and indexes — on every platform, including Windows builds |
+| 0g | `TestPathsafe_ControlCharsRejectedEveryPlatform` | Unit | FR-0002a | NUL, CR, LF rejected under **every** build tag |
+| 0h | `TestPathsafe_DotDotRejectedWithoutTrailingDotRule` | Unit | FR-0002b | **Guards the exact regression:** `..` must fail with the trailing-dot rule disabled |
 
 ---
 
@@ -603,7 +607,7 @@ documented, stable contract.
 | E-1 | Collection with 0 notes | First-run offer to create a note; search returns empty without error |
 | E-2 | Collection with exactly 1 note | Search, outline and backlinks all work; orphans lists that note |
 | E-3 | Collection with 100,000 notes | §1.2 targets met |
-| E-4 | Note filename containing `:` or `?` | Not addressable through the Library; reported as an "unaddressable" class (residual R-7). Never silently omitted |
+| E-4 | Note filename containing `:` or `?` **in a mounted folder** | Addressable (STAGE 0). Only files Omnipus creates in workspace storage on Windows builds are restricted |
 | E-5 | Note 200 MB in size | Indexed with a documented body cap, or skipped and reported — never an unbounded read |
 | E-6 | Wikilink to a note that does not exist | Rendered as unresolved; listed by the unresolved query |
 | E-7 | Two notes sharing a basename | Tie-break applies; ambiguity reported |
@@ -639,7 +643,8 @@ documented, stable contract.
 - **NB-9** The system must not silently skip files it cannot address or read; every exclusion must be reportable.
 - **NB-10** The system must not search across workspace boundaries, because workspace membership is the product's trust boundary.
 - **NB-11** The system must not execute or interpret template content beyond a fixed documented substitution set.
-- **NB-12** The system must not relax `pathsafe` for mounted folders as a side effect of this work; that is a separate decision with its own blast radius.
+- **NB-12** ~~The system must not relax `pathsafe` for mounted folders.~~ **Superseded by STAGE 0** (founder decision 2026-08-22): the rules were being applied to files Omnipus does not own. What must NOT be relaxed is **containment** — see FR-0002 and NB-16.
+- **NB-16** The system must not relax control-character rejection, `..` rejection, or any containment check on any platform. `pathsafe.firstIllegalRune` currently **fuses** C0 controls (`r <= 0x1F` — NUL, CR, LF) with the Windows character set in one predicate; splitting them is mandatory, not optional. See FR-0002a.
 
 ### 10.2 Machine-verifiable constraints
 
@@ -1188,13 +1193,14 @@ come last within their stage because they are slowest and most environment-depen
 | # | Filename | Expected | Traces to |
 |---|---|---|---|
 | 1 | `Ordinary Note.md` | fully addressable | — |
-| 2 | `Meeting: 2026-01-01.md` | **not addressable**; reported unaddressable | E-4, R-7 |
-| 3 | `Why?.md` | as above | E-4 |
-| 4 | `elicify-* packages.md` | as above (present in the reference collection) | E-4 |
+| 2 | `Meeting: 2026-01-01.md` | **addressable in a mounted folder** (STAGE 0). Rejected only when Omnipus *creates* it in workspace storage on a Windows build | US-0 AS-1 |
+| 3 | `Why?.md` | as above | US-0 AS-1 |
+| 4 | `elicify-* packages.md` | as above (present in the reference collection) | US-0 AS-1 |
 | 5 | `Ünïcödé — Näme.md` | fully addressable | — |
+| 5a | name containing NUL / CR / LF | **rejected on every platform** — never relaxed | FR-0002a |
 | 6 | `.hidden.md` | indexed; hidden in the explorer unless shown | M-13 |
-| 7 | 300-character basename | rejected by the length rule; reported | E-4 |
-| 8 | `CON.md` | not addressable; reported | E-4 |
+| 7 | 106-character basename | **addressable in a mounted folder** (STAGE 0); measured — 2 of 748 reference notes exceed 100 runes | US-0 AS-4 |
+| 8 | `CON.md` | addressable in a mounted folder; reserved-name rule applies only to what Omnipus creates on Windows | US-0 AS-3 |
 
 **DS-4 — Write conflicts**
 
@@ -1365,6 +1371,8 @@ explicit seam tests: items 4 and 26.
 | FR-0001 | US-0 | (mounted files are read as-is) | 0a, 0f |
 | FR-0001a | US-0 | (workspace naming, Windows builds) | 0a, 0e |
 | FR-0002 | US-0 | Traversal still refused | 0b |
+| FR-0002a | US-0 | (control chars kept on all platforms) | 0g |
+| FR-0002b | US-0 | (`..` rejected independently) | 0h |
 | FR-0003 | US-0 | Quote in filename header-safe | 0c |
 | FR-0004 | US-0 | Long filename opens | 0d |
 | FR-001 | US-1 | HTML page renders / Documents and media render | 2, 9 |
