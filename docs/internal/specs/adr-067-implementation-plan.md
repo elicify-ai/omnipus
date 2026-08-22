@@ -36,6 +36,34 @@ caught by the tooling; both were caught by reading.
 a wave may write the same file. Where a stage's work spans a file another stage owns, the stages
 are sequenced rather than the file shared.
 
+### Worktree isolation — insurance, not a replacement
+
+Implementing agents run with **`isolation: "worktree"`**: each gets its own checkout, and its
+work is merged back rather than written in place.
+
+**What it buys.** It converts a *silent* collision into a *visible* merge conflict. Both of this
+session's collisions corrupted a file quietly and were caught by reading it, not by any tool. A
+conflict marker cannot be missed. That is the whole argument, and it is enough.
+
+**What it does not buy.** If the ownership partition holds, worktrees change nothing — the value
+appears precisely when the partition turns out to be wrong, which is the case that keeps
+happening. So ownership stays the primary mechanism and isolation is the backstop. Ranking them
+the other way round produces agents that merge cleanly into the wrong design.
+
+**Where it is the wrong tool: the spec documents.** Both collisions were two agents in one
+markdown table, on adjacent rows. Git merges that into a mess or conflicts on nearly every line.
+For prose, one owner beats any merge strategy. Worktree isolation is for **code** — different
+functions, different packages — where merges are clean.
+
+> **Gotcha, from this project's own notes.** The GitNexus index is **per-checkout**, and every
+> checkout registers under the same repository name. An agent in a fresh worktree therefore
+> either has no index, or resolves by name and silently reads **another checkout's graph** —
+> a wrong-branch answer with no error. Agents running in worktrees MUST be told to use direct
+> file reading and to treat the graph as unavailable.
+
+**Cost, stated:** this checkout is ~144 MB, so a wave of six is roughly 900 MB of transient disk
+and eighteen agents about 2.6 GB. The Go build cache is shared by default and is not duplicated.
+
 ---
 
 ## 2. Dependency reality
@@ -147,14 +175,15 @@ audit events, lifecycle (revoke refcount, broken mount, evicted files).
 
 Sequential, because each depends on the last.
 
-1. **`/code-review max`** over the whole branch diff. *(Note: `large` is not a level — the ladder
-   is low, medium, high, max, ultra. `ultra` is the cloud multi-agent review and is
-   user-triggered only; I cannot launch it.)*
+1. **`/code-review high`** over the whole branch diff. *(Founder choice. `large` is not a level — the
+   ladder is low, medium, high, max, ultra. `high` gives broad coverage without `max`'s tail of
+   uncertain findings, which on a diff this size would cost more triage than it returns. `ultra`
+   is the cloud multi-agent review and is user-triggered only; I cannot launch it.)*
 2. **`test-integrity-auditor`** — audits the suite for assertion weakening, over-mocking,
    suppressed tests, oracles adapted to the implementation, and stale green. Returns a weakening
    score and a block/warn/pass verdict.
 3. **Fix wave** — up to 6 agents, partitioned by file, one finding-cluster each.
-4. **Re-review** — `/code-review max` again on the fix diff only. A fix wave that is never
+4. **Re-review** — `/code-review high` again on the fix diff only. A fix wave that is never
    re-reviewed is where regressions enter.
 
 ---
