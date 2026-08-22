@@ -455,3 +455,24 @@ The adversarial review's first blocker: D4 caps each result, nothing capped thei
 **Still to settle at implementation:** whether the trigger is a fraction of the resolved window (adapts per model, but inherits any error in D1–D3) or an absolute per-turn character budget (predictable, and correct even where the window resolves badly). The absolute form is the safer default for the same reason D4's cap is window-independent — see §6.1.
 
 With D13, §12's "nothing size-related is ever turn-fatal" holds: a per-result cap bounds each entry, and the aggregate bounds their sum.
+
+---
+
+## 23. D14 — Bound what enters memory, before anything is parsed (closes CRIT-005)
+
+**Two different limits, for two different failure modes.** D4's cap is measured in characters and protects the *context window*. D14's is measured in megabytes and protects the *process*. D4 cannot substitute for D14: by the time a result is capped it has already been received, held in memory and — under D6 — parsed. A response large enough to exhaust memory kills the single binary before any of that runs.
+
+### 23.1 What was verified
+
+- **`fetch_url` is already correct and is the in-repo pattern to copy.** `pkg/tools/web.go:1334` wraps the body in `http.MaxBytesReader(nil, resp.Body, t.fetchLimitBytes)`, configurable, with a 10 MB fallback at `web.go:1243-1244` labelled *"Security Fallback"*.
+- **Three search providers read unbounded.** `BraveSearchProvider.Search` (`web.go:251`), `DuckDuckGoSearchProvider.Search` (`web.go:450`) and `PerplexitySearchProvider.Search` (`web.go:594`) each call `io.ReadAll(resp.Body)` directly after `p.client.Do(req)` with no limit. Two other call sites in the same file do it correctly with `io.LimitReader(resp.Body, 1<<20)` (`web.go:758`, `web.go:850`), so the omission is inconsistent within one file rather than a considered choice.
+- **The MCP path has no ingest bound.** `pkg/mcp/*.go` contains no `LimitReader`, `MaxBytesReader` or `ContentLength` check (searched, non-test). The transport is `github.com/modelcontextprotocol/go-sdk v1.4.1`; its `MaxBytes` symbol belongs to `MemoryEventStore` (SSE resumability, `mcp/event.go:234-263`) and is **not** a response-size limit, and Omnipus never sets it (searched). The incident's own 1,178,522-byte result is direct evidence that the path admits payloads well past a megabyte.
+
+### 23.2 Decision
+
+Every tool that reads from a network or a subprocess bounds that read at ingest, using `http.MaxBytesReader` or `io.LimitReader`, before the bytes are retained or parsed. Exceeding the ingest bound is a tool failure with a clear message — not a truncation, because a half-read JSON document is not partially useful, it is unparseable.
+
+The ingest bound is an operator setting with a conservative default, sized in megabytes and deliberately far above D4's character cap: its job is to stop a pathological response, not to shape a normal one.
+
+**Ordering matters and is part of the decision: ingest bound → parse → D6 reduction → D4 cap → D13 aggregate.** Each stage may assume the previous one held.
+
