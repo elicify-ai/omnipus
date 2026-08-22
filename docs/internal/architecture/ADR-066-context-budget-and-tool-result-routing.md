@@ -106,7 +106,7 @@ The provider+model key is the nesting; a model's limits live under the route tha
 
 *Closing the resize gap.* `resize_budget` (`long_edge_px`, `max_bytes`) is in **neither** registry (searched both). It is not a model fact but a provider's upload limit, documented once per vendor — the 78-model seed uses exactly **four distinct values**, one per vendor. It lives in the assembly repo as a small per-provider table, hand-maintained and PR-reviewed; the job joins it onto every model of that provider.
 
-*Omnipus-side changes* — four, all small: the seed schema gains the new fields (1.0.0 → 1.1.0); the puller's owner/repo points at the assembly repo (asset name and sidecar unchanged); the refresh interval drops from 7 days to **24 hours, plus one background pull at startup** (never blocking boot; the existing 30 s timeout applies); and the `go:embed` snapshot is **generated from the same feed at build time**, so offline boot and online refresh agree on schema.
+*Omnipus-side changes* — four, all small: the catalog schema becomes 2.0.0 (providers with nested models, §4 "One catalog"); the puller's owner/repo points at the assembly repo (asset name and sidecar unchanged); the refresh interval drops from 7 days to **24 hours, plus one background pull at startup** (never blocking boot; the existing 30 s timeout applies); and the `go:embed` snapshot is **generated from the same feed at build time**, so offline boot and online refresh agree on schema.
 
 *Signing — required, not optional.* The feed becomes a dependency of every install's behaviour, produced by an unattended job. A checksum proves integrity in transit, not authorship. Releases are **signed** (sigstore/cosign or a pinned public key compiled into the binary); a missing or bad signature falls back to the embedded snapshot with a WARN. Blast radius is bounded regardless — a wrong value causes overflow or over-trimming, not a security breach — but the door is locked before it is opened.
 
@@ -140,6 +140,12 @@ The provider+model key is the nesting; a model's limits live under the route tha
 
 **Window-independent.** Identical at 131,072 and 1,048,576, so correct even where D1–D3 resolve badly; shippable first.
 
+**Not only tool results — corrected after the second review.** The first draft capped tool results alone, so an oversized *user message* (a pasted 500 KB document) or oversized *tool-call arguments* (the model writing a whole file into a parameter) would reach D6 with nothing to empty and hit the thrash guard — a typed turn death, contradicting §8's "nothing size-related is turn-fatal". Two more bounds, same numbers, different timing:
+- **User messages** are checked **at the gateway, before a turn starts**: over the builtin cap, the message is refused with a clear, non-fatal reply (*"that message is N chars; the limit is 30,000 — attach it as a file or shorten it"*). Nothing is persisted, no turn is registered, the user edits and resends.
+- **Tool-call arguments** over the cap are **refused as a structured tool result** (the ADR-060 family), not executed and not turn-fatal; the model sees the refusal and retries smaller. `max_output_tokens` already bounds what the model can emit, but 131,072 tokens is still far above the cap.
+
+With those, the thrash guard is reachable only by a bug, and §17.4 tests that.
+
 ---
 
 ## 6. D5 — Empty in place, leave a recall mark
@@ -154,9 +160,13 @@ The provider+model key is the nesting; a model's limits live under the route tha
 
 The call/answer structure is untouched, so the request stays valid for every provider — including those that require a window to open with a user message, where a mid-turn *cut* would not. This is the Anthropic `clear_tool_uses` / LangChain `[cleared]` mechanism, with the placeholder pointing at a real retrieval path.
 
-### 6.1 Projection, not mutation
+### 6.1 Where emptying is applied — corrected after the second review
 
-`JSONLBackend.GetHistory` delegates to the store, which reads the window from disk on every call — an in-memory edit is discarded before the next assembly. And the archive is append-only (ADR-028 D14). So emptying is **applied at assembly time**: the set of emptied `tool_call_id`s is persisted in the window's meta file alongside `skip`/`count` (observed shape of `.context/*.meta.json`), and `assembleMessages` substitutes the mark while building the request. Pure function of (window, budget, emptied-set): deterministic, no LLM call, archive untouched, and live and reload agree — a divergence the review flagged as a recurring hazard.
+**[CORRECTED 2026-08-22.]** The first version said emptying is applied "at assembly time" in `assembleMessages`. That does not reach the case that matters: verified in `loop.go`, `assembleMessages` runs at **four** sites only — the start of the turn and after each of three kinds of trim — while **every mid-turn LLM call is made with `callMessages`, built from the in-memory `messages` slice to which tool results are appended directly** (`messages = append(messages, …)`). A projection confined to `assembleMessages` would empty nothing during the tool loop, which is exactly where the incident happened. (Re-running `assembleMessages` mid-turn is not the fix either — it would re-add the user message already persisted at turn start.)
+
+**Decision.** Emptying acts on **the in-memory `messages` slice, inside the tool loop, right after D6's budget check** — replacing the oldest eligible tool result's `Content` with the mark before `callMessages` is built. The archive is never touched (append-only, ADR-028 D14), so nothing on disk changes. The set of emptied `tool_call_id`s is **also** persisted in the window's meta file alongside `skip`/`count`, and `assembleMessages` applies the same substitution when it does run (turn start, post-trim, reload) — so the in-memory view and the reloaded view agree. Pure function of (messages, budget, emptied-set): deterministic, no LLM call.
+
+**Same rule for D4.** The first draft said an over-cap result is "truncated in the window, full in the archive" without saying how. Same mechanism: the full result is appended to the archive; the in-memory `messages` entry carries the capped content plus the mark; the meta file records the id so reload shows the capped form too.
 
 ### 6.2 Recall is already wired
 
@@ -175,8 +185,8 @@ Verified:
 **Decision.** Add a fourth mode, `tool_call_id`, with optional `offset` and `length` in characters:
 
 - Matches the archive line whose `ToolCallID` equals the argument; returns that one `role: "tool"` message, re-paired via the existing id remap.
-- Returns **one page, bounded by the D4 cap for that surface** (62,500 / 30,000 chars); `offset`/`length` page through the rest — the same interface `read_file` already uses (`offset`, `length`, 64 KB cap). The mark states the total size so the model knows whether to page.
-- Counts against the recall span budget like every other mode; the span may be dropped alone to fit (FR-019), unchanged.
+- Returns **one page of at most 30,000 chars** (the builtin success cap, since recall is a builtin) — `offset`/`length` page through the rest, the same interface `read_file` uses. The mark states the total size so the model knows whether to page.
+- **The `tool_call_id` mode is exempt from the 4,000 / 8,000-token span budgets** — those exist to bound *search* results across many turns; a single addressed page is bounded by its own cap instead. It is still a tool result, so it is subject to the D4 cap, counts toward the D6 running total, and can itself be emptied by D5 later. (The first draft said both "bounded by the 62,500 cap" and "counts against the span budget" — contradictory; this replaces it.)
 - The mark carries the `tool_call_id`, so the pointer resolves in a single call.
 
 **What recall does not cover, by design.** A turn that **aborts** is rolled back: `pkg/agent/turn.go::restoreSession` calls `RollbackAppended`, truncating the archive to its turn-start line count and restoring `Skip` *"so mid-turn evictions are undone"*. Verified on the incident: the archive went from 1,317,446 bytes (snapshot 19:19) to 39,004 (21:04) when the turn died. So recall retrieves the results of turns that **completed**; a failed turn's results leave the archive with the rest of its restore point, exactly as today. With D4–D6 the incident's turn would have completed, so this is consistent rather than a hole. **The D5 emptied-set joins the same restore point** — rolled back with `Skip` on abort, so a retried turn starts from an un-emptied window.
@@ -505,6 +515,6 @@ Catalog from the per-agent policy map (Constraint #6 requires it to enumerate ev
 2. **Long-turn test** — a turn of 50 tool calls each at the cap, against a small window: the request never exceeds the window at any iteration; the most recent result is always intact; emptied results carry marks; `recall_conversation(tool_call_id=…)` returns any emptied result, paged under the D4 cap, and paging reaches its last byte.
    2b. **Rollback test** — a turn that aborts after emptying restores both `Skip` and the emptied-set to their turn-start values.
 3. **Window-agreement test** — the catalog and `windowTrim` resolve the same window for a given model (the three-way disagreement that exists today).
-4. **Thrash-guard test** — an oversized non-tool message produces a typed error, not a loop.
+4. **Thrash-guard test** — an oversized user message is refused at the gateway before the turn (no transcript entry, no error frame); oversized tool-call arguments produce a structured refusal and the turn continues; the thrash guard itself is reached only by an injected fault and then produces a typed error, not a loop.
 5. **Silent-exit test** — each of the four §1.4 returns now produces a log line, an event and a transcript entry.
 6. **Greenfield test** — `grep -rnE '_migrated|alias|deprecat|retired' pkg/providers pkg/config` returns nothing provider-related; a config with `provider: "z-ai"` or `"moonshot-cn-anthropic"` fails as unknown-provider with no rename and no WARN naming a canonical id; `grep -ri antigravity pkg cmd src contracts config docs` returns only historical decision records.
