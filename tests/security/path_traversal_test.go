@@ -212,12 +212,29 @@ func TestPathTraversal_ReadFile(t *testing.T) {
 					"reads opened but WRITES must stay confined: %q was writable", tc.path)
 			}
 
-			// Regardless of pass/fail, the tool MUST NOT leak content from
-			// /etc/passwd, /etc/shadow, or /proc.
-			assert.NotContains(t, result.ForLLM, "root:x:0:0",
-				"read_file must never leak real /etc/passwd contents for input %q", tc.path)
+			// /etc/shadow stays absolute: no input, of any shape, may ever
+			// produce a password hash. Nothing in ADR-062/ADR-063 touches this
+			// — shadow is root-only and is a secret by definition.
 			assert.NotContains(t, result.ForLLM, "root:$",
 				"read_file must never leak real /etc/shadow hash for input %q", tc.path)
+
+			// /etc/passwd is conditional, and only for cases that escape by
+			// SCOPE. Under ADR-062/ADR-063 reads outside the work dir succeed
+			// by design, so a plain path that resolves to a world-readable file
+			// returning its contents is the model working, not a leak
+			// (founder decision 2026-08-22 — see the note on the
+			// unix_parent_traversal case).
+			//
+			// It stays absolute for every other case, which is the half that
+			// still catches a real defect: a MALFORMED input — a NUL byte, an
+			// unparseable path, a file:// URL, a Windows-style path on Linux —
+			// must fail for SHAPE before scope is ever considered. If one of
+			// those ever returns /etc/passwd, the parser mis-read it, and that
+			// is a genuine bypass no amount of open-reads policy excuses.
+			if !tc.escapesByDesign {
+				assert.NotContains(t, result.ForLLM, "root:x:0:0",
+					"read_file must never leak real /etc/passwd contents for input %q", tc.path)
+			}
 		})
 	}
 }
