@@ -252,10 +252,23 @@ phantom-failure signature `runci.sh` already documents from 2026-07-26. Both the
 the runtime install now cover chromium, firefox and webkit, and the revision check verifies all
 of them rather than two.
 
-> **Outstanding on that fix, and it is not cosmetic:** the worker image must be **rebuilt and
-> redeployed** for the Dockerfile change to take effect, and **WebKit needs Debian packages the
-> image does not carry** (gstreamer, libwoff, libenchant among them). Until both are done, the
-> e2e gate on that worker cannot run WebKit. Tracked here rather than assumed.
+> **Done, 2026-08-22 — image rebuilt and verified by launch, not by inventory.** `fly deploy`
+> rebuilt `ci-omnipus` (1.1 GB), and all three engines now launch **and render** on the worker:
+> chromium-1228, firefox-1532, webkit-2311. Presence in a directory listing would not have
+> proven this — WebKit needs system libraries Chromium does not, so the test was to launch each
+> engine and read text back out of a rendered page.
+>
+> Two drifts were fixed in the same deploy. The image pinned Playwright **1.49.0** while the repo
+> is on **1.61.1** — the Dockerfile's own comment says to keep them in sync, and they had
+> silently diverged, which is why `runci.sh` was re-downloading browsers at runtime on every
+> single run. And the pinned apt list is Chromium's; WebKit's differs by Debian release and
+> Playwright version, so the install now uses `--with-deps` rather than a hand-maintained list
+> nobody can audit against what is actually installed.
+>
+> Also: `/cache/runci.sh` (the **executing** copy — a deploy does not update it) was refreshed to
+> md5 `1f64cbf6…`, matching local, and a **31-hour-stale `/tmp/runci.lock`** was cleared. That
+> lock is the mutex serialising runs; left stale it is a plausible cause of a future run
+> refusing to start for no visible reason.
 
 **Process lesson, recorded because it cost real time.** Two file collisions and one broken build
 came from the orchestrator **messaging an agent while it was still running** — which resumes it
