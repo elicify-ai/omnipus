@@ -580,7 +580,7 @@ jobs:
         run: go build -tags goolm,stdjson ./...
 
   windows-pathsafe:
-    name: Windows — pathsafe (test) + library (build)
+    name: Windows — pathsafe (test) + library (create-path test)
     # The ONLY job in this repository that RUNS Go code on Windows (ADR-067
     # Stage 0). Every other workflow is ubuntu-* or macos-*; the sole other
     # Windows exposure is the cross-compile in `make build-all`, which proves
@@ -594,17 +594,20 @@ jobs:
     #     Windows: that the Windows set is the one Windows actually picks.
     #     That is what this job establishes.
     #
-    #   pkg/library — BUILT ONLY. See the residual below.
+    #   pkg/library — BUILT, plus the CREATE-PATH name rules tested. Those
+    #     rules (Root.ValidateCreateName under WindowsRules) are the only
+    #     Stage 0 behaviour that differs by GOOS *inside this package*, and
+    #     they need no filesystem privilege, so they run here. Everything
+    #     else in the package stays build-only — see the residual below.
     #
-    # RESIDUAL, stated rather than implied: pkg/library's Windows *runtime*
-    # behaviour stays unexecuted. Its containment tests create symlinks, which
+    # RESIDUAL, stated rather than implied: pkg/library's CONTAINMENT
+    # behaviour stays unexecuted on Windows. Those tests create symlinks, which
     # needs SeCreateSymbolicLinkPrivilege — withheld from non-elevated accounts
     # by default. Running them here would not fail; they would SKIP, and a
     # skipped security test reports green while proving nothing, which is worse
-    # than not running it at all. Building the package catches compile-level
-    # breakage on Windows and that is the whole of the claim. Widening this job
-    # means solving the privilege problem first (Developer Mode on the runner,
-    # or an elevated step), not deleting the package scope below.
+    # than not running it at all. Widening to the containment tests means
+    # solving the privilege problem first (Developer Mode on the runner, or an
+    # elevated step), not deleting the -run filter below.
     #
     # No SPA build step: neither package imports pkg/gateway, so //go:embed
     # all:spa is not in this build graph.
@@ -628,6 +631,31 @@ jobs:
         # -count=1 defeats the test cache: a cached PASS from a previous run is
         # not evidence that this commit's GOOS selection is right.
         run: go test -tags goolm,stdjson -count=1 ./pkg/pathsafe/...
+
+      - name: Run library create-path tests
+        # Scoped by -run, because the containment tests in this package need a
+        # symlink privilege this runner does not have (see the residual above).
+        #
+        # `go test -run` that matches NOTHING exits 0 and prints only
+        # "no tests to run" — a green that proves the opposite of what it looks
+        # like. So the run is verbose and the output is checked for each test
+        # that MUST have executed; a renamed or deleted test fails this step
+        # instead of silently emptying it.
+        shell: bash
+        run: |
+          set -o pipefail
+          go test -tags goolm,stdjson -count=1 -v \
+            -run '^(TestValidateCreateName_FollowsActiveRules|TestLengthRules_RefusedOnCreate_AcceptedOnRead|TestCleanRelPath_AcceptsWindowsHostileNames|TestCleanRelPath_AddressingSafetyStillRejects)$' \
+            ./pkg/library/ 2>&1 | tee /tmp/win-library.log
+          for t in TestValidateCreateName_FollowsActiveRules \
+                   TestLengthRules_RefusedOnCreate_AcceptedOnRead \
+                   TestCleanRelPath_AcceptsWindowsHostileNames \
+                   TestCleanRelPath_AddressingSafetyStillRejects; do
+            grep -q "^--- PASS: $t" /tmp/win-library.log || {
+              echo "::error::$t did not run on Windows — the -run filter matched nothing for it."
+              exit 1
+            }
+          done
 
   test:
     name: Tests
