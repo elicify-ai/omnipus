@@ -1390,7 +1390,9 @@ come last within their stage because they are slowest and most environment-depen
 | **Stage 1** |
 | 1 | `TestClassifyLibraryEntry_TableDiffIsExactlyIntended` | Unit | SC-013, Regression | **HIGH-risk guard.** Compares the live table against a fixture committed **before** the change; the diff must be exactly the three intended groups. Fails on an unintended fourth row **and** on a missing intended one — the previous "zero diffs" form could only ever fail |
 | 2 | `TestClassifyLibraryEntry_NewKinds` | Unit | US-1 AS-1,5,6 | html / pdf / audio classification |
-| 3 | `TestContentTypeForPath_AudioExtensions` | Unit | MV-14 | Each audio extension → specific MIME |
+| 3 | `TestLibraryInline_AudioContentType` | Integration | MV-14, FR-015a | Each of the seven audio extensions **through the Library handler** — not the workspace map, which this path never reaches. A unit test on that map passes green while Library audio serves as `application/octet-stream` |
+| 3a | `TestLibraryInline_TypeIsHostIndependent` | Integration | FR-015b, MV-24 | `.aac` — absent from Go's built-in table — returns `audio/aac` regardless of the machine's `/etc/mime.types`; an HTML payload under an unknown extension returns `application/octet-stream`, proving no sniff. A sniffing implementation returns `text/html` and fails |
+| 3b | `TestLibraryTypeTable_MatchesInlineAllowList` | Unit | FR-015c | The type table and the §10.4 allow-list are the **same set**. Catches the round-4 omission where `.css` and `.js` were inline-allowed with no type |
 | 4 | `TestInlineDisposition_AllowListOnly` | Unit | US-2 AS-5 | Non-allow-listed types stay attachments |
 | 5 | `TestInlinePreview_ResponseCarriesIsolationPolicy` | Integration | US-2 AS-1 | Response headers, independent of embedder |
 | 6 | `TestStripPrivateComments` | Unit | US-3 AS-1 | `%%…%%` removed |
@@ -1573,6 +1575,35 @@ This feature **modifies existing functionality**. Behaviour that must be preserv
 `pkg/workspace` is called in a new way (mount → knowledge-base resolution). Both get
 explicit seam tests: items 4 and 26.
 
+### 13.3a The SPA tests that run nowhere
+
+**Verified, and this is the most consequential gate defect in the spec.** CI runs vitest in four
+hardcoded groups (`pr.yml`): `src/lib/ src/store/ src/routes/ src/test/`,
+`src/components/chat/`, `src/components/agents|settings|skills|shared|ui/`, and
+`src/components/layout|command-center|projects/`.
+
+**`src/components/library/` matches none of them.** Eleven existing test files in the exact
+directory this feature modifies **run nowhere in CI**. One of the configured patterns points at
+`src/components/command-center/`, a directory this project's own documentation records as
+deleted. The checker that would catch all this exists on `main` and is **not on this branch**.
+
+**Test 1 — the HIGH-risk release gate for `classifyLibraryEntry` — lands in that directory.** As
+things stand it would be written, reviewed, reported green, and never execute once.
+
+- **FR-085** CI MUST run the SPA tests for `src/components/library/`, and the group definitions
+  MUST be verified against the tree rather than hand-maintained: a test file matching no group
+  MUST fail the build. Bring across `scripts/check-vitest-coverage.mjs` from `main`.
+- **FR-086** Patterns naming directories that do not exist MUST fail the build, so a stale
+  pattern cannot masquerade as coverage.
+
+| Order | Test | Level | Traces to | Notes |
+|---|---|---|---|---|
+| 97 | `TestVitestGroups_EveryTestFileMatchesAGroup` | CI gate | FR-085 | Enumerates `**/*.test.ts(x)` and asserts each matches exactly one configured group. **Catches** the current state — 11 library files matching none |
+| 98 | `TestVitestGroups_NoStalePatterns` | CI gate | FR-086 | Every configured pattern resolves to an existing directory. **Catches** the `command-center` pattern, which points at a deleted directory |
+| 99 | `TestNoUnprotectedInlineRoute` | Integration | FR-008b, FR-008c | Enumerates every handler setting `Content-Disposition: inline` and asserts each carries the §10.3 policy, an extension-derived type and `nosniff`. **Catches the round-4 finding**: `/api/v1/media/workspace/` serving HTML inline with no policy |
+
+---
+
 ### 13.4 The browser matrix, and why retries are dangerous here
 
 None of this exists today. Verified: `playwright.config.ts` declares **no** `projects` (Chromium
@@ -1623,6 +1654,9 @@ Required, each a named piece of work:
 - **FR-006** The system MUST block network egress from a previewed document.
 - **FR-007** The system MUST display a persistent untrusted-content boundary outside any inline-rendered frame.
 - **FR-008** The system MUST continue to serve non-allow-listed file types as attachments.
+- **FR-008a** The inline allow-list is the table in **§10.4** and nothing else (MV-22). `.svg` is on it: the token path applies **one policy to every byte it serves**, so an SVG there has the same opaque origin and zero egress `.html` gets. **This is reasoned from the measured HTML result, not separately measured — test 94 must pass before `.svg` ships inline.**
+- **FR-008b** **Every** route that serves Library-resolved bytes inline MUST carry the §10.3 policy, the extension-derived `Content-Type` and `nosniff` — not only the token path. *Found in round 4, verified:* `/api/v1/media/workspace/{workspace}/{id}` (registered `withOptionalAuth`) serves Library-resolved bytes with `Content-Disposition: inline` via `http.ServeFile` and **no policy at all**, and `pkg/library/entries.go` maps `.svg`→`image/svg+xml` and `.html`→`text/html`. An HTML file in a workspace media library is therefore served **inline, as real HTML, on the gateway origin, today** — a live exposure independent of this feature. `http.ServeFile` also sniffs, which FR-015 forbids.
+- **FR-008c** The set of inline-serving routes MUST be **enumerated and asserted**, not assumed. §10.5's two-URL table was written from an incomplete enumeration and was therefore wrong; a test MUST fail if any handler sets `Content-Disposition: inline` without going through the shared policy-and-type helper.
 - **FR-009** The system MUST return a specific MIME type for every supported audio extension.
 - **FR-010** The system MUST NOT render Office documents.
 - **FR-011** The system MUST hide `%%…%%` comments **in the knowledge-base reader only**, and MUST NOT hide them in chat. *Why the scope matters:* the only markdown renderer that exists today is the chat one, so a naive implementation changes what chat shows — and chat renders untrusted model and tool output, where silently deleting the text between two markers hides content from the reader rather than protecting them. Verified: chat renders `%%secret%%` literally today.
@@ -1636,7 +1670,7 @@ Required, each a named piece of work:
 - **FR-015** The system MUST derive `Content-Type` from the file extension, never from content sniffing, and MUST send `X-Content-Type-Options: nosniff` on every inline response.
 - **FR-015a** The Library handler MUST set `Content-Type` **itself, before serving bytes**, from a table compiled into the binary, and MUST NOT delegate to `http.ServeContent`. *Why this is a requirement:* `handleLibraryDownload` calls `ServeContent` with no type set, and that function then does two things FR-015 forbids — asks the host operating system, then **sniffs the first 512 bytes**. The map this spec previously named is unreachable from the Library.
 - **FR-015b** That table MUST be the only source of the type, and the handler MUST NOT consult the host MIME registry. *Consequence otherwise:* the same binary answers differently on different machines. Verified on Go 1.26 — `.aac` is not in its built-in table, so on a developer Mac it resolves from `/etc/apache2/mime.types` and in a scratch container it does not, falls through to sniffing, and serves as `application/octet-stream`, which browsers refuse to play. The test written on the Mac passes; the shipped container is broken. Same for `.ttf`, `.otf`, `.woff`, `.woff2`.
-- **FR-015c** The table MUST cover at minimum the seven audio extensions, `.pdf`, `.html`/`.htm`, and the four webfont extensions FR-019 depends on. An extension absent from the table MUST be served `application/octet-stream` as an attachment — one stated default, no second guess, no sniff.
+- **FR-015c** The table MUST cover **every extension in §10.4**, and at minimum: `.html`/`.htm`, **`.css`, `.js`**, the four webfont extensions, the eight image extensions including `.svg`, the seven audio extensions and the three video extensions, plus `.pdf`, `.txt`, `.md`, `.json`. *Round 4 caught the omission:* an earlier list left out `.css` and `.js` — which §10.4 requires inline — so with the octet-stream default and mandatory `nosniff` every browser would refuse a bundle's own stylesheet and script, breaking US-1 AS-4, the flagship scenario. The table and §10.4 MUST be the same set, asserted by test 3b. An extension absent from the table MUST be served `application/octet-stream` as an attachment — one stated default, no second guess, no sniff.
 - **FR-016** The system MUST fail its build if an extension is added to the inline allow-list without a corresponding type-confusion test.
 - **FR-017** The system MUST describe the isolation rule accurately: only content the browser executes is sandboxed. It MUST NOT imply that formats Omnipus renders itself are sandboxed, nor that HTML is not.
 - **FR-018** The system MUST render PDFs with PDF.js inside the SPA, as a component alongside the existing image and video previews, and MUST load that bundle lazily rather than in the initial payload.
@@ -1780,6 +1814,11 @@ Required, each a named piece of work:
 | FR-006 | US-2 | Cannot reach the network | 11 |
 | FR-007 | US-2 | Untrusted content is visibly marked | 10 |
 | FR-008 | US-2 | Types outside the allow-list are attachments | 4 |
+| FR-008a | US-2 | (allow-list closed; `.svg` inert at its own URL) | 59, 94 |
+| FR-008b | US-2 | (every inline route carries the policy) | 99 |
+| FR-008c | US-2 | (inline routes enumerated and asserted) | 99 |
+| FR-085 | — | (every SPA test file matches a group) | 97 |
+| FR-086 | — | (no stale group patterns) | 98 |
 | FR-009 | US-1 | Documents and media render natively | 3 |
 | FR-010 | US-1 | (negative — NB-2) | 1 |
 | FR-011 | US-3 | Private comments do not render | 6 |
