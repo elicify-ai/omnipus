@@ -330,6 +330,7 @@ selection file failing to compile; and correcting that workflow comment.
 | 0e | `TestPathsafeRegression_WindowsUnchanged` | Unit | AS-3 | The 29 existing assertions still hold under the Windows tag, for **workspace storage** |
 | 0f | `TestMountedFile_NoNameShapeValidation` | Integration | FR-0001, FR-0001b | A mounted file with any OS-legal name lists, opens, indexes AND can be created — on every platform, including Windows builds |
 | 0g | `TestPathsafe_ControlCharsRejectedEveryPlatform` | Unit | FR-0002a | NUL, CR, LF rejected under **every** build tag |
+| 0l | `TestSanitizeComponent_UnchangedOnEveryBuild` | Unit | FR-0001d, NB-18 | The sanitising function produces byte-identical output under **both** rule sets for the remote-attachment corpus. **Catches the likely implementation** — a build-tag-dependent character set relaxes the sanitiser too, because it shares a predicate with the validator |
 | 0h | `TestPathsafe_DotAndDotDotRejectedWithoutTrailingDotRule` | Unit | FR-0002b | **Guards the exact regression:** `.` and `..` must fail with the trailing-dot rule disabled. MUST run under **every** build tag — it is vacuous on Windows, where the mutated rule is still on |
 
 ---
