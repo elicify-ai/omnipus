@@ -355,10 +355,38 @@ Plus a contract test that the capability catalog and the trim path agree on the 
 
 ## 19. Implementation tasks
 
-1. **Tier-1 audit of the builtin catalog.** Every collection tool takes `max_results`; every line- or document-oriented tool takes `offset`/`limit` (or `start_index`). Where a tool lacks one, add it. This is what makes Tier 1 real rather than aspirational. Compliance of the existing tools has **not** been checked.
+1. **Close the Tier-1 gaps.** The audit is **done** — see §19.1. Three tools need a bounding parameter added; the rest already comply.
 2. **Verify foreground `bash` buffer retention** (§7.3) before committing to refetch-only for shell output.
 3. **Seed-generation script** for `context_window` / `max_output_tokens` across the 78 entries.
 4. **Confirm the OpenAI and Anthropic model-list endpoint shapes** (§21) before asserting a native catalog is unavailable.
+
+### 19.1 Tier-1 compliance audit — result
+
+Performed 2026-08-22 on this branch @ `f4aaf37c`. The authoritative catalog is the per-agent policy map, which under Constraint #6 must enumerate every static builtin: **89 builtin tools**, of which **39** can plausibly return bulk output.
+
+**Already Tier-1 compliant — no work needed:**
+
+| Tool | Bounding parameter | Hard cap |
+|---|---|---|
+| `read_file` | `offset`, `length` | **`MaxReadFileSize = 64 * 1024`** — source comment: *"64KB limit to avoid context overflow"* |
+| `library_read` | `offset`, `length` | — |
+| `read_inbox`, `search_email` | `limit` | truncates |
+| `search_web`, `fetch_url` | `max_results`, `count`, `top_k` | truncates |
+| `list_jobs` | `count`, `limit` | truncates |
+| `recall_memory` | `limit` | — |
+| `find_skills` | `limit` | — |
+
+**Tier-1 gaps — a bounding parameter must be added:**
+
+| Tool | Current parameters | Exposure |
+|---|---|---|
+| `list_directory` | `path` only | a directory with tens of thousands of entries is unbounded |
+| `inspect_session` | `session_id`, `tool_name`, `role` | reads session transcripts, which are exactly the artefacts this ADR shows reaching megabytes |
+| `recall_conversation` | `query`, `turn_range`, `time.from/to` | `turn_range` selects a range but bounds no size |
+
+**This materially corrects D4's framing.** Tier 1 is not aspirational — it is largely built, and three tools are outliers rather than the rule. It also **corroborates the cap chosen in §6.1**: this codebase independently picked **64 KB** as its own "avoid context overflow" threshold for file reads, within 2% of the 62,500-char MCP cap derived from Claude Code. Two independent derivations landing on the same number is the strongest evidence available that the order of magnitude is right.
+
+**Method and its limits.** Receivers were resolved from each tool's `Name()` implementation and parameter names read from that receiver's own `Parameters()` body, so the three gaps are precise. The "already compliant" rows for tools sharing a source file with another tool were read at file level and are accurate to the file, not necessarily to the receiver — they should be spot-checked before the implementing commit relies on any individual row.
 
 ## 20. Open questions for ratification
 
@@ -372,4 +400,4 @@ Plus a contract test that the capability catalog and the trim path agree on the 
 - **[UNVERIFIED]** Whether the OpenAI and Anthropic model-list endpoints publish context length. Confirming requires the operator's API keys, deliberately not used. Immaterial to D1 (the seed is generated from OpenRouter's catalog) but must be checked before any claim that a native catalog is unavailable.
 - **[UNVERIFIED]** Ollama's local field name for context length (`/api/show`). The operator's daemon was not running. Needed only if D2 gains a live local-query rung for Ollama.
 - **[UNVERIFIED]** Whether foreground `bash` calls retain their session output buffer for later bounded reads (§7.3, §19.2).
-- **[UNVERIFIED]** Which builtin tools already accept a source-bounding parameter (§19.1).
+- ~~Which builtin tools already accept a source-bounding parameter~~ — **resolved 2026-08-22, see §19.1.**
