@@ -28,7 +28,6 @@
 import js from '@eslint/js';
 import tseslint from 'typescript-eslint';
 import reactHooks from 'eslint-plugin-react-hooks';
-import jsxA11y from 'eslint-plugin-jsx-a11y';
 
 export default tseslint.config(
   {
@@ -78,20 +77,19 @@ export default tseslint.config(
   {
     // Registered but deliberately NOT configured with any rules: the
     // existing codebase already carries `// eslint-disable-next-line
-    // react-hooks/exhaustive-deps` and `jsx-a11y/*` comments from a prior
+    // react-hooks/exhaustive-deps` comments from a prior
     // (now-absent) lint setup. Without these plugins registered, ESLint's
     // disable-directive validation hard-errors with "Definition for rule
     // '<name>' was not found" on every one of those comments — a config
     // resolution failure, not a lint finding. Registering the plugin makes
     // the rule name resolvable (the pre-existing directive then reads as an
     // "unused disable directive" warning, same as any other rule outside
-    // our enabled set) without turning on react-hooks/jsx-a11y linting
+    // our enabled set) without turning on react-hooks linting
     // itself — that stays out of scope per the "enable only @eslint/js +
     // typescript-eslint" baseline. Do not add rules here without
     // deliberately expanding scope.
     plugins: {
       'react-hooks': reactHooks,
-      'jsx-a11y': jsxA11y,
     },
   },
   // Node-run scripts and harnesses execute under Node, not in a browser, so
