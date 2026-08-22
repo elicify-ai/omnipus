@@ -1,0 +1,3 @@
+@font-face{font-family:Probe;src:url('/f/probe.woff2') format('woff2');}
+body{background:#101014;color:#e2e8f0;font-family:Probe,system-ui;}
+#cssmark{--loaded:yes;background:url('/f/cssimg.png');}

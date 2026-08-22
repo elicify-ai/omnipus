@@ -1,0 +1,47 @@
+<!doctype html><html><head><meta charset="utf-8"><title>csp-probe</title>
+<link rel="stylesheet" href="/f/style.css">
+<script src="/f/app.js"></script>
+</head><body>
+<div id="cssmark">probe</div>
+<audio src="/f/tone.wav" preload="auto"></audio>
+<iframe src="/f/doc.pdf" width="120" height="120"></iframe>
+<script>
+// Each probe triggers a REQUEST. The server records which requests arrive.
+// Server-observed arrivals are ground truth; the JS report is corroborating.
+(function(){
+  var EXT = window.__EXT__ || "http://127.0.0.1:__EXTPORT__";
+  function tag(n){ return "/f/probe-"+n; }
+  // same-origin subresource vectors
+  new Image().src = tag("img-same")+".png";
+  fetch(tag("fetch-same")).catch(function(){});
+  // cross-origin exfiltration vectors
+  new Image().src = EXT + "/x/img";
+  fetch(EXT + "/x/fetch").catch(function(){});
+  try { navigator.sendBeacon(EXT + "/x/beacon", "d"); } catch(e){}
+  try { var ws = new WebSocket(EXT.replace("http","ws") + "/x/ws"); } catch(e){}
+  try { var f=document.createElement("iframe"); f.src=EXT+"/x/iframe"; document.body.appendChild(f);}catch(e){}
+  try { var fm=document.createElement("form"); fm.action=EXT+"/x/form"; fm.method="GET";
+        document.body.appendChild(fm); fm.submit(); } catch(e){}
+  try { window.open(EXT+"/x/popup"); } catch(e){}
+
+  function report(){
+    var css = getComputedStyle(document.getElementById('cssmark')).backgroundColor;
+    var a = document.querySelector('audio');
+    var r = {
+      js_ran: !!window.__APP_JS_RAN__,
+      css_applied: getComputedStyle(document.body).backgroundColor === 'rgb(16, 16, 20)',
+      audio_ready: a ? a.readyState : -1,
+      origin: String(window.origin),
+      origin_opaque: String(window.origin) === 'null',
+      cookie: (function(){ try { return document.cookie; } catch(e){ return 'THREW:'+e.name; } })(),
+      localstorage: (function(){ try { localStorage.setItem('k','v'); return 'ok'; } catch(e){ return 'THREW:'+e.name; } })(),
+      fonts_status: (function(){ try { return document.fonts.status; } catch(e){ return 'err'; } })()
+    };
+    document.title = "RESULT:" + JSON.stringify(r);
+    var el=document.createElement('pre'); el.id='result'; el.textContent=JSON.stringify(r); document.body.appendChild(el);
+  }
+  if (document.readyState === 'complete') setTimeout(report, 1200);
+  else window.addEventListener('load', function(){ setTimeout(report, 1200); });
+})();
+</script>
+</body></html>

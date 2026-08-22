@@ -2,9 +2,9 @@
 
 - **Date:** 2026-08-22
 - **Answers:** ADR-067 D15's mandated verification (AC-15.4), and review findings C-01, C-02, m-09
-- **Engines:** Chromium 151.0.7922.34 · Firefox 153.0 · WebKit 26.5 — all headless, macOS
+- **Engines:** Chromium 151.0.7922.34 · Firefox 153.0 · WebKit 26.5 — headless for §1–§5; **§6A was run HEADED on Chromium only**, which changed one conclusion (see §6A.1)
 - **Method:** five candidate policies × two load modes (top-level navigation, embedded iframe) × three engines, each swept twice
-- **Harness:** `scratchpad/csp-exp/` — a page loading an external stylesheet, external script, webfont, audio and a PDF, which also attempts egress to a **second origin** by seven vectors (image, fetch, beacon, WebSocket, iframe, form, popup)
+- **Harness:** `docs/internal/experiments/preview-isolation/` (committed; see §6) — a page loading an external stylesheet, external script, webfont, audio and a PDF, which also attempts egress to a **second origin** by seven vectors (image, fetch, beacon, WebSocket, iframe, form, popup)
 
 > **Ground truth is server-side.** Both origins log every request they receive. What arrives was allowed; what never arrives was blocked. The in-page JavaScript report is corroborating only — a page can misreport what happened to it; a server log cannot.
 
@@ -127,8 +127,9 @@ Fonts are fetched in CORS mode. Under an opaque origin the page is cross-origin 
 ## 6. Reproducing
 
 ```
-cd scratchpad/csp-exp
-python3 server.py <MAIN_PORT> <EXT_PORT>
+cd docs/internal/experiments/preview-isolation
+python3 server.py <MAIN_PORT> <EXT_PORT>     # experiments 1
+python3 server2.py <MAIN_PORT> <EXT_PORT>    # experiment 6A
 # then drive http://127.0.0.1:<MAIN_PORT>/p/<policy>/ in a browser
 # GET /__hits for the server's request log, /__reset between runs
 ```
@@ -136,6 +137,92 @@ python3 server.py <MAIN_PORT> <EXT_PORT>
 Policies: `self`, `origin`, `nosandbox`, `sandboxonly`, `none`. The `none` control **must** show all seven vectors reaching the second origin; if it does not, the harness is broken and no other row means anything.
 
 **Known harness defect:** with no policy, the form-submit probe navigates the document away before the in-page report runs, so the `none` row has no report and a racy egress list. This affects the control only. It does not affect any policy that blocks form submission — i.e. every policy under consideration.
+
+---
+
+## 6A. Second experiment — per-format isolation, the font fix, and type confusion
+
+Run after §1–§5, on the same day, with a **second harness**
+(`docs/internal/experiments/preview-isolation/server2.py` + `fixture2/`). Chromium only —
+the Firefox and WebKit runs were **stopped before completing** when the design moved to
+PDF.js and their results became moot. **Chromium 151.0.7922.34, run HEADED**, each case twice,
+byte-identical across runs.
+
+> **Single-engine. Do not generalise these three results to Firefox or Safari.**
+
+### 6A.1 The headless trap — this invalidated an earlier conclusion
+
+**Headless Chromium has no PDF viewer.** Every PDF — including the no-policy control —
+became a download: `page.goto` threw `Download is starting`, the page stayed at
+`about:blank`. That is a build artifact, not a security control.
+
+**§3.1's conclusion was therefore partly wrong.** Measured headed:
+
+| Case | Result |
+|---|---|
+| PDF **top-level**, under `sandbox` | **Renders.** The sandbox directive does not apply to a top-level PDF navigation — the embedder reported `origin: "http://127.0.0.1:8910"`, not `null` |
+| PDF **top-level**, no policy | Renders |
+| PDF **in an iframe**, under `sandbox` | **Blocked** — `chrome-error://chromewebdata/`, `net::ERR_BLOCKED_BY_CLIENT` |
+| PDF **in an iframe**, no policy | Renders |
+
+So sandbox breaks the PDF *plugin in a subframe*, not a top-level PDF. The Library case is
+the framed one, so §3.1's practical conclusion survives — but its stated reasoning ("sandbox
+breaks the PDF viewer") was too broad. **Any future PDF test MUST run headed.**
+
+### 6A.2 The webfont CORS fix — measured, and the fixture oracle was broken
+
+**§3.2 said this was unsettled. It is now settled for Chromium.**
+
+First, the honest part: **the fixture's own oracle reported failure under every policy,
+including the no-CSP control**, for two independent reasons — the font (Noto Sans Lycian) has
+no glyph for the characters being measured, and the measured element was block-level so its
+width was font-independent. The fixture's `font_actually_applied` field carries no
+information and must not be used.
+
+A working oracle was built instead: the font's **space advance** (260/1000 em ≈ 10.4px at
+40px) versus a monospace fallback (~24px), measured on an inline element.
+
+| Policy | font without `Access-Control-Allow-Origin` | with the header |
+|---|---|---|
+| no CSP | applied (104.0px) | applied (104.0px) |
+| `passive` (no sandbox) | applied (104.0px) | applied (104.0px) |
+| `active` (sandbox) | **NOT applied** (240.82px = fallback) | **applied** (104.0px) |
+
+Corroborated by console (`Access to font … from origin 'null' has been blocked by CORS
+policy`), by network (`net::ERR_FAILED` without the header, 200 with it), and by
+`FontFace.status` (`"error"` vs `"loaded"`).
+
+**CORS is definitively the blocker and the header is definitively the fix — on Chromium.**
+
+> `document.fonts.status` reported `"loaded"` while two of three faces were in
+> `status: "error"`. **Confirmed liar. Never use it as a success oracle.**
+
+### 6A.3 Type confusion — blocked, and not by CSP
+
+An HTML document named `evil.pdf`, containing a script that sets the title and beacons the
+cookie to the external origin, served as `application/pdf` with `nosniff`:
+
+| Case | Title | HTML rendered | External hits |
+|---|---|---|---|
+| under `passive` | `""` | none | **none** |
+| under `active` | `""` | none | **none** |
+| **under `none` — no CSP at all** | `""` | none | **none** |
+
+Chromium routed the bytes to its PDF engine, which rejected them: *"Failed to load PDF
+document."* **Content-type dispatch did the work; CSP contributed nothing.**
+
+**Positive control** (run twice, identical): the same payload served as `text/html` in a
+same-origin iframe on an un-CSP'd page executed fully — title `EVIL_EXECUTED`, the heading
+rendered, and `/x/evil-fetch` and `/x/evil-beacon` both reached the external origin. So the
+negatives above are real, not blind instrumentation.
+
+### 6A.4 Harness defects recorded rather than hidden
+
+- `active-cors` **did not exercise the fix as shipped**: the server adds the header only on
+  `?c=1`, and `index.html` requests the font without it. The winning column above came from an
+  injected `@font-face`, not the fixture.
+- The `none` control has no in-page report in either harness: with no policy the form-submit
+  probe navigates the document away before the report runs.
 
 ---
 

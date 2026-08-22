@@ -1,0 +1,3 @@
+@font-face{font-family:RealProbe;src:url('/f/real.ttf') format('truetype');}
+body{background:#101014;color:#e2e8f0;}
+#ft{font-family:RealProbe,monospace;font-size:40px;}

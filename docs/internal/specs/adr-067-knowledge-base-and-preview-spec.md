@@ -27,11 +27,13 @@ twice each, with **server-side request logs as ground truth** rather than in-pag
 | CSP `'self'` **does** match under an opaque origin | **Measured.** The ADR's original warning was wrong; the distinct-origin fallback is retired |
 | An explicit origin behaves identically to `'self'` and additionally breaks behind a reverse proxy | **Measured** |
 | Both mechanisms are required — `window.open` escapes source directives alone; five of seven vectors escape `sandbox` alone | **Measured** |
-| Webfonts need `Access-Control-Allow-Origin`; CORS is definitively the blocker | **Measured**, with a rendered-width oracle. `document.fonts.status` reports `"loaded"` on failure and **must not** be used |
-| An HTML file named `.pdf` does not execute — blocked by content-type dispatch, **even with no CSP** | **Measured**, with a positive control proving the detection was not blind |
-| PDF.js writes form values and ink signatures correctly, rendered by macOS PDFKit | **Measured** |
+| Webfonts need `Access-Control-Allow-Origin`; CORS is the blocker | **Measured — Chromium only** (experiment §6A.2), with a space-advance oracle after the fixture's own oracle was found broken. **Not measured on Firefox or WebKit** — those runs were stopped. `document.fonts.status` reports `"loaded"` on failure and **must not** be used |
+| An HTML file named `.pdf` does not execute — blocked by content-type dispatch, **even with no CSP** | **Measured — Chromium only** (experiment §6A.3), with a positive control proving the detection was not blind. **Not measured on Firefox or WebKit** |
+| PDF.js writes form values and ink signatures correctly, rendered by macOS PDFKit | **Measured** (experiment §7) — one hand-built single-field form. Complex forms untested |
 | Adobe Acrobat compatibility; complex real-world forms; Safari headful PDF; PDF size threshold | **NOT verified** — see AW-10/11/12. Nothing in this spec may assume them |
 | A sandboxed preview can authenticate | **DISPROVED** — the experiment harness was an unauthenticated static server, which hid this. See FR-003a |
+
+**A conclusion in §3.1 was later corrected by §6A.1** — headless Chromium has no PDF viewer, so an earlier "PDF fails under sandbox everywhere" reading was partly an artifact. Headed, a *top-level* PDF renders even sandboxed; a *framed* PDF is blocked. The Library case is framed, so the practical conclusion held, but the reasoning did not.
 
 **Test rule that follows:** PDF and preview end-to-end tests **must run headed**. Headless
 Chromium has no PDF viewer and headless WebKit renders no PDFs at all; both previously
@@ -65,7 +67,7 @@ Derived from a GitNexus index built on this branch at commit `effdacb`
 | `isSafeHref` (TS) | `src/lib/url-safe.ts` | **Not modified** — bypassed by a KB-specific link renderer |
 | `isSafeHref` (Go) | `pkg/utils/markdown.go` | **Not modified** — recorded for the divergence in §2.4 |
 | `OpenOrCreate` | `pkg/memrooms/index/index.go` | **Not modified** — pattern copied into a sibling package |
-| `CleanRelPath` | `pkg/library/root.go` | **Not modified** — its `pathsafe` rule produces residual R-7 |
+| `CleanRelPath` | `pkg/library/root.go` | **MODIFIED (Stage 0)** — keeps addressing safety unconditionally; name-shape validation moves out of it to the create path, after root resolution |
 | `AllowedMountRoots` | `pkg/workspace/mount.go` | **Called** — the isolation boundary for KB scoping |
 | `ValidateToolPolicyCoverage` | `pkg/config/validate.go` | **Satisfied** — new tools must be seeded or boot aborts |
 
@@ -210,26 +212,47 @@ in the same folder is still refused.
 
 ### Requirements — Stage 0
 
-- **FR-0001** The system MUST NOT apply Omnipus filename-shape rules (illegal characters, reserved device names, trailing dot or space, component length) to files inside **mounted folders** on any platform. Those files are the operator's, and Omnipus reads what is on disk.
-- **FR-0001a** The system MAY apply Windows-safe naming to files it **creates in workspace storage**, and MUST do so only in Windows builds, via build tags.
-- **FR-0002** The system MUST NOT relax path-traversal, containment or root-confinement checks on any platform.
-- **FR-0002a** The system MUST separate **control-character rejection** (`r <= 0x1F`) from Windows-shape rejection before any build-tag split. They are fused in `pathsafe.firstIllegalRune` today; relaxing the fused predicate would drop NUL/CR/LF rejection at untrusted ingest points (`pkg/utils/media.go` remote chat attachments, `upload_workpath.go`), which are not "the operator's own files".
-- **FR-0002b** The system MUST reject a `..` component **independently of the trailing-dot rule**. Verified: `ValidateComponent("..")` currently fails *only* via `hasTrailingDotOrSpace`; build-tagging that rule away makes `..` valid. `library.CleanRelPath` has its own `..` check, but the guarantee MUST NOT depend on every caller repeating it.
-- **FR-0003** The system MUST correctly encode filenames in HTTP headers, including names containing quotes.
-- **FR-0004** The system MUST NOT apply the component-length limit on platforms whose filesystem does not require it.
+> **Layering correction (round-3 review, verified).** An earlier draft put the owned/not-owned
+> distinction inside `pathsafe`, reached through `library.CleanRelPath`. **That is unbuildable
+> there.** Verified: `CleanRelPath(raw string)` is a package-level pure function with no
+> receiver, and **all 12 non-test callers in `rest_library.go` call it BEFORE
+> `openLibraryRoot`** — `Root.mounts` does not exist yet, so at validation time the code cannot
+> know which population the path is in. A build tag is also compile-time and cannot express a
+> runtime distinction; the earlier draft conflated the two axes.
+>
+> **The fix splits by *purpose*, not by population — which removes the need to know the
+> population on the read path at all.** Name-shape rules exist to stop Omnipus *creating*
+> unportable names. They have no business on the read path.
+
+**Two validations, at two layers:**
+
+| | Applies to | Where | Conditional? |
+|---|---|---|---|
+| **Addressing safety** — `..`, traversal, control characters, root confinement | Every path, read or write | `CleanRelPath`, unchanged position | **Never.** Every platform, every build |
+| **Name shape** — Windows characters, reserved device names, trailing dot/space, length | Only names Omnipus **creates** | **After root resolution**, where mount context exists | Workspace storage only; skipped inside mounts |
+
+### Requirements — Stage 0
+
+- **FR-0001** The system MUST NOT apply name-shape rules when **reading, listing, indexing or linking** an existing file, on any platform. Those files are the operator's; Omnipus reports what is on disk.
+- **FR-0001a** The system MUST apply name-shape rules only when **creating or renaming**, and MUST evaluate them **after root resolution**, so the destination's population is known.
+- **FR-0001b** The system MUST NOT apply name-shape rules to a create or rename **inside a mount**.
+- **FR-0001c** The system MAY apply Windows-safe naming to workspace storage, gated on the build target rather than a runtime flag.
+- **FR-0002** The system MUST NOT relax path-traversal, containment or root-confinement checks on any platform, in any build.
+- **FR-0002a** The system MUST separate **control-character rejection** (r <= 0x1F) from Windows-shape rejection before any split. They are fused in `pathsafe.firstIllegalRune` today. The split MUST also cover the **sanitising** paths — `replaceIllegalRunes` / `SanitizeComponent`, used at untrusted ingest (`pkg/utils/media.go`, `pkg/notifications/store.go`) — not only the validating one.
+- **FR-0002b** The system MUST reject `..` **and** `.` independently of the trailing-dot rule. Verified: `ValidateComponent("..")` currently fails *only* via `hasTrailingDotOrSpace`. `library.CleanRelPath` has its own check, but the guarantee MUST NOT depend on every caller repeating it.
 
 ### Tests — Stage 0
 
 | Order | Test | Level | Traces to | Notes |
 |---|---|---|---|---|
-| 0a | `TestPathsafe_PlatformMatrix` | Unit | AS-1, AS-3 | Same input, opposite verdicts per build tag |
+| 0a | `TestNameShape_CreateOnlyNotRead` | Unit | FR-0001, FR-0001a | The same name is accepted for READ and rejected for CREATE in workspace storage on a Windows build |
 | 0b | `TestPathsafe_TraversalStillRefused` | Unit | AS-6, FR-0002 | **The guard that must not regress** |
 | 0c | `TestLibrary_QuoteInFilenameHeaderSafe` | Integration | AS-5, FR-0003 | Header injection via filename |
 | 0d | `TestLibrary_LongFilenameOpens` | Integration | AS-4 | 106-character basename |
 | 0e | `TestPathsafeRegression_WindowsUnchanged` | Unit | AS-3 | The 29 existing assertions still hold under the Windows tag, for **workspace storage** |
-| 0f | `TestMountedFile_NoNameShapeValidation` | Integration | FR-0001 | A mounted file with any OS-legal name lists, opens and indexes — on every platform, including Windows builds |
+| 0f | `TestMountedFile_NoNameShapeValidation` | Integration | FR-0001, FR-0001b | A mounted file with any OS-legal name lists, opens, indexes AND can be created — on every platform, including Windows builds |
 | 0g | `TestPathsafe_ControlCharsRejectedEveryPlatform` | Unit | FR-0002a | NUL, CR, LF rejected under **every** build tag |
-| 0h | `TestPathsafe_DotDotRejectedWithoutTrailingDotRule` | Unit | FR-0002b | **Guards the exact regression:** `..` must fail with the trailing-dot rule disabled |
+| 0h | `TestPathsafe_DotAndDotDotRejectedWithoutTrailingDotRule` | Unit | FR-0002b | **Guards the exact regression:** `.` and `..` must fail with the trailing-dot rule disabled. MUST run under **every** build tag — it is vacuous on Windows, where the mutated rule is still on |
 
 ---
 
@@ -1408,8 +1431,10 @@ explicit seam tests: items 4 and 26.
 
 | Requirement | User story | BDD scenario | Test |
 |---|---|---|---|
-| FR-0001 | US-0 | (mounted files are read as-is) | 0a, 0f |
-| FR-0001a | US-0 | (workspace naming, Windows builds) | 0a, 0e |
+| FR-0001 | US-0 | (read path never shape-validates) | 0a, 0f |
+| FR-0001a | US-0 | (shape checked after root resolution) | 0a |
+| FR-0001b | US-0 | (no shape rules inside mounts) | 0f |
+| FR-0001c | US-0 | (workspace naming, Windows builds) | 0e |
 | FR-0002 | US-0 | Traversal still refused | 0b |
 | FR-0002a | US-0 | (control chars kept on all platforms) | 0g |
 | FR-0002b | US-0 | (`..` rejected independently) | 0h |
@@ -1519,6 +1544,9 @@ explicit seam tests: items 4 and 26.
 | AC-6.2 | 19 | AC-15.3 | 3 |
 | AC-6.3 | 18 | AC-15.4 | 12 |
 | AC-6.4 | 33 | AC-17.1 | 34 |
+| AC-15.5 | 58 | AC-15.8 | 67a |
+| AC-15.6 | 61 | AC-15.9 | 68 |
+| AC-15.7 | 59 | AC-15.10 | 67 |
 |  |  | AC-17.2 | 35 |
 
 ---
