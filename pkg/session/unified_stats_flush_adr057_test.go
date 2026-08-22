@@ -43,9 +43,43 @@ func u6NewTestStore(t *testing.T) *UnifiedStore {
 // Test #20: TestStatsThrottle_NoFileWriteWithinInterval (BDD-65)
 // ---------------------------------------------------------------------
 
+// TestStatsThrottle_NoFileWriteWithinInterval used to compare
+// os.Stat(statsPath).ModTime() (and raw bytes) taken before vs. after a
+// burst of K real, fsync-bound AppendTranscript calls, on the assumption
+// that K appends always complete well inside the configured 300ms flush
+// interval. Under host contention (issue #634: this package run concurrently
+// with pkg/agent's own test suite) that assumption can be false — the K
+// appends' real disk I/O can legitimately take longer than 300ms, so the
+// store's OWN periodic flusher goroutine correctly fires mid-burst and
+// persists stats.json for a completely correct reason, flipping the
+// mtime/bytes-equality assertion with an observed drift as small as ~137ms.
+// That was a genuine race between "how long real I/O takes" and "the
+// configured interval", not a bug in the throttle, and no tolerance widening
+// fixes a race — it only narrows the window in which it's observed.
+//
+// Fixed per the pattern used elsewhere on this branch (see
+// TestUpdateToolCallStatusWithRetry_FoundOnFirstAttemptSkipsRetry,
+// TestEvidenceGate_NeverEmittedMarker_TerminatesWithinBudget): assert the
+// throttle's DECISION, not elapsed wall-clock time. The burst phase below
+// isolates itself from the periodic ticker entirely (SetStatsFlushInterval
+// to an hour — the same established idiom TestAppendTranscriptStrict_StatsThrottled
+// already uses "to isolate from the periodic ticker"), which makes "the
+// burst never touches stats.json" a property that holds by construction, for
+// ANY burst duration, on ANY machine — not a race to be measured. The BDD-65
+// negative control ("after the interval elapses with no other action,
+// stats.json DOES become current") is preserved verbatim and still exercises
+// the REAL periodic flusher goroutine (not a manual force): the interval is
+// re-armed short, then the test polls for the decision (did the periodic
+// path persist it yet?) against a generous backstop deadline, rather than a
+// fixed sleep multiplier that is itself vulnerable to the exact same
+// host-contention risk in the OTHER direction (the flusher goroutine's own
+// tick can be scheduled late too).
 func TestStatsThrottle_NoFileWriteWithinInterval(t *testing.T) {
 	store := u6NewTestStore(t)
-	store.SetStatsFlushInterval(300 * time.Millisecond)
+	// Isolate the burst phase from the periodic ticker completely — see the
+	// doc comment above. No real or simulated clock can make the ticker fire
+	// during the burst, so "unchanged" below is deterministic, not timed.
+	store.SetStatsFlushInterval(time.Hour)
 
 	meta, err := store.NewSession(SessionTypeChat, "", "agent-1")
 	require.NoError(t, err)
@@ -58,8 +92,6 @@ func TestStatsThrottle_NoFileWriteWithinInterval(t *testing.T) {
 	require.NoError(t, store.FlushSessionStats(sessionID))
 
 	statsPath := filepath.Join(store.BaseDir(), sessionID, "stats.json")
-	before, err := os.Stat(statsPath)
-	require.NoError(t, err)
 	beforeBytes, err := os.ReadFile(statsPath)
 	require.NoError(t, err)
 
@@ -67,18 +99,16 @@ func TestStatsThrottle_NoFileWriteWithinInterval(t *testing.T) {
 	beforeTranscript, err := os.ReadFile(transcriptPath)
 	require.NoError(t, err)
 
-	// K appends inside the (300ms) interval — well under it.
+	// K appends. However long these take in real wall-clock time, the
+	// periodic ticker cannot fire — the interval above is an hour.
 	const k = 5
 	for i := 0; i < k; i++ {
 		require.NoError(t, store.AppendTranscript(sessionID, TranscriptEntry{Role: "user", Content: "burst", Tokens: 1}))
 	}
 
-	after, err := os.Stat(statsPath)
-	require.NoError(t, err)
 	afterBytes, err := os.ReadFile(statsPath)
 	require.NoError(t, err)
-	assert.Equal(t, before.ModTime(), after.ModTime(), "stats.json mtime must be unchanged during a burst inside the flush interval")
-	assert.Equal(t, beforeBytes, afterBytes, "stats.json content must be unchanged during a burst inside the flush interval")
+	assert.Equal(t, beforeBytes, afterBytes, "stats.json content must be unchanged after a burst with the periodic ticker isolated — a change here means something OTHER than the periodic flusher wrote it (e.g. AppendTranscript itself is no longer throttling)")
 
 	afterTranscript, err := os.ReadFile(transcriptPath)
 	require.NoError(t, err)
@@ -86,13 +116,30 @@ func TestStatsThrottle_NoFileWriteWithinInterval(t *testing.T) {
 	afterLines := countLines(afterTranscript)
 	assert.Equal(t, k, afterLines-beforeLines, "transcript.jsonl must grow by exactly one line per append")
 
-	// Negative control (grill C-4): after the interval elapses with no
-	// other action, stats.json DOES become current — proving "unchanged"
-	// above was not satisfied by "never written at all".
-	time.Sleep(3 * store.StatsFlushInterval())
-	finalBytes, err := os.ReadFile(statsPath)
-	require.NoError(t, err)
-	assert.NotEqual(t, string(beforeBytes), string(finalBytes), "stats.json must become current after the interval elapses")
+	// Negative control (grill C-4, BDD-65's own "no other action" wording):
+	// re-arm a short interval and prove the REAL periodic flusher — not a
+	// manual FlushSessionStats call — eventually persists the pending delta
+	// on its own. Poll for the decision with a generous backstop deadline
+	// (a backstop against "never happens at all", not the thing under test —
+	// see TestEvidenceGate_NeverEmittedMarker_TerminatesWithinBudget for the
+	// same poll+backstop shape) so this half is equally immune to host
+	// contention delaying the flusher goroutine itself.
+	const rearmedInterval = 20 * time.Millisecond
+	store.SetStatsFlushInterval(rearmedInterval)
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		finalBytes, readErr := os.ReadFile(statsPath)
+		require.NoError(t, readErr)
+		if string(finalBytes) != string(beforeBytes) {
+			break // success: the periodic flusher persisted it with no other action taken
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("stats.json never became current via the periodic flusher within 10s of re-arming a %v interval — "+
+				"either the flusher goroutine is dead (the AC-22 regression TestStatsThrottle_UnforcedFlushConverges also "+
+				"guards) or this negative control itself is broken", rearmedInterval)
+		}
+		time.Sleep(rearmedInterval / 2)
+	}
 }
 
 func countLines(b []byte) int {

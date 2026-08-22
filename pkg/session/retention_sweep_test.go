@@ -14,6 +14,11 @@ func newUnifiedStoreForTest(t *testing.T) *UnifiedStore {
 	t.Helper()
 	store, err := NewUnifiedStore(t.TempDir())
 	require.NoError(t, err, "NewUnifiedStore must succeed")
+	// See issue #634 / u2NewTestStore's doc comment (unified_api_adr057_test.go):
+	// without this, the store's background stats-flusher goroutine (started
+	// unconditionally by the constructor) outlives this test and can pollute
+	// a later test's FR-101 lock-recorder trace.
+	t.Cleanup(func() { _ = store.Close() })
 	return store
 }
 

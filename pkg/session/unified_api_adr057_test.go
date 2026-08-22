@@ -37,6 +37,18 @@ func u2NewTestStore(t *testing.T) *UnifiedStore {
 	t.Helper()
 	store, err := NewUnifiedStore(t.TempDir())
 	require.NoError(t, err)
+	// Every NewUnifiedStore(WithHome) unconditionally starts a background
+	// stats-flusher goroutine (unified_stats_flush.go's startStatsFlusher,
+	// called from the constructor). Without this Close, that goroutine
+	// outlives the test and keeps calling through the package-level
+	// sessionLockAcquireFn/sessionLockReleaseFn FR-101 seam for as long as
+	// the test binary runs — including while a LATER test in this package
+	// has its own recorder installed (installLockRecorder), injecting
+	// foreign lock events into that later test's trace. Close (via
+	// stopStatsFlusher) synchronously stops and joins the goroutine before
+	// this test returns, so it can never survive into another test. See
+	// issue #634.
+	t.Cleanup(func() { _ = store.Close() })
 	return store
 }
 

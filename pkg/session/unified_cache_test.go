@@ -627,6 +627,7 @@ func TestNewUnifiedStore_LoadMetaCache_HappyPath(t *testing.T) {
 
 	first, err := NewUnifiedStore(baseDir)
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = first.Close() }) // see issue #634
 
 	const n = 4
 	ids := make([]string, n)
@@ -641,6 +642,7 @@ func TestNewUnifiedStore_LoadMetaCache_HappyPath(t *testing.T) {
 	// loadMetaCacheLocked's boot-time scan, not any live-instance mutation.
 	second, err := NewUnifiedStore(baseDir)
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = second.Close() }) // see issue #634
 
 	metas, err := second.ListSessions()
 	require.NoError(t, err)
@@ -685,6 +687,7 @@ func TestNewUnifiedStore_LoadMetaCache_CorruptSessionExcludedAndCounted(t *testi
 
 	store, err := NewUnifiedStore(baseDir)
 	require.NoError(t, err, "NewUnifiedStore must succeed despite one corrupt session dir")
+	t.Cleanup(func() { _ = store.Close() }) // see issue #634
 
 	metas, err := store.ListSessions()
 	require.NoError(t, err)

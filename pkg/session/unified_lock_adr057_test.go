@@ -449,6 +449,13 @@ func newTestStoreForLockTests(t *testing.T) *UnifiedStore {
 	t.Helper()
 	store, err := NewUnifiedStore(t.TempDir())
 	require.NoError(t, err)
+	// See u2NewTestStore's doc comment (unified_api_adr057_test.go) / issue
+	// #634: without this, the store's background stats-flusher goroutine
+	// outlives this test and can inject foreign events into a LATER test's
+	// installLockRecorder trace via the shared package-level FR-101 seam —
+	// exactly the class of pollution this file's own recorder exists to
+	// detect, so this file must not itself be a source of it.
+	t.Cleanup(func() { _ = store.Close() })
 	return store
 }
 
@@ -854,8 +861,31 @@ func TestSessionLock_DifferentSessionsNeverBlockEachOther(t *testing.T) {
 
 	hA := store.lockSession(idA)
 	const holdFor = 300 * time.Millisecond
-	releaseTimer := time.AfterFunc(holdFor, func() { hA.Unlock() })
-	t.Cleanup(func() { releaseTimer.Stop() }) // no-op once already fired
+	fired := make(chan struct{})
+	releaseTimer := time.AfterFunc(holdFor, func() {
+		hA.Unlock()
+		close(fired)
+	})
+	// Issue #634: this test's own `select` below returns as soon as B
+	// completes (microseconds), almost always well BEFORE holdFor elapses —
+	// so without this Cleanup, the test used to return with shard idA still
+	// LOCKED and a goroutine still pending to unlock it up to holdFor later,
+	// via the SAME package-level FR-101 sessionLockAcquireFn/ReleaseFn seam
+	// every other test in this package shares. A later test's
+	// installLockRecorder could easily still be installed when that stray
+	// release finally fired, injecting a foreign event into its trace.
+	// time.Timer.Stop's return value distinguishes the two cases correctly:
+	// true means the AfterFunc body never ran at all (so hA.Unlock was never
+	// called — release it here instead); false means it already fired or is
+	// firing right now (so join `fired` to guarantee that goroutine has
+	// fully exited before this test returns).
+	t.Cleanup(func() {
+		if releaseTimer.Stop() {
+			hA.Unlock()
+		} else {
+			<-fired
+		}
+	})
 
 	bDone := make(chan time.Duration, 1)
 	go func() {

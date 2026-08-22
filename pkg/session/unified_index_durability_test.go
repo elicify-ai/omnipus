@@ -90,6 +90,7 @@ func TestUnifiedStore_ColdStartRebuildsParentIndex(t *testing.T) {
 	// scan, not any live-instance mutation.
 	cold, err := NewUnifiedStore(baseDir)
 	require.NoError(t, err, "NewUnifiedStore must succeed on a pre-existing directory")
+	t.Cleanup(func() { _ = cold.Close() }) // see issue #634
 
 	gotChild, err := cold.GetMeta(child.ID)
 	require.NoError(t, err)

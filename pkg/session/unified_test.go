@@ -27,11 +27,15 @@ import (
 )
 
 // newTestStore creates a UnifiedStore rooted at t.TempDir() and returns it.
-// Callers are responsible for closing it if needed.
+// Closed automatically via t.Cleanup — see issue #634: the constructor
+// unconditionally starts a background stats-flusher goroutine that, left
+// running past this test's return, keeps calling through the package-level
+// FR-101 lock-recorder seam and can pollute a later test's recorded trace.
 func newTestStore(t *testing.T) *UnifiedStore {
 	t.Helper()
 	store, err := NewUnifiedStore(t.TempDir())
 	require.NoError(t, err, "NewUnifiedStore must succeed")
+	t.Cleanup(func() { _ = store.Close() })
 	return store
 }
 
@@ -796,6 +800,7 @@ func TestDeleteSession_CascadeDeletesUploads_SharedStore(t *testing.T) {
 
 	store, err := NewUnifiedStoreWithHome(sessionsDir, home)
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() }) // see issue #634
 
 	meta, err := store.NewSession(SessionTypeChat, "", "agent-test")
 	require.NoError(t, err)
@@ -839,6 +844,7 @@ func TestDeleteSession_CascadeDeletesUploads_PerAgentStore(t *testing.T) {
 
 	store, err := NewUnifiedStoreWithHome(agentSessionsDir, home)
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() }) // see issue #634
 
 	meta, err := store.NewSession(SessionTypeChat, "", "my-agent")
 	require.NoError(t, err)
@@ -887,6 +893,8 @@ func newTestStoreWithHome(t *testing.T) (store *UnifiedStore, home string) {
 	sessionsDir := filepath.Join(home, "sessions")
 	store, err := NewUnifiedStoreWithHome(sessionsDir, home)
 	require.NoError(t, err, "NewUnifiedStoreWithHome must succeed")
+	// See newTestStore's doc comment / issue #634.
+	t.Cleanup(func() { _ = store.Close() })
 	return store, home
 }
 

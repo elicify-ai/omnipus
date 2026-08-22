@@ -26,6 +26,11 @@ func newUnifiedStoreForExternalTest(t *testing.T) *session.UnifiedStore {
 	t.Helper()
 	store, err := session.NewUnifiedStore(t.TempDir())
 	require.NoError(t, err, "NewUnifiedStore must succeed")
+	// See pkg/session's u2NewTestStore doc comment / issue #634: without
+	// this, the store's background stats-flusher goroutine outlives this
+	// test and can pollute a later in-package test's FR-101 lock-recorder
+	// trace via the shared package-level seam.
+	t.Cleanup(func() { _ = store.Close() })
 	return store
 }
 

@@ -34,6 +34,9 @@ func u5NewTestStore(t *testing.T) *UnifiedStore {
 	t.Helper()
 	store, err := NewUnifiedStore(t.TempDir())
 	require.NoError(t, err)
+	// See u2NewTestStore's doc comment (unified_api_adr057_test.go) / issue
+	// #634.
+	t.Cleanup(func() { _ = store.Close() })
 	return store
 }
 
@@ -355,6 +358,7 @@ func TestUnifiedMetaMarshal_ByteIdenticalAcrossSplit(t *testing.T) {
 	// survives a full reload, not just an in-process re-read.
 	reopened, err := NewUnifiedStore(store.BaseDir())
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = reopened.Close() }) // see issue #634
 	fromReopen, err := reopened.GetMeta(sessionID)
 	require.NoError(t, err)
 	reopenBytes, err := json.MarshalIndent(fromReopen, "", "  ")
@@ -474,6 +478,7 @@ func TestParentSessionID_RoundTripsAndWiresParentIndex(t *testing.T) {
 	// actually compose it from meta.json, not just serve a cached Go value).
 	reopened, err := NewUnifiedStore(store.BaseDir())
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = reopened.Close() }) // see issue #634
 	gotReloaded, err := reopened.GetMeta(child.ID)
 	require.NoError(t, err)
 	assert.Equal(t, parent.ID, gotReloaded.ParentSessionID, "ParentSessionID must survive a full store reload from disk")
