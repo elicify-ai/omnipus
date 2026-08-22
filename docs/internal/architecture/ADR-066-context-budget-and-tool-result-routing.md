@@ -8,6 +8,8 @@
 - **History:** an earlier draft (commits `f4aaf37c`..`4684e8c7`) built a separate tool-result subsystem — spill-to-disk handles, a four-shape reducer, schema-derived refetch recipes, a second per-turn budget. The adversarial review ([ADR-066 review](ADR-066-context-budget-and-tool-result-routing-review.md), verdict BLOCK, 44 findings) and the operator's direction on 2026-08-22 replaced it with the three changes below. The earlier decisions are retired in §14 rather than deleted, so the reasoning that rejected them survives.
 
 > **Scope note.** This ADR decides how the harness keeps a request inside the model's window **at every point in a turn**, and what happens when it would not. It adds no summarisation, deletes nothing from disk, and introduces no new storage. It reverses one unratified heuristic (`maxTokens * 4`) and extends one ratified mechanism (ADR-028's window).
+>
+> **Greenfield rule (operator, 2026-08-22), applies to the entire scope:** no backward compatibility, no migration, no aliasing of old names, no grace periods, no mixed-version tolerance, no retired-name lists, no boot notifications about removed things. Pre-existing Omnipus state that does not match this design simply does not work. Runtime fallbacks that are part of the design (embedded snapshot when offline, conservative floor for an unknown model) are not compatibility mechanisms and stay.
 
 ---
 
@@ -101,7 +103,7 @@ Three changes to things that already exist. **D4** — a cap at the door: no sin
 
 *Not adopted.* **OpenRouter as a generation source**: its terms forbid automated copying of Service data; it remains a live-query source only (rung 3 of D2). **Hand-curation of the main table**: demonstrated stale. **A boot-time fetch with no bundled fallback**: violates the single-binary offline-boot requirement; every surveyed harness ships a snapshot.
 
-**D2 — resolution ladder.** Per-agent override → global default (Settings, D9) → **live provider query** (Anthropic `/v1/models` `max_input_tokens`/`max_tokens`; Google `inputTokenLimit`/`outputTokenLimit`; OpenRouter `context_length`/`top_provider.max_completion_tokens`, no key needed; Mistral `max_context_length`; Groq `context_window`; xAI `/v1/language-models`; Ollama `/api/show` then `/api/ps` for the loaded window — OpenAI, DeepSeek, Z.ai, Moonshot and MiniMax expose no limits on their model endpoints, verified by the 2026-08-22 survey) → catalog (D1) → learned (D8) → conservative floor **with a WARN naming the model**. Live answers are cached on disk with a TTL, never fetched on the hot path. **Operator decision 2026-08-22:** both the global default and the per-agent override stay, but **an override can only lower, never raise** — the effective window is `min(override, catalogOrLearnedWindow)`. A value above the model's real capability is the incident in §1.1 by another route, so it is clamped and a WARN names the agent and the clamp. (Codex's `min(limit, 0.9 × window)` is the same shape.) `maxTokens * 4` is retired. The two other flat `128000` fallbacks (`windowTrim`, model switch) consolidate onto the ladder — three paths currently give three answers. **`claude-cli` and `codex-cli` are exempt** (they manage their own context). `antigravity` is **not** exempt: it is plain HTTPS (`antigravityBaseURL = "https://cloudcode-pa.googleapis.com"`) **and** the seeded default model (`pkg/config/defaults.go` → `antigravity/gemini-3-flash`).
+**D2 — resolution ladder.** Per-agent override → global default (Settings, D9) → **live provider query** (Anthropic `/v1/models` `max_input_tokens`/`max_tokens`; Google `inputTokenLimit`/`outputTokenLimit`; OpenRouter `context_length`/`top_provider.max_completion_tokens`, no key needed; Mistral `max_context_length`; Groq `context_window`; xAI `/v1/language-models`; Ollama `/api/show` then `/api/ps` for the loaded window — OpenAI, DeepSeek, Z.ai, Moonshot and MiniMax expose no limits on their model endpoints, verified by the 2026-08-22 survey) → catalog (D1) → learned (D8) → conservative floor **with a WARN naming the model**. Live answers are cached on disk with a TTL, never fetched on the hot path. **Operator decision 2026-08-22:** both the global default and the per-agent override stay, but **an override can only lower, never raise** — the effective window is `min(override, catalogOrLearnedWindow)`. A value above the model's real capability is the incident in §1.1 by another route, so it is clamped and a WARN names the agent and the clamp. (Codex's `min(limit, 0.9 × window)` is the same shape.) `maxTokens * 4` is retired. The two other flat `128000` fallbacks (`windowTrim`, model switch) consolidate onto the ladder — three paths currently give three answers. **`claude-cli` and `codex-cli` are exempt** (they manage their own context). (`antigravity` is deleted outright — §11c.4.)
 
 **D3 — unknown window ⇒ conservative and loud.** `Catalog.optimistic` assumes image support for unknown models; correct for modality, where optimism costs a retry. For a window, optimism costs a dead turn. The two policies diverge deliberately; this sentence is the record. **Floor value (operator decision 2026-08-22): 128,000 tokens** — what nearly every current model holds at minimum; a larger model is trimmed earlier than necessary, which is visible (the WARN) and harmless, where a higher guess would overflow a smaller model, which is the bug.
 
@@ -227,22 +229,21 @@ D4 protects the window; it cannot protect the process — by the time a result i
 - Transport dispatch is one `switch` in `pkg/providers/factory_provider.go` (~40 `case` labels) is the only registry; aliases are ad hoc (`"z-ai", "z.ai", "zai"`). **1,241 string literals across 36 distinct ids** in non-test Go (searched), including three spellings of one thing — `qwen-intl`, `qwen-us`, `qwen-international`.
 - Wire protocol is encoded as a *suffix on the provider id* (`z-ai-anthropic`, `moonshot-cn-anthropic`, `alibaba-coding-anthropic`), so every provider that offers two protocols exists twice.
 - The wire `provider` field is a **free string** (`contracts/components/schemas/Agent.yaml` gives `"openrouter"` as an *example*, not an enum) — so renaming ids needs no contract enum change.
-- Credential refs are data: `api_key_ref` in `config.json` (`openrouter_API_KEY`, `z-ai-coding_API_KEY`). Renaming a provider must not touch them.
-- A one-time migration precedent exists (`$OMNIPUS_HOME/.milestones_migrated`, `.planning_status_migrated`).
+- Credential refs are independent of provider id: `api_key_ref` in `config.json` (`openrouter_API_KEY`, `z-ai-coding_API_KEY`) is the key name, so changing provider ids does not invalidate stored secrets.
 
 ### 11a.2 Decision
 
 1. **Canonical provider ids are models.dev's.** `zai`, `zhipuai`, `zai-coding-plan`, `moonshotai`, `moonshotai-cn`, `alibaba`, `alibaba-cn`, `alibaba-coding-plan`, `google`, … One vocabulary shared with OpenCode, Cline, Hermes and Goose; new plans and regions appear without anyone in Omnipus typing anything.
 2. **Protocol becomes a field, not a suffix.** The provider table carries `protocol` from the catalog (`npm`); the `-anthropic` ids collapse into `(id, protocol=anthropic)`. Where models.dev records one protocol but the vendor also serves the other (Z.ai, Moonshot, DeepSeek all expose Anthropic-compatible endpoints alongside OpenAI-compatible ones), the override file in the assembly repo adds the second endpoint — the registry is the default, not the ceiling.
 3. **The factory switch dispatches on protocol, not on provider name.** ~40 cases become ~5 (`openai-compatible`, `anthropic`, `google`, `ollama`, `cli`); base URL, key variable and defaults come from the table. A provider unknown to the table but with an explicit endpoint is still accepted as `custom` (the existing `rest_onboarding.go` path).
-4. **The assembly repo publishes the provider table** next to the model table, from the same feed, with the same signing. **`pkg/providers/catalog` keeps its role and its entry shape; `Entries` stops being a hand-typed Go slice and is loaded from the feed** (embedded snapshot + refreshed copy, exactly as D1 does for models). `gen/main.go` inverts: it generates the SPA file *from the feed*, not from Go. Providers with no registry entry stay in a local file shipped with the feed: `ollama`, `vllm`, `litellm`, `custom`, `claude-cli`, `codex-cli`, `antigravity`, `shengsuanyun`, `volcengine`, `avian`, `mimo`. (`novita` → registry id `novita-ai`; added to the rename table.)
+4. **The assembly repo publishes the provider table** next to the model table, from the same feed, with the same signing. **`pkg/providers/catalog` keeps its role and its entry shape; `Entries` stops being a hand-typed Go slice and is loaded from the feed** (embedded snapshot + refreshed copy, exactly as D1 does for models). `gen/main.go` inverts: it generates the SPA file *from the feed*, not from Go. Providers with no registry entry stay in a local file shipped with the feed: `ollama`, `vllm`, `litellm`, `custom`, `codex-cli`, `shengsuanyun`, `volcengine`, `avian`, `mimo`. (`novita` is `novita-ai` in the registry; listed in the §11a.3 reference table.)
 
 **Aggregators are in the registry as providers in their own right** — `openrouter` (359 models, 60 upstream vendors), `vercel`, `requesty`, `amazon-bedrock`, `nvidia`, `novita-ai`, `kilo`, and ~100 more hosts and gateways; 102 of the 193 providers are aggregators or hosts rather than first-party vendors (read live 2026-08-22). Their models are keyed with the vendor prefix (`openrouter` → `z-ai/glm-5.2`), and their **limits are the aggregator's, not the vendor's** — `z-ai/glm-5.2` is 1,048,576 via `openrouter` and 1,000,000 via `zai`. That is exactly the provider+model key this ADR requires, and why the key cannot be model-only.
 5. **Settings lists providers from the table**, grouped by vendor → region → plan, with protocol shown. That is a new read-only wire surface (`GET` providers catalog) and goes through Constraint #8.
 
-### 11a.3 Migration — one release, then gone
+### 11a.3 Canonical-id reference — documentation only, not a code artefact
 
-The rename table, computed against the live registry (every target verified present):
+Old Omnipus id → canonical registry id, for an operator hand-editing their own `config.json` or agent entities. **Nothing in the binary reads this table.** Every target was verified present in the live registry on 2026-08-22.
 
 | Old Omnipus id | Canonical | Old Omnipus id | Canonical |
 |---|---|---|---|
@@ -253,15 +254,16 @@ The rename table, computed against the live registry (every target verified pres
 | `z-ai-anthropic`, `zhipu-anthropic` | `zai` / `zhipuai`, protocol=anthropic | `qwen-us`, `dashscope-us` | `alibaba`, region=us |
 | `minimax-anthropic` (+`-cn`) | `minimax` (+`-cn`) — registry already records anthropic protocol | `coding-plan`, `alibaba-coding`, `qwen-coding` | `alibaba-coding-plan` |
 | `deepseek-anthropic` | `deepseek`, protocol=anthropic | `…-coding-anthropic` | `alibaba-coding-plan`, protocol=anthropic |
-| `gemini`, `anthropic-messages` | `google`, `anthropic` | unchanged: `openai anthropic openrouter groq google deepseek mistral minimax minimax-cn xai nvidia cerebras …` | |
+| `gemini`, `anthropic-messages` | `google`, `anthropic` | `novita` | `novita-ai` |
 
-- **On first boot after upgrade**, a one-time migration rewrites `provider` values in `config.json` and every agent entity through this table, writes `.providers_migrated`, and logs each rename. **`api_key_ref` values are left exactly as they are** — credentials keep working because the ref is the key name, not the provider id.
-- **The old ids remain accepted as aliases for one release** (the factory already has an alias mechanism), logging a deprecation WARN with the canonical name, then are removed.
-- The SPA's key-format hints (`src/lib/constants.ts`) are re-keyed by canonical id in the same change.
+- **No code rewrites existing config or agent entities.** A `provider` value that is not a canonical id (and not `custom` with an endpoint) is an unknown provider and fails on the generic unknown-provider path.
+- **The factory's ad-hoc alias strings** (`"z-ai", "z.ai", "zai"`, the three `qwen-*` spellings, the `-anthropic` suffix ids) **are deleted** with the switch collapse (§11a.2 item 3); only canonical ids resolve. No deprecation WARN names an old id.
+- Note for operators re-keying their own config: `api_key_ref` is the credential name, not the provider id, so secrets do not need re-entering.
+- The fresh-install seed (`pkg/config/defaults.go`, `config/config.example.json`) is written in canonical ids.
 
 ### 11a.4 Not adopted
 
-- Keeping Omnipus's own names and maintaining a mapping to the registry forever: two vocabularies, permanently, for no gain.
+- Keeping Omnipus's own names and maintaining any mapping to the registry in code: two vocabularies for no gain.
 - Treating protocol as a suffix in the canonical ids: models.dev does not, and it is what produced the duplicate-provider sprawl.
 
 ## 11b. D12 — Provider tiers: declare the two that already exist
@@ -297,7 +299,7 @@ Omnipus speaks exactly two wire protocols today — **OpenAI-compatible HTTP** (
 - **Everything else (~155):** selectable behind "show all providers", reachable through D11's protocol dispatch with URL, key variable and limits from the table. Best-effort; no probe, no onboarding hint, no test matrix.
 - **Unsupported (~5):** the cloud-IAM set above, shown with the reason.
 - **Custom endpoint stays** (any OpenAI- or Anthropic-compatible URL).
-- **A retired-provider list**, as Hermes and Roo keep, so a config naming a removed provider fails with a named reason (also carries D11's one-release aliases).
+- A config naming a provider that is not in the table fails on the generic unknown-provider path (`rest_onboarding.go`). **There is no retired-provider list.**
 
 ## 11c. D13 — Subscription login: only where the vendor permits it, verified from the vendor's own terms
 
@@ -335,7 +337,7 @@ Verified in `pkg/providers` on this branch:
 3. **Subscription login is offered only where the vendor's own terms or an official vendor statement permit it**, cited in §11c.1: **GitHub Copilot** via the official SDK/CLI; **xAI** via the published OAuth flow (ask xAI to list Omnipus, as the five named agents are); **OpenAI** via ChatGPT login, documented as practice-based.
 4. **Never collect, store, proxy or refresh a vendor's consumer credential where the vendor prohibits it.**
 5. **Prefer driving the vendor's own CLI as a subprocess over borrowing its token** wherever both exist.
-6. The table in §11c.1 is re-verified each release; a vendor that changes position moves tier, with the retired-provider list (D12) giving users a named reason.
+6. The table in §11c.1 is re-verified each release; a vendor that changes position moves tier, or is removed outright the way §11c.4 removes `antigravity`.
 
 ### 11c.4 `antigravity` — deleted, no trace, no backward compatibility
 
@@ -351,7 +353,7 @@ Verified in `pkg/providers` on this branch:
 | **Docs** | `docs/ANTIGRAVITY_USAGE.md` deleted; mentions removed from `docs/providers.md`, `docs/configuration.md`, `docs/README.md`, `docs/migration/model-list-migration.md`, `docs/internal/provider-endpoint-audit-2026-06.md`, `docs/internal/design/provider-refactoring*.md` |
 | **Kept deliberately** | historical decision records that mention it as history (ADR-031 and its review, ADR-059 spec reviews, the cli-minimization and workspace-rename specs, the turn-truncation root-cause note, this ADR and its review). Rewriting a past decision's text to erase a name is falsifying the record, not removing a trace. |
 
-**Backward compatibility: none, and nothing antigravity-specific to provide it.** A `config.json` or agent entity that still names `antigravity` is simply an unknown provider id and takes the generic unknown-provider path that already exists (`rest_onboarding.go`: *"unknown provider %q and no endpoint override supplied"*). That path is not touched and never mentions antigravity. The D11 rename grace and the D12 retired-provider list do **not** apply — this is not a rename and it gets no entry.
+**Backward compatibility: none, and nothing antigravity-specific to provide it.** A `config.json` or agent entity that still names `antigravity` is simply an unknown provider id and takes the generic unknown-provider path that already exists (`rest_onboarding.go`: *"unknown provider %q and no endpoint override supplied"*). That path is not touched and never mentions antigravity.
 
 **Exit proof:** `grep -ri antigravity pkg cmd src contracts config docs` returns only the historical decision records listed above; `make verify-contracts` passes after regeneration; `go build` and `npm run typecheck` pass with the files gone.
 
@@ -362,11 +364,11 @@ Verified in `pkg/providers` on this branch:
 
 ## 12. Contract impact (Constraint #8)
 
-- Seed `schema_version` 1.0.0 → 1.1.0; mixed-fleet tolerance (old binary ignores new fields; new binary falls to rung 4 on an old seed).
+- Seed `schema_version` 1.0.0 → 1.1.0; the binary reads 1.1.0 only — a persisted catalog at any other version is ignored in favour of the embedded snapshot (the same path as a signature failure).
 - The emptied-set in window meta is an internal file, not a wire type.
 - D5's recall mark reaches the SPA inside a tool-result message. **Operator decision 2026-08-22: it is rendered in the chat thread only when Verbose chat is on** (`src/lib/toolVisibility.ts`, Settings → Chat); otherwise it stays in the transcript and the ActivityPanel like other infra-only output. It must not be hand-rolled with `fmt.Sprintf` (ADR-060's `%q` finding). Whether it formally joins the ADR-060 family or is typed beside it is left to the implementing commit — the enforcement (schema, no string assembly) is what is decided here, not the family's name.
 - D7's `LLMError` codes and D9's settings schema require `make gen-contracts`.
-- D11's read-only providers-catalog endpoint (Settings picker) is a new wire surface: schema in `contracts/components/schemas/`, generated types, SPA consumes the generated type only. The `provider` field itself stays a free string — no enum — so existing clients keep working through the migration.
+- D11's read-only providers-catalog endpoint (Settings picker) is a new wire surface: schema in `contracts/components/schemas/`, generated types, SPA consumes the generated type only. The `provider` field itself stays a free string — no enum — because the provider set is data (registry table + `custom`), not a compiled enum.
 
 ## 13. Consequences
 
@@ -385,7 +387,7 @@ Verified in `pkg/providers` on this branch:
 3. **A second per-turn budget beside the sliding window.** Two systems disagreeing about the budget. Replaced by running the one window mid-turn (D6).
 4. **Clamping old tool results to ~2,000 chars (Cline-style).** Lossy compression by another name — operator direction: no summarisation — and unworkable as written because `GetHistory` re-reads from disk.
 5. **Relocating results at assembly time.** Subsumed: D5's emptying *is* assembly-time substitution, now with a recall mark instead of a path.
-6. **Exempting `antigravity`.** Factually wrong; see D2.
+6. **Exempting `antigravity`.** Moot — it is deleted, §11c.4.
 7. Also rejected, unchanged from the first draft: raising `max_tokens` to fix the window; setting `context_window` once and stopping; OpenRouter `middle-out`; waiting for MCP; a dedicated window registry; boot-time catalog fetch; mid-turn **cutting** (breaks provider ordering rules; emptying does not); iteration count as a context control (`max_tool_iterations` stays a runaway guard — it resolves per-agent → defaults → hardcoded **200**, so a fresh install is four times more exposed than the operator's 50).
 
 ## 15. Implementation tasks
@@ -393,7 +395,7 @@ Verified in `pkg/providers` on this branch:
 1. Tier-1 gaps from the audit: add a bounding parameter to `list_directory` (`path` only), `inspect_session` (`session_id`, `tool_name`, `role`), `recall_conversation` (`query`, `turn_range`, `time`). With D4 at the door these are hygiene rather than blockers.
 2. `recall_conversation`: the `tool_call_id` mode with `offset`/`length` paging (§6.3); the emptied-set added to the turn restore point.
 3. The assembly repository and its daily job (D1), publishing both the model table and the provider table (D11); the Omnipus-side puller retarget, 24 h + startup refresh, build-time snapshot generation, and release-signature verification.
-3a. D11 migration: the rename table as code, the one-time `.providers_migrated` pass (config + agent entities, `api_key_ref` untouched), one-release alias acceptance with deprecation WARN, the factory switch collapsed to protocol dispatch, the SPA hint map re-keyed.
+3a. D11: `catalog.Entries` loaded from the feed; factory switch collapsed to protocol dispatch; all ad-hoc alias strings and `-anthropic` suffix ids deleted; SPA key-format hint map re-keyed by canonical id; fresh-install seed written in canonical ids; `resolveStrippedPrefix` removed (§4 D1).
 4. Bound the three search providers' reads (D10).
 5. Confirm the provider ordering rule in §16 before allowing any mid-turn cut in future.
 
@@ -415,3 +417,4 @@ Catalog from the per-agent policy map (Constraint #6 requires it to enumerate ev
 3. **Window-agreement test** — the catalog and `windowTrim` resolve the same window for a given model (the three-way disagreement that exists today).
 4. **Thrash-guard test** — an oversized non-tool message produces a typed error, not a loop.
 5. **Silent-exit test** — each of the four §1.4 returns now produces a log line, an event and a transcript entry.
+6. **Greenfield test** — `grep -rnE '_migrated|alias|deprecat|retired' pkg/providers pkg/config` returns nothing provider-related; a config with `provider: "z-ai"` or `"moonshot-cn-anthropic"` fails as unknown-provider with no rename and no WARN naming a canonical id; `grep -ri antigravity pkg cmd src contracts config docs` returns only historical decision records.
