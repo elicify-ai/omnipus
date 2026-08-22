@@ -270,13 +270,32 @@ The rename table, computed against the live registry (every target verified pres
 
 **The field** (research 2026-08-22, pinned commits): OpenCode exposes all 193 models.dev providers but pins **6** as "Popular" in its picker, documents 50, bundles code for 23. Hermes ships 37 plugins split into "First-Class API-Key Providers" (~13) and "Other Compatible Providers". Goose: 34 coded + 42 declarative. Crush/Catwalk: 41. Roo: 28, and it retired 9 in one PR as "low-usage". **Typical tier 1 is 5–15; the tail is 40 to unbounded.** Every harness but Gemini CLI offers a custom OpenAI-compatible endpoint.
 
-**Decision.**
+**Decision (revised 2026-08-22 — operator: follow the OpenCode pattern exactly).** Every provider in the registry is selectable; a small "Popular" set is pinned in the picker; the rest sit behind "show all". No subscription login for Anthropic or Google (D13). **No new SDKs** — validated below.
 
-- **Tier 1 (~15) — named, probed, guided, tested, in the picker by default:** the current ten, plus `xai`, `mistral`, `ollama`, `minimax`, and the regional/coding-plan variants of vendors already in tier 1 (`zhipuai`, `zai-coding-plan`, `moonshotai-cn`, `alibaba-coding-plan`). Membership is a list in the assembly repo's provider table (`tier: 1`), not code.
-- **Tier 2 — everything else in the registry:** reachable through the protocol dispatch of D11 with URL, key variable and limits from the table; shown behind a "show all providers" toggle; labelled best-effort; no probe, no onboarding hint, no test matrix.
-- **Custom endpoint stays** (`custom`, any OpenAI- or Anthropic-compatible URL) — the one thing every harness offers.
-- **A retired-provider list**, as Hermes and Roo keep, so a config naming a removed provider fails with a named reason instead of silently (this also carries D11's one-release aliases).
-- Tier 1 membership is reviewed per release against usage; Roo's "low-usage" pruning is the model.
+### 11b.1 Validation: can the existing transports reach all 193?
+
+Omnipus speaks exactly two wire protocols today — **OpenAI-compatible HTTP** (`pkg/providers/http_provider.go`; the `google` case already uses Gemini's OpenAI-compatible endpoint `generativelanguage.googleapis.com/v1beta/openai`) and **Anthropic Messages** (`claude_provider.go`) — plus the CLI/OAuth specials. Checked against every registry provider's declared protocol (`npm`) on 2026-08-22:
+
+| Registry protocol | Providers | Reachable with existing infra? |
+|---|---|---|
+| `@ai-sdk/openai-compatible` | **154** | **Yes, directly** — base URL, key variable and models all in the registry; **0 of the 154 lack a URL** |
+| `@ai-sdk/anthropic` | **9** (minimax, minimax-cn, kimi-for-coding, …) | **Yes** — `claude_provider.go` with the registry's URL |
+| `@ai-sdk/openai` | 4 (openai, meta, perplexity-agent, vivgrid) | Yes — same wire as openai-compatible |
+| `@ai-sdk/google` | 1 (google) | Yes — via the OpenAI-compatible Gemini endpoint already in use; API key only |
+| Dedicated SDKs that are OpenAI-compatible on the wire | ~20 (groq, mistral, xai, deepseek, cerebras, togetherai, deepinfra, perplexity, openrouter, cohere, azure, …) | **Yes, with a base URL from the override file** — the registry records no `api` for them (26 providers lack one; all are dedicated-SDK entries). Omnipus already hardcodes the OpenAI-compatible URLs for groq, mistral, deepseek and cerebras in `factory_provider.go`, which is the proof of shape. |
+| **Cloud-IAM auth, not a key** | **~5**: `amazon-bedrock` (SigV4 request signing), `google-vertex`, `google-vertex-anthropic` (GCP service-account OAuth), `watsonx` (IBM IAM), `sap-ai-core` | **No** — these need request-signing or cloud-credential code Omnipus does not have. **Excluded**, listed in the provider table as `unsupported: cloud-iam`, revisitable per provider. |
+
+**Result: 163 providers reachable from the registry alone, ~20 more with a URL row in the override file, ~5 excluded.** No new SDK, no new runtime dependency (Constraint #1 holds). The override file's URL rows are the one piece of hand-maintained data this adds, and it is ~20 lines.
+
+*Caveat:* the "OpenAI-compatible on the wire" claim for the ~20 dedicated-SDK providers is established for the four Omnipus already ships and is my assessment for the rest from their public API docs; each is confirmed by the tier-1 probe at the time its URL row is added.
+
+### 11b.2 The tiers
+
+- **Popular (pinned, ~6–8):** the OpenCode shape — `openai`, `openrouter`, `anthropic` (API key), `google` (API key), `xai`, `groq`, `mistral`, `deepseek`. Named, probed, guided, tested.
+- **Everything else (~155):** selectable behind "show all providers", reachable through D11's protocol dispatch with URL, key variable and limits from the table. Best-effort; no probe, no onboarding hint, no test matrix.
+- **Unsupported (~5):** the cloud-IAM set above, shown with the reason.
+- **Custom endpoint stays** (any OpenAI- or Anthropic-compatible URL).
+- **A retired-provider list**, as Hermes and Roo keep, so a config naming a removed provider fails with a named reason (also carries D11's one-release aliases).
 
 ## 11c. D13 — Subscription login: only where the vendor permits it, verified from the vendor's own terms
 
