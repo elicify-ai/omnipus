@@ -118,7 +118,7 @@ Three changes to things that already exist. **D4** — a cap at the door: no sin
 **What.** The slot stays; its content becomes a short deterministic mark:
 
 ```
-[tool result emptied — search_email, 1,178,522 chars, turn 6 · recall_conversation can retrieve it]
+[tool result emptied — search_email, 1,178,522 chars, turn 6, tool_call_id=call_978a85… · recall_conversation(tool_call_id=…) returns it in pages]
 ```
 
 The call/answer structure is untouched, so the request stays valid for every provider — including those that require a window to open with a user message, where a mid-turn *cut* would not. This is the Anthropic `clear_tool_uses` / LangChain `[cleared]` mechanism, with the placeholder pointing at a real retrieval path.
@@ -133,10 +133,24 @@ Verified:
 
 - `SessionReader.ReadArchive` returns *"the FULL archived log … ignoring meta.Skip. Evicted (skipped) turns are included."*
 - `pkg/agent/recall_conversation.go` calls `ReadArchive`, **re-injects `role: "tool"` messages, and remaps their `tool_call_id`s** so the pairing stays valid on re-entry.
-- The write path (`JSONLBackend.AddMessage` / `AddFullMessage`) applies **no content truncation** (searched) — the archive holds the full 1.18 MB. What was emptied is genuinely retrievable.
+- The write path (`JSONLBackend.AddMessage` / `AddFullMessage`) applies **no content truncation** (searched), and the archive reader's line ceiling is `maxLineSize = 10 MB` (`pkg/memory/jsonl.go`, scanner grows from 64 KB) — a 1.18 MB result is written and read back whole.
 - `windowTrim` already budgets the active recall span (FR-019, `al.recallSpans`), and may drop it alone to fit.
+- Archive lines are `ArchivedMessage{providers.Message; TS}` (`pkg/memory/jsonl.go`), so every tool result carries its `ToolCallID` on disk — there is something to address by.
 
-**One gap.** `recall_conversation` takes `query`, `turn_range`, `time.from/to` — it cannot address a tool result by id. Add an optional `tool_call_id` (or return the tool result with its turn) so the mark's pointer resolves in one call. **The D4 cap applies to recalled content too**, otherwise recall re-admits the oversized original.
+### 6.3 Recall by tool result — closing the gap
+
+`recall_conversation` takes `query`, `turn_range`, `time.from/to`; it cannot address a tool result by id, and its span budgets are **4,000 tokens** (query/time mode) and **8,000** (turn-range mode) (`pkg/agent/recall_conversation.go`). A 1.18 MB result cannot come back whole through either — and must not: it would overflow the window it was emptied from.
+
+**Decision.** Add a fourth mode, `tool_call_id`, with optional `offset` and `length` in characters:
+
+- Matches the archive line whose `ToolCallID` equals the argument; returns that one `role: "tool"` message, re-paired via the existing id remap.
+- Returns **one page, bounded by the D4 cap for that surface** (62,500 / 30,000 chars); `offset`/`length` page through the rest — the same interface `read_file` already uses (`offset`, `length`, 64 KB cap). The mark states the total size so the model knows whether to page.
+- Counts against the recall span budget like every other mode; the span may be dropped alone to fit (FR-019), unchanged.
+- The mark carries the `tool_call_id`, so the pointer resolves in a single call.
+
+**What recall does not cover, by design.** A turn that **aborts** is rolled back: `pkg/agent/turn.go::restoreSession` calls `RollbackAppended`, truncating the archive to its turn-start line count and restoring `Skip` *"so mid-turn evictions are undone"*. Verified on the incident: the archive went from 1,317,446 bytes (snapshot 19:19) to 39,004 (21:04) when the turn died. So recall retrieves the results of turns that **completed**; a failed turn's results leave the archive with the rest of its restore point, exactly as today. With D4–D6 the incident's turn would have completed, so this is consistent rather than a hole. **The D5 emptied-set joins the same restore point** — rolled back with `Skip` on abort, so a retried turn starts from an un-emptied window.
+
+(The incident payload survives only in the gateway's browser-facing `tool_results/` store — 826,690 and 1,244,567 bytes — which is gitignored and not model-reachable, and stays that way per §14.1.)
 
 ---
 
@@ -191,7 +205,7 @@ D4 protects the window; it cannot protect the process — by the time a result i
 
 ## 13. Consequences
 
-**Positive.** No single result exceeds the budget (D4); no turn exceeds the window regardless of length (D5+D6); the window record is right (D1–D3) and visible (D9); failures are diagnosable (D7). Nothing is summarised or deleted; everything remains recallable. No new storage, no new retention policy, no new file surface. Per-turn token cost falls by the quadratic argument. The change is three focused edits to existing mechanisms.
+**Positive.** No single result exceeds the budget (D4); no turn exceeds the window regardless of length (D5+D6); the window record is right (D1–D3) and visible (D9); failures are diagnosable (D7). Nothing is summarised or deleted; every result of a completed turn remains recallable, in pages. No new storage, no new retention policy, no new file surface. Per-turn token cost falls by the quadratic argument. The change is three focused edits to existing mechanisms.
 
 **Negative / accepted.** The seed acquires two fields to maintain. A stale seed under-reports a new model until refreshed (mitigated by D8). The conservative floor over-trims for unseeded models — visible, harmless. Emptied results cost a recall round-trip when the model does need them. The per-result budget check adds linear work per tool call.
 
@@ -210,7 +224,7 @@ D4 protects the window; it cannot protect the process — by the time a result i
 ## 15. Implementation tasks
 
 1. Tier-1 gaps from the audit: add a bounding parameter to `list_directory` (`path` only), `inspect_session` (`session_id`, `tool_name`, `role`), `recall_conversation` (`query`, `turn_range`, `time`). With D4 at the door these are hygiene rather than blockers.
-2. `recall_conversation`: address-by-`tool_call_id` (§6.2).
+2. `recall_conversation`: the `tool_call_id` mode with `offset`/`length` paging (§6.3); the emptied-set added to the turn restore point.
 3. Seed-generation script for `context_window` / `max_output_tokens`.
 4. Bound the three search providers' reads (D10).
 5. Confirm the provider ordering rule in §16 before allowing any mid-turn cut in future.
@@ -228,7 +242,8 @@ Catalog from the per-agent policy map (Constraint #6 requires it to enumerate ev
 ## 17. Exit proof
 
 1. **Guard test** — feed a ~2 MB tool result through the loop: the assembled request stays under the window, the model sees a marked result and continues, **the turn completes with no user-facing error**.
-2. **Long-turn test** — a turn of 50 tool calls each at the cap, against a small window: the request never exceeds the window at any iteration; the most recent result is always intact; emptied results carry marks; `recall_conversation` returns any emptied result in full.
+2. **Long-turn test** — a turn of 50 tool calls each at the cap, against a small window: the request never exceeds the window at any iteration; the most recent result is always intact; emptied results carry marks; `recall_conversation(tool_call_id=…)` returns any emptied result, paged under the D4 cap, and paging reaches its last byte.
+   2b. **Rollback test** — a turn that aborts after emptying restores both `Skip` and the emptied-set to their turn-start values.
 3. **Window-agreement test** — the catalog and `windowTrim` resolve the same window for a given model (the three-way disagreement that exists today).
 4. **Thrash-guard test** — an oversized non-tool message produces a typed error, not a loop.
 5. **Silent-exit test** — each of the four §1.4 returns now produces a log line, an event and a transcript entry.
