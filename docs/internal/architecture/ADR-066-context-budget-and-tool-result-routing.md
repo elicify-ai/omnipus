@@ -322,7 +322,7 @@ Verified in `pkg/providers` on this branch:
 
 - **`claude-cli`** — `exec.CommandContext(ctx, "claude", …)`; the file handles no token, credential or keychain (searched). This is the shape Anthropic permits — but it is a *subscription* path, and the operator descoped all Anthropic subscription paths (§11c.3 item 2). **Descoped.**
 - **`codex-cli`** — despite the name, **not** a subprocess: `factory_provider.go` case `"codex-cli"` → `NewCodexProviderWithTokenSource(CreateCodexCliTokenSource())`, which `ReadCodexCliCredentials` from the Codex CLI's `auth.json` and calls `https://chatgpt.com/backend-api/codex` directly. That is token reuse. OpenAI tolerates and publicly encourages it, but the ToS text does not. **Keep, documented as resting on practice; prefer the `codex_cli_provider.go` subprocess path where both exist.**
-- **`antigravity`** — Google OAuth (`auth.GoogleAntigravityOAuthConfig`, `RefreshAccessToken`) against the Antigravity backend. **Deleted, no trace — §11c.4.** **This is the practice Google's §6 names and suspends accounts for — and it is the seeded default model on a fresh install (`pkg/config/defaults.go` → `antigravity/gemini-3-flash`).** Hermes removed the equivalent (PR #50492: *"Google now actively bans accounts … a ban can extend to the entire Google account"*); Goose deprecated it.
+- **`antigravity`** — Google OAuth (`auth.GoogleAntigravityOAuthConfig`, `RefreshAccessToken`) against the Antigravity backend. **Deleted outright, greenfield — §11c.4.** **This is the practice Google's §6 names and suspends accounts for — and it is the seeded default model on a fresh install (`pkg/config/defaults.go` → `antigravity/gemini-3-flash`).** Hermes removed the equivalent (PR #50492: *"Google now actively bans accounts … a ban can extend to the entire Google account"*); Goose deprecated it.
 
 **Decision: delete the `antigravity` OAuth provider entirely (§11c.4), and change the fresh-install default model to a Popular-tier API-key provider.** Google's sanctioned route for third-party tools is the Gemini API or Vertex key, which stays. This is the one finding in this ADR that bears on the running release rather than the design, and it is flagged as such in §13.
 
@@ -339,7 +339,7 @@ Verified in `pkg/providers` on this branch:
 
 ### 11c.4 `antigravity` — deleted, no trace, no backward compatibility
 
-**Inventory (this branch, 2026-08-22): 33 files reference it.** Everything below is removed in one commit; nothing is aliased, shimmed, or migrated.
+**Greenfield removal (operator direction 2026-08-22).** Inventory on this branch: 33 files reference it. Everything below is removed in one commit. **No code deals with antigravity afterwards in any form** — no alias, no shim, no migration, no retired-list row, no boot notification, no error string that names it. After the commit the word does not occur in `pkg/`, `cmd/`, `src/`, `contracts/`, `config/`, or `docs/` outside historical decision records.
 
 | Area | What goes |
 |---|---|
@@ -351,9 +351,9 @@ Verified in `pkg/providers` on this branch:
 | **Docs** | `docs/ANTIGRAVITY_USAGE.md` deleted; mentions removed from `docs/providers.md`, `docs/configuration.md`, `docs/README.md`, `docs/migration/model-list-migration.md`, `docs/internal/provider-endpoint-audit-2026-06.md`, `docs/internal/design/provider-refactoring*.md` |
 | **Kept deliberately** | historical decision records that mention it as history (ADR-031 and its review, ADR-059 spec reviews, the cli-minimization and workspace-rename specs, the turn-truncation root-cause note, this ADR and its review). Rewriting a past decision's text to erase a name is falsifying the record, not removing a trace. |
 
-**Backward compatibility: none.** A `config.json` or agent entity naming `antigravity` fails at boot through the retired-provider list with the named reason (*"removed: Google's Antigravity terms §6 prohibit third-party OAuth access"*) and a pointer to the Gemini API key route. No alias, no silent remap, no one-release grace — the grace period in D11 is for *renames*, and this is not a rename.
+**Backward compatibility: none, and nothing antigravity-specific to provide it.** A `config.json` or agent entity that still names `antigravity` is simply an unknown provider id and takes the generic unknown-provider path that already exists (`rest_onboarding.go`: *"unknown provider %q and no endpoint override supplied"*). That path is not touched and never mentions antigravity. The D11 rename grace and the D12 retired-provider list do **not** apply — this is not a rename and it gets no entry.
 
-**Exit proof:** `grep -ri antigravity` over the tree returns only the historical records listed above; `make verify-contracts` passes after regeneration; a config naming `antigravity` produces the named boot error.
+**Exit proof:** `grep -ri antigravity pkg cmd src contracts config docs` returns only the historical decision records listed above; `make verify-contracts` passes after regeneration; `go build` and `npm run typecheck` pass with the files gone.
 
 ### 11c.5 Not adopted
 
