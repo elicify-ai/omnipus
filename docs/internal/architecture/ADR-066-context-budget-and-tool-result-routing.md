@@ -216,12 +216,57 @@ D4 protects the window; it cannot protect the process — by the time a result i
 
 ---
 
+## 11a. D11 — Provider identity comes from the registry too
+
+*(Operator decision 2026-08-22.)* models.dev is a **provider** catalog as much as a model catalog. Every one of its 193 providers carries `api` (base URL), `npm` (wire protocol: `@ai-sdk/openai-compatible`, `@ai-sdk/anthropic`, …), `env` (key variable) and `doc`; and **region, plan and protocol variants are separate providers** with their own URL, protocol and model list — `zai` / `zhipuai` (international / China), `zai-coding-plan` / `zhipuai-coding-plan`, `moonshotai` / `moonshotai-cn`, `minimax` / `minimax-cn`, `alibaba` / `alibaba-cn` / `alibaba-coding-plan` / `alibaba-token-plan`, `kimi-for-coding`, and so on — **24 of 193** are such variants (read live 2026-08-22). The coding-plan variants expose a *subset* of models (`zai-coding-plan`: 5 of `zai`'s 14), so plan availability is a catalog lookup as well.
+
+### 11a.1 Where provider identity lives in Omnipus today
+
+- One `switch` in `pkg/providers/factory_provider.go` (~40 `case` labels) is the only registry; aliases are ad hoc (`"z-ai", "z.ai", "zai"`). **1,241 string literals across 36 distinct ids** in non-test Go (searched), including three spellings of one thing — `qwen-intl`, `qwen-us`, `qwen-international`.
+- Wire protocol is encoded as a *suffix on the provider id* (`z-ai-anthropic`, `moonshot-cn-anthropic`, `alibaba-coding-anthropic`), so every provider that offers two protocols exists twice.
+- The wire `provider` field is a **free string** (`contracts/components/schemas/Agent.yaml` gives `"openrouter"` as an *example*, not an enum) — so renaming ids needs no contract enum change.
+- Credential refs are data: `api_key_ref` in `config.json` (`openrouter_API_KEY`, `z-ai-coding_API_KEY`). Renaming a provider must not touch them.
+- A one-time migration precedent exists (`$OMNIPUS_HOME/.milestones_migrated`, `.planning_status_migrated`).
+
+### 11a.2 Decision
+
+1. **Canonical provider ids are models.dev's.** `zai`, `zhipuai`, `zai-coding-plan`, `moonshotai`, `moonshotai-cn`, `alibaba`, `alibaba-cn`, `alibaba-coding-plan`, `google`, … One vocabulary shared with OpenCode, Cline, Hermes and Goose; new plans and regions appear without anyone in Omnipus typing anything.
+2. **Protocol becomes a field, not a suffix.** The provider table carries `protocol` from the catalog (`npm`); the `-anthropic` ids collapse into `(id, protocol=anthropic)`. Where models.dev records one protocol but the vendor also serves the other (Z.ai, Moonshot, DeepSeek all expose Anthropic-compatible endpoints alongside OpenAI-compatible ones), the override file in the assembly repo adds the second endpoint — the registry is the default, not the ceiling.
+3. **The factory switch dispatches on protocol, not on provider name.** ~40 cases become ~5 (`openai-compatible`, `anthropic`, `google`, `ollama`, `cli`); base URL, key variable and defaults come from the table. A provider unknown to the table but with an explicit endpoint is still accepted as `custom` (the existing `rest_onboarding.go` path).
+4. **The assembly repo publishes the provider table** next to the model table, from the same feed, with the same signing. Providers with no registry entry stay in a local file shipped with the feed: `ollama`, `vllm`, `litellm`, `custom`, `claude-cli`, `codex-cli`, `antigravity`, `novita`, `shengsuanyun`, `volcengine`, `avian`, `mimo`.
+5. **Settings lists providers from the table**, grouped by vendor → region → plan, with protocol shown. That is a new read-only wire surface (`GET` providers catalog) and goes through Constraint #8.
+
+### 11a.3 Migration — one release, then gone
+
+The rename table, computed against the live registry (every target verified present):
+
+| Old Omnipus id | Canonical | Old Omnipus id | Canonical |
+|---|---|---|---|
+| `z-ai`, `z.ai` | `zai` | `moonshot`, `moonshot-cn` | `moonshotai`, `moonshotai-cn` |
+| `zhipu` | `zhipuai` | `moonshot-anthropic` (+`-cn`) | `moonshotai` (+`-cn`), protocol=anthropic |
+| `z-ai-coding`, `glm-coding` | `zai-coding-plan` | `qwen` | `alibaba-cn` |
+| `zhipu-coding` | `zhipuai-coding-plan` | `qwen-intl`, `qwen-international`, `dashscope-intl` | `alibaba` |
+| `z-ai-anthropic`, `zhipu-anthropic` | `zai` / `zhipuai`, protocol=anthropic | `qwen-us`, `dashscope-us` | `alibaba`, region=us |
+| `minimax-anthropic` (+`-cn`) | `minimax` (+`-cn`) — registry already records anthropic protocol | `coding-plan`, `alibaba-coding`, `qwen-coding` | `alibaba-coding-plan` |
+| `deepseek-anthropic` | `deepseek`, protocol=anthropic | `…-coding-anthropic` | `alibaba-coding-plan`, protocol=anthropic |
+| `gemini`, `anthropic-messages` | `google`, `anthropic` | unchanged: `openai anthropic openrouter groq google deepseek mistral minimax minimax-cn xai nvidia cerebras …` | |
+
+- **On first boot after upgrade**, a one-time migration rewrites `provider` values in `config.json` and every agent entity through this table, writes `.providers_migrated`, and logs each rename. **`api_key_ref` values are left exactly as they are** — credentials keep working because the ref is the key name, not the provider id.
+- **The old ids remain accepted as aliases for one release** (the factory already has an alias mechanism), logging a deprecation WARN with the canonical name, then are removed.
+- The SPA's key-format hints (`src/lib/constants.ts`) are re-keyed by canonical id in the same change.
+
+### 11a.4 Not adopted
+
+- Keeping Omnipus's own names and maintaining a mapping to the registry forever: two vocabularies, permanently, for no gain.
+- Treating protocol as a suffix in the canonical ids: models.dev does not, and it is what produced the duplicate-provider sprawl.
+
 ## 12. Contract impact (Constraint #8)
 
 - Seed `schema_version` 1.0.0 → 1.1.0; mixed-fleet tolerance (old binary ignores new fields; new binary falls to rung 4 on an old seed).
 - The emptied-set in window meta is an internal file, not a wire type.
 - D5's recall mark reaches the SPA inside a tool-result message. **Operator decision 2026-08-22: it is rendered in the chat thread only when Verbose chat is on** (`src/lib/toolVisibility.ts`, Settings → Chat); otherwise it stays in the transcript and the ActivityPanel like other infra-only output. It must not be hand-rolled with `fmt.Sprintf` (ADR-060's `%q` finding). Whether it formally joins the ADR-060 family or is typed beside it is left to the implementing commit — the enforcement (schema, no string assembly) is what is decided here, not the family's name.
 - D7's `LLMError` codes and D9's settings schema require `make gen-contracts`.
+- D11's read-only providers-catalog endpoint (Settings picker) is a new wire surface: schema in `contracts/components/schemas/`, generated types, SPA consumes the generated type only. The `provider` field itself stays a free string — no enum — so existing clients keep working through the migration.
 
 ## 13. Consequences
 
@@ -245,7 +290,8 @@ D4 protects the window; it cannot protect the process — by the time a result i
 
 1. Tier-1 gaps from the audit: add a bounding parameter to `list_directory` (`path` only), `inspect_session` (`session_id`, `tool_name`, `role`), `recall_conversation` (`query`, `turn_range`, `time`). With D4 at the door these are hygiene rather than blockers.
 2. `recall_conversation`: the `tool_call_id` mode with `offset`/`length` paging (§6.3); the emptied-set added to the turn restore point.
-3. The assembly repository and its daily job (D1); the Omnipus-side puller retarget, 24 h + startup refresh, build-time snapshot generation, and release-signature verification.
+3. The assembly repository and its daily job (D1), publishing both the model table and the provider table (D11); the Omnipus-side puller retarget, 24 h + startup refresh, build-time snapshot generation, and release-signature verification.
+3a. D11 migration: the rename table as code, the one-time `.providers_migrated` pass (config + agent entities, `api_key_ref` untouched), one-release alias acceptance with deprecation WARN, the factory switch collapsed to protocol dispatch, the SPA hint map re-keyed.
 4. Bound the three search providers' reads (D10).
 5. Confirm the provider ordering rule in §16 before allowing any mid-turn cut in future.
 
