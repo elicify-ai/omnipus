@@ -452,7 +452,49 @@ The adversarial review's first blocker: D4 caps each result, nothing capped thei
 
 `max_tool_iterations` stays a configuration knob and is **not** the mechanism — lowering it would cap legitimate long investigations to defend against a case D13 handles directly.
 
-**Still to settle at implementation:** whether the trigger is a fraction of the resolved window (adapts per model, but inherits any error in D1–D3) or an absolute per-turn character budget (predictable, and correct even where the window resolves badly). The absolute form is the safer default for the same reason D4's cap is window-independent — see §6.1.
+### 22.1 The trigger — settled by survey, 2026-08-22
+
+**Decision: an absolute cumulative budget, with a relative ceiling. Three numbers, not one.**
+
+```
+trigger = min( absoluteToolOutputBudget , 0.9 × resolvedWindow )
+target  = the level relocation runs down to (below trigger, so it does not re-fire immediately)
+floor   = the most recent tool output, never relocated regardless of budget
+```
+
+**Why absolute-primary.** The survey found **no harness ships a bare percentage**; every relative trigger carries an absolute component:
+
+| Harness | Shape |
+|---|---|
+| Claude Code auto-compact | `effectiveWindow − 13,000` — an **absolute reserve**, not a percentage. The `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` percentage is clamped by `Math.min(userThreshold, default)` so it can only *lower* the threshold **[secondary source — deobfuscated bundle in claude-code#31806, not official documentation]** |
+| **Codex CLI** | The operator value is **absolute**; the relative 90% acts purely as a **ceiling** via `min(limit, 0.9 × window)`. Also carries `used_fallback_model_metadata` and clamps `context_window.min(max_context_window)` — explicit machinery for "our record of the window may be wrong" |
+| Cline | Relative 0.9, with an absolute fallback of `DEFAULT_MAX_INPUT_TOKENS = 128,000` when the model reports no window |
+| Roo Code | Relative, minus an absolute reserve (`maxTokens`) |
+| Anthropic API | **Absolute only** — `clear_tool_uses_20250919` triggers at 100,000 input tokens; `compact_20260112` at 150,000. The server cannot know the client's effective budget |
+
+Codex's shape is adopted directly: it is the one that treats a wrong window record as an expected condition rather than an error, which is precisely §1.1.
+
+**Corroboration from the field on §1.1 itself.** Claude Code shipped fixes for this exact failure mode — auto-compact on *unrecognised model IDs* to "keep sessions within the assumed context window instead of letting them grow past it" (escape hatch `CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT=1`), and `CLAUDE_CODE_DISABLE_1M_CONTEXT` holding 1M-context models to 200K. **The field's answer to an unreliable window record is an absolute fallback plus a clamp — not a better percentage.** That is independent support for D3 as well as for this trigger.
+
+### 22.2 Direct precedent for D13
+
+**Gemini CLI ships the closest thing to D13 that exists.** `COMPRESSION_FUNCTION_RESPONSE_TOKEN_BUDGET = 50,000` (`packages/core/src/context/chatCompressionService.ts`, `truncateHistoryToBudget()`): an **absolute, cumulative, tool-output-specific** budget. It walks history **newest → oldest** keeping a running tally of `functionResponse` tokens; past the budget, older tool outputs are truncated and **offloaded to a temp file** with the path left in context.
+
+That is D13 plus D5, already shipping. Two details adopted from it:
+
+- **Traverse newest-first.** The running tally accumulates backwards so the most recent tool output is preserved at full fidelity and only older output degrades. A forward-accumulating budget starves the results the model is actively reasoning about.
+- **Offload rather than discard**, which D5 already decided independently.
+
+### 22.3 The one place this design is novel
+
+**No surveyed harness bounds cumulative tool output by a running byte or character total** — Gemini's budget is the closest and is denominated in tokens. Choosing characters makes Omnipus first, which is worth stating plainly rather than implying consensus.
+
+It is nevertheless the right denomination here, for the reason given in §6.1: `estimateMessageTokens` is an unvalidated `chars × 2/5` heuristic, and a budget denominated in a guess inherits the guess. Codex establishes that bytes are a legitimate denomination when tokenisation is unavailable — `TruncationPolicyConfig::bytes(10_000)`, `TruncationMode::Bytes`, with `approx_bytes_for_tokens()` converting the other way. Revisit once D11 supplies real `prompt_tokens`.
+
+### 22.4 Deliberately not adopted
+
+- **Iteration count as a context control.** Anthropic offers `trigger: {type: "tool_uses", value: N}` as a first-class alternative. Rejected here for the reason already stated: it caps legitimate long investigations to defend against something D13 handles directly. `max_tool_iterations` stays a runaway guard.
+- **Codex's `BodyAfterPrefix` scope switch**, which excludes a stable system prefix from the budget. Noted as a future refinement; D13's budget covers tool output only, so the fixed preamble is already outside it.
 
 With D13, §12's "nothing size-related is ever turn-fatal" holds: a per-result cap bounds each entry, and the aggregate bounds their sum.
 
