@@ -1,7 +1,7 @@
 # Spec — ADR-066: Context overflow — window resolution, per-result cap, empty-in-place, mid-turn window check
 
 - **Source ADR:** `docs/internal/architecture/ADR-066-context-budget-and-tool-result-routing.md` (Proposed, restructured 2026-08-22; pass-2 findings resolved in §16a; amended 2026-08-22 from the spec review — commit `docs(adr): ADR-066 amendments from spec review`). Review records: `…-review-pass2.md` (ADR), `docs/internal/specs/adr-066-context-overflow-spec-review.md` (this spec, verdict BLOCK — every finding resolved in this revision; see §13).
-- **Status:** Draft (plan-spec) — revision 2, 2026-08-22, branch `feat/context-budget-and-tool-result-routing`. The ADR is the confirmed requirements brief. Where the ADR was silent the §10 table records the operator's resolutions; two new items (A-18, A-19) are open.
+- **Status:** Draft (plan-spec) — revision 2, 2026-08-22, branch `feat/context-budget-and-tool-result-routing`. The ADR is the confirmed requirements brief. Where the ADR was silent the §10 table records the operator's resolutions; every item is closed (A-18/A-19 accepted by the coordinator 2026-08-22; register #3 confirmed).
 - **Scope:** ADR-066 only — D2, D3, D4, D5 (+ recall-by-`tool_call_id`), D6, D7, D9, D10, §16a, and ADR §15 task 1 (bounding parameters for `list_directory`, `inspect_session`, `recall_conversation` search modes — kept as FR-038…FR-040). **D1 (the catalog) is ADR-067 — referenced, not specified.** **D8 is NOT ADOPTED** (ADR-066 commits `ec2e022d`, `80aef474`, `06e6cc17`). Subscriptions / provider deletion / provider UX are ADR-068.
 - **Greenfield rule (operator, 2026-08-22):** no backward compatibility, no migration, no aliasing. Pre-existing state that does not match simply does not work: a `config.json` still carrying `summarize_token_percent` or `agents.defaults.context_window` has those keys silently ignored (`LoadConfig` has no `DisallowUnknownFields`) — no boot notice, no rejection; session meta without projection state loads as an empty set (a zero value, not a compatibility path).
 - **Tech:** Go (`pkg/agent`, `pkg/memory`, `pkg/tools`, `pkg/mcp`, `pkg/gateway`, `pkg/providers`) · React 19 + Vite (SPA) · contract-first (`contracts/*`, Constraint #8).
@@ -220,7 +220,7 @@ As a user on any channel who pastes a huge document, I get a non-fatal refusal b
   5. **Given** 8,000,000 bytes of newlines (escapes to 16,000,000), **Then** the choke point's encoded-line bound caps it so the archive line ≤ 8,388,608 bytes and `GetHistory` still reads the session.
 
 ### US-13 — Bounding parameters for three Tier-1 tools (ADR §15 task 1) — **P2**
-- **Acceptance:** `list_directory` gains `offset`/`limit`; `inspect_session` gains `offset`/`limit`; `recall_conversation` search modes gain `max_results`; each validated (≥ 0 / ≥ 1) and documented in the tool schema. **[A-19]**
+- **Acceptance:** `list_directory` gains `offset`/`limit` (entries); `inspect_session` gains `offset`/`limit` (entries); `recall_conversation`'s `query`/`turn_range` modes gain `max_results` (turns) — parameter names and semantics consistent with `read_file`'s existing `offset`/`length` interface; each validated (`offset ≥ 0`, `limit`/`max_results ≥ 1`) and documented in the tool schema. *(A-19 accepted.)*
 
 ### Edge Cases
 - E1: exactly at cap → unmodified; +1 → capped.
@@ -240,7 +240,7 @@ As a user on any channel who pastes a huge document, I get a non-fatal refusal b
 - E15: delegated sub-turn → ephemeral store keeps projection state in memory; rollback parameter no-op; child's report capped at 64,000 as the parent's tool result.
 - E16: a previous oversized turn kept by the pre-turn floor → its results are eligible for emptying (pre-turn, after the cut fails to fit).
 - E17: a tampered `model_limits.json` can only lower the window (clamp) — accepted.
-- E18: `B ≤ 0` (max_tokens ≥ window) → **[A-18]**.
+- E18: `max_tokens ≥ W` (so `B ≤ 0`) → `max_tokens` is clamped to `floor(W/4)` with a WARN naming the model; B is then positive and the cap clamp holds. *(A-18 accepted.)*
 
 ---
 
@@ -289,6 +289,8 @@ target     = 0.8 × B (if total fired) / 0.8 × absoluteShare (if share fired); 
 guard      ⇔ after emptying, total > B OR share > absoluteShare still holds  →  context_unrecoverable
 ```
 `isOverContextBudget`'s threshold is B (not `contextWindow`); the pre-turn, mid-turn, timeout-recovery and model-switch sites all use it. Exempt providers: `W = 0`, every check skipped.
+
+**`max_tokens` clamp (A-18):** if `max_tokens ≥ W − ceil(0.05 × W) − pinnedCoreOverhead` (B would be ≤ 0), `NewAgentInstance` sets `max_tokens = floor(W / 4)` and logs one WARN naming the model and both values, so B > 0 always. Boundary: `W = 8,192`, `max_tokens = 8,192` → effective `max_tokens = 2,048`.
 
 **Caps and clamp (chars = runes):**
 ```
@@ -367,6 +369,7 @@ head/tail 50/50; mark length counted toward the cap; no rune split
 **B-03b (EC)** re-clamp on catalog change — US-1.AC8. Catalog lowered to 200,000 → next resolution 200,000; override persists.
 **B-04 (AP)** live rung cached — US-1.AC5. Endpoint returns 200,000; resolved twice within 24 h → 200,000 / `live`, one fetch, key `(id, baseURL, model)`; no credential → rung skipped; cold cache → catalog now, live next reload.
 **B-05 (AP)** exempt — US-1.AC6. `claude-cli` → window 0; pre-turn trim, mid-turn and timeout checks skipped.
+**B-05b (EC)** max_tokens clamp — US-1.AC7 / E18. `W = 8,192`, `max_tokens = 8,192` → effective `max_tokens = 2,048`, one WARN, B > 0.
 **B-06 (HP, outline)** one B for all — US-1.AC7. Consumers: pre-turn / mid-turn / timeout recovery / model-switch → same B.
 **B-07 (AP)** cloud floor — US-2.AC1 → 128,000 / `floor`, WARN.
 **B-08 (HP)** Ollama live — US-2.AC2 → 8,192 / `live`.
@@ -483,6 +486,7 @@ head/tail 50/50; mark length counted toward the cap; no rune split
 | 1 | `TestResolveContextWindow_Ladder` | Unit | B-01, B-02, B-02b, B-04, B-07, B-08 | six rungs, source |
 | 2 | `TestResolveContextWindow_ClampAllRungs` | Unit | B-03, B-03b | clamp + WARN; re-clamp |
 | 3 | `TestResolveContextWindow_ExemptZeroWindow` | Unit | B-05 | window 0; checks skipped |
+| 3b | `TestNewAgentInstance_MaxTokensClampedWhenBudgetNonPositive` | Unit | B-05b | 8,192/8,192 → 2,048 + WARN |
 | 4 | `TestResolveContextWindow_Classification` | Unit | B-08, B-09, B-10b | table incl. `lmstudio`, loopback/private, `custom` public |
 | 5 | `TestLiveLimits_CacheKeyTTLCredential` | Unit | B-04 | key, TTL, no-credential skip, cold-cache background |
 | 6 | `TestWindowAgreement_OneBudgetAllSites` | Unit | B-06 | `isOverContextBudget` threshold = B at all four sites; source grep: no `maxTokens * 4`, no `contextWindow = 128000`/`newContextWindow = 128000`, exactly one `cloudWindowFloor` |
@@ -583,6 +587,7 @@ head/tail 50/50; mark length counted toward the cap; no rune split
 | 13 | — | — | — | none | — | custom @ 127.0.0.1 | refused | B-09 |
 | 14 | — | — | — | — | — | claude-cli | window 0, exempt | B-05 |
 | 15 | 1,048,576 | — | — | — | lowered to 200,000 | cloud | 200,000 clamped | B-03b |
+| 16 | — | — | — | 8,192 (max_tokens 8,192) | — | ollama | W 8,192; max_tokens clamped to 2,048 + WARN | B-05b |
 
 #### DS-5: Mid-turn budget positions
 | # | Window (oldest → newest) | Fired | Expected | Traces |
@@ -665,6 +670,7 @@ head/tail 50/50; mark length counted toward the cap; no rune split
 - **FR-003**: Live query cached 24 h at `$OMNIPUS_HOME/cache/model_limits.json`, key (provider id, base URL, model), provider credential from the store, rung skipped without one; never on the turn path; cold cache → next rung + background refresh.
 - **FR-004**: `max_tokens × 4`, both `128000` fallbacks, `agents.defaults.context_window` (+ env var) and `summarize_token_percent` MUST NOT exist; exactly one `cloudWindowFloor` constant; all four consumers read one resolved window.
 - **FR-005**: `claude-cli`/`codex-cli`: `ContextWindow = 0`, pre-turn trim and every budget check skipped.
+- **FR-005b**: When `max_tokens` leaves `B ≤ 0`, `max_tokens` MUST be clamped to `floor(W/4)` with one WARN naming the model (A-18).
 
 **D3 — unknown window**
 - **FR-006**: Cloud class with no source → 128,000, source `floor`, one WARN.
@@ -718,8 +724,8 @@ head/tail 50/50; mark length counted toward the cap; no rune split
 - **FR-038**: Ingest bound default 8,000,000 bytes, setting < 8,388,608; MCP enforced on the transport read (stdio reader bound in `sandboxedStdioConn`; `http.MaxBytesReader` for HTTP/SSE); all five search providers bounded (the two 1 MiB sites raised); `fetch_url` fallback 8 MB; exceeding → tool failure, never truncation.
 
 **ADR §15 task 1**
-- **FR-039**: `list_directory` and `inspect_session` gain `offset`/`limit`. **[A-19]**
-- **FR-040**: `recall_conversation` search modes gain `max_results`. **[A-19]**
+- **FR-039**: `list_directory` and `inspect_session` MUST gain `offset`/`limit` (entries; `offset ≥ 0`, `limit ≥ 1`), named consistently with `read_file`'s interface.
+- **FR-040**: `recall_conversation`'s `query`/`turn_range` modes MUST gain `max_results` (turns, ≥ 1).
 
 ### Success Criteria
 - **SC-001**: 2 MB MCP result → turn completes, every request ≤ B (§17.1).
@@ -744,6 +750,7 @@ head/tail 50/50; mark length counted toward the cap; no rune split
 | FR-003 | US-1 | B-04 | 5 |
 | FR-004 | US-1 | B-06 | 6, 22 |
 | FR-005 | US-1 | B-05 | 3 |
+| FR-005b | US-1 | B-05b | 3b |
 | FR-006 | US-2 | B-07, B-10b | 1, 4 |
 | FR-007 | US-2 | B-08, B-09 | 4 |
 | FR-008 | US-2 | B-09, B-10 | 37 |
@@ -827,8 +834,8 @@ head/tail 50/50; mark length counted toward the cap; no rune split
 | A-15 | ACCEPTED | `capped \| emptied`, now keyed `(id, line)` (MAJ-007). |
 | A-16 | ACCEPTED | 50/50, mark counted. |
 | A-17 | ACCEPTED | No policy change. |
-| **A-18** | **OPEN** | `B ≤ 0` when `max_tokens ≥ W − headroom − pinned` (default `max_tokens` 8,192 on an 8,192 window). **Assumption:** `NewAgentInstance` clamps `max_tokens` to `floor(W/4)` with a WARN whenever `B` would be ≤ 0, so B is always positive and the clamp math holds. Question: clamp `max_tokens`, or refuse the model (`model_unavailable`) until the operator lowers it? |
-| **A-19** | **OPEN** | ADR §15 task 1 names the tools but not the parameters. **Assumption:** `offset`/`limit` for `list_directory` and `inspect_session`; `max_results` for `recall_conversation` search modes. Question: confirm names and defaults. |
+| A-18 | **ACCEPTED** (coordinator 2026-08-22) | When `max_tokens ≥ W` (B ≤ 0), `max_tokens` is clamped to `floor(W/4)` with a WARN naming the model; constraint in §5, boundary row DS-4 #16, FR-005b, B-05b. |
+| A-19 | **ACCEPTED** (coordinator 2026-08-22) | `list_directory` and `inspect_session` gain `offset`/`limit`; `recall_conversation` query/range modes gain `max_results`; consistent with `read_file`'s interface (FR-039/040). |
 
 ---
 
@@ -849,21 +856,21 @@ head/tail 50/50; mark length counted toward the cap; no rune split
 
 ## 12. Assumptions & Clarifications
 
-- A-18 and A-19 are open and proceed under the stated assumptions.
+- Register #3 confirmed by the coordinator (earlier oversized turns kept by the pre-turn floor are eligible for emptying — ADR D5 "When" amendment stands). A-18 and A-19 accepted.
 - ADR-067 supplies `Resolve(provider, model).context_window`; consumed, not specified.
 - The estimator (2.5 chars/token) is the unit of all token arithmetic (no calibration path).
 - Recall `offset`/`length` are runes, not bytes (differs from `read_file`'s byte offsets; same parameter names only).
 
 ## 13. Spec-review disposition (2026-08-22)
 
-All 37 findings verified against the branch; none refuted. CRIT-001…004 per the coordinator's decisions; MAJ-001…016 applied as decided; MIN-001…012 applied; OBS-001…005 applied. Register #3 (pre-turn-kept oversized turns) resolved by making earlier-turn results eligible for emptying (FR-017, B-21b), pinned in the regression table. New open items: A-18, A-19.
+All 37 findings verified against the branch; none refuted. CRIT-001…004 per the coordinator's decisions; MAJ-001…016 applied as decided; MIN-001…012 applied; OBS-001…005 applied. Register #3 (pre-turn-kept oversized turns) resolved by making earlier-turn results eligible for emptying (FR-017, B-21b), pinned in the regression table — confirmed by the coordinator. A-18 and A-19 accepted and closed.
 
 ### Summary
 
 - User stories: **12** (US-1…US-9, US-11, US-12, US-13; US-10 withdrawn)
-- BDD scenarios: **57** (HP 30 · AP 9 · EP 10 · EC 8; 10 outlines)
-- Test datasets: **9**, **73** rows
-- Functional requirements: **40** (FR-035 is the D8 non-behaviour)
+- BDD scenarios: **58** (HP 30 · AP 9 · EP 10 · EC 9; 10 outlines)
+- Test datasets: **9**, **74** rows
+- Functional requirements: **41** (incl. FR-005b; FR-035 is the D8 non-behaviour)
 - Success criteria: **12**
-- Tests planned: **48** (25 unit, 20 integration, 3 E2E)
-- Ambiguities: **19** — 17 closed, **2 open** (A-18, A-19)
+- Tests planned: **49** (26 unit, 20 integration, 3 E2E)
+- Ambiguities: **19** — **all closed**
