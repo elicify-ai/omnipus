@@ -14,7 +14,7 @@
 
 On 2026-08-21 a production turn died silently after two MCP tool results (1.18 MB and 0.82 MB) entered the context in one turn. Four defects were diagnosed (ADR-066 §1): the context window was resolved from `max_tokens × 4` (wrong by 8×); the MCP path admits results of any size; the sliding window is consulted only before the first LLM call of a turn and can only cut at user-message boundaries; and four turn exits emit no log, event or transcript entry.
 
-This spec covers the incident fix: resolve the window from a ladder with a lower-only clamp and a loud floor (D2–D3); cap every tool result at one choke point, bound user messages at the gateway and tool-call arguments as a structured refusal (D4); when the window is over budget mid-turn, empty the oldest eligible tool result in place and leave a recall mark that `recall_conversation` can resolve by `tool_call_id`, in pages (D5); run the window check after every tool result with a floor of the whole last assistant step and a thrash guard (D6); give every turn exit a typed code (D7); learn a lower window from provider errors, reset on catalog version (D8); expose caps, trigger and the effective window with its source in Settings (D9); bound ingest at 10 MB (D10).
+This spec covers the incident fix: resolve the window from a ladder with a lower-only clamp and a loud floor (D2–D3); cap every tool result at one choke point, bound user messages at the gateway and tool-call arguments as a structured refusal (D4); when the window is over budget mid-turn, empty the oldest eligible tool result in place and leave a recall mark that `recall_conversation` can resolve by `tool_call_id`, in pages (D5); run the window check after every tool result with a floor of the whole last assistant step and a thrash guard (D6); give every turn exit a typed code (D7); learn a lower window from provider errors, reset on catalog version (D8); expose caps, trigger and the effective window with its source in Settings (D9); bound ingest at 8 MB, strictly below the archive line ceiling (D10).
 
 Nothing is summarised, nothing is deleted from disk, no new storage is introduced. `windowTrim` remains the only compaction path (ADR-028, extended not superseded).
 
@@ -47,7 +47,7 @@ Nothing is summarised, nothing is deleted from disk, no new storage is introduce
 | `pkg/agent/translate_error.go::contextOverflowSubstrings`, `::classifyByMessage`, `CodeContextTooLong`, `CodeUnknown`, generated `LLMErrorUserAttributions` | **extends** | D7 new codes; D8 numeric extraction feeds back a learned window. |
 | `contracts/components/schemas/LLMError.yaml` (`x-user-messages` catalogue) | **extends** | New codes + copy + attribution (both Go/TS catalogues generated). |
 | `pkg/mcp/manager.go::Manager.CallTool` | **modifies** | No truncation, no ingest bound today. |
-| `pkg/tools/web.go` (`io.ReadAll(resp.Body)` at the Brave/DuckDuckGo/Perplexity search providers; two `LimitReader(…, 1<<20)` sites; `fetch_url` `MaxBytesReader` 10 MB) | **modifies** | D10 bounds the three unbounded reads. |
+| `pkg/tools/web.go` (`io.ReadAll(resp.Body)` at the Brave/DuckDuckGo/Perplexity search providers; two `LimitReader(…, 1<<20)` sites; `fetch_url` `MaxBytesReader` 10 MB) | **modifies** | D10 bounds the three unbounded reads and aligns `fetch_url`'s fallback to 8 MB. |
 | `pkg/tools/filesystem.go::MaxReadFileSize` (64 KB), `pkg/tools/web.go::defaultMaxChars` (50,000), `pkg/tools/browser/tools.go::maxGetTextBytes` (100 KiB), `pkg/tools/shell.go::maxForegroundOutputLen` (10,000) | **modifies** | Per-tool caps aligned to D4 figures. |
 | `pkg/tools/result.go::ToolResult`, `::marshalWithinBudget`, ADR-060 family register (`scripts/check-no-handwritten-wire-types.sh`) | **extends** | D4 argument refusal and D5 recall mark producers. |
 | `pkg/gateway/websocket.go::handleChatMessage` (and the webchat/SSE intake) | **modifies** | D4 user-message bound, before a turn is registered. |
@@ -211,21 +211,21 @@ As an operator, I can see and set the per-surface caps (ceiling 150,000), the D6
 - **Why P1:** "that number is currently unreachable from the UI and the API, which is half of why the 8× error stayed invisible."
 - **Independent test:** the settings endpoint round-trips the caps and trigger; the agent view shows the effective window and source; a cap above 150,000 is rejected.
 - **Acceptance:**
-  1. **Given** Settings, **When** I read the context settings, **Then** I see MCP cap, builtin success cap, builtin failure cap, absolute trigger, ingest bound, and the global default window, with their defaults (62,500 / 64,000 / 10,000 / 400,000 chars / 10 MB / unset).
+  1. **Given** Settings, **When** I read the context settings, **Then** I see MCP cap, builtin success cap, builtin failure cap, absolute trigger, ingest bound, and the global default window, with their defaults (62,500 / 64,000 / 10,000 / 400,000 chars / 8 MB / unset).
   2. **Given** a cap value of 150,001, **When** saved, **Then** HTTP 400 names the ceiling; 150,000 is accepted.
   3. **Given** an agent, **When** I view it, **Then** I see its effective window and its source (`operator` / `live` / `catalog` / `learned` / `floor`) read-only, plus an override field.
   4. **Given** an override above the catalog value, **When** saved, **Then** it is accepted and the effective window shows the clamped value with a clamp indicator.
   5. **Given** every one of these fields, **Then** it is defined in `contracts/` and crosses the boundary only as generated types.
 
 ### US-12 — Bound what enters memory at ingest (D10) — **P1**
-As the process, every network or subprocess read is bounded at 10 MB by default (operator-settable) so an oversized response is a tool failure before it is held or parsed — never a truncation.
+As the process, every network or subprocess read is bounded at 8 MB by default (operator-settable, ceiling strictly below the archive line ceiling) so an oversized response is a tool failure before it is held or parsed — never a truncation.
 - **Why P1:** D4 protects the window, not the process; the §17.1 2 MB test must fit under it.
-- **Independent test:** a 10 MB + 1 byte MCP response or search response fails as a tool error naming the bound; a 2 MB response succeeds.
+- **Independent test:** an 8 MB + 1 byte MCP response or search response fails as a tool error naming the bound; a 2 MB response succeeds; a setting at or above 0.8 × the archive line ceiling is rejected.
 - **Acceptance:**
   1. **Given** an MCP tool result whose serialised content exceeds the bound, **Then** the call is a tool failure naming the bound; no partial content enters the window or archive.
   2. **Given** a Brave/DuckDuckGo/Perplexity response over the bound, **Then** the same.
   3. **Given** a 2 MB response, **Then** it is accepted and flows to D4.
-  4. **Given** any configured ingest bound, **Then** an archived line produced from it remains readable by the archive reader (bound ≤ the reader's line ceiling). **[A-8]**
+  4. **Given** a configured ingest bound, **Then** it is accepted only if strictly below 0.8 × the archive reader's line ceiling (`maxLineSize` stays 10 MB, so the ceiling is < 8,388,608 bytes); a value at or above it is rejected, so every archived line produced from an admitted result remains readable. *(A-8 resolved.)*
 
 ### Edge Cases
 - E1: a tool result of exactly 62,500 (MCP) / 64,000 (builtin) chars → enters unmodified; +1 → capped.
@@ -284,11 +284,11 @@ As the process, every network or subprocess read is bounded at 10 MB by default 
 
 **Sizes (characters = Unicode runes unless stated):**
 - MCP result cap default **62,500**; builtin success cap **64,000**; builtin failure cap **10,000** (head-and-tail); warn threshold **25,000** (log + counter, no modification); operator ceiling **150,000** on every cap.
-- User-message bound = the builtin success cap (**64,000**) **[A-2]**.
+- User-message bound = the builtin success cap (**64,000**); not a separate setting — it tracks the builtin cap; the gateway reply quotes the live value. *(A-2 resolved.)*
 - Tool-call argument cap = the builtin success cap (**64,000**) measured on the serialised arguments string **[A-3]**.
-- Recall page size = the builtin success cap (**64,000**) **[A-1]**.
+- Recall page size = the builtin success cap (**64,000**). *(A-1 resolved.)*
 - D6 `absoluteBudget` default **400,000 chars** (≈ **160,000** estimator tokens at 2.5 chars/token); trigger = `min(absoluteBudget, 0.9 × resolvedWindow)`; target = **80 % of the trigger** **[A-5]**.
-- Ingest bound default **10 MB (10,485,760 bytes)** per response; every archived line ≤ `maxLineSize` (10 MB) **[A-8]**.
+- Ingest bound default **8 MB (8,000,000 bytes)** per response, operator-settable; the setting's ceiling is enforced as **< `maxLineSize` × 0.8 = 8,388,608 bytes** (`maxLineSize` stays 10 MB = 10,485,760 bytes); `fetch_url`'s own fallback is aligned to 8 MB. *(A-8 resolved.)*
 - Cloud floor **128,000 tokens**; local/self-hosted floor: none.
 - Live-query cache TTL **24 h** **[A-9]**.
 
@@ -601,9 +601,9 @@ When read
 Then the outcome is `<outcome>`.
 | source | bytes | outcome |
 |---|---|---|
-| MCP | 10,485,760 | accepted |
-| MCP | 10,485,761 | tool failure naming the bound |
-| Brave search | 10,485,761 | tool failure naming the bound |
+| MCP | 8,000,000 | accepted |
+| MCP | 8,000,001 | tool failure naming the bound |
+| Brave search | 8,000,001 | tool failure naming the bound |
 | Perplexity | 2,097,152 | accepted |
 
 ---
@@ -759,11 +759,12 @@ All Go tests: `CGO_ENABLED=0 go test -tags goolm,stdjson -count=1 -run '^TestNam
 | # | Source | Bytes | Expected | Traces to |
 |---|---|---|---|---|
 | 1 | MCP | 2,097,152 | accepted | B-46 |
-| 2 | MCP | 10,485,760 | accepted | B-46 |
-| 3 | MCP | 10,485,761 | tool failure | B-46 |
-| 4 | Brave | 10,485,761 | tool failure | B-46 |
-| 5 | DuckDuckGo | 10,485,761 | tool failure | B-46 |
-| 6 | Perplexity | 10,485,761 | tool failure | B-46 |
+| 2 | MCP | 8,000,000 | accepted (at bound) | B-46 |
+| 3 | MCP | 8,000,001 | tool failure | B-46 |
+| 4 | Brave | 8,000,001 | tool failure | B-46 |
+| 5 | DuckDuckGo | 8,000,001 | tool failure | B-46 |
+| 6 | Perplexity | 8,000,001 | tool failure | B-46 |
+| 7 | fetch_url (fallback) | 8,000,001 | tool failure (fallback aligned to 8 MB) | B-46 |
 
 #### Dataset DS-9: Settings validation
 
@@ -773,7 +774,9 @@ All Go tests: `CGO_ENABLED=0 go test -tags goolm,stdjson -count=1 -run '^TestNam
 | 2 | mcp_result_cap | 150,001 | 400 | B-14 |
 | 3 | builtin_failure_cap | 0 | 400 | B-14 |
 | 4 | absolute_trigger_chars | 400,000 | 200 | B-44 |
-| 5 | ingest_bound_bytes | 10,485,761 | 400 if > line ceiling [A-8] | B-44 |
+| 5 | ingest_bound_bytes | 8,388,607 | 200 (strictly below 0.8 × maxLineSize) | B-44 |
+| 5b | ingest_bound_bytes | 8,388,608 | 400 (at the ceiling; must be strictly below) | B-44 |
+| 5c | ingest_bound_bytes | 10,485,760 | 400 | B-44 |
 | 6 | context_window_override (agent) | 2,000,000 vs catalog 1,048,576 | 200; effective 1,048,576 clamped | B-45 |
 
 ### Regression Test Requirements
@@ -855,7 +858,7 @@ This feature **modifies existing functionality**.
 - **FR-036**: Per-surface caps, the absolute trigger, the ingest bound and the global default window MUST be first-class contract types on a settings endpoint **[A-13]**; each agent MUST expose effective window, source and override **[A-10]**; all MUST cross the boundary as generated types.
 
 **D10 — ingest**
-- **FR-037**: Every network/subprocess read (MCP results, Brave/DuckDuckGo/Perplexity) MUST be bounded at ingest, default 10 MB, operator-settable; exceeding it MUST be a tool failure naming the bound, never a truncation; the bound MUST keep every archived line ≤ the reader's line ceiling **[A-8]**.
+- **FR-037**: Every network/subprocess read (MCP results, Brave/DuckDuckGo/Perplexity) MUST be bounded at ingest, default 8 MB (8,000,000 bytes), operator-settable; exceeding it MUST be a tool failure naming the bound, never a truncation; the setting's ceiling MUST be enforced as strictly below `maxLineSize` × 0.8 (`maxLineSize` stays 10 MB); `fetch_url`'s own fallback MUST be aligned to 8 MB.
 
 ### Success Criteria
 - **SC-001**: A synthetic 2 MB MCP result through `runTurn` completes the turn with no user-facing error; every provider request ≤ the window (§17.1).
@@ -939,18 +942,18 @@ This feature **modifies existing functionality**.
 
 ## 10. Ambiguity Self-Audit
 
-The ADR is the confirmed brief; the operator cannot be asked during this phase. Each row states what the ADR leaves open, the assumption this spec proceeds under (labelled **[A-n]** where used), and the question for the operator to resolve afterwards.
+The ADR is the confirmed brief; the operator cannot be asked during this phase. A-1, A-2 and A-8 were resolved by ADR commit `f01d5278` (2026-08-22) and the spec body now reflects them; the remaining 14 stay open for the operator. Each row states what the ADR leaves open, the assumption this spec proceeds under (labelled **[A-n]** where used), and the question for the operator to resolve afterwards.
 
 | # | What's ambiguous | Likely agent assumption (used above) | Question to resolve |
 |---|---|---|---|
-| A-1 | §6.3 says the recall page is "at most 30,000 chars (the builtin success cap)", but §16a MAJ-007 raised the builtin success cap to 64,000. | Page size = the builtin success cap = **64,000**, following the stated rationale ("since recall is a builtin"). | Is the recall page 64,000 (track the cap) or a fixed 30,000? |
-| A-2 | §5 says a user message is checked "over the builtin cap" but the example reply says "the limit is 30,000" (pre-MAJ-007 figure). | Bound = builtin success cap = **64,000** chars; reply text uses the live value. | Confirm 64,000, and whether the bound is a separate operator setting. |
+| A-1 | **RESOLVED** (ADR f01d5278) — §6.3 now states 64,000. | Recall page = builtin success cap = **64,000** chars. | — |
+| A-2 | **RESOLVED** (ADR f01d5278) — §5 now says 64,000. | User-message bound = builtin success cap = **64,000**; the gateway reply quotes the live value; it is not a separate setting — it tracks the builtin cap. | — |
 | A-3 | Tool-argument cap: "over the cap" — which cap, measured on what? Media in user messages: counted? | Cap = builtin success cap (64,000) on the serialised arguments string; media refs are not counted toward the user-message bound. | Confirm the cap and the measurement basis. |
 | A-4 | D7 names `turn canceled`/`turn timed out` codes but not the thrash-guard code name, nor whether the existing `context_too_long` is reused. | New codes `turn_canceled`, `turn_timed_out`, and a distinct thrash code (e.g. `context_unrecoverable`, attribution `product`). | Name the thrash-guard code; confirm it is not `context_too_long`. |
 | A-5 | D6 "run down to a target below the trigger" — the target value is unspecified; and how the 400,000-char absolute composes with `windowTrim`'s existing budget is described in prose only. | Target = 80 % of the trigger; composition: total check uses `windowTrim`'s budget with `min(W, 0.9W)` ceiling applied before subtraction, and the absolute term caps the tool-result share in estimator tokens (160,000). | State the target and the exact composition formula. |
 | A-6 | Order of the sensitive-data filter relative to the cap (pass-2 MIN-002, not in §16a). | Filter first, then cap; archive holds the filtered full content. | Confirm. |
 | A-7 | Sanitising/length-limiting the MCP tool name inside the mark (MIN-005). | Name limited to 64 chars, non-printables stripped. | Confirm the rule. |
-| A-8 | Ingest bound 10 MB equals the archive reader's `maxLineSize` 10 MB; JSON escaping inflates a 10 MB raw result beyond a 10 MB line. | Bound is validated at save as ≤ line ceiling; implementation MUST ensure the encoded line fits (e.g. raise the reader ceiling or bound at a margin). | Raise `maxLineSize`, or set the effective ingest bound below it? |
+| A-8 | **RESOLVED** (ADR f01d5278, §16a MAJ-008). | Ingest bound default **8 MB** (8,000,000 bytes), operator-settable; ceiling enforced as `< maxLineSize × 0.8` (8,388,608; `maxLineSize` stays 10 MB); `fetch_url` fallback aligned to 8 MB. Note: 8 MB is read as decimal (8,000,000) — 8 MiB (8,388,608) would sit exactly at the ceiling and fail the strict `<`. | — |
 | A-9 | Live provider query cache TTL and location are unspecified. | 24 h; `$OMNIPUS_HOME/cache/model_limits.json`. | Confirm TTL and path. |
 | A-10 | D9 lists sources "operator / catalog / learned / floor"; D2's ladder also has `live`. How is a clamped override reported? | Enum `operator \| live \| catalog \| learned \| floor`, plus a boolean `clamped`. | Confirm the enum and clamp representation. |
 | A-11 | Warn-threshold "metric" sink unnamed (MIN-007). | WARN log line + in-process counter `tool_result_large_total` exposed where existing counters are. | Name the sink or drop the row. |
@@ -989,5 +992,5 @@ The ADR is the confirmed brief; the operator cannot be asked during this phase. 
 - Functional requirements: **37**
 - Success criteria: **10**
 - Tests planned: **44** (25 unit, 16 integration, 3 E2E)
-- Ambiguities for the operator: **17** (§10), all proceeding under labelled assumptions
+- Ambiguities for the operator: **17** listed in §10 — **3 resolved** (A-1, A-2, A-8 per ADR commit f01d5278), **14 open**, all proceeding under labelled assumptions
 - Gaps: GitNexus impact analysis must be re-run on `runTurn`, `windowTrim`, `RollbackAppended` and `NewAgentInstance` before editing (tools unavailable when this spec was written).
