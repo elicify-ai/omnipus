@@ -51,7 +51,7 @@ Nothing is summarised, nothing is deleted from disk. One new cache file (`$OMNIP
 | `pkg/memory/jsonl.go::sessionMeta` (`skip`, `count`), `::GetHistory`, `::ReadArchive`, `maxLineSize = 10 MB` | **extends** | Meta gains per-result projection state keyed `(tool_call_id, archive line index)`; scanner buffer is `maxLineSize` — a longer line breaks the rest of the session read, hence the encoded-line bound. |
 | `pkg/agent/recall_conversation.go::RecallConversationTool` (`recallDefaultTokens = 4000`, `recallRangeTokens = 8000`, id remap; `Execute` → `setRecallSpan` → receipt *"Recalled N turn(s) … into context."*) | **extends / modifies** | `tool_call_id` (+ `archive_line`) paged mode; `max_results` (FR-040); **D5.4:** receipt rewritten to the real outcome; non-fit message. Verified: the span is read only by `loop.go::assembleMessages` and `loop.go::windowTrim`; mid-turn `callMessages` is built from `repairedHistory := messages` and never consults `activeRecallSpan`. |
 | `pkg/agent/loop.go` tool loop (recall tool-result site), `turnState.injectedRecallSpan` (new), `pkg/agent/context.go::BuildMessages`, `::sanitizeHistoryForProvider` | **modifies / adds** | **D5.4:** splice the span into the in-memory slice right after the recall result is appended; budget check first; `assembleMessages` skips an injected span. |
-| `pkg/agent/attach_hydrate.go::HydrateAgentHistoryFromTranscript` (callers: `pkg/gateway/websocket.go` attach_session — unconditional; `loop.go` self-heal — when history has no assistant/tool) | **modifies** | **D5.5:** attach path skips when the archive has ≥ 1 line; hydration emits tool results from the transcript's bounded `result`; meta `hydrated: true` until the transcript field lands. |
+| `pkg/agent/attach_hydrate.go::HydrateAgentHistoryFromTranscript` (callers: `pkg/gateway/websocket.go` attach_session — unconditional; `loop.go` self-heal — when history has no assistant/tool) | **modifies** | **D5.5:** verified mechanism — the rebuild `switch`es on `e.Role` (`user`/`assistant` only) and emits tool lines only from `e.ToolCalls` on an assistant entry; standalone `type: "tool_call"` entries (no `role`; 55 of them vs 0 `tool_calls` fields on 50 assistant entries in the 08-21 session) hit `default: continue` and are dropped → zero tool lines. Fix: attach path skips when the archive has ≥ 1 line; hydration reconstructs tool calls from standalone entries (attached to the preceding assistant message of the same `turn_id`/agent) with their D4-capped `result`; meta `hydrated: true` until the transcript field lands. |
 | `pkg/memory/jsonl.go::SetHistory` (rewrites the file, `meta.Skip = 0`) | **modifies** | **D5.5:** refuses when the file is non-empty; never resets `Skip` on an existing archive. |
 | `contracts/components/schemas/ToolCall.yaml` `result` (transcript) | **extends** | **D5.5:** bounded `result` content written by the D4 choke point so hydration is not lossy (coordinate with S67's contract commit). |
 | `pkg/agent/translate_error.go::contextOverflowSubstrings`, `::classifyByMessage`, `CodeContextTooLong`, `CodeUnknown` | **extends** | D7 codes only; classification job unchanged (D8 not adopted). |
@@ -247,11 +247,11 @@ As the model, when I call `recall_conversation`, the recalled text is in my very
 
 ### US-15 — Opening a session must not destroy the agent archive (D5.5) — **P0, hotfix first**
 As an operator, opening a session in the browser must never rewrite the per-agent archive, so tool results persist, `Skip` is stable, and ADR-028's append-only invariant holds.
-- **Why P0:** verified on the operator's data: attach rebuilds the archive from the transcript via `SetHistory` (21/53/36 lines → 22/42/0, `skip` 0). D5's "full result stays in the archive" is false until fixed.
+- **Why P0:** verified on the operator's data: attach rebuilds the archive from the transcript via `SetHistory` (21/53/36 lines → 22/42/0, `skip` 0), and the rebuild drops every standalone `tool_call` entry (the current transcript shape) because it only reads `e.ToolCalls` on assistant entries. D5's "full result stays in the archive" is false until fixed.
 - **Independent test:** attach the same session twice → archive bytes and `meta.skip` unchanged; attach to an empty archive → hydrated once, with tool results.
 - **Acceptance:**
   1. **Given** an agent archive with ≥ 1 line, **When** `attach_session` runs, **Then** hydration is skipped; file bytes and `skip` unchanged.
-  2. **Given** an empty archive, **When** attached, **Then** hydration runs once and the rebuilt archive contains one `role: "tool"` line per recorded tool call with the transcript's bounded `result` content.
+  2. **Given** an empty archive and a transcript in the real shape (assistant entries without `tool_calls`, standalone `type: "tool_call"` entries), **When** attached, **Then** hydration runs once; each standalone entry is attached as a `ToolCall` to the preceding assistant message of the same `turn_id`/agent, and the rebuilt archive contains exactly one `role: "tool"` line per recorded call with the entry's D4-capped `result` content.
   3. **Given** the self-heal path, **Then** its existing emptiness condition is unchanged.
   4. **Given** the transcript `tool_call.result` field (bounded by D4, written by the choke point) has not landed, **Then** a hydrated archive carries meta `hydrated: true` and recall by `tool_call_id` answers *"not available — session was rebuilt from the transcript"*.
   5. **Given** a non-empty archive, **When** `SetHistory` is called, **Then** it refuses (error logged) and `Skip` is untouched.
@@ -520,7 +520,7 @@ head/tail 50/50; mark length counted toward the cap; no rune split
 ### Feature: Hydration (D5.5)
 
 **B-52 (HP)** attach twice, archive untouched — US-15.AC1. Archive with 21/53/36 lines → after two attaches bytes identical, `skip` unchanged.
-**B-53 (HP)** empty archive hydrates once with tool results — US-15.AC2, AC3.
+**B-53 (HP)** empty archive hydrates once with tool results from standalone entries — US-15.AC2, AC3. Fixture: 50 assistant entries with no `tool_calls`, 55 standalone `tool_call` entries → 55 `role: "tool"` lines, each paired with the preceding assistant message of its `turn_id`.
 **B-53b (AP)** hydrated flag until the transcript field lands — US-15.AC4. `hydrated: true`; recall by id → "not available — session was rebuilt from the transcript".
 **B-53c (EP)** `SetHistory` on a non-empty archive refused — US-15.AC5.
 **B-53d (HP)** append-only invariant with an attach step — US-15.AC6.
@@ -598,7 +598,7 @@ head/tail 50/50; mark length counted toward the cap; no rune split
 | 53 | `TestRunTurn_InjectedSpanSubjectToD5` | Integration | B-50d | |
 | 54 | `TestSubTurn_RecallReadsParentStore_KnownLimitation` | Integration | B-51 | pins the empty outcome |
 | 55 | `TestAttach_TwiceArchiveByteIdentical` (pkg/gateway, scoped) | Integration | B-52 | bytes + skip |
-| 56 | `TestAttach_EmptyArchiveHydratesOnceWithToolResults` | Integration | B-53, B-53b | |
+| 56 | `TestAttach_EmptyArchiveHydratesStandaloneToolCalls` | Integration | B-53, B-53b | real transcript shape (standalone `tool_call` entries); one tool line per call, attached to the right assistant message |
 | 57 | `TestSetHistory_RefusesNonEmptyArchive` (pkg/memory) | Unit | B-53c | |
 | 58 | `TestArchive_AppendOnlyWithAttachStep` | Integration | B-53d | extends the ADR-028 invariant test |
 
@@ -711,7 +711,8 @@ head/tail 50/50; mark length counted toward the cap; no rune split
 | 3 | span exactly fits (total == B) | injected | B-48 |
 | 4 | two recalls in one turn | second replaces first; one marker | B-50 / E20 |
 | 5 | archive 110 lines, attach ×2 | identical bytes; skip unchanged | B-52 |
-| 6 | archive 0 lines, transcript with 3 tool calls | 3 `role: tool` lines with result content | B-53 |
+| 6 | archive 0 lines; transcript: 2 assistant entries (no `tool_calls`) + 3 standalone `tool_call` entries (turn_id A: 2, turn_id B: 1) | 3 `role: tool` lines with result content; A's two attached to A's assistant message, B's to B's | B-53 |
+| 6b | standalone `tool_call` entry with no preceding assistant entry in its turn | synthetic assistant message with the call inserted; one tool line; WARN logged | B-53 |
 | 7 | archive 0 lines, transcript `result` absent (pre-field) | `hydrated: true`; recall by id → "not available…" | B-53b |
 | 8 | `SetHistory` on 1-line archive | refused; skip unchanged | B-53c |
 
@@ -819,7 +820,7 @@ head/tail 50/50; mark length counted toward the cap; no rune split
 
 **D5.5 — hydration (P0 hotfix, inherited)**
 - **FR-045**: The attach path MUST skip hydration when the agent archive has ≥ 1 line; the self-heal path keeps its emptiness condition.
-- **FR-046**: When hydration runs, the rebuilt archive MUST contain a `role: "tool"` line per recorded tool call carrying the transcript's bounded `result` (D4-capped, written by the choke point); until that field lands, meta MUST carry `hydrated: true` and recall by id MUST answer *"not available — session was rebuilt from the transcript"*.
+- **FR-046**: When hydration runs, it MUST reconstruct tool calls from standalone `type: "tool_call"` transcript entries — attaching each as a `ToolCall` to the preceding assistant message of the same `turn_id`/agent (a synthetic assistant message if none exists, with a WARN) — and the rebuilt archive MUST contain exactly one `role: "tool"` line per recorded call carrying the entry's bounded `result` (D4-capped, written by the choke point); the test fixture MUST use the real transcript shape; until that field lands, meta MUST carry `hydrated: true` and recall by id MUST answer *"not available — session was rebuilt from the transcript"*.
 - **FR-047**: `SetHistory` MUST refuse a non-empty archive and MUST never reset `Skip` on an existing one.
 - **FR-048**: The ADR-028 append-only invariant test MUST include an attach step.
 
@@ -990,7 +991,7 @@ All 37 findings verified against the branch; none refuted. CRIT-001…004 per th
 
 - User stories: **14** (US-1…US-9, US-11…US-15; US-10 withdrawn) — US-14/US-15 are P0 hotfixes inherited by this branch
 - BDD scenarios: **72** (HP 37 · AP 10 · EP 12 · EC 13; 10 outlines)
-- Test datasets: **10**, **83** rows
+- Test datasets: **10**, **84** rows
 - Functional requirements: **49** (incl. FR-005b; FR-035 is the D8 non-behaviour; FR-041…048 are the D5.4/D5.5 preconditions)
 - Success criteria: **15**
 - Tests planned: **61** (28 unit, 29 integration, 4 E2E)
