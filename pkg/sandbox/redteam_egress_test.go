@@ -68,7 +68,11 @@ func rawTCPConnect(ip [4]byte, port uint16) error {
 	if err != nil {
 		return fmt.Errorf("socket: %w", err)
 	}
-	defer syscall.Close(fd)
+	defer func() {
+		if closeErr := syscall.Close(fd); closeErr != nil {
+			_ = closeErr // test fixture cleanup only
+		}
+	}()
 	sa := &syscall.SockaddrInet4{Addr: ip, Port: int(port)}
 	return syscall.Connect(fd, sa)
 }

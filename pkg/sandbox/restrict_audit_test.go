@@ -53,12 +53,12 @@ func TestRestrictCurrentThread_FailureEmitsAudit(t *testing.T) {
 	if entry.Details == nil {
 		t.Fatal("entry.Details is nil; must carry callsite and error")
 	}
-	cs, _ := entry.Details["callsite"].(string)
-	if cs == "" {
+	cs, ok := entry.Details["callsite"].(string)
+	if !ok || cs == "" {
 		t.Errorf("entry.Details[callsite] is empty; want %q", "test.callsite")
 	}
-	errStr, _ := entry.Details["error"].(string)
-	if errStr == "" {
+	errStr, ok := entry.Details["error"].(string)
+	if !ok || errStr == "" {
 		t.Error("entry.Details[error] is empty; must contain the error message")
 	}
 }

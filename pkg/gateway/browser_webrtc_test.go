@@ -691,7 +691,7 @@ func TestCaptureIngestWSHandler_TokenMismatchClosesConnection(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))
 
-	conn.SetReadDeadline(time.Now().Add(3 * time.Second)) //nolint:errcheck
+	conn.SetReadDeadline(time.Now().Add(3 * time.Second)) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
 	_, _, readErr := conn.ReadMessage()
 	require.Error(t, readErr, "a token-mismatched hello must close the connection with no further frames")
 }
@@ -756,7 +756,7 @@ func TestCaptureIngestWSHandler_MalformedFirstFrame_NotHello_ClosesConnection(t 
 	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))
 
-	conn.SetReadDeadline(time.Now().Add(3 * time.Second)) //nolint:errcheck
+	conn.SetReadDeadline(time.Now().Add(3 * time.Second)) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
 	_, _, readErr := conn.ReadMessage()
 	require.Error(t, readErr, "a non-hello first frame must close the connection with no further frames")
 }
@@ -801,7 +801,7 @@ func TestCaptureIngestWSHandler_ValidateInbound_RejectsSchemaInvalidHello(t *tes
 	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))
 
-	conn.SetReadDeadline(time.Now().Add(3 * time.Second)) //nolint:errcheck
+	conn.SetReadDeadline(time.Now().Add(3 * time.Second)) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
 	_, _, readErr := conn.ReadMessage()
 	require.Error(
 		t,
@@ -853,7 +853,7 @@ func TestCaptureIngestWSHandler_HelloSupersedesPreviousConnection(t *testing.T) 
 	require.NoError(t, conn2.WriteMessage(websocket.TextMessage, data))
 
 	// conn1 must be closed by the server once conn2's hello supersedes it.
-	conn1.SetReadDeadline(time.Now().Add(3 * time.Second)) //nolint:errcheck
+	conn1.SetReadDeadline(time.Now().Add(3 * time.Second)) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
 	_, _, readErr := conn1.ReadMessage()
 	require.Error(
 		t,

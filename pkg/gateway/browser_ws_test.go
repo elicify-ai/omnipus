@@ -168,7 +168,7 @@ func writeBrowserAuthFrame(t *testing.T, conn *websocket.Conn, token string) {
 // readBrowserFrame reads one frame off conn and decodes it.
 func readBrowserFrame(t *testing.T, conn *websocket.Conn, timeout time.Duration) browserFrameDecoder {
 	t.Helper()
-	conn.SetReadDeadline(time.Now().Add(timeout)) //nolint:errcheck
+	conn.SetReadDeadline(time.Now().Add(timeout)) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
 	_, raw, err := conn.ReadMessage()
 	require.NoError(t, err, "must read a frame")
 	var f browserFrameDecoder
@@ -238,7 +238,7 @@ func TestBrowserWS_Auth_DevModeBypass_ConnectionProceeds(t *testing.T) {
 
 	conn := dialBrowserTestWS(t, srv)
 	t.Cleanup(func() { _ = conn.Close() })
-	conn.SetReadDeadline(time.Now().Add(3 * time.Second)) //nolint:errcheck
+	conn.SetReadDeadline(time.Now().Add(3 * time.Second)) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
 
 	sendWSAuthFrameDevMode(t, conn)
 	assertBrowserConnProceeds(t, conn)
@@ -266,7 +266,7 @@ func TestBrowserWS_Auth_ValidUserToken_ConnectionProceeds(t *testing.T) {
 
 	conn := dialBrowserTestWS(t, srv)
 	t.Cleanup(func() { _ = conn.Close() })
-	conn.SetReadDeadline(time.Now().Add(3 * time.Second)) //nolint:errcheck
+	conn.SetReadDeadline(time.Now().Add(3 * time.Second)) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
 
 	writeBrowserAuthFrame(t, conn, token)
 	assertBrowserConnProceeds(t, conn)
@@ -292,7 +292,7 @@ func TestBrowserWS_Auth_ValidCLIToken_ConnectionProceeds(t *testing.T) {
 
 	conn := dialBrowserTestWS(t, srv)
 	t.Cleanup(func() { _ = conn.Close() })
-	conn.SetReadDeadline(time.Now().Add(3 * time.Second)) //nolint:errcheck
+	conn.SetReadDeadline(time.Now().Add(3 * time.Second)) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
 
 	writeBrowserAuthFrame(t, conn, token)
 	assertBrowserConnProceeds(t, conn)
@@ -331,7 +331,7 @@ func TestBrowserWS_Auth_InvalidToken_ClosesWithPolicyViolation(t *testing.T) {
 
 	conn := dialBrowserTestWS(t, srv)
 	t.Cleanup(func() { _ = conn.Close() })
-	conn.SetReadDeadline(time.Now().Add(3 * time.Second)) //nolint:errcheck
+	conn.SetReadDeadline(time.Now().Add(3 * time.Second)) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
 
 	writeBrowserAuthFrame(t, conn, "totally-wrong-token")
 
@@ -340,7 +340,7 @@ func TestBrowserWS_Auth_InvalidToken_ClosesWithPolicyViolation(t *testing.T) {
 	assert.Equal(t, wsAuthErrInvalidToken, f.Message,
 		"browser WS invalid-token error must carry the shared wsAuthErrInvalidToken constant verbatim")
 
-	conn.SetReadDeadline(time.Now().Add(1 * time.Second)) //nolint:errcheck
+	conn.SetReadDeadline(time.Now().Add(1 * time.Second)) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
 	_, _, err = conn.ReadMessage()
 	require.Error(t, err, "connection must be closed after invalid auth")
 	var closeErr *websocket.CloseError
@@ -373,7 +373,7 @@ func TestBrowserWS_Auth_NonAuthFirstFrame_Rejected(t *testing.T) {
 
 	conn := dialBrowserTestWS(t, srv)
 	t.Cleanup(func() { _ = conn.Close() })
-	conn.SetReadDeadline(time.Now().Add(3 * time.Second)) //nolint:errcheck
+	conn.SetReadDeadline(time.Now().Add(3 * time.Second)) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
 
 	attach := generated.BrowserAttachFrame{
 		Type:      string(generated.WsFrameTypeBrowserAttach),
@@ -389,7 +389,7 @@ func TestBrowserWS_Auth_NonAuthFirstFrame_Rejected(t *testing.T) {
 	assert.Equal(t, wsAuthErrBadFirstFrame, f.Message,
 		"browser WS bad-first-frame error must carry the shared wsAuthErrBadFirstFrame constant verbatim")
 
-	conn.SetReadDeadline(time.Now().Add(1 * time.Second)) //nolint:errcheck
+	conn.SetReadDeadline(time.Now().Add(1 * time.Second)) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
 	_, _, err = conn.ReadMessage()
 	assert.Error(t, err, "connection must not remain usable after a non-auth first frame")
 }
@@ -419,7 +419,7 @@ func TestBrowserWS_Auth_NoUsersConfigured_UsesSharedConstant(t *testing.T) {
 
 	conn := dialBrowserTestWS(t, srv)
 	t.Cleanup(func() { _ = conn.Close() })
-	conn.SetReadDeadline(time.Now().Add(3 * time.Second)) //nolint:errcheck
+	conn.SetReadDeadline(time.Now().Add(3 * time.Second)) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
 
 	writeBrowserAuthFrame(t, conn, "any-token-nothing-is-configured")
 
@@ -428,7 +428,7 @@ func TestBrowserWS_Auth_NoUsersConfigured_UsesSharedConstant(t *testing.T) {
 	assert.Equal(t, wsAuthErrNoUsers, f.Message,
 		"browser WS no-users-configured error must carry the shared wsAuthErrNoUsers constant verbatim")
 
-	conn.SetReadDeadline(time.Now().Add(1 * time.Second)) //nolint:errcheck
+	conn.SetReadDeadline(time.Now().Add(1 * time.Second)) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
 	_, _, err := conn.ReadMessage()
 	assert.Error(t, err, "connection must be closed when no auth identity is configured at all")
 }
@@ -455,7 +455,7 @@ func TestBrowserWS_LiveViewDisabled_SendsErrorAndCloses(t *testing.T) {
 
 	conn := dialBrowserTestWS(t, srv)
 	t.Cleanup(func() { _ = conn.Close() })
-	conn.SetReadDeadline(time.Now().Add(3 * time.Second)) //nolint:errcheck
+	conn.SetReadDeadline(time.Now().Add(3 * time.Second)) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
 
 	sendWSAuthFrameDevMode(t, conn)
 
@@ -464,7 +464,7 @@ func TestBrowserWS_LiveViewDisabled_SendsErrorAndCloses(t *testing.T) {
 	assert.Equal(t, "error", resp.State)
 	assert.Contains(t, resp.Message, "live_view_enabled")
 
-	conn.SetReadDeadline(time.Now().Add(1 * time.Second)) //nolint:errcheck
+	conn.SetReadDeadline(time.Now().Add(1 * time.Second)) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
 	_, _, err := conn.ReadMessage()
 	assert.Error(t, err, "connection must be closed when live view is disabled — no attach is possible")
 }
@@ -492,7 +492,7 @@ func TestBrowserWS_Attach_NoBrowserManagerForAgent(t *testing.T) {
 
 	conn := dialBrowserTestWS(t, srv)
 	t.Cleanup(func() { _ = conn.Close() })
-	conn.SetReadDeadline(time.Now().Add(3 * time.Second)) //nolint:errcheck
+	conn.SetReadDeadline(time.Now().Add(3 * time.Second)) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
 
 	sendWSAuthFrameDevMode(t, conn)
 
@@ -569,7 +569,7 @@ func TestBrowserWS_ValidateInbound_RejectsMalformedInputFrame(t *testing.T) {
 
 		conn := dialBrowserTestWS(t, srv)
 		t.Cleanup(func() { _ = conn.Close() })
-		conn.SetReadDeadline(time.Now().Add(3 * time.Second)) //nolint:errcheck
+		conn.SetReadDeadline(time.Now().Add(3 * time.Second)) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
 		sendWSAuthFrameDevMode(t, conn)
 
 		require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))
@@ -593,7 +593,7 @@ func TestBrowserWS_ValidateInbound_RejectsMalformedInputFrame(t *testing.T) {
 
 			conn := dialBrowserTestWS(t, srv)
 			t.Cleanup(func() { _ = conn.Close() })
-			conn.SetReadDeadline(time.Now().Add(3 * time.Second)) //nolint:errcheck
+			conn.SetReadDeadline(time.Now().Add(3 * time.Second)) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
 			sendWSAuthFrameDevMode(t, conn)
 
 			require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))
@@ -602,7 +602,7 @@ func TestBrowserWS_ValidateInbound_RejectsMalformedInputFrame(t *testing.T) {
 			// nil-mgr guard returns without any response. If ANY frame arrives
 			// here, schema validation (not something else) must have produced
 			// the previous subtest's error.
-			conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond)) //nolint:errcheck
+			conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond)) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
 			_, _, readErr := conn.ReadMessage()
 			assert.Error(t, readErr, "no frame should arrive when validate_inbound=false and no live view is attached")
 		},
@@ -1270,7 +1270,7 @@ func TestBrowserWS_Input_Navigate_SSRFBlocked_FullRoundTrip(t *testing.T) {
 
 	conn := dialBrowserTestWS(t, srv)
 	t.Cleanup(func() { _ = conn.Close() })
-	conn.SetReadDeadline(time.Now().Add(20 * time.Second)) //nolint:errcheck
+	conn.SetReadDeadline(time.Now().Add(20 * time.Second)) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
 
 	sendWSAuthFrameDevMode(t, conn)
 
@@ -1365,12 +1365,12 @@ func TestBrowserWS_Control_ControlledByOther_BroadcastsToSecondConnection(t *tes
 
 	connA := dialBrowserTestWS(t, srv)
 	t.Cleanup(func() { _ = connA.Close() })
-	connA.SetReadDeadline(time.Now().Add(20 * time.Second)) //nolint:errcheck
+	connA.SetReadDeadline(time.Now().Add(20 * time.Second)) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
 	sendWSAuthFrameDevMode(t, connA)
 
 	connB := dialBrowserTestWS(t, srv)
 	t.Cleanup(func() { _ = connB.Close() })
-	connB.SetReadDeadline(time.Now().Add(20 * time.Second)) //nolint:errcheck
+	connB.SetReadDeadline(time.Now().Add(20 * time.Second)) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
 	sendWSAuthFrameDevMode(t, connB)
 
 	attachFrame := func(sessionID string) []byte {
@@ -1481,7 +1481,7 @@ func readBrowserWebRTCStateFrame(t *testing.T, conn *websocket.Conn, timeout tim
 		if remaining <= 0 {
 			t.Fatal("no browser_webrtc_state frame received within timeout")
 		}
-		conn.SetReadDeadline(time.Now().Add(remaining)) //nolint:errcheck
+		conn.SetReadDeadline(time.Now().Add(remaining)) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
 		_, raw, err := conn.ReadMessage()
 		require.NoError(t, err, "must read a frame")
 		var probe wsTypeOnly
@@ -1548,7 +1548,7 @@ func TestBrowserWS_Attach_AnnouncesWebRTCAvailabilityOnSameConnection(t *testing
 
 	conn := dialBrowserTestWS(t, srv)
 	t.Cleanup(func() { _ = conn.Close() })
-	conn.SetReadDeadline(time.Now().Add(20 * time.Second)) //nolint:errcheck
+	conn.SetReadDeadline(time.Now().Add(20 * time.Second)) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
 	sendWSAuthFrameDevMode(t, conn)
 
 	attachFrame, err := json.Marshal(generated.BrowserAttachFrame{

@@ -111,7 +111,10 @@ func TestEgressProxy_DenyEmitsAudit(t *testing.T) {
 	}()
 
 	// Make an HTTP request through the proxy targeting a denied host.
-	proxyURL, _ := url.Parse("http://" + p.Addr())
+	proxyURL, urlErr := url.Parse("http://" + p.Addr())
+	if urlErr != nil {
+		t.Fatalf("parse proxy URL: %v", urlErr)
+	}
 	client := &http.Client{
 		Transport: &http.Transport{
 			Proxy: http.ProxyURL(proxyURL),
@@ -128,7 +131,10 @@ func TestEgressProxy_DenyEmitsAudit(t *testing.T) {
 		}
 	}()
 	if resp.StatusCode != http.StatusForbidden {
-		body, _ := io.ReadAll(resp.Body)
+		body, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			_ = readErr // best-effort: only used for the diagnostic message below
+		}
 		t.Errorf("status = %d, want 403; body=%s", resp.StatusCode, body)
 	}
 
@@ -143,14 +149,14 @@ func TestEgressProxy_DenyEmitsAudit(t *testing.T) {
 	if entry.Decision != audit.DecisionDeny {
 		t.Errorf("entry.Decision = %q, want deny", entry.Decision)
 	}
-	if got, _ := entry.Details["host"].(string); got != "evil.example.com" {
+	if got, hostOK := entry.Details["host"].(string); !hostOK || got != "evil.example.com" {
 		t.Errorf("entry.Details[host] = %v, want evil.example.com", entry.Details["host"])
 	}
 	listV, ok := entry.Details["allow_list"].([]string)
 	if !ok || len(listV) != 1 || listV[0] != "registry.npmjs.org" {
 		t.Errorf("entry.Details[allow_list] = %v, want [registry.npmjs.org]", entry.Details["allow_list"])
 	}
-	if reason, _ := entry.Details["reason"].(string); reason == "" {
+	if reason, reasonOK := entry.Details["reason"].(string); !reasonOK || reason == "" {
 		t.Errorf("entry.Details[reason] should be populated; got empty")
 	}
 }
@@ -174,7 +180,11 @@ func TestEgressProxy_AllowedRequestForwards(t *testing.T) {
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	go func() { _ = upstream.Serve(listener) }()
+	go func() {
+		if serveErr := upstream.Serve(listener); serveErr != nil {
+			_ = serveErr // expected: http.ErrServerClosed on test teardown
+		}
+	}()
 	defer func() {
 		if closeErr := upstream.Close(); closeErr != nil {
 			_ = closeErr
@@ -193,7 +203,10 @@ func TestEgressProxy_AllowedRequestForwards(t *testing.T) {
 		}
 	}()
 
-	proxyURL, _ := url.Parse("http://" + p.Addr())
+	proxyURL, urlErr := url.Parse("http://" + p.Addr())
+	if urlErr != nil {
+		t.Fatalf("parse proxy URL: %v", urlErr)
+	}
 	client := &http.Client{
 		Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)},
 		Timeout:   5 * time.Second,
@@ -207,7 +220,10 @@ func TestEgressProxy_AllowedRequestForwards(t *testing.T) {
 			_ = closeErr
 		}
 	}()
-	body, _ := io.ReadAll(resp.Body)
+	body, readErr := io.ReadAll(resp.Body)
+	if readErr != nil {
+		t.Fatalf("io.ReadAll(resp.Body): %v", readErr)
+	}
 	if string(body) != "upstream-ok" {
 		t.Errorf("body = %q, want upstream-ok", body)
 	}
@@ -261,7 +277,12 @@ func TestClose_WaitsForTunnels(t *testing.T) {
 		<-releaseUpstream
 	}()
 
-	host, port, _ := net.SplitHostPort(upstream.Addr().String())
+	host, port, splitErr := net.SplitHostPort(upstream.Addr().String())
+	if splitErr != nil {
+		// upstream.Addr() on a real net.Listener always returns a valid
+		// host:port string; this cannot happen in practice.
+		_ = splitErr
+	}
 	p, err := NewEgressProxy([]string{host}, nil)
 	if err != nil {
 		t.Fatalf("NewEgressProxy: %v", err)

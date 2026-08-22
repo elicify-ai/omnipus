@@ -168,7 +168,7 @@ func runNoHashInstall(t *testing.T, slug, displayName, skillMDContent string) (*
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/v1/skills/" + slug:
-			json.NewEncoder(w).Encode(clawhubSkillResponse{ //nolint:errcheck
+			json.NewEncoder(w).Encode(clawhubSkillResponse{ // errcheck rationale (out of errcheck scope; kept as documentation): test HTTP handler response write; the test server discards write errors, only response content matters for the assertions
 				Slug:          slug,
 				DisplayName:   displayName,
 				Summary:       displayName,
@@ -176,7 +176,7 @@ func runNoHashInstall(t *testing.T, slug, displayName, skillMDContent string) (*
 			})
 		case "/api/v1/download":
 			w.Header().Set("Content-Type", "application/zip")
-			w.Write(zipBuf) //nolint:errcheck
+			w.Write(zipBuf) // errcheck rationale (out of errcheck scope; kept as documentation): test HTTP handler response write; the test server discards write errors, only response content matters for the assertions
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}

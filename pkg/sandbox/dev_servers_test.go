@@ -77,7 +77,10 @@ func TestDevServerRegistry_LookupTouchesActivity(t *testing.T) {
 func TestDevServerRegistry_Unregister(t *testing.T) {
 	r := NewDevServerRegistry()
 	defer r.Close()
-	reg, _ := r.Register("a", 18000, 1, "next dev", 5)
+	reg, regErr := r.Register("a", 18000, 1, "next dev", 5)
+	if regErr != nil {
+		t.Fatalf("Register: %v", regErr)
+	}
 	if !r.Unregister(reg.Token) {
 		t.Error("Unregister returned false for existing token")
 	}
@@ -111,7 +114,10 @@ func TestDevServerRegistry_UnregisterByAgent(t *testing.T) {
 func TestDevServerRegistry_JanitorExpiresIdle(t *testing.T) {
 	r := NewDevServerRegistry()
 	defer r.Close()
-	reg, _ := r.Register("a", 18000, 1, "next dev", 5)
+	reg, regErr := r.Register("a", 18000, 1, "next dev", 5)
+	if regErr != nil {
+		t.Fatalf("Register: %v", regErr)
+	}
 	r.mu.Lock()
 	r.entries[reg.Token].LastActivity = time.Now().Add(-IdleTimeout - time.Second)
 	r.mu.Unlock()
@@ -127,7 +133,10 @@ func TestDevServerRegistry_JanitorExpiresIdle(t *testing.T) {
 func TestDevServerRegistry_JanitorExpiresHardCap(t *testing.T) {
 	r := NewDevServerRegistry()
 	defer r.Close()
-	reg, _ := r.Register("a", 18000, 1, "next dev", 5)
+	reg, regErr := r.Register("a", 18000, 1, "next dev", 5)
+	if regErr != nil {
+		t.Fatalf("Register: %v", regErr)
+	}
 	r.mu.Lock()
 	r.entries[reg.Token].CreatedAt = time.Now().Add(-HardTimeout - time.Second)
 	// Keep LastActivity recent so we know the hard cap is what fires.

@@ -139,7 +139,7 @@ func (s *realAuthServer) wsHandler(w http.ResponseWriter, r *http.Request) {
 	defer conn.Close()
 
 	// --- Auth frame ---
-	conn.SetReadDeadline(time.Now().Add(5 * time.Second)) //nolint:errcheck
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second)) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
 	_, raw, err := conn.ReadMessage()
 	if err != nil {
 		return
@@ -158,13 +158,13 @@ func (s *realAuthServer) wsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// --- Message frame (discard content) ---
-	conn.SetReadDeadline(time.Now().Add(5 * time.Second)) //nolint:errcheck
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second)) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
 	if _, _, err = conn.ReadMessage(); err != nil {
 		return
 	}
 
 	// --- Emit scripted frames ---
-	conn.SetReadDeadline(time.Now().Add(30 * time.Second)) //nolint:errcheck
+	conn.SetReadDeadline(time.Now().Add(30 * time.Second)) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
 	for _, frame := range s.frames {
 		data, marshalErr := json.Marshal(frame)
 		if marshalErr != nil {

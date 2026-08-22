@@ -161,7 +161,10 @@ func TestSpawnBackgroundChild_PortInjection(t *testing.T) {
 		t.Fatalf("cmd.Wait: %v", err)
 	}
 
-	outBytes, _ := readFile(t, envFile)
+	outBytes, readErr := readFile(t, envFile)
+	if readErr != nil {
+		t.Fatalf("readFile(%s): %v", envFile, readErr)
+	}
 	out := string(outBytes)
 
 	// The last PORT= entry wins under POSIX lookup; verify PORT=18000 is present.

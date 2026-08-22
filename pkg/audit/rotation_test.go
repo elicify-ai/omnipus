@@ -105,7 +105,11 @@ func TestRotationBySizeAndDaily(t *testing.T) {
 		assert.NoError(t, statErr, "audit.jsonl must exist after first write")
 
 		// Differentiation: a second write to the same logger produces a different file size.
-		info1, _ := os.Stat(activeLog)
+		info1, statErr1 := os.Stat(activeLog)
+		if statErr1 != nil {
+			// info1 stays nil; handled by the size1 fallback below.
+			_ = statErr1
+		}
 		size1 := int64(0)
 		if info1 != nil {
 			size1 = info1.Size()
@@ -119,7 +123,11 @@ func TestRotationBySizeAndDaily(t *testing.T) {
 			Tool:      "browser.screenshot",
 		}))
 
-		info2, _ := os.Stat(activeLog)
+		info2, statErr2 := os.Stat(activeLog)
+		if statErr2 != nil {
+			// info2 stays nil; handled by the size2 fallback below.
+			_ = statErr2
+		}
 		size2 := int64(0)
 		if info2 != nil {
 			size2 = info2.Size()

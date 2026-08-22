@@ -106,7 +106,11 @@ func setupTamperCheckpointFixture(t *testing.T) (dir string, key []byte) {
 		HMACKey:       key,
 	})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = logger2.Close() })
+	t.Cleanup(func() {
+		if closeErr := logger2.Close(); closeErr != nil {
+			_ = closeErr // test cleanup only; failure here does not affect the assertions already made
+		}
+	})
 
 	checkpointFile := filepath.Join(dir, checkpointFileName)
 	_, statErr := os.Stat(checkpointFile)
@@ -234,7 +238,11 @@ func TestCleanupExpired_RePointsStaleCheckpoint_WhenDeletedFileHasNoHMAC(t *test
 		HMACKey:       key,
 	})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = logger.Close() })
+	t.Cleanup(func() {
+		if closeErr := logger.Close(); closeErr != nil {
+			_ = closeErr // test cleanup only; failure here does not affect the assertions already made
+		}
+	})
 
 	_, statErr := os.Stat(older)
 	assert.Truef(t, os.IsNotExist(statErr), "older pre-chain file must have been deleted by retention cleanup")

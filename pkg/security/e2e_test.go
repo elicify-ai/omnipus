@@ -80,7 +80,8 @@ func TestE2E_RateLimitTriggered(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, "deny", parsed["decision"])
-	policyRule, _ := parsed["policy_rule"].(string)
+	policyRule, ok := parsed["policy_rule"].(string)
+	require.True(t, ok, "policy_rule must be a string")
 	assert.Contains(t, policyRule, "rate_limit")
 }
 
@@ -132,6 +133,7 @@ func TestE2E_SSRFBlocked(t *testing.T) {
 
 	assert.Equal(t, "deny", parsed["decision"])
 	assert.Equal(t, "web_fetch", parsed["tool"])
-	policyRule, _ := parsed["policy_rule"].(string)
+	policyRule, ok := parsed["policy_rule"].(string)
+	require.True(t, ok, "policy_rule must be a string")
 	assert.Contains(t, policyRule, "SSRF")
 }

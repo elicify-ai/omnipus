@@ -74,7 +74,7 @@ func TestWSReadLimit_RejectsOversizedFrame(t *testing.T) {
 	}
 	payload := append(append(prefix, oversizedContent...), suffix...)
 
-	conn.SetWriteDeadline(time.Now().Add(10 * time.Second)) //nolint:errcheck
+	conn.SetWriteDeadline(time.Now().Add(10 * time.Second)) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
 	// WriteMessage may succeed at the client side; the server-side ReadMessage will
 	// then hit the SetReadLimit and close the connection.
 	_ = conn.WriteMessage(websocket.TextMessage, payload)
@@ -83,7 +83,7 @@ func TestWSReadLimit_RejectsOversizedFrame(t *testing.T) {
 	// Drain any legitimate server-initiated frames (e.g. session_state emitted on
 	// connect — FR-052, FR-081) before asserting the close error.  The connection
 	// must eventually close with an error.
-	conn.SetReadDeadline(time.Now().Add(5 * time.Second)) //nolint:errcheck
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second)) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
 	var err error
 	for {
 		var msgType int
@@ -126,12 +126,12 @@ func TestWSReadLimit_AcceptsSmallFrame(t *testing.T) {
 	pingFrame := wsClientFrameTestHelper{Type: "ping"}
 	pingData, err := json.Marshal(pingFrame)
 	require.NoError(t, err)
-	conn.SetWriteDeadline(time.Now().Add(2 * time.Second)) //nolint:errcheck
+	conn.SetWriteDeadline(time.Now().Add(2 * time.Second)) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, pingData),
 		"small ping frame must be written without error")
 
 	// Connection must remain open: send a second frame successfully.
-	conn.SetWriteDeadline(time.Now().Add(2 * time.Second)) //nolint:errcheck
+	conn.SetWriteDeadline(time.Now().Add(2 * time.Second)) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
 	pingFrame2 := wsClientFrameTestHelper{Type: "ping"}
 	pingData2, err := json.Marshal(pingFrame2)
 	require.NoError(t, err)

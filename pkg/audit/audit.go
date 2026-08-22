@@ -1065,7 +1065,12 @@ func lastIndexNewline(b []byte) int {
 func (l *Logger) cleanupExpired() {
 	cutoff := time.Now().UTC().AddDate(0, 0, -l.retDays)
 	pattern := filepath.Join(l.dir, "audit-*.jsonl")
-	matches, _ := filepath.Glob(pattern)
+	matches, globErr := filepath.Glob(pattern)
+	if globErr != nil {
+		// pattern is a static, well-formed constant — Glob only fails on a
+		// malformed pattern, which cannot happen here.
+		_ = globErr
+	}
 	// Chronological by each file's first-entry timestamp (falling back to
 	// ModTime, then filename) — see fileorder.go for why filename/ModTime
 	// alone get multi-rotation-per-day files backwards.
@@ -1080,7 +1085,13 @@ func (l *Logger) cleanupExpired() {
 	// detects and warns about a corrupt/forged checkpoint; this function's
 	// job is only to keep an already-trustworthy checkpoint from going
 	// stale.
-	existingCheckpoint, _ := readChainCheckpoint(l.dir, l.chainKey)
+	existingCheckpoint, readCheckpointErr := readChainCheckpoint(l.dir, l.chainKey)
+	if readCheckpointErr != nil {
+		// A read failure (no checkpoint yet, or one that fails its integrity
+		// check) is treated the same as "nothing to keep in sync" here — see
+		// the function doc comment above.
+		_ = readCheckpointErr
+	}
 
 	// lastDeletedFinalHMAC tracks the chain seed of the most recently deleted
 	// file that actually carried one, in chronological (sorted) iteration
@@ -1181,7 +1192,12 @@ func (l *Logger) cleanupExpired() {
 // NewLogger calls openCurrentFile first). Returns "" only if neither exists,
 // which should not happen in practice.
 func (l *Logger) newOldestSurvivingFileName() string {
-	remaining, _ := filepath.Glob(filepath.Join(l.dir, "audit-*.jsonl"))
+	remaining, globErr := filepath.Glob(filepath.Join(l.dir, "audit-*.jsonl"))
+	if globErr != nil {
+		// pattern is a static, well-formed constant — Glob only fails on a
+		// malformed pattern, which cannot happen here.
+		_ = globErr
+	}
 	sortAuditFilesChronologically(remaining)
 	if len(remaining) > 0 {
 		return filepath.Base(remaining[0])

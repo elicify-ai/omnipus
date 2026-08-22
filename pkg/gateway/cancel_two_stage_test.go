@@ -96,7 +96,7 @@ func readCancelStageFrames(conn *websocket.Conn, timeout time.Duration) []string
 	deadline := time.Now().Add(timeout)
 	var stages []string
 	for time.Now().Before(deadline) {
-		conn.SetReadDeadline(deadline) //nolint:errcheck
+		conn.SetReadDeadline(deadline) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
 		_, raw, err := conn.ReadMessage()
 		if err != nil {
 			break

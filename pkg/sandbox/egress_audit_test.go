@@ -107,7 +107,10 @@ func TestEgressProxy_AllowedHostDoesNotEmitDenyAudit(t *testing.T) {
 		}
 	}()
 
-	proxyURL, _ := url.Parse("http://" + p.Addr())
+	proxyURL, urlErr := url.Parse("http://" + p.Addr())
+	if urlErr != nil {
+		t.Fatalf("parse proxy URL: %v", urlErr)
+	}
 	client := &http.Client{
 		Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)},
 		Timeout:   2 * time.Second,
@@ -116,7 +119,10 @@ func TestEgressProxy_AllowedHostDoesNotEmitDenyAudit(t *testing.T) {
 	// allowed.example.com is on the list — the proxy will forward it.
 	// The connection will fail (no real server), but we only care that
 	// the deny audit hook was NOT called.
-	resp, _ := client.Get("http://allowed.example.com/")
+	resp, getErr := client.Get("http://allowed.example.com/")
+	if getErr != nil {
+		_ = getErr // expected: no real server behind the proxy; only the deny-hook behavior is under test
+	}
 	if resp != nil {
 		io.Copy(io.Discard, resp.Body) //nolint:errcheck
 		resp.Body.Close()              //nolint:errcheck

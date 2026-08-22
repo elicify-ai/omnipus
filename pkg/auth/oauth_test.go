@@ -95,7 +95,10 @@ func TestParseTokenResponse(t *testing.T) {
 		"expires_in":    3600,
 		"id_token":      "test-id-token",
 	}
-	body, _ := json.Marshal(resp)
+	body, marshalErr := json.Marshal(resp)
+	if marshalErr != nil {
+		t.Fatalf("json.Marshal: %v", marshalErr)
+	}
 
 	cred, err := parseTokenResponse(body, "openai")
 	if err != nil {
@@ -127,7 +130,10 @@ func TestParseTokenResponseExtractsAccountIDFromIDToken(t *testing.T) {
 		"expires_in":    3600,
 		"id_token":      idToken,
 	}
-	body, _ := json.Marshal(resp)
+	body, marshalErr := json.Marshal(resp)
+	if marshalErr != nil {
+		t.Fatalf("json.Marshal: %v", marshalErr)
+	}
 
 	cred, err := parseTokenResponse(body, "openai")
 	if err != nil {
@@ -166,7 +172,10 @@ func TestParseTokenResponseAccountIDFromIDToken(t *testing.T) {
 		"expires_in":    3600,
 		"id_token":      idToken,
 	}
-	body, _ := json.Marshal(resp)
+	body, marshalErr := json.Marshal(resp)
+	if marshalErr != nil {
+		t.Fatalf("json.Marshal: %v", marshalErr)
+	}
 
 	cred, err := parseTokenResponse(body, "openai")
 	if err != nil {

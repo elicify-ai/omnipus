@@ -89,7 +89,11 @@ func TestRunnerEgressProxy_SSRFBlocksLoopbackHTTP(t *testing.T) {
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	go func() { _ = upstream.Serve(listener) }()
+	go func() {
+		if serveErr := upstream.Serve(listener); serveErr != nil {
+			_ = serveErr // expected: http.ErrServerClosed on test teardown
+		}
+	}()
 	defer func() {
 		if closeErr := upstream.Close(); closeErr != nil {
 			_ = closeErr
@@ -107,7 +111,10 @@ func TestRunnerEgressProxy_SSRFBlocksLoopbackHTTP(t *testing.T) {
 		}
 	}()
 
-	proxyURL, _ := url.Parse("http://" + p.Addr())
+	proxyURL, urlErr := url.Parse("http://" + p.Addr())
+	if urlErr != nil {
+		t.Fatalf("parse proxy URL: %v", urlErr)
+	}
 	client := &http.Client{
 		Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)},
 		Timeout:   5 * time.Second,
@@ -184,7 +191,10 @@ func TestRunnerEgressProxy_SSRFBlocksLoopbackCONNECT(t *testing.T) {
 		t.Fatalf("write CONNECT: %v", err)
 	}
 	buf := make([]byte, 1024)
-	n, _ := dial.Read(buf)
+	n, readErr := dial.Read(buf)
+	if readErr != nil {
+		_ = readErr // a partial read (n>0) is still valid per io.Reader; the assertion below checks the content
+	}
 	statusLine := string(buf[:n])
 	if !strings.Contains(statusLine, "403") {
 		t.Errorf("CONNECT response = %q, want 403 (SSRF block)", firstLine(statusLine))
@@ -223,7 +233,10 @@ func TestRunnerEgressProxy_SSRFAuditHook(t *testing.T) {
 			_ = closeErr
 		}
 	}()
-	proxyURL, _ := url.Parse("http://" + p.Addr())
+	proxyURL, urlErr := url.Parse("http://" + p.Addr())
+	if urlErr != nil {
+		t.Fatalf("parse proxy URL: %v", urlErr)
+	}
 	client := &http.Client{
 		Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)},
 		Timeout:   3 * time.Second,

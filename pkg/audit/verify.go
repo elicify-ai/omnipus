@@ -440,7 +440,12 @@ func checkpointOrGenesisSeed(dir string, key []byte, oldestBase string) []byte {
 func determineFileSeed(dir string, key []byte, targetPath string) []byte {
 	targetBase := filepath.Base(targetPath)
 
-	rotated, _ := filepath.Glob(filepath.Join(dir, "audit-*.jsonl"))
+	rotated, globErr := filepath.Glob(filepath.Join(dir, "audit-*.jsonl"))
+	if globErr != nil {
+		// pattern is a static, well-formed constant — Glob only fails on a
+		// malformed pattern, which cannot happen here.
+		_ = globErr
+	}
 	files := append([]string{}, rotated...)
 	included := false
 	for _, f := range files {

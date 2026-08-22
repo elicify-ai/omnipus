@@ -87,9 +87,12 @@ type DeviceCodeInfo struct {
 // RequestDeviceCode requests a device code from the OAuth provider.
 // Returns the info needed for the user to authenticate in a browser.
 func RequestDeviceCode(cfg OAuthProviderConfig) (*DeviceCodeInfo, error) {
-	reqBody, _ := json.Marshal(map[string]string{
+	reqBody, err := json.Marshal(map[string]string{
 		"client_id": cfg.ClientID,
 	})
+	if err != nil {
+		return nil, fmt.Errorf("marshaling device code request: %w", err)
+	}
 
 	resp, err := http.Post(
 		cfg.Issuer+"/api/accounts/deviceauth/usercode",
@@ -190,10 +193,13 @@ var (
 )
 
 func pollDeviceCode(cfg OAuthProviderConfig, deviceAuthID, userCode string) (*AuthCredential, error) {
-	reqBody, _ := json.Marshal(map[string]string{
+	reqBody, err := json.Marshal(map[string]string{
 		"device_auth_id": deviceAuthID,
 		"user_code":      userCode,
 	})
+	if err != nil {
+		return nil, fmt.Errorf("marshaling device token request: %w", err)
+	}
 
 	resp, err := http.Post(
 		cfg.Issuer+"/api/accounts/deviceauth/token",
@@ -213,8 +219,13 @@ func pollDeviceCode(cfg OAuthProviderConfig, deviceAuthID, userCode string) (*Au
 	}()
 
 	if resp.StatusCode != http.StatusOK {
-		// Try to read the error body to distinguish pending vs denied.
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		// Try to read the error body to distinguish pending vs denied. A
+		// partial/failed read still yields whatever bytes were read before
+		// the error; the substring check below degrades safely to "pending".
+		body, readErr := io.ReadAll(io.LimitReader(resp.Body, 512))
+		if readErr != nil {
+			_ = readErr
+		}
 		bodyStr := strings.ToLower(strings.TrimSpace(string(body)))
 		if strings.Contains(bodyStr, "access_denied") {
 			return nil, errDeviceAuthDenied

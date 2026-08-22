@@ -683,7 +683,7 @@ func TestReloadCycle_FollowUpConfigLoadFailure_LeavesPendingSetAndMarksDegraded(
 	}
 
 	cfg := h.al.GetConfig()
-	h.al.TriggerReload() //nolint:errcheck // sets reloadPending; the slot is already held above
+	h.al.TriggerReload() // errcheck rationale (out of errcheck scope; kept as documentation): sets reloadPending; the slot is already held above
 	runReloadCycle(h.al, h.svc, cfg, exec, failingLoad)
 
 	assert.Equal(t, 2, loadCalls,
@@ -741,7 +741,7 @@ func TestReloadCycle_FollowUpConfigLoadFailure_TransientRetrySucceeds(t *testing
 	}
 
 	cfg := h.al.GetConfig()
-	h.al.TriggerReload() //nolint:errcheck // sets reloadPending; the slot is already held above
+	h.al.TriggerReload() // errcheck rationale (out of errcheck scope; kept as documentation): sets reloadPending; the slot is already held above
 	runReloadCycle(h.al, h.svc, cfg, exec, flakyLoad)
 
 	assert.Equal(t, 2, loadCalls, "the retry must have fired exactly once, and it must have succeeded")

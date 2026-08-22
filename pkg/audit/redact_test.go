@@ -207,13 +207,15 @@ func TestRedactionEngine_RedactEntry(t *testing.T) {
 	params, ok := parsed["parameters"].(map[string]any)
 	require.True(t, ok, "parameters must be a JSON object")
 
-	apiKey, _ := params["api_key"].(string)
+	apiKey, ok := params["api_key"].(string)
+	require.True(t, ok, "api_key must be a string")
 	assert.NotContains(t, apiKey, "sk-ant-",
 		"API key in parameters must be redacted")
 	assert.Equal(t, "[REDACTED]", apiKey,
 		"redacted parameter must become [REDACTED]")
 
-	query, _ := params["query"].(string)
+	query, ok := params["query"].(string)
+	require.True(t, ok, "query must be a string")
 	assert.Equal(t, "safe query text", query,
 		"non-sensitive parameter must be preserved unchanged")
 }
@@ -260,7 +262,8 @@ func TestFieldNameRedaction(t *testing.T) {
 		}
 		var parsed map[string]any
 		require.NoError(t, json.Unmarshal(lines, &parsed))
-		p, _ := parsed["parameters"].(map[string]any)
+		p, ok := parsed["parameters"].(map[string]any)
+		require.True(t, ok, "parameters must be a JSON object")
 		return p
 	}
 
@@ -308,7 +311,8 @@ func TestFieldNameRedaction(t *testing.T) {
 	for _, tc := range aliases {
 		t.Run("alias: "+tc.key, func(t *testing.T) {
 			params := logAndRead(t, map[string]any{tc.key: tc.value})
-			val, _ := params[tc.key].(string)
+			val, ok := params[tc.key].(string)
+			require.True(t, ok, "field %q must be a string", tc.key)
 			assert.Equal(t, "[REDACTED]", val,
 				"field %q with value %q must be redacted by field-name layer", tc.key, tc.value)
 		})
@@ -323,7 +327,8 @@ func TestFieldNameRedaction(t *testing.T) {
 	t.Run("non-sensitive field with bearer token value uses value-pattern layer", func(t *testing.T) {
 		// "debug" is not in the sensitive field set; value-pattern must catch the Bearer token.
 		params := logAndRead(t, map[string]any{"debug": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.payload.sig"})
-		val, _ := params["debug"].(string)
+		val, ok := params["debug"].(string)
+		require.True(t, ok, "debug field must be a string")
 		assert.Equal(t, "[REDACTED]", val,
 			"Bearer token in a non-sensitive field must be caught by value-pattern layer")
 	})

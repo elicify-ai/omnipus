@@ -161,7 +161,12 @@ func TestExpandRulesExcluding_UnreadableDirectoryFailsClosed(t *testing.T) {
 	if err := os.Chmod(home, 0o000); err != nil {
 		t.Fatalf("chmod: %v", err)
 	}
-	t.Cleanup(func() { _ = os.Chmod(home, 0o700) })
+	t.Cleanup(func() {
+		// Restore writable mode so t.TempDir cleanup can remove it.
+		if chmodErr := os.Chmod(home, 0o700); chmodErr != nil {
+			_ = chmodErr
+		}
+	})
 
 	_, err := ExpandRulesExcluding(
 		[]PathRule{{Path: home, Access: AccessRead}}, SecretPaths(home), nil, nil)

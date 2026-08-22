@@ -275,7 +275,7 @@ func TestAuthenticateWS_LogsInvalidSessionCookie(t *testing.T) {
 	// path and fall through to the blocking frame read.
 	conn := dialTestWSWithCookie(t, srv, "an-invalid-session-cookie-value")
 	t.Cleanup(func() { _ = conn.Close() })
-	conn.SetReadDeadline(time.Now().Add(3 * time.Second)) //nolint:errcheck
+	conn.SetReadDeadline(time.Now().Add(3 * time.Second)) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
 
 	authFrame := wsClientFrameTestHelper{Type: "auth", Token: bearerPlain}
 	authData, err := json.Marshal(authFrame)
@@ -333,7 +333,7 @@ func TestBrowserWSAuthenticate_LogsInvalidSessionCookie(t *testing.T) {
 	}
 	require.NoError(t, err, "browser WebSocket dial must succeed")
 	t.Cleanup(func() { _ = conn.Close() })
-	conn.SetReadDeadline(time.Now().Add(3 * time.Second)) //nolint:errcheck
+	conn.SetReadDeadline(time.Now().Add(3 * time.Second)) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
 
 	writeBrowserAuthFrame(t, conn, bearerPlain)
 	assertBrowserConnProceeds(t, conn)

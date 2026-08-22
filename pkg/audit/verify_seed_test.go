@@ -45,7 +45,11 @@ func TestLoggerVerify_AfterRotation_SeedsFromPredecessorNotGenesis(t *testing.T)
 		HMACKey:       key,
 	})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = logger.Close() })
+	t.Cleanup(func() {
+		if closeErr := logger.Close(); closeErr != nil {
+			_ = closeErr // test cleanup only; failure here does not affect the assertions already made
+		}
+	})
 
 	// Entry 1: written to the original file, no rotation yet (currentSize
 	// starts at 0, which is not >= the 1-byte threshold).

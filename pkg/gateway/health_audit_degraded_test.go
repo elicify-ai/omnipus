@@ -42,7 +42,7 @@ func TestHealth_FlipsAuditDegraded_OnLoggerUnavailable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET /health: %v", err)
 	}
-	defer resp.Body.Close() //nolint:errcheck
+	defer resp.Body.Close() // errcheck rationale (out of errcheck scope; kept as documentation): test HTTP response body close; inconsequential once the body has been read
 
 	var body map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
@@ -86,7 +86,7 @@ func TestHealth_FlipsAuditDegraded_OnSkipCount(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET /health: %v", err)
 	}
-	defer resp.Body.Close() //nolint:errcheck
+	defer resp.Body.Close() // errcheck rationale (out of errcheck scope; kept as documentation): test HTTP response body close; inconsequential once the body has been read
 
 	var body map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
@@ -123,7 +123,7 @@ func TestHealth_NotDegraded_WhenLoggerOkAndNoSkips(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET /health: %v", err)
 	}
-	defer resp.Body.Close() //nolint:errcheck
+	defer resp.Body.Close() // errcheck rationale (out of errcheck scope; kept as documentation): test HTTP response body close; inconsequential once the body has been read
 
 	var body map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
@@ -161,7 +161,7 @@ func TestHealth_AuditNotDegraded_WhenDeliberatelyDisabled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET /health: %v", err)
 	}
-	defer resp.Body.Close() //nolint:errcheck
+	defer resp.Body.Close() // errcheck rationale (out of errcheck scope; kept as documentation): test HTTP response body close; inconsequential once the body has been read
 
 	var body map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {

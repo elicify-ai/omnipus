@@ -53,7 +53,7 @@ func TestServerRespondsToAppLayerPing(t *testing.T) {
 		pingData, err := json.Marshal(wsClientFrameTestHelper{Type: "ping"})
 		require.NoError(t, err)
 
-		conn.SetWriteDeadline(time.Now().Add(2 * time.Second)) //nolint:errcheck
+		conn.SetWriteDeadline(time.Now().Add(2 * time.Second)) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
 		require.NoError(t, conn.WriteMessage(websocket.TextMessage, pingData),
 			"ping %d: write must succeed", i)
 
@@ -97,7 +97,7 @@ func TestServerPongDoesNotCorruptInFlightStream(t *testing.T) {
 	msgFrame := wsClientFrameTestHelper{Type: "message", Content: "ping interleave test"}
 	msgData, err := json.Marshal(msgFrame)
 	require.NoError(t, err)
-	conn.SetWriteDeadline(time.Now().Add(2 * time.Second)) //nolint:errcheck
+	conn.SetWriteDeadline(time.Now().Add(2 * time.Second)) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, msgData))
 
 	// Collect frames until session_started or any response from the server,
@@ -108,7 +108,7 @@ func TestServerPongDoesNotCorruptInFlightStream(t *testing.T) {
 	deadline := time.Now().Add(5 * time.Second)
 
 	for time.Now().Before(deadline) {
-		conn.SetReadDeadline(deadline) //nolint:errcheck
+		conn.SetReadDeadline(deadline) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
 		_, raw, err := conn.ReadMessage()
 		if err != nil {
 			break
@@ -128,7 +128,7 @@ func TestServerPongDoesNotCorruptInFlightStream(t *testing.T) {
 		if gotSessionStarted && !pingInjected {
 			pingData, err := json.Marshal(wsClientFrameTestHelper{Type: "ping"})
 			require.NoError(t, err)
-			conn.SetWriteDeadline(time.Now().Add(1 * time.Second)) //nolint:errcheck
+			conn.SetWriteDeadline(time.Now().Add(1 * time.Second)) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
 			_ = conn.WriteMessage(websocket.TextMessage, pingData)
 			pingInjected = true
 		}

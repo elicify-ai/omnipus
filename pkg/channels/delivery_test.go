@@ -39,7 +39,7 @@ func newDeliveryManager(ctx context.Context) (*Manager, *bus.MessageBus) {
 		workers:  make(map[string]*channelWorker),
 		bus:      mb,
 	}
-	dispatchCtx, _ := m.newDispatchContext(ctx) //nolint:errcheck // cancel stored in m
+	dispatchCtx, _ := m.newDispatchContext(ctx) // errcheck rationale (out of errcheck scope; kept as documentation): cancel stored in m
 	m.startDispatchers(dispatchCtx)
 	return m, mb
 }
@@ -476,7 +476,7 @@ func TestDelivery_SendMedia_InvokesChannelSendMedia(t *testing.T) {
 		workers:  make(map[string]*channelWorker),
 		bus:      mb,
 	}
-	dispatchCtx, _ := m.newDispatchContext(ctx) //nolint:errcheck
+	dispatchCtx, _ := m.newDispatchContext(ctx) // errcheck rationale (out of errcheck scope; kept as documentation): cancel stored in m
 	m.startDispatchers(dispatchCtx)
 
 	mediaReceived := make(chan bus.OutboundMediaMessage, 4)
@@ -559,7 +559,7 @@ func TestDelivery_SendMedia_NonMediaChannel_TextFallback(t *testing.T) {
 		workers:  make(map[string]*channelWorker),
 		bus:      mb,
 	}
-	dispatchCtx, _ := m.newDispatchContext(ctx) //nolint:errcheck
+	dispatchCtx, _ := m.newDispatchContext(ctx) // errcheck rationale (out of errcheck scope; kept as documentation): cancel stored in m
 	m.startDispatchers(dispatchCtx)
 
 	textReceived := make(chan bus.OutboundMessage, 8)

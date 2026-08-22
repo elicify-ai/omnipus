@@ -140,7 +140,7 @@ func drainUntilSessionDone(t *testing.T, conn *websocket.Conn, sid string, timeo
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		conn.SetReadDeadline(deadline) //nolint:errcheck
+		conn.SetReadDeadline(deadline) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
 		_, raw, err := conn.ReadMessage()
 		if err != nil {
 			return false
@@ -221,7 +221,7 @@ func TestWS_MessageWithEmptySessionID_MintsAndAcks(t *testing.T) {
 	var sawFollowupDone bool
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		conn.SetReadDeadline(deadline) //nolint:errcheck
+		conn.SetReadDeadline(deadline) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
 		_, raw, readErr := conn.ReadMessage()
 		if readErr != nil {
 			break
@@ -326,7 +326,7 @@ func TestWS_TwoParallelSessions_NoCrosstalk(t *testing.T) {
 	// Collect session-scoped frames; assert no A-frame carries B's id and vice versa
 	allowed := map[string]bool{sessionA: true, sessionB: true}
 	for i := 0; i < 30; i++ {
-		conn.SetReadDeadline(time.Now().Add(3 * time.Second)) //nolint:errcheck
+		conn.SetReadDeadline(time.Now().Add(3 * time.Second)) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
 		_, raw, readErr := conn.ReadMessage()
 		if readErr != nil {
 			break
@@ -430,7 +430,7 @@ func TestWS_MessageWithUnknownSessionID_ErrorsCleanly(t *testing.T) {
 	assert.NotEmpty(t, errFrame.Message, "error frame must carry a non-empty message")
 
 	// BDD: And — connection stays open (write a follow-up to confirm)
-	conn.SetWriteDeadline(time.Now().Add(2 * time.Second)) //nolint:errcheck
+	conn.SetWriteDeadline(time.Now().Add(2 * time.Second)) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
 	ping := wsClientFrameTestHelper{Type: "message", Content: "still open after error?"}
 	pingData, err := json.Marshal(ping)
 	require.NoError(t, err)
@@ -564,7 +564,7 @@ func TestWS_FrameTaggingCompleteness_AllSessionScopedFramesCarrySessionID(t *tes
 	var taggedTypes []string
 	taggedAll := true
 	for i := 0; i < 30; i++ {
-		conn.SetReadDeadline(time.Now().Add(3 * time.Second)) //nolint:errcheck
+		conn.SetReadDeadline(time.Now().Add(3 * time.Second)) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
 		_, raw, err := conn.ReadMessage()
 		if err != nil {
 			break
@@ -761,7 +761,7 @@ func TestWS_Cancel_OnlyInterruptsTargetSession(t *testing.T) {
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, cancelData))
 
 	// Give the server a moment to process. No error frame should arrive.
-	conn.SetReadDeadline(time.Now().Add(300 * time.Millisecond)) //nolint:errcheck
+	conn.SetReadDeadline(time.Now().Add(300 * time.Millisecond)) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
 	_, _, readErr := conn.ReadMessage()
 	// Only allowed failure: deadline exceeded (no frame) or close.
 	if readErr == nil {

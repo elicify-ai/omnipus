@@ -83,7 +83,7 @@ func readAllWSFramesFor(conn *websocket.Conn, timeout time.Duration) []genericWS
 	deadline := time.Now().Add(timeout)
 	var frames []genericWSTestFrame
 	for time.Now().Before(deadline) {
-		conn.SetReadDeadline(deadline) //nolint:errcheck
+		conn.SetReadDeadline(deadline) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
 		_, raw, err := conn.ReadMessage()
 		if err != nil {
 			break
@@ -190,7 +190,7 @@ func TestHandleCancel_LatchExpiredUnfired_SendsHonestErrorFrame(t *testing.T) {
 	deadline := time.Now().Add(3 * time.Second)
 	var found *genericWSTestFrame
 	for time.Now().Before(deadline) && found == nil {
-		conn.SetReadDeadline(deadline) //nolint:errcheck
+		conn.SetReadDeadline(deadline) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
 		_, raw, readErr := conn.ReadMessage()
 		if readErr != nil {
 			break

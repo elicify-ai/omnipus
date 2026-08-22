@@ -110,7 +110,13 @@ func readCurrentUserNProc() uint64 {
 	if err != nil {
 		return 0
 	}
-	defer dir.Close()
+	defer func() {
+		// Read-only directory handle for /proc scanning; a Close error here
+		// cannot affect the count already computed.
+		if closeErr := dir.Close(); closeErr != nil {
+			_ = closeErr
+		}
+	}()
 
 	var count uint64
 	for {

@@ -79,7 +79,13 @@ func TestLandlock_WorkspaceReroot_StaysInsideBootGrant(t *testing.T) {
 	if mkErr != nil {
 		t.Skipf("cannot create an out-of-sandbox probe dir under %q: %v", outsideBase, mkErr)
 	}
-	t.Cleanup(func() { _ = os.RemoveAll(outside) })
+	t.Cleanup(func() {
+		// outside is created OUTSIDE t.TempDir(), so it is not auto-cleaned
+		// by the testing framework; surface a leak instead of hiding it.
+		if rmErr := os.RemoveAll(outside); rmErr != nil {
+			t.Logf("cleanup: os.RemoveAll(%s): %v", outside, rmErr)
+		}
+	})
 
 	// gosec rationale (out of gosec scope; kept as documentation): intentional test-binary self-exec
 	cmd := exec.Command(os.Args[0],

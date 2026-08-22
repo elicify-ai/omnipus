@@ -371,7 +371,7 @@ func TestAuthenticateWS_SecondAccountAuthenticates(t *testing.T) {
 
 	conn := dialTestWS(t, srv)
 	t.Cleanup(func() { _ = conn.Close() })
-	conn.SetReadDeadline(time.Now().Add(3 * time.Second)) //nolint:errcheck
+	conn.SetReadDeadline(time.Now().Add(3 * time.Second)) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
 
 	// Authenticate as the SECOND account.
 	authFrame := wsClientFrameTestHelper{Type: "auth", Token: token2}
@@ -863,7 +863,7 @@ func TestWSAuthAcceptsSessionCookie(t *testing.T) {
 
 	conn := dialTestWSWithCookie(t, srv, plaintext)
 	t.Cleanup(func() { _ = conn.Close() })
-	conn.SetReadDeadline(time.Now().Add(3 * time.Second)) //nolint:errcheck
+	conn.SetReadDeadline(time.Now().Add(3 * time.Second)) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
 
 	// Deliberately send a "message" frame FIRST with no preceding auth frame
 	// — proving the connection is already authenticated via the cookie at

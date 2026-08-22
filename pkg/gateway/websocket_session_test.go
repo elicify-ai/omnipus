@@ -65,7 +65,7 @@ func readFrameOfType(t *testing.T, conn *websocket.Conn, wantType string, timeou
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		conn.SetReadDeadline(deadline) //nolint:errcheck
+		conn.SetReadDeadline(deadline) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
 		_, raw, err := conn.ReadMessage()
 		if err != nil {
 			t.Fatalf("readFrameOfType(%q): read error: %v", wantType, err)
@@ -121,7 +121,7 @@ func TestWS_SessionClose_AcksOnValidSessionID(t *testing.T) {
 	assert.Equal(t, sessionID, resp.ID, "ack must echo back the session_id")
 
 	// Connection must remain open after close ack.
-	conn.SetWriteDeadline(time.Now().Add(1 * time.Second)) //nolint:errcheck
+	conn.SetWriteDeadline(time.Now().Add(1 * time.Second)) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
 	ping := wsClientFrameTestHelper{Type: "message", Content: "still-open"}
 	pingData, err := json.Marshal(ping)
 	require.NoError(t, err)
@@ -233,7 +233,7 @@ func TestWS_AttachSession_NoErrorOnValidSession(t *testing.T) {
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))
 
 	// Server should respond with an error frame (session not found).
-	conn.SetReadDeadline(time.Now().Add(3 * time.Second)) //nolint:errcheck
+	conn.SetReadDeadline(time.Now().Add(3 * time.Second)) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
 	var gotError bool
 	for i := 0; i < 10; i++ {
 		_, raw, err := conn.ReadMessage()

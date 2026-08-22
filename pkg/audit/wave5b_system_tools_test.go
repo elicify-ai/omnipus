@@ -95,7 +95,8 @@ func TestAuditLogging(t *testing.T) {
 		"non-sensitive parameter 'name' must be preserved unchanged")
 
 	// Credential value must be redacted.
-	apiKeyVal, _ := params["api_key"].(string)
+	apiKeyVal, ok := params["api_key"].(string)
+	require.True(t, ok, "api_key must be a string")
 	assert.NotContains(t, apiKeyVal, "sk-ant-",
 		"api_key must NOT appear in plaintext in audit log (wave5b FR-005, SEC-16)")
 	assert.Equal(t, "[REDACTED]", apiKeyVal,

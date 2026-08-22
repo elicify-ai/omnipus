@@ -242,6 +242,11 @@ func countAllJSONLLines(t *testing.T, dir string) int {
 // countAuditFiles returns the number of *.jsonl files in dir.
 func countAuditFiles(t *testing.T, dir string) int {
 	t.Helper()
-	files, _ := filepath.Glob(filepath.Join(dir, "*.jsonl"))
+	files, globErr := filepath.Glob(filepath.Join(dir, "*.jsonl"))
+	if globErr != nil {
+		// pattern is a static, well-formed constant — Glob only fails on a
+		// malformed pattern, which cannot happen here.
+		_ = globErr
+	}
 	return len(files)
 }

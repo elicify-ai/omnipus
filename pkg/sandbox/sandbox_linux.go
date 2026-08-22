@@ -277,7 +277,11 @@ func (lb *LinuxBackend) ApplyWithMode(policy SandboxPolicy, mode Mode) error {
 	if errno != 0 {
 		return fmt.Errorf("landlock: create_ruleset failed: %w", errno)
 	}
-	defer unix.Close(int(rulesetFd))
+	defer func() {
+		if closeErr := unix.Close(int(rulesetFd)); closeErr != nil {
+			slog.Debug("Landlock: failed to close ruleset fd", "error", closeErr)
+		}
+	}()
 
 	// forChild=false: this restricts the GATEWAY, which must retain access to
 	// its own vault and config. Children get the excluded set in
@@ -500,7 +504,11 @@ func addLandlockPathRule(rulesetFd int, path string, rights uint64) error {
 	if err != nil {
 		return fmt.Errorf("open %q: %w", path, err)
 	}
-	defer unix.Close(fd)
+	defer func() {
+		if closeErr := unix.Close(fd); closeErr != nil {
+			slog.Debug("Landlock: failed to close path fd", "path", path, "error", closeErr)
+		}
+	}()
 
 	// Many access rights are directory-only. The kernel validates that
 	// allowed_access only contains rights valid for the FD type (file vs
@@ -694,7 +702,11 @@ func (lb *LinuxBackend) RestrictCurrentThreadWithPolicy(policy *SandboxPolicy) e
 	if errno != 0 {
 		return fmt.Errorf("landlock: create_ruleset failed: %w", errno)
 	}
-	defer unix.Close(int(rulesetFd))
+	defer func() {
+		if closeErr := unix.Close(int(rulesetFd)); closeErr != nil {
+			slog.Debug("Landlock: failed to close ruleset fd", "error", closeErr)
+		}
+	}()
 
 	// 3. Re-add the saved filesystem and net port rules. We tolerate ENOENT
 	//    (path missing on this arch) and EINVAL/ENOENT for net rules on

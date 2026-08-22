@@ -574,7 +574,13 @@ func EmitToolPolicyAskRequested(
 	approvalID, toolCallID, toolName, agentID, sessionID, turnID string,
 	args map[string]any,
 ) {
-	hash, _ := ArgsHash(args)
+	hash, hashErr := ArgsHash(args)
+	if hashErr != nil {
+		// A hashing failure means args_hash below will be empty — log it so
+		// the gap in the audit trail is visible rather than silent.
+		slog.Error("audit: failed to hash tool args for audit event",
+			"approval_id", approvalID, "tool_call_id", toolCallID, "error", hashErr)
+	}
 	fields := map[string]any{
 		"approval_id":  approvalID,
 		"tool_call_id": toolCallID,

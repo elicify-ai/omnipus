@@ -447,7 +447,10 @@ func TestSeatbelt_RealChild_UDPFollowsThePortAllowList(t *testing.T) {
 
 	// Control: the port is NOT allow-listed, so UDP must be denied. Without
 	// this, the positive case below could pass simply because nothing enforces.
-	out, _ := runSandboxed(t, policy, ws, "/bin/bash", "-c", probe)
+	out, ctrlErr := runSandboxed(t, policy, ws, "/bin/bash", "-c", probe)
+	if ctrlErr != nil {
+		_ = ctrlErr // a non-zero exit is one possible symptom of the expected denial; only the output content is asserted
+	}
 	assert.NotContains(t, out, "UDP-REPLY", "UDP to a non-allow-listed port must be denied")
 
 	// Allow-listing the port must permit UDP, not just TCP.

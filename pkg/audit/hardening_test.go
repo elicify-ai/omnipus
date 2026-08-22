@@ -52,7 +52,11 @@ func TestCRIT2_NewLogger_AuditRequested_FailClosed(t *testing.T) {
 		AuditLogRequested: true,
 	})
 	if logger != nil {
-		t.Cleanup(func() { _ = logger.Close() })
+		t.Cleanup(func() {
+			if closeErr := logger.Close(); closeErr != nil {
+				_ = closeErr // test cleanup only; failure here does not affect the assertions already made
+			}
+		})
 	}
 	require.Error(t, err, "NewLogger must return an error when AuditLogRequested=true and open fails")
 
@@ -78,7 +82,12 @@ func TestCRIT2_NewLogger_AuditNotRequested_DegradedMode(t *testing.T) {
 	parent := t.TempDir()
 	auditDir := filepath.Join(parent, "system")
 	require.NoError(t, os.MkdirAll(auditDir, 0o000), "create unwritable audit dir")
-	t.Cleanup(func() { _ = os.Chmod(auditDir, 0o700) })
+	t.Cleanup(func() {
+		// Restore writable mode so t.TempDir cleanup can remove it.
+		if chmodErr := os.Chmod(auditDir, 0o700); chmodErr != nil {
+			_ = chmodErr
+		}
+	})
 
 	logger, err := audit.NewLogger(audit.LoggerConfig{
 		Dir:               auditDir,
@@ -131,7 +140,11 @@ func TestCRIT3_Rotate_RenameError_LatchesDegraded(t *testing.T) {
 		RetentionDays: 90,
 	})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = logger.Close() })
+	t.Cleanup(func() {
+		if closeErr := logger.Close(); closeErr != nil {
+			_ = closeErr // test cleanup only; failure here does not affect the assertions already made
+		}
+	})
 
 	// Write a first entry (success — under 64 bytes).
 	require.NoError(t, logger.Log(&audit.Entry{
@@ -147,7 +160,12 @@ func TestCRIT3_Rotate_RenameError_LatchesDegraded(t *testing.T) {
 	// on the parent.
 	require.NoError(t, os.Chmod(dir, 0o555),
 		"remove write permission on dir so os.Rename fails with EACCES")
-	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	t.Cleanup(func() {
+		// Restore writable mode so t.TempDir cleanup can remove it.
+		if chmodErr := os.Chmod(dir, 0o700); chmodErr != nil {
+			_ = chmodErr
+		}
+	})
 
 	// Force rotation: write enough bytes to push currentSize past MaxSizeBytes.
 	// The next Log call sees currentSize >= maxSize, calls rotate(), which
@@ -209,7 +227,11 @@ func TestCRIT4_RecoverCorruption_LongValidRecord_NotTruncated(t *testing.T) {
 		RetentionDays: 90,
 	})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = logger.Close() })
+	t.Cleanup(func() {
+		if closeErr := logger.Close(); closeErr != nil {
+			_ = closeErr // test cleanup only; failure here does not affect the assertions already made
+		}
+	})
 
 	// Verify the file was NOT truncated.
 	info, err := os.Stat(logPath)
@@ -236,7 +258,11 @@ func TestCRIT4_RecoverCorruption_TruncatesMalformedTrailing(t *testing.T) {
 		RetentionDays: 90,
 	})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = logger.Close() })
+	t.Cleanup(func() {
+		if closeErr := logger.Close(); closeErr != nil {
+			_ = closeErr // test cleanup only; failure here does not affect the assertions already made
+		}
+	})
 
 	data, err := os.ReadFile(logPath)
 	require.NoError(t, err)
@@ -268,7 +294,11 @@ func TestCRIT5_FsyncOnDeny_NotOnAllow(t *testing.T) {
 		RetentionDays: 90,
 	})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = logger.Close() })
+	t.Cleanup(func() {
+		if closeErr := logger.Close(); closeErr != nil {
+			_ = closeErr // test cleanup only; failure here does not affect the assertions already made
+		}
+	})
 
 	// Write one entry of each shape; both must be readable from disk after Log
 	// returns. (For an allow entry the bufio.Flush already makes it visible;
@@ -311,7 +341,11 @@ func TestCRIT5_FsyncOnBootAbortAndPolicyDeny(t *testing.T) {
 		RetentionDays: 90,
 	})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = logger.Close() })
+	t.Cleanup(func() {
+		if closeErr := logger.Close(); closeErr != nil {
+			_ = closeErr // test cleanup only; failure here does not affect the assertions already made
+		}
+	})
 
 	// boot.abort is fsync'd irrespective of Decision.
 	require.NoError(t, logger.Log(&audit.Entry{
@@ -347,7 +381,11 @@ func TestEmptyEvent_RejectedWithIncSkipped(t *testing.T) {
 		RetentionDays: 90,
 	})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = logger.Close() })
+	t.Cleanup(func() {
+		if closeErr := logger.Close(); closeErr != nil {
+			_ = closeErr // test cleanup only; failure here does not affect the assertions already made
+		}
+	})
 
 	// Entry with empty Event — must NOT be written, but Log returns nil.
 	err = logger.Log(&audit.Entry{
@@ -365,7 +403,10 @@ func TestEmptyEvent_RejectedWithIncSkipped(t *testing.T) {
 
 	// And the log file should NOT contain the rejected entry.
 	logPath := filepath.Join(dir, "audit.jsonl")
-	data, _ := os.ReadFile(logPath)
+	data, readErr := os.ReadFile(logPath)
+	if readErr != nil && !os.IsNotExist(readErr) {
+		t.Fatalf("os.ReadFile(%s): %v", logPath, readErr)
+	}
 	assert.NotContains(t, string(data), `"event":""`,
 		"rejected empty-Event entry must not be written to disk")
 }
@@ -451,7 +492,11 @@ func TestUnknownDecisionWarn_FiresOnce(t *testing.T) {
 		RetentionDays: 90,
 	})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = logger.Close() })
+	t.Cleanup(func() {
+		if closeErr := logger.Close(); closeErr != nil {
+			_ = closeErr // test cleanup only; failure here does not affect the assertions already made
+		}
+	})
 
 	// Three entries with unknown Decision values — all should still be written
 	// (Log doesn't reject; only warn-once).

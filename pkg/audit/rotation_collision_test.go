@@ -56,7 +56,11 @@ func TestRotate_SameMillisecondCollision_NoDataLoss(t *testing.T) {
 		HMACKey:       key,
 	})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = logger.Close() })
+	t.Cleanup(func() {
+		if closeErr := logger.Close(); closeErr != nil {
+			_ = closeErr // test cleanup only; failure here does not affect the assertions already made
+		}
+	})
 
 	// currentDate is set from the real wall clock at open time (the
 	// rotateClockNow seam only governs the millis-collision fallback, not

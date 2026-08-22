@@ -64,7 +64,11 @@ func TestEmitSecuritySettingChange_ShapeCorrect(t *testing.T) {
 	dir := t.TempDir()
 	logger, err := audit.NewLogger(audit.LoggerConfig{Dir: dir, RetentionDays: 90})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = logger.Close() })
+	t.Cleanup(func() {
+		if closeErr := logger.Close(); closeErr != nil {
+			_ = closeErr // test cleanup only; failure here does not affect the assertions already made
+		}
+	})
 
 	ctx := ctxWithUser("alice")
 	require.NoError(t, audit.EmitSecuritySettingChange(
@@ -93,7 +97,11 @@ func TestRedact_PasswordInNestedMap(t *testing.T) {
 	dir := t.TempDir()
 	logger, err := audit.NewLogger(audit.LoggerConfig{Dir: dir, RetentionDays: 90})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = logger.Close() })
+	t.Cleanup(func() {
+		if closeErr := logger.Close(); closeErr != nil {
+			_ = closeErr // test cleanup only; failure here does not affect the assertions already made
+		}
+	})
 
 	ctx := ctxWithUser("admin")
 	newValue := map[string]any{
@@ -117,7 +125,11 @@ func TestRedact_TokenHashRedacted(t *testing.T) {
 	dir := t.TempDir()
 	logger, err := audit.NewLogger(audit.LoggerConfig{Dir: dir, RetentionDays: 90})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = logger.Close() })
+	t.Cleanup(func() {
+		if closeErr := logger.Close(); closeErr != nil {
+			_ = closeErr // test cleanup only; failure here does not affect the assertions already made
+		}
+	})
 
 	ctx := ctxWithUser("admin")
 	oldValue := map[string]any{"token_hash": "$2a$10$abcdefg"}
@@ -136,7 +148,11 @@ func TestRedact_ApiKeyRedacted(t *testing.T) {
 	dir := t.TempDir()
 	logger, err := audit.NewLogger(audit.LoggerConfig{Dir: dir, RetentionDays: 90})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = logger.Close() })
+	t.Cleanup(func() {
+		if closeErr := logger.Close(); closeErr != nil {
+			_ = closeErr // test cleanup only; failure here does not affect the assertions already made
+		}
+	})
 
 	ctx := ctxWithUser("admin")
 	newValue := map[string]any{"api_key": "sk-whatever-123"}
@@ -162,7 +178,11 @@ func TestRedact_CamelCaseApiKeyRedacted(t *testing.T) {
 	dir := t.TempDir()
 	logger, err := audit.NewLogger(audit.LoggerConfig{Dir: dir, RetentionDays: 90})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = logger.Close() })
+	t.Cleanup(func() {
+		if closeErr := logger.Close(); closeErr != nil {
+			_ = closeErr // test cleanup only; failure here does not affect the assertions already made
+		}
+	})
 
 	ctx := ctxWithUser("admin")
 	newValue := map[string]any{"apiKey": "sk-camelcase-should-be-redacted"}
@@ -192,7 +212,11 @@ func TestRedact_PreviouslyMissingNamesNowRedacted(t *testing.T) {
 	dir := t.TempDir()
 	logger, err := audit.NewLogger(audit.LoggerConfig{Dir: dir, RetentionDays: 90})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = logger.Close() })
+	t.Cleanup(func() {
+		if closeErr := logger.Close(); closeErr != nil {
+			_ = closeErr // test cleanup only; failure here does not affect the assertions already made
+		}
+	})
 
 	ctx := ctxWithUser("admin")
 
@@ -226,7 +250,11 @@ func TestRedact_CaseInsensitive(t *testing.T) {
 	dir := t.TempDir()
 	logger, err := audit.NewLogger(audit.LoggerConfig{Dir: dir, RetentionDays: 90})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = logger.Close() })
+	t.Cleanup(func() {
+		if closeErr := logger.Close(); closeErr != nil {
+			_ = closeErr // test cleanup only; failure here does not affect the assertions already made
+		}
+	})
 
 	ctx := ctxWithUser("admin")
 
@@ -262,7 +290,11 @@ func TestRedact_UnrelatedFieldsPreserved(t *testing.T) {
 	dir := t.TempDir()
 	logger, err := audit.NewLogger(audit.LoggerConfig{Dir: dir, RetentionDays: 90})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = logger.Close() })
+	t.Cleanup(func() {
+		if closeErr := logger.Close(); closeErr != nil {
+			_ = closeErr // test cleanup only; failure here does not affect the assertions already made
+		}
+	})
 
 	ctx := ctxWithUser("admin")
 	oldValue := map[string]any{"username": "alice", "role": "admin"}
@@ -282,7 +314,11 @@ func TestRedact_RecursiveIntoArrays(t *testing.T) {
 	dir := t.TempDir()
 	logger, err := audit.NewLogger(audit.LoggerConfig{Dir: dir, RetentionDays: 90})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = logger.Close() })
+	t.Cleanup(func() {
+		if closeErr := logger.Close(); closeErr != nil {
+			_ = closeErr // test cleanup only; failure here does not affect the assertions already made
+		}
+	})
 
 	ctx := ctxWithUser("admin")
 	newValue := map[string]any{
@@ -318,7 +354,11 @@ func TestEmitSecuritySettingChange_ActorMissing_LogsWarn(t *testing.T) {
 	dir := t.TempDir()
 	logger, err := audit.NewLogger(audit.LoggerConfig{Dir: dir, RetentionDays: 90})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = logger.Close() })
+	t.Cleanup(func() {
+		if closeErr := logger.Close(); closeErr != nil {
+			_ = closeErr // test cleanup only; failure here does not affect the assertions already made
+		}
+	})
 
 	var buf bytes.Buffer
 	prev := slog.Default()

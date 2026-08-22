@@ -167,7 +167,7 @@ func TestWSHandlerValidAuth(t *testing.T) {
 
 	conn := dialTestWS(t, srv)
 	t.Cleanup(func() { _ = conn.Close() })
-	conn.SetReadDeadline(time.Now().Add(3 * time.Second)) //nolint:errcheck
+	conn.SetReadDeadline(time.Now().Add(3 * time.Second)) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
 
 	// Send valid auth frame.
 	authFrame := wsClientFrameTestHelper{Type: "auth", Token: testToken}
@@ -211,7 +211,7 @@ func TestWSHandlerInvalidAuth(t *testing.T) {
 
 	conn := dialTestWS(t, srv)
 	t.Cleanup(func() { _ = conn.Close() })
-	conn.SetReadDeadline(time.Now().Add(3 * time.Second)) //nolint:errcheck
+	conn.SetReadDeadline(time.Now().Add(3 * time.Second)) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
 
 	// Send wrong token.
 	authFrame := wsClientFrameTestHelper{Type: "auth", Token: "wrong-token"}
@@ -229,7 +229,7 @@ func TestWSHandlerInvalidAuth(t *testing.T) {
 		"chat WS invalid-token error must carry the shared wsAuthErrInvalidToken constant verbatim")
 
 	// After error frame, connection must be closed.
-	conn.SetReadDeadline(time.Now().Add(1 * time.Second)) //nolint:errcheck
+	conn.SetReadDeadline(time.Now().Add(1 * time.Second)) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
 	_, _, err = conn.ReadMessage()
 	assert.Error(t, err, "connection must be closed after invalid auth")
 }
@@ -251,7 +251,7 @@ func TestWSHandlerAuth_BadFirstFrame_UsesSharedConstant(t *testing.T) {
 
 	conn := dialTestWS(t, srv)
 	t.Cleanup(func() { _ = conn.Close() })
-	conn.SetReadDeadline(time.Now().Add(3 * time.Second)) //nolint:errcheck
+	conn.SetReadDeadline(time.Now().Add(3 * time.Second)) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
 
 	// First frame is a "message" frame, not the required "auth" envelope.
 	badFirst := wsClientFrameTestHelper{Type: "message", Content: "no auth frame sent"}
@@ -267,7 +267,7 @@ func TestWSHandlerAuth_BadFirstFrame_UsesSharedConstant(t *testing.T) {
 	assert.Equal(t, wsAuthErrBadFirstFrame, frame.Message,
 		"chat WS bad-first-frame error must carry the shared wsAuthErrBadFirstFrame constant verbatim")
 
-	conn.SetReadDeadline(time.Now().Add(1 * time.Second)) //nolint:errcheck
+	conn.SetReadDeadline(time.Now().Add(1 * time.Second)) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
 	_, _, err = conn.ReadMessage()
 	assert.Error(t, err, "connection must be closed after a bad first frame")
 }
@@ -308,7 +308,7 @@ func TestWSHandlerAuth_NoUsersConfigured_UsesSharedConstant(t *testing.T) {
 
 	conn := dialTestWS(t, srv)
 	t.Cleanup(func() { _ = conn.Close() })
-	conn.SetReadDeadline(time.Now().Add(3 * time.Second)) //nolint:errcheck
+	conn.SetReadDeadline(time.Now().Add(3 * time.Second)) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
 
 	authFrame := wsClientFrameTestHelper{Type: "auth", Token: "any-token-nothing-is-configured"}
 	authData, err := json.Marshal(authFrame)
@@ -323,7 +323,7 @@ func TestWSHandlerAuth_NoUsersConfigured_UsesSharedConstant(t *testing.T) {
 	assert.Equal(t, wsAuthErrNoUsers, frame.Message,
 		"chat WS no-users-configured error must carry the shared wsAuthErrNoUsers constant verbatim")
 
-	conn.SetReadDeadline(time.Now().Add(1 * time.Second)) //nolint:errcheck
+	conn.SetReadDeadline(time.Now().Add(1 * time.Second)) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
 	_, _, err = conn.ReadMessage()
 	assert.Error(t, err, "connection must be closed when no auth identity is configured at all")
 }
@@ -346,7 +346,7 @@ func TestWSHandlerMalformedFrame(t *testing.T) {
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte("not-json{{{bad")))
 
 	// Connection must remain open: send another valid frame.
-	conn.SetWriteDeadline(time.Now().Add(1 * time.Second)) //nolint:errcheck
+	conn.SetWriteDeadline(time.Now().Add(1 * time.Second)) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
 	validFrame := wsClientFrameTestHelper{Type: "message", Content: "still alive"}
 	validData, err := json.Marshal(validFrame)
 	require.NoError(t, err)
@@ -374,7 +374,7 @@ func TestWSHandlerCancelFrame(t *testing.T) {
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, cancelData))
 
 	// Connection must remain open after cancel.
-	conn.SetWriteDeadline(time.Now().Add(1 * time.Second)) //nolint:errcheck
+	conn.SetWriteDeadline(time.Now().Add(1 * time.Second)) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
 	pingFrame := wsClientFrameTestHelper{Type: "message", Content: "after cancel"}
 	pingData, err := json.Marshal(pingFrame)
 	require.NoError(t, err)
@@ -574,7 +574,7 @@ func TestWSHandlerAuthRequired_InvalidTokenRejected(t *testing.T) {
 
 	conn := dialTestWS(t, srv)
 	t.Cleanup(func() { _ = conn.Close() })
-	conn.SetReadDeadline(time.Now().Add(3 * time.Second)) //nolint:errcheck
+	conn.SetReadDeadline(time.Now().Add(3 * time.Second)) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
 
 	// Send wrong token in auth frame.
 	bad := wsClientFrameTestHelper{Type: "auth", Token: "bad-token"}

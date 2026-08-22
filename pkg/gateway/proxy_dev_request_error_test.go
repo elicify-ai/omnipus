@@ -39,7 +39,7 @@ func TestProxyDevRequest_UpstreamError_GenericBody(t *testing.T) {
 			return
 		}
 		conn, _, _ := hj.Hijack()
-		conn.Close() //nolint:errcheck
+		conn.Close() // errcheck rationale (out of errcheck scope; kept as documentation): test conn close; assertions have already completed
 	}))
 	// Close the stub now — every request will get "connection refused".
 	stub.Close()

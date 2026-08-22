@@ -75,7 +75,7 @@ func TestStartAll_InvokesRegisterCommands(t *testing.T) {
 	if err := m.StartAll(ctx); err != nil {
 		t.Fatalf("StartAll: %v", err)
 	}
-	t.Cleanup(func() { m.StopAll(context.Background()) }) //nolint:errcheck
+	t.Cleanup(func() { m.StopAll(context.Background()) }) // errcheck rationale (out of errcheck scope; kept as documentation): test cleanup: stopping the channel manager; failure here does not affect the test's assertions
 
 	// RegisterCommands is called in a goroutine with a 30s timeout; give it
 	// up to 1s to fire (should be near-instant in tests).
@@ -125,7 +125,7 @@ func TestStartAll_RegisterCommands_NotCalledOnNonRegistrar(t *testing.T) {
 	if err := m.StartAll(ctx); err != nil {
 		t.Fatalf("StartAll: %v", err)
 	}
-	t.Cleanup(func() { m.StopAll(context.Background()) }) //nolint:errcheck
+	t.Cleanup(func() { m.StopAll(context.Background()) }) // errcheck rationale (out of errcheck scope; kept as documentation): test cleanup: stopping the channel manager; failure here does not affect the test's assertions
 
 	// Brief pause to make sure no panic occurs.
 	time.Sleep(50 * time.Millisecond)

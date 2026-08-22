@@ -109,7 +109,7 @@ func TestWS_InboundCancel_RejectsEmptySessionID(t *testing.T) {
 		"error frame must carry a message when cancel has no session_id")
 
 	// Connection must remain open.
-	conn.SetWriteDeadline(time.Now().Add(1 * time.Second)) //nolint:errcheck
+	conn.SetWriteDeadline(time.Now().Add(1 * time.Second)) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
 	ping := wsClientFrameTestHelper{Type: "ping"}
 	pingData, err := json.Marshal(ping)
 	require.NoError(t, err)
@@ -182,7 +182,7 @@ func TestWS_ValidateInbound_SchemaRejectsMessageFrameMissingContent(t *testing.T
 		"error message must identify the failing schema")
 
 	// Connection must remain open.
-	conn.SetWriteDeadline(time.Now().Add(1 * time.Second)) //nolint:errcheck
+	conn.SetWriteDeadline(time.Now().Add(1 * time.Second)) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
 	ping := wsClientFrameTestHelper{Type: "ping"}
 	pingData, err := json.Marshal(ping)
 	require.NoError(t, err)
@@ -225,7 +225,7 @@ func TestWS_ValidateInbound_ValidFramePassesThrough(t *testing.T) {
 	// The server should not respond with an error frame for valid input.
 	// Send a second message (ping) after a brief delay; if the first frame caused
 	// a schema error the ping would arrive after the error frame.
-	conn.SetWriteDeadline(time.Now().Add(1 * time.Second)) //nolint:errcheck
+	conn.SetWriteDeadline(time.Now().Add(1 * time.Second)) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
 	ping := wsClientFrameTestHelper{Type: "ping"}
 	pingData, err := json.Marshal(ping)
 	require.NoError(t, err)
@@ -271,7 +271,7 @@ func TestWS_ValidateInbound_EmptyContentWithMedia_PassesThrough(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))
 
-	conn.SetWriteDeadline(time.Now().Add(1 * time.Second)) //nolint:errcheck
+	conn.SetWriteDeadline(time.Now().Add(1 * time.Second)) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
 	ping := wsClientFrameTestHelper{Type: "ping"}
 	pingData, err := json.Marshal(ping)
 	require.NoError(t, err)

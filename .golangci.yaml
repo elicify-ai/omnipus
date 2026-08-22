@@ -45,9 +45,16 @@ linters:
     # pkg/auth) via the path-except exclusion rule below — silent everywhere
     # else in the repo (still 2258 findings project-wide, untriaged). Full
     # repo-wide enablement is separate follow-up work.
+    #
+    # errcheck: ENABLED (removed from this list) 2026-08-22, SCOPED the same
+    # way as gosec above — production AND test files in the same six
+    # security-critical packages only, via the path-except exclusion rule
+    # below. Findings were already fixed across those six packages in an
+    # earlier pass; this closes the gap where nothing enforced the fix.
+    # Silent everywhere else in the repo (1073 findings measured 2026-08-20,
+    # untriaged, tracked as separate follow-up work, not this sweep's scope).
     - contextcheck
     - embeddedstructfieldcheck
-    - errcheck
     - errchkjson
     - exhaustive
     - forbidigo
@@ -318,6 +325,16 @@ linters:
       # separate follow-up work, not this sweep's scope).
       - linters:
           - gosec
+        path-except: ^pkg/(security|sandbox|audit|policy|credentials|auth)/
+      # errcheck: scope to the same six security-critical packages (production
+      # AND test files — unlike gosec above, test files are NOT excluded here;
+      # an unchecked error in a security-package test is still worth catching).
+      # path-except excludes issues for files that do NOT match the pattern,
+      # i.e. keeps errcheck issues only inside this path — silent everywhere
+      # else in the repo (1073 findings measured 2026-08-20, untriaged,
+      # tracked as separate follow-up work, not this sweep's scope).
+      - linters:
+          - errcheck
         path-except: ^pkg/(security|sandbox|audit|policy|credentials|auth)/
 issues:
   max-issues-per-linter: 0

@@ -262,7 +262,8 @@ func rewriteDecision(path string, lineIdx int, from, to string) error {
 	if unmarshalErr := json.Unmarshal(lines[lineIdx], &entry); unmarshalErr != nil {
 		return unmarshalErr
 	}
-	if got, _ := entry["decision"].(string); got != from {
+	got, ok := entry["decision"].(string)
+	if !ok || got != from {
 		return os.ErrInvalid
 	}
 	entry["decision"] = to

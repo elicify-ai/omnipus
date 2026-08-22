@@ -132,7 +132,8 @@ func TestSeatbeltAdversarial_PreexistingHardlink_IsAKnownGap(t *testing.T) {
 		t.Skipf("cannot create hardlink on this filesystem: %v", err)
 	}
 
-	out, _ := advRun(t, policy, ws, "cat "+link)
+	out, err := advRun(t, policy, ws, "cat "+link)
+	assert.NoError(t, err, "documented gap: the pre-placed hardlink read is expected to succeed, not be denied")
 	assert.Contains(t, out, "SECRET-CONTENT",
 		"documented limitation: a pre-placed hardlink is readable through the workspace. "+
 			"If this now FAILS, path-based confinement has gained inode awareness and the "+

@@ -58,7 +58,10 @@ func TestEgressProxy_AuditEntryShape(t *testing.T) {
 		}
 	}()
 
-	proxyURL, _ := url.Parse("http://" + p.Addr())
+	proxyURL, urlErr := url.Parse("http://" + p.Addr())
+	if urlErr != nil {
+		t.Fatalf("parse proxy URL: %v", urlErr)
+	}
 	client := &http.Client{
 		Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)},
 		Timeout:   5 * time.Second,

@@ -187,11 +187,12 @@ func scanFileForLastWriter(filePath, event, path string) (agentID string, found 
 		if e.Event != event || e.Decision != DecisionAllow || e.AgentID == "" {
 			continue
 		}
-		if op, _ := e.Details["op"].(string); op != "write" {
+		op, opOK := e.Details["op"].(string)
+		if !opOK || op != "write" {
 			continue
 		}
-		p, _ := e.Details["path"].(string)
-		if p != path {
+		p, pathOK := e.Details["path"].(string)
+		if !pathOK || p != path {
 			continue
 		}
 		agentID = e.AgentID

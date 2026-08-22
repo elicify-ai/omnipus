@@ -320,7 +320,7 @@ func startGateway(ctx context.Context, omnipusBin, homeDir string) (*gatewayHand
 		time.Sleep(200 * time.Millisecond)
 	}
 	if port == "" {
-		cmd.Process.Kill() //nolint:errcheck
+		cmd.Process.Kill() // errcheck rationale (out of errcheck scope; kept as documentation): killing a test subprocess; ErrProcessDone if it already exited is expected and harmless
 		return nil, fmt.Errorf("gateway did not write port file within 60s")
 	}
 
@@ -344,12 +344,12 @@ func startGateway(ctx context.Context, omnipusBin, homeDir string) (*gatewayHand
 	// Final check.
 	resp, err := http.Get(healthURL) //nolint:noctx
 	if err != nil {
-		cmd.Process.Kill() //nolint:errcheck
+		cmd.Process.Kill() // errcheck rationale (out of errcheck scope; kept as documentation): killing a test subprocess; ErrProcessDone if it already exited is expected and harmless
 		return nil, fmt.Errorf("gateway /health never responded: %w", err)
 	}
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		cmd.Process.Kill() //nolint:errcheck
+		cmd.Process.Kill() // errcheck rationale (out of errcheck scope; kept as documentation): killing a test subprocess; ErrProcessDone if it already exited is expected and harmless
 		return nil, fmt.Errorf("gateway /health returned %d", resp.StatusCode)
 	}
 
@@ -451,10 +451,10 @@ func (h *gatewayHandle) login(username, password string) (string, error) {
 // kill terminates the gateway process and removes the home directory.
 func (h *gatewayHandle) kill() {
 	if h.cmd != nil && h.cmd.Process != nil {
-		h.cmd.Process.Kill() //nolint:errcheck
-		h.cmd.Wait()         //nolint:errcheck
+		h.cmd.Process.Kill() // errcheck rationale (out of errcheck scope; kept as documentation): killing a test subprocess; ErrProcessDone if it already exited is expected and harmless
+		h.cmd.Wait()         // errcheck rationale (out of errcheck scope; kept as documentation): waiting on an already-killed test subprocess; the exit error is expected and not asserted
 	}
-	os.RemoveAll(h.homeDir) //nolint:errcheck
+	os.RemoveAll(h.homeDir) // errcheck rationale (out of errcheck scope; kept as documentation): test cleanup of a temp home dir; failure here does not affect the test's assertions
 }
 
 // ── Turn-by-turn conversation ─────────────────────────────────────────────────
