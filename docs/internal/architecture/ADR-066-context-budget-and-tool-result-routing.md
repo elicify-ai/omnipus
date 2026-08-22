@@ -307,6 +307,18 @@ Omnipus speaks exactly two wire protocols today — **OpenAI-compatible HTTP** (
 - **Popular (pinned, ~6–8):** the OpenCode shape — `openai`, `openrouter`, `anthropic` (API key), `google` (API key), `xai`, `groq`, `mistral`, `deepseek`. Named, probed, guided, tested.
 - **Everything else (~155):** selectable behind "show all providers", reachable through D11's protocol dispatch with URL, key variable and limits from the table. Best-effort; no probe, no onboarding hint, no test matrix.
 - **Unsupported (~5):** the cloud-IAM set above, shown with the reason.
+### 11b.3 The model selector reads the catalog — live `/models` is for entitlement and local endpoints only
+
+*(Operator question 2026-08-22.)* Today the selector is filled by a live call to the provider's `/models` with the user's key (`pkg/providers/validate.go::FetchModels`, OpenAI-compatible only, via the gateway's `refreshProviderModels`) — because there was nothing else to read from. With the catalog there is.
+
+**Decision.** The selector lists **the catalog** — instantly, offline, for every provider, with limits and modalities attached. Live `/models` is **not** used to populate it. Live calls remain for exactly three things the catalog cannot know:
+
+1. **Entitlement — what *this key* can use.** The catalog says what the provider offers, not what a given account, plan or org is allowed. An explicit *"Check with my account"* action calls `/models` with the key and **intersects** the result with the catalog: models the key cannot reach are shown greyed with the reason; models the provider returns that the catalog lacks (brand-new, ahead of the daily file) are shown with *limits unknown → floor* (D2 rung 6). The result is cached per key; it is never a boot-time or hot-path call.
+2. **Local and self-hosted endpoints** — `ollama` (`/api/tags`), `vllm`, LM Studio, `custom`: the catalog cannot know what is installed, so live is the only source there, and limits come from `/api/show` / `max_model_len` (D2 rung 3).
+3. **Key validation** — the existing probe still POSTs one request to prove the key works, but picks its probe model **from the catalog** instead of fetching the list first.
+
+**Not done:** polling OpenRouter or anyone else on a timer to refresh the selector. The daily catalog pull is the refresh; per-key entitlement is on demand.
+
 - **Custom endpoint stays** (any OpenAI- or Anthropic-compatible URL).
 - A config naming a provider that is not in the table fails on the generic unknown-provider path (`rest_onboarding.go`). **There is no retired-provider list.**
 
