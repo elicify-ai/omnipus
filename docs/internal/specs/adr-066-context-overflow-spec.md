@@ -4,6 +4,7 @@
 - **Status:** Draft (plan-spec) — revision 2, 2026-08-22, branch `feat/context-budget-and-tool-result-routing`. The ADR is the confirmed requirements brief. Where the ADR was silent the §10 table records the operator's resolutions; every item is closed (A-18/A-19 accepted by the coordinator 2026-08-22; register #3 confirmed).
 - **Scope:** ADR-066 only — D2, D3, D4, D5 (+ recall-by-`tool_call_id`), D6, D7, D9, D10, §16a, and ADR §15 task 1 (bounding parameters for `list_directory`, `inspect_session`, `recall_conversation` search modes — kept as FR-038…FR-040). **D1 (the catalog) is ADR-067 — referenced, not specified.** **D8 is NOT ADOPTED** (ADR-066 commits `ec2e022d`, `80aef474`, `06e6cc17`). Subscriptions / provider deletion / provider UX are ADR-068.
 - **Greenfield rule (operator, 2026-08-22):** no backward compatibility, no migration, no aliasing. Pre-existing state that does not match simply does not work: a `config.json` still carrying `summarize_token_percent` or `agents.defaults.context_window` has those keys silently ignored (`LoadConfig` has no `DisallowUnknownFields`) — no boot notice, no rejection; session meta without projection state loads as an empty set (a zero value, not a compatibility path).
+- **Cross-spec seams (cross-spec review 2026-08-22, `docs/internal/specs/cross-spec-review-adr-066-067-068.md`):** this spec **requires ADR-067's spec (S67) merged first** — it consumes `pkg/providers/catalog.Resolve(provider, model).Window()`, the `locality` predicate, the `cli_driver` field, and the coordinated contract commit that S67 owns (`Agent.yaml`, the four `LLMError` copies). It depends on ADR-068's spec (S68) only for the UI tail (row/picker refusal state, default-model card). Landing order S67 → S68 → S66 backend → S66 UI tail. Grep gates (tests 6, 11 and S67/S68's) are evaluated on the **merged** branch; S68's removed-provider gate allow-lists the spec/ADR files, but this spec does not rely on that: the deleted id `claude-cli` appears in this document only in this sentence, and in no test literal.
 - **Tech:** Go (`pkg/agent`, `pkg/memory`, `pkg/tools`, `pkg/mcp`, `pkg/gateway`, `pkg/providers`) · React 19 + Vite (SPA) · contract-first (`contracts/*`, Constraint #8).
 - **Citation rule:** `pkg/agent/loop.go` and `pkg/agent/turn.go` are cited as `file::symbol` only — never by line number.
 - **Test conventions:** Go tests run with `-tags goolm,stdjson`; never run the full gateway suite locally (CI is the authority); at most one narrowly-scoped local test (`-run '^TestName$' -p 1`).
@@ -14,7 +15,7 @@
 
 On 2026-08-21 a production turn died silently after two MCP tool results (1.18 MB and 0.82 MB) entered the context in one turn. Four defects were diagnosed (ADR §1): the window was resolved from `max_tokens × 4` (wrong by 8×); the MCP path admits results of any size; the sliding window is consulted only before the first LLM call and can only cut at user-message boundaries; and four turn exits emit no log, event or transcript entry.
 
-This spec covers the incident fix: resolve the window from a ladder — per-agent override → per-(provider, model) operator override → global default → live query → catalog → floor — with every override clamped to the model's capability and a loud floor for unknown cloud models, ask-or-refuse for local endpoints (D2–D3); admit every tool result through one choke point that caps it per surface **and clamps the cap to half the budget**, bound user messages where they become turns and tool-call arguments as a structured refusal (D4); when the window is over budget, empty the oldest eligible tool results in place with a recall mark that `recall_conversation` resolves by `(tool_call_id, archive line)` in pages (D5); run the one existing budget check after every tool result, never cutting mid-turn, with the whole last assistant step as a floor that is always satisfiable and a thrash guard that is unreachable by construction (D6); give every turn exit a typed code (D7); expose caps, trigger, ingest bound, the global default, model overrides and each agent's effective window with its source in Settings (D9); bound ingest at 8 MB on the transport read and bound the encoded archive line (D10).
+This spec covers the incident fix: resolve the window from a ladder — per-agent override → per-(provider, model) operator override → global default → on-demand live query → catalog → floor — with every override clamped to the model's capability and a loud floor for unknown cloud models, ask-or-refuse for local endpoints (D2–D3); admit every tool result through one choke point that caps it per surface **and clamps the cap to half the budget**, bound user messages where they become turns and tool-call arguments as a structured refusal (D4); when the window is over budget, empty the oldest eligible tool results in place with a recall mark that `recall_conversation` resolves by `(tool_call_id, archive line)` in pages (D5); run the one existing budget check after every tool result, never cutting mid-turn, with the whole last assistant step as a floor that is always satisfiable and a thrash guard that is unreachable by construction (D6); give every turn exit a typed code (D7); expose caps, trigger, ingest bound, the global default, model overrides and each agent's effective window with its source in Settings (D9); bound ingest at 8 MB on the transport read and bound the encoded archive line (D10).
 
 Nothing is summarised, nothing is deleted from disk. One new cache file (`$OMNIPUS_HOME/cache/model_limits.json`) is introduced; no new store. `windowTrim` remains the only compaction path (ADR-028, extended not superseded).
 
@@ -50,16 +51,18 @@ Nothing is summarised, nothing is deleted from disk. One new cache file (`$OMNIP
 | `pkg/memory/jsonl.go::sessionMeta` (`skip`, `count`), `::GetHistory`, `::ReadArchive`, `maxLineSize = 10 MB` | **extends** | Meta gains per-result projection state keyed `(tool_call_id, archive line index)`; scanner buffer is `maxLineSize` — a longer line breaks the rest of the session read, hence the encoded-line bound. |
 | `pkg/agent/recall_conversation.go::RecallConversationTool` (`recallDefaultTokens = 4000`, `recallRangeTokens = 8000`, id remap) | **extends** | `tool_call_id` (+ `archive_line`) paged mode; search-mode `max_results` bound (FR-040). |
 | `pkg/agent/translate_error.go::contextOverflowSubstrings`, `::classifyByMessage`, `CodeContextTooLong`, `CodeUnknown` | **extends** | D7 codes only; classification job unchanged (D8 not adopted). |
-| `contracts/components/schemas/LLMError.yaml` | **extends** | `turn_canceled` (attribution `user` — new vocabulary value), `turn_timed_out` (`provider`), `context_unrecoverable` (`product`); `model_unavailable` reused for the D3 refusal. |
+| `LLMError` — **four copies**: `contracts/components/schemas/LLMError.yaml`, `LLMErrorReplay.yaml`, and the inline `components.schemas.LLMError` / `LLMErrorReplay` blocks in `contracts/asyncapi.yaml` (the generators read asyncapi) | **extends (semantics and copy owned here; file edit in S67's coordinated contract commit)** | `turn_canceled` (attribution `user` — new vocabulary value in all four `x-user-message-attributions`), `turn_timed_out` (`provider`), `context_unrecoverable` (`product`), `context_window_unknown` (`config`, the D3 refusal — X-09; `model_unavailable` is NOT reused, its copy describes a fallback). Guarded by `pkg/api/generated/llm_error_codes_test.go::TestContract_LLMError_AllClassifierCodesRoundTrip` and `llm_error_catalogue_test.go::TestContract_LLMErrorCatalogue_AllFourCopiesAgree`. |
 | `contracts/components/schemas/ToolCall.yaml` | **extends** | `content_state: full \| capped \| emptied`. |
 | `contracts/asyncapi.yaml` | **extends** | `tool_result_projection` frame; recall-mark and argument-refusal inline schemas (ADR-060 family). |
-| `contracts/components/schemas/ContextSettings.yaml`, `ContextSettingsUpdate.yaml` (new); `Agent.yaml`, `AgentUpdateRequest.yaml` | **adds / extends** | Caps, trigger, ingest bound, global default, `model_overrides[]`; per-agent `context_window_override` + derived `context_window_effective`, `context_window_source`, `context_window_clamped`. Verified: `Agent.yaml` has no `context_window*` field today. |
+| `contracts/components/schemas/ContextSettings.yaml`, `ContextSettingsUpdate.yaml`, `ContextWindowSource.yaml` (new, owned here); `Agent.yaml`, `AgentUpdateRequest.yaml` (S67 commits the coordinated edit) | **adds / extends** | Caps, trigger, ingest bound, global default, `model_overrides[]`; `ContextWindowSource` enum `operator \| live \| catalog \| floor` `$ref`'d by `Agent.context_window_source` and S68's `DefaultModel.window_source` (X-06); per-agent `context_window_override` + derived `context_window_effective`, `context_window_source`, `context_window_clamped` — all three **optional** on the wire (absent until the resolver lands). Verified: `Agent.yaml` has no `context_window*` field today. |
 | `pkg/config/config.go` `AgentDefaults.ContextWindow` (`json:"context_window"`, env `OMNIPUS_AGENTS_DEFAULTS_CONTEXT_WINDOW`) and `SummarizeTokenPercent` | **deleted** | Single home is `ContextSettings.default_context_window` (MAJ-014); greenfield. |
 | `pkg/mcp/manager.go::sandboxedCommandTransport` / `sandboxedStdioConn` (wraps the SDK `IOTransport`), `::Manager.CallTool` | **modifies** | Transport-level ingest bound on the stdout stream; HTTP/SSE transports via `http.MaxBytesReader` on the client `RoundTripper`. No truncation anywhere today. |
 | `pkg/tools/web.go` — `BraveSearchProvider.Search`, `DuckDuckGoSearchProvider.Search`, `PerplexitySearchProvider.Search` (`io.ReadAll(resp.Body)` unbounded); `GLMSearchProvider.Search`, `BaiduSearchProvider.Search` (`io.LimitReader(…, 1<<20)`); `fetch_url` `MaxBytesReader` 10 MB | **modifies** | All five bounded at the ingest bound; `fetch_url` fallback aligned to 8 MB. |
 | `pkg/tools/filesystem.go::MaxReadFileSize` (64 KB), `web.go::defaultMaxChars` (50,000), `browser/tools.go::maxGetTextBytes` (100 KiB), `shell.go::maxForegroundOutputLen` (10,000) | **modifies** | Aligned to D4 figures. |
 | `pkg/tools/result.go::ToolResult` (`IsError`), `::marshalWithinBudget`, ADR-060 family register (`scripts/check-no-handwritten-wire-types.sh`) | **extends** | Argument refusal and recall mark producers. |
-| `pkg/providers/factory_provider.go` | **extends** | Provider classification table; new `lmstudio` id. |
+| `pkg/providers/catalog` `locality` predicate and `cli_driver` field (owned by S67, X-16/X-14) | **calls** | `locality: local` ⇔ protocol ∈ {ollama, vllm} ∨ id = lmstudio ∨ custom row with loopback/private host; exempt ⇔ `cli_driver` is a subprocess driver. No classification table and no factory id lives in this spec. |
+| `ResolveWindow(provider, model, agentID="")` (new, `pkg/agent`, owned here — X-07) | **adds** | Rungs 2–6 when `agentID` is empty (S68's default-model card and row expand call it); rung 1 applies only with an agent. Exempt → `context_window: 0`, `window_source` absent. |
+| S67's providers-catalog `GET` projection | **extends (field owned here, X-08)** | Per-model `window_source` and, for a `locality: local` model whose live query failed, `window_unknown: true`; S68 renders it with a link to Settings → Models → Model overrides. Not a `Provider.status` value (status stays at six). |
 | `pkg/gateway/metrics.go::toolMetrics` | **extends** | `tool_result_large_total`, `context_empties_total`. |
 | `pkg/gateway/replay.go` (`InlineToolResultMaxBytes`, `tool_results/` store; `role:"turn_canceled"` replay frame) | **extends** | Transcript read returns projected content + `content_state`; full content stays in `tool_results/` for Verbose chat. |
 | `src/lib/toolVisibility.ts::shouldRenderToolCall`; `src/components/settings/*` | **extends** | Mark rendered only under Verbose chat; new Context settings section. |
@@ -107,21 +110,23 @@ As an operator, I want each agent's window resolved per-agent override → per-(
   2. **Given** a per-agent override of 100,000 and catalog 1,048,576, **Then** 100,000, source `operator`.
   3. **Given** a per-(provider, model) override of 200,000 and no per-agent override, **Then** 200,000, source `operator`; **Given** both, **Then** the per-agent value wins.
   4. **Given** an override of 2,000,000 and capability 1,048,576, **Then** 1,048,576, `clamped: true`, one WARN naming agent, override and clamp.
-  5. **Given** a cloud provider whose limits endpoint returns 200,000 and no overrides, **Then** 200,000, source `live`, served from the on-disk cache (TTL 24 h, key (provider id, base URL, model), provider credential from the credential store; rung skipped when no credential) — never fetched on the turn path; on a cold cache the next rung is used and the cache is refreshed in the background.
-  6. **Given** `claude-cli` or `codex-cli`, **Then** `ContextWindow = 0`; pre-turn trim, mid-turn check and timeout-recovery check are all skipped.
+  5. **Given** a cloud provider whose limits endpoint returns 200,000 and no overrides, **Then** 200,000, source `live`, served from the on-disk cache (TTL 24 h, key (provider id, base URL, model), provider credential from the credential store; rung skipped when no credential). The query is **on demand only** — at the first resolution that reaches this rung, **never at boot and never on a timer** (X-18/X-36; ADR-067 §4.3's fourth sanctioned live call); the turn path never waits on it: a cold cache resolves from the next rung now and the live value applies at the next reload.
+  6. **Given** a provider whose catalog row has a subprocess `cli_driver` (today `codex-cli` only; by field, never by id), **Then** `ContextWindow = 0`; pre-turn trim, mid-turn check and timeout-recovery check are all skipped. `openai-chatgpt` is an HTTP transport and is cloud, not exempt (X-20).
   7. **Given** any configuration, **Then** pre-turn, mid-turn, timeout-recovery and model-switch compare against one budget B from one resolved window.
   8. **Given** the catalog value for a model is lowered in a new release, **When** next resolved, **Then** overrides above it are re-clamped (overrides never expire).
+  9. **Given** `ResolveWindow(provider, model)` with no agent, **Then** rungs 2–6 apply and the result carries window + source; with an agent id, rung 1 applies too; an exempt provider returns 0 with no source (X-07).
+  10. **Given** a `model_overrides[]` entry whose provider no longer exists, **Then** the resolver ignores it and the next settings write prunes it.
 
 ### US-2 — Unknown window: floor for cloud, ask-or-refuse for local (D3) — **P0**
-As an operator, a hosted model the catalog does not know gets a 128,000 floor with a WARN; a local endpoint (`ollama`, `vllm`, `lmstudio`, or any provider whose API host is loopback/private) is queried live and, if it reports no window, is unusable with an actionable message that names the exact field to set.
+As an operator, a hosted model the catalog does not know gets a 128,000 floor with a WARN; a `locality: local` endpoint (ADR-067's predicate) is queried live and, if it reports no window, is unusable with an actionable message that names the exact field to set.
 - **Why P0:** a 128,000 guess on an 8k local model is the incident again.
-- **Independent test:** classification table drives floor vs refusal; the override write makes the model usable without restart.
+- **Independent test:** the catalog `locality` drives floor vs refusal; the override write makes the model usable without restart.
 - **Acceptance:**
   1. **Given** a cloud model absent from catalog and live, **Then** 128,000, source `floor`, one WARN naming the model.
   2. **Given** an `ollama` model reporting 8,192 (`/api/ps`), **Then** 8,192, source `live`, never floored.
-  3. **Given** a local endpoint whose live query fails or reports no window, **When** selected or when an agent bound to it starts a turn, **Then** the turn is refused with `LLMError` code `model_unavailable` and the message *"This endpoint did not report a context length for <model>. Set it under Settings → Context → Model overrides → <provider> / <model> → Context length and try again."*; provider row and model picker show the same state.
+  3. **Given** a local endpoint whose live query fails or reports no window, **When** selected or when an agent bound to it starts a turn, **Then** the turn is refused with `LLMError` code `context_window_unknown` (attribution `config`; third in the pre-turn gate after `needs_provider` and `model_unassigned` — X-09) and the message *"This endpoint did not report a context length for <model>. Set it under Settings → Models → Model overrides → <provider> / <model> → Context length and try again."*; the providers-catalog `GET` projection carries `window_unknown: true` for that model so S68's row and picker show the state (X-08).
   4. **Given** that state, **When** the operator writes `model_overrides[{provider, model, context_window}]` via `PUT /api/v1/settings/context`, **Then** a reload is triggered and the next turn runs with that window (clamped), no restart.
-  5. **Given** a `custom`/OpenAI-compatible provider whose base URL host is public, **Then** it is classified cloud: floored with a WARN, never refused.
+  5. **Given** a custom row (operator id, e.g. `my-proxy`) whose base URL host is public, **Then** its `locality` is cloud: floored with a WARN, never refused.
 
 ### US-3 — Admit every tool result through one choke point, capped and clamped (D4) — **P0**
 As the harness, every tool result — success, `IsError`, denied, skipped, hydrated attachment, recall page, delegated report, MCP — becomes a context message through one function that caps it per surface, clamps the cap to half the budget, bounds the encoded archive line, and marks over-cap results.
@@ -231,12 +236,12 @@ As a user on any channel who pastes a huge document, I get a non-fatal refusal b
 - E6: hostile MCP tool name / id → sanitised in the mark.
 - E7: recall id from an aborted turn → not found.
 - E8: paging edge values per US-7.AC2.
-- E9: live cache expired + endpoint down → cloud: catalog → floor; local: refusal; cold cache → next rung + background refresh.
+- E9: live cache expired + endpoint down → cloud: catalog → floor; local: refusal; cold cache → next rung now, live at next reload (no boot/timer fetch).
 - E10: override written while refused → usable after reload, no restart.
 - E11: catalog lowered → re-clamp on next resolution.
 - E12: media refs not counted toward the user bound.
 - E13: abort at any point → turn-start triple.
-- E14: exempt providers → window 0, all checks skipped.
+- E14: exempt (subprocess `cli_driver`) providers → window 0, all checks skipped.
 - E15: delegated sub-turn → ephemeral store keeps projection state in memory; rollback parameter no-op; child's report capped at 64,000 as the parent's tool result.
 - E16: a previous oversized turn kept by the pre-turn floor → its results are eligible for emptying (pre-turn, after the cut fails to fit).
 - E17: a tampered `model_limits.json` can only lower the window (clamp) — accepted.
@@ -248,7 +253,7 @@ As a user on any channel who pastes a huge document, I get a non-fatal refusal b
 
 ### Behavioral Contract
 - When an agent instance is built or reloaded, the system resolves its window via the six-rung ladder, clamps every override to capability (recomputed each time), records source and `clamped`.
-- When a local endpoint reports no window, the system refuses the model (`model_unavailable`) with the message naming `Settings → Context → Model overrides`.
+- When a `locality: local` endpoint reports no window, the system refuses the model (`context_window_unknown`) with the message naming `Settings → Models → Model overrides` and marks the model `window_unknown: true` in the catalog projection.
 - When any tool result is produced, the system admits it through the choke point: filter → cap per surface → clamp to half B (and `/N` for parallel) → encoded-line bound → archive full → record state.
 - When a user message over the bound reaches `processMessage`, the system replies on the originating channel and starts no turn.
 - When arguments exceed the cap, the system returns a structured refusal and continues.
@@ -270,7 +275,8 @@ As a user on any channel who pastes a huge document, I get a non-fatal refusal b
 - Must not floor a local endpoint; must not refuse a cloud endpoint reached via `custom`.
 - Must not learn, infer or cache a window from provider error text (D8 not adopted). **Accepted cost:** a model not yet in the catalog or a plan-specific cap overflows with a typed `context_too_long` until the catalog or an override corrects it.
 - Must not add a per-server/per-tool cap opt-out; must not exempt `delegate` reports or attachments from the choke point.
-- Must not fetch live limits on the turn path.
+- Must not fetch live limits on the turn path, at boot, or on a timer — on demand only (X-18).
+- Must not define provider locality or a factory id — ADR-067's `locality` predicate is the single definition (X-16/X-17).
 - Must not persist, register or error-frame a refused user message.
 - Must not hand-roll the mark or refusal with `fmt.Sprintf`.
 - Must not add a second budget formula, a spill store, a reducer, or refetch recipes (ADR §14); must not keep a `0.9 × window` haircut.
@@ -317,23 +323,17 @@ head/tail 50/50; mark length counted toward the cap; no rune split
 
 **Bounds:** user message = builtin-success cap (64,000), media refs excluded, enforced in `processMessage`; tool-call arguments = 64,000 on the serialised arguments string; ingest 8,000,000 bytes default, setting must be < 8,388,608.
 
-**Provider classification:**
+**Provider locality (consumed from S67, not defined here):** `locality: local` ⇔ protocol ∈ {ollama, vllm} ∨ id = `lmstudio` ∨ custom row with loopback/private host → mandatory live query, no floor. `locality: cloud` (everything else, incl. a custom row at a public host) → floor 128,000 (`cloudWindowFloor`, the only `128000` constant in `pkg/agent`). Exempt ⇔ the row's `cli_driver` is a subprocess driver (today `codex-cli`); `openai-chatgpt` is cloud.
 
-| Provider | Class |
-|---|---|
-| `ollama`, `vllm`, `lmstudio` (new id) | local — mandatory live query, no floor |
-| any provider whose API host is loopback (`127.0.0.0/8`, `::1`, `localhost`) or private (RFC 1918, ULA) | local |
-| everything else in the factory list, incl. `custom` at a public host | cloud — floor 128,000 (`cloudWindowFloor`, the only `128000` constant in `pkg/agent`) |
-| `claude-cli`, `codex-cli` | exempt |
-
-**Window resolution:** `effective = min(first-present(per-agent, per-(provider,model), global default), capability)` where capability = live-or-catalog value (or the floor when absent, cloud only); `clamped = chosen > capability`; live cache key `(provider id, base URL, model)`, TTL 24 h, path `$OMNIPUS_HOME/cache/model_limits.json`.
+**Window resolution:** `effective = min(first-present(per-agent, per-(provider,model), global default), capability)` where capability = live-or-catalog value (or the floor when absent, cloud only); `clamped = chosen > capability`; live cache key `(provider id, base URL, model)` (a catalog `api` change therefore yields a new key), TTL 24 h, path `$OMNIPUS_HOME/cache/model_limits.json`, populated on demand only. `ResolveWindow(provider, model, agentID="")` is the single resolver; `NewAgentInstance` calls it with the agent id, S68's card without.
 
 **HTTP / wire:**
 - `GET/PUT /api/v1/settings/context` — `ContextSettings.yaml` / `ContextSettingsUpdate.yaml` (partial; omitted = unchanged); 400 `ErrorResponse` naming field and limit on: cap > 150,000 or < 1; `absolute_trigger_chars < 1`; `ingest_bound_bytes ≥ 8,388,608` or < 1; `model_overrides[].context_window < 1`. Every 200 write triggers `TriggerReload`. Middleware `withAuth`.
-- `Agent.yaml`: `context_window_effective` (int), `context_window_source` (enum `operator | live | catalog | floor`), `context_window_clamped` (bool); `AgentUpdateRequest.yaml`: `context_window_override` (int ≥ 1, nullable to clear).
+- `ContextWindowSource.yaml` (owned here): enum `operator | live | catalog | floor`; `$ref`'d by `Agent.context_window_source` and S68's `DefaultModel.window_source`. `Agent.yaml` (S67's coordinated commit): `context_window_effective` (int), `context_window_source` (`$ref`), `context_window_clamped` (bool) — all optional; `AgentUpdateRequest.yaml`: `context_window_override` (int ≥ 1, nullable to clear).
+- Providers-catalog `GET` projection (S67's route): per-model `window_source` (`$ref ContextWindowSource`, absent for exempt) and `window_unknown` (bool, true iff `locality: local` and the live query failed).
 - `ToolCall.yaml`: `content_state` (enum `full | capped | emptied`, default `full`).
 - asyncapi: `tool_result_projection` `{tool_call_id, archive_line, content_state, mark}`; recall-mark and argument-refusal inline schemas (ADR-060 D1 checklist: schema, `*Code`, single producer via `marshalWithinBudget`, register entry).
-- `LLMError.yaml`: `turn_canceled` (`user`), `turn_timed_out` (`provider`), `context_unrecoverable` (`product`); `user` added to `x-user-message-attributions`; `model_unavailable` reused for D3.
+- `LLMError` × 4 (`LLMError.yaml`, `LLMErrorReplay.yaml`, asyncapi inline `LLMError` and `LLMErrorReplay`): `turn_canceled` (`user`), `turn_timed_out` (`provider`), `context_unrecoverable` (`product`), `context_window_unknown` (`config`); `user` added to every copy's `x-user-message-attributions`; `TestContract_LLMError_AllClassifierCodesRoundTrip` and `TestContract_LLMErrorCatalogue_AllFourCopiesAgree` pass. Pre-turn gate order: `needs_provider` (S67) → `model_unassigned` (S68) → `context_window_unknown` (here).
 
 **Tool interface:** `recall_conversation` exactly one of `query | turn_range | time | tool_call_id`; with `tool_call_id`: optional `archive_line ≥ 0`, `offset ≥ 0`, `length ≥ 1` (clamped to the page size); `max_results ≥ 1` on search modes. `list_directory`/`inspect_session`: `offset ≥ 0`, `limit ≥ 1`.
 
@@ -367,15 +367,17 @@ head/tail 50/50; mark length counted toward the cap; no rune split
 **B-02b (HP)** per-(provider, model) override — US-1.AC3. Given `model_overrides[{openrouter, z-ai/glm-5.2, 200000}]`, no per-agent → 200,000 / `operator`; with per-agent 100,000 → 100,000.
 **B-03 (EC)** clamp — US-1.AC4. Override 2,000,000, capability 1,048,576 → 1,048,576, `clamped: true`, one WARN.
 **B-03b (EC)** re-clamp on catalog change — US-1.AC8. Catalog lowered to 200,000 → next resolution 200,000; override persists.
-**B-04 (AP)** live rung cached — US-1.AC5. Endpoint returns 200,000; resolved twice within 24 h → 200,000 / `live`, one fetch, key `(id, baseURL, model)`; no credential → rung skipped; cold cache → catalog now, live next reload.
-**B-05 (AP)** exempt — US-1.AC6. `claude-cli` → window 0; pre-turn trim, mid-turn and timeout checks skipped.
+**B-04 (AP)** live rung on demand, cached — US-1.AC5. Endpoint returns 200,000; resolved twice within 24 h → 200,000 / `live`, one fetch, key `(id, baseURL, model)`; no credential → rung skipped; cold cache → catalog now, live next reload; boot and a 25 h idle period perform **zero** fetches.
+**B-04b (HP)** `ResolveWindow` without an agent — US-1.AC9. `(openrouter, z-ai/glm-5.2)` → 1,048,576 / `catalog`; with a per-agent override 100,000 and the agent id → 100,000; exempt provider → 0, no source.
+**B-04c (EC)** dead override pruned — US-1.AC10.
+**B-05 (AP)** exempt by driver — US-1.AC6. A row with subprocess `cli_driver` (`codex-cli`) → window 0; checks skipped; `openai-chatgpt` → cloud, floored.
 **B-05b (EC)** max_tokens clamp — US-1.AC7 / E18. `W = 8,192`, `max_tokens = 8,192` → effective `max_tokens = 2,048`, one WARN, B > 0.
 **B-06 (HP, outline)** one B for all — US-1.AC7. Consumers: pre-turn / mid-turn / timeout recovery / model-switch → same B.
 **B-07 (AP)** cloud floor — US-2.AC1 → 128,000 / `floor`, WARN.
 **B-08 (HP)** Ollama live — US-2.AC2 → 8,192 / `live`.
-**B-09 (EP)** local refusal — US-2.AC3 → `model_unavailable` with the Settings → Context → Model overrides message; row + picker state.
+**B-09 (EP)** local refusal — US-2.AC3 → `context_window_unknown` with the Settings → Models → Model overrides message; catalog projection `window_unknown: true`; gate order third.
 **B-10 (HP)** override clears refusal without restart — US-2.AC4. `PUT /settings/context` `model_overrides` 32,768 → reload triggered; next turn 32,768 / `operator`.
-**B-10b (AP)** `custom` at public host is cloud — US-2.AC5 → 128,000 / `floor`, never refused.
+**B-10b (AP)** custom row at a public host is `locality: cloud` — US-2.AC5 → 128,000 / `floor`, never refused.
 
 ### Feature: Cap at the door (D4)
 
@@ -485,10 +487,11 @@ head/tail 50/50; mark length counted toward the cap; no rune split
 |---|---|---|---|---|
 | 1 | `TestResolveContextWindow_Ladder` | Unit | B-01, B-02, B-02b, B-04, B-07, B-08 | six rungs, source |
 | 2 | `TestResolveContextWindow_ClampAllRungs` | Unit | B-03, B-03b | clamp + WARN; re-clamp |
-| 3 | `TestResolveContextWindow_ExemptZeroWindow` | Unit | B-05 | window 0; checks skipped |
+| 3 | `TestResolveContextWindow_ExemptByCliDriver` | Unit | B-05 | `codex-cli` row (subprocess driver) → 0; `openai-chatgpt` → cloud; no deleted-id literal |
+| 3c | `TestResolveWindow_NoAgent` | Unit | B-04b, B-04c | rungs 2–6; exempt → 0/no source; dead override ignored |
 | 3b | `TestNewAgentInstance_MaxTokensClampedWhenBudgetNonPositive` | Unit | B-05b | 8,192/8,192 → 2,048 + WARN |
-| 4 | `TestResolveContextWindow_Classification` | Unit | B-08, B-09, B-10b | table incl. `lmstudio`, loopback/private, `custom` public |
-| 5 | `TestLiveLimits_CacheKeyTTLCredential` | Unit | B-04 | key, TTL, no-credential skip, cold-cache background |
+| 4 | `TestResolveContextWindow_ByLocality` | Unit | B-08, B-09, B-10b | drives S67's `locality` predicate (fixture rows: ollama, lmstudio, custom loopback, custom public); asserts `window_unknown` in the projection and gate order third |
+| 5 | `TestLiveLimits_OnDemandCacheKeyTTLCredential` | Unit | B-04 | key, TTL, no-credential skip, zero fetches at boot/idle |
 | 6 | `TestWindowAgreement_OneBudgetAllSites` | Unit | B-06 | `isOverContextBudget` threshold = B at all four sites; source grep: no `maxTokens * 4`, no `contextWindow = 128000`/`newContextWindow = 128000`, exactly one `cloudWindowFloor` |
 | 7 | `TestChokePoint_PerSurfaceCap` | Unit | B-11 | surface table |
 | 8 | `TestChokePoint_ClampToHalfBudget` | Unit | B-11b, B-11c | effective cap; `/N` |
@@ -529,7 +532,8 @@ head/tail 50/50; mark length counted toward the cap; no rune split
 | 43 | `TestGateway_ProjectionFrameAndContentState` | Integration | B-26 | frame emitted; transcript `content_state` |
 | 44 | `contract_test.go` additions | Integration | B-41, B-26, B-44 | new schemas validate |
 | 45 | `TestTier1Tools_BoundingParams` | Unit | B-47 | |
-| 46 | `ContextSection.test.tsx` | E2E | B-44, B-14 | |
+| 46 | `ContextSection.test.tsx` (Settings → Models section; independent of S68) | E2E | B-44, B-14 | |
+| 46b | row/picker `window_unknown` state + default-model card window/source (**after S68's components land**) | E2E | B-09, B-04b | S66 UI tail |
 | 47 | `toolVisibility.test.ts` + projection-frame zod test | E2E | B-26 | |
 | 48 | `llm-error.test.ts` | E2E | B-41 | `user` attribution renders as notice |
 
@@ -581,11 +585,12 @@ head/tail 50/50; mark length counted toward the cap; no rune split
 | 7 | — | — | — | 200,000 | 1,048,576 | cloud | 200,000 live | B-04 |
 | 8 | — | — | — | — | — | cloud | 128,000 floor + WARN | B-07 |
 | 9 | — | — | — | 8,192 | — | ollama | 8,192 live | B-08 |
-| 10 | — | — | — | none | — | vllm | refused (`model_unavailable`) | B-09 |
+| 10 | — | — | — | none | — | vllm | refused (`context_window_unknown`) | B-09 |
 | 11 | — | 32,768 | — | none | — | vllm | 32,768 operator | B-10 |
-| 12 | — | — | — | none | — | custom @ public host | 128,000 floor | B-10b |
-| 13 | — | — | — | none | — | custom @ 127.0.0.1 | refused | B-09 |
-| 14 | — | — | — | — | — | claude-cli | window 0, exempt | B-05 |
+| 12 | — | — | — | none | — | custom row `my-proxy` @ public host (cloud) | 128,000 floor | B-10b |
+| 13 | — | — | — | none | — | custom row `my-proxy` @ 127.0.0.1 (local) | refused `context_window_unknown` | B-09 |
+| 14 | — | — | — | — | — | `codex-cli` (subprocess driver) | window 0, exempt | B-05 |
+| 14b | — | — | — | — | catalog | `openai-chatgpt` (HTTP) | catalog value, cloud | B-05 |
 | 15 | 1,048,576 | — | — | — | lowered to 200,000 | cloud | 200,000 clamped | B-03b |
 | 16 | — | — | — | 8,192 (max_tokens 8,192) | — | ollama | W 8,192; max_tokens clamped to 2,048 + WARN | B-05b |
 
@@ -655,7 +660,10 @@ head/tail 50/50; mark length counted toward the cap; no rune split
 | `LLMError` copy rules | `translate_error_test.go`, `llm-error.test.ts` | extended | `user` attribution copy rules: may say "you stopped it" |
 | Per-tool caps | tool tests | `browser_get_text`, shell updated | |
 | ADR-060 family lint | `check-no-handwritten-wire-types.sh` | two discriminators registered | |
-| Delegation identity | `subturn_target_identity_test.go` | child window from target's provider/model | |
+| Delegation identity | `subturn_target_identity_test.go` | **additive assertions only, after S67 re-keys the `mock` fixture** (X-31): child window from target's provider/model | |
+| `AgentDefaults` / `defaults.go` edited by three specs (X-29) | `config_test.go` | S67's `TestSeeds_CanonicalProviderIDs` and S68's `TestDefaultsSeed_NoRemovedProvider` must pass after merge; land S67 → S68 → S66 | struct shrinks monotonically |
+| `LLMError` four-copy agreement (X-01) | `llm_error_codes_test.go`, `llm_error_catalogue_test.go` | must pass with the four new codes + `user` | file edit in S67's contract commit |
+| Grep gates (X-34) | tests 6, 11; S67 T29; S68 gate | evaluated on the merged branch | no deleted-provider id literal in this spec's tests |
 | Replay `turn_canceled` role | replay tests | unchanged; `turn_canceled` LLMError is additional | |
 
 ---
@@ -665,17 +673,17 @@ head/tail 50/50; mark length counted toward the cap; no rune split
 ### Functional Requirements
 
 **D2 — resolution**
-- **FR-001**: Resolve per-agent override → per-(provider, model) override (`ContextSettings.model_overrides[]`) → global default (`ContextSettings.default_context_window`) → live query (cached) → catalog → floor; record source and `clamped`.
+- **FR-001**: `ResolveWindow(provider, model, agentID="")` resolves per-agent override (only with `agentID`) → per-(provider, model) override (`ContextSettings.model_overrides[]`) → global default (`ContextSettings.default_context_window`) → on-demand live query (cached) → catalog (`catalog.Resolve(provider, model).Window()`, S67) → floor; records source (`ContextWindowSource`) and `clamped`; exempt → 0 with no source; entries for a deleted provider ignored and pruned on the next write.
 - **FR-002**: `effective = min(chosen override, capability)` recomputed on every resolution; a clamp logs one WARN.
-- **FR-003**: Live query cached 24 h at `$OMNIPUS_HOME/cache/model_limits.json`, key (provider id, base URL, model), provider credential from the store, rung skipped without one; never on the turn path; cold cache → next rung + background refresh.
+- **FR-003**: Live query **on demand only** (first resolution reaching the rung; never at boot, never on a timer), cached 24 h at `$OMNIPUS_HOME/cache/model_limits.json`, key (provider id, base URL, model), provider credential from the store, rung skipped without one; never on the turn path; cold cache → next rung now, live value at next reload.
 - **FR-004**: `max_tokens × 4`, both `128000` fallbacks, `agents.defaults.context_window` (+ env var) and `summarize_token_percent` MUST NOT exist; exactly one `cloudWindowFloor` constant; all four consumers read one resolved window.
-- **FR-005**: `claude-cli`/`codex-cli`: `ContextWindow = 0`, pre-turn trim and every budget check skipped.
+- **FR-005**: Providers whose catalog row has a subprocess `cli_driver` (today `codex-cli`; by field, never by id): `ContextWindow = 0`, pre-turn trim and every budget check skipped; `openai-chatgpt` is cloud.
 - **FR-005b**: When `max_tokens` leaves `B ≤ 0`, `max_tokens` MUST be clamped to `floor(W/4)` with one WARN naming the model (A-18).
 
 **D3 — unknown window**
 - **FR-006**: Cloud class with no source → 128,000, source `floor`, one WARN.
-- **FR-007**: Local class (`ollama`, `vllm`, `lmstudio`, or loopback/private API host) → mandatory live query, no floor.
-- **FR-008**: No live window → `model_unavailable` with the exact D3 message naming Settings → Context → Model overrides; provider row and picker show it; writing `model_overrides` triggers a reload and makes the model usable without restart.
+- **FR-007**: `locality: local` (S67's predicate; not redefined here) → mandatory live query, no floor; `locality: cloud` → floor.
+- **FR-008**: No live window → `context_window_unknown` (attribution `config`, third in the pre-turn gate) with the exact D3 message naming Settings → Models → Model overrides; the catalog `GET` projection carries `window_unknown: true` and per-model `window_source` (S68 renders); writing `model_overrides` triggers a reload and makes the model usable without restart.
 
 **D4 — caps and bounds**
 - **FR-009**: Exactly one function admits every tool result (the twelve producers; repair placeholder exempt and bounded by construction); a grep-style test enforces the list.
@@ -711,14 +719,14 @@ head/tail 50/50; mark length counted toward the cap; no rune split
 - **FR-033**: Order: ingest bound → filter → cap/clamp + line bound → archive append + state → check → empty → assemble → call.
 
 **D7 — typed exits**
-- **FR-034**: `turn_canceled` (attribution `user`, neutral notice in the SPA), `turn_timed_out` (`provider`), `context_unrecoverable` (`product`) in `LLMError.yaml`; `user` added to the attribution vocabulary; each exit → log line with raw cause + turn-end event + transcript entry; regenerated in the same commit.
+- **FR-034**: `turn_canceled` (attribution `user`, neutral notice in the SPA), `turn_timed_out` (`provider`), `context_unrecoverable` (`product`), `context_window_unknown` (`config`) in **all four** `LLMError` copies (`LLMError.yaml`, `LLMErrorReplay.yaml`, asyncapi inline `LLMError`/`LLMErrorReplay`); `user` added to every copy's attribution vocabulary; the round-trip and four-copies tests pass; the file edit ships in S67's coordinated contract commit; each exit → log line with raw cause + turn-end event + transcript entry.
 
 **D8 — NOT ADOPTED**
 - **FR-035**: No learning from provider error text; `contextOverflowSubstrings` classifies only.
 
 **D9 — settings**
 - **FR-036**: `GET/PUT /api/v1/settings/context` (`ContextSettings.yaml`, `ContextSettingsUpdate.yaml` partial) with caps, `absolute_trigger_chars`, `ingest_bound_bytes`, `default_context_window`, `model_overrides[{provider, model, context_window}]`; validation per §5; every write → `TriggerReload`; `withAuth`.
-- **FR-037**: `Agent.yaml` exposes `context_window_effective`, `context_window_source`, `context_window_clamped`; `AgentUpdateRequest.yaml` accepts `context_window_override`; write → `TriggerReload`.
+- **FR-037**: `ContextWindowSource.yaml` (owned here) is `$ref`'d by `Agent.context_window_source` and S68's `DefaultModel.window_source`; `Agent.yaml` (S67's coordinated commit) exposes the three read-only fields as optional; `AgentUpdateRequest.yaml` accepts `context_window_override`; write → `TriggerReload`; S68's default-model GET calls `ResolveWindow(provider, model)`.
 
 **D10 — ingest**
 - **FR-038**: Ingest bound default 8,000,000 bytes, setting < 8,388,608; MCP enforced on the transport read (stdio reader bound in `sandboxedStdioConn`; `http.MaxBytesReader` for HTTP/SSE); all five search providers bounded (the two 1 MiB sites raised); `fetch_url` fallback 8 MB; exceeding → tool failure, never truncation.
@@ -734,7 +742,8 @@ head/tail 50/50; mark length counted toward the cap; no rune split
 - **SC-004**: Catalog, `windowTrim`, pre-turn, mid-turn, timeout, model-switch → one window, one B (§17.3).
 - **SC-005**: 64,001-char user message on WS, SSE and a channel → 0 transcript entries, 0 turns, 0 error frames; 64,001-char arguments → refusal then a further LLM call; the guard is reached only under an injected fault and then produces `context_unrecoverable` with 0 further provider calls (§17.4).
 - **SC-006**: Each of the four silent returns → ≥1 log line, 1 turn-end event, 1 transcript entry; never `unknown` (§17.5).
-- **SC-007**: Local endpoint with no window → never 128,000; override write → reload → next turn runs (§17.6).
+- **SC-007**: `locality: local` endpoint with no window → `context_window_unknown`, `window_unknown: true` in the projection, never 128,000; override write → reload → next turn runs (§17.6).
+- **SC-013**: `ResolveWindow(provider, model)` without an agent returns the rung-2–6 window + source; exempt → 0/no source (§17.7).
 - **SC-008**: On an 8,192-token model: a 200,000-char result enters ≤ 0.5 B; a 3-call step fits; no guard (§17.4b).
 - **SC-009**: `grep -rn 'maxTokens \* 4\|contextWindow = 128000\|newContextWindow = 128000\|SummarizeTokenPercent\|refreshRestorePointFromSession\|restorePointHistory' pkg/agent pkg/config` → empty; exactly one `cloudWindowFloor`.
 - **SC-010**: Live bytes = reload bytes for an emptied message (§17.2c).
@@ -745,7 +754,7 @@ head/tail 50/50; mark length counted toward the cap; no rune split
 
 | FR | US | BDD | Tests |
 |---|---|---|---|
-| FR-001 | US-1 | B-01, B-02, B-02b, B-04, B-07, B-08 | 1, 4, 5 |
+| FR-001 | US-1 | B-01, B-02, B-02b, B-04, B-04b, B-04c, B-07, B-08 | 1, 3c, 4, 5 |
 | FR-002 | US-1 | B-03, B-03b | 2 |
 | FR-003 | US-1 | B-04 | 5 |
 | FR-004 | US-1 | B-06 | 6, 22 |
@@ -753,7 +762,7 @@ head/tail 50/50; mark length counted toward the cap; no rune split
 | FR-005b | US-1 | B-05b | 3b |
 | FR-006 | US-2 | B-07, B-10b | 1, 4 |
 | FR-007 | US-2 | B-08, B-09 | 4 |
-| FR-008 | US-2 | B-09, B-10 | 37 |
+| FR-008 | US-2 | B-09, B-10 | 4, 37, 46b |
 | FR-009 | US-3 | B-11 | 7, 11 |
 | FR-010 | US-3, US-11 | B-11, B-13, B-14, B-16b | 7, 41 |
 | FR-011 | US-3 | B-11b, B-11c, B-12 | 8, 15, 40 |
@@ -782,7 +791,7 @@ head/tail 50/50; mark length counted toward the cap; no rune split
 | FR-034 | US-9 | B-40, B-41 | 20, 36, 44, 48 |
 | FR-035 | US-1 (non-behaviour) | B-07 | 21 |
 | FR-036 | US-11 | B-44, B-14 | 41, 44, 46 |
-| FR-037 | US-11 | B-45 | 42 |
+| FR-037 | US-11 | B-45, B-04b | 42, 3c, 44 |
 | FR-038 | US-12 | B-46 | 23, 24, 25 |
 | FR-039 | US-13 | B-47 | 45 |
 | FR-040 | US-13 | B-47 | 45 |
@@ -803,11 +812,13 @@ head/tail 50/50; mark length counted toward the cap; no rune split
 | 4c | FR-030 | B-35 | 39 | SC-011 |
 | 5 | FR-034 | B-40 | 20, 36 | SC-006 |
 | 6 | FR-007, FR-008 | B-09, B-10, B-10b | 4, 37 | SC-007 |
+| 7 | FR-001, FR-037 | B-04b | 3c | SC-013 |
 
 ---
 
 ## 9. Prerequisites, Setup, Stack, Runtime
 
+- **Requires S67 merged** (`catalog.Resolve(provider, model).Window()`, `locality`, `cli_driver`, the coordinated contract commit) — until then test 1's catalog rows are skipped, not faked (X-27). S66's SPA work is split: the Settings → Models context section (test 46, independent) and the row/picker/card tail (test 46b, after S68). Land S67 → S68 → S66 (X-29).
 - Go 1.26.4 toolchain (targets 1.22+), Node 20+, `golangci-lint`, `govulncheck`; no new runtime dependencies. Provider endpoints mocked in tests. `make gen-contracts` after editing `contracts/`; SPA embed sync before an embedded-binary check; push for CI.
 - **Runtime:** one new cache file `$OMNIPUS_HOME/cache/model_limits.json`; no new listeners; logs in `$OMNIPUS_HOME/logs/gateway.log`.
 
@@ -826,10 +837,10 @@ head/tail 50/50; mark length counted toward the cap; no rune split
 | A-7 | ACCEPTED | Name (and id) ≤ 64 chars, non-printables stripped. |
 | A-8 | RESOLVED | 8 MB (8,000,000) transport bound, setting < 8,388,608; plus the encoded-line bound (MAJ-008). |
 | A-9 | ACCEPTED | 24 h, `$OMNIPUS_HOME/cache/model_limits.json`; key (id, base URL, model). |
-| A-10 | ACCEPTED | `operator \| live \| catalog \| floor` + `clamped`. |
+| A-10 | ACCEPTED | `operator \| live \| catalog \| floor` + `clamped`; now a shared `ContextWindowSource.yaml` (X-06). |
 | A-11 | ACCEPTED | WARN + `tool_result_large_total` in `metrics.go::toolMetrics`. |
 | A-12 | REVISED (MAJ-006) | Turn number = 1 + preceding `role: user` archive lines. |
-| A-13 | ACCEPTED | `/api/v1/settings/context`, `ContextSettings.yaml`; agent fields on `Agent.yaml`/`AgentUpdateRequest.yaml`; ADR-068 route separate. |
+| A-13 | ACCEPTED | `/api/v1/settings/context`, `ContextSettings.yaml`; agent fields on `Agent.yaml`/`AgentUpdateRequest.yaml` (S67 commits); user-facing location **Settings → Models** (X-37); ADR-068 route separate. |
 | A-14 | MOOT | D8 not adopted. |
 | A-15 | ACCEPTED | `capped \| emptied`, now keyed `(id, line)` (MAJ-007). |
 | A-16 | ACCEPTED | 50/50, mark counted. |
@@ -847,7 +858,7 @@ head/tail 50/50; mark length counted toward the cap; no rune split
 4. **(Happy)** Ask for a long delegated report → the parent's view is capped at 64,000 with a mark; recall retrieves the rest (product decision visible).
 5. **(Error)** Paste 100,000 chars in the SPA, then the same via a Slack channel → both refused with size and limit; no session entry.
 6. **(Error)** Press Stop mid-turn → neutral "you stopped this turn" notice (not an error toast); transcript entry; log line.
-7. **(Edge)** Ollama model with no reported context length → refusal message names Settings → Context → Model overrides; setting it works without restart.
+7. **(Edge)** Ollama model with no reported context length → refusal message names Settings → Models → Model overrides; the provider row shows the state; setting it works without restart.
 8. **(Edge)** 8k Ollama model, a tool returning 200 KB → turn completes; result visibly capped.
 9. **(Edge)** Abort right after results were emptied → new turn sees un-emptied (capped/full) results.
 10. **(Edge)** Live-equals-reload through the embedded binary against a real provider adapter (Anthropic and an OpenAI-compatible one): provider request bytes for an emptied message equal the reload assembly.
@@ -861,16 +872,20 @@ head/tail 50/50; mark length counted toward the cap; no rune split
 - The estimator (2.5 chars/token) is the unit of all token arithmetic (no calibration path).
 - Recall `offset`/`length` are runes, not bytes (differs from `read_file`'s byte offsets; same parameter names only).
 
-## 13. Spec-review disposition (2026-08-22)
+## 13. Review dispositions (2026-08-22)
+
+**Cross-spec review (S66/A66 items):** X-01, X-06, X-07, X-08, X-09, X-16, X-17, X-18, X-19, X-20, X-27, X-28, X-29, X-31, X-34, X-35, X-36, X-37, X-42 — all verified against the tree and applied (X-37 per the coordinator: Settings → Models). None refuted.
+
+**Single-document spec review:**
 
 All 37 findings verified against the branch; none refuted. CRIT-001…004 per the coordinator's decisions; MAJ-001…016 applied as decided; MIN-001…012 applied; OBS-001…005 applied. Register #3 (pre-turn-kept oversized turns) resolved by making earlier-turn results eligible for emptying (FR-017, B-21b), pinned in the regression table — confirmed by the coordinator. A-18 and A-19 accepted and closed.
 
 ### Summary
 
 - User stories: **12** (US-1…US-9, US-11, US-12, US-13; US-10 withdrawn)
-- BDD scenarios: **58** (HP 30 · AP 9 · EP 10 · EC 9; 10 outlines)
-- Test datasets: **9**, **74** rows
+- BDD scenarios: **60** (HP 31 · AP 9 · EP 10 · EC 10; 10 outlines)
+- Test datasets: **9**, **75** rows
 - Functional requirements: **41** (incl. FR-005b; FR-035 is the D8 non-behaviour)
-- Success criteria: **12**
-- Tests planned: **49** (26 unit, 20 integration, 3 E2E)
+- Success criteria: **13**
+- Tests planned: **51** (27 unit, 20 integration, 4 E2E)
 - Ambiguities: **19** — **all closed**
