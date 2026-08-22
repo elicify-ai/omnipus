@@ -1,7 +1,7 @@
 # Feature Specification: ADR-068 — Subscription login policy, provider deletion, the default model, and the provider UX at 190 providers
 
 **Created**: 2026-08-22
-**Status**: Draft (plan-spec output; Phase 1 gate taken as the ADR itself — see "Ambiguity Warnings" for everything the ADR is silent on)
+**Status**: Draft — all 18 ambiguities resolved by operator/coordinator on 2026-08-22 (see "Ambiguity Warnings", each row marked RESOLVED with the decision applied in the body)
 **Input**: [`docs/internal/architecture/ADR-068-subscriptions-provider-deletion-and-provider-ux.md`](../architecture/ADR-068-subscriptions-provider-deletion-and-provider-ux.md) (Proposed, 2026-08-22) plus the §8a resolutions of [`ADR-066 …-review-pass2.md`](../architecture/ADR-066-context-budget-and-tool-result-routing-review-pass2.md) (MAJ-011, MAJ-012, MAJ-013, MAJ-015, MIN-008).
 **Branch**: `feat/context-budget-and-tool-result-routing`
 **Format precedent**: [`agent-form-requirements.md`](./agent-form-requirements.md) (UI spec), [`provider-validation-centralization-spec.md`](./provider-validation-centralization-spec.md) (provider REST spec)
@@ -45,7 +45,9 @@
 | `pkg/providers/claude_cli_provider.go` (+ tests) | **deleted** | Descoped (D13 §2.3 item 2). |
 | `pkg/providers/codex_cli_provider.go` | **keeps, re-keyed** | Becomes what the id `codex-cli` dispatches to (subprocess). |
 | `pkg/providers/codex_provider.go`, `codex_cli_credentials.go` | **keeps, re-keyed** | Become provider id `openai-chatgpt` (direct HTTP with the CLI's saved token). |
-| `pkg/auth/oauth.go::GoogleAntigravityOAuthConfig` | **deleted** | File stays; `OpenAIOAuthConfig`, `RequestDeviceCode`, `RefreshAccessToken` are used by `codex_provider.go`. |
+| `pkg/auth/oauth.go::GoogleAntigravityOAuthConfig` | **deleted** | Deleted with `antigravity`. |
+| `pkg/auth/oauth.go::{OpenAIOAuthConfig, RequestDeviceCode, PollDeviceCodeOnce, pollDeviceCode, RefreshAccessToken, BuildAuthorizeURL, ExchangeCodeForTokens}` and `codex_provider.go::createCodexTokenSource` | **deleted** (resolution #8) | Omnipus starts no device-code/OAuth flow of its own for OpenAI; sign-in state is read from the CLI's saved login only. What remains of `pkg/auth/oauth.go` after the greenfield delete is whatever non-provider callers still use (verified at implementation by `go build`); if nothing remains the file goes. |
+| `pkg/gateway/rest.go::HandleProviders` GET branch — permanent "disconnected" template rows | **removed** (resolution #16) | `GET /providers` returns configured providers only; the `cfg.Providers` seed templates are no longer echoed as rows. |
 | `pkg/credentials/store.go::Store.Delete` | **calls** | Deletes `<providerID>_API_KEY` on confirmed provider deletion. |
 | `pkg/gateway/gateway.go::triggerReloadAndWaitOutcome` | **calls** | Applies config changes to live agent instances; DELETE and default-model PUT must wait on it. |
 | `pkg/providers/catalog/gen/main.go` | **deleted** | Emits `src/lib/generated/providerCatalog.ts`; the TS emission goes. |
@@ -56,7 +58,7 @@
 | `src/components/settings/ProviderRow.tsx` | **modifies** | `signed_in` / `expired` states; Edit → Manage for sign-in providers. |
 | `src/components/settings/ReAuthDialog.tsx` | **extends** | Re-sign-in variant for expired vendor sessions. |
 | `src/components/ui/model-selector.tsx` | **modifies** | Vendor → release-date-desc ordering, Recommended chip, virtualisation above 100 items. |
-| `contracts/components/schemas/ProbeProviderRequest.yaml` (+ `pkg/gateway/inboundschemas/` copy) | **modifies** | `id` enum (61 values, incl. `antigravity`, `claude-cli`, `codexcli`) → free string. |
+| `contracts/components/schemas/ProbeProviderRequest.yaml` (+ `pkg/gateway/inboundschemas/` copy) | **modifies** | `id` enum (61 values, incl. `antigravity`, `claude-cli`, `codexcli`) → free string; gains optional `model` (resolution #12). |
 | `contracts/components/schemas/Provider.yaml` | **modifies** | `status` enum + new fields. |
 | `contracts/components/schemas/ProviderCatalogEntry.yaml` | **replaced by ADR-067's catalog schema** | Describes the 23-entry build-time catalog "never served from a live HTTP endpoint" — that description is now false by decision. |
 | `contracts/components/schemas/OnboardingCompleteRequest.yaml` | **modifies** | `provider.api_key` required today; gains `auth_method`. |
@@ -72,6 +74,8 @@
 | `AgentDefaults.ModelName/Provider` second writer | **MEDIUM** | `gateway.go` onboarding guards (must not fight the PUT); `agent.Registry` model resolution | every agent whose model resolves via the default provider |
 | `src/lib/generated/providerCatalog.ts` deleted | **HIGH** | `onboarding.tsx`, `ProvidersSection.tsx`, `ProviderPickerSheet.tsx`, `catalog_test.go::TestCatalog_EmbedMatchesGeneratedTS` (#13), `src/lib/constants.ts` key-hint map keyed by id | every vitest that imports `PROVIDER_CATALOG` |
 | `pkg/auth/oauth.go::GoogleAntigravityOAuthConfig` | **LOW** | `antigravity_provider.go` only (deleted together) | — |
+| `pkg/auth/oauth.go` OpenAI device-code flow deleted | **LOW** | `codex_provider.go::createCodexTokenSource` (deleted together); `pkg/auth` tests for those functions | the retired browser/device-code login path was already removed in `ab09a0ae`; no other caller expected — confirmed by `go build` at implementation |
+| `GET /providers` template rows removed | **MEDIUM** | `ProvidersSection.test.tsx` "template-provider filtering" describe (becomes dead — delete), `provider_credential_degraded_test.go` fixtures, `tests/e2e/providers.spec.ts` | onboarding "fallback default entry" consumers, if any |
 | `HandleProviders` DELETE branch (new) | **MEDIUM** | none (new) | `credentials.Store`, config writer, reload pipeline — new call pattern, seam tests required |
 
 **HIGH-risk warning (flagged per skill rule):** the two enum changes and the generated-catalog deletion each fan out across Go, TS and tests. They are deliberately batched into the single "antigravity deletion + contract regeneration" commit (ADR §2.4) so the tree is never half-migrated.
@@ -147,7 +151,7 @@ An operator who added OpenRouter to try it, and now uses Anthropic, cannot remov
 2. **Given** that dialog, **When** the operator confirms, **Then** the provider disappears from the list, its catalog entry is again selectable in the picker, and its stored key is gone from the credential store the moment the confirmation request succeeds.
 3. **Given** a provider used by agents A and B as their primary model, **When** the operator opens *Remove provider*, **Then** the dialog lists A and B by name under *"These agents will be left without a model"*.
 4. **Given** the dialog in (3), **When** the operator confirms, **Then** A and B show *"needs a model"* in the agent list, and a chat turn sent to A is refused with a typed error whose code is the one reserved for "no model assigned" — nothing is re-pointed silently.
-5. **Given** the provider backs the default model, **When** the operator opens *Remove provider*, **Then** the dialog contains an inline *New default model* selector restricted to **other connected** providers, and *Remove* is disabled until a new default is chosen.
+5. **Given** the provider backs the default model, **When** the operator opens *Remove provider*, **Then** the dialog contains an inline *New default model* selector restricted to **other connected** providers, and *Remove* is disabled until a new default is chosen. A provider that backs the default can never be removed while it backs it (operator decision, resolution #4); consequently the **last** connected provider can never be removed — its dialog reads *"This is your only provider and backs the default model; connect another provider and make it the default before removing this one."* with *Remove* permanently disabled.
 6. **Given** the dialog in (5) with a new default chosen, **When** the operator confirms, **Then** the default model changes to the new pair and the provider is removed, in that order, and the next turn of an agent using the default runs on the new pair without a restart.
 7. **Given** any successful removal, **When** the operator looks for an Undo, **Then** there is none — no toast offers to restore, and no client or server state retains the key.
 8. **Given** a removal request that names a provider not configured, **When** it is sent, **Then** the response is 404 and nothing changes.
@@ -228,7 +232,7 @@ An operator wants to know which catalog models *their* key can actually use. The
 1. **Given** a connected provider, **When** the operator clicks *Check with my account*, **Then** one live call is made with that provider's key, and models in the catalog but absent from the response are shown greyed with *"not available on this key"*.
 2. **Given** the response includes a model id the catalog lacks, **When** the result renders, **Then** that model is listed with the flag *limits unknown*.
 3. **Given** the live call fails, **When** the result renders, **Then** the catalog list is unchanged and an inline warning shows the upstream error; nothing is greyed.
-4. **Given** a checked provider, **When** the row is expanded, **Then** each model shows window · output · image · PDF and the window's source label (one of override / live / catalog / learned / floor, per ADR-066 D9).
+4. **Given** a checked provider, **When** the row is expanded, **Then** each model shows window · output · image · PDF and the window's source label (one of operator / live / catalog / floor, per ADR-066 D9 — `learned` does not exist: D8 was dropped by the operator 2026-08-22).
 
 ---
 
@@ -285,7 +289,8 @@ Error flows:
 - When "Check with my account" cannot reach the vendor, the system keeps the catalog list and shows the error inline.
 
 Boundary conditions:
-- When the catalog has fewer than 8 Popular providers, the system renders those present, never pads.
+- When the catalog has fewer than 8 `tier: popular` providers, the system renders those present, never pads.
+- When exactly one provider is connected, the system never allows its removal (it backs the default); an install always keeps ≥1 connected provider and a default.
 - When a model list has exactly 100 items, the system renders all rows; at 101 it virtualises.
 - When a provider has exactly 3 recommendable models, all three carry the chip; a fourth qualifying model does not.
 - When the search query is whitespace only, the system treats it as empty (list stays collapsed).
@@ -295,15 +300,19 @@ Boundary conditions:
 
 ## Edge Cases
 
-- Removing the **only** configured provider: allowed; the default is necessarily backed by it, so the dialog cannot offer another connected provider — the dialog says *"This is your only provider. Removing it leaves every agent without a model."* and *Remove* is enabled (no inline re-pick possible); afterwards the Default model card reads *"No default model"* with *Choose* opening the picker. *(Assumption — see Ambiguity #4.)*
+- Removing the **only** connected provider: **refused** (resolution #4). It necessarily backs the default, the dialog cannot offer another connected provider, so it reads *"This is your only provider and backs the default model; connect another provider and make it the default before removing this one."* and *Remove* is disabled. The server enforces the same rule: `DELETE` without a valid `new_default` → 409. There is no "No default model" state after onboarding.
+- Provider that backs the default but other providers are connected: removal proceeds only with the inline new default; the server applies the new default first, then removes the provider.
 - Two providers configured from the **same company** (e.g. Z.ai Coding Plan and Pay-as-you-go): removal targets one variant id; the other row and its key are untouched.
 - A provider whose key is referenced by `api_key_ref` but the credential is already missing from the store: removal succeeds (config row removed, `Delete` on a missing name is not an error).
 - Concurrent removal and PUT on the same id: the second request observes the first's result under `configMu`; a PUT after DELETE re-creates the provider as new (api_key required).
 - A dependent agent that is **locked core** (Mia/Jim/Ava/Ray): listed like any other; it, too, is left needing a model — core status does not exempt it.
-- An agent whose **fallback** model points at the removed provider: the fallback entry is removed and the agent is listed under *"uses as fallback"* in the dialog *(Assumption — Ambiguity #3)*.
+- An agent whose **fallback** model points at the removed provider: the fallback entry is removed and the agent is listed under *"uses as fallback"* in the dialog (resolution #3).
+- An agent that is both `needs_model` (this spec) and `degraded_reason: needs_provider` (ADR-067 MAJ-010): both flags may be true; the agent list renders the `needs_provider` copy (resolution #5).
+- `openai-chatgpt` token carrying its own expiry claim: `expired` follows the claim; the 1 h `auth.json` age rule applies only when no claim exists (resolution #13).
+- Onboarding: the operator changes the model after a successful probe → the probe re-runs with the new `model`; *Finish* is disabled until the re-probe passes (resolution #12).
 - Sign-in provider whose CLI binary is not on PATH: the sign-in panel shows *"`codex` not found on this machine"* with the install hint; status stays `disconnected`.
 - Sign-in with the vendor CLI logged in under an account the operator cannot identify: `account_label` falls back to the vendor name (*"Signed in"*).
-- `openai-chatgpt` token file older than the vendor's refresh window: status `expired`, row routes to re-sign-in, which instructs *"Run `codex login` again"*.
+- `openai-chatgpt` token past its expiry claim (or, with no claim, `auth.json` older than 1 h): status `expired`, row routes to re-sign-in, which instructs *"Run `codex login` again"*.
 - Search query containing regex metacharacters (`(`, `[`, `*`): treated literally.
 - Search query in CJK for a Chinese vendor's alias (e.g. 智谱): matches via the catalog's alias list when present.
 - Locale `zh-CN` → region `china`; `en-US` → `us` where the provider has a US region, else `intl`; any other → `intl`.
@@ -325,6 +334,9 @@ Boundary conditions:
 - The system must not pre-select a model in onboarding, because the operator decided the user picks.
 - The system must not hide unsupported providers, because hidden options generate "where is X?" tickets; they are shown disabled with the reason.
 - The system must not keep any alias, shim, migration, retired-name list or boot notice for `antigravity` or `claude-cli`, because greenfield means no trace.
+- The system must not drive OpenAI's OAuth/device-code client in-app (resolution #8), because that is the token handling the policy avoids; the `pkg/auth` OpenAI device-code flow is deleted.
+- The system must not echo unconfigured template providers as "disconnected" rows in `GET /providers` (resolution #16), because a row the operator never created is not theirs to manage.
+- The system must not allow removal of the provider that backs the default model, nor of the last connected provider (resolution #4), because an install must always keep a default.
 - The system must not bake the provider catalog into the SPA bundle, because the catalog refreshes daily.
 - The system must not hand-write any wire-format struct/interface for the new routes (Constraint #8, lint-caught).
 - The system must not poll any vendor's `/models` on a timer; the live call is on explicit operator action only.
@@ -358,18 +370,21 @@ Boundary conditions:
 - Providers-catalog GET cached client-side; at most **one** network fetch per SPA session unless the validator changes (TanStack Query `staleTime` = session).
 
 **Data Constraints**:
-- `ProbeProviderRequest.id`: string, `minLength 1`, `maxLength 64`, pattern `^[a-z0-9][a-z0-9._-]*$`, no `enum`.
+- `ProbeProviderRequest.id`: string, `minLength 1`, `maxLength 64`, pattern `^[a-z0-9][a-z0-9._-]*$`, no `enum`. `ProbeProviderRequest.model`: optional string `1..256`; when present the probe uses exactly that model (resolution #12); when absent, the provider's first Recommended model from the catalog.
+- `GET /providers` returns **configured providers only** — no template/"disconnected" rows for unconfigured catalog entries (resolution #16).
 - `Provider.status` enum: exactly `connected | disconnected | error | signed_in | expired`.
 - `Provider.auth_method` enum: `api_key | sign_in`; `Provider.account_label`: string, `maxLength 128`, present only when `status = signed_in | expired`.
 - `Provider.dependents`: array of `{id: string, name: string, role: "primary" | "fallback"}`, always present (empty array when none); `Provider.backs_default`: boolean, always present.
 - `ProviderDeleteRequest.new_default`: optional object `{provider: string(1..64), model: string(1..256)}`.
 - `ProviderDeleteResponse`: `{deleted: true, dependents: [...], default_changed: boolean, new_default?: {provider, model}}`.
-- `DefaultModel` (GET/PUT body): `{provider: string, model: string, context_window?: integer ≥ 0, window_source?: "override"|"live"|"catalog"|"learned"|"floor"}`; `PUT` accepts only `{provider, model}` (`additionalProperties: false`).
+- `DefaultModel` (GET/PUT body): `{provider: string, model: string, context_window?: integer ≥ 0, window_source?: "operator"|"live"|"catalog"|"floor"}`; `PUT` accepts only `{provider, model}` (`additionalProperties: false`).
 - `OnboardingCompleteRequest.provider.auth_method`: enum `api_key | sign_in`, **required**; `api_key` required iff `auth_method = api_key`.
 - `SignInStartResponse`: `{method: "cli_login" | "device_code", instructions: string, command?: string, user_code?: string, verification_uri?: string, expires_at?: date-time}`.
 - `SignInStatus`: `{state: "not_signed_in" | "pending" | "signed_in" | "expired", account_label?: string, expires_at?: date-time}`.
-- Popular set: exactly these 8 ids in this order: `openai, anthropic, openrouter, google, xai, groq, mistral, deepseek` (ADR-067 §4.2; pass-2 MIN-008 pins it at 8).
-- Recommended chip: ≤ 3 per provider; eligibility = `tool_calling = true AND context_window ≥ 128000`; tie-break = release date desc, then id asc.
+- Popular set: the providers whose catalog `tier` is `popular`, rendered in catalog order — expected to be exactly `openai, anthropic, openrouter, google, xai, groq, mistral, deepseek` (ADR-067 §4.2; pass-2 MIN-008). **Never a SPA constant** (resolution #1); the SPA reads `tier` from the catalog GET.
+- Recommended chip: ≤ 3 per provider; eligibility = catalog `tool_call = true AND context_window ≥ 128000 AND status ≠ deprecated/retired`; tie-break = `release_date` desc, then id asc.
+- `Agent.needs_model`: boolean, always present, derived = primary `model` empty OR its `provider` not configured. When ADR-067's `degraded_reason: needs_provider` is also set, the list copy shows *needs a provider* (resolution #5).
+- Sign-in `expired` rule: token expiry claim when present; else `auth.json` mtime > 1 h (resolution #13).
 - Region inference map: `zh-*` → `china`; `en-US` → `us` if offered else `intl`; everything else → `intl`.
 - Persisted provider ids for the OpenAI subscription paths: exactly `codex-cli` (subprocess) and `openai-chatgpt` (HTTP); no other spelling is accepted anywhere (`codexcli` removed).
 - Credential name deleted on removal: exactly `<providerID>_API_KEY` (the name `storeCredential` writes today).
@@ -396,7 +411,7 @@ No new nominal Go types beyond the generated wire types. Provider ids, model ids
 ## Prerequisites
 
 - **Hardware / OS**: any platform Omnipus builds for; sign-in providers additionally need the vendor CLI binary for that OS.
-- **Required runtimes**: Go 1.26.4 (go.mod), Node 20+; `codex` CLI on PATH for `codex-cli`/`openai-chatgpt`; GitHub Copilot CLI on PATH for `github-copilot` *(id per Ambiguity #7)*.
+- **Required runtimes**: Go 1.26.4 (go.mod), Node 20+; `codex` CLI on PATH for `codex-cli`/`openai-chatgpt`; GitHub Copilot CLI on PATH for `github-copilot` (resolution #7).
 - **Required services**: none beyond the gateway.
 - **Network assumptions**: outbound HTTPS to the chosen vendor for probe/"Check with my account"; the providers-catalog GET is served by the gateway from ADR-067's embedded/pulled snapshot, so the picker works offline.
 - **Accounts / credentials**: an API key or a vendor subscription the operator already holds; credential store unlocked (ADR-004).
@@ -460,7 +475,7 @@ No new nominal Go types beyond the generated wire types. Provider ids, model ids
 
 - **Data in**: none from this feature.
 - **Data out**: the catalog document via the providers-catalog GET.
-- **Contract**: ADR-067 §5 schema. **Fields this spec consumes and therefore requires** (to be confirmed against ADR-067's schema — Ambiguity #1): per provider `id, display_name, company, tier (popular|standard|unsupported), unsupported_reason?, auth_methods[], plans[], regions[], protocol, aliases[]`; per model `id, display_name, release_date?, tool_calling, context_window, modalities`.
+- **Contract**: ADR-067 §5 schema 2.0.0, which (resolution #1, instructed into the ADR-067 spec) carries exactly the fields this spec consumes: per provider `id, name, tier (popular|standard|unsupported), unsupported_reason, auth_methods[] (api_key|sign_in), aliases[]` (search only); per model `id, name, release_date, tool_call, context_window, max_output_tokens, input_modalities, status`. Plans/regions/protocol are ADR-067 provider-table data already present. This spec adds no field anywhere else.
 - **On failure**: SPA shows picker error state with Retry and Custom endpoint; server already falls back to the embedded snapshot.
 - **Development**: a 190-entry JSON fixture under `src/test/fixtures/providers-catalog.json` generated once from the real snapshot.
 
@@ -566,6 +581,17 @@ No new nominal Go types beyond the generated wire types. Provider ids, model ids
 - **Then** the turn is refused with a typed config error
 - **And** neither the error message nor any log line contains `claude-cli` or `claude`
 
+#### Scenario: GET /providers returns configured providers only
+
+**Traces to**: User Story 3, Acceptance Scenario 8
+**Category**: Edge Case
+
+- **Given** the seed templates in `config.json` name ten providers and the operator has configured only `openrouter`
+- **When** `GET /api/v1/providers` is called
+- **Then** the response contains exactly one row, `openrouter`
+- **And** no row with `status: disconnected` exists for any unconfigured catalog entry
+- **And** `DELETE /api/v1/providers/groq` returns 404
+
 #### Scenario: Signed-in row shows account and Manage
 
 **Traces to**: User Story 2, Acceptance Scenario 7
@@ -617,8 +643,8 @@ No new nominal Go types beyond the generated wire types. Provider ids, model ids
 - **Given** agents "Ava" and "Scout" have `provider: "openrouter"` as primary
 - **When** the operator opens *Remove provider* for OpenRouter
 - **Then** the dialog lists *Ava* and *Scout* under *"These agents will be left without a model"*
-- **And** after confirming, `GET /api/v1/agents` shows both with `needs_model: true`
-- **And** the agent list renders *needs a model* on both rows
+- **And** after confirming, `GET /api/v1/agents` shows both with `needs_model: true` and empty `model`/`provider`
+- **And** the agent list renders *needs a model* on both rows (or *needs a provider* when ADR-067's `degraded_reason: needs_provider` is also set)
 
 #### Scenario: Turn to an agent without a model is refused, not re-pointed
 
@@ -681,15 +707,36 @@ No new nominal Go types beyond the generated wire types. Provider ids, model ids
 - **Then** the response is HTTP 503 with the existing "credential store locked" message
 - **And** `config.json` is byte-identical to before
 
-#### Scenario: Removing the only provider
+#### Scenario: Removing the only provider is refused
 
 **Traces to**: User Story 3, Acceptance Scenario 5
 **Category**: Edge Case
 
-- **Given** exactly one provider is configured and it backs the default
+- **Given** exactly one provider is connected and it backs the default
 - **When** the operator opens *Remove provider*
-- **Then** the dialog reads *"This is your only provider. Removing it leaves every agent without a model."* and *Remove* is enabled
-- **And** after confirming, the Default model card reads *No default model* with a *Choose* action
+- **Then** the dialog reads *"This is your only provider and backs the default model; connect another provider and make it the default before removing this one."*
+- **And** *Remove* is disabled and no *New default model* selector is offered (there is no other connected provider)
+- **And** a direct `DELETE /api/v1/providers/{id}` with no body returns HTTP 409 and the provider, its key and the default are unchanged
+
+#### Scenario: `claude-cli` leaves no trace in the source tree
+
+**Traces to**: User Story 2, Acceptance Scenario 6
+**Category**: Happy Path
+
+- **Given** the descoping commit is checked out
+- **When** `grep -ril 'claude-cli' pkg cmd src contracts config docs` is run
+- **Then** every path returned is a historical decision record (the same allow-list rule as `antigravity`); `pkg/providers/claude_cli_provider.go` and its tests do not exist
+- **And** the grep target is the id `claude-cli`, never the word "claude" (a model family name)
+
+#### Scenario: OpenAI device-code flow leaves no trace
+
+**Traces to**: User Story 2, Acceptance Scenario 2
+**Category**: Happy Path
+
+- **Given** the feature branch
+- **When** `grep -rn 'RequestDeviceCode\|PollDeviceCodeOnce\|OpenAIOAuthConfig\|createCodexTokenSource' pkg cmd` is run
+- **Then** it returns nothing
+- **And** `POST /api/v1/providers/openai-chatgpt/sign-in` returns `method: "cli_login"` with `command: "codex login"` — never `device_code`
 
 #### Scenario: Fallback references are removed and listed
 
@@ -763,8 +810,9 @@ No new nominal Go types beyond the generated wire types. Provider ids, model ids
 
 - **Given** the picker is opened from onboarding step 3
 - **When** it renders
-- **Then** exactly 8 elements with `data-testid^="picker-popular-"` exist in the order openai, anthropic, openrouter, google, xai, groq, mistral, deepseek
+- **Then** exactly 8 elements with `data-testid^="picker-popular-"` exist — one per catalog provider with `tier: popular`, in catalog order (the fixture's: openai, anthropic, openrouter, google, xai, groq, mistral, deepseek)
 - **And** an element `data-testid="picker-all-toggle"` reads *All providers (182)* and `aria-expanded="false"`
+- **And** changing the fixture so `groq` is `tier: standard` and `cerebras` is `tier: popular` re-renders the band accordingly with no SPA code change
 
 #### Scenario: Search expands and filters the full list
 
@@ -896,6 +944,7 @@ No new nominal Go types beyond the generated wire types. Provider ids, model ids
 - **Then** its accessible label is *Model for your first agent*
 - **And** it has no value and *Finish* is disabled
 - **And** a chip row may show Recommended models but none is selected
+- **And** choosing a model sends `POST /onboarding/probe-provider` with that `model`; changing the model afterwards re-sends the probe and disables *Finish* until it passes
 
 #### Scenario Outline: Model selector virtualisation threshold
 
@@ -946,7 +995,7 @@ No new nominal Go types beyond the generated wire types. Provider ids, model ids
 
 - **Given** a connected provider row
 - **When** it is expanded
-- **Then** each model line shows window · output · image · PDF values and a source label from {override, live, catalog, learned, floor}
+- **Then** each model line shows window · output · image · PDF values and a source label from {operator, live, catalog, floor}
 
 ---
 
@@ -1007,20 +1056,24 @@ No new nominal Go types beyond the generated wire types. Provider ids, model ids
 **Category**: Error Path
 
 - **Given** onboarding is not complete
-- **When** `POST /onboarding/probe-provider` is sent with id `<id>` and endpoint `<endpoint>`
+- **When** `POST /onboarding/probe-provider` is sent with id `<id>`, endpoint `<endpoint>` and model `<model>`
 - **Then** the response is `<status>`
 
 **Examples**:
 
-| id | endpoint | status |
-|---|---|---|
-| openrouter | — | 200 (probe runs) |
-| not-a-provider | — | 400 field=id, body lacks any id list |
-| not-a-provider | https://gw.example/v1 | 200 (custom path) |
-| "" | — | 400 field=id |
-| OPENROUTER | — | 400 field=id (pattern) |
-| a×65 | — | 400 field=id (maxLength) |
-| antigravity | — | 400 field=id, body does not contain "antigravity" beyond echoing nothing |
+| id | endpoint | model | status |
+|---|---|---|---|
+| openrouter | — | — | 200 (probe runs with the first Recommended model) |
+| openrouter | — | z-ai/glm-5.2 | 200 (probe runs with exactly that model) |
+| openrouter | — | not/a-model | 200 `success:false` with the upstream error (the probe is the validation) |
+| not-a-provider | — | — | 400 field=id, body lacks any id list |
+| not-a-provider | https://gw.example/v1 | — | 200 (custom path) |
+| "" | — | — | 400 field=id |
+| OPENROUTER | — | — | 400 field=id (pattern) |
+| a×65 | — | — | 400 field=id (maxLength) |
+| antigravity | — | — | 400 field=id, body does not contain "antigravity" beyond echoing nothing |
+| claude-cli | — | — | 400 field=id, body does not contain "claude-cli" |
+| openrouter | — | 257 chars | 400 field=model (maxLength) |
 
 #### Scenario: SPA reads the catalog from the GET, not a bundle
 
@@ -1060,8 +1113,8 @@ Conventions: Go tests run as `CGO_ENABLED=0 go test -tags goolm,stdjson -run '^T
 
 | Order | Test Name | Level | Traces to BDD Scenario | Description |
 |---|---|---|---|---|
-| 1 | `TestNoAntigravityInTree` | Unit (Go, `pkg/providers`) | Antigravity leaves no trace in the source tree | Walks `pkg cmd src contracts config docs`, asserts only the allow-listed historical files contain the word |
-| 2 | `TestProbeProviderID_Validation` | Unit (Go) | Probe provider id validation | Table over the outline rows; asserts status, field, no id list echoed |
+| 1 | `TestNoRemovedProviderInTree` | Unit (Go, `pkg/providers`) | Antigravity leaves no trace…; `claude-cli` leaves no trace…; OpenAI device-code flow leaves no trace | Walks `pkg cmd src contracts config docs` for `antigravity`, the id `claude-cli`, and the deleted `pkg/auth` device-code symbols; asserts only the allow-listed historical files match |
+| 2 | `TestProbeProviderID_Validation` | Unit (Go) | Probe provider id validation | Table over the outline rows; asserts status, field, no id list echoed; optional `model` is passed through to the probe verbatim, absent → first Recommended |
 | 3 | `TestProviderDependents` | Unit (Go, `pkg/gateway`) | Dependents are listed…; Fallback references are removed and listed | Computes `{id,name,role}` from agent entities incl. fallback role |
 | 4 | `TestFactory_NoVendorCaseForRemovedIDs` | Unit (Go) | `claude-cli` is an unknown provider | `antigravity`, `claude-cli`, `claudecli`, `codexcli` construct nothing; `codex-cli` → `*CodexCliProvider`; `openai-chatgpt` → `*CodexProvider` |
 | 5 | `TestRecommendedChipSelection` (`model-ordering.test.ts`) | Unit (TS) | At most three Recommended chips per provider | eligibility + tie-break |
@@ -1074,7 +1127,9 @@ Conventions: Go tests run as `CGO_ENABLED=0 go test -tags goolm,stdjson -run '^T
 | 12 | `TestDeleteProvider_DefaultRequiresReplacement409` | Integration (Go) | DELETE without replacement… is refused | 409, nothing changed |
 | 13 | `TestDeleteProvider_WithNewDefault` | Integration (Go) | Default-backing provider requires an inline new default | order: default changed then provider removed; reload waited |
 | 14 | `TestDeleteProvider_404_503_Bypass503` | Integration (Go) | Removing an unconfigured…; Removal refused while locked | 404 / 503 / RequireNotBypass 503 |
-| 15 | `TestDeleteProvider_OnlyProvider` | Integration (Go) | Removing the only provider | default cleared, GET default-model empty |
+| 15 | `TestDeleteProvider_OnlyProviderRefused409` | Integration (Go) | Removing the only provider is refused | 409, provider/key/default unchanged; RemoveProviderDialog renders the only-provider copy with Remove disabled |
+| 15a | `TestListProviders_ConfiguredOnly` | Integration (Go) | GET /providers returns configured providers only | seed templates not echoed; one row; DELETE on template id → 404 |
+| 15b | `TestSignInStart_CLILoginOnly` | Integration (Go) | OpenAI device-code flow leaves no trace | `method: cli_login`, `command: "codex login"`; no device_code branch exists |
 | 16 | `TestDeleteProvider_FallbackRemoved` | Integration (Go) | Fallback references are removed and listed | fallback entry dropped, `needs_model` false |
 | 17 | `TestDefaultModel_PutGet` | Integration (Go) | Change default model takes effect on the next turn | PUT → GET round-trip; registry resolves new pair (mirrors `rest_default_agent_singleton_test.go`) |
 | 18 | `TestDefaultModel_PutValidation` | Integration (Go) | Default-model PUT validation | outline rows |
@@ -1124,7 +1179,8 @@ Conventions: Go tests run as `CGO_ENABLED=0 go test -tags goolm,stdjson -run '^T
 | 5 | `{"new_default":{"provider":"groq","model":"x"}}` (unconfigured) | Error | 400 | Default-model PUT validation | |
 | 6 | `{"new_default":{}}` | Empty object | 400 | Default-model PUT validation | required fields |
 | 7 | malformed JSON | Corrupt | 400 | Default-model PUT validation | |
-| 8 | no body, only provider, backs default | Edge | 200, default cleared | Removing the only provider | no other connected provider |
+| 8 | no body, only provider, backs default | Edge | 409, nothing changed | Removing the only provider is refused | no other connected provider; never deletable |
+| 8a | `{"new_default":{"provider":"anthropic",...}}` but anthropic is `expired` | Error | 400 | DELETE without replacement… is refused | new default must be connected/signed_in |
 | 9 | concurrent DELETE ×2 same id | Concurrency | first 200, second 404 | Removing an unconfigured provider returns 404 | under `configMu` |
 
 #### Dataset: Dependents computation
@@ -1192,7 +1248,10 @@ Conventions: Go tests run as `CGO_ENABLED=0 go test -tags goolm,stdjson -run '^T
 | 1 | binary missing | Missing dep | `disconnected` + hint | Expired session routes to re-sign-in | |
 | 2 | binary present, no `auth.json` | Missing file | `not_signed_in` | Signed-in row shows account | |
 | 3 | `auth.json` mtime 10 min | Fresh | `signed_in` + label | Signed-in row shows account | |
-| 4 | `auth.json` mtime 61 min (`openai-chatgpt`) | Expired | `expired` | Expired session routes to re-sign-in | mirrors `codex_cli_credentials.go` 1h rule |
+| 4 | `auth.json` mtime 61 min, no expiry claim (`openai-chatgpt`) | Expired | `expired` | Expired session routes to re-sign-in | 1 h rule only without a claim (resolution #13) |
+| 4a | `auth.json` mtime 61 min, claim `exp` 2 h ahead | Claim wins | `signed_in`, `expires_at` = claim | Signed-in row shows account | claim overrides mtime |
+| 4b | `auth.json` mtime 5 min, claim `exp` 1 min ago | Claim wins | `expired` | Expired session routes to re-sign-in | fresh file, stale token |
+| 4c | claim `exp` exactly now | Boundary | `expired` | Expired session routes to re-sign-in | `exp <= now` is expired |
 | 5 | `auth.json` unreadable (perm) | Permission | `not_signed_in` + warning | Expired session routes to re-sign-in | no crash |
 | 6 | `auth.json` malformed | Corrupt | `not_signed_in` + warning | Expired session routes to re-sign-in | |
 | 7 | account field absent | Null | label = "Signed in" | Signed-in row shows account | fallback |
@@ -1204,7 +1263,7 @@ Conventions: Go tests run as `CGO_ENABLED=0 go test -tags goolm,stdjson -run '^T
 | 1 | `PUT /providers/openrouter` with invalid key | 422, nothing persisted (`TestPutProvider_InvalidKey422NotPersisted`) | same | Regression: provider validation |
 | 2 | `PUT` with no-credit key | 200 persisted + validation warning (`TestPutProvider_NoCredit200Persisted`) | same | Regression: provider validation |
 | 3 | `PUT` without `api_key` on existing | no probe (`TestPutProvider_KeyUnchangedNoProbe`) | same | Regression: provider validation |
-| 4 | `GET /providers` with locked vault | `providerCredErrors` message on row | same (now alongside new fields) | Regression: credential degraded (`provider_credential_degraded_test.go`) |
+| 4 | `GET /providers` with locked vault | `providerCredErrors` message on row | same for **configured** rows (template rows no longer exist — resolution #16) | Regression: credential degraded (`provider_credential_degraded_test.go`) |
 | 5 | WS provider refusal | `websocket_provider_refusal_test.go` | same | Regression: LLMError surfacing |
 | 6 | Agent PUT with `delegation_policy` | 400 (ADR-037) | same | Regression: agent handler |
 | 7 | Onboarding complete with `api_key` (auth_method api_key) | 200, default set once | same | Regression: onboarding |
@@ -1221,7 +1280,7 @@ This feature **modifies existing functionality**.
 | Agent↔provider resolution | `rest_agent_provider_test.go` | Yes — `TestAgentProvider_NeedsModelDerived` | `needs_model` must be false for every existing fixture |
 | Default agent singleton | `rest_default_agent_singleton_test.go` | No | pattern reused for default model |
 | Contract round-trip | `pkg/api/generated/contract_test.go` | No (auto-covers new schemas) | |
-| Configured list rendering | `ProvidersSection.test.tsx` (5 describes) | Yes — update fixtures for new required fields `dependents`, `backs_default` | zod will reject old fixtures |
+| Configured list rendering | `ProvidersSection.test.tsx` (5 describes) | Yes — update fixtures for new required fields `dependents`, `backs_default`; **delete** the "template-provider filtering (realistic GET /providers shape)" describe — the shape it filters no longer exists (resolution #16) | zod will reject old fixtures |
 | Catalog embed parity | `catalog_test.go::TestCatalog_EmbedMatchesGeneratedTS` | **Delete** (the TS file is gone) — replace with a test that the served GET equals the embedded snapshot | ADR-067 owns the snapshot |
 | Onboarding probe | `tests/e2e/providers.spec.ts` | Yes — extend for free-string id | |
 
@@ -1231,51 +1290,53 @@ This feature **modifies existing functionality**.
 
 **D13 — policy and removals**
 - **FR-001**: The tree MUST contain no occurrence of `antigravity` outside the historical decision records enumerated in ADR-068 §2.4.
-- **FR-002**: The provider factory MUST construct nothing for `antigravity`, `claude-cli`, `claudecli`, `codexcli`; an agent or config naming them MUST fail on the generic unknown-provider path with no mention of the name.
+- **FR-002**: The provider factory MUST construct nothing for `antigravity`, `claude-cli`, `claudecli`, `codexcli`; an agent or config naming them MUST fail on the generic unknown-provider path with no mention of the name. `claude-cli` MUST be deleted entirely (files, factory cases, enum values, catalog allow-list row, docs) under the same no-trace rule as `antigravity`; the exit-proof grep targets the id `claude-cli`, not the word "claude" (resolution #11).
+- **FR-002a**: The OpenAI device-code/OAuth flow in `pkg/auth/oauth.go` and `codex_provider.go::createCodexTokenSource` MUST be deleted; no code path in Omnipus MUST start a vendor OAuth or device-code login for OpenAI (resolution #8).
 - **FR-003**: The id `codex-cli` MUST dispatch to the subprocess provider; the id `openai-chatgpt` MUST dispatch to the direct-HTTP provider reading the CLI's saved token.
-- **FR-004**: The catalog served to the SPA MUST declare `auth_methods` per provider; `sign_in` MUST be absent for `anthropic`, `google` and (until listing) `xai`, and present for `codex-cli`, `openai-chatgpt`, and the Copilot provider.
+- **FR-004**: The catalog served to the SPA (ADR-067 schema 2.0.0) MUST declare `auth_methods` per provider; `sign_in` MUST be absent for `anthropic`, `google` and (until listing) `xai`, and present for `codex-cli`, `openai-chatgpt`, and `github-copilot` (resolution #7: the official Copilot CLI as a subprocess, no Go SDK module).
 - **FR-005**: The UI MUST render a sign-in control only where `auth_methods` contains `sign_in`, pre-selected where present.
 - **FR-006**: The `openai-chatgpt` option MUST carry the label *"relies on OpenAI's stated tolerance, not its written terms"*; `codex-cli` MUST be the default of the pair.
 - **FR-007**: Omnipus MUST NOT write, refresh or proxy the vendor credential file for `codex-cli`; for `openai-chatgpt` it MUST only read it.
 - **FR-008**: `POST /providers/{id}/sign-in` MUST return 400 for providers without `sign_in`.
-- **FR-009**: `GET /providers/{id}/sign-in/status` MUST return one of `not_signed_in | pending | signed_in | expired` with `account_label` when known.
+- **FR-009**: `GET /providers/{id}/sign-in/status` MUST return one of `not_signed_in | pending | signed_in | expired` with `account_label` when known; `expired` MUST follow the token's own expiry claim when present and the 1 h `auth.json` age rule only when no claim exists (resolution #13). `POST /providers/{id}/sign-in` for `codex-cli`/`openai-chatgpt` MUST return `method: cli_login` with `command: "codex login"` (resolution #8).
 
 **D14 — deletion and default model**
 - **FR-010**: `DELETE /api/v1/providers/{id}` MUST remove every config entry for the provider and the credential `<id>_API_KEY`, then wait for reload, then respond 200 with `ProviderDeleteResponse`.
-- **FR-011**: `DELETE` MUST return 404 for an unconfigured id, 503 when the credential store is locked (before any change), 503 under dev-mode bypass, 409 when `backs_default` and no valid `new_default`, 400 when `new_default` names the same id or an unconnected provider.
-- **FR-012**: `GET /api/v1/providers` rows MUST carry `dependents[]` (`{id,name,role}`) and `backs_default` so the dialog needs no second request.
+- **FR-011**: `DELETE` MUST return 404 for an unconfigured id, 503 when the credential store is locked (before any change), 503 under dev-mode bypass, 409 when `backs_default` and no valid `new_default`, 400 when `new_default` names the same id or a provider that is not `connected | signed_in`. A provider that backs the default MUST never be deleted while it backs it; hence the last connected provider MUST never be deletable (resolution #4). No dry-run mode exists (resolution #2). No password re-type is required (resolution #18).
+- **FR-011a**: `GET /api/v1/providers` MUST return configured providers only — no "disconnected" template rows for unconfigured catalog entries (resolution #16).
+- **FR-012**: `GET /api/v1/providers` rows MUST carry `dependents[]` (`{id,name,role}`) and `backs_default` so the dialog needs no second request (resolution #2).
 - **FR-013**: On deletion, each dependent agent's primary `model`/`provider` MUST be cleared (never re-pointed); fallback entries naming the provider MUST be removed; the response MUST list both.
-- **FR-014**: `GET /api/v1/agents` MUST expose `needs_model: boolean` (true when the primary model is empty or its provider is not configured); the agent list MUST render *needs a model* for such agents.
+- **FR-014**: `GET /api/v1/agents` MUST expose `needs_model: boolean` (true when the primary model is empty or its provider is not configured); the agent list MUST render *needs a model* for such agents, except that when ADR-067's `degraded_reason: needs_provider` is also set the *needs a provider* copy wins (resolution #5).
 - **FR-015**: A turn to an agent with `needs_model` MUST be refused with `LLMError.code = model_unassigned` and no provider call.
-- **FR-016**: The SPA MUST always show the confirm dialog before deletion, with the sentence *"Remove `<Display name>`? Its key will be deleted."*, dependents grouped by role, and — when `backs_default` — an inline new-default selector with *Remove* disabled until chosen.
+- **FR-016**: The SPA MUST always show the confirm dialog before deletion, with the sentence *"Remove `<Display name>`? Its key will be deleted."*, dependents grouped by role, and — when `backs_default` — an inline new-default selector (other `connected | signed_in` providers only) with *Remove* disabled until chosen. When no other connected provider exists the dialog MUST read *"This is your only provider and backs the default model; connect another provider and make it the default before removing this one."* with *Remove* permanently disabled (resolution #4). The dialog is the only gate — no ReAuth password prompt (resolution #18).
 - **FR-017**: The SPA MUST NOT render an Undo affordance after deletion, and MUST NOT retain the key client-side at any time.
 - **FR-018**: `GET/PUT /api/v1/providers/default-model` MUST exist; `PUT` MUST validate provider connected (`connected | signed_in`) and model in catalog (except `custom`, `ollama`, `vllm`, where the provider's own list applies), persist `agents.defaults.{provider,model_name}` under the config lock, wait for reload, and take effect on the next turn.
-- **FR-019**: Settings → Providers MUST render the *Default model* card first, showing `provider · model · window · source`, with *Change* opening the selector filtered to connected providers; the backing row MUST show a *Default* marker; each row MUST offer *Set as default model…*.
+- **FR-019**: Settings → Providers MUST render the *Default model* card first, showing `provider · model · window · source`, with *Change* opening the selector filtered to connected providers; the backing row MUST show a *Default* marker; each row MUST offer *Set as default model…*. Window and source MUST render as `—` until ADR-066 D9 supplies them; the card ships without waiting (resolution #15).
 - **FR-020**: The onboarding completion guard (`ModelName == ""`) MUST NOT overwrite a default written by the PUT.
 
 **§4/§5 — surfaces**
 - **FR-021**: One `ProviderPicker` component MUST be used by onboarding step 3 and the Settings sheet.
-- **FR-022**: The picker MUST render, in order: exactly the 8 Popular tiles (FR constants list), *Recent* (when any), one search field, *All providers (N)* collapsed until query non-empty (trimmed) or expanded, *Custom endpoint* last.
+- **FR-022**: The picker MUST render, in order: the Popular tiles (every catalog provider with `tier: popular`, in catalog order — never a SPA constant, resolution #1), *Recent* (configured providers, most recently saved first, max 3 — resolution #14), one search field, *All providers (N)* collapsed until query non-empty (trimmed) or expanded, *Custom endpoint* last.
 - **FR-023**: The expanded list MUST be letter-grouped (A–Z, `#`) and virtualised with `aria-setsize`/`aria-posinset`; rendered options MUST be ≤ visible + 10.
 - **FR-024**: Search MUST match company, plan, region and alias, case-insensitively, treating the query literally.
 - **FR-025**: Unsupported providers MUST render `aria-disabled="true"` with their reason and MUST NOT be hidden by default.
 - **FR-026**: The picker MUST be built on cmdk `Command` and support ArrowUp/Down/Home/End/Enter/Esc.
-- **FR-027**: The second-level panel MUST present plan and region as `aria-pressed` groups; region MUST default from locale per the inference map with the copy *"Detected: `<Region>` — change"* (or *"Region — change"* when not inferred).
+- **FR-027**: The second-level panel MUST present plan and region as `aria-pressed` groups; region MUST default from locale per the inference map (`zh-*` → china; `en-US` → us when offered; everything else → intl — resolution #17) with the copy *"Detected: `<Region>` — change"* (or *"Region — change"* when not inferred).
 - **FR-028**: The auth-method segmented control MUST live in the second-level panel; onboarding MUST stay three steps.
-- **FR-029**: Onboarding MUST NOT pre-select a model; the field label MUST be *"Model for your first agent"*; *Finish* MUST be disabled until a model is chosen and the probe has passed.
-- **FR-030**: The model selector MUST order by vendor group then release date desc (undated last, id asc), mark ≤3 *Recommended for chat* per provider (tool calling AND window ≥128,000), and virtualise above 100 items.
+- **FR-029**: Onboarding MUST NOT pre-select a model; the field label MUST be *"Model for your first agent"*; *Finish* MUST be disabled until a model is chosen and the probe has passed **for that exact model**; changing the model MUST re-run the probe (resolution #12).
+- **FR-030**: The model selector MUST order by vendor group then `release_date` desc (undated last, id asc), mark ≤3 *Recommended for chat* per provider (catalog `tool_call` AND `context_window` ≥128,000 AND not deprecated/retired `status`), and virtualise above 100 items.
 - **FR-031**: *Refresh models* MUST be replaced by *Check with my account*, which makes one live call, intersects with the catalog, greys absent models with *not available on this key*, flags catalog-unknown with *limits unknown*, caches per key, and leaves the list unchanged on failure with an inline warning.
-- **FR-032**: Each configured row MUST show on expand per-model window · output · image · PDF and the window source label (values per ADR-066 D9).
+- **FR-032**: Each configured row MUST show on expand per-model window · output · image · PDF and the window source label, one of `operator | live | catalog | floor` (ADR-066 D9; `learned` does not exist — D8 dropped), or `—` until D9 lands.
 - **FR-033**: Closing the config sheet via Esc/overlay with a non-empty unsaved key MUST keep it open and show *"Discard key?"* with *Discard* / *Keep editing*; explicit *Cancel* and clean states close without prompt.
 - **FR-034**: Row states MUST include `signed_in` (*Signed in as …*, action *Manage*) and `expired` (*Session expired*, action opens re-sign-in).
 
 **§6/§7 — wire**
 - **FR-035**: Every new or changed wire shape (`ProviderDeleteRequest`, `ProviderDeleteResponse`, `DefaultModel`, `DefaultModelUpdateRequest`, `SignInStartResponse`, `SignInStatus`, `Provider` additions, `Agent.needs_model`, `OnboardingCompleteRequest.provider.auth_method`, `ProbeProviderRequest.id`, LLMError `model_unassigned`) MUST be defined in `contracts/` first and consumed only via generated types; `make verify-contracts` MUST pass.
-- **FR-036**: `ProbeProviderRequest.id` MUST be a free string (`1..64`, pattern `^[a-z0-9][a-z0-9._-]*$`) validated at runtime against the served catalog; unknown without `endpoint` → 400 naming `id`, never echoing an id list.
+- **FR-036**: `ProbeProviderRequest.id` MUST be a free string (`1..64`, pattern `^[a-z0-9][a-z0-9._-]*$`) validated at runtime against the served catalog; unknown without `endpoint` → 400 naming `id`, never echoing an id list. `ProbeProviderRequest.model` (optional, `1..256`) MUST be used verbatim as the probe model when present; absent → the provider's first Recommended catalog model (resolution #12).
 - **FR-037**: `src/lib/generated/providerCatalog.ts` and the `gen/main.go` TS emission MUST be deleted; the SPA MUST read the providers-catalog GET (ADR-067 §5) with at most one fetch per session unless the validator changes.
 - **FR-038**: `Provider.status` enum MUST be exactly `connected | disconnected | error | signed_in | expired`.
 - **FR-039**: `ProviderCatalogEntry.yaml`'s "never served from a live HTTP endpoint" description MUST be removed (the schema is superseded by ADR-067's catalog schema).
-- **FR-040**: Fresh-install seed (`pkg/config/defaults.go`, `config/config.example.json`) MUST name no removed provider and MUST leave `agents.defaults.{provider,model_name}` empty until onboarding writes them.
+- **FR-040**: Fresh-install seed (`pkg/config/defaults.go`) MUST name no removed provider and MUST leave `agents.defaults.{provider,model_name}` **empty**; onboarding's explicit pick is the only writer on a fresh install. The "Popular-tier API-key model" replacement of ADR §2.2 applies only to `config/config.example.json` (resolution #10).
 
 **Accessibility**
 - **FR-041**: All constraints under "Accessibility (WCAG 2.2 AA)" MUST hold; axe MUST report 0 serious/critical on onboarding step 3 and Settings → Providers with sheet and dialog open.
@@ -1284,7 +1345,8 @@ This feature **modifies existing functionality**.
 
 ## Success Criteria
 
-- **SC-001**: `grep -ril antigravity pkg cmd src contracts config docs | grep -v -F -f <allowlist>` prints nothing (exit 1).
+- **SC-001**: `grep -ril antigravity pkg cmd src contracts config docs | grep -v -F -f <allowlist>` prints nothing (exit 1); the same for `grep -ril 'claude-cli'` and for `grep -rn 'RequestDeviceCode\|PollDeviceCodeOnce\|OpenAIOAuthConfig\|createCodexTokenSource' pkg cmd`.
+- **SC-014**: With one connected provider, `DELETE` on it returns 409 in 10/10 runs and the dialog's Remove button has `disabled` set; `GET /providers` with ten seed templates and one configured provider returns exactly one row.
 - **SC-002**: `make verify-contracts`, `gofmt -l . | wc -l` = 0, `golangci-lint run --build-tags=goolm,stdjson`, `CGO_ENABLED=1 go build -tags goolm,stdjson ./...`, `npm run typecheck`, `npx vitest run` all exit 0 on CI (exit codes captured without a pipe).
 - **SC-003**: After `DELETE /providers/{id}` returns 200, `credentials.Store.Get("<id>_API_KEY")` returns `NotFoundError` in the same process within 0 ms of the response (synchronous).
 - **SC-004**: Default-model PUT → one chat turn: the session transcript's model/provider equals the PUT body in 10/10 runs without restart.
@@ -1304,8 +1366,9 @@ This feature **modifies existing functionality**.
 
 | Requirement | User Story | BDD Scenario(s) | Test Name(s) |
 |---|---|---|---|
-| FR-001 | US-1 | Antigravity leaves no trace in the source tree | TestNoAntigravityInTree |
-| FR-002 | US-1, US-2 | Config naming a removed provider fails generically; `claude-cli` is an unknown provider | TestFactory_NoVendorCaseForRemovedIDs; TestProbeProviderID_Validation |
+| FR-001 | US-1 | Antigravity leaves no trace in the source tree | TestNoRemovedProviderInTree |
+| FR-002 | US-1, US-2 | Config naming a removed provider fails generically; `claude-cli` is an unknown provider; `claude-cli` leaves no trace in the source tree | TestFactory_NoVendorCaseForRemovedIDs; TestProbeProviderID_Validation; TestNoRemovedProviderInTree |
+| FR-002a | US-2 | OpenAI device-code flow leaves no trace | TestNoRemovedProviderInTree; TestSignInStart_CLILoginOnly |
 | FR-003 | US-2 | OpenAI sign-in offers two named providers… | TestFactory_NoVendorCaseForRemovedIDs; AuthMethodControl.test.tsx |
 | FR-004 | US-2 | Auth methods offered per provider; Sign-in refused for a key-only provider | AuthMethodControl.test.tsx; TestSignIn_RefusedForKeyOnly400 |
 | FR-005 | US-2, US-5 | Auth methods offered per provider; Auth-method control keeps onboarding at three steps | AuthMethodControl.test.tsx; onboarding.spec.ts |
@@ -1314,12 +1377,13 @@ This feature **modifies existing functionality**.
 | FR-008 | US-2 | Sign-in refused for a key-only provider | TestSignIn_RefusedForKeyOnly400 |
 | FR-009 | US-2 | Signed-in row…; Expired session… | TestSignInStatus_CodexCLI; ProvidersSection.test.tsx |
 | FR-010 | US-3 | Remove an unused provider after one confirmation | TestDeleteProvider_Unused200; providers.spec.ts |
-| FR-011 | US-3 | DELETE without replacement…; Removing an unconfigured…; Removal refused while locked | TestDeleteProvider_DefaultRequiresReplacement409; TestDeleteProvider_404_503_Bypass503 |
+| FR-011 | US-3 | DELETE without replacement…; Removing an unconfigured…; Removal refused while locked; Removing the only provider is refused | TestDeleteProvider_DefaultRequiresReplacement409; TestDeleteProvider_404_503_Bypass503; TestDeleteProvider_OnlyProviderRefused409 |
+| FR-011a | US-3 | GET /providers returns configured providers only | TestListProviders_ConfiguredOnly |
 | FR-012 | US-3 | Dependents are listed…; Default-backing provider requires… | TestProviderDependents; RemoveProviderDialog.test.tsx |
 | FR-013 | US-3 | Dependents are listed and left without a model; Fallback references are removed and listed | TestDeleteProvider_DependentsLeftWithoutModel; TestDeleteProvider_FallbackRemoved |
 | FR-014 | US-3 | Dependents are listed and left without a model | TestDeleteProvider_DependentsLeftWithoutModel; TestAgentProvider_NeedsModelDerived |
 | FR-015 | US-3 | Turn to an agent without a model is refused | TestTurn_ModelUnassignedTypedError |
-| FR-016 | US-3 | Remove an unused…; Dependents…; Default-backing…; Removing the only provider | RemoveProviderDialog.test.tsx; TestDeleteProvider_OnlyProvider |
+| FR-016 | US-3 | Remove an unused…; Dependents…; Default-backing…; Removing the only provider is refused | RemoveProviderDialog.test.tsx; TestDeleteProvider_OnlyProviderRefused409 |
 | FR-017 | US-3 | No Undo exists after removal | ProvidersSection.test.tsx; providers.spec.ts |
 | FR-018 | US-4 | Change default model takes effect…; Default-model PUT validation | TestDefaultModel_PutGet; TestDefaultModel_PutValidation |
 | FR-019 | US-4 | Default model card shows…; Set as default from the provider row | ProvidersSection.test.tsx; providers.spec.ts |
@@ -1346,34 +1410,34 @@ This feature **modifies existing functionality**.
 | FR-040 | US-1 | Fresh install seeds no default model | onboarding.spec.ts; TestBuildGates_FilesGone |
 | FR-041 | US-5, US-3 | Expanded list…; Keyboard-only…; Remove an unused provider… (dialog a11y) | accessibility.spec.ts |
 
-**Completeness check**: every FR has ≥1 scenario and ≥1 test; every BDD scenario above appears in at least one row (Build and contract gates → FR-040/SC-002 via TestBuildGates_FilesGone; Catalog unavailable → FR-037; Removing the only provider → FR-016; No Undo → FR-017).
+**Completeness check**: every FR has ≥1 scenario and ≥1 test; every BDD scenario above appears in at least one row (Build and contract gates → FR-040/SC-002 via TestBuildGates_FilesGone; Catalog unavailable → FR-037; Removing the only provider is refused → FR-011/FR-016; GET /providers returns configured providers only → FR-011a; `claude-cli` / device-code no-trace → FR-002/FR-002a; No Undo → FR-017).
 
 ---
 
 ## Ambiguity Warnings
 
-Items the ADR is silent on. Each is implemented under the **Likely Agent Assumption** (labelled as such in the text above) until the operator resolves it.
+All 18 items were resolved by the operator/coordinator on 2026-08-22 and the decisions are applied throughout the body. The table is kept as the record; no open ambiguity remains.
 
-| # | What's Ambiguous | Likely Agent Assumption | Question to Resolve |
+| # | What was ambiguous | Status | Decision (applied) |
 |---|---|---|---|
-| 1 | Which catalog fields the picker/selector need (`tier`, `unsupported_reason`, `auth_methods`, `aliases`, per-model `release_date`, `tool_calling`, `context_window`) — ADR-067 §5 names the endpoint but not these fields | ADR-067's catalog schema is extended to carry exactly the fields listed under "Providers catalog" above; this spec consumes them and adds none elsewhere | Does ADR-067's schema already carry these, or must its implementer add them? Is the 8-id Popular set data in the catalog (`tier: popular`) or a constant in the SPA? |
-| 2 | Where the "dependents" data for the dialog comes from ("driven by data, not a second request") | `GET /providers` rows carry `dependents[]` and `backs_default`; `DELETE` takes an optional `new_default` body and returns the same shape | Accept `GET`-carried dependents, or prefer a `DELETE ?dry_run=true` round trip? |
-| 3 | Agents that reference the provider only as a **fallback** model | The fallback entry is removed and the agent is listed in the dialog under *"uses as fallback"*; primary `needs_model` unaffected | Remove the fallback entry, or leave it and skip it at runtime with a WARN? |
-| 4 | Removing the **only** configured provider (no other connected provider to re-point the default to) | Allowed; dialog states the consequence; default cleared; card shows *No default model* | Allow, or block with *"Connect another provider first"*? |
-| 5 | How a dependent is "left without a model" on the wire | Server clears the agent entity's primary `model`/`provider`; `Agent.needs_model` is a derived boolean (also true for ADR-067 MAJ-010's unknown-provider case) | Clear the stored fields, or leave them and derive `needs_model` only from provider absence? |
-| 6 | The LLMError code for "agent has no model" | New code `model_unassigned` (attribution `config`), not a reuse of `model_unavailable` (whose copy says "this reply used the previous model" — false here) | New code, or reuse with new copy? |
-| 7 | GitHub Copilot provider id and mechanism ("official SDK/CLI") | Provider id `github-copilot`; mechanism = the official Copilot CLI driven as a subprocess (same shape as `codex-cli`), no new Go module (Constraint #1) | Subprocess of the CLI, or the Go SDK package (a new module dependency)? Exact id? |
-| 8 | What *Sign in* does for OpenAI, given `codex login` is interactive and `pkg/auth` already has an OpenAI device-code flow | Sign in = instruct *"Run `codex login` on this machine"* + *Check* (status endpoint reads the CLI's saved login); Omnipus starts no device-code flow of its own | May Omnipus drive an in-app device-code login (it exists in `pkg/auth/oauth.go`), or only detect the CLI's login? |
-| 9 | Route path for the default-model control ("a PUT on the default") | `GET/PUT /api/v1/providers/default-model` (under the providers handler; `default-model` is reserved, cannot collide with an id because ids are validated against the catalog) | This path, or `/api/v1/settings/default-model`? |
-| 10 | "Replace the fresh-install default model with a Popular-tier API-key model" (§2.2) vs "no default model is pre-selected" (§4) | Seed `agents.defaults` **empty**; the Popular-tier replacement applies only to `config.example.json` and any seeded provider template row that named `antigravity` | Confirm the seed is empty and onboarding's explicit pick is the only writer on fresh install. |
-| 11 | Whether `claude-cli` code is **deleted** or merely unreachable | Deleted (files, factory cases, enum values, catalog allow-list row, docs mentions) with the same "no trace" rule as `antigravity`, minus the grep exit proof on the word "claude" (it is a model family name) | Delete, or keep the file unreferenced? |
-| 12 | Probe model for onboarding ("picks its probe model from the catalog") vs the operator's explicit pick | `ProbeProviderRequest` gains optional `model`; when present the probe uses it, otherwise the provider's first Recommended model | Should the probe validate the user's exact pick (extra probe on model change) or only the key? |
-| 13 | `expired` semantics for `openai-chatgpt` | Mirrors `codex_cli_credentials.go`: `auth.json` older than 1 h → `expired` | Is the 1 h rule correct for the split provider, or should it follow the token's own expiry claim? |
-| 14 | Recent section source | Recent = providers currently configured, most recently saved first, max 3 | Configured-only, or also previously-selected-but-not-saved? |
-| 15 | Window/source on the Default model card and row expand depend on ADR-066 D9 | `DefaultModel` carries optional `context_window`/`window_source` populated by ADR-066's resolver; absent until that lands, card shows `—` | Ship the card before ADR-066 D9 (with `—`), or sequence after? |
-| 16 | `Provider.dependents`/`backs_default` on the always-present "fallback default entry" rows that `GET /providers` emits today | Those template rows report `dependents: []`, `backs_default: false`, and `DELETE` on them returns 404 (not configured) | Confirm that template rows are not deletable. |
-| 17 | Region inference for `en-GB`, `en-AU`, etc. | `intl` (only `en-US` maps to `us`) | Confirm the map. |
-| 18 | Whether deletion requires ReAuth (password re-type, Spec-6 FR-12.2) | No — the confirm dialog is the single gate; `RequireNotBypass` applies | Require re-auth for deletion? |
+| 1 | Catalog fields the picker/selector need | **RESOLVED** | ADR-067 schema 2.0.0 carries provider `tier (popular\|standard\|unsupported)`, `unsupported_reason`, `auth_methods[] (api_key\|sign_in)`, `aliases[]` (search only), `name`; model `name`, `release_date`, `tool_call`, `context_window`, `max_output_tokens`, `input_modalities`, `status`. Popular = `tier: popular` in catalog data, never a SPA constant. |
+| 2 | Source of the dialog's dependents data | **RESOLVED (accept)** | `GET /providers` rows carry `dependents[]` and `backs_default`; `DELETE` takes optional `new_default`; no dry-run. |
+| 3 | Agents referencing the provider only as a fallback | **RESOLVED (accept)** | Fallback entry removed; agent listed under *"uses as fallback"*; primary unaffected. |
+| 4 | Removing the only configured provider | **RESOLVED (operator decision, supersedes assumption)** | A provider that backs the default CANNOT be deleted while it backs it; the user must first choose a new default inline from other connected providers. The last connected provider can therefore never be deleted; its dialog reads *"This is your only provider and backs the default model; connect another provider and make it the default before removing this one."* The "default cleared / No default model" path is removed. |
+| 5 | How a dependent is "left without a model" | **RESOLVED (accept)** | Server clears the agent's stored primary model/provider; `Agent.needs_model` derived. Coordinated with ADR-067 `degraded_reason: needs_provider` — both may apply; `needs_provider` wins in copy. |
+| 6 | LLMError code for "agent has no model" | **RESOLVED (accept)** | New code `model_unassigned`, attribution `config`, via contracts. |
+| 7 | GitHub Copilot id and mechanism | **RESOLVED (accept)** | Id `github-copilot`; official Copilot CLI as subprocess; no Go SDK module (Constraint #1). |
+| 8 | What *Sign in* does for OpenAI | **RESOLVED (accept)** | *"Run `codex login` on this machine"* + Check (status reads the CLI's saved login). Omnipus starts no device-code flow; the `pkg/auth` OpenAI device-code flow is unreferenced and deleted under greenfield. |
+| 9 | Route path for the default-model control | **RESOLVED (accept)** | `GET/PUT /api/v1/providers/default-model`. |
+| 10 | Fresh-install seed vs "no pre-selected model" | **RESOLVED (accept)** | Seed `agents.defaults` EMPTY; onboarding's explicit pick is the only writer; Popular-tier replacement applies only to `config.example.json`. |
+| 11 | `claude-cli` deleted or merely unreachable | **RESOLVED (accept)** | Deleted entirely (files, factory cases, enum values, allow-list row, docs); grep exit proof on the id `claude-cli`, not the word "claude". |
+| 12 | Probe model vs the operator's explicit pick | **RESOLVED (accept)** | `ProbeProviderRequest` gains optional `model`; the probe validates the exact pick; re-probe on model change in onboarding. |
+| 13 | `expired` semantics for `openai-chatgpt` | **RESOLVED (refined)** | Follows the token's own expiry claim when present; the 1 h `auth.json` rule only when no claim exists. |
+| 14 | Recent section source | **RESOLVED (accept)** | Configured providers, most recently saved first, max 3. |
+| 15 | Window/source dependency on ADR-066 D9 | **RESOLVED (accept)** | Ship the card with `—` until ADR-066 D9 lands; no sequencing dependency. Addendum: ADR-066 D8 (learned limits) is dropped — the source vocabulary is `operator \| live \| catalog \| floor`, no `learned`. |
+| 16 | Template "disconnected" rows in `GET /providers` | **RESOLVED (superseded)** | The permanent template rows are REMOVED — `GET /providers` returns configured providers only (greenfield, coordinated with ADR-067). DELETE on an unknown id → 404. |
+| 17 | Region inference for other English locales | **RESOLVED (accept)** | `en-US` → us (when offered), else intl; `zh-*` → china. |
+| 18 | ReAuth for deletion | **RESOLVED (operator decision)** | Confirm dialog only; no password re-type; `RequireNotBypass` applies. |
 
 ---
 
@@ -1429,7 +1493,7 @@ Items the ADR is silent on. Each is implemented under the **Likely Agent Assumpt
 
 - ADR-068 is the confirmed brief (Phase 1 gate); every silence is recorded in Ambiguity Warnings, not resolved by invention.
 - ADR-067 lands first (catalog GET, protocol dispatch, canonical ids); this spec's picker reads that endpoint and never defines its data.
-- ADR-066 D9 supplies window/source values; until it lands the card shows `—`.
+- ADR-066 D9 supplies window/source values; until it lands the card shows `—`. Source vocabulary is `operator | live | catalog | floor` (D8 "learned" dropped).
 - The Popular set is the 8 ids in ADR-067 §4.2 and pass-2 MIN-008.
 - The vendor CLIs (`codex`, Copilot CLI) are installed by the operator; Omnipus never installs them.
 - No Windows-specific behaviour: file locking caveats in CLAUDE.md apply to `config.json` writes as they do to every store today.
@@ -1445,3 +1509,5 @@ Items the ADR is silent on. Each is implemented under the **Likely Agent Assumpt
 - Q: Undo after delete? -> A: None (operator decision 2026-08-22 via pass-2 MAJ-011).
 - Q: `codex-cli` dispatch? -> A: Subprocess; token-reuse path renamed `openai-chatgpt` (pass-2 MAJ-013).
 - Q: xAI? -> A: API-key only until xAI lists Omnipus (pass-2 MAJ-012).
+- Q: The 18 ambiguities? -> A: All resolved by operator/coordinator (see the Ambiguity Warnings table); notable operator decisions: the default-backing / last connected provider is never deletable (#4); no ReAuth on delete (#18); template rows removed from `GET /providers` (#16); `pkg/auth` OpenAI device-code flow deleted (#8).
+- Q: Window-source vocabulary? -> A: ADR-066 D8 (learning limits from provider errors) dropped by the operator; sources are `operator | live | catalog | floor` everywhere in this spec — no `learned`.
