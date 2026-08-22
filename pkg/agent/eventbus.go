@@ -147,7 +147,7 @@ func (b *EventBus) Emit(evt Event) {
 		default:
 		}
 		if mustNotDropEventKind(evt.Kind) {
-			needsRetry = append(needsRetry, pendingRetry{ch: sub.ch})
+			needsRetry = append(needsRetry, pendingRetry(sub))
 			continue
 		}
 		b.recordDrop(evt.Kind)

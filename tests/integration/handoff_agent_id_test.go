@@ -65,16 +65,16 @@ func mockLLMHandoffThenToolCall(tb testing.TB) *httptest.Server {
 			return
 		}
 
-		switch {
-		case n == 1:
+		switch n {
+		case 1:
 			// First request (mia's turn): return handoff tool call to jim.
 			// The handoff tool requires {"agent_id": "jim", "context": "..."}.
 			writeMockToolCallStream(w, "hand_off", `{"agent_id":"jim","context":"regression test handoff"}`)
-		case n == 2:
+		case 2:
 			// Second request (mia wrapping up after handoff executes): return plain
 			// text so the turn finishes.
 			writeMockStream(w, "Handoff complete, jim is now active.")
-		case n == 3:
+		case 3:
 			// Third request (jim's first turn after handoff): return a tool call.
 			// We use "system.time" which is a no-side-effect builtin.
 			// Even if execution fails (policy / unknown), transcript entry is written.

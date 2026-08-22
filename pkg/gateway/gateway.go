@@ -4751,33 +4751,34 @@ func setupAndStartServices(
 		const orphanInterval = 1 * time.Hour
 		ticker := time.NewTicker(orphanInterval)
 		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				a := agentLoop
-				if a == nil {
+		// staticcheck S1000: this select had exactly one case (ticker.C) and
+		// no cancellation/done channel, so it is equivalent to ranging over
+		// the ticker channel directly — ticker.C never closes, so this loops
+		// forever exactly as the select version did.
+		for range ticker.C {
+			a := agentLoop
+			if a == nil {
+				continue
+			}
+			wsFiles, wsErr := listWorkspaceFiles(homePath)
+			if wsErr != nil {
+				slog.Warn("orphan-gc: list workspaces failed", "error", wsErr)
+				continue
+			}
+			for _, ws := range wsFiles {
+				lib, libErr := library.New(homePath, ws.ID)
+				if libErr != nil {
+					slog.Warn("orphan-gc: open library", "workspace_id", ws.ID, "error", libErr)
 					continue
 				}
-				wsFiles, wsErr := listWorkspaceFiles(homePath)
-				if wsErr != nil {
-					slog.Warn("orphan-gc: list workspaces failed", "error", wsErr)
+				gcEntry, gcErr := lib.OrphanGC(library.OrphanGCConfig{Enabled: true})
+				if gcErr != nil {
+					slog.Warn("orphan-gc: run failed", "workspace_id", ws.ID, "error", gcErr)
 					continue
 				}
-				for _, ws := range wsFiles {
-					lib, libErr := library.New(homePath, ws.ID)
-					if libErr != nil {
-						slog.Warn("orphan-gc: open library", "workspace_id", ws.ID, "error", libErr)
-						continue
-					}
-					gcEntry, gcErr := lib.OrphanGC(library.OrphanGCConfig{Enabled: true})
-					if gcErr != nil {
-						slog.Warn("orphan-gc: run failed", "workspace_id", ws.ID, "error", gcErr)
-						continue
-					}
-					if len(gcEntry) > 0 {
-						slog.Info("orphan-gc: deleted orphan entries",
-							"workspace_id", ws.ID, "count", len(gcEntry))
-					}
+				if len(gcEntry) > 0 {
+					slog.Info("orphan-gc: deleted orphan entries",
+						"workspace_id", ws.ID, "count", len(gcEntry))
 				}
 			}
 		}

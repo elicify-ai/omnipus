@@ -592,7 +592,6 @@ func newTurnState(agent *AgentInstance, opts processOptions, scope turnEventScop
 		opts:         opts,
 		scope:        scope,
 		turnID:       scope.turnID,
-		agentID:      agent.ID,
 		sessionKey:   opts.SessionKey,
 		channel:      opts.Channel,
 		chatID:       opts.ChatID,
@@ -602,6 +601,17 @@ func newTurnState(agent *AgentInstance, opts processOptions, scope turnEventScop
 		phase:        TurnPhaseSetup,
 		startedAt:    time.Now(),
 		finishedChan: make(chan struct{}),
+	}
+	// Bug fix (staticcheck SA5011): agentID used to be set from agent.ID
+	// directly in the struct literal above, unconditionally dereferencing
+	// agent 16 lines before the "if agent != nil" guard below — a latent nil
+	// pointer panic for any future caller that passes a nil agent (today's
+	// two call sites happen to already dereference agent.ID themselves before
+	// calling newTurnState, so this never fired in practice, but the function
+	// otherwise treats a nil agent as tolerable). Guard it the same way the
+	// rest of this function treats agent's nilability.
+	if agent != nil {
+		ts.agentID = agent.ID
 	}
 
 	// Bind session store and capture initial history/archive lengths for rollback.

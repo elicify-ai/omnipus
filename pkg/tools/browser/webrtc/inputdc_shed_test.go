@@ -163,10 +163,7 @@ func TestInputQueue_OrderingHoldsWithConcurrentConsumer(t *testing.T) {
 
 	// Let the consumer drain, then close and wait for it to finish.
 	deadline := time.Now().Add(10 * time.Second)
-	for {
-		if queue.Len() == 0 || time.Now().After(deadline) {
-			break
-		}
+	for queue.Len() != 0 && !time.Now().After(deadline) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	queue.close()

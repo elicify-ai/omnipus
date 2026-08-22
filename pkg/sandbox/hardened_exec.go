@@ -822,10 +822,7 @@ func runOnCurrentThread(ctx context.Context, argv []string, env []string, lim Li
 	// child when the context expires; we detect that by inspecting the
 	// derived context's error, NOT the original ctx (which may still be
 	// live if only the timeout fired).
-	timedOut := false
-	if runCtx.Err() == context.DeadlineExceeded {
-		timedOut = true
-	}
+	timedOut := runCtx.Err() == context.DeadlineExceeded
 
 	exitCode := -1
 	if waitErr == nil {

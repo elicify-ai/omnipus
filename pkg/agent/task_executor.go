@@ -1962,7 +1962,7 @@ func (te *TaskExecutor) notifySourceChannel(t *task.Task) {
 // it structurally cannot use; it gets the marker instruction only.
 func (te *TaskExecutor) buildPrompt(t *task.Task) string {
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("# Task: %s\n\n", t.Title))
+	fmt.Fprintf(&sb, "# Task: %s\n\n", t.Title)
 	if t.Prompt != "" {
 		sb.WriteString(t.Prompt)
 		sb.WriteString("\n\n")
@@ -1976,7 +1976,7 @@ func (te *TaskExecutor) buildPrompt(t *task.Task) string {
 	// the real final result at the end of the loop. Attempt 1 (AttemptCount
 	// == 0) never has steering, so first-attempt prompts are unaffected.
 	if t.AttemptCount > 0 && t.Result != "" {
-		sb.WriteString(fmt.Sprintf("## Feedback from attempt %d — address this before re-claiming success:\n", t.AttemptCount))
+		fmt.Fprintf(&sb, "## Feedback from attempt %d — address this before re-claiming success:\n", t.AttemptCount)
 		sb.WriteString(t.Result)
 		sb.WriteString("\n\n")
 	}
@@ -1994,8 +1994,8 @@ func (te *TaskExecutor) buildPrompt(t *task.Task) string {
 		sb.WriteString(evidenceGateSteeringText)
 		sb.WriteString("\n\n")
 	}
-	sb.WriteString(fmt.Sprintf("Priority: %d (1=highest, 5=lowest)\n", t.EffectivePriority()))
-	sb.WriteString(fmt.Sprintf("Task ID: %s\n\n", t.ID))
+	fmt.Fprintf(&sb, "Priority: %d (1=highest, 5=lowest)\n", t.EffectivePriority())
+	fmt.Fprintf(&sb, "Task ID: %s\n\n", t.ID)
 
 	// ADR-052 FR-035: teach the evidence marker itself, immediately before the
 	// completion marker it must precede — checkEvidenceMarkerGate
@@ -2024,7 +2024,7 @@ func (te *TaskExecutor) buildPrompt(t *task.Task) string {
 	sb.WriteString("You may also call `update_task` explicitly when you finish " +
 		"(a task with acceptance criteria is adjudicated by the evidence-ladder judge either way — " +
 		"calling the tool does not skip that review):\n")
-	sb.WriteString(fmt.Sprintf("  task_id: %q\n", t.ID))
+	fmt.Fprintf(&sb, "  task_id: %q\n", t.ID)
 	sb.WriteString("  status: \"done\" (or \"failed\" if unsuccessful)\n")
 	sb.WriteString("  result: a brief summary of what was accomplished\n")
 	return sb.String()
@@ -2250,9 +2250,9 @@ func (te *TaskExecutor) buildChildSummary(children []task.Task) string {
 	var sb strings.Builder
 	sb.WriteString("## Child Task Results\n\n")
 	for _, c := range children {
-		sb.WriteString(fmt.Sprintf("- **%s** (status: %s)", c.Title, c.Status))
+		fmt.Fprintf(&sb, "- **%s** (status: %s)", c.Title, c.Status)
 		if c.Result != "" {
-			sb.WriteString(fmt.Sprintf(": %s", c.Result))
+			fmt.Fprintf(&sb, ": %s", c.Result)
 		}
 		sb.WriteString("\n")
 	}

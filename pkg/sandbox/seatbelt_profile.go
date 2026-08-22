@@ -196,8 +196,8 @@ func renderSeatbeltProfile(policy SandboxPolicy) (string, error) {
 				return "", fmt.Errorf("seatbelt: symlink ancestor %q of %q: %w", anc, rule.Path, err)
 			}
 			seenTraversal[anc] = struct{}{}
-			b.WriteString(fmt.Sprintf(";; traversal for symlinked ancestor of %s\n", rule.Path))
-			b.WriteString(fmt.Sprintf("(allow file-read* (literal %q))\n", anc))
+			fmt.Fprintf(&b, ";; traversal for symlinked ancestor of %s\n", rule.Path)
+			fmt.Fprintf(&b, "(allow file-read* (literal %q))\n", anc)
 		}
 
 		sub := fmt.Sprintf("(subpath %q)", target)
@@ -231,10 +231,10 @@ func renderSeatbeltProfile(policy SandboxPolicy) (string, error) {
 	b.WriteString("\n;; --- Network (default-deny; explicit port allow-list) ---\n")
 	b.WriteString("(deny network*)\n")
 	for _, r := range policy.BindPortRules {
-		b.WriteString(fmt.Sprintf("(allow network-bind (local tcp \"*:%d\"))\n", r.Port))
+		fmt.Fprintf(&b, "(allow network-bind (local tcp \"*:%d\"))\n", r.Port)
 	}
 	for _, r := range policy.ConnectPortRules {
-		b.WriteString(fmt.Sprintf("(allow network-outbound (remote tcp \"*:%d\"))\n", r.Port))
+		fmt.Fprintf(&b, "(allow network-outbound (remote tcp \"*:%d\"))\n", r.Port)
 		// UDP on the SAME port the operator already allow-listed.
 		//
 		// Emitting TCP alone denied UDP entirely, which is stricter than the
@@ -251,7 +251,7 @@ func renderSeatbeltProfile(policy SandboxPolicy) (string, error) {
 		//
 		// This remains far stricter than Linux — UDP is confined to the
 		// allow-list rather than unrestricted.
-		b.WriteString(fmt.Sprintf("(allow network-outbound (remote udp \"*:%d\"))\n", r.Port))
+		fmt.Fprintf(&b, "(allow network-outbound (remote udp \"*:%d\"))\n", r.Port)
 	}
 
 	// --- Secret set: denied LAST (ADR-062 §4.1, spec FR-3.2) ---
@@ -314,8 +314,8 @@ func renderSeatbeltProfile(policy SandboxPolicy) (string, error) {
 				// it reads normally afterwards, and truncate destroys the vault
 				// irreversibly without reading anything at all. Both were
 				// executed against a real child before this line was written.
-				b.WriteString(fmt.Sprintf("(deny file-read* (subpath %q))\n", path))
-				b.WriteString(fmt.Sprintf("(deny file-write* (subpath %q))\n", path))
+				fmt.Fprintf(&b, "(deny file-read* (subpath %q))\n", path)
+				fmt.Fprintf(&b, "(deny file-write* (subpath %q))\n", path)
 			}
 		}
 	}
@@ -370,7 +370,7 @@ func renderSeatbeltProfile(policy SandboxPolicy) (string, error) {
 					continue
 				}
 				emittedNodes[path] = struct{}{}
-				b.WriteString(fmt.Sprintf("(deny file-write* (literal %q))\n", path))
+				fmt.Fprintf(&b, "(deny file-write* (literal %q))\n", path)
 			}
 		}
 	}
@@ -427,8 +427,8 @@ func renderSeatbeltProfile(policy SandboxPolicy) (string, error) {
 				// Safe because validateSeatbeltPath has already rejected any
 				// double quote or backslash in the input.
 				pattern := "^" + escapeSeatbeltRegex(form)
-				b.WriteString(fmt.Sprintf("(deny file-read* (regex #\"%s\"))\n", pattern))
-				b.WriteString(fmt.Sprintf("(deny file-write* (regex #\"%s\"))\n", pattern))
+				fmt.Fprintf(&b, "(deny file-read* (regex #\"%s\"))\n", pattern)
+				fmt.Fprintf(&b, "(deny file-write* (regex #\"%s\"))\n", pattern)
 			}
 		}
 	}

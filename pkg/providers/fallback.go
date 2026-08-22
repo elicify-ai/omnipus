@@ -543,13 +543,13 @@ type FallbackExhaustedError struct {
 
 func (e *FallbackExhaustedError) Error() string {
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("fallback: all %d candidates failed:", len(e.Attempts)))
+	fmt.Fprintf(&sb, "fallback: all %d candidates failed:", len(e.Attempts))
 	for i, a := range e.Attempts {
 		if a.Skipped {
-			sb.WriteString(fmt.Sprintf("\n  [%d] %s/%s: skipped (cooldown)", i+1, a.Provider, a.Model))
+			fmt.Fprintf(&sb, "\n  [%d] %s/%s: skipped (cooldown)", i+1, a.Provider, a.Model)
 		} else {
-			sb.WriteString(fmt.Sprintf("\n  [%d] %s/%s: %v (reason=%s, %s)",
-				i+1, a.Provider, a.Model, a.Error, a.Reason, a.Duration.Round(time.Millisecond)))
+			fmt.Fprintf(&sb, "\n  [%d] %s/%s: %v (reason=%s, %s)",
+				i+1, a.Provider, a.Model, a.Error, a.Reason, a.Duration.Round(time.Millisecond))
 		}
 	}
 	return sb.String()

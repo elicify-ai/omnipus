@@ -263,7 +263,7 @@ func TestBuildCompressedManifest_SortedNamesWithinCategory(t *testing.T) {
 	if aIdx == -1 || mIdx == -1 || zIdx == -1 {
 		t.Fatalf("manifest missing expected tools: %q", got)
 	}
-	if !(aIdx < mIdx && mIdx < zIdx) {
+	if aIdx >= mIdx || mIdx >= zIdx {
 		t.Errorf("tools within category not sorted: a=%d m=%d z=%d in:\n%s", aIdx, mIdx, zIdx, got)
 	}
 }

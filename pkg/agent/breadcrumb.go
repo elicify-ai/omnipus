@@ -177,7 +177,7 @@ func buildBreadcrumb(archive []memory.ArchivedMessage, window []providers.Messag
 	if truncatedAt >= 0 {
 		// truncatedAt is the highest-index chunk we did not fit.
 		// Number of ranges skipped = truncatedAt + 1.
-		sb.WriteString(fmt.Sprintf("+%d earlier ranges", truncatedAt+1))
+		fmt.Fprintf(&sb, "+%d earlier ranges", truncatedAt+1)
 		sb.WriteByte('\n')
 	}
 

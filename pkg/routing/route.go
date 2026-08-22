@@ -230,7 +230,7 @@ func matchesAccountID(matchAccountID, actual string) bool {
 	if trimmed == "*" {
 		return true
 	}
-	return strings.ToLower(trimmed) == strings.ToLower(actual)
+	return strings.EqualFold(trimmed, actual)
 }
 
 func (r *RouteResolver) findPeerMatch(bindings []config.AgentBinding, peer *RoutePeer) *config.AgentBinding {

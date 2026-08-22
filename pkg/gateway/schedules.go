@@ -1005,8 +1005,8 @@ func (a *restAPI) HandleSchedules(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/api/v1/schedules")
 	rest = strings.Trim(rest, "/")
 
-	switch {
-	case rest == "": // collection
+	switch rest {
+	case "": // collection
 		switch r.Method {
 		case http.MethodGet:
 			a.handleListSchedules(w)
@@ -1354,14 +1354,14 @@ func (a *restAPI) HandleNotifications(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/api/v1/notifications")
 	rest = strings.Trim(rest, "/")
 
-	switch {
-	case rest == "":
+	switch rest {
+	case "":
 		if r.Method != http.MethodGet {
 			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
 		}
 		a.handleListNotifications(w, user)
-	case rest == "read-all":
+	case "read-all":
 		if r.Method != http.MethodPost {
 			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
 			return

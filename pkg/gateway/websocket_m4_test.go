@@ -173,7 +173,7 @@ func TestSendConnGenFrame_ResetOnSuccess(t *testing.T) {
 func TestSendConnGenFrame_IncrementsDroppedFramesOnFullChannel(t *testing.T) {
 	// Zero-capacity channel: every send attempt fails immediately.
 	wc := &wsConn{
-		sendCh: make(chan []byte, 0),
+		sendCh: make(chan []byte),
 		doneCh: make(chan struct{}),
 	}
 

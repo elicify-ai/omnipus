@@ -41,8 +41,7 @@ func openAIToolArgsSSE(argChunks []string) string {
 	b.WriteString(`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1",` +
 		`"function":{"name":"write_file","arguments":""}}]}}]}` + "\n\n")
 	for _, c := range argChunks {
-		b.WriteString(fmt.Sprintf(
-			`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":%q}}]}}]}`+"\n\n", c))
+		fmt.Fprintf(&b, `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":%q}}]}}]}`+"\n\n", c)
 	}
 	b.WriteString(`data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}` + "\n\n")
 	b.WriteString("data: [DONE]\n\n")
@@ -59,8 +58,8 @@ func anthropicToolArgsSSE(argChunks []string) string {
 	b.WriteString("event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0," +
 		"\"content_block\":{\"type\":\"tool_use\",\"id\":\"t1\",\"name\":\"write_file\",\"input\":{}}}\n\n")
 	for _, c := range argChunks {
-		b.WriteString(fmt.Sprintf("event: content_block_delta\ndata: {\"type\":\"content_block_delta\","+
-			"\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":%q}}\n\n", c))
+		fmt.Fprintf(&b, "event: content_block_delta\ndata: {\"type\":\"content_block_delta\","+
+			"\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":%q}}\n\n", c)
 	}
 	b.WriteString("event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n")
 	b.WriteString("event: message_delta\ndata: {\"type\":\"message_delta\"," +

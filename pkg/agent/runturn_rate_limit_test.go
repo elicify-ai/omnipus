@@ -164,10 +164,8 @@ func TestRunTurn_RateLimit_LLMCallsPerHour(t *testing.T) {
 	// The loop may return the rate-limit error two ways:
 	//   - as err2 != nil (runAgentLoop propagates the error), or
 	//   - as result2 containing "rate limit" (loop injects a rate-limit message).
-	rateLimitSurfaced := false
-	if err2 != nil && strings.Contains(strings.ToLower(err2.Error()), "rate limit") {
-		rateLimitSurfaced = true
-	}
+	rateLimitSurfaced := err2 != nil && strings.Contains(strings.ToLower(err2.Error()), "rate limit")
+
 	if strings.Contains(strings.ToLower(result2), "rate limit") {
 		rateLimitSurfaced = true
 	}

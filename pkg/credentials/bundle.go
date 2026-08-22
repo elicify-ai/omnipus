@@ -28,7 +28,7 @@ func (b SecretBundle) Get(ref SecretRef) (string, bool) {
 // GetString is a convenience that returns the plaintext or "" if missing.
 // Use Get() if you need to distinguish "ref set to empty" from "ref not in bundle".
 func (b SecretBundle) GetString(ref string) string {
-	v, _ := b[SecretRef(ref)]
+	v := b[SecretRef(ref)]
 	return v
 }
 

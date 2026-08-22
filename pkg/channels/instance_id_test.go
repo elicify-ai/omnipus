@@ -37,9 +37,9 @@ func stubFactory(calledWith *string) ChannelFactory {
 		// directly, avoiding a struct copy of BaseChannel (which contains
 		// sync/atomic.Bool and triggers a vet "copies lock" warning).
 		ch := &mockChannel{}
-		ch.BaseChannel.name = instanceID
-		ch.BaseChannel.instanceID = instanceID
-		ch.BaseChannel.bus = b
+		ch.name = instanceID
+		ch.instanceID = instanceID
+		ch.bus = b
 		ch.sendFn = func(_ context.Context, _ bus.OutboundMessage) error { return nil }
 		return ch, nil
 	}

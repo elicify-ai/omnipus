@@ -43,12 +43,12 @@ func createMockCLI(t *testing.T, stdout, stderr string, exitCode int) string {
 	var sb strings.Builder
 	sb.WriteString("#!/bin/sh\n")
 	if stderr != "" {
-		sb.WriteString(fmt.Sprintf("cat '%s/stderr.txt' >&2\n", dir))
+		fmt.Fprintf(&sb, "cat '%s/stderr.txt' >&2\n", dir)
 	}
 	if stdout != "" {
-		sb.WriteString(fmt.Sprintf("cat '%s/stdout.txt'\n", dir))
+		fmt.Fprintf(&sb, "cat '%s/stdout.txt'\n", dir)
 	}
-	sb.WriteString(fmt.Sprintf("exit %d\n", exitCode))
+	fmt.Fprintf(&sb, "exit %d\n", exitCode)
 
 	script := filepath.Join(dir, "claude")
 	if err := os.WriteFile(script, []byte(sb.String()), 0o755); err != nil {

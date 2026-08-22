@@ -73,14 +73,14 @@ func TestSessionVideoPacketGrowth_SustainedAcrossTwoIndependentWindows(t *testin
 	time.Sleep(mediaGrowthSampleWindow)
 	w2 := viewer.videoPkts.Load()
 
-	if !(w1 > w0) {
+	if w1 <= w0 {
 		t.Fatalf(
 			"video packets did not grow in sampling window 1: %d -> %d (single burst, not continuous streaming)",
 			w0,
 			w1,
 		)
 	}
-	if !(w2 > w1) {
+	if w2 <= w1 {
 		t.Fatalf(
 			"video packets did not grow in sampling window 2: %d -> %d -> %d (one burst then silence, not sustained streaming)",
 			w0,
@@ -135,14 +135,14 @@ func TestSessionAudioTrack_GenuinelyCarried_OpusCodecAndSustainedGrowth(t *testi
 	time.Sleep(mediaGrowthSampleWindow)
 	a2 := viewer.audioPkts.Load()
 
-	if !(a1 > a0) {
+	if a1 <= a0 {
 		t.Fatalf(
 			"audio packets did not grow in sampling window 1: %d -> %d (single burst, not continuous streaming)",
 			a0,
 			a1,
 		)
 	}
-	if !(a2 > a1) {
+	if a2 <= a1 {
 		t.Fatalf(
 			"audio packets did not grow in sampling window 2: %d -> %d -> %d (one burst then silence, not sustained streaming)",
 			a0,

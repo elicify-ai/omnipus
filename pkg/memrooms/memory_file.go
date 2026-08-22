@@ -231,10 +231,7 @@ func memoryMatchesQuery(mf MemoryFile, lowerQuery string) bool {
 			return true
 		}
 	}
-	if strings.Contains(strings.ToLower(mf.Body), lowerQuery) {
-		return true
-	}
-	return false
+	return strings.Contains(strings.ToLower(mf.Body), lowerQuery)
 }
 
 // MemoryNotFoundError is returned when a memory file does not exist.
@@ -325,11 +322,8 @@ func parseMemoryFile(raw string) (MemoryFile, error) {
 	}
 
 	frontmatterText := rest[:closeIdx]
-	afterClose := rest[closeIdx+delimLen:] // skip the matched closing delimiter
-	if strings.HasPrefix(afterClose, "\n") {
-		afterClose = afterClose[1:] // skip blank separator line
-	}
-	body := afterClose
+	afterClose := rest[closeIdx+delimLen:]       // skip the matched closing delimiter
+	body := strings.TrimPrefix(afterClose, "\n") // skip blank separator line
 
 	fm, err := parseFrontmatter(frontmatterText)
 	if err != nil {

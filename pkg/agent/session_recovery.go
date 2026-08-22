@@ -188,7 +188,7 @@ func findOrphanedToolCalls(history []providers.Message) []orphanedToolCall {
 	}
 
 	// Walk backward to find the last assistant message.
-	var lastAssistantIdx int = -1
+	var lastAssistantIdx = -1
 	for i := len(history) - 1; i >= 0; i-- {
 		if history[i].Role == "assistant" {
 			lastAssistantIdx = i

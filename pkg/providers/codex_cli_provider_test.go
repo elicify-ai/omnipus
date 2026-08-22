@@ -419,7 +419,7 @@ func createMockCodexCLI(t *testing.T, events []string) string {
 	var sb strings.Builder
 	sb.WriteString("#!/bin/bash\n")
 	for _, event := range events {
-		sb.WriteString(fmt.Sprintf("echo '%s'\n", event))
+		fmt.Fprintf(&sb, "echo '%s'\n", event)
 	}
 
 	if err := os.WriteFile(scriptPath, []byte(sb.String()), 0o755); err != nil {

@@ -3091,7 +3091,7 @@ func isExternalSubagent(ac config.AgentConfig) bool {
 
 func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string) {
 	cfg := a.agentLoop.GetConfig()
-	var foundIdx int = -1
+	var foundIdx = -1
 	for i := range cfg.Agents.List {
 		if cfg.Agents.List[i].ID == id {
 			foundIdx = i

@@ -497,7 +497,7 @@ func formatGoalEcho(g *CompiledGoal) string {
 	}
 	sb.WriteString("\n\nAcceptance criteria (the Judge will verify these):\n")
 	for i, c := range g.Criteria {
-		sb.WriteString(fmt.Sprintf("  %d. [%s] %s\n", i+1, c.Kind, criterionEchoLine(c)))
+		fmt.Fprintf(&sb, "  %d. [%s] %s\n", i+1, c.Kind, criterionEchoLine(c))
 	}
 	sb.WriteString("\nReply **" + ConfirmGoalWord + "** to activate this goal, or restate it to amend.")
 	return sb.String()

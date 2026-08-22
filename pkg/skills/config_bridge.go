@@ -75,7 +75,7 @@ func ClawHubMarketplaceFromConfig(
 	for _, m := range cfg.Tools.Skills.Marketplaces {
 		// Match the ClawHub entry: explicit Type=="clawhub", or an untyped
 		// entry named "clawhub" (defensive against hand-edited configs).
-		if m.Type != config.MarketplaceTypeClawHub && !(m.Type == "" && m.Name == "clawhub") {
+		if m.Type != config.MarketplaceTypeClawHub && (m.Type != "" || m.Name != "clawhub") {
 			continue
 		}
 		entry := MarketplaceConfig{

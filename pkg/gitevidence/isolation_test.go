@@ -263,11 +263,11 @@ func TestGitEvidence_Isolation_RestoreAtCommit_TreeMatchesRecordedCommit(t *test
 			if tc.needsGit && !systemGitAvailable() {
 				t.Skip("no system git binary on PATH in this environment")
 			}
-			if tc.name == "system_git_worktree" || tc.name == "go_git_clone" || tc.name == "subdir" {
-				// Pin the rung exactly: start the ladder AT this rung and
-				// require delivery at-or-below it only via degradation; the
-				// assertions below check the delivered rung explicitly.
-			}
+			// For every case but "full_ladder", pin the rung exactly: start
+			// the ladder AT this rung and require delivery at-or-below it
+			// only via degradation; the assertion below (tc.name !=
+			// "full_ladder" && ic.Rung > tc.startRung) checks the delivered
+			// rung explicitly.
 			dir, c1Hash, _ := seedTwoCommits(t)
 			target := filepath.Join(t.TempDir(), "restored")
 			ic, err := OpenIsolatedCheckoutAtCommitRung(dir, target, c1Hash, tc.startRung)

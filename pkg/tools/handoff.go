@@ -337,7 +337,7 @@ func formatRecentMessages(entries []session.TranscriptEntry) string {
 		if e.AgentID != "" {
 			agentTag = fmt.Sprintf(" [%s]", e.AgentID)
 		}
-		sb.WriteString(fmt.Sprintf("%s%s: %s\n", e.Role, agentTag, e.Content))
+		fmt.Fprintf(&sb, "%s%s: %s\n", e.Role, agentTag, e.Content)
 	}
 	return strings.TrimRight(sb.String(), "\n")
 }

@@ -694,12 +694,12 @@ func (p *SearXNGSearchProvider) Search(
 
 	// Format results in standard Omnipus format
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("Results for: %s (via SearXNG)\n", query))
+	fmt.Fprintf(&b, "Results for: %s (via SearXNG)\n", query)
 	for i, r := range result.Results {
-		b.WriteString(fmt.Sprintf("%d. %s\n", i+1, r.Title))
-		b.WriteString(fmt.Sprintf("   %s\n", r.URL))
+		fmt.Fprintf(&b, "%d. %s\n", i+1, r.Title)
+		fmt.Fprintf(&b, "   %s\n", r.URL)
 		if r.Content != "" {
-			b.WriteString(fmt.Sprintf("   %s\n", r.Content))
+			fmt.Fprintf(&b, "   %s\n", r.Content)
 		}
 	}
 

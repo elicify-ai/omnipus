@@ -20,7 +20,7 @@ func newBotGoLogger(component string) *botGoLogger {
 func (b *botGoLogger) Info(v ...any) {
 	message := fmt.Sprint(v...)
 	if shouldDemoteBotGoInfo(message) {
-		b.Logger.Debug(message)
+		b.Debug(message)
 		return
 	}
 	b.Logger.Info(message)
@@ -29,7 +29,7 @@ func (b *botGoLogger) Info(v ...any) {
 func (b *botGoLogger) Infof(format string, v ...any) {
 	message := fmt.Sprintf(format, v...)
 	if shouldDemoteBotGoInfo(message) {
-		b.Logger.Debug(message)
+		b.Debug(message)
 		return
 	}
 	b.Logger.Info(message)

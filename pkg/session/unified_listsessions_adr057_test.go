@@ -183,11 +183,9 @@ func TestListSessions_ConcurrentDeleteConsistency(t *testing.T) {
 func TestListSessionsPage_WindowAndStability(t *testing.T) {
 	store := u6NewTestStore(t)
 	const n = 5
-	ids := make([]string, 0, n)
 	for i := 0; i < n; i++ {
-		m, err := store.NewSession(SessionTypeChat, "", "agent-1")
+		_, err := store.NewSession(SessionTypeChat, "", "agent-1")
 		require.NoError(t, err)
-		ids = append(ids, m.ID)
 	}
 
 	full, err := store.ListSessions()
@@ -414,4 +412,14 @@ func TestListSessionsFiltered_ClonesOnlyMatches(t *testing.T) {
 	assert.Equal(t, int64(matching), delta,
 		"ListSessionsFiltered made %d Clone() calls scanning %d cached sessions with %d matches — "+
 			"want exactly %d (clone only matches), not %d (clone-then-filter)", delta, total, matching, matching, total)
+
+	// Bug fix (staticcheck SA4010): matchIDs was collected but never read —
+	// the test asserted only the COUNT of results, not that they were the
+	// RIGHT sessions. Assert identity, order-insensitively (ListSessionsFiltered
+	// does not document a return order).
+	gotIDs := make([]string, 0, len(got))
+	for _, m := range got {
+		gotIDs = append(gotIDs, m.ID)
+	}
+	assert.ElementsMatch(t, matchIDs, gotIDs, "ListSessionsFiltered must return exactly the sessions matching the predicate")
 }

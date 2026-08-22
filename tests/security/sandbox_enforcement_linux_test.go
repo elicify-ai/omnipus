@@ -137,16 +137,12 @@ func TestSandboxEnforcement(t *testing.T) {
 			out, runErr := cmd.CombinedOutput()
 
 			var exitCode int
-			switch {
-			case runErr == nil:
-				exitCode = 0
-			default:
+			if runErr != nil {
 				var exitErr *exec.ExitError
-				if errors.As(runErr, &exitErr) {
-					exitCode = exitErr.ExitCode()
-				} else {
+				if !errors.As(runErr, &exitErr) {
 					t.Fatalf("child exec failed: %v\n%s", runErr, out)
 				}
+				exitCode = exitErr.ExitCode()
 			}
 
 			switch exitCode {

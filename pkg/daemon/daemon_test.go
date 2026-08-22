@@ -6,7 +6,6 @@
 package daemon
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -374,7 +373,7 @@ func TestCheckProcess_DeadPID(t *testing.T) {
 	const deadPID = 2147483647
 	alive, _, _ := checkProcess(deadPID)
 	if alive {
-		t.Skip(fmt.Sprintf("PID %d appears alive; skipping", deadPID))
+		t.Skipf("PID %d appears alive; skipping", deadPID)
 	}
 }
 

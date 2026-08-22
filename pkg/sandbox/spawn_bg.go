@@ -137,7 +137,7 @@ func SpawnBackgroundChild(
 	}
 	var logFile *os.File // closed after Start; child retains its own fd
 	if cmd.Stdout == nil || cmd.Stderr == nil {
-		var logSink io.Writer = io.Discard
+		var logSink = io.Discard
 		if workspaceDir != "" {
 			logPath := filepath.Join(workspaceDir, ".dev-server.log")
 			// #nosec G304 -- workspaceDir is the dev-server tool's own

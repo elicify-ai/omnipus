@@ -75,8 +75,8 @@ func normalizeMessagesForProvider(msgs []providers.Message) []providers.Message 
 	var droppedEmptyAssistant, droppedOrphanTool, merged int
 
 	for _, m := range msgs {
-		switch {
-		case m.Role == "assistant":
+		switch m.Role {
+		case "assistant":
 			// Rule A: drop an empty/no-op assistant (blank Content, no ToolCalls).
 			if strings.TrimSpace(m.Content) == "" && len(m.ToolCalls) == 0 {
 				droppedEmptyAssistant++
@@ -100,7 +100,7 @@ func normalizeMessagesForProvider(msgs []providers.Message) []providers.Message 
 				merged++ // message was merged into the last element rather than appended
 			}
 
-		case m.Role == "tool":
+		case "tool":
 			// Rule D: drop true orphans; keep paired tool results.
 			if m.ToolCallID != "" {
 				// Non-empty ToolCallID: keep iff declared by a preceding assistant.
@@ -220,7 +220,7 @@ func needsNormalization(msgs []providers.Message) bool {
 				}
 			} else {
 				// Empty ToolCallID: orphan unless last kept is assistant-with-toolcalls.
-				if !(lastKeptRole == "assistant" && lastKeptHasToolCalls) {
+				if lastKeptRole != "assistant" || !lastKeptHasToolCalls {
 					return true
 				}
 			}

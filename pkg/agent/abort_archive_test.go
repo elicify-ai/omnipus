@@ -189,9 +189,9 @@ func TestAbortPath_HardAbort_PreservesEvictedArchive(t *testing.T) {
 	// The in-turn sentinel messages must be gone from the archive.
 	afterAbortArchive := archiveLinesFromAgent(t, al, sk)
 	for _, line := range afterAbortArchive {
-		if strings.Contains(line.Message.Content, "ABORT_TEST_SENTINEL") {
+		if strings.Contains(line.Content, "ABORT_TEST_SENTINEL") {
 			t.Errorf("HardAbort rollback left an in-turn sentinel in the archive: role=%s content=%q",
-				line.Message.Role, line.Message.Content)
+				line.Role, line.Content)
 		}
 	}
 
@@ -202,7 +202,7 @@ func TestAbortPath_HardAbort_PreservesEvictedArchive(t *testing.T) {
 	}
 	evictedFound := false
 	for i := 0; i < evictedCount && i < len(afterAbortArchive); i++ {
-		if strings.Contains(afterAbortArchive[i].Message.Content, bigContent[:50]) {
+		if strings.Contains(afterAbortArchive[i].Content, bigContent[:50]) {
 			evictedFound = true
 			break
 		}
@@ -337,9 +337,9 @@ func TestAbortPath_RestoreSession_PreservesEvictedArchive(t *testing.T) {
 	// The in-turn sentinel messages must be gone.
 	afterRestoreArchive := archiveLinesFromAgent(t, al, sk)
 	for _, line := range afterRestoreArchive {
-		if strings.Contains(line.Message.Content, "RESTORE_TEST_SENTINEL") {
+		if strings.Contains(line.Content, "RESTORE_TEST_SENTINEL") {
 			t.Errorf("restoreSession rollback left an in-turn sentinel in the archive: role=%s content=%q",
-				line.Message.Role, line.Message.Content)
+				line.Role, line.Content)
 		}
 	}
 
@@ -350,7 +350,7 @@ func TestAbortPath_RestoreSession_PreservesEvictedArchive(t *testing.T) {
 	}
 	evictedFound := false
 	for i := 0; i < evictedCount && i < len(afterRestoreArchive); i++ {
-		if strings.Contains(afterRestoreArchive[i].Message.Content, bigContent[:50]) {
+		if strings.Contains(afterRestoreArchive[i].Content, bigContent[:50]) {
 			evictedFound = true
 			break
 		}
@@ -617,9 +617,9 @@ func TestRollbackAppended_MidTurnEviction_HardAbort(t *testing.T) {
 	assert.Equal(t, initialArchiveLen, len(archive),
 		"SC-001: ReadArchive must return all pre-turn archive lines after rollback")
 	for _, line := range archive {
-		if strings.Contains(line.Message.Content, "MIDTURN_SENTINEL") {
+		if strings.Contains(line.Content, "MIDTURN_SENTINEL") {
 			t.Errorf("rolled-back sentinel found in archive: role=%s content=%q",
-				line.Message.Role, line.Message.Content)
+				line.Role, line.Content)
 		}
 	}
 }
@@ -707,9 +707,9 @@ func TestRollbackAppended_MidTurnEviction_RestoreSession(t *testing.T) {
 		}
 	}
 	for _, line := range archiveLinesFromAgent(t, al, sk) {
-		if strings.Contains(line.Message.Content, "RS_SENTINEL") {
+		if strings.Contains(line.Content, "RS_SENTINEL") {
 			t.Errorf("in-turn sentinel found in archive after restoreSession: role=%s content=%q",
-				line.Message.Role, line.Message.Content)
+				line.Role, line.Content)
 		}
 	}
 

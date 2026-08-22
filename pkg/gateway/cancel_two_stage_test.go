@@ -255,7 +255,7 @@ func TestCancel_TwoStageTimer_GracefulThenHard(t *testing.T) {
 			"all stages seen: %v", stages)
 
 	// Verify ordering: if both stages arrived, graceful must precede hard.
-	var gracefulIdx, hardIdx int = -1, -1
+	var gracefulIdx, hardIdx = -1, -1
 	allStages := append(stages, readCancelStageFrames(conn, 0)...)
 	for i, s := range allStages {
 		if s == "graceful" && gracefulIdx == -1 {

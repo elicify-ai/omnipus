@@ -2424,11 +2424,11 @@ func (t *DelegateTool) executeStatus(ctx context.Context, args map[string]any) *
 	}
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Subagent status report (%d total):\n", len(taskList)))
+	fmt.Fprintf(&sb, "Subagent status report (%d total):\n", len(taskList))
 	for _, status := range []string{"running", "completed", "failed", "canceled"} {
 		if n := counts[status]; n > 0 {
 			label := strings.ToUpper(status[:1]) + status[1:] + ":"
-			sb.WriteString(fmt.Sprintf("  %-10s %d\n", label, n))
+			fmt.Fprintf(&sb, "  %-10s %d\n", label, n)
 		}
 	}
 	sb.WriteString("\n")
@@ -2511,7 +2511,7 @@ func delegateFormatTask(task *DelegateTaskState, extra string) string {
 	sb.WriteString(header)
 
 	if task.Task != "" {
-		sb.WriteString(fmt.Sprintf("\n  task:   %s", task.Task))
+		fmt.Fprintf(&sb, "\n  task:   %s", task.Task)
 	}
 	if task.Result != "" {
 		result := task.Result
@@ -2520,7 +2520,7 @@ func delegateFormatTask(task *DelegateTaskState, extra string) string {
 		if len(runes) > maxResultLen {
 			result = string(runes[:maxResultLen]) + "…"
 		}
-		sb.WriteString(fmt.Sprintf("\n  result: %s", result))
+		fmt.Fprintf(&sb, "\n  result: %s", result)
 	}
 	if extra != "" {
 		sb.WriteString("\n")

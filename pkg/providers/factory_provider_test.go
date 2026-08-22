@@ -640,7 +640,7 @@ func TestCreateProviderFromConfig_CodingPlanAnthropic(t *testing.T) {
 			}
 			// coding-plan-anthropic uses Anthropic Messages provider
 			// Verify it's the anthropic messages provider by checking interface
-			var _ LLMProvider = provider
+			var _ = provider
 		})
 	}
 }

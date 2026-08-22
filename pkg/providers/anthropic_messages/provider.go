@@ -218,11 +218,15 @@ func buildRequestBody(
 					"tool_use_id": msg.ToolCallID,
 					"content":     msg.Content,
 				}
-				var merged bool
-				apiMessages, merged = mergeToolResultIntoLastUser(apiMessages, toolResultBlock)
-				if merged {
-					continue
-				}
+				// mergeToolResultIntoLastUser always leaves apiMessages holding
+				// the tool result (merged into the previous user message, or
+				// appended as a new one) — its bool return only distinguishes
+				// which happened, and this is the last statement for the "user"
+				// case either way, so there is nothing left to branch on
+				// (staticcheck SA4006: the old `if merged { continue }` never
+				// affected control flow — this case falls out of the switch
+				// identically regardless of merged's value).
+				apiMessages, _ = mergeToolResultIntoLastUser(apiMessages, toolResultBlock)
 			} else if len(msg.Media) > 0 {
 				// User message with media attachments — build multipart content.
 				content := buildAnthropicUserContent(msg.Content, msg.Media)
@@ -282,11 +286,11 @@ func buildRequestBody(
 				"tool_use_id": msg.ToolCallID,
 				"content":     msg.Content,
 			}
-			var merged bool
-			apiMessages, merged = mergeToolResultIntoLastUser(apiMessages, toolResultBlock)
-			if merged {
-				continue
-			}
+			// Same reasoning as the "user" case above: apiMessages already
+			// reflects the merge either way, and "tool" is the last case in
+			// this switch, so there is no remaining control flow to gate on
+			// merged (staticcheck SA4006).
+			apiMessages, _ = mergeToolResultIntoLastUser(apiMessages, toolResultBlock)
 		}
 	}
 

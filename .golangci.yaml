@@ -66,7 +66,6 @@ linters:
     - paralleltest
     - perfsprint
     - revive
-    - staticcheck
     - tagalign
     - testifylint
     - thelper
@@ -157,6 +156,84 @@ linters:
       - node_modules
     generated: lax
     rules:
+      # staticcheck S1016 — pkg/gateway/rest_workspace_instructions.go builds a
+      # generated Response from a generated Request with an explicit struct
+      # literal. staticcheck proposes converting one type into the other, which
+      # is only legal because the two happen to share a shape TODAY. They are
+      # distinct contract types (Hard Constraint #8: generated types are the
+      # only legal cross-boundary types), so a field added to either would break
+      # the wire silently. golangci-lint --fix applied this automatically and it
+      # was deliberately reverted; keep it reverted.
+      - linters:
+          - staticcheck
+        path: ^pkg/gateway/rest_workspace_instructions\.go$
+        text: 'S1016'
+      # ST1005 — Go's own convention exempts error strings that begin with a
+      # proper noun. These lead with a provider/product name.
+      - linters:
+          - staticcheck
+        path: ^pkg/(providers/azure/provider|tools/web)\.go$
+        text: 'ST1005'
+      # SA2001 — a deliberate lock-probe idiom (Lock immediately followed by
+      # Unlock) proving the lock is acquirable / not deadlocked. The "empty
+      # critical section" IS the test.
+      - linters:
+          - staticcheck
+        path: ^pkg/tools/browser/reaper_lifecycle_test\.go$
+        text: 'SA2001'
+      # SA1012 — these tests deliberately pass a nil Context to prove the
+      # function tolerates one. "Fixing" them deletes the coverage.
+      - linters:
+          - staticcheck
+        path: ^pkg/tools/browser/.*_test\.go$
+        text: 'SA1012'
+      # SA1019 — SetNAT1To1IPs is deprecated, but the replacement
+      # (SetICEAddressRewriteRules) has different default semantics for host vs
+      # server-reflexive candidates. Migrating ICE candidate rewriting needs its
+      # own reviewed change, not a lint sweep.
+      - linters:
+          - staticcheck
+        path: ^pkg/tools/browser/webrtc/session\.go$
+        text: 'SA1019'
+      - linters:
+          - staticcheck
+        path: pkg/tools/browser/focus_emulation_test\.go
+        text: 'SA1012:'
+
+      - linters:
+          - staticcheck
+        path: pkg/tools/browser/text_selector_test\.go
+        text: 'SA1012:'
+
+      - linters:
+          - staticcheck
+        path: pkg/task/coverage_test\.go
+        text: 'SA2001:'
+
+      - linters:
+          - staticcheck
+        path: pkg/gateway/rest_preview\.go
+        text: 'SA1019:'
+
+      - linters:
+          - staticcheck
+        path: pkg/gateway/rest\.go
+        text: 'S1016:'
+
+      - linters:
+          - staticcheck
+        path: pkg/channels/wecom/media\.go
+        text: 'S1016:'
+
+      - linters:
+          - staticcheck
+        path: pkg/tools/correction_shared_types_test\.go
+        text: 'QF1011:'
+
+      - linters:
+          - staticcheck
+        path: cmd/omnipus/internal/run/run\.go
+        text: 'ST1005:'
       # errorlint: ten test-file assertions that deliberately check EXACT
       # error identity/type — not "matches or wraps" — because the identity
       # itself IS the behavior under test (proving a function returns an

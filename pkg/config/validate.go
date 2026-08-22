@@ -290,7 +290,7 @@ func emitOrStderr(auditLog AuditEmitter, event, severity string, fields map[stri
 	}
 	// Fall back to stderr — always succeeds for boot-abort visibility.
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("BOOT_ABORT_REASON=%s", event))
+	fmt.Fprintf(&sb, "BOOT_ABORT_REASON=%s", event)
 	// Sort keys for deterministic output.
 	keys := make([]string, 0, len(fields))
 	for k := range fields {
@@ -305,7 +305,7 @@ func emitOrStderr(auditLog AuditEmitter, event, severity string, fields map[stri
 		}
 	}
 	for _, k := range keys {
-		sb.WriteString(fmt.Sprintf(" %s=%v", k, fields[k]))
+		fmt.Fprintf(&sb, " %s=%v", k, fields[k])
 	}
 	fmt.Fprintln(os.Stderr, sb.String())
 }

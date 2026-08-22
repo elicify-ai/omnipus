@@ -515,9 +515,15 @@ func TestPerGoalId_TwoSessionsIndependent_FR107(t *testing.T) {
 	}
 
 	// A's adjudication must NOT mark B as settled (per-goal-id markers).
-	if !al.goalIsIdleSettling(sidA) == al.goalIsIdleSettling(sidB) {
-		// only assert they are distinct states; A re-armed via activity bump
-		// (idleSettling cleared by runGoalAdjudication), B never fired.
+	//
+	// Bug fix (staticcheck SA9003): this if-body used to be comment-only, so
+	// it asserted nothing — it always evaluated the condition and silently
+	// discarded the result regardless of outcome. The intent (per the
+	// comment) was to assert A and B end up in distinct idle-settling
+	// states: A re-armed via activity bump (idleSettling cleared by
+	// runGoalAdjudication), B never fired.
+	if idleA, idleB := al.goalIsIdleSettling(sidA), al.goalIsIdleSettling(sidB); idleA == idleB {
+		t.Fatalf("goal A and goal B idle-settling states must be distinct (per-goal-id): got A=%v B=%v", idleA, idleB)
 	}
 	if al.goalIsIdleSettling(sidB) {
 		t.Fatal("goal B must not be marked idle-settling by goal A's adjudication (per-goal-id)")

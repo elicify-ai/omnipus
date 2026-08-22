@@ -171,9 +171,10 @@ func TestD2Spike_BrowserContextIsolation(t *testing.T) {
 		if ti.Type != "page" {
 			continue
 		}
-		if ti.BrowserContextID == idA {
+		switch ti.BrowserContextID {
+		case idA:
 			inA++
-		} else if ti.BrowserContextID == idB {
+		case idB:
 			inB++
 		}
 	}

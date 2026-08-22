@@ -816,7 +816,7 @@ func (m AgentModelConfig) MarshalJSON() ([]byte, error) {
 		Fallbacks []string `json:"fallbacks,omitempty"`
 		Provider  string   `json:"provider,omitempty"`
 	}
-	return json.Marshal(raw{Primary: m.Primary, Fallbacks: m.Fallbacks, Provider: m.Provider})
+	return json.Marshal(raw(m))
 }
 
 // FallbackModel is one entry in an agent's fallback chain. It carries its
@@ -918,7 +918,7 @@ func (f FallbackModelSlice) MarshalJSON() ([]byte, error) {
 	}
 	out := make([]wire, len(f))
 	for i, fb := range f {
-		out[i] = wire{Model: fb.Model, Provider: fb.Provider}
+		out[i] = wire(fb)
 	}
 	return json.Marshal(out)
 }
@@ -1941,7 +1941,7 @@ var slugPattern = func() func(string) bool {
 			return false
 		}
 		for _, r := range s {
-			if !((r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-') {
+			if (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '-' {
 				return false
 			}
 		}

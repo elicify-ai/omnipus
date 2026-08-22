@@ -5094,8 +5094,8 @@ func (pe *PlanEngine) recordMemberResumePoint(planID, taskID string) {
 	pe.mu.Unlock()
 
 	var hash string
-	switch {
-	case cr == nil:
+	switch cr {
+	case nil:
 		logger.InfoCF("plan_engine", "member resume: fresh attempt (no commit resolver)",
 			map[string]any{"plan_id": planID, "task_id": taskID})
 	default:

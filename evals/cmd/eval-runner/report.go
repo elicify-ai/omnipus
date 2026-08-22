@@ -16,6 +16,26 @@ import (
 // categoryOrder controls the order of categories in the Markdown report.
 var categoryOrder = []string{"persona", "capability", "safety"}
 
+// titleCaseASCII capitalizes the first letter of each whitespace-separated
+// word in s, leaving the rest of each word unchanged. It replaces the
+// deprecated strings.Title for this package's use (report category labels,
+// e.g. "persona" -> "Persona"): those labels are simple, fixed ASCII
+// identifiers defined in this codebase (see categoryOrder above), not
+// arbitrary user text, so strings.Title's documented weakness — mishandling
+// Unicode punctuation-based word boundaries — does not apply here and
+// pulling in golang.org/x/text/cases for one cosmetic label would be
+// disproportionate.
+func titleCaseASCII(s string) string {
+	words := strings.Fields(s)
+	for i, w := range words {
+		if w == "" {
+			continue
+		}
+		words[i] = strings.ToUpper(w[:1]) + w[1:]
+	}
+	return strings.Join(words, " ")
+}
+
 // averageScores returns the arithmetic mean of each numeric field across rows.
 func averageScores(rows []EvalResult) scoreAvg {
 	if len(rows) == 0 {
@@ -191,14 +211,14 @@ func RegenerateReport(resultsDir string, outPath string) error {
 
 	var sb strings.Builder
 	sb.WriteString("# Eval Trend Report\n\n")
-	sb.WriteString(fmt.Sprintf("_Generated: %s UTC_\n\n", time.Now().UTC().Format("2006-01-02 15:04:05")))
+	fmt.Fprintf(&sb, "_Generated: %s UTC_\n\n", time.Now().UTC().Format("2006-01-02 15:04:05"))
 
 	// Cost summary.
 	sb.WriteString("## Cost Summary (last 7 days)\n\n")
-	sb.WriteString(fmt.Sprintf("| Metric | Value |\n|--------|-------|\n"))
-	sb.WriteString(fmt.Sprintf("| Total cost | $%.4f |\n", totalCostUSD))
-	sb.WriteString(fmt.Sprintf("| Agent tokens | %d |\n", totalAgentTokens))
-	sb.WriteString(fmt.Sprintf("| Judge tokens | %d |\n\n", totalJudgeTokens))
+	sb.WriteString("| Metric | Value |\n|--------|-------|\n")
+	fmt.Fprintf(&sb, "| Total cost | $%.4f |\n", totalCostUSD)
+	fmt.Fprintf(&sb, "| Agent tokens | %d |\n", totalAgentTokens)
+	fmt.Fprintf(&sb, "| Judge tokens | %d |\n\n", totalJudgeTokens)
 
 	// One table per category.
 	categories := append([]string{}, categoryOrder...)
@@ -220,7 +240,7 @@ func RegenerateReport(resultsDir string, outPath string) error {
 		if !ok || len(catRows) == 0 {
 			continue
 		}
-		sb.WriteString(fmt.Sprintf("## Category: %s\n\n", strings.Title(cat)))
+		fmt.Fprintf(&sb, "## Category: %s\n\n", titleCaseASCII(cat))
 		sb.WriteString("| Scenario | Agent | Latest | 7d Mean | 7d Trend | Regression |\n")
 		sb.WriteString("|----------|-------|--------|---------|----------|------------|\n")
 		for _, row := range catRows {
@@ -231,8 +251,8 @@ func RegenerateReport(resultsDir string, outPath string) error {
 			meanStr := fmt.Sprintf("%.2f", math.Round(mean7dOverall*100)/100)
 			trend := trendArrow(latestOverall, mean7dOverall)
 			reg := regressionFlag(latestOverall, mean7dOverall)
-			sb.WriteString(fmt.Sprintf("| %s | %s | %s | %s | %s | %s |\n",
-				row.ID, row.AgentID, latestStr, meanStr, trend, reg))
+			fmt.Fprintf(&sb, "| %s | %s | %s | %s | %s | %s |\n",
+				row.ID, row.AgentID, latestStr, meanStr, trend, reg)
 		}
 		sb.WriteString("\n")
 	}

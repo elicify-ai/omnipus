@@ -6,6 +6,7 @@ package config
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -60,7 +61,7 @@ func validateRemovedKeys(data []byte) error {
 	_, hasAllowRead := defaults["allow_read_outside_workspace"]
 
 	if hasRestrict || hasAllowRead {
-		return fmt.Errorf(fr001RemovedKeysMsg)
+		return errors.New(fr001RemovedKeysMsg)
 	}
 
 	return nil

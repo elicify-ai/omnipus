@@ -58,7 +58,7 @@ func (m *MigrateInstance) getCurrentHandler() (Operation, error) {
 	}
 	handler, ok := m.handlers[source]
 	if !ok {
-		return nil, fmt.Errorf("Source '%s' not found", source)
+		return nil, fmt.Errorf("source '%s' not found", source)
 	}
 	return handler, nil
 }
@@ -88,7 +88,7 @@ func (m *MigrateInstance) Run(opts Options) (*Result, error) {
 	}
 
 	if _, err = os.Stat(sourceHome); os.IsNotExist(err) {
-		return nil, fmt.Errorf("Source installation not found at %s", sourceHome)
+		return nil, fmt.Errorf("source installation not found at %s", sourceHome)
 	}
 
 	actions, warnings, err := m.Plan(opts, sourceHome, targetHome)

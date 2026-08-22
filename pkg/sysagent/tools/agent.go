@@ -91,7 +91,7 @@ func validateAgentIcon(s string) error {
 		return fmt.Errorf("invalid icon %q: must be ≤64 characters", s)
 	}
 	for _, r := range s {
-		if !(unicode.IsLetter(r) || unicode.IsDigit(r) || r == '-') {
+		if !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '-' {
 			return fmt.Errorf("invalid icon %q: must be alphanumeric + hyphens only", s)
 		}
 	}
