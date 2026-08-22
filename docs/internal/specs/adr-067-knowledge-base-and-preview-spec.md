@@ -960,8 +960,24 @@ need inline styles (broken layout); same-origin WebSocket matches `'self'` (the 
 silently fails); Shiki needs no WebAssembly (code blocks stop highlighting); nothing embeds the
 SPA (any embedding surface goes blank).
 
-**AMENDED 2026-08-23 — the first real measurement, and it was a failure.** `connect-src 'self'`
-shipped as written and broke the live browser view. Evidence: `E2E — ui-heavy`
+**AMENDED 2026-08-23 — `connect-src 'self'` cannot express this app's ICE servers.**
+
+> **CORRECTION, same day.** This amendment first claimed `connect-src 'self'` *caused* the
+> `E2E — ui-heavy` failure. **It did not.** Widening the directive changed nothing (run
+> 32597431686 failed identically), and `idle-no-reconnect` — which holds a WebSocket open for 90
+> seconds — passed under the policy throughout, so `'self'` was never blocking the socket. The
+> real failure was the agent's own Chrome being refused a navigation to `/preview/<agent>/<token>/`
+> with `net::ERR_NETWORK_ACCESS_DENIED`, leaving its tab on `chrome-error://` with nothing to
+> capture; the "capture/encoder/ICE" frame was the downstream symptom. The timing fit perfectly and
+> the mechanism was plausible, and it was still wrong — recorded here because a confident wrong
+> diagnosis is exactly what this document keeps warning about.
+>
+> The change below **stands on its own merits**: `browserWebRTC.ts` really does configure an
+> external STUN server unconditionally, so a policy permitting only `'self'` really is wrong for
+> this app and would have failed the moment a client needed it. It was a latent defect, not this
+> one.
+
+The substantive point, unchanged: ICE servers are not `'self'`. Original evidence: `E2E — ui-heavy`
 (`browser-live-video.spec.ts`) passed on this branch at CI run 32584338562 with **no** SPA policy,
 then failed **4 of 4 attempts** at run 32595538468 once this policy shipped, with the gateway
 sending `BrowserWebRTCStateFrame` reason `error` — whose contract text is *"a runtime failure
