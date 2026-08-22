@@ -302,11 +302,23 @@ A small optional interface a builtin may implement to declare its own index proj
 
 Track per-turn overflow count per tool. First occurrence: neutral hint. Second: name the exact narrowing parameter. Third: withdraw the retry offer and instruct the model to proceed with what it has. This is Claude Code's compaction-thrash guard applied in-band to the model rather than out-of-band to the user.
 
-## 11. D9 — Tool-result-first eviction
+## 11. D9 — Tool-result relocation, applied at assembly time
 
-`windowTrim` (ADR-028) evicts whole turns and remains the compaction path. D9 **adds a cheaper prior step**: clamp *old tool results in place* before evicting turns. Precedent: Cline clamps to 2,000 chars during compaction; the Anthropic API ships this as a first-class primitive (`clear_tool_uses_20250919`, defaults `trigger` 100,000 / `keep` 3); LangChain ships `ClearToolUsesEdit`. Anthropic describes tool-result clearing as "one of the safest, lightest touch forms of compaction."
+**[REWRITTEN 2026-08-22.]** The original D9 proposed clamping old tool results *in place*, Cline-style, to ~2,000 chars. Two independent objections killed it, and both are recorded because either alone is sufficient:
 
-This does not reintroduce an LLM summariser and does not violate ADR-028's "windowTrim is the only compaction path" — it is a pre-step within the same eviction call, with zero LLM calls, and deletes nothing on disk.
+1. **Operator direction:** no summarisation of tool results. A clamp to 2,000 chars is lossy compression by another name.
+2. **It could not have worked.** `JSONLBackend.GetHistory` (`pkg/session/jsonl_backend.go`) delegates straight to the store, which reads the window from disk on every call. An in-memory clamp is discarded before the next assembly reads it. The original D9 was a no-op.
+
+**Decision — relocate at assembly, never mutate history.** When the turn's running tool-result total approaches budget, `assembleMessages` substitutes the **oldest** oversized tool results with their D5 form — complete index plus spill path — while building the request. The session archive is untouched.
+
+Why this shape:
+
+- **Deterministic.** A pure function of (window, budget, spill index). Same inputs, same request. No LLM call, no sampling, no ordering nondeterminism.
+- **Nothing is summarised and nothing is lost.** The payload is already on disk from D5; the model can still read any of it via the path.
+- **The archive stays append-only**, so ADR-028 D14's invariant is preserved and no `SetHistory` rewrite is needed. This is projection, not compaction — which is also why it does not contend with ADR-028's "windowTrim is the only compaction path".
+- **Oldest-first**, because the newest tool result is the one the model is actively reasoning about.
+
+Precedent for the *intent* — Anthropic's `clear_tool_uses_20250919` and LangChain's `ClearToolUsesEdit` both clear tool results ahead of summarising, and Anthropic calls it "one of the safest, lightest touch forms of compaction." D9 differs in keeping the data retrievable rather than replacing it with a placeholder.
 
 ## 12. D10 — No silent turn exits
 
@@ -342,7 +354,7 @@ All bounded by the 150,000-char ceiling (§6.1).
 
 **Positive.** No single tool result can exceed the budget, and one that would have is routed rather than dropped. Needless trimming stops. Failures become diagnosable. The fix reaches all nine seeded vendors at once. Per-run token cost falls, by the quadratic argument in §2. Spilling the bulk to the gitignored `work/` tree keeps it **out** of the git-tracked `sessions/`/`.context/` files where it lands today, so the change reduces data-at-rest exposure rather than adding to it.
 
-**Not yet addressed — see §22.** The aggregate across a turn is still unbounded; §1.3 remains the one diagnosed defect without a decision.
+**All four diagnosed defects are now addressed:** §1.1 by D1–D3, §1.2 by D4–D7, §1.3 by D13, §1.4 by D10.
 
 **Negative / accepted.** The seed acquires two fields to maintain at release cadence, and a stale seed under-reports a new model's window until refreshed (mitigated by D11). The conservative unknown-window floor over-trims for unseeded models — visible and harmless, by design. Refetch costs an extra call to the external service where it occurs (latency, rate limit, possibly billing) — accepted as strictly cheaper than the alternative it replaces. Non-idempotent tools degrade to lossy truncation (§7.3). D9 adds a step to a hot path.
 
@@ -430,12 +442,16 @@ Performed 2026-08-22 on this branch @ `f4aaf37c`. The authoritative catalog is t
 
 ---
 
-## 22. Open — the aggregate budget (CRIT-001)
+## 22. D13 — The aggregate budget across a turn (closes CRIT-001)
 
-The adversarial review's first blocker stands unresolved, and is recorded here rather than papered over.
+The adversarial review's first blocker: D4 caps each result, nothing capped their sum. §1.3 was the one defect of four diagnosed in §1 with no remedying decision.
 
-D4 caps each result. **Nothing caps their sum.** `max_tool_iterations` is configurable — per-agent, then `agents.defaults`, then a hardcoded fallback of **200** (`pkg/agent/instance.go:241`); the operator's install sets 50. At 50 iterations the builtin cap alone admits 50 x 30,000 chars; at the shipped default of 200 it admits far more than any current model can hold. §1.3 is therefore the one defect of the four diagnosed in §1 that this ADR does not yet fix, and §12's "nothing size-related is ever turn-fatal" is not yet true.
+**The exposure is larger than the incident suggests.** `max_tool_iterations` resolves per-agent → `agents.defaults` → a hardcoded fallback of **200** (`pkg/agent/instance.go:241`). The operator's install sets 50; a fresh install with no config sits at 200. At the builtin cap of 30,000 chars, 200 iterations admits far more than any current model holds.
 
-Operator direction, 2026-08-22: **no summarisation of tool results.** That rules out the Cline-style clamp-to-2,000-chars approach and, with it, D9 as originally written.
+**Decision.** Track the running total of tool-result bytes within the turn. When it crosses the trigger, apply D9's assembly-time relocation oldest-first until the total is back under budget. Deterministic, no LLM call, no history mutation, nothing discarded.
 
-Candidate under discussion — *retroactive spill*: track the running total across the turn; as it approaches budget, take the **oldest** tool results still in the window and apply the D5 treatment to them (payload already on disk, context entry replaced by its complete index plus path). Nothing is summarised and nothing is lost — the same mechanism, applied after the fact. Not yet decided.
+`max_tool_iterations` stays a configuration knob and is **not** the mechanism — lowering it would cap legitimate long investigations to defend against a case D13 handles directly.
+
+**Still to settle at implementation:** whether the trigger is a fraction of the resolved window (adapts per model, but inherits any error in D1–D3) or an absolute per-turn character budget (predictable, and correct even where the window resolves badly). The absolute form is the safer default for the same reason D4's cap is window-independent — see §6.1.
+
+With D13, §12's "nothing size-related is ever turn-fatal" holds: a per-result cap bounds each entry, and the aggregate bounds their sum.
