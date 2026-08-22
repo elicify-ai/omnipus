@@ -1,8 +1,8 @@
-# ADR-066: Context budget and tool-result routing — provider-sourced windows, source-bound tools, and in-band refetch
+# ADR-066: Context budget and tool-result routing — provider-sourced windows, source-bound tools, and spill-with-index recovery
 
 - **Status:** Proposed (2026-08-21). Drafted from a live production incident on the operator's own instance; awaiting operator ratification before implementation.
 - **Date:** 2026-08-21
-- **Related:** [ADR-028](ADR-028-context-paging-sliding-window-recall.md) (`windowTrim` as the only compaction path — **extended, not superseded**, see D9); [ADR-051](ADR-051-media-handling-and-provider-error-translation.md) (`LLMError` classifier and the write choke point — extended by D10; its media-offload sink is the pattern D5 deliberately does **not** follow, see §17.7); [ADR-060](ADR-060-structured-tool-failure-family.md) (structured tool-failure family — D5's payload is a candidate member, see §16); CLAUDE.md **Constraint #1** (single binary, no new runtime deps), **Constraint #6** (explicit tool policy, no defaults), **Constraint #8** (contract-first wire formats).
+- **Related:** [ADR-028](ADR-028-context-paging-sliding-window-recall.md) (`windowTrim` as the only compaction path — **extended, not superseded**, see D9); [ADR-051](ADR-051-media-handling-and-provider-error-translation.md) (`LLMError` classifier and the write choke point — extended by D10; its `offloadSink{workDir: wsDir}` media pattern is the precedent D5 **follows**, see §7.2); [ADR-060](ADR-060-structured-tool-failure-family.md) (structured tool-failure family — D5's payload is a candidate member, see §16); CLAUDE.md **Constraint #1** (single binary, no new runtime deps), **Constraint #6** (explicit tool policy, no defaults), **Constraint #8** (contract-first wire formats).
 - **Deciders:** Operator (Daniel Piatkowski)
 - **Evidence level:** 1 for everything cited as read; 3 for the items marked **[UNVERIFIED]** in §21. Code claims were read in-session on the running build tree `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/build-v0.1.1` @ `6acd378` — the tree the failing binary was built from, not `main`. Cited as `file::symbol` per CLAUDE.md, except where a line number is the claim itself. Claims that are *absences* are cited as searches.
 
@@ -45,9 +45,18 @@ OpenRouter's public catalog reports `z-ai/glm-5.2` at `context_length=1048576`, 
 
 ### 1.2 Tool results enter context uncapped
 
-The only output cap in `pkg/tools` is `maxOutputBufferSize = 1 * 1024 * 1024` for **bash sessions** (`pkg/tools/session.go:16`). `pkg/mcp/manager.go` contains no truncation of any kind (searched). A 1.18 MB single MCP result is the proof.
+**[CORRECTED 2026-08-22]** An earlier draft claimed the only cap in `pkg/tools` was bash's 1 MB session buffer. That was wrong. Model-facing caps already ship:
 
-`pkg/gateway/tool_result_store.go` already offloads any result over `InlineToolResultMaxBytes = 50 KiB` to disk and hands the SPA a 4 KiB preview plus a reference. **That machinery points at the browser. Nothing points it at the model** — and per D5 it stays that way.
+| Cap | Location |
+|---|---|
+| shell output 10,000 chars | `pkg/tools/shell.go:1294` |
+| `fetch_url` 50,000 chars | `pkg/tools/web.go:34` (`defaultMaxChars`) |
+| `browser_get_text` 100 KiB | `pkg/tools/browser/tools.go:20` |
+| bash session buffer 1 MB | `pkg/tools/session.go:16` |
+
+What is absent is a cap on the **MCP path**: `pkg/mcp/manager.go` contains no truncation of any kind (searched). A 1.18 MB single MCP result is the proof. The gap is third-party tools, not the builtin surface.
+
+`pkg/gateway/tool_result_store.go` already offloads any result over `InlineToolResultMaxBytes = 50 KiB` to disk and hands the SPA a 4 KiB preview plus a reference. **That machinery points at the browser.** D5 does not extend it — the gateway store keeps its own location and lifecycle; the model-facing spill goes to the agent's gitignored `work/` tree instead (§7.2).
 
 ### 1.3 The budget is checked once per turn, never after tool results
 
@@ -91,7 +100,8 @@ Every production harness surveyed caps per-result output. Verified figures:
 | Roo Code (terminal → model) | **10 KB**, spill to disk, `read_command_output` |
 | Codex CLI | 10,000 |
 | Copilot CLI | 20 KiB → temp file + preview |
-| **Omnipus** | **none** |
+| **Omnipus (builtins)** | shell 10,000 chars · `fetch_url` 50,000 · `browser_get_text` 100 KiB |
+| **Omnipus (MCP path)** | **none** |
 
 Two findings shape the decisions below.
 
@@ -135,7 +145,7 @@ In order, first hit wins:
 
 `maxTokens * 4` at `pkg/agent/instance.go:249` is **retired**. The two divergent flat `128000` fallbacks at `pkg/agent/loop.go:11306` (`windowTrim`) and `pkg/agent/loop.go:11611` (model switch) are consolidated onto the same ladder — three code paths currently answer "what window do we assume" with three different numbers.
 
-**CLI-backed providers (`claude-cli`, `codex-cli`, `antigravity`) are exempt from budgeting entirely.** Those harnesses manage their own context; imposing a second, guessed budget on top causes the needless trimming of §1.1 without preventing anything.
+**CLI-backed providers (`claude-cli`, `codex-cli`) are exempt from budgeting entirely.** **[CORRECTED 2026-08-22]** An earlier draft also exempted `antigravity`. That was wrong: it is a plain HTTPS provider (`antigravityBaseURL = "https://cloudcode-pa.googleapis.com"`, `http.NewRequestWithContext`, no `exec.Command`) **and** the seeded default model (`pkg/config/defaults.go:200` → `antigravity/gemini-3-flash`). Exempting it would have stripped budgeting from the default provider on every fresh install. Those harnesses manage their own context; imposing a second, guessed budget on top causes the needless trimming of §1.1 without preventing anything.
 
 ## 5. D3 — The unknown-window default is conservative and loud
 
@@ -171,9 +181,11 @@ Characters, not lines: characters track token cost, and line-based caps are bein
 
 **No per-server opt-out.** Claude Code offers servers `_meta["anthropic/maxResultSizeChars"]` up to 500,000. Omnipus does not. A server-controlled lever to raise the cap is a lever to recreate the incident, and §2 shows how servers behave when left to self-limit. One cap, no negotiation.
 
+**Reconciling the caps that already ship.** Operator decision, 2026-08-22: **align the existing per-tool caps to the numbers in this table** rather than leaving three tuned-by-hand values in place. shell's 10,000 and `fetch_url`'s 50,000 become the builtin success cap of 30,000; `browser_get_text`'s 100 KiB likewise. One number per surface, explainable in a sentence, with the per-tool values retired rather than layered.
+
 **The cap is window-independent** — identical behaviour at 131,072 and 1,048,576 — so D4 remains correct even where D1–D3 resolve badly, and is shippable before the catalog work completes.
 
-## 7. D5 — The truncated-result contract: index in, refetch out, no spill
+## 7. D5 — The truncated-result contract: complete index, spilled payload, optional refetch hint
 
 An over-cap result is **not an error**. It is a different shape of success, delivered in-band to the model:
 
@@ -182,7 +194,9 @@ status:  truncated — 10 messages, 1,178,522 chars exceeds the 62,500 char limi
 index:   1  Ingrid <…>        "Owner action — flip p1 to done"  2026-08-12   4 KB
          2  Sven Möhler <…>   "Re: intro"                       2026-08-11   6 KB
          …  all 10 records listed …
-next:    re-call with message_id="…" for one body, or max_results=3
+handle:  <agent work dir>/tool_results/<ref>/result.jsonl
+next:    sed -n '2p' <handle>   |   grep -n "Sven" <handle>
+         (this tool also accepts message_id= for a single body)
 ```
 
 Four mandatory properties:
@@ -198,24 +212,35 @@ Claude Code shows a head preview because for a shell transcript the head is mean
 
 Completeness matters more than size. An agent that cannot tell what was cut re-calls with a larger limit "just in case" — the exact thrash D8 guards against. A complete index removes the uncertainty and the agent stops fetching.
 
-### 7.2 No spill to disk — refetch instead
+### 7.2 Spill to the agent work dir; refetch is the bonus, not the mechanism
 
-**Decision: the model is never handed a file path to a spilled result.** Recovery is a narrower call to the same tool.
+**[REVERSED 2026-08-22 — operator decision, after the security argument behind the previous version was shown to be inverted.]**
 
-Rationale, in order of weight:
+An earlier draft rejected spill-to-disk, ranking *security* first: it claimed the workspace `work/` dir is git-tracked and self-committing. **That was wrong, and it was wrong because the check was run against the parent directories rather than the actual target.** Re-run precisely:
 
-1. **Security.** `$OMNIPUS_HOME` is a git repository with an autocommit script on the operator's machine. Verified with `git check-ignore`: `tool_results/` **is** ignored; `workspace/` and `agents/` are **not**. Spilling raw tool output — third-party email bodies, in the incident — into the workspace `work/` dir would write it into a git-tracked, self-committing directory. An earlier draft of this ADR proposed exactly that. It was wrong.
-2. **Policy reach.** Under Constraint #6 every tool policy is explicit per agent, and many agents deny file tools. A handle is a dead end for those agents. Refetch needs no reader tool, so the mechanism works for every agent regardless of policy — and the reader-tool gate an earlier draft required disappears.
-3. **Confinement.** A spilled path outside the workspace is unopenable under Landlock and Seatbelt; a path inside it is the git problem above. There is no good location.
-4. **Freshness and simplicity.** A refetch returns current data and needs no retention policy, no cleanup, and no new filesystem surface.
+```
+agents/                                   TRACKED
+agents/<id>/work/                         IGNORED  (.gitignore:39  agents/*/work/)
+workspaces/<id>/work/                     IGNORED  (.gitignore:38  workspaces/*/work/)
+sessions/                                 TRACKED
+agents/<id>/sessions/.context/            TRACKED
+```
 
-`pkg/gateway/tool_result_store.go` remains **browser-facing only** and is not extended to the model.
+`.gitignore` carries a 12-line comment explaining that `work/` is deliberately the agent scratch tree and deliberately excluded. **The spill target was the safe location all along.** The tracked location is `sessions/` and `.context/` — where the payload already lands today, by design (`.gitignore:2`: *"Everything not listed here IS committed, including sessions/"*). Spilling does not create that exposure; it is the one thing that could reduce it, by keeping the bulk out of the transcript.
 
-### 7.3 The known limit: non-idempotent and expensive tools
+The second argument for refetch-only also fails on the evidence. §19.1 found **only ~9 of 89 builtin tools accept any narrowing parameter**. Refetch-only therefore lands on D7.2's "honest floor" — *"this data is not retrievable in smaller pieces"* — for the overwhelming majority of tools, making it a dead end in the common case rather than the exception.
 
-Refetch assumes the tool can be called again cheaply and safely. True for API reads; false for a 90-second shell command or a stateful operation.
+**Decision.** On overflow: write the full result to the agent's `work/tool_results/<ref>/`, return the complete index plus the path, **and** a narrowing hint where the tool's schema offers one (D7). Recovery is random-access, works for every tool including non-idempotent ones, and costs no second call to a third-party service.
 
-`bash` is expected to resolve this without re-execution: `pkg/tools/session.go` keeps a 1 MB output buffer and bash already exposes background-dispatch / status-poll / **read** sub-cases, so its "refetch" is a bounded slice of its own buffer. **[UNVERIFIED]** whether *foreground* bash retains that buffer — §19 task. If it does not, bash falls back to head-and-tail truncation with a marker: lossy, no worse than today, and no new attack surface.
+**Retention.** Spilled files live in the agent's scratch tree, which is gitignored and already understood as ephemeral. They are removed with the session.
+
+**The spill must be readable, not merely stored.** A 1.18 MB payload written as one JSON line defeats `grep`, `head` and any line-oriented read. The writer reshapes: collections become newline-delimited (one record per line), oversized fields inside each record are clamped with a marker, and an index file is written alongside. **The caps in §6.1 apply to reads of the spill as well as to the original result** — otherwise a `grep` returning one 400 KB line reproduces the original failure through the recovery path built to prevent it.
+
+### 7.3 Non-idempotent and expensive tools — solved by spill, not by refetch
+
+This was the strongest argument against refetch-only, and §7.2 resolves it: a 90-second shell command, a scrape, or any stateful operation is never re-executed. Its output is on disk and read from there.
+
+**[CORRECTED 2026-08-22]** An earlier draft asserted that foreground `bash` could refetch from its own 1 MB session buffer. The adversarial review disproved it: a foreground call **creates no session and retains no buffer**, and its output is already head-truncated at 10,000 chars (`pkg/tools/shell.go:1294`); the background buffer is a *destructive drain* with a 30-minute GC. Under refetch-only, shell output over the cap would have been unrecoverable. Under D5 as decided, it spills like everything else.
 
 ## 8. D6 — Generic reduction: four result shapes
 
@@ -241,7 +266,6 @@ One rule underneath all four: **keep what is small, elide what is large, report 
 | web fetch | 1 — `max_length` + `start_index` | Document |
 | web search | 2 | Collection — titles and URLs kept, bodies elided |
 | `browser_get_text` | 1 where a selector exists, else 2 | Document |
-| grep-style search | 1 — file cap + `head_limit`/`offset` | Collection |
 | any third-party MCP tool | 2 | whichever of the four the bytes indicate |
 
 **The reducer is pure and deterministic — no LLM call.** It runs on every oversized result; a summarisation call on the path meant to cut cost and latency would reintroduce both.
@@ -316,7 +340,9 @@ All bounded by the 150,000-char ceiling (§6.1).
 
 ## 15. Consequences
 
-**Positive.** The incident class becomes impossible: no single tool result can exceed the budget, and one that would have is routed rather than dropped. Needless trimming stops. Failures become diagnosable. The fix reaches all nine seeded vendors at once. Per-run token cost falls, by the quadratic argument in §2. No new filesystem surface and no new data-at-rest exposure.
+**Positive.** No single tool result can exceed the budget, and one that would have is routed rather than dropped. Needless trimming stops. Failures become diagnosable. The fix reaches all nine seeded vendors at once. Per-run token cost falls, by the quadratic argument in §2. Spilling the bulk to the gitignored `work/` tree keeps it **out** of the git-tracked `sessions/`/`.context/` files where it lands today, so the change reduces data-at-rest exposure rather than adding to it.
+
+**Not yet addressed — see §22.** The aggregate across a turn is still unbounded; §1.3 remains the one diagnosed defect without a decision.
 
 **Negative / accepted.** The seed acquires two fields to maintain at release cadence, and a stale seed under-reports a new model's window until refreshed (mitigated by D11). The conservative unknown-window floor over-trims for unseeded models — visible and harmless, by design. Refetch costs an extra call to the external service where it occurs (latency, rate limit, possibly billing) — accepted as strictly cheaper than the alternative it replaces. Non-idempotent tools degrade to lossy truncation (§7.3). D9 adds a step to a hot path.
 
@@ -337,7 +363,7 @@ All bounded by the 150,000-char ceiling (§6.1).
 4. **Wait for MCP to specify a limit.** Silent through three revisions with two unadopted proposals. Rejected as unbounded.
 5. **Build a dedicated context-window registry.** Duplicates embedding, refresh, checksum, versioning, persistence and id-normalisation that `pkg/providers/capabilities` already implements.
 6. **Fetch provider catalogs live at boot.** Adds a network dependency to startup and fails for `custom`, CLI-backed and offline installs. Rejected in favour of build-time generation plus D11.
-7. **Spill to disk and hand the model a file handle** (Claude Code / Roo / Deep Agents / Cursor all do this). Rejected on the four grounds in §7.2, security first. Note this also declines to extend ADR-051's `offloadSink{workDir: wsDir}` media pattern to tool output: media offload writes files the *provider* cannot present, where the workspace is the only option; tool output has a cheaper recovery that touches no disk.
+7. **Refetch-only, with no spill** (this ADR's own earlier position). Rejected 2026-08-22: its security rationale was inverted (§7.2), and §19.1 shows only ~9 of 89 builtins accept a narrowing parameter, so it degrades to "not retrievable" in the common case. Retained only as the *bonus* path where a schema offers one.
 8. **Pagination of the tool result.** Possible only where the *server* implements it — MCP's `tools/call` has no cursor, and Composio's tool had none. Harness-side pagination over an already-received result is strictly dominated: by the time you could paginate you hold the whole payload, so forcing sequential access is worse than a complete index plus targeted refetch. Sequential paging also re-accumulates every walked page in context, reproducing the quadratic cost in instalments. The one property worth keeping — the iterator contract, "there is more, here is how to get it" — is preserved by D5's `next` field.
 9. **Plain truncation with a marker, no index and no recipe.** The floor the field has moved past. Retained only as the failure-path and non-idempotent-tool fallback (§6.1, §7.3).
 
@@ -399,5 +425,17 @@ Performed 2026-08-22 on this branch @ `f4aaf37c`. The authoritative catalog is t
 
 - **[UNVERIFIED]** Whether the OpenAI and Anthropic model-list endpoints publish context length. Confirming requires the operator's API keys, deliberately not used. Immaterial to D1 (the seed is generated from OpenRouter's catalog) but must be checked before any claim that a native catalog is unavailable.
 - **[UNVERIFIED]** Ollama's local field name for context length (`/api/show`). The operator's daemon was not running. Needed only if D2 gains a live local-query rung for Ollama.
-- **[UNVERIFIED]** Whether foreground `bash` calls retain their session output buffer for later bounded reads (§7.3, §19.2).
+- ~~Whether foreground `bash` retains a session output buffer~~ — **resolved 2026-08-22: it does not.** See §7.3.
 - ~~Which builtin tools already accept a source-bounding parameter~~ — **resolved 2026-08-22, see §19.1.**
+
+---
+
+## 22. Open — the aggregate budget (CRIT-001)
+
+The adversarial review's first blocker stands unresolved, and is recorded here rather than papered over.
+
+D4 caps each result. **Nothing caps their sum.** `max_tool_iterations` is configurable — per-agent, then `agents.defaults`, then a hardcoded fallback of **200** (`pkg/agent/instance.go:241`); the operator's install sets 50. At 50 iterations the builtin cap alone admits 50 x 30,000 chars; at the shipped default of 200 it admits far more than any current model can hold. §1.3 is therefore the one defect of the four diagnosed in §1 that this ADR does not yet fix, and §12's "nothing size-related is ever turn-fatal" is not yet true.
+
+Operator direction, 2026-08-22: **no summarisation of tool results.** That rules out the Cline-style clamp-to-2,000-chars approach and, with it, D9 as originally written.
+
+Candidate under discussion — *retroactive spill*: track the running total across the turn; as it approaches budget, take the **oldest** tool results still in the window and apply the D5 treatment to them (payload already on disk, context entry replaced by its complete index plus path). Nothing is summarised and nothing is lost — the same mechanism, applied after the fact. Not yet decided.
