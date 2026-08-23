@@ -137,15 +137,19 @@ func pinnedCoreOverheadTokens(agent *AgentInstance) int {
 }
 
 // agentContextBudget resolves B for one agent instance — the single call
-// every budget site (pre-turn, timeout-recovery, windowTrim; mid-turn and
-// model-switch once T066-13/T066-09 land) makes, so they can never disagree.
+// every budget site (pre-turn, timeout-recovery, windowTrim, model-switch;
+// mid-turn once T066-13 lands) makes, so they can never disagree.
+//
+// The window is the one ResolveWindow resolved (ADR-066 D2), read under the
+// instance mutex. There is no fallback: an exempt agent (subprocess-CLI
+// provider, FR-005) has no budget at all — callers check
+// budgetChecksExempt first and skip the check — so it returns 0 here rather
+// than inventing a window. An unknown window never reaches a budget site:
+// runTurn refuses the turn before the first check (FR-008).
 func agentContextBudget(agent *AgentInstance) int {
-	contextWindow := agent.ContextWindow
-	if contextWindow <= 0 {
-		// Pre-ADR-066-D2 fallback, kept where windowTrim always had it.
-		// T066-09 deletes it: NewAgentInstance will resolve W through the
-		// ladder and an exempt (cli_driver) agent skips every budget check.
-		contextWindow = 128000
+	contextWindow, exempt, _ := agent.windowSnapshot()
+	if exempt || contextWindow <= 0 {
+		return 0
 	}
 	return contextBudget(contextWindow, agent.MaxTokens, pinnedCoreOverheadTokens(agent))
 }

@@ -568,13 +568,13 @@ func TestBreadcrumb_ZeroLLMCallsViaStubCounter(t *testing.T) {
 			Defaults: config.AgentDefaults{
 				Home:              t.TempDir(),
 				ModelName:         "stub-model",
-				ContextWindow:     128000,
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
 			List: []config.AgentConfig{{ID: "mia", Home: t.TempDir()}},
 		},
 	}
+	cfg.Context.DefaultContextWindow = intPtr(cloudWindowFloor)
 	_ = mustNewAgentLoop(t, cfg, bus.NewMessageBus(), cp)
 
 	// Freeze the clock for deterministic relative times.

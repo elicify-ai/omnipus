@@ -50,7 +50,6 @@ func TestRecallConversation_RealRegistration_ReachesEvictedTurns(t *testing.T) {
 			Defaults: config.AgentDefaults{
 				Home:              tmpDir,
 				ModelName:         "test-model",
-				ContextWindow:     cw,
 				MaxTokens:         mt,
 				MaxToolIterations: 10,
 			},
@@ -59,6 +58,7 @@ func TestRecallConversation_RealRegistration_ReachesEvictedTurns(t *testing.T) {
 			},
 		},
 	}
+	cfg.Context.DefaultContextWindow = intPtr(cw)
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &mockProvider{})
 	t.Cleanup(al.Close)
 

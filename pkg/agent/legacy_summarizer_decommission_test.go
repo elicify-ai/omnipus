@@ -180,15 +180,16 @@ func TestDecommission_LongConversationMakesNoExtraModelCalls(t *testing.T) {
 				ModelName:         "test-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
-				// Generous window so the proactive windowTrim budget check
-				// never fires. windowTrim makes no LLM calls either way, but
-				// keeping it out of the picture makes the call count mean
-				// exactly one thing: one call per turn, nothing else.
-				ContextWindow: 400000,
 			},
 			List: []config.AgentConfig{{ID: "mia", Home: workspace}},
 		},
 	}
+	// Generous window (ADR-066 D2 rung 3; a cloud row nobody can size is
+	// capped at the floor, which is still generous here) so the proactive
+	// windowTrim budget check never fires. windowTrim makes no LLM calls
+	// either way, but keeping it out of the picture makes the call count
+	// mean exactly one thing: one call per turn, nothing else.
+	cfg.Context.DefaultContextWindow = intPtr(400000)
 
 	provider := &turnCallCountingProvider{}
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), provider)

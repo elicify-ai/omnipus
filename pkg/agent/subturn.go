@@ -925,6 +925,14 @@ func spawnSubTurn(
 	execProvider := execSource.Provider
 	execCandidates := execSource.Candidates
 	execThinkingLevel := execSource.ThinkingLevel
+	// ADR-066 D2: the window travels with the quad — it is resolved from
+	// the TARGET's own (provider, model), so the child sees the same
+	// window its provider/model would give it, never the parent's.
+	execContextWindow := execSource.ContextWindow
+	execWindowSource := execSource.WindowSource
+	execWindowClamped := execSource.WindowClamped
+	execWindowExempt := execSource.WindowExempt
+	execWindowUnknown := execSource.WindowUnknown
 	execProviderPool := execSource.providerPool.Load()
 	execSource.mu.RUnlock()
 
@@ -947,7 +955,11 @@ func spawnSubTurn(
 		MaxTokens:       execSource.MaxTokens,
 		Temperature:     execSource.Temperature,
 		ThinkingLevel:   execThinkingLevel,
-		ContextWindow:   execSource.ContextWindow,
+		ContextWindow:   execContextWindow,
+		WindowSource:    execWindowSource,
+		WindowClamped:   execWindowClamped,
+		WindowExempt:    execWindowExempt,
+		WindowUnknown:   execWindowUnknown,
 		Provider:        execProvider,
 		Sessions:        ephemeralStore,
 		ContextBuilder:  execSource.ContextBuilder,

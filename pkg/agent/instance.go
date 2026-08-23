@@ -47,8 +47,20 @@ type AgentInstance struct {
 	MaxTokens      int
 	Temperature    float64
 	ThinkingLevel  ThinkingLevel
-	ContextWindow  int
-	Provider       providers.LLMProvider
+	// ContextWindow is the effective window resolved by the ADR-066 D2
+	// ladder (ResolveWindow) at construction and on every model switch. 0
+	// when the provider is exempt (WindowExempt) or the window is unknown
+	// (WindowUnknown). Written under mu by ApplyAgentModel; read through
+	// windowSnapshot on the turn path so a switch can never tear it.
+	ContextWindow int
+	// WindowSource / WindowClamped / WindowExempt / WindowUnknown are the
+	// rest of the resolution (see WindowResolution); the gateway projects
+	// them as context_window_source / context_window_clamped.
+	WindowSource  WindowSource
+	WindowClamped bool
+	WindowExempt  bool
+	WindowUnknown bool
+	Provider      providers.LLMProvider
 	// providerPool is the atomic-pointer form of ProviderPool. The pool is
 	// keyed by provider name and holds one LLMProvider instance per distinct
 	// provider referenced by Candidates (or by the light tier). The fallback
@@ -245,17 +257,6 @@ func NewAgentInstance(
 		maxTokens = 8192
 	}
 
-	contextWindow := defaults.ContextWindow
-	if contextWindow == 0 {
-		// Default heuristic: 4x the output token limit.
-		// Most models have context windows well above their output limits
-		// (e.g., GPT-4o 128k ctx / 16k out, Claude 200k ctx / 8k out).
-		// 4x is a conservative lower bound that avoids premature
-		// summarization while remaining safe — the reactive
-		// windowTrim (context paging) handles any overshoot.
-		contextWindow = maxTokens * 4
-	}
-
 	temperature := 0.7
 	if defaults.Temperature != nil {
 		temperature = *defaults.Temperature
@@ -287,6 +288,17 @@ func NewAgentInstance(
 	// per-turn hot path allocation-free and surfaces credential / API-base
 	// config errors at startup instead of mid-conversation.
 	providerPool := buildProviderPool(cfg, candidates)
+
+	// ADR-066 D2: the context window comes from the ONE resolver, keyed by
+	// the primary candidate's (provider, model) pair and this agent's id so
+	// the per-agent override applies. There is no heuristic fallback: an
+	// exempt provider gets 0 and skips every budget check; a local endpoint
+	// nobody can size gets 0 and is refused at turn start (D3).
+	windowProvider, windowModel := primaryWindowPair(candidates, defaults.Provider, model)
+	window := ResolveWindow(cfg, windowProvider, windowModel, agentID)
+	contextWindow := window.Window
+	// FR-005b: max_tokens must leave a positive budget B for the window.
+	maxTokens = clampMaxTokensForWindow(contextWindow, maxTokens, model)
 
 	// Model routing setup: pre-resolve light model candidates at creation time
 	// to avoid repeated model_list lookups on every incoming message.
@@ -364,6 +376,10 @@ func NewAgentInstance(
 		Temperature:     temperature,
 		ThinkingLevel:   thinkingLevel,
 		ContextWindow:   contextWindow,
+		WindowSource:    window.Source,
+		WindowClamped:   window.Clamped,
+		WindowExempt:    window.Exempt,
+		WindowUnknown:   window.Unknown,
 		Provider:        provider,
 		Sessions:        sessions,
 		ContextBuilder:  contextBuilder,
@@ -518,6 +534,11 @@ func (a *AgentInstance) snapshotForExternalDispatch() *AgentInstance {
 	provider := a.Provider
 	candidates := a.Candidates
 	thinkingLevel := a.ThinkingLevel
+	contextWindow := a.ContextWindow
+	windowSource := a.WindowSource
+	windowClamped := a.WindowClamped
+	windowExempt := a.WindowExempt
+	windowUnknown := a.WindowUnknown
 	pool := a.providerPool.Load()
 	a.mu.RUnlock()
 
@@ -532,7 +553,11 @@ func (a *AgentInstance) snapshotForExternalDispatch() *AgentInstance {
 		MaxTokens:       a.MaxTokens,
 		Temperature:     a.Temperature,
 		ThinkingLevel:   thinkingLevel,
-		ContextWindow:   a.ContextWindow,
+		ContextWindow:   contextWindow,
+		WindowSource:    windowSource,
+		WindowClamped:   windowClamped,
+		WindowExempt:    windowExempt,
+		WindowUnknown:   windowUnknown,
 		Provider:        provider,
 		Sessions:        a.Sessions,
 		ContextBuilder:  a.ContextBuilder,
@@ -1069,4 +1094,43 @@ func expandHome(path string) string {
 		return home
 	}
 	return path
+}
+
+// primaryWindowPair is the (provider, model) pair ResolveWindow is keyed by:
+// the primary candidate's, which already carries the configured provider
+// that owns the credentials and the bare model id the catalog indexes.
+// With no resolvable candidate it falls back to the defaults' provider and
+// the raw model string so the ladder can still answer.
+func primaryWindowPair(candidates []providers.FallbackCandidate, defaultProvider, model string) (string, string) {
+	if len(candidates) > 0 {
+		return candidates[0].Provider, candidates[0].Model
+	}
+	return strings.TrimSpace(defaultProvider), strings.TrimSpace(model)
+}
+
+// windowSnapshot reads the resolved window under the instance mutex so a
+// concurrent ApplyAgentModel (which rewrites ContextWindow together with
+// Model / Provider / Candidates) can never be observed torn.
+func (a *AgentInstance) windowSnapshot() (window int, exempt, unknown bool) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.ContextWindow, a.WindowExempt, a.WindowUnknown
+}
+
+// budgetChecksExempt reports whether every budget check — pre-turn trim,
+// mid-turn, timeout recovery, model switch — is skipped for this agent
+// (ADR-066 FR-005: a subprocess-CLI provider manages its own context).
+func (a *AgentInstance) budgetChecksExempt() bool {
+	_, exempt, _ := a.windowSnapshot()
+	return exempt
+}
+
+// applyWindowResolution writes a fresh resolution onto the instance. The
+// caller holds a.mu (ApplyAgentModel's tuple flip).
+func (a *AgentInstance) applyWindowResolutionLocked(r WindowResolution) {
+	a.ContextWindow = r.Window
+	a.WindowSource = r.Source
+	a.WindowClamped = r.Clamped
+	a.WindowExempt = r.Exempt
+	a.WindowUnknown = r.Unknown
 }

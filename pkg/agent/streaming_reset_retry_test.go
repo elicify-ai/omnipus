@@ -478,18 +478,20 @@ func TestRetryOnStreamingReset_NothingToTrimStillRetries(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      tmpDir,
-				ModelName: "test-model",
-				// Deliberately tiny so isOverContextBudget is true on a
-				// fresh, single-message turn (B = 100 − 4096 − … < 0),
-				// independent of any default-config edge.
-				ContextWindow:     100,
+				Home:              tmpDir,
+				ModelName:         "test-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
 			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
+	// Deliberately tiny so isOverContextBudget is true on a fresh,
+	// single-message turn (B < 0 even after the FR-005b max_tokens clamp,
+	// because the pinned-core term alone exceeds the window), independent
+	// of any default-config edge. The global default is the ADR-066 D2
+	// ladder's rung 3 (clamped against the floor, so 100 stands).
+	cfg.Context.DefaultContextWindow = intPtr(100)
 
 	msgBus := bus.NewMessageBus()
 	t.Cleanup(func() { msgBus.Close() })
@@ -599,13 +601,13 @@ func TestRetryOnStreamingReset_RecallSpanDropAloneStillRetries(t *testing.T) {
 				// the timeout-recovery check fire is that it measures the
 				// request the retry would assemble, which now includes the
 				// ~150,000-token recall span injected during the failed call.
-				ContextWindow:     100000,
 				MaxTokens:         2000,
 				MaxToolIterations: 10,
 			},
 			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
+	cfg.Context.DefaultContextWindow = intPtr(100000)
 
 	msgBus := bus.NewMessageBus()
 	t.Cleanup(func() { msgBus.Close() })

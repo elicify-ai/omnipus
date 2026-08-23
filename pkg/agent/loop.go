@@ -719,6 +719,16 @@ var ErrWorkspaceWorkDirUnavailable = errors.New("workspace work directory unavai
 // directory is missing or could not be created.
 var ErrAgentHomeUnavailable = errors.New("agent home directory unavailable")
 
+// ErrContextWindowUnknown is returned by runTurn when the agent's provider is
+// a `locality: local` endpoint that reported no context window and no
+// operator override exists (ADR-066 D3, FR-008). The turn is refused — never
+// run on a guessed window — with LLMError code context_window_unknown
+// (attribution config). It is evaluated THIRD in the pre-turn gate, after
+// ADR-067's needs_provider and ADR-068's model_unassigned. Setting
+// ContextSettings.model_overrides[] for the (provider, model) triggers a
+// reload and clears it without a restart.
+var ErrContextWindowUnknown = errors.New("context window unknown for this model; turn refused")
+
 // perCandidateTimeoutFromConfig derives a per-candidate timeout for the fallback
 // chain from the provider config. It uses the RequestTimeout of the first provider
 // that has a positive RequestTimeout value, falling back to the providers package
@@ -1771,12 +1781,22 @@ func registerSharedTools(
 				}
 			}
 		}
+		// The handoff target's window is the one its own instance resolved
+		// through the ADR-066 D2 ladder (its provider, its model, its
+		// override) — never a config default. An unknown target, an exempt
+		// one or an unknown window yields 0: the handoff then transfers no
+		// recent context and the summary line names what was left out.
 		getContextWindow := func(targetAgentID string) int {
-			currentCfg := al.GetConfig()
-			if currentCfg.Agents.Defaults.ContextWindow > 0 {
-				return currentCfg.Agents.Defaults.ContextWindow
+			liveRegistry := al.GetRegistry()
+			if liveRegistry == nil {
+				return 0
 			}
-			return 8192
+			target, ok := liveRegistry.GetAgent(targetAgentID)
+			if !ok || target == nil {
+				return 0
+			}
+			window, _, _ := target.windowSnapshot()
+			return window
 		}
 		getDefaultAgent := func() string {
 			currentCfg := al.GetConfig()
@@ -4905,6 +4925,14 @@ func (al *AgentLoop) ApplyAgentModel(agentID, model string) (string, error) {
 	// candidate chain keeps ProviderPool coherent with Candidates.
 	newPool := buildProviderPool(cfg, nextCandidates)
 
+	// ADR-066 D2: the window is part of the model identity. Re-resolve it
+	// through the ONE ladder for the new primary (provider, model) and flip
+	// it inside the same lock as Model / Provider / Candidates so a reader
+	// never pairs the new model with the old window. FR-005b: max_tokens is
+	// re-clamped against the new window so B stays positive.
+	windowProvider, windowModel := primaryWindowPair(nextCandidates, cfg.Agents.Defaults.Provider, modelCfg.Model)
+	window := ResolveWindow(cfg, windowProvider, windowModel, agent.ID)
+
 	agent.mu.Lock()
 	oldModel := agent.Model
 	oldProvider := agent.Provider
@@ -4912,6 +4940,8 @@ func (al *AgentLoop) ApplyAgentModel(agentID, model string) (string, error) {
 	agent.Provider = nextProvider
 	agent.Candidates = nextCandidates
 	agent.ThinkingLevel = parseThinkingLevel(modelCfg.ThinkingLevel)
+	agent.applyWindowResolutionLocked(window)
+	agent.MaxTokens = clampMaxTokensForWindow(window.Window, agent.MaxTokens, model)
 	// Publish the new pool INSIDE the same lock as the Model + Provider +
 	// Candidates flip. The atomic.Pointer in StoreProviderPool would protect
 	// the pool's map against concurrent read/write on its own, but an
@@ -8087,7 +8117,37 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 		ts.opts.WorkspaceID,
 	)
 
-	if !ts.opts.NoHistory {
+	// ADR-066 D3 pre-turn gate (FR-008): a local endpoint that reported no
+	// context window is refused, never run on a guessed number. Order:
+	// needs_provider (ADR-067) → model_unassigned (ADR-068) →
+	// context_window_unknown (here, third). It sits after the model switch
+	// so a switch onto an unsized local model is refused too, and before
+	// the first budget check so nothing ever computes a budget from W = 0.
+	// Like the workspace gate above, the refusal is a REAL failed turn:
+	// turn.start went out, the LIFO defers fire on return, and the typed
+	// EventKindError is what the SPA renders.
+	if _, windowExempt, windowUnknown := ts.agent.windowSnapshot(); windowUnknown && !windowExempt {
+		turnStatus = TurnEndStatusError
+		windowErr := fmt.Errorf("%w: agent_id=%s model=%s", ErrContextWindowUnknown, ts.agent.ID, ts.agent.Model)
+		llm := TranslateTurnError(windowErr)
+		al.emitEvent(
+			EventKindError,
+			ts.eventMeta("runTurn", "turn.error"),
+			ErrorPayload{
+				Stage:     "context_window",
+				ChatID:    ts.chatID,
+				SessionID: string(ts.routingSessionID),
+				Code:      string(llm.Code),
+				Message:   llm.Message,
+			},
+		)
+		ts.appendClassifiedError(EventKindError.String(), "context_window", llm)
+		return turnResult{}, windowErr
+	}
+
+	// FR-005: an exempt provider (subprocess CLI) manages its own context —
+	// the pre-turn trim and every budget check are skipped.
+	if !ts.opts.NoHistory && !ts.agent.budgetChecksExempt() {
 		toolDefs := ts.agent.Tools.ToProviderDefs()
 		// FR-028: the pre-turn check reads the one budget B — the same value
 		// windowTrim fits the suffix against — never the raw window.
@@ -9055,7 +9115,7 @@ turnLoop:
 				// an active span is part of the next request even though it was
 				// not part of callMessages). windowTrim counts that span the
 				// same way (FR-019 drop-span-first).
-				if !compactionAttemptedOnTimeout && !ts.opts.NoHistory {
+				if !compactionAttemptedOnTimeout && !ts.opts.NoHistory && !ts.agent.budgetChecksExempt() {
 					toolDefs := ts.agent.Tools.ToProviderDefs()
 					retryMessages := callMessages
 					if span := al.activeRecallSpan(ts.sessionKey); span != nil {
@@ -11397,6 +11457,11 @@ var skipAdvanceTotal atomic.Int64
 // The tool-surface term is what the turn ACTUALLY SENDS, not the whole
 // registry — see sentToolSurfaceTokens.
 func (al *AgentLoop) windowTrim(agent *AgentInstance, sessionKey string) (compressionResult, bool) {
+	if agent.budgetChecksExempt() {
+		// FR-005: an exempt provider manages its own context; there is no
+		// budget to fit against, so there is nothing to trim.
+		return compressionResult{NothingToTrim: true}, false
+	}
 	window := agent.Sessions.GetHistory(sessionKey)
 	if len(window) <= 1 {
 		// Nothing to evict: a single-message window cannot be shrunk further.
@@ -11686,47 +11751,33 @@ func (al *AgentLoop) handleModelSwitch(
 	history := agent.Sessions.GetHistory(sessionKey)
 	currentConvTokens := estimateHistoryTokens(history)
 
-	// Resolve the new model's window. ModelConfig itself doesn't carry a
-	// window (the per-agent defaults hold the canonical window), so we read
-	// the configured default from cfg.Agents.Defaults.ContextWindow. On any
-	// miss (cfg nil, model unknown, defaults unset) fall back to the agent's
-	// existing ContextWindow — preserving the historical "treat unknown as
-	// fit" behavior so the next LLM call's windowTrim still fires on overflow.
-	// Force a 128k floor for sub-zero agent defaults so decision logic still
-	// has a sane bound.
-	newContextWindow := agent.ContextWindow
-	if newContextWindow <= 0 {
-		newContextWindow = 128000
-	}
+	// ADR-066 D2: the new model's window comes from the ONE resolver, keyed
+	// by the new primary's (provider, model) and this agent's id — the same
+	// call NewAgentInstance and ApplyAgentModel make, so the switch-time
+	// re-window, the pre-turn trim and the mid-turn check compare against
+	// one budget B (B-06). An unresolvable model keeps the agent's current
+	// window (the "unknown model = no-op switch" behaviour — ApplyAgentModel
+	// below will fail and the turn continues on the previous model), but
+	// the miss MUST be surfaced: discarding it would let a typo'd
+	// `metadata.model_name` silently route the next call through the
+	// agent's PRIMARY model — the exact FR-007 failure mode.
+	newContextWindow, _, _ := agent.windowSnapshot()
 	al.mu.RLock()
 	cfg := al.cfg
 	al.mu.RUnlock()
 	if cfg != nil {
-		// Use ResolveModelCfg to confirm the new model resolves (so we know
-		// it's a real entry in the registry). The actual window still comes
-		// from agent defaults — ModelConfig doesn't carry one. We deliberately
-		// keep the "unknown model = no-op switch" behavior (the next LLM
-		// call will trip on overflow and windowTrim will fire), but
-		// we MUST surface the miss to the operator via a WARN. Discarding the
-		// error (W4-4 silent-failure-A) would let a typo'd `metadata.model_name`
-		// from the operator silently route the next LLM call through the
-		// agent's PRIMARY model — the exact FR-007 failure mode. Logging the
-		// resolve error at WARN with the requested model + agent id gives
-		// operators a breadcrumb to spot the typo at the switch site rather
-		// than several stack frames later.
-		if _, resolveErr := ResolveModelCfg(cfg, newModel, agent.Home); resolveErr != nil {
-			logger.WarnCF("agent", "handleModelSwitch: requested model did not resolve; falling back to agent defaults",
+		if modelCfg, resolveErr := ResolveModelCfg(cfg, newModel, agent.Home); resolveErr != nil {
+			logger.WarnCF("agent", "handleModelSwitch: requested model did not resolve; keeping the current window",
 				map[string]any{
 					"requested_model": newModel,
 					"agent_id":        agent.ID,
 					"resolve_error":   resolveErr.Error(),
 				})
+		} else {
+			candidates := resolveModelCandidatesForAgent(cfg, cfg.Agents.Defaults.Provider, modelCfg.Model, agent)
+			windowProvider, windowModel := primaryWindowPair(candidates, cfg.Agents.Defaults.Provider, modelCfg.Model)
+			newContextWindow = ResolveWindow(cfg, windowProvider, windowModel, agent.ID).Window
 		}
-		if cfg.Agents.Defaults.ContextWindow > 0 {
-			newContextWindow = cfg.Agents.Defaults.ContextWindow
-		}
-		// keep the "unknown model = no-op switch" behavior; the next LLM
-		// call's windowTrim will fire on overflow.
 	}
 
 	// FR-011: Re-window via windowTrim when the new model's window is
@@ -11738,13 +11789,17 @@ func (al *AgentLoop) handleModelSwitch(
 	// turns; evicted turns are reachable via recall_conversation.
 	// DOWNSIZE: windowTrim inherits FR-003's last-user-Turn floor (MAJ-06).
 	// No summary is written — breadcrumb in BuildMessages is the only clue.
+	// An exempt or unknown new window (0) is a Noop: nothing to trim against.
 	action := decideSwitchCompressAction(currentConvTokens, newContextWindow)
 	if action == SwitchActionCompress {
 		// Temporarily set the agent's context window to the new model's window
 		// so windowTrim computes the correct budget. We restore it after the
-		// trim; ApplyAgentModel (below) will set the canonical value.
+		// trim; ApplyAgentModel (below) sets the canonical value under the
+		// instance lock together with the rest of the model identity.
+		agent.mu.Lock()
 		oldContextWindow := agent.ContextWindow
 		agent.ContextWindow = newContextWindow
+		agent.mu.Unlock()
 
 		if _, trimOK := al.windowTrim(agent, sessionKey); !trimOK {
 			logger.DebugCF("agent", "handleModelSwitch: windowTrim returned false (history too small to trim)",
@@ -11759,7 +11814,9 @@ func (al *AgentLoop) handleModelSwitch(
 				})
 		}
 
+		agent.mu.Lock()
 		agent.ContextWindow = oldContextWindow
+		agent.mu.Unlock()
 	}
 
 	// 5. Orchestrate the full in-memory model swap under the agent mutex.
