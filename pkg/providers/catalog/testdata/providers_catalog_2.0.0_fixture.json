@@ -1,0 +1,159 @@
+{
+  "schema_version": "2.0.0",
+  "version": "v2026.8.22",
+  "updated_at": "2026-08-22T06:00:00Z",
+  "source": "models.dev@0123456789abcdef0123456789abcdef01234567 litellm@fedcba9876543210fedcba9876543210fedcba98 overrides@00000000000000000000000000000000deadbeef",
+  "default_resize_limits": { "long_edge_px": 7680, "max_bytes": 10485760 },
+  "providers": [
+    {
+      "id": "zai",
+      "name": "Z.AI",
+      "company": "Zhipu AI",
+      "api": "https://api.z.ai/api/paas/v4",
+      "protocol": "openai-compatible",
+      "protocols": [
+        { "protocol": "openai-compatible", "api": "https://api.z.ai/api/paas/v4" },
+        { "protocol": "anthropic", "api": "https://api.z.ai/api/anthropic" }
+      ],
+      "env": ["ZAI_API_KEY"],
+      "region": "intl",
+      "tier": "popular",
+      "auth_methods": ["api_key"],
+      "aliases": ["z-ai", "zhipu"],
+      "resize_limits": { "long_edge_px": 4096, "max_bytes": 5242880 },
+      "models": [
+        {
+          "id": "glm-5.2",
+          "name": "GLM-5.2",
+          "release_date": "2026-05-20",
+          "tool_call": true,
+          "context_window": 1000000,
+          "max_output_tokens": 131072,
+          "input_modalities": ["text"],
+          "status": "active"
+        },
+        {
+          "id": "glm-5.2-flash",
+          "name": "GLM-5.2 Flash",
+          "release_date": "2026-05-20",
+          "tool_call": true,
+          "context_window": 200000,
+          "max_output_tokens": 65536,
+          "input_modalities": ["text", "image"],
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "openrouter",
+      "name": "OpenRouter",
+      "company": "OpenRouter",
+      "api": "https://openrouter.ai/api/v1",
+      "protocol": "openai-compatible",
+      "env": ["OPENROUTER_API_KEY"],
+      "tier": "popular",
+      "auth_methods": ["api_key"],
+      "aliases": [],
+      "resize_limits": { "long_edge_px": 7680, "max_bytes": 10485760 },
+      "models": [
+        {
+          "id": "z-ai/glm-5.2",
+          "name": "GLM-5.2",
+          "release_date": "2026-05-20",
+          "tool_call": true,
+          "context_window": 1048576,
+          "max_output_tokens": 131072,
+          "input_modalities": ["text"],
+          "status": "active",
+          "disputed": true
+        }
+      ]
+    },
+    {
+      "id": "minimax",
+      "name": "MiniMax",
+      "company": "MiniMax",
+      "api": "https://api.minimax.io/anthropic/v1",
+      "protocol": "anthropic",
+      "env": ["MINIMAX_API_KEY"],
+      "region": "intl",
+      "tier": "standard",
+      "auth_methods": ["api_key"],
+      "aliases": [],
+      "resize_limits": { "long_edge_px": 7680, "max_bytes": 10485760 },
+      "models": [
+        {
+          "id": "MiniMax-M2.7",
+          "name": "MiniMax M2.7",
+          "release_date": "2026-06-01",
+          "tool_call": true,
+          "context_window": 204800,
+          "max_output_tokens": 131072,
+          "input_modalities": ["text", "image", "pdf"],
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "ollama",
+      "name": "Ollama",
+      "company": "Ollama",
+      "api": "http://localhost:11434/v1",
+      "protocol": "ollama",
+      "env": [],
+      "tier": "standard",
+      "auth_methods": ["api_key"],
+      "aliases": [],
+      "resize_limits": { "long_edge_px": 7680, "max_bytes": 10485760 },
+      "models": []
+    },
+    {
+      "id": "lmstudio",
+      "name": "LM Studio",
+      "company": "LM Studio",
+      "api": "http://127.0.0.1:1234/v1",
+      "protocol": "openai-compatible",
+      "env": [],
+      "tier": "standard",
+      "auth_methods": ["api_key"],
+      "aliases": [],
+      "resize_limits": { "long_edge_px": 7680, "max_bytes": 10485760 },
+      "models": [
+        {
+          "id": "qwen3-8b",
+          "name": "Qwen3 8B",
+          "tool_call": true,
+          "context_window": 32768,
+          "max_output_tokens": 8192,
+          "input_modalities": ["text"],
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "amazon-bedrock",
+      "name": "Amazon Bedrock",
+      "company": "Amazon",
+      "api": "",
+      "protocol": "",
+      "env": ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"],
+      "tier": "unsupported",
+      "unsupported_reason": "cloud-iam",
+      "auth_methods": ["api_key"],
+      "aliases": ["bedrock"],
+      "resize_limits": { "long_edge_px": 7680, "max_bytes": 10485760 },
+      "models": [
+        {
+          "id": "anthropic.claude-opus-4",
+          "name": "Claude Opus 4 (Bedrock)",
+          "release_date": "2025-05-22",
+          "tool_call": true,
+          "context_window": 0,
+          "max_output_tokens": 0,
+          "input_modalities": ["text", "image", "pdf"],
+          "status": "active"
+        }
+      ]
+    }
+  ]
+}
