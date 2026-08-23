@@ -707,17 +707,30 @@ func (a *restAPI) HandleOnboardingProbeProvider(w http.ResponseWriter, r *http.R
 		jsonErr(w, http.StatusBadRequest, "id is required")
 		return
 	}
-	if body.ApiKey == "" {
+	// ADR-067 FR-023 / ADR-068 FR-036: ONE ProbeProviderRequest shape. Only the
+	// api_key path is wired here; the sign_in path (CLI saved login / Copilot
+	// session) lands with ADR-068's provider constructors (B3), and catalog
+	// validation of `id` + the custom-row (api_base + protocol) rule land with
+	// ADR-067 T067-12. Until then: auth=sign_in → 400, and api_key is required.
+	if body.Auth != gen.ProbeProviderRequestAuthApiKey {
+		jsonErr(w, http.StatusBadRequest, "auth sign_in is not supported yet; use auth api_key")
+		return
+	}
+	apiKey := ""
+	if body.ApiKey != nil {
+		apiKey = *body.ApiKey
+	}
+	if apiKey == "" {
 		jsonErr(w, http.StatusBadRequest, "api_key is required")
 		return
 	}
 
 	baseURL := ""
-	if body.Endpoint != nil {
-		baseURL = *body.Endpoint
+	if body.ApiBase != nil {
+		baseURL = *body.ApiBase
 	}
 	if baseURL == "" {
-		baseURL = providers.GetDefaultAPIBase(string(body.Id))
+		baseURL = providers.GetDefaultAPIBase(body.Id)
 	}
 	if baseURL == "" {
 		// Unknown provider and caller didn't supply an endpoint — the probe
@@ -743,7 +756,7 @@ func (a *restAPI) HandleOnboardingProbeProvider(w http.ResponseWriter, r *http.R
 	}
 
 	// Fetch the model catalog (behavior-preserving: same as the former fetchUpstreamModels call).
-	models, fetchErr := providers.FetchModels(r.Context(), baseURL, body.ApiKey, a.ssrfChk())
+	models, fetchErr := providers.FetchModels(r.Context(), baseURL, apiKey, a.ssrfChk())
 	if fetchErr != nil {
 		// Upstream catalog fetch failure is a 200 with success=false — symmetrical
 		// with POST /providers/{id}/test, so the SPA's error-handling branch
@@ -768,10 +781,10 @@ func (a *restAPI) HandleOnboardingProbeProvider(w http.ResponseWriter, r *http.R
 	// returned in the validation field (R-B). Only InvalidKey blocks (Blocks=true).
 	// SEC-16: result.RawDetail is server-debug-only; never sent to the client.
 	result := providers.ValidateKey(r.Context(), providers.ValidateInput{
-		ProviderID:   string(body.Id),
-		ProviderName: providers.DisplayName(string(body.Id)),
+		ProviderID:   body.Id,
+		ProviderName: providers.DisplayName(body.Id),
 		BaseURL:      baseURL,
-		APIKey:       body.ApiKey,
+		APIKey:       apiKey,
 		Catalog:      models,
 	}, a.ssrfChk())
 	slog.Debug("rest: probe-provider: key validation result",

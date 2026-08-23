@@ -18,6 +18,8 @@ additionalProperties: false
 #   config     — an operator-fixable setting (credentials, workspace membership).
 #   ambiguous  — could be either side; the copy must say where to look.
 #   unknown    — genuinely unclassified.
+#   user       — the user ended the turn themselves (Stop button, shutdown).
+#                Rendered as a neutral notice, never an error toast (ADR-066 D7).
 x-user-message-attributions:
   - model
   - provider
@@ -25,6 +27,7 @@ x-user-message-attributions:
   - config
   - ambiguous
   - unknown
+  - user
 # ── User-facing copy catalogue (SINGLE SOURCE OF TRUTH) ──────────────────────
 # Every enum value below MUST appear here exactly once, with a non-empty message
 # and an attribution drawn from x-user-message-attributions. Both generators
@@ -86,6 +89,24 @@ x-user-messages:
   model_unavailable:
     message: "The model you picked isn’t available for this turn, so this reply used the previous model. Check the model in Settings."
     attribution: config
+  needs_provider:
+    message: "This agent's provider isn't configured. Open Settings → Providers to connect one."
+    attribution: config
+  model_unassigned:
+    message: "This agent has no model. Pick one in the agent's settings."
+    attribution: config
+  turn_canceled:
+    message: "This turn was stopped before it finished."
+    attribution: user
+  turn_timed_out:
+    message: "The model provider didn’t finish this turn in time, so it was stopped. Retry — if it keeps happening, open Verbose chat for details."
+    attribution: provider
+  context_unrecoverable:
+    message: "We couldn’t fit this turn into the model’s context even after clearing older tool results — that’s a bug on our side, not yours. Start a new session, or open Verbose chat for technical details."
+    attribution: product
+  context_window_unknown:
+    message: "This endpoint did not report a context length for this model. Set it under Settings → Models → Model overrides → Context length."
+    attribution: config
   unknown:
     message: "This turn didn’t finish, and we can’t tell why. Retry — if it keeps happening, open Verbose chat for details, or try a different model."
     attribution: unknown
@@ -106,6 +127,12 @@ properties:
       - agent_not_configured
       - workspace_unavailable
       - model_unavailable
+      - needs_provider
+      - model_unassigned
+      - turn_canceled
+      - turn_timed_out
+      - context_unrecoverable
+      - context_window_unknown
       - unknown
   message:
     type: string

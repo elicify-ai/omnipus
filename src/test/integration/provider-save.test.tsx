@@ -47,13 +47,13 @@ beforeEach(() => {
   // fallback default entry") — ProvidersSection now filters those out of its
   // main list entirely, so a disconnected fixture here would never render.
   vi.mocked(fetchProviders).mockResolvedValue([
-    { id: 'openai', name: 'OpenAI', display_name: 'OpenAI', status: 'connected', models: ['gpt-4o'] },
-    { id: 'anthropic', name: 'Anthropic', display_name: 'Anthropic', status: 'connected', models: ['claude-sonnet-4-5'] },
-    { id: 'google', name: 'Google Gemini', display_name: 'Google Gemini', status: 'connected', models: ['gemini-2.5-flash'] },
-    { id: 'groq', name: 'Groq', display_name: 'Groq', status: 'connected', models: ['llama-3.3-70b'] },
-    { id: 'openrouter', name: 'OpenRouter', display_name: 'OpenRouter', status: 'connected', models: ['openrouter/auto'] },
+    { id: 'openai', name: 'OpenAI', display_name: 'OpenAI', status: 'connected', models: ['gpt-4o'], auth_method: 'api_key', dependents: [], backs_default: false },
+    { id: 'anthropic', name: 'Anthropic', display_name: 'Anthropic', status: 'connected', models: ['claude-sonnet-4-5'], auth_method: 'api_key', dependents: [], backs_default: false },
+    { id: 'google', name: 'Google Gemini', display_name: 'Google Gemini', status: 'connected', models: ['gemini-2.5-flash'], auth_method: 'api_key', dependents: [], backs_default: false },
+    { id: 'groq', name: 'Groq', display_name: 'Groq', status: 'connected', models: ['llama-3.3-70b'], auth_method: 'api_key', dependents: [], backs_default: false },
+    { id: 'openrouter', name: 'OpenRouter', display_name: 'OpenRouter', status: 'connected', models: ['openrouter/auto'], auth_method: 'api_key', dependents: [], backs_default: false },
   ])
-  vi.mocked(configureProvider).mockResolvedValue({ id: 'openai', name: 'OpenAI', status: 'connected', models: [] })
+  vi.mocked(configureProvider).mockResolvedValue({ id: 'openai', name: 'OpenAI', status: 'connected', models: [], auth_method: 'api_key', dependents: [], backs_default: false })
   vi.mocked(testProvider).mockResolvedValue({ success: true })
   // Re-auth succeeds and mints a consent token the save flow replays.
   vi.mocked(reAuth).mockResolvedValue({ verified: true, token: 'consent-token-abc', expires_in: 300 })
@@ -127,7 +127,7 @@ describe('provider save & connect integration (test #27)', () => {
     // comment on why 'disconnected' fixtures don't render); after save,
     // anthropic's model list updates.
     vi.mocked(fetchProviders).mockResolvedValue([
-      { id: 'anthropic', name: 'Anthropic', display_name: 'Anthropic', status: 'connected', models: ['claude-sonnet-4-6'] },
+      { id: 'anthropic', name: 'Anthropic', display_name: 'Anthropic', status: 'connected', models: ['claude-sonnet-4-6'], auth_method: 'api_key', dependents: [], backs_default: false },
     ])
 
     render(<ProvidersSection />, { wrapper })

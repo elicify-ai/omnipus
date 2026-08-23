@@ -1,0 +1,42 @@
+title: DefaultModel
+description: >
+  The global default model as a (provider, model) pair — the body of
+  GET /api/v1/providers/default-model and the persisted shape of
+  agents.defaults.default_model (ADR-068 CRIT-001; agents.defaults.model_name
+  no longer exists). Window fields are produced by ADR-066's
+  ResolveWindow(provider, model) (rungs without the per-agent override,
+  cross-spec X-07) and are absent until that resolver lands. Exempt
+  subprocess-CLI rows return context_window 0 with window_source absent.
+  A fresh install has no default model: the GET returns provider and model
+  as empty strings until onboarding's explicit pick writes the pair.
+type: object
+required:
+  - provider
+  - model
+additionalProperties: false
+properties:
+  provider:
+    type: string
+    maxLength: 64
+    description: Catalog provider id or operator-named custom row id. Empty when unset.
+    example: "openrouter"
+  model:
+    type: string
+    maxLength: 256
+    description: Bare catalog model id. Empty when unset.
+    example: "z-ai/glm-5.2"
+  context_window:
+    type: integer
+    minimum: 0
+    description: Effective context window in tokens; 0 for exempt rows.
+    example: 1048576
+  window_source:
+    $ref: './ContextWindowSource.yaml'
+  window_unknown:
+    type: boolean
+    description: >
+      True iff the row has locality "local" and the live limits query failed
+      or reported no context length (ADR-066 D3, X-08). The SPA renders
+      "No context length" with a pointer to Settings → Models → Model
+      overrides instead of a number.
+    example: false

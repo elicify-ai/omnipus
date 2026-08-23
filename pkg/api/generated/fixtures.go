@@ -2385,7 +2385,7 @@ func FixtureWorkspace_ZeroValue() Workspace {
 
 func FixtureExecutorConfig_Populated() ExecutorConfig {
 	kind := ExternalCli
-	cli := ClaudeCode
+	cli := ExternalCliToolClaudeCode
 	return ExecutorConfig{
 		Kind: &kind,
 		Cli:  &cli,
@@ -2638,7 +2638,7 @@ func FixtureAgentCreateRequestSubagent3p_Populated() AgentCreateRequestSubagent3
 	maxCalls := 100
 	maxTools := 60
 	timeoutSeconds := 300
-	cli := ClaudeCode
+	cli := ExternalCliToolClaudeCode
 	cliPath := "/usr/local/bin/claude"
 
 	return AgentCreateRequestSubagent3p{
@@ -2679,7 +2679,7 @@ func FixtureAgentCreateRequestSubagent3p_Populated() AgentCreateRequestSubagent3
 // request whose type value is not "subagent_3p". JSON Schema validation must
 // reject it.
 func FixtureAgentCreateRequestSubagent3p_InvalidType() AgentCreateRequestSubagent3p {
-	cli := Codex
+	cli := ExternalCliToolCodex
 	cliPath := "/usr/local/bin/codex"
 	return AgentCreateRequestSubagent3p{
 		Name: "Bad Type",
@@ -2875,7 +2875,7 @@ func FixtureCliDetectEntry_NotInstalled() CliDetectEntry {
 
 func FixtureCliValidateRequest_Populated() CliValidateRequest {
 	return CliValidateRequest{
-		Cli:     ClaudeCode,
+		Cli:     ExternalCliToolClaudeCode,
 		CliPath: "/usr/local/bin/claude",
 	}
 }
@@ -3358,59 +3358,5 @@ func FixtureGodModeStatus_Edge() GodModeStatus {
 		Available: false,
 		Supported: true,
 		Persisted: true,
-	}
-}
-
-// ── ModelCapabilities ────────────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/ModelCapabilities.yaml (D18).
-// Previously ZERO contract coverage (test-coverage gate on
-// fix/uat-v0.1.1-defects, GAP 2). modalities is a closed 5-member enum
-// array (text/image/pdf/audio/video) — an out-of-enum value reaching the
-// wire would poison the SPA's whole-array Zod validation for this resource
-// (a real bug caught by review), so the enum boundary gets dedicated
-// coverage below (TestContract_ModelCapabilities_InvalidModalityRejected).
-
-// FixtureModelCapabilities_Populated — a vision-and-document-capable model.
-func FixtureModelCapabilities_Populated() ModelCapabilities {
-	return ModelCapabilities{
-		Id: "gemini-2.5-flash",
-		Modalities: []ModelCapabilitiesModalities{
-			ModelCapabilitiesModalitiesText,
-			ModelCapabilitiesModalitiesImage,
-			ModelCapabilitiesModalitiesPdf,
-		},
-	}
-}
-
-// FixtureModelCapabilities_ZeroValue — Go zero values. Expected to FAIL:
-// Modalities is a nil slice with no `omitempty` tag, so it marshals to
-// `"modalities":null`; the schema requires type: array.
-func FixtureModelCapabilities_ZeroValue() ModelCapabilities {
-	return ModelCapabilities{}
-}
-
-// FixtureModelCapabilities_Edge — a text-only model: id set, modalities is a
-// non-nil but EMPTY array (distinct from ZeroValue's null). No minItems is
-// declared on modalities, so an empty array is legal — a model that accepts
-// no input modality at all would be unusual but is not itself a schema
-// violation; the capability list simply carries no entries.
-func FixtureModelCapabilities_Edge() ModelCapabilities {
-	return ModelCapabilities{
-		Id:         "text-only-model",
-		Modalities: []ModelCapabilitiesModalities{},
-	}
-}
-
-// FixtureModelCapabilities_SecondValid — a second, differently-shaped valid
-// model (glm-5.2: text+audio, no image/pdf) — the differentiation-test
-// fixture proving ModelCapabilities isn't hardcoded to always emit the same
-// modality list.
-func FixtureModelCapabilities_SecondValid() ModelCapabilities {
-	return ModelCapabilities{
-		Id: "glm-5.2",
-		Modalities: []ModelCapabilitiesModalities{
-			ModelCapabilitiesModalitiesText,
-			ModelCapabilitiesModalitiesAudio,
-		},
 	}
 }

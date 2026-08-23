@@ -715,6 +715,22 @@ type ToolCallStartFrame struct {
 	Type               string  `json:"type"`
 }
 
+// ToolResultProjectionFrame — Server → client (ADR-066 D5): a tool result already delivered to this session was capped or emptied in place in the model's window. The archive keeps the full content; the SPA updates its rendering of the matching tool call (recall mark shown only under Verbose chat) and, on reload, learns the same state from ToolCall.content_state on the transcript. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES). Canonical copy — keep in sync by hand with components/schemas/ToolResultProjectionFrame.yaml.
+type ToolResultProjectionFrame struct {
+	// Zero-based index of the tool-result line in the session archive; together with tool_call_id it keys the projection state.
+	ArchiveLine int `json:"archive_line"`
+	// The new projection state. "full" is never pushed — it is the default state and is only ever read from the transcript.
+	ContentState string `json:"content_state"`
+	// The recall mark left in the window (names the tool, the id and the recall_conversation call that restores it). Rendered only under Verbose chat.
+	Mark *string `json:"mark,omitempty"`
+	// ADR-057 FR-012/FR-013 — present iff the projection was produced by a delegated child session different from session_id.
+	ProducingSessionId *string `json:"producing_session_id,omitempty"`
+	SessionId          string  `json:"session_id"`
+	// The projected tool call. Provider-generated ids are not unique across an archive — pair with archive_line.
+	ToolCallId string `json:"tool_call_id"`
+	Type       string `json:"type"`
+}
+
 // ToolResultRef — Sentinel for tool results > 50 KiB but <= 1 MiB whose full body is preserved server-side. SPA fetches via GET /api/v1/tool-results/{ref}.
 type ToolResultRef struct {
 	IsRef             bool   `json:"_ref"`
@@ -764,6 +780,7 @@ const (
 	WsFrameTypeError                    WsFrameType = "error"
 	WsFrameTypeToolCallStart            WsFrameType = "tool_call_start"
 	WsFrameTypeToolCallResult           WsFrameType = "tool_call_result"
+	WsFrameTypeToolResultProjection     WsFrameType = "tool_result_projection"
 	WsFrameTypeSubagentStart            WsFrameType = "subagent_start"
 	WsFrameTypeSubagentMessage          WsFrameType = "subagent_message"
 	WsFrameTypeSubagentState            WsFrameType = "subagent_state"

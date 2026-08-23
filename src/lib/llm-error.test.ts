@@ -41,6 +41,13 @@ const ALL_CODES: LLMErrorCode[] = [
   'agent_not_configured',
   'workspace_unavailable',
   'model_unavailable',
+  // ADR-066 / ADR-067 / ADR-068 (A-CONTRACT commit):
+  'needs_provider',
+  'model_unassigned',
+  'turn_canceled',
+  'turn_timed_out',
+  'context_unrecoverable',
+  'context_window_unknown',
   'unknown',
 ]
 

@@ -1,0 +1,88 @@
+title: CatalogModel
+description: >
+  One model of a catalog provider (ADR-067 schema 2.0.0). Looked up by the
+  exact (provider id, model id) pair — never by model id alone and never
+  with prefix stripping. Limits are authored upstream; a 0 means unknown and
+  is reported as such to consumers (ADR-066's ladder decides what to do).
+  window_source and window_unknown are ADR-066-owned projection fields
+  added by the gateway when it serves the document (X-08); they are never
+  part of the published asset.
+type: object
+required:
+  - id
+  - name
+  - context_window
+  - max_output_tokens
+  - input_modalities
+  - tool_call
+  - status
+additionalProperties: false
+properties:
+  id:
+    type: string
+    minLength: 1
+    maxLength: 256
+    description: Bare model id as the provider's API expects it (e.g. "glm-5.2", "z-ai/glm-5.2" on OpenRouter).
+    example: "glm-5.2"
+  name:
+    type: string
+    minLength: 1
+    description: Display name (Unicode preserved).
+    example: "GLM-5.2"
+  release_date:
+    type: string
+    description: Release date as YYYY-MM-DD. Optional; undated models sort last in the picker.
+    example: "2026-07-01"
+  context_window:
+    type: integer
+    minimum: 0
+    description: Context window in tokens; 0 = unknown.
+    example: 1000000
+  max_output_tokens:
+    type: integer
+    minimum: 0
+    description: Maximum output tokens; 0 = unknown.
+    example: 131072
+  input_modalities:
+    type: array
+    minItems: 1
+    items:
+      type: string
+      enum:
+        - text
+        - image
+        - pdf
+        - audio
+        - video
+    description: Input modalities the model accepts. MUST include "text".
+    example: ["text", "image"]
+  tool_call:
+    type: boolean
+    description: Whether the model supports tool calling.
+    example: true
+  status:
+    type: string
+    enum:
+      - active
+      - retired
+    description: >
+      "retired" rows are carried forward when the model vanishes upstream
+      (ADR-067 §8b); they are not offered for new selection.
+    example: "active"
+  disputed:
+    type: boolean
+    description: >
+      True when the two upstream registries disagreed on a numeric field
+      beyond the tolerance and the last-known-good value was published
+      (ADR-067 US-2.AC2). Informational.
+    example: false
+  window_source:
+    $ref: './ContextWindowSource.yaml'
+  window_unknown:
+    type: boolean
+    description: >
+      ADR-066 projection (X-08): true iff the provider has locality "local"
+      and the live limits query failed or reported no context length. The
+      SPA renders "No context length" with a link to Settings → Models →
+      Model overrides. Never a Provider.status value.
+    example: false

@@ -15,6 +15,7 @@ required:
   - soul
   - timeout_seconds
   - max_tool_iterations
+  - needs_model
 properties:
   id:
     type: string
@@ -209,6 +210,52 @@ properties:
     example: "alloy"
   executor:
     $ref: './ExecutorConfig.yaml'
+  degraded_reason:
+    type: string
+    enum:
+      - needs_provider
+    description: >
+      Present iff the agent cannot run a turn because of its provider binding
+      (ADR-067 FR-016/FR-031): "needs_provider" = the primary model's provider
+      id is neither a catalog id nor a custom row (or fails exact match). Such
+      an agent refuses turns with LLMError code needs_provider and makes zero
+      upstream requests. When both this and needs_model apply, the
+      "needs a provider" copy wins in the UI. Absent when the agent is healthy.
+    example: "needs_provider"
+  needs_model:
+    type: boolean
+    description: >
+      Always present, derived (ADR-068 FR-014): true when the agent's primary
+      model is empty or its provider is not configured. The agent list renders
+      "needs a model"; a turn to such an agent is refused with LLMError code
+      model_unassigned and no provider call. Precedence: degraded_reason
+      needs_provider wins in copy.
+    example: false
+  context_window_effective:
+    type: integer
+    minimum: 0
+    description: >
+      Read-only (ADR-066 D9): the context window in tokens the agent's turns
+      actually run with, after the D2 ladder and the lower-only clamp. 0 for
+      exempt subprocess-CLI rows. Optional — absent until the resolver lands.
+    example: 1048576
+  context_window_source:
+    $ref: './ContextWindowSource.yaml'
+  context_window_clamped:
+    type: boolean
+    description: >
+      Read-only (ADR-066 D2): true when an operator override exceeded the
+      model's capability and was clamped down to it (a WARN names the agent).
+      Optional — absent until the resolver lands.
+    example: false
+  context_window_override:
+    type: integer
+    minimum: 1
+    description: >
+      Per-agent operator override of the context window (ADR-066 D2 rung 1),
+      as persisted. Lower-only: the effective value is min(override, capability).
+      Absent when no override is set.
+    example: 200000
   memory_enabled:
     type: boolean
     default: true

@@ -63,6 +63,8 @@ channels:
         $ref: '#/components/messages/ToolCallStartFrame'
       ToolCallResultFrame:
         $ref: '#/components/messages/ToolCallResultFrame'
+      ToolResultProjectionFrame:
+        $ref: '#/components/messages/ToolResultProjectionFrame'
       SubagentStartFrame:
         $ref: '#/components/messages/SubagentStartFrame'
       SubagentMessageFrame:
@@ -316,6 +318,17 @@ operations:
       '
     messages:
     - $ref: '#/channels/chat/messages/ToolCallResultFrame'
+  receiveToolResultProjection:
+    action: receive
+    channel:
+      $ref: '#/channels/chat'
+    summary: 'A tool result already delivered to this session was capped or emptied in place in the model''s window (ADR-066 D5).
+      The SPA updates the matching tool call''s rendering (recall mark visible only under Verbose chat); the full content stays
+      in the archive and the gateway tool_results/ store.
+
+      '
+    messages:
+    - $ref: '#/channels/chat/messages/ToolResultProjectionFrame'
   receiveSubagentStart:
     action: receive
     channel:
@@ -826,6 +839,13 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/ToolCallResultFrame'
+    ToolResultProjectionFrame:
+      name: ToolResultProjectionFrame
+      title: tool_result_projection
+      summary: Tool result capped or emptied in place in the model window (server → client, ADR-066 D5).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/ToolResultProjectionFrame'
     SubagentStartFrame:
       name: SubagentStartFrame
       title: subagent_start
@@ -1142,6 +1162,7 @@ components:
       - error
       - tool_call_start
       - tool_call_result
+      - tool_result_projection
       - subagent_start
       - subagent_message
       - subagent_state
@@ -1530,6 +1551,8 @@ components:
       #   config     — an operator-fixable setting (credentials, workspace membership).
       #   ambiguous  — could be either side; the copy must say where to look.
       #   unknown    — genuinely unclassified.
+      #   user       — the user ended the turn themselves (Stop button, shutdown).
+      #                Rendered as a neutral notice, never an error toast (ADR-066 D7).
       x-user-message-attributions:
         - model
         - provider
@@ -1537,6 +1560,7 @@ components:
         - config
         - ambiguous
         - unknown
+        - user
       # ── User-facing copy catalogue (SINGLE SOURCE OF TRUTH) ──────────────────────
       # Every enum value below MUST appear here exactly once, with a non-empty message
       # and an attribution drawn from x-user-message-attributions. Both generators
@@ -1598,6 +1622,24 @@ components:
         model_unavailable:
           message: "The model you picked isn’t available for this turn, so this reply used the previous model. Check the model in Settings."
           attribution: config
+        needs_provider:
+          message: "This agent's provider isn't configured. Open Settings → Providers to connect one."
+          attribution: config
+        model_unassigned:
+          message: "This agent has no model. Pick one in the agent's settings."
+          attribution: config
+        turn_canceled:
+          message: "This turn was stopped before it finished."
+          attribution: user
+        turn_timed_out:
+          message: "The model provider didn’t finish this turn in time, so it was stopped. Retry — if it keeps happening, open Verbose chat for details."
+          attribution: provider
+        context_unrecoverable:
+          message: "We couldn’t fit this turn into the model’s context even after clearing older tool results — that’s a bug on our side, not yours. Start a new session, or open Verbose chat for technical details."
+          attribution: product
+        context_window_unknown:
+          message: "This endpoint did not report a context length for this model. Set it under Settings → Models → Model overrides → Context length."
+          attribution: config
         unknown:
           message: "This turn didn’t finish, and we can’t tell why. Retry — if it keeps happening, open Verbose chat for details, or try a different model."
           attribution: unknown
@@ -1618,6 +1660,12 @@ components:
             - agent_not_configured
             - workspace_unavailable
             - model_unavailable
+            - needs_provider
+            - model_unassigned
+            - turn_canceled
+            - turn_timed_out
+            - context_unrecoverable
+            - context_window_unknown
             - unknown
         message:
           type: string
@@ -1650,6 +1698,8 @@ components:
       #   config     — an operator-fixable setting (credentials, workspace membership).
       #   ambiguous  — could be either side; the copy must say where to look.
       #   unknown    — genuinely unclassified.
+      #   user       — the user ended the turn themselves (Stop button, shutdown).
+      #                Rendered as a neutral notice, never an error toast (ADR-066 D7).
       x-user-message-attributions:
         - model
         - provider
@@ -1657,6 +1707,7 @@ components:
         - config
         - ambiguous
         - unknown
+        - user
       # ── User-facing copy catalogue (SINGLE SOURCE OF TRUTH) ──────────────────────
       # Every enum value below MUST appear here exactly once, with a non-empty message
       # and an attribution drawn from x-user-message-attributions. Both generators
@@ -1718,6 +1769,24 @@ components:
         model_unavailable:
           message: "The model you picked isn’t available for this turn, so this reply used the previous model. Check the model in Settings."
           attribution: config
+        needs_provider:
+          message: "This agent's provider isn't configured. Open Settings → Providers to connect one."
+          attribution: config
+        model_unassigned:
+          message: "This agent has no model. Pick one in the agent's settings."
+          attribution: config
+        turn_canceled:
+          message: "This turn was stopped before it finished."
+          attribution: user
+        turn_timed_out:
+          message: "The model provider didn’t finish this turn in time, so it was stopped. Retry — if it keeps happening, open Verbose chat for details."
+          attribution: provider
+        context_unrecoverable:
+          message: "We couldn’t fit this turn into the model’s context even after clearing older tool results — that’s a bug on our side, not yours. Start a new session, or open Verbose chat for technical details."
+          attribution: product
+        context_window_unknown:
+          message: "This endpoint did not report a context length for this model. Set it under Settings → Models → Model overrides → Context length."
+          attribution: config
         unknown:
           message: "This turn didn’t finish, and we can’t tell why. Retry — if it keeps happening, open Verbose chat for details, or try a different model."
           attribution: unknown
@@ -1738,6 +1807,12 @@ components:
             - agent_not_configured
             - workspace_unavailable
             - model_unavailable
+            - needs_provider
+            - model_unassigned
+            - turn_canceled
+            - turn_timed_out
+            - context_unrecoverable
+            - context_window_unknown
             - unknown
         message:
           type: string
@@ -2638,6 +2713,55 @@ components:
           properties:
             llm_error:
               $ref: '#/components/schemas/LLMErrorReplay'
+    ToolResultProjectionFrame:
+      title: ToolResultProjectionFrame
+      description: >
+        Server → client (ADR-066 D5): a tool result already delivered to this
+        session was capped or emptied in place in the model's window. The archive
+        keeps the full content; the SPA updates its rendering of the matching
+        tool call (recall mark shown only under Verbose chat) and, on reload,
+        learns the same state from ToolCall.content_state on the transcript.
+        Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES).
+        Canonical copy — keep in sync by hand with
+        components/schemas/ToolResultProjectionFrame.yaml.
+      type: object
+      required:
+      - type
+      - session_id
+      - tool_call_id
+      - archive_line
+      - content_state
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: tool_result_projection
+        session_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        tool_call_id:
+          type: string
+          minLength: 1
+          description: The projected tool call. Provider-generated ids are not unique across an archive — pair with archive_line.
+        archive_line:
+          type: integer
+          minimum: 0
+          description: Zero-based index of the tool-result line in the session archive; together with tool_call_id it keys the projection state.
+        content_state:
+          type: string
+          enum:
+          - capped
+          - emptied
+          description: The new projection state. "full" is never pushed — it is the default state and is only ever read from the transcript.
+        mark:
+          type: string
+          maxLength: 2048
+          description: The recall mark left in the window (names the tool, the id and the recall_conversation call that restores it). Rendered only under Verbose chat.
+        producing_session_id:
+          type: string
+          minLength: 1
+          description: ADR-057 FR-012/FR-013 — present iff the projection was produced by a delegated child session different from session_id.
     RateLimitFrame:
       title: RateLimitFrame
       description: >

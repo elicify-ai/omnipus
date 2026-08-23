@@ -1,0 +1,150 @@
+title: CatalogProvider
+description: >
+  One provider of the registry-fed catalog (ADR-067 schema 2.0.0): its
+  identity (models.dev id or local-file id), wire protocol(s), tier, auth
+  methods, picker metadata and nested models. Custom (operator-named) rows
+  are never in the document — they are config rows with Provider.custom: true.
+  locality is derived by the gateway on load (ADR-067 FR-039: local ⇔
+  protocol ∈ {ollama, vllm} ∨ id = lmstudio ∨ custom row with a
+  loopback/private host), never published by the assembly job.
+type: object
+required:
+  - id
+  - name
+  - company
+  - api
+  - tier
+  - auth_methods
+  - aliases
+  - locality
+  - models
+additionalProperties: false
+properties:
+  id:
+    type: string
+    minLength: 1
+    maxLength: 64
+    description: Canonical provider id (models.dev id, e.g. "zai", "moonshotai-cn", or a local-file id such as "ollama").
+    example: "zai"
+  name:
+    type: string
+    minLength: 1
+    description: Display name (Unicode preserved).
+    example: "Z.ai"
+  company:
+    type: string
+    minLength: 1
+    description: >
+      Grouping key for the picker (ADR-067 X-10): one tile/row per company,
+      its plan × region variants being the providers that share it. Comes
+      from overrides/ via the models.dev name family; defaults to name.
+    example: "Z.ai"
+  api:
+    type: string
+    description: >
+      Primary base URL. Absolute https with a non-empty host, no userinfo /
+      query / fragment, no loopback, link-local, private or metadata IP
+      literal (FR-033) — except rows with locality "local". Empty only when
+      tier is "unsupported".
+    example: "https://api.z.ai/api/paas/v4"
+  protocol:
+    type: string
+    enum:
+      - openai-compatible
+      - anthropic
+      - google
+      - ollama
+      - cli
+    description: >
+      Primary wire protocol the factory dispatches on (ADR-067 D11). Absent
+      only when tier is "unsupported" (F-19).
+    example: "openai-compatible"
+  protocols:
+    type: array
+    items:
+      $ref: './CatalogProtocol.yaml'
+    description: >
+      Optional secondary protocols a provider offers (e.g. Z.ai's Anthropic
+      endpoint). When present MUST include the primary with the same api;
+      entries unique. A config may select one via ProviderUpdateRequest.protocol.
+  env:
+    type: array
+    items:
+      type: string
+    description: Opaque environment-variable hint for picker help text only; never consumed by the factory (F-20).
+    example: ["ZAI_API_KEY"]
+  region:
+    type: string
+    description: Deployment region when the provider has a regional split (e.g. "intl", "china", "us").
+    example: "intl"
+  plan:
+    type: string
+    description: Billing plan label when the provider has plan variants (e.g. "coding-plan").
+    example: "coding-plan"
+  tier:
+    type: string
+    enum:
+      - popular
+      - standard
+      - unsupported
+    description: >
+      Picker tier (ADR-067 FR-018, data not code). The popular set is
+      rendered as pinned tiles in catalog order; "unsupported" rows are
+      visible but disabled with unsupported_reason.
+    example: "popular"
+  unsupported_reason:
+    type: string
+    enum:
+      - cloud-iam
+      - deployment-url
+      - withdrawn
+    description: >
+      Required when tier is "unsupported". "cloud-iam" = needs request
+      signing (Bedrock, Vertex, watsonx, SAP AI Core); "deployment-url" =
+      needs a per-deployment URL (Azure); "withdrawn" = vanished upstream.
+      Never shown raw — the SPA maps it to copy.
+    example: "cloud-iam"
+  auth_methods:
+    type: array
+    minItems: 1
+    items:
+      type: string
+      enum:
+        - api_key
+        - sign_in
+    description: Auth methods the provider offers (ADR-068 FR-004); the UI renders a sign-in control only when sign_in is present.
+    example: ["api_key"]
+  aliases:
+    type: array
+    items:
+      type: string
+    description: >
+      Search-only strings for the picker's filter (ADR-067 FR-030). Never
+      consulted by resolution, the factory or config validation — an alias
+      is not an accepted provider id.
+    example: ["z-ai", "zhipu"]
+  locality:
+    type: string
+    enum:
+      - local
+      - cloud
+    description: Derived on load by the gateway (FR-039); the only local/cloud classification ADR-066/ADR-068 consume.
+    example: "cloud"
+  cli_kind:
+    type: string
+    enum:
+      - codex
+      - copilot
+    description: Required iff protocol is "cli" — selects the subprocess driver (ADR-067 X-14), never chosen by id.
+    example: "codex"
+  token_source:
+    type: string
+    description: Optional token source for sign-in HTTP rows (e.g. "codex-auth-json" for openai-chatgpt, X-41).
+    example: "codex-auth-json"
+  resize_limits:
+    $ref: './CatalogResizeLimits.yaml'
+  models:
+    type: array
+    items:
+      $ref: './CatalogModel.yaml'
+    description: The provider's models. May be empty (e.g. an unknown-provider row or a local endpoint listed live).

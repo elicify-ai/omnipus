@@ -29,6 +29,7 @@ const (
 	LLMErrorAttributionConfig    LLMErrorAttribution = "config"
 	LLMErrorAttributionAmbiguous LLMErrorAttribution = "ambiguous"
 	LLMErrorAttributionUnknown   LLMErrorAttribution = "unknown"
+	LLMErrorAttributionUser      LLMErrorAttribution = "user"
 )
 
 // LLMErrorAttributionValues is the closed attribution vocabulary, in contract order.
@@ -39,6 +40,7 @@ var LLMErrorAttributionValues = []LLMErrorAttribution{
 	LLMErrorAttributionConfig,
 	LLMErrorAttributionAmbiguous,
 	LLMErrorAttributionUnknown,
+	LLMErrorAttributionUser,
 }
 
 // LLMErrorCodes lists every LLMError code, in contract (enum) order.
@@ -56,43 +58,61 @@ var LLMErrorCodes = []string{
 	"agent_not_configured",
 	"workspace_unavailable",
 	"model_unavailable",
+	"needs_provider",
+	"model_unassigned",
+	"turn_canceled",
+	"turn_timed_out",
+	"context_unrecoverable",
+	"context_window_unknown",
 	"unknown",
 }
 
 // LLMErrorUserMessages maps every LLMError code to the sentence a user sees.
 // Exhaustive by construction: codegen aborts if any code lacks an entry.
 var LLMErrorUserMessages = map[string]string{
-	"media_unsupported":     "This model can’t use that kind of attachment. Try a different file format, or switch to a model that supports it.",
-	"provider_rejected":     "The model declined to respond to this request. Try rephrasing it, or switch models.",
-	"request_too_large":     "We built a request that was too large for this model to accept. Try shortening your message, or switch to a model with a larger limit.",
-	"provider_auth_failed":  "The model provider rejected our credentials. Check this provider’s API key in Settings.",
-	"rate_limited":          "The model provider is temporarily overloaded. Wait a moment, then retry.",
-	"network":               "We couldn’t reach the model provider. Check your internet connection and retry.",
-	"content_policy":        "The model provider blocked this request under its content policy. Try rephrasing to remove the flagged content.",
-	"context_too_long":      "This turn needed more context than the model can hold, even after trimming older turns automatically. Try a model with a larger context window, or shorten this message.",
-	"tool_args":             "The model filled in a tool’s arguments incorrectly. Retry — Verbose chat shows which tool and what went wrong.",
-	"schema":                "We sent the model provider a request it couldn’t process — that’s a bug on our side, not yours. Retry the turn, or open Verbose chat for technical details.",
-	"agent_not_configured":  "This agent isn’t on any workspace yet, so it has nowhere to work. Add it to a workspace team to get started.",
-	"workspace_unavailable": "This agent’s working folder could not be opened. Check that the disk has space and the folder is writable.",
-	"model_unavailable":     "The model you picked isn’t available for this turn, so this reply used the previous model. Check the model in Settings.",
-	"unknown":               "This turn didn’t finish, and we can’t tell why. Retry — if it keeps happening, open Verbose chat for details, or try a different model.",
+	"media_unsupported":      "This model can’t use that kind of attachment. Try a different file format, or switch to a model that supports it.",
+	"provider_rejected":      "The model declined to respond to this request. Try rephrasing it, or switch models.",
+	"request_too_large":      "We built a request that was too large for this model to accept. Try shortening your message, or switch to a model with a larger limit.",
+	"provider_auth_failed":   "The model provider rejected our credentials. Check this provider’s API key in Settings.",
+	"rate_limited":           "The model provider is temporarily overloaded. Wait a moment, then retry.",
+	"network":                "We couldn’t reach the model provider. Check your internet connection and retry.",
+	"content_policy":         "The model provider blocked this request under its content policy. Try rephrasing to remove the flagged content.",
+	"context_too_long":       "This turn needed more context than the model can hold, even after trimming older turns automatically. Try a model with a larger context window, or shorten this message.",
+	"tool_args":              "The model filled in a tool’s arguments incorrectly. Retry — Verbose chat shows which tool and what went wrong.",
+	"schema":                 "We sent the model provider a request it couldn’t process — that’s a bug on our side, not yours. Retry the turn, or open Verbose chat for technical details.",
+	"agent_not_configured":   "This agent isn’t on any workspace yet, so it has nowhere to work. Add it to a workspace team to get started.",
+	"workspace_unavailable":  "This agent’s working folder could not be opened. Check that the disk has space and the folder is writable.",
+	"model_unavailable":      "The model you picked isn’t available for this turn, so this reply used the previous model. Check the model in Settings.",
+	"needs_provider":         "This agent's provider isn't configured. Open Settings → Providers to connect one.",
+	"model_unassigned":       "This agent has no model. Pick one in the agent's settings.",
+	"turn_canceled":          "This turn was stopped before it finished.",
+	"turn_timed_out":         "The model provider didn’t finish this turn in time, so it was stopped. Retry — if it keeps happening, open Verbose chat for details.",
+	"context_unrecoverable":  "We couldn’t fit this turn into the model’s context even after clearing older tool results — that’s a bug on our side, not yours. Start a new session, or open Verbose chat for technical details.",
+	"context_window_unknown": "This endpoint did not report a context length for this model. Set it under Settings → Models → Model overrides → Context length.",
+	"unknown":                "This turn didn’t finish, and we can’t tell why. Retry — if it keeps happening, open Verbose chat for details, or try a different model.",
 }
 
 // LLMErrorUserAttributions maps every LLMError code to its fault attribution.
 // Exhaustive by construction, same as LLMErrorUserMessages.
 var LLMErrorUserAttributions = map[string]LLMErrorAttribution{
-	"media_unsupported":     LLMErrorAttributionModel,
-	"provider_rejected":     LLMErrorAttributionModel,
-	"request_too_large":     LLMErrorAttributionProduct,
-	"provider_auth_failed":  LLMErrorAttributionConfig,
-	"rate_limited":          LLMErrorAttributionProvider,
-	"network":               LLMErrorAttributionAmbiguous,
-	"content_policy":        LLMErrorAttributionProvider,
-	"context_too_long":      LLMErrorAttributionProduct,
-	"tool_args":             LLMErrorAttributionModel,
-	"schema":                LLMErrorAttributionProduct,
-	"agent_not_configured":  LLMErrorAttributionConfig,
-	"workspace_unavailable": LLMErrorAttributionConfig,
-	"model_unavailable":     LLMErrorAttributionConfig,
-	"unknown":               LLMErrorAttributionUnknown,
+	"media_unsupported":      LLMErrorAttributionModel,
+	"provider_rejected":      LLMErrorAttributionModel,
+	"request_too_large":      LLMErrorAttributionProduct,
+	"provider_auth_failed":   LLMErrorAttributionConfig,
+	"rate_limited":           LLMErrorAttributionProvider,
+	"network":                LLMErrorAttributionAmbiguous,
+	"content_policy":         LLMErrorAttributionProvider,
+	"context_too_long":       LLMErrorAttributionProduct,
+	"tool_args":              LLMErrorAttributionModel,
+	"schema":                 LLMErrorAttributionProduct,
+	"agent_not_configured":   LLMErrorAttributionConfig,
+	"workspace_unavailable":  LLMErrorAttributionConfig,
+	"model_unavailable":      LLMErrorAttributionConfig,
+	"needs_provider":         LLMErrorAttributionConfig,
+	"model_unassigned":       LLMErrorAttributionConfig,
+	"turn_canceled":          LLMErrorAttributionUser,
+	"turn_timed_out":         LLMErrorAttributionProvider,
+	"context_unrecoverable":  LLMErrorAttributionProduct,
+	"context_window_unknown": LLMErrorAttributionConfig,
+	"unknown":                LLMErrorAttributionUnknown,
 }

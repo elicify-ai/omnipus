@@ -322,8 +322,38 @@ components:
       $ref: ./components/schemas/PerformanceSettingsUpdate.yaml
     Provider:
       $ref: ./components/schemas/Provider.yaml
-    ModelCapabilities:
-      $ref: ./components/schemas/ModelCapabilities.yaml
+    ProviderDependent:
+      $ref: ./components/schemas/ProviderDependent.yaml
+    ProviderDeleteRequest:
+      $ref: ./components/schemas/ProviderDeleteRequest.yaml
+    ProviderDeleteResponse:
+      $ref: ./components/schemas/ProviderDeleteResponse.yaml
+    DefaultModel:
+      $ref: ./components/schemas/DefaultModel.yaml
+    DefaultModelUpdateRequest:
+      $ref: ./components/schemas/DefaultModelUpdateRequest.yaml
+    EntitlementModel:
+      $ref: ./components/schemas/EntitlementModel.yaml
+    EntitlementResponse:
+      $ref: ./components/schemas/EntitlementResponse.yaml
+    ProvidersCatalog:
+      $ref: ./components/schemas/ProvidersCatalog.yaml
+    CatalogProvider:
+      $ref: ./components/schemas/CatalogProvider.yaml
+    CatalogModel:
+      $ref: ./components/schemas/CatalogModel.yaml
+    CatalogProtocol:
+      $ref: ./components/schemas/CatalogProtocol.yaml
+    CatalogResizeLimits:
+      $ref: ./components/schemas/CatalogResizeLimits.yaml
+    ContextWindowSource:
+      $ref: ./components/schemas/ContextWindowSource.yaml
+    ContextModelOverride:
+      $ref: ./components/schemas/ContextModelOverride.yaml
+    ContextSettings:
+      $ref: ./components/schemas/ContextSettings.yaml
+    ContextSettingsUpdate:
+      $ref: ./components/schemas/ContextSettingsUpdate.yaml
     ReAuthRequest:
       $ref: ./components/schemas/ReAuthRequest.yaml
     ReAuthResponse:
@@ -2896,6 +2926,62 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '401':
           $ref: '#/components/responses/401Unauthorized'
+  /settings/context:
+    get:
+      operationId: getContextSettings
+      summary: Get the global context-budget settings (ADR-066 D9)
+      description: >
+        Returns the per-surface tool-result caps, the absolute trigger, the
+        ingest bound, the global default context window and the per-(provider,
+        model) window overrides. User-facing location: Settings → Models.
+        Readable by any authenticated user (withAuth, the /settings/memory
+        precedent — not RequireNotBypass).
+      tags:
+        - Settings
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Current context settings.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContextSettings'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+    put:
+      operationId: updateContextSettings
+      summary: Update the global context-budget settings (ADR-066 D9)
+      description: >
+        Partial update — an omitted field is unchanged; model_overrides, when
+        present, replaces the whole list; default_context_window null clears
+        it. 400 naming the field and the limit on: any cap > 150,000 or < 1;
+        absolute_trigger_chars < 1; ingest_bound_bytes ≥ 8,388,608 or < 1;
+        model_overrides[].context_window < 1. Every 200 write triggers a
+        registry reload so the next turn uses the new values without a
+        restart; overrides whose provider no longer exists are pruned on
+        write. Writable by any authenticated user (withAuth).
+      tags:
+        - Settings
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ContextSettingsUpdate'
+      responses:
+        '200':
+          description: The stored settings after the update.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContextSettings'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
   /channels:
     get:
       operationId: listChannels
@@ -4107,6 +4193,133 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /providers/catalog:
+    get:
+      operationId: getProvidersCatalog
+      summary: Read the registry-fed providers catalog (ADR-067 FR-017)
+      description: >
+        Returns the full schema-2.0.0 catalog document the gateway itself uses
+        (providers with nested models, tier, protocol(s), unsupported reason,
+        resize limits) plus the serving envelope served_from (embedded | pulled)
+        and stale (updated_at older than 14 days). Served from a pre-serialised
+        byte slice cached at apply time; bytes and ETag are swapped atomically
+        as one pair. Headers: `ETag: "<sha256>"` (quoted, strong) and
+        `Cache-Control: private, max-age=0, must-revalidate`; no content
+        negotiation. A request whose If-None-Match exactly matches the current
+        quoted strong ETag gets 304 with no body; a weak (W/) or unquoted value
+        is treated as no match (200). 503 when the catalog failed to construct
+        at boot (never an empty 200 that looks like "no providers"). The SPA
+        re-validates on Settings open and every 15 minutes.
+        DISPATCH ORDER: "catalog" is a reserved path segment — this route MUST
+        be matched before the /providers/{id} handler, and "catalog" is never a
+        valid provider id.
+      tags:
+      - Providers
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: If-None-Match
+        in: header
+        required: false
+        schema:
+          type: string
+        description: The quoted strong ETag from a previous 200. Exact match → 304.
+        example: '"3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"'
+      responses:
+        '200':
+          description: The catalog document with its serving envelope.
+          headers:
+            ETag:
+              schema:
+                type: string
+              description: Quoted strong ETag — the SHA-256 of the served bytes.
+            Cache-Control:
+              schema:
+                type: string
+              description: Always `private, max-age=0, must-revalidate`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProvidersCatalog'
+        '304':
+          description: If-None-Match matched the current ETag exactly; no body.
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '503':
+          description: No catalog is available (construction failed at boot).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /providers/default-model:
+    get:
+      operationId: getDefaultModel
+      summary: Read the global default model (ADR-068 FR-018)
+      description: >
+        Returns agents.defaults.default_model as a (provider, model) pair with
+        the resolved context window and its source (ADR-066's
+        ResolveWindow(provider, model), absent until it lands). Registered as
+        its own route with adminWrap (withAuth → RequireNotBypass): 401
+        unauthenticated, 503 under dev-mode bypass.
+        DISPATCH ORDER: "default-model" is a reserved path segment — this route
+        MUST be matched before the /providers/{id} handler, and "default-model"
+        is never a valid provider id.
+      tags:
+      - Providers
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: The current default model (provider and model are empty strings on a fresh install).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DefaultModel'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '503':
+          $ref: '#/components/responses/503BypassActive'
+    put:
+      operationId: updateDefaultModel
+      summary: Set the global default model (ADR-068 FR-018)
+      description: >
+        Validates that the provider is configured and connected or signed_in
+        (400 `{"error":"provider not configured","field":"provider"}`) and that
+        the model is in the served catalog for that provider (400
+        `{"error":"model not in catalog for provider","field":"model"}`) —
+        except rows with custom: true or locality: local, where any non-empty
+        model is accepted with no live call. Persists
+        agents.defaults.default_model under the config lock, emits audit
+        provider.default_model.changed, triggers a reload and waits for it
+        (500 `default model saved but config reload failed: <reason>` when it
+        does not confirm); takes effect on the next turn. A
+        ProviderUpdateRequest body sent here is a 400 on shape, never a PUT of
+        a provider named "default-model". adminWrap: 401 / 503 under bypass.
+      tags:
+      - Providers
+      security:
+      - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DefaultModelUpdateRequest'
+      responses:
+        '200':
+          description: The stored default model, with window fields when resolvable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DefaultModel'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+        '503':
+          $ref: '#/components/responses/503BypassActive'
   /providers/{id}:
     put:
       operationId: updateProvider
@@ -4116,6 +4329,13 @@ paths:
         required. On existing providers, api_key may be omitted to keep the
         current key. The API key is stored encrypted (AES-256-GCM) in
         credentials.json. Available before and after onboarding.
+        The id must be a catalog id (ADR-067 registry identity) or, when the
+        body carries api_base + protocol (openai-compatible | anthropic), an
+        operator-named custom row (Provider.custom: true); any other id → 400
+        `unknown provider "<id>"`. A tier "unsupported" catalog provider → 400
+        with its unsupported_reason. The reserved path segments "catalog" and
+        "default-model" are dispatched to their own routes before this one and
+        are never valid provider ids.
       tags:
       - Providers
       parameters:
@@ -4155,6 +4375,75 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+    delete:
+      operationId: deleteProvider
+      summary: Remove a configured provider and its stored key (ADR-068 FR-010)
+      description: >
+        Under the config lock and after recomputing dependents / backs_default
+        (the response, not the dialog, is authoritative), runs in order:
+        (1) clear dependents in the agent entity store (primaries cleared,
+        fallback entries removed — never re-pointed); (2) remove the provider
+        row; (2b) remove ContextSettings.model_overrides rows for the
+        provider; (3) delete the `<id>_API_KEY` credential (not-found counts
+        as success); (3b) evict the provider's entitlement cache entry;
+        (4) audit `provider.deleted`; (5) trigger a reload and wait. 404 when
+        the id is not configured (the reserved literals "catalog" and
+        "default-model" are never provider ids); 503 when the credential store
+        is locked (before any change) or under dev-mode bypass
+        (RequireNotBypass via the inline requireAdminAuthz wrapper); 401 with
+        no authenticated user (no pre-onboarding exception); 409 when the
+        provider backs the default model and no valid new_default is supplied;
+        400 when new_default names the same id or a provider that is not
+        connected | signed_in. A provider that backs the default is never
+        deleted while it backs it, so the last connected provider can never be
+        removed. On a failed step: 500 with deleted false and a retryable
+        state. There is no Undo and no dry run.
+      tags:
+      - Providers
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          maxLength: 64
+        description: Configured provider id (catalog id or custom row id).
+        example: openrouter
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProviderDeleteRequest'
+      responses:
+        '200':
+          description: Provider removed; dependents cleared; key deleted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProviderDeleteResponse'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '409':
+          $ref: '#/components/responses/409Conflict'
+        '500':
+          description: A deletion step failed; state is retryable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProviderDeleteResponse'
+        '503':
+          description: Credential store locked, or dev-mode bypass active.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /providers/{id}/test:
     get:
       operationId: testProvider
@@ -4184,35 +4473,58 @@ paths:
                 $ref: '#/components/schemas/OperationResult'
         '401':
           $ref: '#/components/responses/401Unauthorized'
-  /providers/model-capabilities:
-    get:
-      operationId: listModelCapabilities
-      summary: List declared input-modality capabilities per model
+  /providers/{id}/entitlement:
+    post:
+      operationId: checkProviderEntitlement
+      summary: Check which catalog models this provider's key can use (ADR-067 FR-021)
       description: >
-        Returns the in-repo capability catalog (pkg/providers/capabilities) as
-        a flat list of {id, modalities} pairs (D18). Model vision capability
-        is not knowable client-side at all otherwise — the SPA resolves the
-        target agent's model against this list to show a non-blocking warning
-        before sending a vision attachment (e.g. a live-browser annotation, or
-        an image attached via the composer) to a model that cannot accept
-        images. Returns an empty array when the catalog is not constructed
-        (never a 500) — the catalog is optional and the server-side capability
-        gate remains the authoritative backstop regardless.
+        "Check with my account": makes ONE live listing call with the
+        provider's stored key — openai-compatible / google → `GET {api}/models`;
+        anthropic → `GET {api}/v1/models` with x-api-key + anthropic-version;
+        ollama → `/api/tags` — intersects it with the served catalog and
+        returns every catalog model annotated entitled true/false with limits
+        "known", plus models the provider returned that the catalog lacks with
+        limits "unknown". Cached for the gateway process keyed by
+        SHA-256(providerID + ":" + credentialRefName) — the ref name, never
+        the secret — and evicted on provider DELETE, on a PUT that changes the
+        key (not on one that only bumps updated_at) and on catalog refresh.
+        Never called at boot or on a turn. 409 for protocol cli and for custom
+        rows (`entitlement not supported for this protocol`); 422 when no key
+        resolves; 502 `{"error":"could not fetch upstream model list: status
+        <n>"}` on an upstream non-2xx with nothing cached. Rate-limited like
+        /providers/{id}/test.
       tags:
       - Providers
       security:
       - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          maxLength: 64
+        description: Configured provider id.
+        example: openrouter
       responses:
         '200':
-          description: Array of per-model capability entries. Empty when the catalog is unavailable.
+          description: Catalog models annotated with entitlement.
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/ModelCapabilities'
+                $ref: '#/components/schemas/EntitlementResponse'
         '401':
           $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '409':
+          $ref: '#/components/responses/409Conflict'
+        '422':
+          $ref: '#/components/responses/422UnprocessableEntity'
+        '429':
+          $ref: '#/components/responses/429TooManyRequests'
+        '502':
+          $ref: '#/components/responses/502BadGateway'
   /commands:
     get:
       operationId: listCommands

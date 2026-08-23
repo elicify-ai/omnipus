@@ -15,6 +15,7 @@ function makeAgent(overrides: Partial<Agent> = {}): Agent {
     name: 'General Assistant',
     type: 'core',
     locked: false,
+    needs_model: false,
     status: 'active',
     model: 'claude-sonnet-4-6',
     description: 'General purpose assistant',

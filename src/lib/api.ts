@@ -79,8 +79,6 @@ import {
   StorageStats as StorageStatsSchema,
   // Newly wired schemas:
   Provider as ProviderSchema,
-  // D18 — model-capabilities warn-and-proceed (contract-first #8):
-  ModelCapabilities as ModelCapabilitiesSchema,
   CliDetect as CliDetectSchema,
   // external-executor-cli-path-detection spec (ADR-030): create-time validate.
   CliValidateResponse as CliValidateResponseSchema,
@@ -310,8 +308,6 @@ import type {
   Agent,
   Provider,
   ProviderUpdateRequest,
-  // D18 — model-capabilities warn-and-proceed (contract-first #8):
-  ModelCapabilities,
   CliDetect,
   CliDetectEntry,
   CliValidateRequest,
@@ -496,8 +492,6 @@ export type {
   // Wire types migrated from hand-written interfaces:
   Agent,
   Provider,
-  // D18 — model-capabilities warn-and-proceed (contract-first #8):
-  ModelCapabilities,
   CliDetect,
   CliDetectEntry,
   CliValidateRequest,
@@ -2180,67 +2174,12 @@ export function fetchProviders(): Promise<Provider[]> {
   return request<Provider[]>('/providers', undefined, z.array(ProviderSchema) as ZodType<Provider[]>)
 }
 
-// D18: flat list of {id, modalities} from the backend's in-repo capability
-// catalog (pkg/providers/capabilities) — model vision capability is not
-// knowable client-side at all otherwise. Used to warn (non-blocking) before
-// sending a vision attachment to a model that cannot see images. Empty array
-// when the catalog is unavailable server-side (never an error the caller
-// needs to branch on beyond the normal request() failure path).
-export function fetchModelCapabilities(): Promise<ModelCapabilities[]> {
-  return request<ModelCapabilities[]>(
-    '/providers/model-capabilities',
-    undefined,
-    z.array(ModelCapabilitiesSchema) as ZodType<ModelCapabilities[]>,
-  )
-}
-
-// D18: pure decision helper shared by the two vision-attachment send paths
-// (browserAnnotate.ts's live-browser annotation submit, attachment-adapter.ts's
-// composer image attach) — kept here (not duplicated) so both warn on the
-// identical rule. Unknown/unlisted models return false (optimistic — mirrors
-// the server-side FR-026 default in pkg/providers/capabilities/catalog.go),
-// so a stale or incomplete capabilities fetch never spuriously blocks/warns.
-//
-// Mirrors pkg/providers/capabilities/catalog.go's Catalog.Resolve fix
-// (2026-07-28, live UAT): agents' models are provider-prefixed
-// ("z-ai/glm-5.2"), but the /providers/model-capabilities catalog is keyed
-// by the BARE model id ("glm-5.2") — the vendor is recorded separately.
-// An exact-string-only lookup on a prefixed id always misses, silently
-// falling through to the optimistic default even when the catalog carries
-// an authoritative (and possibly negative) entry for that exact model. See
-// findModelCapabilityEntry below for the stripped-prefix fallback, which
-// applies the identical semantics as the Go side.
-export function modelLacksImageCapability(modelId: string | undefined, entries: ModelCapabilities[]): boolean {
-  if (!modelId) return false
-  const entry = findModelCapabilityEntry(modelId, entries)
-  if (!entry) return false
-  return !entry.modalities.includes('image')
-}
-
-// findModelCapabilityEntry mirrors pkg/providers/capabilities/catalog.go's
-// Catalog.Resolve + resolveStrippedPrefix exactly: try an exact id match
-// first (so a genuine bare catalog id like "gpt-4o", which never carries a
-// vendor prefix, always wins outright and never reaches the fallback);
-// then strip leading "<segment>/" prefixes one at a time — walking from the
-// longest remaining suffix down to the bare trailing segment — retrying the
-// exact lookup after each strip, stopping at the first hit. This also
-// handles the double-prefixed "openrouter/z-ai/glm-5.2" onboarding artifact
-// (both segments must be stripped to reach the bare "glm-5.2" catalog id).
-// Can never produce a WRONG match: catalog ids are unique, so a stripped
-// suffix that hits is, by construction, the intended model.
-function findModelCapabilityEntry(modelId: string, entries: ModelCapabilities[]): ModelCapabilities | undefined {
-  const exact = entries.find((c) => c.id === modelId)
-  if (exact) return exact
-
-  let rest = modelId
-  for (;;) {
-    const idx = rest.indexOf('/')
-    if (idx < 0 || idx === rest.length - 1) return undefined
-    rest = rest.slice(idx + 1)
-    const match = entries.find((c) => c.id === rest)
-    if (match) return match
-  }
-}
+// The D18 model-capabilities endpoint (GET /providers/model-capabilities) and
+// its ModelCapabilities wire type were removed by ADR-067 (the registry-fed
+// catalog at GET /providers/catalog carries per-model input_modalities). The
+// SPA's pre-send vision warning is re-sourced from that catalog in the
+// ADR-068 B5 / T067-13 SPA slice; until then the server-side capability gate
+// (pkg/agent/media_present.go) remains the only backstop.
 
 // configureProvider sets a model/provider's API key, endpoint, and/or model.
 // Post-onboarding this PUT is re-auth gated (Spec-6 FR-12.2 / FR-6.6): the server
@@ -3152,11 +3091,17 @@ export async function completeOnboardingTransaction(req: OnboardingCompleteReque
 export async function probeProvider(
   id: string,
   apiKey: string,
-  endpoint?: string,
+  apiBase?: string,
 ): Promise<ProbeProviderResponse> {
+  // ADR-067 FR-023 / ADR-068 FR-036: ONE ProbeProviderRequest shape
+  // {id, auth, api_key?, model?, api_base?, protocol?}. This wrapper still
+  // drives the api_key path only; the sign_in path and the custom-row
+  // protocol field arrive with ADR-068's picker.
+  const body: Record<string, string> = { id, auth: 'api_key', api_key: apiKey }
+  if (apiBase) body.api_base = apiBase
   return request<ProbeProviderResponse>('/onboarding/probe-provider', {
     method: 'POST',
-    body: JSON.stringify({ id, api_key: apiKey, endpoint: endpoint ?? '' }),
+    body: JSON.stringify(body),
   }, ProbeProviderResponseSchema)
 }
 

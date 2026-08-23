@@ -29,9 +29,7 @@ import {
   getConfigCoercionCount,
   resetConfigCoercionCount,
   fetchCommands,
-  modelLacksImageCapability,
 } from './api'
-import type { ModelCapabilities } from './api'
 import * as telemetry from './telemetry'
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -2637,54 +2635,3 @@ describe('fetchWorkspaceInstructions / updateWorkspaceInstructions', () => {
   })
 })
 
-// ── modelLacksImageCapability: provider-prefix stripped-lookup fallback ─────
-//
-// Mirrors pkg/providers/capabilities/catalog.go's Catalog.Resolve fix
-// (Resolve/resolveStrippedPrefix + regression tests
-// TestCatalog_Resolve_ProviderPrefixedModel_MatchesBareEntry /
-// _DoublePrefixedModel_MatchesBareEntry / _BareModelUnaffectedByPrefixFallback).
-// Agents' models are provider-prefixed ("z-ai/glm-5.2"); the
-// /providers/model-capabilities catalog is keyed by the BARE id ("glm-5.2").
-// An exact-string-only lookup never matches a prefixed id, so it always fell
-// through to the FR-026 optimistic "assume capable" default and the pre-send
-// warning never fired — the same bug the Go Resolve fix closed, mirrored
-// here so the client and server agree on how a slug resolves.
-//
-// REVERT-PROOF: every "must report lacking" case below fails against the
-// pre-fix exact-match-only implementation (it returns false — optimistic
-// default — instead of true) and passes once the stripped-prefix fallback
-// is added.
-describe('modelLacksImageCapability: provider-prefix fallback (mirrors Go Catalog.Resolve)', () => {
-  const textOnlyGlm: ModelCapabilities = { id: 'glm-5.2', modalities: ['text'] }
-  const gpt4o: ModelCapabilities = { id: 'gpt-4o', modalities: ['text', 'image'] }
-
-  it('resolves a single provider-prefixed id ("z-ai/glm-5.2") against a bare catalog entry ("glm-5.2")', () => {
-    // Live-verified shape (2026-07-28 UAT): GET /agents returns model
-    // "z-ai/glm-5.2"; GET /providers/model-capabilities returns bare "glm-5.2".
-    expect(modelLacksImageCapability('z-ai/glm-5.2', [textOnlyGlm])).toBe(true)
-  })
-
-  it('resolves the double-prefixed onboarding artifact ("openrouter/z-ai/glm-5.2") against the bare entry', () => {
-    // normalizeModel-adjacent onboarding artifact — the fallback must strip
-    // BOTH segments, not just the first, to reach the bare catalog id.
-    expect(modelLacksImageCapability('openrouter/z-ai/glm-5.2', [textOnlyGlm])).toBe(true)
-  })
-
-  it('still resolves exactly for a genuine bare id ("gpt-4o") with no vendor prefix — no over-matching', () => {
-    // gpt-4o supports image — must NOT be reported as lacking it, and the
-    // exact match must win outright without ever reaching the fallback.
-    expect(modelLacksImageCapability('gpt-4o', [gpt4o])).toBe(false)
-  })
-
-  it('does not report lacking capability for a truly unknown model (FR-026 optimistic default preserved)', () => {
-    expect(modelLacksImageCapability('some-vendor/unknown-model-xyz', [textOnlyGlm, gpt4o])).toBe(false)
-  })
-
-  it('does not crash or over-match on a trailing-slash edge case ("z-ai/")', () => {
-    expect(modelLacksImageCapability('z-ai/', [textOnlyGlm])).toBe(false)
-  })
-
-  it('returns false (optimistic) when modelId is undefined', () => {
-    expect(modelLacksImageCapability(undefined, [textOnlyGlm])).toBe(false)
-  })
-})

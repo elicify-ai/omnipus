@@ -188,9 +188,9 @@ func TestListExecutorDefaults_ReturnsAllThreeCLIs(t *testing.T) {
 		assert.NotEmpty(t, e.Notes, "cli %q must have a non-empty notes field", e.Cli)
 	}
 	for _, cli := range []gen.ExternalCliTool{
-		gen.ClaudeCode,
-		gen.Codex,
-		gen.Opencode,
+		gen.ExternalCliToolClaudeCode,
+		gen.ExternalCliToolCodex,
+		gen.ExternalCliToolOpencode,
 	} {
 		_, ok := seen[cli]
 		assert.True(t, ok, "expected an entry for cli %q", cli)
@@ -208,7 +208,7 @@ func TestListExecutorDefaults_ReturnsAllThreeCLIs(t *testing.T) {
 func TestListExecutorDefaults_ClaudeMatchesRealBuildArgs(t *testing.T) {
 	api := executorDefaultsTestAPI(t)
 	_, entries := getExecutorDefaults(t, api)
-	claude := findExecutorDefaultsEntry(t, entries, gen.ClaudeCode)
+	claude := findExecutorDefaultsEntry(t, entries, gen.ExternalCliToolClaudeCode)
 	require.NotEmpty(t, claude.AutoAppliedFlags)
 
 	configured := runner.BuildClaudeArgs(runner.RunOptions{
@@ -242,7 +242,7 @@ func TestListExecutorDefaults_ClaudeMatchesRealBuildArgs(t *testing.T) {
 func TestListExecutorDefaults_CodexMatchesRealBuildArgs(t *testing.T) {
 	api := executorDefaultsTestAPI(t)
 	_, entries := getExecutorDefaults(t, api)
-	codex := findExecutorDefaultsEntry(t, entries, gen.Codex)
+	codex := findExecutorDefaultsEntry(t, entries, gen.ExternalCliToolCodex)
 	require.NotEmpty(t, codex.AutoAppliedFlags)
 
 	configured := runner.BuildCodexArgs(runner.RunOptions{
@@ -284,7 +284,7 @@ func TestListExecutorDefaults_CodexMatchesRealBuildArgs(t *testing.T) {
 func TestListExecutorDefaults_OpencodeMatchesRealBuildArgs(t *testing.T) {
 	api := executorDefaultsTestAPI(t)
 	_, entries := getExecutorDefaults(t, api)
-	opencode := findExecutorDefaultsEntry(t, entries, gen.Opencode)
+	opencode := findExecutorDefaultsEntry(t, entries, gen.ExternalCliToolOpencode)
 	require.NotEmpty(t, opencode.AutoAppliedFlags)
 
 	configured := runner.BuildOpencodeArgs(runner.RunOptions{

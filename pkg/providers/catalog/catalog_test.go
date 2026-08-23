@@ -39,56 +39,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/providers"
 )
 
-// loadProbeProviderIDEnum parses contracts/components/schemas/ProbeProviderRequest.yaml
-// at test time and returns the set of ids from the enum field.  Using the real YAML
-// file (not a hand-copied map) means adding a value to ProbeProviderRequest.yaml
-// without triaging it into the catalog immediately causes Test #3 to go red.
-func loadProbeProviderIDEnum(t *testing.T) map[string]bool {
-	t.Helper()
-	_, thisFile, _, ok := runtime.Caller(0)
-	require.True(t, ok, "runtime.Caller must succeed")
-	repoRoot := findRepoRoot(t, filepath.Dir(thisFile))
-	yamlPath := filepath.Join(repoRoot, "contracts", "components", "schemas", "ProbeProviderRequest.yaml")
-	raw, err := os.ReadFile(yamlPath)
-	require.NoError(t, err, "must read ProbeProviderRequest.yaml (run: make gen-contracts to regenerate)")
-
-	// Minimal YAML parsing: extract the enum block under "id:".
-	// We avoid importing a full YAML library by parsing lines directly —
-	// the file has a simple, machine-generated structure.
-	//
-	// The enum block looks like:
-	//   enum:
-	//     - anthropic
-	//     - openai
-	//     ...
-	//
-	// We walk lines, find "    enum:", then collect "      - <value>" lines
-	// until a line without that prefix is encountered.
-	lines := strings.Split(string(raw), "\n")
-	inEnum := false
-	result := make(map[string]bool)
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "enum:" {
-			inEnum = true
-			continue
-		}
-		if inEnum {
-			if strings.HasPrefix(trimmed, "- ") {
-				id := strings.TrimPrefix(trimmed, "- ")
-				result[strings.TrimSpace(id)] = true
-			} else if trimmed != "" {
-				// Non-list, non-empty line ends the enum block.
-				break
-			}
-		}
-	}
-	require.NotEmpty(t, result,
-		"loadProbeProviderIDEnum: parsed 0 values from ProbeProviderRequest.yaml — "+
-			"check that the enum: block is present and correctly formatted")
-	return result
-}
-
 // catalogExcluded is the hand-authored set of knownProtocols ids that are
 // intentionally excluded from the catalog.  They are aliases, CLI executors,
 // or self-hosted infra ids — not user-selectable API-key provider entries.
@@ -236,43 +186,12 @@ func TestCatalog_DriftGuard_IdIsKnownProtocol(t *testing.T) {
 	}
 }
 
-// ── Test #3 ──────────────────────────────────────────────────────────────────
-
-// TestCatalog_DriftGuard_IdInProbeEnum asserts every catalog id is a member of
-// the ProbeProviderRequest id enum.  The enum values are parsed at test time from
-// contracts/components/schemas/ProbeProviderRequest.yaml — NOT a hand-copied map
-// — so adding a value to the YAML without triaging it into the catalog causes
-// this test to fail.
-// Re-homed from the former `AVAILABLE_PROVIDERS ⊆ ProbeProviderRequest` test
-// in `src/routes/-onboarding.test.tsx`.
-// Traces to spec §7 #3, FR-003 property (c), ADR-031 §6 G-2 R3/MAJ-001.
-//
-// Note: aliases need NOT be ProbeProviderRequest enum members — they are
-// display-only ids used by the migration resolver. Only canonical catalog ids
-// must be in the ProbeProviderRequest enum.
-//
-// AnthropicId siblings (FIX-5) ARE probe targets in their own right — the
-// Settings "Endpoint format" toggle probes/configures entry.AnthropicId
-// directly when the operator picks "Anthropic-compatible" — so every non-nil
-// AnthropicId must also be a ProbeProviderRequest enum member.
-func TestCatalog_DriftGuard_IdInProbeEnum(t *testing.T) {
-	probeEnum := loadProbeProviderIDEnum(t)
-	for _, e := range Entries {
-		t.Run(e.Id, func(t *testing.T) {
-			assert.True(t, probeEnum[e.Id],
-				"catalog entry id %q must be in the ProbeProviderRequest id enum; "+
-					"if you added a new provider, update ProbeProviderRequest.yaml + regen", e.Id)
-		})
-		if e.AnthropicId == nil {
-			continue
-		}
-		t.Run(e.Id+"/anthropic_id", func(t *testing.T) {
-			assert.True(t, probeEnum[*e.AnthropicId],
-				"catalog entry %q: AnthropicId %q must be in the ProbeProviderRequest id enum "+
-					"(FIX-5 — the endpoint-format toggle probes this id directly)", e.Id, *e.AnthropicId)
-		})
-	}
-}
+// ── Test #3 — RETIRED ─────────────────────────────────────────────────────────
+// TestCatalog_DriftGuard_IdInProbeEnum asserted every catalog id was a member of
+// the ProbeProviderRequest.id enum. ADR-067 US-10 / FR-023 removed that enum
+// (the id is a free string validated at runtime against the served catalog),
+// so the property it guarded no longer exists. The whole hand-typed catalog
+// and its drift guards are replaced in T067-02.
 
 // ── Test #4 ──────────────────────────────────────────────────────────────────
 
@@ -380,13 +299,13 @@ func TestWireDerivation_Table(t *testing.T) {
 		id       string
 		expected gen.ProviderCatalogEntryWire
 	}{
-		{"openai", gen.OpenaiCompatible},
-		{"z-ai-coding", gen.OpenaiCompatible},
-		{"z-ai-anthropic", gen.Anthropic},
-		{"anthropic", gen.Anthropic},
-		{"anthropic-messages", gen.Anthropic},
-		{"bedrock", gen.Anthropic},
-		{"coding-plan-anthropic", gen.Anthropic},
+		{"openai", gen.ProviderCatalogEntryWireOpenaiCompatible},
+		{"z-ai-coding", gen.ProviderCatalogEntryWireOpenaiCompatible},
+		{"z-ai-anthropic", gen.ProviderCatalogEntryWireAnthropic},
+		{"anthropic", gen.ProviderCatalogEntryWireAnthropic},
+		{"anthropic-messages", gen.ProviderCatalogEntryWireAnthropic},
+		{"bedrock", gen.ProviderCatalogEntryWireAnthropic},
+		{"coding-plan-anthropic", gen.ProviderCatalogEntryWireAnthropic},
 	}
 	for _, row := range specDataset {
 		t.Run("spec/"+row.id, func(t *testing.T) {
@@ -422,8 +341,8 @@ func TestContract_ProviderCatalogEntry_Shape(t *testing.T) {
 	entry := gen.ProviderCatalogEntry{
 		Id:           "z-ai",
 		Company:      "Zhipu / GLM",
-		Plan:         gen.ProviderCatalogEntryPlanStandardApi,
-		Wire:         gen.OpenaiCompatible,
+		Plan:         gen.StandardApi,
+		Wire:         gen.ProviderCatalogEntryWireOpenaiCompatible,
 		Region:       &region,
 		EndpointHint: "api.z.ai/api/paas/v4",
 		LogoSlug:     "zhipu",
@@ -458,8 +377,8 @@ func TestContract_ProviderCatalogEntry_Shape(t *testing.T) {
 	minimalEntry := gen.ProviderCatalogEntry{
 		Id:           "openai",
 		Company:      "OpenAI",
-		Plan:         gen.ProviderCatalogEntryPlanStandardApi,
-		Wire:         gen.OpenaiCompatible,
+		Plan:         gen.StandardApi,
+		Wire:         gen.ProviderCatalogEntryWireOpenaiCompatible,
 		EndpointHint: "api.openai.com/v1",
 		LogoSlug:     "openai",
 		Label:        "OpenAI",
@@ -796,7 +715,7 @@ func TestCatalog_AnthropicWireEntriesHaveAnthropicSuffix(t *testing.T) {
 	}
 	re := regexp.MustCompile(`-anthropic$`)
 	for _, e := range Entries {
-		if e.Wire != gen.Anthropic {
+		if e.Wire != gen.ProviderCatalogEntryWireAnthropic {
 			continue
 		}
 		t.Run(e.Id, func(t *testing.T) {
@@ -834,7 +753,7 @@ func TestCatalog_LabelContainsCodingPlanIffPlanIsCodingPlan(t *testing.T) {
 	for _, e := range Entries {
 		t.Run(e.Id, func(t *testing.T) {
 			hasCodingPlanText := strings.Contains(e.Label, "Coding Plan")
-			isCodingPlan := e.Plan == gen.ProviderCatalogEntryPlanCodingPlan
+			isCodingPlan := e.Plan == gen.CodingPlan
 			assert.Equal(t, isCodingPlan, hasCodingPlanText,
 				"entry %q: label %q contains 'Coding Plan'=%v but plan=%q (isCodingPlan=%v) — "+
 					"these must agree", e.Id, e.Label, hasCodingPlanText, e.Plan, isCodingPlan)
@@ -878,7 +797,7 @@ func TestCatalog_AnthropicIdConsistency(t *testing.T) {
 		anthropicID := "some-anthropic"
 		bad := gen.ProviderCatalogEntry{
 			Id:          "bad-entry",
-			Wire:        gen.Anthropic, // primary itself claims the anthropic wire
+			Wire:        gen.ProviderCatalogEntryWireAnthropic, // primary itself claims the anthropic wire
 			AnthropicId: &anthropicID,
 		}
 		err := validateEntry(bad)
@@ -890,7 +809,7 @@ func TestCatalog_AnthropicIdConsistency(t *testing.T) {
 		selfID := "self-ref"
 		bad := gen.ProviderCatalogEntry{
 			Id:          selfID,
-			Wire:        gen.OpenaiCompatible,
+			Wire:        gen.ProviderCatalogEntryWireOpenaiCompatible,
 			AnthropicId: &selfID,
 		}
 		err := validateEntry(bad)
@@ -901,8 +820,8 @@ func TestCatalog_AnthropicIdConsistency(t *testing.T) {
 	t.Run("rule_c_id_vs_alias_collision_is_rejected", func(t *testing.T) {
 		aliases := []string{"collide"}
 		bad := []gen.ProviderCatalogEntry{
-			{Id: "collide", Wire: gen.OpenaiCompatible},
-			{Id: "other", Wire: gen.OpenaiCompatible, Aliases: &aliases},
+			{Id: "collide", Wire: gen.ProviderCatalogEntryWireOpenaiCompatible},
+			{Id: "other", Wire: gen.ProviderCatalogEntryWireOpenaiCompatible, Aliases: &aliases},
 		}
 		err := validateDisjointIDs(bad)
 		require.Error(t, err, "an id used as another entry's alias must be rejected")
@@ -912,8 +831,8 @@ func TestCatalog_AnthropicIdConsistency(t *testing.T) {
 	t.Run("rule_c_anthropic_id_vs_id_collision_is_rejected", func(t *testing.T) {
 		anthropicID := "sibling"
 		bad := []gen.ProviderCatalogEntry{
-			{Id: "sibling", Wire: gen.OpenaiCompatible},
-			{Id: "primary", Wire: gen.OpenaiCompatible, AnthropicId: &anthropicID},
+			{Id: "sibling", Wire: gen.ProviderCatalogEntryWireOpenaiCompatible},
+			{Id: "primary", Wire: gen.ProviderCatalogEntryWireOpenaiCompatible, AnthropicId: &anthropicID},
 		}
 		err := validateDisjointIDs(bad)
 		require.Error(t, err, "an id used as another entry's AnthropicId must be rejected")
@@ -924,8 +843,8 @@ func TestCatalog_AnthropicIdConsistency(t *testing.T) {
 		aliasesA := []string{"shared-alias"}
 		aliasesB := []string{"shared-alias"}
 		bad := []gen.ProviderCatalogEntry{
-			{Id: "a", Wire: gen.OpenaiCompatible, Aliases: &aliasesA},
-			{Id: "b", Wire: gen.OpenaiCompatible, Aliases: &aliasesB},
+			{Id: "a", Wire: gen.ProviderCatalogEntryWireOpenaiCompatible, Aliases: &aliasesA},
+			{Id: "b", Wire: gen.ProviderCatalogEntryWireOpenaiCompatible, Aliases: &aliasesB},
 		}
 		err := validateDisjointIDs(bad)
 		require.Error(t, err, "two entries must not share the same alias")
@@ -937,7 +856,7 @@ func TestCatalog_AnthropicIdConsistency(t *testing.T) {
 		aliases := []string{"z.ai", "zai"}
 		good := gen.ProviderCatalogEntry{
 			Id:          "z-ai",
-			Wire:        gen.OpenaiCompatible,
+			Wire:        gen.ProviderCatalogEntryWireOpenaiCompatible,
 			AnthropicId: &anthropicID,
 			Aliases:     &aliases,
 		}
@@ -969,7 +888,7 @@ func TestValidateCatalog_NegativeCases(t *testing.T) {
 	t.Run("wire_mismatch_fails", func(t *testing.T) {
 		// "openai" derives to openai-compatible; claiming Anthropic is a lie.
 		bad := []gen.ProviderCatalogEntry{
-			{Id: "openai", Wire: gen.Anthropic},
+			{Id: "openai", Wire: gen.ProviderCatalogEntryWireAnthropic},
 		}
 		err := validateCatalog(bad)
 		require.Error(t, err)
@@ -980,7 +899,7 @@ func TestValidateCatalog_NegativeCases(t *testing.T) {
 		// AnthropicId "openai" derives to openai-compatible, not anthropic.
 		anthropicID := "openai"
 		bad := []gen.ProviderCatalogEntry{
-			{Id: "z-ai", Wire: gen.OpenaiCompatible, AnthropicId: &anthropicID},
+			{Id: "z-ai", Wire: gen.ProviderCatalogEntryWireOpenaiCompatible, AnthropicId: &anthropicID},
 		}
 		err := validateCatalog(bad)
 		require.Error(t, err)
@@ -992,7 +911,7 @@ func TestValidateCatalog_NegativeCases(t *testing.T) {
 		// knownProtocols — an unroutable sibling.
 		anthropicID := "totally-fake-anthropic"
 		bad := []gen.ProviderCatalogEntry{
-			{Id: "z-ai", Wire: gen.OpenaiCompatible, AnthropicId: &anthropicID},
+			{Id: "z-ai", Wire: gen.ProviderCatalogEntryWireOpenaiCompatible, AnthropicId: &anthropicID},
 		}
 		err := validateCatalog(bad)
 		require.Error(t, err)
@@ -1002,7 +921,7 @@ func TestValidateCatalog_NegativeCases(t *testing.T) {
 	t.Run("rule_a_anthropic_wire_owner_with_sibling_fails", func(t *testing.T) {
 		anthropicID := "z-ai-anthropic"
 		bad := []gen.ProviderCatalogEntry{
-			{Id: "anthropic", Wire: gen.Anthropic, AnthropicId: &anthropicID},
+			{Id: "anthropic", Wire: gen.ProviderCatalogEntryWireAnthropic, AnthropicId: &anthropicID},
 		}
 		err := validateCatalog(bad)
 		require.Error(t, err)
@@ -1013,7 +932,7 @@ func TestValidateCatalog_NegativeCases(t *testing.T) {
 	t.Run("rule_b_self_reference_fails", func(t *testing.T) {
 		selfID := "z-ai"
 		bad := []gen.ProviderCatalogEntry{
-			{Id: selfID, Wire: gen.OpenaiCompatible, AnthropicId: &selfID},
+			{Id: selfID, Wire: gen.ProviderCatalogEntryWireOpenaiCompatible, AnthropicId: &selfID},
 		}
 		err := validateCatalog(bad)
 		require.Error(t, err)
@@ -1022,8 +941,8 @@ func TestValidateCatalog_NegativeCases(t *testing.T) {
 
 	t.Run("rule_c_duplicate_ids_fail", func(t *testing.T) {
 		bad := []gen.ProviderCatalogEntry{
-			{Id: "openai", Wire: gen.OpenaiCompatible},
-			{Id: "openai", Wire: gen.OpenaiCompatible},
+			{Id: "openai", Wire: gen.ProviderCatalogEntryWireOpenaiCompatible},
+			{Id: "openai", Wire: gen.ProviderCatalogEntryWireOpenaiCompatible},
 		}
 		err := validateCatalog(bad)
 		require.Error(t, err)
@@ -1034,8 +953,8 @@ func TestValidateCatalog_NegativeCases(t *testing.T) {
 		anthropicID := "z-ai-anthropic"
 		aliases := []string{"z.ai", "zai"}
 		good := []gen.ProviderCatalogEntry{
-			{Id: "openai", Wire: gen.OpenaiCompatible},
-			{Id: "z-ai", Wire: gen.OpenaiCompatible, AnthropicId: &anthropicID, Aliases: &aliases},
+			{Id: "openai", Wire: gen.ProviderCatalogEntryWireOpenaiCompatible},
+			{Id: "z-ai", Wire: gen.ProviderCatalogEntryWireOpenaiCompatible, AnthropicId: &anthropicID, Aliases: &aliases},
 		}
 		assert.NoError(t, validateCatalog(good), "a clean, mutually-disjoint slice must pass validateCatalog")
 	})

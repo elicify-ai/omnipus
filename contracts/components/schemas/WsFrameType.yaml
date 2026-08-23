@@ -19,6 +19,7 @@ enum:
   - error
   - tool_call_start
   - tool_call_result
+  - tool_result_projection
   - subagent_start
   - subagent_end
   - task_status_changed

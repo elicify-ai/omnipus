@@ -3,8 +3,11 @@ description: >
   A single entry in the provider catalog — the curated, build-time-embedded
   registry of 23 user-facing LLM provider variants. Each entry represents one
   billable endpoint (company × plan × region), not a raw protocol id.
-  Delivered as a build-time go:embed artifact + a generated TypeScript catalog;
-  never served from a live HTTP endpoint (FR-016, ADR-031 §6 G-2).
+  SUPERSEDED by the registry-fed catalog served at GET /providers/catalog
+  (ProvidersCatalog.yaml, ADR-067). Retained only until the hand-typed
+  pkg/providers/catalog Entries (ADR-067 T067-02) and the SPA importers of
+  src/lib/generated/providerCatalog.ts (ADR-068 B5 / T067-13) are removed;
+  then this file is deleted.
   The type is contract-defined (Constraint #8) so the same generated struct is
   used in the Go catalog SoT and the generated TS consumer. No secret fields.
 required:

@@ -75,6 +75,7 @@ const mockExternalAgent: Agent = {
   name: 'External Worker',
   type: 'subagent_3p',
   locked: false,
+  needs_model: false,
   status: 'active',
   model: 'claude-sonnet-4-6',
   description: 'Delegates to an external CLI',

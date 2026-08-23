@@ -75,6 +75,7 @@ const agentRay: Agent = {
   name: 'Ray',
   type: 'core',
   locked: true,
+  needs_model: false,
   status: 'active',
   soul: '',
   color: '#3B82F6',

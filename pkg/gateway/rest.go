@@ -56,7 +56,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/onboarding"
 	"github.com/elicify-ai/omnipus/pkg/plan"
 	providers_pkg "github.com/elicify-ai/omnipus/pkg/providers"
-	"github.com/elicify-ai/omnipus/pkg/providers/capabilities"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
 	"github.com/elicify-ai/omnipus/pkg/security"
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -1515,7 +1514,7 @@ func (a *restAPI) testAgentRunner(w http.ResponseWriter, r *http.Request, agentI
 func (a *restAPI) listExecutorDefaults(w http.ResponseWriter) {
 	jsonOK(w, []gen.ExecutorDefaults{
 		{
-			Cli: gen.ClaudeCode,
+			Cli: gen.ExternalCliToolClaudeCode,
 			AutoAppliedFlags: []string{
 				"-p",
 				"--output-format stream-json",
@@ -1528,7 +1527,7 @@ func (a *restAPI) listExecutorDefaults(w http.ResponseWriter) {
 			Notes: "The prompt is delivered via stdin, with no positional prompt argument at all — never via a --prompt flag. --resume/--session-id are never passed; every run starts a fresh claude session. --dangerously-skip-permissions is passed unconditionally (operator decision, issue #488, reversing the original FR-5.3/US-5 stance of using --permission-mode acceptEdits instead) — this matches codex/opencode, which already ran permission-bypassed; see the tracked issue for the sandbox-boundary follow-up this reversal implies for claude specifically. Operator cli_args are appended after this list; a redundant --dangerously-skip-permissions or an attempt to change --output-format away from stream-json is dropped with a WARN (see argsafety.go) — the latter because the driver's own NDJSON stream parser requires stream-json output.",
 		},
 		{
-			Cli: gen.Codex,
+			Cli: gen.ExternalCliToolCodex,
 			AutoAppliedFlags: []string{
 				"--ask-for-approval never",
 				"exec",
@@ -1542,7 +1541,7 @@ func (a *restAPI) listExecutorDefaults(w http.ResponseWriter) {
 			Notes: "--ask-for-approval is a GLOBAL codex flag and must precede the exec subcommand (codex errors if it follows exec); --sandbox is an exec-subcommand flag and is placed after exec instead. The prompt is delivered via stdin — a trailing \"-\" argument — never via a --prompt flag. Operator cli_args are appended after this list; --dangerously-bypass-approvals-and-sandbox, --sandbox danger-full-access, any --ask-for-approval override, and any --json override (bare or \"=false\"-shaped) are dropped with a WARN (see argsafety.go) — the last one because the driver's own NDJSON stream parser requires --json output.",
 		},
 		{
-			Cli: gen.Opencode,
+			Cli: gen.ExternalCliToolOpencode,
 			AutoAppliedFlags: []string{
 				"run",
 				"--format json",
@@ -5919,6 +5918,10 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 				Status:            status,
 				Models:            models,
 				HasModelsEndpoint: &hasEndpointCopy,
+				// ADR-067 FR-024: always-present fields, zero values until ADR-068 computes them.
+				AuthMethod:   gen.ProviderAuthMethodApiKey,
+				Dependents:   []gen.ProviderDependent{},
+				BacksDefault: false,
 			}
 			if modelFetchWarning != "" {
 				p.Warning = &modelFetchWarning
@@ -5943,76 +5946,11 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 				Status:            gen.ProviderStatusDisconnected,
 				Models:            []string{},
 				HasModelsEndpoint: &falseVal,
+				AuthMethod:        gen.ProviderAuthMethodApiKey,
+				Dependents:        []gen.ProviderDependent{},
 			})
 		}
 		jsonOK(w, providers)
-
-	case r.Method == http.MethodGet && sub == "model-capabilities":
-		// GET /api/v1/providers/model-capabilities (D18) — flat list of
-		// {id, modalities} from the in-repo capability catalog
-		// (pkg/providers/capabilities), so the SPA can warn — client-side,
-		// non-blocking — before sending a vision attachment to a model that
-		// cannot see images. Model vision capability is not knowable
-		// client-side at all otherwise. The catalog is optional: a nil
-		// catalog (not yet constructed, e.g. degraded boot) returns an
-		// empty list, never a 500 — the reactive server-side capability
-		// gate (pkg/agent/media_present.go) remains the authoritative
-		// backstop regardless of what this endpoint returns.
-		var catalog *capabilities.Catalog
-		if a.agentLoop != nil {
-			catalog = a.agentLoop.GetCapabilityCatalog()
-		} else {
-			// NewAgentLoop always wires the embedded-seed catalog (loop.go
-			// ~:645), so a.agentLoop == nil is a genuine degraded-boot
-			// shape, never a normal path. The client's
-			// modelLacksImageCapability treats an ABSENT catalog entry as
-			// "assume it can" (FR-026's intentional optimistic default),
-			// so an empty [] response here is wire-identical to "the
-			// catalog legitimately has no entries" — a degraded boot
-			// would otherwise silently produce a blanket all-clear (no
-			// vision warnings for anyone) with zero server-side signal
-			// anywhere. Log it so the degraded state is observable; the
-			// response contract itself is unchanged (still [], never a
-			// 500 — this is an advisory endpoint).
-			slog.Warn("rest: model-capabilities requested with no AgentLoop wired — degraded boot, " +
-				"serving an empty catalog (client-side vision warnings will not fire for any model " +
-				"until this is resolved)")
-		}
-		capsOut := make([]gen.ModelCapabilities, 0)
-		if catalog != nil {
-			for _, snap := range catalog.Models() {
-				modalities := snap.Handle.InputModalities()
-				wireModalities := make([]gen.ModelCapabilitiesModalities, 0, len(modalities))
-				for _, m := range modalities {
-					// The INTERNAL Modality type is deliberately open —
-					// pkg/providers/capabilities/modality.go accepts any
-					// non-empty unknown value so an operator can seed a
-					// modality ("3d", "hologram") ahead of runtime support
-					// (asserted by TestParseSeed_AcceptsUnknownModalities).
-					// The WIRE enum is closed. Casting straight across put an
-					// out-of-enum value on the wire, and the SPA validates with
-					// z.array(z.enum(...)), which rejects the ENTIRE array on a
-					// single bad element — so one forward-compat modality
-					// anywhere in the catalog silently disabled the vision
-					// pre-send warning for EVERY model (both call sites swallow
-					// the failure to console.debug). Drop unrepresentable
-					// values instead: a model with ["text","3d"] correctly
-					// reports ["text"], which is exactly right for this
-					// endpoint's advisory purpose — it lacks "image", so the
-					// warning still fires.
-					wm := gen.ModelCapabilitiesModalities(m)
-					if !wm.Valid() {
-						continue
-					}
-					wireModalities = append(wireModalities, wm)
-				}
-				capsOut = append(capsOut, gen.ModelCapabilities{
-					Id:         snap.ID,
-					Modalities: wireModalities,
-				})
-			}
-		}
-		jsonOK(w, capsOut)
 
 	case r.Method == http.MethodPut && sub != "" && !strings.HasSuffix(sub, "/test"):
 		// PUT /api/v1/providers/{id} — update or insert a provider entry.
@@ -6279,6 +6217,8 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 			Status:            gen.ProviderStatusConnected,
 			Models:            respModels,
 			HasModelsEndpoint: &hasEndpoint,
+			AuthMethod:        gen.ProviderAuthMethodApiKey,
+			Dependents:        []gen.ProviderDependent{},
 		}
 		// R-D step 7 / FR-011: attach validation for warning outcomes (NoCredit/Unreachable/Restricted).
 		// Valid outcome and key-absent PUTs carry no validation field.
@@ -6627,6 +6567,8 @@ func (a *restAPI) refreshProviderModels(w http.ResponseWriter, r *http.Request, 
 		Status:            status,
 		Models:            models,
 		HasModelsEndpoint: &hasEndpoint,
+		AuthMethod:        gen.ProviderAuthMethodApiKey,
+		Dependents:        []gen.ProviderDependent{},
 	}
 	if warning != "" {
 		resp.Warning = &warning

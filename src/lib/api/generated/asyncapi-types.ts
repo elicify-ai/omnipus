@@ -20,6 +20,7 @@ export type WsFrameType =
   | "error"
   | "tool_call_start"
   | "tool_call_result"
+  | "tool_result_projection"
   | "subagent_start"
   | "subagent_message"
   | "subagent_state"
@@ -145,14 +146,14 @@ export interface DoneFrame {
 }
 
 export interface LLMError {
-  code: "media_unsupported" | "provider_rejected" | "request_too_large" | "provider_auth_failed" | "rate_limited" | "network" | "content_policy" | "context_too_long" | "tool_args" | "schema" | "agent_not_configured" | "workspace_unavailable" | "model_unavailable" | "unknown";
+  code: "media_unsupported" | "provider_rejected" | "request_too_large" | "provider_auth_failed" | "rate_limited" | "network" | "content_policy" | "context_too_long" | "tool_args" | "schema" | "agent_not_configured" | "workspace_unavailable" | "model_unavailable" | "needs_provider" | "model_unassigned" | "turn_canceled" | "turn_timed_out" | "context_unrecoverable" | "context_window_unknown" | "unknown";
   message: string;
   retryable: boolean;
   detail?: string;
 }
 
 export interface LLMErrorReplay {
-  code: "media_unsupported" | "provider_rejected" | "request_too_large" | "provider_auth_failed" | "rate_limited" | "network" | "content_policy" | "context_too_long" | "tool_args" | "schema" | "agent_not_configured" | "workspace_unavailable" | "model_unavailable" | "unknown";
+  code: "media_unsupported" | "provider_rejected" | "request_too_large" | "provider_auth_failed" | "rate_limited" | "network" | "content_policy" | "context_too_long" | "tool_args" | "schema" | "agent_not_configured" | "workspace_unavailable" | "model_unavailable" | "needs_provider" | "model_unassigned" | "turn_canceled" | "turn_timed_out" | "context_unrecoverable" | "context_window_unknown" | "unknown";
   message: string;
   retryable: boolean;
 }
@@ -328,6 +329,16 @@ export interface ReplayErrorFrame {
   payload?: {
     llm_error: LLMErrorReplay;
   };
+}
+
+export interface ToolResultProjectionFrame {
+  type: "tool_result_projection";
+  session_id: string;
+  tool_call_id: string;
+  archive_line: number;
+  content_state: "capped" | "emptied";
+  mark?: string;
+  producing_session_id?: string;
 }
 
 export interface RateLimitFrame {
@@ -679,6 +690,7 @@ export type WsFrame =
   | TaskRunStatusFrame
   | ReplayMessageFrame
   | ReplayErrorFrame
+  | ToolResultProjectionFrame
   | RateLimitFrame
   | MediaFrame
   | AgentSwitchedFrame
@@ -753,6 +765,7 @@ export type ServerFrame =
   | TaskRunStatusFrame
   | ReplayMessageFrame
   | ReplayErrorFrame
+  | ToolResultProjectionFrame
   | RateLimitFrame
   | MediaFrame
   | AgentSwitchedFrame

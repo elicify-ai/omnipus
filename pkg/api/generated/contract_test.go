@@ -4240,11 +4240,16 @@ func TestContract_Provider_WithValidation_Valid(t *testing.T) {
 		Name:   "openrouter",
 		Status: ProviderStatusConnected,
 		Models: []string{"meta-llama/llama-3.1-8b-instruct:free"},
+		// ADR-067/068 contract commit: auth_method, dependents and backs_default
+		// are always present on the wire (zero values until ADR-068 computes them).
+		AuthMethod:   ProviderAuthMethodApiKey,
+		Dependents:   []ProviderDependent{},
+		BacksDefault: false,
 		Validation: &struct {
 			Message *string                   `json:"message,omitempty"`
 			Outcome ProviderValidationOutcome `json:"outcome"`
 		}{
-			Outcome: ProviderValidationOutcomeNoCredit,
+			Outcome: NoCredit,
 			Message: &msg,
 		},
 	}
@@ -4262,18 +4267,21 @@ func TestContract_Provider_WithValidation_AllOutcomes(t *testing.T) {
 	// Each non-valid ProviderValidation outcome must produce schema-valid JSON.
 	// Traces to: ProviderValidation.yaml (enum constraint).
 	outcomes := []ProviderValidationOutcome{
-		ProviderValidationOutcomeNoCredit,
-		ProviderValidationOutcomeUnreachable,
-		ProviderValidationOutcomeRestricted,
+		NoCredit,
+		Unreachable,
+		Restricted,
 	}
 	for _, outcome := range outcomes {
 		t.Run(string(outcome), func(t *testing.T) {
 			o := outcome
 			p := Provider{
-				Id:     "testprovider",
-				Name:   "testprovider",
-				Status: ProviderStatusConnected,
-				Models: []string{},
+				Id:           "testprovider",
+				Name:         "testprovider",
+				Status:       ProviderStatusConnected,
+				Models:       []string{},
+				AuthMethod:   ProviderAuthMethodApiKey,
+				Dependents:   []ProviderDependent{},
+				BacksDefault: false,
 				Validation: &struct {
 					Message *string                   `json:"message,omitempty"`
 					Outcome ProviderValidationOutcome `json:"outcome"`
@@ -4615,117 +4623,4 @@ func TestContract_GodModeStatus_MissingRequiredFieldRejected(t *testing.T) {
 	require.NoError(t, err)
 	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "GodModeStatus", raw),
 		"GodModeStatus missing required 'persisted' must fail")
-}
-
-// ── ModelCapabilities ────────────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/ModelCapabilities.yaml (D18).
-// Previously ZERO contract coverage — flagged by the test-coverage gate on
-// fix/uat-v0.1.1-defects (GAP 2). modalities is a closed 5-member enum array
-// (text/image/pdf/audio/video); an out-of-enum value reaching the wire was
-// identified by review as a real bug that would poison the SPA's whole-array
-// Zod validation for this resource, so the enum boundary gets dedicated,
-// explicit coverage (TestContract_ModelCapabilities_InvalidModalityRejected).
-
-func TestContract_ModelCapabilities_Populated(t *testing.T) {
-	// Traces to: ModelCapabilities.yaml — required: [id, modalities],
-	// additionalProperties: false.
-	mustPassComponent(t, "ModelCapabilities", FixtureModelCapabilities_Populated())
-}
-
-func TestContract_ModelCapabilities_ZeroValue(t *testing.T) {
-	// Traces to: ModelCapabilities.yaml — modalities: required, type: array.
-	// Go zero value has a nil (non-omitempty) Modalities slice, which
-	// marshals to `"modalities":null` — schema requires type: array.
-	mustFailComponent(t, "ModelCapabilities", FixtureModelCapabilities_ZeroValue(),
-		"zero value has nil Modalities (marshals to null); schema requires type: array")
-}
-
-func TestContract_ModelCapabilities_Edge(t *testing.T) {
-	// Traces to: ModelCapabilities.yaml — an empty (non-nil) modalities
-	// array is legal (no minItems declared).
-	mustPassComponent(t, "ModelCapabilities", FixtureModelCapabilities_Edge())
-}
-
-func TestContract_ModelCapabilities_Differentiation(t *testing.T) {
-	// Two DIFFERENT models with DIFFERENT modality lists must produce
-	// DIFFERENT JSON — catches a handler that always returns the same
-	// hardcoded capability entry regardless of which model was requested.
-	f1 := FixtureModelCapabilities_Populated()   // gemini-2.5-flash: text+image+pdf
-	f2 := FixtureModelCapabilities_SecondValid() // glm-5.2: text+audio
-	raw1, err := json.Marshal(f1)
-	require.NoError(t, err)
-	raw2, err := json.Marshal(f2)
-	require.NoError(t, err)
-	assert.NotEqual(t, string(raw1), string(raw2),
-		"two different models must produce different ModelCapabilities JSON")
-	assert.Contains(t, string(raw1), `"id":"gemini-2.5-flash"`)
-	assert.Contains(t, string(raw2), `"id":"glm-5.2"`)
-	mustPassComponent(t, "ModelCapabilities", f1)
-	mustPassComponent(t, "ModelCapabilities", f2)
-}
-
-// TestContract_ModelCapabilities_InvalidModalityRejected pins the enum
-// boundary a review flagged as a real bug: modalities is a closed 5-member
-// enum (text/image/pdf/audio/video), and an out-of-enum string reaching the
-// wire would poison the SPA's whole-array Zod validation for this resource
-// (one bad entry fails the entire array, not just that element). This test
-// asserts the SERVER-SIDE contract rejects such a payload outright, so a
-// handler that forwards an un-validated provider-reported modality string
-// can never actually reach the wire in schema-valid form.
-func TestContract_ModelCapabilities_InvalidModalityRejected(t *testing.T) {
-	// Traces to: ModelCapabilities.yaml — modalities[].enum:
-	// [text, image, pdf, audio, video].
-	tests := []struct {
-		name      string
-		modality  string
-		wantError bool
-	}{
-		{"unknown_modality_wibble", "wibble", true},
-		{"case_sensitivity_Text", "Text", true}, // enum is lowercase-only
-		{"valid_text", "text", false},
-		{"valid_video", "video", false},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			doc := map[string]any{
-				"id":         "test-model",
-				"modalities": []string{tc.modality},
-			}
-			raw, err := json.Marshal(doc)
-			require.NoError(t, err)
-			validationErr := validateAgainstComponentSchemaRawJSON(t, "ModelCapabilities", raw)
-			if tc.wantError {
-				assert.Error(t, validationErr,
-					"modalities=[%q] must fail — not a member of the enum [text,image,pdf,audio,video]", tc.modality)
-			} else {
-				assert.NoError(t, validationErr,
-					"modalities=[%q] must pass — is a member of the enum", tc.modality)
-			}
-		})
-	}
-}
-
-func TestContract_ModelCapabilities_RejectsExtraneousField(t *testing.T) {
-	// Traces to: ModelCapabilities.yaml — additionalProperties: false.
-	doc := map[string]any{
-		"id":         "test-model",
-		"modalities": []string{"text"},
-		"provider":   "google", // not a ModelCapabilities field
-	}
-	raw, err := json.Marshal(doc)
-	require.NoError(t, err)
-	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "ModelCapabilities", raw),
-		"ModelCapabilities with extraneous field must fail — additionalProperties: false")
-}
-
-func TestContract_ModelCapabilities_MissingRequiredIdRejected(t *testing.T) {
-	// Traces to: ModelCapabilities.yaml — required: [id, modalities].
-	doc := map[string]any{
-		"modalities": []string{"text"},
-		// "id" omitted
-	}
-	raw, err := json.Marshal(doc)
-	require.NoError(t, err)
-	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "ModelCapabilities", raw),
-		"ModelCapabilities missing required 'id' must fail")
 }

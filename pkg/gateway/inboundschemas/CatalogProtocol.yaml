@@ -1,0 +1,24 @@
+title: CatalogProtocol
+description: >
+  One wire protocol a catalog provider offers, with the base URL to use for
+  it. When a provider lists protocols[], the list MUST include the primary
+  protocol with the same api URL; entries are unique (ADR-067 FR-002, F-19).
+type: object
+required:
+  - protocol
+  - api
+additionalProperties: false
+properties:
+  protocol:
+    type: string
+    enum:
+      - openai-compatible
+      - anthropic
+      - google
+      - ollama
+      - cli
+    example: "anthropic"
+  api:
+    type: string
+    description: Absolute https base URL for this protocol (FR-033 URL rule; local rows may use http).
+    example: "https://api.z.ai/api/anthropic"

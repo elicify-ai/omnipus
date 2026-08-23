@@ -11,6 +11,7 @@ type OnboardingCompleteResponse = LoginResponse;
 type ProbeProviderResponse = {
   success: boolean;
   models?: Array<string> | undefined;
+  probed_model?: string | undefined;
   error?: string | undefined;
   validation?: ProviderValidation | undefined;
 };
@@ -129,6 +130,7 @@ type ToolCall = {
   parameters?: {} | undefined;
   result?: {} | undefined;
   parent_tool_call_id?: string | undefined;
+  content_state?: ("full" | "capped" | "emptied") | undefined;
 };
 type JudgeVerdict = {
   id: string;
@@ -209,6 +211,12 @@ type Agent = {
   updated_at?: string | undefined;
   voice?: (string | null) | undefined;
   executor?: ExecutorConfig | undefined;
+  degraded_reason?: "needs_provider" | undefined;
+  needs_model: boolean;
+  context_window_effective?: number | undefined;
+  context_window_source?: ContextWindowSource | undefined;
+  context_window_clamped?: boolean | undefined;
+  context_window_override?: number | undefined;
   memory_enabled?: boolean | undefined;
 };
 type AgentToolsCfg = Partial<{
@@ -255,6 +263,7 @@ type ExecutorConfig = Partial<{
   cli_args: string;
 }>;
 type ExternalCliTool = "claude-code" | "codex" | "opencode";
+type ContextWindowSource = "operator" | "live" | "catalog" | "floor";
 type AgentCreateRequest =
   | AgentCreateRequestMain
   | AgentCreateRequestSubagent
@@ -348,6 +357,7 @@ type AgentUpdateRequest = Partial<{
   description: string;
   model: string;
   provider: string;
+  context_window_override: number | null;
   soul: string;
   heartbeat: string;
   timeout_seconds: number;
@@ -449,7 +459,25 @@ type Provider = {
   id: string;
   name: string;
   display_name?: string | undefined;
-  status: "connected" | "disconnected" | "error";
+  status:
+    | "connected"
+    | "disconnected"
+    | "error"
+    | "unknown-provider"
+    | "signed_in"
+    | "expired";
+  protocol?:
+    | ("openai-compatible" | "anthropic" | "google" | "ollama" | "cli")
+    | undefined;
+  custom?: boolean | undefined;
+  company?: string | undefined;
+  locality?: ("local" | "cloud") | undefined;
+  cli_kind?: ("codex" | "copilot") | undefined;
+  auth_method: "api_key" | "sign_in";
+  account_label?: string | undefined;
+  dependents: Array<ProviderDependent>;
+  backs_default: boolean;
+  updated_at?: string | undefined;
   models: Array<string>;
   has_models_endpoint?: boolean | undefined;
   has_api_key?: boolean | undefined;
@@ -457,6 +485,119 @@ type Provider = {
   error?: string | undefined;
   validation?: ProviderValidation | undefined;
 };
+type ProviderDependent = {
+  id: string;
+  name: string;
+  role: "primary" | "fallback" | "passthrough" | "recap" | "image" | "voice";
+};
+type ProviderDeleteRequest = Partial<{
+  new_default: DefaultModelUpdateRequest;
+}>;
+type DefaultModelUpdateRequest = {
+  provider: string;
+  model: string;
+};
+type ProviderDeleteResponse = {
+  deleted: boolean;
+  dependents: Array<ProviderDependent>;
+  default_changed: boolean;
+  new_default?: DefaultModelUpdateRequest | undefined;
+};
+type DefaultModel = {
+  provider: string;
+  model: string;
+  context_window?: number | undefined;
+  window_source?: ContextWindowSource | undefined;
+  window_unknown?: boolean | undefined;
+};
+type EntitlementResponse = {
+  models: Array<EntitlementModel>;
+  checked_at: string;
+  cached: boolean;
+};
+type EntitlementModel = {
+  id: string;
+  entitled: boolean;
+  limits: "known" | "unknown";
+};
+type ProvidersCatalog = {
+  schema_version: "2.0.0";
+  version: string;
+  updated_at: string;
+  source: string;
+  default_resize_limits: CatalogResizeLimits;
+  providers: Array<CatalogProvider>;
+  served_from: "embedded" | "pulled";
+  stale: boolean;
+};
+type CatalogResizeLimits = {
+  long_edge_px: number;
+  max_bytes: number;
+};
+type CatalogProvider = {
+  id: string;
+  name: string;
+  company: string;
+  api: string;
+  protocol?:
+    | ("openai-compatible" | "anthropic" | "google" | "ollama" | "cli")
+    | undefined;
+  protocols?: Array<CatalogProtocol> | undefined;
+  env?: Array<string> | undefined;
+  region?: string | undefined;
+  plan?: string | undefined;
+  tier: "popular" | "standard" | "unsupported";
+  unsupported_reason?:
+    | ("cloud-iam" | "deployment-url" | "withdrawn")
+    | undefined;
+  auth_methods: Array<"api_key" | "sign_in">;
+  aliases: Array<string>;
+  locality: "local" | "cloud";
+  cli_kind?: ("codex" | "copilot") | undefined;
+  token_source?: string | undefined;
+  resize_limits?: CatalogResizeLimits | undefined;
+  models: Array<CatalogModel>;
+};
+type CatalogProtocol = {
+  protocol: "openai-compatible" | "anthropic" | "google" | "ollama" | "cli";
+  api: string;
+};
+type CatalogModel = {
+  id: string;
+  name: string;
+  release_date?: string | undefined;
+  context_window: number;
+  max_output_tokens: number;
+  input_modalities: Array<"text" | "image" | "pdf" | "audio" | "video">;
+  tool_call: boolean;
+  status: "active" | "retired";
+  disputed?: boolean | undefined;
+  window_source?: ContextWindowSource | undefined;
+  window_unknown?: boolean | undefined;
+};
+type ContextSettings = {
+  mcp_result_cap: number;
+  builtin_success_cap: number;
+  builtin_failure_cap: number;
+  absolute_trigger_chars: number;
+  ingest_bound_bytes: number;
+  default_context_window?: (number | null) | undefined;
+  model_overrides: Array<ContextModelOverride>;
+};
+type ContextModelOverride = {
+  provider: string;
+  model: string;
+  context_window: number;
+};
+type ContextSettingsUpdate = Partial<{
+  mcp_result_cap: number;
+  builtin_success_cap: number;
+  builtin_failure_cap: number;
+  absolute_trigger_chars: number;
+  ingest_bound_bytes: number;
+  default_context_window: number | null;
+  model_overrides: Array<ContextModelOverride>;
+}>;
 type IntegrationProvidersResponse = {
   search: Array<IntegrationProvider>;
   voice: Array<IntegrationProvider>;
@@ -1566,73 +1707,18 @@ export const OnboardingCompleteRequest = z.object({
     .passthrough(),
 });
 export const ProbeProviderRequest = z.object({
-  id: z.enum([
-    "anthropic",
-    "anthropic-messages",
-    "openai",
-    "openrouter",
-    "gemini",
-    "google",
-    "ollama",
-    "azure",
-    "azure-openai",
-    "bedrock",
-    "litellm",
-    "groq",
-    "zhipu",
-    "z-ai",
-    "zai",
-    "z-ai-coding",
-    "glm-coding",
-    "zhipu-coding",
-    "z-ai-anthropic",
-    "zhipu-anthropic",
-    "moonshot-anthropic",
-    "moonshot-cn-anthropic",
-    "minimax-anthropic",
-    "minimax-cn-anthropic",
-    "deepseek-anthropic",
-    "nvidia",
-    "moonshot",
-    "moonshot-cn",
-    "shengsuanyun",
-    "deepseek",
-    "cerebras",
-    "vivgrid",
-    "volcengine",
-    "vllm",
-    "qwen",
-    "qwen-intl",
-    "qwen-international",
-    "dashscope-intl",
-    "qwen-us",
-    "dashscope-us",
-    "mistral",
-    "avian",
-    "longcat",
-    "modelscope",
-    "novita",
-    "coding-plan",
-    "alibaba-coding",
-    "qwen-coding",
-    "mimo",
-    "minimax",
-    "minimax-cn",
-    "coding-plan-anthropic",
-    "alibaba-coding-anthropic",
-    "antigravity",
-    "claude-cli",
-    "claudecli",
-    "codex-cli",
-    "codexcli",
-  ]),
-  api_key: z.string().min(1),
-  endpoint: z.string().optional(),
+  id: z.string().min(1).max(64),
+  auth: z.enum(["api_key", "sign_in"]),
+  api_key: z.string().min(1).optional(),
+  model: z.string().min(1).max(256).optional(),
+  api_base: z.string().max(2048).optional(),
+  protocol: z.enum(["openai-compatible", "anthropic"]).optional(),
 });
 export const ProbeProviderResponse: z.ZodType<ProbeProviderResponse> = z
   .object({
     success: z.boolean(),
     models: z.array(z.string()).optional(),
+    probed_model: z.string().max(256).optional(),
     error: z.string().optional(),
     validation: ProviderValidation.optional(),
   })
@@ -1724,6 +1810,10 @@ export const ToolCall: z.ZodType<ToolCall> = z.object({
   parameters: z.object({}).partial().passthrough().optional(),
   result: z.object({}).partial().passthrough().optional(),
   parent_tool_call_id: z.string().optional(),
+  content_state: z
+    .enum(["full", "capped", "emptied"])
+    .optional()
+    .default("full"),
 });
 export const CriterionVerdict: z.ZodType<CriterionVerdict> = z.object({
   criterion_id: z.string().min(1),
@@ -1846,6 +1936,12 @@ export const ExecutorConfig: z.ZodType<ExecutorConfig> = z
     cli_args: z.string(),
   })
   .partial();
+export const ContextWindowSource = z.enum([
+  "operator",
+  "live",
+  "catalog",
+  "floor",
+]);
 export const Agent: z.ZodType<Agent> = z
   .object({
     id: z.string(),
@@ -1876,6 +1972,12 @@ export const Agent: z.ZodType<Agent> = z
     updated_at: z.string().datetime({ offset: true }).optional(),
     voice: z.string().nullish(),
     executor: ExecutorConfig.optional(),
+    degraded_reason: z.literal("needs_provider").optional(),
+    needs_model: z.boolean(),
+    context_window_effective: z.number().int().gte(0).optional(),
+    context_window_source: ContextWindowSource.optional(),
+    context_window_clamped: z.boolean().optional(),
+    context_window_override: z.number().int().gte(1).optional(),
     memory_enabled: z.boolean().optional().default(true),
   })
   .passthrough();
@@ -1997,6 +2099,7 @@ export const AgentUpdateRequest: z.ZodType<AgentUpdateRequest> = z
     description: z.string(),
     model: z.string(),
     provider: z.string().max(64),
+    context_window_override: z.number().int().gte(1).nullable(),
     soul: z.string().min(1),
     heartbeat: z.string(),
     timeout_seconds: z.number().int(),
@@ -2392,6 +2495,31 @@ export const MemorySettings: z.ZodType<MemorySettings> = z
     memory_retros_days: z.number().int(),
   })
   .partial();
+export const ContextModelOverride: z.ZodType<ContextModelOverride> = z.object({
+  provider: z.string().min(1).max(64),
+  model: z.string().min(1).max(256),
+  context_window: z.number().int().gte(1),
+});
+export const ContextSettings: z.ZodType<ContextSettings> = z.object({
+  mcp_result_cap: z.number().int().gte(1).lte(150000),
+  builtin_success_cap: z.number().int().gte(1).lte(150000),
+  builtin_failure_cap: z.number().int().gte(1).lte(150000),
+  absolute_trigger_chars: z.number().int().gte(1),
+  ingest_bound_bytes: z.number().int().gte(1).lte(8388607),
+  default_context_window: z.number().int().gte(1).nullish(),
+  model_overrides: z.array(ContextModelOverride),
+});
+export const ContextSettingsUpdate: z.ZodType<ContextSettingsUpdate> = z
+  .object({
+    mcp_result_cap: z.number().int().gte(1).lte(150000),
+    builtin_success_cap: z.number().int().gte(1).lte(150000),
+    builtin_failure_cap: z.number().int().gte(1).lte(150000),
+    absolute_trigger_chars: z.number().int().gte(1),
+    ingest_bound_bytes: z.number().int().gte(1).lte(8388607),
+    default_context_window: z.number().int().gte(1).nullable(),
+    model_overrides: z.array(ContextModelOverride),
+  })
+  .partial();
 export const ChannelId = z.string();
 export const ChannelIdentity: z.ZodType<ChannelIdentity> = z.object({
   kind: z.enum(["agent", "user"]),
@@ -2528,11 +2656,44 @@ export const GatewayStatus = z.object({
   daily_cost: z.number().gte(0),
   version: z.string().optional(),
 });
+export const ProviderDependent: z.ZodType<ProviderDependent> = z
+  .object({
+    id: z.string(),
+    name: z.string(),
+    role: z.enum([
+      "primary",
+      "fallback",
+      "passthrough",
+      "recap",
+      "image",
+      "voice",
+    ]),
+  })
+  .passthrough();
 export const Provider: z.ZodType<Provider> = z.object({
   id: z.string(),
   name: z.string(),
   display_name: z.string().optional(),
-  status: z.enum(["connected", "disconnected", "error"]),
+  status: z.enum([
+    "connected",
+    "disconnected",
+    "error",
+    "unknown-provider",
+    "signed_in",
+    "expired",
+  ]),
+  protocol: z
+    .enum(["openai-compatible", "anthropic", "google", "ollama", "cli"])
+    .optional(),
+  custom: z.boolean().optional(),
+  company: z.string().optional(),
+  locality: z.enum(["local", "cloud"]).optional(),
+  cli_kind: z.enum(["codex", "copilot"]).optional(),
+  auth_method: z.enum(["api_key", "sign_in"]),
+  account_label: z.string().max(128).optional(),
+  dependents: z.array(ProviderDependent),
+  backs_default: z.boolean(),
+  updated_at: z.string().datetime({ offset: true }).optional(),
   models: z.array(z.string()),
   has_models_endpoint: z.boolean().optional(),
   has_api_key: z.boolean().optional(),
@@ -2540,16 +2701,116 @@ export const Provider: z.ZodType<Provider> = z.object({
   error: z.string().optional(),
   validation: ProviderValidation.optional(),
 });
+export const CatalogResizeLimits: z.ZodType<CatalogResizeLimits> = z.object({
+  long_edge_px: z.number().int().gte(1),
+  max_bytes: z.number().int().gte(1),
+});
+export const CatalogProtocol: z.ZodType<CatalogProtocol> = z.object({
+  protocol: z.enum([
+    "openai-compatible",
+    "anthropic",
+    "google",
+    "ollama",
+    "cli",
+  ]),
+  api: z.string(),
+});
+export const CatalogModel: z.ZodType<CatalogModel> = z.object({
+  id: z.string().min(1).max(256),
+  name: z.string().min(1),
+  release_date: z.string().optional(),
+  context_window: z.number().int().gte(0),
+  max_output_tokens: z.number().int().gte(0),
+  input_modalities: z
+    .array(z.enum(["text", "image", "pdf", "audio", "video"]))
+    .min(1),
+  tool_call: z.boolean(),
+  status: z.enum(["active", "retired"]),
+  disputed: z.boolean().optional(),
+  window_source: ContextWindowSource.optional(),
+  window_unknown: z.boolean().optional(),
+});
+export const CatalogProvider: z.ZodType<CatalogProvider> = z.object({
+  id: z.string().min(1).max(64),
+  name: z.string().min(1),
+  company: z.string().min(1),
+  api: z.string(),
+  protocol: z
+    .enum(["openai-compatible", "anthropic", "google", "ollama", "cli"])
+    .optional(),
+  protocols: z.array(CatalogProtocol).optional(),
+  env: z.array(z.string()).optional(),
+  region: z.string().optional(),
+  plan: z.string().optional(),
+  tier: z.enum(["popular", "standard", "unsupported"]),
+  unsupported_reason: z
+    .enum(["cloud-iam", "deployment-url", "withdrawn"])
+    .optional(),
+  auth_methods: z.array(z.enum(["api_key", "sign_in"])).min(1),
+  aliases: z.array(z.string()),
+  locality: z.enum(["local", "cloud"]),
+  cli_kind: z.enum(["codex", "copilot"]).optional(),
+  token_source: z.string().optional(),
+  resize_limits: CatalogResizeLimits.optional(),
+  models: z.array(CatalogModel),
+});
+export const ProvidersCatalog: z.ZodType<ProvidersCatalog> = z.object({
+  schema_version: z.literal("2.0.0"),
+  version: z.string().regex(/^v\d{4}\.\d{1,2}\.\d{1,2}(\.\d+)?$/),
+  updated_at: z.string().datetime({ offset: true }),
+  source: z.string().min(1),
+  default_resize_limits: CatalogResizeLimits,
+  providers: z.array(CatalogProvider).min(1),
+  served_from: z.enum(["embedded", "pulled"]),
+  stale: z.boolean(),
+});
+export const DefaultModel: z.ZodType<DefaultModel> = z.object({
+  provider: z.string().max(64),
+  model: z.string().max(256),
+  context_window: z.number().int().gte(0).optional(),
+  window_source: ContextWindowSource.optional(),
+  window_unknown: z.boolean().optional(),
+});
+export const DefaultModelUpdateRequest: z.ZodType<DefaultModelUpdateRequest> =
+  z.object({
+    provider: z.string().min(1).max(64),
+    model: z.string().min(1).max(256),
+  });
 export const ProviderUpdateRequest = z
   .object({
+    protocol: z.enum([
+      "openai-compatible",
+      "anthropic",
+      "google",
+      "ollama",
+      "cli",
+    ]),
+    auth_method: z.enum(["api_key", "sign_in"]),
+    api_base: z.string().max(2048),
     api_key: z.string(),
     model: z.string(),
     models: z.array(z.string().min(1).max(256)).max(500),
   })
   .partial();
-export const ModelCapabilities = z.object({
-  id: z.string(),
-  modalities: z.array(z.enum(["text", "image", "pdf", "audio", "video"])),
+export const ProviderDeleteRequest: z.ZodType<ProviderDeleteRequest> = z
+  .object({ new_default: DefaultModelUpdateRequest })
+  .partial();
+export const ProviderDeleteResponse: z.ZodType<ProviderDeleteResponse> =
+  z.object({
+    deleted: z.boolean(),
+    dependents: z.array(ProviderDependent),
+    default_changed: z.boolean(),
+    new_default: DefaultModelUpdateRequest.optional(),
+  });
+export const EntitlementModel: z.ZodType<EntitlementModel> = z.object({
+  id: z.string().min(1).max(256),
+  entitled: z.boolean(),
+  limits: z.enum(["known", "unknown"]),
+});
+export const EntitlementResponse: z.ZodType<EntitlementResponse> = z.object({
+  models: z.array(EntitlementModel),
+  checked_at: z.string().datetime({ offset: true }),
+  cached: z.boolean(),
 });
 export const SlashCommand = z.object({
   name: z.string(),
@@ -6727,7 +6988,7 @@ Model lists are fetched live from each provider&#x27;s upstream /models endpoint
     method: "put",
     path: "/providers/:id",
     alias: "updateProvider",
-    description: `Adds or updates an LLM provider entry. On new providers, api_key is required. On existing providers, api_key may be omitted to keep the current key. The API key is stored encrypted (AES-256-GCM) in credentials.json. Available before and after onboarding.
+    description: `Adds or updates an LLM provider entry. On new providers, api_key is required. On existing providers, api_key may be omitted to keep the current key. The API key is stored encrypted (AES-256-GCM) in credentials.json. Available before and after onboarding. The id must be a catalog id (ADR-067 registry identity) or, when the body carries api_base + protocol (openai-compatible | anthropic), an operator-named custom row (Provider.custom: true); any other id → 400 &#x60;unknown provider &quot;&lt;id&gt;&quot;&#x60;. A tier &quot;unsupported&quot; catalog provider → 400 with its unsupported_reason. The reserved path segments &quot;catalog&quot; and &quot;default-model&quot; are dispatched to their own routes before this one and are never valid provider ids.
 `,
     requestFormat: "json",
     parameters: [
@@ -6767,6 +7028,107 @@ Model lists are fetched live from each provider&#x27;s upstream /models endpoint
     ],
   },
   {
+    method: "delete",
+    path: "/providers/:id",
+    alias: "deleteProvider",
+    description: `Under the config lock and after recomputing dependents / backs_default (the response, not the dialog, is authoritative), runs in order: (1) clear dependents in the agent entity store (primaries cleared, fallback entries removed — never re-pointed); (2) remove the provider row; (2b) remove ContextSettings.model_overrides rows for the provider; (3) delete the &#x60;&lt;id&gt;_API_KEY&#x60; credential (not-found counts as success); (3b) evict the provider&#x27;s entitlement cache entry; (4) audit &#x60;provider.deleted&#x60;; (5) trigger a reload and wait. 404 when the id is not configured (the reserved literals &quot;catalog&quot; and &quot;default-model&quot; are never provider ids); 503 when the credential store is locked (before any change) or under dev-mode bypass (RequireNotBypass via the inline requireAdminAuthz wrapper); 401 with no authenticated user (no pre-onboarding exception); 409 when the provider backs the default model and no valid new_default is supplied; 400 when new_default names the same id or a provider that is not connected | signed_in. A provider that backs the default is never deleted while it backs it, so the last connected provider can never be removed. On a failed step: 500 with deleted false and a retryable state. There is no Undo and no dry run.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: ProviderDeleteRequest.optional(),
+      },
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string().max(64),
+      },
+    ],
+    response: ProviderDeleteResponse,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `Conflict — e.g. resource already exists.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `A deletion step failed; state is retryable.`,
+        schema: ProviderDeleteResponse,
+      },
+      {
+        status: 503,
+        description: `Credential store locked, or dev-mode bypass active.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/providers/:id/entitlement",
+    alias: "checkProviderEntitlement",
+    description: `&quot;Check with my account&quot;: makes ONE live listing call with the provider&#x27;s stored key — openai-compatible / google → &#x60;GET {api}/models&#x60;; anthropic → &#x60;GET {api}/v1/models&#x60; with x-api-key + anthropic-version; ollama → &#x60;/api/tags&#x60; — intersects it with the served catalog and returns every catalog model annotated entitled true/false with limits &quot;known&quot;, plus models the provider returned that the catalog lacks with limits &quot;unknown&quot;. Cached for the gateway process keyed by SHA-256(providerID + &quot;:&quot; + credentialRefName) — the ref name, never the secret — and evicted on provider DELETE, on a PUT that changes the key (not on one that only bumps updated_at) and on catalog refresh. Never called at boot or on a turn. 409 for protocol cli and for custom rows (&#x60;entitlement not supported for this protocol&#x60;); 422 when no key resolves; 502 &#x60;{&quot;error&quot;:&quot;could not fetch upstream model list: status &lt;n&gt;&quot;}&#x60; on an upstream non-2xx with nothing cached. Rate-limited like /providers/{id}/test.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string().max(64),
+      },
+    ],
+    response: EntitlementResponse,
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `Conflict — e.g. resource already exists.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 422,
+        description: `Validation failed — semantically invalid input.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 429,
+        description: `Rate limit exceeded.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 502,
+        description: `Bad gateway — an upstream dependency (e.g. a skill registry) is unreachable or returned an error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
     method: "get",
     path: "/providers/:id/test",
     alias: "testProvider",
@@ -6791,16 +7153,92 @@ Model lists are fetched live from each provider&#x27;s upstream /models endpoint
   },
   {
     method: "get",
-    path: "/providers/model-capabilities",
-    alias: "listModelCapabilities",
-    description: `Returns the in-repo capability catalog (pkg/providers/capabilities) as a flat list of {id, modalities} pairs (D18). Model vision capability is not knowable client-side at all otherwise — the SPA resolves the target agent&#x27;s model against this list to show a non-blocking warning before sending a vision attachment (e.g. a live-browser annotation, or an image attached via the composer) to a model that cannot accept images. Returns an empty array when the catalog is not constructed (never a 500) — the catalog is optional and the server-side capability gate remains the authoritative backstop regardless.
+    path: "/providers/catalog",
+    alias: "getProvidersCatalog",
+    description: `Returns the full schema-2.0.0 catalog document the gateway itself uses (providers with nested models, tier, protocol(s), unsupported reason, resize limits) plus the serving envelope served_from (embedded | pulled) and stale (updated_at older than 14 days). Served from a pre-serialised byte slice cached at apply time; bytes and ETag are swapped atomically as one pair. Headers: &#x60;ETag: &quot;&lt;sha256&gt;&quot;&#x60; (quoted, strong) and &#x60;Cache-Control: private, max-age&#x3D;0, must-revalidate&#x60;; no content negotiation. A request whose If-None-Match exactly matches the current quoted strong ETag gets 304 with no body; a weak (W/) or unquoted value is treated as no match (200). 503 when the catalog failed to construct at boot (never an empty 200 that looks like &quot;no providers&quot;). The SPA re-validates on Settings open and every 15 minutes. DISPATCH ORDER: &quot;catalog&quot; is a reserved path segment — this route MUST be matched before the /providers/{id} handler, and &quot;catalog&quot; is never a valid provider id.
 `,
     requestFormat: "json",
-    response: z.array(ModelCapabilities),
+    parameters: [
+      {
+        name: "If-None-Match",
+        type: "Header",
+        schema: z.string().optional(),
+      },
+    ],
+    response: ProvidersCatalog,
+    errors: [
+      {
+        status: 304,
+        description: `If-None-Match matched the current ETag exactly; no body.`,
+        schema: z.void(),
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `No catalog is available (construction failed at boot).`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/providers/default-model",
+    alias: "getDefaultModel",
+    description: `Returns agents.defaults.default_model as a (provider, model) pair with the resolved context window and its source (ADR-066&#x27;s ResolveWindow(provider, model), absent until it lands). Registered as its own route with adminWrap (withAuth → RequireNotBypass): 401 unauthenticated, 503 under dev-mode bypass. DISPATCH ORDER: &quot;default-model&quot; is a reserved path segment — this route MUST be matched before the /providers/{id} handler, and &quot;default-model&quot; is never a valid provider id.
+`,
+    requestFormat: "json",
+    response: DefaultModel,
     errors: [
       {
         status: 401,
         description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `dev_mode_bypass is active (RequireNotBypass guard).`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "put",
+    path: "/providers/default-model",
+    alias: "updateDefaultModel",
+    description: `Validates that the provider is configured and connected or signed_in (400 &#x60;{&quot;error&quot;:&quot;provider not configured&quot;,&quot;field&quot;:&quot;provider&quot;}&#x60;) and that the model is in the served catalog for that provider (400 &#x60;{&quot;error&quot;:&quot;model not in catalog for provider&quot;,&quot;field&quot;:&quot;model&quot;}&#x60;) — except rows with custom: true or locality: local, where any non-empty model is accepted with no live call. Persists agents.defaults.default_model under the config lock, emits audit provider.default_model.changed, triggers a reload and waits for it (500 &#x60;default model saved but config reload failed: &lt;reason&gt;&#x60; when it does not confirm); takes effect on the next turn. A ProviderUpdateRequest body sent here is a 400 on shape, never a PUT of a provider named &quot;default-model&quot;. adminWrap: 401 / 503 under bypass.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: DefaultModelUpdateRequest,
+      },
+    ],
+    response: DefaultModel,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `dev_mode_bypass is active (RequireNotBypass guard).`,
         schema: ErrorResponse,
       },
     ],
@@ -7827,6 +8265,50 @@ Model lists are fetched live from each provider&#x27;s upstream /models endpoint
       {
         status: 405,
         description: `Method not allowed.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/settings/context",
+    alias: "getContextSettings",
+    description: `Returns the per-surface tool-result caps, the absolute trigger, the ingest bound, the global default context window and the per-(provider, model) window overrides. User-facing location: Settings → Models. Readable by any authenticated user (withAuth, the /settings/memory precedent — not RequireNotBypass).
+`,
+    requestFormat: "json",
+    response: ContextSettings,
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "put",
+    path: "/settings/context",
+    alias: "updateContextSettings",
+    description: `Partial update — an omitted field is unchanged; model_overrides, when present, replaces the whole list; default_context_window null clears it. 400 naming the field and the limit on: any cap &gt; 150,000 or &lt; 1; absolute_trigger_chars &lt; 1; ingest_bound_bytes ≥ 8,388,608 or &lt; 1; model_overrides[].context_window &lt; 1. Every 200 write triggers a registry reload so the next turn uses the new values without a restart; overrides whose provider no longer exists are pruned on write. Writable by any authenticated user (withAuth).
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: ContextSettingsUpdate,
+      },
+    ],
+    response: ContextSettings,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
         schema: ErrorResponse,
       },
     ],
@@ -9820,7 +10302,7 @@ export function createApiClient(baseUrl: string, options?: ZodiosOptions) {
 // Do not edit directly — re-run: node scripts/_gen-asyncapi-types.mjs
 // These extend the REST schemas above with all WS frame types.
 
-export const WsFrameType = z.enum(["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "token", "done", "error", "tool_call_start", "tool_call_result", "subagent_start", "subagent_message", "subagent_state", "subagent_end", "task_status_changed", "task_run_status", "replay_message", "replay_error", "rate_limit", "media", "agent_switched", "tool_approval_required", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_close_ack", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_status", "browser_tab_action", "browser_tabs", "browser_viewport", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control", "goal_status", "loop_status", "plan_status", "judge_verdict"]);
+export const WsFrameType = z.enum(["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "token", "done", "error", "tool_call_start", "tool_call_result", "tool_result_projection", "subagent_start", "subagent_message", "subagent_state", "subagent_end", "task_status_changed", "task_run_status", "replay_message", "replay_error", "rate_limit", "media", "agent_switched", "tool_approval_required", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_close_ack", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_status", "browser_tab_action", "browser_tabs", "browser_viewport", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control", "goal_status", "loop_status", "plan_status", "judge_verdict"]);
 
 export const AuthFrame = z
   .object({
@@ -9943,7 +10425,7 @@ export const DoneFrame = z
 
 export const LLMError = z
   .object({
-    code: z.enum(["media_unsupported", "provider_rejected", "request_too_large", "provider_auth_failed", "rate_limited", "network", "content_policy", "context_too_long", "tool_args", "schema", "agent_not_configured", "workspace_unavailable", "model_unavailable", "unknown"]),
+    code: z.enum(["media_unsupported", "provider_rejected", "request_too_large", "provider_auth_failed", "rate_limited", "network", "content_policy", "context_too_long", "tool_args", "schema", "agent_not_configured", "workspace_unavailable", "model_unavailable", "needs_provider", "model_unassigned", "turn_canceled", "turn_timed_out", "context_unrecoverable", "context_window_unknown", "unknown"]),
     message: z.string().min(1).max(4096),
     retryable: z.boolean(),
     detail: z.string().max(2048).optional(),
@@ -9952,7 +10434,7 @@ export const LLMError = z
 
 export const LLMErrorReplay = z
   .object({
-    code: z.enum(["media_unsupported", "provider_rejected", "request_too_large", "provider_auth_failed", "rate_limited", "network", "content_policy", "context_too_long", "tool_args", "schema", "agent_not_configured", "workspace_unavailable", "model_unavailable", "unknown"]),
+    code: z.enum(["media_unsupported", "provider_rejected", "request_too_large", "provider_auth_failed", "rate_limited", "network", "content_policy", "context_too_long", "tool_args", "schema", "agent_not_configured", "workspace_unavailable", "model_unavailable", "needs_provider", "model_unassigned", "turn_canceled", "turn_timed_out", "context_unrecoverable", "context_window_unknown", "unknown"]),
     message: z.string().min(1).max(4096),
     retryable: z.boolean(),
   })
@@ -10168,6 +10650,18 @@ export const ReplayErrorFrame = z
       llm_error: LLMErrorReplay,
     })
     .strict().optional(),
+  })
+  .strict();
+
+export const ToolResultProjectionFrame = z
+  .object({
+    type: z.literal("tool_result_projection"),
+    session_id: z.string().min(1).max(128),
+    tool_call_id: z.string().min(1),
+    archive_line: z.number().int().min(0),
+    content_state: z.enum(["capped", "emptied"]),
+    mark: z.string().max(2048).optional(),
+    producing_session_id: z.string().min(1).optional(),
   })
   .strict();
 
@@ -10599,6 +11093,7 @@ export const WsFrame = z.discriminatedUnion("type", [
   TaskRunStatusFrame,
   ReplayMessageFrame,
   ReplayErrorFrame,
+  ToolResultProjectionFrame,
   RateLimitFrame,
   MediaFrame,
   AgentSwitchedFrame,

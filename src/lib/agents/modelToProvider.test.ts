@@ -8,6 +8,9 @@ const openrouter: Provider = {
   name: 'openrouter',
   display_name: 'OpenRouter',
   status: 'connected',
+  auth_method: 'api_key',
+  dependents: [],
+  backs_default: false,
   models: ['z-ai/glm-5.2', 'z-ai/glm-5-turbo'],
 }
 
@@ -16,6 +19,9 @@ const anthropic: Provider = {
   name: 'anthropic',
   display_name: 'Anthropic',
   status: 'connected',
+  auth_method: 'api_key',
+  dependents: [],
+  backs_default: false,
   models: ['claude-sonnet-4-6', 'claude-opus-4-6'],
 }
 
@@ -24,6 +30,9 @@ const disconnected: Provider = {
   name: 'openai',
   display_name: 'OpenAI',
   status: 'disconnected',
+  auth_method: 'api_key',
+  dependents: [],
+  backs_default: false,
   models: ['gpt-4o'],
 }
 

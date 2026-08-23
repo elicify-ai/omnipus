@@ -31,6 +31,7 @@ export function makeAgent(overrides: Partial<Agent> = {}): Agent {
     name: 'Agent Fixture',
     type: 'Main',
     locked: false,
+    needs_model: false,
     status: 'active',
     soul: '',
     timeout_seconds: 300,

@@ -1,0 +1,48 @@
+title: ToolResultProjectionFrame
+description: >
+  Server → client (ADR-066 D5): a tool result already delivered to this
+  session was capped or emptied in place in the model's window. The archive
+  keeps the full content; the SPA updates its rendering of the matching
+  tool call (recall mark shown only under Verbose chat) and, on reload,
+  learns the same state from ToolCall.content_state on the transcript.
+  Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES).
+  Canonical copy — keep in sync by hand with the inline block in
+  contracts/asyncapi.yaml.
+type: object
+required:
+  - type
+  - session_id
+  - tool_call_id
+  - archive_line
+  - content_state
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: tool_result_projection
+  session_id:
+    type: string
+    minLength: 1
+    maxLength: 128
+  tool_call_id:
+    type: string
+    minLength: 1
+    description: The projected tool call. Provider-generated ids are not unique across an archive — pair with archive_line.
+  archive_line:
+    type: integer
+    minimum: 0
+    description: Zero-based index of the tool-result line in the session archive; together with tool_call_id it keys the projection state.
+  content_state:
+    type: string
+    enum:
+      - capped
+      - emptied
+    description: The new projection state. "full" is never pushed — it is the default state and is only ever read from the transcript.
+  mark:
+    type: string
+    maxLength: 2048
+    description: The recall mark left in the window (names the tool, the id and the recall_conversation call that restores it). Rendered only under Verbose chat.
+  producing_session_id:
+    type: string
+    minLength: 1
+    description: ADR-057 FR-012/FR-013 — present iff the projection was produced by a delegated child session different from session_id.

@@ -76,13 +76,13 @@ var providersCatalogJSON []byte
 // otherwise "openai-compatible".
 func wire(id string) gen.ProviderCatalogEntryWire {
 	if strings.HasSuffix(id, "-anthropic") {
-		return gen.Anthropic
+		return gen.ProviderCatalogEntryWireAnthropic
 	}
 	switch id {
 	case "anthropic", "anthropic-messages", "bedrock":
-		return gen.Anthropic
+		return gen.ProviderCatalogEntryWireAnthropic
 	}
-	return gen.OpenaiCompatible
+	return gen.ProviderCatalogEntryWireOpenaiCompatible
 }
 
 // region constructs a *gen.ProviderCatalogEntryRegion from a string, or nil.
@@ -195,7 +195,7 @@ var Entries = []gen.ProviderCatalogEntry{
 
 	entry(
 		"openai", "OpenAI",
-		gen.ProviderCatalogEntryPlanStandardApi,
+		gen.StandardApi,
 		wire("openai"),
 		nil,
 		"api.openai.com/v1",
@@ -207,7 +207,7 @@ var Entries = []gen.ProviderCatalogEntry{
 	),
 	entry(
 		"anthropic", "Anthropic",
-		gen.ProviderCatalogEntryPlanStandardApi,
+		gen.StandardApi,
 		wire("anthropic"),
 		nil,
 		"api.anthropic.com/v1",
@@ -219,7 +219,7 @@ var Entries = []gen.ProviderCatalogEntry{
 	),
 	entry(
 		"google", "Google Gemini",
-		gen.ProviderCatalogEntryPlanStandardApi,
+		gen.StandardApi,
 		wire("google"),
 		nil,
 		"generativelanguage.googleapis.com",
@@ -231,7 +231,7 @@ var Entries = []gen.ProviderCatalogEntry{
 	),
 	entry(
 		"openrouter", "OpenRouter",
-		gen.ProviderCatalogEntryPlanStandardApi,
+		gen.StandardApi,
 		wire("openrouter"),
 		nil,
 		"openrouter.ai/api/v1",
@@ -243,7 +243,7 @@ var Entries = []gen.ProviderCatalogEntry{
 	),
 	entry(
 		"groq", "Groq",
-		gen.ProviderCatalogEntryPlanStandardApi,
+		gen.StandardApi,
 		wire("groq"),
 		nil,
 		"api.groq.com/openai/v1",
@@ -255,7 +255,7 @@ var Entries = []gen.ProviderCatalogEntry{
 	),
 	entry(
 		"mistral", "Mistral",
-		gen.ProviderCatalogEntryPlanStandardApi,
+		gen.StandardApi,
 		wire("mistral"),
 		nil,
 		"api.mistral.ai/v1",
@@ -267,7 +267,7 @@ var Entries = []gen.ProviderCatalogEntry{
 	),
 	entry(
 		"nvidia", "NVIDIA",
-		gen.ProviderCatalogEntryPlanStandardApi,
+		gen.StandardApi,
 		wire("nvidia"),
 		nil,
 		"integrate.api.nvidia.com/v1",
@@ -279,7 +279,7 @@ var Entries = []gen.ProviderCatalogEntry{
 	),
 	entry(
 		"cerebras", "Cerebras",
-		gen.ProviderCatalogEntryPlanStandardApi,
+		gen.StandardApi,
 		wire("cerebras"),
 		nil,
 		"api.cerebras.ai/v1",
@@ -291,7 +291,7 @@ var Entries = []gen.ProviderCatalogEntry{
 	),
 	entry(
 		"ollama", "Ollama (local)",
-		gen.ProviderCatalogEntryPlanStandardApi,
+		gen.StandardApi,
 		wire("ollama"),
 		nil,
 		"localhost:11434",
@@ -303,7 +303,7 @@ var Entries = []gen.ProviderCatalogEntry{
 	),
 	entry(
 		"azure", "Azure OpenAI",
-		gen.ProviderCatalogEntryPlanStandardApi,
+		gen.StandardApi,
 		wire("azure"),
 		nil,
 		"<resource>.openai.azure.com",
@@ -318,7 +318,7 @@ var Entries = []gen.ProviderCatalogEntry{
 
 	entry(
 		"z-ai", "Zhipu / GLM",
-		gen.ProviderCatalogEntryPlanStandardApi,
+		gen.StandardApi,
 		wire("z-ai"),
 		regionPtr("intl"),
 		"api.z.ai/api/paas/v4",
@@ -330,7 +330,7 @@ var Entries = []gen.ProviderCatalogEntry{
 	),
 	entry(
 		"zhipu", "Zhipu / GLM",
-		gen.ProviderCatalogEntryPlanStandardApi,
+		gen.StandardApi,
 		wire("zhipu"),
 		regionPtr("china"),
 		"open.bigmodel.cn/api/paas/v4",
@@ -342,7 +342,7 @@ var Entries = []gen.ProviderCatalogEntry{
 	),
 	entry(
 		"z-ai-coding", "Zhipu / GLM",
-		gen.ProviderCatalogEntryPlanCodingPlan,
+		gen.CodingPlan,
 		wire("z-ai-coding"),
 		regionPtr("intl"),
 		"api.z.ai/api/coding/paas/v4",
@@ -354,7 +354,7 @@ var Entries = []gen.ProviderCatalogEntry{
 	),
 	entry(
 		"zhipu-coding", "Zhipu / GLM",
-		gen.ProviderCatalogEntryPlanCodingPlan,
+		gen.CodingPlan,
 		wire("zhipu-coding"),
 		regionPtr("china"),
 		"open.bigmodel.cn/api/coding/paas/v4",
@@ -369,7 +369,7 @@ var Entries = []gen.ProviderCatalogEntry{
 
 	entry(
 		"moonshot", "Moonshot / Kimi",
-		gen.ProviderCatalogEntryPlanStandardApi,
+		gen.StandardApi,
 		wire("moonshot"),
 		regionPtr("intl"),
 		"api.moonshot.ai/v1",
@@ -381,7 +381,7 @@ var Entries = []gen.ProviderCatalogEntry{
 	),
 	entry(
 		"moonshot-cn", "Moonshot / Kimi",
-		gen.ProviderCatalogEntryPlanStandardApi,
+		gen.StandardApi,
 		wire("moonshot-cn"),
 		regionPtr("china"),
 		"api.moonshot.cn/v1",
@@ -396,7 +396,7 @@ var Entries = []gen.ProviderCatalogEntry{
 
 	entry(
 		"minimax", "MiniMax",
-		gen.ProviderCatalogEntryPlanStandardApi,
+		gen.StandardApi,
 		wire("minimax"),
 		regionPtr("intl"),
 		"api.minimax.io/v1",
@@ -408,7 +408,7 @@ var Entries = []gen.ProviderCatalogEntry{
 	),
 	entry(
 		"minimax-cn", "MiniMax",
-		gen.ProviderCatalogEntryPlanStandardApi,
+		gen.StandardApi,
 		wire("minimax-cn"),
 		regionPtr("china"),
 		"api.minimaxi.com/v1",
@@ -423,7 +423,7 @@ var Entries = []gen.ProviderCatalogEntry{
 
 	entry(
 		"deepseek", "DeepSeek",
-		gen.ProviderCatalogEntryPlanStandardApi,
+		gen.StandardApi,
 		wire("deepseek"),
 		nil,
 		"api.deepseek.com/v1",
@@ -438,7 +438,7 @@ var Entries = []gen.ProviderCatalogEntry{
 
 	entry(
 		"qwen", "Qwen / Alibaba",
-		gen.ProviderCatalogEntryPlanStandardApi,
+		gen.StandardApi,
 		wire("qwen"),
 		regionPtr("china"),
 		"dashscope.aliyuncs.com/compatible-mode/v1",
@@ -450,7 +450,7 @@ var Entries = []gen.ProviderCatalogEntry{
 	),
 	entry(
 		"qwen-intl", "Qwen / Alibaba",
-		gen.ProviderCatalogEntryPlanStandardApi,
+		gen.StandardApi,
 		wire("qwen-intl"),
 		regionPtr("intl"),
 		"dashscope-intl.aliyuncs.com/compatible-mode/v1",
@@ -462,7 +462,7 @@ var Entries = []gen.ProviderCatalogEntry{
 	),
 	entry(
 		"qwen-us", "Qwen / Alibaba",
-		gen.ProviderCatalogEntryPlanStandardApi,
+		gen.StandardApi,
 		wire("qwen-us"),
 		regionPtr("us"),
 		"dashscope-us.aliyuncs.com/compatible-mode/v1",
@@ -487,7 +487,7 @@ var Entries = []gen.ProviderCatalogEntry{
 	// alias of coding-plan-anthropic) stays excluded — see catalog_test.go.
 	entry(
 		"coding-plan", "Qwen / Alibaba",
-		gen.ProviderCatalogEntryPlanCodingPlan,
+		gen.CodingPlan,
 		wire("coding-plan"),
 		nil,
 		"coding-intl.dashscope.aliyuncs.com/v1",
@@ -518,11 +518,11 @@ func validateEntry(e gen.ProviderCatalogEntry) error {
 	if e.AnthropicId == nil {
 		return nil
 	}
-	if e.Wire != gen.OpenaiCompatible {
+	if e.Wire != gen.ProviderCatalogEntryWireOpenaiCompatible {
 		return fmt.Errorf(
 			"entry id=%q: Wire=%q must be %q when AnthropicId is set — "+
 				"an anthropic-wire primary cannot also point at a sibling endpoint",
-			e.Id, e.Wire, gen.OpenaiCompatible,
+			e.Id, e.Wire, gen.ProviderCatalogEntryWireOpenaiCompatible,
 		)
 	}
 	if *e.AnthropicId == e.Id {
@@ -614,7 +614,7 @@ func validateCatalog(entries []gen.ProviderCatalogEntry) error {
 			continue
 		}
 		anthropicID := *e.AnthropicId
-		if got := DeriveWire(anthropicID); got != gen.Anthropic {
+		if got := DeriveWire(anthropicID); got != gen.ProviderCatalogEntryWireAnthropic {
 			return fmt.Errorf(
 				"entry[%d] id=%q: AnthropicId=%q must derive to the anthropic wire, got %q (FIX-5)",
 				i, e.Id, anthropicID, got,
