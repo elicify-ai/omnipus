@@ -426,9 +426,10 @@ func TestRoutingSessionID_ConsumerSetIsClosed(t *testing.T) {
 	if got := counts[u19BucketPreArm]; got != 3 {
 		t.Errorf("pre-arm key reads = %d, want 3 (FR-016's three direct sites: cancel_prearm.go x2, subturn.go x1)", got)
 	}
-	if got := counts[u19BucketWSStamping]; got != 15 {
-		t.Errorf("WS-payload-stamping reads = %d, want 15 (loop.go x13, subturn.go x2: SubTurnSpawnPayload + "+
-			"SubTurnEndPayload). loop.go grew from 2 to 13 in the 2026-08 UAT remediation: every live "+
+	if got := counts[u19BucketWSStamping]; got != 16 {
+		t.Errorf("WS-payload-stamping reads = %d, want 16 (loop.go x14, subturn.go x2: SubTurnSpawnPayload + "+
+			"SubTurnEndPayload). loop.go grew from 2 to 13 in the 2026-08 UAT remediation, then to 14 when "+
+			"ADR-066 D7 (T066-11) added typedTurnExit's ErrorPayload stamp for the typed turn exits: every live "+
 			"ErrorPayload and RateLimitPayload emit site now stamps SessionID with routingSessionID, "+
 			"because ServeHTTP mints a fresh webchat: uuid per connection — an error carrying only the "+
 			"ChatID was dropped by matchesEvent for a second tab or a reload, which is how a provider 429 "+
@@ -441,9 +442,10 @@ func TestRoutingSessionID_ConsumerSetIsClosed(t *testing.T) {
 			"childTS.routingSessionID = parentTS.routingSessionID assignment)", got)
 	}
 
-	// 9 role-B + 3 pre-arm + 15 WS-stamping + 1 inheritance. Was 17 before the
-	// 2026-08 UAT remediation widened the WS-stamping bucket (see above).
-	const wantTotal = 28
+	// 9 role-B + 3 pre-arm + 16 WS-stamping + 1 inheritance. Was 17 before the
+	// 2026-08 UAT remediation widened the WS-stamping bucket (see above), 28
+	// before ADR-066 D7's typedTurnExit stamp.
+	const wantTotal = 29
 	if len(all) != wantTotal {
 		t.Fatalf("total routingSessionID reads = %d, want exactly %d (the closed consumer set) — "+
 			"either a new read was added outside the four named buckets, or one of the buckets "+
