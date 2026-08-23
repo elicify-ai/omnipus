@@ -87,6 +87,7 @@ import { mountNameFromPath } from './libraryMountName'
 import { LibraryNewFolderDialog } from './LibraryNewFolderDialog'
 import { LibraryPreviewPane } from './LibraryPreviewPane'
 import { LibraryErrorBanner } from './LibraryErrorBanner'
+import { KnowledgePanel } from './knowledge/KnowledgePanel'
 import { confirmDiscardLibraryEdits } from './preview/unsavedGuard'
 import { getLibraryErrorMessage } from './libraryErrorMessage'
 
@@ -827,6 +828,35 @@ export function LibraryExplorer({
         </div>
       )}
 
+      {/* ── Knowledge base (ADR-067 US-4) ────────────────────────────────────
+          The one place a person reaches the knowledge-base surface: it sits
+          above the listing of the folder it is describing, so "is this a
+          collection, and is its index current?" is answered where the folder
+          is, rather than on a screen of its own (no new top-level screen).
+
+          Mounted only when a workspace is open — the virtual root lists
+          workspaces, not files, so there is no folder to ask about. The panel
+          itself decides what to say; it renders nothing at all for a folder
+          whose index is finished and current.
+
+          `progress` is not passed here because it is no longer this file's to
+          pass: the knowledge_index_progress WS frame is routed by
+          src/store/chat.ts into src/store/knowledgeIndex.ts, and KnowledgePanel
+          reads the frame for its own collection_id from there. Do not add a
+          poll — the frame is the contract's answer to progress (FR-080). */}
+      {workspaceId !== null && (
+        <div className="shrink-0 p-2 pb-0">
+          <KnowledgePanel
+            workspaceId={workspaceId}
+            path={browsedDir}
+            onOpenNote={(workspacePath) => {
+              if (!confirmDiscardLibraryEdits()) return
+              goTo(workspaceId, workspacePath)
+            }}
+          />
+        </div>
+      )}
+
       {/* ── List + preview split ────────────────────────────────────────────
           Stacked in the docked aside, side-by-side in the fullscreen tab. In
           BOTH the list stays visible and clickable while a file is open, which
@@ -930,6 +960,14 @@ export function LibraryExplorer({
               goTo(workspaceId, null)
             }}
             onDownload={handleDownload}
+            // FR-012 / US-7 AS-7: following a wikilink, a relative link or a
+            // linked mention inside an open note swaps the pane to the target
+            // AND updates the address, so the note the reader is looking at is
+            // the note the URL names.
+            onOpenNote={(workspacePath) => {
+              if (!confirmDiscardLibraryEdits()) return
+              goTo(workspaceId, workspacePath)
+            }}
           />
         </div>
       )}

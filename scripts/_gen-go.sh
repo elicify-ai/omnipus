@@ -61,6 +61,7 @@ CGO_ENABLED=0 "$GO" run ./scripts/gen-asyncapi-go/ \
 # scripts/gen-go-fixup.go for the rewrite rules.
 echo "==> Applying wire-format fixup to openapi_types.gen.go..."
 CGO_ENABLED=0 "$GO" run ./scripts/gen-go-fixup.go \
+  -strict \
   -file pkg/api/generated/openapi_types.gen.go
 
 echo "==> Go type generation complete."

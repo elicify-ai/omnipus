@@ -103,6 +103,13 @@ export interface LibraryPreviewPaneProps {
   /** Override for the preview-token minter. Production passes nothing and
    *  gets PREVIEW_TOKEN_MINTER; tests inject a stub. */
   mintPreviewToken?: MintLibraryPreviewToken | null
+  /**
+   * Open another file in place, workspace-relative (FR-012, US-7 AS-7).
+   * Followed when a reader clicks a wikilink, a relative link or a linked
+   * mention inside an open note. Omit and those links still render — they
+   * simply do not swap the pane.
+   */
+  onOpenNote?: (workspacePath: string) => void
 }
 
 export function LibraryPreviewPane({
@@ -111,6 +118,7 @@ export function LibraryPreviewPane({
   onClose,
   onDownload,
   mintPreviewToken = PREVIEW_TOKEN_MINTER,
+  onOpenNote,
 }: LibraryPreviewPaneProps) {
   const kind = classifyLibraryEntry(entry)
   // HTML is in this set for its EDIT side only — the rendered view comes from
@@ -201,6 +209,7 @@ export function LibraryPreviewPane({
             content={contentQuery.data}
             onDownload={onDownload}
             onSaved={setLiveEntry}
+            {...(onOpenNote ? { onOpenNote } : {})}
           />
         )
       }
@@ -558,6 +567,7 @@ function LibraryTextBody({
   content,
   onDownload,
   onSaved,
+  onOpenNote,
 }: {
   workspaceId: string
   entry: LibraryEntry
@@ -565,6 +575,7 @@ function LibraryTextBody({
   content: { content?: string; is_text: boolean; too_large: boolean }
   onDownload: (entry: LibraryEntry) => void
   onSaved: (entry: LibraryEntry) => void
+  onOpenNote?: (workspacePath: string) => void
 }) {
   if (content.too_large) {
     return <LibraryDownloadCard entry={entry} reason="too_large" onDownload={onDownload} />
@@ -574,7 +585,15 @@ function LibraryTextBody({
   }
   const text = content.content
   if (kind === 'markdown') {
-    return <LibraryMarkdownPreview workspaceId={workspaceId} entry={entry} content={text} onSaved={onSaved} />
+    return (
+      <LibraryMarkdownPreview
+        workspaceId={workspaceId}
+        entry={entry}
+        content={text}
+        onSaved={onSaved}
+        {...(onOpenNote ? { onOpenNote } : {})}
+      />
+    )
   }
   if (kind === 'mermaid') {
     return <LibraryMermaidPreview workspaceId={workspaceId} entry={entry} content={text} onSaved={onSaved} />

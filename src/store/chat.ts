@@ -12,6 +12,7 @@ import type {
   ToolResultRef,
   TruncatedResult,
   WhatsAppPairingFrame,
+  KnowledgeIndexProgressFrame,
   NotificationFrame,
   GoalStatusFrame,
   LoopStatusFrame,
@@ -21,6 +22,7 @@ import type {
 import { useJudgeActivityStore } from '@/store/judgeActivity'
 import { MessageFrame as MessageFrameSchema } from '@/lib/api/generated/schemas'
 import { useWhatsAppPairingStore } from '@/store/whatsappPairing'
+import { useKnowledgeIndexStore } from '@/store/knowledgeIndex'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { useNotificationsStore } from '@/store/notifications'
 import { useToolApprovalStore } from '@/store/toolApproval'
@@ -5058,6 +5060,19 @@ export const useChatStore = create<ChatStore>((set, get) => {
           // whatsapp_pairing/notification pattern: accessed via getState()
           // at frame time, never routed through a session bucket).
           useJudgeActivityStore.getState().apply(frame as JudgeVerdictFrame)
+          break
+        }
+
+        case 'knowledge_index_progress': {
+          // ADR-067 FR-080: GLOBAL frame (no session_id — it describes a
+          // knowledge base, not a chat). Same shape as the whatsapp_pairing /
+          // notification cases: applied through getState() at frame time so
+          // chatStore stays decoupled from the knowledge store.
+          //
+          // Without this case the frame was validated, counted as known, and
+          // then dropped on the floor — which is why every knowledge base in
+          // the Library reported "no indexing progress received" forever.
+          useKnowledgeIndexStore.getState().apply(frame as KnowledgeIndexProgressFrame)
           break
         }
 

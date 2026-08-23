@@ -1,0 +1,6 @@
+/* Carried over from docs/internal/experiments/preview-isolation/fixture/style.css.
+   The exact rgb(16,16,20) value is the fixture's own CSS oracle: it is what the
+   in-page report compares against to say "the stylesheet was applied", proving
+   style-src 'self' still matches under an opaque origin (experiment §2.1). */
+body { background: rgb(16, 16, 20); color: #e2e8f0; font-family: sans-serif; }
+#cssmark { background: rgb(16, 16, 20); }

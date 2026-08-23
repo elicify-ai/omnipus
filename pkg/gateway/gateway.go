@@ -2152,32 +2152,7 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// metadata-only instances (deps-free, never executed — per ADR-018 D-A1).
 	// After sysAgentDeps is wired (below), the registry is re-populated with live deps.
 	// MCPRegistry starts empty; MCP servers populate it at connection time.
-	centralBuiltinReg := tools.NewBuiltinRegistry()
-	for _, t := range systools.AllTools(nil, nil) {
-		if regErr := centralBuiltinReg.RegisterBuiltin(t); regErr != nil {
-			slog.Warn("gateway: central builtin registry pre-population skipped duplicate",
-				"tool", t.Name(), "error", regErr)
-		}
-	}
-	// Register general-builtin metadata (SC-108 / Issue #350): these instances
-	// expose Name/Description/Category for /api/v1/tools but are NEVER Execute()d.
-	// Constructor errors are logged and skipped per the log-and-skip invariant.
-	for _, t := range tools.GeneralBuiltinMetadata() {
-		if regErr := centralBuiltinReg.RegisterBuiltin(t); regErr != nil {
-			slog.Warn("gateway: central builtin registry general-builtin skipped",
-				"tool", t.Name(), "error", regErr)
-		}
-	}
-	// Register browser.* metadata (Issue #350 / catalog gap): browser tools register
-	// into the per-agent registry at agent-loop boot, so without this they were absent
-	// from GET /api/v1/tools. These metadata-only instances (nil *BrowserManager) are
-	// never Execute()d — they expose Name/Description/Category only (ADR-018 D-A1).
-	for _, t := range browser.BrowserBuiltinMetadata() {
-		if regErr := centralBuiltinReg.RegisterBuiltin(t); regErr != nil {
-			slog.Warn("gateway: central builtin registry browser-builtin skipped",
-				"tool", t.Name(), "error", regErr)
-		}
-	}
+	centralBuiltinReg, _ := buildCentralBuiltinRegistry(nil)
 	centralMCPReg := tools.NewMCPRegistry()
 	// Wire the central registries into the agent loop so ReconcileMCP (triggered
 	// by REST/sysagent MCP writes and hot-reload) populates the SAME registry
@@ -2398,45 +2373,17 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// (constructed inside setupAndStartServices) would retain the pre-sysAgentDeps
 	// registry. The restAPIRef field was stored by setupAndStartServices exactly
 	// for this late-wire step.
-	centralBuiltinReg = tools.NewBuiltinRegistry()
-	for _, t := range systools.AllTools(sysAgentDeps, nil) {
-		if err := centralBuiltinReg.RegisterBuiltin(t); err != nil {
-			slog.Warn("gateway: central builtin registry re-population skipped duplicate",
-				"tool", t.Name(), "error", err)
-		}
-	}
-	// Re-register general-builtin metadata in the live-deps registry (metadata-only,
-	// never executed; duplicates skipped). These instances expose correct
-	// Name/Description/Category for /api/v1/tools without executing anything.
-	generalBuiltinsRegistered := 0
-	for _, t := range tools.GeneralBuiltinMetadata() {
-		if err := centralBuiltinReg.RegisterBuiltin(t); err != nil {
-			slog.Warn("gateway: central builtin registry general-builtin re-population skipped",
-				"tool", t.Name(), "error", err)
-		} else {
-			generalBuiltinsRegistered++
-		}
-	}
-	// Re-register browser.* metadata (metadata-only, never executed; duplicates
-	// skipped) — same catalog-gap fix as the pre-deps block above.
-	browserBuiltinsRegistered := 0
-	for _, t := range browser.BrowserBuiltinMetadata() {
-		if err := centralBuiltinReg.RegisterBuiltin(t); err != nil {
-			slog.Warn("gateway: central builtin registry browser-builtin re-population skipped",
-				"tool", t.Name(), "error", err)
-		} else {
-			browserBuiltinsRegistered++
-		}
-	}
+	centralBuiltinReg, centralBuiltinCounts := buildCentralBuiltinRegistry(sysAgentDeps)
 	// Propagate the updated registry to the already-constructed restAPI (SC-108 fix).
 	if runningServices.restAPIRef != nil {
 		runningServices.restAPIRef.builtinRegistry = centralBuiltinReg
 	}
 	slog.Info("gateway: central BuiltinRegistry re-populated with live deps",
-		"system_tools", centralBuiltinReg.Count()-generalBuiltinsRegistered-browserBuiltinsRegistered,
-		"general_builtins", generalBuiltinsRegistered,
-		"browser_builtins", browserBuiltinsRegistered,
-		"total", centralBuiltinReg.Count())
+		"system_tools", centralBuiltinCounts.system,
+		"general_builtins", centralBuiltinCounts.general,
+		"browser_builtins", centralBuiltinCounts.browser,
+		"knowledge_builtins", centralBuiltinCounts.knowledge,
+		"total", centralBuiltinCounts.total())
 
 	// centralBuiltinReg was just reassigned to a fresh instance above — re-wire
 	// it (and centralMCPReg, unchanged but re-asserted for clarity) into the
@@ -4555,6 +4502,15 @@ func setupAndStartServices(
 	// at boot, after workspaces are ensured, so it's visible up front instead.
 	logWorkspacelessAgents(homePath, cfg)
 
+	// ADR-067 W3 (FR-030..FR-034a, FR-038a, FR-039, FR-080): open the index for
+	// every already-mounted knowledge base, push indexing progress over the
+	// WebSocket, and start each collection's drift schedule. Runs after the
+	// workspaces are ensured (it reads their mount records) and before the
+	// listener accepts connections. Interval 0 means FR-038a's six-hour default:
+	// there is no config key for it yet, and KnowledgeLifecycleOptions.DriftInterval
+	// is where one would be passed in.
+	startKnowledgeLifecycle(homePath, wsHandler, 0)
+
 	// Recover tasks left "in_progress" by a crashed/abandoned previous process.
 	// Runs before the HTTP listener accepts connections (StartAll, below), so no
 	// handler can race reconciliation.
@@ -5012,6 +4968,10 @@ func stopAndCleanupServices(runningServices *services, shutdownTimeout time.Dura
 	if runningServices.CronService != nil {
 		runningServices.CronService.Stop()
 	}
+	// ADR-067 W3: stop every knowledge drift schedule and close every open
+	// collection index. Keyed by $OMNIPUS_HOME rather than carried on
+	// runningServices — see knowledgeLifecycles' doc comment.
+	stopKnowledgeLifecycles()
 	if runningServices.PlanEngine != nil {
 		runningServices.PlanEngine.Stop()
 	}

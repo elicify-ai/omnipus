@@ -234,7 +234,26 @@ func IsValidEventName(e EventName) bool {
 		// rejected because the session is a protected heartbeat session (FR-014).
 		"session.delete.blocked",
 		// Agent management events (pkg/gateway/rest.go).
-		"agent.delete":
+		"agent.delete",
+		// Knowledge-base mutation events (ADR-067 FR-090, D19). Emitted by
+		// pkg/knowledge's authoring tools and by the author/rename primitives
+		// beneath them, for every mutation AND every refusal.
+		//
+		// The names are written out here rather than referenced as
+		// knowledge.EventKnowledgeNote* constants because pkg/knowledge
+		// imports pkg/audit — the reverse reference would be an import cycle.
+		// pkg/knowledge/audit_event_names_test.go asserts the two lists agree,
+		// so a rename there fails a test instead of quietly reintroducing the
+		// warn-once path this entry exists to close.
+		//
+		// "knowledge.note.edit" is emitted by AuthorOpEdit and has no
+		// EventKnowledgeNote* constant; it is listed for the same reason as
+		// the rest.
+		"knowledge.note.create",
+		"knowledge.note.write",
+		"knowledge.note.edit",
+		"knowledge.note.rename",
+		"knowledge.note.delete":
 		return true
 	}
 	return false

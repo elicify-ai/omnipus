@@ -169,6 +169,20 @@ func NewAgentInstance(
 	// or revoked per agent, because GET /agents/{id}/tools lists this registry.
 	toolsRegistry.Register(tools.NewRequestMountTool(config.OmnipusHomeDir()))
 
+	// The knowledge tool family (ADR-067 D7, FR-050–FR-055 retrieval and
+	// FR-100–FR-108 authoring): the agent-facing read AND write path over a
+	// knowledge base mounted into the calling agent's workspace. Registered
+	// unconditionally for EVERY agent, exactly like request_mount directly
+	// above and for the same reason — what an agent may DO with them is its
+	// seeded tool POLICY (D17's matrix, pkg/coreagent/core.go +
+	// pkg/config/defaults.go), never conditional registration (Constraint #6).
+	//
+	// Until this call existed the whole of pkg/knowledge was reachable by
+	// nothing, and until it covered the authoring half, seven of the nine
+	// seeded names were a granted posture over a tool no registry offered.
+	// See knowledge_tools.go for the audit wiring.
+	registerKnowledgeTools(toolsRegistry)
+
 	// Resolve agentID early so the session store can tag sessions with the correct owner.
 	// Empty until an agentCfg supplies one: the "main" sentinel used to stand in
 	// here, which is how it ended up stamped on sessions, transcripts, tasks and

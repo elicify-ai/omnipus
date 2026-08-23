@@ -5230,7 +5230,12 @@ func (a *restAPI) registerAdditionalEndpoints(cm httpHandlerRegistrar) {
 	// decodeAndValidate, so relaxing the outer limit does not widen the
 	// attack surface for the non-upload operations.
 	cm.RegisterHTTPHandler("/api/v1/library", a.withUploadAuth(withRateLimit(configLimiter, a.HandleLibrary)))
-	cm.RegisterHTTPHandler("/api/v1/library/", a.withUploadAuth(withRateLimit(configLimiter, a.HandleLibrary)))
+	// ADR-067 stage 2: the subtree entry point is HandleLibraryTree, which peels
+	// off /library/{id}/knowledge* (rest_knowledge.go) and hands everything else
+	// to HandleLibrary unchanged. It is a shim rather than four more
+	// registrations because the workspace id sits in the MIDDLE of those
+	// patterns and this mux has no path wildcards — see HandleLibraryTree's doc.
+	cm.RegisterHTTPHandler("/api/v1/library/", a.withUploadAuth(withRateLimit(configLimiter, a.HandleLibraryTree)))
 	// ADR-067 stage 1 (FR-003f): the preview-token mint endpoint and the bare
 	// /library-preview/ serving prefix. Registered from rest_library_preview.go
 	// so the two halves share one token store. The mint path is an EXACT

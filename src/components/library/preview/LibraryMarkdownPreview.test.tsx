@@ -53,7 +53,14 @@ vi.mock('@/components/chat/ChatImage', () => ({
 vi.mock('@/store/ui', () => ({
   useUiStore: { getState: () => ({ addToast: vi.fn() }) },
 }))
-vi.mock('@tanstack/react-query', () => ({ useQuery: () => ({ data: null }) }))
+// The stage-2 reading view this pane now mounts fetches through react-query
+// (outline, link graph, detection). Both hooks are stubbed to "nothing has
+// arrived", which is the state this file is asserting the pane in: the rails
+// have no data, so what is proven is the reading COLUMN and its composition.
+vi.mock('@tanstack/react-query', () => ({
+  useQuery: () => ({ data: null }),
+  useQueries: () => [],
+}))
 
 // The view shell is replaced by a pass-through that renders whatever
 // `renderView` produces. This keeps the composition assertions independent of
@@ -327,24 +334,32 @@ describe('KB markdown — the components map is module scope (FR-013c)', () => {
   })
 })
 
-describe('LibraryMarkdownPreview mounts the KB composition (FR-013a)', () => {
-  it('renders the view slot through the KB pipeline, not chat’s', () => {
+describe('LibraryMarkdownPreview mounts the STAGE 2 reading view (FR-013a, US-7)', () => {
+  it('renders the view slot through the KB reading view, not chat’s renderer and not stage 1', () => {
     // The composition is worth nothing if the Library still mounts
-    // HistoricalMessageMarkdown. Proven behaviourally, by the two divergences:
-    // the comment is hidden AND the relative link is a live anchor.
-    // DIES ON: reverting renderView to <HistoricalMessageMarkdown …/>.
+    // HistoricalMessageMarkdown — and stage 2 is worth nothing if the Library
+    // mounts stage 1, which is what it did: KnowledgeReader, KnowledgeOutline,
+    // KnowledgeBacklinks and preview/knowledgeMarkdown.tsx had no importer
+    // outside their own tests, so a reader opening a note got `[[Wikilinks]]`
+    // as literal text while 138 tests asserted otherwise.
+    //
+    // Proven behaviourally by three things stage 1 cannot do: the reading
+    // column exists, the private comment is hidden, and the WIKILINK is a link.
+    //
+    // DIES ON: reverting renderView to <KnowledgeMarkdown …/> (no reading
+    // column, wikilink stays literal) or to <HistoricalMessageMarkdown …/>
+    // (the comment survives too).
     render(
       <LibraryMarkdownPreview
         workspaceId="ws-1"
         entry={entry}
-        content={'[plan](notes/plan.md) %%hidden aside%% visible'}
+        content={'[[Other Note]] %%hidden aside%% visible'}
       />,
     )
     const body = document.body.textContent ?? ''
     expect(body).not.toContain('hidden aside')
     expect(body).toContain('visible')
-    const link = screen.getByTestId('markdown-link')
-    expect(link.tagName).toBe('A')
-    expect(link.getAttribute('href')).toBe('notes/plan.md')
+    expect(screen.getByTestId('knowledge-reader-article')).toBeInTheDocument()
+    expect(screen.getByTestId('markdown-link').getAttribute('data-kb-target')).toBe('Other Note')
   })
 })

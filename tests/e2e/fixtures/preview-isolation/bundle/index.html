@@ -1,0 +1,199 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>hostile-preview</title>
+<!--
+  ADR-067 §18 H-6 — "the hostile page", as an automatable fixture.
+
+  PROVENANCE. The seven egress vectors, their /x/<vector> path names, the
+  same-origin corroboration probes and the in-page report shape are carried over
+  from the COMMITTED experiment harness that measured them:
+  docs/internal/experiments/preview-isolation/fixture/index.html, driven by
+  server.py's five candidate policies on Chromium 151, Firefox 153 and WebKit
+  26.5. These are the measured cases; they are not re-invented here.
+
+  THREE DELIBERATE DIFFERENCES FROM THAT FIXTURE, each with its reason:
+
+  1. Subresource URLs are RELATIVE (./style.css), not absolute (/f/style.css).
+     The experiment served from a fixed /f/ prefix; the product serves from
+     /library-preview/<token>/, whose token segment is unknown until minted.
+     Relative is also what a real bundle uses, so this is closer to US-1 AS-4.
+
+  2. The form probe fires LAST and on a 600 ms delay, with a probe-done ping on
+     both sides of it. The experiment records a known harness defect (§6): under
+     the no-policy control the form submit navigates the document away, and the
+     navigation cancels every other probe still in flight, so its `none` row is
+     racy. Measured here on Firefox: fired synchronously, only three of seven
+     vectors arrived. That is the most dangerous way for this file to be wrong —
+     cancelled reads exactly like blocked. The form is still genuinely
+     submitted; under any policy that blocks it, nothing navigates and the delay
+     changes nothing.
+
+  3. A gesture-driven popup (/x/popup-gesture) is attempted in addition to the
+     load-time one. window.open with no user gesture can be refused by a
+     browser's own popup blocker, which would make the positive control pass for
+     the WRONG reason — "nothing reached the second origin" because the popup
+     blocker stopped it, not because the sandbox did. A real click removes that
+     confound. Both land under /x/popup*, one vector.
+
+  WHAT COUNTS AS PROOF. Ground truth for EGRESS is the SECOND ORIGIN's own
+  request log — what arrives there was allowed out. Nothing else decides that
+  question: a page can misreport what happened to it, and the experiment found
+  that console violation wording differs per engine (§4.4).
+
+  NON-VACUITY is a separate question — "did the twelve probes actually fire, or
+  did the script die on line one?" — and it is answered two ways, because
+  neither works on every engine:
+
+    * the probe-done pings, which are same-origin and permitted by
+      img-src 'self', so the DRIVER sees them leave. Reliable top-level on all
+      three engines;
+    * the `attempted` list in #result, read out of this document's own DOM.
+      Required for the EMBEDDED case, where WebKit reports none of a sandboxed
+      frame's requests to the driver at all.
+
+  The #result block stays corroborating-only for everything else it carries.
+
+  __EXTPORT__ is substituted at copy time with the port of the second origin,
+  matching the experiment harness's own placeholder.
+-->
+<link rel="stylesheet" href="./style.css">
+<script src="./app.js"></script>
+</head>
+<body>
+<div id="cssmark">probe</div>
+<button id="gesture">click me</button>
+<script>
+(function () {
+  var EXT = 'http://127.0.0.1:__EXTPORT__';
+  var attempted = [];
+
+  // Every probe is individually guarded. A vector that throws synchronously
+  // (sendBeacon under some engines, WebSocket under others) must not prevent
+  // the vectors after it from firing — otherwise "zero egress" would be true
+  // because the page stopped trying, which is the vacuous pass this whole file
+  // exists to make impossible.
+  function attempt(name, fn) {
+    try { fn(); } catch (e) { /* refusal is the expected outcome under policy */ }
+    attempted.push(name);
+  }
+
+  function ping(phase) {
+    // Same-origin, img-src 'self' — permitted under the measured policy, and
+    // its ARRIVAL at the gateway is the oracle for "the script really ran".
+    new Image().src = './probe-done.png?phase=' + phase +
+      '&fired=' + attempted.length + '&v=' + Date.now();
+  }
+
+  function fireAll() {
+    // ---- Same-origin probes (FR-006, FR-006a) --------------------------------
+    // FR-006 permits NO fetch/XHR/sendBeacon/WebSocket to ANY origin, the
+    // gateway's own included, while same-origin SUBRESOURCE loads remain
+    // possible and are an accepted residual — on the condition that they arrive
+    // UNAUTHENTICATED. Both halves are probed here.
+    attempt('same-img', function () {
+      new Image().src = './probe-same.png?probe=same-img&v=' + Date.now();
+    });
+    attempt('same-api-img', function () {
+      // The residual FR-006a actually cares about: an IMAGE request to a real
+      // API path. img-src 'self' permits it, so it goes out — and it must go
+      // out with no session cookie, or untrusted content is an authenticated
+      // API caller.
+      new Image().src = '/api/v1/state?probe=same-api-img&v=' + Date.now();
+    });
+    attempt('same-fetch', function () {
+      fetch('/api/v1/state?probe=same-fetch').catch(function () {});
+    });
+    attempt('same-beacon', function () {
+      navigator.sendBeacon('/api/v1/state?probe=same-beacon', 'd');
+    });
+    attempt('same-ws', function () {
+      var scheme = location.protocol === 'https:' ? 'wss://' : 'ws://';
+      new WebSocket(scheme + location.host + '/ws?probe=same-ws');
+    });
+
+    // ---- The seven measured egress vectors (FR-006) --------------------------
+    attempt('img', function () { new Image().src = EXT + '/x/img'; });
+    attempt('fetch', function () { fetch(EXT + '/x/fetch').catch(function () {}); });
+    attempt('beacon', function () { navigator.sendBeacon(EXT + '/x/beacon', 'd'); });
+    attempt('ws', function () { new WebSocket(EXT.replace('http', 'ws') + '/x/ws'); });
+    attempt('iframe', function () {
+      var f = document.createElement('iframe');
+      f.src = EXT + '/x/iframe';
+      document.body.appendChild(f);
+    });
+    // The vector NO CSP directive covers. Measured: with source directives and
+    // no sandbox directive, this reached the second origin on all three
+    // engines. Only the sandbox's omission of allow-popups closes it.
+    attempt('popup', function () { window.open(EXT + '/x/popup', '_blank'); });
+
+    ping('pre-form');
+
+    // LAST, AND ON A DELAY. Unblocked, a GET form submit navigates this
+    // document away, and the navigation CANCELS whatever the eleven probes
+    // above still have in flight. Measured 2026-08-23 on Firefox: fired
+    // synchronously, the no-policy control saw only beacon, form and popup
+    // arrive — the other four were killed by the navigation before they left,
+    // and the control then reads as "the policy blocked them", which is the
+    // most dangerous way for this file to be wrong. The experiment recorded the
+    // same defect (§6, "the `none` row is racy") and did not fix it.
+    //
+    // The delay is clear air for the other probes, not a way to avoid
+    // submitting: the form is still genuinely submitted, from the document, to
+    // the second origin. Under any policy that blocks it, nothing navigates and
+    // this timer changes nothing at all.
+    setTimeout(function () {
+      attempt('form', function () {
+        var fm = document.createElement('form');
+        fm.action = EXT + '/x/form';
+        fm.method = 'GET';
+        document.body.appendChild(fm);
+        fm.submit();
+      });
+      ping('post-form');
+      report();
+    }, 600);
+  }
+
+  // Gesture-driven popup — see note 3. Bound before fireAll so a click that
+  // lands early still exercises it.
+  document.addEventListener('click', function () {
+    try { window.open(EXT + '/x/popup-gesture', '_blank'); } catch (e) {}
+  });
+
+  function report() {
+    var r = {
+      js_ran: !!window.__APP_JS_RAN__,
+      css_applied: getComputedStyle(document.getElementById('cssmark'))
+        .backgroundColor === 'rgb(16, 16, 20)',
+      origin: String(window.origin),
+      origin_opaque: String(window.origin) === 'null',
+      // THREW vs empty is the distinction §12 insists on: an empty string also
+      // comes back when the page never loaded, so "empty" is a false-green.
+      cookie: (function () {
+        try { return document.cookie; } catch (e) { return 'THREW:' + e.name; }
+      })(),
+      localstorage: (function () {
+        try { localStorage.setItem('k', 'v'); return 'ok'; }
+        catch (e) { return 'THREW:' + e.name; }
+      })(),
+      attempted: attempted.join(',')
+    };
+    document.title = 'RESULT:' + JSON.stringify(r);
+    var el = document.createElement('pre');
+    el.id = 'result';
+    el.textContent = JSON.stringify(r);
+    document.body.appendChild(el);
+  }
+
+  // `report()` is called by fireAll's own timer, AFTER the form vector, so the
+  // `attempted` list the test reads is complete rather than eleven-twelfths
+  // complete. Nothing else calls it.
+  function start() { fireAll(); }
+  if (document.readyState === 'complete') { start(); }
+  else { window.addEventListener('load', start); }
+})();
+</script>
+</body>
+</html>

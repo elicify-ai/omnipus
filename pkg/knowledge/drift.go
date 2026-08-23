@@ -95,6 +95,20 @@ const (
 	// DriftUnreadable — a file the walk could not read. It should be in the
 	// index and cannot be, and FR-112 forbids omitting it silently.
 	DriftUnreadable DriftKind = "unreadable"
+	// DriftPendingRename — a rename was journalled and never confirmed
+	// complete. FR-104's second clause makes an interrupted rewrite
+	// "detectable and completable", and §12's scenario places the detection
+	// at "when the collection is checked" — which is this check, the only
+	// automatic one there is. Without it the journal-writing half is built,
+	// the recovery half is built and tested, and nothing ever looks: a
+	// process killed mid-rename leaves the note moved, some inbound links
+	// pointing at a name that no longer exists, and a record on disk that no
+	// code path reads.
+	//
+	// It is a finding rather than an entry in Skipped because it is not
+	// "by design": the collection genuinely may be half-rewritten, and the
+	// remedy — RecoverPending — is an action someone has to take.
+	DriftPendingRename DriftKind = "pending_rename"
 )
 
 // DriftFinding is one way in which the index and the disk disagree.
@@ -196,6 +210,11 @@ func CheckDrift(ctx context.Context, ix *Index) (DriftReport, error) {
 		}
 	}
 
+	// Pending renames are asked about FIRST among the disk-state questions,
+	// because they explain the findings that follow: a half-applied rename
+	// produces stale_content on every note it did not reach.
+	findings = append(findings, pendingRenameFindings(ix.root)...)
+
 	manifest, loadErr := LoadManifest(ix.manifestPath, ix.root)
 	if loadErr != nil {
 		findings = append(findings, DriftFinding{
@@ -281,6 +300,34 @@ func CheckDrift(ctx context.Context, ix *Index) (DriftReport, error) {
 	report.Findings = findings
 	report.Duration = time.Since(started)
 	return report, nil
+}
+
+// pendingRenameFindings reports every journalled rename that was never
+// confirmed complete (FR-104).
+//
+// A journal that will not parse is reported too, and louder: it names an
+// operation whose planned rewrites can no longer be read, which is strictly
+// worse than one that can.
+func pendingRenameFindings(collectionRoot string) []DriftFinding {
+	store := NewJournalStore(DefaultJournalDir(collectionRoot))
+	journals, err := store.List()
+	var out []DriftFinding
+	if err != nil {
+		out = append(out, DriftFinding{
+			Kind:   DriftPendingRename,
+			Detail: "a rename journal could not be read: " + err.Error(),
+		})
+	}
+	for _, j := range journals {
+		out = append(out, DriftFinding{
+			Kind: DriftPendingRename,
+			Path: j.From,
+			Detail: fmt.Sprintf(
+				"a rename of %q to %q (journal %s) was started and never confirmed complete; %d planned link rewrite(s) may be unapplied",
+				j.From, j.To, j.ID, len(j.Steps)),
+		})
+	}
+	return out
 }
 
 // sortDriftFindings puts findings in a deterministic order so the same state

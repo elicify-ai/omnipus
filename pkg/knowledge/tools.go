@@ -408,7 +408,10 @@ func (t *SearchTool) Execute(ctx context.Context, args map[string]any) *tools.To
 		return res
 	}
 
-	scope := ResolveScope(t.deps.Home, tools.ToolWorkspaceID(ctx))
+	// ResolveTurnScope, not ResolveScope(…, ToolWorkspaceID(ctx)): a CLI or
+	// scheduled turn carries no workspace id and would otherwise resolve an
+	// empty scope over a workspace whose mounts exist. See scope_turn.go.
+	scope, _ := ResolveTurnScope(ctx, t.deps.Home)
 	collectionRef, _ := args["collection"].(string)
 	col, ok := scope.Select(collectionRef)
 	if !ok {
@@ -753,7 +756,10 @@ func (t *GraphTool) Execute(ctx context.Context, args map[string]any) *tools.Too
 		return tools.ErrorResult(fmt.Sprintf("knowledge_graph: 'path' is required for operation %q", op))
 	}
 
-	scope := ResolveScope(t.deps.Home, tools.ToolWorkspaceID(ctx))
+	// ResolveTurnScope, not ResolveScope(…, ToolWorkspaceID(ctx)): a CLI or
+	// scheduled turn carries no workspace id and would otherwise resolve an
+	// empty scope over a workspace whose mounts exist. See scope_turn.go.
+	scope, _ := ResolveTurnScope(ctx, t.deps.Home)
 	collectionRef, _ := args["collection"].(string)
 	col, ok := scope.Select(collectionRef)
 	if !ok {

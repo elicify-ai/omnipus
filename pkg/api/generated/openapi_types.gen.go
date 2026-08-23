@@ -8930,7 +8930,7 @@ type KnowledgeGraphResponse struct {
 	CollectionId string `json:"collection_id"`
 
 	// Edges Every edge in this graph. Empty for "orphans". Always an array, never null.
-	Edges []WorkspaceDelegationEdge `json:"edges"`
+	Edges []KnowledgeGraphEdge `json:"edges"`
 
 	// HopLimitApplied Maximum hops walked from source_path (FR-054). Present for "neighbourhood".
 	HopLimitApplied *int `json:"hop_limit_applied,omitempty"`
@@ -8942,28 +8942,10 @@ type KnowledgeGraphResponse struct {
 	NodeLimitApplied *int `json:"node_limit_applied,omitempty"`
 
 	// Nodes Every node referenced by this graph, including non-existent link targets (exists=false). Always an array, never null.
-	Nodes []struct {
-		// Exists False for the target of an unresolved link. The client MUST mark such a node visibly and MUST NOT navigate on click (FR-065).
-		Exists bool `json:"exists"`
-
-		// Path Collection-relative path, forward-slash separated. For a node that does not exist, this is the link text as written, normalised — it is NOT a path the caller may read.
-		Path string `json:"path"`
-
-		// Title Display title. Absent for a node that does not exist.
-		Title *string `json:"title,omitempty"`
-	} `json:"nodes"`
+	Nodes []KnowledgeGraphNode `json:"nodes"`
 
 	// Skipped Paths the walk did not follow, with reasons. Always an array, never null — an empty array is a positive statement that nothing was skipped.
-	Skipped []struct {
-		// Detail Human-readable explanation, safe to display.
-		Detail *string `json:"detail,omitempty"`
-
-		// Path Collection-relative path that was skipped.
-		Path string `json:"path"`
-
-		// Reason "symlink" — a symbolic link, skipped and reported rather than followed (FR-044); this is also how a symlink loop terminates (E-8). "outside_root" — the resolved target lay outside the collection root and was not read (FR-043). "unreadable" — permissions or I/O error; an evicted or unreadable file fails loudly and is never indexed as empty (FR-111). "not_addressable" — the name cannot be represented on this platform. "node_limit" / "hop_limit" — the neighbourhood bound was reached (FR-054).
-		Reason KnowledgeGraphResponseSkippedReason `json:"reason"`
-	} `json:"skipped"`
+	Skipped []KnowledgeGraphSkip `json:"skipped"`
 
 	// SourcePath The note the query was about. Required in practice for links, backlinks and neighbourhood; absent for unresolved and orphans, which are collection-wide.
 	SourcePath *string `json:"source_path,omitempty"`
@@ -9028,22 +9010,7 @@ type KnowledgeOutline struct {
 	FrontmatterMalformed *bool `json:"frontmatter_malformed,omitempty"`
 
 	// Headings Headings in document order. Always an array, never null; empty for a file with no headings.
-	Headings []struct {
-		// ByteOffset Absolute byte offset of the heading within the whole file, for jump-to-heading without re-parsing.
-		ByteOffset *int64 `json:"byte_offset,omitempty"`
-
-		// Level Heading level, 1 for "#" through 6 for "######".
-		Level int `json:"level"`
-
-		// Line 1-based line number of the heading in the source file.
-		Line *int `json:"line,omitempty"`
-
-		// Slug URL fragment identifying this heading, used to make a heading addressable and to resolve a heading link ([[note#Section]]). Unique within one outline — a repeated heading text gets a numeric suffix.
-		Slug string `json:"slug"`
-
-		// Text Heading text with markdown inline formatting removed. May be empty for a heading marker with no text.
-		Text string `json:"text"`
-	} `json:"headings"`
+	Headings []KnowledgeOutlineHeading `json:"headings"`
 
 	// IsKnowledgeBase True when this file sits inside a detected knowledge base, so the client may additionally offer search and backlinks. False means the outline is all that is available for this file — not an error.
 	IsKnowledgeBase bool `json:"is_knowledge_base"`
@@ -9149,47 +9116,11 @@ type KnowledgeSearchResponse struct {
 	CollectionId string `json:"collection_id"`
 
 	// Hits Matched entries, best-scored first. Always present — an empty array, never null — so a client may map over it without a nil check.
-	Hits []struct {
-		// ByteOffset ABSOLUTE byte offset of the match within the whole file — not within the index segment that produced it — so segmentation (FR-034a) cannot misdirect a re-read or a jump-to-match (FR-050a c).
-		ByteOffset *int64 `json:"byte_offset,omitempty"`
-
-		// Excerpt Matched text, RE-READ FROM THE FILE AT QUERY TIME and never stored in the index (FR-050a), so it always matches what is on disk. ABSENT when the re-read could not be performed — see excerpt_unavailable. A hit is still returned in that case, with path and title, because a silently dropped result and a fabricated excerpt are both worse than an honest gap.
-		Excerpt *string `json:"excerpt,omitempty"`
-
-		// ExcerptUnavailable Machine-readable reason no excerpt accompanies this hit. Present if and only if excerpt is absent. "budget_exhausted" is the ordinary case, not an error: excerpt re-reads are budgeted because the latency target allows 500 ms across up to 20 results (FR-050a b).
-		ExcerptUnavailable *KnowledgeSearchResponseHitsExcerptUnavailable `json:"excerpt_unavailable,omitempty"`
-
-		// Kind Whether this hit is a note (body text indexed) or an attachment (filename and path only — contents are never opened, FR-039a).
-		Kind KnowledgeSearchResponseHitsKind `json:"kind"`
-
-		// Path Collection-relative path of the matched entry, forward-slash separated. Always inside the collection root (FR-043).
-		Path string `json:"path"`
-
-		// Score Relevance score. Comparable only within one response; not stable across queries or across index rebuilds of different content.
-		Score float64 `json:"score"`
-
-		// Title Display title — the note's frontmatter title or first heading, falling back to the basename. May be empty for an attachment.
-		Title string `json:"title"`
-	} `json:"hits"`
+	Hits []KnowledgeSearchHit `json:"hits"`
 
 	// Incompleteness The incompleteness statement that rides on EVERY KnowledgeSearchResponse (FR-035). Required, not optional: "absent" would be ambiguous between "complete" and "the server forgot", and the whole point of this object is that a partial answer can never be mistaken for a whole one.
 	// Distinct from KnowledgeIndexProgressFrame, and the distinction is the one FR-080 turns on. This object is a PROPERTY OF THIS ANSWER — "the results you are reading were drawn from a partially built index". The frame is a STREAMING STATE — "indexing has now reached N of M". A client renders this next to the results it qualifies; it subscribes to the frame to watch a number move. Neither substitutes for the other.
-	Incompleteness struct {
-		// Complete True when the index covered the whole collection at query time, so these results are the whole answer.
-		Complete bool `json:"complete"`
-
-		// IndexedFiles Files indexed and therefore searchable at query time.
-		IndexedFiles *int64 `json:"indexed_files,omitempty"`
-
-		// Statement Human-readable sentence stating what was and was not covered, ready to render beside the results. Server-authored so the client cannot phrase an incomplete answer as a complete one.
-		Statement string `json:"statement"`
-
-		// TotalFiles Total files in the collection. Present only when total_known is true.
-		TotalFiles *int64 `json:"total_files,omitempty"`
-
-		// TotalKnown False while the collection is still being ENUMERATED and the total file count is not yet known. The caller MUST then report an indeterminate state rather than computing a ratio (FR-036) — indexed_files is present but total_files is not, and inventing a denominator is exactly the confidently-wrong answer this field exists to prevent.
-		TotalKnown bool `json:"total_known"`
-	} `json:"incompleteness"`
+	Incompleteness KnowledgeSearchIncompleteness `json:"incompleteness"`
 
 	// LimitApplied The result cap actually used for this query.
 	LimitApplied int `json:"limit_applied"`

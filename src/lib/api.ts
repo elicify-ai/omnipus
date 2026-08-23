@@ -188,6 +188,14 @@ import {
   WorkspaceMountCreateResponse as WorkspaceMountCreateResponseSchema,
   LibraryContentResponse as LibraryContentResponseSchema,
   LibraryUploadResponse as LibraryUploadResponseSchema,
+  // ADR-067 stage 2 — the knowledge-base READ surface (contract-first #8).
+  // Every one of the four endpoints validates through its generated schema;
+  // none of them hand-writes a wire type.
+  KnowledgeBaseInfo as KnowledgeBaseInfoSchema,
+  KnowledgeSearchRequest as KnowledgeSearchRequestSchema,
+  KnowledgeSearchResponse as KnowledgeSearchResponseSchema,
+  KnowledgeOutline as KnowledgeOutlineSchema,
+  KnowledgeGraphResponse as KnowledgeGraphResponseSchema,
 } from '@/lib/api/generated/schemas'
 
 // ── Schema validation error ────────────────────────────────────────────────────
@@ -464,6 +472,12 @@ import type {
   LibraryRenameRequest,
   LibraryUploadResponse,
   LibraryTransferRequest,
+  // ADR-067 stage 2 — the knowledge-base read surface (contract-first #8):
+  KnowledgeBaseInfo,
+  KnowledgeSearchRequest,
+  KnowledgeSearchResponse,
+  KnowledgeOutline,
+  KnowledgeGraphResponse,
 } from '@/lib/api/generated/openapi-types'
 
 export type {
@@ -4104,6 +4118,133 @@ export function fetchLibraryEntries(
     `/library/${encodeURIComponent(workspaceId)}/entries${qs ? `?${qs}` : ''}`,
     undefined,
     z.array(LibraryEntrySchema) as ZodType<LibraryEntry[]>,
+  )
+}
+
+/**
+ * Ask whether a folder in a workspace's work tree is a knowledge base
+ * (ADR-067 FR-020/FR-021, GET /library/{workspace_id}/knowledge).
+ *
+ * Detection is marker-based — `.omnipus-vault/` or `.obsidian/` at the root —
+ * and never reads file content. `is_knowledge_base: false` is an ANSWER, not
+ * an error; a marker that exists but cannot be read comes back as
+ * `detection_error` instead, and the caller must surface that rather than
+ * treating the folder as ordinary (E-9).
+ *
+ * Carries no index counts, deliberately. Index progress is the
+ * `knowledge_index_progress` WebSocket frame (FR-080) — polling this endpoint
+ * for it is the mistake that contract exists to prevent, so callers must not
+ * put this on an interval.
+ *
+ * `path` is workspace-relative; '' means the work-tree root. Unlike the
+ * entries listing, the parameter is REQUIRED by the contract, so it is always
+ * sent — including as an empty string.
+ */
+export function fetchKnowledgeBaseInfo(workspaceId: string, path = ''): Promise<KnowledgeBaseInfo> {
+  const qs = new URLSearchParams({ path }).toString()
+  return request<KnowledgeBaseInfo>(
+    `/library/${encodeURIComponent(workspaceId)}/knowledge?${qs}`,
+    undefined,
+    KnowledgeBaseInfoSchema as ZodType<KnowledgeBaseInfo>,
+  )
+}
+
+/**
+ * Relevance search over one knowledge base
+ * (ADR-067 FR-035/FR-036/FR-037, POST /library/{workspace_id}/knowledge/search).
+ *
+ * WHY IT LIVES HERE AND NOT IN THE COMPONENT. It used to build its own
+ * `fetch()` inside `useKnowledgeSearch.ts`, which meant it silently opted out
+ * of everything `request()` does for every other wire call: the schema-error
+ * counter (`_recordApiSchemaError`), the dev-mode toast, `ApiSchemaError` with
+ * the raw body attached, `ApiError.fromResponse`, and the CSRF re-mint retry.
+ * Constraint #8 asks for "drop + counter + dev-mode toast on failure"; a bare
+ * `Schema.parse()` throwing a raw ZodError with no telemetry is half of that.
+ *
+ * The REQUEST body is validated too, not just the response: `limit` has a
+ * contract minimum and a query has a minimum length, and sending a body the
+ * contract forbids is a client bug worth failing on here rather than reading
+ * back as a 400 with no context.
+ */
+// `async` deliberately: `KnowledgeSearchRequestSchema.parse` THROWS, and a
+// function that sometimes throws synchronously and sometimes returns a rejected
+// promise is a trap for every caller with a `.catch()` chain. Marking it async
+// makes both failures arrive the same way.
+export async function searchKnowledge(
+  workspaceId: string,
+  body: KnowledgeSearchRequest,
+  signal?: AbortSignal,
+): Promise<KnowledgeSearchResponse> {
+  return request<KnowledgeSearchResponse>(
+    `/library/${encodeURIComponent(workspaceId)}/knowledge/search`,
+    {
+      method: 'POST',
+      body: JSON.stringify(KnowledgeSearchRequestSchema.parse(body)),
+      ...(signal ? { signal } : {}),
+    },
+    KnowledgeSearchResponseSchema as ZodType<KnowledgeSearchResponse>,
+  )
+}
+
+/**
+ * The heading outline of one markdown file
+ * (ADR-067 FR-062, GET /library/{workspace_id}/knowledge/outline).
+ *
+ * Served for ANY markdown file, knowledge base or not — an outline is parsed
+ * from the one file in hand and needs no index. The response's
+ * `is_knowledge_base` / `collection_id` are what tell a caller whether it may
+ * ALSO offer search and linked mentions, which is why this one call is enough
+ * to decide the whole shape of the reading pane.
+ *
+ * `path` is workspace-relative and required.
+ */
+export function fetchKnowledgeOutline(
+  workspaceId: string,
+  path: string,
+  signal?: AbortSignal,
+): Promise<KnowledgeOutline> {
+  const qs = new URLSearchParams({ path }).toString()
+  return request<KnowledgeOutline>(
+    `/library/${encodeURIComponent(workspaceId)}/knowledge/outline?${qs}`,
+    signal ? { signal } : undefined,
+    KnowledgeOutlineSchema as ZodType<KnowledgeOutline>,
+  )
+}
+
+/** Query arguments for {@link fetchKnowledgeGraph}. Not a wire type — the wire
+ *  shape is the query string the contract declares; this is the SPA-side
+ *  argument bag for it. */
+export interface KnowledgeGraphQuery { // not-wire-format: query-parameter argument bag, never serialized as a JSON body
+  collectionId: string
+  kind: KnowledgeGraphResponse['kind']
+  /** COLLECTION-relative path of the note the query is about. Required by the
+   *  contract for links/backlinks/neighbourhood. */
+  path?: string
+  hops?: number
+  limit?: number
+}
+
+/**
+ * One of the five link-graph queries over a knowledge base
+ * (ADR-067 FR-051/FR-054, GET /library/{workspace_id}/knowledge/graph).
+ *
+ * Every query is bounded and reports its own truncation, so a caller can
+ * always tell a small graph from a clipped one — see KnowledgeGraphResponse's
+ * `truncated`, `node_limit_applied` and `skipped`.
+ */
+export function fetchKnowledgeGraph(
+  workspaceId: string,
+  query: KnowledgeGraphQuery,
+  signal?: AbortSignal,
+): Promise<KnowledgeGraphResponse> {
+  const params = new URLSearchParams({ collection_id: query.collectionId, kind: query.kind })
+  if (query.path !== undefined && query.path !== '') params.set('path', query.path)
+  if (query.hops !== undefined) params.set('hops', String(query.hops))
+  if (query.limit !== undefined) params.set('limit', String(query.limit))
+  return request<KnowledgeGraphResponse>(
+    `/library/${encodeURIComponent(workspaceId)}/knowledge/graph?${params.toString()}`,
+    signal ? { signal } : undefined,
+    KnowledgeGraphResponseSchema as ZodType<KnowledgeGraphResponse>,
   )
 }
 

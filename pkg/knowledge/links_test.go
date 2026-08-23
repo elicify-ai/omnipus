@@ -764,9 +764,21 @@ func TestKnowledge_NoLanguageModelInTheGraphPath(t *testing.T) {
 		}
 	}
 	sort.Strings(toolsImporters)
-	if want := []string{"tools.go"}; strings.Join(toolsImporters, ",") != strings.Join(want, ",") {
+	// The allow-list is the set of TOOL-ADAPTER files — the ones whose job is
+	// to present this package to an agent. tools.go is the retrieval half;
+	// authoring_tools.go (ADR-067 stage 3) is the authoring half, added when
+	// the write path landed; scope_turn.go resolves which workspace a tool
+	// call belongs to. All three are adapters and none is on the graph path,
+	// which is what FR-045 is about.
+	//
+	// This stays an EXPLICIT literal rather than a "*_tools.go" pattern: the
+	// point of the guard is that adding pkg/tools to a new file is a decision
+	// somebody has to make on purpose, and a pattern would silently admit the
+	// next file that happened to be named to fit.
+	want := []string{"authoring_tools.go", "scope_turn.go", "tools.go"}
+	if strings.Join(toolsImporters, ",") != strings.Join(want, ",") {
 		t.Fatalf("pkg/tools is imported by %v, want exactly %v. It is the only import here whose own "+
-			"closure reaches a language-model client, so it belongs in the tool-adapter file and "+
+			"closure reaches a language-model client, so it belongs in the tool-adapter files and "+
 			"nowhere near the indexing, resolution or rewriting path (FR-045)", toolsImporters, want)
 	}
 	sort.Strings(graphPathImports)
@@ -798,34 +810,52 @@ func TestKnowledge_NoLanguageModelInTheGraphPath(t *testing.T) {
 			"stale — either way the clean result above proves nothing")
 	}
 
-	// ---- C. tools.go's use of pkg/tools is pinned ----
-	used, err := selectorsUsedFrom("tools.go", toolsPackagePath)
-	if err != nil {
-		t.Fatalf("reading tools.go's use of pkg/tools: %v", err)
-	}
-	if len(used) == 0 {
-		t.Fatalf("found zero pkg/tools selectors in tools.go, which imports it — the selector scan is blind")
-	}
+	// ---- C. EVERY importer's use of pkg/tools is pinned ----
+	//
+	// Every importer, not just tools.go. Part B admits a file to the boundary;
+	// part C is what says the boundary is narrow. Running C over one file while
+	// B admits three means the other two may call anything pkg/tools exposes —
+	// including, transitively, a provider client — and this test would stay
+	// green. That was the state after authoring_tools.go was added to B's
+	// allow-list and never reached C: the guard's own stated mechanism, "turns
+	// 'we did not import a model' into 'we could not have called one'", did not
+	// cover the rewriting path FR-045 newly names.
 	allowed := make(map[string]struct{}, len(allowedToolsSelectors))
 	for _, a := range allowedToolsSelectors {
 		allowed[a] = struct{}{}
 	}
-	var unpinned []string
-	for _, u := range used {
-		if _, ok := allowed[u]; !ok {
-			unpinned = append(unpinned, u)
+	usedPerFile := map[string][]string{}
+	for _, file := range toolsImporters {
+		used, uErr := selectorsUsedFrom(file, toolsPackagePath)
+		if uErr != nil {
+			t.Fatalf("reading %s's use of pkg/tools: %v", file, uErr)
+		}
+		if len(used) == 0 {
+			t.Fatalf("found zero pkg/tools selectors in %s, which imports it — the selector scan is blind", file)
+		}
+		usedPerFile[file] = used
+		var unpinned []string
+		for _, u := range used {
+			if _, ok := allowed[u]; !ok {
+				unpinned = append(unpinned, u)
+			}
+		}
+		if len(unpinned) != 0 {
+			t.Errorf("%s uses pkg/tools symbols that are not on the reviewed allow-list: %v. "+
+				"pkg/tools can reach a language-model client; every symbol crossing that boundary must "+
+				"be checked and listed in allowedToolsSelectors (FR-045)", file, unpinned)
 		}
 	}
-	if len(unpinned) != 0 {
-		t.Errorf("tools.go uses pkg/tools symbols that are not on the reviewed allow-list: %v. "+
-			"pkg/tools can reach a language-model client; every symbol crossing that boundary must "+
-			"be checked and listed in allowedToolsSelectors (FR-045)", unpinned)
-	}
 
-	// Positive control for part C: the scanner finds a selector that is there.
-	if !containsString(used, "Tool") {
+	// Positive control for part C: the scanner finds selectors that are there,
+	// in each of the two files whose contents this test knows.
+	if !containsString(usedPerFile["tools.go"], "Tool") {
 		t.Fatalf("the selector scan did not find tools.Tool, which tools.go certainly uses — " +
 			"the clean result above proves nothing")
+	}
+	if !containsString(usedPerFile["authoring_tools.go"], "ToolResult") {
+		t.Fatalf("the selector scan did not find tools.ToolResult in authoring_tools.go, which every " +
+			"authoring tool returns — the clean result above proves nothing")
 	}
 }
 

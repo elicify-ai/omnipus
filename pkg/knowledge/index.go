@@ -737,6 +737,7 @@ func (ix *Index) indexNote(batch *batchState, entry ScanEntry) (ManifestEntry, e
 	ordinal := 0      // segment ordinal
 	eof := false      // the reader reported io.EOF
 	wroteAny := false // at least one document was written for this file
+	var totalRead int // bytes actually read off disk, for the FR-111 check
 
 	for !eof {
 		n, readErr := io.ReadFull(f, buf[carry:])
@@ -749,6 +750,7 @@ func (ix *Index) indexNote(batch *batchState, entry ScanEntry) (ManifestEntry, e
 		// Hash exactly the bytes just read, in file order, so the hash is over
 		// the file's true contents regardless of how they were segmented.
 		hasher.Write(buf[carry : carry+n])
+		totalRead += n
 		filled := carry + n
 
 		if filled == 0 {
@@ -783,6 +785,25 @@ func (ix *Index) indexNote(batch *batchState, entry ScanEntry) (ManifestEntry, e
 		if carry > 0 {
 			copy(buf, buf[cut:filled])
 		}
+	}
+
+	// FR-111, and it has to be asked before the empty-note branch below or it
+	// is not asked at all.
+	//
+	// There are two ways a cloud provider's placeholder reads as nothing. The
+	// loud one — open or read returns an error — is already handled: the error
+	// propagates, the sync loop records a ScanProblem and leaves the note out
+	// of the index. The QUIET one is a clean EOF at zero bytes for a file stat
+	// says has content, and it used to fall straight through into "an empty
+	// note is still a note" and be indexed as an EMPTY document: the index
+	// then answers "this note contains nothing" about a file that may contain
+	// anything, which is exactly the outcome FR-111 forbids.
+	//
+	// The classification is lifecycle.go's, not a second copy of the rule.
+	// Two independent classifications would drift, and the direction they
+	// drift in is "one of them starts calling an evicted file empty".
+	if cErr := ClassifyContentFailure(absPath, entry.Size, totalRead, nil); cErr != nil {
+		return ManifestEntry{}, cErr
 	}
 
 	if !wroteAny {

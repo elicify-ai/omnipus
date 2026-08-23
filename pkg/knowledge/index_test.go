@@ -1290,3 +1290,95 @@ func TestIndex_UnreadableNoteIsReportedNotIndexedAsEmpty(t *testing.T) {
 		}
 	}
 }
+
+// TestIndex_QuietlyEvictedNoteIsReportedNotIndexedAsEmpty is FR-111's other
+// half, and the half that was unguarded.
+//
+// # Two ways a cloud placeholder reads as nothing, and only one was covered
+//
+// TestIndex_UnreadableNoteIsReportedNotIndexedAsEmpty simulates eviction as an
+// OPEN ERROR. That is the LOUD variant, and the indexer already handled it: the
+// error propagates out of indexNote, the sync loop records a ScanProblem and
+// removes the file from the manifest.
+//
+// The QUIET variant is a clean EOF at zero bytes for a file stat says has
+// content — no error anywhere. lifecycle.go's ClassifyContentFailure calls it
+// out by name as "the quiet one, and the reason this function exists", and the
+// indexer never called it: `filled == 0` broke the loop, `wroteAny` stayed
+// false, and the "an empty note is still a note" branch wrote ONE EMPTY INDEX
+// DOCUMENT. The index then answers "this note contains nothing" about a file
+// that may contain anything, which is exactly what FR-111 forbids.
+//
+// The fixture reproduces the quiet variant honestly: stat sees the real,
+// non-empty file (the walk stats the real path), while the read returns an
+// empty handle and io.EOF. Nothing errors; the disagreement between the two is
+// the whole signal.
+func TestIndex_QuietlyEvictedNoteIsReportedNotIndexedAsEmpty(t *testing.T) {
+	home, root := t.TempDir(), t.TempDir()
+	b2WriteFile(t, root, "good.md", "a readable note about alpha")
+	b2WriteFile(t, root, "evicted.md", "content that is not on local disk, only a placeholder")
+
+	// An empty stand-in the evicted note's reads are served from.
+	placeholder := filepath.Join(t.TempDir(), "placeholder")
+	if err := os.WriteFile(placeholder, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	prev := openFileForRead
+	openFileForRead = func(path string) (*os.File, error) {
+		if strings.HasSuffix(path, "evicted.md") {
+			return os.Open(placeholder) //nolint:gosec // test fixture
+		}
+		return prev(path)
+	}
+	defer func() { openFileForRead = prev }()
+
+	ix := b2Open(t, home, root)
+	stats := b2Sync(t, ix)
+
+	if stats.Indexed != 1 {
+		t.Errorf("Indexed = %d, want 1 — only the readable note", stats.Indexed)
+	}
+	var problem *ScanProblem
+	for i := range stats.Problems {
+		if stats.Problems[i].RelPath == "evicted.md" {
+			problem = &stats.Problems[i]
+		}
+	}
+	if problem == nil {
+		t.Fatalf("Problems = %+v, want a report for evicted.md — a silently empty index entry is what FR-111 forbids", stats.Problems)
+	}
+	if !strings.Contains(problem.Detail, "not on local disk") {
+		t.Errorf("problem detail = %q, want the eviction classification from ClassifyContentFailure", problem.Detail)
+	}
+
+	// The decisive assertion: the note is ABSENT from the index, not present
+	// and empty. An empty document is findable by path and answers every
+	// content question with "nothing".
+	docs, err := ix.DocCount()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if docs != 1 {
+		t.Errorf("DocCount = %d, want 1 — the evicted note was indexed as an empty document", docs)
+	}
+	hits, err := ix.Search("placeholder", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, h := range hits {
+		if h.Path == "evicted.md" {
+			t.Error("the evicted note is in the index")
+		}
+	}
+
+	// Positive control: the readable note IS indexed, so "absent" above is the
+	// guard working rather than the whole sync failing.
+	good, err := ix.Search("alpha", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(good) != 1 || good[0].Path != "good.md" {
+		t.Fatalf("the readable note is missing from the index: %v", b2HitPaths(good))
+	}
+}

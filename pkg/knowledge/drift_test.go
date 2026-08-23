@@ -735,3 +735,73 @@ func TestHealthCheck_StopsWithItsContext(t *testing.T) {
 		t.Errorf("Runs() went from %d to %d after the schedule was stopped", before, h.Runs())
 	}
 }
+
+// TestDrift_ReportsAnInterruptedRename is FR-104's "detectable" clause, at the
+// surface §12's scenario names: "Given a rename interrupted part-way, When the
+// collection IS CHECKED, Then the interruption is reported".
+//
+// The automatic check is this one. Before this test the check did not look for
+// journals at all — grep for "journal" in drift.go returned nothing — so an
+// interrupted rename was reported by nothing, anywhere: not the drift check,
+// not the gateway's doctor, not a subsequent rename. The recovery machinery was
+// complete and unreachable.
+func TestDrift_ReportsAnInterruptedRename(t *testing.T) {
+	home, root := t.TempDir(), t.TempDir()
+	b2WriteFile(t, root, "Old Note.md", "# Old\n")
+	b2WriteFile(t, root, "inbound.md", "Refers to [[Old Note]].\n")
+
+	ix := b2Open(t, home, root)
+	b2Sync(t, ix)
+	if rep := b4Check(t, ix); !rep.Healthy() {
+		t.Fatalf("a freshly indexed collection reported drift: %v", b4Findings(rep))
+	}
+
+	// Plan and journal a rename, then die before applying a single step —
+	// exactly the state FR-104's first clause guarantees is on disk.
+	cr, err := NewCollectionRoot(OSLinkFS(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := NewJournalStore(DefaultJournalDir(root))
+	r := &Renamer{Root: cr, Store: store}
+	plan, err := r.Plan(RenameRequest{From: "Old Note.md", To: "Renamed.md"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Write(plan.Journal); err != nil {
+		t.Fatal(err)
+	}
+
+	rep := b4Check(t, ix)
+	var pending []DriftFinding
+	for _, f := range rep.Findings {
+		if f.Kind == DriftPendingRename {
+			pending = append(pending, f)
+		}
+	}
+	if len(pending) != 1 {
+		t.Fatalf("findings = %v, want exactly one pending_rename — an interrupted rename must be reported when the collection is checked (FR-104)",
+			b4Findings(rep))
+	}
+	if pending[0].Path != "Old Note.md" {
+		t.Errorf("pending_rename path = %q, want the note being renamed", pending[0].Path)
+	}
+	if !strings.Contains(pending[0].Detail, "Renamed.md") {
+		t.Errorf("pending_rename detail = %q, want it to name the destination so an operator can act", pending[0].Detail)
+	}
+	if rep.Healthy() {
+		t.Error("a collection with an unfinished rename reported itself healthy")
+	}
+
+	// Once the operation completes, the report goes quiet again. Without this
+	// the finding could be a permanent false alarm rather than a state report.
+	if _, err := r.RecoverPending(); err != nil {
+		t.Fatalf("RecoverPending: %v", err)
+	}
+	after := b4Check(t, ix)
+	for _, f := range after.Findings {
+		if f.Kind == DriftPendingRename {
+			t.Errorf("pending_rename survives a completed recovery: %v", f)
+		}
+	}
+}

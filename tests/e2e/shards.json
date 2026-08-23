@@ -97,13 +97,14 @@
       ]
     },
     {
-      "_comment": "ADR-067 §13.4 isolation matrix. These two specs are the ONLY files the isolation-chromium/firefox/webkit projects match, and each runs on all three engines, so this shard needs `playwright install firefox webkit` in addition to chromium -- a chromium-only runner cannot execute it. Its own shard for exactly that reason: the extra engine install is confined here instead of slowing every other shard. key_slot a because nothing here calls an LLM.",
+      "_comment": "ADR-067 §13.4 isolation matrix. These specs are the ONLY files the isolation-chromium/firefox/webkit projects match, and each runs on all three engines, so this shard needs `playwright install firefox webkit` in addition to chromium -- a chromium-only runner cannot execute it. Its own shard for exactly that reason: the extra engine install is confined here instead of slowing every other shard. key_slot a because nothing here calls an LLM.",
       "group": "preview-isolation",
       "key_slot": "a",
       "port": 6069,
       "specs": [
         "tests/e2e/preview-isolation.spec.ts",
-        "tests/e2e/preview-bundle.spec.ts"
+        "tests/e2e/preview-bundle.spec.ts",
+        "tests/e2e/preview-svg.spec.ts"
       ]
     },
     {

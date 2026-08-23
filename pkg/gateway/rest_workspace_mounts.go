@@ -122,6 +122,14 @@ func (a *restAPI) handleWorkspaceMountCreate(w http.ResponseWriter, r *http.Requ
 		}
 	}
 
+	// ADR-067 W3 (FR-030/FR-031/FR-038a): if this mount's target is a knowledge
+	// base, open (or join) its index and start its drift schedule. Asynchronous
+	// on purpose — a first index of a large collection takes minutes and must
+	// not hold the create response open — and a no-op for an ordinary folder,
+	// for a gateway with no knowledge lifecycle, and for a target that has since
+	// gone missing (which is logged, never fatal to the mount itself).
+	a.knowledgeLifecycle().AttachMountAsync(id, m.Name, m.HostPath)
+
 	jsonCreated(w, mountToCreateResponse(m, warning))
 }
 
@@ -188,6 +196,15 @@ func (a *restAPI) handleWorkspaceMountDelete(w http.ResponseWriter, _ *http.Requ
 	// under-revoking is an unauthenticated read grant over a folder the
 	// operator believes they just detached.
 	a.revokePreviewTokensForWorkspace(id)
+
+	// ADR-067 W3 (FR-031): release this mount's hold on its collection index.
+	// The LAST holder's release stops the drift schedule and closes the index;
+	// an earlier one leaves both running, because another workspace is still
+	// searching the same folder (US-16 AS-2).
+	if kErr := a.knowledgeLifecycle().RevokeMount(id, name); kErr != nil {
+		slog.Warn("knowledge: release index on mount delete",
+			"workspace_id", id, "mount", name, "error", kErr)
+	}
 
 	if a.auditor != nil {
 		if aErr := a.auditor.Log(&audit.Entry{

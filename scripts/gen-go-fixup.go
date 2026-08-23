@@ -56,14 +56,71 @@ var fallbackModelsInline = regexp.MustCompile(
 // required (non-pointer slice), so the match is `Edges []struct{...}`. The body
 // itself contains a nested enum field with a per-parent name
 // (WorkspaceDelegationEdgesModes / WorkspaceDelegationUpdateRequestEdgesModes),
-// so the `(?s)...\{...nested...\}` body match must span the inner struct's own
-// brace. We anchor on the trailing `json:"edges"` tag to bound the replacement.
+// but that is a NAMED type, so the body carries no nested braces and `[^{}]*?`
+// bounds it exactly. We anchor on the trailing `json:"edges"` tag too.
+//
+// THE BODY ANCHOR IS LOAD-BEARING, not decoration. This regex used to match on
+// the field name and the json tag alone — `Edges []struct{...} json:"edges"` —
+// which is not a delegation-specific shape at all. ADR-067's
+// KnowledgeGraphResponse also has a required `edges` array of an inline struct,
+// it sorts BEFORE WorkspaceDelegation in the generated file, and it was
+// therefore rewritten to `[]WorkspaceDelegationEdge`: the knowledge graph's
+// links shipped on the wire typed as delegation edges (from_agent/to_agent
+// instead of from_path/to_path/resolution). Nothing caught it — the rewrite
+// produced compiling Go, and the TypeScript half of the contract was correct,
+// so only a handler that actually built the response would have noticed.
+// Requiring `json:"from_agent"` INSIDE the body makes the rule say what it
+// means: this is the delegation edge, not merely something spelled "edges".
 //
 // Group 1: field name ("Edges")
 // Group 2: json tag with backticks ("`json:\"edges\"`")
-var delegationEdgesInline = regexp.MustCompile(`(?s)(Edges)\s+\[\]struct\s*\{.*?\}\s*(` + "`json:\"edges\"`" + `)`)
+var delegationEdgesInline = regexp.MustCompile(
+	`(?s)(Edges)\s+\[\]struct\s*\{[^{}]*?json:"from_agent"[^{}]*?\}\s*(` + "`json:\"edges\"`" + `)`,
+)
 
 const delegationEdgesRewrite = `Edges []WorkspaceDelegationEdge `
+
+// The three ADR-067 KnowledgeGraphResponse arrays. Each is `items: $ref` onto a
+// schema declaring `additionalProperties: false`, which is the same pattern
+// that inlines the delegation edges above, so all three arrive as anonymous
+// structs that Constraint #8 forbids consumers from using.
+//
+// Each is anchored on a json tag unique to its own item schema — `from_path`
+// for an edge, `exists` for a node, `reason` for a skip — so none of them can
+// drift onto a same-named field of some other schema the way the delegation
+// rule did.
+var (
+	knowledgeGraphEdgesInline = regexp.MustCompile(
+		`(?s)(Edges)\s+\[\]struct\s*\{[^{}]*?json:"from_path"[^{}]*?\}\s*(` + "`json:\"edges\"`" + `)`,
+	)
+	knowledgeGraphNodesInline = regexp.MustCompile(
+		`(?s)(Nodes)\s+\[\]struct\s*\{[^{}]*?json:"exists"[^{}]*?\}\s*(` + "`json:\"nodes\"`" + `)`,
+	)
+	knowledgeGraphSkippedInline = regexp.MustCompile(
+		`(?s)(Skipped)\s+\[\]struct\s*\{[^{}]*?json:"reason"[^{}]*?\}\s*(` + "`json:\"skipped\"`" + `)`,
+	)
+)
+
+// The two ADR-067 KnowledgeSearchResponse members, same pattern and same
+// reason: `hits` is an array of KnowledgeSearchHit, `incompleteness` is a
+// single KnowledgeSearchIncompleteness, and both arrive inlined because their
+// schemas declare `additionalProperties: false`.
+//
+// Without these, a handler building a search response has to spell the whole
+// anonymous struct out at every construction site — which is a hand-written
+// copy of a contract type in everything but name, and would drift silently the
+// day a field is added to the schema.
+var (
+	knowledgeSearchHitsInline = regexp.MustCompile(
+		`(?s)(Hits)\s+\[\]struct\s*\{[^{}]*?json:"excerpt_unavailable,omitempty"[^{}]*?\}\s*(` + "`json:\"hits\"`" + `)`,
+	)
+	knowledgeSearchIncompletenessInline = regexp.MustCompile(
+		`(?s)(Incompleteness)\s+struct\s*\{[^{}]*?json:"total_known"[^{}]*?\}\s*(` + "`json:\"incompleteness\"`" + `)`,
+	)
+	knowledgeOutlineHeadingsInline = regexp.MustCompile(
+		`(?s)(Headings)\s+\[\]struct\s*\{[^{}]*?json:"slug"[^{}]*?\}\s*(` + "`json:\"headings\"`" + `)`,
+	)
+)
 
 // memberConfigsHeartbeatInline matches the inline anonymous heartbeat struct
 // oapi-codegen emits for `heartbeat: $ref WorkspaceMemberHeartbeat`. The
@@ -125,6 +182,36 @@ var rewriteRules = []rewriteRule{
 		inline:  delegationEdgesInline,
 		rewrite: delegationEdgesRewrite + "$2",
 	},
+	{
+		name:    "knowledge_graph_edges",
+		inline:  knowledgeGraphEdgesInline,
+		rewrite: "$1 []KnowledgeGraphEdge $2",
+	},
+	{
+		name:    "knowledge_graph_nodes",
+		inline:  knowledgeGraphNodesInline,
+		rewrite: "$1 []KnowledgeGraphNode $2",
+	},
+	{
+		name:    "knowledge_graph_skipped",
+		inline:  knowledgeGraphSkippedInline,
+		rewrite: "$1 []KnowledgeGraphSkip $2",
+	},
+	{
+		name:    "knowledge_search_hits",
+		inline:  knowledgeSearchHitsInline,
+		rewrite: "$1 []KnowledgeSearchHit $2",
+	},
+	{
+		name:    "knowledge_search_incompleteness",
+		inline:  knowledgeSearchIncompletenessInline,
+		rewrite: "$1 KnowledgeSearchIncompleteness $2",
+	},
+	{
+		name:    "knowledge_outline_headings",
+		inline:  knowledgeOutlineHeadingsInline,
+		rewrite: "$1 []KnowledgeOutlineHeading $2",
+	},
 	// heartbeat before member_configs (style preference; both orderings converge).
 	{
 		name:    "member_configs_heartbeat",
@@ -138,7 +225,26 @@ var rewriteRules = []rewriteRule{
 	},
 }
 
-func run(path string) error {
+// run applies every rewrite rule to path.
+//
+// strict makes "this rule matched nothing" an ERROR rather than a silently
+// accepted idempotent state. That distinction is load-bearing: the ONLY
+// production invocation (scripts/_gen-go.sh) runs this immediately after
+// oapi-codegen, on a file that has just been generated from scratch, so every
+// rule's anchor MUST be present. A rule that matches nothing there is a DEAD
+// rule — its anchor drifted, or the schema it targets was renamed — and the
+// generated file ships with the inline anonymous struct the rule existed to
+// remove.
+//
+// That is not hypothetical. KnowledgeGraphResponse.Edges shipped typed as
+// []WorkspaceDelegationEdge because the delegation rule's regex anchored on a
+// field name plus a json tag alone, and KnowledgeGraphResponse sorts before
+// WorkspaceDelegation in the generated file, so the rule fired on the wrong
+// struct. The failure was silent in exactly this way — and it was loud only
+// because a Go call site happened to stop compiling. An anchor that stops
+// matching produces no such compile error at all: the field simply reverts to
+// an anonymous struct, Constraint #8 is violated, and nothing says so.
+func run(path string, strict bool) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("read %s: %w", path, err)
@@ -157,6 +263,14 @@ func run(path string) error {
 		next := rule.inline.ReplaceAllString(current, rule.rewrite)
 		afterCount := len(rule.inline.FindAllString(next, -1))
 
+		if strict && beforeCount == 0 {
+			hardErrors = append(hardErrors, fmt.Sprintf(
+				"rewrite %q: matched NOTHING in a freshly generated file. Its anchor "+
+					"pattern no longer describes what oapi-codegen emits, so the type it "+
+					"exists to fix is shipping as an inline anonymous struct (Constraint #8). "+
+					"Either update the pattern or delete the rule",
+				rule.name))
+		}
 		if beforeCount > 0 && afterCount > 0 {
 			// The pattern matched but the replacement left inline structs behind.
 			// This is a real failure: the regex matched but did not rewrite correctly.
@@ -189,9 +303,12 @@ func run(path string) error {
 
 func main() {
 	path := flag.String("file", "pkg/api/generated/openapi_types.gen.go", "path to the generated openapi Go file")
+	strict := flag.Bool("strict", false,
+		"treat a rule that matches nothing as an error; set by scripts/_gen-go.sh, "+
+			"which always runs against a freshly generated file")
 	flag.Parse()
 
-	if err := run(*path); err != nil {
+	if err := run(*path, *strict); err != nil {
 		fmt.Fprintf(os.Stderr, "_gen-go-fixup: %v\n", err)
 		os.Exit(1)
 	}

@@ -4,10 +4,12 @@
 // work/.library/, and the destructive-action (delete) confirm step.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useUiStore } from '@/store/ui'
 import type { LibraryEntry, LibraryWorkspaceNode } from '@/lib/api'
+import type { KnowledgeBaseInfo } from '@/lib/api/generated/openapi-types'
+import { useKnowledgeIndexStore } from '@/store/knowledgeIndex'
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
@@ -22,6 +24,16 @@ vi.mock('@/lib/api', async (importOriginal) => {
     copyLibraryEntry: vi.fn(),
     uploadLibraryFiles: vi.fn(),
     mkdirLibraryEntry: vi.fn(),
+    // ADR-067 stage 2. These were NOT mocked, so `...actual` handed the real
+    // clients to KnowledgePanel and the reading view: the real fetch ran, the
+    // query failed, and the panel rendered its red `knowledge-panel-error`
+    // alert card in every single test in this file while they all reported
+    // green. Exactly the shape docs/internal/false-green-patterns.md warns
+    // about — a screen nobody asserted on, quietly broken.
+    fetchKnowledgeBaseInfo: vi.fn(),
+    fetchKnowledgeOutline: vi.fn(),
+    fetchKnowledgeGraph: vi.fn(),
+    searchKnowledge: vi.fn(),
     libraryDownloadUrl: vi.fn((wsId: string, path: string) => `/api/v1/library/${wsId}/download?path=${path}`),
   }
 })
@@ -35,6 +47,10 @@ import {
   moveLibraryEntry,
   uploadLibraryFiles,
   mkdirLibraryEntry,
+  fetchKnowledgeBaseInfo,
+  fetchKnowledgeOutline,
+  fetchKnowledgeGraph,
+  searchKnowledge,
   ApiError,
 } from '@/lib/api'
 
@@ -46,6 +62,10 @@ const mockedRename = vi.mocked(renameLibraryEntry)
 const mockedMove = vi.mocked(moveLibraryEntry)
 const mockedUpload = vi.mocked(uploadLibraryFiles)
 const mockedMkdir = vi.mocked(mkdirLibraryEntry)
+const mockedKnowledgeInfo = vi.mocked(fetchKnowledgeBaseInfo)
+const mockedKnowledgeOutline = vi.mocked(fetchKnowledgeOutline)
+const mockedKnowledgeGraph = vi.mocked(fetchKnowledgeGraph)
+const mockedKnowledgeSearch = vi.mocked(searchKnowledge)
 
 import { LibraryExplorer } from './LibraryExplorer'
 
@@ -68,6 +88,19 @@ function renderExplorer(initialWorkspaceId?: string, over: { layout?: 'stacked' 
 
 function makeWorkspaceNode(over: Partial<LibraryWorkspaceNode> = {}): LibraryWorkspaceNode {
   return { id: 'ws-1', name: 'Website API', entry_count: 3, ...over }
+}
+
+/** Serve a directory listing per folder. Module scope so the knowledge-surface
+ *  blocks at the end of this file can use it too — it was private to the
+ *  deep-linking describe, and hoisting it verbatim is the whole change. */
+function entriesByDir(map: Record<string, LibraryEntry[]>) {
+  mockedFetchEntries.mockImplementation(async (_wsId: string, dir?: string, includeHidden?: boolean) => {
+    const all = map[dir ?? ''] ?? []
+    // Mirrors the server: hidden entries are filtered OUT of the listing
+    // unless asked for, which is why a dot-prefixed deep-link target needs
+    // its own wording rather than "not found".
+    return includeHidden ? all : all.filter((e) => !e.name.startsWith('.'))
+  })
 }
 
 function makeEntry(over: Partial<LibraryEntry> = {}): LibraryEntry {
@@ -98,7 +131,44 @@ beforeEach(() => {
     is_text: true,
     too_large: false,
   })
+  // Default: an ordinary folder and an ordinary markdown file. Both are the
+  // common case, and both make the knowledge surfaces render nothing, so the
+  // tests in this file that are about the FILE EXPLORER stay about the file
+  // explorer. Tests that are about the knowledge surface override these.
+  mockedKnowledgeInfo.mockResolvedValue(makeKnowledgeInfo({ is_knowledge_base: false, marker: 'none' }))
+  mockedKnowledgeOutline.mockResolvedValue({
+    path: 'report.md',
+    is_knowledge_base: false,
+    headings: [],
+  })
+  mockedKnowledgeGraph.mockResolvedValue({
+    collection_id: 'kb_1',
+    kind: 'backlinks',
+    nodes: [],
+    edges: [],
+    skipped: [],
+    truncated: false,
+  })
+  mockedKnowledgeSearch.mockResolvedValue({
+    collection_id: 'kb_1',
+    hits: [],
+    incompleteness: { complete: true, total_known: true, statement: 'Searched the whole collection.' },
+    limit_applied: 20,
+    limit_clamped: false,
+  })
+  useKnowledgeIndexStore.setState({ byCollection: {} })
 })
+
+function makeKnowledgeInfo(over: Partial<KnowledgeBaseInfo> = {}): KnowledgeBaseInfo {
+  return {
+    workspace_id: 'ws-1',
+    root_path: 'notes',
+    is_knowledge_base: true,
+    marker: 'omnipus_vault',
+    collection_id: 'kb_1',
+    ...over,
+  }
+}
 
 function act_setToasts() {
   useUiStore.setState({ toasts: [] })
@@ -839,15 +909,6 @@ describe('LibraryExplorer — list/preview split and inline media', () => {
 // rather than a presence, because a component keeping its own copy would pass
 // the presence assertions just as well.
 describe('LibraryExplorer — deep-linking (addressed mode)', () => {
-  function entriesByDir(map: Record<string, LibraryEntry[]>) {
-    mockedFetchEntries.mockImplementation(async (_wsId: string, dir?: string, includeHidden?: boolean) => {
-      const all = map[dir ?? ''] ?? []
-      // Mirrors the server: hidden entries are filtered OUT of the listing
-      // unless asked for, which is why a dot-prefixed deep-link target needs
-      // its own wording rather than "not found".
-      return includeHidden ? all : all.filter((e) => !e.name.startsWith('.'))
-    })
-  }
 
   function renderAddressed(address: { workspaceId?: string; path?: string }) {
     const client = makeClient()
@@ -1093,5 +1154,174 @@ describe('LibraryExplorer — deep-linking (addressed mode)', () => {
     fireEvent.click(screen.getByTestId('library-row-report.md'))
 
     expect(await screen.findByTestId('library-preview-pane')).toBeInTheDocument()
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The knowledge surface, AS MOUNTED (ADR-067 US-4, US-6, US-7, FR-020, FR-062)
+//
+// This whole block exists because the feature's ONLY production wiring —
+// LibraryExplorer → KnowledgePanel, and LibraryPreviewPane → the reading view —
+// had no test at all. Two mutations were run against the previous suite to
+// confirm it: replacing `path={browsedDir}` with `path=""` and blanking the
+// onOpenNote handler passed 400/400, and removing the entire knowledge surface
+// with `{false && (` passed 400/400 as well. Deleting the feature from the
+// product left every library test green.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('LibraryExplorer — the knowledge panel is mounted, and asked about the right folder', () => {
+  it('asks about the folder currently being browsed, not the workspace root (FR-020)', async () => {
+    // DIES ON: `path=""` in the KnowledgePanel mount, which would answer
+    // "is this a knowledge base?" about a folder the reader is not looking at.
+    mockedFetchWorkspaces.mockResolvedValue([])
+    entriesByDir({
+      '': [makeEntry({ name: 'notes', path: 'notes', is_dir: true })],
+      notes: [makeEntry({ name: 'a.md', path: 'notes/a.md' })],
+    })
+    mockedKnowledgeInfo.mockResolvedValue(makeKnowledgeInfo({ root_path: 'notes' }))
+
+    renderExplorer('ws-1')
+
+    await waitFor(() => expect(mockedKnowledgeInfo).toHaveBeenCalledWith('ws-1', ''))
+    fireEvent.click(await screen.findByTestId('library-row-notes'))
+    await waitFor(() => expect(mockedKnowledgeInfo).toHaveBeenCalledWith('ws-1', 'notes'))
+  })
+
+  it('renders the collection surface for a knowledge base, with its search box', async () => {
+    // DIES ON: removing the KnowledgePanel mount, or gating it on something
+    // other than "a workspace is open".
+    mockedFetchWorkspaces.mockResolvedValue([])
+    entriesByDir({ '': [makeEntry({ name: 'a.md', path: 'a.md' })] })
+    mockedKnowledgeInfo.mockResolvedValue(makeKnowledgeInfo({ root_path: '.' }))
+
+    renderExplorer('ws-1')
+
+    expect(await screen.findByTestId('knowledge-panel')).toBeInTheDocument()
+    expect(await screen.findByTestId('knowledge-search')).toBeInTheDocument()
+  })
+
+  it('renders NO knowledge chrome at all for an ordinary folder (US-4 AS-3)', async () => {
+    // Almost every folder is ordinary. A permanent "Not a knowledge base" card
+    // above every listing is itself a knowledge-base feature switched on
+    // everywhere, and it trains the reader to ignore the one spot a real
+    // warning will appear.
+    //
+    // DIES ON: removing the `not_a_knowledge_base && !onCreateCollection` early
+    // return from KnowledgePanel.
+    mockedFetchWorkspaces.mockResolvedValue([])
+    entriesByDir({ '': [makeEntry({ name: 'a.md', path: 'a.md' })] })
+    mockedKnowledgeInfo.mockResolvedValue(
+      makeKnowledgeInfo({ is_knowledge_base: false, marker: 'none', collection_id: undefined }),
+    )
+
+    renderExplorer('ws-1')
+
+    await waitFor(() => expect(screen.getByTestId('library-row-a.md')).toBeInTheDocument())
+    await waitFor(() => expect(mockedKnowledgeInfo).toHaveBeenCalled())
+    expect(screen.queryByTestId('knowledge-panel')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('knowledge-state-not-a-knowledge-base')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('knowledge-search')).not.toBeInTheDocument()
+  })
+
+  it('does not render the panel at the virtual root — there is no folder to ask about', async () => {
+    mockedFetchWorkspaces.mockResolvedValue([makeWorkspaceNode({ id: 'ws-1' })])
+    renderExplorer(undefined)
+    await waitFor(() => expect(screen.getByTestId('library-workspace-node-ws-1')).toBeInTheDocument())
+    expect(mockedKnowledgeInfo).not.toHaveBeenCalled()
+    expect(screen.queryByTestId('knowledge-panel')).not.toBeInTheDocument()
+  })
+
+  it('opens the note a search hit names, translated to a workspace-relative path', async () => {
+    // DIES ON: blanking the onOpenNote handler at the KnowledgePanel mount, or
+    // dropping collectionPathToWorkspacePath — a hit at `a.md` inside a
+    // collection mounted at `notes/` opens `notes/a.md`, not `a.md`.
+    mockedFetchWorkspaces.mockResolvedValue([])
+    entriesByDir({
+      '': [makeEntry({ name: 'notes', path: 'notes', is_dir: true })],
+      notes: [makeEntry({ name: 'a.md', path: 'notes/a.md' })],
+    })
+    mockedKnowledgeInfo.mockResolvedValue(makeKnowledgeInfo({ root_path: 'notes' }))
+    mockedKnowledgeSearch.mockResolvedValue({
+      collection_id: 'kb_1',
+      hits: [{ path: 'a.md', title: 'A note', score: 1, kind: 'note' }],
+      incompleteness: { complete: true, total_known: true, statement: 'Searched the whole collection.' },
+      limit_applied: 20,
+      limit_clamped: false,
+    })
+    const onAddressChange = vi.fn()
+
+    render(
+      <QueryClientProvider client={makeClient()}>
+        <LibraryExplorer address={{ workspaceId: 'ws-1' }} onAddressChange={onAddressChange} />
+      </QueryClientProvider>,
+    )
+
+    fireEvent.click(await screen.findByTestId('library-row-notes'))
+    await waitFor(() => expect(mockedKnowledgeInfo).toHaveBeenCalledWith('ws-1', 'notes'))
+
+    fireEvent.change(await screen.findByLabelText('Search notes'), { target: { value: 'landlock' } })
+    const results = await screen.findByTestId('knowledge-search-results')
+    fireEvent.click(within(results).getByRole('button'))
+
+    await waitFor(() =>
+      expect(onAddressChange).toHaveBeenCalledWith({ workspaceId: 'ws-1', path: 'notes/a.md' }),
+    )
+  })
+})
+
+describe('LibraryExplorer — opening a markdown file reaches the STAGE 2 reading view (US-7)', () => {
+  it('renders the reading column, not the plain stage-1 markdown view', async () => {
+    // DIES ON: reverting LibraryMarkdownPreview's view slot to stage 1 — the
+    // reading column disappears and `[[Wikilinks]]` go back to literal text,
+    // which is what the product actually shipped while 138 tests asserted
+    // otherwise about components nothing imported.
+    mockedFetchWorkspaces.mockResolvedValue([])
+    entriesByDir({ '': [makeEntry({ name: 'report.md', path: 'report.md' })] })
+    mockedFetchContent.mockResolvedValue({
+      path: 'report.md',
+      content: 'see [[Other Note]] %%hidden aside%% visible',
+      size: 40,
+      is_text: true,
+      too_large: false,
+    })
+
+    renderExplorer('ws-1')
+
+    fireEvent.click(await screen.findByTestId('library-row-report.md'))
+
+    const article = await screen.findByTestId('knowledge-reader-article')
+    expect(article.textContent).not.toContain('hidden aside')
+    expect(article.textContent).toContain('visible')
+    expect(within(article).getByTestId('markdown-link').getAttribute('data-kb-target')).toBe(
+      'Other Note',
+    )
+  })
+
+  it('asks for the open file’s outline — an outline is offered for ANY markdown file (FR-062)', async () => {
+    // DIES ON: gating the outline on is_knowledge_base at the mount site, or on
+    // dropping the outline rail from the reading view.
+    mockedFetchWorkspaces.mockResolvedValue([])
+    entriesByDir({ '': [makeEntry({ name: 'report.md', path: 'report.md' })] })
+    mockedKnowledgeInfo.mockResolvedValue(
+      makeKnowledgeInfo({ is_knowledge_base: false, marker: 'none', collection_id: undefined }),
+    )
+    mockedKnowledgeOutline.mockResolvedValue({
+      path: 'report.md',
+      is_knowledge_base: false,
+      headings: [{ level: 1, text: 'Report', slug: 'report' }],
+    })
+
+    renderExplorer('ws-1')
+    fireEvent.click(await screen.findByTestId('library-row-report.md'))
+
+    await waitFor(() =>
+      expect(mockedKnowledgeOutline).toHaveBeenCalledWith('ws-1', 'report.md'),
+    )
+    expect(await screen.findByTestId('knowledge-outline-heading')).toHaveTextContent('Report')
+    // Not a knowledge base: linked mentions genuinely do not apply, and an
+    // empty panel would imply "nothing links here" rather than "the question
+    // does not apply".
+    expect(screen.queryByTestId('knowledge-backlinks')).not.toBeInTheDocument()
+    expect(mockedKnowledgeGraph).not.toHaveBeenCalled()
   })
 })

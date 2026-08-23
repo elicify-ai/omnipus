@@ -46,6 +46,14 @@ import { defineConfig } from '@playwright/test';
 export const ISOLATION_SPEC_FILES = [
   'tests/e2e/preview-isolation.spec.ts',
   'tests/e2e/preview-bundle.spec.ts',
+  // ADR-067 §10.4's `.svg` row — spec tests 94 and 122, plus the type-confusion
+  // pair (FR-008a, FR-015, FR-016). It belongs on all three engines for the same
+  // reason the other two do: "an <img> runs SVG in secure static mode" and "the
+  // sandbox seals the origin" are ENGINE behaviours, so a Chromium-only pass
+  // says nothing about the other two. It also carries a file-level
+  // `test.describe.configure({ retries: 0 })`, so the zero survives even if this
+  // list is edited.
+  'tests/e2e/preview-svg.spec.ts',
 ] as const;
 
 /**
