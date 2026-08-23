@@ -1,7 +1,12 @@
 # ============================================================
 # Stage 1: Build the SPA (frontend) into dist/spa/
+#
+# --platform=$BUILDPLATFORM: the SPA build's output (static JS/CSS) is
+# architecture-independent, so this stage always runs NATIVE to the build
+# host rather than under buildx's QEMU emulation for the target platform.
+# Same rationale as the go-builder stage below.
 # ============================================================
-FROM node:24-alpine AS spa-builder
+FROM --platform=$BUILDPLATFORM node:24-alpine AS spa-builder
 
 WORKDIR /src
 COPY package.json package-lock.json ./
@@ -12,8 +17,18 @@ RUN npm run build
 
 # ============================================================
 # Stage 2: Build the Go binary with the SPA embedded
+#
+# --platform=$BUILDPLATFORM + GOOS/GOARCH: CGO_ENABLED=0 makes this a pure
+# Go build, so it cross-compiles natively for the target platform instead
+# of running the whole compiler under QEMU emulation. This keeps
+# `docker buildx build --platform linux/amd64,linux/arm64` from paying the
+# emulation tax on the two slowest stages (npm ci + go build) of a
+# multi-arch build. TARGETOS/TARGETARCH are populated automatically by
+# buildx; the runtime stage below still handles TARGETARCH itself for the
+# Chrome-for-Testing download, which is arch-specific in a different way
+# (a prebuilt binary fetch, not a compile).
 # ============================================================
-FROM golang:1.26.6-alpine AS go-builder
+FROM --platform=$BUILDPLATFORM golang:1.26.6-alpine AS go-builder
 
 RUN apk add --no-cache git make
 
@@ -28,7 +43,9 @@ COPY . .
 # before `go build` reads the directive.
 COPY --from=spa-builder /src/dist/spa /src/pkg/gateway/spa
 
-RUN CGO_ENABLED=0 go build -tags goolm,stdjson \
+ARG TARGETOS
+ARG TARGETARCH
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -tags goolm,stdjson \
     -ldflags "-s -w" \
     -o /out/omnipus ./cmd/omnipus
 
