@@ -381,9 +381,6 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 			cfg.RequestTimeout,
 		), modelID, nil
 
-	case "antigravity":
-		return NewAntigravityProvider(), modelID, nil
-
 	case "claude-cli", "claudecli":
 		workspace := cfg.Home
 		if workspace == "" {
@@ -462,7 +459,6 @@ var knownProtocols = map[string]bool{
 	"anthropic-messages":       true,
 	"coding-plan-anthropic":    true,
 	"alibaba-coding-anthropic": true,
-	"antigravity":              true,
 	"claude-cli":               true,
 	"claudecli":                true,
 	"codex-cli":                true,

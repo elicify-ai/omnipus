@@ -168,8 +168,8 @@ We currently wire only the **OpenAI-compatible** variant for these (`zhipu`/`z-a
    (`/v1beta/openai/`, Bearer) — we use the latter; map which features each supports.
 3. **Vertex AI** (GCP-hosted Gemini, OAuth/service-account auth, region hosts) is not a
    provider — separate from the public Gemini API. Assess demand.
-4. `antigravity` provider defaults to `gemini-3-flash` — clarify its relationship to the
-   Google ecosystem and whether it should surface in onboarding.
+4. *(Item removed: the OAuth-only Google Cloud Code Assist provider it concerned was
+   deleted under ADR-068 §2.4.)*
 
 ## OP-3 — xAI (Grok) ecosystem — NOT currently supported
 xAI / Grok is **not a provider at all** today (absent from `GetDefaultAPIBase`,
