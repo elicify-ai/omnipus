@@ -122,3 +122,64 @@ jobs:
           echo "=== recent dmesg ===" >&2
           dmesg | grep -i -E "seccomp|sigsys|killed|oom" | tail -5 >&2 || true
           exit 1
+
+  # ADR-067 §7 states the Windows sandbox code "stays compiling, untested and
+  # unshipped" — compiling was the explicitly RETAINED half of the Windows
+  # descope. Reducing Makefile::build-all to four targets deleted the only
+  # GOOS=windows compile in the repo, leaving nine Windows-specific files
+  # (pkg/sandbox/hardened_exec_windows.go, pkg/sandbox/hardened_exec_cancel_windows.go,
+  # pkg/fileutil/flock_windows.go, pkg/daemon/daemon_windows.go,
+  # pkg/agent/runner/procgroup_windows.go, pkg/logger/panic_win.go,
+  # pkg/tools/session_process_windows.go, pkg/tools/shell_process_windows.go,
+  # and daemon_windows_test.go) compiling nowhere: go vet, golangci-lint and
+  # every go build in pr.yml run under the host GOOS and never see them.
+  #
+  # This job restores exactly that commitment and nothing more. It needs no
+  # Windows runner — cross-compiling from Linux is enough to prove the code
+  # still builds. It deliberately does NOT run `go vet ./...`, which also
+  # compiles test files: several of those call syscall.Kill or set
+  # SysProcAttr.Setpgid without a !windows constraint, and gating them cascades
+  # because they define helpers other ungated test files use. Making the TEST
+  # tree Windows-clean is separate, larger work; the ADR only ever promised the
+  # production code compiles.
+  windows-compile:
+    name: Windows cross-compile (ADR-067 §7)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # go:embed all:spa needs the directory to exist. A placeholder is enough
+      # for a compile check — we are proving the Go code builds, not shipping
+      # a binary, and building the real SPA here would cost minutes for nothing.
+      - name: Placeholder SPA for go:embed
+        run: |
+          mkdir -p pkg/gateway/spa
+          [ -f pkg/gateway/spa/index.html ] || echo '<!doctype html>' > pkg/gateway/spa/index.html
+
+      - name: Cross-compile for windows/amd64
+        run: |
+          set -euo pipefail
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 \
+            go build -tags "goolm stdjson" ./...
+
+      # Proves the job is actually exercising the Windows halves rather than
+      # silently compiling the same files a Linux build would. If a rename ever
+      # orphans them, this fails loudly instead of passing over nothing.
+      - name: Assert the Windows-specific files were in the build
+        run: |
+          set -euo pipefail
+          files=$(CGO_ENABLED=0 GOOS=windows GOARCH=amd64 \
+            go list -tags "goolm stdjson" -f '{{join .GoFiles " "}}' \
+            ./pkg/sandbox/ ./pkg/fileutil/ ./pkg/daemon/ | tr ' ' '\n' | grep -c '_windows\.go' || true)
+          echo "windows-specific files compiled: $files"
+          if [ "$files" -lt 3 ]; then
+            echo "ERROR: expected at least 3 *_windows.go files in the build, saw $files." >&2
+            echo "The Windows halves are no longer being compiled — this job would" >&2
+            echo "otherwise report green while covering nothing." >&2
+            exit 1
+          fi
