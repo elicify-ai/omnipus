@@ -1,6 +1,6 @@
 # ADR-067: One registry-fed catalog — model limits and provider identity from public registries
 
-- **Status:** Proposed (2026-08-22). Split out of ADR-066 after its second adversarial review; awaiting operator ratification. **Amended 2026-08-22 (§8b)** from the plan-spec review (`docs/internal/specs/adr-067-registry-catalog-spec-review.md`).
+- **Status:** Accepted (operator approval 2026-08-23 — implementation plan approved). Proposed 2026-08-22; split out of ADR-066 after its second adversarial review. **Amended 2026-08-22 (§8b)** from the plan-spec review (`docs/internal/specs/adr-067-registry-catalog-spec-review.md`).
 - **Date:** 2026-08-22
 - **Related:** [ADR-066](ADR-066-context-budget-and-tool-result-routing.md) (the incident fix; its D2 ladder consumes this catalog); [ADR-068](ADR-068-subscriptions-provider-deletion-and-provider-ux.md) (subscription policy, provider deletion, default model, provider UX — consumes the provider table defined here); CLAUDE.md **Constraint #1** (single binary, no new runtime deps), **Constraint #8** (contract-first wire formats).
 - **Deciders:** Operator (Daniel Piatkowski)

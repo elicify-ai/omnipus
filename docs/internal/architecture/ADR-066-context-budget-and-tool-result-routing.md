@@ -1,6 +1,6 @@
 # ADR-066: Context overflow — the sliding window extended mid-turn, tool results emptied with a recall mark, and a per-result cap at the door
 
-- **Status:** Proposed (2026-08-21; restructured 2026-08-22). Drafted from a live production incident on the operator's own instance; awaiting operator ratification before implementation.
+- **Status:** Accepted (operator approval 2026-08-23 — implementation plan approved). Proposed 2026-08-21; restructured 2026-08-22. Drafted from a live production incident on the operator's own instance.
 - **Date:** 2026-08-22
 - **Related:** [ADR-028](ADR-028-context-paging-sliding-window-recall.md) (`windowTrim` as the only compaction path — **extended, not superseded**: D6 changes *when* it runs and *what it may do mid-turn*; it remains the only path, and nothing here summarises); [ADR-051](ADR-051-media-handling-and-provider-error-translation.md) (`LLMError` classifier — extended by D7); [ADR-060](ADR-060-structured-tool-failure-family.md) (D5's recall mark is a candidate family member, §12); CLAUDE.md **Constraint #1** (single binary), **Constraint #6** (explicit tool policy), **Constraint #8** (contract-first wire formats).
 - **Deciders:** Operator (Daniel Piatkowski)

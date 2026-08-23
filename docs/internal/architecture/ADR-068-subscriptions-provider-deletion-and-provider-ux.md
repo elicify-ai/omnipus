@@ -1,6 +1,6 @@
 # ADR-068: Subscription login policy, provider deletion, the default model, and the provider UX at 190 providers
 
-- **Status:** Proposed (2026-08-22). Split out of ADR-066 after its second adversarial review; awaiting operator ratification.
+- **Status:** Accepted (operator approval 2026-08-23 — implementation plan approved). Proposed 2026-08-22; split out of ADR-066 after its second adversarial review.
 - **Date:** 2026-08-22
 - **Related:** [ADR-066](ADR-066-context-budget-and-tool-result-routing.md) (the incident fix; D9 there defines the Settings controls for caps and window that §4 places on screen); [ADR-067](ADR-067-registry-fed-catalog-and-provider-identity.md) (the catalog and provider table every screen here reads; D12's tiers and selector rule); [ADR-060](ADR-060-structured-tool-failure-family.md) (structured refusals); CLAUDE.md **Constraint #8** (contract-first wire formats).
 - **Deciders:** Operator (Daniel Piatkowski)
