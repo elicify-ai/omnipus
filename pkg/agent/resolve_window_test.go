@@ -544,9 +544,12 @@ func TestResolveContextWindow_ByLocality(t *testing.T) {
 	t.Run("the refusal code, attribution and copy are the contract's", func(t *testing.T) {
 		assert.Equal(t, LLMErrorCode("context_window_unknown"), CodeContextWindowUnknown)
 		assert.Equal(t, generated.LLMErrorAttributionConfig, AttributionForCode(CodeContextWindowUnknown))
-		assert.Equal(t,
-			"This endpoint did not report a context length for this model. Set it under Settings → Models → Model overrides → Context length.",
-			UserMessageForCode(CodeContextWindowUnknown))
+		// The copy itself is the contract's (LLMError.yaml x-user-messages,
+		// read through the generated catalogue); pin its shape, not a paste.
+		msg := UserMessageForCode(CodeContextWindowUnknown)
+		assert.Equal(t, generated.LLMErrorUserMessages["context_window_unknown"], msg)
+		assert.Contains(t, msg, "Settings → Models → Model overrides", "the copy names the exact field to set")
+		assert.NotContains(t, strings.ToLower(msg), "try again", "config-attributed copy must not tell the user to retry")
 		llm := TranslateTurnError(ErrContextWindowUnknown)
 		assert.Equal(t, CodeContextWindowUnknown, llm.Code)
 		assert.False(t, llm.Retryable, "config-attributed copy must not invite a retry")
