@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/memory"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/tools"
@@ -364,7 +365,7 @@ func (t *RecallConversationTool) Execute(ctx context.Context, args map[string]an
 		ordinals[i] = idx + 1
 	}
 
-	spanMsgs := buildRecallSpanMessages(keptIdxs, turns, ordinals)
+	spanMsgs := buildRecallSpanMessages(keptIdxs, turns, ordinals, t.recallCapPolicy())
 	// M7: use newRecallSpan so Tokens is always Σ estimateMessageTokens(Msgs).
 	span := newRecallSpan(fromTurnNum, toTurnNum, spanMsgs, ordinals)
 
@@ -435,6 +436,7 @@ func buildRecallSpanMessages(
 	keptIdxs []int,
 	turns []archiveTurn,
 	ordinals []int,
+	policy resultCapPolicy,
 ) []providers.Message {
 	// demarcation marker (FR-019): honest about contiguous vs sparse coverage.
 	var markerText string
@@ -494,7 +496,7 @@ func buildRecallSpanMessages(
 		}
 
 		// Rewrite messages in this turn.
-		for _, am := range trn.msgs {
+		for j, am := range trn.msgs {
 			m := am.Message // copy
 			switch m.Role {
 			case "assistant":
@@ -509,11 +511,25 @@ func buildRecallSpanMessages(
 					m.ToolCalls = rewritten
 				}
 			case "tool":
+				originalID := m.ToolCallID
 				if m.ToolCallID != "" {
 					if mapped, ok := idMap[m.ToolCallID]; ok {
 						m.ToolCallID = mapped
 					}
 				}
+				// ADR-066 D4: a re-injected recall page is a builtin-success
+				// surface result and passes the choke point's cap (FR-009,
+				// B-11 row "recall page"; T066-14 sizes the page to
+				// cap − framing so this cut is the backstop, not the page
+				// size). The mark cites the real archive line (startIdx + j)
+				// and the ORIGINAL id — the one recall_conversation resolves
+				// — so the model can page the full content.
+				archiveLine := trn.startIdx + j
+				toolName, _ := owningToolCall(out, len(out), m.ToolCallID)
+				m.Content, _ = projectToolResult(m.Content, policy.effectiveCap(surfaceBuiltinSuccess, 1),
+					func(full string) string {
+						return capMarkOrEmpty(toolName, originalID, archiveLine, full, nil)
+					})
 			}
 			out = append(out, m)
 		}
@@ -621,4 +637,23 @@ func turnSearchText(trn archiveTurn) string {
 		}
 	}
 	return sb.String()
+}
+
+// contextSettingsSource is satisfied by *AgentLoop (the RecallSpanSetter the
+// tool is built with) so the recall page reads the live ContextSettings per
+// call (US-3.AC11) without the tool holding a config of its own.
+type contextSettingsSource interface {
+	contextSettings() config.ContextSettings
+}
+
+// recallCapPolicy snapshots the caps for one recall page. The budget clamp
+// is not applied here: the span is budgeted as a whole against B by
+// windowTrim / the D5.4 fit check, which is the right place for a multi-
+// message span; per-message the configured cap is what bounds a page.
+func (t *RecallConversationTool) recallCapPolicy() resultCapPolicy {
+	var cs config.ContextSettings
+	if src, ok := t.spanSetter.(contextSettingsSource); ok {
+		cs = src.contextSettings()
+	}
+	return capPolicyFor(cs, 0)
 }

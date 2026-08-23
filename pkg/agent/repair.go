@@ -261,6 +261,12 @@ func injectSyntheticToolResults(
 				content = syntheticErrorResult(id, entry)
 				stats.SyntheticErrorStubs++
 			}
+			// ADR-066 D4 (FR-009): EXEMPT from the choke point — bounded by
+			// construction. A synthetic error stub is a one-line sentence;
+			// an idempotent re-invocation returns a tool's own output,
+			// which the per-tool caps (FR-014) already bound at the tool.
+			// This is the single sanctioned `Role: "tool"` literal outside
+			// tool_result_admit.go (TestChokePoint_ProducerListByGrep).
 			out = append(out, providers.Message{
 				Role:       "tool",
 				Content:    content,

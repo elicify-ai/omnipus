@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -158,11 +159,15 @@ func (al *AgentLoop) HydrateAgentHistoryFromTranscript(sessionID string) error {
 				if tc.ID == "" {
 					continue
 				}
-				perAgent[owner] = append(perAgent[owner], providers.Message{
-					Role:       "tool",
-					ToolCallID: string(tc.ID),
-					Content:    marshalToolResult(tc),
-				})
+				// ADR-066 D4: a hydrated attachment is a builtin-success
+				// surface result and passes the choke point's cap like any
+				// other (FR-009, no exemption — B-11 row "hydrated
+				// attachment"). The transcript `result` is already the
+				// bounded form the choke point wrote (FR-046), so the cut
+				// only fires for pre-ADR-066 transcripts. SetHistory below
+				// stores the window form as the archive line, so no
+				// projection state is needed: archive and window agree.
+				perAgent[owner] = append(perAgent[owner], al.hydratedToolResultMessage(owner, tc))
 			}
 		default:
 			// system / interruption / unknown — skip; system parts are
@@ -220,4 +225,27 @@ func marshalToolResult(tc *session.ToolCall) string {
 		return fmt.Sprintf(`{"status":%q}`, tc.Status)
 	}
 	return "{}"
+}
+
+// hydratedToolResultMessage builds the tool message for one recorded call,
+// capped at the builtin-success surface through the choke point's pure cap.
+// The mark cites no archive line (the line does not exist until SetHistory
+// writes it) and the turn number of a transcript-rebuilt window is not
+// recoverable, so the mark's hint points at recall by id only — which
+// D5.5's hydrated flag answers with "rebuilt from the transcript" anyway.
+func (al *AgentLoop) hydratedToolResultMessage(owner string, tc *session.ToolCall) providers.Message {
+	var cs config.ContextSettings
+	if cfg := al.GetConfig(); cfg != nil {
+		cs = cfg.Context
+	}
+	budget := 0
+	if registry := al.GetRegistry(); registry != nil {
+		if ag, ok := registry.GetAgent(owner); ok && ag != nil {
+			budget = agentContextBudget(ag)
+		}
+	}
+	policy := capPolicyFor(cs, budget)
+	content, _ := projectToolResult(marshalToolResult(tc), policy.effectiveCap(surfaceBuiltinSuccess, 1),
+		func(full string) string { return capMarkOrEmpty(tc.Tool, string(tc.ID), -1, full, nil) })
+	return toolResultMessage(string(tc.ID), content, nil)
 }
