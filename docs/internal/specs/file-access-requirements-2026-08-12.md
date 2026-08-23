@@ -21,6 +21,15 @@ which tool asks it.
 
 ## 2. The two rule layers must become one
 
+> **Correction (2026-08-23, [ADR-068](../architecture/ADR-068-bash-text-guard-third-rule-layer.md)):**
+> This section counts two layers. There are **three** — the `bash` tool carries
+> its own in-process text guard (`ExecTool.guardCommand`) that runs before any
+> child is spawned and is neither `pkg/fspolicy` nor `pkg/sandbox`. R-4's
+> diagnosis below is also **backwards**: reads are confined for shell commands
+> too, by that third guard. R-1's goal ("one ruleset, written once") and R-4's
+> goal ("a rule must not depend on which tool asks") are unchanged and correct;
+> the count of what must be unified is one higher than written here.
+
 **R-1. One ruleset, written once.** There is today an application layer
 (`pkg/fspolicy`, governing the in-process file tools) and a kernel layer
 (`pkg/sandbox`, governing child processes). They currently disagree in BOTH
@@ -37,8 +46,13 @@ the rule still holds (R-2) but the second wall is absent, and Omnipus says so at
 startup rather than implying protection it does not have.
 
 **R-4. A rule must not depend on which tool asks.** `bash cat X` and
-`read_file X` must give the same answer. Today they do not: reads are open for
-shell commands and confined to the work directory for the file tools. The
+`read_file X` must give the same answer. Today they do not: ~~reads are open for
+shell commands and confined to the work directory for the file tools~~
+**[corrected 2026-08-23, ADR-068 §1.1 — VERIFIED at `e269e52c`: reads are
+confined for BOTH. `bash cat X` on an outside path is rejected in-process by
+`ExecTool.guardCommand` under the shipped `RestrictToWorkspace: true` default
+and never reaches the kernel. The requirement stands; only its stated diagnosis
+was wrong.]**. The
 operator identified this as a bug, and it is — it is also what made an earlier
 version of these requirements argue for a feature (read-only mounts) that only
 made sense while the inconsistency existed.

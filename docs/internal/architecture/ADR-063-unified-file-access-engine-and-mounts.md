@@ -3,11 +3,24 @@
 - **Status:** Proposed (2026-08-12)
 - **Implements:** [file-access requirements, 2026-08-12](../specs/file-access-requirements-2026-08-12.md)
 - **Builds on:** [ADR-062](ADR-062-filesystem-read-exec-model-inversion.md) (reads/exec open; the secret set unreachable)
+- **Corrected by:** [ADR-068](ADR-068-bash-text-guard-third-rule-layer.md) (2026-08-23) — §1.1's two-layer model is incomplete; there is a third, and one VERIFIED claim there is false in shipped code
 - **Supersedes in part:** ADR-046 P1's `FSScope` model; the `repository` field on Workspace
 
 ---
 
 ## 1. Context
+
+> **Correction (2026-08-23, [ADR-068](ADR-068-bash-text-guard-third-rule-layer.md)):**
+> §1.1 below counts two rule layers. There are **three**. The `bash` tool runs
+> its own in-process text guard (`ExecTool.guardCommand`, `pkg/tools/shell.go`)
+> before any child is spawned, and that guard still enforces the pre-ADR-062
+> confined model for reads. The bullet "`bash cat ~/notes.txt` succeeds" and the
+> table row granting outside-`WorkDir` reads to the kernel layer are **false in
+> shipped code** under the default `RestrictToWorkspace: true` — verified at
+> commit `e269e52c` by calling `guardCommand` directly. The command is rejected
+> in-process and never reaches the kernel. Read §1.1's disagreement analysis as
+> incomplete, not merely imprecise: it describes the kernel's disposition toward
+> commands the kernel never sees. ADR-068 §1.1 carries the evidence.
 
 ### 1.1 There are two file-access rule sets and they disagree
 
@@ -25,12 +38,15 @@ and they disagree in **both** directions (VERIFIED, 2026-08-12):
 |---|---|---|
 | `agents/`, `workspaces/` | denied (carve-out) | granted |
 | `config.json`, `cli.token` | **allowed** | denied (ADR-062) |
-| anything outside `WorkDir`, read | denied when confined | **allowed** (ADR-062) |
+| anything outside `WorkDir`, read | denied when confined | ~~**allowed** (ADR-062)~~ — **corrected: denied by the bash text guard before the kernel is reached (ADR-068 §1.1)** |
 
 The practical consequences are all of the form "the answer depends on which tool
 asked", which no operator can predict:
 
-- `bash cat ~/notes.txt` succeeds; `read_file ~/notes.txt` is denied.
+- ~~`bash cat ~/notes.txt` succeeds; `read_file ~/notes.txt` is denied.~~
+  **Corrected (ADR-068):** `bash cat ~/notes.txt` is *also* denied under the
+  shipped default, by the bash tool's own text guard. Both are denied — the
+  asymmetry this bullet claims does not exist on the read axis.
 - An agent running unrestricted can read the gateway bearer token through
   `read_file`, because `cli.token` is not an app-layer carve-out — while the
   same read from `bash` is denied by the kernel.
