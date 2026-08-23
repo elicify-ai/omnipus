@@ -1,0 +1,209 @@
+# Tasks — ADR-067: registry-fed catalog and provider identity
+
+- **Spec:** `docs/internal/specs/adr-067-registry-catalog-spec.md` (Draft, grilled 2026-08-22, §1.1/§1.2 BINDING). ADR: `docs/internal/architecture/ADR-067-registry-fed-catalog-and-provider-identity.md` (Proposed, §8b amended).
+- **Plan:** `docs/internal/specs/implementation-plan-adr-066-067-068.md` — this spec owns **Wave A** (the single coordinated contract commit, task id **A-CONTRACT** = T067-01 below) and **Wave B streams B1** (catalog core) and **B2** (assembly repository).
+- **Branch:** `feat/context-budget-and-tool-result-routing` (worktree `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-context-budget`). Facts in this file were read at `dc9bc96a` on 2026-08-23.
+- **Taskify date:** 2026-08-23.
+
+## Landing order and cross-spec dependencies
+
+1. **S67 lands first, S68 next, S66 last** (spec §1.2 "Sequencing", X-27). Nothing in S67 depends on S66 or S68 at build time.
+2. **A-CONTRACT (T067-01) is the first commit of the whole branch.** Every later task in every spec compiles against its generated types. Gate: Fly `contracts` + `quick`; nothing else starts until green (plan §1).
+3. **B1 and B2 run in parallel** after A-CONTRACT. B2 (the assembly repository) is a separate codebase; B1's catalog package is unit-testable on the conformance fixture alone, but **the fold of `capabilities` into `catalog` (T067-07) cannot build until a real first release is committed as the embedded snapshot (T067-06)** — `go:embed` needs the file, and FR-006 says the snapshot is the published document, not a fixture.
+4. **The factory-switch collapse (T067-08) is one task, one agent, one commit** — see its atomic-landing note. ADR-068's provider constructors (B3) and ADR-066's catalog rung (B4) queue behind it.
+5. **Cross-spec seams this spec hands out:** ADR-068 consumes the catalog `GET`, `unknown-provider`, `needs_provider`, entitlement, free-string probe id, canonical ids, `locality`, `cli_kind`, `custom`; ADR-066 consumes `catalog.Resolve(provider, model).Window()` and `locality`. **Cross-spec seam this spec receives:** the SPA artefact deletion (T067-13) cannot pass `npm run typecheck` until ADR-068's B5 picker rewrites the 7 importers of `src/lib/generated/providerCatalog.ts` (X-23) — that task therefore depends on ADR-068 B5.
+6. Grep gates (T29, SC-009, `scripts/no-removed-providers.allow`) are evaluated on the **merged** branch (X-34); after merge ADR-066's `TestConfig_NoContextWindowDefaultKey` and ADR-068's `TestDefaultsSeed_NoRemovedProvider` must also pass (X-29).
+
+Conventions: test names (T*n*) are from spec §7 TDD Plan; data rows (DS-*n*) from §7 Test Datasets; FR/SC from §8; scenarios are cited by their `Traces to:` id (US-*n*.AC*m* / E*n*). **Tests are written first** (test-driven-development skill) — the "tests to write FIRST" list is the red set before any production edit. Fly gates: `quick | lint | go-test | contracts | spa` via `fly ssh console --app ci-omnipus -C "/cache/runci.sh <ref> <gate>"`; never the full Go suite on the dev machine.
+
+---
+
+## Task list
+
+### T067-01 — A-CONTRACT: the single coordinated contract commit — **P0**
+
+- **Files to create:** `contracts/components/schemas/ProvidersCatalog.yaml`, `CatalogProvider.yaml`, `CatalogModel.yaml`, `EntitlementResponse.yaml`, `DefaultModel.yaml`, `DefaultModelUpdateRequest.yaml`, `ContextSettings.yaml`, `ContextWindowSource.yaml` (the last two are ADR-066-owned shapes written here per X-26 and plan §1); matching `pkg/gateway/inboundschemas/` twins where the request shape is inbound.
+- **Files to modify:** `contracts/components/schemas/Provider.yaml` (`protocol`, `custom`, `status` six-value enum, ADR-068's `auth_method`/`account_label`/`dependents`/`backs_default`/`updated_at`), `ProviderUpdateRequest.yaml` (`protocol`, `auth_method`), `Agent.yaml` (`degraded_reason` enum `[needs_provider]`, ADR-068's `needs_model`, ADR-066's optional `context_window_effective`/`context_window_source`/`context_window_clamped`), `ProbeProviderRequest.yaml` (enum → free string `maxLength: 64`; shape `{id, auth, api_key?, model?, api_base?, protocol?}`; `endpoint` renamed `api_base`), `LLMError.yaml`, `LLMErrorReplay.yaml`, `contracts/asyncapi.yaml` (inline `LLMError` ~L1512 and `LLMErrorReplay` ~L1632 — add `needs_provider` + ADR-068's `model_unassigned` + ADR-066's `turn_canceled`/`turn_timed_out`/`context_unrecoverable`/`context_window_unknown`, attribution `user`), `contracts/openapi.yaml` (add `GET /api/v1/providers/catalog` with ETag/304/503, `POST /api/v1/providers/{id}/entitlement`, `DELETE /providers/{id}`, `PUT /providers/default-model`, `GET/PUT /settings/context`; remove `GET /providers/model-capabilities` and `POST /providers/{id}/refresh-models`), the `pkg/gateway/inboundschemas/` twins (`Provider.yaml`, `ProviderUpdateRequest.yaml`, `Agent.yaml`, `ProbeProviderRequest.yaml`, `LLMError.yaml`, `LLMErrorReplay.yaml`), then `scripts/gen-contracts.sh` → `pkg/api/generated/`, `src/lib/api/generated/`.
+- **Files to delete:** `contracts/components/schemas/ModelCapabilities.yaml`, `ProviderCatalogEntry.yaml` and their `inboundschemas/` twins (FR-024 "`ModelCapabilities` deleted").
+- **FRs:** FR-023, FR-024, FR-031 (field placement), FR-038 (four copies), FR-017 (route + headers declared), FR-021 (route declared).
+- **Scenarios:** US-7.AC5, US-10.AC3 (65-char id by schema), US-6.AC2 (wire vocabulary).
+- **Tests FIRST:** T30 `TestContract_ProvidersCatalog_Shape`, T31 `TestContract_ProbeProviderRequest_NoEnum`, T31b `TestContract_SharedSchemas_FullEnums`; regression: `pkg/api/generated/contract_test.go`, `llm_error_codes_test.go`, `llm_error_catalogue_test.go`, `llm_error_no_hardcopy_test.go` (X-01), T47 contracts gate.
+- **Fly gate:** `contracts`, then `quick`.
+- **Depends on:** none (first commit of the branch).
+- **Size:** L.
+- **Definition of done:** one atomic commit (spec + regenerated artefacts) passes `make verify-contracts` and builds; T30/T31/T31b green; `ProbeProviderRequest.id` has no `enum`; `needs_provider` present in all four `LLMError` copies.
+- **Note (build-compatibility, must be checked by the implementer):** `pkg/api/generated/openapi_types.gen.go` currently carries 4 references to the `ProbeProviderRequest.id` enum type, and `pkg/gateway/rest.go` references the generated `ModelCapabilities` type. The commit must still pass `quick`, so the minimal Go call-site adjustments forced by the generated-type changes (enum → `string`; removed types) ride in this same commit — nothing more. Which call sites break is **unverified** until `make gen-contracts` runs.
+
+### T067-02 — Catalog package core: 2.0.0 document, validation, exact `Resolve(provider, model)`, locality, conformance fixture — **P0**
+
+- **Files to create:** `pkg/providers/catalog/document.go` (2.0.0 DTO → validated domain), `pkg/providers/catalog/parse.go` (FR-002 invariants + FR-033 URL rule), `pkg/providers/catalog/locality.go` (FR-039), `pkg/providers/catalog/resolve.go` (`Handle` with `Window()`, `MaxOutput()`, `Supports(modality)`, `Budget()`), `pkg/providers/catalog/testdata/providers_catalog_2.0.0_fixture.json` (FR-027 — 3 providers/6 models incl. `(openrouter, z-ai/glm-5.2)`=1048576, `(zai, glm-5.2)`=1000000, `minimax` anthropic, `ollama`, `lmstudio`, a `disputed: true` row), `pkg/providers/catalog/catalog_bench_test.go`.
+- **Files to modify:** `pkg/providers/catalog/catalog.go` — the hand-typed `Entries`/`LoadCatalog`/`DeriveWire`/`validateCatalog`/`validateDisjointIDs`/`init` are replaced by the document-backed `Catalog`; the import of `pkg/providers` (for `IsKnownProtocol`) is removed (spec §3 "Cluster Placement"). `pkg/providers/catalog/gen/main.go` is the only non-test consumer of `Entries` (grep 2026-08-23) — **deleted here** with the drift-guard tests `TestCatalog_DriftGuard_IdIsKnownProtocol`, `_IdInProbeEnum`, `_BaseNonEmptyOrExempt`, `_NewProtocolUntriagedFails`, `TestWireDerivation_Table` (spec §7 Regression item 3). The existing `//go:embed data/providers_catalog.json` in `catalog.go:71` is kept pointing at the same path (the file's content is replaced in T067-06).
+- **FRs:** FR-001, FR-002, FR-003, FR-004, FR-027, FR-030, FR-033, FR-039 (and FR-025's `resolveStrippedPrefix` by construction — the new package never has one).
+- **Scenarios:** US-1.AC1–AC5, US-4.AC1–AC3, US-5.AC8 (key shape), E2, E3, E4 (resolve side), E9, E13, F-19 rows.
+- **Tests FIRST:** T1 `TestParseDocument_Conforming`, T2 `TestParseDocument_Rejects` (DS-1 rows 2–8, 11, 15, 16, 23, 26), T3 `TestResolve_SameModelIDTwoProviders`, T4 `TestResolve_UnknownLimitsAreZero`, T5 `TestResolve_NoPrefixStripping`, T6 `TestResolve_MissSemantics`, T9c `TestParseDocument_APIURLValidation` (DS-1.18–22, 25), T24b `TestCatalog_LocalityPredicate`, `BenchmarkResolve` (SC-011: < 1,000 ns/op, 0 allocs); DS-2 rows 1–10.
+- **Fly gate:** `quick`, `lint`.
+- **Depends on:** none at build level (pure package; fixture-only). Can start in parallel with T067-01.
+- **Size:** L.
+- **Definition of done:** DS-1 and DS-2 tables fully asserted; `BenchmarkResolve` 0 allocs; `pkg/providers/catalog` imports neither `pkg/providers`, `pkg/gateway` nor `pkg/agent`; `gen/main.go` gone.
+
+### T067-03 — Version format, puller retarget and feed-acceptance rules — **P0**
+
+- **Files to create:** `pkg/providers/catalog/version.go`, `pkg/providers/catalog/puller.go` (moved from `pkg/providers/capabilities/` — `git mv`, then edit), `puller_test.go`, `version_test.go` (moved; 11 of 12 puller tests unchanged).
+- **Files to modify:** `puller.go` — owner/repo `elicify-ai/omnipus-provider-catalog`, asset `providers_catalog.json`, sidecar **mandatory** and located from the release's own asset list (release path) and also required on the raw path; raw `Ref` pinned to `main` in code, no override; named constants `maxCatalogAssetBytes = 16 << 20` (read limit cap + 1) and `maxReleaseAPIBytes` (4 MB, kept); `version.go` — `version` must match `^v\d{4}\.\d{1,2}\.\d{1,2}(\.\d+)?$`, compared numerically.
+- **FRs:** FR-002 (version regex), FR-007, FR-009 (`checksum`, `too_large` reasons), FR-032.
+- **Scenarios:** US-2.AC1, US-3.AC6 (version outline, 6 rows), E1, E11, E14.
+- **Tests FIRST:** T7 `TestVersion_DateSemver` (DS-7), T8 `TestGHReleasePuller_Pull_RetargetedAsset`, T9b `TestGHReleasePuller_Pull_NoSidecar_Rejected` (rewrites today's `TestGHReleasePuller_Pull_NoSidecar`, which currently asserts success), T12 `TestRefresh_TooLarge_Rejected` (puller half: cap + 1 → `too_large`, never `checksum`; exactly cap → accepted; existing 2 MB fixtures re-sized), T13 `TestRefresh_RawFallback_Degraded`.
+- **Fly gate:** `quick`, `lint`.
+- **Depends on:** T067-02 (puller returns bytes the new parser consumes; version type used by the refresh transaction).
+- **Size:** M.
+- **Definition of done:** DS-7 six rows green; missing sidecar rejected on both paths; 16 MB boundary distinguishes `too_large` from `checksum`; `pkg/providers/capabilities/puller.go`/`version.go` no longer exist.
+
+### T067-04 — Refresh transaction, persisted last-known-good, reason-keyed WARNs, pre-serialised bytes + ETag pair — **P0**
+
+- **Files to create:** `pkg/providers/catalog/refresh.go` (`Refresh`/`refreshLocked`: pull → degraded check → parse 2.0.0 → **schema-version gate** → anti-downgrade → apply → persist), `pkg/providers/catalog/store.go` (`$OMNIPUS_HOME/providers_catalog.json`; boot read; persisted-newer-than-embedded wins; invalid persisted → one WARN; **no code path names `capabilities_catalog.json`**), `pkg/providers/catalog/served.go` (pre-serialised JSON slice + quoted strong SHA-256 ETag + `stale` + `source ∈ {embedded, pulled}`, swapped atomically as one pair at apply; `Degraded()`/last refresh error for `/health`).
+- **Files to modify:** `pkg/providers/catalog/catalog.go` (wire the transaction, refresh mutex, one INFO per successful refresh).
+- **FRs:** FR-001, FR-009, FR-010, FR-017 (bytes/ETag/stale computation — the handler is T067-10), FR-028, FR-037 (degraded reporting + entitlement-cache invalidation hook, consumed by T067-11).
+- **Scenarios:** US-3.AC2, AC4–AC8, E5, E6, E7 (seam), E10 (ETag change), DS-4 rows 1–9.
+- **Tests FIRST:** T6b `TestBoot_PersistedNewerThanEmbedded`, T9 `TestRefresh_ChecksumMismatch_Retains`, T10 `TestRefresh_WrongSchemaVersion_Ignored`, T11 `TestRefresh_Downgrade_Refused`, T12 (refresh half), T14 `TestRefresh_Concurrent_Serialized` (`-race`), T15 `TestStore_InvalidPersisted_Ignored_LegacyInvisible`, T34c's atomic bytes+ETag swap assertion at package level (the REST half lands in T067-10).
+- **Fly gate:** `quick`, `lint`, then one scoped `go-test` on `./pkg/providers/catalog/...` with `-race`.
+- **Depends on:** T067-02, T067-03.
+- **Size:** M.
+- **Definition of done:** every DS-4 row asserted with exactly one WARN carrying `reason ∈ {checksum, schema_version, invalid, regressed, too_large}`; race-clean; zero log lines ever mention `capabilities_catalog.json`.
+
+### T067-05 — B2: assembly repository `elicify-ai/omnipus-provider-catalog` — scaffold, daily job, first release — **P0**
+
+- **Files (separate repository, not this tree):** schema 2.0.0 document; job: pull models.dev `api.json` + LiteLLM `model_prices_and_context_window.json`, manifest of upstream commits, merge keyed by provider + model, `overrides/` (wins; incl. the ~20 dedicated-SDK URL rows, the second-protocol endpoints for Z.ai/Moonshot/DeepSeek, `gemini-3-pro` PDF, `tier`/`unsupported_reason`/`auth_methods`/`aliases`/`company`), `resize_limits.json` (per provider, joined onto every model), local-providers file (`ollama`, `vllm`, `litellm`, `lmstudio`, `codex-cli` (`cli`, `cli_kind: codex`), `openai-chatgpt` (`openai-compatible`, `token_source: codex-auth-json`), `github-copilot` (`cli`, `cli_kind: copilot`), `shengsuanyun`, `volcengine`, `avian`, `mimo`), disagreement rule (≤ 5 % or ≤ 4,096 tokens → publish lower, record both; larger → last-known-good + `disputed: true` + one issue; closed issue → `overrides/`), rows that vanish upstream carried forward (`status: retired` / `tier: unsupported`, `unsupported_reason: withdrawn`), release `providers_catalog.json` + `.sha256`, `version` `vYYYY.M.D[.N]`, the scheduled snapshot-refresh PR against Omnipus, a copy of the conformance fixture from T067-02. Omnipus-side file: none in this task.
+- **FRs (contract side):** FR-006 (PR-driven snapshot), FR-007 (asset layout), FR-018, FR-026 (content the snapshot must contain), FR-027, FR-030, FR-032 (sidecar always published). US-2 acceptance criteria AC1–AC5 are the contract.
+- **Scenarios:** US-2.AC1–AC5 (AC2 and AC3 execute in the assembly repo's own tests), US-8.AC1, US-8.AC2 (data side).
+- **Tests FIRST (assembly-side, against the shared fixture):** US-2.AC2 disagreement → last-known-good + `disputed`; US-2.AC3 override URL; US-2.AC4 local-file shape; sidecar equals SHA-256 of the asset. Omnipus-side verification is T8 and T16–T19 in T067-03/T067-06.
+- **Fly gate:** none (other repo's CI). Omnipus `quick` is unaffected.
+- **Depends on:** plan step 0.4 (empty repo scaffolded). Runs in parallel with T067-02..04.
+- **Size:** L.
+- **Definition of done:** a real GitHub Release exists with `providers_catalog.json` + `.sha256`, 2.0.0, `v`-prefixed version, the popular set, every local-file provider, every unsupported row with a reason, no `custom` row, ≤ 8 MB. **Unverified items carried from the spec** (Copilot CLI flags/login surface; Ollama's exact context field) are confirmed against installed binaries before the fixture pins them (plan §7).
+
+### T067-06 — Commit the first real embedded snapshot and the snapshot tests/gates — **P0**
+
+- **Files to create/modify:** `pkg/providers/catalog/data/providers_catalog.json` (replace the current hand-generated content with B2's first release document, byte-for-byte), `pkg/providers/catalog/embed_test.go`, `.github/workflows/pr.yml` or a release-tag workflow step for T49 (snapshot age ≤ 14 days on release tags), T48 hermetic-build CI step (`GOFLAGS=-mod=mod GOPROXY=off make build` after a warm-cache step; assert `git ls-files` tracks the snapshot, exactly one `//go:embed` in `pkg/providers/catalog`, no network `//go:generate`), `docs/` release checklist line (A-15: snapshot ≤ 14 days old).
+- **FRs:** FR-006, FR-018, FR-026, FR-005 (single embedded file — asserted once `capabilities` is gone in T067-07).
+- **Scenarios:** US-2.AC5 (hermetic build), US-8.AC1 (tiers in data), US-8.AC2 (cloud-IAM listed), US-2.AC4 (local providers), E7 (seam).
+- **Tests FIRST:** T16 `TestEmbeddedSnapshot_Valid_And_Bounded`, T17 `TestEmbeddedSnapshot_PopularTier`, T18 `TestEmbeddedSnapshot_LocalProvidersPresent` (11 ids; no `custom: true` row; `cli_kind` on every `cli` row), T19 `TestEmbeddedSnapshot_UnsupportedHaveReason` (`amazon-bedrock`=`cloud-iam`, `azure`=`deployment-url`), T48 hermetic-build gate, T49 snapshot-age gate.
+- **Fly gate:** `quick`, then `go-test` scoped to `./pkg/providers/catalog/...`.
+- **Depends on:** T067-04, **T067-05 (B2 first release — hard blocker; do not substitute the fixture)**.
+- **Size:** S.
+- **Definition of done:** committed snapshot parses under FR-002, ≤ 8 MB, T16–T19 green, hermetic-build step green in CI.
+
+### T067-07 — Fold `pkg/providers/capabilities` into `pkg/providers/catalog`; gateway wiring (24 h + startup-after-listen, 1 h skip) — **P0**
+
+- **Files to delete:** `pkg/providers/capabilities/` (entire directory: `catalog.go`, `catalog_test.go`, `embed.go`, `modality.go`, `puller.go`, `puller_test.go`, `version.go`, `data/providers_capabilities_seed.json`) — `resolveStrippedPrefix` goes with it.
+- **Files to modify (the six non-test importers, grep 2026-08-23):** `pkg/agent/loop_media.go` (`catalog.Resolve(provider, model).Budget()`), `pkg/agent/loop.go` (catalog field/type), `pkg/agent/media_present.go` (`Supports(ModalityImage/PDF)`, `SetCapabilityCatalog` → catalog type), `pkg/gateway/gateway.go` (`NewCatalog(embedded, puller, store)`; `capFileStore` → `$OMNIPUS_HOME/providers_catalog.json`; `capabilityCatalogRefreshInterval` 7 d → 24 h; `runCapabilityCatalogRefreshLoop` started **after the listener is bound**; startup pull skipped when the persisted document is < 1 h old; log adapter), `pkg/gateway/rest.go` (drop the `/providers/model-capabilities` handler's catalog use — the route itself was removed in T067-01), `pkg/media/resize/resize.go`; plus type references in `pkg/agent/context.go` and `pkg/config/sandbox.go` (spec §3). `pkg/providers/catalog/modality.go` (moved).
+- **Files to create:** `pkg/providers/catalog/testdata/seed_parity.json` (78 rows generated from the old seed at authoring time, with `correction_source` = models.dev commit for each ADR-listed correction, F-33), `pkg/media/resize/resize_catalog_parity_test.go`.
+- **FRs:** FR-004 (consumer-side miss semantics), FR-005, FR-008, FR-010 (boot read), FR-025 (`resolveStrippedPrefix`), FR-037 (`/health` catalog degraded).
+- **Scenarios:** US-3.AC1, AC2, AC3, AC7, US-4.AC3, AC4, E6, E7, DS-6.
+- **Tests FIRST:** T6 (consumer side of `TestResolve_MissSemantics` — media optimistic + default resize; loop `Window()` unknown), `TestMediaResize_BudgetsUnchangedForSeedModels` (DS-6, SC-012), T42 `TestGatewayBoot_OfflineSnapshot_Then_StartupPull` (`source` flips embedded → pulled; recording stub's first hit after listen; 1 h skip), T43 `TestRefreshLoop_24h_NoRequestPathPulls` (fake clock; 0 pulls during 1,000 REST requests + 10 turns), T44 `TestEmbeddedSnapshot_Corrupt_BootDegrades` (seam: listen ok, ERROR once, `/providers/catalog` → 503 once T067-10 lands, media optimistic), T16 build assertion (single `go:embed` under `pkg/providers`).
+- **Fly gate:** `quick`, `lint`, then **one** scoped `go-test` per gateway test (`-run '^TestGatewayBoot_OfflineSnapshot_Then_StartupPull$' -p 1`).
+- **Depends on:** T067-04, T067-06 (embedded file must exist and validate).
+- **Size:** M.
+- **Definition of done:** `ls pkg/providers/capabilities` fails (SC-008); `grep -rn resolveStrippedPrefix pkg` → 0; all 78 DS-6 rows pass; boot-to-listen unchanged ± 5 % (Machine-Verifiable "Performance").
+
+### T067-08 — ATOMIC: factory collapse to protocol dispatch + helper deletions + every call-site rewrite — **P0**
+
+> **Atomic-landing note (spec §1.1 "Structural", §3 HIGH-risk warning, plan §7).** This is **one task, one agent, one commit**. `GetDefaultAPIBase`, `IsKnownProtocol`, `knownProtocols`, `AllKnownProtocols`, `ExtractProtocol`, every vendor `case`, every ad-hoc alias string (`"z-ai", "z.ai", "zai"`, the three `qwen-*` spellings, every `-anthropic` suffix id), `knownDisplayNames`/`DisplayName`, `probeModelDefaults`/`pickProbeModel`'s slug map and the old `Entries` drift guards are **deleted in the same change** as the table-backed factory, so the compiler forbids a partial state in which some providers dispatch by name and others by protocol. The GitNexus impact report for `CreateProviderFromConfig` (HIGH — every LLM call path) and `GetDefaultAPIBase`/`IsKnownProtocol` (HIGH — 13+ sites) is attached to the PR; the Fly `go-test` gate runs **before** the integrator picks it up. Never split across commits.
+
+- **Files to modify:** `pkg/providers/factory_provider.go` (`switch protocol` with exactly `openai-compatible | anthropic | google | ollama | cli` + the `Custom: true` branch; `cli` switches only on `cli_kind ∈ {codex, copilot}`; base URL from the catalog row, explicit `ModelConfig.APIBase` wins; `google` = HTTP provider at the row's Gemini OpenAI-compatible URL with Bearer; keys from the credential store only; `ErrUnknownProvider` names the id and nothing else; protocol not offered → error), `pkg/providers/displayname.go` (name from catalog; unknown → id), `pkg/providers/validate.go` (probe model = first `status: active`, `tool_call`, text model in document order; `model_not_found` fall-through ≤ 3; no `/models` pre-fetch for catalog providers; `FetchModels` retained for entitlement/local only), `pkg/config/config.go` (`ModelConfig`: add `Protocol`, `Custom`; **delete `ModelName`** — field list per FR-013/X-25; trim-only id normalisation at the config boundary), `pkg/config/defaults.go` + `config/config.example.json` (canonical ids), `pkg/gateway/rest.go` (7 sites), `pkg/gateway/rest_onboarding.go` (7 sites incl. the `IsKnownProtocol` gate → catalog membership), `cmd/omnipus/internal/onboard/onboard.go` (6 sites; validates against the embedded snapshot, A-21), `cmd/omnipus/internal/onboard/validate_integration_test.go` (rewritten — used `GetDefaultAPIBase` ×4), `pkg/sysagent/tools/provider.go` (1), `pkg/agent/model_resolution.go` (4 sites — `buildModelListResolver` rewritten to FR-040's three-rule set because its `ExtractProtocol`/`ModelName` inputs no longer exist), `pkg/voice/transcriber.go` (1), `pkg/providers/legacy_provider.go`, `pkg/voice/audio_model_transcriber.go` (constructors via protocol dispatch), `pkg/agent/subturn_target_identity_test.go` (re-key `Provider: "mock"` to a custom row — X-31), `pkg/gateway/provider_validation_test.go`, `rest_agent_provider_test.go`, `websocket_provider_refusal_test.go` (fixture ids re-keyed to canonical; assertions unchanged).
+- **Files to create:** `pkg/providers/factory_source_test.go` (AST scan), `pkg/providers/errors.go` (`ErrUnknownProvider` if not already a typed sentinel). Import direction after this task is `pkg/providers` → `pkg/providers/catalog`, never the reverse (spec §3 Cluster Placement).
+- **FRs:** FR-011, FR-012, FR-013, FR-014, FR-015, FR-022, FR-025 (the five deleted symbols), FR-034, FR-035, FR-036 (config-boundary trim; `pkg/agent`'s sites are T067-09), FR-040.
+- **Scenarios:** US-5.AC1–AC8, US-8.AC3 (construction half), US-8.AC4 (factory half), US-9.AC4 (probe-model rule, unit half), E4, E8, E12, DS-3 rows 1–15, DS-2.9/10.
+- **Tests FIRST:** T20 `TestCreateProviderFromConfig_ProtocolDispatch`, T20b `_RetiredModelConstructs`, T21 `_ProtocolChoice`, T22 `_Custom`, T22b `TestCatalogKey_ProviderAndBareModel`, T23 `_UnknownProvider_NoHint`, T24 `TestFactory_NoVendorCases` (AST: case set exact; inner `cli` switch only `cli_kind` literals; no `"custom"` string literal), T24c `TestModelListResolver_PairExactThenUnique`, T25 `TestSeeds_CanonicalProviderIDs`, T26 `TestPickProbeModel_FromCatalog`, T27 `TestDisplayName_FromCatalog`, T28 `TestConfig_ProviderID_TrimNotFold` (config half), `TestValidateKey_OutcomeClassificationUnchanged`, `TestVoiceTranscriber_ConstructsViaProtocolDispatch`, `TestLegacyProvider_ConstructsViaProtocolDispatch`; regression: `factory_provider_test.go`, `factory_test.go`, `fallback_*_test.go` re-keyed.
+- **Fly gate:** `quick`, `lint`, then **`go-test`** (full remote suite — the only task in this list that must pass the full Go gate before integration).
+- **Depends on:** T067-01 (generated `Provider.protocol`/`custom`, free-string probe id), T067-07 (catalog reachable from the factory; `capabilities` gone so no import cycle).
+- **Size:** L (riskiest task — see dependency summary).
+- **Definition of done:** SC-004 (T24 case set exact), `grep -rnE 'case "(z-ai|zhipu|moonshot|qwen|deepseek|groq|mistral|openrouter|gemini|minimax|nvidia|cerebras)' pkg/providers/factory_provider.go` → 0; `grep -rn 'GetDefaultAPIBase\|IsKnownProtocol\|knownProtocols\|ExtractProtocol\|knownDisplayNames\|probeModelDefaults' pkg cmd` → 0 outside historical docs; DS-3 fifteen rows green; remote `go-test` green.
+
+### T067-09 — Agent-side degrade: `needs_provider` per agent, typed pre-turn refusal, unknown-fallback drop, exact id comparison — **P0**
+
+- **Files to modify:** `pkg/agent/instance.go` (`findModelConfigForProvider`: `strings.EqualFold` → exact after `TrimSpace`; `resolveAgentPrimaryProvider`; `buildProviderPool`: primary unknown → agent `needs_provider`, fallback-only unknown → dropped with one WARN naming agent + provider; existing skip-with-WARN retained), `pkg/agent/registry.go` (`NewAgentInstance` loop at ~::88 stays per-agent non-fatal — MAJ-010 confirmation), `pkg/agent/turn.go` / `loop.go` (pre-turn gate **order**: `needs_provider` → `model_unassigned` (ADR-068) → ADR-066 window refusal; emit `LLMError.code = needs_provider`, attribution `config`, WARN, zero upstream requests), `pkg/gateway/rest.go` (`Agent.degraded_reason` emitted on `listAgents`/`getAgent`/`updateAgent`; `Provider.status: unknown-provider` on the provider row with `models: []`; `needs_provider` wins over `needs_model` in copy).
+- **FRs:** FR-015 (no hint in log/API), FR-016, FR-031, FR-036 (`pkg/agent` sites), FR-038 (gate order + typed code).
+- **Scenarios:** US-6.AC1–AC6, DS-8 rows 1–6, DS-5.18, E4 (entity side).
+- **Tests FIRST:** T28 (agent half: `findModelConfigForProvider("ZAI")` misses `zai`), T32 `TestBuildProviderPool_UnknownProvider_Skips`, T33 `TestAgentTurn_NeedsProvider_TypedRefusal` (gate runs before `model_unassigned`), T33b `TestBuildProviderPool_UnknownFallback_DroppedWithWarn`, T33c `TestAgentRepair_PUTProvider_NoRestart`, T41 `TestGatewayBoot_UnknownProvider_NonFatal` (listen ok; A runs; `nope` row `unknown-provider`; boot log, `GET /providers`, `GET /agents` bodies contain no canonical id — SC-010 asserts absence of `zai`, never the echoed user id).
+- **Fly gate:** `quick`, `lint`, then one scoped gateway test at a time (`-run '^TestGatewayBoot_UnknownProvider_NonFatal$' -p 1`).
+- **Depends on:** T067-08 (`ErrUnknownProvider`, catalog membership), T067-01 (`degraded_reason`, `needs_provider` code).
+- **Size:** M.
+- **Definition of done:** DS-8 six rows green; SC-005 (boot reaches listen, typed refusal with 0 upstream, fallback-only unknown runs); SC-010 no-hint proof green.
+
+### T067-10 — REST: `GET /providers/catalog` (ETag/304/503/stale), `GET /providers` configured-only with catalog models, `PUT /providers/{id}` rules, `/health` catalog state, old routes removed — **P0**
+
+- **Files to create:** `pkg/gateway/rest_providers_catalog.go` (serves the pre-serialised pair from T067-04; `ETag: "<sha256>"`, `Cache-Control: private, max-age=0, must-revalidate`; exact `If-None-Match` → 304 empty body; `W/`/unquoted → 200; 401 via `withAuth`; 503 `{"error":"provider catalog unavailable"}` when no catalog), `pkg/gateway/rest_providers_catalog_test.go`.
+- **Files to modify:** `pkg/gateway/rest.go` (`HandleProviders`: configured rows only — the ~25 template `disconnected` rows removed; `models[]` from the catalog for `locality = cloud`, from the live endpoint (`/api/tags` ollama, `/v1/models` otherwise) for `locality = local`, no outbound call for cloud; PUT: unknown id → 400 `unknown provider "<id>"`, `tier: unsupported` → 400 `provider "<id>" is unsupported: <reason>`, custom row requires `api_base` + `protocol ∈ {openai-compatible, anthropic}` else 400, sets `custom: true`; emit ADR-068 zero values `dependents: []`, `backs_default: false`, `auth_method: api_key`; delete the `refreshProviderModels` handler and the `/providers/model-capabilities` handler + `inferProviderName` where superseded), `pkg/gateway/health.go` (or wherever `/health` is assembled — catalog degraded + last refresh error when stale > 14 d or last refresh failed), `pkg/gateway/gateway.go` (route registration).
+- **FRs:** FR-014 (REST half), FR-017, FR-019 (PUT half), FR-020, FR-025 (`GET /providers/model-capabilities`), FR-029, FR-035 (PUT half), FR-037 (`/health`).
+- **Scenarios:** US-7.AC1–AC6, US-8.AC2 (PUT), AC3, AC4, US-9.AC1, AC3, E2 (listed with empty `models`), E7 (503), E9, E10, DS-5 rows 1–9.
+- **Tests FIRST:** T34 `TestRestProvidersCatalog_GET` (200/401/304/503), T34b `TestRestProviders_GET_ConfiguredOnly` (DS-5.4b/4c), T34c `TestRestProvidersCatalog_ETagAtomicAndStale` (quoted strong ETag; `W/`/unquoted → 200; bytes+ETag one pair under concurrent apply `-race`; `stale: true` at 15 days; `/health` degraded), T35 `TestRestProviders_PUT_Unknown_CloudIAM_Custom` (error vocabulary exact), T36 `TestRestProviders_OfflineModelList` (outbound counter 0 — SC-003), T38 `TestRestProviders_Ollama_Live`, T44's 503 assertion, `BenchmarkProvidersCatalogGET` (SC-011: no per-request marshal).
+- **Fly gate:** `quick`, `lint`, `contracts`, one scoped gateway test at a time.
+- **Depends on:** T067-01, T067-07 (catalog wired into the gateway), T067-08 (PUT uses the custom/unknown rule and `Custom` flag).
+- **Size:** L.
+- **Definition of done:** DS-5 rows 1–9 green; Machine-Verifiable "HTTP" and "HTTP caching" blocks asserted verbatim; `GET /providers` with 2 configured providers and a 190-provider snapshot returns exactly 2 rows.
+
+### T067-11 — `POST /providers/{id}/entitlement` per protocol, intersect + annotate, process-lifetime cache keyed on the ref name — **P1**
+
+- **Files to create:** `pkg/gateway/rest_providers_entitlement.go` (per protocol: `openai-compatible`/`google` → `GET {api}/models` Bearer; `anthropic` → `GET {api}/v1/models` with `x-api-key` + `anthropic-version`; `ollama` → `/api/tags`; `cli` or `custom: true` → 409 `entitlement not supported for this protocol`; no resolvable key → 422 (`describeCredentialResolutionError` vocabulary); upstream non-2xx → 502 `{"error":"could not fetch upstream model list: status <n>"}`, nothing cached; result = catalog list annotated `entitled` + `limits: "known"`, extra upstream models `limits: "unknown"`, `checked_at`, `cached`; cache key `SHA-256(providerID + ":" + credentialRefName)`; eviction on provider DELETE (ADR-068 FR-010 step 3b — hook exposed here), on a PUT that changes `api_key`/`api_key_ref` (not on an `updated_at`-only PUT), and on catalog refresh (T067-04's hook); rate-limited like `/test`; SSRF-safe client retained (SEC-24)), `pkg/gateway/rest_providers_entitlement_test.go`.
+- **Files to modify:** `pkg/gateway/rest.go` (PUT eviction call), `pkg/providers/validate.go` (`FetchModels` generalised per protocol, used here and by local listing only).
+- **FRs:** FR-021, FR-037 (cache invalidation half).
+- **Scenarios:** US-9.AC2 (outline, 6 rows; intersect-and-cache; 422; 502), E10, DS-5 rows 10, 11, 11b, 11c.
+- **Tests FIRST:** T37 `TestRestProviders_Entitlement_PerProtocol` (6-row outline; cache hit on 2nd call with same `checked_at`; stub counter stays 1, becomes 2 after refresh; evicted on DELETE and key-changing PUT; not evicted on `updated_at`-only PUT; 422; 502 on stub 429 with nothing cached).
+- **Fly gate:** `quick`, `lint`, one scoped gateway test.
+- **Depends on:** T067-10 (route family, PUT path), T067-04 (refresh eviction hook).
+- **Size:** M.
+- **Definition of done:** DS-5 rows 10–11c green; the cache never stores or hashes a secret value; `refresh-models` handler and route gone (removed in T067-01/T067-10).
+
+### T067-12 — Key validation and onboarding probe: catalog-gated free-string id, probe model from the catalog, custom rule, CLI onboard — **P0**
+
+- **Files to modify:** `pkg/gateway/rest_onboarding.go` (probe path: `id` validated at runtime against the catalog — `zai` runs, `z-ai` → 400 `unknown provider "z-ai"` with no hint, `amazon-bedrock` → 400 containing `cloud-iam`; custom rule: `api_base` + `protocol` required iff `id` is not a catalog id; `auth: api_key` without `api_key` → 400; `FetchModels` pre-fetch removed from the probe path; two-phase commit + rate limit unchanged), `pkg/gateway/rest.go` (`/providers/{id}/test` uses the catalog probe model, fall-through ≤ 3 on `model_not_found`; `classify`/`BuildMessage` unchanged), `cmd/omnipus/internal/onboard/onboard.go` (same gate against the embedded snapshot, A-21), `pkg/gateway/provider_validation_test.go` (re-keyed).
+- **FRs:** FR-019 (probe half), FR-022 (integration half), FR-023 (runtime validation), FR-035 (probe + CLI halves), FR-011 (probe ids).
+- **Scenarios:** US-9.AC4, US-10.AC1–AC4, DS-5 rows 12–17.
+- **Tests FIRST:** T39 `TestRestProviders_Test_ProbeFromCatalog` (1 POST, 0 `GET /models`; 3-attempt bound; four 404s → Unreachable after 3 POSTs), T40 `TestOnboarding_Probe_FreeStringID` (zai / z-ai / my-proxy with and without `api_base`+`protocol` / bedrock / empty id / 65-char id / missing `api_key`), regression: onboarding two-phase-commit tests, `TestValidateKey_OutcomeClassificationUnchanged` (from T067-08) still green.
+- **Fly gate:** `quick`, `lint`, one scoped gateway test.
+- **Depends on:** T067-08 (probe-model rule, custom rule, `ErrUnknownProvider`), T067-10 (shared 400 vocabulary), T067-01 (free-string `ProbeProviderRequest`).
+- **Size:** M.
+- **Definition of done:** DS-5 rows 12–17 green; the probe path issues zero `GET /models` for catalog providers; onboarding stays a two-phase commit with its rate limit.
+
+### T067-13 — SPA: delete the generated catalog constant and the alias resolver; re-key the hint map; vitest coverage of the `GET` and the free-string probe id — **P0**
+
+- **Files to delete:** `src/lib/generated/providerCatalog.ts` (7 importers as of 2026-08-23 — rewritten by ADR-068 B5, X-23), `src/lib/providerMigration.ts` and its tests; `src/lib/agents/providerCatalog.ts` only if ADR-068 B5 has replaced its consumers (**unverified** whether it survives as the `GET` client — the implementer confirms against B5's state).
+- **Files to modify:** `src/lib/constants.ts` (key-format hint map keyed by catalog id — values for `anthropic`, `openai`, `groq`, `openrouter` unchanged), `src/lib/api.ts` (catalog `GET` client consuming the generated `ProvidersCatalog` type only; ETag re-validation on Settings open and every 15 min, A-1), `catalog-consistency.test.ts` (rewritten against the `GET`).
+- **Files to create:** `src/lib/__tests__/providersCatalog.test.ts` (T45), onboarding probe-id vitest (T46).
+- **FRs:** FR-011 (hint map), FR-017 (client cache rule), FR-025 (two SPA deletions).
+- **Scenarios:** US-11.AC2, US-7.AC5 (zod parse), US-10.AC2 (400 rendered).
+- **Tests FIRST:** T45 `providersCatalog.test.ts` (zod parse of the fixture; ETag cache rule), T46 onboarding probe-id test (free-string id submitted; 400 rendered); gate: `npm run typecheck`, `npx vitest run`.
+- **Fly gate:** `spa`.
+- **Depends on:** T067-01 (generated TS/zod), T067-10 (real `GET` for the contract test fixture), **ADR-068 B5 picker task (cross-spec)** — the deletions break `npm run typecheck` until the 7 importers are rewritten; land this task immediately after B5's importer rewrite, never before.
+- **Size:** S.
+- **Definition of done:** `ls src/lib/providerMigration.ts src/lib/generated/providerCatalog.ts` → both absent; `npm run typecheck` and `npx vitest run` exit 0; no SPA file imports a hand-written provider catalog.
+
+### T067-14 — Greenfield and source-scan enforcement, CI wiring, merged-branch gates — **P0**
+
+- **Files to create:** `pkg/providers/greenfield_test.go` (T29 regex over `pkg/providers`, `pkg/config`; allow only the `retired` status token in `pkg/providers/catalog` and its tests, and the search-only `aliases[]` field name), `pkg/providers/catalog/single_embed_test.go` (exactly one `//go:embed` of a catalog JSON under `pkg/providers`; `ls pkg/providers/capabilities` fails).
+- **Files to modify:** `.github/workflows/pr.yml` (T47 contracts gate already runs `make verify-contracts`; add T48/T49 steps if not landed in T067-06), `scripts/no-removed-providers.allow` (ADR-068-owned file — add this spec, the two review files and ADR-067 for the historical `claude-cli` literal in the disposition table, X-34), `deploy/ci-worker/runci.sh` `lint` gate if a new script is introduced.
+- **FRs:** FR-005, FR-011 (no alias table), FR-025, FR-030 (`aliases[]` never resolved — asserted by the scan), FR-015 (no hint literals).
+- **Scenarios:** US-11.AC1, US-11.AC2 (CI half), US-4.AC4, US-5.AC5 (grep form).
+- **Tests FIRST:** T29 `TestGreenfield_NoAliasMachinery`, the `go:embed` uniqueness scan, SC-008 and SC-009 as shell assertions in CI; SC-006 full quality-gate run (`gofmt`, `golangci-lint --build-tags=goolm,stdjson`, tagged Go tests, `govulncheck`, `npm run typecheck`, `vitest`, `make verify-contracts`) via `gh workflow run pr.yml --ref feat/context-budget-and-tool-result-routing` and Fly `all`; exit codes read without a pipe (false-green-patterns doc).
+- **Fly gate:** `lint`, then `all` (once, as the B1 stream exit).
+- **Depends on:** T067-02 … T067-13 (everything in this spec); the grep gates are re-run on the **merged** branch after S68 and S66 land (X-34).
+- **Size:** S.
+- **Definition of done:** SC-006, SC-008, SC-009 green on the branch head and again after merge; `grep -ri antigravity pkg cmd src contracts config docs` returns only historical decision records (ADR-067 §9 exit proof 6 — the deletion itself is ADR-068's).
+
+---
+
+## Dependency summary
+
+**Serial spine (must land in this order):**
+`T067-01 (A-CONTRACT)` → `T067-02` → `T067-03` → `T067-04` → `T067-06` (needs B2's release) → `T067-07` → **`T067-08` (atomic collapse)** → `T067-09` → `T067-10` → `T067-12` → `T067-14`.
+
+**Parallel groups:**
+- `T067-02` can start **alongside** `T067-01` (pure package, fixture-only; no generated types needed).
+- `T067-05` (B2, the assembly repository) runs **in parallel with** `T067-02`–`T067-04` from plan step 0.4 onward; it must publish before `T067-06` can be written. If B2 is late, `T067-06`, `T067-07` and everything after them block — this is the design's hard edge (FR-006 forbids a fixture as the snapshot), not a schedule choice.
+- After `T067-10`: `T067-11` (entitlement) and `T067-12` (probe) are **independent of each other** and can run in parallel; both precede `T067-14`.
+- `T067-13` (SPA) waits on ADR-068's B5 importer rewrite and on `T067-10`; it is otherwise independent of `T067-09`/`T067-11`/`T067-12`.
+- Cross-spec: ADR-068 B3's provider constructors and ADR-066 B4's catalog rung both queue behind `T067-08`; ADR-066's `Window()` consumer can be developed against `T067-02`'s package API before that.
+
+**Riskiest single task: `T067-08` (the atomic factory collapse + helper deletions).** The spec's own impact assessment (§3): `CreateProviderFromConfig` is **HIGH** — every LLM call path constructs through it (d=1: `instance.go` `NewAgentInstance`/`buildProviderPool`, `loop.go` pool rebuild, `session_end.go` recap pool, `legacy_provider.go`, `voice/audio_model_transcriber.go`; d=2: every agent turn, fallback chain, recap, voice transcription, `rest.go` rewire-after-save); `GetDefaultAPIBase`/`IsKnownProtocol`/`knownProtocols` are **HIGH** — 13 call sites across REST/CLI/tools (d=1: `rest.go` `HandleProviders`/`refreshProviderModels`/`/test`/PUT, `rest_onboarding.go`, `onboard.go`, `sysagent/tools/provider.go`, `catalog.go`; d=2: onboarding two-phase commit, provider test, `system.provider` tool). Grep on 2026-08-23 counts 16 + 7 + 7 + 6 + 4 + 1 + 1 + 5 non-test references across `factory_provider.go`, `rest.go`, `rest_onboarding.go`, `onboard.go`, `model_resolution.go`, `sysagent/tools/provider.go`, `voice/transcriber.go`, `catalog/catalog.go`. The spec's mitigation is structural: the deletions and the table-backed replacement are one change so the compiler rejects any partial state (§1.1 "Structural"); T24 prevents a vendor case from returning; the plan (§7) requires the GitNexus impact report attached and the Fly `go-test` gate green **before** the integrator rebases it. Note for the implementer: the GitNexus registry currently indexes a different checkout (`wt-library-improvements`) — re-index this worktree (plan step 0.1) before running `impact` on `CreateProviderFromConfig`, or the blast radius will be read from the wrong branch.
+
+**Second-riskiest:** `T067-01` — not for code size but because every later task in three specs compiles against it, and a generated-type change that breaks `quick` (enum → string on `ProbeProviderRequest.id`; removed `ModelCapabilities`) must be repaired inside the same commit.
