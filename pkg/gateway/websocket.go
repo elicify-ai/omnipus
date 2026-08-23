@@ -4272,6 +4272,37 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 			}
 			sendConnGenFrame(wc, string(generated.WsFrameTypeTaskRunStatus), runF)
 
+		case agent.EventKindToolResultProjection:
+			// ADR-066 D5 / FR-022 (T066-12): a tool result this session already
+			// received was emptied in place in the model's window. Push the
+			// typed tool_result_projection frame so the SPA re-renders the
+			// matching tool call (the mark only under Verbose chat); on reload
+			// the same state arrives as ToolCall.content_state on the
+			// transcript. Session-scoped: same matchesEvent / session-id
+			// contract as tool_call_result (ToolExecEndPayload).
+			p, ok := evt.Payload.(agent.ToolResultProjectionPayload)
+			if !ok || !matchesEvent(p.ChatID, p.SessionID) {
+				continue
+			}
+			projSID := p.SessionID
+			if projSID == "" {
+				projSID = sessionIDForChat(p.ChatID)
+			}
+			projF := generated.ToolResultProjectionFrame{
+				Type:         string(generated.WsFrameTypeToolResultProjection),
+				SessionId:    projSID,
+				ToolCallId:   string(p.ToolCallID),
+				ArchiveLine:  p.ArchiveLine,
+				ContentState: p.ContentState,
+			}
+			if p.Mark != "" {
+				mark := p.Mark
+				projF.Mark = &mark
+			}
+			if producingSID := string(p.ProducingSessionID); producingSID != "" && producingSID != projSID {
+				projF.ProducingSessionId = &producingSID
+			}
+			sendConnGenFrame(wc, string(generated.WsFrameTypeToolResultProjection), projF)
 		case agent.EventKindLLMRequest, agent.EventKindLLMDelta, agent.EventKindLLMResponse,
 			agent.EventKindLLMRetry, agent.EventKindContextCompress,
 			agent.EventKindToolExecSkipped, agent.EventKindSteeringInjected, agent.EventKindFollowUpQueued,

@@ -91,6 +91,20 @@ func TestProjection_PureFunction(t *testing.T) {
 		assert.Equal(t, small, out[5].Content, "sibling result untouched")
 	})
 
+	t.Run("emptied view == the live emptying pass, byte for byte (B-22)", func(t *testing.T) {
+		live := append([]providers.Message(nil), history...)
+		emptied := emptyOldestFirst(live, eligibleToolResults(live, lineOf, nil), lineOf, archive,
+			func([]providers.Message) bool { return false })
+		require.Len(t, emptied, 1, "only c1 is eligible: c2 and c3 are the last assistant step's results (the floor set)")
+		assert.Equal(t, "c1", emptied[0].ToolCallID)
+		set := memory.ProjectionSet{}
+		for _, e := range emptied {
+			set[memory.ProjectionKey{ToolCallID: e.ToolCallID, ArchiveLine: e.ArchiveLine}] = memory.ProjectionEmptied
+		}
+		out := projectMessages(history, lineOf, set, pc)
+		assert.Equal(t, live, out, "one function, both views: the reload assembly equals what the provider saw")
+	})
+
 	t.Run("composite key: same id on another line is not projected", func(t *testing.T) {
 		set := memory.ProjectionSet{{ToolCallID: "c3", ArchiveLine: 99}: memory.ProjectionEmptied}
 		out := projectMessages(history, lineOf, set, pc)

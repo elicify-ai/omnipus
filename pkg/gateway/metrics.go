@@ -175,6 +175,12 @@ func (a *restAPI) HandleMetrics(w http.ResponseWriter, r *http.Request) {
 	sb.WriteString("# TYPE omnipus_tool_result_large_total counter\n")
 	fmt.Fprintf(&sb, "omnipus_tool_result_large_total %d\n", agent.ToolResultLargeTotal())
 
+	// omnipus_context_empties_total (ADR-066 D5, FR-023 / B-27b): tool
+	// results emptied in place by the D5 pass, summed over every pass.
+	sb.WriteString("# HELP omnipus_context_empties_total Total tool results emptied in place to fit the context budget.\n")
+	sb.WriteString("# TYPE omnipus_context_empties_total counter\n")
+	fmt.Fprintf(&sb, "omnipus_context_empties_total %d\n", agent.ContextEmptiesTotal())
+
 	// omnipus_tool_mcp_collision_total
 	sb.WriteString("# HELP omnipus_tool_mcp_collision_total Total MCP tool name collisions.\n")
 	sb.WriteString("# TYPE omnipus_tool_mcp_collision_total counter\n")

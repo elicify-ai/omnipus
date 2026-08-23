@@ -18,6 +18,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/memory"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 )
 
@@ -257,15 +258,27 @@ func TestWindowTrim_SingleHugeTurn_KeepsLastUser(t *testing.T) {
 	al, _ := buildTrimTestAgentLoop(t, cw, mt)
 	const sk = "t3-session"
 
-	// One massive Turn: 2000 chars of user content alone vastly exceeds window.
+	// One massive Turn: three tool steps of 2000 chars each vastly exceed
+	// the window on their own. ADR-066 register #3 / B-21b: the floor keeps
+	// this turn whole, then D5 empties its results oldest-first — all but
+	// the floor set (the last step's result, tc3).
 	hugeContent := strings.Repeat("z", 2000)
-	history := []providers.Message{
+	history := make([]providers.Message, 0, 9)
+	history = append(history,
 		trimTestMsg("user", "small earlier message"),
 		trimTestMsg("assistant", "small response"),
-		trimTestMsg("user", hugeContent),
-		trimTestMsg("assistant", hugeContent),
+		trimTestMsg("user", "do three big things"),
+	)
+	for _, id := range []string{"tc1", "tc2", "tc3"} {
+		history = append(history,
+			providers.Message{Role: "assistant", ToolCalls: []providers.ToolCall{
+				{ID: id, Name: "some_tool", Function: &providers.FunctionCall{Name: "some_tool", Arguments: "{}"}},
+			}},
+			providers.Message{Role: "tool", ToolCallID: id, Content: hugeContent},
+		)
 	}
 	seedHistory(t, al, sk, history)
+	archiveBefore := archiveLineCount(t, al, sk)
 
 	window, result, ok := windowAfterTrim(t, al, sk)
 	require.True(t, ok, "windowTrim must return true even in last-resort path")
@@ -276,6 +289,22 @@ func TestWindowTrim_SingleHugeTurn_KeepsLastUser(t *testing.T) {
 		"FR-003 floor: window[0] must be the last user message")
 	assert.Greater(t, result.DroppedMessages, 0,
 		"DroppedMessages must be positive")
+	assert.Len(t, window, 7, "the kept turn is whole: user + 3 × (assistant, tool)")
+
+	// B-21b: Skip stopped at the floor (the kept turn's user message) — the
+	// emptying that followed is not a cut and moved it no further.
+	agent := al.GetRegistry().GetDefaultAgent()
+	skip := archiveLineCount(t, al, sk) - len(window)
+	assert.Equal(t, 2, skip, "Skip = the floor's position, unchanged by emptying")
+	assert.Equal(t, archiveBefore, archiveLineCount(t, al, sk), "B-23: no archive line changes")
+
+	// Marks present: tc1 and tc2 emptied (oldest first), tc3 is the floor
+	// set and stays. Persisted state keyed by the ARCHIVE line (skip + idx).
+	pm := agent.Sessions.Projection(sk)
+	assert.Equal(t, memory.ProjectionEmptied, pm.Entries[memory.ProjectionKey{ToolCallID: "tc1", ArchiveLine: 4}])
+	assert.Equal(t, memory.ProjectionEmptied, pm.Entries[memory.ProjectionKey{ToolCallID: "tc2", ArchiveLine: 6}])
+	_, tc3Marked := pm.Entries[memory.ProjectionKey{ToolCallID: "tc3", ArchiveLine: 8}]
+	assert.False(t, tc3Marked, "the floor set is never emptied")
 	// Must terminate — not an infinite loop (test itself would hang if it looped).
 }
 
@@ -571,6 +600,9 @@ func TestDecommission_NoForceCompressionSymbols(t *testing.T) {
 		"context_budget.go",
 		"instance.go",
 		"resolve_window.go",
+		"turn.go",
+		"steering.go",
+		"empty_in_place.go",
 	}
 
 	// These are the patterns that must NOT appear as identifiers or string
@@ -579,14 +611,18 @@ func TestDecommission_NoForceCompressionSymbols(t *testing.T) {
 	forbiddenPatterns := []string{
 		"Emergency compression dropped",
 		"splitHistoryAtTurnMidpoint(",
-		// ADR-066 SC-009 (T066-09): the retired window fallbacks. The
-		// refreshRestorePointFromSession / restorePointHistory half of the
-		// SC-009 grep is added by T066-12, which deletes those symbols.
+		// ADR-066 SC-009 (T066-09): the retired window fallbacks.
 		"maxTokens * 4",
 		"contextWindow = 128000",
 		"newContextWindow = 128000",
 		"SummarizeTokenPercent",
 		"Defaults.ContextWindow",
+		// ADR-066 SC-009 (T066-12, FR-020): the dead "refreshed" restore
+		// point. The restore point is the turn-start triple, captured once
+		// in newTurnState and never moved.
+		"refreshRestorePointFromSession",
+		"restorePointHistory",
+		"captureRestorePoint",
 	}
 
 	// func forceCompression must not exist as a method definition.

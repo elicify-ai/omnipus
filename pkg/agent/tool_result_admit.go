@@ -364,7 +364,6 @@ func (al *AgentLoop) admitToolResult(ts *turnState, adm toolResultAdmission) adm
 	persist := ts != nil && ts.agent != nil && ts.agent.Sessions != nil && !ts.opts.NoHistory
 	if persist {
 		ts.agent.Sessions.AddFullMessage(ts.sessionKey, archived)
-		ts.recordPersistedMessage(archived)
 		if overCap {
 			if read, err := ts.agent.Sessions.ReadArchive(context.Background(), ts.sessionKey); err == nil && len(read) > 0 {
 				archive = read

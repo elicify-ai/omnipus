@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"reflect"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -13,6 +12,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/memory"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/providers/protocoltypes"
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -201,8 +201,20 @@ type turnState struct {
 	// possibility of permanently "bricking" a session's ability to delegate.
 	cancelling atomic.Bool
 
-	restorePointHistory []providers.Message
-	persistedMessages   []providers.Message
+	// initialEmptiedSet is the session's WHOLE projection set
+	// ((tool_call_id, archive_line) → capped | emptied) as of turn start —
+	// the third member of the turn-start restore triple beside
+	// initialArchiveLen and initialHistoryLength (ADR-066 FR-020). Captured
+	// once in newTurnState and never moved during the turn; restoreSession
+	// and HardAbort hand it to RollbackAppended so an aborted turn's
+	// emptying is undone together with its archive tail and its Skip
+	// advance. nil when the store had nothing projected (or no store).
+	initialEmptiedSet memory.ProjectionSet
+	// emptiedTranscriptPrev holds, for every transcript tool_call record the
+	// D5 pass rewrote during this turn (content_state emptied + projected
+	// result), the record's PREVIOUS state — so an abort can put the
+	// transcript back in step with the rolled-back window. Guarded by mu.
+	emptiedTranscriptPrev []session.ToolCallProjectionUpdate
 
 	// SubTurn support
 	depth          int                    // SubTurn depth (0 for root turn)
@@ -620,13 +632,19 @@ func newTurnState(agent *AgentInstance, opts processOptions, scope turnEventScop
 		finishedChan: make(chan struct{}),
 	}
 
-	// Bind session store and capture initial history/archive lengths for rollback.
+	// Bind session store and capture the turn-start restore triple (ADR-066
+	// FR-020): initialHistoryLength, initialArchiveLen and initialEmptiedSet.
 	// initialArchiveLen is the number of physical lines in the archive at turn
 	// start; used by restoreSession and HardAbort to roll back only the messages
 	// appended during this turn (Skip-preserving rollback via RollbackAppended).
+	// initialEmptiedSet is the projection state at turn start, restored in
+	// the same write. All three are captured ONCE, here, and never moved.
 	if agent != nil && agent.Sessions != nil {
 		ts.session = agent.Sessions
 		ts.initialHistoryLength = len(agent.Sessions.GetHistory(opts.SessionKey))
+		if entries := agent.Sessions.Projection(opts.SessionKey).Entries; len(entries) > 0 {
+			ts.initialEmptiedSet = entries.Clone()
+		}
 		if archived, err := agent.Sessions.ReadArchive(context.Background(), opts.SessionKey); err == nil {
 			ts.initialArchiveLen = len(archived)
 		} else {
@@ -1483,30 +1501,29 @@ func (ts *turnState) eventMeta(source, tracePath string) EventMeta {
 	}
 }
 
-func (ts *turnState) captureRestorePoint(history []providers.Message) {
+// revertEmptiedTranscript puts back the PREVIOUS content_state / result of
+// every transcript tool_call record the D5 pass rewrote during this turn
+// (ADR-066 FR-020/FR-022): the window's projection set has just been rolled
+// back to turn start, so the transcript must stop claiming those results are
+// emptied. Best-effort; idempotent (the list is cleared once applied).
+func (ts *turnState) revertEmptiedTranscript() {
 	ts.mu.Lock()
-	defer ts.mu.Unlock()
-	ts.restorePointHistory = append([]providers.Message(nil), history...)
-}
-
-func (ts *turnState) recordPersistedMessage(msg providers.Message) {
-	ts.mu.Lock()
-	defer ts.mu.Unlock()
-	ts.persistedMessages = append(ts.persistedMessages, msg)
-}
-
-func (ts *turnState) refreshRestorePointFromSession(agent *AgentInstance) {
-	history := agent.Sessions.GetHistory(ts.sessionKey)
-
-	ts.mu.RLock()
-	persisted := append([]providers.Message(nil), ts.persistedMessages...)
-	ts.mu.RUnlock()
-
-	if matched := matchingTurnMessageTail(history, persisted); matched > 0 {
-		history = append([]providers.Message(nil), history[:len(history)-matched]...)
+	prev := ts.emptiedTranscriptPrev
+	ts.emptiedTranscriptPrev = nil
+	ts.mu.Unlock()
+	if len(prev) == 0 || ts.transcriptStore == nil || ts.transcriptSessionID == "" {
+		return
 	}
-
-	ts.captureRestorePoint(history)
+	// Oldest row first: a record emptied twice in one turn (impossible today,
+	// the pass skips already-emptied entries — defensive) must end on its
+	// ORIGINAL state, so later rows are overwritten by earlier ones.
+	for i, j := 0, len(prev)-1; i < j; i, j = i+1, j-1 {
+		prev[i], prev[j] = prev[j], prev[i]
+	}
+	if _, err := ts.transcriptStore.UpdateToolCallProjections(ts.transcriptSessionID, prev); err != nil {
+		logger.WarnCF("agent", "abort: transcript content_state revert failed",
+			map[string]any{"session_id": ts.transcriptSessionID, "count": len(prev), "error": err.Error()})
+	}
 }
 
 func (ts *turnState) restoreSession(agent *AgentInstance) error {
@@ -1538,11 +1555,11 @@ func (ts *turnState) restoreSession(agent *AgentInstance) error {
 	// turns that preceded this turn (CRITICAL 1, path 2).
 	//
 	// The third member of the turn-start triple (ADR-066 FR-020) is the
-	// projection set as of turn start. Until T066-12 captures it in
-	// newTurnState (turnState.initialEmptiedSet), nil is passed: no result
-	// is ever emptied before T066-12 lands, so "nothing emptied at turn
-	// start" is exact, and the store keeps pre-turn capped entries on its own.
-	agent.Sessions.RollbackAppended(ts.sessionKey, targetLen, targetSkip, nil)
+	// projection set as of turn start (turnState.initialEmptiedSet): every
+	// result this turn emptied is un-emptied in the same write, and entries
+	// whose archive line is ≥ targetLen go with the truncated tail.
+	agent.Sessions.RollbackAppended(ts.sessionKey, targetLen, targetSkip, ts.initialEmptiedSet)
+	ts.revertEmptiedTranscript()
 
 	// M4 mirror: verify the rollback actually took effect. RollbackAppended is
 	// fire-and-forget (no error return). Re-read the archive and confirm the
@@ -1571,16 +1588,6 @@ func (ts *turnState) restoreSession(agent *AgentInstance) error {
 	}
 
 	return agent.Sessions.Save(ts.sessionKey)
-}
-
-func matchingTurnMessageTail(history, persisted []providers.Message) int {
-	maxMatch := min(len(history), len(persisted))
-	for size := maxMatch; size > 0; size-- {
-		if reflect.DeepEqual(history[len(history)-size:], persisted[len(persisted)-size:]) {
-			return size
-		}
-	}
-	return 0
 }
 
 func (ts *turnState) interruptHintMessage() providers.Message {

@@ -185,3 +185,32 @@ func TestContract_ToolCallResultFrame_ADR066FamilyMembersDiscriminated(t *testin
 			"string-error object must satisfy exactly one $ref; catch-all excludes it")
 	})
 }
+
+// ── ToolResultProjectionFrame — ADR-066 D5 / FR-022 (T066-12, spec test 44, B-26)
+// Traces to: contracts/components/schemas/ToolResultProjectionFrame.yaml
+
+func TestContract_ToolResultProjectionFrame_Populated(t *testing.T) {
+	mark := `{"error":"tool_result_recall_mark","content_state":"emptied"}`
+	producing := "child-sess"
+	mustPassComponent(t, "ToolResultProjectionFrame", ToolResultProjectionFrame{
+		Type:               "tool_result_projection",
+		SessionId:          "sess-1",
+		ToolCallId:         "call-9",
+		ArchiveLine:        12,
+		ContentState:       "emptied",
+		Mark:               &mark,
+		ProducingSessionId: &producing,
+	})
+}
+
+func TestContract_ToolResultProjectionFrame_FullIsNeverPushed(t *testing.T) {
+	mustFailComponent(t, "ToolResultProjectionFrame", ToolResultProjectionFrame{
+		Type: "tool_result_projection", SessionId: "sess-1", ToolCallId: "call-9", ArchiveLine: 0,
+		ContentState: "full",
+	}, "content_state enum is capped|emptied — full is the transcript's default, never a pushed state")
+}
+
+func TestContract_ToolResultProjectionFrame_ZeroValue(t *testing.T) {
+	mustFailComponent(t, "ToolResultProjectionFrame", ToolResultProjectionFrame{},
+		"zero value has empty required strings and the wrong type const")
+}

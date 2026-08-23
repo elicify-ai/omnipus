@@ -74,7 +74,10 @@ func projectMessages(
 				return capMarkOrEmpty(tool, m.ToolCallID, line, full, pc.archive)
 			})
 		case memory.ProjectionEmptied:
-			mark, err := buildRecallMark("emptied", tool, m.ToolCallID, line, m.Content, pc.archive)
+			// Size from the archive line (the full result), not from the
+			// handed-in copy — same source the live pass uses
+			// (empty_in_place.go's markSourceContent), same bytes.
+			mark, err := buildRecallMark("emptied", tool, m.ToolCallID, line, markSourceContent(m, line, pc.archive), pc.archive)
 			if err != nil {
 				// buildRecallMark already reported the marshal failure. An
 				// empty content is still "emptied" — the window must not

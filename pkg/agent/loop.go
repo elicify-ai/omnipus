@@ -8105,7 +8105,6 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 		// cleaned so the LLM does not see dangling unanswered tool_call entries.
 		history = RecoverOrphanedToolCalls(ts.agent.Sessions, ts.sessionKey, al.auditLogger)
 	}
-	ts.captureRestorePoint(history)
 
 	// Site-1: initial assembly (CRITICAL 2 — error handled inside assembleMessages).
 	messages := al.assembleMessages(
@@ -8177,7 +8176,6 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 						RemainingMessages: compression.RemainingMessages,
 					},
 				)
-				ts.refreshRestorePointFromSession(ts.agent)
 			}
 			// Site-2: post-proactive-trim assembly.
 			newHistory := ts.agent.Sessions.GetHistory(ts.sessionKey)
@@ -8209,7 +8207,6 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 		} else {
 			ts.agent.Sessions.AddMessage(ts.sessionKey, rootMsg.Role, rootMsg.Content)
 		}
-		ts.recordPersistedMessage(rootMsg)
 	}
 
 	ts.agent.mu.RLock()
@@ -8343,7 +8340,6 @@ turnLoop:
 					// Persist the original (unresolved) message to session history to preserve
 					// compact media refs; resolved (base64) form is only used for the LLM request.
 					ts.agent.Sessions.AddFullMessage(ts.sessionKey, pm)
-					ts.recordPersistedMessage(pm)
 				}
 				logger.InfoCF("agent", "Injected steering message into context",
 					map[string]any{
@@ -8421,7 +8417,6 @@ turnLoop:
 			syntheticDenyMsg := providers.Message{Role: "system", Content: denyMsg}
 			if !ts.opts.NoHistory {
 				ts.agent.Sessions.AddFullMessage(ts.sessionKey, syntheticDenyMsg)
-				ts.recordPersistedMessage(syntheticDenyMsg)
 			}
 			// ADR-058 §3.2/§10.A3: this branch used to also invoke FR-084's
 			// per-turn synthetic-deny counter-and-abort helper before
@@ -9167,7 +9162,6 @@ turnLoop:
 									RemainingMessages: compression.RemainingMessages,
 								},
 							)
-							ts.refreshRestorePointFromSession(ts.agent)
 							// Site-3: post-timeout-trim assembly.
 							newHistory := ts.agent.Sessions.GetHistory(ts.sessionKey)
 							messages = al.assembleMessages(turnCtx, ts, newHistory, "", nil, activeSkillNames(ts.agent, ts.opts))
@@ -9307,7 +9301,6 @@ turnLoop:
 							RemainingMessages: compression.RemainingMessages,
 						},
 					)
-					ts.refreshRestorePointFromSession(ts.agent)
 				} else {
 					// C3: windowTrim returned ok=false (nothing to trim). Mark the
 					// flag so the NEXT retry attempt will break rather than burning more
@@ -9657,7 +9650,6 @@ turnLoop:
 		messages = append(messages, assistantMsg)
 		if !ts.opts.NoHistory {
 			ts.agent.Sessions.AddFullMessage(ts.sessionKey, assistantMsg)
-			ts.recordPersistedMessage(assistantMsg)
 		}
 
 		// Bug #416 fix: persist the narration text the LLM emitted alongside
@@ -10889,7 +10881,6 @@ turnLoop:
 	if !ts.opts.NoHistory {
 		finalMsg := providers.Message{Role: "assistant", Content: finalContent}
 		ts.agent.Sessions.AddMessage(ts.sessionKey, finalMsg.Role, finalMsg.Content)
-		ts.recordPersistedMessage(finalMsg)
 		if err := ts.agent.Sessions.Save(ts.sessionKey); err != nil {
 			turnStatus = TurnEndStatusError
 			// Wave 1: never surface raw err.Error() (session-save is a
@@ -11506,6 +11497,33 @@ func (al *AgentLoop) windowTrim(agent *AgentInstance, sessionKey string) (compre
 
 	toolDefsTokens := al.sentToolSurfaceTokens(agent, sessionKey)
 
+	// ADR-066 FR-019: measure the window AS THE PROVIDER SEES IT. GetHistory
+	// returns the archive's raw tail; results the choke point capped or an
+	// earlier pass emptied are projected only at assembly. Counting their
+	// full content here would over-evict (and, on the floor path, re-empty
+	// results that are already marks). One archive read serves the
+	// projection, the floor-path emptying below and the M5 stat.
+	archive, archErr := agent.Sessions.ReadArchive(context.Background(), sessionKey)
+	if archErr != nil {
+		logger.DebugCF("agent", "windowTrim: ReadArchive failed; window measured unprojected, no floor emptying",
+			map[string]any{"session_key": sessionKey, "error": archErr.Error()})
+	}
+	measured := window
+	lineOf := func(int) int { return -1 }
+	if archErr == nil {
+		lineOf = archiveLineResolver(archive, window)
+		if pm := agent.Sessions.Projection(sessionKey); len(pm.Entries) > 0 {
+			var cs config.ContextSettings
+			if cfg := al.GetConfig(); cfg != nil {
+				cs = cfg.Context
+			}
+			measured = projectMessages(window, lineOf, pm.Entries, projectionContext{
+				policy:  capPolicyFor(cs, agentContextBudget(agent)),
+				archive: archive,
+			})
+		}
+	}
+
 	// Recall span tokens — updated after a potential drop below.
 	recallSpan := al.activeRecallSpan(sessionKey)
 	recallSpanTokens := 0
@@ -11525,7 +11543,7 @@ func (al *AgentLoop) windowTrim(agent *AgentInstance, sessionKey string) (compre
 
 	// FR-019 drop-span-first: if an active span exists and we're over budget,
 	// drop it and re-check. Only evict real window Turns if still over budget.
-	currentWindowTokens := sumMessageTokens(window)
+	currentWindowTokens := sumMessageTokens(measured)
 	if recallSpan != nil && (currentWindowTokens+toolDefsTokens+recallSpanTokens > budget) {
 		al.dropRecallSpan(sessionKey, "pressure")
 		recallSpanTokens = 0
@@ -11555,7 +11573,7 @@ func (al *AgentLoop) windowTrim(agent *AgentInstance, sessionKey string) (compre
 			// Boundary at 0 keeps everything — not a useful cut.
 			continue
 		}
-		suffix := window[b:]
+		suffix := measured[b:]
 		suffixTokens := sumMessageTokens(suffix)
 		if suffixTokens+toolDefsTokens+recallSpanTokens <= budget {
 			cutIdx = b
@@ -11574,6 +11592,7 @@ func (al *AgentLoop) windowTrim(agent *AgentInstance, sessionKey string) (compre
 	// turns (SC-001). The floor keeps window[lastUserIdx:] — the user message and
 	// any following assistant/tool messages — not just the bare user message.
 	var droppedCount int
+	var emptiedCount int
 	if cutIdx >= 0 {
 		// Normal path: tail-of-window keeps are handled by TruncateHistory.
 		// TruncateHistory advances meta.Skip (archive-preserving; zero bytes
@@ -11601,7 +11620,34 @@ func (al *AgentLoop) windowTrim(agent *AgentInstance, sessionKey string) (compre
 		}
 		keepLast := len(window) - keepStart
 		droppedCount = len(window) - keepLast
-		agent.Sessions.TruncateHistory(sessionKey, keepLast)
+		if droppedCount > 0 {
+			agent.Sessions.TruncateHistory(sessionKey, keepLast)
+		}
+
+		// ADR-066 D5, register #3 / B-21b (FR-017): the floor kept an
+		// oversized turn whole. Its tool results — every one whose call is
+		// in the kept slice, EXCEPT the floor set (the results of its last
+		// assistant step) — are emptied oldest-first until the kept turn
+		// fits B, or none is left. Skip does not move again: this is an
+		// empty, not a cut. The pass persists (id, line) → emptied; the
+		// caller's post-trim assembleMessages re-applies it, so the
+		// in-memory copy mutated here is only the fit measurement.
+		if archErr == nil {
+			kept := append([]providers.Message(nil), measured[keepStart:]...)
+			keptLineOf := func(i int) int { return lineOf(keepStart + i) }
+			fits := func(m []providers.Message) bool {
+				return sumMessageTokens(m)+toolDefsTokens+recallSpanTokens <= budget
+			}
+			emptiedCount = len(al.emptyInPlace(
+				al.getActiveTurnState(sessionKey), agent, sessionKey, kept, keptLineOf, archive, fits, emptyingSitePreTurn))
+		}
+	}
+
+	if droppedCount == 0 && emptiedCount == 0 {
+		// The window is already a single turn whose results are all in the
+		// floor set (or already marks): nothing this site may do. Not an
+		// error — D6's clamp keeps that set under B (CRIT-002).
+		return compressionResult{NothingToTrim: true, RemainingMessages: len(window)}, false
 	}
 
 	if saveErr := agent.Sessions.Save(sessionKey); saveErr != nil {
@@ -11613,9 +11659,11 @@ func (al *AgentLoop) windowTrim(agent *AgentInstance, sessionKey string) (compre
 	// The backends' TruncateHistory is fire-and-forget (errors are logged, not
 	// returned). Re-read GetHistory and compare: if the window is the same size
 	// as before, the trim silently failed — log the error and return ok=false so
-	// the caller does not misreport a successful eviction.
+	// the caller does not misreport a successful eviction. An empty-only pass
+	// (droppedCount == 0) shrinks bytes, not the message count, so it is
+	// exempt from the count check.
 	postWindow := agent.Sessions.GetHistory(sessionKey)
-	if len(postWindow) >= len(window) {
+	if droppedCount > 0 && len(postWindow) >= len(window) {
 		logger.ErrorCF("agent", "windowTrim: TruncateHistory did not shrink the window (backend write may have failed)",
 			map[string]any{
 				"session_key": sessionKey,
@@ -11635,32 +11683,22 @@ func (al *AgentLoop) windowTrim(agent *AgentInstance, sessionKey string) (compre
 
 	keptCount := len(postWindow) // use the verified post-trim window size
 
-	// M5 / FR-018: emit context_archive_bytes by reading the full archive.
-	// This is done after the confirmed trim so the stat reflects the actual
-	// post-eviction archive size (which is UNCHANGED — eviction never deletes
-	// bytes from the JSONL file, only advances Skip). The byte count is emitted
-	// as a structured log field so it is observable in production without a
-	// full metrics framework. Only done when we have an archive reader.
-	archiveBytes := int64(-1) // -1 indicates unavailable (sentinel; explained below)
-	if archived, err := agent.Sessions.ReadArchive(context.Background(), sessionKey); err == nil {
-		// Estimate archive size from the number of archived messages (each JSON
-		// line is typically 100–500 bytes; use message count as a proxy).
-		// Actual byte stat requires fs.Stat — not exposed through SessionStore.
-		// For now: count is a proxy observable alongside the real skip value.
-		archiveBytes = int64(len(archived))
-	} else {
-		// M5: ReadArchive error post-eviction — the eviction itself succeeded
-		// (M4 verified the window shrank), but the archive byte stat is
-		// unavailable. Log at DEBUG so operators can correlate -1 in the warn
-		// below with a transient I/O issue without polluting the warn stream.
-		logger.DebugCF("agent", "windowTrim: M5 ReadArchive failed; context_archive_lines will be -1 (sentinel)",
-			map[string]any{"session_key": sessionKey, "error": err.Error()})
+	// M5 / FR-018: emit context_archive_lines from the archive read above.
+	// Eviction never deletes bytes from the JSONL file, only advances Skip,
+	// and emptying never touches it either (ADR-028 / ADR-066 B-23), so the
+	// pre-trim read is the post-trim truth. Actual byte stat requires
+	// fs.Stat — not exposed through SessionStore; the line count is the
+	// proxy observable alongside the real skip value. -1 = unavailable.
+	archiveBytes := int64(-1)
+	if archErr == nil {
+		archiveBytes = int64(len(archive))
 	}
 
 	logger.WarnCF("agent", "windowTrim: evicted oldest Turns from live window",
 		map[string]any{
 			"session_key":            sessionKey,
 			"turns_evicted":          droppedCount,
+			"results_emptied":        emptiedCount,
 			"kept_msgs":              keptCount,
 			"budget":                 budget,
 			"context_archive_lines":  archiveBytes, // FR-018 context_archive_bytes proxy
