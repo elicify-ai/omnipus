@@ -234,7 +234,8 @@ func TestProviders_UserModels_RoundTrip(t *testing.T) {
 	assert.ElementsMatch(t, []string{"mygw/a", "mygw/b"}, gw.Models)
 
 	// Clearing the list (empty array) removes the user catalog; the provider
-	// then falls back to its configured default model alias.
+	// then reports an empty models list (ADR-068 T068-04 removed the
+	// model_name-alias fallback fill).
 	putProvider(t, api, "mygw", `{"models":[]}`)
 	provs = getProviders(t, api)
 	for i := range provs {

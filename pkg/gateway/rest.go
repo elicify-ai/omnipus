@@ -56,6 +56,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/onboarding"
 	"github.com/elicify-ai/omnipus/pkg/plan"
 	providers_pkg "github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
 	"github.com/elicify-ai/omnipus/pkg/security"
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -110,6 +111,15 @@ type restAPI struct {
 	planStore  *plan.Store
 	credStore  *credentials.Store // shared unlocked credential store (injected at boot)
 	mediaStore media.MediaStore   // shared media store for serving media files
+	// providerCatalog is the ADR-067 registry-fed provider catalog. It is the
+	// only authority on whether a configured provider id is KNOWN: a
+	// configured row whose id the served document does not contain is
+	// reported as status=unknown-provider with the generic text
+	// `unknown provider "<id>"` (ADR-068 FR-043 / ADR-067 FR-016). Nil, or
+	// non-nil with no document loaded (the E7 "boots with no catalog" state),
+	// classifies nothing — rows keep their credential-derived status. Wired
+	// at boot by T067-10; until then only tests set it.
+	providerCatalog *catalog.Catalog
 	// ssrfChecker enforces SEC-24 SSRF protection on outbound HTTP requests made
 	// by REST handlers (skills installer). Nil when SSRF protection is disabled
 	// in config (sandbox.ssrf.enabled = false). Shared with the agent loop's
@@ -5818,10 +5828,17 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 
 	switch {
 	case r.Method == http.MethodGet && sub == "":
-		// Return provider list derived from config model_list, enriched with
-		// upstream available models for OpenAI-compatible providers.
+		// Return the CONFIGURED providers only (ADR-068 FR-011a, resolution
+		// #16), enriched with upstream available models for OpenAI-compatible
+		// providers. The seeded cfg.Providers templates (pkg/config/defaults.go
+		// — model + api_base, no `provider` identity, no credential ref) are
+		// NOT rows: a row the operator never created is not theirs to manage,
+		// and the SPA used to have to filter the ~10 permanent "disconnected"
+		// template rows out of every list. A row is configured when it
+		// carries a `provider` identity — PUT /providers/{id} and onboarding
+		// completion stamp it on every row they write (template or new), and
+		// ADR-067 makes it the only provider identity.
 		cfg := a.agentLoop.GetConfig()
-		providerModels := make(map[string][]string)
 		// providerUserModels holds the operator-supplied catalog slugs for
 		// providers that have no live /models endpoint (UAT model-catalog fix).
 		providerUserModels := make(map[string][]string)
@@ -5834,12 +5851,16 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 		// indistinguishable to the operator viewing Settings/Providers.
 		providerCredErrors := make(map[string]string)
 		providerOrder := make([]string, 0)
+		seen := make(map[string]struct{})
 		for _, m := range cfg.Providers {
-			providerName := inferProviderName(m.Provider, m.Model)
-			if _, exists := providerModels[providerName]; !exists {
+			if m.Provider == "" {
+				continue // seed template, never configured — not a row
+			}
+			providerName := m.Provider
+			if _, exists := seen[providerName]; !exists {
+				seen[providerName] = struct{}{}
 				providerOrder = append(providerOrder, providerName)
 			}
-			providerModels[providerName] = append(providerModels[providerName], m.ModelName)
 			if len(m.Models) > 0 {
 				providerUserModels[providerName] = append(providerUserModels[providerName], m.Models...)
 			}
@@ -5898,14 +5919,12 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 					models = userModels
 				}
 			}
-			// Final fallback: the configured default model alias(es). Provider.yaml
-			// requires models:array — nil marshals as null which fails Zod on the SPA.
+			// No upstream list and no operator slugs: an empty catalog, not the
+			// row's model_name alias (that "final fallback" fill was removed with
+			// the template rows, resolution #16). Provider.yaml requires
+			// models:array — nil marshals as null which fails Zod on the SPA.
 			if models == nil {
-				if configured, ok := providerModels[name]; ok && configured != nil {
-					models = configured
-				} else {
-					models = []string{}
-				}
+				models = []string{}
 			}
 			// FR-104: report Connected only when the provider's API key resolves to
 			// a non-empty credential. providerAPIKeys is populated above for every
@@ -5914,6 +5933,20 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 			status := gen.ProviderStatusDisconnected
 			if _, hasKey := providerAPIKeys[name]; hasKey {
 				status = gen.ProviderStatusConnected
+			}
+			// ADR-068 FR-043 / ADR-067 FR-016: a configured row whose id the
+			// served catalog does not contain is unknown-provider, with the
+			// generic text parameterised by the operator's own id (the id is
+			// user data, not a trace — CRIT-003) and an empty model list
+			// (S67 Q4). Classified only when a catalog document is actually
+			// loaded; an absent catalog (E7) never turns every row unknown.
+			var unknownProviderMsg string
+			if a.providerCatalog != nil && a.providerCatalog.Document() != nil {
+				if _, known := a.providerCatalog.Provider(name); !known {
+					status = gen.ProviderStatusUnknownProvider
+					unknownProviderMsg = fmt.Sprintf("unknown provider %q", name)
+					models = []string{}
+				}
 			}
 			hasEndpointCopy := hasEndpoint
 			p := gen.Provider{
@@ -5930,11 +5963,17 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 			if modelFetchWarning != "" {
 				p.Warning = &modelFetchWarning
 			}
-			// A credential-resolution failure worse than "not configured" (locked/
-			// undecryptable vault) is reported as status=error with the classified
-			// remediation message, instead of a plain "disconnected" indistinguishable
-			// from a provider that was never configured at all (Task 3 fix).
-			if status != gen.ProviderStatusConnected {
+			switch {
+			case unknownProviderMsg != "":
+				// unknown-provider wins over the credential-derived states: a
+				// key for a provider that does not exist is not "connected".
+				p.Error = &unknownProviderMsg
+			case status != gen.ProviderStatusConnected:
+				// A credential-resolution failure worse than "not configured"
+				// (locked/undecryptable vault) is reported as status=error with
+				// the classified remediation message, instead of a plain
+				// "disconnected" indistinguishable from a provider whose key was
+				// never entered (Task 3 fix).
 				if credErrMsg, ok := providerCredErrors[name]; ok {
 					p.Status = gen.ProviderStatusError
 					p.Error = &credErrMsg
@@ -5942,18 +5981,9 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 			}
 			providers = append(providers, p)
 		}
-		if len(providers) == 0 {
-			falseVal := false
-			providers = append(providers, gen.Provider{
-				Id:                "default",
-				Name:              "Default",
-				Status:            gen.ProviderStatusDisconnected,
-				Models:            []string{},
-				HasModelsEndpoint: &falseVal,
-				AuthMethod:        gen.ProviderAuthMethodApiKey,
-				Dependents:        []gen.ProviderDependent{},
-			})
-		}
+		// No configured provider → `[]`, never a synthetic "default" filler
+		// row (a fresh install has nothing to manage yet; the onboarding wizard
+		// creates the first row).
 		jsonOK(w, providers)
 
 	case r.Method == http.MethodPut && sub != "" && !strings.HasSuffix(sub, "/test"):

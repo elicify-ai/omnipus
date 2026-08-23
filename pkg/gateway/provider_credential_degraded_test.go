@@ -31,6 +31,7 @@ import (
 	"strings"
 	"testing"
 
+	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/credentials"
 )
@@ -435,5 +436,43 @@ func TestGatewayBoot_CorruptCredentialsFileProviderInjectionIsFatal(t *testing.T
 	}
 	if !strings.Contains(err.Error(), "corrupted") {
 		t.Errorf("error must surface the store-file-corrupted cause; got: %q", err.Error())
+	}
+}
+
+// TestProviderCredentialDegraded_GETRowsConfiguredOnly — ADR-068 regression
+// row 4 (X-32): with the credential vault locked, GET /api/v1/providers
+// reports the vault-read error on CONFIGURED rows only. The seed templates
+// (no provider identity, no credential ref) are no longer echoed as
+// "disconnected" rows at all (resolution #16), so a locked vault produces
+// exactly one row: the configured provider, status=error, with the
+// classified remediation message.
+func TestProviderCredentialDegraded_GETRowsConfiguredOnly(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+	// A store that is never unlocked: resolveCredentialRef fails with a
+	// non-NotFound error, the "worse than not configured" branch.
+	api.credStore = credentials.NewStore(filepath.Join(api.homePath, "credentials.json"))
+
+	const ref = "DEGRADED_TEST_T068_04_LOCKED_KEY"
+	t.Setenv(ref, "") // ref configured, nothing injected
+	seedTemplateProviders(t, api, &config.ModelConfig{
+		ModelName: "mygw", Provider: "mygw", Model: "mygw/llama", APIKeyRef: ref,
+		Models: []string{"mygw/llama"},
+	})
+
+	provs := getProviders(t, api)
+	if len(provs) != 1 {
+		t.Fatalf("locked vault must yield exactly the configured row, no template rows; got %d rows: %+v",
+			len(provs), provs)
+	}
+	row := provs[0]
+	if row.Id != "mygw" {
+		t.Fatalf("row id = %q, want mygw", row.Id)
+	}
+	if row.Status != gen.ProviderStatusError {
+		t.Errorf("status = %q, want %q (locked vault is worse than 'not configured')",
+			row.Status, gen.ProviderStatusError)
+	}
+	if row.Error == nil || !strings.Contains(*row.Error, "credential vault could not be read") {
+		t.Errorf("error must carry the classified vault-read remediation; got %v", row.Error)
 	}
 }
