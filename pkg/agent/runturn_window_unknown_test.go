@@ -112,9 +112,8 @@ func TestRunTurn_LocalEndpointUnknownWindow_RefusedTyped(t *testing.T) {
 	for _, p := range errPayloads {
 		if p.Code == string(CodeContextWindowUnknown) {
 			found = true
-			assert.Equal(t,
-				"This endpoint did not report a context length for this model. Set it under Settings → Models → Model overrides → Context length.",
-				p.Message, "the live error must carry the exact contract copy")
+			assert.Equal(t, UserMessageForCode(CodeContextWindowUnknown), p.Message,
+				"the live error must carry the catalogue copy, not the raw sentinel")
 			assert.NotEmpty(t, p.SessionID)
 		}
 	}
