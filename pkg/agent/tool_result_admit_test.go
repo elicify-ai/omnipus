@@ -276,7 +276,7 @@ func TestChokePoint_ProducerListByGrep(t *testing.T) {
 	loopSrc, err := os.ReadFile("loop.go")
 	require.NoError(t, err)
 	calls := strings.Count(string(loopSrc), "al.admitToolResult(ts,")
-	assert.Equal(t, 9, calls, "loop.go: success path + seven denied sites + skipped site = 9 choke-point calls")
+	assert.Equal(t, 10, calls, "loop.go: success path + seven denied sites + skipped site + the T066-15 argument-refusal site (FR-016) = 10 choke-point calls")
 
 	for _, f := range []string{"attach_hydrate.go", "recall_conversation.go"} {
 		src, readErr := os.ReadFile(f)
