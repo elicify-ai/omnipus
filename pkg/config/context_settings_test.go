@@ -6,6 +6,7 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -72,6 +73,102 @@ func TestConfig_NoContextWindowDefaultKey(t *testing.T) {
 		}
 		if strings.Contains(string(out), "summarize_token_percent") {
 			t.Fatal("SaveConfig must not write summarize_token_percent")
+		}
+	})
+
+	// --- the `context_window` half (T066-09, FR-004): the single home of the
+	// global default is ContextSettings.DefaultContextWindow; the old
+	// agents.defaults.context_window key and its env var are gone, and a
+	// stale key in an operator's config.json is ignored without error.
+	t.Run("AgentDefaults has no ContextWindow field", func(t *testing.T) {
+		typ := reflect.TypeOf(AgentDefaults{})
+		if _, found := typ.FieldByName("ContextWindow"); found {
+			t.Fatal("AgentDefaults.ContextWindow must be deleted (FR-004) — the single home is ContextSettings.DefaultContextWindow")
+		}
+		for i := 0; i < typ.NumField(); i++ {
+			f := typ.Field(i)
+			if strings.Contains(f.Tag.Get("json"), "context_window") {
+				t.Fatalf("field %s still carries the context_window JSON key", f.Name)
+			}
+			if strings.Contains(f.Tag.Get("env"), "CONTEXT_WINDOW") {
+				t.Fatalf("field %s still carries the CONTEXT_WINDOW env var", f.Name)
+			}
+		}
+	})
+
+	t.Run("stale agents.defaults.context_window key is silently ignored", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "config.json")
+		raw := `{"version": 1, "agents": {"defaults": {"context_window": 131072, "max_tokens": 1234}}}`
+		if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := LoadConfig(path)
+		if err != nil {
+			t.Fatalf("a stale context_window key must load without error, got: %v", err)
+		}
+		if cfg.Agents.Defaults.MaxTokens != 1234 {
+			t.Fatalf("sibling keys must still load; max_tokens = %d", cfg.Agents.Defaults.MaxTokens)
+		}
+		if cfg.Context.DefaultContextWindow != nil {
+			t.Fatalf("a stale agents.defaults.context_window must NOT migrate into context.default_context_window (greenfield, no migration); got %d", *cfg.Context.DefaultContextWindow)
+		}
+	})
+
+	t.Run("OMNIPUS_AGENTS_DEFAULTS_CONTEXT_WINDOW has no effect", func(t *testing.T) {
+		t.Setenv("OMNIPUS_AGENTS_DEFAULTS_CONTEXT_WINDOW", "4096")
+		dir := t.TempDir()
+		path := filepath.Join(dir, "config.json")
+		if err := os.WriteFile(path, []byte(`{"version": 1}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := LoadConfig(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.Context.DefaultContextWindow != nil {
+			t.Fatalf("the retired env var must not populate any window; got %d", *cfg.Context.DefaultContextWindow)
+		}
+	})
+
+	t.Run("saved config never re-emits agents.defaults.context_window", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "config.json")
+		if err := SaveConfig(path, DefaultConfig()); err != nil {
+			t.Fatal(err)
+		}
+		out, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var doc map[string]any
+		if err := json.Unmarshal(out, &doc); err != nil {
+			t.Fatal(err)
+		}
+		if agents, ok := doc["agents"].(map[string]any); ok {
+			if defaults, ok := agents["defaults"].(map[string]any); ok {
+				if _, has := defaults["context_window"]; has {
+					t.Fatal("SaveConfig must not write agents.defaults.context_window")
+				}
+			}
+		}
+	})
+
+	t.Run("config.example.json carries no agents.defaults.context_window", func(t *testing.T) {
+		raw, err := os.ReadFile(filepath.Join("..", "..", "config", "config.example.json"))
+		if err != nil {
+			t.Skipf("example config not readable from the package dir: %v", err)
+		}
+		var doc map[string]any
+		if err := json.Unmarshal(raw, &doc); err != nil {
+			t.Fatal(err)
+		}
+		if agents, ok := doc["agents"].(map[string]any); ok {
+			if defaults, ok := agents["defaults"].(map[string]any); ok {
+				if _, has := defaults["context_window"]; has {
+					t.Fatal("config/config.example.json still documents the retired agents.defaults.context_window key")
+				}
+			}
 		}
 	})
 }

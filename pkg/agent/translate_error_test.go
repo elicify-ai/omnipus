@@ -339,6 +339,7 @@ func allClassifierCodes() []LLMErrorCode {
 		CodeAgentNotConfigured,
 		CodeWorkspaceUnavailable,
 		CodeModelUnavailable,
+		CodeContextWindowUnknown,
 		CodeUnknown,
 	}
 }
@@ -941,4 +942,38 @@ func TestTranslateError_TypedExitsAndAttributions(t *testing.T) {
 	assert.False(t, errors.Is(ErrTurnCanceled, ErrTurnTimedOut))
 	assert.False(t, errors.Is(ErrContextUnrecoverable, ErrTurnCanceled))
 	assert.False(t, errors.Is(ErrTurnCanceled, ErrAgentNotWorkspaceMember))
+}
+
+// TestTranslateError_NoWindowLearning — ADR-066 spec test 21 (B-07; FR-035,
+// D8 NOT adopted). A provider's context-overflow error is CLASSIFIED as
+// context_too_long for the user and nothing else: no window is parsed out of
+// the text, nothing is written back to any override, and the resolver's
+// answer for the same (provider, model) is identical before and after.
+func TestTranslateError_NoWindowLearning(t *testing.T) {
+	installWindowTestCatalog(t, 1_048_576)
+	installLiveWindowStub(t, nil)
+	cfg := windowTestConfig()
+
+	before := ResolveWindow(cfg, "openrouter", "z-ai/glm-5.2", "mia")
+	require.Equal(t, 1_048_576, before.Window)
+
+	body := "This model's maximum context length is 32768 tokens. However, you requested 1200000 tokens."
+	llm := TranslateLLMError(&ProviderError{Status: 400, Body: body}, body)
+	assert.Equal(t, CodeContextTooLong, llm.Code, "overflow text is classified, and only classified")
+
+	after := ResolveWindow(cfg, "openrouter", "z-ai/glm-5.2", "mia")
+	assert.Equal(t, before, after, "no window may be learned from provider error text (D8 not adopted)")
+	assert.Empty(t, cfg.Context.ModelOverrides, "no override is written back")
+	assert.Nil(t, cfg.Context.DefaultContextWindow)
+	for _, ac := range cfg.Agents.List {
+		assert.Nil(t, ac.ContextWindowOverride)
+	}
+
+	// Source-level guard: the classifier never parses a number out of the
+	// overflow text and translate_error.go never reaches the resolver.
+	src := readOwnedFileForTest(t, "translate_error.go")
+	assert.NotContains(t, src, "ResolveWindow(")
+	assert.NotContains(t, src, "ModelOverrides")
+	assert.NotContains(t, src, "ContextWindowOverride")
+	assert.NotContains(t, src, "strconv.Atoi", "no numeric parsing of provider error bodies")
 }

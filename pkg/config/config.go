@@ -1086,6 +1086,14 @@ type AgentConfig struct {
 	// accumulated episodic memory across adjudications. Every other agent
 	// defaults to true (unchanged behavior). See MemoryEnabledEffective.
 	MemoryEnabled *bool `json:"memory_enabled,omitempty"`
+	// ContextWindowOverride is the per-agent context-window override
+	// (tokens), rung 1 of the ADR-066 D2 resolution ladder. nil = unset.
+	// Like every override it can only LOWER the window: the resolver clamps
+	// it to the model's capability on every resolution (FR-002). Written by
+	// PUT /api/v1/agents/{id} `context_window_override` (nullable to clear);
+	// the derived effective window / source / clamped flag are computed by
+	// the resolver and never persisted here.
+	ContextWindowOverride *int `json:"context_window_override,omitempty"`
 	// Tools, when non-nil, overrides scope-based tool visibility for this agent.
 	// Nil means all tools allowed by the agent's type are available.
 	Tools *AgentToolsCfg `json:"tools,omitempty"`
@@ -1570,9 +1578,14 @@ type AgentDefaults struct {
 	ImageModel          string       `json:"image_model,omitempty"           env:"OMNIPUS_AGENTS_DEFAULTS_IMAGE_MODEL"`
 	ImageModelFallbacks []string     `json:"image_model_fallbacks,omitempty"`
 	MaxTokens           int          `json:"max_tokens"                      env:"OMNIPUS_AGENTS_DEFAULTS_MAX_TOKENS"`
-	ContextWindow       int          `json:"context_window,omitempty"        env:"OMNIPUS_AGENTS_DEFAULTS_CONTEXT_WINDOW"`
-	Temperature         *float64     `json:"temperature,omitempty"           env:"OMNIPUS_AGENTS_DEFAULTS_TEMPERATURE"`
-	MaxToolIterations   int          `json:"max_tool_iterations"             env:"OMNIPUS_AGENTS_DEFAULTS_MAX_TOOL_ITERATIONS"`
+	// context_window was deleted by ADR-066 D2 (FR-004, T066-09). The global
+	// default lives in ContextSettings.DefaultContextWindow (the `context`
+	// key, D9) and every agent's window is resolved by the D2 ladder
+	// (pkg/agent ResolveWindow) — there is no agents.defaults.context_window
+	// key and no matching env var. A stale key in an operator's config.json
+	// is ignored (greenfield, no migration).
+	Temperature       *float64 `json:"temperature,omitempty"           env:"OMNIPUS_AGENTS_DEFAULTS_TEMPERATURE"`
+	MaxToolIterations int      `json:"max_tool_iterations"             env:"OMNIPUS_AGENTS_DEFAULTS_MAX_TOOL_ITERATIONS"`
 	// summarize_token_percent was deleted by ADR-066 D6 (FR-004, T066-03).
 	// The legacy summariser's percentage knob had outlived ADR-028 only to
 	// scale the timeout-recovery trim trigger; every consumer now reads the

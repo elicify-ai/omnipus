@@ -32,6 +32,14 @@ import (
 // The ModelName is the public identifier, and the Model field is the
 // provider-prefixed form ("openai/<name>") so the known-protocol factory can
 // build a stub provider. Protocol = "openai" is a recognized protocol prefix.
+//
+// The stub base URL is a NON-loopback, unresolvable host on purpose: this
+// "openai" row is not in the (empty) test catalog, so ADR-066's resolver
+// classifies it through ADR-067's custom-row locality predicate — a
+// loopback host would make it `locality: local`, and a local endpoint with
+// no reported window is refused at turn start (context_window_unknown,
+// D3) rather than floored. These tests model a CLOUD provider whose window
+// nobody knows (→ the 128k floor), so the host must read as public.
 func newSwitchTestAgentLoop(t *testing.T, models ...string) (al *AgentLoop, cfg *config.Config, cleanup func()) {
 	t.Helper()
 	tmpDir := t.TempDir()
@@ -41,7 +49,7 @@ func newSwitchTestAgentLoop(t *testing.T, models ...string) (al *AgentLoop, cfg 
 			ModelName: name,
 			Model:     "openai/" + name,
 			Provider:  "openai",
-			APIBase:   "http://127.0.0.1:1",
+			APIBase:   "http://openai-stub.invalid:1",
 			APIKeyRef: "SWITCH_TEST_KEY",
 		}
 	}
@@ -193,7 +201,7 @@ func TestSwitchTime_EndToEnd_HappyPath(t *testing.T) {
 	agent.ContextWindow = contextWindow
 	agent.MaxTokens = maxTokens
 	al.mu.Lock()
-	al.cfg.Agents.Defaults.ContextWindow = contextWindow
+	al.cfg.Context.DefaultContextWindow = intPtr(contextWindow)
 	al.mu.Unlock()
 
 	oldModel := agent.Model
@@ -331,7 +339,7 @@ func TestSwitchTime_LLMHistoryHasNoSystemMessage(t *testing.T) {
 	agent.ContextWindow = 8000
 	agent.MaxTokens = 4096
 	al.mu.Lock()
-	al.cfg.Agents.Defaults.ContextWindow = 8000
+	al.cfg.Context.DefaultContextWindow = intPtr(8000)
 	al.mu.Unlock()
 
 	const sessionKey = "llm-no-system-msg"
@@ -391,7 +399,7 @@ func TestSwitchTime_UnknownModel_LogsWarn(t *testing.T) {
 	agent.ContextWindow = 8000
 
 	al.mu.Lock()
-	al.cfg.Agents.Defaults.ContextWindow = 200000
+	al.cfg.Context.DefaultContextWindow = intPtr(200000)
 	al.mu.Unlock()
 
 	const sessionKey = "unknown-model-test"

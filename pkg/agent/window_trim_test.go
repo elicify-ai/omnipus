@@ -32,13 +32,17 @@ func buildTrimTestAgentLoop(t *testing.T, contextWindow, maxTokens int) (*AgentL
 			Defaults: config.AgentDefaults{
 				Home:              tmpDir,
 				DefaultModel:      config.DefaultModel{Model: "test-model"},
-				ContextWindow:     contextWindow,
 				MaxTokens:         maxTokens,
 				MaxToolIterations: 10,
 			},
 			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
+	// ADR-066 D2: the window is resolved by the ladder; the global default
+	// (rung 3) pins it for the test. Tests that need a window smaller than
+	// the FR-005b max_tokens clamp would allow set agent.ContextWindow /
+	// agent.MaxTokens on the instance directly afterwards.
+	cfg.Context.DefaultContextWindow = intPtr(contextWindow)
 	mp := &mockProvider{}
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), mp)
 	return al, cfg
@@ -419,10 +423,11 @@ func TestModelSwitch_ReWindowsNoSummary(t *testing.T) {
 	agent.Sessions.SetHistory(sk, history)
 	require.NoError(t, agent.Sessions.Save(sk))
 
-	// Also set cfg.Agents.Defaults.ContextWindow to the new small window so
-	// handleModelSwitch sees a downsize (decideSwitchCompressAction triggers).
+	// Also set the global default window (ADR-066 D2 rung 3) to the new
+	// small window so handleModelSwitch resolves a downsize through the
+	// ladder (decideSwitchCompressAction triggers).
 	al.mu.Lock()
-	al.cfg.Agents.Defaults.ContextWindow = 4000
+	al.cfg.Context.DefaultContextWindow = intPtr(4000)
 	al.mu.Unlock()
 
 	// Drive the switch to a smaller window.
@@ -464,7 +469,7 @@ func TestModelSwitch_ReWindowsNoSummary(t *testing.T) {
 		ag2.ContextWindow = 100000
 		ag2.MaxTokens = 4096
 		al2.mu.Lock()
-		al2.cfg.Agents.Defaults.ContextWindow = 500 // tiny
+		al2.cfg.Context.DefaultContextWindow = intPtr(500) // tiny
 		al2.mu.Unlock()
 
 		const sk2 = "t19-floor-session"
@@ -530,7 +535,7 @@ func TestModelSwitch_UpsizeKeepsSkipForward(t *testing.T) {
 
 	// Now switch to a MUCH larger model; cfg window >> current conversation.
 	al.mu.Lock()
-	al.cfg.Agents.Defaults.ContextWindow = 200000
+	al.cfg.Context.DefaultContextWindow = intPtr(200000)
 	al.mu.Unlock()
 
 	updatedAgent, err := al.handleModelSwitch(
@@ -564,6 +569,8 @@ func TestDecommission_NoForceCompressionSymbols(t *testing.T) {
 	filesOwned := []string{
 		"loop.go",
 		"context_budget.go",
+		"instance.go",
+		"resolve_window.go",
 	}
 
 	// These are the patterns that must NOT appear as identifiers or string
@@ -572,6 +579,14 @@ func TestDecommission_NoForceCompressionSymbols(t *testing.T) {
 	forbiddenPatterns := []string{
 		"Emergency compression dropped",
 		"splitHistoryAtTurnMidpoint(",
+		// ADR-066 SC-009 (T066-09): the retired window fallbacks. The
+		// refreshRestorePointFromSession / restorePointHistory half of the
+		// SC-009 grep is added by T066-12, which deletes those symbols.
+		"maxTokens * 4",
+		"contextWindow = 128000",
+		"newContextWindow = 128000",
+		"SummarizeTokenPercent",
+		"Defaults.ContextWindow",
 	}
 
 	// func forceCompression must not exist as a method definition.
@@ -682,7 +697,7 @@ func TestArchive_ModelSwitchPreservesEvicted(t *testing.T) {
 
 	// Downsize: switch to a much smaller model.
 	al.mu.Lock()
-	al.cfg.Agents.Defaults.ContextWindow = 1000
+	al.cfg.Context.DefaultContextWindow = intPtr(1000)
 	al.mu.Unlock()
 
 	_, err := al.handleModelSwitch(context.Background(), agent, sk, newModel, bus.InboundMessage{})
