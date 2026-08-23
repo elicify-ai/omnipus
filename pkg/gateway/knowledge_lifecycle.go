@@ -243,6 +243,20 @@ type KnowledgeLifecycle struct {
 	// attachWG lets Stop and tests wait for asynchronous attaches to finish
 	// rather than racing them.
 	attachWG sync.WaitGroup
+	// pendingAttaches mirrors attachWG's counter under kl.mu. It exists solely
+	// so WaitForAttaches can decide whether to call attachWG.Wait() at all
+	// without ever calling it unsynchronized with an Add(): sync.WaitGroup's
+	// own contract forbids a Wait() racing with an Add() that starts the
+	// counter back up from zero, and every Add() below already happens under
+	// kl.mu — but WaitForAttaches used to call attachWG.Wait() directly, with
+	// no lock and no relationship to those Add() calls at all. Gating on this
+	// counter turns that into an ordinary sequence: either the Add() this
+	// mirrors already ran before WaitForAttaches looked (so it is safe to
+	// wait — the Add() happened-before the read, via kl.mu), or it has not
+	// run yet (so there is nothing yet to wait for, and skipping is correct:
+	// a caller cannot be owed a wait for work that had not been registered
+	// when it asked).
+	pendingAttaches int
 }
 
 // NewKnowledgeLifecycle builds the lifecycle. It performs no I/O.
@@ -460,10 +474,16 @@ func (kl *KnowledgeLifecycle) AttachMountAsync(workspaceID, mountName, hostPath 
 		return
 	}
 	kl.attachWG.Add(1)
+	kl.pendingAttaches++
 	kl.mu.Unlock()
 
 	go func() {
 		defer kl.attachWG.Done()
+		defer func() {
+			kl.mu.Lock()
+			kl.pendingAttaches--
+			kl.mu.Unlock()
+		}()
 		if err := kl.AttachMount(kl.baseCtx, workspaceID, mountName, hostPath); err != nil {
 			slog.Warn("knowledge: mount not indexed",
 				"workspace_id", workspaceID, "mount", mountName, "host_path", hostPath, "error", err)
@@ -548,9 +568,31 @@ func (kl *KnowledgeLifecycle) AttachAllMounts() {
 	}
 }
 
-// WaitForAttaches blocks until every asynchronous attach has finished. Test
-// support and shutdown ordering; it is never on a request path.
-func (kl *KnowledgeLifecycle) WaitForAttaches() { kl.attachWG.Wait() }
+// WaitForAttaches blocks until every asynchronous attach registered by the
+// time this is called has finished. Test support and shutdown ordering; it is
+// never on a request path.
+//
+// It does NOT call attachWG.Wait() unconditionally. sync.WaitGroup forbids a
+// Wait() racing with an Add() that starts the counter back up from zero, and
+// AttachMountAsync/resyncAfterDrift's Add() calls happen on their own
+// goroutines with no ordering relative to an arbitrary caller of this method
+// — a caller could reach attachWG.Wait() before the Add() it was meant to
+// wait for had even run, which is exactly the pattern go test -race flags
+// (and rightly: WaitGroup gives no guarantee Wait() would have seen that
+// work at all). Checking pendingAttaches under kl.mu first turns that into an
+// ordinary sequence instead of a race: either the Add() already happened
+// before this read (so attachWG.Wait() is safe to call — the Add()
+// happened-before the read, via kl.mu), or it has not happened yet (so there
+// is nothing yet to wait for, and returning immediately is correct: nothing
+// was pending at the moment this was asked).
+func (kl *KnowledgeLifecycle) WaitForAttaches() {
+	kl.mu.Lock()
+	pending := kl.pendingAttaches > 0
+	kl.mu.Unlock()
+	if pending {
+		kl.attachWG.Wait()
+	}
+}
 
 // Stop ends every drift schedule and closes every open index. Idempotent.
 func (kl *KnowledgeLifecycle) Stop() {
@@ -686,6 +728,7 @@ func (kl *KnowledgeLifecycle) resyncAfterDrift(report knowledge.DriftReport) {
 	}
 	c.resyncing = true
 	kl.attachWG.Add(1)
+	kl.pendingAttaches++
 	kl.mu.Unlock()
 
 	go func() {
@@ -693,6 +736,7 @@ func (kl *KnowledgeLifecycle) resyncAfterDrift(report knowledge.DriftReport) {
 		defer func() {
 			kl.mu.Lock()
 			c.resyncing = false
+			kl.pendingAttaches--
 			kl.mu.Unlock()
 		}()
 		if rErr := kl.reconcile(kl.baseCtx, c); rErr != nil {
