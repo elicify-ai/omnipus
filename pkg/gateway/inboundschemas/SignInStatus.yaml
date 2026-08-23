@@ -1,8 +1,17 @@
 type: object
 description: >
-  Response from GET /providers/{id}/sign-in/status (ADR-068 FR-009). Read
-  from the vendor CLI's saved login only — Omnipus never refreshes a token
-  (MAJ-006). There is no `pending` state (MIN-005): a check is synchronous.
+  Response from GET /providers/{id}/sign-in/status (ADR-068 FR-009, amended
+  2026-08-23 §8b). For `cli_login` providers (codex-cli, github-copilot):
+  read from the vendor CLI's saved login only — Omnipus never refreshes that
+  file — `expired` follows the access token's JWT `exp` (decoded unverified,
+  display only) when decodable, else the saved login file being older than
+  one hour. For `device_code` providers (openai-chatgpt, and xai once its
+  catalog row carries `sign_in`): the state comes from the stored
+  `<id>_OAUTH` entry in Omnipus's own encrypted credential store —
+  `expired` means the access token is past `exp` AND a refresh attempt
+  failed or no refresh token is available. `pending` is returned only while
+  a device-code session started by POST /sign-in is open and not yet
+  approved.
 required:
   - state
 additionalProperties: false
@@ -11,26 +20,26 @@ properties:
     type: string
     enum:
       - not_signed_in
+      - pending
       - signed_in
       - expired
     description: >
-      not_signed_in when no saved login exists (or it is unreadable /
-      malformed — logged as a warning); signed_in when a usable login exists;
-      expired when the access token's JWT `exp` (decoded unverified, display
-      only) is at or before now, or — without a decodable `exp` — the saved
-      login file is older than one hour.
+      not_signed_in when no saved login / stored OAuth entry exists (or it
+      is unreadable / malformed — logged as a warning); pending while an
+      open device-code session awaits approval; signed_in when a usable
+      login or OAuth entry exists; expired per the per-method rule above.
     example: signed_in
   account_label:
     type: string
     maxLength: 128
     description: >
-      Opaque account identifier from the CLI's saved login
-      (`tokens.account_id` for codex; the GitHub login for Copilot when the
-      CLI reports one). Present only when the saved login yields one; never
-      an e-mail.
+      Opaque account identifier — `tokens.account_id` for codex-cli, the
+      GitHub login for Copilot when the CLI reports one, or the stored
+      OAuth entry's account_id for device_code providers. Present only when
+      known; never an e-mail.
     example: user_abc123
   expires_at:
     type: string
     format: date-time
-    description: The access token's `exp` claim when decodable. Absent otherwise.
+    description: The access token's expiry when known. Absent otherwise.
     example: "2026-09-01T12:00:00Z"

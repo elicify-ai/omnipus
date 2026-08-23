@@ -5336,13 +5336,37 @@ func (e SessionScopeResponseDmScope) Valid() bool {
 	}
 }
 
-// Defines values for SignInStartResponseMethod.
+// Defines values for SignInPollResponseState.
 const (
-	CliLogin SignInStartResponseMethod = "cli_login"
+	SignInPollResponseStateDenied   SignInPollResponseState = "denied"
+	SignInPollResponseStateExpired  SignInPollResponseState = "expired"
+	SignInPollResponseStatePending  SignInPollResponseState = "pending"
+	SignInPollResponseStateSignedIn SignInPollResponseState = "signed_in"
 )
 
-// Valid indicates whether the value is a known member of the SignInStartResponseMethod enum.
-func (e SignInStartResponseMethod) Valid() bool {
+// Valid indicates whether the value is a known member of the SignInPollResponseState enum.
+func (e SignInPollResponseState) Valid() bool {
+	switch e {
+	case SignInPollResponseStateDenied:
+		return true
+	case SignInPollResponseStateExpired:
+		return true
+	case SignInPollResponseStatePending:
+		return true
+	case SignInPollResponseStateSignedIn:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SignInStartResponseCliLoginMethod.
+const (
+	CliLogin SignInStartResponseCliLoginMethod = "cli_login"
+)
+
+// Valid indicates whether the value is a known member of the SignInStartResponseCliLoginMethod enum.
+func (e SignInStartResponseCliLoginMethod) Valid() bool {
 	switch e {
 	case CliLogin:
 		return true
@@ -5351,21 +5375,39 @@ func (e SignInStartResponseMethod) Valid() bool {
 	}
 }
 
+// Defines values for SignInStartResponseDeviceCodeMethod.
+const (
+	DeviceCode SignInStartResponseDeviceCodeMethod = "device_code"
+)
+
+// Valid indicates whether the value is a known member of the SignInStartResponseDeviceCodeMethod enum.
+func (e SignInStartResponseDeviceCodeMethod) Valid() bool {
+	switch e {
+	case DeviceCode:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for SignInStatusState.
 const (
-	Expired     SignInStatusState = "expired"
-	NotSignedIn SignInStatusState = "not_signed_in"
-	SignedIn    SignInStatusState = "signed_in"
+	SignInStatusStateExpired     SignInStatusState = "expired"
+	SignInStatusStateNotSignedIn SignInStatusState = "not_signed_in"
+	SignInStatusStatePending     SignInStatusState = "pending"
+	SignInStatusStateSignedIn    SignInStatusState = "signed_in"
 )
 
 // Valid indicates whether the value is a known member of the SignInStatusState enum.
 func (e SignInStatusState) Valid() bool {
 	switch e {
-	case Expired:
+	case SignInStatusStateExpired:
 		return true
-	case NotSignedIn:
+	case SignInStatusStateNotSignedIn:
 		return true
-	case SignedIn:
+	case SignInStatusStatePending:
+		return true
+	case SignInStatusStateSignedIn:
 		return true
 	default:
 		return false
@@ -13387,34 +13429,81 @@ type SessionStats struct {
 	ToolCalls int `json:"tool_calls"`
 }
 
-// SignInStartResponse Response from POST /providers/{id}/sign-in (ADR-068 FR-009, MIN-005). Omnipus never performs or stores a vendor login itself: the only sign-in mechanism is the vendor CLI's own login command, which the operator runs in a terminal. `method` is therefore pinned to `cli_login` — there are no device-code fields because nothing produces them.
+// SignInPollRequest Body for POST /providers/{id}/sign-in/poll (ADR-068 FR-044, added 2026-08-23 §8b). Identifies which open device-code session to check.
+type SignInPollRequest struct {
+	// DeviceAuthId The opaque handle returned by POST /providers/{id}/sign-in's device_code response.
+	DeviceAuthId string `json:"device_auth_id"`
+}
+
+// SignInPollResponse Response from POST /providers/{id}/sign-in/poll (ADR-068 FR-044, added 2026-08-23 §8b). The gateway performs at most one vendor poll per call. On `signed_in` the gateway has already stored the `<id>_OAUTH` credential entry before responding. The vendor's device code is never returned here.
+type SignInPollResponse struct {
+	// IntervalSeconds Present only when the vendor asked the client to slow down (OAuth device-flow `slow_down`). The SPA must adopt this as its new poll interval and never poll faster (FR-045).
+	IntervalSeconds *int `json:"interval_seconds,omitempty"`
+
+	// State pending while the operator has not yet approved the session; signed_in once the OAuth tokens are stored; expired when the device-code session's own expires_at has passed; denied when the operator explicitly declined on the vendor's page.
+	State SignInPollResponseState `json:"state"`
+}
+
+// SignInPollResponseState pending while the operator has not yet approved the session; signed_in once the OAuth tokens are stored; expired when the device-code session's own expires_at has passed; denied when the operator explicitly declined on the vendor's page.
+type SignInPollResponseState string
+
+// SignInStartResponse Response from POST /providers/{id}/sign-in (ADR-068 FR-008, amended 2026-08-23 §8b). `cli_login` for codex-cli / github-copilot: the vendor CLI's own login command, run by the operator in a terminal. `device_code` for openai-chatgpt (and xai once its catalog row carries sign_in): Omnipus requests a device code itself and the SPA shows the verification link and user code. Discriminated by `method`.
 type SignInStartResponse struct {
+	union json.RawMessage
+}
+
+// SignInStartResponseCliLogin The `cli_login` variant of SignInStartResponse (ADR-068 FR-008, amended 2026-08-23 §8b). For `codex-cli` and `github-copilot`: Omnipus never performs or stores the vendor login itself — this returns the one instruction the operator needs, the vendor CLI's own login command, so the SPA can show it beside a *Check sign-in* button.
+type SignInStartResponseCliLogin struct {
 	// Command The exact command the operator runs in a terminal (e.g. "codex login", "copilot login").
 	Command string `json:"command"`
 
 	// Instructions Human-readable guidance shown beside the command, ending with the prompt to click Check sign-in.
 	Instructions string `json:"instructions"`
 
-	// Method The only sign-in mechanism — run the vendor CLI's login command.
-	Method SignInStartResponseMethod `json:"method"`
+	// Method Discriminator — run the vendor CLI's login command.
+	Method SignInStartResponseCliLoginMethod `json:"method"`
 }
 
-// SignInStartResponseMethod The only sign-in mechanism — run the vendor CLI's login command.
-type SignInStartResponseMethod string
+// SignInStartResponseCliLoginMethod Discriminator — run the vendor CLI's login command.
+type SignInStartResponseCliLoginMethod string
 
-// SignInStatus Response from GET /providers/{id}/sign-in/status (ADR-068 FR-009). Read from the vendor CLI's saved login only — Omnipus never refreshes a token (MAJ-006). There is no `pending` state (MIN-005): a check is synchronous.
+// SignInStartResponseDeviceCode The `device_code` variant of SignInStartResponse (ADR-068 FR-008/FR-044, added 2026-08-23 §8b). For `openai-chatgpt` (and `xai` once its catalog row carries `sign_in`): Omnipus requests a device code from the vendor itself and the SPA renders the verification link and user code for the operator to approve on any device. `device_auth_id` is an opaque server-side handle for POST /providers/{id}/sign-in/poll — the vendor's own device code and any PKCE verifier are held only by the gateway and never appear on the wire.
+type SignInStartResponseDeviceCode struct {
+	// DeviceAuthId Opaque handle identifying this device-code session for POST /providers/{id}/sign-in/poll. Never the vendor's own device code.
+	DeviceAuthId string `json:"device_auth_id"`
+
+	// ExpiresAt When this device-code session expires server-side (ceiling 15 minutes from start, FR-044). The dialog shows the matching expired end state once past this time.
+	ExpiresAt time.Time `json:"expires_at"`
+
+	// IntervalSeconds Minimum seconds between polls. The SPA must never poll faster than this, and must back off when a later poll response raises it (FR-045, vendor slow_down).
+	IntervalSeconds int `json:"interval_seconds"`
+
+	// Method Discriminator — a device-code session was started; poll for completion.
+	Method SignInStartResponseDeviceCodeMethod `json:"method"`
+
+	// UserCode Short code the operator enters (or confirms) on the verification page.
+	UserCode string `json:"user_code"`
+
+	// VerificationUrl The vendor page the operator opens (new tab) to approve the sign-in.
+	VerificationUrl string `json:"verification_url"`
+}
+
+// SignInStartResponseDeviceCodeMethod Discriminator — a device-code session was started; poll for completion.
+type SignInStartResponseDeviceCodeMethod string
+
+// SignInStatus Response from GET /providers/{id}/sign-in/status (ADR-068 FR-009, amended 2026-08-23 §8b). For `cli_login` providers (codex-cli, github-copilot): read from the vendor CLI's saved login only — Omnipus never refreshes that file — `expired` follows the access token's JWT `exp` (decoded unverified, display only) when decodable, else the saved login file being older than one hour. For `device_code` providers (openai-chatgpt, and xai once its catalog row carries `sign_in`): the state comes from the stored `<id>_OAUTH` entry in Omnipus's own encrypted credential store — `expired` means the access token is past `exp` AND a refresh attempt failed or no refresh token is available. `pending` is returned only while a device-code session started by POST /sign-in is open and not yet approved.
 type SignInStatus struct {
-	// AccountLabel Opaque account identifier from the CLI's saved login (`tokens.account_id` for codex; the GitHub login for Copilot when the CLI reports one). Present only when the saved login yields one; never an e-mail.
+	// AccountLabel Opaque account identifier — `tokens.account_id` for codex-cli, the GitHub login for Copilot when the CLI reports one, or the stored OAuth entry's account_id for device_code providers. Present only when known; never an e-mail.
 	AccountLabel *string `json:"account_label,omitempty"`
 
-	// ExpiresAt The access token's `exp` claim when decodable. Absent otherwise.
+	// ExpiresAt The access token's expiry when known. Absent otherwise.
 	ExpiresAt *time.Time `json:"expires_at,omitempty"`
 
-	// State not_signed_in when no saved login exists (or it is unreadable / malformed — logged as a warning); signed_in when a usable login exists; expired when the access token's JWT `exp` (decoded unverified, display only) is at or before now, or — without a decodable `exp` — the saved login file is older than one hour.
+	// State not_signed_in when no saved login / stored OAuth entry exists (or it is unreadable / malformed — logged as a warning); pending while an open device-code session awaits approval; signed_in when a usable login or OAuth entry exists; expired per the per-method rule above.
 	State SignInStatusState `json:"state"`
 }
 
-// SignInStatusState not_signed_in when no saved login exists (or it is unreadable / malformed — logged as a warning); signed_in when a usable login exists; expired when the access token's JWT `exp` (decoded unverified, display only) is at or before now, or — without a decodable `exp` — the saved login file is older than one hour.
+// SignInStatusState not_signed_in when no saved login / stored OAuth entry exists (or it is unreadable / malformed — logged as a warning); pending while an open device-code session awaits approval; signed_in when a usable login or OAuth entry exists; expired per the per-method rule above.
 type SignInStatusState string
 
 // Skill A single installed skill as returned by GET /skills. Skills are SKILL.md/package bundles loaded from ~/.omnipus/skills/ that extend agent capabilities. Each skill has an ID, version, and human-readable metadata.
@@ -15211,6 +15300,9 @@ type DeleteProviderJSONRequestBody = ProviderDeleteRequest
 
 // UpdateProviderJSONRequestBody defines body for UpdateProvider for application/json ContentType.
 type UpdateProviderJSONRequestBody = ProviderUpdateRequest
+
+// PollProviderSignInJSONRequestBody defines body for PollProviderSignIn for application/json ContentType.
+type PollProviderSignInJSONRequestBody = SignInPollRequest
 
 // RestoreBackupJSONRequestBody defines body for RestoreBackup for application/json ContentType.
 type RestoreBackupJSONRequestBody = RestoreBackupRequest
@@ -17363,6 +17455,95 @@ func (t SessionMessage) MarshalJSON() ([]byte, error) {
 }
 
 func (t *SessionMessage) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	return err
+}
+
+// AsSignInStartResponseCliLogin returns the union data inside the SignInStartResponse as a SignInStartResponseCliLogin
+func (t SignInStartResponse) AsSignInStartResponseCliLogin() (SignInStartResponseCliLogin, error) {
+	var body SignInStartResponseCliLogin
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromSignInStartResponseCliLogin overwrites any union data inside the SignInStartResponse as the provided SignInStartResponseCliLogin
+func (t *SignInStartResponse) FromSignInStartResponseCliLogin(v SignInStartResponseCliLogin) error {
+	v.Method = "cli_login"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeSignInStartResponseCliLogin performs a merge with any union data inside the SignInStartResponse, using the provided SignInStartResponseCliLogin
+func (t *SignInStartResponse) MergeSignInStartResponseCliLogin(v SignInStartResponseCliLogin) error {
+	v.Method = "cli_login"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsSignInStartResponseDeviceCode returns the union data inside the SignInStartResponse as a SignInStartResponseDeviceCode
+func (t SignInStartResponse) AsSignInStartResponseDeviceCode() (SignInStartResponseDeviceCode, error) {
+	var body SignInStartResponseDeviceCode
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromSignInStartResponseDeviceCode overwrites any union data inside the SignInStartResponse as the provided SignInStartResponseDeviceCode
+func (t *SignInStartResponse) FromSignInStartResponseDeviceCode(v SignInStartResponseDeviceCode) error {
+	v.Method = "device_code"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeSignInStartResponseDeviceCode performs a merge with any union data inside the SignInStartResponse, using the provided SignInStartResponseDeviceCode
+func (t *SignInStartResponse) MergeSignInStartResponseDeviceCode(v SignInStartResponseDeviceCode) error {
+	v.Method = "device_code"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t SignInStartResponse) Discriminator() (string, error) {
+	var discriminator struct {
+		Discriminator string `json:"method"`
+	}
+	err := json.Unmarshal(t.union, &discriminator)
+	return discriminator.Discriminator, err
+}
+
+func (t SignInStartResponse) ValueByDiscriminator() (interface{}, error) {
+	discriminator, err := t.Discriminator()
+	if err != nil {
+		return nil, err
+	}
+	switch discriminator {
+	case "cli_login":
+		return t.AsSignInStartResponseCliLogin()
+	case "device_code":
+		return t.AsSignInStartResponseDeviceCode()
+	default:
+		return nil, errors.New("unknown discriminator value: " + discriminator)
+	}
+}
+
+func (t SignInStartResponse) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *SignInStartResponse) UnmarshalJSON(b []byte) error {
 	err := t.union.UnmarshalJSON(b)
 	return err
 }

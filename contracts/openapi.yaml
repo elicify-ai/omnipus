@@ -150,10 +150,38 @@ components:
       $ref: ./components/schemas/OnboardingProviderApiKey.yaml
     OnboardingProviderSignIn:
       $ref: ./components/schemas/OnboardingProviderSignIn.yaml
+    # SignInStartResponse is a discriminated union hosted INLINE here (not in
+    # a schema file), following the ADR-034 precedent for AgentCreateRequest:
+    # oapi-codegen only generates named variant types + As/From accessors for
+    # a oneOf over INTERNAL component refs. The two variants remain one file
+    # each under contracts/components/schemas/.
     SignInStartResponse:
-      $ref: ./components/schemas/SignInStartResponse.yaml
+      description: >
+        Response from POST /providers/{id}/sign-in (ADR-068 FR-008, amended
+        2026-08-23 §8b). `cli_login` for codex-cli / github-copilot: the
+        vendor CLI's own login command, run by the operator in a terminal.
+        `device_code` for openai-chatgpt (and xai once its catalog row
+        carries sign_in): Omnipus requests a device code itself and the SPA
+        shows the verification link and user code. Discriminated by
+        `method`.
+      oneOf:
+        - $ref: '#/components/schemas/SignInStartResponseCliLogin'
+        - $ref: '#/components/schemas/SignInStartResponseDeviceCode'
+      discriminator:
+        propertyName: method
+        mapping:
+          cli_login: '#/components/schemas/SignInStartResponseCliLogin'
+          device_code: '#/components/schemas/SignInStartResponseDeviceCode'
+    SignInStartResponseCliLogin:
+      $ref: ./components/schemas/SignInStartResponseCliLogin.yaml
+    SignInStartResponseDeviceCode:
+      $ref: ./components/schemas/SignInStartResponseDeviceCode.yaml
     SignInStatus:
       $ref: ./components/schemas/SignInStatus.yaml
+    SignInPollRequest:
+      $ref: ./components/schemas/SignInPollRequest.yaml
+    SignInPollResponse:
+      $ref: ./components/schemas/SignInPollResponse.yaml
     OnboardingCompleteResponse:
       $ref: ./components/schemas/LoginResponse.yaml
     ProbeProviderRequest:
@@ -4531,15 +4559,22 @@ paths:
   /providers/{id}/sign-in:
     post:
       operationId: startProviderSignIn
-      summary: Start a vendor sign-in for a provider (ADR-068 FR-008/FR-009)
+      summary: Start a vendor sign-in for a provider (ADR-068 FR-008, amended 2026-08-23 §8b)
       description: >
-        Omnipus never performs or stores the vendor login itself. This
-        endpoint returns the one instruction the operator needs — the vendor
-        CLI's login command — so the SPA can show it beside a *Check sign-in*
-        button. Returns 400 `{"error":"provider does not support sign-in"}`
-        when the provider's catalog row does not list `sign_in` in
-        `auth_methods` (FR-008). Never contacts the vendor and persists
-        nothing. adminWrap: 401 unauthenticated, 503 under dev-mode bypass.
+        For `codex-cli` / `github-copilot`: Omnipus never performs or stores
+        the vendor login itself — returns the one instruction the operator
+        needs, the vendor CLI's own login command, so the SPA can show it
+        beside a *Check sign-in* button (`method: cli_login`). For
+        `openai-chatgpt` (and `xai` once its catalog row carries `sign_in`):
+        Omnipus requests a device code from the vendor itself and returns
+        the verification link, user code, and an opaque `device_auth_id` to
+        poll (`method: device_code`, FR-044) — the vendor's device code and
+        any PKCE verifier never leave the gateway. Returns 400
+        `{"error":"provider does not support sign-in"}` when the provider's
+        catalog row does not list `sign_in` in `auth_methods`, and for `xai`
+        specifically when no client id is configured. Rate-limited like the
+        auth endpoints. adminWrap: 401 unauthenticated, 503 under dev-mode
+        bypass.
       tags:
       - Providers
       security:
@@ -4554,7 +4589,7 @@ paths:
         example: codex-cli
       responses:
         '200':
-          description: The CLI login instruction for this provider.
+          description: The sign-in instruction or device-code session for this provider.
           content:
             application/json:
               schema:
@@ -4563,23 +4598,63 @@ paths:
           $ref: '#/components/responses/400BadRequest'
         '401':
           $ref: '#/components/responses/401Unauthorized'
+        '429':
+          $ref: '#/components/responses/429TooManyRequests'
+        '503':
+          $ref: '#/components/responses/503BypassActive'
+    delete:
+      operationId: signOutProvider
+      summary: Sign out a provider's device-code session (ADR-068 FR-048, added 2026-08-23 §8b)
+      description: >
+        Deletes the `<id>_OAUTH` encrypted credential entry (a missing
+        entry is success), emits audit event `provider.signed_out`, and the
+        row returns to `not_signed_in`. Only meaningful for `device_code`
+        providers — `cli_login` providers hold no Omnipus-side credential to
+        delete and this is a no-op success for them too. adminWrap: 401
+        unauthenticated, 503 under dev-mode bypass.
+      tags:
+      - Providers
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Provider id to sign out.
+        example: openai-chatgpt
+      responses:
+        '200':
+          description: Sign-out result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OperationResult'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
         '503':
           $ref: '#/components/responses/503BypassActive'
   /providers/{id}/sign-in/status:
     get:
       operationId: getProviderSignInStatus
-      summary: Read a provider's vendor sign-in state (ADR-068 FR-009)
+      summary: Read a provider's vendor sign-in state (ADR-068 FR-009, amended 2026-08-23 §8b)
       description: >
-        Reads the vendor CLI's saved login (codex `auth.json` — only
+        For `cli_login` providers (codex-cli, github-copilot): reads the
+        vendor CLI's saved login (codex `auth.json` — only
         `tokens.access_token` for the unverified `exp` claim and
-        `tokens.account_id` for the label; the Copilot CLI's own auth-status)
-        and maps it to `not_signed_in | signed_in | expired`. `expired`
-        follows the JWT `exp` when decodable and the one-hour file-age rule
-        otherwise (MAJ-006). The file is never modified and no refresh
-        request is ever made (FR-007). A missing CLI binary is reported on
-        the Provider row as `disconnected`, not here. Returns 400
-        `{"error":"provider does not support sign-in"}` for providers without
-        `sign_in`. adminWrap: 401 / 503 under bypass.
+        `tokens.account_id` for the label; the Copilot CLI's own
+        auth-status) — the file is never modified and no refresh request is
+        ever made (FR-007). For `device_code` providers (openai-chatgpt,
+        and xai once its catalog row carries `sign_in`): reads the stored
+        `<id>_OAUTH` entry in Omnipus's own encrypted credential store;
+        `expired` means the access token is past `exp` AND a refresh
+        attempt failed or no refresh token is available (FR-046). Maps to
+        `not_signed_in | pending | signed_in | expired`; `pending` only
+        while an open device-code session awaits approval. A missing CLI
+        binary is reported on the Provider row as `disconnected`, not here.
+        Returns 400 `{"error":"provider does not support sign-in"}` for
+        providers without `sign_in`. adminWrap: 401 / 503 under bypass.
       tags:
       - Providers
       security:
@@ -4603,6 +4678,86 @@ paths:
           $ref: '#/components/responses/400BadRequest'
         '401':
           $ref: '#/components/responses/401Unauthorized'
+        '503':
+          $ref: '#/components/responses/503BypassActive'
+  /providers/{id}/sign-in/poll:
+    post:
+      operationId: pollProviderSignIn
+      summary: Poll an open device-code sign-in session (ADR-068 FR-044, added 2026-08-23 §8b)
+      description: >
+        Performs at most ONE vendor poll per call for the device-code
+        session named by `device_auth_id` (returned by a prior POST
+        /providers/{id}/sign-in). On `signed_in` the gateway has already
+        stored the `<id>_OAUTH` credential entry before responding. A
+        device-code session expires server-side at the vendor's
+        `expires_at` (ceiling 15 minutes) and is single-use — an
+        unknown or already-resolved `device_auth_id` returns 404. Never
+        returns the vendor's device code. Rate-limited like the auth
+        endpoints. adminWrap: 401 unauthenticated, 503 under dev-mode
+        bypass.
+      tags:
+      - Providers
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Provider id whose catalog row declares sign_in and uses method device_code.
+        example: openai-chatgpt
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SignInPollRequest'
+      responses:
+        '200':
+          description: The current poll state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SignInPollResponse'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '429':
+          $ref: '#/components/responses/429TooManyRequests'
+        '503':
+          $ref: '#/components/responses/503BypassActive'
+  /providers/openai-chatgpt/sign-in/import:
+    post:
+      operationId: importCodexSignIn
+      summary: Import an existing Codex CLI login for openai-chatgpt (ADR-068 FR-047, added 2026-08-23 §8b)
+      description: >
+        Copies `tokens.access_token` + `tokens.account_id` from
+        `~/.codex/auth.json` into the `openai_OAUTH` encrypted credential
+        entry. No refresh token is imported — a session started this way
+        ends at the copied token's `exp` with no further refresh. The
+        source file's bytes and mtime are left unchanged (read-only,
+        FR-007). Returns 404 `{"error":"no codex login found"}` when the
+        file is absent or unreadable. adminWrap: 401 unauthenticated, 503
+        under dev-mode bypass.
+      tags:
+      - Providers
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: The resulting sign-in state after import.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SignInStatus'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
         '503':
           $ref: '#/components/responses/503BypassActive'
   /providers/{id}/entitlement:

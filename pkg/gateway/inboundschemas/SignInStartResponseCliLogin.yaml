@@ -1,10 +1,10 @@
 type: object
 description: >
-  Response from POST /providers/{id}/sign-in (ADR-068 FR-009, MIN-005).
-  Omnipus never performs or stores a vendor login itself: the only sign-in
-  mechanism is the vendor CLI's own login command, which the operator runs
-  in a terminal. `method` is therefore pinned to `cli_login` — there are no
-  device-code fields because nothing produces them.
+  The `cli_login` variant of SignInStartResponse (ADR-068 FR-008, amended
+  2026-08-23 §8b). For `codex-cli` and `github-copilot`: Omnipus never
+  performs or stores the vendor login itself — this returns the one
+  instruction the operator needs, the vendor CLI's own login command, so the
+  SPA can show it beside a *Check sign-in* button.
 required:
   - method
   - command
@@ -15,7 +15,7 @@ properties:
     type: string
     enum:
       - cli_login
-    description: The only sign-in mechanism — run the vendor CLI's login command.
+    description: Discriminator — run the vendor CLI's login command.
     example: cli_login
   command:
     type: string

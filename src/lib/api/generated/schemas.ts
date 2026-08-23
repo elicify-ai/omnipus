@@ -27,6 +27,22 @@ type OnboardingProviderSignIn = {
   model?: string | undefined;
   endpoint?: string | undefined;
 };
+type SignInStartResponse =
+  | SignInStartResponseCliLogin
+  | SignInStartResponseDeviceCode;
+type SignInStartResponseCliLogin = {
+  method: "cli_login";
+  command: string;
+  instructions: string;
+};
+type SignInStartResponseDeviceCode = {
+  method: "device_code";
+  verification_url: string;
+  user_code: string;
+  device_auth_id: string;
+  expires_at: string;
+  interval_seconds: number;
+};
 type OnboardingCompleteResponse = LoginResponse;
 type ProbeProviderResponse = {
   success: boolean;
@@ -2834,15 +2850,37 @@ export const ProviderDeleteResponse: z.ZodType<ProviderDeleteResponse> =
     default_changed: z.boolean(),
     new_default: DefaultModelUpdateRequest.optional(),
   });
-export const SignInStartResponse = z.object({
-  method: z.literal("cli_login"),
-  command: z.string().min(1).max(256),
-  instructions: z.string().min(1).max(1024),
-});
+export const SignInStartResponseCliLogin =
+  z.object({
+    method: z.literal("cli_login"),
+    command: z.string().min(1).max(256),
+    instructions: z.string().min(1).max(1024),
+  }) satisfies z.ZodType<SignInStartResponseCliLogin>;
+export const SignInStartResponseDeviceCode =
+  z.object({
+    method: z.literal("device_code"),
+    verification_url: z.string().url(),
+    user_code: z.string().min(1).max(16),
+    device_auth_id: z.string().min(1).max(64),
+    expires_at: z.string().datetime({ offset: true }),
+    interval_seconds: z.number().int().gte(1).lte(30),
+  }) satisfies z.ZodType<SignInStartResponseDeviceCode>;
+export const SignInStartResponse =
+  z.discriminatedUnion("method", [
+    SignInStartResponseCliLogin,
+    SignInStartResponseDeviceCode,
+  ]) satisfies z.ZodType<SignInStartResponse>;
 export const SignInStatus = z.object({
-  state: z.enum(["not_signed_in", "signed_in", "expired"]),
+  state: z.enum(["not_signed_in", "pending", "signed_in", "expired"]),
   account_label: z.string().max(128).optional(),
   expires_at: z.string().datetime({ offset: true }).optional(),
+});
+export const SignInPollRequest = z.object({
+  device_auth_id: z.string().min(1).max(64),
+});
+export const SignInPollResponse = z.object({
+  state: z.enum(["pending", "signed_in", "expired", "denied"]),
+  interval_seconds: z.number().int().gte(1).lte(30).optional(),
 });
 export const EntitlementModel: z.ZodType<EntitlementModel> = z.object({
   id: z.string().min(1).max(256),
@@ -7174,7 +7212,7 @@ Model lists are fetched live from each provider&#x27;s upstream /models endpoint
     method: "post",
     path: "/providers/:id/sign-in",
     alias: "startProviderSignIn",
-    description: `Omnipus never performs or stores the vendor login itself. This endpoint returns the one instruction the operator needs — the vendor CLI&#x27;s login command — so the SPA can show it beside a *Check sign-in* button. Returns 400 &#x60;{&quot;error&quot;:&quot;provider does not support sign-in&quot;}&#x60; when the provider&#x27;s catalog row does not list &#x60;sign_in&#x60; in &#x60;auth_methods&#x60; (FR-008). Never contacts the vendor and persists nothing. adminWrap: 401 unauthenticated, 503 under dev-mode bypass.
+    description: `For &#x60;codex-cli&#x60; / &#x60;github-copilot&#x60;: Omnipus never performs or stores the vendor login itself — returns the one instruction the operator needs, the vendor CLI&#x27;s own login command, so the SPA can show it beside a *Check sign-in* button (&#x60;method: cli_login&#x60;). For &#x60;openai-chatgpt&#x60; (and &#x60;xai&#x60; once its catalog row carries &#x60;sign_in&#x60;): Omnipus requests a device code from the vendor itself and returns the verification link, user code, and an opaque &#x60;device_auth_id&#x60; to poll (&#x60;method: device_code&#x60;, FR-044) — the vendor&#x27;s device code and any PKCE verifier never leave the gateway. Returns 400 &#x60;{&quot;error&quot;:&quot;provider does not support sign-in&quot;}&#x60; when the provider&#x27;s catalog row does not list &#x60;sign_in&#x60; in &#x60;auth_methods&#x60;, and for &#x60;xai&#x60; specifically when no client id is configured. Rate-limited like the auth endpoints. adminWrap: 401 unauthenticated, 503 under dev-mode bypass.
 `,
     requestFormat: "json",
     parameters: [
@@ -7197,6 +7235,87 @@ Model lists are fetched live from each provider&#x27;s upstream /models endpoint
         schema: ErrorResponse,
       },
       {
+        status: 429,
+        description: `Rate limit exceeded.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `dev_mode_bypass is active (RequireNotBypass guard).`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "delete",
+    path: "/providers/:id/sign-in",
+    alias: "signOutProvider",
+    description: `Deletes the &#x60;&lt;id&gt;_OAUTH&#x60; encrypted credential entry (a missing entry is success), emits audit event &#x60;provider.signed_out&#x60;, and the row returns to &#x60;not_signed_in&#x60;. Only meaningful for &#x60;device_code&#x60; providers — &#x60;cli_login&#x60; providers hold no Omnipus-side credential to delete and this is a no-op success for them too. adminWrap: 401 unauthenticated, 503 under dev-mode bypass.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: OperationResult,
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `dev_mode_bypass is active (RequireNotBypass guard).`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/providers/:id/sign-in/poll",
+    alias: "pollProviderSignIn",
+    description: `Performs at most ONE vendor poll per call for the device-code session named by &#x60;device_auth_id&#x60; (returned by a prior POST /providers/{id}/sign-in). On &#x60;signed_in&#x60; the gateway has already stored the &#x60;&lt;id&gt;_OAUTH&#x60; credential entry before responding. A device-code session expires server-side at the vendor&#x27;s &#x60;expires_at&#x60; (ceiling 15 minutes) and is single-use — an unknown or already-resolved &#x60;device_auth_id&#x60; returns 404. Never returns the vendor&#x27;s device code. Rate-limited like the auth endpoints. adminWrap: 401 unauthenticated, 503 under dev-mode bypass.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: z.object({ device_auth_id: z.string().min(1).max(64) }),
+      },
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: SignInPollResponse,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 429,
+        description: `Rate limit exceeded.`,
+        schema: ErrorResponse,
+      },
+      {
         status: 503,
         description: `dev_mode_bypass is active (RequireNotBypass guard).`,
         schema: ErrorResponse,
@@ -7207,7 +7326,7 @@ Model lists are fetched live from each provider&#x27;s upstream /models endpoint
     method: "get",
     path: "/providers/:id/sign-in/status",
     alias: "getProviderSignInStatus",
-    description: `Reads the vendor CLI&#x27;s saved login (codex &#x60;auth.json&#x60; — only &#x60;tokens.access_token&#x60; for the unverified &#x60;exp&#x60; claim and &#x60;tokens.account_id&#x60; for the label; the Copilot CLI&#x27;s own auth-status) and maps it to &#x60;not_signed_in | signed_in | expired&#x60;. &#x60;expired&#x60; follows the JWT &#x60;exp&#x60; when decodable and the one-hour file-age rule otherwise (MAJ-006). The file is never modified and no refresh request is ever made (FR-007). A missing CLI binary is reported on the Provider row as &#x60;disconnected&#x60;, not here. Returns 400 &#x60;{&quot;error&quot;:&quot;provider does not support sign-in&quot;}&#x60; for providers without &#x60;sign_in&#x60;. adminWrap: 401 / 503 under bypass.
+    description: `For &#x60;cli_login&#x60; providers (codex-cli, github-copilot): reads the vendor CLI&#x27;s saved login (codex &#x60;auth.json&#x60; — only &#x60;tokens.access_token&#x60; for the unverified &#x60;exp&#x60; claim and &#x60;tokens.account_id&#x60; for the label; the Copilot CLI&#x27;s own auth-status) — the file is never modified and no refresh request is ever made (FR-007). For &#x60;device_code&#x60; providers (openai-chatgpt, and xai once its catalog row carries &#x60;sign_in&#x60;): reads the stored &#x60;&lt;id&gt;_OAUTH&#x60; entry in Omnipus&#x27;s own encrypted credential store; &#x60;expired&#x60; means the access token is past &#x60;exp&#x60; AND a refresh attempt failed or no refresh token is available (FR-046). Maps to &#x60;not_signed_in | pending | signed_in | expired&#x60;; &#x60;pending&#x60; only while an open device-code session awaits approval. A missing CLI binary is reported on the Provider row as &#x60;disconnected&#x60;, not here. Returns 400 &#x60;{&quot;error&quot;:&quot;provider does not support sign-in&quot;}&#x60; for providers without &#x60;sign_in&#x60;. adminWrap: 401 / 503 under bypass.
 `,
     requestFormat: "json",
     parameters: [
@@ -7342,6 +7461,32 @@ Model lists are fetched live from each provider&#x27;s upstream /models endpoint
       {
         status: 500,
         description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `dev_mode_bypass is active (RequireNotBypass guard).`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/providers/openai-chatgpt/sign-in/import",
+    alias: "importCodexSignIn",
+    description: `Copies &#x60;tokens.access_token&#x60; + &#x60;tokens.account_id&#x60; from &#x60;~/.codex/auth.json&#x60; into the &#x60;openai_OAUTH&#x60; encrypted credential entry. No refresh token is imported — a session started this way ends at the copied token&#x27;s &#x60;exp&#x60; with no further refresh. The source file&#x27;s bytes and mtime are left unchanged (read-only, FR-007). Returns 404 &#x60;{&quot;error&quot;:&quot;no codex login found&quot;}&#x60; when the file is absent or unreadable. adminWrap: 401 unauthenticated, 503 under dev-mode bypass.
+`,
+    requestFormat: "json",
+    response: SignInStatus,
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
         schema: ErrorResponse,
       },
       {

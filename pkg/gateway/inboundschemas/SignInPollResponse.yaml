@@ -1,0 +1,32 @@
+type: object
+description: >
+  Response from POST /providers/{id}/sign-in/poll (ADR-068 FR-044, added
+  2026-08-23 §8b). The gateway performs at most one vendor poll per call.
+  On `signed_in` the gateway has already stored the `<id>_OAUTH` credential
+  entry before responding. The vendor's device code is never returned here.
+required:
+  - state
+additionalProperties: false
+properties:
+  state:
+    type: string
+    enum:
+      - pending
+      - signed_in
+      - expired
+      - denied
+    description: >
+      pending while the operator has not yet approved the session;
+      signed_in once the OAuth tokens are stored; expired when the
+      device-code session's own expires_at has passed; denied when the
+      operator explicitly declined on the vendor's page.
+    example: pending
+  interval_seconds:
+    type: integer
+    minimum: 1
+    maximum: 30
+    description: >
+      Present only when the vendor asked the client to slow down
+      (OAuth device-flow `slow_down`). The SPA must adopt this as its new
+      poll interval and never poll faster (FR-045).
+    example: 10

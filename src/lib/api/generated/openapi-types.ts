@@ -1628,11 +1628,15 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Start a vendor sign-in for a provider (ADR-068 FR-008/FR-009)
-         * @description Omnipus never performs or stores the vendor login itself. This endpoint returns the one instruction the operator needs — the vendor CLI's login command — so the SPA can show it beside a *Check sign-in* button. Returns 400 `{"error":"provider does not support sign-in"}` when the provider's catalog row does not list `sign_in` in `auth_methods` (FR-008). Never contacts the vendor and persists nothing. adminWrap: 401 unauthenticated, 503 under dev-mode bypass.
+         * Start a vendor sign-in for a provider (ADR-068 FR-008, amended 2026-08-23 §8b)
+         * @description For `codex-cli` / `github-copilot`: Omnipus never performs or stores the vendor login itself — returns the one instruction the operator needs, the vendor CLI's own login command, so the SPA can show it beside a *Check sign-in* button (`method: cli_login`). For `openai-chatgpt` (and `xai` once its catalog row carries `sign_in`): Omnipus requests a device code from the vendor itself and returns the verification link, user code, and an opaque `device_auth_id` to poll (`method: device_code`, FR-044) — the vendor's device code and any PKCE verifier never leave the gateway. Returns 400 `{"error":"provider does not support sign-in"}` when the provider's catalog row does not list `sign_in` in `auth_methods`, and for `xai` specifically when no client id is configured. Rate-limited like the auth endpoints. adminWrap: 401 unauthenticated, 503 under dev-mode bypass.
          */
         post: operations["startProviderSignIn"];
-        delete?: never;
+        /**
+         * Sign out a provider's device-code session (ADR-068 FR-048, added 2026-08-23 §8b)
+         * @description Deletes the `<id>_OAUTH` encrypted credential entry (a missing entry is success), emits audit event `provider.signed_out`, and the row returns to `not_signed_in`. Only meaningful for `device_code` providers — `cli_login` providers hold no Omnipus-side credential to delete and this is a no-op success for them too. adminWrap: 401 unauthenticated, 503 under dev-mode bypass.
+         */
+        delete: operations["signOutProvider"];
         options?: never;
         head?: never;
         patch?: never;
@@ -1646,12 +1650,52 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Read a provider's vendor sign-in state (ADR-068 FR-009)
-         * @description Reads the vendor CLI's saved login (codex `auth.json` — only `tokens.access_token` for the unverified `exp` claim and `tokens.account_id` for the label; the Copilot CLI's own auth-status) and maps it to `not_signed_in | signed_in | expired`. `expired` follows the JWT `exp` when decodable and the one-hour file-age rule otherwise (MAJ-006). The file is never modified and no refresh request is ever made (FR-007). A missing CLI binary is reported on the Provider row as `disconnected`, not here. Returns 400 `{"error":"provider does not support sign-in"}` for providers without `sign_in`. adminWrap: 401 / 503 under bypass.
+         * Read a provider's vendor sign-in state (ADR-068 FR-009, amended 2026-08-23 §8b)
+         * @description For `cli_login` providers (codex-cli, github-copilot): reads the vendor CLI's saved login (codex `auth.json` — only `tokens.access_token` for the unverified `exp` claim and `tokens.account_id` for the label; the Copilot CLI's own auth-status) — the file is never modified and no refresh request is ever made (FR-007). For `device_code` providers (openai-chatgpt, and xai once its catalog row carries `sign_in`): reads the stored `<id>_OAUTH` entry in Omnipus's own encrypted credential store; `expired` means the access token is past `exp` AND a refresh attempt failed or no refresh token is available (FR-046). Maps to `not_signed_in | pending | signed_in | expired`; `pending` only while an open device-code session awaits approval. A missing CLI binary is reported on the Provider row as `disconnected`, not here. Returns 400 `{"error":"provider does not support sign-in"}` for providers without `sign_in`. adminWrap: 401 / 503 under bypass.
          */
         get: operations["getProviderSignInStatus"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/providers/{id}/sign-in/poll": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Poll an open device-code sign-in session (ADR-068 FR-044, added 2026-08-23 §8b)
+         * @description Performs at most ONE vendor poll per call for the device-code session named by `device_auth_id` (returned by a prior POST /providers/{id}/sign-in). On `signed_in` the gateway has already stored the `<id>_OAUTH` credential entry before responding. A device-code session expires server-side at the vendor's `expires_at` (ceiling 15 minutes) and is single-use — an unknown or already-resolved `device_auth_id` returns 404. Never returns the vendor's device code. Rate-limited like the auth endpoints. adminWrap: 401 unauthenticated, 503 under dev-mode bypass.
+         */
+        post: operations["pollProviderSignIn"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/providers/openai-chatgpt/sign-in/import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Import an existing Codex CLI login for openai-chatgpt (ADR-068 FR-047, added 2026-08-23 §8b)
+         * @description Copies `tokens.access_token` + `tokens.account_id` from `~/.codex/auth.json` into the `openai_OAUTH` encrypted credential entry. No refresh token is imported — a session started this way ends at the copied token's `exp` with no further refresh. The source file's bytes and mtime are left unchanged (read-only, FR-007). Returns 404 `{"error":"no codex login found"}` when the file is absent or unreadable. adminWrap: 401 unauthenticated, 503 under dev-mode bypass.
+         */
+        post: operations["importCodexSignIn"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3238,11 +3282,12 @@ export interface components {
              */
             endpoint?: string;
         };
-        /** @description Response from POST /providers/{id}/sign-in (ADR-068 FR-009, MIN-005). Omnipus never performs or stores a vendor login itself: the only sign-in mechanism is the vendor CLI's own login command, which the operator runs in a terminal. `method` is therefore pinned to `cli_login` — there are no device-code fields because nothing produces them. */
-        SignInStartResponse: {
+        /** @description Response from POST /providers/{id}/sign-in (ADR-068 FR-008, amended 2026-08-23 §8b). `cli_login` for codex-cli / github-copilot: the vendor CLI's own login command, run by the operator in a terminal. `device_code` for openai-chatgpt (and xai once its catalog row carries sign_in): Omnipus requests a device code itself and the SPA shows the verification link and user code. Discriminated by `method`. */
+        SignInStartResponse: components["schemas"]["SignInStartResponseCliLogin"] | components["schemas"]["SignInStartResponseDeviceCode"];
+        /** @description The `cli_login` variant of SignInStartResponse (ADR-068 FR-008, amended 2026-08-23 §8b). For `codex-cli` and `github-copilot`: Omnipus never performs or stores the vendor login itself — this returns the one instruction the operator needs, the vendor CLI's own login command, so the SPA can show it beside a *Check sign-in* button. */
+        SignInStartResponseCliLogin: {
             /**
-             * @description The only sign-in mechanism — run the vendor CLI's login command.
-             * @example cli_login
+             * @description Discriminator — run the vendor CLI's login command. (enum property replaced by openapi-typescript)
              * @enum {string}
              */
             method: "cli_login";
@@ -3257,25 +3302,82 @@ export interface components {
              */
             instructions: string;
         };
-        /** @description Response from GET /providers/{id}/sign-in/status (ADR-068 FR-009). Read from the vendor CLI's saved login only — Omnipus never refreshes a token (MAJ-006). There is no `pending` state (MIN-005): a check is synchronous. */
+        /** @description The `device_code` variant of SignInStartResponse (ADR-068 FR-008/FR-044, added 2026-08-23 §8b). For `openai-chatgpt` (and `xai` once its catalog row carries `sign_in`): Omnipus requests a device code from the vendor itself and the SPA renders the verification link and user code for the operator to approve on any device. `device_auth_id` is an opaque server-side handle for POST /providers/{id}/sign-in/poll — the vendor's own device code and any PKCE verifier are held only by the gateway and never appear on the wire. */
+        SignInStartResponseDeviceCode: {
+            /**
+             * @description Discriminator — a device-code session was started; poll for completion. (enum property replaced by openapi-typescript)
+             * @enum {string}
+             */
+            method: "device_code";
+            /**
+             * Format: uri
+             * @description The vendor page the operator opens (new tab) to approve the sign-in.
+             * @example https://auth.openai.com/codex/device
+             */
+            verification_url: string;
+            /**
+             * @description Short code the operator enters (or confirms) on the verification page.
+             * @example WDJB-MJHT
+             */
+            user_code: string;
+            /**
+             * @description Opaque handle identifying this device-code session for POST /providers/{id}/sign-in/poll. Never the vendor's own device code.
+             * @example das_9f3a2b1c
+             */
+            device_auth_id: string;
+            /**
+             * Format: date-time
+             * @description When this device-code session expires server-side (ceiling 15 minutes from start, FR-044). The dialog shows the matching expired end state once past this time.
+             * @example 2026-08-23T12:15:00Z
+             */
+            expires_at: string;
+            /**
+             * @description Minimum seconds between polls. The SPA must never poll faster than this, and must back off when a later poll response raises it (FR-045, vendor slow_down).
+             * @example 5
+             */
+            interval_seconds: number;
+        };
+        /** @description Response from GET /providers/{id}/sign-in/status (ADR-068 FR-009, amended 2026-08-23 §8b). For `cli_login` providers (codex-cli, github-copilot): read from the vendor CLI's saved login only — Omnipus never refreshes that file — `expired` follows the access token's JWT `exp` (decoded unverified, display only) when decodable, else the saved login file being older than one hour. For `device_code` providers (openai-chatgpt, and xai once its catalog row carries `sign_in`): the state comes from the stored `<id>_OAUTH` entry in Omnipus's own encrypted credential store — `expired` means the access token is past `exp` AND a refresh attempt failed or no refresh token is available. `pending` is returned only while a device-code session started by POST /sign-in is open and not yet approved. */
         SignInStatus: {
             /**
-             * @description not_signed_in when no saved login exists (or it is unreadable / malformed — logged as a warning); signed_in when a usable login exists; expired when the access token's JWT `exp` (decoded unverified, display only) is at or before now, or — without a decodable `exp` — the saved login file is older than one hour.
+             * @description not_signed_in when no saved login / stored OAuth entry exists (or it is unreadable / malformed — logged as a warning); pending while an open device-code session awaits approval; signed_in when a usable login or OAuth entry exists; expired per the per-method rule above.
              * @example signed_in
              * @enum {string}
              */
-            state: "not_signed_in" | "signed_in" | "expired";
+            state: "not_signed_in" | "pending" | "signed_in" | "expired";
             /**
-             * @description Opaque account identifier from the CLI's saved login (`tokens.account_id` for codex; the GitHub login for Copilot when the CLI reports one). Present only when the saved login yields one; never an e-mail.
+             * @description Opaque account identifier — `tokens.account_id` for codex-cli, the GitHub login for Copilot when the CLI reports one, or the stored OAuth entry's account_id for device_code providers. Present only when known; never an e-mail.
              * @example user_abc123
              */
             account_label?: string;
             /**
              * Format: date-time
-             * @description The access token's `exp` claim when decodable. Absent otherwise.
+             * @description The access token's expiry when known. Absent otherwise.
              * @example 2026-09-01T12:00:00Z
              */
             expires_at?: string;
+        };
+        /** @description Body for POST /providers/{id}/sign-in/poll (ADR-068 FR-044, added 2026-08-23 §8b). Identifies which open device-code session to check. */
+        SignInPollRequest: {
+            /**
+             * @description The opaque handle returned by POST /providers/{id}/sign-in's device_code response.
+             * @example das_9f3a2b1c
+             */
+            device_auth_id: string;
+        };
+        /** @description Response from POST /providers/{id}/sign-in/poll (ADR-068 FR-044, added 2026-08-23 §8b). The gateway performs at most one vendor poll per call. On `signed_in` the gateway has already stored the `<id>_OAUTH` credential entry before responding. The vendor's device code is never returned here. */
+        SignInPollResponse: {
+            /**
+             * @description pending while the operator has not yet approved the session; signed_in once the OAuth tokens are stored; expired when the device-code session's own expires_at has passed; denied when the operator explicitly declined on the vendor's page.
+             * @example pending
+             * @enum {string}
+             */
+            state: "pending" | "signed_in" | "expired" | "denied";
+            /**
+             * @description Present only when the vendor asked the client to slow down (OAuth device-flow `slow_down`). The SPA must adopt this as its new poll interval and never poll faster (FR-045).
+             * @example 10
+             */
+            interval_seconds?: number;
         };
         OnboardingCompleteResponse: components["schemas"]["LoginResponse"];
         /** @description Body for POST /onboarding/probe-provider. Validates credentials against a provider and returns the probed model. Non-persistent — nothing is written to disk. CSRF-exempt. Returns 409 once onboarding is complete. ONE shape, owned by ADR-067 (id, api_base, protocol) and ADR-068 (auth, api_key, model) — see ADR-067 FR-023 / ADR-068 FR-036. Runtime rules the schema cannot express: id must be in the served catalog OR be accompanied by both api_base and protocol (a custom row) — otherwise 400 naming the field id with the message 'unknown provider "<id>"' and never a list of accepted ids; the reserved literals "catalog" and "default-model" are never valid ids; api_key is required iff auth is api_key (400 naming api_key) and must be absent with auth sign_in; a tier "unsupported" provider → 400 with its unsupported_reason; any api_base passes the SSRF gate (422 when blocked). */
@@ -15458,7 +15560,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The CLI login instruction for this provider. */
+            /** @description The sign-in instruction or device-code session for this provider. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -15468,6 +15570,35 @@ export interface operations {
                 };
             };
             400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            429: components["responses"]["429TooManyRequests"];
+            503: components["responses"]["503BypassActive"];
+        };
+    };
+    signOutProvider: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Provider id to sign out.
+                 * @example openai-chatgpt
+                 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Sign-out result. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperationResult"];
+                };
+            };
             401: components["responses"]["401Unauthorized"];
             503: components["responses"]["503BypassActive"];
         };
@@ -15498,6 +15629,64 @@ export interface operations {
             };
             400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
+            503: components["responses"]["503BypassActive"];
+        };
+    };
+    pollProviderSignIn: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Provider id whose catalog row declares sign_in and uses method device_code.
+                 * @example openai-chatgpt
+                 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SignInPollRequest"];
+            };
+        };
+        responses: {
+            /** @description The current poll state. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SignInPollResponse"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+            429: components["responses"]["429TooManyRequests"];
+            503: components["responses"]["503BypassActive"];
+        };
+    };
+    importCodexSignIn: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The resulting sign-in state after import. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SignInStatus"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
             503: components["responses"]["503BypassActive"];
         };
     };
@@ -18190,7 +18379,11 @@ export type OnboardingCompleteRequest = components["schemas"]["OnboardingComplet
 export type OnboardingProviderApiKey = components["schemas"]["OnboardingProviderApiKey"];
 export type OnboardingProviderSignIn = components["schemas"]["OnboardingProviderSignIn"];
 export type SignInStartResponse = components["schemas"]["SignInStartResponse"];
+export type SignInStartResponseCliLogin = components["schemas"]["SignInStartResponseCliLogin"];
+export type SignInStartResponseDeviceCode = components["schemas"]["SignInStartResponseDeviceCode"];
 export type SignInStatus = components["schemas"]["SignInStatus"];
+export type SignInPollRequest = components["schemas"]["SignInPollRequest"];
+export type SignInPollResponse = components["schemas"]["SignInPollResponse"];
 export type OnboardingCompleteResponse = components["schemas"]["OnboardingCompleteResponse"];
 export type ProbeProviderRequest = components["schemas"]["ProbeProviderRequest"];
 export type ProbeProviderResponse = components["schemas"]["ProbeProviderResponse"];
