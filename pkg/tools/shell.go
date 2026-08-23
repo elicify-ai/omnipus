@@ -270,7 +270,25 @@ var (
 		regexp.MustCompile(`;\s*rm\s+-[rf]`),
 		regexp.MustCompile(`&&\s*rm\s+-[rf]`),
 		regexp.MustCompile(`\|\|\s*rm\s+-[rf]`),
-		regexp.MustCompile(`<<\s*EOF`),
+		// REMOVED (ADR-068 §3, 2026-08-23): `regexp.MustCompile("<<\\s*EOF")`.
+		// Do NOT restore it. applyDenyPatterns LOWERCASES the command before
+		// matching (lowerASCII, shell_guard.go:32), so an uppercase `EOF`
+		// literal could never match anything: the rule was unreachable from the
+		// day it was written and blocked exactly zero commands over its whole
+		// life. Deleting it therefore changes no runtime behaviour.
+		//
+		// Making it fire instead would have been a REGRESSION dressed up as a
+		// fix — heredocs (`cat > notes.md << EOF … EOF`) are an ordinary,
+		// currently-working way for an agent to write a file, and the ADR-068
+		// investigation confirmed the deny layer allows every heredoc write
+		// shape UAT defect 003 reported as blocked (those were blocked by the
+		// path-containment scan below, not here).
+		//
+		// Two tests pin this: TestDefaultDenyPatterns_HeredocsArePermitted
+		// asserts heredocs stay allowed, and
+		// TestDefaultDenyPatterns_ContainNoUppercaseOnlyLiterals asserts no
+		// pattern in this list can contain an uppercase-only literal again —
+		// the whole bug class, not just this one instance (shell_guard_test.go).
 		// The four substitution rules below are now ALSO covered by
 		// substitutionGuard's R2 (which additionally handles `$(/bin/cat …)`,
 		// `$(FOO=1 curl …)` and mid-pipeline positions). They are retained
@@ -888,6 +906,18 @@ func (t *ExecTool) resolveCWD(ctx context.Context, args map[string]any, baseDir 
 // and (3) a legacy defense-in-depth scan for absolute paths referenced in the
 // command TEXT (independent of the cwd parameter guard above), gated on
 // restrictToWorkspace exactly as the pre-consolidation exec tool did.
+//
+// ADR-068 (2026-08-23) named step 3 the system's THIRD file-access rule layer
+// and corrected the record about what it does: it had been enforcing the
+// pre-ADR-062 CONFINED model for reads as well as writes, which is why
+// `bash cat ~/notes.txt` was refused while ADR-063 documented it as allowed.
+// Under the founder's ruling (ADR-068 §2.1 option A) this layer now
+// distinguishes the two: a path reference outside the working directory that is
+// PROVABLY a read is allowed; anything else — every write, and every reference
+// this scanner cannot prove is a read — still requires a workspace mount,
+// exactly as before. The proof lives in pathUseClassifier below, and it is
+// deliberately allowlist-shaped: see its doc comment for why "not provably a
+// read" must mean "treat as a write", never the other way round.
 func (t *ExecTool) guardCommand(ctx context.Context, command, cwd string) string {
 	if msg := applyDenyPatterns(command, t.denyPatterns, nil); msg != "" {
 		return msg
@@ -944,14 +974,63 @@ func (t *ExecTool) guardCommand(ctx context.Context, command, cwd string) string
 	// gap needs a home/work-dir path-form match this call site can't cheaply
 	// guarantee; it is tracked as follow-up, not attempted inline.)
 	var mountRoots []string
+
+	// ADR-068 read exemption vs the turn's secret set (code review, 2026-08-23,
+	// second pass). Opening reads outside the working directory must NOT open
+	// the secret set with them. secretGuardPatterns (the literal text backstop)
+	// covers only fspolicy.SecretEntriesAlways — config.json, master.key,
+	// cli.token, entities — and deliberately NOT the PER-TURN roots `agents/`
+	// and `workspaces/`. Those were out of reach here only as a side effect of
+	// blocking every outside-WorkDir path, so granting reads removed the sole
+	// app-layer barrier: another agent's SOUL.md and another workspace's work
+	// tree became readable from bash wherever the kernel layer is absent or off
+	// (a non-Landlock host, or sandbox.mode=off) — the exact regression
+	// pkg/sandbox/derive_from_fspolicy.go:160 records as previously fixed.
+	//
+	// IsCarveOut is the right primitive here, and the two obvious alternatives
+	// are both wrong:
+	//   - DeniedPathsFor re-admits a whole per-turn ROOT, so during a workspace
+	//     turn every OTHER workspace is re-admitted with the caller's own. The
+	//     comment at derive_from_fspolicy.go:160 warns against exactly this.
+	//   - KernelDeniedPathsFor is correct but enumerates the sibling set from
+	//     disk on every call — thousands of entries, per bash command, matched
+	//     lexically. Wrong shape for a per-command text guard.
+	// IsCarveOut answers per PATH with no listing, applies the own-tree
+	// exception per-root, and resolves by filesystem identity rather than by
+	// string prefix — which is also what makes this immune to the
+	// lexical-vs-realpath mismatch that made the first attempt at this fix
+	// inert on macOS (/var vs /private/var).
+	//
+	// It is ALSO the same primitive the app-layer file tools call, so `bash cat
+	// X` and `read_file X` now agree about the secret set — the file-access
+	// spec's R-4 ("a rule must not depend on which tool asks"), which ADR-068
+	// §1.1 found was never true on the bash path.
+	//
+	// FAIL CLOSED: when the policy cannot be resolved there is no way to tell
+	// the caller's own tree from anyone else's, so the read exemption is
+	// withheld entirely (readPolicyOK=false) and the guard behaves exactly as
+	// it did before ADR-068. Never widen on an error path.
+	var (
+		turnPolicy   fspolicy.FSPolicy
+		readPolicyOK bool
+	)
 	if authored, ferr := ResolveTurnFSPolicy(ctx, t.workingDir, t.restrictToWorkspace); ferr == nil {
 		mountRoots = authored.AllowedRoots
+		turnPolicy = authored
+		readPolicyOK = true
 	}
 
 	// Web URL schemes whose path components (starting with //) should be
 	// exempt from workspace sandbox checks. file: is intentionally excluded
 	// so file:// URIs are still validated against the workspace boundary.
 	webSchemes := []string{"http:", "https:", "ftp:", "ftps:", "sftp:", "ssh:", "git:"}
+
+	// ADR-068 §1: read/write classification for this command. Built ONCE — it
+	// scans the command for quoting once and answers per-candidate questions
+	// from that single pass. A command it cannot parse confidently classifies
+	// every candidate as a write, i.e. behaves exactly like the pre-ADR-068
+	// guard.
+	classifier := newPathUseClassifier(cmd)
 
 	// Group 1 is the path itself; the full match also consumes the leading
 	// boundary character, so indices 2:4 (not 0:2) are what we want. Reading
@@ -965,6 +1044,12 @@ func (t *ExecTool) guardCommand(ctx context.Context, command, cwd string) string
 		}
 		raw := cmd[start:end]
 
+		// The classification is a property of WHERE the candidate sits in the
+		// command text, so it must be computed here (byte offsets exist only at
+		// this call site) and threaded down into checkPathSegment, which sees
+		// the path string alone.
+		readOnly := classifier.isReadOnly(start)
+
 		// Colon-joined path list (PATH= assignments, -I a:b-style flags):
 		// each `:`-separated segment is checked independently against the
 		// workspace boundary (the same check applied to a bare candidate
@@ -973,9 +1058,13 @@ func (t *ExecTool) guardCommand(ctx context.Context, command, cwd string) string
 		// recognized narrowly, and why an unconditional skip here would
 		// have let a colon-joined list smuggle an out-of-workspace segment
 		// past the guard entirely.
+		//
+		// Every segment of the list inherits the SAME read/write
+		// classification: the list is one token in one argument position, so
+		// whatever the command does with it, it does with all of it.
 		if strings.Contains(raw, ":") && colonPathListPattern.MatchString(raw) {
 			for _, seg := range strings.Split(raw, ":") {
-				if msg := t.checkPathSegment(seg, cwdPath, mountRoots); msg != "" {
+				if msg := t.checkPathSegment(seg, cwdPath, mountRoots, turnPolicy, readPolicyOK, readOnly); msg != "" {
 					return msg
 				}
 			}
@@ -996,7 +1085,7 @@ func (t *ExecTool) guardCommand(ctx context.Context, command, cwd string) string
 			}
 		}
 
-		if msg := t.checkPathSegment(raw, cwdPath, mountRoots); msg != "" {
+		if msg := t.checkPathSegment(raw, cwdPath, mountRoots, turnPolicy, readPolicyOK, readOnly); msg != "" {
 			return msg
 		}
 	}
@@ -1010,7 +1099,14 @@ func (t *ExecTool) guardCommand(ctx context.Context, command, cwd string) string
 // operator-configured allowlist, the workspace-containment boundary, and the
 // turn's workspace mounts (mountRoots, from ResolveTurnFSPolicy.AllowedRoots).
 // Returns "" when the segment is allowed, or a rejection message otherwise.
-func (t *ExecTool) checkPathSegment(raw, cwdPath string, mountRoots []string) string {
+//
+// readOnly is the caller's ADR-068 classification of this candidate: true only
+// when guardCommand's pathUseClassifier could PROVE, from the command text,
+// that the reference is a read. It changes exactly one thing — the final
+// out-of-working-directory rejection. Everything above that point (safePaths,
+// the operator allowlist, containment, mounts) is identical for reads and
+// writes, so no existing exemption widens or narrows because of this parameter.
+func (t *ExecTool) checkPathSegment(raw, cwdPath string, mountRoots []string, turnPolicy fspolicy.FSPolicy, readPolicyOK, readOnly bool) string {
 	p, err := filepath.Abs(raw)
 	if err != nil {
 		return "Command blocked by safety guard (cannot resolve path)"
@@ -1035,9 +1131,393 @@ func (t *ExecTool) checkPathSegment(raw, cwdPath string, mountRoots []string) st
 		if _, ok := matchedAllowedRoot(p, mountRoots); ok {
 			return ""
 		}
-		return fmt.Sprintf("Command blocked by safety guard (path outside working dir): %q is outside the effective working directory %q and no mount covers it", p, cwdPath)
+
+		// ADR-068 §2.3: match the mount roots on the RESOLVED path too.
+		// Mount.HostPath is realpath-resolved when the mount is created
+		// (pkg/workspace/mount.go:37), while p above is only lexically absolute
+		// (filepath.Abs follows no symlinks). On macOS the two forms disagree
+		// constantly — /tmp is a symlink to /private/tmp, /var to /private/var —
+		// so an operator could approve a mount and watch every write to it still
+		// be refused with "no mount covers it", the mount plainly existing. That
+		// is the single worst failure mode this guard has: a denial that
+		// contradicts the operator's own explicit grant.
+		//
+		// resolvePathAgainstExistingAncestor (filesystem.go) is the same
+		// deepest-existing-ancestor resolver resolveAbsPath uses, so a
+		// not-yet-created file under a mounted directory still resolves through
+		// its existing parent. NON-FATAL by design, matching the mount-root
+		// resolution above: a resolve error (nothing on the path exists, an
+		// unreadable ancestor, a symlink loop) leaves the candidate judged on
+		// its lexical form alone — i.e. exactly the pre-ADR-068 behaviour — and
+		// never aborts the command. This can only ADD a mount match, never
+		// remove one, because the lexical match above has already been tried.
+		if resolved, rerr := resolvePathAgainstExistingAncestor(p); rerr == nil && resolved != p {
+			if _, ok := matchedAllowedRoot(resolved, mountRoots); ok {
+				return ""
+			}
+		}
+
+		// ADR-068 §1/§2.1 option A: reads outside the working directory are
+		// allowed; writes outside it still require a mount. readOnly is true
+		// only when the command text PROVES the reference is a read (see
+		// pathUseClassifier) — an unproven reference arrives here as a write and
+		// falls through to the rejection below, which is the pre-ADR-068
+		// behaviour unchanged.
+		if readOnly && readPolicyOK && !t.inTurnSecretSet(p, turnPolicy) {
+			return ""
+		}
+
+		// ADR-068 §6: an unexplained denial is what drives operators to switch
+		// off the entire boundary rather than the one rule in their way, so the
+		// message names the rule, the field behind it, and both ways to change
+		// it. `sandbox.workspace_path_guard` is the operator-facing key that
+		// resolves into AgentDefaults.RestrictToWorkspace (pkg/config/sandbox.go);
+		// the env var is the recovery path that outranks it. Neither is the
+		// kernel sandbox (`sandbox.mode`) — the confusion between the two is
+		// precisely what UAT defect 002 reported.
+		return fmt.Sprintf(
+			"Command blocked by safety guard (path outside working dir): %q is outside the effective working directory %q and no mount covers it. "+
+				"Rule: bash workspace path guard (RestrictToWorkspace) — a WRITE outside the working directory needs an approved workspace mount; reads outside it are allowed (ADR-068). "+
+				"Fixes: request a mount for that folder (request_mount), or have an operator set sandbox.workspace_path_guard=false (env OMNIPUS_AGENTS_DEFAULTS_RESTRICT_TO_WORKSPACE=false). "+
+				"This is NOT the kernel sandbox setting (sandbox.mode).",
+			p, cwdPath)
 	}
 	return ""
+}
+
+// --- read/write classification (ADR-068 §1, option A) ------------------------
+
+// readOnlyShellCommands is the allowlist of command names whose path arguments
+// are provably only READ.
+//
+// MEMBERSHIP CRITERION, and it is deliberately severe: a name belongs here only
+// if the binary has NO flag, in ANY common implementation, that writes to a
+// filesystem path named on its own command line. If a reviewer has to think
+// about it, the answer is no.
+//
+// Why an allowlist and not a blocklist of write markers. Deciding read-vs-write
+// from shell TEXT is, in general, undecidable — the head can be an interpreter
+// whose file access is invisible (`python3 -c`, `sh stage2.sh`), the same binary
+// reads or writes depending on a flag (`sed` vs `sed -i`, `sort` vs `sort -o`,
+// `xxd` vs `xxd -r`), and expansions this scanner does not model change which
+// token is even a path. ADR-068 §5 criticises exactly that kind of pattern
+// matching, so this classifier must never grow a "looks like a read" heuristic.
+// The only safe shape is: prove a read, or call it a write.
+//
+// DELIBERATE EXCLUSIONS, recorded so nobody re-adds them as an "obvious" omission:
+//   - sed, awk, gawk, perl, ruby — in-place flags (`-i`, `-i inplace`).
+//   - sort — `-o FILE`. tee, dd, cp, mv, ln, install, rsync, truncate, touch,
+//     mkdir, tar, unzip — writers, or writers under a destination flag.
+//   - find — `-exec` / `-delete`. less, more, vi, view — shell escapes.
+//   - xxd, od-style dumpers with a reverse mode — `xxd -r in out` writes.
+//   - file — `file -C -m FILE` compiles a magic file and writes FILE.mgc, so
+//     it fails this list's own membership criterion (code review, 2026-08-23).
+//   - every interpreter (python*, node, sh, bash, ruby, php…), plus git, make,
+//     gcc, curl, wget — arbitrary file access by construction.
+//   - echo, printf — they never OPEN the path at all, so there is no read to
+//     grant; leaving them out also keeps `echo x,/etc/shadow` blocked.
+//
+// The known, accepted cost: `gcc -I/usr/include` and `tar -C/etc` are genuine
+// reads that stay blocked. Inferring "this flag names a read-only directory" is
+// the fragile inference this design refuses to make.
+var readOnlyShellCommands = map[string]bool{
+	"cat": true, "head": true, "tail": true, "nl": true, "wc": true,
+	"grep": true, "egrep": true, "fgrep": true, "rg": true,
+	"ls": true, "stat": true, "du": true,
+	"diff": true, "cmp": true, "strings": true,
+	"readlink": true, "realpath": true, "basename": true, "dirname": true,
+	"md5sum": true, "sha1sum": true, "sha256sum": true, "sha512sum": true,
+	"shasum": true, "cksum": true,
+}
+
+// pathUseClassifier answers one question about one command: is the
+// absolute-path candidate starting at byte offset N provably a READ?
+//
+// It fails CLOSED at every step. "false" is returned for anything it cannot
+// prove, which reproduces the pre-ADR-068 guard exactly, so the worst outcome of
+// a gap in this scanner is a command that stays blocked — never a write that
+// slips out of the working directory unnoticed.
+//
+// A candidate is read-only only when ALL of these hold:
+//
+//  1. The whole command is parseable by this scanner: quotes balance, and it
+//     contains no command substitution (`$( )`, backticks) or process
+//     substitution (`<( )`, `>( )`). Those shapes are already judged by
+//     substitutionGuard and the deny patterns, but they are re-tested here so
+//     this classifier stays honest on its own terms if either layer is ever
+//     relaxed — an unresolvable expansion means we do not know what runs.
+//  2. The command segment containing the candidate (split at unquoted
+//     `| ; & newline`) has a LITERAL head that is in readOnlyShellCommands.
+//     Quote-aware splitting is load-bearing: without it `tee "a;cat" /etc/x`
+//     splits into `tee "a` and `cat" /etc/x`, the second segment's head reads
+//     as `cat`, and a genuine write to /etc/x would be classified as a read.
+//  3. The segment contains no brace character. This scanner does not model
+//     brace expansion, and bash rewrites the words before parsing
+//     (`{cat,/etc/passwd}` runs `cat /etc/passwd`), so any `{` or `}` means the
+//     command we are judging is not the command that will run.
+//  4. The candidate is not in the segment's FIRST word. A path in command
+//     position is an EXEC, not a read — `echo hi;/etc/shadow` and
+//     `cat[/etc/shadow]` both land here. ADR-068 rules on reads only; exec
+//     stays where it was.
+//  5. The candidate's word is not the target of an output redirect (`>`, `>>`,
+//     `2>`, `&>`, `>&file`, `<>`). The check scans back from the start of the
+//     WORD, not from the path, so a redirect onto an expansion-prefixed target
+//     (`> ~/evil`, `> $HOME/evil`, whose candidate text starts mid-word) is
+//     still seen as a redirect.
+//  6. Every output redirect in the segment names a LITERAL target. A target
+//     containing an expansion or a glob (`> $OUT`, `> out*.txt`) is a write to
+//     a path this scan cannot see, so the whole segment becomes unclassifiable
+//     rather than let a read be granted beside an invisible write.
+type pathUseClassifier struct {
+	cmd string
+	// mask[i] is true when byte i is quoting syntax, escaped, or inside quotes
+	// — i.e. NOT an operator the shell would act on.
+	mask []bool
+	// classifiable is false when rule 1 fails, which makes every candidate in
+	// the command a write.
+	classifiable bool
+}
+
+func newPathUseClassifier(cmd string) pathUseClassifier {
+	mask, balanced := shellQuoteMask(cmd)
+	return pathUseClassifier{
+		cmd:  cmd,
+		mask: mask,
+		classifiable: balanced &&
+			!strings.Contains(cmd, "$(") &&
+			!strings.Contains(cmd, "`") &&
+			!strings.Contains(cmd, "<(") &&
+			!strings.Contains(cmd, ">("),
+	}
+}
+
+// isReadOnly reports whether the absolute-path candidate beginning at byte
+// offset start is provably a read. See the type's doc comment for the rules.
+func (c pathUseClassifier) isReadOnly(start int) bool {
+	if !c.classifiable || start < 0 || start >= len(c.cmd) {
+		return false
+	}
+
+	segStart, segEnd := c.segmentBounds(start)
+	seg := c.cmd[segStart:segEnd]
+
+	// Rule 3: unmodelled brace expansion.
+	if strings.ContainsAny(seg, "{}") {
+		return false
+	}
+
+	// Rule 2: literal, allowlisted head — named EXACTLY, with no directory
+	// prefix and no case folding.
+	//
+	// shellCommandHead normalises for the DENY path: it lowercases and strips a
+	// directory prefix so `/bin/rm` is judged as `rm`. That is right for a deny
+	// list and a bypass for an allow list — `./cat`, `bin/cat` and `CAT` all
+	// normalise onto the allowlisted head `cat`, and an agent may freely write
+	// an executable named `cat` into its own working directory. It would then
+	// be classified as a proven read while being an arbitrary program with the
+	// account's full write access. shellCommandHeadDetailed reports whether
+	// normalisation changed the token; a changed token is refused here, which
+	// costs only the absolute spellings (`/bin/cat f`) and keeps the doctrine
+	// intact: prove a read, or call it a write.
+	head, headIsExpansion, headNormalised := shellCommandHeadDetailed(seg)
+	if headIsExpansion || headNormalised || !readOnlyShellCommands[head] {
+		return false
+	}
+
+	word := c.wordStart(start, segStart)
+
+	// Rule 4: command position is exec, not read.
+	if word == c.firstWordStart(segStart, segEnd) {
+		return false
+	}
+	// Rule 5: this word is a redirect target.
+	if c.precededByOutputRedirect(word, segStart) {
+		return false
+	}
+	// Rule 6: some other redirect in this segment writes somewhere we cannot see.
+	if !c.redirectTargetsAreLiteral(segStart, segEnd) {
+		return false
+	}
+	return true
+}
+
+// segmentBounds returns the half-open byte range of the command segment
+// containing idx, splitting at unquoted `| ; & newline` exactly as
+// splitShellSegments does — but preserving offsets, which that helper discards.
+func (c pathUseClassifier) segmentBounds(idx int) (int, int) {
+	start := idx
+	for start > 0 && !c.isSegmentSeparator(start-1) {
+		start--
+	}
+	end := idx
+	for end < len(c.cmd) && !c.isSegmentSeparator(end) {
+		end++
+	}
+	return start, end
+}
+
+func (c pathUseClassifier) isSegmentSeparator(i int) bool {
+	if c.mask[i] {
+		return false
+	}
+	switch c.cmd[i] {
+	case '|', ';', '\n', '\r':
+		return true
+	case '&':
+		// `2>&1`, `<&-`: an `&` bound to a redirection operator on its left is
+		// a file-descriptor duplication, not a command separator. Splitting
+		// there would strand the redirect with an empty target and make the
+		// ubiquitous `cmd 2>&1` shape unclassifiable for no reason.
+		if i > 0 && !c.mask[i-1] && (c.cmd[i-1] == '>' || c.cmd[i-1] == '<') {
+			return false
+		}
+		return true
+	}
+	return false
+}
+
+// wordStart returns the offset at which the shell word containing idx begins,
+// never running past segStart. Quoted word-break characters do not break a
+// word, which is what keeps `cat "/etc/my file"` one argument.
+func (c pathUseClassifier) wordStart(idx, segStart int) int {
+	i := idx
+	for i > segStart && !(!c.mask[i-1] && isShellWordBreak(c.cmd[i-1])) {
+		i--
+	}
+	return i
+}
+
+// firstWordStart returns the offset of the segment's first word — the command
+// position.
+func (c pathUseClassifier) firstWordStart(segStart, segEnd int) int {
+	i := segStart
+	for i < segEnd && !c.mask[i] && (c.cmd[i] == ' ' || c.cmd[i] == '\t') {
+		i++
+	}
+	return i
+}
+
+// precededByOutputRedirect reports whether the word beginning at word is the
+// target of an output redirect. It covers `>`, `>>`, `N>`, `<>` (open for
+// read-WRITE) and bash's `>&target` combined form; `<` alone is a read and is
+// deliberately not matched.
+func (c pathUseClassifier) precededByOutputRedirect(word, segStart int) bool {
+	i := word - 1
+	for i >= segStart && !c.mask[i] && (c.cmd[i] == ' ' || c.cmd[i] == '\t') {
+		i--
+	}
+	if i < segStart || c.mask[i] {
+		return false
+	}
+	if c.cmd[i] == '>' {
+		return true
+	}
+	if c.cmd[i] == '&' && i-1 >= segStart && !c.mask[i-1] && c.cmd[i-1] == '>' {
+		return true
+	}
+	return false
+}
+
+// redirectTargetsAreLiteral reports whether every output redirect in the
+// segment names a target this text scan can actually see. A target built from
+// an expansion or a glob (`> $OUT`, `> "$d"/x`, `> out*.txt`) is a write to an
+// unknown path: the write itself is no more and no less guarded than it was
+// before ADR-068 (this scan never resolved `$OUT`), but we refuse to hand out a
+// READ exemption in the same segment as a write we cannot locate.
+func (c pathUseClassifier) redirectTargetsAreLiteral(segStart, segEnd int) bool {
+	for i := segStart; i < segEnd; i++ {
+		if c.mask[i] || c.cmd[i] != '>' {
+			continue
+		}
+		j := i + 1
+		for j < segEnd && !c.mask[j] && c.cmd[j] == '>' { // `>>`
+			j++
+		}
+		for j < segEnd && !c.mask[j] && (c.cmd[j] == ' ' || c.cmd[j] == '\t') {
+			j++
+		}
+		tokStart := j
+		// A leading `&` belongs to the redirection (`>&1`, `>&-`, `>&file`)
+		// even though `&` is otherwise a word break, so step over it before the
+		// word scan starts.
+		if j < segEnd && !c.mask[j] && c.cmd[j] == '&' {
+			j++
+		}
+		for j < segEnd && !(!c.mask[j] && isShellWordBreak(c.cmd[j])) {
+			j++
+		}
+		tok := c.cmd[tokStart:j]
+		if tok == "" {
+			// A redirect with no visible target (truncated command, or a
+			// separator we split on). Unclassifiable.
+			return false
+		}
+		if strings.HasPrefix(tok, "&") {
+			// `>&1`, `>&-`: file-descriptor duplication, no file involved.
+			// `>&file` (bash's combined redirect) IS a file, so only a pure
+			// fd/close suffix short-circuits.
+			if rest := tok[1:]; rest == "-" || isAllDigits(rest) {
+				continue
+			}
+			tok = tok[1:]
+		}
+		if strings.ContainsAny(tok, "$`*?[") {
+			return false
+		}
+		i = j - 1
+	}
+	return true
+}
+
+func isAllDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// shellQuoteMask marks every byte of s that the shell would NOT treat as a bare
+// operator: the quote characters themselves, everything inside them, a
+// backslash and the byte it escapes. The second return value is false when the
+// string ends inside a quote — an unbalanced command is one this scanner
+// refuses to reason about at all.
+//
+// This exists because segment splitting and redirect detection must agree with
+// bash about which `; | & >` characters are syntax and which are data. Getting
+// that wrong in the permissive direction is a real bypass: `tee "a;cat" /etc/x`
+// would otherwise present a segment whose head looks like `cat`.
+func shellQuoteMask(s string) ([]bool, bool) {
+	mask := make([]bool, len(s))
+	var quote byte // 0 = unquoted, '\'' or '"' = inside that quote
+	for i := 0; i < len(s); i++ {
+		ch := s[i]
+		// Backslash escapes everywhere except inside single quotes, where it is
+		// a literal character.
+		if ch == '\\' && quote != '\'' {
+			mask[i] = true
+			if i+1 < len(s) {
+				mask[i+1] = true
+				i++
+			}
+			continue
+		}
+		switch {
+		case quote == 0 && (ch == '\'' || ch == '"'):
+			quote = ch
+			mask[i] = true
+		case quote != 0 && ch == quote:
+			quote = 0
+			mask[i] = true
+		default:
+			mask[i] = quote != 0
+		}
+	}
+	return mask, quote == 0
 }
 
 // --- audit helpers -----------------------------------------------------------
@@ -1687,4 +2167,29 @@ func (t *ExecTool) sessionActionResult(sessionID string, session *ProcessSession
 		ForUser: fmt.Sprintf("Session %s %s", sessionID, status),
 		IsError: marshalErr != nil,
 	}
+}
+
+// inTurnSecretSet reports whether p is in this turn's secret set — another
+// agent's home, another workspace's tree, or one of the always-secret entries.
+//
+// DENY-side, so it errs toward matching. IsCarveOut wants a RESOLVED path
+// (its own parameter is named resolvedAbsPath) and resolves by filesystem
+// identity, so both spellings of the same file are asked about: the lexical
+// form the command actually wrote, and its symlink-resolved form. Checking only
+// one is what made the first version of this fix inert on macOS, where
+// /var/folders/... and /private/var/folders/... are the same directory and the
+// guard compared them as strings.
+//
+// A resolve failure leaves the lexical verdict standing rather than failing
+// open, and never aborts the command.
+func (t *ExecTool) inTurnSecretSet(p string, policy fspolicy.FSPolicy) bool {
+	if fspolicy.IsCarveOut(p, policy) {
+		return true
+	}
+	if resolved, err := resolvePathAgainstExistingAncestor(p); err == nil && resolved != p {
+		if fspolicy.IsCarveOut(resolved, policy) {
+			return true
+		}
+	}
+	return false
 }

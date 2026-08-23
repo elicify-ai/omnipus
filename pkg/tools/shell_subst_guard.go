@@ -543,7 +543,36 @@ func splitShellSegments(s string) []string {
 // `/etc/passwd` that bash actually parses. R2 closes that bypass with a
 // dedicated pre-check (dangerousBraceExpansionHead) before this scan runs.
 func shellCommandHead(seg string) (string, bool) {
+	head, fromExpansion, _ := shellCommandHeadDetailed(seg)
+	return head, fromExpansion
+}
+
+// shellCommandHeadDetailed is shellCommandHead plus the one fact an ALLOW-list
+// caller cannot do without: whether normalisation actually changed the token.
+//
+// The normalisation below (lowercasing, and stripping a directory prefix so
+// `/bin/rm` is judged as `rm`) is correct and load-bearing for a DENY list —
+// it is what stops `/bin/rm` walking past a rule keyed on `rm`. Used by an
+// ALLOW list the same normalisation inverts into a bypass: `./cat`, `bin/cat`
+// and `CAT` all normalise to the allowlisted head `cat`, so an agent that
+// drops its own executable named `cat` into its working directory gets that
+// program classified as a proven read (ADR-068 §5's "prove a read, or call it
+// a write" — and this proved the wrong thing).
+//
+// The third return is true when the returned token is NOT byte-identical to
+// the literal the command actually names, i.e. when a directory prefix was
+// stripped or ASCII case was folded. An allow-list caller must refuse those.
+func shellCommandHeadDetailed(seg string) (string, bool, bool) {
+	// normalised describes ONLY the token this call ultimately returns. It is
+	// recomputed each iteration and never carried across one: the skip paths
+	// below (pure quoting, a leading VAR=value assignment, a shell keyword)
+	// discard their token, so `LC_ALL=C cat f` must report the head `cat` as
+	// un-normalised even though the skipped assignment was case-folded.
+	// Letting it persist marked clean heads as normalised and blocked reads
+	// ADR-068 grants.
+	normalised := false
 	for {
+		normalised = false
 		// Skip leading whitespace and the metacharacters that can precede a
 		// command name (`$( (cat f) )`, `{ cat f; }`, `! cat f`).
 		i := 0
@@ -553,7 +582,7 @@ func shellCommandHead(seg string) (string, bool) {
 		}
 		seg = seg[i:]
 		if seg == "" {
-			return "", false
+			return "", false, normalised
 		}
 
 		end := len(seg)
@@ -568,12 +597,16 @@ func shellCommandHead(seg string) (string, bool) {
 		if end == 0 {
 			// '$' here means the command name IS an expansion (`$C f`).
 			// Anything else (e.g. '<') means the segment names no command.
-			return "", seg[0] == '$'
+			return "", seg[0] == '$', normalised
 		}
 		// Lowercase here as well as in substitutionGuard: the deny maps are
 		// lowercase-keyed, and a caller that skipped normalisation must not
 		// end up with a silently weaker guard.
-		tok := lowerASCII(stripShellQuotes(seg[:end]))
+		rawTok := stripShellQuotes(seg[:end])
+		tok := lowerASCII(rawTok)
+		if tok != rawTok {
+			normalised = true // ASCII case was folded
+		}
 		rest := seg[end:]
 
 		if tok == "" { // token was pure quoting
@@ -595,12 +628,13 @@ func shellCommandHead(seg string) (string, bool) {
 		if terminator == '$' {
 			// `c$X f` / `c$(echo at) f`: the name is only partly literal, so
 			// the resolved command is unknown.
-			return tok, true
+			return tok, true, normalised
 		}
 		if idx := strings.LastIndexByte(tok, '/'); idx >= 0 {
 			tok = tok[idx+1:]
+			normalised = true // a directory prefix was stripped
 		}
-		return tok, false
+		return tok, false, normalised
 	}
 }
 

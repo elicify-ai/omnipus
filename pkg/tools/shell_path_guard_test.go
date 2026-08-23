@@ -44,6 +44,30 @@ package tools
 // blocked today. They have moved to TestGuardCommand_TruePositivesStillBlocked
 // accordingly; a new false-positive case below proves a colon-list whose
 // segments are ALL inside the workspace still passes.
+//
+// ADR-068 (2026-08-23) RETARGETED SEVEN CASES. The founder ruled (§2.1 option
+// A) that reads outside the working directory are allowed and only writes still
+// require a mount. Seven cases in TestGuardCommand_TruePositivesStillBlocked
+// asserted the opposite — that a READ of an outside path is blocked — which was
+// the shipped behaviour ADR-068 §1.1 tabulates as wrong. They were not deleted:
+// each one now appears verbatim in TestGuardCommand_ReadsOutsideWorkDirAllowed
+// (shell_readwrite_guard_test.go) with the corrected oracle, and its WRITE
+// counterpart is pinned below in
+// TestGuardCommand_ADR068RetargetedCases_WriteHalfStillBlocked so this file
+// keeps proving that the same path is still protected against writes:
+//
+//	ls /usr/local/bin/node /opt/homebrew/bin/node   (was "absolute path outside workspace")
+//	cat /etc/passwd                                 (was "read of a system file")
+//	cat ~/.ssh/id_rsa                               (was "home-directory tilde expansion")
+//	cat $HOME/.ssh/id_rsa                           (was "HOME variable expansion")
+//	cat /etc/passwd:evil                            (was "stray colon suffix …")
+//	cat /etc/passwd:/etc/hosts                      (was "colon-joined list …")
+//	cat ~/.ssh/id_rsa:/dev/null                     (was "tilde-expanded colon-joined list …")
+//
+// Everything else in TestGuardCommand_TruePositivesStillBlocked survives
+// untouched, and that matters: the `../` traversal case, the two
+// command-position cases and the attached-flag cases are the tripwires that
+// prove ADR-068 opened reads and nothing else.
 
 import (
 	"context"
@@ -161,11 +185,6 @@ func TestGuardCommand_TruePositivesStillBlocked(t *testing.T) {
 			want: "path traversal detected",
 		},
 		{
-			name: "absolute path outside workspace",
-			cmd:  `ls /usr/local/bin/node /opt/homebrew/bin/node`,
-			want: "path outside working dir",
-		},
-		{
 			name: "absolute path after an operator",
 			cmd:  `echo hi;/etc/shadow`,
 			want: "path outside working dir",
@@ -173,11 +192,6 @@ func TestGuardCommand_TruePositivesStillBlocked(t *testing.T) {
 		{
 			name: "absolute path after a pipe",
 			cmd:  `echo hi|/bin/sh`,
-			want: "path outside working dir",
-		},
-		{
-			name: "read of a system file",
-			cmd:  `cat /etc/passwd`,
 			want: "path outside working dir",
 		},
 		{
@@ -189,16 +203,6 @@ func TestGuardCommand_TruePositivesStillBlocked(t *testing.T) {
 			name: "rm -rf stays denied",
 			cmd:  `rm -rf /`,
 			want: "dangerous pattern detected",
-		},
-		{
-			name: "home-directory tilde expansion",
-			cmd:  `cat ~/.ssh/id_rsa`,
-			want: "path outside working dir",
-		},
-		{
-			name: "HOME variable expansion",
-			cmd:  `cat $HOME/.ssh/id_rsa`,
-			want: "path outside working dir",
 		},
 		{
 			name: "attached short flag (curl -o)",
@@ -236,16 +240,6 @@ func TestGuardCommand_TruePositivesStillBlocked(t *testing.T) {
 			want: "path outside working dir",
 		},
 		{
-			name: "single absolute path with a stray colon suffix is not exempted as a colon list",
-			cmd:  `cat /etc/passwd:evil`,
-			want: "path outside working dir",
-		},
-		{
-			name: "colon-joined list of two out-of-workspace paths",
-			cmd:  `cat /etc/passwd:/etc/hosts`,
-			want: "path outside working dir",
-		},
-		{
 			name: "PATH assignment with a colon-joined absolute path list, first segment out of workspace",
 			cmd:  `PATH=/etc/shadow:/usr/bin make`,
 			want: "path outside working dir",
@@ -253,11 +247,6 @@ func TestGuardCommand_TruePositivesStillBlocked(t *testing.T) {
 		{
 			name: "PATH assignment with a colon-joined absolute path list, second segment out of workspace",
 			cmd:  `PATH=/usr/bin:/etc/shadow make`,
-			want: "path outside working dir",
-		},
-		{
-			name: "tilde-expanded colon-joined list mixing a real path with a safe device",
-			cmd:  `cat ~/.ssh/id_rsa:/dev/null`,
 			want: "path outside working dir",
 		},
 		{
@@ -272,6 +261,74 @@ func TestGuardCommand_TruePositivesStillBlocked(t *testing.T) {
 			got := tool.guardCommand(context.Background(), tc.cmd, cwd)
 			require.NotEmpty(t, got, "command must be blocked: %s", tc.cmd)
 			require.Contains(t, got, tc.want, "wrong rejection reason for: %s", tc.cmd)
+		})
+	}
+}
+
+// TestGuardCommand_ADR068RetargetedCases_WriteHalfStillBlocked is the other
+// half of the seven cases ADR-068 retargeted (see this file's header). Each
+// command names the SAME outside path as the read case it replaces, in a
+// context that writes to it.
+//
+// The point of keeping these here, next to the cases they came from, is that
+// "the read was opened" and "the path is still protected" are two different
+// claims and the second one must not quietly stop being tested when the first
+// changes. If a case here starts passing, ADR-068 has been implemented as
+// "outside paths are open" rather than "outside READS are open".
+func TestGuardCommand_ADR068RetargetedCases_WriteHalfStillBlocked(t *testing.T) {
+	tool, cwd := guardFixture(t)
+
+	cases := []struct {
+		name string
+		cmd  string
+		was  string
+	}{
+		{
+			name: "write to a path in an outside bin directory",
+			cmd:  `printf x > /usr/local/bin/node`,
+			was:  "ls /usr/local/bin/node /opt/homebrew/bin/node",
+		},
+		{
+			name: "write to a system file",
+			cmd:  `printf x > /etc/passwd`,
+			was:  "cat /etc/passwd",
+		},
+		{
+			name: "write through a tilde expansion",
+			cmd:  `printf x > ~/.ssh/id_rsa`,
+			was:  "cat ~/.ssh/id_rsa",
+		},
+		{
+			name: "write through a HOME expansion",
+			cmd:  `printf x > $HOME/.ssh/id_rsa`,
+			was:  "cat $HOME/.ssh/id_rsa",
+		},
+		{
+			name: "write to an absolute path with a stray colon suffix",
+			cmd:  `printf x > /etc/passwd:evil`,
+			was:  "cat /etc/passwd:evil",
+		},
+		{
+			name: "write to every member of a colon-joined list",
+			cmd:  `tee /etc/passwd:/etc/hosts`,
+			was:  "cat /etc/passwd:/etc/hosts",
+		},
+		{
+			name: "write to a tilde-expanded colon-joined list",
+			cmd:  `tee ~/.ssh/id_rsa:/dev/null`,
+			was:  "cat ~/.ssh/id_rsa:/dev/null",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := tool.guardCommand(context.Background(), tc.cmd, cwd)
+			require.NotEmpty(t, got,
+				"the write half of the retargeted case %q must stay blocked: %s", tc.was, tc.cmd)
+			require.Contains(t, got, "path outside working dir",
+				"wrong rejection reason for: %s", tc.cmd)
+			require.Contains(t, got, "RestrictToWorkspace",
+				"ADR-068 §6: the denial must name the rule that fired, so an operator is not driven to disable the whole boundary")
 		})
 	}
 }
