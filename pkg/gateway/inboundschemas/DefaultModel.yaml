@@ -7,8 +7,9 @@ description: >
   ResolveWindow(provider, model) (rungs without the per-agent override,
   cross-spec X-07) and are absent until that resolver lands. Exempt
   subprocess-CLI rows return context_window 0 with window_source absent.
-  A fresh install has no default model: the GET returns provider and model
-  as empty strings until onboarding's explicit pick writes the pair.
+  A fresh install has no default model: the GET answers 404
+  `{"error":"no default model"}` until onboarding's explicit pick writes
+  the pair.
 type: object
 required:
   - provider

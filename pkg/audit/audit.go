@@ -183,6 +183,11 @@ func IsValidEventName(e EventName) bool {
 		// gateway path) and included here to prevent a warn-once on first emission.
 		"provider_key_validated",
 		"provider_key_validation_skipped",
+		// "provider.default_model.changed" is emitted by the
+		// PUT /providers/default-model handler on every successful change of
+		// the global default (provider, model) pair (ADR-068 FR-018, T068-11);
+		// details carry the old and new pairs.
+		"provider.default_model.changed",
 		// pkg/tools/memory.go: long-term memory write events.
 		// "memory.remember" and "memory.retrospective" are the success-path
 		// events; "memory.rate_limited" is emitted by the v0.2 #155 item 6

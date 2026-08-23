@@ -3135,6 +3135,11 @@ export interface components {
              * @example csrf_missing
              */
             code?: string;
+            /**
+             * @description Names the request field the error is about (ADR-068 validation bodies, e.g. "provider", "model", "id", "auth", "api_key"). Present only on field-attributable 4xx validation errors.
+             * @example provider
+             */
+            field?: string;
             /** @description Optional structured details about the error. */
             details?: {
                 [key: string]: unknown;
@@ -6144,7 +6149,7 @@ export interface components {
         };
         /**
          * DefaultModel
-         * @description The global default model as a (provider, model) pair — the body of GET /api/v1/providers/default-model and the persisted shape of agents.defaults.default_model (ADR-068 CRIT-001; agents.defaults.model_name no longer exists). Window fields are produced by ADR-066's ResolveWindow(provider, model) (rungs without the per-agent override, cross-spec X-07) and are absent until that resolver lands. Exempt subprocess-CLI rows return context_window 0 with window_source absent. A fresh install has no default model: the GET returns provider and model as empty strings until onboarding's explicit pick writes the pair.
+         * @description The global default model as a (provider, model) pair — the body of GET /api/v1/providers/default-model and the persisted shape of agents.defaults.default_model (ADR-068 CRIT-001; agents.defaults.model_name no longer exists). Window fields are produced by ADR-066's ResolveWindow(provider, model) (rungs without the per-agent override, cross-spec X-07) and are absent until that resolver lands. Exempt subprocess-CLI rows return context_window 0 with window_source absent. A fresh install has no default model: the GET answers 404 `{"error":"no default model"}` until onboarding's explicit pick writes the pair.
          */
         DefaultModel: {
             /**
@@ -15375,7 +15380,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The current default model (provider and model are empty strings on a fresh install). */
+            /** @description The current default model. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -15385,6 +15390,15 @@ export interface operations {
                 };
             };
             401: components["responses"]["401Unauthorized"];
+            /** @description No default model is set (fresh install before onboarding's explicit pick): `{"error":"no default model"}`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             503: components["responses"]["503BypassActive"];
         };
     };

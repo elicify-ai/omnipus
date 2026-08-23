@@ -5230,6 +5230,15 @@ func (a *restAPI) registerAdditionalEndpoints(cm httpHandlerRegistrar) {
 	// attack surface for the non-upload operations.
 	cm.RegisterHTTPHandler("/api/v1/library", a.withUploadAuth(withRateLimit(configLimiter, a.HandleLibrary)))
 	cm.RegisterHTTPHandler("/api/v1/library/", a.withUploadAuth(withRateLimit(configLimiter, a.HandleLibrary)))
+	// GET/PUT /api/v1/providers/default-model (ADR-068 FR-018/FR-042,
+	// T068-11): its OWN route with the high-blast-radius adminWrap chain
+	// (withAuth → RequireNotBypass — 401 unauthenticated, 503 under
+	// dev-mode bypass), registered ahead of the /providers/ prefix
+	// dispatcher. "default-model" is a reserved path segment, never a
+	// provider id (MAJ-002); the dynamic mux matches this exact path before
+	// the subtree prefix below, so a PUT here can never reach the
+	// /providers/{id} upsert branch.
+	cm.RegisterHTTPHandler("/api/v1/providers/default-model", a.adminWrap(a.HandleDefaultModel))
 	cm.RegisterHTTPHandler("/api/v1/providers", a.withOptionalAuth(a.HandleProviders))
 	cm.RegisterHTTPHandler("/api/v1/providers/", a.withOptionalAuth(a.HandleProviders))
 	cm.RegisterHTTPHandler("/api/v1/mcp-servers", a.withAuth(a.HandleMCPServers))
@@ -6018,8 +6027,24 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 		// creates the first row).
 		jsonOK(w, providers)
 
+	case r.Method == http.MethodDelete && isReservedProviderPathSegment(sub):
+		// DELETE on a reserved path segment ("catalog", "model-capabilities";
+		// "default-model" normally dispatches to its own route first) — the
+		// reserved literals are never provider ids, so there is nothing to
+		// delete: 404, per the MAJ-002 scenario rows. The real DELETE
+		// /providers/{id} branch is a separate ADR-068 task.
+		jsonErr(w, http.StatusNotFound, "provider not found")
+
 	case r.Method == http.MethodPut && sub != "" && !strings.HasSuffix(sub, "/test"):
 		// PUT /api/v1/providers/{id} — update or insert a provider entry.
+		// Reserved path segments are never provider ids (MAJ-002): reject
+		// BEFORE auth-gating or decoding so no request shape can upsert a
+		// provider named "catalog" / "default-model" / "model-capabilities".
+		if isReservedProviderPathSegment(sub) {
+			jsonErrField(w, http.StatusBadRequest,
+				fmt.Sprintf("unknown provider %q", sub), "id")
+			return
+		}
 		// Allow unauthenticated access during onboarding so the wizard can
 		// configure the provider before the admin user exists.
 		onboardingDone := a.onboardingMgr != nil && a.onboardingMgr.IsComplete()

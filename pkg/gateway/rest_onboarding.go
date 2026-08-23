@@ -236,6 +236,11 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 		jsonErr(w, http.StatusBadRequest, "provider.id is required")
 		return
 	}
+	// Reserved path segments are never provider ids (ADR-068 MAJ-002).
+	if isReservedProviderPathSegment(provider.Id) {
+		jsonErrField(w, http.StatusBadRequest, fmt.Sprintf("unknown provider %q", provider.Id), "id")
+		return
+	}
 	// Reject unknown protocols at the boundary so the gateway does not persist
 	// a config that will fail the post-save rewire and flip to degraded.
 	if !providers.IsKnownProtocol(provider.Id) {
@@ -822,6 +827,13 @@ func (a *restAPI) HandleOnboardingProbeProvider(w http.ResponseWriter, r *http.R
 	}
 	if body.Id == "" {
 		jsonErr(w, http.StatusBadRequest, "id is required")
+		return
+	}
+	// Reserved path segments are never provider ids (ADR-068 MAJ-002): the
+	// generic unknown-provider echo, parameterised by the caller's own id
+	// with no id list (CRIT-003).
+	if isReservedProviderPathSegment(body.Id) {
+		jsonErrField(w, http.StatusBadRequest, fmt.Sprintf("unknown provider %q", body.Id), "id")
 		return
 	}
 	// ADR-067 FR-023 / ADR-068 FR-036: ONE ProbeProviderRequest shape. Only the

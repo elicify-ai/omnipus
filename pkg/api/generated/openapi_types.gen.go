@@ -8468,7 +8468,7 @@ type DayBucket struct {
 	} `json:"run_counts,omitempty"`
 }
 
-// DefaultModel The global default model as a (provider, model) pair — the body of GET /api/v1/providers/default-model and the persisted shape of agents.defaults.default_model (ADR-068 CRIT-001; agents.defaults.model_name no longer exists). Window fields are produced by ADR-066's ResolveWindow(provider, model) (rungs without the per-agent override, cross-spec X-07) and are absent until that resolver lands. Exempt subprocess-CLI rows return context_window 0 with window_source absent. A fresh install has no default model: the GET returns provider and model as empty strings until onboarding's explicit pick writes the pair.
+// DefaultModel The global default model as a (provider, model) pair — the body of GET /api/v1/providers/default-model and the persisted shape of agents.defaults.default_model (ADR-068 CRIT-001; agents.defaults.model_name no longer exists). Window fields are produced by ADR-066's ResolveWindow(provider, model) (rungs without the per-agent override, cross-spec X-07) and are absent until that resolver lands. Exempt subprocess-CLI rows return context_window 0 with window_source absent. A fresh install has no default model: the GET answers 404 `{"error":"no default model"}` until onboarding's explicit pick writes the pair.
 type DefaultModel struct {
 	// ContextWindow Effective context window in tokens; 0 for exempt rows.
 	ContextWindow *int `json:"context_window,omitempty"`
@@ -9032,6 +9032,9 @@ type ErrorResponse struct {
 
 	// Error Human-readable error message.
 	Error string `json:"error"`
+
+	// Field Names the request field the error is about (ADR-068 validation bodies, e.g. "provider", "model", "id", "auth", "api_key"). Present only on field-attributable 4xx validation errors.
+	Field *string `json:"field,omitempty"`
 }
 
 // EvidenceRecord Persisted evidence from a single machine-check execution (ADR-049 D2), one per `(criterion_id, attempt)` pair. Stored under `$OMNIPUS_HOME/tasks_evidence/<task_id>/<criterion_id>-<attempt>.json` (mode 0600, dir 0700). `command` and `output` pass through the registered sensitive-value redaction (ADR-004 `RegisterSensitiveValues` flow) BEFORE the record is marshalled/written — never write raw then scrub. Retention follows the 90-day session default and the record is deleted with its task. Read-only surface — never accepted on create/update.

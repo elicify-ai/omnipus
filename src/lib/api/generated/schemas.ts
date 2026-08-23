@@ -1646,6 +1646,7 @@ export const ErrorResponse = z
   .object({
     error: z.string(),
     code: z.string().optional(),
+    field: z.string().optional(),
     details: z.object({}).partial().passthrough().optional(),
   })
   .passthrough();
@@ -7423,6 +7424,11 @@ Model lists are fetched live from each provider&#x27;s upstream /models endpoint
       {
         status: 401,
         description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `No default model is set (fresh install before onboarding&#x27;s explicit pick): &#x60;{&quot;error&quot;:&quot;no default model&quot;}&#x60;.`,
         schema: ErrorResponse,
       },
       {

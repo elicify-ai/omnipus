@@ -11,6 +11,13 @@ properties:
     type: string
     description: Machine-readable error code for programmatic branching (e.g. "csrf_missing", "rate_limited").
     example: "csrf_missing"
+  field:
+    type: string
+    description: >
+      Names the request field the error is about (ADR-068 validation bodies,
+      e.g. "provider", "model", "id", "auth", "api_key"). Present only on
+      field-attributable 4xx validation errors.
+    example: "provider"
   details:
     type: object
     description: Optional structured details about the error.

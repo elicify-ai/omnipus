@@ -4353,13 +4353,19 @@ paths:
       - BearerAuth: []
       responses:
         '200':
-          description: The current default model (provider and model are empty strings on a fresh install).
+          description: The current default model.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/DefaultModel'
         '401':
           $ref: '#/components/responses/401Unauthorized'
+        '404':
+          description: 'No default model is set (fresh install before onboarding''s explicit pick): `{"error":"no default model"}`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '503':
           $ref: '#/components/responses/503BypassActive'
     put:
