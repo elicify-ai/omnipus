@@ -93,9 +93,12 @@ func TestJSONLBackend_TruncateAndSave(t *testing.T) {
 	}
 }
 
+// TestJSONLBackend_SetHistory — SetHistory is a first-fill primitive
+// (ADR-066 FR-047): it fills an empty session, and a second call on the
+// now non-empty archive is refused (logged, fire-and-forget) leaving the
+// archive exactly as the first fill left it.
 func TestJSONLBackend_SetHistory(t *testing.T) {
 	b := newBackend(t)
-	b.AddMessage("s1", "user", "old")
 
 	b.SetHistory("s1", []providers.Message{
 		{Role: "user", Content: "new1"},
@@ -108,6 +111,12 @@ func TestJSONLBackend_SetHistory(t *testing.T) {
 	}
 	if history[0].Content != "new1" {
 		t.Errorf("got %q, want %q", history[0].Content, "new1")
+	}
+
+	b.SetHistory("s1", []providers.Message{{Role: "user", Content: "rewrite"}})
+	history = b.GetHistory("s1")
+	if len(history) != 2 || history[0].Content != "new1" {
+		t.Errorf("non-empty archive was rewritten: %+v", history)
 	}
 }
 

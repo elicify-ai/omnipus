@@ -2125,6 +2125,10 @@ func deliverSubTurnResult(al *AgentLoop, parentTS *turnState, childID string, re
 type ephemeralSessionStore struct {
 	mu      sync.Mutex
 	history []providers.Message
+	// projection / hydrated: in-memory projection state (ADR-066 FR-019);
+	// lives and dies with the sub-turn, never persisted.
+	projection memory.ProjectionSet
+	hydrated   bool
 }
 
 // newEphemeralSession returns a session.SessionStore backed by an in-memory
@@ -2211,10 +2215,14 @@ func (e *ephemeralSessionStore) Save(_ string) error { return nil }
 func (e *ephemeralSessionStore) Close() error        { return nil }
 
 // RollbackAppended truncates the in-memory history to its first
-// targetArchiveLen messages, discarding anything appended after that point.
+// targetArchiveLen messages, discarding anything appended after that point,
+// and drops in-memory projection entries whose archive_line ≥ targetArchiveLen.
 // targetSkip is accepted for interface compatibility but has no effect: the
 // ephemeral backend is a bounded in-memory ring with no Skip/archive split —
-// there is no eviction cursor to restore.
+// there is no eviction cursor to restore. emptiedSet is likewise a no-op
+// here (ADR-066 FR-020): the ephemeral store keeps its projection state in
+// memory for the lifetime of one sub-turn and is discarded with it, so
+// there is no turn-start restore point to return to.
 //
 // Note: rollback is best-effort when the ephemeral ring has wrapped (i.e. a
 // sub-turn appended >maxEphemeralHistorySize messages and the ring discarded
@@ -2224,7 +2232,7 @@ func (e *ephemeralSessionStore) Close() error        { return nil }
 // (sub-turns are short) and the ephemeral store has no persistent archive.
 //
 // Satisfies session.SessionStore (used by hard-abort turn rollback).
-func (e *ephemeralSessionStore) RollbackAppended(_ string, targetArchiveLen, _ int) {
+func (e *ephemeralSessionStore) RollbackAppended(_ string, targetArchiveLen, _ int, _ memory.ProjectionSet) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if targetArchiveLen < 0 {
@@ -2233,6 +2241,36 @@ func (e *ephemeralSessionStore) RollbackAppended(_ string, targetArchiveLen, _ i
 	if targetArchiveLen < len(e.history) {
 		e.history = e.history[:targetArchiveLen]
 	}
+	for k := range e.projection {
+		if k.ArchiveLine >= targetArchiveLen {
+			delete(e.projection, k)
+		}
+	}
+}
+
+// Projection implements session.SessionStore — the in-memory projection
+// state of this sub-turn (never persisted; FR-019 store half).
+func (e *ephemeralSessionStore) Projection(_ string) memory.ProjectionMeta {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return memory.ProjectionMeta{Entries: e.projection.Clone(), Hydrated: e.hydrated}
+}
+
+// SetProjectionState implements session.SessionStore (in-memory).
+func (e *ephemeralSessionStore) SetProjectionState(_ string, pk memory.ProjectionKey, state memory.ProjectionState) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.projection == nil {
+		e.projection = memory.ProjectionSet{}
+	}
+	e.projection[pk] = state
+}
+
+// MarkHydrated implements session.SessionStore (in-memory).
+func (e *ephemeralSessionStore) MarkHydrated(_ string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.hydrated = true
 }
 
 func (e *ephemeralSessionStore) truncateLocked() {
