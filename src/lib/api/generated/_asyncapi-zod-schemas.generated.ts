@@ -216,6 +216,29 @@ export const ToolAssemblyDuplicate = z
   })
   .strict();
 
+export const ToolArgumentRefusal = z
+  .object({
+    error: z.literal("tool_arguments_too_large"),
+    reason: z.string().min(1),
+    tool: z.string().min(1).max(128),
+    size_chars: z.number().int().min(1),
+    cap_chars: z.number().int().min(1),
+  })
+  .strict();
+
+export const ToolResultRecallMark = z
+  .object({
+    error: z.literal("tool_result_recall_mark"),
+    tool: z.string().min(1).max(64),
+    tool_call_id: z.string().min(1).max(64),
+    archive_line: z.number().int().min(0),
+    size_chars: z.number().int().min(1),
+    turn: z.number().int().min(1),
+    content_state: z.enum(["capped", "emptied"]),
+    hint: z.string().min(1),
+  })
+  .strict();
+
 export const ToolCallResultFrame = z
   .object({
     type: z.literal("tool_call_result"),
