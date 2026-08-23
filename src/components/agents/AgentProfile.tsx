@@ -80,6 +80,7 @@ import { cliValidationBlocked, useCliPathValidation } from '@/hooks/useCliPathVa
 import { useCliDetect } from '@/hooks/useCliDetect'
 import { buildExecutorPreviewRequest } from '@/hooks/useCommandPreview'
 import { detectEntryFor, resolveCliDetectHint } from '@/lib/cliDetect'
+import { CONTEXT_WINDOW_SOURCE_LABEL } from '@/components/settings/ContextSection'
 
 /** Editor's fallback entry — `FallbackModel` from the contract with `provider` narrowed to required (the editor always populates it at hydration). */
 type FallbackEntry = FallbackModel & { provider: string }
@@ -114,6 +115,15 @@ interface AgentProfileProps {
    * tests and direct renders; the primary path is the UI store.
    */
   agentId?: string
+}
+
+// ADR-066 D9: context-window sizes render EXACT with thousands separators
+// (1,048,576) — unlike the abbreviated `formatTokens` ("1.0M") used for
+// usage stats, an operator comparing an override against a clamp needs the
+// real number.
+const windowFormatter = new Intl.NumberFormat('en-US')
+function formatWindowTokens(n: number): string {
+  return windowFormatter.format(n)
 }
 
 export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
@@ -362,6 +372,15 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   // an invalid/empty draft restores the last committed value.
   const [timeoutDraft, setTimeoutDraft] = useState('0')
   const [maxToolIterationsDraft, setMaxToolIterationsDraft] = useState('200')
+  // ADR-066 D9 (T068-30): per-agent context-window override (D2 rung 1,
+  // lower-only — the backend clamps to the model's capability). Three-valued
+  // on purpose: `undefined` = the wire omitted it and the operator has not
+  // touched it (the PUT omits the field → backend leaves it unchanged);
+  // `null` = the operator cleared it (the PUT sends null → backend clears);
+  // a number = set. Same draft pattern as the two inputs above so clearing
+  // the field to type never autosaves 0 (the wire minimum is 1).
+  const [contextWindowOverride, setContextWindowOverride] = useState<number | null | undefined>(undefined)
+  const [contextWindowOverrideDraft, setContextWindowOverrideDraft] = useState('')
   // Wave 5 / spec §6.1 BDD #15: Edit slide-over footer Delete agent.
   // Opens an AlertDialog; the confirm mutation invalidates the list and
   // closes the slide-over. Locked agents do not render the trigger.
@@ -594,6 +613,8 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     setTimeoutDraft(String(agent.timeout_seconds ?? 0))
     setMaxToolIterations(agent.max_tool_iterations ?? 200)
     setMaxToolIterationsDraft(String(agent.max_tool_iterations ?? 200))
+    setContextWindowOverride(agent.context_window_override ?? undefined)
+    setContextWindowOverrideDraft(agent.context_window_override != null ? String(agent.context_window_override) : '')
     setShellDenyPatterns(agent.shell_policy?.custom_deny_patterns ?? [])
     // Spec-4: hydrate executor (absent → native default, modelled as undefined).
     setExecutor(agent.executor)
@@ -722,6 +743,11 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       voice: voice.trim() !== '' ? voice.trim() : undefined,
       timeout_seconds: timeoutPayload,
       max_tool_iterations: maxToolIterations,
+      // ADR-066 D9 / FR-037: omitted when untouched-and-absent (undefined is
+      // dropped by JSON.stringify), null to clear, number to set. Not sent
+      // for subagent_3p (the external CLI owns its own window; the agent
+      // is an exempt row with context_window_effective 0).
+      ...(contextWindowOverride !== undefined ? { context_window_override: contextWindowOverride } : {}),
       shell_policy: {
         custom_deny_patterns: shellDenyPatterns.filter((p) => p.trim() !== ''),
       },
@@ -746,7 +772,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     agent?.type, name, description, model, primaryProvider, selectedColor, selectedIcon, isDefault, fallbackModels,
     temperature, maxTokens, topP, useGlobalRateLimits, maxLlmCallsPerHour,
     maxToolCallsPerMinute, maxCostPerDay, soul, memoryEnabled, voice,
-    timeoutPayload, timeoutSeconds, maxToolIterations,
+    timeoutPayload, timeoutSeconds, maxToolIterations, contextWindowOverride,
     shellDenyPatterns,
     agentSkills, executor,
   ])
@@ -2220,6 +2246,78 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                       onBlur={() => setMaxToolIterationsDraft(String(maxToolIterations))}
                       className="text-xs h-8"
                     />
+                  </div>
+                )}
+                {/* ADR-066 D9 (T068-30): per-agent context window override
+                    plus the read-only effective window · source line and
+                    the clamp indicator (FR-037, FR-002). The three read-only
+                    fields are optional on the wire (absent until the
+                    resolver lands) — nothing renders for them when omitted.
+                    Hidden for subagent_3p: the external CLI owns its own
+                    window (exempt row, effective 0). */}
+                {!isExternalAgent && (
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-3">
+                      <label htmlFor="agent-context-window-override-input" className="text-xs text-[var(--color-muted)] w-44 shrink-0">
+                        Context window override
+                        <span className="block text-[10px] text-[var(--color-muted)]/70">
+                          Tokens. Lower-only — never above the model's own limit. Empty = use the model's window.
+                        </span>
+                      </label>
+                      <Input
+                        id="agent-context-window-override-input"
+                        type="number"
+                        min={1}
+                        data-testid="agent-context-window-override-input"
+                        value={contextWindowOverrideDraft}
+                        placeholder="Model default"
+                        onChange={(e) => {
+                          const raw = e.target.value
+                          markDirty()
+                          setContextWindowOverrideDraft(raw)
+                          if (raw === '') {
+                            // Clearing is a real intent (send null → backend
+                            // clears the override), not in-progress typing.
+                            setContextWindowOverride(null)
+                            return
+                          }
+                          const parsed = Number(raw)
+                          // Commit (and autosave) only a real value >= 1; a
+                          // partial/invalid draft never persists.
+                          if (Number.isInteger(parsed) && parsed >= 1) {
+                            setContextWindowOverride(parsed)
+                          }
+                        }}
+                        onBlur={() => setContextWindowOverrideDraft(
+                          contextWindowOverride != null ? String(contextWindowOverride) : '',
+                        )}
+                        className="text-xs h-8"
+                      />
+                    </div>
+                    {agent?.context_window_effective !== undefined && (
+                      <p
+                        data-testid="agent-context-window-effective"
+                        className="pl-[11.75rem] text-[11px] text-[var(--color-muted)]"
+                      >
+                        Effective window: {formatWindowTokens(agent.context_window_effective)} tokens
+                        {agent.context_window_source
+                          ? ` · Source: ${CONTEXT_WINDOW_SOURCE_LABEL[agent.context_window_source]}`
+                          : ''}
+                      </p>
+                    )}
+                    {agent?.context_window_clamped && (
+                      <p
+                        data-testid="agent-context-window-clamped"
+                        role="status"
+                        className="pl-[11.75rem] text-[11px] text-[var(--color-warning,#D4AF37)]"
+                      >
+                        Override clamped to the model's limit
+                        {agent.context_window_effective !== undefined
+                          ? ` (${formatWindowTokens(agent.context_window_effective)} tokens)`
+                          : ''}
+                        {' '}— the value above is higher than this model supports.
+                      </p>
+                    )}
                   </div>
                 )}
               </div>
