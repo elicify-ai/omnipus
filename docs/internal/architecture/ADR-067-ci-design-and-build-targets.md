@@ -200,6 +200,45 @@ spread `//go:build !lite` across 36 files **[VERIFIED]**. The saving reached no 
 `Dockerfile.heavy` survives because a container is where a missing dependency is most
 painful: it carries Node.js 24 for MCP servers and the browser dependencies.
 
+#### 6.2.1 Amendment: "one image" is intent, not yet fact
+
+Implementing the Dockerfile reduction found that **§6.2 as written could not be
+executed**, and the decision it records is only half delivered. Recorded here so
+nobody reads §6.2 and believes the published image changed.
+
+`docker/Dockerfile.goreleaser` **cannot be deleted**: `.goreleaser.yaml` builds
+the release image from it and publishes `ghcr.io/<owner>/omnipus:<tag>` and
+`:latest`. Removing it stops releases outright.
+
+It also cannot be merged into `Dockerfile.heavy` by changing a path, because the
+two use incompatible models:
+
+| | source of the binary | base |
+|---|---|---|
+| `Dockerfile.goreleaser` | copies a **prebuilt** binary goreleaser produced | `alpine:3.21` + ca-certificates, tzdata |
+| `Dockerfile.heavy` | **builds from source** (SPA stage, Go stage) | `node:24-bookworm-slim` + Chrome, Python, uv, git, jq |
+
+So the current state is **five Dockerfiles down to two**, not one:
+
+- **Published**, and unchanged by this work: the small Alpine image from
+  `Dockerfile.goreleaser`. Anyone pulling `:latest` gets exactly what they got
+  before.
+- **Build-it-yourself**: `Dockerfile.heavy`, now multi-arch aware. Nothing
+  publishes it.
+
+**What did change for users:** `make docker-build` used to build a small
+from-source Alpine image and now builds `Dockerfile.heavy` — roughly 71 MB to
+roughly 1 GB, gaining Chrome, Node, Python, git, jq and uv. Anyone scripting
+against that target gets a very different image.
+
+Consequently the attack-surface increase §6.2 implies applies to **local
+builds only**, not to released users. That distinction matters given §9's
+permissive sandbox default and should not be blurred.
+
+Unifying the two — one Dockerfile taking goreleaser's prebuilt binary and the
+heavy runtime — is tracked follow-up work. It is a redesign, not a cleanup, and
+it is the step that would make "one image" true.
+
 ### 6.3 Reversal: Intel Mac returns
 
 `.goreleaser.yaml` excluded `darwin/amd64` **[VERIFIED]**, on two grounds that have
@@ -300,19 +339,37 @@ choice is explicit rather than inherited.
 
 Trust before speed. Optimising a suite nobody believes optimises the wrong thing.
 
-| # | Change | Blocked by |
-|---|---|---|
-| 1 | Add `push: [release/**, main]` to `pr.yml` | — |
-| 2 | Pin `golangci-lint` version for local use (§5) | — |
-| 3 | Single `npm ci` job with shared artifact (§7.1) | — |
-| 4 | ~~Add the `macos-13` leg~~ — **BLOCKED**, runner retired; see §6.3.1 | founder decision |
-| 5 | Remove the `darwin/amd64` `ignore` block | **BLOCKED** on step 4 |
-| 6 | Resolve the stale traversal test | #635 decision |
-| 7 | `cross-platform` green → promote to blocking | step 6 |
-| 8 | Fix or delete `evals-nightly` | #637 |
-| 9 | Reduce `Makefile::build-all` to four targets | — |
-| 10 | Delete `build-lite`, the `lite` tag, `lite-build-weekly.yml` | — |
-| 11 | Delete four Dockerfiles; publish `Dockerfile.heavy` multi-arch | — |
-| 12 | Ship L1 language-split filtering | — |
-| 13 | Ship L2 `go list -deps` selection, fail-open | two weeks green |
-| 14 | Follow-up: remove `!lite`, `!mipsle`, `!netbsd`, `!(freebsd && arm)` | step 10 |
+| # | Change | Status | Blocked by |
+|---|---|---|---|
+| 1 | Add `push: [release/**, main]` to `pr.yml` | **DONE** `49095ce1` — observed firing on push | — |
+| 2 | Pin `golangci-lint` version for local use (§5) | **DONE** `9922d7f3` — fails loudly, proven both ways | — |
+| 3 | Single `npm ci` job with shared artifact (§7.1) | **DONE** `49095ce1` — 11 jobs → 1, verified in CI | — |
+| 4 | ~~Add the `macos-13` leg~~ — **BLOCKED**, runner retired; see §6.3.1 | blocked | founder decision |
+| 5 | Remove the `darwin/amd64` `ignore` block | blocked | step 4 |
+| 6 | Resolve the stale traversal test | open | #635 decision |
+| 7 | `cross-platform` green → promote to blocking | open | step 6 |
+| 8 | Fix or delete `evals-nightly` | open | #637 |
+| 9 | Reduce `Makefile::build-all` to four targets | **DONE** `9922d7f3` — 9 → 4, all four cross-compile | — |
+| 10 | Delete `build-lite`, the `lite` tag, `lite-build-weekly.yml` | Makefile half **DONE** `9922d7f3`; Go tags + workflow in progress | — |
+| 11 | Delete four Dockerfiles; publish `Dockerfile.heavy` multi-arch | **PARTIAL** `a99bd2ee` — see §6.2.1 | — |
+| 12 | Ship L1 language-split filtering | **DONE** `49095ce1` | — |
+| 13 | Ship L2 `go list -deps` selection, fail-open | not started | two weeks green |
+| 14 | Follow-up: remove `!lite`, `!mipsle`, `!netbsd`, `!(freebsd && arm)` | in progress | step 10 |
+
+### 10.1 Found while implementing
+
+Three defects surfaced only on contact with the real systems, none of them
+predicted by the inventory this ADR was written from:
+
+- **Step 11 could not be done as written.** `docker/Dockerfile.goreleaser` is
+  what `.goreleaser.yaml` publishes the release image from; deleting it stops
+  releases. It copies a prebuilt binary, while `Dockerfile.heavy` builds from
+  source, so the two cannot be merged by changing a path. See §6.2.1.
+- **The CLI removed-verb guard had a blind spot.** It required whitespace
+  between the binary and the verb, so a JSON/YAML array form slipped past.
+  Two live callers of the removed `agent` subcommand were hiding behind it —
+  the compose entrypoint and the launcher TUI's chat menu item, the latter
+  discarding the resulting error so it failed invisibly. Both fixed in
+  `49095ce1`; the pattern is widened and mutation-tested.
+- **Three surfaces still advertised the preview port** deleted by ADR-044,
+  including `omnipus start --help`. Fixed in `974e0520`.
