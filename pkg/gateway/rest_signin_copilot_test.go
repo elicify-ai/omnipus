@@ -134,11 +134,39 @@ To authenticate, you can use any of the following methods:
 		assert.Nil(t, got.AccountLabel)
 	})
 
-	t.Run("unauthenticated is 401", func(t *testing.T) {
+	// ADR-068 FR-050 (T068-14, decided here for T068-15's Copilot route):
+	// github-copilot's GET .../sign-in/status is textually one of FR-050's
+	// five sign-in routes (POST /providers/{id}/sign-in, GET
+	// .../sign-in/status, POST .../sign-in/poll, POST
+	// openai-chatgpt/sign-in/import, DELETE .../sign-in) — the FR-050 gate
+	// in HandleProviders' dispatch (rest.go) matches by METHOD + PATH
+	// SUFFIX only, never by provider id, so it was never possible for this
+	// route to be excluded from that set. It belongs in it. The prior
+	// "unauthenticated is 401" expectation predates FR-050 (T068-15 was
+	// written before T068-14) and additionally never injected a config
+	// snapshot into the request context at all, so it was not even
+	// exercising the intended codepath either before or after this change —
+	// with no snapshot, RequireNotBypass fails closed to 503 regardless of
+	// onboarding state (same defect TestProviderSignInRoutes_AuthGating
+	// fixed for the generic routes). Replaced with the FR-050-correct
+	// pre/post-onboarding transition, using the same pattern.
+	t.Run("onboarding incomplete, unauthenticated, no bypass -> reachable (FR-050)", func(t *testing.T) {
 		api, _ := newAuthMethodOnboardingAPI(t)
+		putFakeCopilotOnPath(t, "ok", "", 0)
 		req := httptest.NewRequest(http.MethodGet, path, nil)
+		ctx := context.WithValue(req.Context(), ctxkey.ConfigContextKey{}, api.agentLoop.GetConfig())
 		w := httptest.NewRecorder()
-		api.HandleProviders(w, req)
+		api.HandleProviders(w, req.WithContext(ctx))
+		assert.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+	})
+
+	t.Run("onboarding complete, unauthenticated -> 401 (FR-050)", func(t *testing.T) {
+		api, _ := newAuthMethodOnboardingAPI(t)
+		require.NoError(t, api.onboardingMgr.CompleteOnboarding())
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		ctx := context.WithValue(req.Context(), ctxkey.ConfigContextKey{}, api.agentLoop.GetConfig())
+		w := httptest.NewRecorder()
+		api.HandleProviders(w, req.WithContext(ctx))
 		assert.Equal(t, http.StatusUnauthorized, w.Code)
 	})
 
@@ -178,21 +206,45 @@ func TestSignInStart_Copilot(t *testing.T) {
 	}
 }
 
-// TestSignInStatus_CopilotOtherProvidersStillStubbed proves the T068-15 branch
-// did not turn the remaining ids into a silent 200 — they keep the honest 501
-// naming their owning task.
-func TestSignInStatus_CopilotOtherProvidersStillStubbed(t *testing.T) {
+// TestSignIn_CopilotDispatchDoesNotLeakToOtherProviders replaces
+// TestSignInStatus_CopilotOtherProvidersStillStubbed: T068-14 implemented
+// real handlers for codex-cli and openai-chatgpt (previously the honest 501
+// stub this test pinned), so "other ids stay stubbed" is obsolete by
+// design. The still-valid coverage — the github-copilot special case in
+// HandleProviders' dispatch (rest.go) does not leak its response onto other
+// provider ids — is kept, now proven by each id getting ITS OWN correctly
+// shaped response rather than Copilot's.
+func TestSignIn_CopilotDispatchDoesNotLeakToOtherProviders(t *testing.T) {
 	api, _ := newAuthMethodOnboardingAPI(t)
 
-	for _, rt := range []struct{ method, path string }{
-		{http.MethodPost, "/api/v1/providers/codex-cli/sign-in"},
-		{http.MethodGet, "/api/v1/providers/codex-cli/sign-in/status"},
-		{http.MethodPost, "/api/v1/providers/openai-chatgpt/sign-in"},
-	} {
-		w := adminRequest(t, api, rt.method, rt.path)
-		require.Equal(t, http.StatusNotImplemented, w.Code, "%s %s body=%s", rt.method, rt.path, w.Body.String())
-		assert.Contains(t, w.Body.String(), "T068-16")
-	}
+	w := adminRequest(t, api, http.MethodPost, "/api/v1/providers/codex-cli/sign-in")
+	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+	var codexStart gen.SignInStartResponseCliLogin
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &codexStart))
+	assert.Equal(t, gen.CliLogin, codexStart.Method)
+	assert.Equal(t, "codex login", codexStart.Command)
+	assert.NotEqual(t, "copilot login", codexStart.Command,
+		"codex-cli must never get github-copilot's command")
+
+	w = adminRequest(t, api, http.MethodGet, "/api/v1/providers/codex-cli/sign-in/status")
+	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+	var codexStatus gen.SignInStatus
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &codexStatus))
+	assert.True(t, codexStatus.State.Valid())
+
+	state := "pending"
+	server := httptest.NewServer(deviceCodeVendorMux(t, &state))
+	defer server.Close()
+	withDeviceCodeVendor(t, server)
+
+	w = adminRequest(t, api, http.MethodPost, "/api/v1/providers/openai-chatgpt/sign-in")
+	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+	var chatgptResp gen.SignInStartResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &chatgptResp))
+	disc, err := chatgptResp.Discriminator()
+	require.NoError(t, err)
+	assert.Equal(t, "device_code", disc,
+		"openai-chatgpt must get its own device_code response, never github-copilot's cli_login shape")
 }
 
 // TestSignInStatus_CopilotRowHint covers the FR-009 provider-row half: with the

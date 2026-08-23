@@ -29,8 +29,10 @@ import (
 //     the reservation, so a corrected retry can still succeed.
 //   - missing / unknown auth_method → 400; nothing persisted.
 //
-// Also pins the two new sign-in routes (POST /providers/{id}/sign-in,
-// GET …/sign-in/status) as 501 stubs behind the contract's adminWrap posture.
+// TestProviderSignInRoutes_AuthGating (below) covers the two sign-in routes'
+// (POST /providers/{id}/sign-in, GET …/sign-in/status) auth posture —
+// T068-14 landed the real handlers; see that test's own comment for the
+// FR-050 onboarding-aware gate it now pins instead of the retired 501 stub.
 
 func newAuthMethodOnboardingAPI(t *testing.T) (*restAPI, string) {
 	t.Helper()
@@ -155,39 +157,66 @@ func TestOnboardingComplete_ApiKeyVariant_RejectsFieldsOffTheVariant(t *testing.
 	assert.Contains(t, w.Body.String(), "field not allowed on provider auth_method")
 }
 
-func TestProviderSignInRoutes_StubbedUntilT068_16(t *testing.T) {
-	api, _ := newAuthMethodOnboardingAPI(t)
+// TestProviderSignInRoutes_AuthGating — ADR-068 FR-050 (T068-14). Replaces
+// TestProviderSignInRoutes_StubbedUntilT068_16: T068-14 replaced the 501
+// stub with the real sign-in handlers, so that test's "authenticated
+// non-bypass -> 501 naming T068-16" assertion is obsolete by design (the
+// stub is gone), and its "unauthenticated -> 401" assertion is obsolete
+// because FR-050 makes that 401 conditional on onboarding completion (it
+// also never actually exercised that path — the request carried no config
+// snapshot in context at all, so it was failing closed at the OUTER
+// RequireNotBypass "no snapshot" guard, landing on 503, not tracing through
+// FR-050's own onboardingDone check either before or after this change).
+//
+// Still-valid coverage kept, now for the real, onboarding-aware gate:
+//   - onboarding incomplete + unauthenticated + no bypass -> reachable
+//     (FR-050's pre-auth allowance; this codepath returns 200 for both
+//     routes under test since codex-cli is a cli_login provider with no
+//     external dependency).
+//   - onboarding incomplete OR complete + dev-mode bypass active -> still
+//     503 (RequireNotBypass gates on bypass unconditionally; FR-050 only
+//     ever affects the EARLIER "is a user authenticated" pre-check, never
+//     the bypass gate downstream of it).
+//   - onboarding complete + unauthenticated -> 401 (FR-050's pre-auth
+//     allowance ends once onboarding is done). rest_sign_in_test.go's
+//     TestSignIn_PreAuthOnlyDuringOnboarding already asserts exactly this
+//     transition for POST /providers/{id}/sign-in alone; kept here too
+//     because this test's table also covers GET .../sign-in/status, which
+//     that one does not, so removing it here would drop that route's
+//     coverage of the same FR-050 requirement.
+func TestProviderSignInRoutes_AuthGating(t *testing.T) {
 	routes := []struct{ method, path string }{
 		{http.MethodPost, "/api/v1/providers/codex-cli/sign-in"},
 		{http.MethodGet, "/api/v1/providers/codex-cli/sign-in/status"},
 	}
 	for _, rt := range routes {
 		t.Run(rt.method+" "+rt.path, func(t *testing.T) {
-			// Unauthenticated → 401.
+			api, _ := newAuthMethodOnboardingAPI(t)
+
+			// Onboarding incomplete, unauthenticated, no bypass -> reachable.
 			req := httptest.NewRequest(rt.method, rt.path, nil)
+			ctx := context.WithValue(req.Context(), ctxkey.ConfigContextKey{}, api.agentLoop.GetConfig())
 			w := httptest.NewRecorder()
-			api.HandleProviders(w, req)
-			assert.Equal(t, http.StatusUnauthorized, w.Code)
-
-			// Authenticated, non-bypass → 501 naming T068-16 (T068-16 replaces
-			// this with the real handler).
-			req = httptest.NewRequest(rt.method, rt.path, nil)
-			ctx := context.WithValue(req.Context(), UserContextKey{}, &config.UserConfig{Username: "admin"})
-			ctx = context.WithValue(ctx, ctxkey.ConfigContextKey{}, api.agentLoop.GetConfig())
-			w = httptest.NewRecorder()
 			api.HandleProviders(w, req.WithContext(ctx))
-			require.Equal(t, http.StatusNotImplemented, w.Code, "body=%s", w.Body.String())
-			assert.Contains(t, w.Body.String(), "T068-16")
+			assert.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
 
-			// Authenticated under dev-mode bypass → 503 (adminWrap posture).
+			// Onboarding still incomplete, dev-mode bypass active -> 503
+			// regardless of the FR-050 pre-auth allowance above.
 			bypassCfg := *api.agentLoop.GetConfig()
 			bypassCfg.Gateway.DevModeBypass = true
 			req = httptest.NewRequest(rt.method, rt.path, nil)
-			ctx = context.WithValue(req.Context(), UserContextKey{}, &config.UserConfig{Username: "admin"})
-			ctx = context.WithValue(ctx, ctxkey.ConfigContextKey{}, &bypassCfg)
+			ctx = context.WithValue(req.Context(), ctxkey.ConfigContextKey{}, &bypassCfg)
 			w = httptest.NewRecorder()
 			api.HandleProviders(w, req.WithContext(ctx))
 			assert.Equal(t, http.StatusServiceUnavailable, w.Code)
+
+			// Onboarding complete, unauthenticated -> 401.
+			require.NoError(t, api.onboardingMgr.CompleteOnboarding())
+			req = httptest.NewRequest(rt.method, rt.path, nil)
+			ctx = context.WithValue(req.Context(), ctxkey.ConfigContextKey{}, api.agentLoop.GetConfig())
+			w = httptest.NewRecorder()
+			api.HandleProviders(w, req.WithContext(ctx))
+			assert.Equal(t, http.StatusUnauthorized, w.Code)
 		})
 	}
 }

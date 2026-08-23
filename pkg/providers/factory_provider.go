@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/elicify-ai/omnipus/pkg/auth"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	anthropicmessages "github.com/elicify-ai/omnipus/pkg/providers/anthropic_messages"
 	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
@@ -181,6 +182,25 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 
 	switch row.protocol {
 	case catalog.ProtocolOpenAICompatible, catalog.ProtocolGoogle, catalog.ProtocolOllama:
+		// ADR-068 §8b (T068-32/T068-14): openai-chatgpt is an
+		// openai-compatible row whose credential is Omnipus's OWN stored
+		// device-code OAuth token, not an API key — so it is handled here,
+		// ahead of requireKey, rather than as a protocol of its own. The
+		// vendor file ~/.codex/auth.json stays codex-cli's and read-only.
+		// DefaultCredentialStore is wired once at gateway boot
+		// (pkg/gateway/gateway.go); a nil store means a test or CLI path
+		// never called SetDefaultCredentialStore, and we fail closed with a
+		// clear error rather than nil-dereferencing inside the token source.
+		if cfg.Provider == "openai-chatgpt" {
+			if DefaultCredentialStore == nil {
+				return nil, "", fmt.Errorf(
+					"openai-chatgpt: credential store not available (SetDefaultCredentialStore was never called)",
+				)
+			}
+			tokenSource := NewStoreOAuthTokenSource("openai-chatgpt", DefaultCredentialStore, auth.OpenAIOAuthConfig())
+			return NewCodexProviderWithTokenSource("", "", tokenSource), modelID, nil
+		}
+
 		// One HTTP transport, three protocol values. `google` is the row's
 		// Gemini OpenAI-compatible base with Bearer auth (F-13) and `ollama`
 		// is the local OpenAI-compatible surface; the values stay distinct so

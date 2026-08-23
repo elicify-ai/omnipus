@@ -205,6 +205,20 @@ var (
 	// configLimiter's post-incident ceiling, which calendar navigation
 	// cadence is known to fit.
 	taskReadLimiter = newAPIRateLimiter(240, 1*time.Minute)
+	// /api/v1/providers/{id}/sign-in — 10 requests/minute per IP. ADR-068
+	// FR-008: "rate-limited like the auth endpoints" — matches
+	// reauthLimiter's ceiling. Starting a NEW device-code (or reading a
+	// cli_login instruction) is rare in legitimate use; unlike polling it
+	// has no ongoing-cadence requirement.
+	signInStartLimiter = newAPIRateLimiter(10, 1*time.Minute)
+	// /api/v1/providers/{id}/sign-in/poll — 60 requests/minute per IP. A
+	// DEDICATED, more generous limiter (FR-044 sets no explicit rate but a
+	// device-code dialog legitimately polls at its vendor interval_seconds
+	// — typically ~5s — for up to the 15-minute session ceiling, i.e. up to
+	// ~180 polls per session; 10/min would 429 a single honest sign-in
+	// attempt). Still bounds a runaway/abusive client well below what a
+	// human could trigger by hand.
+	signInPollLimiter = newAPIRateLimiter(60, 1*time.Minute)
 )
 
 // clientIP extracts the client IP from the request for rate-limiting and

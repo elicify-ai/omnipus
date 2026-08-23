@@ -126,6 +126,17 @@ type restAPI struct {
 	// PUT and on a catalog refresh. Its zero value is ready to use — see
 	// rest_providers_entitlement.go.
 	entitlements entitlementCache
+
+	// signInMu guards signInSessions, the in-process store of open
+	// device-code sign-in sessions (ADR-068 FR-008/FR-044, T068-14). Lazily
+	// initialized via deviceSessions()/putDeviceSession() (rest_sign_in.go)
+	// — a bare restAPI{} test literal that never exercises the sign-in
+	// routes need not know this field exists. Single-gateway-process
+	// in-memory state is sufficient: a device-code session's own ceiling is
+	// 15 minutes (FR-044) and Omnipus is a single Go binary, not a
+	// horizontally-scaled fleet.
+	signInMu       sync.Mutex
+	signInSessions map[string]*deviceCodeSession
 	// ssrfChecker enforces SEC-24 SSRF protection on outbound HTTP requests made
 	// by REST handlers (skills installer). Nil when SSRF protection is disabled
 	// in config (sandbox.ssrf.enabled = false). Shared with the agent loop's
@@ -5921,10 +5932,6 @@ func (a *restAPI) HandleActivity(w http.ResponseWriter, r *http.Request) {
 
 // --- Providers ---
 
-// providerSignInNotImplementedMsg is the 501 body for the ADR-068 sign-in
-// routes until T068-16 implements them.
-const providerSignInNotImplementedMsg = "provider sign-in not implemented — T068-16"
-
 // HandleProviders handles GET/PUT/POST /api/v1/providers and sub-paths.
 func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimSuffix(r.URL.Path, "/")
@@ -6518,29 +6525,63 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 		jsonOK(w, providerResp)
 
 	case r.Method == http.MethodPost && strings.HasSuffix(sub, "/sign-in"),
-		r.Method == http.MethodGet && strings.HasSuffix(sub, "/sign-in/status"):
-		// POST /api/v1/providers/{id}/sign-in and GET …/sign-in/status
-		// (ADR-068 FR-008/FR-009, contract landed by T068-06). The vendor
-		// sign-in flow itself is T068-16; until it lands these are honest
-		// stubs behind the contract's adminWrap posture (401 unauthenticated,
-		// 503 under dev-mode bypass) that answer 501 with a message naming
-		// the owning task, never a silent 200 or a blank 404.
-		if r.Context().Value(UserContextKey{}) == nil {
+		r.Method == http.MethodGet && strings.HasSuffix(sub, "/sign-in/status"),
+		r.Method == http.MethodPost && strings.HasSuffix(sub, "/sign-in/poll"),
+		r.Method == http.MethodPost && sub == "openai-chatgpt/sign-in/import",
+		r.Method == http.MethodDelete && strings.HasSuffix(sub, "/sign-in"):
+		// ADR-068 FR-008/FR-009/FR-044/FR-047/FR-048 (§8b amendment,
+		// 2026-08-23; T068-14). FR-050: these five routes are reachable
+		// PRE-AUTH only while onboarding is incomplete (mirrors the /test
+		// handler's onboardingDone gate above, and CLAUDE.md's documented
+		// "Onboarding does NOT need bypass" list, which already covers
+		// bare /providers) — onboarding step 3 needs a working sign-in
+		// flow before any admin account exists to authenticate as. Once
+		// onboarding is complete these revert to the contract's normal
+		// adminWrap posture: 401 unauthenticated, 503 under dev-mode
+		// bypass.
+		onboardingDone := a.onboardingMgr != nil && a.onboardingMgr.IsComplete()
+		if onboardingDone && r.Context().Value(UserContextKey{}) == nil {
 			jsonErr(w, http.StatusUnauthorized, "authentication required")
 			return
 		}
 		a.requireAdminAuthz(func(w http.ResponseWriter, r *http.Request) {
-			// ADR-068 FR-008/FR-009 for `github-copilot` (T068-15). T068-14
-			// generalises these two routes to every sign_in row (its own
-			// rest_sign_in.go) and absorbs this branch; until then the Copilot
-			// half is real and every other id keeps the honest stub.
 			switch {
+			// github-copilot has its own CLI-status-aware handlers (T067-07/
+			// T068-15): a real state via one bounded Copilot CLI invocation,
+			// cost-aware about premium requests. Routed first so they win
+			// over the generic cli_login path below, which would otherwise
+			// also match github-copilot's routes (signInMethodFor classifies
+			// it cli_login) with only a hardcoded command string and no real
+			// status check.
 			case r.Method == http.MethodPost && sub == copilotProviderID+"/sign-in":
 				a.handleCopilotSignInStart(w, r)
 			case r.Method == http.MethodGet && sub == copilotProviderID+"/sign-in/status":
 				a.handleCopilotSignInStatus(w, r)
-			default:
-				jsonErr(w, http.StatusNotImplemented, providerSignInNotImplementedMsg)
+			case r.Method == http.MethodPost && strings.HasSuffix(sub, "/sign-in/poll"):
+				// FR-044: no explicit rate-limit requirement, but a device-code
+				// dialog polls repeatedly by design — signInPollLimiter is a
+				// dedicated, more generous ceiling than start's (see its own
+				// doc comment in rest_auth.go).
+				withRateLimit(signInPollLimiter, func(w http.ResponseWriter, r *http.Request) {
+					a.handleProviderSignInPoll(w, r, strings.TrimSuffix(sub, "/sign-in/poll"))
+				})(w, r)
+			case r.Method == http.MethodPost && sub == "openai-chatgpt/sign-in/import":
+				a.handleProviderSignInImport(w, r)
+			case r.Method == http.MethodPost && strings.HasSuffix(sub, "/sign-in"):
+				// FR-008: "rate-limited like the auth endpoints". codex-cli,
+				// openai-chatgpt, and any other sign_in row land here —
+				// github-copilot is already routed above.
+				withRateLimit(signInStartLimiter, func(w http.ResponseWriter, r *http.Request) {
+					a.handleProviderSignInStart(w, r, strings.TrimSuffix(sub, "/sign-in"))
+				})(w, r)
+			case r.Method == http.MethodGet && strings.HasSuffix(sub, "/sign-in/status"):
+				a.handleProviderSignInStatus(w, r, strings.TrimSuffix(sub, "/sign-in/status"))
+			case r.Method == http.MethodDelete && strings.HasSuffix(sub, "/sign-in"):
+				// FR-048 sign-out: harmless no-op (NotFound = success) for a
+				// cli_login provider like github-copilot, which never has a
+				// "<id>_OAUTH" entry to begin with — Omnipus never sees or
+				// stores its credential.
+				a.handleProviderSignOut(w, r, strings.TrimSuffix(sub, "/sign-in"))
 			}
 		})(w, r)
 
