@@ -1929,15 +1929,40 @@ func (us *UnifiedStore) TruncateHistory(sessionKey string, keepLast int) {
 }
 
 // RollbackAppended implements SessionStore — truncates the on-disk archive to
-// targetArchiveLen physical lines and restores meta.Skip = min(targetSkip,
-// targetArchiveLen). This is the fix for the mid-turn eviction bug: if
-// windowTrim advanced Skip during a live turn and the turn then aborts,
-// restoring Skip to its turn-start value ensures GetHistory returns exactly
-// the pre-turn live window (SC-001, SC-010).
+// targetArchiveLen physical lines, restores meta.Skip = min(targetSkip,
+// targetArchiveLen) and restores the projection state to the turn-start
+// emptiedSet in one meta write (ADR-066 FR-020). This is the fix for the
+// mid-turn eviction bug: if windowTrim advanced Skip during a live turn and
+// the turn then aborts, restoring Skip to its turn-start value ensures
+// GetHistory returns exactly the pre-turn live window (SC-001, SC-010).
 // Callers compute: targetSkip = initialArchiveLen - initialHistoryLength.
-func (us *UnifiedStore) RollbackAppended(sessionKey string, targetArchiveLen, targetSkip int) {
-	if err := us.backend.RollbackAppended(context.Background(), sessionKey, targetArchiveLen, targetSkip); err != nil {
+func (us *UnifiedStore) RollbackAppended(sessionKey string, targetArchiveLen, targetSkip int, emptiedSet memory.ProjectionSet) {
+	if err := us.backend.RollbackAppended(context.Background(), sessionKey, targetArchiveLen, targetSkip, emptiedSet); err != nil {
 		slog.Error("unified_store: rollback appended", "key", sessionKey, "error", err)
+	}
+}
+
+// Projection implements SessionStore.
+func (us *UnifiedStore) Projection(sessionKey string) memory.ProjectionMeta {
+	pm, err := us.backend.GetProjection(context.Background(), sessionKey)
+	if err != nil {
+		slog.Error("unified_store: get projection", "key", sessionKey, "error", err)
+		return memory.ProjectionMeta{Entries: memory.ProjectionSet{}}
+	}
+	return pm
+}
+
+// SetProjectionState implements SessionStore.
+func (us *UnifiedStore) SetProjectionState(sessionKey string, pk memory.ProjectionKey, state memory.ProjectionState) {
+	if err := us.backend.SetProjectionState(context.Background(), sessionKey, pk, state); err != nil {
+		slog.Error("unified_store: set projection state", "key", sessionKey, "error", err)
+	}
+}
+
+// MarkHydrated implements SessionStore.
+func (us *UnifiedStore) MarkHydrated(sessionKey string) {
+	if err := us.backend.MarkHydrated(context.Background(), sessionKey); err != nil {
+		slog.Error("unified_store: mark hydrated", "key", sessionKey, "error", err)
 	}
 }
 

@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -89,16 +90,23 @@ func MigrateFromJSON(
 			key = strings.TrimSuffix(name, ".json")
 		}
 
-		// Use SetHistory (atomic replace) instead of per-message
-		// AddFullMessage. This makes migration idempotent: if the
-		// process crashes after writing messages but before the
-		// rename below, a retry replaces the partial data cleanly
-		// instead of duplicating messages.
+		// Use SetHistory (atomic first fill) instead of per-message
+		// AddFullMessage. This makes migration idempotent: the JSONL is
+		// written with one atomic rename, so if the process crashes after
+		// writing but before the .migrated rename below, the retry finds
+		// a complete, non-empty archive. SetHistory refuses a non-empty
+		// archive (ADR-066 FR-047 — it never rewrites or resets Skip), and
+		// that refusal is exactly the "already imported" signal: skip the
+		// write, finish the rename, never duplicate.
 		if setErr := store.SetHistory(ctx, key, sess.Messages); setErr != nil {
-			return migrated, fmt.Errorf(
-				"memory: migrate %s: set history: %w",
-				name, setErr,
-			)
+			if !errors.Is(setErr, ErrArchiveNotEmpty) {
+				return migrated, fmt.Errorf(
+					"memory: migrate %s: set history: %w",
+					name, setErr,
+				)
+			}
+			logger.InfoCF("memory", "migrate: archive already populated, finishing rename only",
+				map[string]any{"file": name, "key": key})
 		}
 
 		// Rename to .migrated as backup (not delete).

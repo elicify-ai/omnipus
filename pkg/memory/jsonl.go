@@ -43,12 +43,20 @@ const (
 )
 
 // sessionMeta holds per-session metadata stored in a .meta.json file.
+//
+// Projection (ADR-066 FR-019) is the per-result projection state keyed
+// (tool_call_id, archive_line) → capped | emptied, persisted beside Skip so
+// the live window and a reload project the same bytes. Hydrated (FR-048)
+// marks an archive that was rebuilt from the UI transcript. Both are
+// internal persistence state, not wire types.
 type sessionMeta struct {
-	Key       string    `json:"key"`
-	Skip      int       `json:"skip"`
-	Count     int       `json:"count"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	Key        string            `json:"key"`
+	Skip       int               `json:"skip"`
+	Count      int               `json:"count"`
+	CreatedAt  time.Time         `json:"created_at"`
+	UpdatedAt  time.Time         `json:"updated_at"`
+	Projection []projectionEntry `json:"projection,omitempty"`
+	Hydrated   bool              `json:"hydrated,omitempty"`
 }
 
 // JSONLStore implements Store using append-only JSONL files.
@@ -372,14 +380,23 @@ func (s *JSONLStore) TruncateHistory(
 			meta.Skip = meta.Count - keepLast
 		}
 	}
+	// FR-019 / US-6.AC9: entries for evicted lines have no window view left
+	// to project — prune everything below the new Skip.
+	meta.Projection = projectionToEntries(
+		pruneProjectionBelow(projectionFromEntries(meta.Projection), meta.Skip))
 	meta.UpdatedAt = time.Now()
 
 	return s.writeMeta(sessionKey, meta)
 }
 
 // RollbackAppended truncates the JSONL file to the first targetLines
-// non-empty lines, sets meta.Count = targetLines, and restores
-// meta.Skip = min(targetSkip, targetLines).
+// non-empty lines, sets meta.Count = targetLines, restores
+// meta.Skip = min(targetSkip, targetLines), and restores the projection
+// state to the turn-start set emptiedSet (ADR-066 FR-020, US-6.AC5) — all
+// three in ONE meta write, so no reader ever observes an intermediate
+// state. Projection entries whose archive_line ≥ targetLines are dropped;
+// see rollbackProjection for the exact merge rule. emptiedSet is read, never
+// retained — callers may mutate it afterwards.
 //
 // The Skip restore is the fix for the mid-turn eviction bug (SC-001, SC-010):
 // if windowTrim advanced Skip during a live turn and the turn then aborts,
@@ -399,7 +416,7 @@ func (s *JSONLStore) TruncateHistory(
 // If targetLines >= meta.Count (nothing to remove), the method returns nil
 // immediately without touching the file.
 func (s *JSONLStore) RollbackAppended(
-	_ context.Context, sessionKey string, targetLines, targetSkip int,
+	_ context.Context, sessionKey string, targetLines, targetSkip int, emptiedSet ProjectionSet,
 ) error {
 	l := s.sessionLock(sessionKey)
 	l.Lock()
@@ -422,16 +439,20 @@ func (s *JSONLStore) RollbackAppended(
 	}
 	if targetLines >= meta.Count {
 		// Nothing to roll back — the file is already at or below targetLines.
-		// Still restore Skip to targetSkip so mid-turn evictions are undone
-		// even when no new messages were appended during the turn.
+		// Still restore Skip and the projection state to their turn-start
+		// values so mid-turn evictions and empties are undone even when no
+		// new messages were appended during the turn.
 		if targetSkip < 0 {
 			targetSkip = 0
 		}
 		if targetSkip > meta.Count {
 			targetSkip = meta.Count
 		}
-		if meta.Skip != targetSkip {
+		restored := projectionToEntries(rollbackProjection(
+			projectionFromEntries(meta.Projection), emptiedSet, meta.Count))
+		if meta.Skip != targetSkip || !projectionEntriesEqual(meta.Projection, restored) {
 			meta.Skip = targetSkip
+			meta.Projection = restored
 			meta.UpdatedAt = time.Now()
 			return s.writeMeta(sessionKey, meta)
 		}
@@ -457,9 +478,12 @@ func (s *JSONLStore) RollbackAppended(
 		targetSkip = len(kept)
 	}
 
-	// Update meta: Count shrinks, Skip restored to turn-start value.
+	// Update meta: Count shrinks, Skip and the projection state return to
+	// their turn-start values — one write for all three (FR-020).
 	meta.Count = len(kept)
 	meta.Skip = targetSkip
+	meta.Projection = projectionToEntries(rollbackProjection(
+		projectionFromEntries(meta.Projection), emptiedSet, len(kept)))
 	meta.UpdatedAt = time.Now()
 
 	// Write meta BEFORE rewriting the file. If we crash between the two
@@ -474,6 +498,13 @@ func (s *JSONLStore) RollbackAppended(
 	return s.rewriteJSONL(sessionKey, kept)
 }
 
+// SetHistory fills an EMPTY session archive with history (ADR-066 D5.5,
+// FR-047). It refuses with ErrArchiveNotEmpty when the archive already
+// holds at least one line, and it never touches meta.Skip: the only
+// legitimate caller is transcript hydration of a brand-new archive, and a
+// whole-file rewrite of an existing one was the verified mechanism that
+// reset Skip and destroyed every tool result on reopen (US-15). Rolling a
+// turn back is RollbackAppended's job, never this method's.
 func (s *JSONLStore) SetHistory(
 	_ context.Context,
 	sessionKey string,
@@ -483,6 +514,16 @@ func (s *JSONLStore) SetHistory(
 	l.Lock()
 	defer l.Unlock()
 
+	// Count the file, not meta.Count — a crash between the append and the
+	// meta write leaves meta stale, and "non-empty" must be judged on bytes.
+	n, err := countLines(s.jsonlPath(sessionKey))
+	if err != nil {
+		return err
+	}
+	if n > 0 {
+		return fmt.Errorf("%w: %q has %d line(s)", ErrArchiveNotEmpty, sessionKey, n)
+	}
+
 	meta, err := s.readMeta(sessionKey)
 	if err != nil {
 		return err
@@ -491,14 +532,15 @@ func (s *JSONLStore) SetHistory(
 	if meta.CreatedAt.IsZero() {
 		meta.CreatedAt = now
 	}
-	meta.Skip = 0
+	// Skip is deliberately left as-is (FR-047). Any projection entry on an
+	// empty archive addresses a line that does not exist — clear it.
 	meta.Count = len(history)
+	meta.Projection = nil
 	meta.UpdatedAt = now
 
-	// Write meta BEFORE rewriting the JSONL file. If we crash between
-	// the two writes, meta has Skip=0 and the old file is still intact,
-	// so GetHistory reads from line 1 — returning "too many" messages
-	// rather than losing data. The next SetHistory call corrects this.
+	// Write meta BEFORE writing the JSONL file. If we crash between the two
+	// writes, meta.Count overstates an empty file — GetHistory simply reads
+	// nothing, and the next append reconciles Count.
 	err = s.writeMeta(sessionKey, meta)
 	if err != nil {
 		return err
@@ -513,6 +555,81 @@ func (s *JSONLStore) SetHistory(
 		archived[i] = ArchivedMessage{Message: m}
 	}
 	return s.rewriteJSONL(sessionKey, archived)
+}
+
+// GetProjection returns the session's persisted projection state and
+// hydrated flag (FR-019, FR-048). A session with no meta file yields an
+// empty, non-nil set.
+func (s *JSONLStore) GetProjection(_ context.Context, sessionKey string) (ProjectionMeta, error) {
+	l := s.sessionLock(sessionKey)
+	l.Lock()
+	defer l.Unlock()
+
+	meta, err := s.readMeta(sessionKey)
+	if err != nil {
+		return ProjectionMeta{}, err
+	}
+	return ProjectionMeta{
+		Entries:  projectionFromEntries(meta.Projection),
+		Hydrated: meta.Hydrated,
+	}, nil
+}
+
+// SetProjectionState records state for one (tool_call_id, archive_line)
+// (FR-019). Re-marking an existing key overwrites it. Invalid keys or
+// states are refused, never stored.
+func (s *JSONLStore) SetProjectionState(
+	_ context.Context, sessionKey string, pk ProjectionKey, state ProjectionState,
+) error {
+	if err := validateProjectionWrite(pk, state); err != nil {
+		return err
+	}
+	l := s.sessionLock(sessionKey)
+	l.Lock()
+	defer l.Unlock()
+
+	meta, err := s.readMeta(sessionKey)
+	if err != nil {
+		return err
+	}
+	set := projectionFromEntries(meta.Projection)
+	set[pk] = state
+	meta.Projection = projectionToEntries(set)
+	meta.UpdatedAt = time.Now()
+	return s.writeMeta(sessionKey, meta)
+}
+
+// MarkHydrated sets the one-way hydrated flag (FR-048): the archive was
+// rebuilt from the UI transcript, so recall by tool_call_id cannot promise
+// the original result bytes.
+func (s *JSONLStore) MarkHydrated(_ context.Context, sessionKey string) error {
+	l := s.sessionLock(sessionKey)
+	l.Lock()
+	defer l.Unlock()
+
+	meta, err := s.readMeta(sessionKey)
+	if err != nil {
+		return err
+	}
+	if meta.Hydrated {
+		return nil
+	}
+	meta.Hydrated = true
+	meta.UpdatedAt = time.Now()
+	return s.writeMeta(sessionKey, meta)
+}
+
+// projectionEntriesEqual compares two persisted (sorted) entry slices.
+func projectionEntriesEqual(a, b []projectionEntry) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // Compact physically rewrites the JSONL file, dropping all logically

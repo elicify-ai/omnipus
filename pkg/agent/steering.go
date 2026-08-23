@@ -1082,7 +1082,9 @@ func (al *AgentLoop) HardAbort(sessionKey string) error {
 				targetSkip = 0
 			}
 		}
-		ts.session.RollbackAppended(sessionKey, targetLen, targetSkip)
+		// Turn-start projection set: nil until T066-12 captures it (see
+		// turn.go::restoreSession for the reasoning).
+		ts.session.RollbackAppended(sessionKey, targetLen, targetSkip, nil)
 
 		// M4 mirror: verify the rollback actually took effect. RollbackAppended is
 		// fire-and-forget (no error return). Re-read the archive and confirm the

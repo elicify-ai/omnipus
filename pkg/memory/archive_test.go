@@ -389,7 +389,7 @@ func TestRollbackAppended(t *testing.T) {
 
 	// Roll back to initial line count, restoring Skip to the turn-start value
 	// (targetSkip = initialArchiveLen - initialHistoryLength = 10 - 7 = 3).
-	if err = store.RollbackAppended(ctx, key, initial, skipCount); err != nil {
+	if err = store.RollbackAppended(ctx, key, initial, skipCount, nil); err != nil {
 		t.Fatalf("RollbackAppended: %v", err)
 	}
 
@@ -440,7 +440,7 @@ func TestRollbackAppended_NoopWhenTargetGeCount(t *testing.T) {
 	before := countFileLines(t, path)
 
 	// Calling with target == current count, targetSkip=0: file unchanged.
-	if err := store.RollbackAppended(ctx, key, n, 0); err != nil {
+	if err := store.RollbackAppended(ctx, key, n, 0, nil); err != nil {
 		t.Fatalf("RollbackAppended noop: %v", err)
 	}
 	after := countFileLines(t, path)
@@ -449,7 +449,7 @@ func TestRollbackAppended_NoopWhenTargetGeCount(t *testing.T) {
 	}
 
 	// Calling with target > count is also a no-op for the file.
-	if err := store.RollbackAppended(ctx, key, n+100, 0); err != nil {
+	if err := store.RollbackAppended(ctx, key, n+100, 0, nil); err != nil {
 		t.Fatalf("RollbackAppended noop (>count): %v", err)
 	}
 	after2 := countFileLines(t, path)

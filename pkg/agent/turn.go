@@ -1520,7 +1520,13 @@ func (ts *turnState) restoreSession(agent *AgentInstance) error {
 	// are undone. SetHistory is explicitly NOT used here — it would overwrite
 	// the entire JSONL file and reset Skip=0, permanently deleting any evicted
 	// turns that preceded this turn (CRITICAL 1, path 2).
-	agent.Sessions.RollbackAppended(ts.sessionKey, targetLen, targetSkip)
+	//
+	// The third member of the turn-start triple (ADR-066 FR-020) is the
+	// projection set as of turn start. Until T066-12 captures it in
+	// newTurnState (turnState.initialEmptiedSet), nil is passed: no result
+	// is ever emptied before T066-12 lands, so "nothing emptied at turn
+	// start" is exact, and the store keeps pre-turn capped entries on its own.
+	agent.Sessions.RollbackAppended(ts.sessionKey, targetLen, targetSkip, nil)
 
 	// M4 mirror: verify the rollback actually took effect. RollbackAppended is
 	// fire-and-forget (no error return). Re-read the archive and confirm the
