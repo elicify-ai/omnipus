@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { Robot, CaretDown } from '@phosphor-icons/react'
+import { Robot, CaretDown, Lock } from '@phosphor-icons/react'
 import { IconRenderer } from '@/components/shared/IconRenderer'
 import {
   DropdownMenu,
@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/button'
 import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
 import { useChatAgents } from '@/hooks/useChatAgents'
+import { isWorker } from '@/lib/api'
 import { cn, initialOf } from '@/lib/utils'
 
 /**
@@ -34,6 +35,12 @@ import { cn, initialOf } from '@/lib/utils'
  * store (`setActiveSession`) as a side effect of mounting, so this component
  * is expected to be mounted exactly once per screen (in the composer's
  * context row) — mounting it twice would race two auto-select writers.
+ *
+ * One session shape is NOT pickable at all: a session that belongs to a
+ * WORKER agent renders a locked, read-only trigger naming that worker
+ * instead of a dropdown (defect 004 — see the `lockedWorkerAgent`
+ * derivation below). Everything else about the component is unchanged by
+ * that lock.
  */
 export function AgentPicker({
   className,
@@ -71,17 +78,67 @@ export function AgentPicker({
   // Draft-branch: agents exist, but none is ready to chat yet.
   const isDraftOnly = chatAgents.length === 0 && agents.length > 0
 
+  // ── Which agent does the trigger show? ──────────────────────────────────
+  //
+  // These two lines used to sit below the early returns; they are pure
+  // computation (no hooks), and they moved up here only because the worker
+  // lock derived from them is now an input to the latch-reset effect below
+  // as well as to the render branches. Nothing about how they resolve
+  // changed: for every normal session the displayed agent still comes out of
+  // the workspace-scoped `chatAgents`, exactly as before.
+  const effectiveAgentId = activeAgentId || chatAgents[0]?.id
+  const chatAgent = chatAgents.find((a) => a.id === effectiveAgentId)
+
+  // Defect 004 — a session that belongs to a WORKER agent.
+  //
+  // `chatAgents` deliberately excludes workers (useChatAgents.ts): a worker
+  // is a background task runner, not somebody you go and pick out of a list,
+  // and it must stay out of BOTH surfaces that read that list — this
+  // dropdown and the composer's "@" mention menu. You can nonetheless be
+  // sitting INSIDE a worker's session: every path that opens one hands
+  // `activeAgentId` the session's own agent (`active_agent_id ?? agent_id` —
+  // the sidebar's session tree via useSelectSession, the /sessions/{id} deep
+  // link, workspace re-entry). Resolving the trigger purely out of
+  // `chatAgents` therefore found nothing, and the picker read "Select agent"
+  // while the composer placeholder inches away correctly named the worker
+  // (ChatScreen.tsx resolves that one from the unfiltered list) — or, if the
+  // agent list resolved before the session attach landed, auto-select filled
+  // the gap with the first ordinary chat agent.
+  //
+  // So: when — and ONLY when — the `chatAgents` lookup above missed BECAUSE
+  // the active agent is a worker, fall back to the UNFILTERED `agents` list
+  // this component already holds (`hasHardError` and `handleAgentSelect`
+  // already read it the same way). Deliberately narrowed to workers: any
+  // OTHER reason the active agent is missing from `chatAgents` (a draft
+  // agent, one outside this workspace's core_team, the system Judge) keeps
+  // its existing "Select agent" rendering, so no ordinary session changes
+  // behaviour.
+  //
+  // This is a read-only widening of what the TRIGGER may display. It does
+  // not touch `chatAgents`, so nothing new can appear in the dropdown, and
+  // the "@" mention menu reads the shared hook rather than this component —
+  // it is not reachable from here at all.
+  const lockedWorkerAgent =
+    !chatAgent && effectiveAgentId
+      ? agents.find((a) => a.id === effectiveAgentId && isWorker(a))
+      : undefined
+  const activeAgent = chatAgent ?? lockedWorkerAgent
+
   // The `/agents` slash command sets agentSelectorOpen=true unconditionally
-  // (useSlashMenu.ts), but the error/draft branches below return before the
-  // DropdownMenu mounts — without this reset the flag would latch and the
-  // menu would spontaneously pop open the instant the query recovers (e.g. a
-  // background refetch resolves). Placed BEFORE the early returns so hook
-  // order stays stable across renders.
+  // (useSlashMenu.ts), but the error/draft/worker-lock branches below return
+  // before the DropdownMenu mounts — without this reset the flag would latch
+  // and the menu would spontaneously pop open the instant the query recovers
+  // (e.g. a background refetch resolves) or the user left the worker
+  // session. For the worker lock that reset is load-bearing rather than
+  // tidiness: `agentSelectorOpen` is controlled from OUTSIDE this component,
+  // so a latched `true` is exactly what would let `/agents` put a live menu
+  // over a session whose agent is meant to be fixed. Placed BEFORE the early
+  // returns so hook order stays stable across renders.
   useEffect(() => {
-    if ((hasHardError || isDraftOnly) && agentSelectorOpen) {
+    if ((hasHardError || isDraftOnly || !!lockedWorkerAgent) && agentSelectorOpen) {
       setAgentSelectorOpen(false)
     }
-  }, [hasHardError, isDraftOnly, agentSelectorOpen, setAgentSelectorOpen])
+  }, [hasHardError, isDraftOnly, lockedWorkerAgent, agentSelectorOpen, setAgentSelectorOpen])
 
   // Auto-select the first ready agent if none is active yet.
   //
@@ -106,6 +163,13 @@ export function AgentPicker({
   // auto-select ran. Capture both BEFORE the write (they're about to be
   // nulled) and restore them via the store's own setAttachedContext setter
   // immediately after.
+  //
+  // Deliberately NOT given a worker-lock guard (defect 004): this effect
+  // only ever runs while there is no active agent at all, and a worker lock
+  // requires one — with `activeAgentId` null, `effectiveAgentId` above falls
+  // back to `chatAgents[0]`, which can never be a worker. The two states are
+  // mutually exclusive, so the effect is left exactly as it was rather than
+  // carrying a condition that can never be true.
   useEffect(() => {
     if (disabled) return
     if (!activeAgentId && chatAgents.length > 0) {
@@ -149,6 +213,53 @@ export function AgentPicker({
     )
   }
 
+  // Defect 004 — the worker lock. Placed BEFORE the all-draft branch on
+  // purpose: a worker session must report the worker it belongs to even in a
+  // workspace whose ordinary agents happen to be all-draft, where "All agents
+  // are in draft status" would be both wrong and unactionable.
+  //
+  // Rendered as a plain disabled Button rather than a disabled DropdownMenu
+  // trigger, so there is no menu to open at all — see the latch-reset effect
+  // above for why a disabled trigger on its own would not have been enough.
+  // Same testid, geometry and avatar as the normal trigger; the caret is
+  // swapped for a lock so the state reads as deliberately fixed rather than
+  // broken, on top of the shared `disabled:opacity-50` treatment every
+  // read-only Button in the app gets (button.tsx).
+  if (lockedWorkerAgent) {
+    return (
+      <Button
+        variant="ghost"
+        size="sm"
+        data-testid="agent-picker-trigger"
+        data-agent-locked="worker"
+        disabled
+        tabIndex={tabIndex}
+        className={cn(
+          'flex items-center gap-1.5 h-7 px-1.5 text-xs font-medium max-w-[200px] min-w-0',
+          className,
+        )}
+        title={`This session belongs to ${lockedWorkerAgent.name} — the agent cannot be changed for a worker session.`}
+        aria-label={`Agent locked to ${lockedWorkerAgent.name} for this worker session`}
+      >
+        {/* Decorative avatar dot — aria-hidden for the same reason as the
+            normal trigger's (see its comment below): the button carries an
+            explicit aria-label, and hiding the bare initial keeps screen
+            readers' browse mode from reading out a stray character. */}
+        <div
+          aria-hidden="true"
+          className="w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-bold shrink-0"
+          style={{ backgroundColor: lockedWorkerAgent.color ?? 'var(--color-surface-3)' }}
+        >
+          {lockedWorkerAgent.icon
+            ? <IconRenderer icon={lockedWorkerAgent.icon} size={11} />
+            : initialOf(lockedWorkerAgent.name)}
+        </div>
+        <span className="truncate">{lockedWorkerAgent.name}</span>
+        <Lock size={11} weight="fill" aria-hidden="true" className="shrink-0 opacity-60" />
+      </Button>
+    )
+  }
+
   if (isDraftOnly) {
     return (
       <div className={cn('flex items-center gap-2 px-2 min-w-0', className)}>
@@ -158,9 +269,6 @@ export function AgentPicker({
       </div>
     )
   }
-
-  const effectiveAgentId = activeAgentId || chatAgents[0]?.id
-  const activeAgent = chatAgents.find((a) => a.id === effectiveAgentId)
 
   // Fix H: the store is read fresh via `.getState()` at click time — this is
   // the write path, so the freshest state wins, matching useSlashMenu.ts's
