@@ -95,7 +95,7 @@ var DefaultResizeLimits = ResizeLimits{LongEdgePx: 7680, MaxBytes: 10 << 20}
 // so callers MUST treat a Document and everything it owns as read-only.
 type Document struct {
 	SchemaVersion       string
-	Version             string
+	Version             Version
 	UpdatedAt           time.Time
 	Source              string
 	DefaultResizeLimits ResizeLimits

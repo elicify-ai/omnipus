@@ -34,7 +34,6 @@ package capabilities
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
@@ -333,10 +332,9 @@ func TestParseSeed_RejectsMissingSource(t *testing.T) {
 
 // TestParseSeed_RejectsMissingVersion (FIX 5, review) asserts the version
 // invariant: an empty/missing "version" must be rejected outright, not
-// silently accepted. Before this fix, ParseVersion("") never errors (by
-// design — see its doc comment) and produced a Version with raw == "",
-// which defeated refreshLocked's anti-downgrade regression check: that
-// check is gated on `s.Version.raw != ""`, so a version-less catalog was
+// silently accepted. Before this fix an empty version flowed through
+// unchecked, which defeated refreshLocked's anti-downgrade regression
+// check: that check is gated on `s.Version != ""`, so a version-less catalog was
 // applied unconditionally with zero log, even if it was semantically older
 // than the version already running.
 func TestParseSeed_RejectsMissingVersion(t *testing.T) {
@@ -373,7 +371,7 @@ func TestCatalog_Refresh_EmptyVersionRejected_AntiDowngradeGuardHolds(t *testing
 	}
 	c, err := NewCatalog(minimalSeedJSON(), nil, store, testLogger())
 	require.NoError(t, err)
-	require.Equal(t, "v10.0.0", c.Version().String())
+	require.Equal(t, "v10.0.0", c.Version())
 
 	// A pulled catalog with NO version field at all — the exact shape a
 	// misconfigured/degraded seed source could produce.
@@ -388,7 +386,7 @@ func TestCatalog_Refresh_EmptyVersionRejected_AntiDowngradeGuardHolds(t *testing
 	assert.Contains(t, refreshErr.Error(), "version")
 
 	// last-known-good must be untouched.
-	assert.Equal(t, "v10.0.0", c.Version().String())
+	assert.Equal(t, "v10.0.0", c.Version())
 	models := c.Models()
 	hasCurrent, hasSnuckIn := false, false
 	for _, m := range models {
@@ -401,146 +399,6 @@ func TestCatalog_Refresh_EmptyVersionRejected_AntiDowngradeGuardHolds(t *testing
 	}
 	assert.True(t, hasCurrent, "current model must still be present")
 	assert.False(t, hasSnuckIn, "version-less catalog must NOT have been applied")
-}
-
-// ── TD-M5 Version semver comparison (Wave 1 r1) ──────────────────────────────
-
-// TestVersion_SemverComparison asserts the semver-aware comparison
-// (TD-M5 bug fix): semver-parseable strings compare numerically across
-// major/minor/patch, so v10 > v2 (the lexical bug) and v1.2.3 < v1.10.0
-// (the minor-axis bug). Non-semver strings fall back to lexical
-// comparison.
-func TestVersion_SemverComparison(t *testing.T) {
-	cases := []struct {
-		a, b     string
-		wantSign int // -1, 0, +1
-		why      string
-	}{
-		// The headline bug fix: v10 > v2 (lexical would say v10 < v2).
-		{"v10", "v2", +1, "v10 > v2 (semver numeric)"},
-		{"v2", "v10", -1, "v2 < v10 (semver numeric)"},
-		// The minor-axis bug fix: v1.2.3 < v1.10.0.
-		{"v1.2.3", "v1.10.0", -1, "v1.2.3 < v1.10.0 (semver numeric minor)"},
-		{"v1.10.0", "v1.2.3", +1, "v1.10.0 > v1.2.3 (semver numeric minor)"},
-		// Patch axis.
-		{"v1.2.10", "v1.2.2", +1, "v1.2.10 > v1.2.2 (semver numeric patch)"},
-		// Equality.
-		{"v1.2.3", "v1.2.3", 0, "v1.2.3 == v1.2.3"},
-		// Shorthand expansion.
-		{"v1", "v1.0.0", 0, "v1 == v1.0.0 (shorthand)"},
-		{"v1.2", "v1.2.0", 0, "v1.2 == v1.2.0 (shorthand)"},
-		{"v1", "v1.0.1", -1, "v1 < v1.0.1 (shorthand treated as v1.0.0)"},
-		// Prerelease (§11): prerelease sorts BEFORE no-prerelease.
-		{"v1.0.0-rc1", "v1.0.0", -1, "prerelease < stable (semver §11)"},
-		{"v1.0.0", "v1.0.0-rc1", +1, "stable > prerelease (semver §11)"},
-		{"v1.0.0-rc1", "v1.0.0-rc1", 0, "same prerelease is equal"},
-		// Non-semver fallback: lexical.
-		{"2026-07-23", "2026-07-22", +1, "date lexical (later date > earlier)"},
-		{"v1-older", "v2-current", -1, "non-semver lexical (v1-older < v2-current)"},
-		{"2026-07-23", "v1.0.0", -1, "date-string vs semver falls back to lexical"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.why, func(t *testing.T) {
-			a, err := ParseVersion(tc.a)
-			require.NoError(t, err)
-			b, err := ParseVersion(tc.b)
-			require.NoError(t, err)
-			got := a.Compare(b)
-			// Compare the sign of the comparison.
-			gotSign := sign(got)
-			if gotSign != tc.wantSign {
-				t.Errorf("Compare(%q, %q) = %d (sign %d), want sign %d\n  version A: %+v\n  version B: %+v",
-					tc.a, tc.b, got, gotSign, tc.wantSign, a, b)
-			}
-		})
-	}
-}
-
-// sign returns -1/0/+1 for a negative/zero/positive value.
-func sign(v int) int {
-	if v < 0 {
-		return -1
-	}
-	if v > 0 {
-		return 1
-	}
-	return 0
-}
-
-// TestVersion_IsSemver is a small sanity check that ParseVersion
-// correctly identifies semver vs non-semver strings — the runtime
-// uses IsSemver to decide whether to compare numerically or lexically.
-func TestVersion_IsSemver(t *testing.T) {
-	cases := []struct {
-		s    string
-		want bool
-	}{
-		{"v1", true},
-		{"v1.2", true},
-		{"v1.2.3", true},
-		{"v1.2.3-rc1", true},
-		{"v10.0.0", true},
-		{"v1.0.0+build", false}, // build metadata not supported by parser
-		{"", false},
-		{"2026-07-23", false},
-		{"v1-older", false},
-		{"v-1", false},
-		{"v1.", false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.s, func(t *testing.T) {
-			v, err := ParseVersion(tc.s)
-			require.NoError(t, err)
-			assert.Equal(t, tc.want, v.IsSemver(), "IsSemver(%q)", tc.s)
-		})
-	}
-}
-
-// TestCatalog_Refresh_VersionRegressSemver asserts the regression check
-// uses semver comparison: a current "v10.0.0" with a pulled "v2.0.0"
-// (which would be a downgrade under ANY ordering) is rejected, AND
-// a current "v1.0.0" with a pulled "v1.0.10" (which is an UPGRADE
-// under semver but a DOWNGRADE under the old lexical comparison) is
-// rejected by the old code but ACCEPTED by the new code. This is the
-// live regression test for the v10 < v2 bug.
-func TestCatalog_Refresh_VersionRegressSemver(t *testing.T) {
-	store := &memStore{
-		data: []byte(completeSeedJSON(
-			`"version": "v10.0.0","models": [{"id":"current","provider":"p","input_modalities":["text"]}],"default_resize_budget":{"long_edge_px":1,"max_bytes":1}}`,
-		)),
-	}
-	c, err := NewCatalog(minimalSeedJSON(), nil, store, testLogger())
-	require.NoError(t, err)
-	require.Equal(t, "v10.0.0", c.Version().String())
-
-	// Pulled "v2.0.0" — numerically < current "v10.0.0"; semver
-	// regression (the OLD code's lexical comparison would have ACCEPTED
-	// this as an upgrade because "v10" < "v2" lexically).
-	puller := &fakePuller{data: []byte(completeSeedJSON(
-		`"version": "v2.0.0","models": [{"id":"older","provider":"p","input_modalities":["text"]}],"default_resize_budget":{"long_edge_px":1,"max_bytes":1}}`,
-	))}
-	c.puller = puller
-
-	refreshErr := c.Refresh(context.Background())
-	require.Error(t, refreshErr, "v2.0.0 must regress below v10.0.0 (semver)")
-	assert.Contains(t, refreshErr.Error(), "regressed")
-
-	// Now flip: current "v1.0.0" with pulled "v1.0.10" — semver upgrade,
-	// accepted.
-	store.data = []byte(completeSeedJSON(
-		`"version": "v1.0.0","models": [{"id":"current","provider":"p","input_modalities":["text"]}],"default_resize_budget":{"long_edge_px":1,"max_bytes":1}}`,
-	))
-	c, err = NewCatalog(minimalSeedJSON(), nil, store, testLogger())
-	require.NoError(t, err)
-	require.Equal(t, "v1.0.0", c.Version().String())
-
-	puller2 := &fakePuller{data: []byte(completeSeedJSON(
-		`"version": "v1.0.10","models": [{"id":"newer","provider":"p","input_modalities":["text"]}],"default_resize_budget":{"long_edge_px":1,"max_bytes":1}}`,
-	))}
-	c.puller = puller2
-
-	require.NoError(t, c.Refresh(context.Background()), "v1.0.10 must be accepted as an upgrade over v1.0.0 (semver)")
-	assert.Equal(t, "v1.0.10", c.Version().String(), "version upgrades to v1.0.10")
 }
 
 // ── Test #8 ──────────────────────────────────────────────────────────────────
@@ -610,7 +468,7 @@ func TestNewCatalog_HydratesFromStore(t *testing.T) {
 	}
 	assert.True(t, ids["from-store"])
 	assert.False(t, ids["gpt-4o"], "embedded seed entry must not appear when Store hydrates first")
-	assert.Equal(t, "store-2026-07-22", c.Version().String())
+	assert.Equal(t, "store-2026-07-22", c.Version())
 	assert.Equal(t, ResizeBudget{LongEdgePx: 4096, MaxBytes: 5242880}, c.DefaultResizeBudget())
 }
 
@@ -625,7 +483,7 @@ func TestNewCatalog_FallsBackToSeedOnStoreError(t *testing.T) {
 	require.NoError(t, err)
 	models := c.Models()
 	assert.Len(t, models, 2, "embedded seed must hydrate when Store fails")
-	assert.Equal(t, "test-2026-07-23", c.Version().String())
+	assert.Equal(t, "test-2026-07-23", c.Version())
 }
 
 // ── Test #11 ─────────────────────────────────────────────────────────────────
@@ -983,7 +841,7 @@ func TestCatalog_Refresh_PullsAndApplies(t *testing.T) {
 	err = c.Refresh(context.Background())
 	require.NoError(t, err)
 	assert.Equal(t, 1, puller.hits, "puller should be called exactly once")
-	assert.Equal(t, "z-2026-07-24", c.Version().String(), "version updates to the pulled value")
+	assert.Equal(t, "z-2026-07-24", c.Version(), "version updates to the pulled value")
 	models := c.Models()
 	foundNew := false
 	for _, m := range models {
@@ -1060,7 +918,7 @@ func TestCatalog_Refresh_VersionRegress(t *testing.T) {
 	}
 	c, err := NewCatalog(minimalSeedJSON(), nil, store, testLogger())
 	require.NoError(t, err)
-	require.Equal(t, "v2-current", c.Version().String())
+	require.Equal(t, "v2-current", c.Version())
 
 	puller := &fakePuller{data: []byte(completeSeedJSON(
 		`"version": "v1-older","models": [{"id":"older","provider":"p","input_modalities":["text"]}],"default_resize_budget":{"long_edge_px":1,"max_bytes":1}}`,
@@ -1153,7 +1011,7 @@ func TestCatalog_DefaultResizeBudget(t *testing.T) {
 func TestCatalog_VersionAndSource(t *testing.T) {
 	c, err := NewCatalog(minimalSeedJSON(), nil, nil, testLogger())
 	require.NoError(t, err)
-	assert.Equal(t, "test-2026-07-23", c.Version().String())
+	assert.Equal(t, "test-2026-07-23", c.Version())
 	assert.Equal(t, "test-fixture", c.Source())
 	assert.False(t, c.UpdatedAt().IsZero())
 }
@@ -1226,16 +1084,6 @@ func TestNewCatalog_FromFile(t *testing.T) {
 	assert.NotEmpty(t, c.Models(), "real committed seed must contain at least one model")
 }
 
-// ── Linter integration: errors.Is on ErrChecksumMismatch ────────────────────
-
-// TestErrChecksumMismatch_ExportedIs is a small surface-area check that the
-// sentinel error is reachable via errors.Is (the contract documented in the
-// puller's doc comment).
-func TestErrChecksumMismatch_ExportedIs(t *testing.T) {
-	wrapped := fmt.Errorf("wrap: %w", ErrChecksumMismatch)
-	require.True(t, errors.Is(wrapped, ErrChecksumMismatch), "errors.Is must match wrapped sentinel")
-}
-
 // Suppress the unused time import (some test cases above use it for time.Time
 // fields in fixtures; we don't reference time in test bodies to keep this
 // header section clean).
@@ -1290,7 +1138,7 @@ func TestCatalog_Refresh_ConcurrentSerialization(t *testing.T) {
 		"each of %d concurrent Refresh calls must drive exactly one Pull", n)
 	// Final state is internally consistent after N concurrent refreshes —
 	// the last-applied version won cleanly, no torn state.
-	assert.Equal(t, "z-2026-07-25", c.Version().String(),
+	assert.Equal(t, "z-2026-07-25", c.Version(),
 		"final catalog version is the pulled value (no corruption under concurrent refresh)")
 }
 
@@ -1630,7 +1478,7 @@ func TestDecodePersistedState_LegacyBareCatalogFallback(t *testing.T) {
 	store := &memStore{data: legacy}
 	c, err := NewCatalog(minimalSeedJSON(), nil, store, testLogger())
 	require.NoError(t, err)
-	assert.Equal(t, "legacy-1", c.Version().String())
+	assert.Equal(t, "legacy-1", c.Version())
 	d, _ := c.Degraded()
 	assert.False(t, d)
 }

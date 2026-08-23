@@ -82,7 +82,7 @@ func TestParseDocument_Conforming(t *testing.T) {
 	if doc.SchemaVersion != SchemaVersion {
 		t.Fatalf("schema_version = %q, want %q", doc.SchemaVersion, SchemaVersion)
 	}
-	if doc.Version != "v2026.8.22" {
+	if doc.Version.String() != "v2026.8.22" {
 		t.Fatalf("version = %q", doc.Version)
 	}
 	if doc.UpdatedAt.IsZero() || doc.Source == "" {

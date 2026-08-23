@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
-	"regexp"
 	"strconv"
 	"time"
 )
@@ -18,10 +17,6 @@ var ErrInvalid = errors.New("catalog: invalid document")
 // schema_version gate (FR-001), so the refresh path can log
 // reason=schema_version distinctly.
 var ErrSchemaVersion = errors.New("catalog: unsupported schema_version")
-
-// versionRe is FR-002's version rule: vYYYY.M.D[.N] with the leading v so
-// Version.Compare orders numerically (F-01).
-var versionRe = regexp.MustCompile(`^v\d{4}\.\d{1,2}\.\d{1,2}(\.\d+)?$`)
 
 // The unsupported_reason vocabulary (F-16, Unasked Q3).
 const (
@@ -108,7 +103,8 @@ func ParseDocument(data []byte) (*Document, error) {
 		return nil, fmt.Errorf("%w: schema_version %q (want %q): %w",
 			ErrInvalid, dto.SchemaVersion, SchemaVersion, ErrSchemaVersion)
 	}
-	if !versionRe.MatchString(dto.Version) {
+	version, err := ParseVersion(dto.Version)
+	if err != nil {
 		return nil, invalid("version", "%q must match vYYYY.M.D[.N]", dto.Version)
 	}
 	if dto.UpdatedAt == "" {
@@ -131,7 +127,7 @@ func ParseDocument(data []byte) (*Document, error) {
 
 	doc := &Document{
 		SchemaVersion:       dto.SchemaVersion,
-		Version:             dto.Version,
+		Version:             version,
 		UpdatedAt:           updatedAt,
 		Source:              dto.Source,
 		DefaultResizeLimits: defaults,

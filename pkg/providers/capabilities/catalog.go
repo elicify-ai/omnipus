@@ -285,7 +285,11 @@ func decodePersistedState(data []byte) (catalogJSON []byte, degraded bool, relea
 // by seedFile.validate from the permissive JSON DTO; never built
 // directly from raw JSON by external callers.
 type Seed struct {
-	Version             Version
+	// Version is the legacy seed's date-string version ("2026-07-28"),
+	// compared lexically. The semver-aware Version type moved to
+	// pkg/providers/catalog with the 2.0.0 document (T067-03); this
+	// package is deleted whole by T067-07.
+	Version             string
 	SchemaVersion       string
 	UpdatedAt           time.Time
 	Source              string
@@ -332,12 +336,10 @@ type modelDTO struct {
 // validate parses the seedFile's wire data into the validated Seed.
 // All catalog invariants are enforced here (Wave 1 TD-M5):
 //
-//   - Catalog metadata: schema_version, updated_at, source are
-//     non-empty. The seed version string is parsed into a Version
-//     (semver-aware when parseable; lexical fallback otherwise). The
-//     parsed Version is used by Catalog.Refresh for the regression
-//     check so that semver-parseable updates compare numerically
-//     (v10 > v2 — the lexical bug fix).
+//   - Catalog metadata: schema_version, updated_at, source and version
+//     are non-empty. The version string is kept verbatim and compared
+//     lexically by Catalog.Refresh's regression check (correct for the
+//     ISO-date strings this legacy seed uses).
 //   - DefaultResizeBudget has positive LongEdgePx and positive MaxBytes.
 //   - Each model.ID is non-empty and unique.
 //   - Each model.Provider is non-empty.
@@ -362,11 +364,9 @@ func (f seedFile) validate() (Seed, error) {
 		return Seed{}, fmt.Errorf("source must be non-empty")
 	}
 	// FIX 5 (review): an empty/missing version must be rejected outright.
-	// ParseVersion("") does not error (it never errors today — see its doc
-	// comment) and produces a Version with raw == "", and refreshLocked's
-	// anti-downgrade regression check is deliberately gated on
-	// `s.Version.raw != ""` (a version-less pulled/stored catalog can't be
-	// compared, so the check is skipped for it rather than panicking or
+	// refreshLocked's anti-downgrade regression check is deliberately
+	// gated on `s.Version != ""` (a version-less pulled/stored catalog
+	// can't be compared, so the check is skipped for it rather than
 	// false-rejecting). Without this validation, that skip becomes a hole:
 	// a version-less catalog is applied UNCONDITIONALLY — even when it is
 	// semantically older than what's running — with zero log. Rejecting it
@@ -374,11 +374,6 @@ func (f seedFile) validate() (Seed, error) {
 	// makes that guard's "" -> "skip" behavior actually safe.
 	if f.Version == "" {
 		return Seed{}, fmt.Errorf("version must be non-empty")
-	}
-
-	parsedVersion, err := ParseVersion(f.Version)
-	if err != nil {
-		return Seed{}, fmt.Errorf("version: %w", err)
 	}
 
 	if f.DefaultResizeBudget == nil {
@@ -398,7 +393,7 @@ func (f seedFile) validate() (Seed, error) {
 	}
 
 	out := Seed{
-		Version:             parsedVersion,
+		Version:             f.Version,
 		SchemaVersion:       f.SchemaVersion,
 		UpdatedAt:           f.UpdatedAt,
 		Source:              f.Source,
@@ -487,7 +482,7 @@ type Catalog struct {
 	stateMu       sync.RWMutex
 	models        map[string]model
 	defaultBudget ResizeBudget
-	version       Version
+	version       string
 	updatedAt     time.Time
 	source        string
 	// degraded and degradedReleaseErr record whether the most recently
@@ -749,9 +744,9 @@ func (c *Catalog) DefaultResizeBudget() ResizeBudget {
 	return c.defaultBudget
 }
 
-// Version returns the parsed catalog version from the seed/refresh source.
-// Callers that need the raw string call Version.String().
-func (c *Catalog) Version() Version {
+// Version returns the raw catalog version string from the seed/refresh
+// source.
+func (c *Catalog) Version() string {
 	c.stateMu.RLock()
 	defer c.stateMu.RUnlock()
 	return c.version
@@ -863,14 +858,12 @@ func (c *Catalog) refreshLocked(ctx context.Context) error {
 		return err
 	}
 	// 3. Version check (under stateMu; the apply is the only state-mutating step).
-	//    Version.Compare is semver-aware: semver-parseable strings compare
-	//    numerically (v10 > v2); non-semver strings fall back to lexical
-	//    comparison (which preserves chronological ordering for ISO-date
-	//    version strings like the embedded seed's "2026-07-23").
+	//    Lexical comparison preserves chronological ordering for the
+	//    ISO-date version strings this legacy seed uses ("2026-07-28").
 	c.stateMu.RLock()
 	currentVersion := c.version
 	c.stateMu.RUnlock()
-	if currentVersion.raw != "" && s.Version.raw != "" && s.Version.Compare(currentVersion) < 0 {
+	if currentVersion != "" && s.Version != "" && strings.Compare(s.Version, currentVersion) < 0 {
 		c.logger.Warn("capabilities: pulled version regressed; retaining last-known-good",
 			"pulled", s.Version, "current", currentVersion)
 		return fmt.Errorf("pulled catalog version %q regressed below current %q", s.Version, currentVersion)

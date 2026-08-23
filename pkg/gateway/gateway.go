@@ -76,6 +76,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/policy"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/providers/capabilities"
+	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/skills"
@@ -4439,7 +4440,13 @@ func setupAndStartServices(
 	// is sufficient.
 	capCatalog, catErr := capabilities.NewCatalog(
 		capabilities.EmbeddedSeed(),
-		capabilities.NewGHReleasePuller("elicify-ai", "omnipus", "providers_capabilities.json"),
+		// T067-03 retargeted the puller at the assembly repository's
+		// 2.0.0 providers_catalog.json release (FR-007). Until T067-07
+		// folds this legacy catalog into pkg/providers/catalog, every
+		// pull either fails transport or is rejected by seedFile.validate
+		// (no default_resize_budget in a 2.0.0 document) — non-fatal, the
+		// embedded seed is retained.
+		catalog.NewGHReleasePuller(),
 		&capFileStore{path: filepath.Join(homePath, "capabilities_catalog.json")},
 		capabilityCatalogLogAdapter{},
 	)
