@@ -117,8 +117,7 @@ determines which HTTP client, auth flow, or CLI shim is used.
 | `anthropic-messages/` | Anthropic Messages API (native format, no OpenAI shim) |
 | `azure/` or `azure-openai/` | Azure OpenAI; `api_base` and `api_key_ref` required |
 | `bedrock/` | AWS Bedrock; credentials from AWS SDK env/profile/IAM |
-| `claude-cli/` or `claudecli/` | Claude via local CLI binary |
-| `codex-cli/` or `codexcli/` | Codex via local CLI binary |
+| `codex-cli/` | Codex via local CLI binary (signed in through `codex login`; the credential file is read, never written) |
 
 ### OpenAI-compatible protocols
 
@@ -176,8 +175,8 @@ All fields map directly to JSON tags in `pkg/config/config.go:ModelConfig`.
 | API key ref | `api_key_ref` | string | No | Name of a credential in `credentials.json`; resolved at runtime via env var injection |
 | Proxy | `proxy` | string | No | HTTP proxy URL for this entry |
 | Fallbacks | `fallbacks` | []string | No | Ordered list of `model_name` aliases to try on failure |
-| Auth method | `auth_method` | string | No | `oauth` or `token` for OAuth-based protocols |
-| Workspace | `workspace` | string | No | Working directory for CLI-based providers (`claude-cli`, `codex-cli`) |
+| Auth method | `auth_method` | string | No | `api_key` (default) or `sign_in` (vendor CLI sign-in) |
+| Workspace | `workspace` | string | No | Working directory for CLI-based providers (`codex-cli`) |
 | RPM | `rpm` | int | No | Requests-per-minute cap for this entry; 0 = unlimited |
 | Max tokens field | `max_tokens_field` | string | No | Override the field name sent for token limits (e.g. `max_completion_tokens`) |
 | Request timeout | `request_timeout` | int | No | HTTP timeout in seconds; `0` uses the provider default (120 s) |

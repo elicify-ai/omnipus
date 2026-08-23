@@ -2716,9 +2716,9 @@ type VoiceConfig struct {
 // ModelConfig represents a model-centric provider configuration.
 // It allows adding new providers (especially OpenAI-compatible ones) via configuration only.
 // The model field uses protocol prefix format: [protocol/]model-identifier
-// Supported protocols include openai, anthropic, claude-cli,
-// codex-cli, and named OpenAI-compatible protocols such as groq, deepseek,
-// modelscope, and novita.
+// Supported protocols include openai, anthropic, codex-cli, and named
+// OpenAI-compatible protocols such as groq, deepseek, modelscope, and
+// novita.
 // Default protocol is "openai" if no prefix is specified.
 type ModelConfig struct {
 	// Required fields
@@ -2731,9 +2731,12 @@ type ModelConfig struct {
 	Proxy     string   `json:"proxy,omitempty"`     // HTTP proxy URL
 	Fallbacks []string `json:"fallbacks,omitempty"` // Fallback model names for failover
 
-	// Special providers (CLI-based, OAuth, etc.)
-	AuthMethod string `json:"auth_method,omitempty"` // Authentication method: oauth, token
-	Home       string `json:"workspace,omitempty"`   // Home path (working directory) for CLI-based providers
+	// AuthMethod is how this row authenticates — the closed set
+	// AuthMethodAPIKey | AuthMethodSignIn (ADR-068 FR-003, X-25); empty means
+	// api_key. The retired store-OAuth values `oauth` / `token` are rejected by
+	// Validate, never silently accepted.
+	AuthMethod string `json:"auth_method,omitempty"`
+	Home       string `json:"workspace,omitempty"` // Home path (working directory) for CLI-based providers
 
 	// Optional optimizations
 	RPM            int            `json:"rpm,omitempty"`              // Requests per minute limit
@@ -2778,7 +2781,18 @@ func (c *ModelConfig) APIKey() string {
 	return os.Getenv(c.APIKeyRef)
 }
 
-// Validate checks if the ModelConfig has all required fields.
+// ModelConfig.AuthMethod closed set (ADR-068 FR-003, X-25). These mirror the
+// wire enum in contracts/components/schemas/Provider.yaml (`auth_method`).
+const (
+	// AuthMethodAPIKey — the row authenticates with a credential-store API key.
+	AuthMethodAPIKey = "api_key"
+	// AuthMethodSignIn — the row authenticates through a vendor CLI sign-in
+	// whose credential file Omnipus reads but never writes (FR-007).
+	AuthMethodSignIn = "sign_in"
+)
+
+// Validate checks if the ModelConfig has all required fields and that
+// auth_method, when set, is one of the closed set.
 func (c *ModelConfig) Validate() error {
 	if c.ModelName == "" {
 		return fmt.Errorf("model_name is required")
@@ -2786,7 +2800,13 @@ func (c *ModelConfig) Validate() error {
 	if c.Model == "" {
 		return fmt.Errorf("model is required")
 	}
-	return nil
+	switch c.AuthMethod {
+	case "", AuthMethodAPIKey, AuthMethodSignIn:
+		return nil
+	default:
+		return fmt.Errorf("auth_method %q is not supported; must be %q or %q",
+			c.AuthMethod, AuthMethodAPIKey, AuthMethodSignIn)
+	}
 }
 
 // TokenEntry is a single bearer-token credential in a user's token set.

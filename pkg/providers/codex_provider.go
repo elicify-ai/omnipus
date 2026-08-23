@@ -10,7 +10,6 @@ import (
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/responses"
 
-	"github.com/elicify-ai/omnipus/pkg/auth"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	orc "github.com/elicify-ai/omnipus/pkg/providers/openai_responses_common"
 )
@@ -251,35 +250,4 @@ func buildCodexParams(
 	}
 
 	return params
-}
-
-func createCodexTokenSource() func() (string, string, error) {
-	return func() (string, string, error) {
-		cred, err := auth.GetCredential("openai")
-		if err != nil {
-			return "", "", fmt.Errorf("loading auth credentials: %w", err)
-		}
-		if cred == nil {
-			return "", "", fmt.Errorf(
-				"no credentials for openai. Run: omnipus credentials set OPENAI_API_KEY <your-key>",
-			)
-		}
-
-		if cred.AuthMethod == "oauth" && cred.NeedsRefresh() && cred.RefreshToken != "" {
-			oauthCfg := auth.OpenAIOAuthConfig()
-			refreshed, err := auth.RefreshAccessToken(cred, oauthCfg)
-			if err != nil {
-				return "", "", fmt.Errorf("refreshing token: %w", err)
-			}
-			if refreshed.AccountID == "" {
-				refreshed.AccountID = cred.AccountID
-			}
-			if err := auth.SetCredential("openai", refreshed); err != nil {
-				return "", "", fmt.Errorf("saving refreshed token: %w", err)
-			}
-			return refreshed.AccessToken, refreshed.AccountID, nil
-		}
-
-		return cred.AccessToken, cred.AccountID, nil
-	}
 }

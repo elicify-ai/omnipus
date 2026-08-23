@@ -18,38 +18,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/providers/bedrock"
 )
 
-// createClaudeAuthProvider creates a Claude provider using OAuth credentials from auth store.
-func createClaudeAuthProvider() (LLMProvider, error) {
-	cred, err := getCredential("anthropic")
-	if err != nil {
-		return nil, fmt.Errorf("loading auth credentials: %w", err)
-	}
-	if cred == nil {
-		return nil, fmt.Errorf(
-			"no credentials for anthropic. Run: omnipus credentials set ANTHROPIC_API_KEY <your-key>",
-		)
-	}
-	return NewClaudeProviderWithTokenSource(cred.AccessToken, createClaudeTokenSource()), nil
-}
-
-// createCodexAuthProvider creates a Codex provider using OAuth credentials from auth store.
-func createCodexAuthProvider() (LLMProvider, error) {
-	cred, err := getCredential("openai")
-	if err != nil {
-		return nil, fmt.Errorf("loading auth credentials: %w", err)
-	}
-	if cred == nil {
-		return nil, fmt.Errorf(
-			"no credentials for openai. Run: omnipus credentials set OPENAI_API_KEY <your-key>",
-		)
-	}
-	return NewCodexProviderWithTokenSource(
-		cred.AccessToken,
-		cred.AccountID,
-		createCodexTokenSource(),
-	), nil
-}
-
 // ExtractProtocol extracts the protocol prefix and model identifier from a model string.
 // If no prefix is specified, it defaults to "openai".
 // Examples:
@@ -90,14 +58,6 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 
 	switch protocol {
 	case "openai":
-		// OpenAI with OAuth/token auth (Codex-style)
-		if cfg.AuthMethod == "oauth" || cfg.AuthMethod == "token" {
-			provider, err := createCodexAuthProvider()
-			if err != nil {
-				return nil, "", err
-			}
-			return provider, modelID, nil
-		}
 		// OpenAI with API key
 		if cfg.APIKey() == "" && cfg.APIBase == "" {
 			return nil, "", fmt.Errorf(
@@ -306,14 +266,6 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 		return p, modelID, nil
 
 	case "anthropic":
-		if cfg.AuthMethod == "oauth" || cfg.AuthMethod == "token" {
-			// Use OAuth credentials from auth store
-			provider, err := createClaudeAuthProvider()
-			if err != nil {
-				return nil, "", err
-			}
-			return provider, modelID, nil
-		}
 		// Use API key with HTTP API
 		apiBase := cfg.APIBase
 		if apiBase == "" {
@@ -381,14 +333,7 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 			cfg.RequestTimeout,
 		), modelID, nil
 
-	case "claude-cli", "claudecli":
-		workspace := cfg.Home
-		if workspace == "" {
-			workspace = "."
-		}
-		return NewClaudeCliProvider(workspace), modelID, nil
-
-	case "codex-cli", "codexcli":
+	case "codex-cli":
 		workspace := cfg.Home
 		if workspace == "" {
 			workspace = "."
@@ -459,10 +404,7 @@ var knownProtocols = map[string]bool{
 	"anthropic-messages":       true,
 	"coding-plan-anthropic":    true,
 	"alibaba-coding-anthropic": true,
-	"claude-cli":               true,
-	"claudecli":                true,
 	"codex-cli":                true,
-	"codexcli":                 true,
 }
 
 // IsKnownProtocol reports whether the given protocol name is recognized by

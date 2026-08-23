@@ -135,7 +135,7 @@ multi-provider / multi-protocol coverage. Each was sanity-checked live on 2026-0
 ## OP-1 — Anthropic API, especially for Chinese providers (dual OpenAI + Anthropic endpoints)
 Today we treat almost every provider as OpenAI-compatible (`/chat/completions`), and only
 a few as native Anthropic Messages (`/messages`): `anthropic-messages`,
-`coding-plan-anthropic`/`alibaba-coding-anthropic`, `anthropic` in OAuth mode, `claude-cli`.
+`coding-plan-anthropic`/`alibaba-coding-anthropic`.
 But **several Chinese providers expose BOTH an OpenAI-compatible AND an Anthropic-compatible
 endpoint** (the Anthropic one mainly so Claude Code / Anthropic-SDK clients can point at
 them). Live-confirmed (401 = endpoint exists, needs auth) on 2026-06-26:
