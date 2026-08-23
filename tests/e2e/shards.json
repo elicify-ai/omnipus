@@ -1,5 +1,5 @@
 {
-  "_comment": "SINGLE SOURCE OF TRUTH for the E2E shard plan. Consumed by BOTH .github/workflows/pr.yml (scripts/e2e-shards.sh matrix -> strategy.matrix via fromJSON) and deploy/ci-worker/runci.sh (scripts/e2e-shards.sh list). Every tests/e2e/*.spec.ts MUST be assigned to exactly one shard -- scripts/e2e-shards.sh check enforces this and FAILS CI on drift (an unassigned spec would silently never run; a dead reference would error). key_slot selects the OpenRouter key: a=primary (OPENROUTER_API_KEY / secrets.OPENROUTER_API_KEY_CI, always present), b/c=optional extra keys that fall back to a when unset, so concurrent LLM shards never share one rate-limit window. port is used ONLY by runci.sh (all shards share one worker machine, so they need distinct ports); each GitHub Actions shard runs on its own runner and always uses 6060. solo=true (optional, runci.sh-only, default false) makes runci.sh drain all in-flight shards and run this one ALONE in the foreground -- for timing-sensitive specs (WS-idle, live-vs-replay DOM fidelity, real-recap latency) that flake under any CPU contention on the shared worker; on GitHub Actions each shard already has its own runner so solo is a no-op there. To add a spec: drop it in tests/e2e/ and add its path to exactly one shard here -- nothing else to touch.",
+  "_comment": "SINGLE SOURCE OF TRUTH for the E2E shard plan. Consumed by BOTH .github/workflows/pr.yml (scripts/e2e-shards.sh matrix -> strategy.matrix via fromJSON) and deploy/ci-worker/runci.sh (scripts/e2e-shards.sh list). Every tests/e2e/*.spec.ts MUST be assigned to exactly one shard -- scripts/e2e-shards.sh check enforces this and FAILS CI on drift (an unassigned spec would silently never run; a dead reference would error). key_slot selects the OpenRouter key: a=primary (OPENROUTER_API_KEY / secrets.OPENROUTER_API_KEY_CI, always present), b/c=optional extra keys that fall back to a when unset, so concurrent LLM shards never share one rate-limit window. port is used ONLY by runci.sh (all shards share one worker machine, so they need distinct ports); each GitHub Actions shard runs on its own runner and always uses 6060. solo=true (optional, runci.sh-only, default false) makes runci.sh drain all in-flight shards and run this one ALONE in the foreground -- for timing-sensitive specs (WS-idle, live-vs-replay DOM fidelity, real-recap latency) that flake under any CPU contention on the shared worker; on GitHub Actions each shard already has its own runner so solo is a no-op there. To add a spec: drop it in tests/e2e/ and add its path to exactly one shard here -- nothing else to touch. The conformance suite is deliberately spread over FOUR shards (llm-conformance-chat/-plan/-replan/-exec): it is real-LLM, multi-minute-per-test work and as ONE shard it took ~1343s, 4.5x the next-longest E2E shard, single-handedly setting the pipeline's floor. playwright.config.ts pins workers:1/fullyParallel:false (a shared gateway's config/credentials cannot tolerate concurrent writes), so a spec FILE is the smallest unit of parallelism -- hence four files, one per shard, each on its own gateway. They are budget-balanced by summed per-test test.setTimeout (1140/1200/1080/1020s), NOT by line count, and spread across all three key_slots so four concurrent real-LLM shards do not share one rate-limit window. Every conformance test is self-contained (own workspace, own Date.now()-suffixed agent, own chat session), so regrouping them across shards is safe -- but keep any one test whole and do not split a test's file without re-checking that.",
   "shards": [
     {
       "group": "llm-chat",
@@ -52,12 +52,39 @@
       ]
     },
     {
-      "group": "llm-conformance",
-      "key_slot": "c",
+      "group": "llm-conformance-chat",
+      "key_slot": "a",
       "port": 6067,
       "solo": true,
       "specs": [
-        "tests/e2e/conformance-design-e2e.spec.ts"
+        "tests/e2e/conformance-design-chat-e2e.spec.ts"
+      ]
+    },
+    {
+      "group": "llm-conformance-plan",
+      "key_slot": "b",
+      "port": 6069,
+      "solo": true,
+      "specs": [
+        "tests/e2e/conformance-design-plan-e2e.spec.ts"
+      ]
+    },
+    {
+      "group": "llm-conformance-replan",
+      "key_slot": "c",
+      "port": 6070,
+      "solo": true,
+      "specs": [
+        "tests/e2e/conformance-design-replan-e2e.spec.ts"
+      ]
+    },
+    {
+      "group": "llm-conformance-exec",
+      "key_slot": "a",
+      "port": 6071,
+      "solo": true,
+      "specs": [
+        "tests/e2e/conformance-design-exec-e2e.spec.ts"
       ]
     },
     {

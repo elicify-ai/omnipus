@@ -77,18 +77,36 @@ export const test = base.extend<{
   // Test-scoped, freshly empty per attempt — a test pushes into this array
   // as it creates each Plan; the array itself is never shared across tests
   // or across retries of the same test (each attempt gets its own).
-  // No destructured `{}` param here (that trips `no-empty-pattern`): neither
-  // fixture depends on any other fixture, so the first (fixtures) argument
-  // is simply left unnamed-but-typed via a leading placeholder. TypeScript's
-  // inference for `base.extend<Fixtures>({...})` comes from the option
-  // object's position/generic, not from destructuring the first param, so
-  // this is not a behavior change — just not naming an argument we never
-  // read.
-  createdPlanIds: async (_fixtures, use) => {
+  // The empty `{}` first parameter is MANDATORY and is not stylistic.
+  // Playwright derives each fixture's dependency list by parsing the
+  // fixture function's own SOURCE TEXT (innerFixtureParameterNames in
+  // node_modules/playwright/lib/common/index.js) and hard-rejects a first
+  // parameter that is not an object-destructuring pattern:
+  //
+  //     if (firstParam[0] !== '{' || firstParam[firstParam.length-1] !== '}')
+  //       onError({ message: 'First argument must use the object
+  //                 destructuring pattern: ' + firstParam })
+  //
+  // That onError aborts loading the WHOLE spec file. A previous edit
+  // rewrote these two params as `(_fixtures, use)` to satisfy ESLint's
+  // `no-empty-pattern`, with a comment asserting "this is not a behavior
+  // change". It was: every spec importing this `test` collected ZERO tests
+  // and `playwright test` exited 1 before running a single assertion —
+  // verified on Playwright 1.61.1 (the version pinned in package-lock.json)
+  // by listing the conformance specs before and after.
+  //
+  // So the lint rule is disabled on exactly these two lines, narrowly and
+  // with the reason stated, rather than the API requirement being bent to
+  // suit it. Do NOT "clean this up" again without running
+  // `npx playwright test --list tests/e2e/conformance-design-chat-e2e.spec.ts`
+  // and confirming it still reports 3 tests rather than 0.
+  // eslint-disable-next-line no-empty-pattern
+  createdPlanIds: async ({}, use) => {
     const ids: string[] = []
     await use(ids)
   },
-  createdTaskIds: async (_fixtures, use) => {
+  // eslint-disable-next-line no-empty-pattern
+  createdTaskIds: async ({}, use) => {
     const ids: string[] = []
     await use(ids)
   },
