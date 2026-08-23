@@ -79,6 +79,7 @@ import {
   StorageStats as StorageStatsSchema,
   // Newly wired schemas:
   Provider as ProviderSchema,
+  ProvidersCatalog as ProvidersCatalogSchema,
   CliDetect as CliDetectSchema,
   // external-executor-cli-path-detection spec (ADR-030): create-time validate.
   CliValidateResponse as CliValidateResponseSchema,
@@ -309,6 +310,8 @@ import type {
   // Wire types migrated from hand-written interfaces to generated types:
   Agent,
   Provider,
+  ProvidersCatalog,
+  CatalogProvider,
   ProviderUpdateRequest,
   CliDetect,
   CliDetectEntry,
@@ -499,6 +502,8 @@ export type {
   // Wire types migrated from hand-written interfaces:
   Agent,
   Provider,
+  ProvidersCatalog,
+  CatalogProvider,
   CliDetect,
   CliDetectEntry,
   CliValidateRequest,
@@ -2186,12 +2191,19 @@ export function fetchProviders(): Promise<Provider[]> {
   return request<Provider[]>('/providers', undefined, z.array(ProviderSchema) as ZodType<Provider[]>)
 }
 
-// The D18 model-capabilities endpoint (GET /providers/model-capabilities) and
-// its ModelCapabilities wire type were removed by ADR-067 (the registry-fed
-// catalog at GET /providers/catalog carries per-model input_modalities). The
-// SPA's pre-send vision warning is re-sourced from that catalog in the
-// ADR-068 B5 / T067-13 SPA slice; until then the server-side capability gate
-// (pkg/agent/media_present.go) remains the only backstop.
+// fetchProvidersCatalog reads the registry-fed providers catalog the gateway
+// itself uses (ADR-067 FR-017, ADR-068 FR-037) — the schema-2.0.0 document
+// with nested models plus the serving envelope (served_from / stale). This is
+// the SPA's ONLY catalog source: the bundled TS catalog emission under
+// src/lib/generated/ was deleted (T068-05, SC-010) and must never return.
+//
+// T068-05 stub: a plain GET validated against the generated zod schema.
+// T068-18 adds the ETag / If-None-Match re-validation (on Settings open and
+// every 15 min, at most one 200 per ETag) and the TanStack Query cache policy.
+// GET /api/v1/providers/catalog → ProvidersCatalog (contract type).
+export function fetchProvidersCatalog(): Promise<ProvidersCatalog> {
+  return request<ProvidersCatalog>('/providers/catalog', undefined, ProvidersCatalogSchema as ZodType<ProvidersCatalog>)
+}
 
 // configureProvider sets a model/provider's API key, endpoint, and/or model.
 // Post-onboarding this PUT is re-auth gated (Spec-6 FR-12.2 / FR-6.6): the server
@@ -2225,15 +2237,6 @@ export function configureProvider(
 
 export function testProvider(id: string): Promise<OperationResult> {
   return request<OperationResult>(`/providers/${id}/test`, { method: 'POST' }, OperationResultSchema as ZodType<OperationResult>)
-}
-
-// refreshProviderModels re-fetches a provider's model catalogue. For a provider
-// WITH a live /models endpoint (has_models_endpoint=true) the backend re-queries
-// upstream and returns the refreshed list; for an endpoint-less provider it
-// returns the stored operator-supplied slug catalogue (nothing to refresh).
-// POST /api/v1/providers/{id}/refresh-models → Provider (contract type).
-export function refreshProviderModels(id: string): Promise<Provider> {
-  return request<Provider>(`/providers/${id}/refresh-models`, { method: 'POST' }, ProviderSchema as ZodType<Provider>)
 }
 
 // fetchCliDetect probes the host for installed external CLIs (claude-code /

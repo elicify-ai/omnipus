@@ -4,10 +4,14 @@
 // Corrected domain model: a provider is a global, single-instance API config.
 // There is exactly ONE config per catalog entry — no "instances", no
 // workspace/agent binding, no "Add another". The only real variant axes are
-// plan (pay-as-you-go vs Coding Plan) and region (intl/china/us). Wire
-// (OpenAI- vs Anthropic-compatible) is NOT a separate provider — one
-// account/key exposes both base URLs; it is an internal config detail
-// surfaced only as an Endpoint-format toggle inside the config Sheet.
+// plan (pay-as-you-go vs Coding Plan) and region (intl/china/us).
+//
+// Catalog source (ADR-068 FR-037 / T068-05): the registry-fed document from
+// GET /api/v1/providers/catalog (src/lib/api.ts::fetchProvidersCatalog), typed
+// as the generated CatalogProvider. There is NO bundled catalog (SC-010).
+// GET /providers returns configured providers only (FR-011a) — no template
+// rows to filter out. The retired refresh-models action is replaced by
+// *Check with my account* (FR-031), wired in T068-27.
 //
 // Implements:
 //   FIX-1  no per-company "Add another…" control
@@ -16,9 +20,7 @@
 //          opens an on-demand picker Sheet (search + catalog grouped by company,
 //          excluding already-configured entries)
 //   FIX-4  real terminology — "Pay-as-you-go API" / "Coding Plan", no "Standard API"
-//   FIX-5  Endpoint-format toggle (OpenAI-compatible / Anthropic-compatible) for
-//          dual-wire catalog entries; muted "Anthropic endpoint" chip on the row
-//   FIX-6  migration: alias / anthropic_id → canonical, self-hosted→group, unknown→generic
+//   FIX-6  migration: alias → canonical, self-hosted→group, unknown→generic
 //   FR-009 Sheet slide-out for config AND connect (no inline expand)
 //   FR-013 <BrandIcon> + lettermark fallback
 //   FR-014 <BrandDisclaimer> wherever marks appear
@@ -47,31 +49,30 @@ import { BrandIcon } from '@/components/ui/brand-icon'
 import { BrandDisclaimer } from '@/components/ui/brand-disclaimer'
 import {
   fetchProviders,
+  fetchProvidersCatalog,
   configureProvider,
-  refreshProviderModels,
   testProvider,
   getErrorMessage,
 } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import { PROVIDER_HINTS } from '@/lib/constants'
-import { PLAN_LABELS, REGION_LABELS } from '@/lib/providerLabels'
+import { planLabel, regionLabel } from '@/lib/providerLabels'
+import { catalogEndpointHint, catalogLabel, catalogLogoSlug, catalogVariantTitle } from '@/lib/catalogDisplay'
 import { providerCatalogMode } from '@/lib/agents/providerCatalog'
 import { ReAuthDialog } from './ReAuthDialog'
 import { ProviderValidationBanner } from '@/components/providers/ProviderValidationBanner'
-import { PROVIDER_CATALOG } from '@/lib/generated/providerCatalog'
 import { resolveCatalogEntry } from '@/lib/providerMigration'
 import { ProviderRow } from './ProviderRow'
 import { ProviderPickerSheet } from './ProviderPickerSheet'
 import type { CatalogGroup } from './ProviderPickerSheet'
 import type { ProviderValidation, Provider } from '@/lib/api/generated/openapi-types'
-import type { ProviderCatalogEntry } from '@/lib/api/generated/openapi-types'
+import type { CatalogProvider } from '@/lib/api/generated/openapi-types'
 
 // A pending provider edit captured before the re-auth prompt; replayed once the
 // consent token is minted. `id` is the id submitted to the PUT (resolveSubmitId).
 // `draftKey` is the canonical per-provider draft-state key (sheetDraftKey) —
 // carried through so the mutation's success/close handlers clear the SAME key
-// the Sheet read from, even when `id` diverges from it (alias / anthropic_id
-// storage, or the connect-mode endpoint-format toggle). `key` carries an
+// the Sheet read from, even when `id` diverges from it (alias storage). `key` carries an
 // API-key change (empty string = no key change); `models` carries a manual
 // model-slug catalogue replacement (undefined = leave the catalogue unchanged).
 type PendingProviderChange = {
@@ -82,48 +83,10 @@ type PendingProviderChange = {
 }
 
 // The item shown in the Sheet — either an existing configured provider (configure
-// mode) or a catalog entry for first-time setup (connect mode). `viaAnthropicId`
-// (configure mode only) is threaded from resolveCatalogEntry at the point the
-// Sheet was opened — the single source of truth for whether the stored
-// provider.id is the entry's primary id or its anthropic_id sibling, so the
-// read-only endpoint-format display doesn't need to re-derive it.
+// mode) or a catalog entry for first-time setup (connect mode).
 type SheetTarget =
-  | { mode: 'configure'; provider: Provider; entry?: ProviderCatalogEntry; viaAnthropicId?: boolean }
-  | { mode: 'connect'; entry: ProviderCatalogEntry }
-
-// Which endpoint protocol a dual-wire catalog entry gets configured under
-// (FIX-5). 'openai' → entry.id (default). 'anthropic' → entry.anthropic_id.
-type EndpointFormat = 'openai' | 'anthropic'
-
-// A catalog entry known to expose an Anthropic-compatible sibling endpoint —
-// narrows `anthropic_id` from optional to required so callers (the toggle,
-// the read-only configure-mode display) don't need to re-check it.
-type DualWireCatalogEntry = ProviderCatalogEntry & { anthropic_id: string }
-
-function isDualWire(entry: ProviderCatalogEntry): entry is DualWireCatalogEntry {
-  return !!entry.anthropic_id
-}
-
-// Derive the variant row title from the catalog entry, used ONLY inside a
-// grouped company block (company name is already in the group header there).
-// Format: "<Plan> · <Region>" (region omitted when absent).
-function variantRowTitle(entry: ProviderCatalogEntry): string {
-  const plan = PLAN_LABELS[entry.plan]
-  const region = entry.region ? REGION_LABELS[entry.region] : ''
-  return region ? `${plan} · ${region}` : plan
-}
-
-// Backend seeds ~25 keyless template ModelConfigs (pkg/config/defaults.go)
-// and GET /providers reports ALL of them forever as status:'disconnected'
-// (Provider.yaml: "disconnected" = "no key available or fallback default
-// entry"). Only providers the user actually attempted to configure (a stored
-// key that connected, or one that errored) count as "configured" for the
-// list/grouping/picker-exclusion purposes below — otherwise the empty state
-// is unreachable and the picker wrongly excludes every never-touched
-// template (e.g. OpenAI) on a fresh install.
-function isConfigured(provider: Provider): boolean {
-  return provider.status !== 'disconnected'
-}
+  | { mode: 'configure'; provider: Provider; entry?: CatalogProvider }
+  | { mode: 'connect'; entry: CatalogProvider }
 
 // Fallback display-name chain shared by the Sheet title and row titles when
 // no catalog entry resolved for a provider (e.g. a manual/self-hosted id).
@@ -132,25 +95,21 @@ function displayName(provider: Provider | null | undefined, fallbackId: string):
 }
 
 // Resolve the id used for the outgoing PUT. Configure mode always submits
-// the STORED provider id verbatim — canonicalizing an alias or anthropic_id
-// sibling to the catalog's primary id here would silently fork the
-// persisted config into two entries (the backend PUT matches by exact id and
-// APPENDS on mismatch; there is no provider DELETE). Connect mode resolves
-// the toggle's chosen endpoint id from the catalog entry.
-function resolveSubmitId(target: SheetTarget, endpointFormat: EndpointFormat): string {
-  if (target.mode === 'configure') return target.provider.id
-  const { entry } = target
-  return isDualWire(entry) && endpointFormat === 'anthropic' ? entry.anthropic_id : entry.id
+// the STORED provider id verbatim — canonicalizing an alias to the catalog's
+// primary id here would silently fork the persisted config into two entries
+// (the backend PUT matches by exact id and APPENDS on mismatch). Connect mode
+// submits the catalog entry's canonical id.
+function resolveSubmitId(target: SheetTarget): string {
+  return target.mode === 'configure' ? target.provider.id : target.entry.id
 }
 
 // The canonical per-provider draft-state key (apiKeys/showKey/draftModels/
-// newModel/saveValidation/endpointFormats) — the catalog entry id when one
-// resolved, else the raw provider/target id. Stable across the connect-mode
-// endpoint-format toggle and across which literal id (canonical, alias, or
-// anthropic_id sibling) a configured provider happens to be stored under, so
-// a typed-but-unsaved key or validation banner never gets stranded under a
-// stale key (BUG: previously keyed by the raw id, which could diverge from
-// the id the mutation's onSuccess cleanup used).
+// newModel/saveValidation) — the catalog entry id when one resolved, else the
+// raw provider/target id. Stable across which literal id (canonical or alias)
+// a configured provider happens to be stored under, so a typed-but-unsaved
+// key or validation banner never gets stranded under a stale key (BUG:
+// previously keyed by the raw id, which could diverge from the id the
+// mutation's onSuccess cleanup used).
 function sheetDraftKey(target: SheetTarget): string {
   if (target.mode === 'configure') return target.entry?.id ?? target.provider.id
   return target.entry.id
@@ -158,8 +117,7 @@ function sheetDraftKey(target: SheetTarget): string {
 
 interface ProviderGroupItem {
   provider: Provider
-  entry?: ProviderCatalogEntry
-  viaAnthropicId?: boolean
+  entry?: CatalogProvider
 }
 
 interface ProviderGroup {
@@ -168,22 +126,23 @@ interface ProviderGroup {
   items: ProviderGroupItem[]
 }
 
-// Group configured providers by company using the migration resolver.
-function groupProviders(providers: Provider[]): ProviderGroup[] {
+// Group configured providers by company using the migration resolver over
+// the fetched catalog.
+function groupProviders(catalog: CatalogProvider[], providers: Provider[]): ProviderGroup[] {
   const order: string[] = []
   const map = new Map<string, ProviderGroup>()
 
   for (const provider of providers) {
-    const { entry, group, viaAnthropicId } = resolveCatalogEntry(provider.id)
+    const { entry, group } = resolveCatalogEntry(catalog, provider.id)
     if (!map.has(group)) {
       order.push(group)
       map.set(group, {
         group,
-        logoSlug: entry?.logoSlug,
+        logoSlug: entry ? catalogLogoSlug(entry) : undefined,
         items: [],
       })
     }
-    map.get(group)!.items.push({ provider, entry, viaAnthropicId })
+    map.get(group)!.items.push({ provider, entry })
   }
 
   return order.map((g) => map.get(g)!)
@@ -191,15 +150,13 @@ function groupProviders(providers: Provider[]): ProviderGroup[] {
 
 // The set of catalog entry ids that are already configured — an id is
 // "configured" if ANY fetched provider.id resolves to that entry (via
-// resolveCatalogEntry, including alias / anthropic_id matches). Used to
-// exclude entries from the picker (FIX-3). Callers MUST pass an
-// already-filtered (isConfigured) list — a raw GET /providers response
-// includes ~25 forever-disconnected template rows that are never
-// "configured" and must not exclude anything from the picker.
-function configuredEntryIds(providers: Provider[]): Set<string> {
+// resolveCatalogEntry, including alias matches). Used to exclude entries
+// from the picker (FIX-3). GET /providers returns configured rows only
+// (ADR-068 FR-011a), so the whole response participates.
+function configuredEntryIds(catalog: CatalogProvider[], providers: Provider[]): Set<string> {
   const ids = new Set<string>()
   for (const p of providers) {
-    const { entry } = resolveCatalogEntry(p.id)
+    const { entry } = resolveCatalogEntry(catalog, p.id)
     if (entry) ids.add(entry.id)
   }
   return ids
@@ -210,15 +167,15 @@ function configuredEntryIds(providers: Provider[]): Set<string> {
 // ProviderPickerSheet's CatalogGroup shape — owned there (see its doc
 // comment) since this function only builds the data to hand off to the
 // picker's Sheet; nothing in this file reads a group's fields itself.
-function buildCatalogGroups(excludeIds: Set<string>, query: string): CatalogGroup[] {
+function buildCatalogGroups(catalog: CatalogProvider[], excludeIds: Set<string>, query: string): CatalogGroup[] {
   const q = query.trim().toLowerCase()
   const order: string[] = []
   const map = new Map<string, CatalogGroup>()
 
-  for (const entry of PROVIDER_CATALOG) {
+  for (const entry of catalog) {
     if (excludeIds.has(entry.id)) continue
     if (q) {
-      const haystack = [entry.company, entry.label, ...(entry.aliases ?? [])]
+      const haystack = [entry.company, entry.name, catalogLabel(entry), ...entry.aliases]
         .join(' ')
         .toLowerCase()
       if (!haystack.includes(q)) continue
@@ -227,7 +184,7 @@ function buildCatalogGroups(excludeIds: Set<string>, query: string): CatalogGrou
       order.push(entry.company)
       map.set(entry.company, {
         company: entry.company,
-        logoSlug: entry.logoSlug,
+        logoSlug: catalogLogoSlug(entry),
         entries: [],
       })
     }
@@ -235,58 +192,6 @@ function buildCatalogGroups(excludeIds: Set<string>, query: string): CatalogGrou
   }
 
   return order.map((c) => map.get(c)!)
-}
-
-// ---------------------------------------------------------------------------
-// Sub-component: Endpoint-format toggle (FIX-5)
-// ---------------------------------------------------------------------------
-
-function EndpointFormatToggle({
-  entry,
-  value,
-  onChange,
-}: {
-  entry: DualWireCatalogEntry
-  value: EndpointFormat
-  onChange: (v: EndpointFormat) => void
-}) {
-  const optionClass = (active: boolean) =>
-    'flex-1 rounded-md border px-2.5 py-1.5 text-xs font-medium transition-colors ' +
-    (active
-      ? 'border-[var(--color-accent)] bg-[var(--color-accent)]/10 text-[var(--color-accent)]'
-      : 'border-[var(--color-border)] text-[var(--color-secondary)] hover:border-[var(--color-muted)]')
-
-  return (
-    <div data-testid={`endpoint-format-toggle-${entry.id}`}>
-      <label className="text-xs font-medium text-[var(--color-muted)] mb-1.5 block">
-        Endpoint format
-      </label>
-      <div className="flex gap-1.5" role="group" aria-label="Endpoint format">
-        <button tabIndex={0}
-          type="button"
-          aria-pressed={value === 'openai'}
-          onClick={() => onChange('openai')}
-          data-testid={`endpoint-format-openai-${entry.id}`}
-          className={optionClass(value === 'openai')}
-        >
-          OpenAI-compatible (default)
-        </button>
-        <button tabIndex={0}
-          type="button"
-          aria-pressed={value === 'anthropic'}
-          onClick={() => onChange('anthropic')}
-          data-testid={`endpoint-format-anthropic-${entry.id}`}
-          className={optionClass(value === 'anthropic')}
-        >
-          Anthropic-compatible
-        </button>
-      </div>
-      <p className="text-xs text-[var(--color-muted)] mt-1.5">
-        Same account and API key; choose the endpoint your tools expect. Anthropic-compatible
-        suits Claude-Code-style clients.
-      </p>
-    </div>
-  )
 }
 
 // ---------------------------------------------------------------------------
@@ -307,12 +212,8 @@ interface ProviderConfigSheetProps {
   setNewModel: React.Dispatch<React.SetStateAction<Record<string, string>>>
   saveValidation: Record<string, ProviderValidation | undefined>
   setSaveValidation: React.Dispatch<React.SetStateAction<Record<string, ProviderValidation | undefined>>>
-  endpointFormats: Record<string, EndpointFormat>
-  setEndpointFormats: React.Dispatch<React.SetStateAction<Record<string, EndpointFormat>>>
   isSaving: boolean
   requestChange: (id: string, draftKey: string, key: string, models?: string[]) => void
-  refreshing: Record<string, boolean>
-  handleRefreshModels: (id: string) => void
   testing: Record<string, boolean>
   handleTest: (id: string) => void
 }
@@ -331,12 +232,8 @@ function ProviderConfigSheet({
   setNewModel,
   saveValidation,
   setSaveValidation,
-  endpointFormats,
-  setEndpointFormats,
   isSaving,
   requestChange,
-  refreshing,
-  handleRefreshModels,
   testing,
   handleTest,
 }: ProviderConfigSheetProps) {
@@ -350,29 +247,19 @@ function ProviderConfigSheet({
   const provider = target.mode === 'configure' ? target.provider : null
 
   // Canonical draft-state key — see sheetDraftKey's doc comment. Stable
-  // across the connect-mode toggle and across alias/anthropic_id storage.
+  // across alias storage.
   const draftKey = sheetDraftKey(target)
 
   const catalogMode = provider ? providerCatalogMode(provider) : 'live'
   const hint = PROVIDER_HINTS[providerId] ?? 'Enter your API key'
 
-  const sheetTitle = entry ? entry.label : displayName(provider, providerId)
+  const sheetTitle = entry ? catalogLabel(entry) : displayName(provider, providerId)
   const sheetDescription =
     target.mode === 'connect'
       ? 'Enter your API key to connect this provider.'
       : 'Update the API key for this provider.'
 
-  // Endpoint-format toggle (FIX-5, connect mode only — see the read-only
-  // display in the variant-info block for configure mode). Only meaningful
-  // when the entry has a sibling anthropic_id. Default selection: 'openai'
-  // (connect mode always starts from the primary endpoint).
-  const endpointFormat = endpointFormats[draftKey] ?? 'openai'
-  const resolvedSubmitId = resolveSubmitId(target, endpointFormat)
-
-  // Configure mode: whether the STORED provider is reachable via the
-  // anthropic_id sibling — threaded from resolveCatalogEntry at Sheet-open
-  // time (single source of truth, see SheetTarget's doc comment).
-  const viaAnthropicId = target.mode === 'configure' ? !!target.viaAnthropicId : false
+  const resolvedSubmitId = resolveSubmitId(target)
 
   const handleClose = () => {
     onOpenChange(false)
@@ -399,7 +286,7 @@ function ProviderConfigSheet({
           <div className="flex items-center gap-2 min-w-0">
             {entry && (
               <BrandIcon
-                slug={entry.logoSlug}
+                slug={catalogLogoSlug(entry)}
                 size={20}
                 decorative
               />
@@ -410,12 +297,8 @@ function ProviderConfigSheet({
         <SheetDescription className="px-6 pt-3">{sheetDescription}</SheetDescription>
 
         <div className="px-6 space-y-5 overflow-y-auto pr-1 pt-4">
-          {/* View-only variant info — Plan/Region/Endpoint(+format). Wire is a
-              config detail, not a display row (FIX-5) — the Endpoint-format
-              toggle below is interactive ONLY in connect mode; configure mode
-              shows it here read-only (the backend PUT matches by exact id and
-              APPENDS a new entry on mismatch — there is no provider DELETE,
-              so the format can never be changed after the first connect). */}
+          {/* View-only variant info — Plan/Region/Endpoint, derived from the
+              fetched CatalogProvider (src/lib/catalogDisplay.ts). */}
           {entry && (
             <div
               className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] px-4 py-3 space-y-2"
@@ -428,7 +311,7 @@ function ProviderConfigSheet({
                     className="text-[var(--color-secondary)] font-medium"
                     data-testid="variant-plan"
                   >
-                    {PLAN_LABELS[entry.plan]}
+                    {planLabel(entry.plan)}
                   </span>
                 </div>
                 {entry.region && (
@@ -438,7 +321,7 @@ function ProviderConfigSheet({
                       className="text-[var(--color-secondary)] font-medium"
                       data-testid="variant-region"
                     >
-                      {REGION_LABELS[entry.region]}
+                      {regionLabel(entry.region)}
                     </span>
                   </div>
                 )}
@@ -448,37 +331,11 @@ function ProviderConfigSheet({
                     className="text-[var(--color-secondary)] font-mono text-[11px]"
                     data-testid="variant-endpoint"
                   >
-                    {entry.endpointHint}
+                    {catalogEndpointHint(entry)}
                   </span>
                 </div>
-                {target.mode === 'configure' && isDualWire(entry) && (
-                  <div className="w-full">
-                    <span className="text-[var(--color-muted)] mr-1.5">Endpoint format</span>
-                    <span
-                      className="text-[var(--color-secondary)] font-medium"
-                      data-testid="variant-endpoint-format"
-                    >
-                      {viaAnthropicId ? 'Anthropic-compatible endpoint' : 'OpenAI-compatible endpoint'}
-                    </span>
-                  </div>
-                )}
               </div>
-              {target.mode === 'configure' && isDualWire(entry) && (
-                <p className="text-xs text-[var(--color-muted)]" data-testid="endpoint-format-readonly-note">
-                  Endpoint format is chosen when connecting a provider.
-                </p>
-              )}
             </div>
-          )}
-
-          {/* Endpoint-format toggle — connect mode only, dual-wire entries
-              only (FIX-5). Configure mode shows the read-only field above. */}
-          {target.mode === 'connect' && entry && isDualWire(entry) && (
-            <EndpointFormatToggle
-              entry={entry}
-              value={endpointFormat}
-              onChange={(v) => setEndpointFormats((prev) => ({ ...prev, [draftKey]: v }))}
-            />
           )}
 
           {/* API Key input */}
@@ -605,20 +462,6 @@ function ProviderConfigSheet({
           {/* Footer actions */}
           <div className="flex justify-between gap-2 pt-2">
             <div className="flex gap-2">
-              {provider && catalogMode === 'live' && (
-                <button tabIndex={0}
-                  type="button"
-                  onClick={() => handleRefreshModels(providerId)}
-                  disabled={refreshing[providerId]}
-                  title="Re-fetch the live model list from the provider"
-                  data-testid={`refresh-models-${providerId}`}
-                  className="text-xs text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors disabled:opacity-50"
-                >
-                  {refreshing[providerId] ? (
-                    <ArrowCounterClockwise size={12} className="animate-spin inline" />
-                  ) : 'Refresh models'}
-                </button>
-              )}
               {provider && provider.status === 'connected' && (
                 <button tabIndex={0}
                   type="button"
@@ -690,12 +533,10 @@ export function ProvidersSection() {
   const [apiKeys, setApiKeys] = useState<Record<string, string>>({})
   const [showKey, setShowKey] = useState<Record<string, boolean>>({})
   const [testing, setTesting] = useState<Record<string, boolean>>({})
-  const [refreshing, setRefreshing] = useState<Record<string, boolean>>({})
   const [saveValidation, setSaveValidation] = useState<Record<string, ProviderValidation | undefined>>({})
   const [testValidation, setTestValidation] = useState<Record<string, ProviderValidation | undefined>>({})
   const [draftModels, setDraftModels] = useState<Record<string, string[]>>({})
   const [newModel, setNewModel] = useState<Record<string, string>>({})
-  const [endpointFormats, setEndpointFormats] = useState<Record<string, EndpointFormat>>({})
 
   const [pending, setPending] = useState<PendingProviderChange | null>(null)
   const [reauthOpen, setReauthOpen] = useState(false)
@@ -705,6 +546,14 @@ export function ProvidersSection() {
     queryFn: fetchProviders,
   })
 
+  // Registry-fed catalog (ADR-068 FR-037). T068-18 adds the ETag
+  // re-validation cadence; here it is a plain query.
+  const { data: catalogDoc } = useQuery({
+    queryKey: ['providers', 'catalog'],
+    queryFn: fetchProvidersCatalog,
+  })
+  const catalog = useMemo(() => catalogDoc?.providers ?? [], [catalogDoc])
+
   const { mutate: applyChange, isPending: isSaving } = useMutation({
     mutationFn: ({ id, key, token, models }: { id: string; draftKey: string; key: string; token: string; models?: string[] }) =>
       configureProvider(id, key === '' ? undefined : key, undefined, undefined, token, models),
@@ -712,7 +561,7 @@ export function ProvidersSection() {
     // requestChange, so the typed key / validation banner is cleared under the
     // SAME key the Sheet is reading from, regardless of which literal id the
     // PUT actually submitted (BUG #2: previously cleared by mutation `id`,
-    // which can diverge from the draft key on alias / anthropic_id storage).
+    // which can diverge from the draft key on alias storage).
     onSuccess: (provider, { draftKey }) => {
       queryClient.invalidateQueries({ queryKey: ['providers'] })
       const validation = provider.validation
@@ -756,23 +605,6 @@ export function ProvidersSection() {
     applyChange({ id: pending.id, draftKey: pending.draftKey, key: pending.key, token, models: pending.models })
   }
 
-  const handleRefreshModels = async (id: string) => {
-    setRefreshing((prev) => ({ ...prev, [id]: true }))
-    try {
-      const updated = await refreshProviderModels(id)
-      queryClient.invalidateQueries({ queryKey: ['providers'] })
-      if (updated.warning) {
-        addToast({ message: updated.warning, variant: 'error' })
-      } else {
-        addToast({ message: `Model list refreshed (${updated.models?.length ?? 0})`, variant: 'success' })
-      }
-    } catch (err) {
-      addToast({ message: getErrorMessage(err, 'Model refresh failed'), variant: 'error' })
-    } finally {
-      setRefreshing((prev) => ({ ...prev, [id]: false }))
-    }
-  }
-
   const handleTest = async (id: string) => {
     setTesting((prev) => ({ ...prev, [id]: true }))
     setTestValidation((prev) => ({ ...prev, [id]: undefined }))
@@ -795,12 +627,12 @@ export function ProvidersSection() {
   }
 
   const openConfigureSheet = (provider: Provider) => {
-    const { entry, viaAnthropicId } = resolveCatalogEntry(provider.id)
-    setSheetTarget({ mode: 'configure', provider, entry, viaAnthropicId })
+    const { entry } = resolveCatalogEntry(catalog, provider.id)
+    setSheetTarget({ mode: 'configure', provider, entry })
     setSheetOpen(true)
   }
 
-  const openConnectSheet = (entry: ProviderCatalogEntry) => {
+  const openConnectSheet = (entry: CatalogProvider) => {
     setSheetTarget({ mode: 'connect', entry })
     setSheetOpen(true)
   }
@@ -810,19 +642,16 @@ export function ProvidersSection() {
     setPickerOpen(true)
   }
 
-  // Only providers the user actually attempted to configure — see
-  // isConfigured's doc comment (backend seeds ~25 forever-disconnected
-  // template rows that must never appear as "configured").
-  const configuredProviders = useMemo(() => providers.filter(isConfigured), [providers])
-  const groups = groupProviders(configuredProviders)
-  const hasConfigured = configuredProviders.length > 0
+  // GET /providers returns configured providers only (ADR-068 FR-011a).
+  const groups = groupProviders(catalog, providers)
+  const hasConfigured = providers.length > 0
 
-  const excludeIds = useMemo(() => configuredEntryIds(configuredProviders), [configuredProviders])
+  const excludeIds = useMemo(() => configuredEntryIds(catalog, providers), [catalog, providers])
   const catalogGroups = useMemo(
-    () => buildCatalogGroups(excludeIds, pickerQuery),
-    [excludeIds, pickerQuery],
+    () => buildCatalogGroups(catalog, excludeIds, pickerQuery),
+    [catalog, excludeIds, pickerQuery],
   )
-  const allConfigured = excludeIds.size >= PROVIDER_CATALOG.length
+  const allConfigured = catalog.length > 0 && excludeIds.size >= catalog.length
 
   return (
     <div className="space-y-4">
@@ -871,14 +700,13 @@ export function ProvidersSection() {
         <div className="space-y-4">
           {groups.map((group) => {
             if (group.items.length === 1) {
-              const { provider, entry, viaAnthropicId } = group.items[0]
-              const title = entry ? entry.label : displayName(provider, provider.id)
+              const { provider, entry } = group.items[0]
+              const title = entry ? catalogLabel(entry) : displayName(provider, provider.id)
               return (
                 <ProviderRow
                   key={provider.id}
                   provider={provider}
                   entry={entry}
-                  viaAnthropicId={viaAnthropicId}
                   title={title}
                   showIcon
                   onConfigure={() => openConfigureSheet(provider)}
@@ -911,13 +739,12 @@ export function ProvidersSection() {
                 </div>
 
                 <div className="space-y-1.5">
-                  {group.items.map(({ provider, entry, viaAnthropicId }) => (
+                  {group.items.map(({ provider, entry }) => (
                     <ProviderRow
                       key={provider.id}
                       provider={provider}
                       entry={entry}
-                      viaAnthropicId={viaAnthropicId}
-                      title={entry ? variantRowTitle(entry) : displayName(provider, provider.id)}
+                      title={entry ? catalogVariantTitle(entry) : displayName(provider, provider.id)}
                       showIcon={false}
                       onConfigure={() => openConfigureSheet(provider)}
                       testValidation={testValidation[provider.id]}
@@ -988,12 +815,8 @@ export function ProvidersSection() {
         setNewModel={setNewModel}
         saveValidation={saveValidation}
         setSaveValidation={setSaveValidation}
-        endpointFormats={endpointFormats}
-        setEndpointFormats={setEndpointFormats}
         isSaving={isSaving}
         requestChange={requestChange}
-        refreshing={refreshing}
-        handleRefreshModels={handleRefreshModels}
         testing={testing}
         handleTest={handleTest}
       />

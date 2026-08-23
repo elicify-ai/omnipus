@@ -9,7 +9,8 @@ import {
 } from '@/components/ui/sheet'
 import { BrandIcon } from '@/components/ui/brand-icon'
 import { BrandDisclaimer } from '@/components/ui/brand-disclaimer'
-import type { ProviderCatalogEntry } from '@/lib/api/generated/openapi-types'
+import type { CatalogProvider } from '@/lib/api/generated/openapi-types'
+import { catalogLabel, catalogSubtitle } from '@/lib/catalogDisplay'
 
 // See ProvidersSection.tsx's file header for the FIX-N legend (this file
 // implements FIX-3).
@@ -29,7 +30,7 @@ import type { ProviderCatalogEntry } from '@/lib/api/generated/openapi-types'
 export interface CatalogGroup {
   company: string
   logoSlug: string
-  entries: ProviderCatalogEntry[]
+  entries: CatalogProvider[]
 }
 
 interface ProviderPickerSheetProps {
@@ -39,7 +40,7 @@ interface ProviderPickerSheetProps {
   onQueryChange: (query: string) => void
   groups: CatalogGroup[]
   allConfigured: boolean
-  onSelect: (entry: ProviderCatalogEntry) => void
+  onSelect: (entry: CatalogProvider) => void
 }
 
 export function ProviderPickerSheet({
@@ -113,10 +114,10 @@ export function ProviderPickerSheet({
                     >
                       <span className="min-w-0">
                         <span className="block text-sm font-medium text-[var(--color-secondary)] truncate">
-                          {entry.label}
+                          {catalogLabel(entry)}
                         </span>
                         <span className="block text-xs text-[var(--color-muted)] truncate">
-                          {entry.subtitle}
+                          {catalogSubtitle(entry)}
                         </span>
                       </span>
                       <CaretRight size={12} className="shrink-0 text-[var(--color-muted)]" aria-hidden />

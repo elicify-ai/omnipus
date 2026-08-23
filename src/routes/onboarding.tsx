@@ -1,5 +1,6 @@
 import { useState, useMemo } from 'react'
 import { createFileRoute, redirect, useNavigate, useRouteContext } from '@tanstack/react-router'
+import { useQuery } from '@tanstack/react-query'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
   ArrowRight,
@@ -20,7 +21,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { ModelSelector, type ModelGroup } from '@/components/ui/model-selector'
-import { probeProvider, completeOnboardingTransaction, fetchAppState, isApiError } from '@/lib/api'
+import { probeProvider, completeOnboardingTransaction, fetchAppState, fetchProvidersCatalog, isApiError } from '@/lib/api'
 import { pickCapableDefaultModel } from '@/lib/onboarding/defaultModel'
 import OmnipusAvatar from '@/assets/logo/omnipus-avatar.svg?url'
 import { PROVIDER_HINTS } from '@/lib/constants'
@@ -28,11 +29,11 @@ import { useUiStore } from '@/store/ui'
 import { useAuthStore } from '@/store/auth'
 import { queryClient } from '@/lib/queryClient'
 import { ProviderValidationBanner } from '@/components/providers/ProviderValidationBanner'
-import type { ProviderValidation, ProviderCatalogEntry } from '@/lib/api/generated/openapi-types'
-import { PROVIDER_CATALOG } from '@/lib/generated/providerCatalog'
+import type { ProviderValidation, CatalogProvider } from '@/lib/api/generated/openapi-types'
 import { BrandIcon } from '@/components/ui/brand-icon'
 import { BrandDisclaimer } from '@/components/ui/brand-disclaimer'
-import { PLAN_LABELS, REGION_LABELS } from '@/lib/providerLabels'
+import { PLAN_LABELS, REGION_LABELS, DEFAULT_PLAN, planLabel, regionLabel } from '@/lib/providerLabels'
+import { catalogEndpointHint, catalogLogoSlug, catalogSubtitle } from '@/lib/catalogDisplay'
 
 // First-launch onboarding flow — full-screen, outside AppShell.
 //
@@ -45,20 +46,20 @@ import { PLAN_LABELS, REGION_LABELS } from '@/lib/providerLabels'
 type Step = 1 | 2 | 3
 type TestStatus = 'idle' | 'testing' | 'success' | 'error'
 
-// ── Provider data model (ADR-031 Track 1) ─────────────────────────────────────
+// ── Provider data model (ADR-068 FR-037) ──────────────────────────────────────
 //
-// The picker sources from the shared PROVIDER_CATALOG (src/lib/generated/providerCatalog.ts)
-// instead of a local AVAILABLE_PROVIDERS array. Each ProviderCatalogEntry has:
-//   company, plan ('standard-api'|'coding-plan'), region? ('intl'|'china'|'us'),
-//   wire ('openai-compatible'|'anthropic'), id, label, subtitle, logoSlug, endpointHint.
+// The picker sources from the registry-fed catalog the gateway serves at
+// GET /api/v1/providers/catalog (src/lib/api.ts::fetchProvidersCatalog) —
+// there is NO bundled catalog (SC-010). Each CatalogProvider carries
+//   id, name, company, api, plan?, region?, aliases, tier, auth_methods, models…
+// and display strings (label, subtitle, logo slug, endpoint host) derive from
+// src/lib/catalogDisplay.ts. A provider without an explicit `plan` is treated
+// as DEFAULT_PLAN ('standard-api').
 //
 // Two-level grouped picker:
 //   L1 — Company tiles (one per distinct company); multi-variant companies show ▾
-//   L2 — Plan + Region segmented controls. Wire (OpenAI- vs Anthropic-compatible)
-//        is NOT shown here — it is an internal config detail surfaced only as an
-//        Endpoint-format toggle inside Settings' config Sheet (provider-ux-fixes-plan
-//        FIX-5); quick-start onboarding always uses the entry's primary (default)
-//        endpoint. Only the resolved subtitle/endpoint hint is shown for context.
+//   L2 — Plan + Region segmented controls. Only the resolved subtitle/endpoint
+//        hint is shown for context.
 
 // Providers that REQUIRE a custom endpoint to function. The probe will always
 // return "unknown provider" for these without an endpoint because no fixed
@@ -75,8 +76,13 @@ const PRIORITY_COMPANIES = ['OpenAI', 'Anthropic', 'OpenRouter']
 
 // ── Catalog-based grouped-picker helpers ───────────────────────────────────────
 
+/** The plan a catalog provider is filed under (DEFAULT_PLAN when unset). */
+function planOf(entry: CatalogProvider): string {
+  return entry.plan ?? DEFAULT_PLAN
+}
+
 /** Derive unique company names from the catalog (in declaration order, priority first). */
-function uniqueCompanies(catalog: ProviderCatalogEntry[]): string[] {
+function uniqueCompanies(catalog: CatalogProvider[]): string[] {
   const seen = new Set<string>()
   const result: string[] = []
   for (const e of catalog) {
@@ -97,41 +103,35 @@ function uniqueCompanies(catalog: ProviderCatalogEntry[]): string[] {
 }
 
 /** All catalog entries for a given company. */
-function entriesForCompany(catalog: ProviderCatalogEntry[], company: string): ProviderCatalogEntry[] {
+function entriesForCompany(catalog: CatalogProvider[], company: string): CatalogProvider[] {
   return catalog.filter((e) => e.company === company)
 }
 
 /** True when a company has more than one catalog entry (needs L2 plan/region UI). */
-function isMultiVariant(catalog: ProviderCatalogEntry[], company: string): boolean {
+function isMultiVariant(catalog: CatalogProvider[], company: string): boolean {
   return entriesForCompany(catalog, company).length > 1
 }
 
 /** Plans offered by a company (in catalog order, unique). */
-function plansForCompany(
-  catalog: ProviderCatalogEntry[],
-  company: string,
-): ProviderCatalogEntry['plan'][] {
-  const seen = new Set<ProviderCatalogEntry['plan']>()
-  const result: ProviderCatalogEntry['plan'][] = []
+function plansForCompany(catalog: CatalogProvider[], company: string): string[] {
+  const seen = new Set<string>()
+  const result: string[] = []
   for (const e of entriesForCompany(catalog, company)) {
-    if (!seen.has(e.plan)) {
-      seen.add(e.plan)
-      result.push(e.plan)
+    const plan = planOf(e)
+    if (!seen.has(plan)) {
+      seen.add(plan)
+      result.push(plan)
     }
   }
   return result
 }
 
 /** Regions offered by a company for a given plan (unique, in catalog order). */
-function regionsForPlan(
-  catalog: ProviderCatalogEntry[],
-  company: string,
-  plan: ProviderCatalogEntry['plan'],
-): Array<NonNullable<ProviderCatalogEntry['region']>> {
-  const seen = new Set<NonNullable<ProviderCatalogEntry['region']>>()
-  const result: Array<NonNullable<ProviderCatalogEntry['region']>> = []
+function regionsForPlan(catalog: CatalogProvider[], company: string, plan: string): string[] {
+  const seen = new Set<string>()
+  const result: string[] = []
   for (const e of entriesForCompany(catalog, company)) {
-    if (e.plan === plan && e.region !== undefined && !seen.has(e.region)) {
+    if (planOf(e) === plan && e.region !== undefined && !seen.has(e.region)) {
       seen.add(e.region)
       result.push(e.region)
     }
@@ -139,19 +139,15 @@ function regionsForPlan(
   return result
 }
 
-/** Resolve the catalog entry for (company, plan, region). Each dual-wire
- *  provider is now a SINGLE merged catalog entry (the Anthropic-compatible
- *  sibling lives in `anthropic_id`, not as a separate row) — so (company,
- *  plan, region) is unique and no wire-preference tie-break is needed
- *  (provider-ux-fixes-plan FIX-5 / "simplify carefully"). */
+/** Resolve the catalog entry for (company, plan, region) — unique per catalog. */
 function resolveEntry(
-  catalog: ProviderCatalogEntry[],
+  catalog: CatalogProvider[],
   company: string,
-  plan: ProviderCatalogEntry['plan'],
-  region: ProviderCatalogEntry['region'],
-): ProviderCatalogEntry | undefined {
+  plan: string,
+  region: string | undefined,
+): CatalogProvider | undefined {
   const companyEntries = entriesForCompany(catalog, company)
-  const planCandidates = companyEntries.filter((e) => e.plan === plan)
+  const planCandidates = companyEntries.filter((e) => planOf(e) === plan)
   // If no regional split for this plan, return the (unique) match regardless of region.
   if (planCandidates.every((e) => e.region === undefined)) {
     return planCandidates[0]
@@ -172,13 +168,14 @@ function resolveEntry(
   return exactRegionMatch ?? planCandidates[0]
 }
 
-/** The logoSlug for a company (taken from the first entry). */
-function logoSlugForCompany(catalog: ProviderCatalogEntry[], company: string): string {
-  return entriesForCompany(catalog, company)[0]?.logoSlug ?? ''
+/** The logo slug for a company (taken from the first entry). */
+function logoSlugForCompany(catalog: CatalogProvider[], company: string): string {
+  const first = entriesForCompany(catalog, company)[0]
+  return first ? catalogLogoSlug(first) : ''
 }
 
 /** Filter company tiles by a search term (company name + entry aliases, case-insensitive). */
-function filterCompanies(catalog: ProviderCatalogEntry[], query: string): string[] {
+function filterCompanies(catalog: CatalogProvider[], query: string): string[] {
   const q = query.trim().toLowerCase()
   const companies = uniqueCompanies(catalog)
   if (!q) return companies
@@ -186,7 +183,7 @@ function filterCompanies(catalog: ProviderCatalogEntry[], query: string): string
     if (company.toLowerCase().includes(q)) return true
     const aliases = catalog
       .filter((e) => e.company === company)
-      .flatMap((e) => e.aliases ?? [])
+      .flatMap((e) => [e.name, ...e.aliases])
     return aliases.some((a) => a.toLowerCase().includes(q))
   })
 }
@@ -310,8 +307,18 @@ function OnboardingWizard() {
   const { addToast } = useUiStore()
   const { appStateBannerMessage } = useRouteContext({ from: '/onboarding' })
 
-  // Source providers from the shared catalog (ADR-031 Track 1).
-  const providers = PROVIDER_CATALOG
+  // Source providers from the registry-fed catalog (ADR-068 FR-037). T068-18
+  // adds the ETag re-validation cadence; here it is a plain query.
+  const {
+    data: catalogDoc,
+    isError: catalogError,
+    isLoading: catalogLoading,
+    refetch: refetchCatalog,
+  } = useQuery({
+    queryKey: ['providers', 'catalog'],
+    queryFn: fetchProvidersCatalog,
+  })
+  const providers = useMemo(() => catalogDoc?.providers ?? [], [catalogDoc])
 
   const [step, setStep] = useState<Step>(1)
   const [direction, setDirection] = useState(1)
@@ -323,8 +330,8 @@ function OnboardingWizard() {
   // selectedCompany is the L1 company tile; selectedPlan/Region are the L2 controls.
   const [selectedProvider, setSelectedProvider] = useState('')
   const [selectedCompany, setSelectedCompany] = useState('')
-  const [selectedPlan, setSelectedPlan] = useState<ProviderCatalogEntry['plan']>('standard-api')
-  const [selectedRegion, setSelectedRegion] = useState<ProviderCatalogEntry['region']>('intl')
+  const [selectedPlan, setSelectedPlan] = useState<string>(DEFAULT_PLAN)
+  const [selectedRegion, setSelectedRegion] = useState<string | undefined>('intl')
   const [apiKey, setApiKey] = useState('')
   const [endpoint, setEndpoint] = useState('')
   const [showKey, setShowKey] = useState(false)
@@ -373,9 +380,9 @@ function OnboardingWizard() {
     if (selectedCompany === company) return // already selected, no-op
     setSelectedCompany(company)
 
-    // Default plan to 'standard-api'; default region to 'intl' (spec defaults).
-    const newPlan: ProviderCatalogEntry['plan'] = 'standard-api'
-    const newRegion: ProviderCatalogEntry['region'] = 'intl'
+    // Default plan to DEFAULT_PLAN; default region to 'intl' (spec defaults).
+    const newPlan = DEFAULT_PLAN
+    const newRegion = 'intl'
     setSelectedPlan(newPlan)
     setSelectedRegion(newRegion)
 
@@ -388,18 +395,18 @@ function OnboardingWizard() {
 
   // L2: User changes the plan. Re-resolve the id and reset the model list
   // (stale models from a different endpoint are wrong picks — spec requirement).
-  const handleSelectPlan = (plan: ProviderCatalogEntry['plan']) => {
+  const handleSelectPlan = (plan: string) => {
     setSelectedPlan(plan)
     // Check if this plan has regions.
     const regions = regionsForPlan(providers, selectedCompany, plan)
     let newRegion = selectedRegion
-    if (regions.length > 0 && !regions.includes(selectedRegion as NonNullable<ProviderCatalogEntry['region']>)) {
+    if (regions.length > 0 && (selectedRegion === undefined || !regions.includes(selectedRegion))) {
       // Current region not valid for this plan — default to intl or first available.
       newRegion = regions.includes('intl') ? 'intl' : regions[0]
       setSelectedRegion(newRegion)
     }
     const entry = resolveEntry(providers, selectedCompany, plan, newRegion)
-    const resolvedId = entry?.id ?? entriesForCompany(providers, selectedCompany).find(e => e.plan === plan)?.id ?? ''
+    const resolvedId = entry?.id ?? entriesForCompany(providers, selectedCompany).find((e) => planOf(e) === plan)?.id ?? ''
     setSelectedProvider(resolvedId)
     // Reset model list — changing plan means a different endpoint and different models.
     setAvailableModels([])
@@ -411,7 +418,7 @@ function OnboardingWizard() {
   }
 
   // L2: User changes the region. Re-resolve the id and reset the model list.
-  const handleSelectRegion = (region: ProviderCatalogEntry['region']) => {
+  const handleSelectRegion = (region: string | undefined) => {
     setSelectedRegion(region)
     const entry = resolveEntry(providers, selectedCompany, selectedPlan, region)
     // Fall back to any entry for this company+plan (mirrors handleSelectPlan) so
@@ -419,7 +426,7 @@ function OnboardingWizard() {
     // and collapse the API-key panel.
     const resolvedId =
       entry?.id ??
-      entriesForCompany(providers, selectedCompany).find((e) => e.plan === selectedPlan)?.id ??
+      entriesForCompany(providers, selectedCompany).find((e) => planOf(e) === selectedPlan)?.id ??
       ''
     setSelectedProvider(resolvedId)
     // Reset model list — different region = different endpoint + different models.
@@ -746,6 +753,9 @@ function OnboardingWizard() {
             >
               <ModelKeyStep
                 providers={providers}
+                catalogLoading={catalogLoading}
+                catalogError={catalogError}
+                onRetryCatalog={() => { void refetchCatalog() }}
                 selectedProvider={selectedProvider}
                 selectedCompany={selectedCompany}
                 selectedPlan={selectedPlan}
@@ -1072,6 +1082,9 @@ function PasswordStep({
 
 function ModelKeyStep({
   providers,
+  catalogLoading,
+  catalogError,
+  onRetryCatalog,
   selectedProvider,
   selectedCompany,
   selectedPlan,
@@ -1098,14 +1111,17 @@ function ModelKeyStep({
   finishError,
   probeValidation,
 }: {
-  providers: ProviderCatalogEntry[]
+  providers: CatalogProvider[]
+  catalogLoading: boolean
+  catalogError: boolean
+  onRetryCatalog: () => void
   selectedProvider: string
   selectedCompany: string
-  selectedPlan: ProviderCatalogEntry['plan']
-  selectedRegion: ProviderCatalogEntry['region']
+  selectedPlan: string
+  selectedRegion: string | undefined
   onSelectCompany: (company: string) => void
-  onSelectPlan: (plan: ProviderCatalogEntry['plan']) => void
-  onSelectRegion: (region: ProviderCatalogEntry['region']) => void
+  onSelectPlan: (plan: string) => void
+  onSelectRegion: (region: string | undefined) => void
   /** Kept for backward-compat paths (Azure direct click, etc.) */
   onSelect: (id: string) => void
   apiKey: string
@@ -1209,9 +1225,9 @@ function ModelKeyStep({
               </p>
               <p className="text-xs truncate" style={{ color: 'var(--color-muted)' }}>
                 {[
-                  PLAN_LABELS[selectedPlan],
-                  hasRegionForPlan && selectedRegion ? REGION_LABELS[selectedRegion] : null,
-                  resolvedEntry?.endpointHint,
+                  planLabel(selectedPlan),
+                  hasRegionForPlan && selectedRegion ? regionLabel(selectedRegion) : null,
+                  resolvedEntry ? catalogEndpointHint(resolvedEntry) : null,
                 ]
                   .filter(Boolean)
                   .join(' · ')}
@@ -1248,6 +1264,28 @@ function ModelKeyStep({
             aria-label="Search providers"
           />
         </div>
+
+        {/* Catalog load state — the picker has nothing to show without the
+            registry-fed document (ADR-068 FR-037). T068-20 ships the full
+            error state; this is the minimal honest surface. */}
+        {catalogError && (
+          <div
+            className="rounded-lg border px-3 py-2 flex items-center justify-between gap-2 text-xs"
+            style={{ borderColor: 'var(--color-error)', color: 'var(--color-error)' }}
+            role="alert"
+            data-testid="catalog-error"
+          >
+            <span>Provider catalog unavailable.</span>
+            <button tabIndex={0} type="button" onClick={onRetryCatalog} className="underline">
+              Retry
+            </button>
+          </div>
+        )}
+        {catalogLoading && !catalogError && (
+          <p className="text-xs" style={{ color: 'var(--color-muted)' }} data-testid="catalog-loading">
+            Loading providers…
+          </p>
+        )}
 
         {/* Company tiles grid */}
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-2" role="group" aria-label="Choose your provider">
@@ -1355,7 +1393,7 @@ function ModelKeyStep({
                             }
                       }
                     >
-                      {PLAN_LABELS[plan]}
+                      {planLabel(plan)}
                     </button>
                   ))}
                 </div>
@@ -1408,26 +1446,24 @@ function ModelKeyStep({
                               }
                         }
                       >
-                        {REGION_LABELS[region]}
+                        {regionLabel(region)}
                       </button>
                     ))}
                   </div>
                 </div>
               )}
 
-              {/* Endpoint hint/subtitle only — wire (OpenAI- vs Anthropic-compatible)
-                  is an internal config detail, not shown in onboarding
-                  (provider-ux-fixes-plan FIX-5: the toggle lives in Settings). */}
-              {resolvedEntry?.subtitle && (
+              {/* Endpoint hint/subtitle derived from the fetched catalog entry. */}
+              {resolvedEntry && (
                 <p className="text-xs truncate" style={{ color: 'var(--color-muted)' }}>
-                  {resolvedEntry.subtitle}
+                  {catalogSubtitle(resolvedEntry)}
                 </p>
               )}
 
               {/* Resolved endpoint hint — recognition + debuggability (spec requirement) */}
-              {resolvedEntry?.endpointHint && (
+              {resolvedEntry && (
                 <p className="text-xs font-mono" style={{ color: 'var(--color-muted)' }}>
-                  → {resolvedEntry.endpointHint}
+                  → {catalogEndpointHint(resolvedEntry)}
                 </p>
               )}
             </div>

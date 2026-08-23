@@ -74,10 +74,11 @@ export async function submitAnnotation({ comment, file, point, sessionId, agentI
     throw new AnnotationBusyError('The agent is busy — wait for it to finish, then send.')
   }
 
-  // The D18 client-side vision pre-send warning was removed with the
-  // GET /providers/model-capabilities endpoint (ADR-067). It is re-sourced
-  // from GET /providers/catalog in the ADR-068 B5 / T067-13 SPA slice; the
-  // reactive server-side explanation (loop_media.go) remains the backstop.
+  // No client-side vision pre-send warning here (ADR-068 T068-05): the SPA's
+  // only model-capability source is the registry-fed catalog
+  // (fetchProvidersCatalog → CatalogModel.input_modalities); the pre-send
+  // check is re-added on that source in a later B5 task. The reactive
+  // server-side explanation (loop_media.go) is the backstop meanwhile.
 
   const uploadResult = await uploadFiles(sessionId, [file], useWorkspacesStore.getState().activeWorkspaceId ?? undefined)
   const uploaded = uploadResult.files[0]
