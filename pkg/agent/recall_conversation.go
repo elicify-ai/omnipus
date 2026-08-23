@@ -151,8 +151,10 @@ func (t *RecallConversationTool) Parameters() map[string]any {
 
 // Execute selects turns by the given mode, bounds them, rewrites IDs, builds
 // and stores the RecallSpan, then returns a short confirmation string to the
-// model (FR-008). The actual recalled messages are merged into the next
-// BuildMessages assembly via the span.
+// model (FR-008). The recalled messages reach the model through the span:
+// the agent loop splices it into the very next request at the tool-result
+// site (ADR-066 D5.4, recall_injection.go) and every from-scratch assembly
+// includes it via BuildMessages.
 func (t *RecallConversationTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
 	// Derive the routing session key from ctx (FR-013 session scope).
 	// ToolSessionKey carries the routing key set by the agent loop on each turn.
@@ -384,13 +386,19 @@ func (t *RecallConversationTool) Execute(ctx context.Context, args map[string]an
 		"tokens", span.Tokens,
 	)
 
-	// Confirmation string mirrors the marker: range form when contiguous,
-	// ordinal-list form when sparse, so the model knows exactly what it got.
+	// Receipt (ADR-066 D5.4, FR-043): mirrors the marker — range form when
+	// contiguous, ordinal-list form when sparse — and states that the text
+	// is now in context. That claim is made true by the agent loop, which
+	// splices the span into the very next request at the tool-result site
+	// (recall_injection.go); when the span does not fit the window budget
+	// the loop rewrites this result to the FR-042 non-fit message BEFORE it
+	// is admitted, so no receipt ever says "in your context" unless the
+	// text is in the next request.
 	var resultStr string
 	isContiguous := (toTurnNum - fromTurnNum + 1) == len(keptIdxs)
 	if isContiguous {
 		resultStr = fmt.Sprintf(
-			"Recalled %d turn(s) (turns %d–%d) into context.",
+			"Recalled %d turn(s) (turns %d–%d); their text is now in your context",
 			len(keptIdxs),
 			fromTurnNum,
 			toTurnNum,
@@ -401,14 +409,14 @@ func (t *RecallConversationTool) Execute(ctx context.Context, args map[string]an
 			ordParts[i] = strconv.Itoa(o)
 		}
 		resultStr = fmt.Sprintf(
-			"Recalled %d turn(s) (ordinals: %s) into context.",
+			"Recalled %d turn(s) (ordinals: %s); their text is now in your context",
 			len(keptIdxs),
 			strings.Join(ordParts, ", "),
 		)
 	}
 	if overflow > 0 {
 		resultStr += fmt.Sprintf(
-			" %d more — narrow the query or use turn_range to retrieve them.", overflow)
+			"; %d more — narrow the query or use turn_range to retrieve them", overflow)
 	}
 	return tools.NewToolResult(resultStr)
 }

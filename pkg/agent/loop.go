@@ -10519,6 +10519,13 @@ turnLoop:
 			if len(toolResult.Media) > 0 && turnMediaStore != nil {
 				attachToolResultMedia(&mediaMsg, toolResult.Media, turnMediaStore, maxMediaSize)
 			}
+			// ADR-066 D5.4 (FR-041/FR-042): budget-first recall decision,
+			// BEFORE the choke point so the archive, transcript and events
+			// carry the truthful outcome — the tool's "now in your context"
+			// receipt only when the span will be spliced below, the non-fit
+			// message otherwise. A no-op for every other tool.
+			recallDecision := al.decideRecallInjection(ts, tc.Name, messages, contentForLLM)
+			contentForLLM = recallDecision.content
 			admitted := al.admitToolResult(ts, toolResultAdmission{
 				Tool:       tc.Name,
 				ToolCallID: toolCallID,
@@ -10720,6 +10727,12 @@ turnLoop:
 			}
 			ts.appendToolCallTranscript(tcRecord)
 			messages = append(messages, toolResultMsg)
+			// ADR-066 D5.4 (FR-041): the recalled text joins the in-memory
+			// slice HERE — the same mutation point every mid-turn request
+			// is built from — so the provider's next call carries it.
+			if recallDecision.inject {
+				messages = al.spliceRecallSpan(ts, messages, recallDecision.span)
+			}
 
 			if steerMsgs := al.dequeueSteeringMessagesForScope(ts.sessionKey); len(steerMsgs) > 0 {
 				pendingMessages = append(pendingMessages, steerMsgs...)
@@ -11355,7 +11368,12 @@ func (al *AgentLoop) assembleMessages(
 			taskStatusLabel, taskStatusLabel,
 		)
 	}
-	spanMsgs := al.activeRecallSpan(ts.sessionKey).Messages()
+	span := al.activeRecallSpan(ts.sessionKey)
+	// ADR-066 D5.4 (FR-043): this from-scratch assembly includes the active
+	// span exactly once (BuildMessages, after the pinned core). Record it by
+	// identity so the tool-result site never splices it a second time, and
+	// so a same-turn replacement (E20) can find the block to remove.
+	recordAssembledRecallSpan(ts, span, history)
 	return ts.agent.ContextBuilder.BuildMessages(
 		history,
 		userMsg,
@@ -11366,7 +11384,7 @@ func (al *AgentLoop) assembleMessages(
 		ts.opts.SenderID,
 		ts.opts.SenderDisplayName,
 		breadcrumb,
-		spanMsgs,
+		span.Messages(),
 		skillNames...,
 	)
 }

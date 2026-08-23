@@ -232,6 +232,22 @@ type turnState struct {
 	session                session.SessionStore // Session store reference
 	initialHistoryLength   int                  // Snapshot of window (GetHistory) length at turn start
 	initialArchiveLen      int                  // Snapshot of archive (ReadArchive) line count at turn start — for Skip-preserving rollback
+
+	// injectedRecallSpan is the recall span whose messages are currently
+	// present in this turn's in-memory message slice (ADR-066 D5.4,
+	// FR-043), compared by IDENTITY against al.activeRecallSpan. It is set
+	// by assembleMessages (every from-scratch assembly includes the active
+	// span once via BuildMessages) and by the tool-result-site splice
+	// (recall_injection.go). The tool-result site never splices a span
+	// that is already recorded here, so nothing is doubled; nil means no
+	// span is in the slice. injectedRecallAt/injectedRecallLen locate that
+	// block — [at, at+len) — so a second recall in the same turn (E20)
+	// removes the replaced span before splicing the new one. Both the
+	// splice and every reassembly reset the triple; appends only ever land
+	// at the end of the slice, so the block stays valid in between.
+	injectedRecallSpan *RecallSpan
+	injectedRecallAt   int
+	injectedRecallLen  int
 	// parentSpawnCallID is the ToolCall.ID of the spawn tool call in the parent turn that
 	// triggered this sub-turn. Set by spawnSubTurn at child construction (FR-H-003).
 	// Empty for root turns. Used to populate ParentSpawnCallID on ToolExec* payloads
