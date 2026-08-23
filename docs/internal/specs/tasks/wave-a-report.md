@@ -230,3 +230,83 @@ inherited from the release branch like the gosec findings). Not fixed — featur
   fixtures/tests.
 - Whether `TestNoAgentConfigWorkspaceIdentifier` and `TestPathTraversal_ReadFile` also fail on
   `origin/release/v0.1.1` or `origin/main`.
+
+## Wave A.1 — final gate on the pushed head (2026-08-23)
+
+Head verified: local `HEAD` == `origin/feat/context-budget-and-tool-result-routing` ==
+`5e194f34`. Every Fly run below printed `HEAD: 5e194f34 test(contracts): fixtures and probe tests
+on the A-CONTRACT shapes`, so no stale-checkout trap applies. Exit codes below are the per-gate
+`-> exit N` lines from `runci.sh` output, not the SSH wrapper's status.
+
+### Commits since 36801b44 (newest first)
+
+- `5e194f34` test(contracts): fixtures and probe tests on the A-CONTRACT shapes
+- `bed09152` docs(spec): record A-CONTRACT decisions in ADR-066/067/068 specs
+- `aa51a4f1` docs(tasks): Wave A report
+
+### Per-gate verdicts (`/cache/runci.sh feat/context-budget-and-tool-result-routing <gate>`)
+
+| Gate | Steps | Verdict |
+|---|---|---|
+| `spa` | npm-ci exit 0, typecheck exit 0, vitest exit 0 (428 files, 6988 passed, 2 expected fail) | **GREEN** — `ALL GATES GREEN` |
+| `go-test` | go-build exit 0, **go-test exit 1** | **RED** — `GATE FAILURE(S)`; zero `FLAKE (passed isolated)` lines |
+| `contracts` | npm-ci exit 0, verify-contracts exit 0 | **GREEN** — `ALL GATES GREEN` |
+| `quick` | gofmt exit 0, go-build exit 0 | **GREEN** — `ALL GATES GREEN` |
+| `lint` | not run (operator instruction) | accepted baseline — see below |
+
+The only `go-test` failure (failed in both the parallel run and the isolated `-p 1` re-run, so
+flagged `REAL FAILURE`):
+
+```
+--- FAIL: TestNoAgentConfigWorkspaceIdentifier (0.18s)
+    rename_guard_test.go:137: reintroduced agent-config .Workspace usage (FR-001/FR-002 — rename the identifier to .Home, or add a reviewed file:line entry to allowedWorkspaceIdentifierLines in this file with a documented reason if it genuinely belongs to an unrelated type):
+        pkg/migrate/sources/openclaw/openclaw_config.go:374: if c.Agents == nil || c.Agents.Defaults == nil || c.Agents.Defaults.Workspace == nil {
+        pkg/migrate/sources/openclaw/openclaw_config.go:377: return rewriteWorkspacePath(*c.Agents.Defaults.Workspace)
+        pkg/migrate/sources/openclaw/openclaw_config.go:416: cfg.Agents.Defaults.Workspace = c.GetDefaultWorkspace()
+        pkg/migrate/sources/openclaw/openclaw_config.go:862: if entry.Workspace != nil {
+        pkg/migrate/sources/openclaw/openclaw_config.go:863: agentCfg.Workspace = rewriteWorkspacePath(*entry.Workspace)
+        pkg/migrate/sources/openclaw/openclaw_config.go:889: cfg.Agents.Defaults.Home = c.Agents.Defaults.Workspace
+        pkg/migrate/sources/openclaw/openclaw_config.go:916: Home:    a.Workspace,
+FAIL
+FAIL	github.com/elicify-ai/omnipus/pkg/config	1.439s
+```
+
+**Attribution: INHERITED, not introduced by this branch.** The same test is already recorded red in
+`docs/internal/specs/tasks/baseline-2026-08-23.md` (measured at `dc9bc96a`, before `36801b44`), and
+`git diff --stat c60da266 36801b44 -- pkg/config pkg/migrate` is empty. It is the only remaining
+`go-test` red on Fly. Per Constraint #7 it is still ours to fix; it is not being fixed in Wave A.1
+(gate-only task) and stays listed under "Blockers carried forward".
+
+`TestPathTraversal_ReadFile/unix_parent_traversal` (the second unattributed failure from the Wave A
+report) did **not** fail on Fly in this run — consistent with the tests agent's finding that it
+passes on macOS and on the Fly worker and failed only on the GitHub runner (environment-dependent;
+the contract commit touches nothing under `tests/security`, `pkg/tools`, `pkg/sandbox`).
+
+### Accepted baseline: `lint`
+
+Not run. Its 12 gosec G115 findings in `pkg/sandbox/sandbox_linux.go` / `seccomp_linux.go` are
+inherited from `release/v0.1.1` (`ef100ce7`) and are being fixed on another branch per the operator.
+Recorded as an accepted baseline for this branch, not a blocker.
+
+### `t.Skip`'d tests
+
+None. The tests agent's commit (`5e194f34`) added zero `t.Skip` calls; failing tests were either
+fixed against the new contract shapes or retired outright. Retired (per ADR-067 FR-023, the
+`ProbeProviderRequest.id` enum no longer exists) in `pkg/providers/factory_provider_test.go`, with
+the owning follow-up task ids recorded in a retirement note in that file:
+
+- `probeEnumIDsFromYAML`, `TestProbeEnumProvidersResolveBase`,
+  `TestProbeEnumProvidersAreKnownProtocols`, `TestEveryProbeProviderBuilds` → replaced by
+  **T067-08** (table-backed factory / T24) and **T067-12** (T40 `TestOnboarding_Probe_FreeStringID`).
+
+Verified locally: `git diff --name-only 36801b44..HEAD | grep _test | xargs grep -ln 't.Skip'` returns
+nothing.
+
+### Verdict
+
+- `spa`, `contracts`, `quick`: **GREEN**.
+- `go-test`: **RED** on exactly one inherited test (`pkg/config` `TestNoAgentConfigWorkspaceIdentifier`).
+- The branch is therefore **not fully green** on the four gates; it is green on three, and the one
+  red is a pre-existing failure outside the Wave A change set. No race (`go-race`) or e2e signal was
+  collected in Wave A.1 — a Fly `go-test` green would carry no race signal either (see
+  `deploy/ci-worker/CLAUDE.md`).
