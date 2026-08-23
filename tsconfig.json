@@ -3,8 +3,16 @@
   //
   // It intentionally has NO "include"/"files"/"compilerOptions" of its own —
   // it only delegates to the referenced sub-projects (tsconfig.app.json,
-  // tsconfig.node.json). This is the "references mode" described at
+  // tsconfig.node.json, tsconfig.tests.json). This is the "references mode"
+  // described at
   // https://www.typescriptlang.org/docs/handbook/project-references.html.
+  //
+  // CONSEQUENCE OF THAT DELEGATION: any TypeScript not inside some referenced
+  // sub-project's "include" is checked by NOTHING. Adding a new directory of
+  // .ts files therefore requires adding it to one of these sub-projects (or
+  // adding a new one and referencing it here) — otherwise `npm run typecheck`
+  // stays green over code it never opened. That is exactly what happened to
+  // tests/ and playwright.config.ts; see tsconfig.tests.json's header.
   //
   // TRAP: `tsc --noEmit` against this root file is a SILENT NO-OP — it exits 0
   // without type-checking a single file. Always use `tsc -b --noEmit` (with the
@@ -13,6 +21,7 @@
   "files": [],
   "references": [
     { "path": "./tsconfig.app.json" },
-    { "path": "./tsconfig.node.json" }
+    { "path": "./tsconfig.node.json" },
+    { "path": "./tsconfig.tests.json" }
   ]
 }

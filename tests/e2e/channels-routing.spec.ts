@@ -37,6 +37,7 @@
 
 import { expect, type Locator, type Page, type Route } from '@playwright/test'
 import { test } from './fixtures/console-errors'
+import { selectNativeOptionByLabel } from './fixtures/selectors'
 
 // ── (a) Connectors sidebar item ───────────────────────────────────────────────
 // BDD: Given the user is logged in,
@@ -332,7 +333,10 @@ async function openTelegramConfigPanel(page: Page): Promise<Locator> {
 async function chooseSmartSelectOption(page: Page, container: Locator, label: RegExp) {
   const native = container.locator('select')
   if ((await native.count()) > 0) {
-    await native.selectOption({ label })
+    // NOT `native.selectOption({ label })` — that option is typed `string` and
+    // compared with `===` in Playwright's injected script, so a RegExp matches
+    // nothing. See selectNativeOptionByLabel's doc comment.
+    await selectNativeOptionByLabel(native, label)
   } else {
     const trigger = container.locator('button').first()
     await expect(trigger).toBeVisible({ timeout: 5_000 })

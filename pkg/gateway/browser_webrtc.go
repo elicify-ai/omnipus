@@ -451,7 +451,17 @@ func (h *BrowserWSHandler) handleWebRTCOffer(
 		)
 		h.auditStream(userID, frame.AgentId, audit.SeverityWarn, audit.EventBrowserWebRTCViewerOfferFailed,
 			map[string]any{"session_id": sessID, "viewer_id": viewerID, "reason": reason, "error": offerErr.Error()})
-		h.sendWebRTCState(wc, sessID, viewerID, true, false, false, "error")
+		// Send the CLASSIFIED reason, not the literal "error". This line used
+		// to hardcode "error" while the reason computed six lines above went
+		// only to the log and the audit event — so the one surface a human
+		// actually reads (the UI, and any E2E assertion quoting it) was
+		// strictly LESS informative than the log line beside it. That cost a
+		// full investigation: an ingest timeout, which has a specific and
+		// actionable cause, presented as the generic "reported an error
+		// starting video". ADR-061 deleted the silent JPEG fallback so a
+		// WebRTC failure would be visible; a visible failure that names the
+		// wrong cause is the same defect one level down.
+		h.sendWebRTCState(wc, sessID, viewerID, true, false, false, reason)
 		return
 	}
 

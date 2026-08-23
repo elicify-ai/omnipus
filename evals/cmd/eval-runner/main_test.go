@@ -10,6 +10,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
 // ── CSRF extraction ───────────────────────────────────────────────────────────
@@ -250,5 +252,116 @@ func TestDoStatefulPost_AttachesAuthHeader(t *testing.T) {
 
 	if gotAuth != "Bearer my-bearer-token" {
 		t.Errorf("expected Authorization 'Bearer my-bearer-token', got %q", gotAuth)
+	}
+}
+
+// ── Gateway boot contract (issue #637) ────────────────────────────────────────
+
+// TestSeedConfigIsAcceptedByTheRealConfigLoader is the regression guard for the
+// defect that silently killed every nightly eval run for three months: the
+// seeded config.json omitted "version", so the gateway treated it as a pre-v1
+// config, ran the v0 migration, and aborted boot on a schema mismatch. The
+// runner saw only a 60s "did not write port file" timeout.
+//
+// The oracle here is the gateway's OWN loader, not a hand-copied expectation —
+// if pkg/config ever tightens what it accepts, this test fails rather than the
+// nightly quietly going red again.
+func TestSeedConfigIsAcceptedByTheRealConfigLoader(t *testing.T) {
+	home := t.TempDir()
+	if err := seedConfig(home, 41234); err != nil {
+		t.Fatalf("seedConfig: %v", err)
+	}
+
+	cfg, err := config.LoadConfig(filepath.Join(home, "config.json"))
+	if err != nil {
+		t.Fatalf("the real gateway config loader rejected the seeded config: %v", err)
+	}
+	if cfg.Gateway.Port != 41234 {
+		t.Errorf("gateway.port = %d, want the concrete port 41234 the runner reserved", cfg.Gateway.Port)
+	}
+	if cfg.AgentHomeBasePath() != home {
+		t.Errorf("AgentHomeBasePath() = %q, want %q — gateway.port file lands here", cfg.AgentHomeBasePath(), home)
+	}
+}
+
+// TestSeedConfigDeclaresCurrentVersion pins the specific field whose absence
+// caused the outage, so a future edit that drops it fails loudly here even if
+// the loader has by then grown a lenient fallback.
+func TestSeedConfigDeclaresCurrentVersion(t *testing.T) {
+	home := t.TempDir()
+	if err := seedConfig(home, 41235); err != nil {
+		t.Fatalf("seedConfig: %v", err)
+	}
+	raw, err := os.ReadFile(filepath.Join(home, "config.json"))
+	if err != nil {
+		t.Fatalf("read seeded config: %v", err)
+	}
+	var probe struct {
+		Version *int `json:"version"`
+	}
+	if err := json.Unmarshal(raw, &probe); err != nil {
+		t.Fatalf("seeded config is not valid JSON: %v", err)
+	}
+	if probe.Version == nil {
+		t.Fatal(`seeded config.json has no "version" field — the gateway will treat it as v0 and abort boot`)
+	}
+	if *probe.Version != config.CurrentVersion {
+		t.Errorf("seeded version = %d, want config.CurrentVersion = %d", *probe.Version, config.CurrentVersion)
+	}
+}
+
+// TestSeedConfigRejectsEphemeralPortZero encodes the second half of the defect:
+// the gateway does not interpret port 0 as "choose one for me" — it either
+// rejects it or echoes 0 back into gateway.port, leaving the runner polling a
+// URL of http://127.0.0.1:0. The runner must always seed a concrete port.
+func TestSeedConfigRejectsEphemeralPortZero(t *testing.T) {
+	port, err := pickFreePort()
+	if err != nil {
+		t.Fatalf("pickFreePort: %v", err)
+	}
+	if port <= 0 || port > 65535 {
+		t.Fatalf("pickFreePort returned %d, want a bindable port in [1, 65535]", port)
+	}
+
+	home := t.TempDir()
+	if seedErr := seedConfig(home, port); seedErr != nil {
+		t.Fatalf("seedConfig: %v", seedErr)
+	}
+	cfg, err := config.LoadConfig(filepath.Join(home, "config.json"))
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if cfg.Gateway.Port == 0 {
+		t.Fatal("seeded gateway.port is 0; the gateway never supported ephemeral port selection")
+	}
+}
+
+// TestBootFailureDetailQuotesTheGatewayPanicLog covers the diagnostic half of
+// the fix. The gateway writes fatal startup errors to logs/gateway_panic.log
+// rather than the stderr it inherits, so without this the runner reports a bare
+// timeout and the real cause is invisible — exactly why #637 went unexplained.
+func TestBootFailureDetailQuotesTheGatewayPanicLog(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, "logs"), 0o700); err != nil {
+		t.Fatalf("mkdir logs: %v", err)
+	}
+	const fatal = "Error: error loading config: config is missing a version field"
+	body := "INFO starting\nINFO sandbox applied\n" + fatal + "\n"
+	if err := os.WriteFile(filepath.Join(home, "logs", "gateway_panic.log"), []byte(body), 0o600); err != nil {
+		t.Fatalf("write panic log: %v", err)
+	}
+
+	got := bootFailureDetail(home)
+	if !strings.Contains(got, fatal) {
+		t.Errorf("bootFailureDetail() = %q, want it to quote the fatal line %q", got, fatal)
+	}
+}
+
+// TestBootFailureDetailSurvivesAMissingLog ensures the diagnostic helper never
+// itself becomes the reason an error is unreportable.
+func TestBootFailureDetailSurvivesAMissingLog(t *testing.T) {
+	got := bootFailureDetail(t.TempDir())
+	if got == "" {
+		t.Error("bootFailureDetail() on a home with no panic log returned an empty string; want a stated reason")
 	}
 }

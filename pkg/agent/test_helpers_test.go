@@ -5,7 +5,9 @@
 package agent
 
 import (
+	"bytes"
 	"encoding/json"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -461,4 +463,75 @@ func testHarnessAgentIDs(cfg *config.Config) []string {
 		ids = append(ids, id)
 	}
 	return ids
+}
+
+// -----------------------------------------------------------------------------
+// Race-free capture of the process-global slog default
+// -----------------------------------------------------------------------------
+
+// raceFreeLogBuffer is a mutex-protected sink for slog output.
+//
+// Any test that asserts on real emitted log bytes has to swap the
+// PROCESS-GLOBAL slog default (slog.SetDefault) — production code under test
+// logs through slog.Warn/slog.Error, not through an injectable logger. That
+// makes the sink shared with every other goroutine alive in the test binary,
+// and a bare bytes.Buffer is not safe for concurrent use, so
+// Write/String/Reset from different goroutines is a genuine data race.
+//
+// This is not hypothetical and it is not confined to a test that spawns its
+// own goroutines. Two independent CI failures have been caused by it:
+//
+//   - 2026-08-19: an async sub-turn kept logging after spawnSubTurn returned,
+//     racing wave3_fix5b_test.go's Buffer.String() (this type's original home).
+//   - 2026-08-23: pkg/session's stats-flusher goroutine — started per
+//     UnifiedStore by NewAgentLoop and never stopped by the test that created
+//     it — ticked every 5s (config.DefaultSessionStatsFlushInterval) and called
+//     slog.Warn from pkg/session/unified_stats_flush.go's flushAllDirtyStats,
+//     racing task_trigger_rrule_test.go's Buffer.Reset()/String(). The writer
+//     belonged to a DIFFERENT, already-finished test; the reader belonged to
+//     TestTriggerScheduler_UnreadableTaskEscalatesToError, which is what the
+//     detector failed.
+//
+// The lesson from the second one: the racing writer need not be anything the
+// asserting test started or knows about. Treat any global-slog capture as
+// concurrently written by definition and always use this type — never a bare
+// bytes.Buffer.
+//
+// The race is in the test harness, not in the code under test: the fix is to
+// synchronize the sink, not to silence the detector.
+type raceFreeLogBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *raceFreeLogBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *raceFreeLogBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// Reset drops everything captured so far. Used by tests that assert on one
+// phase, clear, then assert on the next.
+func (b *raceFreeLogBuffer) Reset() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.buf.Reset()
+}
+
+// captureDefaultSlog installs a text handler at level as the process-global
+// slog default for the duration of the test and returns the race-free buffer
+// it writes into, restoring the previous default via t.Cleanup.
+func captureDefaultSlog(t *testing.T, level slog.Level) *raceFreeLogBuffer {
+	t.Helper()
+	buf := &raceFreeLogBuffer{}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: level})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	return buf
 }

@@ -408,15 +408,7 @@ func applySandbox(opts SandboxApplyOptions) (result *SandboxApplyResult, err err
 	enforcePortRules := abiVersion >= 4 || (confinesChildren && kernelConfiner.ConfinesChildren())
 
 	if enforcePortRules && opts.Cfg != nil {
-		pr := opts.Cfg.Sandbox.DevServerPortRange
-		if !pr.IsZero() {
-			for p := pr.Min(); p <= pr.Max(); p++ {
-				if p < 1 || p > 65535 {
-					continue
-				}
-				bindPorts = append(bindPorts, uint16(p))
-			}
-		}
+		bindPorts = sandboxExtraPorts(opts.Cfg)
 		// NOTE (WebRTC build W1-A / CRIT-001): the managed Chromium used to
 		// need a bind-port allow-rule here for its fixed DevTools TCP port
 		// (browser.DebugPort, 9223) — removed along with that port. CDP now
@@ -510,18 +502,15 @@ func applySandbox(opts SandboxApplyOptions) (result *SandboxApplyResult, err err
 	// Extend the connect-port allow-list (v0.2 #155 item 4). DefaultPolicy
 	// pre-seeds {53, 80, 443}; we append every port in DevServerPortRange so
 	// children can dial loopback dev servers and the egress proxy without
-	// the kernel intercepting at connect(2). Done after DefaultPolicy
+	// the kernel intercepting at connect(2), plus every port this gateway
+	// itself listens on (see sandboxExtraPorts). Done after DefaultPolicy
 	// returns so we don't have to thread an additional parameter through
 	// DefaultPolicy's call sites (the redteam test, agent loop, etc.).
 	if enforcePortRules && opts.Cfg != nil {
-		pr := opts.Cfg.Sandbox.DevServerPortRange
-		if !pr.IsZero() {
-			extra := make([]sandbox.NetPortRule, 0, pr.Max()-pr.Min()+1)
-			for p := pr.Min(); p <= pr.Max(); p++ {
-				if p < 1 || p > 65535 {
-					continue
-				}
-				extra = append(extra, sandbox.NetPortRule{Port: uint16(p)})
+		if ports := sandboxExtraPorts(opts.Cfg); len(ports) > 0 {
+			extra := make([]sandbox.NetPortRule, 0, len(ports))
+			for _, p := range ports {
+				extra = append(extra, sandbox.NetPortRule{Port: p})
 			}
 			policy.ConnectPortRules = append(policy.ConnectPortRules, extra...)
 		}
@@ -761,6 +750,72 @@ func applySandbox(opts SandboxApplyOptions) (result *SandboxApplyResult, err err
 // Install is reached.
 type linuxApplier interface {
 	ApplyWithMode(policy sandbox.SandboxPolicy, mode sandbox.Mode) error
+}
+
+// sandboxExtraPorts returns every TCP port that must be added to BOTH Landlock
+// allow-lists (NET_BIND_TCP and NET_CONNECT_TCP) on top of
+// sandbox.DefaultConnectPorts ({53, 80, 443}).
+//
+// Two groups, and they are deliberately the SAME list for bind and connect:
+//
+//   - cfg.Sandbox.DevServerPortRange — agents bind dev servers here via
+//     web_serve / background bash, and other children dial them back.
+//
+//   - The gateway's OWN listeners: cfg.Gateway.Port, and
+//     cfg.Tools.Browser.WebRTCMediaTCPPort when ICE-TCP is configured.
+//
+// # Why the gateway's own port belongs here (regression guard)
+//
+// It was missing, and that is the whole of CI's intermittent
+// `net::ERR_NETWORK_ACCESS_DENIED` on the WebRTC live-video test. The gateway
+// serves its own start page, its `/preview/…` URLs, and the capture encoder's
+// `ws://127.0.0.1:<gateway.port>/api/v1/browser/capture-ingest` socket on
+// cfg.Gateway.Port. The managed Chrome is a CHILD of the gateway, so when it
+// inherits the Landlock domain its connect(2) to that port returns EACCES,
+// which Chromium's MapConnectError turns verbatim into
+// ERR_NETWORK_ACCESS_DENIED (net/socket/socket_posix.cc). Every default port
+// was outside both allow-lists — production's 5000 as much as CI's 6060 — so
+// this was a product defect on any Linux host with Landlock ABI v4+ (kernel
+// 6.7+) in enforce mode, not a CI-only artifact.
+//
+// The BIND half matters for a second, latent reason: the gateway binds its own
+// listener AFTER applySandbox runs (pkg/channels/manager.go's StartAll), so
+// cfg.Gateway.Port must be bind-allow-listed or the gateway cannot open the
+// socket it exists to serve. That it works today at all is an accident of
+// Landlock's per-thread semantics (landlock_restrict_self covers only the
+// calling thread and threads forked from it), which happens to leave most Go
+// worker threads unrestricted — see LinuxBackend.ApplyToCmd's "Landlock
+// child-process contract". Do not rely on that accident.
+//
+// Deliberately NOT widened further: the point of this allow-list is that
+// lateral SSH/MySQL/Redis and custom backdoor ports stay denied in the kernel.
+// Only ports this process itself listens on are added.
+func sandboxExtraPorts(cfg *config.Config) []uint16 {
+	if cfg == nil {
+		return nil
+	}
+	seen := make(map[uint16]struct{})
+	var out []uint16
+	add := func(p int) {
+		if p < 1 || p > 65535 {
+			return
+		}
+		port := uint16(p)
+		if _, dup := seen[port]; dup {
+			return
+		}
+		seen[port] = struct{}{}
+		out = append(out, port)
+	}
+
+	if pr := cfg.Sandbox.DevServerPortRange; !pr.IsZero() {
+		for p := pr.Min(); p <= pr.Max(); p++ {
+			add(int(p))
+		}
+	}
+	add(cfg.Gateway.Port)
+	add(cfg.Tools.Browser.WebRTCMediaTCPPort)
+	return out
 }
 
 // connectPortsFromRules flattens the boot policy's outbound port rules back to

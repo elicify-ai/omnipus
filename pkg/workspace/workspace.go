@@ -14,19 +14,22 @@ package workspace
 // JSON tag rules (must stay stable — the files are the long-term store):
 //
 //	id, name, description, status, pinned, pin_order, core_team,
-//	owner, is_default, setup_pending, delegation, member_configs,
+//	owner, is_default, setup_pending, member_configs,
 //	created_at, updated_at
 //
 // `mounts` was REMOVED from this record and must not return — it is a write
 // grant and this file is writable by a sandboxed child. See the note where the
 // field used to be, and mountstore.go.
 //
+// `delegation` was REMOVED for the same reason — it is an AUTHORIZATION and
+// this file is writable by a sandboxed child. See the note where that field
+// used to be, and delegationstore.go.
+//
 // repository was deleted with no back-compat (FR-9.1, ADR-063 D7, matching
 // the ADR-035/037 precedent) — do not reintroduce it. Git linkage is now a
 // convenience on top of mounting: clone to an operator-chosen location, then
 // mount it.
 //
-// Delegation is the typed form shared with delegation.go's DelegationEdge.
 // Adding a new field here requires a matching JSON tag and must be
 // backward-compatible (omitempty on optional fields so old files still parse).
 type Workspace struct { // not-wire-format: internal disk-cache struct, mapped to gen.Workspace before sending over the wire
@@ -56,18 +59,40 @@ type Workspace struct { // not-wire-format: internal disk-cache struct, mapped t
 	// and for any workspace created with an explicit core_team.
 	SetupPending bool `json:"setup_pending,omitempty"`
 
-	// Delegation is the per-workspace delegation graph (M5): the directed edges
-	// that authorize who-delegates-to-whom on this workspace. This is the
-	// editable source of truth surfaced in the workspace Team tab. nil/empty
-	// means no delegation configured. This graph is the SOLE delegation
-	// enforcement mechanism (ADR-037) — there is no separate per-agent
-	// delegation_policy; that field was removed entirely, and this graph is
-	// both what the UI/update_workspace edit AND what the runtime enforces.
+	// NOTE — delegation edges are deliberately NOT a field here, and must never
+	// become one again. A delegation edge is an AUTHORIZATION, and per ADR-037
+	// the per-workspace edge list is the SOLE runtime authority for
+	// who-may-delegate-to-whom (the global AgentConfig.DelegationPolicy was
+	// deleted precisely so this one gate could not be bypassed). That makes the
+	// edge list a security decision input, and this record is writable by the
+	// principal it constrains: the kernel policy grants $OMNIPUS_HOME RWX and
+	// fspolicy.DeniedPathsFor re-admits the whole `workspaces` root for any
+	// re-rooted workspace turn, so `bash` can append to its own workspace
+	// record. Storing the edge list here let a child append
+	// {"from_agent":"me","to_agent":"anyone"} and grant ITSELF delegation to any
+	// agent on the workspace. Re-validating on load does not close it — a
+	// hostile edge is SHAPE-LEGAL and indistinguishable from an operator-created
+	// one; the list has to be unreachable. It lives in
+	// $OMNIPUS_HOME/entities/delegation/<id>.json, inside the
+	// kernel-and-app-layer denied `entities` root. See delegationstore.go's
+	// leading comment.
 	//
-	// DelegationEdge is defined in delegation.go and has the same JSON tags as
-	// the former storedDelegationEdge in pkg/gateway; they are structurally
-	// identical and now unified here.
-	Delegation []DelegationEdge `json:"delegation,omitempty"`
+	// Delegation remains on the WIRE unchanged (gen.WorkspaceDelegation, the
+	// GET/PUT /workspaces/{id}/delegation pair) — pkg/gateway sources it from
+	// workspace.LoadDelegation and persists it with workspace.SaveDelegation.
+	// Only the storage location changed; contracts/ is untouched.
+	//
+	// An old record still carrying a `delegation` array (or one a child plants
+	// there) is IGNORED by encoding/json on load and dropped on the next save.
+	// That is the intended migration: importing those edges into the protected
+	// store would launder exactly the attacker-controlled data this move exists
+	// to distrust. WHAT AN EXISTING INSTALL LOSES: a workspace upgraded across
+	// this change starts with an EMPTY delegation graph — delegation is
+	// deny-by-default, so every delegation on that workspace is refused until an
+	// operator re-saves the graph from the Team tab (PUT
+	// /api/v1/workspaces/{id}/delegation). That is the fail-closed direction and
+	// it is deliberate; a fresh install is unaffected (create-time seeding writes
+	// straight to the store).
 
 	// MemberConfigs holds per-(workspace, agent) configuration keyed by agent
 	// ID. Currently carries heartbeat settings (FR-001). Only agents present

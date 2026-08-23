@@ -3,7 +3,6 @@ package agent
 import (
 	"context"
 	"encoding/json"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -20,18 +19,7 @@ import (
 // first so a single test can exercise per-workspace isolation.
 func writeWorkspaceFileForTest(t *testing.T, home, wsID string, isDefault bool, edges []graphEdge) {
 	t.Helper()
-	wsDir := filepath.Join(home, "workspaces")
-	if err := os.MkdirAll(wsDir, 0o755); err != nil {
-		t.Fatalf("mkdir workspaces: %v", err)
-	}
-	rec := testWorkspaceRecord{ID: wsID, IsDefault: isDefault, Delegation: edges}
-	data, err := json.Marshal(rec)
-	if err != nil {
-		t.Fatalf("marshal workspace record: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(wsDir, wsID+".json"), data, 0o644); err != nil {
-		t.Fatalf("write workspace file: %v", err)
-	}
+	writeGraphFiles(t, home, wsID, isDefault, edges)
 }
 
 // intPtr is a local helper for building *int policy/depth fields.

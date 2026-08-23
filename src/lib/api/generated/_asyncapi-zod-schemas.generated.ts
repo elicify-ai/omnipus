@@ -627,7 +627,7 @@ export const BrowserWebRTCStateFrame = z
     type: z.literal("browser_webrtc_state"),
     session_id: z.string().max(128).optional(),
     available: z.boolean(),
-    reason: z.enum(["disabled", "not_capable", "lite_build", "error", "multi_agent_capture_denied"]).optional(),
+    reason: z.enum(["disabled", "not_capable", "lite_build", "error", "multi_agent_capture_denied", "ingest_timeout"]).optional(),
     has_audio: z.boolean().optional(),
     active: z.boolean().optional(),
     ice_servers: z.array(z

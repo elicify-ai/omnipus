@@ -293,15 +293,32 @@ func (t *WorkspaceUpdateTool) Execute(_ context.Context, args map[string]any) *t
 	// among pre-existing members are never re-added, so a deliberate prior
 	// removal (via the Team tab's delegation PUT) is never silently
 	// resurrected by a later, unrelated core_team edit.
+	//
+	// The edge list is read from and written to the DELEGATION STORE
+	// (entities/delegation/<id>.json), never the workspace record — an
+	// authorization must not live in a file the constrained principal can
+	// write. See pkg/workspace/delegationstore.go. pendingDelegation is nil
+	// unless this call actually seeds an edge; a plain rename never touches
+	// the store at all.
 	var delegationSeedNote string
+	var pendingDelegation []workspacepkg.DelegationEdge
 	if coreTeamChanged {
 		added := teamDiffAdded(oldTeam, w.CoreTeam)
 		if len(added) > 0 {
+			existing, storeOK := workspacepkg.LoadDelegation(t.deps.Home, id)
+			if !storeOK {
+				// FAIL CLOSED: seeding on top of an edge list we could not read
+				// would silently drop the operator's real graph and replace it
+				// with defaults. LoadDelegation already logged the reason.
+				return tools.ErrorResult(errorJSON("DELEGATION_STORE_UNREADABLE",
+					"workspace delegation record is unreadable — refusing to seed delegation edges over it",
+					"Inspect (or remove) $OMNIPUS_HOME/entities/delegation/"+id+".json, then re-save the graph from the Team tab"))
+			}
 			ceiling := workspaceDelegationDepthCeiling(t.deps)
 			configPresent := configAgentPresenceSet(t.deps)
-			seeded := seedDelegationEdgesForNewMembers(w.CoreTeam, added, w.Delegation, ceiling, configPresent)
+			seeded := seedDelegationEdgesForNewMembers(w.CoreTeam, added, existing, ceiling, configPresent)
 			if len(seeded) > 0 {
-				w.Delegation = append(w.Delegation, seeded...)
+				pendingDelegation = append(append([]workspacepkg.DelegationEdge(nil), existing...), seeded...)
 				delegationSeedNote = seededEdgesSummary(seeded, added)
 			}
 		}
@@ -342,28 +359,30 @@ func (t *WorkspaceUpdateTool) Execute(_ context.Context, args map[string]any) *t
 	// the ONLY way this tool can add an edge is the auto-seed block above,
 	// and every candidate edge it appends has already been individually
 	// validated (and dropped + logged on failure, never escalated to an
-	// update-aborting error) before being appended to w.Delegation.
-	// readWorkspaceFromDisk otherwise loads the existing graph and
-	// writeEntity re-serializes it verbatim. But the moment ANY write path
-	// persists the Delegation slice, it becomes a write surface — a corrupted
-	// on-disk edge being rewritten here, or a future `delegation` arg, could
-	// otherwise launder an invalid edge that is then TRUSTED at runtime (the
-	// per-workspace graph is the sole delegation authority). So re-validate
-	// EVERY edge (pre-existing and auto-seeded alike) against the shared
-	// workspace.DelegationEdge.Validate authority before committing, using
-	// the same team set (core_team ∪ existing-edge endpoints) and depth
-	// ceiling the gateway PUT handler enforces. Any invalid edge aborts the
-	// whole write — we never persist an unvalidated edge. This whole-graph
-	// pass is a second, broader safety net on top of the auto-seed's own
-	// per-candidate validation (which uses a narrower, newTeam-only team
-	// set) — it is expected to be a no-op immediately after a clean
-	// auto-seed, and exists to catch a corrupted on-disk edge from another
-	// writer.
-	if len(w.Delegation) > 0 {
-		team := workspaceDelegationTeamSet(w)
+	// update-aborting error). But the moment this call persists an edge list
+	// it becomes a write surface — a corrupted on-disk edge being rewritten
+	// here, or a future `delegation` arg, could otherwise launder an invalid
+	// edge that is then TRUSTED at runtime (the per-workspace graph is the
+	// sole delegation authority). So re-validate EVERY edge (pre-existing and
+	// auto-seeded alike) against the shared workspace.DelegationEdge.Validate
+	// authority before committing, using the same team set (core_team ∪
+	// existing-edge endpoints) and depth ceiling the gateway PUT handler
+	// enforces. Any invalid edge aborts the whole write — we never persist an
+	// unvalidated edge. This whole-graph pass is a second, broader safety net
+	// on top of the auto-seed's own per-candidate validation (which uses a
+	// narrower, newTeam-only team set) — it is expected to be a no-op
+	// immediately after a clean auto-seed, and exists to catch a corrupted
+	// on-disk edge from another writer.
+	//
+	// It runs only when this call is actually about to WRITE the store. An
+	// update that seeds nothing leaves the delegation record untouched, so
+	// there is no write surface to guard and no reason to fail an unrelated
+	// rename over a graph this call never rewrites.
+	if len(pendingDelegation) > 0 {
+		team := workspaceDelegationTeamSet(w, pendingDelegation)
 		ceiling := workspaceDelegationDepthCeiling(t.deps)
-		for i := range w.Delegation {
-			if err := w.Delegation[i].Validate(team, ceiling); err != nil {
+		for i := range pendingDelegation {
+			if err := pendingDelegation[i].Validate(team, ceiling); err != nil {
 				return tools.ErrorResult(errorJSON("INVALID_DELEGATION_EDGE", err.Error(),
 					"Fix the workspace delegation graph via the Team tab or the delegation API"))
 			}
@@ -373,6 +392,15 @@ func (t *WorkspaceUpdateTool) Execute(_ context.Context, args map[string]any) *t
 	w.UpdatedAt = nowISO()
 	if err := writeEntity(workspacesDir(t.deps.Home), id, w); err != nil {
 		return tools.ErrorResult(errorJSON("SAVE_FAILED", err.Error(), ""))
+	}
+	// Persist seeded edges AFTER the record, so a failed record write can never
+	// leave the store authorizing agents the record does not list on the team.
+	// workspacepkg.LockID(id) is held for this whole function, which is
+	// SaveDelegation's stated caller contract.
+	if len(pendingDelegation) > 0 {
+		if err := workspacepkg.SaveDelegation(t.deps.Home, id, pendingDelegation); err != nil {
+			return tools.ErrorResult(errorJSON("SAVE_FAILED", err.Error(), ""))
+		}
 	}
 	tc := computeWorkspaceTaskCount(t.deps.Home, id)
 	resp := map[string]any{
@@ -682,8 +710,14 @@ func workspaceDelegationDepthCeiling(d *Deps) int {
 // under-restricts relative to the API write path; previously the two hand-rolled
 // copies diverged on whitespace trimming (this one did NOT trim), which TeamSet
 // now fixes uniformly.
-func workspaceDelegationTeamSet(w workspace) map[string]bool {
-	return workspacepkg.TeamSet(w.CoreTeam, w.Delegation)
+//
+// edges is the workspace's delegation edge list as loaded from the DELEGATION
+// STORE (workspacepkg.LoadDelegation), never a field on the workspace record —
+// the record is writable by the sandboxed child the delegation decision
+// constrains, so deriving team membership from it would let that child widen
+// its own team. See pkg/workspace/delegationstore.go.
+func workspaceDelegationTeamSet(w workspace, edges []workspacepkg.DelegationEdge) map[string]bool {
+	return workspacepkg.TeamSet(w.CoreTeam, edges)
 }
 
 // ---- system.workspace.delete ----
@@ -787,6 +821,17 @@ func (t *WorkspaceDeleteTool) Execute(_ context.Context, args map[string]any) *t
 	// this pool is not reentrant.
 	if err := workspacepkg.DeleteMountStore(t.deps.Home, id); err != nil {
 		slog.Warn("sysagent: workspace cascade delete: failed to remove mount store",
+			"workspace_id", id, "error", err)
+	}
+
+	// Step 3b: best-effort cascade of the delegation store. Delegation edges
+	// live in entities/delegation/<id>.json (out of a sandboxed child's reach —
+	// see pkg/workspace/delegationstore.go), NOT under the workspace directory,
+	// so the RemoveAll below does not reach them. Runs after unlock for the
+	// same reason as the mount store: DeleteDelegationStore takes LockID itself
+	// and this pool is not reentrant.
+	if err := workspacepkg.DeleteDelegationStore(t.deps.Home, id); err != nil {
+		slog.Warn("sysagent: workspace cascade delete: failed to remove delegation store",
 			"workspace_id", id, "error", err)
 	}
 

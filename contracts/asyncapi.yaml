@@ -3569,6 +3569,7 @@ components:
           - lite_build
           - error
           - multi_agent_capture_denied
+          - ingest_timeout
           description: 'Present when available=false (or when active unexpectedly drops to false): disabled = tools.browser.webrtc_enabled
             is off; not_capable = platform/managed-Chrome capability classification is below WebRTC eligibility (ADR-047 D5,
             e.g. chrome-headless-shell only, no full Chrome); lite_build = binary built with -tags lite (Pion compiled out,

@@ -21,5 +21,14 @@
     },
     "types": ["node", "vite/client"]
   },
-  "include": ["src"]
+  // packages/ui/src/index.ts is the npm-publishable entry of @omnipus/ui and
+  // is nothing but `export * from '../../../src/index'` — i.e. it lives in
+  // this project's own module graph. It was previously checked by no gate at
+  // all: this project included only "src", and packages/ui has no tsconfig.json
+  // of its own (its `type-check` script, `tsc --noEmit`, therefore resolves
+  // upward and is the silent no-op documented in tsconfig.json's header).
+  // Listing it here means a break in the published surface — a renamed or
+  // deleted src/index export — fails `npm run typecheck` instead of only
+  // surfacing at `npm run build:lib` time.
+  "include": ["src", "packages/ui/src"]
 }

@@ -1,4 +1,4 @@
-import { type Page, expect } from '@playwright/test';
+import { type Locator, type Page, expect } from '@playwright/test';
 
 /**
  * Chat composer input — AssistantUI renders ComposerPrimitive.Input as a
@@ -355,4 +355,42 @@ export async function waitForLiveSink(
   // round trip never completed), or the ADR-061 regression the `img` canary
   // above exists to catch.
   return sawImg ? 'img' : null;
+}
+
+// ── Native <select> helpers ───────────────────────────────────────────────
+
+/**
+ * Select an option from a NATIVE `<select>` by a label PATTERN.
+ *
+ * WHY THIS EXISTS: `Locator.selectOption({ label })` takes a **string**, not a
+ * RegExp — the label is compared with `===` inside Playwright's injected page
+ * script. A RegExp neither survives the wire serialization nor that comparison,
+ * so `selectOption({ label: /Sales/i })` matches nothing and dies on the
+ * "did not find some options" timeout. Seven call sites across
+ * channel-routing.spec.ts and channels-routing.spec.ts were written exactly
+ * that way. Nobody noticed because these are the `<select>` branch of a
+ * SmartSelect fork, and SmartSelect renders a Radix combobox (not a native
+ * `<select>`) for every roster size these specs actually build — so the broken
+ * branch has never executed. It was also invisible to `npm run typecheck`,
+ * which did not look at tests/ at all until tsconfig.tests.json existed.
+ *
+ * Resolving the pattern against the real option list here keeps the intended
+ * case-insensitive/partial matching, and selecting by INDEX sidesteps the
+ * `option.label`-vs-textContent ambiguity entirely. A non-match throws with the
+ * full option list, so an activated-but-wrong branch fails loudly and legibly
+ * instead of timing out anonymously.
+ */
+export async function selectNativeOptionByLabel(
+  select: Locator,
+  label: RegExp,
+): Promise<void> {
+  const texts = await select.locator('option').allTextContents();
+  const index = texts.findIndex((t) => label.test(t.trim()));
+  if (index === -1) {
+    throw new Error(
+      `selectNativeOptionByLabel: no <option> matches ${String(label)} — ` +
+        `options present: ${JSON.stringify(texts.map((t) => t.trim()))}`,
+    );
+  }
+  await select.selectOption({ index });
 }

@@ -88,12 +88,19 @@ func delegationEdgeToWire(e storedDelegationEdge) gen.WorkspaceDelegationEdge {
 // task-assignment validation actually enforces. Sourcing from the same
 // wrapper closes that gap — this is now the SAME derivation as
 // validateTaskAgentID's, not a parallel one.
-func workspaceDelegationToWire(ws storedWorkspace, defaultDepth int) gen.WorkspaceDelegation {
-	edges := make([]gen.WorkspaceDelegationEdge, 0, len(ws.Delegation))
-	for _, e := range ws.Delegation {
+//
+// stored is the workspace's edge list as read from the DELEGATION STORE
+// (workspace.LoadDelegation), never a field on the workspace record — see
+// pkg/workspace/delegationstore.go. It is passed in rather than loaded here so
+// the PUT handler can render the set it just persisted without a re-read.
+func workspaceDelegationToWire(
+	ws storedWorkspace, stored []storedDelegationEdge, defaultDepth int,
+) gen.WorkspaceDelegation {
+	edges := make([]gen.WorkspaceDelegationEdge, 0, len(stored))
+	for _, e := range stored {
 		edges = append(edges, delegationEdgeToWire(e))
 	}
-	teamSet := workspaceTeamSet(ws)
+	teamSet := workspace.TeamSet(ws.CoreTeam, stored)
 	team := make([]string, 0, len(teamSet))
 	for id := range teamSet {
 		team = append(team, id)
@@ -122,8 +129,19 @@ func (a *restAPI) handleWorkspaceDelegationGet(w http.ResponseWriter, _ *http.Re
 	if !ok {
 		return
 	}
+	// Edges come from the delegation store, not the workspace record (see
+	// pkg/workspace/delegationstore.go). An untrusted store record is a 500,
+	// never an empty graph: rendering "no edges" for a corrupt/tampered record
+	// would invite the operator to "fix" it by saving over it, silently
+	// destroying the real graph and hiding the tampering.
+	stored, storeOK := workspace.LoadDelegation(a.homePath, id)
+	if !storeOK {
+		slog.Error("rest: read workspace delegation: store record unreadable or untrusted", "id", id)
+		jsonErr(w, http.StatusInternalServerError, "workspace delegation record is unreadable")
+		return
+	}
 	cfg := a.agentLoop.GetConfig()
-	jsonOK(w, workspaceDelegationToWire(ws, delegationDepthCeiling(cfg)))
+	jsonOK(w, workspaceDelegationToWire(ws, stored, delegationDepthCeiling(cfg)))
 }
 
 // handleWorkspaceDelegationPut replaces the workspace's delegation edge set.
@@ -139,6 +157,13 @@ func (a *restAPI) handleWorkspaceDelegationGet(w http.ResponseWriter, _ *http.Re
 //   - depth must be >= 0 and <= the global subturn depth ceiling
 //
 // Edges are deduplicated by (from_agent, to_agent); the last writer wins.
+//
+// The edge set is persisted to (and read from) the per-workspace DELEGATION
+// STORE, $OMNIPUS_HOME/entities/delegation/<id>.json — NOT the workspace
+// record. An authorization must not be writable by the principal it
+// constrains, and the workspace record is (see
+// pkg/workspace/delegationstore.go). This handler is one of the two sanctioned
+// writers; the other is the update_workspace tool's new-member auto-seed.
 //
 // This graph IS the runtime authority — the ONLY delegation-enforcement
 // mechanism (ADR-037). Per-workspace delegation enforcement reads these edges
@@ -174,11 +199,24 @@ func (a *restAPI) handleWorkspaceDelegationPut(w http.ResponseWriter, r *http.Re
 		return
 	}
 
+	// The EXISTING edge set comes from the delegation store, not the workspace
+	// record. An untrusted store record fails the write closed rather than
+	// deriving the team from a graph we cannot read (which would silently
+	// narrow the team to core_team and reject legitimate edges for a reason the
+	// operator can neither see nor act on). Repair is to remove the corrupt
+	// entities/delegation/<id>.json and re-save from the Team tab.
+	existing, storeOK := workspace.LoadDelegation(a.homePath, id)
+	if !storeOK {
+		slog.Error("rest: update workspace delegation: store record unreadable or untrusted", "id", id)
+		jsonErr(w, http.StatusInternalServerError, "workspace delegation record is unreadable")
+		return
+	}
+
 	cfg := a.agentLoop.GetConfig()
 	// Validate edge endpoints against the workspace TEAM (core_team ∪ existing-edge
 	// endpoints), not the whole config roster — an edge write must not silently
 	// add an off-team agent to the workspace team. team ⊆ roster by construction.
-	team := workspaceTeamSet(ws)
+	team := workspace.TeamSet(ws.CoreTeam, existing)
 	ceiling := delegationDepthCeiling(cfg)
 
 	edges, errMsg := buildWorkspaceDelegationEdges(req.Edges, team, ceiling)
@@ -187,10 +225,16 @@ func (a *restAPI) handleWorkspaceDelegationPut(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	ws.Delegation = edges
+	// Persist to the delegation store. LockID(id) is already held above, which
+	// is SaveDelegation's stated caller contract.
+	if err := workspace.SaveDelegation(a.homePath, id, edges); err != nil {
+		slog.Error("rest: update workspace delegation", "error", err, "id", id)
+		jsonErr(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
 	ws.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	if err := writeWorkspaceFile(a.homePath, ws); err != nil {
-		slog.Error("rest: update workspace delegation", "error", err, "id", id)
+		slog.Error("rest: update workspace delegation: touch record", "error", err, "id", id)
 		jsonErr(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
@@ -205,7 +249,7 @@ func (a *restAPI) handleWorkspaceDelegationPut(w http.ResponseWriter, r *http.Re
 		}
 	}
 
-	jsonOK(w, workspaceDelegationToWire(ws, ceiling))
+	jsonOK(w, workspaceDelegationToWire(ws, edges, ceiling))
 }
 
 // defaultWorkspaceDelegationEdges derives the seed delegation graph for a new
@@ -416,8 +460,18 @@ func seedEdgesForTeam(edges []storedDelegationEdge, team []string) []storedDeleg
 // It is a thin adapter over the canonical workspace.TeamSet, which is the SINGLE
 // derivation shared with the update_workspace tool — the two write paths can no
 // longer diverge (they previously differed on whitespace trimming).
-func workspaceTeamSet(ws storedWorkspace) map[string]bool {
-	return workspace.TeamSet(ws.CoreTeam, ws.Delegation)
+//
+// The existing-edge half is loaded from the DELEGATION STORE (home is needed
+// for that), never from a field on the workspace record — the record is
+// writable by the sandboxed child the delegation decision constrains, so
+// deriving team membership from it would let that child widen its own team.
+// An unreadable/untrusted store contributes NO endpoints (deny-by-default);
+// the two callers that need to distinguish that case from "no edges" — the
+// delegation GET/PUT handlers — call workspace.LoadDelegation directly and
+// fail closed on !ok rather than going through this helper.
+func workspaceTeamSet(home string, ws storedWorkspace) map[string]bool {
+	stored, _ := workspace.LoadDelegation(home, ws.ID)
+	return workspace.TeamSet(ws.CoreTeam, stored)
 }
 
 // buildWorkspaceDelegationEdges validates and normalises the incoming edge list

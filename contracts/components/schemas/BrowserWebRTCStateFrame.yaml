@@ -43,6 +43,7 @@ properties:
       - lite_build
       - error
       - multi_agent_capture_denied
+      - ingest_timeout
     description: >-
       Present when available=false (or when active unexpectedly drops to
       false): disabled = tools.browser.webrtc_enabled is off; not_capable =
@@ -52,7 +53,12 @@ properties:
       out, ADR-047 D7); error = a runtime failure (capture/encoder/ICE)
       took the WebRTC path out of service for this session;
       multi_agent_capture_denied = another agent's capture is already
-      being viewed (ADR-048 condition 2; v1 is single-capture).
+      being viewed (ADR-048 condition 2; v1 is single-capture);
+      ingest_timeout = the capture pipeline produced no video track within
+      waitForTracksTimeout (webrtc.ErrNoIngestVideoTrack) — distinct from
+      error because the cause sits UPSTREAM of ICE, the encoder page never
+      delivered frames, so retrying the viewer connection is usually futile
+      while restarting capture is not.
   has_audio:
     type: boolean
     description: >-

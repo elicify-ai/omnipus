@@ -19,7 +19,6 @@
 package agent
 
 import (
-	"bytes"
 	"log/slog"
 	"testing"
 
@@ -34,13 +33,9 @@ import (
 // into. Same technique this package already uses for exactly this class of
 // requirement — see wave3_fix5b_test.go's inline slog.SetDefault capture —
 // asserting on real emitted bytes rather than a recording spy.
-func u22CaptureLogs(t *testing.T) *bytes.Buffer {
+func u22CaptureLogs(t *testing.T) *raceFreeLogBuffer {
 	t.Helper()
-	buf := &bytes.Buffer{}
-	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
-	t.Cleanup(func() { slog.SetDefault(prev) })
-	return buf
+	return captureDefaultSlog(t, slog.LevelWarn)
 }
 
 // TestTranscriptMutate_MissingSessionIsLoggedAndCounted is TDD plan test

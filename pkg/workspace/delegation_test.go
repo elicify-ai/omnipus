@@ -24,15 +24,34 @@ func writeWS(t *testing.T, home, id, body string) {
 	}
 }
 
+// writeDelegationStoreRaw writes a raw delegation-store record for id. Raw
+// (rather than SaveDelegation) so a test can persist a legacy on-disk shape
+// SaveDelegation would normalise away.
+func writeDelegationStoreRaw(t *testing.T, home, id, body string) {
+	t.Helper()
+	dir := DelegationStoreDir(home)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("mkdir delegation store: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, id+".json"), []byte(body), 0o600); err != nil {
+		t.Fatalf("write delegation store: %v", err)
+	}
+}
+
 func TestReadDelegation_ReturnsEdges(t *testing.T) {
 	home := t.TempDir()
+	// The workspace record exists (ReadDelegation still requires it — a
+	// delegation check that cannot locate its governing workspace fails
+	// closed) but carries NO edges. Edges live in the delegation store; see
+	// delegationstore.go for why they cannot live in the record.
+	writeWS(t, home, "ws1", `{"id":"ws1"}`)
 	// Edge 0 is persisted under the legacy 3-value vocabulary ("background") to
 	// double as a migration-transparency check: ReadDelegation must read it back
 	// as the collapsed "direct" mode via DelegationEdge.UnmarshalJSON, with no
 	// separate migration step. Dedicated migration-decode cases (multi-value,
 	// idempotency) live in TestDelegationEdge_UnmarshalJSON_MigratesLegacyModes.
-	writeWS(t, home, "ws1", `{
-		"id":"ws1",
+	writeDelegationStoreRaw(t, home, "ws1", `{
+		"workspace_id":"ws1",
 		"delegation":[
 			{"from_agent":"mia","to_agent":"ray","modes":["background"],"depth":3},
 			{"from_agent":"jim","to_agent":"ava"}
@@ -58,6 +77,41 @@ func TestReadDelegation_ReturnsEdges(t *testing.T) {
 	// Absent modes/depth → nil (= all modes / inherit).
 	if edges[1].Modes != nil || edges[1].Depth != nil {
 		t.Fatalf("edge 1 should have nil modes/depth, got: %+v", edges[1])
+	}
+}
+
+func TestReadDelegation_EmptyEdgesIsNotError_StoreAbsent(t *testing.T) {
+	home := t.TempDir()
+	writeWS(t, home, "ws1", `{"id":"ws1"}`) // no delegation store file at all
+
+	edges, err := ReadDelegation(home, "ws1")
+	if err != nil {
+		t.Fatalf("a workspace with no delegation store record must not error: %v", err)
+	}
+	if len(edges) != 0 {
+		t.Fatalf("expected 0 edges, got %d", len(edges))
+	}
+}
+
+// TestReadDelegation_FailsClosedOnUntrustedStoreRecord: a delegation record
+// that exists but cannot be trusted is a HARD error, never an empty graph.
+// The gate turns the error into a denial; an empty graph would also deny
+// today, but silently — and any future caller that distinguishes "no edges"
+// from "cannot tell" would then fall open.
+func TestReadDelegation_FailsClosedOnUntrustedStoreRecord(t *testing.T) {
+	cases := map[string]string{
+		"malformed JSON":                 `{not valid json`,
+		"workspace_id disagrees with id": `{"workspace_id":"other","delegation":[]}`,
+	}
+	for name, body := range cases {
+		t.Run(name, func(t *testing.T) {
+			home := t.TempDir()
+			writeWS(t, home, "ws1", `{"id":"ws1"}`)
+			writeDelegationStoreRaw(t, home, "ws1", body)
+			if _, err := ReadDelegation(home, "ws1"); err == nil {
+				t.Fatal("an untrusted delegation record must be a hard error (fail closed at the gate)")
+			}
+		})
 	}
 }
 
@@ -114,19 +168,6 @@ func TestDelegationEdge_UnmarshalJSON_MigratesLegacyModes(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-func TestReadDelegation_EmptyEdgesIsNotError(t *testing.T) {
-	home := t.TempDir()
-	writeWS(t, home, "ws1", `{"id":"ws1"}`) // no delegation key
-
-	edges, err := ReadDelegation(home, "ws1")
-	if err != nil {
-		t.Fatalf("a workspace with no edges must not error: %v", err)
-	}
-	if len(edges) != 0 {
-		t.Fatalf("expected 0 edges, got %d", len(edges))
 	}
 }
 

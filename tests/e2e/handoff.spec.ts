@@ -317,7 +317,7 @@ test(
 
     // Assert: at least one collapsed block is present with correct structure.
     const blockCount = await collapsedBlock.count();
-    expect(blockCount).toBeGreaterThanOrEqual(1, 'at least one SubagentBlock must be rendered');
+    expect(blockCount, 'at least one SubagentBlock must be rendered').toBeGreaterThanOrEqual(1);
 
     // BDD Scenario 4: click the collapsed header → expanded region appears.
     await collapsedBlock.first().click();

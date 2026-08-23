@@ -187,6 +187,45 @@ it — **with a control**. Two attempts to verify this produced false results: o
 wrong payload shape (rejected for unrelated reasons), one used `typeof` assertions that can
 never fail. Only a probe with a passing control proved anything.
 
+### 9. A project-references root checks only what its sub-projects include
+
+`npm run typecheck` is the TypeScript gate, and CI runs it as the job "TypeScript Type
+Check". It ran `tsc -b --noEmit` against `tsconfig.json` — which is a references root with
+no `include`/`files` of its own. It delegated to exactly two sub-projects:
+`tsconfig.app.json` (`include: ["src"]`) and `tsconfig.node.json` (`include:
+["vite.config.ts", "vite.lib.config.ts"]`).
+
+Everything else was checked by **nothing**: all 79 TypeScript files under `tests/e2e/`
+(every Playwright spec, every fixture, global setup/teardown), `playwright.config.ts`, and
+`packages/ui/src/index.ts`. `-b` was correct — the well-known trap in that file's own header
+— and it still checked nothing there, because `-b` builds the referenced projects and those
+projects did not reference the code.
+
+Measured with a control:
+
+| injected `const x: number = "not a number"` in | exit | `error TS` lines |
+|---|---|---|
+| `tests/e2e/about.spec.ts` | **0** | **0** |
+| `src/lib/utils.ts` (control) | 2 | 1 |
+
+Turning the gate on surfaced **16 pre-existing errors across six specs**, several of them
+real defects rather than type noise: seven `selectOption({ label: /regex/ })` calls that can
+never match (the option is typed `string` and compared with `===` in Playwright's injected
+script), five `expect(x).toBe(y, 'message')` calls whose message was silently discarded (the
+message argument belongs on `expect()`, not the matcher), and two `locator(..., { exact:
+false })` options that are not part of `LocatorOptions` at all.
+
+Fixed by adding `tsconfig.tests.json` as a third referenced sub-project, with
+`tsconfig.app.json`'s strictness flags copied verbatim, plus `packages/ui/src` on
+`tsconfig.app.json`'s include. `playwright.config.ts` and `packages/**` were also added to
+the `spa` path filter in `.github/workflows/pr.yml` — the `typecheck` job is
+path-filtered, so a gate that covers a file but never runs for it is the same false green.
+
+**Rule:** for any references root, the question is never "does the gate run?" but "what is
+in some sub-project's `include`?" Anything outside every `include` is invisible, and the
+gate reports green over it forever. Prove coverage the same way every time — inject an
+error, run the gate, and inject the control.
+
 ---
 
 ## Environment traps that masquerade as bugs

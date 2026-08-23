@@ -15,6 +15,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/config"
 	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
+	workspacepkg "github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
 // ---- helpers ----
@@ -60,23 +61,25 @@ func TestWorkspaceUpdate_PreservesDelegationGraph(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(wsPath), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	// A workspace WITH a delegation graph (as the gateway seeds it).
+	// A workspace WITH a delegation graph (as the gateway seeds it). The graph
+	// lives in the delegation store, NOT the workspace record — see
+	// pkg/workspace/delegationstore.go.
 	original := `{
 		"id": "` + id + `",
 		"name": "My Workspace",
 		"status": "active",
 		"core_team": ["mia","jim","ava","ray"],
 		"is_default": true,
-		"delegation": [
-			{"from_agent":"mia","to_agent":"worker","modes":["task","background"]},
-			{"from_agent":"jim","to_agent":"ava","modes":["task"]}
-		],
 		"created_at": "2026-06-27T17:41:35Z",
 		"updated_at": "2026-06-27T17:41:35Z"
 	}`
 	if err := os.WriteFile(wsPath, []byte(original), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	seedDelegationStoreForTest(t, home, id, `[
+		{"from_agent":"mia","to_agent":"worker","modes":["task","background"]},
+		{"from_agent":"jim","to_agent":"ava","modes":["task"]}
+	]`)
 
 	// Update the workspace exactly as Ava did: add a new agent to core_team.
 	res := systools.NewWorkspaceUpdateTool(deps).Execute(context.Background(), map[string]any{
@@ -88,6 +91,11 @@ func TestWorkspaceUpdate_PreservesDelegationGraph(t *testing.T) {
 	}
 
 	// The delegation graph must survive the update.
+	edges := delegationEdgesFromDisk(t, home, id)
+	if len(edges) != 2 {
+		t.Fatalf("delegation graph LOST/altered by update_workspace: got %v (want 2 edges)", edges)
+	}
+	// ...and must NOT have been copied into the child-writable workspace record.
 	data, err := os.ReadFile(wsPath)
 	if err != nil {
 		t.Fatal(err)
@@ -96,9 +104,8 @@ func TestWorkspaceUpdate_PreservesDelegationGraph(t *testing.T) {
 	if err := json.Unmarshal(data, &got); err != nil {
 		t.Fatalf("workspace JSON unparseable after update: %v", err)
 	}
-	edges, ok := got["delegation"].([]any)
-	if !ok || len(edges) != 2 {
-		t.Fatalf("delegation graph LOST/altered by update_workspace: got %v (want 2 edges)", got["delegation"])
+	if _, leaked := got["delegation"]; leaked {
+		t.Errorf("update_workspace wrote the edge list back into the workspace record: %v", got["delegation"])
 	}
 	// Sanity: the core_team change still applied.
 	if team, _ := got["core_team"].([]any); len(team) != 5 {
@@ -108,11 +115,18 @@ func TestWorkspaceUpdate_PreservesDelegationGraph(t *testing.T) {
 
 // TestWorkspaceUpdate_FullFieldRoundTrip asserts that a gateway-authored workspace
 // file containing EVERY on-disk field (id, name, description, status, pinned,
-// pin_order, core_team, owner, is_default, delegation,
-// created_at, updated_at) survives an update_workspace round-trip with ALL
-// fields intact. This is the acceptance proof of the unified-struct fix: the
-// shared workspace.Workspace type ensures no field written by the gateway path
-// can be silently dropped by the tool write path.
+// pin_order, core_team, owner, is_default, created_at, updated_at) survives an
+// update_workspace round-trip with ALL fields intact. This is the acceptance
+// proof of the unified-struct fix: the shared workspace.Workspace type ensures
+// no field written by the gateway path can be silently dropped by the tool
+// write path.
+//
+// `delegation` is deliberately NOT one of those fields any more (issue #636 —
+// see pkg/workspace/delegationstore.go): the edge list moved to its own store
+// because the workspace record is writable by the sandboxed child the edges
+// constrain. The round-trip property still applies to it, so this test asserts
+// it in its real location — the STORE record must be byte-identical after the
+// rename — and additionally asserts nothing leaked back into the record.
 func TestWorkspaceUpdate_FullFieldRoundTrip(t *testing.T) {
 	deps, home := newTestDepsWithHome(t)
 
@@ -133,16 +147,16 @@ func TestWorkspaceUpdate_FullFieldRoundTrip(t *testing.T) {
 		"core_team": ["mia","jim","ava","ray"],
 		"owner": "alice",
 		"is_default": false,
-		"delegation": [
-			{"from_agent":"jim","to_agent":"ava","modes":["await","task"],"depth":2},
-			{"from_agent":"mia","to_agent":"ray"}
-		],
 		"created_at": "2026-06-20T10:00:00Z",
 		"updated_at": "2026-06-20T10:00:00Z"
 	}`
 	if err := os.WriteFile(wsPath, []byte(original), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	seedDelegationStoreForTest(t, home, id, `[
+		{"from_agent":"jim","to_agent":"ava","modes":["await","task"],"depth":2},
+		{"from_agent":"mia","to_agent":"ray"}
+	]`)
 
 	// Perform a minimal update — rename only. All other fields must be unchanged.
 	res := systools.NewWorkspaceUpdateTool(deps).Execute(context.Background(), map[string]any{
@@ -202,13 +216,20 @@ func TestWorkspaceUpdate_FullFieldRoundTrip(t *testing.T) {
 		t.Errorf("core_team: want 4 entries, got %v", got["core_team"])
 	}
 
-	// Delegation graph must survive with correct structure.
-	edges, ok := got["delegation"].([]any)
-	if !ok || len(edges) != 2 {
-		t.Fatalf("delegation: want 2 edges, got %v", got["delegation"])
+	// The edge list must NEVER be written back into the workspace record — it
+	// is writable by the principal the edges constrain, so a copy there is a
+	// latent authorization source (issue #636).
+	if _, leaked := got["delegation"]; leaked {
+		t.Errorf("update_workspace wrote the edge list into the workspace record: %v", got["delegation"])
+	}
+
+	// Delegation graph must survive with correct structure, in the store.
+	edges := delegationEdgesFromDisk(t, home, id)
+	if len(edges) != 2 {
+		t.Fatalf("delegation: want 2 edges in the delegation store, got %v", edges)
 	}
 	// First edge: jim→ava with modes and depth.
-	e0, _ := edges[0].(map[string]any)
+	e0 := edges[0]
 	if e0["from_agent"] != "jim" || e0["to_agent"] != "ava" {
 		t.Errorf("delegation edge 0 from/to: got %v→%v", e0["from_agent"], e0["to_agent"])
 	}
@@ -219,7 +240,7 @@ func TestWorkspaceUpdate_FullFieldRoundTrip(t *testing.T) {
 		t.Errorf("delegation edge 0 depth: want 2, got %v", e0["depth"])
 	}
 	// Second edge: mia→ray with nil modes/depth (omitempty).
-	e1, _ := edges[1].(map[string]any)
+	e1 := edges[1]
 	if e1["from_agent"] != "mia" || e1["to_agent"] != "ray" {
 		t.Errorf("delegation edge 1 from/to: got %v→%v", e1["from_agent"], e1["to_agent"])
 	}
@@ -670,17 +691,34 @@ func TestWorkspaceUpdate_InvalidStatus(t *testing.T) {
 // deliberate prior removal via the Team tab stays removed) and never
 // duplicating an edge that already exists.
 
-// delegationEdgesFromDisk reads workspaces/<id>.json and returns its
-// "delegation" array as []map[string]any for assertions.
+// delegationEdgesFromDisk reads the workspace's PERSISTED delegation edges and
+// returns them as []map[string]any for assertions.
+//
+// The one and only persisted location is the delegation store,
+// $OMNIPUS_HOME/entities/delegation/<id>.json — NOT workspaces/<id>.json, which
+// is writable by the sandboxed child the edges constrain (issue #636,
+// pkg/workspace/delegationstore.go). Reading the record here would assert on a
+// location nothing enforces from.
+//
+// An absent store record means "no edges" (the normal state for a workspace
+// with no delegation) and yields an empty slice; an UNREADABLE one fails the
+// test rather than reading as empty.
 func delegationEdgesFromDisk(t *testing.T, home, id string) []map[string]any {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(home, "workspaces", id+".json"))
+	path, err := workspacepkg.DelegationStorePath(home, id)
 	if err != nil {
-		t.Fatalf("read workspace file: %v", err)
+		t.Fatalf("delegation store path: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		t.Fatalf("read delegation store record: %v", err)
 	}
 	var raw map[string]any
 	if err := json.Unmarshal(data, &raw); err != nil {
-		t.Fatalf("workspace JSON unparseable: %v", err)
+		t.Fatalf("delegation store JSON unparseable: %v", err)
 	}
 	rawEdges, _ := raw["delegation"].([]any)
 	out := make([]map[string]any, 0, len(rawEdges))
@@ -692,6 +730,25 @@ func delegationEdgesFromDisk(t *testing.T, home, id string) []map[string]any {
 		out = append(out, em)
 	}
 	return out
+}
+
+// seedDelegationStoreForTest writes a workspace's delegation edges to the
+// delegation store from a raw JSON array literal — the pre-existing graph a
+// test starts from. Raw JSON (rather than workspace.SaveDelegation) so a test
+// can seed a legacy on-disk mode vocabulary the typed writer would normalise.
+func seedDelegationStoreForTest(t *testing.T, home, id, edgesJSON string) {
+	t.Helper()
+	path, err := workspacepkg.DelegationStorePath(home, id)
+	if err != nil {
+		t.Fatalf("delegation store path: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatalf("mkdir delegation store: %v", err)
+	}
+	body := `{"workspace_id":"` + id + `","delegation":` + edgesJSON + `}`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write delegation store record: %v", err)
+	}
 }
 
 // findEdge returns the edge with the given from/to, or nil if absent.
@@ -820,15 +877,15 @@ func TestWorkspaceUpdate_SeedDedupesExistingEdge(t *testing.T) {
 		"name": "Dedup Test",
 		"status": "active",
 		"core_team": ["ava"],
-		"delegation": [
-			{"from_agent":"jim","to_agent":"worker","modes":["task"]}
-		],
 		"created_at": "2026-01-01T00:00:00Z",
 		"updated_at": "2026-01-01T00:00:00Z"
 	}`
 	if err := os.WriteFile(wsPath, []byte(original), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	seedDelegationStoreForTest(t, home, id, `[
+		{"from_agent":"jim","to_agent":"worker","modes":["task"]}
+	]`)
 
 	res := systools.NewWorkspaceUpdateTool(deps).Execute(context.Background(), map[string]any{
 		"id":        id,
@@ -926,15 +983,15 @@ func TestWorkspaceUpdate_NoCoreTeamArg_DelegationUntouched(t *testing.T) {
 		"name": "Untouched Test",
 		"status": "active",
 		"core_team": ["ava", "jim"],
-		"delegation": [
-			{"from_agent":"jim","to_agent":"ava","modes":["task"]}
-		],
 		"created_at": "2026-01-01T00:00:00Z",
 		"updated_at": "2026-01-01T00:00:00Z"
 	}`
 	if err := os.WriteFile(wsPath, []byte(original), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	seedDelegationStoreForTest(t, home, id, `[
+		{"from_agent":"jim","to_agent":"ava","modes":["task"]}
+	]`)
 
 	// Update only the name — no core_team key present in args at all.
 	res := systools.NewWorkspaceUpdateTool(deps).Execute(context.Background(), map[string]any{
@@ -981,17 +1038,17 @@ func TestWorkspaceUpdate_RemovalOnly_NoNewEdgesNoGC(t *testing.T) {
 		"name": "Removal Test",
 		"status": "active",
 		"core_team": ["ava", "jim", "worker"],
-		"delegation": [
-			{"from_agent":"jim","to_agent":"ava","modes":["task","direct"]},
-			{"from_agent":"jim","to_agent":"worker","modes":["task","direct"]},
-			{"from_agent":"ava","to_agent":"worker","modes":["task","direct"]}
-		],
 		"created_at": "2026-01-01T00:00:00Z",
 		"updated_at": "2026-01-01T00:00:00Z"
 	}`
 	if err := os.WriteFile(wsPath, []byte(original), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	seedDelegationStoreForTest(t, home, id, `[
+		{"from_agent":"jim","to_agent":"ava","modes":["task","direct"]},
+		{"from_agent":"jim","to_agent":"worker","modes":["task","direct"]},
+		{"from_agent":"ava","to_agent":"worker","modes":["task","direct"]}
+	]`)
 
 	// Remove "worker" from core_team — no additions.
 	res := systools.NewWorkspaceUpdateTool(deps).Execute(context.Background(), map[string]any{
@@ -1109,17 +1166,17 @@ func TestWorkspaceUpdate_CombinedAddRemove_SeedsAdditionsPreservesRemovedEdges(t
 		"name": "Combined Add Remove Test",
 		"status": "active",
 		"core_team": ["ava", "jim", "worker"],
-		"delegation": [
-			{"from_agent":"jim","to_agent":"ava","modes":["task","direct"]},
-			{"from_agent":"jim","to_agent":"worker","modes":["task","direct"]},
-			{"from_agent":"ava","to_agent":"worker","modes":["task","direct"]}
-		],
 		"created_at": "2026-01-01T00:00:00Z",
 		"updated_at": "2026-01-01T00:00:00Z"
 	}`
 	if err := os.WriteFile(wsPath, []byte(original), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	seedDelegationStoreForTest(t, home, id, `[
+		{"from_agent":"jim","to_agent":"ava","modes":["task","direct"]},
+		{"from_agent":"jim","to_agent":"worker","modes":["task","direct"]},
+		{"from_agent":"ava","to_agent":"worker","modes":["task","direct"]}
+	]`)
 
 	// Remove jim, add ray — in one call.
 	res := systools.NewWorkspaceUpdateTool(deps).Execute(context.Background(), map[string]any{

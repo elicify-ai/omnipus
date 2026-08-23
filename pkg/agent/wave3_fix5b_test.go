@@ -21,10 +21,8 @@
 package agent
 
 import (
-	"bytes"
 	"context"
 	"log/slog"
-	"sync"
 	"testing"
 	"time"
 
@@ -271,10 +269,16 @@ func TestSpawnSubTurn_AsyncAckNeverFound_LogsWarnAfterRetryBudgetExhausted(t *te
 		transcriptSessionID: sessionID,
 	}
 
-	var logBuf raceFreeLogBuffer
-	oldHandler := slog.Default().Handler()
-	slog.SetDefault(slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn})))
-	defer slog.SetDefault(slog.New(oldHandler))
+	// raceFreeLogBuffer, not bytes.Buffer: slog.SetDefault swaps the
+	// PROCESS-GLOBAL logger, so the async sub-turn spawned below — and any
+	// other goroutine still alive in the test binary — writes into this sink
+	// concurrently with logBuf.String(). Handler stays JSON here (the
+	// assertions below read JSON-encoded output), so this site builds its own
+	// handler rather than using captureDefaultSlog's text one.
+	logBuf := &raceFreeLogBuffer{}
+	prevLogger := slog.Default()
+	t.Cleanup(func() { slog.SetDefault(prevLogger) })
+	slog.SetDefault(slog.New(slog.NewJSONHandler(logBuf, &slog.HandlerOptions{Level: slog.LevelWarn})))
 
 	// Async: true is required — the new warn branch is gated on cfg.Async &&
 	// !found; synchronous delegation's "not found" is the documented,
@@ -293,27 +297,6 @@ func TestSpawnSubTurn_AsyncAckNeverFound_LogsWarnAfterRetryBudgetExhausted(t *te
 	assert.Contains(t, logOutput, sessionID, "the WARN must include the session_id for diagnosis")
 }
 
-// raceFreeLogBuffer is a mutex-protected sink for slog output.
-//
-// The async sub-turn this test spawns keeps running (and logging through the
-// same process-wide slog default) after spawnSubTurn returns, so reading a
-// bare bytes.Buffer here is a genuine data race — the -race build caught it on
-// CI 2026-08-19 as a concurrent Buffer.String()/Write. The race is in the test
-// harness, not the loop: the fix is to synchronize the sink, not to silence
-// the detector.
-type raceFreeLogBuffer struct {
-	mu  sync.Mutex
-	buf bytes.Buffer
-}
-
-func (b *raceFreeLogBuffer) Write(p []byte) (int, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buf.Write(p)
-}
-
-func (b *raceFreeLogBuffer) String() string {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buf.String()
-}
+// raceFreeLogBuffer and captureDefaultSlog now live in test_helpers_test.go —
+// three tests in this package capture the process-global slog default and all
+// of them need the same mutex-protected sink.
