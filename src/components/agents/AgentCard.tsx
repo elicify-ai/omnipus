@@ -22,9 +22,20 @@ function badgeVariantFor(type: string): 'secondary' | 'outline' | 'default' {
   return typeBadgeVariant[type] ?? 'outline'
 }
 
+// T068-28 / ADR-068 FR-014 (SPA half): derive the provider-binding copy for the
+// agent list row. Precedence (resolution #5): ADR-067's degraded_reason
+// "needs_provider" wins over the derived needs_model flag when both apply.
+// Returns null for a healthy agent. Not colour-only: the string itself is the state.
+export function providerBindingCopy(agent: Pick<Agent, 'needs_model' | 'degraded_reason'>): string | null {
+  if (agent.degraded_reason === 'needs_provider') return 'needs a provider'
+  if (agent.needs_model) return 'needs a model'
+  return null
+}
+
 export function AgentCard({ agent, onClick, onSetDefault }: AgentCardProps) {
   const openEditAgentSlideOver = useUiStore((s) => s.openEditAgentSlideOver)
   const handleOpen = onClick ?? (() => openEditAgentSlideOver(agent.id))
+  const bindingCopy = providerBindingCopy(agent)
 
   return (
     <div className="relative group/card">
@@ -98,6 +109,15 @@ export function AgentCard({ agent, onClick, onSetDefault }: AgentCardProps) {
                 >
                   {agent.model.includes('/') ? agent.model.split('/').slice(1).join('/') : agent.model}
                 </span>
+              )}
+              {bindingCopy && (
+                // T068-28 / FR-014: text badge, never colour-only — the copy is the state.
+                <Badge
+                  variant="warning"
+                  className="text-[var(--color-warning)] border-[var(--color-warning)]/30 bg-[var(--color-warning)]/10 font-normal"
+                >
+                  {bindingCopy}
+                </Badge>
               )}
             </div>
             {agent.status === 'draft' && agent.type === 'Main' && (
