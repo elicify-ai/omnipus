@@ -619,6 +619,23 @@ func TestMidTurnBudget_SameBudgetAsWindowTrim(t *testing.T) {
 		}
 	})
 
+	t.Run("the mid-turn site reads the same budget (T066-13)", func(t *testing.T) {
+		src := readOwnedFileForTest(t, "midturn_budget.go")
+		if !strings.Contains(src, "agentContextBudget(ts.agent)") {
+			t.Error("midTurnWindowCheck must derive B via agentContextBudget(ts.agent) — the same helper every other site reads (FR-028)")
+		}
+		if strings.Contains(src, "SummarizeTokenPercent") {
+			t.Error("the mid-turn site must not consult the deleted summarize_token_percent")
+		}
+		// The tool loop hands EVERY admitted result to the check: the count
+		// of loop.go call sites must cover the append sites (8 denial-family
+		// + the main result site + the skipped-results site).
+		loopSrc := readOwnedFileForTest(t, "loop.go")
+		if got := strings.Count(loopSrc, "al.midTurnWindowCheck(ts, messages, providerToolDefs)"); got < 10 {
+			t.Errorf("loop.go has %d midTurnWindowCheck sites; every admitted-result append must be followed by the check (want ≥ 10)", got)
+		}
+	})
+
 	t.Run("SummarizeTokenPercent is absent from pkg/agent", func(t *testing.T) {
 		entries, err := os.ReadDir(".")
 		if err != nil {

@@ -8237,6 +8237,11 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	ts.agent.mu.RUnlock()
 	pendingMessages := append([]providers.Message(nil), ts.opts.InitialSteeringMessages...)
 	var finalContent string
+	// midTurnGuardErr carries the ADR-066 D6 thrash-guard error out of the
+	// per-result mid-turn window checks below (midturn_budget.go). Declared
+	// before the turnLoop label so the `goto turnLoop` below never jumps
+	// over its declaration.
+	var midTurnGuardErr error
 	emptyResponseRetries := 0
 	const maxEmptyResponseRetries = 1
 
@@ -9648,6 +9653,29 @@ turnLoop:
 				logger.WarnCF("agent", "failed to marshal tool call arguments", map[string]any{"tool": tc.Name, "error": marshalErr.Error()})
 				argumentsJSON = []byte("{}")
 			}
+			// ADR-066 D4×D6 (T066-13): an over-bound arguments string never
+			// enters memory. The dispatch below refuses the call from the
+			// PARSED args (FR-016 — this elision cannot mask that check),
+			// and the refusal result names the real size, so echoing the
+			// full blob into the assistant message would plant budget-
+			// busting bytes in the archive and every later request that D5
+			// can never empty (an assistant message is not a tool result) —
+			// DS-3 #2 at the default window would then trip the D6 guard
+			// that B-19 forbids. The elided echo is what the archive, the
+			// window and every reload all see, so live == reload holds with
+			// no projection entry.
+			if bound := toolArgumentsBound(cfg); UserMessageChars(string(argumentsJSON)) > bound {
+				elided, elideErr := json.Marshal(map[string]any{
+					"_omnipus":   "arguments_elided_over_bound",
+					"size_chars": UserMessageChars(string(argumentsJSON)),
+					"cap_chars":  bound,
+				})
+				if elideErr == nil {
+					argumentsJSON = elided
+				} else {
+					argumentsJSON = []byte("{}")
+				}
+			}
 			extraContent := tc.ExtraContent
 			thoughtSignature := ""
 			if tc.Function != nil {
@@ -9750,6 +9778,14 @@ turnLoop:
 					Tool: tc.Name, ToolCallID: tc.ID, Content: payload, IsError: true, ParallelN: len(normalizedToolCalls),
 				}).Message
 				messages = append(messages, deniedMsg)
+				// ADR-066 D6 (T066-13): the window check runs after EVERY admitted
+				// result — empty-only mid-turn, Skip never moves; a thrash-guard fire
+				// ends the turn typed with no further provider call (FR-032).
+				if messages, midTurnGuardErr = al.midTurnWindowCheck(ts, messages, providerToolDefs); midTurnGuardErr != nil {
+					res, status, exitErr := al.typedTurnExit(ts, iteration, llmModel, midTurnGuardErr)
+					turnStatus = status
+					return res, exitErr
+				}
 				al.emitEvent(
 					EventKindToolExecSkipped,
 					ts.eventMeta("runTurn", "turn.tool.skipped"),
@@ -9795,6 +9831,14 @@ turnLoop:
 						Tool: tc.Name, ToolCallID: tc.ID, Content: denyContent, IsError: true, ParallelN: len(normalizedToolCalls),
 					}).Message
 					messages = append(messages, deniedMsg)
+					// ADR-066 D6 (T066-13): the window check runs after EVERY admitted
+					// result — empty-only mid-turn, Skip never moves; a thrash-guard fire
+					// ends the turn typed with no further provider call (FR-032).
+					if messages, midTurnGuardErr = al.midTurnWindowCheck(ts, messages, providerToolDefs); midTurnGuardErr != nil {
+						res, status, exitErr := al.typedTurnExit(ts, iteration, llmModel, midTurnGuardErr)
+						turnStatus = status
+						return res, exitErr
+					}
 					// ADR-058 fix: this branch used to `continue` with no
 					// ClassifyDenial, no recordToolDenial and no budget check
 					// at all — a third-party ProcessHook that denies a tool
@@ -9853,6 +9897,14 @@ turnLoop:
 					Tool: tc.Name, ToolCallID: tc.ID, Content: refusal.ContentForLLM(), IsError: true, ParallelN: len(normalizedToolCalls),
 				}).Message
 				messages = append(messages, refusedMsg)
+				// ADR-066 D6 (T066-13): the window check runs after EVERY admitted
+				// result — empty-only mid-turn, Skip never moves; a thrash-guard fire
+				// ends the turn typed with no further provider call (FR-032).
+				if messages, midTurnGuardErr = al.midTurnWindowCheck(ts, messages, providerToolDefs); midTurnGuardErr != nil {
+					res, status, exitErr := al.typedTurnExit(ts, iteration, llmModel, midTurnGuardErr)
+					turnStatus = status
+					return res, exitErr
+				}
 				al.emitEvent(
 					EventKindToolExecSkipped,
 					ts.eventMeta("runTurn", "turn.tool.skipped"),
@@ -9906,6 +9958,14 @@ turnLoop:
 						Tool: tc.Name, ToolCallID: tc.ID, Content: denyContent, IsError: true, ParallelN: len(normalizedToolCalls),
 					}).Message
 					messages = append(messages, deniedMsg)
+					// ADR-066 D6 (T066-13): the window check runs after EVERY admitted
+					// result — empty-only mid-turn, Skip never moves; a thrash-guard fire
+					// ends the turn typed with no further provider call (FR-032).
+					if messages, midTurnGuardErr = al.midTurnWindowCheck(ts, messages, providerToolDefs); midTurnGuardErr != nil {
+						res, status, exitErr := al.typedTurnExit(ts, iteration, llmModel, midTurnGuardErr)
+						turnStatus = status
+						return res, exitErr
+					}
 					// ADR-058 fix: same rationale as the HookActionDenyTool
 					// branch above — this hook-deny path used to bypass the
 					// ledger entirely (no ClassifyDenial, no
@@ -9954,6 +10014,14 @@ turnLoop:
 					Tool: tc.Name, ToolCallID: tc.ID, Content: denyMsg, IsError: true, ParallelN: len(normalizedToolCalls),
 				}).Message
 				messages = append(messages, deniedMsg)
+				// ADR-066 D6 (T066-13): the window check runs after EVERY admitted
+				// result — empty-only mid-turn, Skip never moves; a thrash-guard fire
+				// ends the turn typed with no further provider call (FR-032).
+				if messages, midTurnGuardErr = al.midTurnWindowCheck(ts, messages, providerToolDefs); midTurnGuardErr != nil {
+					res, status, exitErr := al.typedTurnExit(ts, iteration, llmModel, midTurnGuardErr)
+					turnStatus = status
+					return res, exitErr
+				}
 				al.emitEvent(
 					EventKindToolExecSkipped,
 					ts.eventMeta("runTurn", "turn.tool.skipped"),
@@ -10033,6 +10101,14 @@ turnLoop:
 						Tool: tc.Name, ToolCallID: tc.ID, Content: denyMsg, IsError: true, ParallelN: len(normalizedToolCalls),
 					}).Message
 					messages = append(messages, deniedMsg)
+					// ADR-066 D6 (T066-13): the window check runs after EVERY admitted
+					// result — empty-only mid-turn, Skip never moves; a thrash-guard fire
+					// ends the turn typed with no further provider call (FR-032).
+					if messages, midTurnGuardErr = al.midTurnWindowCheck(ts, messages, providerToolDefs); midTurnGuardErr != nil {
+						res, status, exitErr := al.typedTurnExit(ts, iteration, llmModel, midTurnGuardErr)
+						turnStatus = status
+						return res, exitErr
+					}
 					al.emitEvent(
 						EventKindToolExecSkipped,
 						ts.eventMeta("runTurn", "turn.tool.skipped"),
@@ -10116,6 +10192,14 @@ turnLoop:
 						Tool: tc.Name, ToolCallID: tc.ID, Content: denyMsg, IsError: true, ParallelN: len(normalizedToolCalls),
 					}).Message
 					messages = append(messages, deniedMsg)
+					// ADR-066 D6 (T066-13): the window check runs after EVERY admitted
+					// result — empty-only mid-turn, Skip never moves; a thrash-guard fire
+					// ends the turn typed with no further provider call (FR-032).
+					if messages, midTurnGuardErr = al.midTurnWindowCheck(ts, messages, providerToolDefs); midTurnGuardErr != nil {
+						res, status, exitErr := al.typedTurnExit(ts, iteration, llmModel, midTurnGuardErr)
+						turnStatus = status
+						return res, exitErr
+					}
 					al.emitEvent(
 						EventKindToolExecSkipped,
 						ts.eventMeta("runTurn", "turn.tool.skipped"),
@@ -10336,6 +10420,14 @@ turnLoop:
 						Tool: tc.Name, ToolCallID: tc.ID, Content: errMsg, IsError: true, ParallelN: len(normalizedToolCalls),
 					}).Message
 					messages = append(messages, deniedMsg)
+					// ADR-066 D6 (T066-13): the window check runs after EVERY admitted
+					// result — empty-only mid-turn, Skip never moves; a thrash-guard fire
+					// ends the turn typed with no further provider call (FR-032).
+					if messages, midTurnGuardErr = al.midTurnWindowCheck(ts, messages, providerToolDefs); midTurnGuardErr != nil {
+						res, status, exitErr := al.typedTurnExit(ts, iteration, llmModel, midTurnGuardErr)
+						turnStatus = status
+						return res, exitErr
+					}
 					al.emitEvent(
 						EventKindToolExecSkipped,
 						ts.eventMeta("runTurn", "turn.tool.skipped"),
@@ -10778,6 +10870,14 @@ turnLoop:
 			if recallDecision.inject {
 				messages = al.spliceRecallSpan(ts, messages, recallDecision.span)
 			}
+			// ADR-066 D6 (T066-13): the window check runs after EVERY admitted
+			// result — empty-only mid-turn, Skip never moves; a thrash-guard fire
+			// ends the turn typed with no further provider call (FR-032).
+			if messages, midTurnGuardErr = al.midTurnWindowCheck(ts, messages, providerToolDefs); midTurnGuardErr != nil {
+				res, status, exitErr := al.typedTurnExit(ts, iteration, llmModel, midTurnGuardErr)
+				turnStatus = status
+				return res, exitErr
+			}
 
 			if steerMsgs := al.dequeueSteeringMessagesForScope(ts.sessionKey); len(steerMsgs) > 0 {
 				pendingMessages = append(pendingMessages, steerMsgs...)
@@ -10859,6 +10959,14 @@ turnLoop:
 						followUps:  append([]bus.InboundMessage(nil), ts.followUps...),
 						turnFailed: ts.turnFailed,
 					}, nil
+				}
+				// ADR-066 D6 (T066-13): the window check runs after EVERY admitted
+				// result — empty-only mid-turn, Skip never moves; a thrash-guard fire
+				// ends the turn typed with no further provider call (FR-032).
+				if messages, midTurnGuardErr = al.midTurnWindowCheck(ts, messages, providerToolDefs); midTurnGuardErr != nil {
+					res, status, exitErr := al.typedTurnExit(ts, iteration, llmModel, midTurnGuardErr)
+					turnStatus = status
+					return res, exitErr
 				}
 				break
 			}

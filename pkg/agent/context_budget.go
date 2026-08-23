@@ -137,8 +137,9 @@ func pinnedCoreOverheadTokens(agent *AgentInstance) int {
 }
 
 // agentContextBudget resolves B for one agent instance — the single call
-// every budget site (pre-turn, timeout-recovery, windowTrim, model-switch;
-// mid-turn once T066-13 lands) makes, so they can never disagree.
+// every budget site (pre-turn, mid-turn after every admitted result,
+// timeout-recovery, windowTrim, model-switch) makes, so they can never
+// disagree.
 //
 // The window is the one ResolveWindow resolved (ADR-066 D2), read under the
 // instance mutex. There is no fallback: an exempt agent (subprocess-CLI
@@ -154,19 +155,14 @@ func agentContextBudget(agent *AgentInstance) int {
 	return contextBudget(contextWindow, agent.MaxTokens, pinnedCoreOverheadTokens(agent))
 }
 
-// isOverContextBudget reports whether the assembled request would exceed the
-// budget B (see contextBudget). It counts every message except the pinned
-// system prompt at messages[0] — that cost is already inside B via
-// pinnedCoreOverhead — plus the tool surface. System-role notes the turn
-// injects after the pinned prompt (scratchpad, workspace instructions,
-// manifest) are real request bytes and DO count. The output reserve is not
-// added here either: B already subtracted it. This enables proactive
-// trimming before calling the LLM, rather than reacting to 400 errors.
-func isOverContextBudget(
-	budget int,
-	messages []providers.Message,
-	toolDefs []providers.ToolDefinition,
-) bool {
+// requestTokens is FR-029's `total`: the estimator cost of the assembled
+// request — every message except the pinned system prompt at messages[0]
+// (that cost is already inside B via pinnedCoreOverhead) plus the tool
+// surface. System-role notes the turn injects after the pinned prompt
+// (scratchpad, workspace instructions, manifest) are real request bytes and
+// DO count; so does an injected recall span, which lives in the slice. The
+// output reserve is not added: B already subtracted it.
+func requestTokens(messages []providers.Message, toolDefs []providers.ToolDefinition) int {
 	msgTokens := 0
 	for i, m := range messages {
 		if i == 0 && m.Role == "system" {
@@ -174,8 +170,19 @@ func isOverContextBudget(
 		}
 		msgTokens += estimateMessageTokens(m)
 	}
+	return msgTokens + estimateToolDefsTokens(toolDefs)
+}
 
-	toolTokens := estimateToolDefsTokens(toolDefs)
-
-	return msgTokens+toolTokens > budget
+// isOverContextBudget reports whether the assembled request would exceed the
+// budget B (see contextBudget): requestTokens > B. Every budget site —
+// pre-turn, mid-turn (midturn_budget.go), timeout-recovery, model-switch —
+// compares through this predicate or requestTokens directly, so the sites
+// cannot disagree (FR-028). This enables proactive trimming before calling
+// the LLM, rather than reacting to 400 errors.
+func isOverContextBudget(
+	budget int,
+	messages []providers.Message,
+	toolDefs []providers.ToolDefinition,
+) bool {
+	return requestTokens(messages, toolDefs) > budget
 }
