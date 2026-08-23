@@ -1819,3 +1819,78 @@ jobs:
           if [ -f /tmp/omnipus.pid ]; then
             kill "$(cat /tmp/omnipus.pid)" 2>/dev/null || true
           fi
+
+  # ---------------------------------------------------------------------------
+  # The single required check.
+  #
+  # Branch protection currently names JOB IDS (typecheck, lint, test, security,
+  # perf-smoke, playwright, wire-types-lint, verify-contracts). GitHub reports
+  # check runs under a job's DISPLAY NAME, and every one of those jobs sets
+  # `name:` — so the required contexts match nothing that is ever emitted, and
+  # `playwright` is a matrix job that can only ever emit "E2E — <group>". The
+  # practical effect is that no result from this workflow gates any merge.
+  #
+  # Requiring eight name strings that must each stay in sync with a `name:`
+  # field is the kind of duplicated definition that drifts silently. This job
+  # exists so protection can require exactly ONE context that cannot drift:
+  # it depends on every gate and re-derives the verdict from their results.
+  #
+  # Semantics, deliberately:
+  #   failure/cancelled in ANY dependency -> fail. No exceptions, no allowlist.
+  #   skipped                             -> pass. Language scoping means a
+  #                                          Go-only PR legitimately skips the
+  #                                          SPA jobs and vice versa.
+  #   changes must have SUCCEEDED         -> otherwise "everything skipped"
+  #                                          reads as success while nothing ran.
+  ci-required:
+    name: CI
+    if: always()
+    needs:
+      - changes
+      - setup
+      - typecheck
+      - lint-spa
+      - vitest
+      - wire-types-lint
+      - tool-error-status-lint
+      - verify-contracts
+      - cli-verb-guard
+      - e2e-shard-check
+      - lint
+      - fast-tier
+      - vuln_check
+      - cgo-gate
+      - test
+      - security
+      - perf-smoke
+      - e2e-plan
+      - playwright
+      - browser-tests-gated
+      - browser-e2e
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every gate to have passed or legitimately skipped
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          echo "$RESULTS"
+
+          # `changes` decides what runs. If it did not succeed, every downstream
+          # skip is meaningless and "all skipped" must not read as a pass.
+          changes_result=$(echo "$RESULTS" | python3 -c \
+            'import json,sys; print(json.load(sys.stdin)["changes"]["result"])')
+          if [ "$changes_result" != "success" ]; then
+            echo "FAIL: the 'changes' job did not succeed (result: $changes_result)." >&2
+            echo "Every other job's skip is therefore uninterpretable — refusing to pass." >&2
+            exit 1
+          fi
+
+          bad=$(echo "$RESULTS" | python3 -c \
+            'import json,sys; d=json.load(sys.stdin); print(" ".join(sorted(k for k,v in d.items() if v["result"] not in ("success","skipped"))))')
+          if [ -n "$bad" ]; then
+            echo "FAIL: these jobs did not pass:" >&2
+            for j in $bad; do echo "  - $j" >&2; done
+            exit 1
+          fi
+          echo "OK: every gate passed or was legitimately skipped."
