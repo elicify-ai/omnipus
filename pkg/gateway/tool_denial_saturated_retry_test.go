@@ -154,7 +154,7 @@ func TestSaturatedDenial_PositiveLowerBound_RetrySucceedsAfterQueueDrains(t *tes
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              tmpHome,
-				ModelName:         "scripted-model",
+				DefaultModel:      config.DefaultModel{Model: "scripted-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 20,
 			},

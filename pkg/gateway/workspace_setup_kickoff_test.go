@@ -124,9 +124,9 @@ func newTestWSHandlerForKickoffAudit(t *testing.T, msgBus *bus.MessageBus) (*WSH
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080, DevModeBypass: true},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      workspaceDir,
-				ModelName: "test-default-model",
-				MaxTokens: 4096,
+				Home:         workspaceDir,
+				DefaultModel: config.DefaultModel{Model: "test-default-model"},
+				MaxTokens:    4096,
 			},
 		},
 		Sandbox: config.OmnipusSandboxConfig{AuditLog: true},
@@ -492,9 +492,9 @@ func TestHandleChatMessage_WorkspaceSetupKickoff_NoStore_Rejects(t *testing.T) {
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080, DevModeBypass: true},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      workspaceDir,
-				ModelName: "test-default-model",
-				MaxTokens: 4096,
+				Home:         workspaceDir,
+				DefaultModel: config.DefaultModel{Model: "test-default-model"},
+				MaxTokens:    4096,
 			},
 		},
 	}

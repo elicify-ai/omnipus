@@ -142,7 +142,7 @@ func TestValidateConfigKey_LegitimateKeysStillAccepted(t *testing.T) {
 		"gateway.log_level",
 		"gateway.hot_reload",
 		"gateway.preview_enabled",
-		"agents.defaults.model_name",
+		"agents.defaults.default_model.model",
 		"agents.defaults.default_agent_id",
 		"tools.read_file.max_read_file_size",
 		"tools.web.brave.max_results",
@@ -168,7 +168,7 @@ func TestValidateConfigKey_LegitimateKeysStillAccepted(t *testing.T) {
 func TestValidateConfigKey_BlockedSectionsKeepAWritableSibling(t *testing.T) {
 	siblings := map[string]string{
 		"gateway": "gateway.port",
-		"agents":  "agents.defaults.model_name",
+		"agents":  "agents.defaults.default_model.model",
 		"tools":   "tools.read_file.max_read_file_size",
 	}
 	for section, sibling := range siblings {

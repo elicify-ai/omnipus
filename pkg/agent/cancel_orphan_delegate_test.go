@@ -60,7 +60,7 @@ import (
 func TestSessionTurnsStillAlive_ReturnsOnlyAliveMatchingTurns(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Provider: "mock"},
+			Defaults: config.AgentDefaults{DefaultModel: config.DefaultModel{Provider: "mock"}},
 			List:     []config.AgentConfig{{ID: "mia"}},
 		},
 	}
@@ -149,9 +149,9 @@ func TestRequestCancel_OrphanedBackgroundDelegate_HardAbortedAfterParentGraceful
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      tmpDir,
-				ModelName: "orphan-delegate-test-model",
-				MaxTokens: 4096,
+				Home:         tmpDir,
+				DefaultModel: config.DefaultModel{Model: "orphan-delegate-test-model"},
+				MaxTokens:    4096,
 			},
 			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},

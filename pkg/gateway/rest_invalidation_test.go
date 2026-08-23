@@ -27,9 +27,9 @@ func TestUpdateAgent_InvalidatesPreamble(t *testing.T) {
 
 	cfg := &config.Config{}
 	cfg.Agents.Defaults = config.AgentDefaults{
-		Home:      tmpDir,
-		ModelName: "test-model",
-		MaxTokens: 4096,
+		Home:         tmpDir,
+		DefaultModel: config.DefaultModel{Model: "test-model"},
+		MaxTokens:    4096,
 	}
 
 	msgBus := bus.NewMessageBus()

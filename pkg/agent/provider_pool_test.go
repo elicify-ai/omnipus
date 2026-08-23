@@ -27,8 +27,7 @@ func newPoolTestConfig(t *testing.T) *config.Config {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              t.TempDir(),
-				Provider:          "openrouter",
-				ModelName:         "openrouter-default",
+				DefaultModel:      config.DefaultModel{Provider: "openrouter", Model: "openrouter/anthropic/claude-sonnet-4.6"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},

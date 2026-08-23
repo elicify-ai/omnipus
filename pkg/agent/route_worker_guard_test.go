@@ -32,7 +32,7 @@ func TestResolveMessageRoute_ExplicitWorkerAgentIDDegradesToDefault(t *testing.T
 
 	cfg := &config.Config{}
 	cfg.Agents.Defaults.Home = filepath.Join(home, "default-workspace")
-	cfg.Agents.Defaults.ModelName = "test-model"
+	cfg.Agents.Defaults.DefaultModel = config.DefaultModel{Model: "test-model"}
 	// The route cascade reads cfg.Agents.List to resolve the default — give it a
 	// chat-target default and a worker.
 	cfg.Agents.List = []config.AgentConfig{
@@ -78,7 +78,7 @@ func TestResolveMessageRoute_WorkerHandoffPinClearedAndFallsBack(t *testing.T) {
 
 	cfg := &config.Config{}
 	cfg.Agents.Defaults.Home = filepath.Join(home, "default-workspace")
-	cfg.Agents.Defaults.ModelName = "test-model"
+	cfg.Agents.Defaults.DefaultModel = config.DefaultModel{Model: "test-model"}
 	cfg.Agents.List = []config.AgentConfig{
 		{ID: "mia", Default: true},
 		{ID: "hans", Type: config.AgentTypeWorker},
@@ -125,7 +125,7 @@ func TestResolveMessageRoute_ExplicitBaseAgentIDStillResolves(t *testing.T) {
 
 	cfg := &config.Config{}
 	cfg.Agents.Defaults.Home = filepath.Join(home, "default-workspace")
-	cfg.Agents.Defaults.ModelName = "test-model"
+	cfg.Agents.Defaults.DefaultModel = config.DefaultModel{Model: "test-model"}
 	cfg.Agents.List = []config.AgentConfig{
 		{ID: "mia", Default: true},
 		{ID: "jim"},

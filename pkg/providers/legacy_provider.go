@@ -16,17 +16,18 @@ import (
 // The old providers config is automatically converted to model_list during config loading.
 // Returns the provider, the model ID to use, and any error.
 func CreateProvider(cfg *config.Config) (LLMProvider, string, error) {
-	model := cfg.Agents.Defaults.GetModelName()
+	pair := cfg.Agents.Defaults.DefaultModel
+	model := pair.String()
 
 	// Must have model_list at this point
 	if len(cfg.Providers) == 0 {
 		return nil, "", fmt.Errorf("no providers configured. Please add entries to model_list in your config")
 	}
 
-	// Get model config from model_list
-	modelCfg, err := cfg.GetModelConfig(model)
+	// Resolve the default (provider, model) pair EXACTLY (ADR-068 D14.1).
+	modelCfg, err := cfg.GetModelConfig(pair.Provider, pair.Model)
 	if err != nil {
-		return nil, "", fmt.Errorf("model %q not found in model_list: %w", model, err)
+		return nil, "", fmt.Errorf("default model %q not found in providers: %w", model, err)
 	}
 
 	// Inject global workspace if not set in model config

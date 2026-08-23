@@ -83,7 +83,7 @@ func newTimeoutRegressionHarness(t *testing.T, provider *testutil.ScenarioProvid
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              tmpHome,
-				ModelName:         "scripted-model",
+				DefaultModel:      config.DefaultModel{Model: "scripted-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 20,
 			},

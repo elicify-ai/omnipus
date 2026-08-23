@@ -215,7 +215,7 @@ func TestSpawn_PersistsParentToolCallID_ViaProductionPath(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              t.TempDir(),
-				ModelName:         "test-model",
+				DefaultModel:      config.DefaultModel{Model: "test-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},

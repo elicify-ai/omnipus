@@ -203,7 +203,7 @@ func TestEventForwarder_InternalRateLimitDenial_EmitsExactlyOneFrame(t *testing.
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              workspaceDir,
-				ModelName:         "scripted-model",
+				DefaultModel:      config.DefaultModel{Model: "scripted-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},

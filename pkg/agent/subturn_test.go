@@ -949,7 +949,7 @@ func TestSpawnSubTurn_PanicRecovery(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              t.TempDir(),
-				ModelName:         "test-model",
+				DefaultModel:      config.DefaultModel{Model: "test-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -1065,8 +1065,7 @@ func TestGetActiveTurn(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				ModelName: "gpt-4o-mini",
-				Provider:  "mock",
+				DefaultModel: config.DefaultModel{Provider: "mock", Model: "gpt-4o-mini"},
 			},
 			List: []config.AgentConfig{{ID: "mia"}},
 		},
@@ -1124,8 +1123,7 @@ func TestGetActiveTurn_WithChildren(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				ModelName: "gpt-4o-mini",
-				Provider:  "mock",
+				DefaultModel: config.DefaultModel{Provider: "mock", Model: "gpt-4o-mini"},
 			},
 			List: []config.AgentConfig{{ID: "mia"}},
 		},
@@ -1206,8 +1204,7 @@ func TestInjectFollowUp(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				ModelName: "gpt-4o-mini",
-				Provider:  "mock",
+				DefaultModel: config.DefaultModel{Provider: "mock", Model: "gpt-4o-mini"},
 			},
 			List: []config.AgentConfig{{ID: "mia"}},
 		},
@@ -1236,8 +1233,7 @@ func TestAPIAliases(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				ModelName: "gpt-4o-mini",
-				Provider:  "mock",
+				DefaultModel: config.DefaultModel{Provider: "mock", Model: "gpt-4o-mini"},
 			},
 			List: []config.AgentConfig{{ID: "mia"}},
 		},
@@ -1276,8 +1272,7 @@ func TestInterruptHard_Alias(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				ModelName: "gpt-4o-mini",
-				Provider:  "mock",
+				DefaultModel: config.DefaultModel{Provider: "mock", Model: "gpt-4o-mini"},
 			},
 			List: []config.AgentConfig{{ID: "mia"}},
 		},
@@ -1453,7 +1448,7 @@ func TestConcurrencySemaphore_Timeout(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Provider: "mock",
+				DefaultModel: config.DefaultModel{Provider: "mock"},
 			},
 			List: []config.AgentConfig{{ID: "mia"}},
 		},
@@ -1557,7 +1552,7 @@ func TestContextWrapping_SingleLayer(t *testing.T) {
 			// AgentHomeBasePath() (and the shared session store's baseDir) to
 			// the process's current working directory, shared by every test
 			// in this package/binary that also leaves it unset.
-			Defaults: config.AgentDefaults{Provider: "mock", Home: t.TempDir()},
+			Defaults: config.AgentDefaults{DefaultModel: config.DefaultModel{Provider: "mock"}, Home: t.TempDir()},
 			List:     []config.AgentConfig{{ID: "mia"}},
 		},
 	}
@@ -1620,7 +1615,7 @@ func TestSyncSubTurn_NoChannelDelivery(t *testing.T) {
 		Agents: config.AgentsConfig{
 			// Home MUST be a real, isolated dir — see TestContextWrapping_SingleLayer's
 			// identical note.
-			Defaults: config.AgentDefaults{Provider: "mock", Home: t.TempDir()},
+			Defaults: config.AgentDefaults{DefaultModel: config.DefaultModel{Provider: "mock"}, Home: t.TempDir()},
 			List:     []config.AgentConfig{{ID: "mia"}},
 		},
 	}
@@ -1692,7 +1687,7 @@ func TestAsyncSubTurn_ChannelDelivery(t *testing.T) {
 		Agents: config.AgentsConfig{
 			// Home MUST be a real, isolated dir — see TestContextWrapping_SingleLayer's
 			// identical note.
-			Defaults: config.AgentDefaults{Provider: "mock", Home: t.TempDir()},
+			Defaults: config.AgentDefaults{DefaultModel: config.DefaultModel{Provider: "mock"}, Home: t.TempDir()},
 			List:     []config.AgentConfig{{ID: "mia"}},
 		},
 	}
@@ -1838,7 +1833,7 @@ func TestSpawnDuringAbort_RaceCondition(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Provider: "mock",
+				DefaultModel: config.DefaultModel{Provider: "mock"},
 			},
 			List: []config.AgentConfig{{ID: "mia"}},
 		},
@@ -1938,7 +1933,7 @@ func TestAsyncSubTurn_ParentFinishesEarly(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Provider: "mock",
+				DefaultModel: config.DefaultModel{Provider: "mock"},
 			},
 			List: []config.AgentConfig{{ID: "mia"}},
 		},
@@ -2025,7 +2020,7 @@ func TestAsyncSubTurn_ParentWaitsForChild(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Provider: "mock",
+				DefaultModel: config.DefaultModel{Provider: "mock"},
 			},
 			List: []config.AgentConfig{{ID: "mia"}},
 		},
@@ -2193,7 +2188,7 @@ func TestSubTurn_IndependentContext(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Provider: "mock",
+				DefaultModel: config.DefaultModel{Provider: "mock"},
 			},
 			List: []config.AgentConfig{{ID: "mia"}},
 		},

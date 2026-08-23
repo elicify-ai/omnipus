@@ -195,7 +195,7 @@ func TestDelegateAsyncCompletion_ToolCallThenFinalAnswer_SurvivesParentFinish(t 
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              workspaceDir,
-				ModelName:         "content-routed-mock",
+				DefaultModel:      config.DefaultModel{Model: "content-routed-mock"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -212,7 +212,7 @@ func TestDelegateAsyncCompletion_ToolCallThenFinalAnswer_SurvivesParentFinish(t 
 	gt := &gateTool{unblock: unblock, entered: make(chan struct{})}
 	al.RegisterTool(gt)
 
-	delegateTool := tools.NewDelegateTool(cfg.Agents.Defaults.ModelName, cfg.Agents.Defaults.MaxTokens, 0)
+	delegateTool := tools.NewDelegateTool(cfg.Agents.Defaults.DefaultModel.Model, cfg.Agents.Defaults.MaxTokens, 0)
 	delegateTool.SetSpawner(NewSubTurnSpawner(al))
 	// ADR-057 U14 fixture repair: DelegateTool now refuses to start a
 	// delegated session without a durable lifecycle store wired (fail-closed

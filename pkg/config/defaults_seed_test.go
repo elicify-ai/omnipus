@@ -40,7 +40,7 @@ func TestDefaultsSeed_NoRemovedProvider(t *testing.T) {
 		}
 	}
 
-	if cfg.Agents.Defaults.ModelName != "" {
-		t.Errorf("agents.defaults default model = %q, want zero value (FR-040)", cfg.Agents.Defaults.ModelName)
+	if !cfg.Agents.Defaults.DefaultModel.IsZero() {
+		t.Errorf("agents.defaults.default_model = %+v, want the zero pair (FR-040)", cfg.Agents.Defaults.DefaultModel)
 	}
 }

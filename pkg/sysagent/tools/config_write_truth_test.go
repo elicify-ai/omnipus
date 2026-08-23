@@ -242,8 +242,8 @@ func TestConfigSet_LegitimateWritesStillLand(t *testing.T) {
 			func(c *config.Config) bool { return c.Gateway.Port == 7777 }, "an int field"},
 		{"gateway.host", "127.0.0.5",
 			func(c *config.Config) bool { return c.Gateway.Host == "127.0.0.5" }, "a string field"},
-		{"agents.defaults.model_name", "glm-4.7",
-			func(c *config.Config) bool { return c.Agents.Defaults.ModelName == "glm-4.7" }, "a nested field"},
+		{"agents.defaults.default_model.model", "glm-4.7",
+			func(c *config.Config) bool { return c.Agents.Defaults.DefaultModel.Model == "glm-4.7" }, "a nested field"},
 		{"tools.read_file.max_read_file_size", float64(123456),
 			func(c *config.Config) bool { return c.Tools.ReadFile.MaxReadFileSize == 123456 },
 			"a doubly-nested field"},
@@ -287,28 +287,28 @@ func TestConfigSet_LegitimateWritesStillLand(t *testing.T) {
 // positive a naive "read it back and compare" check would produce.
 //
 // json.Unmarshal MERGES an object into the live struct, so writing
-// {"model_name":…} at "agents.defaults" legitimately leaves every sibling
+// {"default_model":{…}} at "agents.defaults" legitimately leaves every sibling
 // setting standing — the value read back is much larger than the value written.
 // The verification must judge that a success, member by member, not a mismatch.
 func TestConfigSet_ObjectWriteMergesWithoutFalseAlarm(t *testing.T) {
 	deps, cfg := newTestDeps()
 	cfg.Agents.Defaults.MaxTokens = 4242
-	cfg.Agents.Defaults.Provider = "openrouter"
+	cfg.Agents.Defaults.DefaultModel.Provider = "openrouter"
 
 	result := systools.NewConfigSetTool(deps).Execute(context.Background(), map[string]any{
 		"key":   "agents.defaults",
-		"value": map[string]any{"model_name": "glm-4.7"},
+		"value": map[string]any{"default_model": map[string]any{"model": "glm-4.7"}},
 	})
 	if result.IsError {
 		t.Fatalf("set_config(agents.defaults, partial object) = error %s — a partial object "+
 			"write is an ordinary merge, not a failed write", result.ForLLM)
 	}
-	if cfg.Agents.Defaults.ModelName != "glm-4.7" {
-		t.Fatalf("ModelName = %q, want glm-4.7", cfg.Agents.Defaults.ModelName)
+	if cfg.Agents.Defaults.DefaultModel.Model != "glm-4.7" {
+		t.Fatalf("ModelName = %q, want glm-4.7", cfg.Agents.Defaults.DefaultModel.Model)
 	}
-	if cfg.Agents.Defaults.MaxTokens != 4242 || cfg.Agents.Defaults.Provider != "openrouter" {
+	if cfg.Agents.Defaults.MaxTokens != 4242 || cfg.Agents.Defaults.DefaultModel.Provider != "openrouter" {
 		t.Fatalf("the merge dropped siblings: MaxTokens=%d Provider=%q",
-			cfg.Agents.Defaults.MaxTokens, cfg.Agents.Defaults.Provider)
+			cfg.Agents.Defaults.MaxTokens, cfg.Agents.Defaults.DefaultModel.Provider)
 	}
 }
 
@@ -404,7 +404,7 @@ func TestConfigSet_EveryReportedSuccessIsReadableBack(t *testing.T) {
 	}{
 		{"gateway.port", float64(7777)},
 		{"gateway.host", "127.0.0.5"},
-		{"agents.defaults.model_name", "glm-4.7"},
+		{"agents.defaults.default_model.model", "glm-4.7"},
 		{"tools.read_file.max_read_file_size", float64(123456)},
 		{"devices.enabled", true},
 		{"tools.web.enabled", true},

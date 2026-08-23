@@ -26,7 +26,7 @@ func newStartTaskNowWithRegistry(t *testing.T) (*TaskExecutor, *task.Store, *Age
 	const agentID = "test-agent"
 	cfg := &config.Config{}
 	cfg.Agents.Defaults.Home = filepath.Join(home, "default-workspace")
-	cfg.Agents.Defaults.ModelName = "test-model"
+	cfg.Agents.Defaults.DefaultModel = config.DefaultModel{Model: "test-model"}
 	cfg.Agents.List = []config.AgentConfig{
 		{ID: agentID, Name: agentID, Type: config.AgentTypeCore},
 	}

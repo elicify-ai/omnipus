@@ -53,7 +53,7 @@ func TestPromptGuard_InitializedFromConfig(t *testing.T) {
 				Agents: config.AgentsConfig{
 					Defaults: config.AgentDefaults{
 						Home:              tmpDir,
-						ModelName:         "test-model",
+						DefaultModel:      config.DefaultModel{Model: "test-model"},
 						MaxTokens:         4096,
 						MaxToolIterations: 10,
 					},
@@ -175,7 +175,7 @@ func TestExecProxy_StartedWhenEnabled(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              tmpDir,
-				ModelName:         "test-model",
+				DefaultModel:      config.DefaultModel{Model: "test-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -205,7 +205,7 @@ func TestExecProxy_NilWhenDisabled(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              tmpDir,
-				ModelName:         "test-model",
+				DefaultModel:      config.DefaultModel{Model: "test-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -317,7 +317,7 @@ func TestAgentLoopClose_StopsExecProxy(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              tmpDir,
-				ModelName:         "test-model",
+				DefaultModel:      config.DefaultModel{Model: "test-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -364,7 +364,7 @@ func TestAgentLoop_PromptGuardAuditTrail(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              filepath.Join(tmpDir, "workspace"),
-				ModelName:         "test-model",
+				DefaultModel:      config.DefaultModel{Model: "test-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},

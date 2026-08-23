@@ -75,7 +75,7 @@ func TestExecuteTask_NativeDispatch_RootsAtTaskWorkspaceID_WhenAgentBelongsToMul
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:                agentHomeDir,
-				ModelName:           "scripted-model",
+				DefaultModel:        config.DefaultModel{Model: "scripted-model"},
 				MaxTokens:           4096,
 				MaxToolIterations:   10,
 				RestrictToWorkspace: true,

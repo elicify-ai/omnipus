@@ -339,8 +339,12 @@ func (al *AgentLoop) runRecap(sessionID, trigger string) {
 	// see a consistent view of the config even if SwapConfig races.
 	snapCfg := al.GetConfig()
 	recapModel := snapCfg.Agents.Defaults.RecapModel
-	if recapModel == "" {
-		recapModel = snapCfg.Agents.Defaults.GetModelName()
+	// When no recap model is configured the default (provider, model) pair is
+	// used as-is — pinned to its own provider, never re-resolved (ADR-068).
+	var recapPinnedProvider string
+	if recapModel == "" && !snapCfg.Agents.Defaults.DefaultModel.IsZero() {
+		recapModel = snapCfg.Agents.Defaults.DefaultModel.Model
+		recapPinnedProvider = snapCfg.Agents.Defaults.DefaultModel.Provider
 	}
 	if recapModel == "" {
 		recapModel = agentInst.Model
@@ -360,9 +364,11 @@ func (al *AgentLoop) runRecap(sessionID, trigger string) {
 	// heuristic stub, and last-session.md loses the real summary. The turn path
 	// resolves Provider; the recap MUST match it.
 	candidates := make([]providers.FallbackCandidate, 0, 1+len(snapCfg.Agents.Defaults.RecapFallbackModels))
-	primaryCandidate := providers.FallbackCandidate{Model: recapModel}
-	if ref, ok := resolveModelRef(snapCfg, recapModel); ok {
-		primaryCandidate = providers.FallbackCandidate{Model: ref.Model, Provider: ref.Provider}
+	primaryCandidate := providers.FallbackCandidate{Model: recapModel, Provider: recapPinnedProvider}
+	if recapPinnedProvider == "" {
+		if ref, ok := resolveModelRef(snapCfg, recapModel); ok {
+			primaryCandidate = providers.FallbackCandidate{Model: ref.Model, Provider: ref.Provider}
+		}
 	}
 	candidates = append(candidates, primaryCandidate)
 	for _, fm := range snapCfg.Agents.Defaults.RecapFallbackModels {

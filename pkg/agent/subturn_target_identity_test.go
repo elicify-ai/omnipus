@@ -94,7 +94,7 @@ func stiNewNestedHomeAgentLoop(t *testing.T) *AgentLoop {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              agentHome,
-				ModelName:         "test-model",
+				DefaultModel:      config.DefaultModel{Model: "test-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -127,9 +127,8 @@ func TestSpawnSubTurn_TargetIdentity_DispatchesExternalCLIFromTargetConfig(t *te
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Provider:  "mock",
-				Home:      parentWorkspace,
-				ModelName: "parent-default-model",
+				Home:         parentWorkspace,
+				DefaultModel: config.DefaultModel{Provider: "mock", Model: "parent-default-model"},
 			},
 			List: []config.AgentConfig{
 				// The delegating PARENT: an ordinary, explicitly-registered
@@ -270,9 +269,8 @@ func TestSpawnSubTurn_TargetIdentity_PropagatesFullTargetConfig(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Provider:  "mock",
-				Home:      parentWorkspace,
-				ModelName: "parent-default-model",
+				Home:         parentWorkspace,
+				DefaultModel: config.DefaultModel{Provider: "mock", Model: "parent-default-model"},
 			},
 			List: []config.AgentConfig{
 				// The delegating PARENT: an ordinary, explicitly-registered
@@ -475,9 +473,8 @@ func TestSpawnSubTurn_NativeDispatch_AdoptsFullTargetIdentityIncludingModel(t *t
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Provider:  "mock",
-				Home:      parentWorkspace,
-				ModelName: "parent-native-model",
+				Home:         parentWorkspace,
+				DefaultModel: config.DefaultModel{Provider: "mock", Model: "parent-native-model"},
 			},
 			List: []config.AgentConfig{
 				// The delegating PARENT: an ordinary, explicitly-registered
@@ -661,9 +658,8 @@ func TestSpawnSubTurn_NativeDispatch_AdoptsTargetToolPolicy(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Provider:  "mock",
-				Home:      parentWorkspace,
-				ModelName: "parent-model",
+				Home:         parentWorkspace,
+				DefaultModel: config.DefaultModel{Provider: "mock", Model: "parent-model"},
 				// ADR-054 D6.4: AgentConfig.Default (set below on
 				// parent-allow-policy, kept for realism) is no longer
 				// consulted by GetDefaultAgent — the settings singleton is
@@ -881,9 +877,8 @@ func TestSpawnSubTurn_NativeDispatch_AdoptsTargetWorkspaceForFileTools(t *testin
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Provider:            "mock",
 				Home:                filepath.Join(home, "agents", "parent-fs-scope"),
-				ModelName:           "parent-model",
+				DefaultModel:        config.DefaultModel{Provider: "mock", Model: "parent-model"},
 				RestrictToWorkspace: true, // required for read_file to actually root relative paths at the re-rooted workspace dir, not the raw host fs (buildFs: !restrict -> hostFs{})
 			},
 			List: []config.AgentConfig{
@@ -1043,8 +1038,7 @@ func TestSpawnSubTurn_ProviderPoolCopiedFromParent(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              parentWorkspace,
-				Provider:          "openrouter",
-				ModelName:         "openrouter-default",
+				DefaultModel:      config.DefaultModel{Provider: "openrouter", Model: "openrouter/anthropic/claude-sonnet-4.6"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -1157,9 +1151,8 @@ func TestSpawnSubTurn_TargetIdentity_ConcurrentModelSwitchRace(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Provider:  "mock",
-				Home:      parentWorkspace,
-				ModelName: "parent-default-model",
+				Home:         parentWorkspace,
+				DefaultModel: config.DefaultModel{Provider: "mock", Model: "parent-default-model"},
 			},
 			List: []config.AgentConfig{
 				// The delegating PARENT: an ordinary, explicitly-registered

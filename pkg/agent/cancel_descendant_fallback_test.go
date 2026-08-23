@@ -68,7 +68,7 @@ func TestRequestCancel_RootAlreadyClaimed_FallsBackToLiveDescendant(t *testing.T
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              workspaceDir,
-				ModelName:         "cascade-test-model",
+				DefaultModel:      config.DefaultModel{Model: "cascade-test-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},

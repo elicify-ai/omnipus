@@ -63,7 +63,8 @@ func marcusP4TestHome(t *testing.T, wsID, assigneeID string) (al *AgentLoop, wor
 
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Home: t.TempDir(), ModelName: "test-model"},
+			Defaults: config.AgentDefaults{
+				Home: t.TempDir(), DefaultModel: config.DefaultModel{Model: "test-model"}},
 			List: []config.AgentConfig{
 				{ID: assigneeID, Name: "Native Agent", Type: config.AgentTypeWorker, Home: agentHome},
 				{ID: string(coreagent.IDJudge), Name: "Judge", Type: config.AgentTypeSystem, Home: t.TempDir()},
@@ -227,7 +228,8 @@ func TestJudge_MachineCheck_TaskWorkspaceUnreachable_RefusesHonestly(t *testing.
 
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Home: t.TempDir(), ModelName: "test-model"},
+			Defaults: config.AgentDefaults{
+				Home: t.TempDir(), DefaultModel: config.DefaultModel{Model: "test-model"}},
 			List: []config.AgentConfig{
 				{ID: assigneeID, Name: "Native Agent", Type: config.AgentTypeWorker, Home: agentHome},
 			},

@@ -195,17 +195,17 @@ var allowedWorkspaceIdentifierLines = map[string]bool{
 	"pkg/skills/github_registry_test.go:238": true,
 	"pkg/skills/github_registry_test.go:321": true,
 
-	"pkg/migrate/sources/openclaw/openclaw_config.go:396": true,
-	"pkg/migrate/sources/openclaw/openclaw_config.go:399": true,
-	"pkg/migrate/sources/openclaw/openclaw_config.go:438": true,
-	"pkg/migrate/sources/openclaw/openclaw_config.go:884": true,
-	"pkg/migrate/sources/openclaw/openclaw_config.go:885": true,
-	"pkg/migrate/sources/openclaw/openclaw_config.go:911": true,
-	"pkg/migrate/sources/openclaw/openclaw_config.go:938": true,
+	"pkg/migrate/sources/openclaw/openclaw_config.go:374": true,
+	"pkg/migrate/sources/openclaw/openclaw_config.go:377": true,
+	"pkg/migrate/sources/openclaw/openclaw_config.go:416": true,
+	"pkg/migrate/sources/openclaw/openclaw_config.go:863": true,
+	"pkg/migrate/sources/openclaw/openclaw_config.go:864": true,
+	"pkg/migrate/sources/openclaw/openclaw_config.go:890": true,
+	"pkg/migrate/sources/openclaw/openclaw_config.go:920": true,
 
-	"pkg/migrate/sources/openclaw/openclaw_config_test.go:248": true,
-	"pkg/migrate/sources/openclaw/openclaw_config_test.go:249": true,
-	"pkg/migrate/sources/openclaw/openclaw_config_test.go:616": true,
+	"pkg/migrate/sources/openclaw/openclaw_config_test.go:250": true,
+	"pkg/migrate/sources/openclaw/openclaw_config_test.go:251": true,
+	"pkg/migrate/sources/openclaw/openclaw_config_test.go:618": true,
 }
 
 // repoRootForRenameGuard resolves the repository root from this test file's

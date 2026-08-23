@@ -34,7 +34,7 @@ func newCompressedCfg(t *testing.T) *config.Config {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              tmpDir,
-				ModelName:         "mock-model",
+				DefaultModel:      config.DefaultModel{Model: "mock-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},

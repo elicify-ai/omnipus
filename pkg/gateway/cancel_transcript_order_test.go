@@ -98,9 +98,9 @@ func TestRunTurn_CancelMidStream_TranscriptOrderAssistantBeforeTurnCanceled(t *t
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080, DevModeBypass: true},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      tmpDir,
-				ModelName: "blocking-stream-model",
-				MaxTokens: 4096,
+				Home:         tmpDir,
+				DefaultModel: config.DefaultModel{Model: "blocking-stream-model"},
+				MaxTokens:    4096,
 			},
 			// An explicitly registered agent. There is no implicit "main" sentinel
 			// to fall back on any more (ADR-064), and handleChatMessage now

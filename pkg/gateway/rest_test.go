@@ -119,9 +119,9 @@ func newTestRestAPI(t *testing.T) (*restAPI, func()) {
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      tmpDir,
-				ModelName: "test-model",
-				MaxTokens: 4096,
+				Home:         tmpDir,
+				DefaultModel: config.DefaultModel{Model: "test-model"},
+				MaxTokens:    4096,
 			},
 		},
 	}
@@ -186,9 +186,9 @@ func TestHandleAgentsListIncludesConfiguredAgents(t *testing.T) {
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      tmpDir,
-				ModelName: "test-model",
-				MaxTokens: 4096,
+				Home:         tmpDir,
+				DefaultModel: config.DefaultModel{Model: "test-model"},
+				MaxTokens:    4096,
 			},
 			List: []config.AgentConfig{
 				{ID: "my-agent", Name: "My Agent"},
@@ -524,7 +524,8 @@ func TestAgentListStatus_CoreAgentNeverDraft(t *testing.T) {
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+			Defaults: config.AgentDefaults{
+				Home: tmpDir, DefaultModel: config.DefaultModel{Model: "test-model"}, MaxTokens: 4096},
 		},
 	}
 	coreagent.SeedConfig(cfg)
@@ -566,9 +567,9 @@ func TestAgentListStatus_CustomAgentIdle(t *testing.T) {
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      tmpDir,
-				ModelName: "test-model",
-				MaxTokens: 4096,
+				Home:         tmpDir,
+				DefaultModel: config.DefaultModel{Model: "test-model"},
+				MaxTokens:    4096,
 			},
 			List: []config.AgentConfig{
 				{ID: "my-agent", Name: "My Agent"},
@@ -722,9 +723,9 @@ func TestGetAgentTools_CustomAgent(t *testing.T) {
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      tmpDir,
-				ModelName: "test-model",
-				MaxTokens: 4096,
+				Home:         tmpDir,
+				DefaultModel: config.DefaultModel{Model: "test-model"},
+				MaxTokens:    4096,
 			},
 			List: []config.AgentConfig{
 				{
@@ -832,7 +833,8 @@ func TestUpdateAgent_LockedRejectsIdentityChange(t *testing.T) {
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+			Defaults: config.AgentDefaults{
+				Home: tmpDir, DefaultModel: config.DefaultModel{Model: "test-model"}, MaxTokens: 4096},
 		},
 	}
 	coreagent.SeedConfig(cfg)
@@ -909,9 +911,9 @@ func TestUpdateAgentTools_InvalidPolicyValue(t *testing.T) {
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      tmpDir,
-				ModelName: "test-model",
-				MaxTokens: 4096,
+				Home:         tmpDir,
+				DefaultModel: config.DefaultModel{Model: "test-model"},
+				MaxTokens:    4096,
 			},
 			List: []config.AgentConfig{
 				{ID: "test-agent", Name: "Test"},
@@ -956,9 +958,9 @@ func TestCreateAgent_WithToolsCfg(t *testing.T) {
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      tmpDir,
-				ModelName: "test-model",
-				MaxTokens: 4096,
+				Home:         tmpDir,
+				DefaultModel: config.DefaultModel{Model: "test-model"},
+				MaxTokens:    4096,
 			},
 		},
 	}
@@ -1080,9 +1082,9 @@ func TestCreateAgent_WithSkills(t *testing.T) {
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      tmpDir,
-				ModelName: "test-model",
-				MaxTokens: 4096,
+				Home:         tmpDir,
+				DefaultModel: config.DefaultModel{Model: "test-model"},
+				MaxTokens:    4096,
 			},
 		},
 	}
@@ -1136,9 +1138,9 @@ func TestCreateAgent_NoSkills(t *testing.T) {
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      tmpDir,
-				ModelName: "test-model",
-				MaxTokens: 4096,
+				Home:         tmpDir,
+				DefaultModel: config.DefaultModel{Model: "test-model"},
+				MaxTokens:    4096,
 			},
 		},
 	}
@@ -1196,9 +1198,9 @@ func TestUpdateAgent_SkillsPersist(t *testing.T) {
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      tmpDir,
-				ModelName: "test-model",
-				MaxTokens: 4096,
+				Home:         tmpDir,
+				DefaultModel: config.DefaultModel{Model: "test-model"},
+				MaxTokens:    4096,
 			},
 			List: []config.AgentConfig{
 				{ID: "agent-a", Name: "Agent A"},
@@ -1272,9 +1274,9 @@ func TestUpdateAgent_SkillsClear(t *testing.T) {
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      tmpDir,
-				ModelName: "test-model",
-				MaxTokens: 4096,
+				Home:         tmpDir,
+				DefaultModel: config.DefaultModel{Model: "test-model"},
+				MaxTokens:    4096,
 			},
 			List: []config.AgentConfig{
 				{ID: "skilled-agent", Name: "Skilled Agent", Skills: []string{"web-research"}},
@@ -1330,9 +1332,9 @@ func TestAgent_MemoryEnabled_DefaultsTrueAndRoundTripsOnPUT(t *testing.T) {
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      tmpDir,
-				ModelName: "test-model",
-				MaxTokens: 4096,
+				Home:         tmpDir,
+				DefaultModel: config.DefaultModel{Model: "test-model"},
+				MaxTokens:    4096,
 			},
 			List: []config.AgentConfig{
 				{ID: "mem-agent", Name: "Mem Agent"},
@@ -1436,9 +1438,9 @@ func TestCreateAgent_UnknownSkillIDRejected(t *testing.T) {
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      tmpDir,
-				ModelName: "test-model",
-				MaxTokens: 4096,
+				Home:         tmpDir,
+				DefaultModel: config.DefaultModel{Model: "test-model"},
+				MaxTokens:    4096,
 			},
 		},
 	}
@@ -1502,9 +1504,9 @@ func TestUpdateAgent_UnknownSkillIDRejected(t *testing.T) {
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      tmpDir,
-				ModelName: "test-model",
-				MaxTokens: 4096,
+				Home:         tmpDir,
+				DefaultModel: config.DefaultModel{Model: "test-model"},
+				MaxTokens:    4096,
 			},
 			List: []config.AgentConfig{
 				{ID: "my-agent", Name: "My Agent"},
@@ -1558,7 +1560,8 @@ func TestUpdateAgent_LockedRejectsSkills(t *testing.T) {
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+			Defaults: config.AgentDefaults{
+				Home: tmpDir, DefaultModel: config.DefaultModel{Model: "test-model"}, MaxTokens: 4096},
 		},
 	}
 	coreagent.SeedConfig(cfg)
@@ -1622,9 +1625,9 @@ func TestUpdateAgentTools_Success(t *testing.T) {
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      tmpDir,
-				ModelName: "test-model",
-				MaxTokens: 4096,
+				Home:         tmpDir,
+				DefaultModel: config.DefaultModel{Model: "test-model"},
+				MaxTokens:    4096,
 			},
 			List: []config.AgentConfig{
 				{ID: "update-agent", Name: "Update Agent"},
@@ -1728,9 +1731,9 @@ func TestUpdateAgentTools_LegacyModeAloneCoverageGapRejected(t *testing.T) {
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      tmpDir,
-				ModelName: "test-model",
-				MaxTokens: 4096,
+				Home:         tmpDir,
+				DefaultModel: config.DefaultModel{Model: "test-model"},
+				MaxTokens:    4096,
 			},
 			List: []config.AgentConfig{
 				{ID: "update-agent-legacy", Name: "Update Agent Legacy"},
@@ -1788,9 +1791,9 @@ func TestUpdateAgentTools_PoliciesWinsOverLegacyModeVisible(t *testing.T) {
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      tmpDir,
-				ModelName: "test-model",
-				MaxTokens: 4096,
+				Home:         tmpDir,
+				DefaultModel: config.DefaultModel{Model: "test-model"},
+				MaxTokens:    4096,
 			},
 			List: []config.AgentConfig{
 				{ID: "update-agent-both", Name: "Update Agent Both"},
@@ -1877,9 +1880,9 @@ func TestUpdateAgentTools_ReloadFailure_Returns503(t *testing.T) {
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      tmpDir,
-				ModelName: "test-model",
-				MaxTokens: 4096,
+				Home:         tmpDir,
+				DefaultModel: config.DefaultModel{Model: "test-model"},
+				MaxTokens:    4096,
 			},
 			List: []config.AgentConfig{
 				{ID: "reload-test-agent", Name: "Reload Test Agent"},

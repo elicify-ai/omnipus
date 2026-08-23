@@ -26,7 +26,7 @@ func TestResolveMessageRoute_BoundDrop_SkipsGetDefaultAgent(t *testing.T) {
 
 	cfg := &config.Config{}
 	cfg.Agents.Defaults.Home = filepath.Join(home, "default-workspace")
-	cfg.Agents.Defaults.ModelName = "test-model"
+	cfg.Agents.Defaults.DefaultModel = config.DefaultModel{Model: "test-model"}
 	// mia is the global default chat agent; "ray" is NOT in the list (deleted).
 	cfg.Agents.List = []config.AgentConfig{
 		{ID: "mia", Default: true},
@@ -94,7 +94,7 @@ func TestResolveMessageRoute_Unbound_DefaultUnchanged(t *testing.T) {
 
 	cfg := &config.Config{}
 	cfg.Agents.Defaults.Home = filepath.Join(home, "default-workspace")
-	cfg.Agents.Defaults.ModelName = "test-model"
+	cfg.Agents.Defaults.DefaultModel = config.DefaultModel{Model: "test-model"}
 	cfg.Agents.List = []config.AgentConfig{
 		{ID: "mia", Default: true},
 	}
@@ -141,7 +141,7 @@ func TestResolveMessageRoute_BoundDrift_WorkerAgent_LoopLevel(t *testing.T) {
 
 	cfg := &config.Config{}
 	cfg.Agents.Defaults.Home = filepath.Join(home, "default-workspace")
-	cfg.Agents.Defaults.ModelName = "test-model"
+	cfg.Agents.Defaults.DefaultModel = config.DefaultModel{Model: "test-model"}
 	cfg.Agents.List = []config.AgentConfig{
 		{ID: "mia", Default: true},
 		{ID: "worker1", Type: config.AgentTypeWorker},
@@ -200,7 +200,7 @@ func TestGetDriftDropped_InitiallyZero(t *testing.T) {
 
 	cfg := &config.Config{}
 	cfg.Agents.Defaults.Home = filepath.Join(home, "default-workspace")
-	cfg.Agents.Defaults.ModelName = "test-model"
+	cfg.Agents.Defaults.DefaultModel = config.DefaultModel{Model: "test-model"}
 
 	msgBus := bus.NewMessageBus()
 	al := mustNewAgentLoop(t, cfg, msgBus, &mockProvider{})
@@ -232,7 +232,7 @@ func TestDriftDrop_SingleEmission_ViaProcessMessage(t *testing.T) {
 
 	cfg := &config.Config{}
 	cfg.Agents.Defaults.Home = filepath.Join(home, "default-workspace")
-	cfg.Agents.Defaults.ModelName = "test-model"
+	cfg.Agents.Defaults.DefaultModel = config.DefaultModel{Model: "test-model"}
 	cfg.Agents.List = []config.AgentConfig{
 		{ID: "mia", Default: true},
 		// "ray" is intentionally absent (deleted) — drift condition.

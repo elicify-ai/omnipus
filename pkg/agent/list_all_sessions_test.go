@@ -35,9 +35,9 @@ func TestListAllSessions_PartialErrors(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      tmpDir,
-				ModelName: "test-model",
-				MaxTokens: 4096,
+				Home:         tmpDir,
+				DefaultModel: config.DefaultModel{Model: "test-model"},
+				MaxTokens:    4096,
 			},
 			List: []config.AgentConfig{
 				// No "main" sentinel to fall back to anymore — this is now

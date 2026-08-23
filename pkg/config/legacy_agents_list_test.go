@@ -292,7 +292,7 @@ func TestLoadConfig_LegacyAgentsList_SelfHealsAndNeverPopulatesInMemory(t *testi
 	raw := `{
 		"version": 1,
 		"agents": {
-			"defaults": {"workspace": "` + dir + `", "model_name": "test-model", "max_tokens": 4096},
+			"defaults": {"workspace": "` + dir + `", "default_model": {"provider": "", "model": "test-model"}, "max_tokens": 4096},
 			"list": [
 				{"id": "judge", "name": "Judge"},
 				{"id": "old-custom-agent", "name": "Old Custom Agent"}
@@ -310,8 +310,8 @@ func TestLoadConfig_LegacyAgentsList_SelfHealsAndNeverPopulatesInMemory(t *testi
 	if len(cfg.Agents.List) != 0 {
 		t.Fatalf("cfg.Agents.List must be empty after load, got %d: %+v", len(cfg.Agents.List), cfg.Agents.List)
 	}
-	if cfg.Agents.Defaults.ModelName != "test-model" {
-		t.Errorf("Agents.Defaults.ModelName = %q, want test-model", cfg.Agents.Defaults.ModelName)
+	if cfg.Agents.Defaults.DefaultModel.Model != "test-model" {
+		t.Errorf("Agents.Defaults.DefaultModel.Model = %q, want test-model", cfg.Agents.Defaults.DefaultModel.Model)
 	}
 
 	onDiskRaw, err := os.ReadFile(path)

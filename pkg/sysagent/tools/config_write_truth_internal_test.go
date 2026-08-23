@@ -71,7 +71,7 @@ func TestObserveConfigWrite_MergeIsNotDrift(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.MaxTokens = 4242
 
-	want := map[string]any{"model_name": "glm-4.7"}
+	want := map[string]any{"default_model": map[string]any{"model": "glm-4.7"}}
 	if err := dotSet(cfg, "agents.defaults", want); err != nil {
 		t.Fatalf("dotSet: %v", err)
 	}
@@ -180,16 +180,16 @@ func TestValidateConfigKeyLands_Table(t *testing.T) {
 	}
 
 	accepted := map[string]string{
-		"gateway.port":                       "a plain nested field",
-		"gateway":                            "a bare section — writing a whole object is legal",
-		"agents.defaults.model_name":         "two levels down",
-		"tools.read_file.max_read_file_size": "three levels down",
-		"devices.enabled":                    "a bool",
-		"tools.web.enabled":                  "PROMOTED from the untagged embedded ToolConfig",
-		"tools.web.brave.enabled":            "a named nested struct beside the embedded one",
-		"channels.telegram.enabled":          "a field of an EXISTING map entry",
-		"channels.telegram.base_url":         "an omitempty field of an existing map entry",
-		"providers":                          "a slice field, written wholesale",
+		"gateway.port":                        "a plain nested field",
+		"gateway":                             "a bare section — writing a whole object is legal",
+		"agents.defaults.default_model.model": "three levels down, inside a nested struct",
+		"tools.read_file.max_read_file_size":  "three levels down",
+		"devices.enabled":                     "a bool",
+		"tools.web.enabled":                   "PROMOTED from the untagged embedded ToolConfig",
+		"tools.web.brave.enabled":             "a named nested struct beside the embedded one",
+		"channels.telegram.enabled":           "a field of an EXISTING map entry",
+		"channels.telegram.base_url":          "an omitempty field of an existing map entry",
+		"providers":                           "a slice field, written wholesale",
 		// The multi-account fix: "slack.eu" is a NAMESPACED instance id
 		// (ADR-029) that itself contains a dot, so these two keys split into
 		// FOUR raw segments. configKeySegments now coalesces "slack"+"eu"

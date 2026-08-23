@@ -51,7 +51,7 @@ func memReloadTestLoop(t *testing.T) (*AgentLoop, string) {
 
 	cfg := config.DefaultConfig()
 	coreagent.SeedConfig(cfg)
-	cfg.Agents.Defaults.ModelName = "test-model"
+	cfg.Agents.Defaults.DefaultModel = config.DefaultModel{Model: "test-model"}
 	cfg.Agents.Defaults.MaxTokens = 4096
 	cfg.Sandbox.AuditLog = true
 

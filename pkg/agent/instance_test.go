@@ -32,7 +32,7 @@ func TestNewAgentInstance_UsesDefaultsTemperatureAndMaxTokens(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              tmpDir,
-				ModelName:         "test-model",
+				DefaultModel:      config.DefaultModel{Model: "test-model"},
 				MaxTokens:         1234,
 				MaxToolIterations: 5,
 			},
@@ -74,7 +74,7 @@ func TestNewAgentInstance_DefaultsTemperatureWhenZero(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              tmpDir,
-				ModelName:         "test-model",
+				DefaultModel:      config.DefaultModel{Model: "test-model"},
 				MaxTokens:         1234,
 				MaxToolIterations: 5,
 			},
@@ -113,7 +113,7 @@ func TestNewAgentInstance_DefaultsTemperatureWhenUnset(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              tmpDir,
-				ModelName:         "test-model",
+				DefaultModel:      config.DefaultModel{Model: "test-model"},
 				MaxTokens:         1234,
 				MaxToolIterations: 5,
 			},
@@ -152,9 +152,8 @@ func TestNewAgentInstance_FallbackModelsPerEntryProvider(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      tmpDir,
-				ModelName: "gpt-5",
-				Provider:  "openrouter",
+				Home:         tmpDir,
+				DefaultModel: config.DefaultModel{Provider: "openrouter", Model: "openai/gpt-5"},
 			},
 			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
@@ -214,7 +213,7 @@ func TestNewAgentInstance_FallbackModelsPerEntryProvider(t *testing.T) {
 			"candidate[1].Provider = %q, want %q (FR-007: fallback must carry its own provider, not the agent's default %q)",
 			agent.Candidates[1].Provider,
 			"anthropic",
-			cfg.Agents.Defaults.Provider,
+			cfg.Agents.Defaults.DefaultModel.Provider,
 		)
 	}
 	// Because the fallback has a pinned Provider, the resolver is bypassed:
@@ -275,9 +274,8 @@ func TestNewAgentInstance_FallbackModelsPrefersExplicitOverLegacy(t *testing.T) 
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      tmpDir,
-				ModelName: "gpt-5",
-				Provider:  "openrouter",
+				Home:         tmpDir,
+				DefaultModel: config.DefaultModel{Provider: "openrouter", Model: "openai/gpt-5"},
 			},
 			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
@@ -392,26 +390,30 @@ func TestAgentInstance_GetProviderForCandidate_NilAgent(t *testing.T) {
 	}
 }
 
-func TestNewAgentInstance_ResolveCandidatesFromModelListAlias(t *testing.T) {
+// TestNewAgentInstance_ResolveCandidatesFromDefaultModelPair: an agent with
+// no model of its own runs on agents.defaults.default_model — the exact
+// (provider, model) pair (ADR-068 D14.1) — and its primary candidate is pinned
+// to that pair's provider, never inferred from the slug.
+func TestNewAgentInstance_ResolveCandidatesFromDefaultModelPair(t *testing.T) {
 	tests := []struct {
 		name         string
-		aliasName    string
+		provider     string
 		modelName    string
 		apiBase      string
 		wantProvider string
 		wantModel    string
 	}{
 		{
-			name:         "alias with provider prefix",
-			aliasName:    "step-3.5-flash",
+			name:         "row model carries the provider prefix",
+			provider:     "openrouter",
 			modelName:    "openrouter/stepfun/step-3.5-flash:free",
 			apiBase:      "https://openrouter.ai/api/v1",
 			wantProvider: "openrouter",
 			wantModel:    "stepfun/step-3.5-flash:free",
 		},
 		{
-			name:         "alias without provider prefix",
-			aliasName:    "glm-5",
+			name:         "bare row model",
+			provider:     "openai",
 			modelName:    "glm-5",
 			apiBase:      "https://api.z.ai/api/coding/paas/v4",
 			wantProvider: "openai",
@@ -439,16 +441,16 @@ func TestNewAgentInstance_ResolveCandidatesFromModelListAlias(t *testing.T) {
 			cfg := &config.Config{
 				Agents: config.AgentsConfig{
 					Defaults: config.AgentDefaults{
-						Home:      tmpDir,
-						ModelName: tt.aliasName,
+						Home:         tmpDir,
+						DefaultModel: config.DefaultModel{Provider: tt.provider, Model: tt.modelName},
 					},
 					List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 				},
 				Providers: []*config.ModelConfig{
 					{
-						ModelName: tt.aliasName,
-						Model:     tt.modelName,
-						APIBase:   tt.apiBase,
+						Provider: tt.provider,
+						Model:    tt.modelName,
+						APIBase:  tt.apiBase,
 					},
 				},
 			}
@@ -494,7 +496,7 @@ func TestNewAgentInstance_AllowsMediaTempDirForReadAndList_RejectsForBash(t *tes
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:                workspace,
-				ModelName:           "test-model",
+				DefaultModel:        config.DefaultModel{Model: "test-model"},
 				RestrictToWorkspace: true,
 			},
 			List: []config.AgentConfig{{ID: "mia", Home: workspace}},
@@ -567,8 +569,8 @@ func TestNewAgentInstance_InvalidExecConfigDoesNotExit(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      workspace,
-				ModelName: "test-model",
+				Home:         workspace,
+				DefaultModel: config.DefaultModel{Model: "test-model"},
 			},
 			List: []config.AgentConfig{{ID: "mia", Home: workspace}},
 		},

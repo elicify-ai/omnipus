@@ -47,7 +47,7 @@ func TestSynthesizeImageRejection_PriorPDFDowngrade_DoesNotBlockFriendlySynthesi
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              tmpDir,
-				ModelName:         modelName,
+				DefaultModel:      config.DefaultModel{Model: modelName},
 				MaxTokens:         4096,
 				MaxToolIterations: 3,
 			},

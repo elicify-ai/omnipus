@@ -51,9 +51,9 @@ func buildLoopWithShellAgent(t *testing.T) (*AgentLoop, *config.Config) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      tmpDir,
-				ModelName: "test-model",
-				MaxTokens: 4096,
+				Home:         tmpDir,
+				DefaultModel: config.DefaultModel{Model: "test-model"},
+				MaxTokens:    4096,
 			},
 			List: []config.AgentConfig{
 				{ID: "shell-agent", Name: "Shell Agent"},

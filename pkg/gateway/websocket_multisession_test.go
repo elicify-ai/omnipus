@@ -81,9 +81,9 @@ func newStreamingTestWSHandler(t *testing.T) (*WSHandler, *bus.MessageBus, *agen
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080, DevModeBypass: true},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      tmpDir,
-				ModelName: "streaming-test-model",
-				MaxTokens: 4096,
+				Home:         tmpDir,
+				DefaultModel: config.DefaultModel{Model: "streaming-test-model"},
+				MaxTokens:    4096,
 			},
 			// A real, chat-target agent ("mia") so the default-agent
 			// resolution every test in this file relies on (every message

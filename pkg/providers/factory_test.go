@@ -8,7 +8,9 @@ import (
 
 func TestCreateProviderReturnsHTTPProviderForOpenRouter(t *testing.T) {
 	cfg := config.DefaultConfig()
-	cfg.Agents.Defaults.ModelName = "test-openrouter"
+	// The default is the exact (provider, model) pair of the row below (ADR-068
+	// D14.1); the row names no provider, so the pair's provider half is empty too.
+	cfg.Agents.Defaults.DefaultModel = config.DefaultModel{Model: "openrouter/auto"}
 	const keyRef = "FACTORY_TEST_OPENROUTER_KEY"
 	t.Setenv(keyRef, "sk-or-test")
 	modelCfg := &config.ModelConfig{
@@ -31,7 +33,7 @@ func TestCreateProviderReturnsHTTPProviderForOpenRouter(t *testing.T) {
 
 func TestCreateProviderReturnsCodexCliProviderForCodexCode(t *testing.T) {
 	cfg := config.DefaultConfig()
-	cfg.Agents.Defaults.ModelName = "test-codex"
+	cfg.Agents.Defaults.DefaultModel = config.DefaultModel{Model: "codex-cli/codex-model"}
 	cfg.Providers = []*config.ModelConfig{
 		{
 			ModelName: "test-codex",

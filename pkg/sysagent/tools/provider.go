@@ -303,7 +303,7 @@ func (t *ModelsListTool) Execute(_ context.Context, args map[string]any) *tools.
 		Default  bool   `json:"default,omitempty"`
 	}
 
-	defaultModel := cfg.Agents.Defaults.ModelName
+	defaultModel := cfg.Agents.Defaults.DefaultModel
 
 	// Collect unique providers and resolve their API keys.
 	type providerInfo struct {
@@ -373,14 +373,14 @@ func (t *ModelsListTool) Execute(_ context.Context, args map[string]any) *tools.
 			models = append(models, modelEntry{
 				Model:    m,
 				Provider: pi.name,
-				Default:  m == defaultModel,
+				Default:  pi.name == defaultModel.Provider && m == defaultModel.Model,
 			})
 		}
 	}
 
 	result := map[string]any{
 		"models":        models,
-		"default_model": defaultModel,
+		"default_model": map[string]string{"provider": defaultModel.Provider, "model": defaultModel.Model},
 		"total":         len(models),
 	}
 	if len(warnings) > 0 {

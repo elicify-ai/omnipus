@@ -186,7 +186,7 @@ func TestRetryOnStreamingReset_SingleCandidateTurnSucceeds(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              workspaceDir,
-				ModelName:         "test-model",
+				DefaultModel:      config.DefaultModel{Model: "test-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -242,7 +242,7 @@ func TestRetryOnStreamingReset_GoAwayTurnSucceeds(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              tmpDir,
-				ModelName:         "test-model",
+				DefaultModel:      config.DefaultModel{Model: "test-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -300,7 +300,7 @@ func TestRetryOnStreamingReset_ExhaustsMaxRetries(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              tmpDir,
-				ModelName:         "test-model",
+				DefaultModel:      config.DefaultModel{Model: "test-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -352,7 +352,7 @@ func TestRetryOnStreamingReset_AuthErrorNotRetried(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              tmpDir,
-				ModelName:         "test-model",
+				DefaultModel:      config.DefaultModel{Model: "test-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -404,7 +404,7 @@ func TestRetryOnStreamingReset_ScenarioProviderVariant(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              tmpDir,
-				ModelName:         "scripted-model",
+				DefaultModel:      config.DefaultModel{Model: "scripted-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -478,8 +478,8 @@ func TestRetryOnStreamingReset_NothingToTrimStillRetries(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      tmpDir,
-				ModelName: "test-model",
+				Home:         tmpDir,
+				DefaultModel: config.DefaultModel{Model: "test-model"},
 				// Deliberately tiny so isOverContextBudget is true on a
 				// fresh, single-message turn (B = 100 − 4096 − … < 0),
 				// independent of any default-config edge.
@@ -591,8 +591,8 @@ func TestRetryOnStreamingReset_RecallSpanDropAloneStillRetries(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      tmpDir,
-				ModelName: "test-model",
+				Home:         tmpDir,
+				DefaultModel: config.DefaultModel{Model: "test-model"},
 				// The window stays generous so the small initial (span-free)
 				// messages never trip the proactive pre-call check. Both
 				// checks read the ONE budget B (ADR-066 FR-028) — what makes

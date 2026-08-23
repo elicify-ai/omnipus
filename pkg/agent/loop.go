@@ -4660,7 +4660,7 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 
 	logger.InfoCF("agent", "Provider and config reloaded successfully",
 		map[string]any{
-			"model": cfg.Agents.Defaults.GetModelName(),
+			"model": cfg.Agents.Defaults.DefaultModel.String(),
 		})
 
 	return nil
@@ -4894,7 +4894,7 @@ func (al *AgentLoop) ApplyAgentModel(agentID, model string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to initialize model %q: %w", model, err)
 	}
-	nextCandidates := resolveModelCandidatesForAgent(cfg, cfg.Agents.Defaults.Provider, modelCfg.Model, agent)
+	nextCandidates := resolveModelCandidatesForAgent(cfg, cfg.Agents.Defaults.DefaultModel.Provider, modelCfg.Model, agent)
 	if len(nextCandidates) == 0 {
 		return "", fmt.Errorf("model %q did not resolve to any provider candidates", model)
 	}
@@ -12182,7 +12182,7 @@ func (al *AgentLoop) buildCommandsRuntime(agent *AgentInstance, opts *processOpt
 			agent.mu.RLock()
 			m, c := agent.Model, agent.Candidates
 			agent.mu.RUnlock()
-			return m, resolvedCandidateProvider(c, cfg.Agents.Defaults.Provider)
+			return m, resolvedCandidateProvider(c, cfg.Agents.Defaults.DefaultModel.Provider)
 		}
 		rt.SwitchModel = func(value string) (string, error) {
 			// Shared in-place model switch (#73): same path as the

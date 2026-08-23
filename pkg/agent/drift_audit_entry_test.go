@@ -94,7 +94,7 @@ func TestDriftDrop_EmitsAuditEntry_WithRequiredFields(t *testing.T) {
 
 	cfg := &config.Config{}
 	cfg.Agents.Defaults.Home = filepath.Join(home, "default-workspace")
-	cfg.Agents.Defaults.ModelName = "test-model"
+	cfg.Agents.Defaults.DefaultModel = config.DefaultModel{Model: "test-model"}
 	cfg.Agents.List = []config.AgentConfig{
 		{ID: "mia", Default: true},
 		// "ray" is intentionally absent (deleted) → drift condition.
@@ -199,7 +199,7 @@ func TestDriftDrop_ExactlyOneEntryPerMessage(t *testing.T) {
 
 	cfg := &config.Config{}
 	cfg.Agents.Defaults.Home = filepath.Join(home, "default-workspace")
-	cfg.Agents.Defaults.ModelName = "test-model"
+	cfg.Agents.Defaults.DefaultModel = config.DefaultModel{Model: "test-model"}
 	cfg.Agents.List = []config.AgentConfig{
 		{ID: "mia", Default: true},
 		// "ray" absent → drift.

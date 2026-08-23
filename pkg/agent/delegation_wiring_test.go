@@ -28,7 +28,7 @@ import (
 func wireTestLoopWithGraph(t *testing.T, agentID string) (*AgentLoop, *ContextBuilder) {
 	t.Helper()
 	cfg := minimalTestConfig(t)
-	cfg.Agents.Defaults.ModelName = "test-model"
+	cfg.Agents.Defaults.DefaultModel = config.DefaultModel{Model: "test-model"}
 	cfg.Agents.Defaults.MaxTokens = 4096
 
 	msgBus := bus.NewMessageBus()

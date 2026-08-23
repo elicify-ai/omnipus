@@ -134,7 +134,7 @@ func newTestAgentLoop(
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              tmpDir,
-				ModelName:         "test-model",
+				DefaultModel:      config.DefaultModel{Model: "test-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -178,7 +178,7 @@ func TestProcessMessage_IncludesCurrentSenderInDynamicContext(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              tmpDir,
-				ModelName:         "test-model",
+				DefaultModel:      config.DefaultModel{Model: "test-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -277,7 +277,7 @@ func TestProcessMessage_WebRenderingNoteWiring(t *testing.T) {
 			Agents: config.AgentsConfig{
 				Defaults: config.AgentDefaults{
 					Home:              tmpDir,
-					ModelName:         "test-model",
+					DefaultModel:      config.DefaultModel{Model: "test-model"},
 					MaxTokens:         4096,
 					MaxToolIterations: 10,
 				},
@@ -379,7 +379,7 @@ func TestProcessMessage_SkillCommandLoadsRequestedSkill(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              tmpDir,
-				ModelName:         "test-model",
+				DefaultModel:      config.DefaultModel{Model: "test-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -431,7 +431,7 @@ func TestHandleCommand_UseTokenIsNormalMessage(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              tmpDir,
-				ModelName:         "test-model",
+				DefaultModel:      config.DefaultModel{Model: "test-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -479,7 +479,7 @@ func TestProcessMessage_SkillTokenAloneRunsSkill(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              tmpDir,
-				ModelName:         "test-model",
+				DefaultModel:      config.DefaultModel{Model: "test-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -646,7 +646,7 @@ func TestNewAgentLoop_StateInitialized(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              tmpDir,
-				ModelName:         "test-model",
+				DefaultModel:      config.DefaultModel{Model: "test-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -692,7 +692,7 @@ func TestToolRegistry_ToolRegistration(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              tmpDir,
-				ModelName:         "test-model",
+				DefaultModel:      config.DefaultModel{Model: "test-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -759,7 +759,7 @@ func TestToolRegistry_GetDefinitions(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              tmpDir,
-				ModelName:         "test-model",
+				DefaultModel:      config.DefaultModel{Model: "test-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -792,7 +792,7 @@ func TestProcessMessage_MediaToolDeliveryEmitsMediaAndCallsFollowUp(t *testing.T
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              tmpDir,
-				ModelName:         "test-model",
+				DefaultModel:      config.DefaultModel{Model: "test-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -897,7 +897,7 @@ func TestProcessMessage_HandledToolProcessesQueuedSteeringBeforeReturning(t *tes
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              tmpDir,
-				ModelName:         "test-model",
+				DefaultModel:      config.DefaultModel{Model: "test-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -962,7 +962,7 @@ func TestProcessMessage_MediaArtifactCanBeForwardedBySendFile(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.Home = tmpDir
-	cfg.Agents.Defaults.ModelName = "test-model"
+	cfg.Agents.Defaults.DefaultModel = config.DefaultModel{Model: "test-model"}
 	cfg.Agents.Defaults.MaxTokens = 4096
 	cfg.Agents.Defaults.MaxToolIterations = 10
 	// An explicitly registered agent. The registry no longer contains an
@@ -1064,7 +1064,7 @@ func TestAgentLoop_GetStartupInfo(t *testing.T) {
 
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.Home = tmpDir
-	cfg.Agents.Defaults.ModelName = "test-model"
+	cfg.Agents.Defaults.DefaultModel = config.DefaultModel{Model: "test-model"}
 	cfg.Agents.Defaults.MaxTokens = 4096
 	cfg.Agents.Defaults.MaxToolIterations = 10
 	// An explicitly registered agent. The registry no longer contains an
@@ -1121,7 +1121,7 @@ func TestAgentLoop_Stop(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              tmpDir,
-				ModelName:         "test-model",
+				DefaultModel:      config.DefaultModel{Model: "test-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -1667,7 +1667,7 @@ func TestProcessMessage_UsesRouteSessionKey(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              tmpDir,
-				ModelName:         "test-model",
+				DefaultModel:      config.DefaultModel{Model: "test-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -1735,7 +1735,7 @@ func TestProcessMessage_CommandOutcomes(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              tmpDir,
-				ModelName:         "test-model",
+				DefaultModel:      config.DefaultModel{Model: "test-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -1859,8 +1859,7 @@ func TestProcessMessage_SwitchModelShowModelConsistency(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              tmpDir,
-				Provider:          "openai",
-				ModelName:         "local",
+				DefaultModel:      config.DefaultModel{Model: "openai/local-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -1899,7 +1898,7 @@ func TestProcessMessage_SwitchModelShowModelConsistency(t *testing.T) {
 			ID:   "user1",
 		},
 	})
-	if !strings.Contains(switchResp, "Switched model from local to deepseek") {
+	if !strings.Contains(switchResp, "Switched model from openai/local-model to deepseek") {
 		t.Fatalf("unexpected /switch reply: %q", switchResp)
 	}
 
@@ -1944,8 +1943,7 @@ func TestProcessMessage_SwitchModelRejectsUnknownAlias(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              tmpDir,
-				Provider:          "openai",
-				ModelName:         "local",
+				DefaultModel:      config.DefaultModel{Model: "openai/local-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -1994,7 +1992,7 @@ func TestProcessMessage_SwitchModelRejectsUnknownAlias(t *testing.T) {
 			ID:   "user1",
 		},
 	})
-	if !strings.Contains(showResp, "Current Model: local (Provider: openai)") {
+	if !strings.Contains(showResp, "Current Model: openai/local-model (Provider: openai)") {
 		t.Fatalf("unexpected /show model reply after rejected switch: %q", showResp)
 	}
 
@@ -2038,8 +2036,7 @@ func TestProcessMessage_SwitchModelRoutesSubsequentRequestsToSelectedProvider(t 
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              tmpDir,
-				Provider:          "openai",
-				ModelName:         "local",
+				DefaultModel:      config.DefaultModel{Model: "openai/Qwen3.5-35B-A3B"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -2106,7 +2103,7 @@ func TestProcessMessage_SwitchModelRoutesSubsequentRequestsToSelectedProvider(t 
 			ID:   "user1",
 		},
 	})
-	if !strings.Contains(switchResp, "Switched model from local to deepseek") {
+	if !strings.Contains(switchResp, "Switched model from openai/Qwen3.5-35B-A3B to deepseek") {
 		t.Fatalf("unexpected /switch reply: %q", switchResp)
 	}
 
@@ -2185,7 +2182,7 @@ func TestProcessMessage_ModelRoutingUsesLightProvider(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              tmpDir,
-				ModelName:         "gemini-main",
+				DefaultModel:      config.DefaultModel{Model: "gemini/gemini-2.5-flash"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 				Routing: &config.RoutingConfig{
@@ -2264,7 +2261,7 @@ func TestToolResult_SilentToolDoesNotSendUserMessage(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              tmpDir,
-				ModelName:         "test-model",
+				DefaultModel:      config.DefaultModel{Model: "test-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -2318,7 +2315,7 @@ func TestToolResult_UserFacingToolDoesSendMessage(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              tmpDir,
-				ModelName:         "test-model",
+				DefaultModel:      config.DefaultModel{Model: "test-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -2401,7 +2398,7 @@ func TestAgentLoop_ContextExhaustionRetry(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              tmpDir,
-				ModelName:         "test-model",
+				DefaultModel:      config.DefaultModel{Model: "test-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -2491,7 +2488,7 @@ func TestAgentLoop_EmptyModelResponseUsesAccurateFallback(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              tmpDir,
-				ModelName:         "test-model",
+				DefaultModel:      config.DefaultModel{Model: "test-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 3,
 			},
@@ -2540,7 +2537,7 @@ func TestAgentLoop_ToolLimitUsesDedicatedFallback(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              tmpDir,
-				ModelName:         "test-model",
+				DefaultModel:      config.DefaultModel{Model: "test-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 1,
 			},
@@ -2614,7 +2611,7 @@ func TestAgentLoop_SuccessfulTurnDoesNotSetTurnFailed(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              tmpDir,
-				ModelName:         "test-model",
+				DefaultModel:      config.DefaultModel{Model: "test-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -2667,7 +2664,7 @@ func TestProcessDirectWithChannel_TriggersMCPInitialization(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              tmpDir,
-				ModelName:         "test-model",
+				DefaultModel:      config.DefaultModel{Model: "test-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -2729,7 +2726,7 @@ func TestTargetReasoningChannelID_AllChannels(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              tmpDir,
-				ModelName:         "test-model",
+				DefaultModel:      config.DefaultModel{Model: "test-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -2807,7 +2804,7 @@ func TestHandleReasoning(t *testing.T) {
 			Agents: config.AgentsConfig{
 				Defaults: config.AgentDefaults{
 					Home:              tmpDir,
-					ModelName:         "test-model",
+					DefaultModel:      config.DefaultModel{Model: "test-model"},
 					MaxTokens:         4096,
 					MaxToolIterations: 10,
 				},
@@ -2974,7 +2971,7 @@ func TestProcessMessage_PublishesReasoningContentToReasoningChannel(t *testing.T
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              tmpDir,
-				ModelName:         "test-model",
+				DefaultModel:      config.DefaultModel{Model: "test-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -3038,7 +3035,7 @@ func TestProcessMessage_PublishesToolFeedbackWhenEnabled(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              tmpDir,
-				ModelName:         "test-model",
+				DefaultModel:      config.DefaultModel{Model: "test-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 				ToolFeedback: config.ToolFeedbackConfig{

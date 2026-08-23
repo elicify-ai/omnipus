@@ -40,7 +40,7 @@ func TestCustomAgent_HasNoSystemToolsRegistered(t *testing.T) {
 
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.Home = tmpDir
-	cfg.Agents.Defaults.ModelName = "test-model"
+	cfg.Agents.Defaults.DefaultModel = config.DefaultModel{Model: "test-model"}
 	// Add a custom agent.
 	cfg.Agents.List = []config.AgentConfig{
 		{ID: "custom-bot", Name: "Custom Bot"},

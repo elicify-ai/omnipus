@@ -15,8 +15,11 @@ import (
 // selector helper (buildModelListResolver).
 //
 // Resolution order (per phase-1 spec §11 Dataset 1 + FR-003):
-//  1. Exact match against cfg.GetModelConfig (looks up cfg.Providers by
-//     ModelName). This is the historical path.
+//  1. cfg.FindModelConfigBySlug — a row whose Model equals the slug, else a
+//     row whose display alias (ModelConfig.ModelName, until T067-08 deletes
+//     it) equals the slug. The former rung 1 — cfg.GetModelConfig by alias —
+//     is gone: GetModelConfig now keys on the exact (provider, model) pair
+//     (ADR-068 D14.1) and is the DEFAULT model's lookup, not a slug resolver.
 //  2. Exact match against cfg.Providers[i].Model (the protocol-prefixed form).
 //  3. Match against the model ID extracted from cfg.Providers[i].Model via
 //     providers.ExtractProtocol — catches slugs like "gpt-4o" when the entry
@@ -46,8 +49,8 @@ func ResolveModelCfg(cfg *config.Config, modelName, workspace string) (*config.M
 		return nil, fmt.Errorf("model name is required")
 	}
 
-	// 1. Direct match via cfg.GetModelConfig (matches by ModelName).
-	if mc, err := cfg.GetModelConfig(raw); err == nil && mc != nil {
+	// 1. Direct slug match (Model, then the row display alias).
+	if mc, err := cfg.FindModelConfigBySlug(raw); err == nil && mc != nil {
 		return cloneWithWorkspace(mc, workspace), nil
 	}
 

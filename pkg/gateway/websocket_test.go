@@ -29,9 +29,9 @@ func newTestWSHandler(t *testing.T) (*WSHandler, *bus.MessageBus, *agent.AgentLo
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080, DevModeBypass: true},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      tmpDir,
-				ModelName: "test-model",
-				MaxTokens: 4096,
+				Home:         tmpDir,
+				DefaultModel: config.DefaultModel{Model: "test-model"},
+				MaxTokens:    4096,
 			},
 			// An explicitly registered agent. handleChatMessage REFUSES a chat
 			// frame it cannot resolve an agent for rather than publishing a
@@ -295,7 +295,8 @@ func TestWSHandlerAuth_NoUsersConfigured_UsesSharedConstant(t *testing.T) {
 			DevModeBypass: false, // explicit: fail closed, not the dev-mode fallback.
 		},
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+			Defaults: config.AgentDefaults{
+				Home: tmpDir, DefaultModel: config.DefaultModel{Model: "test-model"}, MaxTokens: 4096},
 		},
 	}
 	msgBus := bus.NewMessageBus()

@@ -115,7 +115,7 @@ func schedTestLoop(t *testing.T) (*AgentLoop, string) {
 
 	cfg := &config.Config{}
 	cfg.Agents.Defaults.Home = filepath.Join(home, "default-workspace")
-	cfg.Agents.Defaults.ModelName = "test-model"
+	cfg.Agents.Defaults.DefaultModel = config.DefaultModel{Model: "test-model"}
 	cfg.Agents.Defaults.MaxTokens = 4096
 	cfg.Agents.Defaults.MaxToolIterations = 10
 
@@ -403,7 +403,7 @@ func schedTestLoopWithAudit(t *testing.T) (*AgentLoop, string, string) {
 
 	cfg := &config.Config{}
 	cfg.Agents.Defaults.Home = workspaceDir
-	cfg.Agents.Defaults.ModelName = "test-model"
+	cfg.Agents.Defaults.DefaultModel = config.DefaultModel{Model: "test-model"}
 	cfg.Agents.Defaults.MaxTokens = 4096
 	cfg.Agents.Defaults.MaxToolIterations = 10
 	// Enable audit logging so the auto-deny path writes to audit.jsonl.

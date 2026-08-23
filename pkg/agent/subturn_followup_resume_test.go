@@ -60,7 +60,7 @@ func newFollowUpResumeTestAgentLoop(t *testing.T) *AgentLoop {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              tmpDir,
-				ModelName:         "followup-resume-test-model",
+				DefaultModel:      config.DefaultModel{Model: "followup-resume-test-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},

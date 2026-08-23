@@ -32,7 +32,8 @@ func newExternalCLITaskTestLoop(t *testing.T, provider providers.LLMProvider) (a
 
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Home: t.TempDir(), ModelName: "test-model"},
+			Defaults: config.AgentDefaults{
+				Home: t.TempDir(), DefaultModel: config.DefaultModel{Model: "test-model"}},
 			List: []config.AgentConfig{
 				{
 					ID:   "ext-agent",

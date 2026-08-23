@@ -90,7 +90,7 @@ import (
 func TestSpawnSubTurn_AwaitedSyncCancel_CascadesAndRecordsDescendants(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Provider: "mock"},
+			Defaults: config.AgentDefaults{DefaultModel: config.DefaultModel{Provider: "mock"}},
 			List:     []config.AgentConfig{{ID: "mia"}},
 		},
 	}

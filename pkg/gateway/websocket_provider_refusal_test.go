@@ -142,9 +142,9 @@ func newRefusingTestWSHandler(t *testing.T) (*WSHandler, *rateLimitedStreamingPr
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080, DevModeBypass: true},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      tmpDir,
-				ModelName: refusalTestModel,
-				MaxTokens: 4096,
+				Home:         tmpDir,
+				DefaultModel: config.DefaultModel{Model: refusalTestModel},
+				MaxTokens:    4096,
 			},
 			// A real chat-target agent: the "main" sentinel is gone (ADR-064),
 			// so handleChatMessage rejects a message frame with no agent_id

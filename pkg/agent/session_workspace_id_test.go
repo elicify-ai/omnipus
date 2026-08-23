@@ -44,7 +44,7 @@ func TestSessionCreation_InheritsWorkspaceID(t *testing.T) {
 
 	cfg := &config.Config{}
 	cfg.Agents.Defaults.Home = workspace
-	cfg.Agents.Defaults.ModelName = "test-model"
+	cfg.Agents.Defaults.DefaultModel = config.DefaultModel{Model: "test-model"}
 	cfg.Agents.List = []config.AgentConfig{
 		{ID: "mia", Default: true},
 		{ID: "ray"},
@@ -119,7 +119,7 @@ func TestSessionCreation_UnboundInstance_NoWorkspaceID(t *testing.T) {
 
 	cfg := &config.Config{}
 	cfg.Agents.Defaults.Home = workspace
-	cfg.Agents.Defaults.ModelName = "test-model"
+	cfg.Agents.Defaults.DefaultModel = config.DefaultModel{Model: "test-model"}
 	cfg.Agents.List = []config.AgentConfig{
 		{ID: "mia", Default: true},
 	}
@@ -168,7 +168,7 @@ func TestSessionCreation_TwoInstancesDifferentWorkspaces(t *testing.T) {
 
 	cfg := &config.Config{}
 	cfg.Agents.Defaults.Home = workspace
-	cfg.Agents.Defaults.ModelName = "test-model"
+	cfg.Agents.Defaults.DefaultModel = config.DefaultModel{Model: "test-model"}
 	cfg.Agents.List = []config.AgentConfig{
 		{ID: "mia", Default: true},
 		{ID: "ray"},

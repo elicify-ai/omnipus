@@ -68,7 +68,8 @@ func (p *usageStubProvider) GetDefaultModel() string { return "usage-stub-model"
 func TestRunTurn_DebitsTokenBudget_CoreAgentNoExemption(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Home: t.TempDir(), ModelName: "test-model"},
+			Defaults: config.AgentDefaults{
+				Home: t.TempDir(), DefaultModel: config.DefaultModel{Model: "test-model"}},
 			List: []config.AgentConfig{
 				{ID: "core-agent", Name: "Core", Type: config.AgentTypeCore, Home: t.TempDir()},
 			},

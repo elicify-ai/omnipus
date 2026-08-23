@@ -83,9 +83,9 @@ func newOrphanForegroundTurnTestWSHandler(
 		},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      tmpDir,
-				ModelName: "blocking-cancel-provider",
-				MaxTokens: 4096,
+				Home:         tmpDir,
+				DefaultModel: config.DefaultModel{Model: "blocking-cancel-provider"},
+				MaxTokens:    4096,
 			},
 			// An explicitly registered agent: no implicit "main" sentinel remains
 			// for chat dispatch to resolve to (ADR-064).

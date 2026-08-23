@@ -119,9 +119,9 @@ func newBrowserWSTestHandler(t *testing.T, mutate func(cfg *config.Config)) (*Br
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080, DevModeBypass: true},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      tmpDir,
-				ModelName: "test-model",
-				MaxTokens: 4096,
+				Home:         tmpDir,
+				DefaultModel: config.DefaultModel{Model: "test-model"},
+				MaxTokens:    4096,
 			},
 			// An explicitly registered agent. Several tests built on this
 			// harness call GetRegistry().GetDefaultAgent() and require a
@@ -632,9 +632,9 @@ func newBrowserWSHandlerWithAudit(t *testing.T) (*BrowserWSHandler, *agent.Agent
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080, DevModeBypass: true},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      workspaceDir,
-				ModelName: "test-model",
-				MaxTokens: 4096,
+				Home:         workspaceDir,
+				DefaultModel: config.DefaultModel{Model: "test-model"},
+				MaxTokens:    4096,
 			},
 		},
 		Sandbox: config.OmnipusSandboxConfig{

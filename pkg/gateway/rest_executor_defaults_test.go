@@ -43,7 +43,7 @@ func executorDefaultsTestAPI(t *testing.T) *restAPI {
 	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{ModelName: "test-model", MaxTokens: 4096},
+			Defaults: config.AgentDefaults{DefaultModel: config.DefaultModel{Model: "test-model"}, MaxTokens: 4096},
 		},
 	}
 	al := mustAgentLoop(t, cfg, bus.NewMessageBus(), &restMockProvider{})
