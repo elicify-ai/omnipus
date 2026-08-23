@@ -97,8 +97,63 @@ components:
       $ref: ./components/schemas/BrowserInspectResponse.yaml
     ChangePasswordRequest:
       $ref: ./components/schemas/ChangePasswordRequest.yaml
+    # OnboardingCompleteRequest is hosted INLINE here because its `provider`
+    # member is a discriminated union (ADR-068 MAJ-014) and oapi-codegen only
+    # emits named variant structs + As*/From* accessors for a oneOf over
+    # INTERNAL component refs (ADR-034 precedent, AgentCreateRequest). The
+    # inbound-validator twin lives in
+    # contracts/components/schemas/OnboardingCompleteRequest.yaml with file
+    # refs over the same two variants — keep both in lockstep.
     OnboardingCompleteRequest:
-      $ref: ./components/schemas/OnboardingCompleteRequest.yaml
+      type: object
+      title: OnboardingCompleteRequest
+      description: >
+        Body for POST /onboarding/complete. Atomically sets up the first LLM
+        provider and creates the initial admin account. CSRF-exempt (no cookie
+        exists at this point). `provider` is discriminated by `auth_method`:
+        `api_key` requires `api_key`; `sign_in` forbids it (ADR-068 MAJ-014).
+      required:
+        - provider
+        - admin
+      additionalProperties: false
+      properties:
+        provider:
+          description: LLM provider configuration to persist, discriminated by `auth_method`.
+          oneOf:
+            - $ref: '#/components/schemas/OnboardingProviderApiKey'
+            - $ref: '#/components/schemas/OnboardingProviderSignIn'
+          discriminator:
+            propertyName: auth_method
+            mapping:
+              api_key: '#/components/schemas/OnboardingProviderApiKey'
+              sign_in: '#/components/schemas/OnboardingProviderSignIn'
+        admin:
+          type: object
+          description: Initial admin account credentials.
+          required:
+            - username
+            - password
+          properties:
+            username:
+              type: string
+              minLength: 2
+              maxLength: 63
+              pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{1,62}$'
+              description: Admin login name.
+              example: "admin"
+            password:
+              type: string
+              minLength: 8
+              description: Admin password. Minimum 8 characters.
+              example: "s3cr3tpassword"
+    OnboardingProviderApiKey:
+      $ref: ./components/schemas/OnboardingProviderApiKey.yaml
+    OnboardingProviderSignIn:
+      $ref: ./components/schemas/OnboardingProviderSignIn.yaml
+    SignInStartResponse:
+      $ref: ./components/schemas/SignInStartResponse.yaml
+    SignInStatus:
+      $ref: ./components/schemas/SignInStatus.yaml
     OnboardingCompleteResponse:
       $ref: ./components/schemas/LoginResponse.yaml
     ProbeProviderRequest:
@@ -4473,6 +4528,83 @@ paths:
                 $ref: '#/components/schemas/OperationResult'
         '401':
           $ref: '#/components/responses/401Unauthorized'
+  /providers/{id}/sign-in:
+    post:
+      operationId: startProviderSignIn
+      summary: Start a vendor sign-in for a provider (ADR-068 FR-008/FR-009)
+      description: >
+        Omnipus never performs or stores the vendor login itself. This
+        endpoint returns the one instruction the operator needs — the vendor
+        CLI's login command — so the SPA can show it beside a *Check sign-in*
+        button. Returns 400 `{"error":"provider does not support sign-in"}`
+        when the provider's catalog row does not list `sign_in` in
+        `auth_methods` (FR-008). Never contacts the vendor and persists
+        nothing. adminWrap: 401 unauthenticated, 503 under dev-mode bypass.
+      tags:
+      - Providers
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Provider id whose catalog row declares sign_in (e.g. "codex-cli", "openai-chatgpt", "github-copilot").
+        example: codex-cli
+      responses:
+        '200':
+          description: The CLI login instruction for this provider.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SignInStartResponse'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '503':
+          $ref: '#/components/responses/503BypassActive'
+  /providers/{id}/sign-in/status:
+    get:
+      operationId: getProviderSignInStatus
+      summary: Read a provider's vendor sign-in state (ADR-068 FR-009)
+      description: >
+        Reads the vendor CLI's saved login (codex `auth.json` — only
+        `tokens.access_token` for the unverified `exp` claim and
+        `tokens.account_id` for the label; the Copilot CLI's own auth-status)
+        and maps it to `not_signed_in | signed_in | expired`. `expired`
+        follows the JWT `exp` when decodable and the one-hour file-age rule
+        otherwise (MAJ-006). The file is never modified and no refresh
+        request is ever made (FR-007). A missing CLI binary is reported on
+        the Provider row as `disconnected`, not here. Returns 400
+        `{"error":"provider does not support sign-in"}` for providers without
+        `sign_in`. adminWrap: 401 / 503 under bypass.
+      tags:
+      - Providers
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Provider id whose catalog row declares sign_in.
+        example: codex-cli
+      responses:
+        '200':
+          description: The current sign-in state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SignInStatus'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '503':
+          $ref: '#/components/responses/503BypassActive'
   /providers/{id}/entitlement:
     post:
       operationId: checkProviderEntitlement

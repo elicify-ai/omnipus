@@ -67,7 +67,7 @@ func TestSessionCookie_SurvivesManualReload(t *testing.T) {
 
 	// Step 1: onboard admin — issues the omnipus-session cookie and persists
 	// session_token_hash to config.json.
-	body := `{"provider":{"id":"openai","api_key":"sk-test"},"admin":{"username":"admin","password":"admin123"}}`
+	body := `{"provider":{"auth_method":"api_key","id":"openai","api_key":"sk-test"},"admin":{"username":"admin","password":"admin123"}}`
 	body = hermeticOnboardBody(t, body)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")

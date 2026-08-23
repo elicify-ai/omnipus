@@ -285,7 +285,7 @@ func TestProviders_BackwardCompatPlaintextAPIKey(t *testing.T) {
 // is available — NOT as plaintext api_key in config.json.
 //
 // BDD: Given OMNIPUS_MASTER_KEY is set (credentials store can be unlocked),
-// When POST /api/v1/onboarding/complete {"provider":{"id":"openai","api_key":"sk-secret"},...} is called,
+// When POST /api/v1/onboarding/complete {"provider":{"auth_method":"api_key","id":"openai","api_key":"sk-secret"},...} is called,
 // Then config.json has "api_key_ref" in the provider entry (not plaintext "api_key"),
 // AND credentials.json contains the API key encrypted under the master key.
 //
@@ -293,7 +293,7 @@ func TestProviders_BackwardCompatPlaintextAPIKey(t *testing.T) {
 func TestOnboarding_CreatesAPIKeyRef(t *testing.T) {
 	api, tmpDir, _ := newTestAPIWithMasterKey(t)
 
-	body := `{"provider":{"id":"anthropic","api_key":"sk-ant-secret-key"},"admin":{"username":"alice","password":"alice1234"}}`
+	body := `{"provider":{"auth_method":"api_key","id":"anthropic","api_key":"sk-ant-secret-key"},"admin":{"username":"alice","password":"alice1234"}}`
 	body = hermeticOnboardBody(t, body)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -373,7 +373,7 @@ func TestOnboarding_RefusesWhenNoMasterKey(t *testing.T) {
 		0o600,
 	))
 
-	body := `{"provider":{"id":"openai","api_key":"sk-fallback-test"},"admin":{"username":"bob","password":"bob12345"}}`
+	body := `{"provider":{"auth_method":"api_key","id":"openai","api_key":"sk-fallback-test"},"admin":{"username":"bob","password":"bob12345"}}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()

@@ -572,7 +572,7 @@ EOF
   # Onboarding must pass the REAL key — the handler appends a second provider entry the
   # agent's model lookup then picks; a placeholder would 401 every LLM call.
   jq -n --arg key "$key" \
-    '{provider:{id:"openrouter",api_key:$key,model:"openrouter/z-ai/glm-5.2"},admin:{username:"admin",password:"admin123"}}' \
+    '{provider:{auth_method:"api_key",id:"openrouter",api_key:$key,model:"openrouter/z-ai/glm-5.2"},admin:{username:"admin",password:"admin123"}}' \
     | curl -sf -X POST "http://localhost:$port/api/v1/onboarding/complete" \
         -H 'Content-Type: application/json' -d @- >/dev/null \
     || { echo "[$name] onboarding failed" >&2; cat "$logf" >&2; return 1; }

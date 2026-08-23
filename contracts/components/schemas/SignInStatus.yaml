@@ -1,0 +1,36 @@
+type: object
+description: >
+  Response from GET /providers/{id}/sign-in/status (ADR-068 FR-009). Read
+  from the vendor CLI's saved login only — Omnipus never refreshes a token
+  (MAJ-006). There is no `pending` state (MIN-005): a check is synchronous.
+required:
+  - state
+additionalProperties: false
+properties:
+  state:
+    type: string
+    enum:
+      - not_signed_in
+      - signed_in
+      - expired
+    description: >
+      not_signed_in when no saved login exists (or it is unreadable /
+      malformed — logged as a warning); signed_in when a usable login exists;
+      expired when the access token's JWT `exp` (decoded unverified, display
+      only) is at or before now, or — without a decodable `exp` — the saved
+      login file is older than one hour.
+    example: signed_in
+  account_label:
+    type: string
+    maxLength: 128
+    description: >
+      Opaque account identifier from the CLI's saved login
+      (`tokens.account_id` for codex; the GitHub login for Copilot when the
+      CLI reports one). Present only when the saved login yields one; never
+      an e-mail.
+    example: user_abc123
+  expires_at:
+    type: string
+    format: date-time
+    description: The access token's `exp` claim when decodable. Absent otherwise.
+    example: "2026-09-01T12:00:00Z"

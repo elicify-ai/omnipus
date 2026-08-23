@@ -1,0 +1,31 @@
+type: object
+description: >
+  Response from POST /providers/{id}/sign-in (ADR-068 FR-009, MIN-005).
+  Omnipus never performs or stores a vendor login itself: the only sign-in
+  mechanism is the vendor CLI's own login command, which the operator runs
+  in a terminal. `method` is therefore pinned to `cli_login` — there are no
+  device-code fields because nothing produces them.
+required:
+  - method
+  - command
+  - instructions
+additionalProperties: false
+properties:
+  method:
+    type: string
+    enum:
+      - cli_login
+    description: The only sign-in mechanism — run the vendor CLI's login command.
+    example: cli_login
+  command:
+    type: string
+    minLength: 1
+    maxLength: 256
+    description: The exact command the operator runs in a terminal (e.g. "codex login", "copilot login").
+    example: codex login
+  instructions:
+    type: string
+    minLength: 1
+    maxLength: 1024
+    description: Human-readable guidance shown beside the command, ending with the prompt to click Check sign-in.
+    example: Run `codex login` in a terminal, then click Check sign-in.

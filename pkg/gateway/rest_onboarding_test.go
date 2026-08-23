@@ -114,7 +114,7 @@ func hermeticOnboardBody(t *testing.T, body string) string {
 // TestHandleCompleteOnboarding_Success verifies that POST /api/v1/onboarding/complete
 // with valid provider and admin credentials returns 200 with a token.
 // BDD: Given a fresh install (onboarding not complete),
-// When POST /api/v1/onboarding/complete {"provider":{"id":"openai","api_key":"sk-test"},"admin":{"username":"admin","password":"secret123"}} is called,
+// When POST /api/v1/onboarding/complete {"provider":{"auth_method":"api_key","id":"openai","api_key":"sk-test"},"admin":{"username":"admin","password":"secret123"}} is called,
 // Then 200 with {"token":"<token>","role":"admin","username":"admin"}.
 func TestHandleCompleteOnboarding_Success(t *testing.T) {
 	tmpDir := t.TempDir()
@@ -138,7 +138,7 @@ func TestHandleCompleteOnboarding_Success(t *testing.T) {
 	// Verify onboarding is not complete yet
 	require.False(t, api.onboardingMgr.IsComplete(), "onboarding should not be complete initially")
 
-	body := `{"provider":{"id":"openai","api_key":"sk-test"},"admin":{"username":"admin","password":"secret123"}}`
+	body := `{"provider":{"auth_method":"api_key","id":"openai","api_key":"sk-test"},"admin":{"username":"admin","password":"secret123"}}`
 	body = hermeticOnboardBody(t, body)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -187,7 +187,7 @@ func TestHandleCompleteOnboarding_AlreadyComplete(t *testing.T) {
 	// Mark onboarding as complete
 	require.NoError(t, onboardingMgr.CompleteOnboarding())
 
-	body := `{"provider":{"id":"openai","api_key":"sk-test"},"admin":{"username":"admin","password":"secret123"}}`
+	body := `{"provider":{"auth_method":"api_key","id":"openai","api_key":"sk-test"},"admin":{"username":"admin","password":"secret123"}}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -208,7 +208,7 @@ func TestHandleCompleteOnboarding_AlreadyComplete(t *testing.T) {
 func TestHandleCompleteOnboarding_MissingAPIKey(t *testing.T) {
 	api := newTestRestAPIWithHomeAuth(t)
 
-	body := `{"provider":{"id":"openai","api_key":""},"admin":{"username":"admin","password":"secret123"}}`
+	body := `{"provider":{"auth_method":"api_key","id":"openai","api_key":""},"admin":{"username":"admin","password":"secret123"}}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -229,7 +229,7 @@ func TestHandleCompleteOnboarding_MissingAPIKey(t *testing.T) {
 func TestHandleCompleteOnboarding_MissingProviderID(t *testing.T) {
 	api := newTestRestAPIWithHomeAuth(t)
 
-	body := `{"provider":{"id":"","api_key":"sk-test"},"admin":{"username":"admin","password":"secret123"}}`
+	body := `{"provider":{"auth_method":"api_key","id":"","api_key":"sk-test"},"admin":{"username":"admin","password":"secret123"}}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -250,7 +250,7 @@ func TestHandleCompleteOnboarding_MissingProviderID(t *testing.T) {
 func TestHandleCompleteOnboarding_MissingAdminUsername(t *testing.T) {
 	api := newTestRestAPIWithHomeAuth(t)
 
-	body := `{"provider":{"id":"openai","api_key":"sk-test"},"admin":{"username":"","password":"secret123"}}`
+	body := `{"provider":{"auth_method":"api_key","id":"openai","api_key":"sk-test"},"admin":{"username":"","password":"secret123"}}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -271,7 +271,7 @@ func TestHandleCompleteOnboarding_MissingAdminUsername(t *testing.T) {
 func TestHandleCompleteOnboarding_MissingAdminPassword(t *testing.T) {
 	api := newTestRestAPIWithHomeAuth(t)
 
-	body := `{"provider":{"id":"openai","api_key":"sk-test"},"admin":{"username":"admin","password":""}}`
+	body := `{"provider":{"auth_method":"api_key","id":"openai","api_key":"sk-test"},"admin":{"username":"admin","password":""}}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -303,7 +303,7 @@ func TestHandleCompleteOnboarding_RejectsInvalidUsername(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			api := newTestRestAPIWithHomeAuth(t)
 
-			body := `{"provider":{"id":"openai","api_key":"sk-test"},"admin":{"username":"` + tc.username + `","password":"secret123"}}`
+			body := `{"provider":{"auth_method":"api_key","id":"openai","api_key":"sk-test"},"admin":{"username":"` + tc.username + `","password":"secret123"}}`
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(body))
 			req.Header.Set("Content-Type", "application/json")
 			w := httptest.NewRecorder()
@@ -323,7 +323,7 @@ func TestHandleCompleteOnboarding_RejectsInvalidUsername(t *testing.T) {
 	t.Run("valid 2-char username passes username check", func(t *testing.T) {
 		api := newTestRestAPIWithHomeAuth(t)
 
-		body := `{"provider":{"id":"openai","api_key":"sk-test"},"admin":{"username":"ab","password":"secret123"}}`
+		body := `{"provider":{"auth_method":"api_key","id":"openai","api_key":"sk-test"},"admin":{"username":"ab","password":"secret123"}}`
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
@@ -348,7 +348,7 @@ func TestHandleCompleteOnboarding_RejectsInvalidUsername(t *testing.T) {
 func TestHandleCompleteOnboarding_WeakPassword(t *testing.T) {
 	api := newTestRestAPIWithHomeAuth(t)
 
-	body := `{"provider":{"id":"openai","api_key":"sk-test"},"admin":{"username":"admin","password":"short"}}`
+	body := `{"provider":{"auth_method":"api_key","id":"openai","api_key":"sk-test"},"admin":{"username":"admin","password":"short"}}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -406,7 +406,7 @@ func TestHandleCompleteOnboarding_ThenLogin(t *testing.T) {
 	api := newOnboardingTestAPI(t, tmpDir, al)
 
 	// Step 1: Complete onboarding
-	onboardingBody := `{"provider":{"id":"openai","api_key":"sk-test"},"admin":{"username":"admin","password":"secret123"}}`
+	onboardingBody := `{"provider":{"auth_method":"api_key","id":"openai","api_key":"sk-test"},"admin":{"username":"admin","password":"secret123"}}`
 	onboardingBody = hermeticOnboardBody(t, onboardingBody)
 	onboardingReq := httptest.NewRequest(
 		http.MethodPost,
@@ -485,7 +485,7 @@ func TestHandleCompleteOnboarding_PersistsAdmin(t *testing.T) {
 	api := newOnboardingTestAPI(t, tmpDir, al)
 
 	// Complete onboarding
-	body := `{"provider":{"id":"openai","api_key":"sk-test"},"admin":{"username":"admin","password":"secret123"}}`
+	body := `{"provider":{"auth_method":"api_key","id":"openai","api_key":"sk-test"},"admin":{"username":"admin","password":"secret123"}}`
 	body = hermeticOnboardBody(t, body)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -554,7 +554,7 @@ func TestHandleCompleteOnboarding_WritesActualModelAsAlias(t *testing.T) {
 	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
 	api := newOnboardingTestAPI(t, tmpDir, al)
 
-	body := `{"provider":{"id":"openrouter","api_key":"sk-or-v1-test","model":"z-ai/glm-5v-turbo"},` +
+	body := `{"provider":{"auth_method":"api_key","id":"openrouter","api_key":"sk-or-v1-test","model":"z-ai/glm-5v-turbo"},` +
 		`"admin":{"username":"admin","password":"secret123"}}`
 	body = hermeticOnboardBody(t, body)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(body))
@@ -628,7 +628,7 @@ func TestHandleCompleteOnboarding_SecondModelSameProviderCreatesNewEntry(t *test
 	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
 	api := newOnboardingTestAPI(t, tmpDir, al)
 
-	body := `{"provider":{"id":"openrouter","api_key":"sk-or-v1-test","model":"anthropic/claude-sonnet-4.6"},` +
+	body := `{"provider":{"auth_method":"api_key","id":"openrouter","api_key":"sk-or-v1-test","model":"anthropic/claude-sonnet-4.6"},` +
 		`"admin":{"username":"admin","password":"secret123"}}`
 	body = hermeticOnboardBody(t, body)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(body))
@@ -712,7 +712,7 @@ func TestHandleCompleteOnboarding_Concurrent(t *testing.T) {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
-			body := `{"provider":{"id":"openai","api_key":"sk-test"},"admin":{"username":"admin","password":"secret123"}}`
+			body := `{"provider":{"auth_method":"api_key","id":"openai","api_key":"sk-test"},"admin":{"username":"admin","password":"secret123"}}`
 			body = withProviderEndpoint(body, upstream)
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(body))
 			req.Header.Set("Content-Type", "application/json")
@@ -792,7 +792,7 @@ func TestHandleCompleteOnboarding_ConcurrentDifferentUsers(t *testing.T) {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
-			body := `{"provider":{"id":"openai","api_key":"sk-test-` + string(
+			body := `{"provider":{"auth_method":"api_key","id":"openai","api_key":"sk-test-` + string(
 				rune('0'+idx),
 			) + `"},"admin":{"username":"admin` + string(
 				rune('0'+idx),
@@ -1003,7 +1003,7 @@ func TestHandleCompleteOnboarding_BadRequest_ReleasesReservation(t *testing.T) {
 
 	// Step 1: Send a bad request — admin.username is empty, which triggers a 400
 	// before the config write. The reservation must be released in the defer.
-	badBody := `{"provider":{"id":"openai","api_key":"sk-test"},"admin":{"username":"","password":"secret123"}}`
+	badBody := `{"provider":{"auth_method":"api_key","id":"openai","api_key":"sk-test"},"admin":{"username":"","password":"secret123"}}`
 	badReq := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(badBody))
 	badReq.Header.Set("Content-Type", "application/json")
 	badW := httptest.NewRecorder()
@@ -1020,7 +1020,7 @@ func TestHandleCompleteOnboarding_BadRequest_ReleasesReservation(t *testing.T) {
 	require.False(t, api.onboardingMgr.IsComplete(),
 		"onboarding must NOT be complete after a 400 response")
 
-	goodBody := `{"provider":{"id":"openai","api_key":"sk-test"},"admin":{"username":"admin","password":"secret123"}}`
+	goodBody := `{"provider":{"auth_method":"api_key","id":"openai","api_key":"sk-test"},"admin":{"username":"admin","password":"secret123"}}`
 	goodBody = hermeticOnboardBody(t, goodBody)
 	goodReq := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(goodBody))
 	goodReq.Header.Set("Content-Type", "application/json")
@@ -1644,7 +1644,7 @@ func TestHandleCompleteOnboarding_ValidKeyAccepted(t *testing.T) {
 	// A provider that answers the probe successfully — i.e. says the key is good.
 	upstream := startFakeProviderUpstream(t)
 	body := withProviderEndpoint(
-		`{"provider":{"id":"openai","api_key":"sk-good-key"},"admin":{"username":"admin","password":"secret123"}}`,
+		`{"provider":{"auth_method":"api_key","id":"openai","api_key":"sk-good-key"},"admin":{"username":"admin","password":"secret123"}}`,
 		upstream,
 	)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(body))
@@ -1704,7 +1704,7 @@ func TestHandleCompleteOnboarding_InvalidKeyRejectedAndNotStored(t *testing.T) {
 	api := newOnboardingTestAPI(t, tmpDir, al)
 
 	body := withProviderEndpoint(
-		`{"provider":{"id":"openai","api_key":"sk-typo"},"admin":{"username":"admin","password":"secret123"}}`,
+		`{"provider":{"auth_method":"api_key","id":"openai","api_key":"sk-typo"},"admin":{"username":"admin","password":"secret123"}}`,
 		upstreamSrv.URL,
 	)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(body))
@@ -1769,7 +1769,7 @@ func TestHandleCompleteOnboarding_UnreachableProviderStillCompletes(t *testing.T
 	api := newOnboardingTestAPI(t, tmpDir, al)
 
 	body := withProviderEndpoint(
-		`{"provider":{"id":"openai","api_key":"sk-cannot-check"},"admin":{"username":"admin","password":"secret123"}}`,
+		`{"provider":{"auth_method":"api_key","id":"openai","api_key":"sk-cannot-check"},"admin":{"username":"admin","password":"secret123"}}`,
 		deadURL,
 	)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(body))
@@ -1833,7 +1833,7 @@ func TestHandleCompleteOnboarding_NoEndpointResolvedStillCompletesWithWarning(t 
 	t.Cleanup(func() { _ = auditLogger.Close() })
 	api.auditor = auditLogger
 
-	body := `{"provider":{"id":"azure","api_key":"sk-azure-key"},"admin":{"username":"admin","password":"secret123"}}`
+	body := `{"provider":{"auth_method":"api_key","id":"azure","api_key":"sk-azure-key"},"admin":{"username":"admin","password":"secret123"}}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -1908,7 +1908,7 @@ func TestHandleCompleteOnboarding_SSRFBlockedProbeStillCompletesWithWarning(t *t
 	api.auditor = auditLogger
 
 	// No `endpoint` field at all — probeBase must come from GetDefaultAPIBase.
-	body := `{"provider":{"id":"litellm","api_key":"sk-litellm-key"},"admin":{"username":"admin","password":"secret123"}}`
+	body := `{"provider":{"auth_method":"api_key","id":"litellm","api_key":"sk-litellm-key"},"admin":{"username":"admin","password":"secret123"}}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -2009,7 +2009,7 @@ func TestHandleCompleteOnboarding_UsesLiveCatalogForProbeModel(t *testing.T) {
 	api := newOnboardingTestAPI(t, tmpDir, al)
 
 	body := withProviderEndpoint(
-		`{"provider":{"id":"openrouter","api_key":"sk-or-v1-still-good"},"admin":{"username":"admin","password":"secret123"}}`,
+		`{"provider":{"auth_method":"api_key","id":"openrouter","api_key":"sk-or-v1-still-good"},"admin":{"username":"admin","password":"secret123"}}`,
 		upstream.URL,
 	)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(body))

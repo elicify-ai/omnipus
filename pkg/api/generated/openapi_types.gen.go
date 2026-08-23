@@ -2558,6 +2558,36 @@ func (e NotificationListNotificationsType) Valid() bool {
 	}
 }
 
+// Defines values for OnboardingProviderApiKeyAuthMethod.
+const (
+	OnboardingProviderApiKeyAuthMethodApiKey OnboardingProviderApiKeyAuthMethod = "api_key"
+)
+
+// Valid indicates whether the value is a known member of the OnboardingProviderApiKeyAuthMethod enum.
+func (e OnboardingProviderApiKeyAuthMethod) Valid() bool {
+	switch e {
+	case OnboardingProviderApiKeyAuthMethodApiKey:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for OnboardingProviderSignInAuthMethod.
+const (
+	OnboardingProviderSignInAuthMethodSignIn OnboardingProviderSignInAuthMethod = "sign_in"
+)
+
+// Valid indicates whether the value is a known member of the OnboardingProviderSignInAuthMethod enum.
+func (e OnboardingProviderSignInAuthMethod) Valid() bool {
+	switch e {
+	case OnboardingProviderSignInAuthMethodSignIn:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for OperationResultValidationOutcome.
 const (
 	OperationResultValidationOutcomeInvalidKey  OperationResultValidationOutcome = "invalid_key"
@@ -5300,6 +5330,42 @@ func (e SessionScopeResponseDmScope) Valid() bool {
 	case SessionScopeResponseDmScopePerChannelPeer:
 		return true
 	case SessionScopeResponseDmScopePerPeer:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SignInStartResponseMethod.
+const (
+	CliLogin SignInStartResponseMethod = "cli_login"
+)
+
+// Valid indicates whether the value is a known member of the SignInStartResponseMethod enum.
+func (e SignInStartResponseMethod) Valid() bool {
+	switch e {
+	case CliLogin:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SignInStatusState.
+const (
+	Expired     SignInStatusState = "expired"
+	NotSignedIn SignInStatusState = "not_signed_in"
+	SignedIn    SignInStatusState = "signed_in"
+)
+
+// Valid indicates whether the value is a known member of the SignInStatusState enum.
+func (e SignInStatusState) Valid() bool {
+	switch e {
+	case Expired:
+		return true
+	case NotSignedIn:
+		return true
+	case SignedIn:
 		return true
 	default:
 		return false
@@ -10381,7 +10447,7 @@ type NotificationListNotificationsSeverity string
 // NotificationListNotificationsType The event class. Extensible; consumers must tolerate unknown values.
 type NotificationListNotificationsType string
 
-// OnboardingCompleteRequest Body for POST /onboarding/complete. Atomically sets up the first LLM provider and creates the initial admin account. CSRF-exempt (no cookie exists at this point).
+// OnboardingCompleteRequest Body for POST /onboarding/complete. Atomically sets up the first LLM provider and creates the initial admin account. CSRF-exempt (no cookie exists at this point). `provider` is discriminated by `auth_method`: `api_key` requires `api_key`; `sign_in` forbids it (ADR-068 MAJ-014).
 type OnboardingCompleteRequest struct {
 	// Admin Initial admin account credentials.
 	Admin struct {
@@ -10392,20 +10458,13 @@ type OnboardingCompleteRequest struct {
 		Username string `json:"username"`
 	} `json:"admin"`
 
-	// Provider LLM provider configuration to persist.
-	Provider struct {
-		// ApiKey API key for the provider. Stored encrypted (AES-256-GCM) in credentials.json.
-		ApiKey string `json:"api_key"`
+	// Provider LLM provider configuration to persist, discriminated by `auth_method`.
+	Provider OnboardingCompleteRequest_Provider `json:"provider"`
+}
 
-		// Endpoint Optional custom API base URL, persisted as the provider entry's api_base. Required for providers that have no fixed default endpoint (e.g. azure, azure-openai — a per-resource host); also usable to override the regional default (e.g. a China vs international host). When omitted, the provider's built-in default base is used.
-		Endpoint *string `json:"endpoint,omitempty"`
-
-		// Id Provider protocol identifier (e.g. "anthropic", "openai", "openrouter", "gemini"). Must be a known protocol; unknown values are rejected with 400.
-		Id string `json:"id"`
-
-		// Model Default model to use for this provider. When omitted, a sensible default is chosen per provider (e.g. "claude-sonnet-4-6" for anthropic, "gpt-4o" for openai).
-		Model *string `json:"model,omitempty"`
-	} `json:"provider"`
+// OnboardingCompleteRequest_Provider LLM provider configuration to persist, discriminated by `auth_method`.
+type OnboardingCompleteRequest_Provider struct {
+	union json.RawMessage
 }
 
 // OnboardingCompleteResponse Returned on successful login or onboarding/complete. Contains the bearer token to use in subsequent Authorization headers and the username.
@@ -10419,6 +10478,45 @@ type OnboardingCompleteResponse struct {
 	// Warning Non-fatal advisory message. Present on onboarding/complete for either of two independent reasons, mutually exclusive on a single response: (1) the credential store is locked and the API key was stored in plaintext, or (2) the provider API key was submitted but could not be positively verified — the provider was unreachable, the key has no credit, access is regionally/model restricted, or no endpoint was available to probe against. Absent entirely when the key was actively verified as valid. A key the provider actively confirms is WRONG is never represented via this field — that outcome rejects the request with 400 instead (see POST /onboarding/complete). Never present on POST /auth/login.
 	Warning *string `json:"warning,omitempty"`
 }
+
+// OnboardingProviderApiKey The `api_key` variant of OnboardingCompleteRequest.provider (ADR-068, MAJ-014). Discriminated by `auth_method` following the ADR-034 inline oneOf mechanism; `api_key` is REQUIRED here and is not a property of the sign-in variant.
+type OnboardingProviderApiKey struct {
+	// ApiKey API key for the provider. Stored encrypted (AES-256-GCM) in credentials.json.
+	ApiKey string `json:"api_key"`
+
+	// AuthMethod Discriminator — this variant authenticates with an API key.
+	AuthMethod OnboardingProviderApiKeyAuthMethod `json:"auth_method"`
+
+	// Endpoint Optional custom API base URL, persisted as the provider entry's api_base. Required for providers that have no fixed default endpoint (e.g. azure, azure-openai — a per-resource host); also usable to override the regional default. When omitted, the provider's built-in default base is used.
+	Endpoint *string `json:"endpoint,omitempty"`
+
+	// Id Provider id (e.g. "anthropic", "openai", "openrouter", "gemini"). Must be a known protocol; unknown values are rejected with 400.
+	Id string `json:"id"`
+
+	// Model The model chosen for the first agent — the probe-validated pick from step 3, persisted as agents.defaults.default_model together with the provider id.
+	Model *string `json:"model,omitempty"`
+}
+
+// OnboardingProviderApiKeyAuthMethod Discriminator — this variant authenticates with an API key.
+type OnboardingProviderApiKeyAuthMethod string
+
+// OnboardingProviderSignIn The `sign_in` variant of OnboardingCompleteRequest.provider (ADR-068, MAJ-014). The vendor CLI holds the login; Omnipus stores no credential, so `api_key` is not a property here and a body carrying one is a schema violation (400 "api_key not allowed with sign_in").
+type OnboardingProviderSignIn struct {
+	// AuthMethod Discriminator — this variant uses the vendor CLI's saved login.
+	AuthMethod OnboardingProviderSignInAuthMethod `json:"auth_method"`
+
+	// Endpoint Optional custom API base URL, persisted as the provider entry's api_base.
+	Endpoint *string `json:"endpoint,omitempty"`
+
+	// Id Provider id whose catalog row declares `sign_in` in auth_methods (e.g. "codex-cli", "openai-chatgpt", "github-copilot"); any other id is rejected with 400 "provider does not support sign-in".
+	Id string `json:"id"`
+
+	// Model The model chosen for the first agent — the sign-in-probe-validated pick from step 3, persisted as agents.defaults.default_model together with the provider id.
+	Model *string `json:"model,omitempty"`
+}
+
+// OnboardingProviderSignInAuthMethod Discriminator — this variant uses the vendor CLI's saved login.
+type OnboardingProviderSignInAuthMethod string
 
 // OnboardingStatusResponse Response from PATCH /api/v1/state when marking onboarding complete. Confirms that onboarding has been completed.
 type OnboardingStatusResponse struct {
@@ -13288,6 +13386,36 @@ type SessionStats struct {
 	// ToolCalls Total number of tool calls made in this session.
 	ToolCalls int `json:"tool_calls"`
 }
+
+// SignInStartResponse Response from POST /providers/{id}/sign-in (ADR-068 FR-009, MIN-005). Omnipus never performs or stores a vendor login itself: the only sign-in mechanism is the vendor CLI's own login command, which the operator runs in a terminal. `method` is therefore pinned to `cli_login` — there are no device-code fields because nothing produces them.
+type SignInStartResponse struct {
+	// Command The exact command the operator runs in a terminal (e.g. "codex login", "copilot login").
+	Command string `json:"command"`
+
+	// Instructions Human-readable guidance shown beside the command, ending with the prompt to click Check sign-in.
+	Instructions string `json:"instructions"`
+
+	// Method The only sign-in mechanism — run the vendor CLI's login command.
+	Method SignInStartResponseMethod `json:"method"`
+}
+
+// SignInStartResponseMethod The only sign-in mechanism — run the vendor CLI's login command.
+type SignInStartResponseMethod string
+
+// SignInStatus Response from GET /providers/{id}/sign-in/status (ADR-068 FR-009). Read from the vendor CLI's saved login only — Omnipus never refreshes a token (MAJ-006). There is no `pending` state (MIN-005): a check is synchronous.
+type SignInStatus struct {
+	// AccountLabel Opaque account identifier from the CLI's saved login (`tokens.account_id` for codex; the GitHub login for Copilot when the CLI reports one). Present only when the saved login yields one; never an e-mail.
+	AccountLabel *string `json:"account_label,omitempty"`
+
+	// ExpiresAt The access token's `exp` claim when decodable. Absent otherwise.
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
+
+	// State not_signed_in when no saved login exists (or it is unreadable / malformed — logged as a warning); signed_in when a usable login exists; expired when the access token's JWT `exp` (decoded unverified, display only) is at or before now, or — without a decodable `exp` — the saved login file is older than one hour.
+	State SignInStatusState `json:"state"`
+}
+
+// SignInStatusState not_signed_in when no saved login exists (or it is unreadable / malformed — logged as a warning); signed_in when a usable login exists; expired when the access token's JWT `exp` (decoded unverified, display only) is at or before now, or — without a decodable `exp` — the saved login file is older than one hour.
+type SignInStatusState string
 
 // Skill A single installed skill as returned by GET /skills. Skills are SKILL.md/package bundles loaded from ~/.omnipus/skills/ that extend agent capabilities. Each skill has an ID, version, and human-readable metadata.
 type Skill struct {
@@ -16757,6 +16885,95 @@ func (t MessageParentRequest) MarshalJSON() ([]byte, error) {
 }
 
 func (t *MessageParentRequest) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	return err
+}
+
+// AsOnboardingProviderApiKey returns the union data inside the OnboardingCompleteRequest_Provider as a OnboardingProviderApiKey
+func (t OnboardingCompleteRequest_Provider) AsOnboardingProviderApiKey() (OnboardingProviderApiKey, error) {
+	var body OnboardingProviderApiKey
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromOnboardingProviderApiKey overwrites any union data inside the OnboardingCompleteRequest_Provider as the provided OnboardingProviderApiKey
+func (t *OnboardingCompleteRequest_Provider) FromOnboardingProviderApiKey(v OnboardingProviderApiKey) error {
+	v.AuthMethod = "api_key"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeOnboardingProviderApiKey performs a merge with any union data inside the OnboardingCompleteRequest_Provider, using the provided OnboardingProviderApiKey
+func (t *OnboardingCompleteRequest_Provider) MergeOnboardingProviderApiKey(v OnboardingProviderApiKey) error {
+	v.AuthMethod = "api_key"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsOnboardingProviderSignIn returns the union data inside the OnboardingCompleteRequest_Provider as a OnboardingProviderSignIn
+func (t OnboardingCompleteRequest_Provider) AsOnboardingProviderSignIn() (OnboardingProviderSignIn, error) {
+	var body OnboardingProviderSignIn
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromOnboardingProviderSignIn overwrites any union data inside the OnboardingCompleteRequest_Provider as the provided OnboardingProviderSignIn
+func (t *OnboardingCompleteRequest_Provider) FromOnboardingProviderSignIn(v OnboardingProviderSignIn) error {
+	v.AuthMethod = "sign_in"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeOnboardingProviderSignIn performs a merge with any union data inside the OnboardingCompleteRequest_Provider, using the provided OnboardingProviderSignIn
+func (t *OnboardingCompleteRequest_Provider) MergeOnboardingProviderSignIn(v OnboardingProviderSignIn) error {
+	v.AuthMethod = "sign_in"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t OnboardingCompleteRequest_Provider) Discriminator() (string, error) {
+	var discriminator struct {
+		Discriminator string `json:"auth_method"`
+	}
+	err := json.Unmarshal(t.union, &discriminator)
+	return discriminator.Discriminator, err
+}
+
+func (t OnboardingCompleteRequest_Provider) ValueByDiscriminator() (interface{}, error) {
+	discriminator, err := t.Discriminator()
+	if err != nil {
+		return nil, err
+	}
+	switch discriminator {
+	case "api_key":
+		return t.AsOnboardingProviderApiKey()
+	case "sign_in":
+		return t.AsOnboardingProviderSignIn()
+	default:
+		return nil, errors.New("unknown discriminator value: " + discriminator)
+	}
+}
+
+func (t OnboardingCompleteRequest_Provider) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *OnboardingCompleteRequest_Provider) UnmarshalJSON(b []byte) error {
 	err := t.union.UnmarshalJSON(b)
 	return err
 }

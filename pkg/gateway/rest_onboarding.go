@@ -5,8 +5,11 @@
 package gateway
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"regexp"
@@ -63,6 +66,111 @@ const reservedUsernameMsg = "this username is reserved and cannot be registered"
 // resolves to middleware.IssueSessionCookie.
 var issueSessionCookieFn = middleware.IssueSessionCookie
 
+// onboardingSignInNotImplementedMsg is the typed 400 returned when a
+// completion body selects the `sign_in` variant. The sign-in completion path
+// (vendor-CLI login, no stored credential) is T068-16; until it lands the
+// contract is honoured at the schema level only. T068-16 replaces this
+// rejection with the real path and flips the pinning test in
+// rest_onboarding_authmethod_test.go.
+const onboardingSignInNotImplementedMsg = "sign-in onboarding not implemented — T068-16"
+
+// onboardingAuthMethodErrMsg is the 400 for a missing or unrecognized
+// provider.auth_method discriminator.
+const onboardingAuthMethodErrMsg = "provider.auth_method is required and must be one of api_key, sign_in"
+
+// decodeOnboardingCompleteBody reads the POST /onboarding/complete body,
+// peeks provider.auth_method, and — for the api_key variant — returns the
+// decoded wrapper (for `admin`) plus the strictly-decoded
+// OnboardingProviderApiKey. Any other discriminator value has already been
+// answered with a 400 when ok is false.
+//
+// Behaviour for api_key bodies is byte-for-byte the pre-ADR-068 one apart
+// from the now-required auth_method field: the same 1 MB limit, the same
+// "request body is required" / "invalid JSON body" messages, and schema
+// validation only when validateEnabled.
+func decodeOnboardingCompleteBody(w http.ResponseWriter, r *http.Request, validateEnabled bool) (gen.OnboardingCompleteRequest, gen.OnboardingProviderApiKey, bool) {
+	var body gen.OnboardingCompleteRequest
+	var provider gen.OnboardingProviderApiKey
+
+	raw, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		jsonErr(w, http.StatusBadRequest, "could not read request body")
+		return body, provider, false
+	}
+	if len(raw) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		jsonErr(w, http.StatusBadRequest, "request body is required")
+		return body, provider, false
+	}
+
+	var peek struct { // not-wire-format: decode-only local peek at the discriminator and the raw provider member, never serialized
+		Provider struct {
+			AuthMethod *string `json:"auth_method"`
+		} `json:"provider"`
+	}
+	if err := json.Unmarshal(raw, &peek); err != nil {
+		jsonErr(w, http.StatusBadRequest, "invalid JSON body")
+		return body, provider, false
+	}
+	if peek.Provider.AuthMethod == nil {
+		jsonErr(w, http.StatusBadRequest, onboardingAuthMethodErrMsg)
+		return body, provider, false
+	}
+	switch *peek.Provider.AuthMethod {
+	case string(gen.OnboardingProviderApiKeyAuthMethodApiKey):
+		// fallthrough to the api_key path below
+	case string(gen.OnboardingProviderSignInAuthMethodSignIn):
+		// T068-16 wires the sign-in completion path; stubbed honestly until then.
+		jsonErr(w, http.StatusBadRequest, onboardingSignInNotImplementedMsg)
+		return body, provider, false
+	default:
+		jsonErr(w, http.StatusBadRequest, onboardingAuthMethodErrMsg)
+		return body, provider, false
+	}
+
+	if validateEnabled {
+		// The wrapper twin (inboundschemas/OnboardingCompleteRequest.yaml)
+		// carries the same oneOf, so one validation covers admin AND the
+		// chosen variant (additionalProperties: false on each).
+		if errMsg, serverErr := validateBodyAgainstSchema("OnboardingCompleteRequest", raw); errMsg != "" {
+			if serverErr {
+				jsonErr(w, http.StatusInternalServerError, "inbound schema unavailable")
+			} else {
+				jsonErr(w, http.StatusBadRequest,
+					fmt.Sprintf("request body does not match schema %s: %s", "OnboardingCompleteRequest", errMsg))
+			}
+			return body, provider, false
+		}
+	}
+
+	if err := json.Unmarshal(raw, &body); err != nil {
+		jsonErr(w, http.StatusBadRequest, "invalid JSON body")
+		return body, provider, false
+	}
+	// Strict decode of the provider member into the named variant: a field
+	// the api_key variant does not carry is rejected 400 unconditionally,
+	// independent of ValidateInbound (ADR-034 decodeAgentCreateVariant rule).
+	var providerRaw struct { // not-wire-format: decode-only local carrier for the raw provider member
+		Provider json.RawMessage `json:"provider"`
+	}
+	if err := json.Unmarshal(raw, &providerRaw); err != nil || len(providerRaw.Provider) == 0 {
+		jsonErr(w, http.StatusBadRequest, "invalid JSON body")
+		return body, provider, false
+	}
+	dec := json.NewDecoder(bytes.NewReader(providerRaw.Provider))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&provider); err != nil {
+		if strings.Contains(err.Error(), "unknown field") {
+			jsonErr(w, http.StatusBadRequest, fmt.Sprintf(
+				"field not allowed on provider auth_method %q: %v — see the OnboardingProviderApiKey schema",
+				*peek.Provider.AuthMethod, err))
+		} else {
+			jsonErr(w, http.StatusBadRequest, "invalid JSON body")
+		}
+		return body, provider, false
+	}
+	return body, provider, true
+}
+
 // HandleCompleteOnboarding handles POST /api/v1/onboarding/complete.
 //
 // Two-phase commit invariant:
@@ -110,24 +218,31 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 		}
 	}()
 
-	var body gen.OnboardingCompleteRequest
+	// ADR-068 (T068-06): `provider` is a discriminated union on `auth_method`
+	// (OnboardingProviderApiKey | OnboardingProviderSignIn). Mirror the ADR-034
+	// peek-discriminator pattern of createAgent (rest.go): buffer the body,
+	// peek provider.auth_method from the raw JSON, validate against the chosen
+	// variant's inbound schema when ValidateInbound is on, then strictly
+	// decode the provider into the NAMED variant struct — never through the
+	// generated union wrapper's As*() accessors.
 	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
-	if !decodeAndValidate(w, r, "OnboardingCompleteRequest", &body, validateEnabled) {
+	body, provider, ok := decodeOnboardingCompleteBody(w, r, validateEnabled)
+	if !ok {
 		return
 	}
 
 	// Validate provider.
-	if body.Provider.Id == "" {
+	if provider.Id == "" {
 		jsonErr(w, http.StatusBadRequest, "provider.id is required")
 		return
 	}
 	// Reject unknown protocols at the boundary so the gateway does not persist
 	// a config that will fail the post-save rewire and flip to degraded.
-	if !providers.IsKnownProtocol(body.Provider.Id) {
-		jsonErr(w, http.StatusBadRequest, fmt.Sprintf("provider.id %q is not a known protocol", body.Provider.Id))
+	if !providers.IsKnownProtocol(provider.Id) {
+		jsonErr(w, http.StatusBadRequest, fmt.Sprintf("provider.id %q is not a known protocol", provider.Id))
 		return
 	}
-	if body.Provider.ApiKey == "" {
+	if provider.ApiKey == "" {
 		jsonErr(w, http.StatusBadRequest, "provider.api_key is required")
 		return
 	}
@@ -218,11 +333,11 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 	// Resolve what the probe will talk to: the operator's endpoint override if
 	// they supplied one, else the vendor default for this protocol.
 	probeBase := ""
-	if body.Provider.Endpoint != nil {
-		probeBase = strings.TrimSpace(*body.Provider.Endpoint)
+	if provider.Endpoint != nil {
+		probeBase = strings.TrimSpace(*provider.Endpoint)
 	}
 	if probeBase == "" {
-		probeBase = providers.GetDefaultAPIBase(body.Provider.Id)
+		probeBase = providers.GetDefaultAPIBase(provider.Id)
 	}
 
 	// keyWarning carries a non-blocking validation outcome to the response's
@@ -231,7 +346,7 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 	// probeSkipReason is empty when the probe actually ran; otherwise it names
 	// why it could not, for the audit trail.
 	probeSkipReason := ""
-	providerDisplayName := providers.DisplayName(body.Provider.Id)
+	providerDisplayName := providers.DisplayName(provider.Id)
 	if probeBase == "" {
 		// A known protocol with no vendor default and no operator-supplied
 		// endpoint (azure is the live example — it has no fixed base). There is
@@ -263,7 +378,7 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 			// finish first-run setup at all. Same principle as the unreachable
 			// rule: not being permitted to look is not evidence the key is bad.
 			slog.Warn("onboarding: SSRF guard blocked the key-validation probe; proceeding without it",
-				"provider", body.Provider.Id, "error", err)
+				"provider", provider.Id, "error", err)
 			probeSkipReason = "ssrf blocked"
 			// D4: same visibility fix as the branch above. Deliberately does NOT
 			// echo probeBase/err — those are already in the WARN log above for an
@@ -292,22 +407,22 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 		// providers it's most likely to matter for. A fetch failure here is not
 		// fatal: ValidateKey falls back to the rules-table default exactly as it
 		// did before this fetch existed.
-		catalog, catalogErr := providers.FetchModels(r.Context(), probeBase, body.Provider.ApiKey, a.ssrfChk())
+		catalog, catalogErr := providers.FetchModels(r.Context(), probeBase, provider.ApiKey, a.ssrfChk())
 		if catalogErr != nil {
 			slog.Debug("onboarding: catalog fetch before key validation failed; falling back to rules-table probe model",
-				"provider", body.Provider.Id, "error", catalogErr)
+				"provider", provider.Id, "error", catalogErr)
 			catalog = nil
 		}
 		// SEC-16: result.RawDetail is server-debug-only and never leaves this process.
 		result := providers.ValidateKey(r.Context(), providers.ValidateInput{
-			ProviderID:   body.Provider.Id,
+			ProviderID:   provider.Id,
 			ProviderName: providerDisplayName,
 			BaseURL:      probeBase,
-			APIKey:       body.Provider.ApiKey,
+			APIKey:       provider.ApiKey,
 			Catalog:      catalog,
 		}, a.ssrfChk())
 		slog.Debug("onboarding: provider key validation result",
-			"provider", body.Provider.Id, "outcome", result.Outcome, "detail", result.RawDetail)
+			"provider", provider.Id, "outcome", result.Outcome, "detail", result.RawDetail)
 
 		if result.Blocks() {
 			// invalid_key — the only blocking outcome. Nothing is stored: the
@@ -335,7 +450,7 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 					Event:    "provider_key_validated",
 					Decision: audit.DecisionAllow,
 					Details: map[string]any{
-						"provider": body.Provider.Id,
+						"provider": provider.Id,
 						"outcome":  string(result.Outcome),
 						"action":   "proceeded",
 						"source":   "onboarding",
@@ -353,7 +468,7 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 			Event:    "provider_key_validation_skipped",
 			Decision: audit.DecisionAllow,
 			Details: map[string]any{
-				"provider": body.Provider.Id,
+				"provider": provider.Id,
 				"reason":   probeSkipReason,
 				"source":   "onboarding",
 			},
@@ -364,7 +479,7 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 
 	// Store the API key in the encrypted credentials store (AES-256-GCM).
 	// Refuses the operation if the store is locked (SEC-23: no plaintext fallback).
-	credRefName, credErr := a.storeCredential(body.Provider.Id+"_API_KEY", body.Provider.ApiKey)
+	credRefName, credErr := a.storeCredential(provider.Id+"_API_KEY", provider.ApiKey)
 	if credErr != nil {
 		slog.Error("rest: credential store unavailable during onboarding", "error", credErr)
 		jsonErr(
@@ -378,11 +493,11 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 	// Build the provider entry as a JSON object to inject into providers array.
 	// model defaults per provider when not specified in the onboarding request.
 	providerModel := ""
-	if body.Provider.Model != nil {
-		providerModel = *body.Provider.Model
+	if provider.Model != nil {
+		providerModel = *provider.Model
 	}
 	if providerModel == "" {
-		switch body.Provider.Id {
+		switch provider.Id {
 		case "anthropic":
 			providerModel = "claude-sonnet-4-6"
 		case "gemini", "google":
@@ -401,15 +516,15 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 	// Use the actual model string so the alias matches what the user picked.
 	newProviderEntry := map[string]any{
 		"model_name":  providerModel,
-		"provider":    body.Provider.Id,
+		"provider":    provider.Id,
 		"model":       providerModel,
 		"api_key_ref": credRefName,
 	}
 	// Persist a custom endpoint as api_base when supplied (required for providers
 	// with no fixed default base, e.g. azure; also a regional-host override). The
 	// runtime factory reads api_base before falling back to GetDefaultAPIBase.
-	if body.Provider.Endpoint != nil {
-		if ep := strings.TrimSpace(*body.Provider.Endpoint); ep != "" {
+	if provider.Endpoint != nil {
+		if ep := strings.TrimSpace(*provider.Endpoint); ep != "" {
 			newProviderEntry["api_base"] = ep
 		}
 	}
@@ -469,20 +584,20 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 			if !isMap {
 				continue
 			}
-			if entryMap["provider"] == body.Provider.Id && entryMap["model"] == providerModel {
+			if entryMap["provider"] == provider.Id && entryMap["model"] == providerModel {
 				// Update existing entry.
 				if credRefName != "" {
 					entryMap["api_key_ref"] = credRefName
 					delete(entryMap, "api_key")
 					delete(entryMap, "api_keys")
 				} else {
-					entryMap["api_key"] = body.Provider.ApiKey
+					entryMap["api_key"] = provider.ApiKey
 				}
 				entryMap["model"] = providerModel
 				entryMap["model_name"] = providerModel
-				entryMap["provider"] = body.Provider.Id
-				if body.Provider.Endpoint != nil {
-					if ep := strings.TrimSpace(*body.Provider.Endpoint); ep != "" {
+				entryMap["provider"] = provider.Id
+				if provider.Endpoint != nil {
+					if ep := strings.TrimSpace(*provider.Endpoint); ep != "" {
 						entryMap["api_base"] = ep
 					}
 				}

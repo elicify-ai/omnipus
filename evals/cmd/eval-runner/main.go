@@ -379,9 +379,10 @@ func (h *gatewayHandle) onboard(agentModel string) error {
 
 	body := map[string]any{
 		"provider": map[string]any{
-			"id":      providerID,
-			"api_key": apiKey,
-			"model":   modelPath,
+			"auth_method": "api_key",
+			"id":          providerID,
+			"api_key":     apiKey,
+			"model":       modelPath,
 		},
 		"admin": map[string]any{
 			"username": "eval-admin",
