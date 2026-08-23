@@ -67,9 +67,9 @@ func TestHandleProviders_NoKey_IsDisconnected(t *testing.T) {
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      tmpDir,
-				ModelName: "claude-sonnet-4-6",
-				MaxTokens: 4096,
+				Home:         tmpDir,
+				DefaultModel: config.DefaultModel{Provider: "anthropic", Model: "claude-sonnet-4-6"},
+				MaxTokens:    4096,
 			},
 		},
 		Providers: []*config.ModelConfig{
@@ -153,9 +153,9 @@ func TestHandleProviders_EnvVarKey_IsConnected(t *testing.T) {
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      tmpDir,
-				ModelName: "gpt-4o",
-				MaxTokens: 4096,
+				Home:         tmpDir,
+				DefaultModel: config.DefaultModel{Provider: "openrouter", Model: "openai/gpt-4o"},
+				MaxTokens:    4096,
 			},
 		},
 		Providers: []*config.ModelConfig{
@@ -237,9 +237,9 @@ func TestHandleProviders_CredStoreRef_EmptyRef_IsDisconnected(t *testing.T) {
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      tmpDir,
-				ModelName: "gemini-flash",
-				MaxTokens: 4096,
+				Home:         tmpDir,
+				DefaultModel: config.DefaultModel{Provider: "gemini", Model: "gemini-2.0-flash"},
+				MaxTokens:    4096,
 			},
 		},
 		Providers: []*config.ModelConfig{
@@ -332,9 +332,9 @@ func TestHandleProviders_CredStoreRef_Resolved_IsConnected(t *testing.T) {
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      tmpDir,
-				ModelName: "claude-haiku",
-				MaxTokens: 4096,
+				Home:         tmpDir,
+				DefaultModel: config.DefaultModel{Provider: "anthropic", Model: "claude-haiku-4-5"},
+				MaxTokens:    4096,
 			},
 		},
 		Providers: []*config.ModelConfig{

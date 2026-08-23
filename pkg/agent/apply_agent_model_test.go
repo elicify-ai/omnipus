@@ -21,8 +21,7 @@ func TestApplyAgentModel_SwitchesInPlacePreservingInstance(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              t.TempDir(),
-				Provider:          "openai",
-				ModelName:         "local",
+				DefaultModel:      config.DefaultModel{Model: "openai/qwen"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -57,8 +56,8 @@ func TestApplyAgentModel_SwitchesInPlacePreservingInstance(t *testing.T) {
 		t.Fatal("no default agent")
 	}
 	id := before.ID
-	if before.Model != "local" {
-		t.Fatalf("initial model = %q, want local", before.Model)
+	if before.Model != "openai/qwen" {
+		t.Fatalf("initial model = %q, want the default pair's model openai/qwen", before.Model)
 	}
 	beforeProvider := before.Provider
 
@@ -66,8 +65,8 @@ func TestApplyAgentModel_SwitchesInPlacePreservingInstance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ApplyAgentModel: %v", err)
 	}
-	if old != "local" {
-		t.Errorf("returned previous model = %q, want local", old)
+	if old != "openai/qwen" {
+		t.Errorf("returned previous model = %q, want openai/qwen", old)
 	}
 
 	after, ok := al.GetRegistry().GetAgent(id)
@@ -94,8 +93,7 @@ func TestApplyAgentModel_UnknownModelRejectedNoMutation(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              t.TempDir(),
-				Provider:          "openai",
-				ModelName:         "local",
+				DefaultModel:      config.DefaultModel{Model: "openai/qwen"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -123,8 +121,8 @@ func TestApplyAgentModel_UnknownModelRejectedNoMutation(t *testing.T) {
 		t.Fatal("expected error for unknown model, got nil")
 	}
 	after, _ := al.GetRegistry().GetAgent(id)
-	if after.Model != "local" {
-		t.Errorf("model = %q after failed switch; want unchanged 'local'", after.Model)
+	if after.Model != "openai/qwen" {
+		t.Errorf("model = %q after failed switch; want unchanged 'openai/qwen'", after.Model)
 	}
 
 	if _, err := al.ApplyAgentModel(id, "   "); err == nil {
@@ -149,8 +147,7 @@ func TestApplyAgentModel_PassthroughModel_UpdatesInMemory(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              t.TempDir(),
-				Provider:          "openai",
-				ModelName:         "local",
+				DefaultModel:      config.DefaultModel{Model: "openai/qwen"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -186,8 +183,8 @@ func TestApplyAgentModel_PassthroughModel_UpdatesInMemory(t *testing.T) {
 		t.Fatal("no default agent")
 	}
 	id := before.ID
-	if before.Model != "local" {
-		t.Fatalf("initial model = %q, want local", before.Model)
+	if before.Model != "openai/qwen" {
+		t.Fatalf("initial model = %q, want the default pair's model openai/qwen", before.Model)
 	}
 
 	// Apply a slug that is NOT registered as its own provider entry; the
@@ -196,8 +193,8 @@ func TestApplyAgentModel_PassthroughModel_UpdatesInMemory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ApplyAgentModel(passthrough) returned error: %v — FR-004 violated (FIX-2)", err)
 	}
-	if old != "local" {
-		t.Errorf("returned previous model = %q, want local", old)
+	if old != "openai/qwen" {
+		t.Errorf("returned previous model = %q, want openai/qwen", old)
 	}
 
 	after, ok := al.GetRegistry().GetAgent(id)

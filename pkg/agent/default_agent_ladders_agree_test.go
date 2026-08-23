@@ -55,9 +55,9 @@ func TestDefaultAgentLadders_AgreeWithoutAnOverride(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      home,
-				ModelName: "test-model",
-				MaxTokens: 256,
+				Home:         home,
+				DefaultModel: config.DefaultModel{Model: "test-model"},
+				MaxTokens:    256,
 			},
 			List: agentsCfg,
 			// No DefaultAgentID: this test is about the LAST RESORT, which is
@@ -114,9 +114,9 @@ func TestDefaultAgentLadders_AgreeOnAMixedCaseOverride(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      home,
-				ModelName: "test-model",
-				MaxTokens: 256,
+				Home:         home,
+				DefaultModel: config.DefaultModel{Model: "test-model"},
+				MaxTokens:    256,
 				// Mixed case on purpose: "ava" sorts first, so if the override
 				// is missed the registry returns ava and the divergence shows.
 				DefaultAgentID: "Mia",

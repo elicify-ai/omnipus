@@ -139,8 +139,12 @@ func TestRun_FreshInstall_WritesUsableConfig(t *testing.T) {
 	}
 
 	defaults, _ := cfg["agents"].(map[string]any)["defaults"].(map[string]any)
-	if defaults["model_name"] != "gpt-4o" {
-		t.Errorf("agents.defaults.model_name = %v, want gpt-4o", defaults["model_name"])
+	if _, has := defaults["model_name"]; has {
+		t.Errorf("agents.defaults.model_name must not be written (ADR-068 CRIT-001): %v", defaults["model_name"])
+	}
+	dm, _ := defaults["default_model"].(map[string]any)
+	if dm["provider"] != "openai" || dm["model"] != "gpt-4o" {
+		t.Errorf("agents.defaults.default_model = %v, want {openai gpt-4o}", defaults["default_model"])
 	}
 
 	gateway, _ := cfg["gateway"].(map[string]any)

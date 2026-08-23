@@ -972,11 +972,12 @@ func NormalizeFallbacks(cfg *Config, in []FallbackModel) []FallbackModel {
 // here to avoid a config→agent import cycle — pkg/agent already imports
 // pkg/config).
 //
-// Resolution order:
-//  1. Exact match against any configured provider's ModelName → that
-//     provider's Provider field.
-//  2. Exact match against any configured provider's Model (the slug)
+// Resolution order (mirrors FindModelConfigBySlug's rungs):
+//  1. Exact match against any configured provider's Model (the slug)
 //     → that provider's Provider field.
+//  2. Exact match against a row's display alias (ModelConfig.ModelName —
+//     a row field that survives until ADR-067 T067-08 deletes it; NOT the
+//     deleted agents.defaults.model_name semantics) → that row's Provider.
 //  3. Any configured provider is a passthrough (openrouter / vivgrid) →
 //     that passthrough provider.
 //  4. Otherwise empty string (apply-time resolver will error out).
@@ -993,15 +994,21 @@ func resolveFallbackProvider(cfg *Config, slug string) string {
 		return ""
 	}
 
-	// 1 & 2: match against provider entries.
+	// 1: match against what each provider row serves.
+	for _, p := range cfg.Providers {
+		if p == nil {
+			continue
+		}
+		if strings.TrimSpace(p.Model) == slug {
+			return strings.TrimSpace(p.Provider)
+		}
+	}
+	// 2: row display alias.
 	for _, p := range cfg.Providers {
 		if p == nil {
 			continue
 		}
 		if strings.TrimSpace(p.ModelName) == slug {
-			return strings.TrimSpace(p.Provider)
-		}
-		if strings.TrimSpace(p.Model) == slug {
 			return strings.TrimSpace(p.Provider)
 		}
 	}
@@ -1546,17 +1553,26 @@ type AgentDefaults struct {
 	// is an intentional ops escape hatch: operator-facing JSON config hygiene
 	// rejects the keys, but the env var remains as a lower-level override for
 	// advanced/ops use.
-	RestrictToWorkspace       bool     `json:"-"                               env:"OMNIPUS_AGENTS_DEFAULTS_RESTRICT_TO_WORKSPACE"`
-	AllowReadOutsideWorkspace bool     `json:"-"                               env:"OMNIPUS_AGENTS_DEFAULTS_ALLOW_READ_OUTSIDE_WORKSPACE"`
-	Provider                  string   `json:"provider"                        env:"OMNIPUS_AGENTS_DEFAULTS_PROVIDER"`
-	ModelName                 string   `json:"model_name"                      env:"OMNIPUS_AGENTS_DEFAULTS_MODEL_NAME"`
-	ModelFallbacks            []string `json:"model_fallbacks,omitempty"`
-	ImageModel                string   `json:"image_model,omitempty"           env:"OMNIPUS_AGENTS_DEFAULTS_IMAGE_MODEL"`
-	ImageModelFallbacks       []string `json:"image_model_fallbacks,omitempty"`
-	MaxTokens                 int      `json:"max_tokens"                      env:"OMNIPUS_AGENTS_DEFAULTS_MAX_TOKENS"`
-	ContextWindow             int      `json:"context_window,omitempty"        env:"OMNIPUS_AGENTS_DEFAULTS_CONTEXT_WINDOW"`
-	Temperature               *float64 `json:"temperature,omitempty"           env:"OMNIPUS_AGENTS_DEFAULTS_TEMPERATURE"`
-	MaxToolIterations         int      `json:"max_tool_iterations"             env:"OMNIPUS_AGENTS_DEFAULTS_MAX_TOOL_ITERATIONS"`
+	RestrictToWorkspace       bool `json:"-"                               env:"OMNIPUS_AGENTS_DEFAULTS_RESTRICT_TO_WORKSPACE"`
+	AllowReadOutsideWorkspace bool `json:"-"                               env:"OMNIPUS_AGENTS_DEFAULTS_ALLOW_READ_OUTSIDE_WORKSPACE"`
+	// DefaultModel is the global default model as an exact (provider, model)
+	// PAIR (ADR-068 D14.1 / FR-018; contract DefaultModel.yaml is both the
+	// persisted shape and the GET body). It replaces the deleted model_name
+	// alias (+ the separate provider field): an alias was resolved by
+	// GetModelConfig → findMatches against each providers[] row's single
+	// model_name, so a (provider, model) selection had nowhere to land.
+	// GetModelConfig(pair) resolves it exactly. A fresh install leaves it at
+	// the zero value (FR-040) — onboarding's explicit pick and the
+	// default-model PUT are its only writers; no boot/reload path may back-fill
+	// it (FR-020).
+	DefaultModel        DefaultModel `json:"default_model"`
+	ModelFallbacks      []string     `json:"model_fallbacks,omitempty"`
+	ImageModel          string       `json:"image_model,omitempty"           env:"OMNIPUS_AGENTS_DEFAULTS_IMAGE_MODEL"`
+	ImageModelFallbacks []string     `json:"image_model_fallbacks,omitempty"`
+	MaxTokens           int          `json:"max_tokens"                      env:"OMNIPUS_AGENTS_DEFAULTS_MAX_TOKENS"`
+	ContextWindow       int          `json:"context_window,omitempty"        env:"OMNIPUS_AGENTS_DEFAULTS_CONTEXT_WINDOW"`
+	Temperature         *float64     `json:"temperature,omitempty"           env:"OMNIPUS_AGENTS_DEFAULTS_TEMPERATURE"`
+	MaxToolIterations   int          `json:"max_tool_iterations"             env:"OMNIPUS_AGENTS_DEFAULTS_MAX_TOOL_ITERATIONS"`
 	// summarize_token_percent was deleted by ADR-066 D6 (FR-004, T066-03).
 	// The legacy summariser's percentage knob had outlived ADR-028 only to
 	// scale the timeout-recovery trim trigger; every consumer now reads the
@@ -1641,10 +1657,34 @@ func (d *AgentDefaults) IsToolFeedbackEnabled() bool {
 	return d.ToolFeedback.Enabled
 }
 
-// GetModelName returns the effective model name for the agent defaults.
-// It prefers the new "model_name" field but falls back to "model" for backward compatibility.
-func (d *AgentDefaults) GetModelName() string {
-	return d.ModelName
+// DefaultModel is the persisted (provider, model) pair at
+// agents.defaults.default_model — the shape of contract DefaultModel.yaml
+// minus the window fields ADR-066's ResolveWindow projects onto the GET body.
+// Provider is the providers[] row's routing key (catalog id or custom row id);
+// Model is that row's exact model id. An empty Model means "no default model"
+// (IsZero). The default-model PUT (FR-018) requires both halves; GetModelConfig
+// matches both halves exactly, an empty Provider included — it never widens
+// to "any provider serving this model".
+type DefaultModel struct {
+	Provider string `json:"provider"`
+	Model    string `json:"model"`
+}
+
+// IsZero reports whether no default model is set (no model half).
+func (d DefaultModel) IsZero() bool {
+	return strings.TrimSpace(d.Model) == ""
+}
+
+// String renders the pair as "provider/model" ("model" alone when the
+// provider half is empty) for logs and error text.
+func (d DefaultModel) String() string {
+	if d.IsZero() {
+		return ""
+	}
+	if p := strings.TrimSpace(d.Provider); p != "" {
+		return p + "/" + strings.TrimSpace(d.Model)
+	}
+	return strings.TrimSpace(d.Model)
 }
 
 // ChannelIdentityKind enumerates the legal values for ChannelIdentity.Kind.
@@ -2741,6 +2781,12 @@ type ModelConfig struct {
 	APIBase   string   `json:"api_base,omitempty"`  // API endpoint URL
 	Proxy     string   `json:"proxy,omitempty"`     // HTTP proxy URL
 	Fallbacks []string `json:"fallbacks,omitempty"` // Fallback model names for failover
+
+	// UpdatedAt is stamped on every PUT of this row (ADR-068 MAJ-015) and is
+	// the picker's *Recent* ordering key (Provider.updated_at on the wire).
+	// Mirrors AgentConfig.UpdatedAt. Nil for rows never written through the
+	// REST PUT (seed templates, onboarding rows).
+	UpdatedAt *time.Time `json:"updated_at,omitempty"`
 
 	// AuthMethod is how this row authenticates — the closed set
 	// AuthMethodAPIKey | AuthMethodSignIn (ADR-068 FR-003, X-25); empty means
@@ -4272,14 +4318,18 @@ func expandHome(path string) string {
 	return path
 }
 
-// GetModelConfig returns the ModelConfig for the given model name.
-// If multiple configs exist with the same model_name, it uses round-robin
-// selection for load balancing — over the USABLE ones only, see findMatches.
-// Returns an error if the model is not found.
-func (c *Config) GetModelConfig(modelName string) (*ModelConfig, error) {
-	matches := c.findMatches(modelName)
+// GetModelConfig returns the ModelConfig for the EXACT (provider, model)
+// pair (ADR-068 D14.1 / ADR-067's exact lookup). Both halves are required —
+// the model id alone is not a key, a row's user-facing model_name alias is
+// not a key (that alias resolution was deleted with agents.defaults.model_name,
+// CRIT-001), and no prefix stripping or cross-provider fallback happens here.
+// If several providers[] rows carry the same pair (load balancing) it
+// round-robins over the USABLE ones only, see findMatches.
+// Returns an error if no row carries the pair.
+func (c *Config) GetModelConfig(provider, model string) (*ModelConfig, error) {
+	matches := c.findMatches(provider, model)
 	if len(matches) == 0 {
-		return nil, fmt.Errorf("model %q not found in model_list or providers", modelName)
+		return nil, fmt.Errorf("model %q not found in providers for provider %q", model, provider)
 	}
 	if len(matches) == 1 {
 		return matches[0], nil
@@ -4307,11 +4357,13 @@ func modelConfigCredentialUsable(m *ModelConfig) bool {
 	return m.APIKey() != ""
 }
 
-// findMatches finds all ModelConfig entries with the given model_name,
-// preferring USABLE ones (see modelConfigCredentialUsable) when at least one
-// exists.
+// findMatches finds all ModelConfig entries carrying the exact
+// (provider, model) pair, preferring USABLE ones (see
+// modelConfigCredentialUsable) when at least one exists. Whitespace-trimmed
+// on both sides; an empty model never matches, and an empty provider matches
+// only rows whose own provider is empty (exact, never "any provider").
 //
-// Why (2026-08-15): several providers[] entries may share one model_name for
+// Why (2026-08-15): several providers[] entries may share one pair for
 // load balancing, round-robinned by GetModelConfig above. Before this
 // change, an entry whose api_key_ref never resolved (missing from the
 // vault, wrong master key while it was still degradable, …) stayed in the
@@ -4334,11 +4386,18 @@ func modelConfigCredentialUsable(m *ModelConfig) bool {
 // unfiltered so the caller still gets a ModelConfig back (and, for the
 // default model, gateway.go's defaultModelCredentialBlocked reports it as
 // blocked rather than silently 401ing).
-func (c *Config) findMatches(modelName string) []*ModelConfig {
+func (c *Config) findMatches(provider, model string) []*ModelConfig {
+	provider = strings.TrimSpace(provider)
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return nil
+	}
 	var all []*ModelConfig
 	var usable []*ModelConfig
 	for i := range c.Providers {
-		if c.Providers[i].ModelName != modelName {
+		if c.Providers[i] == nil ||
+			strings.TrimSpace(c.Providers[i].Provider) != provider ||
+			strings.TrimSpace(c.Providers[i].Model) != model {
 			continue
 		}
 		all = append(all, c.Providers[i])
@@ -4350,6 +4409,57 @@ func (c *Config) findMatches(modelName string) []*ModelConfig {
 		return usable
 	}
 	return all
+}
+
+// FindModelConfigBySlug resolves a bare model slug — a per-agent `model`, a
+// `voice.model_name`, a composer pick — to the providers[] row that SERVES
+// it, without a provider half. It is NOT the default-model lookup (that is
+// the exact pair, GetModelConfig) and it applies no passthrough fallback
+// (pkg/agent's ResolveModelCfg layers that on top).
+//
+// Order: a row whose Model equals the slug wins; failing that, a row whose
+// user-facing ModelName alias equals the slug. The alias rung exists only
+// until ADR-067's T067-08 deletes ModelConfig.ModelName (bare catalog ids);
+// it is a row-display alias, not the deleted agents.defaults.model_name
+// semantics. Among several hits the USABLE ones are preferred
+// (modelConfigCredentialUsable), round-robinned like GetModelConfig.
+func (c *Config) FindModelConfigBySlug(slug string) (*ModelConfig, error) {
+	slug = strings.TrimSpace(slug)
+	if slug == "" {
+		return nil, fmt.Errorf("model slug is required")
+	}
+	pick := func(match func(*ModelConfig) bool) *ModelConfig {
+		var all, usable []*ModelConfig
+		for i := range c.Providers {
+			m := c.Providers[i]
+			if m == nil || !match(m) {
+				continue
+			}
+			all = append(all, m)
+			if modelConfigCredentialUsable(m) {
+				usable = append(usable, m)
+			}
+		}
+		pool := all
+		if len(usable) > 0 {
+			pool = usable
+		}
+		switch len(pool) {
+		case 0:
+			return nil
+		case 1:
+			return pool[0]
+		default:
+			return pool[(rrCounter.Add(1)-1)%uint64(len(pool))]
+		}
+	}
+	if m := pick(func(m *ModelConfig) bool { return strings.TrimSpace(m.Model) == slug }); m != nil {
+		return m, nil
+	}
+	if m := pick(func(m *ModelConfig) bool { return strings.TrimSpace(m.ModelName) == slug }); m != nil {
+		return m, nil
+	}
+	return nil, fmt.Errorf("model %q not found in model_list or providers", slug)
 }
 
 // ValidateProviders validates all ModelConfig entries in the providers config.

@@ -30,11 +30,13 @@ func DefaultConfig() *Config {
 			Defaults: AgentDefaults{
 				Home:                workspacePath,
 				RestrictToWorkspace: true,
-				Provider:            "",
-				MaxTokens:           32768,
-				Temperature:         nil, // nil means use provider default
-				MaxToolIterations:   200,
-				SteeringMode:        "one-at-a-time",
+				// DefaultModel deliberately left at its zero value (FR-040):
+				// onboarding's explicit pick is the only writer on a fresh
+				// install.
+				MaxTokens:         32768,
+				Temperature:       nil, // nil means use provider default
+				MaxToolIterations: 200,
+				SteeringMode:      "one-at-a-time",
 				// Concurrency-gate consolidation (2026-08-04, commit
 				// 536b7340's follow-up fix): SubTurn.MaxConcurrent is
 				// deliberately left UNSET (Go zero value) rather than seeded.

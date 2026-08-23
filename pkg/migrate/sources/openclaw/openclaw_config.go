@@ -414,6 +414,7 @@ func (c *OpenClawConfig) ConvertToOmnipus(sourceHome string) (*OmnipusConfig, []
 
 	provider, modelName := c.GetDefaultModel()
 	cfg.Agents.Defaults.Workspace = c.GetDefaultWorkspace()
+	cfg.Agents.Defaults.Provider = provider
 	cfg.Agents.Defaults.ModelName = modelName
 
 	providerConfigs := GetProviderConfigFromDir(sourceHome)
@@ -887,8 +888,11 @@ func (c *OmnipusConfig) ToStandardConfig() *config.Config {
 	cfg := config.DefaultConfig()
 
 	cfg.Agents.Defaults.Home = c.Agents.Defaults.Workspace
-	cfg.Agents.Defaults.Provider = c.Agents.Defaults.Provider
-	cfg.Agents.Defaults.ModelName = c.Agents.Defaults.ModelName
+	// ADR-068 D14.1: the default model is the exact (provider, model) pair.
+	cfg.Agents.Defaults.DefaultModel = config.DefaultModel{
+		Provider: c.Agents.Defaults.Provider,
+		Model:    c.Agents.Defaults.ModelName,
+	}
 	cfg.Agents.Defaults.ModelFallbacks = c.Agents.Defaults.ModelFallbacks
 
 	for _, m := range c.Providers {

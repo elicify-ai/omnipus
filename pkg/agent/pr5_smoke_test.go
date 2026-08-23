@@ -27,9 +27,9 @@ func TestBash_RegisteredUnconditionally_NoExperimentalFlag(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      tmpDir,
-				ModelName: "test-model",
-				MaxTokens: 4096,
+				Home:         tmpDir,
+				DefaultModel: config.DefaultModel{Model: "test-model"},
+				MaxTokens:    4096,
 			},
 			List: []config.AgentConfig{
 				{ID: "test-agent", Name: "Test Agent"},
@@ -69,9 +69,9 @@ func TestBash_JimSeedPolicyAppliedInLoop(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      tmpDir,
-				ModelName: "test-model",
-				MaxTokens: 4096,
+				Home:         tmpDir,
+				DefaultModel: config.DefaultModel{Model: "test-model"},
+				MaxTokens:    4096,
 			},
 			// Deliberately NO List here — coreagent.SeedConfig only seeds
 			// the full core roster (with real tool policies) when

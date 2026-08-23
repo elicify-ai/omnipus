@@ -218,7 +218,7 @@ func TestCreateStartupProvider_BlockedDefaultModelNamesTheCredential(t *testing.
 
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{ModelName: "openrouter-auto"},
+			Defaults: config.AgentDefaults{DefaultModel: config.DefaultModel{Provider: "openrouter", Model: "openrouter/z-ai/glm-5-turbo"}},
 		},
 		Providers: []*config.ModelConfig{{
 			ModelName: "openrouter-auto",
@@ -244,7 +244,8 @@ func TestCreateStartupProvider_BlockedDefaultModelNamesTheCredential(t *testing.
 	if chatErr == nil {
 		t.Fatal("a blocked provider must fail every chat turn")
 	}
-	if !strings.Contains(chatErr.Error(), ref) || !strings.Contains(chatErr.Error(), "openrouter-auto") {
+	// The message names the default PAIR (provider/model), never a row alias.
+	if !strings.Contains(chatErr.Error(), ref) || !strings.Contains(chatErr.Error(), "openrouter/openrouter/z-ai/glm-5-turbo") {
 		t.Errorf(
 			"the chat error must name the model and the missing credential so the operator can act; got: %q",
 			chatErr.Error(),
@@ -262,7 +263,7 @@ func TestCreateStartupProvider_ResolvedCredentialIsNotBlocked(t *testing.T) {
 
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{ModelName: "openrouter-auto"},
+			Defaults: config.AgentDefaults{DefaultModel: config.DefaultModel{Provider: "openrouter", Model: "openrouter/z-ai/glm-5-turbo"}},
 		},
 		Providers: []*config.ModelConfig{{
 			ModelName: "openrouter-auto",
@@ -303,7 +304,7 @@ func TestCreateStartupProvider_LoadBalancedSiblingKeepsModelUsable(t *testing.T)
 	}
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{ModelName: "openrouter-auto"},
+			Defaults: config.AgentDefaults{DefaultModel: config.DefaultModel{Provider: "openrouter", Model: "openrouter/z-ai/glm-5-turbo"}},
 		},
 		Providers: []*config.ModelConfig{entry(badRef), entry(goodRef)},
 	}

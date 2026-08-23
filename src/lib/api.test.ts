@@ -1794,15 +1794,16 @@ describe('enableChannel / disableChannel: ChannelEnabledResponse validation (fix
   })
 })
 
-// ── rawToFrontendConfig / frontendToRawConfig round-trip for model_name / provider ──
+// ── rawToFrontendConfig / frontendToRawConfig round-trip for default_model ──
 //
-// Regression guard: agents.defaults.model_name and agents.defaults.provider were
-// previously not threaded through the mapping functions, causing them to be silently
-// dropped when settings were read from the backend or saved back.
+// Regression guard: the agents.defaults default model was previously not
+// threaded through the mapping functions, causing it to be silently dropped
+// when settings were read from the backend or saved back. ADR-068 D14.1: it is
+// now the exact (provider, model) pair at agents.defaults.default_model.
 //
-// Traces to: hotfix/v0.1.1 Wave 4 — api round-trip
+// Traces to: hotfix/v0.1.1 Wave 4 — api round-trip; ADR-068 T068-07
 
-describe('rawToFrontendConfig: preserves agents.defaults.model_name and provider', () => {
+describe('rawToFrontendConfig: preserves agents.defaults.default_model', () => {
   let fetchSpy: ReturnType<typeof vi.fn>
 
   function stubCookieLocal3(value: string) {
@@ -1830,7 +1831,7 @@ describe('rawToFrontendConfig: preserves agents.defaults.model_name and provider
     vi.resetModules()
   })
 
-  it('rawToFrontendConfig preserves agents.defaults.model_name and provider', async () => {
+  it('rawToFrontendConfig preserves agents.defaults.default_model', async () => {
     // Traces to: hotfix/v0.1.1 — agents.defaults fields must survive rawToFrontendConfig
     const wireConfig = {
       gateway: { host: '127.0.0.1', port: 8080 },
@@ -1838,8 +1839,7 @@ describe('rawToFrontendConfig: preserves agents.defaults.model_name and provider
       storage: { retention: { session_days: 90 } },
       agents: {
         defaults: {
-          model_name: 'claude-3-haiku',
-          provider: 'anthropic',
+          default_model: { provider: 'anthropic', model: 'claude-3-haiku' },
         },
       },
     }
@@ -1854,11 +1854,10 @@ describe('rawToFrontendConfig: preserves agents.defaults.model_name and provider
     const { fetchConfig } = await import('./api')
     const config = await fetchConfig()
 
-    expect(config.agents?.defaults?.model_name).toBe('claude-3-haiku')
-    expect(config.agents?.defaults?.provider).toBe('anthropic')
+    expect(config.agents?.defaults?.default_model).toEqual({ provider: 'anthropic', model: 'claude-3-haiku' })
   })
 
-  it('frontendToRawConfig round-trips model_name and provider without dropping them', async () => {
+  it('frontendToRawConfig round-trips default_model without dropping it', async () => {
     // Traces to: hotfix/v0.1.1 — agents.defaults must survive the full fetchConfig→updateConfig round-trip
     const wireConfig = {
       gateway: { host: '127.0.0.1', port: 8080 },
@@ -1866,8 +1865,7 @@ describe('rawToFrontendConfig: preserves agents.defaults.model_name and provider
       storage: { retention: { session_days: 90 } },
       agents: {
         defaults: {
-          model_name: 'claude-3-haiku',
-          provider: 'anthropic',
+          default_model: { provider: 'anthropic', model: 'claude-3-haiku' },
         },
       },
     }
@@ -1890,9 +1888,8 @@ describe('rawToFrontendConfig: preserves agents.defaults.model_name and provider
     const { fetchConfig, updateConfig } = await import('./api')
     const fetchedConfig = await fetchConfig()
 
-    // Confirm the fetched config has the fields.
-    expect(fetchedConfig.agents?.defaults?.model_name).toBe('claude-3-haiku')
-    expect(fetchedConfig.agents?.defaults?.provider).toBe('anthropic')
+    // Confirm the fetched config has the pair.
+    expect(fetchedConfig.agents?.defaults?.default_model).toEqual({ provider: 'anthropic', model: 'claude-3-haiku' })
 
     // Send the config back via updateConfig — the round-trip must preserve the fields
     // in the wire body sent to the backend.
@@ -1902,11 +1899,10 @@ describe('rawToFrontendConfig: preserves agents.defaults.model_name and provider
     const [, putInit] = fetchSpy.mock.calls[1] as [string, RequestInit]
     const putBody = JSON.parse(putInit.body as string) as Record<string, unknown>
 
-    // The wire body must contain agents.defaults with both fields intact.
+    // The wire body must contain agents.defaults with the pair intact.
     const putAgents = putBody.agents as Record<string, unknown>
     const putDefaults = putAgents?.defaults as Record<string, unknown>
-    expect(putDefaults?.model_name).toBe('claude-3-haiku')
-    expect(putDefaults?.provider).toBe('anthropic')
+    expect(putDefaults?.default_model).toEqual({ provider: 'anthropic', model: 'claude-3-haiku' })
   })
 })
 

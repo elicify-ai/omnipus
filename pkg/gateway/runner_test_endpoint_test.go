@@ -21,7 +21,7 @@ func runnerTestAPI(t *testing.T) *restAPI {
 	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{ModelName: "test-model", MaxTokens: 4096},
+			Defaults: config.AgentDefaults{DefaultModel: config.DefaultModel{Model: "test-model"}, MaxTokens: 4096},
 			List: []config.AgentConfig{
 				{ID: "native-agent", Name: "Native", Type: config.AgentTypeCustom},
 				{

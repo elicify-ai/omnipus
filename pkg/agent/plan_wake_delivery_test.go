@@ -185,7 +185,8 @@ func newPlanWakeHarness(t *testing.T) *planWakeHarness {
 
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Home: tmp(), ModelName: "test-model"},
+			Defaults: config.AgentDefaults{
+				Home: tmp(), DefaultModel: config.DefaultModel{Model: "test-model"}},
 			List: []config.AgentConfig{
 				{ID: testPlanOwnerAgentID, Name: "Plan Owner", Type: config.AgentTypeCustom, Home: tmp()},
 				{ID: planSupervisorAgentID, Name: "PlanSupervisor", Type: config.AgentTypeSystem, Home: tmp()},

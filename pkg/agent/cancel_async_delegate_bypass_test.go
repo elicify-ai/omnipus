@@ -55,7 +55,7 @@ func TestRepro_SpawnSubTurn_RawStoreBypassesPreArmedCancel(t *testing.T) {
 			// tree (verified: pkg/agent/sessions/child-bypass-repro existed
 			// from a prior run and collided with FR-096's new collision
 			// guard) instead of vanishing with t.TempDir()'s cleanup.
-			Defaults: config.AgentDefaults{Provider: "mock", Home: t.TempDir()},
+			Defaults: config.AgentDefaults{DefaultModel: config.DefaultModel{Provider: "mock"}, Home: t.TempDir()},
 			List: []config.AgentConfig{
 				{
 					ID:   "remote-target",

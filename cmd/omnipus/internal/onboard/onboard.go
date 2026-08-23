@@ -816,7 +816,12 @@ func mutateConfigFile(path string, in Input, credRef, passwordHash, tokenHash st
 	if defaultsMap == nil {
 		defaultsMap = map[string]any{}
 	}
-	defaultsMap["model_name"] = in.Model
+	// ADR-068 D14.1: the default model is the exact (provider, model) pair.
+	delete(defaultsMap, "model_name")
+	defaultsMap["default_model"] = map[string]any{
+		"provider": in.ProviderID,
+		"model":    in.Model,
+	}
 	agentsMap["defaults"] = defaultsMap
 	m["agents"] = agentsMap
 

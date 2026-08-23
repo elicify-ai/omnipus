@@ -72,9 +72,9 @@ func newStrandedTestAPI(t *testing.T) (api *restAPI, auditDir string) {
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      filepath.Join(tmpDir, "agents"),
-				ModelName: "test-model",
-				MaxTokens: 4096,
+				Home:         filepath.Join(tmpDir, "agents"),
+				DefaultModel: config.DefaultModel{Model: "test-model"},
+				MaxTokens:    4096,
 			},
 		},
 	}

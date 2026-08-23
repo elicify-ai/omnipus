@@ -52,9 +52,9 @@ func TestNewAgentLoop_AuditConstructionFails_AuditLogTrue_BootAborts(t *testing.
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 0},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      workspaceDir,
-				ModelName: "test-model",
-				MaxTokens: 4096,
+				Home:         workspaceDir,
+				DefaultModel: config.DefaultModel{Model: "test-model"},
+				MaxTokens:    4096,
 			},
 		},
 		Sandbox: config.OmnipusSandboxConfig{
@@ -117,9 +117,9 @@ func TestNewAgentLoop_AuditConstructionFails_AuditLogFalse_Continues(t *testing.
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 0},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      workspaceDir,
-				ModelName: "test-model",
-				MaxTokens: 4096,
+				Home:         workspaceDir,
+				DefaultModel: config.DefaultModel{Model: "test-model"},
+				MaxTokens:    4096,
 			},
 		},
 		Sandbox: config.OmnipusSandboxConfig{

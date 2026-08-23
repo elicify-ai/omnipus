@@ -125,9 +125,9 @@ func TestHandleCompleteOnboarding_Success(t *testing.T) {
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      tmpDir,
-				ModelName: "test-model",
-				MaxTokens: 4096,
+				Home:         tmpDir,
+				DefaultModel: config.DefaultModel{Model: "test-model"},
+				MaxTokens:    4096,
 			},
 		},
 	}
@@ -167,9 +167,9 @@ func TestHandleCompleteOnboarding_AlreadyComplete(t *testing.T) {
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      tmpDir,
-				ModelName: "test-model",
-				MaxTokens: 4096,
+				Home:         tmpDir,
+				DefaultModel: config.DefaultModel{Model: "test-model"},
+				MaxTokens:    4096,
 			},
 		},
 	}
@@ -395,9 +395,9 @@ func TestHandleCompleteOnboarding_ThenLogin(t *testing.T) {
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      tmpDir,
-				ModelName: "test-model",
-				MaxTokens: 4096,
+				Home:         tmpDir,
+				DefaultModel: config.DefaultModel{Model: "test-model"},
+				MaxTokens:    4096,
 			},
 		},
 	}
@@ -474,9 +474,9 @@ func TestHandleCompleteOnboarding_PersistsAdmin(t *testing.T) {
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      tmpDir,
-				ModelName: "test-model",
-				MaxTokens: 4096,
+				Home:         tmpDir,
+				DefaultModel: config.DefaultModel{Model: "test-model"},
+				MaxTokens:    4096,
 			},
 		},
 	}
@@ -568,13 +568,15 @@ func TestHandleCompleteOnboarding_WritesActualModelAsAlias(t *testing.T) {
 	var configMap map[string]any
 	require.NoError(t, json.Unmarshal(configData, &configMap))
 
-	// 1. agents.defaults.model_name is the actual model, not the provider ID.
+	// 1. agents.defaults.default_model is the exact (provider, model) pair the
+	//    user picked (ADR-068 D14.1); no model_name key exists.
 	agents, ok := configMap["agents"].(map[string]any)
 	require.True(t, ok)
 	defaults, ok := agents["defaults"].(map[string]any)
 	require.True(t, ok)
-	assert.Equal(t, "z-ai/glm-5v-turbo", defaults["model_name"],
-		"agents.defaults.model_name must be the actual model the user selected, not the provider ID")
+	assert.NotContains(t, defaults, "model_name", "agents.defaults.model_name no longer exists (CRIT-001)")
+	assert.Equal(t, map[string]any{"provider": "openrouter", "model": "z-ai/glm-5v-turbo"}, defaults["default_model"],
+		"agents.defaults.default_model must be the exact pair the user selected")
 
 	// 2. The new provider entry uses the actual model as model_name,
 	//    keeps provider=openrouter for API routing, and stores the api_key_ref.
@@ -683,9 +685,9 @@ func TestHandleCompleteOnboarding_Concurrent(t *testing.T) {
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      tmpDir,
-				ModelName: "test-model",
-				MaxTokens: 4096,
+				Home:         tmpDir,
+				DefaultModel: config.DefaultModel{Model: "test-model"},
+				MaxTokens:    4096,
 			},
 		},
 	}
@@ -764,9 +766,9 @@ func TestHandleCompleteOnboarding_ConcurrentDifferentUsers(t *testing.T) {
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      tmpDir,
-				ModelName: "test-model",
-				MaxTokens: 4096,
+				Home:         tmpDir,
+				DefaultModel: config.DefaultModel{Model: "test-model"},
+				MaxTokens:    4096,
 			},
 		},
 	}
@@ -991,9 +993,9 @@ func TestHandleCompleteOnboarding_BadRequest_ReleasesReservation(t *testing.T) {
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      tmpDir,
-				ModelName: "test-model",
-				MaxTokens: 4096,
+				Home:         tmpDir,
+				DefaultModel: config.DefaultModel{Model: "test-model"},
+				MaxTokens:    4096,
 			},
 		},
 	}
@@ -1250,7 +1252,8 @@ func newProviderTestAPI(t *testing.T, tmpDir, configJSON string) *restAPI {
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+			Defaults: config.AgentDefaults{
+				Home: tmpDir, DefaultModel: config.DefaultModel{Model: "test-model"}, MaxTokens: 4096},
 		},
 	}
 	msgBus := bus.NewMessageBus()
@@ -1382,7 +1385,8 @@ func TestProviderTest_CredentialVaultUnreadable(t *testing.T) {
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+			Defaults: config.AgentDefaults{
+				Home: tmpDir, DefaultModel: config.DefaultModel{Model: "test-model"}, MaxTokens: 4096},
 		},
 	}
 	msgBus := bus.NewMessageBus()
@@ -1430,7 +1434,8 @@ func TestRefreshProviderModels_CredentialVaultUnreadable(t *testing.T) {
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+			Defaults: config.AgentDefaults{
+				Home: tmpDir, DefaultModel: config.DefaultModel{Model: "test-model"}, MaxTokens: 4096},
 		},
 		Providers: []*config.ModelConfig{
 			{ModelName: "gpt-4", Provider: "openai", Model: "gpt-4", APIKeyRef: "openai_API_KEY"},
@@ -1486,7 +1491,8 @@ func TestProviderTest_CredentialRefNotFound(t *testing.T) {
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+			Defaults: config.AgentDefaults{
+				Home: tmpDir, DefaultModel: config.DefaultModel{Model: "test-model"}, MaxTokens: 4096},
 		},
 	}
 	msgBus := bus.NewMessageBus()
@@ -1535,7 +1541,8 @@ func TestRefreshProviderModels_CredentialRefNotFound(t *testing.T) {
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+			Defaults: config.AgentDefaults{
+				Home: tmpDir, DefaultModel: config.DefaultModel{Model: "test-model"}, MaxTokens: 4096},
 		},
 		Providers: []*config.ModelConfig{
 			{ModelName: "gpt-4", Provider: "openai", Model: "gpt-4", APIKeyRef: "openai_API_KEY"},
@@ -1635,7 +1642,8 @@ func TestHandleCompleteOnboarding_ValidKeyAccepted(t *testing.T) {
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+			Defaults: config.AgentDefaults{
+				Home: tmpDir, DefaultModel: config.DefaultModel{Model: "test-model"}, MaxTokens: 4096},
 		},
 	}
 	al := mustAgentLoop(t, cfg, bus.NewMessageBus(), &restMockProvider{})
@@ -1697,7 +1705,8 @@ func TestHandleCompleteOnboarding_InvalidKeyRejectedAndNotStored(t *testing.T) {
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+			Defaults: config.AgentDefaults{
+				Home: tmpDir, DefaultModel: config.DefaultModel{Model: "test-model"}, MaxTokens: 4096},
 		},
 	}
 	al := mustAgentLoop(t, cfg, bus.NewMessageBus(), &restMockProvider{})
@@ -1762,7 +1771,8 @@ func TestHandleCompleteOnboarding_UnreachableProviderStillCompletes(t *testing.T
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+			Defaults: config.AgentDefaults{
+				Home: tmpDir, DefaultModel: config.DefaultModel{Model: "test-model"}, MaxTokens: 4096},
 		},
 	}
 	al := mustAgentLoop(t, cfg, bus.NewMessageBus(), &restMockProvider{})
@@ -1821,7 +1831,8 @@ func TestHandleCompleteOnboarding_NoEndpointResolvedStillCompletesWithWarning(t 
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+			Defaults: config.AgentDefaults{
+				Home: tmpDir, DefaultModel: config.DefaultModel{Model: "test-model"}, MaxTokens: 4096},
 		},
 	}
 	al := mustAgentLoop(t, cfg, bus.NewMessageBus(), &restMockProvider{})
@@ -1893,7 +1904,8 @@ func TestHandleCompleteOnboarding_SSRFBlockedProbeStillCompletesWithWarning(t *t
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+			Defaults: config.AgentDefaults{
+				Home: tmpDir, DefaultModel: config.DefaultModel{Model: "test-model"}, MaxTokens: 4096},
 		},
 	}
 	al := mustAgentLoop(t, cfg, bus.NewMessageBus(), &restMockProvider{})
@@ -2002,7 +2014,8 @@ func TestHandleCompleteOnboarding_UsesLiveCatalogForProbeModel(t *testing.T) {
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+			Defaults: config.AgentDefaults{
+				Home: tmpDir, DefaultModel: config.DefaultModel{Model: "test-model"}, MaxTokens: 4096},
 		},
 	}
 	al := mustAgentLoop(t, cfg, bus.NewMessageBus(), &restMockProvider{})

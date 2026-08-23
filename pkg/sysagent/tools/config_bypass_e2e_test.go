@@ -163,13 +163,13 @@ func TestConfigSet_SectionWritesThatAreSafeStillWork(t *testing.T) {
 		deps, cfg := newTestDeps()
 		result := systools.NewConfigSetTool(deps).Execute(context.Background(), map[string]any{
 			"key":   "agents.defaults",
-			"value": map[string]any{"model_name": "glm-4.7"},
+			"value": map[string]any{"default_model": map[string]any{"model": "glm-4.7"}},
 		})
 		if result.IsError {
 			t.Fatalf("set_config(agents.defaults) failed: %s", result.ForLLM)
 		}
-		if cfg.Agents.Defaults.ModelName != "glm-4.7" {
-			t.Errorf("ModelName = %q, want %q", cfg.Agents.Defaults.ModelName, "glm-4.7")
+		if cfg.Agents.Defaults.DefaultModel.Model != "glm-4.7" {
+			t.Errorf("ModelName = %q, want %q", cfg.Agents.Defaults.DefaultModel.Model, "glm-4.7")
 		}
 	})
 

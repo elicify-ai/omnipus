@@ -202,7 +202,7 @@ func runRecapModelResolutionScenario(t *testing.T, agentID, agentName, defaultMo
 	cfg := &config.Config{}
 	cfg.Agents.Defaults.AutoRecapEnabled = true
 	cfg.Agents.Defaults.RecapModel = "" // empty → should fall through the tiers
-	cfg.Agents.Defaults.ModelName = defaultModelName
+	cfg.Agents.Defaults.DefaultModel.Model = defaultModelName
 
 	script := &scriptedProvider{
 		responseBody: `{"recap":"ok","went_well":[],"needs_improvement":[],"worth_remembering":[]}`,

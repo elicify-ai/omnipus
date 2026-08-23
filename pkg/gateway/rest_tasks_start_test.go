@@ -45,9 +45,9 @@ func newTestRestAPIWithTaskExecutor(t *testing.T) *restAPI {
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      tmpDir,
-				ModelName: "test-model",
-				MaxTokens: 4096,
+				Home:         tmpDir,
+				DefaultModel: config.DefaultModel{Model: "test-model"},
+				MaxTokens:    4096,
 			},
 		},
 	}
@@ -610,9 +610,9 @@ func newTestRestAPIAlignedStoresWithProvider(t *testing.T, provider providers.LL
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      workspaceDir,
-				ModelName: "test-model",
-				MaxTokens: 4096,
+				Home:         workspaceDir,
+				DefaultModel: config.DefaultModel{Model: "test-model"},
+				MaxTokens:    4096,
 			},
 			// A single real, chat-target agent ("mia") so tests that need "a
 			// known agent in the registry" have one to assign tasks to. The

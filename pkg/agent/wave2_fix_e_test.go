@@ -97,7 +97,7 @@ func TestRunAgentLoop_RoundTrip_AfterReopen_PreservesModelAndErrorStatus(t *test
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              workspaceDir,
-				ModelName:         "scripted-model",
+				DefaultModel:      config.DefaultModel{Model: "scripted-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -291,7 +291,7 @@ func TestRunTurn_StampsModelFieldOnAssistantEntry(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              workspaceDir,
-				ModelName:         modelName,
+				DefaultModel:      config.DefaultModel{Model: modelName},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -573,7 +573,7 @@ func TestRunAgentLoop_ErrorEntry_HasStatusErrorField(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              workspaceDir,
-				ModelName:         "scripted-model",
+				DefaultModel:      config.DefaultModel{Model: "scripted-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -702,8 +702,7 @@ func TestApplyAgentModel_SwitchesInPlace_PreservesID(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              t.TempDir(),
-				Provider:          "openai",
-				ModelName:         "local",
+				DefaultModel:      config.DefaultModel{Model: "openai/qwen"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -769,7 +768,7 @@ func TestRunAgentLoop_ProviderError_HasStatusErrorField(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              workspaceDir,
-				ModelName:         "scripted-model",
+				DefaultModel:      config.DefaultModel{Model: "scripted-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},

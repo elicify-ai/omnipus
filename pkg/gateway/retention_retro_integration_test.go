@@ -192,9 +192,9 @@ func TestIntegration_RetroSweep180Split(t *testing.T) {
 	loopCfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      tmpHome,
-				ModelName: "test-model",
-				MaxTokens: 4096,
+				Home:         tmpHome,
+				DefaultModel: config.DefaultModel{Model: "test-model"},
+				MaxTokens:    4096,
 			},
 			List: []config.AgentConfig{{ID: "mia"}},
 		},

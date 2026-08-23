@@ -71,9 +71,9 @@ func newProviderValidationTestAPI(t *testing.T, providerID, upstreamBaseURL stri
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      tmpDir,
-				ModelName: "test-model",
-				MaxTokens: 4096,
+				Home:         tmpDir,
+				DefaultModel: config.DefaultModel{Model: "test-model"},
+				MaxTokens:    4096,
 			},
 		},
 	}
@@ -358,7 +358,8 @@ func TestPutProvider_SSRFPersistedApiBase(t *testing.T) {
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+			Defaults: config.AgentDefaults{
+				Home: tmpDir, DefaultModel: config.DefaultModel{Model: "test-model"}, MaxTokens: 4096},
 		},
 		// Provider with a loopback api_base that the SSRF checker must block.
 		Providers: []*config.ModelConfig{
@@ -435,7 +436,8 @@ func TestProviderTest_ClassifiedOutcome(t *testing.T) {
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+			Defaults: config.AgentDefaults{
+				Home: tmpDir, DefaultModel: config.DefaultModel{Model: "test-model"}, MaxTokens: 4096},
 		},
 		Providers: []*config.ModelConfig{
 			{ModelName: "testprovider", Provider: "testprovider", Model: "test-model", APIBase: upstream.URL},
@@ -517,7 +519,8 @@ func TestProviderTest_DoesNotPersistCredential(t *testing.T) {
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+			Defaults: config.AgentDefaults{
+				Home: tmpDir, DefaultModel: config.DefaultModel{Model: "test-model"}, MaxTokens: 4096},
 		},
 		Providers: []*config.ModelConfig{
 			{ModelName: "testprovider", Provider: "testprovider", Model: "test-model", APIBase: upstream.URL},
@@ -624,7 +627,8 @@ func TestAudit_ProbeAndTestNotAudited(t *testing.T) {
 		cfg := &config.Config{
 			Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 			Agents: config.AgentsConfig{
-				Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+				Defaults: config.AgentDefaults{
+					Home: tmpDir, DefaultModel: config.DefaultModel{Model: "test-model"}, MaxTokens: 4096},
 			},
 			Providers: []*config.ModelConfig{
 				{ModelName: "testprovider2", Provider: "testprovider2", Model: "test-model", APIBase: upstream.URL},
@@ -765,7 +769,8 @@ func TestPutProvider_StoreLockedAndReloadFail(t *testing.T) {
 		cfg := &config.Config{
 			Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 			Agents: config.AgentsConfig{
-				Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+				Defaults: config.AgentDefaults{
+					Home: tmpDir, DefaultModel: config.DefaultModel{Model: "test-model"}, MaxTokens: 4096},
 			},
 			Providers: []*config.ModelConfig{
 				{ModelName: "testprovider", Provider: "testprovider", Model: "test-model", APIBase: upstream.URL},

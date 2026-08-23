@@ -69,7 +69,7 @@ func TestUpdateAgent_DefaultToggle_RegistryAndRoutingAgree(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              tmpDir,
-				ModelName:         "test-model",
+				DefaultModel:      config.DefaultModel{Model: "test-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 20,
 				// Deliberately no DefaultAgentID: this is the exact
@@ -208,7 +208,7 @@ func TestUpdateAgent_DefaultToggle_WireResponseDerivedFromSingleton(t *testing.T
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              tmpDir,
-				ModelName:         "test-model",
+				DefaultModel:      config.DefaultModel{Model: "test-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 20,
 				// The singleton names agent-b as the real default...

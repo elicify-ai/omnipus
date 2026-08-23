@@ -72,7 +72,7 @@ func TestRunTurn_MultiMembership_AdvertisementMatchesEnforcement(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:                agentWorkspaceDir,
-				ModelName:           "scripted-model",
+				DefaultModel:        config.DefaultModel{Model: "scripted-model"},
 				MaxTokens:           4096,
 				MaxToolIterations:   10,
 				RestrictToWorkspace: true,

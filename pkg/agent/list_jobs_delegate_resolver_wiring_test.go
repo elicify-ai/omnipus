@@ -57,8 +57,8 @@ func TestWireJobRoster_SubagentActionable_ReflectsDelegateSessionIndex(t *testin
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      filepath.Join(home, "agents"),
-				ModelName: "test-model",
+				Home:         filepath.Join(home, "agents"),
+				DefaultModel: config.DefaultModel{Model: "test-model"},
 			},
 			List: []config.AgentConfig{{ID: "mia", Home: filepath.Join(home, "agents")}},
 		},
@@ -156,8 +156,8 @@ func TestWireJobRoster_SubagentActionable_FalseForUnknownSession(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      filepath.Join(home, "agents"),
-				ModelName: "test-model",
+				Home:         filepath.Join(home, "agents"),
+				DefaultModel: config.DefaultModel{Model: "test-model"},
 			},
 			List: []config.AgentConfig{{ID: "mia", Home: filepath.Join(home, "agents")}},
 		},

@@ -94,9 +94,8 @@ func TestSpawnSubTurn_NativeDispatch_SystemPromptComesFromTargetContextBuilder(t
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Provider:  "mock",
-				Home:      parentWorkspace,
-				ModelName: "parent-default-model",
+				Home:         parentWorkspace,
+				DefaultModel: config.DefaultModel{Provider: "mock", Model: "parent-default-model"},
 			},
 			List: []config.AgentConfig{
 				// The delegating PARENT: an ordinary, explicitly-registered

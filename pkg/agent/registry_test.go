@@ -31,7 +31,7 @@ func testCfg(agents []config.AgentConfig) *config.Config {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              "/tmp/omnipus-test-registry",
-				ModelName:         "gpt-4",
+				DefaultModel:      config.DefaultModel{Model: "gpt-4"},
 				MaxTokens:         8192,
 				MaxToolIterations: 10,
 			},

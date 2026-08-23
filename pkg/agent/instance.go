@@ -262,7 +262,7 @@ func NewAgentInstance(
 	}
 
 	var thinkingLevelStr string
-	if mc, err := cfg.GetModelConfig(model); err == nil {
+	if mc, err := cfg.FindModelConfigBySlug(model); err == nil {
 		thinkingLevelStr = mc.ThinkingLevel
 	}
 	thinkingLevel := parseThinkingLevel(thinkingLevelStr)
@@ -276,9 +276,9 @@ func NewAgentInstance(
 	// O3 two-field model: when the agent pins an explicit primary provider, the
 	// primary candidate routes through it directly (never inferred). Empty
 	// provider preserves the pre-O3 selection exactly.
-	primaryProvider := resolveAgentPrimaryProvider(agentCfg)
+	primaryProvider := resolveAgentPrimaryProvider(agentCfg, defaults)
 	candidates := resolveAgentCandidatesWithPrimaryProvider(
-		cfg, defaults.Provider, model, primaryProvider, fallbackModels, fallbacks)
+		cfg, defaults.DefaultModel.Provider, model, primaryProvider, fallbackModels, fallbacks)
 
 	// Pre-build the provider pool for every distinct provider referenced by
 	// the resolved candidate chain. FR-007 requires each fallback to use its
@@ -294,7 +294,7 @@ func NewAgentInstance(
 	var lightCandidates []providers.FallbackCandidate
 	var lightProvider providers.LLMProvider
 	if rc := defaults.Routing; rc != nil && rc.Enabled && rc.LightModel != "" {
-		resolved := resolveModelCandidates(cfg, defaults.Provider, rc.LightModel, nil)
+		resolved := resolveModelCandidates(cfg, defaults.DefaultModel.Provider, rc.LightModel, nil)
 		if len(resolved) > 0 {
 			lightModelCfg, err := resolvedModelConfig(cfg, rc.LightModel, workspace)
 			if err != nil {
@@ -887,23 +887,34 @@ func resolveAgentHome(agentCfg *config.AgentConfig, defaults *config.AgentDefaul
 	return resolved
 }
 
-// resolveAgentModel resolves the primary model for an agent.
+// resolveAgentModel resolves the primary model for an agent: its own
+// model.primary, else the model half of agents.defaults.default_model
+// (ADR-068 D14.1). Empty when neither is set.
 func resolveAgentModel(agentCfg *config.AgentConfig, defaults *config.AgentDefaults) string {
 	if agentCfg != nil && agentCfg.Model != nil && strings.TrimSpace(agentCfg.Model.Primary) != "" {
 		return strings.TrimSpace(agentCfg.Model.Primary)
 	}
-	return defaults.GetModelName()
+	if defaults == nil || defaults.DefaultModel.IsZero() {
+		return ""
+	}
+	return strings.TrimSpace(defaults.DefaultModel.Model)
 }
 
-// resolveAgentPrimaryProvider returns the agent's EXPLICIT primary-model provider
-// (O3 two-field model). Empty string means "no explicit provider — resolve via
-// the default/passthrough path". Only honored when the agent actually sets a
-// primary model; a defaults-derived model uses the default provider.
-func resolveAgentPrimaryProvider(agentCfg *config.AgentConfig) string {
+// resolveAgentPrimaryProvider returns the provider the agent's primary model is
+// PINNED to (O3 two-field model). When the agent sets its own primary model,
+// this is its explicit model.provider — empty means "no explicit provider,
+// resolve via the passthrough path". When the agent runs on the default model
+// it is the provider half of agents.defaults.default_model: the default is an
+// exact pair (ADR-068 D14.1), so it is pinned exactly like an explicit
+// per-agent provider and never inferred from a configured passthrough.
+func resolveAgentPrimaryProvider(agentCfg *config.AgentConfig, defaults *config.AgentDefaults) string {
 	if agentCfg != nil && agentCfg.Model != nil && strings.TrimSpace(agentCfg.Model.Primary) != "" {
 		return strings.TrimSpace(agentCfg.Model.Provider)
 	}
-	return ""
+	if defaults == nil || defaults.DefaultModel.IsZero() {
+		return ""
+	}
+	return strings.TrimSpace(defaults.DefaultModel.Provider)
 }
 
 // resolveAgentFallbacks resolves the fallback models for an agent.

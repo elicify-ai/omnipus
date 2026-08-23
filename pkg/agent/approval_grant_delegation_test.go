@@ -136,9 +136,8 @@ func newGrantChainAgentLoop(t *testing.T) *AgentLoop {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Provider:  "mock",
-				Home:      tmpDir,
-				ModelName: "test-model",
+				Home:         tmpDir,
+				DefaultModel: config.DefaultModel{Provider: "mock", Model: "test-model"},
 			},
 			List: []config.AgentConfig{
 				// The delegating PARENT: an ordinary, explicitly-registered

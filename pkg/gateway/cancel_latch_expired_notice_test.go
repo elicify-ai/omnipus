@@ -237,9 +237,9 @@ func TestHandleCancel_FiredImmediately_NoLatchExpiredFalseAlarm(t *testing.T) {
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 18804, DevModeBypass: true},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      workspaceDir,
-				ModelName: "iron-provider",
-				MaxTokens: 4096,
+				Home:         workspaceDir,
+				DefaultModel: config.DefaultModel{Model: "iron-provider"},
+				MaxTokens:    4096,
 			},
 			// An explicitly registered agent. There is no implicit "main" sentinel
 			// to fall back on any more (ADR-064), and handleChatMessage now

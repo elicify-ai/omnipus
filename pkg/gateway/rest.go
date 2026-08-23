@@ -1921,7 +1921,7 @@ func (a *restAPI) listAgents(w http.ResponseWriter) {
 	activeIDs := a.activeAgentIDSet()
 
 	defaults := buildAgentDefaults(cfg)
-	defaultModel := cfg.Agents.Defaults.ModelName
+	defaultModel := cfg.Agents.Defaults.DefaultModel.Model
 	for _, ac := range cfg.Agents.List {
 		model := defaultModel
 		if ac.Model != nil && ac.Model.Primary != "" {
@@ -1990,7 +1990,7 @@ func (a *restAPI) getAgent(w http.ResponseWriter, id string) {
 
 	for _, ac := range cfg.Agents.List {
 		if ac.ID == id {
-			model := cfg.Agents.Defaults.ModelName
+			model := cfg.Agents.Defaults.DefaultModel.Model
 			if ac.Model != nil && ac.Model.Primary != "" {
 				model = ac.Model.Primary
 			}
@@ -2822,7 +2822,7 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	// Capture the default model name BEFORE the fast upsert to avoid a race
 	// between it (which may swap the live config) and the read below.
-	defaultModelName := a.agentLoop.GetConfig().Agents.Defaults.ModelName
+	defaultModelName := a.agentLoop.GetConfig().Agents.Defaults.DefaultModel.Model
 
 	// Persistence succeeded. Publish the new agent into the live AgentRegistry
 	// BEFORE we answer 201 — via the ADR-054 fast path (issue #571), not a
@@ -3844,7 +3844,7 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 	soul, _ := readAgentFiles(workspace)
 	// Build the response from defaults, then override with request values.
 	agentID := cfg.Agents.List[foundIdx].ID
-	model := cfg.Agents.Defaults.ModelName
+	model := cfg.Agents.Defaults.DefaultModel.Model
 	if newModel != "" {
 		model = newModel
 	}
@@ -6153,6 +6153,10 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 				userModelsJSON = []any{} // explicit clear
 			}
 		}
+		// ADR-068 MAJ-015: every PUT stamps the row's updated_at — the
+		// picker's Recent ordering key (Provider.updated_at).
+		putStamp := time.Now().UTC()
+		putStampStr := putStamp.Format(time.RFC3339)
 		if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
 			providerList, _ := m["providers"].([]any)
 			updated := false
@@ -6163,6 +6167,7 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 				}
 				pName := inferProviderName(strVal(model, "provider"), strVal(model, "model"))
 				if pName == providerID {
+					model["updated_at"] = putStampStr
 					if req.ApiKey != nil && *req.ApiKey != "" {
 						model["api_key_ref"] = credRefName
 						delete(model, "api_key")
@@ -6194,6 +6199,7 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 					"provider":    providerID,
 					"model":       modelVal,
 					"api_key_ref": credRefName,
+					"updated_at":  putStampStr,
 				}
 				if len(userModelsJSON) > 0 {
 					newEntry["models"] = userModelsJSON
@@ -6253,6 +6259,7 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 			HasModelsEndpoint: &hasEndpoint,
 			AuthMethod:        gen.ProviderAuthMethodApiKey,
 			Dependents:        []gen.ProviderDependent{},
+			UpdatedAt:         &putStamp,
 		}
 		// R-D step 7 / FR-011: attach validation for warning outcomes (NoCredit/Unreachable/Restricted).
 		// Valid outcome and key-absent PUTs carry no validation field.

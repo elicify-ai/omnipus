@@ -58,7 +58,7 @@ func ModelSupportsAudioTranscription(model string) bool {
 // secrets provides the resolved ElevenLabs API key without using os.Getenv.
 func DetectTranscriber(cfg *config.Config, secrets credentials.SecretBundle) Transcriber {
 	if modelName := strings.TrimSpace(cfg.Voice.ModelName); modelName != "" {
-		modelCfg, err := cfg.GetModelConfig(modelName)
+		modelCfg, err := cfg.FindModelConfigBySlug(modelName)
 		if err != nil {
 			slog.Warn("voice: configured transcription model not found in providers — transcription unavailable",
 				"voice.model_name", modelName, "error", err)

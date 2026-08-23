@@ -70,7 +70,7 @@ func newExternalTestLoop(t *testing.T, cli, workspace string) (*AgentLoop, *turn
 	}
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Provider: "mock"},
+			Defaults: config.AgentDefaults{DefaultModel: config.DefaultModel{Provider: "mock"}},
 			List:     []config.AgentConfig{{ID: "mia"}},
 		},
 	}
@@ -190,7 +190,7 @@ func TestExternalDispatch_WorkspacelessAgentRefused(t *testing.T) {
 
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Provider: "mock"},
+			Defaults: config.AgentDefaults{DefaultModel: config.DefaultModel{Provider: "mock"}},
 			List:     []config.AgentConfig{{ID: "mia"}},
 		},
 	}
@@ -619,7 +619,7 @@ func TestExternalDispatch_CoreTeamMember_RunsInWorkspaceSharedDir(t *testing.T) 
 
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Provider: "mock"},
+			Defaults: config.AgentDefaults{DefaultModel: config.DefaultModel{Provider: "mock"}},
 			List:     []config.AgentConfig{{ID: "mia"}},
 		},
 	}

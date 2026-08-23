@@ -123,7 +123,8 @@ func TestVerifierSessionType_FallsBackWhenJudgeNotRegistered(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model"},
+			Defaults: config.AgentDefaults{
+				Home: tmpDir, DefaultModel: config.DefaultModel{Model: "test-model"}},
 			// Deliberately no List entries — no Judge, no worker, nothing.
 			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},

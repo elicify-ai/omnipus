@@ -508,12 +508,10 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 			providerModel = "gpt-4o"
 		}
 	}
-	// model_name is the user-facing alias that agents.defaults.model_name
-	// references to resolve a provider entry. It is also what the Agent Profile
-	// UI shows as the agent's model. Using the provider ID here (e.g.
-	// "openrouter") would display as the agent's model — non-descriptive and
-	// inconsistent with seeded entries, which set model_name == model.
-	// Use the actual model string so the alias matches what the user picked.
+	// model_name is the row's user-facing display alias (deleted by ADR-067
+	// T067-08); the default model itself is the (provider, model) PAIR written
+	// below, never this alias. Use the actual model string so the alias matches
+	// what the user picked.
 	newProviderEntry := map[string]any{
 		"model_name":  providerModel,
 		"provider":    provider.Id,
@@ -612,10 +610,10 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 		m["providers"] = providerList
 
 		// --- Set default model ---
-		// The actual model the user selected becomes the default agent model.
-		// This matches the model_name on the provider entry created above, so
-		// the Agent Profile UI and LLM routing both show the model the user
-		// picked (not a generic provider alias).
+		// The pair the user picked becomes agents.defaults.default_model
+		// (ADR-068 D14.1 / FR-020): written ONCE here, as the exact
+		// (provider, model) the provider row above carries, so GetModelConfig
+		// resolves it exactly. No boot/reload path rewrites it.
 		agentsMap, ok := m["agents"].(map[string]any)
 		if !ok {
 			agentsMap = map[string]any{}
@@ -624,7 +622,11 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 		if !ok {
 			defaultsMap = map[string]any{}
 		}
-		defaultsMap["model_name"] = providerModel
+		delete(defaultsMap, "model_name")
+		defaultsMap["default_model"] = map[string]any{
+			"provider": provider.Id,
+			"model":    providerModel,
+		}
 		agentsMap["defaults"] = defaultsMap
 		m["agents"] = agentsMap
 

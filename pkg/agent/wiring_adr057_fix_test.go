@@ -162,7 +162,7 @@ func TestWiring_RootDelegationAdmission_RefusesPastCapThenAdmitsOnRelease(t *tes
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              tmpDir,
-				ModelName:         "test-model",
+				DefaultModel:      config.DefaultModel{Model: "test-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 				SubTurn:           config.SubTurnConfig{MaxConcurrent: 1},
@@ -272,7 +272,7 @@ func TestWiring_RootDelegationFanOut_BoundedByCentralValueNot16(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              tmpDir,
-				ModelName:         "test-model",
+				DefaultModel:      config.DefaultModel{Model: "test-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 				// SubTurn.MaxConcurrent deliberately left UNSET (Go zero
@@ -379,7 +379,7 @@ func TestWiring_StatsFlushInterval_ReachesSharedSessionStore(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              tmpDir,
-				ModelName:         "test-model",
+				DefaultModel:      config.DefaultModel{Model: "test-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 				SubTurn:           config.SubTurnConfig{MaxConcurrent: 16},

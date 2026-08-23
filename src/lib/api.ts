@@ -1929,9 +1929,11 @@ export interface Config { // not-wire-format: SPA-internal configuration shape p
   agents?: {
     defaults?: {
       default_agent_id?: string
-      // Previously missing — silently stripped by rawToFrontendConfig/frontendToRawConfig before this fix
-      model_name?: string
-      provider?: string
+      // ADR-068 D14.1: the default model is the exact (provider, model) pair
+      // persisted at agents.defaults.default_model (agents.defaults.model_name
+      // no longer exists). Threaded through rawToFrontendConfig so it survives
+      // a settings round-trip.
+      default_model?: { provider?: string; model?: string }
     }
   }
 }
@@ -2102,8 +2104,7 @@ function rawToFrontendConfig(raw: Record<string, unknown>): Config {
     agents: {
       defaults: {
         default_agent_id: agentDefaults.default_agent_id as string | undefined,
-        model_name: agentDefaults.model_name as string | undefined,
-        provider: agentDefaults.provider as string | undefined,
+        default_model: agentDefaults.default_model as { provider?: string; model?: string } | undefined,
       },
     },
   }

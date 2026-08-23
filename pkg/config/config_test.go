@@ -362,7 +362,10 @@ func TestSaveConfig_FilePermissions(t *testing.T) {
 	}
 }
 
-func TestSaveConfig_IncludesEmptyLegacyModelField(t *testing.T) {
+// TestSaveConfig_WritesZeroDefaultModelPair: a fresh config persists
+// agents.defaults.default_model as the zero (provider, model) pair and never
+// an agents.defaults.model_name key (ADR-068 D14.1 / FR-040).
+func TestSaveConfig_WritesZeroDefaultModelPair(t *testing.T) {
 	tmpDir := t.TempDir()
 	path := filepath.Join(tmpDir, "config.json")
 
@@ -375,9 +378,17 @@ func TestSaveConfig_IncludesEmptyLegacyModelField(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile failed: %v", err)
 	}
-
-	if !strings.Contains(string(data), `"model_name": ""`) {
-		t.Fatalf("saved config should include empty legacy model_name field, got: %s", string(data))
+	var top map[string]any
+	if err := json.Unmarshal(data, &top); err != nil {
+		t.Fatalf("saved config is not JSON: %v", err)
+	}
+	defaults := top["agents"].(map[string]any)["defaults"].(map[string]any)
+	if _, ok := defaults["model_name"]; ok {
+		t.Fatalf("saved config must not carry agents.defaults.model_name: %s", string(data))
+	}
+	dm, ok := defaults["default_model"].(map[string]any)
+	if !ok || dm["provider"] != "" || dm["model"] != "" {
+		t.Fatalf("saved config must carry the zero default_model pair, got: %v", defaults["default_model"])
 	}
 }
 

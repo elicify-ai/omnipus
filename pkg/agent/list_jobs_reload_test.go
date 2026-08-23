@@ -40,8 +40,8 @@ func listJobsReloadConfig(home string, filter bool, secrets []string) *config.Co
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      filepath.Join(home, "agents"),
-				ModelName: "test-model",
+				Home:         filepath.Join(home, "agents"),
+				DefaultModel: config.DefaultModel{Model: "test-model"},
 			},
 			List: []config.AgentConfig{
 				{

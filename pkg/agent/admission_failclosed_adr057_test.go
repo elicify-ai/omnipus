@@ -30,7 +30,7 @@ func TestRootDelegationAdmission_UnsetInheritsCentralValueLive(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              t.TempDir(),
-				ModelName:         "test-model",
+				DefaultModel:      config.DefaultModel{Model: "test-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -104,7 +104,7 @@ func TestRootDelegationAdmission_NegativeConfigFailsClosedToCentralValue(t *test
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              t.TempDir(),
-				ModelName:         "test-model",
+				DefaultModel:      config.DefaultModel{Model: "test-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 				SubTurn:           config.SubTurnConfig{MaxConcurrent: -1}, // genuine misconfiguration
@@ -155,7 +155,7 @@ func TestRootDelegationAdmission_ValidOverrideIsNotCoerced(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              t.TempDir(),
-				ModelName:         "test-model",
+				DefaultModel:      config.DefaultModel{Model: "test-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 				SubTurn:           config.SubTurnConfig{MaxConcurrent: operatorCap},

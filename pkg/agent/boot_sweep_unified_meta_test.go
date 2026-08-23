@@ -49,7 +49,8 @@ func newMetaReconcileTestAgentLoop(t *testing.T) (al *AgentLoop, agentID string)
 	t.Setenv(config.EnvHome, home)
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Home: t.TempDir(), ModelName: "test-model"},
+			Defaults: config.AgentDefaults{
+				Home: t.TempDir(), DefaultModel: config.DefaultModel{Model: "test-model"}},
 			List: []config.AgentConfig{
 				{ID: agentID, Name: "Meta Reconcile Test Agent", Type: config.AgentTypeWorker, Home: t.TempDir()},
 			},

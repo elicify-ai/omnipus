@@ -163,7 +163,7 @@ func TestValidateConfigKey_LegitimateKeysStillWritable(t *testing.T) {
 		"gateway.port",
 		"gateway.host",
 		"agents.defaults",
-		"agents.defaults.model_name",
+		"agents.defaults.default_model.model",
 		"tools.read_file.max_read_file_size",
 		"tools.skills.max_concurrent_searches",
 		"channels.telegram.enabled",
@@ -232,7 +232,7 @@ func TestValidateConfigReadKey_OrdinaryKeysStillReadable(t *testing.T) {
 	for _, key := range []string{
 		"gateway", // an ancestor read: served, with blocked descendants redacted
 		"gateway.port",
-		"agents.defaults.model_name",
+		"agents.defaults.default_model.model",
 		"tools.read_file.max_read_file_size",
 	} {
 		if err := validateConfigReadKey(nil, key); err != nil {

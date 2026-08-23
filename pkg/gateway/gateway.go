@@ -1648,16 +1648,13 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// Build the real LLM provider. The test_harness override hook + scripted-
 	// scenario fallback was removed 2026-05-10; tests now run against real
 	// OpenRouter via the configured provider entry.
-	provider, modelID, err := createStartupProvider(cfg, allowEmptyStartup)
+	// ADR-068 FR-020: the startup provider's model id is NEVER written back
+	// into agents.defaults.default_model. The old `ModelName == ""` back-fill
+	// guard that lived here was deleted with the alias — the pair is written
+	// only by onboarding completion and the default-model PUT.
+	provider, _, err := createStartupProvider(cfg, allowEmptyStartup)
 	if err != nil {
 		return fmt.Errorf("error creating provider: %w", err)
-	}
-
-	// Only override ModelName if it was empty (first boot / migration).
-	// Don't overwrite an alias (e.g. "openrouter-auto") with the raw model slug
-	// (e.g. "z-ai/glm-5v-turbo") — the alias is what GetModelConfig looks up by.
-	if modelID != "" && cfg.Agents.Defaults.ModelName == "" {
-		cfg.Agents.Defaults.ModelName = modelID
 	}
 
 	// ADR-054 D2/D3: bring in any agents already persisted as entity records
@@ -3638,8 +3635,7 @@ func createStartupProvider(
 	cfg *config.Config,
 	allowEmptyStartup bool,
 ) (providers.LLMProvider, string, error) {
-	modelName := cfg.Agents.Defaults.GetModelName()
-	if modelName == "" && allowEmptyStartup {
+	if cfg.Agents.Defaults.DefaultModel.IsZero() && allowEmptyStartup {
 		reason := "no default model configured; gateway started in limited mode"
 		fmt.Printf("⚠ Warning: %s\n", reason)
 		logger.WarnCF("gateway", "Gateway started without default model", map[string]any{
@@ -3674,8 +3670,10 @@ func createStartupProvider(
 // credential is absent from (or unreadable in) the vault, so no request to that
 // provider can succeed.
 //
-// "Every entry" and not "the entry" on purpose: several entries may share one
-// model_name for load balancing (config.GetModelConfig round-robins over them).
+// "Every entry" and not "the entry" on purpose: several entries may carry the
+// same (provider, model) pair for load balancing (config.GetModelConfig
+// round-robins over them). Matching is by the exact pair (ADR-068 D14.1) — a
+// row serving the same model under another provider never backs the default.
 // If any one of them still has a usable key, the model is not blocked and the
 // factory keeps its existing behaviour.
 //
@@ -3703,14 +3701,16 @@ func createStartupProvider(
 // fatal-on-non-NotFoundError behavior without also fixing this message —
 // see the incident note on reportInjectionErrors (2026-08-15).
 func defaultModelCredentialBlocked(cfg *config.Config) (string, bool) {
-	modelName := cfg.Agents.Defaults.GetModelName()
-	if modelName == "" {
+	pair := cfg.Agents.Defaults.DefaultModel
+	if pair.IsZero() {
 		return "", false
 	}
+	wantProvider := strings.TrimSpace(pair.Provider)
+	wantModel := strings.TrimSpace(pair.Model)
 	var missingRef string
 	var candidates int
 	for _, m := range cfg.Providers {
-		if m == nil || m.ModelName != modelName {
+		if m == nil || strings.TrimSpace(m.Provider) != wantProvider || strings.TrimSpace(m.Model) != wantModel {
 			continue
 		}
 		candidates++
@@ -3731,7 +3731,7 @@ func defaultModelCredentialBlocked(cfg *config.Config) (string, bool) {
 	return fmt.Sprintf(
 		"the default model %q cannot be used: its credential %q is missing from the credential vault — "+
 			"re-enter the API key in Settings → Providers (or remove the stale provider entry)",
-		modelName, missingRef,
+		pair.String(), missingRef,
 	), true
 }
 
@@ -5020,7 +5020,7 @@ func handleConfigReload(
 ) error {
 	logger.Info("🔄 Config file changed, reloading...")
 
-	newModel := newCfg.Agents.Defaults.ModelName
+	newModel := newCfg.Agents.Defaults.DefaultModel.String()
 
 	logger.Infof(" New model is '%s', recreating provider...", newModel)
 
@@ -5030,7 +5030,7 @@ func handleConfigReload(
 	// Build the real LLM provider on reload. The test_harness override hook
 	// was removed 2026-05-10; reload always recreates the real provider from
 	// the new config's `providers` entry.
-	newProvider, newModelID, err := createStartupProvider(newCfg, allowEmptyStartup)
+	newProvider, _, err := createStartupProvider(newCfg, allowEmptyStartup)
 	if err != nil {
 		logger.Errorf("  ⚠ Error creating new provider: %v", err)
 		logger.Warn("  Attempting to restart services with old provider and config...")
@@ -5052,10 +5052,8 @@ func handleConfigReload(
 		return fmt.Errorf("error creating new provider: %w", err)
 	}
 
-	if newModelID != "" && newCfg.Agents.Defaults.ModelName == "" {
-		newCfg.Agents.Defaults.ModelName = newModelID
-	}
-
+	// ADR-068 FR-020: no reload path back-fills agents.defaults.default_model
+	// (the twin `ModelName == ""` guard was deleted with the alias).
 	reloadCtx, reloadCancel := context.WithTimeout(context.Background(), providerReloadTimeout)
 	defer reloadCancel()
 

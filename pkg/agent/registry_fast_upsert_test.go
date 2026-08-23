@@ -43,7 +43,7 @@ func buildFastUpsertTestLoop(t *testing.T, agents []config.AgentConfig) *AgentLo
 	t.Setenv("OMNIPUS_HOME", home)
 
 	cfg := config.DefaultConfig()
-	cfg.Agents.Defaults.ModelName = "test-model"
+	cfg.Agents.Defaults.DefaultModel = config.DefaultModel{Model: "test-model"}
 	cfg.Agents.Defaults.MaxTokens = 4096
 	cfg.Agents.Defaults.MaxToolIterations = 10
 	cfg.Agents.List = agents
