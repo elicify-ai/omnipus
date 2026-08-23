@@ -468,9 +468,6 @@ func (al *AgentLoop) reconcileLocked(ctx context.Context) error {
 		mgr = mcp.NewManager()
 		newManager = true
 	}
-	// ADR-066 D10: the live ingest bound applies to every server connected
-	// in this pass (transports are built at connect time).
-	mgr.SetIngestBoundBytes(al.cfg.Context.IngestBoundBytes)
 
 	// --- Connects: desired but not (still) live, including changed servers
 	// just disconnected above. Each server connects on its own goroutine

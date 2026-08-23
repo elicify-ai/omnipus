@@ -1667,7 +1667,6 @@ func registerSharedTools(
 		// Per-provider Enabled sub-flags (Brave, Tavily, etc.) are retained because
 		// they select which upstream API is used, not whether the tool exists.
 		searchTool, err := tools.NewWebSearchTool(tools.WebSearchToolOptions{
-			IngestBoundBytes:      cfg.Context.IngestBoundBytes, // ADR-066 D10
 			BraveAPIKeys:          braveKeys(cfg.Tools.Web.Brave.APIKey()),
 			BraveMaxResults:       cfg.Tools.Web.Brave.MaxResults,
 			BraveEnabled:          cfg.Tools.Web.Brave.Enabled,
