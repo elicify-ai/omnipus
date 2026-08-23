@@ -21,10 +21,12 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -216,12 +218,22 @@ func discoverScenarios(root string) ([]Scenario, error) {
 
 // gatewayHandle wraps a running omnipus process and its home directory.
 type gatewayHandle struct {
-	homeDir   string
-	baseURL   string
-	cmd       *exec.Cmd
+	homeDir string
+	baseURL string
+	cmd     *exec.Cmd
+	// waited receives the single cmd.Wait() result. startGateway reaps the
+	// process in a goroutine so it can detect a boot abort while polling, so
+	// nothing else may call cmd.Wait() — kill() drains this channel instead.
+	waited    <-chan error
 	token     string // bearer token obtained after onboarding
 	csrfToken string // CSRF token extracted from Set-Cookie on state-changing responses
 }
+
+// gatewayBootTimeout bounds each phase of gateway startup (port file, then
+// /health). It is a backstop for a genuinely wedged process — a healthy
+// gateway binds in a couple of seconds and a misconfigured one now fails fast
+// via the process-death check, so reaching this timeout is itself a finding.
+const gatewayBootTimeout = 60 * time.Second
 
 // csrfCookieName is the cookie name used by the Omnipus CSRF middleware.
 const csrfCookieName = "__Host-csrf"
@@ -256,25 +268,53 @@ func (h *gatewayHandle) doStatefulPost(path string, body []byte) (*http.Response
 	return http.DefaultClient.Do(req)
 }
 
-// seedConfig writes a minimal config.json into homeDir. The provider entry is
-// a placeholder — the real API key is passed during onboarding/complete.
-func seedConfig(homeDir, agentModel string) error {
-	// Strip the "openrouter/" prefix if present to get the model list ID.
-	providerID := "openrouter"
-	modelPath := agentModel
-	if parts := strings.SplitN(agentModel, "/", 2); len(parts) == 2 && parts[0] == "openrouter" {
-		providerID = "openrouter"
-		modelPath = parts[1]
+// pickFreePort asks the kernel for an unused TCP port on the loopback
+// interface and returns it, releasing the listener immediately.
+//
+// The gateway does NOT support `gateway.port: 0` as an "bind an ephemeral
+// port" instruction — config validation rejects 0 outright ("gateway.port 0
+// is out of range [1, 65535]"), and on builds without that validation the
+// gateway echoes the *configured* value into gateway.port, so a 0 there means
+// "the operator literally configured 0", not "here is the port I bound".
+// The runner therefore has to choose a concrete port itself and hand it to
+// the gateway. The window between closing this listener and the gateway
+// binding is a benign TOCTOU race — a collision surfaces as a loud bind
+// failure from the gateway, not as a silent hang.
+func pickFreePort() (int, error) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return 0, fmt.Errorf("reserve free port: %w", err)
 	}
-	_ = providerID
-	_ = modelPath
+	addr, ok := l.Addr().(*net.TCPAddr)
+	if !ok {
+		l.Close() // errcheck rationale (out of errcheck scope; kept as documentation): closing a listener we are abandoning on an impossible-type path; the returned error adds nothing to the one below
+		return 0, fmt.Errorf("reserved listener has address type %T, want *net.TCPAddr", l.Addr())
+	}
+	port := addr.Port
+	if err := l.Close(); err != nil {
+		return 0, fmt.Errorf("release reserved port %d: %w", port, err)
+	}
+	return port, nil
+}
 
+// seedConfig writes a minimal config.json into homeDir, binding the gateway to
+// the given concrete port. The provider entry is a placeholder — the real API
+// key is passed during onboarding/complete.
+//
+// The `"version": 1` field is REQUIRED and must not be dropped. A config.json
+// with no version field is treated as a pre-v1 (v0) config: the loader runs
+// the v0→v1 migration, which unmarshals the file into the v0 schema and fails
+// on any field whose shape differs (this is what silently killed every nightly
+// eval run — the old seed's `"model_list": {}` is an object, while v0 declares
+// model_list as an array). Newer builds reject a missing version outright.
+func seedConfig(homeDir string, port int) error {
 	// Write a bare config that lets the gateway start. The provider entry and
-	// model are set via onboarding/complete.
+	// model are set via onboarding/complete, so no model keys are seeded here.
 	cfgContent := `{
+  "version": 1,
   "gateway": {
     "host": "127.0.0.1",
-    "port": 0,
+    "port": ` + strconv.Itoa(port) + `,
     "allow_empty": true,
     "dev_mode_bypass": true
   },
@@ -282,9 +322,7 @@ func seedConfig(homeDir, agentModel string) error {
     "defaults": {
       "workspace": "` + homeDir + `"
     }
-  },
-  "model": "",
-  "model_list": {}
+  }
 }`
 	if err := os.WriteFile(filepath.Join(homeDir, "config.json"), []byte(cfgContent), 0o600); err != nil {
 		return fmt.Errorf("seed config.json: %w", err)
@@ -292,9 +330,36 @@ func seedConfig(homeDir, agentModel string) error {
 	return nil
 }
 
-// startGateway starts the omnipus binary with the given home directory,
-// waits for /health to respond, and returns a gatewayHandle.
-func startGateway(ctx context.Context, omnipusBin, homeDir string) (*gatewayHandle, error) {
+// bootFailureDetail returns a short diagnostic drawn from the gateway's own
+// startup log, for use when the gateway dies before it is reachable.
+//
+// The gateway writes fatal startup errors (bad config, bind failure, credential
+// unlock failure) to $OMNIPUS_HOME/logs/gateway_panic.log and NOT to the stderr
+// it inherited from us. Without this, a hard boot abort is indistinguishable
+// from a hang: the runner just times out with "gateway did not write port
+// file", which is what left the nightly evals undiagnosed for three months.
+func bootFailureDetail(homeDir string) string {
+	data, err := os.ReadFile(filepath.Join(homeDir, "logs", "gateway_panic.log"))
+	if err != nil {
+		return fmt.Sprintf("(no gateway_panic.log: %v)", err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	// The fatal line is last; keep a little leading context.
+	if len(lines) > bootLogTailLines {
+		lines = lines[len(lines)-bootLogTailLines:]
+	}
+	return strings.Join(lines, " | ")
+}
+
+// bootLogTailLines is how many trailing gateway_panic.log lines are quoted
+// into a boot-failure error.
+const bootLogTailLines = 6
+
+// startGateway starts the omnipus binary with the given home directory on the
+// given port, waits for /health to respond, and returns a gatewayHandle.
+//
+// port must be the same concrete port that seedConfig wrote into config.json.
+func startGateway(ctx context.Context, omnipusBin, homeDir string, port int) (*gatewayHandle, error) {
 	cmd := exec.CommandContext(ctx, omnipusBin, "gateway", "--allow-empty")
 	cmd.Env = append(os.Environ(),
 		"OMNIPUS_HOME="+homeDir,
@@ -306,29 +371,50 @@ func startGateway(ctx context.Context, omnipusBin, homeDir string) (*gatewayHand
 		return nil, fmt.Errorf("start gateway: %w", err)
 	}
 
-	// Read the port from the gateway's port file, which it writes on bind.
-	// Poll for up to 30 seconds.
+	// The gateway writes gateway.port once its listener is up, so the file is
+	// still the readiness signal — but it echoes the CONFIGURED port, so it can
+	// only ever confirm the port we asked for, never discover one.
+	//
+	// Poll for the file while simultaneously watching for process death. A
+	// gateway that aborts at boot exits within a second or two; without the
+	// liveness check we would sit here for the full timeout and then report a
+	// misleading "never wrote its port file" instead of the actual cause.
+	waited := make(chan error, 1)
+	go func() { waited <- cmd.Wait() }()
+
 	portFile := filepath.Join(homeDir, "gateway.port")
-	var port string
-	deadline := time.Now().Add(60 * time.Second)
-	for time.Now().Before(deadline) {
-		data, err := os.ReadFile(portFile)
-		if err == nil && len(bytes.TrimSpace(data)) > 0 {
-			port = strings.TrimSpace(string(data))
+	wantPort := strconv.Itoa(port)
+	var got string
+	deadline := time.Now().Add(gatewayBootTimeout)
+	for got == "" && time.Now().Before(deadline) {
+		if data, err := os.ReadFile(portFile); err == nil && len(bytes.TrimSpace(data)) > 0 {
+			got = string(bytes.TrimSpace(data))
 			break
 		}
-		time.Sleep(200 * time.Millisecond)
+		select {
+		case werr := <-waited:
+			return nil, fmt.Errorf(
+				"gateway exited during startup before binding port %d: %s: %w",
+				port, bootFailureDetail(homeDir), werr)
+		case <-time.After(200 * time.Millisecond):
+		}
 	}
-	if port == "" {
+	if got == "" {
 		cmd.Process.Kill() // errcheck rationale (out of errcheck scope; kept as documentation): killing a test subprocess; ErrProcessDone if it already exited is expected and harmless
-		return nil, fmt.Errorf("gateway did not write port file within 60s")
+		return nil, fmt.Errorf(
+			"gateway still running but did not write %s within %s: %s",
+			portFile, gatewayBootTimeout, bootFailureDetail(homeDir))
+	}
+	if got != wantPort {
+		cmd.Process.Kill() // errcheck rationale (out of errcheck scope; kept as documentation): killing a test subprocess; ErrProcessDone if it already exited is expected and harmless
+		return nil, fmt.Errorf("gateway bound port %s but config requested %s", got, wantPort)
 	}
 
-	baseURL := "http://127.0.0.1:" + port
+	baseURL := "http://127.0.0.1:" + wantPort
 
 	// Wait for /health.
 	healthURL := baseURL + "/health"
-	deadline = time.Now().Add(60 * time.Second)
+	deadline = time.Now().Add(gatewayBootTimeout)
 	for time.Now().Before(deadline) {
 		resp, err := http.Get(healthURL) //nolint:noctx
 		if err == nil && resp.StatusCode == http.StatusOK {
@@ -345,7 +431,7 @@ func startGateway(ctx context.Context, omnipusBin, homeDir string) (*gatewayHand
 	resp, err := http.Get(healthURL) //nolint:noctx
 	if err != nil {
 		cmd.Process.Kill() // errcheck rationale (out of errcheck scope; kept as documentation): killing a test subprocess; ErrProcessDone if it already exited is expected and harmless
-		return nil, fmt.Errorf("gateway /health never responded: %w", err)
+		return nil, fmt.Errorf("gateway /health never responded: %w: %s", err, bootFailureDetail(homeDir))
 	}
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -357,6 +443,7 @@ func startGateway(ctx context.Context, omnipusBin, homeDir string) (*gatewayHand
 		homeDir: homeDir,
 		baseURL: baseURL,
 		cmd:     cmd,
+		waited:  waited,
 	}, nil
 }
 
@@ -452,7 +539,15 @@ func (h *gatewayHandle) login(username, password string) (string, error) {
 func (h *gatewayHandle) kill() {
 	if h.cmd != nil && h.cmd.Process != nil {
 		h.cmd.Process.Kill() // errcheck rationale (out of errcheck scope; kept as documentation): killing a test subprocess; ErrProcessDone if it already exited is expected and harmless
-		h.cmd.Wait()         // errcheck rationale (out of errcheck scope; kept as documentation): waiting on an already-killed test subprocess; the exit error is expected and not asserted
+		// Reap via the channel startGateway's goroutine owns — calling
+		// cmd.Wait() here as well would race it and return "Wait was already
+		// called". The exit error is expected (we just killed it) and not asserted.
+		if h.waited != nil {
+			select {
+			case <-h.waited:
+			case <-time.After(5 * time.Second):
+			}
+		}
 	}
 	os.RemoveAll(h.homeDir) // errcheck rationale (out of errcheck scope; kept as documentation): test cleanup of a temp home dir; failure here does not affect the test's assertions
 }
@@ -725,7 +820,17 @@ func runScenario(
 		return result
 	}
 
-	err = seedConfig(homeDir, c.agentModel)
+	// The gateway cannot pick its own port (see pickFreePort), so reserve one
+	// here and seed it into the config the gateway is about to read.
+	var port int
+	port, err = pickFreePort()
+	if err != nil {
+		os.RemoveAll(homeDir)
+		result.Error = fmt.Sprintf("pick port: %v", err)
+		return result
+	}
+
+	err = seedConfig(homeDir, port)
 	if err != nil {
 		os.RemoveAll(homeDir)
 		result.Error = fmt.Sprintf("seed config: %v", err)
@@ -733,7 +838,7 @@ func runScenario(
 	}
 
 	var gw *gatewayHandle
-	gw, err = startGateway(ctx, c.omnipusBin, homeDir)
+	gw, err = startGateway(ctx, c.omnipusBin, homeDir, port)
 	if err != nil {
 		os.RemoveAll(homeDir)
 		result.Error = fmt.Sprintf("start gateway: %v", err)
