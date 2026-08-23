@@ -14,6 +14,7 @@
 package agent
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -117,6 +118,28 @@ const (
 	// switch failed. The turn continues on the previous model; this code
 	// is how we say so instead of "we can't tell why".
 	CodeModelUnavailable LLMErrorCode = "model_unavailable"
+
+	// CodeTurnCanceled (ADR-066 D7, FR-034): the turn's context was cancelled
+	// — Stop button, session interrupt, shutdown — before the provider
+	// finished. Attribution `user`: the SPA renders it as a neutral notice,
+	// not an error toast. Not retryable: the user chose to stop.
+	//
+	// Produced by runTurn's typed exits (see typedTurnExit in loop.go) and by
+	// TranslateTurnError for any error chain carrying context.Canceled or
+	// ErrTurnCanceled.
+	CodeTurnCanceled LLMErrorCode = "turn_canceled"
+
+	// CodeTurnTimedOut (ADR-066 D7, FR-034): the turn's deadline expired
+	// while waiting on the provider. Attribution `provider`; retryable.
+	CodeTurnTimedOut LLMErrorCode = "turn_timed_out"
+
+	// CodeContextUnrecoverable (ADR-066 D6/D7, FR-032, FR-034): the mid-turn
+	// window guard fired — after emptying every eligible tool result a
+	// trigger condition still held, so no further provider call is made.
+	// Attribution `product` (our bug, never the user's). Reachable only via
+	// an injected fault; the guard itself lands with T066-13, this constant
+	// and its attribution/copy land here so the contract round-trip closes.
+	CodeContextUnrecoverable LLMErrorCode = "context_unrecoverable"
 
 	// CodeUnknown: unclassified — the residual/inconclusive verdict.
 	//
@@ -655,15 +678,25 @@ func TranslateLLMError(pe *ProviderError, message string) LLMError {
 //   - ErrAgentNotWorkspaceMember → CodeAgentNotConfigured. Raised by
 //     resolveTurnWorkDirOrRefuse (pkg/agent/workspace_reroot.go) and preserved
 //     through runTurn → runAgentLoop → processMessage.
+//
 //   - ErrWorkspaceWorkDirUnavailable / ErrAgentHomeUnavailable →
 //     CodeWorkspaceUnavailable. The agent is on a workspace (or is a system
 //     agent with a home) but the folder could not be opened.
+//
+//   - ErrTurnCanceled / context.Canceled → CodeTurnCanceled;
+//     ErrTurnTimedOut / context.DeadlineExceeded → CodeTurnTimedOut;
+//     ErrContextUnrecoverable → CodeContextUnrecoverable (ADR-066 D7). The
+//     typed exits in runTurn wrap both the sentinel and the raw cause, so
+//     either match routes here.
 //
 // Anything else falls through to the substring classifier, preserving the
 // previous behaviour for every other error shape.
 func TranslateTurnError(err error) LLMError {
 	if err == nil {
 		return TranslateLLMError(nil, "")
+	}
+	if code, ok := typedExitCode(err); ok {
+		return typedExitError(code, err)
 	}
 	if errors.Is(err, ErrAgentNotWorkspaceMember) {
 		return LLMError{
@@ -686,13 +719,66 @@ func TranslateTurnError(err error) LLMError {
 	return TranslateLLMError(nil, err.Error())
 }
 
+// Typed turn-exit sentinels (ADR-066 D7, FR-034). runTurn's formerly silent
+// return sites wrap one of these together with the raw cause
+// (`fmt.Errorf("%w: %w", ErrTurnCanceled, cause)`), so a caller can errors.Is
+// either the sentinel or the underlying context error. TranslateTurnError
+// maps each to its typed code.
+var (
+	// ErrTurnCanceled: the turn context was cancelled before the provider
+	// finished (Stop button, interrupt, shutdown).
+	ErrTurnCanceled = errors.New("turn canceled")
+	// ErrTurnTimedOut: the turn deadline expired while waiting on the provider.
+	ErrTurnTimedOut = errors.New("turn timed out")
+	// ErrContextUnrecoverable: the mid-turn window guard fired (T066-13
+	// raises it); no further provider call is made.
+	ErrContextUnrecoverable = errors.New("context unrecoverable after emptying every eligible tool result")
+)
+
+// typedExitCode reports the ADR-066 D7 exit code carried by err's chain, if
+// any. The sentinel and the raw context error are both accepted so callers
+// that see only the unwrapped context error (e.g. a provider returning
+// context.Canceled directly) classify identically to callers that see the
+// wrapped runTurn return.
+func typedExitCode(err error) (LLMErrorCode, bool) {
+	switch {
+	case err == nil:
+		return "", false
+	case errors.Is(err, ErrContextUnrecoverable):
+		return CodeContextUnrecoverable, true
+	case errors.Is(err, ErrTurnCanceled), errors.Is(err, context.Canceled):
+		return CodeTurnCanceled, true
+	case errors.Is(err, ErrTurnTimedOut), errors.Is(err, context.DeadlineExceeded):
+		return CodeTurnTimedOut, true
+	}
+	return "", false
+}
+
+// typedExitError builds the LLMError for a typed exit: catalogue copy for the
+// code, contract retryability, and the raw cause confined to the
+// Verbose-Chat-only Detail (never the Message, never persisted).
+func typedExitError(code LLMErrorCode, cause error) LLMError {
+	detail := ""
+	if cause != nil {
+		detail = cause.Error()
+	}
+	return LLMError{
+		Code:      code,
+		Message:   defaultUserMessage(code),
+		Retryable: isRetryable(code),
+		Detail:    buildDetail(nil, detail),
+	}
+}
+
 // isRetryable reports whether code's user-facing condition is one the
 // operator can safely retry without changing inputs. Everything else —
 // capability, content, size, auth, and setup failures — fails identically on
-// retry and is reported as not retryable.
+// retry and is reported as not retryable. A timed-out turn is retryable (the
+// provider may answer next time); a cancelled one is not (the user stopped
+// it); an unrecoverable context is not (retrying re-runs the same overflow).
 func isRetryable(code LLMErrorCode) bool {
 	switch code {
-	case CodeRateLimited, CodeNetwork:
+	case CodeRateLimited, CodeNetwork, CodeTurnTimedOut:
 		return true
 	}
 	return false

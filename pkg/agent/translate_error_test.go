@@ -891,3 +891,54 @@ func TestProviderError_FormatCompatForClassifyError(t *testing.T) {
 		_ = nilPE.Error()
 	}, "nil ProviderError receiver must not panic")
 }
+
+// TestTranslateError_TypedExitsAndAttributions — ADR-066 D7 (T066-11), spec
+// test row 20, B-40 / B-41. The three typed turn exits exist as classifier
+// codes, carry the contract's attribution (`user` is a real vocabulary value),
+// and TranslateTurnError maps the sentinel / context causes onto them instead
+// of falling to `unknown`.
+func TestTranslateError_TypedExitsAndAttributions(t *testing.T) {
+	assert.Equal(t, LLMErrorCode("turn_canceled"), CodeTurnCanceled)
+	assert.Equal(t, LLMErrorCode("turn_timed_out"), CodeTurnTimedOut)
+	assert.Equal(t, LLMErrorCode("context_unrecoverable"), CodeContextUnrecoverable)
+
+	// B-41: attribution is contract-defined; `user` is in the vocabulary.
+	assert.Equal(t, LLMErrorAttribution("user"), AttributionForCode(CodeTurnCanceled))
+	assert.Equal(t, LLMErrorAttribution("provider"), AttributionForCode(CodeTurnTimedOut))
+	assert.Equal(t, LLMErrorAttribution("product"), AttributionForCode(CodeContextUnrecoverable))
+	for _, c := range []LLMErrorCode{CodeTurnCanceled, CodeTurnTimedOut, CodeContextUnrecoverable} {
+		assert.NotEqual(t, UserMessageForCode(CodeUnknown), UserMessageForCode(c),
+			"%s must have its own catalogue copy", c)
+	}
+
+	cases := []struct {
+		name      string
+		err       error
+		wantCode  LLMErrorCode
+		retryable bool
+	}{
+		{"raw context.Canceled", context.Canceled, CodeTurnCanceled, false},
+		{"wrapped context.Canceled", fmt.Errorf("run turn: %w", context.Canceled), CodeTurnCanceled, false},
+		{"ErrTurnCanceled sentinel", fmt.Errorf("x: %w", ErrTurnCanceled), CodeTurnCanceled, false},
+		{"raw DeadlineExceeded", context.DeadlineExceeded, CodeTurnTimedOut, true},
+		{"ErrTurnTimedOut sentinel", fmt.Errorf("x: %w", ErrTurnTimedOut), CodeTurnTimedOut, true},
+		{"ErrContextUnrecoverable sentinel", fmt.Errorf("x: %w", ErrContextUnrecoverable), CodeContextUnrecoverable, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			llm := TranslateTurnError(tc.err)
+			assert.Equal(t, tc.wantCode, llm.Code)
+			assert.Equal(t, UserMessageForCode(tc.wantCode), llm.Message)
+			assert.Equal(t, tc.retryable, llm.Retryable)
+			assert.NotEqual(t, CodeUnknown, llm.Code, "never unknown")
+			assert.Contains(t, llm.Detail, tc.err.Error(),
+				"the raw cause belongs in the Verbose-Chat detail, not the message")
+		})
+	}
+
+	// The exit sentinels stay distinct from each other and from the
+	// workspace sentinels so errors.Is routing cannot cross-match.
+	assert.False(t, errors.Is(ErrTurnCanceled, ErrTurnTimedOut))
+	assert.False(t, errors.Is(ErrContextUnrecoverable, ErrTurnCanceled))
+	assert.False(t, errors.Is(ErrTurnCanceled, ErrAgentNotWorkspaceMember))
+}

@@ -9248,11 +9248,12 @@ turnLoop:
 		if err != nil {
 			// C2: check for context cancellation/timeout before reporting a generic
 			// "LLM call failed" error — these are user/system actions, not LLM failures.
-			if errors.Is(err, context.Canceled) {
-				return turnResult{}, fmt.Errorf("turn canceled")
-			}
-			if errors.Is(err, context.DeadlineExceeded) {
-				return turnResult{}, fmt.Errorf("turn timed out")
+			// ADR-066 D7: typed, never silent — see typedTurnExit.
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				var res turnResult
+				var exitErr error
+				res, turnStatus, exitErr = al.typedTurnExit(ts, iteration, llmModel, err)
+				return res, exitErr
 			}
 		}
 		if err != nil {
@@ -9467,11 +9468,12 @@ turnLoop:
 			}
 			// If the inner retry loop set an error, surface it via the outer error path.
 			if err != nil {
-				if errors.Is(err, context.Canceled) {
-					return turnResult{}, fmt.Errorf("turn canceled")
-				}
-				if errors.Is(err, context.DeadlineExceeded) {
-					return turnResult{}, fmt.Errorf("turn timed out")
+				// ADR-066 D7: typed, never silent — see typedTurnExit.
+				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+					var res turnResult
+					var exitErr error
+					res, turnStatus, exitErr = al.typedTurnExit(ts, iteration, llmModel, err)
+					return res, exitErr
 				}
 				turnStatus = TurnEndStatusError
 				// Wave 1 (error-provenance hardening): translate via the
@@ -10865,6 +10867,68 @@ turnLoop:
 // headless scheduled run has no live user to "already know" the run stopped
 // early — see ProcessScheduled's comment.
 const hardInterruptAbortReason = "turn canceled by hard interrupt request"
+
+// typedTurnExit (ADR-066 D7, FR-034, SC-006) finalizes a turn that ended
+// because its context was cancelled or its deadline expired while waiting on
+// the provider. These were runTurn's four SILENT return sites — a bare
+// fmt.Errorf("turn canceled") / ("turn timed out") with no log line, no
+// EventKindError and no transcript entry, so the user saw nothing and the
+// session worker rendered the "we can't tell why" copy.
+//
+// Every typed exit produces the three SC-006 artefacts:
+//   - one log line carrying the typed code AND the raw cause (operator triage),
+//   - one EventKindError carrying the typed code (live wire; the deferred
+//     EventKindTurnEnd in runTurn fires on return with the status returned
+//     here — TurnEndStatusAborted for a cancel, which is an intentional user
+//     action and must not mark the turn failed; TurnEndStatusError for a
+//     timeout),
+//   - one transcript entry with the typed code (replay).
+//
+// The returned error wraps BOTH the sentinel (ErrTurnCanceled /
+// ErrTurnTimedOut) and the raw cause, so runAgentLoop / processMessage /
+// session_worker callers that errors.Is the context error keep working and
+// TranslateTurnError classifies the chain to the same code. Never `unknown`.
+func (al *AgentLoop) typedTurnExit(ts *turnState, iteration int, llmModel string, cause error) (turnResult, TurnEndStatus, error) {
+	code, ok := typedExitCode(cause)
+	if !ok {
+		// Not a typed exit — callers only route context errors here; fall
+		// back to the cancel shape rather than inventing an `unknown`.
+		code = CodeTurnCanceled
+	}
+	var (
+		sentinel = ErrTurnCanceled
+		status   = TurnEndStatusAborted
+		level    = logger.WarnCF
+	)
+	switch code {
+	case CodeTurnTimedOut:
+		sentinel, status = ErrTurnTimedOut, TurnEndStatusError
+	case CodeContextUnrecoverable:
+		sentinel, status, level = ErrContextUnrecoverable, TurnEndStatusError, logger.ErrorCF
+	}
+	llm := typedExitError(code, cause)
+
+	al.emitEvent(
+		EventKindError,
+		ts.eventMeta("runTurn", "turn.error"),
+		ErrorPayload{
+			Stage:     "llm",
+			ChatID:    ts.opts.ChatID,
+			Code:      string(llm.Code),
+			Message:   llm.Message,
+			SessionID: string(ts.routingSessionID),
+		},
+	)
+	ts.appendClassifiedError(EventKindError.String(), "runTurn", llm)
+	level("agent", "Turn exited: "+string(code), map[string]any{
+		"agent_id":  ts.agent.ID,
+		"iteration": iteration,
+		"model":     llmModel,
+		"code":      string(code),
+		"cause":     cause.Error(),
+	})
+	return turnResult{status: status}, status, fmt.Errorf("%w: %w", sentinel, cause)
+}
 
 // abortTurn finalizes a hard-aborted turn. It differentiates two cases by
 // reason string, because they need opposite treatment: one is a successful
