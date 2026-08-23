@@ -42,9 +42,11 @@ import (
 	"time"
 )
 
-// EmbeddedSnapshot is the committed providers_catalog.json (schema 2.0.0 once
-// T067-06 lands the first real release; until then its content is the legacy
-// artefact and ParseDocument rejects it by schema_version).
+// EmbeddedSnapshot is the committed providers_catalog.json — a byte-for-byte
+// copy of the assembly repository's release document (schema 2.0.0, first
+// landed from elicify-ai/omnipus-provider-catalog v2026.8.23.1 in T067-06),
+// refreshed only by pull request (FR-006) and pinned by embed_test.go
+// (T16–T19) and the hermetic-build CI gate (T48).
 //
 //go:embed data/providers_catalog.json
 var EmbeddedSnapshot []byte

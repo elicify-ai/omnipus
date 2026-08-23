@@ -560,6 +560,62 @@ jobs:
         run: go build -tags goolm,stdjson ./...
 
 
+  hermetic-build:
+    name: Hermetic Build Gate (catalog snapshot)
+    # T067-06 / ADR-067 FR-006, US-2.AC5 (spec test T48): the provider catalog
+    # is a committed, git-tracked snapshot embedded via //go:embed — the build
+    # must never fetch it (or any Go module) from the network. After a
+    # warm-cache step, `make build` runs with GOPROXY=off so any build-time
+    # module fetch fails loudly. The job also pins the snapshot mechanics:
+    # the file is git-tracked, pkg/providers/catalog carries exactly one
+    # //go:embed and no //go:generate that could reach the network.
+    runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: "0"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+
+      - name: Snapshot git-tracked, single go:embed, no go:generate
+        run: |
+          set -euo pipefail
+          git ls-files --error-unmatch pkg/providers/catalog/data/providers_catalog.json
+          embed_count=$(grep -rh --include='*.go' '^//go:embed' pkg/providers/catalog | wc -l)
+          if [ "$embed_count" -ne 1 ]; then
+            echo "expected exactly one //go:embed in pkg/providers/catalog, found $embed_count"
+            grep -rn --include='*.go' '^//go:embed' pkg/providers/catalog || true
+            exit 1
+          fi
+          if grep -rn --include='*.go' '^//go:generate' pkg/providers/catalog; then
+            echo "pkg/providers/catalog must not carry //go:generate directives (hermetic build)"
+            exit 1
+          fi
+
+      - name: Warm Go module cache (the only step allowed to fetch modules)
+        run: go mod download
+
+      - name: Hermetic make build (GOPROXY=off)
+        # GOFLAGS uses the -tags= equals form on purpose: the Makefile's
+        # `GOFLAGS?=` lets this env value override it (so it must carry the
+        # canonical build tags), AND the go tool parses the same value from
+        # the environment, where the space form (`-tags goolm,stdjson`) is
+        # rejected as a non-flag argument.
+        env:
+          GOPROXY: "off"
+          GOFLAGS: "-v -tags=goolm,stdjson -mod=mod"
+        run: make build
+
+
   test:
     name: Tests
     runs-on: ubuntu-latest
