@@ -5,7 +5,6 @@
 package agent
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"log/slog"
@@ -623,10 +622,12 @@ func TestTriggerScheduler_UnreadableTaskEscalatesToError(t *testing.T) {
 	sched.RunDueJobs(clk.Now())
 	sched.WaitForLane()
 
-	var logBuf bytes.Buffer
-	origLogger := slog.Default()
-	t.Cleanup(func() { slog.SetDefault(origLogger) })
-	slog.SetDefault(slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	// Must be a raceFreeLogBuffer, never a bare bytes.Buffer: slog.SetDefault
+	// swaps the PROCESS-GLOBAL logger, so every still-running goroutine in the
+	// test binary writes into this sink concurrently with the Reset()/String()
+	// calls below. See raceFreeLogBuffer's doc comment (test_helpers_test.go)
+	// for the CI failure this exact line produced on 2026-08-23.
+	logBuf := captureDefaultSlog(t, slog.LevelInfo)
 
 	sched.RunRecoverySweep()
 
