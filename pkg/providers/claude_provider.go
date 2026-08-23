@@ -2,7 +2,6 @@ package providers
 
 import (
 	"context"
-	"fmt"
 
 	anthropicprovider "github.com/elicify-ai/omnipus/pkg/providers/anthropic"
 )
@@ -14,15 +13,6 @@ type ClaudeProvider struct {
 func NewClaudeProvider(token string) *ClaudeProvider {
 	return &ClaudeProvider{
 		delegate: anthropicprovider.NewProvider(token),
-	}
-}
-
-func NewClaudeProviderWithTokenSource(
-	token string,
-	tokenSource func() (string, error),
-) *ClaudeProvider {
-	return &ClaudeProvider{
-		delegate: anthropicprovider.NewProviderWithTokenSource(token, tokenSource),
 	}
 }
 
@@ -49,7 +39,7 @@ func (p *ClaudeProvider) Chat(
 //
 // Without this method ClaudeProvider does not satisfy StreamingProvider, and
 // ClaudeProvider is the ONLY thing that constructs the native Anthropic
-// provider (see NewClaudeProvider / NewClaudeProviderWithTokenSource — the
+// provider (see NewClaudeProvider — the
 // inner type has no other non-test caller). The agent loop's
 // `activeProvider.(providers.StreamingProvider)` assertion therefore failed
 // for every Anthropic install, silently taking the non-streaming path — so the
@@ -75,19 +65,4 @@ func (p *ClaudeProvider) ChatStream(
 
 func (p *ClaudeProvider) GetDefaultModel() string {
 	return p.delegate.GetDefaultModel()
-}
-
-func createClaudeTokenSource() func() (string, error) {
-	return func() (string, error) {
-		cred, err := getCredential("anthropic")
-		if err != nil {
-			return "", fmt.Errorf("loading auth credentials: %w", err)
-		}
-		if cred == nil {
-			return "", fmt.Errorf(
-				"no credentials for anthropic. Run: omnipus credentials set ANTHROPIC_API_KEY <your-key>",
-			)
-		}
-		return cred.AccessToken, nil
-	}
 }

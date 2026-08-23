@@ -1,20 +1,27 @@
 package auth
 
 import (
-	"crypto/rand"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 )
 
+// OAuthProviderConfig describes a vendor OAuth token endpoint used for
+// store-held credential refresh.
+//
+// ADR-068 FR-002a: the OpenAI device-code / browser-login flow that used to
+// live in this file (device-code request + poll, authorize-URL building,
+// code-for-token exchange, the OpenAI client config) is deleted. No code path
+// in Omnipus starts a vendor OAuth or device-code login for OpenAI; OpenAI
+// sign-in is the vendor's own CLI (`codex login`) whose credential file is
+// read, never written (FR-007). What remains here is the refresh path still
+// used by the Google Cloud Code Assist provider.
 type OAuthProviderConfig struct {
 	Issuer   string
 	ClientID string
@@ -28,18 +35,7 @@ type OAuthProviderConfig struct {
 	ClientSecret string
 	TokenURL     string // Override token endpoint (Google uses a different URL than issuer)
 	Scopes       string
-	Originator   string
 	Port         int
-}
-
-func OpenAIOAuthConfig() OAuthProviderConfig {
-	return OAuthProviderConfig{
-		Issuer:     "https://auth.openai.com",
-		ClientID:   "app_EMoamEEZ73f0CkXaXp7hrann",
-		Scopes:     "openid profile email offline_access",
-		Originator: "codex_cli_rs",
-		Port:       1455,
-	}
 }
 
 // GoogleAntigravityOAuthConfig returns the OAuth configuration for Google Cloud Code Assist (Antigravity).
@@ -61,185 +57,8 @@ func GoogleAntigravityOAuthConfig() OAuthProviderConfig {
 	}
 }
 
-// GenerateState generates a random state string for OAuth CSRF protection.
-func GenerateState() (string, error) {
-	buf := make([]byte, 32)
-	if _, err := rand.Read(buf); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(buf), nil
-}
-
-type deviceCodeResponse struct {
-	DeviceAuthID string
-	UserCode     string
-	Interval     int
-}
-
-// DeviceCodeInfo holds the device code information returned by the OAuth provider.
-type DeviceCodeInfo struct {
-	DeviceAuthID string `json:"device_auth_id"`
-	UserCode     string `json:"user_code"`
-	VerifyURL    string `json:"verify_url"`
-	Interval     int    `json:"interval"`
-}
-
-// RequestDeviceCode requests a device code from the OAuth provider.
-// Returns the info needed for the user to authenticate in a browser.
-func RequestDeviceCode(cfg OAuthProviderConfig) (*DeviceCodeInfo, error) {
-	reqBody, _ := json.Marshal(map[string]string{
-		"client_id": cfg.ClientID,
-	})
-
-	resp, err := http.Post(
-		cfg.Issuer+"/api/accounts/deviceauth/usercode",
-		"application/json",
-		strings.NewReader(string(reqBody)),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("requesting device code: %w", err)
-	}
-	// Response body is fully drained (via io.ReadAll or a bounded LimitReader
-	// below); a Close error on an already-consumed HTTP response body has no
-	// effect on the parsed OAuth result.
-	defer func() {
-		if closeErr := resp.Body.Close(); closeErr != nil {
-			_ = closeErr
-		}
-	}()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("reading device code response: %w", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("device code request failed: %s", string(body))
-	}
-
-	deviceResp, err := parseDeviceCodeResponse(body)
-	if err != nil {
-		return nil, fmt.Errorf("parsing device code response: %w", err)
-	}
-
-	if deviceResp.Interval < 1 {
-		deviceResp.Interval = 5
-	}
-
-	return &DeviceCodeInfo{
-		DeviceAuthID: deviceResp.DeviceAuthID,
-		UserCode:     deviceResp.UserCode,
-		VerifyURL:    cfg.Issuer + "/codex/device",
-		Interval:     deviceResp.Interval,
-	}, nil
-}
-
-// PollDeviceCodeOnce makes a single poll attempt to check if the user has authenticated.
-// Returns (credential, nil) on success, (nil, nil) if still pending, or (nil, err) on failure.
-func PollDeviceCodeOnce(cfg OAuthProviderConfig, deviceAuthID, userCode string) (*AuthCredential, error) {
-	return pollDeviceCode(cfg, deviceAuthID, userCode)
-}
-
-func parseDeviceCodeResponse(body []byte) (deviceCodeResponse, error) {
-	var raw struct {
-		DeviceAuthID string          `json:"device_auth_id"`
-		UserCode     string          `json:"user_code"`
-		Interval     json.RawMessage `json:"interval"`
-	}
-
-	if err := json.Unmarshal(body, &raw); err != nil {
-		return deviceCodeResponse{}, err
-	}
-
-	interval, err := parseFlexibleInt(raw.Interval)
-	if err != nil {
-		return deviceCodeResponse{}, err
-	}
-
-	return deviceCodeResponse{
-		DeviceAuthID: raw.DeviceAuthID,
-		UserCode:     raw.UserCode,
-		Interval:     interval,
-	}, nil
-}
-
-func parseFlexibleInt(raw json.RawMessage) (int, error) {
-	if len(raw) == 0 || string(raw) == "null" {
-		return 0, nil
-	}
-
-	var interval int
-	if err := json.Unmarshal(raw, &interval); err == nil {
-		return interval, nil
-	}
-
-	var intervalStr string
-	if err := json.Unmarshal(raw, &intervalStr); err == nil {
-		intervalStr = strings.TrimSpace(intervalStr)
-		if intervalStr == "" {
-			return 0, nil
-		}
-		return strconv.Atoi(intervalStr)
-	}
-
-	return 0, fmt.Errorf("invalid integer value: %s", string(raw))
-}
-
-var (
-	errDeviceAuthPending = fmt.Errorf("authorization_pending")
-	errDeviceAuthDenied  = fmt.Errorf("access_denied")
-)
-
-func pollDeviceCode(cfg OAuthProviderConfig, deviceAuthID, userCode string) (*AuthCredential, error) {
-	reqBody, _ := json.Marshal(map[string]string{
-		"device_auth_id": deviceAuthID,
-		"user_code":      userCode,
-	})
-
-	resp, err := http.Post(
-		cfg.Issuer+"/api/accounts/deviceauth/token",
-		"application/json",
-		strings.NewReader(string(reqBody)),
-	)
-	if err != nil {
-		return nil, err
-	}
-	// Response body is fully drained (via io.ReadAll or a bounded LimitReader
-	// below); a Close error on an already-consumed HTTP response body has no
-	// effect on the parsed OAuth result.
-	defer func() {
-		if closeErr := resp.Body.Close(); closeErr != nil {
-			_ = closeErr
-		}
-	}()
-
-	if resp.StatusCode != http.StatusOK {
-		// Try to read the error body to distinguish pending vs denied.
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		bodyStr := strings.ToLower(strings.TrimSpace(string(body)))
-		if strings.Contains(bodyStr, "access_denied") {
-			return nil, errDeviceAuthDenied
-		}
-		return nil, errDeviceAuthPending
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("reading device token response: %w", err)
-	}
-
-	var tokenResp struct {
-		AuthorizationCode string `json:"authorization_code"`
-		CodeChallenge     string `json:"code_challenge"`
-		CodeVerifier      string `json:"code_verifier"`
-	}
-	if err := json.Unmarshal(body, &tokenResp); err != nil {
-		return nil, err
-	}
-
-	redirectURI := cfg.Issuer + "/deviceauth/callback"
-	return ExchangeCodeForTokens(cfg, tokenResp.AuthorizationCode, tokenResp.CodeVerifier, redirectURI)
-}
-
+// RefreshAccessToken exchanges a store-held refresh token for a fresh access
+// token at the provider's token endpoint.
 func RefreshAccessToken(cred *AuthCredential, cfg OAuthProviderConfig) (*AuthCredential, error) {
 	if cred.RefreshToken == "" {
 		return nil, fmt.Errorf("no refresh token available")
@@ -261,16 +80,15 @@ func RefreshAccessToken(cred *AuthCredential, cfg OAuthProviderConfig) (*AuthCre
 	}
 
 	// #nosec G107 -- tokenURL is derived from cfg.Issuer/cfg.TokenURL, and cfg
-	// is only ever constructed by the two hardcoded factories in this file
-	// (OpenAIOAuthConfig, GoogleAntigravityOAuthConfig) with fixed literal
-	// Issuer/TokenURL strings — never request-derived.
+	// is only ever constructed by the hardcoded factory in this file
+	// (GoogleAntigravityOAuthConfig) with fixed literal Issuer/TokenURL
+	// strings — never request-derived.
 	resp, err := http.PostForm(tokenURL, data)
 	if err != nil {
 		return nil, fmt.Errorf("refreshing token: %w", err)
 	}
-	// Response body is fully drained (via io.ReadAll or a bounded LimitReader
-	// below); a Close error on an already-consumed HTTP response body has no
-	// effect on the parsed OAuth result.
+	// Response body is fully drained via io.ReadAll below; a Close error on an
+	// already-consumed HTTP response body has no effect on the parsed result.
 	defer func() {
 		if closeErr := resp.Body.Close(); closeErr != nil {
 			_ = closeErr
@@ -302,95 +120,6 @@ func RefreshAccessToken(cred *AuthCredential, cfg OAuthProviderConfig) (*AuthCre
 		refreshed.ProjectID = cred.ProjectID
 	}
 	return refreshed, nil
-}
-
-func BuildAuthorizeURL(cfg OAuthProviderConfig, pkce PKCECodes, state, redirectURI string) string {
-	return buildAuthorizeURL(cfg, pkce, state, redirectURI)
-}
-
-func buildAuthorizeURL(cfg OAuthProviderConfig, pkce PKCECodes, state, redirectURI string) string {
-	params := url.Values{
-		"response_type":         {"code"},
-		"client_id":             {cfg.ClientID},
-		"redirect_uri":          {redirectURI},
-		"scope":                 {cfg.Scopes},
-		"code_challenge":        {pkce.CodeChallenge},
-		"code_challenge_method": {"S256"},
-		"state":                 {state},
-	}
-
-	isGoogle := strings.Contains(strings.ToLower(cfg.Issuer), "accounts.google.com")
-	if isGoogle {
-		// Google OAuth requires these for refresh token support
-		params.Set("access_type", "offline")
-		params.Set("prompt", "consent")
-	} else {
-		// OpenAI-specific parameters
-		params.Set("id_token_add_organizations", "true")
-		params.Set("codex_cli_simplified_flow", "true")
-		if strings.Contains(strings.ToLower(cfg.Issuer), "auth.openai.com") {
-			params.Set("originator", "omnipus")
-		}
-		if cfg.Originator != "" {
-			params.Set("originator", cfg.Originator)
-		}
-	}
-
-	// Google uses /auth path, OpenAI uses /oauth/authorize
-	if isGoogle {
-		return cfg.Issuer + "/auth?" + params.Encode()
-	}
-	return cfg.Issuer + "/oauth/authorize?" + params.Encode()
-}
-
-// ExchangeCodeForTokens exchanges an authorization code for tokens.
-func ExchangeCodeForTokens(cfg OAuthProviderConfig, code, codeVerifier, redirectURI string) (*AuthCredential, error) {
-	data := url.Values{
-		"grant_type":    {"authorization_code"},
-		"code":          {code},
-		"redirect_uri":  {redirectURI},
-		"client_id":     {cfg.ClientID},
-		"code_verifier": {codeVerifier},
-	}
-	if cfg.ClientSecret != "" {
-		data.Set("client_secret", cfg.ClientSecret)
-	}
-
-	tokenURL := cfg.Issuer + "/oauth/token"
-	if cfg.TokenURL != "" {
-		tokenURL = cfg.TokenURL
-	}
-
-	// Determine provider name from config
-	provider := "openai"
-	if cfg.TokenURL != "" && strings.Contains(cfg.TokenURL, "googleapis.com") {
-		provider = "google-antigravity"
-	}
-
-	// #nosec G107 -- same as RefreshAccessToken above: tokenURL comes only
-	// from the two hardcoded provider-config factories in this file.
-	resp, err := http.PostForm(tokenURL, data)
-	if err != nil {
-		return nil, fmt.Errorf("exchanging code for tokens: %w", err)
-	}
-	// Response body is fully drained (via io.ReadAll or a bounded LimitReader
-	// below); a Close error on an already-consumed HTTP response body has no
-	// effect on the parsed OAuth result.
-	defer func() {
-		if closeErr := resp.Body.Close(); closeErr != nil {
-			_ = closeErr
-		}
-	}()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("reading token exchange response: %w", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("token exchange failed: %s", string(body))
-	}
-
-	return parseTokenResponse(body, provider)
 }
 
 func parseTokenResponse(body []byte, provider string) (*AuthCredential, error) {
@@ -426,7 +155,6 @@ func parseTokenResponse(body []byte, provider string) (*AuthCredential, error) {
 		AuthMethod:   "oauth",
 	}
 
-	// Recent OpenAI OAuth responses may only include chatgpt_account_id in id_token claims.
 	if id := extractAccountID(tokenResp.IDToken); id != "" {
 		cred.AccountID = id
 	} else if id := extractAccountID(tokenResp.AccessToken); id != "" {

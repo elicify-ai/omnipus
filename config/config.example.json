@@ -39,8 +39,7 @@
     },
     {
       "model_name": "gemini",
-      "model": "antigravity/gemini-2.0-flash",
-      "auth_method": "oauth"
+      "model": "antigravity/gemini-2.0-flash"
     },
     {
       "model_name": "deepseek",
