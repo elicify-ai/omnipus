@@ -2,7 +2,7 @@
 
 - **Source ADR:** `docs/internal/architecture/ADR-066-context-budget-and-tool-result-routing.md` (Proposed, restructured 2026-08-22; pass-2 findings resolved in §16a; amended 2026-08-22 from the spec review — commit `docs(adr): ADR-066 amendments from spec review`). Review records: `…-review-pass2.md` (ADR), `docs/internal/specs/adr-066-context-overflow-spec-review.md` (this spec, verdict BLOCK — every finding resolved in this revision; see §13).
 - **Status:** Draft (plan-spec) — revision 2, 2026-08-22, branch `feat/context-budget-and-tool-result-routing`. The ADR is the confirmed requirements brief. Where the ADR was silent the §10 table records the operator's resolutions; every item is closed (A-18/A-19 accepted by the coordinator 2026-08-22; register #3 confirmed).
-- **Scope:** ADR-066 only — D2, D3, D4, D5 (+ recall-by-`tool_call_id`), D6, D7, D9, D10, §16a, ADR §15 task 1 (bounding parameters — FR-038…FR-040), and the two **P0 preconditions for D5** added 2026-08-22 — **D5.4 recall injection at the tool-result site** and **D5.5 hydration must not overwrite the archive** (US-14, US-15; both ship as a hotfix first, then this branch inherits them). **D1 (the catalog) is ADR-067 — referenced, not specified.** **D8 is NOT ADOPTED** (ADR-066 commits `ec2e022d`, `80aef474`, `06e6cc17`). Subscriptions / provider deletion / provider UX are ADR-068.
+- **Scope:** ADR-066 only — D2, D3, D4, D5 (+ recall-by-`tool_call_id`), D6, D7, D9, D10, §16a, ADR §15 task 1 (bounding parameters — FR-038…FR-040), and the two **P0 preconditions for D5** added 2026-08-22 — **D5.4 recall injection at the tool-result site** and **D5.5 hydration must not overwrite the archive** (US-14, US-15; both ship as a with this branch, then this branch inherits them). **D1 (the catalog) is ADR-067 — referenced, not specified.** **D8 is NOT ADOPTED** (ADR-066 commits `ec2e022d`, `80aef474`, `06e6cc17`). Subscriptions / provider deletion / provider UX are ADR-068.
 - **Greenfield rule (operator, 2026-08-22):** no backward compatibility, no migration, no aliasing. Pre-existing state that does not match simply does not work: a `config.json` still carrying `summarize_token_percent` or `agents.defaults.context_window` has those keys silently ignored (`LoadConfig` has no `DisallowUnknownFields`) — no boot notice, no rejection; session meta without projection state loads as an empty set (a zero value, not a compatibility path).
 - **Cross-spec seams (cross-spec review 2026-08-22, `docs/internal/specs/cross-spec-review-adr-066-067-068.md`):** this spec **requires ADR-067's spec (S67) merged first** — it consumes `pkg/providers/catalog.Resolve(provider, model).Window()`, the `locality` predicate, the `cli_driver` field, and the coordinated contract commit that S67 owns (`Agent.yaml`, the four `LLMError` copies). It depends on ADR-068's spec (S68) only for the UI tail (row/picker refusal state, default-model card). Landing order S67 → S68 → S66 backend → S66 UI tail. Grep gates (tests 6, 11 and S67/S68's) are evaluated on the **merged** branch; S68's removed-provider gate allow-lists the spec/ADR files, but this spec does not rely on that: the deleted id `claude-cli` appears in this document only in this sentence, and in no test literal.
 - **Tech:** Go (`pkg/agent`, `pkg/memory`, `pkg/tools`, `pkg/mcp`, `pkg/gateway`, `pkg/providers`) · React 19 + Vite (SPA) · contract-first (`contracts/*`, Constraint #8).
@@ -231,7 +231,7 @@ As a user on any channel who pastes a huge document, I get a non-fatal refusal b
 ### US-13 — Bounding parameters for three Tier-1 tools (ADR §15 task 1) — **P2**
 - **Acceptance:** `list_directory` gains `offset`/`limit` (entries); `inspect_session` gains `offset`/`limit` (entries); `recall_conversation`'s `query`/`turn_range` modes gain `max_results` (turns) — parameter names and semantics consistent with `read_file`'s existing `offset`/`length` interface; each validated (`offset ≥ 0`, `limit`/`max_results ≥ 1`) and documented in the tool schema. *(A-19 accepted.)*
 
-### US-14 — Recall content reaches the model in the same turn (D5.4) — **P0, hotfix first**
+### US-14 — Recall content reaches the model in the same turn (D5.4) — **P0**
 As the model, when I call `recall_conversation`, the recalled text is in my very next request — or the tool result tells me it did not fit — so emptied content really does come back via recall.
 - **Why P0:** verified bug: the span is only read at assembly/trim sites; mid-turn requests are built from the in-memory slice, so 25 live recalls reached the model as a receipt string only. D5 is false without this.
 - **Independent test:** loop-level, fake recording provider: nonce in turn 1 evicted past `Skip`; provider's first response calls `recall_conversation(turn_range:"1-1")`; the provider's **second** request contains the nonce and the recall marker.
@@ -245,7 +245,7 @@ As the model, when I call `recall_conversation`, the recalled text is in my very
   7. **Given** an injected span, **Then** it is subject to D5 emptying and D6 like any tool result.
   8. **Given** a delegated sub-turn calls recall, **Then** (known limitation, pinned by a test, not fixed here) it reads the parent store under the child's ephemeral key and returns nothing; the test asserts the empty outcome and the INFO line naming it.
 
-### US-15 — Opening a session must not destroy the agent archive (D5.5) — **P0, hotfix first**
+### US-15 — Opening a session must not destroy the agent archive (D5.5) — **P0**
 As an operator, opening a session in the browser must never rewrite the per-agent archive, so tool results persist, `Skip` is stable, and ADR-028's append-only invariant holds.
 - **Why P0:** verified on the operator's data: attach rebuilds the archive from the transcript via `SetHistory` (21/53/36 lines → 22/42/0, `skip` 0), and the rebuild drops every standalone `tool_call` entry (the current transcript shape) because it only reads `e.ToolCalls` on assistant entries. D5's "full result stays in the archive" is false until fixed.
 - **Independent test:** attach the same session twice → archive bytes and `meta.skip` unchanged; attach to an empty archive → hydrated once, with tool results.
@@ -812,13 +812,13 @@ head/tail 50/50; mark length counted toward the cap; no rune split
 **D10 — ingest**
 - **FR-038**: Ingest bound default 8,000,000 bytes, setting < 8,388,608; MCP enforced on the transport read (stdio reader bound in `sandboxedStdioConn`; `http.MaxBytesReader` for HTTP/SSE); all five search providers bounded (the two 1 MiB sites raised); `fetch_url` fallback 8 MB; exceeding → tool failure, never truncation.
 
-**D5.4 — recall injection (P0 hotfix, inherited)**
+**D5.4 — recall injection (P0)**
 - **FR-041**: Immediately after a recall tool result is appended to `messages` mid-turn, the system MUST run the D6 fit check (budget B) and, if the span fits, splice `span.Messages()` at the `BuildMessages` position and run `sanitizeHistoryForProvider` on the combined slice.
 - **FR-042**: If the span does not fit, the system MUST NOT splice and MUST NOT drop silently; the tool result MUST read *"N turn(s) found (X estimator tokens) but they do not fit the current window; narrow with turn_range or query"*.
 - **FR-043**: The receipt MUST read *"Recalled N turn(s) (turns A–B); their text is now in your context"* only when injected; `assembleMessages` MUST skip a span already marked injected (`ts.injectedRecallSpan`, by identity); the `tool_call_id` mode MUST inject per page; set/injected/refused/dropped MUST log at INFO with sizes; an injected span is subject to D5/D6.
 - **FR-044**: The sub-turn limitation (child recall reads the parent store under the ephemeral key → empty) MUST be pinned by a test and logged; it is not fixed here.
 
-**D5.5 — hydration (P0 hotfix, inherited)**
+**D5.5 — hydration (P0)**
 - **FR-045**: The attach path MUST skip hydration when the agent archive has ≥ 1 line; the self-heal path keeps its emptiness condition.
 - **FR-046**: When hydration runs, it MUST reconstruct tool calls from standalone `type: "tool_call"` transcript entries — attaching each as a `ToolCall` to the preceding assistant message of the same `turn_id`/agent (a synthetic assistant message if none exists, with a WARN) — and the rebuilt archive MUST contain exactly one `role: "tool"` line per recorded call carrying the entry's bounded `result` (D4-capped, written by the choke point); the test fixture MUST use the real transcript shape; until that field lands, meta MUST carry `hydrated: true` and recall by id MUST answer *"not available — session was rebuilt from the transcript"*.
 - **FR-047**: `SetHistory` MUST refuse a non-empty archive and MUST never reset `Skip` on an existing one.
@@ -989,8 +989,7 @@ All 37 findings verified against the branch; none refuted. CRIT-001…004 per th
 
 ### Summary
 
-- User stories: **14** (US-1…US-9, US-11…US-15; US-10 withdrawn) — US-14/US-15 are P0 hotfixes inherited by this branch
-- BDD scenarios: **72** (HP 37 · AP 10 · EP 12 · EC 13; 10 outlines)
+- User stories: **14** (US-1…US-9, US-11…US-15; US-10 withdrawn) — US-14/US-15 are P0 and ship with this branch; 10 outlines)
 - Test datasets: **10**, **84** rows
 - Functional requirements: **49** (incl. FR-005b; FR-035 is the D8 non-behaviour; FR-041…048 are the D5.4/D5.5 preconditions)
 - Success criteria: **15**

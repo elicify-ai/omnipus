@@ -169,7 +169,9 @@ Verified:
 
 ---
 
-### 6.4 D5.4 — Recall is injected at the tool-result site (P0; ships with this branch — operator decision 2026-08-23: no separate hotfix; everything lands together)
+> **Operator decision 2026-08-23:** D5.4 and D5.5 are not shipped as a separate hotfix. Everything in ADR-066/067/068 lands together on `feat/context-budget-and-tool-result-routing`.
+
+### 6.4 D5.4 — Recall is injected at the tool-result site (P0; ships with this branch)
 
 **The bug (operator report 2026-08-22, severity High), verified on this branch.** `pkg/agent/recall_conversation.go::Execute` builds the full-text span (whole turns, verbatim), calls `setRecallSpan`, and returns only *"Recalled N turn(s) … into context."* The span is read in exactly **two** places — `loop.go::assembleMessages` (turn start and the trim sites) and `loop.go::windowTrim` (FR-019, which **drops** it under pressure). Inside the tool loop every LLM call uses `callMessages` built from `repairedHistory := messages` — the in-memory slice — and `activeRecallSpan` is never consulted there. So a recall made mid-turn reaches the model only if a trim happens to re-assemble before the next call; otherwise the next request carries the receipt string and nothing else. Live evidence (sessions `01M0HYPY…`, `01M0MS6W…`): 25 recall calls, all "success", the model's next answer quotes nothing; no span set/drop is logged. Existing tests (`TestRecallSpan_ReinjectedProviderValid` and siblings) assert the tool result string and span state only — none asserts that the **next LLM request** contains recalled text. **This is a precondition for D5: "emptied content comes back via recall" is false until it is fixed.**
 
@@ -187,7 +189,7 @@ Verified:
 
 **Known limitation, recorded with a test, not fixed here:** `spawnSubTurn` gives the child the parent's tool registry (`Tools: cfg.Tools`) but its own `ephemeralSessionStore`; the recall tool was constructed with the parent's `agent.Sessions`, so a child's recall reads the parent store under the child's ephemeral key and returns nothing.
 
-### 6.5 D5.5 — Hydration may only fill an empty archive, never overwrite one (P0; ships with this branch — operator decision 2026-08-23: no separate hotfix; everything lands together)
+### 6.5 D5.5 — Hydration may only fill an empty archive, never overwrite one (P0; ships with this branch)
 
 **The bug, verified on this branch and on the operator's data.** `pkg/agent/attach_hydrate.go::HydrateAgentHistoryFromTranscript` rebuilds the per-agent archive **from the UI transcript** and writes it with `SetHistory`. **The verified mechanism:** the rebuild `switch`es on `e.Role` and handles only `"user"` and `"assistant"`; it emits `role: "tool"` lines **only** from `e.ToolCalls` on an **assistant** entry (content `marshalToolResult(tc)` — the transcript's bounded inline `result` map when present, ≤ 50 KiB, larger results are offloaded stubs — else `{"status":…}`). In the operator's transcripts tool calls are written as **standalone entries** (`type: "tool_call"`, no `role`) — the 08-21 session has 50 assistant entries with 0 `tool_calls` fields and 55 standalone `tool_call` entries. Those entries match no case and fall to `default: continue`, so the rebuilt archive has **zero** tool lines — exactly what the operator's file shows. For the current transcript shape hydration is not merely lossy-by-stub: it discards every tool call and result outright. `SetHistory`, which (`pkg/memory/jsonl.go::SetHistory`) rewrites the whole file and sets `meta.Skip = 0`. It is called **unconditionally** from the `attach_session` handler (`pkg/gateway/websocket.go`) and conditionally from `loop.go` (self-heal when the history has no assistant/tool message). Evidence: the 08-21 Jarvis archive held 21 user / 53 assistant / 36 tool lines at the 19:19 snapshot and 22 / 42 / 0 afterwards with `skip = 0` — a whole-file replacement, not a rollback. Consequences: every reopen discards all real tool results (recall returns text only), resets the window pointer, and violates ADR-028's append-only archive — so D5's "the full result stays in the archive" is false until this is fixed.
 
@@ -285,8 +287,8 @@ D4 protects the window; it cannot protect the process — by the time a result i
 3. The local-endpoint live window query and the "set the context length" state on the provider row and model picker (D3).
 4. Bound the three search providers' reads (D10).
 5. Confirm the provider ordering rule in §16 before allowing any mid-turn cut in future.
-6. **P0 hotfix, inherited by this branch:** D5.4 — recall injection at the tool-result site, with the loop-level nonce test and the sub-turn limitation test.
-7. **P0 hotfix, inherited by this branch:** D5.5 — hydration fills only an empty archive; `SetHistory` refuses a non-empty file; the transcript `tool_call.result` field; the attach-twice byte-identity test.
+6. **P0 (ships with this branch):** D5.4 — recall injection at the tool-result site, with the loop-level nonce test and the sub-turn limitation test.
+7. **P0 (ships with this branch):** D5.5 — hydration fills only an empty archive; `SetHistory` refuses a non-empty file; the transcript `tool_call.result` field; the attach-twice byte-identity test.
 
 ### 15.1 Tier-1 audit (2026-08-22, this branch)
 
