@@ -188,6 +188,15 @@ func IsValidEventName(e EventName) bool {
 		// the global default (provider, model) pair (ADR-068 FR-018, T068-11);
 		// details carry the old and new pairs.
 		"provider.default_model.changed",
+		// "provider.deleted" is emitted once per COMPLETED
+		// DELETE /providers/{id} run (ADR-068 FR-010 step 4, T068-09);
+		// details carry the credential REF NAME (never the value), the
+		// dependents count and any default change.
+		// "provider.credential_swept" is emitted by the boot-time sweep of
+		// orphaned `<id>_API_KEY` credentials whose provider row is gone
+		// (ADR-068 FR-010 last clause, T068-10).
+		"provider.deleted",
+		"provider.credential_swept",
 		// pkg/tools/memory.go: long-term memory write events.
 		// "memory.remember" and "memory.retrospective" are the success-path
 		// events; "memory.rate_limited" is emitted by the v0.2 #155 item 6

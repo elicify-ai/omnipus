@@ -6031,9 +6031,21 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 		// DELETE on a reserved path segment ("catalog", "model-capabilities";
 		// "default-model" normally dispatches to its own route first) — the
 		// reserved literals are never provider ids, so there is nothing to
-		// delete: 404, per the MAJ-002 scenario rows. The real DELETE
-		// /providers/{id} branch is a separate ADR-068 task.
+		// delete: 404, per the MAJ-002 scenario rows.
 		jsonErr(w, http.StatusNotFound, "provider not found")
+
+	case r.Method == http.MethodDelete && sub != "" && !strings.Contains(sub, "/"):
+		// DELETE /api/v1/providers/{id} (T068-09, ADR-068 FR-010/FR-011,
+		// rest_providers_delete.go). The shared dispatcher is registered
+		// withOptionalAuth, so the verb carries its own authorization gate
+		// inline (FR-042/MAJ-007): requireAdminAuthz (RequireNotBypass →
+		// 503 under dev-mode bypass) here, and the unconditional 401 for an
+		// unauthenticated caller inside deleteProvider — no pre-onboarding
+		// exception.
+		providerID := sub
+		a.requireAdminAuthz(func(w http.ResponseWriter, r *http.Request) {
+			a.deleteProvider(w, r, providerID)
+		})(w, r)
 
 	case r.Method == http.MethodPut && sub != "" && !strings.HasSuffix(sub, "/test"):
 		// PUT /api/v1/providers/{id} — update or insert a provider entry.

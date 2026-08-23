@@ -13,6 +13,7 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -24,6 +25,7 @@ import (
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/gateway/ctxkey"
 	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
 )
 
@@ -145,16 +147,20 @@ func TestListProviders_ConfiguredOnly(t *testing.T) {
 	})
 
 	t.Run("DELETE on a template id is not found", func(t *testing.T) {
-		// Until T068-09 lands the DELETE branch, the dispatcher has no DELETE
-		// case and answers 405; T068-09 tightens this to 404. Either way a
-		// template id is never a deletable row.
+		// T068-09's DELETE branch answers 404 for a template id: a seed
+		// template row carries no provider identity, so it was never a
+		// configured, deletable row. The request carries the config snapshot
+		// and an authenticated user because the DELETE verb is gated inline
+		// (requireAdminAuthz + unconditional 401 — FR-042); in production
+		// configSnapshotMiddleware wraps every registered handler.
 		api := newTestRestAPIWithHome(t)
 		seedTemplateProviders(t, api)
 		w := httptest.NewRecorder()
 		r := httptest.NewRequest(http.MethodDelete, "/api/v1/providers/groq", nil)
-		api.HandleProviders(w, r)
-		assert.Contains(t, []int{http.StatusNotFound, http.StatusMethodNotAllowed}, w.Code,
-			"body=%s", w.Body.String())
+		ctx := context.WithValue(r.Context(), ctxkey.ConfigContextKey{}, api.agentLoop.GetConfig())
+		ctx = context.WithValue(ctx, UserContextKey{}, &config.UserConfig{Username: "admin"})
+		api.HandleProviders(w, r.WithContext(ctx))
+		assert.Equal(t, http.StatusNotFound, w.Code, "body=%s", w.Body.String())
 	})
 }
 
