@@ -831,7 +831,7 @@ func (a *restAPI) validateTaskAgentID(agentID, workspaceID string) error {
 	if wsErr != nil {
 		return fmt.Errorf("cannot assign agent %q: workspace %q could not be loaded: %w", agentID, workspaceID, wsErr)
 	}
-	if !workspaceTeamSet(ws)[agentID] {
+	if !workspaceTeamSet(a.homePath, ws)[agentID] {
 		return fmt.Errorf(
 			"agent %q is not a member of this workspace's team — add it to the workspace's core team or a delegation edge before assigning tasks to it",
 			agentID,

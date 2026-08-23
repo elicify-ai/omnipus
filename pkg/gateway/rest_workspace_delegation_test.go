@@ -31,6 +31,22 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
+// loadStoredDelegationEdges reads a workspace's PERSISTED delegation edges.
+//
+// The one and only persisted location is the delegation store,
+// $OMNIPUS_HOME/entities/delegation/<id>.json — NOT the workspace record. These
+// assertions used to read workspaces/<id>.json, which is the very file a
+// sandboxed child can write; asserting there would now pass on a hostile edge
+// and fail on a legitimate one. Fails the test (rather than returning empty) on
+// an unreadable store, so "the edges vanished" can never read as "there were no
+// edges".
+func loadStoredDelegationEdges(t *testing.T, home, id string) []storedDelegationEdge {
+	t.Helper()
+	edges, ok := workspace.LoadDelegation(home, id)
+	require.True(t, ok, "delegation store record for workspace %s must be readable", id)
+	return edges
+}
+
 // buildWorkspaceDelegationTestAPI builds a restAPI with a roster (jim, ava, ray,
 // planner) so delegation edge endpoints resolve targets, plus a pre-created
 // workspace whose id is returned.
@@ -166,10 +182,8 @@ func TestWorkspaceDelegation_PutAndRoundTrip(t *testing.T) {
 	assert.Len(t, *got.Edges[0].Modes, 2)
 	assert.Equal(t, 3, got.DefaultDepth, "default_depth must be present on the PUT response too")
 
-	// Persisted to the workspace file.
-	stored, err := readWorkspaceFile(api.homePath, id)
-	require.NoError(t, err)
-	require.Len(t, stored.Delegation, 2)
+	// Persisted to the delegation store (never the workspace record).
+	require.Len(t, loadStoredDelegationEdges(t, api.homePath, id), 2)
 }
 
 func TestWorkspaceDelegation_PutUnknownAgent_400(t *testing.T) {
@@ -542,9 +556,10 @@ func TestDefaultWorkspaceSeeder_TeamAndEdges(t *testing.T) {
 	// Edges: full coreAgentDelegation matrix with Worker on-team —
 	// Jim→ava/ray/worker, Mia→worker, Ava→worker, Ray→worker/researcher,
 	// Planner→explorer/researcher.
-	require.Len(t, ws.Delegation, 9)
-	byPair := make(map[string]storedDelegationEdge, len(ws.Delegation))
-	for _, e := range ws.Delegation {
+	seeded := loadStoredDelegationEdges(t, home, ws.ID)
+	require.Len(t, seeded, 9)
+	byPair := make(map[string]storedDelegationEdge, len(seeded))
+	for _, e := range seeded {
 		byPair[e.FromAgent+"->"+e.ToAgent] = e
 	}
 	for _, want := range []string{
@@ -576,7 +591,7 @@ func TestDefaultWorkspaceSeeder_TeamAndEdges(t *testing.T) {
 		plannerToExplorer.Modes, "planner->explorer must carry Planner's seeded modes, collapsed to [direct, task]")
 
 	// The two research specialists are leaves: no outgoing edges seeded for them.
-	for _, e := range ws.Delegation {
+	for _, e := range seeded {
 		assert.NotEqual(t, "explorer", e.FromAgent, "explorer must not have a seeded outgoing edge")
 		assert.NotEqual(t, "researcher", e.FromAgent, "researcher must not have a seeded outgoing edge")
 	}
@@ -664,8 +679,9 @@ func TestDefaultWorkspaceSeeder_PartialRoster_DropsOnlyMissingAgentEdges(t *test
 	// (b) only researcher's edges are dropped — every other edge from the
 	// full-roster matrix (see TestDefaultWorkspaceSeeder_TeamAndEdges) survives
 	// exactly as seeded.
-	byPair := make(map[string]storedDelegationEdge, len(ws.Delegation))
-	for _, e := range ws.Delegation {
+	seeded := loadStoredDelegationEdges(t, home, ws.ID)
+	byPair := make(map[string]storedDelegationEdge, len(seeded))
+	for _, e := range seeded {
 		byPair[e.FromAgent+"->"+e.ToAgent] = e
 		assert.NotEqual(t, "researcher", e.FromAgent, "researcher is off-team — must not appear as a from_agent")
 		assert.NotEqual(t, "researcher", e.ToAgent, "researcher is off-team — must not appear as a to_agent")
@@ -681,7 +697,7 @@ func TestDefaultWorkspaceSeeder_PartialRoster_DropsOnlyMissingAgentEdges(t *test
 	// dangling with an unresolvable endpoint.
 	assert.NotContains(t, byPair, "ray->researcher")
 	assert.NotContains(t, byPair, "planner->researcher")
-	assert.Len(t, ws.Delegation, 7, "9 full-roster edges minus the 2 that reference the missing researcher")
+	assert.Len(t, seeded, 7, "9 full-roster edges minus the 2 that reference the missing researcher")
 }
 
 // TestDefaultWorkspaceDelegationEdges_MatchesCoreagentSeed verifies the
@@ -836,10 +852,8 @@ func TestWorkspaceDelegation_Depth0AndEmptyModes_RoundTrip(t *testing.T) {
 	assert.Equal(t, 0, *jimAva.Depth, "depth:0 must survive (no onward delegation)")
 
 	// Persisted form must also carry depth:0.
-	stored, err := readWorkspaceFile(api.homePath, id)
-	require.NoError(t, err)
 	var foundDepth0 bool
-	for _, e := range stored.Delegation {
+	for _, e := range loadStoredDelegationEdges(t, api.homePath, id) {
 		if e.FromAgent == "jim" && e.ToAgent == "ava" {
 			require.NotNil(t, e.Depth, "stored depth:0 must persist")
 			assert.Equal(t, 0, *e.Depth)

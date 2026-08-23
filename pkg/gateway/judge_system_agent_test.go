@@ -193,7 +193,7 @@ func TestSystemAgent_ExcludedFromEnumeration(t *testing.T) {
 		// the seeded default team and assert the Judge is not a member — so it can
 		// never be a delegation target.
 		ws := storedWorkspace{ID: "ws1", CoreTeam: defaultWorkspaceTeam(cfg)}
-		set := workspaceTeamSet(ws)
+		set := workspaceTeamSet(t.TempDir(), ws)
 		assert.False(t, set["judge"], "the Judge must not be in the workspace team set (no delegation target)")
 	})
 

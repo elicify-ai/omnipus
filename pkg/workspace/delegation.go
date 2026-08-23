@@ -55,8 +55,11 @@ var legacyModeDirect = map[string]bool{
 	"background": true,
 }
 
-// DelegationEdge mirrors a single directed delegation edge stored in
-// workspaces/<id>.json. It is the dependency-free read view of the gateway's
+// DelegationEdge mirrors a single directed delegation edge stored in the
+// per-workspace delegation store, entities/delegation/<id>.json (NOT in
+// workspaces/<id>.json — see delegationstore.go for why an authorization
+// cannot live in a record the constrained principal can write). It is the
+// dependency-free read view of the gateway's
 // storedDelegationEdge (same JSON tags), so non-gateway packages (pkg/agent)
 // can read the per-workspace delegation graph WITHOUT importing pkg/gateway
 // (which would create an import cycle).
@@ -106,6 +109,9 @@ type DelegationEdge struct {
 // sysagent tool — routes through this single method (they all unmarshal into
 // this same struct, directly or via an embedding/aliasing type), so fixing the
 // migration here covers all three read paths with no other code changes.
+// (ReadDelegation now sources its edges from the delegation store rather than
+// the workspace record; the decode still lands in this same struct, so the
+// migration point is unchanged.)
 //
 // It decodes into a shadow struct with Modes as raw []string, remaps any
 // legacy "await"/"background" value to "direct" (via legacyModeDirect),
@@ -236,15 +242,21 @@ func TeamSet(coreTeam []string, edges []DelegationEdge) map[string]bool {
 	return team
 }
 
-// delegationRecord is the minimal subset of the on-disk workspace JSON that
-// ReadDelegation parses — just the delegation edge list. It deliberately does
-// NOT mirror the full storedWorkspace struct (the gateway owns that).
-type delegationRecord struct {
-	Delegation []DelegationEdge `json:"delegation,omitempty"`
+// workspaceExistenceProbe is the minimal subset of the on-disk workspace JSON
+// that ReadDelegation parses. It carries NO delegation field, deliberately: the
+// only thing the workspace record is still consulted for at delegation time is
+// "does this workspace exist and is its record intact". The edges themselves
+// come from the delegation store (delegationstore.go), which is where a
+// sandboxed child cannot reach them.
+//
+// Do NOT add a Delegation field here. Parsing the record's own `delegation`
+// array — even just to compare, log, or merge it — re-opens the self-
+// authorization hole this split exists to close.
+type workspaceExistenceProbe struct {
+	ID string `json:"id"`
 }
 
-// ReadDelegation reads and returns the delegation edges from
-// workspaces/<workspaceID>.json under home.
+// ReadDelegation reads and returns the delegation edges governing workspaceID.
 //
 // This is the SOLE runtime authority for who-may-delegate-to-whom in a
 // workspace (ADR-037) — there is no separate global per-agent delegation
@@ -252,15 +264,29 @@ type delegationRecord struct {
 // bootstrap a fresh workspace's initial edges, never at enforcement time.
 // Callers that fail to read the graph MUST fail closed (deny), never fall open.
 //
+// SOURCE (the whole point): the edges come from the delegation STORE,
+// $OMNIPUS_HOME/entities/delegation/<id>.json, NEVER from
+// workspaces/<id>.json. The workspace record is writable by the sandboxed
+// child the delegation decision constrains, so an edge list read from it would
+// let that child authorize itself — see delegationstore.go's leading comment
+// and the NOTE in workspace.go where the `delegation` field used to be. A
+// `delegation` array still present in (or planted into) the workspace record is
+// read by nothing and authorizes nothing.
+//
+// The workspace record is still read, for one purpose only: a delegation check
+// that cannot locate or parse its governing workspace MUST fail closed. That is
+// an existence/integrity probe (workspaceExistenceProbe), not an edge source.
+//
 // Returns:
-//   - (edges, nil)        when the workspace file exists and parses. An empty
-//     (or absent) Delegation list yields an empty, non-nil-or-nil slice with a
-//     nil error: "workspace exists but has no edges" ⇒ deny-by-default at the
-//     caller (no matching edge can be found).
-//   - ("", ErrInvalidWorkspaceID-wrapped err) when the id is unsafe (traversal).
-//   - (nil, wrapped err)  when the file is missing or unreadable, or its JSON is
-//     malformed. The caller MUST treat this as a hard error and DENY — an
-//     unreadable graph is a closed graph.
+//   - (edges, nil)        when the workspace record exists and parses and the
+//     store is readable. A workspace with no delegation store file yields a nil
+//     slice with a nil error: "workspace exists but has no edges" ⇒
+//     deny-by-default at the caller (no matching edge can be found).
+//   - (nil, ErrInvalidWorkspaceID-wrapped err) when the id is unsafe (traversal).
+//   - (nil, wrapped err)  when the workspace record is missing, unreadable or
+//     malformed, OR when the delegation store record exists but cannot be
+//     trusted (unreadable, malformed, id mismatch). The caller MUST treat this
+//     as a hard error and DENY — an unreadable graph is a closed graph.
 func ReadDelegation(home, workspaceID string) ([]DelegationEdge, error) {
 	if !safeID(workspaceID) {
 		return nil, fmt.Errorf("%w: %q", ErrInvalidWorkspaceID, workspaceID)
@@ -273,11 +299,19 @@ func ReadDelegation(home, workspaceID string) ([]DelegationEdge, error) {
 		// cannot locate its governing workspace MUST fail closed at the caller.
 		return nil, fmt.Errorf("workspace: read delegation %q: %w", workspaceID, err)
 	}
-	var rec delegationRecord
-	if jerr := json.Unmarshal(data, &rec); jerr != nil {
+	var probe workspaceExistenceProbe
+	if jerr := json.Unmarshal(data, &probe); jerr != nil {
 		return nil, fmt.Errorf("workspace: parse delegation %q: %w", workspaceID, jerr)
 	}
-	return rec.Delegation, nil
+	edges, ok := loadDelegationStore(home, workspaceID)
+	if !ok {
+		// loadDelegationStore already logged the specific reason (unreadable,
+		// malformed, or a record whose workspace_id disagrees with its
+		// filename). An edge list that cannot be trusted is never approximated.
+		return nil, fmt.Errorf(
+			"workspace: read delegation %q: delegation store record is unreadable or untrusted", workspaceID)
+	}
+	return edges, nil
 }
 
 // ValidateShape checks the invariants of a single edge that hold with NO

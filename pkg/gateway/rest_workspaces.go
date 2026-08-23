@@ -513,7 +513,9 @@ func ensureDefaultWorkspace(home, ownerUsername string, cfg *config.Config) erro
 	// persisted. The source is the trusted compiled-in roster so failures are
 	// unexpected; on failure log WARN and drop the offending edge rather than
 	// hard-failing boot over a seed-config issue.
-	team := workspaceTeamSet(ws)
+	// The workspace is brand new, so its delegation store is empty and the team
+	// set is core_team alone.
+	team := workspace.TeamSet(ws.CoreTeam, nil)
 	ceiling := delegationDepthCeiling(cfg)
 	validEdges := seedEdges[:0:0]
 	for _, edge := range seedEdges {
@@ -524,14 +526,32 @@ func ensureDefaultWorkspace(home, ownerUsername string, cfg *config.Config) erro
 		}
 		validEdges = append(validEdges, edge)
 	}
-	ws.Delegation = validEdges
 	if err := writeWorkspaceFile(home, ws); err != nil {
 		return fmt.Errorf("ensureDefaultWorkspace: write: %w", err)
 	}
+	// Seed edges go to the delegation store, never onto the record — see
+	// pkg/workspace/delegationstore.go. This is a hard failure: a boot that
+	// silently produced a default workspace with no delegation graph would look
+	// healthy and then deny every delegation at runtime.
+	if err := saveWorkspaceDelegation(home, ws.ID, validEdges); err != nil {
+		return fmt.Errorf("ensureDefaultWorkspace: seed delegation: %w", err)
+	}
 	slog.Info("rest: default workspace auto-created",
 		"id", ws.ID, "owner", ownerUsername,
-		"team_size", len(ws.CoreTeam), "edge_count", len(ws.Delegation))
+		"team_size", len(ws.CoreTeam), "edge_count", len(validEdges))
 	return nil
+}
+
+// saveWorkspaceDelegation persists a workspace's delegation edge set to the
+// delegation store, taking the per-workspace lock SaveDelegation requires its
+// caller to hold. Use it from paths that do NOT already hold workspace.LockID
+// (the create paths); handleWorkspaceDelegationPut holds the lock across its
+// whole load-modify-write and calls workspace.SaveDelegation directly, because
+// the lock pool is not reentrant.
+func saveWorkspaceDelegation(home, id string, edges []storedDelegationEdge) error {
+	unlock := workspace.LockID(id)
+	defer unlock()
+	return workspace.SaveDelegation(home, id, edges)
 }
 
 // ensureBuiltinRosterPresent unions any built-in-roster member
@@ -868,7 +888,9 @@ func (a *restAPI) handleWorkspacePost(w http.ResponseWriter, r *http.Request) {
 	// persisted. The source is the trusted compiled-in roster so failures are
 	// unexpected; on failure log WARN and drop the offending edge (do not hard-fail
 	// the create request over a seed-config issue).
-	createTeam := workspaceTeamSet(ws)
+	// The workspace is brand new, so its delegation store is empty and the team
+	// set is core_team alone.
+	createTeam := workspace.TeamSet(ws.CoreTeam, nil)
 	createCeiling := delegationDepthCeiling(cfg)
 	validSeedEdges := seedEdges[:0:0]
 	for _, edge := range seedEdges {
@@ -879,12 +901,20 @@ func (a *restAPI) handleWorkspacePost(w http.ResponseWriter, r *http.Request) {
 		}
 		validSeedEdges = append(validSeedEdges, edge)
 	}
-	ws.Delegation = validSeedEdges
 
 	if err := writeWorkspaceFile(a.homePath, ws); err != nil {
 		slog.Error("rest: create workspace", "error", err)
 		jsonErr(w, http.StatusInternalServerError, "internal server error")
 		return
+	}
+	// Seed edges go to the delegation store, never onto the record — see
+	// pkg/workspace/delegationstore.go. The workspace record is already
+	// committed at this point, so a store failure is logged rather than turned
+	// into a 500 the client would read as "nothing was created". The fallout is
+	// fail-closed (a workspace with no delegation graph denies every
+	// delegation) and repairable from the Team tab.
+	if err := saveWorkspaceDelegation(a.homePath, ws.ID, validSeedEdges); err != nil {
+		slog.Error("rest: create workspace: seed delegation store", "error", err, "id", ws.ID)
 	}
 	wire := workspaceToWire(a.homePath, ws, 0)
 	if a.auditor != nil {
@@ -1467,6 +1497,18 @@ func (a *restAPI) handleWorkspaceDelete(w http.ResponseWriter, r *http.Request, 
 	// takes LockID itself and that pool is not reentrant.
 	if err := workspace.DeleteMountStore(a.homePath, id); err != nil {
 		slog.Warn("rest: delete workspace: cascade mount store", "id", id, "error", err)
+	}
+
+	// Remove the workspace's delegation record, for the same reason and with
+	// the same lifecycle as the mount store above: it lives in
+	// entities/delegation/<id>.json (see pkg/workspace/delegationstore.go), NOT
+	// under the workspace directory, so the RemoveAll below never reaches it.
+	// Leaving it behind would strand an authorization record for a workspace
+	// that no longer exists — and would silently re-authorize the graph if the
+	// id were ever reused. Best-effort, and after unlock() because
+	// DeleteDelegationStore takes LockID itself and that pool is not reentrant.
+	if err := workspace.DeleteDelegationStore(a.homePath, id); err != nil {
+		slog.Warn("rest: delete workspace: cascade delegation store", "id", id, "error", err)
 	}
 
 	// Best-effort: remove the per-workspace directory. This now holds more than

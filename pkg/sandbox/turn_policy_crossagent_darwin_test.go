@@ -316,10 +316,13 @@ func TestPerTurnPolicy_EmptyWorkDirIsRefused(t *testing.T) {
 //	  read AND write of every workspace record, own and foreign, then rename
 //	  back so the gateway reads the TAMPERED record as if nothing happened.
 //
-// The workspace half is the worse one: workspaces/<id>.json carries the
-// delegation trust_set (pkg/workspace.ReadDelegation, the live gate consulted
-// from the agent loop) and core_team, which drives per-turn filesystem
-// re-rooting. Rewriting it re-opens delegation for the NEXT turn.
+// The workspace half is the worse one: workspaces/<id>.json carries core_team,
+// which drives per-turn filesystem re-rooting, and — until issue #636 moved it
+// to $OMNIPUS_HOME/entities/delegation/<id>.json — it also carried the
+// delegation trust_set that pkg/workspace.ReadDelegation feeds to the live
+// gate. The delegation half is closed by the store move (an edge planted in
+// the record now authorizes nothing); the node-rename bypass this file tests
+// is what stops the rest.
 
 // renameNode returns the argv that attempts to rename a directory node.
 func renameNode(from, to string) []string {

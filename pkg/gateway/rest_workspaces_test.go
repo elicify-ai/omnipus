@@ -619,8 +619,10 @@ func TestSeed_ConcurrentBoot_NoDoubleSeed(t *testing.T) {
 //  3. NEVER add "never-on-team-custom" (a second custom agent present in
 //     cfg.Agents.List but never added to this workspace) — the back-fill is
 //     built-in-roster-only.
-//  4. Leave w.Delegation completely unchanged — expanding/back-filling a
-//     team must never create or imply a Delegation[] trust edge (FR-038).
+//  4. Leave the workspace's delegation edge set completely unchanged —
+//     expanding/back-filling a team must never create or imply a trust edge
+//     (FR-038). The edges live in the delegation store, not the workspace
+//     record (pkg/workspace/delegationstore.go), so this reads them there.
 func TestUpgrade_ExistingDefaultWorkspace_NoCustomAutoAdd(t *testing.T) {
 	home := t.TempDir()
 	cfg := &config.Config{
@@ -650,14 +652,12 @@ func TestUpgrade_ExistingDefaultWorkspace_NoCustomAutoAdd(t *testing.T) {
 		Status:    "active",
 		IsDefault: true,
 		CoreTeam:  []string{"mia", "jim", "ava", "worker", "planner", "explorer", "researcher", "hand-added-custom"},
-		Delegation: []storedDelegationEdge{
-			{FromAgent: "jim", ToAgent: "worker", Modes: nil},
-		},
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
 	require.NoError(t, writeWorkspaceFile(home, ws))
-	preUpgradeDelegation := append([]storedDelegationEdge(nil), ws.Delegation...)
+	preUpgradeDelegation := []storedDelegationEdge{{FromAgent: "jim", ToAgent: "worker", Modes: nil}}
+	require.NoError(t, saveWorkspaceDelegation(home, ws.ID, preUpgradeDelegation))
 
 	require.NoError(t, ensureDefaultWorkspace(home, "alice", cfg),
 		"ensureDefaultWorkspace must not error when a default workspace already exists")
@@ -676,8 +676,10 @@ func TestUpgrade_ExistingDefaultWorkspace_NoCustomAutoAdd(t *testing.T) {
 	assert.ElementsMatch(t,
 		[]string{"mia", "jim", "ava", "ray", "worker", "planner", "explorer", "researcher", "hand-added-custom"},
 		got.CoreTeam)
-	assert.Equal(t, preUpgradeDelegation, got.Delegation,
-		"back-filling the roster must NEVER create or imply a Delegation[] trust edge (FR-038)")
+	gotEdges, storeOK := workspace.LoadDelegation(home, got.ID)
+	require.True(t, storeOK, "delegation store record must still be readable after the back-fill")
+	assert.Equal(t, preUpgradeDelegation, gotEdges,
+		"back-filling the roster must NEVER create or imply a delegation trust edge (FR-038)")
 }
 
 // TestHandleWorkspaces_InboxAutoCreated verifies that GET /api/v1/workspaces on a fresh home dir
@@ -1085,11 +1087,15 @@ func TestHandleWorkspacePut_FullFieldRoundTrip(t *testing.T) {
 	id := created.Id
 	require.NotEmpty(t, id)
 
-	// Step 2: Back-patch the on-disk file with ALL fields (including delegation and
-	// pin_order=5, pinned=true, status=active, is_default=false) so that the PUT
-	// handler must preserve them during a partial update.
-	// We write the delegation edges directly to disk — they are not settable via
-	// PUT /workspaces/{id} (they live at /workspaces/{id}/delegation).
+	// Step 2: Back-patch the on-disk file with ALL fields (pin_order=5,
+	// pinned=true, status=active, is_default=false) so that the PUT handler
+	// must preserve them during a partial update.
+	//
+	// Delegation edges are set separately, in the delegation store — they are
+	// not settable via PUT /workspaces/{id} (they live at
+	// /workspaces/{id}/delegation) and, since issue #636, they are not a field
+	// on the workspace record at all: the record is writable by the sandboxed
+	// child the edges constrain (pkg/workspace/delegationstore.go).
 	originalUpdatedAt := "2026-06-01T09:00:00Z"
 	fullJSON := fmt.Sprintf(`{
 		"id": %q,
@@ -1101,16 +1107,17 @@ func TestHandleWorkspacePut_FullFieldRoundTrip(t *testing.T) {
 		"core_team": ["mia","jim","ava","ray"],
 		"owner": "alice",
 		"is_default": false,
-		"delegation": [
-			{"from_agent":"jim","to_agent":"ava","modes":["await","task"],"depth":2},
-			{"from_agent":"mia","to_agent":"ray"}
-		],
 		"created_at": "2026-06-01T08:00:00Z",
 		"updated_at": %q
 	}`, id, originalUpdatedAt)
 	wsDir := filepath.Join(api.homePath, "workspaces")
 	require.NoError(t, os.MkdirAll(wsDir, 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(wsDir, id+".json"), []byte(fullJSON), 0o600))
+	depth2 := 2
+	require.NoError(t, saveWorkspaceDelegation(api.homePath, id, []storedDelegationEdge{
+		{FromAgent: "jim", ToAgent: "ava", Modes: []workspace.DelegationMode{workspace.ModeDirect, workspace.ModeTask}, Depth: &depth2},
+		{FromAgent: "mia", ToAgent: "ray"},
+	}))
 
 	// Step 3: PUT — mutate only the name.
 	wPut := httptest.NewRecorder()
@@ -1165,26 +1172,25 @@ func TestHandleWorkspacePut_FullFieldRoundTrip(t *testing.T) {
 
 	// Step 5: Verify delegation edges survived on disk (they are not surfaced by
 	// GET /workspaces/{id} — that is /workspaces/{id}/delegation — but the merge
-	// path must not wipe them from the file).
+	// path must not wipe them).
+	delegation := loadStoredDelegationEdges(t, api.homePath, id)
+	assert.Len(t, delegation, 2,
+		"both delegation edges must survive the name-only PUT")
+	assert.Equal(t, "jim", delegation[0].FromAgent, "delegation edge 0 from_agent must survive PUT")
+	assert.Equal(t, "ava", delegation[0].ToAgent, "delegation edge 0 to_agent must survive PUT")
+	assert.Equal(t, "mia", delegation[1].FromAgent, "delegation edge 1 from_agent must survive PUT")
+	assert.Equal(t, "ray", delegation[1].ToAgent, "delegation edge 1 to_agent must survive PUT")
+
+	// ...and the PUT must not have copied them into the child-writable record.
 	diskData, err := os.ReadFile(filepath.Join(wsDir, id+".json"))
 	require.NoError(t, err, "workspace file must still exist on disk after PUT")
 	var diskObj map[string]any
 	require.NoError(t, json.Unmarshal(diskData, &diskObj),
 		"workspace file must be valid JSON after PUT")
-
-	delegation, ok := diskObj["delegation"].([]any)
-	require.True(t, ok, "delegation field must survive on disk as an array; got %T=%v",
-		diskObj["delegation"], diskObj["delegation"])
-	assert.Len(t, delegation, 2,
-		"both delegation edges must survive the name-only PUT on disk")
-
-	e0, _ := delegation[0].(map[string]any)
-	assert.Equal(t, "jim", e0["from_agent"], "delegation edge 0 from_agent must survive PUT")
-	assert.Equal(t, "ava", e0["to_agent"], "delegation edge 0 to_agent must survive PUT")
-
-	e1, _ := delegation[1].(map[string]any)
-	assert.Equal(t, "mia", e1["from_agent"], "delegation edge 1 from_agent must survive PUT")
-	assert.Equal(t, "ray", e1["to_agent"], "delegation edge 1 to_agent must survive PUT")
+	_, leaked := diskObj["delegation"]
+	assert.False(t, leaked,
+		"the workspace record must carry no delegation array — it is writable by the principal the "+
+			"edges constrain (issue #636); got %v", diskObj["delegation"])
 }
 
 // TestHandleWorkspaces_RepositoryFieldRejected_PUT verifies FR-9.2: PUT
@@ -1310,7 +1316,9 @@ func TestHandleWorkspacePost_NoCoreTeam_SeedsAvaOnly_SetupPending(t *testing.T) 
 	require.NoError(t, err)
 	assert.Equal(t, []string{"ava"}, stored.CoreTeam, "on-disk core_team must match the wire response")
 	assert.True(t, stored.SetupPending, "on-disk setup_pending must be true")
-	assert.Empty(t, stored.Delegation,
+	seeded, storeOK := workspace.LoadDelegation(api.homePath, ws.Id)
+	require.True(t, storeOK, "delegation store record must be readable")
+	assert.Empty(t, seeded,
 		"ava's only coreagent seed edge (ava->worker) must be dropped since worker is off-team")
 }
 
@@ -1474,7 +1482,9 @@ func TestHandleWorkspacePost_ExplicitEmptyCoreTeam_SeedsAvaOnly_SetupPending(t *
 	require.NoError(t, err)
 	assert.Equal(t, []string{"ava"}, stored.CoreTeam, "on-disk core_team must match the wire response")
 	assert.True(t, stored.SetupPending, "on-disk setup_pending must be true")
-	assert.Empty(t, stored.Delegation, "no delegation edges expected for the Ava-only seed team")
+	seeded, storeOK := workspace.LoadDelegation(api.homePath, ws.Id)
+	require.True(t, storeOK, "delegation store record must be readable")
+	assert.Empty(t, seeded, "no delegation edges expected for the Ava-only seed team")
 }
 
 // TestEnsureDefaultWorkspace_StillSeedsFullRoster_NoSetupPending is a
@@ -1517,7 +1527,9 @@ func TestEnsureDefaultWorkspace_StillSeedsFullRoster_NoSetupPending(t *testing.T
 	assert.ElementsMatch(t,
 		[]string{"mia", "jim", "ava", "ray", "worker", "planner", "explorer", "researcher"},
 		ws.CoreTeam, "the boot default workspace must still seed the FULL install roster")
-	assert.Len(t, ws.Delegation, 9, "the boot default workspace must still seed the full edge set")
+	bootEdges, storeOK := workspace.LoadDelegation(home, ws.ID)
+	require.True(t, storeOK, "delegation store record must be readable")
+	assert.Len(t, bootEdges, 9, "the boot default workspace must still seed the full edge set")
 	assert.False(t, ws.SetupPending,
 		"the boot default workspace must never be setup_pending — it never runs the setup interview")
 
