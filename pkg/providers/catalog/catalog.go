@@ -11,6 +11,14 @@
 //     (FR-039) every other consumer reads.
 //   - resolve.go  — Handle, what Resolve hands to the media pipeline and the
 //     agent loop; a miss is a miss (FR-003), never a prefix-stripped hit.
+//   - refresh.go  — the serialized refresh transaction (T067-04): pull →
+//     degraded check → parse → schema gate → anti-downgrade → apply →
+//     persist, with the FR-009 reason-keyed WARNs.
+//   - store.go    — Boot and the persisted last-known-good under
+//     $OMNIPUS_HOME/providers_catalog.json (FR-010, E6, E7).
+//   - served.go   — the pre-serialised GET body + quoted strong SHA-256
+//     ETag pair, swapped atomically with the snapshot (FR-017), and
+//     Degraded() for /health (FR-037).
 //
 // # Boundaries
 //
@@ -29,7 +37,9 @@ package catalog
 
 import (
 	_ "embed"
+	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // EmbeddedSnapshot is the committed providers_catalog.json (schema 2.0.0 once
@@ -46,12 +56,15 @@ type pairKey struct {
 	model    string
 }
 
-// snapshot is one immutable, fully indexed document. Catalog swaps whole
-// snapshots atomically so readers never observe a torn index.
+// snapshot is one immutable, fully indexed document, together with its
+// pre-serialised serving pair. Catalog swaps whole snapshots atomically so
+// readers never observe a torn index — and never a body from one apply
+// with the ETag of another (FR-017, T34c).
 type snapshot struct {
 	doc        *Document
 	byProvider map[string]*Provider
 	byPair     map[pairKey]*Model
+	served     servedPair
 }
 
 func index(doc *Document) *snapshot {
@@ -75,6 +88,31 @@ func index(doc *Document) *snapshot {
 // Apply publishes a new one or leaves the current one untouched.
 type Catalog struct {
 	cur atomic.Pointer[snapshot]
+
+	// The refresh transaction (T067-04). refreshMu serializes Refresh
+	// (FR-028); puller/store/log/nowFn are set at construction (Boot) and
+	// never mutated afterwards.
+	refreshMu sync.Mutex
+	puller    Puller
+	store     Store
+	log       Logger
+	nowFn     func() time.Time // test seam; nil → time.Now
+
+	// stateMu guards the /health state and the applied hooks. Never held
+	// across I/O or a hook call.
+	stateMu            sync.Mutex
+	lastRefreshErr     error
+	degradedTransport  bool
+	degradedReleaseErr error
+	onApplied          []func()
+}
+
+// now returns the injected clock, defaulting to time.Now.
+func (c *Catalog) now() time.Time {
+	if c.nowFn != nil {
+		return c.nowFn()
+	}
+	return time.Now()
 }
 
 // New returns an empty catalog: every lookup misses (FR-004), Document is
@@ -94,14 +132,28 @@ func NewCatalog(data []byte) (*Catalog, error) {
 }
 
 // Apply validates data and, only on success, swaps it in as the served
-// document. On any error the previously loaded document is retained
-// (US-1.AC2/AC3) — the caller decides what to log.
+// document with embedded provenance. On any error the previously loaded
+// document is retained (US-1.AC2/AC3) — the caller decides what to log.
+// The refresh transaction and the boot read use applyDoc directly with
+// the correct ServedFrom marker.
 func (c *Catalog) Apply(data []byte) error {
 	doc, err := ParseDocument(data)
 	if err != nil {
 		return err
 	}
-	c.cur.Store(index(doc))
+	return c.applyDoc(doc, ServedEmbedded)
+}
+
+// applyDoc indexes doc, pre-serialises its serving pair (FR-017) and
+// publishes both as one atomic snapshot swap.
+func (c *Catalog) applyDoc(doc *Document, from ServedFrom) error {
+	s := index(doc)
+	pair, err := buildServed(doc, from, c.now())
+	if err != nil {
+		return err
+	}
+	s.served = pair
+	c.cur.Store(s)
 	return nil
 }
 
