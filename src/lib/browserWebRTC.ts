@@ -245,6 +245,13 @@ export function translateWebRTCFallbackReason(reason: string): string {
       return 'The live browser reported an error starting video. Retry, or reload the page if it keeps failing.'
     case 'multi_agent_capture_denied':
       return 'Live video is already in use by another agent. Close that live view first, then retry.'
+    case 'ingest_timeout':
+      // The gateway classified this one specifically (ErrNoIngestVideoTrack):
+      // the capture pipeline produced no video track within its wait window.
+      // Distinct from a generic 'error' because the cause is upstream of ICE
+      // — the encoder page never delivered frames — so retrying the viewer
+      // connection is usually futile while restarting capture is not.
+      return "The browser's video capture didn't start in time — no frames reached the server. Retry, or restart the live view if it keeps failing."
     default:
       return `Live video connection failed (${reason}). Retry, or reload the page if it keeps failing.`
   }
