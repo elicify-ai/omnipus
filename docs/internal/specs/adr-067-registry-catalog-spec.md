@@ -64,7 +64,7 @@ Each finding was verified against the code before disposition. Coordinator decis
 | Unasked Q4 | — | Override re-clamp on refresh is ADR-066 D2's rule and the override itself lives in ADR-066's `ContextSettings.yaml` `model_overrides[{provider, model, context_window}]`; this spec defines no override and only guarantees `Window()` reflects the new catalog value immediately. |
 | Unasked Q8 | — | Refresh does not rebuild provider instances; a changed `api` takes effect at the next agent reload (ADR §8b). |
 | Unasked Q9 | — | `GET /providers` returns configured rows **with** `models[]` filled from the catalog (US-9.AC1); the SPA does not join. The default model shown against a row is ADR-068's `DefaultModel.yaml` pair (`agents.defaults.default_model`), not a `model_name` alias. |
-| Unasked Q10 | — | A persisted file rejected under FR-033 logs `reason=invalid` with the path; the `GET` shows `source: embedded` so the condition is visible. |
+| Unasked Q10 | — | A persisted file rejected under FR-033 logs `reason=invalid` with the path; the `GET` shows `served_from: embedded` so the condition is visible (field renamed from `source` by Amendment 2026-08-23 (A-CONTRACT)). |
 | Cross-doc | — | `Provider.status` six-value enum cited verbatim in FR-024; the entitlement route is `POST /api/v1/providers/{id}/entitlement` → `EntitlementResponse.yaml` (single name/shape); `Agent.yaml` carries `degraded_reason` (here) and `needs_model` (ADR-068) with `needs_provider`-wins precedence in both specs; the default model is the `(provider, model)` pair in `agents.defaults.default_model` (`DefaultModel.yaml`, ADR-068 CRIT-001) — this spec reads and writes no `model_name` (verified by grep); per-model window overrides are owned by ADR-066's `ContextSettings.yaml` `model_overrides[{provider, model, context_window}]` — this spec defines no competing override; the no-trace proof (SC-010) asserts only the absence of a canonical id, never the echoed user id. |
 
 ## 1.2 Amendment A2 — post cross-spec review (BINDING; overrides §1.1 and anything below on conflict)
@@ -98,6 +98,17 @@ Coordinator decisions 2026-08-22. This spec **owns the single coordinated contra
 1. **S67 lands first** — including the whole coordinated contract commit above; nothing in S67 depends on S66 or S68 at build time.
 2. **S68** lands next (consumes the catalog `GET`, `unknown-provider`, `needs_provider`, entitlement, free-string probe id, canonical ids, `locality`, `cli_kind`, `custom`).
 3. **S66 backend** may be developed in parallel behind this spec's package API (`catalog.Resolve(provider, model).Window()`, `locality`) but **merges after S67** — its catalog rung does not compile before the contract commit and the `pkg/providers/catalog` fold; its row/picker UI slice lands after S68.
+
+## 1.3 Amendment 2026-08-23 (A-CONTRACT) — BINDING on the points below
+
+The A-CONTRACT commit (`36801b44`, T067-01) followed this spec where its brief disagreed with it. Recorded here so the text and the shipped contract agree; where a sentence below conflicts with an older sentence in this document, this section wins.
+
+- **`Agent.degraded_reason` / `needs_model` (FR-024, FR-031 — authoritative):** `Agent.degraded_reason` is an **optional string enum with the single value `needs_provider`**; `Agent.needs_model` is a **separate, required boolean** (derived, ADR-068 FR-014). Both may be true; `needs_provider` wins in copy. The ADR-068 and ADR-066 specs carry the same wording as of this date.
+- **Envelope marker renamed `source` → `served_from` (FR-017, US-7.AC1, Unasked Q10, scenarios, T42, H-HP3):** the 2.0.0 document's top-level `source` stays **free text** (upstream registry commit ids, written by the assembly job — FR-002, §5 document shape). The gateway's origin marker on the `GET /api/v1/providers/catalog` envelope is **`served_from ∈ {embedded, pulled}`**, beside `stale: boolean`; both are `required` on `ProvidersCatalog.yaml`. Every occurrence of `source: embedded|pulled` in this document has been rewritten to `served_from`; wherever `source` still appears it means the document field.
+- **`ProviderDeleteRequest` / `ProviderDeleteResponse` / `ProviderDependent` / `DefaultModelUpdateRequest`:** written in the A-CONTRACT commit (shared — `Provider.dependents` `$ref`s `ProviderDependent.yaml`), so they are already present; ADR-068 consumes the generated types (ADR-068 spec FR-035 amended accordingly).
+- **`ProviderCatalogEntry.yaml` NOT deleted (T067-01 "Files to delete"):** `ModelCapabilities.yaml` was deleted; `ProviderCatalogEntry.yaml` was kept with its description rewritten to "SUPERSEDED … retained until …" because it is still consumed by `pkg/providers/catalog/catalog.go` (`Entries`) and 7 SPA importers of `src/lib/generated/providerCatalog.ts`. Its deletion is deferred to **T067-02** (Go consumer) and **T067-13** (SPA consumers, after ADR-068 B5) — see the task list. ADR-068 FR-039 (remove the "never served from a live HTTP endpoint" description) is therefore already satisfied.
+- **`POST /providers/{id}/refresh-models` was never in `openapi.yaml`:** there was nothing for the contract commit to remove (only `GET /providers/model-capabilities` existed and was removed). The un-contracted Go handler `pkg/gateway/rest.go::refreshProviderModels` and the SPA wrapper `src/lib/api.ts::refreshProviderModels` still exist on the branch; their removal is owned by **T067-10 / T067-12** (backend) and **ADR-068 X-23 / T068-05** (SPA), not by A-CONTRACT.
+- **oapi-codegen behaviour (all three specs):** `ContextWindowSource.yaml` is one `$ref` in the contract, but oapi-codegen emits a **per-parent copy** of the enum in Go — `ContextWindowSource`, `AgentContextWindowSource`, and one per further parent (e.g. `DefaultModel.window_source`) — each a distinct Go string type with the same values. Implementers convert at the boundary (`generated.AgentContextWindowSource(src)`) rather than adding a hand-written shared type; the TS side has a single type.
 
 ## 2. Available Reference Patterns
 
@@ -225,7 +236,7 @@ An operator whose config names an unknown provider still reaches Settings to fix
 ### US-7 — Read-only providers-catalog endpoint — **P0**
 The SPA and any client read the same document the gateway uses, through a contract-defined surface. *Why P0:* Constraint #8; ADR-068's picker cannot be built without it. *Independent test:* `GET` with and without auth; compare to the in-memory catalog; ETag round trip.
 
-1. **Given** an authenticated request, **When** `GET /api/v1/providers/catalog` is called, **Then** the response is the full 2.0.0 document (providers with nested models, tier, protocol(s), unsupported reason, resize limits) plus `version`, `updated_at`, a `source` marker (`embedded` / `pulled`) and `stale: true` when `updated_at` is older than 14 days `[A-1]` (F-24).
+1. **Given** an authenticated request, **When** `GET /api/v1/providers/catalog` is called, **Then** the response is the full 2.0.0 document (providers with nested models, tier, protocol(s), unsupported reason, resize limits) plus `version`, `updated_at`, the document's free-text `source`, a `served_from` marker (`embedded` / `pulled`) and `stale: true` when `updated_at` is older than 14 days `[A-1]` (F-24).
 2. **Given** an unauthenticated request, **When** called, **Then** 401.
 3. **Given** a client sending `If-None-Match` with the current document's quoted strong ETag, **When** called, **Then** 304 with no body; a weak `W/` value or an unquoted value is treated as no match (200) `[A-1]` (F-29).
 4. **Given** the catalog failed to construct at boot, **When** called, **Then** 503 with a typed error (never an empty 200 that looks like "no providers") `[A-12]`.
@@ -423,13 +434,13 @@ Then it succeeds; `git ls-files pkg/providers/catalog/data/providers_catalog.jso
 **Scenario (HP): offline boot serves the snapshot** — Traces to US-3.AC1
 Given a recording stub host that records the wall-clock of each hit
 When the gateway boots
-Then `GET /providers/catalog` returns the snapshot's `version` with `source: embedded`, and the stub's first hit (if any) is after the listener bound.
+Then `GET /providers/catalog` returns the snapshot's `version` with `served_from: embedded`, and the stub's first hit (if any) is after the listener bound.
 
 
 **Scenario (HP): startup pull replaces the snapshot** — Traces to US-3.AC2
 Given a stub host serving version V+1
 When the gateway boots and the background pull completes
-Then the catalog reports V+1 with `source: pulled` and the persisted file holds V+1.
+Then the catalog reports V+1 with `served_from: pulled` and the persisted file holds V+1.
 
 **Scenario (HP): 24 h ticker** — Traces to US-3.AC3
 Given a refresh loop with a 24 h interval and a fake clock
@@ -459,7 +470,7 @@ Then the embedded snapshot serves, exactly one WARN `reason=schema_version` name
 **Scenario (EC): persisted newer than embedded wins** — Traces to E6
 Given the embedded snapshot at `v2026.8.20` and a valid persisted `v2026.8.21`
 When the gateway boots
-Then `Version()` is `v2026.8.21` and `source` is `pulled`.
+Then `Version()` is `v2026.8.21` and `served_from` is `pulled`.
 
 **Scenario (EP): missing sidecar is rejected** — Traces to E11, US-2.AC1
 Given a stub release whose asset list has `providers_catalog.json` but no `.sha256`
@@ -816,7 +827,7 @@ When `PUT /providers/my-proxy {api_base, protocol: ollama}` → 400.
 | 39 | `TestRestProviders_Test_ProbeFromCatalog` | Integration | probe from catalog; fall-through | 1 POST, 0 GET `/models`; 3-attempt bound on `model_not_found` |
 | 40 | `TestOnboarding_Probe_FreeStringID` | Integration | probe zai / z-ai / custom / bedrock | 4 outcomes |
 | 41 | `TestGatewayBoot_UnknownProvider_NonFatal` | Integration | boot survives; no hint | listen ok; A runs; rows/logs lack hint |
-| 42 | `TestGatewayBoot_OfflineSnapshot_Then_StartupPull` | Integration | offline boot; startup pull | `source` flips embedded→pulled; stub's first hit is after listen; startup pull skipped when persisted < 1 h old |
+| 42 | `TestGatewayBoot_OfflineSnapshot_Then_StartupPull` | Integration | offline boot; startup pull | `served_from` flips embedded→pulled; stub's first hit is after listen; startup pull skipped when persisted < 1 h old |
 | 43 | `TestRefreshLoop_24h_NoRequestPathPulls` | Integration (fake clock) | 24 h ticker | exactly 1 extra pull; 0 during traffic |
 | 44 | `TestEmbeddedSnapshot_Corrupt_BootDegrades` | Integration | bad embedded snapshot | 503 + ERROR once (test seam injects bytes) |
 | 45 | SPA `providersCatalog.test.ts` | Unit (vitest) | catalog endpoint validates | zod parse of fixture; `ETag` cache rule `[A-1]` |
@@ -984,7 +995,7 @@ This feature **modifies existing functionality**.
 - **FR-014** A custom row MUST require `api_base` and accept `protocol ∈ {openai-compatible, anthropic}` only; it carries `custom: true` on disk (`ModelConfig.Custom`) and on the wire (`Provider.custom`); every check is on the flag (X-13).
 - **FR-015** An unknown provider id MUST produce `ErrUnknownProvider` whose message names the id and never a canonical alternative.
 - **FR-016** Boot MUST succeed with unknown providers; the provider row reports `unknown-provider` `[A-16]`. An agent is `degraded_reason: needs_provider` **iff its primary provider is unknown** (or fails exact-match, FR-036); it then refuses turns with error kind `needs_provider` (logged at WARN) and zero upstream requests. An unknown provider referenced only by a fallback is dropped from the pool with one WARN naming the agent and the provider; the agent runs on the remaining pool.
-- **FR-017** `GET /api/v1/providers/catalog` MUST return a pre-serialised byte slice cached at apply time with `version`, `updated_at`, `source ∈ {embedded, pulled}`, `stale` (true when `updated_at` > 14 days); `ETag: "<sha256>"` quoted strong, `Cache-Control: private, max-age=0, must-revalidate`, no content negotiation; 304 on an exactly matching `If-None-Match` (weak/unquoted → 200); bytes and ETag swapped atomically as one pair; 401 unauthenticated; 503 when no catalog `[A-1]`.
+- **FR-017** `GET /api/v1/providers/catalog` MUST return a pre-serialised byte slice cached at apply time with `version`, `updated_at`, the document's free-text `source`, `served_from ∈ {embedded, pulled}`, `stale` (true when `updated_at` > 14 days); `ETag: "<sha256>"` quoted strong, `Cache-Control: private, max-age=0, must-revalidate`, no content negotiation; 304 on an exactly matching `If-None-Match` (weak/unquoted → 200); bytes and ETag swapped atomically as one pair; 401 unauthenticated; 503 when no catalog `[A-1]`.
 - **FR-018** Tier and unsupported reason MUST be data in the document; the popular set is `{openai, openrouter, anthropic, google, xai, groq, mistral, deepseek}` `[A-9]`.
 - **FR-019** Configuring or probing a `tier: unsupported` provider MUST return 400 with the reason.
 - **FR-020** The providers API MUST list models for `locality = cloud` providers from the catalog with no outbound call; for `locality = local` providers (FR-039) from the live endpoint.
@@ -1114,7 +1125,7 @@ Every BDD scenario above maps to ≥1 FR via its US; assembly-side scenario US-2
 
 - **H-HP1:** On a laptop with Wi-Fi off, start the gateway fresh, open Settings → Providers, add Anthropic with any key, open the model selector: the list appears immediately with context-window numbers next to models, and the gateway log shows no outbound `/models` attempt.
 - **H-HP2:** Configure Z.ai as `zai` and OpenRouter; set two agents to `glm-5.2` via each; in each agent's Settings window display (ADR-066 D9) read the catalog window: 1,000,000 for the direct route and 1,048,576 via OpenRouter.
-- **H-HP3:** Leave a gateway running across a day with network; the next morning `GET /api/v1/providers/catalog` reports a newer `version` and `source: pulled`, and exactly one refresh line per attempt appears in the log.
+- **H-HP3:** Leave a gateway running across a day with network; the next morning `GET /api/v1/providers/catalog` reports a newer `version` and `served_from: pulled`, and exactly one refresh line per attempt appears in the log.
 - **H-EP1:** Point the puller (test build flag) at a host serving a tampered asset with the real sidecar: the gateway logs one WARN naming a checksum mismatch and Settings keeps showing the previous `version`.
 - **H-EP2:** Hand-edit `config.json` to `provider: "z-ai"` for one agent and restart: the gateway comes up, other agents chat normally, the provider row says unknown provider, the agent says it needs a provider, and nowhere — log, API, UI — is the word `zai` offered as the fix.
 - **H-EC1:** Pick a provider from the long tail (e.g. a Chinese coding-plan variant) that Omnipus never shipped before, enter a key, and send a message: the request goes to the URL the catalog lists for it, with no code change.

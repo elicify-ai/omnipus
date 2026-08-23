@@ -21,6 +21,22 @@ Nothing is summarised, nothing is deleted from disk. One new cache file (`$OMNIP
 
 ---
 
+## 1.1 Amendment 2026-08-23 (A-CONTRACT) — BINDING on the points below
+
+The A-CONTRACT commit (`36801b44`, ADR-067 T067-01) shipped the shared contract this spec consumes. Where an older sentence in this document disagrees, this section wins.
+
+- **`ContextSettings` wire field names, pinned exactly (US-11, DS-8, FR-036):** `mcp_result_cap`, `builtin_success_cap`, `builtin_failure_cap`, `absolute_trigger_chars`, `ingest_bound_bytes`, `default_context_window` (nullable, optional), `model_overrides` (array of `ContextModelOverride {provider, model, context_window}`); `additionalProperties: false`. `ContextSettingsUpdate.yaml` is the all-optional partial. The `warn_threshold` named in T066-03 is config-internal only — it is **not** on the wire; adding it would need a follow-up contract commit.
+- **`Agent.yaml` fields as shipped:** `degraded_reason` is an **optional enum with the single value `needs_provider`** (ADR-067), `needs_model` is a **separate, required boolean** (ADR-068); this spec's `context_window_effective`, `context_window_source` (`$ref ContextWindowSource.yaml`: `operator | live | catalog | floor`), `context_window_clamped` and `context_window_override` are all optional. Pre-turn gate order is unchanged: `needs_provider` → `model_unassigned` → `context_window_unknown`.
+- **`LLMError` copy — the shipped strings ARE the contract text** (read from `contracts/components/schemas/LLMError.yaml` `x-user-messages`; generators fan them out to the other three copies):
+  - `turn_canceled` (`user`): "This turn was stopped before it finished."
+  - `turn_timed_out` (`provider`): "The model provider didn’t finish this turn in time, so it was stopped. Retry — if it keeps happening, open Verbose chat for details."
+  - `context_unrecoverable` (`product`): "We couldn’t fit this turn into the model’s context even after clearing older tool results — that’s a bug on our side, not yours. Start a new session, or open Verbose chat for technical details."
+  - `context_window_unknown` (`config`): "This endpoint did not report a context length for this model. Set it under Settings → Models → Model overrides → Context length."
+  The earlier draft of the `context_window_unknown` message (parameterised `<model>` / `<provider>`, ending "…and try again") is withdrawn: **`config`-attributed copy must not tell the user to retry** (the copy rule enforced by `pkg/agent/translate_error_test.go` / `src/lib/llm-error.test.ts`), and the catalogue is static text with no parameters. US-2.AC3, FR-008 and B-09 read with this text.
+- **ADR-060-family inline schemas NOT in A-CONTRACT:** the recall-mark and argument-refusal inline asyncapi schemas (§3 row `contracts/asyncapi.yaml`, §5 "asyncapi" bullet, T066-04's producers) were **not** added by the contract commit. A-CONTRACT did ship `ToolCall.content_state` and the `tool_result_projection` frame (`ToolResultProjectionFrame.yaml`). The two inline schemas plus their `check-no-handwritten-wire-types.sh` register entries ride in **T066-01** (a follow-up contract commit, spec + generated diff atomic), never in feature code.
+- **Providers-catalog envelope naming:** the per-model `window_unknown` projection this spec relies on (X-08) lives on the `GET /providers/catalog` document; that envelope's origin marker is `served_from ∈ {embedded, pulled}` plus `stale` (the document's `source` is free text).
+- **oapi-codegen behaviour (all three specs):** `ContextWindowSource.yaml` is one `$ref` in the contract, but oapi-codegen emits a **per-parent copy** of the enum in Go — `ContextWindowSource`, `AgentContextWindowSource`, and one per further parent (e.g. `DefaultModel.window_source`) — each a distinct Go string type with the same values. Implementers convert at the boundary (`generated.AgentContextWindowSource(src)`) rather than adding a hand-written shared type; the TS side has a single type.
+
 ## 2. Available Reference Patterns
 
 `docs/reference/go-implementation/` does not exist in this repository. **N/A.** Internal patterns reused: the ADR-060 structured tool-failure family (`marshalWithinBudget`, single producer, inline asyncapi schema) for the argument refusal and the recall mark; ADR-028's archive-preserving `TruncateHistory`/`RollbackAppended`; ADR-051's `LLMError` classifier and generated copy catalogue; the `/settings/memory` + `MemorySettings.yaml` / `PerformanceSettingsUpdate.yaml` partial-update pattern for D9; the default-agent `TriggerReload` precedent for settings that must take effect live.
@@ -128,7 +144,7 @@ As an operator, a hosted model the catalog does not know gets a 128,000 floor wi
 - **Acceptance:**
   1. **Given** a cloud model absent from catalog and live, **Then** 128,000, source `floor`, one WARN naming the model.
   2. **Given** an `ollama` model reporting 8,192 (`/api/ps`), **Then** 8,192, source `live`, never floored.
-  3. **Given** a local endpoint whose live query fails or reports no window, **When** selected or when an agent bound to it starts a turn, **Then** the turn is refused with `LLMError` code `context_window_unknown` (attribution `config`; third in the pre-turn gate after `needs_provider` and `model_unassigned` — X-09) and the message *"This endpoint did not report a context length for <model>. Set it under Settings → Models → Model overrides → <provider> / <model> → Context length and try again."*; the providers-catalog `GET` projection carries `window_unknown: true` for that model so S68's row and picker show the state (X-08).
+  3. **Given** a local endpoint whose live query fails or reports no window, **When** selected or when an agent bound to it starts a turn, **Then** the turn is refused with `LLMError` code `context_window_unknown` (attribution `config`; third in the pre-turn gate after `needs_provider` and `model_unassigned` — X-09) and the message *"This endpoint did not report a context length for this model. Set it under Settings → Models → Model overrides → Context length."* (shipped contract copy, `LLMError.yaml` `x-user-messages.context_window_unknown`; the earlier draft text ending "…and try again" was dropped because `config`-attributed copy must not tell the user to retry — Amendment 2026-08-23 (A-CONTRACT)); the providers-catalog `GET` projection carries `window_unknown: true` for that model so S68's row and picker show the state (X-08).
   4. **Given** that state, **When** the operator writes `model_overrides[{provider, model, context_window}]` via `PUT /api/v1/settings/context`, **Then** a reload is triggered and the next turn runs with that window (clamped), no restart.
   5. **Given** a custom row (operator id, e.g. `my-proxy`) whose base URL host is public, **Then** its `locality` is cloud: floored with a WARN, never refused.
 
@@ -215,7 +231,7 @@ As a user on any channel who pastes a huge document, I get a non-fatal refusal b
 
 ### US-11 — Controls in Settings (D9) — **P1**
 - **Acceptance:**
-  1. **Given** `GET /api/v1/settings/context`, **Then** caps (62,500 / 64,000 / 10,000), `absolute_trigger_chars` 400,000, `ingest_bound_bytes` 8,000,000, `default_context_window` unset, `model_overrides: []`.
+  1. **Given** `GET /api/v1/settings/context`, **Then** caps `mcp_result_cap` 62,500 / `builtin_success_cap` 64,000 / `builtin_failure_cap` 10,000, `absolute_trigger_chars` 400,000, `ingest_bound_bytes` 8,000,000, `default_context_window` unset, `model_overrides: []`.
   2. **Given** `PUT` with a partial body (`ContextSettingsUpdate`, omitted = unchanged), **Then** 200 and a reload is triggered; cap > 150,000 or < 1, trigger < 1, ingest bound ≥ 8,388,608 → 400 naming the field and limit.
   3. **Given** an agent, **Then** `context_window_effective`, `context_window_source` (`operator | live | catalog | floor`), `context_window_clamped`, `context_window_override` — generated types only; a `PUT /agents/{id}` override write triggers a reload.
   4. **Given** the routes, **Then** `withAuth` (any authenticated user, the `/settings/memory` precedent), not `RequireNotBypass`.
@@ -694,6 +710,8 @@ head/tail 50/50; mark length counted toward the cap; no rune split
 | 5 | fetch_url fallback | 8,000,001 | failure | B-46 |
 
 #### DS-8: Settings validation
+*Field names are the shipped `ContextSettings.yaml` names: `mcp_result_cap`, `builtin_success_cap`, `builtin_failure_cap`, `absolute_trigger_chars`, `ingest_bound_bytes`, `default_context_window`, `model_overrides` (Amendment 2026-08-23 (A-CONTRACT)).*
+
 | # | Field | Value | Expected | Traces |
 |---|---|---|---|---|
 | 1 | mcp_result_cap | 150,000 / 150,001 / 0 | 200 / 400 / 400 | B-14 |
@@ -806,7 +824,7 @@ head/tail 50/50; mark length counted toward the cap; no rune split
 - **FR-035**: No learning from provider error text; `contextOverflowSubstrings` classifies only.
 
 **D9 — settings**
-- **FR-036**: `GET/PUT /api/v1/settings/context` (`ContextSettings.yaml`, `ContextSettingsUpdate.yaml` partial) with caps, `absolute_trigger_chars`, `ingest_bound_bytes`, `default_context_window`, `model_overrides[{provider, model, context_window}]`; validation per §5; every write → `TriggerReload`; `withAuth`.
+- **FR-036**: `GET/PUT /api/v1/settings/context` (`ContextSettings.yaml`, `ContextSettingsUpdate.yaml` partial) with exactly these wire fields (pinned by Amendment 2026-08-23 (A-CONTRACT)): `mcp_result_cap`, `builtin_success_cap`, `builtin_failure_cap`, `absolute_trigger_chars`, `ingest_bound_bytes`, `default_context_window`, `model_overrides[{provider, model, context_window}]`; validation per §5; every write → `TriggerReload`; `withAuth`.
 - **FR-037**: `ContextWindowSource.yaml` (owned here) is `$ref`'d by `Agent.context_window_source` and S68's `DefaultModel.window_source`; `Agent.yaml` (S67's coordinated commit) exposes the three read-only fields as optional; `AgentUpdateRequest.yaml` accepts `context_window_override`; write → `TriggerReload`; S68's default-model GET calls `ResolveWindow(provider, model)`.
 
 **D10 — ingest**
