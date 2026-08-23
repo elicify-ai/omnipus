@@ -115,7 +115,6 @@ determines which HTTP client, auth flow, or CLI shim is used.
 |--------|-------------|
 | `anthropic/` | Anthropic API (api-key auth). Default base: `https://api.anthropic.com/v1` |
 | `anthropic-messages/` | Anthropic Messages API (native format, no OpenAI shim) |
-| `antigravity/` | Google Cloud Code Assist via OAuth (no `api_key_ref` needed; uses `auth_method: oauth`) |
 | `azure/` or `azure-openai/` | Azure OpenAI; `api_base` and `api_key_ref` required |
 | `bedrock/` | AWS Bedrock; credentials from AWS SDK env/profile/IAM |
 | `claude-cli/` or `claudecli/` | Claude via local CLI binary |

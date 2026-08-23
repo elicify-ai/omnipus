@@ -31,7 +31,7 @@ Root causes, grouped by the missing root that blocks each chain:
 |---|---|---|---|
 | T067-02 (document-backed catalog: `document.go` / `parse.go` / `resolve.go` / `locality.go`) | local worktree `wt-task-T067-02` at `64503f91`, no commits, not on origin | T067-03, T068-05, T068-11, T068-13, T066-09 | all of S67 (T067-04..14), most of S68, S66 window chain |
 | T067-03 / T067-04 (version + puller; refresh transaction / store / served pair) | no branch anywhere | T067-06, T067-07, T067-11 | T067-08..14 |
-| T068-02 (delete antigravity) | no branch anywhere | T068-03, T068-04, T068-05, T068-07 | T068-08..31 |
+| T068-02 (delete the OAuth-only Google provider) | no branch anywhere | T068-03, T068-04, T068-05, T068-07 | T068-08..31 |
 | T068-06 (ADR-068 own contracts) | local worktree `wt-task-T068-06` at `64503f91`, no commits | T068-07, T068-09, T068-13, T068-14 | S68 UI tail |
 | T066-02 (pkg/memory projection state, `RollbackAppended` emptied-set) | no branch anywhere | T066-05, T066-12 | T066-06/07/13/14/18 |
 | T066-03 (`config.ContextSettings` + budget-B helper) | local worktree `wt-task-T066-03` at `64503f91`, no commits | T066-05, T066-07, T066-08, T066-09, T066-15, T066-16, T068-17 | T066-10/17, T068-29/30 |
@@ -83,7 +83,7 @@ Also inherited from Wave A.1 and still true: `pkg/providers/capabilities/` is st
 - `pkg/gateway structured_failure_discriminator_coverage_test.go` was not run locally for T066-01; it passed inside the Fly go-test @`7139e762` run (107 packages ok) — that is the only evidence.
 - Fly lint was not re-run at `7139e762` (see section 5).
 - Whether any blocked root task has uncommitted work in another session's worktree — every task only inspected `origin` refs and `git worktree list`; the three zero-commit worktrees (`wt-task-T067-02`, `wt-task-T066-03`, `wt-task-T068-06`) were not inspected for dirty files.
-- Queue planning items carried over unratified: the 13 list inconsistencies in the queue notes (067-first ordering vs ADR-068's antigravity-first advice; T067-10/T068-04, T067-11/T068-17, T067-12/T068-13 scope splits; `cli_driver` vs `cli_kind` naming — T066-09 must use `cli_kind`; T067-06 pinning B2 `v2026.8.23.1` rather than the first release).
+- Queue planning items carried over unratified: the 13 list inconsistencies in the queue notes (067-first ordering vs ADR-068's deletion-first advice; T067-10/T068-04, T067-11/T068-17, T067-12/T068-13 scope splits; `cli_driver` vs `cli_kind` naming — T066-09 must use `cli_kind`; T067-06 pinning B2 `v2026.8.23.1` rather than the first release).
 
 ## 9. Tasks remaining for Wave B.1
 

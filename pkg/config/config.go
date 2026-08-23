@@ -2716,7 +2716,7 @@ type VoiceConfig struct {
 // ModelConfig represents a model-centric provider configuration.
 // It allows adding new providers (especially OpenAI-compatible ones) via configuration only.
 // The model field uses protocol prefix format: [protocol/]model-identifier
-// Supported protocols include openai, anthropic, antigravity, claude-cli,
+// Supported protocols include openai, anthropic, claude-cli,
 // codex-cli, and named OpenAI-compatible protocols such as groq, deepseek,
 // modelscope, and novita.
 // Default protocol is "openai" if no prefix is specified.

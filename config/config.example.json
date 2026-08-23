@@ -39,8 +39,8 @@
     },
     {
       "model_name": "gemini",
-      "model": "antigravity/gemini-2.0-flash",
-      "auth_method": "oauth"
+      "model": "gemini/gemini-2.0-flash",
+      "api_key": "your-gemini-api-key"
     },
     {
       "model_name": "deepseek",

@@ -194,13 +194,6 @@ func DefaultConfig() *Config {
 				APIBase:   "https://api.shengsuanyun.com/v1",
 			},
 
-			// Antigravity (Google Cloud Code Assist) - OAuth only
-			{
-				ModelName:  "gemini-flash",
-				Model:      "antigravity/gemini-3-flash",
-				AuthMethod: "oauth",
-			},
-
 			// Ollama (local) - https://ollama.com
 			{
 				ModelName: "llama3",

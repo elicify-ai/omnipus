@@ -92,8 +92,8 @@ Inspired by [LiteLLM](https://docs.litellm.ai/docs/proxy/configs) design:
     },
     {
       "model_name": "gemini-3-flash",
-      "model": "antigravity/gemini-3-flash",
-      "auth_method": "oauth"
+      "model": "gemini/gemini-3-flash",
+      "api_key": "your-gemini-api-key"
     },
     {
       "model_name": "my-company-llm",
@@ -153,7 +153,6 @@ Identify protocol via prefix in `model` field:
 |--------|----------|-------------|
 | `openai/` | OpenAI-compatible | Most common, includes DeepSeek, Qwen, Groq, etc. |
 | `anthropic/` | Anthropic | Claude series specific |
-| `antigravity/` | Antigravity | Google Cloud Code Assist |
 | `gemini/` | Gemini | Google Gemini native API (if needed) |
 
 ---

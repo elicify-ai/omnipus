@@ -9,27 +9,17 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"strconv"
 	"strings"
 	"time"
 )
 
 type OAuthProviderConfig struct {
-	Issuer   string
-	ClientID string
-	// ClientSecret is required for Google OAuth (confidential client). Field
-	// name matches gosec's secret-name pattern by design: it holds the
-	// actual OAuth client secret, sourced from an env var (see
-	// GoogleAntigravityOAuthConfig), never a literal; never serialized to
-	// any gateway/API response (grep confirms no pkg/gateway reference to
-	// OAuthProviderConfig).
-	// #nosec G117 -- see comment above
-	ClientSecret string
-	TokenURL     string // Override token endpoint (Google uses a different URL than issuer)
-	Scopes       string
-	Originator   string
-	Port         int
+	Issuer     string
+	ClientID   string
+	Scopes     string
+	Originator string
+	Port       int
 }
 
 func OpenAIOAuthConfig() OAuthProviderConfig {
@@ -39,25 +29,6 @@ func OpenAIOAuthConfig() OAuthProviderConfig {
 		Scopes:     "openid profile email offline_access",
 		Originator: "codex_cli_rs",
 		Port:       1455,
-	}
-}
-
-// GoogleAntigravityOAuthConfig returns the OAuth configuration for Google Cloud Code Assist (Antigravity).
-// Client credentials are the same ones used by OpenCode/pi-ai for Cloud Code Assist access.
-func GoogleAntigravityOAuthConfig() OAuthProviderConfig {
-	// Google OAuth credentials must be configured via environment variables.
-	clientID := os.Getenv("OMNIPUS_GOOGLE_CLIENT_ID")
-	clientSecret := os.Getenv("OMNIPUS_GOOGLE_CLIENT_SECRET")
-	// #nosec G101 -- ClientID/ClientSecret below are the clientID/clientSecret
-	// locals read from os.Getenv two lines up, not hardcoded literals; gosec's
-	// pattern match fires on the struct field names alone.
-	return OAuthProviderConfig{
-		Issuer:       "https://accounts.google.com/o/oauth2/v2",
-		TokenURL:     "https://oauth2.googleapis.com/token",
-		ClientID:     clientID,
-		ClientSecret: clientSecret,
-		Scopes:       "https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/cclog https://www.googleapis.com/auth/experimentsandconfigs",
-		Port:         51121,
 	}
 }
 
@@ -251,19 +222,11 @@ func RefreshAccessToken(cred *AuthCredential, cfg OAuthProviderConfig) (*AuthCre
 		"refresh_token": {cred.RefreshToken},
 		"scope":         {"openid profile email"},
 	}
-	if cfg.ClientSecret != "" {
-		data.Set("client_secret", cfg.ClientSecret)
-	}
-
 	tokenURL := cfg.Issuer + "/oauth/token"
-	if cfg.TokenURL != "" {
-		tokenURL = cfg.TokenURL
-	}
 
-	// #nosec G107 -- tokenURL is derived from cfg.Issuer/cfg.TokenURL, and cfg
-	// is only ever constructed by the two hardcoded factories in this file
-	// (OpenAIOAuthConfig, GoogleAntigravityOAuthConfig) with fixed literal
-	// Issuer/TokenURL strings — never request-derived.
+	// #nosec G107 -- tokenURL is derived from cfg.Issuer, and cfg is only
+	// ever constructed by the hardcoded OpenAIOAuthConfig factory in this
+	// file with a fixed literal Issuer — never request-derived.
 	resp, err := http.PostForm(tokenURL, data)
 	if err != nil {
 		return nil, fmt.Errorf("refreshing token: %w", err)
@@ -319,27 +282,16 @@ func buildAuthorizeURL(cfg OAuthProviderConfig, pkce PKCECodes, state, redirectU
 		"state":                 {state},
 	}
 
-	isGoogle := strings.Contains(strings.ToLower(cfg.Issuer), "accounts.google.com")
-	if isGoogle {
-		// Google OAuth requires these for refresh token support
-		params.Set("access_type", "offline")
-		params.Set("prompt", "consent")
-	} else {
-		// OpenAI-specific parameters
-		params.Set("id_token_add_organizations", "true")
-		params.Set("codex_cli_simplified_flow", "true")
-		if strings.Contains(strings.ToLower(cfg.Issuer), "auth.openai.com") {
-			params.Set("originator", "omnipus")
-		}
-		if cfg.Originator != "" {
-			params.Set("originator", cfg.Originator)
-		}
+	// OpenAI-specific parameters
+	params.Set("id_token_add_organizations", "true")
+	params.Set("codex_cli_simplified_flow", "true")
+	if strings.Contains(strings.ToLower(cfg.Issuer), "auth.openai.com") {
+		params.Set("originator", "omnipus")
+	}
+	if cfg.Originator != "" {
+		params.Set("originator", cfg.Originator)
 	}
 
-	// Google uses /auth path, OpenAI uses /oauth/authorize
-	if isGoogle {
-		return cfg.Issuer + "/auth?" + params.Encode()
-	}
 	return cfg.Issuer + "/oauth/authorize?" + params.Encode()
 }
 
@@ -352,23 +304,11 @@ func ExchangeCodeForTokens(cfg OAuthProviderConfig, code, codeVerifier, redirect
 		"client_id":     {cfg.ClientID},
 		"code_verifier": {codeVerifier},
 	}
-	if cfg.ClientSecret != "" {
-		data.Set("client_secret", cfg.ClientSecret)
-	}
-
 	tokenURL := cfg.Issuer + "/oauth/token"
-	if cfg.TokenURL != "" {
-		tokenURL = cfg.TokenURL
-	}
-
-	// Determine provider name from config
 	provider := "openai"
-	if cfg.TokenURL != "" && strings.Contains(cfg.TokenURL, "googleapis.com") {
-		provider = "google-antigravity"
-	}
 
 	// #nosec G107 -- same as RefreshAccessToken above: tokenURL comes only
-	// from the two hardcoded provider-config factories in this file.
+	// from the hardcoded provider-config factory in this file.
 	resp, err := http.PostForm(tokenURL, data)
 	if err != nil {
 		return nil, fmt.Errorf("exchanging code for tokens: %w", err)
