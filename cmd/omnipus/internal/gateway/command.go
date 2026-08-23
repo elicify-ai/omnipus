@@ -39,10 +39,12 @@ func NewGatewayCommand() *cobra.Command {
 		Aliases: []string{"gateway", "g"},
 		Short:   "Start Omnipus (serves the SPA + API on port 5000)",
 		Long: "Start Omnipus.\n\n" +
-			"Opens two ports — 5000 for the SPA + REST + WebSocket API, 5001 for\n" +
-			"sandboxed agent preview iframes. On a fresh install the SPA at\n" +
-			"http://localhost:5000 runs the onboarding wizard; afterwards `start`\n" +
-			"boots straight into the chat UI with the configured provider.\n\n" +
+			"Serves the SPA, the REST + WebSocket API, and sandboxed agent\n" +
+			"preview iframes on a SINGLE port (5000 by default). ADR-044 unified\n" +
+			"/preview/ onto this listener; there is no second preview port.\n\n" +
+			"On a fresh install the SPA at http://localhost:5000 runs the\n" +
+			"onboarding wizard; afterwards `start` boots straight into the\n" +
+			"chat UI with the configured provider.\n\n" +
 			"Exit codes:\n" +
 			"  0   clean shutdown\n" +
 			"  1   generic boot failure (credential/config/provider error)\n" +

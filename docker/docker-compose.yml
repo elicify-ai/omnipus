@@ -21,7 +21,9 @@ services:
   # Omnipus Gateway (long-running)
   #   docker compose -f docker/docker-compose.yml --profile gateway up
   #
-  # Ports: 5000 = SPA + API, 5001 = preview iframes (gateway.preview_port).
+  # Port: 5000 = SPA + REST/WS API + agent preview iframes. ADR-044 put
+  # /preview/ on this same listener, so there is only ONE port to publish;
+  # the gateway.preview_port key it used to need was deleted with it.
   # Bound to 127.0.0.1 by default so the gateway is not reachable from the
   # public network without an explicit reverse proxy. Change to 0.0.0.0:5000
   # if you intentionally want LAN/WAN exposure.
@@ -34,13 +36,11 @@ services:
       - gateway
     ports:
       - "127.0.0.1:5000:5000"
-      - "127.0.0.1:5001:5001"
     # OMNIPUS_GATEWAY_PORT aligns the in-container listener with the host
     # port mapping above. Without this, datamodel.Init() seeds port 3000
     # on first run and the published 5000 mapping points to a closed port.
     environment:
       - OMNIPUS_GATEWAY_PORT=5000
-      - OMNIPUS_GATEWAY_PREVIEW_PORT=5001
     # Uncomment to access host network; leave commented unless needed.
     #extra_hosts:
     #  - "host.docker.internal:host-gateway"
