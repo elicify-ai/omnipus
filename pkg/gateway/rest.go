@@ -1968,6 +1968,8 @@ func (a *restAPI) listAgents(w http.ResponseWriter) {
 		// silently disagree with which agent actually receives inbound
 		// messages with no more-specific routing rule.
 		ag.Default = boolPtr(ac.ID == cfg.Agents.Defaults.DefaultAgentID)
+		// ADR-068 FR-014 (T068-08): needs_model is derived, never stored.
+		ag.NeedsModel = agentNeedsModel(cfg, &ac)
 		if len(ac.Skills) > 0 {
 			skills := make([]string, len(ac.Skills))
 			copy(skills, ac.Skills)
@@ -2027,6 +2029,8 @@ func (a *restAPI) getAgent(w http.ResponseWriter, id string) {
 			// Derived from the settings singleton — see listAgents' comment on
 			// the same line shape for the full rationale.
 			ag.Default = boolPtr(ac.ID == cfg.Agents.Defaults.DefaultAgentID)
+			// ADR-068 FR-014 (T068-08): needs_model is derived, never stored.
+			ag.NeedsModel = agentNeedsModel(cfg, &ac)
 			if len(ac.Skills) > 0 {
 				skills := make([]string, len(ac.Skills))
 				copy(skills, ac.Skills)
@@ -3917,6 +3921,8 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 				// rebuilt it from the just-written config.json, so this reflects
 				// the singleton this exact request just persisted.
 				ag.Default = boolPtr(ac.ID == liveCfg.Agents.Defaults.DefaultAgentID)
+				// ADR-068 FR-014 (T068-08): needs_model is derived, never stored.
+				ag.NeedsModel = agentNeedsModel(liveCfg, &ac)
 				if len(ac.Skills) > 0 {
 					skills := make([]string, len(ac.Skills))
 					copy(skills, ac.Skills)
@@ -5850,6 +5856,13 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 		// configured at all" were both reported as plain status=disconnected,
 		// indistinguishable to the operator viewing Settings/Providers.
 		providerCredErrors := make(map[string]string)
+		// providerUpdatedAt / providerAuthMethod carry the ADR-068 row fields
+		// (T068-08): the latest PUT stamp across the provider's rows (MAJ-015,
+		// the picker's Recent ordering key) and the row's auth method
+		// (api_key unless a sign_in row exists — T068-14 wires the sign-in
+		// status/account_label on top of this).
+		providerUpdatedAt := make(map[string]*time.Time)
+		providerAuthMethod := make(map[string]string)
 		providerOrder := make([]string, 0)
 		seen := make(map[string]struct{})
 		for _, m := range cfg.Providers {
@@ -5860,6 +5873,14 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 			if _, exists := seen[providerName]; !exists {
 				seen[providerName] = struct{}{}
 				providerOrder = append(providerOrder, providerName)
+			}
+			if m.UpdatedAt != nil {
+				if cur := providerUpdatedAt[providerName]; cur == nil || m.UpdatedAt.After(*cur) {
+					providerUpdatedAt[providerName] = m.UpdatedAt
+				}
+			}
+			if providerAuthMethod[providerName] == "" && m.AuthMethod != "" {
+				providerAuthMethod[providerName] = m.AuthMethod
 			}
 			if len(m.Models) > 0 {
 				providerUserModels[providerName] = append(providerUserModels[providerName], m.Models...)
@@ -5949,16 +5970,27 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			hasEndpointCopy := hasEndpoint
+			// ADR-068 T068-08: the row's auth method comes from the config row
+			// (closed set api_key | sign_in — Validate rejects anything else);
+			// api_key when unset. account_label stays absent until T068-14's
+			// sign-in status computation lands (zero value per FR-024).
+			authMethod := gen.ProviderAuthMethodApiKey
+			if providerAuthMethod[name] == config.AuthMethodSignIn {
+				authMethod = gen.ProviderAuthMethodSignIn
+			}
 			p := gen.Provider{
 				Id:                name,
 				Name:              name,
 				Status:            status,
 				Models:            models,
 				HasModelsEndpoint: &hasEndpointCopy,
-				// ADR-067 FR-024: always-present fields, zero values until ADR-068 computes them.
-				AuthMethod:   gen.ProviderAuthMethodApiKey,
-				Dependents:   []gen.ProviderDependent{},
-				BacksDefault: false,
+				// ADR-068 FR-012 (T068-08): dependents/backs_default are
+				// advisory here; T068-09's DELETE recomputes them under
+				// configMu and its response is authoritative (MAJ-018).
+				AuthMethod:   authMethod,
+				Dependents:   computeProviderDependents(cfg, name),
+				BacksDefault: providerBacksDefault(cfg, name),
+				UpdatedAt:    providerUpdatedAt[name],
 			}
 			if modelFetchWarning != "" {
 				p.Warning = &modelFetchWarning

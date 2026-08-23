@@ -986,12 +986,28 @@ func NormalizeFallbacks(cfg *Config, in []FallbackModel) []FallbackModel {
 // already imports pkg/config, so the reverse direction would be a cycle. The
 // 3-line check below mirrors that helper byte-for-byte; keep them in sync.
 func resolveFallbackProvider(cfg *Config, slug string) string {
+	provider, _ := ResolveSlugProvider(cfg, slug)
+	return provider
+}
+
+// ResolveSlugProvider resolves the provider a bare model slug would route
+// through today, and reports whether that resolution happened only via the
+// passthrough rung (rule 3: openrouter / vivgrid). It is the exported face
+// of resolveFallbackProvider's rungs, added for ADR-068 FR-012: the
+// dependents computation in pkg/gateway (provider_dependents.go) must apply
+// the exact same rungs — an agent whose slug exact-matches a provider row is
+// a `primary` dependent, one that resolves only through rule 3 is a
+// `passthrough` dependent — so the rule lives here once and is consumed
+// there, never duplicated.
+//
+// Returns ("", false) when nothing configured can serve the slug.
+func ResolveSlugProvider(cfg *Config, slug string) (provider string, viaPassthrough bool) {
 	if cfg == nil {
-		return ""
+		return "", false
 	}
 	slug = strings.TrimSpace(slug)
 	if slug == "" {
-		return ""
+		return "", false
 	}
 
 	// 1: match against what each provider row serves.
@@ -1000,7 +1016,7 @@ func resolveFallbackProvider(cfg *Config, slug string) string {
 			continue
 		}
 		if strings.TrimSpace(p.Model) == slug {
-			return strings.TrimSpace(p.Provider)
+			return strings.TrimSpace(p.Provider), false
 		}
 	}
 	// 2: row display alias.
@@ -1009,7 +1025,7 @@ func resolveFallbackProvider(cfg *Config, slug string) string {
 			continue
 		}
 		if strings.TrimSpace(p.ModelName) == slug {
-			return strings.TrimSpace(p.Provider)
+			return strings.TrimSpace(p.Provider), false
 		}
 	}
 
@@ -1021,11 +1037,11 @@ func resolveFallbackProvider(cfg *Config, slug string) string {
 		provName := strings.ToLower(strings.TrimSpace(p.Provider))
 		if provName == "openrouter" || provName == "vivgrid" ||
 			strings.Contains(strings.ToLower(p.APIBase), "openrouter.ai") {
-			return strings.TrimSpace(p.Provider)
+			return strings.TrimSpace(p.Provider), true
 		}
 	}
 
-	return ""
+	return "", false
 }
 
 type AgentConfig struct {
