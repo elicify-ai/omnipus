@@ -207,10 +207,79 @@ func validateAllowPaths(patterns []string, fieldName string) error {
 	return nil
 }
 
+// envRestrictToWorkspace is the environment variable that overrides the
+// workspace path guard. It is the same name AgentDefaults.RestrictToWorkspace
+// carries in its `env:` struct tag — declared here as a constant because this
+// is the one place that reads it with os.LookupEnv rather than through
+// env.Parse, and the two spellings must never drift apart.
+// TestWorkspacePathGuard_EnvNameMatchesStructTag pins them together.
+const envRestrictToWorkspace = "OMNIPUS_AGENTS_DEFAULTS_RESTRICT_TO_WORKSPACE"
+
+// applyWorkspacePathGuard resolves the operator-facing
+// `sandbox.workspace_path_guard` key into AgentDefaults.RestrictToWorkspace,
+// which is the field every consumer actually reads (pkg/agent/instance.go,
+// pkg/agent/loop.go). ADR-068 §6.
+//
+// The whole point of resolving rather than adding a second read site is that
+// there is exactly ONE value at runtime. Five call sites build tools from
+// RestrictToWorkspace; none of them learns about the new key, and none of
+// them can therefore disagree with it.
+//
+// Precedence, highest first:
+//
+//  1. OMNIPUS_AGENTS_DEFAULTS_RESTRICT_TO_WORKSPACE — the FR-001 ops escape
+//     hatch. It must keep winning: it is the only way to recover a running
+//     install whose config.json carries a value that locks the operator out,
+//     and it predates this key.
+//  2. sandbox.workspace_path_guard — the operator's own persisted choice.
+//  3. The shipped default (true, seeded by DefaultConfig). A nil pointer
+//     means "never set", so an untouched install keeps the guard ON and the
+//     key never appears in config.json.
+//
+// Why os.LookupEnv rather than inspecting the field: env.Parse leaves the
+// DefaultConfig seed in place when the variable is absent, so after it runs
+// the field alone cannot distinguish "the operator set it to true" from
+// "nobody set anything". Only the presence of the variable can.
+//
+// The `raw != ""` test deliberately mirrors env.Parse's own rule (setField in
+// caarlos0/env: `if value != ""`). An env var that exists but is empty is a
+// no-op for env.Parse, so counting it as "set" here would silently void the
+// operator's config key while nothing had actually overridden it. A
+// whitespace-but-not-empty value never reaches this function at all —
+// strconv.ParseBool rejects it and env.Parse fails the whole load first.
+//
+// Called at the top of validateBootConfig, which runs after both struct
+// unmarshal and env.Parse. That ordering is required: reading the env var
+// before env.Parse has applied it would be harmless, but reading the sandbox
+// key before unmarshal would read nothing.
+func applyWorkspacePathGuard(cfg *Config) {
+	if raw, ok := os.LookupEnv(envRestrictToWorkspace); ok && raw != "" {
+		// env.Parse has already written the operator's value into the field.
+		// Leave it exactly as it is.
+		return
+	}
+	if cfg.Sandbox.WorkspacePathGuard == nil {
+		// Unset: keep whatever DefaultConfig seeded (true). Deliberately not
+		// written back into the pointer — leaving it nil is what keeps the
+		// key out of config.json on the next SaveConfig, so a fresh install
+		// does not acquire a key it never asked for.
+		return
+	}
+	cfg.Agents.Defaults.RestrictToWorkspace = *cfg.Sandbox.WorkspacePathGuard
+}
+
 // validateBootConfig validates the fully-loaded Config struct against the
 // constraints added by the path-sandbox-and-capability-tiers.
 // Called after struct unmarshal and env-override application.
 func validateBootConfig(cfg *Config) error {
+	// --- ADR-068 §6: resolve the operator-facing workspace path guard ---
+	// Runs first so that everything below (and every consumer after boot)
+	// sees the single settled value of RestrictToWorkspace. This cannot
+	// fail: the key is a tri-state *bool, so there is no invalid value to
+	// reject — which is why it applies a setting here rather than returning
+	// an error like its neighbours.
+	applyWorkspacePathGuard(cfg)
+
 	// --- FR-002a: AllowReadPaths and AllowWritePaths validation ---
 	if err := validateAllowPaths(cfg.Tools.AllowReadPaths, "cfg.Tools.AllowReadPaths"); err != nil {
 		return err
@@ -477,4 +546,21 @@ func validateBootConfig(cfg *Config) error {
 	}
 
 	return nil
+}
+
+// WorkspacePathGuardEnvLocked reports whether the environment hatch
+// (OMNIPUS_AGENTS_DEFAULTS_RESTRICT_TO_WORKSPACE) is currently outranking any
+// saved sandbox.workspace_path_guard value.
+//
+// Exported for the gateway, which must tell the UI to present the control as
+// locked while this is true — a saved change would persist and change nothing
+// until restart, and offering a write that silently does nothing is the class
+// of confusion ADR-068 §6 exists to remove.
+//
+// It deliberately shares applyWorkspacePathGuard's exact test, including the
+// `raw != ""` part (an empty value does NOT lock), so the two can never drift
+// into disagreeing about whether the hatch is in force.
+func WorkspacePathGuardEnvLocked() bool {
+	raw, ok := os.LookupEnv(envRestrictToWorkspace)
+	return ok && raw != ""
 }

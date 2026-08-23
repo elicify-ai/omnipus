@@ -5118,6 +5118,16 @@ export interface components {
              */
             god_mode_available?: boolean;
             /**
+             * @description ADR-068 §6. Whether the bash tool confines filesystem paths to the agent's working directory. This is NOT the kernel sandbox (`mode`) — it is a separate, app-layer guard that runs in-process before any child is spawned, and the two were previously confusable because only the kernel one had a control (UAT defect 002). When true, a WRITE outside the working directory needs an approved workspace mount; reads outside it are allowed either way. Resolves into AgentDefaults.RestrictToWorkspace. Defaults to true (fail-closed) when unset.
+             * @example true
+             */
+            workspace_path_guard?: boolean;
+            /**
+             * @description True when OMNIPUS_AGENTS_DEFAULTS_RESTRICT_TO_WORKSPACE is set in the gateway's environment and is therefore outranking the saved value. While it is true a change to workspace_path_guard would persist and change nothing at runtime, so the UI must present the control as locked rather than offering a write that silently does nothing.
+             * @example false
+             */
+            workspace_path_guard_env_override?: boolean;
+            /**
              * @description Global fallback shell command deny-list (regex entries). Per-agent custom patterns extend this list.
              * @example [
              *       "^curl\\s",
@@ -6116,6 +6126,11 @@ export interface components {
              *     ]
              */
             shell_deny_patterns?: string[];
+            /**
+             * @description ADR-068 §6. Turns the IN-PROCESS bash workspace path guard on or off. Distinct from `mode`, which is the kernel sandbox — the two are separate boundaries and setting one has no effect on the other (UAT defect 002 was operators expecting otherwise). When true, a WRITE outside the agent's working directory needs an approved workspace mount; reads outside it are allowed either way. Restart-gated: it resolves into AgentDefaults.RestrictToWorkspace at boot. Ignored at runtime while OMNIPUS_AGENTS_DEFAULTS_RESTRICT_TO_WORKSPACE is set, which outranks it — see workspace_path_guard_env_override on the GET response.
+             * @example false
+             */
+            workspace_path_guard?: boolean;
         };
         /**
          * Task

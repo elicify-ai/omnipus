@@ -81,3 +81,16 @@ properties:
     example:
       - "rm -rf /"
       - "curl.*169\\.254"
+  workspace_path_guard:
+    type: boolean
+    description: >
+      ADR-068 §6. Turns the IN-PROCESS bash workspace path guard on or off.
+      Distinct from `mode`, which is the kernel sandbox — the two are separate
+      boundaries and setting one has no effect on the other (UAT defect 002 was
+      operators expecting otherwise). When true, a WRITE outside the agent's
+      working directory needs an approved workspace mount; reads outside it are
+      allowed either way. Restart-gated: it resolves into
+      AgentDefaults.RestrictToWorkspace at boot. Ignored at runtime while
+      OMNIPUS_AGENTS_DEFAULTS_RESTRICT_TO_WORKSPACE is set, which outranks it —
+      see workspace_path_guard_env_override on the GET response.
+    example: false

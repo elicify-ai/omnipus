@@ -521,8 +521,17 @@ export function SecuritySection() {
               Process Sandbox (Landlock / seccomp)
             </p>
             <SandboxSection />
+            {/* The old footnote read "Sandbox configuration is auto-detected at
+                startup based on your kernel capabilities" — printed directly
+                beneath a control the operator very much does set, and it read
+                as "this is not yours to change". What is actually detected is
+                the kernel's capabilities, which decide which modes will work.
+                (UAT defect 002 / ADR-068 §6.) */}
             <p className="text-xs text-[var(--color-muted)] pt-1">
-              Sandbox configuration is auto-detected at startup based on your kernel capabilities.
+              What your kernel supports is detected when the gateway starts, and that decides which
+              modes will actually work — the mode itself is yours to choose above. The sandbox is
+              only one of the boundaries on what an agent may touch: the shell workspace limit is a
+              separate rule with its own setting, in the same panel.
             </p>
           </section>
 

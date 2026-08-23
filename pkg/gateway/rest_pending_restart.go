@@ -48,6 +48,12 @@ var RestartGatedKeys = []config.ConfigKey{
 	// owns this signal accurately instead: the POST's restart_required flag
 	// opens GatewayRestartModal, and the toggle's own note is availability-
 	// driven. See rest_god_mode.go.
+	// ADR-068 §6. ExecTool captures restrictToWorkspace at construction and a
+	// config reload only swaps the config pointer (AgentLoop.SwapConfig), so a
+	// saved change to this guard does not reach a running gateway. Gated so the
+	// operator is told, instead of believing a security setting applied when it
+	// has not.
+	config.SandboxWorkspacePathGuard,
 	config.SessionDMScope,
 	// Changing the bind host re-binds the listener (like the port), which can
 	// only happen safely on restart — so it is restart-gated like gateway.port.

@@ -1529,16 +1529,62 @@ type ToolFeedbackConfig struct {
 
 type AgentDefaults struct {
 	Home string `json:"workspace" env:"OMNIPUS_AGENTS_DEFAULTS_WORKSPACE"`
-	// RestrictToWorkspace and AllowReadOutsideWorkspace are removed from the v1
-	// JSON schema only (FR-001): tags use json:"-" so SaveConfig never
-	// serializes them, and validateRemovedKeys rejects any v1 config JSON that
-	// still carries these keys. The fields themselves are NOT dead — they
-	// remain live via env var override (OMNIPUS_AGENTS_DEFAULTS_RESTRICT_TO_WORKSPACE,
-	// OMNIPUS_AGENTS_DEFAULTS_ALLOW_READ_OUTSIDE_WORKSPACE) and are read for real
-	// sandboxing decisions in pkg/agent/loop.go and pkg/agent/instance.go. This
-	// is an intentional ops escape hatch: operator-facing JSON config hygiene
-	// rejects the keys, but the env var remains as a lower-level override for
-	// advanced/ops use.
+	// RestrictToWorkspace and AllowReadOutsideWorkspace stay OUT of the v1
+	// JSON schema at THIS path (FR-001): the tags are json:"-" so SaveConfig
+	// never serializes them here, and validateRemovedKeys still rejects any
+	// config JSON that carries `agents.defaults.restrict_to_workspace` or
+	// `agents.defaults.allow_read_outside_workspace`. That contract is
+	// unchanged and is pinned by TestFR001_RemovedKeysRejected.
+	//
+	// These are NOT dead fields. They are the values every file tool, the
+	// bash tool, send_file and browser_screenshot are actually built with
+	// (pkg/agent/instance.go, pkg/agent/loop.go). RestrictToWorkspace in
+	// particular is the ADR-068 "third rule layer": an in-process path guard
+	// that runs before any child process exists and is completely separate
+	// from the kernel sandbox (`sandbox.mode`).
+	//
+	// WHAT CHANGED (ADR-068 §6, 2026-08-23). RestrictToWorkspace used to be
+	// reachable ONLY through OMNIPUS_AGENTS_DEFAULTS_RESTRICT_TO_WORKSPACE,
+	// described here as "an intentional ops escape hatch". That was the
+	// wrong trade and it produced a real defect: an operator saw the sandbox
+	// switch on the Security page, turned it off, and commands were still
+	// refused — by this setting, which had no control anywhere. An
+	// unexplained denial is what drives operators to disable the whole
+	// boundary instead of the one rule that is in their way.
+	//
+	// RestrictToWorkspace now has an operator-facing control:
+	// `sandbox.workspace_path_guard` (OmnipusSandboxConfig.WorkspacePathGuard,
+	// sandbox.go). applyWorkspacePathGuard (validator.go) resolves it into
+	// this field at load time, so all five read sites keep reading exactly
+	// one field and can never disagree about the answer.
+	//
+	// THE TRADE-OFF, stated plainly, because it is a real one: the new key
+	// is a DIFFERENT JSON path from the removed one. Two spellings for one
+	// behaviour is a cost. We pay it because the alternatives are worse:
+	//
+	//   - Giving this field a real JSON tag would make SaveConfig write
+	//     `agents.defaults.restrict_to_workspace` back into config.json, and
+	//     loadConfigInternal would then REJECT that same file on the next
+	//     boot (validateRemovedKeys runs before unmarshal). The gateway
+	//     re-saves config on load, so a single boot would brick the install.
+	//   - Relaxing validateRemovedKeys would repeal a documented, tested
+	//     contract in order to reinstate a key name whose meaning is
+	//     simultaneously being narrowed (spec FR-2.5) — the same wire name
+	//     with new semantics, which is exactly what that spec warns against.
+	//   - `agents.defaults.*` is writable through the generic
+	//     PUT /api/v1/config endpoint and through the sysagent's
+	//     `system.config.set` tool, neither of which is re-auth-gated or
+	//     audited. A security control there could be switched off by an
+	//     agent itself. Everything under `sandbox.` is blocked from both.
+	//
+	// AllowReadOutsideWorkspace deliberately gets NO new control in this
+	// change. It is the read-side companion, and ADR-068 step 2 (splitting
+	// read from write inside the bash guard) has to land before a read-side
+	// switch would mean what its label says. Until then it stays env-only —
+	// documented here so the asymmetry is a decision, not an oversight.
+	//
+	// The env vars remain, and still WIN over the config key, so an operator
+	// locked out by a bad config value can always recover from the shell.
 	RestrictToWorkspace       bool               `json:"-"                               env:"OMNIPUS_AGENTS_DEFAULTS_RESTRICT_TO_WORKSPACE"`
 	AllowReadOutsideWorkspace bool               `json:"-"                               env:"OMNIPUS_AGENTS_DEFAULTS_ALLOW_READ_OUTSIDE_WORKSPACE"`
 	Provider                  string             `json:"provider"                        env:"OMNIPUS_AGENTS_DEFAULTS_PROVIDER"`

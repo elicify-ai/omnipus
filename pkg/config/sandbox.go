@@ -342,6 +342,59 @@ type OmnipusSandboxConfig struct {
 	// choice.
 	FilesystemModel string `json:"filesystem_model"`
 
+	// WorkspacePathGuard is the operator-facing control for the IN-PROCESS
+	// path guard — the third file-access rule layer identified by ADR-068.
+	// It is NOT the kernel sandbox, and it is deliberately named so that no
+	// one can confuse the two:
+	//
+	//   - `sandbox.mode` (above) selects how the KERNEL enforces policy
+	//     (Landlock on Linux, Seatbelt on macOS) on a child process that has
+	//     already been spawned.
+	//   - `sandbox.workspace_path_guard` (this field) decides, in Go and
+	//     before any child exists, whether an agent's file tools and the
+	//     text of a `bash` command may reference paths outside the agent's
+	//     own home directory and its approved workspace mounts.
+	//
+	// The two are independent. Turning the kernel sandbox off does NOT turn
+	// this guard off — which is precisely the operator-experience defect
+	// ADR-068 §6 records: the Security page showed one switch, the operator
+	// turned it off, and commands kept being refused by a different rule
+	// that had no switch at all.
+	//
+	// What it actually governs today (be exact — a control whose label
+	// over-promises is the ADR-037 anti-pattern this project bans). This
+	// value resolves into AgentDefaults.RestrictToWorkspace, which is handed
+	// to: write_file, edit_file, append_file, bash, send_file and
+	// browser_screenshot as their write scope; and, combined with
+	// AllowReadOutsideWorkspace, to read_file, list_directory, library_list
+	// and library_read as their read scope (pkg/agent/instance.go). So it is
+	// a PATH guard, not yet a pure write guard. ADR-068 step 2 narrows the
+	// bash side of it to writes only; the file-tool read side keeps its own
+	// separate control (allow_read_outside_workspace).
+	//
+	// *bool, not bool, and the reason is not cosmetic: a plain bool cannot
+	// tell "the operator chose false" apart from "nobody has ever set this",
+	// and SaveConfig re-marshals the whole struct on every save. nil means
+	// unset and resolves to the shipped default of TRUE (guard on) via
+	// ResolveBool — the same nil-means-unset pattern as
+	// PathGuardAuditFailClosed above. `omitempty` keeps an unset field out
+	// of config.json entirely, so an untouched install never grows the key.
+	//
+	// Precedence, applied by applyWorkspacePathGuard (validator.go):
+	// OMNIPUS_AGENTS_DEFAULTS_RESTRICT_TO_WORKSPACE (the FR-001 env hatch,
+	// still wins) > this key > the shipped default (true).
+	//
+	// Why it lives under `sandbox.` rather than under `agents.defaults.`
+	// next to the field it drives: everything under `sandbox.` is blocked
+	// from the generic PUT /api/v1/config endpoint (pkg/gateway/
+	// blocked_paths.go) and from the sysagent's own `system.config.set`
+	// tool (pkg/sysagent/tools/config.go), so it can only be changed through
+	// the dedicated /api/v1/security/sandbox-config endpoint, which is
+	// admin-gated, re-auth-gated and audited. `agents.defaults.*` is
+	// writable through both of those unaudited surfaces — including by an
+	// agent itself, which would let an agent switch off its own cage.
+	WorkspacePathGuard *bool `json:"workspace_path_guard,omitempty"`
+
 	// AuditLog enables the structured security audit log per SEC-17.
 	// Written to ~/.omnipus/system/audit.jsonl.
 	AuditLog bool `json:"audit_log,omitempty"`

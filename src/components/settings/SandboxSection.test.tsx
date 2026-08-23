@@ -1023,3 +1023,244 @@ describe('re-auth cancel reverts optimistic state', () => {
     expect(updateSandboxConfig).toHaveBeenCalledTimes(1)
   })
 })
+
+// ── describe: shell workspace limit (ADR-068 §6) ─────────────────────────────
+//
+// The defect this control closes (UAT 002) is an operator turning the kernel
+// sandbox off, still being blocked by restrict_to_workspace, and finding
+// nothing on the page that names the rule. Two things therefore have to hold
+// and both are asserted here: the control exists and really writes the
+// setting, and — when the gateway does not report the setting — the page says
+// so instead of drawing a control that would look live and do nothing.
+
+// Builds a config response carrying restrict_to_workspace. The cast is
+// deliberate: the field is not in the generated SandboxConfigResponse type
+// yet (contracts/components/schemas/SandboxConfig.yaml does not declare it),
+// which is exactly the situation the component reads defensively for.
+function configWithWorkspaceLimit(value: unknown): SandboxConfigResponse {
+  return { ...baseConfig, restrict_to_workspace: value } as SandboxConfigResponse
+}
+
+describe('shell workspace limit', () => {
+  it('restrict_to_workspace=true → the "confined" option is pre-selected and no unavailable notice shows', async () => {
+    vi.mocked(fetchSandboxConfig).mockResolvedValue(configWithWorkspaceLimit(true))
+
+    renderSection()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('sandbox-workspace-limit-on')).toBeChecked()
+    })
+    expect(screen.getByTestId('sandbox-workspace-limit-off')).not.toBeChecked()
+    expect(screen.queryByTestId('workspace-limit-unavailable')).not.toBeInTheDocument()
+  })
+
+  it('restrict_to_workspace=false → the "any path" option is pre-selected (false is a real value, not a missing one)', async () => {
+    vi.mocked(fetchSandboxConfig).mockResolvedValue(configWithWorkspaceLimit(false))
+
+    renderSection()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('sandbox-workspace-limit-off')).toBeChecked()
+    })
+    expect(screen.getByTestId('sandbox-workspace-limit-on')).not.toBeChecked()
+    expect(screen.queryByTestId('workspace-limit-unavailable')).not.toBeInTheDocument()
+  })
+
+  it('switching to "any path" PUTs exactly {restrict_to_workspace: false} and nothing else', async () => {
+    vi.mocked(fetchSandboxConfig).mockResolvedValue(configWithWorkspaceLimit(true))
+    vi.mocked(updateSandboxConfig).mockResolvedValue(configWithWorkspaceLimit(false))
+
+    renderSection()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('sandbox-workspace-limit-on')).toBeChecked()
+    })
+    fireEvent.click(screen.getByTestId('sandbox-workspace-limit-off'))
+
+    await waitFor(() => {
+      expect(updateSandboxConfig).toHaveBeenCalledTimes(1)
+    })
+    // toEqual, not toMatchObject: a partial PUT that also carried `mode` or
+    // `filesystem_model` would silently re-save whatever the radios happened
+    // to be showing, so the body must contain this key alone.
+    expect(vi.mocked(updateSandboxConfig).mock.calls[0][0]).toEqual({ restrict_to_workspace: false })
+  })
+
+  it('switching back to "confined" PUTs exactly {restrict_to_workspace: true}', async () => {
+    vi.mocked(fetchSandboxConfig).mockResolvedValue(configWithWorkspaceLimit(false))
+    vi.mocked(updateSandboxConfig).mockResolvedValue(configWithWorkspaceLimit(true))
+
+    renderSection()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('sandbox-workspace-limit-off')).toBeChecked()
+    })
+    fireEvent.click(screen.getByTestId('sandbox-workspace-limit-on'))
+
+    await waitFor(() => {
+      expect(updateSandboxConfig).toHaveBeenCalledTimes(1)
+    })
+    expect(vi.mocked(updateSandboxConfig).mock.calls[0][0]).toEqual({ restrict_to_workspace: true })
+  })
+
+  it('clicking the already-selected option fires no PUT', async () => {
+    vi.mocked(fetchSandboxConfig).mockResolvedValue(configWithWorkspaceLimit(true))
+
+    renderSection()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('sandbox-workspace-limit-on')).toBeChecked()
+    })
+    fireEvent.click(screen.getByTestId('sandbox-workspace-limit-on'))
+
+    expect(updateSandboxConfig).not.toHaveBeenCalled()
+  })
+
+  // ── Degraded state: the backend does not expose the field ──────────────────
+
+  it('field absent from the response → no radios at all, and an explanation naming the environment variable', async () => {
+    // baseConfig is the shipped shape today: no restrict_to_workspace key.
+    vi.mocked(fetchSandboxConfig).mockResolvedValue(baseConfig)
+
+    renderSection()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('workspace-limit-unavailable')).toBeInTheDocument()
+    })
+
+    // Nothing that looks like a working control is drawn.
+    expect(screen.queryByTestId('sandbox-workspace-limit-on')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('sandbox-workspace-limit-off')).not.toBeInTheDocument()
+
+    // The operator is told why, and where the setting actually lives.
+    const notice = screen.getByTestId('workspace-limit-unavailable')
+    expect(notice).toHaveTextContent(/cannot be changed from here/i)
+    expect(notice).toHaveTextContent('OMNIPUS_AGENTS_DEFAULTS_RESTRICT_TO_WORKSPACE')
+
+    // The heading still renders, so the boundary is at least named on the page
+    // even when it cannot be edited — that naming is half the defect.
+    expect(screen.getByText('Shell workspace limit')).toBeInTheDocument()
+  })
+
+  it('field present but not a boolean → treated as absent, never coerced into a checked radio', async () => {
+    // A backend sending the string "true" (or null) must not produce a control
+    // showing a value the server never actually asserted.
+    vi.mocked(fetchSandboxConfig).mockResolvedValue(configWithWorkspaceLimit('true'))
+
+    renderSection()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('workspace-limit-unavailable')).toBeInTheDocument()
+    })
+    expect(screen.queryByTestId('sandbox-workspace-limit-on')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('sandbox-workspace-limit-off')).not.toBeInTheDocument()
+  })
+
+  it('null value → treated as absent', async () => {
+    vi.mocked(fetchSandboxConfig).mockResolvedValue(configWithWorkspaceLimit(null))
+
+    renderSection()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('workspace-limit-unavailable')).toBeInTheDocument()
+    })
+    expect(screen.queryByTestId('sandbox-workspace-limit-on')).not.toBeInTheDocument()
+  })
+
+  // ── Failure paths ──────────────────────────────────────────────────────────
+
+  it('cancelling re-auth reverts the optimistic selection, and the change can be retried afterwards', async () => {
+    vi.mocked(fetchSandboxConfig).mockResolvedValue(configWithWorkspaceLimit(true))
+    vi.mocked(updateSandboxConfig).mockRejectedValue(reAuth403())
+
+    renderSection()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('sandbox-workspace-limit-on')).toBeChecked()
+    })
+    fireEvent.click(screen.getByTestId('sandbox-workspace-limit-off'))
+
+    // Optimistic: the new choice shows before the PUT settles.
+    await waitFor(() => {
+      expect(screen.getByTestId('sandbox-workspace-limit-off')).toBeChecked()
+    })
+
+    await waitFor(() => {
+      expect(screen.getByTestId('reauth-cancel')).toBeInTheDocument()
+    })
+    fireEvent.click(screen.getByTestId('reauth-cancel'))
+
+    // Reverted to the saved server value — otherwise the radio sits on an
+    // unsaved value with no error shown, and the equality guard in the handler
+    // means re-clicking it would not even refire onChange.
+    await waitFor(() => {
+      expect(screen.getByTestId('sandbox-workspace-limit-on')).toBeChecked()
+    })
+    expect(screen.getByTestId('sandbox-workspace-limit-off')).not.toBeChecked()
+    expect(mockAddToast).not.toHaveBeenCalled()
+    expect(updateSandboxConfig).toHaveBeenCalledTimes(1)
+
+    // Recovery: the same change must be attemptable again.
+    vi.mocked(updateSandboxConfig).mockResolvedValueOnce(configWithWorkspaceLimit(false))
+    fireEvent.click(screen.getByTestId('sandbox-workspace-limit-off'))
+    await waitFor(() => {
+      expect(updateSandboxConfig).toHaveBeenCalledTimes(2)
+    })
+  })
+
+  it('a server error reverts the selection and raises a toast', async () => {
+    vi.mocked(fetchSandboxConfig).mockResolvedValue(configWithWorkspaceLimit(true))
+    vi.mocked(updateSandboxConfig).mockRejectedValue(new ApiError(500, 'boom'))
+
+    renderSection()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('sandbox-workspace-limit-on')).toBeChecked()
+    })
+    fireEvent.click(screen.getByTestId('sandbox-workspace-limit-off'))
+
+    await waitFor(() => {
+      expect(mockAddToast).toHaveBeenCalledWith(
+        expect.objectContaining({ variant: 'error' }),
+      )
+    })
+    expect(screen.getByTestId('sandbox-workspace-limit-on')).toBeChecked()
+    expect(screen.getByTestId('sandbox-workspace-limit-off')).not.toBeChecked()
+  })
+})
+
+// ── describe: telling the two boundaries apart ───────────────────────────────
+
+describe('sandbox vs workspace-limit copy', () => {
+  it('the workspace limit is presented as a separate boundary, not as part of the sandbox mode group', async () => {
+    vi.mocked(fetchSandboxConfig).mockResolvedValue(configWithWorkspaceLimit(true))
+
+    renderSection()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('workspace-limit-section')).toBeInTheDocument()
+    })
+
+    const section = screen.getByTestId('workspace-limit-section')
+    // Its own radio group name — a click here can never move the sandbox mode.
+    expect(screen.getByTestId('sandbox-workspace-limit-on')).toHaveAttribute('name', 'workspace-limit')
+    // And the copy states the difference rather than leaving the reader to
+    // infer it from two similarly-worded switches.
+    expect(section).toHaveTextContent(/different boundary from the sandbox above/i)
+    expect(section).toHaveTextContent(/turning the sandbox off does not turn this off/i)
+  })
+
+  it('the "off" sandbox mode says plainly that it does not lift the workspace limit', async () => {
+    renderSection()
+
+    await waitFor(() => {
+      expect(screen.getByRole('radio', { name: /sandbox mode: off/i })).toBeInTheDocument()
+    })
+
+    // This sentence is the whole fix for the "I turned it off and I am still
+    // blocked" report — assert it, so it cannot be edited away silently.
+    expect(
+      screen.getByText(/does not switch off the shell workspace limit/i),
+    ).toBeInTheDocument()
+  })
+})

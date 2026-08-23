@@ -24,11 +24,36 @@ const (
 	// rest_god_mode.go.
 	SandboxGodMode        ConfigKey = "sandbox.god_mode"
 	SandboxGodModeAllowed ConfigKey = "sandbox.god_mode_allowed"
-	SessionDMScope        ConfigKey = "session.dm_scope"
-	GatewayHost           ConfigKey = "gateway.host"
-	GatewayPort           ConfigKey = "gateway.port"
-	GatewayUsers          ConfigKey = "gateway.users"
-	GatewayDevModeBypass  ConfigKey = "gateway.dev_mode_bypass"
+	// SandboxWorkspacePathGuard is the operator-facing control for the
+	// in-process path guard (ADR-068 §6) — the rule layer that decides,
+	// before any child process is spawned, whether an agent's file tools and
+	// the text of a bash command may reference paths outside the agent's own
+	// home directory and its approved mounts.
+	//
+	// It is NOT SandboxModeKey. `sandbox.mode` selects how the KERNEL
+	// enforces policy on an already-spawned child; this key gates a Go-side
+	// text/path check that runs earlier and independently. Operators who
+	// turned the kernel sandbox off and still saw commands refused were
+	// hitting this rule, which until ADR-068 had no control at all. Any
+	// surface that renders these two must label them distinctly.
+	//
+	// RESTART-GATED (corrected 2026-08-23, code review). An earlier version of
+	// this comment claimed the value is re-read on every config reload and that
+	// a pending-restart banner "would be a lie". That was wrong in the other
+	// direction: a reload ends at AgentLoop.SwapConfig (pkg/agent/loop.go),
+	// which swaps the *config.Config pointer and bumps configGen — it rebuilds
+	// no tools. ExecTool captures restrictToWorkspace at CONSTRUCTION
+	// (shell.go's ExecTool.restrictToWorkspace, set from
+	// pkg/agent/instance.go), so a running gateway keeps the old value until
+	// restarted. Listed in RestartGatedKeys (pkg/gateway/rest_pending_restart.go)
+	// so the operator is told that, rather than watching a saved security
+	// setting appear to take effect while the guard still enforces the old one.
+	SandboxWorkspacePathGuard ConfigKey = "sandbox.workspace_path_guard"
+	SessionDMScope            ConfigKey = "session.dm_scope"
+	GatewayHost               ConfigKey = "gateway.host"
+	GatewayPort               ConfigKey = "gateway.port"
+	GatewayUsers              ConfigKey = "gateway.users"
+	GatewayDevModeBypass      ConfigKey = "gateway.dev_mode_bypass"
 
 	// GatewayPublicURL drives boot-frozen CORS/CSP/WS-origin fences
 	// (CanonicalGatewayOrigin) — it MUST stay restart-gated (ADR-044).

@@ -97,6 +97,21 @@ func (a *restAPI) getSandboxConfig(w http.ResponseWriter, r *http.Request) {
 	godModeAvail := a.godModeAvailable()
 	godModeOn := godModeAvail && cfg.Sandbox.GodMode
 
+	// ADR-068 §6: the in-process bash path guard, reported separately from the
+	// kernel sandbox (mode) because they are different boundaries and the UI
+	// must not merge them — conflating the two is UAT defect 002 itself.
+	//
+	// Report the RESOLVED value (Agents.Defaults.RestrictToWorkspace), not the
+	// raw tri-state pointer: applyWorkspacePathGuard has already settled the
+	// env > key > default precedence there, so this is the value actually in
+	// force. Reading the pointer would show nil (=> nothing) on a fresh install
+	// whose effective setting is true.
+	workspacePathGuard := cfg.Agents.Defaults.RestrictToWorkspace
+	// When the env hatch is set it outranks any saved value, so a write from
+	// the UI would persist and change nothing until restart. Say so rather than
+	// offering a control that silently does nothing.
+	workspaceGuardEnvLocked := config.WorkspacePathGuardEnvLocked()
+
 	// Return both the flat-field shape and the nested ssrf object.
 	// The flat fields are the canonical wire format; the nested ssrf block is
 	// included for backward-compatible clients. Both are safe to include — JSON
@@ -120,6 +135,9 @@ func (a *restAPI) getSandboxConfig(w http.ResponseWriter, r *http.Request) {
 		ShellDenyPatterns:    &shellDenyPatterns,
 		GodMode:              &godModeOn,
 		GodModeAvailable:     &godModeAvail,
+
+		WorkspacePathGuard:            &workspacePathGuard,
+		WorkspacePathGuardEnvOverride: &workspaceGuardEnvLocked,
 		// Nested ssrf object for backward-compatible clients.
 		Ssrf: &struct {
 			AllowInternal *[]string `json:"allow_internal,omitempty"`
@@ -171,14 +189,15 @@ func (a *restAPI) putSandboxConfig(w http.ResponseWriter, r *http.Request) {
 	changedAllowInternal := resolvedAllowInternal != nil
 	changedShellDenyPatterns := body.ShellDenyPatterns != nil
 	changedFilesystemModel := body.FilesystemModel != nil
+	changedWorkspacePathGuard := body.WorkspacePathGuard != nil
 
 	if !changedMode && !changedAllowNetworkOutbound && !changedAllowedPaths &&
 		!changedSSRFEnabled && !changedAllowInternal && !changedShellDenyPatterns &&
-		!changedFilesystemModel {
+		!changedFilesystemModel && !changedWorkspacePathGuard {
 		jsonErr(
 			w,
 			http.StatusBadRequest,
-			"at least one field required — expected mode, filesystem_model, allowed_paths, ssrf.allow_internal, or shell_deny_patterns",
+			"at least one field required — expected mode, filesystem_model, allowed_paths, ssrf.allow_internal, shell_deny_patterns, or workspace_path_guard",
 		)
 		return
 	}
@@ -230,6 +249,10 @@ func (a *restAPI) putSandboxConfig(w http.ResponseWriter, r *http.Request) {
 		oldAllowedPaths      []string
 		oldAllowInternal     []string
 		oldShellDenyPatterns []string
+		// Defaults to true so an audit entry for the first-ever write records
+		// the value that was actually in force (the fail-closed default), not
+		// Go's zero value, which would read as "it was off" when it was on.
+		oldWorkspacePathGuard = true
 	)
 
 	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
@@ -292,6 +315,18 @@ func (a *restAPI) putSandboxConfig(w http.ResponseWriter, r *http.Request) {
 			}
 			sandbox["shell_deny_patterns"] = toAnySlice(*body.ShellDenyPatterns)
 		}
+		// ADR-068 §6. Restart-gated: applyWorkspacePathGuard resolves this into
+		// AgentDefaults.RestrictToWorkspace at boot, and the guard reads that
+		// resolved value, so a running gateway keeps its current setting until
+		// restarted. Persisted as an explicit bool, never removed on false —
+		// the tri-state nil means "unset, use the default", which is NOT the
+		// same as an operator deliberately choosing false.
+		if changedWorkspacePathGuard {
+			if prev, ok := sandbox["workspace_path_guard"].(bool); ok {
+				oldWorkspacePathGuard = prev
+			}
+			sandbox["workspace_path_guard"] = *body.WorkspacePathGuard
+		}
 		return nil
 	}); err != nil {
 		slog.Error("rest: update sandbox config", "error", err)
@@ -340,6 +375,15 @@ func (a *restAPI) putSandboxConfig(w http.ResponseWriter, r *http.Request) {
 					slog.Error("rest: audit emit shell_deny_patterns change", "error", err)
 				}
 			}
+			if changedWorkspacePathGuard {
+				if err := audit.EmitSecuritySettingChange(
+					r.Context(), auditLogger,
+					"sandbox.workspace_path_guard",
+					oldWorkspacePathGuard, *body.WorkspacePathGuard,
+				); err != nil {
+					slog.Error("rest: audit emit workspace_path_guard change", "error", err)
+				}
+			}
 		}
 	}
 
@@ -359,7 +403,7 @@ func (a *restAPI) putSandboxConfig(w http.ResponseWriter, r *http.Request) {
 	// mode and allowed_paths are restart-gated (each is consumed at boot or
 	// agent-wiring time). ssrf.allow_internal and shell_deny_patterns are
 	// hot-reload via the config-poll loop.
-	partialRestartRequired := changedMode || changedAllowedPaths
+	partialRestartRequired := changedMode || changedAllowedPaths || changedWorkspacePathGuard
 
 	// Return the updated config so the UI can cache-update without a follow-up GET.
 	// Include both flat fields and nested ssrf object for backward-compatible clients.

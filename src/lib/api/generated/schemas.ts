@@ -2275,6 +2275,8 @@ export const SandboxConfig = z
       .passthrough(),
     god_mode: z.boolean(),
     god_mode_available: z.boolean(),
+    workspace_path_guard: z.boolean(),
+    workspace_path_guard_env_override: z.boolean(),
     shell_deny_patterns: z.array(z.string()),
     requires_restart: z.boolean(),
     saved: z.boolean(),
@@ -2294,6 +2296,7 @@ export const SandboxConfigUpdate = z
       .partial()
       .passthrough(),
     shell_deny_patterns: z.array(z.string()),
+    workspace_path_guard: z.boolean(),
   })
   .partial()
   .passthrough();

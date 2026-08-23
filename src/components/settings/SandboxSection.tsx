@@ -26,7 +26,7 @@ import {
   updateSandboxConfig,
   getErrorMessage,
 } from '@/lib/api'
-import type { SandboxStatus } from '@/lib/api'
+import type { SandboxStatus, SandboxConfigResponse } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import { SaveStatus, useSaveStatus } from './SaveStatus'
 import { ShellDenyPatternsEditor } from '@/components/agents/ShellDenyPatternsEditor'
@@ -78,6 +78,80 @@ function listsMatch(a: string[], b: readonly string[]): boolean {
 function extractShellDenyPatterns(data: { shell_deny_patterns?: string[] } | undefined | null): string[] {
   return Array.isArray(data?.shell_deny_patterns) ? data.shell_deny_patterns : []
 }
+
+// ── Workspace file limit (ADR-068 §6) ─────────────────────────────────────────
+//
+// The workspace path guard is a DIFFERENT boundary from the kernel sandbox,
+// and the two have been routinely confused: an operator turns the sandbox
+// off, finds commands still refused, and nothing on this page names the rule
+// that refused them (UAT defect 002). The kernel sandbox decides how the
+// operating system polices a child process that has already been started; the
+// workspace limit is a check Omnipus makes in-process and earlier, over the
+// paths an agent's file tools and the text of a bash command may name.
+//
+// ── Why this is read defensively rather than off the generated type ──
+//
+// When this control was written the setting had no place in the sandbox-config
+// payload at all: it was environment-variable only (pkg/config/config.go tags
+// AgentDefaults.RestrictToWorkspace `json:"-"`), and its exposure was landing
+// in parallel. The generated zod schema is .passthrough(), so a key the SPA
+// does not know about survives response validation and arrives here intact —
+// which means this control lights up the moment a gateway starts sending it,
+// with no SPA release.
+//
+// Two spellings are accepted because the backend key was still being named
+// while this shipped: `workspace_path_guard` (the settled name — a dedicated
+// sandbox-scoped key, chosen so it can only be written through this
+// re-auth-gated endpoint) and `restrict_to_workspace` (the name of the agent
+// default it resolves into, in case the REST layer echoes that instead).
+//
+// Whichever spelling the server used on the way IN is the one written back
+// out. That is not tidiness: PUTting the other name would be accepted with a
+// 200 and silently ignored, which is precisely the "control that looks like it
+// worked and did nothing" this section exists to stop.
+const WORKSPACE_LIMIT_KEYS = ['workspace_path_guard', 'restrict_to_workspace'] as const
+type WorkspaceLimitKey = (typeof WORKSPACE_LIMIT_KEYS)[number]
+
+// The environment escape hatch outranks the saved setting on the backend
+// (OMNIPUS_AGENTS_DEFAULTS_RESTRICT_TO_WORKSPACE — the FR-001 ops hatch, kept
+// deliberately at the top of the precedence order). While it is in force a
+// saved change here would persist and change nothing at runtime, so the
+// control must not be offered. The gateway is expected to say so with this
+// flag; when it is absent the UI falls back to a standing caveat, which is the
+// most honest thing available without a signal.
+const WORKSPACE_LIMIT_ENV_OVERRIDE_KEY = 'workspace_path_guard_env_override'
+const WORKSPACE_LIMIT_ENV_VAR = 'OMNIPUS_AGENTS_DEFAULTS_RESTRICT_TO_WORKSPACE'
+
+type WorkspaceLimit = {
+  /** The exact key the server sent — the only key we send back. */
+  key: WorkspaceLimitKey
+  value: boolean
+  /** True when the environment variable is overriding the saved value. */
+  envOverride: boolean
+}
+
+// undefined means "this gateway does not report the setting" — NOT "off". A
+// non-boolean (null, a string, a number) is treated the same way: a value the
+// server never actually asserted must never be rendered as a chosen one.
+function readWorkspaceLimit(data: SandboxConfigResponse | undefined | null): WorkspaceLimit | undefined {
+  const raw = data as unknown as Record<string, unknown> | undefined | null
+  if (!raw) return undefined
+  for (const key of WORKSPACE_LIMIT_KEYS) {
+    const value = raw[key]
+    if (typeof value === 'boolean') {
+      return { key, value, envOverride: raw[WORKSPACE_LIMIT_ENV_OVERRIDE_KEY] === true }
+    }
+  }
+  return undefined
+}
+
+// PUT body for a sandbox-config mutation. SandboxConfigUpdate (generated from
+// contracts/components/schemas/SandboxConfigUpdate.yaml) does not carry either
+// workspace-limit spelling yet; the intersection keeps every other field
+// checked against the real contract while letting this one through until the
+// contract catches up.
+type SandboxUpdateBody = Parameters<typeof updateSandboxConfig>[0] &
+  Partial<Record<WorkspaceLimitKey, boolean>>
 
 // ── Status dot ────────────────────────────────────────────────────────────────
 
@@ -315,8 +389,16 @@ export function SandboxSection(): React.ReactElement {
   // kernel enforces at all, the model decides WHAT it enforces for reads and
   // execution. Both are restart-gated, and neither changes what may be written.
   const [currentFsModel, setCurrentFsModel] = useState<'confined' | 'open' | undefined>()
+  // Workspace file limit — see readWorkspaceLimit above. Held as
+  // `boolean | undefined` on purpose: undefined is not "off", it is "this
+  // gateway never told us", and the two render very differently.
+  const [currentWorkspaceLimit, setCurrentWorkspaceLimit] = useState<boolean | undefined>()
   const savedMode = configData?.mode as 'enforce' | 'permissive' | 'off' | undefined
   const savedFsModel = configData?.filesystem_model as 'confined' | 'open' | undefined
+  const serverWorkspaceLimit = readWorkspaceLimit(configData)
+  const savedWorkspaceLimit = serverWorkspaceLimit?.value
+  const workspaceLimitSupported = serverWorkspaceLimit !== undefined
+  const workspaceLimitEnvLocked = serverWorkspaceLimit?.envOverride === true
 
   const restartPending = !!(
     configData &&
@@ -387,6 +469,7 @@ export function SandboxSection(): React.ReactElement {
     // Sync mode
     setCurrentMode(configData.mode as 'enforce' | 'permissive' | 'off' | undefined)
     setCurrentFsModel(configData.filesystem_model as 'confined' | 'open' | undefined)
+    setCurrentWorkspaceLimit(readWorkspaceLimit(configData)?.value)
   }, [configData])
 
   // ── Mode save mutation ────────────────────────────────────────────────────
@@ -444,6 +527,34 @@ export function SandboxSection(): React.ReactElement {
       setErrorMessage(msg)
       addToast({ message: msg, variant: 'error' })
       setCurrentFsModel(savedFsModel)
+    },
+  })
+
+  // ── Workspace file limit save mutation ────────────────────────────────────
+  // Same contract as doSaveFsModel: optimistic in the handler, reverted here on
+  // both failure paths. The revert is mandatory, not tidiness — the handler's
+  // equality guard means a stuck optimistic value can never be re-submitted by
+  // clicking the same radio again, so without it there is no recovery path.
+  const { mutate: doSaveWorkspaceLimit } = useMutation({
+    mutationFn: (body: SandboxUpdateBody) =>
+      runGatedSandbox((token) => updateSandboxConfig(body, token)),
+    onMutate: () => setSaveState('saving'),
+    onSuccess: (saved) => {
+      setSaveState('saved')
+      queryClient.setQueryData(['sandbox-config'], saved)
+      void queryClient.invalidateQueries({ queryKey: ['sandbox-config'] })
+    },
+    onError: (err: Error) => {
+      if (isReAuthCancelled(err)) {
+        setSaveState('idle')
+        setCurrentWorkspaceLimit(savedWorkspaceLimit)
+        return
+      }
+      setSaveState('error')
+      const msg = getErrorMessage(err, 'Save failed')
+      setErrorMessage(msg)
+      addToast({ message: msg, variant: 'error' })
+      setCurrentWorkspaceLimit(savedWorkspaceLimit)
     },
   })
 
@@ -629,6 +740,19 @@ export function SandboxSection(): React.ReactElement {
     doSaveFsModel({ filesystem_model: model })
   }
 
+  function handleWorkspaceLimitChange(next: boolean) {
+    // Belt and braces: the radios are not rendered at all when the gateway
+    // does not report the setting, or when the environment variable is
+    // overriding it, so this can only fire from a gateway that will honour
+    // it. Guarding on the server value here as well means no future refactor
+    // can turn this into a control that PUTs a key the server ignores.
+    if (!serverWorkspaceLimit || workspaceLimitEnvLocked) return
+    if (next === currentWorkspaceLimit) return
+    setCurrentWorkspaceLimit(next)
+    // The key is echoed back, never hardcoded — see WORKSPACE_LIMIT_KEYS.
+    doSaveWorkspaceLimit({ [serverWorkspaceLimit.key]: next } as SandboxUpdateBody)
+  }
+
   function handleModeChange(mode: 'enforce' | 'permissive' | 'off') {
     if (mode === currentMode) return
 
@@ -712,11 +836,51 @@ const FILESYSTEM_MODELS: { value: 'confined' | 'open'; label: string; desc: stri
   },
 ]
 
+/**
+ * The three kernel-sandbox modes, described by CONSEQUENCE and each one
+ * explicit about the boundary it does NOT cover.
+ *
+ * The previous copy named only the mechanism ("Landlock + seccomp denies
+ * violating syscalls"), which is how this switch came to be read as the single
+ * master control over what an agent may touch: operators turned it off, stayed
+ * blocked by the shell workspace limit below, and had nothing on the page to
+ * explain the contradiction (UAT defect 002, ADR-068 §6).
+ */
 const SANDBOX_MODES: Array<{ value: 'enforce' | 'permissive' | 'off'; label: string; desc: string }> = [
-    { value: 'enforce', label: 'Enforce', desc: 'Kernel-level Landlock + seccomp denies violating syscalls.' },
-    { value: 'permissive', label: 'Permissive', desc: 'Policy computed and logged; violations not blocked (audit-only).' },
-    { value: 'off', label: 'Off', desc: 'Sandbox disabled. Development only; production banner will fire.' },
+    {
+      value: 'enforce',
+      label: 'Enforce',
+      desc: 'The operating system itself stops a program that reaches outside what you have allowed \u2014 even a program that ignores Omnipus\u2019s own rules. Uses Linux kernel Landlock and seccomp.',
+    },
+    {
+      value: 'permissive',
+      label: 'Permissive',
+      desc: 'The same policy is worked out and every violation is written to the audit log, but nothing is blocked. Useful for seeing what enforcing would break before you commit to it.',
+    },
+    {
+      value: 'off',
+      label: 'Off',
+      desc: 'No operating-system protection: a program an agent starts can reach whatever your own account can reach. Development only \u2014 the production warning banner will fire. This does not switch off the shell workspace limit or the blocked command patterns below; those are separate rules with their own settings.',
+    },
   ]
+
+/**
+ * The two postures of the shell workspace limit (ADR-068 §6), deliberately
+ * described without the sandbox's vocabulary. The entire point of the control
+ * is that an operator can tell it apart from the kernel switch above it.
+ */
+const WORKSPACE_LIMIT_OPTIONS: Array<{ value: 'on' | 'off'; label: string; desc: string }> = [
+  {
+    value: 'on',
+    label: 'Confined to the working folder',
+    desc: 'A shell command naming a file outside the agent\u2019s working folder is refused before it runs. Folders you have mounted into the workspace count as inside.',
+  },
+  {
+    value: 'off',
+    label: 'Any path on this machine',
+    desc: 'Shell commands may name files anywhere your own account can reach. Blocked command patterns and the process sandbox above still apply \u2014 this setting lifts neither.',
+  },
+]
 
   const effectiveMode = currentMode ?? savedMode
 
@@ -837,6 +1001,11 @@ const SANDBOX_MODES: Array<{ value: 'enforce' | 'permissive' | 'off'; label: str
           {/* ── Mode radio — top of config section ── */}
           <div className="space-y-2">
             <p className="text-xs font-semibold text-[var(--color-secondary)]">Sandbox mode</p>
+            <p className="text-xs text-[var(--color-muted)] leading-snug">
+              Whether the operating system polices the programs an agent starts. It does not decide
+              which files a shell command may name &mdash; that is the shell workspace limit further
+              down, which has its own separate setting.
+            </p>
 
             {/* Restart pending notice */}
             {restartPending && (
@@ -944,6 +1113,95 @@ const SANDBOX_MODES: Array<{ value: 'enforce' | 'permissive' | 'off'; label: str
                 <p className="text-xs text-[var(--color-muted)]">
                   Takes effect after a restart — the kernel profile is built once at startup.
                 </p>
+              </fieldset>
+            )}
+          </div>
+
+          {/* ── Shell workspace limit (ADR-068 §6) ──
+              Its own block, not another fieldset inside the sandbox-mode
+              group, because the defect being fixed is precisely that operators
+              could not tell the two boundaries apart. It gets a rule above it,
+              its own heading, and copy that names the difference in the first
+              sentence.
+
+              When the gateway does not report restrict_to_workspace the block
+              renders an explanation instead of radios. Rendering a disabled
+              pair of radios was rejected: with nothing to check they would
+              have had to show an invented default, and a control showing a
+              value the server never sent is exactly the lie this section is
+              here to stop telling. */}
+          <div
+            className="space-y-2 border-t border-[var(--color-border)] pt-4"
+            data-testid="workspace-limit-section"
+          >
+            <p className="text-xs font-semibold text-[var(--color-secondary)]">Shell workspace limit</p>
+            <p className="text-xs text-[var(--color-muted)] leading-snug">
+              A different boundary from the sandbox above, with its own setting. The sandbox is an
+              operating-system protection wrapped around the programs an agent starts. This is a
+              check Omnipus makes on the command text itself, before anything starts: it decides
+              whether a shell command may name a file outside the agent&rsquo;s working folder.
+              Turning the sandbox off does not turn this off.
+            </p>
+
+            {configLoading ? (
+              <div className="space-y-2 animate-pulse">
+                <div className="h-3 w-3/4 rounded bg-[var(--color-border)]" />
+                <div className="h-3 w-1/2 rounded bg-[var(--color-border)]" />
+              </div>
+            ) : !workspaceLimitSupported ? (
+              <div
+                className="flex items-start gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-2.5"
+                role="status"
+                data-testid="workspace-limit-unavailable"
+              >
+                <Warning
+                  size={14}
+                  weight="fill"
+                  style={{ color: 'var(--color-muted)' }}
+                  className="mt-0.5 shrink-0"
+                />
+                <p className="text-xs leading-relaxed text-[var(--color-secondary)]">
+                  <span className="font-semibold">Cannot be changed from here.</span> This gateway
+                  does not report the workspace limit, so Omnipus cannot show you whether it is on
+                  or off, and a setting here would have no effect. On this version it is set only by
+                  the{' '}
+                  <code className="font-mono break-all">{WORKSPACE_LIMIT_ENV_VAR}</code>{' '}
+                  environment variable, which is read once when the gateway starts. Upgrade the
+                  gateway to manage it here.
+                </p>
+              </div>
+            ) : (
+              <fieldset className="space-y-2">
+                <legend className="sr-only">Shell workspace limit</legend>
+                {WORKSPACE_LIMIT_OPTIONS.map((o) => {
+                  const selected = currentWorkspaceLimit === (o.value === 'on')
+                  return (
+                    <label
+                      key={o.value}
+                      className={`flex items-start gap-2 p-2 rounded-md border cursor-pointer transition-colors ${
+                        selected
+                          ? 'border-[var(--color-accent)]/50 bg-[var(--color-accent)]/5'
+                          : 'border-[var(--color-border)] hover:bg-[var(--color-surface-2)]'
+                      }`}
+                    >
+                      <input
+                        tabIndex={0}
+                        type="radio"
+                        name="workspace-limit"
+                        value={o.value}
+                        checked={selected}
+                        onChange={() => handleWorkspaceLimitChange(o.value === 'on')}
+                        className="mt-0.5 accent-[var(--color-accent)]"
+                        aria-label={`Shell workspace limit: ${o.label}`}
+                        data-testid={`sandbox-workspace-limit-${o.value}`}
+                      />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-[var(--color-secondary)]">{o.label}</p>
+                        <p className="text-xs text-[var(--color-muted)] leading-snug">{o.desc}</p>
+                      </div>
+                    </label>
+                  )
+                })}
               </fieldset>
             )}
           </div>
