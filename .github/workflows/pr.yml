@@ -80,6 +80,13 @@ jobs:
     # closed into a silent skip. This is also what ADR-067 §4.3 requires for
     # a release-branch push ("merge into a release branch always runs
     # unscoped").
+    #
+    # That fail-open claim holds ONLY because both dorny/paths-filter steps
+    # below carry `continue-on-error: true`. It was false before they did:
+    # a filter-step failure failed this JOB, and every consumer gates on
+    # `success()` / `needs.changes.result == 'success'`, so the whole
+    # workflow skipped while "Decide" cheerfully wrote code=true to an
+    # output nobody could reach. Do not remove those two lines.
     runs-on: ubuntu-latest
     outputs:
       code: ${{ steps.decide.outputs.code }}
@@ -94,6 +101,22 @@ jobs:
         # "Decide" below applies.
         id: filter
         if: github.event_name == 'pull_request'
+        # REQUIRED for the fail-open contract this job documents to actually
+        # hold at the JOB level. Without it, a dorny/paths-filter failure
+        # (GitHub API 5xx, secondary rate limit, token scope) fails this STEP,
+        # which fails the whole `changes` job. "Decide" below still runs
+        # (`if: always()`) and still writes code/go/spa = 'true', but that
+        # output reaches nobody: every consumer additionally gates on
+        # `success()` or `needs.changes.result == 'success'`, so the entire
+        # workflow silently skips — fail CLOSED, the exact opposite of the
+        # documented behaviour. `continue-on-error` keeps the job green so the
+        # fail-open default is load-bearing.
+        #
+        # It does NOT weaken the check below: `steps.<id>.outcome` is the
+        # result BEFORE continue-on-error is applied (`conclusion` is the one
+        # after), so a failed filter still reports outcome == 'failure' and
+        # "Decide" correctly falls through to the 'true' branch.
+        continue-on-error: true
         uses: dorny/paths-filter@v4
         with:
           # 'every' quantifier + all-negated patterns: a changed file only
@@ -122,6 +145,9 @@ jobs:
         # rationale as the step above.
         id: lang_filter
         if: github.event_name == 'pull_request'
+        # Same fail-open requirement as the step above — see its comment for
+        # why this is load-bearing rather than cosmetic.
+        continue-on-error: true
         uses: dorny/paths-filter@v4
         with:
           filters: |
@@ -133,8 +159,24 @@ jobs:
               - '.golangci.yaml'
               - 'contracts/**'
               - '.github/**'
+              # scripts/** is force-full for the same reason .github/** is: a
+              # script in there decides WHAT the Go gates run.
+              # scripts/race-packages.sh is the SOLE source of the -race
+              # package list, so a PR editing only that file used to get
+              # go=false, skip `test` entirely, and gut the race surface with
+              # nothing red. A change to a gate's own definition must never be
+              # filtered against a stale copy of that definition.
+              - 'scripts/**'
             spa:
               - 'src/**'
+              # tests/** is SPA source too: eslint.config.js lints src/ AND
+              # tests/ (tests/ is not in its `ignores` list), and
+              # vite.config.ts's vitest `include` is
+              # ['src/**/*.test.{ts,tsx}', 'tests/**/*.test.{ts,tsx}'].
+              # Without this line a PR touching only tests/ set spa=false, so
+              # `lint-spa` and `vitest` both skipped and eslint violations
+              # plus broken tests/** unit tests merged green.
+              - 'tests/**'
               - 'public/**'
               - 'index.html'
               - 'package.json'
@@ -146,6 +188,11 @@ jobs:
               - 'Makefile'
               - 'contracts/**'
               - '.github/**'
+              # Same force-full rationale as the `go` filter above:
+              # scripts/check-vitest-coverage.mjs is what decides whether the
+              # vitest matrix actually covers every test file, so it must not
+              # be changeable without the SPA gates running.
+              - 'scripts/**'
 
       - name: Decide whether the full job set must run
         id: decide
@@ -225,11 +272,26 @@ jobs:
         run: tar -cf node_modules.tar node_modules
 
       - name: Upload node_modules artifact
+        # The name is keyed on run_id ONLY — deliberately NOT run_id +
+        # run_attempt. "Re-run failed jobs" increments run_attempt but does
+        # NOT re-run jobs that already succeeded, so this job does not run
+        # again and no attempt-2 artifact is ever produced. With run_attempt
+        # in the name, all 11 consuming jobs then died at their download step
+        # ("Unable to find an artifact with the name ..."), i.e. every partial
+        # re-run failed 11 jobs for an infra reason unrelated to the code.
+        # An artifact belongs to the RUN, not the attempt, so a run_id-only
+        # name is still visible to later attempts of the same run.
+        #
+        # `overwrite: true` is the other half: on "Re-run ALL jobs" this job
+        # DOES run again, and re-uploading the same name into the same run is
+        # a 409 conflict without it. Together the two make both re-run modes
+        # work.
         uses: actions/upload-artifact@v7
         with:
-          name: node-modules-${{ github.run_id }}-${{ github.run_attempt }}
+          name: node-modules-${{ github.run_id }}
           path: node_modules.tar
           retention-days: 1
+          overwrite: true
 
   e2e-shard-check:
     name: E2E shard plan check
@@ -433,7 +495,7 @@ jobs:
       - name: Download node_modules artifact
         uses: actions/download-artifact@v7
         with:
-          name: node-modules-${{ github.run_id }}-${{ github.run_attempt }}
+          name: node-modules-${{ github.run_id }}
 
       - name: Extract node_modules
         run: tar -xf node_modules.tar
@@ -472,7 +534,7 @@ jobs:
       - name: Download node_modules artifact
         uses: actions/download-artifact@v7
         with:
-          name: node-modules-${{ github.run_id }}-${{ github.run_attempt }}
+          name: node-modules-${{ github.run_id }}
 
       - name: Extract node_modules
         run: tar -xf node_modules.tar
@@ -492,9 +554,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Group A: lib, store, routes, test — fast pure-logic units
+          # Group A: lib, store, routes, test — fast pure-logic units.
+          # tests/e2e/fixtures/ belongs here despite living outside src/:
+          # vite.config.ts's vitest `include` covers
+          # 'tests/**/*.test.{ts,tsx}' as well as src/, and the pure-logic
+          # unit tests for the Playwright fixtures (selectors.test.ts) are
+          # vitest tests, not Playwright specs — vitest's include matches
+          # *.test.ts only, so the sibling *.spec.ts Playwright files are not
+          # picked up by this pattern. It ran in NO shard until 2026-08-23.
           - group: lib-store
-            patterns: "src/lib/ src/store/ src/routes/ src/test/"
+            patterns: "src/lib/ src/store/ src/routes/ src/test/ tests/e2e/fixtures/"
           # Group B: chat components — heaviest component group
           - group: components-chat
             patterns: "src/components/chat/"
@@ -526,7 +595,7 @@ jobs:
       - name: Download node_modules artifact
         uses: actions/download-artifact@v7
         with:
-          name: node-modules-${{ github.run_id }}-${{ github.run_attempt }}
+          name: node-modules-${{ github.run_id }}
 
       - name: Extract node_modules
         run: tar -xf node_modules.tar
@@ -659,7 +728,7 @@ jobs:
       - name: Download node_modules artifact
         uses: actions/download-artifact@v7
         with:
-          name: node-modules-${{ github.run_id }}-${{ github.run_attempt }}
+          name: node-modules-${{ github.run_id }}
 
       - name: Extract node_modules
         run: tar -xf node_modules.tar
@@ -720,7 +789,7 @@ jobs:
       - name: Download node_modules artifact
         uses: actions/download-artifact@v7
         with:
-          name: node-modules-${{ github.run_id }}-${{ github.run_attempt }}
+          name: node-modules-${{ github.run_id }}
 
       - name: Extract node_modules
         run: tar -xf node_modules.tar
@@ -782,9 +851,23 @@ jobs:
     # explicit per-need checks below be the ONLY gate) without also making
     # this job eligible to start while the run itself is being cancelled,
     # which bare `always()` would.
+    #
+    # `setup` is listed as a need and checked explicitly. It is NOT redundant
+    # bookkeeping: `typecheck`, `lint-spa` and `lint` all consume setup's
+    # node_modules artifact AND are all explicitly tolerated as 'skipped'
+    # above, so a broken `npm ci` skips all three and this job tolerates all
+    # three. The only thing that used to stop a failed setup from clearing the
+    # whole fast tier was `verify-contracts` happening to also consume the
+    # artifact while NOT being tolerant of a skip — one undeclared edge
+    # carrying the entire cascade. Stated directly here instead.
+    # `setup` is gated on `code == 'true'` exactly like this job, so whenever
+    # this job is eligible at all setup has really run: no 'skipped'
+    # tolerance is wanted or correct for it. Same shape the `playwright` job
+    # already uses.
     runs-on: ubuntu-latest
     needs:
       - changes
+      - setup
       - e2e-shard-check
       - cli-verb-guard
       - typecheck
@@ -797,6 +880,7 @@ jobs:
       !cancelled() &&
       needs.changes.outputs.code == 'true' &&
       needs.changes.result == 'success' &&
+      needs.setup.result == 'success' &&
       needs.e2e-shard-check.result == 'success' &&
       needs.cli-verb-guard.result == 'success' &&
       (needs.typecheck.result == 'success' || needs.typecheck.result == 'skipped') &&
@@ -840,7 +924,7 @@ jobs:
       - name: Download node_modules artifact
         uses: actions/download-artifact@v7
         with:
-          name: node-modules-${{ github.run_id }}-${{ github.run_attempt }}
+          name: node-modules-${{ github.run_id }}
 
       - name: Extract node_modules
         run: tar -xf node_modules.tar
@@ -898,7 +982,7 @@ jobs:
       - name: Download node_modules artifact
         uses: actions/download-artifact@v7
         with:
-          name: node-modules-${{ github.run_id }}-${{ github.run_attempt }}
+          name: node-modules-${{ github.run_id }}
 
       - name: Extract node_modules
         run: tar -xf node_modules.tar
@@ -976,7 +1060,7 @@ jobs:
       - name: Download node_modules artifact
         uses: actions/download-artifact@v7
         with:
-          name: node-modules-${{ github.run_id }}-${{ github.run_attempt }}
+          name: node-modules-${{ github.run_id }}
 
       - name: Extract node_modules
         run: tar -xf node_modules.tar
@@ -1280,7 +1364,7 @@ jobs:
       - name: Download node_modules artifact
         uses: actions/download-artifact@v7
         with:
-          name: node-modules-${{ github.run_id }}-${{ github.run_attempt }}
+          name: node-modules-${{ github.run_id }}
       - name: Extract node_modules
         run: tar -xf node_modules.tar
       - name: Build SPA
@@ -1355,7 +1439,7 @@ jobs:
       - name: Download node_modules artifact
         uses: actions/download-artifact@v7
         with:
-          name: node-modules-${{ github.run_id }}-${{ github.run_attempt }}
+          name: node-modules-${{ github.run_id }}
 
       - name: Extract node_modules
         run: tar -xf node_modules.tar
@@ -1480,7 +1564,7 @@ jobs:
       - name: Download node_modules artifact
         uses: actions/download-artifact@v7
         with:
-          name: node-modules-${{ github.run_id }}-${{ github.run_attempt }}
+          name: node-modules-${{ github.run_id }}
 
       - name: Extract node_modules
         run: tar -xf node_modules.tar

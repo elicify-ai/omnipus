@@ -13,6 +13,17 @@
 // A hand-maintained allowlist drifts the moment someone adds a directory. This
 // makes coverage an enforced property instead of a convention: add a new test
 // directory without adding it to the matrix and CI fails with the exact list.
+//
+// The set of files this guard considers "a vitest test file" is READ FROM
+// vite.config.ts's own `include`, never hardcoded here. It used to be
+// hardcoded as `f.startsWith('src/')`, and that reproduced the very defect
+// class the guard exists to catch: vite.config.ts's include is
+// ['src/**/*.test.{ts,tsx}', 'tests/**/*.test.{ts,tsx}'], every vitest matrix
+// pattern also begins with 'src/', so tests/e2e/fixtures/selectors.test.ts —
+// a real vitest test file with 3 real tests — was executed by NO shard on any
+// PR while this guard printed "OK: all 427 SPA test files are covered". A
+// second hardcoded copy of the test-file definition is exactly the drift this
+// script was written to make impossible.
 import { readFileSync } from 'node:fs'
 import { execSync } from 'node:child_process'
 
@@ -38,12 +49,71 @@ if (patterns.length === 0) {
   process.exit(1)
 }
 
+// --- What counts as a vitest test file: read vite.config.ts's own `include` ---
+//
+// Single source of truth. If vite's include grows a directory, this guard
+// starts policing it on the same commit, with no second list to remember.
+const viteCfg = readFileSync('vite.config.ts', 'utf8')
+const includeMatch = viteCfg.match(/^\s*include:\s*\[([^\]]*)\]/m)
+if (!includeMatch) {
+  console.error("FAIL: could not find vitest's `include:` array in vite.config.ts.")
+  console.error('This guard mirrors that list; if it moved or was renamed, update this')
+  console.error('guard deliberately rather than letting it fall back to a guess.')
+  process.exit(1)
+}
+const includeGlobs = [...includeMatch[1].matchAll(/['"]([^'"]+)['"]/g)].map((m) => m[1])
+if (includeGlobs.length === 0) {
+  console.error('FAIL: vitest `include:` in vite.config.ts parsed to zero globs.')
+  process.exit(1)
+}
+
+// Minimal glob → RegExp for the shapes vitest's include actually uses:
+// `**` (any path segments), `*` (any run of non-slash chars), and `{a,b}`
+// alternation. Anything else is escaped literally.
+function globToRegExp(glob) {
+  let out = ''
+  for (let i = 0; i < glob.length; i++) {
+    const c = glob[i]
+    if (c === '*') {
+      if (glob[i + 1] === '*') {
+        // `**/` swallows the slash so it can also match zero segments.
+        if (glob[i + 2] === '/') {
+          out += '(?:[^/]+/)*'
+          i += 2
+        } else {
+          out += '.*'
+          i += 1
+        }
+      } else {
+        out += '[^/]*'
+      }
+    } else if (c === '{') {
+      const close = glob.indexOf('}', i)
+      if (close === -1) {
+        out += '\\{'
+      } else {
+        const alts = glob.slice(i + 1, close).split(',')
+        out += `(?:${alts.map((a) => a.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})`
+        i = close
+      }
+    } else {
+      out += c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    }
+  }
+  return new RegExp(`^${out}$`)
+}
+
+const includeRes = includeGlobs.map(globToRegExp)
+
 const files = execSync('git ls-files', { encoding: 'utf8' })
   .split('\n')
-  .filter((f) => f.startsWith('src/') && /\.(test|spec)\.[cm]?[jt]sx?$/.test(f))
+  .filter((f) => includeRes.some((re) => re.test(f)))
 
 if (files.length === 0) {
-  console.error('FAIL: found no SPA test files at all — the glob is wrong, or tests vanished.')
+  console.error(
+    `FAIL: vite.config.ts's include (${includeGlobs.join(', ')}) matched no tracked file — ` +
+      'the glob translation is wrong, or the tests vanished.',
+  )
   process.exit(1)
 }
 
