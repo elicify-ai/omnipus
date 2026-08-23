@@ -11,6 +11,9 @@
 //   - tools/list request → {tools: [{name:"stub.echo",...},{name:"stub.noop",...}]}
 //   - tools/call stub.echo → {content: [{type:"text",text:<echo of 'message' arg>}]}
 //   - tools/call stub.noop → {content: [{type:"text",text:"noop"}]}
+//   - tools/call stub.blob → a text result padded so the encoded JSON-RPC
+//     response line is EXACTLY 'bytes' bytes long (excluding the trailing
+//     newline). Used by the ADR-066 D10 ingest-bound tests.
 //   - All other methods → error -32601 (method not found)
 //
 // Build:
@@ -28,6 +31,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 )
 
 // jsonrpcRequest is the minimal shape of an incoming JSON-RPC 2.0 request.
@@ -106,6 +110,17 @@ func main() {
 						},
 					},
 					{
+						"name":        "stub.blob",
+						"description": "Returns a text result whose encoded response line is exactly 'bytes' bytes.",
+						"inputSchema": map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"bytes": map[string]any{"type": "integer"},
+							},
+							"required": []string{"bytes"},
+						},
+					},
+					{
 						"name":        "stub.noop",
 						"description": "Returns a fixed 'noop' response.",
 						"inputSchema": map[string]any{
@@ -143,6 +158,9 @@ func main() {
 						{"type": "text", "text": "noop"},
 					},
 				})
+			case "stub.blob":
+				want, _ := params.Arguments["bytes"].(float64)
+				writeBlob(req.ID, int(want))
 			default:
 				writeError(enc, req.ID, -32601,
 					fmt.Sprintf("tool not found: %q", params.Name))
@@ -176,4 +194,31 @@ func writeError(enc *json.Encoder, id json.RawMessage, code int, msg string) {
 		Error:   &jsonrpcError{Code: code, Message: msg},
 	}
 	_ = enc.Encode(resp)
+}
+
+// writeBlob writes a tools/call result whose serialized JSON-RPC line is
+// exactly want bytes long (the newline delimiter is extra). The text payload
+// is unescaped ASCII so its JSON length equals its byte length; the envelope
+// overhead is measured once with an empty payload and subtracted.
+func writeBlob(id json.RawMessage, want int) {
+	build := func(text string) []byte {
+		b, _ := json.Marshal(jsonrpcResponse{
+			JSONRPC: "2.0",
+			ID:      id,
+			Result: map[string]any{
+				"content": []map[string]any{{"type": "text", "text": text}},
+			},
+		})
+		return b
+	}
+	overhead := len(build(""))
+	if want < overhead {
+		want = overhead
+	}
+	line := build(strings.Repeat("a", want-overhead))
+	if len(line) != want {
+		fmt.Fprintf(os.Stderr, "stub_mcp_server: blob size mismatch: got %d want %d\n", len(line), want)
+		os.Exit(1)
+	}
+	_, _ = os.Stdout.Write(append(line, '\n'))
 }
