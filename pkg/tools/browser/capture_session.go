@@ -188,7 +188,7 @@ type ingestLossNotifier interface {
 
 // bitrateTargetNotifier is the optional RelaySession capability that reports a
 // congestion target derived from the VIEWER leg's RTCP receiver reports
-// (ADR-062 Finding 2). Detected by type assertion for the same reason as the
+// (ADR-069 Finding 2). Detected by type assertion for the same reason as the
 // interfaces above: the lite stub and the test fakes do not implement it.
 type bitrateTargetNotifier interface {
 	SetOnBitrateTarget(fn func(bps int))
@@ -452,7 +452,7 @@ func newCaptureSessionWithDeps(
 	if bt, ok := relay.(bitrateTargetNotifier); ok {
 		// Close the congestion loop: the viewer leg measures the real path,
 		// the encoder is the only thing that can act on it, and this is the
-		// wire between them (ADR-062 Finding 2).
+		// wire between them (ADR-069 Finding 2).
 		bt.SetOnBitrateTarget(cs.SetMaxBitrate)
 	}
 	return cs
@@ -1311,7 +1311,7 @@ func (cs *CaptureSession) CaptureScale() float64 {
 // keeps the guarantee and drops the cost, so the warm capture stays useful for
 // a panel opened long after boot.
 // SetMaxBitrate pushes a viewer-derived bitrate ceiling to the encoder
-// (ADR-062 Finding 2). The value comes from the viewer leg's own RTCP
+// (ADR-069 Finding 2). The value comes from the viewer leg's own RTCP
 // receiver reports; before this existed the encoder only ever measured the
 // loopback ingest hop and happily encoded 24 Mbps for a link delivering 355
 // kbps.

@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// ADR-062 tier 3 was BLOCKED on two findings in adversarial review. These
+// ADR-069 tier 3 was BLOCKED on two findings in adversarial review. These
 // tests are the two findings, made non-vacuous.
 
 // CORRECTION 2: pion's DefaultPermissionHandler admits every peer, which turns

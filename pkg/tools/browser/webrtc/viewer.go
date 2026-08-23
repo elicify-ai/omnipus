@@ -489,7 +489,7 @@ func (s *Session) drainViewerRTCP(prefix string, sender *webrtc.RTPSender) {
 			case *rtcp.PictureLossIndication, *rtcp.FullIntraRequest:
 				s.forwardPLIThrottled(prefix)
 			case *rtcp.ReceiverReport:
-				// ADR-062 Finding 2: this is the only place the gateway ever
+				// ADR-069 Finding 2: this is the only place the gateway ever
 				// learns what the VIEWER's link is actually doing. It used to
 				// be dropped on the floor, so the encoder congestion-
 				// controlled against the loopback ingest hop instead. Take the

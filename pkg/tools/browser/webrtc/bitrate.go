@@ -2,7 +2,7 @@ package webrtc
 
 import "time"
 
-// ADR-062 Finding 2: the encoder congestion-controls against the WRONG link.
+// ADR-069 Finding 2: the encoder congestion-controls against the WRONG link.
 //
 // The capture page's PeerConnection is loopback (gateway <-> its own headless
 // Chrome): infinite bandwidth, zero loss. Chrome therefore encodes for that

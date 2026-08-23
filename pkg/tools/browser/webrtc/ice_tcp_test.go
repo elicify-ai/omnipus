@@ -57,7 +57,7 @@ func TestSession_ViewerAnswerAdvertisesTCPCandidate(t *testing.T) {
 		}
 	}
 	require.True(t, tcpPassive,
-		"ADR-062 tier 2: a configured ICE-TCP listener must appear as a passive tcp candidate; got %v", cands)
+		"ADR-069 tier 2: a configured ICE-TCP listener must appear as a passive tcp candidate; got %v", cands)
 }
 
 // TestSession_TCPOnlyWithStun_StillNegotiates is the regression guard for the

@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// ADR-062 Finding 2. Before this controller existed the gateway dropped every
+// ADR-069 Finding 2. Before this controller existed the gateway dropped every
 // RTCP receiver report on the floor, so the encoder congestion-controlled
 // against the loopback ingest hop and happily produced 24 Mbps for a viewer
 // path measured at 355 kbps with 27.6% loss.

@@ -1,6 +1,15 @@
-# ADR-062: Universal live-browser connectivity — embedded TURN, no external service
+# ADR-069 — Universal live-browser connectivity — embedded TURN, no external service
 
 - **Status:** **Proposed — 2026-08-15** (under adversarial review; see "Open questions").
+- **Renumbered 2026-08-23:** this document was filed as **ADR-062**, a number
+  [ADR-062 (reads/exec open; writes confined)](ADR-062-filesystem-read-exec-model-inversion.md)
+  already held since 2026-08-13. Two ADRs sharing a number is not cosmetic here:
+  bare "ADR-062" citations existed in both `pkg/tools/browser/*` (meaning this
+  document) and `pkg/tools/shell.go`, `CLAUDE.md`, and the file-access specs
+  (meaning the other), so the same string resolved to two different decisions
+  depending on where you read it. The Accepted, widely-referenced filesystem ADR
+  keeps 062; this one moves to 069 and its 25 in-code citations were updated
+  with it. Older git history and any external link still say ADR-062.
 - **Deciders:** Daniel Piatkowski (operator). Direction stated 2026-08-15: connectivity that
   works universally, no external provider, no additional configuration for the user; and the
   closing constraint on scope — *"if the normal web page cannot be reached, no browser is
@@ -187,7 +196,7 @@ ADR introduces:
 
 The server also offered `srflx` candidates on ephemeral ports
 (`216.246.119.120:58967`, `[2605:4c40:119:f110::1192]:55212`). Those are the
-only candidates the pre-ADR-062 build could offer, and neither was selected —
+only candidates the pre-ADR-069 build could offer, and neither was selected —
 Fly routes nothing to them. That is the failure this tier fixes, and the
 candidate that won is the one the fix adds.
 

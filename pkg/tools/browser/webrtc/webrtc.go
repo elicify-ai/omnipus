@@ -70,7 +70,7 @@ type Config struct {
 	StunServer string
 
 	// MediaConn is a SHARED, already-bound UDP socket that every viewer leg
-	// multiplexes over (ADR-062 tier 1). nil keeps the pre-ADR-062
+	// multiplexes over (ADR-069 tier 1). nil keeps the pre-ADR-069
 	// behaviour: an ephemeral port per session, which only ever works when
 	// the viewer can reach the gateway directly (same host, or an open LAN).
 	//
@@ -94,13 +94,13 @@ type Config struct {
 	MediaConn net.PacketConn
 
 	// MediaTCP is a SHARED, already-bound TCP listener for ICE-TCP
-	// (ADR-062 tier 2). nil keeps UDP-only. Same sharing rule as MediaConn:
+	// (ADR-069 tier 2). nil keeps UDP-only. Same sharing rule as MediaConn:
 	// one gateway-owned listener, muxed by ufrag, because a Session is per-agent.
 	// Used when the viewer's network drops raw UDP (VPN system extensions).
 	MediaTCP net.Listener
 
 	// PublicIPs are addresses advertised to VIEWERS as media candidates
-	// (ADR-062 tier 1). Applied to the viewer leg ONLY -- see
+	// (ADR-069 tier 1). Applied to the viewer leg ONLY -- see
 	// Session.apiViewer. On a hosted box
 	// the socket binds a private address (Fly: 172.19.x.x) that no viewer can
 	// route to; without this the gateway advertises only unreachable private
@@ -108,7 +108,7 @@ type Config struct {
 	// forwards.
 	//
 	// Sourced from gateway.public_url, which any operator behind a domain has
-	// already set -- deliberately NOT a new configuration key (ADR-062: no
+	// already set -- deliberately NOT a new configuration key (ADR-069: no
 	// additional configuration for the user).
 	PublicIPs []string
 }

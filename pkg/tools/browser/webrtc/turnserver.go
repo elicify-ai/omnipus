@@ -13,7 +13,7 @@ import (
 	"github.com/pion/turn/v5"
 )
 
-// ADR-062 tier 3: embedded TURN, no external service.
+// ADR-069 tier 3: embedded TURN, no external service.
 //
 // Tiers 1 and 2 both require the VIEWER to send packets directly to a port on
 // this gateway. Tier 3 is for the client that cannot: a VPN system extension

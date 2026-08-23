@@ -1,4 +1,4 @@
-// ADR-062 tier 1 — the two defects an adversarial review caught in the first
+// ADR-069 tier 1 — the two defects an adversarial review caught in the first
 // implementation, before it shipped. Both are invisible to a "does it compile"
 // or "does one viewer connect" check, and both break something that currently
 // works.
@@ -29,9 +29,9 @@ func TestSession_ViewerAndIngestLegsUseSeparateAPIs(t *testing.T) {
 	}
 }
 
-// With no ADR-062 settings the two legs may safely share one API — this pins
+// With no ADR-069 settings the two legs may safely share one API — this pins
 // that the split is driven by configuration, not unconditional overhead, and
-// that a laptop install keeps its pre-ADR-062 behaviour.
+// that a laptop install keeps its pre-ADR-069 behaviour.
 func TestSession_DefaultConfigKeepsPreADR062Behaviour(t *testing.T) {
 	s := NewSession(Config{}, nil, nil)
 	defer func() { _ = s.Close() }()

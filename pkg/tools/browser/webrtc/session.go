@@ -78,7 +78,7 @@ type Session struct {
 	onIngestLost func()
 
 	// onBitrateTarget is invoked (no lock held) when the viewer leg's own RTCP
-	// receiver reports move the congestion target. ADR-062 Finding 2: without
+	// receiver reports move the congestion target. ADR-069 Finding 2: without
 	// this the encoder only ever sees the loopback ingest hop and encodes for
 	// a link that does not exist.
 	onBitrateTarget func(bps int)
@@ -226,7 +226,7 @@ func NewSession(cfg Config, sink InputSink, logf func(string, ...any)) *Session 
 	// "lo" is present.
 	se.SetIncludeLoopbackCandidate(true)
 
-	// ADR-062 tier 1 applies to the VIEWER leg ONLY, so the settings are
+	// ADR-069 tier 1 applies to the VIEWER leg ONLY, so the settings are
 	// split in two from here on.
 	//
 	// The legs are not alike and must not share a SettingEngine. The INGEST
@@ -236,7 +236,7 @@ func NewSession(cfg Config, sink InputSink, logf func(string, ...any)) *Session 
 	// public address on the shared engine would hand the loopback encoder an
 	// address it cannot reach -- breaking capture on EVERY install,
 	// including laptops, in exchange for fixing hosted ones. (Caught in
-	// adversarial review of ADR-062 before it shipped; both legs run through
+	// adversarial review of ADR-069 before it shipped; both legs run through
 	// buildPeerConnection, which made the blast radius easy to miss.)
 	viewerSE := se
 	if cfg.MediaConn != nil {
@@ -247,7 +247,7 @@ func NewSession(cfg Config, sink InputSink, logf func(string, ...any)) *Session 
 		viewerSE.SetICEUDPMux(webrtc.NewICEUDPMux(nil, cfg.MediaConn))
 	}
 	if cfg.MediaTCP != nil {
-		// ADR-062 tier 2. Default Pion network types omit TCP entirely, so the
+		// ADR-069 tier 2. Default Pion network types omit TCP entirely, so the
 		// mux would be installed and never advertised. Widen to include TCP;
 		// deliberately KEEP both UDP families -- an earlier revision narrowed
 		// this to UDP4 only, which silently removed every IPv6 host candidate
@@ -302,7 +302,7 @@ func NewSession(cfg Config, sink InputSink, logf func(string, ...any)) *Session 
 // write fails against a closed pipe, freezing the stream on its last frame.
 // Safe to call at any time; pass nil to unregister.
 // SetOnBitrateTarget registers cb, invoked when the viewer leg's RTCP receiver
-// reports move the congestion target (ADR-062 Finding 2). The owner wires it
+// reports move the congestion target (ADR-069 Finding 2). The owner wires it
 // to a browser_capture_control{set_bitrate} push so the encoder finally
 // congestion-controls against the VIEWER's link rather than the loopback
 // ingest hop. Safe to call at any time; pass nil to unregister.
@@ -365,7 +365,7 @@ func (s *Session) nextConnID() int64 {
 // Session's STUN policy (empty Config.StunServer -> host candidates only,
 // per wave-plan decision 7).
 // buildPeerConnection builds a PC on the api the CALLER names, because the
-// two legs need different ICE settings (ADR-062): pass s.api for the loopback
+// two legs need different ICE settings (ADR-069): pass s.api for the loopback
 // ingest leg, s.apiViewer for a viewer. Making it a parameter rather than a
 // field read means a new call site has to state which leg it is, instead of
 // silently inheriting whichever engine happened to be default.
