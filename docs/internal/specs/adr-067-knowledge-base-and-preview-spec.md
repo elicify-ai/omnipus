@@ -24,8 +24,8 @@ twice each, with **server-side request logs as ground truth** rather than in-pag
 |---|---|
 | `sandbox allow-scripts` (no `allow-same-origin`) + source directives blocks **all seven** egress vectors (image, fetch, beacon, WebSocket, iframe, form, popup) | **Measured** |
 | Under that policy `document.cookie` and `localStorage` **throw `SecurityError`** — they do not return empty | **Measured.** Any test asserting "empty" is a false-green: it also passes when the page failed to load |
-| CSP `'self'` **does** match under an opaque origin | **Measured.** The ADR's original warning was wrong; the distinct-origin fallback is retired |
-| An explicit origin behaves identically to `'self'` and additionally breaks behind a reverse proxy | **Measured** |
+| CSP `'self'` **does** match under an opaque origin | **PARTLY WRONG — corrected 2026-08-23, see §10.3's amendment.** True for the header's `sandbox` *directive*, which is all the 2026-08-22 run measured. **False on WebKit once FR-005b's iframe `sandbox` ATTRIBUTE is added** — `'self'` then matches nothing and a bundle's external script and stylesheet are blocked. Chromium and Firefox are unaffected. Containment held in every cell; the defect is rendering (US-1 AS-4) |
+| An explicit origin behaves identically to `'self'` and additionally breaks behind a reverse proxy | **Half of this stands, and the halves swapped roles.** The reverse-proxy hazard is real and was re-measured: naming `127.0.0.1` while the browser reaches the same socket as `localhost` blocks subresources on **all three** engines. "Behaves identically" is now false in the one cell that matters — the explicit origin works where `'self'` does not. §10.3 therefore names **both**, and neither the distinct-origin alternative (A14) nor a second listener returns |
 | Both mechanisms are required — `window.open` escapes source directives alone; five of seven vectors escape `sandbox` alone | **Measured** |
 | Webfonts need `Access-Control-Allow-Origin`; CORS is the blocker | **Measured — Chromium only** (experiment §6A.2), with a space-advance oracle after the fixture's own oracle was found broken. **Not measured on Firefox or WebKit** — those runs were stopped. `document.fonts.status` reports `"loaded"` on failure and **must not** be used |
 | An HTML file named `.pdf` does not execute — blocked by content-type dispatch, **even with no CSP** | **Measured — Chromium only** (experiment §6A.3), with a positive control proving the detection was not blind. **Not measured on Firefox or WebKit** |
@@ -797,7 +797,7 @@ documented, stable contract.
 **Responses**
 - MV-11 A version-token mismatch returns HTTP 409 with a typed error body naming the path.
 - MV-12 A request for a knowledge base outside the caller's workspace returns an empty result set — not 403, which would confirm its existence.
-- MV-13 Every response on the preview-token path carries a `Content-Security-Policy` **byte-identical to the literal string in §10.3**; an attachment response on the authenticated Library path carries none. Asserting the string is the point — a constraint that only says "a policy is present" is satisfied by `default-src *`.
+- MV-13 Every response on the preview-token path carries a `Content-Security-Policy` **byte-identical to §10.3's template with `${GATEWAY_ORIGIN}` substituted** by that section's rules; an attachment response on the authenticated Library path carries none. Asserting the whole string is the point — a constraint that only says "a policy is present" is satisfied by `default-src *`, and one that only says "the origin appears somewhere" is satisfied by a policy that has lost `sandbox`. **The oracle reads the template out of §10.3 and substitutes; it MUST NOT degrade to a substring or `contains` check**, which is how this guarantee dies. Both substitutions are asserted: a configured origin, and the empty case collapsing to exactly the pre-amendment string with no double space.
 - MV-14 Each supported audio extension returns its specific MIME type, never `application/octet-stream`.
 - MV-15 Index directory mode 0700; index file mode 0600.
 
@@ -814,24 +814,72 @@ documented, stable contract.
 
 ---
 
-### 10.3 The measured isolation policy — the literal string
+### 10.3 The measured isolation policy — the literal template
 
 This is one header value. It is the whole of the P0 control for stage 1, reproduced verbatim
 because a nickname ("the measured shape") cannot be implemented and cannot be tested.
 
+> **AMENDED 2026-08-23 — this is now a TEMPLATE with one named placeholder, not a fixed literal.**
+> The six source directives name the gateway's origin **in addition to** `'self'`, because `'self'`
+> matches nothing inside an attribute-sandboxed WebKit iframe. Nothing else about the policy
+> changed, and the byte-for-byte contract did not weaken — it now binds the *substituted* string.
+> **The measurement, the mechanism and the decision are the amendment at the end of this section.
+> Read it before editing anything here.**
+
 **Every response on the preview-token path MUST carry exactly this `Content-Security-Policy`,
-byte for byte, whatever the file's type:**
+byte for byte, whatever the file's type, with `${GATEWAY_ORIGIN}` substituted per the table
+below:**
 
 ```
-sandbox allow-scripts; default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; media-src 'self'; frame-src 'self'; connect-src 'none'; form-action 'none'; base-uri 'none'; object-src 'none'
+sandbox allow-scripts; default-src 'none'; script-src 'self' ${GATEWAY_ORIGIN} 'unsafe-inline'; style-src 'self' ${GATEWAY_ORIGIN} 'unsafe-inline'; img-src 'self' ${GATEWAY_ORIGIN} data: blob:; font-src 'self' ${GATEWAY_ORIGIN}; media-src 'self' ${GATEWAY_ORIGIN}; frame-src 'self' ${GATEWAY_ORIGIN}; connect-src 'none'; form-action 'none'; base-uri 'none'; object-src 'none'
 ```
 
-**Provenance.** Recovered from `docs/internal/experiments/preview-isolation/server.py`
-(`POLICIES["self"]`) and confirmed byte-identical to `server2.py`'s `active`. Both harnesses are
-committed, so this string is evidence rather than recollection. It is the row recorded as `self`
-in [the experiment](adr-067-preview-isolation-experiment-2026-08-22.md) §1 — zero of seven egress
+**`${GATEWAY_ORIGIN}` — what it stands for, and the substitution rules.**
+
+It is a **space-separated list of CSP host-sources**, not a single origin. One entry is the common
+case; a loopback bind produces three. A CSP source directive is a list, so this substitutes
+cleanly.
+
+| Case | Rule |
+|---|---|
+| **Base value** | `middleware.CanonicalGatewayOrigin(cfg)` — the boot-frozen origin **the browser actually reaches**, as `scheme://host[:port]`, no trailing slash and no path. It is the same resolver CORS, the WebSocket `CheckOrigin` check and `web_serve`'s preview URLs already use, so a reverse-proxy deployment that sets `gateway.public_url` is correct here for free |
+| **Non-loopback host** | One entry: the canonical origin, substituted literally into each of the six directives carrying the placeholder, and nowhere else |
+| **Loopback host** (`127.0.0.1`, `localhost`, `[::1]`) | **All three spellings**, same scheme and port, **canonical origin first** and then the remaining two in the fixed order `127.0.0.1`, `localhost`, `[::1]`, skipping the one already emitted. For a default install (`127.0.0.1:5000`): `http://127.0.0.1:5000 http://localhost:5000 http://[::1]:5000` |
+| **Empty** | The placeholder **and the single space preceding it** are removed, collapsing `'self' ${GATEWAY_ORIGIN}` to `'self'` — which reproduces the pre-amendment string exactly, byte for byte. **No double space, ever.** One WARN MUST be logged, naming `gateway.public_url` as the fix and Safari as the symptom |
+
+**Why the loopback aliases, and why they are not a widening.** `127.0.0.1` and `localhost` are the
+same socket and a user picks between them without thinking; a host-source match is textual, so
+naming one and being reached by the other blocks every subresource — measured, on all three
+engines. The seeded default binds `127.0.0.1`, so without the aliases a user who types
+`localhost:5000` would get an unstyled, inert preview on Safari. They grant nothing new: all three
+name the gateway itself, which `'self'` already permits at top level, and none of them is
+reachable from outside the machine.
+
+**`connect-src` stays `'none'` and MUST NOT gain the origin.** FR-006 forbids `fetch`, XHR,
+`sendBeacon` and WebSocket to **any** origin, the gateway's included, and that is measured rather
+than incidental. The six directives that take the origin are the ones that load *subresources*;
+the one that opens a *channel* is deliberately not among them.
+
+**Why the empty case degrades instead of refusing.** `CanonicalGatewayOrigin` returns `""` for a
+`0.0.0.0` or `::` bind with no `gateway.public_url` — an ordinary Docker or LAN deployment, not a
+misconfiguration. Failing closed there would leave those operators with no preview at all, a
+larger regression than the defect being fixed, and **containment is identical either way**: the
+`sandbox` directive, the opaque origin and `connect-src 'none'` do not depend on the origin. The
+collapsed form is exactly today's behaviour — correct on Chromium and Firefox, and on WebKit
+everywhere except inside an attribute-sandboxed frame. It is a *rendering* degradation, and it
+must be **visible in the log** rather than silent. (`pkg/tools/web_serve.go`'s SFH-2 fails closed
+on this same empty value; that precedent is right there and wrong here — it is minting a URL that
+has to be reachable, not choosing how precisely to describe one.)
+
+**Provenance.** The `'self'` half was recovered from
+`docs/internal/experiments/preview-isolation/server.py` (`POLICIES["self"]`) and confirmed
+byte-identical to `server2.py`'s `active`. Both harnesses are committed, so that string is
+evidence rather than recollection. It is the row recorded as `self` in
+[the experiment](adr-067-preview-isolation-experiment-2026-08-22.md) §1 — zero of seven egress
 vectors, opaque origin, cookie unreadable, CSS and JS working — on Chromium 151, Firefox 153 and
 WebKit 26.5, twice each, top-level and embedded, with server-side request logs as ground truth.
+The `${GATEWAY_ORIGIN}` half comes from the 2026-08-23 re-measurement recorded in the amendment
+below, which added it without changing any other byte.
 
 **Why `allow-same-origin` is absent — the load-bearing omission.** Withholding it is what makes
 the origin opaque, which is what made `document.cookie` and `localStorage` **throw** on all three
@@ -853,7 +901,89 @@ contains the page is the opaque origin plus zero egress.
 
 **Both mechanisms are required.** `sandbox` alone let five of seven vectors out; source directives
 alone let `window.open` out. An implementation shipping either half satisfies neither FR-005 nor
-FR-006 — and would pass any requirement that merely asks for "a policy".
+FR-006 — and would pass any requirement that merely asks for "a policy". **This survived the
+2026-08-23 amendment unchanged, and it is the constraint that ruled out the obvious fix:** the
+rendering defect below is triggered by the FR-005b iframe *attribute*, so "just drop the
+attribute" would have made previews render again while reopening five of seven egress vectors any
+time a proxy strips the header. Neither half leaves.
+
+**AMENDED 2026-08-23 — `'self'` matches nothing inside an attribute-sandboxed WebKit iframe.**
+
+> The full re-measurement, including the mechanism, the upstream citations and a four-engine table
+> that includes **real Safari 26.5.2**, is
+> [adr-067-webkit-self-origin-measurement-2026-08-23.md](adr-067-webkit-self-origin-measurement-2026-08-23.md).
+> Summarised here only as far as this section's own decision needs.
+
+**What was measured, one engine at a time**, with the byte-identical shipped policy, the shipped
+fixture bundle, the shipped `<iframe>` attribute set, and server-side arrival as ground truth.
+Every cell carried a positive control proving the document loaded and its inline script ran, so
+"nothing rendered" could never be mistaken for "nothing escaped":
+
+| Engine | Mode | External `<script src>` ran | External stylesheet applied |
+|---|---|---|---|
+| WebKit | top level, no frame | yes | yes |
+| **WebKit** | **embedded, `sandbox="allow-scripts"`** | **NO** | **NO** |
+| WebKit | embedded, attribute removed | yes | yes |
+| Chromium, Firefox | every mode | yes | yes |
+
+The page's **inline** script still ran in the broken cell. What stopped working is exactly the
+subresources `'self'` governs: the external `<script src>` and the `<link rel=stylesheet>`. The
+requests never reached the server, and a `securitypolicyviolation` listener captured enforce-mode
+violations naming `script-src-elem` and `style-src-elem` with those URLs as `blockedURI`. It is
+CSP, before the network, and not a load failure.
+
+**Why this shipped: the original experiment measured the header ALONE.** The 2026-08-22 run
+covered five policies × two load modes × three engines and never once combined the §10.3 header
+with FR-005b's `sandbox` iframe **attribute** — the composition this feature actually ships. Under
+the header's `sandbox` *directive* alone WebKit builds its CSP object before the directive makes
+the origin opaque, so `'self'` still captures the URL's origin and the row came back green. Add
+the attribute and the origin is already opaque when the policy is parsed, and the self-source has
+no scheme or host left to match with. **The trigger is the attribute alone, not the interaction:**
+a sources-only header with the `sandbox` directive removed fails identically. The §10.3 header is
+innocent; *any* policy relying on `'self'` fails in *any* attribute-sandboxed WebKit iframe.
+
+**Containment was never affected. This is a rendering defect.** In the broken cell the origin was
+still opaque, `document.cookie` and `localStorage` both still **threw** `SecurityError`, and
+**zero of seven** egress vectors arrived — verified against a no-policy control in the same run
+that let all seven through, so the egress oracle was demonstrably alive. What broke is **US-1
+AS-4**: the flagship scenario in which a bundle's stylesheet, script and webfont all load.
+
+**Whose bug.** WebKit's; Chromium and Firefox are spec-correct. CSP3 §2.2.2 sets a policy's
+self-origin from **the response URL's origin**, explicitly so `'self'` keeps working for documents
+with an opaque origin; WebKit derives it from the document's `SecurityOrigin` instead. Filed
+upstream as WebKit bug **316847**, already fixed by **315247@main** (2026-06-15) and not yet in any
+shipping Safari — the regression reached release through **314912@main**. Real Safari 26.5.2
+reproduces it, so this is what end users see today, not a Playwright artefact.
+
+**Decision — keep both mechanisms, and name the origin explicitly beside `'self'`. There is no
+fallback and no second code path.** Adding an explicit host-source was measured green on all three
+engines in both modes, embedded and top level, with all seven egress vectors still at zero. It is
+also permanently sound rather than a workaround for one bug: CSP3 §6.7.2 host-source matching
+compares the **request URL** against the source expression and never consults the document's
+origin, so it is immune to this entire class of defect by construction. Once the WebKit fix ships
+the explicit origin becomes redundant, never harmful.
+
+**Why `'self'` is KEPT and not replaced — a measured hazard that outranks the Safari bug.** A
+policy naming `http://127.0.0.1:6789` while the browser reached the *same socket* as
+`http://localhost:6789` blocked the bundle's script and stylesheet **on all three engines**, top
+level and embedded. The seeded default config binds `127.0.0.1:5000`, so replacing `'self'` would
+have meant that an operator who types `localhost:5000` — the same server, a spelling nobody thinks
+about — gets a broken preview in *every* browser. That trades a Safari-only defect for an
+all-browser one triggered by how a URL was typed. Keeping both sources is strictly better than
+either alone: on the spec-correct engines `'self'` matches however the URL was spelled; on Safari
+the explicit origin carries it; and if the origin is wrong, absent, or spelled differently,
+Chromium and Firefox still work and WebKit degrades to **today's** behaviour. Never worse than
+now, better whenever the origin is right. Adding the origin grants no source the document could
+not already reach at top level, and `connect-src 'none'` is untouched.
+
+**The URL-spelling hole is closed for loopback, and left open elsewhere.** A loopback bind emits
+all three spellings (the substitution table above), so a default install works on Safari whichever
+of them the user typed. It is **not** closed for a non-loopback deployment reached by a second
+name — a LAN IP as well as a hostname, or a proxy FQDN that does not match `gateway.public_url`.
+There, Safari falls back to today's behaviour (unstyled, inert preview; containment intact) while
+Chromium and Firefox keep working through `'self'`. Setting `gateway.public_url` to the name the
+browser uses is the fix, and it is the same setting those deployments already need for CORS and
+the WebSocket origin check.
 
 ### 10.4 The inline allow-list
 
@@ -936,6 +1066,16 @@ empty `allow=""` (delegates no camera, microphone or anything added to Permissio
 > `sandbox` directive, the effective sandbox is the **intersection** — a capability exists only
 > if **both** grant it. Adding a token to one side alone grants nothing. Worth knowing before
 > someone "fixes" a broken preview by editing one of them.
+>
+> **AMENDED 2026-08-23 — and someone did exactly that, for a real reason.** The attribute has a
+> second, undocumented effect on WebKit: it makes the document's origin opaque *before* the CSP is
+> parsed, and WebKit's `'self'` then matches nothing, so a bundle's external script and stylesheet
+> are blocked and the preview renders blank. **The attribute stays.** Removing it would restore
+> rendering while reopening five of seven egress vectors any time a proxy strips the header, which
+> is precisely the "edit one of them" this note warns against. §10.3 fixes it in the *policy*
+> instead, by naming the gateway origin beside `'self'`. Note the shape: the attribute is doing
+> two things, one of them nowhere in its documentation, and the visible symptom pointed at the
+> header.
 
 **Relationship to ADR-044.** Reused: the shape — a bare, path-token-authenticated prefix on the
 *main* listener. ADR-044 removed the separate preview listener deliberately and this does not
@@ -1445,6 +1585,7 @@ come last within their stage because they are slowest and most environment-depen
 | 9 | `E2E_PreviewBundle_AllAssetsLoad` | E2E (browser) | US-1 AS-4 | **Real browser.** css + js + font + audio |
 | 10 | `E2E_PreviewIsolation_TopLevelNavigation` | E2E (browser) | US-2 AS-1 | Asserts the read **throws** and `window.origin === "null"`. **Positive control required in the same run.** Fails if the sandbox directive is dropped, and fails (rather than falsely passing) if the page never loads |
 | 11 | `E2E_PreviewIsolation_NetworkBlocked` | E2E (browser) | US-2 AS-3 | Egress asserted by **server-observed request arrival**, never by console text — the experiment found console wording differs per engine, so a string match silently stops matching on a new version. All seven vectors, plus a positive control |
+| 11c | `preview-isolation.spec.ts › 11c — a previewed bundle runs its own script and applies its own stylesheet` | E2E (3 engines) | US-1 AS-4, FR-004, FR-005c | **The rendering half, and it must stay separate from 11a/11b.** Asserts `js_ran` and `css_applied` from the frame's own DOM, embedded with FR-005b's `sandbox` attribute. Egress tests pass perfectly on a page that never rendered, so without this the WebKit defect was invisible: 11a and 11b were green on WebKit throughout while every external subresource was blocked. **This is the test that caught the 2026-08-23 `'self'` defect and the one that would catch its return** |
 | 12 | `E2E_PreviewIsolation_BrowserMatrix` | E2E (browser) | MV-13 | Tests 10 and 11 **and their positive controls** on Chromium, Firefox and WebKit at **`retries: 0`**. Not Safari proper — see SC-012 |
 | 57 | `E2E_PdfRendersViaPdfJs` | E2E (browser) | US-1 AS-5, AC-15.4 | **Real browser, 3 engines, HEADED.** Headless has no PDF viewer and previously produced a false negative |
 | 58 | `TestTypeConfusion_HtmlNamedPdfDoesNotExecute` | Integration + E2E | FR-015, AC-15.5 | **The critical control.** Served `application/pdf`, `nosniff` present, no script runs, nothing reaches an external origin. Requires a **positive control** (same payload as `text/html`) proving the detection is not blind |
@@ -1480,7 +1621,7 @@ come last within their stage because they are slowest and most environment-depen
 | 87 | `TestKbMarkdown_InheritsSharedRenderers` | Unit | FR-013a, FR-013b | The KB composition renders table, fence, mermaid and image identically to chat, differing **only** in the two listed places |
 | 88 | `TestLibraryRow_MediaThumbnailKindsUnchanged` | Unit | SC-016 | The row's thumbnail predicate stays exactly `image` or `video` after the union widens |
 | 89 | `TestLibraryPreviewPane_NoUnhandledKind` | Unit | SC-017 | Every union member mounts a surface. TypeScript cannot catch this — the pane uses `&&` chains, not an exhaustive switch |
-| 90 | `TestPreviewPolicy_LiteralHeader` | Integration | MV-13, FR-005a | Byte-exact policy string on every token-path response. Negative half: the authenticated path carries none and still says `attachment` |
+| 90 | `TestPreviewPolicy_LiteralHeader` | Integration | MV-13, FR-005a, FR-005c | Byte-exact policy on every token-path response, built by reading §10.3's **template** out of the spec file and substituting the origin — never a substring or `contains` check, which would pass with `sandbox` missing. Negative half: the authenticated path carries none and still says `attachment`. Both substitutions asserted: a configured origin appears in all six source directives and **not** in `connect-src`; an empty origin collapses to exactly the pre-amendment `'self'`-only string, with no double space |
 | 91 | `TestPreviewToken_TtlBoundary` | Integration | MV-20, FR-003d | Accepted at 14 minutes, refused at 15, against the named constant |
 | 92 | `TestPreviewToken_InvalidatedOnLogout` | Integration | FR-003d | Mint, log out, use — refused. Also mount revoked, and file deleted |
 | 93 | `TestPreviewPath_TokenNeverLogged` | Integration | MV-23, FR-003e | Drives a **real 429** with a capturing log handler; the record contains neither the token nor an unredacted path. Reading the code is not the test |
@@ -1714,9 +1855,10 @@ Required, each a named piece of work:
 - **FR-003n** A request bearing an expired, revoked or unknown token MUST receive a **human-readable HTML body** — the in-frame half of "visible error rather than a blank frame" — with `404`, `text/html`, `nosniff`, and the §10.3 policy byte-identically. Expired, revoked and unknown MUST be **indistinguishable**: a `410`-vs-`404` split is a working oracle for whether a token ever existed.
 - **FR-004** The system MUST execute scripts in a previewed HTML document.
 - **FR-005** The system MUST bind every inline-previewed document to an opaque origin, established by the response and not by the embedder.
-- **FR-005a** The system MUST serve the **literal policy string in §10.3** on every preview-token response, and MUST combine **both** mechanisms — the `sandbox` directive and the source directives. Measured on all three engines: `sandbox` alone let five of seven egress vectors out; source directives alone let `window.open` out, because no CSP directive covers popup navigation.
+- **FR-005a** The system MUST serve **§10.3's policy template, with `${GATEWAY_ORIGIN}` substituted by that section's rules**, on every preview-token response, and MUST combine **both** mechanisms — the `sandbox` directive and the source directives. Measured on all three engines: `sandbox` alone let five of seven egress vectors out; source directives alone let `window.open` out, because no CSP directive covers popup navigation. *(Amended 2026-08-23: the string was a fixed literal until `'self'` was measured to match nothing inside an attribute-sandboxed WebKit iframe. Both mechanisms and every directive are unchanged — six source directives now name the gateway origin **in addition to** `'self'`.)*
+- **FR-005c** The host-sources substituted into §10.3 MUST derive from `middleware.CanonicalGatewayOrigin(cfg)` — the boot-frozen origin the browser actually reaches — and MUST NOT be a hostname compiled into the binary or reconstructed from the request. `'self'` MUST be **retained** beside them, never replaced: it is what keeps Chromium and Firefox working whatever spelling of the URL the browser used, and the explicit sources are what WebKit can match at all. When the canonical host is loopback the substitution MUST emit all three loopback spellings per §10.3's table, canonical first. When the resolver yields `""` (a `0.0.0.0`/`::` bind with no `gateway.public_url`) the system MUST serve the collapsed `'self'`-only form, which is byte-identical to the pre-amendment string, and MUST log one WARN naming `gateway.public_url`. It MUST NOT refuse to serve, and MUST NOT emit an unresolved placeholder, an empty source or a doubled space. `connect-src` MUST remain `'none'`. *Rationale in §10.3: containment does not depend on these sources, so a missing or wrong origin is a visible rendering degradation, never a refusal — and never a silent one.*
 - **FR-005b** The system MUST embed previewed documents with `<iframe src="<token URL>">` — **never `srcdoc`**, which resolves relative URLs against the embedder and so cannot load a bundle's subresources at all (FR-003), and which has no response to carry FR-005's policy. The frame MUST also carry `sandbox="allow-scripts"`, `referrerpolicy="no-referrer"` and an empty `allow=""`. The effective sandbox is the **intersection** of attribute and header, so adding a token to only one grants nothing.
-- **FR-006** The system MUST block egress from a previewed document **to any origin other than the gateway's own**, and MUST permit no `fetch`, XHR, `sendBeacon` or WebSocket to **any** origin, the gateway's included. *The earlier wording — "MUST block network egress" — overstated what was measured:* the experiment's ground truth was requests arriving at a **second** origin standing in for the internet, and the policy's `'self'` sources permit subresource loads back to the gateway.
+- **FR-006** The system MUST block egress from a previewed document **to any origin other than the gateway's own**, and MUST permit no `fetch`, XHR, `sendBeacon` or WebSocket to **any** origin, the gateway's included. *The earlier wording — "MUST block network egress" — overstated what was measured:* the experiment's ground truth was requests arriving at a **second** origin standing in for the internet, and the policy's `'self'` sources permit subresource loads back to the gateway. *(Since 2026-08-23 those six directives also name the gateway origin explicitly — the same permission written a second way, for the WebKit reason in §10.3. `connect-src` remains `'none'` and MUST NOT gain it: this requirement's "no `fetch`, XHR, `sendBeacon` or WebSocket to **any** origin, the gateway's included" is exactly what that directive carries.)*
 - **FR-006a** Same-origin **subresource** loads from a previewed document remain possible, and this is **accepted** on one stated condition: they arrive **unauthenticated**. The condition holds because the document has an opaque origin, making the request cross-site, and the session cookie is `SameSite=Strict`. Residual accepted alongside: attacker-timed requests reach the gateway and land in the request log; their responses are unreadable to the page. **The condition MUST be asserted, not assumed** — one edit to the cookie's `SameSite` mode turns this into authenticated API calls from untrusted content, with no other symptom.
 - **FR-006b** The SPA shell MUST be served with `frame-ancestors 'none'`. The measured policy contains `frame-src 'self'`, so a previewed page may embed any gateway page including the real SPA — the nested context reads no cookie, but renders genuine Omnipus chrome inside attacker-authored content. The control belongs on the **framed** resource; narrowing `frame-src` instead would invalidate the measurement.
 - **FR-007** The system MUST display a persistent untrusted-content boundary outside any inline-rendered frame.
@@ -1758,6 +1900,7 @@ Required, each a named piece of work:
 - **FR-024** The system MUST store a knowledge base's display name and template location in its marker.
 - **FR-025** The system MUST create knowledge bases inside the workspace tree, not at arbitrary host paths.
 - **FR-026** A knowledge base MUST be exactly one mounted folder (AW-5). The system MUST refuse a second root with a typed error naming both, and MUST NOT resolve a link, backlink or search hit across two collections.
+- **FR-026a** That refusal belongs to the operation that **mounts**, and to no other. The detection endpoint — `GET /library/{workspace_id}/knowledge`, which reports whether a folder looks like a knowledge base — mounts nothing, changes nothing, and MUST NOT be able to answer with the mount-conflict error. *Found by contract review 2026-08-23:* it currently documents a `409 KnowledgeMountConflictError`, a response it has no way to produce. That is worse than dead documentation, because it describes the wrong rule: a workspace may hold more than one knowledge base — FR-026 constrains what **one** knowledge base is, not how many a workspace may have — so a client written against that `409` would treat an ordinary second collection as an error. **The `409` MUST be removed from the detection endpoint** in `contracts/openapi.yaml`; it stays on the mount operation, where it is correct.
 
 **Index and search (stage 2)**
 - **FR-030** The system MUST store the index outside the collection.
@@ -1785,7 +1928,7 @@ Required, each a named piece of work:
 
 **Retrieval and isolation (stage 2)**
 - **FR-050** The system MUST provide relevance search returning path, title and matched excerpt.
-- **FR-050a** The excerpt MUST be produced by **re-reading the file at query time**, never stored in the index (AW-1), so it always matches disk. Three consequences the decision left unstated: **(a)** when the re-read fails or the match has moved — deleted, unreadable, evicted — the hit is still returned with path and title plus a machine-readable reason, never a fabricated excerpt and never a silently dropped result; **(b)** the re-reads are **budgeted**, because MV-1 allows 500 ms across up to 20 results; **(c)** offsets are absolute within the file, so FR-034a's segmentation cannot misdirect the re-read.
+- **FR-050a** The excerpt MUST be produced by **re-reading the file at query time**, never stored in the index (AW-1), so it always matches disk. Three consequences the decision left unstated: **(a)** when the re-read fails or the match has moved — deleted, unreadable, evicted — the hit is still returned with path and title plus a machine-readable reason, never a fabricated excerpt and never a silently dropped result; **and the set of reasons MUST cover the case where no re-read was ever attempted.** *Found by contract review 2026-08-23:* an **attachment** hit carries no excerpt by construction, because FR-039a forbids opening an attachment's contents at all — yet the `excerpt_unavailable` enum offers only `file_unreadable`, `file_missing`, `match_moved` and `budget_exhausted`, so an attachment hit arrives with neither an excerpt nor a reason for its absence, which is exactly the unexplained gap this requirement exists to prevent. `pkg/knowledge` already emits `attachment_not_read` (`pkg/knowledge/tools.go`), so the value exists and only the contract is missing it; **`attachment_not_read` MUST be added to the enum** in `contracts/components/schemas/KnowledgeSearchHit.yaml`, and the gateway MUST pass it through rather than dropping it; **(b)** the re-reads are **budgeted**, because MV-1 allows 500 ms across up to 20 results; **(c)** offsets are absolute within the file, so FR-034a's segmentation cannot misdirect the re-read.
 - **FR-051** The system MUST provide link, backlink, unresolved, orphan and neighbourhood queries.
 - **FR-052** The system MUST scope all retrieval to knowledge bases mounted into the calling agent's workspace.
 - **FR-053** The system MUST return an empty result set, not a permission error, for out-of-scope collections.
@@ -1841,7 +1984,7 @@ Required, each a named piece of work:
 - **SC-009** Rebuilding a fixture index yields identical ranked results and identical graph sets across 10 consecutive rebuilds.
 - **SC-010** Renaming a note updates 100% of inbound links, body and frontmatter, across the reference collection's link distribution.
 - **SC-011** Zero lost writes across 1,000 concurrent cross-process write attempts.
-- **SC-012** The preview isolation tests pass on all three engines in the matrix — Chromium, Firefox and **WebKit** — at `retries: 0`. **Safari proper is not covered:** Playwright's WebKit is not Safari and no macOS runner is planned. Earlier drafts promised coverage nobody is building.
+- **SC-012** The preview isolation tests pass on all three engines in the matrix — Chromium, Firefox and **WebKit** — at `retries: 0`. **Safari proper is not covered:** Playwright's WebKit is not Safari and no macOS runner is planned. Earlier drafts promised coverage nobody is building. *(2026-08-23: the WebKit `'self'` defect in §10.3 was confirmed by hand on **real Safari 26.5.2** as well as on Playwright's WebKit. That was a one-off manual run, not coverage — this criterion is unchanged. It does establish that Playwright's WebKit reported this defect faithfully, which is the case for keeping the engine in the matrix even though it is not Safari.)*
 - **SC-013** The preview classification table changes in **exactly the rows this feature intends and nowhere else**. The current table is committed as a fixture **before** any code change; afterwards it differs in exactly three groups — `.html`/`.htm`, `.pdf`, and the seven audio extensions. A fourth diff fails the build. *Why the wording changed:* the previous form demanded zero diffs while FR-001 and FR-018 require exactly those three to change kind, so a guard written to it fails the moment the feature lands, and one written to pass has been weakened to whatever the implementer left in.
 - **SC-016** The Library row's inline-thumbnail predicate still admits exactly two kinds, `image` and `video`, after the union widens. Otherwise every audio and PDF row downloads the whole file into an `<img>` that cannot render it.
 - **SC-017** Every member of `LibraryPreviewKind` mounts a preview surface. TypeScript cannot catch a gap here — the pane dispatches with `{kind === '…' && …}` chains, not an exhaustive switch, so a new kind compiles clean and renders an empty pane.
@@ -1884,6 +2027,7 @@ Required, each a named piece of work:
 | FR-005 | US-2 | Cannot read the session cookie (both contexts) | 5, 10, 12 |
 | FR-005a | US-2 | The literal policy string, both mechanisms | 90, 12 |
 | FR-005b | US-2 | Frame mechanism and sandbox composition | 95 |
+| FR-005c | US-1 | The origin is the one the browser reaches; empty degrades visibly, never refuses | 90, 11c |
 | FR-006 | US-2 | Cannot reach the network | 11 |
 | FR-006a | US-2 | (same-origin subresources reach the gateway, unauthenticated) | 110 |
 | FR-006b | US-2 | (the SPA refuses to be framed by a preview) | 111 |
@@ -1926,6 +2070,7 @@ Required, each a named piece of work:
 | FR-024 | US-4 | Identity survives relocation | 16 |
 | FR-025 | US-4 | (creation location) | 15 |
 | FR-026 | US-4 | (one collection, one folder) | 71 |
+| FR-026a | US-4 | (the mount conflict is a mount-time error, never a detection result) | 71 |
 | FR-030 | US-5 | (index location) | 22 |
 | FR-031 | US-16 | Revoking one of two mounts | 24 |
 | FR-032 | US-5 | (permissions) | 23 |

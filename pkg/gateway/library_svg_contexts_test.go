@@ -92,7 +92,8 @@ func TestSvgInSpa_ImageNotDocument(t *testing.T) {
 		// THIS ASSERTS THE RESPONSE, NOT THE CONTAINMENT. Whether an engine
 		// actually confines an SVG document under this policy was never
 		// measured — §10.4 says so — and test 94 is what would settle it.
-		want := specIsolationPolicy(t)
+		freezePreviewPolicyForTest(t)
+		want := specIsolationPolicy(t, previewFixtureSources)
 		rec := serveViaLibraryPreviewRoute(t, "logo.svg", []byte(scriptedSVG))
 
 		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())

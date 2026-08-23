@@ -28,8 +28,16 @@ package gateway
 //
 // THE FOUR THINGS THAT MUST NOT BE "TIDIED" HERE:
 //
-//  1. The policy string is copied byte for byte from §10.3 and is asserted
-//     byte for byte. BOTH halves are load-bearing: measured on three engines,
+//  1. The policy is built from §10.3's template exactly once and is asserted
+//     directive by directive against the spec's own text. Its six source
+//     directives name the gateway's canonical origin IN ADDITION TO `'self'`:
+//     under WebKit, the FR-005b iframe sandbox ATTRIBUTE on top of the §10.3
+//     sandbox DIRECTIVE makes the document's `self` an opaque origin matching
+//     nothing, so the explicit host source is the one that matches — and
+//     `'self'` stays beside it so a wrong or absent origin degrades on Safari
+//     alone rather than on every engine (library_isolation_policy.go has the
+//     measurement).
+//     BOTH halves are load-bearing: measured on three engines,
 //     the `sandbox` directive alone let five of seven egress vectors out, and
 //     the source directives alone let window.open out because no CSP
 //     directive covers popup navigation. Dropping either half satisfies
@@ -72,8 +80,9 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
-// The §10.3 policy string itself lives in ONE place — inline_serving.go's
-// libraryIsolationPolicy — and this route reaches it through
+// The §10.3 policy is BUILT in ONE place — library_isolation_policy.go's
+// buildLibraryIsolationPolicy, reached through libraryIsolationPolicy() — and
+// this route carries it via setLibraryPreviewSecurityHeaders and
 // applyLibraryPreviewByteHeaders. A second copy here would be a defect, not a
 // convenience: MV-13 asserts one byte-identical value, and the only thing
 // keeping two literals in step is a human remembering both. The copy that
@@ -232,9 +241,49 @@ type libraryPreviewRoutes struct {
 // on the floor and expiry silently became the only revocation the product had.
 // Making the constructor perform the wiring removes the step a caller can skip.
 func newLibraryPreviewRoutes(a *restAPI) *libraryPreviewRoutes {
+	// Freeze the §10.3 policy against the gateway's canonical browser-facing
+	// origin here, in the constructor, for the same reason the store is
+	// published here: this is the one step no caller can skip. The registrar
+	// below is not that step — the test fixtures build their routes through
+	// this constructor and never register anything, so a freeze in the
+	// registrar would leave every one of them serving the unfrozen policy while
+	// the shipped binary served a different one. A test suite that measures a
+	// header the product never sends is the false green this feature has
+	// already been bitten by once.
+	//
+	// The origin comes from middleware.CanonicalGatewayOrigin — the resolver
+	// §10.3 names, and the same one CORS, the WebSocket CheckOrigin fence and
+	// web_serve's preview URLs use. It is deliberately NOT recomputed from
+	// Host/Port here and deliberately NOT taken from a.allowedOrigin: a second
+	// derivation of "the same" origin disagrees silently, and gateway.public_url
+	// (restart-gated, ADR-044) is what makes a reverse-proxied deployment name
+	// the origin the BROWSER reaches rather than the one we bound.
+	//
+	// When it resolves to "" — a wildcard bind with no gateway.public_url —
+	// freezeLibraryIsolationPolicy collapses §10.3's template to its
+	// `'self'`-only form, which is byte-identical to what this package shipped
+	// before the amendment, and logs one WARN. Containment is unchanged; what
+	// degrades is Safari's ability to load a bundle's external CSS and JS
+	// inside the FR-005b sandbox attribute.
+	freezeLibraryIsolationPolicy(previewCanonicalOrigin(a))
+
 	routes := &libraryPreviewRoutes{api: a, tokens: NewPreviewTokenStore()}
 	a.previewTokens.Store(routes.tokens)
 	return routes
+}
+
+// previewCanonicalOrigin resolves the gateway's browser-facing origin through
+// the one resolver §10.3 names, tolerating a restAPI with no agent loop.
+//
+// The nil case is not defensive padding: a restAPI without a loop cannot serve
+// a preview at all, and returning "" there yields the collapsed `'self'` policy
+// — the same answer an operator gets from a wildcard bind, arrived at by the
+// same path, rather than a panic inside a constructor.
+func previewCanonicalOrigin(a *restAPI) string {
+	if a == nil || a.agentLoop == nil {
+		return ""
+	}
+	return middleware.CanonicalGatewayOrigin(a.agentLoop.GetConfig())
 }
 
 // registerLibraryPreviewRoutes registers both halves and wires the store into
@@ -285,7 +334,7 @@ func (p *libraryPreviewRoutes) serveHandler() http.HandlerFunc {
 // tolerable.
 func setLibraryPreviewSecurityHeaders(w http.ResponseWriter) {
 	h := w.Header()
-	h.Set(headerContentSecurityPolicy, libraryIsolationPolicy)
+	h.Set(headerContentSecurityPolicy, libraryIsolationPolicy())
 	h.Set("Referrer-Policy", "no-referrer")
 	h.Set("X-Content-Type-Options", "nosniff")
 	h.Set("Cache-Control", "no-store")

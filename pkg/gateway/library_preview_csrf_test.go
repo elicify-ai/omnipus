@@ -71,8 +71,11 @@ func previewChainURL() string {
 // is 405 with `Allow: GET, HEAD`, `Content-Type: text/html` and the §10.3
 // policy. Asserting only "not 200" would pass on either.
 func TestLibraryPreviewChain_NonGetVerbsGet405NotACsrf403(t *testing.T) {
-	want := specIsolationPolicy(t)
 	handler := newPreviewChainMux(t)
+	// After the mux is built: registration freezes the policy from the
+	// fixture's own allowedOrigin.
+	freezePreviewPolicyForTest(t)
+	want := specIsolationPolicy(t, previewFixtureSources)
 
 	for _, method := range []string{
 		http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete,

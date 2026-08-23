@@ -23,16 +23,47 @@
  *
  * Requirements: FR-004, FR-005, FR-005a, FR-005b, FR-006, FR-006a, FR-006b.
  * Spec tests: 11 (`E2E_PreviewIsolation_NetworkBlocked`, as 11a/11b),
+ * 95 (`E2E_PreviewFrame_SandboxComposition`, as 11d),
  * 110 (`E2E_PreviewSameOrigin_ReachableButUnauthenticated`),
  * 111 (`E2E_PreviewCannotFrameTheSpa`), and — because the isolation projects
  * run all three engines — the browser-matrix half of 12.
  *
- * ⚠️ 11c IS EXPECTED RED ON WEBKIT, and that is a finding, not a flake. Under
- * WebKit, adding FR-005b's `sandbox="allow-scripts"` ATTRIBUTE on top of the
- * §10.3 sandbox DIRECTIVE stops `script-src 'self'` / `style-src 'self'`
- * matching the serving origin, so a bundle's own external script and stylesheet
- * do not load. Containment is unaffected — 11a and 11b pass there — but US-1
- * AS-4 does not hold. Full measurement table in 11c's own comment.
+ * ═══════════════════════════════════════════════════════════════════════════
+ * WHY THIS FILE MEASURES RENDERING AND CONTAINMENT TOGETHER
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * A rendering defect shipped here behind a green security suite, and the shape
+ * of the mistake is worth more than the fix.
+ *
+ * The original experiment measured the §10.3 HEADER, alone, on three engines:
+ * zero egress, opaque origin, cookie unreadable, CSS and JS working. FR-005b
+ * then added a `sandbox="allow-scripts"` ATTRIBUTE on the frame, as defence in
+ * depth. That COMPOSITION — header AND attribute — was never measured, and
+ * under WebKit it stopped `script-src 'self'` matching the serving origin: a
+ * previewed bundle's external `<script src>` and `<link rel=stylesheet>` did
+ * not load, while every containment assertion in this file went on passing.
+ * Chromium and Firefox were unaffected. Full table in 11c's comment.
+ *
+ * The fix was §10.3 naming the gateway's origins EXPLICITLY **in addition to**
+ * `'self'`, never instead of it — and BOTH isolation mechanisms stayed. Each of
+ * those three "boths" is load-bearing and none is a belt-and-braces flourish:
+ *
+ *   `'self'` AND the origins — `'self'` matches whatever spelling the reader
+ *     typed, so on Chromium and Firefox no misconfigured origin string can ever
+ *     break a preview. The explicit origins are what WebKit matches, because it
+ *     does not resolve `'self'` inside an attribute-sandboxed frame at all.
+ *     Delete `'self'` and a wrong origin breaks all three engines instead of
+ *     one; delete the origins and WebKit is back where it started.
+ *   header AND attribute — the header carries twelve rules and the attribute
+ *     provides one of them. Measured: the sandbox half alone let five of seven
+ *     egress vectors out, the source half alone let `window.open` out.
+ *
+ * The generalisable lesson: a preview that renders NOTHING satisfies every
+ * "nothing escaped" assertion perfectly. So no test here may assert only
+ * containment. 11c asserts rendering on its own, and 11d (spec test 95)
+ * asserts rendering AND all seven egress vectors in ONE observation of ONE
+ * loaded frame — the assertion that, had it existed, would have caught this on
+ * the day the attribute was added.
  *
  * GROUND TRUTH IS A SECOND ORIGIN'S OWN REQUEST LOG. A page that merely fails
  * to render proves nothing, and neither does a console message: the experiment
@@ -70,8 +101,8 @@
  * EVERY ASSERTION HERE HAS BEEN SEEN TO FAIL
  * ═══════════════════════════════════════════════════════════════════════════
  *
- * The last four tests in this file are the proof. They serve the SAME fixture
- * bytes through the SAME assertion function, from a local origin that applies a
+ * The last tests in this file are the proof. They serve the SAME fixture bytes
+ * through the SAME assertion functions, from a local origin that applies a
  * DELIBERATELY BROKEN policy derived from the live shipped one:
  *
  *   • no policy at all      → all seven vectors must arrive. If this control
@@ -82,11 +113,32 @@
  *                             navigation — measured on all three engines.
  *   • source half deleted   → five of seven must arrive (image, fetch, beacon,
  *                             WebSocket, iframe).
+ *   • sources repointed at  → the bundle's external script and stylesheet must
+ *     a dead origin           NOT load, while the inline script still fires all
+ *                             twelve probes. This is the mutation proof for the
+ *                             RENDER half — 11c and 11d assert `js_ran` and
+ *                             `css_applied`, and a claim that a page rendered
+ *                             is worth nothing until it has been seen to fail.
+ *   • the FR-005b ATTRIBUTE → five of seven must arrive, the same five the
+ *     with NO header          `sandbox` DIRECTIVE alone let out. This is why
+ *                             the header cannot be dropped "because the frame
+ *                             is sandboxed anyway": the attribute provides one
+ *                             of the header's twelve rules.
  *
- * Each of those asserts that `assertNoEgress` — the exact function guarding the
+ * The egress rows assert that `assertNoEgress` — the exact function guarding the
  * product tests above — THROWS. The expected vector lists are read off the
  * experiment's measured table (adr-067-preview-isolation-experiment-2026-08-22
  * §1), never off the implementation.
+ *
+ * ⚠️ THE MUTANTS ARE DERIVED FROM THE LIVE SHIPPED HEADER AND MUST STAY THAT
+ * WAY. `splitPolicy` partitions on the DIRECTIVE NAME (`sandbox` vs the rest)
+ * and `repointSourcesToDeadOrigin` rewrites any origin-bearing source, keyword
+ * or explicit. Neither knows what `'self'` is, which is why both kept mutating
+ * unchanged when §10.3 added the gateway's explicit origins alongside `'self'`
+ * — a policy shape in which a mutant that rewrote only the keyword, or only the
+ * host sources, would have left the other half live and stopped mutating at
+ * all. A mutant built by copying the policy into this file would have kept
+ * testing the policy we used to have — silently, and with a full row of green.
  *
  * The mutants are served locally rather than by editing pkg/gateway, for two
  * reasons: this suite does not own that package, and a test that edits the
@@ -100,8 +152,12 @@ import {
   EGRESS_VECTORS,
   type EgressVectorName,
   type MutantOrigin,
+  type MutantPolicyName,
   type RecordedHit,
   type RecordingOrigin,
+  DEAD_ORIGIN,
+  directiveHostSources,
+  directiveNamesOriginExplicitly,
   embedPreview,
   installBundle,
   mintPreviewToken,
@@ -324,40 +380,206 @@ test.describe('ADR-067 preview isolation — seven egress vectors, retries: 0', 
   // ───────────────────────────────────────────────────────────────────────────
   test('11c — FR-004: a previewed bundle runs its own script and applies its own stylesheet', async ({ page }) => {
     // WHY THIS IS NOT FOLDED INTO 11a. It is a RENDERING requirement, not a
-    // containment one, and on one engine the two currently disagree. Measured
-    // 2026-08-23 against this branch's gateway, one engine at a time:
+    // containment one, and for a while the two disagreed on one engine. This
+    // test went RED on WebKit on purpose, for four days, because that is what
+    // a real defect looks like. It is here in its original strength — the fix
+    // was to the product, not to these two assertions.
     //
-    //   engine    embedding                              js_ran  css_applied
-    //   Chromium  top-level                                ✅       ✅
-    //   Chromium  iframe + sandbox="allow-scripts"         ✅       ✅
-    //   WebKit    top-level                                ✅       ✅
-    //   WebKit    iframe + sandbox="allow-scripts"         ❌       ❌
+    // WHAT WAS MEASURED, one engine at a time, embedded exactly as FR-005b
+    // requires (`sandbox="allow-scripts"` on the frame) and top-level:
     //
-    // The INLINE script runs in every cell (the `attempted` list is complete in
-    // all four), so the document loads and executes. What fails on WebKit is
-    // the EXTERNAL `<script src>` and `<link rel=stylesheet>`, which are gated
-    // by `script-src 'self'` / `style-src 'self'` — i.e. under WebKit, adding
-    // FR-005b's sandbox ATTRIBUTE on top of the §10.3 sandbox DIRECTIVE stops
-    // `'self'` matching the serving origin. Removing just the attribute makes
-    // WebKit pass; the header alone is fine there.
+    //   policy source form        engine    embedded          top-level
+    //   'self' alone              Chromium  js ✅  css ✅      js ✅  css ✅
+    //   'self' alone              Firefox   js ✅  css ✅      js ✅  css ✅
+    //   'self' alone              WebKit    js ❌  css ❌      js ✅  css ✅
+    //   'self' + this origin      Chromium  js ✅  css ✅      js ✅  css ✅
+    //   'self' + this origin      Firefox   js ✅  css ✅      js ✅  css ✅
+    //   'self' + this origin      WebKit    js ✅  css ✅      js ✅  css ✅
+    //   'self' + a DIFFERENT      Chromium  js ✅  css ✅      js ✅  css ✅
+    //     spelling of this        Firefox   js ✅  css ✅      js ✅  css ✅
+    //     origin                  WebKit    js ❌  css ❌      js ✅  css ✅
     //
-    // The experiment (§2.1) measured `'self'` matching under an opaque origin
-    // on all three engines — but it measured the HEADER alone. The attribute is
-    // FR-005b's addition and this composition was never measured. Containment
-    // is unaffected either way (origin opaque, cookie throws, zero egress —
-    // 11a and 11b pass on WebKit): what breaks is US-1 AS-4, the flagship
-    // "a complete bundle loads all of its assets" scenario.
+    // READ THE LAST THREE ROWS BEFORE TOUCHING THE POLICY. They are the reason
+    // §10.3 keeps `'self'` AND names the origin, and the reason the precondition
+    // in 11d exists. An explicit host source is matched by STRING: a policy
+    // naming `http://127.0.0.1:PORT` while the reader opened the identical
+    // socket as `http://localhost:PORT` does not match, and because `'self'`
+    // still covers Chromium and Firefox, that misconfiguration shows up on ONE
+    // engine out of three — as a blank preview, with nothing naming the cause.
+    // (§10.3 answers it by naming all three loopback spellings when the bind is
+    // loopback; a reverse proxy needs `gateway.public_url` to be right.)
     //
-    // Kept red rather than skipped, and separate rather than buried inside an
-    // isolation test, so the failure names the real defect instead of reading
-    // as an isolation regression.
+    // THE INLINE SCRIPT RAN IN EVERY ONE OF THOSE CELLS — `attempted` came back
+    // complete at twelve in all of them, so no row is the trivial "the page
+    // never loaded". What failed was the EXTERNAL `<script src>` and
+    // `<link rel=stylesheet>`: under WebKit, adding FR-005b's sandbox
+    // ATTRIBUTE on top of §10.3's sandbox DIRECTIVE stopped `'self'` matching
+    // the serving origin. Removing the attribute made WebKit pass, so the
+    // header alone was never the problem; the COMPOSITION was.
+    //
+    // THE FIX, and why it is the product's and not this test's: §10.3 now names
+    // the gateway's origin EXPLICITLY in its source directives instead of
+    // leaning on `'self'`, so the match no longer depends on the document
+    // having a usable `self` at all. BOTH isolation mechanisms stayed — the
+    // header carries twelve rules and the attribute provides one of them
+    // (measured: the sandbox half alone let five of seven vectors out; the
+    // source half alone let `window.open` out). Dropping either was never on
+    // the table.
+    //
+    // WHY IT WAS NEVER CAUGHT: the original experiment measured the HEADER
+    // ALONE. Containment was unaffected throughout — opaque origin, cookie
+    // throws, zero of seven egress; 11a and 11b passed on WebKit the whole
+    // time. What broke was US-1 AS-4, the flagship "a complete bundle loads
+    // all of its assets" scenario, and a page that renders nothing satisfies
+    // every containment assertion ever written. 11d exists so that the two
+    // properties can never again be observed apart.
+    //
+    // CAN THIS STILL FAIL? Yes, and it is proved rather than asserted: the
+    // `wrongsource` mutation below serves these exact bytes under this exact
+    // policy with its origin-bearing sources repointed at a dead origin, and
+    // requires both flags below to come back FALSE while `attempted` stays at
+    // twelve.
     await page.goto('/');
     const tokenURL = await tokenURLFor(page, 'index.html');
     await embedPreview(page, tokenURL);
 
     const report = await readPreviewReport(page, '#e2e-preview-frame');
-    expect(report.js_ran, "FR-004 / script-src 'self': the bundle's external script MUST execute").toBe(true);
-    expect(report.css_applied, "style-src 'self': the bundle's external stylesheet MUST apply").toBe(true);
+    expect(report.js_ran, "FR-004 / script-src: the bundle's external script MUST execute").toBe(true);
+    expect(report.css_applied, 'style-src: the bundle\'s external stylesheet MUST apply').toBe(true);
+  });
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // Spec test 95 — E2E_PreviewFrame_SandboxComposition
+  // ───────────────────────────────────────────────────────────────────────────
+  test('11d — FR-005b composition: the header AND the frame attribute together, rendering and containment in ONE observation', async ({ page, baseURL }) => {
+    // THE TEST THIS EPISODE WAS MISSING, and the reason it is one test rather
+    // than two.
+    //
+    // 11a proves containment. 11c proves rendering. Both passed on WebKit for
+    // four days while the product was broken — because 11c did not exist yet,
+    // and every assertion that did exist was satisfied *better* by a page that
+    // rendered nothing at all. The original experiment made the same split:
+    // it measured the §10.3 HEADER alone, so the composition FR-005b actually
+    // ships — header AND `sandbox="allow-scripts"` on the frame — was never
+    // measured in either property, let alone both at once.
+    //
+    // So this test observes ONE frame, loaded ONCE, the way the product loads
+    // it, and requires all of it to hold simultaneously:
+    //
+    //   the frame carries FR-005b's three attributes;
+    //   the response carries a policy that names an origin the frame is on;
+    //   the bundle's EXTERNAL script ran and its EXTERNAL stylesheet applied;
+    //   all twelve probes fired;
+    //   the form was refused rather than skipped;
+    //   ZERO of the seven egress vectors reached the second origin;
+    //   the origin is opaque and `document.cookie` THREW.
+    //
+    // Any future change that buys one of those with another — the exact trade
+    // that produced this defect — turns this test red on the engine where it
+    // happens, and the failure message names which half went.
+    const log = recordBrowserRequests(page.context());
+    await page.goto('/');
+    const tokenURL = await tokenURLFor(page, 'index.html');
+    const gatewayOrigin = new URL(tokenURL, page.url()).origin;
+
+    // ── PRECONDITION, and it exists to make ONE failure mode loud ────────────
+    //
+    // §10.3 names the gateway's origins EXPLICITLY as well as saying `'self'`.
+    // The explicit half is what fixed WebKit (see 11c) and it is matched by
+    // STRING: it covers the exact spellings named and nothing else. So a
+    // deployment reachable by a name the policy does not list renders previews
+    // with no CSS and no JS — measured, on a policy naming
+    // `http://127.0.0.1:PORT` while the browser opened the identical socket as
+    // `http://localhost:PORT`.
+    //
+    // ⚠️ AND IT HIDES ON TWO ENGINES OUT OF THREE. `'self'` is retained, so
+    // Chromium and Firefox keep working through exactly that misconfiguration
+    // and only WebKit goes blank — with no error, nothing in the console that
+    // names a cause, and a rendering symptom indistinguishable from the browser
+    // bug this whole change exists to work around. That is why this is asserted
+    // HERE, directly, rather than left to 11c to catch: 11c would go red on one
+    // engine and read as "WebKit again".
+    //
+    // ⚠️ `'self'` DELIBERATELY DOES NOT SATISFY THIS ASSERTION. An earlier
+    // version accepted either form, which — with `'self'` on every directive —
+    // made it permanently true and therefore incapable of reporting anything.
+    // A diagnostic that cannot fail is not a diagnostic.
+    const headResponse = await page.request.get(tokenURL);
+    expect(headResponse.ok(), `token path → ${headResponse.status()}`).toBeTruthy();
+    const livePolicy = headResponse.headers()['content-security-policy'];
+    expect(livePolicy, 'FR-005a: every token-path response carries the §10.3 policy').toBeTruthy();
+    for (const directive of ['script-src', 'style-src'] as const) {
+      const named = directiveHostSources(livePolicy, directive);
+      expect(
+        directiveNamesOriginExplicitly(livePolicy, directive, gatewayOrigin),
+        `${directive} does not name ${gatewayOrigin} — the origin this browser is ` +
+        `actually on (baseURL ${baseURL}). It names: ` +
+        `${named.length ? named.join(', ') : '(no origin at all — only \'self\')'}.\n` +
+        `Consequence: the bundle's own ${directive === 'script-src' ? 'external script' : 'external stylesheet'} ` +
+        'will NOT load in Safari/WebKit, while Chromium and Firefox render it correctly via ' +
+        "`'self'` — so this misconfiguration is invisible on two engines out of three.\n" +
+        'Fix, in order of likelihood:\n' +
+        '  • same host under a different name (127.0.0.1 vs localhost vs a LAN IP): the ' +
+        'gateway derives its origin from gateway.host/gateway.port, so open the SPA at the ' +
+        'origin it derived, or set gateway.public_url to the one you use;\n' +
+        '  • behind a reverse proxy: set gateway.public_url to the HTTPS origin the browser ' +
+        'reaches;\n' +
+        '  • no origin named at all: the bind is a wildcard (0.0.0.0 / ::) so no origin is ' +
+        'derivable — set gateway.public_url. The gateway logs this at boot too.\n' +
+        `Served policy: ${livePolicy}`,
+      ).toBe(true);
+    }
+
+    await embedPreview(page, tokenURL);
+
+    // ── FR-005b's three attributes, read off the live DOM ────────────────────
+    // Asserted rather than assumed: `embedPreview` sets them, but if a future
+    // edit drops one, every containment row below would still pass — the header
+    // would be carrying the whole load — and the "defence in depth if a proxy
+    // strips the header" property would be gone with no symptom.
+    const attrs = await page.evaluate(() => {
+      const f = document.querySelector('#e2e-preview-frame');
+      return {
+        sandbox: f?.getAttribute('sandbox') ?? null,
+        referrerpolicy: f?.getAttribute('referrerpolicy') ?? null,
+        allow: f?.getAttribute('allow') ?? null,
+        srcdoc: f?.hasAttribute('srcdoc') ?? false,
+      };
+    });
+    expect(attrs.sandbox, 'FR-005b: sandbox="allow-scripts", and NOT allow-same-origin').toBe('allow-scripts');
+    expect(attrs.referrerpolicy, 'FR-005b: the token must not leave in a Referer').toBe('no-referrer');
+    expect(attrs.allow, 'FR-005b: an empty allow="" delegates no permissions').toBe('');
+    expect(attrs.srcdoc, '§10.6: never srcdoc — it has no response to carry the policy').toBe(false);
+
+    // ── NON-VACUITY, from the frame's own DOM ────────────────────────────────
+    // Not from the network: WebKit surfaces none of a sandboxed frame's
+    // requests to the driver, so a request-count oracle is blind there and
+    // every negative below would be automatically true.
+    const report = await readPreviewReport(page, '#e2e-preview-frame');
+    expect(report.attempted.split(','), 'all twelve probes must have been attempted')
+      .toHaveLength(PROBES_BEFORE_FORM + 1);
+
+    await clickInsidePreview(page, '#e2e-preview-frame');
+    await page.waitForTimeout(EGRESS_SETTLE_MS);
+
+    // ── RENDERING (US-1 AS-4, FR-004) ────────────────────────────────────────
+    // The half the header+attribute composition broke on WebKit. `'unsafe-inline'`
+    // cannot explain either of these: both flags are set by an EXTERNAL file.
+    expect(report.js_ran, "FR-004: under the composition, the bundle's external script MUST run").toBe(true);
+    expect(report.css_applied, 'US-1 AS-4: and its external stylesheet MUST apply').toBe(true);
+
+    // ── CONTAINMENT (FR-005, FR-006), the SAME frame, the SAME load ──────────
+    const previewFrame = page.frames().find((f) => f.url().includes(tokenURL));
+    expect(previewFrame, 'the preview frame navigated away — the form submit was NOT blocked').toBeTruthy();
+    assertNoEgress(ext.hits, 'the composed header + attribute embedding');
+    expect(vectorsReaching(ext.hits)).toEqual([]);
+    expect(report.origin_opaque, 'FR-005: the document must be bound to an opaque origin').toBe(true);
+    expect(report.cookie, 'document.cookie must THROW, not return empty').toMatch(/^THREW:/);
+
+    // The browser-side log is deliberately NOT an oracle here — see the module
+    // header. It is kept only so a failure report can show what the driver did
+    // see, which on WebKit is nothing from inside the frame, by design.
+    await log.settle();
   });
 
   // ───────────────────────────────────────────────────────────────────────────
@@ -597,11 +819,19 @@ test.describe('ADR-067 preview isolation — seven egress vectors, retries: 0', 
     const policies = mutantPolicies(shippedPolicy);
     expect(policies.sandboxonly, 'the shipped policy must contain a sandbox directive').toMatch(/^sandbox\b/);
     expect(policies.nosandbox, 'the shipped policy must contain source directives').toContain("default-src 'none'");
+    // The `wrongsource` mutant must actually BE a mutation. If §10.3 ever
+    // reached a shape with no origin-bearing source at all, the rewrite would
+    // be the identity function and the render-mutation proof below would pass
+    // while proving nothing — the precise false-green this file is built
+    // against.
+    expect(policies.wrongsource, 'repointing the sources must change the policy — otherwise the render mutation is vacuous')
+      .not.toBe(shippedPolicy);
+    expect(policies.wrongsource, `the repointed policy must name ${DEAD_ORIGIN}`).toContain(DEAD_ORIGIN);
     mutant = await startMutantOrigin(policies, ext.port);
     return mutant;
   }
 
-  async function driveMutant(page: Page, policy: 'shipped' | 'nosandbox' | 'sandboxonly' | 'none'): Promise<void> {
+  async function driveMutant(page: Page, policy: MutantPolicyName): Promise<void> {
     const origin = await ensureMutantOrigin(page);
     ext.reset();
     await page.goto(origin.documentURL(policy));
@@ -678,5 +908,82 @@ test.describe('ADR-067 preview isolation — seven egress vectors, retries: 0', 
     await driveMutant(page, 'shipped');
     assertNoEgress(ext.hits, 'the shipped-policy mutant baseline');
     expect(vectorsReaching(ext.hits)).toEqual([]);
+  });
+
+  test('mutation — repointing the SOURCES at a dead origin stops the bundle rendering, and the render assertions go red', async ({ page }) => {
+    // THE MUTATION PROOF FOR 11c AND 11d's RENDER HALF.
+    //
+    // Those two require `js_ran` and `css_applied` to be TRUE. Neither claim is
+    // worth anything until this oracle has been seen to report FALSE — and
+    // "the page rendered" is the single most likely assertion in this file to
+    // go quietly, permanently true. (It is also the mirror image of the trap
+    // the containment tests guard against: a page that renders nothing passes
+    // every egress assertion perfectly.)
+    //
+    // The mutant is the LIVE shipped policy with EVERY origin-bearing source
+    // rewritten to a dead loopback origin — `'self'` and the explicit host
+    // sources alike, because §10.3 carries both and rewriting only one of them
+    // would leave the other live and stop mutating anything. It is mechanically
+    // derived, so it stays a real mutation through any future change to the
+    // policy's source form. `sandbox` is left intact so the origin stays opaque
+    // and the report is still readable out of the document.
+    await driveMutant(page, 'wrongsource');
+    const report = await readPreviewReport(page);
+
+    // NON-VACUITY FIRST, and it is the whole reason this mutation is honest:
+    // the document DID load and its inline script DID run all twelve probes.
+    // Without this, `js_ran: false` would be equally consistent with "the
+    // fixture 404'd", which would make the mutation prove nothing about
+    // source-directive matching.
+    expect(report.attempted.split(','), 'the mutant document must still load and run its inline script')
+      .toHaveLength(PROBES_BEFORE_FORM + 1);
+
+    expect(report.js_ran, 'with the sources repointed, the EXTERNAL script must NOT run').toBe(false);
+    expect(report.css_applied, 'with the sources repointed, the EXTERNAL stylesheet must NOT apply').toBe(false);
+  });
+
+  test('mutation — the FR-005b ATTRIBUTE alone, with no policy at all, lets five of seven out', async ({ page }) => {
+    // WHY BOTH MECHANISMS STAY, stated as a measurement rather than as a claim
+    // in a comment.
+    //
+    // The obvious "simplification" whenever this policy causes trouble is to
+    // drop the header and rely on the frame's `sandbox="allow-scripts"`
+    // attribute, which looks like it does the same job. It does not: the header
+    // carries TWELVE rules and the attribute supplies exactly one of them (the
+    // sandbox). Everything the source directives do — no fetch, no beacon, no
+    // WebSocket, no cross-origin image, no nested frame — is simply absent.
+    //
+    // Same fixture bytes, same seven-vector oracle, embedded with the same
+    // three FR-005b attributes as the product, from a policy-free host page on
+    // the mutant origin. (The gateway's own shell cannot host this: §10.7 gives
+    // it `frame-src 'self'`, so the frame would be refused before the mutation
+    // was exercised.)
+    //
+    // Expected: the five the `sandbox` DIRECTIVE alone also let out (experiment
+    // §1, row `sandboxonly` — image, fetch, beacon, WebSocket, iframe), with
+    // popup and form closed by the sandbox. That list is PRE-REGISTERED from
+    // the experiment's measured table, not read off this run.
+    const origin = await ensureMutantOrigin(page);
+    ext.reset();
+    await page.goto(origin.embedderURL());
+    await embedPreview(page, origin.documentURL('none'));
+
+    const report = await readPreviewReport(page, '#e2e-preview-frame');
+    expect(report.attempted.split(','), 'all twelve probes must have been attempted')
+      .toHaveLength(PROBES_BEFORE_FORM + 1);
+    // The attribute IS doing its own job — this is not a "no isolation at all"
+    // control, it is the half that remains. If this ever comes back false the
+    // test below is measuring something other than the attribute standing alone.
+    expect(report.origin_opaque, 'the attribute alone still seals the origin').toBe(true);
+
+    await clickInsidePreview(page, '#e2e-preview-frame');
+    await waitForVectors(5);
+
+    const reached = vectorsReaching(ext.hits);
+    for (const vector of ['image', 'fetch', 'beacon', 'websocket', 'iframe'] as EgressVectorName[]) {
+      expect(reached, `${vector} escapes when only the frame attribute remains — the header is not optional`)
+        .toContain(vector);
+    }
+    expect(() => assertNoEgress(ext.hits, 'the attribute-only embedding')).toThrow(/egress reached/);
   });
 });

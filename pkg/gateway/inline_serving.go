@@ -37,10 +37,13 @@ package gateway
 //	                        (FR-015).
 //	Content-Disposition     inline ONLY for the §10.4 allow-list; everything
 //	                        else, .pdf included, is an attachment (FR-008).
-//	Content-Security-Policy the §10.3 literal string below, on every INLINE
-//	                        response and only those (FR-008b, MV-13). An
-//	                        attachment response carries none — MV-13 asserts
-//	                        that half too.
+//	Content-Security-Policy the §10.3 policy, on every INLINE response and only
+//	                        those (FR-008b, MV-13). An attachment response
+//	                        carries none — MV-13 asserts that half too. The
+//	                        string is BUILT IN ONE PLACE,
+//	                        library_isolation_policy.go, from §10.3's template
+//	                        and the gateway's canonical origin; this file only
+//	                        decides which responses carry it.
 //
 // HOW IT IS KEPT TRUE. inline_serving_test.go parses the package's own source
 // and fails when (a) any file other than this one writes a Content-Disposition
@@ -66,44 +69,28 @@ import (
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 )
 
-// libraryIsolationPolicy is the ADR-067 §10.3 measured isolation policy,
-// reproduced BYTE FOR BYTE. It is the whole of the P0 control for stage 1.
+// The §10.3 policy itself is BUILT, not written down, and it is built in ONE
+// place: library_isolation_policy.go's buildLibraryIsolationPolicy, reached
+// from here through libraryIsolationPolicy().
 //
-// Provenance: docs/internal/experiments/preview-isolation/server.py's
-// POLICIES["self"], byte-identical to server2.py's `active`. Measured on
-// Chromium 151, Firefox 153 and WebKit 26.5, twice each, top-level and
-// embedded, with server-side request logs as ground truth: zero of seven
-// egress vectors out, opaque origin, cookie unreadable, CSS and JS working.
+// It stopped being a compile-time constant because §10.3 became a TEMPLATE
+// (amended 2026-08-23). Under WebKit, adding the FR-005b iframe `sandbox`
+// ATTRIBUTE on top of the §10.3 sandbox DIRECTIVE makes the document's own
+// `self` an opaque origin that matches nothing, so its external `<script src>`
+// and `<link rel=stylesheet>` never load — measured, and not a containment
+// failure: the origin stays opaque, `document.cookie` still throws and zero of
+// seven egress vectors arrive. The six source directives therefore name the
+// gateway's canonical browser-facing origin IN ADDITION TO `'self'`, never
+// instead of it: an explicit host source is matched against the REQUEST URL and
+// so is immune to the opaque-origin problem, while keeping `'self'` is what
+// makes a wrong or absent origin a Safari-only degradation instead of an
+// all-engine outage. The measurement, the substitution rules and the reason
+// both mechanisms stay are documented in library_isolation_policy.go.
 //
-// DO NOT "TIDY" THIS STRING. Three parts of it are load-bearing in ways that
-// are invisible from reading it:
-//
-//   - `allow-same-origin` is ABSENT, deliberately. Withholding it is what
-//     makes the origin opaque, which is what makes document.cookie and
-//     localStorage THROW on all three engines. Granting it beside
-//     allow-scripts hands the page the session cookie and undoes everything
-//     else here.
-//   - `allow-popups`/`allow-forms`/`allow-downloads` are ABSENT. Measured:
-//     with the source directives but no sandbox, window.open still reached
-//     the external origin on EVERY engine. No CSP directive covers popup
-//     navigation; the sandbox is the only thing that closes it.
-//   - BOTH mechanisms are required. sandbox alone let five of seven vectors
-//     out; source directives alone let window.open out. Shipping either half
-//     satisfies neither FR-005 nor FR-006 — and would still pass any
-//     requirement that merely asks for "a policy".
-//
-// `'unsafe-inline'` is deliberate and is NOT the boundary: a previewed report
-// normally contains inline scripts and styles, and removing it breaks ordinary
-// documents without adding protection. What contains the page is the opaque
-// origin plus zero egress.
-//
-// `frame-ancestors` is deliberately NOT here and has never been measured. Do
-// not add it on reasoning alone (§10.3).
-const libraryIsolationPolicy = "sandbox allow-scripts; default-src 'none'; " +
-	"script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; " +
-	"img-src 'self' data: blob:; font-src 'self'; media-src 'self'; " +
-	"frame-src 'self'; connect-src 'none'; form-action 'none'; " +
-	"base-uri 'none'; object-src 'none'"
+// A SECOND COPY OF THE STRING ANYWHERE IN THIS PACKAGE IS A DEFECT. Two copies
+// drift, and the copy that drifts is the one nobody re-reads — a dropped
+// directive has no visible symptom. inline_serving_test.go's source gate fails
+// the build if a const string carrying the policy appears outside the builder.
 
 // Header names, written once so the source scan in inline_serving_test.go has
 // exactly one legal place to find the Content-Disposition literal.
@@ -159,7 +146,7 @@ func applyLibraryByteHeaders(
 	if disposition == gen.LibraryInlineDispositionDispositionInline {
 		h.Set(headerContentDisposition, contentDispositionInline(displayName))
 		// FR-008b / MV-13: every inline response, whatever the file's type.
-		h.Set(headerContentSecurityPolicy, libraryIsolationPolicy)
+		h.Set(headerContentSecurityPolicy, libraryIsolationPolicy())
 		return disposition
 	}
 
@@ -192,7 +179,7 @@ func applyLibraryPreviewByteHeaders(
 	displayName string,
 ) gen.LibraryInlineDispositionDisposition {
 	disposition := applyLibraryByteHeaders(w, displayName, false)
-	w.Header().Set(headerContentSecurityPolicy, libraryIsolationPolicy)
+	w.Header().Set(headerContentSecurityPolicy, libraryIsolationPolicy())
 	return disposition
 }
 

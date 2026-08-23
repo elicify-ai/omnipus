@@ -67,8 +67,9 @@ func previewLimitRequest(method, target, clientIP string) *http.Request {
 // TestPreviewToken_RateLimitedAndCapped is spec test 115.
 func TestPreviewToken_RateLimitedAndCapped(t *testing.T) {
 	t.Run("the serving path answers 429 past its window", func(t *testing.T) {
-		want := specIsolationPolicy(t)
 		f := newPreviewFixture(t)
+		freezePreviewPolicyForTest(t)
+		want := specIsolationPolicy(t, previewFixtureSources)
 
 		limit := libraryPreviewServeLimiter.limit
 		require.Positive(t, limit,

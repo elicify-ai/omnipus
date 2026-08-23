@@ -115,6 +115,12 @@ import { expect, request as playwrightRequest, test, type APIRequestContext, typ
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type { Socket } from 'node:net';
+import {
+  GATEWAY_ORIGIN_PLACEHOLDER,
+  expectedIsolationPolicy,
+  gatewayCanonicalOrigin,
+  gatewayOriginSources,
+} from './fixtures/preview-isolation/policy-oracle.js';
 
 // FILE-level retry pin. See the header: this is the second of two independent
 // places that hold it at zero.
@@ -124,20 +130,29 @@ const BASE_URL = process.env.OMNIPUS_URL || 'http://localhost:6060';
 const AUTH_FILE = process.env.OMNIPUS_AUTH_FILE || './tests/e2e/fixtures/.auth/admin.json';
 
 /**
- * The ADR-067 §10.3 policy, byte for byte.
+ * The ADR-067 §10.3 policy this gateway must serve, byte for byte.
  *
- * Copied from the SPEC (§10.3 "The measured isolation policy — the literal
- * string"), NOT from pkg/gateway/inline_serving.go. That direction is the whole
- * point of an oracle: a test that reads its expected value out of the
- * implementation asserts only that the implementation equals itself, and would
- * keep passing while a directive was quietly dropped.
+ * STILL READ FROM THE SPEC, NOT FROM pkg/gateway — the direction is the whole
+ * point of an oracle, and nothing about that has changed: a test that reads its
+ * expected value out of the implementation asserts only that the implementation
+ * equals itself, and would keep passing while a directive was quietly dropped.
+ *
+ * WHAT CHANGED, 2026-08-23. §10.3 is no longer a fixed literal that could be
+ * transcribed here. It is a TEMPLATE with one named placeholder,
+ * `${GATEWAY_ORIGIN}`, and the substitution depends on the gateway's own
+ * configuration — because `'self'` matches nothing inside an
+ * attribute-sandboxed WebKit iframe, so the six subresource directives name the
+ * gateway's origin as well. A hand-transcribed literal cannot express that, and
+ * the old one is now simply the wrong string.
+ *
+ * So the expected value is assembled by `expectedIsolationPolicy()`, which
+ * reads §10.3's template out of the specification's own markdown and applies
+ * §10.3's substitution table to `$OMNIPUS_HOME/config.json`. Read that module's
+ * header before touching this — in particular the note explaining why the
+ * origin comes from the GATEWAY'S config and NOT from `BASE_URL`, which is the
+ * one thing here that looks like a bug and is not.
  */
-const ISOLATION_POLICY =
-  "sandbox allow-scripts; default-src 'none'; " +
-  "script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; " +
-  "img-src 'self' data: blob:; font-src 'self'; media-src 'self'; " +
-  "frame-src 'self'; connect-src 'none'; form-action 'none'; " +
-  "base-uri 'none'; object-src 'none'";
+const ISOLATION_POLICY = expectedIsolationPolicy();
 
 /** The prefix §10.3's sandbox half occupies, used to derive the two mutations. */
 const SANDBOX_PREFIX = 'sandbox allow-scripts; ';
@@ -775,6 +790,58 @@ test.describe('ADR-067 §10.4 — .svg on the inline allow-list, and type confus
     expect(SOURCES_ONLY_POLICY).not.toContain('sandbox');
     expect(SANDBOX_ONLY_POLICY).not.toBe(ISOLATION_POLICY);
     expect(SANDBOX_ONLY_POLICY).not.toContain('default-src');
+  });
+
+  /**
+   * The ORACLE must have substituted, and it must have substituted correctly.
+   *
+   * Without this, the byte-exact assertions below would be satisfied by an
+   * oracle that quietly produced §10.3's EMPTY case — the collapsed `'self'`
+   * form — while the gateway also produced it, and both would be wrong
+   * together: every Safari preview in that configuration renders blank. The
+   * empty case is legitimate (a wildcard bind with no `gateway.public_url`) and
+   * the gateway logs a WARN for it, so it is not asserted away here — it is
+   * asserted ALOUD, with the derivation printed, so a run in that configuration
+   * says which case it measured instead of silently measuring the weaker one.
+   *
+   * Read off §10.3's substitution table, never off the served header:
+   *   • a placeholder never survives into a served policy;
+   *   • the empty case collapses `'self' ${GATEWAY_ORIGIN}` to `'self'` with NO
+   *     double space anywhere — the failure that is invisible in both strings;
+   *   • otherwise every derived source appears, and a loopback bind yields all
+   *     three spellings.
+   */
+  test('the policy oracle substituted §10.3\'s placeholder, and says which case it took', () => {
+    const canonical = gatewayCanonicalOrigin();
+    const sources = gatewayOriginSources(canonical);
+    const evidence =
+      `canonical origin: ${canonical || '(none — wildcard bind and no gateway.public_url)'} | ` +
+      `substituted sources: ${sources.length ? sources.join(' ') : '(none — §10.3 empty case)'} | ` +
+      `policy: ${ISOLATION_POLICY}`;
+
+    expect(ISOLATION_POLICY, `a placeholder must never survive substitution. ${evidence}`)
+      .not.toContain(GATEWAY_ORIGIN_PLACEHOLDER);
+    expect(ISOLATION_POLICY, `§10.3 forbids a double space in every case. ${evidence}`)
+      .not.toContain('  ');
+
+    if (sources.length === 0) {
+      // The empty case, stated rather than skipped past. This gateway serves
+      // previews that WebKit renders without CSS or JS; §10.3 accepts that and
+      // requires a WARN, and this suite must not report it as the normal case.
+      expect(ISOLATION_POLICY, `§10.3 empty case must collapse to 'self' exactly. ${evidence}`)
+        .toContain("script-src 'self' 'unsafe-inline'");
+      return;
+    }
+
+    for (const source of sources) {
+      expect(ISOLATION_POLICY, `every derived source must appear in the policy. ${evidence}`)
+        .toContain(source);
+    }
+    // A loopback bind is the default install and the case that broke Safari;
+    // one entry there means the alias rule was lost.
+    if (/^https?:\/\/(127\.|localhost|\[::1\])/.test(canonical)) {
+      expect(sources.length, `§10.3: a loopback bind names all three spellings. ${evidence}`).toBe(3);
+    }
   });
 
   /**

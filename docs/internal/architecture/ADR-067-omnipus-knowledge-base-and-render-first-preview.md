@@ -449,6 +449,46 @@ the URL the resource was served from, not the document's opaque origin. An expli
 behaved identically and additionally hardcodes a hostname that breaks behind a reverse
 proxy (`gateway.public_url`).
 
+> **AMENDED 2026-08-23 — the paragraph above is wrong in one cell, and it was the cell we
+> ship.** Kept rather than deleted, because what was believed and why it failed is the useful
+> part. Revision 1's warning was half right after all.
+>
+> The 2026-08-22 measurement covered the §10.3 **header alone**. It never combined the header
+> with the `sandbox` **attribute** on the `<iframe>` that D15.6's delivery model actually uses.
+> Measured on 2026-08-23, one engine at a time, with a positive control per cell proving the
+> document loaded: on **WebKit**, an embedded preview carrying `sandbox="allow-scripts"` runs
+> its inline script but **`'self'` matches nothing** — the external `<script src>` and
+> `<link rel=stylesheet>` are refused before any request leaves, with enforce-mode
+> `script-src-elem` / `style-src-elem` violations naming them. Chromium and Firefox are
+> unaffected in every mode; WebKit is fine top-level, and fine embedded with the attribute
+> removed. **Real Safari 26.5.2 reproduces it**, so this is what users see today.
+>
+> **Containment never moved.** Opaque origin, `document.cookie` and `localStorage` still
+> throwing, zero of seven egress vectors — in the broken cell too, against a no-policy control
+> that let all seven through. This is a rendering defect against US-1 AS-4, not a security one.
+>
+> **Whose bug:** WebKit's. CSP3 §2.2.2 sets a policy's self-origin from the *response URL's*
+> origin, precisely so `'self'` survives an opaque origin; WebKit derives it from the document's
+> `SecurityOrigin`, which the attribute has already made opaque by parse time. Upstream bug
+> **316847**, fixed by **315247@main** (2026-06-15), regression introduced by **314912@main** —
+> not yet in any shipping Safari. Full record, including the four-engine table:
+> `docs/internal/specs/adr-067-webkit-self-origin-measurement-2026-08-23.md`.
+>
+> **Decision: `'self'` is KEPT and the gateway's explicit origin is ADDED beside it** in the six
+> source directives (never `connect-src`, which stays `'none'`). Not replaced — replacing it was
+> measured worse: a policy naming `127.0.0.1` while the browser reached the same socket as
+> `localhost` blocked subresources on **all three** engines, and the seeded default binds
+> `127.0.0.1:5000`, so pure replacement would trade a Safari-only defect for an all-browser one
+> triggered by how someone typed the URL. With both sources present, the spec-correct engines
+> match via `'self'` regardless of spelling, Safari is carried by the explicit origin, and a
+> wrong or absent origin degrades to exactly today's behaviour rather than to a blank page.
+> The reverse-proxy objection in the paragraph above stands and is answered the same way: the
+> origin is resolved at runtime from `middleware.CanonicalGatewayOrigin(cfg)`, never compiled in,
+> and an empty result (a `0.0.0.0` bind with no `public_url` — ordinary Docker) collapses to the
+> `'self'`-only string plus one WARN. Adding a host-source is also permanently sound rather than
+> a workaround: CSP3 §6.7.2 matches a host-source against the **request URL** and never consults
+> the document origin, so it cannot be re-broken by this class of bug.
+
 **Both mechanisms are required.** Measured: with source directives but no `sandbox`,
 `window.open` still reached the external origin on every engine — no CSP directive covers
 popup navigation. With `sandbox` but no source directives, five of seven vectors escaped.
@@ -724,7 +764,7 @@ sequencing is now the main lever left"* — was dropped in revision 1. Reinstate
 | A11 | Last-write-wins on KB files | With Syncthing replicating and agents writing unattended, a silently lost note is inevitable |
 | A12 | Read-only in mounted KBs | Removes the authoring tools from the KB they were designed for |
 | A13 | Create KBs at arbitrary host paths | A new broad capability, when workspace-first plus the existing move covers the need |
-| A14 | **Serve preview content from a distinct origin** (separate port or host) | **Rejected on evidence, 2026-08-22.** It existed only as a fallback if `'self'` failed under an opaque origin; measurement on three engines showed `'self'` works, so the fallback is unnecessary and ADR-044's single listener stands |
+| A14 | **Serve preview content from a distinct origin** (separate port or host) | **Still rejected — but the 2026-08-22 reason it was rejected for turned out to be false, so the current reason is different.** That entry read: *"It existed only as a fallback if `'self'` failed under an opaque origin; measurement on three engines showed `'self'` works, so the fallback is unnecessary and ADR-044's single listener stands."* Re-measured 2026-08-23 (D15.2's amendment): `'self'` **does** fail under an opaque origin on WebKit, in exactly the embedded-with-`sandbox`-attribute configuration this ADR ships, and on real Safari 26.5.2. What that revives is not this alternative, though — a second origin was only ever one way to give the policy a source it could match, and naming the gateway's own origin explicitly beside `'self'` does the same thing for the price of one config lookup, with no second listener, no second certificate, no second `public_url` and no change to ADR-044. A14 stays rejected on cost; the fallback it was hedging is no longer hypothetical, and has been answered elsewhere |
 | A17 | **One sandboxing policy for every inline format** (revision 1) | Measured: breaks a framed PDF on all three engines. Superseded — with PDF.js there is no framed PDF to break, and the uniform policy returns for the one class that needs it |
 | A18 | **Add `allow-downloads` to the sandbox so PDFs render** | Unverified, and it weakens the sandbox for active content where downloads are an exfiltration route. Unnecessary once PDF is not rendered by the browser at all |
 | A19 | **Drop inline PDF entirely, keep the download card** | Honest and zero-risk, but loses the format the operator most wants to read in place |

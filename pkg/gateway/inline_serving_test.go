@@ -60,12 +60,32 @@ import (
 // 0. The oracle: the §10.3 policy, typed from the spec, not from the code
 // ---------------------------------------------------------------------------
 
-// inlinePolicyFromSpec is ADR-067 §10.3's literal string, transcribed from the
-// specification. It is deliberately a single unbroken literal — the production
-// constant is assembled from concatenated fragments, so a transcription error
-// in either one shows up as a mismatch rather than as two copies of the same
-// mistake.
-const inlinePolicyFromSpec = "sandbox allow-scripts; default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; media-src 'self'; frame-src 'self'; connect-src 'none'; form-action 'none'; base-uri 'none'; object-src 'none'"
+// inlinePolicyTemplateFromSpec is ADR-067 §10.3's TEMPLATE, transcribed by
+// hand from the specification. It is deliberately a single unbroken literal —
+// the production template is assembled from concatenated fragments, so a
+// transcription error in either one shows up as a mismatch rather than as two
+// copies of the same mistake.
+//
+// AMENDED 2026-08-23. §10.3 stopped being a fixed literal: the six source
+// directives now name the gateway's origin BESIDE `'self'`, because `'self'`
+// matches nothing inside an FR-005b attribute-sandboxed WebKit iframe. The
+// byte-for-byte contract did not weaken — it binds the SUBSTITUTED string, and
+// the substitution rules are §10.3's own.
+const inlinePolicyTemplateFromSpec = "sandbox allow-scripts; default-src 'none'; script-src 'self' ${GATEWAY_ORIGIN} 'unsafe-inline'; style-src 'self' ${GATEWAY_ORIGIN} 'unsafe-inline'; img-src 'self' ${GATEWAY_ORIGIN} data: blob:; font-src 'self' ${GATEWAY_ORIGIN}; media-src 'self' ${GATEWAY_ORIGIN}; frame-src 'self' ${GATEWAY_ORIGIN}; connect-src 'none'; form-action 'none'; base-uri 'none'; object-src 'none'"
+
+// inlineServingWantPolicy is the header these routes must serve once the
+// gateway origin is frozen to previewFixtureCanonicalOrigin: §10.3's template,
+// read from the spec markdown at test time, with the loopback source list
+// substituted by §10.3's rules (specIsolationPolicy, rest_library_preview_test.go).
+//
+// Read from the spec rather than from inlinePolicyTemplateFromSpec on purpose —
+// two independent transcriptions of the same string cannot cover for each
+// other, which is what makes TestInlineIsolationPolicy_MatchesSpecDocument
+// worth having.
+func inlineServingWantPolicy(t *testing.T) string {
+	t.Helper()
+	return specIsolationPolicy(t, previewFixtureSources)
+}
 
 // specDocRelPath is the specification itself, read at test time.
 const specDocRelPath = "../../docs/internal/specs/adr-067-knowledge-base-and-preview-spec.md"
@@ -86,12 +106,16 @@ const specDocRelPath = "../../docs/internal/specs/adr-067-knowledge-base-and-pre
 func TestInlineIsolationPolicy_MatchesSpecDocument(t *testing.T) {
 	fromDoc := readSpecPolicyString(t)
 
-	assert.Equal(t, fromDoc, libraryIsolationPolicy,
-		"the production constant is not byte-identical to ADR-067 §10.3.\n"+
+	assert.Equal(t, fromDoc, libraryIsolationPolicyTemplate,
+		"the production template is not byte-identical to ADR-067 §10.3.\n"+
 			"This is the whole P0 control: a dropped directive here has no visible "+
 			"symptom and reopens measured egress vectors.")
-	assert.Equal(t, fromDoc, inlinePolicyFromSpec,
+	assert.Equal(t, fromDoc, inlinePolicyTemplateFromSpec,
 		"this test file's transcription of §10.3 has drifted from the spec")
+	assert.Contains(t, fromDoc, libraryIsolationOriginPlaceholder,
+		"§10.3 is a template: the production code substitutes %s, so a spec that has lost "+
+			"its placeholder would silently pin the pre-amendment literal and Safari would "+
+			"render blank previews again", libraryIsolationOriginPlaceholder)
 }
 
 // readSpecPolicyString extracts the single fenced code block that follows the
@@ -176,6 +200,18 @@ var expectedInlineServingSites = []inlineServingSite{
 	{file: "rest_library_preview.go", fn: "handleServeLibraryPreview", policyOnEveryResponse: true},
 }
 
+// libraryIsolationPolicyImplFile is where the §10.3 policy is BUILT, and the
+// only file permitted to contain the string.
+//
+// It is a SECOND exemption, separate from inlineServingImplFile, and the two
+// are not interchangeable: inline_serving.go is the only file that may WRITE a
+// Content-Disposition header, and library_isolation_policy.go is the only file
+// that may CONTAIN the policy template. Collapsing them into one constant
+// would quietly let the policy be redefined in inline_serving.go, which is
+// where it used to live and is therefore exactly where a merge would put it
+// back.
+const libraryIsolationPolicyImplFile = "library_isolation_policy.go"
+
 // inlineServingImplFile is where the helpers are DEFINED. Its own calls are the
 // implementation, not serving sites.
 const inlineServingImplFile = "inline_serving.go"
@@ -259,13 +295,13 @@ func TestNoUnprotectedInlineRoute(t *testing.T) {
 	t.Run("the_isolation_policy_is_defined_exactly_once", func(t *testing.T) {
 		copies := scanIsolationPolicyLiterals(t)
 		assert.Empty(t, copies,
-			"FR-008b/MV-13: the §10.3 policy string is duplicated outside %s.\n"+
+			"FR-008b/MV-13: the §10.3 policy template is duplicated outside %s.\n"+
 				"Two copies drift, and the copy that drifts is the one nobody re-reads — a\n"+
 				"dropped directive has no visible symptom, so the stale copy keeps serving\n"+
 				"pages that look identical and are no longer contained. Use\n"+
-				"libraryIsolationPolicy (or applyLibraryPreviewByteHeaders, which carries it on\n"+
+				"libraryIsolationPolicy() (or applyLibraryPreviewByteHeaders, which carries it on\n"+
 				"every response including attachments, as the token path requires):\n%s",
-			inlineServingImplFile, strings.Join(copies, "\n"))
+			libraryIsolationPolicyImplFile, strings.Join(copies, "\n"))
 	})
 
 	t.Run("only_inventoried_functions_call_a_stdlib_byte_writer", func(t *testing.T) {
@@ -428,7 +464,7 @@ func scanIsolationPolicyLiterals(t *testing.T) []string {
 
 	for _, dir := range inlineServingScannedDirs {
 		for _, file := range inlineServingScanGoFiles(t, dir) {
-			if filepath.Base(file) == inlineServingImplFile {
+			if filepath.Base(file) == libraryIsolationPolicyImplFile {
 				continue // the definition
 			}
 			parsed, err := parser.ParseFile(fset, file, nil, parser.SkipObjectResolution)
@@ -602,6 +638,13 @@ func inlineServingRouteCases() []inlineServingRouteCase {
 // nosniff), FR-015/FR-015a/FR-015b (the type comes from the compiled-in table,
 // never the host registry and never the bytes), MV-13, MV-24, spec test 99.
 func TestInlineServingRoutes_PolicyTypeAndDisposition(t *testing.T) {
+	// §10.3 is now substituted from the frozen gateway origin, so the expected
+	// header is only defined once that origin is known. Freezing it here — and
+	// restoring it afterwards — is what stops this test measuring whichever
+	// origin some earlier test happened to leave behind.
+	freezeLibraryIsolationPolicyForTest(t, previewFixtureCanonicalOrigin)
+	wantPolicy := inlineServingWantPolicy(t)
+
 	for _, tc := range inlineServingRouteCases() {
 		for _, fx := range inlineServingFixtures() {
 			t.Run(tc.site.fn+"/"+fx.name, func(t *testing.T) {
@@ -637,9 +680,9 @@ func TestInlineServingRoutes_PolicyTypeAndDisposition(t *testing.T) {
 						"§10.4 lists %q as inline, and the filename survives", filepath.Ext(fx.name))
 					require.Len(t, policy, 1,
 						"FR-008b: an inline response carries exactly one Content-Security-Policy")
-					assert.Equal(t, inlinePolicyFromSpec, policy[0],
-						"MV-13: the policy must be byte-identical to §10.3. A policy that merely "+
-							"exists is satisfied by default-src *")
+					assert.Equal(t, wantPolicy, policy[0],
+						"MV-13: the policy must be byte-identical to §10.3's substituted string. "+
+							"A policy that merely exists is satisfied by default-src *")
 					return
 				}
 
@@ -654,7 +697,7 @@ func TestInlineServingRoutes_PolicyTypeAndDisposition(t *testing.T) {
 					require.Len(t, policy, 1,
 						"§10.3: every response on the preview-token path carries the policy, "+
 							"WHATEVER the file's type — an attachment there is not an exception")
-					assert.Equal(t, inlinePolicyFromSpec, policy[0])
+					assert.Equal(t, wantPolicy, policy[0])
 					return
 				}
 				assert.Empty(t, policy,
@@ -679,12 +722,13 @@ func TestInlineServingRoutes_PolicyTypeAndDisposition(t *testing.T) {
 //
 // Traces to: FR-008b, US-2 AS-1.
 func TestWorkspaceMediaRoute_HtmlNoLongerRendersOnTheGatewayOrigin(t *testing.T) {
+	freezeLibraryIsolationPolicyForTest(t, previewFixtureCanonicalOrigin)
 	rec := serveViaWorkspaceMediaRoute(t, "agent-report.html", scriptedHTML)
 
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 	require.Equal(t, string(scriptedHTML), rec.Body.String())
 
-	assert.Equal(t, inlinePolicyFromSpec, rec.Header().Get("Content-Security-Policy"),
+	assert.Equal(t, inlineServingWantPolicy(t), rec.Header().Get("Content-Security-Policy"),
 		"an HTML entry in a workspace media library is served inline on the gateway origin; "+
 			"without the §10.3 policy it has the session cookie and the whole authenticated API")
 	assert.NotContains(t, rec.Header().Get("Content-Security-Policy"), "allow-same-origin",
@@ -704,13 +748,16 @@ func TestWorkspaceMediaRoute_HtmlNoLongerRendersOnTheGatewayOrigin(t *testing.T)
 //
 // Traces to: §10.3, FR-008, FR-008b, MV-13.
 func TestApplyLibraryPreviewByteHeaders_PolicyOnEveryResponse(t *testing.T) {
+	freezeLibraryIsolationPolicyForTest(t, previewFixtureCanonicalOrigin)
+	wantPolicy := inlineServingWantPolicy(t)
+
 	t.Run("inline_type_still_inline_and_contained", func(t *testing.T) {
 		rec := httptest.NewRecorder()
 		got := applyLibraryPreviewByteHeaders(rec, "index.html")
 
 		assert.Equal(t, gen.LibraryInlineDispositionDispositionInline, got)
 		assert.Equal(t, `inline; filename="index.html"`, rec.Header().Get("Content-Disposition"))
-		assert.Equal(t, inlinePolicyFromSpec, rec.Header().Get("Content-Security-Policy"))
+		assert.Equal(t, wantPolicy, rec.Header().Get("Content-Security-Policy"))
 		assert.Equal(t, "text/html; charset=utf-8", rec.Header().Get("Content-Type"))
 		assert.Equal(t, "nosniff", rec.Header().Get("X-Content-Type-Options"))
 	})
@@ -722,7 +769,7 @@ func TestApplyLibraryPreviewByteHeaders_PolicyOnEveryResponse(t *testing.T) {
 		assert.Equal(t, gen.LibraryInlineDispositionDispositionAttachment, got,
 			"FR-008: .pdf is typed but not on the §10.4 allow-list")
 		assert.True(t, strings.HasPrefix(rec.Header().Get("Content-Disposition"), "attachment;"))
-		assert.Equal(t, inlinePolicyFromSpec, rec.Header().Get("Content-Security-Policy"),
+		assert.Equal(t, wantPolicy, rec.Header().Get("Content-Security-Policy"),
 			"§10.3 applies to every response on the token path, whatever the file's type")
 	})
 }

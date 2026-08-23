@@ -151,7 +151,7 @@ func (f *revocationFixture) requireGrantDead(t *testing.T, url, forbidden string
 			"revocation — an unrevoked token is a live UNAUTHENTICATED read grant for up to 15 minutes")
 	assert.NotContains(t, rec.Body.String(), forbidden,
 		"FR-003d: the refused response must not still contain the granted file's bytes")
-	assert.Equal(t, libraryIsolationPolicy, rec.Header().Get("Content-Security-Policy"),
+	assert.Equal(t, libraryIsolationPolicy(), rec.Header().Get("Content-Security-Policy"),
 		"FR-003n/§10.3: the refusal is still a response on the token path and carries the policy")
 }
 

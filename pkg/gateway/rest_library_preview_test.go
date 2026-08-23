@@ -5,10 +5,13 @@
 // ORACLE DISCIPLINE. Every expected value below comes from the specification,
 // not from what the handler happens to do:
 //
-//   - the Content-Security-Policy string is READ OUT OF THE SPEC FILE at test
-//     time (§10.3's fenced block) and compared to the constant the handler
-//     serves. A test carrying its own hand-typed copy of the policy asserts
-//     only that two strings written by the same person agree.
+//   - the Content-Security-Policy is READ OUT OF THE SPEC FILE at test time
+//     (§10.3's fenced TEMPLATE), has the gateway host-sources substituted per
+//     §10.3's table, and is compared byte for byte against the header a browser
+//     would actually receive. A test carrying its own hand-typed copy of the
+//     policy asserts only that two strings written by the same person agree;
+//     a test that checked the header merely CONTAINS the origin would pass on
+//     a policy that had lost `sandbox`, which is five of seven egress vectors.
 //   - "GET, HEAD" and 405 come from FR-003j; 404-for-all-token-failures from
 //     FR-003n; 900 seconds from FR-003d/§10.5; the inline/attachment split
 //     from the §10.4 table.
@@ -44,19 +47,85 @@ import (
 
 // --- the policy string, read from the specification ------------------------
 
-// specIsolationPolicy extracts §10.3's fenced policy block from the spec file
-// and returns it verbatim.
+// gatewayOriginPlaceholder is the named placeholder §10.3 publishes inside its
+// policy template. It is spelled here exactly once; every substitution in this
+// package goes through specIsolationPolicy.
+const gatewayOriginPlaceholder = "${GATEWAY_ORIGIN}"
+
+// originBearingDirectives is §10.3's substitution table, transcribed: the six
+// source directives that carry the gateway origin beside 'self', and nothing
+// else.
+//
+// connect-src is deliberately ABSENT and its absence is asserted. FR-006
+// forbids fetch, XHR, sendBeacon and WebSocket to ANY origin, the gateway's
+// included — the directives that take the origin are the ones that load
+// subresources; the one that opens a channel is not among them. Adding the
+// origin there would look like a consistency fix and would silently reopen the
+// vector the requirement exists for.
+var originBearingDirectives = []string{
+	"script-src", "style-src", "img-src", "font-src", "media-src", "frame-src",
+}
+
+// previewFixtureCanonicalOrigin is the canonical gateway origin these oracles
+// pin for the duration of each test. It is the default-install shape — a
+// loopback bind — so the source list they compare against exercises §10.3's
+// alias rule rather than its simplest case.
+const previewFixtureCanonicalOrigin = "http://127.0.0.1:8080"
+
+// previewFixtureSources is what §10.3's ${GATEWAY_ORIGIN} expands to for that
+// origin — a space-separated SOURCE LIST, not one origin. The host is loopback,
+// so §10.3's table calls for all three loopback spellings, the canonical one
+// first and then the remaining two in the fixed order 127.0.0.1, localhost,
+// [::1].
+//
+// It is written here as a LITERAL, derived by hand from §10.3's table, and that
+// is the whole point of it. A test that asked the production code which sources
+// it chose would agree with whatever it chose — one origin instead of three, a
+// different order, or "" (the degraded case), which would silently make every
+// comparison in this package pass against the unmodified pre-2026-08-23 string.
+const previewFixtureSources = "http://127.0.0.1:8080 http://localhost:8080 http://[::1]:8080"
+
+// freezePreviewPolicyForTest pins previewFixtureCanonicalOrigin as the
+// gateway's canonical origin for one test, restoring the previous value
+// afterwards.
+//
+// WHY EVERY ORACLE HERE MUST DO THIS, and it is not boilerplate. The policy is
+// frozen once per PROCESS at route registration, from restAPI.allowedOrigin —
+// so in a package where some tests register routes and some do not, whatever a
+// test measures would otherwise depend on which tests ran before it. That is a
+// test-order dependency on the value these oracles exist to check, and it reads
+// exactly like a real failure when it eventually bites. Pinning it makes each
+// oracle answer the same question no matter what else ran.
+//
+// It must be called AFTER anything that registers routes, since registration
+// re-freezes from the fixture's own allowedOrigin.
+func freezePreviewPolicyForTest(t *testing.T) {
+	t.Helper()
+	freezeLibraryIsolationPolicyForTest(t, previewFixtureCanonicalOrigin)
+	require.Equal(t, previewFixtureSources, strings.Join(libraryIsolationPolicySources(), " "),
+		"§10.3's substitution table: a loopback canonical origin expands to all three "+
+			"loopback spellings, canonical first. These oracles compare against a hand-derived "+
+			"list; if the derivation changed, re-derive it from §10.3 rather than weakening "+
+			"the comparisons")
+}
+
+// specIsolationPolicyTemplate extracts §10.3's fenced policy TEMPLATE from the
+// spec file and returns it verbatim, placeholder unsubstituted.
 //
 // WHY THE TEST READS THE SPEC. §10.3 says the header must match "byte for
-// byte" and reproduces the string precisely because "a nickname cannot be
+// byte" and publishes the string precisely because "a nickname cannot be
 // implemented and cannot be tested". A test that repeats the string inline
 // would go green on a typo copied into both places at once — which is exactly
 // how a policy loses a directive and nobody notices. Reading the source of
 // truth makes the two independent.
 //
 // Failing to find the block is a test FAILURE, never a skip: a silently
-// missing oracle is the false-green this suite is audited against.
-func specIsolationPolicy(t *testing.T) string {
+// missing oracle is the false-green this suite is audited against. The same
+// applies to the placeholder checks below — a template that has quietly lost
+// its placeholders would still produce a plausible-looking policy, and every
+// comparison in this package would keep passing while Safari served blank
+// previews again.
+func specIsolationPolicyTemplate(t *testing.T) string {
 	t.Helper()
 	raw, err := os.ReadFile(filepath.Join(
 		"..", "..", "docs", "internal", "specs",
@@ -69,9 +138,123 @@ func specIsolationPolicy(t *testing.T) string {
 	matches := re.FindAllString(string(raw), -1)
 	require.Len(t, matches, 1,
 		"§10.3 must contribute exactly one literal policy line to the spec; found %d", len(matches))
-	policy := matches[0]
-	require.NotEmpty(t, policy)
+	tmpl := matches[0]
+	require.NotEmpty(t, tmpl)
+
+	// The placeholder must appear in exactly the six source directives §10.3
+	// names, always preceded by a single space after 'self' — the empty-origin
+	// case collapses "'self' ${GATEWAY_ORIGIN}" by deleting the space and the
+	// placeholder together, and that only produces the documented string if
+	// every occurrence has that shape.
+	require.Equal(t, len(originBearingDirectives),
+		strings.Count(tmpl, gatewayOriginPlaceholder),
+		"§10.3's template must carry %s in exactly the %d source directives it names: %s",
+		gatewayOriginPlaceholder, len(originBearingDirectives), originBearingDirectives)
+	require.Equal(t,
+		strings.Count(tmpl, gatewayOriginPlaceholder),
+		strings.Count(tmpl, " '"+"self' "+gatewayOriginPlaceholder),
+		"every %s in §10.3 must follow \"'self' \" exactly — the empty-origin collapse in "+
+			"FR-005c deletes the placeholder AND the space before it, and any other shape "+
+			"leaves a doubled space or a hostless source", gatewayOriginPlaceholder)
+
+	// Directive-level check, so "the origin appears six times" cannot be
+	// satisfied by six occurrences in the wrong places.
+	byName := map[string]string{}
+	for _, d := range strings.Split(tmpl, "; ") {
+		name, value, _ := strings.Cut(d, " ")
+		byName[name] = value
+	}
+	for _, d := range originBearingDirectives {
+		value, ok := byName[d]
+		require.True(t, ok, "§10.3 lost the %s directive entirely", d)
+		require.Contains(t, value, gatewayOriginPlaceholder,
+			"§10.3's %s must carry %s", d, gatewayOriginPlaceholder)
+	}
+	require.Equal(t, "'none'", byName["connect-src"],
+		"FR-006/§10.3: connect-src must stay 'none' and MUST NOT gain the gateway origin — "+
+			"no fetch, XHR, sendBeacon or WebSocket to any origin, the gateway's included")
+
+	return tmpl
+}
+
+// specIsolationPolicy returns §10.3's template with the gateway host-sources
+// substituted by §10.3's rules, which is the value MV-13 requires on every
+// preview-token response.
+//
+// sources is the space-separated source LIST §10.3's ${GATEWAY_ORIGIN} stands
+// for — one entry for an ordinary host, three for a loopback bind.
+//
+// sources == "" is the documented degraded case (FR-005c): a 0.0.0.0 bind with
+// no gateway.public_url. The placeholder and the space before it are removed
+// together, which reproduces the pre-2026-08-23 string exactly — the point
+// being that operators in that configuration are no worse off than before, not
+// that they get a broken header.
+func specIsolationPolicy(t *testing.T, sources string) string {
+	t.Helper()
+	tmpl := specIsolationPolicyTemplate(t)
+
+	var policy string
+	if sources == "" {
+		policy = strings.ReplaceAll(tmpl, " "+gatewayOriginPlaceholder, "")
+	} else {
+		policy = strings.ReplaceAll(tmpl, gatewayOriginPlaceholder, sources)
+		require.Equal(t, len(originBearingDirectives), strings.Count(policy, sources),
+			"the substituted source list must appear once per origin-bearing directive")
+	}
+
+	// Substitution damage is invisible in a passing test that compares two
+	// equally-damaged strings, so it is checked here rather than at the call
+	// sites.
+	require.NotContains(t, policy, "${",
+		"unsubstituted placeholder left in the policy — §10.3 publishes exactly one, %s",
+		gatewayOriginPlaceholder)
+	require.NotContains(t, policy, "  ",
+		"doubled space in the substituted policy; the empty-origin collapse must remove the "+
+			"space before the placeholder as well as the placeholder")
+	require.True(t, strings.HasPrefix(policy, "sandbox allow-scripts; default-src 'none'; "),
+		"both mechanisms are required (§10.3): the sandbox directive alone let five of seven "+
+			"egress vectors out, and the source directives alone let window.open out")
 	return policy
+}
+
+// preAmendmentIsolationPolicy is the §10.3 literal as it stood before the
+// 2026-08-23 amendment, transcribed by hand from the spec's git history.
+//
+// It is here to pin ONE property that is easy to lose and impossible to notice:
+// FR-005c promises that a gateway which cannot resolve its own origin (a
+// 0.0.0.0 bind with no gateway.public_url — ordinary Docker) serves exactly
+// what it served yesterday. "Exactly" is the whole promise. A collapse that
+// left a doubled space, a trailing space, or a hostless source would still look
+// like a policy, would still pass any `contains` check, and would be a new
+// defect shipped to every containerised install in the name of fixing Safari.
+const preAmendmentIsolationPolicy = "sandbox allow-scripts; default-src 'none'; " +
+	"script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; " +
+	"img-src 'self' data: blob:; font-src 'self'; media-src 'self'; " +
+	"frame-src 'self'; connect-src 'none'; form-action 'none'; " +
+	"base-uri 'none'; object-src 'none'"
+
+// TestIsolationPolicy_EmptyOriginCollapsesToTheHistoricalString is FR-005c's
+// degraded case, asserted on the substitution rule itself.
+//
+// Scope, stated so nobody reads more into a green: this tests §10.3's TEMPLATE
+// and the substitution, not the handler. That the handler passes "" when
+// CanonicalGatewayOrigin yields "", and logs the WARN FR-005c requires, belongs
+// with the code that resolves the origin.
+func TestIsolationPolicy_EmptyOriginCollapsesToTheHistoricalString(t *testing.T) {
+	got := specIsolationPolicy(t, "")
+
+	require.Equal(t, preAmendmentIsolationPolicy, got,
+		"FR-005c: with no resolvable gateway origin the policy must collapse to exactly the "+
+			"pre-2026-08-23 string. Containment never depended on the origin, so this case is "+
+			"a visible rendering degradation and must be no worse than yesterday")
+	assert.NotContains(t, got, "  ", "the collapse must remove the space before the placeholder too")
+	assert.NotContains(t, got, "${", "no unsubstituted placeholder may survive")
+
+	// And the non-degraded form must differ from it — otherwise the whole
+	// amendment is a no-op that every assertion in this package would accept.
+	assert.NotEqual(t, preAmendmentIsolationPolicy, specIsolationPolicy(t, previewFixtureSources),
+		"a configured origin must actually change the policy; if these are equal, §10.3's "+
+			"template has lost its placeholders and Safari renders blank previews again")
 }
 
 // --- fixture ---------------------------------------------------------------
@@ -226,14 +409,27 @@ func tokenURL(token, rel string) string {
 //	(c) it is on EVERY response this route produces, errors included — a
 //	    policy that appears only on the happy path leaves every failure frame
 //	    unprotected.
+//
+// AMENDED 2026-08-23 with §10.3. The oracle is now the spec's TEMPLATE with the
+// gateway host-sources substituted, and the comparison is against the header a
+// browser would actually receive rather than against the production constant.
+// Both changes matter:
+//
+//   - byte-for-byte still means byte-for-byte. A `contains` check on the origin
+//     would pass on a policy that had lost `sandbox`, which is five of seven
+//     egress vectors.
+//   - `'self'` is KEPT beside the explicit sources, never replaced. It is what
+//     keeps Chromium and Firefox matching whatever spelling of the URL the
+//     browser used; the explicit sources are the only thing WebKit can match
+//     inside an attribute-sandboxed frame. Assertion (d) pins both, because
+//     "tidying" either one away is a one-line edit with no visible symptom.
 func TestLibraryPreview_PolicyIsTheSpecLiteralOnEveryResponse(t *testing.T) {
-	want := specIsolationPolicy(t)
 	f := newPreviewFixture(t)
+	freezePreviewPolicyForTest(t)
+	want := specIsolationPolicy(t, previewFixtureSources)
 	minted := f.mint(t, gen.LibraryPreviewTokenRequestScopeBundle, "site")
 
-	// (a) + (b), asserted against the constant the handler serves.
-	require.Equal(t, want, libraryIsolationPolicy,
-		"FR-005a: the served policy must be §10.3's literal string, byte for byte")
+	// (a) + (b) — properties of the string the spec publishes.
 	assert.Contains(t, want, "sandbox allow-scripts",
 		"FR-005a: the sandbox half is required — source directives alone let window.open out")
 	assert.Contains(t, want, "default-src 'none'",
@@ -244,6 +440,19 @@ func TestLibraryPreview_PolicyIsTheSpecLiteralOnEveryResponse(t *testing.T) {
 		"§10.3: granting allow-same-origin beside allow-scripts hands the page the session cookie")
 	assert.NotContains(t, want, "frame-ancestors",
 		"§10.3: frame-ancestors was never measured here — FR-006b puts the framing control on the SPA shell")
+
+	// (d) BOTH source forms survive, in each of the six origin-bearing
+	// directives, and connect-src gains neither.
+	for _, directive := range originBearingDirectives {
+		assert.Contains(t, want, directive+" 'self' "+previewFixtureSources,
+			"§10.3/FR-005c: %s must name 'self' AND the gateway sources, in that order. "+
+				"Dropping 'self' breaks every browser when the URL is spelled differently "+
+				"from the configured origin; dropping the sources leaves Safari with an "+
+				"unstyled, inert preview inside the FR-005b sandbox attribute", directive)
+	}
+	assert.NotContains(t, want, "connect-src 'self'",
+		"FR-006: connect-src must stay 'none' — it is the directive that opens a channel, "+
+			"not one that loads a subresource")
 
 	// (c) every response shape this route can produce.
 	responses := map[string]*httptest.ResponseRecorder{
@@ -418,12 +627,12 @@ func TestPreviewTokenPath_ContainedAtSyscall(t *testing.T) {
 // content type, same body bytes, same policy. Comparing them to each other is
 // what makes a future "helpful" 410-for-expired fail.
 func TestPreviewToken_ExpiredResponseIsPolicyCarrying(t *testing.T) {
-	want := specIsolationPolicy(t)
-
 	// An injected clock, so the 15-minute boundary is crossed without sleeping.
 	now := time.Now()
 	clock := func() time.Time { return now }
 	api, wsID := buildLibraryTestAPI(t)
+	freezePreviewPolicyForTest(t)
+	want := specIsolationPolicy(t, previewFixtureSources)
 	work := workDir(api, wsID)
 	require.NoError(t, os.MkdirAll(filepath.Join(work, "site"), 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(work, "site", "index.html"), []byte("<p>hi</p>"), 0o600))
@@ -883,10 +1092,14 @@ var _ io.Reader = (*bodyReadRecorder)(nil)
 //     policy at all, so the content type and the header are the discriminator
 //     rather than the status code, which is 404 either way.
 func TestLibraryPreviewRoutes_AreReachableOnTheRealMux(t *testing.T) {
-	want := specIsolationPolicy(t)
 	api := newTestRestAPIWithHome(t)
 	mux := http.NewServeMux()
 	api.registerAdditionalEndpoints(&testMuxRegistrar{mux: mux})
+	// After registration: registerLibraryPreviewRoutes freezes the policy from
+	// this fixture's own allowedOrigin, which would otherwise decide what the
+	// assertions below measure.
+	freezePreviewPolicyForTest(t)
+	want := specIsolationPolicy(t, previewFixtureSources)
 
 	t.Run("the mint endpoint outranks the library subtree", func(t *testing.T) {
 		// dev_mode_bypass lets withAuth through so the request reaches the

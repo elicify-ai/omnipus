@@ -112,8 +112,27 @@ export async function startExternalOrigin(): Promise<RecordingOrigin> {
   });
 }
 
-/** The five candidate policies, keyed exactly as the experiment keyed them. */
-export type MutantPolicyName = 'shipped' | 'nosandbox' | 'sandboxonly' | 'none';
+/**
+ * The candidate policies. The first four are keyed exactly as the experiment
+ * keyed them; `wrongsource` is this suite's own addition — see
+ * `repointSourcesToDeadOrigin` for what it is for.
+ */
+export type MutantPolicyName =
+  | 'shipped'
+  | 'nosandbox'
+  | 'sandboxonly'
+  | 'wrongsource'
+  | 'none';
+
+/** A directive is the sandbox one, or it is a source directive. Nothing else. */
+function isSandboxDirective(directive: string): boolean {
+  return directive === 'sandbox' || directive.startsWith('sandbox ');
+}
+
+/** Split a policy header into trimmed, non-empty directives. */
+export function policyDirectives(policy: string): string[] {
+  return policy.split(';').map((d) => d.trim()).filter(Boolean);
+}
 
 /**
  * Split a live policy string into its sandbox half and its source-directive
@@ -122,12 +141,138 @@ export type MutantPolicyName = 'shipped' | 'nosandbox' | 'sandboxonly' | 'none';
  * Derived from the string the gateway actually sent, never re-typed here. If
  * the shipped policy is edited, the mutants follow it automatically — a
  * hand-copied mutant would keep testing the policy we used to have.
+ *
+ * ⚠️ THIS SPLIT KNOWS NOTHING ABOUT `'self'`, DELIBERATELY. It partitions on
+ * the DIRECTIVE NAME — `sandbox` versus everything else — so it kept working
+ * unchanged when §10.3 ADDED the gateway's origins alongside `'self'`
+ * (2026-08-23), and would keep working if either form went away. Any future
+ * edit that starts matching on a source EXPRESSION
+ * rather than a directive name re-introduces exactly the coupling this comment
+ * exists to forbid: the mutants would then follow the keyword rather than the
+ * policy, and would quietly stop mutating the day the keyword changed again.
  */
 export function splitPolicy(policy: string): { sandbox: string; sources: string } {
-  const directives = policy.split(';').map((d) => d.trim()).filter(Boolean);
-  const sandbox = directives.filter((d) => d === 'sandbox' || d.startsWith('sandbox '));
-  const sources = directives.filter((d) => !(d === 'sandbox' || d.startsWith('sandbox ')));
+  const directives = policyDirectives(policy);
+  const sandbox = directives.filter((d) => isSandboxDirective(d));
+  const sources = directives.filter((d) => !isSandboxDirective(d));
   return { sandbox: sandbox.join('; '), sources: sources.join('; ') };
+}
+
+/**
+ * The source expressions of one directive, or `null` when the policy has no
+ * such directive at all.
+ *
+ * `null` and `[]` are kept distinct on purpose: "the policy does not mention
+ * script-src" and "script-src permits nothing" are different findings, and a
+ * caller that cannot tell them apart writes the vacuous version of both.
+ */
+export function directiveSources(policy: string, name: string): string[] | null {
+  for (const directive of policyDirectives(policy)) {
+    const parts = directive.split(/\s+/);
+    if (parts[0] === name) return parts.slice(1);
+  }
+  return null;
+}
+
+/** Trailing-slash-insensitive origin comparison — `http://h:1/` is `http://h:1`. */
+function sameOrigin(a: string, b: string): boolean {
+  return a.replace(/\/+$/, '') === b.replace(/\/+$/, '');
+}
+
+/**
+ * Whether `directive` names `origin` EXPLICITLY, as a host source.
+ *
+ * ⚠️ `'self'` DOES NOT COUNT HERE, AND THAT IS THE ENTIRE POINT. An earlier
+ * version of this helper accepted either form. Under §10.3 as it now stands
+ * that made it permanently true and therefore worthless: the policy retains
+ * `'self'` on every directive, so "does this permit the browser's origin?"
+ * answers yes before the explicit half is even looked at.
+ *
+ * The two halves do different jobs and only one of them can be checked this
+ * way (§10.3, 2026-08-23):
+ *
+ *   `'self'`            resolves to the document's own origin, so it matches
+ *                       whatever spelling the reader typed. On Chromium and
+ *                       Firefox it carries the whole load and no origin string
+ *                       can break it.
+ *   the explicit origins is what WebKit needs, because WebKit does not resolve
+ *                       `'self'` at all inside a frame carrying FR-005b's
+ *                       `sandbox` ATTRIBUTE (CSP3 §2.2.2 says self-origin comes
+ *                       from the RESPONSE URL; WebKit reads it off the
+ *                       document's opaque origin instead — WebKit bug 316847,
+ *                       fixed upstream 315247@main but not in any shipping
+ *                       Safari). An explicit host source is matched by string,
+ *                       so it works where `'self'` does not — and only for the
+ *                       exact spellings named.
+ *
+ * So a policy that names no origin the browser is on still renders correctly on
+ * two engines out of three, and silently renders blank on the third. That is
+ * the failure this helper exists to make loud, and accepting `'self'` as
+ * sufficient would hide it exactly where it hides in production.
+ */
+export function directiveNamesOriginExplicitly(
+  policy: string,
+  name: string,
+  origin: string,
+): boolean {
+  const sources = directiveSources(policy, name);
+  if (sources === null) return false;
+  return sources.some((s) => s !== "'self'" && sameOrigin(s, origin));
+}
+
+/**
+ * The host sources of a directive — every source expression that is not a
+ * keyword or a bare scheme. Used only to put the real list in a failure
+ * message, so an operator sees what the policy DID name next to what it
+ * needed to name.
+ */
+export function directiveHostSources(policy: string, name: string): string[] {
+  return (directiveSources(policy, name) ?? []).filter(
+    (s) => /^[a-z][a-z0-9+.-]*:\/\//i.test(s),
+  );
+}
+
+/**
+ * An origin that is guaranteed not to be serving anything: port 1 on loopback.
+ *
+ * Used only to build the `wrongsource` mutant. It must not be a port this
+ * suite ever listens on, or the mutant would accidentally permit the real
+ * fixture and stop mutating.
+ */
+export const DEAD_ORIGIN = 'http://127.0.0.1:1';
+
+/**
+ * Rewrite every ORIGIN-BEARING source expression in a policy to `DEAD_ORIGIN`.
+ *
+ * WHY THIS EXISTS. `preview-isolation.spec.ts` asserts that a previewed
+ * bundle's EXTERNAL `<script src>` and `<link rel=stylesheet>` really load
+ * (FR-004, US-1 AS-4). That assertion is worth nothing unless it can be shown
+ * to fail — and "the page rendered" is precisely the shape of claim that goes
+ * quietly true when nobody checks the negative. This mutation is that check:
+ * same bytes, same frame, same assertion, a policy whose source directives
+ * name an origin the document is not on.
+ *
+ * MECHANICAL AND POLICY-SHAPE-AGNOSTIC. It rewrites `'self'` AND any explicit
+ * `scheme://host[:port]`, and leaves `'none'`, `'unsafe-inline'`, `data:` and
+ * `blob:` alone. So it produced a real mutant both before and after §10.3
+ * swapped one form for the other, and it is not a second hand-copy of the
+ * policy that would drift.
+ *
+ * The `sandbox` directive is passed through untouched: the mutant must keep the
+ * origin opaque, or `#result` could not be read out of the frame and the
+ * mutation would fail for the wrong reason.
+ */
+export function repointSourcesToDeadOrigin(policy: string): string {
+  return policyDirectives(policy)
+    .map((directive) => {
+      if (isSandboxDirective(directive)) return directive;
+      const [name, ...sources] = directive.split(/\s+/);
+      const rewritten = sources.map((s) =>
+        s === "'self'" || /^[a-z][a-z0-9+.-]*:\/\//i.test(s) ? DEAD_ORIGIN : s,
+      );
+      return [name, ...new Set(rewritten)].join(' ');
+    })
+    .join('; ');
 }
 
 /**
@@ -137,6 +282,10 @@ export function splitPolicy(policy: string): { sandbox: string; sources: string 
  *                 window.open still reaching the second origin under this.
  * `sandboxonly` — the sandbox directive alone. The experiment measured five of
  *                 seven vectors escaping under this.
+ * `wrongsource` — every origin-bearing source repointed at a dead origin. Not
+ *                 an experiment row: it is the RENDER assertions' mutation
+ *                 proof, and the only mutant whose expected result is "the
+ *                 bundle's own assets do NOT load".
  * `none`        — no policy at all. The control that must show all seven, or
  *                 no other row means anything (experiment §6).
  */
@@ -146,6 +295,7 @@ export function mutantPolicies(shipped: string): Record<MutantPolicyName, string
     shipped,
     nosandbox: sources,
     sandboxonly: sandbox,
+    wrongsource: repointSourcesToDeadOrigin(shipped),
     none: null,
   };
 }
@@ -153,6 +303,17 @@ export function mutantPolicies(shipped: string): Record<MutantPolicyName, string
 export interface MutantOrigin extends RecordingOrigin {
   /** URL of the hostile document served under the named policy. */
   documentURL(policy: MutantPolicyName, file?: string): string;
+  /**
+   * A bare, policy-free HTML page on this origin, to be used as an EMBEDDER.
+   *
+   * The gateway's own SPA shell cannot play that role for a mutant: §10.7 gives
+   * it `frame-src 'self'`, so an `<iframe>` pointed at this origin is refused
+   * before any mutation is exercised. This page carries no policy at all, so
+   * the only thing constraining the frame it holds is the frame's own `sandbox`
+   * ATTRIBUTE — which is exactly the isolation half that has to be measured
+   * standing alone.
+   */
+  embedderURL(): string;
   /** The policy strings this origin is serving, for reporting in failures. */
   policies: Record<MutantPolicyName, string | null>;
 }
@@ -191,6 +352,19 @@ export async function startMutantOrigin(
 
     const [rawPath] = url.split('?');
     const parts = rawPath.split('/').filter(Boolean);
+
+    // /embedder — a policy-free host document. See MutantOrigin.embedderURL.
+    if (parts[0] === 'embedder') {
+      const body = Buffer.from(
+        '<!doctype html><meta charset="utf-8"><title>mutant-embedder</title><body></body>',
+      );
+      res.writeHead(200, {
+        'Content-Type': 'text/html; charset=utf-8',
+        'Content-Length': String(body.length),
+      });
+      res.end(body);
+      return;
+    }
 
     // /m/<policy>/<file>
     if (parts[0] === 'm' && parts.length >= 2) {
@@ -231,6 +405,9 @@ export async function startMutantOrigin(
     policies,
     documentURL(policy: MutantPolicyName, file = 'index.html') {
       return `${server.origin}/m/${policy}/${file}`;
+    },
+    embedderURL() {
+      return `${server.origin}/embedder`;
     },
   };
 }
