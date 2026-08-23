@@ -41,15 +41,14 @@ type AgentInstance struct {
 	// at config-load time via config.NormalizeFallbacks, so by the time this
 	// slice reaches the agent every entry carries a populated Provider (or an
 	// empty one if no configured provider matched).
-	FallbackModels        []config.FallbackModel
-	Home                  string
-	MaxIterations         int
-	MaxTokens             int
-	Temperature           float64
-	ThinkingLevel         ThinkingLevel
-	ContextWindow         int
-	SummarizeTokenPercent int
-	Provider              providers.LLMProvider
+	FallbackModels []config.FallbackModel
+	Home           string
+	MaxIterations  int
+	MaxTokens      int
+	Temperature    float64
+	ThinkingLevel  ThinkingLevel
+	ContextWindow  int
+	Provider       providers.LLMProvider
 	// providerPool is the atomic-pointer form of ProviderPool. The pool is
 	// keyed by provider name and holds one LLMProvider instance per distinct
 	// provider referenced by Candidates (or by the light tier). The fallback
@@ -268,11 +267,6 @@ func NewAgentInstance(
 	}
 	thinkingLevel := parseThinkingLevel(thinkingLevelStr)
 
-	summarizeTokenPercent := defaults.SummarizeTokenPercent
-	if summarizeTokenPercent == 0 {
-		summarizeTokenPercent = 75
-	}
-
 	// Resolve fallback candidates. Prefer the provider-aware resolver when
 	// AgentConfig.FallbackModels (or a derived equivalent) is populated so a
 	// fallback can route through its own provider (FR-007). Falls back to the
@@ -359,30 +353,29 @@ func NewAgentInstance(
 	// RouteResolver.resolveDefaultAgentID — see those functions' doc
 	// comments for the current (3-priority) ladder.
 	inst := &AgentInstance{
-		ID:                    agentID,
-		Name:                  agentName,
-		Model:                 model,
-		Fallbacks:             fallbacks,
-		FallbackModels:        fallbackModels,
-		Home:                  workspace,
-		MaxIterations:         maxIter,
-		MaxTokens:             maxTokens,
-		Temperature:           temperature,
-		ThinkingLevel:         thinkingLevel,
-		ContextWindow:         contextWindow,
-		SummarizeTokenPercent: summarizeTokenPercent,
-		Provider:              provider,
-		Sessions:              sessions,
-		ContextBuilder:        contextBuilder,
-		Tools:                 toolsRegistry,
-		Subagents:             subagents,
-		SkillsFilter:          skillsFilter,
-		Candidates:            candidates,
-		Router:                router,
-		LightCandidates:       lightCandidates,
-		LightProvider:         lightProvider,
-		TimeoutSeconds:        timeoutSeconds,
-		AgentType:             resolvedAgentType,
+		ID:              agentID,
+		Name:            agentName,
+		Model:           model,
+		Fallbacks:       fallbacks,
+		FallbackModels:  fallbackModels,
+		Home:            workspace,
+		MaxIterations:   maxIter,
+		MaxTokens:       maxTokens,
+		Temperature:     temperature,
+		ThinkingLevel:   thinkingLevel,
+		ContextWindow:   contextWindow,
+		Provider:        provider,
+		Sessions:        sessions,
+		ContextBuilder:  contextBuilder,
+		Tools:           toolsRegistry,
+		Subagents:       subagents,
+		SkillsFilter:    skillsFilter,
+		Candidates:      candidates,
+		Router:          router,
+		LightCandidates: lightCandidates,
+		LightProvider:   lightProvider,
+		TimeoutSeconds:  timeoutSeconds,
+		AgentType:       resolvedAgentType,
 	}
 	// Publish the eagerly-built pool. StoreProviderPool uses the atomic
 	// pointer; calling it here (vs. direct field assignment) keeps the
@@ -529,30 +522,29 @@ func (a *AgentInstance) snapshotForExternalDispatch() *AgentInstance {
 	a.mu.RUnlock()
 
 	out := &AgentInstance{
-		ID:                    a.ID,
-		Name:                  a.Name,
-		Model:                 model,
-		Fallbacks:             a.Fallbacks,
-		FallbackModels:        a.FallbackModels,
-		Home:                  a.Home,
-		MaxIterations:         a.MaxIterations,
-		MaxTokens:             a.MaxTokens,
-		Temperature:           a.Temperature,
-		ThinkingLevel:         thinkingLevel,
-		ContextWindow:         a.ContextWindow,
-		SummarizeTokenPercent: a.SummarizeTokenPercent,
-		Provider:              provider,
-		Sessions:              a.Sessions,
-		ContextBuilder:        a.ContextBuilder,
-		Tools:                 a.Tools,
-		Subagents:             a.Subagents,
-		SkillsFilter:          a.SkillsFilter,
-		Candidates:            candidates,
-		TimeoutSeconds:        a.TimeoutSeconds,
-		AgentType:             a.AgentType,
-		Router:                a.Router,
-		LightCandidates:       a.LightCandidates,
-		LightProvider:         a.LightProvider,
+		ID:              a.ID,
+		Name:            a.Name,
+		Model:           model,
+		Fallbacks:       a.Fallbacks,
+		FallbackModels:  a.FallbackModels,
+		Home:            a.Home,
+		MaxIterations:   a.MaxIterations,
+		MaxTokens:       a.MaxTokens,
+		Temperature:     a.Temperature,
+		ThinkingLevel:   thinkingLevel,
+		ContextWindow:   a.ContextWindow,
+		Provider:        provider,
+		Sessions:        a.Sessions,
+		ContextBuilder:  a.ContextBuilder,
+		Tools:           a.Tools,
+		Subagents:       a.Subagents,
+		SkillsFilter:    a.SkillsFilter,
+		Candidates:      candidates,
+		TimeoutSeconds:  a.TimeoutSeconds,
+		AgentType:       a.AgentType,
+		Router:          a.Router,
+		LightCandidates: a.LightCandidates,
+		LightProvider:   a.LightProvider,
 	}
 	if pool != nil {
 		out.StoreProviderPool(*pool)

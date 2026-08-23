@@ -98,22 +98,80 @@ func estimateToolDefsTokens(defs []providers.ToolDefinition) int {
 	return totalChars * 2 / 5
 }
 
-// isOverContextBudget checks whether the assembled messages plus tool definitions
-// and output reserve would exceed the model's context window. This enables
-// proactive compression before calling the LLM, rather than reacting to 400 errors.
+// contextBudget is the ONE budget B every consumer reads (ADR-066 D6,
+// FR-028):
+//
+//	B = W − max_tokens − ceil(0.05·W) − pinnedCoreOverhead
+//
+// W is the resolved context window, max_tokens the output reserve, the 5 %
+// term the headroom that keeps a just-trimmed window from re-trimming on the
+// very next turn, and pinnedCoreOverhead the estimated cost of the pinned
+// system prompt plus the breadcrumb block. B is what the NON-pinned request
+// (window history, injected notes, tool surface) may occupy; it can be ≤ 0
+// when max_tokens alone exceeds the window — callers treat that as "always
+// over" (FR-005b clamps max_tokens so a real instance never gets there).
+//
+// The formula is the one windowTrim always used for its suffix fit-check;
+// the pre-turn and timeout-recovery checks now derive their threshold from
+// the same helper instead of comparing against the raw window or a
+// percentage-scaled one (the retired summarize_token_percent).
+func contextBudget(contextWindow, maxTokens, pinnedCoreOverhead int) int {
+	headroom := (contextWindow + 19) / 20 // ceil(0.05 * contextWindow)
+	return contextWindow - maxTokens - headroom - pinnedCoreOverhead
+}
+
+// pinnedCoreOverheadTokens estimates the pinned core an assembled request
+// always carries: the agent's system prompt (via the ContextBuilder cache —
+// the static prompt is already cached, so this is cheap) plus the
+// breadcrumb block's hard cap. It uses the same chars*2/5 heuristic as
+// estimateMessageTokens so the two cannot drift (chars/4 would underestimate
+// by ~38 % and cause under-eviction on small-window models).
+func pinnedCoreOverheadTokens(agent *AgentInstance) int {
+	overhead := 0
+	if agent.ContextBuilder != nil {
+		overhead = len(agent.ContextBuilder.BuildSystemPromptWithCache()) * 2 / 5
+	}
+	// breadcrumbTokenCap is the hard cap on the breadcrumb block (~1000
+	// tokens); use it as a conservative estimate of the breadcrumb overhead.
+	return overhead + breadcrumbTokenCap
+}
+
+// agentContextBudget resolves B for one agent instance — the single call
+// every budget site (pre-turn, timeout-recovery, windowTrim; mid-turn and
+// model-switch once T066-13/T066-09 land) makes, so they can never disagree.
+func agentContextBudget(agent *AgentInstance) int {
+	contextWindow := agent.ContextWindow
+	if contextWindow <= 0 {
+		// Pre-ADR-066-D2 fallback, kept where windowTrim always had it.
+		// T066-09 deletes it: NewAgentInstance will resolve W through the
+		// ladder and an exempt (cli_driver) agent skips every budget check.
+		contextWindow = 128000
+	}
+	return contextBudget(contextWindow, agent.MaxTokens, pinnedCoreOverheadTokens(agent))
+}
+
+// isOverContextBudget reports whether the assembled request would exceed the
+// budget B (see contextBudget). It counts every message except the pinned
+// system prompt at messages[0] — that cost is already inside B via
+// pinnedCoreOverhead — plus the tool surface. System-role notes the turn
+// injects after the pinned prompt (scratchpad, workspace instructions,
+// manifest) are real request bytes and DO count. The output reserve is not
+// added here either: B already subtracted it. This enables proactive
+// trimming before calling the LLM, rather than reacting to 400 errors.
 func isOverContextBudget(
-	contextWindow int,
+	budget int,
 	messages []providers.Message,
 	toolDefs []providers.ToolDefinition,
-	maxTokens int,
 ) bool {
 	msgTokens := 0
-	for _, m := range messages {
+	for i, m := range messages {
+		if i == 0 && m.Role == "system" {
+			continue // pinned core: accounted for in B
+		}
 		msgTokens += estimateMessageTokens(m)
 	}
 
 	toolTokens := estimateToolDefsTokens(toolDefs)
-	total := msgTokens + toolTokens + maxTokens
 
-	return total > contextWindow
+	return msgTokens+toolTokens > budget
 }
