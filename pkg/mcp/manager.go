@@ -45,7 +45,10 @@ import (
 // process reaping — we cannot construct an ioConn directly because newIOConn is
 // unexported in the SDK.
 type sandboxedCommandTransport struct {
-	cmd *exec.Cmd
+	// ingest is the ADR-066 D10 per-message bound guard; nil → unbounded
+	// (only test wiring constructs the transport without one).
+	ingest *ingestGuard
+	cmd    *exec.Cmd
 	// terminateDuration is how long Close waits after closing stdin for the
 	// child to exit before sending SIGTERM, then SIGKILL. Defaults to 5s.
 	terminateDuration time.Duration
@@ -72,6 +75,11 @@ func (t *sandboxedCommandTransport) Connect(ctx context.Context) (mcp.Connection
 	// matches CommandTransport.pipeRWC semantics ("close the connection by
 	// closing stdin, not stdout").
 	stdout = io.NopCloser(stdout)
+	if t.ingest != nil {
+		// ADR-066 D10: bound every JSON-RPC message on the transport read so
+		// a runaway response is aborted at bound+1 bytes, never buffered.
+		stdout = io.NopCloser(&boundedMessageReader{r: stdout, guard: t.ingest})
+	}
 	stdin, err := t.cmd.StdinPipe()
 	if err != nil {
 		return nil, fmt.Errorf("mcp stdio: stdin pipe: %w", err)
@@ -346,6 +354,9 @@ type ServerConnection struct {
 	// by reconciliation to detect config drift (reflect.DeepEqual against the
 	// desired config) without re-reading config.json.
 	Config config.MCPServerConfig
+	// ingest records an ADR-066 D10 bound violation on this server's
+	// transport so CallTool can name the bound in its failure.
+	ingest *ingestGuard
 }
 
 // Manager manages multiple MCP server connections
@@ -354,17 +365,33 @@ type Manager struct {
 	mu      sync.RWMutex
 	closed  atomic.Bool    // changed from bool to atomic.Bool to avoid TOCTOU race
 	wg      sync.WaitGroup // tracks in-flight CallTool calls
+	// ingestBound is ADR-066 D10's ingest_bound_bytes applied to every
+	// server connected AFTER it is set (the transport is built at connect).
+	ingestBound atomic.Int64
 }
 
-// NewManager creates a new MCP manager
+// NewManager creates a new MCP manager bounded at the config default
+// ingest bound (config.DefaultIngestBoundBytes).
 func NewManager() *Manager {
-	return &Manager{
+	m := &Manager{
 		servers: make(map[string]*ServerConnection),
 	}
+	m.ingestBound.Store(int64(config.DefaultIngestBoundBytes))
+	return m
+}
+
+// SetIngestBoundBytes sets ADR-066 D10's per-message ingest bound for
+// servers connected from now on. Values ≤ 0 restore the config default.
+func (m *Manager) SetIngestBoundBytes(n int) {
+	if n <= 0 {
+		n = config.DefaultIngestBoundBytes
+	}
+	m.ingestBound.Store(int64(n))
 }
 
 // LoadFromConfig loads MCP servers from configuration
 func (m *Manager) LoadFromConfig(ctx context.Context, cfg *config.Config) error {
+	m.SetIngestBoundBytes(cfg.Context.IngestBoundBytes)
 	return m.LoadFromMCPConfig(ctx, cfg.Tools.MCP, cfg.AgentHomeBasePath())
 }
 
@@ -510,6 +537,7 @@ func (m *Manager) ConnectServer(
 	// Auto-detect transport type if not explicitly specified
 	var transport mcp.Transport
 	transportType := cfg.Type
+	ingest := newIngestGuard(name, m.ingestBound.Load())
 
 	// Auto-detect: if URL is provided, use SSE; if command is provided, use stdio
 	if transportType == "" {
@@ -550,20 +578,20 @@ func (m *Manager) ConnectServer(
 			Endpoint: cfg.URL,
 		}
 
-		// Add custom headers if provided
+		// ADR-066 D10: every POST response body goes through
+		// http.MaxBytesReader at the ingest bound. Custom headers, when
+		// configured, are injected beneath it.
+		var rt http.RoundTripper = http.DefaultTransport
 		if len(cfg.Headers) > 0 {
-			// Create a custom HTTP client with header-injecting transport
-			sseTransport.HTTPClient = &http.Client{
-				Transport: &headerTransport{
-					base:    http.DefaultTransport,
-					headers: cfg.Headers,
-				},
-			}
+			rt = &headerTransport{base: rt, headers: cfg.Headers}
 			logger.DebugCF("mcp", "Added custom HTTP headers",
 				map[string]any{
 					"server":       name,
 					"header_count": len(cfg.Headers),
 				})
+		}
+		sseTransport.HTTPClient = &http.Client{
+			Transport: &ingestBoundTransport{base: rt, guard: ingest},
 		}
 
 		transport = sseTransport
@@ -602,7 +630,9 @@ func (m *Manager) ConnectServer(
 		}
 		cmd.Env = env
 
-		transport = newSandboxedCommandTransport(cmd)
+		stdioTransport := newSandboxedCommandTransport(cmd)
+		stdioTransport.ingest = ingest
+		transport = stdioTransport
 	default:
 		return fmt.Errorf(
 			"unsupported transport type: %s (supported: stdio, sse, http)",
@@ -673,6 +703,7 @@ func (m *Manager) ConnectServer(
 		Session: session,
 		Tools:   tools,
 		Config:  cfg,
+		ingest:  ingest,
 	}
 	m.mu.Unlock()
 
@@ -786,6 +817,11 @@ func (m *Manager) CallTool(
 
 	result, err := conn.Session.CallTool(ctx, params)
 	if err != nil {
+		// ADR-066 D10: a transport abort surfaces from the SDK as a generic
+		// closed-connection error; name the bound instead.
+		if conn.ingest != nil && conn.ingest.exceeded.Load() {
+			return nil, fmt.Errorf("failed to call tool: %w", conn.ingest.err())
+		}
 		return nil, fmt.Errorf("failed to call tool: %w", err)
 	}
 
