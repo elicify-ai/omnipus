@@ -101,6 +101,10 @@ describe('configureProvider — Test #22', () => {
       id: 'openrouter',
       name: 'openrouter',
       status: 'connected',
+      // A-CONTRACT (ADR-068): auth_method / dependents / backs_default are required on Provider.
+      auth_method: 'api_key',
+      dependents: [],
+      backs_default: false,
       models: ['openrouter/auto'],
       validation: {
         outcome: 'no_credit',
@@ -121,6 +125,10 @@ describe('configureProvider — Test #22', () => {
       id: 'openrouter',
       name: 'openrouter',
       status: 'connected',
+      // A-CONTRACT (ADR-068): auth_method / dependents / backs_default are required on Provider.
+      auth_method: 'api_key',
+      dependents: [],
+      backs_default: false,
       models: [],
       validation: {
         outcome: 'unreachable',
@@ -139,6 +147,10 @@ describe('configureProvider — Test #22', () => {
       id: 'openrouter',
       name: 'openrouter',
       status: 'connected',
+      // A-CONTRACT (ADR-068): auth_method / dependents / backs_default are required on Provider.
+      auth_method: 'api_key',
+      dependents: [],
+      backs_default: false,
       models: [],
       validation: {
         outcome: 'restricted',
@@ -157,6 +169,10 @@ describe('configureProvider — Test #22', () => {
       id: 'openrouter',
       name: 'openrouter',
       status: 'connected',
+      // A-CONTRACT (ADR-068): auth_method / dependents / backs_default are required on Provider.
+      auth_method: 'api_key',
+      dependents: [],
+      backs_default: false,
       models: ['openrouter/auto'],
       // No validation field (or valid) → no banner
     }
@@ -179,6 +195,9 @@ describe('configureProvider — Test #32 / m4 / R-C — key omission', () => {
         id: 'openrouter',
         name: 'openrouter',
         status: 'connected',
+        auth_method: 'api_key',
+        dependents: [],
+        backs_default: false,
         models: ['openrouter/auto'],
       }),
     )
@@ -351,7 +370,7 @@ describe('probeProvider — MAJOR-4 / validation passthrough', () => {
     expect(result.validation == null || result.validation.outcome === 'valid').toBe(true)
   })
 
-  it('sends the correct request body (id + api_key, no endpoint when omitted)', async () => {
+  it('sends the correct request body (id + auth + api_key, no api_base when omitted)', async () => {
     fetchSpy.mockResolvedValue(makeJsonResponse({ success: true, models: [] }))
 
     await probeProvider('anthropic', 'sk-ant-test')
@@ -360,17 +379,22 @@ describe('probeProvider — MAJOR-4 / validation passthrough', () => {
     const body = JSON.parse(init.body as string) as Record<string, unknown>
     expect(body.id).toBe('anthropic')
     expect(body.api_key).toBe('sk-ant-test')
-    // endpoint omitted when not passed → empty string per the implementation
-    expect(body.endpoint).toBe('')
+    // A-CONTRACT (ADR-067 FR-023 / ADR-068 FR-036): ONE ProbeProviderRequest
+    // shape — auth is required and this wrapper drives the api_key path.
+    expect(body.auth).toBe('api_key')
+    // api_base omitted when not passed; the retired `endpoint` key never appears.
+    expect(Object.prototype.hasOwnProperty.call(body, 'api_base')).toBe(false)
+    expect(Object.prototype.hasOwnProperty.call(body, 'endpoint')).toBe(false)
   })
 
-  it('forwards endpoint when provided', async () => {
+  it('forwards api_base when provided', async () => {
     fetchSpy.mockResolvedValue(makeJsonResponse({ success: true, models: [] }))
 
     await probeProvider('azure', 'azure-key', 'https://my.azure.com/openai')
 
     const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
     const body = JSON.parse(init.body as string) as Record<string, unknown>
-    expect(body.endpoint).toBe('https://my.azure.com/openai')
+    expect(body.api_base).toBe('https://my.azure.com/openai')
+    expect(Object.prototype.hasOwnProperty.call(body, 'endpoint')).toBe(false)
   })
 })

@@ -58,7 +58,7 @@ func newOnboardingTestAPI(t *testing.T, tmpDir string, al *agent.AgentLoop) *res
 // Every onboarding test that expects to reach the end of HandleCompleteOnboarding
 // needs one. Since the handler now probes the submitted api_key (see the
 // "Provider API-key validation" block in rest_onboarding.go), a test posting
-// {"id":"openai","api_key":"sk-test"} with no endpoint override would otherwise
+// {"id":"openai","auth":"api_key","api_key":"sk-test"} with no api_base override would otherwise
 // make a live call to api.openai.com on every CI run — and get a real 401, i.e.
 // the tests would both depend on the public internet AND fail once they reached
 // it. Pointing provider.endpoint at this server keeps them hermetic.
@@ -872,7 +872,7 @@ func TestHandleOnboardingProbeProvider_SuccessWithModels(t *testing.T) {
 	require.False(t, api.onboardingMgr.IsComplete(),
 		"onboarding must not be complete for the probe to work")
 
-	body := `{"id":"openai","api_key":"test-key","endpoint":"` + upstream.URL + `"}`
+	body := `{"id":"openai","auth":"api_key","api_key":"test-key","api_base":"` + upstream.URL + `"}`
 	w := probeProviderWithUpstream(t, upstream.URL, body, api)
 
 	assert.Equal(t, http.StatusOK, w.Code)
@@ -903,7 +903,7 @@ func TestHandleOnboardingProbeProvider_UpstreamUnauthorized(t *testing.T) {
 	tmpDir := t.TempDir()
 	api := newOnboardingTestAPI(t, tmpDir, nil)
 
-	body := `{"id":"openai","api_key":"bad-key","endpoint":"` + upstream.URL + `"}`
+	body := `{"id":"openai","auth":"api_key","api_key":"bad-key","api_base":"` + upstream.URL + `"}`
 	w := probeProviderWithUpstream(t, upstream.URL, body, api)
 
 	assert.Equal(t, http.StatusOK, w.Code,
@@ -933,7 +933,7 @@ func TestHandleOnboardingProbeProvider_AlreadyComplete(t *testing.T) {
 	require.NoError(t, commit())
 	require.True(t, api.onboardingMgr.IsComplete())
 
-	body := `{"id":"openai","api_key":"any","endpoint":"http://127.0.0.1:1/"}`
+	body := `{"id":"openai","auth":"api_key","api_key":"any","api_base":"http://127.0.0.1:1/"}`
 	w := probeProviderWithUpstream(t, "", body, api)
 
 	assert.Equal(t, http.StatusConflict, w.Code,
@@ -943,7 +943,7 @@ func TestHandleOnboardingProbeProvider_AlreadyComplete(t *testing.T) {
 
 // TestHandleOnboardingProbeProvider_MissingFields exercises the request-body
 // validation branches — empty id, empty api_key, and an unknown provider
-// without endpoint override must all return 400.
+// without api_base override must all return 400.
 func TestHandleOnboardingProbeProvider_MissingFields(t *testing.T) {
 	tmpDir := t.TempDir()
 	api := newOnboardingTestAPI(t, tmpDir, nil)
@@ -953,9 +953,9 @@ func TestHandleOnboardingProbeProvider_MissingFields(t *testing.T) {
 		body string
 		want string // substring of error
 	}{
-		{"empty_id", `{"api_key":"k","endpoint":"http://x/"}`, "id is required"},
-		{"empty_api_key", `{"id":"openai","endpoint":"http://x/"}`, "api_key is required"},
-		{"unknown_provider_no_endpoint", `{"id":"notaprovider","api_key":"k"}`, "unknown provider"},
+		{"empty_id", `{"auth":"api_key","api_key":"k","api_base":"http://x/"}`, "id is required"},
+		{"empty_api_key", `{"id":"openai","auth":"api_key","api_base":"http://x/"}`, "api_key is required"},
+		{"unknown_provider_no_api_base", `{"id":"notaprovider","auth":"api_key","api_key":"k"}`, "unknown provider"},
 		{"malformed_json", `{not-json`, "invalid JSON"},
 	}
 	for _, tc := range cases {
@@ -1057,7 +1057,7 @@ func TestHandleOnboardingProbeProvider_WrongMethod(t *testing.T) {
 // user-facing message and a validation.outcome of "invalid_key".
 //
 // BDD: Given a mock upstream where GET /models → 200 but POST /chat/completions → 401,
-// When POST /api/v1/onboarding/probe-provider {"id":"openai","api_key":"bad-key"} is called,
+// When POST /api/v1/onboarding/probe-provider {"id":"openai","auth":"api_key","api_key":"bad-key"} is called,
 // Then the response is HTTP 200 with success=false, validation.outcome="invalid_key",
 // and the error does NOT contain the raw upstream body or the API key (SEC-16).
 func TestHandleOnboardingProbeProvider_PublicModelsBadKey(t *testing.T) {
@@ -1081,7 +1081,7 @@ func TestHandleOnboardingProbeProvider_PublicModelsBadKey(t *testing.T) {
 	api := newOnboardingTestAPI(t, tmpDir, nil)
 	require.False(t, api.onboardingMgr.IsComplete())
 
-	body := `{"id":"openai","api_key":"bad-key","endpoint":"` + upstream.URL + `"}`
+	body := `{"id":"openai","auth":"api_key","api_key":"bad-key","api_base":"` + upstream.URL + `"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/probe-provider", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -1113,7 +1113,7 @@ func TestHandleOnboardingProbeProvider_PublicModelsBadKey(t *testing.T) {
 // GET /models → 200 and POST /chat/completions → 200 → success=true with models.
 //
 // BDD: Given a mock upstream where both GET /models and POST /chat/completions → 200,
-// When POST /api/v1/onboarding/probe-provider {"id":"openai","api_key":"good-key"} is called,
+// When POST /api/v1/onboarding/probe-provider {"id":"openai","auth":"api_key","api_key":"good-key"} is called,
 // Then the response is HTTP 200 with {"success":true,"models":[...]}.
 func TestHandleOnboardingProbeProvider_PublicModelsGoodKey(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1134,7 +1134,7 @@ func TestHandleOnboardingProbeProvider_PublicModelsGoodKey(t *testing.T) {
 	api := newOnboardingTestAPI(t, tmpDir, nil)
 	require.False(t, api.onboardingMgr.IsComplete())
 
-	body := `{"id":"openai","api_key":"good-key","endpoint":"` + upstream.URL + `"}`
+	body := `{"id":"openai","auth":"api_key","api_key":"good-key","api_base":"` + upstream.URL + `"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/probe-provider", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -1169,7 +1169,7 @@ func captureSlog(t *testing.T) *bytes.Buffer {
 // outbound call — closing the pre-onboarding, unauthenticated SSRF hole.
 //
 // BDD: Given an SSRF checker with no internal allowlist,
-// When POST /onboarding/probe-provider has endpoint=http://127.0.0.1:<port>/,
+// When POST /onboarding/probe-provider has api_base=http://127.0.0.1:<port>/,
 // Then HTTP 200 with {"success":false,"error":"endpoint not allowed"} and the
 //
 //	upstream is never contacted.
@@ -1188,7 +1188,7 @@ func TestHandleOnboardingProbeProvider_SSRFBlocksInternalEndpoint(t *testing.T) 
 	api.ssrfChecker = security.NewSSRFChecker(nil)
 	require.False(t, api.onboardingMgr.IsComplete())
 
-	body := `{"id":"openai","api_key":"test-key","endpoint":"` + upstream.URL + `"}`
+	body := `{"id":"openai","auth":"api_key","api_key":"test-key","api_base":"` + upstream.URL + `"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/probe-provider", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -1226,7 +1226,7 @@ func TestHandleOnboardingProbeProvider_SSRFAllowsAllowlistedLoopback(t *testing.
 	// Allowlist loopback so the legitimate httptest target is permitted.
 	api.ssrfChecker = security.NewSSRFChecker([]string{"127.0.0.1", "::1"})
 
-	body := `{"id":"openai","api_key":"test-key","endpoint":"` + upstream.URL + `"}`
+	body := `{"id":"openai","auth":"api_key","api_key":"test-key","api_base":"` + upstream.URL + `"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/probe-provider", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -1590,7 +1590,7 @@ func TestHandleOnboardingProbeProvider_EmptyModelsWarns(t *testing.T) {
 	api := newOnboardingTestAPI(t, tmpDir, nil)
 	api.ssrfChecker = security.NewSSRFChecker([]string{"127.0.0.1", "::1"})
 
-	body := `{"id":"openai","api_key":"test-key","endpoint":"` + upstream.URL + `"}`
+	body := `{"id":"openai","auth":"api_key","api_key":"test-key","api_base":"` + upstream.URL + `"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/probe-provider", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()

@@ -6,11 +6,9 @@
 package providers
 
 import (
-	"bufio"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -880,124 +878,15 @@ func TestCreateProviderFromConfig_ZAI(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Task 1 — base-resolution invariant
-// Traces to: docs/internal/provider-endpoint-audit-2026-06.md (Recommendations §1)
-//
-// Every id in the ProbeProviderRequest.yaml enum must either resolve a non-empty
-// default API base (so the onboarding probe can build the request URL) OR appear
-// in the explicit allowlist below for ids that *require* a per-deployment endpoint
-// (azure, azure-openai, bedrock).
-//
-// This test would have caught the z-ai, anthropic, anthropic-messages, moonshot-cn,
-// and minimax-cn gaps. A new provider id added to the enum without a GetDefaultAPIBase
-// case (and not in the allowlist) causes a red test here.
+// RETIRED (A-CONTRACT, 36801b44 — ADR-067 FR-023): probeEnumIDsFromYAML,
+// TestProbeEnumProvidersResolveBase, TestProbeEnumProvidersAreKnownProtocols and
+// TestEveryProbeProviderBuilds enumerated the ProbeProviderRequest.id enum. The
+// enum no longer exists — id is a free string validated at runtime against the
+// served catalog. Their replacements are the catalog-driven guards delivered by
+// T067-08 (table-backed factory, T24 case set) and T067-12 (probe id validation,
+// T40 TestOnboarding_Probe_FreeStringID); see
+// docs/internal/specs/tasks/adr-067-registry-catalog-spec-tasks.md.
 // ---------------------------------------------------------------------------
-
-// probeEnumIDsFromYAML parses the enum: list from the ProbeProviderRequest schema file.
-// It looks for lines that are "      - <id>" under the enum key.
-func probeEnumIDsFromYAML(t *testing.T) []string {
-	t.Helper()
-	data, err := os.ReadFile("../../contracts/components/schemas/ProbeProviderRequest.yaml")
-	if err != nil {
-		t.Fatalf("cannot read ProbeProviderRequest.yaml: %v", err)
-	}
-	var ids []string
-	inEnum := false
-	scanner := bufio.NewScanner(strings.NewReader(string(data)))
-	for scanner.Scan() {
-		line := scanner.Text()
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "enum:" {
-			inEnum = true
-			continue
-		}
-		if inEnum {
-			// Stop at the next key that is not a list item
-			if strings.HasPrefix(trimmed, "-") {
-				id := strings.TrimSpace(strings.TrimPrefix(trimmed, "-"))
-				if id != "" {
-					ids = append(ids, id)
-				}
-			} else if trimmed != "" {
-				// A non-list, non-empty line ends the enum block
-				inEnum = false
-			}
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		t.Fatalf("scanning ProbeProviderRequest.yaml: %v", err)
-	}
-	if len(ids) == 0 {
-		t.Fatal("ProbeProviderRequest.yaml parsed 0 enum ids — check YAML structure")
-	}
-	return ids
-}
-
-// TestProbeEnumProvidersResolveBase is the headline invariant guard.
-//
-// For every id in the ProbeProviderRequest enum:
-//   - if id is in needsEndpointAllowlist  → assert GetDefaultAPIBase(id) == "" (documents the requirement)
-//   - otherwise                           → assert GetDefaultAPIBase(id) != "" (the probe can build a URL)
-//
-// If this test fails, add a GetDefaultAPIBase case for the id, or add it to
-// needsEndpointAllowlist with a comment explaining why it needs a per-deployment base.
-func TestProbeEnumProvidersResolveBase(t *testing.T) {
-	// needsEndpointAllowlist contains ids that legitimately have NO fixed default base
-	// because every deployment has a unique host. These ids MUST be supplied an
-	// endpoint override in the probe request or they cannot work. The allowlist is
-	// intentionally small — if you're tempted to add a new id here, consider whether
-	// the provider actually has a well-known hosted endpoint instead.
-	needsEndpointAllowlist := map[string]bool{
-		"azure":        true, // per-resource Azure OpenAI host, e.g. https://your-resource.openai.azure.com
-		"azure-openai": true, // alias for azure; same requirement
-		"bedrock":      true, // AWS SDK credential-based; endpoint derived from region, not a fixed URL
-	}
-
-	// Ids that don't route through GetDefaultAPIBase at all (CLI/local tools, no HTTP probe base needed)
-	// and are not in the onboarding probe's base-resolution path.
-	noBaseExpected := map[string]bool{
-		"antigravity": true, // in-process mock provider — no real upstream
-		"claude-cli":  true, // local CLI subprocess, no HTTP base
-		"claudecli":   true, // alias for claude-cli
-		"codex-cli":   true, // local CLI subprocess, no HTTP base
-		"codexcli":    true, // alias for codex-cli
-	}
-
-	ids := probeEnumIDsFromYAML(t)
-	t.Logf("ProbeProviderRequest enum contains %d ids", len(ids))
-
-	for _, id := range ids {
-		t.Run(id, func(t *testing.T) {
-			got := GetDefaultAPIBase(id)
-			switch {
-			case needsEndpointAllowlist[id]:
-				// These must NOT have a fixed default — they require per-deployment endpoints.
-				if got != "" {
-					t.Errorf(
-						"GetDefaultAPIBase(%q) = %q: id is in needsEndpointAllowlist (per-deployment host required), expected empty string",
-						id,
-						got,
-					)
-				}
-			case noBaseExpected[id]:
-				// CLI / local tools — no HTTP base; either "" or a localhost default is acceptable.
-				// We only document; we don't fail.
-			default:
-				// Every other probe-enum id MUST resolve a non-empty base so the
-				// onboarding probe can construct the upstream URL. If this fails,
-				// add a GetDefaultAPIBase case for %q or add it to needsEndpointAllowlist.
-				if got == "" {
-					t.Errorf(
-						"GetDefaultAPIBase(%q) = \"\": id is in the ProbeProviderRequest enum but has no default base — "+
-							"add a GetDefaultAPIBase case for %q or add it to needsEndpointAllowlist with a comment explaining why",
-						id,
-						id,
-					)
-				}
-			}
-		})
-	}
-}
 
 // ---------------------------------------------------------------------------
 // Task 2 — per-provider base assertions for newly-wired and key providers
@@ -1124,71 +1013,5 @@ func TestCreateProviderFromConfig_MinimaxCN(t *testing.T) {
 	// minimax-cn must also inject reasoning_split (same branch as minimax)
 	if got, ok := requestBody["reasoning_split"]; !ok || got != true {
 		t.Errorf("minimax-cn: reasoning_split = %v, want true — minimax-cn branch must inject reasoning_split", got)
-	}
-}
-
-// TestProbeEnumProvidersAreKnownProtocols guards the second half of the
-// onboarding consistency contract: every provider id offered to the probe must
-// ALSO be accepted by IsKnownProtocol — otherwise onboarding lets the user TEST
-// the key but then rejects /onboarding/complete with "not a known protocol".
-// This is the gap that left z-ai / moonshot-cn / minimax-cn in the probe enum +
-// factory switch but missing from knownProtocols. A new probe-enum id that isn't
-// wired into knownProtocols fails here with a clear, actionable message.
-func TestProbeEnumProvidersAreKnownProtocols(t *testing.T) {
-	for _, id := range probeEnumIDsFromYAML(t) {
-		if !IsKnownProtocol(id) {
-			t.Errorf("provider id %q is in the ProbeProviderRequest enum but not in "+
-				"knownProtocols — onboarding-complete would reject it. Add %q to the "+
-				"knownProtocols map in factory_provider.go.", id, id)
-		}
-	}
-}
-
-// TestEveryProbeProviderBuilds is the comprehensive end-to-end guard: EVERY
-// provider id offered by the onboarding probe must actually build via
-// CreateProviderFromConfig — not just resolve a base (TestProbeEnumProviders
-// ResolveBase) and be a known protocol (TestProbeEnumProvidersAreKnownProtocols),
-// but have a real factory case that constructs a provider. This catches a
-// provider that's wired into the enum + knownProtocols + GetDefaultAPIBase but
-// missing from the CreateProviderFromConfig switch (it would build "unknown
-// protocol"). One subtest per provider, so CI names the exact id that broke.
-func TestEveryProbeProviderBuilds(t *testing.T) {
-	// Providers that cannot be built from a bare api_key in a unit test: CLI/local
-	// subprocess providers (need an external binary) and the AWS-SDK bedrock path.
-	// Still guarded by knownProtocols + their own dedicated tests.
-	skipBuild := map[string]bool{
-		"bedrock":     true, // AWS SDK credential flow, no api_key HTTP path
-		"antigravity": true, // in-process mock harness
-		"claude-cli":  true, // local CLI subprocess
-		"claudecli":   true,
-		"codex-cli":   true, // local CLI subprocess
-		"codexcli":    true,
-	}
-	// Providers with no fixed base require an explicit endpoint to build.
-	needsEndpoint := map[string]bool{"azure": true, "azure-openai": true}
-
-	for _, id := range probeEnumIDsFromYAML(t) {
-		if skipBuild[id] {
-			continue
-		}
-		t.Run(id, func(t *testing.T) {
-			const keyRef = "FACTORY_EVERY_PROVIDER_TEST_KEY"
-			t.Setenv(keyRef, "test-key")
-			cfg := &config.ModelConfig{
-				Model:     id + "/test-model",
-				APIKeyRef: keyRef,
-			}
-			if needsEndpoint[id] {
-				cfg.APIBase = "https://example.openai.azure.com/openai/deployments/test"
-			}
-			p, _, err := CreateProviderFromConfig(cfg)
-			if err != nil {
-				t.Fatalf("CreateProviderFromConfig(%q) error: %v — the factory "+
-					"switch in CreateProviderFromConfig is missing a case for %q", id, err, id)
-			}
-			if p == nil {
-				t.Fatalf("CreateProviderFromConfig(%q) returned nil provider", id)
-			}
-		})
 	}
 }

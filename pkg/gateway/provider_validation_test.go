@@ -609,7 +609,7 @@ func TestAudit_ProbeAndTestNotAudited(t *testing.T) {
 		api := newOnboardingTestAPI(t, tmpDir, nil)
 		api.auditor = auditLogger
 
-		body := `{"id":"openai","api_key":"valid-key","endpoint":"` + upstream.URL + `"}`
+		body := `{"id":"openai","auth":"api_key","api_key":"valid-key","api_base":"` + upstream.URL + `"}`
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/probe-provider", strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
@@ -918,7 +918,7 @@ func TestOnboardingProbe_NoCreditWarns(t *testing.T) {
 	api := newOnboardingTestAPI(t, tmpDir, nil)
 	require.False(t, api.onboardingMgr.IsComplete())
 
-	body := `{"id":"openai","api_key":"valid-key","endpoint":"` + upstream.URL + `"}`
+	body := `{"id":"openai","auth":"api_key","api_key":"valid-key","api_base":"` + upstream.URL + `"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/probe-provider", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
