@@ -941,18 +941,6 @@ func TestLoadConfig_HooksProcessConfig(t *testing.T) {
 }
 
 // TestDefaultConfig_DMScope verifies the default dm_scope value
-// TestDefaultConfig_SummarizationThresholds verifies the SummarizeTokenPercent
-// default. The field survived the legacy-summariser decommission because it
-// also gates and sizes the timeout-recovery windowTrim trigger in
-// pkg/agent/loop.go::runTurn — it is no longer a summarization knob.
-func TestDefaultConfig_SummarizationThresholds(t *testing.T) {
-	cfg := DefaultConfig()
-
-	if cfg.Agents.Defaults.SummarizeTokenPercent != 75 {
-		t.Errorf("SummarizeTokenPercent = %d, want 75", cfg.Agents.Defaults.SummarizeTokenPercent)
-	}
-}
-
 func TestDefaultConfig_DMScope(t *testing.T) {
 	cfg := DefaultConfig()
 

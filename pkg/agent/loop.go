@@ -8089,7 +8089,9 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 
 	if !ts.opts.NoHistory {
 		toolDefs := ts.agent.Tools.ToProviderDefs()
-		if isOverContextBudget(ts.agent.ContextWindow, messages, toolDefs, ts.agent.MaxTokens) {
+		// FR-028: the pre-turn check reads the one budget B — the same value
+		// windowTrim fits the suffix against — never the raw window.
+		if isOverContextBudget(agentContextBudget(ts.agent), messages, toolDefs) {
 			logger.WarnCF("agent", "Proactive window trim: context budget exceeded before LLM call",
 				map[string]any{"session_key": ts.sessionKey})
 			if compression, ok := al.windowTrim(ts.agent, ts.sessionKey); ok {
@@ -9044,12 +9046,22 @@ turnLoop:
 					},
 				)
 				// Timeout recovery: compact context if it's heavily loaded, then retry once.
-				if !compactionAttemptedOnTimeout && ts.agent.SummarizeTokenPercent > 0 && !ts.opts.NoHistory {
+				//
+				// FR-028 / B-38: the check reads the one budget B — the retired
+				// summarize_token_percent no longer scales the window here. What
+				// it measures is the request the RETRY would assemble: the
+				// messages of the failed call plus any recall span that became
+				// active during it (the retry re-assembles from the session, so
+				// an active span is part of the next request even though it was
+				// not part of callMessages). windowTrim counts that span the
+				// same way (FR-019 drop-span-first).
+				if !compactionAttemptedOnTimeout && !ts.opts.NoHistory {
 					toolDefs := ts.agent.Tools.ToProviderDefs()
-					if isOverContextBudget(
-						ts.agent.ContextWindow*ts.agent.SummarizeTokenPercent/100,
-						callMessages, toolDefs, ts.agent.MaxTokens,
-					) {
+					retryMessages := callMessages
+					if span := al.activeRecallSpan(ts.sessionKey); span != nil {
+						retryMessages = append(append([]providers.Message(nil), callMessages...), span.Messages()...)
+					}
+					if isOverContextBudget(agentContextBudget(ts.agent), retryMessages, toolDefs) {
 						compactionAttemptedOnTimeout = true
 						// windowTrim has three possible outcomes here:
 						//  1. ok=true — a real eviction occurred, either window Turns were
@@ -11400,48 +11412,25 @@ func (al *AgentLoop) windowTrim(agent *AgentInstance, sessionKey string) (compre
 		recallSpanTokens = recallSpan.Tokens
 	}
 
-	contextWindow := agent.ContextWindow
-	if contextWindow <= 0 {
-		contextWindow = 128000
-	}
-	maxTokens := agent.MaxTokens
-
-	// 5% headroom target: budget for the window must leave room for a normal
-	// next-turn response and the 5% slack so we don't immediately re-trim.
-	headroom := (contextWindow + 19) / 20 // ceil(0.05 * contextWindow)
-
-	// M3 fix: subtract pinned-core (system prompt) + breadcrumb overhead so the
-	// suffix fit-check uses the same budget basis as isOverContextBudget (which
-	// counts the system message). On small-window models, omitting these causes
-	// under-eviction — the assembled request is still over budget after trim.
-	//
-	// Estimate the system prompt token cost via the ContextBuilder cache:
-	// the static prompt is already cached, so BuildSystemPromptWithCache is cheap.
-	// We estimate using the same chars-per-token ratio as estimateMessageTokens.
-	var pinnedCoreOverhead int
-	if agent.ContextBuilder != nil {
-		sysPrompt := agent.ContextBuilder.BuildSystemPromptWithCache()
-		// chars*2/5 ≈ tokens — exactly the same heuristic as estimateMessageTokens
-		// (which uses chars*2/5 after adding per-message overhead). chars/4 would
-		// underestimate by ~38%, causing under-eviction on small-window models.
-		pinnedCoreOverhead = len(sysPrompt) * 2 / 5
-	}
-	// breadcrumbTokenCap is the hard cap on the breadcrumb block (~1000 tokens);
-	// use it as a conservative estimate of the breadcrumb overhead.
-	pinnedCoreOverhead += breadcrumbTokenCap
-
-	budget := contextWindow - maxTokens - headroom - pinnedCoreOverhead
+	// The ONE budget B (ADR-066 FR-028): W − max_tokens − ceil(0.05·W) −
+	// pinnedCoreOverhead, resolved by the same helper the pre-turn and
+	// timeout-recovery checks call, so the suffix fit-check below and the
+	// checks that decide to invoke it can never disagree. The 5 % headroom
+	// keeps a just-trimmed window from re-trimming on the very next turn;
+	// the pinned-core term (M3 fix) is what stops under-eviction on
+	// small-window models — the system prompt and breadcrumb are sent every
+	// turn but are not part of `window`.
+	budget := agentContextBudget(agent)
 
 	// FR-019 drop-span-first: if an active span exists and we're over budget,
 	// drop it and re-check. Only evict real window Turns if still over budget.
 	currentWindowTokens := sumMessageTokens(window)
-	if recallSpan != nil && (currentWindowTokens+toolDefsTokens+recallSpanTokens+maxTokens > contextWindow) {
+	if recallSpan != nil && (currentWindowTokens+toolDefsTokens+recallSpanTokens > budget) {
 		al.dropRecallSpan(sessionKey, "pressure")
 		recallSpanTokens = 0
-		// Re-check against the same budget basis used for the suffix fit-check
-		// below (contextWindow − maxTokens − headroom − pinnedCoreOverhead).
-		// Using raw contextWindow here would pass cases that the suffix walk
-		// would still reject, causing unnecessary evictions on the next call.
+		// Re-check against the same budget B used for the suffix fit-check
+		// below. Using the raw window here would pass cases that the suffix
+		// walk would still reject, causing unnecessary evictions on the next call.
 		if currentWindowTokens+toolDefsTokens <= budget {
 			// The recall span alone was the problem: dropping it brought the
 			// window back under budget without evicting any window Turns.

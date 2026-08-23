@@ -28,14 +28,13 @@ func DefaultConfig() *Config {
 		Version: CurrentVersion,
 		Agents: AgentsConfig{
 			Defaults: AgentDefaults{
-				Home:                  workspacePath,
-				RestrictToWorkspace:   true,
-				Provider:              "",
-				MaxTokens:             32768,
-				Temperature:           nil, // nil means use provider default
-				MaxToolIterations:     200,
-				SummarizeTokenPercent: 75,
-				SteeringMode:          "one-at-a-time",
+				Home:                workspacePath,
+				RestrictToWorkspace: true,
+				Provider:            "",
+				MaxTokens:           32768,
+				Temperature:         nil, // nil means use provider default
+				MaxToolIterations:   200,
+				SteeringMode:        "one-at-a-time",
 				// Concurrency-gate consolidation (2026-08-04, commit
 				// 536b7340's follow-up fix): SubTurn.MaxConcurrent is
 				// deliberately left UNSET (Go zero value) rather than seeded.
@@ -645,6 +644,9 @@ func DefaultConfig() *Config {
 			AuditRetention:       DefaultSMAuditRetention,
 			UndeliveredRetention: DefaultSMUndeliveredRetention,
 		},
+		// ADR-066 D9 context-budget seed (B-44 defaults) — see
+		// context_settings.go for the per-field meaning.
+		Context: DefaultContextSettings(),
 		Tools: ToolsConfig{
 			FilterSensitiveData: true,
 			FilterMinLength:     8,
