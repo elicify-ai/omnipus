@@ -212,9 +212,38 @@ both expired:
    during the 2026-08-22 work all ran on it.
 
 The exclusion's *mechanism* remains true and becomes an ordering constraint:
-`macos-latest` is Apple Silicon, so **no CI job has ever run on Intel Mac**. The
-`macos-13` leg must land **before** the exclusion is removed, or we release a binary no
-automated test has touched.
+`macos-latest` is Apple Silicon, so **no CI job has ever run on Intel Mac**.
+
+### 6.3.1 Amendment 2026-08-23 — the prerequisite cannot be met on GitHub-hosted runners
+
+Implementation revealed that the `macos-13` leg this ADR assumed is **not available**,
+and no substitute is reachable on this organisation's current plan. **[VERIFIED]**
+
+- `macos-13` was **retired on 2025-12-04** (GitHub Changelog, "macOS 13 runner image is
+  closing down"; brownout Nov 2025). It no longer appears in `actions/runner-images`'
+  Available Images table.
+- The recommended x64 replacements — `macos-15-intel`, `macos-14-large`,
+  `macos-latest-large` — are **larger runners**, a paid product that an org admin must
+  explicitly provision. `gh api orgs/elicify-ai` returns `"plan":"free"` and
+  `gh api orgs/elicify-ai/actions/runners` returns `total_count: 0` **[VERIFIED]**.
+- `macos-14-large` is itself past its "fully unsupported" date (2025-11-02).
+- GitHub has announced it will **discontinue x86_64 macOS runners entirely** after the
+  macOS 15 image retires in Fall 2027.
+
+So there is currently no `runs-on` label this repository can reference that resolves to
+an Intel Mac. The ordering constraint stands but its prerequisite is unobtainable, which
+turns §6.1's `darwin/amd64` decision into an open question rather than a settled one:
+
+| Option | Cost | Consequence |
+|---|---|---|
+| Ship `darwin/amd64` with **no** CI coverage | none | Accepts an untested-by-CI binary. Mitigated in practice: it is the primary development host, so it is the most manually-exercised platform in the project — but that is a person, not a gate. |
+| Self-host an Intel Mac runner | maintenance | The development host already exists. Gives a real gate; adds runner upkeep and a security surface. |
+| Upgrade to Team/Enterprise + provision a larger runner | ongoing paid | Works until Fall 2027, then ends anyway. |
+| Drop `darwin/amd64` after all | none | Contradicts §6.3's reasoning; abandons the platform the project is developed on. |
+
+**Pending a founder decision, step 5 is blocked and `darwin/amd64` remains excluded from
+releases.** Recording the blocker rather than silently shipping an untested binary or
+quietly dropping the target.
 
 ## 7. Consequences
 
@@ -276,10 +305,10 @@ Trust before speed. Optimising a suite nobody believes optimises the wrong thing
 | 1 | Add `push: [release/**, main]` to `pr.yml` | — |
 | 2 | Pin `golangci-lint` version for local use (§5) | — |
 | 3 | Single `npm ci` job with shared artifact (§7.1) | — |
-| 4 | Add the `macos-13` leg to `cross-platform.yml` | — |
-| 5 | Remove the `darwin/amd64` `ignore` block | step 4 |
+| 4 | ~~Add the `macos-13` leg~~ — **BLOCKED**, runner retired; see §6.3.1 | founder decision |
+| 5 | Remove the `darwin/amd64` `ignore` block | **BLOCKED** on step 4 |
 | 6 | Resolve the stale traversal test | #635 decision |
-| 7 | `cross-platform` green → promote to blocking | steps 4, 6 |
+| 7 | `cross-platform` green → promote to blocking | step 6 |
 | 8 | Fix or delete `evals-nightly` | #637 |
 | 9 | Reduce `Makefile::build-all` to four targets | — |
 | 10 | Delete `build-lite`, the `lite` tag, `lite-build-weekly.yml` | — |
