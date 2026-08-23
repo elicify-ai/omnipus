@@ -225,6 +225,25 @@ export interface ToolAssemblyDuplicate {
   message: string;
 }
 
+export interface ToolArgumentRefusal {
+  error: "tool_arguments_too_large";
+  reason: string;
+  tool: string;
+  size_chars: number;
+  cap_chars: number;
+}
+
+export interface ToolResultRecallMark {
+  error: "tool_result_recall_mark";
+  tool: string;
+  tool_call_id: string;
+  archive_line: number;
+  size_chars: number;
+  turn: number;
+  content_state: "capped" | "emptied";
+  hint: string;
+}
+
 export interface ToolCallResultFrame {
   type: "tool_call_result";
   session_id: string;

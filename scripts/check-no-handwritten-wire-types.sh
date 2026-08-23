@@ -1016,6 +1016,10 @@ KNOWN_STRUCTURED_FAILURE_DISCRIMINATORS = {
     'file_exists',
     'permission_denied',
     'tool_assembly_duplicate',
+    # ADR-066 (T066-01 schemas in contracts/asyncapi.yaml: ToolArgumentRefusal,
+    # ToolResultRecallMark; T066-04 producers + *Code constants).
+    'tool_arguments_too_large',
+    'tool_result_recall_mark',
 }
 
 # Matches both raw-string (`{"error":"x"}`) and interpreted-string
