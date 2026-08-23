@@ -7,6 +7,26 @@ type LoginResponse = {
   warning?: string | undefined;
 };
 type BearerToken = string;
+type OnboardingCompleteRequest = {
+  provider: OnboardingProviderApiKey | OnboardingProviderSignIn;
+  admin: {
+    username: string;
+    password: string;
+  };
+};
+type OnboardingProviderApiKey = {
+  auth_method: "api_key";
+  id: string;
+  api_key: string;
+  model?: string | undefined;
+  endpoint?: string | undefined;
+};
+type OnboardingProviderSignIn = {
+  auth_method: "sign_in";
+  id: string;
+  model?: string | undefined;
+  endpoint?: string | undefined;
+};
 type OnboardingCompleteResponse = LoginResponse;
 type ProbeProviderResponse = {
   success: boolean;
@@ -1686,26 +1706,38 @@ export const VoiceProvider = z
     voices_endpoint: z.string().nullish(),
   })
   .passthrough();
-export const OnboardingCompleteRequest = z.object({
-  provider: z
-    .object({
-      id: z.string(),
-      api_key: z.string().min(1),
-      model: z.string().optional(),
-      endpoint: z.string().optional(),
-    })
-    .passthrough(),
-  admin: z
-    .object({
-      username: z
-        .string()
-        .min(2)
-        .max(63)
-        .regex(/^[A-Za-z0-9][A-Za-z0-9._-]{1,62}$/),
-      password: z.string().min(8),
-    })
-    .passthrough(),
-});
+export const OnboardingProviderApiKey =
+  z.object({
+    auth_method: z.literal("api_key"),
+    id: z.string().min(1).max(64),
+    api_key: z.string().min(1),
+    model: z.string().min(1).max(256).optional(),
+    endpoint: z.string().optional(),
+  }) satisfies z.ZodType<OnboardingProviderApiKey>;
+export const OnboardingProviderSignIn =
+  z.object({
+    auth_method: z.literal("sign_in"),
+    id: z.string().min(1).max(64),
+    model: z.string().min(1).max(256).optional(),
+    endpoint: z.string().optional(),
+  }) satisfies z.ZodType<OnboardingProviderSignIn>;
+export const OnboardingCompleteRequest =
+  z.object({
+    provider: z.discriminatedUnion("auth_method", [
+      OnboardingProviderApiKey,
+      OnboardingProviderSignIn,
+    ]),
+    admin: z
+      .object({
+        username: z
+          .string()
+          .min(2)
+          .max(63)
+          .regex(/^[A-Za-z0-9][A-Za-z0-9._-]{1,62}$/),
+        password: z.string().min(8),
+      })
+      .passthrough(),
+  }) satisfies z.ZodType<OnboardingCompleteRequest>;
 export const ProbeProviderRequest = z.object({
   id: z.string().min(1).max(64),
   auth: z.enum(["api_key", "sign_in"]),
@@ -2802,6 +2834,16 @@ export const ProviderDeleteResponse: z.ZodType<ProviderDeleteResponse> =
     default_changed: z.boolean(),
     new_default: DefaultModelUpdateRequest.optional(),
   });
+export const SignInStartResponse = z.object({
+  method: z.literal("cli_login"),
+  command: z.string().min(1).max(256),
+  instructions: z.string().min(1).max(1024),
+});
+export const SignInStatus = z.object({
+  state: z.enum(["not_signed_in", "signed_in", "expired"]),
+  account_label: z.string().max(128).optional(),
+  expires_at: z.string().datetime({ offset: true }).optional(),
+});
 export const EntitlementModel: z.ZodType<EntitlementModel> = z.object({
   id: z.string().min(1).max(256),
   entitled: z.boolean(),
@@ -7124,6 +7166,72 @@ Model lists are fetched live from each provider&#x27;s upstream /models endpoint
       {
         status: 502,
         description: `Bad gateway — an upstream dependency (e.g. a skill registry) is unreachable or returned an error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/providers/:id/sign-in",
+    alias: "startProviderSignIn",
+    description: `Omnipus never performs or stores the vendor login itself. This endpoint returns the one instruction the operator needs — the vendor CLI&#x27;s login command — so the SPA can show it beside a *Check sign-in* button. Returns 400 &#x60;{&quot;error&quot;:&quot;provider does not support sign-in&quot;}&#x60; when the provider&#x27;s catalog row does not list &#x60;sign_in&#x60; in &#x60;auth_methods&#x60; (FR-008). Never contacts the vendor and persists nothing. adminWrap: 401 unauthenticated, 503 under dev-mode bypass.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: SignInStartResponse,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `dev_mode_bypass is active (RequireNotBypass guard).`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/providers/:id/sign-in/status",
+    alias: "getProviderSignInStatus",
+    description: `Reads the vendor CLI&#x27;s saved login (codex &#x60;auth.json&#x60; — only &#x60;tokens.access_token&#x60; for the unverified &#x60;exp&#x60; claim and &#x60;tokens.account_id&#x60; for the label; the Copilot CLI&#x27;s own auth-status) and maps it to &#x60;not_signed_in | signed_in | expired&#x60;. &#x60;expired&#x60; follows the JWT &#x60;exp&#x60; when decodable and the one-hour file-age rule otherwise (MAJ-006). The file is never modified and no refresh request is ever made (FR-007). A missing CLI binary is reported on the Provider row as &#x60;disconnected&#x60;, not here. Returns 400 &#x60;{&quot;error&quot;:&quot;provider does not support sign-in&quot;}&#x60; for providers without &#x60;sign_in&#x60;. adminWrap: 401 / 503 under bypass.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: SignInStatus,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `dev_mode_bypass is active (RequireNotBypass guard).`,
         schema: ErrorResponse,
       },
     ],

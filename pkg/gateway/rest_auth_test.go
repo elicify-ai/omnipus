@@ -1789,7 +1789,7 @@ func TestLogin_AfterOnboardingWithoutRestart(t *testing.T) {
 
 	// Step 1: Complete onboarding — writes admin to disk AND refreshes in-memory config.
 	// Use a provider body that passes ValidateProviders (model field required).
-	onboardBody := `{"provider":{"id":"openai","api_key":"sk-test","model":"gpt-4o"},"admin":{"username":"admin","password":"secret123"}}`
+	onboardBody := `{"provider":{"auth_method":"api_key","id":"openai","api_key":"sk-test","model":"gpt-4o"},"admin":{"username":"admin","password":"secret123"}}`
 	onboardBody = hermeticOnboardBody(t, onboardBody)
 	onboardReq := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(onboardBody))
 	onboardReq.Header.Set("Content-Type", "application/json")

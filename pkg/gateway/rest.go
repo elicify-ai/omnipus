@@ -5806,6 +5806,10 @@ func (a *restAPI) HandleActivity(w http.ResponseWriter, r *http.Request) {
 
 // --- Providers ---
 
+// providerSignInNotImplementedMsg is the 501 body for the ADR-068 sign-in
+// routes until T068-16 implements them.
+const providerSignInNotImplementedMsg = "provider sign-in not implemented — T068-16"
+
 // HandleProviders handles GET/PUT/POST /api/v1/providers and sub-paths.
 func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimSuffix(r.URL.Path, "/")
@@ -6260,6 +6264,22 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 
 	case r.Method == http.MethodPost && strings.HasSuffix(sub, "/refresh-models"):
 		a.refreshProviderModels(w, r, strings.TrimSuffix(sub, "/refresh-models"))
+
+	case r.Method == http.MethodPost && strings.HasSuffix(sub, "/sign-in"),
+		r.Method == http.MethodGet && strings.HasSuffix(sub, "/sign-in/status"):
+		// POST /api/v1/providers/{id}/sign-in and GET …/sign-in/status
+		// (ADR-068 FR-008/FR-009, contract landed by T068-06). The vendor
+		// sign-in flow itself is T068-16; until it lands these are honest
+		// stubs behind the contract's adminWrap posture (401 unauthenticated,
+		// 503 under dev-mode bypass) that answer 501 with a message naming
+		// the owning task, never a silent 200 or a blank 404.
+		if r.Context().Value(UserContextKey{}) == nil {
+			jsonErr(w, http.StatusUnauthorized, "authentication required")
+			return
+		}
+		a.requireAdminAuthz(func(w http.ResponseWriter, _ *http.Request) {
+			jsonErr(w, http.StatusNotImplemented, providerSignInNotImplementedMsg)
+		})(w, r)
 
 	case r.Method == http.MethodPost && strings.HasSuffix(sub, "/test"):
 		// POST /api/v1/providers/{id}/test — verify the provider has a valid API key.

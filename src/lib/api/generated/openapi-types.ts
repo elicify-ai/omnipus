@@ -1618,6 +1618,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/providers/{id}/sign-in": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start a vendor sign-in for a provider (ADR-068 FR-008/FR-009)
+         * @description Omnipus never performs or stores the vendor login itself. This endpoint returns the one instruction the operator needs — the vendor CLI's login command — so the SPA can show it beside a *Check sign-in* button. Returns 400 `{"error":"provider does not support sign-in"}` when the provider's catalog row does not list `sign_in` in `auth_methods` (FR-008). Never contacts the vendor and persists nothing. adminWrap: 401 unauthenticated, 503 under dev-mode bypass.
+         */
+        post: operations["startProviderSignIn"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/providers/{id}/sign-in/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read a provider's vendor sign-in state (ADR-068 FR-009)
+         * @description Reads the vendor CLI's saved login (codex `auth.json` — only `tokens.access_token` for the unverified `exp` claim and `tokens.account_id` for the label; the Copilot CLI's own auth-status) and maps it to `not_signed_in | signed_in | expired`. `expired` follows the JWT `exp` when decodable and the one-hour file-age rule otherwise (MAJ-006). The file is never modified and no refresh request is ever made (FR-007). A missing CLI binary is reported on the Provider row as `disconnected`, not here. Returns 400 `{"error":"provider does not support sign-in"}` for providers without `sign_in`. adminWrap: 401 / 503 under bypass.
+         */
+        get: operations["getProviderSignInStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/providers/{id}/entitlement": {
         parameters: {
             query?: never;
@@ -3126,31 +3166,13 @@ export interface components {
              */
             new_password: string;
         };
-        /** @description Body for POST /onboarding/complete. Atomically sets up the first LLM provider and creates the initial admin account. CSRF-exempt (no cookie exists at this point). */
+        /**
+         * OnboardingCompleteRequest
+         * @description Body for POST /onboarding/complete. Atomically sets up the first LLM provider and creates the initial admin account. CSRF-exempt (no cookie exists at this point). `provider` is discriminated by `auth_method`: `api_key` requires `api_key`; `sign_in` forbids it (ADR-068 MAJ-014).
+         */
         OnboardingCompleteRequest: {
-            /** @description LLM provider configuration to persist. */
-            provider: {
-                /**
-                 * @description Provider protocol identifier (e.g. "anthropic", "openai", "openrouter", "gemini"). Must be a known protocol; unknown values are rejected with 400.
-                 * @example anthropic
-                 */
-                id: string;
-                /**
-                 * @description API key for the provider. Stored encrypted (AES-256-GCM) in credentials.json.
-                 * @example sk-ant-...
-                 */
-                api_key: string;
-                /**
-                 * @description Default model to use for this provider. When omitted, a sensible default is chosen per provider (e.g. "claude-sonnet-4-6" for anthropic, "gpt-4o" for openai).
-                 * @example claude-sonnet-4-6
-                 */
-                model?: string;
-                /**
-                 * @description Optional custom API base URL, persisted as the provider entry's api_base. Required for providers that have no fixed default endpoint (e.g. azure, azure-openai — a per-resource host); also usable to override the regional default (e.g. a China vs international host). When omitted, the provider's built-in default base is used.
-                 * @example https://my-resource.openai.azure.com/openai/deployments/gpt-4o
-                 */
-                endpoint?: string;
-            };
+            /** @description LLM provider configuration to persist, discriminated by `auth_method`. */
+            provider: components["schemas"]["OnboardingProviderApiKey"] | components["schemas"]["OnboardingProviderSignIn"];
             /** @description Initial admin account credentials. */
             admin: {
                 /**
@@ -3164,6 +3186,96 @@ export interface components {
                  */
                 password: string;
             };
+        };
+        /** @description The `api_key` variant of OnboardingCompleteRequest.provider (ADR-068, MAJ-014). Discriminated by `auth_method` following the ADR-034 inline oneOf mechanism; `api_key` is REQUIRED here and is not a property of the sign-in variant. */
+        OnboardingProviderApiKey: {
+            /**
+             * @description Discriminator — this variant authenticates with an API key. (enum property replaced by openapi-typescript)
+             * @enum {string}
+             */
+            auth_method: "api_key";
+            /**
+             * @description Provider id (e.g. "anthropic", "openai", "openrouter", "gemini"). Must be a known protocol; unknown values are rejected with 400.
+             * @example anthropic
+             */
+            id: string;
+            /**
+             * @description API key for the provider. Stored encrypted (AES-256-GCM) in credentials.json.
+             * @example sk-ant-...
+             */
+            api_key: string;
+            /**
+             * @description The model chosen for the first agent — the probe-validated pick from step 3, persisted as agents.defaults.default_model together with the provider id.
+             * @example claude-sonnet-4-6
+             */
+            model?: string;
+            /**
+             * @description Optional custom API base URL, persisted as the provider entry's api_base. Required for providers that have no fixed default endpoint (e.g. azure, azure-openai — a per-resource host); also usable to override the regional default. When omitted, the provider's built-in default base is used.
+             * @example https://my-resource.openai.azure.com/openai/deployments/gpt-4o
+             */
+            endpoint?: string;
+        };
+        /** @description The `sign_in` variant of OnboardingCompleteRequest.provider (ADR-068, MAJ-014). The vendor CLI holds the login; Omnipus stores no credential, so `api_key` is not a property here and a body carrying one is a schema violation (400 "api_key not allowed with sign_in"). */
+        OnboardingProviderSignIn: {
+            /**
+             * @description Discriminator — this variant uses the vendor CLI's saved login. (enum property replaced by openapi-typescript)
+             * @enum {string}
+             */
+            auth_method: "sign_in";
+            /**
+             * @description Provider id whose catalog row declares `sign_in` in auth_methods (e.g. "codex-cli", "openai-chatgpt", "github-copilot"); any other id is rejected with 400 "provider does not support sign-in".
+             * @example codex-cli
+             */
+            id: string;
+            /**
+             * @description The model chosen for the first agent — the sign-in-probe-validated pick from step 3, persisted as agents.defaults.default_model together with the provider id.
+             * @example gpt-5.4
+             */
+            model?: string;
+            /**
+             * @description Optional custom API base URL, persisted as the provider entry's api_base.
+             * @example https://api.example.com/v1
+             */
+            endpoint?: string;
+        };
+        /** @description Response from POST /providers/{id}/sign-in (ADR-068 FR-009, MIN-005). Omnipus never performs or stores a vendor login itself: the only sign-in mechanism is the vendor CLI's own login command, which the operator runs in a terminal. `method` is therefore pinned to `cli_login` — there are no device-code fields because nothing produces them. */
+        SignInStartResponse: {
+            /**
+             * @description The only sign-in mechanism — run the vendor CLI's login command.
+             * @example cli_login
+             * @enum {string}
+             */
+            method: "cli_login";
+            /**
+             * @description The exact command the operator runs in a terminal (e.g. "codex login", "copilot login").
+             * @example codex login
+             */
+            command: string;
+            /**
+             * @description Human-readable guidance shown beside the command, ending with the prompt to click Check sign-in.
+             * @example Run `codex login` in a terminal, then click Check sign-in.
+             */
+            instructions: string;
+        };
+        /** @description Response from GET /providers/{id}/sign-in/status (ADR-068 FR-009). Read from the vendor CLI's saved login only — Omnipus never refreshes a token (MAJ-006). There is no `pending` state (MIN-005): a check is synchronous. */
+        SignInStatus: {
+            /**
+             * @description not_signed_in when no saved login exists (or it is unreadable / malformed — logged as a warning); signed_in when a usable login exists; expired when the access token's JWT `exp` (decoded unverified, display only) is at or before now, or — without a decodable `exp` — the saved login file is older than one hour.
+             * @example signed_in
+             * @enum {string}
+             */
+            state: "not_signed_in" | "signed_in" | "expired";
+            /**
+             * @description Opaque account identifier from the CLI's saved login (`tokens.account_id` for codex; the GitHub login for Copilot when the CLI reports one). Present only when the saved login yields one; never an e-mail.
+             * @example user_abc123
+             */
+            account_label?: string;
+            /**
+             * Format: date-time
+             * @description The access token's `exp` claim when decodable. Absent otherwise.
+             * @example 2026-09-01T12:00:00Z
+             */
+            expires_at?: string;
         };
         OnboardingCompleteResponse: components["schemas"]["LoginResponse"];
         /** @description Body for POST /onboarding/probe-provider. Validates credentials against a provider and returns the probed model. Non-persistent — nothing is written to disk. CSRF-exempt. Returns 409 once onboarding is complete. ONE shape, owned by ADR-067 (id, api_base, protocol) and ADR-068 (auth, api_key, model) — see ADR-067 FR-023 / ADR-068 FR-036. Runtime rules the schema cannot express: id must be in the served catalog OR be accompanied by both api_base and protocol (a custom row) — otherwise 400 naming the field id with the message 'unknown provider "<id>"' and never a list of accepted ids; the reserved literals "catalog" and "default-model" are never valid ids; api_key is required iff auth is api_key (400 naming api_key) and must be absent with auth sign_in; a tier "unsupported" provider → 400 with its unsupported_reason; any api_base passes the SSRF gate (422 when blocked). */
@@ -15331,6 +15443,64 @@ export interface operations {
             401: components["responses"]["401Unauthorized"];
         };
     };
+    startProviderSignIn: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Provider id whose catalog row declares sign_in (e.g. "codex-cli", "openai-chatgpt", "github-copilot").
+                 * @example codex-cli
+                 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The CLI login instruction for this provider. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SignInStartResponse"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            503: components["responses"]["503BypassActive"];
+        };
+    };
+    getProviderSignInStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Provider id whose catalog row declares sign_in.
+                 * @example codex-cli
+                 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The current sign-in state. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SignInStatus"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            503: components["responses"]["503BypassActive"];
+        };
+    };
     checkProviderEntitlement: {
         parameters: {
             query?: never;
@@ -18017,6 +18187,10 @@ export type BrowserInspectRequest = components["schemas"]["BrowserInspectRequest
 export type BrowserInspectResponse = components["schemas"]["BrowserInspectResponse"];
 export type ChangePasswordRequest = components["schemas"]["ChangePasswordRequest"];
 export type OnboardingCompleteRequest = components["schemas"]["OnboardingCompleteRequest"];
+export type OnboardingProviderApiKey = components["schemas"]["OnboardingProviderApiKey"];
+export type OnboardingProviderSignIn = components["schemas"]["OnboardingProviderSignIn"];
+export type SignInStartResponse = components["schemas"]["SignInStartResponse"];
+export type SignInStatus = components["schemas"]["SignInStatus"];
 export type OnboardingCompleteResponse = components["schemas"]["OnboardingCompleteResponse"];
 export type ProbeProviderRequest = components["schemas"]["ProbeProviderRequest"];
 export type ProbeProviderResponse = components["schemas"]["ProbeProviderResponse"];

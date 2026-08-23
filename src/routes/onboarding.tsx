@@ -543,6 +543,10 @@ function OnboardingWizard() {
     try {
       const resp = await completeOnboardingTransaction({
         provider: {
+          // ADR-068 T068-06: provider is a discriminated union on auth_method.
+          // This screen only collects API keys today; the sign_in variant is
+          // wired by T068-16.
+          auth_method: 'api_key',
           id: selectedProvider,
           api_key: apiKey,
           model: selectedModel,

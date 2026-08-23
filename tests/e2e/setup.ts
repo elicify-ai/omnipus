@@ -375,6 +375,7 @@ export async function onboardAdmin(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       provider: {
+        auth_method: 'api_key',
         id: 'openrouter',
         // CI injects OPENROUTER_API_KEY_CI (per-shard via GITHUB_ENV). Local
         // runs and the Go Tests job use OPENROUTER_API_KEY. Either is a real
