@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"sync/atomic"
+	"unicode"
 
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/providers"
@@ -426,11 +428,23 @@ func FileExistsRefusalResult(tool, path, reason string) *ToolResult {
 // four ways a fifth member can still slip past both enforcement mechanisms.
 // Read there before adding a fifth discriminator, rather than re-deriving
 // the rule from these four constants.
+//
+// ToolArgumentsTooLargeCode and ToolResultRecallMarkCode are the two ADR-066
+// members (contracts/asyncapi.yaml ToolArgumentRefusal and
+// ToolResultRecallMark, T066-01 schemas / T066-04 producers). The refusal is
+// toolResult-channel (it IS the tool's result, US-5.AC3). The recall mark is
+// NOT a failure — `error` is only the family's discriminator key; the tool
+// call succeeded and the mark lives in the model's window in place of the
+// result's content. Its allow-list membership is defensive over-provisioning
+// on the ToolAssemblyDuplicate precedent (ADR-060 §7 item 3): it keeps the
+// coverage test enrolling the producer in the schema-and-budget assertions.
 const (
 	FileExistsRefusalCode     = "file_exists"
 	DelegationDeniedCode      = "delegation_denied"
 	PermissionDeniedCode      = "permission_denied"
 	ToolAssemblyDuplicateCode = "tool_assembly_duplicate"
+	ToolArgumentsTooLargeCode = "tool_arguments_too_large"
+	ToolResultRecallMarkCode  = "tool_result_recall_mark"
 )
 
 // AllStructuredFailureCodes returns every structured tool-failure
@@ -451,7 +465,136 @@ func AllStructuredFailureCodes() []string {
 		FileExistsRefusalCode,
 		PermissionDeniedCode,
 		ToolAssemblyDuplicateCode,
+		ToolArgumentsTooLargeCode,
+		ToolResultRecallMarkCode,
 	}
+}
+
+// ToolArgumentRefusalPayload builds the JSON-encoded, budget-bounded
+// ToolArgumentRefusal wire payload (contracts/asyncapi.yaml, ADR-066 D4 /
+// spec FR-016): the result the loop hands the model INSTEAD of executing a
+// tool call whose serialised arguments exceed the builtin success cap. It
+// names the tool, the size the model sent and the live cap so a retry can
+// target it. Reason is the one field marshalWithinBudget may shrink.
+//
+// Like its siblings it uses encoding/json (via marshalWithinBudget) rather
+// than fmt.Sprintf, and defaults every required field to a schema-valid
+// minimum (minLength:1 / minimum:1) so a zero-value caller can never emit a
+// schema-invalid payload.
+func ToolArgumentRefusalPayload(tool string, sizeChars, capChars int) ([]byte, error) {
+	if tool == "" {
+		tool = "(unknown tool)"
+	}
+	tool = clampRefusalField(tool, maxRefusalToolRunes)
+	sizeChars = max(1, sizeChars)
+	capChars = max(1, capChars)
+	reason := "tool call refused: the serialised arguments for " + tool + " are " +
+		strconv.Itoa(sizeChars) + " characters, over the " + strconv.Itoa(capChars) +
+		"-character cap. The tool did not run. Retry with smaller arguments — " +
+		"for example write large content in several smaller pieces."
+	payload := generated.ToolArgumentRefusal{
+		Error:     ToolArgumentsTooLargeCode,
+		Reason:    reason,
+		Tool:      tool,
+		SizeChars: sizeChars,
+		CapChars:  capChars,
+	}
+	return marshalWithinBudget(&payload, &payload.Reason)
+}
+
+// ToolArgumentRefusalResult wraps ToolArgumentRefusalPayload as the error
+// ToolResult the loop admits through the D4 choke point (US-5.AC3) in place
+// of the tool's own result. ForLLM is the payload verbatim — the model reads
+// ForLLM and nothing else (ADR-059 W3) — and IsError is set so the frame
+// status is "error"; Err keeps the reason for logging.
+func ToolArgumentRefusalResult(tool string, sizeChars, capChars int) *ToolResult {
+	encoded, err := ToolArgumentRefusalPayload(tool, sizeChars, capChars)
+	if err != nil {
+		warnStructuredFailureMarshalError("ToolArgumentRefusalResult", tool, ToolArgumentsTooLargeCode, err)
+		return ErrorResult("tool call refused: serialised arguments exceed the cap; retry with smaller arguments")
+	}
+	return (&ToolResult{
+		ForLLM:  string(encoded),
+		IsError: true,
+	}).WithError(fmt.Errorf("%s: arguments of %d chars exceed the %d-char cap", tool, sizeChars, capChars))
+}
+
+// RecallMarkParams are the facts a recall mark states (ADR-066 D5 / spec
+// FR-018). Tool and ToolCallID are sanitised by the producer — at most
+// maxRefusalToolRunes printable runes each — so a hostile MCP tool name or a
+// provider-generated id never reaches the model or the SPA unbounded (E6).
+// ArchiveLine is the zero-based archive index of the result line; SizeChars
+// the full result's length in characters as archived; Turn the number
+// recall_conversation's turn_range mode addresses (1 + the count of
+// role:user archive lines preceding ArchiveLine — computed by the pkg/agent
+// caller, which owns the archive).
+type RecallMarkParams struct {
+	Tool        string
+	ToolCallID  string
+	ArchiveLine int
+	SizeChars   int
+	Turn        int
+}
+
+// CappedMarkPayload builds the ToolResultRecallMark payload for a result the
+// D4 choke point admitted head-and-tail capped (content_state=capped). Its
+// length counts toward the cap (FR-011), which is why the mark is short and
+// deterministic.
+func CappedMarkPayload(p RecallMarkParams) ([]byte, error) {
+	return recallMarkPayload("capped", p)
+}
+
+// EmptiedMarkPayload builds the ToolResultRecallMark payload that REPLACES a
+// result's content in the model's window when D5 empties it in place
+// (content_state=emptied). The archive keeps the full content.
+func EmptiedMarkPayload(p RecallMarkParams) ([]byte, error) {
+	return recallMarkPayload("emptied", p)
+}
+
+// recallMarkPayload is the single producer behind both mark states. It is
+// routed through marshalWithinBudget like every family member; the hint is
+// the one shrinkable field, and with both ids bounded to 64 runes the
+// payload never approaches the budget in practice.
+func recallMarkPayload(state string, p RecallMarkParams) ([]byte, error) {
+	tool := SanitiseMarkField(p.Tool, "(unknown tool)")
+	id := SanitiseMarkField(p.ToolCallID, "(unknown id)")
+	hint := "Call recall_conversation with tool_call_id=" + strconv.Quote(id) +
+		" and archive_line=" + strconv.Itoa(max(0, p.ArchiveLine)) +
+		" (offset, length) to read the full content in pages."
+	payload := generated.ToolResultRecallMark{
+		Error:        ToolResultRecallMarkCode,
+		Tool:         tool,
+		ToolCallId:   id,
+		ArchiveLine:  max(0, p.ArchiveLine),
+		SizeChars:    max(1, p.SizeChars),
+		Turn:         max(1, p.Turn),
+		ContentState: state,
+		Hint:         hint,
+	}
+	return marshalWithinBudget(&payload, &payload.Hint)
+}
+
+// SanitiseMarkField bounds a tool name or tool_call_id for a recall mark
+// (FR-018): every non-printable rune (controls, DEL, unassigned) is
+// stripped, the HEAD is kept up to maxRefusalToolRunes runes (the namespace
+// prefix of an MCP tool name — `mcp_<server>_` — is the informative part),
+// and an input that strips to nothing becomes fallback so the minLength:1
+// contract fields never go empty.
+func SanitiseMarkField(s, fallback string) string {
+	out := make([]rune, 0, min(len(s), maxRefusalToolRunes))
+	for _, r := range s {
+		if !unicode.IsPrint(r) {
+			continue
+		}
+		out = append(out, r)
+		if len(out) == maxRefusalToolRunes {
+			break
+		}
+	}
+	if len(out) == 0 {
+		return fallback
+	}
+	return string(out)
 }
 
 // PermissionDeniedPayload builds the JSON-encoded, budget-bounded
