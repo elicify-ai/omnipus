@@ -24,7 +24,7 @@
 #   bedrock    compiles in the real AWS Bedrock provider (stub without it)
 # =============================================================================
 
-.PHONY: all build install uninstall clean help test gen-contracts verify-contracts lint-wire-types lint-tool-error-status lint-no-jpeg-screencast spa-embed release-snapshot release-build
+.PHONY: all build install uninstall clean help test gen-contracts verify-contracts lint-wire-types lint-tool-error-status lint-no-jpeg-screencast spa-embed release-snapshot release-build golangci-lint-version-check
 
 # Build variables
 BINARY_NAME=omnipus
@@ -48,40 +48,13 @@ GO?=CGO_ENABLED=0 go
 WEB_GO?=$(GO)
 GO_BUILD_TAGS?=goolm,stdjson
 GOFLAGS?=-v -tags $(GO_BUILD_TAGS)
-comma:=,
-empty:=
-space:=$(empty) $(empty)
-GO_BUILD_TAGS_NO_GOOLM:=$(subst $(space),$(comma),$(strip $(filter-out goolm,$(subst $(comma),$(space),$(GO_BUILD_TAGS)))))
-GOFLAGS_NO_GOOLM?=-v -tags $(GO_BUILD_TAGS_NO_GOOLM)
-
-# Patch MIPS LE ELF e_flags (offset 36) for NaN2008-only kernels (e.g. Ingenic X2600).
-#
-# Bytes (octal): \004 \024 \000 \160  →  little-endian 0x70001404
-#   0x70000000  EF_MIPS_ARCH_32R2   MIPS32 Release 2
-#   0x00001000  EF_MIPS_ABI_O32     O32 ABI
-#   0x00000400  EF_MIPS_NAN2008     IEEE 754-2008 NaN encoding
-#   0x00000004  EF_MIPS_CPIC        PIC calling sequence
-#
-# Go's GOMIPS=softfloat emits no FP instructions, so the NaN mode is irrelevant
-# at runtime — this is purely an ELF metadata fix to satisfy the kernel's check.
-# patchelf cannot modify e_flags; dd at a fixed offset is the most portable way.
-#
-# Ref: https://codebrowser.dev/linux/linux/arch/mips/include/asm/elf.h.html
-define PATCH_MIPS_FLAGS
-	@if [ -f "$(1)" ]; then \
-		printf '\004\024\000\160' | dd of=$(1) bs=1 seek=36 count=4 conv=notrunc 2>/dev/null || \
-		{ echo "Error: failed to patch MIPS e_flags for $(1)"; exit 1; }; \
-	else \
-		echo "Error: $(1) not found, cannot patch MIPS e_flags"; exit 1; \
-	fi
-endef
-
-# Patch creack/pty for loong64 support (upstream doesn't have ztypes_loong64.go)
-PTY_PATCH_LOONG64=pty_dir=$$(go env GOMODCACHE)/github.com/creack/pty@v1.1.9; \
-	if [ -d "$$pty_dir" ] && [ ! -f "$$pty_dir/ztypes_loong64.go" ]; then \
-		chmod +w "$$pty_dir" 2>/dev/null || true; \
-		printf '//go:build linux && loong64\npackage pty\ntype (_C_int int32; _C_uint uint32)\n' > "$$pty_dir/ztypes_loong64.go"; \
-	fi
+# GOFLAGS_NO_GOOLM / GO_BUILD_TAGS_NO_GOOLM / the comma-empty-space helpers,
+# and the PATCH_MIPS_FLAGS / PTY_PATCH_LOONG64 macros below, were removed
+# 2026-08-23 (ADR-067 §6.2/§10 step 9): they existed solely to serve
+# linux/mipsle and linux/loong64, both dropped from `build-all` (no evidence
+# of users; mipsle alone forced this Matrix-less, goolm-less build path).
+# `git log -p` on this file has the originals if a mipsle/loong64 build is
+# ever revisited as its own decision.
 
 # Golangci-lint
 GOLANGCI_LINT?=golangci-lint
@@ -95,6 +68,15 @@ OAPI_CODEGEN_VERSION := $(shell sed -n 's/^REQUIRED_OAPI_CODEGEN_VERSION="\(.*\)
 # govulncheck is installed @latest by CI (.github/workflows/pr.yml), so local
 # installs track the same moving target rather than pinning behind it.
 GOVULNCHECK_VERSION?=latest
+# golangci-lint MUST match the version CI gates with (.github/workflows/pr.yml's
+# `golangci-lint-action` step: `version: v2.10.1`). ADR-067 §5: two different
+# golangci-lint versions disagree on findings (measured: G115 differed between
+# 2.10.1 and 2.12.2 in both directions) — a local "0 issues" run with the wrong
+# version is not a green, it's an unmeasured claim. Bump this the moment
+# pr.yml's pin changes; `make lint`/`make fix` refuse to run on a mismatch
+# rather than silently trusting whatever is on PATH (see
+# golangci-lint-version-check below).
+GOLANGCI_LINT_VERSION := v2.10.1
 
 # Installation
 INSTALL_PREFIX?=$(HOME)/.local
@@ -196,22 +178,12 @@ build-launcher-tui:
 	@ln -sf omnipus-launcher-tui-$(PLATFORM)-$(ARCH) $(BUILD_DIR)/omnipus-launcher-tui
 	@echo "Build complete: $(BUILD_DIR)/omnipus-launcher-tui"
 
-## build-lite: Build the lite variant (excludes WhatsApp native/whatsmeow); smaller binary
-## NOTE: WhatsApp native (whatsmeow) ships in the DEFAULT build (`make build` / `make build-all`).
-## The lite variant opts OUT of it via `-tags lite` to keep the binary small (~half the size).
-build-lite: generate
-	@echo "Building lite variant (no WhatsApp native) for multiple platforms..."
-	@mkdir -p $(BUILD_DIR)
-	GOOS=linux GOARCH=amd64 $(GO) build -tags $(GO_BUILD_TAGS),lite -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-lite-linux-amd64 ./$(CMD_DIR)
-	GOOS=linux GOARCH=arm GOARM=7 $(GO) build -tags $(GO_BUILD_TAGS),lite -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-lite-linux-arm ./$(CMD_DIR)
-	GOOS=linux GOARCH=arm64 $(GO) build -tags $(GO_BUILD_TAGS),lite -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-lite-linux-arm64 ./$(CMD_DIR)
-	GOOS=linux GOARCH=loong64 $(GO) build -tags $(GO_BUILD_TAGS),lite -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-lite-linux-loong64 ./$(CMD_DIR)
-	GOOS=linux GOARCH=riscv64 $(GO) build -tags $(GO_BUILD_TAGS),lite -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-lite-linux-riscv64 ./$(CMD_DIR)
-	GOOS=linux GOARCH=mipsle GOMIPS=softfloat $(GO) build -tags $(GO_BUILD_TAGS_NO_GOOLM),lite -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-lite-linux-mipsle ./$(CMD_DIR)
-	$(call PATCH_MIPS_FLAGS,$(BUILD_DIR)/$(BINARY_NAME)-lite-linux-mipsle)
-	GOOS=darwin GOARCH=arm64 $(GO) build -tags $(GO_BUILD_TAGS),lite -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-lite-darwin-arm64 ./$(CMD_DIR)
-	GOOS=windows GOARCH=amd64 $(GO) build -tags $(GO_BUILD_TAGS),lite -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-lite-windows-amd64.exe ./$(CMD_DIR)
-	@echo "Lite build complete"
+# build-lite (ADR-067 §6.2 / §10 step 10) was removed 2026-08-23: the lite
+# variant saved ~58 MB by dropping whatsmeow, was never published, and forced
+# `//go:build !lite` across 36 Go source files for a saving that reached no
+# one. Go source build tags are Wave 2's follow-up (ADR-067 §10 step 14,
+# `!lite`/`!mipsle`/`!netbsd`/`!(freebsd && arm)`), not removed here.
+# `lite-build-weekly.yml` is likewise out of this file's scope.
 
 # Single-platform convenience targets (build-linux-arm, build-linux-arm64,
 # build-linux-mipsle, build-pi-zero) were removed 2026-07-21: every platform
@@ -221,21 +193,20 @@ build-lite: generate
 # single platform ad hoc, set GOOS/GOARCH on `build-all`'s recipe line, or
 # just run `make build-all` and take the artifact you need.
 
-## build-all: Build omnipus for all platforms
+## build-all: Build omnipus for all shipped platforms (ADR-067 §6.1/§6.2/§10 step 9)
+## Exactly four targets: linux/amd64, linux/arm64, darwin/arm64, darwin/amd64 — the
+## set .goreleaser.yaml actually releases, plus the multi-arch container image (built
+## separately via `make docker-build`). Windows, linux/arm(v6),
+## linux/armv7, linux/loong64, linux/riscv64, and linux/mipsle were built here but never
+## released; see ADR-067 §6.2 for why each was dropped. Do not re-add a target without
+## also adding it to .goreleaser.yaml and a CI leg that exercises it (ADR-067 §6.3).
 build-all: spa-embed generate
 	@echo "Building for multiple platforms..."
 	@mkdir -p $(BUILD_DIR)
 	GOOS=linux GOARCH=amd64 $(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-linux-amd64 ./$(CMD_DIR)
-	GOOS=linux GOARCH=arm GOARM=7 $(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-linux-arm ./$(CMD_DIR)
 	GOOS=linux GOARCH=arm64 $(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-linux-arm64 ./$(CMD_DIR)
-	@$(PTY_PATCH_LOONG64)
-	GOOS=linux GOARCH=loong64 $(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-linux-loong64 ./$(CMD_DIR)
-	GOOS=linux GOARCH=riscv64 $(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-linux-riscv64 ./$(CMD_DIR)
-	GOOS=linux GOARCH=mipsle GOMIPS=softfloat $(GO) build $(GOFLAGS_NO_GOOLM) -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-linux-mipsle ./$(CMD_DIR)
-	$(call PATCH_MIPS_FLAGS,$(BUILD_DIR)/$(BINARY_NAME)-linux-mipsle)
-	GOOS=linux GOARCH=arm GOARM=7 $(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-linux-armv7 ./$(CMD_DIR)
 	GOOS=darwin GOARCH=arm64 $(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-darwin-arm64 ./$(CMD_DIR)
-	GOOS=windows GOARCH=amd64 $(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-windows-amd64.exe ./$(CMD_DIR)
+	GOOS=darwin GOARCH=amd64 $(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-darwin-amd64 ./$(CMD_DIR)
 	# NetBSD targets removed 2026-05-30. They have never built in this repo:
 	#   (a) pkg/sandbox/hardened_exec.go references applyPlatformHardening,
 	#       applyPostStartHardening, memoryLimitSupported — defined only in
@@ -305,16 +276,37 @@ vet: generate
 test: generate
 	@$(GO) test $(GOFLAGS) ./...
 
+## golangci-lint-version-check: Fail loudly if $(GOLANGCI_LINT) isn't the version CI gates with.
+## ADR-067 §5: a green measured with a different instrument is not a green — this refuses
+## to run lint/fix at all rather than silently trusting whatever golangci-lint is on PATH.
+golangci-lint-version-check:
+	@if ! command -v $(GOLANGCI_LINT) >/dev/null 2>&1; then \
+		echo "ERROR: golangci-lint not found on PATH (looked for '$(GOLANGCI_LINT)')."; \
+		echo "  Install the pinned version: make tools"; \
+		exit 1; \
+	fi; \
+	found=$$($(GOLANGCI_LINT) version --short 2>/dev/null); \
+	want=$(GOLANGCI_LINT_VERSION:v%=%); \
+	if [ "$$found" != "$$want" ]; then \
+		echo "ERROR: golangci-lint version mismatch."; \
+		echo "  found:  $$found"; \
+		echo "  wanted: $$want  (pinned in Makefile::GOLANGCI_LINT_VERSION, matching .github/workflows/pr.yml)"; \
+		echo "  A different golangci-lint version can disagree on findings (ADR-067 §5) —"; \
+		echo "  a local run with the wrong version is not a trustworthy green."; \
+		echo "  Fix: make tools   (installs golangci-lint@$(GOLANGCI_LINT_VERSION) into \$$(go env GOPATH)/bin)"; \
+		exit 1; \
+	fi
+
 ## fmt: Format Go code
-fmt:
+fmt: golangci-lint-version-check
 	@$(GOLANGCI_LINT) fmt
 
 ## lint: Run linters
-lint:
+lint: golangci-lint-version-check
 	@$(GOLANGCI_LINT) run --build-tags $(GO_BUILD_TAGS)
 
 ## fix: Fix linting issues
-fix:
+fix: golangci-lint-version-check
 	@$(GOLANGCI_LINT) run --fix --build-tags $(GO_BUILD_TAGS)
 
 ## deps: Download dependencies
@@ -336,6 +328,7 @@ tools:
 	@echo "Installing pinned Go tools into $$($(GO) env GOPATH)/bin ..."
 	@CGO_ENABLED=0 go install github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@$(OAPI_CODEGEN_VERSION)
 	@CGO_ENABLED=0 go install golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION)
+	@CGO_ENABLED=0 go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 	@echo "Done. Ensure $$($(GO) env GOPATH)/bin is on PATH."
 
 ## tools-check: Report whether each quality-gate tool is present and correctly versioned
@@ -348,8 +341,12 @@ tools-check:
 	else echo "  oapi-codegen   MISSING -> make tools"; fail=1; fi; \
 	if command -v govulncheck >/dev/null 2>&1; then echo "  govulncheck    present"; \
 	else echo "  govulncheck    MISSING -> make tools"; fail=1; fi; \
-	if command -v $(GOLANGCI_LINT) >/dev/null 2>&1; then echo "  golangci-lint  present"; \
-	else echo "  golangci-lint  MISSING -> https://golangci-lint.run/welcome/install/"; fail=1; fi; \
+	if command -v $(GOLANGCI_LINT) >/dev/null 2>&1; then \
+		glv=$$($(GOLANGCI_LINT) version --short 2>/dev/null); \
+		gwant=$(GOLANGCI_LINT_VERSION:v%=%); \
+		if [ "$$glv" = "$$gwant" ]; then echo "  golangci-lint  $$glv (pinned OK)"; \
+		else echo "  golangci-lint  $$glv (WRONG, want $$gwant) -> make tools"; fail=1; fi; \
+	else echo "  golangci-lint  MISSING -> make tools"; fail=1; fi; \
 	if [ -d node_modules ]; then echo "  node_modules   present (redocly/openapi-* resolve via npx)"; \
 	else echo "  node_modules   MISSING -> npm ci"; fail=1; fi; \
 	exit $$fail
@@ -366,43 +363,48 @@ check: deps fmt vet test
 run: build
 	@$(BUILD_DIR)/$(BINARY_NAME) $(ARGS)
 
-## docker-build: Build Docker image (minimal Alpine-based)
+DOCKER_IMAGE ?= omnipus:latest
+
+## docker-build: Build the Omnipus container image
 docker-build:
-	@echo "Building minimal Docker image (Alpine-based)..."
-	docker compose -f docker/docker-compose.yml build omnipus-agent omnipus-gateway
+	@echo "Building Omnipus container image (docker/Dockerfile.heavy)..."
+	docker build -f docker/Dockerfile.heavy -t $(DOCKER_IMAGE) .
 
-## docker-build-full: Build Docker image with full MCP support (Node.js 24)
-docker-build-full:
-	@echo "Building full-featured Docker image (Node.js 24)..."
-	docker compose -f docker/docker-compose.full.yml build omnipus-agent omnipus-gateway
+# Was `docker compose -f docker/docker-compose.yml build ...`, which exited 0
+# while building NOTHING ("No services to build", verified 2026-08-23): after
+# the ADR-067 image consolidation that compose file is pull-only — both
+# services name a published ghcr.io tag and neither has a build section. A
+# target that prints "Building..." and silently builds nothing is exactly the
+# false green docs/internal/false-green-patterns.md exists to stop, so this
+# now invokes the one real Dockerfile directly.
 
-## docker-test: Test MCP tools in Docker container
+# docker-build-full / docker-run-full / docker-run-agent-full (ADR-067 §1/§6.2)
+# were removed 2026-08-23: the project ships ONE container image now
+# (docker/Dockerfile.heavy, which already carries Node.js 24 for MCP servers
+# and the browser dependencies — what "full" used to mean). The "minimal"
+# vs "full" split, docker/docker-compose.full.yml, and the other four
+# Dockerfiles were removed by the sibling pass on docker/ (ADR-067 §10 step
+# 11); this file only removes the Makefile targets that pointed at them.
+
+## docker-test: Smoke-test the runtime tooling in the container image
 docker-test:
-	@echo "Testing MCP tools in Docker..."
+	@echo "Testing runtime tooling in the container image..."
 	@chmod +x scripts/test-docker-mcp.sh
-	@./scripts/test-docker-mcp.sh
+	@OMNIPUS_TEST_IMAGE=$(DOCKER_IMAGE) ./scripts/test-docker-mcp.sh
 
-## docker-run: Run omnipus gateway in Docker (Alpine-based)
+## docker-run: Run omnipus gateway in Docker
 docker-run:
 	docker compose -f docker/docker-compose.yml --profile gateway up
 
-## docker-run-full: Run omnipus gateway in Docker (full-featured)
-docker-run-full:
-	docker compose -f docker/docker-compose.full.yml --profile gateway up
-
-## docker-run-agent: Run omnipus agent in Docker (interactive, Alpine-based)
+## docker-run-agent: Run omnipus agent in Docker (interactive)
 docker-run-agent:
 	docker compose -f docker/docker-compose.yml run --rm omnipus-agent
-
-## docker-run-agent-full: Run omnipus agent in Docker (interactive, full-featured)
-docker-run-agent-full:
-	docker compose -f docker/docker-compose.full.yml run --rm omnipus-agent
 
 ## docker-clean: Clean Docker images and volumes
 docker-clean:
 	docker compose -f docker/docker-compose.yml down -v
-	docker compose -f docker/docker-compose.full.yml down -v
-	docker rmi omnipus:latest omnipus:full 2>/dev/null || true
+	-docker rmi $(DOCKER_IMAGE) 2>/dev/null
+	docker rmi omnipus:latest 2>/dev/null || true
 
 
 ## build-macos-app: Build Omnipus macOS .app bundle (no terminal window)
@@ -482,7 +484,7 @@ help:
 	@echo "  make install            # Install to ~/.local/bin"
 	@echo "  make uninstall          # Remove from /usr/local/bin"
 	@echo "  make install-skills     # Install skills to workspace"
-	@echo "  make docker-build       # Build minimal Docker image"
+	@echo "  make docker-build       # Build Docker image"
 	@echo "  make docker-test        # Test MCP tools in Docker"
 	@echo ""
 	@echo "Environment Variables:"
