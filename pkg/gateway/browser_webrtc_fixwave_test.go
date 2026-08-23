@@ -242,12 +242,22 @@ func newHandleWebRTCOfferWithFakeCapture(
 // HandleViewerOffer failure wrapping webrtc.ErrNoIngestVideoTrack is audited
 // under EventBrowserWebRTCViewerOfferFailed with reason="ingest_timeout" —
 // distinguishable from any OTHER HandleViewerOffer failure, which the
-// companion test below proves still classifies as reason="error". Neither
-// case changes the WIRE-level browser_webrtc_state.reason (still "error" —
-// the wire enum in contracts/components/schemas/BrowserWebRTCStateFrame.yaml
-// is unchanged by this backend-only fix; see the incident report for why a
-// distinct wire-level reason + prompt client reaction needs a frontend-lead
-// follow-up in src/lib/browserWebRTC.ts).
+// companion test below proves still classifies as reason="error".
+//
+// UPDATED: this test used to assert the WIRE-level reason stayed "error",
+// because the 2026-07-28 fix was deliberately backend-only and deferred "a
+// distinct wire-level reason + prompt client reaction" to a frontend-lead
+// follow-up in src/lib/browserWebRTC.ts. THAT FOLLOW-UP HAS LANDED: the wire
+// enum in contracts/components/schemas/BrowserWebRTCStateFrame.yaml (and the
+// inlined copy in contracts/asyncapi.yaml, which is what actually feeds the
+// generated zod) now carries ingest_timeout, translateWebRTCFallbackReason
+// renders it, and handleWebRTCOffer sends the classified reason instead of
+// the literal "error". So the wire assertion below now expects the same
+// value the audit record does.
+//
+// The companion negative-control test is what keeps this honest: it still
+// requires a NON-ingest failure to report "error" on the wire, so a
+// regression that made every failure report ingest_timeout would fail there.
 func TestHandleWebRTCOffer_IngestTimeout_ClassifiedDistinctlyInAuditAndLogs(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("ClassifyVideoCapabilityWithExec only ever reports Capable=true on linux")
@@ -263,7 +273,10 @@ func TestHandleWebRTCOffer_IngestTimeout_ClassifiedDistinctlyInAuditAndLogs(t *t
 	got := newHandleWebRTCOfferWithFakeCapture(t, handler, al, defaultAgent.ID, relay)
 
 	require.True(t, got.Available, "an ingest-timeout must still allow a future offer (available stays true)")
-	require.Equal(t, "error", got.Reason, "the WIRE-level reason is unchanged by this backend-only fix")
+	require.Equal(t, "ingest_timeout", got.Reason,
+		"the classified reason must reach the WIRE, not just the log and audit record — "+
+			"a viewer told only \"reported an error starting video\" cannot tell an ingest "+
+			"timeout (restart capture) from a generic failure (retry the viewer)")
 
 	rec := lastBrowserAuditRecord(t, auditDir, audit.EventBrowserWebRTCViewerOfferFailed)
 	assert.Equal(t, audit.SeverityWarn, rec.Severity)
