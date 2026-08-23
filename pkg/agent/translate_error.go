@@ -119,6 +119,15 @@ const (
 	// is how we say so instead of "we can't tell why".
 	CodeModelUnavailable LLMErrorCode = "model_unavailable"
 
+	// CodeNeedsProvider (ADR-068 FR-046, T068-32): a device-code provider's
+	// (openai-chatgpt, xai) stored sign-in could not be refreshed — nothing
+	// is stored, or a refresh attempt failed. Attribution `user` (a routine
+	// re-auth prompt, not an operator setup gap — see the x-user-messages
+	// catalog entry's note on the still-unreconciled ADR-067 pre-turn-gate
+	// producer for this same wire code). Produced by TranslateTurnError
+	// recognizing providers.ErrProviderNeedsSignIn in the error chain.
+	CodeNeedsProvider LLMErrorCode = "needs_provider"
+
 	// CodeTurnCanceled (ADR-066 D7, FR-034): the turn's context was cancelled
 	// — Stop button, session interrupt, shutdown — before the provider
 	// finished. Attribution `user`: the SPA renders it as a neutral notice,
@@ -725,6 +734,17 @@ func TranslateTurnError(err error) LLMError {
 			Message:   defaultUserMessage(CodeWorkspaceUnavailable),
 			Retryable: isRetryable(CodeWorkspaceUnavailable),
 			Detail:    buildDetail(nil, err.Error()),
+		}
+	}
+	if errors.Is(err, providers.ErrProviderNeedsSignIn) {
+		return LLMError{
+			Code:      CodeNeedsProvider,
+			Message:   defaultUserMessage(CodeNeedsProvider),
+			Retryable: isRetryable(CodeNeedsProvider),
+			// The token source's own error text may name the provider id;
+			// safe as a Verbose-Chat detail (never the refresh/access token
+			// itself — the sentinel error never carries either).
+			Detail: buildDetail(nil, err.Error()),
 		}
 	}
 	if errors.Is(err, ErrContextWindowUnknown) {

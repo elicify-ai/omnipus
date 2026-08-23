@@ -339,6 +339,7 @@ func allClassifierCodes() []LLMErrorCode {
 		CodeAgentNotConfigured,
 		CodeWorkspaceUnavailable,
 		CodeModelUnavailable,
+		CodeNeedsProvider,
 		CodeContextWindowUnknown,
 		CodeUnknown,
 	}
@@ -508,6 +509,25 @@ func TestTranslateTurnError_AgentHomeUnavailable(t *testing.T) {
 	assert.Equal(t, CodeWorkspaceUnavailable, llm.Code)
 	assert.Equal(t, UserMessageForCode(CodeWorkspaceUnavailable), llm.Message)
 	assert.NotContains(t, llm.Message, "agent_id=sys")
+}
+
+// TestTranslateTurnError_ProviderNeedsSignIn covers ADR-068 FR-046: a
+// device-code provider's store-OAuth token source returns
+// providers.ErrProviderNeedsSignIn (wrapped, as CodexProvider.Chat's
+// "refreshing token: %w" does) when it cannot produce a usable access
+// token, and that must classify as needs_provider — never a silent turn
+// exit, never CodeUnknown.
+func TestTranslateTurnError_ProviderNeedsSignIn(t *testing.T) {
+	wrapped := fmt.Errorf("refreshing token: %w",
+		fmt.Errorf("provider %s needs sign-in: %w", "openai-chatgpt", providers.ErrProviderNeedsSignIn))
+
+	llm := TranslateTurnError(wrapped)
+	assert.Equal(t, CodeNeedsProvider, llm.Code,
+		"a store-OAuth refresh failure must classify as needs_provider, not unknown")
+	assert.False(t, llm.Retryable, "signing in again is the fix; retrying as-is is not")
+	assert.Equal(t, UserMessageForCode(CodeNeedsProvider), llm.Message)
+	assert.Equal(t, generated.LLMErrorAttributionUser, AttributionForCode(CodeNeedsProvider),
+		"FR-046 requires attribution user, not config, for this producer")
 }
 
 // TestUserMessageForCode_NoLegacyAIServiceCopy locks the brand-tone

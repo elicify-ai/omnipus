@@ -43,7 +43,9 @@ fresh_tree() {
 
 ID_A="anti""gravity"
 ID_B="claude""-cli"
-SYM="RequestDevice""Code"
+# ADR-068 §8b: RequestDeviceCode is restored (T068-32) and no longer
+# forbidden — the fixture symbol must be one still in SYMS.
+SYM="createClaude""AuthProvider"
 
 FAIL=0
 expect() { # expect <label> <want-exit>

@@ -90,8 +90,10 @@ x-user-messages:
     message: "The model you picked isn’t available for this turn, so this reply used the previous model. Check the model in Settings."
     attribution: config
   needs_provider:
-    message: "This agent's provider isn't configured. Open Settings → Providers to connect one."
-    attribution: config
+    # ADR-068 FR-046 (2026-08-23 §8b, T068-32) — kept in lockstep with
+    # contracts/components/schemas/LLMError.yaml; see that file's comment.
+    message: "Your sign-in for this provider expired. Sign in again under Settings → Providers."
+    attribution: user
   model_unassigned:
     message: "This agent has no model. Pick one in the agent's settings."
     attribution: config
