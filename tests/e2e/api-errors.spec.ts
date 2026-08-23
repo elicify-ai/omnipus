@@ -87,7 +87,11 @@ test(
       .or(page.locator('text=Invalid password'))
       .or(page.locator('text=Wrong password'))
       .or(page.locator('text=Unauthorized'))
-      .or(page.locator('text=invalid credentials', { exact: false }))
+      // No `{ exact: false }` here: Locator options are {has,hasNot,hasText,
+      // hasNotText} only, so the flag was silently discarded — and unquoted
+      // `text=` is ALREADY a case-insensitive substring match, i.e. exactly
+      // what it was asking for. Removing it changes nothing at runtime.
+      .or(page.locator('text=invalid credentials'))
       .or(page.locator('[role="alert"]'))
       .or(page.locator('[data-testid="login-error"]'))
       .first()
@@ -195,12 +199,22 @@ test(
     await page.goto('/')
     await expect(page.getByRole('banner')).toBeVisible({ timeout: 15_000 })
 
-    let abortRequest: (() => void) | null = null
+    // One release function per intercepted request, collected in a const array.
+    //
+    // This was `let abortRequest: (() => void) | null = null` reassigned from
+    // inside the route handler. TypeScript ignores assignments made in a nested
+    // function when narrowing an outer `let`, so at the call site below the
+    // variable was narrowed to `null`, then the `if` guard narrowed it to
+    // `never` — "This expression is not callable". Worse, the single slot only
+    // ever held the MOST RECENT request's resolver: a second interception of
+    // /api/v1/config would await a promise nobody could resolve and hang the
+    // handler until the test ended. Collecting into a const array fixes both —
+    // no narrowing to defeat, and every intercepted request gets released.
+    const abortReleases: Array<() => void> = []
     await page.route(`${BASE_URL}/api/v1/config`, async (route) => {
-      const abortPromise = new Promise<void>((resolve) => {
-        abortRequest = resolve
+      await new Promise<void>((resolve) => {
+        abortReleases.push(resolve)
       })
-      await abortPromise
       await route.abort('timedout')
     })
 
@@ -214,8 +228,9 @@ test(
     // Wait briefly for the fetch to be intercepted
     await page.waitForTimeout(500)
 
-    // Abort the intercepted request (simulate timeout)
-    if (abortRequest) abortRequest()
+    // Abort every intercepted request (simulate timeout). An empty array here
+    // means the route was never hit — the same no-op the old `if` guard gave.
+    for (const release of abortReleases) release()
 
     // After abort, the ApiError(0, ...) is thrown by api.ts.
     // The SPA must handle this gracefully — not crash the entire page.
@@ -315,7 +330,9 @@ test(
     // Acceptable outcomes: error message visible near the save area, or a toast.
     const errorVisible = await page
       .locator('text=500')
-      .or(page.locator('text=server error', { exact: false }))
+      // `{ exact: false }` removed — see the identical note above; unquoted
+      // `text=` already matches case-insensitively on a substring.
+      .or(page.locator('text=server error'))
       .or(page.locator('text=Failed to save'))
       .or(page.locator('text=Could not save'))
       .or(page.locator('[role="alert"]'))

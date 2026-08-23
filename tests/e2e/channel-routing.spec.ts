@@ -34,6 +34,7 @@
 
 import { expect, type Page, type Route } from '@playwright/test'
 import { test } from './fixtures/console-errors'
+import { selectNativeOptionByLabel } from './fixtures/selectors'
 
 const BASE_URL = process.env.OMNIPUS_URL || 'http://localhost:6060'
 void BASE_URL // used only for reference; actual calls are via page.goto
@@ -278,7 +279,7 @@ test(
     const wsHasNative = (await wsNativeSelect.count()) > 0
 
     if (wsHasNative) {
-      await wsNativeSelect.selectOption({ label: /Sales/i })
+      await selectNativeOptionByLabel(wsNativeSelect, /Sales/i)
     } else {
       // SmartSelect renders a plain Radix SelectTrigger (role=combobox,
       // no aria-haspopup) for <=5 items and the searchable popover button
@@ -361,7 +362,7 @@ test(
     const wsHasNative = (await wsNativeSelect.count()) > 0
 
     if (wsHasNative) {
-      await wsNativeSelect.selectOption({ label: /Empty Team/i })
+      await selectNativeOptionByLabel(wsNativeSelect, /Empty Team/i)
     } else {
       const wsTrigger = wsContainer.locator('button').first()
       await expect(wsTrigger).toBeVisible({ timeout: 5_000 })
@@ -424,7 +425,7 @@ test(
     const wsHasNative = (await wsNativeSelect.count()) > 0
 
     if (wsHasNative) {
-      await wsNativeSelect.selectOption({ label: /Sales/i })
+      await selectNativeOptionByLabel(wsNativeSelect, /Sales/i)
     } else {
       const wsTrigger = wsContainer.locator('button').first()
       await expect(wsTrigger).toBeVisible({ timeout: 5_000 })
@@ -462,7 +463,7 @@ test(
     const wsHasNative = (await wsNativeSelect.count()) > 0
 
     if (wsHasNative) {
-      await wsNativeSelect.selectOption({ label: /Sales/i })
+      await selectNativeOptionByLabel(wsNativeSelect, /Sales/i)
     } else {
       const wsTrigger = wsContainer.locator('button').first()
       await expect(wsTrigger).toBeVisible({ timeout: 5_000 })
@@ -533,7 +534,7 @@ test(
     const wsHasNative = (await wsNativeSelect.count()) > 0
 
     if (wsHasNative) {
-      await wsNativeSelect.selectOption({ label: /Sales/i })
+      await selectNativeOptionByLabel(wsNativeSelect, /Sales/i)
     } else {
       const wsTrigger = wsContainer.locator('button').first()
       await expect(wsTrigger).toBeVisible({ timeout: 5_000 })
@@ -552,7 +553,7 @@ test(
     if (agentHasNative) {
       // Wait for the select to be enabled before selecting
       await expect(agentNativeSelect).not.toBeDisabled({ timeout: 8_000 })
-      await agentNativeSelect.selectOption({ label: /Mia/i })
+      await selectNativeOptionByLabel(agentNativeSelect, /Mia/i)
     } else {
       const agentTrigger = agentContainer.locator('button').first()
       await expect(agentTrigger).not.toBeDisabled({ timeout: 8_000 })

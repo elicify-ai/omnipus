@@ -183,6 +183,15 @@ jobs:
               - 'package-lock.json'
               - 'vite.config.ts'
               - 'vite.lib.config.ts'
+              # playwright.config.ts and packages/** became type-checked when
+              # tsconfig.tests.json (tests/ + playwright.config.ts) and
+              # tsconfig.app.json's "packages/ui/src" include were added. Without
+              # them listed here a PR touching only one of those files sets
+              # spa=false, `typecheck` skips, and the gate that now covers them
+              # never runs — a gate that exists but is never triggered is the
+              # same false green as no gate at all.
+              - 'playwright.config.ts'
+              - 'packages/**'
               - 'tsconfig*.json'
               - 'eslint.config.js'
               - 'Makefile'

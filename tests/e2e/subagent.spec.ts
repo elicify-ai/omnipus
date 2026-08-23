@@ -134,14 +134,14 @@ test(
     // Traces to: BDD Scenario 10 — "no subagent_start frame with a grandchild parent_call_id"
     const nestedCollapsed = expandedBlock.locator('[data-testid="subagent-collapsed"]');
     const nestedCount = await nestedCollapsed.count();
-    expect(nestedCount).toBe(0, 'expanded SubagentBlock must contain zero nested subagent-collapsed elements (grandchildren are forbidden — FR-H-006)');
+    expect(nestedCount, 'expanded SubagentBlock must contain zero nested subagent-collapsed elements (grandchildren are forbidden — FR-H-006)').toBe(0);
 
     // Structural assertion: exactly one parent-level collapsed block.
-    expect(blockCount).toBe(1, 'exactly one SubagentBlock at parent level — grandchild attempt must not create a second block');
+    expect(blockCount, 'exactly one SubagentBlock at parent level — grandchild attempt must not create a second block').toBe(1);
 
     // Structural assertion: expanded block has child elements (steps or error message).
     const children = await expandedBlock.locator('> *').count();
-    expect(children).toBeGreaterThan(0, 'expanded block must have content (steps or error message)');
+    expect(children, 'expanded block must have content (steps or error message)').toBeGreaterThan(0);
   },
 );
 
@@ -218,7 +218,7 @@ test(
 
     // Differentiation test: two different blocks expanded/collapsed independently.
     const finalCount = await collapsedBlocks.count();
-    expect(finalCount).toBe(2, 'exactly 2 sibling SubagentBlocks must be rendered for two delegate calls');
+    expect(finalCount, 'exactly 2 sibling SubagentBlocks must be rendered for two delegate calls').toBe(2);
   },
 );
 

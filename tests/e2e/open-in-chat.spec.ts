@@ -158,7 +158,12 @@ test(
       ;(window as unknown as Record<string, unknown>).__failOnceMatch = null
       void marker
       class OneShotFailWebSocket extends RealWebSocket {
-        send(data: string | ArrayBufferLike | Blob | ArrayBufferView): void {
+        // Parameter type is taken straight from the base method rather than
+        // hand-listed. The hand-written union said `ArrayBufferLike`, which
+        // includes SharedArrayBuffer — a type WebSocket.send does NOT accept —
+        // so `super.send(data)` did not type-check. Deriving it keeps the
+        // override in lockstep with lib.dom.
+        send(data: Parameters<WebSocket['send']>[0]): void {
           const w = window as unknown as { __failOnceMatch?: string | null }
           if (w.__failOnceMatch && typeof data === 'string' && data.includes(w.__failOnceMatch)) {
             w.__failOnceMatch = null // one-shot — consume so the Retry resend passes

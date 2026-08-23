@@ -1,0 +1,55 @@
+{
+  // Third sub-project of the tsconfig.json project-references root, alongside
+  // tsconfig.app.json (src/) and tsconfig.node.json (the two vite configs).
+  //
+  // WHY THIS FILE EXISTS: before it, `npm run typecheck` (`tsc -b --noEmit`)
+  // type-checked NOTHING under tests/ or playwright.config.ts, because
+  // tsconfig.app.json includes only "src" and tsconfig.node.json only the two
+  // vite config files — and the root delegates, it does not include. Appending
+  // `const x: number = "not a number"` to any tests/e2e/*.spec.ts left the
+  // gate at exit 0 with zero `error TS` lines, while the same line in
+  // src/ correctly failed with exit 2. ~79 TypeScript files — every Playwright
+  // spec, every fixture, the global setup/teardown, and the Playwright config
+  // itself — were invisible to the "TypeScript Type Check" CI job.
+  //
+  // The strictness flags below are a VERBATIM copy of tsconfig.app.json's.
+  // Do not soften any of them for this project: the point of the file is that
+  // tests are held to the same bar as src, not a weaker one.
+  //
+  // Differences from tsconfig.app.json, and why each is a real difference in
+  // the code being checked rather than a relaxation:
+  //   - "types": ["node"] instead of ["node", "vite/client"] — tests run under
+  //     Node/Playwright, not inside a Vite-served page, so import.meta.env and
+  //     the asset-module declarations do not apply here.
+  //   - "jsx" is omitted — there is no TSX under tests/.
+  //   - "lib" keeps DOM/DOM.Iterable, which IS needed: Playwright
+  //     page.evaluate() callbacks are authored inline and execute in the
+  //     browser, so document/window/Element must resolve.
+  //   - "useDefineForClassFields" is omitted — no classes with fields here.
+  //
+  // The "@/*" path mapping mirrors vite.config.ts's resolve.alias, which
+  // vitest also applies when it runs tests/**/*.test.ts. Without it, a test
+  // importing from "@/..." would fail to resolve at type-check time while
+  // working at runtime.
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "skipLibCheck": true,
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "isolatedModules": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitReturns": true,
+    "paths": {
+      "@/*": ["./src/*"]
+    },
+    "types": ["node"]
+  },
+  "include": ["tests", "playwright.config.ts"]
+}
