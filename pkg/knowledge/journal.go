@@ -679,16 +679,24 @@ func MoveStateOf(root CollectionRoot, j *Journal) (MoveState, error) {
 		}
 	}
 
+	// Converted to booleans deliberately, and NOT left as errors with a
+	// //nolint:nilerr on the return below. That directive was load-bearing in
+	// one environment and reported as UNUSED by nolintlint in another (CI
+	// linter 32620684085), so the suppression itself could not be made to pass
+	// both. Presence/absence is what this function actually reasons about; an
+	// Lstat error here is an ANSWER, not a fault, so representing it as a bool
+	// says what is meant and leaves no non-nil error in scope to suppress.
 	_, fromErr := os.Lstat(fromLex)
 	_, toErr := os.Lstat(toLex)
+	fromExists, toExists := fromErr == nil, toErr == nil
 	switch {
-	case fromErr == nil && toErr != nil:
+	case fromExists && !toExists:
 		// toErr non-nil is the EXPECTED reading here, not a failure: the
 		// destination not existing is precisely what "the move has not
 		// happened yet" means. Returning it as an error would abort a
 		// recoverable rename on its normal starting state.
-		return MoveNotDone, nil //nolint:nilerr // see above: toErr is the answer, not a fault
-	case fromErr != nil && toErr == nil:
+		return MoveNotDone, nil
+	case !fromExists && toExists:
 		return MoveDone, nil
 	default:
 		// Both present (a hard link, a collision, or a case fold this code
