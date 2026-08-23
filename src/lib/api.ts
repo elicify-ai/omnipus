@@ -169,6 +169,8 @@ import {
   MemorySettings as MemorySettingsSchema,
   // ADR-053 D12/R§8.3 (FE-6) — app-level OVERALL token budget status:
   TokenBudgetStatus as TokenBudgetStatusSchema,
+  // ADR-066 D9 — global context-budget settings (Settings → Models):
+  ContextSettings as ContextSettingsSchema,
   // M11 per-(agent, workspace) email mailbox account (contract-first #8):
   Mailbox as MailboxSchema,
   MailboxListResponse as MailboxListResponseSchema,
@@ -379,6 +381,11 @@ import type {
   TokenUsageSummary,
   // ADR-053 D12/R§8.3 (FE-6) — app-level OVERALL token budget status:
   TokenBudgetStatus,
+  // ADR-066 D9 — global context-budget settings (Settings → Models):
+  ContextSettings,
+  ContextSettingsUpdate,
+  ContextModelOverride,
+  ContextWindowSource,
   // Unified task types (Sprint 2) — imported once here (Task was already imported above):
   TaskCreateRequest,
   TaskUpdateRequest,
@@ -563,6 +570,11 @@ export type {
   TokenUsageSummary,
   // ADR-053 D12/R§8.3 (FE-6) — app-level OVERALL token budget status:
   TokenBudgetStatus,
+  // ADR-066 D9 — global context-budget settings (Settings → Models):
+  ContextSettings,
+  ContextSettingsUpdate,
+  ContextModelOverride,
+  ContextWindowSource,
   // Unified task types (Sprint 2) — Task already exported above, add new ones:
   TaskCreateRequest,
   TaskUpdateRequest,
@@ -4547,6 +4559,31 @@ export function updateMemorySettings(body: MemorySettings): Promise<MemorySettin
     '/settings/memory',
     { method: 'PUT', body: JSON.stringify(body) },
     MemorySettingsSchema as ZodType<MemorySettings>,
+  )
+}
+
+// ADR-066 D9 (FR-036) — global context-budget settings: per-surface tool-result
+// caps, the absolute mid-turn trigger, the ingest bound, the global default
+// context window and the per-(provider, model) window overrides. User-facing
+// location: Settings → Models (FR-037). PUT is a PARTIAL update
+// (ContextSettingsUpdate): an omitted field is unchanged, `model_overrides`
+// replaces the whole list, `default_context_window: null` clears it. Every
+// 200 write triggers a registry reload on the gateway. withAuth (the
+// /settings/memory precedent). See contracts/components/schemas/ContextSettings.yaml.
+
+export function getContextSettings(): Promise<ContextSettings> {
+  return request<ContextSettings>(
+    '/settings/context',
+    undefined,
+    ContextSettingsSchema as ZodType<ContextSettings>,
+  )
+}
+
+export function putContextSettings(body: ContextSettingsUpdate): Promise<ContextSettings> {
+  return request<ContextSettings>(
+    '/settings/context',
+    { method: 'PUT', body: JSON.stringify(body) },
+    ContextSettingsSchema as ZodType<ContextSettings>,
   )
 }
 
