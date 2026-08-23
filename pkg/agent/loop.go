@@ -31,6 +31,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/constants"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/media"
+	"github.com/elicify-ai/omnipus/pkg/memory"
 	"github.com/elicify-ai/omnipus/pkg/plan"
 	"github.com/elicify-ai/omnipus/pkg/policy"
 	"github.com/elicify-ai/omnipus/pkg/providers"
@@ -4675,6 +4676,17 @@ func (al *AgentLoop) GetRegistry() *AgentRegistry {
 }
 
 // GetConfig returns the current config (thread-safe)
+// contextSettings returns the live ADR-066 ContextSettings (caps, trigger,
+// ingest bound) — read per call, so a settings write applies to the next
+// tool result without a restart (US-3.AC11). Satisfies the
+// contextSettingsSource the recall_conversation tool type-asserts.
+func (al *AgentLoop) contextSettings() config.ContextSettings {
+	if cfg := al.GetConfig(); cfg != nil {
+		return cfg.Context
+	}
+	return config.ContextSettings{}
+}
+
 func (al *AgentLoop) GetConfig() *config.Config {
 	al.mu.RLock()
 	defer al.mu.RUnlock()
@@ -9661,16 +9673,12 @@ turnLoop:
 				// (the same shape the headless auto-deny site below relies
 				// on for the identical reason).
 				settleAskToolCallTranscript(ts, session.ToolCallID(tc.ID), toolName, toolArgs, qReason)
-				deniedMsg := providers.Message{
-					Role:       "tool",
-					Content:    payload,
-					ToolCallID: tc.ID,
-				}
+				// ADR-066 D4: denied results enter through the choke point on the
+				// builtin-failure surface (FR-009); it persists the line itself.
+				deniedMsg := al.admitToolResult(ts, toolResultAdmission{
+					Tool: tc.Name, ToolCallID: tc.ID, Content: payload, IsError: true, ParallelN: len(normalizedToolCalls),
+				}).Message
 				messages = append(messages, deniedMsg)
-				if !ts.opts.NoHistory {
-					ts.agent.Sessions.AddFullMessage(ts.sessionKey, deniedMsg)
-					ts.recordPersistedMessage(deniedMsg)
-				}
 				al.emitEvent(
 					EventKindToolExecSkipped,
 					ts.eventMeta("runTurn", "turn.tool.skipped"),
@@ -9710,16 +9718,12 @@ turnLoop:
 							Reason: denyContent,
 						},
 					)
-					deniedMsg := providers.Message{
-						Role:       "tool",
-						Content:    denyContent,
-						ToolCallID: tc.ID,
-					}
+					// ADR-066 D4: denied results enter through the choke point on the
+					// builtin-failure surface (FR-009); it persists the line itself.
+					deniedMsg := al.admitToolResult(ts, toolResultAdmission{
+						Tool: tc.Name, ToolCallID: tc.ID, Content: denyContent, IsError: true, ParallelN: len(normalizedToolCalls),
+					}).Message
 					messages = append(messages, deniedMsg)
-					if !ts.opts.NoHistory {
-						ts.agent.Sessions.AddFullMessage(ts.sessionKey, deniedMsg)
-						ts.recordPersistedMessage(deniedMsg)
-					}
 					// ADR-058 fix: this branch used to `continue` with no
 					// ClassifyDenial, no recordToolDenial and no budget check
 					// at all — a third-party ProcessHook that denies a tool
@@ -9791,16 +9795,12 @@ turnLoop:
 							Reason: denyContent,
 						},
 					)
-					deniedMsg := providers.Message{
-						Role:       "tool",
-						Content:    denyContent,
-						ToolCallID: tc.ID,
-					}
+					// ADR-066 D4: denied results enter through the choke point on the
+					// builtin-failure surface (FR-009); it persists the line itself.
+					deniedMsg := al.admitToolResult(ts, toolResultAdmission{
+						Tool: tc.Name, ToolCallID: tc.ID, Content: denyContent, IsError: true, ParallelN: len(normalizedToolCalls),
+					}).Message
 					messages = append(messages, deniedMsg)
-					if !ts.opts.NoHistory {
-						ts.agent.Sessions.AddFullMessage(ts.sessionKey, deniedMsg)
-						ts.recordPersistedMessage(deniedMsg)
-					}
 					// ADR-058 fix: same rationale as the HookActionDenyTool
 					// branch above — this hook-deny path used to bypass the
 					// ledger entirely (no ClassifyDenial, no
@@ -9843,16 +9843,12 @@ turnLoop:
 				cls, _ := ClassifyDenial(policyDeniedReason)
 				denyMsg := denialPayloadJSON(toolName, policyDeniedReason, cls)
 				al.emitPolicyDenyAudit(ts, toolName, "deny", "mid_turn_policy_change")
-				deniedMsg := providers.Message{
-					Role:       "tool",
-					Content:    denyMsg,
-					ToolCallID: tc.ID,
-				}
+				// ADR-066 D4: denied results enter through the choke point on the
+				// builtin-failure surface (FR-009); it persists the line itself.
+				deniedMsg := al.admitToolResult(ts, toolResultAdmission{
+					Tool: tc.Name, ToolCallID: tc.ID, Content: denyMsg, IsError: true, ParallelN: len(normalizedToolCalls),
+				}).Message
 				messages = append(messages, deniedMsg)
-				if !ts.opts.NoHistory {
-					ts.agent.Sessions.AddFullMessage(ts.sessionKey, deniedMsg)
-					ts.recordPersistedMessage(deniedMsg)
-				}
 				al.emitEvent(
 					EventKindToolExecSkipped,
 					ts.eventMeta("runTurn", "turn.tool.skipped"),
@@ -9926,16 +9922,12 @@ turnLoop:
 					// finds no placeholder, which is exactly this case.
 					settleAskToolCallTranscript(
 						ts, session.ToolCallID(tc.ID), toolName, toolArgs, denialReason)
-					deniedMsg := providers.Message{
-						Role:       "tool",
-						Content:    denyMsg,
-						ToolCallID: tc.ID,
-					}
+					// ADR-066 D4: denied results enter through the choke point on the
+					// builtin-failure surface (FR-009); it persists the line itself.
+					deniedMsg := al.admitToolResult(ts, toolResultAdmission{
+						Tool: tc.Name, ToolCallID: tc.ID, Content: denyMsg, IsError: true, ParallelN: len(normalizedToolCalls),
+					}).Message
 					messages = append(messages, deniedMsg)
-					if !ts.opts.NoHistory {
-						ts.agent.Sessions.AddFullMessage(ts.sessionKey, deniedMsg)
-						ts.recordPersistedMessage(deniedMsg)
-					}
 					al.emitEvent(
 						EventKindToolExecSkipped,
 						ts.eventMeta("runTurn", "turn.tool.skipped"),
@@ -10013,16 +10005,12 @@ turnLoop:
 					cls, _ := ClassifyDenial(denialReason)
 					denyMsg := denialPayloadJSON(toolName, denialReason, cls)
 					al.emitPolicyDenyAudit(ts, toolName, "ask", denialReason)
-					deniedMsg := providers.Message{
-						Role:       "tool",
-						Content:    denyMsg,
-						ToolCallID: tc.ID,
-					}
+					// ADR-066 D4: denied results enter through the choke point on the
+					// builtin-failure surface (FR-009); it persists the line itself.
+					deniedMsg := al.admitToolResult(ts, toolResultAdmission{
+						Tool: tc.Name, ToolCallID: tc.ID, Content: denyMsg, IsError: true, ParallelN: len(normalizedToolCalls),
+					}).Message
 					messages = append(messages, deniedMsg)
-					if !ts.opts.NoHistory {
-						ts.agent.Sessions.AddFullMessage(ts.sessionKey, deniedMsg)
-						ts.recordPersistedMessage(deniedMsg)
-					}
 					al.emitEvent(
 						EventKindToolExecSkipped,
 						ts.eventMeta("runTurn", "turn.tool.skipped"),
@@ -10237,16 +10225,12 @@ turnLoop:
 					// rate limit above, which aborts the turn entirely.
 					errMsg := fmt.Sprintf("Rate limited: %s (retry after %.0fs)",
 						toolRLResult.PolicyRule, toolRLResult.RetryAfterSeconds)
-					deniedMsg := providers.Message{
-						Role:       "tool",
-						Content:    errMsg,
-						ToolCallID: tc.ID,
-					}
+					// ADR-066 D4: denied results enter through the choke point on the
+					// builtin-failure surface (FR-009); it persists the line itself.
+					deniedMsg := al.admitToolResult(ts, toolResultAdmission{
+						Tool: tc.Name, ToolCallID: tc.ID, Content: errMsg, IsError: true, ParallelN: len(normalizedToolCalls),
+					}).Message
 					messages = append(messages, deniedMsg)
-					if !ts.opts.NoHistory {
-						ts.agent.Sessions.AddFullMessage(ts.sessionKey, deniedMsg)
-						ts.recordPersistedMessage(deniedMsg)
-					}
 					al.emitEvent(
 						EventKindToolExecSkipped,
 						ts.eventMeta("runTurn", "turn.tool.skipped"),
@@ -10450,16 +10434,15 @@ turnLoop:
 				}
 			}
 
-			// Filter sensitive data (API keys, tokens, secrets) before sending to LLM
-			if cfg.Tools.IsFilterSensitiveDataEnabled() {
-				contentForLLM = cfg.FilterSensitiveData(contentForLLM)
-			}
-
-			toolResultMsg := providers.Message{
-				Role:       "tool",
-				Content:    contentForLLM,
-				ToolCallID: toolCallID,
-			}
+			// ADR-066 D4 (FR-009, FR-013): the sensitive-data filter now runs
+			// INSIDE the choke point, on the full content, before the cap —
+			// so a secret straddling the head or tail cut is redacted whole
+			// in both the archive and the window (B-16). The choke point
+			// also persists the archive line itself (the mark cites that
+			// line), so the AddFullMessage this site used to do is gone.
+			// Media refs are resolved on a scratch message first so both
+			// the archived and the window form carry them.
+			var mediaMsg providers.Message
 			// Attach inline image data URLs so vision-capable models can SEE the
 			// screenshot/image returned by the tool. Without this the LLM only
 			// gets the placeholder text and cannot reason about the picture.
@@ -10474,8 +10457,22 @@ turnLoop:
 			// guard; the artifact tag at loop.go:8246 is the path-based
 			// fallback hook for the rare "rasterize failed" case.
 			if len(toolResult.Media) > 0 && turnMediaStore != nil {
-				attachToolResultMedia(&toolResultMsg, toolResult.Media, turnMediaStore, maxMediaSize)
+				attachToolResultMedia(&mediaMsg, toolResult.Media, turnMediaStore, maxMediaSize)
 			}
+			admitted := al.admitToolResult(ts, toolResultAdmission{
+				Tool:       tc.Name,
+				ToolCallID: toolCallID,
+				Content:    contentForLLM,
+				Media:      mediaMsg.Media,
+				IsError:    toolResult.IsError,
+				ParallelN:  len(normalizedToolCalls),
+			})
+			// contentForLLM from here on is the FILTERED full content the
+			// archive holds — what the event sinks and the transcript error
+			// field always carried (the gateway tool_results/ store keeps it
+			// for Verbose chat); the window form is toolResultMsg.
+			contentForLLM = admitted.Archived.Content
+			toolResultMsg := admitted.Message
 			endSID, endProducingSID := u9ToolExecSessionIDs(ts)
 			al.emitEvent(
 				EventKindToolExecEnd,
@@ -10647,12 +10644,22 @@ turnLoop:
 			if toolResult.IsError && tcRecord.Result == nil {
 				tcRecord.Error = truncateRunes(contentForLLM, maxFailClosedOutputChars)
 			}
+			// ADR-066 FR-046: the transcript tool_call entry carries the
+			// BOUNDED result the model saw (the window form) so D5.5
+			// hydration (T066-06) rebuilds a window that is not lossy, plus
+			// the projection state for the SPA's content_state. Only when
+			// nothing richer is there already (media descriptors, the sync
+			// delegate shape, or the failure Error text).
+			if tcRecord.Result == nil && tcRecord.Error == "" {
+				if text := strings.TrimSpace(toolResultMsg.Content); text != "" {
+					tcRecord.Result = map[string]any{"text": text}
+				}
+			}
+			if admitted.Capped {
+				tcRecord.ContentState = string(memory.ProjectionCapped)
+			}
 			ts.appendToolCallTranscript(tcRecord)
 			messages = append(messages, toolResultMsg)
-			if !ts.opts.NoHistory {
-				ts.agent.Sessions.AddFullMessage(ts.sessionKey, toolResultMsg)
-				ts.recordPersistedMessage(toolResultMsg)
-			}
 
 			if steerMsgs := al.dequeueSteeringMessagesForScope(ts.sessionKey); len(steerMsgs) > 0 {
 				pendingMessages = append(pendingMessages, steerMsgs...)
@@ -10705,16 +10712,12 @@ turnLoop:
 								Reason: skipReason,
 							},
 						)
-						skippedMsg := providers.Message{
-							Role:       "tool",
-							Content:    skipMessage,
-							ToolCallID: skippedTC.ID,
-						}
+						// ADR-066 D4: the synthetic skipped result is a builtin-failure
+						// surface result like any denial (FR-009).
+						skippedMsg := al.admitToolResult(ts, toolResultAdmission{
+							Tool: skippedTC.Name, ToolCallID: skippedTC.ID, Content: skipMessage, IsError: true, ParallelN: len(normalizedToolCalls),
+						}).Message
 						messages = append(messages, skippedMsg)
-						if !ts.opts.NoHistory {
-							ts.agent.Sessions.AddFullMessage(ts.sessionKey, skippedMsg)
-							ts.recordPersistedMessage(skippedMsg)
-						}
 					}
 				}
 				if parked {
@@ -11261,6 +11264,20 @@ func (al *AgentLoop) assembleMessages(
 			"Use the recall_conversation tool with a turn_range to retrieve them."
 	} else {
 		breadcrumb = buildBreadcrumb(archive, history, breadcrumbTokenCap)
+		// ADR-066 FR-019: apply the persisted projection state so the
+		// window the provider sees here (turn start, post-trim, reload) is
+		// byte-identical to what the choke point / the D5 emptying pass
+		// produced live. Pure; no-op when nothing was capped or emptied.
+		if pm := ts.agent.Sessions.Projection(ts.sessionKey); len(pm.Entries) > 0 {
+			var cs config.ContextSettings
+			if cfg := al.GetConfig(); cfg != nil {
+				cs = cfg.Context
+			}
+			history = projectMessages(history, archiveLineResolver(archive, history), pm.Entries, projectionContext{
+				policy:  capPolicyFor(cs, agentContextBudget(ts.agent)),
+				archive: archive,
+			})
+		}
 	}
 	// Review B3: a task's TASK_STATUS/TASK_SUMMARY marker instruction
 	// (buildPrompt, task_executor.go) lives only in the task's first user

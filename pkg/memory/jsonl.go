@@ -40,6 +40,13 @@ const (
 	// we set a generous limit. The scanner starts at 64 KB and grows
 	// only as needed up to this cap.
 	maxLineSize = 10 * 1024 * 1024 // 10 MB
+
+	// EncodedLineBound is the largest JSON-encoded ArchivedMessage line the
+	// ADR-066 D4 choke point lets reach the archive: 0.8 × maxLineSize
+	// (FR-012, US-3.AC6). A line over maxLineSize breaks the scanner and
+	// with it every later line of the session; the 20 % margin absorbs the
+	// per-line framing (timestamp, ids, escapes) the cap cannot see.
+	EncodedLineBound = maxLineSize * 4 / 5
 )
 
 // sessionMeta holds per-session metadata stored in a .meta.json file.
