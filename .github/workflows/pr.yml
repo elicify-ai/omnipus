@@ -1790,6 +1790,10 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: playwright-artifacts-${{ matrix.group }}
+          # Re-running all jobs reuses this run_id, so the same artifact name is
+          # uploaded twice and upload-artifact 409s — failing an always()/failure()
+          # step and the job, for a reason unrelated to the code under test.
+          overwrite: true
           path: |
             playwright-report/
             test-results/
@@ -1800,6 +1804,10 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: gateway-logs-${{ matrix.group }}
+          # Re-running all jobs reuses this run_id, so the same artifact name is
+          # uploaded twice and upload-artifact 409s — failing an always()/failure()
+          # step and the job, for a reason unrelated to the code under test.
+          overwrite: true
           path: |
             /tmp/omnipus.log
             /tmp/omnipus-e2e/logs/
