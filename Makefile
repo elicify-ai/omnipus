@@ -194,9 +194,14 @@ build-launcher-tui:
 # just run `make build-all` and take the artifact you need.
 
 ## build-all: Build omnipus for all shipped platforms (ADR-067 §6.1/§6.2/§10 step 9)
-## Exactly four targets: linux/amd64, linux/arm64, darwin/arm64, darwin/amd64 — the
-## set .goreleaser.yaml actually releases, plus the multi-arch container image (built
-## separately via `make docker-build`). Windows, linux/arm(v6),
+## Exactly four targets: linux/amd64, linux/arm64, darwin/arm64, darwin/amd64.
+## NOTE: this is NOT the set .goreleaser.yaml releases — it explicitly ignores
+## darwin/amd64 (goos: darwin / goarch: amd64), and ADR-067 §6.3.1 keeps it
+## excluded because no Intel Mac runner is obtainable. darwin/amd64 is built
+## here anyway because it is the primary development host: developers must be
+## able to cross-compile it locally even while it ships to nobody. It is the
+## one deliberate exception to the rule below. Also built: the container image
+## (separately, via `make docker-build`). Windows, linux/arm(v6),
 ## linux/armv7, linux/loong64, linux/riscv64, and linux/mipsle were built here but never
 ## released; see ADR-067 §6.2 for why each was dropped. Do not re-add a target without
 ## also adding it to .goreleaser.yaml and a CI leg that exercises it (ADR-067 §6.3).

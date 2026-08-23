@@ -141,9 +141,11 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | sh && \
   ln -s /root/.local/bin/uvx /usr/local/bin/uvx && \
   uv --version
 
-# Gateway defaults: 5000 = SPA + API, 5001 = preview iframes.
-# See gateway.preview_port / preview_listener_enabled in pkg/config.
-EXPOSE 5000 5001
+# Gateway default: 5000 serves the SPA, the REST/WS API and agent preview
+# iframes. ADR-044 put /preview/ on this same listener and deleted the
+# gateway.preview_port / preview_listener_enabled keys, so there is no
+# second port to expose.
+EXPOSE 5000
 
 # Inside a container the gateway must bind 0.0.0.0 so the published port
 # mapping is reachable from the host. Same rationale as the minimal

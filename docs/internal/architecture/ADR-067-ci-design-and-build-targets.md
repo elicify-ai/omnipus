@@ -370,6 +370,29 @@ predicted by the inventory this ADR was written from:
   Two live callers of the removed `agent` subcommand were hiding behind it —
   the compose entrypoint and the launcher TUI's chat menu item, the latter
   discarding the resulting error so it failed invisibly. Both fixed in
-  `49095ce1`; the pattern is widened and mutation-tested.
+  `49095ce1`.
+
+  **Correction.** `49095ce1` claimed the widened pattern meant "the next one
+  cannot hide the same way." That was an overclaim, and review caught it. The
+  mutation test behind it planted a single-line violation only. The guard is
+  still defeated by the *same* defect merely formatted across lines —
+
+  ```go
+  cmd := exec.Command(
+      "omnipus",
+      "model",
+  )
+  ```
+
+  — which `gofmt` produces for any call over the line budget. Verified: the
+  guard exits 0 on that probe. It is also blind to a verb held in a variable
+  or slice, to `${VAR}` and lowercase `$var` forms, and to file types outside
+  its `--include` list (`.mjs`, of which five exist in scanned directories).
+
+  The widening is still worth having — it caught two real bugs — but `grep` is
+  line-based and cannot close this class. Closing it properly means an AST
+  check for Go and a parsed check for YAML/JSON, which is its own piece of
+  work. Until then the guard is a useful net with known holes, and this ADR
+  should not be read as saying otherwise.
 - **Three surfaces still advertised the preview port** deleted by ADR-044,
   including `omnipus start --help`. Fixed in `974e0520`.
