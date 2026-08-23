@@ -1885,6 +1885,18 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// most a handful of deletes); never fatal.
 	sweepOrphanedProviderCredentials(cfg, credStore, agentLoop.AuditLogger())
 
+	// ADR-066 D2 rung 4 (T066-10): install the on-demand, 24 h-cached live
+	// limits query AFTER NewAgentLoop has built every instance, so boot's
+	// own window resolutions never reach the rung (FR-003: never at boot,
+	// never on a timer). Installing performs no I/O; the first resolution
+	// that reaches the rung — the next reload, a settings write, the
+	// catalog projection — starts one background fetch per (provider, base
+	// URL, model) and the live value applies at the resolution after it.
+	// The credential comes from the store via the provider's api_key_ref
+	// (InjectFromConfig's env injection first); a cloud row without one is
+	// skipped, never queried.
+	agent.SetLiveWindowLookup(newLiveLimitsForBoot(homePath, credStore, agentLoop).Lookup)
+
 	// Boot-time browser provisioning: NewAgentLoop above just finished
 	// registering browser tools for every agent (registerSharedTools →
 	// browser.RegisterTools), each backed by its own *browser.BrowserManager.

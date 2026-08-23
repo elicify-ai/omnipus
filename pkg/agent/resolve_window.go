@@ -26,7 +26,7 @@ import (
 //  1. per-agent override        AgentConfig.ContextWindowOverride  (only with agentID)
 //  2. per-(provider, model)     ContextSettings.ModelOverrides[]
 //  3. global default            ContextSettings.DefaultContextWindow
-//  4. live provider query       on demand, cached 24 h (T066-10 wires the fetch)
+//  4. live provider query       on demand, cached 24 h (LiveLimits, live_limits.go; never blocks)
 //  5. catalog                   catalog.Resolve(provider, model).Window()
 //  6. floor                     cloudWindowFloor, cloud rows only, one WARN
 //
@@ -190,16 +190,26 @@ func ResolveWindow(cfg *config.Config, provider, model, agentID string) WindowRe
 		return WindowResolution{Exempt: true}
 	}
 
-	// Capability: the live-or-catalog value. 0 = nobody knows.
+	// Capability: the live-or-catalog value. 0 = nobody knows. Rung 4's
+	// Lookup never blocks: a cold cache answers (0, false) now and the live
+	// value applies at the next resolution (T066-10, FR-003).
 	capability, capSource := 0, WindowSource("")
 	if fn := liveWindowLookup(); fn != nil && row.known {
 		if w, ok := fn(provider, row.baseURL, model); ok && w > 0 {
 			capability, capSource = w, WindowSourceLive
 		}
 	}
-	if capability == 0 {
-		if w := windowCatalog().Resolve(provider, model).Window(); w > 0 {
-			capability, capSource = w, WindowSourceCatalog
+	if cw := windowCatalog().Resolve(provider, model).Window(); cw > 0 {
+		switch {
+		case capability == 0:
+			capability, capSource = cw, WindowSourceCatalog
+		case capability > cw:
+			// E17: the live cache lives in $OMNIPUS_HOME and can be hand-
+			// edited; it can only LOWER the window. A live value above the
+			// catalog's capability is clamped to the catalog.
+			logger.DebugCF("agent", "Live context window exceeds the catalog's; clamped to the catalog",
+				map[string]any{"provider": provider, "model": model, "live": capability, "catalog": cw})
+			capability, capSource = cw, WindowSourceCatalog
 		}
 	}
 	local := row.locality == catalog.LocalityLocal
