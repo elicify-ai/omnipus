@@ -1,5 +1,3 @@
-//go:build !lite
-
 // navigate_stranded_tab_test.go — SECURITY regression (2026-08-13): a
 // navigation that FAILS TO COMPLETE must not leave the tab parked on the
 // target URL.

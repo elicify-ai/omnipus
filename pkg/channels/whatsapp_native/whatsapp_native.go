@@ -1,4 +1,4 @@
-//go:build !lite && !mipsle && !netbsd && !(freebsd && arm)
+//go:build !mipsle && !netbsd && !(freebsd && arm)
 
 // Omnipus - Ultra-lightweight personal AI agent
 // License: MIT
@@ -37,9 +37,9 @@ import (
 )
 
 // NativeAvailable reports whether the native whatsmeow-based WhatsApp transport
-// was compiled into this binary. True in default builds; false in the lite
-// variant or on architectures that exclude modernc.org/sqlite (mipsle, netbsd,
-// freebsd/arm). REST callers use this to know whether to offer the QR-pairing
+// was compiled into this binary. True in every build except on architectures
+// that exclude modernc.org/sqlite (mipsle, netbsd, freebsd/arm), where the
+// stub sets it false. REST callers use this to know whether to offer the QR-pairing
 // flow or restrict the UI to bridge mode only.
 const NativeAvailable = true
 

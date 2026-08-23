@@ -1,5 +1,3 @@
-//go:build !lite
-
 // ADR-062 tier 1 — the two defects an adversarial review caught in the first
 // implementation, before it shipped. Both are invisible to a "does it compile"
 // or "does one viewer connect" check, and both break something that currently

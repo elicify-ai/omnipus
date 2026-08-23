@@ -1,5 +1,3 @@
-//go:build !lite
-
 // live_tabchange_coordination_test.go — round-2 findings F1/F3/F5, the three
 // coordination defects the round-1 fixes left behind. Every one of them is
 // invisible on a fast machine and routine on the 2-CPU hosted box, which is

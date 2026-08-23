@@ -1,5 +1,3 @@
-//go:build !lite
-
 // ADR-062 tier 1: what address viewers are told to send media to.
 //
 // The design promise is "no additional configuration for the user" — a hosted

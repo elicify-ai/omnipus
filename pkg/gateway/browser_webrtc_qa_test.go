@@ -1,4 +1,4 @@
-//go:build !cgo && !lite
+//go:build !cgo
 
 // browser_webrtc_qa_test.go — QA wave additions closing coverage gaps NOT
 // exercised by TestWebRTCEndToEndInProcess (browser_webrtc_e2e_test.go):

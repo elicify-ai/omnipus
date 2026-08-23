@@ -1,5 +1,3 @@
-//go:build !lite
-
 // ingest_seqrewrite_test.go — unit tests for seqRewriter (2026-08-13), the
 // constant-offset sequence rewrite that replaced read-order renumbering.
 // Read-order renumbering hid ingest-leg packet loss from the viewer (no gap

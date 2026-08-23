@@ -1,5 +1,3 @@
-//go:build !lite
-
 // input_ordering_burst_test.go — QA wave addition. Package webrtc_test
 // (external), reusing session_test.go's fixtures (newFakeEncoder,
 // newFakeViewer, nonTrickleOffer, setAnswer, waitCond, safeLogf, testWait)

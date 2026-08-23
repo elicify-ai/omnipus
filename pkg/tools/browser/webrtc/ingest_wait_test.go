@@ -1,5 +1,3 @@
-//go:build !lite
-
 package webrtc
 
 // In-package unit tests for waitForTracks' audio-grace behavior (UAT

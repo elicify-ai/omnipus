@@ -1,5 +1,3 @@
-//go:build !lite
-
 package webrtc
 
 import (
@@ -24,12 +22,12 @@ import (
 var pliForwardMinInterval = 750 * time.Millisecond
 
 // Available reports whether this build compiles in the real Pion-backed
-// Session (true here; false in stub.go's lite build). Exported so a caller
-// deciding the ADR-047 D3 gate ladder (wave-plan W2-A: "WebRTCEnabled, then
-// lite/webrtc.ErrUnavailable, then ClassifyVideoCapability, else attempt a
-// real offer") can distinguish "this binary has no WebRTC at all" from a
-// runtime failure WITHOUT first standing up a capture session/encoder page
-// just to provoke an ErrUnavailable from a real call.
+// Session. Since ADR-067 §10 step 14 retired the `lite` build variant (and
+// with it stub.go, the only place this was ever false), it is true in every
+// build; it stays a var, not a const, because pkg/gateway's gate ladder
+// (ADR-047 D3 / wave-plan W2-A: "WebRTCEnabled, then WebRTC availability,
+// then ClassifyVideoCapability, else attempt a real offer") still reads it
+// and its tests still flip it to exercise the reason="lite_build" branch.
 var Available = true
 
 // Session is the SFU-style forwarding state shared by the ingest leg (the

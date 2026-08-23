@@ -1,5 +1,3 @@
-//go:build !lite
-
 // inputdc_coalesce_test.go — unit tests for coalesceInputBatch (2026-08-13),
 // the dequeue-time compaction that bounds input LATENCY (push-time shedding
 // only ever bounded memory): a drained backlog is dispatched as the few

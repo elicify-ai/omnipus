@@ -1,5 +1,3 @@
-//go:build !lite
-
 package webrtc
 
 import (

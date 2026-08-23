@@ -1,5 +1,3 @@
-//go:build !lite
-
 // probe_timeout_test.go — the managed binary's `--version` probe gets a
 // realistic budget (2026-08-13, macOS): a freshly-downloaded ~200MB Chrome
 // bundle pays Gatekeeper's whole-bundle signature verification on its FIRST

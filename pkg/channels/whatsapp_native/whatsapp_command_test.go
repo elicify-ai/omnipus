@@ -1,4 +1,4 @@
-//go:build !lite && !mipsle && !netbsd && !(freebsd && arm)
+//go:build !mipsle && !netbsd && !(freebsd && arm)
 
 package whatsapp
 

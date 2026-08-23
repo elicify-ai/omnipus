@@ -1,5 +1,3 @@
-//go:build !lite
-
 // browser_webrtc_e2e_test.go — ADR-047 / wave-plan W2-C: the centerpiece
 // integration test proving the FULL WebRTC signaling + media + input path
 // end-to-end, IN-PROCESS, with NO Chrome involved:

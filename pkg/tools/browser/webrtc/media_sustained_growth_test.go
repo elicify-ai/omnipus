@@ -1,5 +1,3 @@
-//go:build !lite
-
 // media_sustained_growth_test.go closes two coverage gaps in
 // TestSessionGoToGoFullFlow (session_test.go), which only asserts each of
 // video/audio packet counts "> 5" ONCE and Stats().{HasAudio,AudioCodec,...}

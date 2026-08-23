@@ -1,4 +1,4 @@
-//go:build !windows && !lite
+//go:build !windows
 
 // coordinator_shutdown_process_test.go — proves the OS PROCESS is gone after
 // Shutdown, not merely that the coordinator's own bookkeeping says so.

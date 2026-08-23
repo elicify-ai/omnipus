@@ -1,5 +1,3 @@
-//go:build !lite
-
 // live_viewport_resize_test.go — the 2026-08-16 resize fix wave, every case
 // measured against a real headless Chrome 152 before it was written:
 //

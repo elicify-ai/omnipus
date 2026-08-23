@@ -1,5 +1,3 @@
-//go:build !lite
-
 // inputdc_backpressure_test.go — in-package (package webrtc) unit test for
 // the inputQueueCapacity drop-oldest backpressure mechanism in inputdc.go.
 //

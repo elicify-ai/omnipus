@@ -1,4 +1,4 @@
-//go:build lite || mipsle || netbsd || (freebsd && arm)
+//go:build mipsle || netbsd || (freebsd && arm)
 
 // Omnipus - Ultra-lightweight personal AI agent
 // License: MIT
@@ -12,8 +12,8 @@ import (
 )
 
 // TestStubReturnsError asserts that, in builds where native WhatsApp is not
-// compiled in (the lite variant, or an architecture where modernc.org/sqlite is
-// unavailable), NewWhatsAppNativeChannel fails closed: it returns a nil channel
+// compiled in (an architecture where modernc.org/sqlite is unavailable),
+// NewWhatsAppNativeChannel fails closed: it returns a nil channel
 // and a non-nil error. This guards the build-tag split — a regression that made
 // the stub return (nil, nil) would let initChannels register a dead channel that
 // silently never pairs.

@@ -1,5 +1,3 @@
-//go:build !lite
-
 package webrtc
 
 import (
@@ -21,14 +19,15 @@ import (
 // callers must not inspect or compare its fields.
 //
 // HandleViewerOfferHandle/CloseViewerIfCurrent both declare this as `any`
-// (not *ViewerHandle) at their signature boundary — deliberately, so that
-// pkg/tools/browser's viewerOfferHandler optional-capability interface (a
-// build-tag-NEUTRAL file, compiled into the LITE build too, where this
-// concrete type does not exist at all — this whole file is //go:build !lite)
-// can name that method's signature without ever referencing *ViewerHandle
-// directly, which would fail to compile under -tags lite. Callers still get
-// a concrete *ViewerHandle back dynamically; treat the `any` as opaque and
-// pass it straight to CloseViewerIfCurrent rather than inspecting it.
+// (not *ViewerHandle) at their signature boundary. That began as a build-tag
+// requirement — pkg/tools/browser's viewerOfferHandler interface had to name
+// the method signature in a file that also compiled under `-tags lite`, where
+// this type did not exist — and ADR-067 §10 step 14 has since retired that
+// variant. The `any` is kept because the interface is still an OPTIONAL
+// capability satisfied by narrower test fakes that have no ViewerHandle of
+// their own. Callers still get a concrete *ViewerHandle back dynamically;
+// treat the `any` as opaque and pass it straight to CloseViewerIfCurrent
+// rather than inspecting it.
 type ViewerHandle struct {
 	viewerID string
 	pc       *webrtc.PeerConnection
@@ -53,8 +52,8 @@ type ViewerHandle struct {
 //
 // This is a thin wrapper around HandleViewerOfferHandle that discards the
 // handle, kept with this EXACT 2-return signature because it implements
-// RelaySession (capture_session.go), which the lite build's stub Session
-// must also keep satisfying unchanged. A caller that needs supersede-safe
+// RelaySession (capture_session.go), which the package's test fakes must
+// also keep satisfying unchanged. A caller that needs supersede-safe
 // cleanup (CaptureSession) calls HandleViewerOfferHandle directly instead,
 // via the optional-capability pattern (capture_session.go's
 // viewerOfferHandler) rather than widening RelaySession itself.

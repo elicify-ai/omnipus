@@ -1,5 +1,3 @@
-//go:build !lite
-
 // live_setviewport_retry_test.go — SetViewport's single deadline-only retry
 // (2026-08-13 UAT: transient "could not resize the browser viewport" toast
 // when the browser process was momentarily starved under encode+input load;

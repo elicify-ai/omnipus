@@ -20,9 +20,10 @@
 // complete answer SDP in one shot, matching decision 6 in the wave plan.
 //
 // This file has no build tag: Config, InputSink, Stats and ErrUnavailable are
-// the shared, always-compiled surface between the real implementation
-// (session.go et al, //go:build !lite) and the lite stub (stub.go,
-// //go:build lite) so callers can reference these types regardless of build.
+// the shared, always-compiled surface of the package. It used to be the
+// boundary between the real implementation and a lite stub (stub.go), but
+// ADR-067 retired the lite variant and deleted that stub, so session.go et al
+// now compile unconditionally.
 package webrtc
 
 import (
@@ -50,12 +51,14 @@ var ErrUnavailable = errors.New("browser webrtc: not available in this build (li
 // transient cold-start race — but it deserves its own name in logs/audit
 // rather than being indistinguishable from every other "error".
 //
-// This lives HERE, in the build-tag-free file, rather than alongside
-// waitForTracks in ingest.go (//go:build !lite), because pkg/gateway
-// references it UNCONDITIONALLY — an errors.Is classification that must
-// compile in every build. Defining it in the !lite file broke the
-// lite/mipsle link check ("undefined: webrtc.ErrNoIngestVideoTrack"). Keep
-// every exported symbol the gateway names in a file both builds compile,
+// This lives HERE rather than alongside waitForTracks in ingest.go because
+// pkg/gateway references it UNCONDITIONALLY — an errors.Is classification
+// that must compile in every build. Historically ingest.go was //go:build
+// !lite and defining the sentinel there broke the lite/mipsle link check
+// ("undefined: webrtc.ErrNoIngestVideoTrack"); ADR-067 retired the lite
+// variant, so that specific trap is gone, but the rule it taught still
+// holds for the architecture-gated files. Keep every exported symbol the
+// gateway names in a file every build compiles,
 // the same way ErrUnavailable above already is.
 var ErrNoIngestVideoTrack = errors.New("no ingest video track")
 

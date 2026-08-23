@@ -1,5 +1,3 @@
-//go:build !lite
-
 // Package webrtc_test exercises Session end-to-end with two IN-PROCESS Pion
 // PeerConnections standing in for the real browser endpoints -- one as the
 // headless-Chrome tabCapture "encoder" (offers synthetic video+audio),
