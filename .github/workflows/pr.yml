@@ -3,13 +3,29 @@ name: PR
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
+  # ADR-067 step 1: run the SAME checks on a direct push to a release branch
+  # or main, not just on pull_request. Before this, pr.yml was
+  # pull_request-only, so a commit merged straight to a release branch (no
+  # PR into it) ran CodeQL and nothing else — 23 commits did exactly that.
+  # See the `changes` job below for how path filtering fails open (never
+  # closed) for this event type: dorny/paths-filter has no PR diff to
+  # compare against on a push, so its filter steps are skipped entirely for
+  # push, and every gated job's `code`/`go`/`spa` input defaults to 'true'.
+  push:
+    branches:
+      - release/**
+      - main
   # Allow manual runs on feature branches without opening a PR.
   workflow_dispatch:
 
 # Six playwright e2e shards (llm-chat, llm-agents, llm-light, llm-hot-reload,
 # llm-verifier-eval, llm-conformance) call a real paid LLM (openrouter/z-ai/glm-5.2),
 # so every push to a PR branch spends money. Cancel the superseded run on each new
-# push instead of letting it burn through the full 17-job/9-shard fan-out.
+# push instead of letting it burn through the full 17-job/9-shard fan-out. For a
+# release-branch/main push (no `pull_request` context), `github.event.pull_request.number`
+# is empty so the group falls back to `github.ref` (e.g. refs/heads/release/v0.1.1) —
+# still one group per branch, so a rapid run of pushes to the same release branch
+# cancels its own superseded run exactly like a PR branch does.
 concurrency:
   group: pr-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
@@ -21,28 +37,61 @@ defaults:
 jobs:
   changes:
     name: Detect changed paths
-    # Feeds the `code` output every other job in this workflow gates on
-    # (path filtering). Conservative by design: `code` is only 'false' when
-    # EVERY changed file in a pull_request is a doc/markdown/license file
-    # (docs/**, **/*.md, LICENSE, NOTICE, .preview-doc/**) — none of which
-    # any job in this workflow reads (see docs/internal/false-green-patterns.md
-    # and CLAUDE.md's record of file-scoped changes breaking a DIFFERENT
-    # package's tests, which rules out any narrower, package-level filter —
-    # see that doc for the two concrete incidents). Any doubt defaults to
-    # running everything: non-pull_request events (workflow_dispatch has no
-    # PR diff to filter against) always get code=true, and if the filter
-    # step below doesn't run or doesn't succeed, the fallback step still
-    # defaults to code=true — fail open, never fail closed into a silent
-    # skip.
+    # Feeds three outputs every other job in this workflow gates on (path
+    # filtering): `code`, `go`, `spa`.
+    #
+    # `code` is the broad gate. Conservative by design: it is only 'false'
+    # when EVERY changed file in a pull_request is a doc/markdown/license
+    # file (docs/**, **/*.md, LICENSE, NOTICE, .preview-doc/**) — none of
+    # which any job in this workflow reads (see
+    # docs/internal/false-green-patterns.md and CLAUDE.md's record of
+    # file-scoped changes breaking a DIFFERENT package's tests, which rules
+    # out any narrower, package-level filter — see that doc for the two
+    # concrete incidents).
+    #
+    # `go` and `spa` (ADR-067 step 12, L1 language-split filtering) are a
+    # NARROWER, additional gate layered on top of `code` — a handful of
+    # Tier 1/2 jobs skip when their own language wasn't touched, on top of
+    # (never instead of) the `code` check. `go` is 'true' whenever a changed
+    # file is a *.go file, or one of the non-.go inputs that change Go
+    # behaviour without touching a .go file: go.mod, go.sum, Makefile,
+    # .golangci.yaml, contracts/** (the OpenAPI/AsyncAPI specs the generated
+    # Go types come from), and .github/** (this workflow's own definition —
+    # a change to the workflow must never be filtered against a stale copy
+    # of its own filter). `spa` mirrors that for frontend inputs — src/**,
+    # public/**, index.html, package.json/package-lock.json, vite.config.ts,
+    # vite.lib.config.ts, tsconfig*.json, eslint.config.js — plus the same
+    # Makefile/contracts/**/.github/** force-full set (Makefile drives the
+    # `spa-embed` build target; contracts/** regenerates the TS wire types
+    # under src/lib/api/generated/).
+    #
+    # ADR-067 §4.2 explicitly REJECTS anything finer than this file-type
+    # split as unsound (an errcheck sweep confined to pkg/audit produced 62
+    # govet findings repo-wide; a pkg/tools/registry.go change broke judge
+    # tests in pkg/agent, a package it doesn't appear in) — `go`/`spa` are
+    # the entire selection boundary here. No per-package Go selection exists
+    # or should be added.
+    #
+    # Any doubt defaults to running everything: non-pull_request events
+    # (push to release/**|main, or workflow_dispatch — neither has a PR diff
+    # to filter against) always get code=true AND go=true AND spa=true, and
+    # if a filter step below doesn't run or doesn't succeed, the fallback in
+    # "Decide" still defaults every output to 'true' — fail open, never fail
+    # closed into a silent skip. This is also what ADR-067 §4.3 requires for
+    # a release-branch push ("merge into a release branch always runs
+    # unscoped").
     runs-on: ubuntu-latest
     outputs:
       code: ${{ steps.decide.outputs.code }}
+      go: ${{ steps.decide.outputs.go }}
+      spa: ${{ steps.decide.outputs.spa }}
     steps:
-      - name: Filter changed paths (pull_request only)
+      - name: Filter changed paths — anything-but-docs (pull_request only)
         # dorny/paths-filter's GitHub-API mode needs no checkout for
-        # pull_request events. workflow_dispatch has no PR to diff against,
-        # so this step is skipped for that event and the fail-open default
-        # in "Decide" below applies.
+        # pull_request events. Non-pull_request events (push to
+        # release/**|main, or workflow_dispatch) have no PR to diff against,
+        # so this step is skipped for them and the fail-open default in
+        # "Decide" below applies.
         id: filter
         if: github.event_name == 'pull_request'
         uses: dorny/paths-filter@v4
@@ -62,6 +111,42 @@ jobs:
               - '!NOTICE'
               - '!.preview-doc/**'
 
+      - name: Filter changed paths — Go / SPA language split (pull_request only)
+        # A SEPARATE dorny/paths-filter invocation, not more filters bolted
+        # onto the step above: `predicate-quantifier` is a per-invocation
+        # setting, not per-filter, and cannot be mixed — the step above needs
+        # 'every' (ALL changed files must be non-doc), while go/spa need the
+        # ordinary 'some' quantifier (AT LEAST ONE changed file matches AT
+        # LEAST ONE pattern). This step omits predicate-quantifier, which
+        # defaults to 'some'. Same pull_request-only guard, same fail-open
+        # rationale as the step above.
+        id: lang_filter
+        if: github.event_name == 'pull_request'
+        uses: dorny/paths-filter@v4
+        with:
+          filters: |
+            go:
+              - '**/*.go'
+              - 'go.mod'
+              - 'go.sum'
+              - 'Makefile'
+              - '.golangci.yaml'
+              - 'contracts/**'
+              - '.github/**'
+            spa:
+              - 'src/**'
+              - 'public/**'
+              - 'index.html'
+              - 'package.json'
+              - 'package-lock.json'
+              - 'vite.config.ts'
+              - 'vite.lib.config.ts'
+              - 'tsconfig*.json'
+              - 'eslint.config.js'
+              - 'Makefile'
+              - 'contracts/**'
+              - '.github/**'
+
       - name: Decide whether the full job set must run
         id: decide
         if: always()
@@ -74,6 +159,77 @@ jobs:
           else
             echo "code=true" >> "$GITHUB_OUTPUT"
           fi
+
+          # go/spa: same fail-open shape as code above. A pull_request whose
+          # lang_filter step ran successfully gets the REAL per-language
+          # answer; every other case (non-pull_request event, or the step
+          # didn't run/succeed) defaults to 'true' for both.
+          if [ "${{ github.event_name }}" = "pull_request" ] \
+             && [ "${{ steps.lang_filter.outcome }}" = "success" ]; then
+            echo "go=${{ steps.lang_filter.outputs.go }}" >> "$GITHUB_OUTPUT"
+            echo "spa=${{ steps.lang_filter.outputs.spa }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "go=true" >> "$GITHUB_OUTPUT"
+            echo "spa=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  setup:
+    name: Install Node dependencies
+    # ADR-067 step 3 (§7.1): npm ci ran in 11 of 20 pull-request jobs, each
+    # installing ~1,018 packages, measured ~5 minutes cold — the single
+    # largest cost in the workflow, dominating the Tier 1 budget closely
+    # enough that tiering barely mattered. This job installs ONCE; every job
+    # that needs node_modules downloads the already-built tree as an
+    # artifact instead of re-running npm ci.
+    #
+    # Chosen over actions/setup-node's built-in `cache: npm` option: that
+    # caches ~/.npm (npm's download cache), not node_modules — every
+    # consuming job would still have to run `npm ci` itself (dependency
+    # resolution, integrity checks, ~1,018 package extractions/links to
+    # disk), just against a warm local cache instead of the network. This
+    # repo has no "postinstall" script in package.json and no npm
+    # "workspaces" entry (both checked), so node_modules is a single flat,
+    # symlink-free tree — safe to tar up once and extract verbatim wherever
+    # it's needed. That is strictly less work per consuming job than even a
+    # cache-warmed `npm ci`, and it removes 10 of the 11 registry round
+    # trips entirely rather than just speeding them up.
+    # actions/upload-artifact already compresses in transit, so the archive
+    # step below does not add its own compression on top.
+    #
+    # Cost trade-off: this adds one serialized ~5-minute step ahead of Tier 1
+    # (Tier 1's own node-consuming jobs previously paid that same ~5 minutes
+    # each, but in PARALLEL, so Tier 1 wall-clock is roughly unchanged). What
+    # it removes is a duplicate ~5-minute npm ci from every OTHER
+    # node-consuming job, including the slow Tier 2/3 jobs (test, security,
+    # perf-smoke, playwright) that previously paid it too despite already
+    # running after Tier 1 had cleared — that is where the real wall-clock
+    # and billed-runner-minute savings land: roughly 55 runner-minutes of
+    # duplicated npm ci (11 x ~5 min) drops to roughly 5 (this job) + a
+    # handful of ~1-minute download+extract steps.
+    runs-on: ubuntu-latest
+    needs: [changes]
+    if: success() && needs.changes.outputs.code == 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Archive node_modules
+        run: tar -cf node_modules.tar node_modules
+
+      - name: Upload node_modules artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: node-modules-${{ github.run_id }}-${{ github.run_attempt }}
+          path: node_modules.tar
+          retention-days: 1
 
   e2e-shard-check:
     name: E2E shard plan check
@@ -111,11 +267,19 @@ jobs:
       - name: Check for removed CLI verbs in infra
         run: |
           set -euo pipefail
-          PATTERN='(omnipus|[A-Za-z0-9_./-]*omnipus|\$[A-Z_]+)[[:space:]]+(agent|auth|status|cron|migrate|model|skills)\b'
-          DIRS="docker .github deploy scripts cmd/omnipus-launcher-tui"
+          # The separator is [[:space:],] with optional surrounding quotes, not
+          # plain whitespace: a JSON/YAML array form puts a quote-comma-quote
+          # between the binary and the verb, and the whitespace-only pattern was
+          # blind to it. That blind spot was live: docker/docker-compose.yml had
+          # a removed verb in exactly that shape, and so did the launcher TUI
+          # (an exec.Command with the binary and verb as separate arguments), in
+          # directories this guard scans — and it reported clean. Both are fixed;
+          # the pattern is widened so the next one cannot hide the same way.
+          PATTERN='(omnipus|[A-Za-z0-9_./-]*omnipus|\$[A-Z_]+)["'"'"']?[[:space:],]+["'"'"']?(agent|auth|status|cron|migrate|model|skills)\b'
+          DIRS=(docker .github deploy scripts cmd/omnipus-launcher-tui)
           FOUND=$(grep -rE "$PATTERN" --include="*.sh" --include="*.yml" --include="*.yaml" \
             --include="Dockerfile*" --include="*.go" \
-            $DIRS 2>/dev/null | grep -v "^Binary" || true)
+            "${DIRS[@]}" 2>/dev/null | grep -v "^Binary" || true)
           if [ -n "$FOUND" ]; then
             echo "ERROR: removed CLI verb found in infra. Update callers to use 'omnipus start', 'omnipus credentials', etc." >&2
             echo "" >&2
@@ -250,9 +414,13 @@ jobs:
     # project-references root (no "include"/"files") and always exits 0. The
     # `-b` flag is required to actually type-check the referenced sub-projects.
     # See F6 in the Phase 7 review findings.
+    #
+    # ADR-067 step 12: skips when no SPA-relevant file changed (see the
+    # `changes` job's `spa` filter and its force-full list). `code` is still
+    # checked too — `spa` narrows on top of it, never replaces it.
     runs-on: ubuntu-latest
-    needs: [changes]
-    if: success() && needs.changes.outputs.code == 'true'
+    needs: [changes, setup]
+    if: success() && needs.changes.outputs.code == 'true' && needs.changes.outputs.spa == 'true'
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -262,8 +430,13 @@ jobs:
         with:
           node-version: "24"
 
-      - name: Install Node dependencies
-        run: npm ci
+      - name: Download node_modules artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: node-modules-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Extract node_modules
+        run: tar -xf node_modules.tar
 
       - name: Run TypeScript type check
         run: npm run typecheck
@@ -280,9 +453,13 @@ jobs:
     # can only move down, never back up. No continue-on-error: violations
     # must be visible as red on every PR, same as every other lint job in
     # this workflow.
+    #
+    # ADR-067 step 12: skips when no SPA-relevant file changed (see the
+    # `changes` job's `spa` filter and its force-full list). `code` is still
+    # checked too — `spa` narrows on top of it, never replaces it.
     runs-on: ubuntu-latest
-    needs: [changes]
-    if: success() && needs.changes.outputs.code == 'true'
+    needs: [changes, setup]
+    if: success() && needs.changes.outputs.code == 'true' && needs.changes.outputs.spa == 'true'
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -292,17 +469,25 @@ jobs:
         with:
           node-version: "24"
 
-      - name: Install Node dependencies
-        run: npm ci
+      - name: Download node_modules artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: node-modules-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Extract node_modules
+        run: tar -xf node_modules.tar
 
       - name: Run ESLint (must be clean — no baseline, no ratchet)
         run: npm run lint
 
   vitest:
     name: Vitest — ${{ matrix.group }}
+    # ADR-067 step 12: skips when no SPA-relevant file changed (see the
+    # `changes` job's `spa` filter and its force-full list). `code` is still
+    # checked too — `spa` narrows on top of it, never replaces it.
     runs-on: ubuntu-latest
-    needs: [changes, fast-tier]
-    if: success() && needs.changes.outputs.code == 'true'
+    needs: [changes, fast-tier, setup]
+    if: success() && needs.changes.outputs.code == 'true' && needs.changes.outputs.spa == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -337,10 +522,14 @@ jobs:
         uses: actions/setup-node@v7
         with:
           node-version: "24"
-          cache: "npm"
 
-      - name: Install Node dependencies
-        run: npm ci
+      - name: Download node_modules artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: node-modules-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Extract node_modules
+        run: tar -xf node_modules.tar
 
       - name: Verify every test file is covered by some vitest group
         # An unmatched test file is silently never run while this job still
@@ -350,9 +539,18 @@ jobs:
       - name: Run Vitest (${{ matrix.group }})
         env:
           VITEST_PATTERNS: ${{ matrix.patterns }}
-        # word-split $VITEST_PATTERNS intentionally — each space-separated token
-        # becomes a separate vitest path filter (substring match against full path)
-        run: npx vitest run --reporter=verbose $VITEST_PATTERNS
+        # Each space-separated token in VITEST_PATTERNS is a separate vitest path
+        # filter (substring match against the full path). Split explicitly into an
+        # array rather than relying on unquoted word-splitting, so the intent is
+        # stated in the code instead of in a comment shellcheck cannot verify.
+        run: |
+          read -ra patterns <<< "$VITEST_PATTERNS"
+          if [ ${#patterns[@]} -eq 0 ]; then
+            echo "ERROR: VITEST_PATTERNS is empty for group '${{ matrix.group }}' —" >&2
+            echo "an unfiltered run would silently test everything or nothing." >&2
+            exit 1
+          fi
+          npx vitest run --reporter=verbose "${patterns[@]}"
 
   wire-types-lint:
     name: Wire-Types Lint
@@ -436,8 +634,11 @@ jobs:
     # Failure means someone edited a spec without running gen-contracts.sh,
     # or edited a generated file directly. Fix: run `make gen-contracts` locally
     # and commit the regenerated diff.
+    # Cross-cutting (Go + TS both), so left gated on `code` alone — not
+    # narrowed to `go` or `spa` individually (ADR-067 step 12 only splits
+    # the exclusively-Go and exclusively-frontend suites).
     runs-on: ubuntu-latest
-    needs: [changes]
+    needs: [changes, setup]
     if: success() && needs.changes.outputs.code == 'true'
     env:
       CGO_ENABLED: "0"
@@ -455,8 +656,13 @@ jobs:
         with:
           node-version: "24"
 
-      - name: Install Node dependencies
-        run: npm ci
+      - name: Download node_modules artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: node-modules-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Extract node_modules
+        run: tar -xf node_modules.tar
 
       - name: Install oapi-codegen
         # Pin to a known-good version that matches the generated file headers.
@@ -480,9 +686,16 @@ jobs:
 
   lint:
     name: Linter
+    # ADR-067 step 12: skips when no Go-relevant file changed (see the
+    # `changes` job's `go` filter and its force-full list). `code` is still
+    # checked too — `go` narrows on top of it, never replaces it. Still
+    # needs Node/npm to build the SPA embed target below, purely because
+    # go:embed requires it to exist for the Go build to compile — that need
+    # is unconditional whenever this job runs at all, independent of whether
+    # any SPA source itself changed.
     runs-on: ubuntu-latest
-    needs: [changes]
-    if: success() && needs.changes.outputs.code == 'true'
+    needs: [changes, setup]
+    if: success() && needs.changes.outputs.code == 'true' && needs.changes.outputs.go == 'true'
     env:
       # Omnipus ships a pure-Go binary (CLAUDE.md hard constraint #2), so tests
       # run with cgo disabled to match the release build. This is the
@@ -504,13 +717,20 @@ jobs:
         with:
           node-version: "24"
 
+      - name: Download node_modules artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: node-modules-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Extract node_modules
+        run: tar -xf node_modules.tar
+
       - name: Build SPA
         # pkg/gateway/embed.go has //go:embed all:spa and pkg/gateway/spa/ is
         # gitignored. Vite builds into dist/spa; we copy it into the embed
         # target so go vet/build/lint can compile the !cgo gateway files.
         run: |
           set -euo pipefail
-          npm ci
           npm run build
           rm -rf pkg/gateway/spa
           cp -r dist/spa pkg/gateway/spa
@@ -535,6 +755,33 @@ jobs:
     # filter, this job is itself skipped too (default `success()` semantics
     # on `needs:`), which cascades the skip down through every SLOW job's
     # own needs on it.
+    #
+    # ADR-067 step 12 changes this: `typecheck`, `lint-spa`, and `lint` are
+    # now independently skippable (spa==false or go==false respectively)
+    # even when `code` is true. A skipped need is NOT a success under
+    # GitHub's default `needs` semantics, so a bare `success()` here would
+    # cascade-skip THIS job whenever any one of those three legitimately
+    # skips — taking every Tier 2/3 job down with it, including ones from
+    # the OTHER cohort that still needed to run (e.g. a pure-SPA PR
+    # legitimately skipping `lint` (go==false) must not also take `vitest`
+    # (spa==true, needs fast-tier) down with it). So this job cannot rely on
+    # bare success(): each of the three conditionally-skippable needs is
+    # explicitly allowed to be 'skipped' as well as 'success'; every other
+    # need (still gated on `code` alone, unchanged) must be a real
+    # 'success' — a genuine failure or cancellation of ANY need still blocks
+    # this job exactly as before.
+    #
+    # `!cancelled()` (not a bare custom expression, and deliberately not
+    # `always()`) is required as the leading term: GitHub implicitly ANDs a
+    # bare `success()` onto ANY `if:` that doesn't itself call one of
+    # success()/always()/failure()/cancelled() — so without this, the
+    # tolerant `(... == 'skipped')` clauses below would be silently
+    # overridden by that same implicit success() gate this whole comment is
+    # working around. `!cancelled()` is GitHub's own documented alternative
+    # to `always()` here: it drops the implicit success() gate (letting the
+    # explicit per-need checks below be the ONLY gate) without also making
+    # this job eligible to start while the run itself is being cancelled,
+    # which bare `always()` would.
     runs-on: ubuntu-latest
     needs:
       - changes
@@ -546,16 +793,30 @@ jobs:
       - tool-error-status-lint
       - verify-contracts
       - lint
-    if: success() && needs.changes.outputs.code == 'true'
+    if: >-
+      !cancelled() &&
+      needs.changes.outputs.code == 'true' &&
+      needs.changes.result == 'success' &&
+      needs.e2e-shard-check.result == 'success' &&
+      needs.cli-verb-guard.result == 'success' &&
+      (needs.typecheck.result == 'success' || needs.typecheck.result == 'skipped') &&
+      (needs.lint-spa.result == 'success' || needs.lint-spa.result == 'skipped') &&
+      needs.wire-types-lint.result == 'success' &&
+      needs.tool-error-status-lint.result == 'success' &&
+      needs.verify-contracts.result == 'success' &&
+      (needs.lint.result == 'success' || needs.lint.result == 'skipped')
     steps:
       - name: Fast tier green
         run: echo "All fast-tier checks passed — slow tier is cleared to run."
 
   vuln_check:
     name: Security Check
+    # ADR-067 step 12: skips when no Go-relevant file changed (see the
+    # `changes` job's `go` filter and its force-full list). `code` is still
+    # checked too — `go` narrows on top of it, never replaces it.
     runs-on: ubuntu-latest
-    needs: [changes, fast-tier]
-    if: success() && needs.changes.outputs.code == 'true'
+    needs: [changes, fast-tier, setup]
+    if: success() && needs.changes.outputs.code == 'true' && needs.changes.outputs.go == 'true'
     env:
       GOFLAGS: -tags=goolm,stdjson
       # See comment on the lint job above.
@@ -576,12 +837,19 @@ jobs:
         with:
           node-version: "24"
 
+      - name: Download node_modules artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: node-modules-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Extract node_modules
+        run: tar -xf node_modules.tar
+
       - name: Build SPA
         # govulncheck runs a build under the hood; the gateway embed target
         # must exist for that build to succeed.
         run: |
           set -euo pipefail
-          npm ci
           npm run build
           rm -rf pkg/gateway/spa
           cp -r dist/spa pkg/gateway/spa
@@ -604,9 +872,13 @@ jobs:
     # entire module so a CGo dependency sneaking into any package fails CI
     # loudly and early — independent of the test job. Among other things this
     # protects bleve's pure-Go scorch backend (no leveldb/rocksdb CGo kvstore).
+    #
+    # ADR-067 step 12: skips when no Go-relevant file changed (see the
+    # `changes` job's `go` filter and its force-full list). `code` is still
+    # checked too — `go` narrows on top of it, never replaces it.
     runs-on: ubuntu-latest
-    needs: [changes, fast-tier]
-    if: success() && needs.changes.outputs.code == 'true'
+    needs: [changes, fast-tier, setup]
+    if: success() && needs.changes.outputs.code == 'true' && needs.changes.outputs.go == 'true'
     env:
       CGO_ENABLED: "0"
     steps:
@@ -623,13 +895,20 @@ jobs:
         with:
           node-version: "24"
 
+      - name: Download node_modules artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: node-modules-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Extract node_modules
+        run: tar -xf node_modules.tar
+
       - name: Build SPA
         # pkg/gateway/embed.go has //go:embed all:spa and pkg/gateway/spa/ is
         # gitignored. Vite builds into dist/spa; we copy it into the embed
         # target so the CGO=0 build can resolve the //go:embed directive.
         run: |
           set -euo pipefail
-          npm ci
           npm run build
           rm -rf pkg/gateway/spa
           cp -r dist/spa pkg/gateway/spa
@@ -663,9 +942,16 @@ jobs:
 
   test:
     name: Tests
+    # ADR-067 step 12: skips when no Go-relevant file changed (see the
+    # `changes` job's `go` filter and its force-full list). `code` is still
+    # checked too — `go` narrows on top of it, never replaces it. Downstream
+    # `security`/`perf-smoke` (needs: this job) and `e2e-plan`/`playwright`
+    # (needs: this job too, but NOT go-gated — they exercise the full stack
+    # and must still run on an spa-only change) each account for this job's
+    # possible 'skipped' result explicitly — see their own comments.
     runs-on: ubuntu-latest
-    needs: [changes, fast-tier]
-    if: success() && needs.changes.outputs.code == 'true'
+    needs: [changes, fast-tier, setup]
+    if: success() && needs.changes.outputs.code == 'true' && needs.changes.outputs.go == 'true'
     env:
       # See comment on the lint job above.
       CGO_ENABLED: "0"
@@ -687,10 +973,17 @@ jobs:
         with:
           node-version: "24"
 
+      - name: Download node_modules artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: node-modules-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Extract node_modules
+        run: tar -xf node_modules.tar
+
       - name: Build SPA
         run: |
           set -euo pipefail
-          npm ci
           npm run build
           rm -rf pkg/gateway/spa
           cp -r dist/spa pkg/gateway/spa
@@ -902,9 +1195,21 @@ jobs:
           CGO_ENABLED: "1"
         run: |
           set +e
-          # shellcheck disable=SC2046 — intentional word-splitting: race-packages.sh
-          # prints one package path per line with no globs/spaces to mis-split.
-          out=$(go test -race -tags goolm,stdjson -count=1 -timeout 900s $(scripts/race-packages.sh) 2>&1)
+          # race-packages.sh prints one package path per line. Read them into an
+          # array instead of relying on unquoted command-substitution splitting.
+          # The old form carried a suppression comment for SC2046 with an
+          # explanation appended after the rule id on the same line. shellcheck
+          # rejects that as malformed (SC1125) and ignores it, so the
+          # suppression never actually applied — the same trap as a nosec
+          # annotation with trailing prose. An array removes the need for one.
+          mapfile -t race_pkgs < <(scripts/race-packages.sh)
+          if [ ${#race_pkgs[@]} -eq 0 ]; then
+            echo "ERROR: scripts/race-packages.sh produced no packages." >&2
+            echo "Refusing to run: a bare 'go test -race' with no package list" >&2
+            echo "would report a pass without testing the intended packages." >&2
+            exit 1
+          fi
+          out=$(go test -race -tags goolm,stdjson -count=1 -timeout 900s "${race_pkgs[@]}" 2>&1)
           code=$?
           echo "$out"
           # DATA RACE is checked BEFORE the exit-code short-circuit on purpose: a
@@ -952,9 +1257,15 @@ jobs:
 
   security:
     name: Security Tests
+    # ADR-067 step 12: skips when no Go-relevant file changed (see the
+    # `changes` job's `go` filter and its force-full list). `code` is still
+    # checked too — `go` narrows on top of it, never replaces it. This is
+    # redundant with `test`'s own go-gate (needs: test, whose default
+    # cascade-skip would take this job down too) but stated explicitly here
+    # for clarity rather than relying on that cascade alone.
     runs-on: ubuntu-latest
-    needs: [changes, fast-tier, test]
-    if: success() && needs.changes.outputs.code == 'true'
+    needs: [changes, fast-tier, test, setup]
+    if: success() && needs.changes.outputs.code == 'true' && needs.changes.outputs.go == 'true'
     timeout-minutes: 15
     env:
       CGO_ENABLED: "0"
@@ -966,9 +1277,14 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: "24"
+      - name: Download node_modules artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: node-modules-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Extract node_modules
+        run: tar -xf node_modules.tar
       - name: Build SPA
         run: |
-          npm ci
           npm run build
           rm -rf pkg/gateway/spa
           cp -r dist/spa pkg/gateway/spa
@@ -1011,9 +1327,14 @@ jobs:
             --exclude './src/routeTree.gen.ts'
   perf-smoke:
     name: Perf Smoke
+    # ADR-067 step 12: skips when no Go-relevant file changed (see the
+    # `changes` job's `go` filter and its force-full list). `code` is still
+    # checked too — `go` narrows on top of it, never replaces it. Redundant
+    # with `test`'s own go-gate (needs: test) but stated explicitly here for
+    # clarity rather than relying on that cascade alone.
     runs-on: ubuntu-latest
-    needs: [changes, fast-tier, test]
-    if: success() && needs.changes.outputs.code == 'true'
+    needs: [changes, fast-tier, test, setup]
+    if: success() && needs.changes.outputs.code == 'true' && needs.changes.outputs.go == 'true'
     timeout-minutes: 10
     env:
       CGO_ENABLED: "0"
@@ -1031,10 +1352,17 @@ jobs:
         with:
           node-version: '24'
 
+      - name: Download node_modules artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: node-modules-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Extract node_modules
+        run: tar -xf node_modules.tar
+
       - name: Build SPA
         run: |
           set -euo pipefail
-          npm ci
           npm run build
           rm -rf pkg/gateway/spa
           cp -r dist/spa pkg/gateway/spa
@@ -1060,8 +1388,29 @@ jobs:
     # the expensive tier fast-tier exists to protect. Its needs on `test`
     # (unchanged from before this change) already short-circuits it whenever
     # fast-tier fails, since `test` itself needs fast-tier below.
+    #
+    # ADR-067 step 12: `test` is now go-gated (skips when go==false), but
+    # `playwright` — which needs THIS job's matrix output — is deliberately
+    # NOT go/spa-restricted: it exercises the full stack end-to-end and must
+    # still run on an spa-only PR even though `test` legitimately skipped in
+    # that case. A bare success() on `needs: test` would treat that
+    # legitimate skip as a failure and cascade-skip this job (and therefore
+    # playwright) too, so `test` is explicitly allowed to be 'skipped' here.
+    # A genuine test FAILURE (result == 'failure'/'cancelled') still blocks,
+    # exactly as before.
+    #
+    # `!cancelled()` leads the expression for the same reason as `fast-tier`
+    # above: without a status-check function, GitHub implicitly ANDs its own
+    # `success()` onto this `if:`, which would silently defeat the
+    # `(... == 'skipped')` tolerance below. `!cancelled()` is GitHub's
+    # documented alternative to `always()` for this — it removes the
+    # implicit gate without making the job eligible to start mid-cancellation.
     needs: [changes, test]
-    if: success() && needs.changes.outputs.code == 'true'
+    if: >-
+      !cancelled() &&
+      needs.changes.outputs.code == 'true' &&
+      needs.changes.result == 'success' &&
+      (needs.test.result == 'success' || needs.test.result == 'skipped')
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
     steps:
@@ -1076,9 +1425,29 @@ jobs:
 
   playwright:
     name: E2E — ${{ matrix.group }}
+    # Deliberately NOT go/spa-restricted (unlike vuln_check/cgo-gate/test/
+    # security/perf-smoke/lint above, or typecheck/lint-spa/vitest below):
+    # this exercises the full stack through a real browser and must still
+    # run on an spa-only PR, so it stays gated on `code` alone. Its `test`
+    # need is therefore explicitly allowed to be 'skipped' (go==false) as
+    # well as 'success' — see the comment on `e2e-plan` above for why a bare
+    # success() here would be wrong. A genuine failure/cancellation of any
+    # need still blocks, exactly as before.
+    #
+    # `!cancelled()` leads the expression for the same reason as `fast-tier`
+    # and `e2e-plan` above: without a status-check function, GitHub
+    # implicitly ANDs its own `success()` onto this `if:`, which would
+    # silently defeat the `(... == 'skipped')` tolerance below.
     runs-on: ubuntu-latest
-    needs: [changes, fast-tier, test, e2e-plan]
-    if: success() && needs.changes.outputs.code == 'true'
+    needs: [changes, fast-tier, test, e2e-plan, setup]
+    if: >-
+      !cancelled() &&
+      needs.changes.outputs.code == 'true' &&
+      needs.changes.result == 'success' &&
+      needs.fast-tier.result == 'success' &&
+      (needs.test.result == 'success' || needs.test.result == 'skipped') &&
+      needs.e2e-plan.result == 'success' &&
+      needs.setup.result == 'success'
     strategy:
       fail-fast: false
       # Groups, key slots, and spec lists come from tests/e2e/shards.json via the e2e-plan
@@ -1102,15 +1471,19 @@ jobs:
         uses: actions/setup-node@v7
         with:
           node-version: "24"
-          cache: "npm"
 
       - name: Setup Go
         uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
 
-      - name: Install Node dependencies
-        run: npm ci
+      - name: Download node_modules artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: node-modules-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Extract node_modules
+        run: tar -xf node_modules.tar
 
       - name: Build SPA
         # Vite outputs to dist/spa/. Must be synced into pkg/gateway/spa/ before

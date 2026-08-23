@@ -6,9 +6,6 @@
 package ui
 
 import (
-	"os"
-	"os/exec"
-
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 )
@@ -44,14 +41,19 @@ func (a *App) newHomePage() tview.Primitive {
 		list.AddItem("GATEWAY MANAGEMENT", "Manage Omnipus gateway daemon", 'g', func() {
 			a.navigateTo("gateway", a.newGatewayPage())
 		})
-		list.AddItem("CHAT: Start AI agent chat", "Launch interactive chat session", 'c', func() {
-			a.tapp.Suspend(func() {
-				cmd := exec.Command("omnipus", "agent")
-				cmd.Stdin = os.Stdin
-				cmd.Stdout = os.Stdout
-				cmd.Stderr = os.Stderr
-				_ = cmd.Run()
-			})
+		// This used to shell out to the binary's old "agent" subcommand, which
+		// was removed in the CLI redesign (cmd/omnipus/main.go::removedVerbs).
+		// The child printed a "was removed" notice and exited 1, but its result
+		// was assigned to _ , so pressing 'c' suspended the TUI, flashed an
+		// error nobody could read, and returned as if nothing had happened.
+		// There is no interactive CLI chat to point at — chat lives in the web
+		// UI — so the item now says where it went instead of failing silently.
+		list.AddItem("CHAT: Open the chat UI", "Chat moved to the web interface", 'c', func() {
+			a.showInfo("CHAT IS IN THE WEB UI",
+				"Interactive chat is no longer a CLI command.\n\n"+
+					"Start the daemon from GATEWAY MANAGEMENT, then open\n"+
+					"the web interface (http://localhost:5000 by default)\n"+
+					"and chat there.")
 		})
 		list.AddItem("QUIT SYSTEM", "Exit Omnipus Launcher", 'q', func() { a.tapp.Stop() })
 		if sel >= 0 && sel < list.GetItemCount() {

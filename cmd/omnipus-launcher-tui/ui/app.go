@@ -215,6 +215,23 @@ func (a *App) showError(msg string) {
 	a.showModal("error", modal)
 }
 
+// showInfo is showError's neutral twin: same modal, no red ERROR banner. Used
+// where the app has something to TELL the user rather than something that went
+// wrong (e.g. a feature that moved to the web UI).
+func (a *App) showInfo(title, msg string) {
+	modal := tview.NewModal().
+		SetText(" [#00f0ff::b]" + title + "[-::-]\n\n" + msg).
+		AddButtons([]string{"OK"}).
+		SetDoneFunc(func(_ int, _ string) {
+			a.hideModal("info")
+		})
+	modal.SetBackgroundColor(tcell.NewHexColor(0x1a1a2e))
+	modal.SetTextColor(tcell.NewHexColor(0xffffff))
+	modal.SetButtonBackgroundColor(tcell.NewHexColor(0x00f0ff))
+	modal.SetButtonTextColor(tcell.NewHexColor(0x050510))
+	a.showModal("info", modal)
+}
+
 func (a *App) confirmDelete(label string, onConfirm func()) {
 	modal := tview.NewModal().
 		SetText(" [red::b]DELETE WARNING[-::-]\n\nDelete " + label + "?\n[gray]This action cannot be undone.[-]").
