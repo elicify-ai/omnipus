@@ -15,7 +15,9 @@ import (
 
 // ── ADR-068 own contract files (T068-06) ─────────────────────────────────────
 // Traces to:
-//   contracts/components/schemas/SignInStartResponse.yaml      (FR-009, MIN-005)
+//   contracts/openapi.yaml#/components/schemas/SignInStartResponse (FR-008, inline oneOf)
+//   contracts/components/schemas/SignInStartResponseCliLogin.yaml  (FR-008)
+//   contracts/components/schemas/SignInStartResponseDeviceCode.yaml (FR-008/FR-044)
 //   contracts/components/schemas/SignInStatus.yaml             (FR-009, MAJ-006)
 //   contracts/components/schemas/OnboardingProviderApiKey.yaml (MAJ-014)
 //   contracts/components/schemas/OnboardingProviderSignIn.yaml (MAJ-014)
@@ -24,44 +26,112 @@ import (
 //   contracts/components/schemas/Provider.yaml                 (FR-038 / SC-012)
 
 // Generated enum const names (oapi-codegen v2.7.0 drops the type prefix when
-// the value is unique across the spec): CliLogin, NotSignedIn, SignedIn,
-// Expired. The union accessors are Discriminator() /
-// AsOnboardingProviderApiKey() / AsOnboardingProviderSignIn().
+// the value is unique across the spec): CliLogin, DeviceCode. The
+// SignInStatusState consts keep their prefix because "signed_in"/"expired"
+// also appear on Provider.status. The union accessors are Discriminator() /
+// AsOnboardingProviderApiKey() / AsOnboardingProviderSignIn() and
+// AsSignInStartResponseCliLogin() / AsSignInStartResponseDeviceCode().
 
-// SignInStartResponse — {method: "cli_login", instructions, command}; no
-// device-code fields, no other method value (spec: "the schema has no other
-// `method` value").
+// SignInStartResponse — a discriminated union hosted INLINE in openapi.yaml
+// (ADR-034 precedent), amended 2026-08-23 §8b (T068-34): `cli_login`
+// {method, instructions, command} for codex-cli / github-copilot, and
+// `device_code` {method, verification_url, user_code, device_auth_id,
+// expires_at, interval_seconds} for openai-chatgpt. Each variant is one
+// schema file, validated here per file; the union wrapper is exercised via
+// the generated accessors.
 
-func TestContract_SignInStartResponse_Populated(t *testing.T) {
-	mustPassComponent(t, "SignInStartResponse", SignInStartResponse{
+func TestContract_SignInStartResponseCliLogin_Populated(t *testing.T) {
+	mustPassComponent(t, "SignInStartResponseCliLogin", SignInStartResponseCliLogin{
 		Method:       CliLogin,
 		Command:      "codex login",
 		Instructions: "Run `codex login` in a terminal, then click Check sign-in.",
 	})
 }
 
-func TestContract_SignInStartResponse_ZeroValue(t *testing.T) {
-	mustFailComponent(t, "SignInStartResponse", SignInStartResponse{},
+func TestContract_SignInStartResponseCliLogin_ZeroValue(t *testing.T) {
+	mustFailComponent(t, "SignInStartResponseCliLogin", SignInStartResponseCliLogin{},
 		"method const, command and instructions are all required and non-empty")
 }
 
-func TestContract_SignInStartResponse_OtherMethodRejected(t *testing.T) {
+func TestContract_SignInStartResponseCliLogin_OtherMethodRejected(t *testing.T) {
 	raw := []byte(`{"method":"device_code","command":"codex login","instructions":"x"}`)
-	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "SignInStartResponse", raw),
-		"cli_login is the only method value (MIN-005)")
+	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "SignInStartResponseCliLogin", raw),
+		"the cli_login variant pins method to cli_login")
 }
 
-func TestContract_SignInStartResponse_DeviceCodeFieldsRejected(t *testing.T) {
+func TestContract_SignInStartResponseCliLogin_DeviceCodeFieldsRejected(t *testing.T) {
 	raw := []byte(`{"method":"cli_login","command":"codex login","instructions":"x","user_code":"ABCD-EFGH"}`)
-	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "SignInStartResponse", raw),
-		"no device-code fields — additionalProperties: false")
+	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "SignInStartResponseCliLogin", raw),
+		"no device-code fields on the cli_login variant — additionalProperties: false")
 }
 
-// SignInStatus — {state: not_signed_in|signed_in|expired, account_label?,
-// expires_at?}; no `pending`.
+func deviceCodeFixture() SignInStartResponseDeviceCode {
+	return SignInStartResponseDeviceCode{
+		Method:          DeviceCode,
+		VerificationUrl: "https://auth.openai.com/codex/device",
+		UserCode:        "WDJB-MJHT",
+		DeviceAuthId:    "das_9f3a2b1c",
+		ExpiresAt:       time.Date(2026, 8, 23, 12, 15, 0, 0, time.UTC),
+		IntervalSeconds: 5,
+	}
+}
+
+func TestContract_SignInStartResponseDeviceCode_Populated(t *testing.T) {
+	mustPassComponent(t, "SignInStartResponseDeviceCode", deviceCodeFixture())
+}
+
+func TestContract_SignInStartResponseDeviceCode_ZeroValue(t *testing.T) {
+	mustFailComponent(t, "SignInStartResponseDeviceCode", SignInStartResponseDeviceCode{},
+		"method const, verification_url, user_code, device_auth_id, expires_at and interval_seconds are all required")
+}
+
+func TestContract_SignInStartResponseDeviceCode_IntervalBounds(t *testing.T) {
+	low := deviceCodeFixture()
+	low.IntervalSeconds = 0
+	mustFailComponent(t, "SignInStartResponseDeviceCode", low, "interval_seconds minimum 1")
+	high := deviceCodeFixture()
+	high.IntervalSeconds = 31
+	mustFailComponent(t, "SignInStartResponseDeviceCode", high, "interval_seconds maximum 30 (FR-045)")
+}
+
+func TestContract_SignInStartResponseDeviceCode_CliLoginFieldsRejected(t *testing.T) {
+	raw := []byte(`{"method":"device_code","verification_url":"https://x","user_code":"A","device_auth_id":"d","expires_at":"2026-08-23T12:15:00Z","interval_seconds":5,"command":"codex login"}`)
+	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "SignInStartResponseDeviceCode", raw),
+		"no cli_login fields on the device_code variant — additionalProperties: false")
+}
+
+func TestContract_SignInStartResponse_UnionRoundTrip(t *testing.T) {
+	var u SignInStartResponse
+	require.NoError(t, u.FromSignInStartResponseDeviceCode(deviceCodeFixture()))
+	b, err := json.Marshal(u)
+	require.NoError(t, err)
+	var back SignInStartResponse
+	require.NoError(t, json.Unmarshal(b, &back))
+	disc, err := back.Discriminator()
+	require.NoError(t, err)
+	assert.Equal(t, "device_code", disc)
+	v, err := back.AsSignInStartResponseDeviceCode()
+	require.NoError(t, err)
+	assert.Equal(t, "das_9f3a2b1c", v.DeviceAuthId)
+
+	var c SignInStartResponse
+	require.NoError(t, c.FromSignInStartResponseCliLogin(SignInStartResponseCliLogin{
+		Method: CliLogin, Command: "copilot login", Instructions: "x",
+	}))
+	disc, err = c.Discriminator()
+	require.NoError(t, err)
+	assert.Equal(t, "cli_login", disc)
+}
+
+// SignInStatus — {state: not_signed_in|pending|signed_in|expired,
+// account_label?, expires_at?}; `pending` added by the 2026-08-23 §8b
+// amendment for open device-code sessions.
 
 func TestContract_SignInStatus_AllStates(t *testing.T) {
-	for _, st := range []SignInStatusState{NotSignedIn, SignedIn, Expired} {
+	for _, st := range []SignInStatusState{
+		SignInStatusStateNotSignedIn, SignInStatusStatePending,
+		SignInStatusStateSignedIn, SignInStatusStateExpired,
+	} {
 		mustPassComponent(t, "SignInStatus", SignInStatus{State: st})
 	}
 }
@@ -70,7 +140,7 @@ func TestContract_SignInStatus_Populated(t *testing.T) {
 	label := "user_abc123"
 	exp := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
 	mustPassComponent(t, "SignInStatus", SignInStatus{
-		State:        SignedIn,
+		State:        SignInStatusStateSignedIn,
 		AccountLabel: &label,
 		ExpiresAt:    &exp,
 	})
@@ -80,15 +150,15 @@ func TestContract_SignInStatus_ZeroValue(t *testing.T) {
 	mustFailComponent(t, "SignInStatus", SignInStatus{}, "state is required")
 }
 
-func TestContract_SignInStatus_PendingRejected(t *testing.T) {
-	raw := []byte(`{"state":"pending"}`)
+func TestContract_SignInStatus_UnknownStateRejected(t *testing.T) {
+	raw := []byte(`{"state":"refreshing"}`)
 	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "SignInStatus", raw),
-		"there is no pending state (MIN-005)")
+		"state is a closed enum of exactly four values")
 }
 
 func TestContract_SignInStatus_AccountLabelOver128Rejected(t *testing.T) {
 	label := strings.Repeat("a", 129)
-	mustFailComponent(t, "SignInStatus", SignInStatus{State: SignedIn, AccountLabel: &label},
+	mustFailComponent(t, "SignInStatus", SignInStatus{State: SignInStatusStateSignedIn, AccountLabel: &label},
 		"account_label maxLength 128")
 }
 
