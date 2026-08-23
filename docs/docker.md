@@ -4,38 +4,70 @@
 
 ## What runs in the container
 
-Omnipus is a **single binary** (`omnipus`) with the React SPA compiled in via `go:embed`. It opens two TCP listeners:
+Omnipus is a **single binary** (`omnipus`) with the React SPA compiled in via `go:embed`. It opens **one** TCP listener:
 
 | Listener | Default port | Purpose |
 |---|---|---|
-| Main | `5000` | SPA, REST API, WebSocket/SSE chat |
-| Preview | `5001` (main + 1) | Agent-generated HTML previews (isolated origin) |
+| Main | `5000` | SPA, REST API, WebSocket/SSE chat, and agent-generated previews under `/preview/` |
 
-Ports are read from `config.json` (`gateway.port`, `gateway.preview_port`) or the environment variables `OMNIPUS_GATEWAY_PORT` / `OMNIPUS_GATEWAY_PREVIEW_PORT`. The preview port auto-derives to `gateway.port + 1` when not set explicitly.
+There is no second preview port. ADR-044 moved agent previews onto the main listener, and the `gateway.preview_port` / `preview_host` / `preview_origin` config keys were deleted outright. If you are following an older guide that publishes `5001`, drop it — nothing listens there.
 
-All Omnipus data — `config.json`, `master.key`, sessions, tasks, audit log — lives under `~/.omnipus/` (i.e. `/root/.omnipus/` in the container as root, or the path set by `OMNIPUS_HOME`).
+The port comes from `config.json` (`gateway.port`) or the environment variable `OMNIPUS_GATEWAY_PORT`.
+
+**The bind address is the one setting a container operator must not skip.** Omnipus defaults to binding loopback only — `gateway.host` is `localhost` in the seeded `config.json` (`pkg/datamodel/init.go`) and `127.0.0.1` in the compiled defaults (`pkg/config/defaults.go`). Loopback inside a container means loopback *of the container*, so a published port mapping reaches a closed door. Set `OMNIPUS_GATEWAY_HOST=0.0.0.0` (or `gateway.host` in `config.json`) whenever you publish a port. The examples below do this explicitly.
+
+All Omnipus data — `config.json`, `master.key`, sessions, tasks, audit log — lives under `~/.omnipus/` (i.e. `/root/.omnipus/` in the published image, which runs as root, or the path set by `OMNIPUS_HOME`).
 
 ---
 
-## Image variants
+## Images
 
-Three `Dockerfile`s ship in `docker/`. Pick the variant that matches the agent tools you intend to run.
+Two `Dockerfile`s ship in `docker/`. They are not two flavours of the same build — they are built by different things, for different reasons.
 
-| Variant | Dockerfile | Built size | Browser tools | Python MCP | Use case |
-|---|---|---|---|---|---|
-| **Minimal** (published) | [`docker/Dockerfile`](../docker/Dockerfile) | ~71 MB | ❌ | ❌ | Chat, channels, file/exec tools. The image published as `ghcr.io/elicify-ai/omnipus:latest`. |
-| **Heavy** (build-it-yourself) | [`docker/Dockerfile.heavy`](../docker/Dockerfile.heavy) | ~1.08 GB | ✅ apk Chromium | ✅ uv/uvx + python3 | `browser.*` tools, `web_serve` dev-server preview, `agent-browser`, Python MCP servers. |
-| **Full** (vestigial) | `docker/Dockerfile.full` | — | — | — | Inherited from upstream, not maintained as a v0.1 product. See [Vestigial files](#vestigial-files). |
+| Image | Dockerfile | How it is built | Browser tools | Python / Node MCP |
+|---|---|---|---|---|
+| **Published release** — `ghcr.io/elicify-ai/omnipus:latest` | [`docker/Dockerfile.goreleaser`](../docker/Dockerfile.goreleaser) | goreleaser hands it a prebuilt per-architecture binary; the Dockerfile only copies it onto `alpine:3.21` with `ca-certificates` and `tzdata` | No | No |
+| **Heavy** — build it yourself | [`docker/Dockerfile.heavy`](../docker/Dockerfile.heavy) | Builds the SPA and the Go binary from source, then layers a full browser and scripting runtime | Yes — bundled Chrome-for-Testing | Yes — Node 24, Python 3, `uv`/`uvx`, `git`, `jq` |
 
-All variants share the same three-stage build internally: `node:24-alpine` compiles the SPA → `golang:1.26.3-alpine` embeds it and builds the binary → a runtime stage layers on what's needed (`alpine:3.23` for minimal, `node:24-alpine3.23` + chromium/python/uv for heavy). The Go binary itself is identical across variants.
+### One image is the intent, not yet the reality
 
-### Minimal image — what it can and can't do
+ADR-067 decided the project should ship **one** container image, the heavy one. That decision is recorded, and part of it has landed — but the consolidation is not finished, and this guide describes what exists today rather than what is planned:
 
-The minimal image (`ghcr.io/elicify-ai/omnipus:latest`) **deliberately omits Chromium** to stay small. Without Chromium, the entire `browser.*` tool family (`browser.navigate`, `browser.screenshot`, `browser.read_content`, `browser.console_logs`, `browser.action`) will not work, nor will `web_serve` dev-server previews (the iframe-preview feature on the chat surface) or any custom skill or MCP server that shells out to a system chromium.
+- The image you **pull** is still the small Alpine one. Its contents did not change in the consolidation work.
+- `Dockerfile.heavy` is still **build-it-yourself**. Nothing publishes it.
+- Merging the two is genuine redesign work, not a path swap: goreleaser's container model copies an already-built binary, while the heavy image compiles its own. A single Dockerfile would have to accept goreleaser's prebuilt binary *and* carry the heavy runtime. That is tracked as follow-up work. See ADR-067 §10.1.
 
-The gateway falls through to its managed-Chromium download path on first call, but the downloaded binary is glibc-linked and Alpine is musl — `exec` returns a misleading `no such file or directory` (the missing ELF interpreter is `/lib64/ld-linux-x86-64.so.2`, not the binary itself). The Max agent gracefully degrades to `web_fetch` and surfaces the failure inline in chat.
+### What did change: `make docker-build`
 
-**If you need browser tools, use the heavy image.** Adding `apk add chromium` to a derived `FROM ghcr.io/elicify-ai/omnipus:latest` works too — the gateway's PATH lookup (`pkg/tools/browser/manager.go::resolveExecPath`) picks up `/usr/bin/chromium-browser` automatically once installed.
+`make docker-build` used to build a small Alpine image from source. **It now builds `docker/Dockerfile.heavy`**, tagged `omnipus:latest` by default (override with `DOCKER_IMAGE`):
+
+```bash
+make docker-build
+```
+
+If you script against this target, budget for the difference. The image it used to produce was on the order of 70 MB; the heavy image is on the order of a gigabyte, because it carries a full Chrome, Node 24, Python 3, `uv`, `git` and `jq`. That is a deliberate trade — a container is where a missing dependency hurts most — but it is a real jump in download size, disk footprint and installed attack surface.
+
+The other Docker make targets:
+
+| Target | What it does |
+|---|---|
+| `make docker-build` | Build the heavy image from `docker/Dockerfile.heavy` |
+| `make docker-test` | Build the heavy image and smoke-test its runtime tooling (`scripts/test-docker-mcp.sh`) |
+| `make docker-run` | `docker compose --profile gateway up` against the **published** image |
+| `make docker-run-agent` | `docker compose run --rm omnipus-agent` (interactive) |
+| `make docker-clean` | `docker compose down -v` and remove the local image tags |
+
+The former `-full` variants of these targets were deleted along with the Dockerfiles they referenced.
+
+### The published image and browser tools
+
+The published image (`ghcr.io/elicify-ai/omnipus:latest`) contains **no browser**. Without one, the entire `browser.*` tool family (`browser.navigate`, `browser.screenshot`, `browser.read_content`, `browser.console_logs`, `browser.action`) will not work, nor will `web_serve` dev-server previews, nor any skill or MCP server that shells out to a system Chrome.
+
+It also does not carry the bundled Chrome-for-Testing payload that the `.tar.gz` archives and the `.deb` / `.rpm` packages ship — the Dockerfile copies the `omnipus` binary and nothing else.
+
+The gateway falls through to its managed-Chromium download path on first call, and on this image that download does not help: the downloaded binary is glibc-linked and Alpine is musl, so launching it fails with a misleading `no such file or directory` (the missing piece is the ELF interpreter `/lib64/ld-linux-x86-64.so.2`, not the binary). The agent degrades to `web_fetch` and surfaces the failure inline in chat.
+
+**If you need browser tools, build the heavy image.**
 
 ### Building the heavy image
 
@@ -43,35 +75,50 @@ The gateway falls through to its managed-Chromium download path on first call, b
 docker build -t omnipus:heavy -f docker/Dockerfile.heavy .
 ```
 
-Then run it like the minimal image, but bind the data volume to `/home/omnipus/.omnipus` (heavy runs as UID 1000 like the local-build minimal):
+Run it from the repository root, not from `docker/` — the build context must include the whole tree.
+
+Three stages: `node:24-alpine` builds the SPA into `dist/spa/`; `golang:1.26.6-alpine` copies that output into `pkg/gateway/spa/` (satisfying the `//go:embed all:spa` directive) and builds the binary; `node:24-bookworm-slim` is the runtime, which adds Chrome-for-Testing, Python 3, `uv`/`uvx`, `git`, `jq` and the shared libraries Chrome links against.
+
+Both builder stages are pinned to the **build** platform and cross-compile, so a multi-architecture build does not run `npm ci` and `go build` under emulation:
+
+```bash
+docker buildx build --platform linux/amd64,linux/arm64 -f docker/Dockerfile.heavy .
+```
+
+The runtime stage deliberately has no platform pin — it installs native packages and fetches the Chrome build for the real target architecture.
+
+The heavy image runs as a non-root user `omnipus` (UID 1000), so bind-mounts target `/home/omnipus/.omnipus`:
 
 ```bash
 docker run -d \
   -p 127.0.0.1:5000:5000 \
-  -p 127.0.0.1:5001:5001 \
+  -e OMNIPUS_GATEWAY_HOST=0.0.0.0 \
   -v "$PWD/data:/home/omnipus/.omnipus" \
   omnipus:heavy
 ```
 
-Onboarding flow, sandbox behaviour, and the rest of this guide apply identically once the container is up.
+It already sets `OMNIPUS_GATEWAY_HOST=0.0.0.0` and `OMNIPUS_SANDBOX_MODE=permissive` in the image, so the `-e` flag above is belt-and-braces rather than strictly required. See [Sandbox under Docker](#sandbox-under-docker) for what the permissive default means.
+
+Onboarding, sandbox behaviour and the rest of this guide apply identically once the container is up.
 
 ---
 
-## Release image vs. dev image
+## Entrypoints
 
-| Image | Source | Entrypoint |
+| Image | Entrypoint | Effective command |
 |---|---|---|
-| `ghcr.io/elicify-ai/omnipus:latest` | Built by goreleaser on release | `docker/entrypoint.sh` |
-| Local build (`docker build -f docker/Dockerfile .`) | Multi-stage SPA + Go build | `omnipus start` directly |
-| Local build (`docker build -f docker/Dockerfile.heavy .`) | Same SPA + Go build, chromium + python + uv runtime | `omnipus start` directly |
+| Published release | `docker/entrypoint.sh` | `exec omnipus start "$@"` |
+| Heavy (local build) | `omnipus` | `omnipus start --allow-empty` |
 
-The release image uses `entrypoint.sh`, which is now a thin `exec omnipus gateway "$@"` wrapper (no first-run gate). Locally-built images (minimal and heavy) start the gateway directly — they self-bootstrap on the first run.
+`entrypoint.sh` is a one-line wrapper around `omnipus start` with no first-run gate. `gateway` still works as an alias for `start`, so an older `docker run ... omnipus gateway` command line keeps working.
+
+`--allow-empty` (`-E`) is now a **hidden, deprecated no-op**. The gateway always boots into limited mode when no provider is configured, which is exactly what the flag used to request, so scripts that still pass it keep working and scripts that drop it behave identically.
 
 ---
 
 ## Before you start
 
-> The release image (`ghcr.io/elicify-ai/omnipus:latest`) starts the gateway directly on every boot. The previous first-run gate that called `omnipus onboard` and exited was removed (see `docker/entrypoint.sh`); onboarding is now driven from the web UI at `/onboarding` (visit once the gateway is up) or from `docker exec -it <ctr> omnipus onboard`. The default `CMD` includes `--allow-empty` so the gateway comes up before any provider is configured — the SPA onboarding wizard adds the first one. See [First-run behavior](#first-run-behavior) for the full explanation.
+> The container boots straight into the gateway on every start. Onboarding is driven from the web UI at `/onboarding` (visit it once the gateway is up) or from `docker exec -it <ctr> omnipus onboard`. The gateway comes up before any provider is configured, so the SPA wizard can add the first one. See [First-run behavior](#first-run-behavior).
 
 ---
 
@@ -83,7 +130,7 @@ mkdir -p ./data
 
 docker run -d \
   -p 127.0.0.1:5000:5000 \
-  -p 127.0.0.1:5001:5001 \
+  -e OMNIPUS_GATEWAY_HOST=0.0.0.0 \
   -v "$PWD/data:/root/.omnipus" \
   ghcr.io/elicify-ai/omnipus:latest
 
@@ -91,19 +138,20 @@ docker run -d \
 open http://localhost:5000
 ```
 
-The onboarding wizard (at `/onboarding`) walks through: provider selection, API key entry, model selection, and account creation. Complete it before using the chat UI.
+`OMNIPUS_GATEWAY_HOST=0.0.0.0` is required on the published image. Without it the gateway binds the container's own loopback interface and `http://localhost:5000` on your machine connects to nothing.
 
-> Port `5000` is widely used by other local dev servers (macOS AirPlay receiver, Flask defaults, etc.) and `3000` is the Next.js default. If the host port collides, pick a free port (e.g. `5050`) and use it consistently in `config.json`, the `-p` flag, and the URL you open.
+The onboarding wizard (at `/onboarding`) walks through provider selection, API key entry, model selection and account creation. Complete it before using the chat UI.
 
-To override the port via environment instead of editing `config.json`:
+> Port `5000` is widely used by other local dev servers (the macOS AirPlay receiver, Flask defaults, and so on). If the host port collides, pick a free port (e.g. `5050`) and use it consistently in the `-p` flag, the in-container port, and the URL you open.
+
+To move the port without editing `config.json`:
 
 ```bash
 docker run -d \
   -p 127.0.0.1:5050:5050 \
-  -p 127.0.0.1:5051:5051 \
   -v "$PWD/data:/root/.omnipus" \
+  -e OMNIPUS_GATEWAY_HOST=0.0.0.0 \
   -e OMNIPUS_GATEWAY_PORT=5050 \
-  -e OMNIPUS_GATEWAY_PREVIEW_PORT=5051 \
   ghcr.io/elicify-ai/omnipus:latest
 ```
 
@@ -111,13 +159,21 @@ docker run -d \
 
 ## Quick start — docker compose
 
-The compose file is at `docker/docker-compose.yml`. Run from the repo root:
+The compose file is at `docker/docker-compose.yml`. It is **pull-only**: both services reference the published `ghcr.io/elicify-ai/omnipus:latest` tag and neither has a `build:` section, so `docker compose build` against it builds nothing. Use `make docker-build` (or the `docker build` command above) to build an image.
+
+Run from the repo root:
 
 ```bash
 docker compose -f docker/docker-compose.yml --profile gateway up -d
 ```
 
-The compose file maps `127.0.0.1:5000:5000` and `127.0.0.1:5001:5001` and sets `OMNIPUS_GATEWAY_PORT=5000` + `OMNIPUS_GATEWAY_PREVIEW_PORT=5001` on the gateway service, so the in-container listener matches the host port out of the box. The gateway self-bootstraps on first run (seeded port `5000`, no providers) — the onboarding wizard at `/onboarding` adds the first provider.
+The compose file maps `127.0.0.1:5000:5000` and sets `OMNIPUS_GATEWAY_PORT=5000` on the gateway service so the in-container listener matches the host port. It does **not** currently set `OMNIPUS_GATEWAY_HOST`, so add it before the mapping is reachable:
+
+```yaml
+    environment:
+      - OMNIPUS_GATEWAY_PORT=5000
+      - OMNIPUS_GATEWAY_HOST=0.0.0.0
+```
 
 Check logs:
 
@@ -133,30 +189,30 @@ docker compose -f docker/docker-compose.yml --profile gateway down
 
 ### Agent profile (one-shot query)
 
-The `agent` profile runs a single query and exits:
+The `agent` profile runs a single query and exits. The one-shot form is `omnipus <agent-name> "<prompt>"` — the agent's name comes first, then the prompt:
 
 ```bash
-docker compose -f docker/docker-compose.yml run --rm omnipus-agent -m "What is 2+2?"
+docker compose -f docker/docker-compose.yml run --rm omnipus-agent mia "What is 2+2?"
 ```
+
+`mia` is the default assistant in the built-in roster (`mia`, `jim`, `ray`, `ava`). Run the container with no arguments to print the roster.
+
+Two prerequisites, because the one-shot command is a **client** rather than a self-contained run:
+
+1. **Onboarding must already be complete in the shared `./data` directory.** The command reads `cli.token` from the data directory and fails with `no CLI key found — run 'omnipus start'` if the gateway has never started.
+2. **It talks to `localhost` inside its own container**, not to the separate `omnipus-gateway` container. If no gateway is listening there and a non-interactive master key is on disk, it starts one itself and retries.
+
+> **Removed CLI verbs.** `agent`, `auth`, `status`, `cron`, `migrate`, `model` and `skills` were removed in the CLI redesign (`cmd/omnipus/main.go`'s `removedVerbs`). Typing one prints a pointer to `omnipus --help` and exits non-zero. In particular there is no `omnipus agent` subcommand any more — that is why the compose entrypoint is a bare `["omnipus"]`. `gateway` is the one survivor, kept as an alias for `start`.
 
 ---
 
 ## First-run behavior
 
-The release image (`ghcr.io/elicify-ai/omnipus:latest`) uses `docker/entrypoint.sh`, which has been simplified to a single line:
+There is **no first-run gate**. The container boots straight into the gateway on every start, on both images. The gateway comes up even before any provider is configured; the SPA onboarding wizard at `/onboarding` adds the first one. If you prefer to drive onboarding from a terminal, run `docker exec -it <ctr> omnipus onboard` against the running container.
 
-```sh
-exec omnipus gateway "$@"
-```
+The previous gate called `omnipus onboard` and exited before the gateway could start; the command was a print-only stub at the time. See issue #159 for the history.
 
-There is **no first-run gate**. The container boots straight into the gateway on every start. The image's `CMD` includes `--allow-empty` so the gateway comes up even before any provider is configured — the SPA onboarding wizard at `/onboarding` adds the first one. If you prefer to drive onboarding from the terminal, run `docker exec -it <ctr> omnipus onboard` against the running container.
-
-The previous first-run gate (which called `omnipus onboard` and exited before the gateway could start) was removed; that command was a print-only stub. See issue #159 for the history.
-
-The local-build images (`docker/Dockerfile`, `docker/Dockerfile.heavy`) don't use `entrypoint.sh` — they `exec` the `omnipus` binary directly with `CMD ["gateway", "--allow-empty"]`. On the first start the gateway:
-
-1. Calls `datamodel.Init()`, which creates `~/.omnipus/` subdirectories and writes a minimal `config.json` (seeded port `5000`, no providers).
-2. Boots into onboarding mode. Visit `http://localhost:5000/onboarding` (the seeded port) to complete setup, or override via `OMNIPUS_GATEWAY_PORT`.
+On the first start the gateway calls `datamodel.Init()`, which creates the `~/.omnipus/` subdirectories and writes a minimal `config.json` — seeded host `localhost`, port `5000`, no providers, no agents. Visit `http://localhost:5000/onboarding` to complete setup.
 
 ---
 
@@ -166,21 +222,17 @@ The data path inside the container depends on which image you use:
 
 | Image | Runs as | Data path inside container |
 |---|---|---|
-| `ghcr.io/elicify-ai/omnipus:latest` (release) | `root` | `/root/.omnipus` |
-| Local build (`docker build -f docker/Dockerfile .`) | `omnipus` (UID 1000) | `/home/omnipus/.omnipus` |
-| Local build (`docker build -f docker/Dockerfile.heavy .`) | `omnipus` (UID 1000) | `/home/omnipus/.omnipus` |
+| `ghcr.io/elicify-ai/omnipus:latest` (published) | `root` | `/root/.omnipus` |
+| Heavy (`docker build -f docker/Dockerfile.heavy .`) | `omnipus` (UID 1000) | `/home/omnipus/.omnipus` |
 
-The `docker run` and compose examples above use `/root/.omnipus` because they target the release image. If you bind-mount against a locally-built image, change the right-hand side accordingly:
+The `docker run` and compose examples above use `/root/.omnipus` because they target the published image. Against a locally-built heavy image, change the right-hand side:
 
 ```bash
 docker run -d \
   -p 127.0.0.1:5000:5000 \
-  -p 127.0.0.1:5001:5001 \
   -v "$PWD/data:/home/omnipus/.omnipus" \
-  omnipus:local
+  omnipus:heavy
 ```
-
-(The local-build image self-bootstraps via `datamodel.Init()` and uses the seeded port `5000` unless overridden.)
 
 Either way, the directory layout is the same:
 
@@ -189,6 +241,7 @@ Either way, the directory layout is the same:
 | `config.json` | Main config: providers, agents, gateway, channels |
 | `master.key` | AES-256 encryption key (0600). **Back this up.** |
 | `credentials.json` | Encrypted credential store (AES-256-GCM + Argon2id) |
+| `cli.token` | Plaintext CLI key (0600), used by one-shot `omnipus <agent> "…"` runs |
 | `sessions/` | Day-partitioned JSONL transcripts |
 | `tasks/` | Per-task JSON files |
 | `agents/` | Custom agent definitions (AGENT.md + SOUL.md) |
@@ -196,7 +249,7 @@ Either way, the directory layout is the same:
 
 Mount the entire data directory as a single named volume or bind-mount. Splitting sub-paths into separate mounts is not supported.
 
-**Back up `master.key`.** Losing it makes every credential in `credentials.json` permanently unrecoverable. For headless deployments, inject the key via `OMNIPUS_MASTER_KEY` (64-char hex) or `OMNIPUS_KEY_FILE` (path to a 0600 file) instead of relying on the auto-generated key file.
+**Back up `master.key`.** Losing it makes every credential in `credentials.json` permanently unrecoverable. For headless deployments, inject the key via `OMNIPUS_MASTER_KEY` (64-character hex) or `OMNIPUS_KEY_FILE` (path to a 0600 file) instead of relying on the auto-generated key file.
 
 ---
 
@@ -209,80 +262,72 @@ docker pull ghcr.io/elicify-ai/omnipus:latest
 docker pull ghcr.io/elicify-ai/omnipus:v0.1.0
 ```
 
----
-
-## Building the image locally
-
-The `docker/Dockerfile` is a multi-stage build that compiles the SPA and the Go binary in one step. Run from the repo root (not from `docker/`):
-
-```bash
-docker build -f docker/Dockerfile -t omnipus:local .
-```
-
-The build is three stages: a Node stage that builds the React SPA into `dist/spa/`, a Go stage that copies the SPA output into `pkg/gateway/spa/` before `go build` (satisfying the `//go:embed all:spa` directive), and a minimal Alpine runtime. Check `docker/Dockerfile` for current toolchain versions — they move with upstream.
-
-Build arguments are not required. The image installs `ca-certificates`, `tzdata`, and `curl` for the health check.
-
-The local-build image runs as a non-root user `omnipus` (UID 1000), so bind-mounts must target `/home/omnipus/.omnipus` rather than `/root/.omnipus` — see [Volume layout](#volume-layout).
+Releases publish `linux/amd64` and `linux/arm64`. Nightly builds publish a `:nightly` tag instead of `:latest`.
 
 ---
 
 ## Port exposure and security
 
-By default, both the compose file and the recommended `docker run` command bind to `127.0.0.1`, making the gateway reachable only from localhost. This is intentional: port 5000 (or whichever port you configure) serves the authenticated API and the onboarding wizard. Anyone who can reach the port before onboarding completes can claim the account.
+By default, both the compose file and the recommended `docker run` command bind the **host** side to `127.0.0.1`, making the gateway reachable only from the machine running Docker. This is intentional: the port serves the authenticated API and the onboarding wizard, and anyone who reaches it before onboarding completes can claim the account.
 
-To expose the gateway to a LAN or public IP, change the bind address:
+Note the two different bind addresses at work. `-p 127.0.0.1:5000:5000` restricts who on your network can reach Docker's published port. `OMNIPUS_GATEWAY_HOST=0.0.0.0` controls the interface the gateway binds *inside* the container, where `0.0.0.0` is what makes the published port work at all. Setting the second does not expose you to the network; the first is what decides that.
+
+To expose the gateway to a LAN or public IP, change the host side:
 
 ```bash
 docker run -d \
   -p 0.0.0.0:5000:5000 \
-  -p 0.0.0.0:5001:5001 \
+  -e OMNIPUS_GATEWAY_HOST=0.0.0.0 \
   -v "$PWD/data:/root/.omnipus" \
   ghcr.io/elicify-ai/omnipus:latest
 ```
 
 Do this only after onboarding is complete and a strong admin password is set.
 
-### Three Flags Every Docker Operator Should Set Deliberately
+### Three flags every Docker operator should set deliberately
 
-**`gateway.sandbox.mode`** (config.json) or CLI `--sandbox=enforce|permissive|off`. Defaults to `enforce` when the kernel supports Landlock + seccomp; falls back automatically otherwise. Verify after first boot with `omnipus doctor` (or `gateway.log` — see [Sandbox under Docker](#sandbox-under-docker)). See [docs/operations/security-considerations.md](operations/security-considerations.md) for the full threat model.
+**`sandbox.mode`** (top level of `config.json`, not under `gateway`), or the environment variable `OMNIPUS_SANDBOX_MODE`, or the CLI flag `--sandbox=enforce|permissive|off`. Defaults to `enforce` when the kernel supports Landlock and seccomp, and falls back automatically otherwise — but **the heavy image ships `OMNIPUS_SANDBOX_MODE=permissive`**, so in that image kernel-level confinement is off unless you override it. See [Sandbox under Docker](#sandbox-under-docker) and [docs/operations/security-considerations.md](operations/security-considerations.md).
 
 **`gateway.trust_xff`** — leave `false` unless you front the container with a reverse proxy. When `true`, the gateway honours `X-Forwarded-For` for audit logs and rate-limit keys. Setting it `true` without a trusted proxy lets any client spoof their IP. See [reverse-proxy.md](operations/reverse-proxy.md).
 
-**`gateway.dev_mode_bypass`** — **never set this `true` in any Docker deployment.** It disables auth on routes that haven't completed onboarding and is intended for unit-test scaffolding only.
+**`gateway.dev_mode_bypass`** — **never set this `true` in any Docker deployment.** It disables auth on routes that have not completed onboarding and exists for unit-test scaffolding only.
 
 ---
 
 ## Sandbox under Docker
 
-Omnipus's kernel sandbox uses Landlock + seccomp on Linux 5.13+ to constrain the gateway process itself (see CLAUDE.md hard-constraint #4 and [security-considerations.md](operations/security-considerations.md)). Docker's defaults interact with this in non-obvious ways:
+Omnipus's kernel sandbox uses Landlock and seccomp on Linux 5.13+ to constrain the gateway process itself (see CLAUDE.md hard-constraint #4 and [security-considerations.md](operations/security-considerations.md)). Docker's defaults interact with this in non-obvious ways:
 
 | Concern | What to do |
 |---|---|
-| **Kernel version** | The kernel inside the container is the host's kernel. Linux 5.13+ is required for full enforcement. Docker Desktop on macOS/Windows uses a managed Linux VM that is typically supported; on a stock Ubuntu 20.04 host (kernel 5.4) the sandbox falls back to app-level checks. |
-| **Default seccomp profile** | Docker 23+ defaults allow the `landlock_*` and `seccomp(2)` syscalls. Older Docker daemons may need `--security-opt seccomp=<profile>` with a profile that permits these. |
-| **`no-new-privileges`** | Not required but recommended; nested seccomp installation works either way in current Omnipus. |
+| **Permissive by default in the heavy image** | `docker/Dockerfile.heavy` sets `ENV OMNIPUS_SANDBOX_MODE=permissive`. The default unprivileged container seccomp profile blocks syscalls the hardened-exec path needs, which surfaces as `fork/exec /bin/sh: permission denied` under `enforce`. The container boundary is the confinement in that configuration — a deliberate choice, recorded in ADR-067 §9, not an accident. Set `OMNIPUS_SANDBOX_MODE=enforce` only if you have granted the container the capabilities it needs. |
+| **Kernel version** | The kernel inside the container is the host's kernel. Linux 5.13+ is required for full enforcement. Docker Desktop on macOS and Windows uses a managed Linux VM that is typically new enough; on a stock Ubuntu 20.04 host (kernel 5.4) the sandbox falls back to application-level checks. |
+| **Default seccomp profile** | Docker 23+ defaults allow the `landlock_*` and `seccomp(2)` syscalls. Older Docker daemons may need `--security-opt seccomp=<profile>` with a profile that permits them. |
+| **`no-new-privileges`** | Not required but recommended; nested seccomp installation works either way. |
 | **`--privileged`** | **Defeats the sandbox.** Don't run the container privileged. |
-| **`--security-opt seccomp=unconfined`** | Disables Docker's seccomp filter but Omnipus's own seccomp filter still installs. Acceptable for debugging, not for production. If you must use it, also set `gateway.sandbox.mode = "off"` so the degraded posture is explicit in the config. |
+| **`--security-opt seccomp=unconfined`** | Disables Docker's seccomp filter; Omnipus's own filter still installs. Acceptable for debugging, not for production. If you must use it, also set `sandbox.mode` to `"off"` so the degraded posture is explicit in the config rather than implied. |
 | **Read-only rootfs** | Omnipus reads `/proc/self/status` to detect capabilities; this works with `--read-only` as long as `/proc` remains mounted (the default). |
 
-**Verifying after start.** Tail `gateway.log` (in the `logs/` subdirectory of the data volume) for the boot line:
+**Verifying after start.** The authoritative check is the API:
 
+```bash
+curl -fsS -H "Authorization: Bearer <token>" \
+  http://localhost:5000/api/v1/security/sandbox-status
 ```
-sandbox initialized: mode=enforce backend=landlock+seccomp
-```
 
-If you see `backend=fallback`, kernel features are unavailable on this host and only tool-layer enforcement is active. The gateway also surfaces this at `/health` and `/api/v1/security/sandbox-status`.
+It reports the active backend and mode. The gateway also logs the outcome at boot as `sandbox.applied` with `backend` and `mode` fields — but that is an informational-level line and the default log level is `warn`, so raise `gateway.log_level` to `info` if you want to see it in `gateway.log`. A degraded start is logged at warning level as `sandbox.permissive` and will appear at the default level.
 
-**Internal preview / web_serve ports.** Agent-generated previews bind temporary ports in the range `18000–18999` inside the container. You only need to publish `5000` and `5001` to the host — these internal ports route back through `5001` (the preview listener) and never need direct exposure.
+**Internal preview / `web_serve` ports.** Agent-generated dev servers bind temporary ports in the range `18000–18999` inside the container. You do not need to publish them — previews are served back through `/preview/` on the main port.
 
 ---
 
 ## Reverse proxy
 
-For TLS termination, set `gateway.public_url` and `gateway.preview_origin` in `config.json` (or `OMNIPUS_GATEWAY_PUBLIC_URL` / `OMNIPUS_GATEWAY_PREVIEW_ORIGIN`) to the HTTPS URLs your browser reaches. The gateway uses these values to build correct `Content-Security-Policy` and `frame-ancestors` headers.
+For TLS termination, set `gateway.public_url` in `config.json` (or `OMNIPUS_GATEWAY_PUBLIC_URL`) to the fully-qualified HTTPS URL your browser reaches. The gateway uses it to build correct `Content-Security-Policy`, CORS and WebSocket origin checks, and to construct `web_serve` preview links. The value is read once at boot, so changing it needs a restart.
 
-See [docs/operations/reverse-proxy.md](operations/reverse-proxy.md) for complete nginx and Caddy configuration examples covering the two-port topology.
+There is no separate `preview_origin` setting any more — ADR-044 deleted it along with the second listener.
+
+See [docs/operations/reverse-proxy.md](operations/reverse-proxy.md) for complete nginx and Caddy examples.
 
 ---
 
@@ -292,7 +337,9 @@ See [docs/operations/reverse-proxy.md](operations/reverse-proxy.md) for complete
 curl -fsS http://localhost:5000/health
 ```
 
-Returns `200 OK` with a JSON body when the gateway is healthy. The Dockerfile includes a built-in `HEALTHCHECK` using this endpoint (30 s interval, 3 s timeout).
+Returns `200 OK` with a JSON body when the gateway is healthy, and `503` when it is running but degraded.
+
+`docker/Dockerfile.heavy` wires this into a container `HEALTHCHECK` (30 s interval, 3 s timeout, 5 s start period, 3 retries). **The published image has no `HEALTHCHECK`** and does not ship `curl`, so `docker ps` will report no health status for it — poll `/health` from the host or your orchestrator instead.
 
 ---
 
@@ -313,7 +360,7 @@ docker rm omnipus-gateway
 # Re-run the original docker run command with the same volume mount.
 ```
 
-The data directory is never modified by the image pull. **Patch and minor releases require no migration step.** Major-version upgrades (`v0.1 → v0.2 → v0.3`) may require manual `~/.omnipus/` migration — the v0.3 "Rooms" redesign explicitly breaks backward compatibility. **Snapshot the data directory before pulling a new major tag.**
+The data directory is never modified by the image pull. **Patch and minor releases require no migration step.** Major-version upgrades (`v0.1 → v0.2 → v0.3`) may require manual `~/.omnipus/` migration — the v0.3 Workspaces redesign explicitly breaks backward compatibility. **Snapshot the data directory before pulling a new major tag.**
 
 ---
 
@@ -322,9 +369,9 @@ The data directory is never modified by the image pull. **Patch and minor releas
 The entire state of an Omnipus deployment lives under `~/.omnipus/`. Backup is a single directory snapshot:
 
 ```bash
-# Stop the container so writes settle (sessions and audit log are append-only
-# JSONL — a hot snapshot is usually safe, but stopping is the only way to get
-# a transactional point-in-time view).
+# Stop the container so writes settle (sessions and the audit log are
+# append-only JSONL — a hot snapshot is usually safe, but stopping is the
+# only way to get a transactional point-in-time view).
 docker compose -f docker/docker-compose.yml --profile gateway down
 
 # Snapshot.
@@ -334,7 +381,7 @@ tar czf omnipus-backup-$(date +%F).tgz -C ./ data/
 docker compose -f docker/docker-compose.yml --profile gateway up -d
 ```
 
-Restore is the same in reverse: stop, extract the tarball into place, restart. **`master.key` must be restored alongside the data** — without it, `credentials.json` is unrecoverable. If you back up encrypted volumes with separate key management, store the master key in your secrets vault and inject via `OMNIPUS_KEY_FILE` instead of restoring it onto disk.
+Restore is the same in reverse: stop, extract the tarball into place, restart. **`master.key` must be restored alongside the data** — without it, `credentials.json` is unrecoverable. If you back up encrypted volumes with separate key management, store the master key in your secrets vault and inject it via `OMNIPUS_KEY_FILE` instead of restoring it onto disk.
 
 ---
 
@@ -345,11 +392,13 @@ The gateway writes to two files inside the data volume's `logs/` directory:
 | File | Contents |
 |---|---|
 | `gateway.log` | Runtime log (requests, errors, sandbox events) |
-| `gateway_panic.log` | Stderr capture, populated only on startup panic |
+| `gateway_panic.log` | Stderr capture, populated only on a startup panic |
+
+The default log level is `warn`. Raise `gateway.log_level` to `info` or `debug` in `config.json` when you need boot-time detail such as the `sandbox.applied` line.
 
 **The gateway does not rotate these files itself.** On a long-running deployment they will grow unbounded.
 
-### Host-Side Rotation
+### Host-side rotation
 
 Mount `logs/` as a separate bind-mount and rotate with `logrotate` on the host (`/etc/logrotate.d/omnipus`):
 
@@ -363,7 +412,7 @@ Mount `logs/` as a separate bind-mount and rotate with `logrotate` on the host (
 }
 ```
 
-### Docker Logging Driver
+### Docker logging driver
 
 Run the gateway with the JSON file driver's built-in rotation (in `docker-compose.yml`):
 
@@ -375,16 +424,14 @@ logging:
     max-file: "5"
 ```
 
-Note: this only captures stdout/stderr; the file-based `gateway.log` still grows. The container logs are a duplicate of `gateway.log` for the most recent boot only.
+This only captures stdout and stderr; the file-based `gateway.log` still grows. The container logs duplicate `gateway.log` for the most recent boot only.
 
 For a production deployment, prefer host-side `logrotate` against the bind-mount.
 
 ---
 
-## Vestigial files
+## What happened to the other Dockerfiles
 
-The following files in `docker/` are inherited from upstream and are not part of the v0.1 product. Do not use them; they may be removed in a future cleanup commit.
+`docker/` used to hold five Dockerfiles and two compose files. ADR-067 consolidated them. `Dockerfile` (the old minimal image), `Dockerfile.full`, `Dockerfile.goreleaser.launcher` and `docker-compose.full.yml` were **deleted** — five ways to package one binary were four too many, and three of them were already documented here as unmaintained.
 
-`Dockerfile.full` is the same broken Go-only builder stage that `Dockerfile.heavy` had before its fix. It is untested; the v0.1 path for chat and MCP without browser tools is the minimal image plus a user-supplied MCP server. `Dockerfile.goreleaser.launcher` and `docker-compose.full.yml` are similarly vestigial.
-
-(`Dockerfile.heavy` was previously listed here but has been rewritten with a working three-stage build and is now a supported image variant — see [Image variants](#image-variants).)
+What remains is `Dockerfile.goreleaser` (the published release image), `Dockerfile.heavy` (build it yourself), `docker-compose.yml` and `entrypoint.sh`. If a merge or an old branch reintroduces any of the deleted files, resolve by keeping the deletion.
