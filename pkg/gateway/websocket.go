@@ -1717,7 +1717,17 @@ func (h *WSHandler) handleChatMessage(
 			h.agentLoop.DisarmOrphanForegroundTurnWatch(sessionID)
 		}
 
-		if sessionID != "" {
+		// ADR-066 D4 / FR-015: this handler persists the user message BEFORE
+		// the bus publish, but processMessage is the enforcement point for
+		// the user-message bound and refuses an over-bound message with NO
+		// transcript entry. So the one thing this intake does for the bound
+		// is skip that early write when processMessage is about to refuse —
+		// the refusal reply itself comes back through the ordinary outbound
+		// path (token + done frames, never an error frame). A kickoff turn
+		// discards the client content entirely, so it is never over-bound.
+		overUserBound := !setupKickoff &&
+			agent.UserMessageChars(content) > h.agentLoop.UserMessageBound()
+		if sessionID != "" && !overUserBound {
 			entry := session.TranscriptEntry{
 				ID:        uuid.New().String(),
 				Role:      "user",

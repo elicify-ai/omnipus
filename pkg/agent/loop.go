@@ -6809,6 +6809,25 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 		return resp, nil, err
 	}
 
+	// ADR-066 D4 / FR-015: the user-message bound, at the one point where an
+	// inbound message becomes a turn — BEFORE routing mints a channel session,
+	// before the transcript write below, before turn registration. Over the
+	// bound, the reply is returned as this message's ordinary response: the
+	// caller (session worker / unroutable path) publishes it on the
+	// originating channel like any assistant reply — no error frame, no
+	// transcript entry, no turn id. Media refs ride in msg.Media and are not
+	// counted. See user_message_bound.go.
+	if reply, refused := al.refuseOversizedUserMessage(msg); refused {
+		logger.InfoCF("agent", "Refused oversized user message before turn start (ADR-066 D4)",
+			map[string]any{
+				"channel":     msg.Channel,
+				"chat_id":     msg.ChatID,
+				"size_chars":  UserMessageChars(msg.Content),
+				"bound_chars": al.UserMessageBound(),
+			})
+		return reply, nil, nil
+	}
+
 	route, agent, routeErr := al.resolveMessageRoute(msg)
 	if routeErr != nil {
 		// ADR-029 FR-028/MAJ-003: emit the drift-drop counter and audit event
@@ -9809,6 +9828,40 @@ turnLoop:
 					turnStatus = TurnEndStatusAborted
 					return al.abortTurn(ts, "before_tool", decision.Reason)
 				}
+			}
+
+			// ADR-066 D4 / FR-016: the tool-argument bound, measured on the
+			// serialised arguments AFTER hooks.BeforeTool (a hook may rewrite
+			// them) and BEFORE any approval round-trip — a call that will be
+			// refused must not cost the user an approval prompt. Over the
+			// cap the tool does not run; the ADR-060-family refusal
+			// (tools.ToolArgumentRefusalResult) enters through the choke
+			// point like any other result and the turn continues — the model
+			// sees the size and the cap and retries smaller. Not a policy
+			// denial: the ledger/quarantine machinery is deliberately not
+			// consulted.
+			if argChars, argCap := serialisedToolArgsChars(toolArgs), toolArgumentsBound(cfg); argChars > argCap {
+				refusal := tools.ToolArgumentRefusalResult(toolName, argChars, argCap)
+				logger.WarnCF("agent", "Tool call refused: serialised arguments exceed the cap (ADR-066 D4)",
+					map[string]any{
+						"agent_id":   ts.agent.ID,
+						"tool":       toolName,
+						"size_chars": argChars,
+						"cap_chars":  argCap,
+					})
+				refusedMsg := al.admitToolResult(ts, toolResultAdmission{
+					Tool: tc.Name, ToolCallID: tc.ID, Content: refusal.ContentForLLM(), IsError: true, ParallelN: len(normalizedToolCalls),
+				}).Message
+				messages = append(messages, refusedMsg)
+				al.emitEvent(
+					EventKindToolExecSkipped,
+					ts.eventMeta("runTurn", "turn.tool.skipped"),
+					ToolExecSkippedPayload{
+						Tool:   toolName,
+						Reason: fmt.Sprintf("%s: serialised arguments of %d chars exceed the %d-char cap", tools.ToolArgumentsTooLargeCode, argChars, argCap),
+					},
+				)
+				continue
 			}
 
 			if al.hooks != nil {
