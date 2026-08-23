@@ -135,7 +135,11 @@ run_lint() {
   bash scripts/check-no-handwritten-wire-types.sh || return 1
   bash scripts/check-no-tool-error-from-status.sh || return 1
   # ADR-061 regression guard: the deleted JPEG screencast path must not return.
-  bash scripts/check-no-jpeg-screencast.sh
+  bash scripts/check-no-jpeg-screencast.sh || return 1
+  # ADR-068 §2.4 regression guard: antigravity / claude-cli / OpenAI device-code
+  # flow leave no trace. Self-check first (a guard that cannot fail is no guard).
+  bash scripts/check-no-removed-providers-selfcheck.sh || return 1
+  bash scripts/check-no-removed-providers.sh
 }
 # Full suite with a flake filter: a package that fails the contended full run but passes when
 # re-run isolated (-p 1) is a timing flake → not a real failure. Fails both = real.

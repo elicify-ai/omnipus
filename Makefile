@@ -24,7 +24,7 @@
 #   bedrock    compiles in the real AWS Bedrock provider (stub without it)
 # =============================================================================
 
-.PHONY: all build install uninstall clean help test gen-contracts verify-contracts lint-wire-types lint-tool-error-status lint-no-jpeg-screencast spa-embed release-snapshot release-build
+.PHONY: all build install uninstall clean help test gen-contracts verify-contracts lint-wire-types lint-tool-error-status lint-no-jpeg-screencast lint-no-removed-providers spa-embed release-snapshot release-build
 
 # Build variables
 BINARY_NAME=omnipus
@@ -310,7 +310,7 @@ fmt:
 	@$(GOLANGCI_LINT) fmt
 
 ## lint: Run linters
-lint:
+lint: lint-no-removed-providers
 	@$(GOLANGCI_LINT) run --build-tags $(GO_BUILD_TAGS)
 
 ## fix: Fix linting issues
@@ -435,6 +435,13 @@ lint-tool-error-status:
 ## Regression guard for ADR-061 — see scripts/check-no-jpeg-screencast.sh's header comment.
 lint-no-jpeg-screencast:
 	bash scripts/check-no-jpeg-screencast.sh
+
+## lint-no-removed-providers: Fail if the providers deleted under ADR-068 §2.4 leave any trace
+## (antigravity, claude-cli, the OpenAI device-code flow). Runs the guard's self-check first so
+## a guard that can no longer fail is itself a failure. Allow-list: scripts/no-removed-providers.allow.
+lint-no-removed-providers:
+	bash scripts/check-no-removed-providers-selfcheck.sh
+	bash scripts/check-no-removed-providers.sh
 
 ## verify-contracts: Regenerate contracts, run wire-type lint, typecheck TS, fail if anything has drifted
 # Note: `tsc --noEmit` (without -b) is a silent no-op on a project-references

@@ -352,6 +352,18 @@ jobs:
         # CLAUDE.md's "Retired surfaces — do NOT reintroduce" rule.
         run: bash scripts/check-no-jpeg-screencast.sh
 
+      - name: Run removed-providers guard self-check
+        # Proves the guard below can still go red (ADR-068 spec SC-001) before
+        # its verdict is trusted — see docs/internal/false-green-patterns.md.
+        run: bash scripts/check-no-removed-providers-selfcheck.sh
+
+      - name: Run removed-providers guard
+        # ADR-068 §2.4: antigravity, claude-cli and the OpenAI device-code flow
+        # are deleted greenfield with no trace outside the historical records in
+        # scripts/no-removed-providers.allow. Branches cut before the deletion
+        # re-add them on merge as an ordinary addition — keep the deletion.
+        run: bash scripts/check-no-removed-providers.sh
+
   verify-contracts:
     name: Verify Contracts
     # Ensure generated wire-format types (TS + Go) match the spec files.

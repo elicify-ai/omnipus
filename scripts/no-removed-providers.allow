@@ -1,0 +1,47 @@
+# no-removed-providers.allow — data file for scripts/check-no-removed-providers.sh
+#
+# Files that MAY still contain the names of providers and symbols deleted under
+# ADR-068 §2.4 (greenfield, no trace). Everything NOT listed here must be clean.
+#
+# Why these and only these (ADR-068 spec FR-001, X-19): they are historical
+# decision records — ADRs, spec reviews and root-cause notes — that mention the
+# removed providers AS HISTORY. Rewriting a past decision's text to erase a name
+# is falsifying the record, not removing a trace (ADR-068 §2.4, "Kept
+# deliberately"). Plans and task lists that describe the deletion itself are
+# kept for the same reason: they cannot say what to delete without naming it.
+#
+# Format: one path per line, relative to the repo root, POSIX extended regular
+# expression anchored at both ends by the script. Blank lines and `#` comments
+# are ignored. Keep this list SHORT — every row here is a hole in the guard.
+# Never place an allow-list inside pkg/ (it would itself have to spell the
+# names the guard forbids).
+
+# --- the allow-list itself -------------------------------------------------
+scripts/no-removed-providers\.allow
+
+# --- ADR-068 §2.4 "Kept deliberately": historical decision records ---------
+docs/internal/architecture/ADR-031-connectors-providers-redesign\.md
+docs/internal/architecture/ADR-031-connectors-providers-redesign-review\.md
+docs/internal/architecture/ADR-053-bedrock-provider-first-class\.md
+docs/internal/specs/adr-059-delegation-observability-spec-review\.md
+docs/internal/specs/adr-059-delegation-observability-spec-review-pass2\.md
+docs/internal/specs/cli-minimization-spec\.md
+docs/internal/specs/cli-minimization-spec-review\.md
+docs/internal/specs/v01-spec1-workspace-rename-spec\.md
+docs/internal/specs/v01-spec1-workspace-rename-spec-review\.md
+docs/internal/turn-truncation-rootcause-2026-07-30\.md
+
+# --- FR-001: ADR-066 / ADR-067 / ADR-068 and their reviews ------------------
+docs/internal/architecture/ADR-066-[^/]*\.md
+docs/internal/architecture/ADR-067-[^/]*\.md
+docs/internal/architecture/ADR-068-[^/]*\.md
+
+# --- FR-001: the three specs, their reviews, the cross-spec review ----------
+docs/internal/specs/adr-066-context-overflow-spec[^/]*\.md
+docs/internal/specs/adr-067-registry-catalog-spec[^/]*\.md
+docs/internal/specs/adr-068-providers-ux-spec[^/]*\.md
+docs/internal/specs/cross-spec-review-adr-066-067-068\.md
+
+# --- the implementation plan and task lists that schedule the deletion ------
+docs/internal/specs/implementation-plan-adr-066-067-068\.md
+docs/internal/specs/tasks/adr-06[678]-[^/]*-tasks\.md
