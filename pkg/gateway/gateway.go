@@ -697,6 +697,114 @@ func bootCredentials(
 	return cfg, bundle, credStore, nil
 }
 
+// sweepOrphanedProviderCredentials is T068-10's startup sweep (ADR-068
+// FR-010 last clause, D14.2): delete any `<id>_API_KEY` credential whose
+// provider row is gone from cfg.Providers — greenfield housekeeping for the
+// one gap DELETE /providers/{id} cannot close on its own (a crash between
+// its step 2 config write and step 3 credential delete leaves an orphaned
+// secret; the retry story assumes the operator retries, boot must not).
+// Runs once per boot, after config load + credential-store unlock, as soon
+// as the audit logger exists.
+//
+// The pattern rule (BDD "a <name> that does not match the `<id>_API_KEY`
+// pattern is left untouched") is deliberately conservative — wrongly
+// deleting a live secret is unrecoverable, failing to sweep is harmless:
+//
+//   - only names ending in exactly `_API_KEY` with a provider-id-shaped
+//     `<id>` prefix (lowercase/digits/[-_.], ≤64 — the shape onboarding and
+//     PUT /providers/{id} write via `provider.Id+"_API_KEY"`) are eligible.
+//     This leaves the ALL-UPPERCASE integration refs (BRAVE_API_KEY,
+//     GROQ_API_KEY, ELEVENLABS_API_KEY, …) and every channel/mailbox secret
+//     (`channel_<id>_<field>`, `mailbox_…_password`) untouched;
+//   - a name whose `<id>` matches a configured row's Provider is kept;
+//   - belt-and-braces: a name ANY provider row's api_key_ref points at is
+//     kept even when no row id matches its prefix.
+//
+// Never fatal: a locked store, a List failure, or a Delete failure is logged
+// and boot proceeds — the sweep is housekeeping, not a boot gate. A nil
+// auditor (sandbox.audit_log disabled) skips only the audit emission.
+func sweepOrphanedProviderCredentials(cfg *config.Config, store *credentials.Store, auditor *audit.Logger) {
+	if cfg == nil || store == nil || store.IsLocked() {
+		return
+	}
+	names, err := store.List()
+	if err != nil {
+		slog.Warn("gateway: credential sweep skipped: could not list credentials", "error", err)
+		return
+	}
+	configured := make(map[string]struct{}, len(cfg.Providers))
+	referenced := make(map[string]struct{}, len(cfg.Providers))
+	for _, row := range cfg.Providers {
+		if row == nil {
+			continue
+		}
+		if id := strings.TrimSpace(row.Provider); id != "" {
+			configured[id] = struct{}{}
+		}
+		if ref := strings.TrimSpace(row.APIKeyRef); ref != "" {
+			referenced[ref] = struct{}{}
+		}
+	}
+	for _, name := range names {
+		id, matches := strings.CutSuffix(name, "_API_KEY")
+		if !matches || !isProviderCredentialID(id) {
+			continue
+		}
+		if _, ok := configured[id]; ok {
+			continue
+		}
+		if _, ok := referenced[name]; ok {
+			continue
+		}
+		if err := store.Delete(name); err != nil {
+			var nf *credentials.NotFoundError
+			if errors.As(err, &nf) {
+				continue // already gone — absence is success (FR-010 step 3 posture)
+			}
+			slog.Warn("gateway: credential sweep: could not delete orphaned credential",
+				"credential_ref", name, "error", err)
+			continue
+		}
+		// The one INFO line per swept orphan — ref NAME only, never the value.
+		slog.Info("gateway: swept orphaned provider credential",
+			"credential_ref", name, "provider_id", id)
+		if auditor != nil {
+			if err := auditor.Log(&audit.Entry{
+				Event:    EventProviderCredentialSwept,
+				Decision: audit.DecisionAllow,
+				Details: map[string]any{
+					"provider":       id,
+					"credential_ref": name,
+				},
+			}); err != nil {
+				slog.Warn("audit write failed", "event", EventProviderCredentialSwept, "error", err)
+			}
+		}
+	}
+}
+
+// isProviderCredentialID reports whether id has the shape of a provider row
+// id as written by onboarding and PUT /providers/{id} (catalog ids are
+// models.dev slugs — lowercase letters, digits, '-', '.', '_' — and the
+// contract caps ids at 64 chars). Uppercase prefixes are OUT by design: they
+// belong to the integration refs (BRAVE_API_KEY, …), which are not provider
+// credentials. A custom row id containing uppercase is simply never swept —
+// the conservative direction for housekeeping.
+func isProviderCredentialID(id string) bool {
+	if id == "" || len(id) > 64 {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		c := id[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= '0' && c <= '9', c == '-', c == '_', c == '.':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 // RunOptions carries the inputs for the gateway runtime. Kept as a struct
 // so new Sprint-J options (SandboxMode) and future options can be added
 // without churning the Run signature. The legacy Run function remains as a
@@ -1768,6 +1876,14 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 		}
 		return fmt.Errorf("gateway: agent loop boot failed: %w", err)
 	}
+
+	// T068-10 (ADR-068 FR-010 last clause): startup sweep of orphaned
+	// `<id>_API_KEY` credentials. Config is loaded and the store unlocked
+	// (bootCredentials above); this is the earliest point where the audit
+	// logger exists, so the sweep's provider.credential_swept entries land
+	// in the real audit chain. Synchronous and fast (one store read, at
+	// most a handful of deletes); never fatal.
+	sweepOrphanedProviderCredentials(cfg, credStore, agentLoop.AuditLogger())
 
 	// Boot-time browser provisioning: NewAgentLoop above just finished
 	// registering browser tools for every agent (registerSharedTools →
