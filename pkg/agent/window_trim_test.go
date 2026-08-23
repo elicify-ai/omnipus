@@ -9,9 +9,11 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -20,6 +22,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/memory"
 	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
 // buildTrimTestAgentLoop builds a minimal AgentLoop whose default agent has
@@ -762,3 +765,71 @@ func TestWindowTrim_SetHistoryNeverCalled(t *testing.T) {
 
 // newSwitchTestAgentLoop is defined in switch_compress_test.go which is also
 // in the agent package — no redefinition needed here.
+
+// TestArchive_AppendOnlyWithAttachStep — ADR-066 FR-048 / B-53d (test 58):
+// the ADR-028 append-only invariant with an attach step. A session is
+// hydrated once from the transcript (empty archive), grows by live turns,
+// is trimmed (Skip advances, no bytes deleted), and is then re-attached:
+// the attach path's hydration must leave the archive byte-identical and
+// meta.skip unchanged. Before D5.5 that re-attach rewrote the whole file
+// and reset skip to 0 (the verified US-15 operator bug).
+func TestArchive_AppendOnlyWithAttachStep(t *testing.T) {
+	h := newHydrateTestHarness(t, "archive-attach")
+	now := time.Now().UTC()
+	h.append(t,
+		session.TranscriptEntry{Role: "user", Content: "first", AgentID: h.agentID, TurnID: "A", Timestamp: now},
+		session.TranscriptEntry{Role: "assistant", Content: "working", AgentID: h.agentID, TurnID: "A", Timestamp: now.Add(time.Second)},
+		standaloneToolCall(h.agentID, "A", "call-1", "bash", map[string]any{"output": "x"}, now.Add(2*time.Second)),
+		session.TranscriptEntry{Role: "assistant", Content: "done", AgentID: h.agentID, TurnID: "A", Timestamp: now.Add(3 * time.Second)},
+	)
+	require.NoError(t, h.al.HydrateAgentHistoryFromTranscript(h.transcriptID))
+	key := h.key()
+	require.Len(t, h.ag.Sessions.GetHistory(key), 4, "hydrated window: user, assistant(+call), tool, assistant")
+
+	// Live turns appended by the turn path, then a trim that advances Skip.
+	big := strings.Repeat("w", 3000)
+	for i := 0; i < 4; i++ {
+		h.ag.Sessions.AddMessage(key, "user", big)
+		h.ag.Sessions.AddMessage(key, "assistant", big)
+	}
+	require.NoError(t, h.ag.Sessions.Save(key))
+	linesBeforeTrim, err := h.ag.Sessions.ReadArchive(context.Background(), key)
+	require.NoError(t, err)
+	require.Len(t, linesBeforeTrim, 12)
+
+	h.ag.ContextWindow = 2000
+	h.ag.MaxTokens = 200
+	_, ok := h.al.windowTrim(h.ag, key)
+	require.True(t, ok, "trim must succeed")
+	windowAfterTrim := len(h.ag.Sessions.GetHistory(key))
+	require.Less(t, windowAfterTrim, 12, "trim must have advanced Skip")
+
+	archiveBytes, err := os.ReadFile(h.archivePath())
+	require.NoError(t, err)
+	metaBytes, err := os.ReadFile(h.metaPath())
+	require.NoError(t, err)
+	var metaBefore struct {
+		Skip int `json:"skip"`
+	}
+	require.NoError(t, json.Unmarshal(metaBytes, &metaBefore))
+	require.Greater(t, metaBefore.Skip, 0)
+
+	// Attach step: what the WS attach_session path does (FR-045).
+	require.True(t, h.al.AgentArchiveNonEmpty(h.transcriptID), "attach pre-check must see the archive")
+	require.NoError(t, h.al.HydrateAgentHistoryFromTranscript(h.transcriptID))
+
+	archiveAfter, err := os.ReadFile(h.archivePath())
+	require.NoError(t, err)
+	assert.Equal(t, string(archiveBytes), string(archiveAfter), "attach must leave the archive byte-identical")
+	metaAfterBytes, err := os.ReadFile(h.metaPath())
+	require.NoError(t, err)
+	var metaAfter struct {
+		Skip int `json:"skip"`
+	}
+	require.NoError(t, json.Unmarshal(metaAfterBytes, &metaAfter))
+	assert.Equal(t, metaBefore.Skip, metaAfter.Skip, "attach must not move Skip")
+	assert.Equal(t, windowAfterTrim, len(h.ag.Sessions.GetHistory(key)), "window unchanged by attach")
+	linesAfter, err := h.ag.Sessions.ReadArchive(context.Background(), key)
+	require.NoError(t, err)
+	assert.Len(t, linesAfter, 12, "no archive line deleted (ADR-028)")
+}

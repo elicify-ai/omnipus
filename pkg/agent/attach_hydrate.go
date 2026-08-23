@@ -14,6 +14,7 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -24,14 +25,91 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
+// hydrateSessionKey is the per-agent SessionStore key for a transcript session.
+func hydrateSessionKey(agentID, sessionID string) string {
+	return fmt.Sprintf("agent:%s:session:%s", agentID, sessionID)
+}
+
+// sessionOwnerAgent resolves the agent a transcript session belongs to
+// (ActiveAgentID, else AgentID) — "" when the meta names nobody.
+func sessionOwnerAgent(store *session.UnifiedStore, sessionID string) string {
+	meta, err := store.GetMeta(sessionID)
+	if err != nil || meta == nil {
+		return ""
+	}
+	if meta.ActiveAgentID != "" {
+		return meta.ActiveAgentID
+	}
+	return meta.AgentID
+}
+
+// AgentArchiveNonEmpty reports whether the session's owning agent already
+// holds ≥ 1 archive line for sessionID — the attach path's pre-check
+// (ADR-066 D5.5, FR-045): hydration may only FILL an empty archive, never
+// touch an existing one. Anything unresolvable answers false; hydration
+// then runs and its own per-agent guard (and SetHistory's refusal) still
+// protects a non-empty file.
+func (al *AgentLoop) AgentArchiveNonEmpty(sessionID string) bool {
+	if sessionID == "" {
+		return false
+	}
+	store := al.ResolveSessionStore(sessionID)
+	if store == nil {
+		return false
+	}
+	owner := sessionOwnerAgent(store, sessionID)
+	if owner == "" {
+		return false
+	}
+	registry := al.GetRegistry()
+	if registry == nil {
+		return false
+	}
+	ag, ok := registry.GetAgent(owner)
+	if !ok || ag == nil || ag.Sessions == nil {
+		return false
+	}
+	return agentArchiveHasLines(ag, hydrateSessionKey(owner, sessionID))
+}
+
+// agentArchiveHasLines counts the archive from line 0 (ReadArchive ignores
+// Skip), so a fully evicted window still counts as a non-empty archive.
+func agentArchiveHasLines(ag *AgentInstance, key string) bool {
+	archived, err := ag.Sessions.ReadArchive(context.Background(), key)
+	if err != nil {
+		logger.WarnCF("agent.attach", "archive read failed; treating as empty",
+			map[string]any{"session_key": key, "error": err.Error()})
+		return false
+	}
+	return len(archived) > 0
+}
+
+// openAssistant points at the assistant message a standalone tool_call entry
+// attaches to: the most recent assistant message of the same agent in the
+// current turn, valid only while nothing but its own tool results follow it.
+type openAssistant struct {
+	idx    int
+	turnID string
+}
+
 // HydrateAgentHistoryFromTranscript reads the transcript for sessionID and
 // rebuilds each owning agent's session.SessionStore history under the key
 // "agent:<agentID>:session:<sessionID>".
 //
-// The mapping is best-effort: messages with unknown roles or unresolvable
-// agent IDs are skipped. SubTurn entries (orchestrator hand-offs) are ignored
-// at this layer — they are reconstructed by the agent loop's own subturn
-// machinery on demand.
+// ADR-066 D5.5 (FR-045, FR-046): hydration only ever FILLS an empty archive.
+// An agent whose archive already has ≥ 1 line is skipped — bytes, Skip and
+// the hydrated flag untouched. When it does run, tool calls are rebuilt from
+// the real transcript shape: standalone `type: "tool_call"` entries are
+// attached as ToolCalls to the preceding assistant message of the same
+// turn/agent (a synthetic, empty assistant message with a WARN when the turn
+// has none — the model emitted only tool calls), each followed by exactly one
+// role:"tool" line carrying the entry's bounded result through the choke
+// point. The rebuilt archive is flagged hydrated: true (FR-048).
+//
+// The mapping is otherwise best-effort: messages with unknown roles or
+// unresolvable agent IDs are skipped. SubTurn entries (orchestrator
+// hand-offs) are ignored at this layer — they are reconstructed by the agent
+// loop's own subturn machinery on demand.
 func (al *AgentLoop) HydrateAgentHistoryFromTranscript(sessionID string) error {
 	if sessionID == "" {
 		return fmt.Errorf("agent: HydrateAgentHistoryFromTranscript: sessionID required")
@@ -59,17 +137,32 @@ func (al *AgentLoop) HydrateAgentHistoryFromTranscript(sessionID string) error {
 	// sentinel is the agent-of-last-resort behind it — naming a specific
 	// agent when metadata resolves nothing would reattribute one agent's
 	// history to another.
-	sessionOwner := ""
-	if meta, err := store.GetMeta(sessionID); err == nil && meta != nil {
-		if meta.ActiveAgentID != "" {
-			sessionOwner = meta.ActiveAgentID
-		} else if meta.AgentID != "" {
-			sessionOwner = meta.AgentID
-		}
-	}
+	sessionOwner := sessionOwnerAgent(store, sessionID)
 
 	// Group provider messages per owning agent.
 	perAgent := make(map[string][]providers.Message)
+	// The assistant message a standalone tool_call entry attaches to, per
+	// agent (FR-046). Reset whenever a user-role message starts a new turn.
+	open := make(map[string]*openAssistant)
+	resetOpen := func() {
+		for id := range open {
+			delete(open, id)
+		}
+	}
+	// appendToolCallTranscript may append a second entry for one call id
+	// (the approval-gate placeholder fallthrough); only the LAST record of an
+	// id is hydrated so the archive carries exactly one tool line per call.
+	lastRecord := make(map[string]int)
+	for i := range entries {
+		if entries[i].Type != session.EntryTypeToolCall {
+			continue
+		}
+		for j := range entries[i].ToolCalls {
+			if id := string(entries[i].ToolCalls[j].ID); id != "" {
+				lastRecord[id] = i
+			}
+		}
+	}
 
 	// First pass — discover every agent that has any presence in this
 	// transcript so handoff broadcasts can reach all of them, including
@@ -106,6 +199,21 @@ func (al *AgentLoop) HydrateAgentHistoryFromTranscript(sessionID string) error {
 			for id := range knownAgents {
 				perAgent[id] = append(perAgent[id], msg)
 			}
+			resetOpen()
+			continue
+		}
+		// FR-046: a standalone tool_call entry (the real transcript shape —
+		// Type "tool_call", no Role) becomes a ToolCall on the open
+		// assistant message of its turn plus one tool-result line.
+		if e.Type == session.EntryTypeToolCall {
+			for j := range e.ToolCalls {
+				tc := &e.ToolCalls[j]
+				id := string(tc.ID)
+				if id == "" || lastRecord[id] != i {
+					continue
+				}
+				al.attachStandaloneToolCall(perAgent, open, owner, e.TurnID, tc, sessionID)
+			}
 			continue
 		}
 		switch e.Role {
@@ -128,6 +236,7 @@ func (al *AgentLoop) HydrateAgentHistoryFromTranscript(sessionID string) error {
 			} else {
 				perAgent[owner] = append(perAgent[owner], userMsg)
 			}
+			resetOpen()
 		case "assistant":
 			msg := providers.Message{Role: "assistant", Content: e.Content}
 			for j := range e.ToolCalls {
@@ -151,6 +260,7 @@ func (al *AgentLoop) HydrateAgentHistoryFromTranscript(sessionID string) error {
 				continue
 			}
 			perAgent[owner] = append(perAgent[owner], msg)
+			open[owner] = &openAssistant{idx: len(perAgent[owner]) - 1, turnID: e.TurnID}
 			// Emit a tool result per recorded tool call so the next LLM
 			// call sees a balanced tool_use / tool_result sequence
 			// (Anthropic and others reject orphan tool_use blocks).
@@ -183,8 +293,18 @@ func (al *AgentLoop) HydrateAgentHistoryFromTranscript(sessionID string) error {
 				map[string]any{"agent_id": agentID, "msg_count": len(msgs)})
 			continue
 		}
-		key := fmt.Sprintf("agent:%s:session:%s", agentID, sessionID)
+		key := hydrateSessionKey(agentID, sessionID)
+		// FR-045: fill only an empty archive. A non-empty one is the live
+		// record — bytes, Skip and flags stay exactly as they are.
+		if agentArchiveHasLines(ag, key) {
+			logger.InfoCF("agent.attach", "skip hydration; agent archive already has lines",
+				map[string]any{"agent_id": agentID, "session_key": key, "session_id": sessionID})
+			continue
+		}
 		ag.Sessions.SetHistory(key, msgs)
+		// FR-048: recall by tool_call_id cannot promise the original result
+		// bytes for a transcript-rebuilt archive.
+		ag.Sessions.MarkHydrated(key)
 		if err := ag.Sessions.Save(key); err != nil {
 			logger.WarnCF("agent.attach", "save hydrated history failed",
 				map[string]any{"agent_id": agentID, "session_key": key, "error": err.Error()})
@@ -199,6 +319,64 @@ func (al *AgentLoop) HydrateAgentHistoryFromTranscript(sessionID string) error {
 		}
 	}
 	return nil
+}
+
+// attachStandaloneToolCall implements FR-046 for one recorded call: the call
+// joins the open assistant message of the same turn/agent — or a synthetic
+// one when the turn has no assistant text before the call (the model emitted
+// only tool calls), logged at WARN — and exactly one role:"tool" line with the
+// entry's bounded result follows.
+//
+// The open message is valid only when every message after it is one of its
+// own tool results (provider ordering: results must directly follow the
+// assistant message that issued the calls) and, when both sides carry a turn
+// id, the ids agree. Entries written before tool_call entries were stamped
+// with a turn id fall back to the turn boundary (the last user message).
+func (al *AgentLoop) attachStandaloneToolCall(
+	perAgent map[string][]providers.Message,
+	open map[string]*openAssistant,
+	owner, turnID string,
+	tc *session.ToolCall,
+	sessionID string,
+) {
+	msgs := perAgent[owner]
+	o := open[owner]
+	valid := o != nil && o.idx < len(msgs) && msgs[o.idx].Role == "assistant" &&
+		(turnID == "" || o.turnID == "" || turnID == o.turnID)
+	if valid {
+		for _, m := range msgs[o.idx+1:] {
+			if m.Role != "tool" {
+				valid = false
+				break
+			}
+		}
+	}
+	if !valid {
+		logger.WarnCF("agent.attach", "standalone tool_call has no preceding assistant message in its turn; synthesising one",
+			map[string]any{
+				"agent_id":     owner,
+				"session_id":   sessionID,
+				"turn_id":      turnID,
+				"tool_call_id": string(tc.ID),
+				"tool":         tc.Tool,
+			})
+		msgs = append(msgs, providers.Message{Role: "assistant"})
+		o = &openAssistant{idx: len(msgs) - 1, turnID: turnID}
+		open[owner] = o
+	}
+	args := tc.Parameters
+	msgs[o.idx].ToolCalls = append(msgs[o.idx].ToolCalls, providers.ToolCall{
+		ID:   string(tc.ID),
+		Type: "function",
+		Function: &providers.FunctionCall{
+			Name:      tc.Tool,
+			Arguments: marshalToolArgs(args),
+		},
+		Name:      tc.Tool,
+		Arguments: args,
+	})
+	msgs = append(msgs, al.hydratedToolResultMessage(owner, tc))
+	perAgent[owner] = msgs
 }
 
 func marshalToolArgs(args map[string]any) string {

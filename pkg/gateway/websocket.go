@@ -2798,7 +2798,15 @@ drainDone:
 	// next LLM turn sees the prior conversation. Without this, the SPA
 	// shows replayed messages but the agent answers as if the session just
 	// started — see pkg/agent/attach_hydrate.go for the rationale.
-	if err := h.agentLoop.HydrateAgentHistoryFromTranscript(attachID); err != nil {
+	//
+	// ADR-066 D5.5 (FR-045): only an EMPTY agent archive is hydrated. An
+	// archive with ≥ 1 line is the live record of the session — rebuilding
+	// it from the UI transcript was the verified mechanism that dropped
+	// every tool result and reset Skip on each reopen (US-15).
+	if h.agentLoop.AgentArchiveNonEmpty(attachID) {
+		slog.Debug("ws: attach_session: agent archive non-empty; hydration skipped",
+			"session_id", attachID)
+	} else if err := h.agentLoop.HydrateAgentHistoryFromTranscript(attachID); err != nil {
 		slog.Warn("ws: attach_session: hydrate agent history failed",
 			"session_id", attachID, "error", err)
 		sidCopy := attachID

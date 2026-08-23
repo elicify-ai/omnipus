@@ -7073,6 +7073,10 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 					}
 				}
 			}
+			// ADR-066 D5.5 (FR-045): this emptiness condition is unchanged;
+			// hydration itself now refuses to touch an agent archive that
+			// already has lines, so a window that is empty only because Skip
+			// reached the end of a non-empty archive is never rebuilt.
 			if needsHydrate {
 				if err := al.HydrateAgentHistoryFromTranscript(transcriptSessionID); err != nil {
 					logger.WarnCF("agent", "self-heal hydrate failed", map[string]any{

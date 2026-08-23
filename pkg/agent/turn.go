@@ -1657,6 +1657,10 @@ func (ts *turnState) appendToolCallTranscript(tc session.ToolCall) {
 		AgentID:   agentID,
 		Timestamp: time.Now().UTC(),
 		ToolCalls: []session.ToolCall{tc},
+		// ADR-066 FR-046: hydration attaches a standalone tool_call entry to
+		// the preceding assistant message of the SAME turn; the turn id makes
+		// that match exact instead of inferred from the last user boundary.
+		TurnID: ts.turnID,
 	}
 	if err := ts.transcriptStore.AppendTranscriptStrict(ts.transcriptSessionID, entry); err != nil {
 		transcriptWriteFailures.Add(1)
