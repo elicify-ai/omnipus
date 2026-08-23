@@ -40,43 +40,46 @@
 // apologetic empty state forever. Whoever mounts this passes the generated
 // client; tests pass a stub, which is also the fetch boundary they mock at.
 
-import { useMemo, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
-import { WarningCircle } from '@phosphor-icons/react'
-import { QueryErrorState } from '@/components/shared/QueryErrorState'
-import { KnowledgeRailPanelHeader, type KnowledgeRailQualifier } from './KnowledgeRailPanel'
+import { useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { WarningCircle } from "@phosphor-icons/react";
+import { QueryErrorState } from "@/components/shared/QueryErrorState";
+import {
+  KnowledgeRailPanelHeader,
+  type KnowledgeRailQualifier,
+} from "./KnowledgeRailPanel";
 import type {
   KnowledgeOutline as KnowledgeOutlineResponse,
   KnowledgeOutlineHeading,
-} from '@/lib/api/generated/openapi-types'
+} from "@/lib/api/generated/openapi-types";
 
 /** Arguments for `GET /api/v1/library/{workspace_id}/knowledge/outline`. */
 export interface KnowledgeOutlineRequest {
-  workspaceId: string
+  workspaceId: string;
   /** Workspace-relative path of the markdown file, per the operation's `path` query parameter. */
-  path: string
+  path: string;
 }
 
 /** The injected client for the outline endpoint. */
 export type KnowledgeOutlineLoader = (
   request: KnowledgeOutlineRequest,
-) => Promise<KnowledgeOutlineResponse>
+) => Promise<KnowledgeOutlineResponse>;
 
 export function knowledgeOutlineQueryKey(workspaceId: string, path: string) {
-  return ['library', 'knowledge', 'outline', workspaceId, path] as const
+  return ["library", "knowledge", "outline", workspaceId, path] as const;
 }
 
 /**
  * How many indent steps a row may take before the indent stops growing. Beyond
  * this the row's level chip carries the depth instead — see the header note.
  */
-export const KNOWLEDGE_OUTLINE_MAX_INDENT_DEPTH = 4
+export const KNOWLEDGE_OUTLINE_MAX_INDENT_DEPTH = 4;
 
 /** Pixels per indent step. */
-const INDENT_STEP_PX = 12
+const INDENT_STEP_PX = 12;
 
 /** Left padding of a depth-0 row. */
-const INDENT_BASE_PX = 8
+const INDENT_BASE_PX = 8;
 
 /**
  * Nesting depth for each heading, derived from the ladder of levels actually
@@ -91,22 +94,25 @@ const INDENT_BASE_PX = 8
  * Exported because it is the whole of the nesting rule and is worth asserting
  * directly, without going through a render.
  */
-export function outlineIndentDepths(headings: readonly KnowledgeOutlineHeading[]): number[] {
-  const open: number[] = []
+export function outlineIndentDepths(
+  headings: readonly KnowledgeOutlineHeading[],
+): number[] {
+  const open: number[] = [];
   return headings.map((heading) => {
-    while (open.length > 0 && open[open.length - 1] >= heading.level) open.pop()
-    const depth = open.length
-    open.push(heading.level)
-    return depth
-  })
+    while (open.length > 0 && open[open.length - 1] >= heading.level)
+      open.pop();
+    const depth = open.length;
+    open.push(heading.level);
+    return depth;
+  });
 }
 
 export interface KnowledgeOutlineProps {
-  workspaceId: string
+  workspaceId: string;
   /** Workspace-relative path of the open markdown file. */
-  path: string
+  path: string;
   /** See the header note — required, not defaulted, so a missing wiring is a compile error. */
-  loadOutline: KnowledgeOutlineLoader
+  loadOutline: KnowledgeOutlineLoader;
   /**
    * Move the reader to this heading. Owned by the caller because this component
    * does not own the rendered document: the KB markdown composition
@@ -114,15 +120,15 @@ export interface KnowledgeOutlineProps {
    * `#slug` anchor to link to and no honest way for this panel to scroll one
    * into view on its own.
    */
-  onNavigate: (heading: KnowledgeOutlineHeading) => void
+  onNavigate: (heading: KnowledgeOutlineHeading) => void;
   /** Slug of the heading the reader is currently at, if the caller tracks it. */
-  activeSlug?: string
+  activeSlug?: string;
   /**
    * FR-064 / US-7 AS-9 — in a narrow docked rail the panel collapses to a
    * toggle instead of splitting the pane. Collapsed panels start closed and
    * render no body at all.
    */
-  collapsible?: boolean
+  collapsible?: boolean;
 }
 
 export function KnowledgeOutline({
@@ -133,33 +139,37 @@ export function KnowledgeOutline({
   activeSlug,
   collapsible = false,
 }: KnowledgeOutlineProps) {
-  const [expanded, setExpanded] = useState(!collapsible)
+  const [expanded, setExpanded] = useState(!collapsible);
 
   const query = useQuery({
     queryKey: knowledgeOutlineQueryKey(workspaceId, path),
     queryFn: () => loadOutline({ workspaceId, path }),
-  })
+  });
 
-  const headings = useMemo(() => query.data?.headings ?? [], [query.data])
-  const depths = useMemo(() => outlineIndentDepths(headings), [headings])
+  const headings = useMemo(() => query.data?.headings ?? [], [query.data]);
+  const depths = useMemo(() => outlineIndentDepths(headings), [headings]);
 
   const qualifiers = useMemo<KnowledgeRailQualifier[]>(
     () =>
       query.data?.frontmatter_malformed
         ? [
             {
-              label: 'frontmatter unreadable',
+              label: "frontmatter unreadable",
               detail:
                 "This note's frontmatter is not valid YAML, so none of it was read. " +
-                'The headings listed here are still complete.',
+                "The headings listed here are still complete.",
             },
           ]
         : [],
     [query.data],
-  )
+  );
 
   return (
-    <section data-testid="knowledge-outline" aria-label="Outline" className="flex flex-col min-h-0">
+    <section
+      data-testid="knowledge-outline"
+      aria-label="Outline"
+      className="flex flex-col min-h-0"
+    >
       <KnowledgeRailPanelHeader
         title="Outline"
         count={query.data ? headings.length : undefined}
@@ -187,10 +197,14 @@ export function KnowledgeOutline({
               data-testid="knowledge-outline-frontmatter-malformed"
               className="flex items-start gap-2 px-3 py-2 text-xs text-[var(--color-warning)]"
             >
-              <WarningCircle size={14} className="mt-px shrink-0" aria-hidden="true" />
+              <WarningCircle
+                size={14}
+                className="mt-px shrink-0"
+                aria-hidden="true"
+              />
               <span>
-                This note&apos;s frontmatter is not valid YAML, so none of it was read. The headings
-                below are still complete.
+                This note&apos;s frontmatter is not valid YAML, so none of it
+                was read. The headings below are still complete.
               </span>
             </p>
           )}
@@ -199,7 +213,10 @@ export function KnowledgeOutline({
             // Indeterminate on purpose: there is no total to divide by, so
             // there is no bar and no percentage. See the same rule in
             // KnowledgeBacklinks.
-            <p data-testid="knowledge-outline-loading" className="px-3 py-2 text-xs text-[var(--color-muted)]">
+            <p
+              data-testid="knowledge-outline-loading"
+              className="px-3 py-2 text-xs text-[var(--color-muted)]"
+            >
               Reading this note&apos;s headings…
             </p>
           )}
@@ -214,7 +231,10 @@ export function KnowledgeOutline({
           )}
 
           {query.isSuccess && headings.length === 0 && (
-            <p data-testid="knowledge-outline-empty" className="px-3 py-2 text-xs text-[var(--color-muted)]">
+            <p
+              data-testid="knowledge-outline-empty"
+              className="px-3 py-2 text-xs text-[var(--color-muted)]"
+            >
               This note has no headings.
             </p>
           )}
@@ -222,27 +242,34 @@ export function KnowledgeOutline({
           {query.isSuccess && headings.length > 0 && (
             <ul className="flex flex-col py-1">
               {headings.map((heading, i) => {
-                const depth = depths[i]
-                const clamped = Math.min(depth, KNOWLEDGE_OUTLINE_MAX_INDENT_DEPTH)
-                const isActive = activeSlug !== undefined && activeSlug === heading.slug
-                const label = heading.text.trim()
+                const depth = depths[i];
+                const clamped = Math.min(
+                  depth,
+                  KNOWLEDGE_OUTLINE_MAX_INDENT_DEPTH,
+                );
+                const isActive =
+                  activeSlug !== undefined && activeSlug === heading.slug;
+                const label = heading.text.trim();
                 return (
                   <li key={`${heading.slug}-${i}`}>
                     <button
                       type="button"
+                      tabIndex={0}
                       data-testid="knowledge-outline-heading"
                       data-slug={heading.slug}
                       data-level={heading.level}
                       data-indent-depth={clamped}
-                      aria-current={isActive ? 'true' : undefined}
+                      aria-current={isActive ? "true" : undefined}
                       onClick={() => onNavigate(heading)}
-                      style={{ paddingLeft: `${INDENT_BASE_PX + clamped * INDENT_STEP_PX}px` }}
+                      style={{
+                        paddingLeft: `${INDENT_BASE_PX + clamped * INDENT_STEP_PX}px`,
+                      }}
                       className={
-                        'flex w-full items-baseline gap-2 py-1 pr-3 text-left text-xs transition-colors ' +
-                        'hover:bg-[var(--color-surface-2)] ' +
+                        "flex w-full items-baseline gap-2 py-1 pr-3 text-left text-xs transition-colors " +
+                        "hover:bg-[var(--color-surface-2)] " +
                         (isActive
-                          ? 'text-[var(--color-accent)]'
-                          : 'text-[var(--color-secondary)] hover:text-[var(--color-secondary)]')
+                          ? "text-[var(--color-accent)]"
+                          : "text-[var(--color-secondary)] hover:text-[var(--color-secondary)]")
                       }
                     >
                       {/* Lossless where the indent is clamped — the chip always
@@ -253,17 +280,23 @@ export function KnowledgeOutline({
                       >
                         H{heading.level}
                       </span>
-                      <span className={label ? 'min-w-0 break-words' : 'min-w-0 italic text-[var(--color-muted)]'}>
-                        {label || 'Untitled heading'}
+                      <span
+                        className={
+                          label
+                            ? "min-w-0 break-words"
+                            : "min-w-0 italic text-[var(--color-muted)]"
+                        }
+                      >
+                        {label || "Untitled heading"}
                       </span>
                     </button>
                   </li>
-                )
+                );
               })}
             </ul>
           )}
         </div>
       )}
     </section>
-  )
+  );
 }

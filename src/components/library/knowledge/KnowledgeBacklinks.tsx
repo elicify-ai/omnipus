@@ -58,39 +58,50 @@
 //
 // The loader is injected for the reason KnowledgeOutline.tsx records.
 
-import { useMemo, useState } from 'react'
-import type { MouseEvent } from 'react'
-import { useQuery } from '@tanstack/react-query'
-import { LinkBreak, WarningCircle } from '@phosphor-icons/react'
-import { QueryErrorState } from '@/components/shared/QueryErrorState'
-import { KnowledgeRailPanelHeader, type KnowledgeRailQualifier } from './KnowledgeRailPanel'
+import { useMemo, useState } from "react";
+import type { MouseEvent } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { LinkBreak, WarningCircle } from "@phosphor-icons/react";
+import { QueryErrorState } from "@/components/shared/QueryErrorState";
+import {
+  KnowledgeRailPanelHeader,
+  type KnowledgeRailQualifier,
+} from "./KnowledgeRailPanel";
 import type {
   KnowledgeGraphResponse,
   KnowledgeGraphSkip,
-} from '@/lib/api/generated/openapi-types'
+} from "@/lib/api/generated/openapi-types";
 
 /** Arguments for `GET /api/v1/library/{workspace_id}/knowledge/graph`. */
 export interface KnowledgeGraphRequest {
-  workspaceId: string
-  collectionId: string
-  kind: KnowledgeGraphResponse['kind']
+  workspaceId: string;
+  collectionId: string;
+  kind: KnowledgeGraphResponse["kind"];
   /** Collection-relative path of the note the query is about. */
-  path?: string
-  hops?: number
-  limit?: number
+  path?: string;
+  hops?: number;
+  limit?: number;
 }
 
 /** The injected client for the graph endpoint. */
 export type KnowledgeGraphLoader = (
   request: KnowledgeGraphRequest,
-) => Promise<KnowledgeGraphResponse>
+) => Promise<KnowledgeGraphResponse>;
 
 export function knowledgeBacklinksQueryKey(
   workspaceId: string,
   collectionId: string,
   notePath: string,
 ) {
-  return ['library', 'knowledge', 'graph', 'backlinks', workspaceId, collectionId, notePath] as const
+  return [
+    "library",
+    "knowledge",
+    "graph",
+    "backlinks",
+    workspaceId,
+    collectionId,
+    notePath,
+  ] as const;
 }
 
 /**
@@ -102,9 +113,9 @@ export function collectionPathToWorkspacePath(
   collectionRoot: string,
   collectionRelativePath: string,
 ): string {
-  const root = collectionRoot.replace(/^\/+|\/+$/g, '')
-  const rel = collectionRelativePath.replace(/^\/+/, '')
-  return root === '' ? rel : `${root}/${rel}`
+  const root = collectionRoot.replace(/^\/+|\/+$/g, "");
+  const rel = collectionRelativePath.replace(/^\/+/, "");
+  return root === "" ? rel : `${root}/${rel}`;
 }
 
 /**
@@ -112,40 +123,46 @@ export function collectionPathToWorkspacePath(
  * the router with `createHashHistory()` — so the address lives after the `#`,
  * exactly as `LibraryPanel`'s pop-out already writes it.
  */
-export function libraryNoteHref(workspaceId: string, workspacePath: string): string {
-  const params = new URLSearchParams({ workspace: workspaceId, path: workspacePath })
-  return `/#/library?${params.toString()}`
+export function libraryNoteHref(
+  workspaceId: string,
+  workspacePath: string,
+): string {
+  const params = new URLSearchParams({
+    workspace: workspaceId,
+    path: workspacePath,
+  });
+  return `/#/library?${params.toString()}`;
 }
 
 /** Plain-English rendering of every `KnowledgeGraphSkip.reason` (FR-112). */
-const SKIP_REASON_TEXT: Record<KnowledgeGraphSkip['reason'], string> = {
-  symlink: 'Symbolic link — not followed',
-  outside_root: 'Outside the collection — not read',
-  unreadable: 'Could not be read',
-  not_addressable: 'Name cannot be represented on this system',
-  node_limit: 'Node limit reached',
-  hop_limit: 'Hop limit reached',
-}
+const SKIP_REASON_TEXT: Record<KnowledgeGraphSkip["reason"], string> = {
+  symlink: "Symbolic link — not followed",
+  outside_root: "Outside the collection — not read",
+  unreadable: "Could not be read",
+  not_addressable: "Name cannot be represented on this system",
+  node_limit: "Node limit reached",
+  hop_limit: "Hop limit reached",
+};
 
 function basename(path: string): string {
-  const parts = path.split('/')
-  return parts[parts.length - 1] || path
+  const parts = path.split("/");
+  return parts[parts.length - 1] || path;
 }
 
 export interface KnowledgeBacklinksProps {
-  workspaceId: string
+  workspaceId: string;
   /** The `KnowledgeBaseInfo.collection_id` this note belongs to. */
-  collectionId: string
+  collectionId: string;
   /** Collection-relative path of the open note. */
-  notePath: string
+  notePath: string;
   /** The collection's own workspace-relative root path; '' when it is the workspace root. */
-  collectionRoot: string
+  collectionRoot: string;
   /** See KnowledgeOutline's header note — required, not defaulted. */
-  loadGraph: KnowledgeGraphLoader
+  loadGraph: KnowledgeGraphLoader;
   /** Open a backlink in place. Receives a WORKSPACE-relative path. */
-  onOpenNote?: (workspacePath: string) => void
+  onOpenNote?: (workspacePath: string) => void;
   /** FR-064 / US-7 AS-9 — collapse to a toggle in a narrow docked rail. */
-  collapsible?: boolean
+  collapsible?: boolean;
 }
 
 export function KnowledgeBacklinks({
@@ -157,20 +174,26 @@ export function KnowledgeBacklinks({
   onOpenNote,
   collapsible = false,
 }: KnowledgeBacklinksProps) {
-  const [expanded, setExpanded] = useState(!collapsible)
+  const [expanded, setExpanded] = useState(!collapsible);
 
   const query = useQuery({
     queryKey: knowledgeBacklinksQueryKey(workspaceId, collectionId, notePath),
-    queryFn: () => loadGraph({ workspaceId, collectionId, kind: 'backlinks', path: notePath }),
-  })
+    queryFn: () =>
+      loadGraph({
+        workspaceId,
+        collectionId,
+        kind: "backlinks",
+        path: notePath,
+      }),
+  });
 
-  const edges = useMemo(() => query.data?.edges ?? [], [query.data])
-  const skipped = useMemo(() => query.data?.skipped ?? [], [query.data])
+  const edges = useMemo(() => query.data?.edges ?? [], [query.data]);
+  const skipped = useMemo(() => query.data?.skipped ?? [], [query.data]);
   const nodeByPath = useMemo(() => {
-    const map = new Map<string, KnowledgeGraphResponse['nodes'][number]>()
-    for (const node of query.data?.nodes ?? []) map.set(node.path, node)
-    return map
-  }, [query.data])
+    const map = new Map<string, KnowledgeGraphResponse["nodes"][number]>();
+    for (const node of query.data?.nodes ?? []) map.set(node.path, node);
+    return map;
+  }, [query.data]);
 
   // FR-054/FR-112 on the ALWAYS-VISIBLE row. The truncation notice and the
   // skipped-paths section below are inside the collapsed body; with
@@ -180,31 +203,33 @@ export function KnowledgeBacklinks({
   // … so a small graph is never mistaken for a clipped one"; a caveat behind a
   // disclosure is not stated at all.
   const qualifiers = useMemo<KnowledgeRailQualifier[]>(() => {
-    const out: KnowledgeRailQualifier[] = []
+    const out: KnowledgeRailQualifier[] = [];
     if (query.data?.truncated) {
       const bounds = [
         query.data.node_limit_applied !== undefined
           ? `node limit ${query.data.node_limit_applied}`
-          : '',
-        query.data.hop_limit_applied !== undefined ? `hop limit ${query.data.hop_limit_applied}` : '',
-      ].filter(Boolean)
+          : "",
+        query.data.hop_limit_applied !== undefined
+          ? `hop limit ${query.data.hop_limit_applied}`
+          : "",
+      ].filter(Boolean);
       out.push({
-        label: 'truncated',
+        label: "truncated",
         detail:
-          'A bound stopped the walk, so this count is of a clipped view rather than every ' +
-          `inbound link${bounds.length > 0 ? ` (${bounds.join(', ')})` : ''}.`,
-      })
+          "A bound stopped the walk, so this count is of a clipped view rather than every " +
+          `inbound link${bounds.length > 0 ? ` (${bounds.join(", ")})` : ""}.`,
+      });
     }
     if (skipped.length > 0) {
       out.push({
         label: `${skipped.length} skipped`,
         detail:
-          `${skipped.length} ${skipped.length === 1 ? 'path was' : 'paths were'} skipped while ` +
-          'walking this collection and were not searched for links.',
-      })
+          `${skipped.length} ${skipped.length === 1 ? "path was" : "paths were"} skipped while ` +
+          "walking this collection and were not searched for links.",
+      });
     }
-    return out
-  }, [query.data, skipped])
+    return out;
+  }, [query.data, skipped]);
 
   return (
     <section
@@ -250,15 +275,20 @@ export function KnowledgeBacklinks({
               data-testid="knowledge-backlinks-truncated"
               className="flex items-start gap-2 px-3 py-2 text-xs text-[var(--color-warning)]"
             >
-              <WarningCircle size={14} className="mt-px shrink-0" aria-hidden="true" />
+              <WarningCircle
+                size={14}
+                className="mt-px shrink-0"
+                aria-hidden="true"
+              />
               <span>
-                A bound stopped the walk, so this is a clipped view rather than every inbound link.
+                A bound stopped the walk, so this is a clipped view rather than
+                every inbound link.
                 {query.data.node_limit_applied !== undefined
                   ? ` Node limit: ${query.data.node_limit_applied}.`
-                  : ''}
+                  : ""}
                 {query.data.hop_limit_applied !== undefined
                   ? ` Hop limit: ${query.data.hop_limit_applied}.`
-                  : ''}
+                  : ""}
               </span>
             </p>
           )}
@@ -275,22 +305,26 @@ export function KnowledgeBacklinks({
           {edges.length > 0 && (
             <ul className="flex flex-col py-1">
               {edges.map((edge, i) => {
-                const source = nodeByPath.get(edge.from_path)
+                const source = nodeByPath.get(edge.from_path);
                 // A node the response never vouched for is treated exactly like
                 // one it marked non-existent: shown, and not navigable. The
                 // contract says `nodes` carries every node referenced by the
                 // graph, so a gap is a broken answer — and the safe reading of
                 // a broken answer is "do not send the reader to this path".
-                const unresolved = source?.exists !== true || edge.resolution === 'unresolved'
-                const workspacePath = collectionPathToWorkspacePath(collectionRoot, edge.from_path)
-                const label = source?.title?.trim() || basename(edge.from_path)
+                const unresolved =
+                  source?.exists !== true || edge.resolution === "unresolved";
+                const workspacePath = collectionPathToWorkspacePath(
+                  collectionRoot,
+                  edge.from_path,
+                );
+                const label = source?.title?.trim() || basename(edge.from_path);
 
                 const context = (
                   <>
                     <span className="block truncate text-[11px] text-[var(--color-muted)]">
                       {edge.from_path}
                     </span>
-                    {edge.alias !== undefined && edge.alias !== '' && (
+                    {edge.alias !== undefined && edge.alias !== "" && (
                       <span
                         data-testid="knowledge-backlink-alias"
                         className="block text-[11px] text-[var(--color-muted)]"
@@ -298,7 +332,7 @@ export function KnowledgeBacklinks({
                         Refers to this note as “{edge.alias}”
                       </span>
                     )}
-                    {edge.heading !== undefined && edge.heading !== '' && (
+                    {edge.heading !== undefined && edge.heading !== "" && (
                       <span
                         data-testid="knowledge-backlink-heading"
                         className="block text-[11px] text-[var(--color-muted)]"
@@ -320,13 +354,14 @@ export function KnowledgeBacklinks({
                         className="mt-1 block text-[11px] text-[var(--color-warning)]"
                       >
                         Ambiguous link
-                        {edge.link_text !== undefined && edge.link_text !== ''
+                        {edge.link_text !== undefined && edge.link_text !== ""
                           ? `: “${edge.link_text}” matched more than one note`
-                          : ': more than one note matched'}
+                          : ": more than one note matched"}
                         . Resolved to {edge.to_path}
-                        {edge.candidates !== undefined && edge.candidates.length > 0
-                          ? `. Candidates, in tie-break order: ${edge.candidates.join(', ')}`
-                          : ''}
+                        {edge.candidates !== undefined &&
+                        edge.candidates.length > 0
+                          ? `. Candidates, in tie-break order: ${edge.candidates.join(", ")}`
+                          : ""}
                         .
                       </span>
                     )}
@@ -336,13 +371,14 @@ export function KnowledgeBacklinks({
                         className="mt-1 flex items-center gap-1 text-[11px] text-[var(--color-warning)]"
                       >
                         <LinkBreak size={12} aria-hidden="true" />
-                        Unresolved — this note is not on disk, so it cannot be opened
+                        Unresolved — this note is not on disk, so it cannot be
+                        opened
                       </span>
                     )}
                   </>
-                )
+                );
 
-                const rowClass = 'block w-full px-3 py-1.5 text-left text-xs'
+                const rowClass = "block w-full px-3 py-1.5 text-left text-xs";
 
                 return (
                   <li key={`${edge.from_path}-${edge.to_path}-${i}`}>
@@ -360,6 +396,7 @@ export function KnowledgeBacklinks({
                       </span>
                     ) : (
                       <a
+                        tabIndex={0}
                         data-testid="knowledge-backlink"
                         data-unresolved="false"
                         data-path={edge.from_path}
@@ -373,11 +410,11 @@ export function KnowledgeBacklinks({
                             event.altKey ||
                             event.button !== 0
                           ) {
-                            return
+                            return;
                           }
-                          if (!onOpenNote) return
-                          event.preventDefault()
-                          onOpenNote(workspacePath)
+                          if (!onOpenNote) return;
+                          event.preventDefault();
+                          onOpenNote(workspacePath);
                         }}
                         className={`${rowClass} text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors`}
                       >
@@ -386,7 +423,7 @@ export function KnowledgeBacklinks({
                       </a>
                     )}
                   </li>
-                )
+                );
               })}
             </ul>
           )}
@@ -395,9 +432,14 @@ export function KnowledgeBacklinks({
               alongside a full result list — a skipped file is not an error
               state, it is part of the answer. */}
           {skipped.length > 0 && (
-            <div data-testid="knowledge-backlinks-skipped" className="border-t border-[var(--color-border)] px-3 py-2">
+            <div
+              data-testid="knowledge-backlinks-skipped"
+              className="border-t border-[var(--color-border)] px-3 py-2"
+            >
               <p className="text-[11px] text-[var(--color-warning)]">
-                {skipped.length === 1 ? '1 path was skipped' : `${skipped.length} paths were skipped`}{' '}
+                {skipped.length === 1
+                  ? "1 path was skipped"
+                  : `${skipped.length} paths were skipped`}{" "}
                 while walking this collection:
               </p>
               <ul className="mt-1 flex flex-col gap-1">
@@ -408,10 +450,14 @@ export function KnowledgeBacklinks({
                     data-reason={skip.reason}
                     className="text-[11px] text-[var(--color-muted)]"
                   >
-                    <span className="block truncate text-[var(--color-secondary)]">{skip.path}</span>
+                    <span className="block truncate text-[var(--color-secondary)]">
+                      {skip.path}
+                    </span>
                     <span className="block">
                       {SKIP_REASON_TEXT[skip.reason]}
-                      {skip.detail !== undefined && skip.detail !== '' ? ` — ${skip.detail}` : ''}
+                      {skip.detail !== undefined && skip.detail !== ""
+                        ? ` — ${skip.detail}`
+                        : ""}
                     </span>
                   </li>
                 ))}
@@ -421,5 +467,5 @@ export function KnowledgeBacklinks({
         </div>
       )}
     </section>
-  )
+  );
 }

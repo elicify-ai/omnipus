@@ -24,27 +24,27 @@
 // `detail` is the full sentence, rendered screen-reader-only, because "200
 // TRUNCATED" read aloud is not a sentence.
 
-import type { ReactNode } from 'react'
-import { CaretDown, CaretRight } from '@phosphor-icons/react'
+import type { ReactNode } from "react";
+import { CaretDown, CaretRight } from "@phosphor-icons/react";
 
 /** A caveat that must remain visible while the panel is collapsed. */
 export interface KnowledgeRailQualifier {
   /** Terse, lower-case, two or three words at most: "truncated", "3 skipped". */
-  label: string
+  label: string;
   /** The whole sentence, for assistive technology. Never abbreviated. */
-  detail: string
+  detail: string;
 }
 
 export interface KnowledgeRailPanelHeaderProps {
-  title: string
+  title: string;
   /** Count of what is LOADED. Omit while loading — "0" would be a claim. */
-  count?: number
-  collapsible: boolean
-  expanded: boolean
-  onToggle: () => void
-  testId: string
+  count?: number;
+  collapsible: boolean;
+  expanded: boolean;
+  onToggle: () => void;
+  testId: string;
   /** Caveats about the number beside them. Rendered in the always-visible row. */
-  qualifiers?: KnowledgeRailQualifier[]
+  qualifiers?: KnowledgeRailQualifier[];
 }
 
 export function KnowledgeRailPanelHeader({
@@ -66,7 +66,10 @@ export function KnowledgeRailPanelHeader({
         ))}
       <span className="font-medium uppercase tracking-wide">{title}</span>
       {count !== undefined && (
-        <span className="text-[var(--color-muted)]" data-testid={`${testId}-count`}>
+        <span
+          className="text-[var(--color-muted)]"
+          data-testid={`${testId}-count`}
+        >
           {count}
         </span>
       )}
@@ -82,17 +85,18 @@ export function KnowledgeRailPanelHeader({
         </span>
       ))}
     </>
-  )
+  );
 
   const className =
-    'flex w-full items-center gap-2 px-3 py-2 text-left text-[11px] text-[var(--color-secondary)]'
+    "flex w-full items-center gap-2 px-3 py-2 text-left text-[11px] text-[var(--color-secondary)]";
 
-  if (!collapsible) return <h3 className={className}>{body}</h3>
+  if (!collapsible) return <h3 className={className}>{body}</h3>;
 
   return (
     <h3>
       <button
         type="button"
+        tabIndex={0}
         data-testid={testId}
         aria-expanded={expanded}
         onClick={onToggle}
@@ -101,5 +105,5 @@ export function KnowledgeRailPanelHeader({
         {body}
       </button>
     </h3>
-  )
+  );
 }
