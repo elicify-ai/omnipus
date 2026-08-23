@@ -169,6 +169,14 @@ func NewAgentInstance(
 	// or revoked per agent, because GET /agents/{id}/tools lists this registry.
 	toolsRegistry.Register(tools.NewRequestMountTool(config.OmnipusHomeDir()))
 
+	// list_mounts (ADR-068 §4) registers here for exactly the reason spelled
+	// out above: a mount tool that lives only in the metadata catalog is
+	// visible in Settings and callable by nobody. It is the read-only half of
+	// the pair — an agent that can request a mount must also be able to see
+	// which mounts it already has, or it re-requests folders it was already
+	// granted (ADR-068 §2.2).
+	toolsRegistry.Register(tools.NewListMountsTool(config.OmnipusHomeDir()))
+
 	// Resolve agentID early so the session store can tag sessions with the correct owner.
 	// Empty until an agentCfg supplies one: the "main" sentinel used to stand in
 	// here, which is how it ended up stamped on sessions, transcripts, tasks and

@@ -338,7 +338,23 @@ func DefaultConfig() *Config {
 				"library_list":   "allow",
 				"library_read":   "allow",
 				// The operator approves each grant; see ADR-063 FR-7.2.
-				"request_mount":       "ask",
+				"request_mount": "ask",
+				// list_mounts (ADR-068 §4) is the READ-ONLY counterpart and is
+				// "allow", not "ask". It mutates nothing: it reads back the
+				// grant list the operator themself approved and computes a live
+				// exists/doesn't-exist status per entry — there is no
+				// destructive action for an "ask" to stand in front of, and no
+				// information in it the operator did not already decide to
+				// give. Putting a human prompt in front of an agent checking
+				// which folders it may write to would also, under the
+				// strictest-wins global x agent merge
+				// (pkg/tools/compositor.go), drag every per-agent "allow" down
+				// to "ask" — so an agent could not discover its own grants
+				// without interrupting the person who granted them, which is
+				// the exact friction ADR-068 §4 exists to remove. As always,
+				// raising the ceiling grants the tool to nobody by itself; the
+				// per-agent seeds in pkg/coreagent/core.go decide who has it.
+				"list_mounts":         "allow",
 				"search_web":          "allow",
 				"fetch_url":           "allow",
 				"send_message":        "allow",

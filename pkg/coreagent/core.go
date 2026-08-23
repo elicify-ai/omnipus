@@ -358,6 +358,13 @@ var allStaticToolNames = []string{
 	// request_mount (ADR-063 FR-7.2): seeded "ask" everywhere — the whole
 	// point is that the operator approves each folder.
 	"request_mount",
+	// list_mounts (ADR-068 §4): the read-only counterpart to request_mount —
+	// it enumerates folders the operator has ALREADY approved and mutates
+	// nothing, so it is seeded "allow", not "ask". An "ask" here would
+	// re-introduce a human prompt for reading back a grant the human just
+	// made. This name MUST stay in this literal: validateOverrideKeys panics
+	// on an override key absent from it.
+	"list_mounts",
 	"search_web", "fetch_url",
 	"send_message", "hand_off", "return_to_default", "send_file",
 	"find_skills", "install_skill",
@@ -722,6 +729,7 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			overrides["library_list"] = allow
 			overrides["library_read"] = allow
 			overrides["request_mount"] = ask
+			overrides["list_mounts"] = allow
 			overrides["create_task"] = allow
 			overrides["update_task"] = allow
 			overrides["list_tasks"] = allow
@@ -742,6 +750,7 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			overrides["library_list"] = allow
 			overrides["library_read"] = allow
 			overrides["request_mount"] = ask
+			overrides["list_mounts"] = allow
 			overrides["remember"] = allow
 			overrides["recall_memory"] = allow
 			overrides["run_retrospective"] = allow
@@ -767,6 +776,7 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			// read_file-only allowance; he has no list_directory either).
 			overrides["library_read"] = allow
 			overrides["request_mount"] = ask
+			overrides["list_mounts"] = allow
 			overrides["remember"] = allow
 			overrides["recall_memory"] = allow
 			overrides["run_retrospective"] = allow
@@ -927,6 +937,7 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			"library_list":  allow,
 			"library_read":  allow,
 			"request_mount": ask,
+			"list_mounts":   allow,
 			// Persistent memory (carries research context across sessions).
 			"remember":            allow,
 			"recall_memory":       allow,
@@ -986,6 +997,7 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			"library_list":  allow,
 			"library_read":  allow,
 			"request_mount": ask,
+			"list_mounts":   allow,
 			// External lookups.
 			"search_web": allow,
 			"fetch_url":  allow,
@@ -2051,6 +2063,7 @@ func NewCustomAgentToolsCfg() *config.AgentToolsCfg {
 				"library_list":        allow,
 				"library_read":        allow,
 				"request_mount":       ask,
+				"list_mounts":         allow,
 				"remember":            allow,
 				"recall_memory":       allow,
 				"run_retrospective":   allow,

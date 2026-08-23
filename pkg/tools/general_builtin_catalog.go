@@ -71,6 +71,15 @@ func GeneralBuiltinMetadata() []Tool {
 	// is the static catalog used for policy enumeration and the tool picker;
 	// the per-turn instance is built with a real workspace when registered.
 	out = append(out, NewRequestMountTool(""))
+	// list_mounts (ADR-068 §4): the read-only counterpart to request_mount —
+	// which folders are mounted into this workspace right now. Catalogued for
+	// the same reason request_mount is, and it MUST be here rather than only
+	// in the per-agent registry: this catalog is what pkg/gateway's
+	// buildKnownBuiltinToolNames walks to build the Constraint #6 coverage
+	// universe, and a tool missing from it ships denied-by-default on every
+	// install even though every agent registers it (see
+	// recall_conversation_meta.go, which exists because that happened).
+	out = append(out, NewListMountsTool(""))
 
 	// --- Web tools (CategoryWeb) ---
 	// search_web: use DuckDuckGoEnabled to satisfy the at-least-one-provider
