@@ -1,7 +1,10 @@
 import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest'
 import React from 'react'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { queryClient } from '@/lib/queryClient'
+import { PROVIDERS_CATALOG_STUB, STUB_PROVIDERS } from '@/test/fixtures/providersCatalog.stub'
+import { catalogEndpointHint, catalogSubtitle } from '@/lib/catalogDisplay'
 
 // Wave 5b spec tests — OnboardingWizard frontend tests
 // Traces to: wave5b-system-agent-spec.md — Onboarding Flow BDD scenarios
@@ -54,15 +57,16 @@ vi.mock('@/lib/api', async (importOriginal) => {
     // fetchProviders is called after a successful test to populate the model list.
     // Return empty models so ModelSelector renders in free-text (Input) mode.
     fetchProviders: vi.fn().mockResolvedValue([]),
+    // The registry-fed catalog (ADR-068 FR-037) — the picker's only source.
+    fetchProvidersCatalog: vi.fn(),
   }
 })
 
 // Mock SVG import
 vi.mock('@/assets/logo/omnipus-avatar.svg?url', () => ({ default: '/test-avatar.svg' }))
 
-import { configureProvider, probeProvider, completeOnboardingTransaction } from '@/lib/api'
+import { configureProvider, probeProvider, completeOnboardingTransaction, fetchProvidersCatalog } from '@/lib/api'
 import { evaluatePasswordStrength, friendlyProbeError, PROVIDERS_REQUIRING_ENDPOINT, PLAN_LABELS, REGION_LABELS } from './onboarding'
-import { PROVIDER_CATALOG } from '@/lib/generated/providerCatalog'
 import { readFileSync } from 'fs'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
@@ -80,11 +84,19 @@ beforeAll(async () => {
 
 async function renderWizard() {
   if (!WizardComponent) throw new Error('WizardComponent not loaded — beforeAll did not run')
-  return render(<WizardComponent />)
+  // A fresh QueryClient per render so the catalog query never leaks a cached
+  // document (or error) between tests.
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  return render(
+    <QueryClientProvider client={client}>
+      <WizardComponent />
+    </QueryClientProvider>,
+  )
 }
 
 beforeEach(() => {
   vi.clearAllMocks()
+  vi.mocked(fetchProvidersCatalog).mockResolvedValue(PROVIDERS_CATALOG_STUB)
   mockNavigate.mockResolvedValue(undefined)
   vi.mocked(completeOnboardingTransaction).mockResolvedValue({
     token: 'test-token',
@@ -637,7 +649,7 @@ describe('PROVIDERS_REQUIRING_ENDPOINT', () => {
 // =====================================================================
 //
 // The new UI shows ONE tile per company (not per variant). Multi-variant
-// companies (Moonshot/Kimi, MiniMax, Qwen, Zhipu/GLM, DeepSeek) each get
+// companies (Moonshot AI, MiniMax, Alibaba Cloud, Zhipu AI) each get
 // one tile with a ▾ affordance. The old flat-variant button names are gone.
 
 describe('OnboardingWizard — company grid (grouped picker)', () => {
@@ -657,18 +669,18 @@ describe('OnboardingWizard — company grid (grouped picker)', () => {
   it('renders one tile per company (multi-variant companies collapsed into one)', async () => {
     await goToStep3()
     // Multi-variant companies show one tile each.
-    expect(screen.getByRole('button', { name: /Moonshot \/ Kimi/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^Moonshot AI$/i })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /^MiniMax$/i })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /Zhipu \/ GLM/i })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /Qwen \/ Alibaba/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^Zhipu AI$/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^Alibaba Cloud$/i })).toBeInTheDocument()
     // Old flat variant names should NOT appear as separate tiles.
-    expect(screen.queryByRole('button', { name: /Moonshot \/ Kimi \(International\)/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Moonshot AI \(International\)/i })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /MiniMax \(International\)/i })).not.toBeInTheDocument()
   })
 
-  it('shows Plan controls (standard-api/coding-plan) when Zhipu/GLM tile is clicked; no wire control at all', async () => {
+  it('shows Plan controls (standard-api/coding-plan) when Zhipu AI tile is clicked; no wire control at all', async () => {
     await goToStep3()
-    fireEvent.click(screen.getByRole('button', { name: /Zhipu \/ GLM/i }))
+    fireEvent.click(screen.getByRole('button', { name: /^Zhipu AI$/i }))
     await waitFor(() => {
       expect(screen.getByRole('button', { name: PLAN_LABELS['standard-api'] })).toBeInTheDocument()
       expect(screen.getByRole('button', { name: PLAN_LABELS['coding-plan'] })).toBeInTheDocument()
@@ -679,33 +691,33 @@ describe('OnboardingWizard — company grid (grouped picker)', () => {
     expect(screen.queryByText(/Anthropic-compatible/i)).not.toBeInTheDocument()
   })
 
-  it('shows Region controls (intl/china) for Zhipu/GLM on api plan', async () => {
+  it('shows Region controls (intl/china) for Zhipu AI on api plan', async () => {
     await goToStep3()
-    fireEvent.click(screen.getByRole('button', { name: /Zhipu \/ GLM/i }))
+    fireEvent.click(screen.getByRole('button', { name: /^Zhipu AI$/i }))
     await waitFor(() => {
       expect(screen.getByRole('button', { name: REGION_LABELS.intl })).toBeInTheDocument()
       expect(screen.getByRole('button', { name: REGION_LABELS.china })).toBeInTheDocument()
     })
   })
 
-  it('resolves the correct id for Zhipu/GLM standard-api+intl: z-ai', async () => {
+  it('resolves the correct id for Zhipu AI standard-api+intl: zai', async () => {
     vi.mocked(probeProvider).mockResolvedValue({ success: true })
     await goToStep3()
-    fireEvent.click(screen.getByRole('button', { name: /Zhipu \/ GLM/i }))
+    fireEvent.click(screen.getByRole('button', { name: /^Zhipu AI$/i }))
     await waitFor(() => screen.getByRole('button', { name: PLAN_LABELS['standard-api'] }))
-    // Plan defaults to standard-api, region defaults to intl → id should be z-ai
+    // Plan defaults to standard-api, region defaults to intl → id should be zai
     // (the only catalog entry for this company+plan+region since wire merged).
     fireEvent.change(screen.getByLabelText('API Key'), { target: { value: 'test-key' } })
     fireEvent.click(screen.getByRole('button', { name: /connect & load models/i }))
     await waitFor(() => {
-      expect(probeProvider).toHaveBeenCalledWith('z-ai', 'test-key', undefined)
+      expect(probeProvider).toHaveBeenCalledWith('zai', 'test-key', undefined)
     })
   })
 
-  it('resolves the correct id for Zhipu/GLM coding-plan+china: zhipu-coding', async () => {
+  it('resolves the correct id for Zhipu AI coding-plan+china: zhipuai-coding-plan', async () => {
     vi.mocked(probeProvider).mockResolvedValue({ success: true })
     await goToStep3()
-    fireEvent.click(screen.getByRole('button', { name: /Zhipu \/ GLM/i }))
+    fireEvent.click(screen.getByRole('button', { name: /^Zhipu AI$/i }))
     await waitFor(() => screen.getByRole('button', { name: PLAN_LABELS['coding-plan'] }))
     fireEvent.click(screen.getByRole('button', { name: PLAN_LABELS['coding-plan'] }))
     await waitFor(() => screen.getByRole('button', { name: REGION_LABELS.china }))
@@ -713,14 +725,14 @@ describe('OnboardingWizard — company grid (grouped picker)', () => {
     fireEvent.change(screen.getByLabelText('API Key'), { target: { value: 'test-key' } })
     fireEvent.click(screen.getByRole('button', { name: /connect & load models/i }))
     await waitFor(() => {
-      expect(probeProvider).toHaveBeenCalledWith('zhipu-coding', 'test-key', undefined)
+      expect(probeProvider).toHaveBeenCalledWith('zhipuai-coding-plan', 'test-key', undefined)
     })
   })
 
-  it('resolves the correct id for Qwen/Alibaba Coding Plan (single entry, no region split): coding-plan', async () => {
+  it('resolves the correct id for Alibaba Cloud Coding Plan (single entry, no region split): alibaba-coding-plan', async () => {
     vi.mocked(probeProvider).mockResolvedValue({ success: true })
     await goToStep3()
-    fireEvent.click(screen.getByRole('button', { name: /Qwen \/ Alibaba/i }))
+    fireEvent.click(screen.getByRole('button', { name: /^Alibaba Cloud$/i }))
     await waitFor(() => screen.getByRole('button', { name: PLAN_LABELS['coding-plan'] }))
     fireEvent.click(screen.getByRole('button', { name: PLAN_LABELS['coding-plan'] }))
     // The Coding Plan variant has no regional split — no Region control renders.
@@ -728,7 +740,7 @@ describe('OnboardingWizard — company grid (grouped picker)', () => {
     fireEvent.change(screen.getByLabelText('API Key'), { target: { value: 'test-key' } })
     fireEvent.click(screen.getByRole('button', { name: /connect & load models/i }))
     await waitFor(() => {
-      expect(probeProvider).toHaveBeenCalledWith('coding-plan', 'test-key', undefined)
+      expect(probeProvider).toHaveBeenCalledWith('alibaba-coding-plan', 'test-key', undefined)
     })
   })
 
@@ -741,21 +753,21 @@ describe('OnboardingWizard — company grid (grouped picker)', () => {
     expect(screen.queryByRole('button', { name: PLAN_LABELS['coding-plan'] })).not.toBeInTheDocument()
   })
 
-  it('search filters by alias: "kimi" shows Moonshot/Kimi tile', async () => {
+  it('search filters by alias: "kimi" shows Moonshot AI tile', async () => {
     await goToStep3()
     fireEvent.change(screen.getByLabelText(/search providers/i), { target: { value: 'kimi' } })
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /Moonshot \/ Kimi/i })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /^Moonshot AI$/i })).toBeInTheDocument()
     })
     // Non-matching companies should be filtered out.
     expect(screen.queryByRole('button', { name: /^OpenAI$/i })).not.toBeInTheDocument()
   })
 
-  it('search filters by alias: "glm" shows Zhipu/GLM tile', async () => {
+  it('search filters by alias: "glm" shows Zhipu AI tile', async () => {
     await goToStep3()
     fireEvent.change(screen.getByLabelText(/search providers/i), { target: { value: 'glm' } })
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /Zhipu \/ GLM/i })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /^Zhipu AI$/i })).toBeInTheDocument()
     })
     expect(screen.queryByRole('button', { name: /^Groq$/i })).not.toBeInTheDocument()
   })
@@ -766,7 +778,7 @@ describe('OnboardingWizard — company grid (grouped picker)', () => {
       models: ['model-a', 'model-b'],
     })
     await goToStep3()
-    fireEvent.click(screen.getByRole('button', { name: /Zhipu \/ GLM/i }))
+    fireEvent.click(screen.getByRole('button', { name: /^Zhipu AI$/i }))
     await waitFor(() => screen.getByLabelText('API Key'))
     fireEvent.change(screen.getByLabelText('API Key'), { target: { value: 'test-key' } })
     fireEvent.click(screen.getByRole('button', { name: /connect & load models/i }))
@@ -1114,107 +1126,58 @@ describe('OnboardingWizard — finish', () => {
 })
 
 // =====================================================================
-// PROVIDER_CATALOG consistency (US-7 / FR-019) — onboarding consumes
-// the shared catalog verbatim (labels, subtitles, logoSlug).
-// The AVAILABLE_PROVIDERS ⊆ ProbeProviderRequest invariant has been
-// re-homed to Go: TestCatalog_DriftGuard_IdInProbeEnum (already green).
+// Catalog source (ADR-068 FR-037 / T068-05) — the SPA reads the catalog
+// from GET /providers/catalog, not a bundle. Grep half of the BDD
+// scenario "SPA reads the catalog from the GET, not a bundle" (the network
+// half lands with T068-31's Playwright spec). The old SC-009 "static-only"
+// guard asserted the opposite invariant and is retired with the bundle.
 // =====================================================================
 
-describe('PROVIDER_CATALOG — onboarding sources catalog verbatim (US-7 / FR-019, FIX-4/5)', () => {
-  it('PROVIDER_CATALOG is non-empty and has 23 entries (post FIX-5 wire-merge: 30 → 23)', () => {
-    expect(PROVIDER_CATALOG.length).toBe(23)
+describe('Providers catalog — onboarding reads GET /providers/catalog, never a bundle (FR-037)', () => {
+  async function goToStep3() {
+    await renderWizard()
+    await advanceNameToPassword()
+    await advancePasswordToModelKey()
+  }
+
+  it('[SC-010] onboarding.tsx sources the catalog through fetchProvidersCatalog and imports no bundle', () => {
+    const src = readFileSync(join(__dirname_onboarding, 'onboarding.tsx'), 'utf-8')
+    expect(src).toContain('fetchProvidersCatalog')
+    expect(src).not.toContain("from '@/lib/generated/")
   })
 
-  it('every entry has required fields: id, company, label, subtitle, logoSlug, plan, wire', () => {
-    for (const entry of PROVIDER_CATALOG) {
-      expect(entry.id, `missing id on ${JSON.stringify(entry)}`).toBeTruthy()
-      expect(entry.company, `missing company on ${entry.id}`).toBeTruthy()
-      expect(entry.label, `missing label on ${entry.id}`).toBeTruthy()
-      expect(entry.subtitle, `missing subtitle on ${entry.id}`).toBeTruthy()
-      expect(entry.logoSlug, `missing logoSlug on ${entry.id}`).toBeTruthy()
-      expect(['standard-api', 'coding-plan']).toContain(entry.plan)
-      expect(['openai-compatible', 'anthropic']).toContain(entry.wire)
-    }
+  it('[SC-010] ProvidersSection.tsx sources the catalog through fetchProvidersCatalog and imports no bundle', () => {
+    const src = readFileSync(join(__dirname_onboarding, '../components/settings/ProvidersSection.tsx'), 'utf-8')
+    expect(src).toContain('fetchProvidersCatalog')
+    expect(src).not.toContain("from '@/lib/generated/")
   })
 
-  it('catalog has entries for Zhipu/GLM: 2 plans × 2 regions = 4 entries (wire merged into anthropic_id)', () => {
-    const entries = PROVIDER_CATALOG.filter((e) => e.company === 'Zhipu / GLM')
-    expect(entries).toHaveLength(4)
+  it('the wizard requests the catalog from the API on step 3', async () => {
+    await goToStep3()
+    expect(fetchProvidersCatalog).toHaveBeenCalled()
   })
 
-  it('catalog has entries for Moonshot/Kimi: 1 plan × 2 regions = 2 entries (wire merged into anthropic_id)', () => {
-    const entries = PROVIDER_CATALOG.filter((e) => e.company === 'Moonshot / Kimi')
-    expect(entries).toHaveLength(2)
+  it('the selected entry renders the subtitle and endpoint derived from the fetched document (US-7 parity)', async () => {
+    await goToStep3()
+    fireEvent.click(screen.getByRole('button', { name: /^Zhipu AI$/i }))
+    const entry = STUB_PROVIDERS.find((e) => e.id === 'zai')!
+    await waitFor(() => {
+      expect(screen.getByText(catalogSubtitle(entry))).toBeInTheDocument()
+    })
+    // Pinned verbatim — the same strings onboarding-settings-parity.test.tsx pins.
+    expect(catalogSubtitle(entry)).toBe('Pay-as-you-go, per token · api.z.ai/api/paas/v4')
+    expect(screen.getByText(`→ ${catalogEndpointHint(entry)}`)).toBeInTheDocument()
   })
 
-  it('catalog has entries for MiniMax: 1 plan × 2 regions = 2 entries (wire merged into anthropic_id)', () => {
-    const entries = PROVIDER_CATALOG.filter((e) => e.company === 'MiniMax')
-    expect(entries).toHaveLength(2)
-  })
-
-  it('catalog has entries for DeepSeek: 1 plan, no region = 1 entry (wire merged into anthropic_id)', () => {
-    const entries = PROVIDER_CATALOG.filter((e) => e.company === 'DeepSeek')
-    expect(entries).toHaveLength(1)
-  })
-
-  it('catalog has entries for Qwen/Alibaba: 3 api regions + 1 coding-plan = 4 entries', () => {
-    const entries = PROVIDER_CATALOG.filter((e) => e.company === 'Qwen / Alibaba')
-    expect(entries).toHaveLength(4)
-  })
-
-  it('the z-ai entry label and subtitle match catalog verbatim (US-7 consistency, FIX-4)', () => {
-    const entry = PROVIDER_CATALOG.find((e) => e.id === 'z-ai')
-    expect(entry).toBeDefined()
-    expect(entry!.label).toBe('Zhipu / GLM (International)')
-    expect(entry!.subtitle).toBe('Pay-as-you-go, per token · api.z.ai/api/paas/v4')
-    expect(entry!.logoSlug).toBe('zhipu')
-    expect(entry!.anthropic_id).toBe('z-ai-anthropic')
-  })
-
-  it('openai entry label and subtitle match catalog verbatim (FIX-4: no plan suffix for single-plan companies)', () => {
-    const entry = PROVIDER_CATALOG.find((e) => e.id === 'openai')
-    expect(entry).toBeDefined()
-    expect(entry!.label).toBe('OpenAI')
-    expect(entry!.logoSlug).toBe('openai')
-  })
-
-  // [SC-009] The SPA MUST consume the provider catalog via a static import, NOT
-  // a live /providers/catalog HTTP fetch.  ADR-031 explicitly rejected a live
-  // catalog endpoint (G-2=B: build-time embed, not a live endpoint).
-  //
-  // We verify this by:
-  // (a) Confirming PROVIDER_CATALOG is a non-empty array (static import works).
-  // (b) Reading the source files of onboarding.tsx and ProvidersSection.tsx and
-  //     asserting they contain NO fetch('/providers/catalog') call.
-  //
-  // This is a source-scan, not a mock-level test — it verifies the property at
-  // the code level, where a mock might hide a real fetch call.
-  //
-  // Traces to: connectors-providers-redesign-spec.md §7 SC-009; ADR-031 §"Out of scope".
-  it('[SC-009] PROVIDER_CATALOG is a non-empty array consumed via static import', () => {
-    // Proves the static import itself works at runtime.
-    expect(Array.isArray(PROVIDER_CATALOG)).toBe(true)
-    expect(PROVIDER_CATALOG.length).toBeGreaterThan(0)
-  })
-
-  it('[SC-009] onboarding.tsx source does not fetch /providers/catalog (static-only)', () => {
-    // Read the source file and assert no live catalog fetch exists.
-    const src = readFileSync(
-      join(__dirname_onboarding, 'onboarding.tsx'),
-      'utf-8',
-    )
-    expect(src, 'onboarding.tsx must not call a /providers/catalog endpoint').not.toContain(
-      '/providers/catalog',
-    )
-  })
-
-  it('[SC-009] ProvidersSection.tsx source does not fetch /providers/catalog (static-only)', () => {
-    const src = readFileSync(
-      join(__dirname_onboarding, '../components/settings/ProvidersSection.tsx'),
-      'utf-8',
-    )
-    expect(src, 'ProvidersSection.tsx must not call a /providers/catalog endpoint').not.toContain(
-      '/providers/catalog',
-    )
+  it('a catalog fetch failure shows "Provider catalog unavailable" with a Retry that refetches', async () => {
+    vi.mocked(fetchProvidersCatalog).mockRejectedValueOnce(new Error('503'))
+    await goToStep3()
+    await waitFor(() => screen.getByTestId('catalog-error'))
+    expect(screen.queryByRole('button', { name: /^OpenAI$/i })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /retry/i }))
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /^OpenAI$/i })).toBeInTheDocument()
+    })
+    expect(screen.queryByTestId('catalog-error')).not.toBeInTheDocument()
   })
 })

@@ -43,7 +43,8 @@ export function avatarColorName(hex: string | undefined): string {
   return AVATAR_COLORS_BY_NAME[hex] ?? hex
 }
 
-/** Hint text for API key input fields, keyed by provider ID. */
+/** Hint text for API key input fields, keyed by canonical CatalogProvider id
+ *  (the `id` of GET /providers/catalog entries, ADR-067 schema 2.0.0). */
 export const PROVIDER_HINTS: Record<string, string> = {
   anthropic: 'Starts with sk-ant-...',
   openai: 'Starts with sk-...',

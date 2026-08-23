@@ -11,10 +11,10 @@ import { useSessionStore } from '@/store/session'
 import { useChatStore } from '@/store/chat'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 
-// D18: mock only the network calls (uploadFiles, inspectBrowserElement,
-// fetchModelCapabilities); keep the real modelLacksImageCapability (pure
-// decision helper) via importActual so the D18 tests below exercise the
-// actual integration, not a re-implemented mock of the decision logic.
+// D18: mock only the network calls (uploadFiles, inspectBrowserElement);
+// keep the real modelLacksImageCapability (pure decision helper) via
+// importActual so the D18 tests below exercise the actual integration, not a
+// re-implemented mock of the decision logic.
 vi.mock('@/lib/api', async () => {
   const actual = await vi.importActual<typeof import('@/lib/api')>('@/lib/api')
   return {

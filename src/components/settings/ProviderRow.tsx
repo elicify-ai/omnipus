@@ -5,10 +5,12 @@ import { BrandIcon } from '@/components/ui/brand-icon'
 import { providerCatalogMode } from '@/lib/agents/providerCatalog'
 import { ProviderValidationBanner } from '@/components/providers/ProviderValidationBanner'
 import type { ProviderValidation, Provider } from '@/lib/api/generated/openapi-types'
-import type { ProviderCatalogEntry } from '@/lib/api/generated/openapi-types'
+import type { CatalogProvider } from '@/lib/api/generated/openapi-types'
+import { catalogLogoSlug, catalogSubtitle } from '@/lib/catalogDisplay'
 
-// See ProvidersSection.tsx's file header for the FIX-N legend (this file
-// implements part of FIX-5, the Anthropic-endpoint chip below).
+// See ProvidersSection.tsx's file header for the FIX-N legend. `entry` is the
+// registry-fed CatalogProvider resolved for this configured row (ADR-068
+// FR-037) — display strings derive from src/lib/catalogDisplay.ts.
 
 // ---------------------------------------------------------------------------
 // Sub-component: a single configured-provider row (flat or inside a group)
@@ -17,15 +19,13 @@ import type { ProviderCatalogEntry } from '@/lib/api/generated/openapi-types'
 export function ProviderRow({
   provider,
   entry,
-  viaAnthropicId,
   title,
   showIcon,
   onConfigure,
   testValidation,
 }: {
   provider: Provider
-  entry?: ProviderCatalogEntry
-  viaAnthropicId?: boolean
+  entry?: CatalogProvider
   title: string
   showIcon: boolean
   onConfigure: () => void
@@ -33,7 +33,7 @@ export function ProviderRow({
 }) {
   const connected = provider.status === 'connected'
   const catalogMode = providerCatalogMode(provider)
-  const subtitle = entry?.subtitle
+  const subtitle = entry ? catalogSubtitle(entry) : undefined
 
   return (
     <div
@@ -51,7 +51,7 @@ export function ProviderRow({
       <div className="flex items-center gap-3 px-4 py-3">
         {showIcon && (
           entry ? (
-            <BrandIcon slug={entry.logoSlug} size={22} decorative className="shrink-0" />
+            <BrandIcon slug={catalogLogoSlug(entry)} size={22} decorative className="shrink-0" />
           ) : (
             <Globe size={22} className="text-[var(--color-muted)] shrink-0" aria-hidden="true" />
           )
@@ -64,16 +64,6 @@ export function ProviderRow({
             >
               {title}
             </span>
-            {/* Anthropic-endpoint chip (FIX-5) — only when configured under anthropic_id */}
-            {viaAnthropicId && (
-              <Badge
-                variant="muted"
-                className="font-normal text-[10px]"
-                data-testid={`anthropic-endpoint-chip-${provider.id}`}
-              >
-                Anthropic endpoint
-              </Badge>
-            )}
             {connected ? (
               <Badge data-testid={`connected-badge-${provider.id}`} variant="success" className="gap-1">
                 <CheckCircle size={10} weight="fill" /> Connected
