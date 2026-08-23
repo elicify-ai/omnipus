@@ -12,12 +12,27 @@ import (
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/chromedp"
 
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
-// maxGetTextBytes caps browser_get_text output to prevent enormous DOM dumps.
-const maxGetTextBytes = 100 * 1024 // 100KB per spec edge case
+// maxGetTextChars caps browser_get_text output to prevent enormous DOM
+// dumps. Aligned to the ADR-066 D4 builtin-success cap (FR-014, B-15) so
+// the result never reaches the tool-result choke point already over the
+// cap it will be held to. No per-tool opt-out.
+const maxGetTextChars = config.DefaultBuiltinSuccessCap // 64,000 chars
+
+// getTextTruncationSuffix is appended when capGetText cuts the text.
+const getTextTruncationSuffix = "\n[truncated at 64,000 chars]"
+
+// capGetText holds a browser_get_text result to maxGetTextChars.
+func capGetText(text string) string {
+	if len(text) > maxGetTextChars {
+		return text[:maxGetTextChars] + getTextTruncationSuffix
+	}
+	return text
+}
 
 // getTextWaitTimeout bounds the initial element-presence wait for
 // browser_get_text and browser_wait with a SHORT, dedicated timeout instead
@@ -634,9 +649,7 @@ func (t *GetTextTool) Execute(ctx context.Context, args map[string]any) *tools.T
 			displayTarget, scrubMarkerFromError(err, target, displayTarget)))
 	}
 
-	if len(resultText) > maxGetTextBytes {
-		resultText = resultText[:maxGetTextBytes] + "\n[truncated at 100KB]"
-	}
+	resultText = capGetText(resultText)
 
 	return jsonResult(map[string]any{"text": resultText})
 }

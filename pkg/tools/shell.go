@@ -1170,7 +1170,7 @@ func foregroundResultFromSandbox(res sandbox.Result, timeoutSeconds int32) *Tool
 	// while leaving an earlier, worker-embedded fake suffix as the text's
 	// last occurrence.
 	exitCode := res.ExitCode
-	output = truncateOutput(output)
+	output = truncateOutput(output, res.ExitCode)
 	if res.ExitCode != 0 {
 		output += fmt.Sprintf("\n\n[Command exited with code %d]", res.ExitCode)
 		if res.ExitCode == -1 {
@@ -1278,7 +1278,7 @@ func (t *ExecTool) runUnconstrained(
 	// structured field is set first (truncation-immune, authoritative for
 	// the judge), and the display suffix is appended AFTER truncation.
 	realExitCode := exitCode
-	output = truncateOutput(output)
+	output = truncateOutput(output, exitCode)
 	if exitCode != 0 {
 		output += fmt.Sprintf("\n\n[Command exited with code %d]", exitCode)
 	}
@@ -1291,17 +1291,29 @@ func (t *ExecTool) runUnconstrained(
 	}
 }
 
-const maxForegroundOutputLen = 10000
+// Foreground output caps, aligned to the ADR-066 D4 per-surface figures
+// (FR-014, B-15) so a bash result never reaches the tool-result choke point
+// already larger than the cap it will be held to. A successful command
+// (exit 0) may return up to the builtin-success cap; a failed one is held
+// to the builtin-failure cap. There is no per-tool opt-out.
+const (
+	maxForegroundSuccessOutputLen = config.DefaultBuiltinSuccessCap // 64,000 chars
+	maxForegroundOutputLen        = config.DefaultBuiltinFailureCap // 10,000 chars (failure path)
+)
 
-func truncateOutput(output string) string {
+func truncateOutput(output string, exitCode int) string {
 	if output == "" {
 		return "(no output)"
 	}
-	if len(output) > maxForegroundOutputLen {
+	limit := maxForegroundOutputLen
+	if exitCode == 0 {
+		limit = maxForegroundSuccessOutputLen
+	}
+	if len(output) > limit {
 		totalLen := len(output)
-		return output[:maxForegroundOutputLen] + fmt.Sprintf(
+		return output[:limit] + fmt.Sprintf(
 			"\n... (truncated, %d more chars)",
-			totalLen-maxForegroundOutputLen,
+			totalLen-limit,
 		)
 	}
 	return output
