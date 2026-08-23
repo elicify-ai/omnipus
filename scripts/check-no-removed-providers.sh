@@ -1,11 +1,17 @@
 #!/usr/bin/env bash
 # check-no-removed-providers.sh
 #
-# Regression guard for ADR-068 §2.4: the `antigravity` OAuth provider, the
-# `claude-cli` provider and the OpenAI device-code/OAuth login flow are DELETED
-# — greenfield, no alias, no shim, no migration, no error string naming them.
-# This script fails the build if any of them leaves (or regains) a trace in the
-# source tree.
+# Regression guard for ADR-068 §2.4: the `antigravity` OAuth provider and the
+# `claude-cli` provider are DELETED — greenfield, no alias, no shim, no
+# migration, no error string naming them. This script fails the build if
+# either leaves (or regains) a trace in the source tree.
+#
+# ADR-068 §8b (2026-08-23 amendment): the OpenAI device-code/OAuth login flow
+# this header used to list as deleted is RESTORED (T068-32) — the shared
+# Codex login is the form OpenAI itself endorses and every peer agent ships.
+# Its symbols are no longer forbidden here. The Anthropic/Claude store-OAuth
+# ladder (createClaudeAuthProvider, createClaudeTokenSource) remains deleted
+# and is still checked below.
 #
 # WHY A SCRIPT AND NOT A GO TEST
 #
@@ -22,8 +28,8 @@
 #   * the provider id `antigravity`   — case-insensitive, content AND file name
 #   * the provider id `claude-cli`    — the id, NOT the word "claude"
 #                                       (spec resolution #11)
-#   * the deleted OAuth/device-code symbols from pkg/auth/oauth.go and
-#     pkg/providers/codex_provider.go (FR-002a)
+#   * the deleted Anthropic/Claude store-OAuth ladder symbols
+#     (createClaudeAuthProvider, createClaudeTokenSource) — D13 §2.3 item 2
 #
 # across `pkg cmd src contracts config docs`, in every file type (generated
 # code, YAML contracts, JSON examples and prose included — "no trace" is a
@@ -78,7 +84,14 @@ ALLOW_RE="^($ALLOW_RE)\$"
 # --- forbidden strings (fragments, see header) --------------------------------
 ID_ANTI="anti""gravity"                         # matched case-insensitively
 ID_CCLI="claude""-cli"                          # the id, not the word
-SYMS="RequestDevice""Code|PollDeviceCode""Once|OpenAIOAuth""Config|createCodex""TokenSource|createCodex""AuthProvider|createClaude""AuthProvider|createClaude""TokenSource"
+# ADR-068 §8b (2026-08-23 amendment): the OpenAI device-code/OAuth symbols
+# (RequestDeviceCode, PollDeviceCodeOnce, OpenAIOAuthConfig,
+# createCodexTokenSource, createCodexAuthProvider) are RESTORED (T068-32) —
+# the shared Codex login is the form OpenAI itself endorses. They are
+# deliberately dropped from this list. The Anthropic/Claude store-OAuth
+# ladder stays deleted (D13 §2.3 item 2 unchanged) — those two names remain
+# forbidden.
+SYMS="createClaude""AuthProvider|createClaude""TokenSource"
 
 is_allowed() { printf '%s\n' "$1" | grep -qE "$ALLOW_RE"; }
 

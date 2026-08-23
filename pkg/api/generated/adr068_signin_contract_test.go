@@ -13,32 +13,37 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// ── ADR-068 own contract files (T068-06) ─────────────────────────────────────
+// ── ADR-068 own contract files (T068-06, amended 2026-08-23 SS8b/T068-34) ────
+// ── ADR-068 own contract files (T068-06, amended 2026-08-23 §8b/T068-34) ────
 // Traces to:
 //   contracts/openapi.yaml#/components/schemas/SignInStartResponse (FR-008, inline oneOf)
-//   contracts/components/schemas/SignInStartResponseCliLogin.yaml  (FR-008)
+//   contracts/components/schemas/SignInStartResponseCliLogin.yaml   (FR-008)
 //   contracts/components/schemas/SignInStartResponseDeviceCode.yaml (FR-008/FR-044)
-//   contracts/components/schemas/SignInStatus.yaml             (FR-009, MAJ-006)
+//   contracts/components/schemas/SignInStatus.yaml                  (FR-009)
+//   contracts/components/schemas/SignInPollRequest.yaml             (FR-044)
+//   contracts/components/schemas/SignInPollResponse.yaml            (FR-044)
 //   contracts/components/schemas/OnboardingProviderApiKey.yaml (MAJ-014)
 //   contracts/components/schemas/OnboardingProviderSignIn.yaml (MAJ-014)
 //   contracts/components/schemas/OnboardingCompleteRequest.yaml (provider oneOf)
 //   contracts/components/schemas/ProbeProviderResponse.yaml    (FR-036 probed_model)
 //   contracts/components/schemas/Provider.yaml                 (FR-038 / SC-012)
-
+//
+// SignInStartResponse became a discriminated union (ADR-034 pattern, same as
+// AgentCreateRequest) 2026-08-23: cli_login for codex-cli/github-copilot,
+// device_code for openai-chatgpt (and xai once configured) — there is no
+// longer a flat "SignInStartResponse.yaml" component file to validate
+// against directly; test each variant file instead (mirrors the
+// AgentCreateRequestMain/Subagent/Subagent3p section below). SignInStatus's
+// state enum gained `pending`.
+//
 // Generated enum const names (oapi-codegen v2.7.0 drops the type prefix when
-// the value is unique across the spec): CliLogin, DeviceCode. The
-// SignInStatusState consts keep their prefix because "signed_in"/"expired"
-// also appear on Provider.status. The union accessors are Discriminator() /
-// AsOnboardingProviderApiKey() / AsOnboardingProviderSignIn() and
-// AsSignInStartResponseCliLogin() / AsSignInStartResponseDeviceCode().
-
-// SignInStartResponse — a discriminated union hosted INLINE in openapi.yaml
-// (ADR-034 precedent), amended 2026-08-23 §8b (T068-34): `cli_login`
-// {method, instructions, command} for codex-cli / github-copilot, and
-// `device_code` {method, verification_url, user_code, device_auth_id,
-// expires_at, interval_seconds} for openai-chatgpt. Each variant is one
-// schema file, validated here per file; the union wrapper is exercised via
-// the generated accessors.
+// the value is unique across the spec, and qualifies EVERY sibling of a type
+// once any one value collides elsewhere in the spec — `pending` collides, so
+// all four SignInStatusState members are qualified now, unlike before):
+// CliLogin, DeviceCode, SignInStatusState{NotSignedIn,Pending,SignedIn,Expired}.
+// The union accessors are Discriminator() / AsSignInStartResponseCliLogin() /
+// AsSignInStartResponseDeviceCode() / AsOnboardingProviderApiKey() /
+// AsOnboardingProviderSignIn().
 
 func TestContract_SignInStartResponseCliLogin_Populated(t *testing.T) {
 	mustPassComponent(t, "SignInStartResponseCliLogin", SignInStartResponseCliLogin{
@@ -100,6 +105,12 @@ func TestContract_SignInStartResponseDeviceCode_CliLoginFieldsRejected(t *testin
 		"no cli_login fields on the device_code variant — additionalProperties: false")
 }
 
+func TestContract_SignInStartResponseDeviceCode_WrongDiscriminatorRejected(t *testing.T) {
+	raw := []byte(`{"method":"cli_login","verification_url":"https://x.example/device","user_code":"AB-12","device_auth_id":"das_1","expires_at":"2026-08-23T12:15:00Z","interval_seconds":5}`)
+	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "SignInStartResponseDeviceCode", raw),
+		"method is pinned to the device_code literal on this variant")
+}
+
 func TestContract_SignInStartResponse_UnionRoundTrip(t *testing.T) {
 	var u SignInStartResponse
 	require.NoError(t, u.FromSignInStartResponseDeviceCode(deviceCodeFixture()))
@@ -121,6 +132,37 @@ func TestContract_SignInStartResponse_UnionRoundTrip(t *testing.T) {
 	disc, err = c.Discriminator()
 	require.NoError(t, err)
 	assert.Equal(t, "cli_login", disc)
+}
+
+// SignInPollRequest / SignInPollResponse (FR-044).
+
+func TestContract_SignInPollRequest_Populated(t *testing.T) {
+	mustPassComponent(t, "SignInPollRequest", SignInPollRequest{DeviceAuthId: "das_9f3a2b1c"})
+}
+
+func TestContract_SignInPollRequest_ZeroValue(t *testing.T) {
+	mustFailComponent(t, "SignInPollRequest", SignInPollRequest{}, "device_auth_id is required and non-empty")
+}
+
+func TestContract_SignInPollResponse_AllStates(t *testing.T) {
+	for _, st := range []SignInPollResponseState{
+		SignInPollResponseStatePending, SignInPollResponseStateSignedIn,
+		SignInPollResponseStateExpired, SignInPollResponseStateDenied,
+	} {
+		mustPassComponent(t, "SignInPollResponse", SignInPollResponse{State: st})
+	}
+}
+
+func TestContract_SignInPollResponse_SlowDownInterval(t *testing.T) {
+	interval := 10
+	mustPassComponent(t, "SignInPollResponse", SignInPollResponse{
+		State:           SignInPollResponseStatePending,
+		IntervalSeconds: &interval,
+	})
+}
+
+func TestContract_SignInPollResponse_ZeroValue(t *testing.T) {
+	mustFailComponent(t, "SignInPollResponse", SignInPollResponse{}, "state is required")
 }
 
 // SignInStatus — {state: not_signed_in|pending|signed_in|expired,

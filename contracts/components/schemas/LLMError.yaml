@@ -90,8 +90,18 @@ x-user-messages:
     message: "The model you picked isn’t available for this turn, so this reply used the previous model. Check the model in Settings."
     attribution: config
   needs_provider:
-    message: "This agent's provider isn't configured. Open Settings → Providers to connect one."
-    attribution: config
+    # ADR-068 FR-046 (2026-08-23 §8b, T068-32): the first real producer of
+    # this code is a device-code provider (openai-chatgpt, xai) whose stored
+    # sign-in could not be refreshed — copy and attribution are FR-046's,
+    # not provider-specific, since the same closure and code serve every
+    # device-code provider. attribution is deliberately `user` here (a
+    # routine re-auth prompt, not an operator setup gap) — NOTE for whoever
+    # wires an ADR-067 "no provider configured at all" pre-turn producer for
+    # this same code later: that scenario reads as `config`, not `user`; the
+    # two have not been reconciled and may need a distinct code instead of
+    # sharing this one.
+    message: "Your sign-in for this provider expired. Sign in again under Settings → Providers."
+    attribution: user
   model_unassigned:
     message: "This agent has no model. Pick one in the agent's settings."
     attribution: config

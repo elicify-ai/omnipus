@@ -691,7 +691,21 @@ func bootCredentials(
 			values = append(values, v)
 		}
 	}
+	// ADR-068 FR-046/security paragraph (T068-32): stored device-code OAuth
+	// tokens (openai_OAUTH, and once configured xai_OAUTH) are not part of
+	// the config-ref-driven bundle above — nothing in config.json references
+	// them — so a restart would otherwise leave a previously-signed-in
+	// session's tokens unscrubbed until the next explicit sign-in. Fold them
+	// in here too.
+	values = append(values, providers.CollectOAuthSensitiveValues(credStore)...)
 	cfg.RegisterSensitiveValues(values)
+
+	// Wire the shared credential store for CreateProviderFromConfig's
+	// openai-chatgpt (device-code) dispatch — see
+	// providers.SetDefaultCredentialStore's doc comment for why this
+	// package-level seam exists instead of threading a *credentials.Store
+	// through every CreateProviderFromConfig call site.
+	providers.SetDefaultCredentialStore(credStore)
 
 	return cfg, bundle, credStore, nil
 }
