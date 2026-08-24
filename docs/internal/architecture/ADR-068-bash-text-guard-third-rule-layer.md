@@ -318,14 +318,72 @@ and `read_file X` now agree about the secret set — spec **R-4** ("a rule must
 not depend on which tool asks"), which §1.1 found had never been true on the
 bash path.
 
-### 9.3 §1 restated, precisely
+### 9.3 A rule must not depend on how the path is SPELLED (round 3)
+
+A third review pass found the read exemption still reachable for a secret-set
+file — through a different spelling of it.
+
+`absolutePathPattern` treats `~` and a token-start `$VAR` as **boundary**
+characters and captures only the suffix. So
+`$OMNIPUS_HOME/agents/other/SOUL.md` reached the guard as the candidate
+`/agents/other/SOUL.md` — a path naming no real file. It is outside the work
+dir, no mount covers it, the head is `cat` so `readOnly` is true, and
+`IsCarveOut` cannot match a carve-out root against a path that never contained
+`$OMNIPUS_HOME`. The guard allowed it; the shell then expanded the variable and
+read the real file. Measured, with the literal spelling of the same file
+correctly refused:
+
+| Command | Before |
+|---|---|
+| `cat <home>/agents/victim/SOUL.md` | BLOCKED |
+| `cat $HOME/.omnipus/agents/victim/SOUL.md` | **ALLOWED** |
+| `cat ~/.omnipus/agents/victim/SOUL.md` | **ALLOWED** |
+
+The write half was escapable the same way, and this half predates ADR-068: a
+fabricated suffix can be made to land **inside** the work dir
+(`printf x > $HOME<abs-cwd>/pwned`), so `checkPathSegment` returned "" before
+reaching the mount check at all, while the real target was outside every mount.
+`~/dev/null` likewise reached the `safePaths` exemption while bash wrote a real
+file at `$HOME/dev/null`.
+
+**Fixed by resolving the prefix at the scan site**, not by refusing expansions.
+`~`, `$HOME` and `$OMNIPUS_HOME` are expanded before judgement, so the real path
+faces the same checks its literal spelling does; any other `$VAR` is refused,
+because its value is unknowable to this process. The first attempt refused every
+expansion-derived candidate and broke `cat ~/notes.txt` — an ordinary read this
+ADR exists to permit, and one an existing test already pinned.
+
+**The general rule this makes explicit:** a path guard that reasons about
+command TEXT must judge the path the shell will actually open, not the substring
+its own regex happened to capture. Where it cannot know that path, it must
+refuse — never fall through to judging a fragment.
+
+### 9.4 Still open — the carve-out set omits session transcripts
+
+Round 3 also measured `cat <home>/sessions/<id>/<date>.jsonl` as **allowed** by
+its plain literal absolute path — no expansion trick needed.
+`SecretEntriesAlways`/`PerTurn` cover `agents` and `workspaces` but not
+`sessions/`, `memory/`, `tasks/`, `uploads/`, `media/` or `logs/`.
+
+A cross-agent session transcript contains the other agent's persona, the user's
+messages and every tool result in that turn — a superset of what
+`agents/<id>/SOUL.md` discloses. Denying `agents/` while `sessions/` stays open
+is the "deny that reads as correct and protects nothing" shape
+`SecretEntriesAlways`'s own doc comment warns about.
+
+This is an **ADR-063 scope decision about the carve-out set**, not a bug in this
+guard, so it is recorded here rather than changed unilaterally — but the ADR-068
+read exemption is what makes it reachable from `bash` for the first time, so it
+should be decided before this ships broadly.
+
+### 9.5 §1 restated, precisely
 
 Reads outside the working directory are allowed **when the command head is an
 exact, unqualified allow-listed name, and the path is not in the turn's secret
 set**. Everything else — including anything the classifier cannot prove — is a
 write and needs a mount.
 
-## 10. Implementation order
+## 11. Implementation order
 
 1. Delete the dead `<<\s*EOF` pattern; add a test asserting heredocs are
    permitted, so the removal is pinned.

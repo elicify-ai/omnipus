@@ -1018,6 +1018,16 @@ func (t *ExecTool) guardCommand(ctx context.Context, command, cwd string) string
 		mountRoots = authored.AllowedRoots
 		turnPolicy = authored
 		readPolicyOK = true
+	} else {
+		// The fail-closed direction is right, but silence is not: with no
+		// policy the agent loses BOTH its mounts and the ADR-068 read
+		// exemption, so an operator sees writes to a folder they demonstrably
+		// mounted refused with "request a mount for that folder" — advice for
+		// a thing they already did. Log it so the degraded mode is
+		// diagnosable instead of looking like the mount never existed
+		// (code review round 3).
+		logger.WarnCF("tools", "bash guard: turn filesystem policy unresolved; mounts and the ADR-068 read exemption are both withheld for this command",
+			map[string]any{"working_dir": t.workingDir, "error": ferr.Error()})
 	}
 
 	// Web URL schemes whose path components (starting with //) should be
@@ -1044,11 +1054,49 @@ func (t *ExecTool) guardCommand(ctx context.Context, command, cwd string) string
 		}
 		raw := cmd[start:end]
 
+		// EXPANSION-DERIVED CANDIDATE (code review round 3, 2026-08-24).
+		//
+		// absolutePathPattern treats `~` and a token-start `$VAR` as BOUNDARY
+		// characters and captures only the suffix after them, so
+		// `$HOME/.omnipus/agents/other/SOUL.md` reaches this loop as the
+		// candidate `/.omnipus/agents/other/SOUL.md` — a path that names no
+		// real file. Judging that phantom is meaningless: it is outside the
+		// work dir, no mount covers it, and IsCarveOut cannot match it because
+		// the carve-out roots are anchored at the real $OMNIPUS_HOME. The shell
+		// then expands the variable and touches the REAL file.
+		//
+		// Measured before this guard: `cat $HOME/.omnipus/agents/victim/SOUL.md`
+		// and the `~` spelling were both ALLOWED while the literal absolute
+		// path was correctly blocked — the ADR-068 read exemption reachable
+		// through a different spelling of the same file.
+		//
+		// The boundary the regex consumed sits between loc[0] and loc[2], so
+		// the fact is available here and nowhere downstream. A candidate built
+		// this way is UNRESOLVABLE by a text scan: fail closed. It earns
+		// neither the read exemption nor the inside-the-work-dir pass, because
+		// the suffix can be made to land inside the work dir while the real
+		// target is anywhere on the host (`printf x > $HOME<abs-cwd>/pwned`).
+		expansionDerived := false
+		if loc[0] >= 0 && loc[0] < start {
+			if prefix, resolved, isExpansion := expandCandidatePrefix(cmd[loc[0]:start]); isExpansion {
+				if resolved {
+					// Judge the REAL path. `cat ~/notes.txt` stays an ordinary
+					// outside-the-work-dir read (allowed), while
+					// `cat ~/.omnipus/agents/other/SOUL.md` now resolves onto
+					// the carve-out and is refused — the same verdict its
+					// literal absolute spelling already got.
+					raw = filepath.Join(prefix, raw)
+				} else {
+					expansionDerived = true
+				}
+			}
+		}
+
 		// The classification is a property of WHERE the candidate sits in the
 		// command text, so it must be computed here (byte offsets exist only at
 		// this call site) and threaded down into checkPathSegment, which sees
 		// the path string alone.
-		readOnly := classifier.isReadOnly(start)
+		readOnly := classifier.isReadOnly(start) && !expansionDerived
 
 		// Colon-joined path list (PATH= assignments, -I a:b-style flags):
 		// each `:`-separated segment is checked independently against the
@@ -1064,7 +1112,7 @@ func (t *ExecTool) guardCommand(ctx context.Context, command, cwd string) string
 		// whatever the command does with it, it does with all of it.
 		if strings.Contains(raw, ":") && colonPathListPattern.MatchString(raw) {
 			for _, seg := range strings.Split(raw, ":") {
-				if msg := t.checkPathSegment(seg, cwdPath, mountRoots, turnPolicy, readPolicyOK, readOnly); msg != "" {
+				if msg := t.checkPathSegment(seg, cwdPath, mountRoots, turnPolicy, readPolicyOK, readOnly, expansionDerived); msg != "" {
 					return msg
 				}
 			}
@@ -1085,7 +1133,7 @@ func (t *ExecTool) guardCommand(ctx context.Context, command, cwd string) string
 			}
 		}
 
-		if msg := t.checkPathSegment(raw, cwdPath, mountRoots, turnPolicy, readPolicyOK, readOnly); msg != "" {
+		if msg := t.checkPathSegment(raw, cwdPath, mountRoots, turnPolicy, readPolicyOK, readOnly, expansionDerived); msg != "" {
 			return msg
 		}
 	}
@@ -1106,11 +1154,25 @@ func (t *ExecTool) guardCommand(ctx context.Context, command, cwd string) string
 // out-of-working-directory rejection. Everything above that point (safePaths,
 // the operator allowlist, containment, mounts) is identical for reads and
 // writes, so no existing exemption widens or narrows because of this parameter.
-func (t *ExecTool) checkPathSegment(raw, cwdPath string, mountRoots []string, turnPolicy fspolicy.FSPolicy, readPolicyOK, readOnly bool) string {
+func (t *ExecTool) checkPathSegment(raw, cwdPath string, mountRoots []string, turnPolicy fspolicy.FSPolicy, readPolicyOK, readOnly, expansionDerived bool) string {
 	p, err := filepath.Abs(raw)
 	if err != nil {
 		return "Command blocked by safety guard (cannot resolve path)"
 	}
+
+	// An UNRESOLVABLE expansion (see guardCommand's scan loop): the candidate is
+	// only the suffix after a `$VAR` whose value this process cannot know, so
+	// every check below would reason about a path that names no real file.
+	// `~`, `$HOME` and `$OMNIPUS_HOME` are resolved at the call site instead and
+	// never arrive here; anything else is refused. Fail closed.
+	if expansionDerived {
+		return fmt.Sprintf(
+			"Command blocked by safety guard (unresolvable path): %q follows a shell variable whose value "+
+				"the guard cannot know, so it cannot tell which file the command will actually open. "+
+				"Rule: bash workspace path guard (RestrictToWorkspace). "+
+				"Fix: write the path literally, or use ~ / $HOME / $OMNIPUS_HOME, which the guard does resolve.", raw)
+	}
+
 	if safePaths[p] {
 		return ""
 	}
@@ -2192,4 +2254,66 @@ func (t *ExecTool) inTurnSecretSet(p string, policy fspolicy.FSPolicy) bool {
 		}
 	}
 	return false
+}
+
+// expandCandidatePrefix inspects the boundary text absolutePathPattern consumed
+// immediately before a path candidate and, when that boundary is a `~` or a
+// variable this process can resolve, returns the prefix the shell will prepend.
+//
+// # Why this exists
+//
+// absolutePathPattern treats `~` and a token-start `$VAR` as boundary
+// characters and captures only the suffix, so `$HOME/.omnipus/agents/x/SOUL.md`
+// arrives as the candidate `/.omnipus/agents/x/SOUL.md` — a path naming no real
+// file. Judging that phantom is meaningless, and it was measurably exploitable
+// (code review round 3): the ADR-068 read exemption was reachable through the
+// `~`/`$HOME` spelling of a file whose literal absolute spelling was correctly
+// refused, because IsCarveOut cannot match a carve-out root against a path that
+// never contained $OMNIPUS_HOME.
+//
+// # Why resolve rather than refuse
+//
+// Refusing every expansion-derived candidate outright also blocks `cat
+// ~/notes.txt`, an ordinary read ADR-068 exists to permit — and an existing
+// test asserts that it must stay permitted. Resolving the prefix keeps that
+// read working while giving the secret-set and mount checks the real path.
+//
+// # Fail-closed remainder
+//
+// Only `~`, `$HOME`/`${HOME}` and `$OMNIPUS_HOME`/`${OMNIPUS_HOME}` are
+// resolved, because only those have a value this process can be sure of. Any
+// other `$VAR` returns resolved=false, and the caller refuses the candidate
+// rather than guessing. os.UserHomeDir failing likewise yields resolved=false.
+//
+// Returns (prefix, resolved, isExpansion). isExpansion=false means the boundary
+// was ordinary punctuation and the candidate is already a literal path.
+func expandCandidatePrefix(boundary string) (string, bool, bool) {
+	if boundary == "" {
+		return "", false, false
+	}
+	// The boundary may carry leading punctuation (`="`, `,`, a flag cluster);
+	// only its TAIL decides, because that is what abuts the captured path.
+	switch {
+	case strings.HasSuffix(boundary, "~"):
+		home, err := os.UserHomeDir()
+		if err != nil || home == "" {
+			return "", false, true
+		}
+		return home, true, true
+	case strings.HasSuffix(boundary, "$HOME"), strings.HasSuffix(boundary, "${HOME}"):
+		home, err := os.UserHomeDir()
+		if err != nil || home == "" {
+			return "", false, true
+		}
+		return home, true, true
+	case strings.HasSuffix(boundary, "$OMNIPUS_HOME"), strings.HasSuffix(boundary, "${OMNIPUS_HOME}"):
+		if h := config.OmnipusHomeDir(); h != "" {
+			return h, true, true
+		}
+		return "", false, true
+	case strings.ContainsRune(boundary, '$'):
+		// Some other variable — value unknown to this process.
+		return "", false, true
+	}
+	return "", false, false
 }
