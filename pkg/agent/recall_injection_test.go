@@ -345,3 +345,102 @@ func TestRecallSpanFits_ExactBudget(t *testing.T) {
 	require.False(t, recallSpanFits(100, 60, 10, 31), "total == B+1 must not fit")
 	require.True(t, recallSpanFits(100, 0, 0, 1))
 }
+
+// countPageMarkers returns how many messages in req carry the tool_call_id
+// recall page marker (T066-14; distinct from the whole-turn recall marker).
+func countPageMarkers(req []providers.Message) int {
+	n := 0
+	for _, m := range req {
+		if strings.Contains(m.Content, "[Recalled tool result page") {
+			n++
+		}
+	}
+	return n
+}
+
+// TestRunTurn_RecallByIdPageInjected — B-50b / FR-043 (per-page injection
+// clause), test 52. A `tool_call_id` recall is injected the same way a
+// whole-turn recall is, ONE PAGE AT A TIME: the provider's next request
+// carries that page's bytes and nothing else of the result, and a second
+// recall in the same turn replaces the first page rather than stacking it.
+func TestRunTurn_RecallByIdPageInjected(t *testing.T) {
+	const (
+		callID = "call_page_1"
+		nonce1 = "NONCE-PAGE-ONE-7f3a"
+		nonce2 = "NONCE-PAGE-TWO-b91c"
+	)
+	// The nonces live ONLY in the archived tool result, so neither the
+	// window nor the eviction breadcrumb (which quotes the user line) can
+	// put them in a request — only a real page splice can.
+	result := strings.Repeat("a", 50) + nonce1 + strings.Repeat("b", 100) + nonce2 + strings.Repeat("c", 50)
+	require.Greater(t, len(result), 200, "test setup")
+
+	firstTurn := []providers.Message{
+		{Role: "user", Content: "search the mailbox"},
+		{Role: "assistant", ToolCalls: []providers.ToolCall{{
+			ID: callID, Type: "function", Name: "read_file",
+			Function: &providers.FunctionCall{Name: "read_file", Arguments: "{}"},
+		}}},
+		{Role: "tool", ToolCallID: callID, Content: result},
+	}
+	filler := strings.Repeat("x", 200)
+	turns := [][]providers.Message{firstTurn}
+	for i := 0; i < 4; i++ {
+		turns = append(turns, makeTurn(fmt.Sprintf("turn %d %s", i+2, filler), filler))
+	}
+
+	page1Len := 50 + len(nonce1) + 20 // covers nonce1, stops well before nonce2
+	provider := &recallInjectionProvider{
+		first: map[string]any{"tool_call_id": callID, "offset": 0, "length": page1Len},
+		script: []func() (*providers.LLMResponse, error){
+			func() (*providers.LLMResponse, error) {
+				return &providers.LLMResponse{ToolCalls: []providers.ToolCall{{
+					ID: "call_recall_2", Type: "function", Name: "recall_conversation",
+					Arguments: map[string]any{
+						"tool_call_id": callID,
+						"offset":       page1Len,
+						"length":       len(result) - page1Len,
+					},
+				}}}, nil
+			},
+		},
+	}
+	al, agent := recallInjectionFixture(t, provider, 200000, 1000, turns)
+
+	total := 0
+	for _, tr := range turns {
+		total += len(tr)
+	}
+	agent.Sessions.TruncateHistory(recallInjectionSessionKey, total-len(firstTurn))
+	for _, m := range agent.Sessions.GetHistory(recallInjectionSessionKey) {
+		require.NotContains(t, m.Content, nonce1, "test setup: the result must be evicted from the window")
+		require.NotContains(t, m.Content, nonce2, "test setup: the result must be evicted from the window")
+	}
+
+	_, err := al.processTaskDirect(context.Background(), agent.ID, "what did the search return?", recallInjectionSessionKey, "chat-recall-page")
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, provider.calls(), 3, "two recalls means three provider calls")
+
+	require.False(t, requestContains(provider.request(1), nonce1), "request 1 must not carry the evicted result")
+
+	// Page 1 — and ONLY page 1 — reaches the provider's second request.
+	req2 := provider.request(2)
+	require.True(t, requestContains(req2, nonce1), "B-50b: page 1 must be in the provider's second request")
+	require.False(t, requestContains(req2, nonce2), "only the addressed page may be injected, not the whole result")
+	require.Equal(t, 1, countPageMarkers(req2), "exactly one page marker in request 2")
+	require.True(t, requestContains(req2, "total="+fmt.Sprint(len(result))+" chars"),
+		"the page framing must state the total size")
+
+	content, ok := toolMessageContent(req2, "call_recall_1")
+	require.True(t, ok, "request 2 must carry the recall tool result")
+	require.Contains(t, content, "this page is now in your context")
+	require.Contains(t, content, fmt.Sprintf("next offset %d", page1Len))
+
+	// Page 2 replaces page 1 in the third request — one page at a time.
+	req3 := provider.request(3)
+	require.True(t, requestContains(req3, nonce2), "B-50b: page 2 must be in the provider's third request")
+	require.Equal(t, 1, countPageMarkers(req3), "the replaced page must not stack (FR-043)")
+	content2, ok := toolMessageContent(req3, "call_recall_2")
+	require.True(t, ok, "request 3 must carry the second recall tool result")
+	require.Contains(t, content2, "end of result reached")
+}

@@ -2060,6 +2060,16 @@ func (us *UnifiedStore) ReadArchive(ctx context.Context, sessionKey string) ([]m
 	return msgs, nil
 }
 
+// ScanArchive streams the archive for sessionKey line by line, stopping when
+// fn returns false — the ADR-066 FR-024 / B-31b path recall by tool_call_id
+// uses so one addressed line never costs a whole-archive load. Indexing is
+// identical to ReadArchive's slice positions (see memory.JSONLStore.ScanArchive).
+func (us *UnifiedStore) ScanArchive(
+	ctx context.Context, sessionKey string, fn func(idx int, msg memory.ArchivedMessage) bool,
+) error {
+	return us.backend.ScanArchive(ctx, sessionKey, fn)
+}
+
 // Save implements SessionStore — ensures all writes are durable.
 // Since the JSONL backend fsyncs every write immediately, the data is
 // already durable at this point.

@@ -12,7 +12,9 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/memory"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/tools"
@@ -845,4 +847,388 @@ func countDrops(calls []struct{ key, reason string }, key, reason string) int {
 		}
 	}
 	return n
+}
+
+// --- T066-14: recall by tool_call_id, in pages -------------------------------
+//
+// ADR-066 §6.3 / FR-024…FR-027, FR-043 (per-page injection), FR-046.
+// BDD B-28, B-29, B-29b, B-30, B-31, B-31b, B-53b. Data set DS-6.
+
+// scanArchive is a ConversationArchiveReader that ALSO implements
+// ConversationArchiveScanner and recallProjectionReader, counting how many
+// lines a scan decoded and how many times the whole-archive ReadArchive path
+// was taken — the two numbers B-31b is about.
+type scanArchive struct {
+	msgs     []memory.ArchivedMessage
+	visited  int
+	reads    int
+	hydrated bool
+}
+
+func (s *scanArchive) ReadArchive(_ context.Context, _ string) ([]memory.ArchivedMessage, error) {
+	s.reads++
+	return s.msgs, nil
+}
+
+func (s *scanArchive) ScanArchive(
+	_ context.Context, _ string, fn func(idx int, msg memory.ArchivedMessage) bool,
+) error {
+	for i, m := range s.msgs {
+		s.visited++
+		if !fn(i, m) {
+			return nil
+		}
+	}
+	return nil
+}
+
+func (s *scanArchive) Projection(string) memory.ProjectionMeta {
+	return memory.ProjectionMeta{Hydrated: s.hydrated}
+}
+
+// incidentResult is the DS-6 payload: 1,178,522 characters, the size of the
+// tool result that produced the incident this ADR is about. Every character
+// is ASCII, so rune offsets and byte offsets coincide and a page can be
+// compared against a plain slice of this string.
+func incidentResult() string {
+	return strings.Repeat("incident ", 130_947)[:1_178_522]
+}
+
+// idArchive returns the DS-6 archive: one user line, one assistant tool call
+// for id on tool, and the tool result at archive line 2.
+func idArchive(id, tool, content string) []memory.ArchivedMessage {
+	return []memory.ArchivedMessage{
+		makeUserMsg("find the invoices"),
+		makeAssistantWithTool("", id, tool),
+		makeToolResultMsg(id, content),
+	}
+}
+
+// pageOf returns the recall page message a tool_call_id call installed, and
+// splits its content into the framing line and the payload after it.
+func pageOf(t *testing.T, setter *stubSpanSetter, key string) (msg providers.Message, framing, payload string) {
+	t.Helper()
+	span, ok := setter.spans[key]
+	if !ok {
+		t.Fatalf("no recall span installed for %q", key)
+	}
+	if len(span.Msgs) != 3 {
+		t.Fatalf("page span has %d messages, want marker + assistant + page", len(span.Msgs))
+	}
+	msg = span.Msgs[2]
+	if msg.Role != "tool" {
+		t.Fatalf("page message role = %q, want tool", msg.Role)
+	}
+	nl := strings.IndexByte(msg.Content, '\n')
+	if nl <= 0 {
+		t.Fatalf("page content has no framing line: %.200q", msg.Content)
+	}
+	return msg, msg.Content[:nl], msg.Content[nl+1:]
+}
+
+// TestRecallConversation_ToolCallID_PageFitsAfterFraming — test 26, B-28,
+// DS-6 #1. The first page of a 1,178,522-char archived result: payload =
+// effective cap − framing, the whole message is ≤ the builtin-success cap,
+// and it passes the choke point's cap unmodified.
+func TestRecallConversation_ToolCallID_PageFitsAfterFraming(t *testing.T) {
+	const id = "call_inc"
+	content := incidentResult()
+	archive := &scanArchive{msgs: idArchive(id, "mcp_gmail_search_email", content)}
+	setter := newStubSpanSetter()
+	tool := makeTool(archive, setter)
+
+	res := tool.Execute(makeCtx("sess-page-1"), map[string]any{"tool_call_id": id})
+	if res.IsError {
+		t.Fatalf("unexpected error: %s", res.ForLLM)
+	}
+
+	msg, framing, payload := pageOf(t, setter, "sess-page-1")
+
+	// The whole message — framing included — is inside the cap the recall
+	// page is admitted under (builtin success: recall is a builtin).
+	const capChars = config.DefaultBuiltinSuccessCap
+	if n := utf8.RuneCountInString(msg.Content); n > capChars {
+		t.Fatalf("page message is %d chars, want ≤ %d (B-28)", n, capChars)
+	}
+	// …and it passes the choke point unmodified: the pure cap is a no-op.
+	projected, cut := projectToolResult(msg.Content, capChars, func(string) string { return "[mark]" })
+	if cut || projected != msg.Content {
+		t.Fatalf("B-28: the page must pass the choke point unmodified (cut=%v)", cut)
+	}
+	// The payload really uses the cap — a page must not be token-sized.
+	if len(payload) < 63_000 {
+		t.Fatalf("payload is %d chars; a page must be ~cap − framing, not %d", len(payload), len(payload))
+	}
+	// DS-6 #1: the payload is the head of the archived content.
+	if payload != content[:len(payload)] {
+		t.Fatalf("payload is not the first %d chars of the archived result", len(payload))
+	}
+	// The framing states the total and where the next page starts.
+	if !strings.Contains(framing, "total=1178522") {
+		t.Fatalf("framing must state the total size, got %q", framing)
+	}
+	if !strings.Contains(framing, fmt.Sprintf("next_offset=%d", len(payload))) {
+		t.Fatalf("framing must state the next offset %d, got %q", len(payload), framing)
+	}
+	if !strings.Contains(framing, "tool_call_id="+id) {
+		t.Fatalf("framing must name the tool_call_id, got %q", framing)
+	}
+	// FR-024: the streaming scan served this, not a whole-archive read.
+	if archive.reads != 0 {
+		t.Fatalf("ReadArchive was called %d times; the id mode must stream (B-31b)", archive.reads)
+	}
+}
+
+// TestRecallConversation_ToolCallID_PagingReachesLastByte — test 27, B-29,
+// DS-6 #2…#6. Contiguous pages reproduce the archived result byte for byte;
+// offset at/past the end is an empty page stating the total; offset < 0 and
+// length < 1 are errors; length above the page size is clamped.
+func TestRecallConversation_ToolCallID_PagingReachesLastByte(t *testing.T) {
+	const id, key = "call_inc", "sess-page-2"
+	content := incidentResult()
+	archive := &scanArchive{msgs: idArchive(id, "read_file", content)}
+	setter := newStubSpanSetter()
+	tool := makeTool(archive, setter)
+	ctx := makeCtx(key)
+
+	// DS-6 #2: page from 0 following each page's next_offset to the end.
+	var got strings.Builder
+	offset, pages := 0, 0
+	for {
+		res := tool.Execute(ctx, map[string]any{"tool_call_id": id, "offset": offset})
+		if res.IsError {
+			t.Fatalf("page at offset %d errored: %s", offset, res.ForLLM)
+		}
+		msg, framing, payload := pageOf(t, setter, key)
+		if n := utf8.RuneCountInString(msg.Content); n > config.DefaultBuiltinSuccessCap {
+			t.Fatalf("page at offset %d is %d chars, over the cap", offset, n)
+		}
+		if payload != content[offset:offset+len(payload)] {
+			t.Fatalf("page at offset %d is not the archived slice", offset)
+		}
+		got.WriteString(payload)
+		pages++
+		if pages > 100 {
+			t.Fatalf("paging did not terminate after %d pages", pages)
+		}
+		if strings.Contains(framing, "next_offset=end") {
+			break
+		}
+		offset += len(payload)
+	}
+	if got.String() != content {
+		t.Fatalf("concatenated pages (%d chars over %d pages) != the archived result (%d chars)",
+			got.Len(), pages, len(content))
+	}
+	if pages < 2 {
+		t.Fatalf("a 1,178,522-char result must need more than one page, got %d", pages)
+	}
+
+	// DS-6 #3: offset at the end → an empty page that still states the total.
+	res := tool.Execute(ctx, map[string]any{"tool_call_id": id, "offset": len(content)})
+	if res.IsError {
+		t.Fatalf("offset == total must not be an error: %s", res.ForLLM)
+	}
+	if !strings.Contains(res.ForLLM, "1178522") {
+		t.Fatalf("the empty page must state the total, got %q", res.ForLLM)
+	}
+
+	// DS-6 #4 / #6: invalid paging values are tool errors naming the field.
+	for _, tc := range []struct {
+		name  string
+		args  map[string]any
+		field string
+	}{
+		{"offset -1", map[string]any{"tool_call_id": id, "offset": -1}, "offset"},
+		{"length 0", map[string]any{"tool_call_id": id, "length": 0}, "length"},
+		{"archive_line -1", map[string]any{"tool_call_id": id, "archive_line": -1}, "archive_line"},
+	} {
+		r := tool.Execute(ctx, tc.args)
+		if !r.IsError {
+			t.Fatalf("%s must be a tool error, got %q", tc.name, r.ForLLM)
+		}
+		if !strings.Contains(r.ForLLM, tc.field) {
+			t.Fatalf("%s error must name %q, got %q", tc.name, tc.field, r.ForLLM)
+		}
+	}
+
+	// DS-6 #5: length above the page size is clamped to the page; a smaller
+	// length is honoured exactly.
+	full := tool.Execute(ctx, map[string]any{"tool_call_id": id, "offset": 0})
+	if full.IsError {
+		t.Fatalf("unexpected error: %s", full.ForLLM)
+	}
+	_, _, defaultPayload := pageOf(t, setter, key)
+	clamped := tool.Execute(ctx, map[string]any{"tool_call_id": id, "offset": 0, "length": 70_000})
+	if clamped.IsError {
+		t.Fatalf("unexpected error: %s", clamped.ForLLM)
+	}
+	_, _, clampedPayload := pageOf(t, setter, key)
+	if clampedPayload != defaultPayload {
+		t.Fatalf("length 70,000 must clamp to the page size (%d chars), got %d",
+			len(defaultPayload), len(clampedPayload))
+	}
+	small := tool.Execute(ctx, map[string]any{"tool_call_id": id, "offset": 10, "length": 25})
+	if small.IsError {
+		t.Fatalf("unexpected error: %s", small.ForLLM)
+	}
+	_, _, smallPayload := pageOf(t, setter, key)
+	if smallPayload != content[10:35] {
+		t.Fatalf("length 25 at offset 10 must return exactly chars 10–34, got %d chars", len(smallPayload))
+	}
+}
+
+// TestRecallConversation_ToolCallID_DuplicateIds — test 28, B-29b, DS-6 #7
+// and #8. Provider-generated ids are not unique across an archive: the most
+// recent line wins, and archive_line addresses the older one.
+func TestRecallConversation_ToolCallID_DuplicateIds(t *testing.T) {
+	const id, key = "call_0", "sess-dupe"
+	const older, newer = "OLDER-RESULT-PAYLOAD", "NEWER-RESULT-PAYLOAD"
+	archive := &scanArchive{msgs: []memory.ArchivedMessage{
+		makeUserMsg("first question"),              // 0
+		makeAssistantWithTool("", id, "read_file"), // 1
+		makeToolResultMsg(id, older),               // 2
+		makeUserMsg("second question"),             // 3
+		makeAssistantWithTool("", id, "read_file"), // 4
+		makeToolResultMsg(id, newer),               // 5
+	}}
+	setter := newStubSpanSetter()
+	tool := makeTool(archive, setter)
+	ctx := makeCtx(key)
+
+	// DS-6 #7: no archive_line → the most recent line.
+	if res := tool.Execute(ctx, map[string]any{"tool_call_id": id}); res.IsError {
+		t.Fatalf("unexpected error: %s", res.ForLLM)
+	}
+	_, framing, payload := pageOf(t, setter, key)
+	if payload != newer {
+		t.Fatalf("most recent line must win, got %q", payload)
+	}
+	if !strings.Contains(framing, "archive_line=5") {
+		t.Fatalf("framing must cite archive line 5, got %q", framing)
+	}
+
+	// DS-6 #8: archive_line selects the older line.
+	if res := tool.Execute(ctx, map[string]any{"tool_call_id": id, "archive_line": 2}); res.IsError {
+		t.Fatalf("unexpected error: %s", res.ForLLM)
+	}
+	_, framing, payload = pageOf(t, setter, key)
+	if payload != older {
+		t.Fatalf("archive_line 2 must return the older line, got %q", payload)
+	}
+	if !strings.Contains(framing, "archive_line=2") {
+		t.Fatalf("framing must cite archive line 2, got %q", framing)
+	}
+
+	// An archive_line that holds no such result is an error naming the line.
+	res := tool.Execute(ctx, map[string]any{"tool_call_id": id, "archive_line": 3})
+	if !res.IsError {
+		t.Fatalf("archive_line 3 holds a user message; want an error, got %q", res.ForLLM)
+	}
+	if !strings.Contains(res.ForLLM, "3") || !strings.Contains(res.ForLLM, id) {
+		t.Fatalf("the error must name the line and the id, got %q", res.ForLLM)
+	}
+}
+
+// TestRecallConversation_ToolCallID_ExemptNotFoundExclusiveStreaming —
+// test 29, B-30 / B-31 / B-31b. The addressed page is exempt from the
+// 4,000 / 8,000-token span budgets; an unknown or rolled-back id is a tool
+// error naming it; two modes at once is an error; and the archive is
+// streamed, stopping at the addressed line.
+func TestRecallConversation_ToolCallID_ExemptNotFoundExclusiveStreaming(t *testing.T) {
+	const id = "call_inc"
+	content := incidentResult()
+
+	// B-30: a full page is far over both span budgets and is installed anyway.
+	archive := &scanArchive{msgs: idArchive(id, "read_file", content)}
+	setter := newStubSpanSetter()
+	tool := makeTool(archive, setter)
+	if res := tool.Execute(makeCtx("sess-exempt"), map[string]any{"tool_call_id": id}); res.IsError {
+		t.Fatalf("unexpected error: %s", res.ForLLM)
+	}
+	span := setter.spans["sess-exempt"]
+	if span == nil {
+		t.Fatal("B-30: the page span must be installed")
+	}
+	if span.Tokens <= recallRangeTokens {
+		t.Fatalf("B-30: the page span is %d tokens; the fixture must exceed the %d-token range budget "+
+			"for the exemption to mean anything", span.Tokens, recallRangeTokens)
+	}
+
+	// B-31: an id that is in no archive line — unknown, or from a turn that
+	// aborted and was rolled back (its tool line is gone, the assistant call
+	// with it) — is a tool error naming the id.
+	rolledBack := &scanArchive{msgs: []memory.ArchivedMessage{
+		makeUserMsg("do the thing"),
+		makeAssistantWithTool("", "call_aborted", "read_file"), // call recorded, result never archived
+	}}
+	rbTool := makeTool(rolledBack, newStubSpanSetter())
+	for _, missing := range []string{"call_never_existed", "call_aborted"} {
+		res := rbTool.Execute(makeCtx("sess-missing"), map[string]any{"tool_call_id": missing})
+		if !res.IsError {
+			t.Fatalf("%s must be a tool error, got %q", missing, res.ForLLM)
+		}
+		if !strings.Contains(res.ForLLM, missing) {
+			t.Fatalf("the error must name the id %q, got %q", missing, res.ForLLM)
+		}
+	}
+
+	// B-31: exactly one mode.
+	for _, args := range []map[string]any{
+		{"tool_call_id": id, "query": "invoices"},
+		{"tool_call_id": id, "turn_range": "1-2"},
+		{"tool_call_id": id, "time": map[string]any{"from": 0}},
+	} {
+		res := tool.Execute(makeCtx("sess-modes"), args)
+		if !res.IsError {
+			t.Fatalf("two modes at once must error, got %q", res.ForLLM)
+		}
+		if !strings.Contains(res.ForLLM, "exactly one") {
+			t.Fatalf("the mode error must say exactly one, got %q", res.ForLLM)
+		}
+	}
+
+	// B-31b: the scan streams and stops at the addressed line — the tail of
+	// the archive is never decoded, and the whole-archive path is never taken.
+	long := make([]memory.ArchivedMessage, 0, 203)
+	long = append(long, idArchive(id, "read_file", "PAYLOAD")...)
+	for i := 0; i < 200; i++ {
+		long = append(long, makeUserMsg(fmt.Sprintf("later line %d", i)))
+	}
+	streaming := &scanArchive{msgs: long}
+	sTool := makeTool(streaming, newStubSpanSetter())
+	if res := sTool.Execute(makeCtx("sess-stream"), map[string]any{"tool_call_id": id, "archive_line": 2}); res.IsError {
+		t.Fatalf("unexpected error: %s", res.ForLLM)
+	}
+	if streaming.reads != 0 {
+		t.Fatalf("B-31b: ReadArchive was called %d times; the id mode must stream", streaming.reads)
+	}
+	if streaming.visited != 3 {
+		t.Fatalf("B-31b: the scan decoded %d of %d lines; it must stop at the addressed line",
+			streaming.visited, len(long))
+	}
+}
+
+// TestRecallConversation_ToolCallID_HydratedSessionNotAvailable — B-53b /
+// FR-046. A hydrated archive was rebuilt from the UI transcript, so the
+// original tool-result bytes are not there to page.
+func TestRecallConversation_ToolCallID_HydratedSessionNotAvailable(t *testing.T) {
+	const id = "call_inc"
+	archive := &scanArchive{msgs: idArchive(id, "read_file", "PAYLOAD"), hydrated: true}
+	setter := newStubSpanSetter()
+	tool := makeTool(archive, setter)
+
+	res := tool.Execute(makeCtx("sess-hydrated"), map[string]any{"tool_call_id": id})
+	if !res.IsError {
+		t.Fatalf("recall by id on a hydrated session must be a tool error, got %q", res.ForLLM)
+	}
+	if !strings.Contains(res.ForLLM, "not available — session was rebuilt from the transcript") {
+		t.Fatalf("FR-046 answer required, got %q", res.ForLLM)
+	}
+	if !strings.Contains(res.ForLLM, id) {
+		t.Fatalf("the answer must name the id, got %q", res.ForLLM)
+	}
+	if len(setter.spans) != 0 {
+		t.Fatal("no span may be installed for a hydrated session")
+	}
 }

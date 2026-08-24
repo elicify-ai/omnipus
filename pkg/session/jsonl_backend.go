@@ -26,6 +26,31 @@ func (b *JSONLBackend) ReadArchive(ctx context.Context, key string) ([]memory.Ar
 	return b.store.ReadArchive(ctx, key)
 }
 
+// ScanArchive streams the archive for key line by line, stopping when fn
+// returns false (ADR-066 FR-024 / B-31b — recall by tool_call_id). When the
+// wrapped memory.Store can stream (memory.JSONLStore), the scan is a true
+// stream; otherwise it degrades to a ReadArchive iteration with identical
+// indexing and stop semantics.
+func (b *JSONLBackend) ScanArchive(
+	ctx context.Context, key string, fn func(idx int, msg memory.ArchivedMessage) bool,
+) error {
+	if sc, ok := b.store.(interface {
+		ScanArchive(ctx context.Context, sessionKey string, fn func(idx int, msg memory.ArchivedMessage) bool) error
+	}); ok {
+		return sc.ScanArchive(ctx, key, fn)
+	}
+	msgs, err := b.store.ReadArchive(ctx, key)
+	if err != nil {
+		return err
+	}
+	for i, m := range msgs {
+		if !fn(i, m) {
+			return nil
+		}
+	}
+	return nil
+}
+
 func (b *JSONLBackend) AddMessage(sessionKey, role, content string) {
 	if err := b.store.AddMessage(context.Background(), sessionKey, role, content); err != nil {
 		slog.Error("session: add message", "key", sessionKey, "error", err)

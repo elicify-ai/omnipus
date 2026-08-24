@@ -356,6 +356,69 @@ func (s *JSONLStore) ReadArchive(
 	return readMessages(s.jsonlPath(sessionKey), 0)
 }
 
+// ScanArchive streams the FULL archived log for sessionKey line by line,
+// ignoring meta.Skip, calling fn with the zero-based archive index and the
+// decoded message. The index is identical to the position the same message
+// takes in a ReadArchive result: empty lines are skipped and corrupt lines
+// are skipped (logged) without consuming an index, exactly as readMessages
+// does, so marks and projection keys address the same line either way.
+//
+// fn returning false stops the scan immediately — no later line is decoded
+// (ADR-066 FR-024 / B-31b: recall by tool_call_id must not load the whole
+// archive to serve one line). A missing session file scans zero lines and
+// returns nil.
+func (s *JSONLStore) ScanArchive(
+	_ context.Context, sessionKey string, fn func(idx int, msg ArchivedMessage) bool,
+) error {
+	l := s.sessionLock(sessionKey)
+	l.Lock()
+	defer l.Unlock()
+
+	path := s.jsonlPath(sessionKey)
+	f, err := os.Open(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("memory: open jsonl: %w", err)
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	// Allow large lines for tool results (read_file, web search, etc.).
+	scanner.Buffer(make([]byte, 0, 64*1024), maxLineSize)
+
+	idx := 0
+	lineNum := 0
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		lineNum++
+		var msg ArchivedMessage
+		if err := json.Unmarshal(line, &msg); err != nil {
+			// Same recovery pattern as readMessages: log and continue
+			// WITHOUT consuming an index, so ScanArchive and ReadArchive
+			// agree on every message's archive index.
+			logger.WarnCF("memory", "skipping corrupt JSONL line", map[string]any{
+				"line":  lineNum,
+				"file":  filepath.Base(path),
+				"error": err.Error(),
+			})
+			continue
+		}
+		if !fn(idx, msg) {
+			return nil
+		}
+		idx++
+	}
+	if scanner.Err() != nil {
+		return fmt.Errorf("memory: scan jsonl: %w", scanner.Err())
+	}
+	return nil
+}
+
 func (s *JSONLStore) TruncateHistory(
 	_ context.Context, sessionKey string, keepLast int,
 ) error {

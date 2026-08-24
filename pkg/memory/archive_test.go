@@ -457,3 +457,75 @@ func TestRollbackAppended_NoopWhenTargetGeCount(t *testing.T) {
 		t.Errorf("target>count case: expected %d lines, got %d", before, after2)
 	}
 }
+
+// TestScanArchive_IndexParityAndEarlyStop — ADR-066 FR-024 / B-31b. Recall
+// by tool_call_id addresses an archive line by index and must not pay for
+// the whole log to serve one line. Two properties make that safe:
+//
+//   - index parity: the idx ScanArchive reports is the position the same
+//     message occupies in a ReadArchive result, so an `archive_line` a mark
+//     cites means the same thing either way;
+//   - early stop: returning false decodes no further line.
+func TestScanArchive_IndexParityAndEarlyStop(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	const key = "scan-session"
+	for i := 0; i < 40; i++ {
+		if err := store.AddMessage(ctx, key, "user", fmt.Sprintf("line %d", i)); err != nil {
+			t.Fatalf("AddMessage %d: %v", i, err)
+		}
+	}
+
+	want, err := store.ReadArchive(ctx, key)
+	if err != nil {
+		t.Fatalf("ReadArchive: %v", err)
+	}
+	if len(want) != 40 {
+		t.Fatalf("fixture: archive has %d lines, want 40", len(want))
+	}
+
+	var gotIdx []int
+	var gotContent []string
+	if err := store.ScanArchive(ctx, key, func(idx int, msg ArchivedMessage) bool {
+		gotIdx = append(gotIdx, idx)
+		gotContent = append(gotContent, msg.Content)
+		return true
+	}); err != nil {
+		t.Fatalf("ScanArchive: %v", err)
+	}
+	if len(gotIdx) != len(want) {
+		t.Fatalf("ScanArchive visited %d lines, ReadArchive returned %d", len(gotIdx), len(want))
+	}
+	for i := range want {
+		if gotIdx[i] != i {
+			t.Fatalf("index parity: visit %d reported idx %d", i, gotIdx[i])
+		}
+		if gotContent[i] != want[i].Content {
+			t.Fatalf("index parity: line %d content %q != ReadArchive %q", i, gotContent[i], want[i].Content)
+		}
+	}
+
+	// Early stop: returning false at line 5 decodes nothing after it.
+	visited := 0
+	if err := store.ScanArchive(ctx, key, func(idx int, _ ArchivedMessage) bool {
+		visited++
+		return idx < 5
+	}); err != nil {
+		t.Fatalf("ScanArchive (early stop): %v", err)
+	}
+	if visited != 6 {
+		t.Fatalf("early stop decoded %d lines, want 6 (0…5)", visited)
+	}
+
+	// A session with no file scans zero lines and is not an error.
+	n := 0
+	if err := store.ScanArchive(ctx, "no-such-session", func(int, ArchivedMessage) bool {
+		n++
+		return true
+	}); err != nil {
+		t.Fatalf("ScanArchive on a missing session: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("a missing session scanned %d lines", n)
+	}
+}
