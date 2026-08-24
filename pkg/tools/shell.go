@@ -1443,7 +1443,7 @@ func (c pathUseClassifier) isSegmentSeparator(i int) bool {
 // word, which is what keeps `cat "/etc/my file"` one argument.
 func (c pathUseClassifier) wordStart(idx, segStart int) int {
 	i := idx
-	for i > segStart && !(!c.mask[i-1] && isShellWordBreak(c.cmd[i-1])) {
+	for i > segStart && (c.mask[i-1] || !isShellWordBreak(c.cmd[i-1])) {
 		i--
 	}
 	return i
@@ -1505,7 +1505,7 @@ func (c pathUseClassifier) redirectTargetsAreLiteral(segStart, segEnd int) bool 
 		if j < segEnd && !c.mask[j] && c.cmd[j] == '&' {
 			j++
 		}
-		for j < segEnd && !(!c.mask[j] && isShellWordBreak(c.cmd[j])) {
+		for j < segEnd && (c.mask[j] || !isShellWordBreak(c.cmd[j])) {
 			j++
 		}
 		tok := c.cmd[tokStart:j]

@@ -242,7 +242,7 @@ func TestWorkspacePathGuard_RoundTripsAcrossTwoCycles(t *testing.T) {
 
 	// Cycle 2: save what was loaded, exactly as the gateway does on every
 	// config reload (LoadConfig may normalize and re-save).
-	if err := SaveConfig(cfgPath, first); err != nil {
+	if err = SaveConfig(cfgPath, first); err != nil {
 		t.Fatalf("SaveConfig (cycle 2): %v", err)
 	}
 	second, err := LoadConfig(cfgPath)

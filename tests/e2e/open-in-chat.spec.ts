@@ -11,12 +11,22 @@
  *   go build -o /tmp/omnipus ./cmd/omnipus/
  *   OMNIPUS_BEARER_TOKEN="" /tmp/omnipus gateway --allow-empty &
  *
- * (a) Command Center "Open in Chat" → session route → live streaming (#250)
- *     Given a task with a running session_id
- *     When the user clicks "Open in Chat" on TaskDetailPanel
- *     Then the SPA navigates to /sessions/$sessionId
- *     And the WS attach_session frame is sent (chat loads with existing history)
- *     And a new text message sent from that screen produces a streamed assistant token.
+ * (a) "Open in Chat" → session route → live streaming (#250)
+ *     The Command Center screen this test originally drove through is retired
+ *     (CLAUDE.md "Retired surfaces" — /tasks is now a redirect stub into the
+ *     workspace Board/Calendar) and `data-testid="task-item"` no longer exists
+ *     anywhere in src/, so the click-through UI path is unreachable dead code
+ *     and has been removed. TaskDetailPanel's "Open in Chat" button
+ *     (src/components/workspaces/OpenInChatButton.tsx) has its own unit test
+ *     (OpenInChatButton.test.tsx) covering the click itself. What remains
+ *     here, proven end to end against a live gateway:
+ *       Given a real session created via POST /api/v1/sessions
+ *       And a real task created via POST /api/v1/tasks (workspace-scoped,
+ *         proving that endpoint — which TaskDetailPanel's data comes from —
+ *         still accepts a real create request)
+ *       When the SPA navigates to /sessions/$sessionId
+ *       Then the WS attach_session frame is sent (chat loads with existing history)
+ *       And a new text message sent from that screen produces a streamed assistant token.
  *
  * (b) Failed send → user bubble shows error + reachable Retry (#253)
  *     Given the WS connection drops mid-send
@@ -29,13 +39,14 @@
 import { expect } from '@playwright/test'
 import { test } from './fixtures/console-errors'
 import { assistantMessages, waitForConnected } from './fixtures/selectors'
+import { openSessionByDeepLink } from './fixtures/session-setup'
 
 const BASE_URL = process.env.OMNIPUS_URL || 'http://localhost:6060'
 
 // ── (a) Open in Chat → live streaming ─────────────────────────────────────────
 
 test(
-  '(a) Command Center Open in Chat navigates to session route and enables chat',
+  '(a) Open in Chat navigates to session route and enables chat',
   async ({ page }) => {
     test.setTimeout(120_000)
 
@@ -70,7 +81,8 @@ test(
       )
     }
 
-    // Create a session via the API so TaskDetailPanel has a real session_id to open.
+    // Create a real session via the API — this is the session route the test
+    // navigates to below (the reachable end of the "Open in Chat" flow).
     // NOTE: agent_id is REQUIRED — omitting it defaults to the non-existent "main"
     // agent, which makes the session read-only ("Agent removed") and disables the
     // chat input. Use a seeded core agent ('mia', the guide) so the session is live.
@@ -79,46 +91,58 @@ test(
     const sessionId = (sessionResp.body as { id: string }).id
     expect(typeof sessionId).toBe('string')
 
-    // Create a task that references the session
+    // Create a workspace to hang the task off of. POST /api/v1/tasks requires
+    // workspace_id (contracts/components/schemas/TaskCreateRequest.yaml: required
+    // [title, action, workspace_id]) — every task is workspace-scoped, there is
+    // no bare/global task creation.
+    const wsResp = await apiFetch('POST', '/api/v1/workspaces', {
+      name: `E2E Open-in-Chat Workspace ${Date.now()}`,
+    })
+    expect(wsResp.ok, `POST /api/v1/workspaces failed: ${JSON.stringify(wsResp.body)}`).toBe(true)
+    const workspaceId = (wsResp.body as { id: string }).id
+    expect(typeof workspaceId).toBe('string')
+
+    // Create a task in that workspace. NOTE: TaskCreateRequest has no session_id
+    // field at all (additionalProperties: false on the schema) — a task's
+    // session_id is populated server-side once the task actually runs (see
+    // task.Task.SessionID's doc comment / pkg/gateway/rest_tasks.go), never
+    // supplied by the client at creation. This is a real assertion, not a
+    // soft-skip: a regression in task creation must fail the suite, not
+    // silently vanish (see docs/internal/false-green-patterns.md).
     const taskResp = await apiFetch('POST', '/api/v1/tasks', {
       title: 'e2e-open-in-chat-test',
       prompt: 'Test task for open-in-chat e2e',
-      session_id: sessionId,
+      workspace_id: workspaceId,
     })
-    // If tasks endpoint isn't available, skip gracefully (not all builds have it)
-    if (!taskResp.ok) {
-      test.skip()
-      return
-    }
+    expect(taskResp.ok, `POST /api/v1/tasks failed: ${JSON.stringify(taskResp.body)}`).toBe(true)
 
-    // Navigate to Command Center and open the task detail
-    await page.goto(`${BASE_URL}/#/tasks`)
-    await expect(page.getByRole('banner')).toBeVisible({ timeout: 15_000 })
-
-    // Find and click the task
-    const taskItem = page.locator('[data-testid="task-item"]', { hasText: 'e2e-open-in-chat-test' }).first()
-    const taskFound = await taskItem.isVisible({ timeout: 10_000 }).catch(() => false)
-    if (!taskFound) {
-      // Task list may not show in the current view — navigate directly to session
-      await page.goto(`${BASE_URL}/#/sessions/${sessionId}`)
-    } else {
-      await taskItem.click()
-      // Click "Open in Chat"
-      const openBtn = page.locator('button', { hasText: /Open in Chat/i })
-      await expect(openBtn).toBeVisible({ timeout: 5_000 })
-      await openBtn.click()
-    }
+    // The Command Center screen and its task-item click-through are retired
+    // (CLAUDE.md "Retired surfaces" — /tasks is now a redirect stub into the
+    // workspace Board/Calendar) and `data-testid="task-item"` does not exist
+    // anywhere in src/ — that UI path can never execute. TaskDetailPanel's
+    // "Open in Chat" (src/components/workspaces/OpenInChatButton.tsx) is
+    // covered by its own unit test (OpenInChatButton.test.tsx); this e2e test
+    // proves the reachable end of that flow instead: navigating straight to a
+    // session route enables a live, working chat.
+    //
+    // Use the suite's own canonical deep-link helper (fixtures/session-setup.ts)
+    // rather than a bare `page.goto` + composer-enabled check: a bare
+    // visible/enabled wait on the composer is satisfied by the PREVIOUS
+    // route's composer during the swap (the page is still on `/` from the
+    // top of this test) — typing at that instant sends against a stale/null
+    // session binding and no send frame ever reaches the wire. This is the
+    // exact, previously-diagnosed root cause documented in that helper
+    // ("root cause of the replay-fidelity (c) mid-turn attach flake") and
+    // reproduced live here: a bare-goto version of this test hung the full
+    // 60s timeout with zero send frame on the WS trace roughly 1 in 3 runs.
+    // `openSessionByDeepLink` adds the missing route-swap guard
+    // (`[data-active-session-id="$id"]`) before checking the composer at all.
+    await openSessionByDeepLink(page, sessionId)
 
     // Assert: URL must now be /sessions/$sessionId (not /)
     await expect(page).toHaveURL(new RegExp(`sessions/${sessionId}`), { timeout: 10_000 })
 
-    // The chat input must be enabled and reachable
     const chatInput = page.locator('[data-testid="chat-input"]').first()
-    await expect(chatInput).toBeVisible({ timeout: 15_000 })
-    await expect(chatInput).toBeEnabled({ timeout: 10_000 })
-    // toBeEnabled() alone no longer implies "connected" (2fa26e6a, #105 fix —
-    // see waitForConnected's doc comment in fixtures/selectors.ts).
-    await waitForConnected(page, { timeout: 10_000 })
 
     // Send a message and assert a streamed assistant token appears
     await chatInput.fill('Say exactly: "ping"')

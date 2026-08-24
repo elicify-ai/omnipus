@@ -402,33 +402,62 @@ test.describe('Bug-5: Replay frame ordering preserved after navigation', () => {
 // error toast, with the message appearing in the chat.
 import * as fs from 'fs'
 import * as path from 'path'
+import { randomUUID } from 'crypto'
 const BUG_BASE_URL = process.env.OMNIPUS_URL || 'http://localhost:6060'
 const BUG_OMNIPUS_HOME =
   process.env.OMNIPUS_HOME ||
   (process.env.HOME ? path.join(process.env.HOME, '.omnipus') : '')
 
 test.describe('Bug-Hans: per-agent session resume must not produce "session not found"', () => {
-  // NOTE 2026-05-30: marked .fixme — the test sets up a per-agent session
-  // by writing meta.json + transcript.jsonl into
+  // NOTE (fixed 2026-08-24, was `.fixme` since 2026-05-30): the test sets
+  // up a per-agent session by writing meta.json + transcript.jsonl into
   //   OMNIPUS_HOME/agents/<id>/sessions/<sid>/
-  // but the resulting transcript stays empty after the WS message lands.
-  // Most likely cause: the SPA's chat-store hydration treats an empty
-  // seeded transcript as "fresh chat" and sends the first message without
-  // a session_id, so the WS handler mints a NEW session in the shared
-  // store rather than appending to the seeded per-agent file. Fixing
-  // this requires either (a) seeding a one-line transcript so hydration
-  // recognises the session, or (b) waiting for an explicit SPA "session
-  // attached" signal before sending. Tracked separately; meanwhile the
-  // Go regression test (TestWS_Message_FindsSession_InPerAgentStore in
-  // pkg/gateway/websocket_session_test.go) is the rock-solid guard
-  // against the underlying bug — verified to fail without the fix and
-  // pass with it.
-  test.fixme('(Bug-Hans-a) follow-up message on a per-agent session succeeds', async ({ page }) => {
+  // then drives a real browser to it and sends a follow-up message.
+  //
+  // The original note guessed the resulting transcript stayed empty
+  // because an empty SEEDED transcript reads to SPA hydration as "fresh
+  // chat". Live reproduction (instrumenting the real WS traffic) disproved
+  // that: the actual cause was a RACE between the composer becoming
+  // enabled/"connected" (which only proves the WS socket is open) and the
+  // SessionRoute mount effect's `attach_session` call actually completing
+  // (which is what points the chat store's `activeSessionId` at this
+  // seeded session). The test used to send its follow-up as soon as the
+  // composer looked usable — often before that effect had run — so the
+  // outbound `message` frame carried no `session_id`, and the gateway
+  // minted a brand-new session in the shared store (attributed to the
+  // default agent) instead of resuming the seeded one. Fixed by waiting
+  // for the WS `done` frame that closes out `attach_session`'s replay
+  // before sending anything — see the `expect.poll` below, right before
+  // the follow-up is sent. Two harness-only bugs (unrelated to the
+  // product) had to be fixed to even reach that race: the agent-creation
+  // POST needed the CSRF header this suite's double-submit pattern
+  // requires, and it needed `type`/`soul`, both required by the
+  // ADR-034 discriminated-union create contract added since this test
+  // was written.
+  //
+  // The underlying PRODUCT bug (not this test harness) already has a
+  // rock-solid Go regression test — TestWS_Message_FindsSession_InPerAgentStore
+  // in pkg/gateway/websocket_session_test.go — verified to fail without
+  // the fix and pass with it.
+  test('(Bug-Hans-a) follow-up message on a per-agent session succeeds', async ({ page }) => {
     test.slow() // real LLM call once the message lands; budget accordingly
     if (!BUG_OMNIPUS_HOME) {
       test.skip(true, 'OMNIPUS_HOME unavailable')
       return
     }
+    // Collect every WS frame the SPA receives for the life of the test. The
+    // hash-router navigation in step 4 below does NOT open a new
+    // WebSocket — the connection opened by step 1's page.goto('/') persists
+    // — so this listener must be registered before that connection opens to
+    // see every frame, including the `attach_session` round-trip step 4
+    // triggers. Used below to wait for the real "session attached" signal
+    // before sending the follow-up message (see the comment at that wait).
+    const receivedFrames: string[] = []
+    page.on('websocket', (ws) => {
+      ws.on('framereceived', (frame) => {
+        if (typeof frame.payload === 'string') receivedFrames.push(frame.payload)
+      })
+    })
 
     // 1. Navigate to the SPA first so the page is on the right origin —
     //    localStorage is inaccessible from about:blank, which is the default
@@ -438,15 +467,33 @@ test.describe('Bug-Hans: per-agent session resume must not produce "session not 
 
     // 2. Create a custom agent — its store lives at
     //    OMNIPUS_HOME/agents/<id>/sessions/, NOT in the shared layout.
-    //    Auth via the storageState token captured by global-setup.
-    const token = await page.evaluate(() => localStorage.getItem('omnipus_auth_token'))
-    const authHeaders: Record<string, string> = token
-      ? { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
-      : { 'Content-Type': 'application/json' }
+    //    Auth rides the storageState `omnipus-session` cookie automatically
+    //    (page.request shares the browser context's cookie jar — ADR-044
+    //    removed the JS-readable bearer token this used to read from
+    //    localStorage). The double-submit CSRF pattern additionally
+    //    requires the SAME csrf cookie value echoed back as an explicit
+    //    `X-CSRF-Token` header (src/lib/api.ts's withCsrfHeaders does this
+    //    for real browser-driven fetches; see agents.spec.ts's identical
+    //    csrfHeaders() helper) — without it the gateway's CSRF middleware
+    //    403s with "csrf header missing" before this test ever reaches the
+    //    per-agent-session behaviour it's meant to exercise.
+    const cookies = await page.context().cookies()
+    const csrfCookie = cookies.find((c) => c.name === 'csrf' || c.name === '__Host-csrf')
+    const authHeaders: Record<string, string> = {
+      'Content-Type': 'application/json',
+      ...(csrfCookie ? { 'X-CSRF-Token': csrfCookie.value } : {}),
+    }
     const agentResp = await page.request.post(`${BUG_BASE_URL}/api/v1/agents`, {
       headers: authHeaders,
       data: {
+        // `type` and `soul` are required by the v0.1.1 discriminated-union
+        // create contract (ADR-034, AgentCreateRequestMain.yaml) — 'Main' is
+        // the wire enum for a user-defined chat colleague, matching the
+        // custom-agent-via-builder scenario this test reproduces (see
+        // agents.spec.ts's identical create-agent payload shape).
         name: `Hans-${Date.now()}`,
+        type: 'Main',
+        soul: 'You are Hans, a regression fixture agent for per-agent session resume.',
         description: 'regression fixture for per-agent session resume',
       },
     })
@@ -476,7 +523,7 @@ test.describe('Bug-Hans: per-agent session resume must not produce "session not 
       updated_at: nowISO,
       stats: {
         tokens_in: 0, tokens_out: 0, tokens_total: 0,
-        cost: 0, tool_calls: 0, message_count: 0,
+        cost: 0, tool_calls: 0, message_count: 1,
       },
       channel: 'webchat',
       partitions: null,
@@ -485,7 +532,31 @@ test.describe('Bug-Hans: per-agent session resume must not produce "session not 
       type: 'chat',
     }
     fs.writeFileSync(path.join(sessionDir, 'meta.json'), JSON.stringify(meta, null, 2))
-    fs.writeFileSync(path.join(sessionDir, 'transcript.jsonl'), '')
+    // Seed a real one-line transcript entry, not an empty file — this is
+    // what a session the task scheduler actually created looks like (it
+    // always has at least the kickoff message). Shape matches
+    // session.TranscriptEntry (pkg/session/daypartition.go) exactly as
+    // production writes it for a real user message on the interactive WS
+    // path (uuid id, role, agent_id, content, RFC3339 timestamp —
+    // pkg/gateway/websocket.go's handleChatMessage, `entry :=
+    // session.TranscriptEntry{...}`).
+    //
+    // NOTE ON THE ORIGINAL 2026-05-30 DIAGNOSIS: this test was `.fixme`'d on
+    // the theory that an EMPTY seeded transcript reads to SPA hydration as
+    // "fresh chat", causing the follow-up to go out with no session_id.
+    // Reproducing this test live (instrumenting the real WS traffic) proved
+    // that theory wrong: an empty transcript.jsonl round-trips through
+    // attach_session/replay/done exactly as well as a seeded one. The real
+    // cause was a RACE, unrelated to transcript content — see the comment
+    // on the `expect.poll` wait below, right before the follow-up is sent.
+    const priorEntry = {
+      id: randomUUID(),
+      role: 'user',
+      agent_id: agent.id,
+      content: 'task done — open me to resume',
+      timestamp: nowISO,
+    }
+    fs.writeFileSync(path.join(sessionDir, 'transcript.jsonl'), JSON.stringify(priorEntry) + '\n')
 
     // 4. Navigate directly to the seeded session (TanStack Router hash form).
     await page.goto(`/#/sessions/${sessionID}`)
@@ -497,6 +568,40 @@ test.describe('Bug-Hans: per-agent session resume must not produce "session not 
     // see waitForConnected's doc comment in fixtures/selectors.ts).
     await waitForConnected(page, { timeout: 15_000 })
 
+    // 4b. Wait for the SPA's session-attach round-trip to actually finish
+    // before sending anything. `toBeEnabled()` + `waitForConnected()` above
+    // only prove the WS is open — they say nothing about whether THIS
+    // route's mount effect (SessionRoute, src/routes/_app/sessions.$sessionId.tsx)
+    // has yet sent `attach_session` for our seeded session and flipped
+    // `activeSessionId` in the store. Confirmed by instrumenting the real WS
+    // traffic: without this wait, the composer sends the follow-up BEFORE
+    // that effect runs, so the outbound `message` frame carries no
+    // `session_id` at all — the gateway mints a brand-new session (attributed
+    // to the default agent) instead of resuming this one, and
+    // `attach_session` for the real seeded session only goes out afterward.
+    // That race, not an empty seeded transcript, is the actual, confirmed
+    // cause of this test's original failure. The server's `done` frame
+    // closing out `attach_session`'s replay (of the seeded transcript entry
+    // above) is the one genuine "session attached" signal in the WS
+    // vocabulary — there is no separate ack frame type for it.
+    await expect
+      .poll(
+        () =>
+          receivedFrames.some((raw) => {
+            try {
+              const frame = JSON.parse(raw) as { type?: string; session_id?: string }
+              return frame.type === 'done' && frame.session_id === sessionID
+            } catch {
+              return false
+            }
+          }),
+        {
+          timeout: 15_000,
+          message: `expected a WS 'done' frame for session ${sessionID} confirming attach_session's replay completed before sending a follow-up`,
+        },
+      )
+      .toBe(true)
+
     // 5. Listen for the "session not found" error frame. If it arrives,
     //    the bug is back. We watch the page's connection store for a
     //    toast or error banner with that text.
@@ -507,8 +612,10 @@ test.describe('Bug-Hans: per-agent session resume must not produce "session not 
     await input.fill('Hello from the regression test.')
     await input.press('Enter')
 
-    // 7. The user message bubble must appear (echoed by the WS).
-    const userMsg = page.locator('[data-message-id].flex-row-reverse').first()
+    // 7. The user message bubble must appear (echoed by the WS). `.last()`,
+    //    not `.first()` — the thread now also renders the seeded prior
+    //    entry's replay ("task done — open me to resume") ahead of it.
+    const userMsg = page.locator('[data-message-id].flex-row-reverse').last()
     await expect(userMsg).toBeVisible({ timeout: 10_000 })
     await expect(userMsg).toContainText('Hello from the regression test.')
 
