@@ -82,22 +82,22 @@ func (f *gchatFakeClient) lastRequest() *http.Request {
 // --- test keys and signing --------------------------------------------------
 
 var (
-	gchatKeyOnce sync.Once
-	gchatKeyVal  *rsa.PrivateKey
-	gchatKeyErr  error
+	gchatKeyOnce   sync.Once
+	gchatKeyVal    *rsa.PrivateKey
+	errGchatKeyGen error
 
-	gchatForeignKeyOnce sync.Once
-	gchatForeignKeyVal  *rsa.PrivateKey
-	gchatForeignKeyErr  error
+	gchatForeignKeyOnce   sync.Once
+	gchatForeignKeyVal    *rsa.PrivateKey
+	errGchatForeignKeyGen error
 )
 
 // gchatTestKey is the "Google" signing key: 2048-bit RSA, the modulus size
 // Google publishes for service-account JWKS keys. Generated once per run.
 func gchatTestKey(t *testing.T) *rsa.PrivateKey {
 	t.Helper()
-	gchatKeyOnce.Do(func() { gchatKeyVal, gchatKeyErr = rsa.GenerateKey(rand.Reader, 2048) })
-	if gchatKeyErr != nil {
-		t.Fatalf("generate test RSA key: %v", gchatKeyErr)
+	gchatKeyOnce.Do(func() { gchatKeyVal, errGchatKeyGen = rsa.GenerateKey(rand.Reader, 2048) })
+	if errGchatKeyGen != nil {
+		t.Fatalf("generate test RSA key: %v", errGchatKeyGen)
 	}
 	return gchatKeyVal
 }
@@ -106,9 +106,9 @@ func gchatTestKey(t *testing.T) *rsa.PrivateKey {
 // channel's JWKS cache.
 func gchatForeignKey(t *testing.T) *rsa.PrivateKey {
 	t.Helper()
-	gchatForeignKeyOnce.Do(func() { gchatForeignKeyVal, gchatForeignKeyErr = rsa.GenerateKey(rand.Reader, 2048) })
-	if gchatForeignKeyErr != nil {
-		t.Fatalf("generate foreign RSA key: %v", gchatForeignKeyErr)
+	gchatForeignKeyOnce.Do(func() { gchatForeignKeyVal, errGchatForeignKeyGen = rsa.GenerateKey(rand.Reader, 2048) })
+	if errGchatForeignKeyGen != nil {
+		t.Fatalf("generate foreign RSA key: %v", errGchatForeignKeyGen)
 	}
 	return gchatForeignKeyVal
 }
@@ -215,7 +215,7 @@ func TestVerifySignature_AcceptsValidSignatureAfterResolvingKidFromJWKS(t *testi
 	}
 
 	// The resolved key must be cached under its kid for reuse.
-	if got := ch.jwksCache[uncachedKid]; got == nil || got.N.Cmp(gchatTestKey(t).PublicKey.N) != 0 {
+	if got := ch.jwksCache[uncachedKid]; got == nil || got.N.Cmp(gchatTestKey(t).N) != 0 {
 		t.Errorf("jwksCache[%q] = %v, want the fetched RSA public key", uncachedKid, got)
 	}
 }

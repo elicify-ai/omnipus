@@ -66,7 +66,7 @@ var browserViewportContractScaleRegexp = regexp.MustCompile(
 // police. See this file's oracle-independence note on the F10 tests below:
 // the original defect was exactly the opposite of this — the expected value
 // WAS the constant under test.
-func browserViewportContractScaleRange(t *testing.T) (min, max float64) {
+func browserViewportContractScaleRange(t *testing.T) (rangeMin, rangeMax float64) {
 	t.Helper()
 	path := filepath.Join("..", "..", "contracts", "components", "schemas", "BrowserViewportFrame.yaml")
 	raw, err := os.ReadFile(path) // gosec rationale (out of gosec scope; kept as documentation): fixed, repo-relative contract path
