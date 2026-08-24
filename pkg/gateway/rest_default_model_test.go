@@ -197,8 +197,8 @@ func TestDefaultModel_PutResolvesAtTurnTime(t *testing.T) {
 	// (no served catalog is installed → the membership check is bypassed the
 	// same way a custom row bypasses it, X-13).
 	rows := []*config.ModelConfig{
-		{ModelName: "before", Provider: "provider-a", Model: "model-before", APIBase: "https://a.example/v1"},
-		{ModelName: "after", Provider: "provider-b", Model: "model-after", APIBase: "https://b.example/v1"},
+		{Name: "before", Provider: "provider-a", Model: "model-before", APIBase: "https://a.example/v1"},
+		{Name: "after", Provider: "provider-b", Model: "model-after", APIBase: "https://b.example/v1"},
 	}
 	api, tmpDir, auditDir := newDefaultModelAPI(
 		t, config.DefaultModel{Provider: "provider-a", Model: "model-before"}, rows, rec)
@@ -319,9 +319,9 @@ func findAuditEvent(t *testing.T, auditDir, event string) map[string]any {
 func TestDefaultModel_PutValidation(t *testing.T) {
 	max256 := strings.Repeat("m", 256)
 	rows := []*config.ModelConfig{
-		{ModelName: "cloud", Provider: "cloudprov", Model: "model-in-catalog", APIBase: "https://api.cloudprov.example/v1"},
-		{ModelName: "local", Provider: "ollama", Model: "llama3", APIBase: "http://localhost:11434/v1"},
-		{ModelName: "custom", Provider: "my-proxy", Model: "user/slug", APIBase: "https://proxy.example/v1"},
+		{Name: "cloud", Provider: "cloudprov", Model: "model-in-catalog", APIBase: "https://api.cloudprov.example/v1"},
+		{Name: "local", Provider: "ollama", Model: "llama3", APIBase: "http://localhost:11434/v1"},
+		{Name: "custom", Provider: "my-proxy", Model: "user/slug", APIBase: "https://proxy.example/v1"},
 	}
 	api, _, _ := newDefaultModelAPI(
 		t, config.DefaultModel{}, rows, &restMockProvider{})

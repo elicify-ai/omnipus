@@ -896,11 +896,16 @@ func (c *OmnipusConfig) ToStandardConfig() *config.Config {
 	cfg.Agents.Defaults.ModelFallbacks = c.Agents.Defaults.ModelFallbacks
 
 	for _, m := range c.Providers {
+		// ADR-067 X-25: `model_name` is gone. An OpenClaw row's alias becomes
+		// the row's display Name; its `model` string is carried across
+		// verbatim. The migrated row has no `provider` half — OpenClaw never
+		// recorded one — so the operator re-keys it against the catalog after
+		// migration; the warning below says so.
 		mc := &config.ModelConfig{
-			ModelName: m.ModelName,
-			Model:     m.Model,
-			APIBase:   m.APIBase,
-			Proxy:     m.Proxy,
+			Name:    m.ModelName,
+			Model:   m.Model,
+			APIBase: m.APIBase,
+			Proxy:   m.Proxy,
 			// APIKey not migrated: re-enter via `omnipus credentials set <REF> <value>`
 			// and set api_key_ref in config.
 		}

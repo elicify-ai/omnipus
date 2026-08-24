@@ -1038,7 +1038,7 @@ func TestSpawnSubTurn_ProviderPoolCopiedFromParent(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              parentWorkspace,
-				DefaultModel:      config.DefaultModel{Provider: "openrouter", Model: "openrouter/anthropic/claude-sonnet-4.6"},
+				DefaultModel:      config.DefaultModel{Provider: "openrouter", Model: "anthropic/claude-sonnet-4.6"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -1049,16 +1049,14 @@ func TestSpawnSubTurn_ProviderPoolCopiedFromParent(t *testing.T) {
 		},
 		Providers: []*config.ModelConfig{
 			{
-				ModelName: "openrouter-default",
-				Model:     "openrouter/anthropic/claude-sonnet-4.6",
 				Provider:  "openrouter",
+				Model:     "anthropic/claude-sonnet-4.6",
 				APIBase:   "https://openrouter.ai/api/v1",
 				APIKeyRef: "W4_17_OPENROUTER_KEY_SUBTURN",
 			},
 			{
-				ModelName: "anthropic-haiku",
-				Model:     "claude-haiku-4-5-20251001",
 				Provider:  "anthropic",
+				Model:     "claude-haiku-4-5-20251001",
 				APIBase:   "https://api.anthropic.com",
 				APIKeyRef: "W4_17_ANTHROPIC_KEY_SUBTURN",
 			},

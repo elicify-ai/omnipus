@@ -6,109 +6,169 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
 )
 
-// ResolveModelCfg resolves a model name to a *config.ModelConfig that is ready
-// to be handed to providers.CreateProviderFromConfig. It is the single source
-// of truth for "which ModelConfig does this name refer to?" used by both the
-// chat runtime (ApplyAgentModel → CreateProviderFromConfig) and the UI
-// selector helper (buildModelListResolver).
+// ── FR-040: how a model reference resolves to a configured row ───────────────
 //
-// Resolution order (per phase-1 spec §11 Dataset 1 + FR-003):
-//  1. cfg.FindModelConfigBySlug — a row whose Model equals the slug, else a
-//     row whose display alias (ModelConfig.ModelName, until T067-08 deletes
-//     it) equals the slug. The former rung 1 — cfg.GetModelConfig by alias —
-//     is gone: GetModelConfig now keys on the exact (provider, model) pair
-//     (ADR-068 D14.1) and is the DEFAULT model's lookup, not a slug resolver.
-//  2. Exact match against cfg.Providers[i].Model (the protocol-prefixed form).
-//  3. Match against the model ID extracted from cfg.Providers[i].Model via
-//     providers.ExtractProtocol — catches slugs like "gpt-4o" when the entry
-//     has Model="openai/gpt-4o".
-//  4. Passthrough fallback: if NO match found AND the input has no provider
-//     prefix (no "/"), and a passthrough provider (openrouter / vivgrid) is
-//     configured, prepend the passthrough provider name to the input and
-//     return a clone of that provider's ModelConfig (so credentials and
-//     APIBase are inherited).
+// A reference is the PAIR (provider, model). There are exactly three rules
+// (ADR-067 FR-040, X-24), and nothing else:
 //
-// The "no slash" guard on step 4 prevents the original bug from Dataset 1
-// row 4: a deliberate "openai/gpt-4o" input MUST NOT be silently re-prefixed
-// to "openrouter/openai/gpt-4o" when no openai provider is configured — the
-// caller is explicitly asking for a provider that doesn't exist.
+//  1. An exact pair — a configured row whose Provider and Model both match —
+//     wins outright.
+//  1b. A pair whose provider IS configured and whose model that provider
+//     OFFERS (the catalog's models for a cloud row, the row's own manual
+//     `models[]` for a local one) resolves to that row carrying the
+//     requested model. This is the ordinary case: a provider row is a
+//     credential plus an endpoint, and the agent picks the model.
+//  2. A BARE model id with no provider resolves iff exactly one configured,
+//     non-degraded provider offers it. Two providers offering the same model
+//     is genuinely ambiguous and stays unresolved — guessing between them is
+//     how a turn silently ran on the wrong account.
+//  3. Anything else is unresolved (ADR-068 turns that into `needs_model`).
 //
-// Returns an error when no match is found; on error the returned
-// *config.ModelConfig is nil. On success the returned config is a CLONE —
-// callers may mutate it (e.g. setting Home) without affecting the
-// provider entry in cfg.
+// What is GONE, deliberately: the `model_name` display alias (X-25), the
+// `<protocol>/<model>` prefix split (FR-034), and the passthrough fallback
+// that re-prefixed any unmatched slug onto the first aggregator it found.
+// That last one is the reason this rewrite matters: it meant a typo'd or
+// retired model id never failed to resolve — it silently became an
+// OpenRouter request, billed to the operator's OpenRouter key, for a model
+// nobody had chosen.
+
+// providerOffers reports whether a configured row can serve a model id:
+// its own pinned Model, an entry in its manual `models[]` (the local-row
+// list), or — for a cloud row — a model the catalog lists under that
+// provider. Comparison is exact after TrimSpace (FR-036).
+func providerOffers(mc *config.ModelConfig, model string) bool {
+	if mc == nil {
+		return false
+	}
+	if strings.TrimSpace(mc.Model) == model {
+		return true
+	}
+	for _, m := range mc.Models {
+		if strings.TrimSpace(m) == model {
+			return true
+		}
+	}
+	row, known := providers.CatalogProvider(mc.Provider)
+	if !known || row.Locality == catalog.LocalityLocal {
+		// A local runtime serves whatever the operator pulled; the catalog
+		// carries no model rows for it, so the manual list above is the only
+		// authority. An unknown provider offers nothing.
+		return false
+	}
+	return providers.ProviderCatalog().Resolve(strings.TrimSpace(mc.Provider), model).Found()
+}
+
+// providerConfigured reports whether a row's provider id is one the runtime
+// can actually construct: a catalog id, or an operator-typed custom row.
+// A row naming an unknown provider is DEGRADED and never resolves anything
+// (FR-016) — that agent needs a provider, not a silently different one.
+func providerConfigured(mc *config.ModelConfig) bool {
+	if mc == nil {
+		return false
+	}
+	return mc.Custom || providers.IsCatalogProvider(mc.Provider)
+}
+
+// resolveModelPair applies the three rules above and returns a CLONE of the
+// matched row carrying the requested model, or (nil, false).
+func resolveModelPair(cfg *config.Config, provider, model string) (*config.ModelConfig, bool) {
+	if cfg == nil {
+		return nil, false
+	}
+	provider = strings.TrimSpace(provider)
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return nil, false
+	}
+
+	// Rule 1 — exact pair.
+	for i := range cfg.Providers {
+		mc := cfg.Providers[i]
+		if mc == nil || !providerConfigured(mc) {
+			continue
+		}
+		if strings.TrimSpace(mc.Provider) == provider && strings.TrimSpace(mc.Model) == model {
+			return mc, true
+		}
+	}
+
+	if provider != "" {
+		// Rule 1b — the named provider is configured and offers the model.
+		for i := range cfg.Providers {
+			mc := cfg.Providers[i]
+			if mc == nil || !providerConfigured(mc) {
+				continue
+			}
+			if strings.TrimSpace(mc.Provider) != provider {
+				continue
+			}
+			if providerOffers(mc, model) {
+				return mc, true
+			}
+		}
+		return nil, false
+	}
+
+	// Rule 2 — a bare model id, offered by exactly one provider.
+	var match *config.ModelConfig
+	matchedProvider := ""
+	for i := range cfg.Providers {
+		mc := cfg.Providers[i]
+		if mc == nil || !providerConfigured(mc) || !providerOffers(mc, model) {
+			continue
+		}
+		id := strings.TrimSpace(mc.Provider)
+		if match != nil && id != matchedProvider {
+			// Two different providers offer it — ambiguous, rule 3.
+			return nil, false
+		}
+		if match == nil {
+			match = mc
+			matchedProvider = id
+		}
+	}
+	if match == nil {
+		return nil, false
+	}
+	return match, true
+}
+
+// ResolveModelCfg resolves a model reference to a *config.ModelConfig ready
+// for providers.CreateProviderFromConfig. It is the single source of truth
+// for "which row does this reference name?" used by both the chat runtime
+// (ApplyAgentModel → CreateProviderFromConfig) and the UI selector helper
+// (buildModelListResolver), under the FR-040 rules above.
+//
+// On success the returned config is a CLONE — callers may mutate it (e.g.
+// setting Home) without touching the entry in cfg.
 func ResolveModelCfg(cfg *config.Config, modelName, workspace string) (*config.ModelConfig, error) {
+	return ResolveModelPairCfg(cfg, "", modelName, workspace)
+}
+
+// ResolveModelPairCfg is ResolveModelCfg with the provider half supplied —
+// the form every caller that already knows the pair should use (a pinned
+// agent primary, a fallback entry with its own provider).
+func ResolveModelPairCfg(
+	cfg *config.Config,
+	provider, modelName, workspace string,
+) (*config.ModelConfig, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("config is nil")
 	}
-
 	raw := strings.TrimSpace(modelName)
 	if raw == "" {
 		return nil, fmt.Errorf("model name is required")
 	}
-
-	// 1. Direct slug match (Model, then the row display alias).
-	if mc, err := cfg.FindModelConfigBySlug(raw); err == nil && mc != nil {
-		return cloneWithWorkspace(mc, workspace), nil
+	mc, ok := resolveModelPair(cfg, provider, raw)
+	if !ok {
+		return nil, fmt.Errorf("model %q not found in model_list or providers", raw)
 	}
-
-	// 2 & 3. Direct model-field or unprefixed-modelID match against each
-	// provider entry.
-	for i := range cfg.Providers {
-		full := strings.TrimSpace(cfg.Providers[i].Model)
-		if full == "" {
-			continue
-		}
-		if full == raw {
-			return cloneWithWorkspace(cfg.Providers[i], workspace), nil
-		}
-		if _, modelID := providers.ExtractProtocol(full); modelID == raw {
-			return cloneWithWorkspace(cfg.Providers[i], workspace), nil
-		}
-	}
-
-	// 4. Passthrough fallback. A passthrough provider (openrouter, vivgrid) is
-	// an AGGREGATOR whose OWN model catalog uses "<vendor>/<model>" ids —
-	// "anthropic/claude-3.5-haiku", "openai/gpt-4o", "z-ai/glm-5.2". The vendor
-	// segment there is part of the aggregator's slug, NOT a request for a
-	// separately-configured provider. So ANY model that didn't match an
-	// explicit provider entry above is routed through the first configured
-	// passthrough provider, regardless of its vendor prefix.
-	//
-	// Regression fix: an earlier guard (looksLikeBareModelSlug /
-	// knownProviderPrefixes, added in 2225b5ea to "close Dataset 1 row 4")
-	// rejected any "anthropic/…" or "openai/…" slug as an "explicit provider
-	// request", which made every OpenRouter catalog pick unresolvable — the
-	// composer lists OpenRouter's upstream /models (vendor-prefixed ids) but
-	// the runtime then refused them, silently falling back to the default. The
-	// row-4 assumption ("openai/gpt-4o means the openai provider") is wrong for
-	// an aggregator: with openrouter configured, openrouter serves openai/gpt-4o.
-	// When NO passthrough provider is configured, an unmatched model still
-	// errors below — a dedicated-only setup can't invent a route for a model
-	// none of its providers expose.
-	for i := range cfg.Providers {
-		provName := strings.TrimSpace(cfg.Providers[i].Provider)
-		if provName == "" {
-			continue
-		}
-		if providers.IsPassthroughProvider(provName, cfg.Providers[i].APIBase) {
-			clone := cloneWithWorkspace(cfg.Providers[i], workspace)
-			// Prefix the aggregator provider name unless the caller already did
-			// (avoids "openrouter/openrouter/…" on an explicitly-prefixed input).
-			if strings.HasPrefix(strings.ToLower(raw), strings.ToLower(provName)+"/") {
-				clone.Model = raw
-			} else {
-				clone.Model = provName + "/" + raw
-			}
-			// Clone already carries the provider's own Provider field; keep
-			// it so CreateProviderFromConfig routes via the right backend.
-			return clone, nil
-		}
-	}
-
-	return nil, fmt.Errorf("model %q not found in model_list or providers", raw)
+	clone := cloneWithWorkspace(mc, workspace)
+	clone.Model = raw
+	return clone, nil
 }
 
 // cloneWithWorkspace returns a pointer to a fresh copy of src with Home
@@ -270,9 +330,12 @@ func resolveModelCandidatesFromList(
 		// means "no configured provider matched" — fall back to the chat-side
 		// resolver so the candidate at least surfaces a sensible default.
 		if strings.TrimSpace(fb.Provider) != "" {
-			ref := providers.ParseModelRef(candidateRaw, fb.Provider)
-			if ref == nil {
-				return
+			// The pair is already pinned. Take it verbatim — no prefix split
+			// (FR-034: a `/` inside a model id is data, e.g.
+			// `z-ai/glm-5.2` under `openrouter`).
+			ref := &providers.ModelRef{
+				Provider: strings.TrimSpace(fb.Provider),
+				Model:    candidateRaw,
 			}
 			key := providers.ModelKey(ref.Provider, ref.Model)
 			if seen[key] {
@@ -346,15 +409,15 @@ func resolveAgentCandidatesWithPrimaryProvider(
 		return resolveModelCandidates(cfg, defaultProvider, primary, fallbacks)
 	}
 
-	// Explicit provider: pin the primary candidate to it. ParseModelRef strips any
-	// redundant "<provider>/" prefix already present on the slug and routes via
-	// the pinned provider.
+	// Explicit provider: pin the primary candidate to it, verbatim.
 	seen := make(map[string]bool)
 	var out []providers.FallbackCandidate
-	if ref := providers.ParseModelRef(strings.TrimSpace(primary), pinned); ref != nil {
-		key := providers.ModelKey(ref.Provider, ref.Model)
+	// The pair is pinned by the agent's own config — take it verbatim, never
+	// split a `/` out of the model id (FR-034).
+	if model := strings.TrimSpace(primary); model != "" {
+		key := providers.ModelKey(pinned, model)
 		seen[key] = true
-		out = append(out, providers.FallbackCandidate{Provider: ref.Provider, Model: ref.Model})
+		out = append(out, providers.FallbackCandidate{Provider: pinned, Model: model})
 	}
 
 	// Append the fallback chain (provider-aware when available), skipping any
@@ -396,41 +459,25 @@ func resolvedCandidateProvider(candidates []providers.FallbackCandidate, fallbac
 // resolvedModelConfig resolves a model name to a *config.ModelConfig usable by
 // the chat runtime. After the phase-1 refactor (FR-003) it delegates to the
 // shared ResolveModelCfg so the chat runtime and the UI selector agree on
-// passthrough fallback and prefix-handling rules.
+// the FR-040 rules.
 func resolvedModelConfig(cfg *config.Config, modelName, workspace string) (*config.ModelConfig, error) {
 	return ResolveModelCfg(cfg, modelName, workspace)
 }
 
-// IsKnownModel reports whether `slug` corresponds to a model that at least
-// one configured provider exposes. It is the validation half of W6-C4 / G12:
-// the SPA lets users type arbitrary model slugs (free-text) into the
-// AgentProfile model picker, but the runtime will fail any chat call against
-// a slug no provider actually supports. This helper is the authoritative
-// answer for "is this slug resolvable?" so the SPA can show a persistent
-// "unresolved" indicator (the TS twin lives in
+// IsKnownModel reports whether `slug` names a model at least one configured
+// provider offers. It is the validation half of W6-C4 / G12: the SPA lets
+// users type arbitrary model ids into the AgentProfile picker, and this is
+// the authoritative answer to "is this resolvable?" behind the persistent
+// "unresolved" chip (the TS twin lives in
 // `src/lib/agents/model-validation.ts` and MUST stay in sync).
 //
-// Matching rules (mirrors `resolveModel` so the UI's unresolved chip and the
-// chat runtime agree on what "known" means):
-//
-//  1. Empty / whitespace slug → false (no model to validate).
-//  2. Exact match against `mc.Model` (the protocol-prefixed form, e.g.
-//     "openai/gpt-4o"). Case-insensitive on both sides.
-//  3. Match against the model ID extracted from `mc.Model` via
-//     `providers.ExtractProtocol` — catches bare slugs ("gpt-4o") when the
-//     entry stores the protocol-prefixed form ("openai/gpt-4o"). Same case
-//     insensitivity.
-//  4. Exact match against `mc.ModelName` (the user-facing alias). Same
-//     case insensitivity.
-//
-// A passthrough provider (openrouter / vivgrid) does NOT auto-validate
-// arbitrary slugs — `IsKnownModel` is the conservative "explicitly
-// configured" check; the SPA's free-text "Use <slug>" path still works, but
-// the unresolved chip is the user-facing signal that the runtime may not
-// have a route. That matches G12's product intent ("show a warning; don't
-// block the save").
+// Matching is FR-040 rule 2's "offers it" test, applied per row and compared
+// EXACTLY after TrimSpace — no case folding (A-19), no prefix split
+// (FR-034), no display alias (X-25). Unlike ResolveModelCfg this does not
+// require the match to be unique: the chip answers "does anything serve
+// this?", and ambiguity is the resolver's problem, not the chip's.
 func IsKnownModel(slug string, models []*config.ModelConfig) bool {
-	needle := strings.ToLower(strings.TrimSpace(slug))
+	needle := strings.TrimSpace(slug)
 	if needle == "" {
 		return false
 	}
@@ -438,17 +485,7 @@ func IsKnownModel(slug string, models []*config.ModelConfig) bool {
 		if mc == nil {
 			continue
 		}
-		if strings.ToLower(strings.TrimSpace(mc.Model)) == needle {
-			return true
-		}
-		if _, modelID := providers.ExtractProtocol(
-			strings.TrimSpace(mc.Model),
-		); strings.ToLower(
-			strings.TrimSpace(modelID),
-		) == needle {
-			return true
-		}
-		if strings.ToLower(strings.TrimSpace(mc.ModelName)) == needle {
+		if providerOffers(mc, needle) {
 			return true
 		}
 	}

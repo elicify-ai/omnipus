@@ -1873,6 +1873,11 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 		catalogLogAdapter{},
 	)
 	agent.SetWindowCatalog(providerCatalog)
+	// ADR-067 FR-012: the provider FACTORY dispatches on the protocol this
+	// same document carries, so it must read the same instance — otherwise
+	// the gateway would resolve windows from the pulled document while
+	// constructing transports from the embedded snapshot.
+	providers.SetCatalog(providerCatalog)
 
 	msgBus := bus.NewMessageBus()
 	var agentLoop *agent.AgentLoop

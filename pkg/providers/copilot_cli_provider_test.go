@@ -363,10 +363,10 @@ func TestCopilotCliProvider_FactoryDispatchByCliKind(t *testing.T) {
 // CreateProviderFromConfig path.
 func TestCopilotCliProvider_FactoryCreatesFromConfig(t *testing.T) {
 	p, modelID, err := CreateProviderFromConfig(&config.ModelConfig{
-		ModelName: "copilot",
-		Model:     "claude-sonnet-4.6",
-		Provider:  "github-copilot",
-		Home:      "/tmp/copilot-ws",
+		Name:     "copilot",
+		Model:    "claude-sonnet-4.6",
+		Provider: "github-copilot",
+		Home:     "/tmp/copilot-ws",
 	})
 	if err != nil {
 		t.Fatalf("CreateProviderFromConfig() error: %v", err)
@@ -377,8 +377,8 @@ func TestCopilotCliProvider_FactoryCreatesFromConfig(t *testing.T) {
 	if modelID != "claude-sonnet-4.6" {
 		t.Errorf("modelID = %q, want %q", modelID, "claude-sonnet-4.6")
 	}
-	if !IsKnownProtocol("github-copilot") {
-		t.Error("IsKnownProtocol(github-copilot) = false; the row would be rejected before it reaches the factory")
+	if !IsCatalogProvider("github-copilot") {
+		t.Error("IsCatalogProvider(github-copilot) = false; the row would be rejected before it reaches the factory")
 	}
 }
 

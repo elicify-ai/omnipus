@@ -159,16 +159,16 @@ func TestNewAgentInstance_FallbackModelsPerEntryProvider(t *testing.T) {
 		},
 		Providers: []*config.ModelConfig{
 			{
-				ModelName: "gpt-5",
-				Model:     "openai/gpt-5",
-				Provider:  "openrouter",
-				APIBase:   "https://openrouter.ai/api/v1",
+				Name:     "gpt-5",
+				Model:    "openai/gpt-5",
+				Provider: "openrouter",
+				APIBase:  "https://openrouter.ai/api/v1",
 			},
 			{
-				ModelName: "claude-haiku",
-				Model:     "anthropic/claude-haiku-4-5",
-				Provider:  "anthropic",
-				APIBase:   "https://api.anthropic.com/v1",
+				Name:     "claude-haiku",
+				Model:    "anthropic/claude-haiku-4-5",
+				Provider: "anthropic",
+				APIBase:  "https://api.anthropic.com/v1",
 			},
 		},
 	}
@@ -197,7 +197,7 @@ func TestNewAgentInstance_FallbackModelsPerEntryProvider(t *testing.T) {
 	}
 
 	// Candidates must contain BOTH the primary and the explicit fallback.
-	// The primary resolves through cfg.GetModelConfig (matches by ModelName
+	// The primary resolves through cfg.GetModelConfig (matches by Name
 	// "gpt-5") and returns the entry's Model verbatim ("openai/gpt-5") —
 	// so the primary candidate carries the explicit "openai/" prefix, and
 	// ParseModelRef splits that into Provider=openai, Model=gpt-5.
@@ -281,22 +281,22 @@ func TestNewAgentInstance_FallbackModelsPrefersExplicitOverLegacy(t *testing.T) 
 		},
 		Providers: []*config.ModelConfig{
 			{
-				ModelName: "gpt-5",
-				Model:     "openai/gpt-5",
-				Provider:  "openrouter",
-				APIBase:   "https://openrouter.ai/api/v1",
+				Name:     "gpt-5",
+				Model:    "openai/gpt-5",
+				Provider: "openrouter",
+				APIBase:  "https://openrouter.ai/api/v1",
 			},
 			{
-				ModelName: "haiku-anthropic",
-				Model:     "anthropic/claude-haiku-4-5",
-				Provider:  "anthropic",
-				APIBase:   "https://api.anthropic.com/v1",
+				Name:     "haiku-anthropic",
+				Model:    "anthropic/claude-haiku-4-5",
+				Provider: "anthropic",
+				APIBase:  "https://api.anthropic.com/v1",
 			},
 			{
-				ModelName: "haiku-openrouter",
-				Model:     "openrouter/anthropic/claude-haiku-4-5",
-				Provider:  "openrouter",
-				APIBase:   "https://openrouter.ai/api/v1",
+				Name:     "haiku-openrouter",
+				Model:    "openrouter/anthropic/claude-haiku-4-5",
+				Provider: "openrouter",
+				APIBase:  "https://openrouter.ai/api/v1",
 			},
 		},
 	}
@@ -399,25 +399,27 @@ func TestNewAgentInstance_ResolveCandidatesFromDefaultModelPair(t *testing.T) {
 		name         string
 		provider     string
 		modelName    string
-		apiBase      string
 		wantProvider string
 		wantModel    string
 	}{
 		{
-			name:         "row model carries the provider prefix",
+			// ADR-067 FR-034: a `/` inside a model id is DATA. This id is
+			// one OpenRouter model called `stepfun/step-3.5-flash:free`,
+			// and it reaches the candidate whole — the old resolver split
+			// it and produced the provider `stepfun`, which nothing was
+			// configured for.
+			name:         "model id containing a slash is never split",
 			provider:     "openrouter",
-			modelName:    "openrouter/stepfun/step-3.5-flash:free",
-			apiBase:      "https://openrouter.ai/api/v1",
+			modelName:    "stepfun/step-3.5-flash:free",
 			wantProvider: "openrouter",
 			wantModel:    "stepfun/step-3.5-flash:free",
 		},
 		{
 			name:         "bare row model",
 			provider:     "openai",
-			modelName:    "glm-5",
-			apiBase:      "https://api.z.ai/api/coding/paas/v4",
+			modelName:    "gpt-4.1",
 			wantProvider: "openai",
-			wantModel:    "glm-5",
+			wantModel:    "gpt-4.1",
 		},
 	}
 
@@ -450,7 +452,6 @@ func TestNewAgentInstance_ResolveCandidatesFromDefaultModelPair(t *testing.T) {
 					{
 						Provider: tt.provider,
 						Model:    tt.modelName,
-						APIBase:  tt.apiBase,
 					},
 				},
 			}

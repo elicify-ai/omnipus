@@ -22,6 +22,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/credentials"
 	"github.com/elicify-ai/omnipus/pkg/onboarding"
+	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/security"
 	"github.com/elicify-ai/omnipus/pkg/task"
 )
@@ -1438,7 +1439,7 @@ func TestRefreshProviderModels_CredentialVaultUnreadable(t *testing.T) {
 				Home: tmpDir, DefaultModel: config.DefaultModel{Model: "test-model"}, MaxTokens: 4096},
 		},
 		Providers: []*config.ModelConfig{
-			{ModelName: "gpt-4", Provider: "openai", Model: "gpt-4", APIKeyRef: "openai_API_KEY"},
+			{Name: "gpt-4", Provider: "openai", Model: "gpt-4", APIKeyRef: "openai_API_KEY"},
 		},
 	}
 	msgBus := bus.NewMessageBus()
@@ -1545,7 +1546,7 @@ func TestRefreshProviderModels_CredentialRefNotFound(t *testing.T) {
 				Home: tmpDir, DefaultModel: config.DefaultModel{Model: "test-model"}, MaxTokens: 4096},
 		},
 		Providers: []*config.ModelConfig{
-			{ModelName: "gpt-4", Provider: "openai", Model: "gpt-4", APIKeyRef: "openai_API_KEY"},
+			{Name: "gpt-4", Provider: "openai", Model: "gpt-4", APIKeyRef: "openai_API_KEY"},
 		},
 	}
 	msgBus := bus.NewMessageBus()
@@ -1818,11 +1819,13 @@ func TestHandleCompleteOnboarding_UnreachableProviderStillCompletes(t *testing.T
 // completing onboarding with zero signal that the key was never checked.
 
 // TestHandleCompleteOnboarding_NoEndpointResolvedStillCompletesWithWarning covers
-// the "no endpoint resolved" skip branch: azure is a known protocol (see
-// providers.IsKnownProtocol) with no vendor default base (providers.GetDefaultAPIBase
-// falls to its `default: return ""` case for it) and the request supplies no
-// endpoint override either, so probeBase resolves to "". There is nothing to
-// probe — no outbound call is possible, hermetic by construction.
+// the "no endpoint resolved" skip branch: azure is a catalog provider (see
+// providers.IsCatalogProvider) but a `tier: unsupported` (deployment-URL) row,
+// so its catalog API field is empty and providers.APIBaseFor("azure") returns
+// "" (ADR-067: "API is the primary base URL. Empty only on tier-unsupported
+// rows."). The request supplies no endpoint override either, so probeBase
+// resolves to "". There is nothing to probe — no outbound call is possible,
+// hermetic by construction.
 func TestHandleCompleteOnboarding_NoEndpointResolvedStillCompletesWithWarning(t *testing.T) {
 	tmpDir := t.TempDir()
 	minimalCfg := []byte(`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[]}`)
@@ -1885,17 +1888,20 @@ func TestHandleCompleteOnboarding_NoEndpointResolvedStillCompletesWithWarning(t 
 }
 
 // TestHandleCompleteOnboarding_SSRFBlockedProbeStillCompletesWithWarning covers
-// the "ssrf blocked" skip branch AND, simultaneously, the real GetDefaultAPIBase
-// (no operator-supplied endpoint) resolution path that review finding D5 flagged
-// as having zero coverage once every other test in this file started injecting
-// `endpoint` via hermeticOnboardBody: the request below supplies NO endpoint at
-// all, so probeBase comes from providers.GetDefaultAPIBase("litellm"), which is
-// itself a loopback address (http://localhost:4000/v1 — see the ollama/litellm
-// case list in factory_provider.go, the exact "operators the divergence was
-// designed to protect" the D4 review comment names). A real, unallowlisted
-// *security.SSRFChecker blocks it before any outbound call — hermetic by
-// construction, and it proves the vendor-default branch resolves to a real,
-// loopback-shaped base rather than the empty string.
+// the "ssrf blocked" skip branch AND, simultaneously, the real
+// providers.APIBaseFor (no operator-supplied endpoint) resolution path that
+// review finding D5 flagged as having zero coverage once every other test in
+// this file started injecting `endpoint` via hermeticOnboardBody: the request
+// below supplies NO endpoint at all, so probeBase comes from
+// providers.APIBaseFor("ollama"), which is itself a loopback address
+// (http://localhost:11434/v1 — the catalog's own base for the local-runtime
+// row, the exact "operators the divergence was designed to protect" the D4
+// review comment names; litellm is no longer usable for this case — ADR-067
+// classifies it `tier: unsupported` / deployment-url, so its catalog base is
+// now empty and it would exercise the OTHER skip branch instead). A real,
+// unallowlisted *security.SSRFChecker blocks it before any outbound call —
+// hermetic by construction, and it proves the catalog-default branch resolves
+// to a real, loopback-shaped base rather than the empty string.
 func TestHandleCompleteOnboarding_SSRFBlockedProbeStillCompletesWithWarning(t *testing.T) {
 	tmpDir := t.TempDir()
 	minimalCfg := []byte(`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[]}`)
@@ -1919,8 +1925,8 @@ func TestHandleCompleteOnboarding_SSRFBlockedProbeStillCompletesWithWarning(t *t
 	t.Cleanup(func() { _ = auditLogger.Close() })
 	api.auditor = auditLogger
 
-	// No `endpoint` field at all — probeBase must come from GetDefaultAPIBase.
-	body := `{"provider":{"auth_method":"api_key","id":"litellm","api_key":"sk-litellm-key"},"admin":{"username":"admin","password":"secret123"}}`
+	// No `endpoint` field at all — probeBase must come from providers.APIBaseFor.
+	body := `{"provider":{"auth_method":"api_key","id":"ollama","api_key":"sk-ollama-key"},"admin":{"username":"admin","password":"secret123"}}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -1939,9 +1945,9 @@ func TestHandleCompleteOnboarding_SSRFBlockedProbeStillCompletesWithWarning(t *t
 	assert.Contains(t, warning, "endpoint",
 		"the warning must explain the endpoint could not be checked, got %q", warning)
 
-	stored, err := api.credStore.Get("litellm_API_KEY")
+	stored, err := api.credStore.Get("ollama_API_KEY")
 	require.NoError(t, err, "an unchecked key must still be stored as entered")
-	assert.Equal(t, "sk-litellm-key", stored)
+	assert.Equal(t, "sk-ollama-key", stored)
 	assert.True(t, api.onboardingMgr.IsComplete(), "onboarding must be marked complete")
 
 	_ = auditLogger.Close()
@@ -1951,7 +1957,7 @@ func TestHandleCompleteOnboarding_SSRFBlockedProbeStillCompletesWithWarning(t *t
 		if line["event"] == "provider_key_validation_skipped" {
 			found = true
 			details, _ := line["details"].(map[string]any)
-			assert.Equal(t, "litellm", details["provider"])
+			assert.Equal(t, "ollama", details["provider"])
 			assert.Equal(t, "ssrf blocked", details["reason"])
 			assert.Equal(t, "onboarding", details["source"])
 		}
@@ -1960,37 +1966,50 @@ func TestHandleCompleteOnboarding_SSRFBlockedProbeStillCompletesWithWarning(t *t
 		"ssrf blocked")
 }
 
-// TestHandleCompleteOnboarding_UsesLiveCatalogForProbeModel is the regression
-// test for review finding D6: HandleCompleteOnboarding previously called
-// providers.ValidateKey without a Catalog, so providers.pickProbeModel returned
-// providers.probeModelDefaults' hardcoded slug for openrouter
-// ("meta-llama/llama-3.1-8b-instruct") immediately — WITHOUT ever calling
-// providers.FetchModels — whenever that slug existed in the rules table,
-// regardless of whether it still exists on the provider's live catalog.
+// TestHandleCompleteOnboarding_ProbeModelFallsThroughCatalogCandidates is the
+// current form of the review finding D6 regression test, updated for ADR-067
+// FR-022: the probe model for a CATALOG provider now comes from the registry
+// catalog document — the first `status: active`, tool-calling, text-modality
+// model, in document order (catalogProbeModels) — never from a hand-typed
+// slug table and never from a live `/models` fetch (FR-022 explicitly
+// forbids the pre-fetch for catalog providers; HandleCompleteOnboarding's own
+// D6 catalog fetch still runs and is threaded through as ValidateInput.Catalog,
+// but ValidateKey only consults it when catalogProbeModels returns no
+// candidates at all — never to override a catalog candidate that exists).
 //
-// This stand-in simulates that slug having been retired: /models does not list
-// it, but does list a different chat-capable model. If the handler still probes
-// the hardcoded slug, /chat/completions 404s and classify() maps that to
-// Unreachable — a false "couldn't check" warning for a perfectly good key. With
-// the live catalog wired through, pickProbeModel falls back to the first
-// chat-capable catalog entry instead, the probe succeeds, and onboarding
-// completes with NO warning (OutcomeValid).
-func TestHandleCompleteOnboarding_UsesLiveCatalogForProbeModel(t *testing.T) {
+// What D6 actually protects against under this rule is a STALE catalog
+// document: the first candidate the served snapshot lists is missing
+// upstream (entitlement gap, a model pulled after the snapshot was cut).
+// This stand-in simulates exactly that for "openrouter": its first two
+// catalogProbeModels candidates are real ids from the embedded snapshot
+// (asserted below so this test fails loudly if the snapshot ever reorders
+// them); the stub 404s the first as "model not found" and accepts the
+// second. FR-022's fall-through (bounded to 3 attempts, T26) must step past
+// it and complete onboarding with NO warning (OutcomeValid) — not a false
+// Unreachable from stopping at the first, stale candidate.
+func TestHandleCompleteOnboarding_ProbeModelFallsThroughCatalogCandidates(t *testing.T) {
 	tmpDir := t.TempDir()
 	minimalCfg := []byte(`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[]}`)
 	require.NoError(t, os.WriteFile(tmpDir+"/config.json", minimalCfg, 0o600))
 
-	const retiredDefault = "meta-llama/llama-3.1-8b-instruct"
-	const liveModel = "some-vendor/still-live-chat-model"
+	// The catalog's own first two probe candidates for "openrouter" — pinned
+	// here, not hardcoded blind, so a snapshot refresh that reorders them
+	// fails this test instead of silently testing nothing.
+	staleCandidate := providers.DefaultProbeModel("openrouter")
+	require.NotEmpty(t, staleCandidate, "openrouter must have at least one catalog probe candidate")
+	const liveCandidate = "~anthropic/claude-haiku-latest"
+	require.NotEqual(t, staleCandidate, liveCandidate,
+		"fixture assumption broken: the catalog's first two openrouter candidates must differ")
 
 	var probedModels []string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
 		case strings.HasSuffix(r.URL.Path, "/models"):
-			// The rules-table default is deliberately ABSENT — simulating a
-			// retired slug — alongside one still-live chat-capable model.
-			_, _ = w.Write([]byte(`{"data":[{"id":"` + liveModel + `"}]}`))
+			// FR-022: a catalog provider's probe model never comes from this
+			// endpoint, so its body is irrelevant — present only so a
+			// wrongly-reintroduced pre-fetch would not itself 404.
+			_, _ = w.Write([]byte(`{"data":[]}`))
 		case strings.HasSuffix(r.URL.Path, "/chat/completions"):
 			var payload struct {
 				Model string `json:"model"`
@@ -1998,8 +2017,9 @@ func TestHandleCompleteOnboarding_UsesLiveCatalogForProbeModel(t *testing.T) {
 			raw, _ := io.ReadAll(r.Body)
 			_ = json.Unmarshal(raw, &payload)
 			probedModels = append(probedModels, payload.Model)
-			if payload.Model == retiredDefault {
-				// The real OpenRouter behavior for an unknown/retired slug.
+			if payload.Model == staleCandidate {
+				// The real OpenRouter behavior for an entitlement gap / a
+				// model the snapshot lists but the account cannot reach.
 				w.WriteHeader(http.StatusNotFound)
 				_, _ = w.Write([]byte(`{"error":{"message":"model not found","code":404}}`))
 				return
@@ -2032,15 +2052,13 @@ func TestHandleCompleteOnboarding_UsesLiveCatalogForProbeModel(t *testing.T) {
 	api.HandleCompleteOnboarding(w, req)
 
 	require.Equal(t, http.StatusOK, w.Code,
-		"a good key must still complete onboarding even when the hardcoded default slug is retired (body=%s)", w.Body.String())
+		"a good key must still complete onboarding even when the catalog's first probe candidate 404s (body=%s)", w.Body.String())
 	var resp map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Nil(t, resp["warning"],
-		"D6: with the live catalog wired through, the probe must use a model that is actually live — no warning expected")
+		"FR-022: falling through to the next catalog candidate must succeed — no warning expected")
 
 	require.NotEmpty(t, probedModels, "the probe must have hit /chat/completions at least once")
-	assert.NotContains(t, probedModels, retiredDefault,
-		"D6: the handler must not probe the retired rules-table slug when a live catalog is available; probed=%v", probedModels)
-	assert.Contains(t, probedModels, liveModel,
-		"D6: the handler must fall back to a live catalog entry; probed=%v", probedModels)
+	assert.Equal(t, []string{staleCandidate, liveCandidate}, probedModels,
+		"FR-022: the probe must try the catalog's first candidate, then fall through to the second on model_not_found")
 }

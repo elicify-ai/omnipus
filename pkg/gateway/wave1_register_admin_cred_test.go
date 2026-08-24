@@ -109,7 +109,7 @@ func newTestAPIWithMasterKey(t *testing.T) (*restAPI, string, string) {
 // pre-seeds the in-memory AgentLoop config with the given providers slice. Use this
 // when the PUT /providers/{id} handler needs to resolve a specific api_base from the
 // in-memory config (e.g. to point at an httptest stub rather than the live provider
-// endpoint that GetDefaultAPIBase would return). The callers of newTestAPIWithMasterKey
+// endpoint that providers.APIBaseFor would return). The callers of newTestAPIWithMasterKey
 // that do NOT need custom providers are left unchanged.
 func newTestAPIWithMasterKeyAndProviders(t *testing.T, provs []*config.ModelConfig) (*restAPI, string, string) {
 	t.Helper()
@@ -239,7 +239,7 @@ func TestProviders_BackwardCompatPlaintextAPIKey(t *testing.T) {
 			},
 		},
 		Providers: []*config.ModelConfig{
-			{ModelName: "openai", Provider: "openai", Model: "gpt-4o", APIKeyRef: "OPENAI_API_KEY"},
+			{Name: "openai", Provider: "openai", Model: "gpt-4o", APIKeyRef: "OPENAI_API_KEY"},
 		},
 	}
 	msgBus := bus.NewMessageBus()
@@ -426,14 +426,14 @@ func TestProviderPUT_StoresAPIKeyRef(t *testing.T) {
 
 	// Seed the in-memory config with an anthropic provider whose api_base points
 	// at the stub. The PUT handler resolves persistedAPIBase from cfg.Providers
-	// first; this overrides the GetDefaultAPIBase("anthropic") = real endpoint
+	// first; this overrides the providers.APIBaseFor("anthropic") = real endpoint
 	// fallback so ValidateKey probes the stub and returns OutcomeValid.
 	api, tmpDir, _ := newTestAPIWithMasterKeyAndProviders(t, []*config.ModelConfig{
 		{
-			ModelName: "anthropic",
-			Provider:  "anthropic",
-			Model:     "claude-3-haiku-20240307",
-			APIBase:   stub.URL,
+			Name:     "anthropic",
+			Provider: "anthropic",
+			Model:    "claude-3-haiku-20240307",
+			APIBase:  stub.URL,
 		},
 	})
 
@@ -593,7 +593,7 @@ func TestProviderGET_ResolvesAPIKeyRefFromCredStore(t *testing.T) {
 			},
 		},
 		Providers: []*config.ModelConfig{
-			{ModelName: "openai", Provider: "openai", Model: "gpt-4o", APIKeyRef: credRef},
+			{Name: "openai", Provider: "openai", Model: "gpt-4o", APIKeyRef: credRef},
 		},
 	}
 	msgBus := bus.NewMessageBus()

@@ -7,12 +7,15 @@ package providers
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
 )
 
 // ── TestClassify_Matrix ───────────────────────────────────────────────────────
@@ -311,104 +314,267 @@ func TestBuildMessage_Catalog(t *testing.T) {
 	}
 }
 
-// ── TestPickProbeModel_SkipsNonChat ───────────────────────────────────────────
-// US5 AS1: interleaved catalog → chat model returned; non-chat excluded.
+// ── T26 TestPickProbeModel_FromCatalog ───────────────────────────────────────
+// FR-022 / A-20: the probe model is the provider's first ACTIVE,
+// TOOL-CALLING, TEXT model in DOCUMENT ORDER — read from the catalog, not
+// from a hand-typed slug table. The retired table is what this replaces: a
+// stale slug there produced a 404 that classified as *Unreachable*, so a
+// perfectly good key was reported as "provider unreachable".
 
-func TestPickProbeModel_SkipsNonChat(t *testing.T) {
+func TestPickProbeModel_FromCatalog(t *testing.T) {
+	withProbeCatalog(t)
+
+	t.Run("first active tool-calling text model in document order", func(t *testing.T) {
+		got := catalogProbeModels("probeshop")
+		want := []string{"chat-b", "chat-c", "chat-d"}
+		if len(got) != len(want) {
+			t.Fatalf("candidates = %v, want %v", got, want)
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Fatalf("candidates = %v, want %v", got, want)
+			}
+		}
+		if got[0] != "chat-b" {
+			t.Errorf("first candidate = %q; the document's first row (chat-a) is retired "+
+				"and must be skipped", got[0])
+		}
+	})
+
+	t.Run("bounded to three attempts", func(t *testing.T) {
+		if got := catalogProbeModels("probeshop"); len(got) > maxProbeAttempts {
+			t.Errorf("candidates = %d, want at most %d", len(got), maxProbeAttempts)
+		}
+	})
+
+	t.Run("a non-catalog provider yields no candidates", func(t *testing.T) {
+		if got := catalogProbeModels("nope"); got != nil {
+			t.Errorf("catalogProbeModels(nope) = %v, want nil so the caller falls back to the live list", got)
+		}
+	})
+
+	t.Run("DefaultProbeModel exposes the first candidate", func(t *testing.T) {
+		if got := DefaultProbeModel("probeshop"); got != "chat-b" {
+			t.Errorf("DefaultProbeModel = %q, want chat-b", got)
+		}
+		if got := DefaultProbeModel("nope"); got != "" {
+			t.Errorf("DefaultProbeModel(nope) = %q, want empty", got)
+		}
+	})
+}
+
+// TestChatProbeCandidates_LiveListFallback covers the custom/local path,
+// where the catalog has no models and the upstream list is all there is.
+func TestChatProbeCandidates_LiveListFallback(t *testing.T) {
 	t.Parallel()
-	catalog := []string{"text-embedding-3-small", "gpt-4o-mini", "dall-e-3"}
-	got := pickProbeModel(catalog, "openai")
-	// The rules-table default for openai is "gpt-4o-mini".
-	// gpt-4o-mini is in the catalog and is a chat model.
-	if got != "gpt-4o-mini" {
-		t.Errorf("pickProbeModel([embed,gpt-4o-mini,dall-e], openai) = %q, want gpt-4o-mini", got)
+	got := chatProbeCandidates([]string{
+		"text-embedding-3-small", "gpt-4o-mini", "dall-e-3", "chat-1", "chat-2", "chat-3",
+	})
+	if len(got) != maxProbeAttempts {
+		t.Fatalf("candidates = %v, want %d entries", got, maxProbeAttempts)
 	}
-
-	// OpenRouter — catalog contains the current rules-table default (meta-llama/llama-3.1-8b-instruct).
-	// pickProbeModel should prefer the default when it IS in the catalog.
-	catalogOR := []string{"openai/gpt-4o", "text-embedding-ada-002", "meta-llama/llama-3.1-8b-instruct"}
-	got = pickProbeModel(catalogOR, "openrouter")
-	// Rules-table default is "meta-llama/llama-3.1-8b-instruct" which is present in the catalog.
-	if got != "meta-llama/llama-3.1-8b-instruct" {
-		t.Errorf("pickProbeModel(openrouter catalog with default) = %q, want meta-llama/llama-3.1-8b-instruct", got)
+	if got[0] != "gpt-4o-mini" {
+		t.Errorf("first candidate = %q, want gpt-4o-mini (the embedding entry must be skipped)", got[0])
 	}
-	// Must not be the embedding entry.
-	if strings.Contains(strings.ToLower(got), "embed") {
-		t.Errorf("pickProbeModel returned an embedding model: %q", got)
+	for _, m := range got {
+		for _, sub := range nonChatSubstrings {
+			if strings.Contains(strings.ToLower(m), sub) {
+				t.Errorf("candidate %q contains the non-chat marker %q", m, sub)
+			}
+		}
 	}
 }
 
-// ── TestPickProbeModel_DefaultNotInCatalogFallsToFirstChatEntry ───────────────
-// Regression test for the bug where pickProbeModel returned a rules-table default
-// that was NOT present in the fetched catalog, causing a false Unreachable outcome.
-// When the default is absent from the catalog, the function must return a catalog
-// entry instead of the absent slug.
+// TestValidateKey_FallsThroughOnModelNotFound — F-25: a "that model does not
+// exist" answer moves to the NEXT candidate; a credential answer does not.
+// Bounded at three attempts so one key check can never become a burst.
+func TestValidateKey_FallsThroughOnModelNotFound(t *testing.T) {
+	withProbeCatalog(t)
 
-func TestPickProbeModel_DefaultNotInCatalogFallsToFirstChatEntry(t *testing.T) {
-	t.Parallel()
-
-	// OpenRouter catalog that does NOT contain the rules-table default.
-	// This simulates the real scenario: the old ":free" slug was deprecated and
-	// removed from the catalog; the probe must pick a live model instead.
-	catalogOR := []string{"openai/gpt-4o", "text-embedding-ada-002", "anthropic/claude-3-haiku"}
-	got := pickProbeModel(catalogOR, "openrouter")
-
-	// Must NOT return the rules-table default (it's not in the catalog).
-	def := probeModelDefaults["openrouter"]
-	if got == def {
-		t.Errorf("pickProbeModel returned rules-table default %q which is not in catalog — "+
-			"this would produce a false Unreachable (404 model-not-found vs. key check)", got)
-	}
-	// Must return a non-empty chat-capable model from the catalog.
-	if got == "" {
-		t.Errorf("pickProbeModel returned empty string; want a chat slug from the catalog")
-	}
-	// Must not be an embedding/non-chat model.
-	for _, sub := range nonChatSubstrings {
-		if strings.Contains(strings.ToLower(got), sub) {
-			t.Errorf("pickProbeModel returned non-chat model %q (contains %q)", got, sub)
+	var seen []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var req struct {
+			Model string `json:"model"`
 		}
-	}
-	// Must be one of the chat entries from the catalog.
-	catalogChatEntries := []string{"openai/gpt-4o", "anthropic/claude-3-haiku"} // embed excluded
-	found := false
-	for _, m := range catalogChatEntries {
-		if got == m {
-			found = true
-			break
+		_ = json.Unmarshal(body, &req)
+		seen = append(seen, req.Model)
+		if req.Model == "chat-d" {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"hi"}}]}`))
+			return
 		}
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"error":{"code":"model_not_found","message":"the model does not exist"}}`))
+	}))
+	defer srv.Close()
+
+	res := ValidateKey(context.Background(), ValidateInput{
+		ProviderID:   "probeshop",
+		ProviderName: "ProbeShop",
+		BaseURL:      srv.URL,
+		APIKey:       "sk-test",
+	}, NoopChecker{})
+
+	if res.Outcome != OutcomeValid {
+		t.Fatalf("outcome = %q (%s), want valid after falling through to a live model",
+			res.Outcome, res.RawDetail)
 	}
-	if !found {
-		t.Errorf(
-			"pickProbeModel returned %q which is not in the expected chat catalog entries %v",
-			got,
-			catalogChatEntries,
-		)
+	want := []string{"chat-b", "chat-c", "chat-d"}
+	if len(seen) != len(want) {
+		t.Fatalf("probed %v, want exactly %v", seen, want)
+	}
+	for i := range want {
+		if seen[i] != want[i] {
+			t.Fatalf("probed %v, want %v", seen, want)
+		}
 	}
 }
 
-// ── TestPickProbeModel_EmptyCatalogFallback ───────────────────────────────────
-// US5 AS2: empty catalog → rules-table default; no false InvalidKey.
+// TestValidateKey_NoFallThroughOnBadKey — an invalid-key answer is the ANSWER.
+// Retrying it against two more models would triple the traffic and tell us
+// nothing, and would report the same outcome anyway.
+func TestValidateKey_NoFallThroughOnBadKey(t *testing.T) {
+	withProbeCatalog(t)
 
-func TestPickProbeModel_EmptyCatalogFallback(t *testing.T) {
-	t.Parallel()
-	// Known provider: should return a non-empty default.
-	got := pickProbeModel(nil, "openai")
-	if got == "" {
-		t.Errorf("pickProbeModel(nil, openai): expected non-empty fallback default")
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":{"message":"Incorrect API key provided"}}`))
+	}))
+	defer srv.Close()
+
+	res := ValidateKey(context.Background(), ValidateInput{
+		ProviderID:   "probeshop",
+		ProviderName: "ProbeShop",
+		BaseURL:      srv.URL,
+		APIKey:       "sk-bad",
+	}, NoopChecker{})
+
+	if res.Outcome != OutcomeInvalidKey {
+		t.Fatalf("outcome = %q, want invalid_key", res.Outcome)
 	}
-	// Verify it is a chat slug (does not match any non-chat substring).
-	for _, sub := range nonChatSubstrings {
-		if strings.Contains(strings.ToLower(got), sub) {
-			t.Errorf("pickProbeModel fallback %q contains non-chat substring %q", got, sub)
+	if calls != 1 {
+		t.Errorf("upstream calls = %d, want exactly 1 — a credential answer is final", calls)
+	}
+}
+
+// TestValidateKey_NoModelsPreFetchForCatalogProvider — FR-022: the probe path
+// makes ZERO `GET /models` calls for a provider the catalog knows.
+func TestValidateKey_NoModelsPreFetchForCatalogProvider(t *testing.T) {
+	withProbeCatalog(t)
+
+	var gets, posts int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			gets++
+		} else {
+			posts++
 		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"hi"}}]}`))
+	}))
+	defer srv.Close()
+
+	ValidateKey(context.Background(), ValidateInput{
+		ProviderID:   "probeshop",
+		ProviderName: "ProbeShop",
+		BaseURL:      srv.URL,
+		APIKey:       "sk-test",
+	}, NoopChecker{})
+
+	if gets != 0 {
+		t.Errorf("GET requests = %d, want 0 — the catalog already lists this provider's models", gets)
+	}
+	if posts != 1 {
+		t.Errorf("POST requests = %d, want exactly 1 completion probe", posts)
+	}
+}
+
+// TestValidateKey_OutcomeClassificationUnchanged — the regression this task
+// owes: the probe MODEL now comes from the catalog, and the outcome
+// CLASSIFICATION must be byte-for-byte what it was. Each row is an upstream
+// answer and the outcome `classify` has always produced for it.
+func TestValidateKey_OutcomeClassificationUnchanged(t *testing.T) {
+	withProbeCatalog(t)
+
+	tests := []struct {
+		name   string
+		status int
+		body   string
+		want   Outcome
+	}{
+		{"200 completion", http.StatusOK, `{"choices":[{"message":{"content":"hi"}}]}`, OutcomeValid},
+		{"401 credential marker", http.StatusUnauthorized, `{"error":{"message":"Incorrect API key provided"}}`, OutcomeInvalidKey},
+		{"402 no credit", http.StatusPaymentRequired, `{"error":{"message":"insufficient balance"}}`, OutcomeNoCredit},
+		{"403 permission", http.StatusForbidden, `{"error":{"message":"permission_denied for region"}}`, OutcomeRestricted},
+		{"500 upstream", http.StatusInternalServerError, `{"error":{"message":"boom"}}`, OutcomeUnreachable},
 	}
 
-	// Unknown provider + empty catalog: must return "" (no model to probe). ValidateKey
-	// turns that into Unreachable (US5 AS2), never a false InvalidKey.
-	if got := pickProbeModel(nil, "some-unknown-provider-xyz"); got != "" {
-		t.Errorf("pickProbeModel(nil, unknown): want \"\" (no probe model), got %q", got)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tt.status)
+				_, _ = w.Write([]byte(tt.body))
+			}))
+			defer srv.Close()
+
+			res := ValidateKey(context.Background(), ValidateInput{
+				ProviderID:   "probeshop",
+				ProviderName: "ProbeShop",
+				BaseURL:      srv.URL,
+				APIKey:       "sk-test",
+			}, NoopChecker{})
+			if res.Outcome != tt.want {
+				t.Errorf("outcome = %q, want %q (raw: %s)", res.Outcome, tt.want, res.RawDetail)
+			}
+			if res.Blocks() != (tt.want == OutcomeInvalidKey) {
+				t.Errorf("Blocks() = %v for outcome %q", res.Blocks(), res.Outcome)
+			}
+		})
 	}
+}
+
+// probeCatalogJSON is a minimal 2.0.0 document whose single provider exercises
+// every branch of the probe-model rule: a retired row, a non-tool-calling row
+// and an image-only row all sit AHEAD of the models that qualify.
+const probeCatalogJSON = `{
+  "schema_version": "2.0.0",
+  "version": "v2026.8.22",
+  "updated_at": "2026-08-22T06:00:00Z",
+  "source": "test",
+  "default_resize_limits": {"long_edge_px": 7680, "max_bytes": 10485760},
+  "providers": [{
+    "id": "probeshop",
+    "name": "ProbeShop",
+    "company": "ProbeShop",
+    "api": "https://api.probeshop.example/v1",
+    "protocol": "openai-compatible",
+    "tier": "standard",
+    "auth_methods": ["api_key"],
+    "resize_limits": {"long_edge_px": 7680, "max_bytes": 10485760},
+    "models": [
+      {"id": "chat-a", "name": "A", "tool_call": true,  "context_window": 8192, "input_modalities": ["text"], "status": "retired"},
+      {"id": "embed-1","name": "E", "tool_call": false, "context_window": 8192, "input_modalities": ["text"], "status": "active"},
+      {"id": "chat-b", "name": "B", "tool_call": true,  "context_window": 8192, "input_modalities": ["text"], "status": "active"},
+      {"id": "chat-c", "name": "C", "tool_call": true,  "context_window": 8192, "input_modalities": ["text","image"], "status": "active"},
+      {"id": "chat-d", "name": "D", "tool_call": true,  "context_window": 8192, "input_modalities": ["text"], "status": "active"},
+      {"id": "chat-e", "name": "F", "tool_call": true,  "context_window": 8192, "input_modalities": ["text"], "status": "active"}
+    ]
+  }]
+}`
+
+// withProbeCatalog installs probeCatalogJSON as the process catalog for one
+// test. These tests never run in parallel: the catalog is process-wide.
+func withProbeCatalog(t *testing.T) {
+	t.Helper()
+	c, err := catalog.NewCatalog([]byte(probeCatalogJSON))
+	if err != nil {
+		t.Fatalf("parse probe catalog: %v", err)
+	}
+	SetCatalog(c)
+	t.Cleanup(func() { SetCatalog(nil) })
 }
 
 // ── TestFetchModels_BehaviourPreserved ────────────────────────────────────────

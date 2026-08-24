@@ -225,7 +225,7 @@ func TestSignInStatus_CopilotRowReportsDisconnected(t *testing.T) {
 
 	cfg := api.agentLoop.GetConfig()
 	cfg.Providers = append(cfg.Providers, &config.ModelConfig{
-		ModelName:  "copilot",
+		Name:       "copilot",
 		Model:      "claude-sonnet-4.6",
 		Provider:   "github-copilot",
 		AuthMethod: config.AuthMethodSignIn,

@@ -99,8 +99,6 @@ func NewProviderWithMaxTokensFieldAndTimeout(
 func (p *Provider) buildRequestBody(
 	messages []Message, tools []ToolDefinition, model string, options map[string]any,
 ) map[string]any {
-	model = normalizeModel(model, p.apiBase)
-
 	requestBody := map[string]any{
 		"model":    model,
 		"messages": common.SerializeMessages(messages),
@@ -440,36 +438,6 @@ func parseStreamResponse(
 	}, nil
 }
 
-func normalizeModel(model, apiBase string) string {
-	before, after, ok := strings.Cut(model, "/")
-	if !ok {
-		return model
-	}
-
-	if strings.Contains(strings.ToLower(apiBase), "openrouter.ai") {
-		// OpenRouter model IDs are "<vendor>/<model>" (e.g. "z-ai/glm-5.2").
-		// Omnipus config may namespace them with an extra "openrouter/" prefix
-		// ("openrouter/z-ai/glm-5.2" — the form onboarding writes), which the
-		// upstream rejects ("... is not a valid model ID"). Strip that prefix —
-		// but ONLY when a vendor/model slash remains after it, so the genuine
-		// OpenRouter router model "openrouter/auto" (and "openrouter/auto:*") is
-		// left intact (it IS a valid upstream ID, not a namespace prefix).
-		if strings.EqualFold(before, "openrouter") && strings.Contains(after, "/") {
-			return after
-		}
-		return model
-	}
-
-	prefix := strings.ToLower(before)
-	switch prefix {
-	case "litellm", "moonshot", "nvidia", "groq", "ollama", "deepseek", "google",
-		"openrouter", "zhipu", "mistral", "vivgrid", "minimax", "novita":
-		return after
-	default:
-		return model
-	}
-}
-
 func buildToolsList(tools []ToolDefinition, nativeSearch bool) []any {
 	result := make([]any, 0, len(tools)+1)
 	for _, t := range tools {
@@ -508,4 +476,13 @@ func supportsPromptCacheKey(apiBase string) bool {
 	}
 	host := u.Hostname()
 	return host == "api.openai.com" || strings.HasSuffix(host, ".openai.azure.com")
+}
+
+// APIBase returns the resolved base URL this provider posts to (ADR-067
+// DS-3 asserts the URL the catalog row produced).
+func (p *Provider) APIBase() string {
+	if p == nil {
+		return ""
+	}
+	return p.apiBase
 }

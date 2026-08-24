@@ -241,10 +241,12 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 		jsonErrField(w, http.StatusBadRequest, fmt.Sprintf("unknown provider %q", provider.Id), "id")
 		return
 	}
-	// Reject unknown protocols at the boundary so the gateway does not persist
-	// a config that will fail the post-save rewire and flip to degraded.
-	if !providers.IsKnownProtocol(provider.Id) {
-		jsonErr(w, http.StatusBadRequest, fmt.Sprintf("provider.id %q is not a known protocol", provider.Id))
+	// Reject ids the catalog does not carry at the boundary, so the gateway
+	// never persists a config that fails the post-save rewire and flips to
+	// degraded. The message names the id the caller sent and offers NO
+	// canonical alternative (ADR-067 FR-015, SC-010).
+	if !providers.IsCatalogProvider(provider.Id) {
+		jsonErr(w, http.StatusBadRequest, fmt.Sprintf("unknown provider %q", provider.Id))
 		return
 	}
 	if provider.ApiKey == "" {
@@ -342,7 +344,7 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 		probeBase = strings.TrimSpace(*provider.Endpoint)
 	}
 	if probeBase == "" {
-		probeBase = providers.GetDefaultAPIBase(provider.Id)
+		probeBase = providers.APIBaseFor(provider.Id)
 	}
 
 	// keyWarning carries a non-blocking validation outcome to the response's
@@ -400,18 +402,18 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 	if probeSkipReason == "" {
 		// D6: fetch the live model catalog first, exactly as
 		// HandleOnboardingProbeProvider does (see its Catalog: models call
-		// below), so ValidateKey's pickProbeModel can prefer a probe model that
-		// is actually present in the provider's current catalog. Without this,
-		// pickProbeModel returns providers.probeModelDefaults' hardcoded slug
-		// immediately for any of the 10 providers in that table WITHOUT ever
-		// calling FetchModels (see pickProbeModel: it only reaches the
-		// catalog-fetch fallback when the filtered catalog is empty AND no
-		// rules-table default exists) — so a retired default slug would silently
-		// degrade the check to a false Unreachable, or a wrong-model 400 to a
-		// false Valid, defeating the whole point of this fix for exactly the
-		// providers it's most likely to matter for. A fetch failure here is not
-		// fatal: ValidateKey falls back to the rules-table default exactly as it
-		// did before this fetch existed.
+		// below), so ValidateKey's probe-model pick can prefer a candidate
+		// that is actually present in the provider's current catalog. The
+		// probe model itself now comes from the registry catalog
+		// (catalogProbeModels — ADR-067 FR-022: the first active,
+		// tool-calling text model in document order), not a hand-maintained
+		// slug table, but a live fetch can still surface a model that is
+		// present today and simply listed later in the catalog's document
+		// order — so skipping this fetch would still risk a false
+		// Unreachable or a wrong-model 400 on exactly the providers this fix
+		// targets. A fetch failure here is not fatal: ValidateKey falls back
+		// to the catalog's own candidate list exactly as it did before this
+		// fetch existed.
 		catalog, catalogErr := providers.FetchModels(r.Context(), probeBase, provider.ApiKey, a.ssrfChk())
 		if catalogErr != nil {
 			slog.Debug("onboarding: catalog fetch before key validation failed; falling back to rules-table probe model",
@@ -525,7 +527,8 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 	}
 	// Persist a custom endpoint as api_base when supplied (required for providers
 	// with no fixed default base, e.g. azure; also a regional-host override). The
-	// runtime factory reads api_base before falling back to GetDefaultAPIBase.
+	// runtime factory reads an explicit api_base before falling back to the
+	// catalog row's own base URL (ADR-067 FR-012).
 	if provider.Endpoint != nil {
 		if ep := strings.TrimSpace(*provider.Endpoint); ep != "" {
 			newProviderEntry["api_base"] = ep
@@ -786,7 +789,7 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 //	{"id":"openrouter","api_key":"sk-or-...","endpoint":"https://openrouter.ai/api/v1"}
 //
 // `endpoint` is optional; when omitted, the server uses
-// providers.GetDefaultAPIBase(id).
+// providers.APIBaseFor(id).
 //
 // Response shape:
 //
@@ -859,7 +862,7 @@ func (a *restAPI) HandleOnboardingProbeProvider(w http.ResponseWriter, r *http.R
 		baseURL = *body.ApiBase
 	}
 	if baseURL == "" {
-		baseURL = providers.GetDefaultAPIBase(body.Id)
+		baseURL = providers.APIBaseFor(body.Id)
 	}
 	if baseURL == "" {
 		// Unknown provider and caller didn't supply an endpoint — the probe

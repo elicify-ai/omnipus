@@ -201,7 +201,7 @@ var allowedWorkspaceIdentifierLines = map[string]bool{
 	"pkg/migrate/sources/openclaw/openclaw_config.go:863": true,
 	"pkg/migrate/sources/openclaw/openclaw_config.go:864": true,
 	"pkg/migrate/sources/openclaw/openclaw_config.go:890": true,
-	"pkg/migrate/sources/openclaw/openclaw_config.go:920": true,
+	"pkg/migrate/sources/openclaw/openclaw_config.go:925": true,
 
 	"pkg/migrate/sources/openclaw/openclaw_config_test.go:250": true,
 	"pkg/migrate/sources/openclaw/openclaw_config_test.go:251": true,

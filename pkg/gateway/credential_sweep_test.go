@@ -77,7 +77,7 @@ func TestCredentialSweep_RemovesOrphans(t *testing.T) {
 	require.NoError(t, store.Set("_API_KEY", "empty-id-secret"))
 
 	cfg := &config.Config{Providers: []*config.ModelConfig{{
-		ModelName: "openrouter", Provider: "openrouter",
+		Name: "openrouter", Provider: "openrouter",
 		Model: "z-ai/glm-5", APIKeyRef: "openrouter_API_KEY",
 	}}}
 
@@ -117,7 +117,7 @@ func TestCredentialSweep_RowReferencedRefSurvives(t *testing.T) {
 	require.NoError(t, store.Set("legacy_API_KEY", "sk-referenced"))
 
 	cfg := &config.Config{Providers: []*config.ModelConfig{{
-		ModelName: "custom", Provider: "my-custom",
+		Name: "custom", Provider: "my-custom",
 		Model: "some/model", APIKeyRef: "legacy_API_KEY",
 	}}}
 
@@ -135,7 +135,7 @@ func TestCredentialSweep_CleanStoreNoEffect(t *testing.T) {
 	require.NoError(t, store.Set("openrouter_API_KEY", "sk-live"))
 
 	cfg := &config.Config{Providers: []*config.ModelConfig{{
-		ModelName: "openrouter", Provider: "openrouter",
+		Name: "openrouter", Provider: "openrouter",
 		Model: "z-ai/glm-5", APIKeyRef: "openrouter_API_KEY",
 	}}}
 

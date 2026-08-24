@@ -1859,7 +1859,7 @@ func TestProcessMessage_SwitchModelShowModelConsistency(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              tmpDir,
-				DefaultModel:      config.DefaultModel{Model: "openai/local-model"},
+				DefaultModel:      config.DefaultModel{Provider: "openai", Model: "gpt-4.1"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -1867,14 +1867,16 @@ func TestProcessMessage_SwitchModelShowModelConsistency(t *testing.T) {
 		},
 		Providers: []*config.ModelConfig{
 			{
-				ModelName: "local",
-				Model:     "openai/local-model",
+				Provider:  "openai",
+				Model:     "gpt-4.1",
 				APIBase:   "https://local.example.invalid/v1",
 				APIKeyRef: "LOOP_TEST_LOCAL_KEY",
 			},
 			{
-				ModelName: "deepseek",
-				Model:     "openrouter/deepseek/deepseek-v3.2",
+				// One OpenRouter model id that happens to contain a slash
+				// (ADR-067 FR-034) — not a request for a `deepseek` provider.
+				Provider:  "openrouter",
+				Model:     "deepseek/deepseek-v3.2",
 				APIBase:   "https://openrouter.ai/api/v1",
 				APIKeyRef: "LOOP_TEST_DEEPSEEK_KEY",
 			},
@@ -1892,13 +1894,13 @@ func TestProcessMessage_SwitchModelShowModelConsistency(t *testing.T) {
 			CanonicalID: "user1",
 		},
 		ChatID:  "chat1",
-		Content: "/switch model to deepseek",
+		Content: "/switch model to deepseek/deepseek-v3.2",
 		Peer: bus.Peer{
 			Kind: bus.PeerDirect,
 			ID:   "user1",
 		},
 	})
-	if !strings.Contains(switchResp, "Switched model from openai/local-model to deepseek") {
+	if !strings.Contains(switchResp, "Switched model from gpt-4.1 to deepseek/deepseek-v3.2") {
 		t.Fatalf("unexpected /switch reply: %q", switchResp)
 	}
 
@@ -1914,7 +1916,7 @@ func TestProcessMessage_SwitchModelShowModelConsistency(t *testing.T) {
 			ID:   "user1",
 		},
 	})
-	if !strings.Contains(showResp, "Current Model: deepseek (Provider: openrouter)") {
+	if !strings.Contains(showResp, "Current Model: deepseek/deepseek-v3.2 (Provider: openrouter)") {
 		t.Fatalf("unexpected /show model reply after switch: %q", showResp)
 	}
 
@@ -1943,7 +1945,7 @@ func TestProcessMessage_SwitchModelRejectsUnknownAlias(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              tmpDir,
-				DefaultModel:      config.DefaultModel{Model: "openai/local-model"},
+				DefaultModel:      config.DefaultModel{Provider: "openai", Model: "gpt-4.1"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -1951,8 +1953,8 @@ func TestProcessMessage_SwitchModelRejectsUnknownAlias(t *testing.T) {
 		},
 		Providers: []*config.ModelConfig{
 			{
-				ModelName: "local",
-				Model:     "openai/local-model",
+				Provider:  "openai",
+				Model:     "gpt-4.1",
 				APIBase:   "https://local.example.invalid/v1",
 				APIKeyRef: "LOOP_TEST_LOCAL_KEY_2",
 			},
@@ -1992,7 +1994,7 @@ func TestProcessMessage_SwitchModelRejectsUnknownAlias(t *testing.T) {
 			ID:   "user1",
 		},
 	})
-	if !strings.Contains(showResp, "Current Model: openai/local-model (Provider: openai)") {
+	if !strings.Contains(showResp, "Current Model: gpt-4.1 (Provider: openai)") {
 		t.Fatalf("unexpected /show model reply after rejected switch: %q", showResp)
 	}
 
@@ -2036,7 +2038,7 @@ func TestProcessMessage_SwitchModelRoutesSubsequentRequestsToSelectedProvider(t 
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              tmpDir,
-				DefaultModel:      config.DefaultModel{Model: "openai/Qwen3.5-35B-A3B"},
+				DefaultModel:      config.DefaultModel{Provider: "openai", Model: "gpt-4.1"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -2044,18 +2046,27 @@ func TestProcessMessage_SwitchModelRoutesSubsequentRequestsToSelectedProvider(t 
 		},
 		Providers: []*config.ModelConfig{
 			{
-				ModelName: "local",
-				Model:     "openai/Qwen3.5-35B-A3B",
+				Provider:  "openai",
+				Model:     "gpt-4.1",
 				APIBase:   localServer.URL,
 				APIKeyRef: localKeyRef,
 			},
 			{
-				ModelName: "deepseek",
-				Model:     "openrouter/deepseek/deepseek-v3.2",
+				Provider:  "openrouter",
+				Model:     "deepseek/deepseek-v3.2",
 				APIBase:   remoteServer.URL,
 				APIKeyRef: remoteKeyRef,
 			},
 		},
+		// Both rows point at httptest servers on 127.0.0.1, which makes them
+		// LOCAL endpoints (ADR-067 FR-039). ADR-066 D3 never guesses a window
+		// for a local endpoint — it refuses the turn until an operator sets
+		// one — so these overrides are what a real local-endpoint operator
+		// would configure.
+		Context: config.ContextSettings{ModelOverrides: []config.ContextModelOverride{
+			{Provider: "openai", Model: "gpt-4.1", ContextWindow: 128_000},
+			{Provider: "openrouter", Model: "deepseek/deepseek-v3.2", ContextWindow: 128_000},
+		}},
 	}
 
 	msgBus := bus.NewMessageBus()
@@ -2087,7 +2098,7 @@ func TestProcessMessage_SwitchModelRoutesSubsequentRequestsToSelectedProvider(t 
 	if remoteCalls != 0 {
 		t.Fatalf("remote calls before switch = %d, want 0", remoteCalls)
 	}
-	if localModel != "Qwen3.5-35B-A3B" {
+	if localModel != "gpt-4.1" {
 		t.Fatalf("local model before switch = %q, want %q", localModel, "Qwen3.5-35B-A3B")
 	}
 
@@ -2097,13 +2108,13 @@ func TestProcessMessage_SwitchModelRoutesSubsequentRequestsToSelectedProvider(t 
 			CanonicalID: "user1",
 		},
 		ChatID:  "chat1",
-		Content: "/switch model to deepseek",
+		Content: "/switch model to deepseek/deepseek-v3.2",
 		Peer: bus.Peer{
 			Kind: bus.PeerDirect,
 			ID:   "user1",
 		},
 	})
-	if !strings.Contains(switchResp, "Switched model from openai/Qwen3.5-35B-A3B to deepseek") {
+	if !strings.Contains(switchResp, "Switched model from gpt-4.1 to deepseek/deepseek-v3.2") {
 		t.Fatalf("unexpected /switch reply: %q", switchResp)
 	}
 
@@ -2128,11 +2139,11 @@ func TestProcessMessage_SwitchModelRoutesSubsequentRequestsToSelectedProvider(t 
 	if remoteCalls != 1 {
 		t.Fatalf("remote calls after switch = %d, want 1", remoteCalls)
 	}
-	if remoteModel != "deepseek-v3.2" {
+	if remoteModel != "deepseek/deepseek-v3.2" {
 		t.Fatalf(
 			"remote model after switch = %q, want %q",
 			remoteModel,
-			"deepseek-v3.2",
+			"deepseek/deepseek-v3.2",
 		)
 	}
 }
@@ -2182,12 +2193,12 @@ func TestProcessMessage_ModelRoutingUsesLightProvider(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              tmpDir,
-				DefaultModel:      config.DefaultModel{Model: "gemini/gemini-2.5-flash"},
+				DefaultModel:      config.DefaultModel{Provider: "google", Model: "gemini-2.5-flash"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 				Routing: &config.RoutingConfig{
 					Enabled:    true,
-					LightModel: "qwen-light",
+					LightModel: "qwen2.5:0.5b",
 					Threshold:  0.99,
 				},
 			},
@@ -2195,18 +2206,25 @@ func TestProcessMessage_ModelRoutingUsesLightProvider(t *testing.T) {
 		},
 		Providers: []*config.ModelConfig{
 			{
-				ModelName: "gemini-main",
-				Model:     "gemini/gemini-2.5-flash",
+				Provider:  "google",
+				Model:     "gemini-2.5-flash",
 				APIBase:   heavyServer.URL,
 				APIKeyRef: heavyKeyRef,
 			},
 			{
-				ModelName: "qwen-light",
-				Model:     "ollama/qwen2.5:0.5b",
+				Provider:  "ollama",
+				Model:     "qwen2.5:0.5b",
+				Models:    []string{"qwen2.5:0.5b"},
 				APIBase:   lightServer.URL,
 				APIKeyRef: lightKeyRef,
 			},
 		},
+		// Both rows are httptest servers on 127.0.0.1 — local endpoints, whose
+		// window ADR-066 D3 refuses to guess.
+		Context: config.ContextSettings{ModelOverrides: []config.ContextModelOverride{
+			{Provider: "google", Model: "gemini-2.5-flash", ContextWindow: 128_000},
+			{Provider: "ollama", Model: "qwen2.5:0.5b", ContextWindow: 32_000},
+		}},
 	}
 
 	msgBus := bus.NewMessageBus()

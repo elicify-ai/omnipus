@@ -338,7 +338,7 @@ func TestHandleProviders_CorruptedCredential_IsErrorStatus(t *testing.T) {
 		},
 		Providers: []*config.ModelConfig{
 			{
-				ModelName: "claude-sonnet-4-6",
+				Name:      "claude-sonnet-4-6",
 				Provider:  "anthropic",
 				Model:     "claude-sonnet-4-6",
 				APIKeyRef: "CORRUPT_PROVIDER_KEY",

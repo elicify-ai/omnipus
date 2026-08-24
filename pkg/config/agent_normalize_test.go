@@ -28,10 +28,10 @@ func TestNormalizeAgentRoster_AppliesBothPasses(t *testing.T) {
 	cfg := &Config{
 		Providers: []*ModelConfig{
 			{
-				ModelName: "glm-5.2",
-				Model:     "z-ai/glm-5.2",
-				Provider:  "openrouter",
-				APIBase:   "https://openrouter.ai/api/v1",
+				Name:     "glm-5.2",
+				Model:    "z-ai/glm-5.2",
+				Provider: "openrouter",
+				APIBase:  "https://openrouter.ai/api/v1",
 			},
 		},
 		Agents: AgentsConfig{

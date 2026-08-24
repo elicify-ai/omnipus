@@ -169,7 +169,7 @@ func TestConfigSet_SectionWritesThatAreSafeStillWork(t *testing.T) {
 			t.Fatalf("set_config(agents.defaults) failed: %s", result.ForLLM)
 		}
 		if cfg.Agents.Defaults.DefaultModel.Model != "glm-4.7" {
-			t.Errorf("ModelName = %q, want %q", cfg.Agents.Defaults.DefaultModel.Model, "glm-4.7")
+			t.Errorf("Name = %q, want %q", cfg.Agents.Defaults.DefaultModel.Model, "glm-4.7")
 		}
 	})
 

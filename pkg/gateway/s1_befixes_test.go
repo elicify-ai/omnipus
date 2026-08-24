@@ -74,7 +74,7 @@ func TestHandleProviders_NoKey_IsDisconnected(t *testing.T) {
 		},
 		Providers: []*config.ModelConfig{
 			{
-				ModelName: "claude-sonnet-4-6",
+				Name:      "claude-sonnet-4-6",
 				Provider:  "anthropic",
 				Model:     "claude-sonnet-4-6",
 				APIKeyRef: "ANTHROPIC_API_KEY",
@@ -159,7 +159,7 @@ func TestHandleProviders_EnvVarKey_IsConnected(t *testing.T) {
 			},
 		},
 		Providers: []*config.ModelConfig{
-			{ModelName: "gpt-4o", Provider: "openrouter", Model: "openai/gpt-4o", APIKeyRef: "OPENROUTER_API_KEY"},
+			{Name: "gpt-4o", Provider: "openrouter", Model: "openai/gpt-4o", APIKeyRef: "OPENROUTER_API_KEY"},
 		},
 	}
 	msgBus := bus.NewMessageBus()
@@ -243,7 +243,7 @@ func TestHandleProviders_CredStoreRef_EmptyRef_IsDisconnected(t *testing.T) {
 			},
 		},
 		Providers: []*config.ModelConfig{
-			{ModelName: "gemini-flash", Provider: "gemini", Model: "gemini-2.0-flash", APIKeyRef: "GEMINI_API_KEY"},
+			{Name: "gemini-flash", Provider: "gemini", Model: "gemini-2.0-flash", APIKeyRef: "GEMINI_API_KEY"},
 		},
 	}
 	msgBus := bus.NewMessageBus()
@@ -338,7 +338,7 @@ func TestHandleProviders_CredStoreRef_Resolved_IsConnected(t *testing.T) {
 			},
 		},
 		Providers: []*config.ModelConfig{
-			{ModelName: "claude-haiku", Provider: "anthropic", Model: "claude-haiku-4-5", APIKeyRef: credRef},
+			{Name: "claude-haiku", Provider: "anthropic", Model: "claude-haiku-4-5", APIKeyRef: credRef},
 		},
 	}
 	msgBus := bus.NewMessageBus()

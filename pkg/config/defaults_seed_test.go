@@ -32,11 +32,11 @@ func TestDefaultsSeed_NoRemovedProvider(t *testing.T) {
 	for _, tpl := range cfg.Providers {
 		for _, p := range removedPrefixes {
 			if strings.HasPrefix(strings.ToLower(tpl.Model), p) {
-				t.Errorf("seed template %q names a removed provider: model=%q", tpl.ModelName, tpl.Model)
+				t.Errorf("seed template %q names a removed provider: model=%q", tpl.Name, tpl.Model)
 			}
 		}
 		if f := reflect.ValueOf(tpl).Elem().FieldByName("AuthMethod"); f.IsValid() && !f.IsZero() {
-			t.Errorf("seed template %q sets an auth-method override %v; fresh-install templates are API-key only", tpl.ModelName, f.Interface())
+			t.Errorf("seed template %q sets an auth-method override %v; fresh-install templates are API-key only", tpl.Name, f.Interface())
 		}
 	}
 

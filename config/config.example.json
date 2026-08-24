@@ -5,7 +5,7 @@
       "restrict_to_workspace": true,
       "default_model": {
         "provider": "openai",
-        "model": "openai/gpt-5.4"
+        "model": "gpt-4.1"
       },
       "max_tokens": 8192,
       "temperature": 0.7,
@@ -19,64 +19,57 @@
   },
   "providers": [
     {
-      "model_name": "gpt-5.4",
       "provider": "openai",
-      "model": "openai/gpt-5.4",
-      "api_key": "sk-your-openai-key",
-      "api_base": "https://api.openai.com/v1"
+      "model": "gpt-4.1",
+      "api_key_ref": "OPENAI_API_KEY"
     },
     {
-      "model_name": "claude-sonnet-4.6",
-      "model": "anthropic/claude-sonnet-4.6",
-      "api_key": "sk-ant-your-key",
-      "api_base": "https://api.anthropic.com/v1",
+      "provider": "anthropic",
+      "model": "claude-sonnet-4-5",
+      "api_key_ref": "ANTHROPIC_API_KEY",
       "thinking_level": "high"
     },
     {
-      "_comment": "Anthropic Messages API - use native format for direct Anthropic API access",
-      "model_name": "claude-opus-4-6",
-      "model": "anthropic-messages/claude-opus-4-6",
-      "api_key": "sk-ant-your-key",
-      "api_base": "https://api.anthropic.com"
+      "_comment": "Same provider on its secondary wire protocol — `protocol` selects one of the endpoints the catalog row offers.",
+      "provider": "zai",
+      "protocol": "anthropic",
+      "model": "glm-4.5",
+      "api_key_ref": "ZAI_API_KEY"
     },
     {
-      "model_name": "gemini",
-      "model": "gemini/gemini-2.0-flash",
-      "api_key": "your-gemini-api-key"
+      "provider": "google",
+      "model": "gemini-2.5-flash",
+      "api_key_ref": "GOOGLE_API_KEY"
     },
     {
-      "model_name": "deepseek",
-      "model": "deepseek/deepseek-chat",
-      "api_key": "sk-your-deepseek-key"
+      "provider": "deepseek",
+      "model": "deepseek-chat",
+      "api_key_ref": "DEEPSEEK_API_KEY"
     },
     {
-      "model_name": "longcat",
-      "model": "longcat/LongCat-Flash-Thinking",
-      "api_key": "your-longcat-api-key"
+      "provider": "longcat",
+      "model": "LongCat-2.0",
+      "api_key_ref": "LONGCAT_API_KEY"
     },
     {
-      "model_name": "modelscope-qwen",
-      "model": "modelscope/Qwen/Qwen3-235B-A22B-Instruct-2507",
-      "api_key": "your-modelscope-access-token",
-      "api_base": "https://api-inference.modelscope.cn/v1"
+      "provider": "modelscope",
+      "model": "Qwen/Qwen3-235B-A22B-Instruct-2507",
+      "api_key_ref": "MODELSCOPE_API_KEY"
     },
     {
-      "model_name": "azure-gpt5",
-      "model": "azure/my-gpt5-deployment",
-      "api_key": "your-azure-api-key",
-      "api_base": "https://your-resource.openai.azure.com"
+      "_comment": "An operator-named endpoint the catalog does not carry: `custom` plus `api_base` and a protocol of openai-compatible or anthropic.",
+      "provider": "my-proxy",
+      "custom": true,
+      "protocol": "openai-compatible",
+      "model": "gpt-4.1",
+      "api_base": "https://llm.internal.example/v1",
+      "api_key_ref": "MY_PROXY_API_KEY"
     },
     {
-      "model_name": "loadbalanced-gpt-5.4",
-      "model": "openai/gpt-5.4",
-      "api_key": "sk-key1",
-      "api_base": "https://api1.example.com/v1"
-    },
-    {
-      "model_name": "loadbalanced-gpt-5.4",
-      "model": "openai/gpt-5.4",
-      "api_key": "sk-key2",
-      "api_base": "https://api2.example.com/v1"
+      "_comment": "Two rows with the same (provider, model) pair and different keys load-balance across them.",
+      "provider": "openai",
+      "model": "gpt-4.1",
+      "api_key_ref": "OPENAI_API_KEY_2"
     }
   ],
   "channels": {
@@ -85,7 +78,9 @@
       "token": "YOUR_TELEGRAM_BOT_TOKEN",
       "base_url": "",
       "proxy": "",
-      "allow_from": ["YOUR_USER_ID"],
+      "allow_from": [
+        "YOUR_USER_ID"
+      ],
       "use_markdown_v2": false,
       "reasoning_channel_id": "",
       "streaming": {
@@ -131,7 +126,11 @@
       "allow_from": [],
       "placeholder": {
         "enabled": true,
-        "text": ["Thinking...", "Processing...", "Typing..."]
+        "text": [
+          "Thinking...",
+          "Processing...",
+          "Typing..."
+        ]
       },
       "reasoning_channel_id": "",
       "random_reaction_emoji": [],
@@ -164,7 +163,11 @@
       },
       "placeholder": {
         "enabled": true,
-        "text": ["Thinking...", "Processing...", "Typing..."]
+        "text": [
+          "Thinking...",
+          "Processing...",
+          "Typing..."
+        ]
       },
       "reasoning_channel_id": "",
       "crypto_database_path": "",
@@ -199,8 +202,13 @@
       "nickserv_password": "",
       "sasl_user": "",
       "sasl_password": "",
-      "channels": ["#mychannel"],
-      "request_caps": ["server-time", "message-tags"],
+      "channels": [
+        "#mychannel"
+      ],
+      "request_caps": [
+        "server-time",
+        "message-tags"
+      ],
       "allow_from": [],
       "group_trigger": {
         "mention_only": true
@@ -222,7 +230,9 @@
       "brave": {
         "enabled": false,
         "api_key": "YOUR_BRAVE_API_KEY",
-        "api_keys": ["YOUR_BRAVE_API_KEY"],
+        "api_keys": [
+          "YOUR_BRAVE_API_KEY"
+        ],
         "max_results": 5
       },
       "tavily": {
@@ -238,7 +248,9 @@
       "perplexity": {
         "enabled": false,
         "api_key": "pplx-xxx",
-        "api_keys": ["pplx-xxx"],
+        "api_keys": [
+          "pplx-xxx"
+        ],
         "max_results": 5
       },
       "searxng": {
@@ -259,7 +271,6 @@
         "base_url": "https://qianfan.baidubce.com/v2/ai_search/web_search",
         "max_results": 10
       },
-      "fetch_limit_bytes": 10485760,
       "private_host_whitelist": []
     },
     "cron": {
@@ -287,12 +298,19 @@
         "filesystem": {
           "enabled": false,
           "command": "npx",
-          "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+          "args": [
+            "-y",
+            "@modelcontextprotocol/server-filesystem",
+            "/tmp"
+          ]
         },
         "github": {
           "enabled": false,
           "command": "npx",
-          "args": ["-y", "@modelcontextprotocol/server-github"],
+          "args": [
+            "-y",
+            "@modelcontextprotocol/server-github"
+          ],
           "env": {
             "GITHUB_PERSONAL_ACCESS_TOKEN": "YOUR_GITHUB_TOKEN"
           }
@@ -300,7 +318,10 @@
         "brave-search": {
           "enabled": false,
           "command": "npx",
-          "args": ["-y", "@modelcontextprotocol/server-brave-search"],
+          "args": [
+            "-y",
+            "@modelcontextprotocol/server-brave-search"
+          ],
           "env": {
             "BRAVE_API_KEY": "YOUR_BRAVE_API_KEY"
           }
@@ -317,7 +338,10 @@
         "slack": {
           "enabled": false,
           "command": "npx",
-          "args": ["-y", "@modelcontextprotocol/server-slack"],
+          "args": [
+            "-y",
+            "@modelcontextprotocol/server-slack"
+          ],
           "env": {
             "SLACK_BOT_TOKEN": "YOUR_SLACK_BOT_TOKEN",
             "SLACK_TEAM_ID": "YOUR_SLACK_TEAM_ID"

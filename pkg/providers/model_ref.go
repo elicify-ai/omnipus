@@ -32,38 +32,18 @@ func ParseModelRef(raw string, defaultProvider string) *ModelRef {
 	}
 }
 
-// NormalizeProvider normalizes provider identifiers to canonical form.
+// NormalizeProvider trims a provider identifier and returns it unchanged
+// otherwise.
+//
+// It used to be an alias table — `z.ai`/`z-ai` → `zai`, three `qwen-*`
+// spellings collapsed into one, `google` → `gemini`, and a dozen more. That
+// table was the last rename mechanism in the binary, and ADR-067's greenfield
+// rule removed every one of them (FR-011, SC-009): provider ids are the
+// registry's, compared EXACTLY after trimming, never case-folded (A-19). The
+// function survives only because dedup keys and refs read cleaner with one
+// named trim than with a bare strings.TrimSpace at each site.
 func NormalizeProvider(provider string) string {
-	p := strings.ToLower(strings.TrimSpace(provider))
-
-	switch p {
-	case "z.ai", "z-ai":
-		return "zai"
-	case "opencode-zen":
-		return "opencode"
-	case "qwen":
-		return "qwen-portal"
-	case "kimi-code":
-		return "kimi-coding"
-	case "gpt":
-		return "openai"
-	case "claude":
-		return "anthropic"
-	case "glm":
-		return "zhipu"
-	case "google":
-		return "gemini"
-	case "alibaba-coding", "qwen-coding":
-		return "coding-plan"
-	case "alibaba-coding-anthropic":
-		return "coding-plan-anthropic"
-	case "qwen-international", "dashscope-intl":
-		return "qwen-intl"
-	case "dashscope-us":
-		return "qwen-us"
-	}
-
-	return p
+	return strings.TrimSpace(provider)
 }
 
 // ModelKey returns a canonical "provider/model" key for deduplication.

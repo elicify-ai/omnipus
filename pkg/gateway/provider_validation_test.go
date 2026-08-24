@@ -51,8 +51,8 @@ func asString(v any) string {
 //
 // The upstream argument is the httptest server URL; the provider's api_base
 // is NOT written to the config (ProviderUpdateRequest has no api_base field —
-// the handler resolves the base from the in-memory config or GetDefaultAPIBase).
-// For a custom/unknown provider ID, GetDefaultAPIBase returns "" and ValidateKey
+// the handler resolves the base from the in-memory config or providers.APIBaseFor).
+// For a custom/unknown provider ID, providers.APIBaseFor returns "" and ValidateKey
 // skips the SSRF check + falls back to Unreachable without a base URL.
 //
 // To exercise validation against a real httptest upstream, callers should use a
@@ -81,10 +81,10 @@ func newProviderValidationTestAPI(t *testing.T, providerID, upstreamBaseURL stri
 	if providerID != "" && upstreamBaseURL != "" {
 		cfg.Providers = []*config.ModelConfig{
 			{
-				ModelName: providerID,
-				Provider:  providerID,
-				Model:     "test-model",
-				APIBase:   upstreamBaseURL,
+				Name:     providerID,
+				Provider: providerID,
+				Model:    "test-model",
+				APIBase:  upstreamBaseURL,
 			},
 		}
 	}
@@ -118,10 +118,10 @@ func newProviderValidationTestAPI(t *testing.T, providerID, upstreamBaseURL stri
 				continue
 			}
 			mc := &config.ModelConfig{
-				ModelName: asString(e["model_name"]),
-				Provider:  asString(e["provider"]),
-				Model:     asString(e["model"]),
-				APIBase:   upstreamBaseURL, // preserve the test stub base
+				Name:     asString(e["model_name"]),
+				Provider: asString(e["provider"]),
+				Model:    asString(e["model"]),
+				APIBase:  upstreamBaseURL, // preserve the test stub base
 			}
 			c.Providers = append(c.Providers, mc)
 		}
@@ -363,7 +363,7 @@ func TestPutProvider_SSRFPersistedApiBase(t *testing.T) {
 		},
 		// Provider with a loopback api_base that the SSRF checker must block.
 		Providers: []*config.ModelConfig{
-			{ModelName: "testprovider", Provider: "testprovider", Model: "test-model", APIBase: "http://127.0.0.1:9"},
+			{Name: "testprovider", Provider: "testprovider", Model: "test-model", APIBase: "http://127.0.0.1:9"},
 		},
 	}
 	msgBus := bus.NewMessageBus()
@@ -440,7 +440,7 @@ func TestProviderTest_ClassifiedOutcome(t *testing.T) {
 				Home: tmpDir, DefaultModel: config.DefaultModel{Model: "test-model"}, MaxTokens: 4096},
 		},
 		Providers: []*config.ModelConfig{
-			{ModelName: "testprovider", Provider: "testprovider", Model: "test-model", APIBase: upstream.URL},
+			{Name: "testprovider", Provider: "testprovider", Model: "test-model", APIBase: upstream.URL},
 		},
 	}
 	msgBus := bus.NewMessageBus()
@@ -523,7 +523,7 @@ func TestProviderTest_DoesNotPersistCredential(t *testing.T) {
 				Home: tmpDir, DefaultModel: config.DefaultModel{Model: "test-model"}, MaxTokens: 4096},
 		},
 		Providers: []*config.ModelConfig{
-			{ModelName: "testprovider", Provider: "testprovider", Model: "test-model", APIBase: upstream.URL},
+			{Name: "testprovider", Provider: "testprovider", Model: "test-model", APIBase: upstream.URL},
 		},
 	}
 	require.NoError(t, os.WriteFile(tmpDir+"/config.json",
@@ -631,7 +631,7 @@ func TestAudit_ProbeAndTestNotAudited(t *testing.T) {
 					Home: tmpDir, DefaultModel: config.DefaultModel{Model: "test-model"}, MaxTokens: 4096},
 			},
 			Providers: []*config.ModelConfig{
-				{ModelName: "testprovider2", Provider: "testprovider2", Model: "test-model", APIBase: upstream.URL},
+				{Name: "testprovider2", Provider: "testprovider2", Model: "test-model", APIBase: upstream.URL},
 			},
 		}
 		msgBus := bus.NewMessageBus()
@@ -773,7 +773,7 @@ func TestPutProvider_StoreLockedAndReloadFail(t *testing.T) {
 					Home: tmpDir, DefaultModel: config.DefaultModel{Model: "test-model"}, MaxTokens: 4096},
 			},
 			Providers: []*config.ModelConfig{
-				{ModelName: "testprovider", Provider: "testprovider", Model: "test-model", APIBase: upstream.URL},
+				{Name: "testprovider", Provider: "testprovider", Model: "test-model", APIBase: upstream.URL},
 			},
 		}
 		msgBus := bus.NewMessageBus()

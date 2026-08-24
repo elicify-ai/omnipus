@@ -187,7 +187,7 @@ func TestSeedConfig_ExistingConfig_KeepsExplicitFalse(t *testing.T) {
 
 // runRecapModelResolutionScenario is the shared setup for IMP-2's
 // model-resolution tiers (recap_model → default_model → agent model): a fresh
-// agent loop with RecapModel always empty, Defaults.ModelName set to
+// agent loop with RecapModel always empty, Defaults.Name set to
 // defaultModelName (possibly "" to fall through further), and the session
 // agent's own Model always "agent-own-model" — then asserts the recap
 // actually used wantModel. Shared by
@@ -258,14 +258,14 @@ func runRecapModelResolutionScenario(t *testing.T, agentID, agentName, defaultMo
 }
 
 // TestRunRecap_ModelResolution_DefaultModelFallback verifies IMP-2a:
-// When RecapModel is empty and Defaults.ModelName is set, the recap uses
+// When RecapModel is empty and Defaults.Name is set, the recap uses
 // the global default model (not the agent's own model).
 func TestRunRecap_ModelResolution_DefaultModelFallback(t *testing.T) {
 	runRecapModelResolutionScenario(t, "imp2a-agent", "Imp2a", "default-model", "default-model")
 }
 
 // TestRunRecap_ModelResolution_AgentModelFallback verifies IMP-2b:
-// When both RecapModel and Defaults.ModelName are empty, the recap uses
+// When both RecapModel and Defaults.Name are empty, the recap uses
 // the session agent's own model.
 func TestRunRecap_ModelResolution_AgentModelFallback(t *testing.T) {
 	runRecapModelResolutionScenario(t, "imp2b-agent", "Imp2b", "", "agent-own-model")

@@ -165,7 +165,7 @@ func TestGatewayBoot_StaleProviderCredentialDoesNotAbortBoot(t *testing.T) {
 	}
 
 	// Loud, not silent: ERROR naming the provider entry AND the credential.
-	requireSlogRecord(t, logBuf, "ERROR", "openrouter-onboarding", staleRef)
+	requireSlogRecord(t, logBuf, "ERROR", "openrouter", staleRef)
 }
 
 // TestGatewayBoot_OnlyBrokenProviderStillBoots covers the worse shape: the
@@ -203,7 +203,7 @@ func TestGatewayBoot_OnlyBrokenProviderStillBoots(t *testing.T) {
 	if _, _, _, err := bootCredentials(tmpDir, configPath); err != nil {
 		t.Fatalf("boot must survive with NO usable provider at all; got: %v", err)
 	}
-	requireSlogRecord(t, logBuf, "ERROR", "openrouter-auto", staleRef)
+	requireSlogRecord(t, logBuf, "ERROR", "openrouter", staleRef)
 }
 
 // TestCreateStartupProvider_BlockedDefaultModelNamesTheCredential pins the
@@ -221,7 +221,7 @@ func TestCreateStartupProvider_BlockedDefaultModelNamesTheCredential(t *testing.
 			Defaults: config.AgentDefaults{DefaultModel: config.DefaultModel{Provider: "openrouter", Model: "openrouter/z-ai/glm-5-turbo"}},
 		},
 		Providers: []*config.ModelConfig{{
-			ModelName: "openrouter-auto",
+			Name:      "openrouter-auto",
 			Model:     "openrouter/z-ai/glm-5-turbo",
 			Provider:  "openrouter",
 			APIBase:   "https://openrouter.ai/api/v1",
@@ -266,7 +266,7 @@ func TestCreateStartupProvider_ResolvedCredentialIsNotBlocked(t *testing.T) {
 			Defaults: config.AgentDefaults{DefaultModel: config.DefaultModel{Provider: "openrouter", Model: "openrouter/z-ai/glm-5-turbo"}},
 		},
 		Providers: []*config.ModelConfig{{
-			ModelName: "openrouter-auto",
+			Name:      "openrouter-auto",
 			Model:     "openrouter/z-ai/glm-5-turbo",
 			Provider:  "openrouter",
 			APIBase:   "https://openrouter.ai/api/v1",
@@ -295,7 +295,7 @@ func TestCreateStartupProvider_LoadBalancedSiblingKeepsModelUsable(t *testing.T)
 
 	entry := func(ref string) *config.ModelConfig {
 		return &config.ModelConfig{
-			ModelName: "openrouter-auto",
+			Name:      "openrouter-auto",
 			Model:     "openrouter/z-ai/glm-5-turbo",
 			Provider:  "openrouter",
 			APIBase:   "https://openrouter.ai/api/v1",
@@ -388,7 +388,7 @@ func TestGatewayBoot_WrongMasterKeyProviderCredentialIsFatal(t *testing.T) {
 	// worded as the scoped "credential unusable ... rest of the system
 	// continues" message the NotFoundError-degrade branch emits — that
 	// message would be a lie here.
-	requireSlogRecord(t, logBuf, "ERROR", "openrouter-auto", ref)
+	requireSlogRecord(t, logBuf, "ERROR", "openrouter", ref)
 	for _, line := range strings.Split(logBuf.String(), "\n") {
 		if strings.Contains(line, "rest of the system continues") {
 			t.Errorf(
@@ -456,7 +456,7 @@ func TestProviderCredentialDegraded_GETRowsConfiguredOnly(t *testing.T) {
 	const ref = "DEGRADED_TEST_T068_04_LOCKED_KEY"
 	t.Setenv(ref, "") // ref configured, nothing injected
 	seedTemplateProviders(t, api, &config.ModelConfig{
-		ModelName: "mygw", Provider: "mygw", Model: "mygw/llama", APIKeyRef: ref,
+		Name: "mygw", Provider: "mygw", Model: "mygw/llama", APIKeyRef: ref,
 		Models: []string{"mygw/llama"},
 	})
 

@@ -839,14 +839,13 @@ func buildConfig(hc *harnessConfig, homeDir string, port int) *config.Config {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:         homeDir,
-				DefaultModel: config.DefaultModel{Provider: "openrouter", Model: "openrouter/z-ai/glm-5v-turbo"},
+				DefaultModel: config.DefaultModel{Provider: "openrouter", Model: "z-ai/glm-5v-turbo"},
 				MaxTokens:    4096,
 			},
 		},
 		Providers: []*config.ModelConfig{
 			{
-				ModelName: "openrouter-glm",
-				Model:     "openrouter/z-ai/glm-5v-turbo",
+				Model:     "z-ai/glm-5v-turbo",
 				Provider:  "openrouter",
 				APIBase:   "https://openrouter.ai/api/v1",
 				APIKeyRef: "OPENROUTER_API_KEY",

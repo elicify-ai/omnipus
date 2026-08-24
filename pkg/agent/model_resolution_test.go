@@ -6,16 +6,32 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
-// Dataset 1 from phase-1 spec §11 / TDD rows 1–5. The single underlying
-// resolver MUST return the same canonical model name from both the UI
-// selector path (buildModelListResolver) and the chat runtime path
-// (resolvedModelConfig → CreateProviderFromConfig). Traces to FR-003.
+// ADR-067 FR-040 (X-24) replaced this file's subject wholesale. The old rules
+// — a `model_name` display alias, a `<protocol>/<model>` prefix split, and a
+// passthrough fallback that re-prefixed ANY unmatched slug onto the first
+// aggregator it found — are gone. Three rules remain:
+//
+//  1. an exact (provider, model) pair;
+//  1b. a configured provider that OFFERS the model;
+//  2. a bare model id offered by exactly ONE configured provider;
+//  3. otherwise unresolved.
+//
+// The passthrough rung is the one worth remembering: it meant a typo'd or
+// retired model id NEVER failed to resolve — it silently became an OpenRouter
+// request, billed to the operator's OpenRouter key, for a model nobody chose.
 
-// TestResolveModelCfg_EmptyProviders_ReturnsNotFound covers Dataset 1 row 1
-// (BDD-21): no providers, any model resolves to false.
+// row builds a configured provider row keyed by a real catalog provider id.
+func row(provider, model string) *config.ModelConfig {
+	return &config.ModelConfig{
+		Provider:  provider,
+		Model:     model,
+		APIKeyRef: "RESOLVE_TEST_KEY",
+	}
+}
+
 func TestResolveModelCfg_EmptyProviders_ReturnsNotFound(t *testing.T) {
 	cfg := &config.Config{}
-	got, err := ResolveModelCfg(cfg, "gpt-4o", "")
+	got, err := ResolveModelCfg(cfg, "gpt-4.1", "")
 	if err == nil {
 		t.Fatalf("expected error for empty providers, got %v", got)
 	}
@@ -24,646 +40,302 @@ func TestResolveModelCfg_EmptyProviders_ReturnsNotFound(t *testing.T) {
 	}
 }
 
-// TestResolveModelCfg_ExactMatchInProviders covers Dataset 1 row 2 (BDD-5):
-// model_name="gpt-4o" with Model="openai/gpt-4o" resolves to the canonical
-// protocol-prefixed form.
-func TestResolveModelCfg_ExactMatchInProviders(t *testing.T) {
-	cfg := &config.Config{
-		Providers: []*config.ModelConfig{
-			{
-				ModelName: "gpt-4o",
-				Model:     "openai/gpt-4o",
-				Provider:  "openai",
-				APIBase:   "http://127.0.0.1:1",
-				APIKeyRef: "RESOLVE_KEY",
-			},
-		},
-	}
-	mc, err := ResolveModelCfg(cfg, "gpt-4o", "")
-	if err != nil {
-		t.Fatalf("ResolveModelCfg: %v", err)
-	}
-	if mc.Model != "openai/gpt-4o" {
-		t.Errorf("mc.Model = %q, want %q", mc.Model, "openai/gpt-4o")
-	}
-}
+// T24c — TestModelListResolver_PairExactThenUnique is the FR-040 rule set,
+// asserted rung by rung.
+func TestModelListResolver_PairExactThenUnique(t *testing.T) {
+	t.Run("rule 1: the exact pair wins over any other row", func(t *testing.T) {
+		cfg := &config.Config{Providers: []*config.ModelConfig{
+			row("openrouter", "z-ai/glm-5.2"),
+			row("zai", "glm-5.2"),
+		}}
+		mc, err := ResolveModelPairCfg(cfg, "zai", "glm-5.2", "")
+		if err != nil {
+			t.Fatalf("ResolveModelPairCfg: %v", err)
+		}
+		if mc.Provider != "zai" || mc.Model != "glm-5.2" {
+			t.Errorf("resolved (%s, %s), want (zai, glm-5.2)", mc.Provider, mc.Model)
+		}
+	})
 
-// TestResolveModelCfg_PassthroughProviderFallback covers Dataset 1 row 3
-// (BDD-4): user picks "z-ai/glm-5-turbo" from the live list. The slug isn't
-// its own provider entry but openrouter accepts arbitrary slugs; the resolver
-// MUST prefix the input with the passthrough provider so the runtime can
-// route it via the openrouter credentials.
-func TestResolveModelCfg_PassthroughProviderFallback(t *testing.T) {
-	cfg := &config.Config{
-		Providers: []*config.ModelConfig{
-			{
-				ModelName: "z-ai/glm-5.2",
-				Model:     "z-ai/glm-5.2",
-				Provider:  "openrouter",
-				APIBase:   "https://openrouter.ai/api/v1",
-				APIKeyRef: "OPENROUTER_KEY",
-			},
-		},
-	}
-	mc, err := ResolveModelCfg(cfg, "z-ai/glm-5-turbo", "")
-	if err != nil {
-		t.Fatalf("ResolveModelCfg: %v", err)
-	}
-	if mc.Model != "openrouter/z-ai/glm-5-turbo" {
-		t.Errorf("mc.Model = %q, want %q", mc.Model, "openrouter/z-ai/glm-5-turbo")
-	}
-	if mc.Provider != "openrouter" {
-		t.Errorf("mc.Provider = %q, want openrouter (clone must preserve passthrough provider)", mc.Provider)
-	}
-	// The passthrough clone MUST inherit credentials from the provider entry —
-	// otherwise CreateProviderFromConfig has no API base / key to talk to.
-	if mc.APIBase != "https://openrouter.ai/api/v1" {
-		t.Errorf("mc.APIBase = %q, want passthrough provider's APIBase", mc.APIBase)
-	}
-	if mc.APIKeyRef != "OPENROUTER_KEY" {
-		t.Errorf("mc.APIKeyRef = %q, want passthrough provider's APIKeyRef", mc.APIKeyRef)
-	}
-}
+	t.Run("rule 1b: a configured provider that offers the model", func(t *testing.T) {
+		cfg := &config.Config{Providers: []*config.ModelConfig{row("anthropic", "claude-haiku-4-5")}}
+		mc, err := ResolveModelPairCfg(cfg, "anthropic", "claude-opus-4-5", "")
+		if err != nil {
+			t.Fatalf("a catalog model on a configured provider must resolve: %v", err)
+		}
+		if mc.Provider != "anthropic" || mc.Model != "claude-opus-4-5" {
+			t.Errorf("resolved (%s, %s), want (anthropic, claude-opus-4-5)", mc.Provider, mc.Model)
+		}
+	})
 
-// TestResolveModelCfg_VendorPrefixedSlug_RoutesViaPassthrough covers the
-// aggregator case (regression fix; supersedes the former row-4 "returns error"
-// expectation). OpenRouter's own catalog uses vendor-prefixed ids like
-// "openai/gpt-4o" and "anthropic/claude-3.5-haiku"; the vendor segment is part
-// of OpenRouter's slug, not a request for a separately-configured provider. So
-// with only an openrouter provider configured, such a pick MUST route through
-// openrouter — the earlier guard wrongly refused it, silently falling back to
-// the default (the composer lists these models but the runtime couldn't use them).
-func TestResolveModelCfg_VendorPrefixedSlug_RoutesViaPassthrough(t *testing.T) {
-	cfg := &config.Config{
-		Providers: []*config.ModelConfig{
-			{
-				ModelName: "z-ai/glm-5.2",
-				Model:     "z-ai/glm-5.2",
-				Provider:  "openrouter",
-				APIBase:   "https://openrouter.ai/api/v1",
-				APIKeyRef: "OPENROUTER_KEY",
-			},
-		},
-	}
-	for _, slug := range []string{"openai/gpt-4o", "anthropic/claude-3.5-haiku", "google/gemini-2.5-flash"} {
-		mc, err := ResolveModelCfg(cfg, slug, "")
-		if err != nil || mc == nil {
-			t.Fatalf("expected %q to route via the openrouter passthrough, got err=%v mc=%+v", slug, err, mc)
+	t.Run("rule 2: a bare id offered by exactly one provider", func(t *testing.T) {
+		cfg := &config.Config{Providers: []*config.ModelConfig{
+			row("openrouter", "z-ai/glm-5.2"),
+			row("anthropic", "claude-haiku-4-5"),
+		}}
+		mc, err := ResolveModelCfg(cfg, "z-ai/glm-5.2", "")
+		if err != nil {
+			t.Fatalf("ResolveModelCfg: %v", err)
 		}
 		if mc.Provider != "openrouter" {
-			t.Errorf("%q: expected Provider=openrouter, got %q", slug, mc.Provider)
+			t.Errorf("provider = %q, want openrouter", mc.Provider)
 		}
-		if mc.Model != "openrouter/"+slug {
-			t.Errorf("%q: expected Model=openrouter/%s, got %q", slug, slug, mc.Model)
+		if mc.Model != "z-ai/glm-5.2" {
+			t.Errorf("model = %q, want the full id verbatim — no prefix split", mc.Model)
 		}
-		if mc.APIKeyRef != "OPENROUTER_KEY" {
-			t.Errorf("%q: expected inherited APIKeyRef, got %q", slug, mc.APIKeyRef)
+	})
+
+	t.Run("rule 3: an ambiguous bare id stays unresolved", func(t *testing.T) {
+		cfg := &config.Config{Providers: []*config.ModelConfig{
+			row("openrouter", "shared-model"),
+			row("groq", "shared-model"),
+		}}
+		if mc, err := ResolveModelCfg(cfg, "shared-model", ""); err == nil {
+			t.Errorf("two providers offer it; resolving to %q is a guess, not an answer", mc.Provider)
 		}
+	})
+
+	t.Run("rule 3: an unknown id is unresolved, never re-routed", func(t *testing.T) {
+		cfg := &config.Config{Providers: []*config.ModelConfig{row("openrouter", "z-ai/glm-5.2")}}
+		if mc, err := ResolveModelCfg(cfg, "no-such-model", ""); err == nil {
+			t.Errorf("an unmatched id resolved to (%s, %s); the passthrough fallback is gone",
+				mc.Provider, mc.Model)
+		}
+	})
+
+	t.Run("no ModelName path: a row's display Name resolves nothing", func(t *testing.T) {
+		mc := row("openai", "gpt-4.1")
+		mc.Name = "my-favourite-model"
+		cfg := &config.Config{Providers: []*config.ModelConfig{mc}}
+		if got, err := ResolveModelCfg(cfg, "my-favourite-model", ""); err == nil {
+			t.Errorf("the display alias resolved to (%s, %s); X-25 deleted that rung",
+				got.Provider, got.Model)
+		}
+	})
+
+	t.Run("a row on an unknown provider resolves nothing", func(t *testing.T) {
+		cfg := &config.Config{Providers: []*config.ModelConfig{row("z-ai", "glm-5.2")}}
+		if got, err := ResolveModelCfg(cfg, "glm-5.2", ""); err == nil {
+			t.Errorf("a degraded row served the model as (%s, %s); it needs a provider first",
+				got.Provider, got.Model)
+		}
+	})
+
+	t.Run("a custom row is configured and resolves", func(t *testing.T) {
+		mc := row("my-proxy", "house-model")
+		mc.Custom = true
+		mc.Protocol = "openai-compatible"
+		mc.APIBase = "https://llm.example/v1"
+		cfg := &config.Config{Providers: []*config.ModelConfig{mc}}
+		got, err := ResolveModelCfg(cfg, "house-model", "")
+		if err != nil {
+			t.Fatalf("a custom row must resolve its own model: %v", err)
+		}
+		if got.Provider != "my-proxy" {
+			t.Errorf("provider = %q, want my-proxy", got.Provider)
+		}
+	})
+}
+
+// TestResolveModelCfg_LocalRowUsesItsManualList — FR-040 rule 2's local half:
+// the catalog carries no models for a local runtime, so the row's own
+// `models[]` is the authority.
+func TestResolveModelCfg_LocalRowUsesItsManualList(t *testing.T) {
+	local := row("ollama", "llama3")
+	local.Models = []string{"llama3", "mistral-7b"}
+	cfg := &config.Config{Providers: []*config.ModelConfig{local}}
+
+	for _, model := range []string{"llama3", "mistral-7b"} {
+		mc, err := ResolveModelCfg(cfg, model, "")
+		if err != nil {
+			t.Fatalf("ResolveModelCfg(%q): %v", model, err)
+		}
+		if mc.Provider != "ollama" || mc.Model != model {
+			t.Errorf("resolved (%s, %s), want (ollama, %s)", mc.Provider, mc.Model, model)
+		}
+	}
+	if _, err := ResolveModelCfg(cfg, "not-pulled", ""); err == nil {
+		t.Error("a model the local row does not list must not resolve")
 	}
 }
 
-// TestResolveModelCfg_VendorPrefixedSlug_NoPassthrough_Errors preserves the
-// legitimate half of the old guard: when NO passthrough/aggregator provider is
-// configured (only a dedicated, non-aggregator provider that doesn't match),
-// an unmatched vendor-prefixed model still errors — a dedicated-only setup
-// can't invent a route for a model none of its providers expose.
-func TestResolveModelCfg_VendorPrefixedSlug_NoPassthrough_Errors(t *testing.T) {
-	cfg := &config.Config{
-		Providers: []*config.ModelConfig{
-			{
-				ModelName: "gpt-4o",
-				Model:     "openai/gpt-4o",
-				Provider:  "openai",
-				APIBase:   "https://api.openai.com/v1",
-				APIKeyRef: "OPENAI_KEY",
-			},
-		},
-	}
-	mc, err := ResolveModelCfg(cfg, "anthropic/claude-3.5-haiku", "")
-	if err == nil || mc != nil {
-		t.Fatalf("expected error (no passthrough provider) for anthropic/… slug, got mc=%+v", mc)
-	}
-}
+// TestResolveModelCfg_ClonesAndFillsWorkspace keeps the clone contract: the
+// caller may mutate what it gets back.
+func TestResolveModelCfg_ClonesAndFillsWorkspace(t *testing.T) {
+	original := row("openai", "gpt-4.1")
+	cfg := &config.Config{Providers: []*config.ModelConfig{original}}
 
-// TestResolveModelCfg_MultipleProviders_PassthroughSelectsCorrect covers
-// Dataset 1 row 5 (BDD-4 / BDD-8): with both openai and openrouter configured,
-// passthrough fallback MUST select openrouter (not openai), and the openai
-// provider's credentials MUST NOT leak into the resolved config.
-func TestResolveModelCfg_MultipleProviders_PassthroughSelectsCorrect(t *testing.T) {
-	cfg := &config.Config{
-		Providers: []*config.ModelConfig{
-			{
-				ModelName: "gpt-4o",
-				Model:     "gpt-4o",
-				Provider:  "openai",
-				APIBase:   "https://api.openai.com/v1",
-				APIKeyRef: "OPENAI_KEY",
-			},
-			{
-				ModelName: "z-ai/glm-5.2",
-				Model:     "z-ai/glm-5.2",
-				Provider:  "openrouter",
-				APIBase:   "https://openrouter.ai/api/v1",
-				APIKeyRef: "OPENROUTER_KEY",
-			},
-		},
-	}
-	mc, err := ResolveModelCfg(cfg, "z-ai/glm-5-turbo", "")
+	mc, err := ResolveModelCfg(cfg, "gpt-4.1", "/tmp/agent-home")
 	if err != nil {
 		t.Fatalf("ResolveModelCfg: %v", err)
 	}
-	if mc.Model != "openrouter/z-ai/glm-5-turbo" {
-		t.Errorf("mc.Model = %q, want %q", mc.Model, "openrouter/z-ai/glm-5-turbo")
+	if mc == original {
+		t.Fatal("ResolveModelCfg returned the config's own row; callers mutate the result")
 	}
-	if mc.APIKeyRef != "OPENROUTER_KEY" {
-		t.Errorf("mc.APIKeyRef = %q, want OPENROUTER_KEY (passthrough must not steal openai creds)", mc.APIKeyRef)
+	if mc.Home != "/tmp/agent-home" {
+		t.Errorf("Home = %q, want the workspace filled in", mc.Home)
 	}
-}
-
-// TestResolveModelCfg_MultipleProviders_ExactMatchInOne covers Dataset 1
-// row 6 (BDD-5): with multiple providers configured, an exact model_name
-// match in one provider resolves to that provider's entry — passthrough
-// fallback MUST NOT shadow it.
-func TestResolveModelCfg_MultipleProviders_ExactMatchInOne(t *testing.T) {
-	cfg := &config.Config{
-		Providers: []*config.ModelConfig{
-			{
-				ModelName: "gpt-4o",
-				Model:     "gpt-4o",
-				Provider:  "openai",
-				APIBase:   "https://api.openai.com/v1",
-				APIKeyRef: "OPENAI_KEY",
-			},
-			{
-				ModelName: "z-ai/glm-5.2",
-				Model:     "z-ai/glm-5.2",
-				Provider:  "openrouter",
-				APIBase:   "https://openrouter.ai/api/v1",
-				APIKeyRef: "OPENROUTER_KEY",
-			},
-		},
-	}
-	mc, err := ResolveModelCfg(cfg, "gpt-4o", "")
-	if err != nil {
-		t.Fatalf("ResolveModelCfg: %v", err)
-	}
-	if mc.Model != "gpt-4o" {
-		t.Errorf("mc.Model = %q, want %q (entry's own Model field, unprefixed)", mc.Model, "gpt-4o")
-	}
-	if mc.Provider != "openai" {
-		t.Errorf("mc.Provider = %q, want openai (must NOT be hijacked by openrouter passthrough)", mc.Provider)
-	}
-	if mc.APIKeyRef != "OPENAI_KEY" {
-		t.Errorf("mc.APIKeyRef = %q, want OPENAI_KEY", mc.APIKeyRef)
+	mc.Model = "MUTATED"
+	if original.Model != "gpt-4.1" {
+		t.Errorf("mutating the clone reached the config row (Model = %q)", original.Model)
 	}
 }
 
-// TestBuildModelListResolver_MatchesResolveModelCfg is the regression guard
-// for FR-003: the UI selector helper and the chat runtime helper MUST agree
-// on every input. Pre-refactor, the two paths diverged — `buildModelListResolver`
-// had the passthrough fallback, `resolvedModelConfig` did not. After the
-// refactor, both MUST resolve a model name to the same canonical string.
+// TestBuildModelListResolver_MatchesResolveModelCfg — the UI selector and the
+// chat runtime must answer the same question the same way, or the composer
+// offers a model the runtime then refuses.
 func TestBuildModelListResolver_MatchesResolveModelCfg(t *testing.T) {
-	cfg := &config.Config{
-		Providers: []*config.ModelConfig{
-			{
-				ModelName: "gpt-4o",
-				Model:     "openai/gpt-4o",
-				Provider:  "openai",
-				APIBase:   "https://api.openai.com/v1",
-				APIKeyRef: "OPENAI_KEY",
-			},
-			{
-				ModelName: "z-ai/glm-5.2",
-				Model:     "z-ai/glm-5.2",
-				Provider:  "openrouter",
-				APIBase:   "https://openrouter.ai/api/v1",
-				APIKeyRef: "OPENROUTER_KEY",
-			},
-		},
+	cfg := &config.Config{Providers: []*config.ModelConfig{
+		row("openrouter", "z-ai/glm-5.2"),
+		row("anthropic", "claude-haiku-4-5"),
+	}}
+	resolve := buildModelListResolver(cfg)
+
+	for _, model := range []string{"z-ai/glm-5.2", "claude-haiku-4-5"} {
+		ref, ok := resolve(model)
+		if !ok {
+			t.Fatalf("buildModelListResolver(%q) returned false", model)
+		}
+		mc, err := ResolveModelCfg(cfg, model, "")
+		if err != nil {
+			t.Fatalf("ResolveModelCfg(%q): %v", model, err)
+		}
+		if ref.Provider != mc.Provider || ref.Model != mc.Model {
+			t.Errorf("selector says (%s, %s), runtime says (%s, %s)",
+				ref.Provider, ref.Model, mc.Provider, mc.Model)
+		}
 	}
 
-	cases := []struct {
-		name  string
-		input string
-		want  string
-	}{
-		{"exact_match_openai", "gpt-4o", "openai/gpt-4o"},
-		{"passthrough_openrouter", "z-ai/glm-5-turbo", "openrouter/z-ai/glm-5-turbo"},
-		{"unprefixed_openai_entry", "openai/gpt-4o", "openai/gpt-4o"},
-	}
-
-	resolver := buildModelListResolver(cfg)
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			resolved, ok := resolver(tc.input)
-			if !ok {
-				t.Fatalf("buildModelListResolver(%q) returned false", tc.input)
-			}
-			mc, err := ResolveModelCfg(cfg, tc.input, "")
-			if err != nil {
-				t.Fatalf("ResolveModelCfg(%q): %v", tc.input, err)
-			}
-			if resolved.Model != mc.Model {
-				t.Errorf("path divergence on %q: ui=%q, chat=%q — FR-003 violated", tc.input, resolved.Model, mc.Model)
-			}
-			if resolved.Model != tc.want {
-				t.Errorf("got %q, want %q", resolved.Model, tc.want)
-			}
-		})
+	if ref, ok := resolve("no-such-model"); ok {
+		t.Errorf("selector resolved an unknown id to (%s, %s)", ref.Provider, ref.Model)
 	}
 }
 
-// TestBuildModelListResolver_ResolvesPrefixedViaPassthrough confirms the UI
-// selector path resolves an aggregator's vendor-prefixed catalog model the
-// SAME way the chat runtime does (buildModelListResolver shares ResolveModelCfg
-// — the whole point is that the picker and the runtime agree on what's usable).
-// Supersedes the former "rejects prefixed passthrough" assertion, which locked
-// in the regression where the composer offered OpenRouter models the runtime
-// then refused.
-func TestBuildModelListResolver_ResolvesPrefixedViaPassthrough(t *testing.T) {
-	cfg := &config.Config{
-		Providers: []*config.ModelConfig{
-			{
-				ModelName: "z-ai/glm-5.2",
-				Model:     "z-ai/glm-5.2",
-				Provider:  "openrouter",
-				APIBase:   "https://openrouter.ai/api/v1",
-				APIKeyRef: "OPENROUTER_KEY",
-			},
-		},
-	}
-	resolver := buildModelListResolver(cfg)
-	got, ok := resolver("openai/gpt-4o")
-	if !ok {
-		t.Fatalf("expected openai/gpt-4o to resolve via the openrouter aggregator, got (%+v, false)", got)
-	}
-	if got.Provider != "openrouter" || got.Model != "openrouter/openai/gpt-4o" {
-		t.Errorf("expected (openrouter, openrouter/openai/gpt-4o), got (%q, %q)", got.Provider, got.Model)
-	}
-}
-
-// TestResolveModelCandidatesFromList_PerEntryProvider locks in the FR-007
-// contract: each fallback in the [{model, provider}] form must yield a
-// candidate whose Provider equals the explicit provider, NOT the agent's
-// default provider. Without this, a fallback that the operator pinned to a
-// different provider (e.g. anthropic when primary is openrouter) silently
-// re-routes through the primary's credentials at LLM-call time.
-//
-// The primary is resolved through the model_list lookup (it has no explicit
-// Provider on the FallbackModel entry); the fallback bypasses the lookup
-// because its Provider is pinned — the operator's exact intent.
+// TestResolveModelCandidatesFromList_PerEntryProvider — a fallback entry that
+// pins its own provider is taken VERBATIM: no prefix split (FR-034), no
+// re-resolution through the list.
 func TestResolveModelCandidatesFromList_PerEntryProvider(t *testing.T) {
-	cfg := &config.Config{
-		Providers: []*config.ModelConfig{
-			{
-				ModelName: "gpt-5",
-				Model:     "openai/gpt-5",
-				Provider:  "openrouter",
-				APIBase:   "https://openrouter.ai/api/v1",
-				APIKeyRef: "OPENROUTER_KEY",
-			},
-			{
-				ModelName: "claude-haiku",
-				Model:     "anthropic/claude-haiku-4-5",
-				Provider:  "anthropic",
-				APIBase:   "https://api.anthropic.com/v1",
-				APIKeyRef: "ANTHROPIC_KEY",
-			},
-		},
-	}
-
+	cfg := &config.Config{Providers: []*config.ModelConfig{row("openrouter", "z-ai/glm-5.2")}}
 	fallbacks := []config.FallbackModel{
-		{Model: "claude-haiku", Provider: "anthropic"},
+		{Provider: "anthropic", Model: "claude-haiku-4-5"},
+		{Provider: "openrouter", Model: "z-ai/glm-5.2"},
 	}
 
-	candidates := resolveModelCandidatesFromList(cfg, "openrouter", "gpt-5", fallbacks)
-
-	if len(candidates) != 2 {
-		t.Fatalf("candidates = %d, want 2 (primary + 1 explicit-provider fallback)", len(candidates))
-	}
-	// Primary is resolved via cfg.GetModelConfig(ModelName="gpt-5") which
-	// returns the openrouter entry with Model="openai/gpt-5" and
-	// Provider="openrouter". The candidate's Provider is the matched
-	// entry's Provider (openrouter) — the configured provider that owns
-	// the credentials. The Model stays "openai/gpt-5" verbatim because
-	// the prefix "openai" doesn't match the matched Provider "openrouter"
-	// (vendor namespace vs. routing key). The old contract treated the
-	// slash-prefix as the real provider, which leaked the unrouteable
-	// "openai" into candidates for any openrouter-passthrough entry.
-	if candidates[0].Provider != "openrouter" || candidates[0].Model != "openai/gpt-5" {
-		t.Errorf("candidates[0] = %s/%s, want openrouter/openai/gpt-5", candidates[0].Provider, candidates[0].Model)
-	}
-	// Fallback MUST carry its own Provider — anthropic, NOT openrouter.
-	// This is the FR-007 invariant the bug was violating.
-	if candidates[1].Provider != "anthropic" {
-		t.Errorf("candidates[1].Provider = %q, want %q (FR-007: fallback must use its own provider)",
-			candidates[1].Provider, "anthropic")
-	}
-	// Because the fallback has a pinned Provider, the resolver is bypassed:
-	// the Model is taken verbatim from the entry. The operator wrote the
-	// model slug the way their provider expects it — we don't second-guess.
-	if candidates[1].Model != "claude-haiku" {
-		t.Errorf("candidates[1].Model = %q, want %q (explicit Provider: model is verbatim)",
-			candidates[1].Model, "claude-haiku")
-	}
-}
-
-// TestResolveModelCandidatesFromList_PassthroughProviderHonored confirms that
-// when the only configured provider is openrouter, a fallback declared as
-// {model, provider:"anthropic"} STILL routes through anthropic — the
-// provider is honored even though no passthrough match exists for the slug.
-func TestResolveModelCandidatesFromList_PassthroughProviderHonored(t *testing.T) {
-	cfg := &config.Config{
-		Providers: []*config.ModelConfig{
-			{
-				ModelName: "gpt-5",
-				Model:     "openai/gpt-5",
-				Provider:  "openrouter",
-				APIBase:   "https://openrouter.ai/api/v1",
-				APIKeyRef: "OPENROUTER_KEY",
-			},
-		},
-	}
-
-	fallbacks := []config.FallbackModel{
-		{Model: "claude-haiku-4-5", Provider: "anthropic"},
-	}
-
-	candidates := resolveModelCandidatesFromList(cfg, "openrouter", "gpt-5", fallbacks)
-
-	if len(candidates) != 2 {
-		t.Fatalf("candidates = %d, want 2", len(candidates))
-	}
-	// Primary: matched via cfg.GetModelConfig by ModelName "gpt-5"; the
-	// entry's Model is "openai/gpt-5" and Provider is "openrouter". The
-	// candidate's Provider is the matched entry's Provider (openrouter)
-	// — the configured provider that owns the credentials. The Model
-	// stays "openai/gpt-5" verbatim because the slash-prefix "openai"
-	// doesn't match the matched Provider "openrouter" (vendor namespace
-	// vs. routing key). The old contract treated the slash-prefix as
-	// the real provider, which leaked the unrouteable "openai" into
-	// candidates for any openrouter-passthrough entry.
-	if candidates[0].Provider != "openrouter" {
-		t.Errorf("candidates[0].Provider = %q, want openrouter", candidates[0].Provider)
-	}
-	if candidates[0].Model != "openai/gpt-5" {
-		t.Errorf("candidates[0].Model = %q, want openai/gpt-5", candidates[0].Model)
-	}
-	// Fallback via anthropic — explicit Provider overrides any passthrough
-	// that might match the slug.
-	if candidates[1].Provider != "anthropic" {
-		t.Errorf("candidates[1].Provider = %q, want anthropic (explicit provider wins over passthrough)",
-			candidates[1].Provider)
-	}
-	if candidates[1].Model != "claude-haiku-4-5" {
-		t.Errorf("candidates[1].Model = %q, want claude-haiku-4-5", candidates[1].Model)
-	}
-}
-
-// TestResolveModelCandidatesForAgent_PicksFallbackModelsWhenSet asserts the
-// runtime helper used by ApplyAgentModel: when the agent instance carries
-// FallbackModels, the per-entry-provider resolver is selected; when only the
-// legacy Fallbacks []string is set, the historical resolver is selected.
-func TestResolveModelCandidatesForAgent_PicksFallbackModelsWhenSet(t *testing.T) {
-	cfg := &config.Config{
-		Providers: []*config.ModelConfig{
-			{
-				ModelName: "gpt-5",
-				Model:     "openai/gpt-5",
-				Provider:  "openrouter",
-				APIBase:   "https://openrouter.ai/api/v1",
-			},
-			{
-				ModelName: "haiku",
-				Model:     "anthropic/claude-haiku-4-5",
-				Provider:  "anthropic",
-				APIBase:   "https://api.anthropic.com/v1",
-			},
-		},
-	}
-
-	// Modern wire shape: fallback carries its own Provider.
-	modern := &AgentInstance{
-		Model: "gpt-5",
-		FallbackModels: []config.FallbackModel{
-			{Model: "haiku", Provider: "anthropic"},
-		},
-	}
-	cands := resolveModelCandidatesForAgent(cfg, "openrouter", "gpt-5", modern)
-	if len(cands) != 2 || cands[1].Provider != "anthropic" {
-		t.Fatalf("modern agent: cands = %+v, want 2 entries with [1].Provider=anthropic", cands)
-	}
-
-	// Legacy wire shape: agent carries only Fallbacks []string.
-	// The legacy resolver runs the bare slug "haiku" through the model_list
-	// lookup first. "haiku" is registered as a ModelName → entry with
-	// Model="anthropic/claude-haiku-4-5" and Provider="anthropic". The
-	// resolver returns the matched entry's Provider (anthropic) and the
-	// Model verbatim (no prefix to strip). So the legacy path also ends up
-	// with the anthropic provider in this case — that's the unified
-	// contract, not a happy coincidence.
-	legacy := &AgentInstance{
-		Model:     "gpt-5",
-		Fallbacks: []string{"haiku"},
-	}
-	cands = resolveModelCandidatesForAgent(cfg, "openrouter", "gpt-5", legacy)
+	cands := resolveModelCandidatesFromList(cfg, "openrouter", "z-ai/glm-5.2", fallbacks)
 	if len(cands) != 2 {
-		t.Fatalf("legacy agent: cands = %d, want 2", len(cands))
+		t.Fatalf("len(cands) = %d, want 2 (the primary and the anthropic fallback; the "+
+			"second fallback duplicates the primary): %+v", len(cands), cands)
 	}
-
-	// Nil agent → legacy resolver with no fallbacks → only the primary.
-	// The primary "gpt-5" matches the openrouter entry whose Model is
-	// "openai/gpt-5" (vendor namespace + model). The candidate is
-	// {Provider: openrouter, Model: openai/gpt-5}.
-	cands = resolveModelCandidatesForAgent(cfg, "openrouter", "gpt-5", nil)
-	if len(cands) != 1 || cands[0].Model != "openai/gpt-5" {
-		t.Fatalf("nil agent: cands = %+v, want 1 entry {openrouter, openai/gpt-5}", cands)
+	if cands[0].Provider != "openrouter" || cands[0].Model != "z-ai/glm-5.2" {
+		t.Errorf("primary = (%s, %s), want (openrouter, z-ai/glm-5.2)", cands[0].Provider, cands[0].Model)
 	}
-}
-
-// TestIsKnownModel covers W6-C4 / G12 — the catalog helper that lets the SPA
-// show a persistent "unresolved" indicator when a user types a free-text
-// model slug that no configured provider exposes. The TS twin in
-// src/lib/agents/model-validation.ts MUST mirror these cases.
-func TestIsKnownModel(t *testing.T) {
-	cfg := &config.Config{
-		Providers: []*config.ModelConfig{
-			{
-				ModelName: "claude-haiku",
-				Model:     "anthropic/claude-haiku-4-5",
-				Provider:  "anthropic",
-			},
-			{
-				ModelName: "gpt-4o",
-				Model:     "openai/gpt-4o",
-				Provider:  "openai",
-			},
-			{
-				ModelName: "z-ai/glm-5.2",
-				Model:     "z-ai/glm-5.2",
-				Provider:  "openrouter",
-			},
-		},
-	}
-
-	cases := []struct {
-		name string
-		slug string
-		want bool
-	}{
-		// Empty / whitespace → false (nothing to validate).
-		{"empty", "", false},
-		{"whitespace", "   ", false},
-
-		// Exact match against mc.Model (protocol-prefixed form).
-		{"exact-protocol-prefixed", "anthropic/claude-haiku-4-5", true},
-		// Case-insensitive.
-		{"case-insensitive-protocol", "Anthropic/Claude-Haiku-4-5", true},
-
-		// Bare slug extracted from mc.Model via providers.ExtractProtocol.
-		{"bare-slug-from-protocol", "claude-haiku-4-5", true},
-		{"bare-slug-from-protocol-case", "GPT-4O", true},
-
-		// Match against mc.ModelName (user-facing alias).
-		{"model-name", "claude-haiku", true},
-
-		// None of the providers expose this slug → false.
-		{"unknown-bare", "gpt-9000-ultra", false},
-		{"unknown-prefix", "fake-provider/some-model", false},
-
-		// Passthrough provider's ModelName happens to contain a slash; that
-		// shouldn't fool the validator when the lookup is against an
-		// entirely different slug.
-		{"passthrough-non-match", "z-ai/glm-5-turbo", false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := IsKnownModel(tc.slug, cfg.Providers)
-			if got != tc.want {
-				t.Errorf("IsKnownModel(%q) = %v, want %v", tc.slug, got, tc.want)
-			}
-		})
+	if cands[1].Provider != "anthropic" || cands[1].Model != "claude-haiku-4-5" {
+		t.Errorf("fallback = (%s, %s), want (anthropic, claude-haiku-4-5)",
+			cands[1].Provider, cands[1].Model)
 	}
 }
 
-// TestIsKnownModel_NilAndEmpty makes sure the helper doesn't panic on the
-// edge cases the gateway encounters when /providers has never been seeded
-// (fresh install, prior to onboarding).
-func TestIsKnownModel_NilAndEmpty(t *testing.T) {
-	if IsKnownModel("gpt-4o", nil) {
-		t.Errorf("IsKnownModel(nil providers) = true, want false")
-	}
-	if IsKnownModel("gpt-4o", []*config.ModelConfig{}) {
-		t.Errorf("IsKnownModel(empty providers) = true, want false")
-	}
-	// Nil entry inside the slice is skipped, not panicked on.
-	ps := []*config.ModelConfig{nil, {Model: "openai/gpt-4o", Provider: "openai"}}
-	if !IsKnownModel("openai/gpt-4o", ps) {
-		t.Errorf("IsKnownModel(slice with nil entry) = false, want true")
-	}
-}
-
-// TestResolveModelCandidatesFromList_SeededAgentStyle pins the bug fix for
-// the live preview: a primary whose Model is "z-ai/glm-5.2" (vendor
-// namespace, NOT a configured provider) MUST produce a candidate whose
-// Provider is the configured provider (openrouter) that owns the matching
-// provider entry — NOT the slash-prefix normalized to "zai" which no
-// provider is configured for. Without this fix the chat runtime fails with
-// "provider 'zai' not found in configured providers" and the agent loop
-// never starts a turn.
+// TestResolveModelCandidatesFromList_SeededAgentStyle pins the bug this
+// resolution path exists for: a primary whose model id is `z-ai/glm-5.2` — a
+// VENDOR NAMESPACE inside an OpenRouter model id, not a provider — must
+// produce a candidate whose Provider is `openrouter`. Splitting it produced
+// `zai`, a provider nothing was configured for, and the agent loop then
+// refused to start a turn.
 func TestResolveModelCandidatesFromList_SeededAgentStyle(t *testing.T) {
-	cfg := &config.Config{
-		Providers: []*config.ModelConfig{
-			{
-				ModelName: "z-ai/glm-5.2",
-				Model:     "z-ai/glm-5.2",
-				Provider:  "openrouter",
-				APIBase:   "https://openrouter.ai/api/v1",
-				APIKeyRef: "OPENROUTER_KEY",
-			},
-		},
-	}
+	cfg := &config.Config{Providers: []*config.ModelConfig{row("openrouter", "z-ai/glm-5.2")}}
+
 	cands := resolveModelCandidatesFromList(cfg, "", "z-ai/glm-5.2", nil)
 	if len(cands) != 1 {
 		t.Fatalf("len(cands) = %d, want 1: %+v", len(cands), cands)
 	}
 	if cands[0].Provider != "openrouter" {
-		t.Errorf("cands[0].Provider = %q, want %q — vendor namespace leaked into Provider (the bug)",
-			cands[0].Provider, "openrouter")
+		t.Errorf("Provider = %q, want openrouter — the vendor namespace must not leak into it",
+			cands[0].Provider)
 	}
 	if cands[0].Model != "z-ai/glm-5.2" {
-		t.Errorf("cands[0].Model = %q, want %q", cands[0].Model, "z-ai/glm-5.2")
+		t.Errorf("Model = %q, want the full id verbatim", cands[0].Model)
 	}
 }
 
-// TestResolveAgentCandidatesWithPrimaryProvider_PinsPrimary proves the O3
-// two-field model: an explicit primary provider pins the primary candidate to
-// that provider directly, never inferring one from the slug or the default
-// provider. The fallback chain is appended, de-duplicated against the pinned
-// primary.
+// TestResolveAgentCandidatesWithPrimaryProvider_PinsPrimary — an explicit
+// primary provider pins the candidate directly, never inferred from the slug
+// and never split on a slash.
 func TestResolveAgentCandidatesWithPrimaryProvider_PinsPrimary(t *testing.T) {
-	cfg := &config.Config{
-		Providers: []*config.ModelConfig{
-			{
-				ModelName: "passthru",
-				Model:     "openrouter/x",
-				Provider:  "openrouter",
-				APIBase:   "https://openrouter.ai/api/v1",
-				APIKeyRef: "OR_KEY",
-			},
-		},
-	}
+	cfg := &config.Config{Providers: []*config.ModelConfig{row("openrouter", "z-ai/glm-5.2")}}
 
-	// Explicit provider "anthropic" pins the primary regardless of the
-	// configured passthrough — the primary routes via anthropic.
-	candidates := resolveAgentCandidatesWithPrimaryProvider(
-		cfg, "openrouter", "claude-sonnet-4.6", "anthropic", nil, nil)
+	cands := resolveAgentCandidatesWithPrimaryProvider(
+		cfg, "openrouter", "claude-sonnet-4-5", "anthropic", nil, nil)
 
-	if len(candidates) == 0 {
-		t.Fatalf("expected at least the pinned primary candidate")
+	if len(cands) == 0 {
+		t.Fatal("expected at least the pinned primary candidate")
 	}
-	if candidates[0].Provider != "anthropic" {
-		t.Errorf("candidates[0].Provider = %q, want %q (explicit primary provider must be honored, never inferred)",
-			candidates[0].Provider, "anthropic")
+	if cands[0].Provider != "anthropic" {
+		t.Errorf("Provider = %q, want anthropic (the explicit provider is never inferred away)",
+			cands[0].Provider)
 	}
-	if candidates[0].Model != "claude-sonnet-4.6" {
-		t.Errorf("candidates[0].Model = %q, want %q (verbatim under pinned provider)",
-			candidates[0].Model, "claude-sonnet-4.6")
+	if cands[0].Model != "claude-sonnet-4-5" {
+		t.Errorf("Model = %q, want it verbatim under the pinned provider", cands[0].Model)
 	}
 }
 
-// TestResolveAgentCandidatesWithPrimaryProvider_EmptyProviderPreservesLegacy
-// proves that with no explicit provider the selection is identical to the
-// pre-O3 resolver (resolveModelCandidatesFromList for the modern chain).
-func TestResolveAgentCandidatesWithPrimaryProvider_EmptyProviderPreservesLegacy(t *testing.T) {
-	cfg := &config.Config{
-		Providers: []*config.ModelConfig{
-			{
-				ModelName: "gpt-5",
-				Model:     "openai/gpt-5",
-				Provider:  "openrouter",
-				APIBase:   "https://openrouter.ai/api/v1",
-				APIKeyRef: "OR_KEY",
-			},
-		},
-	}
-	fb := []config.FallbackModel{{Model: "claude-haiku", Provider: "anthropic"}}
+// TestResolveAgentCandidatesWithPrimaryProvider_PinnedPrefixedModelNotSplit —
+// the pinned path must not split a `/` out of the model id (FR-034).
+func TestResolveAgentCandidatesWithPrimaryProvider_PinnedPrefixedModelNotSplit(t *testing.T) {
+	cfg := &config.Config{Providers: []*config.ModelConfig{row("openrouter", "z-ai/glm-5.2")}}
 
-	withEmpty := resolveAgentCandidatesWithPrimaryProvider(cfg, "openrouter", "gpt-5", "", fb, nil)
-	legacy := resolveModelCandidatesFromList(cfg, "openrouter", "gpt-5", fb)
+	cands := resolveAgentCandidatesWithPrimaryProvider(
+		cfg, "", "z-ai/glm-5.2", "openrouter", nil, nil)
 
-	if len(withEmpty) != len(legacy) {
-		t.Fatalf("empty-provider path differs in length: got %d, legacy %d", len(withEmpty), len(legacy))
+	if len(cands) == 0 {
+		t.Fatal("expected the pinned primary candidate")
 	}
-	for i := range legacy {
-		if withEmpty[i] != legacy[i] {
-			t.Errorf(
-				"candidate[%d] = %+v, legacy %+v — empty provider must preserve pre-O3 behavior",
-				i,
-				withEmpty[i],
-				legacy[i],
-			)
-		}
+	if cands[0].Provider != "openrouter" || cands[0].Model != "z-ai/glm-5.2" {
+		t.Errorf("candidate = (%s, %s), want (openrouter, z-ai/glm-5.2)",
+			cands[0].Provider, cands[0].Model)
+	}
+}
+
+// TestIsKnownModel — the SPA's "unresolved" chip asks the same question the
+// resolver does, minus the uniqueness requirement.
+func TestIsKnownModel(t *testing.T) {
+	models := make([]*config.ModelConfig, 0, 3)
+	models = append(models,
+		row("openrouter", "z-ai/glm-5.2"),
+		row("anthropic", "claude-haiku-4-5"),
+	)
+	local := row("ollama", "llama3")
+	local.Models = []string{"llama3"}
+	models = append(models, local)
+
+	tests := []struct {
+		name string
+		slug string
+		want bool
+	}{
+		{"row's own model", "z-ai/glm-5.2", true},
+		{"another catalog model on a configured provider", "claude-opus-4-5", true},
+		{"a local row's manual entry", "llama3", true},
+		{"a model no configured provider offers", "no-such-model", false},
+		// A-19: ids are compared exactly. Case is significant.
+		{"different case is a different id", "Z-AI/GLM-5.2", false},
+		{"empty", "", false},
+		{"whitespace only", "   ", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := IsKnownModel(tt.slug, models); got != tt.want {
+				t.Errorf("IsKnownModel(%q) = %v, want %v", tt.slug, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsKnownModel_NilAndEmpty(t *testing.T) {
+	if IsKnownModel("gpt-4.1", nil) {
+		t.Error("IsKnownModel with no providers = true, want false")
+	}
+	ps := []*config.ModelConfig{nil, row("openai", "gpt-4.1")}
+	if !IsKnownModel("gpt-4.1", ps) {
+		t.Error("IsKnownModel(slice with a nil entry) = false, want true")
 	}
 }

@@ -975,12 +975,12 @@ func NormalizeFallbacks(cfg *Config, in []FallbackModel) []FallbackModel {
 // Resolution order (mirrors FindModelConfigBySlug's rungs):
 //  1. Exact match against any configured provider's Model (the slug)
 //     → that provider's Provider field.
-//  2. Exact match against a row's display alias (ModelConfig.ModelName —
-//     a row field that survives until ADR-067 T067-08 deletes it; NOT the
-//     deleted agents.defaults.model_name semantics) → that row's Provider.
-//  3. Any configured provider is a passthrough (openrouter / vivgrid) →
+//  2. Any configured provider is a passthrough (openrouter / vivgrid) →
 //     that passthrough provider.
-//  4. Otherwise empty string (apply-time resolver will error out).
+//  3. Otherwise empty string (apply-time resolver will error out).
+//
+// The display-alias rung is gone with ModelConfig.ModelName (ADR-067
+// FR-013 / X-25): a row is addressed by its (provider, model) pair.
 //
 // Step 3 cannot call providers.IsPassthroughProvider directly — pkg/providers
 // already imports pkg/config, so the reverse direction would be a cycle. The
@@ -1019,17 +1019,7 @@ func ResolveSlugProvider(cfg *Config, slug string) (provider string, viaPassthro
 			return strings.TrimSpace(p.Provider), false
 		}
 	}
-	// 2: row display alias.
-	for _, p := range cfg.Providers {
-		if p == nil {
-			continue
-		}
-		if strings.TrimSpace(p.ModelName) == slug {
-			return strings.TrimSpace(p.Provider), false
-		}
-	}
-
-	// 3: passthrough fallback (openrouter, vivgrid).
+	// 2: passthrough fallback (openrouter, vivgrid).
 	for _, p := range cfg.Providers {
 		if p == nil {
 			continue
@@ -2793,18 +2783,38 @@ type VoiceConfig struct {
 	GroqAPIKeyRef string `json:"groq_api_key_ref,omitempty" env:"OMNIPUS_VOICE_GROQ_API_KEY_REF"`
 }
 
-// ModelConfig represents a model-centric provider configuration.
-// It allows adding new providers (especially OpenAI-compatible ones) via configuration only.
-// The model field uses protocol prefix format: [protocol/]model-identifier
-// Supported protocols include openai, anthropic, codex-cli, and named
-// OpenAI-compatible protocols such as groq, deepseek, modelscope, and
-// novita.
-// Default protocol is "openai" if no prefix is specified.
+// ModelConfig is one configured provider row.
+//
+// Since ADR-067 it is keyed by the EXACT pair (Provider, Model): a registry
+// provider id and a bare catalog model id. Adding a provider is a catalog
+// row plus a key — never a code change — and there is no protocol-prefix
+// convention on Model, no display alias, and no id normalisation beyond
+// trimming whitespace at the config boundary (FR-034, FR-036, A-19).
 type ModelConfig struct {
-	// Required fields
-	ModelName string `json:"model_name"`         // User-facing alias for the model
-	Model     string `json:"model"`              // Protocol/model-identifier (e.g., "openai/gpt-4o", "anthropic/claude-sonnet-4.6")
-	Provider  string `json:"provider,omitempty"` // Routing key — determines which API endpoint to use (e.g. "openrouter", "anthropic")
+	// Provider is the catalog provider id — the exact registry id
+	// (`zai`, `openrouter`, `moonshotai-cn`, …) or an operator-named custom
+	// row. It is compared exactly after TrimSpace, never case-folded
+	// (ADR-067 FR-036, A-19), and it is half of the catalog key.
+	Provider string `json:"provider,omitempty"`
+	// Model is the BARE catalog model id — the other half of the key
+	// (ADR-067 FR-034). A `/` inside it is data, not a prefix:
+	// `z-ai/glm-5.2` under `openrouter` is one model id, and it is never
+	// split. The retired `<protocol>/<model>` convention and its
+	// `ExtractProtocol` splitter are gone.
+	Model string `json:"model"`
+
+	// Protocol optionally selects one of the SECONDARY wire protocols the
+	// catalog row offers (ADR-067 FR-013, A-8) — e.g. `anthropic` on a
+	// provider whose primary is `openai-compatible`. Empty means the row's
+	// primary. A protocol the row does not offer is an error, never a
+	// silent fallback. On a custom row it is required and closed to
+	// `openai-compatible | anthropic`.
+	Protocol string `json:"protocol,omitempty"`
+	// Custom marks an operator-typed endpoint: an id the catalog does not
+	// carry, defined entirely by this row's APIBase + Protocol (FR-014,
+	// FR-035, X-13). Several custom rows with different ids coexist. Every
+	// check is on this flag — never on a literal id.
+	Custom bool `json:"custom,omitempty"`
 
 	// HTTP-based providers
 	APIBase   string   `json:"api_base,omitempty"`  // API endpoint URL
@@ -2836,7 +2846,10 @@ type ModelConfig struct {
 	// via the process environment (SEC-22). Raw values must never appear in config files.
 	APIKeyRef string `json:"api_key_ref,omitempty" yaml:"api_key_ref,omitempty"`
 
-	// Name is an alias for ModelName used in some display contexts.
+	// Name is the operator's own label for this row, shown where a row needs
+	// a human-readable handle. It is display data only: nothing resolves,
+	// routes or validates through it (the retired `model_name` alias did,
+	// and that is exactly what ADR-068 CRIT-001 removed).
 	Name string `json:"name,omitempty" yaml:"name,omitempty"`
 
 	// Models is the user-supplied catalog of model slugs for providers that do
@@ -2880,8 +2893,8 @@ const (
 // Validate checks if the ModelConfig has all required fields and that
 // auth_method, when set, is one of the closed set.
 func (c *ModelConfig) Validate() error {
-	if c.ModelName == "" {
-		return fmt.Errorf("model_name is required")
+	if c.Provider == "" {
+		return fmt.Errorf("provider is required")
 	}
 	if c.Model == "" {
 		return fmt.Errorf("model is required")
@@ -3921,6 +3934,27 @@ type CredentialStore interface {
 	Set(name, value string) error
 }
 
+// normalizeProviderRows trims whitespace off the identity fields of every
+// configured provider row (ADR-067 FR-036). It never changes case, never
+// rewrites an id, and never drops a row: an id that is wrong after trimming
+// stays wrong, and is reported as an unknown provider by whoever asks the
+// catalog about it.
+func normalizeProviderRows(cfg *Config) {
+	if cfg == nil {
+		return
+	}
+	for i := range cfg.Providers {
+		p := cfg.Providers[i]
+		if p == nil {
+			continue
+		}
+		p.Provider = strings.TrimSpace(p.Provider)
+		p.Model = strings.TrimSpace(p.Model)
+		p.Protocol = strings.TrimSpace(p.Protocol)
+		p.APIBase = strings.TrimSpace(p.APIBase)
+	}
+}
+
 // LoadConfigWithStore loads a config, threading store through to callers that
 // need it for credential-store-backed operations during load (per the
 // documented credential boot contract, ADR-004: NewStore → Unlock →
@@ -4061,6 +4095,15 @@ func loadConfigInternal(path string, store CredentialStore, onSelfHeal SelfHealW
 	if err := env.Parse(cfg); err != nil {
 		return nil, err
 	}
+
+	// ADR-067 FR-036 / A-19: the config boundary is the ONE place a provider
+	// id is normalised, and the normalisation is TRIM-ONLY. Case is
+	// preserved and therefore significant: `" ZAI "` becomes `"ZAI"`, which
+	// is an unknown provider — not a quietly-corrected `zai`. Case folding
+	// here would be the last surviving alias mechanism, and an id that
+	// silently changes meaning between the file and the catalog is exactly
+	// the class of defect ADR-067 removed.
+	normalizeProviderRows(cfg)
 
 	// Phase 1B FR-006: normalize legacy `fallback_models: [string]` entries
 	// into the new `[{model, provider}]` form. Provider resolution mirrors
@@ -4446,11 +4489,9 @@ func (c *Config) findMatches(provider, model string) []*ModelConfig {
 // the exact pair, GetModelConfig) and it applies no passthrough fallback
 // (pkg/agent's ResolveModelCfg layers that on top).
 //
-// Order: a row whose Model equals the slug wins; failing that, a row whose
-// user-facing ModelName alias equals the slug. The alias rung exists only
-// until ADR-067's T067-08 deletes ModelConfig.ModelName (bare catalog ids);
-// it is a row-display alias, not the deleted agents.defaults.model_name
-// semantics. Among several hits the USABLE ones are preferred
+// Order: a row whose Model equals the slug wins — and that is the ONLY
+// rung. The display-alias rung is gone with ModelConfig.ModelName (ADR-067
+// FR-013 / X-25). Among several hits the USABLE ones are preferred
 // (modelConfigCredentialUsable), round-robinned like GetModelConfig.
 func (c *Config) FindModelConfigBySlug(slug string) (*ModelConfig, error) {
 	slug = strings.TrimSpace(slug)
@@ -4485,15 +4526,13 @@ func (c *Config) FindModelConfigBySlug(slug string) (*ModelConfig, error) {
 	if m := pick(func(m *ModelConfig) bool { return strings.TrimSpace(m.Model) == slug }); m != nil {
 		return m, nil
 	}
-	if m := pick(func(m *ModelConfig) bool { return strings.TrimSpace(m.ModelName) == slug }); m != nil {
-		return m, nil
-	}
 	return nil, fmt.Errorf("model %q not found in model_list or providers", slug)
 }
 
 // ValidateProviders validates all ModelConfig entries in the providers config.
 // It checks that each model config is valid.
-// Note: Multiple entries with the same model_name are allowed for load balancing.
+// Note: Multiple entries with the same (provider, model) pair are allowed —
+// that is how multi-key load balancing is expressed.
 func (c *Config) ValidateProviders() error {
 	for i := range c.Providers {
 		if err := c.Providers[i].Validate(); err != nil {

@@ -688,14 +688,6 @@ func findPassthroughForModel(cfg *config.Config, model string) *config.ModelConf
 			clone := *mc
 			return &clone
 		}
-		// Suffix match — one openrouter entry may have a wildcard Model like
-		// "openrouter/*" or a base model that covers many variants. The
-		// candidate's Model is the full "vendor/model" form, the entry's
-		// Model is the canonical form.
-		if strings.EqualFold(strings.TrimSpace(mc.ModelName), model) {
-			clone := *mc
-			return &clone
-		}
 	}
 	return nil
 }

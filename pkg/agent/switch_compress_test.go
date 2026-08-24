@@ -29,9 +29,10 @@ import (
 // ApplyAgentModel (which handleModelSwitch now calls to orchestrate the
 // provider+candidates swap alongside Model) can resolve them.
 //
-// The ModelName is the public identifier, and the Model field is the
-// provider-prefixed form ("openai/<name>") so the known-protocol factory can
-// build a stub provider. Protocol = "openai" is a recognized protocol prefix.
+// Each row is the exact pair (openai, <name>) — a catalog provider id and a
+// BARE model id (ADR-067 FR-034). The model ids are invented, which is fine:
+// a row resolves through what IT serves, so the pair is addressable even
+// though the catalog lists no such model under openai.
 //
 // The stub base URL is a NON-loopback, unresolvable host on purpose: this
 // "openai" row is not in the (empty) test catalog, so ADR-066's resolver
@@ -46,9 +47,8 @@ func newSwitchTestAgentLoop(t *testing.T, models ...string) (al *AgentLoop, cfg 
 	t.Setenv("SWITCH_TEST_KEY", "switch-test-key")
 	mkProvider := func(name string) *config.ModelConfig {
 		return &config.ModelConfig{
-			ModelName: name,
-			Model:     "openai/" + name,
 			Provider:  "openai",
+			Model:     name,
 			APIBase:   "http://openai-stub.invalid:1",
 			APIKeyRef: "SWITCH_TEST_KEY",
 		}
@@ -61,7 +61,7 @@ func newSwitchTestAgentLoop(t *testing.T, models ...string) (al *AgentLoop, cfg 
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              tmpDir,
-				DefaultModel:      config.DefaultModel{Model: "test-model"},
+				DefaultModel:      config.DefaultModel{Provider: "openai", Model: "test-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},

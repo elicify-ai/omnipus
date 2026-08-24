@@ -1684,6 +1684,28 @@ func strVal(m map[string]any, key string) string {
 
 // inferProviderName returns the provider name from an explicit Provider field,
 // or infers it from the Model field's "provider/model" format. Falls back to "default".
+// isSeedTemplateRow reports whether a providers[] entry is a fresh-install
+// TEMPLATE rather than something the operator configured (ADR-067 FR-029).
+//
+// The test used to be `Provider == ""`, because seed templates carried no
+// provider identity at all. ADR-067 FR-011 made the provider id mandatory —
+// a row IS the pair (provider, model) — so identity no longer distinguishes
+// them. What does is that a template names a provider and supplies NOTHING
+// with which to reach it: no credential, no endpoint, no model list, no PUT
+// stamp and no auth method. The moment any of those is present, an operator
+// has touched the row and it is a configuration.
+func isSeedTemplateRow(m *config.ModelConfig) bool {
+	if m == nil {
+		return true
+	}
+	return strings.TrimSpace(m.Provider) == "" ||
+		(m.APIKeyRef == "" &&
+			m.APIBase == "" &&
+			m.AuthMethod == "" &&
+			m.UpdatedAt == nil &&
+			len(m.Models) == 0)
+}
+
 func inferProviderName(provider, model string) string {
 	if provider != "" {
 		return provider
@@ -5875,8 +5897,8 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 		providerOrder := make([]string, 0)
 		seen := make(map[string]struct{})
 		for _, m := range cfg.Providers {
-			if m.Provider == "" {
-				continue // seed template, never configured — not a row
+			if isSeedTemplateRow(m) {
+				continue // never configured — not a row (FR-029)
 			}
 			providerName := m.Provider
 			if _, exists := seen[providerName]; !exists {
@@ -5922,11 +5944,11 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 			// OpenAI-compatible base URL we can query (openrouter, openai, …).
 			// Providers with no known base (custom / unknown gateways) rely on the
 			// operator-supplied catalog slugs.
-			hasEndpoint := providers_pkg.GetDefaultAPIBase(name) != ""
+			hasEndpoint := providers_pkg.APIBaseFor(name) != ""
 			// Try to fetch the full model list from the provider's upstream API.
 			if hasEndpoint {
 				if apiKey, ok := providerAPIKeys[name]; ok {
-					baseURL := providers_pkg.GetDefaultAPIBase(name)
+					baseURL := providers_pkg.APIBaseFor(name)
 					if upstream, err := providers_pkg.FetchModels(
 						r.Context(),
 						baseURL,
@@ -6169,7 +6191,7 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			if persistedAPIBase == "" {
-				persistedAPIBase = providers_pkg.GetDefaultAPIBase(providerID)
+				persistedAPIBase = providers_pkg.APIBaseFor(providerID)
 			}
 			// SSRF-check the persisted api_base before any outbound probe.
 			if persistedAPIBase != "" && a.ssrfChecker != nil {
@@ -6322,7 +6344,7 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 			slog.Warn("rest: reload after provider update did not confirm within the poll window; "+
 				"agents may still be served by the stale cached provider client", "provider_id", providerID)
 		}
-		hasEndpoint := providers_pkg.GetDefaultAPIBase(providerID) != ""
+		hasEndpoint := providers_pkg.APIBaseFor(providerID) != ""
 		respModels := []string{}
 		if req.Models != nil {
 			respModels = dedupeNonEmpty(*req.Models)
@@ -6509,7 +6531,7 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 		// (fix #3).
 		baseURL := configuredAPIBase
 		if baseURL == "" {
-			baseURL = providers_pkg.GetDefaultAPIBase(providerID)
+			baseURL = providers_pkg.APIBaseFor(providerID)
 		}
 		if baseURL == "" {
 			// Neither a configured api_base nor a known vendor default — the probe
@@ -6644,7 +6666,7 @@ func (a *restAPI) refreshProviderModels(w http.ResponseWriter, r *http.Request, 
 		}
 		found = true
 		if defaultName == "" {
-			defaultName = m.ModelName
+			defaultName = m.Model
 		}
 		if len(m.Models) > 0 {
 			userModels = append(userModels, m.Models...)
@@ -6671,7 +6693,7 @@ func (a *restAPI) refreshProviderModels(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	hasEndpoint := providers_pkg.GetDefaultAPIBase(providerID) != ""
+	hasEndpoint := providers_pkg.APIBaseFor(providerID) != ""
 	status := gen.ProviderStatusDisconnected
 	if apiKey != "" {
 		status = gen.ProviderStatusConnected
@@ -6688,7 +6710,7 @@ func (a *restAPI) refreshProviderModels(w http.ResponseWriter, r *http.Request, 
 			jsonErr(w, http.StatusUnprocessableEntity, "no API key configured for this provider")
 			return
 		}
-		baseURL := providers_pkg.GetDefaultAPIBase(providerID)
+		baseURL := providers_pkg.APIBaseFor(providerID)
 		upstream, err := providers_pkg.FetchModels(r.Context(), baseURL, apiKey, a.ssrfChk())
 		if err != nil {
 			slog.Warn("rest: refresh-models: upstream fetch failed", "provider", providerID, "error", err)

@@ -18,8 +18,8 @@ import (
 func TestGetModelConfig_ExactPair(t *testing.T) {
 	cfg := &Config{
 		Providers: []*ModelConfig{
-			{ModelName: "glm-via-openrouter", Provider: "openrouter", Model: "z-ai/glm-5.2", APIBase: "https://openrouter.ai/api/v1"},
-			{ModelName: "glm-direct", Provider: "zai", Model: "glm-5.2", APIBase: "https://api.z.ai/v1"},
+			{Name: "glm-via-openrouter", Provider: "openrouter", Model: "z-ai/glm-5.2", APIBase: "https://openrouter.ai/api/v1"},
+			{Name: "glm-direct", Provider: "zai", Model: "glm-5.2", APIBase: "https://api.z.ai/v1"},
 		},
 	}
 

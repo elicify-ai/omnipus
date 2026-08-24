@@ -31,16 +31,22 @@ import (
 
 // seedTemplateProviders installs the real fresh-install seed templates from
 // config.DefaultConfig() into the in-memory config, then appends the given
-// operator-configured rows. Templates carry no `provider` identity and no
-// credential ref — exactly the shape pkg/config/defaults.go ships.
+// operator-configured rows.
+//
+// A template carries a CATALOG provider id (ADR-067 FR-011 keys every row by
+// the pair, and a row with no provider half no longer validates) but no
+// credential ref — the missing credential is what makes it a template rather
+// than a configuration, and what the configured-only filter keys on.
 func seedTemplateProviders(t *testing.T, api *restAPI, configured ...*config.ModelConfig) {
 	t.Helper()
 	templates := config.DefaultConfig().Providers
 	require.GreaterOrEqual(t, len(templates), 10,
 		"the fresh-install seed must ship at least ten templates for SC-014's second clause to mean anything")
 	for _, tpl := range templates {
-		require.Empty(t, tpl.Provider, "seed template %q must carry no provider identity", tpl.ModelName)
-		require.Empty(t, tpl.APIKeyRef, "seed template %q must carry no credential ref", tpl.ModelName)
+		require.NotEmpty(t, tpl.Provider,
+			"seed template %q must be keyed by a catalog provider id (ADR-067 FR-011)", tpl.Model)
+		require.Empty(t, tpl.APIKeyRef,
+			"seed template %q must carry no credential ref", tpl.Provider)
 	}
 	cfg := api.agentLoop.GetConfig()
 	cfg.Providers = cfg.Providers[:0]
@@ -58,7 +64,7 @@ func TestListProviders_ConfiguredOnly(t *testing.T) {
 		const ref = "T068_04_MYGW_API_KEY"
 		t.Setenv(ref, "sk-configured")
 		seedTemplateProviders(t, api, &config.ModelConfig{
-			ModelName: "mygw",
+			Name:      "mygw",
 			Provider:  "mygw",
 			Model:     "mygw/llama",
 			APIKeyRef: ref,
@@ -91,7 +97,7 @@ func TestListProviders_ConfiguredOnly(t *testing.T) {
 	t.Run("configured row without a key is still a row (disconnected), template is not", func(t *testing.T) {
 		api := newTestRestAPIWithHome(t)
 		seedTemplateProviders(t, api, &config.ModelConfig{
-			ModelName: "mygw", Provider: "mygw", Model: "mygw/llama",
+			Name: "mygw", Provider: "mygw", Model: "mygw/llama",
 			Models: []string{"mygw/llama"},
 		})
 		provs := getProviders(t, api)
@@ -103,8 +109,10 @@ func TestListProviders_ConfiguredOnly(t *testing.T) {
 
 	t.Run("no models from any source → models is [] not the template alias", func(t *testing.T) {
 		api := newTestRestAPIWithHome(t)
+		const ref = "T068_04_MYGW_NOMODELS_KEY"
+		t.Setenv(ref, "sk-configured")
 		seedTemplateProviders(t, api, &config.ModelConfig{
-			ModelName: "mygw-alias", Provider: "mygw", Model: "mygw/llama",
+			Name: "mygw-alias", Provider: "mygw", Model: "llama", APIKeyRef: ref,
 		})
 		provs := getProviders(t, api)
 		require.Len(t, provs, 1, "got %+v", provs)
@@ -124,9 +132,9 @@ func TestListProviders_ConfiguredOnly(t *testing.T) {
 		const ref = "T068_04_NOPE_API_KEY"
 		t.Setenv(ref, "sk-whatever")
 		seedTemplateProviders(t, api,
-			&config.ModelConfig{ModelName: "nope", Provider: "nope", Model: "nope/x", APIKeyRef: ref,
+			&config.ModelConfig{Name: "nope", Provider: "nope", Model: "nope/x", APIKeyRef: ref,
 				Models: []string{"nope/x"}},
-			&config.ModelConfig{ModelName: "mygw", Provider: "zai", Model: "zai/glm-5.2",
+			&config.ModelConfig{Name: "mygw", Provider: "zai", Model: "zai/glm-5.2",
 				Models: []string{"glm-5.2"}},
 		)
 		provs := getProviders(t, api)
@@ -148,8 +156,8 @@ func TestListProviders_ConfiguredOnly(t *testing.T) {
 
 	t.Run("DELETE on a template id is not found", func(t *testing.T) {
 		// T068-09's DELETE branch answers 404 for a template id: a seed
-		// template row carries no provider identity, so it was never a
-		// configured, deletable row. The request carries the config snapshot
+		// template row supplies nothing to reach the provider with, so it
+		// was never a configured, deletable row (ADR-067 FR-029). The request carries the config snapshot
 		// and an authenticated user because the DELETE verb is gated inline
 		// (requireAdminAuthz + unconditional 401 — FR-042); in production
 		// configSnapshotMiddleware wraps every registered handler.

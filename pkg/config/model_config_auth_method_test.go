@@ -23,7 +23,7 @@ func TestModelConfigValidate_AuthMethodClosedSet(t *testing.T) {
 		{"device_code", true},
 	} {
 		t.Run("auth_method="+tc.method, func(t *testing.T) {
-			mc := &ModelConfig{ModelName: "m", Model: "openai/gpt-4o", AuthMethod: tc.method}
+			mc := &ModelConfig{Provider: "openai", Model: "gpt-4o", AuthMethod: tc.method}
 			err := mc.Validate()
 			if tc.wantErr && err == nil {
 				t.Fatalf("Validate() with auth_method=%q: want error, got nil", tc.method)
@@ -43,8 +43,8 @@ func TestModelConfigValidate_AuthMethodClosedSet(t *testing.T) {
 func TestValidateProviders_RejectsRetiredAuthMethod(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Providers = []*ModelConfig{
-		{ModelName: "ok", Model: "openai/gpt-4o"},
-		{ModelName: "bad", Model: "anthropic/claude-sonnet-4.6", AuthMethod: "oauth"},
+		{Provider: "openai", Model: "gpt-4o"},
+		{Provider: "anthropic", Model: "claude-sonnet-4-5", AuthMethod: "oauth"},
 	}
 	err := cfg.ValidateProviders()
 	if err == nil {

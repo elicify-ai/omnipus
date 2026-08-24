@@ -15,6 +15,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
 )
 
 // URLChecker is the SSRF guard interface. The gateway passes its *security.SSRFChecker;
@@ -300,36 +302,64 @@ var nonChatSubstrings = []string{
 	"embed", "whisper", "tts", "dall-e", "image", "rerank", "moderation",
 }
 
-// probeModelDefaults is the per-provider rules table for the default chat probe slug.
-// providerID keys are lowercase. The generic fallback ("") applies to any unknown provider.
-// These slugs are used ONLY when the catalog is empty (offline/CLI path) — when a live
-// catalog is available, pickProbeModel prefers a catalog entry over a slug not present
-// in the catalog, so stale entries here do not cause false Unreachable outcomes.
-var probeModelDefaults = map[string]string{
-	"openai":     "gpt-4o-mini",
-	"gemini":     "gemini-2.0-flash",
-	"google":     "gemini-2.0-flash",
-	"deepseek":   "deepseek-chat",
-	"groq":       "llama-3.1-8b-instant",
-	"openrouter": "meta-llama/llama-3.1-8b-instruct",
-	"anthropic":  "claude-3-haiku-20240307",
-	"zhipu":      "glm-4-flash",
-	"z-ai":       "glm-4-flash",
-	"moonshot":   "moonshot-v1-8k",
+// maxProbeAttempts bounds the fall-through when a probe model turns out not
+// to exist upstream (FR-022, F-25). Three is enough to step past a couple of
+// entitlement gaps in a provider's own catalog and small enough that a badly
+// stale document cannot turn one key check into a burst of requests.
+const maxProbeAttempts = 3
+
+// catalogProbeModels returns the probe candidates for a CATALOG provider, in
+// document order: the first `status: active`, tool-calling, text-modality
+// models of that provider, capped at maxProbeAttempts (FR-022, A-20).
+//
+// The old per-provider slug table (`probeModelDefaults`) is gone. It was a
+// hand-typed list of ten vendor model ids that went stale silently — a
+// retired slug there produced a 404 that classified as *Unreachable*, i.e. a
+// perfectly good key reported as "provider unreachable". The catalog knows
+// which models are live, so the probe now asks it.
+//
+// An id the catalog does not carry returns nil: a custom or local endpoint
+// has no catalog models, and its caller falls back to the live list.
+func catalogProbeModels(providerID string) []string {
+	row, ok := CatalogProvider(providerID)
+	if !ok {
+		return nil
+	}
+	var out []string
+	for _, m := range row.Models {
+		if m.Status != catalog.StatusActive || !m.ToolCall {
+			continue
+		}
+		if !hasTextModality(m.InputModalities) {
+			continue
+		}
+		out = append(out, m.ID)
+		if len(out) == maxProbeAttempts {
+			break
+		}
+	}
+	return out
 }
 
-// pickProbeModel selects a chat-capable model to use for the completion probe.
-// It filters the catalog to exclude obvious non-chat entries, then prefers the
-// provider's rules-table default if present in the filtered catalog.
-// On empty catalog it returns the rules-table default (never a non-chat model).
-// It never returns a value that would cause a false InvalidKey.
-func pickProbeModel(catalog []string, providerID string) string {
-	pid := strings.ToLower(strings.TrimSpace(providerID))
-	def := probeModelDefaults[pid]
+// hasTextModality reports whether a model accepts text input. Every valid
+// catalog model does (FR-002), so this is a belt-and-braces read of the
+// document rather than a filter that routinely fires.
+func hasTextModality(mods []catalog.Modality) bool {
+	for _, m := range mods {
+		if m == catalog.ModalityText {
+			return true
+		}
+	}
+	return false
+}
 
-	// Filter catalog to chat-only entries.
-	var chatEntries []string
-	for _, m := range catalog {
+// chatProbeCandidates filters a LIVE model list down to plausibly chat-capable
+// entries and caps it at maxProbeAttempts. It is the fallback path for rows
+// with no catalog models: operator-typed custom endpoints and local runtimes,
+// whose model list only exists upstream.
+func chatProbeCandidates(models []string) []string {
+	var out []string
+	for _, m := range models {
 		ml := strings.ToLower(m)
 		skip := false
 		for _, sub := range nonChatSubstrings {
@@ -338,36 +368,38 @@ func pickProbeModel(catalog []string, providerID string) string {
 				break
 			}
 		}
-		if !skip {
-			chatEntries = append(chatEntries, m)
+		if skip {
+			continue
+		}
+		out = append(out, m)
+		if len(out) == maxProbeAttempts {
+			break
 		}
 	}
+	return out
+}
 
-	if len(chatEntries) == 0 {
-		// No chat entries in catalog. Return the rules-table default if known.
-		if def != "" {
-			return def
+// modelNotFoundMarkers are the upstream phrasings that mean "that model id
+// does not exist here" as opposed to "your key is bad" or "we are down".
+// Only these justify trying the next candidate (F-25).
+var modelNotFoundMarkers = []string{
+	"model_not_found",
+	"model not found",
+	"does not exist",
+	"unknown model",
+	"invalid model",
+	"no such model",
+}
+
+// isModelNotFound reports whether an upstream detail names a missing model.
+func isModelNotFound(rawDetail string) bool {
+	d := strings.ToLower(rawDetail)
+	for _, m := range modelNotFoundMarkers {
+		if strings.Contains(d, m) {
+			return true
 		}
-		// No known default and empty filtered catalog — return empty string.
-		// The caller (ValidateKey) falls back to catalog-fetch-only in this case.
-		return ""
 	}
-
-	// Prefer the rules-table default if it exists in the chat-filtered catalog.
-	if def != "" {
-		for _, m := range chatEntries {
-			if m == def {
-				return def
-			}
-		}
-		// Default not present in catalog — do NOT return the stale slug; it would
-		// produce a false Unreachable outcome (a 404 "model not found" instead of a
-		// credential check). Fall through to the first chat-capable catalog entry.
-	}
-
-	// No rules-table default, or the default is absent from the live catalog:
-	// return the first chat entry from the sorted catalog.
-	return chatEntries[0]
+	return false
 }
 
 // ── FetchModels (moved from pkg/gateway/rest.go fetchUpstreamModels) ─────────
@@ -492,25 +524,29 @@ func ValidateKey(ctx context.Context, in ValidateInput, checker URLChecker) Vali
 		}
 	}
 
-	catalog := in.Catalog
-
-	// Resolve probe model. Attempt a catalog fetch first if catalog is empty.
-	probeModel := pickProbeModel(catalog, in.ProviderID)
-	if probeModel == "" && len(catalog) == 0 {
-		// Try fetching the catalog.
-		fetched, err := FetchModels(ctx, in.BaseURL, in.APIKey, checker)
-		if err != nil {
-			slog.Debug("providers: FetchModels failed during ValidateKey; proceeding without catalog",
-				"provider", in.ProviderID, "error", err)
-		} else {
-			catalog = fetched
-			probeModel = pickProbeModel(catalog, in.ProviderID)
+	// Resolve the probe candidates. For a CATALOG provider the document is
+	// the source and NO `/models` pre-fetch happens at all (FR-022) — that
+	// round trip used to run on every key check and told us nothing the
+	// catalog does not already know. Only a row the catalog has no models
+	// for (a custom endpoint, a local runtime) falls back to the live list.
+	candidates := catalogProbeModels(in.ProviderID)
+	if len(candidates) == 0 {
+		live := in.Catalog
+		if len(live) == 0 {
+			fetched, err := FetchModels(ctx, in.BaseURL, in.APIKey, checker)
+			if err != nil {
+				slog.Debug("providers: FetchModels failed during ValidateKey; proceeding without model list",
+					"provider", in.ProviderID, "error", err)
+			} else {
+				live = fetched
+			}
 		}
+		candidates = chatProbeCandidates(live)
 	}
 
-	if probeModel == "" {
-		// No chat model found and no catalog — we have no probe model.
-		// Return Unreachable (proceed with warning) rather than a false InvalidKey.
+	if len(candidates) == 0 {
+		// No probe model anywhere. Return Unreachable (proceed with a
+		// warning) rather than a false InvalidKey.
 		slog.Warn("providers: no probe model available; returning Unreachable",
 			"provider", in.ProviderID)
 		return ValidationResult{
@@ -520,8 +556,21 @@ func ValidateKey(ctx context.Context, in ValidateInput, checker URLChecker) Vali
 		}
 	}
 
-	// Perform the completion probe.
-	outcome, rawDetail := probeCompletion(ctx, in.BaseURL, in.APIKey, probeModel, checker)
+	// Probe in document order, falling through to the next candidate only
+	// when the upstream said the MODEL is missing — never on a credential or
+	// transport answer, which is what we came to find out (F-25). Bounded by
+	// maxProbeAttempts, which len(candidates) already respects.
+	var outcome Outcome
+	var rawDetail string
+	for i, model := range candidates {
+		outcome, rawDetail = probeCompletion(ctx, in.BaseURL, in.APIKey, model, checker)
+		if i+1 < len(candidates) && outcome != OutcomeValid && isModelNotFound(rawDetail) {
+			slog.Debug("providers: probe model not found upstream; trying the next candidate",
+				"provider", in.ProviderID, "model", model)
+			continue
+		}
+		break
+	}
 
 	return ValidationResult{
 		Outcome:   outcome,
@@ -584,4 +633,19 @@ func probeCompletion(ctx context.Context, baseURL, apiKey, model string, checker
 	// rawDetail for server debug log only — the caller must NOT send this to the user.
 	raw := fmt.Sprintf("status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(body)))
 	return outcome, raw
+}
+
+// DefaultProbeModel returns the first catalog model a provider offers that is
+// active, tool-calling and text-capable — the same rule the key-validation
+// probe uses (FR-022, A-20), exported for the CLI onboarding wizard, which
+// needs a concrete model id to write into the config it creates (A-21).
+//
+// Empty when the id is not a catalog provider or the row lists no such model;
+// the caller then asks the operator.
+func DefaultProbeModel(providerID string) string {
+	c := catalogProbeModels(providerID)
+	if len(c) == 0 {
+		return ""
+	}
+	return c[0]
 }

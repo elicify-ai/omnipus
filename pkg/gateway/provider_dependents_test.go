@@ -36,15 +36,21 @@ func depCfg(providers []*config.ModelConfig, agents ...config.AgentConfig) *conf
 	}
 }
 
+// Both helpers carry an api_key_ref: since ADR-067 FR-011 a provider id alone
+// no longer distinguishes a CONFIGURED row from a fresh-install template
+// (every row has an id), so what makes a row configured is that it supplies
+// something to reach the provider with — see isSeedTemplateRow.
 func openrouterRow() *config.ModelConfig {
 	return &config.ModelConfig{
-		Provider: "openrouter", Model: "openrouter/auto", ModelName: "openrouter",
+		Provider: "openrouter", Model: "auto", Name: "openrouter",
+		APIKeyRef: "DEPS_TEST_OPENROUTER_KEY",
 	}
 }
 
 func anthropicRow() *config.ModelConfig {
 	return &config.ModelConfig{
-		Provider: "anthropic", Model: "claude-sonnet-4.6", ModelName: "anthropic",
+		Provider: "anthropic", Model: "claude-sonnet-4-5", Name: "anthropic",
+		APIKeyRef: "DEPS_TEST_ANTHROPIC_KEY",
 	}
 }
 
@@ -126,7 +132,7 @@ func TestProviderDependents(t *testing.T) {
 
 	t.Run("row 7: provider empty, slug exact-matches the provider's row Model → primary", func(t *testing.T) {
 		cfg := depCfg([]*config.ModelConfig{openrouterRow()},
-			agentWith("ray", "Ray", "openrouter/auto", ""))
+			agentWith("ray", "Ray", "auto", ""))
 		deps := computeProviderDependents(cfg, "openrouter")
 		require.Len(t, deps, 1)
 		assert.Equal(t, gen.ProviderDependentRolePrimary, deps[0].Role,
@@ -215,7 +221,7 @@ func TestProviderDependents_WireEmission(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 	stamp := time.Date(2026, 8, 22, 10, 15, 0, 0, time.UTC)
 	seedTemplateProviders(t, api, &config.ModelConfig{
-		ModelName: "openrouter", Provider: "openrouter", Model: "openrouter/auto",
+		Name: "openrouter", Provider: "openrouter", Model: "openrouter/auto",
 		Models: []string{"z-ai/glm-5.2"}, UpdatedAt: &stamp,
 	})
 	cfg := api.agentLoop.GetConfig()

@@ -61,10 +61,10 @@ func TestRunTurn_LocalEndpointUnknownWindow_RefusedTyped(t *testing.T) {
 		// A custom row at a loopback host: locality local (ADR-067's
 		// predicate), not in the catalog, no live value → unknown window.
 		Providers: []*config.ModelConfig{{
-			ModelName: "local-model",
-			Model:     "local-model",
-			Provider:  "my-proxy",
-			APIBase:   "http://127.0.0.1:8000/v1",
+			Name:     "local-model",
+			Model:    "local-model",
+			Provider: "my-proxy",
+			APIBase:  "http://127.0.0.1:8000/v1",
 		}},
 	}
 	cfg.Context = config.DefaultContextSettings()

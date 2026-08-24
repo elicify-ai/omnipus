@@ -669,7 +669,7 @@ func TestToStandardConfig(t *testing.T) {
 	foundModel := false
 	var foundAPIKey string
 	for _, m := range stdCfg.Providers {
-		if m.ModelName == "claude-sonnet-4-20250514" {
+		if m.Name == "claude-sonnet-4-20250514" {
 			foundModel = true
 			foundAPIKey = m.APIKey()
 			break

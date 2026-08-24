@@ -9,10 +9,10 @@ import (
 
 func TestDetectTranscriber(t *testing.T) {
 	// Provider API keys are still injected via env (InjectFromConfig path).
-	t.Setenv("TRANSCRIBER_TEST_GEMINI_KEY", "sk-gemini-model")
+	t.Setenv("TRANSCRIBER_TEST_ZAI_KEY", "sk-zai-model")
+	t.Setenv("TRANSCRIBER_TEST_PROXY_KEY", "sk-proxy")
 	t.Setenv("TRANSCRIBER_TEST_OPENAI_KEY", "sk-openai")
 	t.Setenv("TRANSCRIBER_TEST_GROQ_KEY", "sk-groq-model")
-	t.Setenv("TRANSCRIBER_TEST_AZURE_KEY", "sk-azure")
 	t.Setenv("TRANSCRIBER_TEST_ANTHROPIC_KEY", "sk-anthropic")
 	t.Setenv("TRANSCRIBER_TEST_OTHER_KEY", "sk-other-model")
 
@@ -35,14 +35,17 @@ func TestDetectTranscriber(t *testing.T) {
 			wantNil: true,
 		},
 		{
+			// `voice.model_name` names a MODEL id, resolved through the
+			// providers list (ADR-067 FR-034 — a row is the pair, and the
+			// display alias is gone).
 			name: "voice model name selects audio model transcriber",
 			cfg: &config.Config{
-				Voice: config.VoiceConfig{ModelName: "voice-gemini"},
+				Voice: config.VoiceConfig{ModelName: "gpt-4o-audio-preview"},
 				Providers: []*config.ModelConfig{
 					{
-						ModelName: "voice-gemini",
-						Model:     "gemini/gemini-2.5-flash",
-						APIKeyRef: "TRANSCRIBER_TEST_GEMINI_KEY",
+						Provider:  "openai",
+						Model:     "gpt-4o-audio-preview",
+						APIKeyRef: "TRANSCRIBER_TEST_OPENAI_KEY",
 					},
 				},
 			},
@@ -52,10 +55,10 @@ func TestDetectTranscriber(t *testing.T) {
 			name: "groq via model list",
 			cfg: &config.Config{
 				Providers: []*config.ModelConfig{
-					{ModelName: "openai", Model: "openai/gpt-4o", APIKeyRef: "TRANSCRIBER_TEST_OPENAI_KEY"},
+					{Provider: "openai", Model: "gpt-4.1", APIKeyRef: "TRANSCRIBER_TEST_OPENAI_KEY"},
 					{
-						ModelName: "groq",
-						Model:     "groq/llama-3.3-70b",
+						Provider:  "groq",
+						Model:     "llama-3.1-8b-instant",
 						APIKeyRef: "TRANSCRIBER_TEST_GROQ_KEY",
 					},
 				},
@@ -63,42 +66,47 @@ func TestDetectTranscriber(t *testing.T) {
 			wantName: "groq",
 		},
 		{
-			name: "voice model name selects non-gemini audio model transcriber",
+			name: "voice model name selects a second openai-compatible row",
 			cfg: &config.Config{
-				Voice: config.VoiceConfig{ModelName: "voice-openai-audio"},
+				Voice: config.VoiceConfig{ModelName: "glm-4.5"},
 				Providers: []*config.ModelConfig{
 					{
-						ModelName: "voice-openai-audio",
-						Model:     "openai/gpt-4o-audio-preview",
-						APIKeyRef: "TRANSCRIBER_TEST_OPENAI_KEY",
+						Provider:  "zai",
+						Model:     "glm-4.5",
+						APIKeyRef: "TRANSCRIBER_TEST_ZAI_KEY",
 					},
 				},
 			},
 			wantName: "audio-model",
 		},
 		{
-			name: "voice model name selects azure audio model transcriber",
+			// A CUSTOM row — an operator's own OpenAI-compatible endpoint —
+			// reaches the same transport, recognised by its `protocol`
+			// field and not by any vendor list (ADR-067 FR-012).
+			name: "custom openai-compatible row selects the audio model transcriber",
 			cfg: &config.Config{
-				Voice: config.VoiceConfig{ModelName: "voice-azure-audio"},
+				Voice: config.VoiceConfig{ModelName: "my-audio-model"},
 				Providers: []*config.ModelConfig{
 					{
-						ModelName: "voice-azure-audio",
-						Model:     "azure/my-audio-deployment",
-						APIKeyRef: "TRANSCRIBER_TEST_AZURE_KEY",
-						APIBase:   "https://example.openai.azure.com",
+						Provider:  "my-proxy",
+						Custom:    true,
+						Protocol:  "openai-compatible",
+						Model:     "my-audio-model",
+						APIBase:   "https://llm.example/v1",
+						APIKeyRef: "TRANSCRIBER_TEST_PROXY_KEY",
 					},
 				},
 			},
 			wantName: "audio-model",
 		},
 		{
-			name: "voice model name with non openai compatible protocol does not select audio model transcriber",
+			name: "voice model name on an anthropic row does not select the audio model transcriber",
 			cfg: &config.Config{
-				Voice: config.VoiceConfig{ModelName: "voice-anthropic"},
+				Voice: config.VoiceConfig{ModelName: "claude-sonnet-4-5"},
 				Providers: []*config.ModelConfig{
 					{
-						ModelName: "voice-anthropic",
-						Model:     "anthropic/claude-sonnet-4.6",
+						Provider:  "anthropic",
+						Model:     "claude-sonnet-4-5",
 						APIKeyRef: "TRANSCRIBER_TEST_ANTHROPIC_KEY",
 					},
 				},
@@ -109,7 +117,7 @@ func TestDetectTranscriber(t *testing.T) {
 			name: "groq model list entry without key is skipped",
 			cfg: &config.Config{
 				Providers: []*config.ModelConfig{
-					{Model: "groq/llama-3.3-70b"},
+					{Provider: "groq", Model: "llama-3.1-8b-instant"},
 				},
 			},
 			wantNil: true,
@@ -119,8 +127,8 @@ func TestDetectTranscriber(t *testing.T) {
 			cfg: &config.Config{
 				Providers: []*config.ModelConfig{
 					{
-						ModelName: "groq",
-						Model:     "groq/llama-3.3-70b",
+						Provider:  "groq",
+						Model:     "llama-3.1-8b-instant",
 						APIKeyRef: "TRANSCRIBER_TEST_GROQ_KEY",
 					},
 				},
@@ -133,8 +141,8 @@ func TestDetectTranscriber(t *testing.T) {
 				Voice: config.VoiceConfig{ModelName: "missing"},
 				Providers: []*config.ModelConfig{
 					{
-						ModelName: "other",
-						Model:     "gemini/gemini-2.5-flash",
+						Provider:  "google",
+						Model:     "gemini-2.5-flash",
 						APIKeyRef: "TRANSCRIBER_TEST_OTHER_KEY",
 					},
 				},
@@ -155,8 +163,8 @@ func TestDetectTranscriber(t *testing.T) {
 				Voice: config.VoiceConfig{ElevenLabsAPIKeyRef: "TRANSCRIBER_TEST_ELEVENLABS_KEY"},
 				Providers: []*config.ModelConfig{
 					{
-						ModelName: "groq",
-						Model:     "groq/llama-3.3-70b",
+						Provider:  "groq",
+						Model:     "llama-3.1-8b-instant",
 						APIKeyRef: "TRANSCRIBER_TEST_GROQ_KEY",
 					},
 				},
@@ -168,14 +176,14 @@ func TestDetectTranscriber(t *testing.T) {
 			name: "voice model name takes priority over elevenlabs",
 			cfg: &config.Config{
 				Voice: config.VoiceConfig{
-					ModelName:           "voice-gemini",
+					ModelName:           "gpt-4o-audio-preview",
 					ElevenLabsAPIKeyRef: "TRANSCRIBER_TEST_ELEVENLABS_KEY",
 				},
 				Providers: []*config.ModelConfig{
 					{
-						ModelName: "voice-gemini",
-						Model:     "gemini/gemini-2.5-flash",
-						APIKeyRef: "TRANSCRIBER_TEST_GEMINI_KEY",
+						Provider:  "openai",
+						Model:     "gpt-4o-audio-preview",
+						APIKeyRef: "TRANSCRIBER_TEST_OPENAI_KEY",
 					},
 				},
 			},

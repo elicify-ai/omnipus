@@ -104,7 +104,7 @@ func startPerfGateway(tb testing.TB, _ *testutil.ScenarioProvider) *perfGateway 
 		},
 		Providers: []*config.ModelConfig{
 			{
-				ModelName: "openrouter-glm",
+				Name:      "openrouter-glm",
 				Model:     "openrouter/z-ai/glm-5-turbo",
 				Provider:  "openrouter",
 				APIBase:   mock.URL, // mock OpenRouter — see mockOpenRouterServer

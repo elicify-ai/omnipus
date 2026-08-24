@@ -38,7 +38,7 @@ func TestSensitiveDataReplacer_ReducesResolvedKey(t *testing.T) {
 	cfg := &config.Config{
 		Providers: []*config.ModelConfig{
 			{
-				ModelName: "c",
+				Name:      "c",
 				APIKeyRef: "ANTHROPIC_API_KEY",
 				Model:     "anthropic/claude",
 				Provider:  "anthropic",
@@ -104,7 +104,7 @@ func TestRefreshConfigAfterSave_PreservesRedaction(t *testing.T) {
 		},
 		Providers: []*config.ModelConfig{
 			{
-				ModelName: "anthropic",
+				Name:      "anthropic",
 				APIKeyRef: "ANTHROPIC_API_KEY",
 				Model:     "claude-3-5-sonnet-20241022",
 				Provider:  "anthropic",

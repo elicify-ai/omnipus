@@ -66,7 +66,7 @@ func TestOnboardingComplete_ApiKey_WritesDefaultModelPair_ReloadDoesNotOverwrite
 }
 
 // TestGateway_NoBootPathWritesDefaultModel pins the deletion of the two
-// `ModelName == ""` guards (gateway.go's post-createStartupProvider back-fill
+// `Name == ""` guards (gateway.go's post-createStartupProvider back-fill
 // and handleConfigReload's twin). A `git merge` of an older branch can
 // resurrect them as a conflict-free addition, so the absence is asserted
 // over the package's non-test sources rather than trusted.
@@ -86,7 +86,7 @@ func TestGateway_NoBootPathWritesDefaultModel(t *testing.T) {
 			line := 1 + strings.Count(string(src[:loc[0]]), "\n")
 			t.Errorf("%s:%d assigns agents.defaults.default_model from Go code; only onboarding completion and the default-model PUT (config-JSON writers) may set it (FR-020)", name, line)
 		}
-		if strings.Contains(string(src), "Defaults.ModelName") {
+		if strings.Contains(string(src), "Defaults.Name") {
 			t.Errorf("%s still references the deleted agents.defaults.model_name alias", name)
 		}
 	}

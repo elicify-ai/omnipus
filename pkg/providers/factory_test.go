@@ -8,15 +8,16 @@ import (
 
 func TestCreateProviderReturnsHTTPProviderForOpenRouter(t *testing.T) {
 	cfg := config.DefaultConfig()
-	// The default is the exact (provider, model) pair of the row below (ADR-068
-	// D14.1); the row names no provider, so the pair's provider half is empty too.
-	cfg.Agents.Defaults.DefaultModel = config.DefaultModel{Model: "openrouter/auto"}
+	// The default is the exact (provider, model) pair of the row below
+	// (ADR-068 D14.1) — a CATALOG provider id and a BARE model id.
+	cfg.Agents.Defaults.DefaultModel = config.DefaultModel{
+		Provider: "openrouter", Model: "~anthropic/claude-sonnet-latest",
+	}
 	const keyRef = "FACTORY_TEST_OPENROUTER_KEY"
 	t.Setenv(keyRef, "sk-or-test")
 	modelCfg := &config.ModelConfig{
-		ModelName: "test-openrouter",
-		Model:     "openrouter/auto",
-		APIBase:   "https://openrouter.ai/api/v1",
+		Provider:  "openrouter",
+		Model:     "~anthropic/claude-sonnet-latest",
 		APIKeyRef: keyRef,
 	}
 	cfg.Providers = []*config.ModelConfig{modelCfg}
@@ -33,12 +34,14 @@ func TestCreateProviderReturnsHTTPProviderForOpenRouter(t *testing.T) {
 
 func TestCreateProviderReturnsCodexCliProviderForCodexCode(t *testing.T) {
 	cfg := config.DefaultConfig()
-	cfg.Agents.Defaults.DefaultModel = config.DefaultModel{Model: "codex-cli/codex-model"}
+	cfg.Agents.Defaults.DefaultModel = config.DefaultModel{
+		Provider: "codex-cli", Model: "gpt-5.4-codex",
+	}
 	cfg.Providers = []*config.ModelConfig{
 		{
-			ModelName: "test-codex",
-			Model:     "codex-cli/codex-model",
-			Home:      "/tmp/workspace",
+			Provider: "codex-cli",
+			Model:    "gpt-5.4-codex",
+			Home:     "/tmp/workspace",
 		},
 	}
 

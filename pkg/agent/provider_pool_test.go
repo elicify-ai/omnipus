@@ -27,7 +27,7 @@ func newPoolTestConfig(t *testing.T) *config.Config {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              t.TempDir(),
-				DefaultModel:      config.DefaultModel{Provider: "openrouter", Model: "openrouter/anthropic/claude-sonnet-4.6"},
+				DefaultModel:      config.DefaultModel{Provider: "openrouter", Model: "anthropic/claude-sonnet-4.6"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -35,16 +35,17 @@ func newPoolTestConfig(t *testing.T) *config.Config {
 		},
 		Providers: []*config.ModelConfig{
 			{
-				ModelName: "openrouter-default",
-				Model:     "openrouter/anthropic/claude-sonnet-4.6",
+				// The model id is `anthropic/claude-sonnet-4.6` — one
+				// OpenRouter model whose id contains a slash (FR-034), not a
+				// request for a separate `anthropic` provider.
 				Provider:  "openrouter",
+				Model:     "anthropic/claude-sonnet-4.6",
 				APIBase:   "https://openrouter.ai/api/v1",
 				APIKeyRef: "W4_17_OPENROUTER_KEY",
 			},
 			{
-				ModelName: "anthropic-haiku",
-				Model:     "claude-haiku-4-5-20251001",
 				Provider:  "anthropic",
+				Model:     "claude-haiku-4-5-20251001",
 				APIBase:   "https://api.anthropic.com",
 				APIKeyRef: "W4_17_ANTHROPIC_KEY",
 			},
@@ -87,8 +88,8 @@ func TestApplyAgentModel_RebuildsProviderPool(t *testing.T) {
 	// Switch primary to anthropic-pinned model. The fallback chain (if any)
 	// references anthropic, so the post-switch pool must include both
 	// providers.
-	if _, err := al.ApplyAgentModel(before.ID, "anthropic-haiku"); err != nil {
-		t.Fatalf("ApplyAgentModel(anthropic): %v", err)
+	if _, err := al.ApplyAgentModel(before.ID, "claude-haiku-4-5-20251001"); err != nil {
+		t.Fatalf("ApplyAgentModel(claude-haiku-4-5-20251001): %v", err)
 	}
 
 	after, ok := al.GetRegistry().GetAgent(before.ID)
@@ -141,7 +142,7 @@ func TestBuildProviderPool_DedupsDistinctProviders(t *testing.T) {
 	cfg := &config.Config{
 		Providers: []*config.ModelConfig{
 			{
-				ModelName: "openrouter-1",
+				Name:      "openrouter-1",
 				Model:     "openrouter/openai/gpt-4o",
 				Provider:  "openrouter",
 				APIBase:   "https://openrouter.ai/api/v1",
@@ -152,7 +153,7 @@ func TestBuildProviderPool_DedupsDistinctProviders(t *testing.T) {
 
 	candidates := []providers.FallbackCandidate{
 		{Provider: "openrouter", Model: "openrouter/openai/gpt-4o"},
-		{Provider: "openrouter", Model: "openrouter/anthropic/claude-sonnet-4.6"},
+		{Provider: "openrouter", Model: "anthropic/claude-sonnet-4.6"},
 		{Provider: "openrouter", Model: "openrouter/google/gemini-2.5-flash"},
 	}
 
@@ -179,7 +180,7 @@ func TestBuildProviderPool_SkipsProvidersWithMissingModelConfig(t *testing.T) {
 	cfg := &config.Config{
 		Providers: []*config.ModelConfig{
 			{
-				ModelName: "openrouter-1",
+				Name:      "openrouter-1",
 				Model:     "openrouter/openai/gpt-4o",
 				Provider:  "openrouter",
 				APIBase:   "https://openrouter.ai/api/v1",
@@ -229,7 +230,7 @@ func TestFindModelConfigForProvider_CaseInsensitiveMatch(t *testing.T) {
 	cfg := &config.Config{
 		Providers: []*config.ModelConfig{
 			{
-				ModelName: "openrouter-1",
+				Name:      "openrouter-1",
 				Model:     "openrouter/openai/gpt-4o",
 				Provider:  "openrouter",
 				APIBase:   "https://openrouter.ai/api/v1",
@@ -251,8 +252,8 @@ func TestFindModelConfigForProvider_CaseInsensitiveMatch(t *testing.T) {
 
 	// And the clone must be a distinct value (modifying it must not mutate
 	// cfg.Providers[0]).
-	mc.ModelName = "MUTATED"
-	if cfg.Providers[0].ModelName == "MUTATED" {
+	mc.Name = "MUTATED"
+	if cfg.Providers[0].Name == "MUTATED" {
 		t.Error("findModelConfigForProvider did not return a clone — mutation leaked into cfg.Providers[0]")
 	}
 }
@@ -268,7 +269,7 @@ func TestBuildProviderPool_FallsBackToPassthrough(t *testing.T) {
 	cfg := &config.Config{
 		Providers: []*config.ModelConfig{
 			{
-				ModelName: "z-ai/glm-5.2",
+				Name:      "z-ai/glm-5.2",
 				Model:     "z-ai/glm-5.2",
 				Provider:  "openrouter",
 				APIBase:   "https://openrouter.ai/api/v1",

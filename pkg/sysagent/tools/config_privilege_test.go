@@ -138,7 +138,7 @@ func TestConfigSet_LegitimateKeysStillWritable(t *testing.T) {
 			t.Fatalf("set_config(agents.defaults.default_model.model) failed: %s", result.ForLLM)
 		}
 		if cfg.Agents.Defaults.DefaultModel.Model != "glm-4.7" {
-			t.Errorf("ModelName = %q, want %q", cfg.Agents.Defaults.DefaultModel.Model, "glm-4.7")
+			t.Errorf("Name = %q, want %q", cfg.Agents.Defaults.DefaultModel.Model, "glm-4.7")
 		}
 	})
 

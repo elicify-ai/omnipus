@@ -82,181 +82,77 @@ func DefaultConfig() *Config {
 				ApprovalTimeoutMS:    60000,
 			},
 		},
+		// ADR-067 FR-011 / T25: every seed row is keyed by an exact CATALOG
+		// provider id and a BARE catalog model id. No `<protocol>/<model>`
+		// prefixes, no display aliases, and no api_base — the catalog
+		// supplies the URL, so a vendor that moves its endpoint is a
+		// snapshot refresh, not a code change. These rows are keyless
+		// templates: the operator adds a credential to the one they want.
 		Providers: []*ModelConfig{
-			// ============================================
-			// Add your API key to the model you want to use
-			// ============================================
+			// Z.ai (GLM) — https://z.ai/manage-apikey/apikey-list
+			{Provider: "zai", Model: "glm-4.5"},
 
-			// Zhipu AI (智谱) - https://open.bigmodel.cn/usercenter/apikeys
-			{
-				ModelName: "glm-4.7",
-				Model:     "zhipu/glm-4.7",
-				APIBase:   "https://open.bigmodel.cn/api/paas/v4",
-			},
+			// OpenAI — https://platform.openai.com/api-keys
+			{Provider: "openai", Model: "gpt-4.1"},
 
-			// OpenAI - https://platform.openai.com/api-keys
-			{
-				ModelName: "gpt-5.4",
-				Model:     "openai/gpt-5.4",
-				APIBase:   "https://api.openai.com/v1",
-			},
+			// Anthropic Claude — https://console.anthropic.com/settings/keys
+			{Provider: "anthropic", Model: "claude-sonnet-4-5"},
 
-			// Anthropic Claude - https://console.anthropic.com/settings/keys
-			{
-				ModelName: "claude-sonnet-4.6",
-				Model:     "anthropic/claude-sonnet-4.6",
-				APIBase:   "https://api.anthropic.com/v1",
-			},
+			// DeepSeek — https://platform.deepseek.com/
+			{Provider: "deepseek", Model: "deepseek-chat"},
 
-			// DeepSeek - https://platform.deepseek.com/
-			{
-				ModelName: "deepseek-chat",
-				Model:     "deepseek/deepseek-chat",
-				APIBase:   "https://api.deepseek.com/v1",
-			},
+			// Google Gemini — https://ai.google.dev/
+			{Provider: "google", Model: "gemini-2.5-flash"},
 
-			// Google Gemini - https://ai.google.dev/
-			{
-				ModelName: "gemini-2.0-flash",
-				Model:     "gemini/gemini-2.0-flash-exp",
-				APIBase:   "https://generativelanguage.googleapis.com/v1beta",
-			},
+			// Alibaba Qwen (DashScope) — https://dashscope.console.aliyun.com/apiKey
+			{Provider: "alibaba", Model: "qwen-flash"},
 
-			// Qwen (通义千问) - https://dashscope.console.aliyun.com/apiKey
-			{
-				ModelName: "qwen-plus",
-				Model:     "qwen/qwen-plus",
-				APIBase:   "https://dashscope.aliyuncs.com/compatible-mode/v1",
-			},
+			// Moonshot (Kimi) — https://platform.moonshot.ai/console/api-keys
+			{Provider: "moonshotai", Model: "kimi-k2-thinking"},
 
-			// Moonshot (月之暗面) - https://platform.moonshot.cn/console/api-keys
-			{
-				ModelName: "moonshot-v1-8k",
-				Model:     "moonshot/moonshot-v1-8k",
-				APIBase:   "https://api.moonshot.cn/v1",
-			},
+			// Groq — https://console.groq.com/keys
+			{Provider: "groq", Model: "llama-3.1-8b-instant"},
 
-			// Groq - https://console.groq.com/keys
-			{
-				ModelName: "llama-3.3-70b",
-				Model:     "groq/llama-3.3-70b-versatile",
-				APIBase:   "https://api.groq.com/openai/v1",
-			},
+			// OpenRouter — https://openrouter.ai/keys
+			{Provider: "openrouter", Model: "~anthropic/claude-sonnet-latest"},
 
-			// OpenRouter (100+ models) - https://openrouter.ai/keys
-			{
-				ModelName: "openrouter-auto",
-				Model:     "openrouter/auto",
-				APIBase:   "https://openrouter.ai/api/v1",
-			},
-			{
-				ModelName: "openrouter-gpt-5.4",
-				Model:     "openrouter/openai/gpt-5.4",
-				APIBase:   "https://openrouter.ai/api/v1",
-			},
+			// NVIDIA — https://build.nvidia.com/
+			{Provider: "nvidia", Model: "deepseek-ai/deepseek-v4-flash"},
 
-			// NVIDIA - https://build.nvidia.com/
-			{
-				ModelName: "nemotron-4-340b",
-				Model:     "nvidia/nemotron-4-340b-instruct",
-				APIBase:   "https://integrate.api.nvidia.com/v1",
-			},
+			// Cerebras — https://inference.cerebras.ai/
+			{Provider: "cerebras", Model: "gpt-oss-120b"},
 
-			// Cerebras - https://inference.cerebras.ai/
-			{
-				ModelName: "cerebras-llama-3.3-70b",
-				Model:     "cerebras/llama-3.3-70b",
-				APIBase:   "https://api.cerebras.ai/v1",
-			},
+			// Vivgrid — https://vivgrid.com
+			{Provider: "vivgrid", Model: "deepseek-v3.2"},
 
-			// Vivgrid - https://vivgrid.com
-			{
-				ModelName: "vivgrid-auto",
-				Model:     "vivgrid/auto",
-				APIBase:   "https://api.vivgrid.com/v1",
-			},
-
-			// Volcengine (火山引擎) - https://console.volcengine.com/ark
-			{
-				ModelName: "ark-code-latest",
-				Model:     "volcengine/ark-code-latest",
-				APIBase:   "https://ark.cn-beijing.volces.com/api/v3",
-			},
-			{
-				ModelName: "doubao-pro",
-				Model:     "volcengine/doubao-pro-32k",
-				APIBase:   "https://ark.cn-beijing.volces.com/api/v3",
-			},
+			// Volcengine (火山引擎) — https://console.volcengine.com/ark
+			{Provider: "volcengine", Model: "doubao-seed-2-0-pro-260215"},
 
 			// ShengsuanYun (神算云)
-			{
-				ModelName: "deepseek-v3",
-				Model:     "shengsuanyun/deepseek-v3",
-				APIBase:   "https://api.shengsuanyun.com/v1",
-			},
+			{Provider: "shengsuanyun", Model: "deepseek/deepseek-v4-pro"},
 
-			// Ollama (local) - https://ollama.com
-			{
-				ModelName: "llama3",
-				Model:     "ollama/llama3",
-				APIBase:   "http://localhost:11434/v1",
-			},
+			// Mistral AI — https://console.mistral.ai/api-keys
+			{Provider: "mistral", Model: "devstral-latest"},
 
-			// Mistral AI - https://console.mistral.ai/api-keys
-			{
-				ModelName: "mistral-small",
-				Model:     "mistral/mistral-small-latest",
-				APIBase:   "https://api.mistral.ai/v1",
-			},
+			// Avian — https://avian.io
+			{Provider: "avian", Model: "deepseek/deepseek-v4-pro"},
 
-			// Avian - https://avian.io
-			{
-				ModelName: "deepseek-v3.2",
-				Model:     "avian/deepseek/deepseek-v3.2",
-				APIBase:   "https://api.avian.io/v1",
-			},
-			{
-				ModelName: "kimi-k2.5",
-				Model:     "avian/moonshotai/kimi-k2.5",
-				APIBase:   "https://api.avian.io/v1",
-			},
+			// MiniMax — https://api.minimax.io/ (Anthropic Messages wire format)
+			{Provider: "minimax", Model: "MiniMax-M2.5"},
 
-			// Minimax - https://api.minimax.io/
-			{
-				ModelName: "MiniMax-M2.5",
-				Model:     "minimax/MiniMax-M2.5",
-				APIBase:   "https://api.minimax.io/v1",
-				ExtraBody: map[string]any{"reasoning_split": true},
-			},
+			// LongCat — https://longcat.chat/platform
+			{Provider: "longcat", Model: "LongCat-2.0"},
 
-			// LongCat - https://longcat.chat/platform
-			{
-				ModelName: "LongCat-Flash-Thinking",
-				Model:     "longcat/LongCat-Flash-Thinking",
-				APIBase:   "https://api.longcat.chat/openai",
-			},
+			// ModelScope (魔搭社区) — https://modelscope.cn/my/tokens
+			{Provider: "modelscope", Model: "Qwen/Qwen3-235B-A22B-Instruct-2507"},
 
-			// ModelScope (魔搭社区) - https://modelscope.cn/my/tokens
-			{
-				ModelName: "modelscope-qwen",
-				Model:     "modelscope/Qwen/Qwen3-235B-A22B-Instruct-2507",
-				APIBase:   "https://api-inference.modelscope.cn/v1",
-			},
+			// Ollama (local). A local runtime serves whatever the operator
+			// pulled, so a configured row lists its own models (FR-020,
+			// FR-040 rule 2) — a TEMPLATE presumes none.
+			{Provider: "ollama", Model: "llama3"},
 
-			// VLLM (local) - http://localhost:8000
-			{
-				ModelName: "local-model",
-				Model:     "vllm/custom-model",
-				APIBase:   "http://localhost:8000/v1",
-			},
-
-			// Azure OpenAI - https://portal.azure.com
-			// model_name is a user-friendly alias; the model field's path after "azure/" is your deployment name
-			{
-				ModelName: "azure-gpt5",
-				Model:     "azure/my-gpt5-deployment",
-				APIBase:   "https://your-resource.openai.azure.com",
-			},
+			// vLLM (local), same rule as Ollama above.
+			{Provider: "vllm", Model: "custom-model"},
 		},
 		Gateway: GatewayConfig{
 			Host: "127.0.0.1",

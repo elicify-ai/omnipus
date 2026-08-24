@@ -102,7 +102,7 @@ func providerDeleteBaseConfig(
 // credential ref the DELETE must sweep.
 func deleteTestOpenrouterRow() *config.ModelConfig {
 	return &config.ModelConfig{
-		ModelName: "openrouter", Provider: "openrouter",
+		Name: "openrouter", Provider: "openrouter",
 		Model: "z-ai/glm-5", APIKeyRef: "openrouter_API_KEY",
 	}
 }
@@ -111,7 +111,7 @@ func deleteTestOpenrouterRow() *config.ModelConfig {
 // last one.
 func deleteTestAnthropicRow() *config.ModelConfig {
 	return &config.ModelConfig{
-		ModelName: "anthropic", Provider: "anthropic",
+		Name: "anthropic", Provider: "anthropic",
 		Model: "claude-sonnet-4.6", APIKeyRef: "anthropic_API_KEY",
 	}
 }

@@ -37,14 +37,18 @@ import (
 
 // providerConfigured reports whether an operator-configured provider row with
 // this identity exists — the same predicate the GET /providers list uses to
-// decide what is a row at all (m.Provider != "" — seed templates carry no
-// provider identity and are not rows, resolution #16).
+// decide what is a row at all (resolution #16).
+//
+// Since ADR-067 FR-011 every row carries a provider id, seed templates
+// included, so identity alone no longer separates the two: the test is
+// isSeedTemplateRow (no credential, no endpoint, no model list, no PUT stamp,
+// no auth method).
 func providerConfigured(cfg *config.Config, providerID string) bool {
 	if cfg == nil || providerID == "" {
 		return false
 	}
 	for _, m := range cfg.Providers {
-		if m == nil {
+		if m == nil || isSeedTemplateRow(m) {
 			continue
 		}
 		if strings.TrimSpace(m.Provider) == providerID {

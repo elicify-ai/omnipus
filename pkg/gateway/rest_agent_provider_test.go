@@ -15,6 +15,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -189,15 +190,26 @@ func TestAgentProvider_NeedsModelDerived(t *testing.T) {
 	// in-memory: every agent POST/PUT runs refreshConfigAndRewireServices,
 	// which reloads config.json and swaps the live config, so an in-memory
 	// Providers append would silently vanish on the first write below.
+	//
+	// updated_at is required here, not decorative: isSeedTemplateRow
+	// (rest.go, ADR-067 FR-029) treats a row with no credential, no
+	// endpoint, no model list AND no updated_at as an un-configured
+	// fresh-install template — indistinguishable from a real row unless one
+	// of those is set. Every real write path (PUT /providers/{id}, both its
+	// found-and new-entry branches) always stamps updated_at unconditionally
+	// (ADR-068 MAJ-015), so a hand-written fixture that skips it is
+	// simulating a row no real write path produces, not "a configured
+	// provider with no extra fields".
+	updatedAt := time.Now().UTC()
 	diskCfg := fmt.Sprintf(`{"version":%d,"agents":{"defaults":{"workspace":%q,`+
 		`"default_model":{"provider":"openrouter","model":"z-ai/glm-5.2"},"max_tokens":4096},"list":[]},`+
-		`"providers":[{"model_name":"openrouter","model":"openrouter/auto","provider":"openrouter"}]}`,
-		config.CurrentVersion, api.homePath)
+		`"providers":[{"model_name":"openrouter","model":"openrouter/auto","provider":"openrouter","updated_at":%q}]}`,
+		config.CurrentVersion, api.homePath, updatedAt.Format(time.RFC3339))
 	require.NoError(t, os.WriteFile(api.configPath(), []byte(diskCfg), 0o600))
 	// Mirror into the live config for reads that happen before the first write.
 	cfg := api.agentLoop.GetConfig()
 	cfg.Providers = append(cfg.Providers, &config.ModelConfig{
-		ModelName: "openrouter", Provider: "openrouter", Model: "openrouter/auto",
+		Name: "openrouter", Provider: "openrouter", Model: "openrouter/auto", UpdatedAt: &updatedAt,
 	})
 	cfg.Agents.Defaults.DefaultModel = config.DefaultModel{
 		Provider: "openrouter", Model: "z-ai/glm-5.2",

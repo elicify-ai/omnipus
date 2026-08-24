@@ -229,22 +229,25 @@ func TestModelConfig_Validate(t *testing.T) {
 		{
 			name: "valid config",
 			config: ModelConfig{
-				ModelName: "test",
-				Model:     "openai/gpt-4o",
+				Provider: "openai",
+				Model:    "gpt-4o",
 			},
 			wantErr: false,
 		},
 		{
-			name: "missing model_name",
+			// ADR-067 FR-034: a row is the PAIR, so a row with no provider
+			// half is unroutable — Validate rejects it where `model_name`
+			// used to be the required field.
+			name: "missing provider",
 			config: ModelConfig{
-				Model: "openai/gpt-4o",
+				Model: "gpt-4o",
 			},
 			wantErr: true,
 		},
 		{
 			name: "missing model",
 			config: ModelConfig{
-				ModelName: "test",
+				Provider: "openai",
 			},
 			wantErr: true,
 		},
@@ -276,8 +279,8 @@ func TestConfig_ValidateProviders(t *testing.T) {
 			name: "valid list",
 			config: &Config{
 				Providers: []*ModelConfig{
-					{ModelName: "test1", Model: "openai/gpt-4o"},
-					{ModelName: "test2", Model: "anthropic/claude"},
+					{Provider: "openai", Model: "gpt-4o"},
+					{Provider: "anthropic", Model: "claude-sonnet-4-5"},
 				},
 			},
 			wantErr: false,
@@ -286,12 +289,12 @@ func TestConfig_ValidateProviders(t *testing.T) {
 			name: "invalid entry",
 			config: &Config{
 				Providers: []*ModelConfig{
-					{ModelName: "test1", Model: "openai/gpt-4o"},
-					{ModelName: "", Model: "anthropic/claude"}, // missing model_name
+					{Provider: "openai", Model: "gpt-4o"},
+					{Provider: "", Model: "claude-sonnet-4-5"}, // missing provider half
 				},
 			},
 			wantErr: true,
-			errMsg:  "model_name is required",
+			errMsg:  "provider is required",
 		},
 		{
 			name: "empty list",

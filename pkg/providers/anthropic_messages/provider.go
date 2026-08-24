@@ -494,3 +494,12 @@ type usageInfo struct {
 	CacheCreationInputTokens int64 `json:"cache_creation_input_tokens"`
 	CacheReadInputTokens     int64 `json:"cache_read_input_tokens"`
 }
+
+// APIBase returns the normalised base URL this provider posts to (ADR-067
+// DS-3 asserts the URL the catalog row produced).
+func (p *Provider) APIBase() string {
+	if p == nil {
+		return ""
+	}
+	return p.apiBase
+}

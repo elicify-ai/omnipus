@@ -304,7 +304,7 @@ func TestConfigSet_ObjectWriteMergesWithoutFalseAlarm(t *testing.T) {
 			"write is an ordinary merge, not a failed write", result.ForLLM)
 	}
 	if cfg.Agents.Defaults.DefaultModel.Model != "glm-4.7" {
-		t.Fatalf("ModelName = %q, want glm-4.7", cfg.Agents.Defaults.DefaultModel.Model)
+		t.Fatalf("Name = %q, want glm-4.7", cfg.Agents.Defaults.DefaultModel.Model)
 	}
 	if cfg.Agents.Defaults.MaxTokens != 4242 || cfg.Agents.Defaults.DefaultModel.Provider != "openrouter" {
 		t.Fatalf("the merge dropped siblings: MaxTokens=%d Provider=%q",

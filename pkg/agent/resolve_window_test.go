@@ -510,7 +510,7 @@ func TestResolveContextWindow_ByLocality(t *testing.T) {
 	t.Run("DS-4 #12 custom row at a public host is cloud → floor (B-10b)", func(t *testing.T) {
 		installLiveWindowStub(t, nil)
 		cfg := windowTestConfig()
-		cfg.Providers = []*config.ModelConfig{{ModelName: "proxy-model", Model: "proxy-model", Provider: "my-proxy", APIBase: "https://llm.example.com/v1"}}
+		cfg.Providers = []*config.ModelConfig{{Name: "proxy-model", Model: "proxy-model", Provider: "my-proxy", APIBase: "https://llm.example.com/v1"}}
 		got := ResolveWindow(cfg, "my-proxy", "proxy-model", "mia")
 		assert.Equal(t, cloudWindowFloor, got.Window)
 		assert.Equal(t, WindowSourceFloor, got.Source)
@@ -520,7 +520,7 @@ func TestResolveContextWindow_ByLocality(t *testing.T) {
 	t.Run("DS-4 #13 custom row at 127.0.0.1 is local → refused (B-09)", func(t *testing.T) {
 		installLiveWindowStub(t, nil)
 		cfg := windowTestConfig()
-		cfg.Providers = []*config.ModelConfig{{ModelName: "proxy-model", Model: "proxy-model", Provider: "my-proxy", APIBase: "http://127.0.0.1:8080/v1"}}
+		cfg.Providers = []*config.ModelConfig{{Name: "proxy-model", Model: "proxy-model", Provider: "my-proxy", APIBase: "http://127.0.0.1:8080/v1"}}
 		got := ResolveWindow(cfg, "my-proxy", "proxy-model", "mia")
 		assert.True(t, got.Unknown)
 		assert.Equal(t, 0, got.Window)
@@ -535,7 +535,7 @@ func TestResolveContextWindow_ByLocality(t *testing.T) {
 			return 0, false
 		})
 		cfg := windowTestConfig()
-		cfg.Providers = []*config.ModelConfig{{ModelName: "proxy-model", Model: "proxy-model", Provider: "my-proxy", APIBase: "http://127.0.0.1:8080/v1"}}
+		cfg.Providers = []*config.ModelConfig{{Name: "proxy-model", Model: "proxy-model", Provider: "my-proxy", APIBase: "http://127.0.0.1:8080/v1"}}
 		got := ResolveWindow(cfg, "my-proxy", "proxy-model", "mia")
 		assert.Equal(t, 4096, got.Window)
 		assert.Equal(t, WindowSourceLive, got.Source)
@@ -595,7 +595,7 @@ func TestNewAgentInstance_MaxTokensClampedWhenBudgetNonPositive(t *testing.T) {
 				},
 				List: []config.AgentConfig{{ID: "mia", Home: home}},
 			},
-			Providers: []*config.ModelConfig{{ModelName: "llama3:8b", Model: "ollama/llama3:8b", Provider: "ollama", APIBase: "http://localhost:11434/v1"}},
+			Providers: []*config.ModelConfig{{Name: "llama3:8b", Model: "ollama/llama3:8b", Provider: "ollama", APIBase: "http://localhost:11434/v1"}},
 		}
 		cfg.Context = config.DefaultContextSettings()
 		return cfg

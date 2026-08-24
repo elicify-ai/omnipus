@@ -1,6 +1,7 @@
 package providers
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -21,19 +22,22 @@ func removedIDFragments() []string {
 
 // TestCreateProviderFromConfig_RemovedIDsAreUnknown — ADR-068 FR-002 / spec
 // TDD row 4: the deleted ids fail on the generic unknown-provider path, with
-// no hint naming a replacement. Tightened to
-// errors.Is(err, catalog.ErrUnknownProvider) once T067-08 lands that sentinel.
+// no hint naming a replacement. Since T067-08 the failure is the typed
+// providers.ErrUnknownProvider sentinel.
 func TestCreateProviderFromConfig_RemovedIDsAreUnknown(t *testing.T) {
 	for _, id := range removedIDFragments() {
 		t.Run(id, func(t *testing.T) {
 			cfg := &config.ModelConfig{
-				ModelName: "removed",
-				Model:     id + "/some-model",
-				Home:      t.TempDir(),
+				Provider: id,
+				Model:    "some-model",
+				Home:     t.TempDir(),
 			}
 			provider, _, err := CreateProviderFromConfig(cfg)
 			if err == nil {
 				t.Fatalf("CreateProviderFromConfig(%q) error = nil, want unknown-provider error", id)
+			}
+			if !errors.Is(err, ErrUnknownProvider) {
+				t.Fatalf("CreateProviderFromConfig(%q) error = %v, want ErrUnknownProvider", id, err)
 			}
 			if provider != nil {
 				t.Fatalf("CreateProviderFromConfig(%q) returned %T, want nil", id, provider)
@@ -52,9 +56,9 @@ func TestCreateProviderFromConfig_RemovedIDsAreUnknown(t *testing.T) {
 // the kept id `codex-cli` still dispatches to NewCodexCliProvider.
 func TestCreateProviderFromConfig_CodexCLI_StillDispatches(t *testing.T) {
 	cfg := &config.ModelConfig{
-		ModelName: "codex",
-		Model:     "codex-cli/codex",
-		Home:      t.TempDir(),
+		Provider: "codex-cli",
+		Model:    "gpt-5.4-codex",
+		Home:     t.TempDir(),
 	}
 	provider, modelID, err := CreateProviderFromConfig(cfg)
 	if err != nil {
@@ -63,8 +67,8 @@ func TestCreateProviderFromConfig_CodexCLI_StillDispatches(t *testing.T) {
 	if _, ok := provider.(*CodexCliProvider); !ok {
 		t.Fatalf("provider = %T, want *CodexCliProvider", provider)
 	}
-	if modelID != "codex" {
-		t.Errorf("modelID = %q, want %q", modelID, "codex")
+	if modelID != "gpt-5.4-codex" {
+		t.Errorf("modelID = %q, want %q", modelID, "gpt-5.4-codex")
 	}
 }
 
@@ -81,16 +85,16 @@ func TestCreateProviderFromConfig_NoStoreOAuthLadder(t *testing.T) {
 		return nil, nil
 	}
 
-	for _, tc := range []struct{ protocol, method string }{
+	for _, tc := range []struct{ provider, method string }{
 		{"openai", "oauth"},
 		{"openai", "token"},
 		{"anthropic", "oauth"},
 		{"anthropic", "token"},
 	} {
-		t.Run(tc.protocol+"/"+tc.method, func(t *testing.T) {
+		t.Run(tc.provider+"/"+tc.method, func(t *testing.T) {
 			cfg := &config.ModelConfig{
-				ModelName:  "m",
-				Model:      tc.protocol + "/some-model",
+				Provider:   tc.provider,
+				Model:      "some-model",
 				AuthMethod: tc.method,
 			}
 			provider, _, err := CreateProviderFromConfig(cfg)
