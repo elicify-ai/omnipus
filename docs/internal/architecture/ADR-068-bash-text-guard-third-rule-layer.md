@@ -358,7 +358,7 @@ command TEXT must judge the path the shell will actually open, not the substring
 its own regex happened to capture. Where it cannot know that path, it must
 refuse — never fall through to judging a fragment.
 
-### 9.4 Still open — the carve-out set omits session transcripts
+### 9.4 Decided (accepted) — the carve-out set omits session transcripts
 
 Round 3 also measured `cat <home>/sessions/<id>/<date>.jsonl` as **allowed** by
 its plain literal absolute path — no expansion trick needed.
@@ -372,9 +372,25 @@ is the "deny that reads as correct and protects nothing" shape
 `SecretEntriesAlways`'s own doc comment warns about.
 
 This is an **ADR-063 scope decision about the carve-out set**, not a bug in this
-guard, so it is recorded here rather than changed unilaterally — but the ADR-068
-read exemption is what makes it reachable from `bash` for the first time, so it
-should be decided before this ships broadly.
+guard, so it was escalated rather than changed here.
+
+**Ruled 2026-08-24: accepted as-is.** Agents on the same install may read each
+other's session transcripts; the founder does not treat that as a breach. The
+read exemption therefore ships with `sessions/` (and `memory/`, `tasks/`,
+`logs/`, `uploads/`, `media/`) outside the carve-out set.
+
+Nothing about the finding changed — only its severity. It was always true; it
+was merely unreachable from `bash` while every outside-WorkDir path was blocked.
+Recording it so a future reader does not mistake the omission for an oversight
+nobody had noticed.
+
+Filed as [#646](https://github.com/elicify-ai/omnipus/issues/646) (P3) to
+revisit. The revisit's real question is not "add `sessions/`?" but **which way to
+align**: protect the transcript too, or drop the per-turn `agents`/`workspaces`
+protection as the odd one out and let the secret set mean *credentials* rather
+than *privacy between agents*. Either is coherent. Only the current mix —
+guarding the persona file while the record of what that agent actually did stays
+open — is hard to defend on its own terms.
 
 ### 9.5 §1 restated, precisely
 
