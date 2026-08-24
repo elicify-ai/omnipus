@@ -9374,7 +9374,11 @@ turnLoop:
 					}
 				}
 
-				if compression, ok := al.windowTrim(ts.agent, ts.sessionKey); ok {
+				// force: the PROVIDER rejected this request with a context
+				// error, so our own estimate said it fit and was wrong.
+				// Honouring the "already fits" guard here would make the
+				// retry byte-identical to the call that just failed.
+				if compression, ok := al.windowTrimForce(ts.agent, ts.sessionKey, true); ok {
 					al.emitEvent(
 						EventKindContextCompress,
 						ts.eventMeta("runTurn", "turn.context.compress"),
@@ -11710,6 +11714,26 @@ var skipAdvanceTotal atomic.Int64
 // The tool-surface term is what the turn ACTUALLY SENDS, not the whole
 // registry — see sentToolSurfaceTokens.
 func (al *AgentLoop) windowTrim(agent *AgentInstance, sessionKey string) (compressionResult, bool) {
+	return al.windowTrimForce(agent, sessionKey, false)
+}
+
+// windowTrimForce is windowTrim with the "the window already fits, do
+// nothing" guard optionally disabled.
+//
+// force=false (windowTrim, every proactive caller): a caller that measured
+// the budget itself and decided to trim can be WRONG — the pre-turn check
+// historically charged the whole tool registry while this function charges
+// only the sent surface — and without the guard a mis-fired call silently
+// evicted the oldest turn every turn.
+//
+// force=true: the PROVIDER rejected the request with its own context error.
+// Our estimate said it fit and the provider says otherwise, so the estimate
+// is what is wrong; refusing to trim here would leave the retry identical to
+// the call that just failed. This is the documented reactive fallback for
+// "the estimate undershoots reality".
+func (al *AgentLoop) windowTrimForce(
+	agent *AgentInstance, sessionKey string, force bool,
+) (compressionResult, bool) {
 	if agent.budgetChecksExempt() {
 		// FR-005: an exempt provider manages its own context; there is no
 		// budget to fit against, so there is nothing to trim.
@@ -11777,7 +11801,10 @@ func (al *AgentLoop) windowTrim(agent *AgentInstance, sessionKey string) (compre
 	// still reach the boundary walk below, take the first non-zero boundary
 	// whose suffix fits, and evict the oldest turn — every turn, silently,
 	// on a conversation that never came close to the budget.
-	if currentWindowTokens+toolDefsTokens+recallSpanTokens <= budget {
+	//
+	// Skipped under force: there the provider itself rejected the request, so
+	// it is our estimate that is wrong, not the window.
+	if !force && currentWindowTokens+toolDefsTokens+recallSpanTokens <= budget {
 		return compressionResult{NothingToTrim: true, RemainingMessages: len(window)}, false
 	}
 

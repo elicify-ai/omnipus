@@ -560,12 +560,16 @@ func TestResolveContextWindow_ByLocality(t *testing.T) {
 		runTurn := src[strings.Index(src, "func (al *AgentLoop) runTurn("):]
 		wsGate := strings.Index(runTurn, "resolveTurnWorkDirOrRefuse(turnCtx")
 		windowGate := strings.Index(runTurn, "ErrContextWindowUnknown")
-		budget := strings.Index(runTurn, "isOverContextBudget(")
+		// Either form of the predicate: the pre-turn site uses the
+		// measured-token overload (isOverContextBudgetTokens) so it charges
+		// the SENT tool surface, the one windowTrim measures.
+		budget := regexp.MustCompile(`isOverContextBudget(?:Tokens)?\(`).FindStringIndex(runTurn)
+		require.NotNil(t, budget, "runTurn must carry a pre-turn budget check")
 		require.Positive(t, wsGate)
 		require.Positive(t, windowGate, "runTurn must refuse an unknown window with ErrContextWindowUnknown")
-		require.Positive(t, budget)
+		require.Positive(t, budget[0])
 		assert.Greater(t, windowGate, wsGate, "context_window_unknown is evaluated after the earlier pre-turn refusals")
-		assert.Less(t, windowGate, budget, "the refusal must fire before any budget check reads the window")
+		assert.Less(t, windowGate, budget[0], "the refusal must fire before any budget check reads the window")
 	})
 }
 
@@ -677,7 +681,11 @@ func TestWindowAgreement_OneBudgetAllSites(t *testing.T) {
 
 	t.Run("every budget site reads the one resolved window through agentContextBudget", func(t *testing.T) {
 		src := readOwnedFileForTest(t, "loop.go")
-		calls := regexp.MustCompile(`isOverContextBudget\(\s*([^,]+),`).FindAllStringSubmatch(src, -1)
+		// Both forms count: isOverContextBudget (tool-defs) and
+		// isOverContextBudgetTokens (a caller that already measured its SENT
+		// tool surface — the pre-turn and timeout-recovery sites, so they
+		// charge exactly what windowTrim charges).
+		calls := regexp.MustCompile(`isOverContextBudget(?:Tokens)?\(\s*([^,]+),`).FindAllStringSubmatch(src, -1)
 		require.GreaterOrEqual(t, len(calls), 2, "pre-turn and timeout-recovery sites")
 		for _, c := range calls {
 			assert.Equal(t, "agentContextBudget(ts.agent)", strings.TrimSpace(c[1]))
