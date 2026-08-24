@@ -94,6 +94,22 @@ upper="$(printf '%s' "$ID_A" | tr '[:lower:]' '[:upper:]')"
 printf 'nothing here\n' > "$TMP/tree/docs/${upper}_USAGE.md"
 expect "file NAME carrying $ID_A" 1
 
+# pkg/gateway/spa/ is the gitignored go:embed staging copy of the Vite build,
+# not source. A minified third-party bundle there is not a trace and must not
+# fail the guard — this went unnoticed until the guard ran on a checkout that
+# had actually built the SPA (a fresh GitHub checkout has no such directory).
+fresh_tree
+mkdir -p "$TMP/tree/pkg/gateway/spa/assets"
+printf 'var x="%s";var y="%s";\n' "$ID_A" "$ID_B" > "$TMP/tree/pkg/gateway/spa/assets/app-abc123.js"
+expect "build output under pkg/gateway/spa/ is not source" 0
+
+# …and the exclusion is that directory ONLY: the same bytes one level up are
+# still a trace, so the skip cannot be widened by accident.
+fresh_tree
+mkdir -p "$TMP/tree/pkg/gateway"
+printf 'var x="%s";\n' "$ID_A" > "$TMP/tree/pkg/gateway/notspa.js"
+expect "the same bytes outside pkg/gateway/spa/ still fail" 1
+
 if [ "$FAIL" -ne 0 ]; then
   echo "selfcheck: check-no-removed-providers.sh does not behave — see above" >&2
   exit 1

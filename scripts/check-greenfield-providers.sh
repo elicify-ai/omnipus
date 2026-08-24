@@ -234,9 +234,15 @@ run_scan() { # run_scan <repo_root>  -> 0 clean, 1 offenders, 2 cannot run
   fi
 
   # ── SC-008b: the prefix-stripping resolver is gone, repo-wide under pkg/ ──
+  #
+  # pkg/gateway/spa/ is excluded: it is the gitignored go:embed staging copy of
+  # the Vite build, not source. A fresh GitHub checkout has no such directory,
+  # so a guard that scans it is green on CI and red on any machine that has run
+  # `make build` — a verdict that depends on local build state is not a verdict.
   local strip_hits rc
   strip_hits="$(grep -rInI -e "$SYM_STRIP" -- pkg 2>/dev/null)"
   rc=$?
+  strip_hits="$(printf '%s' "$strip_hits" | grep -v '^pkg/gateway/spa/' || true)"
   if [ "$rc" -gt 1 ]; then
     echo "$NAME: grep failed (exit $rc) while scanning for the prefix resolver" >&2
     return 2
@@ -364,6 +370,11 @@ GO
   printf 'package providers\n\nfunc %s(s string) string { return s }\n' \
     "$SYM_STRIP" > "$tmp/case/pkg/providers/strip.go"
   expect "SC-008: prefix resolver back" 1
+
+  fixture
+  mkdir -p "$tmp/case/pkg/gateway/spa/assets"
+  printf 'function %s(s){return s}\n' "$SYM_STRIP" > "$tmp/case/pkg/gateway/spa/assets/app-abc123.js"
+  expect "SC-008: build output under pkg/gateway/spa/ is not source" 0
 
   fixture
   cat > "$tmp/case/pkg/config/aliases.go" <<'GO'
