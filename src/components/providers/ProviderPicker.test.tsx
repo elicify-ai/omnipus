@@ -420,3 +420,75 @@ describe('ProviderPicker — catalog unavailable (FR-037)', () => {
     expect(screen.queryAllByTestId(/^picker-row-/)).toHaveLength(0)
   })
 })
+
+// ── T068-21: the second-level panel the picker opens (FR-027, FR-028) ───────
+// The panel's own behaviour is ProviderDetailPanel.test.tsx; what belongs here
+// is the wiring — that choosing a company opens it, that the locale reaches it,
+// and that a caller which does not ask for a panel still gets none.
+describe('ProviderPicker — second-level panel (FR-027/FR-028)', () => {
+  async function openZhipuPanel(locale: string | null) {
+    const onProviderConfirm = vi.fn()
+    const utils = renderPicker({ onProviderConfirm, locale })
+    const user = userEvent.setup()
+    await user.type(screen.getByTestId('picker-search'), 'zhipu')
+    fireEvent.click(screen.getByTestId('picker-row-Zhipu AI'))
+    return { ...utils, onProviderConfirm, user }
+  }
+
+  it('does not mount a panel when the caller asks for no second level', () => {
+    const { onSelect } = renderPicker()
+    fireEvent.click(screen.getByTestId('picker-popular-anthropic'))
+    expect(onSelect).toHaveBeenCalledTimes(1)
+    expect(screen.queryByTestId('provider-detail-panel')).not.toBeInTheDocument()
+  })
+
+  it('opens the panel on selection while still reporting the first-level choice', async () => {
+    const { onSelect } = await openZhipuPanel('de-DE')
+    expect(onSelect).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'row', provider: expect.objectContaining({ id: 'zai' }) }),
+    )
+    expect(screen.getByTestId('provider-detail-panel')).toBeInTheDocument()
+  })
+
+  // Scenario Outline "Region inferred from locale", driven end-to-end through
+  // the picker: the locale the picker is given is the one the panel infers from.
+  const regionRows: Array<{ locale: string | null; selected: string; copy: string }> = [
+    { locale: 'zh-CN', selected: 'china', copy: 'Detected: China — change' },
+    { locale: 'zh-SG', selected: 'china', copy: 'Detected: China — change' },
+    { locale: 'zh-TW', selected: 'intl', copy: 'Detected: International — change' },
+    { locale: 'zh-HK', selected: 'intl', copy: 'Detected: International — change' },
+    { locale: 'en-GB', selected: 'intl', copy: 'Detected: International — change' },
+    { locale: 'en-US', selected: 'intl', copy: 'Detected: International — change' },
+    { locale: 'de-DE', selected: 'intl', copy: 'Detected: International — change' },
+    { locale: '', selected: 'intl', copy: 'Region — change' },
+  ]
+
+  for (const row of regionRows) {
+    it(`pre-selects ${row.selected} in the panel for locale "${row.locale}"`, async () => {
+      await openZhipuPanel(row.locale)
+      const panel = screen.getByTestId('provider-detail-panel')
+      expect(within(panel).getByTestId('provider-detail-panel-region-' + row.selected)).toHaveAttribute(
+        'aria-pressed',
+        'true',
+      )
+      expect(within(panel).getByTestId('provider-detail-panel-region-copy')).toHaveTextContent(row.copy)
+    })
+  }
+
+  it('reports the resolved plan x region variant on Continue', async () => {
+    const { onProviderConfirm } = await openZhipuPanel('zh-CN')
+    fireEvent.click(screen.getByTestId('provider-detail-panel-continue'))
+    expect(onProviderConfirm).toHaveBeenCalledWith(
+      expect.objectContaining({ providerId: 'zhipuai', region: 'china', authMethod: 'api_key' }),
+    )
+    // Confirming closes the panel — the picker is back at its first level.
+    expect(screen.queryByTestId('provider-detail-panel')).not.toBeInTheDocument()
+  })
+
+  it('closes the panel on Cancel without confirming anything', async () => {
+    const { onProviderConfirm } = await openZhipuPanel('de-DE')
+    fireEvent.click(screen.getByTestId('provider-detail-panel-cancel'))
+    expect(screen.queryByTestId('provider-detail-panel')).not.toBeInTheDocument()
+    expect(onProviderConfirm).not.toHaveBeenCalled()
+  })
+})

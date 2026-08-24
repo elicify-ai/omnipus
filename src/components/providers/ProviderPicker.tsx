@@ -60,6 +60,7 @@ import {
   type PickerRowRef,
 } from './provider-picker-model'
 import { CustomEndpointPanel, type CustomEndpointDraft } from './CustomEndpointPanel'
+import { ProviderDetailPanel, type ProviderDetailSelection } from './ProviderDetailPanel'
 
 /** The picker's `performance.mark` name — SC-005 records first paint, never gates it. */
 export const PROVIDER_PICKER_OPEN_MARK = 'provider-picker-open'
@@ -117,6 +118,21 @@ export interface ProviderPickerProps {
   onRetry?: () => void
   /** Fired for every selection kind. */
   onSelect: (selection: PickerSelection) => void
+  /**
+   * FR-027/FR-028 — the second-level panel (T068-21). Supplying this opts the
+   * picker into opening `ProviderDetailPanel` when a company is chosen, and is
+   * fired with the panel's resolved plan x region x auth-method selection.
+   * `onSelect` still fires at the moment of choosing, unchanged; a caller that
+   * only wants the first-level selection simply omits this and no panel mounts.
+   */
+  onProviderConfirm?: (selection: ProviderDetailSelection) => void
+  /**
+   * Locale driving the panel's region default (FR-027). Defaults to
+   * `navigator.language` inside the panel.
+   */
+  locale?: string | null
+  /** T068-33 seam, forwarded to the panel's *Sign in* button. */
+  onSignIn?: (providerId: string) => void
   /** List viewport height in CSS px (the virtualiser's window). */
   viewportHeight?: number
   /** Row height in CSS px. */
@@ -147,6 +163,9 @@ export function ProviderPicker({
   status = 'ready',
   onRetry,
   onSelect,
+  onProviderConfirm,
+  locale,
+  onSignIn,
   viewportHeight = PICKER_VIEWPORT_HEIGHT,
   rowHeight = PICKER_ROW_HEIGHT,
   onVirtualScrollToIndex,
@@ -156,6 +175,7 @@ export function ProviderPicker({
   const [query, setQuery] = React.useState('')
   const [expandedByOperator, setExpandedByOperator] = React.useState(false)
   const [customOpen, setCustomOpen] = React.useState(false)
+  const [detailCompany, setDetailCompany] = React.useState<PickerCompanyRow | null>(null)
   const [activeIndex, setActiveIndex] = React.useState(-1)
 
   const inputRef = React.useRef<HTMLInputElement | null>(null)
@@ -278,8 +298,11 @@ export function ProviderPicker({
         company: row,
         provider: row.primary,
       })
+      // FR-027/FR-028: the second-level panel opens in place, only for a caller
+      // that asked for it (T068-21).
+      if (onProviderConfirm) setDetailCompany(row)
     },
-    [model, onSelect],
+    [model, onProviderConfirm, onSelect],
   )
 
   const handleKeyDownCapture = React.useCallback(
@@ -546,6 +569,20 @@ export function ProviderPicker({
           </div>
         </div>
       </Command>
+
+      {detailCompany && onProviderConfirm && (
+        <ProviderDetailPanel
+          key={detailCompany.company}
+          company={detailCompany}
+          locale={locale}
+          onSignIn={onSignIn}
+          onConfirm={(selection) => {
+            setDetailCompany(null)
+            onProviderConfirm(selection)
+          }}
+          onCancel={() => setDetailCompany(null)}
+        />
+      )}
 
       {customOpen && (
         <CustomEndpointPanel
