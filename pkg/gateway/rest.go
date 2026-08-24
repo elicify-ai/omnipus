@@ -5312,6 +5312,14 @@ func (a *restAPI) registerAdditionalEndpoints(cm httpHandlerRegistrar) {
 	// spend lever is Stop/cancel, not a live token cut — R§8.3e/FR-177).
 	cm.RegisterHTTPHandler("/api/v1/settings/token-budget", a.withAuth(a.HandleTokenBudgetSettings))
 
+	// Context-budget settings endpoint (ADR-066 D9, FR-036 / US-11): the D4
+	// per-surface caps, the D6 absolute trigger, the D10 ingest bound, the D2
+	// global default window and the per-(provider, model) overrides. Same
+	// posture as /settings/memory (withAuth, not RequireNotBypass) per the
+	// contract. This is the operator's only escape from the
+	// context_window_unknown turn refusal, which names it by hand.
+	cm.RegisterHTTPHandler("/api/v1/settings/context", a.withAuth(a.HandleContextSettings))
+
 	// Settings endpoints (Wave 4).
 	// GET /api/v1/audit-log — the audit log contains every privileged action,
 	// tool-use trace, and LLM request; gated behind authentication only under

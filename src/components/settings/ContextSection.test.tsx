@@ -2,7 +2,12 @@
 // Scenarios: B-44 (read defaults / partial write round-trip), B-14 (cap ceiling
 // rows surfaced as field errors), X-08 (pre-fill a new override row from
 // `?provider=&model=`). The endpoint is mocked at the api-client seam from the
-// generated zod schema until T066-17 lands the backend.
+// generated zod schema: these assertions cover the COMPONENT's behaviour only
+// and are not evidence that the endpoint exists. The backend contract
+// (registration on the real mux, the partial-update semantics, the 400 rules)
+// is covered by pkg/gateway/rest_context_settings_test.go — in particular
+// TestContextSettings_RouteIsRegisteredOnRealMux, which drives the production
+// registerAdditionalEndpoints mux and fails with 404 if the route disappears.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor, fireEvent, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'

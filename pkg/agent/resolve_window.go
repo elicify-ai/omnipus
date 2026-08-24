@@ -310,3 +310,13 @@ func clampMaxTokensForWindow(w, maxTokens int, model string) int {
 		})
 	return clamped
 }
+
+// WindowProviderKnown reports whether `provider` is a real provider as far as
+// the D2 ladder is concerned — present in the served catalog, or configured as
+// a custom row in cfg.Providers. It is the exact predicate ResolveWindow uses
+// to decide whether a ContextSettings.ModelOverrides[] entry is live or dead
+// (US-1.AC10), exported so the /settings/context write can prune the dead ones
+// instead of re-deriving the rule.
+func WindowProviderKnown(cfg *config.Config, provider string) bool {
+	return lookupWindowRow(cfg, strings.TrimSpace(provider)).known
+}
