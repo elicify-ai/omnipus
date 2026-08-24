@@ -196,9 +196,22 @@ func TestDefaultModel_PutResolvesAtTurnTime(t *testing.T) {
 	// Neither names a vault ref, so both are credential-usable custom rows
 	// (no served catalog is installed → the membership check is bypassed the
 	// same way a custom row bypasses it, X-13).
+	//
+	// `protocol` is REQUIRED for a custom row (ADR-067 FR-035, T067-09): with
+	// only half a definition the id is UNKNOWN, and an agent bound to it is
+	// degraded `needs_provider` and refuses the turn this test's oracle
+	// depends on. The pool entry the completed rows now produce is never
+	// consulted here — a single-candidate chain calls the agent's primary
+	// provider (the stub) directly.
 	rows := []*config.ModelConfig{
-		{Name: "before", Provider: "provider-a", Model: "model-before", APIBase: "https://a.example/v1"},
-		{Name: "after", Provider: "provider-b", Model: "model-after", APIBase: "https://b.example/v1"},
+		{
+			Name: "before", Provider: "provider-a", Model: "model-before",
+			APIBase: "https://a.example/v1", Protocol: "openai-compatible",
+		},
+		{
+			Name: "after", Provider: "provider-b", Model: "model-after",
+			APIBase: "https://b.example/v1", Protocol: "openai-compatible",
+		},
 	}
 	api, tmpDir, auditDir := newDefaultModelAPI(
 		t, config.DefaultModel{Provider: "provider-a", Model: "model-before"}, rows, rec)
@@ -321,7 +334,12 @@ func TestDefaultModel_PutValidation(t *testing.T) {
 	rows := []*config.ModelConfig{
 		{Name: "cloud", Provider: "cloudprov", Model: "model-in-catalog", APIBase: "https://api.cloudprov.example/v1"},
 		{Name: "local", Provider: "ollama", Model: "llama3", APIBase: "http://localhost:11434/v1"},
-		{Name: "custom", Provider: "my-proxy", Model: "user/slug", APIBase: "https://proxy.example/v1"},
+		{
+			// A custom row carries BOTH halves (ADR-067 FR-035) — with only
+			// an api_base the id would be unknown, not custom.
+			Name: "custom", Provider: "my-proxy", Model: "user/slug",
+			APIBase: "https://proxy.example/v1", Protocol: "openai-compatible",
+		},
 	}
 	api, _, _ := newDefaultModelAPI(
 		t, config.DefaultModel{}, rows, &restMockProvider{})

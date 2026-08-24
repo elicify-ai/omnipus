@@ -426,12 +426,14 @@ func TestRoutingSessionID_ConsumerSetIsClosed(t *testing.T) {
 	if got := counts[u19BucketPreArm]; got != 3 {
 		t.Errorf("pre-arm key reads = %d, want 3 (FR-016's three direct sites: cancel_prearm.go x2, subturn.go x1)", got)
 	}
-	if got := counts[u19BucketWSStamping]; got != 17 {
-		t.Errorf("WS-payload-stamping reads = %d, want 17 (loop.go x15, subturn.go x2: SubTurnSpawnPayload + "+
+	if got := counts[u19BucketWSStamping]; got != 18 {
+		t.Errorf("WS-payload-stamping reads = %d, want 18 (loop.go x16, subturn.go x2: SubTurnSpawnPayload + "+
 			"SubTurnEndPayload). loop.go grew from 2 to 13 in the 2026-08 UAT remediation, then to 14 when "+
 			"ADR-066 D7 (T066-11) added typedTurnExit's ErrorPayload stamp for the typed turn exits, then to 15 "+
 			"when ADR-066 D3 (T066-09) added runTurn's context_window_unknown pre-turn refusal (the same "+
-			"ErrorPayload shape as the workspace refusal right above it): every live "+
+			"ErrorPayload shape as the workspace refusal right above it), then to 16 when ADR-067 FR-016 "+
+			"(T067-09) added runTurn's needs_provider pre-turn refusal — the FIRST of the three pre-turn "+
+			"gates, emitting that same ErrorPayload shape: every live "+
 			"ErrorPayload and RateLimitPayload emit site now stamps SessionID with routingSessionID, "+
 			"because ServeHTTP mints a fresh webchat: uuid per connection — an error carrying only the "+
 			"ChatID was dropped by matchesEvent for a second tab or a reload, which is how a provider 429 "+
@@ -444,11 +446,12 @@ func TestRoutingSessionID_ConsumerSetIsClosed(t *testing.T) {
 			"childTS.routingSessionID = parentTS.routingSessionID assignment)", got)
 	}
 
-	// 9 role-B + 3 pre-arm + 17 WS-stamping + 1 inheritance. Was 17 before the
+	// 9 role-B + 3 pre-arm + 18 WS-stamping + 1 inheritance. Was 17 before the
 	// 2026-08 UAT remediation widened the WS-stamping bucket (see above), 28
 	// before ADR-066 D7's typedTurnExit stamp, 29 before ADR-066 D3's
-	// context_window_unknown refusal stamp (T066-09).
-	const wantTotal = 30
+	// context_window_unknown refusal stamp (T066-09), and 30 before ADR-067
+	// FR-016's needs_provider refusal stamp (T067-09).
+	const wantTotal = 31
 	if len(all) != wantTotal {
 		t.Fatalf("total routingSessionID reads = %d, want exactly %d (the closed consumer set) — "+
 			"either a new read was added outside the four named buckets, or one of the buckets "+
