@@ -243,9 +243,37 @@ func TestHandleLogout_ClearsBothCookies(t *testing.T) {
 }
 
 // TestHandleLogout_ClearsSessionTokenHashOnDisk verifies the disk-level revocation.
+// BDD: Given a user who logged in for real (session_token_hash is non-empty
+// on disk — the precondition proving login actually wrote something),
+// When that user POSTs /auth/logout,
+// Then session_token_hash is present on disk as an empty string (not merely
+// absent — a missing key must not be mistaken for a cleared one).
+//
+// qa-lead note: the earlier version of this test skipped login entirely (it
+// injected the user context directly) and read against a fixture that never
+// seeded session_token_hash at all. A failed map type-assertion on an absent
+// key silently yields "", so the old assert.Empty passed before HandleLogout
+// ever ran — deleting the production clear line did not turn this test red.
 // Traces to: path-sandbox-and-capability-tiers-spec.md
 func TestHandleLogout_ClearsSessionTokenHashOnDisk(t *testing.T) {
 	api, tmpDir := newTestRestAPIWithUser(t, "disklogout", "DiskLogoutPass1")
+
+	// Log in for real so a session_token_hash is actually written to disk.
+	loginBody := `{"username":"disklogout","password":"DiskLogoutPass1"}`
+	loginReq := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(loginBody))
+	loginReq.Header.Set("Content-Type", "application/json")
+	loginW := httptest.NewRecorder()
+	api.HandleLogin(loginW, loginReq)
+	require.Equal(t, http.StatusOK, loginW.Code, "login must succeed: %s", loginW.Body.String())
+
+	// Precondition: session_token_hash must be non-empty on disk after login.
+	// Without this check, a broken login that never writes the hash would
+	// still let the post-logout assertion pass vacuously.
+	usersBefore := loadDiskUsers(t, tmpDir)
+	require.NotEmpty(t, usersBefore)
+	sessionHashBefore, _ := usersBefore[0]["session_token_hash"].(string)
+	require.NotEmpty(t, sessionHashBefore,
+		"precondition: session_token_hash must be non-empty on disk after login")
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/logout", nil)
 	req = injectUser(req, "disklogout")
@@ -255,14 +283,66 @@ func TestHandleLogout_ClearsSessionTokenHashOnDisk(t *testing.T) {
 
 	require.Equal(t, http.StatusNoContent, w.Code)
 
-	users := loadDiskUsers(t, tmpDir)
-	require.NotEmpty(t, users)
-	// session_token_hash must be empty (or absent via omitempty).
-	sessionHash, _ := users[0]["session_token_hash"].(string)
-	assert.Empty(t, sessionHash,
+	usersAfter := loadDiskUsers(t, tmpDir)
+	require.NotEmpty(t, usersAfter)
+	// Assert the key is PRESENT with an empty value, not merely absent — a
+	// failed type assertion on a missing key also yields "", which would let
+	// this pass even if HandleLogout stopped writing the field entirely.
+	sessionHashValue, keyPresent := usersAfter[0]["session_token_hash"]
+	require.True(t, keyPresent,
+		"session_token_hash key must still be present (as empty string) after logout, not simply absent")
+	sessionHashAfter, isString := sessionHashValue.(string)
+	require.True(t, isString, "session_token_hash must be a string")
+	assert.Empty(t, sessionHashAfter,
 		"session_token_hash must be cleared on disk after logout (MAJ-004)")
+}
 
-	tokenHash, _ := users[0]["token_hash"].(string)
-	assert.Empty(t, tokenHash,
-		"token_hash must be cleared on disk after logout (FR-103)")
+// TestRevokeUserToken_ClearsLegacyTokenHashWhenPresentedTokenVerifies covers
+// revokeUserToken's legacy single-token_hash branch directly. This branch had
+// ZERO test coverage anywhere in the suite before this test: grep confirmed no
+// test file referenced revokeUserToken at all. Mutation-proven — deleting the
+// legacy-clear block entirely left TestHandleLogout*/TestHandleLogin*/
+// TestHandleChangePassword* all green (0 --- FAIL), because none of them ever
+// populates a legacy token_hash in the first place; HandleLogin only ever
+// writes to the tokens[] set (SEC-1/UAT #399).
+func TestRevokeUserToken_ClearsLegacyTokenHashWhenPresentedTokenVerifies(t *testing.T) {
+	const rawToken = "legacy-raw-token-abc123"
+	hashBytes, err := bcrypt.GenerateFromPassword([]byte(rawToken), bcrypt.DefaultCost)
+	require.NoError(t, err, "test setup: bcrypt hash of the legacy raw token")
+
+	userMap := map[string]any{
+		"token_hash": string(hashBytes),
+	}
+
+	revokeUserToken(userMap, rawToken, "")
+
+	got, ok := userMap["token_hash"].(string)
+	require.True(t, ok, "token_hash key must remain present (cleared to empty, not deleted)")
+	assert.Empty(t, got,
+		"revokeUserToken must clear the legacy token_hash when the presented raw token "+
+			"verifies against it — this is the branch rest_auth.go:807-810 implements and it had "+
+			"no test anywhere in the suite before this one")
+}
+
+// TestRevokeUserToken_LeavesLegacyTokenHashWhenPresentedTokenDoesNotVerify is
+// the negative control for the test above — proves the clear is conditional
+// on verification, not unconditional. Without this, a mutant that always
+// clears token_hash regardless of the presented token would pass the
+// positive test above.
+func TestRevokeUserToken_LeavesLegacyTokenHashWhenPresentedTokenDoesNotVerify(t *testing.T) {
+	const rawToken = "legacy-raw-token-abc123"
+	hashBytes, err := bcrypt.GenerateFromPassword([]byte(rawToken), bcrypt.DefaultCost)
+	require.NoError(t, err, "test setup: bcrypt hash of the legacy raw token")
+
+	userMap := map[string]any{
+		"token_hash": string(hashBytes),
+	}
+
+	revokeUserToken(userMap, "a-completely-different-wrong-token", "")
+
+	got, ok := userMap["token_hash"].(string)
+	require.True(t, ok)
+	assert.Equal(t, string(hashBytes), got,
+		"revokeUserToken must NOT clear token_hash when the presented token does not verify "+
+			"against it — the clear is conditional, not unconditional")
 }

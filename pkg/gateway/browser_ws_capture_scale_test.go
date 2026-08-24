@@ -34,6 +34,10 @@ package gateway
 import (
 	"encoding/json"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -45,6 +49,39 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/tools/browser"
 )
+
+// browserViewportContractScaleRegexp matches the device_scale_factor
+// property block in contracts/components/schemas/BrowserViewportFrame.yaml
+// and captures its declared minimum/maximum. Anchored on the exact
+// "type: number" line so it cannot accidentally match a different numeric
+// property that happens to be named similarly.
+var browserViewportContractScaleRegexp = regexp.MustCompile(
+	`(?m)^  device_scale_factor:\n    type: number\n    minimum: (\d+(?:\.\d+)?)\n    maximum: (\d+(?:\.\d+)?)`,
+)
+
+// browserViewportContractScaleRange reads device_scale_factor's declared
+// [minimum, maximum] straight out of the wire contract (Constraint #8's
+// single source of truth) rather than from any Go constant, so tests using
+// it cannot be made to pass by moving the Go-side constant they are meant to
+// police. See this file's oracle-independence note on the F10 tests below:
+// the original defect was exactly the opposite of this — the expected value
+// WAS the constant under test.
+func browserViewportContractScaleRange(t *testing.T) (min, max float64) {
+	t.Helper()
+	path := filepath.Join("..", "..", "contracts", "components", "schemas", "BrowserViewportFrame.yaml")
+	raw, err := os.ReadFile(path) // gosec rationale (out of gosec scope; kept as documentation): fixed, repo-relative contract path
+	require.NoError(t, err, "the contract must be readable — it is the authority on this range")
+
+	m := browserViewportContractScaleRegexp.FindSubmatch(raw)
+	require.NotNil(t, m,
+		"BrowserViewportFrame.device_scale_factor must still declare minimum/maximum for this test to mean anything")
+
+	minVal, err := strconv.ParseFloat(string(m[1]), 64)
+	require.NoError(t, err)
+	maxVal, err := strconv.ParseFloat(string(m[2]), 64)
+	require.NoError(t, err)
+	return minVal, maxVal
+}
 
 // f64ptr is a tiny helper so test literals can address a float64 constant
 // inline, matching generated.BrowserViewportFrame.DeviceScaleFactor's
@@ -59,12 +96,22 @@ func f64ptr(v float64) *float64 { return &v }
 
 // TestBrowserWS_HandleViewport_ClampsOutOfRangeScale_BeforeRecording proves a
 // malformed/hostile device_scale_factor (50, far outside the contract's
-// [1,3] range) never reaches CaptureSession.SetCaptureScale unclamped. Before
-// the F10 fix, dsf flowed straight from the wire frame into
+// declared range) never reaches CaptureSession.SetCaptureScale unclamped.
+// Before the F10 fix, dsf flowed straight from the wire frame into
 // att.capture.SetCaptureScale(dsf) with no bound at all — CaptureScale()
 // only floors values below 1, it never caps the top — so this test's
-// assertion (CaptureScale() <= maxDeviceScaleFactor) fails against the
-// pre-fix code, which would have recorded 50 verbatim.
+// assertion (CaptureScale() <= contract max) fails against the pre-fix code,
+// which would have recorded 50 verbatim.
+//
+// Oracle independence: the expected ceiling is read from
+// contracts/components/schemas/BrowserViewportFrame.yaml via
+// browserViewportContractScaleRange, NOT from the Go constant
+// maxDeviceScaleFactor. An earlier version of this test asserted
+// `CaptureScale() == maxDeviceScaleFactor` — the constant under test WAS the
+// oracle, so bumping maxDeviceScaleFactor from 3.0 to 50.0 moved the
+// goalposts with it and every assertion here stayed green. Proven by direct
+// experiment: with that change applied, this test (as rewritten) still
+// fails, because 50 no longer equals the contract-derived ceiling of 3.
 //
 // No live Chrome/CDP is needed: state.mgr.Live() has no live view registered
 // for the session (no browser_attach happened), so
@@ -74,6 +121,8 @@ func f64ptr(v float64) *float64 { return &v }
 // record-before-resize step this test is targeting, so it does not
 // interfere with the assertion.
 func TestBrowserWS_HandleViewport_ClampsOutOfRangeScale_BeforeRecording(t *testing.T) {
+	_, contractMax := browserViewportContractScaleRange(t)
+
 	handler, al := newBrowserWSTestHandler(t, func(cfg *config.Config) {
 		cfg.Tools.Browser.WebRTCEnabled = true
 	})
@@ -108,26 +157,32 @@ func TestBrowserWS_HandleViewport_ClampsOutOfRangeScale_BeforeRecording(t *testi
 
 	handler.handleViewport(wc, state, viewerID, data)
 
-	require.LessOrEqual(t, cs.CaptureScale(), maxDeviceScaleFactor,
+	require.LessOrEqual(t, cs.CaptureScale(), contractMax,
 		"an out-of-contract device_scale_factor must be clamped before it ever reaches SetCaptureScale")
-	require.Equal(t, maxDeviceScaleFactor, cs.CaptureScale(),
-		"50 clamped to the contract ceiling must land exactly on maxDeviceScaleFactor, not merely 'somewhere below it'")
+	require.Equal(t, contractMax, cs.CaptureScale(),
+		"50 clamped must land exactly on the contract's declared maximum, not merely 'somewhere below it'")
 
 	// F2's remember-path must observe the SAME clamped value, not the raw
 	// wire value — otherwise a cold-start commit (applyColdStartRecapture)
 	// could re-introduce the very out-of-range value this test just proved
 	// gets clamped on the direct path.
-	require.Equal(t, maxDeviceScaleFactor, state.pendingViewportScale(),
+	require.Equal(t, contractMax, state.pendingViewportScale(),
 		"pendingCaptureScale must also carry the clamped value, not the raw out-of-range one")
 }
 
 // TestBrowserWS_HandleViewport_ClampsSubOneScale_BeforeRecording covers the
-// low end of the same F10 fix: a device_scale_factor below 1 (e.g. a buggy
-// client sending 0.1) must floor to 1, matching the contract's minimum and
-// CaptureScale()'s own floor — asserted here at the RECORDING boundary
-// itself, before CaptureScale()'s independent floor could paper over a bug
-// in the new clamp.
+// low end of the same F10 fix: a device_scale_factor below the contract's
+// declared minimum (e.g. a buggy client sending 0.1) must floor to that
+// minimum — asserted here at the RECORDING boundary itself, before
+// CaptureScale()'s own independent floor could paper over a bug in the new
+// clamp.
+//
+// Oracle independence: the floor is read from the contract
+// (browserViewportContractScaleRange), not hardcoded as the literal `1` that
+// happens to match today's handleViewport implementation.
 func TestBrowserWS_HandleViewport_ClampsSubOneScale_BeforeRecording(t *testing.T) {
+	contractMin, _ := browserViewportContractScaleRange(t)
+
 	handler, al := newBrowserWSTestHandler(t, func(cfg *config.Config) {
 		cfg.Tools.Browser.WebRTCEnabled = true
 	})
@@ -159,8 +214,103 @@ func TestBrowserWS_HandleViewport_ClampsSubOneScale_BeforeRecording(t *testing.T
 
 	handler.handleViewport(wc, state, viewerID, data)
 
-	require.Equal(t, float64(1), state.pendingViewportScale(),
-		"a sub-1 device_scale_factor must floor to 1 at the recording boundary")
+	require.Equal(t, contractMin, state.pendingViewportScale(),
+		"a sub-minimum device_scale_factor must floor to the contract's declared minimum at the recording boundary")
+}
+
+// TestBrowserWS_HandleViewport_ScaleClampBoundaries is table-driven boundary
+// and differentiation coverage for the same F10 clamp. It exists alongside
+// the two tests above (rather than replacing them) to add cases those two
+// don't reach:
+//
+//   - a value sitting exactly ON each contract edge must pass through
+//     UNCHANGED — proves the clamp isn't simply forcing everything to one
+//     constant, which the over/under-range tests alone can't distinguish
+//     from a correct clamp (a broken "always return 3" implementation would
+//     also pass the over-range test).
+//   - a value just past each edge must still be clamped — the boundary+1 /
+//     boundary-1 cases the base tests skip.
+//   - a valid mid-range value (2.0) must also pass through unchanged, and be
+//     DIFFERENT from the min/max boundary values — this is the
+//     differentiation case: it rules out a hardcoded-response
+//     implementation that always emits the same scale regardless of input.
+//
+// Every expected value is read from browserViewportContractScaleRange (the
+// contract), never from maxDeviceScaleFactor — same oracle-independence
+// rationale as the two tests above.
+func TestBrowserWS_HandleViewport_ScaleClampBoundaries(t *testing.T) {
+	contractMin, contractMax := browserViewportContractScaleRange(t)
+
+	cases := []struct {
+		name     string
+		input    float64
+		expected float64
+	}{
+		{"at_max_boundary_unchanged", contractMax, contractMax},
+		{"just_above_max_clamped", contractMax + 0.5, contractMax},
+		{"at_min_boundary_unchanged", contractMin, contractMin},
+		{"just_below_min_floored", contractMin - 0.5, contractMin},
+		{"mid_range_valid_unchanged", 2.0, 2.0},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			handler, al := newBrowserWSTestHandler(t, func(cfg *config.Config) {
+				cfg.Tools.Browser.WebRTCEnabled = true
+			})
+			t.Cleanup(handler.Wait)
+
+			defaultAgent := al.GetRegistry().GetDefaultAgent()
+			require.NotNil(t, defaultAgent)
+			mgr, ok := al.BrowserManagerForAgent(defaultAgent.ID)
+			require.True(t, ok)
+
+			relay := &fakeRelay{}
+			var calls int32
+			cs, err := browser.NewCaptureSessionWithDeps(mgr, defaultAgent.ID, relay, fakeEncoderStarter(&calls, nil), nil)
+			require.NoError(t, err)
+
+			wc := newTestBrowserWSConn()
+			state := &browserConnState{mgr: mgr, sessionID: "sess-clamp-boundary-" + tc.name}
+			state.webrtc = &webrtcAttachment{agentID: defaultAgent.ID, capture: cs}
+			viewerID := "viewer-clamp-boundary-" + tc.name
+
+			frame := generated.BrowserViewportFrame{
+				Type:              string(generated.WsFrameTypeBrowserViewport),
+				Width:             800,
+				Height:            600,
+				DeviceScaleFactor: f64ptr(tc.input),
+			}
+			data, err := json.Marshal(frame)
+			require.NoError(t, err)
+
+			handler.handleViewport(wc, state, viewerID, data)
+
+			require.Equal(t, tc.expected, cs.CaptureScale(),
+				"input %v must clamp to %v per the contract's declared [min,max] range", tc.input, tc.expected)
+			require.Equal(t, tc.expected, state.pendingViewportScale(),
+				"pendingViewportScale must carry the same clamped value as the capture session")
+		})
+	}
+}
+
+// TestMaxDeviceScaleFactor_MatchesContractMaximum is the drift guard: the Go
+// constant maxDeviceScaleFactor (browser_ws.go) and
+// BrowserViewportFrame.device_scale_factor's contract `maximum` are
+// documented (maxDeviceScaleFactor's own doc comment) as two values that
+// "must stay in lockstep." Nothing before this test enforced that — a
+// developer could edit either one alone and every other test in this file
+// would still pass, because they all derive their expectations from
+// whichever side of the pair they read. This test reads BOTH independently
+// (the contract via browserViewportContractScaleRange, the constant
+// directly) and fails the instant they disagree, regardless of what either
+// value actually is.
+func TestMaxDeviceScaleFactor_MatchesContractMaximum(t *testing.T) {
+	_, contractMax := browserViewportContractScaleRange(t)
+
+	require.Equal(t, contractMax, maxDeviceScaleFactor,
+		"maxDeviceScaleFactor (browser_ws.go) and BrowserViewportFrame.device_scale_factor's contract maximum "+
+			"must stay in lockstep — see maxDeviceScaleFactor's doc comment")
 }
 
 // ---------------------------------------------------------------------------

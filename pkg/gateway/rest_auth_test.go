@@ -776,16 +776,69 @@ func injectUser(r *http.Request, username string) *http.Request {
 }
 
 // TestHandleLogout_Success verifies that POST /api/v1/auth/logout with a valid
-// authenticated session returns 200 {"success":true} and invalidates the token.
-// BDD: Given an authenticated user "logoutuser",
-// When POST /api/v1/auth/logout is called with the user injected in context,
-// Then 200 {"success":true} is returned and token_hash is cleared in config.json.
+// authenticated session returns 204 No Content and revokes the presented
+// bearer token from the on-disk tokens[] set.
+// BDD: Given a user who logged in for real (a bearer token is live in
+// tokens[] on disk — the precondition proving login actually wrote
+// something),
+// When that user POSTs /auth/logout presenting that same bearer token,
+// Then 204 No Content is returned and tokens[] no longer contains it.
+//
+// qa-lead note: the earlier version of this test never logged in — it
+// injected the user context directly on top of a fixture seeded with
+// token_hash:"" and no "tokens" key at all — then asserted
+// userMap["token_hash"] == "". SEC-1/UAT #399 moved bearer tokens to the
+// tokens[] SET (see the comment on TestHandleLogout_RevokesOnlyPresentedToken
+// below); login never touches the legacy token_hash field, so that assertion
+// was true before HandleLogout ever ran and could not have caught a
+// regression. Fixed by logging in for real and asserting on tokens[], the
+// field the code actually writes — mirrors
+// TestHandleLogout_RevokesOnlyPresentedToken's approach for the single-token
+// case.
 // Traces to: Milestone 1 — HandleLogout implementation (pkg/gateway/rest_auth.go)
 func TestHandleLogout_Success(t *testing.T) {
 	api, tmpDir := newTestRestAPIWithUser(t, "logoutuser", "password123")
 
-	// POST /auth/logout with user injected into context (simulates withAuth middleware).
+	// Log in for real so a bearer token is actually appended to tokens[] on disk.
+	loginBody := `{"username":"logoutuser","password":"password123"}`
+	loginReq := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(loginBody))
+	loginReq.Header.Set("Content-Type", "application/json")
+	loginW := httptest.NewRecorder()
+	api.HandleLogin(loginW, loginReq)
+	require.Equal(t, http.StatusOK, loginW.Code, "login must succeed: %s", loginW.Body.String())
+	var loginResp map[string]any
+	require.NoError(t, json.Unmarshal(loginW.Body.Bytes(), &loginResp))
+	token, tokenOk := loginResp["token"].(string)
+	require.True(t, tokenOk, "login response token must be a string")
+	require.NotEmpty(t, token, "login must return a non-empty bearer token")
+
+	// Precondition: tokens[] must be non-empty on disk after login. Without
+	// this check, a login that never wrote the token would still let the
+	// post-logout "tokens[] is empty" assertion pass vacuously.
+	readUsers := func() []any {
+		t.Helper()
+		diskData, err := os.ReadFile(filepath.Join(tmpDir, "config.json"))
+		require.NoError(t, err)
+		var diskCfg map[string]any
+		require.NoError(t, json.Unmarshal(diskData, &diskCfg))
+		gwMap, ok := diskCfg["gateway"].(map[string]any)
+		require.True(t, ok, "gateway config must be present on disk")
+		users, ok := gwMap["users"].([]any)
+		require.True(t, ok, "users must be present on disk")
+		require.Len(t, users, 1)
+		return users
+	}
+	userMapBefore, ok := readUsers()[0].(map[string]any)
+	require.True(t, ok)
+	tokensBefore, ok := userMapBefore["tokens"].([]any)
+	require.True(t, ok, "tokens set must be present on disk after login")
+	require.NotEmpty(t, tokensBefore, "precondition: tokens[] must be non-empty on disk after login")
+
+	// POST /auth/logout presenting the real bearer token, with the user
+	// injected into context (simulates withAuth middleware after validating
+	// that same token).
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/logout", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
 	req = injectUser(req, "logoutuser")
 	w := httptest.NewRecorder()
 
@@ -793,19 +846,12 @@ func TestHandleLogout_Success(t *testing.T) {
 
 	require.Equal(t, http.StatusNoContent, w.Code, "logout must return 204 No Content")
 
-	// Verify persistence: token_hash is cleared in config.json on disk.
-	diskData, err := os.ReadFile(filepath.Join(tmpDir, "config.json"))
-	require.NoError(t, err)
-	var diskCfg map[string]any
-	require.NoError(t, json.Unmarshal(diskData, &diskCfg))
-	gwMap, ok := diskCfg["gateway"].(map[string]any)
-	require.True(t, ok, "gateway config must be present on disk")
-	users, ok := gwMap["users"].([]any)
-	require.True(t, ok, "users must be present on disk")
-	require.Len(t, users, 1)
-	userMap, ok := users[0].(map[string]any)
+	// Verify persistence: the presented token is removed from tokens[] on disk.
+	userMapAfter, ok := readUsers()[0].(map[string]any)
 	require.True(t, ok)
-	assert.Equal(t, "", userMap["token_hash"], "token_hash must be empty after logout")
+	tokensAfter, ok := userMapAfter["tokens"].([]any)
+	require.True(t, ok, "tokens key must still be present (as an empty array) after logout")
+	assert.Empty(t, tokensAfter, "the logged-out token must be removed from tokens[] after logout")
 }
 
 // TestHandleLogout_DevBypassUser_ClearsCookiesNo500 proves that a logout by the
