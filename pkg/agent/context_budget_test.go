@@ -603,7 +603,12 @@ func TestMidTurnBudget_SameBudgetAsWindowTrim(t *testing.T) {
 
 	t.Run("every isOverContextBudget site in loop.go reads agentContextBudget", func(t *testing.T) {
 		src := readOwnedFileForTest(t, "loop.go")
-		calls := regexp.MustCompile(`isOverContextBudget\(\s*([^,]+),`).FindAllStringSubmatch(src, -1)
+		// Both forms of the predicate count: the defs form
+		// (isOverContextBudget) and the measured-token form
+		// (isOverContextBudgetTokens), which the pre-turn and
+		// timeout-recovery sites use so they charge the SENT tool surface —
+		// the one windowTrim measures — instead of the whole registry.
+		calls := regexp.MustCompile(`isOverContextBudget(?:Tokens)?\(\s*([^,]+),`).FindAllStringSubmatch(src, -1)
 		if len(calls) < 2 {
 			t.Fatalf("expected the pre-turn and timeout-recovery sites in loop.go, found %d call(s)", len(calls))
 		}

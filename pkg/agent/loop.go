@@ -8225,10 +8225,14 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	// FR-005: an exempt provider (subprocess CLI) manages its own context —
 	// the pre-turn trim and every budget check are skipped.
 	if !ts.opts.NoHistory && !ts.agent.budgetChecksExempt() {
-		toolDefs := ts.agent.Tools.ToProviderDefs()
 		// FR-028: the pre-turn check reads the one budget B — the same value
-		// windowTrim fits the suffix against — never the raw window.
-		if isOverContextBudget(agentContextBudget(ts.agent), messages, toolDefs) {
+		// windowTrim fits the suffix against — never the raw window — AND the
+		// same tool surface windowTrim measures (sentToolSurfaceTokens, what
+		// the turn actually sends). Charging the whole registry here, as this
+		// site used to, fired the check on a conversation that fit and had
+		// windowTrim evict one turn per turn.
+		toolDefsTokens := al.sentToolSurfaceTokens(ts.agent, ts.sessionKey)
+		if isOverContextBudgetTokens(agentContextBudget(ts.agent), messages, toolDefsTokens) {
 			logger.WarnCF("agent", "Proactive window trim: context budget exceeded before LLM call",
 				map[string]any{"session_key": ts.sessionKey})
 			if compression, ok := al.windowTrim(ts.agent, ts.sessionKey); ok {
@@ -9196,12 +9200,14 @@ turnLoop:
 				// not part of callMessages). windowTrim counts that span the
 				// same way (FR-019 drop-span-first).
 				if !compactionAttemptedOnTimeout && !ts.opts.NoHistory && !ts.agent.budgetChecksExempt() {
-					toolDefs := ts.agent.Tools.ToProviderDefs()
+					// The sent surface, not the whole registry — same helper
+					// windowTrim measures with (FR-028; see the pre-turn site).
+					toolDefsTokens := al.sentToolSurfaceTokens(ts.agent, ts.sessionKey)
 					retryMessages := callMessages
 					if span := al.activeRecallSpan(ts.sessionKey); span != nil {
 						retryMessages = append(append([]providers.Message(nil), callMessages...), span.Messages()...)
 					}
-					if isOverContextBudget(agentContextBudget(ts.agent), retryMessages, toolDefs) {
+					if isOverContextBudgetTokens(agentContextBudget(ts.agent), retryMessages, toolDefsTokens) {
 						compactionAttemptedOnTimeout = true
 						// windowTrim has three possible outcomes here:
 						//  1. ok=true — a real eviction occurred, either window Turns were
@@ -11753,6 +11759,17 @@ func (al *AgentLoop) windowTrim(agent *AgentInstance, sessionKey string) (compre
 	// FR-019 drop-span-first: if an active span exists and we're over budget,
 	// drop it and re-check. Only evict real window Turns if still over budget.
 	currentWindowTokens := sumMessageTokens(measured)
+
+	// Nothing to do: the window already fits. Without this, a caller that
+	// mis-fired (historically the pre-turn check, which charged the whole
+	// tool registry while this function charges only the sent surface) would
+	// still reach the boundary walk below, take the first non-zero boundary
+	// whose suffix fits, and evict the oldest turn — every turn, silently,
+	// on a conversation that never came close to the budget.
+	if currentWindowTokens+toolDefsTokens+recallSpanTokens <= budget {
+		return compressionResult{NothingToTrim: true, RemainingMessages: len(window)}, false
+	}
+
 	if recallSpan != nil && (currentWindowTokens+toolDefsTokens+recallSpanTokens > budget) {
 		al.dropRecallSpan(sessionKey, "pressure")
 		recallSpanTokens = 0

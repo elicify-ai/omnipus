@@ -143,6 +143,29 @@ func (al *AgentLoop) midTurnWindowCheck(
 	}
 	lineOf := midTurnLineResolver(archive, messages)
 
+	// FR-032 pre-check: can the pass possibly succeed?
+	//
+	// D5 only ever removes the CONTENT of the ELIGIBLE results. Everything
+	// else in the request is un-emptiable: the tool-definition surface (which
+	// `total` counts but B does not subtract), the system notes, the user
+	// message and the whole floor set. When that residue ALONE still exceeds
+	// a fired trigger, the guard below is certain to fire — and running the
+	// pass first would empty, and PERSIST as emptied, every eligible result
+	// on a turn that is about to abort. typedTurnExit (unlike abortTurn)
+	// never calls restoreSession, so those projection entries would survive
+	// forever: the marks become permanent and every later turn on the session
+	// dies the same way. Refuse before touching anything instead.
+	//
+	// The residue is measured with the candidates' content removed entirely —
+	// an optimistic lower bound, so this can only refuse a pass that could
+	// not have worked.
+	if !al.midTurnPassCanSucceed(ts, messages, toolDefs, lineOf, budget, absShare, totalFired, shareFired) {
+		return messages, fmt.Errorf(
+			"%w: the un-emptiable residue alone exceeds the budget "+
+				"(total=%d budget=%d share=%d absolute_share=%d agent_id=%s session_key=%s)",
+			ErrContextUnrecoverable, total, budget, share, absShare, ts.agent.ID, ts.sessionKey)
+	}
+
 	// Target = 80 % of each condition that fired (FR-029). The un-fired
 	// condition imposes nothing — its own trigger still guards it on the
 	// next check.
@@ -168,4 +191,36 @@ func (al *AgentLoop) midTurnWindowCheck(
 			ErrContextUnrecoverable, total, budget, share, absShare, ts.agent.ID, ts.sessionKey)
 	}
 	return messages, nil
+}
+
+// midTurnPassCanSucceed reports whether emptying every eligible result could
+// bring the fired trigger conditions back under their thresholds. See the
+// FR-032 pre-check in midTurnWindowCheck for why this runs BEFORE the pass
+// rather than as an after-the-fact guard.
+func (al *AgentLoop) midTurnPassCanSucceed(
+	ts *turnState,
+	messages []providers.Message,
+	toolDefs []providers.ToolDefinition,
+	lineOf func(int) int,
+	budget, absShare int,
+	totalFired, shareFired bool,
+) bool {
+	if ts.agent.Sessions == nil {
+		return true
+	}
+	set := ts.agent.Sessions.Projection(ts.sessionKey).Entries
+	candidates := eligibleToolResults(messages, lineOf, set)
+
+	residue := make([]providers.Message, len(messages))
+	copy(residue, messages)
+	for _, i := range candidates {
+		residue[i].Content = ""
+	}
+	if totalFired && requestTokens(residue, toolDefs) > budget {
+		return false
+	}
+	if shareFired && toolResultShareTokens(residue) > absShare {
+		return false
+	}
+	return true
 }

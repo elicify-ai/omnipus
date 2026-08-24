@@ -425,3 +425,108 @@ func TestRunTurn_AbortRestoresTurnStartTriple(t *testing.T) {
 	assert.Equal(t, transcriptA, transcriptAfter[:len(transcriptA)],
 		"turn A's records back to their turn-start state (call-3/call-4 reverted, call-1/call-2 still emptied)")
 }
+
+// --- reused tool_call_ids (B-29b) ----------------------------------------
+
+// TestEligibleToolResults_FloorIsIndexKeyedNotIDKeyed pins FR-031's floor as
+// "the results of the LAST assistant step", addressed by slice INDEX.
+//
+// The regression: the floor was a set of bare tool_call_id strings. Providers
+// reuse ids — memory.ProjectionKey is composite precisely because "providers
+// reuse ids such as call_0 on every turn" (B-29b) — so with a provider that
+// numbers calls per message, `floor = {call_0}` excluded EVERY older call_0
+// result in the window. Nothing was eligible, emptyInPlace emptied nothing,
+// and D6's thrash guard ended the turn with ErrContextUnrecoverable while
+// large, evictable results sat right there in the window.
+func TestEligibleToolResults_FloorIsIndexKeyedNotIDKeyed(t *testing.T) {
+	big := strings.Repeat("b", 2000)
+	// A provider that restarts its numbering on every assistant message.
+	msgs := []providers.Message{
+		{Role: "user", Content: "turn one"},
+		{Role: "assistant", ToolCalls: []providers.ToolCall{toolCallFor("call_0", "one")}},
+		{Role: "tool", ToolCallID: "call_0", Content: big},
+		{Role: "user", Content: "turn two"},
+		{Role: "assistant", ToolCalls: []providers.ToolCall{toolCallFor("call_0", "two")}},
+		{Role: "tool", ToolCallID: "call_0", Content: big},
+		{Role: "user", Content: "turn three"},
+		{Role: "assistant", ToolCalls: []providers.ToolCall{toolCallFor("call_0", "three")}},
+		{Role: "tool", ToolCallID: "call_0", Content: big},
+	}
+	lineOf := func(i int) int { return i }
+
+	got := eligibleToolResults(msgs, lineOf, nil)
+	assert.Equal(t, []int{2, 5}, got,
+		"only the LAST step's result (index 8) is floor; the two older call_0 results are eligible")
+}
+
+// TestMidTurnLineResolver_ReusedIDsResolvePositionally pins the composite
+// address D5 persists under.
+//
+// The regression: the resolver returned the MOST RECENT archive line
+// carrying a message's tool_call_id, so two window messages sharing an id
+// both resolved to the newer line. Emptying the OLDER one then (a) built its
+// mark from the newer line — wrong size, wrong content behind the recall
+// key — and (b) persisted (id, newerLine) → emptied, so the reload
+// projection (archiveLineResolver, index-exact) blanked the NEWER result
+// while the older one came back at full content. Live and reload disagreed,
+// breaking B-22, and the wrong result was destroyed.
+func TestMidTurnLineResolver_ReusedIDsResolvePositionally(t *testing.T) {
+	turn1 := strings.Repeat("1", 100)
+	turn2 := strings.Repeat("2", 200)
+	turn3 := strings.Repeat("3", 300)
+	archive := []memory.ArchivedMessage{
+		{Message: providers.Message{Role: "user", Content: "one"}},                                                   // 0
+		{Message: providers.Message{Role: "assistant", ToolCalls: []providers.ToolCall{toolCallFor("call_0", "a")}}}, // 1
+		{Message: providers.Message{Role: "tool", ToolCallID: "call_0", Content: turn1}},                             // 2
+		{Message: providers.Message{Role: "user", Content: "two"}},                                                   // 3
+		{Message: providers.Message{Role: "assistant", ToolCalls: []providers.ToolCall{toolCallFor("call_0", "b")}}}, // 4
+		{Message: providers.Message{Role: "tool", ToolCallID: "call_0", Content: turn2}},                             // 5
+		{Message: providers.Message{Role: "user", Content: "three"}},                                                 // 6
+		{Message: providers.Message{Role: "assistant", ToolCalls: []providers.ToolCall{toolCallFor("call_1", "c")}}}, // 7
+		{Message: providers.Message{Role: "tool", ToolCallID: "call_1", Content: turn3}},                             // 8
+	}
+	live := make([]providers.Message, len(archive))
+	for i := range archive {
+		live[i] = archive[i].Message
+	}
+
+	lineOf := midTurnLineResolver(archive, live)
+	assert.Equal(t, 2, lineOf(2), "turn 1's call_0 result must resolve to ITS OWN line, not the newest call_0 line")
+	assert.Equal(t, 5, lineOf(5), "turn 2's call_0 result resolves to line 5")
+	assert.Equal(t, 8, lineOf(8))
+	assert.Equal(t, -1, lineOf(0), "a user message has no result line")
+
+	// It also agrees with the reload resolver, which is index-exact here.
+	reloadLineOf := archiveLineResolver(archive, live)
+	for _, i := range []int{2, 5, 8} {
+		assert.Equal(t, reloadLineOf(i), lineOf(i),
+			"the mid-turn and reload resolvers must address the same line for message %d", i)
+	}
+
+	// End to end: emptying the OLDEST eligible result must mark line 2 with
+	// turn 1's size, not line 5 with turn 2's.
+	work := append([]providers.Message(nil), live...)
+	emptied := emptyOldestFirst(work, eligibleToolResults(work, lineOf, nil), lineOf, archive,
+		func(m []providers.Message) bool { return m[2].Content != turn1 })
+	require.Len(t, emptied, 1)
+	assert.Equal(t, 2, emptied[0].ArchiveLine, "the persisted key must cite the message's OWN archive line")
+	assert.Equal(t, len(turn1), emptied[0].SizeChars, "the mark must describe the content that was actually lost")
+	assert.Equal(t, turn2, work[5].Content, "turn 2's newer result must be untouched")
+}
+
+// TestMidTurnLineResolver_OffArchiveMessageConsumesNoLine — a spliced recall
+// span is not on the archive and must not steal a line from a real result.
+func TestMidTurnLineResolver_OffArchiveMessageConsumesNoLine(t *testing.T) {
+	archive := []memory.ArchivedMessage{
+		{Message: providers.Message{Role: "assistant", ToolCalls: []providers.ToolCall{toolCallFor("c1", "a")}}},
+		{Message: providers.Message{Role: "tool", ToolCallID: "c1", Content: "real"}},
+	}
+	live := []providers.Message{
+		archive[0].Message,
+		archive[1].Message,
+		{Role: "tool", ToolCallID: "spliced", Content: "recall span"},
+	}
+	lineOf := midTurnLineResolver(archive, live)
+	assert.Equal(t, -1, lineOf(2), "an off-archive message resolves to -1")
+	assert.Equal(t, 1, lineOf(1), "and must not have consumed the real result's line")
+}

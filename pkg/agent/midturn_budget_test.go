@@ -270,6 +270,57 @@ func TestMidTurnBudget_TriggerTargetStop(t *testing.T) {
 		require.Error(t, err)
 		assert.True(t, errors.Is(err, ErrContextUnrecoverable), "FR-032: the guard is the typed sentinel, got %v", err)
 	})
+
+	t.Run("guard is decided BEFORE the pass: an unsatisfiable budget empties and persists nothing", func(t *testing.T) {
+		// The regression: when the un-emptiable residue (tool defs + the
+		// system/user messages + the floor set) alone exceeds B, the check
+		// still ran the whole D5 pass first — emptying every eligible result
+		// AND persisting each (tool_call_id, archive_line) -> emptied — and
+		// only then fired the guard. typedTurnExit (unlike abortTurn) never
+		// calls restoreSession, so those projection entries survived forever:
+		// the marks became permanent and every later turn on the session died
+		// the same way, with the results it might have used already destroyed.
+		al, agent := midTurnFixture(t, 40_000, 0)
+		key := "midturn-guard-preflight"
+		budget := agentContextBudget(agent)
+		eligible := proseOfTokens(budget / 2)
+		window, ts := seedMidTurn(t, agent, key, []providers.Message{
+			// Un-emptiable on its own: no pass can bring total under B.
+			{Role: "user", Content: proseOfTokens(budget * 12 / 10)},
+			{Role: "assistant", ToolCalls: []providers.ToolCall{toolCallFor("c1", "a")}},
+			{Role: "tool", ToolCallID: "c1", Content: eligible},
+			{Role: "assistant", ToolCalls: []providers.ToolCall{toolCallFor("f1", "b")}},
+			{Role: "tool", ToolCallID: "f1", Content: "tiny floor"},
+		})
+		require.Greater(t, requestTokens(window, nil), budget, "precondition: total fired")
+		require.Equal(t, []int{2}, eligibleToolResults(window,
+			midTurnLineResolverForTest(t, agent, key, window), nil),
+			"precondition: there IS an eligible result the old code would have emptied")
+
+		before := ContextEmptiesTotal()
+		out, err := al.midTurnWindowCheck(ts, window, nil)
+		require.Error(t, err)
+		assert.True(t, errors.Is(err, ErrContextUnrecoverable), "still the typed sentinel, got %v", err)
+
+		assert.Equal(t, before, ContextEmptiesTotal(),
+			"a turn that is going to abort must not empty anything")
+		assert.Equal(t, eligible, out[2].Content,
+			"the eligible result must be left intact — the turn aborts, the content is not destroyed")
+		assert.Empty(t, agent.Sessions.Projection(key).Entries,
+			"no projection state may be persisted on a turn the guard is certain to kill: "+
+				"typedTurnExit never rolls it back")
+	})
+}
+
+// midTurnLineResolverForTest builds the same resolver midTurnWindowCheck
+// uses, so a precondition can assert what the real pass would have seen.
+func midTurnLineResolverForTest(
+	t *testing.T, agent *AgentInstance, key string, window []providers.Message,
+) func(int) int {
+	t.Helper()
+	archive, err := agent.Sessions.ReadArchive(context.Background(), key)
+	require.NoError(t, err)
+	return midTurnLineResolver(archive, window)
 }
 
 // testutilScenarioText returns a one-line text provider for fixtures whose

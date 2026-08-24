@@ -70,21 +70,13 @@ type emptiedToolResult struct {
 // and anything the persisted set already marks emptied (re-emptying a mark
 // would be a no-op that still counted as work).
 func eligibleToolResults(msgs []providers.Message, lineOf func(int) int, set memory.ProjectionSet) []int {
-	floor := make(map[string]struct{})
-	for i := len(msgs) - 1; i >= 0; i-- {
-		if msgs[i].Role == "assistant" && len(msgs[i].ToolCalls) > 0 {
-			for _, tc := range msgs[i].ToolCalls {
-				floor[tc.ID] = struct{}{}
-			}
-			break
-		}
-	}
+	floor := floorResultIndices(msgs)
 	var out []int
 	for i, m := range msgs {
 		if m.Role != "tool" || m.ToolCallID == "" {
 			continue
 		}
-		if _, isFloor := floor[m.ToolCallID]; isFloor {
+		if _, isFloor := floor[i]; isFloor {
 			continue
 		}
 		line := lineOf(i)
@@ -103,6 +95,43 @@ func eligibleToolResults(msgs []providers.Message, lineOf func(int) int, set mem
 		out = append(out, i)
 	}
 	return out
+}
+
+// floorResultIndices returns the SLICE INDICES of the FR-031 floor set: the
+// results of the most recent assistant message that issued tool calls.
+//
+// It is keyed on the index, never on the bare tool_call_id. Ids are NOT
+// unique within a session — memory.ProjectionKey is composite precisely
+// because "providers reuse ids such as call_0 on every turn" (B-29b) — so an
+// id-keyed floor swallowed every OLDER result that happened to share an id
+// with the current step. With a provider that numbers calls per message, that
+// made the entire window ineligible, emptied nothing, and turned D6's thrash
+// guard into a turn-killer while large evictable results sat in the window.
+//
+// The floor's results are exactly the tool messages that FOLLOW that
+// assistant message and answer one of its calls; anything before it belongs
+// to an earlier, completed step and is eligible (register #3, B-21b).
+func floorResultIndices(msgs []providers.Message) map[int]struct{} {
+	floor := make(map[int]struct{})
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role != "assistant" || len(msgs[i].ToolCalls) == 0 {
+			continue
+		}
+		ids := make(map[string]struct{}, len(msgs[i].ToolCalls))
+		for _, tc := range msgs[i].ToolCalls {
+			ids[tc.ID] = struct{}{}
+		}
+		for k := i + 1; k < len(msgs); k++ {
+			if msgs[k].Role != "tool" || msgs[k].ToolCallID == "" {
+				continue
+			}
+			if _, ok := ids[msgs[k].ToolCallID]; ok {
+				floor[k] = struct{}{}
+			}
+		}
+		break
+	}
+	return floor
 }
 
 // callPresent reports whether an assistant message before index i issued
@@ -195,22 +224,47 @@ func toolResultShareTokens(msgs []providers.Message) int {
 
 // midTurnLineResolver returns the lineOf function for the in-memory slice
 // the tool loop builds (pinned core + breadcrumb + window + this turn's
-// appended messages): a tool message's archive line is the MOST RECENT
-// archive line carrying its tool_call_id. Every result this turn appended
-// is at the archive's tail (the choke point appends before the slice does),
-// and the window's own results precede them, so most-recent is exact unless
-// a provider reuses an id inside one session — recall_conversation's
-// duplicate rule (B-29b) makes the same choice. Messages that are not on
-// the archive (system notes, a spliced recall span) resolve to −1.
+// appended messages).
+//
+// It is POSITION-AWARE, not id-keyed. The archive is append-only and the
+// slice's tool messages appear in the same relative order as their archive
+// lines (the window is an archive suffix; the choke point appends this
+// turn's results before the slice does), so a single reverse walk that
+// CONSUMES each matched line assigns every message its own line — including
+// when a provider reuses an id such as call_0 on every turn (B-29b, the very
+// reason memory.ProjectionKey is composite).
+//
+// Resolving by id alone took the most recent line for every message carrying
+// that id, so two results sharing an id both resolved to the newer line: the
+// mark described the wrong content, and the persisted (id, line) → emptied
+// entry made the reload projection blank a DIFFERENT, newer result than the
+// live pass emptied — the live/reload byte-identity B-22 requires.
+//
+// A message that is not on the archive (a system note, a spliced recall
+// span) matches nothing, resolves to −1 and consumes no line.
 func midTurnLineResolver(archive []memory.ArchivedMessage, msgs []providers.Message) func(int) int {
-	return func(i int) int {
-		if i < 0 || i >= len(msgs) || msgs[i].Role != "tool" || msgs[i].ToolCallID == "" {
-			return -1
+	lines := make(map[int]int, len(msgs))
+	next := len(archive) - 1
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role != "tool" || msgs[i].ToolCallID == "" {
+			continue
 		}
-		for j := len(archive) - 1; j >= 0; j-- {
+		found := -1
+		for j := next; j >= 0; j-- {
 			if archive[j].Role == "tool" && archive[j].ToolCallID == msgs[i].ToolCallID {
-				return j
+				found = j
+				break
 			}
+		}
+		lines[i] = found
+		if found >= 0 {
+			// Consume: an EARLIER message can only own an earlier line.
+			next = found - 1
+		}
+	}
+	return func(i int) int {
+		if line, ok := lines[i]; ok {
+			return line
 		}
 		return -1
 	}

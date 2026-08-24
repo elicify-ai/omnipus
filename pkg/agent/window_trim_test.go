@@ -833,3 +833,65 @@ func TestArchive_AppendOnlyWithAttachStep(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, linesAfter, 12, "no archive line deleted (ADR-028)")
 }
+
+// TestWindowTrim_AlreadyFitsEvictsNothing pins the missing "already fits"
+// guard.
+//
+// windowTrim had no early return: it went straight to the boundary walk and
+// took the smallest boundary b > 0 whose suffix fits, evicting the oldest
+// turn — even when the WHOLE window already fitted. That made every
+// mis-firing caller destructive rather than merely wasteful, and the
+// pre-turn check was exactly such a caller: it charged the full tool
+// registry while windowTrim charges only the sent surface, so on a
+// compressed manifest with lazy tools registered it fired on conversations
+// that fitted comfortably and shaved one turn per turn, silently.
+func TestWindowTrim_AlreadyFitsEvictsNothing(t *testing.T) {
+	const (
+		cw = 100_000
+		mt = 1000
+	)
+	al, _ := buildTrimTestAgentLoop(t, cw, mt)
+	const sessionKey = "fits-session"
+
+	var history []providers.Message
+	for i := 0; i < 4; i++ {
+		history = append(history, makeTurn("small question", "small answer")...)
+	}
+	seedHistory(t, al, sessionKey, history)
+
+	agent := al.GetRegistry().GetDefaultAgent()
+	before := agent.Sessions.GetHistory(sessionKey)
+	require.Len(t, before, len(history), "precondition: the whole window is live")
+
+	result, ok := al.windowTrim(agent, sessionKey)
+
+	assert.False(t, ok, "a window that already fits must not report an eviction")
+	assert.True(t, result.NothingToTrim,
+		"a window that already fits must report NothingToTrim, not silently evict the oldest turn")
+	assert.Equal(t, before, agent.Sessions.GetHistory(sessionKey),
+		"windowTrim must not touch a window that already fits")
+}
+
+// TestBudgetSites_MeasureTheSentToolSurface is the mechanical guard for
+// FR-028's "every budget site compares through one predicate and cannot
+// disagree".
+//
+// The pre-turn check and the timeout-recovery check both built their tool
+// surface as `ts.agent.Tools.ToProviderDefs()` — a full JSON schema for EVERY
+// registered tool — while windowTrim, the function they call on a positive
+// result, measures `al.sentToolSurfaceTokens`, which charges only the tools
+// actually sent under a compressed manifest. With ~15 MCP servers connected
+// the over-count is tens of thousands of tokens, so the check fired on a
+// conversation windowTrim then measured as fitting.
+func TestBudgetSites_MeasureTheSentToolSurface(t *testing.T) {
+	loop := readOwnedFileForTest(t, "loop.go")
+
+	assert.NotContains(t, loop, "toolDefs := ts.agent.Tools.ToProviderDefs()",
+		"a budget site must not charge the whole tool registry — use "+
+			"al.sentToolSurfaceTokens(ts.agent, ts.sessionKey), the surface windowTrim measures")
+	assert.NotContains(t, loop, "isOverContextBudget(agentContextBudget(ts.agent)",
+		"the pre-turn and timeout-recovery sites must compare through "+
+			"isOverContextBudgetTokens with the measured sent surface")
+	assert.Contains(t, loop, "isOverContextBudgetTokens(agentContextBudget(ts.agent)",
+		"the token-count predicate is how those sites share windowTrim's measurement")
+}

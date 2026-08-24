@@ -186,3 +186,34 @@ func isOverContextBudget(
 ) bool {
 	return requestTokens(messages, toolDefs) > budget
 }
+
+// isOverContextBudgetTokens is isOverContextBudget for a caller that has
+// already MEASURED its tool surface — the pre-turn and timeout-recovery
+// sites, which charge only the tools actually sent
+// (AgentLoop.sentToolSurfaceTokens) rather than the whole registry.
+//
+// The two used to disagree: they passed agent.Tools.ToProviderDefs() — a full
+// JSON schema for EVERY registered tool — while windowTrim, the function they
+// call on a positive result, measured the sent surface. With a compressed
+// manifest and a few MCP servers connected the over-count is tens of
+// thousands of tokens, so the check fired on a conversation that fit
+// comfortably and windowTrim then evicted a turn per turn. FR-028 requires
+// every budget site to compare through ONE predicate; this is that predicate
+// for the token-count form.
+func isOverContextBudgetTokens(budget int, messages []providers.Message, toolDefsTokens int) bool {
+	return sumRequestMessageTokens(messages)+toolDefsTokens > budget
+}
+
+// sumRequestMessageTokens is requestTokens' message half: every message
+// except the pinned system prompt at messages[0], whose cost is already
+// inside B.
+func sumRequestMessageTokens(messages []providers.Message) int {
+	total := 0
+	for i, m := range messages {
+		if i == 0 && m.Role == "system" {
+			continue
+		}
+		total += estimateMessageTokens(m)
+	}
+	return total
+}
