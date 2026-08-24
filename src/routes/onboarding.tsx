@@ -21,7 +21,8 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { ModelSelector, type ModelGroup } from '@/components/ui/model-selector'
-import { probeProvider, completeOnboardingTransaction, fetchAppState, fetchProvidersCatalog, isApiError } from '@/lib/api'
+import { probeProvider, completeOnboardingTransaction, fetchAppState, isApiError } from '@/lib/api'
+import { providersCatalogQueryOptions } from '@/lib/providersCatalogQuery'
 import { pickCapableDefaultModel } from '@/lib/onboarding/defaultModel'
 import OmnipusAvatar from '@/assets/logo/omnipus-avatar.svg?url'
 import { PROVIDER_HINTS } from '@/lib/constants'
@@ -307,17 +308,14 @@ function OnboardingWizard() {
   const { addToast } = useUiStore()
   const { appStateBannerMessage } = useRouteContext({ from: '/onboarding' })
 
-  // Source providers from the registry-fed catalog (ADR-068 FR-037). T068-18
-  // adds the ETag re-validation cadence; here it is a plain query.
+  // Source providers from the registry-fed catalog (ADR-068 FR-037), on the
+  // shared ETag re-validation policy (providersCatalogQuery.ts).
   const {
     data: catalogDoc,
     isError: catalogError,
     isLoading: catalogLoading,
     refetch: refetchCatalog,
-  } = useQuery({
-    queryKey: ['providers', 'catalog'],
-    queryFn: fetchProvidersCatalog,
-  })
+  } = useQuery(providersCatalogQueryOptions())
   const providers = useMemo(() => catalogDoc?.providers ?? [], [catalogDoc])
 
   const [step, setStep] = useState<Step>(1)

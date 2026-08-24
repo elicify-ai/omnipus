@@ -18,7 +18,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { PROVIDERS_CATALOG_STUB, STUB_PROVIDERS } from '@/test/fixtures/providersCatalog.stub'
+import { PROVIDERS_CATALOG, CATALOG_PROVIDERS } from '@/test/fixtures/providersCatalog'
 import { catalogLabel, catalogLogoSlug, catalogSubtitle } from '@/lib/catalogDisplay'
 
 // ---------------------------------------------------------------------------
@@ -61,7 +61,7 @@ function renderSection() {
 
 beforeEach(() => {
   vi.clearAllMocks()
-  vi.mocked(api.fetchProvidersCatalog).mockResolvedValue(PROVIDERS_CATALOG_STUB)
+  vi.mocked(api.fetchProvidersCatalog).mockResolvedValue(PROVIDERS_CATALOG)
 })
 
 const configured = (id: string, display_name: string, models: string[]) =>
@@ -77,7 +77,7 @@ const configured = (id: string, display_name: string, models: string[]) =>
 
 describe('[C2] ProvidersSection renders the catalog-derived subtitle verbatim â€” settings DOM parity', () => {
   it('zai-coding-plan: subtitle in DOM matches catalogSubtitle(entry) (not hardcoded)', async () => {
-    const catalogEntry = STUB_PROVIDERS.find((e) => e.id === 'zai-coding-plan')
+    const catalogEntry = CATALOG_PROVIDERS.find((e) => e.id === 'zai-coding-plan')
     expect(catalogEntry, 'zai-coding-plan must be in the stub catalog').toBeDefined()
 
     vi.mocked(api.fetchProviders).mockResolvedValue([configured('zai-coding-plan', 'zai-coding-plan', ['glm-5.2'])])
@@ -89,7 +89,7 @@ describe('[C2] ProvidersSection renders the catalog-derived subtitle verbatim â€
   })
 
   it('openai: subtitle in DOM matches catalogSubtitle(entry) (not hardcoded)', async () => {
-    const catalogEntry = STUB_PROVIDERS.find((e) => e.id === 'openai')
+    const catalogEntry = CATALOG_PROVIDERS.find((e) => e.id === 'openai')
     expect(catalogEntry, 'openai must be in the stub catalog').toBeDefined()
 
     vi.mocked(api.fetchProviders).mockResolvedValue([configured('openai', 'OpenAI', ['gpt-5'])])
@@ -101,8 +101,8 @@ describe('[C2] ProvidersSection renders the catalog-derived subtitle verbatim â€
   })
 
   it('differentiation: openai and zai-coding-plan produce DIFFERENT subtitle text', () => {
-    const openaiEntry = STUB_PROVIDERS.find((e) => e.id === 'openai')
-    const zhipuEntry = STUB_PROVIDERS.find((e) => e.id === 'zai-coding-plan')
+    const openaiEntry = CATALOG_PROVIDERS.find((e) => e.id === 'openai')
+    const zhipuEntry = CATALOG_PROVIDERS.find((e) => e.id === 'zai-coding-plan')
     expect(openaiEntry).toBeDefined()
     expect(zhipuEntry).toBeDefined()
 
@@ -114,7 +114,7 @@ describe('[C2] ProvidersSection renders the catalog-derived subtitle verbatim â€
   it('zai: derived label/subtitle/logo match the values asserted in -onboarding.test.tsx', () => {
     // No component render â€” pins the derivation the onboarding test also
     // pins verbatim, so a helper change without a test update fails here.
-    const entry = STUB_PROVIDERS.find((e) => e.id === 'zai')
+    const entry = CATALOG_PROVIDERS.find((e) => e.id === 'zai')
     expect(entry).toBeDefined()
     expect(catalogLabel(entry!)).toBe('Z.AI (International)')
     expect(catalogSubtitle(entry!)).toBe('Pay-as-you-go, per token Â· api.z.ai/api/paas/v4')

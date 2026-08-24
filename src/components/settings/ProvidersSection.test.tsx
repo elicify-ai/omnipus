@@ -45,7 +45,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
 import * as api from '@/lib/api'
 import { ProvidersSection } from './ProvidersSection'
 import { resolveCatalogEntry, SELF_HOSTED_CUSTOM_GROUP, GENERIC_GROUP } from '@/lib/providerMigration'
-import { PROVIDERS_CATALOG_STUB, STUB_PROVIDERS } from '@/test/fixtures/providersCatalog.stub'
+import { PROVIDERS_CATALOG, CATALOG_PROVIDERS } from '@/test/fixtures/providersCatalog'
 import { catalogLabel, catalogSubtitle } from '@/lib/catalogDisplay'
 
 // ---------------------------------------------------------------------------
@@ -112,7 +112,7 @@ const ZHIPU_CODING_PROVIDER = {
 beforeEach(() => {
   vi.clearAllMocks()
   vi.mocked(api.fetchProviders).mockResolvedValue([ANTHROPIC_PROVIDER] as never)
-  vi.mocked(api.fetchProvidersCatalog).mockResolvedValue(PROVIDERS_CATALOG_STUB)
+  vi.mocked(api.fetchProvidersCatalog).mockResolvedValue(PROVIDERS_CATALOG)
 })
 
 // ---------------------------------------------------------------------------
@@ -225,7 +225,7 @@ describe('ProvidersSection — FIX-3 configured-only list', () => {
   })
 
   it('shows an "all configured" message when every catalog entry is already configured', async () => {
-    const allConfigured = STUB_PROVIDERS.map((e) => ({
+    const allConfigured = CATALOG_PROVIDERS.map((e) => ({
       ...CONFIGURED_BASE,
       id: e.id,
       name: e.id,
@@ -418,7 +418,7 @@ describe('ProvidersSection — #24 settings-side catalog label', () => {
     renderSection()
     await waitFor(() => screen.getByTestId('provider-row-openrouter'))
 
-    const catalogEntry = STUB_PROVIDERS.find((e) => e.id === 'openrouter')
+    const catalogEntry = CATALOG_PROVIDERS.find((e) => e.id === 'openrouter')
     expect(catalogEntry).toBeDefined()
     // Subtitle derived from the fetched catalog entry should appear in the row
     expect(screen.getByText(catalogSubtitle(catalogEntry!))).toBeInTheDocument()
@@ -430,7 +430,7 @@ describe('ProvidersSection — #24 settings-side catalog label', () => {
 // ---------------------------------------------------------------------------
 
 describe('resolveCatalogEntry — migration dataset', () => {
-  const resolve = (id: string) => resolveCatalogEntry(STUB_PROVIDERS, id)
+  const resolve = (id: string) => resolveCatalogEntry(CATALOG_PROVIDERS, id)
 
   it('#1 zai → Zhipu AI (canonical)', () => {
     const result = resolve('zai')

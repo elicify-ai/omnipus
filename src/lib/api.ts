@@ -2192,18 +2192,104 @@ export function fetchProviders(): Promise<Provider[]> {
   return request<Provider[]>('/providers', undefined, z.array(ProviderSchema) as ZodType<Provider[]>)
 }
 
-// fetchProvidersCatalog reads the registry-fed providers catalog the gateway
-// itself uses (ADR-067 FR-017, ADR-068 FR-037) — the schema-2.0.0 document
-// with nested models plus the serving envelope (served_from / stale). This is
-// the SPA's ONLY catalog source: the bundled TS catalog emission under
-// src/lib/generated/ was deleted (T068-05, SC-010) and must never return.
+// ── Providers catalog (ETag re-validated) ────────────────────────────────────
 //
-// T068-05 stub: a plain GET validated against the generated zod schema.
-// T068-18 adds the ETag / If-None-Match re-validation (on Settings open and
-// every 15 min, at most one 200 per ETag) and the TanStack Query cache policy.
+// The registry-fed catalog the gateway itself uses (ADR-067 FR-017, ADR-068
+// FR-037) — the schema-2.0.0 document with nested models plus the serving
+// envelope (served_from / stale). This is the SPA's ONLY catalog source: the
+// bundled TS catalog emission under src/lib/generated/ was deleted (T068-05,
+// SC-010) and must never return.
+//
+// Cadence is ADR-067 A-1: re-validate on Settings open and every 15 minutes
+// (the schedule lives in providersCatalogQuery.ts). The assertion FR-037 makes
+// is "at most one 200 per ETag value" — 304s are expected requests, a second
+// 200 for an unchanged document is not. That is what the module-level cache
+// below buys: the strong ETag the gateway sends is replayed as If-None-Match,
+// and a 304 resolves with the SAME document object we already parsed, so the
+// body is downloaded and zod-validated exactly once per catalog version.
+//
+// The cache is module-level rather than TanStack-Query-level on purpose: the
+// query cache is evicted on gcTime and cleared on logout, and each of those
+// would otherwise cost a fresh 200 for a document the client already holds.
+let providersCatalogETag: string | null = null
+let providersCatalogDocument: ProvidersCatalog | null = null
+
+// resetProvidersCatalogCache drops the memoised document + ETag. Used by tests
+// and by any caller that must force a cold 200 (e.g. after a sign-out clears
+// the session the catalog was fetched under).
+export function resetProvidersCatalogCache(): void {
+  providersCatalogETag = null
+  providersCatalogDocument = null
+}
+
 // GET /api/v1/providers/catalog → ProvidersCatalog (contract type).
-export function fetchProvidersCatalog(): Promise<ProvidersCatalog> {
-  return request<ProvidersCatalog>('/providers/catalog', undefined, ProvidersCatalogSchema as ZodType<ProvidersCatalog>)
+//
+// Rejects with ApiError on any non-2xx (the picker renders "Catalog
+// unavailable" with a Retry from this rejection — ADR-068 BDD "Catalog
+// unavailable in the picker") and with ApiSchemaError when the body does not
+// match the generated schema. A failed re-validation never poisons the cached
+// document: the previously served catalog stays available for the next call.
+export async function fetchProvidersCatalog(): Promise<ProvidersCatalog> {
+  return fetchProvidersCatalogOnce(true)
+}
+
+async function fetchProvidersCatalogOnce(mayRetryWithoutETag: boolean): Promise<ProvidersCatalog> {
+  const path = '/providers/catalog'
+  const conditional = providersCatalogETag !== null && providersCatalogDocument !== null
+  let res: Response
+  try {
+    res = await fetch(`${BASE_URL}/api/v1${path}`, {
+      credentials: 'include',
+      headers: buildHeaders(conditional ? { 'If-None-Match': providersCatalogETag as string } : undefined),
+    })
+  } catch (cause) {
+    throw new ApiError(0, 'Network unavailable. Check your connection.', { cause })
+  }
+
+  if (res.status === 304) {
+    if (providersCatalogDocument !== null) return providersCatalogDocument
+    // A 304 with nothing cached means our ETag outlived the document (only
+    // reachable if the cache was reset mid-flight). Retry unconditionally
+    // once so the caller still gets a catalog rather than an error. The
+    // `mayRetryWithoutETag` flag makes the recursion provably single-shot.
+    resetProvidersCatalogCache()
+    if (mayRetryWithoutETag) return fetchProvidersCatalogOnce(false)
+    throw new ApiError(304, 'Providers catalog returned 304 with no cached document.')
+  }
+
+  if (!res.ok) throw await ApiError.fromResponse(res)
+
+  let body: unknown
+  try {
+    body = (await res.json()) as unknown
+  } catch {
+    _recordApiSchemaError(`GET /api/v1${path}`, 1)
+    const schemaErr = new ApiSchemaError(
+      `GET /api/v1${path}`,
+      [{ path: [], message: 'Response is not valid JSON' }],
+      undefined,
+    )
+    void maybeDevToast(`[api] Non-JSON response: ${path}`, `GET:${path}:non-json`)
+    throw schemaErr
+  }
+
+  const parsed = (ProvidersCatalogSchema as ZodType<ProvidersCatalog>).safeParse(body)
+  if (!parsed.success) {
+    _recordApiSchemaError(`GET /api/v1${path}`, parsed.error.issues.length)
+    const schemaErr = new ApiSchemaError(
+      `GET /api/v1${path}`,
+      parsed.error.issues.map((i) => ({ path: i.path as (string | number)[], message: i.message })),
+      body,
+    )
+    void maybeDevToast(`[api] Schema mismatch: ${path} — ${schemaErr.zodIssues[0]?.message ?? 'unknown'}`, `GET:${path}:schema`)
+    throw schemaErr
+  }
+
+  // Only a validated document may claim an ETag — otherwise a malformed 200
+  // would install an ETag whose 304s resolve with the previous catalog.
+  providersCatalogDocument = parsed.data
+  providersCatalogETag = res.headers.get('ETag')
+  return parsed.data
 }
 
 // configureProvider sets a model/provider's API key, endpoint, and/or model.

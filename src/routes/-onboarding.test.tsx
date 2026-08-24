@@ -3,7 +3,7 @@ import React from 'react'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { queryClient } from '@/lib/queryClient'
-import { PROVIDERS_CATALOG_STUB, STUB_PROVIDERS } from '@/test/fixtures/providersCatalog.stub'
+import { PROVIDERS_CATALOG, CATALOG_PROVIDERS } from '@/test/fixtures/providersCatalog'
 import { catalogEndpointHint, catalogSubtitle } from '@/lib/catalogDisplay'
 
 // Wave 5b spec tests — OnboardingWizard frontend tests
@@ -96,7 +96,7 @@ async function renderWizard() {
 
 beforeEach(() => {
   vi.clearAllMocks()
-  vi.mocked(fetchProvidersCatalog).mockResolvedValue(PROVIDERS_CATALOG_STUB)
+  vi.mocked(fetchProvidersCatalog).mockResolvedValue(PROVIDERS_CATALOG)
   mockNavigate.mockResolvedValue(undefined)
   vi.mocked(completeOnboardingTransaction).mockResolvedValue({
     token: 'test-token',
@@ -1140,15 +1140,23 @@ describe('Providers catalog — onboarding reads GET /providers/catalog, never a
     await advancePasswordToModelKey()
   }
 
-  it('[SC-010] onboarding.tsx sources the catalog through fetchProvidersCatalog and imports no bundle', () => {
+  // T068-18: both screens now reach the catalog through the shared
+  // ETag-re-validating query policy (providersCatalogQuery.ts →
+  // fetchProvidersCatalog) instead of naming the fetcher inline. The
+  // still-valid half of the original assertion — no bundled catalog import —
+  // is preserved verbatim; the sourcing half is asserted on the import that
+  // actually carries the call, which a stray comment cannot satisfy.
+  it('[SC-010] onboarding.tsx sources the catalog through the providers-catalog query policy and imports no bundle', () => {
     const src = readFileSync(join(__dirname_onboarding, 'onboarding.tsx'), 'utf-8')
-    expect(src).toContain('fetchProvidersCatalog')
+    expect(src).toContain("from '@/lib/providersCatalogQuery'")
+    expect(src).toContain('providersCatalogQueryOptions()')
     expect(src).not.toContain("from '@/lib/generated/")
   })
 
-  it('[SC-010] ProvidersSection.tsx sources the catalog through fetchProvidersCatalog and imports no bundle', () => {
+  it('[SC-010] ProvidersSection.tsx sources the catalog through the providers-catalog query policy and imports no bundle', () => {
     const src = readFileSync(join(__dirname_onboarding, '../components/settings/ProvidersSection.tsx'), 'utf-8')
-    expect(src).toContain('fetchProvidersCatalog')
+    expect(src).toContain("from '@/lib/providersCatalogQuery'")
+    expect(src).toContain('providersCatalogQueryOptions()')
     expect(src).not.toContain("from '@/lib/generated/")
   })
 
@@ -1160,7 +1168,7 @@ describe('Providers catalog — onboarding reads GET /providers/catalog, never a
   it('the selected entry renders the subtitle and endpoint derived from the fetched document (US-7 parity)', async () => {
     await goToStep3()
     fireEvent.click(screen.getByRole('button', { name: /^Zhipu AI$/i }))
-    const entry = STUB_PROVIDERS.find((e) => e.id === 'zai')!
+    const entry = CATALOG_PROVIDERS.find((e) => e.id === 'zai')!
     await waitFor(() => {
       expect(screen.getByText(catalogSubtitle(entry))).toBeInTheDocument()
     })

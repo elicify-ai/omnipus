@@ -49,7 +49,6 @@ import { BrandIcon } from '@/components/ui/brand-icon'
 import { BrandDisclaimer } from '@/components/ui/brand-disclaimer'
 import {
   fetchProviders,
-  fetchProvidersCatalog,
   configureProvider,
   testProvider,
   getErrorMessage,
@@ -59,6 +58,7 @@ import { PROVIDER_HINTS } from '@/lib/constants'
 import { planLabel, regionLabel } from '@/lib/providerLabels'
 import { catalogEndpointHint, catalogLabel, catalogLogoSlug, catalogVariantTitle } from '@/lib/catalogDisplay'
 import { providerCatalogMode } from '@/lib/agents/providerCatalog'
+import { providersCatalogQueryOptions } from '@/lib/providersCatalogQuery'
 import { ReAuthDialog } from './ReAuthDialog'
 import { ProviderValidationBanner } from '@/components/providers/ProviderValidationBanner'
 import { resolveCatalogEntry } from '@/lib/providerMigration'
@@ -546,12 +546,10 @@ export function ProvidersSection() {
     queryFn: fetchProviders,
   })
 
-  // Registry-fed catalog (ADR-068 FR-037). T068-18 adds the ETag
-  // re-validation cadence; here it is a plain query.
-  const { data: catalogDoc } = useQuery({
-    queryKey: ['providers', 'catalog'],
-    queryFn: fetchProvidersCatalog,
-  })
+  // Registry-fed catalog (ADR-068 FR-037). The ETag re-validation cadence
+  // (Settings open + every 15 min) is the shared policy in
+  // providersCatalogQuery.ts — never re-specified at a call site.
+  const { data: catalogDoc } = useQuery(providersCatalogQueryOptions())
   const catalog = useMemo(() => catalogDoc?.providers ?? [], [catalogDoc])
 
   const { mutate: applyChange, isPending: isSaving } = useMutation({
