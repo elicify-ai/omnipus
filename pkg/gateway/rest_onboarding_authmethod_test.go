@@ -23,9 +23,10 @@ import (
 //
 //   - api_key  → the pre-ADR-068 behaviour, unchanged: 200 + token, the key in
 //     the credential store, the provider row persisted in config.json.
-//   - sign_in  → 400 naming T068-16. T068-16 owns the real sign-in completion
-//     path and will FLIP that assertion (200 + no stored credential) when it
-//     lands; until then the honest stub is the contract.
+//   - sign_in  → the real sign-in completion path (T068-16), covered in
+//     rest_onboarding_complete_test.go. What stays here is the half this file
+//     has always owned: a REJECTED sign_in body persists nothing and releases
+//     the reservation, so a corrected retry can still succeed.
 //   - missing / unknown auth_method → 400; nothing persisted.
 //
 // Also pins the two new sign-in routes (POST /providers/{id}/sign-in,
@@ -99,25 +100,30 @@ func TestOnboardingComplete_AuthMethodApiKey_UnchangedBehaviour(t *testing.T) {
 	assert.True(t, api.onboardingMgr.IsComplete())
 }
 
-func TestOnboardingComplete_AuthMethodSignIn_StubbedUntilT068_16(t *testing.T) {
+// TestOnboardingComplete_AuthMethodSignIn_RejectedBodyPersistsNothing keeps the
+// coverage the T068-16 stub test carried — a rejected sign_in completion writes
+// NOTHING and leaves the reservation released so the operator can retry — now
+// that the rejection comes from a real rule rather than a not-implemented stub.
+// The rule exercised is OnboardingProviderSignIn.yaml's own: the id must name a
+// catalog row that declares sign_in, and `openrouter` is api_key-only.
+func TestOnboardingComplete_AuthMethodSignIn_RejectedBodyPersistsNothing(t *testing.T) {
 	api, tmpDir := newAuthMethodOnboardingAPI(t)
-	body := `{"provider":{"auth_method":"sign_in","id":"codex-cli","model":"gpt-5.4"},"admin":{"username":"admin","password":"secret123"}}`
+	body := `{"provider":{"auth_method":"sign_in","id":"openrouter","model":"openai/gpt-4o"},` +
+		`"admin":{"username":"admin","password":"secret123"}}`
 
 	w := postOnboardingComplete(api, body)
 
-	// T068-16 flips this to 200 with no stored credential once the sign-in
-	// completion path exists.
 	require.Equal(t, http.StatusBadRequest, w.Code, "body=%s", w.Body.String())
 	var resp map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Equal(t, onboardingSignInNotImplementedMsg, resp["error"])
-	assert.Contains(t, resp["error"], "T068-16")
+	assert.Equal(t, onboardingSignInUnsupportedMsg, resp["error"])
+	assert.Equal(t, "id", resp["field"])
 
 	// Nothing persisted, reservation released so a retry can succeed.
 	assert.False(t, api.onboardingMgr.IsComplete())
 	raw, err := os.ReadFile(tmpDir + "/config.json")
 	require.NoError(t, err)
-	assert.NotContains(t, string(raw), "codex-cli")
+	assert.NotContains(t, string(raw), "openrouter")
 }
 
 func TestOnboardingComplete_AuthMethodMissingOrUnknown_400(t *testing.T) {

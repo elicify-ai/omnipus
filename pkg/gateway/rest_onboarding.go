@@ -6,6 +6,7 @@ package gateway
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -67,40 +68,69 @@ const reservedUsernameMsg = "this username is reserved and cannot be registered"
 // resolves to middleware.IssueSessionCookie.
 var issueSessionCookieFn = middleware.IssueSessionCookie
 
-// onboardingSignInNotImplementedMsg is the typed 400 returned when a
-// completion body selects the `sign_in` variant. The sign-in completion path
-// (vendor-CLI login, no stored credential) is T068-16; until it lands the
-// contract is honoured at the schema level only. T068-16 replaces this
-// rejection with the real path and flips the pinning test in
-// rest_onboarding_authmethod_test.go.
-const onboardingSignInNotImplementedMsg = "sign-in onboarding not implemented — T068-16"
-
 // onboardingAuthMethodErrMsg is the 400 for a missing or unrecognized
 // provider.auth_method discriminator.
 const onboardingAuthMethodErrMsg = "provider.auth_method is required and must be one of api_key, sign_in"
 
+// onboardingSignInUnsupportedMsg is the 400 for a `sign_in` completion naming
+// a provider whose catalog row does not declare `sign_in` in auth_methods —
+// the rule OnboardingProviderSignIn.yaml states for its `id`.
+const onboardingSignInUnsupportedMsg = "provider does not support sign-in"
+
+// onboardingSignInModelRequiredMsg is the 400 for a `sign_in` completion that
+// names no model on a row the catalog has no Recommended-for-chat model for.
+// Guessing a vendor default the way the api_key branch does would write a pair
+// GetModelConfig cannot resolve (FR-020: the pair is written once, exactly).
+const onboardingSignInModelRequiredMsg = "provider.model is required for this provider"
+
+// onboardingProviderChoice is the decode-time normalization of the two
+// OnboardingCompleteRequest.provider variants (OnboardingProviderApiKey |
+// OnboardingProviderSignIn), so the handler below asks "which auth method"
+// once instead of carrying two parallel shapes through 200 lines.
+//
+// It is NOT a wire type: it is never serialized, never crosses the gateway
+// boundary, and carries no json tags. The strict decode that produces it
+// happens into the GENERATED variant structs (Constraint #8).
+type onboardingProviderChoice struct {
+	// AuthMethod is a config.AuthMethod* constant, never the raw wire literal.
+	AuthMethod string
+	ID         string
+	// APIKey is empty on the sign_in variant, which has no such property.
+	APIKey   string
+	Model    string
+	Endpoint string
+}
+
 // decodeOnboardingCompleteBody reads the POST /onboarding/complete body,
-// peeks provider.auth_method, and — for the api_key variant — returns the
-// decoded wrapper (for `admin`) plus the strictly-decoded
-// OnboardingProviderApiKey. Any other discriminator value has already been
-// answered with a 400 when ok is false.
+// peeks provider.auth_method, and strictly decodes the provider member into
+// the NAMED generated variant the discriminator selects — never through the
+// union wrapper's As*() accessors (the ADR-034 pattern createAgent uses).
+// It returns the decoded wrapper (for `admin`) plus the variant normalized
+// into onboardingProviderChoice.
 //
 // Behaviour for api_key bodies is byte-for-byte the pre-ADR-068 one apart
 // from the now-required auth_method field: the same 1 MB limit, the same
 // "request body is required" / "invalid JSON body" messages, and schema
 // validation only when validateEnabled.
-func decodeOnboardingCompleteBody(w http.ResponseWriter, r *http.Request, validateEnabled bool) (gen.OnboardingCompleteRequest, gen.OnboardingProviderApiKey, bool) {
+//
+// The strict decode is what enforces the two variants' disjointness
+// unconditionally, independent of ValidateInbound: `api_key` is not a
+// property of OnboardingProviderSignIn, so a sign-in body carrying one is a
+// 400 naming the field and the schema it violated.
+func decodeOnboardingCompleteBody(
+	w http.ResponseWriter, r *http.Request, validateEnabled bool,
+) (gen.OnboardingCompleteRequest, onboardingProviderChoice, bool) {
 	var body gen.OnboardingCompleteRequest
-	var provider gen.OnboardingProviderApiKey
+	var choice onboardingProviderChoice
 
 	raw, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	if err != nil {
 		jsonErr(w, http.StatusBadRequest, "could not read request body")
-		return body, provider, false
+		return body, choice, false
 	}
 	if len(raw) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
 		jsonErr(w, http.StatusBadRequest, "request body is required")
-		return body, provider, false
+		return body, choice, false
 	}
 
 	var peek struct { // not-wire-format: decode-only local peek at the discriminator and the raw provider member, never serialized
@@ -110,22 +140,20 @@ func decodeOnboardingCompleteBody(w http.ResponseWriter, r *http.Request, valida
 	}
 	if err := json.Unmarshal(raw, &peek); err != nil {
 		jsonErr(w, http.StatusBadRequest, "invalid JSON body")
-		return body, provider, false
+		return body, choice, false
 	}
 	if peek.Provider.AuthMethod == nil {
 		jsonErr(w, http.StatusBadRequest, onboardingAuthMethodErrMsg)
-		return body, provider, false
+		return body, choice, false
 	}
 	switch *peek.Provider.AuthMethod {
 	case string(gen.OnboardingProviderApiKeyAuthMethodApiKey):
-		// fallthrough to the api_key path below
+		choice.AuthMethod = config.AuthMethodAPIKey
 	case string(gen.OnboardingProviderSignInAuthMethodSignIn):
-		// T068-16 wires the sign-in completion path; stubbed honestly until then.
-		jsonErr(w, http.StatusBadRequest, onboardingSignInNotImplementedMsg)
-		return body, provider, false
+		choice.AuthMethod = config.AuthMethodSignIn
 	default:
 		jsonErr(w, http.StatusBadRequest, onboardingAuthMethodErrMsg)
-		return body, provider, false
+		return body, choice, false
 	}
 
 	if validateEnabled {
@@ -139,37 +167,73 @@ func decodeOnboardingCompleteBody(w http.ResponseWriter, r *http.Request, valida
 				jsonErr(w, http.StatusBadRequest,
 					fmt.Sprintf("request body does not match schema %s: %s", "OnboardingCompleteRequest", errMsg))
 			}
-			return body, provider, false
+			return body, choice, false
 		}
 	}
 
 	if err := json.Unmarshal(raw, &body); err != nil {
 		jsonErr(w, http.StatusBadRequest, "invalid JSON body")
-		return body, provider, false
+		return body, choice, false
 	}
-	// Strict decode of the provider member into the named variant: a field
-	// the api_key variant does not carry is rejected 400 unconditionally,
-	// independent of ValidateInbound (ADR-034 decodeAgentCreateVariant rule).
 	var providerRaw struct { // not-wire-format: decode-only local carrier for the raw provider member
 		Provider json.RawMessage `json:"provider"`
 	}
 	if err := json.Unmarshal(raw, &providerRaw); err != nil || len(providerRaw.Provider) == 0 {
 		jsonErr(w, http.StatusBadRequest, "invalid JSON body")
-		return body, provider, false
+		return body, choice, false
 	}
+
+	// Strict decode of the provider member into the named variant: a field
+	// the chosen variant does not carry is rejected 400 unconditionally,
+	// independent of ValidateInbound (ADR-034 decodeAgentCreateVariant rule).
 	dec := json.NewDecoder(bytes.NewReader(providerRaw.Provider))
 	dec.DisallowUnknownFields()
-	if err := dec.Decode(&provider); err != nil {
+	schemaName := "OnboardingProviderApiKey"
+	if choice.AuthMethod == config.AuthMethodSignIn {
+		schemaName = "OnboardingProviderSignIn"
+	}
+	decodeFailed := func(err error) bool {
+		if err == nil {
+			return false
+		}
 		if strings.Contains(err.Error(), "unknown field") {
 			jsonErr(w, http.StatusBadRequest, fmt.Sprintf(
-				"field not allowed on provider auth_method %q: %v — see the OnboardingProviderApiKey schema",
-				*peek.Provider.AuthMethod, err))
+				"field not allowed on provider auth_method %q: %v — see the %s schema",
+				*peek.Provider.AuthMethod, err, schemaName))
 		} else {
 			jsonErr(w, http.StatusBadRequest, "invalid JSON body")
 		}
-		return body, provider, false
+		return true
 	}
-	return body, provider, true
+
+	if choice.AuthMethod == config.AuthMethodSignIn {
+		var variant gen.OnboardingProviderSignIn
+		if decodeFailed(dec.Decode(&variant)) {
+			return body, choice, false
+		}
+		choice.ID = variant.Id
+		if variant.Model != nil {
+			choice.Model = *variant.Model
+		}
+		if variant.Endpoint != nil {
+			choice.Endpoint = *variant.Endpoint
+		}
+		return body, choice, true
+	}
+
+	var variant gen.OnboardingProviderApiKey
+	if decodeFailed(dec.Decode(&variant)) {
+		return body, choice, false
+	}
+	choice.ID = variant.Id
+	choice.APIKey = variant.ApiKey
+	if variant.Model != nil {
+		choice.Model = *variant.Model
+	}
+	if variant.Endpoint != nil {
+		choice.Endpoint = *variant.Endpoint
+	}
+	return body, choice, true
 }
 
 // HandleCompleteOnboarding handles POST /api/v1/onboarding/complete.
@@ -233,13 +297,13 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 	}
 
 	// Validate provider.
-	if provider.Id == "" {
+	if provider.ID == "" {
 		jsonErr(w, http.StatusBadRequest, "provider.id is required")
 		return
 	}
 	// Reserved path segments are never provider ids (ADR-068 MAJ-002).
-	if isReservedProviderPathSegment(provider.Id) {
-		jsonErrField(w, http.StatusBadRequest, fmt.Sprintf("unknown provider %q", provider.Id), "id")
+	if isReservedProviderPathSegment(provider.ID) {
+		jsonErrField(w, http.StatusBadRequest, fmt.Sprintf("unknown provider %q", provider.ID), "id")
 		return
 	}
 	// Reject ids the catalog does not carry at the boundary, so the gateway
@@ -253,11 +317,23 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 	// third, because it would also make the "no endpoint resolved" skip
 	// branch below unreachable — every supported catalog row carries a URL,
 	// so the only ids that reach it are the unsupported ones.
-	if !providers.IsCatalogProvider(provider.Id) {
-		jsonErr(w, http.StatusBadRequest, fmt.Sprintf("unknown provider %q", provider.Id))
+	if !providers.IsCatalogProvider(provider.ID) {
+		jsonErr(w, http.StatusBadRequest, fmt.Sprintf("unknown provider %q", provider.ID))
 		return
 	}
-	if provider.ApiKey == "" {
+	// The two variants diverge for the first time here: the api_key variant
+	// must carry a key, and the sign_in variant must name a row whose catalog
+	// entry actually declares sign_in (the rule OnboardingProviderSignIn.yaml
+	// states for its `id`). A row with no declared auth_methods at all is not
+	// refused — that is a catalog gap, not an operator error.
+	if provider.AuthMethod == config.AuthMethodSignIn {
+		row, known := providers.CatalogProvider(provider.ID)
+		if known && len(row.AuthMethods) > 0 &&
+			!catalogOffersAuth(row.AuthMethods, gen.ProbeProviderRequestAuthSignIn) {
+			jsonErrField(w, http.StatusBadRequest, onboardingSignInUnsupportedMsg, "id")
+			return
+		}
+	} else if provider.APIKey == "" {
 		jsonErr(w, http.StatusBadRequest, "provider.api_key is required")
 		return
 	}
@@ -285,222 +361,43 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// ── Provider API-key validation ──────────────────────────────────────────
-	//
-	// Before this block, first-run setup checked only that api_key was non-empty
-	// and then stored it verbatim. That made the STRICTEST moment in the product
-	// — the one where a wrong key leaves an install whose agent cannot answer a
-	// single message — the ONLY place with no key check, while the far less
-	// consequential provider EDIT path (PUT /api/v1/providers/{id}, rest.go's
-	// keyChanged branch) has probed the key and rejected a bad one all along.
-	// The operator's words: "a provider without key or other authentication
-	// should not be possible to configure."
-	//
-	// This deliberately calls the SAME validator as that PUT path and as the CLI
-	// wizard (cmd/omnipus/internal/onboard/onboard.go::validateAndResolveKey) —
-	// providers.ValidateKey — rather than an onboarding-local check that would
-	// drift from them the first time a provider changes its error shape.
-	//
-	// Placement is deliberate on both sides:
-	//   * LAST of the request validations, so a malformed body (bad username,
-	//     short password) is still rejected without a billable upstream call.
-	//   * BEFORE storeCredential, so a rejected key never reaches the credential
-	//     store or config.json.
-	//   * AFTER a credential-store readiness check, for the same reason the PUT
-	//     path orders it that way: there is no point probing a key we have
-	//     nowhere to put, and a locked store must report itself as a locked
-	//     store (503) rather than be mistaken for a bad key.
-	//
-	// ACCEPT/REJECT POLICY — only "the provider told us this key is wrong"
-	// blocks. providers.ValidationResult.Blocks() is true for exactly one
-	// outcome, invalid_key; no_credit / unreachable / restricted all proceed
-	// with a warning. That asymmetry matters more here than anywhere else in
-	// the product, because onboarding is the only door in: if a DNS hiccup, a
-	// captive portal, a provider 5xx or a 30-second outage could block it, a
-	// flaky network would make Omnipus uninstallable — strictly worse than the
-	// bad-key bug this check fixes. Fail CLOSED on "we asked and the answer was
-	// no"; fail OPEN on "we could not find out".
-	//
-	// KNOWN, ACCEPTED TRADE-OFF (review finding D8): this probe is now a real,
-	// billed upstream call that can take up to ~25s (10s catalog fetch + 15s
-	// completion probe) — up from ~1s before this check existed — and that
-	// time is spent INSIDE the ReserveComplete()/committed-guard window above,
-	// and counts against onboardingCompleteLimiter's 3-requests/minute-per-IP
-	// budget (rest_auth.go). Three mistyped keys in a row therefore cost a
-	// real minute of lockout, and a double-click mid-probe can surface a
-	// spurious 409 "onboarding already complete" instead of a clean retry.
-	// This is not fixed here: retuning onboardingCompleteLimiter or adding a
-	// fast client-side debounce is a rate-limiting/UX design change with its
-	// own blast radius, not a one-line fix alongside a validation-correctness
-	// patch, and PUT /providers/{id} already accepts the identical latency
-	// profile for the same reason (a probe cannot be both real and instant).
-	// Tracked as follow-up, not a blocker for this change.
-	if err := a.credentialStoreReady(); err != nil {
-		slog.Error("onboarding: credential store unavailable before key validation", "error", err)
-		jsonErr(
-			w,
-			http.StatusServiceUnavailable,
-			"credential store locked: set OMNIPUS_MASTER_KEY or unlock before saving secrets",
-		)
-		return
-	}
-
-	// Resolve what the probe will talk to: the operator's endpoint override if
-	// they supplied one, else the vendor default for this protocol.
-	probeBase := ""
-	if provider.Endpoint != nil {
-		probeBase = strings.TrimSpace(*provider.Endpoint)
-	}
-	if probeBase == "" {
-		probeBase = providers.APIBaseFor(provider.Id)
-	}
-
-	// keyWarning carries a non-blocking validation outcome to the response's
-	// existing `warning` field. Empty means "nothing to say".
+	// ── Credential handling, per auth method ────────────────────────────────
+	// api_key: probe the key and store it. sign_in: nothing to probe and
+	// nothing to store — the vendor CLI's own login is the credential and
+	// Omnipus only ever reads it (FR-007), so credRefName stays empty and no
+	// key warning can arise.
+	credRefName := ""
 	keyWarning := ""
-	// probeSkipReason is empty when the probe actually ran; otherwise it names
-	// why it could not, for the audit trail.
-	probeSkipReason := ""
-	providerDisplayName := providers.DisplayName(provider.Id)
-	if probeBase == "" {
-		// A known protocol with no vendor default and no operator-supplied
-		// endpoint (azure is the live example — it has no fixed base). There is
-		// nothing to probe against, which is "we could not find out", not "the
-		// key is bad".
-		probeSkipReason = "no endpoint resolved"
-		// D4: this is a non-blocking outcome just like `unreachable`, three
-		// lines below in the other skip branch — it must be equally visible to
-		// the operator, not just to the audit log. Without this, a provider
-		// with no fixed default base (azure) always looks EXACTLY like a
-		// verified key on the completion screen, which is indistinguishable
-		// from the "warning nobody sees" failure mode this whole check exists
-		// to avoid.
-		keyWarning = fmt.Sprintf(
-			"Couldn't verify your %s key: no endpoint is configured for this provider and none was supplied. Continuing with the key as entered.",
-			providerDisplayName,
-		)
-	} else if a.ssrfChecker != nil {
-		if err := a.ssrfChecker.CheckURL(r.Context(), probeBase); err != nil {
-			// SEC-24: this endpoint is reachable pre-auth and CSRF-exempt, and
-			// probeBase can come straight from the request body, so the probe
-			// must never be the thing that reaches an internal address. Skipping
-			// the outbound call IS the mitigation — we do not additionally reject
-			// the request the way PUT /providers/{id} does. PUT can afford a 422
-			// because it runs post-auth against an already-persisted api_base;
-			// rejecting here would mean an operator running a local model server
-			// (Ollama / LM Studio / LiteLLM on 127.0.0.1 — loopback is blocked by
-			// default unless allowlisted, see security.NewSSRFChecker) could not
-			// finish first-run setup at all. Same principle as the unreachable
-			// rule: not being permitted to look is not evidence the key is bad.
-			slog.Warn("onboarding: SSRF guard blocked the key-validation probe; proceeding without it",
-				"provider", provider.Id, "error", err)
-			probeSkipReason = "ssrf blocked"
-			// D4: same visibility fix as the branch above. Deliberately does NOT
-			// echo probeBase/err — those are already in the WARN log above for an
-			// operator/support engineer, and the completion-screen message is
-			// user-facing text, not a debug trace (SEC-16 posture: curated,
-			// no raw detail on the wire).
-			keyWarning = fmt.Sprintf(
-				"Couldn't verify your %s key: the configured endpoint isn't reachable for an automatic check (e.g. a local model server). Continuing with the key as entered.",
-				providerDisplayName,
-			)
-		}
-	}
-
-	if probeSkipReason == "" {
-		// ADR-067 FR-022: NO `GET /models` pre-fetch. provider.Id is gated
-		// above to a catalog id, so ValidateKey resolves its probe candidates
-		// straight from the registry catalog (the first active, tool-calling
-		// text models in document order) and falls through to the next one on
-		// a model_not_found answer, at most three times. The live fetch this
-		// used to make was a round trip whose answer the catalog already
-		// carries — and on a provider whose /models is public it returned a
-		// reassuring 200 that said nothing about the key.
-		//
-		// SEC-16: result.RawDetail is server-debug-only and never leaves this process.
-		result := providers.ValidateKey(r.Context(), providers.ValidateInput{
-			ProviderID:   provider.Id,
-			ProviderName: providerDisplayName,
-			BaseURL:      probeBase,
-			APIKey:       provider.ApiKey,
-		}, a.ssrfChk())
-		slog.Debug("onboarding: provider key validation result",
-			"provider", provider.Id, "outcome", result.Outcome, "detail", result.RawDetail)
-
-		if result.Blocks() {
-			// invalid_key — the only blocking outcome. Nothing is stored: the
-			// credential-store write and the config.json transaction are both
-			// still below this point, and the committed-guard defer above
-			// releases the onboarding reservation so the operator can retry
-			// immediately with a corrected key.
-			//
-			// 400 rather than the PUT path's 422 purely because
-			// /onboarding/complete's contract (contracts/openapi.yaml) declares
-			// 400/409/429/500/503 and not 422, and a rejected api_key is a
-			// rejected request field exactly like the checks above it. The
-			// decision itself — which outcomes reject — is shared with PUT via
-			// Blocks(); only the status code differs.
-			jsonErr(w, http.StatusBadRequest, result.Message)
+	if provider.AuthMethod == config.AuthMethodAPIKey {
+		var ok bool
+		credRefName, keyWarning, ok = a.validateAndStoreOnboardingKey(w, r, provider)
+		if !ok {
 			return
 		}
-		if result.Outcome != providers.OutcomeValid {
-			// no_credit / unreachable / restricted: proceed, but do not proceed
-			// silently — a first-run that quietly accepts an out-of-credit key is
-			// how someone ends up debugging a "broken" install.
-			keyWarning = result.Message
-			if a.auditor != nil {
-				if err := a.auditor.Log(&audit.Entry{
-					Event:    "provider_key_validated",
-					Decision: audit.DecisionAllow,
-					Details: map[string]any{
-						"provider": provider.Id,
-						"outcome":  string(result.Outcome),
-						"action":   "proceeded",
-						"source":   "onboarding",
-					},
-				}); err != nil {
-					slog.Warn("audit write failed", "event", "provider_key_validated", "error", err)
-				}
-			}
-		}
-	} else if a.auditor != nil {
-		// The probe did not run at all. That is a legitimate outcome (see the
-		// two branches above) but it must be visible afterwards, so it uses the
-		// audit event pkg/audit/audit.go already reserves for exactly this.
-		if err := a.auditor.Log(&audit.Entry{
-			Event:    "provider_key_validation_skipped",
-			Decision: audit.DecisionAllow,
-			Details: map[string]any{
-				"provider": provider.Id,
-				"reason":   probeSkipReason,
-				"source":   "onboarding",
-			},
-		}); err != nil {
-			slog.Warn("audit write failed", "event", "provider_key_validation_skipped", "error", err)
-		}
-	}
-
-	// Store the API key in the encrypted credentials store (AES-256-GCM).
-	// Refuses the operation if the store is locked (SEC-23: no plaintext fallback).
-	credRefName, credErr := a.storeCredential(provider.Id+"_API_KEY", provider.ApiKey)
-	if credErr != nil {
-		slog.Error("rest: credential store unavailable during onboarding", "error", credErr)
-		jsonErr(
-			w,
-			http.StatusServiceUnavailable,
-			"credential store locked: set OMNIPUS_MASTER_KEY or unlock before saving secrets",
-		)
-		return
 	}
 
 	// Build the provider entry as a JSON object to inject into providers array.
 	// model defaults per provider when not specified in the onboarding request.
-	providerModel := ""
-	if provider.Model != nil {
-		providerModel = *provider.Model
+	providerModel := provider.Model
+	if providerModel == "" && provider.AuthMethod == config.AuthMethodSignIn {
+		// A sign-in row has no vendor api_key default to guess from — its
+		// models are whatever the operator's subscription carries — so the
+		// fallback is the row's own first Recommended-for-chat catalog model,
+		// the SAME pick the probe would have exercised (FR-036). If the
+		// catalog offers none, say so rather than write a pair
+		// GetModelConfig cannot resolve.
+		if row, known := providers.CatalogProvider(provider.ID); known {
+			if rec := recommendedProbeModels(row); len(rec) > 0 {
+				providerModel = rec[0]
+			}
+		}
+		if providerModel == "" {
+			jsonErrField(w, http.StatusBadRequest, onboardingSignInModelRequiredMsg, "model")
+			return
+		}
 	}
 	if providerModel == "" {
-		switch provider.Id {
+		switch provider.ID {
 		case "anthropic":
 			providerModel = "claude-sonnet-4-6"
 		case "gemini", "google":
@@ -515,20 +412,25 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 	// T067-08); the default model itself is the (provider, model) PAIR written
 	// below, never this alias. Use the actual model string so the alias matches
 	// what the user picked.
+	//
+	// auth_method is stamped explicitly on both variants (ADR-068 FR-003):
+	// the row records HOW it authenticates, so a sign-in row is never
+	// mistaken for a key row whose credential went missing.
 	newProviderEntry := map[string]any{
 		"model_name":  providerModel,
-		"provider":    provider.Id,
+		"provider":    provider.ID,
 		"model":       providerModel,
-		"api_key_ref": credRefName,
+		"auth_method": provider.AuthMethod,
+	}
+	if credRefName != "" {
+		newProviderEntry["api_key_ref"] = credRefName
 	}
 	// Persist a custom endpoint as api_base when supplied (required for providers
 	// with no fixed default base, e.g. azure; also a regional-host override). The
 	// runtime factory reads an explicit api_base before falling back to the
 	// catalog row's own base URL (ADR-067 FR-012).
-	if provider.Endpoint != nil {
-		if ep := strings.TrimSpace(*provider.Endpoint); ep != "" {
-			newProviderEntry["api_base"] = ep
-		}
+	if ep := strings.TrimSpace(provider.Endpoint); ep != "" {
+		newProviderEntry["api_base"] = ep
 	}
 
 	// Pre-compute all expensive crypto operations outside the config lock to
@@ -586,22 +488,29 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 			if !isMap {
 				continue
 			}
-			if entryMap["provider"] == provider.Id && entryMap["model"] == providerModel {
+			if entryMap["provider"] == provider.ID && entryMap["model"] == providerModel {
 				// Update existing entry.
-				if credRefName != "" {
+				switch {
+				case credRefName != "":
 					entryMap["api_key_ref"] = credRefName
 					delete(entryMap, "api_key")
 					delete(entryMap, "api_keys")
-				} else {
-					entryMap["api_key"] = provider.ApiKey
+				case provider.AuthMethod == config.AuthMethodSignIn:
+					// No credential exists for a sign-in row, so leave none
+					// behind — including a stale one from an earlier api_key
+					// onboarding of the same pair.
+					delete(entryMap, "api_key")
+					delete(entryMap, "api_keys")
+					delete(entryMap, "api_key_ref")
+				default:
+					entryMap["api_key"] = provider.APIKey
 				}
 				entryMap["model"] = providerModel
 				entryMap["model_name"] = providerModel
-				entryMap["provider"] = provider.Id
-				if provider.Endpoint != nil {
-					if ep := strings.TrimSpace(*provider.Endpoint); ep != "" {
-						entryMap["api_base"] = ep
-					}
+				entryMap["provider"] = provider.ID
+				entryMap["auth_method"] = provider.AuthMethod
+				if ep := strings.TrimSpace(provider.Endpoint); ep != "" {
+					entryMap["api_base"] = ep
 				}
 				providerList[i] = entryMap
 				found = true
@@ -628,7 +537,7 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 		}
 		delete(defaultsMap, "model_name")
 		defaultsMap["default_model"] = map[string]any{
-			"provider": provider.Id,
+			"provider": provider.ID,
 			"model":    providerModel,
 		}
 		agentsMap["defaults"] = defaultsMap
@@ -752,7 +661,7 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 		Username: body.Admin.Username,
 	}
 	switch {
-	case credRefName == "":
+	case provider.AuthMethod == config.AuthMethodAPIKey && credRefName == "":
 		warningMsg := "API key stored in plaintext — set OMNIPUS_MASTER_KEY for encrypted storage"
 		resp.Warning = &warningMsg
 	case keyWarning != "":
@@ -763,6 +672,225 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 		resp.Warning = &keyWarning
 	}
 	jsonOK(w, resp)
+}
+
+// validateAndStoreOnboardingKey is the api_key half of onboarding completion:
+// probe the submitted key, then put it in the encrypted credential store. It
+// runs for the OnboardingProviderApiKey variant only — the sign_in variant has
+// no key to probe and stores no credential at all (ADR-068 FR-007: the vendor
+// CLI holds the login and Omnipus never copies it).
+//
+// Returns (credRefName, keyWarning, ok). ok is false when it has already
+// written the response; the caller must return immediately.
+func (a *restAPI) validateAndStoreOnboardingKey(
+	w http.ResponseWriter, r *http.Request, provider onboardingProviderChoice,
+) (string, string, bool) {
+	// ── Provider API-key validation ──────────────────────────────────────────
+	//
+	// Before this block, first-run setup checked only that api_key was non-empty
+	// and then stored it verbatim. That made the STRICTEST moment in the product
+	// — the one where a wrong key leaves an install whose agent cannot answer a
+	// single message — the ONLY place with no key check, while the far less
+	// consequential provider EDIT path (PUT /api/v1/providers/{id}, rest.go's
+	// keyChanged branch) has probed the key and rejected a bad one all along.
+	// The operator's words: "a provider without key or other authentication
+	// should not be possible to configure."
+	//
+	// This deliberately calls the SAME validator as that PUT path and as the CLI
+	// wizard (cmd/omnipus/internal/onboard/onboard.go::validateAndResolveKey) —
+	// providers.ValidateKey — rather than an onboarding-local check that would
+	// drift from them the first time a provider changes its error shape.
+	//
+	// Placement is deliberate on both sides:
+	//   * LAST of the request validations, so a malformed body (bad username,
+	//     short password) is still rejected without a billable upstream call.
+	//   * BEFORE storeCredential, so a rejected key never reaches the credential
+	//     store or config.json.
+	//   * AFTER a credential-store readiness check, for the same reason the PUT
+	//     path orders it that way: there is no point probing a key we have
+	//     nowhere to put, and a locked store must report itself as a locked
+	//     store (503) rather than be mistaken for a bad key.
+	//
+	// ACCEPT/REJECT POLICY — only "the provider told us this key is wrong"
+	// blocks. providers.ValidationResult.Blocks() is true for exactly one
+	// outcome, invalid_key; no_credit / unreachable / restricted all proceed
+	// with a warning. That asymmetry matters more here than anywhere else in
+	// the product, because onboarding is the only door in: if a DNS hiccup, a
+	// captive portal, a provider 5xx or a 30-second outage could block it, a
+	// flaky network would make Omnipus uninstallable — strictly worse than the
+	// bad-key bug this check fixes. Fail CLOSED on "we asked and the answer was
+	// no"; fail OPEN on "we could not find out".
+	//
+	// KNOWN, ACCEPTED TRADE-OFF (review finding D8): this probe is now a real,
+	// billed upstream call that can take up to ~25s (10s catalog fetch + 15s
+	// completion probe) — up from ~1s before this check existed — and that
+	// time is spent INSIDE the ReserveComplete()/committed-guard window above,
+	// and counts against onboardingCompleteLimiter's 3-requests/minute-per-IP
+	// budget (rest_auth.go). Three mistyped keys in a row therefore cost a
+	// real minute of lockout, and a double-click mid-probe can surface a
+	// spurious 409 "onboarding already complete" instead of a clean retry.
+	// This is not fixed here: retuning onboardingCompleteLimiter or adding a
+	// fast client-side debounce is a rate-limiting/UX design change with its
+	// own blast radius, not a one-line fix alongside a validation-correctness
+	// patch, and PUT /providers/{id} already accepts the identical latency
+	// profile for the same reason (a probe cannot be both real and instant).
+	// Tracked as follow-up, not a blocker for this change.
+	if err := a.credentialStoreReady(); err != nil {
+		slog.Error("onboarding: credential store unavailable before key validation", "error", err)
+		jsonErr(
+			w,
+			http.StatusServiceUnavailable,
+			"credential store locked: set OMNIPUS_MASTER_KEY or unlock before saving secrets",
+		)
+		return "", "", false
+	}
+
+	// Resolve what the probe will talk to: the operator's endpoint override if
+	// they supplied one, else the vendor default for this protocol.
+	probeBase := strings.TrimSpace(provider.Endpoint)
+	if probeBase == "" {
+		probeBase = providers.APIBaseFor(provider.ID)
+	}
+
+	// keyWarning carries a non-blocking validation outcome to the response's
+	// existing `warning` field. Empty means "nothing to say".
+	keyWarning := ""
+	// probeSkipReason is empty when the probe actually ran; otherwise it names
+	// why it could not, for the audit trail.
+	probeSkipReason := ""
+	providerDisplayName := providers.DisplayName(provider.ID)
+	if probeBase == "" {
+		// A known protocol with no vendor default and no operator-supplied
+		// endpoint (azure is the live example — it has no fixed base). There is
+		// nothing to probe against, which is "we could not find out", not "the
+		// key is bad".
+		probeSkipReason = "no endpoint resolved"
+		// D4: this is a non-blocking outcome just like `unreachable`, three
+		// lines below in the other skip branch — it must be equally visible to
+		// the operator, not just to the audit log. Without this, a provider
+		// with no fixed default base (azure) always looks EXACTLY like a
+		// verified key on the completion screen, which is indistinguishable
+		// from the "warning nobody sees" failure mode this whole check exists
+		// to avoid.
+		keyWarning = fmt.Sprintf(
+			"Couldn't verify your %s key: no endpoint is configured for this provider and none was supplied. Continuing with the key as entered.",
+			providerDisplayName,
+		)
+	} else if a.ssrfChecker != nil {
+		if err := a.ssrfChecker.CheckURL(r.Context(), probeBase); err != nil {
+			// SEC-24: this endpoint is reachable pre-auth and CSRF-exempt, and
+			// probeBase can come straight from the request body, so the probe
+			// must never be the thing that reaches an internal address. Skipping
+			// the outbound call IS the mitigation — we do not additionally reject
+			// the request the way PUT /providers/{id} does. PUT can afford a 422
+			// because it runs post-auth against an already-persisted api_base;
+			// rejecting here would mean an operator running a local model server
+			// (Ollama / LM Studio / LiteLLM on 127.0.0.1 — loopback is blocked by
+			// default unless allowlisted, see security.NewSSRFChecker) could not
+			// finish first-run setup at all. Same principle as the unreachable
+			// rule: not being permitted to look is not evidence the key is bad.
+			slog.Warn("onboarding: SSRF guard blocked the key-validation probe; proceeding without it",
+				"provider", provider.ID, "error", err)
+			probeSkipReason = "ssrf blocked"
+			// D4: same visibility fix as the branch above. Deliberately does NOT
+			// echo probeBase/err — those are already in the WARN log above for an
+			// operator/support engineer, and the completion-screen message is
+			// user-facing text, not a debug trace (SEC-16 posture: curated,
+			// no raw detail on the wire).
+			keyWarning = fmt.Sprintf(
+				"Couldn't verify your %s key: the configured endpoint isn't reachable for an automatic check (e.g. a local model server). Continuing with the key as entered.",
+				providerDisplayName,
+			)
+		}
+	}
+
+	if probeSkipReason == "" {
+		// ADR-067 FR-022: NO `GET /models` pre-fetch. provider.ID is gated
+		// above to a catalog id, so ValidateKey resolves its probe candidates
+		// straight from the registry catalog (the first active, tool-calling
+		// text models in document order) and falls through to the next one on
+		// a model_not_found answer, at most three times. The live fetch this
+		// used to make was a round trip whose answer the catalog already
+		// carries — and on a provider whose /models is public it returned a
+		// reassuring 200 that said nothing about the key.
+		//
+		// SEC-16: result.RawDetail is server-debug-only and never leaves this process.
+		result := providers.ValidateKey(r.Context(), providers.ValidateInput{
+			ProviderID:   provider.ID,
+			ProviderName: providerDisplayName,
+			BaseURL:      probeBase,
+			APIKey:       provider.APIKey,
+		}, a.ssrfChk())
+		slog.Debug("onboarding: provider key validation result",
+			"provider", provider.ID, "outcome", result.Outcome, "detail", result.RawDetail)
+
+		if result.Blocks() {
+			// invalid_key — the only blocking outcome. Nothing is stored: the
+			// credential-store write and the config.json transaction are both
+			// still below this point, and the committed-guard defer above
+			// releases the onboarding reservation so the operator can retry
+			// immediately with a corrected key.
+			//
+			// 400 rather than the PUT path's 422 purely because
+			// /onboarding/complete's contract (contracts/openapi.yaml) declares
+			// 400/409/429/500/503 and not 422, and a rejected api_key is a
+			// rejected request field exactly like the checks above it. The
+			// decision itself — which outcomes reject — is shared with PUT via
+			// Blocks(); only the status code differs.
+			jsonErr(w, http.StatusBadRequest, result.Message)
+			return "", "", false
+		}
+		if result.Outcome != providers.OutcomeValid {
+			// no_credit / unreachable / restricted: proceed, but do not proceed
+			// silently — a first-run that quietly accepts an out-of-credit key is
+			// how someone ends up debugging a "broken" install.
+			keyWarning = result.Message
+			if a.auditor != nil {
+				if err := a.auditor.Log(&audit.Entry{
+					Event:    "provider_key_validated",
+					Decision: audit.DecisionAllow,
+					Details: map[string]any{
+						"provider": provider.ID,
+						"outcome":  string(result.Outcome),
+						"action":   "proceeded",
+						"source":   "onboarding",
+					},
+				}); err != nil {
+					slog.Warn("audit write failed", "event", "provider_key_validated", "error", err)
+				}
+			}
+		}
+	} else if a.auditor != nil {
+		// The probe did not run at all. That is a legitimate outcome (see the
+		// two branches above) but it must be visible afterwards, so it uses the
+		// audit event pkg/audit/audit.go already reserves for exactly this.
+		if err := a.auditor.Log(&audit.Entry{
+			Event:    "provider_key_validation_skipped",
+			Decision: audit.DecisionAllow,
+			Details: map[string]any{
+				"provider": provider.ID,
+				"reason":   probeSkipReason,
+				"source":   "onboarding",
+			},
+		}); err != nil {
+			slog.Warn("audit write failed", "event", "provider_key_validation_skipped", "error", err)
+		}
+	}
+
+	// Store the API key in the encrypted credentials store (AES-256-GCM).
+	// Refuses the operation if the store is locked (SEC-23: no plaintext fallback).
+	credRefName, credErr := a.storeCredential(provider.ID+"_API_KEY", provider.APIKey)
+	if credErr != nil {
+		slog.Error("rest: credential store unavailable during onboarding", "error", credErr)
+		jsonErr(
+			w,
+			http.StatusServiceUnavailable,
+			"credential store locked: set OMNIPUS_MASTER_KEY or unlock before saving secrets",
+		)
+		return "", "", false
+	}
+
+	return credRefName, keyWarning, true
 }
 
 // Wire-format limits from contracts/components/schemas/ProbeProviderRequest.yaml,
@@ -1007,16 +1135,6 @@ func (a *restAPI) HandleOnboardingProbeProvider(w http.ResponseWriter, r *http.R
 		}
 	}
 
-	// The sign-in probe itself (CLI saved login / Copilot session) lands with
-	// ADR-068 T068-14's provider constructors. Everything above already
-	// decided that this provider OFFERS sign-in; what is missing is the
-	// machinery to exercise it.
-	if body.Auth != gen.ProbeProviderRequestAuthApiKey {
-		jsonErrField(w, http.StatusBadRequest,
-			"auth sign_in is not supported yet; use auth api_key", "auth")
-		return
-	}
-
 	// The model list comes from the REGISTRY CATALOG, offline, with zero
 	// outbound requests (ADR-067 FR-020/FR-022, US-9.AC1). The `GET /models`
 	// pre-fetch that used to run here told us nothing the catalog does not
@@ -1035,6 +1153,22 @@ func (a *restAPI) HandleOnboardingProbeProvider(w http.ResponseWriter, r *http.R
 	if len(models) == 0 {
 		slog.Warn("rest: probe-provider: provider returned no models",
 			"provider", body.Id)
+	}
+
+	// ── auth: sign_in (ADR-068 FR-036, CRIT-002) ────────────────────────────
+	// Everything above already decided that this provider OFFERS sign-in.
+	// What remains is the same two questions the api_key path asks, answered
+	// through the vendor's saved login instead of a submitted key: is there a
+	// login at all, and does ONE completion with the operator's chosen model
+	// succeed.
+	if body.Auth == gen.ProbeProviderRequestAuthSignIn {
+		result, refusal := a.probeSignIn(r.Context(), catalogRow, isCatalogRow, body.Id, pickedModel, baseURL)
+		if refusal != "" {
+			jsonErrField(w, http.StatusBadRequest, refusal, "auth")
+			return
+		}
+		writeProbeResult(w, body.Id, result, models)
+		return
 	}
 
 	// Auth-validation step: use the centralized providers.ValidateKey to probe the key.
@@ -1067,9 +1201,18 @@ func (a *restAPI) HandleOnboardingProbeProvider(w http.ResponseWriter, r *http.R
 		"provider", body.Id, "outcome", result.Outcome,
 		"probed_model", result.ProbedModel, "detail", result.RawDetail)
 
-	// Build the probe response (R-B / FR-013).
-	// validation is present for non-valid probed outcomes only (no_credit, unreachable,
-	// restricted) — absent for valid (symmetric with Provider/OperationResult).
+	writeProbeResult(w, body.Id, result, models)
+}
+
+// writeProbeResult renders one ValidationResult as the probe's 200 body
+// (R-B / FR-013). Shared by the api_key and sign-in paths so BOTH keep the
+// invariant this endpoint's doc comment states: `success` is the complement of
+// Blocks(), `probed_model` names the model actually exercised, and `validation`
+// is present for non-valid outcomes only (symmetric with Provider /
+// OperationResult).
+func writeProbeResult(
+	w http.ResponseWriter, providerID string, result providers.ValidationResult, models []string,
+) {
 	probeResp := gen.ProbeProviderResponse{
 		Success: !result.Blocks(),
 		Models:  &models,
@@ -1085,7 +1228,7 @@ func (a *restAPI) HandleOnboardingProbeProvider(w http.ResponseWriter, r *http.R
 		// Guard: only assign the validation object when the cast is a known wire value.
 		if !outcomeStr.Valid() {
 			slog.Warn("rest: probe-provider: unrecognized validation outcome; omitting validation field",
-				"provider", body.Id, "outcome", result.Outcome)
+				"provider", providerID, "outcome", result.Outcome)
 		} else {
 			// Assign the generated anonymous field struct directly (matching the two
 			// rest.go sites) — binding it to a local first trips the hand-written
@@ -1101,9 +1244,195 @@ func (a *restAPI) HandleOnboardingProbeProvider(w http.ResponseWriter, r *http.R
 	}
 
 	if result.Blocks() {
-		// InvalidKey — report failure. The curated message is safe to surface (SEC-16).
+		// The credential was rejected — report failure. The curated message is
+		// safe to surface (SEC-16).
 		probeResp.Models = nil
 		probeResp.Error = &result.Message
 	}
 	jsonOK(w, probeResp)
+}
+
+// ── The sign-in probe (ADR-068 FR-036 / FR-029, CRIT-002) ───────────────────
+
+// probeNotSignedInMsg is the ONLY pre-probe refusal a sign-in probe may
+// return: there is no saved vendor login on this machine at all. FR-036 is
+// explicit that a sign-in probe "400s only when neither is present" — every
+// other answer comes from the completion it then runs, exactly as the api_key
+// path's does.
+const probeNotSignedInMsg = "not signed in"
+
+// probeSignInUnavailableMsg answers a row that declares `sign_in` but offers
+// no mechanism this gateway can exercise: no `cli_kind` (a vendor CLI holding
+// the login) and no `token_source` (a saved token Omnipus may read). Today
+// that is the device-code shape (xai) — its stored-OAuth token and the chat
+// client to spend it are separate, unlanded features — and any operator-named
+// custom row, which is not a catalog row and so declares no mechanism at all.
+//
+// It is deliberately NOT "not signed in": whether the operator has an account
+// is unknown here, and guessing would send them to sign in again and again
+// against a probe that could never go green.
+const probeSignInUnavailableMsg = "sign-in cannot be probed for this provider"
+
+// signInProbeTimeout bounds the ONE completion a sign-in probe runs. It is
+// wider than probeCompletion's 15s because the CLI mechanisms spawn a real
+// vendor binary that boots a runtime before it answers.
+const signInProbeTimeout = 90 * time.Second
+
+// signInProbePrompt is the smallest prompt that still forces a real turn.
+const signInProbePrompt = "hi"
+
+// probeSignIn runs the `auth: sign_in` half of POST /onboarding/probe-provider.
+//
+// Which mechanism to use is CATALOG DATA, never a hardcoded id list:
+//
+//   - `cli_kind` (codex | copilot) — a `protocol: cli` row whose vendor binary
+//     holds the login. The probe is one subprocess completion with the chosen
+//     model.
+//   - `token_source: codex-auth-json` — a row that reuses the Codex CLI's saved
+//     access token against its OWN base URL (openai-chatgpt). The probe is one
+//     ordinary completion carrying that token, classified by the same
+//     providers.ValidateKey the api_key path uses.
+//
+// Returns (result, refusal). A non-empty refusal is a 400 on field `auth` and
+// the result is meaningless; an empty refusal means a completion ran and its
+// result is the answer.
+func (a *restAPI) probeSignIn(
+	ctx context.Context,
+	row catalog.Provider, isCatalogRow bool,
+	providerID, pickedModel, baseURL string,
+) (providers.ValidationResult, string) {
+	// FR-036 decides WHICH model is exercised identically for both auth
+	// methods: the operator's pick verbatim, absent → the row's first
+	// Recommended-for-chat catalog model.
+	model := pickedModel
+	if model == "" && isCatalogRow {
+		if rec := recommendedProbeModels(row); len(rec) > 0 {
+			model = rec[0]
+		}
+	}
+	displayName := providers.DisplayName(providerID)
+
+	ctx, cancel := context.WithTimeout(ctx, signInProbeTimeout)
+	defer cancel()
+
+	switch {
+	case row.CLIKind != "":
+		return a.probeSignInCLI(ctx, row, displayName, model)
+
+	case row.TokenSource == catalog.TokenSourceCodexAuthJSON:
+		// FR-007: the file is read, never written, refreshed or proxied.
+		token, _, _, err := providers.ReadCodexCliCredentials()
+		if err != nil {
+			slog.Debug("rest: probe-provider: no saved codex login for a token-source row",
+				"provider", providerID, "error", err)
+			return providers.ValidationResult{}, probeNotSignedInMsg
+		}
+		var probeModels []string
+		if model != "" {
+			probeModels = []string{model}
+		}
+		result := providers.ValidateKey(ctx, providers.ValidateInput{
+			ProviderID:   providerID,
+			ProviderName: displayName,
+			BaseURL:      baseURL,
+			APIKey:       token,
+			ProbeModels:  probeModels,
+		}, a.ssrfChk())
+		slog.Debug("rest: probe-provider: sign-in token probe result",
+			"provider", providerID, "outcome", result.Outcome,
+			"probed_model", result.ProbedModel, "detail", result.RawDetail)
+		return result, ""
+
+	default:
+		return providers.ValidationResult{}, probeSignInUnavailableMsg
+	}
+}
+
+// probeSignInCLI is the `cli_kind` half of probeSignIn: confirm a saved login
+// exists, then spend exactly one subprocess completion on the chosen model.
+//
+// The presence check is per-mechanism and comes FIRST, because the two failure
+// modes must not be conflated: "you have not signed in" is a 400 on field
+// `auth` that tells the operator what to do, while "the vendor answered no to
+// this model" is a 200 with success=false that tells them to pick another one.
+func (a *restAPI) probeSignInCLI(
+	ctx context.Context, row catalog.Provider, displayName, model string,
+) (providers.ValidationResult, string) {
+	switch row.CLIKind {
+	case catalog.CLIKindCodex:
+		// The Codex CLI's login IS its auth.json; no auth.json, no login.
+		if _, _, _, err := providers.ReadCodexCliCredentials(); err != nil {
+			slog.Debug("rest: probe-provider: no saved codex cli login",
+				"provider", row.ID, "error", err)
+			return providers.ValidationResult{}, probeNotSignedInMsg
+		}
+	case catalog.CLIKindCopilot:
+		// The Copilot CLI stores its token in the system credential store and
+		// exposes no status command (see CopilotSignIn's verified-behaviour
+		// note), so the only thing knowable WITHOUT spending a request is
+		// whether the binary exists at all. Its login state is read off the
+		// completion below, via the shared classifier.
+		if !providers.CopilotCLIAvailable("") {
+			return providers.ValidationResult{}, providers.CopilotCLIMissingHint
+		}
+	default:
+		slog.Warn("rest: probe-provider: catalog row carries an unknown cli_kind",
+			"provider", row.ID, "cli_kind", row.CLIKind)
+		return providers.ValidationResult{}, probeSignInUnavailableMsg
+	}
+
+	prov, err := providers.NewCliProviderForKind(row.CLIKind, "", "")
+	if err != nil {
+		slog.Warn("rest: probe-provider: no subprocess driver for cli_kind",
+			"provider", row.ID, "cli_kind", row.CLIKind, "error", err)
+		return providers.ValidationResult{}, probeSignInUnavailableMsg
+	}
+
+	_, chatErr := prov.Chat(ctx,
+		[]providers.Message{{Role: "user", Content: signInProbePrompt}}, nil, model, nil)
+	if chatErr == nil {
+		return providers.ValidationResult{Outcome: providers.OutcomeValid, ProbedModel: model}, ""
+	}
+	slog.Debug("rest: probe-provider: sign-in cli probe failed",
+		"provider", row.ID, "cli_kind", row.CLIKind, "model", model, "error", chatErr)
+
+	// Copilot only reveals "no credential" here, after the run — so report it
+	// as the sign-in refusal it is rather than as a rejected model. Only an
+	// EXPLICIT marker match counts: an unrecognised failure from a CLI that is
+	// installed, after a completion on the operator's chosen model, is far
+	// likelier to be that model or that plan, and answering it with "not
+	// signed in" would send them to re-authenticate against a problem
+	// authentication cannot fix (see MatchCopilotSignInFailure).
+	if row.CLIKind == catalog.CLIKindCopilot {
+		if state, matched := providers.MatchCopilotSignInFailure(chatErr.Error()); matched &&
+			(state == providers.CopilotNotSignedIn || state == providers.CopilotSignInExpired) {
+			return providers.ValidationResult{}, probeNotSignedInMsg
+		}
+	}
+
+	// A login existed and the vendor still said no. That is the sign-in
+	// equivalent of a rejected key, so it maps to the one outcome that
+	// BLOCKS — `success:false`, Finish stays disabled (FR-029) — carrying a
+	// message written for a sign-in row rather than BuildMessage's key
+	// wording. SEC-16: chatErr stays in the debug log above, never on the wire.
+	return providers.ValidationResult{
+		Outcome:     providers.OutcomeInvalidKey,
+		Message:     signInProbeFailureMsg(displayName, model),
+		RawDetail:   chatErr.Error(),
+		ProbedModel: model,
+	}, ""
+}
+
+// signInProbeFailureMsg is the curated, user-facing text for a completion that
+// failed AFTER a saved login was confirmed (SEC-16: no raw vendor detail).
+func signInProbeFailureMsg(displayName, model string) string {
+	if model == "" {
+		return fmt.Sprintf(
+			"You're signed in to %s, but the test message failed. Try signing in again, then retry.",
+			displayName)
+	}
+	return fmt.Sprintf(
+		"You're signed in to %s, but the test message failed for %q. "+
+			"Check that model is available on your plan, or sign in again.",
+		displayName, model)
 }

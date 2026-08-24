@@ -167,18 +167,42 @@ func CopilotSignIn(ctx context.Context, command, workspace string) CopilotSignIn
 // unrecognised failure is `not_signed_in` with a warning, never a confident
 // `signed_in` or `expired`.
 func classifyCopilotSignInFailure(detail string) CopilotSignInState {
-	lower := strings.ToLower(detail)
-	for _, m := range copilotExpiredMarkers {
-		if strings.Contains(lower, m) {
-			return CopilotSignInExpired
-		}
-	}
-	for _, m := range copilotNotSignedInMarkers {
-		if strings.Contains(lower, m) {
-			return CopilotNotSignedIn
-		}
+	if state, matched := MatchCopilotSignInFailure(detail); matched {
+		return state
 	}
 	slog.Warn("copilot cli sign-in check failed with an unrecognised message; reporting not_signed_in",
 		"provider", "github-copilot", "detail", detail)
 	return CopilotNotSignedIn
+}
+
+// MatchCopilotSignInFailure reports the sign-in state a failed Copilot CLI
+// invocation EXPLICITLY names, and whether any marker matched at all. It walks
+// the same two marker sets classifyCopilotSignInFailure does — it is where that
+// function's matching now lives — so there is one copy to keep current when the
+// vendor rewords an error.
+//
+// The difference from classifyCopilotSignInFailure is the `matched` half, and
+// it is the whole point of exporting this. That function degrades an
+// unrecognised message to `not_signed_in`, which is the right default when the
+// question being asked IS "is this login usable" — CopilotSignIn's own fixed
+// prompt run. The ADR-068 FR-036 sign-in probe asks a different question: it
+// has already established that a CLI exists and has just spent one completion
+// on the model the OPERATOR picked, so an unrecognised failure there is far
+// likelier to be that model or that plan than the login. Answering it with
+// "you are not signed in" would send the operator to re-authenticate against a
+// problem authentication cannot fix, so that caller takes matched=false and
+// uses its own wording.
+func MatchCopilotSignInFailure(detail string) (CopilotSignInState, bool) {
+	lower := strings.ToLower(detail)
+	for _, m := range copilotExpiredMarkers {
+		if strings.Contains(lower, m) {
+			return CopilotSignInExpired, true
+		}
+	}
+	for _, m := range copilotNotSignedInMarkers {
+		if strings.Contains(lower, m) {
+			return CopilotNotSignedIn, true
+		}
+	}
+	return "", false
 }

@@ -31,6 +31,15 @@ const (
 	CLIKindCopilot = "copilot"
 )
 
+// The token_source vocabulary (X-41). A row names a token_source when its
+// credential is a file some OTHER vendor tool already wrote and Omnipus only
+// reads — never one Omnipus mints, refreshes or owns.
+const (
+	// TokenSourceCodexAuthJSON — the access token in the Codex CLI's own
+	// ~/.codex/auth.json (openai-chatgpt). Read-only to Omnipus (FR-007).
+	TokenSourceCodexAuthJSON = "codex-auth-json"
+)
+
 // --- wire DTOs (the 2.0.0 document as published; never exported) ---
 
 type documentDTO struct {
