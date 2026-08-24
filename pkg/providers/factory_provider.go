@@ -16,7 +16,32 @@ import (
 	anthropicmessages "github.com/elicify-ai/omnipus/pkg/providers/anthropic_messages"
 	"github.com/elicify-ai/omnipus/pkg/providers/azure"
 	"github.com/elicify-ai/omnipus/pkg/providers/bedrock"
+	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
 )
+
+// NewCliProviderForKind returns the subprocess driver named by a catalog row's
+// `cli_kind` (ADR-068 FR-003, X-14): `codex` -> CodexCliProvider,
+// `copilot` -> CopilotCliProvider. cliPath is the row's optional `cli_path`
+// override; empty means the vendor's default binary name on PATH.
+//
+// This is the seam S67's protocol dispatch calls once `protocol: cli` rows
+// reach the factory carrying their kind — until then the two id-keyed cases in
+// CreateProviderFromConfig below route through it, so there is exactly one
+// place that maps a kind to a constructor.
+func NewCliProviderForKind(kind, workspace, cliPath string) (LLMProvider, error) {
+	if workspace == "" {
+		workspace = "."
+	}
+	switch kind {
+	case catalog.CLIKindCodex:
+		return NewCodexCliProvider(workspace), nil
+	case catalog.CLIKindCopilot:
+		return NewCopilotCliProviderWithCommand(cliPath, workspace), nil
+	default:
+		return nil, fmt.Errorf("unknown cli_kind %q (want %s|%s)",
+			kind, catalog.CLIKindCodex, catalog.CLIKindCopilot)
+	}
+}
 
 // ExtractProtocol extracts the protocol prefix and model identifier from a model string.
 // If no prefix is specified, it defaults to "openai".
@@ -334,11 +359,21 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 		), modelID, nil
 
 	case "codex-cli":
-		workspace := cfg.Home
-		if workspace == "" {
-			workspace = "."
+		p, err := NewCliProviderForKind(catalog.CLIKindCodex, cfg.Home, "")
+		if err != nil {
+			return nil, "", err
 		}
-		return NewCodexCliProvider(workspace), modelID, nil
+		return p, modelID, nil
+
+	case "github-copilot":
+		// The official GitHub Copilot CLI as a subprocess (ADR-068 §2.1,
+		// FR-003). The catalog row is protocol `cli` + `cli_kind: copilot`;
+		// the login lives in the CLI, so this row never carries an api_key.
+		p, err := NewCliProviderForKind(catalog.CLIKindCopilot, cfg.Home, "")
+		if err != nil {
+			return nil, "", err
+		}
+		return p, modelID, nil
 
 	default:
 		return nil, "", fmt.Errorf("unknown protocol %q in model %q", protocol, cfg.Model)
@@ -405,6 +440,7 @@ var knownProtocols = map[string]bool{
 	"coding-plan-anthropic":    true,
 	"alibaba-coding-anthropic": true,
 	"codex-cli":                true,
+	"github-copilot":           true,
 }
 
 // IsKnownProtocol reports whether the given protocol name is recognized by

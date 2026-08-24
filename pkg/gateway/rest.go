@@ -5978,6 +5978,14 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 					models = []string{}
 				}
 			}
+			// ADR-068 FR-009 (T068-15): a `github-copilot` row is backed by
+			// the vendor CLI, not an API key, so the key-derived status above
+			// says nothing useful about it. When the CLI is absent from this
+			// machine the row stays `disconnected` and carries the operator
+			// hint. Whether the operator is SIGNED IN is not computed here —
+			// that check runs the CLI and costs a premium request, so it is
+			// the explicit Check sign-in action only.
+			copilotHint := copilotRowHint(name)
 			hasEndpointCopy := hasEndpoint
 			// ADR-068 T068-08: the row's auth method comes from the config row
 			// (closed set api_key | sign_in — Validate rejects anything else);
@@ -6018,6 +6026,8 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 				if credErrMsg, ok := providerCredErrors[name]; ok {
 					p.Status = gen.ProviderStatusError
 					p.Error = &credErrMsg
+				} else if copilotHint != "" {
+					p.Error = &copilotHint
 				}
 			}
 			providers = append(providers, p)
@@ -6383,8 +6393,19 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 			jsonErr(w, http.StatusUnauthorized, "authentication required")
 			return
 		}
-		a.requireAdminAuthz(func(w http.ResponseWriter, _ *http.Request) {
-			jsonErr(w, http.StatusNotImplemented, providerSignInNotImplementedMsg)
+		a.requireAdminAuthz(func(w http.ResponseWriter, r *http.Request) {
+			// ADR-068 FR-008/FR-009 for `github-copilot` (T068-15). T068-14
+			// generalises these two routes to every sign_in row (its own
+			// rest_sign_in.go) and absorbs this branch; until then the Copilot
+			// half is real and every other id keeps the honest stub.
+			switch {
+			case r.Method == http.MethodPost && sub == copilotProviderID+"/sign-in":
+				a.handleCopilotSignInStart(w, r)
+			case r.Method == http.MethodGet && sub == copilotProviderID+"/sign-in/status":
+				a.handleCopilotSignInStatus(w, r)
+			default:
+				jsonErr(w, http.StatusNotImplemented, providerSignInNotImplementedMsg)
+			}
 		})(w, r)
 
 	case r.Method == http.MethodPost && strings.HasSuffix(sub, "/test"):
