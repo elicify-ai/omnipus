@@ -315,8 +315,11 @@ func (a *restAPI) runProviderDelete(
 		return failed()
 	}
 
-	// Step 3b (entitlement-cache eviction) is T068-17's hook: the cache does
-	// not exist yet; when it lands, evict `SHA-256(providerID+":"+ref)` here.
+	// Step 3b — evict the provider's entitlement-cache entries (ADR-067
+	// FR-021, T067-11). Keyed on the provider id rather than on
+	// SHA-256(providerID+":"+ref) so a row whose credential ref changed
+	// during the process's lifetime still loses every stale answer.
+	a.entitlements.evictProvider(providerID)
 
 	// Step 3 — delete the credential; absence is success
 	// (credentials.NotFoundError is absorbed by removeStoredCredential).

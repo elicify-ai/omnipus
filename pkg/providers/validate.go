@@ -402,7 +402,62 @@ func isModelNotFound(rawDetail string) bool {
 	return false
 }
 
-// ── FetchModels (moved from pkg/gateway/rest.go fetchUpstreamModels) ─────────
+// ── model listing (moved from pkg/gateway/rest.go fetchUpstreamModels) ───────
+
+// modelListTimeout bounds every live listing call in this file.
+const modelListTimeout = 10 * time.Second
+
+// anthropicVersionHeader is the dated Anthropic API version every Anthropic
+// REST call must carry (including GET /v1/models).
+const anthropicVersionHeader = "2023-06-01"
+
+// UpstreamStatusError is returned when a provider's listing endpoint was
+// reached but answered a non-2xx status. It exists so a caller can report
+// the STATUS rather than a generic transport failure — ADR-067 FR-021 (X-12)
+// requires the entitlement endpoint to answer
+// `could not fetch upstream model list: status <n>`, which is only possible
+// if the status survives the return.
+type UpstreamStatusError struct {
+	Status int
+}
+
+func (e *UpstreamStatusError) Error() string {
+	return fmt.Sprintf("upstream models: status %d", e.Status)
+}
+
+// ListModels lists the model ids a provider's live listing endpoint reports,
+// dispatching on the catalog PROTOCOL (ADR-067 FR-021):
+//
+//   - openai-compatible, google (and an empty protocol) → GET {base}/models
+//     with a Bearer key;
+//   - anthropic → GET {base}/v1/models with `x-api-key` + `anthropic-version`;
+//   - ollama → GET {base without /v1}/api/tags, unauthenticated.
+//
+// Any other protocol (notably `cli`, which has no HTTP listing at all) is an
+// error: callers decide the status code — the gateway's entitlement endpoint
+// refuses those rows with 409 BEFORE reaching here.
+//
+// This is the only listing entry point with a protocol argument. Its two
+// callers are the entitlement endpoint and the providers GET's local-endpoint
+// listing; everything else (onboarding, ValidateKey) still calls FetchModels
+// directly because it is already talking to an OpenAI-compatible base.
+func ListModels(
+	ctx context.Context,
+	protocol catalog.Protocol,
+	baseURL, apiKey string,
+	checker URLChecker,
+) ([]string, error) {
+	switch protocol {
+	case catalog.ProtocolOllama:
+		return fetchOllamaTags(ctx, baseURL, checker)
+	case catalog.ProtocolAnthropic:
+		return fetchAnthropicModels(ctx, baseURL, apiKey, checker)
+	case catalog.ProtocolOpenAICompatible, catalog.ProtocolGoogle, "":
+		return FetchModels(ctx, baseURL, apiKey, checker)
+	default:
+		return nil, fmt.Errorf("model listing is not supported for protocol %q", protocol)
+	}
+}
 
 // FetchModels fetches the list of available models from an OpenAI-compatible
 // provider's /models endpoint. Returns model IDs sorted alphabetically, or nil on error.
@@ -411,42 +466,55 @@ func isModelNotFound(rawDetail string) bool {
 // SEC-24: when checker is non-nil the request is made through the SSRF-safe HTTP
 // client. A nil checker uses a plain client (CLI path — operator-run, accepted).
 func FetchModels(ctx context.Context, baseURL, apiKey string, checker URLChecker) ([]string, error) {
-	client := &http.Client{Timeout: 10 * time.Second}
-	if checker != nil {
-		client = checker.SafeClient()
-		client.Timeout = 10 * time.Second
+	headers := map[string]string{
+		"Authorization": "Bearer " + apiKey,
+		"X-Api-Key":     apiKey,
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		strings.TrimSuffix(baseURL, "/")+"/models", nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Authorization", "Bearer "+apiKey)
-	req.Header.Set("X-Api-Key", apiKey)
+	// Legacy host sniff, kept for the callers that reach an Anthropic base
+	// through this OpenAI-compatible entry point (onboarding, ValidateKey).
+	// The protocol-dispatched path never relies on it — see
+	// fetchAnthropicModels.
 	if strings.Contains(baseURL, "anthropic") {
-		req.Header.Set("Anthropic-Version", "2023-06-01")
+		headers["Anthropic-Version"] = anthropicVersionHeader
 	}
-
-	resp, err := client.Do(req)
+	ids, err := fetchModelIDs(ctx, strings.TrimSuffix(baseURL, "/")+"/models", headers, checker)
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	sort.Strings(ids)
+	return ids, nil
+}
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("upstream models: status %d", resp.StatusCode)
-	}
-
-	ct := resp.Header.Get("Content-Type")
-	if ct != "" && !strings.Contains(ct, "application/json") {
-		return nil, fmt.Errorf("upstream models: unexpected Content-Type %q", ct)
-	}
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20)) // 2 MB limit
+// fetchAnthropicModels lists models over the Anthropic protocol: the dated
+// version header is mandatory and the key travels in `x-api-key`, never as a
+// Bearer token. A base that already ends in /v1 is not doubled.
+func fetchAnthropicModels(ctx context.Context, baseURL, apiKey string, checker URLChecker) ([]string, error) {
+	root := strings.TrimSuffix(strings.TrimSuffix(strings.TrimSpace(baseURL), "/"), "/v1")
+	ids, err := fetchModelIDs(ctx, root+"/v1/models", map[string]string{
+		"X-Api-Key":         apiKey,
+		"Anthropic-Version": anthropicVersionHeader,
+	}, checker)
 	if err != nil {
 		return nil, err
 	}
+	sort.Strings(ids)
+	return ids, nil
+}
 
+// fetchModelIDs performs one listing GET and decodes the `{"data":[{"id"}]}`
+// envelope both the OpenAI-compatible and the Anthropic listing return. A
+// non-2xx comes back as *UpstreamStatusError so the caller can report the
+// status verbatim.
+func fetchModelIDs(
+	ctx context.Context,
+	url string,
+	headers map[string]string,
+	checker URLChecker,
+) ([]string, error) {
+	body, err := getUpstreamJSON(ctx, url, headers, checker)
+	if err != nil {
+		return nil, err
+	}
 	var result struct { // not-wire-format: decodes upstream provider /models API response, never emitted to SPA
 		Data []struct {
 			ID string `json:"id"`
@@ -455,15 +523,80 @@ func FetchModels(ctx context.Context, baseURL, apiKey string, checker URLChecker
 	if err := json.Unmarshal(body, &result); err != nil {
 		return nil, err
 	}
-
 	models := make([]string, 0, len(result.Data))
 	for _, m := range result.Data {
-		if m.ID != "" {
-			models = append(models, m.ID)
+		if id := strings.TrimSpace(m.ID); id != "" {
+			models = append(models, id)
 		}
 	}
-	sort.Strings(models)
 	return models, nil
+}
+
+// fetchOllamaTags lists the models an ollama endpoint has actually pulled,
+// from its native /api/tags. The catalog carries ollama's OpenAI-compatible
+// base (…:11434/v1); /api/tags hangs off the root, so the /v1 suffix is
+// trimmed. The endpoint is unauthenticated — no key is sent.
+//
+// Document order is preserved (unlike the /models paths, which sort): the
+// order ollama reports is the order the operator's own machine has them.
+func fetchOllamaTags(ctx context.Context, baseURL string, checker URLChecker) ([]string, error) {
+	root := strings.TrimSuffix(strings.TrimSuffix(strings.TrimSpace(baseURL), "/"), "/v1")
+	body, err := getUpstreamJSON(ctx, root+"/api/tags", nil, checker)
+	if err != nil {
+		return nil, err
+	}
+	var decoded struct { // not-wire-format: decodes ollama's /api/tags response, never emitted to the SPA
+		Models []struct {
+			Name string `json:"name"`
+		} `json:"models"`
+	}
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(decoded.Models))
+	for _, m := range decoded.Models {
+		if name := strings.TrimSpace(m.Name); name != "" {
+			out = append(out, name)
+		}
+	}
+	return out, nil
+}
+
+// getUpstreamJSON issues one bounded GET and returns at most 2 MB of JSON
+// body. SEC-24: a non-nil checker supplies the SSRF-safe client; a nil
+// checker uses a plain one (CLI path — operator-run, accepted).
+func getUpstreamJSON(
+	ctx context.Context,
+	url string,
+	headers map[string]string,
+	checker URLChecker,
+) ([]byte, error) {
+	client := &http.Client{Timeout: modelListTimeout}
+	if checker != nil {
+		client = checker.SafeClient()
+		client.Timeout = modelListTimeout
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, &UpstreamStatusError{Status: resp.StatusCode}
+	}
+	ct := resp.Header.Get("Content-Type")
+	if ct != "" && !strings.Contains(ct, "application/json") {
+		return nil, fmt.Errorf("upstream models: unexpected Content-Type %q", ct)
+	}
+	return io.ReadAll(io.LimitReader(resp.Body, 2<<20)) // 2 MB limit
 }
 
 // ── BuildMessage (FR-7 catalog) ───────────────────────────────────────────────

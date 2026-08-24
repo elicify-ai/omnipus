@@ -25,9 +25,7 @@ package gateway
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -250,9 +248,9 @@ func catalogModelIDs(row catalog.Provider) []string {
 const localModelListTimeout = 5 * time.Second
 
 // fetchLocalModels lists the models a LOCAL endpoint currently serves
-// (FR-020, US-9.AC3): `/api/tags` for the ollama protocol, `/v1/models`
-// for everything else (the catalog's `api` for those rows already ends in
-// /v1, which providers.FetchModels completes with /models).
+// (FR-020, US-9.AC3) through the ONE protocol-dispatching listing helper
+// (providers.ListModels, T067-11): `/api/tags` for the ollama protocol,
+// `/v1/models` for the anthropic protocol, `{base}/models` otherwise.
 //
 // No SSRF checker is passed, deliberately and by definition: `locality =
 // local` MEANS loopback/private (catalog.DeriveLocality), so the guard
@@ -263,49 +261,7 @@ const localModelListTimeout = 5 * time.Second
 func fetchLocalModels(ctx context.Context, protocol catalog.Protocol, apiBase, apiKey string) ([]string, error) {
 	ctx, cancel := context.WithTimeout(ctx, localModelListTimeout)
 	defer cancel()
-	if protocol == catalog.ProtocolOllama {
-		return fetchOllamaTags(ctx, apiBase)
-	}
-	return providers_pkg.FetchModels(ctx, apiBase, apiKey, providers_pkg.NoopChecker{})
-}
-
-// fetchOllamaTags lists the locally pulled models from ollama's native
-// /api/tags endpoint. The catalog carries ollama's OpenAI-compatible base
-// (…:11434/v1); /api/tags hangs off the root, so the /v1 suffix is
-// trimmed.
-func fetchOllamaTags(ctx context.Context, apiBase string) ([]string, error) {
-	root := strings.TrimSuffix(strings.TrimSuffix(strings.TrimSpace(apiBase), "/"), "/v1")
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, root+"/api/tags", nil)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := (&http.Client{Timeout: localModelListTimeout}).Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("ollama tags: status %d", resp.StatusCode)
-	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
-	if err != nil {
-		return nil, err
-	}
-	var decoded struct { // not-wire-format: decodes ollama's /api/tags response, never emitted to the SPA
-		Models []struct {
-			Name string `json:"name"`
-		} `json:"models"`
-	}
-	if err := json.Unmarshal(body, &decoded); err != nil {
-		return nil, err
-	}
-	out := make([]string, 0, len(decoded.Models))
-	for _, m := range decoded.Models {
-		if name := strings.TrimSpace(m.Name); name != "" {
-			out = append(out, name)
-		}
-	}
-	return out, nil
+	return providers_pkg.ListModels(ctx, protocol, apiBase, apiKey, providers_pkg.NoopChecker{})
 }
 
 // ── PUT admission (FR-019, FR-035) ──────────────────────────────────────────

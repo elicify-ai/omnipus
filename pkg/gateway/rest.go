@@ -120,6 +120,12 @@ type restAPI struct {
 	// classifies nothing — rows keep their credential-derived status. Wired
 	// at boot by T067-10; until then only tests set it.
 	providerCatalog *catalog.Catalog
+	// entitlements is the ADR-067 FR-021 "Check with my account" cache:
+	// one annotated model list per (provider, credential ref NAME) for the
+	// life of the process, evicted on provider DELETE, on a key-changing
+	// PUT and on a catalog refresh. Its zero value is ready to use — see
+	// rest_providers_entitlement.go.
+	entitlements entitlementCache
 	// ssrfChecker enforces SEC-24 SSRF protection on outbound HTTP requests made
 	// by REST handlers (skills installer). Nil when SSRF protection is disabled
 	// in config (sandbox.ssrf.enabled = false). Shared with the agent loop's
@@ -6352,6 +6358,14 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 			jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not save config: %v", err))
 			return
 		}
+		// ADR-067 FR-021 (T067-11): a PUT that CHANGED the key invalidates
+		// this provider's cached entitlement — what a different key can
+		// reach is a different fact. A PUT that only bumps updated_at (or
+		// edits the model list) is deliberately NOT an eviction: the key
+		// behind the cached answer is still the same key.
+		if keyChanged {
+			a.entitlements.evictProvider(providerID)
+		}
 		// Trigger reload AND WAIT for it (triggerReloadAndWaitOutcome, not a bare
 		// TriggerReload — mirrors createAgent/updateAgent/deleteAgent/
 		// updateAgentTools): a bare TriggerReload only enqueues the reload and
@@ -6476,6 +6490,14 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 				jsonErr(w, http.StatusNotImplemented, providerSignInNotImplementedMsg)
 			}
 		})(w, r)
+
+	case r.Method == http.MethodPost && strings.HasSuffix(sub, "/entitlement"):
+		// POST /api/v1/providers/{id}/entitlement (ADR-067 FR-021, T067-11)
+		// — "Check with my account". One live listing call per protocol,
+		// intersected with the catalog and cached for the process. The
+		// retired POST /providers/{id}/refresh-models is NOT its ancestor:
+		// that route is gone entirely (T067-01/T067-10) and must not return.
+		a.handleProviderEntitlement(w, r, strings.TrimSuffix(sub, "/entitlement"))
 
 	case r.Method == http.MethodPost && strings.HasSuffix(sub, "/test"):
 		// POST /api/v1/providers/{id}/test — verify the provider has a valid API key.

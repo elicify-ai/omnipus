@@ -4628,6 +4628,10 @@ func setupAndStartServices(
 		taskLock:        task.TaskFileLock,               // shared striped lock for board task RMW
 	}
 	api.cronService.Store(runningServices.CronService) // #264: schedules CRUD (atomic.Pointer)
+	// ADR-067 FR-037 (T067-11): a catalog refresh invalidates the
+	// entitlement cache — the intersection behind every cached answer was
+	// computed against a document that is no longer the served one.
+	registerEntitlementCacheInvalidation(providerCatalog, api)
 	// Stash the api ref so RunContextWithOptions can update builtinRegistry
 	// after the M16 live-deps re-population (which creates a fresh *BuiltinRegistry
 	// that would otherwise not reach the already-constructed api).
