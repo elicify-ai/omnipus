@@ -72,6 +72,11 @@ func (recallConversationMeta) Parameters() map[string]any {
 					"[capped]/[emptied] mark cites. Returns one page of the result; the page " +
 					"framing states the total size and the next offset when more remains.",
 			},
+			"max_results": map[string]any{
+				"type": "integer",
+				"description": "Only with query, turn_range or time: the maximum number of turns to " +
+					"bring back (must be >= 1). It only narrows the built-in bound, never widens it.",
+			},
 			"archive_line": map[string]any{
 				"type": "integer",
 				"description": "Only with tool_call_id: the zero-based archive line the mark cites, " +

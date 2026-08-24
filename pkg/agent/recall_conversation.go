@@ -154,6 +154,11 @@ func (t *RecallConversationTool) Parameters() map[string]any {
 					"[capped]/[emptied] mark cites. Returns one page of the result; the page " +
 					"framing states the total size and the next offset when more remains.",
 			},
+			"max_results": map[string]any{
+				"type": "integer",
+				"description": "Only with query, turn_range or time: the maximum number of turns to " +
+					"bring back (must be >= 1). It only narrows the built-in bound, never widens it.",
+			},
 			"archive_line": map[string]any{
 				"type": "integer",
 				"description": "Only with tool_call_id: the zero-based archive line the mark cites, " +
@@ -225,6 +230,25 @@ func (t *RecallConversationTool) Execute(ctx context.Context, args map[string]an
 		return tools.ErrorResult(
 			"recall_conversation: provide exactly one of query, turn_range, time, or tool_call_id — " +
 				"multiple modes are ambiguous (FR-027)")
+	}
+
+	// --- max_results (ADR-066 §15 task 1, FR-040) ---------------------
+	// A caller-supplied bound on the number of turns, validated on every
+	// call (an out-of-range value is a tool error, never a silent clamp)
+	// and applied to the three archive-selection modes below. It only ever
+	// NARROWS the built-in bound: widening it would let one recall exceed
+	// the span budget the built-in bound exists to hold.
+	maxResults := 0
+	if v, present, err := intArg(args, "max_results"); err != nil {
+		incRecallCounter("error")
+		return tools.ErrorResult("recall_conversation: " + err.Error())
+	} else if present {
+		if v < 1 {
+			incRecallCounter("error")
+			return tools.ErrorResult(fmt.Sprintf(
+				"recall_conversation: max_results must be >= 1, got %d", v))
+		}
+		maxResults = v
 	}
 
 	// --- tool_call_id mode (ADR-066 §6.3, FR-024…FR-027, T066-14) ------
@@ -365,6 +389,10 @@ func (t *RecallConversationTool) Execute(ctx context.Context, args map[string]an
 	if isRangeMode {
 		maxTurns = recallRangeTurns
 		maxTokens = recallRangeTokens
+	}
+	// FR-040: max_results narrows the turn bound, never widens it.
+	if maxResults > 0 && maxResults < maxTurns {
+		maxTurns = maxResults
 	}
 
 	var keptIdxs []int

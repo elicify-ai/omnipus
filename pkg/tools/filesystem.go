@@ -877,7 +877,8 @@ func (t *ListDirTool) Name() string {
 }
 
 func (t *ListDirTool) Description() string {
-	return "List files and directories in a path"
+	return "List files and directories in a path. Large directories page with offset/limit " +
+		"(entries), the same way read_file pages a file with offset/length (bytes)."
 }
 
 func (t *ListDirTool) Scope() ToolScope       { return ScopeGeneral }
@@ -891,6 +892,17 @@ func (t *ListDirTool) Parameters() map[string]any {
 				"type":        "string",
 				"description": "Path to list",
 			},
+			"offset": map[string]any{
+				"type":        "integer",
+				"description": "Entry index to start listing from (0-based, must be >= 0).",
+				"default":     0,
+			},
+			"limit": map[string]any{
+				"type": "integer",
+				"description": fmt.Sprintf(
+					"Maximum number of entries to return (must be >= 1, capped at %d).", maxListDirEntries),
+				"default": maxListDirEntries,
+			},
 		},
 		"required": []string{"path"},
 	}
@@ -900,6 +912,27 @@ func (t *ListDirTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 	path, ok := args["path"].(string)
 	if !ok {
 		path = "."
+	}
+
+	// Bounding parameters (ADR-066 §15 task 1, FR-039): entries, named as
+	// read_file names its byte window. An out-of-range value is a tool
+	// error, never a silent clamp — the model must learn its call was wrong.
+	offset, err := getInt64Arg(args, "offset", 0)
+	if err != nil {
+		return ErrorResult(err.Error())
+	}
+	if offset < 0 {
+		return ErrorResult("offset must be >= 0")
+	}
+	limit, err := getInt64Arg(args, "limit", maxListDirEntries)
+	if err != nil {
+		return ErrorResult(err.Error())
+	}
+	if limit < 1 {
+		return ErrorResult("limit must be >= 1")
+	}
+	if limit > maxListDirEntries {
+		limit = maxListDirEntries
 	}
 
 	policy, err := ResolveTurnFSPolicy(ctx, t.agentHome, t.restrict)
@@ -917,17 +950,41 @@ func (t *ListDirTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 	if err != nil {
 		return ErrorResult(err.Error())
 	}
-	return formatDirEntries(entries)
+	return formatDirEntries(entries, int(offset), int(limit))
 }
 
-func formatDirEntries(entries []os.DirEntry) *ToolResult {
+// maxListDirEntries bounds one list_directory page (ADR-066 §15 task 1,
+// FR-039). It is both the default and the ceiling for `limit`: a directory
+// with more entries than this pages through offset instead of returning a
+// result the D4 cap would have to truncate blindly mid-name.
+const maxListDirEntries = 1000
+
+// formatDirEntries renders one page of a directory listing. offset/limit are
+// already validated by the caller (offset >= 0, 1 <= limit <= maxListDirEntries).
+// A page that does not cover the whole directory carries a framing line
+// stating the total and the next offset, so the model can page deliberately
+// rather than guess whether it saw everything.
+func formatDirEntries(entries []os.DirEntry, offset, limit int) *ToolResult {
+	total := len(entries)
+	start := min(offset, total)
+	end := min(start+limit, total)
+
 	var result strings.Builder
-	for _, entry := range entries {
+	for _, entry := range entries[start:end] {
 		if entry.IsDir() {
 			result.WriteString("DIR:  " + entry.Name() + "\n")
 		} else {
 			result.WriteString("FILE: " + entry.Name() + "\n")
 		}
+	}
+	if start > 0 || end < total {
+		next := "end"
+		if end < total {
+			next = strconv.Itoa(end)
+		}
+		fmt.Fprintf(&result,
+			"[listing: entries %d-%d of %d, offset=%d, next_offset=%s]\n",
+			start, end, total, start, next)
 	}
 	return NewToolResult(result.String())
 }
