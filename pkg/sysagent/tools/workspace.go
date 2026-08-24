@@ -474,6 +474,26 @@ func edgeModeCategory(mode config.DelegationMode) workspacepkg.DelegationMode {
 	}
 }
 
+// ACCEPTED DESIGN (operator decision, 2026-08-23): update_workspace being
+// agent-drivable is intentional and is NOT the #636 vulnerability.
+//
+// #636 was that the delegation edge list lived in a file a sandboxed child
+// could append to directly, bypassing every gate. That is fixed — the list
+// now lives in entities/, which fspolicy denies unconditionally on every
+// turn, and the workspace record can no longer carry it at all.
+//
+// This path is a different thing and is deliberately allowed: an agent with
+// the update_workspace tool can grow the graph, but ONLY by replaying the
+// compiled-in coreagent.SeedDelegationEdges matrix among agents already on
+// the team and already present in the live config. It cannot invent an
+// arbitrary edge, name an off-team agent, or widen a depth cap beyond the
+// compiled seed. The control is the tool policy governing update_workspace,
+// which is an explicit per-agent grant with no default fallback
+// (CLAUDE.md Hard Constraint #6).
+//
+// Do not "harden" this into an operator-only path without an ADR — it would
+// break workspace self-assembly, which is the feature it exists for.
+//
 // seedDelegationEdgesForNewMembers derives the default delegation edges an
 // update_workspace core_team change should auto-add for NEWLY ADDED members.
 // Mirrors pkg/gateway's defaultWorkspaceDelegationEdges: for every agent in
