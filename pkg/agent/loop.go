@@ -35,7 +35,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/plan"
 	"github.com/elicify-ai/omnipus/pkg/policy"
 	"github.com/elicify-ai/omnipus/pkg/providers"
-	"github.com/elicify-ai/omnipus/pkg/providers/capabilities"
+	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
 	"github.com/elicify-ai/omnipus/pkg/providers/protocoltypes"
 	"github.com/elicify-ai/omnipus/pkg/routing"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
@@ -275,13 +275,14 @@ type AgentLoop struct {
 	// (<homePath>/browser/shared-chrome.pid) from it.
 	homePath string
 
-	// capabilityCatalog (ADR-051 Rev 4, Wave 3 T9) is the step-1 capability
-	// gate source for the presentation chain (FR-010). Constructed from the
-	// compiled-in seed at NewAgentLoop time so the gate works without gateway
-	// boot wiring; the gateway may inject a puller-equipped catalog via
-	// SetCapabilityCatalog (FR-025 repo-pull). Nil → optimistic (FR-026).
+	// capabilityCatalog is the step-1 capability-gate source for the
+	// presentation chain (ADR-067 FR-004). The gateway installs the ONE
+	// booted catalog here at boot via SetCapabilityCatalog — the same
+	// instance ResolveWindow and the REST surface read, so the 2 MB embedded
+	// snapshot is parsed once per process. Nil until then, which is the
+	// documented optimistic posture, not a degradation.
 	// Guarded by mu (the struct's primary RWMutex).
-	capabilityCatalog *capabilities.Catalog
+	capabilityCatalog *catalog.Catalog
 
 	// workspaceLibCache (FR-007a) caches per-workspace media libraries for
 	// manifest-refcount accounting. Keyed by workspace ID. Lazily populated
@@ -842,23 +843,6 @@ func NewAgentLoop(
 	al.homePath = homePath
 	al.taskStore = task.New(filepath.Join(homePath, "tasks"))
 	al.taskExecutor = newTaskExecutor(al, al.taskStore)
-
-	// ADR-051 Rev 4 (Wave 3 T9): construct the capability catalog from the
-	// compiled-in seed so the step-1 presentation gate (FR-010) works
-	// immediately, without gateway boot wiring. The gateway may later inject
-	// a puller-equipped catalog via SetCapabilityCatalog (FR-025 repo-pull).
-	// A construction failure is non-fatal — nil catalog → optimistic (FR-026).
-	if catalog, catErr := capabilities.NewCatalog(capabilities.EmbeddedSeed(), nil, nil, nil); catErr != nil {
-		logger.WarnCF(
-			"agent",
-			"Capability catalog construction failed; presentation gate degrades to optimistic",
-			map[string]any{
-				"error": catErr.Error(),
-			},
-		)
-	} else {
-		al.capabilityCatalog = catalog
-	}
 
 	// Initialize shared session store at $OMNIPUS_HOME/sessions/.
 	// All new chat sessions are created here (joined session model).
@@ -8146,8 +8130,9 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	// as an offloadSink lets attachments no provider can present (e.g. AVIF/HEIC
 	// with no decoder) be copied into work/ and surfaced as a filesystem path +
 	// guidance instead of dying the turn (ADR-051 Rev 4 FR-020/020a/021).
+	turnProvider, turnModel := ts.agent.primaryModelPair()
 	messages = resolveMediaRefsWithOffload(
-		messages, turnMediaStore, maxMediaSize, ts.agent.Model,
+		messages, turnMediaStore, maxMediaSize, turnProvider, turnModel,
 		&offloadSink{workDir: wsDir}, turnCatalog, turnRefcounter,
 		ts.opts.WorkspaceID,
 	)
@@ -8210,8 +8195,9 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 				ts.media,
 				activeSkillNames(ts.agent, ts.opts),
 			)
+			trimProvider, trimModel := ts.agent.primaryModelPair()
 			messages = resolveMediaRefsWithOffload(
-				messages, turnMediaStore, maxMediaSize, ts.agent.Model,
+				messages, turnMediaStore, maxMediaSize, trimProvider, trimModel,
 				&offloadSink{workDir: wsDir}, turnCatalog, turnRefcounter,
 				ts.opts.WorkspaceID,
 			)
@@ -8356,7 +8342,8 @@ turnLoop:
 		// Inject pending steering messages
 		if len(pendingMessages) > 0 {
 			resolvedPending := resolveMediaRefsWithOffload(
-				pendingMessages, turnMediaStore, maxMediaSize, activeModel,
+				pendingMessages, turnMediaStore, maxMediaSize,
+				candidateProvider(activeCandidates), activeModel,
 				&offloadSink{workDir: wsDir}, turnCatalog, turnRefcounter,
 				ts.opts.WorkspaceID,
 			)

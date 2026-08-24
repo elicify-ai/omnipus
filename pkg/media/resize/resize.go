@@ -2,7 +2,7 @@
 // workspace media library (ADR-051 Rev 4, FR-011/012/013/014/015).
 //
 // The pipeline shrinks a decoded raster image until it fits a per-provider
-// ResizeBudget. The order of attempts at each candidate size is:
+// ResizeLimits budget. The order of attempts at each candidate size is:
 //
 //  1. PNG at the candidate size (FR-011: canonical PNG output when it fits).
 //  2. JPEG at the candidate size, quality ladder 90 → 40 (FR-015).
@@ -15,7 +15,7 @@
 //
 // # Budget shape (Wave 1 TD-M6)
 //
-// ResizeToFit accepts the canonical pkg/providers/capabilities.ResizeBudget
+// ResizeToFit accepts the canonical pkg/providers/catalog.ResizeLimits
 // directly. There is no resize.Budget type. Byte counts are int64
 // end-to-end so a 32-bit target cannot truncate the comparison; the
 // catalog allows MaxBytes up to math.MaxInt64 and the resize pipeline
@@ -32,7 +32,7 @@ import (
 
 	"golang.org/x/image/draw"
 
-	"github.com/elicify-ai/omnipus/pkg/providers/capabilities"
+	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
 )
 
 // ErrLadderFloor is returned by ResizeToFit when the image still does not
@@ -71,7 +71,7 @@ type Result struct {
 // (see encodeImageToDataURL, FR-013): ResizeToFit does NOT enforce
 // maxImagePixels because it operates on a fully decoded image.Image.
 //
-// The budget shape is pkg/providers/capabilities.ResizeBudget — the
+// The budget shape is pkg/providers/catalog.ResizeLimits — the
 // canonical per-model resize budget. LongEdgePx is the long-edge
 // ceiling; MaxBytes (int64) is the byte ceiling after the PNG→JPEG
 // quality ladder. Both must be positive; non-positive values surface
@@ -79,7 +79,7 @@ type Result struct {
 //
 // Pure-Go: uses stdlib image/jpeg, image/png, and golang.org/x/image/draw.
 // No CGo.
-func ResizeToFit(img image.Image, budget capabilities.ResizeBudget) (Result, error) {
+func ResizeToFit(img image.Image, budget catalog.ResizeLimits) (Result, error) {
 	if budget.LongEdgePx <= 0 || budget.MaxBytes <= 0 {
 		return Result{}, errors.New("resize: invalid budget (LongEdgePx and MaxBytes must be > 0)")
 	}

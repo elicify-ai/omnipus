@@ -20,6 +20,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/fileutil"
 )
@@ -58,6 +59,22 @@ func (s *FileStore) Read(_ context.Context) ([]byte, error) {
 // Write atomically replaces the persisted file.
 func (s *FileStore) Write(_ context.Context, data []byte) error {
 	return fileutil.WriteFileAtomic(s.path, data, 0o600)
+}
+
+// ModTime reports when the persisted last-known-good was last written —
+// the local fetch time, not the document's own updated_at (which is the
+// assembly job's publish stamp and would make the FR-008 startup-pull skip
+// fire almost never). The gateway reads it to decide whether the startup
+// pull is worth making at all: a document written less than an hour ago is
+// current enough that pulling again only spends GitHub's unauthenticated
+// rate limit. A missing file surfaces fs.ErrNotExist, which the caller
+// reads as "nothing persisted — pull".
+func (s *FileStore) ModTime() (time.Time, error) {
+	fi, err := os.Stat(s.path)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return fi.ModTime(), nil
 }
 
 // Boot constructs the gateway's catalog (T067-04): it parses the embedded

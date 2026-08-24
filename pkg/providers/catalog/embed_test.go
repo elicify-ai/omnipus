@@ -19,9 +19,15 @@ package catalog
 
 import (
 	"bytes"
+	"io/fs"
 	"os"
+	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // maxEmbeddedSnapshotBytes is the FR-026 / A-2 bound on the committed file.
@@ -164,4 +170,77 @@ func TestEmbeddedSnapshot_UnsupportedHaveReason(t *testing.T) {
 	} else if got != "deployment-url" {
 		t.Errorf("azure unsupported_reason = %q, want deployment-url", got)
 	}
+}
+
+// TestSingleCatalogEmbedUnderProviders (T16, FR-005, SC-008) is the
+// build-shape assertion behind the capabilities→catalog fold: after the fold
+// there is exactly ONE go:embed directive anywhere under pkg/providers, and it
+// names the committed catalog snapshot. A second embedded catalog is how the
+// old duplication came back the last time — two documents, two sources of
+// truth, and no compile error to tell anyone.
+func TestSingleCatalogEmbedUnderProviders(t *testing.T) {
+	root := ".."
+	var directives []string
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() || !strings.HasSuffix(d.Name(), ".go") {
+			return nil
+		}
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return readErr
+		}
+		for _, line := range strings.Split(string(data), "\n") {
+			trimmed := strings.TrimSpace(line)
+			if strings.HasPrefix(trimmed, "//go:embed") {
+				directives = append(directives, path+": "+trimmed)
+			}
+		}
+		return nil
+	})
+	require.NoError(t, err)
+
+	require.Len(t, directives, 1,
+		"exactly one go:embed may exist under pkg/providers; found: %v", directives)
+	assert.Contains(t, directives[0], "data/providers_catalog.json",
+		"the single embed must name the committed catalog snapshot")
+	assert.Contains(t, directives[0], filepath.Join("catalog", "catalog.go"),
+		"the single embed must live in the catalog package")
+}
+
+// TestCapabilitiesPackageGone (SC-008) pins the deletion itself: the folded
+// package must not exist, and the retired prefix-stripping resolver — which
+// ADR-067 FR-003 replaced with exact-pair lookup — must not survive anywhere
+// under pkg/providers. The banned identifier is assembled at runtime so this
+// file is not itself a hit.
+func TestCapabilitiesPackageGone(t *testing.T) {
+	_, err := os.Stat(filepath.Join("..", "capabilities"))
+	assert.True(t, os.IsNotExist(err),
+		"pkg/providers/capabilities must not exist (FR-005, SC-008)")
+
+	// Assembled, never written whole: a literal here would make this file its
+	// own first hit.
+	bannedResolver := "resolve" + "StrippedPrefix"
+
+	var hits []string
+	err = filepath.WalkDir("..", func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() || !strings.HasSuffix(d.Name(), ".go") {
+			return nil
+		}
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return readErr
+		}
+		if strings.Contains(string(data), bannedResolver) {
+			hits = append(hits, path)
+		}
+		return nil
+	})
+	require.NoError(t, err)
+	assert.Empty(t, hits, "%s must be gone (FR-025, SC-008)", bannedResolver)
 }

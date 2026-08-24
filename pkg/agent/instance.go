@@ -1119,6 +1119,35 @@ func primaryWindowPair(candidates []providers.FallbackCandidate, defaultProvider
 	return strings.TrimSpace(defaultProvider), strings.TrimSpace(model)
 }
 
+// primaryModelPair is the (provider, model) pair the presentation gate and
+// the resize-budget lookup resolve against for this turn — the SAME pair
+// primaryWindowPair hands ResolveWindow, read under the same lock, so the
+// media path and the context-window path can never disagree about which
+// row of the catalog this agent is. A model id alone is not a catalog key
+// (ADR-067 FR-003): "z-ai/glm-5.2" under openrouter and "glm-5.2" under
+// zai are different rows with different modalities.
+//
+// With no resolved candidates the provider is unknown (""), which resolves
+// as a miss — the documented optimistic posture, never a guess.
+func (a *AgentInstance) primaryModelPair() (provider, model string) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if len(a.Candidates) > 0 {
+		return a.Candidates[0].Provider, a.Candidates[0].Model
+	}
+	return "", a.Model
+}
+
+// candidateProvider is primaryModelPair's counterpart for a candidate slice
+// already resolved for this turn (the light-tier switch resolves its own).
+// An empty slice yields "" — a catalog miss, not a guess.
+func candidateProvider(candidates []providers.FallbackCandidate) string {
+	if len(candidates) == 0 {
+		return ""
+	}
+	return candidates[0].Provider
+}
+
 // windowSnapshot reads the resolved window under the instance mutex so a
 // concurrent ApplyAgentModel (which rewrites ContextWindow together with
 // Model / Provider / Candidates) can never be observed torn.

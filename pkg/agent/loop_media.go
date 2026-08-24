@@ -33,7 +33,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/media/library"
 	"github.com/elicify-ai/omnipus/pkg/media/resize"
 	"github.com/elicify-ai/omnipus/pkg/providers"
-	"github.com/elicify-ai/omnipus/pkg/providers/capabilities"
+	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
 )
 
 // resolveMediaRefs resolves media:// refs in messages.
@@ -73,7 +73,7 @@ func resolveMediaRefs(
 	maxSize int,
 	model string,
 ) []providers.Message {
-	return resolveMediaRefsWithOffload(messages, store, maxSize, model, nil, nil, nil, "")
+	return resolveMediaRefsWithOffload(messages, store, maxSize, "", model, nil, nil, nil, "")
 }
 
 // resolveMediaRefsWithOffload is the full presentation path: the legacy
@@ -91,9 +91,9 @@ func resolveMediaRefsWithOffload(
 	messages []providers.Message,
 	store media.MediaStore,
 	maxSize int,
-	model string,
+	provider, model string,
 	sink *offloadSink,
-	catalog *capabilities.Catalog,
+	cat *catalog.Catalog,
 	rc workspaceRefcounter,
 	callerWorkspace string,
 ) []providers.Message {
@@ -200,14 +200,14 @@ func resolveMediaRefsWithOffload(
 				// always passes and a wrong guess self-corrects via the
 				// outcome-based step-4 retry.
 				var dataURL string
-				if modelSupportsImage(catalog, model) {
+				if modelSupportsImage(cat, provider, model) {
 					dataURL = encodeImageToDataURLCached(
 						localPath,
 						mime,
 						info,
 						maxSize,
 						model,
-						resizeBudgetForModel(catalog, model, maxSize),
+						resizeBudgetForModel(cat, provider, model, maxSize),
 					)
 				}
 				if dataURL != "" {
@@ -255,7 +255,7 @@ func resolveMediaRefsWithOffload(
 			// step-5 offload with document-class guidance, falling back to
 			// step-6 text extraction (FR-022) and step-7 honest marker.
 			if isPDF(mime, meta.Filename) {
-				if modelSupportsPDF(catalog, model) && pdfCapableModel(model) {
+				if modelSupportsPDF(cat, provider, model) && pdfCapableModel(model) {
 					dataURL := encodePDFToDataURL(localPath, info, maxSize)
 					if dataURL != "" {
 						resolved = append(resolved, dataURL)
@@ -263,7 +263,7 @@ func resolveMediaRefsWithOffload(
 						inj := buildDocumentInjection(localPath, mime, meta.Filename, info.Size())
 						contentInjections = append(contentInjections, inj)
 					}
-				} else if !modelSupportsPDF(catalog, model) {
+				} else if !modelSupportsPDF(cat, provider, model) {
 					// Step-1 gate: text-only model + PDF → offload with
 					// document-class guidance + text extraction (step 5 + 6).
 					textInj := buildDocumentInjection(localPath, mime, meta.Filename, info.Size())
@@ -734,7 +734,7 @@ func encodeImageToDataURL(
 	localPath, mime string,
 	info os.FileInfo,
 	maxSize int,
-	budget ...capabilities.ResizeBudget,
+	budget ...catalog.ResizeLimits,
 ) string {
 	return encodeImageToDataURLCached(localPath, mime, info, maxSize, "", budget...)
 }
@@ -748,7 +748,7 @@ func encodeImageToDataURLCached(
 	info os.FileInfo,
 	maxSize int,
 	modelSlot string,
-	budget ...capabilities.ResizeBudget,
+	budget ...catalog.ResizeLimits,
 ) string {
 	if info.Size() > int64(maxSize) {
 		logImageNormalizationFailure(localPath, mime, "input-oversize", nil, map[string]any{
@@ -850,7 +850,7 @@ func encodeImageToDataURLCached(
 		return ""
 	}
 
-	result, err := resize.ResizeToFit(decoded, capabilities.ResizeBudget{
+	result, err := resize.ResizeToFit(decoded, catalog.ResizeLimits{
 		LongEdgePx: longEdgePx,
 		MaxBytes:   maxBytes,
 	})
@@ -1249,21 +1249,24 @@ func verifyFileIntegrity(path, expectedSHA256 string) error {
 	return nil
 }
 
-// resizeBudgetForModel returns the per-model resize budget from the capability
-// catalog (FR-014). When the catalog is nil or the model is unknown, falls back
-// to the catalog's DefaultResizeBudget (which is always non-zero post-validate
-// — see capabilities/seedFile.validate). The maxSize parameter caps MaxBytes
-// as an additional safety bound (agents.defaults.max_media_size).
-func resizeBudgetForModel(catalog *capabilities.Catalog, model string, maxSize int) capabilities.ResizeBudget {
-	if catalog != nil {
-		budget := catalog.Resolve(model).Budget()
-		if budget.LongEdgePx > 0 {
+// resizeBudgetForModel returns the resize budget the media pipeline must
+// honour for one (provider, model) pair (FR-004). A hit carries the
+// provider's own resize_limits; a miss — and a nil catalog — carries the
+// document-level default, which ParseDocument guarantees is non-zero. The
+// maxSize parameter is the additional operator bound
+// (agents.defaults.max_media_size) applied downstream by
+// encodeImageToDataURLCached, which takes the smaller of the two byte
+// ceilings; it is used here only for the no-catalog fallback.
+func resizeBudgetForModel(cat *catalog.Catalog, provider, model string, maxSize int) catalog.ResizeLimits {
+	if cat != nil {
+		if budget := cat.Resolve(provider, model).Budget(); budget.LongEdgePx > 0 {
 			return budget
 		}
 	}
-	// Fallback default matching the catalog's seed default.
-	return capabilities.ResizeBudget{
-		LongEdgePx: 7680,
+	// No catalog at all: the package default long edge with the operator's
+	// byte cap.
+	return catalog.ResizeLimits{
+		LongEdgePx: catalog.DefaultResizeLimits.LongEdgePx,
 		MaxBytes:   int64(maxSize),
 	}
 }
