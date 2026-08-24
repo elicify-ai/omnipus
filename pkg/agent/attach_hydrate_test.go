@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -607,5 +608,104 @@ func TestHydrate_NonEmptyArchiveIsLeftAlone(t *testing.T) {
 	}
 	if n := len(h.ag.Sessions.GetHistory(h.key())); n != 4 {
 		t.Errorf("window len = %d, want 4 (skip untouched)", n)
+	}
+}
+
+// TestHydrateAgentHistoryFromTranscript_UnreadableArchiveIsNotFlaggedHydrated
+// is the regression for the "flag a live session hydrated on a write that
+// never landed" bug.
+//
+// agentArchiveHasLines used to treat a ReadArchive FAILURE as "empty", so an
+// archive that is temporarily unreadable — e.g. it carries an over-long line
+// that trips bufio.Scanner — passed the FR-045 guard. SetHistory then
+// correctly refused it (ErrArchiveNotEmpty), but SessionWriter.SetHistory is
+// fire-and-forget, so the refusal was swallowed and the unconditional
+// MarkHydrated below it set the ONE-WAY hydrated flag on the real, live
+// archive. From then on every recall_conversation(tool_call_id) answered
+// "session was rebuilt from the transcript", turning every [capped]/[emptied]
+// mark in that session into a dead pointer — while the operator log reported
+// hydration succeeded.
+func TestHydrateAgentHistoryFromTranscript_UnreadableArchiveIsNotFlaggedHydrated(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("OMNIPUS_HOME", home)
+
+	cfg := &config.Config{}
+	msgBus := bus.NewMessageBus()
+	al := mustNewAgentLoop(t, cfg, msgBus, &mockProvider{})
+	t.Cleanup(func() { al.Close() })
+
+	sessionsDir := filepath.Join(home, "sessions")
+	store, err := session.NewUnifiedStore(sessionsDir)
+	if err != nil {
+		t.Fatalf("NewUnifiedStore: %v", err)
+	}
+	al.sharedSessionStore = store
+
+	const agentID = "mia"
+	ag := NewAgentInstance(&config.AgentConfig{ID: agentID, Name: agentID},
+		&cfg.Agents.Defaults, cfg, &mockProvider{})
+	ag.Home = filepath.Join(home, "agents", agentID)
+	ag.ContextBuilder = NewContextBuilder(ag.Home).WithAgentInfo(agentID, agentID)
+	al.registry.mu.Lock()
+	al.registry.agents[agentID] = ag
+	al.registry.mu.Unlock()
+
+	meta, err := store.NewSession(session.SessionTypeChat, "webchat", agentID)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	now := time.Now().UTC()
+	for i, e := range []session.TranscriptEntry{
+		{Role: "user", Content: "deploy host?", AgentID: agentID, Timestamp: now},
+		{Role: "assistant", Content: "prod-east-1", AgentID: agentID, Timestamp: now.Add(time.Second)},
+	} {
+		if err := store.AppendTranscript(meta.ID, e); err != nil {
+			t.Fatalf("AppendTranscript[%d]: %v", i, err)
+		}
+	}
+
+	// A REAL, non-empty archive that cannot be read: one line above
+	// bufio.Scanner's 10 MB ceiling. Seed one message through the agent's own
+	// store first so the archive file exists where that store actually keeps
+	// it (a per-agent store under the agent workspace, not `sessionsDir`),
+	// then locate it by its sanitized name (':' → '_') and overwrite it.
+	key := fmt.Sprintf("agent:%s:session:%s", agentID, meta.ID)
+	ag.Sessions.AddMessage(key, "user", "seed")
+	wantName := strings.ReplaceAll(key, ":", "_") + ".jsonl"
+	archivePath := ""
+	if walkErr := filepath.WalkDir(home, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil //nolint:nilerr // best-effort search
+		}
+		if d.Name() == wantName {
+			archivePath = path
+		}
+		return nil
+	}); walkErr != nil {
+		t.Fatalf("locate archive: %v", walkErr)
+	}
+	if archivePath == "" {
+		t.Fatalf("could not locate the agent archive %q under %s", wantName, home)
+	}
+	oversize := make([]byte, 11*1024*1024)
+	for i := range oversize {
+		oversize[i] = 'x'
+	}
+	line := append([]byte(`{"role":"user","content":"`), oversize...)
+	line = append(line, []byte(`"}`+"\n")...)
+	if err := os.WriteFile(archivePath, line, 0o600); err != nil {
+		t.Fatalf("write oversize archive: %v", err)
+	}
+	if _, readErr := ag.Sessions.ReadArchive(t.Context(), key); readErr == nil {
+		t.Fatal("precondition: the archive must be unreadable for this test to mean anything")
+	}
+
+	if err := al.HydrateAgentHistoryFromTranscript(meta.ID); err != nil {
+		t.Fatalf("HydrateAgentHistoryFromTranscript: %v", err)
+	}
+
+	if ag.Sessions.Projection(key).Hydrated {
+		t.Fatal("an archive that could not be read must never be flagged hydrated: the flag is " +
+			"one-way and permanently disables recall by tool_call_id for the whole session")
 	}
 }

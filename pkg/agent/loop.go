@@ -12538,8 +12538,7 @@ func (al *AgentLoop) buildCommandsRuntime(agent *AgentInstance, opts *processOpt
 				return fmt.Errorf("sessions not initialized for agent")
 			}
 
-			agent.Sessions.SetHistory(opts.SessionKey, make([]providers.Message, 0))
-			return agent.Sessions.Save(opts.SessionKey)
+			return clearSessionWindow(agent.Sessions, opts.SessionKey)
 		}
 	}
 
@@ -12559,6 +12558,26 @@ func (al *AgentLoop) buildCommandsRuntime(agent *AgentInstance, opts *processOpt
 	rt = rt.WithAgentLoop(al)
 
 	return rt
+}
+
+// clearSessionWindow implements /new (alias /clear): it empties the live
+// window while preserving the archive.
+//
+// It clears with the Skip-advancing primitive, NOT SetHistory. ADR-066 FR-047
+// narrowed SetHistory to a first-fill primitive — an archive-backed store
+// REFUSES it once the archive holds >= 1 line (memory.ErrArchiveNotEmpty) —
+// and because SessionWriter.SetHistory is fire-and-forget the refusal is
+// swallowed into a slog.Error. /clear therefore answered "Chat history
+// cleared!" on CLI and every channel while clearing nothing at all, and the
+// next message was answered with the whole prior conversation still in the
+// window.
+//
+// TruncateHistory(key, 0) sets Skip = Count: the live window is empty, the
+// JSONL archive is untouched (recall by tool_call_id still resolves), and the
+// projection entries below the new Skip are pruned in the same meta write.
+func clearSessionWindow(sessions session.SessionStore, sessionKey string) error {
+	sessions.TruncateHistory(sessionKey, 0)
+	return sessions.Save(sessionKey)
 }
 
 func mapCommandError(result commands.ExecuteResult) string {

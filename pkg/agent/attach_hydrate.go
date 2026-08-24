@@ -69,19 +69,32 @@ func (al *AgentLoop) AgentArchiveNonEmpty(sessionID string) bool {
 	if !ok || ag == nil || ag.Sessions == nil {
 		return false
 	}
-	return agentArchiveHasLines(ag, hydrateSessionKey(owner, sessionID))
+	hasLines, known := agentArchiveHasLines(ag, hydrateSessionKey(owner, sessionID))
+	if !known {
+		// Unreadable is not empty. Answering "non-empty" here keeps the
+		// attach path off a session whose archive we cannot inspect.
+		return true
+	}
+	return hasLines
 }
 
 // agentArchiveHasLines counts the archive from line 0 (ReadArchive ignores
 // Skip), so a fully evicted window still counts as a non-empty archive.
-func agentArchiveHasLines(ag *AgentInstance, key string) bool {
+//
+// The second return is whether the answer is KNOWN. A read failure is NOT
+// "empty": an archive can be temporarily unreadable (e.g. an over-long line
+// trips bufio.Scanner) while being a real, live record. Reporting it empty is
+// how hydration used to overwrite-and-flag a live session — see
+// HydrateAgentHistoryFromTranscript. Callers must treat unknown as
+// "do not hydrate".
+func agentArchiveHasLines(ag *AgentInstance, key string) (hasLines, known bool) {
 	archived, err := ag.Sessions.ReadArchive(context.Background(), key)
 	if err != nil {
-		logger.WarnCF("agent.attach", "archive read failed; treating as empty",
+		logger.WarnCF("agent.attach", "archive read failed; treating as UNKNOWN (never as empty)",
 			map[string]any{"session_key": key, "error": err.Error()})
-		return false
+		return false, false
 	}
-	return len(archived) > 0
+	return len(archived) > 0, true
 }
 
 // openAssistant points at the assistant message a standalone tool_call entry
@@ -295,13 +308,36 @@ func (al *AgentLoop) HydrateAgentHistoryFromTranscript(sessionID string) error {
 		}
 		key := hydrateSessionKey(agentID, sessionID)
 		// FR-045: fill only an empty archive. A non-empty one is the live
-		// record — bytes, Skip and flags stay exactly as they are.
-		if agentArchiveHasLines(ag, key) {
-			logger.InfoCF("agent.attach", "skip hydration; agent archive already has lines",
-				map[string]any{"agent_id": agentID, "session_key": key, "session_id": sessionID})
+		// record — bytes, Skip and flags stay exactly as they are. An
+		// UNREADABLE one is not empty either: hydrating it would flag a real
+		// session hydrated on the strength of a write that SetHistory
+		// refuses.
+		hasLines, known := agentArchiveHasLines(ag, key)
+		if hasLines || !known {
+			logger.InfoCF("agent.attach", "skip hydration; agent archive is non-empty or unreadable",
+				map[string]any{
+					"agent_id": agentID, "session_key": key,
+					"session_id": sessionID, "archive_readable": known,
+				})
 			continue
 		}
 		ag.Sessions.SetHistory(key, msgs)
+		// SessionWriter.SetHistory is fire-and-forget and JSONLStore refuses a
+		// non-empty archive (ErrArchiveNotEmpty), so the ONLY way to know the
+		// write landed is to look. MarkHydrated is documented one-way: flagging
+		// a session whose fill never happened permanently answers every
+		// recall_conversation(tool_call_id) with "session was rebuilt from the
+		// transcript", turning every [capped]/[emptied] mark into a dead
+		// pointer — while the operator log claims hydration succeeded.
+		if wrote, readable := agentArchiveHasLines(ag, key); !wrote || !readable {
+			logger.ErrorCF("agent.attach", "hydration write did not land; not marking hydrated",
+				map[string]any{
+					"agent_id": agentID, "session_key": key,
+					"session_id": sessionID, "message_count": len(msgs),
+					"archive_readable": readable,
+				})
+			continue
+		}
 		// FR-048: recall by tool_call_id cannot promise the original result
 		// bytes for a transcript-rebuilt archive.
 		ag.Sessions.MarkHydrated(key)
