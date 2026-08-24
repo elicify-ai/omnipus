@@ -6602,9 +6602,18 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		if firstModel == "" {
-			// No model to probe with — the auth call cannot run. Make the skip
-			// observable instead of silently returning success (fix #4).
+		if firstModel == "" && providers_pkg.DefaultProbeModel(providerID) == "" {
+			// No model to probe with ANYWHERE — neither the operator's config
+			// nor the registry catalog offers one, so the auth call cannot
+			// run. Make the skip observable instead of silently returning
+			// success (fix #4).
+			//
+			// ADR-067 FR-022 (T067-12): a configured model is no longer a
+			// precondition. The probe model comes from the CATALOG — the first
+			// active, tool-calling text model of that row in document order —
+			// so a catalog provider whose entry lists no slugs is still fully
+			// verified. Requiring one here used to turn "I have not picked a
+			// model yet" into "your key is fine", untested.
 			slog.Warn("rest: provider test: provider has no model to probe; API key not verified",
 				"provider", providerID)
 			jsonOK(w, gen.OperationResult{Success: true})

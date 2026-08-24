@@ -854,19 +854,30 @@ func probeProviderWithUpstream(t *testing.T, upstream string, body string, api *
 
 // TestHandleOnboardingProbeProvider_SuccessWithModels probes a stub upstream
 // and asserts the handler returns the model list without persisting anything.
+//
+// ADR-067 T067-12 re-keyed the model-list half of this test: the list is now
+// the CATALOG's models for the row, served offline, and the upstream
+// `GET /models` the probe used to make is gone (FR-020/FR-022). The
+// still-valid coverage — success on an accepted key, and the api_key never
+// touching disk — is unchanged, and the "no outbound listing" half is now
+// asserted directly instead of being implied.
 func TestHandleOnboardingProbeProvider_SuccessWithModels(t *testing.T) {
-	// Stub /v1/models endpoint.
+	var modelsGETs int
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.HasSuffix(r.URL.Path, "/models") {
-			http.NotFound(w, r)
-			return
-		}
-		if auth := r.Header.Get("Authorization"); auth != "Bearer test-key" {
-			w.WriteHeader(http.StatusUnauthorized)
-			return
-		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"data":[{"id":"gpt-4"},{"id":"gpt-3.5-turbo"}]}`))
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/models"):
+			modelsGETs++
+			_, _ = w.Write([]byte(`{"data":[{"id":"gpt-4"},{"id":"gpt-3.5-turbo"}]}`))
+		case strings.HasSuffix(r.URL.Path, "/chat/completions"):
+			if auth := r.Header.Get("Authorization"); auth != "Bearer test-key" {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"hi"}}]}`))
+		default:
+			http.NotFound(w, r)
+		}
 	}))
 	defer upstream.Close()
 
@@ -882,9 +893,16 @@ func TestHandleOnboardingProbeProvider_SuccessWithModels(t *testing.T) {
 	var resp map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, true, resp["success"])
+	assert.Zero(t, modelsGETs,
+		"FR-022: the probe must not fetch the upstream model list")
+
 	models, _ := resp["models"].([]any)
-	assert.ElementsMatch(t, []any{"gpt-3.5-turbo", "gpt-4"}, models,
-		"probe must return the upstream model list sorted alphabetically")
+	row, known := providers.CatalogProvider("openai")
+	require.True(t, known, "the embedded snapshot must carry openai")
+	require.Len(t, models, len(row.Models),
+		"FR-020: the model list is the catalog's own, served offline")
+	assert.Equal(t, row.Models[0].ID, models[0],
+		"the catalog's document order must be preserved")
 
 	// Nothing persisted: config.json has no providers array entry, creds store is empty.
 	cfgData, err := os.ReadFile(tmpDir + "/config.json")
@@ -916,7 +934,17 @@ func TestHandleOnboardingProbeProvider_UpstreamUnauthorized(t *testing.T) {
 	assert.Equal(t, false, resp["success"])
 	errMsg, errMsgOk := resp["error"].(string)
 	require.True(t, errMsgOk, "response error field must be a string")
-	assert.Contains(t, errMsg, "401")
+	// T067-12: the message is the curated FR-7 text, because the 401 now
+	// comes from the completion probe rather than from a model-list fetch
+	// whose raw error string was passed through. SEC-16 wanted the curated
+	// text here all along.
+	assert.Contains(t, errMsg, "rejected",
+		"a 401 must be reported as a rejected key, in the curated wording")
+	assert.NotContains(t, errMsg, "bad-key",
+		"SEC-16: the error must never echo the api key")
+	validationMap, _ := resp["validation"].(map[string]any)
+	require.NotNil(t, validationMap, "validation must be present for a non-valid outcome")
+	assert.Equal(t, "invalid_key", validationMap["outcome"])
 }
 
 // TestHandleOnboardingProbeProvider_AlreadyComplete verifies that once
@@ -1478,14 +1506,26 @@ func TestProviderTest_CredentialRefNotFound(t *testing.T) {
 	assert.NotContains(t, errStr, "no API key configured")
 }
 
-// TestHandleOnboardingProbeProvider_EmptyModelsWarns proves fix #4: when the
-// upstream /models list is empty the probe still returns success=true (the catalog
-// is simply empty) but the skip is observable via a WARN — instead of a silent pass
-// that would defeat the auth-verification intent for empty-catalog providers.
+// TestHandleOnboardingProbeProvider_EmptyModelsWarns proves fix #4: when there
+// is no model list to offer, the probe still returns success=true (the key was
+// checked; there is simply nothing to pick from) but the gap is observable via
+// a WARN — instead of a silent pass that would leave the operator staring at an
+// empty dropdown with no explanation.
+//
+// T067-12 re-keyed the fixture rather than the assertion: the empty list used
+// to come from an upstream `GET /models` returning `{"data":[]}`, and that
+// fetch no longer happens. An operator-named CUSTOM row (X-13 vocabulary — the
+// flag, never the literal id "custom") is now the case that genuinely has no
+// catalog models, so it is the one that must warn.
 func TestHandleOnboardingProbeProvider_EmptyModelsWarns(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"data":[]}`)) // empty model list
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/models"):
+			_, _ = w.Write([]byte(`{"data":[]}`)) // empty model list
+		default:
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"hi"}}]}`))
+		}
 	}))
 	defer upstream.Close()
 
@@ -1495,7 +1535,8 @@ func TestHandleOnboardingProbeProvider_EmptyModelsWarns(t *testing.T) {
 	api := newOnboardingTestAPI(t, tmpDir, nil)
 	api.ssrfChecker = security.NewSSRFChecker([]string{"127.0.0.1", "::1"})
 
-	body := `{"id":"openai","auth":"api_key","api_key":"test-key","api_base":"` + upstream.URL + `"}`
+	body := `{"id":"my-proxy","auth":"api_key","api_key":"test-key","api_base":"` + upstream.URL +
+		`","protocol":"openai-compatible"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/probe-provider", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -1505,11 +1546,11 @@ func TestHandleOnboardingProbeProvider_EmptyModelsWarns(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 	var resp map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	// Empty catalog is not a hard failure — success stays true (don't block onboarding).
-	assert.Equal(t, true, resp["success"], "empty model list must not hard-fail the probe")
-	// But the skip must be observable.
+	// No model list is not a hard failure — success stays true (don't block onboarding).
+	assert.Equal(t, true, resp["success"], "an empty model list must not hard-fail the probe")
+	// But the gap must be observable.
 	assert.Contains(t, logBuf.String(), "provider returned no models",
-		"an empty model list must emit an observable WARN that the key was not verified")
+		"an empty model list must emit an observable WARN")
 }
 
 // --- provider API-key validation at first-run setup ---

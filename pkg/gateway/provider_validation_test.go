@@ -1,6 +1,14 @@
 // Provider-validation gateway integration tests (spec: provider-validation-centralization-spec.md).
 // Tests #10–#16, #28–#30 from the TDD plan (gateway layer only).
 //
+// ADR-067 T067-12 re-keyed the fixture ids here from "testprovider" to
+// "my-proxy": an id the registry catalog does not carry is an operator-named
+// CUSTOM row (FR-035), and every check in the product is on that row's
+// `custom: true` flag, never on a literal id (X-13). These rows therefore
+// exercise the custom half of key validation — the one whose probe candidates
+// can only come from the live endpoint, because no catalog document describes
+// it. The CATALOG half is T39, in rest_probe_catalog_test.go.
+//
 // Each test drives a real restAPI instance against an httptest upstream stub.
 // No live provider calls are made. Credential store is wired with a test master key.
 //
@@ -211,7 +219,7 @@ func TestPutProvider_InvalidKey422NotPersisted(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	api := newProviderValidationTestAPI(t, "testprovider", upstream.URL)
+	api := newProviderValidationTestAPI(t, "my-proxy", upstream.URL)
 
 	// Record credential store state before the PUT.
 	credPathBefore := api.credentialsStorePath()
@@ -222,7 +230,7 @@ func TestPutProvider_InvalidKey422NotPersisted(t *testing.T) {
 	}
 
 	body := `{"api_key":"bad-key-401"}`
-	w := doPutProvider(t, api, "testprovider", body)
+	w := doPutProvider(t, api, "my-proxy", body)
 
 	// Must return 422 (InvalidKey blocks save).
 	assert.Equal(t, http.StatusUnprocessableEntity, w.Code,
@@ -272,10 +280,10 @@ func TestPutProvider_NoCredit200Persisted(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	api := newProviderValidationTestAPI(t, "testprovider", upstream.URL)
+	api := newProviderValidationTestAPI(t, "my-proxy", upstream.URL)
 
 	body := `{"api_key":"valid-key-no-credit"}`
-	w := doPutProvider(t, api, "testprovider", body)
+	w := doPutProvider(t, api, "my-proxy", body)
 
 	// Must return 200 (NoCredit proceeds).
 	require.Equal(t, http.StatusOK, w.Code,
@@ -283,7 +291,7 @@ func TestPutProvider_NoCredit200Persisted(t *testing.T) {
 
 	var provider gen.Provider
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &provider))
-	assert.Equal(t, "testprovider", provider.Id)
+	assert.Equal(t, "my-proxy", provider.Id)
 	assert.Equal(t, gen.ProviderStatusConnected, provider.Status,
 		"provider must be connected (key was persisted)")
 
@@ -323,11 +331,11 @@ func TestPutProvider_KeyUnchangedNoProbe(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	api := newProviderValidationTestAPI(t, "testprovider", upstream.URL)
+	api := newProviderValidationTestAPI(t, "my-proxy", upstream.URL)
 
 	// PUT changing only the model (no api_key in body).
 	body := `{"model":"other-model"}`
-	w := doPutProvider(t, api, "testprovider", body)
+	w := doPutProvider(t, api, "my-proxy", body)
 
 	assert.Equal(t, http.StatusOK, w.Code,
 		"model-only edit must succeed; body=%s", w.Body.String())
@@ -351,7 +359,7 @@ func TestPutProvider_SSRFPersistedApiBase(t *testing.T) {
 	t.Setenv("OMNIPUS_MASTER_KEY", testMasterKeyValidation)
 	tmpDir := t.TempDir()
 	minimalCfg := []byte(
-		`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[{"model_name":"testprovider","provider":"testprovider","model":"test-model"}]}`,
+		`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[{"model_name":"my-proxy","provider":"my-proxy","model":"test-model"}]}`,
 	)
 	require.NoError(t, os.WriteFile(tmpDir+"/config.json", minimalCfg, 0o600))
 
@@ -363,7 +371,7 @@ func TestPutProvider_SSRFPersistedApiBase(t *testing.T) {
 		},
 		// Provider with a loopback api_base that the SSRF checker must block.
 		Providers: []*config.ModelConfig{
-			{Name: "testprovider", Provider: "testprovider", Model: "test-model", APIBase: "http://127.0.0.1:9"},
+			{Name: "my-proxy", Provider: "my-proxy", Model: "test-model", APIBase: "http://127.0.0.1:9"},
 		},
 	}
 	msgBus := bus.NewMessageBus()
@@ -388,7 +396,7 @@ func TestPutProvider_SSRFPersistedApiBase(t *testing.T) {
 
 	// PUT with a new api_key — SSRF check on the persisted 127.0.0.1 base should block.
 	body := `{"api_key":"sk-test-key"}`
-	w := doPutProvider(t, api, "testprovider", body)
+	w := doPutProvider(t, api, "my-proxy", body)
 
 	// SSRF rejection returns 422 (the persisted api_base is loopback — blocked pre-probe).
 	assert.Equal(t, http.StatusUnprocessableEntity, w.Code,
@@ -440,7 +448,7 @@ func TestProviderTest_ClassifiedOutcome(t *testing.T) {
 				Home: tmpDir, DefaultModel: config.DefaultModel{Model: "test-model"}, MaxTokens: 4096},
 		},
 		Providers: []*config.ModelConfig{
-			{Name: "testprovider", Provider: "testprovider", Model: "test-model", APIBase: upstream.URL},
+			{Name: "my-proxy", Provider: "my-proxy", Model: "test-model", APIBase: upstream.URL},
 		},
 	}
 	msgBus := bus.NewMessageBus()
@@ -449,17 +457,17 @@ func TestProviderTest_ClassifiedOutcome(t *testing.T) {
 	credStore := credentials.NewStore(tmpDir + "/credentials.json")
 	require.NoError(t, credentials.Unlock(credStore))
 	// Pre-store a credential so the Test handler can resolve the API key.
-	require.NoError(t, credStore.Set("testprovider_API_KEY", "valid-key-no-credit"))
+	require.NoError(t, credStore.Set("my-proxy_API_KEY", "valid-key-no-credit"))
 	// Write the api_key_ref into config.json for the Test handler to pick up.
 	cfgJSON := map[string]any{
 		"version": 1,
 		"agents":  map[string]any{"defaults": map[string]any{}, "list": []any{}},
 		"providers": []any{
 			map[string]any{
-				"model_name":  "testprovider",
-				"provider":    "testprovider",
+				"model_name":  "my-proxy",
+				"provider":    "my-proxy",
 				"model":       "test-model",
-				"api_key_ref": "testprovider_API_KEY",
+				"api_key_ref": "my-proxy_API_KEY",
 				"api_base":    upstream.URL,
 			},
 		},
@@ -477,7 +485,7 @@ func TestProviderTest_ClassifiedOutcome(t *testing.T) {
 		credStore:     credStore,
 	}
 
-	w := doProviderTest(t, api, "testprovider")
+	w := doProviderTest(t, api, "my-proxy")
 
 	require.Equal(t, http.StatusOK, w.Code, "provider test must return 200; body=%s", w.Body.String())
 
@@ -523,7 +531,7 @@ func TestProviderTest_DoesNotPersistCredential(t *testing.T) {
 				Home: tmpDir, DefaultModel: config.DefaultModel{Model: "test-model"}, MaxTokens: 4096},
 		},
 		Providers: []*config.ModelConfig{
-			{Name: "testprovider", Provider: "testprovider", Model: "test-model", APIBase: upstream.URL},
+			{Name: "my-proxy", Provider: "my-proxy", Model: "test-model", APIBase: upstream.URL},
 		},
 	}
 	require.NoError(t, os.WriteFile(tmpDir+"/config.json",
@@ -534,16 +542,16 @@ func TestProviderTest_DoesNotPersistCredential(t *testing.T) {
 	credStore := credentials.NewStore(tmpDir + "/credentials.json")
 	require.NoError(t, credentials.Unlock(credStore))
 	// Pre-store a credential so the Test handler can resolve the API key.
-	require.NoError(t, credStore.Set("testprovider_API_KEY", "existing-key"))
+	require.NoError(t, credStore.Set("my-proxy_API_KEY", "existing-key"))
 	// Write api_key_ref into config.json for the Test handler.
 	cfgJSON := map[string]any{
 		"version": 1,
 		"agents":  map[string]any{"defaults": map[string]any{}, "list": []any{}},
 		"providers": []any{map[string]any{
-			"model_name":  "testprovider",
-			"provider":    "testprovider",
+			"model_name":  "my-proxy",
+			"provider":    "my-proxy",
 			"model":       "test-model",
-			"api_key_ref": "testprovider_API_KEY",
+			"api_key_ref": "my-proxy_API_KEY",
 			"api_base":    upstream.URL,
 		}},
 	}
@@ -566,7 +574,7 @@ func TestProviderTest_DoesNotPersistCredential(t *testing.T) {
 	require.NoError(t, err, "credential store must exist before the test")
 	beforeMtime := beforeStat.ModTime()
 
-	w := doProviderTest(t, api, "testprovider")
+	w := doProviderTest(t, api, "my-proxy")
 	require.Equal(t, http.StatusOK, w.Code, "provider test must return 200; body=%s", w.Body.String())
 
 	// Credential store must NOT have been modified.
@@ -631,22 +639,22 @@ func TestAudit_ProbeAndTestNotAudited(t *testing.T) {
 					Home: tmpDir, DefaultModel: config.DefaultModel{Model: "test-model"}, MaxTokens: 4096},
 			},
 			Providers: []*config.ModelConfig{
-				{Name: "testprovider2", Provider: "testprovider2", Model: "test-model", APIBase: upstream.URL},
+				{Name: "my-proxy-2", Provider: "my-proxy-2", Model: "test-model", APIBase: upstream.URL},
 			},
 		}
 		msgBus := bus.NewMessageBus()
 		al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
 		credStore := credentials.NewStore(tmpDir + "/credentials.json")
 		require.NoError(t, credentials.Unlock(credStore))
-		require.NoError(t, credStore.Set("testprovider2_API_KEY", "valid-key"))
+		require.NoError(t, credStore.Set("my-proxy-2_API_KEY", "valid-key"))
 		cfgJSON := map[string]any{
 			"version": 1,
 			"agents":  map[string]any{"defaults": map[string]any{}, "list": []any{}},
 			"providers": []any{map[string]any{
-				"model_name":  "testprovider2",
-				"provider":    "testprovider2",
+				"model_name":  "my-proxy-2",
+				"provider":    "my-proxy-2",
 				"model":       "test-model",
-				"api_key_ref": "testprovider2_API_KEY",
+				"api_key_ref": "my-proxy-2_API_KEY",
 				"api_base":    upstream.URL,
 			}},
 		}
@@ -664,7 +672,7 @@ func TestAudit_ProbeAndTestNotAudited(t *testing.T) {
 			auditor:       auditLogger,
 		}
 
-		w := doProviderTest(t, api, "testprovider2")
+		w := doProviderTest(t, api, "my-proxy-2")
 		require.Equal(t, http.StatusOK, w.Code, "settings test must return 200; body=%s", w.Body.String())
 	})
 
@@ -700,23 +708,23 @@ func TestPutProvider_SameKeyReprobes(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	api := newProviderValidationTestAPI(t, "testprovider", upstream.URL)
+	api := newProviderValidationTestAPI(t, "my-proxy", upstream.URL)
 
 	// First PUT: submit a key (fires 1 probe — valid response).
-	w1 := doPutProvider(t, api, "testprovider", `{"api_key":"same-key"}`)
+	w1 := doPutProvider(t, api, "my-proxy", `{"api_key":"same-key"}`)
 	require.Equal(t, http.StatusOK, w1.Code, "first PUT must succeed; body=%s", w1.Body.String())
 	assert.Equal(t, int64(1), completionHits.Load(), "first PUT must fire exactly 1 probe")
 
 	// Second PUT: re-submit the same key (must fire 1 more probe — R-C).
 	completionHits.Store(0)
-	w2 := doPutProvider(t, api, "testprovider", `{"api_key":"same-key"}`)
+	w2 := doPutProvider(t, api, "my-proxy", `{"api_key":"same-key"}`)
 	require.Equal(t, http.StatusOK, w2.Code, "re-submitting same key must succeed; body=%s", w2.Body.String())
 	assert.Equal(t, int64(1), completionHits.Load(),
 		"SC-012: re-sending the same key value must re-probe (not skip)")
 
 	// Third PUT: omit api_key (model-only) — must fire 0 probes.
 	completionHits.Store(0)
-	w3 := doPutProvider(t, api, "testprovider", `{"model":"other-model"}`)
+	w3 := doPutProvider(t, api, "my-proxy", `{"model":"other-model"}`)
 	require.Equal(t, http.StatusOK, w3.Code, "model-only PUT must succeed; body=%s", w3.Body.String())
 	assert.Equal(t, int64(0), completionHits.Load(),
 		"SC-005: omitting api_key must fire 0 probes")
@@ -753,7 +761,7 @@ func TestPutProvider_StoreLockedAndReloadFail(t *testing.T) {
 			os.WriteFile(
 				tmpDir+"/config.json",
 				[]byte(
-					`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[{"model_name":"testprovider","provider":"testprovider","model":"test-model"}]}`,
+					`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[{"model_name":"my-proxy","provider":"my-proxy","model":"test-model"}]}`,
 				),
 				0o600,
 			),
@@ -773,7 +781,7 @@ func TestPutProvider_StoreLockedAndReloadFail(t *testing.T) {
 					Home: tmpDir, DefaultModel: config.DefaultModel{Model: "test-model"}, MaxTokens: 4096},
 			},
 			Providers: []*config.ModelConfig{
-				{Name: "testprovider", Provider: "testprovider", Model: "test-model", APIBase: upstream.URL},
+				{Name: "my-proxy", Provider: "my-proxy", Model: "test-model", APIBase: upstream.URL},
 			},
 		}
 		msgBus := bus.NewMessageBus()
@@ -790,7 +798,7 @@ func TestPutProvider_StoreLockedAndReloadFail(t *testing.T) {
 			// which fails in this scenario (no key, no TTY) and returns an error → 503.
 		}
 
-		w := doPutProvider(t, api, "testprovider", `{"api_key":"valid-key"}`)
+		w := doPutProvider(t, api, "my-proxy", `{"api_key":"valid-key"}`)
 		// With no master key and a pre-existing credentials.json, Unlock fails → 503.
 		assert.Equal(t, http.StatusServiceUnavailable, w.Code,
 			"locked credential store must return 503; body=%s", w.Body.String())
@@ -809,14 +817,14 @@ func TestPutProvider_StoreLockedAndReloadFail(t *testing.T) {
 		}))
 		defer upstream.Close()
 
-		api := newProviderValidationTestAPI(t, "testprovider", upstream.URL)
+		api := newProviderValidationTestAPI(t, "my-proxy", upstream.URL)
 
 		// Override reload to fail.
 		api.agentLoop.SetReloadFunc(func() error {
 			return os.ErrNotExist // simulated reload failure
 		})
 
-		w := doPutProvider(t, api, "testprovider", `{"api_key":"valid-key"}`)
+		w := doPutProvider(t, api, "my-proxy", `{"api_key":"valid-key"}`)
 		// Reload failure returns 500 (existing behavior — key has been persisted).
 		assert.Equal(t, http.StatusInternalServerError, w.Code,
 			"reload failure must return 500; body=%s", w.Body.String())
@@ -852,7 +860,7 @@ func TestPutProvider_ReauthTokenBurnedOn422(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	api := newProviderValidationTestAPI(t, "testprovider", upstream.URL)
+	api := newProviderValidationTestAPI(t, "my-proxy", upstream.URL)
 
 	// Step 1: mint a single-use re-auth token directly from the store and inject
 	// it alongside an admin user in the request context (mirrors withReAuthAdmin
@@ -861,13 +869,13 @@ func TestPutProvider_ReauthTokenBurnedOn422(t *testing.T) {
 	require.NoError(t, err, "minting a re-auth consent token must not fail")
 
 	body := `{"api_key":"bad-key"}`
-	req := httptest.NewRequest(http.MethodPut, "/api/v1/providers/testprovider", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/providers/my-proxy", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set(reAuthHeader, token)
 	req = withReAuthAdminNoToken(req) // sets the user context (token is in the header above)
 	// Replace the header-set token with our minted one (withReAuthAdminNoToken doesn't mint).
 	req.Header.Set(reAuthHeader, token)
-	req.URL.Path = "/api/v1/providers/testprovider"
+	req.URL.Path = "/api/v1/providers/my-proxy"
 
 	w1 := httptest.NewRecorder()
 	api.HandleProviders(w1, req)
@@ -884,12 +892,12 @@ func TestPutProvider_ReauthTokenBurnedOn422(t *testing.T) {
 
 	// Step 4: retry the PUT with the stale (now-deleted) token — must be rejected
 	// at the re-auth gate (403 Forbidden), not at the validation layer (422).
-	req2 := httptest.NewRequest(http.MethodPut, "/api/v1/providers/testprovider", strings.NewReader(body))
+	req2 := httptest.NewRequest(http.MethodPut, "/api/v1/providers/my-proxy", strings.NewReader(body))
 	req2.Header.Set("Content-Type", "application/json")
 	req2.Header.Set(reAuthHeader, token) // same stale token
 	req2 = withReAuthAdminNoToken(req2)
 	req2.Header.Set(reAuthHeader, token)
-	req2.URL.Path = "/api/v1/providers/testprovider"
+	req2.URL.Path = "/api/v1/providers/my-proxy"
 	w2 := httptest.NewRecorder()
 	api.HandleProviders(w2, req2)
 	assert.Equal(t, http.StatusForbidden, w2.Code,
@@ -962,7 +970,7 @@ func TestAudit_WarningProceedNoSecret(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	api := newProviderValidationTestAPI(t, "testprovider", upstream.URL)
+	api := newProviderValidationTestAPI(t, "my-proxy", upstream.URL)
 
 	// Wire a file-backed audit logger so we can inspect emitted entries.
 	auditDir := t.TempDir()
@@ -975,7 +983,7 @@ func TestAudit_WarningProceedNoSecret(t *testing.T) {
 	t.Cleanup(func() { _ = auditLogger.Close() })
 	api.auditor = auditLogger
 
-	w := doPutProvider(t, api, "testprovider", `{"api_key":"no-credit-key"}`)
+	w := doPutProvider(t, api, "my-proxy", `{"api_key":"no-credit-key"}`)
 	require.Equal(t, http.StatusOK, w.Code, "NoCredit PUT must return 200; body=%s", w.Body.String())
 
 	// Flush and read audit log.
@@ -988,7 +996,7 @@ func TestAudit_WarningProceedNoSecret(t *testing.T) {
 		if line["event"] == "provider_key_validated" {
 			found = true
 			details, _ := line["details"].(map[string]any)
-			assert.Equal(t, "testprovider", details["provider"],
+			assert.Equal(t, "my-proxy", details["provider"],
 				"audit entry must name the provider")
 			assert.Equal(t, "no_credit", details["outcome"],
 				"audit entry must record the outcome")

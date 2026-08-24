@@ -310,58 +310,22 @@ func fetchOllamaTags(ctx context.Context, apiBase string) ([]string, error) {
 
 // ── PUT admission (FR-019, FR-035) ──────────────────────────────────────────
 
-// providerAdmission is the FR-019/FR-035 gate every write path shares
-// (PUT /providers/{id} here; the onboarding probe and the CLI wizard in
-// their own tasks apply the same rule against the same catalog).
+// providerAdmission is PUT /providers/{id}'s view of the ONE FR-019/FR-035
+// gate. The rule itself lives in providers.AdmitIn so the onboarding probe
+// and the CLI wizard cannot drift from it (T067-12); this wrapper exists
+// only to keep the handler reading against the catalog the gateway booted
+// rather than the process-wide one.
 //
 // It returns the typed provider error to report, or nil when the id may be
 // configured. custom reports whether the accepted row is an operator-named
 // custom endpoint, which the caller persists as ModelConfig.Custom.
-//
-// With no catalog document loaded (E7) nothing is classified: admitting
-// the write is the honest behaviour, since the gateway cannot tell an
-// unknown id from a known one and refusing every configuration would make
-// a bad snapshot unrecoverable through the UI.
 func providerAdmission(
 	cat *catalog.Catalog,
 	id string,
 	apiBase string,
 	protocol string,
 ) (custom bool, err error) {
-	if cat == nil || cat.Document() == nil {
-		return false, nil
-	}
-	row, known := cat.Provider(id)
-	if known {
-		if row.Tier == catalog.TierUnsupported {
-			reason := row.UnsupportedReason
-			if reason == "" {
-				reason = "unsupported"
-			}
-			return false, &providers_pkg.UnsupportedProviderError{ProviderID: id, Reason: reason}
-		}
-		return false, nil
-	}
-	// FR-035: an id the catalog does not carry is accepted only as a
-	// custom endpoint, and only when the operator supplied BOTH halves of
-	// what it takes to reach one.
-	if strings.TrimSpace(apiBase) == "" || !isCustomRowProtocol(protocol) {
-		return false, &providers_pkg.UnknownProviderError{ProviderID: id}
-	}
-	return true, nil
-}
-
-// isCustomRowProtocol reports whether p is one of the two protocols a
-// custom row may declare (FR-014/FR-035). `google`, `ollama` and `cli`
-// carry vendor-specific construction the operator cannot describe with a
-// base URL alone, so they are catalog-only.
-func isCustomRowProtocol(p string) bool {
-	switch catalog.Protocol(strings.TrimSpace(p)) {
-	case catalog.ProtocolOpenAICompatible, catalog.ProtocolAnthropic:
-		return true
-	default:
-		return false
-	}
+	return providers_pkg.AdmitIn(cat, id, apiBase, protocol)
 }
 
 // providerWireProtocol maps a resolved protocol onto the wire enum,
