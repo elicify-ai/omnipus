@@ -423,6 +423,59 @@ describe('chat store — tool-call offset stamping (position-in-model fix)', () 
       expect(assistantMsgs).toHaveLength(1)
       expect(assistantMsgs[0].content).toBe('first half\n\nsecond half')
     })
+
+    /**
+     * ADR-070 §2.2 covers TWO replay merge branches: the general same-turn
+     * merge (tested above) and this one — coalescing replayed text into a
+     * trailing EMPTY assistant placeholder that a replayed tool_call_start
+     * already created. Self-verification (test-plan-and-write mutation
+     * gate): confirmed by deliberately removing the raw-tail guard from this
+     * specific branch that no existing test in the suite caught it — this
+     * test closes that real gap. Without the guard, a steer's user entry
+     * replayed between the empty placeholder and its text would be skipped
+     * over, coalescing the text into a bubble positioned BEFORE the steer.
+     */
+    it('a mid-turn-steer user entry replayed BETWEEN an empty tool-call placeholder and its text prevents coalescing (ADR-070 §2.2, empty-placeholder branch)', () => {
+      act(() => {
+        useChatStore.getState().handleFrame({
+          type: 'tool_call_start',
+          call_id: 'tc_pre_steer',
+          tool: 'bash',
+          params: {},
+          agent_id: 'agent-ray',
+          session_id: SID,
+        })
+      })
+      act(() => {
+        useChatStore.getState().handleFrame({
+          type: 'replay_message',
+          role: 'user',
+          content: 'the follow-up sent mid-turn',
+          id: 'entry-steer-2',
+          session_id: SID,
+        })
+      })
+      act(() => {
+        useChatStore.getState().handleFrame({
+          type: 'replay_message',
+          role: 'assistant',
+          content: 'post-steer narration',
+          id: 'entry-post-2',
+          agent_id: 'agent-ray',
+          turn_id: 'turn-steered-2',
+          session_id: SID,
+        })
+      })
+
+      const state = useChatStore.getState()
+      const messages = state.messages
+      // The empty placeholder stays empty and separate — the post-steer
+      // text must NOT coalesce into it across the steer boundary.
+      expect(messages.map((m) => m.role)).toEqual(['assistant', 'user', 'assistant'])
+      expect(messages[0].content).toBe('')
+      expect(messages[1].content).toBe('the follow-up sent mid-turn')
+      expect(messages[2].content).toBe('post-steer narration')
+    })
   })
 
   describe('reconnect-guard: missing snapshot', () => {

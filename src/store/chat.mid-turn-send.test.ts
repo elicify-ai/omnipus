@@ -785,6 +785,43 @@ describe('mid-turn steer + subagent_start/media frames, no intervening token (AD
     expect(messages.map((m) => m.role)).toEqual(['user', 'assistant', 'user', 'assistant'])
   })
 
+  /**
+   * Self-verification (test-plan-and-write mutation gate): the test above
+   * (non-empty pre-steer content) is NOT actually lethal against the
+   * findOpenAssistantMessageId guard on this branch — reverting the guard to
+   * a bare findLastAssistantMessageId scan still passes it, because the
+   * downstream `canAttach = msg.isStreaming || (msg.content ?? '') === ''`
+   * check independently rejects a non-empty, non-streaming bubble regardless
+   * of which scan found it. Confirmed by deliberately reverting the guard
+   * and re-running the suite. An EMPTY pre-steer bubble is the case that
+   * actually exercises the guard: `canAttach`'s own OR-empty-content clause
+   * would otherwise treat the closed, empty, closedBySteer bubble as a valid
+   * attach target — this is the scenario the guard alone must prevent.
+   */
+  it('a real media attachment immediately after a steer with an EMPTY pre-steer bubble opens a NEW bubble, not the closed empty one', () => {
+    const send = connectWithSendSpy()
+    startTurn(send)
+    // No token before the steer — the pre-steer bubble is empty when closed.
+    act(() => { useChatStore.getState().sendMessage('steer this turn') })
+
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'media',
+        session_id: TEST_SESSION_ID,
+        parts: [{ type: 'image', url: '/media/y.png', filename: 'y.png', content_type: 'image/png' }],
+      })
+    })
+
+    const { messages } = useChatStore.getState()
+    const assistantMsgs = messages.filter((m) => m.role === 'assistant')
+    expect(assistantMsgs).toHaveLength(2)
+    expect(assistantMsgs[0].closedBySteer).toBe(true)
+    expect(assistantMsgs[0].media ?? []).toHaveLength(0)
+    expect(assistantMsgs[1].media?.[0]?.url).toBe('/media/y.png')
+    expect(assistantMsgs[1].closedBySteer).toBeFalsy()
+    expect(messages.map((m) => m.role)).toEqual(['user', 'assistant', 'user', 'assistant'])
+  })
+
   it('an invalid-parts media notice immediately after a steer opens a NEW bubble instead of appending to the closed one', () => {
     const send = connectWithSendSpy()
     startTurn(send)

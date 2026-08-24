@@ -471,6 +471,47 @@ every current consumer of `messageOrder`/`turnId`/`isStreaming` above).
   `isStreaming` on `isReplaying` — only the bucket-level flag is gated) — left unchanged as a
   non-issue, not a missed fix.
 
+## 8a. Test-plan-and-write mutation self-verification (2026-08-24)
+
+Per the `test-plan-and-write` skill's mandatory gate ("mutate your own code and confirm the test
+dies"), every one of the ten guarded points this fix touches was independently reverted, one at a
+time, with the corresponding test(s) re-run to confirm a RED result, then restored
+(`git checkout -- src/store/chat.ts`) before the next:
+
+| # | Site | Result |
+|---|------|--------|
+| 1 | `sendMessage` steer-close | 12/23 tests died |
+| 2 | `subagent_start` guard | 1/1 died |
+| 3 | `media` invalid-parts guard | 1/1 died |
+| 4 | `media` zero-attachments guard | 1/1 died |
+| 5 | `media` real-attachment guard (non-empty pre-steer content) | **survived — false negative found** |
+| 5b | `media` real-attachment guard (empty pre-steer content, new test) | 1/1 died |
+| 6 | `replay_message` general merge guard | 1/1 died |
+| 7 | `replay_message` empty-placeholder coalesce guard | **survived — zero coverage found, new test added** |
+| 8 | C8 sweep `closedBySteer` exclusion | 1/1 died |
+| 9 | `markLastMessageInterrupted` guard | 1/1 died |
+| 10 | `lastAssistantMessageId` (ARIA) guard | 1/1 died |
+
+Two real gaps surfaced by this process, not by review:
+
+- **#5**: the original test used a non-empty pre-steer bubble, which the branch's own downstream
+  `canAttach = msg.isStreaming || (msg.content ?? '') === ''` check already rejects independently
+  of the guard — the test passed whether or not the guard existed, meaning it verified nothing
+  about that specific line. Fixed by adding an empty-pre-steer-bubble variant, which the OR-empty
+  clause of `canAttach` would otherwise wrongly accept — that's the actual case the guard exists
+  to prevent, and only that case makes the mutation lethal.
+- **#7**: the empty-placeholder coalesce branch (distinct from the general merge branch tested by
+  the original replay test) had **zero** test coverage of any kind before this pass — not a weak
+  test, an absent one. Added
+  `'a mid-turn-steer user entry replayed BETWEEN an empty tool-call placeholder and its text
+  prevents coalescing'` (`chat.tool-call-offset.test.ts`), confirmed lethal against the same
+  mutation that left #6 (the general branch) caught.
+
+All ten sites are now confirmed genuinely load-bearing, not merely covered. Also incidentally
+confirmed the live-UAT ambiguity noted in §8 below (the cancel-race scenario) is a live-network
+timing artifact, not a logic defect: mutation #9, run against the exact same code path the live
+click exercises, killed the corresponding unit test cleanly and deterministically.
+
 ## 8. Live UAT (2026-08-24)
 
 Built the SPA + Go binary from this exact branch (release/v0.1.1, with the fix applied) and ran
