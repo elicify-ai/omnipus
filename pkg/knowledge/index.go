@@ -62,6 +62,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/blevesearch/bleve/v2"
 	"github.com/blevesearch/bleve/v2/index/scorch"
@@ -200,6 +201,144 @@ type SyncOptions struct {
 	//
 	// It does NOT read attachments. FR-039a has no exception for verification.
 	Deep bool
+
+	// OnProgress reports how far this reconcile has got, WHILE it runs.
+	//
+	// indexed is how many of the walk's files this run has reconciled so far —
+	// newly indexed plus verified-unchanged — and total is how many files the
+	// walk found. It is the same arithmetic the run's final SyncStats reports
+	// (Indexed + Unchanged against Scanned), so the last call of a successful
+	// run states exactly the numbers the caller will read off the return value,
+	// and a caller never has to reconcile two different definitions of "done".
+	//
+	// A file that could not be read moves neither number: it is counted in
+	// Problems, not in indexed, so the count can pause without ever going
+	// backwards. indexed never exceeds total and never decreases.
+	//
+	// The call is COALESCED — see the SyncWith doc comment for the rule and the
+	// reason. A caller that turns each call into a WebSocket frame therefore
+	// gets a bounded stream rather than one frame per file, and does not have to
+	// invent a throttle of its own (nor remember to). Nil disables reporting.
+	//
+	// It is called from the goroutine running SyncWith, with the index's write
+	// lock held: it must not call back into this Index, and it should not block.
+	OnProgress func(indexed, total int)
+
+	// ProgressInterval is the shortest wall-clock gap between two OnProgress
+	// calls. Zero means DefaultProgressInterval. The final call of a run ignores
+	// it, so a run shorter than one interval still reports its result exactly
+	// once rather than not at all.
+	ProgressInterval time.Duration
+}
+
+const (
+	// DefaultProgressInterval is the coalescing window for SyncOptions.
+	// OnProgress: at most one call per this much wall-clock time.
+	//
+	// 200ms is five updates a second. A person reading a number cannot absorb
+	// more than that, and the cost of the frames is paid whether they can or
+	// not, so anything faster buys nothing and spends bandwidth and main-thread
+	// time on the client.
+	DefaultProgressInterval = 200 * time.Millisecond
+
+	// maxProgressUpdates bounds how many OnProgress calls one run may make
+	// regardless of how long it takes.
+	//
+	// Time alone is not a sufficient bound: a very large collection can index
+	// for an hour, and 5/s for an hour is 18,000 frames. A count bound makes the
+	// worst case a property of the RUN rather than of its duration — one update
+	// per 0.1% of the collection, which is finer than any progress bar can
+	// render and finer than any reader can notice.
+	maxProgressUpdates = 1000
+)
+
+// progressStride is the minimum number of files that must be reconciled between
+// two OnProgress calls, so a run makes at most maxProgressUpdates of them.
+//
+// It rounds UP, so the bound holds for every total: a 1,500-file collection
+// gets a stride of 2 (≤750 updates), not a stride of 1 (1,500 updates).
+func progressStride(total int) int {
+	if total <= maxProgressUpdates {
+		return 1
+	}
+	return (total + maxProgressUpdates - 1) / maxProgressUpdates
+}
+
+// progressCoalescer applies the two bounds above to a stream of absolute counts.
+//
+// Both must be satisfied for an update to go out, which is what makes the two
+// bounds compose: a run emits at most min(maxProgressUpdates, elapsed/interval)
+// updates, plus one final flush. The final flush is unconditional on both
+// bounds — without it a run would routinely stop short of its own total (the
+// last few files rarely land exactly on a stride boundary at the moment an
+// interval expires), and a progress number that stops at 99,940 of 100,000 is
+// precisely the confidently-wrong report ADR-067 exists to prevent.
+type progressCoalescer struct {
+	fn       func(indexed, total int)
+	total    int
+	stride   int
+	interval time.Duration
+	now      func() time.Time
+	lastAt   time.Time
+	lastN    int
+}
+
+func newProgressCoalescer(
+	fn func(indexed, total int), total int, interval time.Duration, now func() time.Time,
+) *progressCoalescer {
+	if now == nil {
+		now = time.Now
+	}
+	if interval <= 0 {
+		interval = DefaultProgressInterval
+	}
+	return &progressCoalescer{
+		fn:       fn,
+		total:    total,
+		stride:   progressStride(total),
+		interval: interval,
+		now:      now,
+		// The clock starts now, so the first update waits a whole interval:
+		// the caller has just been told the run began and does not need to be
+		// told again in the same millisecond.
+		lastAt: now(),
+	}
+}
+
+// update offers an absolute count. It reports only if both bounds allow it.
+func (c *progressCoalescer) update(indexed int) {
+	if c == nil || c.fn == nil {
+		return
+	}
+	if indexed-c.lastN < c.stride {
+		return
+	}
+	at := c.now()
+	if at.Sub(c.lastAt) < c.interval {
+		return
+	}
+	c.report(indexed, at)
+}
+
+// flush reports the run's final count, whatever the bounds say — unless that
+// exact count has already gone out, in which case there is nothing left to say.
+func (c *progressCoalescer) flush(indexed int) {
+	if c == nil || c.fn == nil || indexed == c.lastN {
+		return
+	}
+	c.report(indexed, c.now())
+}
+
+func (c *progressCoalescer) report(indexed int, at time.Time) {
+	if indexed > c.total {
+		indexed = c.total
+	}
+	if indexed < 0 {
+		indexed = 0
+	}
+	c.lastN = indexed
+	c.lastAt = at
+	c.fn(indexed, c.total)
 }
 
 // Index is an open scorch index over one collection.
@@ -566,6 +705,36 @@ func (ix *Index) Sync(ctx context.Context) (SyncStats, error) {
 // bounded batches (FR-034), segments oversized notes (FR-034a), never opens an
 // attachment (FR-039a), and persists the manifest so the next open — after a
 // restart or not — repeats none of the work (FR-039).
+//
+// # Reporting progress, and why the throttle lives here
+//
+// opts.OnProgress is called as files are reconciled, so a caller can show a
+// number that MOVES rather than a bar that sits still for minutes on a large
+// collection. It is called at most once per file, and in practice far less:
+//
+//   - at most one call per opts.ProgressInterval of wall-clock time
+//     (DefaultProgressInterval, 200ms — five a second, beyond which a reader
+//     absorbs nothing), AND
+//   - at most maxProgressUpdates calls for the whole run, one per
+//     progressStride files (0.1% of the collection),
+//
+// with both conditions required, plus one unconditional final call so the count
+// always lands on the run's true total. A 100,000-file collection therefore
+// produces at most 1,001 calls however long it takes, against 100,000 from a
+// naive per-file hook — and a caller that turns each call into a WebSocket
+// frame gets a stream a client can keep up with.
+//
+// The coalescing lives HERE rather than in the caller for the same reason
+// SyncTracked exists: a hook whose rate every future caller must remember to
+// bound is a hook that will eventually be wired straight to a socket. The
+// caller keeps the choice that is genuinely its own — how smooth it wants the
+// stream — as opts.ProgressInterval, and cannot opt out of the bound.
+//
+// The number reported is Indexed + Unchanged so far, against the walk's total:
+// a report of WORK DONE, not of durability. Documents become searchable when
+// their batch commits, on the batch's own schedule and, for the last batch,
+// after this loop ends. Whether a search may claim completeness is the progress
+// tracker's question (SyncTracked), never this number's.
 func (ix *Index) SyncWith(ctx context.Context, opts SyncOptions) (SyncStats, error) {
 	ix.mu.Lock()
 	defer ix.mu.Unlock()
@@ -589,11 +758,17 @@ func (ix *Index) SyncWith(ctx context.Context, opts SyncOptions) (SyncStats, err
 
 	batch := newBatchState(ix)
 	seen := make(map[string]struct{}, len(scan.Entries))
+	progress := newProgressCoalescer(opts.OnProgress, len(scan.Entries), opts.ProgressInterval, time.Now)
 
 	for _, entry := range scan.Entries {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return stats, ctxErr
 		}
+		// Reported at the TOP of the iteration, covering the entries already
+		// finished, so there is ONE call site rather than one before each of
+		// the four ways this loop can reach its end. The final flush below is
+		// what makes the last entry's completion visible.
+		progress.update(stats.Indexed + stats.Unchanged)
 		seen[entry.RelPath] = struct{}{}
 
 		rec, hadRec := manifest.Get(entry.RelPath)
@@ -647,6 +822,11 @@ func (ix *Index) SyncWith(ctx context.Context, opts SyncOptions) (SyncStats, err
 		stats.Indexed++
 		stats.Segments += newRec.Segments
 	}
+
+	// The run's own last word on its progress. Unthrottled on purpose: without
+	// it the number would stop wherever the last throttled call happened to
+	// land — short of the total, and indistinguishable from a stall.
+	progress.flush(stats.Indexed + stats.Unchanged)
 
 	// Files the manifest knows and the walk did not find are gone from disk.
 	for relPath, rec := range manifest.Entries {

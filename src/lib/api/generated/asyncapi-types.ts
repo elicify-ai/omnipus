@@ -458,7 +458,7 @@ export interface WhatsAppPairingSubscribeFrame {
 export interface NotificationFrame {
   type: "notification";
   id: string;
-  notification_type: "schedule_failed";
+  notification_type: "schedule_failed" | "knowledge_drift";
   title: string;
   body?: string;
   severity: "info" | "warning" | "error";

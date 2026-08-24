@@ -61,11 +61,20 @@ properties:
       - file_missing
       - match_moved
       - budget_exhausted
+      - attachment_not_read
     description: >
       Machine-readable reason no excerpt accompanies this hit. Present if and
       only if excerpt is absent. "budget_exhausted" is the ordinary case, not
       an error: excerpt re-reads are budgeted because the latency target
       allows 500 ms across up to 20 results (FR-050a b).
+
+      "attachment_not_read" is the other ordinary case and covers the hit for
+      which no re-read was ever ATTEMPTED: an attachment is indexed by filename
+      and path only and its contents are never opened for any reason
+      (FR-039a), so it carries no body excerpt by construction. Without this
+      member such a hit arrived with neither an excerpt nor a reason, breaking
+      the present-if-and-only-if invariant this field exists to keep
+      (FR-050a a).
     example: "budget_exhausted"
   byte_offset:
     type: integer

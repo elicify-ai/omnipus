@@ -1828,15 +1828,18 @@ func (e KnowledgeMountConflictErrorCode) Valid() bool {
 
 // Defines values for KnowledgeSearchHitExcerptUnavailable.
 const (
-	KnowledgeSearchHitExcerptUnavailableBudgetExhausted KnowledgeSearchHitExcerptUnavailable = "budget_exhausted"
-	KnowledgeSearchHitExcerptUnavailableFileMissing     KnowledgeSearchHitExcerptUnavailable = "file_missing"
-	KnowledgeSearchHitExcerptUnavailableFileUnreadable  KnowledgeSearchHitExcerptUnavailable = "file_unreadable"
-	KnowledgeSearchHitExcerptUnavailableMatchMoved      KnowledgeSearchHitExcerptUnavailable = "match_moved"
+	KnowledgeSearchHitExcerptUnavailableAttachmentNotRead KnowledgeSearchHitExcerptUnavailable = "attachment_not_read"
+	KnowledgeSearchHitExcerptUnavailableBudgetExhausted   KnowledgeSearchHitExcerptUnavailable = "budget_exhausted"
+	KnowledgeSearchHitExcerptUnavailableFileMissing       KnowledgeSearchHitExcerptUnavailable = "file_missing"
+	KnowledgeSearchHitExcerptUnavailableFileUnreadable    KnowledgeSearchHitExcerptUnavailable = "file_unreadable"
+	KnowledgeSearchHitExcerptUnavailableMatchMoved        KnowledgeSearchHitExcerptUnavailable = "match_moved"
 )
 
 // Valid indicates whether the value is a known member of the KnowledgeSearchHitExcerptUnavailable enum.
 func (e KnowledgeSearchHitExcerptUnavailable) Valid() bool {
 	switch e {
+	case KnowledgeSearchHitExcerptUnavailableAttachmentNotRead:
+		return true
 	case KnowledgeSearchHitExcerptUnavailableBudgetExhausted:
 		return true
 	case KnowledgeSearchHitExcerptUnavailableFileMissing:
@@ -1888,15 +1891,18 @@ func (e KnowledgeSearchRequestKinds) Valid() bool {
 
 // Defines values for KnowledgeSearchResponseHitsExcerptUnavailable.
 const (
-	KnowledgeSearchResponseHitsExcerptUnavailableBudgetExhausted KnowledgeSearchResponseHitsExcerptUnavailable = "budget_exhausted"
-	KnowledgeSearchResponseHitsExcerptUnavailableFileMissing     KnowledgeSearchResponseHitsExcerptUnavailable = "file_missing"
-	KnowledgeSearchResponseHitsExcerptUnavailableFileUnreadable  KnowledgeSearchResponseHitsExcerptUnavailable = "file_unreadable"
-	KnowledgeSearchResponseHitsExcerptUnavailableMatchMoved      KnowledgeSearchResponseHitsExcerptUnavailable = "match_moved"
+	KnowledgeSearchResponseHitsExcerptUnavailableAttachmentNotRead KnowledgeSearchResponseHitsExcerptUnavailable = "attachment_not_read"
+	KnowledgeSearchResponseHitsExcerptUnavailableBudgetExhausted   KnowledgeSearchResponseHitsExcerptUnavailable = "budget_exhausted"
+	KnowledgeSearchResponseHitsExcerptUnavailableFileMissing       KnowledgeSearchResponseHitsExcerptUnavailable = "file_missing"
+	KnowledgeSearchResponseHitsExcerptUnavailableFileUnreadable    KnowledgeSearchResponseHitsExcerptUnavailable = "file_unreadable"
+	KnowledgeSearchResponseHitsExcerptUnavailableMatchMoved        KnowledgeSearchResponseHitsExcerptUnavailable = "match_moved"
 )
 
 // Valid indicates whether the value is a known member of the KnowledgeSearchResponseHitsExcerptUnavailable enum.
 func (e KnowledgeSearchResponseHitsExcerptUnavailable) Valid() bool {
 	switch e {
+	case KnowledgeSearchResponseHitsExcerptUnavailableAttachmentNotRead:
+		return true
 	case KnowledgeSearchResponseHitsExcerptUnavailableBudgetExhausted:
 		return true
 	case KnowledgeSearchResponseHitsExcerptUnavailableFileMissing:
@@ -2488,12 +2494,15 @@ func (e NotificationSeverity) Valid() bool {
 
 // Defines values for NotificationType.
 const (
+	NotificationTypeKnowledgeDrift NotificationType = "knowledge_drift"
 	NotificationTypeScheduleFailed NotificationType = "schedule_failed"
 )
 
 // Valid indicates whether the value is a known member of the NotificationType enum.
 func (e NotificationType) Valid() bool {
 	switch e {
+	case NotificationTypeKnowledgeDrift:
+		return true
 	case NotificationTypeScheduleFailed:
 		return true
 	default:
@@ -2524,12 +2533,15 @@ func (e NotificationListNotificationsSeverity) Valid() bool {
 
 // Defines values for NotificationListNotificationsType.
 const (
+	NotificationListNotificationsTypeKnowledgeDrift NotificationListNotificationsType = "knowledge_drift"
 	NotificationListNotificationsTypeScheduleFailed NotificationListNotificationsType = "schedule_failed"
 )
 
 // Valid indicates whether the value is a known member of the NotificationListNotificationsType enum.
 func (e NotificationListNotificationsType) Valid() bool {
 	switch e {
+	case NotificationListNotificationsTypeKnowledgeDrift:
+		return true
 	case NotificationListNotificationsTypeScheduleFailed:
 		return true
 	default:
@@ -9047,6 +9059,7 @@ type KnowledgeSearchHit struct {
 	Excerpt *string `json:"excerpt,omitempty"`
 
 	// ExcerptUnavailable Machine-readable reason no excerpt accompanies this hit. Present if and only if excerpt is absent. "budget_exhausted" is the ordinary case, not an error: excerpt re-reads are budgeted because the latency target allows 500 ms across up to 20 results (FR-050a b).
+	// "attachment_not_read" is the other ordinary case and covers the hit for which no re-read was ever ATTEMPTED: an attachment is indexed by filename and path only and its contents are never opened for any reason (FR-039a), so it carries no body excerpt by construction. Without this member such a hit arrived with neither an excerpt nor a reason, breaking the present-if-and-only-if invariant this field exists to keep (FR-050a a).
 	ExcerptUnavailable *KnowledgeSearchHitExcerptUnavailable `json:"excerpt_unavailable,omitempty"`
 
 	// Kind Whether this hit is a note (body text indexed) or an attachment (filename and path only — contents are never opened, FR-039a).
@@ -9063,6 +9076,7 @@ type KnowledgeSearchHit struct {
 }
 
 // KnowledgeSearchHitExcerptUnavailable Machine-readable reason no excerpt accompanies this hit. Present if and only if excerpt is absent. "budget_exhausted" is the ordinary case, not an error: excerpt re-reads are budgeted because the latency target allows 500 ms across up to 20 results (FR-050a b).
+// "attachment_not_read" is the other ordinary case and covers the hit for which no re-read was ever ATTEMPTED: an attachment is indexed by filename and path only and its contents are never opened for any reason (FR-039a), so it carries no body excerpt by construction. Without this member such a hit arrived with neither an excerpt nor a reason, breaking the present-if-and-only-if invariant this field exists to keep (FR-050a a).
 type KnowledgeSearchHitExcerptUnavailable string
 
 // KnowledgeSearchHitKind Whether this hit is a note (body text indexed) or an attachment (filename and path only — contents are never opened, FR-039a).
@@ -9133,6 +9147,7 @@ type KnowledgeSearchResponse struct {
 }
 
 // KnowledgeSearchResponseHitsExcerptUnavailable Machine-readable reason no excerpt accompanies this hit. Present if and only if excerpt is absent. "budget_exhausted" is the ordinary case, not an error: excerpt re-reads are budgeted because the latency target allows 500 ms across up to 20 results (FR-050a b).
+// "attachment_not_read" is the other ordinary case and covers the hit for which no re-read was ever ATTEMPTED: an attachment is indexed by filename and path only and its contents are never opened for any reason (FR-039a), so it carries no body excerpt by construction. Without this member such a hit arrived with neither an excerpt nor a reason, breaking the present-if-and-only-if invariant this field exists to keep (FR-050a a).
 type KnowledgeSearchResponseHitsExcerptUnavailable string
 
 // KnowledgeSearchResponseHitsKind Whether this hit is a note (body text indexed) or an attachment (filename and path only — contents are never opened, FR-039a).
@@ -10074,7 +10089,7 @@ type ModelTokens struct {
 	Total int `json:"total"`
 }
 
-// Notification A user-facing notification (#264) surfaced in the header notification center. Currently raised on scheduled-run failures, but the type is open for future sources. Coalesced per source where noted (e.g. one item per schedule, updated).
+// Notification A user-facing notification (#264) surfaced in the header notification center. Raised on scheduled-run failures and on knowledge-base drift repair (ADR-067 FR-038a); the type is open for future sources. Coalesced per source where noted (e.g. one item per schedule, updated).
 type Notification struct {
 	// AgentId The agent the notification concerns.
 	AgentId *string `json:"agent_id,omitempty"`
@@ -10096,6 +10111,8 @@ type Notification struct {
 	Title     string               `json:"title"`
 
 	// Type The event class. Extensible; consumers must tolerate unknown values.
+	//
+	// "knowledge_drift" (ADR-067 FR-038a) means the automatic drift check found that a knowledge base's search index no longer matched the folder on disk, and the index is being rebuilt from that folder. It is raised ONLY when something was actually wrong — a healthy check produces no notification — and it never reports a change to the operator's own files.
 	Type NotificationType `json:"type"`
 
 	// UpdatedAtMs Set when a coalesced notification is updated (e.g. repeated schedule failure).
@@ -10106,6 +10123,8 @@ type Notification struct {
 type NotificationSeverity string
 
 // NotificationType The event class. Extensible; consumers must tolerate unknown values.
+//
+// "knowledge_drift" (ADR-067 FR-038a) means the automatic drift check found that a knowledge base's search index no longer matched the folder on disk, and the index is being rebuilt from that folder. It is raised ONLY when something was actually wrong — a healthy check produces no notification — and it never reports a change to the operator's own files.
 type NotificationType string
 
 // NotificationList The authenticated user's notifications plus the unread count (#264).
@@ -10132,6 +10151,8 @@ type NotificationList struct {
 		Title     string                                `json:"title"`
 
 		// Type The event class. Extensible; consumers must tolerate unknown values.
+		//
+		// "knowledge_drift" (ADR-067 FR-038a) means the automatic drift check found that a knowledge base's search index no longer matched the folder on disk, and the index is being rebuilt from that folder. It is raised ONLY when something was actually wrong — a healthy check produces no notification — and it never reports a change to the operator's own files.
 		Type NotificationListNotificationsType `json:"type"`
 
 		// UpdatedAtMs Set when a coalesced notification is updated (e.g. repeated schedule failure).
@@ -10146,6 +10167,8 @@ type NotificationList struct {
 type NotificationListNotificationsSeverity string
 
 // NotificationListNotificationsType The event class. Extensible; consumers must tolerate unknown values.
+//
+// "knowledge_drift" (ADR-067 FR-038a) means the automatic drift check found that a knowledge base's search index no longer matched the folder on disk, and the index is being rebuilt from that folder. It is raised ONLY when something was actually wrong — a healthy check produces no notification — and it never reports a change to the operator's own files.
 type NotificationListNotificationsType string
 
 // OnboardingCompleteRequest Body for POST /onboarding/complete. Atomically sets up the first LLM provider and creates the initial admin account. CSRF-exempt (no cookie exists at this point).

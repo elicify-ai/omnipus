@@ -31,6 +31,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/blevesearch/bleve/v2"
 	"github.com/blevesearch/bleve/v2/index/scorch"
@@ -1381,4 +1382,240 @@ func TestIndex_QuietlyEvictedNoteIsReportedNotIndexedAsEmpty(t *testing.T) {
 	if len(good) != 1 || good[0].Path != "good.md" {
 		t.Fatalf("the readable note is missing from the index: %v", b2HitPaths(good))
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Indexing progress — the number has to MOVE, and it has to move a bounded
+// number of times.
+//
+// Oracles come from the SyncOptions.OnProgress / SyncWith contract, not from
+// the loop: indexed counts files reconciled so far (indexed + unchanged)
+// against the walk's total, never decreases, never exceeds the total, is
+// coalesced to at most one call per interval AND per stride, and the LAST call
+// of a run states the run's true final count.
+// ---------------------------------------------------------------------------
+
+// b2ProgressCalls records every OnProgress call in order.
+type b2ProgressCalls struct {
+	indexed []int
+	total   []int
+}
+
+func (r *b2ProgressCalls) hook() func(indexed, total int) {
+	return func(indexed, total int) {
+		r.indexed = append(r.indexed, indexed)
+		r.total = append(r.total, total)
+	}
+}
+
+// b2Fixture writes n notes and returns the root holding them.
+func b2Fixture(t *testing.T, n int) string {
+	t.Helper()
+	root := t.TempDir()
+	for i := 0; i < n; i++ {
+		b2WriteFile(t, root, fmt.Sprintf("note%03d.md", i), fmt.Sprintf("# Note %d\nalpha bravo charlie %d", i, i))
+	}
+	return root
+}
+
+// TestSyncProgress_CountRisesAndEndsAtTheTotal is the founder-visible property:
+// the number moves while the index runs, and it finishes on the true total
+// rather than wherever the last throttled update happened to land.
+//
+// ProgressInterval is set to the smallest possible value so the TIME bound
+// stops suppressing updates; the count bound (one update per stride, and a
+// stride of 1 for a collection this size) is left doing the work. Without that
+// the test would be asserting a property of the clock, not of the reporting.
+func TestSyncProgress_CountRisesAndEndsAtTheTotal(t *testing.T) {
+	const wantTotal = 60 // the fixture's own size — counted here, not read off the code
+	home, root := t.TempDir(), b2Fixture(t, wantTotal)
+
+	ix := b2Open(t, home, root)
+	rec := &b2ProgressCalls{}
+	stats, err := ix.SyncWith(context.Background(), SyncOptions{
+		OnProgress:       rec.hook(),
+		ProgressInterval: time.Nanosecond,
+	})
+	if err != nil {
+		t.Fatalf("SyncWith: %v", err)
+	}
+	if stats.Scanned != wantTotal || stats.Indexed != wantTotal {
+		t.Fatalf("fixture mis-built: Scanned=%d Indexed=%d, want %d each", stats.Scanned, stats.Indexed, wantTotal)
+	}
+
+	if len(rec.indexed) < 5 {
+		t.Fatalf("OnProgress fired %d times for %d files: a bar that moves twice is the frozen bar this exists to fix (calls: %v)",
+			len(rec.indexed), wantTotal, rec.indexed)
+	}
+
+	prev := -1
+	for i, n := range rec.indexed {
+		if n <= prev {
+			t.Errorf("call %d reported %d after %d: the count must STRICTLY increase (calls: %v)", i, n, prev, rec.indexed)
+		}
+		if n > wantTotal {
+			t.Errorf("call %d reported %d of %d: a count above the total is a ratio over 1", i, n, wantTotal)
+		}
+		if rec.total[i] != wantTotal {
+			t.Errorf("call %d reported total %d, want the walk's %d", i, rec.total[i], wantTotal)
+		}
+		prev = n
+	}
+
+	last := rec.indexed[len(rec.indexed)-1]
+	if last != wantTotal {
+		t.Errorf("last OnProgress reported %d of %d; the final call must state the run's true count, not stop short of it",
+			last, wantTotal)
+	}
+	if last != stats.Indexed+stats.Unchanged {
+		t.Errorf("last OnProgress reported %d but the run returned Indexed+Unchanged = %d: the two must be the same arithmetic",
+			last, stats.Indexed+stats.Unchanged)
+	}
+}
+
+// TestSyncProgress_IsCoalescedNotOncePerFile pins the other half of the
+// contract. A per-file hook on a 100,000-note vault is 100,000 WebSocket
+// frames, which is worse for the reader than the three frames it replaced.
+//
+// The oracle is the documented bound itself — at most one call per interval,
+// plus the final flush — checked against the run's MEASURED duration, so the
+// assertion cannot go flaky when the machine is slow: a slower run simply
+// permits proportionally more calls.
+func TestSyncProgress_IsCoalescedNotOncePerFile(t *testing.T) {
+	const wantTotal = 60
+	home, root := t.TempDir(), b2Fixture(t, wantTotal)
+
+	ix := b2Open(t, home, root)
+	rec := &b2ProgressCalls{}
+	started := time.Now()
+	// No ProgressInterval: the production default (200ms) applies.
+	if _, err := ix.SyncWith(context.Background(), SyncOptions{OnProgress: rec.hook()}); err != nil {
+		t.Fatalf("SyncWith: %v", err)
+	}
+	elapsed := time.Since(started)
+
+	permitted := 1 + int(elapsed/DefaultProgressInterval) + 1 // intervals that elapsed, plus the final flush
+	if len(rec.indexed) > permitted {
+		t.Errorf("OnProgress fired %d times in %v: the 200ms window permits at most %d (calls: %v)",
+			len(rec.indexed), elapsed, permitted, rec.indexed)
+	}
+	if len(rec.indexed) >= wantTotal {
+		t.Errorf("OnProgress fired %d times for %d files — that is the unthrottled per-file hook",
+			len(rec.indexed), wantTotal)
+	}
+	if len(rec.indexed) == 0 {
+		t.Fatal("OnProgress never fired: a run always reports its final count")
+	}
+	if last := rec.indexed[len(rec.indexed)-1]; last != wantTotal {
+		t.Errorf("last OnProgress reported %d of %d: throttling may drop intermediate updates, never the final one",
+			last, wantTotal)
+	}
+}
+
+// TestProgressStride_BoundsUpdatesForALargeCollection checks the count bound
+// that makes the worst case a property of the RUN rather than of its duration.
+//
+// Both directions matter. Too small a stride is the 100,000-frame flood; too
+// large a stride is a bar that jumps from nothing to done, which is the frozen
+// bar again wearing a different hat. The budget must be mostly USED.
+func TestProgressStride_BoundsUpdatesForALargeCollection(t *testing.T) {
+	for _, total := range []int{0, 1, 7, 999, 1000, 1001, 1500, 100000, 1000000} {
+		stride := progressStride(total)
+		if stride < 1 {
+			t.Fatalf("progressStride(%d) = %d: a stride below 1 cannot bound anything", total, stride)
+		}
+		updates := 0
+		if stride > 0 {
+			updates = (total + stride - 1) / stride
+		}
+		if updates > maxProgressUpdates {
+			t.Errorf("total %d with stride %d permits %d updates, above the %d budget",
+				total, stride, updates, maxProgressUpdates)
+		}
+		if total >= maxProgressUpdates && updates < maxProgressUpdates/2 {
+			t.Errorf("total %d with stride %d permits only %d updates: the budget is %d and a coarser bar than that stops informing anyone",
+				total, stride, updates, maxProgressUpdates)
+		}
+	}
+}
+
+// TestProgressCoalescer_BothBoundsApplyAndTheFinalCallAlwaysGoesOut drives the
+// coalescer on a fake clock, so the time bound is asserted by COUNTING time
+// rather than by sleeping through it.
+func TestProgressCoalescer_BothBoundsApplyAndTheFinalCallAlwaysGoesOut(t *testing.T) {
+	base := time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)
+
+	newC := func(total int, interval time.Duration, clock *time.Time) (*progressCoalescer, *b2ProgressCalls) {
+		rec := &b2ProgressCalls{}
+		return newProgressCoalescer(rec.hook(), total, interval, func() time.Time { return *clock }), rec
+	}
+
+	t.Run("an update inside the interval is suppressed", func(t *testing.T) {
+		clock := base
+		c, rec := newC(10, time.Second, &clock)
+		clock = base.Add(999 * time.Millisecond)
+		c.update(5)
+		if len(rec.indexed) != 0 {
+			t.Errorf("reported %v inside the interval; the window is the whole point", rec.indexed)
+		}
+		clock = base.Add(time.Second)
+		c.update(5)
+		if len(rec.indexed) != 1 || rec.indexed[0] != 5 {
+			t.Errorf("calls = %v, want exactly [5] once the interval has passed", rec.indexed)
+		}
+	})
+
+	t.Run("an update below the stride is suppressed however long it waits", func(t *testing.T) {
+		clock := base
+		// 4000 files: stride 4, so a single-file step must not report.
+		c, rec := newC(4000, time.Millisecond, &clock)
+		clock = base.Add(time.Hour)
+		c.update(3)
+		if len(rec.indexed) != 0 {
+			t.Errorf("reported %v for a 3-file step against a stride of %d", rec.indexed, progressStride(4000))
+		}
+		c.update(4)
+		if len(rec.indexed) != 1 || rec.indexed[0] != 4 {
+			t.Errorf("calls = %v, want [4] once the stride is met", rec.indexed)
+		}
+	})
+
+	t.Run("the final call ignores both bounds", func(t *testing.T) {
+		clock := base
+		c, rec := newC(10, time.Hour, &clock)
+		c.update(9) // suppressed: no time has passed
+		c.flush(10)
+		if len(rec.indexed) != 1 || rec.indexed[0] != 10 {
+			t.Errorf("calls = %v, want [10]: a run that finishes inside one window still reports its total", rec.indexed)
+		}
+	})
+
+	t.Run("the final call is silent when it would repeat itself", func(t *testing.T) {
+		clock := base
+		c, rec := newC(10, time.Nanosecond, &clock)
+		clock = base.Add(time.Second)
+		c.update(10)
+		c.flush(10)
+		if len(rec.indexed) != 1 {
+			t.Errorf("calls = %v, want one: the count already landed on the total", rec.indexed)
+		}
+	})
+
+	t.Run("a count above the total is clamped, never reported as a ratio over 1", func(t *testing.T) {
+		clock := base
+		c, rec := newC(10, time.Nanosecond, &clock)
+		clock = base.Add(time.Second)
+		c.update(99)
+		if len(rec.indexed) != 1 || rec.indexed[0] != 10 || rec.total[0] != 10 {
+			t.Errorf("calls = %v of %v, want 10 of 10", rec.indexed, rec.total)
+		}
+	})
+
+	t.Run("a nil hook is inert", func(t *testing.T) {
+		clock := base
+		c := newProgressCoalescer(nil, 10, time.Nanosecond, func() time.Time { return clock })
+		clock = base.Add(time.Hour)
+		c.update(5)
+		c.flush(10) // must not panic
+	})
 }

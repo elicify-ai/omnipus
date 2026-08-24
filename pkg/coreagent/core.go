@@ -330,11 +330,13 @@ func GetPrompt(id string) string {
 //   - 2 ADR-055 (PlanSupervisor) supervision/containment tools — plan_correct
 //     and stop_plan, registered here for the same reason and under the same
 //     rule as the ADR-052 four.
-//   - 9 ADR-067 (knowledge base) tools — 2 retrieval (knowledge_search,
-//     knowledge_graph) and 7 authoring (knowledge_create, knowledge_link,
-//     knowledge_set_property, knowledge_append_section, knowledge_tasks,
+//   - 9 ADR-067 (knowledge base) tools — 3 retrieval (knowledge_search,
+//     knowledge_graph, knowledge_tasks) and 6 authoring (knowledge_create,
+//     knowledge_link, knowledge_set_property, knowledge_append_section,
 //     knowledge_move, knowledge_rename), registered here for the same reason
 //     and under the same rule as the ADR-052 four. See D17/FR-070.
+//     knowledge_tasks reads; the split below says why it is counted with the
+//     retrieval pair rather than under ADR-067 D7's "Authoring" heading.
 //   - ADR-056's list_jobs is counted in the 34 general tools above (it is a
 //     ScopeGeneral tool in pkg/tools, not a separate tier); it is called out
 //     here only because its seeded posture is a rule of its own — see
@@ -438,13 +440,45 @@ var allStaticToolNames = []string{
 	//
 	// Retrieval — read-only, and scoped at the tool layer to the calling
 	// agent's workspace mounts (ADR-067 D7 isolation).
-	"knowledge_search", "knowledge_graph",
+	//
+	// SEED RULE — knowledge_tasks IS RETRIEVAL, not authoring, even though
+	// ADR-067 D7 prints the name under a heading called "Authoring". That
+	// heading is a bucket, not a definition, and nothing else in the ADR or
+	// the spec defines the tool: round-1 review finding M-14 recorded that
+	// knowledge_link, knowledge_set_property, knowledge_append_section and
+	// knowledge_tasks "appear nowhere in the document — no user story, no
+	// scenario, no requirement, no test", and review rounds 2, 3 and 4 never
+	// answered it. So the classification was inherited from a layout choice,
+	// never decided.
+	//
+	// What the tool actually does settles it. pkg/knowledge's TasksTool walks
+	// the collection, reads notes and regex-matches "- [ ]" / "- [x]" lines,
+	// returning the note and line of each. It opens no writer, calls none of
+	// author.go's or rename.go's primitives, and emits no mutation audit
+	// record — because it performs no mutation. It is rate-limited through
+	// checkRetrievalRate, the retrieval limiter, and it answers an
+	// out-of-scope collection with FR-053's EMPTY RESULT SET, which is the
+	// read contract; every authoring tool refuses instead. The only other
+	// available semantics agree: the operator's `ev` CLI files `tasks` with
+	// `read`, `links`, `backlinks` and `unresolved`, apart from `create`,
+	// `set`, `append`, `move` and `rename`.
+	//
+	// This grouping is load-bearing, not cosmetic — the per-agent seeds below
+	// follow it. Filed as authoring, knowledge_tasks was seeded "ask" for Mia
+	// (the DEFAULT agent) and Ray while knowledge_search — which reads the
+	// same notes and returns their text — was seeded "allow". That put an
+	// approval prompt in front of a read whose every byte was already
+	// reachable, unprompted, through a different tool on the same agent. A
+	// prompt that protects nothing is not a harmless extra confirmation: it
+	// is training to click through the prompts that do protect something.
+	// Keep this name with the reads.
+	"knowledge_search", "knowledge_graph", "knowledge_tasks",
 	// Authoring — these write to the operator's REAL disk, outside the
 	// Library's audit path, which is why ADR-067 D19 requires an audit event
 	// per mutation and why the seeded postures below are split by role
 	// rather than granted roster-wide.
 	"knowledge_create", "knowledge_link", "knowledge_set_property",
-	"knowledge_append_section", "knowledge_tasks",
+	"knowledge_append_section",
 	"knowledge_move", "knowledge_rename",
 }
 
@@ -759,13 +793,17 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			// "the Worker" is a grant to all of them. An operator who wants a
 			// delegated worker reading a knowledge base changes this on their
 			// own install (Constraint #6 — this is seeded data, not a branch).
+			//
+			// knowledge_tasks rides with the reads (see allStaticToolNames'
+			// SEED RULE), which for the Worker means the same deny the other
+			// two reads carry, for the same reason.
 			"knowledge_search":         deny,
 			"knowledge_graph":          deny,
+			"knowledge_tasks":          deny,
 			"knowledge_create":         deny,
 			"knowledge_link":           deny,
 			"knowledge_set_property":   deny,
 			"knowledge_append_section": deny,
-			"knowledge_tasks":          deny,
 			"knowledge_move":           deny,
 			"knowledge_rename":         deny,
 		})
@@ -924,14 +962,18 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			// her role, so she holds the write half unprompted, the same way
 			// she holds create_agent/update_agent. Retrieval is allow for all
 			// four base agents (read-only, and scoped by the tool itself to
-			// this agent's workspace mounts — ADR-067 D7).
+			// this agent's workspace mounts — ADR-067 D7), and that includes
+			// knowledge_tasks (see allStaticToolNames' SEED RULE). Ava's two
+			// halves happen to resolve to the same value, so the regrouping
+			// changes nothing she can do — it keeps her map readable as the
+			// same matrix as everyone else's.
 			"knowledge_search":         allow,
 			"knowledge_graph":          allow,
+			"knowledge_tasks":          allow,
 			"knowledge_create":         allow,
 			"knowledge_link":           allow,
 			"knowledge_set_property":   allow,
 			"knowledge_append_section": allow,
-			"knowledge_tasks":          allow,
 			"knowledge_move":           allow,
 			"knowledge_rename":         allow,
 		})
@@ -992,13 +1034,26 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			// write lands on the operator's REAL disk outside the Library's
 			// audit path — so the everyday assistant asks before writing
 			// there, exactly as she asks before delete_task.
+			//
+			// knowledge_tasks is ALLOW here, with the reads. It was "ask"
+			// until this change, and Mia is the install's default agent, so
+			// hers was the prompt an operator actually met: "may I list the
+			// checkboxes in your notes?" — raised by an agent already holding
+			// unprompted knowledge_search over the very same notes, which
+			// returns their TEXT rather than just their checkbox lines. The
+			// prompt withheld nothing, so it protected nothing, and the
+			// operator's only available lesson was that these prompts are
+			// noise. That lesson is then carried to knowledge_create and
+			// knowledge_move directly below, where the "ask" is the whole
+			// control. See allStaticToolNames' SEED RULE for why the tool is
+			// a read.
 			"knowledge_search":         allow,
 			"knowledge_graph":          allow,
+			"knowledge_tasks":          allow,
 			"knowledge_create":         ask,
 			"knowledge_link":           ask,
 			"knowledge_set_property":   ask,
 			"knowledge_append_section": ask,
-			"knowledge_tasks":          ask,
 			"knowledge_move":           ask,
 			"knowledge_rename":         ask,
 		})
@@ -1079,13 +1134,19 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			// researches and reports rather than editing the operator's
 			// knowledge base, and his file writes go to the workspace
 			// (write_file/append_file above), not to a mounted vault.
+			//
+			// knowledge_tasks is ALLOW here, with the reads (it was "ask"
+			// until this change). "What is still open in this vault?" is a
+			// survey question, which is the Scout's entire job, and the tool
+			// reads strictly less than the knowledge_search he already holds
+			// unprompted. See allStaticToolNames' SEED RULE.
 			"knowledge_search":         allow,
 			"knowledge_graph":          allow,
+			"knowledge_tasks":          allow,
 			"knowledge_create":         ask,
 			"knowledge_link":           ask,
 			"knowledge_set_property":   ask,
 			"knowledge_append_section": ask,
-			"knowledge_tasks":          ask,
 			"knowledge_move":           ask,
 			"knowledge_rename":         ask,
 		})
@@ -1222,14 +1283,17 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			// write surface for the workspace (write_file/edit_file/bash), so
 			// gating the knowledge equivalents behind a prompt would buy
 			// nothing while making the orchestrator depend on a human for
-			// routine work. Retrieval is allow for all four base agents.
+			// routine work. Retrieval is allow for all four base agents, and
+			// that includes knowledge_tasks (see allStaticToolNames' SEED
+			// RULE). Like Ava's, Jim's two halves resolve to the same value,
+			// so the regrouping changes nothing he can do.
 			"knowledge_search":         allow,
 			"knowledge_graph":          allow,
+			"knowledge_tasks":          allow,
 			"knowledge_create":         allow,
 			"knowledge_link":           allow,
 			"knowledge_set_property":   allow,
 			"knowledge_append_section": allow,
-			"knowledge_tasks":          allow,
 			"knowledge_move":           allow,
 			"knowledge_rename":         allow,
 		})

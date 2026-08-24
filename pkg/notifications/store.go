@@ -34,9 +34,16 @@ const (
 	SeverityError   = "error"
 )
 
-// Type values mirror the Notification.type contract enum.
+// Type values mirror the Notification.type contract enum
+// (contracts/components/schemas/Notification.yaml). A value not in that enum is
+// rejected by the SPA's generated zod guard and the notification disappears
+// without a trace, so this list and the contract's must be changed together.
 const (
 	TypeScheduleFailed = "schedule_failed"
+	// TypeKnowledgeDrift — ADR-067 FR-038a. The automatic drift check found a
+	// knowledge base's search index out of step with its folder, and the index
+	// is being rebuilt. Raised only when something is actually wrong.
+	TypeKnowledgeDrift = "knowledge_drift"
 )
 
 // notificationCap is the per-user retention bound (keep the most recent N).

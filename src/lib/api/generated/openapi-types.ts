@@ -4287,10 +4287,11 @@ export interface components {
             excerpt?: string;
             /**
              * @description Machine-readable reason no excerpt accompanies this hit. Present if and only if excerpt is absent. "budget_exhausted" is the ordinary case, not an error: excerpt re-reads are budgeted because the latency target allows 500 ms across up to 20 results (FR-050a b).
+             *     "attachment_not_read" is the other ordinary case and covers the hit for which no re-read was ever ATTEMPTED: an attachment is indexed by filename and path only and its contents are never opened for any reason (FR-039a), so it carries no body excerpt by construction. Without this member such a hit arrived with neither an excerpt nor a reason, breaking the present-if-and-only-if invariant this field exists to keep (FR-050a a).
              * @example budget_exhausted
              * @enum {string}
              */
-            excerpt_unavailable?: "file_unreadable" | "file_missing" | "match_moved" | "budget_exhausted";
+            excerpt_unavailable?: "file_unreadable" | "file_missing" | "match_moved" | "budget_exhausted" | "attachment_not_read";
             /**
              * Format: int64
              * @description ABSOLUTE byte offset of the match within the whole file — not within the index segment that produced it — so segmentation (FR-034a) cannot misdirect a re-read or a jump-to-match (FR-050a c).
@@ -9247,15 +9248,17 @@ export interface components {
         };
         /**
          * Notification
-         * @description A user-facing notification (#264) surfaced in the header notification center. Currently raised on scheduled-run failures, but the type is open for future sources. Coalesced per source where noted (e.g. one item per schedule, updated).
+         * @description A user-facing notification (#264) surfaced in the header notification center. Raised on scheduled-run failures and on knowledge-base drift repair (ADR-067 FR-038a); the type is open for future sources. Coalesced per source where noted (e.g. one item per schedule, updated).
          */
         Notification: {
             id: string;
             /**
              * @description The event class. Extensible; consumers must tolerate unknown values.
+             *
+             *     "knowledge_drift" (ADR-067 FR-038a) means the automatic drift check found that a knowledge base's search index no longer matched the folder on disk, and the index is being rebuilt from that folder. It is raised ONLY when something was actually wrong — a healthy check produces no notification — and it never reports a change to the operator's own files.
              * @enum {string}
              */
-            type: "schedule_failed";
+            type: "schedule_failed" | "knowledge_drift";
             title: string;
             /** @description Optional detail (e.g. the failure reason). */
             body?: string;
@@ -17484,15 +17487,6 @@ export interface operations {
             401: components["responses"]["401Unauthorized"];
             403: components["responses"]["403Forbidden"];
             404: components["responses"]["404NotFound"];
-            /** @description A second knowledge-base root was requested for a workspace that already has one. A knowledge base is exactly one mounted folder (FR-026); the body names both roots. */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["KnowledgeMountConflictError"];
-                };
-            };
             500: components["responses"]["500InternalServerError"];
         };
     };

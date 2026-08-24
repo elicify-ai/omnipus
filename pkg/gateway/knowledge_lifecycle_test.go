@@ -17,6 +17,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -911,4 +912,124 @@ func TestKnowledgeLifecycle_DriftRepairsTheIndexItFoundStale(t *testing.T) {
 		"the operator's own notify hook must still see the UNHEALTHY report that triggered "+
 			"the repair — repairing silently and reporting nothing would hide a vault that "+
 			"drifts every hour")
+}
+
+// --- FR-080 / US-6: the progress number has to MOVE ------------------------
+
+// TestKnowledgeLifecycle_IndexingProgressMovesDuringAFirstIndex is the
+// founder-raised defect: a first index used to emit three frames — enumerating,
+// 0 of N, N of N — so a large collection looked frozen for minutes.
+//
+// The oracle is the spec's own requirement that indexing state be observable
+// while it runs (US-6, FR-080), expressed as: several indexing frames, a count
+// that strictly increases, and a last count equal to the fixture's true size.
+// Asserting only "more than three frames" would pass an implementation that
+// emitted the same number repeatedly.
+//
+// The SyncWith seam is used ONLY to shorten the coalescing window — the hook
+// itself is the production one, and the test asserts it was handed over. With
+// the production 200ms window a fixture small enough to run in a test would
+// finish inside one window and legitimately emit a single update, so the test
+// would be measuring the clock rather than the wiring.
+func TestKnowledgeLifecycle_IndexingProgressMovesDuringAFirstIndex(t *testing.T) {
+	const wantTotal = 40 // the fixture builds exactly this many indexable files
+	files := make(map[string]string, wantTotal)
+	for i := 0; i < wantTotal; i++ {
+		files[fmt.Sprintf("note%02d.md", i)] = fmt.Sprintf("# Note %d\nalpha bravo %d", i, i)
+	}
+	root := kltVault(t, files)
+	home := kltHome(t)
+
+	rec := &kltFrames{}
+	var handedHook bool
+	kl := kltLifecycle(t, KnowledgeLifecycleOptions{
+		Home: home,
+		Emit: rec.emit,
+		SyncWith: func(ctx context.Context, ix *knowledge.Index, o knowledge.SyncOptions) (knowledge.SyncStats, error) {
+			handedHook = o.OnProgress != nil
+			o.ProgressInterval = time.Nanosecond
+			return ix.SyncWith(ctx, o)
+		},
+	})
+
+	require.NoError(t, kl.AttachMount(context.Background(), "ws-a", "vault", root))
+
+	require.True(t, handedHook,
+		"a first index must hand the indexer a progress hook — without one the number cannot move at all")
+
+	var indexing []gen.KnowledgeIndexProgressFrame
+	for _, f := range rec.all() {
+		if f.Phase == "indexing" {
+			indexing = append(indexing, f)
+		}
+	}
+	require.GreaterOrEqual(t, len(indexing), 5,
+		"only %d indexing frames for %d files: phases seen %v", len(indexing), wantTotal, rec.phases())
+
+	assert.Equal(t, int64(0), indexing[0].IndexedFiles,
+		"a run announces itself before it has done any work")
+
+	prev := int64(-1)
+	for i, f := range indexing {
+		assert.Greater(t, f.IndexedFiles, prev,
+			"frame %d reported %d after %d: the count must strictly increase", i, f.IndexedFiles, prev)
+		prev = f.IndexedFiles
+
+		assert.True(t, f.TotalKnown, "frame %d: the total is measured before indexing begins", i)
+		require.NotNil(t, f.TotalFiles, "frame %d: total_files must be present once total_known is true", i)
+		assert.Equal(t, int64(wantTotal), *f.TotalFiles, "frame %d states a total the walk did not measure", i)
+		assert.LessOrEqual(t, f.IndexedFiles, *f.TotalFiles, "frame %d is a ratio above 1", i)
+		assert.Equal(t, "ws-a", f.WorkspaceId)
+	}
+
+	last := indexing[len(indexing)-1]
+	assert.Equal(t, int64(wantTotal), last.IndexedFiles,
+		"the last indexing frame stopped at %d of %d: a count that stops short is indistinguishable from a stall",
+		last.IndexedFiles, wantTotal)
+
+	terminal := rec.all()[len(rec.all())-1]
+	assert.Equal(t, "idle", terminal.Phase, "phases seen: %v", rec.phases())
+	assert.Equal(t, int64(wantTotal), terminal.IndexedFiles)
+}
+
+// TestKnowledgeLifecycle_ProgressFramesAreBoundedNotOnePerFile is the other
+// half: emitting one frame per note would put 100,000 frames on a socket for a
+// 100,000-note vault, which is worse for the reader than the three frames this
+// change replaced. The production window applies here — no seam — so the count
+// is checked against the run's measured duration and cannot go flaky on a slow
+// machine.
+func TestKnowledgeLifecycle_ProgressFramesAreBoundedNotOnePerFile(t *testing.T) {
+	const wantTotal = 40
+	files := make(map[string]string, wantTotal)
+	for i := 0; i < wantTotal; i++ {
+		files[fmt.Sprintf("note%02d.md", i)] = fmt.Sprintf("# Note %d\nalpha bravo %d", i, i)
+	}
+	root := kltVault(t, files)
+	home := kltHome(t)
+
+	rec := &kltFrames{}
+	kl := kltLifecycle(t, KnowledgeLifecycleOptions{Home: home, Emit: rec.emit})
+
+	started := time.Now()
+	require.NoError(t, kl.AttachMount(context.Background(), "ws-a", "vault", root))
+	elapsed := time.Since(started)
+
+	var indexing int
+	for _, f := range rec.all() {
+		if f.Phase == "indexing" {
+			indexing++
+		}
+	}
+	// One announcement, one per elapsed coalescing window, one final flush.
+	permitted := 2 + int(elapsed/knowledge.DefaultProgressInterval) + 1
+	assert.LessOrEqual(t, indexing, permitted,
+		"%d indexing frames in %v: the %v window permits at most %d",
+		indexing, elapsed, knowledge.DefaultProgressInterval, permitted)
+	assert.Less(t, indexing, wantTotal,
+		"one frame per file is the flood this coalescing exists to prevent")
+
+	terminal := rec.all()[len(rec.all())-1]
+	assert.Equal(t, "idle", terminal.Phase)
+	assert.Equal(t, int64(wantTotal), terminal.IndexedFiles,
+		"coalescing may drop intermediate frames, never the final count")
 }

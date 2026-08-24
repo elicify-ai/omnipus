@@ -608,6 +608,18 @@ func DefaultConfig() *Config {
 				// explicit deny everywhere else including the Worker's sparse
 				// map, where an absent key would silently INHERIT this allow).
 				//
+				// "Retrieval" is THREE names, not two: knowledge_tasks reads.
+				// It walks the collection and regex-matches checkbox lines,
+				// mutating nothing and writing no mutation audit record, and
+				// it is rate-limited through the retrieval limiter. ADR-067 D7
+				// prints the name under an "Authoring" heading, but that
+				// heading is a bucket rather than a definition — nothing in
+				// the ADR or the spec states a single requirement, scenario or
+				// test for the tool (round-1 review finding M-14, unanswered
+				// through rounds 2-4). The full reasoning, and why the grouping
+				// is load-bearing rather than cosmetic, is the SEED RULE in
+				// pkg/coreagent/core.go's allStaticToolNames.
+				//
 				// An "ask" ceiling on the authoring tools would be the same
 				// landed defect recorded four times above (inspect_session,
 				// the ADR-052 three, plan_correct/stop_plan, list_jobs): the
@@ -621,13 +633,15 @@ func DefaultConfig() *Config {
 				// is the per-agent seed, the workspace-mount scoping the
 				// retrieval tools enforce themselves (ADR-067 D7), and the
 				// per-mutation audit event (ADR-067 D19).
-				"knowledge_search":         "allow",
-				"knowledge_graph":          "allow",
+				// Retrieval.
+				"knowledge_search": "allow",
+				"knowledge_graph":  "allow",
+				"knowledge_tasks":  "allow",
+				// Authoring.
 				"knowledge_create":         "allow",
 				"knowledge_link":           "allow",
 				"knowledge_set_property":   "allow",
 				"knowledge_append_section": "allow",
-				"knowledge_tasks":          "allow",
 				"knowledge_move":           "allow",
 				"knowledge_rename":         "allow",
 			},

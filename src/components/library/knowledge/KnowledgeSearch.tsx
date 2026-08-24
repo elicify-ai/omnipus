@@ -46,9 +46,15 @@ import {
   type KnowledgeSearchHit,
 } from './useKnowledgeSearch'
 
-/** Human sentences for the machine-readable reasons an excerpt could not be
- *  re-read at query time. The hit is still shown — a result is never silently
- *  dropped for want of an excerpt, and an excerpt is never fabricated. */
+/** Human sentences for the machine-readable reasons a hit carries no excerpt.
+ *  The hit is still shown — a result is never silently dropped for want of an
+ *  excerpt, and an excerpt is never fabricated.
+ *
+ *  This Record is deliberately EXHAUSTIVE over the contract enum rather than a
+ *  lookup with a fallback string: adding a reason to
+ *  KnowledgeSearchHit.excerpt_unavailable without a sentence for it then fails
+ *  `tsc`, instead of shipping a hit whose reason renders as blank. That is how
+ *  `attachment_not_read` was caught. */
 const EXCERPT_UNAVAILABLE_REASON: Record<
   NonNullable<KnowledgeSearchHit['excerpt_unavailable']>,
   string
@@ -57,6 +63,9 @@ const EXCERPT_UNAVAILABLE_REASON: Record<
   file_missing: 'No excerpt: the file is no longer there.',
   match_moved: 'No excerpt: the file changed since it was indexed.',
   budget_exhausted: 'No excerpt: the time budget for reading excerpts ran out.',
+  // Not a failure: an attachment is found by its name and path, and its
+  // contents are never opened (FR-039a), so there is nothing to quote.
+  attachment_not_read: 'Matched on the file name — attachment contents are never read.',
 }
 
 function formatCount(n: number): string {

@@ -502,7 +502,7 @@ export const NotificationFrame = z
   .object({
     type: z.literal("notification"),
     id: z.string().min(1),
-    notification_type: z.literal("schedule_failed"),
+    notification_type: z.enum(["schedule_failed", "knowledge_drift"]),
     title: z.string().min(1),
     body: z.string().optional(),
     severity: z.enum(["info", "warning", "error"]),

@@ -553,12 +553,15 @@ func (a *restAPI) handleKnowledgeSearch(w http.ResponseWriter, r *http.Request, 
 
 // knowledgeSearchHit builds one wire hit.
 //
-// The excerpt and its absence are a matched pair: excerpt_unavailable is
-// present exactly when excerpt is absent, apart from the one case the contract
-// itself carves out — an ATTACHMENT, whose contents are never opened for any
-// reason (FR-039a) and for which the contract's reason enum has no value at
-// all. That hit carries neither field, which is the contract's own statement
-// that "an attachment hit never carries a body excerpt".
+// The excerpt and its absence are a matched pair, with NO carve-out: a hit
+// carries an excerpt, or it carries the machine-readable reason there is none
+// (FR-050a a). That invariant used to have a hole exactly where it was least
+// defensible — an ATTACHMENT, whose contents are never opened for any reason
+// (FR-039a) and which therefore has no body excerpt by construction. The
+// contract's enum had no member for it, so the reason pkg/knowledge already
+// emitted ("attachment_not_read") was dropped here and the hit reached the SPA
+// with neither field: no quote, and no word about why. FR-050a(a)'s amendment
+// added the member; this function no longer drops it.
 func knowledgeSearchHit(relPath, title, excerpt, unavailable string, kind gen.KnowledgeSearchHitKind, score float64) gen.KnowledgeSearchHit {
 	out := gen.KnowledgeSearchHit{Kind: kind, Path: relPath, Score: score, Title: title}
 	if excerpt != "" {
@@ -583,11 +586,11 @@ func knowledgeSearchHit(relPath, title, excerpt, unavailable string, kind gen.Kn
 //     inside the collection, so nothing was opened. "file_unreadable" is the
 //     only value in the contract's enum that does not assert something untrue
 //     about it; "file_missing" would, since the file is very much there.
-//   - attachment_not_read → NO value, and the hit carries no reason at all.
-//     The contract's enum has no attachment member while its own prose says an
-//     attachment hit never carries a body excerpt. Inventing a member here
-//     would fail the SPA's zod validation and silently drop the whole payload,
-//     which is worse than an absent optional field.
+//   - attachment_not_read → attachment_not_read. Passed through verbatim now
+//     that the contract has the member (FR-050a a). It is NOT a failure and
+//     must not be worded as one: nothing went wrong, nothing was even tried —
+//     an attachment is matched on its name and path and its bytes are never
+//     opened (FR-039a).
 func knowledgeExcerptReason(reason string) (gen.KnowledgeSearchHitExcerptUnavailable, bool) {
 	switch knowledge.ExcerptReason(reason) {
 	case knowledge.ExcerptFileMissing:
@@ -598,6 +601,8 @@ func knowledgeExcerptReason(reason string) (gen.KnowledgeSearchHitExcerptUnavail
 		return gen.KnowledgeSearchHitExcerptUnavailableMatchMoved, true
 	case knowledge.ExcerptBudgetExhausted:
 		return gen.KnowledgeSearchHitExcerptUnavailableBudgetExhausted, true
+	case knowledge.ExcerptAttachment:
+		return gen.KnowledgeSearchHitExcerptUnavailableAttachmentNotRead, true
 	default:
 		return "", false
 	}

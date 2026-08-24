@@ -198,7 +198,13 @@ type KnowledgeSearchHit = {
   kind: "note" | "attachment";
   excerpt?: string | undefined;
   excerpt_unavailable?:
-    | ("file_unreadable" | "file_missing" | "match_moved" | "budget_exhausted")
+    | (
+        | "file_unreadable"
+        | "file_missing"
+        | "match_moved"
+        | "budget_exhausted"
+        | "attachment_not_read"
+      )
     | undefined;
   byte_offset?: number | undefined;
 };
@@ -921,7 +927,7 @@ type NotificationList = {
 };
 type Notification = {
   id: string;
-  type: "schedule_failed";
+  type: "schedule_failed" | "knowledge_drift";
   title: string;
   body?: string | undefined;
   severity: "info" | "warning" | "error";
@@ -3108,7 +3114,7 @@ export const ScheduleRunResult = z.object({
 });
 export const Notification: z.ZodType<Notification> = z.object({
   id: z.string(),
-  type: z.literal("schedule_failed"),
+  type: z.enum(["schedule_failed", "knowledge_drift"]),
   title: z.string().min(1),
   body: z.string().optional(),
   severity: z.enum(["info", "warning", "error"]),
@@ -3301,13 +3307,6 @@ export const KnowledgeBaseInfo = z.object({
     })
     .optional(),
 });
-export const KnowledgeMountConflictError = z.object({
-  error: z.string().min(1),
-  code: z.literal("knowledge_mount_conflict"),
-  existing_root_path: z.string().min(1),
-  requested_root_path: z.string().min(1),
-  existing_collection_id: z.string().optional(),
-});
 export const KnowledgeSearchRequest = z.object({
   query: z.string().min(1).max(1024),
   collection_id: z.string().min(1),
@@ -3327,6 +3326,7 @@ export const KnowledgeSearchHit: z.ZodType<KnowledgeSearchHit> = z.object({
       "file_missing",
       "match_moved",
       "budget_exhausted",
+      "attachment_not_read",
     ])
     .optional(),
   byte_offset: z.number().int().gte(0).optional(),
@@ -3630,6 +3630,13 @@ export const KnowledgeConflictError = z.object({
   path: z.string().min(1),
   expected_version: z.string().optional(),
   actual_version: z.string().optional(),
+});
+export const KnowledgeMountConflictError = z.object({
+  error: z.string().min(1),
+  code: z.literal("knowledge_mount_conflict"),
+  existing_root_path: z.string().min(1),
+  requested_root_path: z.string().min(1),
+  existing_collection_id: z.string().optional(),
 });
 export const AgentSession = z
   .object({
@@ -6074,12 +6081,6 @@ Carries no index counts. Index progress is a streaming state pushed over the Web
         status: 404,
         description: `Resource not found.`,
         schema: ErrorResponse,
-      },
-      {
-        status: 409,
-        description: `A second knowledge-base root was requested for a workspace that already has one. A knowledge base is exactly one mounted folder (FR-026); the body names both roots.
-`,
-        schema: KnowledgeMountConflictError,
       },
       {
         status: 500,
@@ -10945,7 +10946,7 @@ export const NotificationFrame = z
   .object({
     type: z.literal("notification"),
     id: z.string().min(1),
-    notification_type: z.literal("schedule_failed"),
+    notification_type: z.enum(["schedule_failed", "knowledge_drift"]),
     title: z.string().min(1),
     body: z.string().optional(),
     severity: z.enum(["info", "warning", "error"]),

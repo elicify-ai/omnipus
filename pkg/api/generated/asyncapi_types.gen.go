@@ -435,10 +435,11 @@ type MessageFrame struct {
 
 // NotificationFrame — Server → client. A notification raised for the recipient user (e.g. a scheduled run failed). Delivered only to that user's connections; the SPA adds it to the header notification center (#264).
 type NotificationFrame struct {
-	AgentId          *string `json:"agent_id,omitempty"`
-	Body             *string `json:"body,omitempty"`
-	CreatedAtMs      int64   `json:"created_at_ms"`
-	Id               string  `json:"id"`
+	AgentId     *string `json:"agent_id,omitempty"`
+	Body        *string `json:"body,omitempty"`
+	CreatedAtMs int64   `json:"created_at_ms"`
+	Id          string  `json:"id"`
+	// The event class. Mirrors Notification.type in openapi.yaml. "knowledge_drift" (ADR-067 FR-038a) means the drift check found a knowledge base's search index out of step with the folder on disk and the index is being rebuilt; it is never emitted for a healthy check.
 	NotificationType string  `json:"notification_type"`
 	Read             bool    `json:"read"`
 	ScheduleId       *string `json:"schedule_id,omitempty"`

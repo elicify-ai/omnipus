@@ -3158,8 +3158,14 @@ components:
           minLength: 1
         notification_type:
           type: string
+          description: 'The event class. Mirrors Notification.type in openapi.yaml. "knowledge_drift" (ADR-067 FR-038a)
+            means the drift check found a knowledge base''s search index out of step with the folder on disk and the index
+            is being rebuilt; it is never emitted for a healthy check.
+
+            '
           enum:
           - schedule_failed
+          - knowledge_drift
         title:
           type: string
           minLength: 1

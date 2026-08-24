@@ -4509,7 +4509,8 @@ func setupAndStartServices(
 	// listener accepts connections. Interval 0 means FR-038a's six-hour default:
 	// there is no config key for it yet, and KnowledgeLifecycleOptions.DriftInterval
 	// is where one would be passed in.
-	startKnowledgeLifecycle(homePath, wsHandler, 0)
+	startKnowledgeLifecycle(homePath, wsHandler, 0,
+		knowledgeDriftNotifier(runningServices.notifStore, agentLoop, agentLoop.GetConfig))
 
 	// Recover tasks left "in_progress" by a crashed/abandoned previous process.
 	// Runs before the HTTP listener accepts connections (StartAll, below), so no

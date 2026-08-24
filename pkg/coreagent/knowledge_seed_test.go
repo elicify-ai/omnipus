@@ -37,11 +37,24 @@ var knowledgeSeedMatrix = map[string]struct {
 // the catalog, so that a name added to allStaticToolNames and to nothing else
 // fails TestCoreAgentSeed_KnowledgeFamilyIsExactlyTheADRList below rather
 // than silently inheriting a posture nobody chose.
+//
+// knowledge_tasks is listed as RETRIEVAL, which is not where ADR-067 D7's
+// prose puts it. D7 prints the name under a heading called "Authoring", but
+// the ADR and the spec between them state no requirement, scenario or test
+// for the tool at all — round-1 review finding M-14 recorded exactly that,
+// and rounds 2, 3 and 4 never answered it — so the heading is a layout
+// choice, not a decision the oracle can lean on. What the tool DOES is
+// observable and unambiguous: pkg/knowledge's TasksTool reads notes and
+// regex-matches checkbox lines, opens no writer, emits no mutation audit
+// record, is rate-limited through the retrieval limiter, and answers an
+// out-of-scope collection with FR-053's empty result set (the read contract;
+// every authoring tool refuses instead). A read is seeded like the other
+// reads. See the SEED RULE in pkg/coreagent/core.go's allStaticToolNames.
 var (
-	knowledgeRetrievalTools = []string{"knowledge_search", "knowledge_graph"}
+	knowledgeRetrievalTools = []string{"knowledge_search", "knowledge_graph", "knowledge_tasks"}
 	knowledgeAuthoringTools = []string{
 		"knowledge_create", "knowledge_link", "knowledge_set_property",
-		"knowledge_append_section", "knowledge_tasks",
+		"knowledge_append_section",
 		"knowledge_move", "knowledge_rename",
 	}
 )

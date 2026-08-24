@@ -7002,15 +7002,16 @@ paths:
           $ref: '#/components/responses/403Forbidden'
         '404':
           $ref: '#/components/responses/404NotFound'
-        '409':
-          description: >
-            A second knowledge-base root was requested for a workspace that
-            already has one. A knowledge base is exactly one mounted folder
-            (FR-026); the body names both roots.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/KnowledgeMountConflictError'
+        # NO 409 HERE, DELIBERATELY (FR-026a). This operation MOUNTS NOTHING —
+        # it reports whether a folder looks like a knowledge base — so it has no
+        # way to produce a mount conflict. Worse than dead documentation, a 409
+        # here states the wrong rule: FR-026 constrains what ONE knowledge base
+        # is (exactly one folder), not how many a workspace may hold, and
+        # knowledge.ResolveScope deliberately supports a workspace with several.
+        # A client written against a 409 here would treat an ordinary second
+        # collection as an error. KnowledgeMountConflictError stays in
+        # components/schemas and belongs to the operation that MOUNTS, where
+        # Collection.AttachRoot is the real enforcement point.
         '500':
           $ref: '#/components/responses/500InternalServerError'
 

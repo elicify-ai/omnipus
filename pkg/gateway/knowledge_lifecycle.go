@@ -47,14 +47,16 @@
 // # What this file does NOT do
 //
 // It does not register the knowledge tools with any agent, serve any REST
-// endpoint, or render anything. Those are separate lanes. It also does not
-// route the drift report into the notification centre: `Notification.type` in
-// contracts/components/schemas/Notification.yaml admits only `schedule_failed`
-// today, so a `knowledge_drift` notification would be dropped by the SPA's
-// generated zod guard and the operator would be told nothing while the code
-// looked wired. Until that enum gains a value, the report goes to the
-// structured log and to KnowledgeLifecycleOptions.DriftNotify, which exists
-// precisely so that lane has somewhere to attach.
+// endpoint, or render anything. Those are separate lanes.
+//
+// It also does not COMPOSE the drift notification — knowledge_drift_notify.go
+// owns the wording and the recipients, and hands this file a plain
+// func(knowledge.DriftReport) through KnowledgeLifecycleOptions.DriftNotify.
+// That hook was nil in production until `Notification.type` gained the
+// `knowledge_drift` member (contracts/components/schemas/Notification.yaml and
+// NotificationFrame in contracts/asyncapi.yaml), because before that a drift
+// notification would have been rejected by the SPA's generated zod guard and
+// the operator told nothing while the code looked wired.
 
 package gateway
 
@@ -800,6 +802,18 @@ func (kl *KnowledgeLifecycle) reconcile(ctx context.Context, c *knowledgeCollect
 }
 
 // firstIndex is the measured-total path: enumerate, publish the total, index.
+//
+// It is also the ONLY path that can move a number while it works, which is why
+// the running report is wired here and not in reconcile: an incremental run has
+// no measured denominator (see reconcile), and a count that rises against no
+// total is not progress, it is a number nobody can read.
+//
+// The running report goes through knowledge.SyncOptions.OnProgress, whose
+// call rate the indexer itself bounds (at most one call per 200ms AND per 0.1%
+// of the collection, plus a final one). This file therefore does no throttling
+// of its own: one callback becomes one frame per mounting workspace, and the
+// worst case for a 100,000-file collection is ~1,001 callbacks rather than
+// 100,000. Adding a second throttle here would only make the two disagree.
 func (kl *KnowledgeLifecycle) firstIndex(
 	ctx context.Context, c *knowledgeCollection, tracker *knowledge.ProgressTracker,
 ) (knowledge.SyncStats, error) {
@@ -822,12 +836,43 @@ func (kl *KnowledgeLifecycle) firstIndex(
 		kl.emit(c, kl.updateFromProgress(tracker.Progress()))
 	}
 
-	stats, syncErr := kl.syncWith(ctx, c.index, knowledge.SyncOptions{})
+	stats, syncErr := kl.syncWith(ctx, c.index, knowledge.SyncOptions{
+		OnProgress: kl.progressReporter(c, tracker),
+	})
 	if syncErr == nil {
 		tracker.SetIndexed(stats.Indexed + stats.Unchanged)
 	}
 	tracker.Finish(stats.Scanned == 0)
 	return stats, syncErr
+}
+
+// progressReporter is the running report a first index publishes as it works:
+// it advances the shared tracker and pushes one frame per mounting workspace.
+//
+// THE DENOMINATOR COMES FROM THE TRACKER, NOT FROM THE CALLBACK, and the
+// callback's own total is deliberately discarded. The indexer walks the tree a
+// second time, so its total can differ from the one this collection's clients
+// were already given — a file created between the two walks is enough. Swapping
+// denominators mid-run would make an on-screen ratio jump backwards, which
+// reads as a bug even when both numbers are true. The tracker clamps the count
+// to the total it published, so the bar can sit at full while the last few
+// stragglers finish, and reconcile's terminal frame — which carries the
+// indexer's own measured Scanned — is what corrects the total. That frame is
+// the authority on the final numbers; this one is the authority on movement.
+//
+// It emits nothing unless the tracker is actually in the indexing phase. An
+// "idle" frame arriving mid-run would tell a client the work had stopped.
+func (kl *KnowledgeLifecycle) progressReporter(
+	c *knowledgeCollection, tracker *knowledge.ProgressTracker,
+) func(indexed, total int) {
+	return func(indexed, _ int) {
+		tracker.SetIndexed(indexed)
+		p := tracker.Progress()
+		if p.Phase != knowledge.IndexPhaseIndexing {
+			return
+		}
+		kl.emit(c, kl.updateFromProgress(p))
+	}
 }
 
 // manifestExists reports whether this collection has been indexed before. A
@@ -1018,27 +1063,32 @@ func (a *restAPI) knowledgeLifecycle() *KnowledgeLifecycle {
 //
 // wsh may be nil, in which case progress is computed and dropped rather than
 // broadcast — a gateway with no WebSocket handler still indexes.
-// WHAT AN OPERATOR ACTUALLY SEES WHEN DRIFT IS FOUND, stated plainly because
-// half of it is still owed work:
+// WHAT AN OPERATOR ACTUALLY SEES WHEN DRIFT IS FOUND, stated plainly:
 //
 //   - They see the collection RE-INDEX. NewKnowledgeLifecycle wraps DriftNotify
 //     so an unhealthy report triggers resyncAfterDrift, and that re-index emits
 //     knowledge_index_progress frames the SPA already routes into the Library's
 //     knowledge panel. So the visible consequence is real and is the one that
 //     matters: the stale answers stop.
-//   - They do NOT get a NOTIFICATION. DriftNotify is left nil here, so the
-//     report itself is a slog.Warn in gateway.log and nothing else.
-//     `Notification.type` in contracts/components/schemas/Notification.yaml
-//     admits only `schedule_failed`, so a knowledge_drift notification would be
-//     dropped by the SPA's generated zod guard — the operator would be told
-//     nothing while the code looked wired, which is worse than the honest gap.
-//     Closing it means adding the enum member, regenerating, and routing it in
-//     the SPA; until all three land, this stays nil on purpose.
-//   - There is also no CONFIG KEY for the interval yet: gateway.go passes a
+//   - They now also get a NOTIFICATION in the header bell, in words rather than
+//     field names — driftNotify is built by knowledgeDriftNotifier
+//     (knowledge_drift_notify.go) and passed in by gateway.go. A nil driftNotify
+//     restores the previous behaviour (a slog.Warn and nothing else), which is
+//     what every test harness that boots no notification store gets.
+//   - There is still no CONFIG KEY for the interval: gateway.go passes a
 //     literal 0, which NewKnowledgeLifecycle turns into FR-038a's six-hour
-//     default. FR-038a says "operator-configurable"; that half is owed too.
-func startKnowledgeLifecycle(homePath string, wsh *WSHandler, driftInterval time.Duration) *KnowledgeLifecycle {
-	opts := KnowledgeLifecycleOptions{Home: homePath, DriftInterval: driftInterval}
+//     default. FR-038a says "operator-configurable"; that half is owed.
+func startKnowledgeLifecycle(
+	homePath string,
+	wsh *WSHandler,
+	driftInterval time.Duration,
+	driftNotify func(knowledge.DriftReport),
+) *KnowledgeLifecycle {
+	opts := KnowledgeLifecycleOptions{
+		Home:          homePath,
+		DriftInterval: driftInterval,
+		DriftNotify:   driftNotify,
+	}
 	if wsh != nil {
 		opts.Emit = wsh.broadcastKnowledgeIndexProgress
 	}
