@@ -487,6 +487,134 @@ describe('VirtualizedMessageList', () => {
     const anchor = container.querySelector('[data-testid="streaming-message-anchor"]')
     expect(anchor).not.toBeNull()
   })
+
+  /**
+   * ADR-070 §4/F3 (grill-spec round 1 on the implementation spec): this is
+   * the one claim in the whole ADR that, before this test existed, was only
+   * ever verified via a disposable, uncommitted throwaway repro — it had to
+   * land as committed coverage. The mid-turn-steer sequence is the exact
+   * precondition that broke the pin-to-bottom mechanism: once a follow-up
+   * becomes the array's last item, `hasStreamingMessage` (keyed off
+   * `messages[messages.length - 1]?.isStreaming`) used to go false even
+   * though a genuinely-streaming bubble existed elsewhere in the array.
+   * ADR-070 §2.1's fix (closing the pre-steer bubble so a NEW bubble opens
+   * and becomes the true last item) is what self-heals this — this test
+   * proves that healing actually happens, not just that it should in theory.
+   */
+  function seedSteeredStreamingStore(): ChatMessage[] {
+    const userMsg: ChatMessage = {
+      id: 'msg_user', role: 'user', content: 'question', timestamp: new Date().toISOString(), status: 'done',
+    }
+    const closedBySteerMsg: ChatMessage = {
+      id: 'msg_pre_steer', role: 'assistant', content: 'partial reply before the follow-up',
+      timestamp: new Date().toISOString(), status: 'done', isStreaming: false, closedBySteer: true,
+    }
+    const steerMsg: ChatMessage = {
+      id: 'msg_steer', role: 'user', content: 'follow-up sent mid-turn', timestamp: new Date().toISOString(), status: 'done',
+    }
+    const postSteerStreamingMsg: ChatMessage = {
+      id: 'msg_post_steer', role: 'assistant', content: 'reply to the follow-up, still streaming',
+      timestamp: new Date().toISOString(), status: 'streaming', isStreaming: true,
+    }
+    const allMessages = [userMsg, closedBySteerMsg, steerMsg, postSteerStreamingMsg]
+    const bucket = makeBucketMessages(allMessages)
+    useChatStore.setState((s) => ({
+      ...s,
+      sessionsById: {
+        [SID]: {
+          ...((s.sessionsById ?? {})[SID] ?? {}),
+          ...bucket,
+          isStreaming: true,
+          isReplaying: false,
+          replayCompletedForSession: SID,
+          toolCalls: {},
+          toolCallOrder: [],
+          textAtToolCallStart: {},
+          sessionTokens: 0,
+          sessionCost: 0,
+          rateLimitEvent: null,
+          lastUserMessageAt: null,
+          cancelStage: null,
+          lastReceivedEventTime: null,
+          spanByParentCallId: {},
+          trimmedCount: 0,
+        },
+      },
+      messages: allMessages,
+      isStreaming: true,
+      isReplaying: false,
+      replayCompletedForSession: SID,
+    }))
+    useSessionStore.setState({ activeSessionId: SID, activeAgentId: 'agent-1' })
+    return allMessages
+  }
+
+  it('pins the live streaming anchor to the POST-steer bubble, not the closed pre-steer one (ADR-070 §4 F3)', async () => {
+    seedSteeredStreamingStore()
+
+    let container!: HTMLElement
+    await act(async () => {
+      const result = render(<ChatScreen />)
+      container = result.container
+    })
+
+    // The pin-to-bottom mechanism must still engage even though the array's
+    // last item is the streaming bubble ONLY because ADR-070 §2.1 closed the
+    // pre-steer one — before that fix, the last array item in this exact
+    // shape would have been the (non-streaming) steer message, and this
+    // anchor would have been absent (confirmed via a throwaway repro during
+    // investigation; this test replaces that with committed coverage).
+    const anchor = container.querySelector('[data-testid="streaming-message-anchor"]')
+    expect(anchor).not.toBeNull()
+  })
+
+  it('DOM order top-to-bottom matches [user, finished pre-steer reply, follow-up, live post-steer reply] (ADR-070 §4 F3)', async () => {
+    // Uses the PlainMessageList fallback (ResizeObserver removed) for
+    // deterministic DOM rendering — jsdom's lack of a layout engine makes
+    // the virtualized path unreliable for a small, fixed message set (see
+    // 'VirtualUserMessageRow media rendering' below for the same technique).
+    // PlainMessageList renders every message in true array order with no
+    // separate "live anchor" region, which is exactly what a direct
+    // DOM-order assertion needs.
+    vi.unstubAllGlobals()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ;(globalThis as any).ResizeObserver = undefined
+
+    seedSteeredStreamingStore()
+
+    let container!: HTMLElement
+    await act(async () => {
+      const result = render(<ChatScreen />)
+      container = result.container
+    })
+
+    const rows = Array.from(container.querySelectorAll('[data-message-role]'))
+    const rendered = rows.map((r) => ({
+      role: r.getAttribute('data-message-role'),
+      text: r.textContent ?? '',
+    }))
+
+    expect(rendered.length).toBe(4)
+    expect(rendered.map((r) => r.role)).toEqual(['user', 'assistant', 'user', 'assistant'])
+    // The core reported symptom, asserted directly: the reply to the
+    // follow-up must render below it, not above it.
+    const idxOf = (needle: string) => rendered.findIndex((r) => r.text.includes(needle))
+    const preSteerIdx = idxOf('partial reply before the follow-up')
+    const steerIdx = idxOf('follow-up sent mid-turn')
+    const postSteerIdx = idxOf('reply to the follow-up, still streaming')
+    expect(preSteerIdx).toBeGreaterThanOrEqual(0)
+    expect(steerIdx).toBeGreaterThanOrEqual(0)
+    expect(postSteerIdx).toBeGreaterThanOrEqual(0)
+    expect(preSteerIdx).toBeLessThan(steerIdx)
+    expect(steerIdx).toBeLessThan(postSteerIdx)
+
+    // Restore ResizeObserver for subsequent tests in this file.
+    vi.stubGlobal('ResizeObserver', class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    })
+  })
 })
 
 // ── VirtualUserMessageRow media rendering (finding 7) ────────────────────────

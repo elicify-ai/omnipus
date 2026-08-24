@@ -213,6 +213,21 @@ export type ChatMessage = Message & {
    * payload) — dedup then falls back to the existing content+role dedup.
    */
   errorEntryId?: string
+  /**
+   * ADR-070 §2.4 — true when this assistant bubble was closed because a
+   * mid-turn steer (a follow-up sent while it was still streaming) landed
+   * after it, rather than because the reply/turn fully finished. Debugging/
+   * bookkeeping only — deliberately NOT a new `AssistantMessage.status`
+   * value (a union-member design was proposed and rejected; see the ADR for
+   * why) and never serialized to the wire. Status stays `'done'`, identical
+   * to an ordinarily-finished reply, so every existing UI/ARIA/Copy site
+   * keeps its current, correct-for-`'done'` behavior unmodified. Consulted
+   * only by: the C8 error-sweep (must not re-stamp it), and
+   * `markLastMessageInterrupted` (must not re-stamp it as interrupted) —
+   * both via `findOpenAssistantMessageId`'s eligibility check or an
+   * equivalent explicit exclusion, never by a UI render branch.
+   */
+  closedBySteer?: boolean
 }
 
 // Client-side truncation sentinel — parallel to server TruncatedResult/ToolResultRef shapes.
@@ -710,6 +725,39 @@ export function findLastAssistantMessageId(
 }
 
 /**
+ * ADR-070 §2.1/§2.7 — the assistant bubble still eligible to receive more
+ * live content or be mutated as "the current turn's reply": the raw tail of
+ * `order` if it's an assistant message (the common case), or — when
+ * something else (a mid-turn steer's user message) has landed after it —
+ * the last assistant message ONLY if it is still genuinely open
+ * (`isStreaming`). Returns null when no bubble is eligible; the caller must
+ * open a new one (or, for read-only consumers, treat "no eligible bubble
+ * yet" as its own state rather than falling back to a closed one).
+ *
+ * `findLastAssistantMessageId`'s bare backward scan is intentionally NOT
+ * replaced everywhere — several callers (the C8 error sweep's `lastMsgId`,
+ * `findAssistantMessageIdByTurnId`'s sibling use, `done`/`error` sweeps that
+ * must finalize EVERY still-streaming bubble regardless of position) have a
+ * genuinely different job than "can I still write here," and stay on the
+ * bare scan. This helper is for the specific "is this bubble still open"
+ * question — see ADR-070 §2.1 (token/tool_call_start already implement this
+ * rule inline; subagent_start/media/markLastMessageInterrupted/
+ * lastAssistantMessageId are routed through this shared helper instead of
+ * re-deriving it ad hoc).
+ */
+export function findOpenAssistantMessageId(
+  order: readonly string[],
+  messagesById: Record<string, ChatMessage>,
+): string | null {
+  const tailId = order[order.length - 1]
+  const tail = tailId ? messagesById[tailId] : undefined
+  if (tail?.role === 'assistant') return tailId ?? null
+  const candidateId = findLastAssistantMessageId(order, messagesById)
+  const candidate = candidateId ? messagesById[candidateId] : undefined
+  return candidate?.isStreaming ? candidateId : null
+}
+
+/**
  * Find the id of the assistant message carrying the given turnId — used to
  * correlate a replayed `turn_canceled` entry (Fix 5c) to the specific
  * assistant message it interrupted. Deliberately independent of
@@ -955,9 +1003,17 @@ interface ChatStore {
    */
   messagesById: Record<string, ChatMessage>
   /**
-   * The id of the most recent assistant message in the active session's
-   * bucket (null when none exists), derived by bucketToForeground via
-   * findLastAssistantMessageId. Companion to `messagesById` for any
+   * The id of the most recent, still-eligible-to-be-"the reply" assistant
+   * message in the active session's bucket (null when none exists), derived
+   * by bucketToForeground via findOpenAssistantMessageId (ADR-070 §2.7,
+   * grill-spec round 2 NEW-002 — was findLastAssistantMessageId; routed
+   * through the eligibility helper so a bubble closed by a mid-turn steer
+   * cannot be mistaken for the turn's genuinely-final reply between the
+   * steer and the next frame reopening one). Its only consumer today is
+   * ChatScreen's ARIA "New response from {agent}" live-region announcement,
+   * which must fire once per completed turn, not once per steered segment —
+   * see the field's original doc reasoning below for why it exists as a
+   * dedicated derived field at all. Companion to `messagesById` for any
    * consumer that previously did `[...messages].reverse().find((m) => m.role === 'assistant')`
    * — the ARIA live-region hook in ChatScreen used to do exactly that on
    * every WS frame: it subscribed to the whole `messages` array (which
@@ -1536,7 +1592,14 @@ export const useChatStore = create<ChatStore>((set, get) => {
     return {
       ...rest,
       messages: getMessages(bucket),
-      lastAssistantMessageId: findLastAssistantMessageId(bucket.messageOrder, bucket.messagesById),
+      // ADR-070 §2.7 (grill-spec round 2, NEW-002): routed through the same
+      // eligibility helper the write-side handlers use, so the ARIA "New
+      // response" announcement this field solely drives cannot fire early
+      // for a bubble that was only closed because a mid-turn steer landed
+      // after it. Traced against the ordinary (non-steer) case: the final
+      // reply is always the raw tail once it's genuinely done, so this is a
+      // no-op change there — same id, same behavior as before.
+      lastAssistantMessageId: findOpenAssistantMessageId(bucket.messageOrder, bucket.messagesById),
     }
   }
 
@@ -1837,7 +1900,18 @@ export const useChatStore = create<ChatStore>((set, get) => {
     markLastMessageInterrupted: (sessionId) => {
       const sid = sessionId ?? getActiveSid()
       withBucket(sid, (b) => {
-        const lastMsgId = findLastAssistantMessageId(b.messageOrder, b.messagesById)
+        // ADR-070 §2.7 (grill-spec round 2, NEW-001): a bare
+        // findLastAssistantMessageId scan would resolve to an already-closed
+        // closedBySteer bubble if Stop/Escape/`/cancel` fires in the window
+        // between a steer closing the pre-steer bubble and the next frame
+        // opening a new one — mislabeling an already-finished, correct
+        // reply segment as 'interrupted'. findOpenAssistantMessageId
+        // refuses that; null is then handled by the SAME "no assistant
+        // message exists yet" placeholder branch immediately below, which
+        // already exists for the analogous pre-existing case (cancel fired
+        // before the first token frame) — the trigger condition just got
+        // broader, not the branch itself.
+        const lastMsgId = findOpenAssistantMessageId(b.messageOrder, b.messagesById)
         if (!lastMsgId) {
           // FR-21 / T21–T23: No assistant message exists yet (cancel fired between
           // session_started and the first token frame). The server may still send
@@ -2519,6 +2593,13 @@ export const useChatStore = create<ChatStore>((set, get) => {
             // user bubble as 'error' (Retry affordance) and leave
             // `isStreaming` alone; there is no assistant placeholder to roll
             // back because a mid-turn steering send never creates one.
+            // ADR-070 §2.1 deliberately does NOT close the pre-steer bubble
+            // in this branch: the backend never received this steer, so it
+            // keeps writing into the SAME original segment exactly as
+            // before — closing the bubble here would be actively wrong, not
+            // just unnecessary (a real, previously-uncaught gap: closing it
+            // unconditionally alongside the append broke the assertion this
+            // branch's own pre-existing test pins).
             withBucket(activeSessionId, (b) => produce(b, (draft) => {
               const um = draft.messagesById[userMsg.id]
               if (um) { um.status = 'error' }
@@ -2526,7 +2607,35 @@ export const useChatStore = create<ChatStore>((set, get) => {
             useConnectionStore.getState().setConnectionError(
               'Message could not be sent — connection dropped. Your message was kept; press Retry to resend.'
             )
+            return
           }
+
+          // ADR-070 §2.1: only NOW, once the steer has genuinely reached the
+          // gateway, close the assistant bubble that was open at send-time —
+          // a SEPARATE update from the append above (not merged into it),
+          // specifically so a failed send (handled above) never touches the
+          // bubble at all. Resolved against the POST-append bucket state:
+          // findOpenAssistantMessageId's raw-tail check sees the just-
+          // appended user message as the tail and falls back to the last
+          // assistant message, closing it only if still genuinely
+          // `isStreaming` — which correctly excludes an earlier steer's
+          // already-closed bubble for a second/third rapid steer in the
+          // same turn (nothing left open to close, by design — ADR §2.1).
+          withBucket(activeSessionId, (b) => {
+            const openId = findOpenAssistantMessageId(b.messageOrder, b.messagesById)
+            if (!openId || !b.messagesById[openId]) return {}
+            return produce(b, (draft) => {
+              const msg = draft.messagesById[openId]
+              msg.isStreaming = false
+              msg.status = 'done'
+              msg.closedBySteer = true
+              // Code review: every other close site (markLastMessageInterrupted,
+              // updateLastAssistantMessage, the C8/done sweeps) clears this
+              // seam marker on close; this site didn't, leaving a
+              // representable-but-meaningless true on a finalized bubble.
+              msg.pendingTextBoundary = false
+            }) as Partial<SessionChatState>
+          })
           return
         }
 
@@ -3828,7 +3937,12 @@ export const useChatStore = create<ChatStore>((set, get) => {
               // restamped as the failure. SessionID delivery made that
               // live frame reach the second tab; this guard is the pair.
               const lastContentEmpty = !!lastMsg && (!lastMsg.content || !lastMsg.content.trim())
-              const lastIsThisTurn = !!lastMsg && (
+              // ADR-070 §2.6: `lastContentEmpty` alone would otherwise pull
+              // an already-closed, closedBySteer bubble (content still ''
+              // because the steer landed before any text streamed) into
+              // this sweep and re-stamp it with the error — mirrors how
+              // `lastIsTerminalError` already excludes 'error' below.
+              const lastIsThisTurn = !!lastMsg && !lastMsg.closedBySteer && (
                 lastMsg.isStreaming
                 || lastMsg.status === 'streaming'
                 || lastContentEmpty
@@ -4322,8 +4436,29 @@ export const useChatStore = create<ChatStore>((set, get) => {
           const sf = frame as WsSubagentStartFrame
           withBucket(targetSid, (b) => {
             return produce(b, (draft) => {
-              const lastMsgId = findLastAssistantMessageId(draft.messageOrder, draft.messagesById)
-              if (!lastMsgId) return
+              // ADR-070 §2.1/F2: a bare findLastAssistantMessageId scan here
+              // would reattach this span to a closed, closedBySteer bubble
+              // (positioned before a mid-turn steer's user message) if the
+              // span is the first live frame to arrive after the steer.
+              // findOpenAssistantMessageId refuses that; when it resolves to
+              // null, open a fresh placeholder — mirroring
+              // case 'tool_call_start' — rather than silently dropping a
+              // real delegation span (worse than the mis-ordering itself).
+              let lastMsgId = findOpenAssistantMessageId(draft.messageOrder, draft.messagesById)
+              if (!lastMsgId) {
+                const placeholder: ChatMessage = {
+                  id: generateId(),
+                  role: 'assistant',
+                  content: '',
+                  timestamp: new Date().toISOString(),
+                  status: 'streaming',
+                  isStreaming: true,
+                  agentId: sf.agent_id ?? useSessionStore.getState().activeAgentId ?? undefined,
+                }
+                draft.messagesById[placeholder.id] = placeholder
+                draft.messageOrder.push(placeholder.id)
+                lastMsgId = placeholder.id
+              }
               const span: SubagentSpanRunning = {
                 spanId: sf.span_id,
                 parentCallId: sf.parent_call_id,
@@ -4717,7 +4852,20 @@ export const useChatStore = create<ChatStore>((set, get) => {
               // that tool_call_start frames already created.
               if (role === 'assistant') {
                 const lastMsgId = findLastAssistantMessageId(draft.messageOrder, draft.messagesById)
-                if (lastMsgId && (draft.messagesById[lastMsgId].content ?? '') === '') {
+                // ADR-070 §2.2: a candidate is only eligible to receive more
+                // replayed content — coalesce OR the same-turn merge below —
+                // if it is still the RAW TAIL of messageOrder. Replay
+                // bubbles are finalized (isStreaming:false) the instant
+                // they're created, so isStreaming can't serve as the "still
+                // open" signal the way it does live (§2.1); raw-tail
+                // position is the substitute. Without this, a steer's
+                // persisted user entry replayed between two same-turn
+                // assistant entries would be skipped over by the backward
+                // scan and the two entries would wrongly merge into one
+                // bubble positioned before the steer message.
+                const lastMsgIsRawTail =
+                  lastMsgId != null && draft.messageOrder[draft.messageOrder.length - 1] === lastMsgId
+                if (lastMsgId && lastMsgIsRawTail && (draft.messagesById[lastMsgId].content ?? '') === '') {
                   // Bake any tool calls that belong to this turn BEFORE taking the early
                   // return. Without this, toolCallOrder accumulates across turns and ends
                   // up baked onto the wrong (later) assistant message.
@@ -4810,7 +4958,12 @@ export const useChatStore = create<ChatStore>((set, get) => {
                     (draft.mergedReplayMessageIds?.[messageId] ?? false) ||
                     (candidate.mergedReplayIds?.includes(messageId) ?? false)
                   )
-                  if (sameTurn && compatibleProducer && !alreadyMerged) {
+                  // ADR-070 §2.2: `lastMsgIsRawTail` (computed once, above,
+                  // alongside `lastMsgId`) refuses this merge whenever
+                  // something — in practice, a steer's persisted user entry
+                  // — has been replayed after `candidate` since it was
+                  // created, even when turnId/agentId still match.
+                  if (sameTurn && compatibleProducer && !alreadyMerged && lastMsgIsRawTail) {
                     // Bake any tool calls that started on this bubble since
                     // the last segment landed, onto the SAME bubble we are
                     // about to extend — this is the bubble live's `done`
@@ -4926,10 +5079,25 @@ export const useChatStore = create<ChatStore>((set, get) => {
             logDiagnostic('chatMediaFrameInvalidParts', { sessionId: targetSid })
             withBucket(targetSid, (b) => {
               return produce(b, (draft) => {
-                const lastMsgId = findLastAssistantMessageId(draft.messageOrder, draft.messagesById)
+                // ADR-070 §2.1/F2 (code review): a bare scan would append
+                // this notice to a closed, closedBySteer bubble if this
+                // frame is the first to arrive after a mid-turn steer.
+                // Mint a fresh bubble when there is no eligible open one —
+                // matching the real-attachment branch below — rather than
+                // silently dropping a failure notice the user should see.
+                const lastMsgId = findOpenAssistantMessageId(draft.messageOrder, draft.messagesById)
                 if (lastMsgId) {
                   const msg = draft.messagesById[lastMsgId]
                   msg.content = (msg.content ?? '') + (msg.content ? '\n\n' : '') + '_1 attachment could not be displayed._'
+                } else {
+                  const newMsg: ChatMessage = {
+                    id: generateId(),
+                    role: 'assistant',
+                    content: '_1 attachment could not be displayed._',
+                    timestamp: new Date().toISOString(),
+                  }
+                  draft.messagesById[newMsg.id] = newMsg
+                  draft.messageOrder.push(newMsg.id)
                 }
               }) as Partial<SessionChatState>
             })
@@ -4947,11 +5115,22 @@ export const useChatStore = create<ChatStore>((set, get) => {
           if (attachments.length === 0) {
             withBucket(targetSid, (b) => {
               return produce(b, (draft) => {
-                const lastMsgId = findLastAssistantMessageId(draft.messageOrder, draft.messagesById)
+                // ADR-070 §2.1/F2 — same reasoning as the invalid-parts
+                // branch above.
+                const lastMsgId = findOpenAssistantMessageId(draft.messageOrder, draft.messagesById)
+                const notice = `_${frame.parts.length} attachment${frame.parts.length > 1 ? 's' : ''} could not be displayed._`
                 if (lastMsgId) {
                   const msg = draft.messagesById[lastMsgId]
-                  msg.content = (msg.content ?? '') + (msg.content ? '\n\n' : '') +
-                    `_${frame.parts.length} attachment${frame.parts.length > 1 ? 's' : ''} could not be displayed._`
+                  msg.content = (msg.content ?? '') + (msg.content ? '\n\n' : '') + notice
+                } else {
+                  const newMsg: ChatMessage = {
+                    id: generateId(),
+                    role: 'assistant',
+                    content: notice,
+                    timestamp: new Date().toISOString(),
+                  }
+                  draft.messagesById[newMsg.id] = newMsg
+                  draft.messageOrder.push(newMsg.id)
                 }
               }) as Partial<SessionChatState>
             })
@@ -4959,7 +5138,14 @@ export const useChatStore = create<ChatStore>((set, get) => {
           }
           withBucket(targetSid, (b) => {
             return produce(b, (draft) => {
-              const lastMsgId = findLastAssistantMessageId(draft.messageOrder, draft.messagesById)
+              // ADR-070 §2.1/F2: resolve the candidate through the
+              // eligibility helper so a closed, closedBySteer bubble can
+              // never be considered — the downstream `canAttach` refinement
+              // (isStreaming OR empty-content) is unrelated to steering (it
+              // exists for a freshly-created, not-yet-streaming placeholder)
+              // and is kept as-is, now only ever evaluated against a
+              // candidate that already passed the "still open" gate.
+              const lastMsgId = findOpenAssistantMessageId(draft.messageOrder, draft.messagesById)
               const dedupe = (existing: MediaAttachment[] | undefined, incoming: MediaAttachment[]) => {
                 const seen = new Set((existing ?? []).map((a) => a.url))
                 const fresh = incoming.filter((a) => !seen.has(a.url))

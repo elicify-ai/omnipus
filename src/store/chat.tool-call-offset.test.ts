@@ -331,6 +331,98 @@ describe('chat store — tool-call offset stamping (position-in-model fix)', () 
       expect('A'.length).toBe(1) // pin the literal the assertion below relies on
       expect(tc?.textOffset).toBe('A'.length)
     })
+
+    /**
+     * ADR-070 §2.2: the merge condition above (`sameTurn && compatibleProducer`)
+     * is deliberately blind to whether the two segments are ADJACENT in
+     * messageOrder — it never checked for that before this fix. A mid-turn
+     * steer's persisted user entry, replayed between two same-turn_id
+     * assistant entries, must break the merge; without the raw-tail guard
+     * this test pins, the two entries would wrongly coalesce into one bubble
+     * positioned BEFORE the steer's user message on reload — reproducing the
+     * live ordering bug (ADR-070's whole reason for existing) after a
+     * refresh, even once the live-path fix (§2.1) is applied.
+     */
+    it('a mid-turn-steer user entry replayed BETWEEN two same-turn_id assistant entries prevents them from merging (ADR-070 §2.2)', () => {
+      act(() => {
+        useChatStore.getState().handleFrame({
+          type: 'replay_message',
+          role: 'assistant',
+          content: 'pre-steer reply',
+          id: 'entry-pre',
+          agent_id: 'agent-ray',
+          turn_id: 'turn-steered-1',
+          session_id: SID,
+        })
+      })
+      act(() => {
+        useChatStore.getState().handleFrame({
+          type: 'replay_message',
+          role: 'user',
+          content: 'the follow-up sent mid-turn',
+          id: 'entry-steer',
+          session_id: SID,
+        })
+      })
+      act(() => {
+        useChatStore.getState().handleFrame({
+          type: 'replay_message',
+          role: 'assistant',
+          content: 'post-steer reply',
+          id: 'entry-post',
+          agent_id: 'agent-ray',
+          turn_id: 'turn-steered-1',
+          session_id: SID,
+        })
+      })
+
+      const state = useChatStore.getState()
+      const messages = state.messages
+      // TWO separate assistant bubbles, correctly ordered around the steer —
+      // not one merged bubble sitting before it.
+      expect(messages.map((m) => m.role)).toEqual(['assistant', 'user', 'assistant'])
+      expect(messages[0].content).toBe('pre-steer reply')
+      expect(messages[1].content).toBe('the follow-up sent mid-turn')
+      expect(messages[2].content).toBe('post-steer reply')
+      expect(messages.filter((m) => m.role === 'assistant')).toHaveLength(2)
+    })
+
+    /**
+     * Regression guard, same fix: when NOTHING intervenes between two
+     * same-turn_id assistant entries (the ordinary interleaved-narration
+     * case this describe block's other tests already cover for the
+     * tool-call variant), the raw-tail guard must be a no-op — the candidate
+     * IS still the raw tail, so the merge proceeds exactly as before.
+     */
+    it('two same-turn_id assistant entries with NO intervening entry still merge (regression guard, non-steer case unchanged)', () => {
+      act(() => {
+        useChatStore.getState().handleFrame({
+          type: 'replay_message',
+          role: 'assistant',
+          content: 'first half',
+          id: 'entry-1b',
+          agent_id: 'agent-ray',
+          turn_id: 'turn-unsteered-1',
+          session_id: SID,
+        })
+      })
+      act(() => {
+        useChatStore.getState().handleFrame({
+          type: 'replay_message',
+          role: 'assistant',
+          content: 'second half',
+          id: 'entry-2b',
+          agent_id: 'agent-ray',
+          turn_id: 'turn-unsteered-1',
+          session_id: SID,
+        })
+      })
+
+      const state = useChatStore.getState()
+      const assistantMsgs = state.messages.filter((m) => m.role === 'assistant')
+      expect(assistantMsgs).toHaveLength(1)
+      expect(assistantMsgs[0].content).toBe('first half\n\nsecond half')
+    })
   })
 
   describe('reconnect-guard: missing snapshot', () => {
