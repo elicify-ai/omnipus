@@ -20,7 +20,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor, fireEvent, within } from '@testing-library/react'
+import { act, render, screen, waitFor, fireEvent, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 const addToast = vi.fn()
@@ -928,5 +928,198 @@ describe('ProvidersSection — validation integration (MAJOR-3 / US8)', () => {
     expect(addToast).not.toHaveBeenCalledWith(
       expect.objectContaining({ message: 'undefined' }),
     )
+  })
+})
+
+// ---------------------------------------------------------------------------
+// FR-033 / US-8 — a typed key is never lost on sheet close.
+//
+// Oracle: the spec's "Esc with a dirty key keeps the sheet open", "Discard
+// clears the draft" and "Close behaviour by draft state" (5 rows) scenarios in
+// docs/internal/specs/adr-068-providers-ux-spec.md. The pure matrix is asserted
+// in src/hooks/use-draft-guard.test.ts (TDD row 9); these are the wiring tests
+// that prove ProvidersSection's close handler obeys it, plus the accessibility
+// row "the prompt does not move focus out of the sheet" (3.2.1).
+// ---------------------------------------------------------------------------
+
+describe('ProvidersSection — FR-033 draft-key preservation (US-8)', () => {
+  const CONNECTED_PROVIDER = [
+    {
+      ...CONFIGURED_BASE,
+      id: 'openrouter',
+      name: 'openrouter',
+      display_name: 'OpenRouter',
+      has_models_endpoint: true,
+      models: ['openrouter/auto'],
+    },
+  ]
+
+  beforeEach(() => {
+    vi.mocked(api.fetchProviders).mockResolvedValue(CONNECTED_PROVIDER as never)
+  })
+
+  async function openSheet() {
+    await waitFor(() => screen.getByTestId('configure-btn-openrouter'))
+    fireEvent.click(screen.getByTestId('configure-btn-openrouter'))
+    await waitFor(() => screen.getByTestId('provider-config-sheet'))
+    return screen.getByTestId('api-key-input-openrouter') as HTMLInputElement
+  }
+
+  async function openSheetWithKey(value: string) {
+    renderSection()
+    const input = await openSheet()
+    fireEvent.change(input, { target: { value } })
+    return input
+  }
+
+  function pressEsc() {
+    fireEvent.keyDown(screen.getByTestId('provider-config-sheet'), {
+      key: 'Escape',
+      code: 'Escape',
+    })
+  }
+
+  it('Esc with a dirty key keeps the sheet open and shows the Discard key? prompt', async () => {
+    await openSheetWithKey('sk-test-123')
+
+    pressEsc()
+
+    // Stays open — the sheet and the field are both still mounted.
+    expect(screen.getByTestId('provider-config-sheet')).toBeInTheDocument()
+    const prompt = screen.getByTestId('discard-key-prompt')
+    expect(within(prompt).getByText('Discard key?')).toBeInTheDocument()
+    expect(within(prompt).getByRole('button', { name: 'Discard' })).toBeInTheDocument()
+    expect(within(prompt).getByRole('button', { name: 'Keep editing' })).toBeInTheDocument()
+  })
+
+  it('Keep editing dismisses the prompt and leaves the key value untouched', async () => {
+    const input = await openSheetWithKey('sk-test-123')
+
+    pressEsc()
+    fireEvent.click(screen.getByRole('button', { name: 'Keep editing' }))
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('discard-key-prompt')).not.toBeInTheDocument()
+    })
+    expect(screen.getByTestId('provider-config-sheet')).toBeInTheDocument()
+    expect(input).toHaveValue('sk-test-123')
+  })
+
+  it('the prompt does not move focus out of the sheet (WCAG 3.2.1)', async () => {
+    await openSheetWithKey('sk-test-123')
+
+    pressEsc()
+
+    const sheet = screen.getByTestId('provider-config-sheet')
+    expect(sheet.contains(document.activeElement)).toBe(true)
+  })
+
+  it('Discard closes the sheet and clears the draft — reopening shows an empty field', async () => {
+    await openSheetWithKey('sk-test-123')
+
+    pressEsc()
+    fireEvent.click(screen.getByRole('button', { name: 'Discard' }))
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('provider-config-sheet')).not.toBeInTheDocument()
+    })
+
+    const reopened = await openSheet()
+    expect(reopened).toHaveValue('')
+    expect(screen.queryByTestId('discard-key-prompt')).not.toBeInTheDocument()
+  })
+
+  it('an overlay click with a dirty key keeps the sheet open and prompts', async () => {
+    await openSheetWithKey('sk-test-123')
+
+    // Radix defers a left-button pointer-down-outside to the following click,
+    // so the gesture is both events on the overlay — the element rendered
+    // immediately before the sheet inside the portal.
+    const overlay = screen.getByTestId('provider-config-sheet').previousElementSibling
+    expect(overlay).not.toBeNull()
+    fireEvent.pointerDown(overlay as Element, { button: 0 })
+    fireEvent.click(overlay as Element, { button: 0 })
+
+    await waitFor(() => {
+      expect(screen.getByTestId('discard-key-prompt')).toBeInTheDocument()
+    })
+    expect(screen.getByTestId('provider-config-sheet')).toBeInTheDocument()
+  })
+
+  it('an empty key closes on Esc with no prompt', async () => {
+    renderSection()
+    await openSheet()
+
+    pressEsc()
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('provider-config-sheet')).not.toBeInTheDocument()
+    })
+    expect(screen.queryByTestId('discard-key-prompt')).not.toBeInTheDocument()
+  })
+
+  it('a whitespace-only key counts as empty and closes on Esc with no prompt', async () => {
+    await openSheetWithKey('   ')
+
+    pressEsc()
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('provider-config-sheet')).not.toBeInTheDocument()
+    })
+    expect(screen.queryByTestId('discard-key-prompt')).not.toBeInTheDocument()
+  })
+
+  it('explicit Cancel with a dirty key closes without a prompt and clears the draft', async () => {
+    await openSheetWithKey('sk-test-123')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('provider-config-sheet')).not.toBeInTheDocument()
+    })
+    expect(screen.queryByTestId('discard-key-prompt')).not.toBeInTheDocument()
+
+    const reopened = await openSheet()
+    expect(reopened).toHaveValue('')
+  })
+
+  it('a saved key is clean — Esc closes with no prompt after a successful save', async () => {
+    // A non-blocking outcome keeps the sheet open after the save, which is the
+    // only in-component way to reach the "saved" column of the outline.
+    vi.mocked(api.configureProvider).mockResolvedValue({
+      ...CONNECTED_PROVIDER[0],
+      validation: {
+        outcome: 'no_credit',
+        message: 'Your OpenRouter key works, but the account has no credit.',
+      },
+    } as never)
+    vi.mocked(api.reAuth).mockResolvedValue({
+      verified: true,
+      token: 'reauth_tok',
+      expires_in: 300,
+    } as never)
+
+    await openSheetWithKey('sk-saved-key')
+    fireEvent.click(screen.getByTestId('save-provider-openrouter'))
+    await waitFor(() => screen.getByTestId('reauth-password-input'))
+    fireEvent.change(screen.getByTestId('reauth-password-input'), { target: { value: 'mypassword' } })
+    fireEvent.click(screen.getByTestId('reauth-confirm'))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('save-validation-banner-openrouter')).toBeInTheDocument()
+    })
+
+    // The re-auth dialog was a second Radix dismissable layer on top of the
+    // sheet; the sheet re-attaches its own Escape listener only once Radix's
+    // layer bookkeeping has re-rendered after that unmount. Flush that before
+    // pressing Esc, or the first key press is swallowed by the library, not by
+    // the behaviour under test.
+    await act(async () => { await Promise.resolve() })
+    pressEsc()
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('provider-config-sheet')).not.toBeInTheDocument()
+    })
+    expect(screen.queryByTestId('discard-key-prompt')).not.toBeInTheDocument()
   })
 })

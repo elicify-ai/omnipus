@@ -25,7 +25,7 @@
 //   FR-013 <BrandIcon> + lettermark fallback
 //   FR-014 <BrandDisclaimer> wherever marks appear
 
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Eye,
@@ -59,6 +59,7 @@ import { planLabel, regionLabel } from '@/lib/providerLabels'
 import { catalogEndpointHint, catalogLabel, catalogLogoSlug, catalogVariantTitle } from '@/lib/catalogDisplay'
 import { providerCatalogMode } from '@/lib/agents/providerCatalog'
 import { providersCatalogQueryOptions } from '@/lib/providersCatalogQuery'
+import { DRAFT_DISCARD_PROMPT, draftCloseDecision, type DraftCloseAction } from '@/hooks/use-draft-guard'
 import { ReAuthDialog } from './ReAuthDialog'
 import { ProviderValidationBanner } from '@/components/providers/ProviderValidationBanner'
 import { resolveCatalogEntry } from '@/lib/providerMigration'
@@ -206,6 +207,13 @@ interface ProviderConfigSheetProps {
   setApiKeys: React.Dispatch<React.SetStateAction<Record<string, string>>>
   showKey: Record<string, boolean>
   setShowKey: React.Dispatch<React.SetStateAction<Record<string, boolean>>>
+  /**
+   * Per-draft "what is in the field has already been saved" flag (FR-033,
+   * "saved = clean"). Owned by the parent because the successful-save handler
+   * lives there; reset the moment the operator types again.
+   */
+  keySaved: Record<string, boolean>
+  setKeySaved: React.Dispatch<React.SetStateAction<Record<string, boolean>>>
   draftModels: Record<string, string[]>
   setDraftModels: React.Dispatch<React.SetStateAction<Record<string, string[]>>>
   newModel: Record<string, string>
@@ -226,6 +234,8 @@ function ProviderConfigSheet({
   setApiKeys,
   showKey,
   setShowKey,
+  keySaved,
+  setKeySaved,
   draftModels,
   setDraftModels,
   newModel,
@@ -237,6 +247,16 @@ function ProviderConfigSheet({
   testing,
   handleTest,
 }: ProviderConfigSheetProps) {
+  // FR-033: an accidental close (Esc / overlay) with a dirty key does not
+  // close — it asks. This flag is the inline "Discard key?" prompt's state.
+  // Declared before the `!target` guard so the hook order never changes.
+  const [discardPrompt, setDiscardPrompt] = useState(false)
+
+  // A freshly opened sheet never inherits a stale prompt.
+  useEffect(() => {
+    if (!open) setDiscardPrompt(false)
+  }, [open])
+
   if (!target) return null
 
   // Determine the provider id and entry in both modes.
@@ -261,8 +281,14 @@ function ProviderConfigSheet({
 
   const resolvedSubmitId = resolveSubmitId(target)
 
-  const handleClose = () => {
+  // The one place the sheet actually goes away. Clears every per-draft scrap,
+  // the typed key included — FR-033 only ever reaches here on a decision that
+  // says the draft may be dropped.
+  const closeAndClear = () => {
+    setDiscardPrompt(false)
     onOpenChange(false)
+    setApiKeys((prev) => ({ ...prev, [draftKey]: '' }))
+    setKeySaved((prev) => ({ ...prev, [draftKey]: false }))
     setSaveValidation((prev) => ({ ...prev, [draftKey]: undefined }))
     setDraftModels((prev) => {
       const rest = { ...prev }
@@ -270,6 +296,28 @@ function ProviderConfigSheet({
       return rest
     })
     setNewModel((prev) => ({ ...prev, [draftKey]: '' }))
+  }
+
+  /**
+   * FR-033's close matrix, applied. `cancel` is the operator saying so out
+   * loud (the Cancel button); `esc` / `overlay` are the accidents that used to
+   * destroy a pasted key silently. The rule itself lives in
+   * `@/hooks/use-draft-guard` so the five spec rows are testable on their own.
+   *
+   * The Sheet's own X button routes through `esc`: it is a close gesture, not
+   * the explicit discard that Cancel is, so it gets the same protection.
+   */
+  const handleClose = (action: DraftCloseAction) => {
+    const decision = draftCloseDecision({
+      value: apiKeys[draftKey],
+      saved: !!keySaved[draftKey],
+      action,
+    })
+    if (decision.prompt) {
+      setDiscardPrompt(true)
+      return
+    }
+    closeAndClear()
   }
 
   const canSave = (() => {
@@ -280,8 +328,32 @@ function ProviderConfigSheet({
   })()
 
   return (
-    <Sheet open={open} onOpenChange={(o) => { if (!o) handleClose() }}>
-      <SheetContent side="right" widthClass="w-[90vw] sm:max-w-lg" className="p-0" data-testid="provider-config-sheet">
+    <Sheet open={open} onOpenChange={(o) => { if (!o) handleClose('esc') }}>
+      <SheetContent
+        side="right"
+        widthClass="w-[90vw] sm:max-w-lg"
+        className="p-0"
+        data-testid="provider-config-sheet"
+        // FR-033: preventDefault keeps Radix from unmounting the sheet, so the
+        // prompt renders inside a sheet that never lost focus (WCAG 3.2.1).
+        onEscapeKeyDown={(e) => {
+          e.preventDefault()
+          if (discardPrompt) {
+            setDiscardPrompt(false)
+            return
+          }
+          handleClose('esc')
+        }}
+        // Deliberately onPointerDownOutside, NOT onInteractOutside: the latter
+        // also fires on focus-outside, which is exactly what happens when the
+        // re-auth dialog opens on top of the sheet — the operator never touched
+        // the overlay, so it must not be read as a dismissal.
+        onPointerDownOutside={(e) => {
+          e.preventDefault()
+          if (discardPrompt) return
+          handleClose('overlay')
+        }}
+      >
         <SheetHeader className="px-6 pr-14">
           <div className="flex items-center gap-2 min-w-0">
             {entry && (
@@ -348,9 +420,11 @@ function ProviderConfigSheet({
                 id={`api-key-input-${draftKey}`}
                 type={showKey[draftKey] ? 'text' : 'password'}
                 value={apiKeys[draftKey] ?? ''}
-                onChange={(e) =>
+                onChange={(e) => {
                   setApiKeys((prev) => ({ ...prev, [draftKey]: e.target.value }))
-                }
+                  // Typing makes the field dirty again (FR-033).
+                  setKeySaved((prev) => ({ ...prev, [draftKey]: false }))
+                }}
                 placeholder={hint}
                 className="pr-9 font-mono text-xs"
                 autoComplete="off"
@@ -459,6 +533,47 @@ function ProviderConfigSheet({
             />
           )}
 
+          {/* FR-033 inline discard prompt — rendered inside the sheet so the
+              question never steals focus from it (WCAG 3.2.1). */}
+          {discardPrompt && (
+            <div
+              role="alertdialog"
+              aria-labelledby={`discard-key-title-${draftKey}`}
+              aria-describedby={`discard-key-body-${draftKey}`}
+              data-testid="discard-key-prompt"
+              className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] px-4 py-3 space-y-2"
+            >
+              <p
+                id={`discard-key-title-${draftKey}`}
+                className="text-sm font-medium text-[var(--color-secondary)]"
+              >
+                {DRAFT_DISCARD_PROMPT.title}
+              </p>
+              <p id={`discard-key-body-${draftKey}`} className="text-xs text-[var(--color-muted)]">
+                The key you typed has not been saved yet.
+              </p>
+              <div className="flex justify-end gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  autoFocus
+                  onClick={() => setDiscardPrompt(false)}
+                  data-testid="discard-key-keep"
+                >
+                  {DRAFT_DISCARD_PROMPT.cancel}
+                </Button>
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  onClick={closeAndClear}
+                  data-testid="discard-key-discard"
+                >
+                  {DRAFT_DISCARD_PROMPT.confirm}
+                </Button>
+              </div>
+            </div>
+          )}
+
           {/* Footer actions */}
           <div className="flex justify-between gap-2 pt-2">
             <div className="flex gap-2">
@@ -480,7 +595,8 @@ function ProviderConfigSheet({
               <Button
                 variant="outline"
                 size="sm"
-                onClick={handleClose}
+                onClick={() => handleClose('cancel')}
+                data-testid={`cancel-provider-${providerId}`}
               >
                 Cancel
               </Button>
@@ -532,6 +648,9 @@ export function ProvidersSection() {
 
   const [apiKeys, setApiKeys] = useState<Record<string, string>>({})
   const [showKey, setShowKey] = useState<Record<string, boolean>>({})
+  // FR-033 "saved = clean": true once the draft under this key has been saved,
+  // cleared the moment the operator types again. Never holds the key itself.
+  const [keySaved, setKeySaved] = useState<Record<string, boolean>>({})
   const [testing, setTesting] = useState<Record<string, boolean>>({})
   const [saveValidation, setSaveValidation] = useState<Record<string, ProviderValidation | undefined>>({})
   const [testValidation, setTestValidation] = useState<Record<string, ProviderValidation | undefined>>({})
@@ -585,6 +704,9 @@ export function ProvidersSection() {
       }
       setPending(null)
       setApiKeys((prev) => ({ ...prev, [draftKey]: '' }))
+      // The draft is now on the server: closing the sheet loses nothing
+      // (FR-033, "saved = clean").
+      setKeySaved((prev) => ({ ...prev, [draftKey]: true }))
     },
     onError: (err: Error) => {
       addToast({ message: getErrorMessage(err, 'Provider save failed'), variant: 'error' })
@@ -807,6 +929,8 @@ export function ProvidersSection() {
         setApiKeys={setApiKeys}
         showKey={showKey}
         setShowKey={setShowKey}
+        keySaved={keySaved}
+        setKeySaved={setKeySaved}
         draftModels={draftModels}
         setDraftModels={setDraftModels}
         newModel={newModel}
