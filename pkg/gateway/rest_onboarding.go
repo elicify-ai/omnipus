@@ -245,6 +245,13 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 	// never persists a config that fails the post-save rewire and flips to
 	// degraded. The message names the id the caller sent and offers NO
 	// canonical alternative (ADR-067 FR-015, SC-010).
+	//
+	// Membership only, deliberately: FR-019's tier gate belongs to the two
+	// sites the spec maps it to — PUT /providers/{id} (T067-10) and the
+	// onboarding PROBE below (T067-12). This wizard step must not become the
+	// third, because it would also make the "no endpoint resolved" skip
+	// branch below unreachable — every supported catalog row carries a URL,
+	// so the only ids that reach it are the unsupported ones.
 	if !providers.IsCatalogProvider(provider.Id) {
 		jsonErr(w, http.StatusBadRequest, fmt.Sprintf("unknown provider %q", provider.Id))
 		return
@@ -400,33 +407,21 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 	}
 
 	if probeSkipReason == "" {
-		// D6: fetch the live model catalog first, exactly as
-		// HandleOnboardingProbeProvider does (see its Catalog: models call
-		// below), so ValidateKey's probe-model pick can prefer a candidate
-		// that is actually present in the provider's current catalog. The
-		// probe model itself now comes from the registry catalog
-		// (catalogProbeModels — ADR-067 FR-022: the first active,
-		// tool-calling text model in document order), not a hand-maintained
-		// slug table, but a live fetch can still surface a model that is
-		// present today and simply listed later in the catalog's document
-		// order — so skipping this fetch would still risk a false
-		// Unreachable or a wrong-model 400 on exactly the providers this fix
-		// targets. A fetch failure here is not fatal: ValidateKey falls back
-		// to the catalog's own candidate list exactly as it did before this
-		// fetch existed.
-		catalog, catalogErr := providers.FetchModels(r.Context(), probeBase, provider.ApiKey, a.ssrfChk())
-		if catalogErr != nil {
-			slog.Debug("onboarding: catalog fetch before key validation failed; falling back to rules-table probe model",
-				"provider", provider.Id, "error", catalogErr)
-			catalog = nil
-		}
+		// ADR-067 FR-022: NO `GET /models` pre-fetch. provider.Id is gated
+		// above to a catalog id, so ValidateKey resolves its probe candidates
+		// straight from the registry catalog (the first active, tool-calling
+		// text models in document order) and falls through to the next one on
+		// a model_not_found answer, at most three times. The live fetch this
+		// used to make was a round trip whose answer the catalog already
+		// carries — and on a provider whose /models is public it returned a
+		// reassuring 200 that said nothing about the key.
+		//
 		// SEC-16: result.RawDetail is server-debug-only and never leaves this process.
 		result := providers.ValidateKey(r.Context(), providers.ValidateInput{
 			ProviderID:   provider.Id,
 			ProviderName: providerDisplayName,
 			BaseURL:      probeBase,
 			APIKey:       provider.ApiKey,
-			Catalog:      catalog,
 		}, a.ssrfChk())
 		slog.Debug("onboarding: provider key validation result",
 			"provider", provider.Id, "outcome", result.Outcome, "detail", result.RawDetail)
@@ -841,9 +836,8 @@ func (a *restAPI) HandleOnboardingProbeProvider(w http.ResponseWriter, r *http.R
 	}
 	// ADR-067 FR-023 / ADR-068 FR-036: ONE ProbeProviderRequest shape. Only the
 	// api_key path is wired here; the sign_in path (CLI saved login / Copilot
-	// session) lands with ADR-068's provider constructors (B3), and catalog
-	// validation of `id` + the custom-row (api_base + protocol) rule land with
-	// ADR-067 T067-12. Until then: auth=sign_in → 400, and api_key is required.
+	// session) lands with ADR-068's provider constructors (B3). Until then:
+	// auth=sign_in → 400, and api_key is required.
 	if body.Auth != gen.ProbeProviderRequestAuthApiKey {
 		jsonErr(w, http.StatusBadRequest, "auth sign_in is not supported yet; use auth api_key")
 		return
@@ -853,20 +847,41 @@ func (a *restAPI) HandleOnboardingProbeProvider(w http.ResponseWriter, r *http.R
 		apiKey = *body.ApiKey
 	}
 	if apiKey == "" {
-		jsonErr(w, http.StatusBadRequest, "api_key is required")
+		jsonErrField(w, http.StatusBadRequest, "api_key is required", "api_key")
 		return
 	}
 
-	baseURL := ""
+	reqAPIBase := ""
 	if body.ApiBase != nil {
-		baseURL = *body.ApiBase
+		reqAPIBase = strings.TrimSpace(*body.ApiBase)
 	}
+	reqProtocol := ""
+	if body.Protocol != nil {
+		reqProtocol = string(*body.Protocol)
+	}
+	// ADR-067 FR-019/FR-023/FR-035 (T067-12): the SAME admission gate
+	// PUT /providers/{id} and the CLI wizard apply, against the catalog this
+	// process serves. `id` is a free string on the wire (there is no enum any
+	// more), so this is the only thing standing between a typo'd id and a
+	// probe fired at a URL nobody asked for.
+	if _, admitErr := providers.Admit(body.Id, reqAPIBase, reqProtocol); admitErr != nil {
+		field := "id"
+		if errors.Is(admitErr, providers.ErrUnknownProvider) && reqAPIBase != "" {
+			// The id is unknown AND a base was supplied: what is missing is
+			// the protocol, so point the SPA at that field (mirrors PUT).
+			field = "protocol"
+		}
+		jsonErrField(w, http.StatusBadRequest, admitErr.Error(), field)
+		return
+	}
+
+	baseURL := reqAPIBase
 	if baseURL == "" {
 		baseURL = providers.APIBaseFor(body.Id)
 	}
 	if baseURL == "" {
-		// Unknown provider and caller didn't supply an endpoint — the probe
-		// cannot proceed without one.
+		// Admission passed, so this is a catalog row whose document carries no
+		// URL at all — nothing to probe against.
 		jsonErr(w, http.StatusBadRequest,
 			fmt.Sprintf("unknown provider %q and no endpoint override supplied", body.Id))
 		return
@@ -887,21 +902,21 @@ func (a *restAPI) HandleOnboardingProbeProvider(w http.ResponseWriter, r *http.R
 		}
 	}
 
-	// Fetch the model catalog (behavior-preserving: same as the former fetchUpstreamModels call).
-	models, fetchErr := providers.FetchModels(r.Context(), baseURL, apiKey, a.ssrfChk())
-	if fetchErr != nil {
-		// Upstream catalog fetch failure is a 200 with success=false — symmetrical
-		// with POST /providers/{id}/test, so the SPA's error-handling branch
-		// is identical for both flows.
-		errMsg := fetchErr.Error()
-		jsonOK(w, gen.ProbeProviderResponse{Success: false, Error: &errMsg})
-		return
+	// The model list comes from the REGISTRY CATALOG, offline, with zero
+	// outbound requests (ADR-067 FR-020/FR-022, US-9.AC1). The `GET /models`
+	// pre-fetch that used to run here told us nothing the catalog does not
+	// already know, cost a round trip on every keystroke-driven probe, and —
+	// on providers whose /models is public, like OpenRouter — reported a 200
+	// that proved nothing about the key. An operator-named custom row has no
+	// catalog models: it lists none, and the operator types their own slug.
+	var models []string
+	if row, known := providers.CatalogProvider(body.Id); known {
+		models = catalogModelIDs(row)
 	}
 
-	// An empty catalog is not a hard failure (the key is still validated below via a
-	// default chat model), but it IS observable: the operator gets no model list to
-	// pick from. Surface it as a WARN so an empty-catalog provider doesn't look like a
-	// silent success.
+	// An empty list is not a hard failure (the key is still validated below),
+	// but it IS observable: the operator gets nothing to pick from. Surface it
+	// as a WARN so it does not look like a silent success.
 	if len(models) == 0 {
 		slog.Warn("rest: probe-provider: provider returned no models",
 			"provider", body.Id)

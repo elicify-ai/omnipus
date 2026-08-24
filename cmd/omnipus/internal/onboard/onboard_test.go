@@ -557,6 +557,21 @@ func TestInputFromFlags_Validation(t *testing.T) {
 			want: `unknown provider "not-real"`,
 		},
 		{
+			// ADR-067 FR-019 / T067-12: the wizard applies the SAME admission
+			// gate as the gateway, against the EMBEDDED snapshot (A-21) — a
+			// cloud-IAM row is refused with the catalog's own reason, rather
+			// than written into a config whose first turn cannot construct a
+			// provider at all.
+			name: "unsupported provider carries the catalog's reason",
+			f: inputFlags{
+				providerID: "amazon-bedrock",
+				apiKey:     "k",
+				username:   "u",
+				password:   "longenoughpw",
+			},
+			want: "cloud-iam",
+		},
+		{
 			name: "api-key + api-key-stdin both set",
 			f: inputFlags{
 				providerID:  "openai",

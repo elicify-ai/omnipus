@@ -291,8 +291,15 @@ func inputFromFlags(stdin io.Reader, f inputFlags) (Input, error) {
 	if f.providerID == "" {
 		return in, errors.New("--provider is required in --non-interactive mode")
 	}
-	if !providers.IsCatalogProvider(f.providerID) {
-		return in, fmt.Errorf("unknown provider %q", f.providerID)
+	// ADR-067 FR-019/FR-035, A-21: the SAME admission gate the gateway's PUT
+	// and onboarding probe apply, resolved against the EMBEDDED catalog
+	// snapshot (no network, no gateway). The wizard has no --api-base /
+	// --protocol pair, so a custom row cannot be created here and an id the
+	// snapshot does not carry is simply unknown; a `tier: unsupported` row is
+	// refused with the catalog's own reason instead of being written into a
+	// config whose very first turn cannot construct a provider.
+	if _, admitErr := providers.Admit(f.providerID, "", ""); admitErr != nil {
+		return in, admitErr
 	}
 	in.ProviderID = f.providerID
 
@@ -541,7 +548,7 @@ func validateAndResolveKey(ctx context.Context, in Input, wio wizardIO, baseURL 
 // The provider step now presents a numbered menu (FR-010/US-8): the user types
 // a digit (1–N); an out-of-range entry re-prompts without crashing; choosing
 // "Other" prompts for a raw provider id validated against the embedded
-// catalog snapshot via providers.IsCatalogProvider (ADR-067 A-21).
+// catalog snapshot via providers.Admit (ADR-067 A-21).
 func prompt(wio wizardIO) (Input, error) {
 	reader := bufio.NewReader(wio.stdin)
 	in := Input{}
@@ -601,8 +608,8 @@ func prompt(wio wizardIO) (Input, error) {
 
 // promptProviderMenu prints the numbered menu and reads the user's selection,
 // re-prompting on out-of-range or blank input. Returns the selected protocol id.
-// Selecting "Other" prompts for a raw provider id and validates it against
-// the embedded catalog snapshot (providers.IsCatalogProvider).
+// Selecting "Other" prompts for a raw provider id and admits it against
+// the embedded catalog snapshot (providers.Admit).
 func promptProviderMenu(out io.Writer, reader *bufio.Reader) (string, error) {
 	for {
 		fmt.Fprintln(out, "Select your LLM provider:")
@@ -640,8 +647,9 @@ func promptProviderMenu(out io.Writer, reader *bufio.Reader) (string, error) {
 			// lowercasing here would quietly "fix" a typo into a different
 			// provider than the one the operator typed.
 			rawID = strings.TrimSpace(rawID)
-			if !providers.IsCatalogProvider(rawID) {
-				return "", fmt.Errorf("unknown provider %q", rawID)
+			// Same admission gate as --non-interactive (ADR-067 FR-019/FR-035).
+			if _, admitErr := providers.Admit(rawID, "", ""); admitErr != nil {
+				return "", admitErr
 			}
 			return rawID, nil
 		}
