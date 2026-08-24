@@ -2138,8 +2138,31 @@ type ephemeralSessionStore struct {
 	history []providers.Message
 	// projection / hydrated: in-memory projection state (ADR-066 FR-019);
 	// lives and dies with the sub-turn, never persisted.
+	//
+	// projection is keyed ABSOLUTELY — by (tool_call_id, dropped + relative
+	// index) — while every caller addresses lines RELATIVELY, by the index
+	// ReadArchive reports today. See dropped.
 	projection memory.ProjectionSet
 	hydrated   bool
+	// dropped counts the messages removed from the FRONT of history, by
+	// TruncateHistory and by the maxEphemeralHistorySize ring.
+	//
+	// memory.ProjectionKey.ArchiveLine is documented as "the zero-based
+	// archive line", and every producer derives it from a ReadArchive index
+	// (tool_result_admit.go: line = len(read) - 1). memory.JSONLStore honours
+	// the implied invariant — its archive is append-only and TruncateHistory
+	// only advances Skip, so an index never moves. This store truncates from
+	// the front, which shifts every surviving message's index down while the
+	// recorded keys stay put: after one trim (or one ring wrap) every capped
+	// or emptied sub-turn result silently re-inflated to its FULL content on
+	// the next assembly — so the retry after a provider context overflow sent
+	// MORE than the attempt that had just overflowed.
+	//
+	// dropped restores the invariant without changing the interface: writes
+	// are translated to absolute (+dropped) and reads back to relative
+	// (−dropped), so a key addresses the same MESSAGE for as long as that
+	// message is in the ring.
+	dropped int
 }
 
 // newEphemeralSession returns a session.SessionStore backed by an in-memory
@@ -2205,6 +2228,10 @@ func (e *ephemeralSessionStore) SetHistory(_ string, history []providers.Message
 	defer e.mu.Unlock()
 	e.history = make([]providers.Message, len(history))
 	copy(e.history, history)
+	// A wholesale replacement invalidates every recorded line, exactly as
+	// memory.JSONLStore.SetHistory clears meta.Projection.
+	e.projection = nil
+	e.dropped = 0
 	e.truncateLocked()
 }
 
@@ -2212,6 +2239,7 @@ func (e *ephemeralSessionStore) TruncateHistory(_ string, keepLast int) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if keepLast <= 0 {
+		e.dropped += len(e.history)
 		e.history = nil
 		return
 	}
@@ -2219,6 +2247,7 @@ func (e *ephemeralSessionStore) TruncateHistory(_ string, keepLast int) {
 	if keepLast >= len(e.history) {
 		return
 	}
+	e.dropped += len(e.history) - keepLast
 	e.history = e.history[len(e.history)-keepLast:]
 }
 
@@ -2252,8 +2281,9 @@ func (e *ephemeralSessionStore) RollbackAppended(_ string, targetArchiveLen, _ i
 	if targetArchiveLen < len(e.history) {
 		e.history = e.history[:targetArchiveLen]
 	}
+	// targetArchiveLen is a RELATIVE length; the keys are absolute.
 	for k := range e.projection {
-		if k.ArchiveLine >= targetArchiveLen {
+		if k.ArchiveLine-e.dropped >= targetArchiveLen {
 			delete(e.projection, k)
 		}
 	}
@@ -2261,20 +2291,34 @@ func (e *ephemeralSessionStore) RollbackAppended(_ string, targetArchiveLen, _ i
 
 // Projection implements session.SessionStore — the in-memory projection
 // state of this sub-turn (never persisted; FR-019 store half).
+// The returned keys are RELATIVE to the current ring contents — the same
+// index space ReadArchive reports and archiveLineResolver resolves into —
+// so a key keeps addressing its own message across front-truncations. An
+// entry whose message has been dropped out of the ring is omitted.
 func (e *ephemeralSessionStore) Projection(_ string) memory.ProjectionMeta {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return memory.ProjectionMeta{Entries: e.projection.Clone(), Hydrated: e.hydrated}
+	out := make(memory.ProjectionSet, len(e.projection))
+	for k, v := range e.projection {
+		rel := k.ArchiveLine - e.dropped
+		if rel < 0 {
+			continue // the message is no longer in the ring
+		}
+		out[memory.ProjectionKey{ToolCallID: k.ToolCallID, ArchiveLine: rel}] = v
+	}
+	return memory.ProjectionMeta{Entries: out, Hydrated: e.hydrated}
 }
 
-// SetProjectionState implements session.SessionStore (in-memory).
+// SetProjectionState implements session.SessionStore (in-memory). The caller
+// addresses the line relatively (len(ReadArchive)-1); it is stored absolutely
+// so a later front-truncation cannot re-point it at a different message.
 func (e *ephemeralSessionStore) SetProjectionState(_ string, pk memory.ProjectionKey, state memory.ProjectionState) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.projection == nil {
 		e.projection = memory.ProjectionSet{}
 	}
-	e.projection[pk] = state
+	e.projection[memory.ProjectionKey{ToolCallID: pk.ToolCallID, ArchiveLine: pk.ArchiveLine + e.dropped}] = state
 }
 
 // MarkHydrated implements session.SessionStore (in-memory).
@@ -2286,6 +2330,7 @@ func (e *ephemeralSessionStore) MarkHydrated(_ string) {
 
 func (e *ephemeralSessionStore) truncateLocked() {
 	if len(e.history) > maxEphemeralHistorySize {
+		e.dropped += len(e.history) - maxEphemeralHistorySize
 		e.history = e.history[len(e.history)-maxEphemeralHistorySize:]
 	}
 }

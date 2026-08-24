@@ -161,8 +161,9 @@ func TestChokePoint_EncodedLineBound(t *testing.T) {
 	content := strings.Repeat("\n", 8_000_000)
 	msg := providers.Message{Role: "tool", ToolCallID: "call_big", Content: content}
 
-	bounded, origRunes, cut := boundArchivedMessage(msg)
+	bounded, origRunes, cut, overflow := boundArchivedMessage(msg)
 	require.True(t, cut, "16 MB encoded line must be cut")
+	require.False(t, overflow, "content alone can always be shrunk to fit")
 	assert.Equal(t, 8_000_000, origRunes)
 	encoded, err := json.Marshal(memory.ArchivedMessage{Message: bounded, TS: 1_700_000_000_000})
 	require.NoError(t, err)
@@ -173,8 +174,9 @@ func TestChokePoint_EncodedLineBound(t *testing.T) {
 
 	t.Run("a line under the bound is untouched", func(t *testing.T) {
 		small := providers.Message{Role: "tool", ToolCallID: "c", Content: strings.Repeat("a", 1_000_000)}
-		got, _, cut := boundArchivedMessage(small)
+		got, _, cut, overflow := boundArchivedMessage(small)
 		assert.False(t, cut)
+		assert.False(t, overflow)
 		assert.Equal(t, small, got)
 	})
 
@@ -405,4 +407,111 @@ func seedAssistantCall(t *testing.T, store session.SessionStore, key, callID, to
 		calls = append(calls, providers.ToolCall{ID: id, Type: "function", Name: tool, Function: &providers.FunctionCall{Name: tool, Arguments: "{}"}})
 	}
 	store.AddFullMessage(key, providers.Message{Role: "assistant", ToolCalls: calls})
+}
+
+// TestChokePoint_MediaOverflowIsBounded pins the Media half of FR-012.
+//
+// The regression: the shrink loop only ever touched msg.Content, but
+// encodedArchiveLineLen measures Media too — attachToolResultMedia inlines
+// base64 data URLs bounded only by max_media_size (20 MB by default). With
+// the overflow in Media the loop drove `keep` to 0 and then made no further
+// progress: it destroyed the ENTIRE textual result (the model saw "\n" too,
+// since contentForLLM is the archived content) and still returned
+// "cut: true" for a line megabytes over the store's own 10 MB maxLineSize.
+// Appending it broke every later read of that session with bufio.Scanner
+// ErrTooLong, and GetHistory answered with an empty slice — the session's
+// whole history silently and permanently gone.
+func TestChokePoint_MediaOverflowIsBounded(t *testing.T) {
+	// One ~10.7 MB base64 data URL, the shape attachToolResultMedia produces
+	// for an ~8 MB screenshot.
+	big := "data:image/png;base64," + strings.Repeat("A", 10_700_000)
+	msg := providers.Message{
+		Role:       "tool",
+		ToolCallID: "call_shot",
+		Content:    "screenshot of the login page, 1280x720",
+		Media:      []string{big},
+	}
+
+	bounded, origRunes, cut, overflow := boundArchivedMessage(msg)
+	require.True(t, cut, "the line is over the bound and must be reported as cut")
+	assert.False(t, overflow,
+		"dropping the media must bring the line under the bound — a still-over line would break the session")
+	assert.Equal(t, utf8.RuneCountInString(msg.Content), origRunes)
+
+	encoded, err := json.Marshal(memory.ArchivedMessage{Message: bounded, TS: 1_700_000_000_000})
+	require.NoError(t, err)
+	assert.LessOrEqual(t, len(encoded), memory.EncodedLineBound,
+		"the encoded archive line must fit the bound once media is accounted for")
+	assert.Empty(t, bounded.Media, "the oversize media entry is dropped, largest first")
+	assert.Equal(t, msg.Content, bounded.Content,
+		"the textual result must survive: the overflow was in Media, and destroying the text "+
+			"neither fixed the line nor left the model anything to work with")
+
+	t.Run("the smallest media entries survive when dropping the largest is enough", func(t *testing.T) {
+		small := "data:image/png;base64," + strings.Repeat("B", 1_000)
+		multi := providers.Message{
+			Role:       "tool",
+			ToolCallID: "call_multi",
+			Content:    "two screenshots",
+			Media:      []string{small, big, small},
+		}
+		got, _, cut, overflow := boundArchivedMessage(multi)
+		require.True(t, cut)
+		assert.False(t, overflow)
+		assert.Equal(t, []string{small, small}, got.Media, "only the oversize entry goes")
+		assert.Equal(t, multi.Content, got.Content)
+	})
+}
+
+// TestChokePoint_FailureSurfaceCapSurvivesReload pins FR-019 / US-6.AC3 /
+// B-12 / B-22 for the failure surface: the bytes assembled on reload for a
+// capped result must be IDENTICAL to the bytes the model saw live.
+//
+// The regression: memory.ProjectionState recorded only "capped", never which
+// D4 surface produced the cut, and projectMessages hard-coded isError=false.
+// A failed MCP call cut to builtin_failure_cap (10,000) live therefore
+// re-projected at the MCP success cap (62,500) on reload — 6.25x the bytes
+// the model was given, on the surface deliberately capped tightest.
+func TestChokePoint_FailureSurfaceCapSurvivesReload(t *testing.T) {
+	al, ts, store := newChokePointTurn(t, 400_000)
+	const (
+		tool   = "mcp_github_search"
+		callID = "call_fail"
+	)
+	seedAssistantCall(t, store, ts.sessionKey, callID, tool, 1)
+
+	// A 200,000-char error payload: over both the failure cap (10,000) and
+	// the MCP success cap (62,500), so the two cuts are distinguishable.
+	body := strings.Repeat("lorem ipsum ", 200_000/len("lorem ipsum "))
+	admitted := al.admitToolResult(ts, toolResultAdmission{
+		Tool: tool, ToolCallID: callID, Content: body, ParallelN: 1, IsError: true,
+	})
+	require.True(t, admitted.Capped, "precondition: the failure payload is over its cap")
+	require.Equal(t, config.DefaultBuiltinFailureCap, admitted.EffectiveCap,
+		"a failed call is cut at the builtin-failure cap, not the MCP success cap")
+	liveBytes := admitted.Message.Content
+	require.LessOrEqual(t, runes(liveBytes), config.DefaultBuiltinFailureCap)
+
+	// The recorded state must say WHICH cap produced those bytes.
+	set := store.Projection(ts.sessionKey).Entries
+	key := memory.ProjectionKey{ToolCallID: callID, ArchiveLine: admitted.ArchiveLine}
+	require.Equal(t, memory.ProjectionCappedFailure, set[key],
+		"the failure surface must be part of the persisted state — the window carries no IsError")
+
+	// Reload: assemble from the archive through the ONE projection function.
+	archive, err := store.ReadArchive(context.Background(), ts.sessionKey)
+	require.NoError(t, err)
+	reloadMsgs := make([]providers.Message, len(archive))
+	for i := range archive {
+		reloadMsgs[i] = archive[i].Message
+	}
+	lineOf := archiveLineResolver(archive, reloadMsgs)
+	projected := projectMessages(reloadMsgs, lineOf, set, projectionContext{
+		policy:  capPolicyFor(config.DefaultContextSettings(), agentContextBudget(ts.agent)),
+		archive: archive,
+	})
+
+	assert.Equal(t, liveBytes, projected[admitted.ArchiveLine].Content,
+		"B-22: the reloaded bytes must be byte-identical to what the model saw live — "+
+			"re-cutting a failure at the success cap shows 6.25x more content")
 }

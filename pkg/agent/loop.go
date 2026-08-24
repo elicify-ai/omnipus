@@ -10914,6 +10914,12 @@ turnLoop:
 				}
 			}
 			if admitted.Capped {
+				// Always the plain "capped": the SPA-facing content_state
+				// enum (ToolCall.yaml) is full | capped | emptied and does
+				// NOT distinguish the D4 surface. The internal state also
+				// records which cap produced the live bytes
+				// (memory.ProjectionCappedFailure) — that value must never
+				// be written here, it is not on the wire.
 				tcRecord.ContentState = string(memory.ProjectionCapped)
 			}
 			ts.appendToolCallTranscript(tcRecord)

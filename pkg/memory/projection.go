@@ -18,8 +18,23 @@ type ProjectionState string
 
 const (
 	// ProjectionCapped — the archive holds the full result; the window
-	// carries the D4 head-and-tail capped form plus the cap mark.
+	// carries the D4 head-and-tail capped form plus the cap mark, cut at
+	// the SUCCESS cap for the owning tool's surface.
 	ProjectionCapped ProjectionState = "capped"
+	// ProjectionCappedFailure — as ProjectionCapped, but the live cut used
+	// the D4 "builtin-failure" surface because the result was a failed,
+	// denied or skipped call.
+	//
+	// The surface has to be part of the recorded state: the window carries
+	// no IsError, so a reload that re-derived the surface from the tool name
+	// alone re-cut a failure at the SUCCESS cap (64,000 — or 62,500 for an
+	// `mcp_*` name) when the model had actually been given 10,000. That is a
+	// direct violation of FR-019 / B-12 / B-22, which require the bytes
+	// assembled on reload to be identical to the bytes the model saw live.
+	// Entries written before this state existed read back as
+	// ProjectionCapped, i.e. the old success-cap behaviour, which is the
+	// safe direction (still bounded, still marked).
+	ProjectionCappedFailure ProjectionState = "capped_failure"
 	// ProjectionEmptied — the archive holds the full result; the window
 	// carries only the D5 recall mark.
 	ProjectionEmptied ProjectionState = "emptied"
@@ -64,7 +79,7 @@ type ProjectionMeta struct {
 
 // validProjectionState reports whether s is one of the two known states.
 func validProjectionState(s ProjectionState) bool {
-	return s == ProjectionCapped || s == ProjectionEmptied
+	return s == ProjectionCapped || s == ProjectionCappedFailure || s == ProjectionEmptied
 }
 
 // validateProjectionWrite checks a SetProjectionState request.
@@ -141,9 +156,9 @@ func pruneProjectionBelow(p ProjectionSet, skip int) ProjectionSet {
 //
 //   - every entry (current or turn-start) with archive_line ≥ targetLines
 //     is dropped — those lines no longer exist;
-//   - current `capped` entries below targetLines are kept — capping
-//     happens at append time, so a capped pre-turn line was capped at turn
-//     start too;
+//   - current `capped` / `capped_failure` entries below targetLines are
+//     kept — capping happens at append time, so a capped pre-turn line was
+//     capped at turn start too;
 //   - turn-start entries below targetLines are restored verbatim and win
 //     over the current state, undoing every mid-turn empty of a pre-turn
 //     line;
@@ -155,7 +170,7 @@ func pruneProjectionBelow(p ProjectionSet, skip int) ProjectionSet {
 func rollbackProjection(current, turnStart ProjectionSet, targetLines int) ProjectionSet {
 	out := make(ProjectionSet, len(turnStart))
 	for k, v := range current {
-		if k.ArchiveLine < targetLines && v == ProjectionCapped {
+		if k.ArchiveLine < targetLines && (v == ProjectionCapped || v == ProjectionCappedFailure) {
 			out[k] = v
 		}
 	}

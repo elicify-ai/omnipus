@@ -209,15 +209,55 @@ func cutHeadAndTail(content string, capChars int, mark string) string {
 // read, so this is checked post-filter, pre-append, on the exact bytes the
 // store writes. Content that does not fit is cut head-and-tail — a plain
 // join, no mark: the mark the window carries states the archived size and
-// the WARN the caller logs states the original. Returns the (possibly cut)
-// message, the original rune count and whether a cut happened.
-func boundArchivedMessage(msg providers.Message) (providers.Message, int, bool) {
-	origRunes := utf8.RuneCountInString(msg.Content)
+// the WARN the caller logs states the original.
+//
+// Media counts too. attachToolResultMedia inlines base64 data URLs into
+// msg.Media (bounded only by max_media_size, 20 MB by default) and
+// encodedArchiveLineLen measures them — but the shrink loop only ever
+// touched Content, so a single large screenshot made the loop unable to make
+// progress: once `keep` hit 0 every further iteration was a no-op and the
+// function returned "cut: true" for a line that was still megabytes over the
+// STORE's own maxLineSize. Appending it broke every later read of that
+// session (bufio.Scanner ErrTooLong), and GetHistory then returned an empty
+// slice — the session's whole history silently gone, permanently. So once
+// Content is exhausted the media entries are dropped, largest first.
+//
+// Returns the (possibly cut) message, the original rune count, whether a cut
+// happened, and whether the line STILL does not fit — which the caller must
+// treat as "do not archive this".
+func boundArchivedMessage(msg providers.Message) (out providers.Message, origRunes int, cut, overflow bool) {
+	origRunes = utf8.RuneCountInString(msg.Content)
 	target := memory.EncodedLineBound - archivedLineSafetyBytes
 	encodedLen := encodedArchiveLineLen(msg)
 	if encodedLen <= target {
-		return msg, origRunes, false
+		return msg, origRunes, false, false
 	}
+	// Media first, and ONLY when it is the term that does not fit: measure the
+	// line with the content removed. If even that is over the bound, no amount
+	// of content shrinking can help, so entries go largest-first. If it fits,
+	// the media stays and the content shrink below does the work.
+	probe := msg
+	probe.Content = ""
+	for encodedArchiveLineLen(probe) > target && len(probe.Media) > 0 {
+		largest := 0
+		for i := range probe.Media {
+			if len(probe.Media[i]) > len(probe.Media[largest]) {
+				largest = i
+			}
+		}
+		trimmed := make([]string, 0, len(probe.Media)-1)
+		trimmed = append(trimmed, probe.Media[:largest]...)
+		trimmed = append(trimmed, probe.Media[largest+1:]...)
+		probe.Media = trimmed
+	}
+	if len(probe.Media) != len(msg.Media) {
+		msg.Media = probe.Media
+		encodedLen = encodedArchiveLineLen(msg)
+		if encodedLen <= target {
+			return msg, origRunes, true, false
+		}
+	}
+
 	r := []rune(msg.Content)
 	keep := len(r)
 	for i := 0; i < 24 && encodedLen > target; i++ {
@@ -237,7 +277,7 @@ func boundArchivedMessage(msg providers.Message) (providers.Message, int, bool) 
 		msg.Content = string(r[:head]) + "\n" + string(r[len(r)-tail:])
 		encodedLen = encodedArchiveLineLen(msg)
 	}
-	return msg, origRunes, true
+	return msg, origRunes, true, encodedLen > target
 }
 
 // encodedArchiveLineLen measures the line exactly as memory.JSONLStore writes
@@ -323,10 +363,37 @@ func (al *AgentLoop) admitToolResult(ts *turnState, adm toolResultAdmission) adm
 	capChars := policy.effectiveCap(surface, parallelN)
 
 	archived := toolResultMessage(adm.ToolCallID, content, adm.Media)
-	archived, origRunes, lineCut := boundArchivedMessage(archived)
+	archived, origRunes, lineCut, lineOverflow := boundArchivedMessage(archived)
 	sessionKey := ""
 	if ts != nil {
 		sessionKey = ts.sessionKey
+	}
+	if lineOverflow {
+		// Unreachable once Content and Media have both been exhausted, but
+		// a line that STILL does not fit must never be appended: a line over
+		// the store's scanner limit makes every later read of the session
+		// fail and GetHistory answer with an empty slice — the whole history
+		// gone from the agent's point of view, permanently. Refuse the
+		// archive and tell the model what happened instead.
+		logger.ErrorCF("agent", "tool result cannot be archived within the encoded line bound; not archived",
+			map[string]any{
+				"tool":           adm.Tool,
+				"tool_call_id":   adm.ToolCallID,
+				"session_key":    sessionKey,
+				"original_chars": origRunes,
+				"encoded_len":    encodedArchiveLineLen(archived),
+				"line_bound":     memory.EncodedLineBound,
+			})
+		notice := toolResultMessage(adm.ToolCallID,
+			"[tool result discarded: it could not be stored within the archive line bound "+
+				"and was dropped to keep this session readable]", nil)
+		return admittedToolResult{
+			Message:       notice,
+			Archived:      notice,
+			ArchiveLine:   -1,
+			OriginalRunes: origRunes,
+			EffectiveCap:  capChars,
+		}
 	}
 	if lineCut {
 		logger.WarnCF("agent", "tool result cut to the encoded archive-line bound (ADR-066 FR-012)",
@@ -379,8 +446,15 @@ func (al *AgentLoop) admitToolResult(ts *turnState, adm toolResultAdmission) adm
 	if overCap {
 		window.Content = cutHeadAndTail(archived.Content, capChars, capMarkOrEmpty(adm.Tool, adm.ToolCallID, line, archived.Content, archive))
 		if persist && line >= 0 {
+			// Record WHICH surface produced the live cut: the window carries
+			// no IsError, so without this the reload re-cuts a failure at
+			// the success cap (FR-019 / B-22 byte identity).
+			cappedState := memory.ProjectionCapped
+			if adm.IsError {
+				cappedState = memory.ProjectionCappedFailure
+			}
 			ts.agent.Sessions.SetProjectionState(ts.sessionKey,
-				memory.ProjectionKey{ToolCallID: adm.ToolCallID, ArchiveLine: line}, memory.ProjectionCapped)
+				memory.ProjectionKey{ToolCallID: adm.ToolCallID, ArchiveLine: line}, cappedState)
 		}
 		logger.InfoCF("agent", "tool result capped at the door (ADR-066 D4)",
 			map[string]any{

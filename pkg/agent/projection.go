@@ -36,12 +36,14 @@ type projectionContext struct {
 //
 // capped: the result is re-cut head-and-tail at the cap the surface and the
 // owning call's parallel count yield under pc.policy. The surface is taken
-// from the owning assistant call's tool name; success is assumed because the
-// window does not record IsError — a FAILURE-surface result that was capped
-// live therefore re-projects at its success cap on reload (it stays bounded
-// and correctly marked, but may show more of its content than the model saw
-// live). Recording the effective cap with the state would close that gap;
-// it is a pkg/memory shape change deliberately not made here.
+// from the owning assistant call's tool name PLUS the recorded state: the
+// window carries no IsError, so a failed/denied/skipped result is recorded
+// as memory.ProjectionCappedFailure and re-cut at the same D4
+// "builtin-failure" cap the choke point applied live. Re-deriving the
+// surface from the tool name alone assumed success, so an MCP failure cut to
+// 10,000 chars live came back at 62,500 on reload — 6.25x what the model was
+// given, on the surface capped tightest, breaking FR-019 / B-12 / B-22's
+// byte identity.
 //
 // emptied: the content becomes the emptied recall mark and nothing else.
 func projectMessages(
@@ -68,8 +70,9 @@ func projectMessages(
 		}
 		tool, parallelN := owningToolCall(msgs, i, m.ToolCallID)
 		switch state {
-		case memory.ProjectionCapped:
-			capChars := pc.policy.effectiveCap(toolResultSurfaceFor(tool, false), parallelN)
+		case memory.ProjectionCapped, memory.ProjectionCappedFailure:
+			capChars := pc.policy.effectiveCap(
+				toolResultSurfaceFor(tool, state == memory.ProjectionCappedFailure), parallelN)
 			out[i].Content, _ = projectToolResult(m.Content, capChars, func(full string) string {
 				return capMarkOrEmpty(tool, m.ToolCallID, line, full, pc.archive)
 			})
