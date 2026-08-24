@@ -307,44 +307,6 @@ func TestProviders_ModelBounds_Rejected(t *testing.T) {
 	})
 }
 
-// TestProviders_RefreshModels_EndpointlessReturnsUserCatalogue proves the
-// /refresh-models endpoint returns the stored slugs for an endpoint-less provider.
-func TestProviders_RefreshModels_EndpointlessReturnsUserCatalogue(t *testing.T) {
-	api := newTestRestAPIWithHome(t)
-	seedProviderConfig(
-		t, api,
-		map[string]any{
-			"model_name": "mygw", "provider": "mygw", "model": "mygw/a",
-			"models": []any{"mygw/a", "mygw/b"},
-		},
-	)
-
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPost, "/api/v1/providers/mygw/refresh-models", nil)
-	r.URL.Path = "/api/v1/providers/mygw/refresh-models"
-	api.HandleProviders(w, r)
-
-	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
-	var p gen.Provider
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &p))
-	require.NotNil(t, p.HasModelsEndpoint)
-	assert.False(t, *p.HasModelsEndpoint)
-	assert.ElementsMatch(t, []string{"mygw/a", "mygw/b"}, p.Models)
-}
-
-// TestProviders_RefreshModels_NotConfigured_404 proves refresh on an unknown
-// provider returns 404.
-func TestProviders_RefreshModels_NotConfigured_404(t *testing.T) {
-	api := newTestRestAPIWithHome(t)
-
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPost, "/api/v1/providers/ghost/refresh-models", nil)
-	r.URL.Path = "/api/v1/providers/ghost/refresh-models"
-	api.HandleProviders(w, r)
-
-	require.Equal(t, http.StatusNotFound, w.Code, "body=%s", w.Body.String())
-}
-
 // --- Task 1 (M4): workspace→turn binding ---
 
 // TestHandleChatMessage_StampsWorkspaceOnSession proves that a chat frame

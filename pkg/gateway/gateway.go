@@ -2717,6 +2717,15 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	runningServices.HealthServer.SetAuditLoggerConfiguredFunc(func() bool {
 		return agentLoop.GetConfig().Sandbox.AuditLog
 	})
+	// ADR-067 FR-037 (T067-10): /health reports the provider catalog
+	// degraded — with the last refresh error — whenever no document is
+	// loaded, the last refresh failed, or the served document is stale
+	// (updated_at older than 14 days). Like audit_degraded it is a FIELD,
+	// not a 503: an out-of-date registry snapshot makes the model picker
+	// less accurate, it does not stop the gateway serving turns.
+	runningServices.HealthServer.SetCatalogStateFunc(func() (bool, string) {
+		return catalogHealthState(providerCatalog)
+	})
 
 	var configReloadChan <-chan *config.Config
 	stopWatch := func() {}

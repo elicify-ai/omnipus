@@ -357,7 +357,7 @@ func (a *restAPI) withOptionalAuth(handler http.HandlerFunc) http.HandlerFunc {
 		// token — it authenticates via the omnipus-session HttpOnly cookie. Resolve
 		// it here (the same lookup checkBearerAuth/authenticateWS/browser_ws use) so
 		// optional-auth routes that DO require a user post-onboarding — e.g.
-		// PUT /providers/{id}, POST /providers/{id}/test and /refresh-models, whose
+		// PUT /providers/{id} and POST /providers/{id}/test, whose
 		// handlers 401 when UserContextKey is nil — see the logged-in identity
 		// instead of falling through to anonymous. Like a non-matching bearer above,
 		// a cookie-parse error or no match is NOT a hard 401 here: it falls through

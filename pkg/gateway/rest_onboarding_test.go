@@ -1418,57 +1418,6 @@ func TestProviderTest_CredentialVaultUnreadable(t *testing.T) {
 	assert.NotContains(t, errStr, "no API key configured")
 }
 
-// TestRefreshProviderModels_CredentialVaultUnreadable proves the
-// whole-codebase-review Backend-High finding's sibling gap in
-// refreshProviderModels: when the provider entry references an api_key_ref
-// that the credential vault cannot resolve, POST
-// /api/v1/providers/{id}/refresh-models must surface the DISTINCT "vault
-// could not be read" message — not the misleading "no API key configured" —
-// mirroring TestProviderTest_CredentialVaultUnreadable above (fix #5's
-// pattern, replicated here per finding #2).
-//
-// BDD: Given a provider entry with api_key_ref but a LOCKED credential store,
-// When POST /api/v1/providers/openai/refresh-models is called,
-// Then 422 with an error mentioning the credential vault could not be read.
-func TestRefreshProviderModels_CredentialVaultUnreadable(t *testing.T) {
-	tmpDir := t.TempDir()
-	cfg := &config.Config{
-		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
-		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{
-				Home: tmpDir, DefaultModel: config.DefaultModel{Model: "test-model"}, MaxTokens: 4096},
-		},
-		Providers: []*config.ModelConfig{
-			{Name: "gpt-4", Provider: "openai", Model: "gpt-4", APIKeyRef: "openai_API_KEY"},
-		},
-	}
-	msgBus := bus.NewMessageBus()
-	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
-	// Build the API WITHOUT an unlocked credential store: a LOCKED store makes
-	// resolveCredentialRef fail, exercising the present-but-unresolvable branch.
-	lockedStore := credentials.NewStore(tmpDir + "/credentials.json")
-	api := &restAPI{
-		agentLoop:     al,
-		homePath:      tmpDir,
-		allowedOrigin: "http://localhost:3000",
-		onboardingMgr: onboarding.NewManager(tmpDir),
-		taskStore:     task.New(tmpDir + "/tasks"),
-		credStore:     lockedStore,
-	}
-
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/providers/openai/refresh-models", nil)
-	w := httptest.NewRecorder()
-	api.refreshProviderModels(w, req, "openai")
-
-	require.Equal(t, http.StatusUnprocessableEntity, w.Code, "body=%s", w.Body.String())
-	var resp map[string]any
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	errStr, _ := resp["error"].(string)
-	assert.Contains(t, errStr, "credential vault could not be read",
-		"unresolvable ref must surface the vault-read error, not 'no API key configured'")
-	assert.NotContains(t, errStr, "no API key configured")
-}
-
 // TestProviderTest_CredentialRefNotFound proves the fix for the credential-resolution
 // conflation finding: a resolveCredentialRef failure caused by the ref simply not
 // existing in the store (*credentials.NotFoundError — e.g. a stale/deleted credential
@@ -1521,58 +1470,6 @@ func TestProviderTest_CredentialRefNotFound(t *testing.T) {
 	var resp map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, false, resp["success"])
-	errStr, _ := resp["error"].(string)
-	assert.Contains(t, errStr, "no longer exists",
-		"a ref absent from an unlocked store must surface the not-found message")
-	assert.NotContains(t, errStr, "unlock and retry",
-		"unlock-and-retry is WRONG advice when the ref simply doesn't exist in the store")
-	assert.NotContains(t, errStr, "no API key configured")
-}
-
-// TestRefreshProviderModels_CredentialRefNotFound is the refresh-models counterpart to
-// TestProviderTest_CredentialRefNotFound: a ref absent from an UNLOCKED store must
-// surface the "no longer exists / re-enter" message, never "unlock and retry".
-//
-// BDD: Given a provider entry with api_key_ref pointing at a name absent from an
-// UNLOCKED credential store,
-// When POST /api/v1/providers/openai/refresh-models is called,
-// Then 422 with an error saying the ref no longer exists — never "unlock and retry".
-func TestRefreshProviderModels_CredentialRefNotFound(t *testing.T) {
-	tmpDir := t.TempDir()
-	cfg := &config.Config{
-		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
-		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{
-				Home: tmpDir, DefaultModel: config.DefaultModel{Model: "test-model"}, MaxTokens: 4096},
-		},
-		Providers: []*config.ModelConfig{
-			{Name: "gpt-4", Provider: "openai", Model: "gpt-4", APIKeyRef: "openai_API_KEY"},
-		},
-	}
-	msgBus := bus.NewMessageBus()
-	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
-	// Build the API with an UNLOCKED store that has never had "openai_API_KEY"
-	// written to it — resolveCredentialRef must fail with *credentials.NotFoundError,
-	// NOT ErrStoreLocked, exercising the ref-genuinely-absent branch.
-	t.Setenv("OMNIPUS_MASTER_KEY", testMasterKey)
-	unlockedStore := credentials.NewStore(tmpDir + "/credentials.json")
-	require.NoError(t, credentials.Unlock(unlockedStore))
-	api := &restAPI{
-		agentLoop:     al,
-		homePath:      tmpDir,
-		allowedOrigin: "http://localhost:3000",
-		onboardingMgr: onboarding.NewManager(tmpDir),
-		taskStore:     task.New(tmpDir + "/tasks"),
-		credStore:     unlockedStore,
-	}
-
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/providers/openai/refresh-models", nil)
-	w := httptest.NewRecorder()
-	api.refreshProviderModels(w, req, "openai")
-
-	require.Equal(t, http.StatusUnprocessableEntity, w.Code, "body=%s", w.Body.String())
-	var resp map[string]any
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	errStr, _ := resp["error"].(string)
 	assert.Contains(t, errStr, "no longer exists",
 		"a ref absent from an unlocked store must surface the not-found message")

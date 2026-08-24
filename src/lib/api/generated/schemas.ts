@@ -2302,7 +2302,19 @@ export const SessionScopeUpdateResponse = z
     warning: z.string().optional(),
   })
   .passthrough();
-export const HealthResponse = z.object({ status: z.literal("ok") });
+export const HealthResponse = z.object({
+  status: z.enum(["ok", "degraded"]),
+  reason: z.string().optional(),
+  uptime: z.string().optional(),
+  pid: z.number().int().optional(),
+  audit_logger: z.enum(["ok", "unavailable", "unknown"]).optional(),
+  audit_skipped: z.object({}).partial().passthrough().optional(),
+  audit_degraded: z.boolean().optional(),
+  sandbox: z.object({}).partial().passthrough().optional(),
+  catalog: z
+    .object({ degraded: z.boolean(), reason: z.string().optional() })
+    .optional(),
+});
 export const AboutResponse = z.object({
   version: z.string(),
   go_version: z.string(),
@@ -5741,7 +5753,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "get",
     path: "/health",
     alias: "getHealth",
-    description: `Returns HTTP 200 when the gateway is running. No authentication required.
+    description: `Returns HTTP 200 with status &quot;ok&quot; when the gateway is serving, and HTTP 503 with status &quot;degraded&quot; plus a reason on a gateway-fatal condition (agent loop dead, config reload failed, default agent unloadable). The audit_* and catalog fields describe a degraded SUBSYSTEM while the gateway itself is still serving and never change the status code — a stale provider catalog (ADR-067 FR-037) makes the model picker less accurate, it does not take the process out of rotation. No authentication required.
 `,
     requestFormat: "json",
     response: HealthResponse,
@@ -5750,6 +5762,11 @@ Includes session_start events from all agent stores and task lifecycle events.
         status: 404,
         description: `Not used — gateway is always healthy or not reachable.`,
         schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `Gateway is degraded; the body names the reason.`,
+        schema: HealthResponse,
       },
     ],
   },

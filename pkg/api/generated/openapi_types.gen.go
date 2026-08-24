@@ -1976,14 +1976,38 @@ func (e GoalState) Valid() bool {
 	}
 }
 
+// Defines values for HealthResponseAuditLogger.
+const (
+	HealthResponseAuditLoggerOk          HealthResponseAuditLogger = "ok"
+	HealthResponseAuditLoggerUnavailable HealthResponseAuditLogger = "unavailable"
+	HealthResponseAuditLoggerUnknown     HealthResponseAuditLogger = "unknown"
+)
+
+// Valid indicates whether the value is a known member of the HealthResponseAuditLogger enum.
+func (e HealthResponseAuditLogger) Valid() bool {
+	switch e {
+	case HealthResponseAuditLoggerOk:
+		return true
+	case HealthResponseAuditLoggerUnavailable:
+		return true
+	case HealthResponseAuditLoggerUnknown:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for HealthResponseStatus.
 const (
-	HealthResponseStatusOk HealthResponseStatus = "ok"
+	HealthResponseStatusDegraded HealthResponseStatus = "degraded"
+	HealthResponseStatusOk       HealthResponseStatus = "ok"
 )
 
 // Valid indicates whether the value is a known member of the HealthResponseStatus enum.
 func (e HealthResponseStatus) Valid() bool {
 	switch e {
+	case HealthResponseStatusDegraded:
+		return true
 	case HealthResponseStatusOk:
 		return true
 	default:
@@ -6610,28 +6634,28 @@ func (e GetTokenStatsParamsPeriod) Valid() bool {
 
 // Defines values for ListTasksParamsStatus.
 const (
-	Blocked    ListTasksParamsStatus = "blocked"
-	Done       ListTasksParamsStatus = "done"
-	Failed     ListTasksParamsStatus = "failed"
-	InProgress ListTasksParamsStatus = "in_progress"
-	Inbox      ListTasksParamsStatus = "inbox"
-	Next       ListTasksParamsStatus = "next"
+	ListTasksParamsStatusBlocked    ListTasksParamsStatus = "blocked"
+	ListTasksParamsStatusDone       ListTasksParamsStatus = "done"
+	ListTasksParamsStatusFailed     ListTasksParamsStatus = "failed"
+	ListTasksParamsStatusInProgress ListTasksParamsStatus = "in_progress"
+	ListTasksParamsStatusInbox      ListTasksParamsStatus = "inbox"
+	ListTasksParamsStatusNext       ListTasksParamsStatus = "next"
 )
 
 // Valid indicates whether the value is a known member of the ListTasksParamsStatus enum.
 func (e ListTasksParamsStatus) Valid() bool {
 	switch e {
-	case Blocked:
+	case ListTasksParamsStatusBlocked:
 		return true
-	case Done:
+	case ListTasksParamsStatusDone:
 		return true
-	case Failed:
+	case ListTasksParamsStatusFailed:
 		return true
-	case InProgress:
+	case ListTasksParamsStatusInProgress:
 		return true
-	case Inbox:
+	case ListTasksParamsStatusInbox:
 		return true
-	case Next:
+	case ListTasksParamsStatusNext:
 		return true
 	default:
 		return false
@@ -9415,13 +9439,45 @@ type GodModeUpdateResponse struct {
 	RestartRequired bool `json:"restart_required"`
 }
 
-// HealthResponse Response from GET /health. Returns HTTP 200 when the gateway is up. No authentication required.
+// HealthResponse Response from GET /health. HTTP 200 with status "ok" when the gateway is serving; HTTP 503 with status "degraded" and a reason when a gateway-fatal condition holds (agent loop dead, config reload failed, default agent unloadable). The audit_* and catalog objects are FIELDS, not status drivers: they describe a subsystem that is degraded while the gateway itself is still serving, so an operator can see the problem without reading logs and without the process being taken out of a load balancer. No authentication required.
 type HealthResponse struct {
-	// Status Always "ok" when the gateway is healthy.
+	// AuditDegraded True when the operator asked for audit logging and it is not working, or when audit writes are being dropped. Does not change the HTTP status.
+	AuditDegraded *bool `json:"audit_degraded,omitempty"`
+
+	// AuditLogger Whether the gateway constructed a working audit logger.
+	AuditLogger *HealthResponseAuditLogger `json:"audit_logger,omitempty"`
+
+	// AuditSkipped Cumulative counts of audit writes that fell through to slog because the logger was unavailable or a write failed with audit_fail_closed=false.
+	AuditSkipped *map[string]interface{} `json:"audit_skipped,omitempty"`
+
+	// Catalog ADR-067 FR-037 — the provider catalog's state. Degraded (with the last refresh error as the reason) when no document is loaded, the last refresh failed, the document arrived over the degraded raw-fallback transport, or the served document is stale (updated_at older than 14 days). Absent when no catalog hook is wired. Does not change the HTTP status: a stale registry snapshot makes the model picker less accurate, it does not stop the gateway serving turns.
+	Catalog *struct {
+		Degraded bool `json:"degraded"`
+
+		// Reason The catalog's own explanation. Present only when degraded.
+		Reason *string `json:"reason,omitempty"`
+	} `json:"catalog,omitempty"`
+
+	// Pid Process id of the running gateway.
+	Pid *int `json:"pid,omitempty"`
+
+	// Reason Why the gateway is degraded. Present only with status "degraded".
+	Reason *string `json:"reason,omitempty"`
+
+	// Sandbox Sandbox state ({applied, mode, backend}) once Apply has completed. Absent when no sandbox hook is wired.
+	Sandbox *map[string]interface{} `json:"sandbox,omitempty"`
+
+	// Status "ok" when the gateway is serving; "degraded" alongside HTTP 503.
 	Status HealthResponseStatus `json:"status"`
+
+	// Uptime Time since the gateway started, as a Go duration string. Absent on the degraded response.
+	Uptime *string `json:"uptime,omitempty"`
 }
 
-// HealthResponseStatus Always "ok" when the gateway is healthy.
+// HealthResponseAuditLogger Whether the gateway constructed a working audit logger.
+type HealthResponseAuditLogger string
+
+// HealthResponseStatus "ok" when the gateway is serving; "degraded" alongside HTTP 503.
 type HealthResponseStatus string
 
 // HostFolderEntry One directory inside a HostFolderListing, with the verdict on whether it may be mounted. The verdict travels WITH the row so the client can disable the choice at the point of selection, rather than letting the operator pick a folder and only then be told no.

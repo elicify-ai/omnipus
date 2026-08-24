@@ -44,6 +44,14 @@ type Server struct {
 	// logger is unavailable, that IS degraded (operator wanted audit, it's
 	// broken).
 	auditLoggerConfiguredFn func() bool
+
+	// catalogStateFn, when non-nil, reports the ADR-067 provider-catalog
+	// state (FR-037): (degraded, reason). It is surfaced as the "catalog"
+	// object on /health and, like audit_degraded, does NOT flip the HTTP
+	// status — a stale registry snapshot degrades the model picker's
+	// accuracy, it does not stop the gateway serving. See
+	// gateway.catalogHealthState for the closure.
+	catalogStateFn func() (bool, string)
 }
 
 type Check struct {
@@ -184,6 +192,21 @@ func (s *Server) SetAuditLoggerConfiguredFunc(fn func() bool) {
 	s.auditLoggerConfiguredFn = fn
 }
 
+// SetCatalogStateFunc sets the closure /health calls for the ADR-067
+// provider-catalog state (FR-037): it returns (degraded, reason) — true
+// with the last refresh error whenever no document is loaded, the last
+// refresh failed, the document arrived over the degraded transport, or the
+// served document is stale (updated_at older than 14 days).
+//
+// The result is reported as the "catalog" object; it never changes the
+// HTTP status, because a degraded catalog is an accuracy problem, not an
+// availability one.
+func (s *Server) SetCatalogStateFunc(fn func() (bool, string)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.catalogStateFn = fn
+}
+
 func (s *Server) reloadHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Content-Type", "application/json")
@@ -221,6 +244,7 @@ func (s *Server) healthHandler(w http.ResponseWriter, r *http.Request) {
 	sandboxInfoFn := s.sandboxInfoFn
 	auditAvailFn := s.auditLoggerAvailableFn
 	auditConfiguredFn := s.auditLoggerConfiguredFn
+	catalogStateFn := s.catalogStateFn
 	s.mu.RUnlock()
 
 	w.Header().Set("Content-Type", "application/json")
@@ -253,6 +277,17 @@ func (s *Server) healthHandler(w http.ResponseWriter, r *http.Request) {
 	//   audit_logger=unavailable AND operator did NOT ask for audit → NOT degraded (deliberately off)
 	//   skipped.Total > 0          → degraded (writes are being dropped)
 	//   audit_logger=unknown (no configured-fn wired) → degraded (cannot confirm)
+	// ADR-067 FR-037: the provider catalog's own state, reported as a
+	// field beside the audit one. Absent when nothing wired the hook.
+	var catalogInfo map[string]any
+	if catalogStateFn != nil {
+		catalogDegraded, catalogReason := catalogStateFn()
+		catalogInfo = map[string]any{"degraded": catalogDegraded}
+		if catalogReason != "" {
+			catalogInfo["reason"] = catalogReason
+		}
+	}
+
 	auditConfigured := auditConfiguredFn != nil && auditConfiguredFn()
 	auditDegraded := skipped.Total > 0
 	if auditLoggerStatus == "unknown" {
@@ -274,6 +309,9 @@ func (s *Server) healthHandler(w http.ResponseWriter, r *http.Request) {
 			}
 			if sandboxInfo != nil {
 				resp["sandbox"] = sandboxInfo
+			}
+			if catalogInfo != nil {
+				resp["catalog"] = catalogInfo
 			}
 			json.NewEncoder(w).Encode(resp)
 			return
@@ -297,6 +335,9 @@ func (s *Server) healthHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	if sandboxInfo != nil {
 		resp["sandbox"] = sandboxInfo
+	}
+	if catalogInfo != nil {
+		resp["catalog"] = catalogInfo
 	}
 	json.NewEncoder(w).Encode(resp)
 }

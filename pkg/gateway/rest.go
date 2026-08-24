@@ -1682,8 +1682,6 @@ func strVal(m map[string]any, key string) string {
 	return s
 }
 
-// inferProviderName returns the provider name from an explicit Provider field,
-// or infers it from the Model field's "provider/model" format. Falls back to "default".
 // isSeedTemplateRow reports whether a providers[] entry is a fresh-install
 // TEMPLATE rather than something the operator configured (ADR-067 FR-029).
 //
@@ -1704,16 +1702,6 @@ func isSeedTemplateRow(m *config.ModelConfig) bool {
 			m.AuthMethod == "" &&
 			m.UpdatedAt == nil &&
 			len(m.Models) == 0)
-}
-
-func inferProviderName(provider, model string) string {
-	if provider != "" {
-		return provider
-	}
-	if parts := strings.SplitN(model, "/", 2); len(parts) == 2 {
-		return parts[0]
-	}
-	return "default"
 }
 
 // Agent response type is defined in contracts/components/schemas/Agent.yaml
@@ -5261,6 +5249,14 @@ func (a *restAPI) registerAdditionalEndpoints(cm httpHandlerRegistrar) {
 	// the subtree prefix below, so a PUT here can never reach the
 	// /providers/{id} upsert branch.
 	cm.RegisterHTTPHandler("/api/v1/providers/default-model", a.adminWrap(a.HandleDefaultModel))
+	// GET /api/v1/providers/catalog (ADR-067 FR-017, T067-10). Its own
+	// exact path under withAuth, registered ahead of the /providers/
+	// subtree dispatcher: "catalog" is a reserved path segment and is
+	// never a provider id, and the exact match always beats the prefix.
+	// Plain withAuth rather than adminWrap — this is a READ of the same
+	// public registry document the binary ships embedded, so a dev-mode
+	// bypass 503 would only break local development for no gain.
+	cm.RegisterHTTPHandler("/api/v1/providers/catalog", a.withAuth(a.HandleProvidersCatalog))
 	cm.RegisterHTTPHandler("/api/v1/providers", a.withOptionalAuth(a.HandleProviders))
 	cm.RegisterHTTPHandler("/api/v1/providers/", a.withOptionalAuth(a.HandleProviders))
 	cm.RegisterHTTPHandler("/api/v1/mcp-servers", a.withAuth(a.HandleMCPServers))
@@ -5894,6 +5890,11 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 		// status/account_label on top of this).
 		providerUpdatedAt := make(map[string]*time.Time)
 		providerAuthMethod := make(map[string]string)
+		// providerFirstRow is the representative config row for each
+		// provider — the first non-template one, which carries the
+		// custom/protocol/api_base identity ADR-067 FR-020 and FR-039 read
+		// to decide where this row's model list comes from.
+		providerFirstRow := make(map[string]*config.ModelConfig)
 		providerOrder := make([]string, 0)
 		seen := make(map[string]struct{})
 		for _, m := range cfg.Providers {
@@ -5904,6 +5905,7 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 			if _, exists := seen[providerName]; !exists {
 				seen[providerName] = struct{}{}
 				providerOrder = append(providerOrder, providerName)
+				providerFirstRow[providerName] = m
 			}
 			if m.UpdatedAt != nil {
 				if cur := providerUpdatedAt[providerName]; cur == nil || m.UpdatedAt.After(*cur) {
@@ -5938,46 +5940,24 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 		}
 		providers := make([]gen.Provider, 0, len(providerOrder))
 		for _, name := range providerOrder {
-			var models []string
-			var modelFetchWarning string
-			// A provider "has a live /models endpoint" when it maps to a known
-			// OpenAI-compatible base URL we can query (openrouter, openai, …).
-			// Providers with no known base (custom / unknown gateways) rely on the
-			// operator-supplied catalog slugs.
-			hasEndpoint := providers_pkg.APIBaseFor(name) != ""
-			// Try to fetch the full model list from the provider's upstream API.
-			if hasEndpoint {
-				if apiKey, ok := providerAPIKeys[name]; ok {
-					baseURL := providers_pkg.APIBaseFor(name)
-					if upstream, err := providers_pkg.FetchModels(
-						r.Context(),
-						baseURL,
-						apiKey,
-						a.ssrfChk(),
-					); err != nil {
-						slog.Warn("rest: failed to fetch upstream models", "provider", name, "error", err)
-						modelFetchWarning = fmt.Sprintf("could not fetch upstream model list: %v", err)
-					} else if len(
-						upstream,
-					) > 0 {
-						models = upstream
-					}
-				}
-			}
-			// Endpoint-less provider (or upstream fetch failed): use the operator's
-			// supplied catalog slugs as the catalog.
-			if models == nil {
-				if userModels := dedupeNonEmpty(providerUserModels[name]); len(userModels) > 0 {
-					models = userModels
-				}
-			}
-			// No upstream list and no operator slugs: an empty catalog, not the
-			// row's model_name alias (that "final fallback" fill was removed with
-			// the template rows, resolution #16). Provider.yaml requires
-			// models:array — nil marshals as null which fails Zod on the SPA.
-			if models == nil {
-				models = []string{}
-			}
+			// ADR-067 FR-020 (T067-10): the model list's source is decided
+			// by the row's locality, not by whether a vendor base URL is
+			// hardcoded anywhere. A `locality = cloud` row lists the
+			// CATALOG's models with no outbound call at all (US-9.AC1 —
+			// the list is instant and works offline); only a
+			// `locality = local` row is listed live, because nothing but
+			// that machine knows what has been pulled onto it (US-9.AC3).
+			src := a.resolveProviderRow(name, providerFirstRow[name])
+			models, modelFetchWarning := a.providerModelList(
+				r.Context(), name, src, providerAPIKeys[name], providerUserModels[name])
+			// "Has a live /models endpoint" means "the gateway fills this
+			// list, so the SPA must not present it as an editable slug
+			// list". A custom endpoint never qualifies — its catalogue IS
+			// the operator's slugs. APIBaseFor reads the process catalog,
+			// which the gateway installs from the very document
+			// resolveProviderRow read (providers.SetCatalog at boot), so
+			// the two agree on every real installation.
+			hasEndpoint := !src.custom && providers_pkg.APIBaseFor(name) != ""
 			// FR-104: report Connected only when the provider's API key resolves to
 			// a non-empty credential. providerAPIKeys is populated above for every
 			// provider that has either a resolvable api_key_ref or an inline api_key;
@@ -5991,14 +5971,14 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 			// generic text parameterised by the operator's own id (the id is
 			// user data, not a trace — CRIT-003) and an empty model list
 			// (S67 Q4). Classified only when a catalog document is actually
-			// loaded; an absent catalog (E7) never turns every row unknown.
+			// loaded, and never for a custom row — an operator-named
+			// endpoint is not in the catalog BY DESIGN (FR-035, X-13); an
+			// absent catalog (E7) never turns every row unknown.
 			var unknownProviderMsg string
-			if a.providerCatalog != nil && a.providerCatalog.Document() != nil {
-				if _, known := a.providerCatalog.Provider(name); !known {
-					status = gen.ProviderStatusUnknownProvider
-					unknownProviderMsg = fmt.Sprintf("unknown provider %q", name)
-					models = []string{}
-				}
+			if src.unknownProvider() {
+				status = gen.ProviderStatusUnknownProvider
+				unknownProviderMsg = fmt.Sprintf("unknown provider %q", name)
+				models = []string{}
 			}
 			// ADR-068 FR-009 (T068-15): a `github-copilot` row is backed by
 			// the vendor CLI, not an API key, so the key-derived status above
@@ -6030,6 +6010,26 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 				Dependents:   computeProviderDependents(cfg, name),
 				BacksDefault: providerBacksDefault(cfg, name),
 				UpdatedAt:    providerUpdatedAt[name],
+				// ADR-067 identity fields (T067-10): the wire row now
+				// carries what the catalog says about it, so the SPA never
+				// has to re-derive protocol, locality or grouping.
+				Protocol: providerWireProtocol(src.protocol),
+				Locality: providerWireLocality(src.locality),
+			}
+			if src.custom {
+				customCopy := true
+				p.Custom = &customCopy
+			}
+			if src.known {
+				if company := src.row.Company; company != "" {
+					companyCopy := company
+					p.Company = &companyCopy
+				}
+				if display := src.row.Name; display != "" {
+					displayCopy := display
+					p.DisplayName = &displayCopy
+				}
+				p.CliKind = providerWireCLIKind(src.row.CLIKind)
 			}
 			if modelFetchWarning != "" {
 				p.Warning = &modelFetchWarning
@@ -6131,6 +6131,29 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
+		// ADR-067 FR-019 / FR-035 (T067-10): catalog admission. The id the
+		// operator typed is either a catalog row (accepted unless the
+		// catalog itself marks it unsupported, with the catalog's own
+		// reason), or an operator-named CUSTOM endpoint — accepted only
+		// when it carries both halves of what it takes to reach one, an
+		// api_base and one of the two protocols a base URL fully
+		// describes. Anything else is an unknown provider, and saying so
+		// here is the difference between an obvious 400 and a row that
+		// looks saved and never resolves a model.
+		reqAPIBase := derefStr(req.ApiBase)
+		reqProtocol := derefStr((*string)(req.Protocol))
+		isCustomRow, admitErr := providerAdmission(a.providerCatalog, providerID, reqAPIBase, reqProtocol)
+		if admitErr != nil {
+			field := "id"
+			if errors.Is(admitErr, providers_pkg.ErrUnknownProvider) && reqAPIBase != "" {
+				// The id is unknown AND a base was supplied: what is
+				// missing is the protocol, so point the SPA at that field.
+				field = "protocol"
+			}
+			jsonErrField(w, http.StatusBadRequest, admitErr.Error(), field)
+			return
+		}
+
 		// Check if the provider already exists.
 		cfg := a.agentLoop.GetConfig()
 		found := false
@@ -6138,8 +6161,7 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 			if m.IsVirtual() {
 				continue
 			}
-			pName := inferProviderName(m.Provider, m.Model)
-			if pName == providerID {
+			if strings.TrimSpace(m.Provider) == providerID {
 				found = true
 				break
 			}
@@ -6179,15 +6201,19 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 					"credential store locked: set OMNIPUS_MASTER_KEY or unlock before saving secrets")
 				return
 			}
-			// Resolve the persisted api_base from the in-memory config.
-			var persistedAPIBase string
-			for _, m := range cfg.Providers {
-				if m.IsVirtual() {
-					continue
-				}
-				if inferProviderName(m.Provider, m.Model) == providerID {
-					persistedAPIBase = m.APIBase
-					break
+			// Resolve the base URL to probe: the api_base this very
+			// request supplies wins (a custom row has no other source),
+			// then the persisted one, then the catalog's.
+			persistedAPIBase := reqAPIBase
+			if persistedAPIBase == "" {
+				for _, m := range cfg.Providers {
+					if m.IsVirtual() {
+						continue
+					}
+					if strings.TrimSpace(m.Provider) == providerID {
+						persistedAPIBase = m.APIBase
+						break
+					}
 				}
 			}
 			if persistedAPIBase == "" {
@@ -6266,8 +6292,7 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 				if !ok {
 					continue
 				}
-				pName := inferProviderName(strVal(model, "provider"), strVal(model, "model"))
-				if pName == providerID {
+				if strings.TrimSpace(strVal(model, "provider")) == providerID {
 					model["updated_at"] = putStampStr
 					if req.ApiKey != nil && *req.ApiKey != "" {
 						model["api_key_ref"] = credRefName
@@ -6285,6 +6310,7 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 						}
 					}
 					model["provider"] = providerID
+					applyProviderIdentity(model, reqAPIBase, reqProtocol, isCustomRow)
 					updated = true
 					break
 				}
@@ -6296,7 +6322,6 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 					modelVal = *req.Model
 				}
 				newEntry := map[string]any{
-					"model_name":  providerID,
 					"provider":    providerID,
 					"model":       modelVal,
 					"api_key_ref": credRefName,
@@ -6305,6 +6330,7 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 				if len(userModelsJSON) > 0 {
 					newEntry["models"] = userModelsJSON
 				}
+				applyProviderIdentity(newEntry, reqAPIBase, reqProtocol, isCustomRow)
 				m["providers"] = append(providerList, newEntry)
 			}
 			return nil
@@ -6344,7 +6370,10 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 			slog.Warn("rest: reload after provider update did not confirm within the poll window; "+
 				"agents may still be served by the stale cached provider client", "provider_id", providerID)
 		}
-		hasEndpoint := providers_pkg.APIBaseFor(providerID) != ""
+		// The saved row is a catalog row unless admission classified it as
+		// an operator-named custom endpoint (FR-035); a catalog row's list
+		// is filled by the gateway, a custom row's is the operator's own.
+		hasEndpoint := !isCustomRow && providers_pkg.IsCatalogProvider(providerID)
 		respModels := []string{}
 		if req.Models != nil {
 			respModels = dedupeNonEmpty(*req.Models)
@@ -6360,7 +6389,15 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 			HasModelsEndpoint: &hasEndpoint,
 			AuthMethod:        gen.ProviderAuthMethodApiKey,
 			Dependents:        []gen.ProviderDependent{},
+			BacksDefault:      providerBacksDefault(a.agentLoop.GetConfig(), providerID),
 			UpdatedAt:         &putStamp,
+		}
+		if isCustomRow {
+			customCopy := true
+			providerResp.Custom = &customCopy
+		}
+		if p := providerWireProtocol(catalog.Protocol(reqProtocol)); p != nil {
+			providerResp.Protocol = p
 		}
 		// R-D step 7 / FR-011: attach validation for warning outcomes (NoCredit/Unreachable/Restricted).
 		// Valid outcome and key-absent PUTs carry no validation field.
@@ -6399,9 +6436,6 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		jsonOK(w, providerResp)
-
-	case r.Method == http.MethodPost && strings.HasSuffix(sub, "/refresh-models"):
-		a.refreshProviderModels(w, r, strings.TrimSuffix(sub, "/refresh-models"))
 
 	case r.Method == http.MethodPost && strings.HasSuffix(sub, "/sign-in"),
 		r.Method == http.MethodGet && strings.HasSuffix(sub, "/sign-in/status"):
@@ -6469,8 +6503,7 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 			if !ok {
 				continue
 			}
-			pName := inferProviderName(strVal(modelMap, "provider"), strVal(modelMap, "model"))
-			if pName == providerID {
+			if strings.TrimSpace(strVal(modelMap, "provider")) == providerID {
 				found = true
 				// Capture the provider entry's configured api_base (config.go
 				// `json:"api_base"`). Preferred over the vendor default so a
@@ -6624,125 +6657,6 @@ func dedupeNonEmpty(in []string) []string {
 		out = append(out, s)
 	}
 	return out
-}
-
-// refreshProviderModels handles POST /api/v1/providers/{id}/refresh-models. For a
-// provider WITH a live /models endpoint it re-fetches the upstream catalog and
-// returns the refreshed Provider. For an endpoint-less provider it returns the
-// stored operator-supplied catalog (nothing to refresh). Requires the provider
-// to be configured (404 otherwise) and an API key to query upstream.
-func (a *restAPI) refreshProviderModels(w http.ResponseWriter, r *http.Request, providerID string) {
-	// Auth: post-onboarding requires an authenticated user (same gate as PUT).
-	onboardingDone := a.onboardingMgr != nil && a.onboardingMgr.IsComplete()
-	if onboardingDone && r.Context().Value(UserContextKey{}) == nil {
-		jsonErr(w, http.StatusUnauthorized, "authentication required")
-		return
-	}
-	if err := validateEntityID(providerID); err != nil {
-		jsonErr(w, http.StatusBadRequest, "invalid provider id")
-		return
-	}
-
-	cfg := a.agentLoop.GetConfig()
-	var (
-		found       bool
-		apiKey      string
-		userModels  []string
-		defaultName string
-		// credResolveErr captures a resolveCredentialRef failure when the provider
-		// entry references an api_key_ref that the credential vault could NOT
-		// resolve. This is distinct from "no key configured" and must surface a
-		// different, actionable message that depends on WHY resolution failed —
-		// see describeCredentialResolutionError, same distinction HandleProviders'
-		// test sub-path makes (~rest.go:5618).
-		credResolveErr error
-	)
-	for _, m := range cfg.Providers {
-		if m.IsVirtual() {
-			continue
-		}
-		if inferProviderName(m.Provider, m.Model) != providerID {
-			continue
-		}
-		found = true
-		if defaultName == "" {
-			defaultName = m.Model
-		}
-		if len(m.Models) > 0 {
-			userModels = append(userModels, m.Models...)
-		}
-		if apiKey == "" {
-			resolved := m.APIKey()
-			if resolved == "" && m.APIKeyRef != "" {
-				if v, err := a.resolveCredentialRef(m.APIKeyRef); err != nil {
-					// A ref is present but could not be resolved — do NOT fall
-					// through to "no API key configured" (misleading). The exact
-					// remediation depends on WHY it failed; see
-					// describeCredentialResolutionError below.
-					slog.Warn("rest: refresh-models: credential resolve failed", "ref", m.APIKeyRef, "error", err)
-					credResolveErr = err
-				} else {
-					resolved = v
-				}
-			}
-			apiKey = resolved
-		}
-	}
-	if !found {
-		jsonErr(w, http.StatusNotFound, fmt.Sprintf("provider %q not configured", providerID))
-		return
-	}
-
-	hasEndpoint := providers_pkg.APIBaseFor(providerID) != ""
-	status := gen.ProviderStatusDisconnected
-	if apiKey != "" {
-		status = gen.ProviderStatusConnected
-	}
-
-	var models []string
-	var warning string
-	if hasEndpoint {
-		if apiKey == "" {
-			if credResolveErr != nil {
-				jsonErr(w, http.StatusUnprocessableEntity, describeCredentialResolutionError(credResolveErr))
-				return
-			}
-			jsonErr(w, http.StatusUnprocessableEntity, "no API key configured for this provider")
-			return
-		}
-		baseURL := providers_pkg.APIBaseFor(providerID)
-		upstream, err := providers_pkg.FetchModels(r.Context(), baseURL, apiKey, a.ssrfChk())
-		if err != nil {
-			slog.Warn("rest: refresh-models: upstream fetch failed", "provider", providerID, "error", err)
-			warning = fmt.Sprintf("could not fetch upstream model list: %v", err)
-		} else {
-			models = upstream
-		}
-	}
-	// Endpoint-less (or upstream failed): return the stored operator catalog.
-	if models == nil {
-		if um := dedupeNonEmpty(userModels); len(um) > 0 {
-			models = um
-		} else if defaultName != "" {
-			models = []string{defaultName}
-		} else {
-			models = []string{}
-		}
-	}
-
-	resp := gen.Provider{
-		Id:                providerID,
-		Name:              providerID,
-		Status:            status,
-		Models:            models,
-		HasModelsEndpoint: &hasEndpoint,
-		AuthMethod:        gen.ProviderAuthMethodApiKey,
-		Dependents:        []gen.ProviderDependent{},
-	}
-	if warning != "" {
-		resp.Warning = &warning
-	}
-	jsonOK(w, resp)
 }
 
 // --- MCP Servers ---

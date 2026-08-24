@@ -545,7 +545,7 @@ export interface paths {
         };
         /**
          * Health check
-         * @description Returns HTTP 200 when the gateway is running. No authentication required.
+         * @description Returns HTTP 200 with status "ok" when the gateway is serving, and HTTP 503 with status "degraded" plus a reason on a gateway-fatal condition (agent loop dead, config reload failed, default agent unloadable). The audit_* and catalog fields describe a degraded SUBSYSTEM while the gateway itself is still serving and never change the status code — a stale provider catalog (ADR-067 FR-037) makes the model picker less accurate, it does not take the process out of rotation. No authentication required.
          */
         get: operations["getHealth"];
         put?: never;
@@ -5923,15 +5923,59 @@ export interface components {
         };
         /**
          * HealthResponse
-         * @description Response from GET /health. Returns HTTP 200 when the gateway is up. No authentication required.
+         * @description Response from GET /health. HTTP 200 with status "ok" when the gateway is serving; HTTP 503 with status "degraded" and a reason when a gateway-fatal condition holds (agent loop dead, config reload failed, default agent unloadable). The audit_* and catalog objects are FIELDS, not status drivers: they describe a subsystem that is degraded while the gateway itself is still serving, so an operator can see the problem without reading logs and without the process being taken out of a load balancer. No authentication required.
          */
         HealthResponse: {
             /**
-             * @description Always "ok" when the gateway is healthy.
+             * @description "ok" when the gateway is serving; "degraded" alongside HTTP 503.
              * @example ok
              * @enum {string}
              */
-            status: "ok";
+            status: "ok" | "degraded";
+            /**
+             * @description Why the gateway is degraded. Present only with status "degraded".
+             * @example config reload failed: invalid provider entry
+             */
+            reason?: string;
+            /**
+             * @description Time since the gateway started, as a Go duration string. Absent on the degraded response.
+             * @example 3h12m5s
+             */
+            uptime?: string;
+            /**
+             * @description Process id of the running gateway.
+             * @example 4711
+             */
+            pid?: number;
+            /**
+             * @description Whether the gateway constructed a working audit logger.
+             * @example ok
+             * @enum {string}
+             */
+            audit_logger?: "ok" | "unavailable" | "unknown";
+            /** @description Cumulative counts of audit writes that fell through to slog because the logger was unavailable or a write failed with audit_fail_closed=false. */
+            audit_skipped?: {
+                [key: string]: unknown;
+            };
+            /**
+             * @description True when the operator asked for audit logging and it is not working, or when audit writes are being dropped. Does not change the HTTP status.
+             * @example false
+             */
+            audit_degraded?: boolean;
+            /** @description Sandbox state ({applied, mode, backend}) once Apply has completed. Absent when no sandbox hook is wired. */
+            sandbox?: {
+                [key: string]: unknown;
+            };
+            /** @description ADR-067 FR-037 — the provider catalog's state. Degraded (with the last refresh error as the reason) when no document is loaded, the last refresh failed, the document arrived over the degraded raw-fallback transport, or the served document is stale (updated_at older than 14 days). Absent when no catalog hook is wired. Does not change the HTTP status: a stale registry snapshot makes the model picker less accurate, it does not stop the gateway serving turns. */
+            catalog?: {
+                /** @example false */
+                degraded: boolean;
+                /**
+                 * @description The catalog's own explanation. Present only when degraded.
+                 * @example catalog: served document is stale: updated_at 2026-08-01T03:00:00Z is 360h0m0s old
+                 */
+                reason?: string;
+            };
         };
         /** @description Gateway runtime status as returned by GET /status (polled by the frontend StatusBar every 15 seconds). Summarises the number of configured agents and channels plus a daily cost accumulator. */
         GatewayStatus: {
@@ -13001,6 +13045,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Gateway is degraded; the body names the reason. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HealthResponse"];
                 };
             };
         };

@@ -2225,15 +2225,27 @@ paths:
     get:
       operationId: getHealth
       summary: Health check
-      description: 'Returns HTTP 200 when the gateway is running. No authentication required.
-
-        '
+      description: >
+        Returns HTTP 200 with status "ok" when the gateway is serving, and HTTP
+        503 with status "degraded" plus a reason on a gateway-fatal condition
+        (agent loop dead, config reload failed, default agent unloadable). The
+        audit_* and catalog fields describe a degraded SUBSYSTEM while the
+        gateway itself is still serving and never change the status code — a
+        stale provider catalog (ADR-067 FR-037) makes the model picker less
+        accurate, it does not take the process out of rotation. No
+        authentication required.
       security: []
       tags:
       - Health
       responses:
         '200':
           description: Gateway is healthy.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+        '503':
+          description: Gateway is degraded; the body names the reason.
           content:
             application/json:
               schema:
