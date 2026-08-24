@@ -34,6 +34,7 @@
  */
 
 import { expect, test } from '@playwright/test'
+import { stubOnboarding } from './fixtures/onboarding-stubs'
 
 const BASE_URL = process.env.OMNIPUS_URL || 'http://localhost:6060'
 
@@ -131,3 +132,83 @@ test(
     expect(connectedBadgeCount).toBeGreaterThanOrEqual(1)
   },
 )
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ADR-068 T068-31 — the provider rows that are writable on this branch.
+//
+// FR-037 / MAJ-004: the SPA reads its provider list from
+// `GET /api/v1/providers/catalog` (ADR-067's route), never from a bundled TS
+// module, and re-validates with `If-None-Match` so at most ONE 200 is served
+// per ETag value within a page session.
+//
+// DELIBERATELY NOT WRITTEN YET (the task's `depends-on` list is not fully
+// landed on this branch — T068-25 Settings → Providers, T068-26 the remove
+// dialog, T068-27 *Check with my account*):
+//   • "Remove an unused provider" — needs the rebuilt screen's row menu and the
+//     confirm dialog; DELETE has no UI caller yet.
+//   • "Change default model takes effect on the next turn" — needs the Default
+//     model card (FR-019), which lives only on the rebuilt screen.
+//   • "Check with my account" (FR-031) — needs the entitlement button on the
+//     rebuilt row.
+// Each of those rows would today assert against markup that does not exist, so
+// they are named here rather than written as tests that pass by finding
+// nothing (docs/internal/false-green-patterns.md).
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('the picker reads the catalog from the GET, and serves at most one 200 per ETag', async ({
+  page,
+}) => {
+  // Only `/state` is stubbed — the catalog comes from the real gateway, which
+  // is the whole point of this row.
+  await stubOnboarding(page, { catalog: 'real' })
+
+  const catalogResponses: Array<{ status: number; etag: string | undefined }> = []
+  page.on('response', (res) => {
+    if (!res.url().includes('/api/v1/providers/catalog')) return
+    catalogResponses.push({ status: res.status(), etag: res.headers()['etag'] })
+  })
+
+  await page.goto(`${BASE_URL}/#/onboarding`)
+  await expect(page.getByText('Step 1 of 3').first()).toBeVisible({ timeout: 15_000 })
+  await page.locator('#admin-username').fill('catalog-probe-admin')
+  await page.getByRole('button', { name: /^continue$/i }).click()
+  await page.locator('#admin-password').fill('catalog-passw0rd!')
+  await page.locator('#admin-password-confirm').fill('catalog-passw0rd!')
+  await page.getByRole('button', { name: /^continue$/i }).click()
+
+  // The picker rendered from whatever the gateway served — Popular tiles exist,
+  // which is only possible if a real catalog document arrived.
+  const tiles = page.locator('[data-testid^="picker-popular-"]')
+  await expect(tiles.first()).toBeVisible({ timeout: 15_000 })
+  expect(await tiles.count(), 'the Popular band is empty — no catalog was read').toBeGreaterThan(0)
+
+  // The GET happened, returned 200 and carried an ETag (ADR-067 A-1).
+  await expect.poll(() => catalogResponses.length).toBeGreaterThanOrEqual(1)
+  const twoHundreds = catalogResponses.filter((r) => r.status === 200)
+  expect(twoHundreds.length, 'the catalog GET never returned 200').toBeGreaterThanOrEqual(1)
+  expect(twoHundreds[0].etag, 'the catalog GET served no ETag to re-validate against').toBeTruthy()
+
+  // Navigate away and back: the second visit must NOT pull a second 200 for the
+  // same ETag — either nothing goes out, or the re-validation returns 304.
+  // Same-document hash navigation, deliberately NOT page.goto: a full document
+  // load would reset the SPA's in-memory ETag cache and this row would then be
+  // measuring the harness rather than the re-validation policy.
+  await page.evaluate(() => {
+    window.location.hash = '#/agents'
+  })
+  await expect(page).toHaveURL(/agents/, { timeout: 10_000 })
+  await page.evaluate(() => {
+    window.location.hash = '#/onboarding'
+  })
+  await expect(page.getByText('Step 1 of 3').first()).toBeVisible({ timeout: 15_000 })
+
+  const byEtag = new Map<string, number>()
+  for (const r of catalogResponses) {
+    if (r.status !== 200) continue
+    const key = r.etag ?? '<none>'
+    byEtag.set(key, (byEtag.get(key) ?? 0) + 1)
+  }
+  for (const [etag, count] of byEtag) {
+    expect(count, `catalog ETag ${etag} was served ${count} times with a 200`).toBeLessThanOrEqual(1)
+  }
+})

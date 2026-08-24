@@ -167,6 +167,10 @@ before any test runs, so CI fails loudly rather than silently accepting bad meta
 ```
 tests/e2e/
   *.spec.ts               — test suites (one per feature area)
+  binary_no_removed_literal_test.go
+                          — Go test (ADR-068 SC-001): the BUILT binary contains
+                            no removed provider id. Lives here because tests/ is
+                            outside the roots check-no-removed-providers.sh scans.
   global-setup.ts         — auth setup + preflight checks
   global-teardown.ts      — skip manifest writer + baseline gate + expired-entry gate
   setup.ts                — self-managed gateway helpers (startGateway, stopGateway)
@@ -179,6 +183,10 @@ tests/e2e/
     login.ts              — loginAs() helper
     onboard-via-api.ts    — onboardViaAPI() helper
     selectors.ts          — canonical DOM selector helpers
+    onboarding-stubs.ts   — stubOnboarding(): puts the SPA back on the wizard
+                            without mutating the shared gateway (ADR-068)
+    contrast.ts           — WCAG luminance/contrast maths for the focus-ring row
+    contrast.test.ts      — vitest coverage for those helpers (runs in `spa`)
     session-setup.ts      — session creation helpers
     .auth/admin.json      — persisted auth state (gitignored)
 ```
