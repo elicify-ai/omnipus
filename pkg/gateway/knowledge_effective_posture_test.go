@@ -23,9 +23,10 @@
 //
 // # The oracle
 //
-// ADR-067 D17, quoted: "retrieval tools (knowledge_search, knowledge_graph)
-// `allow` for all four core agents; authoring tools `allow` for Jim and Ava,
-// `ask` for Mia and Ray." That sentence is transcribed below as data. It is
+// ADR-067 D17, quoted (as amended 2026-08-24): "retrieval tools
+// (knowledge_search, knowledge_graph, knowledge_tasks) `allow` for all four
+// core agents; authoring tools `allow` for Jim and Ava, `ask` for Mia and
+// Ray." That sentence is transcribed below as data. It is
 // NOT read back from pkg/config/defaults.go or pkg/coreagent/core.go — those
 // are the things under test, and a test that asks the seed what the seed says
 // passes for any seed.
@@ -70,10 +71,24 @@ var d17Posture = map[string]struct{ retrieval, authoring string }{
 func TestKnowledgeTools_D17PostureIsWhatTheTurnActuallyResolves(t *testing.T) {
 	al, _, _ := kwLoop(t)
 
+	// RETRIEVAL HERE MEANS "POSTURED AS A READ", NOT "BUILT BY RetrievalTools".
+	//
+	// The two groupings are deliberately not the same set, and conflating them
+	// is what put this test in the wrong. knowledgeRetrievalToolNames mirrors
+	// knowledge.RetrievalToolNames(), which is derived from the tool objects
+	// RetrievalTools() constructs — a WIRING group (who gets which deps). D17
+	// classifies by BEHAVIOUR: does the call read, or does it write?
+	//
+	// knowledge_tasks is constructed alongside the authoring tools and always
+	// has been; ADR-067 D7's 2026-08-24 amendment reclassifies its POSTURE as
+	// retrieval, because TasksTool.Execute opens no writer and emits no
+	// mutation audit record. The construction grouping is left alone on
+	// purpose — moving it would change tool wiring to settle a policy question.
 	retrieval := map[string]bool{}
 	for _, n := range knowledgeRetrievalToolNames {
 		retrieval[n] = true
 	}
+	retrieval["knowledge_tasks"] = true
 
 	for agentID, want := range d17Posture {
 		normalized := routing.NormalizeAgentID(agentID)

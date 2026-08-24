@@ -219,10 +219,24 @@ weakened into one that asserts nothing (`docs/internal/false-green-patterns.md`)
 ### D7 — Retrieval and authoring tools, workspace-scoped
 
 **Retrieval:** `knowledge_search` (BM25; top-N; folder scoping; returns path, title, matched
-excerpt) and `knowledge_graph` (`links`, `backlinks`, `unresolved`, `orphans`, neighbourhood).
+excerpt), `knowledge_graph` (`links`, `backlinks`, `unresolved`, `orphans`, neighbourhood) and
+`knowledge_tasks` (checklist items parsed out of notes; see the 2026-08-24 amendment below).
 
 **Authoring:** `knowledge_create`, `knowledge_link`, `knowledge_set_property`,
-`knowledge_append_section`, `knowledge_tasks`, `knowledge_move` / `knowledge_rename`.
+`knowledge_append_section`, `knowledge_move` / `knowledge_rename`.
+
+> *Amended 2026-08-24:* the Authoring list above read `knowledge_create`, `knowledge_link`,
+> `knowledge_set_property`, `knowledge_append_section`, **`knowledge_tasks`**, `knowledge_move` /
+> `knowledge_rename`, and `knowledge_tasks` is now listed under **Retrieval** instead. It was
+> filed as authoring by proximity, not by behaviour: `TasksTool.Execute`
+> (`pkg/knowledge/authoring_tools.go`) opens no writer, calls no `os.Create`/`WriteFile`/
+> `Rename`/`Remove`, emits no mutation audit record, and appends only to the in-memory response
+> it returns. It walks notes and reports the checklist items it finds. Classifying a read as
+> authoring had a real cost under D17: it put an approval modal in front of Mia (the default
+> agent) and Ray for a tool that reads strictly less than the `knowledge_search` those same
+> agents already hold at `allow` — the same notes, returned as text, with no prompt. A consent
+> step that guards nothing trains the operator to dismiss consent steps. The rename/move pair
+> keeps its `ask`, where the prompt is the whole point.
 
 **Isolation (security).** Both retrieval tools are scoped to **the calling agent's workspace's
 mounts**. Resolution path: agent → workspace → `AllowedMountRoots(home, workspaceID)` → KBs
@@ -691,8 +705,15 @@ Absent from revision 1, and a boot-blocker: `config.ValidateToolPolicyCoverage` 
 - **Fresh install:** all `knowledge_*` tools are enumerated explicitly in
   `pkg/config/defaults.go` and per-agent in `coreagent.SeedConfig`. No wildcards — the
   no-default-policy rule admits none for static builtins.
-- **Seed posture:** retrieval tools (`knowledge_search`, `knowledge_graph`) `allow` for all
-  four core agents; authoring tools `allow` for Jim and Ava, `ask` for Mia and Ray.
+- **Seed posture:** retrieval tools (`knowledge_search`, `knowledge_graph`,
+  `knowledge_tasks`) `allow` for all four core agents; authoring tools `allow` for Jim and Ava,
+  `ask` for Mia and Ray.
+  > *Amended 2026-08-24:* the retrieval list read `knowledge_search`, `knowledge_graph` only,
+  > because D7 filed `knowledge_tasks` under authoring. D7's amendment reclassifies it as
+  > retrieval on the evidence that it performs no writes, so it is seeded `allow` for all four
+  > core agents like the other two reads. This LOOSENS the seeded posture for Mia and Ray from
+  > `ask` to `allow`; it is recorded here rather than left as a silent divergence between the
+  > seed and this decision. Operator-ratified 2026-08-24.
 - **Existing installs:** the load-path backfill sets unknown tools to `deny` with only a WARN
   (`pkg/config/validate.go`), so every existing operator would upgrade into a KB whose tools
   are all denied and be told only in a log line. A **migration** must seed the new tools at

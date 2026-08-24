@@ -90,7 +90,29 @@ func knowledgeDriftNotifier(
 		title, body := knowledgeDriftMessage(r)
 		now := time.Now().UnixMilli()
 
-		for _, recipient := range knowledgeDriftRecipients(getCfg) {
+		// THE LOG LINE IS THE FLOOR, NOT THE FALLBACK.
+		//
+		// Before this notifier existed, NewKnowledgeLifecycle's default hook
+		// wrote a slog.Warn for every unhealthy report, and that WARN was the
+		// operator's only record. Installing a notifier silently retired it:
+		// the default hook is only used when DriftNotify is nil, and boot now
+		// always passes this function, so that WARN became unreachable in
+		// production. The notification then replaced it with something WEAKER
+		// on the most common install shape — accountless, headless, or simply
+		// no tab open — where the recipient is the broadcast sentinel, nothing
+		// is persisted, and an emit with no subscriber is discarded in silence.
+		// Drift was detected, a full re-index ran, and gateway.log said nothing.
+		//
+		// So log unconditionally, BEFORE delivery is attempted. The notification
+		// is an addition to the log, never a replacement for it: the bell is
+		// for the person watching, the log is for the person diagnosing after
+		// the fact, and those are not the same person or the same moment.
+		recipients := knowledgeDriftRecipients(getCfg)
+		slog.Warn("knowledge: drift detected",
+			"collection", r.Root, "findings", len(r.Findings), "summary", r.Summary(),
+			"recipients", len(recipients))
+
+		for _, recipient := range recipients {
 			n := notifications.Notification{
 				Recipient:   recipient,
 				Type:        notifications.TypeKnowledgeDrift,
@@ -98,11 +120,27 @@ func knowledgeDriftNotifier(
 				Body:        body,
 				Severity:    notifications.SeverityWarning,
 				CreatedAtMs: now,
+				// One live item per COLLECTION, updated in place. Drift that a
+				// re-index cannot clear — an unreadable file, a stale rename
+				// journal, a document-count mismatch — is re-reported every
+				// cycle by design, because it is still true. Without a key
+				// that is a new bell item every six hours, forever, and the
+				// 50-item cap turns one bad file into an eviction engine for
+				// every other notification the operator has.
+				CoalesceKey: "knowledge_drift:" + r.Root,
 			}
 			stored := n
 			// The admin-broadcast sentinel is not a real username; persisting it
 			// would write a file no ListForUser ever reads (same rule the
 			// schedule-failure path follows).
+			if recipient == agent.NotificationAdminBroadcast {
+				// Same situation schedules.go reports as finding M4, and the
+				// same wording: there is no account to file this under, so the
+				// bell cannot hold it and a reload cannot recover it. The WARN
+				// above is the durable record; this line names why.
+				slog.Warn("knowledge: drift notification has no persistable recipient; live-broadcast only",
+					"collection", r.Root)
+			}
 			if store != nil && recipient != agent.NotificationAdminBroadcast {
 				persisted, err := store.Create(n)
 				if err != nil {

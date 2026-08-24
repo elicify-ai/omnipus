@@ -733,8 +733,12 @@ func (r *scheduledRunner) onFailure(job *cron.CronJob, sessionID string, runErr 
 			Body:       body,
 			Severity:   notifications.SeverityError,
 			ScheduleID: job.ID,
-			SessionID:  sessionID,
-			AgentID:    job.AgentID,
+			// One live item per schedule, updated — the behaviour Create used
+			// to give this path implicitly by keying on ScheduleID. It is
+			// stated explicitly now that the key is its own field.
+			CoalesceKey: "schedule:" + job.ID,
+			SessionID:   sessionID,
+			AgentID:     job.AgentID,
 		}
 		stored := n
 		// M4: the admin-broadcast sentinel is NOT a real username — persisting it

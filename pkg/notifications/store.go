@@ -71,6 +71,19 @@ type Notification struct {
 	Read        bool   `json:"read"`
 	CreatedAtMs int64  `json:"created_at_ms"`
 	UpdatedAtMs int64  `json:"updated_at_ms,omitempty"`
+	// CoalesceKey is the stable identity of a RECURRING event: a Create whose
+	// key matches an existing UNREAD notification updates that one in place
+	// instead of adding a row. Empty means "always a new row".
+	//
+	// This is the ONLY coalescing mechanism. Create used to key on ScheduleID,
+	// which quietly made coalescing a privilege of the scheduler: the drift
+	// checker sets no ScheduleID, so its every-six-hours report appended
+	// forever. Some drift cannot be repaired by re-indexing — one unreadable
+	// file, a stale rename journal — so a single bad file produced a new item
+	// every six hours indefinitely and evicted everything else from the
+	// 50-item cap within a fortnight. Any producer that repeats MUST set this;
+	// ScheduleID is now routing data (the SPA's click target) and nothing more.
+	CoalesceKey string `json:"coalesce_key,omitempty"`
 	ScheduleID  string `json:"schedule_id,omitempty"`
 	SessionID   string `json:"session_id,omitempty"`
 	AgentID     string `json:"agent_id,omitempty"`
@@ -219,16 +232,19 @@ func (s *Store) Create(n Notification) (Notification, error) {
 		return Notification{}, err
 	}
 
-	// Coalesce: find an existing UNREAD notification for the same schedule.
-	if n.ScheduleID != "" {
+	// Coalesce: find an existing UNREAD notification for the same recurring
+	// event. See CoalesceKey's doc comment for why this is not keyed on
+	// ScheduleID any more.
+	if n.CoalesceKey != "" {
 		for i := range list {
-			if !list[i].Read && list[i].ScheduleID == n.ScheduleID {
+			if !list[i].Read && list[i].CoalesceKey == n.CoalesceKey {
 				list[i].Title = n.Title
 				list[i].Body = n.Body
 				list[i].Severity = n.Severity
 				list[i].Type = n.Type
 				list[i].SessionID = n.SessionID
 				list[i].AgentID = n.AgentID
+				list[i].ScheduleID = n.ScheduleID
 				list[i].UpdatedAtMs = now
 				updated := list[i]
 				if err := s.saveLocked(n.Recipient, list); err != nil {

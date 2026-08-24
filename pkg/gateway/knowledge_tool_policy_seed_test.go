@@ -224,10 +224,18 @@ func TestKnowledgeTools_SeededPostureMatchesD17(t *testing.T) {
 
 	// D17: retrieval "allow" for all four base agents; authoring "allow" for
 	// Jim and Ava, "ask" for Mia and Ray.
-	retrieval := []string{"knowledge_search", "knowledge_graph"}
+	//
+	// knowledge_tasks is RETRIEVAL, per ADR-067 D7's 2026-08-24 amendment. It
+	// sat in the authoring list here until then, matching D7's original filing;
+	// both were wrong about the same thing. TasksTool.Execute opens no writer
+	// and emits no mutation audit record — it parses checklist items out of the
+	// notes knowledge_search already returns verbatim at "allow". Read the ADR
+	// amendment before moving it back: the classification is the decision, and
+	// this list is a transcription of it, not an independent judgement.
+	retrieval := []string{"knowledge_search", "knowledge_graph", "knowledge_tasks"}
 	authoring := []string{
 		"knowledge_create", "knowledge_link", "knowledge_set_property",
-		"knowledge_append_section", "knowledge_tasks",
+		"knowledge_append_section",
 		"knowledge_move", "knowledge_rename",
 	}
 	authoringPosture := map[string]string{

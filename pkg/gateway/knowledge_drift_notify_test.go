@@ -69,6 +69,11 @@ func driftCfgWithUser(username string) func() *config.Config {
 	return func() *config.Config { return cfg }
 }
 
+// driftCfgNoUsers is the DEFAULT install shape: a gateway with no accounts
+// onboarded yet. It is the configuration under which a drift alert has nowhere
+// persistable to go, which is exactly why it needs its own coverage.
+var driftCfgNoUsers = func() *config.Config { return &config.Config{} }
+
 func unhealthyDriftReport(root string) knowledge.DriftReport {
 	return knowledge.DriftReport{
 		Root:      root,
@@ -443,4 +448,67 @@ func TestDriftNotify_BootActuallyPassesTheNotifier(t *testing.T) {
 			"call. A nil there ships the whole drift-notification lane dead — the operator "+
 			"is told nothing while every test in this file stays green, which is the exact "+
 			"failure mode this change was written to end", bootFile)
+}
+
+// captureSlog lives in rest_onboarding_test.go — same package, same purpose.
+
+// TestDriftNotify_AlwaysLeavesADurableRecord is the regression guard for the
+// silent-drift defect fixed 2026-08-24.
+//
+// THE SHAPE OF THE BUG: NewKnowledgeLifecycle carries a default DriftNotify
+// hook that slog.Warns every unhealthy report, and that WARN was, for a while,
+// the operator's only record of drift. Installing this notifier retired it —
+// the default is used only when DriftNotify is nil, and boot always passes a
+// non-nil one — so the WARN became unreachable in production. The notification
+// that replaced it is WEAKER on the most common install: with no configured
+// users the recipient is the broadcast sentinel, which is deliberately never
+// persisted, and an emit with no WebSocket subscriber is discarded without a
+// counter or a log. Drift was found, a full re-index ran, and nothing anywhere
+// recorded it.
+//
+// The assertion is on the log, NOT on the notification, because the log is the
+// only surface that survives all four of: no users, no browser tab, a restart,
+// and a store write failure.
+func TestDriftNotify_AlwaysLeavesADurableRecord(t *testing.T) {
+	unhealthy := knowledge.DriftReport{
+		Root: "/vault",
+		Findings: []knowledge.DriftFinding{
+			{Kind: knowledge.DriftUnreadable, Path: "locked.md"},
+		},
+	}
+
+	t.Run("no users configured — live-only, and the log says so", func(t *testing.T) {
+		buf := captureSlog(t)
+		// No store and no users: the notification cannot be persisted, and
+		// with no subscriber the live push reaches nobody either.
+		notify := knowledgeDriftNotifier(nil, &driftEmitRecorder{}, driftCfgNoUsers)
+		if notify == nil {
+			t.Fatal("notifier must exist when an emitter is present")
+		}
+		notify(unhealthy)
+
+		out := buf.String()
+		if !strings.Contains(out, "knowledge: drift detected") {
+			t.Fatalf("drift must ALWAYS be recorded in the log — this is the only\n"+
+				"surface that survives a headless install with no tab open.\ngot: %s", out)
+		}
+		if !strings.Contains(out, "/vault") {
+			t.Fatalf("the record must name the collection, else it cannot be acted on\ngot: %s", out)
+		}
+		if !strings.Contains(out, "no persistable recipient") {
+			t.Fatalf("when the bell cannot hold the alert the log must SAY so, "+
+				"the way schedules.go does for the same situation\ngot: %s", out)
+		}
+	})
+
+	t.Run("healthy report stays silent", func(t *testing.T) {
+		buf := captureSlog(t)
+		notify := knowledgeDriftNotifier(nil, &driftEmitRecorder{}, driftCfgNoUsers)
+		notify(knowledge.DriftReport{Root: "/vault"})
+
+		if strings.Contains(buf.String(), "drift detected") {
+			t.Fatalf("a HEALTHY collection must produce no drift record at all — "+
+				"a log that cries wolf every six hours is one nobody reads\ngot: %s", buf.String())
+		}
+	})
 }
