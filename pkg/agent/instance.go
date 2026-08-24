@@ -60,7 +60,19 @@ type AgentInstance struct {
 	WindowClamped bool
 	WindowExempt  bool
 	WindowUnknown bool
-	Provider      providers.LLMProvider
+	// needsProvider / needsProviderID are ADR-067 FR-016's per-agent degrade:
+	// the PRIMARY candidate pins a provider id that is neither a catalog id
+	// nor a constructible custom row. runTurn refuses such a turn FIRST in
+	// the pre-turn gate with LLMError code needs_provider and makes zero
+	// upstream requests; the gateway projects the same state independently
+	// as Agent.degraded_reason. needsProviderID is the operator's own
+	// spelling of the id, carried so the WARN can name it (and nothing else
+	// — SC-010). Written under mu at construction and on every model switch;
+	// read through needsProviderSnapshot on the turn path so a concurrent
+	// ApplyAgentModel can never be observed torn.
+	needsProvider   bool
+	needsProviderID string
+	Provider        providers.LLMProvider
 	// providerPool is the atomic-pointer form of ProviderPool. The pool is
 	// keyed by provider name and holds one LLMProvider instance per distinct
 	// provider referenced by Candidates (or by the light tier). The fallback
@@ -287,7 +299,7 @@ func NewAgentInstance(
 	// construction (vs. lazily inside the fallback hot path) keeps the
 	// per-turn hot path allocation-free and surfaces credential / API-base
 	// config errors at startup instead of mid-conversation.
-	providerPool := buildProviderPool(cfg, candidates)
+	poolBuild := buildProviderPool(cfg, candidates, agentID)
 
 	// ADR-066 D2: the context window comes from the ONE resolver, keyed by
 	// the primary candidate's (provider, model) pair and this agent's id so
@@ -380,6 +392,8 @@ func NewAgentInstance(
 		WindowClamped:   window.Clamped,
 		WindowExempt:    window.Exempt,
 		WindowUnknown:   window.Unknown,
+		needsProvider:   poolBuild.primaryUnknown,
+		needsProviderID: poolBuild.primaryProvider,
 		Provider:        provider,
 		Sessions:        sessions,
 		ContextBuilder:  contextBuilder,
@@ -396,7 +410,7 @@ func NewAgentInstance(
 	// Publish the eagerly-built pool. StoreProviderPool uses the atomic
 	// pointer; calling it here (vs. direct field assignment) keeps the
 	// publish path identical to the model-switch path in ApplyAgentModel.
-	inst.StoreProviderPool(providerPool)
+	inst.StoreProviderPool(poolBuild.pool)
 	// O7: thread the global sandbox tool policies into the runtime policy
 	// snapshot so FilterToolsByPolicy enforces global × agent merge at call
 	// time. Build the policy even when the agent has no per-agent tools
@@ -539,6 +553,8 @@ func (a *AgentInstance) snapshotForExternalDispatch() *AgentInstance {
 	windowClamped := a.WindowClamped
 	windowExempt := a.WindowExempt
 	windowUnknown := a.WindowUnknown
+	needsProvider := a.needsProvider
+	needsProviderID := a.needsProviderID
 	pool := a.providerPool.Load()
 	a.mu.RUnlock()
 
@@ -558,6 +574,8 @@ func (a *AgentInstance) snapshotForExternalDispatch() *AgentInstance {
 		WindowClamped:   windowClamped,
 		WindowExempt:    windowExempt,
 		WindowUnknown:   windowUnknown,
+		needsProvider:   needsProvider,
+		needsProviderID: needsProviderID,
 		Provider:        provider,
 		Sessions:        a.Sessions,
 		ContextBuilder:  a.ContextBuilder,
@@ -578,18 +596,54 @@ func (a *AgentInstance) snapshotForExternalDispatch() *AgentInstance {
 	return out
 }
 
+// providerPoolBuild is everything buildProviderPool decided for one agent:
+// the pool itself, plus whether the PRIMARY candidate pins a provider id that
+// is UNKNOWN (ADR-067 FR-016). An unknown primary is the agent's
+// `needs_provider` degrade — it refuses every turn with zero upstream
+// requests and the gateway projects it as Agent.degraded_reason. An unknown
+// FALLBACK is not: it is dropped from the pool and the agent runs on the
+// rest (DS-8 rows 3 and 6).
+type providerPoolBuild struct {
+	pool map[string]providers.LLMProvider
+	// primaryUnknown and primaryProvider name the FR-016 degrade. The id is
+	// carried so the refusal can name the operator's own spelling — and only
+	// that, never a canonical alternative (SC-010).
+	primaryUnknown  bool
+	primaryProvider string
+}
+
 // buildProviderPool pre-builds an LLMProvider for every distinct provider
 // name referenced by the agent's candidate chain (primary + fallbacks).
-// Returns nil when the candidate chain has no explicit providers (every
-// candidate routes through the agent primary — no pool needed).
+// Returns a nil pool when the candidate chain has no explicit providers
+// (every candidate routes through the agent primary — no pool needed).
 //
 // Build failures are non-fatal: a missing entry for a pinned provider name
 // degrades to "use the primary's provider" via GetProviderForCandidate's
 // fallback path. We log at WARN so operators can see the cause of a
 // degraded fallback path at startup.
-func buildProviderPool(cfg *config.Config, candidates []providers.FallbackCandidate) map[string]providers.LLMProvider {
+//
+// ADR-067 FR-016 splits one of those failures out of the generic skip. A
+// candidate whose provider id is UNKNOWN — neither a catalog id nor a
+// constructible custom row (providers.IsUnknownProviderID) — is never
+// constructed and never rescued through the passthrough net: rescuing it
+// would be an alias by another name, and aliases are what the greenfield
+// rule deleted. Instead:
+//
+//   - unknown PRIMARY  → primaryUnknown; the agent is `needs_provider` and
+//     runTurn refuses before any provider call.
+//   - unknown FALLBACK → dropped from the pool with exactly ONE WARN naming
+//     the agent and the provider; the agent runs on the remaining pool.
+//
+// agentID is the agent the pool belongs to; it appears in those WARNs so an
+// operator can tell WHICH agent lost a fallback. It may be empty for a
+// one-off pool that belongs to no single agent (the session-recap chain).
+func buildProviderPool(
+	cfg *config.Config,
+	candidates []providers.FallbackCandidate,
+	agentID string,
+) providerPoolBuild {
 	if cfg == nil || len(candidates) == 0 {
-		return nil
+		return providerPoolBuild{}
 	}
 	// Collect distinct provider names. Empty Provider names share the
 	// primary's provider via the legacy path — no pool entry needed.
@@ -602,10 +656,19 @@ func buildProviderPool(cfg *config.Config, candidates []providers.FallbackCandid
 		seen[name] = struct{}{}
 	}
 	if len(seen) == 0 {
-		return nil
+		return providerPoolBuild{}
 	}
+	// unknown holds the FR-016 classification for every distinct candidate
+	// provider id. It is computed BEFORE any construction so a decision that
+	// belongs to the catalog is never inferred from a client-build failure
+	// (a missing credential is not an unknown provider).
+	unknown := make(map[string]struct{})
 	pool := make(map[string]providers.LLMProvider, len(seen))
 	for name := range seen {
+		if providers.IsUnknownProviderID(cfg, name) {
+			unknown[name] = struct{}{}
+			continue
+		}
 		mc, err := findModelConfigForProvider(cfg, name)
 		if err != nil {
 			logger.WarnCF("agent", "buildProviderPool: no ModelConfig for candidate provider; pool entry skipped",
@@ -638,6 +701,15 @@ func buildProviderPool(cfg *config.Config, candidates []providers.FallbackCandid
 		if _, ok := pool[name]; ok {
 			continue
 		}
+		if _, bad := unknown[name]; bad {
+			// FR-016: an UNKNOWN id is never rescued through a passthrough.
+			// The net exists for a vendor NAMESPACE that leaked out of a
+			// slash-separated model id (the id is a real catalog provider,
+			// just not a configured row); routing an id the catalog has
+			// never heard of through someone else's credentials would be an
+			// alias, which is exactly what the greenfield rule removed.
+			continue
+		}
 		if mc := findPassthroughForModel(cfg, c.Model); mc != nil {
 			p, _, err := providers.CreateProviderFromConfig(mc)
 			if err != nil {
@@ -661,10 +733,40 @@ func buildProviderPool(cfg *config.Config, candidates []providers.FallbackCandid
 		}
 	}
 
-	if len(pool) == 0 {
-		return nil
+	// FR-016 verdict. The primary candidate is candidates[0] — the pinned
+	// (provider, model) pair when the agent (or agents.defaults.default_model)
+	// names one, and the resolver's own first choice otherwise.
+	primary := strings.TrimSpace(candidateProvider(candidates))
+	_, primaryUnknown := unknown[primary]
+	primaryUnknown = primaryUnknown && primary != ""
+
+	// One WARN per unknown FALLBACK-only provider, naming the agent and the
+	// provider — the operator's own spelling, never a canonical alternative.
+	// The unknown PRIMARY gets its own single WARN below; it is a different
+	// event (the agent stops running) and must not be reported as a dropped
+	// fallback.
+	for name := range unknown {
+		if name == primary {
+			continue
+		}
+		logger.WarnCF("agent",
+			"Unknown provider named by a fallback; dropped from the agent's provider pool",
+			map[string]any{"agent_id": agentID, "provider": name})
 	}
-	return pool
+	if primaryUnknown {
+		logger.WarnCF("agent",
+			"Agent's primary provider is unknown; the agent needs a provider and will refuse turns",
+			map[string]any{"agent_id": agentID, "provider": primary})
+	}
+
+	if len(pool) == 0 {
+		pool = nil
+	}
+	return providerPoolBuild{
+		pool:            pool,
+		primaryUnknown:  primaryUnknown,
+		primaryProvider: primary,
+	}
 }
 
 // findPassthroughForModel scans cfg.Providers for a passthrough entry
@@ -708,7 +810,13 @@ func findModelConfigForProvider(cfg *config.Config, providerName string) (*confi
 		if mc == nil {
 			continue
 		}
-		if strings.EqualFold(strings.TrimSpace(mc.Provider), providerName) {
+		// ADR-067 FR-036: EXACT after TrimSpace, never case-folded. The
+		// previous strings.EqualFold made "ZAI" resolve the "zai" row, which
+		// is the one shape a retired spelling could still be resurrected
+		// through after the greenfield rename paths were deleted. An
+		// entity whose provider differs from the config only by case is
+		// UNKNOWN, and the agent bound to it degrades (DS-8 row 4).
+		if strings.TrimSpace(mc.Provider) == providerName {
 			clone := *mc
 			return &clone, nil
 		}
@@ -1147,6 +1255,20 @@ func (a *AgentInstance) windowSnapshot() (window int, exempt, unknown bool) {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	return a.ContextWindow, a.WindowExempt, a.WindowUnknown
+}
+
+// needsProviderSnapshot reads the ADR-067 FR-016 degrade under the instance
+// mutex, for the same reason windowSnapshot does: ApplyAgentModel rewrites it
+// inside the Model / Provider / Candidates / pool flip, and a turn must never
+// pair the new model with the old verdict. Returns the operator's own
+// spelling of the offending id alongside the flag so the refusal can name it.
+func (a *AgentInstance) needsProviderSnapshot() (needs bool, providerID string) {
+	if a == nil {
+		return false, ""
+	}
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.needsProvider, a.needsProviderID
 }
 
 // budgetChecksExempt reports whether every budget check — pre-turn trim,

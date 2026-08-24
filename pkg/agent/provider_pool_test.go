@@ -157,7 +157,7 @@ func TestBuildProviderPool_DedupsDistinctProviders(t *testing.T) {
 		{Provider: "openrouter", Model: "openrouter/google/gemini-2.5-flash"},
 	}
 
-	pool := buildProviderPool(cfg, candidates)
+	pool := buildProviderPool(cfg, candidates, "mia").pool
 	if pool == nil {
 		t.Fatal("buildProviderPool returned nil despite 3 openrouter candidates")
 	}
@@ -194,7 +194,7 @@ func TestBuildProviderPool_SkipsProvidersWithMissingModelConfig(t *testing.T) {
 		{Provider: "nonexistent-provider", Model: "mystery/model"},
 	}
 
-	pool := buildProviderPool(cfg, candidates)
+	pool := buildProviderPool(cfg, candidates, "mia").pool
 	if pool == nil {
 		t.Fatal("buildProviderPool returned nil — valid openrouter entry should have produced a 1-entry pool")
 	}
@@ -212,46 +212,62 @@ func TestBuildProviderPool_SkipsProvidersWithMissingModelConfig(t *testing.T) {
 // valid input (NewAgentInstance may be called during test teardown / partial
 // boot) — the function must not panic and must return nil.
 func TestBuildProviderPool_NilCfgReturnsNil(t *testing.T) {
-	if got := buildProviderPool(nil, []providers.FallbackCandidate{{Provider: "openrouter", Model: "x"}}); got != nil {
-		t.Errorf("buildProviderPool(nil, ...) = %v, want nil", got)
+	if got := buildProviderPool(nil, []providers.FallbackCandidate{{Provider: "openrouter", Model: "x"}}, "mia"); got.pool != nil {
+		t.Errorf("buildProviderPool(nil, ...) = %v, want nil", got.pool)
 	}
-	if got := buildProviderPool(&config.Config{}, nil); got != nil {
-		t.Errorf("buildProviderPool(cfg, nil) = %v, want nil", got)
+	if got := buildProviderPool(&config.Config{}, nil, "mia"); got.pool != nil {
+		t.Errorf("buildProviderPool(cfg, nil) = %v, want nil", got.pool)
 	}
 }
 
-// TestFindModelConfigForProvider_CaseInsensitiveMatch covers Crit 8: a
-// candidate chain that pins "OpenRouter" (mixed case) must still resolve to
-// the "openrouter" ModelConfig. The spec for the candidate string is
-// case-insensitive on the provider name — otherwise a config that defines
-// "openrouter" but a fallback that says "OpenRouter" silently skips the
-// pool entry.
-func TestFindModelConfigForProvider_CaseInsensitiveMatch(t *testing.T) {
+// TestFindModelConfigForProvider_ExactMatchOnly — ADR-067 T067-09 test T28
+// (FR-036, DS-8 row 4). REPLACES TestFindModelConfigForProvider_CaseInsensitiveMatch,
+// whose subject (strings.EqualFold on the provider id) FR-036 deletes: a
+// case-folded match is the one shape through which a retired spelling could
+// still resolve a canonical row after the greenfield rename paths were
+// removed. The clone half of that test's coverage is preserved verbatim
+// below — it was, and remains, a real invariant.
+//
+// The lookup is EXACT after TrimSpace: surrounding whitespace is tolerated
+// (a config field the operator typed), a different case is not.
+func TestFindModelConfigForProvider_ExactMatchOnly(t *testing.T) {
 	cfg := &config.Config{
 		Providers: []*config.ModelConfig{
 			{
-				Name:      "openrouter-1",
-				Model:     "openrouter/openai/gpt-4o",
-				Provider:  "openrouter",
-				APIBase:   "https://openrouter.ai/api/v1",
+				Name:      "zai-1",
+				Model:     "glm-5.2",
+				Provider:  "zai",
+				APIBase:   "https://api.z.ai/api/paas/v4",
 				APIKeyRef: "k",
 			},
 		},
 	}
 
-	mc, err := findModelConfigForProvider(cfg, "OpenRouter")
-	if err != nil {
-		t.Fatalf("findModelConfigForProvider(OpenRouter) error = %v — want case-insensitive match", err)
+	// The FR-036 case: an entity that says "ZAI" must NOT resolve "zai".
+	if mc, err := findModelConfigForProvider(cfg, "ZAI"); err == nil {
+		t.Fatalf(
+			"findModelConfigForProvider(%q) resolved %q — FR-036 requires an EXACT comparison; a case-folded match resurrects a retired spelling",
+			"ZAI", mc.Provider,
+		)
 	}
-	if mc == nil {
-		t.Fatal("findModelConfigForProvider returned nil mc — expected clone of openrouter entry")
-	}
-	if mc.Provider != "openrouter" {
-		t.Errorf("returned mc.Provider = %q, want 'openrouter' (the canonical-cased match)", mc.Provider)
+
+	// The exact id still resolves, and whitespace around it is trimmed.
+	for _, id := range []string{"zai", "  zai  "} {
+		mc, err := findModelConfigForProvider(cfg, id)
+		if err != nil {
+			t.Fatalf("findModelConfigForProvider(%q) error = %v — the exact id (after TrimSpace) must resolve", id, err)
+		}
+		if mc == nil || mc.Provider != "zai" {
+			t.Fatalf("findModelConfigForProvider(%q) = %+v, want the 'zai' row", id, mc)
+		}
 	}
 
 	// And the clone must be a distinct value (modifying it must not mutate
-	// cfg.Providers[0]).
+	// cfg.Providers[0]) — preserved from the replaced test.
+	mc, err := findModelConfigForProvider(cfg, "zai")
+	if err != nil {
+		t.Fatalf("findModelConfigForProvider(zai) error = %v", err)
+	}
 	mc.Name = "MUTATED"
 	if cfg.Providers[0].Name == "MUTATED" {
 		t.Error("findModelConfigForProvider did not return a clone — mutation leaked into cfg.Providers[0]")
@@ -283,7 +299,7 @@ func TestBuildProviderPool_FallsBackToPassthrough(t *testing.T) {
 	candidates := []providers.FallbackCandidate{
 		{Provider: "zai", Model: "z-ai/glm-5.2"},
 	}
-	pool := buildProviderPool(cfg, candidates)
+	pool := buildProviderPool(cfg, candidates, "mia").pool
 	if len(pool) == 0 {
 		t.Fatal("buildProviderPool returned empty pool — defensive fallback failed to route through openrouter")
 	}

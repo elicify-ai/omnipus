@@ -1980,6 +1980,11 @@ func (a *restAPI) listAgents(w http.ResponseWriter) {
 		ag.Default = boolPtr(ac.ID == cfg.Agents.Defaults.DefaultAgentID)
 		// ADR-068 FR-014 (T068-08): needs_model is derived, never stored.
 		ag.NeedsModel = agentNeedsModel(cfg, &ac)
+		// ADR-067 FR-016/FR-031 (T067-09): degraded_reason is derived too,
+		// from the SAME predicate the agent runtime's pre-turn gate uses.
+		// Both flags may be true; `needs_provider` wins in copy (the SPA's
+		// concern) and they stay separate fields on the wire.
+		ag.DegradedReason = agentDegradedReason(a.providerCatalog, cfg, &ac)
 		if len(ac.Skills) > 0 {
 			skills := make([]string, len(ac.Skills))
 			copy(skills, ac.Skills)
@@ -2041,6 +2046,8 @@ func (a *restAPI) getAgent(w http.ResponseWriter, id string) {
 			ag.Default = boolPtr(ac.ID == cfg.Agents.Defaults.DefaultAgentID)
 			// ADR-068 FR-014 (T068-08): needs_model is derived, never stored.
 			ag.NeedsModel = agentNeedsModel(cfg, &ac)
+			// ADR-067 FR-016/FR-031 (T067-09) — see listAgents.
+			ag.DegradedReason = agentDegradedReason(a.providerCatalog, cfg, &ac)
 			if len(ac.Skills) > 0 {
 				skills := make([]string, len(ac.Skills))
 				copy(skills, ac.Skills)
@@ -3933,6 +3940,12 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 				ag.Default = boolPtr(ac.ID == liveCfg.Agents.Defaults.DefaultAgentID)
 				// ADR-068 FR-014 (T068-08): needs_model is derived, never stored.
 				ag.NeedsModel = agentNeedsModel(liveCfg, &ac)
+				// ADR-067 FR-016/FR-031 (T067-09): the PUT response carries
+				// the degrade the request just cleared (or created) — a
+				// repair is visible in the very response that made it, with
+				// no restart beyond the reload this handler already triggers
+				// (US-6.AC3).
+				ag.DegradedReason = agentDegradedReason(a.providerCatalog, liveCfg, &ac)
 				if len(ac.Skills) > 0 {
 					skills := make([]string, len(ac.Skills))
 					copy(skills, ac.Skills)

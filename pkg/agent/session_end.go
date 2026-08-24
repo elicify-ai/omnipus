@@ -411,7 +411,10 @@ func (al *AgentLoop) runRecap(sessionID, trigger string) {
 	// FR-007). The agent's own providerPool only contains its turn candidates;
 	// recap candidates are separate config fields and are never included there.
 	// We build a one-off pool here using the same buildProviderPool helper.
-	recapProviderPool := buildProviderPool(snapCfg, candidates)
+	// The agent id is passed for the FR-016 WARNs only; a recap chain is not
+	// the agent's turn chain, so its primaryUnknown verdict is deliberately
+	// NOT projected onto the instance's needs_provider degrade.
+	recapProviderPool := buildProviderPool(snapCfg, candidates, agentInst.ID).pool
 
 	// resolveRecapProvider mirrors GetProviderForCandidate but consults the
 	// one-off recap pool first, then the agent's turn pool (single-passthrough

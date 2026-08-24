@@ -141,6 +141,18 @@ const (
 	// and its attribution/copy land here so the contract round-trip closes.
 	CodeContextUnrecoverable LLMErrorCode = "context_unrecoverable"
 
+	// CodeNeedsProvider (ADR-067 FR-016/FR-031/FR-038): the agent's PRIMARY
+	// provider id is neither a catalog id nor a constructible custom row (an
+	// id that differs only by case is exact-compared and therefore unknown —
+	// FR-036), so the turn was refused before any provider call and zero
+	// upstream requests were made. Attribution `config`: the copy points at
+	// Settings → Providers, the one place the operator can fix it. Raised by
+	// runTurn's pre-turn gate (FIRST, ahead of model_unassigned and
+	// context_window_unknown) via ErrAgentNeedsProvider. When ADR-068's
+	// derived needs_model is also true, this copy wins (FR-031) — a provider
+	// must exist before a model can.
+	CodeNeedsProvider LLMErrorCode = "needs_provider"
+
 	// CodeContextWindowUnknown (ADR-066 D3, FR-008): the agent's provider is
 	// a `locality: local` endpoint that reported no context window and no
 	// operator override exists, so the turn was refused before any provider
@@ -724,6 +736,14 @@ func TranslateTurnError(err error) LLMError {
 			Code:      CodeWorkspaceUnavailable,
 			Message:   defaultUserMessage(CodeWorkspaceUnavailable),
 			Retryable: isRetryable(CodeWorkspaceUnavailable),
+			Detail:    buildDetail(nil, err.Error()),
+		}
+	}
+	if errors.Is(err, ErrAgentNeedsProvider) {
+		return LLMError{
+			Code:      CodeNeedsProvider,
+			Message:   defaultUserMessage(CodeNeedsProvider),
+			Retryable: isRetryable(CodeNeedsProvider),
 			Detail:    buildDetail(nil, err.Error()),
 		}
 	}

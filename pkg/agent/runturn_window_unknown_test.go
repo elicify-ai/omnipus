@@ -60,11 +60,19 @@ func TestRunTurn_LocalEndpointUnknownWindow_RefusedTyped(t *testing.T) {
 		},
 		// A custom row at a loopback host: locality local (ADR-067's
 		// predicate), not in the catalog, no live value → unknown window.
+		//
+		// `protocol` is REQUIRED here (ADR-067 FR-035, T067-09): a row the
+		// catalog does not carry is a valid custom endpoint only when it
+		// supplies BOTH `api_base` and a custom-eligible `protocol`. Without
+		// it the id is UNKNOWN, and the FIRST pre-turn gate (needs_provider)
+		// would refuse before this test's window gate is ever reached — the
+		// fixture would then pass for the wrong reason, or fail for one.
 		Providers: []*config.ModelConfig{{
 			Name:     "local-model",
 			Model:    "local-model",
 			Provider: "my-proxy",
 			APIBase:  "http://127.0.0.1:8000/v1",
+			Protocol: "openai-compatible",
 		}},
 	}
 	cfg.Context = config.DefaultContextSettings()

@@ -721,6 +721,22 @@ var ErrWorkspaceWorkDirUnavailable = errors.New("workspace work directory unavai
 // directory is missing or could not be created.
 var ErrAgentHomeUnavailable = errors.New("agent home directory unavailable")
 
+// ErrAgentNeedsProvider is returned by runTurn when the agent's PRIMARY
+// provider id is UNKNOWN (ADR-067 FR-016/FR-038): neither a catalog id nor a
+// constructible custom row — including an id that differs from a configured
+// one only by case, which is exact-compared and therefore unknown (FR-036).
+//
+// The turn is refused with LLMError code needs_provider (attribution
+// `config`), logged at WARN, and ZERO upstream requests are made. It is
+// evaluated FIRST in the pre-turn gate, ahead of ADR-068's model_unassigned
+// and ADR-066's ErrContextWindowUnknown: a provider must exist before a model
+// can, and a model must exist before its window can be sized.
+//
+// The refusal clears the moment the operator re-points the agent at a real
+// provider through the existing agent-update path — no restart beyond the
+// reload that path already triggers (US-6.AC3).
+var ErrAgentNeedsProvider = errors.New("agent's provider is not configured; turn refused")
+
 // ErrContextWindowUnknown is returned by runTurn when the agent's provider is
 // a `locality: local` endpoint that reported no context window and no
 // operator override exists (ADR-066 D3, FR-008). The turn is refused — never
@@ -4920,7 +4936,7 @@ func (al *AgentLoop) ApplyAgentModel(agentID, model string) (string, error) {
 	// distinct provider pre-built. The agent's existing pool may carry stale
 	// entries for the previous primary's provider; rebuilding from the new
 	// candidate chain keeps ProviderPool coherent with Candidates.
-	newPool := buildProviderPool(cfg, nextCandidates)
+	newBuild := buildProviderPool(cfg, nextCandidates, agent.ID)
 
 	// ADR-066 D2: the window is part of the model identity. Re-resolve it
 	// through the ONE ladder for the new primary (provider, model) and flip
@@ -4948,7 +4964,14 @@ func (al *AgentLoop) ApplyAgentModel(agentID, model string) (string, error) {
 	// while the model field still says OLD. Holding the lock across the
 	// full tuple flip makes (Model, Provider, Candidates, ProviderPool) a
 	// single coherent swap from any reader's perspective.
-	agent.StoreProviderPool(newPool)
+	agent.StoreProviderPool(newBuild.pool)
+	// ADR-067 FR-016: the degrade is part of the model identity too — a
+	// switch onto a provider the catalog does not know must leave the agent
+	// refusing turns, and a switch OFF one must clear the refusal without a
+	// restart (US-6.AC3). Flipped inside the same lock as the rest of the
+	// tuple so a turn never pairs the new model with the old verdict.
+	agent.needsProvider = newBuild.primaryUnknown
+	agent.needsProviderID = newBuild.primaryProvider
 	agent.mu.Unlock()
 
 	// Close the previous provider if it holds resources (e.g. a stateful
@@ -8137,9 +8160,43 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 		ts.opts.WorkspaceID,
 	)
 
+	// ADR-067 FR-016/FR-038 pre-turn gate (FIRST of the three). An agent whose
+	// PRIMARY provider id is unknown cannot reach any upstream at all, so it
+	// is refused here — before the model gate can ask which model, and before
+	// the window gate can ask how big that model's context is. Like the two
+	// gates below it the refusal is a REAL failed turn: turn.start already
+	// went out, the LIFO defers fire on return, and the typed EventKindError
+	// is what the SPA renders. The WARN and the error name the operator's own
+	// spelling of the id and nothing else — never a canonical alternative
+	// (SC-010).
+	if needsProvider, unknownProviderID := ts.agent.needsProviderSnapshot(); needsProvider {
+		turnStatus = TurnEndStatusError
+		providerErr := fmt.Errorf("%w: agent_id=%s provider=%s",
+			ErrAgentNeedsProvider, ts.agent.ID, unknownProviderID)
+		llm := TranslateTurnError(providerErr)
+		logger.WarnCF("agent", "Turn refused: the agent's provider is unknown",
+			map[string]any{"agent_id": ts.agent.ID, "provider": unknownProviderID})
+		al.emitEvent(
+			EventKindError,
+			ts.eventMeta("runTurn", "turn.error"),
+			ErrorPayload{
+				Stage:     "provider",
+				ChatID:    ts.chatID,
+				SessionID: string(ts.routingSessionID),
+				Code:      string(llm.Code),
+				Message:   llm.Message,
+			},
+		)
+		ts.appendClassifiedError(EventKindError.String(), "provider", llm)
+		return turnResult{}, providerErr
+	}
+
+	// (ADR-068's `model_unassigned` gate is the SECOND of the three and lands
+	// between this one and the window gate below.)
+
 	// ADR-066 D3 pre-turn gate (FR-008): a local endpoint that reported no
 	// context window is refused, never run on a guessed number. Order:
-	// needs_provider (ADR-067) → model_unassigned (ADR-068) →
+	// needs_provider (ADR-067, above) → model_unassigned (ADR-068) →
 	// context_window_unknown (here, third). It sits after the model switch
 	// so a switch onto an unsized local model is refused too, and before
 	// the first budget check so nothing ever computes a budget from W = 0.
