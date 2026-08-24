@@ -136,13 +136,12 @@ run_lint() {
   bash scripts/check-no-tool-error-from-status.sh || return 1
   # ADR-061 regression guard: the deleted JPEG screencast path must not return.
   bash scripts/check-no-jpeg-screencast.sh || return 1
-  # ADR-068 §2.4 and ADR-067 SC-008/SC-009/US-11.AC2 guards, same reasoning:
-  # pr.yml runs each in its own step, so omitting them here lets the worker
-  # report a green lint while GitHub's is red. Each self-check/self-test runs
-  # first so a guard that can no longer fail is caught before its verdict is
-  # trusted (docs/internal/false-green-patterns.md).
-  bash scripts/check-no-removed-providers-selfcheck.sh || return 1
-  bash scripts/check-no-removed-providers.sh || return 1
+  # ADR-067 SC-008/SC-009/US-11.AC2 regression guard: no alias, migration or
+  # deprecation machinery in pkg/providers or pkg/config, no folded-away
+  # capabilities package, no bundled SPA catalog. Same reasoning as the guards
+  # above: pr.yml runs it in its own step, so omitting it here lets the worker
+  # report a green lint while GitHub's is red. Self-test first (a guard that
+  # cannot fail is no guard — docs/internal/false-green-patterns.md).
   bash scripts/check-greenfield-providers.sh --self-test || return 1
   bash scripts/check-greenfield-providers.sh || return 1
   # ADR-068 §2.4 regression guard: antigravity / claude-cli / OpenAI device-code
