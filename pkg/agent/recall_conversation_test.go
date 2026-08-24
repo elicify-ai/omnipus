@@ -10,6 +10,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -1230,5 +1231,40 @@ func TestRecallConversation_ToolCallID_HydratedSessionNotAvailable(t *testing.T)
 	}
 	if len(setter.spans) != 0 {
 		t.Fatal("no span may be installed for a hydrated session")
+	}
+}
+
+// TestRecallConversation_CatalogMirrorParametersInSync — pkg/tools carries a
+// metadata-only mirror of this tool (recall_conversation_meta.go) because it
+// cannot import pkg/agent; the catalog and the Constraint #6 coverage
+// universe read the mirror, not the real tool. Its header names
+// pkg/agent/recall_conversation.go as the source of truth, and nothing
+// enforced that until T066-14 found the mirror three modes out of date.
+// pkg/agent CAN see pkg/tools, so the parameter names are compared here.
+func TestRecallConversation_CatalogMirrorParametersInSync(t *testing.T) {
+	live := makeTool(&stubArchive{}, newStubSpanSetter()).Parameters()
+	var mirror map[string]any
+	for _, meta := range tools.GeneralBuiltinMetadata() {
+		if meta.Name() == "recall_conversation" {
+			mirror = meta.Parameters()
+			break
+		}
+	}
+	if mirror == nil {
+		t.Fatal("recall_conversation is missing from the general builtin catalog metadata")
+	}
+	names := func(params map[string]any) []string {
+		props, _ := params["properties"].(map[string]any)
+		out := make([]string, 0, len(props))
+		for k := range props {
+			out = append(out, k)
+		}
+		slices.Sort(out)
+		return out
+	}
+	got, want := names(mirror), names(live)
+	if !slices.Equal(got, want) {
+		t.Fatalf("catalog mirror parameters %v != the real tool's %v — keep "+
+			"pkg/tools/recall_conversation_meta.go in sync with pkg/agent/recall_conversation.go", got, want)
 	}
 }
