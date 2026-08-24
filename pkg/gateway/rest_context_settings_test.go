@@ -195,15 +195,15 @@ func TestContextSettings_PutNullClearsDefaultWindow(t *testing.T) {
 	assert.Equal(t, 64000, *kept.DefaultContextWindow)
 
 	// Explicit null clears it.
-	clear := httptest.NewRecorder()
+	cleared := httptest.NewRecorder()
 	r3 := httptest.NewRequest(http.MethodPut, "/api/v1/settings/context",
 		strings.NewReader(`{"default_context_window":null}`))
 	r3.Header.Set("Content-Type", "application/json")
-	api.HandleContextSettings(clear, r3)
-	require.Equal(t, http.StatusOK, clear.Code, "body: %s", clear.Body.String())
-	var cleared gen.ContextSettings
-	require.NoError(t, json.Unmarshal(clear.Body.Bytes(), &cleared))
-	assert.Nil(t, cleared.DefaultContextWindow, "an explicit null must clear default_context_window")
+	api.HandleContextSettings(cleared, r3)
+	require.Equal(t, http.StatusOK, cleared.Code, "body: %s", cleared.Body.String())
+	var out gen.ContextSettings
+	require.NoError(t, json.Unmarshal(cleared.Body.Bytes(), &out))
+	assert.Nil(t, out.DefaultContextWindow, "an explicit null must clear default_context_window")
 }
 
 // TestContextSettings_PutRejectsOutOfRange covers every 400 rule the contract
