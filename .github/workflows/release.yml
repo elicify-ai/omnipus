@@ -26,8 +26,67 @@ on:
         default: false
 
 jobs:
+  catalog-snapshot-age:
+    name: Catalog Snapshot Age Gate
+    # ADR-067 A-15 / FR-006 (spec test T49). The embedded provider catalog is
+    # a committed snapshot of the assembly repository's release document — the
+    # build never fetches it (see pr.yml's hermetic-build job), which means a
+    # release ships whatever was last committed. A stale snapshot is invisible
+    # at runtime and expensive in the field: models the registry has since
+    # added are simply missing, windows are wrong, and a provider added after
+    # the snapshot cannot be configured at all until the operator's first
+    # successful refresh.
+    #
+    # So the age is gated where it can still be fixed — BEFORE the tag is
+    # created, not after the binaries are published. If this fails, refresh
+    # the snapshot from the assembly repository, commit it, and re-run the
+    # release.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Snapshot updated_at is within 14 days
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import datetime, json, sys
+
+          PATH = "pkg/providers/catalog/data/providers_catalog.json"
+          MAX_AGE_DAYS = 14
+
+          with open(PATH, encoding="utf-8") as fh:
+              doc = json.load(fh)
+
+          raw = doc.get("updated_at")
+          if not raw:
+              print(f"{PATH}: no updated_at — cannot age-check the snapshot")
+              sys.exit(1)
+
+          stamp = datetime.datetime.fromisoformat(raw.replace("Z", "+00:00"))
+          if stamp.tzinfo is None:
+              stamp = stamp.replace(tzinfo=datetime.timezone.utc)
+          age = datetime.datetime.now(datetime.timezone.utc) - stamp
+          days = age.total_seconds() / 86400
+
+          print(f"snapshot version={doc.get('version')} updated_at={raw} age={days:.1f}d")
+          if days > MAX_AGE_DAYS:
+              print(
+                  f"FAIL: the embedded catalog snapshot is {days:.1f} days old, over the "
+                  f"{MAX_AGE_DAYS}-day release bound (ADR-067 A-15). Refresh it from the "
+                  "assembly repository's latest release, commit the new "
+                  "pkg/providers/catalog/data/providers_catalog.json, and re-run this release."
+              )
+              sys.exit(1)
+          if days < 0:
+              print(f"FAIL: updated_at {raw} is in the future — the snapshot is not trustworthy")
+              sys.exit(1)
+          PY
+
   create-tag:
     name: Create Git Tag
+    needs: catalog-snapshot-age
     runs-on: ubuntu-latest
     permissions:
       contents: write

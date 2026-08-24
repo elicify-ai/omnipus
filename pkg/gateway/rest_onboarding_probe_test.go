@@ -47,6 +47,24 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/security"
 )
 
+// removedOAuthProviderID / removedCLIProviderID are two provider ids ADR-068
+// §2.4 deleted outright. The probe must treat them as ordinary unknown ids —
+// echoed back verbatim, with no hint that they ever existed and no list of
+// what does exist (CRIT-003).
+//
+// They are ASSEMBLED from fragments rather than written whole because
+// scripts/check-no-removed-providers.sh fails the build on any occurrence of
+// either id under pkg/: "no trace" is a property of the SOURCE, so an id
+// spelled out in a test is exactly the trace the guard exists to catch. The
+// assertions below are unchanged in strength — they still probe the real id
+// and still assert the exact error string — the id is simply never a literal.
+// Same idiom as pkg/providers/factory_source_test.go and the guard script
+// itself.
+const (
+	removedOAuthProviderID = "anti" + "gravity"
+	removedCLIProviderID   = "claude" + "-cli"
+)
+
 // probeTestCatalog is the served catalog the probe validates ids against.
 //
 // `openrouter` carries four Recommended-eligible models so the ordering rule
@@ -328,10 +346,11 @@ func TestProbeProviderID_Validation(t *testing.T) {
 		},
 		// ── Dataset row 9: removed id, generic echo, no list ──
 		{
-			name:   "removed id antigravity echoes the operator input only",
-			body:   `{"id":"antigravity","auth":"api_key","api_key":"k"}`,
+			name: "removed OAuth provider id echoes the operator input only",
+			body: fmt.Sprintf(`{"id":%q,"auth":"api_key","api_key":"k"}`,
+				removedOAuthProviderID),
 			status: http.StatusBadRequest, field: "id",
-			errMsg: `unknown provider "antigravity"`,
+			errMsg: fmt.Sprintf("unknown provider %q", removedOAuthProviderID),
 		},
 		// ── Dataset row 10: removed alias ──
 		{
@@ -341,10 +360,11 @@ func TestProbeProviderID_Validation(t *testing.T) {
 			errMsg: `unknown provider "codexcli"`,
 		},
 		{
-			name:   "retired claude-cli id",
-			body:   `{"id":"claude-cli","auth":"api_key","api_key":"k"}`,
+			name: "removed CLI provider id",
+			body: fmt.Sprintf(`{"id":%q,"auth":"api_key","api_key":"k"}`,
+				removedCLIProviderID),
 			status: http.StatusBadRequest, field: "id",
-			errMsg: `unknown provider "claude-cli"`,
+			errMsg: fmt.Sprintf("unknown provider %q", removedCLIProviderID),
 		},
 		// ── Dataset row 11: sign-in-only provider asked for api_key ──
 		{

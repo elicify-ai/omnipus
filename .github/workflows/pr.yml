@@ -364,6 +364,21 @@ jobs:
         # re-add them on merge as an ordinary addition — keep the deletion.
         run: bash scripts/check-no-removed-providers.sh
 
+      - name: Run ADR-067 greenfield guard self-test
+        # Proves the guard below can still go red (11 planted violations, one
+        # per rule) before its verdict is trusted — see
+        # docs/internal/false-green-patterns.md.
+        run: bash scripts/check-greenfield-providers.sh --self-test
+
+      - name: Run ADR-067 greenfield guard
+        # ADR-067 SC-008 / SC-009 / US-11.AC2: pkg/providers/capabilities is
+        # folded into pkg/providers/catalog, the prefix-stripping resolver is
+        # gone, neither pkg/providers nor pkg/config carries alias / migration
+        # / deprecation machinery, and the SPA's bundled catalog is deleted.
+        # A branch cut before ADR-067 re-adds the alias path on merge as an
+        # ordinary addition — KEEP THE DELETION.
+        run: bash scripts/check-greenfield-providers.sh
+
   verify-contracts:
     name: Verify Contracts
     # Ensure generated wire-format types (TS + Go) match the spec files.

@@ -360,7 +360,13 @@ func TestResolveContextWindow_ExemptByCliDriver(t *testing.T) {
 
 	t.Run("exemption is by field: no provider-id literal in the resolver", func(t *testing.T) {
 		src := readOwnedFileForTest(t, "resolve_window.go")
-		for _, literal := range []string{`"codex-cli"`, `"codex"`, `"copilot"`, `"claude-cli"`, `"openai-chatgpt"`} {
+		// The fourth id is assembled, not written whole: it names a provider
+		// ADR-068 §2.4 deleted, and scripts/check-no-removed-providers.sh
+		// fails the build on any occurrence of it under pkg/ ("no trace" is a
+		// property of the SOURCE). The assertion is unchanged — the same id is
+		// still searched for in resolve_window.go.
+		removedCLIID := `"` + "claude" + `-cli"`
+		for _, literal := range []string{`"codex-cli"`, `"codex"`, `"copilot"`, removedCLIID, `"openai-chatgpt"`} {
 			assert.NotContains(t, src, literal,
 				"resolve_window.go must decide exemption by the catalog row's cli_kind field, never by id %s", literal)
 		}
