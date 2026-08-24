@@ -737,6 +737,29 @@ var ErrAgentHomeUnavailable = errors.New("agent home directory unavailable")
 // reload that path already triggers (US-6.AC3).
 var ErrAgentNeedsProvider = errors.New("agent's provider is not configured; turn refused")
 
+// ErrAgentModelUnassigned is returned by runTurn when the agent has no model
+// to send the request to (ADR-068 FR-014/FR-015, MAJ-008). Two shapes reach
+// it, and they are exactly the two halves of the derived `needs_model` the
+// gateway projects onto Agent.needs_model:
+//
+//   - the agent pins no primary model and `agents.defaults.default_model`
+//     names none either, so there is literally nothing to call; or
+//   - the model it does pin routes through a provider that is not configured,
+//     which is ADR-067's `needs_provider` state — and that code WINS, because
+//     the pre-turn gate evaluates it first (see below).
+//
+// The turn is refused with LLMError code model_unassigned (attribution
+// `config`) and ZERO upstream requests are made. It is evaluated SECOND in
+// the pre-turn gate: after ADR-067's ErrAgentNeedsProvider (a provider must
+// exist before a model can) and before ADR-066's ErrContextWindowUnknown (a
+// model must exist before its window can be sized). The overlap is not
+// hypothetical — an agent bound to an unknown provider satisfies BOTH
+// predicates, and SC-013 requires it to end with `needs_provider`.
+//
+// The refusal clears as soon as the operator assigns a model through the
+// existing agent-update path, which triggers its own reload.
+var ErrAgentModelUnassigned = errors.New("agent has no model assigned; turn refused")
+
 // ErrContextWindowUnknown is returned by runTurn when the agent's provider is
 // a `locality: local` endpoint that reported no context window and no
 // operator override exists (ADR-066 D3, FR-008). The turn is refused — never
@@ -8196,8 +8219,35 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 		return turnResult{}, providerErr
 	}
 
-	// (ADR-068's `model_unassigned` gate is the SECOND of the three and lands
-	// between this one and the window gate below.)
+	// ADR-068 FR-014/FR-015 pre-turn gate (SECOND of the three). An agent
+	// with no model to call is refused here — after the provider gate above
+	// (a provider must exist before a model can, SC-013) and before the
+	// window gate below (a model must exist before its window can be sized).
+	// Same shape as its two siblings: a REAL failed turn with turn.start
+	// already out, the LIFO defers firing on return, and a typed
+	// EventKindError the SPA renders. The agent's stored model is NOT
+	// touched — a refusal never re-points an agent at some other model
+	// (US-3.AC4).
+	if ts.agent.needsModelSnapshot() {
+		turnStatus = TurnEndStatusError
+		modelErr := fmt.Errorf("%w: agent_id=%s", ErrAgentModelUnassigned, ts.agent.ID)
+		llm := TranslateTurnError(modelErr)
+		logger.WarnCF("agent", "Turn refused: the agent has no model assigned",
+			map[string]any{"agent_id": ts.agent.ID})
+		al.emitEvent(
+			EventKindError,
+			ts.eventMeta("runTurn", "turn.error"),
+			ErrorPayload{
+				Stage:     "model",
+				ChatID:    ts.chatID,
+				SessionID: string(ts.routingSessionID),
+				Code:      string(llm.Code),
+				Message:   llm.Message,
+			},
+		)
+		ts.appendClassifiedError(EventKindError.String(), "model", llm)
+		return turnResult{}, modelErr
+	}
 
 	// ADR-066 D3 pre-turn gate (FR-008): a local endpoint that reported no
 	// context window is refused, never run on a guessed number. Order:

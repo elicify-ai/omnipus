@@ -193,7 +193,7 @@ func TestSpawnSubTurn_ExplicitCancelViaRequestCancel_RecordsCancelledAndReason(t
 	// returns before ever appending to parentTS.childTurnIDs.
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{DefaultModel: config.DefaultModel{Provider: "mock"}, Home: t.TempDir()},
+			Defaults: config.AgentDefaults{DefaultModel: config.DefaultModel{Provider: "mock", Model: "gpt-4o-mini"}, Home: t.TempDir()},
 			List:     []config.AgentConfig{{ID: "mia"}},
 		},
 	}

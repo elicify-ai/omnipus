@@ -1552,7 +1552,7 @@ func TestContextWrapping_SingleLayer(t *testing.T) {
 			// AgentHomeBasePath() (and the shared session store's baseDir) to
 			// the process's current working directory, shared by every test
 			// in this package/binary that also leaves it unset.
-			Defaults: config.AgentDefaults{DefaultModel: config.DefaultModel{Provider: "mock"}, Home: t.TempDir()},
+			Defaults: config.AgentDefaults{DefaultModel: config.DefaultModel{Provider: "mock", Model: "gpt-4o-mini"}, Home: t.TempDir()},
 			List:     []config.AgentConfig{{ID: "mia"}},
 		},
 	}
@@ -1615,7 +1615,7 @@ func TestSyncSubTurn_NoChannelDelivery(t *testing.T) {
 		Agents: config.AgentsConfig{
 			// Home MUST be a real, isolated dir — see TestContextWrapping_SingleLayer's
 			// identical note.
-			Defaults: config.AgentDefaults{DefaultModel: config.DefaultModel{Provider: "mock"}, Home: t.TempDir()},
+			Defaults: config.AgentDefaults{DefaultModel: config.DefaultModel{Provider: "mock", Model: "gpt-4o-mini"}, Home: t.TempDir()},
 			List:     []config.AgentConfig{{ID: "mia"}},
 		},
 	}
@@ -1687,7 +1687,7 @@ func TestAsyncSubTurn_ChannelDelivery(t *testing.T) {
 		Agents: config.AgentsConfig{
 			// Home MUST be a real, isolated dir — see TestContextWrapping_SingleLayer's
 			// identical note.
-			Defaults: config.AgentDefaults{DefaultModel: config.DefaultModel{Provider: "mock"}, Home: t.TempDir()},
+			Defaults: config.AgentDefaults{DefaultModel: config.DefaultModel{Provider: "mock", Model: "gpt-4o-mini"}, Home: t.TempDir()},
 			List:     []config.AgentConfig{{ID: "mia"}},
 		},
 	}

@@ -161,6 +161,20 @@ const (
 	// and its attribution/copy land here so the contract round-trip closes.
 	CodeContextUnrecoverable LLMErrorCode = "context_unrecoverable"
 
+	// CodeModelUnassigned (ADR-068 FR-014/FR-015, MAJ-008): the agent has no
+	// model to send the request to — it pins no primary model and
+	// `agents.defaults.default_model` names none either, or the model it
+	// pins routes through a provider that is not configured. The turn is
+	// refused before any provider call and zero upstream requests are made.
+	// Attribution `config`: the copy points at the agent's own settings, the
+	// one place the operator assigns a model.
+	//
+	// Raised by runTurn's pre-turn gate (SECOND, after needs_provider and
+	// before context_window_unknown) via ErrAgentModelUnassigned.
+	// `agent_not_configured` is deliberately NOT reused: its copy and
+	// attribution describe workspace membership, not a missing model.
+	CodeModelUnassigned LLMErrorCode = "model_unassigned"
+
 	// CodeContextWindowUnknown (ADR-066 D3, FR-008): the agent's provider is
 	// a `locality: local` endpoint that reported no context window and no
 	// operator override exists, so the turn was refused before any provider
@@ -761,6 +775,14 @@ func TranslateTurnError(err error) LLMError {
 			// safe as a Verbose-Chat detail (never the refresh/access token
 			// itself — the sentinel error never carries either).
 			Detail: buildDetail(nil, err.Error()),
+		}
+	}
+	if errors.Is(err, ErrAgentModelUnassigned) {
+		return LLMError{
+			Code:      CodeModelUnassigned,
+			Message:   defaultUserMessage(CodeModelUnassigned),
+			Retryable: isRetryable(CodeModelUnassigned),
+			Detail:    buildDetail(nil, err.Error()),
 		}
 	}
 	if errors.Is(err, ErrContextWindowUnknown) {

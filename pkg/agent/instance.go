@@ -1286,6 +1286,36 @@ func (a *AgentInstance) needsProviderSnapshot() (needs bool, providerID string) 
 	return a.needsProvider, a.needsProviderID
 }
 
+// needsModelSnapshot reports ADR-068 FR-014's derived `needs_model` for this
+// live instance, read under the instance mutex for the same reason its two
+// siblings are: ApplyAgentModel rewrites Model together with Candidates and
+// the needsProvider verdict, and a turn must never pair one half of that flip
+// with the other.
+//
+// The predicate is FR-014's, expressed in the terms the instance actually
+// has:
+//
+//   - Model empty — neither the agent's own `model.primary` nor
+//     `agents.defaults.default_model` named one, so there is nothing to call.
+//   - needsProvider — the model it does name routes through a provider id
+//     that is not configured (ADR-067 FR-016). This half is why the gate
+//     ORDER is load-bearing rather than decorative: such an agent satisfies
+//     BOTH pre-turn predicates, and SC-013 requires the turn to end with
+//     `needs_provider`, never `model_unassigned`.
+//
+// It is deliberately NOT "the model failed to resolve to a configured row".
+// An agent running on an injected provider with an unrecognised slug is a
+// turn-time failure (the provider answers, or it does not), not a
+// configuration state the operator can see and fix in the agent's settings.
+func (a *AgentInstance) needsModelSnapshot() bool {
+	if a == nil {
+		return true
+	}
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return strings.TrimSpace(a.Model) == "" || a.needsProvider
+}
+
 // budgetChecksExempt reports whether every budget check — pre-turn trim,
 // mid-turn, timeout recovery, model switch — is skipped for this agent
 // (ADR-066 FR-005: a subprocess-CLI provider manages its own context).
