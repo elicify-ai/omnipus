@@ -99,6 +99,24 @@ type LiveLimitsOptions struct {
 	Client *http.Client
 	// Now is the clock; nil uses time.Now. Tests drive the TTL with it.
 	Now func() time.Time
+	// OnWindowLanded is called, off the caller's goroutine, whenever a
+	// background fetch stores a NEW or CHANGED window for a key. nil
+	// disables the notification.
+	//
+	// It exists because Lookup never blocks (FR-003): the resolution that
+	// reached the rung has already returned by the time the answer arrives,
+	// and an AgentInstance caches its window at construction. For a
+	// `locality: local` row with no catalog entry that resolution is
+	// WindowResolution{Unknown} — and runTurn refuses every subsequent turn
+	// with context_window_unknown. Without a notification the live value
+	// would sit in the cache, correct and unused, until something else
+	// happened to trigger a reload; the gateway wires this to TriggerReload
+	// so the refused resolution simply re-runs and the endpoint's own
+	// reported window applies (FR-007, US-2.AC2).
+	//
+	// It is NOT a timer: it fires only as the tail of a fetch some
+	// resolution asked for.
+	OnWindowLanded func(provider, baseURL, model string, window int)
 }
 
 // LiveLimits is rung 4's implementation. Install with
@@ -108,6 +126,7 @@ type LiveLimits struct {
 	credential func(string) string
 	client     *http.Client
 	now        func() time.Time
+	onLanded   func(provider, baseURL, model string, window int)
 
 	mu       sync.Mutex
 	loaded   bool
@@ -142,6 +161,7 @@ func NewLiveLimits(opts LiveLimitsOptions) *LiveLimits {
 		credential: opts.Credential,
 		client:     opts.Client,
 		now:        opts.Now,
+		onLanded:   opts.OnWindowLanded,
 		entries:    map[string]liveLimitEntry{},
 		inflight:   map[string]struct{}{},
 		failedAt:   map[string]time.Time{},
@@ -193,6 +213,11 @@ func (ll *LiveLimits) Lookup(provider, baseURL, model string) (int, bool) {
 	go ll.fetchAndStore(key, target)
 	return 0, false
 }
+
+// CachePath returns the resolved on-disk cache file (FR-003:
+// $OMNIPUS_HOME/cache/model_limits.json). Exported so the boot wiring can be
+// asserted against the real value rather than a re-derived one.
+func (ll *LiveLimits) CachePath() string { return ll.cachePath }
 
 // Wait blocks until every background fetch started so far has finished.
 // Shutdown and tests use it; the resolver never does.
@@ -274,7 +299,16 @@ func (ll *LiveLimits) fetchAndStore(key string, t liveTarget) {
 		return
 	}
 	delete(ll.failedAt, key)
+	changed := true
+	if prev, ok := ll.entries[key]; ok && prev.Window == window {
+		changed = false
+	}
 	ll.entries[key] = liveLimitEntry{Provider: t.provider, BaseURL: t.baseURL, Model: t.model, Window: window, FetchedAt: now}
+	if changed && ll.onLanded != nil {
+		// Off this goroutine and outside ll.mu: the callback re-resolves
+		// windows (a registry reload), which calls back into Lookup.
+		go ll.onLanded(t.provider, t.baseURL, t.model, window)
+	}
 	if err := ll.saveLocked(); err != nil {
 		logger.WarnCF("agent", "Could not persist the live model limits cache", map[string]any{
 			"path": ll.cachePath, "error": err.Error(),

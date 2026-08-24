@@ -6,6 +6,7 @@
 package gateway
 
 import (
+	"log/slog"
 	"path/filepath"
 	"strings"
 
@@ -31,11 +32,89 @@ type configSource interface {
 // environment InjectFromConfig populated at boot, else straight from the
 // store — supplies the key; no row, no ref, or an unresolvable ref means
 // "" and the rung is skipped for that provider.
-func newLiveLimitsForBoot(homePath string, store *credentials.Store, src configSource) *agent.LiveLimits {
+func newLiveLimitsForBoot(
+	homePath string,
+	store *credentials.Store,
+	src configSource,
+	onLanded func(provider, baseURL, model string, window int),
+) *agent.LiveLimits {
 	return agent.NewLiveLimits(agent.LiveLimitsOptions{
-		CachePath:  filepath.Join(homePath, filepath.FromSlash(liveLimitsCacheFile)),
-		Credential: func(provider string) string { return providerCredential(src, store, provider) },
+		CachePath:      filepath.Join(homePath, filepath.FromSlash(liveLimitsCacheFile)),
+		Credential:     func(provider string) string { return providerCredential(src, store, provider) },
+		OnWindowLanded: onLanded,
 	})
+}
+
+// windowReloader is the slice of *agent.AgentLoop the rung-4 notification
+// needs.
+type windowReloader interface {
+	configSource
+	GetRegistry() *agent.AgentRegistry
+	TriggerReload() error
+}
+
+// reloadOnLiveWindow is what newLiveLimitsForBoot's OnWindowLanded is wired
+// to: a landed live window is only real once the agents that were built
+// without it are rebuilt, because an AgentInstance resolves and CACHES its
+// window at construction (pkg/agent/instance.go).
+//
+// Without this a fresh Ollama install never runs a turn: rung 4 is installed
+// after NewAgentLoop, Lookup never blocks, so the first resolution that
+// reaches it answers Unknown and starts a fetch — and the answer, correct and
+// cached, was applied by nothing (FR-007, US-2.AC2). It is not a timer: it
+// fires only as the tail of a fetch a resolution asked for.
+func reloadOnLiveWindow(al windowReloader) func(string, string, string, int) {
+	return func(provider, _, model string, window int) {
+		if al == nil {
+			return
+		}
+		if err := al.TriggerReload(); err != nil {
+			// ErrReloadAlreadyInProgress means another landed window is
+			// already rebuilding the registry — ours rides along.
+			slog.Debug("gateway: live context window landed; reload not started",
+				"provider", provider, "model", model, "window", window, "error", err)
+			return
+		}
+		slog.Info("gateway: live context window landed; agents rebuilt with it",
+			"provider", provider, "model", model, "window", window)
+	}
+}
+
+// primeUnknownWindows asks rung 4 once, in the background, for every agent
+// whose window resolved UNKNOWN at construction — a `locality: local` row the
+// catalog cannot size, whose every turn is refused with
+// context_window_unknown until an operator sets an override.
+//
+// That population is exactly the set FR-007 makes the live query mandatory
+// for, and it is the only set primed: a cloud row that resolved to a catalog
+// value or the floor is left alone, so this starts no upstream request the
+// ladder did not already need. Each prime that lands calls back into
+// reloadOnLiveWindow, which rebuilds the agent with the endpoint's own
+// reported window.
+func primeUnknownWindows(al windowReloader) {
+	if al == nil {
+		return
+	}
+	cfg := al.GetConfig()
+	registry := al.GetRegistry()
+	if cfg == nil || registry == nil {
+		return
+	}
+	for i := range cfg.Agents.List {
+		ac := &cfg.Agents.List[i]
+		inst, ok := registry.GetAgent(ac.ID)
+		if !ok || inst == nil || !inst.WindowUnknown {
+			continue
+		}
+		provider := agentPrimaryProviderID(cfg, ac)
+		model := agentPrimaryModelID(cfg, ac)
+		if provider == "" || model == "" {
+			continue
+		}
+		// The call itself reaches rung 4 and starts the fetch; the answer is
+		// deliberately discarded (Lookup never blocks).
+		_ = agent.ResolveWindow(cfg, provider, model, ac.ID)
+	}
 }
 
 // providerCredential resolves provider's API key from its configured

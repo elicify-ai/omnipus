@@ -311,10 +311,11 @@ func (p *BraveSearchProvider) Search(
 }
 
 type TavilySearchProvider struct {
-	keyPool *APIKeyPool
-	baseURL string
-	proxy   string
-	client  *http.Client
+	keyPool     *APIKeyPool
+	baseURL     string
+	proxy       string
+	client      *http.Client
+	ingestBound int64 // ADR-066 D10: ingest_bound_bytes; ≤ 0 → config default
 }
 
 func (p *TavilySearchProvider) Search(
@@ -369,10 +370,19 @@ func (p *TavilySearchProvider) Search(
 			continue
 		}
 
-		body, err := io.ReadAll(resp.Body)
+		// ADR-066 D10: every network read is bounded at ingest. Tavily is
+		// not named in FR-038's list, but an unbounded io.ReadAll here
+		// buffers the whole response into the gateway process before any
+		// parsing or capping — the D4 window cap protects the window, it
+		// cannot protect the process.
+		body, err := readIngestBounded(resp.Body, p.ingestBound, "Tavily")
 		resp.Body.Close()
 
 		if err != nil {
+			var ibe *IngestBoundError
+			if errors.As(err, &ibe) {
+				return "", err // a bound violation is final, not retried per key
+			}
 			lastErr = fmt.Errorf("failed to read response: %w", err)
 			continue
 		}
@@ -1014,10 +1024,11 @@ func NewWebSearchTool(opts WebSearchToolOptions) (*WebSearchTool, error) {
 			return nil, fmt.Errorf("failed to create HTTP client for Tavily: %w", err)
 		}
 		provider = &TavilySearchProvider{
-			keyPool: NewAPIKeyPool(opts.TavilyAPIKeys),
-			baseURL: opts.TavilyBaseURL,
-			proxy:   opts.Proxy,
-			client:  client,
+			keyPool:     NewAPIKeyPool(opts.TavilyAPIKeys),
+			baseURL:     opts.TavilyBaseURL,
+			proxy:       opts.Proxy,
+			client:      client,
+			ingestBound: ingestBound,
 		}
 		if opts.TavilyMaxResults > 0 {
 			maxResults = min(opts.TavilyMaxResults, 10)

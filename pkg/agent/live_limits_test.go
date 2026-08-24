@@ -164,6 +164,30 @@ func TestLiveLimits_OnDemandCacheKeyTTLCredential(t *testing.T) {
 		assert.Equal(t, int64(0), up.requests.Load(), "an idle period must not fetch (no timer)")
 	})
 
+	t.Run("no scheduler exists at all (the discrete property, not a stopwatch)", func(t *testing.T) {
+		// The subtest above advances an INJECTED clock and then sleeps 20 ms
+		// of wall time. The injected clock feeds only LiveLimits' TTL
+		// arithmetic — it does not drive Go's runtime timers — so a
+		// background refresher scheduled on real time would need 24 REAL
+		// hours to fire and 20 ms proves nothing about it (false-green
+		// patterns §3: a stopwatch standing in for a discrete property).
+		//
+		// Assert the property itself: rung 4 registers no scheduler, so
+		// there is nothing that could fire. Adding
+		// time.AfterFunc(24*time.Hour, ...) to NewLiveLimits leaves both
+		// assertions above reading 0 requests and green, while the shipped
+		// binary starts calling every configured provider's models endpoint
+		// unsolicited — exactly what FR-003 forbids.
+		src, err := os.ReadFile("live_limits.go")
+		require.NoError(t, err)
+		for _, forbidden := range []string{
+			"time.AfterFunc(", "time.NewTicker(", "time.NewTimer(", "time.Tick(",
+		} {
+			assert.NotContains(t, string(src), forbidden,
+				"live_limits.go must register no scheduler: %s would make the rung fire on a timer (FR-003)", forbidden)
+		}
+	})
+
 	t.Run("DS-4 #7: resolved twice within 24 h → one fetch, 200,000 / live (B-04)", func(t *testing.T) {
 		up := newLiveTestUpstream(t)
 		up.openaiModels = []map[string]any{
@@ -462,4 +486,70 @@ func TestLiveLimits_TamperedCacheCanOnlyLower(t *testing.T) {
 		_, ok := ll.Lookup("openrouter", "https://openrouter.ai/api/v1", "z-ai/glm-5.2")
 		assert.False(t, ok)
 	})
+}
+
+// TestLiveLimits_LandedWindowNotifiesTheInstaller pins FR-007 / US-2.AC2's
+// missing half.
+//
+// Lookup never blocks: the resolution that reached rung 4 has already
+// answered by the time the fetch lands, and an AgentInstance CACHES its
+// window at construction. For a `locality: local` row the catalog cannot
+// size, that first resolution is WindowResolution{Unknown} and runTurn
+// refuses every later turn with context_window_unknown. Nothing in
+// live_limits.go used to tell anybody the answer had arrived, so the correct
+// window sat in the cache, unused, and a healthy Ollama endpoint stayed
+// refused indefinitely. The gateway wires this notification to TriggerReload.
+func TestLiveLimits_LandedWindowNotifiesTheInstaller(t *testing.T) {
+	installWindowTestCatalog(t, 1_048_576)
+	clock := &liveTestClock{now: time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)}
+
+	up := newLiveTestUpstream(t)
+	up.ollamaPS = []map[string]any{{"name": "llama3.1:8b", "context_length": 8192}}
+
+	target, err := url.Parse(up.srv.URL)
+	require.NoError(t, err)
+
+	type landing struct {
+		provider string
+		model    string
+		window   int
+	}
+	landed := make(chan landing, 4)
+	ll := NewLiveLimits(LiveLimitsOptions{
+		CachePath:  filepath.Join(t.TempDir(), "cache", "model_limits.json"),
+		Credential: noCredential,
+		Client:     &http.Client{Transport: rewriteTransport{target: target, inner: http.DefaultTransport}},
+		Now:        clock.Now,
+		OnWindowLanded: func(provider, _, model string, window int) {
+			landed <- landing{provider: provider, model: model, window: window}
+		},
+	})
+
+	// A cold lookup answers "unknown" NOW and starts the fetch.
+	window, ok := ll.Lookup("ollama", "http://127.0.0.1:11434", "llama3.1:8b")
+	assert.False(t, ok, "the rung never blocks: a cold cache answers at once")
+	assert.Equal(t, 0, window)
+
+	ll.Wait()
+	select {
+	case got := <-landed:
+		assert.Equal(t, "ollama", got.provider)
+		assert.Equal(t, "llama3.1:8b", got.model)
+		assert.Equal(t, 8192, got.window,
+			"the notification must carry the window the endpoint reported")
+	case <-time.After(5 * time.Second):
+		t.Fatal("a landed live window must notify the installer — without it the resolution that " +
+			"was refused never re-runs and the endpoint stays refused forever")
+	}
+
+	// The value is now servable, and re-serving it does NOT re-notify.
+	window, ok = ll.Lookup("ollama", "http://127.0.0.1:11434", "llama3.1:8b")
+	require.True(t, ok)
+	assert.Equal(t, 8192, window)
+	ll.Wait()
+	select {
+	case got := <-landed:
+		t.Fatalf("a cache hit must not notify again; got %+v", got)
+	case <-time.After(50 * time.Millisecond):
+	}
 }

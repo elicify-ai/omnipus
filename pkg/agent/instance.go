@@ -45,8 +45,19 @@ type AgentInstance struct {
 	Home           string
 	MaxIterations  int
 	MaxTokens      int
-	Temperature    float64
-	ThinkingLevel  ThinkingLevel
+	// configuredMaxTokens is the CONFIGURED max_tokens, before the FR-005b
+	// window clamp. MaxTokens is the clamped value the turn actually uses.
+	//
+	// The two must stay separate: clampMaxTokensForWindow only ever LOWERS,
+	// so feeding the already-clamped MaxTokens back into it on every model
+	// switch made the value monotonically decreasing for the lifetime of the
+	// process. Switching to an 8k-window model and back to a 200k one left
+	// the agent capped at the small model's window/4 forever — silently, with
+	// no log line and no way back short of a restart. Every re-clamp reads
+	// this field, never MaxTokens.
+	configuredMaxTokens int
+	Temperature         float64
+	ThinkingLevel       ThinkingLevel
 	// ContextWindow is the effective window resolved by the ADR-066 D2
 	// ladder (ResolveWindow) at construction and on every model switch. 0
 	// when the provider is exempt (WindowExempt) or the window is unknown
@@ -310,6 +321,9 @@ func NewAgentInstance(
 	window := ResolveWindow(cfg, windowProvider, windowModel, agentID)
 	contextWindow := window.Window
 	// FR-005b: max_tokens must leave a positive budget B for the window.
+	// Keep the configured value: every later re-clamp (a model switch) must
+	// start from it, never from the already-clamped result.
+	configuredMaxTokens := maxTokens
 	maxTokens = clampMaxTokensForWindow(contextWindow, maxTokens, model)
 
 	// Model routing setup: pre-resolve light model candidates at creation time
@@ -377,35 +391,36 @@ func NewAgentInstance(
 	// RouteResolver.resolveDefaultAgentID — see those functions' doc
 	// comments for the current (3-priority) ladder.
 	inst := &AgentInstance{
-		ID:              agentID,
-		Name:            agentName,
-		Model:           model,
-		Fallbacks:       fallbacks,
-		FallbackModels:  fallbackModels,
-		Home:            workspace,
-		MaxIterations:   maxIter,
-		MaxTokens:       maxTokens,
-		Temperature:     temperature,
-		ThinkingLevel:   thinkingLevel,
-		ContextWindow:   contextWindow,
-		WindowSource:    window.Source,
-		WindowClamped:   window.Clamped,
-		WindowExempt:    window.Exempt,
-		WindowUnknown:   window.Unknown,
-		needsProvider:   poolBuild.primaryUnknown,
-		needsProviderID: poolBuild.primaryProvider,
-		Provider:        provider,
-		Sessions:        sessions,
-		ContextBuilder:  contextBuilder,
-		Tools:           toolsRegistry,
-		Subagents:       subagents,
-		SkillsFilter:    skillsFilter,
-		Candidates:      candidates,
-		Router:          router,
-		LightCandidates: lightCandidates,
-		LightProvider:   lightProvider,
-		TimeoutSeconds:  timeoutSeconds,
-		AgentType:       resolvedAgentType,
+		ID:                  agentID,
+		Name:                agentName,
+		Model:               model,
+		Fallbacks:           fallbacks,
+		FallbackModels:      fallbackModels,
+		Home:                workspace,
+		MaxIterations:       maxIter,
+		MaxTokens:           maxTokens,
+		configuredMaxTokens: configuredMaxTokens,
+		Temperature:         temperature,
+		ThinkingLevel:       thinkingLevel,
+		ContextWindow:       contextWindow,
+		WindowSource:        window.Source,
+		WindowClamped:       window.Clamped,
+		WindowExempt:        window.Exempt,
+		WindowUnknown:       window.Unknown,
+		needsProvider:       poolBuild.primaryUnknown,
+		needsProviderID:     poolBuild.primaryProvider,
+		Provider:            provider,
+		Sessions:            sessions,
+		ContextBuilder:      contextBuilder,
+		Tools:               toolsRegistry,
+		Subagents:           subagents,
+		SkillsFilter:        skillsFilter,
+		Candidates:          candidates,
+		Router:              router,
+		LightCandidates:     lightCandidates,
+		LightProvider:       lightProvider,
+		TimeoutSeconds:      timeoutSeconds,
+		AgentType:           resolvedAgentType,
 	}
 	// Publish the eagerly-built pool. StoreProviderPool uses the atomic
 	// pointer; calling it here (vs. direct field assignment) keeps the
@@ -1287,4 +1302,14 @@ func (a *AgentInstance) applyWindowResolutionLocked(r WindowResolution) {
 	a.WindowClamped = r.Clamped
 	a.WindowExempt = r.Exempt
 	a.WindowUnknown = r.Unknown
+}
+
+// configuredMaxTokensLocked returns the configured (pre-clamp) max_tokens,
+// falling back to the current field for an instance built by a test that
+// never set it. agent.mu must be held.
+func (a *AgentInstance) configuredMaxTokensLocked() int {
+	if a.configuredMaxTokens > 0 {
+		return a.configuredMaxTokens
+	}
+	return a.MaxTokens
 }

@@ -4954,7 +4954,12 @@ func (al *AgentLoop) ApplyAgentModel(agentID, model string) (string, error) {
 	agent.Candidates = nextCandidates
 	agent.ThinkingLevel = parseThinkingLevel(modelCfg.ThinkingLevel)
 	agent.applyWindowResolutionLocked(window)
-	agent.MaxTokens = clampMaxTokensForWindow(window.Window, agent.MaxTokens, model)
+	// From the CONFIGURED max_tokens, never from the current (possibly
+	// already-clamped) field: the clamp only lowers, so re-feeding its own
+	// output ratcheted the value down permanently — a round-trip through a
+	// small-window model left the agent capped at that model's window/4 on a
+	// 200k model, with no log line and no recovery short of a restart.
+	agent.MaxTokens = clampMaxTokensForWindow(window.Window, agent.configuredMaxTokensLocked(), model)
 	// Publish the new pool INSIDE the same lock as the Model + Provider +
 	// Candidates flip. The atomic.Pointer in StoreProviderPool would protect
 	// the pool's map against concurrent read/write on its own, but an

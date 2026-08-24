@@ -1,7 +1,7 @@
 package tools
 
-// web_ingest_test.go — ADR-066 D10 (FR-038, B-46, DS-7 #4–#5): all five
-// search providers (Brave, DuckDuckGo, Perplexity, GLM, Baidu) are bounded
+// web_ingest_test.go — ADR-066 D10 (FR-038, B-46, DS-7 #4–#5): every search
+// provider (Brave, DuckDuckGo, Perplexity, GLM, Baidu, Tavily) is bounded
 // at ingest_bound_bytes — a response of bound+1 bytes is a tool failure
 // naming the bound; 2 MiB and exactly the bound are accepted with nothing
 // truncated (the two former 1 MiB LimitReader sites — GLM, Baidu — are
@@ -107,6 +107,25 @@ func TestIngestBound_SearchProvidersAll5(t *testing.T) {
 			},
 			body: func(t *testing.T, want int) string {
 				return exactBody(t, `{"references":[{"title":"t","url":"https://x","content":"`,
+					ingestTestMarker+`"}]}`, want)
+			},
+		},
+		{
+			// Tavily is not named in FR-038's list, so it kept a bare
+			// io.ReadAll: a compromised endpoint (or an operator-set custom
+			// base URL) could buffer an arbitrarily large body into the
+			// gateway process before any parsing or capping. D4 protects the
+			// window; it cannot protect the process — which is what D10
+			// exists for.
+			name: "Tavily",
+			build: func(c *http.Client, base string) SearchProvider {
+				return &TavilySearchProvider{
+					keyPool: NewAPIKeyPool([]string{"k"}), baseURL: base,
+					client: c, ingestBound: ingestTestBound,
+				}
+			},
+			body: func(t *testing.T, want int) string {
+				return exactBody(t, `{"results":[{"title":"t","url":"https://x","content":"`,
 					ingestTestMarker+`"}]}`, want)
 			},
 		},

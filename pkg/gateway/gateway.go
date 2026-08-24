@@ -1929,7 +1929,19 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// The credential comes from the store via the provider's api_key_ref
 	// (InjectFromConfig's env injection first); a cloud row without one is
 	// skipped, never queried.
-	agent.SetLiveWindowLookup(newLiveLimitsForBoot(homePath, credStore, agentLoop).Lookup)
+	agent.SetLiveWindowLookup(
+		newLiveLimitsForBoot(homePath, credStore, agentLoop, reloadOnLiveWindow(agentLoop)).Lookup)
+
+	// FR-007 / US-2.AC2: an agent on a `locality: local` row the catalog
+	// cannot size resolved UNKNOWN above (the rung was not installed yet) and
+	// every one of its turns is refused with context_window_unknown. Ask the
+	// rung once for exactly that population, in the background and off the
+	// boot path; when the endpoint answers, reloadOnLiveWindow rebuilds those
+	// agents with the window it reported. Without this a fresh Ollama install
+	// stays refused indefinitely and the refusal points the operator at a
+	// control (Settings → Models → Model overrides) they should not have
+	// needed. Not a timer: one pass, only for agents that are already broken.
+	go primeUnknownWindows(agentLoop)
 
 	// Boot-time browser provisioning: NewAgentLoop above just finished
 	// registering browser tools for every agent (registerSharedTools →
