@@ -290,7 +290,7 @@ describe('probeProvider — MAJOR-4 / validation passthrough', () => {
       }),
     )
 
-    const result = await probeProvider('openrouter', 'key-with-no-credit')
+    const result = await probeProvider({ id: 'openrouter', auth: 'api_key', api_key: 'key-with-no-credit' })
 
     expect(result.success).toBe(true)
     expect(result.validation).toBeDefined()
@@ -314,7 +314,7 @@ describe('probeProvider — MAJOR-4 / validation passthrough', () => {
       }),
     )
 
-    const result = await probeProvider('openrouter', 'key-no-reach')
+    const result = await probeProvider({ id: 'openrouter', auth: 'api_key', api_key: 'key-no-reach' })
 
     expect(result.success).toBe(true)
     expect(result.validation?.outcome).toBe('unreachable')
@@ -332,7 +332,7 @@ describe('probeProvider — MAJOR-4 / validation passthrough', () => {
       }),
     )
 
-    const result = await probeProvider('openrouter', 'key-restricted')
+    const result = await probeProvider({ id: 'openrouter', auth: 'api_key', api_key: 'key-restricted' })
 
     expect(result.success).toBe(true)
     expect(result.validation?.outcome).toBe('restricted')
@@ -346,7 +346,7 @@ describe('probeProvider — MAJOR-4 / validation passthrough', () => {
       }),
     )
 
-    const result = await probeProvider('openrouter', 'wrong-key')
+    const result = await probeProvider({ id: 'openrouter', auth: 'api_key', api_key: 'wrong-key' })
 
     expect(result.success).toBe(false)
     expect(result.error).toMatch(/rejected by OpenRouter/i)
@@ -362,7 +362,7 @@ describe('probeProvider — MAJOR-4 / validation passthrough', () => {
       }),
     )
 
-    const result = await probeProvider('openrouter', 'valid-key')
+    const result = await probeProvider({ id: 'openrouter', auth: 'api_key', api_key: 'valid-key' })
 
     expect(result.success).toBe(true)
     expect(result.models).toHaveLength(2)
@@ -373,7 +373,7 @@ describe('probeProvider — MAJOR-4 / validation passthrough', () => {
   it('sends the correct request body (id + auth + api_key, no api_base when omitted)', async () => {
     fetchSpy.mockResolvedValue(makeJsonResponse({ success: true, models: [] }))
 
-    await probeProvider('anthropic', 'sk-ant-test')
+    await probeProvider({ id: 'anthropic', auth: 'api_key', api_key: 'sk-ant-test' })
 
     const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
     const body = JSON.parse(init.body as string) as Record<string, unknown>
@@ -390,7 +390,7 @@ describe('probeProvider — MAJOR-4 / validation passthrough', () => {
   it('forwards api_base when provided', async () => {
     fetchSpy.mockResolvedValue(makeJsonResponse({ success: true, models: [] }))
 
-    await probeProvider('azure', 'azure-key', 'https://my.azure.com/openai')
+    await probeProvider({ id: 'azure', auth: 'api_key', api_key: 'azure-key', api_base: 'https://my.azure.com/openai' })
 
     const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
     const body = JSON.parse(init.body as string) as Record<string, unknown>

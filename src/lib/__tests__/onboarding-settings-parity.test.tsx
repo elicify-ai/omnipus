@@ -14,6 +14,13 @@
 // - The onboarding surface DOM assertion is in -onboarding.test.tsx; both
 //   reference the same stub document and the same derivation helpers, so a
 //   drift in either breaks both tests — that is the invariant.
+//
+// ADR-068 T068-24 moved WHERE onboarding renders those strings, not whether it
+// does: step 3 is now the shared ProviderPicker (FR-021), and the subtitle +
+// endpoint hint are rendered on the confirmed-row summary the second-level
+// panel produces ("the confirmed row renders the subtitle and endpoint derived
+// from the fetched document (US-7 parity)" in -onboarding.test.tsx). The zai
+// strings pinned verbatim below are the same ones that test pins.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'

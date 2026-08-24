@@ -281,6 +281,7 @@ if ((import.meta.env.DEV || import.meta.env.MODE === 'test' || (typeof navigator
 // so function return-type annotations compile, then re-export for consumers.
 import type {
   LoginResponse,
+  ProbeProviderRequest,
   ProbeProviderResponse,
   AgentSession,
   AgentToolEntry,
@@ -474,6 +475,7 @@ import type {
 
 export type {
   LoginResponse,
+  ProbeProviderRequest,
   ProbeProviderResponse,
   AgentSession,
   AgentToolEntry,
@@ -3190,20 +3192,15 @@ export async function completeOnboardingTransaction(req: OnboardingCompleteReque
 // because the browser has the __Host-csrf cookie at that point.
 //
 // ProbeProviderResponse is re-exported from @/lib/api/generated/openapi-types.
-export async function probeProvider(
-  id: string,
-  apiKey: string,
-  apiBase?: string,
-): Promise<ProbeProviderResponse> {
+export async function probeProvider(req: ProbeProviderRequest): Promise<ProbeProviderResponse> {
   // ADR-067 FR-023 / ADR-068 FR-036: ONE ProbeProviderRequest shape
-  // {id, auth, api_key?, model?, api_base?, protocol?}. This wrapper still
-  // drives the api_key path only; the sign_in path and the custom-row
-  // protocol field arrive with ADR-068's picker.
-  const body: Record<string, string> = { id, auth: 'api_key', api_key: apiKey }
-  if (apiBase) body.api_base = apiBase
+  // {id, auth, api_key?, model?, api_base?, protocol?} — the generated type is
+  // the only shape this wrapper accepts, so the sign-in path (auth: 'sign_in',
+  // no api_key) and the chosen-model path (model, echoed back as probed_model)
+  // are expressible without a second function or a parallel struct.
   return request<ProbeProviderResponse>('/onboarding/probe-provider', {
     method: 'POST',
-    body: JSON.stringify(body),
+    body: JSON.stringify(req),
   }, ProbeProviderResponseSchema)
 }
 
