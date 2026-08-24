@@ -28,6 +28,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -282,6 +283,58 @@ func providerAdmission(
 	protocol string,
 ) (custom bool, err error) {
 	return providers_pkg.AdmitIn(cat, id, apiBase, protocol)
+}
+
+// Recommended-for-chat eligibility (ADR-068 FR-030): the catalog says the
+// model calls tools, carries at least this much context, and is still
+// active. recommendedProbeMax caps how many the probe will ever try, which
+// is also providers.maxProbeAttempts — the probe falls through on
+// model_not_found and nothing else.
+const (
+	recommendedMinContextWindow = 128000
+	recommendedProbeMax         = 3
+)
+
+// recommendedProbeModels returns a catalog provider's Recommended-for-chat
+// models in selection order — release_date descending, undated last, ties
+// broken by id ascending — capped at recommendedProbeMax.
+//
+// This is the fallback pick for a probe that names no model (ADR-068
+// FR-036). It is deliberately the SAME shortlist the model selector chips
+// (FR-030), so "the first Recommended model" means one thing on both sides
+// of the wire: an operator who probes without choosing gets the model the
+// UI would have recommended, not an arbitrary catalog row.
+//
+// Returns nil for an unknown id, a custom row, or a provider whose models
+// are all ineligible — the caller then leaves the pick to ValidateKey.
+func recommendedProbeModels(row catalog.Provider) []string {
+	eligible := make([]catalog.Model, 0, len(row.Models))
+	for _, m := range row.Models {
+		if m.Status != catalog.StatusActive || !m.ToolCall {
+			continue
+		}
+		if m.ContextWindow < recommendedMinContextWindow {
+			continue
+		}
+		eligible = append(eligible, m)
+	}
+	sort.SliceStable(eligible, func(i, j int) bool {
+		di, dj := eligible[i].ReleaseDate, eligible[j].ReleaseDate
+		if di != dj {
+			// Dates are YYYY-MM-DD, so a lexical compare IS a date compare;
+			// an undated model sorts last because "" is below every date.
+			return di > dj
+		}
+		return eligible[i].ID < eligible[j].ID
+	})
+	if len(eligible) > recommendedProbeMax {
+		eligible = eligible[:recommendedProbeMax]
+	}
+	out := make([]string, 0, len(eligible))
+	for _, m := range eligible {
+		out = append(out, m.ID)
+	}
+	return out
 }
 
 // providerWireProtocol maps a resolved protocol onto the wire enum,

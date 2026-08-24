@@ -80,6 +80,12 @@ type ValidationResult struct {
 	// RawDetail is the raw upstream detail for the server debug log ONLY. Never send
 	// this to the user or on the wire.
 	RawDetail string
+	// ProbedModel is the model the completion was actually fired against —
+	// the last candidate tried, which is the one this Outcome describes.
+	// Empty when no probe ran at all (empty key, or no candidate anywhere).
+	// ADR-068 FR-036 surfaces it as ProbeProviderResponse.probed_model so the
+	// operator can tie a green probe to the exact model they picked.
+	ProbedModel string
 }
 
 // Blocks reports whether this outcome must block the flow. Derived solely from Outcome
@@ -101,6 +107,13 @@ type ValidateInput struct {
 	// Catalog is the already-fetched model list. If empty, ValidateKey will attempt
 	// to fetch it via FetchModels before picking a probe model.
 	Catalog []string
+	// ProbeModels, when non-empty, IS the candidate list — in order, capped
+	// at maxProbeAttempts — and neither the catalog document nor a live
+	// /models call is consulted to build one. The caller has already decided
+	// which models this probe is about (ADR-068 FR-036: the operator's
+	// verbatim pick, or the provider's Recommended-for-chat shortlist), and a
+	// second opinion here would answer a question nobody asked.
+	ProbeModels []string
 }
 
 // ── Credential-marker set (R-A) ──────────────────────────────────────────────
@@ -662,7 +675,13 @@ func ValidateKey(ctx context.Context, in ValidateInput, checker URLChecker) Vali
 	// round trip used to run on every key check and told us nothing the
 	// catalog does not already know. Only a row the catalog has no models
 	// for (a custom endpoint, a local runtime) falls back to the live list.
-	candidates := catalogProbeModels(in.ProviderID)
+	candidates := in.ProbeModels
+	if len(candidates) > maxProbeAttempts {
+		candidates = candidates[:maxProbeAttempts]
+	}
+	if len(candidates) == 0 {
+		candidates = catalogProbeModels(in.ProviderID)
+	}
 	if len(candidates) == 0 {
 		live := in.Catalog
 		if len(live) == 0 {
@@ -695,8 +714,10 @@ func ValidateKey(ctx context.Context, in ValidateInput, checker URLChecker) Vali
 	// maxProbeAttempts, which len(candidates) already respects.
 	var outcome Outcome
 	var rawDetail string
+	var probedModel string
 	for i, model := range candidates {
 		outcome, rawDetail = probeCompletion(ctx, in.BaseURL, in.APIKey, model, checker)
+		probedModel = model
 		if i+1 < len(candidates) && outcome != OutcomeValid && isModelNotFound(rawDetail) {
 			slog.Debug("providers: probe model not found upstream; trying the next candidate",
 				"provider", in.ProviderID, "model", model)
@@ -706,9 +727,10 @@ func ValidateKey(ctx context.Context, in ValidateInput, checker URLChecker) Vali
 	}
 
 	return ValidationResult{
-		Outcome:   outcome,
-		Message:   BuildMessage(outcome, in.ProviderName),
-		RawDetail: rawDetail,
+		Outcome:     outcome,
+		Message:     BuildMessage(outcome, in.ProviderName),
+		RawDetail:   rawDetail,
+		ProbedModel: probedModel,
 	}
 }
 

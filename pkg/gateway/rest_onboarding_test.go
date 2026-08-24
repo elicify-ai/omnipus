@@ -1195,13 +1195,22 @@ func captureSlog(t *testing.T) *bytes.Buffer {
 }
 
 // TestHandleOnboardingProbeProvider_SSRFBlocksInternalEndpoint proves the SSRF
-// gate: a probe whose caller-supplied `endpoint` points at an internal/loopback
-// address is rejected with success=false "endpoint not allowed" BEFORE any
-// outbound call — closing the pre-onboarding, unauthenticated SSRF hole.
+// gate: a probe whose caller-supplied `api_base` points at an internal/loopback
+// address is refused BEFORE any outbound call — closing the pre-onboarding,
+// unauthenticated SSRF hole.
+//
+// The refusal is HTTP 422 (ADR-068 FR-036 / MIN-006), not the 200
+// {"success":false} this test pinned before T068-13. The old shape said "the
+// provider rejected your key" for a request the SERVER refused, sending the
+// operator hunting for a credential problem that does not exist; 422 also
+// matches what PUT /providers/{id} already answers for the same guard. The
+// two assertions that carry the security guarantee — the upstream is never
+// contacted, and the body names the guard rather than the internal address —
+// are unchanged.
 //
 // BDD: Given an SSRF checker with no internal allowlist,
 // When POST /onboarding/probe-provider has api_base=http://127.0.0.1:<port>/,
-// Then HTTP 200 with {"success":false,"error":"endpoint not allowed"} and the
+// Then HTTP 422 {"error":"provider endpoint not allowed (SSRF guard)"} and the
 //
 //	upstream is never contacted.
 func TestHandleOnboardingProbeProvider_SSRFBlocksInternalEndpoint(t *testing.T) {
@@ -1226,11 +1235,12 @@ func TestHandleOnboardingProbeProvider_SSRFBlocksInternalEndpoint(t *testing.T) 
 
 	api.HandleOnboardingProbeProvider(w, req)
 
-	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, http.StatusUnprocessableEntity, w.Code, "body=%s", w.Body.String())
 	var resp map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Equal(t, false, resp["success"], "internal endpoint must be rejected")
-	assert.Equal(t, "endpoint not allowed", resp["error"])
+	assert.Equal(t, "provider endpoint not allowed (SSRF guard)", resp["error"])
+	assert.NotContains(t, w.Body.String(), "127.0.0.1",
+		"the refusal must not echo the internal address back to an unauthenticated caller")
 	assert.Zero(t, hits, "upstream must never be contacted when SSRF blocks the endpoint")
 }
 

@@ -24,6 +24,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/gateway/middleware"
 	"github.com/elicify-ai/omnipus/pkg/onboarding"
 	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
 )
 
 var usernameRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{1,62}$`)
@@ -764,6 +765,34 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 	jsonOK(w, resp)
 }
 
+// Wire-format limits from contracts/components/schemas/ProbeProviderRequest.yaml,
+// enforced in the handler as well as the schema because validate_inbound is
+// off by default.
+const (
+	probeProviderIDMaxLen    = 64
+	probeProviderModelMaxLen = 256
+)
+
+// catalogOffersAuth reports whether a catalog row's auth_methods include the
+// method the probe was asked for.
+func catalogOffersAuth(methods []catalog.AuthMethod, want gen.ProbeProviderRequestAuth) bool {
+	for _, m := range methods {
+		if string(m) == string(want) {
+			return true
+		}
+	}
+	return false
+}
+
+// probeUnsupportedAuthMsg names the method the provider does not offer, in
+// the operator's vocabulary ("sign-in", not the wire literal "sign_in").
+func probeUnsupportedAuthMsg(auth gen.ProbeProviderRequestAuth) string {
+	if auth == gen.ProbeProviderRequestAuthSignIn {
+		return "provider does not support sign-in"
+	}
+	return "provider does not support api_key"
+}
+
 // HandleOnboardingProbeProvider handles POST /api/v1/onboarding/probe-provider.
 //
 // Purpose: during onboarding the SPA needs to test an API key AND fetch the
@@ -779,23 +808,41 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 // + GET /providers flow (which works because their browser has the cookie
 // by then).
 //
-// Request body:
+// Request body (ProbeProviderRequest — ADR-067 FR-023 / ADR-068 FR-036):
 //
-//	{"id":"openrouter","api_key":"sk-or-...","endpoint":"https://openrouter.ai/api/v1"}
+//	{"id":"openrouter","auth":"api_key","api_key":"sk-or-...",
+//	 "model":"z-ai/glm-5.2","api_base":"https://…/v1","protocol":"openai-compatible"}
 //
-// `endpoint` is optional; when omitted, the server uses
-// providers.APIBaseFor(id).
+// `id` is a FREE STRING (1..64) with no enum and no hand pattern — it is
+// valid iff the served catalog carries it, or the caller supplied both
+// `api_base` and `protocol` (an operator-named custom row). Anything else is
+// 400 `unknown provider "<id>"` on field `id`, echoing the caller's own
+// input and NEVER a list of accepted ids: this endpoint is unauthenticated
+// pre-onboarding, and a list would hand an attacker a map of the install.
+//
+// `api_base` is optional for a catalog provider (an override); when omitted
+// the catalog row's own base is used, falling back to
+// providers.APIBaseFor(id). Whatever resolves is SSRF-checked before any
+// outbound call.
+//
+// `model`, when present, is exercised VERBATIM — the probe is the
+// validation, so a slug the catalog has never heard of is answered by the
+// upstream, not pre-refused here. Absent → the provider's Recommended-for-
+// chat shortlist (release_date desc, ≤3), falling through only on
+// model_not_found.
 //
 // Response shape:
 //
 //	{
 //	  "success": true,
 //	  "models":  ["gpt-4","gpt-4-turbo",...],
+//	  "probed_model": "z-ai/glm-5.2",                          // the model actually exercised
 //	  "validation": {"outcome":"no_credit","message":"..."}   // present for non-valid outcomes only
 //	}
 //	{"success":false,"error":"401 unauthorized"}               on upstream reject (outcome==invalid_key)
 //	(HTTP 409)                                                 after onboarding complete
-//	(HTTP 400)                                                 on malformed body / unknown id
+//	(HTTP 400)                                                 malformed body, unknown id, auth/api_key/model rules
+//	(HTTP 422)                                                 api_base refused by the SSRF guard
 //
 // success is the complement of ValidationResult.Blocks() — only invalid_key yields success=false.
 // The validation field is present for non-valid probed outcomes (no_credit, unreachable, restricted)
@@ -823,8 +870,19 @@ func (a *restAPI) HandleOnboardingProbeProvider(w http.ResponseWriter, r *http.R
 	if !decodeAndValidate(w, r, "ProbeProviderRequest", &body, validateEnabled) {
 		return
 	}
+	// ── `id` (ADR-068 FR-036 / ADR-067 FR-023) ──────────────────────────────
+	// A free string, `1..64`, with NO enum and NO hand pattern (MIN-011):
+	// what makes an id valid is membership in the SERVED CATALOG, decided at
+	// runtime, or the operator declaring a custom endpoint. The length cap is
+	// enforced here as well as in the schema because validate_inbound is off
+	// by default.
 	if body.Id == "" {
-		jsonErr(w, http.StatusBadRequest, "id is required")
+		jsonErrField(w, http.StatusBadRequest, "id is required", "id")
+		return
+	}
+	if len(body.Id) > probeProviderIDMaxLen {
+		jsonErrField(w, http.StatusBadRequest,
+			fmt.Sprintf("id exceeds %d characters", probeProviderIDMaxLen), "id")
 		return
 	}
 	// Reserved path segments are never provider ids (ADR-068 MAJ-002): the
@@ -834,21 +892,50 @@ func (a *restAPI) HandleOnboardingProbeProvider(w http.ResponseWriter, r *http.R
 		jsonErrField(w, http.StatusBadRequest, fmt.Sprintf("unknown provider %q", body.Id), "id")
 		return
 	}
-	// ADR-067 FR-023 / ADR-068 FR-036: ONE ProbeProviderRequest shape. Only the
-	// api_key path is wired here; the sign_in path (CLI saved login / Copilot
-	// session) lands with ADR-068's provider constructors (B3). Until then:
-	// auth=sign_in → 400, and api_key is required.
-	if body.Auth != gen.ProbeProviderRequestAuthApiKey {
-		jsonErr(w, http.StatusBadRequest, "auth sign_in is not supported yet; use auth api_key")
+
+	// ── `auth` (required, closed set) ───────────────────────────────────────
+	if body.Auth == "" {
+		jsonErrField(w, http.StatusBadRequest, "auth is required", "auth")
 		return
 	}
+	if !body.Auth.Valid() {
+		jsonErrField(w, http.StatusBadRequest,
+			fmt.Sprintf("unsupported auth %q", string(body.Auth)), "auth")
+		return
+	}
+
+	// ── `model` (optional, 1..256, used verbatim) ───────────────────────────
+	pickedModel := ""
+	if body.Model != nil {
+		pickedModel = *body.Model
+		if pickedModel == "" {
+			jsonErrField(w, http.StatusBadRequest, "model must not be empty", "model")
+			return
+		}
+		if len(pickedModel) > probeProviderModelMaxLen {
+			jsonErrField(w, http.StatusBadRequest,
+				fmt.Sprintf("model exceeds %d characters", probeProviderModelMaxLen), "model")
+			return
+		}
+	}
+
+	// ── `api_key` — required iff auth is api_key, forbidden with sign_in ────
 	apiKey := ""
 	if body.ApiKey != nil {
 		apiKey = *body.ApiKey
 	}
-	if apiKey == "" {
-		jsonErrField(w, http.StatusBadRequest, "api_key is required", "api_key")
-		return
+	switch body.Auth {
+	case gen.ProbeProviderRequestAuthApiKey:
+		if apiKey == "" {
+			jsonErrField(w, http.StatusBadRequest, "api_key is required", "api_key")
+			return
+		}
+	default:
+		if apiKey != "" {
+			jsonErrField(w, http.StatusBadRequest,
+				"api_key must not be sent with auth sign_in", "api_key")
+			return
+		}
 	}
 
 	reqAPIBase := ""
@@ -875,6 +962,18 @@ func (a *restAPI) HandleOnboardingProbeProvider(w http.ResponseWriter, r *http.R
 		return
 	}
 
+	// ── the provider must OFFER the requested auth method (FR-030) ──────────
+	// Catalog data decides this, so it is answerable without any network
+	// call: a sign-in-only row asked for an api_key, or a key-only row asked
+	// for sign-in, is a 400 that names the method — not a probe that fails
+	// later for a reason the operator cannot act on. A custom row is not a
+	// catalog row, so it declares no auth methods and is never refused here.
+	catalogRow, isCatalogRow := providers.CatalogProvider(body.Id)
+	if len(catalogRow.AuthMethods) > 0 && !catalogOffersAuth(catalogRow.AuthMethods, body.Auth) {
+		jsonErrField(w, http.StatusBadRequest, probeUnsupportedAuthMsg(body.Auth), "auth")
+		return
+	}
+
 	baseURL := reqAPIBase
 	if baseURL == "" {
 		baseURL = providers.APIBaseFor(body.Id)
@@ -887,19 +986,35 @@ func (a *restAPI) HandleOnboardingProbeProvider(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	// SEC-24: this endpoint is CSRF-exempt and reachable pre-onboarding WITHOUT
-	// authentication, and baseURL can come from a caller-supplied `endpoint`
-	// override. Without this gate an attacker could make the server POST/GET to
-	// http://169.254.169.254/... (cloud metadata), http://10.x, or localhost:<port>.
-	// Resolve + check the host (with DNS-rebinding protection) before ANY outbound
-	// call. Redirect-to-internal is additionally caught by the SSRF-safe client
-	// passed into FetchModels / ValidateKey below.
+	// SEC-24 / MIN-006: this endpoint is CSRF-exempt and reachable
+	// pre-onboarding WITHOUT authentication, and baseURL can come from a
+	// caller-supplied `api_base`. Without this gate an attacker could make the
+	// server POST/GET to http://169.254.169.254/... (cloud metadata),
+	// http://10.x, or localhost:<port>. Resolve + check the host (with
+	// DNS-rebinding protection) before ANY outbound call. Redirect-to-internal
+	// is additionally caught by the SSRF-safe client passed into FetchModels /
+	// ValidateKey below.
+	//
+	// A blocked base is 422, not a 200 with success=false: the request was
+	// well-formed and the server REFUSED it — reporting that as "the provider
+	// rejected your key" would send the operator hunting for a credential
+	// problem that does not exist.
 	if a.ssrfChecker != nil {
 		if err := a.ssrfChecker.CheckURL(r.Context(), baseURL); err != nil {
 			slog.Warn("rest: probe-provider: SSRF blocked endpoint", "error", err)
-			jsonOK(w, gen.ProbeProviderResponse{Success: false, Error: ptr("endpoint not allowed")})
+			jsonErr(w, http.StatusUnprocessableEntity, "provider endpoint not allowed (SSRF guard)")
 			return
 		}
+	}
+
+	// The sign-in probe itself (CLI saved login / Copilot session) lands with
+	// ADR-068 T068-14's provider constructors. Everything above already
+	// decided that this provider OFFERS sign-in; what is missing is the
+	// machinery to exercise it.
+	if body.Auth != gen.ProbeProviderRequestAuthApiKey {
+		jsonErrField(w, http.StatusBadRequest,
+			"auth sign_in is not supported yet; use auth api_key", "auth")
+		return
 	}
 
 	// The model list comes from the REGISTRY CATALOG, offline, with zero
@@ -910,8 +1025,8 @@ func (a *restAPI) HandleOnboardingProbeProvider(w http.ResponseWriter, r *http.R
 	// that proved nothing about the key. An operator-named custom row has no
 	// catalog models: it lists none, and the operator types their own slug.
 	var models []string
-	if row, known := providers.CatalogProvider(body.Id); known {
-		models = catalogModelIDs(row)
+	if isCatalogRow {
+		models = catalogModelIDs(catalogRow)
 	}
 
 	// An empty list is not a hard failure (the key is still validated below),
@@ -927,15 +1042,30 @@ func (a *restAPI) HandleOnboardingProbeProvider(w http.ResponseWriter, r *http.R
 	// a 200 from /models does NOT prove the key is valid. The classified outcome is
 	// returned in the validation field (R-B). Only InvalidKey blocks (Blocks=true).
 	// SEC-16: result.RawDetail is server-debug-only; never sent to the client.
+	//
+	// FR-036 decides WHICH model is exercised, and the answer is never a
+	// catalog membership check: an explicit `model` is used verbatim (the
+	// probe IS the validation — if the slug is wrong the upstream is the one
+	// that says so), and only an absent `model` falls back to the provider's
+	// Recommended-for-chat shortlist.
+	var probeModels []string
+	if isCatalogRow {
+		probeModels = recommendedProbeModels(catalogRow)
+	}
+	if pickedModel != "" {
+		probeModels = []string{pickedModel}
+	}
 	result := providers.ValidateKey(r.Context(), providers.ValidateInput{
 		ProviderID:   body.Id,
 		ProviderName: providers.DisplayName(body.Id),
 		BaseURL:      baseURL,
 		APIKey:       apiKey,
 		Catalog:      models,
+		ProbeModels:  probeModels,
 	}, a.ssrfChk())
 	slog.Debug("rest: probe-provider: key validation result",
-		"provider", body.Id, "outcome", result.Outcome, "detail", result.RawDetail)
+		"provider", body.Id, "outcome", result.Outcome,
+		"probed_model", result.ProbedModel, "detail", result.RawDetail)
 
 	// Build the probe response (R-B / FR-013).
 	// validation is present for non-valid probed outcomes only (no_credit, unreachable,
@@ -943,6 +1073,12 @@ func (a *restAPI) HandleOnboardingProbeProvider(w http.ResponseWriter, r *http.R
 	probeResp := gen.ProbeProviderResponse{
 		Success: !result.Blocks(),
 		Models:  &models,
+	}
+	// FR-029/FR-036: report the model the probe actually exercised, so the
+	// SPA can tie the outcome to the exact pick and refuse Finish when the
+	// operator changes the model afterwards.
+	if result.ProbedModel != "" {
+		probeResp.ProbedModel = &result.ProbedModel
 	}
 	if result.Outcome != providers.OutcomeValid {
 		outcomeStr := gen.ProbeProviderResponseValidationOutcome(result.Outcome)

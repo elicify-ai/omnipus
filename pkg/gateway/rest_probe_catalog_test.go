@@ -26,6 +26,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -74,6 +75,46 @@ func expectedProbeCandidates(t *testing.T, providerID string) []string {
 		if !text {
 			continue
 		}
+		out = append(out, m.ID)
+		if len(out) == 3 {
+			break
+		}
+	}
+	return out
+}
+
+// expectedRecommendedCandidates spells out ADR-068 FR-030/FR-036 against the
+// served document — Recommended-for-chat is `tool_call` AND `context_window`
+// >= 128,000 AND `status: active`, ordered `release_date` descending then id
+// ascending, at most three — and is the rule the ONBOARDING PROBE uses to
+// pick a model when the caller names none (T068-13).
+//
+// It is deliberately a SECOND oracle rather than a reuse of
+// expectedProbeCandidates: the two endpoints answer different questions.
+// POST /providers/{id}/test asks "does this key work at all", so FR-022's
+// document order is right there. The onboarding probe asks "does the model I
+// am about to make my default work", so it exercises the model the picker
+// would have recommended — otherwise a green probe would describe a model the
+// operator never sees.
+func expectedRecommendedCandidates(t *testing.T, providerID string) []string {
+	t.Helper()
+	row, ok := providers.CatalogProvider(providerID)
+	require.Truef(t, ok, "the embedded snapshot must carry %q", providerID)
+	eligible := make([]catalog.Model, 0, len(row.Models))
+	for _, m := range row.Models {
+		if m.Status != catalog.StatusActive || !m.ToolCall || m.ContextWindow < 128000 {
+			continue
+		}
+		eligible = append(eligible, m)
+	}
+	sort.SliceStable(eligible, func(i, j int) bool {
+		if eligible[i].ReleaseDate != eligible[j].ReleaseDate {
+			return eligible[i].ReleaseDate > eligible[j].ReleaseDate
+		}
+		return eligible[i].ID < eligible[j].ID
+	})
+	out := make([]string, 0, 3)
+	for _, m := range eligible {
 		out = append(out, m.ID)
 		if len(out) == 3 {
 			break
@@ -304,8 +345,16 @@ func TestOnboarding_Probe_FreeStringID(t *testing.T) {
 
 		gets, probed := rec.snapshot()
 		assert.Zero(t, gets, "FR-022: the probe path must not pre-fetch GET /models")
-		assert.Equal(t, expectedProbeCandidates(t, "zai")[:1], probed,
-			"FR-022: the probe model comes from the catalog")
+		// REPLACED ASSERTION (T068-13): this row pinned FR-022's document
+		// order, expectedProbeCandidates(t, "zai")[:1]. ADR-068 FR-036 gives
+		// the ONBOARDING probe its own rule — the first Recommended-for-chat
+		// model — because that probe is about the model the operator is
+		// choosing as their default, not merely about the key. FR-022's order
+		// still governs POST /providers/{id}/test, which T39 above asserts.
+		// The coverage this row carries is unchanged: the model came from the
+		// CATALOG (not a hardcoded table), and exactly one completion ran.
+		assert.Equal(t, expectedRecommendedCandidates(t, "zai")[:1], probed,
+			"FR-036: the probe model is the first Recommended catalog model")
 
 		require.NotNil(t, resp.Models, "US-9.AC1: the model list is served from the catalog")
 		row, ok := providers.CatalogProvider("zai")
