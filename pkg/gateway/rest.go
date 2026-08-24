@@ -1972,6 +1972,9 @@ func (a *restAPI) listAgents(w http.ResponseWriter) {
 		ag.Type = coreagent.ToWireType(ac)
 		ag.Locked = ac.Locked
 		applyAgentOverrides(&ag, &ac)
+		// ADR-066 D2/D9: the persisted rung-1 override plus the three derived
+		// read-only window fields the Advanced panel renders.
+		applyAgentContextWindow(&ag, cfg, &ac)
 		ag.Model = &model
 		setAgentModelProvider(&ag, ac.Model)
 		ag.Status = gen.AgentStatus(computeAgentStatus(ac.ID, activeIDs, soul, ac.Locked))
@@ -2043,6 +2046,8 @@ func (a *restAPI) getAgent(w http.ResponseWriter, id string) {
 			ag.Type = coreagent.ToWireType(ac)
 			ag.Locked = ac.Locked
 			applyAgentOverrides(&ag, &ac)
+			// ADR-066 D2/D9 — see listAgents.
+			applyAgentContextWindow(&ag, cfg, &ac)
 			ag.Model = &model
 			setAgentModelProvider(&ag, ac.Model)
 			ag.Status = gen.AgentStatus(computeAgentStatus(ac.ID, activeIDs, soul, ac.Locked))
@@ -3189,6 +3194,27 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 			}
 		}
 	}
+	// ADR-066 D2 rung 1 — context_window_override. The generated *int
+	// collapses "absent" and "null" to nil, but the contract gives them
+	// different meanings ("send null to clear"), so peek the raw body for an
+	// explicit null exactly as the sandbox_profile sniff above does.
+	clearsContextWindowOverride := false
+	if req.ContextWindowOverride != nil {
+		if *req.ContextWindowOverride < 1 {
+			jsonErr(w, http.StatusBadRequest,
+				"context_window_override must be ≥ 1 (send null to clear it)")
+			return
+		}
+	} else {
+		var windowPeek map[string]json.RawMessage
+		if json.Unmarshal(rawBody, &windowPeek) == nil {
+			if v, present := windowPeek["context_window_override"]; present &&
+				string(bytes.TrimSpace(v)) == "null" {
+				clearsContextWindowOverride = true
+			}
+		}
+	}
+
 	// Locked core agents: reject identity and prompt mutations.
 	// Allowed: model selection, heartbeat schedule (enabled/interval), tools (via updateAgentTools).
 	foundAgent := cfg.Agents.List[foundIdx]
@@ -3579,6 +3605,16 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 				if req.MaxToolIterations != nil {
 					agentRec.MaxToolIterations = *req.MaxToolIterations
 				}
+				// ADR-066 D2 rung 1: the per-agent context-window override.
+				// Nil-and-not-null leaves the persisted value untouched; an
+				// explicit null clears it. Without this the PUT returned 200
+				// and changed nothing at all — the ADR-037 anti-pattern.
+				if req.ContextWindowOverride != nil {
+					v := *req.ContextWindowOverride
+					agentRec.ContextWindowOverride = &v
+				} else if clearsContextWindowOverride {
+					agentRec.ContextWindowOverride = nil
+				}
 				// tool_feedback was removed from the wire in W1 (it's now per-channel
 				// runtime behavior driven by pkg/agent/loop.go: webchat skips). The
 				// global config-level agents.defaults.tool_feedback stays.
@@ -3837,7 +3873,12 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 	// AgentLoop.UpsertAgentFast for how the resolver/override/wiring parity
 	// is achieved without that cost; it falls back to the slow, hardened
 	// full reload on any wiring error.
-	needsReload := req.Soul != nil || defaultAgentIDChanged
+	// ADR-066 D2/D9: "every write triggers a registry reload so the next turn
+	// uses the new window" — AgentInstance resolves and CACHES its window at
+	// construction (instance.go), so a bare config swap would leave the
+	// running instance on the old window until a restart.
+	contextWindowOverrideChanged := req.ContextWindowOverride != nil || clearsContextWindowOverride
+	needsReload := req.Soul != nil || defaultAgentIDChanged || contextWindowOverrideChanged
 	var reloadWarning string
 	if needsReload {
 		reloadWarning = a.fastAgentUpsert(id)
@@ -3968,6 +4009,10 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 				// request-value overrides below so an explicit req.MaxToolIterations
 				// (also touched by applyAgentOverrides) still wins.
 				applyAgentOverrides(&ag, &ac)
+				// ADR-066 D2/D9: echo the just-persisted rung-1 override and
+				// re-derive the effective window from liveCfg, so the form
+				// round-trips instead of coming back blank.
+				applyAgentContextWindow(&ag, liveCfg, &ac)
 				break
 			}
 		}
