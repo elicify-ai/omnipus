@@ -5,7 +5,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/elicify-ai/omnipus/pkg/auth"
 	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
@@ -78,13 +77,16 @@ func TestCreateProviderFromConfig_CodexCLI_StillDispatches(t *testing.T) {
 // it takes the ordinary API-key path (and fails on the missing key), so the
 // store-credential seam is never called.
 func TestCreateProviderFromConfig_NoStoreOAuthLadder(t *testing.T) {
-	original := getCredential
-	t.Cleanup(func() { getCredential = original })
-	getCredential = func(provider string) (*auth.AuthCredential, error) {
-		t.Fatalf("getCredential(%q) called: the store-OAuth ladder must not exist", provider)
-		return nil, nil
-	}
-
+	// This test used to install a fake over factory.go's `getCredential`
+	// seam (= the auth package's GetCredential) and t.Fatal from inside it.
+	// That seam is
+	// gone: the OAuth-path hardening pass deleted the whole plaintext
+	// auth.json store, including
+	// GetCredential, so the ladder is now impossible by construction rather
+	// than merely unexercised — a stronger guarantee than the runtime
+	// assertion it replaces, and one the compiler enforces. What remains
+	// here is the still-valid behavioural half: a retired AuthMethod value
+	// must take the ordinary API-key path and fail on the missing key.
 	for _, tc := range []struct{ provider, method string }{
 		{"openai", "oauth"},
 		{"openai", "token"},

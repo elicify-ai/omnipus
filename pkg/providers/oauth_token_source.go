@@ -118,14 +118,111 @@ func needsOAuthRefresh(expiresAt time.Time) bool {
 	return time.Now().Add(5 * time.Minute).After(expiresAt)
 }
 
+// --- Process-wide single-flight for vendor refresh exchanges ---------------
+//
+// Threat note. This mutex map used to be a `var mu sync.Mutex` declared
+// INSIDE NewStoreOAuthTokenSource, i.e. one mutex per constructed closure —
+// and a fresh closure is constructed on every CreateProviderFromConfig (each
+// agent instance, each loop rebuild, the voice transcriber) and on every
+// GET /providers/{id}/sign-in/status poll from the SPA. Two of those hold two
+// different mutexes, so they could run the refresh exchange concurrently with
+// the SAME refresh token. OpenAI ROTATES refresh tokens: the first exchange
+// consumes it, the second presents an already-consumed token, fails
+// invalid_grant, and last-write-wins decided which credential survived. The
+// realistic outcome was a stored credential whose refresh token was dead —
+// a "needs sign-in" the operator could only clear by signing in again.
+//
+// Keying on the credential-store ENTRY NAME (not the provider id) is what
+// makes the single-flight correct: openai-chatgpt and any future
+// OpenAI-family row share one stored vendor identity (OAuthVendorID), so they
+// must share one lock. The map is bounded by the number of OAuth vendors that
+// have ever been used in this process — a handful — so entries are never
+// evicted; a mutex is 8 bytes.
+var (
+	oauthRefreshLocksMu sync.Mutex
+	oauthRefreshLocks   = make(map[string]*sync.Mutex)
+)
+
+// oauthRefreshLock returns the process-wide mutex for one credential-store
+// entry, creating it on first use.
+func oauthRefreshLock(entryName string) *sync.Mutex {
+	oauthRefreshLocksMu.Lock()
+	defer oauthRefreshLocksMu.Unlock()
+	mu, ok := oauthRefreshLocks[entryName]
+	if !ok {
+		mu = &sync.Mutex{}
+		oauthRefreshLocks[entryName] = mu
+	}
+	return mu
+}
+
+// --- Sensitive-value registration seam -------------------------------------
+//
+// ADR-068 FR-046 requires every stored OAuth token to be scrubbed from LLM
+// output, logs and audit. The gateway registers them at boot
+// (bootCredentials) and after each sign-in / status poll, but the AGENT-path
+// refresh below mints a NEW access+refresh pair mid-turn: without this seam
+// the scrubber kept protecting the OLD, superseded token while the live one
+// travelled unprotected until the next boot, sign-in or status call.
+//
+// pkg/providers has no handle on *config.Config (that is the whole reason the
+// gap existed), so the registration is a narrow hook the gateway installs
+// once at boot — see SetSensitiveValueRegistrar. It stays a no-op in every
+// other build and in tests that do not install one.
+
+var (
+	sensitiveRegistrarMu sync.RWMutex
+	// sensitiveRegistrar defaults to a no-op so the refresh path never has to
+	// nil-check a security control it cannot itself provide.
+	sensitiveRegistrar = func(_ ...string) {}
+)
+
+// SetSensitiveValueRegistrar installs the callback invoked with every newly
+// minted OAuth token after a successful agent-path refresh. Called once at
+// gateway boot (pkg/gateway/gateway.go), where a *config.Config is in scope.
+//
+// The callback must treat its arguments as ADDITIONS: config's
+// RegisterSensitiveValues has "replace with the complete current set"
+// semantics, so the gateway's implementation recomputes the full set rather
+// than registering these values alone. Passing nil restores the no-op.
+func SetSensitiveValueRegistrar(fn func(values ...string)) {
+	sensitiveRegistrarMu.Lock()
+	defer sensitiveRegistrarMu.Unlock()
+	if fn == nil {
+		sensitiveRegistrar = func(_ ...string) {}
+		return
+	}
+	sensitiveRegistrar = fn
+}
+
+// registerSensitiveValues hands freshly minted tokens to the installed
+// registrar. Empty values are dropped so a vendor response missing a rotated
+// refresh token cannot register "" as a secret.
+func registerSensitiveValues(values ...string) {
+	nonEmpty := make([]string, 0, len(values))
+	for _, v := range values {
+		if v != "" {
+			nonEmpty = append(nonEmpty, v)
+		}
+	}
+	if len(nonEmpty) == 0 {
+		return
+	}
+	sensitiveRegistrarMu.RLock()
+	fn := sensitiveRegistrar
+	sensitiveRegistrarMu.RUnlock()
+	fn(nonEmpty...)
+}
+
 // NewStoreOAuthTokenSource returns a token-source closure — the shape
 // CodexProvider.tokenSource expects, func() (token, accountID string, err
 // error) — backed by the encrypted credential store's
 // "<OAuthVendorID(providerID)>_OAUTH" entry. It refreshes the stored token
-// when within 5 minutes of expiry, single-flighted per token-source
-// instance (one mutex per constructed closure) so concurrent turns sharing
-// this provider share one vendor refresh call rather than racing it, and
-// persists the refreshed result before returning it (ADR-068 FR-046).
+// when within 5 minutes of expiry, single-flighted PROCESS-WIDE per stored
+// vendor entry (oauthRefreshLock, not a per-closure mutex — see the threat
+// note there) so that however many token sources exist, one vendor refresh
+// call happens rather than N racing ones, and persists the refreshed result
+// before returning it (ADR-068 FR-046).
 //
 // Scope note: refresh-on-401 (a live API 401 despite a not-yet-expired
 // stored token) is not actively retried here — CodexProvider's Chat() has
@@ -138,9 +235,13 @@ func NewStoreOAuthTokenSource(
 ) func() (string, string, error) {
 	vendorID := OAuthVendorID(providerID)
 	entryName := credentials.OAuthEntryName(vendorID)
-	var mu sync.Mutex
 
 	return func() (string, string, error) {
+		// Held across the vendor exchange, which is why that exchange must be
+		// bounded: auth.RefreshAccessToken carries an explicit HTTP timeout
+		// (auth.OAuthProviderConfig.Timeout, defaulted by the auth package),
+		// so the worst case is one bounded stall, never a permanent wedge.
+		mu := oauthRefreshLock(entryName)
 		mu.Lock()
 		defer mu.Unlock()
 
@@ -171,6 +272,29 @@ func NewStoreOAuthTokenSource(
 			return "", "", &providerNeedsSignInError{ProviderID: providerID, Cause: err}
 		}
 
+		// Compare-and-swap against a lost update. The lock above excludes
+		// every other refresh IN THIS PROCESS, but not the sign-in handlers
+		// (which write this same entry without taking it) nor a second
+		// Omnipus process sharing the store. If either installed a newer
+		// usable credential while our exchange was in flight, theirs wins:
+		// overwriting a just-completed sign-in with our older exchange's
+		// result is exactly the lost update that leaves a dead refresh token
+		// on disk.
+		if latest, rerr := readStoreOAuthCred(store, entryName); rerr == nil &&
+			latest != nil &&
+			latest.AccessToken != cred.AccessToken &&
+			latest.AccessToken != refreshed.AccessToken &&
+			!needsOAuthRefresh(latest.ExpiresAt) {
+			// Register it too. When the newer credential came from THIS
+			// process's sign-in handler it is already known to the scrubber,
+			// but when it came from a second Omnipus process sharing the
+			// store nothing here has ever seen it — and we are about to hand
+			// it to the LLM transport. ADR-068 FR-046 does not care which
+			// process minted the token.
+			registerSensitiveValues(latest.AccessToken, latest.RefreshToken)
+			return latest.AccessToken, latest.AccountID, nil
+		}
+
 		newCred := &storeOAuthCred{
 			AccessToken:  refreshed.AccessToken,
 			RefreshToken: refreshed.RefreshToken,
@@ -180,6 +304,11 @@ func NewStoreOAuthTokenSource(
 		if err := writeStoreOAuthCred(store, entryName, newCred); err != nil {
 			return "", "", fmt.Errorf("saving refreshed credential for %s: %w", providerID, err)
 		}
+		// ADR-068 FR-046: the pair that just replaced the stored one must be
+		// scrubbed from LLM output, logs and audit from here on. Registered
+		// AFTER the write so the gateway's registrar, which recomputes the
+		// complete set from the store, sees the same credential we return.
+		registerSensitiveValues(newCred.AccessToken, newCred.RefreshToken)
 		return newCred.AccessToken, newCred.AccountID, nil
 	}
 }

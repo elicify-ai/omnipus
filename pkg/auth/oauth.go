@@ -1,6 +1,8 @@
 package auth
 
 import (
+	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -11,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // OAuthProviderConfig describes a vendor OAuth token endpoint — device-code
@@ -30,7 +33,22 @@ type OAuthProviderConfig struct {
 	Issuer   string
 	ClientID string
 	Scopes   string
-	Port     int
+
+	// Timeout bounds a single HTTP call made with this config — dial,
+	// request, redirects and body read together. Zero means
+	// defaultOAuthHTTPTimeout. It exists because the two callers of this
+	// package want different bounds: the interactive sign-in flow can afford
+	// the default, while the agent-path refresh
+	// (providers.NewStoreOAuthTokenSource) runs inside a live turn and
+	// bounds itself tighter so a hung vendor stalls one turn rather than the
+	// whole token source.
+	//
+	// There is deliberately no unbounded setting: a zero-timeout
+	// http.Client is what this file used to have (http.DefaultClient), and a
+	// vendor that accepts the TCP connection and then never answers wedged
+	// the caller — and, in the agent path, the refresh mutex — for the
+	// process lifetime.
+	Timeout time.Duration
 }
 
 // OpenAIOAuthConfig returns the Codex device-code endpoints and the shared
@@ -41,7 +59,6 @@ func OpenAIOAuthConfig() OAuthProviderConfig {
 		Issuer:   "https://auth.openai.com",
 		ClientID: "app_EMoamEEZ73f0CkXaXp7hrann",
 		Scopes:   "openid profile email offline_access",
-		Port:     1455,
 	}
 }
 
@@ -83,6 +100,116 @@ func XAIOAuthConfig() (OAuthProviderConfig, error) {
 	}, nil
 }
 
+// --- Bounded HTTP transport for every OAuth call ---------------------------
+//
+// Threat note. Before this block every call in this file went through
+// http.Post / http.PostForm on http.DefaultClient, whose Timeout is 0 — no
+// dial deadline, no response deadline, no body-read deadline. A vendor (or
+// anything on the path able to accept a TCP connection and then stay silent)
+// could park an Omnipus goroutine indefinitely. In the agent path that
+// goroutine holds the per-vendor refresh mutex
+// (providers.NewStoreOAuthTokenSource), so a single hung refresh wedged the
+// provider for every later turn until the process restarted. Every call now
+// carries BOTH a context deadline and an http.Client.Timeout: the client
+// timeout also covers the body read, which a bare context on the request does
+// not once the response headers have arrived.
+
+// defaultOAuthHTTPTimeout bounds one OAuth HTTP call when
+// OAuthProviderConfig.Timeout is unset. Generous enough for an interactive
+// sign-in against a slow vendor, far short of "forever".
+//
+// A var, not a const, purely so this package's own tests can shrink it; no
+// production code assigns to it.
+var defaultOAuthHTTPTimeout = 30 * time.Second
+
+// maxOAuthResponseBytes bounds every OAuth response body read. Token
+// responses are a few KB at most (an id_token JWT is the largest part), so
+// this is orders of magnitude of headroom while still refusing to buffer an
+// unbounded stream into memory on the say-so of the remote end.
+const maxOAuthResponseBytes = 256 << 10
+
+// maxVendorErrorEcho bounds how much of a vendor's own error body may be
+// echoed into an error string. These strings travel: a refresh failure is
+// wrapped into providers' providerNeedsSignInError.Cause, reaches the agent
+// error classifier, and can surface to the operator. An upstream response is
+// attacker-influenced text, so it is truncated and stripped of control
+// characters before it is quoted.
+const maxVendorErrorEcho = 256
+
+// httpTimeout resolves the bound for one call: the config's own override
+// when set, the package default otherwise.
+func (c OAuthProviderConfig) httpTimeout() time.Duration {
+	if c.Timeout > 0 {
+		return c.Timeout
+	}
+	return defaultOAuthHTTPTimeout
+}
+
+// doOAuthPost issues one bounded POST and returns the response. The caller
+// owns resp.Body. cancel must be called once the body has been read — not
+// before, or the body read is aborted.
+func doOAuthPost(cfg OAuthProviderConfig, endpoint, contentType string, body []byte) (*http.Response, context.CancelFunc, error) {
+	timeout := cfg.httpTimeout()
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		cancel()
+		return nil, nil, err
+	}
+	req.Header.Set("Content-Type", contentType)
+
+	// A fresh Client per call is cheap: a nil Transport means
+	// http.DefaultTransport, so the connection pool is still shared. Only the
+	// timeout is per-call.
+	client := &http.Client{Timeout: timeout}
+	resp, err := client.Do(req)
+	if err != nil {
+		cancel()
+		return nil, nil, err
+	}
+	return resp, cancel, nil
+}
+
+// readOAuthBody drains a bounded prefix of an OAuth response body.
+func readOAuthBody(resp *http.Response) ([]byte, error) {
+	return io.ReadAll(io.LimitReader(resp.Body, maxOAuthResponseBytes))
+}
+
+// sanitizeVendorError makes a vendor's error body safe to quote in an error
+// string: truncated to maxVendorErrorEcho bytes, forced to valid UTF-8,
+// control characters dropped and whitespace collapsed to single spaces.
+func sanitizeVendorError(body []byte) string {
+	truncated := false
+	if len(body) > maxVendorErrorEcho {
+		body = body[:maxVendorErrorEcho]
+		truncated = true
+	}
+	// Truncation can split a multi-byte rune; drop any invalid sequence
+	// rather than emitting U+FFFD noise into an operator-facing string.
+	s := strings.ToValidUTF8(string(body), "")
+	s = strings.Map(func(r rune) rune {
+		switch {
+		case r == '\n' || r == '\r' || r == '\t':
+			return ' '
+		case r < 0x20 || r == 0x7f:
+			return -1
+		case !utf8.ValidRune(r):
+			return -1
+		default:
+			return r
+		}
+	}, s)
+	s = strings.Join(strings.Fields(s), " ")
+	if s == "" {
+		s = "(empty response body)"
+	}
+	if truncated {
+		s += " [truncated]"
+	}
+	return s
+}
+
 // DeviceCodeInfo holds what the SPA needs to show the operator to complete a
 // device-code sign-in (ADR-068 FR-008/FR-044): the link to open, the code to
 // enter, and how often to poll.
@@ -110,28 +237,25 @@ func RequestDeviceCode(cfg OAuthProviderConfig) (*DeviceCodeInfo, error) {
 		return nil, fmt.Errorf("encoding device code request: %w", err)
 	}
 
-	resp, err := http.Post(
-		cfg.Issuer+"/api/accounts/deviceauth/usercode",
-		"application/json",
-		strings.NewReader(string(reqBody)),
-	)
+	resp, cancel, err := doOAuthPost(cfg, cfg.Issuer+"/api/accounts/deviceauth/usercode", "application/json", reqBody)
 	if err != nil {
 		return nil, fmt.Errorf("requesting device code: %w", err)
 	}
-	// Response body is fully drained via io.ReadAll below; a Close error on an
-	// already-consumed HTTP response body has no effect on the parsed result.
+	defer cancel()
+	// Response body is fully drained via readOAuthBody below; a Close error on
+	// an already-consumed HTTP response body has no effect on the parsed result.
 	defer func() {
 		if closeErr := resp.Body.Close(); closeErr != nil {
 			_ = closeErr
 		}
 	}()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := readOAuthBody(resp)
 	if err != nil {
 		return nil, fmt.Errorf("reading device code response: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("device code request failed: %s", string(body))
+		return nil, fmt.Errorf("device code request failed: %s", sanitizeVendorError(body))
 	}
 
 	deviceResp, err := parseDeviceCodeResponse(body)
@@ -236,17 +360,14 @@ func pollDeviceCode(cfg OAuthProviderConfig, providerID, deviceAuthID, userCode 
 		return nil, "", fmt.Errorf("encoding device poll request: %w", err)
 	}
 
-	resp, err := http.Post(
-		cfg.Issuer+"/api/accounts/deviceauth/token",
-		"application/json",
-		strings.NewReader(string(reqBody)),
-	)
+	resp, cancel, err := doOAuthPost(cfg, cfg.Issuer+"/api/accounts/deviceauth/token", "application/json", reqBody)
 	if err != nil {
 		return nil, "", err
 	}
-	// Response body is fully drained (via io.ReadAll or a bounded LimitReader
-	// below); a Close error on an already-consumed HTTP response body has no
-	// effect on the parsed OAuth result.
+	defer cancel()
+	// Response body is fully drained via a bounded LimitReader below; a Close
+	// error on an already-consumed HTTP response body has no effect on the
+	// parsed OAuth result.
 	defer func() {
 		if closeErr := resp.Body.Close(); closeErr != nil {
 			_ = closeErr
@@ -269,7 +390,7 @@ func pollDeviceCode(cfg OAuthProviderConfig, providerID, deviceAuthID, userCode 
 		}
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := readOAuthBody(resp)
 	if err != nil {
 		return nil, "", fmt.Errorf("reading device token response: %w", err)
 	}
@@ -307,27 +428,28 @@ func ExchangeCodeForTokens(cfg OAuthProviderConfig, providerID, code, codeVerifi
 	}
 	tokenURL := cfg.Issuer + "/oauth/token"
 
-	// #nosec G107 -- tokenURL is derived from cfg.Issuer, which callers pass
-	// from fixed literal configuration (OpenAIOAuthConfig / XAIOAuthConfig) —
-	// never request-derived.
-	resp, err := http.PostForm(tokenURL, data)
+	// tokenURL is derived from cfg.Issuer, which callers pass from fixed
+	// literal configuration (OpenAIOAuthConfig / XAIOAuthConfig) — never
+	// request-derived.
+	resp, cancel, err := doOAuthPost(cfg, tokenURL, "application/x-www-form-urlencoded", []byte(data.Encode()))
 	if err != nil {
 		return nil, fmt.Errorf("exchanging code for tokens: %w", err)
 	}
-	// Response body is fully drained via io.ReadAll below; a Close error on an
-	// already-consumed HTTP response body has no effect on the parsed result.
+	defer cancel()
+	// Response body is fully drained via readOAuthBody below; a Close error on
+	// an already-consumed HTTP response body has no effect on the parsed result.
 	defer func() {
 		if closeErr := resp.Body.Close(); closeErr != nil {
 			_ = closeErr
 		}
 	}()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := readOAuthBody(resp)
 	if err != nil {
 		return nil, fmt.Errorf("reading token exchange response: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("token exchange failed: %s", string(body))
+		return nil, fmt.Errorf("token exchange failed: %s", sanitizeVendorError(body))
 	}
 
 	return parseTokenResponse(body, providerID)
@@ -348,26 +470,27 @@ func RefreshAccessToken(cred *AuthCredential, cfg OAuthProviderConfig) (*AuthCre
 	}
 	tokenURL := cfg.Issuer + "/oauth/token"
 
-	// #nosec G107 -- tokenURL is derived from cfg.Issuer, which callers pass
-	// from fixed literal configuration — never request-derived.
-	resp, err := http.PostForm(tokenURL, data)
+	// tokenURL is derived from cfg.Issuer, which callers pass from fixed
+	// literal configuration — never request-derived.
+	resp, cancel, err := doOAuthPost(cfg, tokenURL, "application/x-www-form-urlencoded", []byte(data.Encode()))
 	if err != nil {
 		return nil, fmt.Errorf("refreshing token: %w", err)
 	}
-	// Response body is fully drained via io.ReadAll below; a Close error on an
-	// already-consumed HTTP response body has no effect on the parsed result.
+	defer cancel()
+	// Response body is fully drained via readOAuthBody below; a Close error on
+	// an already-consumed HTTP response body has no effect on the parsed result.
 	defer func() {
 		if closeErr := resp.Body.Close(); closeErr != nil {
 			_ = closeErr
 		}
 	}()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := readOAuthBody(resp)
 	if err != nil {
 		return nil, fmt.Errorf("reading token refresh response: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("token refresh failed: %s", string(body))
+		return nil, fmt.Errorf("token refresh failed: %s", sanitizeVendorError(body))
 	}
 
 	refreshed, err := parseTokenResponse(body, cred.Provider)

@@ -8,6 +8,7 @@ package providers
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/auth"
 	"github.com/elicify-ai/omnipus/pkg/config"
@@ -157,6 +158,14 @@ func requireKey(cfg *config.ModelConfig, row resolvedRow) error {
 	return fmt.Errorf("api_key is required for provider %q (model: %s)", cfg.Provider, cfg.Model)
 }
 
+// agentOAuthRefreshTimeout bounds one agent-path OAuth refresh exchange
+// (auth.OAuthProviderConfig.Timeout). Deliberately shorter than the auth
+// package's own default, which serves the interactive sign-in flow where an
+// operator is watching a spinner: here nobody is watching, the caller is a
+// turn in progress, and the call is made while holding the per-vendor refresh
+// lock every other turn on this provider needs.
+const agentOAuthRefreshTimeout = 20 * time.Second
+
 // CreateProviderFromConfig builds the LLM transport for one provider config.
 //
 // It dispatches on the WIRE PROTOCOL the catalog carries for the provider id —
@@ -197,7 +206,13 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 					"openai-chatgpt: credential store not available (SetDefaultCredentialStore was never called)",
 				)
 			}
-			tokenSource := NewStoreOAuthTokenSource("openai-chatgpt", DefaultCredentialStore, auth.OpenAIOAuthConfig())
+			// The agent-path refresh runs inside a live turn and holds the
+			// process-wide per-vendor refresh lock while it does, so it is
+			// bounded tighter than the interactive sign-in flow's default:
+			// a hung vendor must cost one turn, not every later turn.
+			oauthCfg := auth.OpenAIOAuthConfig()
+			oauthCfg.Timeout = agentOAuthRefreshTimeout
+			tokenSource := NewStoreOAuthTokenSource("openai-chatgpt", DefaultCredentialStore, oauthCfg)
 			return NewCodexProviderWithTokenSource("", "", tokenSource), modelID, nil
 		}
 

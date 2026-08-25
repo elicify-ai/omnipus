@@ -235,9 +235,14 @@ func TestOpenAIOAuthConfig(t *testing.T) {
 	if cfg.ClientID == "" {
 		t.Error("ClientID is empty")
 	}
-	if cfg.Port != 1455 {
-		t.Errorf("Port = %d, want 1455", cfg.Port)
+	if cfg.Scopes == "" {
+		t.Error("Scopes is empty")
 	}
+	// The Port field (and its 1455 value) was vestigial from the DELETED
+	// loopback-callback flow — nothing outside this assertion ever read it,
+	// and it documented a localhost listener ADR-068 forbids. Both are gone;
+	// the assertion that replaces it pins the fields the device-code flow
+	// actually uses.
 }
 
 func TestXAIOAuthConfig_Unset(t *testing.T) {

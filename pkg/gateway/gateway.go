@@ -710,6 +710,50 @@ func bootCredentials(
 	return cfg, bundle, credStore, nil
 }
 
+// wireOAuthSensitiveValueRegistrar installs providers' sensitive-value
+// registration hook (ADR-068 FR-046). See the call site in Run for why the
+// seam exists and why the config is read through a getter rather than
+// captured.
+//
+// getCfg returns the live config (nil-safe); store is the unlocked credential
+// store. Errors are swallowed deliberately — this is housekeeping on a
+// security control, and the alternative to a best-effort re-registration is
+// no re-registration at all.
+func wireOAuthSensitiveValueRegistrar(getCfg func() *config.Config, store *credentials.Store) {
+	providers.SetSensitiveValueRegistrar(oauthSensitiveValueRegistrar(getCfg, store))
+}
+
+// oauthSensitiveValueRegistrar builds the closure wireOAuthSensitiveValueRegistrar
+// installs. Split out so it can be exercised directly: installing it into
+// providers' package-level seam makes it unreachable from a test, and a
+// re-registration that silently registers nothing is exactly the failure this
+// whole seam exists to prevent.
+func oauthSensitiveValueRegistrar(getCfg func() *config.Config, store *credentials.Store) func(values ...string) {
+	return func(values ...string) {
+		if getCfg == nil || store == nil {
+			return
+		}
+		cfg := getCfg()
+		if cfg == nil {
+			return
+		}
+		bundle, _ := credentials.ResolveBundle(cfg, store)
+		complete := make([]string, 0, len(bundle)+len(values)+2)
+		for _, v := range bundle {
+			if v != "" {
+				complete = append(complete, v)
+			}
+		}
+		complete = append(complete, providers.CollectOAuthSensitiveValues(store)...)
+		for _, v := range values {
+			if v != "" {
+				complete = append(complete, v)
+			}
+		}
+		cfg.RegisterSensitiveValues(complete)
+	}
+}
+
 // sweepOrphanedProviderCredentials is T068-10's startup sweep (ADR-068
 // FR-010 last clause, D14.2): delete any `<id>_API_KEY` credential whose
 // provider row is gone from cfg.Providers — greenfield housekeeping for the
@@ -1979,6 +2023,29 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// in the real audit chain. Synchronous and fast (one store read, at
 	// most a handful of deletes); never fatal.
 	sweepOrphanedProviderCredentials(cfg, credStore, agentLoop.AuditLogger())
+
+	// ADR-068 FR-046: an agent-path OAuth refresh (providers'
+	// NewStoreOAuthTokenSource, invoked mid-turn) mints a NEW access+refresh
+	// pair and persists it. bootCredentials above registered the tokens that
+	// existed AT BOOT; without this hook the scrubber would keep protecting
+	// those superseded values while the live pair travelled unprotected until
+	// the next boot, sign-in or sign-in-status poll.
+	//
+	// pkg/providers cannot do this itself — it has no *config.Config — so it
+	// exposes a one-line registration seam and the gateway fills it in here,
+	// where both the live config and the unlocked store are in scope. Wired
+	// after the agent loop exists so the closure can read the CURRENT config
+	// on every call: a config reload swaps the *config.Config out from under
+	// us, and registering onto the boot-time instance would silently stop
+	// protecting anything after the first reload.
+	//
+	// RegisterSensitiveValues replaces rather than appends, so the closure
+	// recomputes the COMPLETE set (config-ref bundle + every stored
+	// "<vendor>_OAUTH" entry) exactly as boot does; the freshly minted values
+	// it is handed are folded in explicitly so the registration does not
+	// depend on the store write having already landed. Best-effort by
+	// design: a failure here must never break a turn.
+	wireOAuthSensitiveValueRegistrar(func() *config.Config { return agentLoop.GetConfig() }, credStore)
 
 	// Install the same catalog instance on the agent loop: the presentation
 	// gate (ADR-067 FR-004) and ResolveWindow's rung 5 read one document, and
