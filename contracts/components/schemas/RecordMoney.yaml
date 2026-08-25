@@ -5,8 +5,9 @@ description: >
   fields that nothing keeps together is the failure this type closes.
 
   The amount is a DECIMAL STRING and never a JSON number. `type: number` in
-  this contract generates a Go float64 and a JavaScript number, and binary
-  floating point cannot represent 0.1 exactly — so a total that must be exact
+  this contract generates a Go float32 (float64 only with `format: double`)
+  and a JavaScript number, and binary floating point cannot represent 0.1
+  exactly — so a total that must be exact
   would drift by an amount nobody can see until it is reconciled against a
   bank. FR-013 requires exact decimal arithmetic and FR-020b forbids a binary
   float ANYWHERE in the storage or retrieval path; a string is the only

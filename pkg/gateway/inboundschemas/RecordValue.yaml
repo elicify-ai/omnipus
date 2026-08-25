@@ -5,8 +5,9 @@ description: >
   one is named by `type`.
 
   Numbers and money are carried as DECIMAL STRINGS, never as JSON numbers.
-  `type: number` in this contract generates a Go float64 and a JavaScript
-  number; binary floating point cannot represent 0.1 exactly, so a value would
+  `type: number` in this contract generates a Go float32 (float64 only with
+  `format: double`) and a JavaScript number; binary floating point cannot
+  represent 0.1 exactly, so a value would
   drift on a round trip that nobody performed deliberately. FR-020b forbids a
   binary float anywhere in the storage or retrieval path, and the wire is part
   of that path.

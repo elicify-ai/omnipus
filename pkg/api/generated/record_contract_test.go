@@ -256,7 +256,8 @@ func TestContract_RecordMoney_AmountIsAStringNotANumber(t *testing.T) {
 	amount := requiredJSONField(t, typ, "amount")
 	assert.Equal(t, reflect.String, amount.Type.Kind(),
 		"RecordMoney.Amount must be a string. `type: number` in the contract "+
-			"generates a Go float64 and a JavaScript number, and binary floating "+
+			"generates a Go float32 — float64 only with format: double — and a "+
+			"JavaScript number, and binary floating "+
 			"point cannot represent 0.1 exactly — FR-020b forbids a binary float "+
 			"anywhere in the path, and the wire is part of the path")
 
