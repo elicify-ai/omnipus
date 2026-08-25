@@ -67,9 +67,9 @@ export interface ProviderDetailPanelProps {
   onChange?: (selection: ProviderDetailSelection) => void
   onCancel?: () => void
   /**
-   * T068-33 seam — opens `SignInDialog` for the given provider id. Until that
-   * task lands the *Sign in* button is inert rather than absent, so the panel's
-   * layout and focus order are already the final ones.
+   * Opens `SignInDialog` for the given provider id (T068-33). Omitting it
+   * leaves the *Sign in* button inert rather than absent, so the panel's
+   * layout and focus order are the same either way.
    */
   onSignIn?: (providerId: string) => void
   /** Replaces the built-in key input (onboarding owns its own field, T068-27). */

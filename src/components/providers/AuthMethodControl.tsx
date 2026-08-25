@@ -26,7 +26,10 @@
 //
 // The *Sign in* button is a seam, not a flow: it calls `onSignIn` with the
 // selected provider id. T068-33's `SignInDialog` (device code / CLI login)
-// drops into that callback with no change here.
+// dropped into that callback with no change here — every caller that wants a
+// working sign-in supplies `onSignIn` and renders that dialog itself
+// (`ProviderDetailPanel` → `ProviderPicker` → onboarding step 3 and
+// Settings → Providers), so this file stays free of any transport concern.
 
 import * as React from 'react'
 import { Key, SignIn } from '@phosphor-icons/react'
@@ -81,8 +84,9 @@ export interface AuthMethodControlProps {
   /** Fired on every sign-in provider change, and once on mount with the default. */
   onSignInProviderChange?: (providerId: string) => void
   /**
-   * T068-33 seam: opens the sign-in dialog for the selected provider. Until
-   * that task lands the button is simply inert when this is unset.
+   * Opens the sign-in dialog for the selected provider (T068-33). A caller
+   * that omits it leaves the button inert — the control still renders, which
+   * is what keeps the panel's layout and focus order identical either way.
    */
   onSignIn?: (providerId: string) => void
   /** Rendered under the segment while the API-key method is selected. */

@@ -2,7 +2,7 @@ import { expect, test as baseTest } from '@playwright/test';
 import { test } from './fixtures/console-errors';
 import { expectA11yClean } from './fixtures/a11y';
 import { focusRingContrast, type FocusRingSample } from './fixtures/contrast';
-import { popularTiles, stubOnboarding } from './fixtures/onboarding-stubs';
+import { popularTiles, stubOnboarding, stubProviderSignIn } from './fixtures/onboarding-stubs';
 
 // Global storageState provides pre-authenticated session (see playwright.config.ts + global-setup.ts).
 
@@ -298,4 +298,53 @@ baseTest('the expanded provider list renders at most floor(height/40) + 10 optio
   ).toBeLessThanOrEqual(bound);
   // Differentiation: a list that rendered nothing would also satisfy the bound.
   expect(options, 'the expanded list rendered no options at all').toBeGreaterThan(0);
+});
+
+// ── ADR-068 §8b / FR-045 — the shared sign-in dialog (T068-33) ──────────────
+//
+// The dialog is the only surface on this branch that renders a modal over the
+// picker, so its axe row is separate from the step-3 row above. FR-045 names
+// three constraints axe cannot check on its own: focus must move INTO the
+// dialog, Escape must close it, and the status line must be a polite live
+// region — each has its own assertion here.
+
+baseTest('axe is clean on the sign-in dialog, focus enters it, and Escape closes it', async ({
+  page,
+}) => {
+  await stubOnboarding(page);
+  const signIn = await stubProviderSignIn(page);
+  await openOnboardingPicker(page);
+
+  // `openai-chatgpt` is a standard-tier row — reachable through search.
+  await page.getByTestId('picker-search').fill('chatgpt');
+  await page.getByTestId('picker-row-ChatGPT').click();
+  await expect(page.getByTestId('provider-detail-panel')).toBeVisible();
+  await page.getByTestId('provider-detail-panel-auth-signin-start').click();
+
+  const dialog = page.getByTestId('sign-in-dialog');
+  await expect(dialog).toBeVisible();
+  await expect(page.getByTestId('user-code')).toHaveText(/WDJB-MJHT/);
+  expect(signIn.starts, 'the dialog did not start a sign-in').toContain('openai-chatgpt');
+
+  await expectA11yClean(page);
+
+  // FR-045: the verification link opens a new tab and is `rel="noopener"`.
+  const link = page.getByTestId('verification-link');
+  await expect(link).toHaveAttribute('target', '_blank');
+  await expect(link).toHaveAttribute('rel', 'noopener');
+
+  // FR-045: the status line is a polite live region.
+  await expect(page.getByTestId('sign-in-status')).toHaveAttribute('aria-live', 'polite');
+
+  // FR-045: focus is inside the dialog, not left behind on the picker.
+  const focusInside = await page.evaluate(() => {
+    const el = document.querySelector('[data-testid="sign-in-dialog"]');
+    return !!el && !!document.activeElement && el.contains(document.activeElement);
+  });
+  expect(focusInside, 'focus stayed outside the sign-in dialog').toBe(true);
+
+  // FR-045: Escape closes it, and the picker underneath is still there.
+  await page.keyboard.press('Escape');
+  await expect(dialog).toBeHidden();
+  await expect(page.getByTestId('provider-detail-panel')).toBeVisible();
 });

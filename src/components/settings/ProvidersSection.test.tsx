@@ -38,9 +38,21 @@ vi.mock('@/lib/api', async (importOriginal) => {
     configureProvider: vi.fn(),
     testProvider: vi.fn(),
     reAuth: vi.fn(),
+    signOutProvider: vi.fn(),
     isApiError: actual.isApiError,
   }
 })
+
+// SignInDialog itself is unit-tested in full in SignInDialog.test.tsx — here
+// we only need to assert ProvidersSection opens it with the right target.
+vi.mock('@/components/providers/SignInDialog', () => ({
+  SignInDialog: ({ open, providerId, providerLabel }: { open: boolean; providerId: string; providerLabel: string }) =>
+    open ? (
+      <div data-testid="sign-in-dialog-stub">
+        {providerLabel} ({providerId})
+      </div>
+    ) : null,
+}))
 
 import * as api from '@/lib/api'
 import { ProvidersSection } from './ProvidersSection'
@@ -1121,5 +1133,129 @@ describe('ProvidersSection — FR-033 draft-key preservation (US-8)', () => {
       expect(screen.queryByTestId('provider-config-sheet')).not.toBeInTheDocument()
     })
     expect(screen.queryByTestId('discard-key-prompt')).not.toBeInTheDocument()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// ADR-068 §8b sign-in row states (T068-33) — signed_in / expired / Sign out.
+// Gated primarily on the registry catalog entry's `auth_methods` (see
+// ProviderRow.tsx's isSignInCapable). `openai-chatgpt` and `codex-cli` are
+// two of the shared fixture's `auth_methods: ["sign_in"]` rows, so these
+// fixtures exercise the catalog signal itself; the configured row's own
+// `auth_method: "sign_in"` field is carried too, which is the fallback
+// isSignInCapable takes for an id absent from the catalog.
+// ---------------------------------------------------------------------------
+
+const SIGNED_IN_PROVIDER = {
+  ...CONFIGURED_BASE,
+  id: 'openai-chatgpt',
+  name: 'openai-chatgpt',
+  display_name: 'openai-chatgpt',
+  status: 'signed_in',
+  auth_method: 'sign_in',
+  account_label: 'user@example.com',
+  models: [],
+}
+
+const EXPIRED_PROVIDER = {
+  ...CONFIGURED_BASE,
+  id: 'codex-cli',
+  name: 'codex-cli',
+  display_name: 'codex-cli',
+  status: 'expired',
+  auth_method: 'sign_in',
+  models: [],
+}
+
+describe('ProvidersSection — ADR-068 sign-in row states', () => {
+  it('a signed_in row shows the account label and a Sign out button, not Configure', async () => {
+    vi.mocked(api.fetchProviders).mockResolvedValue([SIGNED_IN_PROVIDER] as never)
+    renderSection()
+
+    await waitFor(() => screen.getByTestId('provider-row-openai-chatgpt'))
+    expect(screen.getByTestId('signed-in-badge-openai-chatgpt')).toHaveTextContent('Signed in as user@example.com')
+    expect(screen.getByTestId('sign-out-btn-openai-chatgpt')).toBeInTheDocument()
+    expect(screen.queryByTestId('configure-btn-openai-chatgpt')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('sign-in-btn-openai-chatgpt')).not.toBeInTheDocument()
+  })
+
+  it('an expired row shows "Session expired" and "Sign in again", which opens the dialog for that provider', async () => {
+    vi.mocked(api.fetchProviders).mockResolvedValue([EXPIRED_PROVIDER] as never)
+    renderSection()
+
+    await waitFor(() => screen.getByTestId('provider-row-codex-cli'))
+    expect(screen.getByTestId('expired-badge-codex-cli')).toHaveTextContent('Session expired')
+    const btn = screen.getByTestId('sign-in-btn-codex-cli')
+    expect(btn).toHaveTextContent('Sign in again')
+
+    expect(screen.queryByTestId('sign-in-dialog-stub')).not.toBeInTheDocument()
+    fireEvent.click(btn)
+    await waitFor(() => {
+      expect(screen.getByTestId('sign-in-dialog-stub')).toHaveTextContent('codex-cli')
+    })
+  })
+
+  it('Sign out calls signOutProvider and refetches the provider list', async () => {
+    vi.mocked(api.fetchProviders).mockResolvedValue([SIGNED_IN_PROVIDER] as never)
+    vi.mocked(api.signOutProvider).mockResolvedValue({ success: true })
+    renderSection()
+
+    await waitFor(() => screen.getByTestId('sign-out-btn-openai-chatgpt'))
+    fireEvent.click(screen.getByTestId('sign-out-btn-openai-chatgpt'))
+
+    await waitFor(() => {
+      expect(api.signOutProvider).toHaveBeenCalledWith('openai-chatgpt')
+    })
+    await waitFor(() => {
+      expect(addToast).toHaveBeenCalledWith(expect.objectContaining({ message: 'Signed out', variant: 'success' }))
+    })
+    // fetchProviders is re-invoked on invalidation (initial render + refetch).
+    await waitFor(() => {
+      expect(vi.mocked(api.fetchProviders).mock.calls.length).toBeGreaterThan(1)
+    })
+  })
+
+  it('Sign out surfacing a server-reported failure shows the error, not a false success toast', async () => {
+    vi.mocked(api.fetchProviders).mockResolvedValue([SIGNED_IN_PROVIDER] as never)
+    vi.mocked(api.signOutProvider).mockResolvedValue({ success: false, error: 'could not delete credential' })
+    renderSection()
+
+    await waitFor(() => screen.getByTestId('sign-out-btn-openai-chatgpt'))
+    fireEvent.click(screen.getByTestId('sign-out-btn-openai-chatgpt'))
+
+    await waitFor(() => {
+      expect(addToast).toHaveBeenCalledWith(
+        expect.objectContaining({ message: 'could not delete credential', variant: 'error' }),
+      )
+    })
+    expect(addToast).not.toHaveBeenCalledWith(expect.objectContaining({ message: 'Signed out' }))
+  })
+
+  it('a non-sign-in provider (regression) never shows Sign in/Sign out controls', async () => {
+    vi.mocked(api.fetchProviders).mockResolvedValue([ANTHROPIC_PROVIDER] as never)
+    renderSection()
+
+    await waitFor(() => screen.getByTestId('provider-row-anthropic'))
+    expect(screen.queryByTestId('sign-out-btn-anthropic')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('sign-in-btn-anthropic')).not.toBeInTheDocument()
+    expect(screen.getByTestId('configure-btn-anthropic')).toBeInTheDocument()
+  })
+
+  it('selecting a sign_in-only catalog entry from the picker opens SignInDialog directly, not the API-key connect Sheet', async () => {
+    // `openai-chatgpt` is one of the shared fixture's three `auth_methods:
+    // ["sign_in"]` rows — the same shape the served catalog carries, so this
+    // asserts the real FR-005 branch rather than a bespoke entry.
+    vi.mocked(api.fetchProviders).mockResolvedValue([] as never)
+    renderSection()
+
+    await waitFor(() => screen.getByTestId('connect-provider-btn'))
+    fireEvent.click(screen.getByTestId('connect-provider-btn'))
+    await waitFor(() => screen.getByTestId('picker-entry-openai-chatgpt'))
+    fireEvent.click(screen.getByTestId('picker-entry-openai-chatgpt'))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('sign-in-dialog-stub')).toHaveTextContent('openai-chatgpt')
+    })
+    expect(screen.queryByTestId('provider-config-sheet')).not.toBeInTheDocument()
   })
 })

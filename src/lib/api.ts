@@ -81,6 +81,10 @@ import {
   Provider as ProviderSchema,
   ProvidersCatalog as ProvidersCatalogSchema,
   CliDetect as CliDetectSchema,
+  // ADR-068 §8b sign-in wire shapes (T068-33/T068-34):
+  SignInStartResponse as SignInStartResponseSchema,
+  SignInStatus as SignInStatusSchema,
+  SignInPollResponse as SignInPollResponseSchema,
   // external-executor-cli-path-detection spec (ADR-030): create-time validate.
   CliValidateResponse as CliValidateResponseSchema,
   // Agent System P0 fix: real auto-applied CLI flags (replaces misleading
@@ -331,6 +335,11 @@ import type {
   UploadedFile,
   AgentToolsCfg,
   OnboardingCompleteRequest,
+  // ADR-068 section 8b sign-in wire shapes (T068-33/T068-34):
+  SignInStartResponse,
+  SignInStatus,
+  SignInPollRequest,
+  SignInPollResponse,
   // New wire types (contract-first #8):
   Task,
   McpServer,
@@ -2326,6 +2335,77 @@ export function configureProvider(
 
 export function testProvider(id: string): Promise<OperationResult> {
   return request<OperationResult>(`/providers/${id}/test`, { method: 'POST' }, OperationResultSchema as ZodType<OperationResult>)
+}
+
+// ── Provider sign-in (device code / CLI login, ADR-068 §8b, T068-33) ────────
+//
+// SignInDialog (src/components/providers/SignInDialog.tsx) is the sole
+// caller. All five endpoints are `adminWrap` (401 when unauthenticated) with
+// ONE documented exception (FR-050): while onboarding is incomplete they are
+// reachable without a session, which is what lets onboarding step 3 run a
+// real sign-in before any admin account exists to authenticate as. Once
+// onboarding completes they revert to the normal 401/503 posture.
+
+// startSignIn begins a vendor sign-in for a provider whose catalog row
+// declares `sign_in` (ADR-068 FR-008). Returns the `cli_login` instruction
+// (codex-cli / github-copilot — run the vendor CLI's own login command) or a
+// `device_code` session (openai-chatgpt, and xai once configured —
+// verification link + user code to poll, FR-044).
+export function startSignIn(id: string): Promise<SignInStartResponse> {
+  return request<SignInStartResponse>(
+    `/providers/${id}/sign-in`,
+    { method: 'POST' },
+    SignInStartResponseSchema as ZodType<SignInStartResponse>,
+  )
+}
+
+// fetchSignInStatus reads a provider's current vendor sign-in state without
+// side effects — no vendor poll, no file write (FR-007/FR-009). Used for the
+// cli_login "Check sign-in" button.
+export function fetchSignInStatus(id: string): Promise<SignInStatus> {
+  return request<SignInStatus>(
+    `/providers/${id}/sign-in/status`,
+    undefined,
+    SignInStatusSchema as ZodType<SignInStatus>,
+  )
+}
+
+// pollSignIn performs at most one vendor poll for an open device-code
+// session. The caller MUST respect the LATEST `interval_seconds` it has seen
+// (from startSignIn or a prior poll response) and never poll faster — and
+// must back off when a poll response raises it via vendor `slow_down`
+// (FR-045).
+export function pollSignIn(id: string, deviceAuthId: string): Promise<SignInPollResponse> {
+  const body: SignInPollRequest = { device_auth_id: deviceAuthId }
+  return request<SignInPollResponse>(
+    `/providers/${id}/sign-in/poll`,
+    { method: 'POST', body: JSON.stringify(body) },
+    SignInPollResponseSchema as ZodType<SignInPollResponse>,
+  )
+}
+
+// importCodexLogin copies an existing Codex CLI login (~/.codex/auth.json)
+// into openai-chatgpt's own encrypted OAuth entry (FR-047) — read-only, no
+// refresh token imported (that session ends at the copied token's `exp`).
+// 404 when no Codex login exists.
+export function importCodexLogin(): Promise<SignInStatus> {
+  return request<SignInStatus>(
+    '/providers/openai-chatgpt/sign-in/import',
+    { method: 'POST' },
+    SignInStatusSchema as ZodType<SignInStatus>,
+  )
+}
+
+// signOutProvider deletes the provider's stored OAuth credential entry
+// (device_code providers) and returns the row to not_signed_in (FR-048). A
+// missing entry is still success; a no-op success for cli_login providers,
+// which hold no Omnipus-side credential to delete.
+export function signOutProvider(id: string): Promise<OperationResult> {
+  return request<OperationResult>(
+    `/providers/${id}/sign-in`,
+    { method: 'DELETE' },
+    OperationResultSchema as ZodType<OperationResult>,
+  )
 }
 
 // fetchCliDetect probes the host for installed external CLIs (claude-code /
