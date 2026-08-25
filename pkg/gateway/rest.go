@@ -128,10 +128,16 @@ type restAPI struct {
 	entitlements entitlementCache
 
 	// signInMu guards signInSessions, the in-process store of open
-	// device-code sign-in sessions (ADR-068 FR-008/FR-044, T068-14). Lazily
-	// initialized via deviceSessions()/putDeviceSession() (rest_sign_in.go)
-	// — a bare restAPI{} test literal that never exercises the sign-in
-	// routes need not know this field exists. Single-gateway-process
+	// device-code sign-in sessions (ADR-068 FR-008/FR-044, T068-14) — AND
+	// every field of every *deviceCodeSession the map holds. No session
+	// pointer ever escapes the lock: rest_sign_in.go's accessors return
+	// value copies and mutate only inside the critical section. Read the
+	// CONCURRENCY CONTRACT block above putDeviceSession there before
+	// touching either field; handing the live map out is what made
+	// GET .../sign-in/status a pre-auth process-killing fatal. Lazily
+	// initialized on first put — a bare restAPI{} test literal that never
+	// exercises the sign-in routes need not know this field exists.
+	// Single-gateway-process
 	// in-memory state is sufficient: a device-code session's own ceiling is
 	// 15 minutes (FR-044) and Omnipus is a single Go binary, not a
 	// horizontally-scaled fleet.
@@ -6556,7 +6562,10 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 			case r.Method == http.MethodPost && sub == copilotProviderID+"/sign-in":
 				a.handleCopilotSignInStart(w, r)
 			case r.Method == http.MethodGet && sub == copilotProviderID+"/sign-in/status":
-				a.handleCopilotSignInStatus(w, r)
+				// Rate-limited for the same reason as the generic status
+				// route below — this one spawns a Copilot CLI process per
+				// call (see signInStatusLimiter's doc comment).
+				withRateLimit(signInStatusLimiter, a.handleCopilotSignInStatus)(w, r)
 			case r.Method == http.MethodPost && strings.HasSuffix(sub, "/sign-in/poll"):
 				// FR-044: no explicit rate-limit requirement, but a device-code
 				// dialog polls repeatedly by design — signInPollLimiter is a
@@ -6575,7 +6584,14 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 					a.handleProviderSignInStart(w, r, strings.TrimSuffix(sub, "/sign-in"))
 				})(w, r)
 			case r.Method == http.MethodGet && strings.HasSuffix(sub, "/sign-in/status"):
-				a.handleProviderSignInStatus(w, r, strings.TrimSuffix(sub, "/sign-in/status"))
+				// NOT read-only in the way the shape suggests: for a
+				// device_code provider this reaches the stored-OAuth token
+				// source, which refreshes against the vendor within 5
+				// minutes of expiry (FR-046). It needs a ceiling like its
+				// sibling routes — see signInStatusLimiter (rest_auth.go).
+				withRateLimit(signInStatusLimiter, func(w http.ResponseWriter, r *http.Request) {
+					a.handleProviderSignInStatus(w, r, strings.TrimSuffix(sub, "/sign-in/status"))
+				})(w, r)
 			case r.Method == http.MethodDelete && strings.HasSuffix(sub, "/sign-in"):
 				// FR-048 sign-out: harmless no-op (NotFound = success) for a
 				// cli_login provider like github-copilot, which never has a

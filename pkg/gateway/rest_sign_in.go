@@ -44,6 +44,11 @@ const maxProviderIDLen = 64
 // the client — the client only ever sees our opaque handle), the OAuth
 // endpoint config needed to poll and exchange, and the session's own
 // server-enforced expiry / single-use guard.
+//
+// Every field is guarded by restAPI.signInMu — see the CONCURRENCY CONTRACT
+// above putDeviceSession. The struct is deliberately copyable (no pointers,
+// no embedded lock) so readers can be handed a snapshot instead of the live
+// record.
 type deviceCodeSession struct {
 	providerID         string
 	vendorDeviceAuthID string
@@ -59,39 +64,130 @@ type deviceCodeSession struct {
 // server-side lifetime, applied even if the vendor reports a longer one.
 const deviceCodeSessionMaxTTL = 15 * time.Minute
 
-// deviceSessions returns the lazily-initialized, mutex-guarded device-code
-// session map, creating it on first use. Safe for concurrent callers. A
-// bare `restAPI{}` test literal that never touches sign-in routes need not
-// know this field exists.
-func (a *restAPI) deviceSessions() map[string]*deviceCodeSession {
+// --- device-code session store -------------------------------------------
+//
+// CONCURRENCY CONTRACT — one lock, and no pointer ever escapes it.
+//
+// a.signInMu is the SINGLE mutex guarding both the signInSessions map AND
+// every field of every deviceCodeSession it holds. No *deviceCodeSession is
+// ever handed to a caller: readers get a value COPY, and every mutation goes
+// through a helper below that does its work inside the critical section.
+//
+// This is not a style preference. The previous shape handed the LIVE map out
+// of an already-released lock (deviceSessions()) and deviceCodeStatus ranged
+// over it unlocked; a concurrent put/delete during that range is
+// "fatal error: concurrent map iteration and map write" — Go's UNRECOVERABLE
+// runtime fatal, which kills the whole gateway process, not just the
+// request. It also wrote sess.resolved and sess.intervalSeconds after
+// getDeviceSession had released the lock, a plain data race on the same
+// fields a concurrent status read was reading. Both GET .../sign-in/status
+// and POST .../sign-in are reachable UNAUTHENTICATED while onboarding is
+// incomplete (FR-050), so this was a pre-auth remote crash.
+//
+// LOCK ORDER: signInMu is a LEAF. No other lock (a.configMu, the credential
+// store's, the audit logger's) may be taken while it is held, and no helper
+// below performs I/O — no vendor call, no store read, no audit write — under
+// it. Every such call in the handlers happens between helper invocations,
+// never inside one.
+//
+// The map is lazily initialized on first write, so a bare `restAPI{}` test
+// literal that never touches a sign-in route need not know the field exists.
+
+// putDeviceSession stores a COPY of sess under handle, and opportunistically
+// sweeps sessions that can no longer produce a non-terminal outcome (see
+// sweepDeviceSessionsLocked) so an abandoned dialog does not leak an entry
+// for the life of the process.
+func (a *restAPI) putDeviceSession(handle string, sess deviceCodeSession) {
 	a.signInMu.Lock()
 	defer a.signInMu.Unlock()
 	if a.signInSessions == nil {
 		a.signInSessions = make(map[string]*deviceCodeSession)
 	}
-	return a.signInSessions
+	a.sweepDeviceSessionsLocked(time.Now())
+	stored := sess
+	a.signInSessions[handle] = &stored
 }
 
-func (a *restAPI) putDeviceSession(handle string, sess *deviceCodeSession) {
-	a.signInMu.Lock()
-	defer a.signInMu.Unlock()
-	if a.signInSessions == nil {
-		a.signInSessions = make(map[string]*deviceCodeSession)
-	}
-	a.signInSessions[handle] = sess
-}
-
-func (a *restAPI) getDeviceSession(handle string) (*deviceCodeSession, bool) {
+// getDeviceSession returns a COPY of the session under handle. Callers get a
+// consistent snapshot they may read freely; they may not write it back —
+// mutations go through resolveDeviceSession/widenDeviceSessionInterval.
+func (a *restAPI) getDeviceSession(handle string) (deviceCodeSession, bool) {
 	a.signInMu.Lock()
 	defer a.signInMu.Unlock()
 	sess, ok := a.signInSessions[handle]
-	return sess, ok
+	if !ok {
+		return deviceCodeSession{}, false
+	}
+	return *sess, true
 }
 
-func (a *restAPI) deleteDeviceSession(handle string) {
+// resolveDeviceSession marks the session terminal AND removes it in one
+// critical section — FR-044's single-use guard: signed_in / expired / denied
+// is returned exactly once for a handle, and a concurrent status read can
+// never observe the half-applied state (resolved set, entry still present)
+// that two separate lock acquisitions would expose.
+func (a *restAPI) resolveDeviceSession(handle string) {
 	a.signInMu.Lock()
 	defer a.signInMu.Unlock()
+	if sess, ok := a.signInSessions[handle]; ok {
+		sess.resolved = true
+	}
 	delete(a.signInSessions, handle)
+}
+
+// widenDeviceSessionInterval applies the vendor's slow_down back-off to the
+// stored session under the lock and returns the new floor, so subsequent
+// polls (and a concurrent GET status) see it too. ok is false when the
+// session is already gone — the caller then reports the widened value it
+// computed for this response only.
+func (a *restAPI) widenDeviceSessionInterval(handle string) (widened int, ok bool) {
+	a.signInMu.Lock()
+	defer a.signInMu.Unlock()
+	sess, found := a.signInSessions[handle]
+	if !found {
+		return 0, false
+	}
+	widened = sess.intervalSeconds * 2
+	if widened <= sess.intervalSeconds {
+		widened = sess.intervalSeconds + 5
+	}
+	sess.intervalSeconds = widened
+	return widened, true
+}
+
+// pendingDeviceSessionExists reports whether an OPEN (unresolved, unexpired)
+// device-code session exists for providerID. The iteration happens INSIDE
+// the critical section — that is the whole point of this method existing
+// instead of a map accessor: the caller never holds a reference it could
+// range over while another request writes the map.
+func (a *restAPI) pendingDeviceSessionExists(providerID string) bool {
+	a.signInMu.Lock()
+	defer a.signInMu.Unlock()
+	now := time.Now()
+	a.sweepDeviceSessionsLocked(now)
+	for _, sess := range a.signInSessions {
+		if sess.providerID == providerID && !sess.resolved && now.Before(sess.expiresAt) {
+			return true
+		}
+	}
+	return false
+}
+
+// sweepDeviceSessionsLocked drops every session that can no longer produce a
+// non-terminal outcome: already resolved, or past its own expiresAt (which
+// putDeviceSession caps at deviceCodeSessionMaxTTL). Without it a dialog the
+// operator opened and closed leaked its entry until process exit — the poll
+// path removes an entry only on a TERMINAL outcome that a client actually
+// asked for. Deleting from a map being ranged over is defined behaviour in
+// Go: an entry removed before it is reached is simply not produced.
+//
+// The caller MUST hold a.signInMu.
+func (a *restAPI) sweepDeviceSessionsLocked(now time.Time) {
+	for handle, sess := range a.signInSessions {
+		if sess.resolved || !now.Before(sess.expiresAt) {
+			delete(a.signInSessions, handle)
+		}
+	}
 }
 
 // newDeviceAuthHandle mints the opaque, gateway-side handle returned to the
@@ -272,7 +368,7 @@ func (a *restAPI) handleProviderSignInStart(w http.ResponseWriter, r *http.Reque
 	}
 	now := time.Now()
 	expiresAt := now.Add(deviceCodeSessionMaxTTL)
-	a.putDeviceSession(handle, &deviceCodeSession{
+	a.putDeviceSession(handle, deviceCodeSession{
 		providerID:         providerID,
 		vendorDeviceAuthID: info.DeviceAuthID,
 		vendorUserCode:     info.UserCode,
@@ -323,8 +419,7 @@ func (a *restAPI) handleProviderSignInPoll(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if time.Now().After(sess.expiresAt) {
-		sess.resolved = true
-		a.deleteDeviceSession(req.DeviceAuthId)
+		a.resolveDeviceSession(req.DeviceAuthId)
 		jsonOK(w, gen.SignInPollResponse{State: gen.SignInPollResponseStateExpired})
 		return
 	}
@@ -372,8 +467,7 @@ func (a *restAPI) handleProviderSignInPoll(w http.ResponseWriter, r *http.Reques
 				slogWarnAuditFailed("provider.signed_in", logErr)
 			}
 		}
-		sess.resolved = true
-		a.deleteDeviceSession(req.DeviceAuthId)
+		a.resolveDeviceSession(req.DeviceAuthId)
 		jsonOK(w, gen.SignInPollResponse{State: gen.SignInPollResponseStateSignedIn})
 		return
 	}
@@ -382,22 +476,24 @@ func (a *restAPI) handleProviderSignInPoll(w http.ResponseWriter, r *http.Reques
 	case auth.DeviceCodePollSlowDown:
 		// Widen the session's own interval so subsequent polls (and a
 		// concurrent GET status, were it to read it) see the new floor too.
-		newInterval := sess.intervalSeconds * 2
-		if newInterval <= sess.intervalSeconds {
-			newInterval = sess.intervalSeconds + 5
+		// The widening happens under signInMu; if the session vanished in
+		// the meantime the widened value still governs THIS response.
+		newInterval, stored := a.widenDeviceSessionInterval(req.DeviceAuthId)
+		if !stored {
+			newInterval = sess.intervalSeconds * 2
+			if newInterval <= sess.intervalSeconds {
+				newInterval = sess.intervalSeconds + 5
+			}
 		}
-		sess.intervalSeconds = newInterval
 		jsonOK(w, gen.SignInPollResponse{
 			State:           gen.SignInPollResponseStatePending,
 			IntervalSeconds: &newInterval,
 		})
 	case auth.DeviceCodePollDenied:
-		sess.resolved = true
-		a.deleteDeviceSession(req.DeviceAuthId)
+		a.resolveDeviceSession(req.DeviceAuthId)
 		jsonOK(w, gen.SignInPollResponse{State: gen.SignInPollResponseStateDenied})
 	case auth.DeviceCodePollExpired:
-		sess.resolved = true
-		a.deleteDeviceSession(req.DeviceAuthId)
+		a.resolveDeviceSession(req.DeviceAuthId)
 		jsonOK(w, gen.SignInPollResponse{State: gen.SignInPollResponseStateExpired})
 	default: // pending
 		jsonOK(w, gen.SignInPollResponse{State: gen.SignInPollResponseStatePending})
@@ -479,11 +575,11 @@ func (a *restAPI) deviceCodeStatus(providerID string) gen.SignInStatus {
 	if err != nil {
 		return gen.SignInStatus{State: gen.SignInStatusStateNotSignedIn}
 	}
-	// Any open, unresolved device-code session for this provider reports pending.
-	for _, sess := range a.deviceSessions() {
-		if sess.providerID == providerID && !sess.resolved && time.Now().Before(sess.expiresAt) {
-			return gen.SignInStatus{State: gen.SignInStatusStatePending}
-		}
+	// Any open, unresolved device-code session for this provider reports
+	// pending. The scan runs inside signInMu — see the concurrency contract
+	// above pendingDeviceSessionExists.
+	if a.pendingDeviceSessionExists(providerID) {
+		return gen.SignInStatus{State: gen.SignInStatusStatePending}
 	}
 
 	oauthCfg, cfgErr := oauthConfigFor(providerID)

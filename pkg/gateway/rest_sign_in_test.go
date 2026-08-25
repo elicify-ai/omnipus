@@ -54,6 +54,9 @@ func deviceCodeVendorMux(t *testing.T, pollState *string) *http.ServeMux {
 		case "signed_in":
 			resp := map[string]any{"authorization_code": "code1", "code_verifier": "verif1"}
 			require.NoError(t, json.NewEncoder(w).Encode(resp))
+		case "slow_down":
+			// RFC 8628 §3.5 back-off — still pending, poll less often.
+			http.Error(w, `{"error":"slow_down"}`, http.StatusBadRequest)
 		default:
 			http.Error(w, "unexpected state", http.StatusInternalServerError)
 		}

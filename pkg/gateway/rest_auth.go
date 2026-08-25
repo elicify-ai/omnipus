@@ -219,6 +219,18 @@ var (
 	// attempt). Still bounds a runaway/abusive client well below what a
 	// human could trigger by hand.
 	signInPollLimiter = newAPIRateLimiter(60, 1*time.Minute)
+	// /api/v1/providers/{id}/sign-in/status — 60 requests/minute per IP.
+	// This route looked read-only enough to leave unlimited and is not:
+	// for a device_code provider it reaches the stored-OAuth token source,
+	// which REFRESHES against the vendor when the stored token is within 5
+	// minutes of expiry (ADR-068 FR-046), and for github-copilot it spawns
+	// a bounded Copilot CLI invocation (T068-15) — so an unauthenticated
+	// caller (FR-050 makes it pre-auth reachable while onboarding is
+	// incomplete) could drive outbound vendor traffic or process spawns at
+	// will. Shares signInPollLimiter's ceiling rather than the tighter
+	// start/auth one because the sign-in dialog legitimately re-reads
+	// status alongside every poll.
+	signInStatusLimiter = newAPIRateLimiter(60, 1*time.Minute)
 )
 
 // clientIP extracts the client IP from the request for rate-limiting and

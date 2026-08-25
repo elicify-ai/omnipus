@@ -21,9 +21,13 @@
 // entries removed (FR-013); (2) remove the provider row from config.json and
 // prune the non-agent settings references, including (2b) the
 // ContextSettings.model_overrides rows for the id (cross-spec Q3); (3)
-// delete the `<id>_API_KEY` credential, treating credentials.NotFoundError
-// as success; (4) audit provider.deleted with the credential REF NAME (never
-// the value), the dependents count and any default change; (5) trigger a
+// delete BOTH credentials the row can own — the `<id>_API_KEY` entry and the
+// device-code OAuth entry named
+// credentials.OAuthEntryName(providers.OAuthVendorID(id)) (openai-chatgpt's
+// tokens live under `openai_OAUTH`, ADR-068 FR-007) — treating
+// credentials.NotFoundError as success; (4) audit provider.deleted with the
+// credential REF NAMES (never the values), the dependents count and any
+// default change; (5) trigger a
 // reload and wait. A failure at any step answers 500 {deleted:false} leaving
 // a retryable state — a second identical DELETE re-runs every step and
 // succeeds, and after a completed run no orphaned secret can survive
@@ -43,6 +47,8 @@ import (
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/credentials"
+	providers_pkg "github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
 )
 
@@ -51,10 +57,11 @@ import (
 const EventProviderDeleted = "provider.deleted"
 
 // EventProviderCredentialSwept is the audit event the T068-10 startup sweep
-// emits when it removes an orphaned `<id>_API_KEY` whose provider row is
-// gone. Declared here alongside the deletion event that shares the
-// credential-name rule; registered in pkg/audit.IsValidEventName so the
-// sweep's first emission never trips the unknown-event warn-once.
+// emits when it removes an orphaned provider secret whose provider row is
+// gone — either an `<id>_API_KEY`, or a `<vendor>_OAUTH` device-code grant
+// no configured row maps to. Declared here alongside the deletion event that
+// shares the credential-name rule; registered in pkg/audit.IsValidEventName
+// so the sweep's first emission never trips the unknown-event warn-once.
 const EventProviderCredentialSwept = "provider.credential_swept"
 
 // Test seams for the partial-failure contract (TDD row 10a). Nil in
@@ -321,13 +328,29 @@ func (a *restAPI) runProviderDelete(
 	// during the process's lifetime still loses every stale answer.
 	a.entitlements.evictProvider(providerID)
 
-	// Step 3 — delete the credential; absence is success
+	// Step 3 — delete the credentials; absence is success
 	// (credentials.NotFoundError is absorbed by removeStoredCredential).
+	//
+	// BOTH secrets a provider row can own must go, or the confirm does not
+	// revoke anything (ADR-068 §9 exit proof #2, "no secret survives the
+	// confirm"). Deleting only `<id>_API_KEY` left a signed-in
+	// openai-chatgpt row's live access AND refresh token sitting in
+	// credentials.json with no UI referencing it any more — an orphaned,
+	// unrevokable grant on the operator's real vendor account.
+	//
+	// The OAuth entry is NOT `<providerID>_OAUTH`: providers.OAuthVendorID
+	// maps a route/catalog id to the VENDOR identity its tokens belong to
+	// (openai-chatgpt → openai, ADR-068 FR-007), and that mapping is what
+	// every writer of the entry uses. Deriving the name any other way here
+	// would silently miss the only row that actually has one today.
 	credRef := providerID + "_API_KEY"
-	if err := a.removeStoredCredential(credRef); err != nil {
-		slog.Error("rest: provider delete: credential delete failed",
-			"provider_id", providerID, "credential_ref", credRef, "error", err)
-		return failed()
+	oauthRef := credentials.OAuthEntryName(providers_pkg.OAuthVendorID(providerID))
+	for _, ref := range []string{credRef, oauthRef} {
+		if err := a.removeStoredCredential(ref); err != nil {
+			slog.Error("rest: provider delete: credential delete failed",
+				"provider_id", providerID, "credential_ref", ref, "error", err)
+			return failed()
+		}
 	}
 
 	// Step 4 — audit with the ref NAME, never the value (MAJ-016).
@@ -336,10 +359,11 @@ func (a *restAPI) runProviderDelete(
 	// complete.
 	if a.auditor != nil {
 		details := map[string]any{
-			"provider":        providerID,
-			"credential_ref":  credRef,
-			"dependents":      len(dependents),
-			"default_changed": defaultChanged,
+			"provider":             providerID,
+			"credential_ref":       credRef,
+			"oauth_credential_ref": oauthRef,
+			"dependents":           len(dependents),
+			"default_changed":      defaultChanged,
 		}
 		if defaultChanged {
 			details["old_default_provider"] = oldPair.Provider
@@ -359,6 +383,7 @@ func (a *restAPI) runProviderDelete(
 	// The ref name is loggable; the key value never is (SC-003's log check).
 	slog.Info("rest: provider removed",
 		"provider_id", providerID, "credential_ref", credRef,
+		"oauth_credential_ref", oauthRef,
 		"dependents", len(dependents), "default_changed", defaultChanged)
 
 	resp = &gen.ProviderDeleteResponse{

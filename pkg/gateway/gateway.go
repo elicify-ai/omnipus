@@ -719,6 +719,22 @@ func bootCredentials(
 // Runs once per boot, after config load + credential-store unlock, as soon
 // as the audit logger exists.
 //
+// It also sweeps orphaned device-code OAuth entries (`<vendor>_OAUTH`,
+// ADR-068 FR-007) — a signed-in provider's stored access AND refresh token
+// for the operator's real vendor account, which is the MORE sensitive of
+// the two secrets a provider row can own. Two rules make this safe:
+//
+//   - the key is the VENDOR, not the provider id. providers.OAuthVendorID
+//     maps openai-chatgpt → openai, and a single vendor entry may legitimately
+//     back several configured rows, so an entry is swept only when NO
+//     configured row maps to its vendor;
+//   - the conservative direction differs from the API-key case and is
+//     stated deliberately. Wrongly deleting an `_API_KEY` is unrecoverable
+//     (Omnipus cannot re-mint the operator's key), which is why that half
+//     stays as narrow as it is. Wrongly deleting an `_OAUTH` entry costs one
+//     "Sign in" click — while LEAVING one costs a live, unrevokable grant
+//     nothing in the UI references any more.
+//
 // The pattern rule (BDD "a <name> that does not match the `<id>_API_KEY`
 // pattern is left untouched") is deliberately conservative — wrongly
 // deleting a live secret is unrecoverable, failing to sweep is harmless:
@@ -746,6 +762,7 @@ func sweepOrphanedProviderCredentials(cfg *config.Config, store *credentials.Sto
 		return
 	}
 	configured := make(map[string]struct{}, len(cfg.Providers))
+	configuredVendors := make(map[string]struct{}, len(cfg.Providers))
 	referenced := make(map[string]struct{}, len(cfg.Providers))
 	for _, row := range cfg.Providers {
 		if row == nil {
@@ -753,20 +770,18 @@ func sweepOrphanedProviderCredentials(cfg *config.Config, store *credentials.Sto
 		}
 		if id := strings.TrimSpace(row.Provider); id != "" {
 			configured[id] = struct{}{}
+			// A vendor entry can back MORE THAN ONE row (openai-chatgpt and
+			// any future OpenAI-family sign-in row share `openai_OAUTH`), so
+			// the keep-set is keyed on the vendor, not the row id.
+			configuredVendors[providers.OAuthVendorID(id)] = struct{}{}
 		}
 		if ref := strings.TrimSpace(row.APIKeyRef); ref != "" {
 			referenced[ref] = struct{}{}
 		}
 	}
 	for _, name := range names {
-		id, matches := strings.CutSuffix(name, "_API_KEY")
-		if !matches || !isProviderCredentialID(id) {
-			continue
-		}
-		if _, ok := configured[id]; ok {
-			continue
-		}
-		if _, ok := referenced[name]; ok {
+		id, sweepable := sweepableOrphanCredential(name, configured, configuredVendors, referenced)
+		if !sweepable {
 			continue
 		}
 		if err := store.Delete(name); err != nil {
@@ -794,6 +809,44 @@ func sweepOrphanedProviderCredentials(cfg *config.Config, store *credentials.Sto
 			}
 		}
 	}
+}
+
+// oauthEntrySuffix is the suffix credentials.OAuthEntryName appends, derived
+// from that function itself (it takes the vendor id as its only argument, so
+// the empty id yields the bare suffix) rather than restated as a literal — a
+// rename there cannot silently desync this sweep.
+var oauthEntrySuffix = credentials.OAuthEntryName("")
+
+// sweepableOrphanCredential decides whether a credential-store entry name is
+// an orphaned provider secret the boot sweep may delete, and returns the
+// provider/vendor label to log and audit it under. Everything that is not
+// unambiguously an orphan is left alone — see the rules and the asymmetric
+// risk argument in sweepOrphanedProviderCredentials' doc comment.
+func sweepableOrphanCredential(name string, configured, configuredVendors, referenced map[string]struct{}) (string, bool) {
+	// A name any provider row's api_key_ref points at is kept whatever its
+	// shape — belt-and-braces for a row whose ref was renamed by hand.
+	if _, ok := referenced[name]; ok {
+		return "", false
+	}
+	if id, ok := strings.CutSuffix(name, "_API_KEY"); ok {
+		if !isProviderCredentialID(id) {
+			return "", false
+		}
+		if _, cfgd := configured[id]; cfgd {
+			return "", false
+		}
+		return id, true
+	}
+	if vendor, ok := strings.CutSuffix(name, oauthEntrySuffix); ok {
+		if !isProviderCredentialID(vendor) {
+			return "", false
+		}
+		if _, backed := configuredVendors[vendor]; backed {
+			return "", false
+		}
+		return vendor, true
+	}
+	return "", false
 }
 
 // isProviderCredentialID reports whether id has the shape of a provider row
