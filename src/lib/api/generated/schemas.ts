@@ -272,6 +272,201 @@ type KnowledgeOutlineHeading = {
   line?: number | undefined;
   byte_offset?: number | undefined;
 };
+type RecordSchema = {
+  types: Array<RecordType>;
+  problems: Array<RecordProblem>;
+};
+type RecordType = {
+  schema_version: number;
+  type: string;
+  label?: string | undefined;
+  identity_prefix?: string | undefined;
+  properties: Array<PropertyDef>;
+  source_path?: string | undefined;
+};
+type PropertyDef = {
+  name: string;
+  type: "text" | "enum" | "relation" | "date" | "number" | "money" | "person";
+  many: boolean;
+  required: boolean;
+  label?: string | undefined;
+  values?: Array<EnumValueDef> | undefined;
+  to?: string | undefined;
+  inverse?: string | undefined;
+  unit?: string | undefined;
+  scale?: number | undefined;
+};
+type EnumValueDef = {
+  value: string;
+  label?: string | undefined;
+  position: number;
+  group?: ("open" | "done" | "cancelled") | undefined;
+};
+type RecordProblem = {
+  code:
+    | "missing_schema_version"
+    | "duplicate_type_declaration"
+    | "unknown_property"
+    | "unknown_enum_value"
+    | "missing_required"
+    | "arity_violation"
+    | "enum_violation"
+    | "type_mismatch"
+    | "dangling_relation"
+    | "relation_type_mismatch"
+    | "cardinality_violation"
+    | "duplicate_id"
+    | "cross_currency"
+    | "money_scale_mismatch"
+    | "candidate_cap_exceeded"
+    | "hop_limit_exceeded"
+    | "page_size_clamped"
+    | "scope_truncated"
+    | "aggregate_refused"
+    | "index_unavailable";
+  reason: string;
+  records: Array<string>;
+  property?: string | undefined;
+  expected?: string | undefined;
+  fix?: string | undefined;
+  permitted?: Array<string> | undefined;
+  paths?: Array<string> | undefined;
+};
+type VaultRecord = {
+  id: string;
+  type: string;
+  path: string;
+  title?: string | undefined;
+  version_token?: string | undefined;
+  properties: Array<RecordPropertyValue>;
+};
+type RecordPropertyValue = {
+  property: string;
+  type?:
+    | ("text" | "enum" | "relation" | "date" | "number" | "money" | "person")
+    | undefined;
+  values: Array<RecordValue>;
+};
+type RecordValue = {
+  type: "text" | "enum" | "relation" | "date" | "number" | "money" | "person";
+  text?: string | undefined;
+  enum?: string | undefined;
+  relation?: RecordRef | undefined;
+  date?: string | undefined;
+  number?: string | undefined;
+  money?: RecordMoney | undefined;
+  person?: RecordRef | undefined;
+};
+type RecordRef = {
+  link: string;
+  resolved: boolean;
+  id?: string | undefined;
+  type?: string | undefined;
+  title?: string | undefined;
+};
+type RecordMoney = {
+  amount: string;
+  currency: string;
+  scale: number;
+};
+type RecordQueryRequest = {
+  type: string;
+  filters?: Array<RecordFilter> | undefined;
+  group_by?: Array<string> | undefined;
+  sort?: Array<RecordSort> | undefined;
+  aggregates?: Array<RecordAggregate> | undefined;
+  select?: Array<string> | undefined;
+  limit?: number | undefined;
+  cursor?: string | undefined;
+  hops?: number | undefined;
+};
+type RecordFilter = {
+  property: string;
+  op:
+    | "eq"
+    | "neq"
+    | "in"
+    | "not_in"
+    | "lt"
+    | "lte"
+    | "gt"
+    | "gte"
+    | "is_absent"
+    | "is_present";
+  values?: Array<RecordValue> | undefined;
+  include_absent?: boolean | undefined;
+  via?: Array<string> | undefined;
+};
+type RecordSort = {
+  property: string;
+  direction: "asc" | "desc";
+};
+type RecordAggregate = {
+  op: "count" | "sum" | "min" | "max";
+  property?: string | undefined;
+};
+type RecordQueryResponse = {
+  records: Array<VaultRecord>;
+  complete: boolean;
+  problems: Array<RecordProblem>;
+  refused: boolean;
+  groups?: Array<RecordGroup> | undefined;
+  aggregates?: Array<RecordAggregateResult> | undefined;
+  limit_applied: number;
+  limit_clamped: boolean;
+  limit_requested?: number | undefined;
+  total_matched?: number | undefined;
+  next_cursor?: string | undefined;
+};
+type RecordGroup = {
+  keys: Array<RecordGroupKey>;
+  count: number;
+  record_ids: Array<string>;
+  aggregates?: Array<RecordAggregateResult> | undefined;
+};
+type RecordGroupKey = {
+  property: string;
+  absent: boolean;
+  value?: RecordValue | undefined;
+  label?: string | undefined;
+};
+type RecordAggregateResult = {
+  op: "count" | "sum" | "min" | "max";
+  property?: string | undefined;
+  refused: boolean;
+  count?: number | undefined;
+  value?: RecordValue | undefined;
+  excluded_records?: number | undefined;
+  currencies_present?: Array<string> | undefined;
+};
+type RecordWriteRequest = {
+  type: string;
+  id?: string | undefined;
+  path?: string | undefined;
+  version_token?: string | undefined;
+  properties: Array<RecordPropertyValue>;
+};
+type ViewDef = {
+  schema_version: number;
+  name: string;
+  type: string;
+  label?: string | undefined;
+  filters?: Array<RecordFilter> | undefined;
+  group_by?: Array<string> | undefined;
+  sort?: Array<RecordSort> | undefined;
+  properties?: Array<string> | undefined;
+  aggregates?: Array<RecordAggregate> | undefined;
+  limit?: number | undefined;
+  source?: string | undefined;
+  untranslated?: Array<string> | undefined;
+};
+type ValidationReport = {
+  complete: boolean;
+  problems: Array<RecordProblem>;
+  records_checked: number;
+  types_checked: number;
+  types?: Array<string> | undefined;
+};
 type Agent = {
   id: string;
   name: string;
@@ -3637,6 +3832,237 @@ export const KnowledgeMountConflictError = z.object({
   existing_root_path: z.string().min(1),
   requested_root_path: z.string().min(1),
   existing_collection_id: z.string().optional(),
+});
+export const EnumValueDef: z.ZodType<EnumValueDef> = z.object({
+  value: z.string().min(1),
+  label: z.string().optional(),
+  position: z.number().int().gte(0),
+  group: z.enum(["open", "done", "cancelled"]).optional(),
+});
+export const PropertyDef: z.ZodType<PropertyDef> = z.object({
+  name: z.string().min(1),
+  type: z.enum([
+    "text",
+    "enum",
+    "relation",
+    "date",
+    "number",
+    "money",
+    "person",
+  ]),
+  many: z.boolean(),
+  required: z.boolean(),
+  label: z.string().optional(),
+  values: z.array(EnumValueDef).optional(),
+  to: z.string().min(1).optional(),
+  inverse: z.string().min(1).optional(),
+  unit: z.string().optional(),
+  scale: z.number().int().gte(0).lte(12).optional(),
+});
+export const RecordType: z.ZodType<RecordType> = z.object({
+  schema_version: z.number().int().gte(1),
+  type: z.string().min(1),
+  label: z.string().optional(),
+  identity_prefix: z.string().min(1).optional(),
+  properties: z.array(PropertyDef),
+  source_path: z.string().optional(),
+});
+export const RecordProblem: z.ZodType<RecordProblem> = z.object({
+  code: z.enum([
+    "missing_schema_version",
+    "duplicate_type_declaration",
+    "unknown_property",
+    "unknown_enum_value",
+    "missing_required",
+    "arity_violation",
+    "enum_violation",
+    "type_mismatch",
+    "dangling_relation",
+    "relation_type_mismatch",
+    "cardinality_violation",
+    "duplicate_id",
+    "cross_currency",
+    "money_scale_mismatch",
+    "candidate_cap_exceeded",
+    "hop_limit_exceeded",
+    "page_size_clamped",
+    "scope_truncated",
+    "aggregate_refused",
+    "index_unavailable",
+  ]),
+  reason: z.string().min(1),
+  records: z.array(z.string().min(1)),
+  property: z.string().min(1).optional(),
+  expected: z.string().optional(),
+  fix: z.string().optional(),
+  permitted: z.array(z.string()).optional(),
+  paths: z.array(z.string().min(1)).optional(),
+});
+export const RecordSchema: z.ZodType<RecordSchema> = z.object({
+  types: z.array(RecordType),
+  problems: z.array(RecordProblem),
+});
+export const RecordRef: z.ZodType<RecordRef> = z.object({
+  link: z.string().min(1),
+  resolved: z.boolean(),
+  id: z.string().min(1).optional(),
+  type: z.string().min(1).optional(),
+  title: z.string().optional(),
+});
+export const RecordMoney: z.ZodType<RecordMoney> = z.object({
+  amount: z
+    .string()
+    .min(1)
+    .max(40)
+    .regex(/^-?(0|[1-9][0-9]*)(\.[0-9]+)?$/),
+  currency: z.string().regex(/^[A-Z]{3}$/),
+  scale: z.number().int().gte(0).lte(12),
+});
+export const RecordValue: z.ZodType<RecordValue> = z.object({
+  type: z.enum([
+    "text",
+    "enum",
+    "relation",
+    "date",
+    "number",
+    "money",
+    "person",
+  ]),
+  text: z.string().optional(),
+  enum: z.string().min(1).optional(),
+  relation: RecordRef.optional(),
+  date: z.string().min(8).max(40).optional(),
+  number: z
+    .string()
+    .min(1)
+    .max(40)
+    .regex(/^-?(0|[1-9][0-9]*)(\.[0-9]+)?$/)
+    .optional(),
+  money: RecordMoney.optional(),
+  person: RecordRef.optional(),
+});
+export const RecordPropertyValue: z.ZodType<RecordPropertyValue> = z.object({
+  property: z.string().min(1),
+  type: z
+    .enum(["text", "enum", "relation", "date", "number", "money", "person"])
+    .optional(),
+  values: z.array(RecordValue),
+});
+export const VaultRecord: z.ZodType<VaultRecord> = z.object({
+  id: z.string().min(1),
+  type: z.string().min(1),
+  path: z.string().min(1),
+  title: z.string().optional(),
+  version_token: z.string().min(1).optional(),
+  properties: z.array(RecordPropertyValue),
+});
+export const RecordFilter: z.ZodType<RecordFilter> = z.object({
+  property: z.string().min(1),
+  op: z.enum([
+    "eq",
+    "neq",
+    "in",
+    "not_in",
+    "lt",
+    "lte",
+    "gt",
+    "gte",
+    "is_absent",
+    "is_present",
+  ]),
+  values: z.array(RecordValue).optional(),
+  include_absent: z.boolean().optional(),
+  via: z.array(z.string().min(1)).max(2).optional(),
+});
+export const RecordSort: z.ZodType<RecordSort> = z.object({
+  property: z.string().min(1),
+  direction: z.enum(["asc", "desc"]),
+});
+export const RecordAggregate: z.ZodType<RecordAggregate> = z.object({
+  op: z.enum(["count", "sum", "min", "max"]),
+  property: z.string().min(1).optional(),
+});
+export const RecordQueryRequest: z.ZodType<RecordQueryRequest> = z.object({
+  type: z.string().min(1),
+  filters: z.array(RecordFilter).optional(),
+  group_by: z.array(z.string().min(1)).max(2).optional(),
+  sort: z.array(RecordSort).optional(),
+  aggregates: z.array(RecordAggregate).optional(),
+  select: z.array(z.string().min(1)).optional(),
+  limit: z.number().int().gte(1).optional().default(50),
+  cursor: z.string().min(1).optional(),
+  hops: z.number().int().gte(0).optional().default(0),
+});
+export const RecordGroupKey: z.ZodType<RecordGroupKey> = z.object({
+  property: z.string().min(1),
+  absent: z.boolean(),
+  value: RecordValue.optional(),
+  label: z.string().optional(),
+});
+export const RecordAggregateResult: z.ZodType<RecordAggregateResult> = z.object(
+  {
+    op: z.enum(["count", "sum", "min", "max"]),
+    property: z.string().min(1).optional(),
+    refused: z.boolean(),
+    count: z.number().int().gte(0).optional(),
+    value: RecordValue.optional(),
+    excluded_records: z.number().int().gte(0).optional(),
+    currencies_present: z.array(z.string().regex(/^[A-Z]{3}$/)).optional(),
+  }
+);
+export const RecordGroup: z.ZodType<RecordGroup> = z.object({
+  keys: z.array(RecordGroupKey).min(1).max(2),
+  count: z.number().int().gte(0),
+  record_ids: z.array(z.string().min(1)),
+  aggregates: z.array(RecordAggregateResult).optional(),
+});
+export const RecordQueryResponse: z.ZodType<RecordQueryResponse> = z.object({
+  records: z.array(VaultRecord),
+  complete: z.boolean(),
+  problems: z.array(RecordProblem),
+  refused: z.boolean(),
+  groups: z.array(RecordGroup).optional(),
+  aggregates: z.array(RecordAggregateResult).optional(),
+  limit_applied: z.number().int().gte(1),
+  limit_clamped: z.boolean(),
+  limit_requested: z.number().int().gte(1).optional(),
+  total_matched: z.number().int().gte(0).optional(),
+  next_cursor: z.string().min(1).optional(),
+});
+export const RecordWriteRequest: z.ZodType<RecordWriteRequest> = z.object({
+  type: z.string().min(1),
+  id: z.string().min(1).optional(),
+  path: z.string().min(1).optional(),
+  version_token: z.string().min(1).optional(),
+  properties: z.array(RecordPropertyValue).min(1),
+});
+export const RelationWriteRequest = z.object({
+  id: z.string().min(1),
+  version_token: z.string().min(1),
+  property: z.string().min(1),
+  op: z.enum(["add", "remove", "replace"]),
+  targets: z.array(z.string().min(1)),
+});
+export const ViewDef: z.ZodType<ViewDef> = z.object({
+  schema_version: z.number().int().gte(1),
+  name: z.string().min(1),
+  type: z.string().min(1),
+  label: z.string().optional(),
+  filters: z.array(RecordFilter).optional(),
+  group_by: z.array(z.string().min(1)).max(2).optional(),
+  sort: z.array(RecordSort).optional(),
+  properties: z.array(z.string().min(1)).optional(),
+  aggregates: z.array(RecordAggregate).optional(),
+  limit: z.number().int().gte(1).optional(),
+  source: z.string().optional(),
+  untranslated: z.array(z.string().min(1)).optional(),
+});
+export const ValidationReport: z.ZodType<ValidationReport> = z.object({
+  complete: z.boolean(),
+  problems: z.array(RecordProblem),
+  records_checked: z.number().int().gte(0),
+  types_checked: z.number().int().gte(0),
+  types: z.array(z.string().min(1)).optional(),
 });
 export const AgentSession = z
   .object({

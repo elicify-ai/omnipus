@@ -1,0 +1,59 @@
+title: RecordPropertyValue
+description: >
+  One property of one record, with all of its values (ADR-068 D3).
+
+  `values` is ALWAYS an array, whatever the declared arity, and arity is
+  enforced against the schema rather than guessed from the wire shape: a
+  scalar property carrying two values is rejected with the expected shape
+  named (FR-006), and it is never silently widened into a list. The single
+  most-reported failure in the research corpus is precisely that silent
+  widening, after which every query written against the property returns
+  nothing with no error.
+
+  AN EMPTY `values` ARRAY MEANS ABSENT (D3.2, FR-007), and absent is a state
+  distinct from every value. On a write, an empty array clears the property.
+
+  Used in both directions. On a READ the server also populates `type`. On a
+  WRITE (RecordWriteRequest) `type` may be omitted — the schema is the
+  authority — and relation and person properties are NOT writable here: they
+  are modified through RelationWriteRequest's explicit add / remove / replace
+  verbs (FR-045), because a read-then-write round trip that silently replaces
+  a relation list is how the incumbent deletes relations and returns success.
+type: object
+additionalProperties: false
+required:
+  - property
+  - values
+properties:
+  property:
+    type: string
+    minLength: 1
+    description: >
+      The declared property name. Validated against the record type's schema
+      BEFORE evaluation or write; an unknown name is rejected with the valid
+      names listed (FR-023, FR-024).
+    example: "arr"
+  type:
+    type: string
+    enum:
+      - text
+      - enum
+      - relation
+      - date
+      - number
+      - money
+      - person
+    description: >
+      The declared property type, echoed by the server on reads. Optional on a
+      write request, where the schema is the authority.
+    example: "money"
+  values:
+    type: array
+    description: >
+      The values held. Always present — an empty array, never null. Empty
+      means the property is ABSENT on this record (D3.2), which a filter can
+      test for explicitly and which a negative filter includes by default
+      (FR-008).
+    items:
+      $ref: "./RecordValue.yaml"
+      x-go-type: RecordValue

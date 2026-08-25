@@ -1,0 +1,78 @@
+title: RecordValue
+description: >
+  ONE value of one property, tagged with the property type that governs it
+  (ADR-068 D3). Exactly one of the seven value fields is populated, and which
+  one is named by `type`.
+
+  Numbers and money are carried as DECIMAL STRINGS, never as JSON numbers.
+  `type: number` in this contract generates a Go float64 and a JavaScript
+  number; binary floating point cannot represent 0.1 exactly, so a value would
+  drift on a round trip that nobody performed deliberately. FR-020b forbids a
+  binary float anywhere in the storage or retrieval path, and the wire is part
+  of that path.
+
+  ABSENCE IS NOT A VALUE. A property with no value carries no RecordValue at
+  all — its RecordPropertyValue.values array is empty (D3.2, FR-007). This
+  matters: "days I did not meditate" must be answerable, and it is not
+  answerable in a model where absent and false are the same state.
+type: object
+additionalProperties: false
+required:
+  - type
+properties:
+  type:
+    type: string
+    enum:
+      - text
+      - enum
+      - relation
+      - date
+      - number
+      - money
+      - person
+    description: >
+      Which of the seven property types governs this value, and therefore
+      which field below is populated.
+    example: "money"
+  text:
+    type: string
+    description: Populated when type is "text". Prose; never compared for equality (D3).
+    example: "Introduced by a mutual contact at a conference."
+  enum:
+    type: string
+    minLength: 1
+    description: >
+      Populated when type is "enum". The declared token, which MUST appear in
+      the property's declared value set; anything else is rejected with the
+      permitted values named (FR-011).
+    example: "active"
+  relation:
+    $ref: "./RecordRef.yaml"
+    x-go-type: RecordRef
+  date:
+    type: string
+    minLength: 8
+    maxLength: 40
+    description: >
+      Populated when type is "date". Either a calendar day as YYYY-MM-DD or an
+      instant as RFC 3339. Comparable in both forms — the failure this closes
+      is a date stored as free text, which sorts and filters as nothing.
+    example: "2026-08-25"
+  number:
+    type: string
+    minLength: 1
+    maxLength: 40
+    pattern: '^-?(0|[1-9][0-9]*)(\.[0-9]+)?$'
+    description: >
+      Populated when type is "number". A decimal STRING for the same reason as
+      money: a JSON number becomes a binary float in both generated languages,
+      and a quantity that cannot survive a round trip unchanged is not a
+      quantity a caller can reconcile. The unit, if any, is declared once on
+      the PropertyDef and is never glued into the value.
+    example: "60"
+  money:
+    $ref: "./RecordMoney.yaml"
+    x-go-type: RecordMoney
+  person:
+    $ref: "./RecordRef.yaml"
+    x-go-type: RecordRef

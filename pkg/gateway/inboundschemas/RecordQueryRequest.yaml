@@ -1,0 +1,107 @@
+title: RecordQueryRequest
+description: >
+  A structured record query (ADR-068 D13, D15.1b; FR-022 to FR-029).
+
+  Structured, never a text query language (FR-022): every property name, enum
+  value and relation target is checked against the schema BEFORE anything is
+  evaluated (FR-023), and a query naming something the schema does not declare
+  is REJECTED with the valid names listed rather than returning zero records
+  (FR-024). A mistyped property that returns an empty result is
+  indistinguishable from a correct query over an empty vault, and the accepted
+  community workaround for that today is "keep testing until something is
+  returned".
+
+  Scope is not negotiable by the caller. Every record tool resolves through
+  the calling agent's workspace (FR-060); records in a vault mounted only into
+  another workspace are invisible, and that case is indistinguishable from an
+  empty vault (FR-062). Scope is resolved BEFORE a rejection is built, so the
+  valid-names list in an error can never reveal schemas outside that scope
+  (FR-024).
+
+  Bounds are stated and every breach is REPORTED, never silently applied — see
+  RecordQueryResponse.
+type: object
+additionalProperties: false
+required:
+  - type
+properties:
+  type:
+    type: string
+    minLength: 1
+    description: >
+      The record type to query. Exactly one; a query does not span record
+      types, it follows relations between them via RecordFilter.via.
+    example: "deal"
+  filters:
+    type: array
+    description: >
+      Filter clauses, combined with AND. Omitted or empty matches every record
+      of the type within scope.
+    items:
+      $ref: "./RecordFilter.yaml"
+      x-go-type: RecordFilter
+  group_by:
+    type: array
+    maxItems: 2
+    description: >
+      Properties to group by, outermost first. Two levels are supported
+      (FR-027); grouping by a relation is supported (FR-029); a record with
+      several values appears in every group it belongs to (FR-028).
+    items:
+      type: string
+      minLength: 1
+    example: ["company", "status"]
+  sort:
+    type: array
+    description: Sort keys, applied in order. Enums sort by declared position (FR-010).
+    items:
+      $ref: "./RecordSort.yaml"
+      x-go-type: RecordSort
+  aggregates:
+    type: array
+    description: >
+      Aggregates to compute over the matched set, and per group when group_by
+      is present. None are returned over a refused candidate set (FR-066).
+    items:
+      $ref: "./RecordAggregate.yaml"
+      x-go-type: RecordAggregate
+  select:
+    type: array
+    description: >
+      Properties to return on each record. Omitted returns every declared
+      property. Narrowing this changes what is RETURNED, never what is
+      matched.
+    items:
+      type: string
+      minLength: 1
+    example: ["name", "status", "arr"]
+  limit:
+    type: integer
+    minimum: 1
+    default: 50
+    description: >
+      Records per page. Default 50. A value above the server cap of 200 is
+      CLAMPED, not rejected, and the clamp is REPORTED on the response
+      (limit_clamped / limit_applied, FR-063) — deliberately no `maximum`
+      here, so an over-large request comes back with a stated clamp rather
+      than a bare schema error that says nothing about what was applied.
+    example: 50
+  cursor:
+    type: string
+    minLength: 1
+    description: >
+      Opaque pagination cursor from a previous response's next_cursor. A
+      cursor that cannot be honoured is an ERROR, never a silent restart from
+      the beginning (D15.1b) — a silent restart returns page one while the
+      caller believes it is reading page four.
+    example: "eyJvIjoxMDB9"
+  hops:
+    type: integer
+    minimum: 0
+    default: 0
+    description: >
+      Maximum relation hops this query may follow. At most 2; a query
+      requesting more is REFUSED with the reason (FR-065) rather than rejected
+      by the schema, so the caller is told the bound and not merely that its
+      body was invalid.
+    example: 1

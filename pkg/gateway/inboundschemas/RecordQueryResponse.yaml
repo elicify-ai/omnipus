@@ -1,0 +1,140 @@
+title: RecordQueryResponse
+description: >
+  The answer to a record query — records AND the account of everything the
+  query could not include, in the SAME response (ADR-068 D13, FR-025).
+
+  THERE IS NO CALL SHAPE THAT RETURNS RECORDS ALONE. `complete` and `problems`
+  are REQUIRED fields, not optional ones, and that is the load-bearing decision
+  of this whole contract. If either were optional, a client could receive a
+  total without the caveats attached to it, a server could omit them under load
+  and still be conformant, and the generated types would carry them as nullable
+  — at which point the guarantee is a convention rather than a structure, and
+  conventions are exactly what fails silently. Required here means: a caller
+  physically cannot hold these records without also holding the verdict on
+  them.
+
+  Every bound in D15.1b sets complete: false with the reason and the remedy —
+  a clamped page, a refused candidate set, a hop limit, a truncated scope, an
+  index that cannot answer. So a caller that ignores `problems` entirely still
+  cannot mistake a bounded answer for a whole one, because the boolean it did
+  read already said so.
+
+  A refusal arrives HERE, not as an HTTP error: refused: true with records
+  empty and a narrowing instruction in problems (FR-064, FR-066). No partial
+  answer and no partial total is ever returned in that case.
+
+  An out-of-scope query is not an error either — it returns records: [] with
+  complete: true, indistinguishable from an empty vault (FR-061, FR-062), so
+  the error channel cannot be used to probe for records the caller may not see.
+type: object
+additionalProperties: false
+required:
+  - records
+  - complete
+  - problems
+  - refused
+  - limit_applied
+  - limit_clamped
+properties:
+  records:
+    type: array
+    description: >
+      The matched records, in the requested sort order. Always present — an
+      empty array, never null — so a client may map over it without a nil
+      check. Each record appears ONCE even when grouping placed it in several
+      groups; the groups reference it by id.
+    items:
+      $ref: "./VaultRecord.yaml"
+      x-go-type: VaultRecord
+  complete:
+    type: boolean
+    description: >
+      REQUIRED. True only when the query covered everything it was asked to
+      cover: no record excluded for a type violation, no clamp, no refusal, no
+      truncated scope, no unavailable index. False whenever ANY of those
+      applies, with the reason and the remedy in `problems`.
+
+      Never optional. The completeness verdict travelling separately from the
+      records — or not travelling at all — is the failure mode this response
+      type was designed to make impossible.
+    example: false
+  problems:
+    type: array
+    description: >
+      REQUIRED. Everything the query could not include, and why. Always
+      present — an EMPTY ARRAY when there is nothing to report, never null and
+      never absent, so "no problems" is stated rather than inferred from a
+      missing field.
+
+      A record excluded from an aggregate is named here with the reason
+      (FR-026). So is a clamp, a refusal, a hop limit and a truncated scope.
+    items:
+      $ref: "./RecordProblem.yaml"
+      x-go-type: RecordProblem
+  refused:
+    type: boolean
+    description: >
+      REQUIRED. True when the query was refused outright and NO answer was
+      computed — the candidate set exceeded the 10,000-record materialisation
+      bound (FR-064), or more than two relation hops were requested (FR-065).
+      Records is then empty, no aggregate is returned (FR-066), and `problems`
+      carries the narrowing instruction naming the filter that would help.
+
+      Distinct from complete: false, which also covers a partial answer that
+      WAS computed. A caller must be able to tell "here is some of it" from
+      "here is none of it, narrow and re-ask" without parsing prose.
+    example: false
+  groups:
+    type: array
+    description: >
+      Grouped results, present only when the request carried group_by. The
+      records themselves stay in `records`; groups reference them by id.
+    items:
+      $ref: "./RecordGroup.yaml"
+      x-go-type: RecordGroup
+  aggregates:
+    type: array
+    description: >
+      Aggregate results over the whole matched set, in the order requested. A
+      refused aggregate is present and marked refused — never omitted (FR-014,
+      FR-066).
+    items:
+      $ref: "./RecordAggregateResult.yaml"
+      x-go-type: RecordAggregateResult
+  limit_applied:
+    type: integer
+    minimum: 1
+    description: The page size actually used for this query.
+    example: 50
+  limit_clamped:
+    type: boolean
+    description: >
+      True when the requested page size exceeded the server cap of 200 and was
+      reduced to limit_applied. The clamp is REPORTED, never silent (FR-063) —
+      silent truncation is the incumbent behaviour this ADR cites as
+      motivating evidence, and shipping our own would be indefensible.
+    example: false
+  limit_requested:
+    type: integer
+    minimum: 1
+    description: >
+      The page size the caller asked for. Present only when limit_clamped is
+      true, so the caller can see exactly what was refused.
+    example: 5000
+  total_matched:
+    type: integer
+    format: int64
+    minimum: 0
+    description: >
+      Records matching the filters across all pages, when it is known exactly.
+      ABSENT rather than estimated when it is not — an invented denominator is
+      the confidently-wrong answer this response type exists to prevent.
+    example: 63
+  next_cursor:
+    type: string
+    minLength: 1
+    description: >
+      Opaque cursor for the next page. Absent means this was the last page.
+      Cursor-based, so a page boundary cannot silently repeat or skip records
+      when the corpus changes between calls.
+    example: "eyJvIjoxMDB9"

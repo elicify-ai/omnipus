@@ -1298,6 +1298,27 @@ func (e DoctorResultIssuesSeverity) Valid() bool {
 	}
 }
 
+// Defines values for EnumValueDefGroup.
+const (
+	EnumValueDefGroupCancelled EnumValueDefGroup = "cancelled"
+	EnumValueDefGroupDone      EnumValueDefGroup = "done"
+	EnumValueDefGroupOpen      EnumValueDefGroup = "open"
+)
+
+// Valid indicates whether the value is a known member of the EnumValueDefGroup enum.
+func (e EnumValueDefGroup) Valid() bool {
+	switch e {
+	case EnumValueDefGroupCancelled:
+		return true
+	case EnumValueDefGroupDone:
+		return true
+	case EnumValueDefGroupOpen:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ExecutorCommandPreviewResponsePromptDelivery.
 const (
 	PositionalArgumentAfter ExecutorCommandPreviewResponsePromptDelivery = "positional argument after --"
@@ -3530,6 +3551,39 @@ func (e PromptGuardUpdateResponseAppliedLevel) Valid() bool {
 	}
 }
 
+// Defines values for PropertyDefType.
+const (
+	PropertyDefTypeDate     PropertyDefType = "date"
+	PropertyDefTypeEnum     PropertyDefType = "enum"
+	PropertyDefTypeMoney    PropertyDefType = "money"
+	PropertyDefTypeNumber   PropertyDefType = "number"
+	PropertyDefTypePerson   PropertyDefType = "person"
+	PropertyDefTypeRelation PropertyDefType = "relation"
+	PropertyDefTypeText     PropertyDefType = "text"
+)
+
+// Valid indicates whether the value is a known member of the PropertyDefType enum.
+func (e PropertyDefType) Valid() bool {
+	switch e {
+	case PropertyDefTypeDate:
+		return true
+	case PropertyDefTypeEnum:
+		return true
+	case PropertyDefTypeMoney:
+		return true
+	case PropertyDefTypeNumber:
+		return true
+	case PropertyDefTypePerson:
+		return true
+	case PropertyDefTypeRelation:
+		return true
+	case PropertyDefTypeText:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ProviderStatus.
 const (
 	ProviderStatusConnected    ProviderStatus = "connected"
@@ -3629,6 +3683,273 @@ func (e ProviderCatalogEntryWire) Valid() bool {
 	case Anthropic:
 		return true
 	case OpenaiCompatible:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RecordAggregateOp.
+const (
+	RecordAggregateOpCount RecordAggregateOp = "count"
+	RecordAggregateOpMax   RecordAggregateOp = "max"
+	RecordAggregateOpMin   RecordAggregateOp = "min"
+	RecordAggregateOpSum   RecordAggregateOp = "sum"
+)
+
+// Valid indicates whether the value is a known member of the RecordAggregateOp enum.
+func (e RecordAggregateOp) Valid() bool {
+	switch e {
+	case RecordAggregateOpCount:
+		return true
+	case RecordAggregateOpMax:
+		return true
+	case RecordAggregateOpMin:
+		return true
+	case RecordAggregateOpSum:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RecordAggregateResultOp.
+const (
+	RecordAggregateResultOpCount RecordAggregateResultOp = "count"
+	RecordAggregateResultOpMax   RecordAggregateResultOp = "max"
+	RecordAggregateResultOpMin   RecordAggregateResultOp = "min"
+	RecordAggregateResultOpSum   RecordAggregateResultOp = "sum"
+)
+
+// Valid indicates whether the value is a known member of the RecordAggregateResultOp enum.
+func (e RecordAggregateResultOp) Valid() bool {
+	switch e {
+	case RecordAggregateResultOpCount:
+		return true
+	case RecordAggregateResultOpMax:
+		return true
+	case RecordAggregateResultOpMin:
+		return true
+	case RecordAggregateResultOpSum:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RecordFilterOp.
+const (
+	Eq        RecordFilterOp = "eq"
+	Gt        RecordFilterOp = "gt"
+	Gte       RecordFilterOp = "gte"
+	In        RecordFilterOp = "in"
+	IsAbsent  RecordFilterOp = "is_absent"
+	IsPresent RecordFilterOp = "is_present"
+	Lt        RecordFilterOp = "lt"
+	Lte       RecordFilterOp = "lte"
+	Neq       RecordFilterOp = "neq"
+	NotIn     RecordFilterOp = "not_in"
+)
+
+// Valid indicates whether the value is a known member of the RecordFilterOp enum.
+func (e RecordFilterOp) Valid() bool {
+	switch e {
+	case Eq:
+		return true
+	case Gt:
+		return true
+	case Gte:
+		return true
+	case In:
+		return true
+	case IsAbsent:
+		return true
+	case IsPresent:
+		return true
+	case Lt:
+		return true
+	case Lte:
+		return true
+	case Neq:
+		return true
+	case NotIn:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RecordProblemCode.
+const (
+	AggregateRefused         RecordProblemCode = "aggregate_refused"
+	ArityViolation           RecordProblemCode = "arity_violation"
+	CandidateCapExceeded     RecordProblemCode = "candidate_cap_exceeded"
+	CardinalityViolation     RecordProblemCode = "cardinality_violation"
+	CrossCurrency            RecordProblemCode = "cross_currency"
+	DanglingRelation         RecordProblemCode = "dangling_relation"
+	DuplicateId              RecordProblemCode = "duplicate_id"
+	DuplicateTypeDeclaration RecordProblemCode = "duplicate_type_declaration"
+	EnumViolation            RecordProblemCode = "enum_violation"
+	HopLimitExceeded         RecordProblemCode = "hop_limit_exceeded"
+	IndexUnavailable         RecordProblemCode = "index_unavailable"
+	MissingRequired          RecordProblemCode = "missing_required"
+	MissingSchemaVersion     RecordProblemCode = "missing_schema_version"
+	MoneyScaleMismatch       RecordProblemCode = "money_scale_mismatch"
+	PageSizeClamped          RecordProblemCode = "page_size_clamped"
+	RelationTypeMismatch     RecordProblemCode = "relation_type_mismatch"
+	ScopeTruncated           RecordProblemCode = "scope_truncated"
+	TypeMismatch             RecordProblemCode = "type_mismatch"
+	UnknownEnumValue         RecordProblemCode = "unknown_enum_value"
+	UnknownProperty          RecordProblemCode = "unknown_property"
+)
+
+// Valid indicates whether the value is a known member of the RecordProblemCode enum.
+func (e RecordProblemCode) Valid() bool {
+	switch e {
+	case AggregateRefused:
+		return true
+	case ArityViolation:
+		return true
+	case CandidateCapExceeded:
+		return true
+	case CardinalityViolation:
+		return true
+	case CrossCurrency:
+		return true
+	case DanglingRelation:
+		return true
+	case DuplicateId:
+		return true
+	case DuplicateTypeDeclaration:
+		return true
+	case EnumViolation:
+		return true
+	case HopLimitExceeded:
+		return true
+	case IndexUnavailable:
+		return true
+	case MissingRequired:
+		return true
+	case MissingSchemaVersion:
+		return true
+	case MoneyScaleMismatch:
+		return true
+	case PageSizeClamped:
+		return true
+	case RelationTypeMismatch:
+		return true
+	case ScopeTruncated:
+		return true
+	case TypeMismatch:
+		return true
+	case UnknownEnumValue:
+		return true
+	case UnknownProperty:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RecordPropertyValueType.
+const (
+	RecordPropertyValueTypeDate     RecordPropertyValueType = "date"
+	RecordPropertyValueTypeEnum     RecordPropertyValueType = "enum"
+	RecordPropertyValueTypeMoney    RecordPropertyValueType = "money"
+	RecordPropertyValueTypeNumber   RecordPropertyValueType = "number"
+	RecordPropertyValueTypePerson   RecordPropertyValueType = "person"
+	RecordPropertyValueTypeRelation RecordPropertyValueType = "relation"
+	RecordPropertyValueTypeText     RecordPropertyValueType = "text"
+)
+
+// Valid indicates whether the value is a known member of the RecordPropertyValueType enum.
+func (e RecordPropertyValueType) Valid() bool {
+	switch e {
+	case RecordPropertyValueTypeDate:
+		return true
+	case RecordPropertyValueTypeEnum:
+		return true
+	case RecordPropertyValueTypeMoney:
+		return true
+	case RecordPropertyValueTypeNumber:
+		return true
+	case RecordPropertyValueTypePerson:
+		return true
+	case RecordPropertyValueTypeRelation:
+		return true
+	case RecordPropertyValueTypeText:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RecordSortDirection.
+const (
+	Asc  RecordSortDirection = "asc"
+	Desc RecordSortDirection = "desc"
+)
+
+// Valid indicates whether the value is a known member of the RecordSortDirection enum.
+func (e RecordSortDirection) Valid() bool {
+	switch e {
+	case Asc:
+		return true
+	case Desc:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RecordValueType.
+const (
+	Date     RecordValueType = "date"
+	Enum     RecordValueType = "enum"
+	Money    RecordValueType = "money"
+	Number   RecordValueType = "number"
+	Person   RecordValueType = "person"
+	Relation RecordValueType = "relation"
+	Text     RecordValueType = "text"
+)
+
+// Valid indicates whether the value is a known member of the RecordValueType enum.
+func (e RecordValueType) Valid() bool {
+	switch e {
+	case Date:
+		return true
+	case Enum:
+		return true
+	case Money:
+		return true
+	case Number:
+		return true
+	case Person:
+		return true
+	case Relation:
+		return true
+	case Text:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RelationWriteRequestOp.
+const (
+	Add     RelationWriteRequestOp = "add"
+	Remove  RelationWriteRequestOp = "remove"
+	Replace RelationWriteRequestOp = "replace"
+)
+
+// Valid indicates whether the value is a known member of the RelationWriteRequestOp enum.
+func (e RelationWriteRequestOp) Valid() bool {
+	switch e {
+	case Add:
+		return true
+	case Remove:
+		return true
+	case Replace:
 		return true
 	default:
 		return false
@@ -6151,28 +6472,28 @@ func (e GetTokenStatsParamsPeriod) Valid() bool {
 
 // Defines values for ListTasksParamsStatus.
 const (
-	ListTasksParamsStatusBlocked    ListTasksParamsStatus = "blocked"
-	ListTasksParamsStatusDone       ListTasksParamsStatus = "done"
-	ListTasksParamsStatusFailed     ListTasksParamsStatus = "failed"
-	ListTasksParamsStatusInProgress ListTasksParamsStatus = "in_progress"
-	ListTasksParamsStatusInbox      ListTasksParamsStatus = "inbox"
-	ListTasksParamsStatusNext       ListTasksParamsStatus = "next"
+	Blocked    ListTasksParamsStatus = "blocked"
+	Done       ListTasksParamsStatus = "done"
+	Failed     ListTasksParamsStatus = "failed"
+	InProgress ListTasksParamsStatus = "in_progress"
+	Inbox      ListTasksParamsStatus = "inbox"
+	Next       ListTasksParamsStatus = "next"
 )
 
 // Valid indicates whether the value is a known member of the ListTasksParamsStatus enum.
 func (e ListTasksParamsStatus) Valid() bool {
 	switch e {
-	case ListTasksParamsStatusBlocked:
+	case Blocked:
 		return true
-	case ListTasksParamsStatusDone:
+	case Done:
 		return true
-	case ListTasksParamsStatusFailed:
+	case Failed:
 		return true
-	case ListTasksParamsStatusInProgress:
+	case InProgress:
 		return true
-	case ListTasksParamsStatusInbox:
+	case Inbox:
 		return true
-	case ListTasksParamsStatusNext:
+	case Next:
 		return true
 	default:
 		return false
@@ -8279,6 +8600,25 @@ type DoctorResult struct {
 
 // DoctorResultIssuesSeverity Issue severity level.
 type DoctorResultIssuesSeverity string
+
+// EnumValueDef One value of a closed, ORDERED enum (ADR-068 D4). Order is data, carried in `position`, so nobody has to encode it into the spelling — the "1-Pending / 7-DoNotContact" prefix hack in real vaults exists only because the tool sorted lexically and offered no other way to state sequence.
+// Sorting an enum property sorts by `position`, never lexically (FR-010). A value outside the declared set is REJECTED with the permitted values named (FR-011); it is never silently auto-created as a second de-facto value.
+type EnumValueDef struct {
+	// Group Optional lifecycle grouping (D4) so "is this finished?" is answerable across record types whose vocabularies differ. Omitted means ungrouped.
+	Group *EnumValueDefGroup `json:"group,omitempty"`
+
+	// Label Human-readable label for display. Absent means render `value`.
+	Label *string `json:"label,omitempty"`
+
+	// Position Zero-based declared position. Sort order for this property (FR-010).
+	Position int `json:"position"`
+
+	// Value The token as written in the record's frontmatter.
+	Value string `json:"value"`
+}
+
+// EnumValueDefGroup Optional lifecycle grouping (D4) so "is this finished?" is answerable across record types whose vocabularies differ. Omitted means ungrouped.
+type EnumValueDefGroup string
 
 // ErrorResponse Standard error envelope returned by all non-2xx responses.
 type ErrorResponse struct {
@@ -11126,6 +11466,45 @@ type PromptGuardUpdateResponse struct {
 // PromptGuardUpdateResponseAppliedLevel The prompt guard level now active.
 type PromptGuardUpdateResponseAppliedLevel string
 
+// PropertyDef One declared property of a record type (ADR-068 D2, D3). Seven property types exist and no more: text, enum, relation, date, number, money, person.
+// ARITY AND PRESENCE ARE BOTH REQUIRED FIELDS, deliberately. `many` and `required` carry no default and are never inferred, because the single most-reported failure in the research corpus is a scalar property silently becoming a list the moment a second value is added — after which every query written against it returns nothing, with no error (D3.1). A property whose arity is merely "absent" reproduces exactly that ambiguity on the wire.
+// Property types are scoped to their record type (D3.3, FR-009): `status` on one type and `status` on another are unrelated declarations. This contract therefore never carries a vault-wide property table.
+// ADR-068 D0: the product ships NO record types and NO properties of its own. Every PropertyDef on the wire came from a schema file the operator's vault declared. The names used in the examples here are illustrative of the mechanism only.
+type PropertyDef struct {
+	// Inverse Name of the DERIVED reverse direction (D5). The inverse is computed from the index and is NEVER stored in any file (FR-032) — the hand-maintained reverse list is the field that drifts the first time anyone forgets.
+	Inverse *string `json:"inverse,omitempty"`
+
+	// Label Human-readable label for display. Absent means render `name`.
+	Label *string `json:"label,omitempty"`
+
+	// Many Declared ARITY (D3.1). True means a list, false means a scalar. Writing a list to a scalar property is rejected with the expected shape named (FR-006), rather than silently widening the property.
+	Many bool `json:"many"`
+
+	// Name The frontmatter key, exactly as the operator declared it. Never renamed and never prefixed by us — only fields Omnipus itself maintains carry the `omni_` prefix (D8), so removing Omnipus leaves a working note.
+	Name string `json:"name"`
+
+	// Required True when a record of this type MUST carry the property. A record missing a required property is named by validation with the property and the reason (RecordProblem.code = missing_required).
+	Required bool `json:"required"`
+
+	// Scale Declared decimal scale for a "money" property — the fractional digit count every RecordMoney value of this property must carry (FR-012). Present only when type is "money".
+	Scale *int `json:"scale,omitempty"`
+
+	// To Target record type name. Present only when type is "relation" or "person". A relation pointing at a note that exists but is not of this type is a validation finding, not a silent accept (FR-034).
+	To *string `json:"to,omitempty"`
+
+	// Type "text" — prose. Never validated and never queried for equality (D3), so a filter on a text property supports only is_absent / is_present; full-text retrieval is ADR-067's search surface, not this one. "enum" — one of a closed, ordered set (`values`). "relation" — a typed edge to another record (D5); `to` names the target record type and `inverse` names the derived reverse direction. "date" — a day or an instant, comparable. "number" — a quantity; `unit` is declared metadata, never glued into the property name. "money" — amount + ISO-4217 currency + scale as one value (RecordMoney). "person" — a relation to a person record, kept distinct from a name typed as text so one vault cannot model the same concept both ways.
+	Type PropertyDefType `json:"type"`
+
+	// Unit Unit of measure for a "number" property, declared as metadata rather than glued into the property name (D3). Absent means unitless.
+	Unit *string `json:"unit,omitempty"`
+
+	// Values The closed, ordered value set. Present only when type is "enum", and then non-empty. Order here IS the sort order (FR-010).
+	Values *[]EnumValueDef `json:"values,omitempty"`
+}
+
+// PropertyDefType "text" — prose. Never validated and never queried for equality (D3), so a filter on a text property supports only is_absent / is_present; full-text retrieval is ADR-067's search surface, not this one. "enum" — one of a closed, ordered set (`values`). "relation" — a typed edge to another record (D5); `to` names the target record type and `inverse` names the derived reverse direction. "date" — a day or an instant, comparable. "number" — a quantity; `unit` is declared metadata, never glued into the property name. "money" — amount + ISO-4217 currency + scale as one value (RecordMoney). "person" — a relation to a person record, kept distinct from a name typed as text so one vault cannot model the same concept both ways.
+type PropertyDefType string
+
 // Provider A single LLM provider entry as returned by GET /providers and PUT /providers/{id}. Describes the provider's connection status, the resolved model list, and any non-fatal warnings encountered when fetching the upstream model catalogue.
 type Provider struct {
 	// DisplayName Branded display name for UI presentation (e.g. "OpenRouter", "Anthropic"). Falls back to name when absent.
@@ -11308,6 +11687,406 @@ type ReAuthResponse struct {
 	// Verified Whether the re-typed password matched.
 	Verified bool `json:"verified"`
 }
+
+// RecordAggregate One aggregate to compute over the matched records (ADR-068 D9, D13).
+// There is deliberately NO "avg". A mean over exact decimals is not itself exact — it reintroduces a rounding decision at the one point where this design promises there is none (FR-013) — and a caller that wants one can compute it from `count` and `sum` with a rounding rule it chose. Offering avg here would be offering a number whose precision nobody declared.
+// No aggregate is returned at all over a refused candidate set (FR-066); it is never partial.
+type RecordAggregate struct {
+	// Op "count" — number of matched records; the only op valid with no property. "sum" — exact decimal total. Across several currencies it is REFUSED with the currencies listed, never summed (FR-014). "min" / "max" — extreme value, by declared position for an enum.
+	Op RecordAggregateOp `json:"op"`
+
+	// Property The property to aggregate. Required for sum, min and max; omitted for count. Validated against the schema before evaluation (FR-023).
+	Property *string `json:"property,omitempty"`
+}
+
+// RecordAggregateOp "count" — number of matched records; the only op valid with no property. "sum" — exact decimal total. Across several currencies it is REFUSED with the currencies listed, never summed (FR-014). "min" / "max" — extreme value, by declared position for an enum.
+type RecordAggregateOp string
+
+// RecordAggregateResult The outcome of one requested aggregate — WHICH MAY BE A REFUSAL, stated as such (ADR-068 D13, FR-014, FR-066).
+// A refusal is a first-class result here, not an error and not a missing entry. The alternative — omitting the aggregate, or returning a number computed over whatever happened to parse — is exactly the confidently-wrong total this ADR exists to prevent. Every record excluded from an aggregate is additionally named in the response's `problems` with the reason (FR-026).
+type RecordAggregateResult struct {
+	// Count The count, when op is "count" and refused is false. Also the number of records that CONTRIBUTED to a sum, min or max, so a caller can see how many were excluded without subtracting.
+	Count *int64 `json:"count,omitempty"`
+
+	// CurrenciesPresent The currencies found, listed when a money sum is refused for spanning more than one (FR-014). Listing them is the actionable half of the refusal: the caller can re-ask per currency. There is no FX conversion and no rate table in this ADR.
+	CurrenciesPresent *[]string `json:"currencies_present,omitempty"`
+
+	// ExcludedRecords How many matched records were excluded from this aggregate because their value could not be read as the declared type. Every one of them is named in the response's `problems` (FR-026) — this field is the headline, not a substitute for the list.
+	ExcludedRecords *int64 `json:"excluded_records,omitempty"`
+
+	// Op The aggregate requested, echoed back.
+	Op RecordAggregateResultOp `json:"op"`
+
+	// Property The property aggregated. Absent for count.
+	Property *string `json:"property,omitempty"`
+
+	// Refused True when NO figure is returned. Set for a cross-currency sum (FR-014), for an aggregate over a refused candidate set (FR-066), and whenever a figure could not be computed exactly. When true, `value` and `count` are absent and the reason is in the response's `problems`.
+	Refused bool `json:"refused"`
+
+	// Value ONE value of one property, tagged with the property type that governs it (ADR-068 D3). Exactly one of the seven value fields is populated, and which one is named by `type`.
+	// Numbers and money are carried as DECIMAL STRINGS, never as JSON numbers. `type: number` in this contract generates a Go float64 and a JavaScript number; binary floating point cannot represent 0.1 exactly, so a value would drift on a round trip that nobody performed deliberately. FR-020b forbids a binary float anywhere in the storage or retrieval path, and the wire is part of that path.
+	// ABSENCE IS NOT A VALUE. A property with no value carries no RecordValue at all — its RecordPropertyValue.values array is empty (D3.2, FR-007). This matters: "days I did not meditate" must be answerable, and it is not answerable in a model where absent and false are the same state.
+	Value *RecordValue `json:"value,omitempty"`
+}
+
+// RecordAggregateResultOp The aggregate requested, echoed back.
+type RecordAggregateResultOp string
+
+// RecordFilter One structured filter clause (ADR-068 D13, FR-022). The query surface takes a STRUCTURED filter object and deliberately accepts no text query language: a query language would have to be parsed, and a parse failure that degrades to "returns nothing" is the silent-empty-result failure this ADR exists to end.
+// Every property name and enum value here is validated against the schema BEFORE evaluation (FR-023). A clause naming something the schema does not declare REJECTS the query with the valid names listed — it MUST NOT return zero records (FR-024), because a typo and a genuinely empty result look identical and the caller cannot tell which it got.
+// A "text" property supports only is_absent / is_present: text is prose, never validated and never compared for equality (D3). Relevance search over prose is ADR-067's surface, not this one.
+type RecordFilter struct {
+	// IncludeAbsent Whether records where the property is ABSENT satisfy this clause.
+	// Defaulted by the server per FR-008, not by the client: a NEGATIVE clause (neq, not_in) INCLUDES absent records unless this is explicitly false, and a positive clause excludes them unless this is explicitly true. That default is the correction of a real failure — "days I did not meditate" currently omits every day with no value, precisely the days being asked about. Omitted means "use the default for this operator"; present means the caller has overridden it deliberately.
+	IncludeAbsent *bool `json:"include_absent,omitempty"`
+
+	// Op "eq" / "neq" — equality against a single value. "in" / "not_in" — membership in `values`. "lt" / "lte" / "gt" / "gte" — ordered comparison. Valid on date, number and money; on an enum it compares DECLARED POSITION, not spelling (FR-010). Money compares only within one currency. "is_absent" / "is_present" — the third state (D3.2), tested explicitly. These are the only operators valid on a "text" property (D3).
+	Op RecordFilterOp `json:"op"`
+
+	// Property The declared property to filter on, in the record type reached after following `via`. Property types are scoped to their record type (D3.3), so this name is resolved against that type's schema and no other.
+	Property string `json:"property"`
+
+	// Values Operand values. Empty or omitted for is_absent / is_present; exactly one for eq, neq and the ordered comparisons; one or more for in / not_in.
+	Values *[]RecordValue `json:"values,omitempty"`
+
+	// Via Relation properties to follow before applying this clause, in order — the two-hop question of ADR-068 section 1.2 expressed as data. At most two hops (FR-065); a third is REFUSED rather than walked implicitly, because a deeper traversal is a follow-up query the caller should make knowingly. Omitted or empty means the clause applies to the queried type itself.
+	Via *[]string `json:"via,omitempty"`
+}
+
+// RecordFilterOp "eq" / "neq" — equality against a single value. "in" / "not_in" — membership in `values`. "lt" / "lte" / "gt" / "gte" — ordered comparison. Valid on date, number and money; on an enum it compares DECLARED POSITION, not spelling (FR-010). Money compares only within one currency. "is_absent" / "is_present" — the third state (D3.2), tested explicitly. These are the only operators valid on a "text" property (D3).
+type RecordFilterOp string
+
+// RecordGroup One group of matched records (ADR-068 D10, FR-027 to FR-029).
+// Two levels of grouping are supported, and the second level is carried as a SECOND ENTRY IN `keys` rather than as a nested group, so the structure is flat, non-recursive and cannot express a third level by accident. A published CRM design specified "group by company, then jurisdiction" and shipped with one level, the second being inexpressible; two levels is the requirement, and exactly two is what this type can hold.
+// A record with several values in the grouping property APPEARS IN EVERY GROUP IT BELONGS TO (FR-028). This is a deliberate departure from Obsidian, whose single combined group ("Finance Business" for a record tagged Finance and Business) is confirmed intentional by its authors and is useless for the categorisation case it appears in. The consequence is that the group counts can sum to MORE than the number of matched records; that is correct, not a double count.
+// Grouping by a RELATION is supported (FR-029). Notion's own answer to this is "Not currently", which is why their first-party guidance flattens relations into selects; we do not inherit the constraint that caused it.
+type RecordGroup struct {
+	// Aggregates Per-group aggregate results, in the order requested. A refusal inside one group is stated on that group, so a single cross-currency group cannot silently void the totals of the others.
+	Aggregates *[]RecordAggregateResult `json:"aggregates,omitempty"`
+
+	// Count Records in this group. May sum across groups to more than the total matched, when a multi-value property placed a record in several groups (FR-028).
+	Count int64 `json:"count"`
+
+	// Keys This group's key, one entry per grouping level, outermost first. Two entries means a second-level group (FR-027).
+	Keys []RecordGroupKey `json:"keys"`
+
+	// RecordIds Identifiers of the records in this group, in the response's sort order. Always present — an empty array, never null. Ids rather than whole records, so a record appearing in several groups is carried once in `records` and referenced from each.
+	RecordIds []string `json:"record_ids"`
+}
+
+// RecordGroupKey One level of a group's key (ADR-068 D10).
+// ABSENT IS ITS OWN GROUP. `absent: true` with no `value` is the group of records that hold no value for the grouping property (D3.2) — it is not merged into an empty-string group and it is not dropped. Grouping that silently discards the records with nothing in the column loses exactly the rows a triage view is looking for.
+type RecordGroupKey struct {
+	// Absent True when this group holds the records for which the property is absent. When true, `value` is omitted.
+	Absent bool `json:"absent"`
+
+	// Label Display label for the group heading. For an enum this is the declared label, and groups are ordered by declared position, not by spelling (FR-010).
+	Label *string `json:"label,omitempty"`
+
+	// Property The property this level grouped by.
+	Property string `json:"property"`
+
+	// Value ONE value of one property, tagged with the property type that governs it (ADR-068 D3). Exactly one of the seven value fields is populated, and which one is named by `type`.
+	// Numbers and money are carried as DECIMAL STRINGS, never as JSON numbers. `type: number` in this contract generates a Go float64 and a JavaScript number; binary floating point cannot represent 0.1 exactly, so a value would drift on a round trip that nobody performed deliberately. FR-020b forbids a binary float anywhere in the storage or retrieval path, and the wire is part of that path.
+	// ABSENCE IS NOT A VALUE. A property with no value carries no RecordValue at all — its RecordPropertyValue.values array is empty (D3.2, FR-007). This matters: "days I did not meditate" must be answerable, and it is not answerable in a model where absent and false are the same state.
+	Value *RecordValue `json:"value,omitempty"`
+}
+
+// RecordMoney A money value: amount, ISO-4217 currency and declared scale carried as ONE value (ADR-068 D3, FR-012). A value missing currency is REJECTED — two loose fields that nothing keeps together is the failure this type closes.
+// The amount is a DECIMAL STRING and never a JSON number. `type: number` in this contract generates a Go float64 and a JavaScript number, and binary floating point cannot represent 0.1 exactly — so a total that must be exact would drift by an amount nobody can see until it is reconciled against a bank. FR-013 requires exact decimal arithmetic and FR-020b forbids a binary float ANYWHERE in the storage or retrieval path; a string is the only representation that survives both the wire and the two generated languages without a lossy hop.
+// `scale` states how many fractional digits the amount is DECLARED to carry, so "10.00" USD (scale 2) is distinguishable from "10" USD (scale 0) and the amount converts losslessly to and from integer minor units (ADR-068 O-2's resolution): minor units = amount x 10^scale, exactly, with no rounding. The fractional digit count of `amount` MUST equal `scale`; a mismatch is a validation finding, not something the server silently normalises.
+// Summing money is exact WITHIN one currency. A sum ACROSS currencies is REFUSED with the currencies present listed (FR-014) — see RecordAggregateResult.currencies_present. There is no FX conversion and no rate table in this ADR.
+type RecordMoney struct {
+	// Amount The exact decimal amount as a string. Never a JSON number. Optional leading minus, no thousands separators, no exponent, no currency symbol. The number of digits after the decimal point MUST equal `scale`.
+	Amount string `json:"amount"`
+
+	// Currency ISO-4217 alphabetic currency code, upper case. Mandatory: a money value without a currency is rejected (FR-012), because an amount alone cannot be compared, sorted or summed against anything.
+	Currency string `json:"currency"`
+
+	// Scale Declared number of fractional digits. 2 for most currencies, 0 for JPY, 3 for KWD, and higher where an operator's convention needs it. Declared rather than inferred from the currency, because the vault's convention — not the product — decides how precisely it records a figure (D0).
+	Scale int `json:"scale"`
+}
+
+// RecordProblem One thing a record operation could not do, named rather than dropped (ADR-068 D13). This is the type the whole ADR exists to serve: the failure mode being corrected is SILENCE — a query that quietly omits the records it could not understand and returns a confident total over what is left.
+// A problem names the records affected, the reason, and where possible the expected shape and the remedy. The community's accepted debugging advice for the incumbent tools today is "keep testing until something is returned"; that is what a system with no error channel forces on people.
+// A RecordProblem is NOT an HTTP error. Bounded, refused and partially evaluated answers all arrive as a normal response carrying `complete: false` and one or more of these (D15.1b).
+type RecordProblem struct {
+	// Code Machine-readable cause, so a caller can branch without parsing prose. "missing_schema_version" — a schema file lacking schema_version; no records of that type are validated against it (FR-002). "duplicate_type_declaration" — two schema files declare the same record type; both paths are named in `paths` (FR-003). "unknown_property" / "unknown_enum_value" — a query named something the schema does not declare. The query is REJECTED with the valid names listed; it never returns an empty result set (FR-024). "missing_required" — a required property is absent from a record. "arity_violation" — a list where a scalar was declared, or the reverse (FR-006). "enum_violation" — a value outside the declared, closed set (FR-011). "type_mismatch" — the stored value cannot be read as its declared type. "dangling_relation" — the relation target does not exist (FR-033). "relation_type_mismatch" — the target exists but is not of the declared target type (FR-034). "cardinality_violation" — more values than the declared cardinality permits (FR-035). "duplicate_id" — two records share an identifier; both paths are named (FR-039). "cross_currency" — a money total spanning several currencies was REFUSED, not summed (FR-014). "money_scale_mismatch" — the amount's fractional digit count disagrees with the declared scale (FR-012). "candidate_cap_exceeded" — the candidate set exceeded the 10,000-record materialisation bound; the query is refused with a narrowing instruction and NO partial answer is returned (FR-064). "hop_limit_exceeded" — more than two relation hops were requested (FR-065). "page_size_clamped" — the requested page size exceeded the cap and was reduced; the clamp is REPORTED, never silent (FR-063). "scope_truncated" — workspace scope resolution was itself incomplete (ADR-067 Scope.Truncated), so a whole mounted folder may be missing. The answer MUST NOT claim success (FR-062a). "aggregate_refused" — no aggregate is returned over a refused candidate set; it is never partial (FR-066). "index_unavailable" — the index predates record support and cannot hold the properties queried. A silent no-op returning complete:true over zero properties is impossible (FR-020a).
+	Code RecordProblemCode `json:"code"`
+
+	// Expected The shape that WAS expected, stated plainly. A rejection that does not say what correct looks like leaves the caller guessing (FR-042).
+	Expected *string `json:"expected,omitempty"`
+
+	// Fix The remedy. For a refusal this is the narrowing instruction naming the filter that would help (FR-064) — a bound is never reported without one.
+	Fix *string `json:"fix,omitempty"`
+
+	// Paths Vault-relative paths implicated. Carries BOTH paths for a duplicate type declaration (FR-003) or a duplicate identifier (FR-039), where naming only one leaves the conflict unfixable.
+	Paths *[]string `json:"paths,omitempty"`
+
+	// Permitted The permitted values or valid names, listed so the caller can correct itself. Populated for unknown_property, unknown_enum_value and enum_violation (FR-011, FR-024). Scope is resolved BEFORE this list is built, so it can never reveal schemas outside the caller's workspace (FR-024, FR-062).
+	Permitted *[]string `json:"permitted,omitempty"`
+
+	// Property The property at fault, when the problem is attributable to one.
+	Property *string `json:"property,omitempty"`
+
+	// Reason Human-readable statement of what went wrong, ready to render. Never empty — a problem with no reason is indistinguishable from silence, which is the failure this type exists to end.
+	Reason string `json:"reason"`
+
+	// Records Record identifiers this problem applies to. Always present — an empty array, never null — so a caller may render it without a nil check. Empty when the problem is a property of the QUERY rather than of particular records (a clamp, a refusal, a truncated scope).
+	Records []string `json:"records"`
+}
+
+// RecordProblemCode Machine-readable cause, so a caller can branch without parsing prose. "missing_schema_version" — a schema file lacking schema_version; no records of that type are validated against it (FR-002). "duplicate_type_declaration" — two schema files declare the same record type; both paths are named in `paths` (FR-003). "unknown_property" / "unknown_enum_value" — a query named something the schema does not declare. The query is REJECTED with the valid names listed; it never returns an empty result set (FR-024). "missing_required" — a required property is absent from a record. "arity_violation" — a list where a scalar was declared, or the reverse (FR-006). "enum_violation" — a value outside the declared, closed set (FR-011). "type_mismatch" — the stored value cannot be read as its declared type. "dangling_relation" — the relation target does not exist (FR-033). "relation_type_mismatch" — the target exists but is not of the declared target type (FR-034). "cardinality_violation" — more values than the declared cardinality permits (FR-035). "duplicate_id" — two records share an identifier; both paths are named (FR-039). "cross_currency" — a money total spanning several currencies was REFUSED, not summed (FR-014). "money_scale_mismatch" — the amount's fractional digit count disagrees with the declared scale (FR-012). "candidate_cap_exceeded" — the candidate set exceeded the 10,000-record materialisation bound; the query is refused with a narrowing instruction and NO partial answer is returned (FR-064). "hop_limit_exceeded" — more than two relation hops were requested (FR-065). "page_size_clamped" — the requested page size exceeded the cap and was reduced; the clamp is REPORTED, never silent (FR-063). "scope_truncated" — workspace scope resolution was itself incomplete (ADR-067 Scope.Truncated), so a whole mounted folder may be missing. The answer MUST NOT claim success (FR-062a). "aggregate_refused" — no aggregate is returned over a refused candidate set; it is never partial (FR-066). "index_unavailable" — the index predates record support and cannot hold the properties queried. A silent no-op returning complete:true over zero properties is impossible (FR-020a).
+type RecordProblemCode string
+
+// RecordPropertyValue One property of one record, with all of its values (ADR-068 D3).
+// `values` is ALWAYS an array, whatever the declared arity, and arity is enforced against the schema rather than guessed from the wire shape: a scalar property carrying two values is rejected with the expected shape named (FR-006), and it is never silently widened into a list. The single most-reported failure in the research corpus is precisely that silent widening, after which every query written against the property returns nothing with no error.
+// AN EMPTY `values` ARRAY MEANS ABSENT (D3.2, FR-007), and absent is a state distinct from every value. On a write, an empty array clears the property.
+// Used in both directions. On a READ the server also populates `type`. On a WRITE (RecordWriteRequest) `type` may be omitted — the schema is the authority — and relation and person properties are NOT writable here: they are modified through RelationWriteRequest's explicit add / remove / replace verbs (FR-045), because a read-then-write round trip that silently replaces a relation list is how the incumbent deletes relations and returns success.
+type RecordPropertyValue struct {
+	// Property The declared property name. Validated against the record type's schema BEFORE evaluation or write; an unknown name is rejected with the valid names listed (FR-023, FR-024).
+	Property string `json:"property"`
+
+	// Type The declared property type, echoed by the server on reads. Optional on a write request, where the schema is the authority.
+	Type *RecordPropertyValueType `json:"type,omitempty"`
+
+	// Values The values held. Always present — an empty array, never null. Empty means the property is ABSENT on this record (D3.2), which a filter can test for explicitly and which a negative filter includes by default (FR-008).
+	Values []RecordValue `json:"values"`
+}
+
+// RecordPropertyValueType The declared property type, echoed by the server on reads. Optional on a write request, where the schema is the authority.
+type RecordPropertyValueType string
+
+// RecordQueryRequest A structured record query (ADR-068 D13, D15.1b; FR-022 to FR-029).
+// Structured, never a text query language (FR-022): every property name, enum value and relation target is checked against the schema BEFORE anything is evaluated (FR-023), and a query naming something the schema does not declare is REJECTED with the valid names listed rather than returning zero records (FR-024). A mistyped property that returns an empty result is indistinguishable from a correct query over an empty vault, and the accepted community workaround for that today is "keep testing until something is returned".
+// Scope is not negotiable by the caller. Every record tool resolves through the calling agent's workspace (FR-060); records in a vault mounted only into another workspace are invisible, and that case is indistinguishable from an empty vault (FR-062). Scope is resolved BEFORE a rejection is built, so the valid-names list in an error can never reveal schemas outside that scope (FR-024).
+// Bounds are stated and every breach is REPORTED, never silently applied — see RecordQueryResponse.
+type RecordQueryRequest struct {
+	// Aggregates Aggregates to compute over the matched set, and per group when group_by is present. None are returned over a refused candidate set (FR-066).
+	Aggregates *[]RecordAggregate `json:"aggregates,omitempty"`
+
+	// Cursor Opaque pagination cursor from a previous response's next_cursor. A cursor that cannot be honoured is an ERROR, never a silent restart from the beginning (D15.1b) — a silent restart returns page one while the caller believes it is reading page four.
+	Cursor *string `json:"cursor,omitempty"`
+
+	// Filters Filter clauses, combined with AND. Omitted or empty matches every record of the type within scope.
+	Filters *[]RecordFilter `json:"filters,omitempty"`
+
+	// GroupBy Properties to group by, outermost first. Two levels are supported (FR-027); grouping by a relation is supported (FR-029); a record with several values appears in every group it belongs to (FR-028).
+	GroupBy *[]string `json:"group_by,omitempty"`
+
+	// Hops Maximum relation hops this query may follow. At most 2; a query requesting more is REFUSED with the reason (FR-065) rather than rejected by the schema, so the caller is told the bound and not merely that its body was invalid.
+	Hops *int `json:"hops,omitempty"`
+
+	// Limit Records per page. Default 50. A value above the server cap of 200 is CLAMPED, not rejected, and the clamp is REPORTED on the response (limit_clamped / limit_applied, FR-063) — deliberately no `maximum` here, so an over-large request comes back with a stated clamp rather than a bare schema error that says nothing about what was applied.
+	Limit *int `json:"limit,omitempty"`
+
+	// Select Properties to return on each record. Omitted returns every declared property. Narrowing this changes what is RETURNED, never what is matched.
+	Select *[]string `json:"select,omitempty"`
+
+	// Sort Sort keys, applied in order. Enums sort by declared position (FR-010).
+	Sort *[]RecordSort `json:"sort,omitempty"`
+
+	// Type The record type to query. Exactly one; a query does not span record types, it follows relations between them via RecordFilter.via.
+	Type string `json:"type"`
+}
+
+// RecordQueryResponse The answer to a record query — records AND the account of everything the query could not include, in the SAME response (ADR-068 D13, FR-025).
+// THERE IS NO CALL SHAPE THAT RETURNS RECORDS ALONE. `complete` and `problems` are REQUIRED fields, not optional ones, and that is the load-bearing decision of this whole contract. If either were optional, a client could receive a total without the caveats attached to it, a server could omit them under load and still be conformant, and the generated types would carry them as nullable — at which point the guarantee is a convention rather than a structure, and conventions are exactly what fails silently. Required here means: a caller physically cannot hold these records without also holding the verdict on them.
+// Every bound in D15.1b sets complete: false with the reason and the remedy — a clamped page, a refused candidate set, a hop limit, a truncated scope, an index that cannot answer. So a caller that ignores `problems` entirely still cannot mistake a bounded answer for a whole one, because the boolean it did read already said so.
+// A refusal arrives HERE, not as an HTTP error: refused: true with records empty and a narrowing instruction in problems (FR-064, FR-066). No partial answer and no partial total is ever returned in that case.
+// An out-of-scope query is not an error either — it returns records: [] with complete: true, indistinguishable from an empty vault (FR-061, FR-062), so the error channel cannot be used to probe for records the caller may not see.
+type RecordQueryResponse struct {
+	// Aggregates Aggregate results over the whole matched set, in the order requested. A refused aggregate is present and marked refused — never omitted (FR-014, FR-066).
+	Aggregates *[]RecordAggregateResult `json:"aggregates,omitempty"`
+
+	// Complete REQUIRED. True only when the query covered everything it was asked to cover: no record excluded for a type violation, no clamp, no refusal, no truncated scope, no unavailable index. False whenever ANY of those applies, with the reason and the remedy in `problems`.
+	// Never optional. The completeness verdict travelling separately from the records — or not travelling at all — is the failure mode this response type was designed to make impossible.
+	Complete bool `json:"complete"`
+
+	// Groups Grouped results, present only when the request carried group_by. The records themselves stay in `records`; groups reference them by id.
+	Groups *[]RecordGroup `json:"groups,omitempty"`
+
+	// LimitApplied The page size actually used for this query.
+	LimitApplied int `json:"limit_applied"`
+
+	// LimitClamped True when the requested page size exceeded the server cap of 200 and was reduced to limit_applied. The clamp is REPORTED, never silent (FR-063) — silent truncation is the incumbent behaviour this ADR cites as motivating evidence, and shipping our own would be indefensible.
+	LimitClamped bool `json:"limit_clamped"`
+
+	// LimitRequested The page size the caller asked for. Present only when limit_clamped is true, so the caller can see exactly what was refused.
+	LimitRequested *int `json:"limit_requested,omitempty"`
+
+	// NextCursor Opaque cursor for the next page. Absent means this was the last page. Cursor-based, so a page boundary cannot silently repeat or skip records when the corpus changes between calls.
+	NextCursor *string `json:"next_cursor,omitempty"`
+
+	// Problems REQUIRED. Everything the query could not include, and why. Always present — an EMPTY ARRAY when there is nothing to report, never null and never absent, so "no problems" is stated rather than inferred from a missing field.
+	// A record excluded from an aggregate is named here with the reason (FR-026). So is a clamp, a refusal, a hop limit and a truncated scope.
+	Problems []RecordProblem `json:"problems"`
+
+	// Records The matched records, in the requested sort order. Always present — an empty array, never null — so a client may map over it without a nil check. Each record appears ONCE even when grouping placed it in several groups; the groups reference it by id.
+	Records []VaultRecord `json:"records"`
+
+	// Refused REQUIRED. True when the query was refused outright and NO answer was computed — the candidate set exceeded the 10,000-record materialisation bound (FR-064), or more than two relation hops were requested (FR-065). Records is then empty, no aggregate is returned (FR-066), and `problems` carries the narrowing instruction naming the filter that would help.
+	// Distinct from complete: false, which also covers a partial answer that WAS computed. A caller must be able to tell "here is some of it" from "here is none of it, narrow and re-ask" without parsing prose.
+	Refused bool `json:"refused"`
+
+	// TotalMatched Records matching the filters across all pages, when it is known exactly. ABSENT rather than estimated when it is not — an invented denominator is the confidently-wrong answer this response type exists to prevent.
+	TotalMatched *int64 `json:"total_matched,omitempty"`
+}
+
+// RecordRef A reference from one record to another — the wire form of a "relation" or "person" value (ADR-068 D5, D5.1).
+// What is stored ON DISK is a quoted wikilink, and nothing else. It renders and navigates in Obsidian and carries no Omnipus-specific encoding, so removing Omnipus leaves a working link (D8's no-lock-in promise). What the INDEX joins on is the target's record ID, resolved by following the wikilink to a file and reading its id — so a rename cannot break a relation from either direction.
+// This type therefore carries BOTH, and `link` is the required half because it is the half that always exists. `id` is absent exactly when the reference could not be resolved, and `resolved` says so explicitly rather than leaving the caller to infer it from a missing field. An unresolvable or ambiguous wikilink is a validation finding (RecordProblem.dangling_relation), never a silent drop and never rendered as a distinct group of one.
+type RecordRef struct {
+	// Id The target's stable record identifier (D7). Present only when resolved is true.
+	Id *string `json:"id,omitempty"`
+
+	// Link The wikilink target text as stored in the file, without the surrounding brackets. This is the durable, human-editable form.
+	Link string `json:"link"`
+
+	// Resolved True when the link resolved to exactly one record of the declared target type. False for a dangling, ambiguous or wrong-type target — in which case the query still returns the reference and the response carries a matching RecordProblem (FR-033, FR-034).
+	Resolved bool `json:"resolved"`
+
+	// Title Display title of the target, for rendering without a second fetch.
+	Title *string `json:"title,omitempty"`
+
+	// Type The target's record type. Present only when resolved is true. A target that resolves to a record of the WRONG type is reported as relation_type_mismatch, not silently accepted (FR-034).
+	Type *string `json:"type,omitempty"`
+}
+
+// RecordSchema Every record type visible to the caller (ADR-068 D2, D15, record_schema).
+// ADR-068 D0: this list is whatever the operator's vault declares. Omnipus ships NO record types of its own — not one, and not as an overridable default — so an empty `types` array on a vault that has declared nothing is the correct and expected answer, not a broken installation.
+// `problems` is REQUIRED here, not optional, for the same reason it is on a query response: a schema listing that quietly omits a type it could not load — an unversioned file (FR-002), a type declared twice in two files (FR-003) — tells the caller the type does not exist, which is a different and wrong answer. Both paths of a duplicate declaration are named in the problem (FR-003).
+// The listing is scoped to the calling agent's workspace (FR-060). A schema in a vault mounted only into another workspace is simply not in this list, and that is indistinguishable from it not existing (FR-062).
+// Note for the agent-facing tool: record_schema returns a COMPACT TEXTUAL schema to the model, not this object serialised as JSON — Notion measured a ~91% context-token reduction making that change. This type is the structured form for the gateway/SPA boundary.
+type RecordSchema struct {
+	// Problems REQUIRED. Schema files that could not be loaded, and why. Always present — an EMPTY ARRAY when every schema loaded cleanly, never null.
+	Problems []RecordProblem `json:"problems"`
+
+	// Types The declared record types, ordered by type name. Always present — an empty array, never null.
+	Types []RecordType `json:"types"`
+}
+
+// RecordSort One sort key (ADR-068 D4, FR-010).
+// An ENUM property sorts by its DECLARED POSITION, never lexically. That is the whole reason position is data: operators otherwise encode order into the spelling — "1-Pending", "7-DoNotContact" — and the encoding then leaks into every rendering that shows the value.
+// Money sorts only within one currency; a sort spanning currencies is reported as a problem rather than ordered by a number that means different things in each row.
+type RecordSort struct {
+	// Direction Ascending or descending. For an enum, along declared position.
+	Direction RecordSortDirection `json:"direction"`
+
+	// Property The declared property to sort by, validated against the schema first (FR-023).
+	Property string `json:"property"`
+}
+
+// RecordSortDirection Ascending or descending. For an enum, along declared position.
+type RecordSortDirection string
+
+// RecordType One record type as declared by the vault in `<vault>/.omnipus-vault/records/<type>.yaml` (ADR-068 D2).
+// ADR-068 D0 is binding here: Omnipus ships the MECHANISM and the vault ships the CONVENTION. There are NO built-in record types — no company, contact, deal or interaction, not even as an overridable default — because a shipped default becomes the de-facto standard and quietly gives the product opinions about the operator's business that it has no basis for. Every RecordType on this wire was read from a file in the operator's own vault.
+// `schema_version` is mandatory from the first release (FR-002): a schema file without it is rejected and NO records of that type are validated against it. Obsidian's `.base` format broke in five consecutive releases across eight weeks, two of them unannounced; machine-generated schemas make an unversioned format worse, not better.
+type RecordType struct {
+	// IdentityPrefix Prefix for minted record identifiers (D7) — a prefix of "CO" yields "CO-0142". Identity is a stable ID, not the filename, so a rename can neither break a relation nor fork a group.
+	IdentityPrefix *string `json:"identity_prefix,omitempty"`
+
+	// Label Human-readable label for display. Absent means render `type`.
+	Label *string `json:"label,omitempty"`
+
+	// Properties The declared properties, in declaration order. Always present — an empty array, never null.
+	Properties []PropertyDef `json:"properties"`
+
+	// SchemaVersion Declared schema version. Mandatory (FR-002) — a schema file lacking it is rejected outright rather than loaded with an assumed version.
+	SchemaVersion int `json:"schema_version"`
+
+	// SourcePath Vault-relative path of the schema file that declared this type. Carried so a duplicate declaration can name BOTH paths (FR-003) instead of reporting an unlocatable conflict.
+	SourcePath *string `json:"source_path,omitempty"`
+
+	// Type The record type name, matching the `type` key in a record's frontmatter (D1). A note whose type matches no schema is an ordinary note and NOT an error (FR-005).
+	Type string `json:"type"`
+}
+
+// RecordValue ONE value of one property, tagged with the property type that governs it (ADR-068 D3). Exactly one of the seven value fields is populated, and which one is named by `type`.
+// Numbers and money are carried as DECIMAL STRINGS, never as JSON numbers. `type: number` in this contract generates a Go float64 and a JavaScript number; binary floating point cannot represent 0.1 exactly, so a value would drift on a round trip that nobody performed deliberately. FR-020b forbids a binary float anywhere in the storage or retrieval path, and the wire is part of that path.
+// ABSENCE IS NOT A VALUE. A property with no value carries no RecordValue at all — its RecordPropertyValue.values array is empty (D3.2, FR-007). This matters: "days I did not meditate" must be answerable, and it is not answerable in a model where absent and false are the same state.
+type RecordValue struct {
+	// Date Populated when type is "date". Either a calendar day as YYYY-MM-DD or an instant as RFC 3339. Comparable in both forms — the failure this closes is a date stored as free text, which sorts and filters as nothing.
+	Date *string `json:"date,omitempty"`
+
+	// Enum Populated when type is "enum". The declared token, which MUST appear in the property's declared value set; anything else is rejected with the permitted values named (FR-011).
+	Enum *string `json:"enum,omitempty"`
+
+	// Money A money value: amount, ISO-4217 currency and declared scale carried as ONE value (ADR-068 D3, FR-012). A value missing currency is REJECTED — two loose fields that nothing keeps together is the failure this type closes.
+	// The amount is a DECIMAL STRING and never a JSON number. `type: number` in this contract generates a Go float64 and a JavaScript number, and binary floating point cannot represent 0.1 exactly — so a total that must be exact would drift by an amount nobody can see until it is reconciled against a bank. FR-013 requires exact decimal arithmetic and FR-020b forbids a binary float ANYWHERE in the storage or retrieval path; a string is the only representation that survives both the wire and the two generated languages without a lossy hop.
+	// `scale` states how many fractional digits the amount is DECLARED to carry, so "10.00" USD (scale 2) is distinguishable from "10" USD (scale 0) and the amount converts losslessly to and from integer minor units (ADR-068 O-2's resolution): minor units = amount x 10^scale, exactly, with no rounding. The fractional digit count of `amount` MUST equal `scale`; a mismatch is a validation finding, not something the server silently normalises.
+	// Summing money is exact WITHIN one currency. A sum ACROSS currencies is REFUSED with the currencies present listed (FR-014) — see RecordAggregateResult.currencies_present. There is no FX conversion and no rate table in this ADR.
+	Money *RecordMoney `json:"money,omitempty"`
+
+	// Number Populated when type is "number". A decimal STRING for the same reason as money: a JSON number becomes a binary float in both generated languages, and a quantity that cannot survive a round trip unchanged is not a quantity a caller can reconcile. The unit, if any, is declared once on the PropertyDef and is never glued into the value.
+	Number *string `json:"number,omitempty"`
+
+	// Person A reference from one record to another — the wire form of a "relation" or "person" value (ADR-068 D5, D5.1).
+	// What is stored ON DISK is a quoted wikilink, and nothing else. It renders and navigates in Obsidian and carries no Omnipus-specific encoding, so removing Omnipus leaves a working link (D8's no-lock-in promise). What the INDEX joins on is the target's record ID, resolved by following the wikilink to a file and reading its id — so a rename cannot break a relation from either direction.
+	// This type therefore carries BOTH, and `link` is the required half because it is the half that always exists. `id` is absent exactly when the reference could not be resolved, and `resolved` says so explicitly rather than leaving the caller to infer it from a missing field. An unresolvable or ambiguous wikilink is a validation finding (RecordProblem.dangling_relation), never a silent drop and never rendered as a distinct group of one.
+	Person *RecordRef `json:"person,omitempty"`
+
+	// Relation A reference from one record to another — the wire form of a "relation" or "person" value (ADR-068 D5, D5.1).
+	// What is stored ON DISK is a quoted wikilink, and nothing else. It renders and navigates in Obsidian and carries no Omnipus-specific encoding, so removing Omnipus leaves a working link (D8's no-lock-in promise). What the INDEX joins on is the target's record ID, resolved by following the wikilink to a file and reading its id — so a rename cannot break a relation from either direction.
+	// This type therefore carries BOTH, and `link` is the required half because it is the half that always exists. `id` is absent exactly when the reference could not be resolved, and `resolved` says so explicitly rather than leaving the caller to infer it from a missing field. An unresolvable or ambiguous wikilink is a validation finding (RecordProblem.dangling_relation), never a silent drop and never rendered as a distinct group of one.
+	Relation *RecordRef `json:"relation,omitempty"`
+
+	// Text Populated when type is "text". Prose; never compared for equality (D3).
+	Text *string `json:"text,omitempty"`
+
+	// Type Which of the seven property types governs this value, and therefore which field below is populated.
+	Type RecordValueType `json:"type"`
+}
+
+// RecordValueType Which of the seven property types governs this value, and therefore which field below is populated.
+type RecordValueType string
+
+// RecordWriteRequest A typed, validated write to one record (ADR-068 D14, FR-040 to FR-044).
+// A write is a SPLICE, never a re-serialisation. Comments, key order, blank lines and quoting style survive, and the file is byte-identical outside the patched span (FR-041). This is not a nicety: the vault is simultaneously a human's working notes, and a writer that re-serialises YAML degrades it a little on every touch until the operator stops trusting the agent.
+// A write that violates the schema is REJECTED with the expected shape named, and the file is left unmodified (FR-042). Nothing is half-written.
+// RELATIONS AND PERSON PROPERTIES ARE NOT WRITABLE HERE. They are modified through RelationWriteRequest's three explicit verbs (FR-045), because a read-then-write round trip that silently replaces a relation list is how the incumbent deletes relations and returns success.
+// Derived values are never written into frontmatter (D9, FR-046) — a request naming a derived property is rejected, not honoured.
+type RecordWriteRequest struct {
+	// Id The record to update. ABSENT MEANS CREATE, in which case `path` is required and the identifier is minted by the server (FR-036) — never supplied by the caller, so two concurrent creators cannot choose the same id. When present, `version_token` is required too.
+	Id *string `json:"id,omitempty"`
+
+	// Path Vault-relative path of the note. Required on create; ignored on update, where the id already locates the record and a rename is a separate operation.
+	Path *string `json:"path,omitempty"`
+
+	// Properties The properties to write, and only those — every other byte of the file is untouched. An entry whose `values` array is empty CLEARS that property (D3.2). A write of a list into a scalar property, or of a value outside a closed enum, is rejected with the expected shape named (FR-006, FR-011, FR-042).
+	Properties []RecordPropertyValue `json:"properties"`
+
+	// Type The record type being written. Always required, on create and update alike.
+	Type string `json:"type"`
+
+	// VersionToken ADR-067 D14's opaque content-hash token, as returned on the record that is being updated. REQUIRED whenever `id` is present: a stale token means the file changed since it was read, and the write is REFUSED and the refusal AUDITED (FR-043, FR-044) rather than overwriting an edit nobody saw. Omitted only on create, where there is no prior version.
+	VersionToken *string `json:"version_token,omitempty"`
+}
+
+// RelationWriteRequest A change to one relation property, through THREE DISTINCT VERBS (ADR-068 D15, FR-045).
+// `replace` must be named explicitly, and that is the entire point of this type existing separately from RecordWriteRequest. The incumbent offers only replace, so the ordinary read-then-write pattern — read the list, append, write it back — deletes every relation added by anyone else in between and returns success. Making add and remove first-class means the common case never has to send the whole list, and making replace a named verb means clearing a list is something a caller did on purpose.
+// A relation is stored ONCE, on one side, as a quoted wikilink (D5.1). The inverse is derived from the index and is never written to any file (FR-032); writing the reverse direction is not something this request can do, and not something anyone needs to remember to do.
+type RelationWriteRequest struct {
+	// Id The record whose relation property is being changed.
+	Id string `json:"id"`
+
+	// Op "add" — add the targets, leaving existing ones in place. Adding a target already present is a no-op, not a duplicate. "remove" — remove the targets, leaving the rest in place. Removing a target that is not present is a no-op, not an error. "replace" — the existing targets are DISCARDED and replaced by `targets`. An empty `targets` clears the property. Named explicitly so that destroying a list is never the accidental outcome of a read-modify- write (FR-045).
+	Op RelationWriteRequestOp `json:"op"`
+
+	// Property The relation or person property to change. Must be declared as type "relation" or "person" in the record type's schema; anything else is rejected with the expected shape named. Declared cardinality is enforced (FR-035) — adding a second target to a scalar relation is refused.
+	Property string `json:"property"`
+
+	// Targets The relation targets, each a wikilink target text or a record identifier. Always present — an empty array, never null; empty is valid ONLY with op "replace", where it clears the property, and is rejected for add and remove, which would otherwise be silent no-ops that look like successful writes.
+	// A target that does not exist, or that exists but is not of the declared target type, is REPORTED (FR-033, FR-034) — never silently stored as a link that will render as a distinct group of one.
+	Targets []string `json:"targets"`
+
+	// VersionToken ADR-067 D14's opaque content-hash token for that record. A stale token is REFUSED and the refusal AUDITED (FR-043, FR-044).
+	VersionToken string `json:"version_token"`
+}
+
+// RelationWriteRequestOp "add" — add the targets, leaving existing ones in place. Adding a target already present is a no-op, not a duplicate. "remove" — remove the targets, leaving the rest in place. Removing a target that is not present is a no-op, not an error. "replace" — the existing targets are DISCARDED and replaced by `targets`. An empty `targets` clears the property. Named explicitly so that destroying a list is never the accidental outcome of a read-modify- write (FR-045).
+type RelationWriteRequestOp string
 
 // RestoreBackupRequest Request body for POST /api/v1/restore. Extracts a backup tar.gz archive over ~/.omnipus/, skipping config.json to preserve current settings.
 type RestoreBackupRequest struct {
@@ -14134,6 +14913,49 @@ type ValidateTokenResponse struct {
 	Username string `json:"username"`
 }
 
+// ValidationReport The result of running the schema across records (ADR-068 D15, record_validate).
+// Its purpose is to turn "the view looks wrong" into a clearable worklist: every failure named per record, with the reason and the expected shape.
+// `complete` and `problems` are REQUIRED for the same structural reason they are on RecordQueryResponse: a validation run that could not cover everything it was asked to cover, and does not say so, is worse than no validation at all — it certifies a corpus nobody checked. An empty `problems` array with `complete: true` is the only combination that means "this corpus is clean".
+type ValidationReport struct {
+	// Complete REQUIRED. True only when every record of every requested type within scope was checked. False when scope resolution was itself incomplete (FR-062a), when a bound stopped the run, or when a schema could not be loaded — with the reason in `problems`.
+	Complete bool `json:"complete"`
+
+	// Problems REQUIRED. Every finding, named per record with the reason and, where applicable, the expected shape. Always present — an EMPTY ARRAY when the corpus is clean, never null and never absent.
+	Problems []RecordProblem `json:"problems"`
+
+	// RecordsChecked How many records were actually examined. Stated so a clean report over zero records cannot be mistaken for a clean report over the corpus.
+	RecordsChecked int64 `json:"records_checked"`
+
+	// Types The record types examined, by name. Present so the caller can see what the run covered without inferring it from the findings.
+	Types *[]string `json:"types,omitempty"`
+
+	// TypesChecked How many record types were examined.
+	TypesChecked int64 `json:"types_checked"`
+}
+
+// VaultRecord One record: an ordinary Markdown note in the operator's own vault that declares a record type in its frontmatter (ADR-068 D1). There is no separate database — a record IS the note, and a note whose type matches no schema is simply an ordinary note, not an error (FR-005).
+// Derived values — counts, sums, last-interaction dates, relation inverses — are NEVER present as stored properties here (D9, FR-046). They are computed at query time, because an agent reading frontmatter cannot tell a stale derived value from a fact, and every hand-maintained derived field found in the research is wrong in somebody's vault right now.
+// NAMED VaultRecord, NOT Record. A component named "Record" generates a TypeScript `export type Record = ...` that shadows the built-in Record<K, V> utility type throughout the generated module, and tsc then fails with "Type 'Record' is not generic" on every unrelated use of it in the same file. That is a property of the generator's output, so no hand-edit could survive a regeneration.
+type VaultRecord struct {
+	// Id The stable record identifier, minted on creation and immutable (D7, FR-036) — identity is an ID, not the filename, so a rename cannot break a relation. Unique within its type; a duplicate is a hard validation error naming both paths (FR-039).
+	Id string `json:"id"`
+
+	// Path Vault-relative path of the note. Always within the calling agent's workspace scope — a record in a vault mounted only into another workspace is not visible at all, and that case is indistinguishable from an empty vault (FR-060, FR-062).
+	Path string `json:"path"`
+
+	// Properties The record's declared properties and their values, in the schema's declaration order. Always present — an empty array, never null. A property whose values array is empty is ABSENT (D3.2).
+	Properties []RecordPropertyValue `json:"properties"`
+
+	// Title Display title, for rendering without opening the file.
+	Title *string `json:"title,omitempty"`
+
+	// Type The declared record type this record belongs to.
+	Type string `json:"type"`
+
+	// VersionToken ADR-067 D14's opaque content-hash version token for this note. Present on reads, and required back on a write; a stale token is REFUSED and the refusal is audited (FR-043). Opaque — never parsed, compared only for equality.
+	VersionToken *string `json:"version_token,omitempty"`
+}
+
 // VersionResponse Response from GET /api/v1/version. Returns build identity information. Used by the frontend to detect version drift and show "New version available" prompts (issue #110). No authentication required.
 type VersionResponse struct {
 	// BuildSha VCS revision SHA embedded at build time via debug.ReadBuildInfo(). Value is "dev" when built outside a version-controlled tree or when vcs.revision is not set (e.g. go run). Otherwise a 7-40 character lowercase hex SHA.
@@ -14141,6 +14963,47 @@ type VersionResponse struct {
 
 	// Version Omnipus gateway version string (e.g. "0.1.0"). Must follow semver format.
 	Version string `json:"version"`
+}
+
+// ViewDef A saved query, stored as data (ADR-068 D10). A view names a record type, filters, grouping, sort and the properties to show; it lives in `<vault>/.omnipus-vault/views/<name>.yaml`, so an agent can author one and a human can diff it.
+// A view naming a property or enum value that does not exist is REJECTED at write time (D15), not stored and discovered broken later.
+// `untranslated` exists for record_view_import (FR-100 to FR-102). An imported `.base` file may contain an expression this system cannot translate; that expression is preserved VERBATIM here and reported, never approximated and never silently dropped (FR-101). An approximation that looks like a translation is worse than an honest gap, because nobody reviews a filter that appears to have imported cleanly. Import is one-shot: `.base` files are never read on the query path (FR-102).
+type ViewDef struct {
+	// Aggregates Aggregates to compute for this view, and per group when grouped.
+	Aggregates *[]RecordAggregate `json:"aggregates,omitempty"`
+
+	// Filters Filter clauses, combined with AND.
+	Filters *[]RecordFilter `json:"filters,omitempty"`
+
+	// GroupBy Grouping properties, outermost first. Two levels (FR-027); a relation is a valid grouping property (FR-029).
+	GroupBy *[]string `json:"group_by,omitempty"`
+
+	// Label Human-readable title. Absent means render `name`.
+	Label *string `json:"label,omitempty"`
+
+	// Limit Page size for this view. Clamped at the server cap of 200, with the clamp reported on the response (FR-063).
+	Limit *int `json:"limit,omitempty"`
+
+	// Name View identifier, unique within the vault.
+	Name string `json:"name"`
+
+	// Properties Properties to display, in this order. Omitted shows every declared property.
+	Properties *[]string `json:"properties,omitempty"`
+
+	// SchemaVersion Declared version of the view format, mandatory for the same reason a record schema's is (D2): a format that breaks unannounced is worse when the files are machine-generated.
+	SchemaVersion int `json:"schema_version"`
+
+	// Sort Sort keys, applied in order.
+	Sort *[]RecordSort `json:"sort,omitempty"`
+
+	// Source Vault-relative path of the file this view was IMPORTED from, when it was imported rather than authored. Recorded so the provenance of a partially translated view is visible; the source is never re-read afterwards (FR-102).
+	Source *string `json:"source,omitempty"`
+
+	// Type The record type this view queries.
+	Type string `json:"type"`
+
+	// Untranslated Expressions from the imported source that could NOT be translated, preserved verbatim (FR-101). Present only on an imported view, and non-empty only when something was genuinely left behind. Never an approximation of the original.
+	Untranslated *[]string `json:"untranslated,omitempty"`
 }
 
 // VoiceProvider Response body for GET /api/v1/voice/provider. Describes the active voice provider configuration so the SPA can decide which widget variant (dropdown / free-text / disabled) to render in the agent edit slide-over.

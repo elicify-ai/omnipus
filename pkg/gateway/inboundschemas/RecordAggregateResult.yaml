@@ -1,0 +1,71 @@
+title: RecordAggregateResult
+description: >
+  The outcome of one requested aggregate — WHICH MAY BE A REFUSAL, stated as
+  such (ADR-068 D13, FR-014, FR-066).
+
+  A refusal is a first-class result here, not an error and not a missing entry.
+  The alternative — omitting the aggregate, or returning a number computed over
+  whatever happened to parse — is exactly the confidently-wrong total this ADR
+  exists to prevent. Every record excluded from an aggregate is additionally
+  named in the response's `problems` with the reason (FR-026).
+type: object
+additionalProperties: false
+required:
+  - op
+  - refused
+properties:
+  op:
+    type: string
+    enum:
+      - count
+      - sum
+      - min
+      - max
+    description: The aggregate requested, echoed back.
+    example: "sum"
+  property:
+    type: string
+    minLength: 1
+    description: The property aggregated. Absent for count.
+    example: "arr"
+  refused:
+    type: boolean
+    description: >
+      True when NO figure is returned. Set for a cross-currency sum (FR-014),
+      for an aggregate over a refused candidate set (FR-066), and whenever a
+      figure could not be computed exactly. When true, `value` and `count` are
+      absent and the reason is in the response's `problems`.
+    example: false
+  count:
+    type: integer
+    format: int64
+    minimum: 0
+    description: >
+      The count, when op is "count" and refused is false. Also the number of
+      records that CONTRIBUTED to a sum, min or max, so a caller can see how
+      many were excluded without subtracting.
+    example: 63
+  value:
+    $ref: "./RecordValue.yaml"
+    x-go-type: RecordValue
+  excluded_records:
+    type: integer
+    format: int64
+    minimum: 0
+    description: >
+      How many matched records were excluded from this aggregate because their
+      value could not be read as the declared type. Every one of them is named
+      in the response's `problems` (FR-026) — this field is the headline, not
+      a substitute for the list.
+    example: 22
+  currencies_present:
+    type: array
+    description: >
+      The currencies found, listed when a money sum is refused for spanning
+      more than one (FR-014). Listing them is the actionable half of the
+      refusal: the caller can re-ask per currency. There is no FX conversion
+      and no rate table in this ADR.
+    items:
+      type: string
+      pattern: '^[A-Z]{3}$'
+    example: ["USD", "EUR", "GBP", "JPY"]

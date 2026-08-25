@@ -1,0 +1,61 @@
+title: RecordMoney
+description: >
+  A money value: amount, ISO-4217 currency and declared scale carried as ONE
+  value (ADR-068 D3, FR-012). A value missing currency is REJECTED — two loose
+  fields that nothing keeps together is the failure this type closes.
+
+  The amount is a DECIMAL STRING and never a JSON number. `type: number` in
+  this contract generates a Go float64 and a JavaScript number, and binary
+  floating point cannot represent 0.1 exactly — so a total that must be exact
+  would drift by an amount nobody can see until it is reconciled against a
+  bank. FR-013 requires exact decimal arithmetic and FR-020b forbids a binary
+  float ANYWHERE in the storage or retrieval path; a string is the only
+  representation that survives both the wire and the two generated languages
+  without a lossy hop.
+
+  `scale` states how many fractional digits the amount is DECLARED to carry,
+  so "10.00" USD (scale 2) is distinguishable from "10" USD (scale 0) and the
+  amount converts losslessly to and from integer minor units (ADR-068 O-2's
+  resolution): minor units = amount x 10^scale, exactly, with no rounding.
+  The fractional digit count of `amount` MUST equal `scale`; a mismatch is a
+  validation finding, not something the server silently normalises.
+
+  Summing money is exact WITHIN one currency. A sum ACROSS currencies is
+  REFUSED with the currencies present listed (FR-014) — see
+  RecordAggregateResult.currencies_present. There is no FX conversion and no
+  rate table in this ADR.
+type: object
+additionalProperties: false
+required:
+  - amount
+  - currency
+  - scale
+properties:
+  amount:
+    type: string
+    minLength: 1
+    maxLength: 40
+    pattern: '^-?(0|[1-9][0-9]*)(\.[0-9]+)?$'
+    description: >
+      The exact decimal amount as a string. Never a JSON number. Optional
+      leading minus, no thousands separators, no exponent, no currency symbol.
+      The number of digits after the decimal point MUST equal `scale`.
+    example: "1250000.00"
+  currency:
+    type: string
+    pattern: '^[A-Z]{3}$'
+    description: >
+      ISO-4217 alphabetic currency code, upper case. Mandatory: a money value
+      without a currency is rejected (FR-012), because an amount alone cannot
+      be compared, sorted or summed against anything.
+    example: "USD"
+  scale:
+    type: integer
+    minimum: 0
+    maximum: 12
+    description: >
+      Declared number of fractional digits. 2 for most currencies, 0 for JPY,
+      3 for KWD, and higher where an operator's convention needs it. Declared
+      rather than inferred from the currency, because the vault's convention —
+      not the product — decides how precisely it records a figure (D0).
+    example: 2

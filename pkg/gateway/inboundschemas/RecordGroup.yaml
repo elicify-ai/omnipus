@@ -1,0 +1,68 @@
+title: RecordGroup
+description: >
+  One group of matched records (ADR-068 D10, FR-027 to FR-029).
+
+  Two levels of grouping are supported, and the second level is carried as a
+  SECOND ENTRY IN `keys` rather than as a nested group, so the structure is
+  flat, non-recursive and cannot express a third level by accident. A published
+  CRM design specified "group by company, then jurisdiction" and shipped with
+  one level, the second being inexpressible; two levels is the requirement, and
+  exactly two is what this type can hold.
+
+  A record with several values in the grouping property APPEARS IN EVERY GROUP
+  IT BELONGS TO (FR-028). This is a deliberate departure from Obsidian, whose
+  single combined group ("Finance Business" for a record tagged Finance and
+  Business) is confirmed intentional by its authors and is useless for the
+  categorisation case it appears in. The consequence is that the group counts
+  can sum to MORE than the number of matched records; that is correct, not a
+  double count.
+
+  Grouping by a RELATION is supported (FR-029). Notion's own answer to this is
+  "Not currently", which is why their first-party guidance flattens relations
+  into selects; we do not inherit the constraint that caused it.
+type: object
+additionalProperties: false
+required:
+  - keys
+  - count
+  - record_ids
+properties:
+  keys:
+    type: array
+    minItems: 1
+    maxItems: 2
+    description: >
+      This group's key, one entry per grouping level, outermost first. Two
+      entries means a second-level group (FR-027).
+    items:
+      $ref: "./RecordGroupKey.yaml"
+      x-go-type: RecordGroupKey
+  count:
+    type: integer
+    format: int64
+    minimum: 0
+    description: >
+      Records in this group. May sum across groups to more than the total
+      matched, when a multi-value property placed a record in several groups
+      (FR-028).
+    example: 12
+  record_ids:
+    type: array
+    description: >
+      Identifiers of the records in this group, in the response's sort order.
+      Always present — an empty array, never null. Ids rather than whole
+      records, so a record appearing in several groups is carried once in
+      `records` and referenced from each.
+    items:
+      type: string
+      minLength: 1
+    example: ["CO-0142", "CO-0198"]
+  aggregates:
+    type: array
+    description: >
+      Per-group aggregate results, in the order requested. A refusal inside one
+      group is stated on that group, so a single cross-currency group cannot
+      silently void the totals of the others.
+    items:
+      $ref: "./RecordAggregateResult.yaml"
+      x-go-type: RecordAggregateResult

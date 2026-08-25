@@ -1,0 +1,46 @@
+title: RecordSchema
+description: >
+  Every record type visible to the caller (ADR-068 D2, D15, record_schema).
+
+  ADR-068 D0: this list is whatever the operator's vault declares. Omnipus
+  ships NO record types of its own — not one, and not as an overridable
+  default — so an empty `types` array on a vault that has declared nothing is
+  the correct and expected answer, not a broken installation.
+
+  `problems` is REQUIRED here, not optional, for the same reason it is on a
+  query response: a schema listing that quietly omits a type it could not load
+  — an unversioned file (FR-002), a type declared twice in two files (FR-003) —
+  tells the caller the type does not exist, which is a different and wrong
+  answer. Both paths of a duplicate declaration are named in the problem
+  (FR-003).
+
+  The listing is scoped to the calling agent's workspace (FR-060). A schema in
+  a vault mounted only into another workspace is simply not in this list, and
+  that is indistinguishable from it not existing (FR-062).
+
+  Note for the agent-facing tool: record_schema returns a COMPACT TEXTUAL
+  schema to the model, not this object serialised as JSON — Notion measured a
+  ~91% context-token reduction making that change. This type is the structured
+  form for the gateway/SPA boundary.
+type: object
+additionalProperties: false
+required:
+  - types
+  - problems
+properties:
+  types:
+    type: array
+    description: >
+      The declared record types, ordered by type name. Always present — an
+      empty array, never null.
+    items:
+      $ref: "./RecordType.yaml"
+      x-go-type: RecordType
+  problems:
+    type: array
+    description: >
+      REQUIRED. Schema files that could not be loaded, and why. Always present
+      — an EMPTY ARRAY when every schema loaded cleanly, never null.
+    items:
+      $ref: "./RecordProblem.yaml"
+      x-go-type: RecordProblem

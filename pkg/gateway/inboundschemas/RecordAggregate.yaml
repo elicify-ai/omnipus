@@ -1,0 +1,37 @@
+title: RecordAggregate
+description: >
+  One aggregate to compute over the matched records (ADR-068 D9, D13).
+
+  There is deliberately NO "avg". A mean over exact decimals is not itself
+  exact — it reintroduces a rounding decision at the one point where this
+  design promises there is none (FR-013) — and a caller that wants one can
+  compute it from `count` and `sum` with a rounding rule it chose. Offering
+  avg here would be offering a number whose precision nobody declared.
+
+  No aggregate is returned at all over a refused candidate set (FR-066); it is
+  never partial.
+type: object
+additionalProperties: false
+required:
+  - op
+properties:
+  op:
+    type: string
+    enum:
+      - count
+      - sum
+      - min
+      - max
+    description: >
+      "count" — number of matched records; the only op valid with no property.
+      "sum" — exact decimal total. Across several currencies it is REFUSED
+      with the currencies listed, never summed (FR-014).
+      "min" / "max" — extreme value, by declared position for an enum.
+    example: "sum"
+  property:
+    type: string
+    minLength: 1
+    description: >
+      The property to aggregate. Required for sum, min and max; omitted for
+      count. Validated against the schema before evaluation (FR-023).
+    example: "arr"

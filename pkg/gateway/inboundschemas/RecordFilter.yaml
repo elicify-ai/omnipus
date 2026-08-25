@@ -1,0 +1,88 @@
+title: RecordFilter
+description: >
+  One structured filter clause (ADR-068 D13, FR-022). The query surface takes
+  a STRUCTURED filter object and deliberately accepts no text query language:
+  a query language would have to be parsed, and a parse failure that degrades
+  to "returns nothing" is the silent-empty-result failure this ADR exists to
+  end.
+
+  Every property name and enum value here is validated against the schema
+  BEFORE evaluation (FR-023). A clause naming something the schema does not
+  declare REJECTS the query with the valid names listed — it MUST NOT return
+  zero records (FR-024), because a typo and a genuinely empty result look
+  identical and the caller cannot tell which it got.
+
+  A "text" property supports only is_absent / is_present: text is prose, never
+  validated and never compared for equality (D3). Relevance search over prose
+  is ADR-067's surface, not this one.
+type: object
+additionalProperties: false
+required:
+  - property
+  - op
+properties:
+  property:
+    type: string
+    minLength: 1
+    description: >
+      The declared property to filter on, in the record type reached after
+      following `via`. Property types are scoped to their record type (D3.3),
+      so this name is resolved against that type's schema and no other.
+    example: "status"
+  op:
+    type: string
+    enum:
+      - eq
+      - neq
+      - in
+      - not_in
+      - lt
+      - lte
+      - gt
+      - gte
+      - is_absent
+      - is_present
+    description: >
+      "eq" / "neq" — equality against a single value.
+      "in" / "not_in" — membership in `values`.
+      "lt" / "lte" / "gt" / "gte" — ordered comparison. Valid on date, number
+      and money; on an enum it compares DECLARED POSITION, not spelling
+      (FR-010). Money compares only within one currency.
+      "is_absent" / "is_present" — the third state (D3.2), tested explicitly.
+      These are the only operators valid on a "text" property (D3).
+    example: "neq"
+  values:
+    type: array
+    description: >
+      Operand values. Empty or omitted for is_absent / is_present; exactly one
+      for eq, neq and the ordered comparisons; one or more for in / not_in.
+    items:
+      $ref: "./RecordValue.yaml"
+      x-go-type: RecordValue
+  include_absent:
+    type: boolean
+    description: >
+      Whether records where the property is ABSENT satisfy this clause.
+
+      Defaulted by the server per FR-008, not by the client: a NEGATIVE clause
+      (neq, not_in) INCLUDES absent records unless this is explicitly false,
+      and a positive clause excludes them unless this is explicitly true. That
+      default is the correction of a real failure — "days I did not meditate"
+      currently omits every day with no value, precisely the days being asked
+      about. Omitted means "use the default for this operator"; present means
+      the caller has overridden it deliberately.
+    example: true
+  via:
+    type: array
+    maxItems: 2
+    description: >
+      Relation properties to follow before applying this clause, in order —
+      the two-hop question of ADR-068 section 1.2 expressed as data. At most
+      two hops (FR-065); a third is REFUSED rather than walked implicitly,
+      because a deeper traversal is a follow-up query the caller should make
+      knowingly. Omitted or empty means the clause applies to the queried type
+      itself.
+    items:
+      type: string
+      minLength: 1
+    example: ["company"]

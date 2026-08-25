@@ -1,0 +1,66 @@
+title: RecordType
+description: >
+  One record type as declared by the vault in
+  `<vault>/.omnipus-vault/records/<type>.yaml` (ADR-068 D2).
+
+  ADR-068 D0 is binding here: Omnipus ships the MECHANISM and the vault ships
+  the CONVENTION. There are NO built-in record types — no company, contact,
+  deal or interaction, not even as an overridable default — because a shipped
+  default becomes the de-facto standard and quietly gives the product opinions
+  about the operator's business that it has no basis for. Every RecordType on
+  this wire was read from a file in the operator's own vault.
+
+  `schema_version` is mandatory from the first release (FR-002): a schema file
+  without it is rejected and NO records of that type are validated against it.
+  Obsidian's `.base` format broke in five consecutive releases across eight
+  weeks, two of them unannounced; machine-generated schemas make an unversioned
+  format worse, not better.
+type: object
+additionalProperties: false
+required:
+  - schema_version
+  - type
+  - properties
+properties:
+  schema_version:
+    type: integer
+    minimum: 1
+    description: >
+      Declared schema version. Mandatory (FR-002) — a schema file lacking it is
+      rejected outright rather than loaded with an assumed version.
+    example: 1
+  type:
+    type: string
+    minLength: 1
+    description: >
+      The record type name, matching the `type` key in a record's frontmatter
+      (D1). A note whose type matches no schema is an ordinary note and NOT an
+      error (FR-005).
+    example: "company"
+  label:
+    type: string
+    description: Human-readable label for display. Absent means render `type`.
+    example: "Company"
+  identity_prefix:
+    type: string
+    minLength: 1
+    description: >
+      Prefix for minted record identifiers (D7) — a prefix of "CO" yields
+      "CO-0142". Identity is a stable ID, not the filename, so a rename can
+      neither break a relation nor fork a group.
+    example: "CO"
+  properties:
+    type: array
+    description: >
+      The declared properties, in declaration order. Always present — an empty
+      array, never null.
+    items:
+      $ref: "./PropertyDef.yaml"
+      x-go-type: PropertyDef
+  source_path:
+    type: string
+    description: >
+      Vault-relative path of the schema file that declared this type. Carried
+      so a duplicate declaration can name BOTH paths (FR-003) instead of
+      reporting an unlocatable conflict.
+    example: ".omnipus-vault/records/company.yaml"

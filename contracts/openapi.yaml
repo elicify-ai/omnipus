@@ -233,6 +233,79 @@ components:
       $ref: ./components/schemas/KnowledgeConflictError.yaml
     KnowledgeMountConflictError:
       $ref: ./components/schemas/KnowledgeMountConflictError.yaml
+    # ── Vault records (ADR-068) ───────────────────────────────────────────
+    # Contract-first per Hard Constraint #8 and ADR-068 D19: these types are
+    # defined here BEFORE any Go or TS code exists (FR-090). No REST path
+    # references them yet — the first consumers are the nine record_* agent
+    # tools; the human surface arrives in ADR-068 D20's W5. skip-prune keeps
+    # them generated regardless, which is the point: the generated types are
+    # the only legal cross-boundary types when that code is written.
+    #
+    # ADR-068 D0 is binding on every schema below: the product ships the
+    # MECHANISM, the vault ships the CONVENTION. There is NO built-in record
+    # type here — no company, contact, deal or interaction, not even as an
+    # overridable default. Names in the examples are illustrative only.
+    #
+    # Every cross-file $ref in these schemas carries an `x-go-type` sibling.
+    # That is not decoration. oapi-codegen v2.7.0 INLINES a cross-file $ref as
+    # an anonymous struct at the use site, so without it RecordQueryResponse
+    # would carry `Problems []struct{...}` rather than `[]RecordProblem` — a
+    # JSON-shape-coincident copy that no handler can name and that silently
+    # stops matching the schema the day a field is added. The repo's other
+    # answer to this is the regex rewriter in scripts/gen-go-fixup.go, per
+    # type; x-go-type is the same fix declared in the contract instead, and it
+    # already has precedent here (CliValidateRequest.cli). The TypeScript and
+    # Zod generators ignore x-* extensions, so both halves stay in step.
+    RecordSchema:
+      $ref: ./components/schemas/RecordSchema.yaml
+    RecordType:
+      $ref: ./components/schemas/RecordType.yaml
+    PropertyDef:
+      $ref: ./components/schemas/PropertyDef.yaml
+    EnumValueDef:
+      $ref: ./components/schemas/EnumValueDef.yaml
+    # Named VaultRecord, not Record: a component called "Record" generates a
+    # TypeScript `export type Record = ...` that SHADOWS the built-in
+    # Record<K, V> utility type across the whole generated module, and tsc
+    # then fails with "Type 'Record' is not generic" on every unrelated use
+    # of it in the same file. Discovered by regenerating; the collision is in
+    # generated code, so no hand-edit could survive it.
+    VaultRecord:
+      $ref: ./components/schemas/VaultRecord.yaml
+    RecordPropertyValue:
+      $ref: ./components/schemas/RecordPropertyValue.yaml
+    RecordValue:
+      $ref: ./components/schemas/RecordValue.yaml
+    RecordMoney:
+      $ref: ./components/schemas/RecordMoney.yaml
+    RecordRef:
+      $ref: ./components/schemas/RecordRef.yaml
+    RecordQueryRequest:
+      $ref: ./components/schemas/RecordQueryRequest.yaml
+    RecordQueryResponse:
+      $ref: ./components/schemas/RecordQueryResponse.yaml
+    RecordFilter:
+      $ref: ./components/schemas/RecordFilter.yaml
+    RecordSort:
+      $ref: ./components/schemas/RecordSort.yaml
+    RecordAggregate:
+      $ref: ./components/schemas/RecordAggregate.yaml
+    RecordAggregateResult:
+      $ref: ./components/schemas/RecordAggregateResult.yaml
+    RecordGroup:
+      $ref: ./components/schemas/RecordGroup.yaml
+    RecordGroupKey:
+      $ref: ./components/schemas/RecordGroupKey.yaml
+    RecordProblem:
+      $ref: ./components/schemas/RecordProblem.yaml
+    RecordWriteRequest:
+      $ref: ./components/schemas/RecordWriteRequest.yaml
+    RelationWriteRequest:
+      $ref: ./components/schemas/RelationWriteRequest.yaml
+    ViewDef:
+      $ref: ./components/schemas/ViewDef.yaml
+    ValidationReport:
+      $ref: ./components/schemas/ValidationReport.yaml
     Agent:
       $ref: ./components/schemas/Agent.yaml
     AgentModelParams:

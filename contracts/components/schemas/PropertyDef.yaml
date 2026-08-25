@@ -1,0 +1,117 @@
+title: PropertyDef
+description: >
+  One declared property of a record type (ADR-068 D2, D3). Seven property
+  types exist and no more: text, enum, relation, date, number, money, person.
+
+  ARITY AND PRESENCE ARE BOTH REQUIRED FIELDS, deliberately. `many` and
+  `required` carry no default and are never inferred, because the single
+  most-reported failure in the research corpus is a scalar property silently
+  becoming a list the moment a second value is added — after which every query
+  written against it returns nothing, with no error (D3.1). A property whose
+  arity is merely "absent" reproduces exactly that ambiguity on the wire.
+
+  Property types are scoped to their record type (D3.3, FR-009): `status` on
+  one type and `status` on another are unrelated declarations. This contract
+  therefore never carries a vault-wide property table.
+
+  ADR-068 D0: the product ships NO record types and NO properties of its own.
+  Every PropertyDef on the wire came from a schema file the operator's vault
+  declared. The names used in the examples here are illustrative of the
+  mechanism only.
+type: object
+additionalProperties: false
+required:
+  - name
+  - type
+  - many
+  - required
+properties:
+  name:
+    type: string
+    minLength: 1
+    description: >
+      The frontmatter key, exactly as the operator declared it. Never renamed
+      and never prefixed by us — only fields Omnipus itself maintains carry
+      the `omni_` prefix (D8), so removing Omnipus leaves a working note.
+    example: "status"
+  type:
+    type: string
+    enum:
+      - text
+      - enum
+      - relation
+      - date
+      - number
+      - money
+      - person
+    description: >
+      "text" — prose. Never validated and never queried for equality (D3), so
+      a filter on a text property supports only is_absent / is_present;
+      full-text retrieval is ADR-067's search surface, not this one.
+      "enum" — one of a closed, ordered set (`values`).
+      "relation" — a typed edge to another record (D5); `to` names the target
+      record type and `inverse` names the derived reverse direction.
+      "date" — a day or an instant, comparable.
+      "number" — a quantity; `unit` is declared metadata, never glued into the
+      property name.
+      "money" — amount + ISO-4217 currency + scale as one value (RecordMoney).
+      "person" — a relation to a person record, kept distinct from a name
+      typed as text so one vault cannot model the same concept both ways.
+    example: "enum"
+  many:
+    type: boolean
+    description: >
+      Declared ARITY (D3.1). True means a list, false means a scalar. Writing
+      a list to a scalar property is rejected with the expected shape named
+      (FR-006), rather than silently widening the property.
+    example: false
+  required:
+    type: boolean
+    description: >
+      True when a record of this type MUST carry the property. A record
+      missing a required property is named by validation with the property and
+      the reason (RecordProblem.code = missing_required).
+    example: true
+  label:
+    type: string
+    description: Human-readable label for display. Absent means render `name`.
+    example: "Status"
+  values:
+    type: array
+    description: >
+      The closed, ordered value set. Present only when type is "enum", and
+      then non-empty. Order here IS the sort order (FR-010).
+    items:
+      $ref: "./EnumValueDef.yaml"
+      x-go-type: EnumValueDef
+  to:
+    type: string
+    minLength: 1
+    description: >
+      Target record type name. Present only when type is "relation" or
+      "person". A relation pointing at a note that exists but is not of this
+      type is a validation finding, not a silent accept (FR-034).
+    example: "company"
+  inverse:
+    type: string
+    minLength: 1
+    description: >
+      Name of the DERIVED reverse direction (D5). The inverse is computed from
+      the index and is NEVER stored in any file (FR-032) — the hand-maintained
+      reverse list is the field that drifts the first time anyone forgets.
+    example: "deals"
+  unit:
+    type: string
+    description: >
+      Unit of measure for a "number" property, declared as metadata rather
+      than glued into the property name (D3). Absent means unitless.
+    example: "minutes"
+  scale:
+    type: integer
+    minimum: 0
+    maximum: 12
+    description: >
+      Declared decimal scale for a "money" property — the fractional digit
+      count every RecordMoney value of this property must carry (FR-012).
+      Present only when type is "money".
+    example: 2

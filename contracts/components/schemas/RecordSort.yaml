@@ -1,0 +1,30 @@
+title: RecordSort
+description: >
+  One sort key (ADR-068 D4, FR-010).
+
+  An ENUM property sorts by its DECLARED POSITION, never lexically. That is the
+  whole reason position is data: operators otherwise encode order into the
+  spelling — "1-Pending", "7-DoNotContact" — and the encoding then leaks into
+  every rendering that shows the value.
+
+  Money sorts only within one currency; a sort spanning currencies is reported
+  as a problem rather than ordered by a number that means different things in
+  each row.
+type: object
+additionalProperties: false
+required:
+  - property
+  - direction
+properties:
+  property:
+    type: string
+    minLength: 1
+    description: The declared property to sort by, validated against the schema first (FR-023).
+    example: "status"
+  direction:
+    type: string
+    enum:
+      - asc
+      - desc
+    description: Ascending or descending. For an enum, along declared position.
+    example: "asc"

@@ -1,0 +1,146 @@
+title: RecordProblem
+description: >
+  One thing a record operation could not do, named rather than dropped
+  (ADR-068 D13). This is the type the whole ADR exists to serve: the failure
+  mode being corrected is SILENCE — a query that quietly omits the records it
+  could not understand and returns a confident total over what is left.
+
+  A problem names the records affected, the reason, and where possible the
+  expected shape and the remedy. The community's accepted debugging advice for
+  the incumbent tools today is "keep testing until something is returned";
+  that is what a system with no error channel forces on people.
+
+  A RecordProblem is NOT an HTTP error. Bounded, refused and partially
+  evaluated answers all arrive as a normal response carrying `complete: false`
+  and one or more of these (D15.1b).
+type: object
+additionalProperties: false
+required:
+  - code
+  - reason
+  - records
+properties:
+  code:
+    type: string
+    enum:
+      - missing_schema_version
+      - duplicate_type_declaration
+      - unknown_property
+      - unknown_enum_value
+      - missing_required
+      - arity_violation
+      - enum_violation
+      - type_mismatch
+      - dangling_relation
+      - relation_type_mismatch
+      - cardinality_violation
+      - duplicate_id
+      - cross_currency
+      - money_scale_mismatch
+      - candidate_cap_exceeded
+      - hop_limit_exceeded
+      - page_size_clamped
+      - scope_truncated
+      - aggregate_refused
+      - index_unavailable
+    description: >
+      Machine-readable cause, so a caller can branch without parsing prose.
+      "missing_schema_version" — a schema file lacking schema_version; no
+      records of that type are validated against it (FR-002).
+      "duplicate_type_declaration" — two schema files declare the same record
+      type; both paths are named in `paths` (FR-003).
+      "unknown_property" / "unknown_enum_value" — a query named something the
+      schema does not declare. The query is REJECTED with the valid names
+      listed; it never returns an empty result set (FR-024).
+      "missing_required" — a required property is absent from a record.
+      "arity_violation" — a list where a scalar was declared, or the reverse
+      (FR-006).
+      "enum_violation" — a value outside the declared, closed set (FR-011).
+      "type_mismatch" — the stored value cannot be read as its declared type.
+      "dangling_relation" — the relation target does not exist (FR-033).
+      "relation_type_mismatch" — the target exists but is not of the declared
+      target type (FR-034).
+      "cardinality_violation" — more values than the declared cardinality
+      permits (FR-035).
+      "duplicate_id" — two records share an identifier; both paths are named
+      (FR-039).
+      "cross_currency" — a money total spanning several currencies was
+      REFUSED, not summed (FR-014).
+      "money_scale_mismatch" — the amount's fractional digit count disagrees
+      with the declared scale (FR-012).
+      "candidate_cap_exceeded" — the candidate set exceeded the 10,000-record
+      materialisation bound; the query is refused with a narrowing instruction
+      and NO partial answer is returned (FR-064).
+      "hop_limit_exceeded" — more than two relation hops were requested
+      (FR-065).
+      "page_size_clamped" — the requested page size exceeded the cap and was
+      reduced; the clamp is REPORTED, never silent (FR-063).
+      "scope_truncated" — workspace scope resolution was itself incomplete
+      (ADR-067 Scope.Truncated), so a whole mounted folder may be missing. The
+      answer MUST NOT claim success (FR-062a).
+      "aggregate_refused" — no aggregate is returned over a refused candidate
+      set; it is never partial (FR-066).
+      "index_unavailable" — the index predates record support and cannot hold
+      the properties queried. A silent no-op returning complete:true over zero
+      properties is impossible (FR-020a).
+    example: "type_mismatch"
+  reason:
+    type: string
+    minLength: 1
+    description: >
+      Human-readable statement of what went wrong, ready to render. Never
+      empty — a problem with no reason is indistinguishable from silence,
+      which is the failure this type exists to end.
+    example: "company is text, not a relation — cannot be resolved"
+  records:
+    type: array
+    description: >
+      Record identifiers this problem applies to. Always present — an empty
+      array, never null — so a caller may render it without a nil check. Empty
+      when the problem is a property of the QUERY rather than of particular
+      records (a clamp, a refusal, a truncated scope).
+    items:
+      type: string
+      minLength: 1
+    example: ["CO-0052"]
+  property:
+    type: string
+    minLength: 1
+    description: >
+      The property at fault, when the problem is attributable to one.
+    example: "company"
+  expected:
+    type: string
+    description: >
+      The shape that WAS expected, stated plainly. A rejection that does not
+      say what correct looks like leaves the caller guessing (FR-042).
+    example: "expected a link to a company record"
+  fix:
+    type: string
+    description: >
+      The remedy. For a refusal this is the narrowing instruction naming the
+      filter that would help (FR-064) — a bound is never reported without one.
+    example: "add a status filter, or narrow the date range"
+  permitted:
+    type: array
+    description: >
+      The permitted values or valid names, listed so the caller can correct
+      itself. Populated for unknown_property, unknown_enum_value and
+      enum_violation (FR-011, FR-024). Scope is resolved BEFORE this list is
+      built, so it can never reveal schemas outside the caller's workspace
+      (FR-024, FR-062).
+    items:
+      type: string
+    example: ["prospect", "active", "dormant", "churned"]
+  paths:
+    type: array
+    description: >
+      Vault-relative paths implicated. Carries BOTH paths for a duplicate type
+      declaration (FR-003) or a duplicate identifier (FR-039), where naming
+      only one leaves the conflict unfixable.
+    items:
+      type: string
+      minLength: 1
+    example:
+      - ".omnipus-vault/records/company.yaml"
+      - ".omnipus-vault/records/companies.yaml"

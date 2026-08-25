@@ -1,0 +1,109 @@
+title: ViewDef
+description: >
+  A saved query, stored as data (ADR-068 D10). A view names a record type,
+  filters, grouping, sort and the properties to show; it lives in
+  `<vault>/.omnipus-vault/views/<name>.yaml`, so an agent can author one and a
+  human can diff it.
+
+  A view naming a property or enum value that does not exist is REJECTED at
+  write time (D15), not stored and discovered broken later.
+
+  `untranslated` exists for record_view_import (FR-100 to FR-102). An
+  imported `.base` file may contain an expression this system cannot
+  translate; that expression is preserved VERBATIM here and reported, never
+  approximated and never silently dropped (FR-101). An approximation that
+  looks like a translation is worse than an honest gap, because nobody
+  reviews a filter that appears to have imported cleanly. Import is one-shot:
+  `.base` files are never read on the query path (FR-102).
+type: object
+additionalProperties: false
+required:
+  - schema_version
+  - name
+  - type
+properties:
+  schema_version:
+    type: integer
+    minimum: 1
+    description: >
+      Declared version of the view format, mandatory for the same reason a
+      record schema's is (D2): a format that breaks unannounced is worse when
+      the files are machine-generated.
+    example: 1
+  name:
+    type: string
+    minLength: 1
+    description: View identifier, unique within the vault.
+    example: "open-by-owner"
+  type:
+    type: string
+    minLength: 1
+    description: The record type this view queries.
+    example: "deal"
+  label:
+    type: string
+    description: Human-readable title. Absent means render `name`.
+    example: "Open deals by owner"
+  filters:
+    type: array
+    description: Filter clauses, combined with AND.
+    items:
+      $ref: "./RecordFilter.yaml"
+      x-go-type: RecordFilter
+  group_by:
+    type: array
+    maxItems: 2
+    description: >
+      Grouping properties, outermost first. Two levels (FR-027); a relation is
+      a valid grouping property (FR-029).
+    items:
+      type: string
+      minLength: 1
+    example: ["owner"]
+  sort:
+    type: array
+    description: Sort keys, applied in order.
+    items:
+      $ref: "./RecordSort.yaml"
+      x-go-type: RecordSort
+  properties:
+    type: array
+    description: >
+      Properties to display, in this order. Omitted shows every declared
+      property.
+    items:
+      type: string
+      minLength: 1
+    example: ["name", "status", "value"]
+  aggregates:
+    type: array
+    description: Aggregates to compute for this view, and per group when grouped.
+    items:
+      $ref: "./RecordAggregate.yaml"
+      x-go-type: RecordAggregate
+  limit:
+    type: integer
+    minimum: 1
+    description: >
+      Page size for this view. Clamped at the server cap of 200, with the
+      clamp reported on the response (FR-063).
+    example: 50
+  source:
+    type: string
+    description: >
+      Vault-relative path of the file this view was IMPORTED from, when it was
+      imported rather than authored. Recorded so the provenance of a partially
+      translated view is visible; the source is never re-read afterwards
+      (FR-102).
+    example: "CRM/Deals.base"
+  untranslated:
+    type: array
+    description: >
+      Expressions from the imported source that could NOT be translated,
+      preserved verbatim (FR-101). Present only on an imported view, and
+      non-empty only when something was genuinely left behind. Never an
+      approximation of the original.
+    items:
+      type: string
+      minLength: 1
+    example: ["status != \"done\" && (due < now() || priority > 3)"]
