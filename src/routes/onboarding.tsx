@@ -40,7 +40,12 @@ import type {
 import { BrandIcon } from '@/components/ui/brand-icon'
 import { BrandDisclaimer } from '@/components/ui/brand-disclaimer'
 import { PLAN_LABELS, REGION_LABELS } from '@/lib/providerLabels'
-import { catalogEndpointHint, catalogLogoSlug, catalogSubtitle } from '@/lib/catalogDisplay'
+import {
+  catalogEndpointHint,
+  catalogEntryById,
+  catalogLogoSlug,
+  catalogSubtitle,
+} from '@/lib/catalogDisplay'
 
 // First-launch onboarding flow — full-screen, outside AppShell.
 //
@@ -87,15 +92,9 @@ export const ONBOARDING_MODEL_LABEL = 'Model for your first agent'
 // onboarding still needs from the catalog is a single lookup: the row behind
 // the id the picker handed back, so the confirmed-selection summary can show
 // the same catalog-derived subtitle and endpoint hint Settings shows (US-7
-// parity, asserted in onboarding-settings-parity.test.tsx).
-
-/** The catalog row for a provider id, or undefined for a custom endpoint row. */
-export function catalogEntryById(
-  catalog: CatalogProvider[],
-  id: string,
-): CatalogProvider | undefined {
-  return catalog.find((entry) => entry.id === id)
-}
+// parity, asserted in onboarding-settings-parity.test.tsx). That lookup is
+// `catalogEntryById` in `@/lib/catalogDisplay` — one exact-match helper shared
+// with Settings (ADR-067 FR-011), never a second copy here.
 
 /**
  * The CLI binary name a sign-in row drives (`codex`, `copilot`), used for the

@@ -63,3 +63,40 @@ export function catalogVariantTitle(entry: CatalogProvider): string {
   const region = regionLabel(entry.region)
   return region ? `${plan} · ${region}` : plan
 }
+
+// ---------------------------------------------------------------------------
+// Identity — exact, greenfield (ADR-067 FR-011 / FR-030, US-11.AC2)
+// ---------------------------------------------------------------------------
+//
+// A stored provider id is a catalog id or an operator-named custom row. There
+// is no alias table, no rename ladder and no "known self-hosted" side list:
+// `src/lib/providerMigration.ts` carried all three and is deleted (T067-13).
+// `CatalogProvider.aliases[]` is SEARCH-ONLY (FR-030) — it must never
+// participate in resolution, or the SPA would show a configured row under a
+// canonical identity the gateway does not agree with.
+
+/** Display group for a configured row whose id the catalog does not carry. */
+export const UNGROUPED_PROVIDER_GROUP = 'Other'
+
+/**
+ * The catalog row for a stored provider id — EXACT id match only.
+ *
+ * Undefined for an operator-named custom row, for an id the served document
+ * does not carry, for the empty string, and while the catalog GET is still in
+ * flight (an empty array). Never throws.
+ */
+export function catalogEntryById(
+  catalog: readonly CatalogProvider[],
+  id: string,
+): CatalogProvider | undefined {
+  if (!id) return undefined
+  return catalog.find((entry) => entry.id === id)
+}
+
+/**
+ * Display group name for a configured provider row: the catalog company when
+ * the id resolved, else "Other".
+ */
+export function catalogGroupName(entry: CatalogProvider | undefined): string {
+  return entry?.company ?? UNGROUPED_PROVIDER_GROUP
+}

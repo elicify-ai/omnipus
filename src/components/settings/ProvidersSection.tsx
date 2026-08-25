@@ -20,7 +20,8 @@
 //          opens an on-demand picker Sheet (search + catalog grouped by company,
 //          excluding already-configured entries)
 //   FIX-4  real terminology — "Pay-as-you-go API" / "Coding Plan", no "Standard API"
-//   FIX-6  migration: alias → canonical, self-hosted→group, unknown→generic
+//   FR-011 exact catalog identity — company group when the id is a catalog id,
+//          "Other" otherwise (ADR-067; the alias/self-hosted resolver is deleted)
 //   FR-009 Sheet slide-out for config AND connect (no inline expand)
 //   FR-013 <BrandIcon> + lettermark fallback
 //   FR-014 <BrandDisclaimer> wherever marks appear
@@ -61,13 +62,19 @@ import {
 import { useUiStore } from '@/store/ui'
 import { PROVIDER_HINTS } from '@/lib/constants'
 import { planLabel, regionLabel } from '@/lib/providerLabels'
-import { catalogEndpointHint, catalogLabel, catalogLogoSlug, catalogVariantTitle } from '@/lib/catalogDisplay'
+import {
+  catalogEndpointHint,
+  catalogEntryById,
+  catalogGroupName,
+  catalogLabel,
+  catalogLogoSlug,
+  catalogVariantTitle,
+} from '@/lib/catalogDisplay'
 import { providerCatalogMode } from '@/lib/agents/providerCatalog'
 import { providersCatalogQueryOptions } from '@/lib/providersCatalogQuery'
 import { DRAFT_DISCARD_PROMPT, draftCloseDecision, type DraftCloseAction } from '@/hooks/use-draft-guard'
 import { ReAuthDialog } from './ReAuthDialog'
 import { ProviderValidationBanner } from '@/components/providers/ProviderValidationBanner'
-import { resolveCatalogEntry } from '@/lib/providerMigration'
 import { ProviderRow, cliKindOf } from './ProviderRow'
 import { SignInDialog } from '@/components/providers/SignInDialog'
 import { ManageSignInDialog } from '@/components/providers/ManageSignInDialog'
@@ -88,7 +95,7 @@ import type {
 // consent token is minted. `id` is the id submitted to the PUT (resolveSubmitId).
 // `draftKey` is the canonical per-provider draft-state key (sheetDraftKey) —
 // carried through so the mutation's success/close handlers clear the SAME key
-// the Sheet read from, even when `id` diverges from it (alias storage). `key` carries an
+// the Sheet read from. `key` carries an
 // API-key change (empty string = no key change); `models` carries a manual
 // model-slug catalogue replacement (undefined = leave the catalogue unchanged).
 type PendingProviderChange = {
@@ -113,21 +120,20 @@ function displayName(provider: Provider | null | undefined, fallbackId: string):
 }
 
 // Resolve the id used for the outgoing PUT. Configure mode always submits
-// the STORED provider id verbatim — canonicalizing an alias to the catalog's
-// primary id here would silently fork the persisted config into two entries
-// (the backend PUT matches by exact id and APPENDS on mismatch). Connect mode
-// submits the catalog entry's canonical id.
+// the STORED provider id verbatim — the backend PUT matches by exact id and
+// APPENDS on mismatch, so substituting any other id here would silently fork
+// the persisted config into two entries. Connect mode submits the catalog
+// entry's id.
 function resolveSubmitId(target: SheetTarget): string {
   return target.mode === 'configure' ? target.provider.id : target.entry.id
 }
 
-// The canonical per-provider draft-state key (apiKeys/showKey/draftModels/
-// newModel/saveValidation) — the catalog entry id when one resolved, else the
-// raw provider/target id. Stable across which literal id (canonical or alias)
-// a configured provider happens to be stored under, so a typed-but-unsaved
-// key or validation banner never gets stranded under a stale key (BUG:
-// previously keyed by the raw id, which could diverge from the id the
-// mutation's onSuccess cleanup used).
+// The per-provider draft-state key (apiKeys/showKey/draftModels/newModel/
+// saveValidation) — the catalog entry id when one resolved, else the raw
+// provider/target id. Under ADR-067's exact identity (FR-011) a resolved entry
+// id IS the stored id, so this key and resolveSubmitId always agree and a
+// typed-but-unsaved key or validation banner can never be stranded under a
+// stale key by the mutation's onSuccess cleanup.
 function sheetDraftKey(target: SheetTarget): string {
   if (target.mode === 'configure') return target.entry?.id ?? target.provider.id
   return target.entry.id
@@ -144,14 +150,16 @@ interface ProviderGroup {
   items: ProviderGroupItem[]
 }
 
-// Group configured providers by company using the migration resolver over
-// the fetched catalog.
+// Group configured providers by company over the fetched catalog. Identity is
+// EXACT (ADR-067 FR-011): a row whose id the catalog does not carry — a custom
+// endpoint, or an id the registry no longer knows — groups under "Other".
 function groupProviders(catalog: CatalogProvider[], providers: Provider[]): ProviderGroup[] {
   const order: string[] = []
   const map = new Map<string, ProviderGroup>()
 
   for (const provider of providers) {
-    const { entry, group } = resolveCatalogEntry(catalog, provider.id)
+    const entry = catalogEntryById(catalog, provider.id)
+    const group = catalogGroupName(entry)
     if (!map.has(group)) {
       order.push(group)
       map.set(group, {
@@ -243,8 +251,7 @@ function ProviderConfigSheet({
   // For the provider object in configure mode.
   const provider = target.mode === 'configure' ? target.provider : null
 
-  // Canonical draft-state key — see sheetDraftKey's doc comment. Stable
-  // across alias storage.
+  // Draft-state key — see sheetDraftKey's doc comment.
   const draftKey = sheetDraftKey(target)
 
   const catalogMode = provider ? providerCatalogMode(provider) : 'live'
@@ -710,11 +717,10 @@ export function ProvidersSection() {
       models?: string[]
       custom?: Pick<ProviderUpdateRequest, 'api_base' | 'protocol'>
     }) => configureProvider(id, key === '' ? undefined : key, undefined, undefined, token, models, custom),
-    // Destructure `draftKey` (NOT `id`) — the canonical draft-state key set by
+    // Destructure `draftKey` (NOT `id`) — the draft-state key set by
     // requestChange, so the typed key / validation banner is cleared under the
     // SAME key the Sheet is reading from, regardless of which literal id the
-    // PUT actually submitted (BUG #2: previously cleared by mutation `id`,
-    // which can diverge from the draft key on alias storage).
+    // PUT actually submitted (BUG #2: previously cleared by mutation `id`).
     onSuccess: (provider, { draftKey }) => {
       queryClient.invalidateQueries({ queryKey: ['providers'] })
       const validation = provider.validation
@@ -796,7 +802,7 @@ export function ProvidersSection() {
   }
 
   const openConfigureSheet = (provider: Provider) => {
-    const { entry } = resolveCatalogEntry(catalog, provider.id)
+    const entry = catalogEntryById(catalog, provider.id)
     setSheetTarget({ mode: 'configure', provider, entry })
     setSheetOpen(true)
   }
@@ -1170,7 +1176,7 @@ export function ProvidersSection() {
         onOpenChange={(o) => {
           setSheetOpen(o)
           if (!o) {
-            // Clean up on close — same canonical draft key the Sheet reads
+            // Clean up on close — same draft key the Sheet reads
             // from (sheetDraftKey), so the banner never survives under a
             // stale key (BUG #2, see PendingProviderChange's doc comment).
             if (sheetTarget) {

@@ -3611,63 +3611,6 @@ func (e ProviderValidationOutcome) Valid() bool {
 	}
 }
 
-// Defines values for ProviderCatalogEntryPlan.
-const (
-	CodingPlan  ProviderCatalogEntryPlan = "coding-plan"
-	StandardApi ProviderCatalogEntryPlan = "standard-api"
-)
-
-// Valid indicates whether the value is a known member of the ProviderCatalogEntryPlan enum.
-func (e ProviderCatalogEntryPlan) Valid() bool {
-	switch e {
-	case CodingPlan:
-		return true
-	case StandardApi:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for ProviderCatalogEntryRegion.
-const (
-	China ProviderCatalogEntryRegion = "china"
-	Intl  ProviderCatalogEntryRegion = "intl"
-	Us    ProviderCatalogEntryRegion = "us"
-)
-
-// Valid indicates whether the value is a known member of the ProviderCatalogEntryRegion enum.
-func (e ProviderCatalogEntryRegion) Valid() bool {
-	switch e {
-	case China:
-		return true
-	case Intl:
-		return true
-	case Us:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for ProviderCatalogEntryWire.
-const (
-	ProviderCatalogEntryWireAnthropic        ProviderCatalogEntryWire = "anthropic"
-	ProviderCatalogEntryWireOpenaiCompatible ProviderCatalogEntryWire = "openai-compatible"
-)
-
-// Valid indicates whether the value is a known member of the ProviderCatalogEntryWire enum.
-func (e ProviderCatalogEntryWire) Valid() bool {
-	switch e {
-	case ProviderCatalogEntryWireAnthropic:
-		return true
-	case ProviderCatalogEntryWireOpenaiCompatible:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for ProviderDeleteResponseDependentsRole.
 const (
 	ProviderDeleteResponseDependentsRoleFallback    ProviderDeleteResponseDependentsRole = "fallback"
@@ -6514,19 +6457,19 @@ func (e WorkspaceUpdateRequestStatus) Valid() bool {
 
 // Defines values for ListCommandsParamsSurface.
 const (
-	ListCommandsParamsSurfaceChannel ListCommandsParamsSurface = "channel"
-	ListCommandsParamsSurfaceCli     ListCommandsParamsSurface = "cli"
-	ListCommandsParamsSurfaceWeb     ListCommandsParamsSurface = "web"
+	Channel ListCommandsParamsSurface = "channel"
+	Cli     ListCommandsParamsSurface = "cli"
+	Web     ListCommandsParamsSurface = "web"
 )
 
 // Valid indicates whether the value is a known member of the ListCommandsParamsSurface enum.
 func (e ListCommandsParamsSurface) Valid() bool {
 	switch e {
-	case ListCommandsParamsSurfaceChannel:
+	case Channel:
 		return true
-	case ListCommandsParamsSurfaceCli:
+	case Cli:
 		return true
-	case ListCommandsParamsSurfaceWeb:
+	case Web:
 		return true
 	default:
 		return false
@@ -11639,51 +11582,6 @@ type ProviderStatus string
 
 // ProviderValidationOutcome Classified result of the key probe. "valid" — the key was accepted by the upstream provider. "invalid_key" — the upstream confirmed the key is wrong or revoked; this is the only outcome that blocks a save. "no_credit" — the key is valid but the account has insufficient credit or quota. "unreachable" — the upstream could not be reached (transport error, timeout, 5xx, 404, pre-auth 429); transient. "restricted" — the key works but the request was blocked by a region or permission policy on the provider side.
 type ProviderValidationOutcome string
-
-// ProviderCatalogEntry A single entry in the provider catalog — the curated, build-time-embedded registry of 23 user-facing LLM provider variants. Each entry represents one billable endpoint (company × plan × region), not a raw protocol id. SUPERSEDED by the registry-fed catalog served at GET /providers/catalog (ProvidersCatalog.yaml, ADR-067). The hand-typed pkg/providers/catalog Entries (ADR-067 T067-02) and the SPA's bundled TS catalog emission plus its importers (ADR-068 T068-05) are already gone; this schema is retained only until ADR-067 T067-13 deletes it. The type is contract-defined (Constraint #8) so the same generated struct is used in the Go catalog SoT and the generated TS consumer. No secret fields.
-type ProviderCatalogEntry struct {
-	// Aliases Additional protocol ids that map to this catalog entry. Derived from the GetDefaultAPIBase switch: ids grouped in the same case share a base URL and are aliases. The aliases list excludes the canonical id itself. Used by the migration resolver to normalize stored alias ids to the canonical catalog entry (ADR-031 §7 G-4, FR-012, US-8).
-	Aliases *[]string `json:"aliases,omitempty"`
-
-	// AnthropicId Sibling protocol id exposing the Anthropic-compatible endpoint for the same account/API key (e.g. z-ai → z-ai-anthropic). Present only for dual-wire providers; the UI offers it as an endpoint-format choice inside config, never as a separate provider row.
-	AnthropicId *string `json:"anthropic_id,omitempty"`
-
-	// Company Human-readable company/brand name. Used as the group header in the configured-providers list. Multiple catalog entries share the same company when one vendor exposes multiple endpoints (plan × region).
-	Company string `json:"company"`
-
-	// EndpointHint Curated display host for this endpoint (e.g. "api.z.ai/api/coding/paas/v4"). Hand-authored, NOT derived from GetDefaultAPIBase (which returns full URLs the display doesn't need). For deployment-configured providers, this is a placeholder template (e.g. "<resource>.openai.azure.com"). Shown in the subtitle and the variant config Sheet (ADR-031 R2-01/R2-03).
-	EndpointHint string `json:"endpointHint"`
-
-	// Id Canonical protocol identifier — matches a knownProtocols entry and a member of the ProbeProviderRequest id enum. Used as the primary key for probe, configure, and drift-guard lookups.
-	Id string `json:"id"`
-
-	// Label Full human-readable label for this variant. Standard-api entries use "<Brand> [(Region)]" (no access-type suffix); coding-plan entries use "<Brand> — Coding Plan [(Region)]". Carried on the wire so onboarding and Settings render identical text from one catalog source (ADR-031 FR-007, G-3=C safety guarantee). Example: "Zhipu / GLM — Coding Plan (International)".
-	Label string `json:"label"`
-
-	// LogoSlug Asset key for the <BrandIcon> component. Maps to a vendored SVG in src/assets/brand-logos/p_<logoSlug>.svg. When no SVG exists for the slug, BrandIcon falls back to a lettermark chip (FR-011, FR-013). Companies with no vendored SVG use a short id (e.g. "cerebras", "nvidia") which triggers the lettermark path.
-	LogoSlug string `json:"logoSlug"`
-
-	// Plan Billing plan for this variant. "standard-api" = pay-as-you-go per-token API (formerly "api" in the onboarding PLAN_LABELS). "coding-plan" = subscription-based coding plan (unchanged label). The legacy "anthropic" plan value is NOT in this enum — it was a mislabeled wire protocol; the wire field carries that information instead (ADR-031 FR-006).
-	Plan ProviderCatalogEntryPlan `json:"plan"`
-
-	// Region Deployment region, when the provider has a regional split. Omitted for providers with a single global endpoint (e.g. OpenAI, DeepSeek).
-	Region *ProviderCatalogEntryRegion `json:"region,omitempty"`
-
-	// Subtitle Short billing-model description and endpoint hint. Shown below the label in the picker and Sheet. Format: "<billing model> · <endpointHint>". Example: "Subscription (Coding Plan) · api.z.ai/api/coding/paas/v4".
-	Subtitle string `json:"subtitle"`
-
-	// Wire Wire protocol used to call this endpoint. Derived, not authored: "anthropic" when id matches /-anthropic$/ or id ∈ {anthropic, anthropic-messages, bedrock}; otherwise "openai-compatible" (ADR-031 FR-005). Internal config detail — surfaced only via the Endpoint-format toggle for dual-wire entries in Settings; never a UI badge or plan option.
-	Wire ProviderCatalogEntryWire `json:"wire"`
-}
-
-// ProviderCatalogEntryPlan Billing plan for this variant. "standard-api" = pay-as-you-go per-token API (formerly "api" in the onboarding PLAN_LABELS). "coding-plan" = subscription-based coding plan (unchanged label). The legacy "anthropic" plan value is NOT in this enum — it was a mislabeled wire protocol; the wire field carries that information instead (ADR-031 FR-006).
-type ProviderCatalogEntryPlan string
-
-// ProviderCatalogEntryRegion Deployment region, when the provider has a regional split. Omitted for providers with a single global endpoint (e.g. OpenAI, DeepSeek).
-type ProviderCatalogEntryRegion string
-
-// ProviderCatalogEntryWire Wire protocol used to call this endpoint. Derived, not authored: "anthropic" when id matches /-anthropic$/ or id ∈ {anthropic, anthropic-messages, bedrock}; otherwise "openai-compatible" (ADR-031 FR-005). Internal config detail — surfaced only via the Endpoint-format toggle for dual-wire entries in Settings; never a UI badge or plan option.
-type ProviderCatalogEntryWire string
 
 // ProviderDeleteRequest Optional body for DELETE /api/v1/providers/{id} (ADR-068 FR-010/FR-011). new_default is required (409 otherwise) when the provider backs the default model; it must name a different provider that is connected or signed_in (400 otherwise). The server recomputes dependents and backs_default under the config lock — the response is authoritative.
 type ProviderDeleteRequest struct {

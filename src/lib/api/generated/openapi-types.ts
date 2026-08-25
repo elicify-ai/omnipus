@@ -6829,70 +6829,6 @@ export interface components {
              */
             summary?: string;
         };
-        /** @description A single entry in the provider catalog — the curated, build-time-embedded registry of 23 user-facing LLM provider variants. Each entry represents one billable endpoint (company × plan × region), not a raw protocol id. SUPERSEDED by the registry-fed catalog served at GET /providers/catalog (ProvidersCatalog.yaml, ADR-067). The hand-typed pkg/providers/catalog Entries (ADR-067 T067-02) and the SPA's bundled TS catalog emission plus its importers (ADR-068 T068-05) are already gone; this schema is retained only until ADR-067 T067-13 deletes it. The type is contract-defined (Constraint #8) so the same generated struct is used in the Go catalog SoT and the generated TS consumer. No secret fields. */
-        ProviderCatalogEntry: {
-            /**
-             * @description Canonical protocol identifier — matches a knownProtocols entry and a member of the ProbeProviderRequest id enum. Used as the primary key for probe, configure, and drift-guard lookups.
-             * @example z-ai-coding
-             */
-            id: string;
-            /**
-             * @description Human-readable company/brand name. Used as the group header in the configured-providers list. Multiple catalog entries share the same company when one vendor exposes multiple endpoints (plan × region).
-             * @example Zhipu / GLM
-             */
-            company: string;
-            /**
-             * @description Billing plan for this variant. "standard-api" = pay-as-you-go per-token API (formerly "api" in the onboarding PLAN_LABELS). "coding-plan" = subscription-based coding plan (unchanged label). The legacy "anthropic" plan value is NOT in this enum — it was a mislabeled wire protocol; the wire field carries that information instead (ADR-031 FR-006).
-             * @example standard-api
-             * @enum {string}
-             */
-            plan: "standard-api" | "coding-plan";
-            /**
-             * @description Deployment region, when the provider has a regional split. Omitted for providers with a single global endpoint (e.g. OpenAI, DeepSeek).
-             * @example intl
-             * @enum {string}
-             */
-            region?: "intl" | "china" | "us";
-            /**
-             * @description Wire protocol used to call this endpoint. Derived, not authored: "anthropic" when id matches /-anthropic$/ or id ∈ {anthropic, anthropic-messages, bedrock}; otherwise "openai-compatible" (ADR-031 FR-005). Internal config detail — surfaced only via the Endpoint-format toggle for dual-wire entries in Settings; never a UI badge or plan option.
-             * @example openai-compatible
-             * @enum {string}
-             */
-            wire: "openai-compatible" | "anthropic";
-            /**
-             * @description Curated display host for this endpoint (e.g. "api.z.ai/api/coding/paas/v4"). Hand-authored, NOT derived from GetDefaultAPIBase (which returns full URLs the display doesn't need). For deployment-configured providers, this is a placeholder template (e.g. "<resource>.openai.azure.com"). Shown in the subtitle and the variant config Sheet (ADR-031 R2-01/R2-03).
-             * @example api.z.ai/api/coding/paas/v4
-             */
-            endpointHint: string;
-            /**
-             * @description Asset key for the <BrandIcon> component. Maps to a vendored SVG in src/assets/brand-logos/p_<logoSlug>.svg. When no SVG exists for the slug, BrandIcon falls back to a lettermark chip (FR-011, FR-013). Companies with no vendored SVG use a short id (e.g. "cerebras", "nvidia") which triggers the lettermark path.
-             * @example zhipu
-             */
-            logoSlug: string;
-            /**
-             * @description Full human-readable label for this variant. Standard-api entries use "<Brand> [(Region)]" (no access-type suffix); coding-plan entries use "<Brand> — Coding Plan [(Region)]". Carried on the wire so onboarding and Settings render identical text from one catalog source (ADR-031 FR-007, G-3=C safety guarantee). Example: "Zhipu / GLM — Coding Plan (International)".
-             * @example Zhipu / GLM — Coding Plan (International)
-             */
-            label: string;
-            /**
-             * @description Short billing-model description and endpoint hint. Shown below the label in the picker and Sheet. Format: "<billing model> · <endpointHint>". Example: "Subscription (Coding Plan) · api.z.ai/api/coding/paas/v4".
-             * @example Subscription (Coding Plan) · api.z.ai/api/coding/paas/v4
-             */
-            subtitle: string;
-            /**
-             * @description Additional protocol ids that map to this catalog entry. Derived from the GetDefaultAPIBase switch: ids grouped in the same case share a base URL and are aliases. The aliases list excludes the canonical id itself. Used by the migration resolver to normalize stored alias ids to the canonical catalog entry (ADR-031 §7 G-4, FR-012, US-8).
-             * @example [
-             *       "glm-coding",
-             *       "zhipu-coding"
-             *     ]
-             */
-            aliases?: string[];
-            /**
-             * @description Sibling protocol id exposing the Anthropic-compatible endpoint for the same account/API key (e.g. z-ai → z-ai-anthropic). Present only for dual-wire providers; the UI offers it as an endpoint-format choice inside config, never as a separate provider row.
-             * @example z-ai-anthropic
-             */
-            anthropic_id?: string;
-        };
         /** @description Metadata for a single successfully uploaded file, as returned in the POST /upload response body's "files" array. Callers use the path field to construct the /api/v1/uploads/{session_id}/{filename} download URL. */
         UploadedFile: {
             /**
@@ -18555,7 +18491,6 @@ export type TranscribeResponse = components["schemas"]["TranscribeResponse"];
 export type Skill = components["schemas"]["Skill"];
 export type SlashCommand = components["schemas"]["SlashCommand"];
 export type ActivityEvent = components["schemas"]["ActivityEvent"];
-export type ProviderCatalogEntry = components["schemas"]["ProviderCatalogEntry"];
 export type UploadedFile = components["schemas"]["UploadedFile"];
 export type SandboxConfigUpdate = components["schemas"]["SandboxConfigUpdate"];
 export type Task = components["schemas"]["Task"];

@@ -9,7 +9,7 @@
  *   - FIX-3: configured-only list, empty state, always-visible "Connect a provider",
  *            picker Sheet (search + catalog grouped by company, excludes configured)
  *   - FIX-4: real terminology ("Pay-as-you-go API" / "Coding Plan", no "Standard API")
- *   - Migration dataset (resolveCatalogEntry over the fetched catalog)
+ *   - Exact catalog identity (catalogEntryById over the fetched catalog)
  *   - Settings-side catalog label consistency (US-7)
  *   - ADR-068 T068-25 (TDD row 27): the *Default model* card, *Set as default
  *     model…* from a row, the *Remove provider* flow and its no-Undo guarantee,
@@ -151,7 +151,7 @@ vi.mock('@/components/providers/ReSignInDialog', () => ({
 
 import * as api from '@/lib/api'
 import { ProvidersSection } from './ProvidersSection'
-import { resolveCatalogEntry, SELF_HOSTED_CUSTOM_GROUP, GENERIC_GROUP } from '@/lib/providerMigration'
+import { catalogEntryById, catalogGroupName, UNGROUPED_PROVIDER_GROUP } from '@/lib/catalogDisplay'
 import { PROVIDERS_CATALOG, CATALOG_PROVIDERS } from '@/test/fixtures/providersCatalog'
 import { catalogLabel, catalogSubtitle } from '@/lib/catalogDisplay'
 
@@ -186,6 +186,13 @@ const ANTHROPIC_PROVIDER = {
   id: 'anthropic',
   name: 'anthropic',
   display_name: 'Anthropic',
+  // The gateway sets this on EVERY row it serves (pkg/gateway/rest.go), and
+  // anthropic is a catalog provider whose `models` the gateway fills, so the
+  // fixture states it. It used to be omitted and the SPA guessed 'live' from a
+  // hand-written id list; T067-13 deleted that guess (FR-011/FR-025), and an
+  // omitted field now means 'manual' — an editable slug list, which is not what
+  // this row is.
+  has_models_endpoint: true,
   models: [],
 }
 
@@ -340,6 +347,37 @@ describe('ProvidersSection — FIX-3 configured-only list', () => {
     // Not hidden from the catalog band either — a second variant may be wanted.
     expect(screen.getByTestId('picker-popular-anthropic')).toBeInTheDocument()
     expect(screen.getByTestId('picker-popular-openai')).toBeInTheDocument()
+  })
+
+  // REPLACES 'the picker excludes the canonical entry for an alias-stored
+  // provider (z-ai → zai)', which asserted the opposite outcome from the same
+  // setup because the deleted alias resolver mapped 'z-ai' onto 'zai'. Under
+  // ADR-067 FR-030 `aliases[]` is search-only and identity is exact, so a row
+  // stored under a non-catalog id is NOT the catalog row: it must surface as
+  // ITS OWN Recent entry (never canonicalised to 'zai'), and the real 'zai'
+  // catalog row must stay fully offered — an alias-stored row can never hide
+  // it or masquerade as it. Adapted from exclusion-based assertions
+  // (picker-entry-*, deleted with the local Sheet) onto the shared picker's
+  // Recent/Popular surface; the underlying FR-030 invariant this pins is
+  // additionally covered at the unit level below
+  // ('catalogEntryById — exact provider identity').
+  it('a row stored under an alias id never resolves to — or collides with — the real catalog entry (FR-030)', async () => {
+    expect(CATALOG_PROVIDERS.find((e) => e.id === 'zai')?.aliases).toContain('z-ai')
+    vi.mocked(api.fetchProviders).mockResolvedValue([
+      { ...CONFIGURED_BASE, id: 'z-ai', name: 'z-ai', display_name: 'z-ai', updated_at: '2026-08-20T10:00:00Z', has_models_endpoint: false, models: [] },
+    ] as never)
+    renderSection()
+    await waitFor(() => screen.getByTestId('connect-provider-btn'))
+    fireEvent.click(screen.getByTestId('connect-provider-btn'))
+    await waitFor(() => screen.getByTestId('settings-provider-picker'))
+
+    // The stored row surfaces as Recent under its OWN raw id — never
+    // canonicalised to the entry it aliases.
+    expect(screen.getByTestId('picker-recent-z-ai')).toBeInTheDocument()
+    expect(screen.queryByTestId('picker-recent-zai')).not.toBeInTheDocument()
+    // 'zai' itself is still fully offered, untouched by the alias-stored row —
+    // exact identity means a row filed under a different id can never hide it.
+    expect(screen.getByTestId('picker-popular-zai')).toBeInTheDocument()
   })
 
   it('a Recent row opens that provider\'s own config Sheet, not a connect form', async () => {
@@ -574,76 +612,94 @@ describe('ProvidersSection — #24 settings-side catalog label', () => {
 })
 
 // ---------------------------------------------------------------------------
-// Migration dataset — resolveCatalogEntry over the fetched catalog (spec test #12)
+// Exact catalog identity — catalogEntryById over the fetched catalog
+// (ADR-067 FR-011 / FR-030, US-11.AC2; T067-13)
+//
+// REPLACES the "migration dataset" block that exercised
+// `resolveCatalogEntry` from the now-deleted src/lib/providerMigration.ts.
+// The same dataset is kept — the SAME ids, the SAME catalog, and the same
+// never-throws obligations — but the ORACLE moved: alias ids and the
+// hand-written litellm/vllm "self-hosted" side list no longer resolve to a
+// canonical entry, because ADR-067 makes provider identity exact and makes
+// `aliases[]` search-only (FR-030). A stored id is a catalog id or it is not.
+//
+// That inversion is the point of the greenfield rule, so the alias cases are
+// kept as NEGATIVE controls rather than dropped: if alias resolution ever
+// comes back, these fail.
 // ---------------------------------------------------------------------------
 
-describe('resolveCatalogEntry — migration dataset', () => {
-  const resolve = (id: string) => resolveCatalogEntry(CATALOG_PROVIDERS, id)
+describe('catalogEntryById — exact provider identity (FR-011/FR-030)', () => {
+  const resolve = (id: string) => {
+    const entry = catalogEntryById(CATALOG_PROVIDERS, id)
+    return { entry, group: catalogGroupName(entry) }
+  }
 
-  it('#1 zai → Zhipu AI (canonical)', () => {
+  it('#1 zai → Zhipu AI (canonical catalog id)', () => {
     const result = resolve('zai')
-    expect(result.group).toBe('Zhipu AI')
     expect(result.entry?.id).toBe('zai')
+    expect(result.group).toBe('Zhipu AI')
   })
 
-  it('#2 z-ai → Zhipu AI (alias)', () => {
+  it('#2 z-ai does NOT resolve — an alias is not an identity (FR-030)', () => {
+    // `zai.aliases` carries this string, and the gateway would answer
+    // `unknown provider "z-ai"` for it (US-10.AC2). The SPA must agree.
+    expect(CATALOG_PROVIDERS.find((e) => e.id === 'zai')?.aliases).toContain('z-ai')
     const result = resolve('z-ai')
-    expect(result.group).toBe('Zhipu AI')
-    expect(result.entry?.id).toBe('zai')
+    expect(result.entry).toBeUndefined()
+    expect(result.group).toBe(UNGROUPED_PROVIDER_GROUP)
   })
 
-  it('#3 zhipu → Zhipu AI (alias)', () => {
-    const result = resolve('zhipu')
-    expect(result.group).toBe('Zhipu AI')
-    expect(result.entry?.id).toBe('zai')
+  it('#3 zhipu does NOT resolve (alias)', () => {
+    expect(resolve('zhipu').entry).toBeUndefined()
   })
 
-  it('#4 glm-coding → Zhipu AI (alias for zai-coding-plan)', () => {
+  it('#4 glm-coding does NOT resolve (alias of zai-coding-plan)', () => {
+    expect(CATALOG_PROVIDERS.find((e) => e.id === 'zai-coding-plan')?.aliases).toContain('glm-coding')
     const result = resolve('glm-coding')
-    expect(result.group).toBe('Zhipu AI')
-    expect(result.entry?.id).toBe('zai-coding-plan')
+    expect(result.entry).toBeUndefined()
+    expect(result.group).toBe(UNGROUPED_PROVIDER_GROUP)
   })
 
-  it('#5 ollama → Ollama [first-class catalog provider, NOT Self-hosted/Custom]', () => {
+  it('#5 ollama → Ollama (a first-class catalog provider, exact id)', () => {
     const result = resolve('ollama')
-    expect(result.group).toBe('Ollama')
     expect(result.entry?.id).toBe('ollama')
+    expect(result.group).toBe('Ollama')
   })
 
-  it('#6 vllm → Self-hosted / Custom', () => {
+  it('#6 vllm → Other (no hand-written self-hosted table any more)', () => {
     const result = resolve('vllm')
-    expect(result.group).toBe(SELF_HOSTED_CUSTOM_GROUP)
     expect(result.entry).toBeUndefined()
+    expect(result.group).toBe(UNGROUPED_PROVIDER_GROUP)
   })
 
-  it('#7 litellm → Self-hosted / Custom', () => {
+  it('#7 litellm → Other', () => {
     const result = resolve('litellm')
-    expect(result.group).toBe(SELF_HOSTED_CUSTOM_GROUP)
     expect(result.entry).toBeUndefined()
+    expect(result.group).toBe(UNGROUPED_PROVIDER_GROUP)
   })
 
-  it('#8 empty string → Generic (no crash)', () => {
+  it('#8 empty string → Other (no crash)', () => {
     const result = resolve('')
-    expect(result.group).toBe(GENERIC_GROUP)
     expect(result.entry).toBeUndefined()
+    expect(result.group).toBe(UNGROUPED_PROVIDER_GROUP)
   })
 
-  it('#9 zzz-unknown → Generic (raw id)', () => {
+  it('#9 zzz-unknown → Other (raw id)', () => {
     const result = resolve('zzz-unknown')
-    expect(result.group).toBe(GENERIC_GROUP)
     expect(result.entry).toBeUndefined()
+    expect(result.group).toBe(UNGROUPED_PROVIDER_GROUP)
   })
 
-  it('#10 z-ai-legacy-removed → Other (alias in no catalog entry, no throw)', () => {
+  it('#10 z-ai-legacy-removed → Other (no throw)', () => {
     const result = resolve('z-ai-legacy-removed')
-    expect(result.group).toBe(GENERIC_GROUP)
     expect(result.entry).toBeUndefined()
+    expect(result.group).toBe(UNGROUPED_PROVIDER_GROUP)
   })
 
   it('#11 an empty catalog (GET not yet resolved) never crashes and resolves to Other', () => {
-    const result = resolveCatalogEntry([], 'zai')
-    expect(result.group).toBe(GENERIC_GROUP)
-    expect(result.entry).toBeUndefined()
+    const entry = catalogEntryById([], 'zai')
+    expect(entry).toBeUndefined()
+    expect(catalogGroupName(entry)).toBe(UNGROUPED_PROVIDER_GROUP)
   })
 })
 

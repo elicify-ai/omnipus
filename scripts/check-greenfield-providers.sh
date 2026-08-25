@@ -19,8 +19,9 @@
 #   SC-009  `_migrated|alias|deprecat|retired` does not appear in the CODE of
 #           pkg/providers or pkg/config, outside the catalog package's two
 #           sanctioned tokens.
-#   AC2     the SPA's bundled provider catalog and alias resolver do not exist
-#           (US-11.AC2).
+#   AC2     the SPA's bundled provider catalog (src/lib/generated/
+#           providerCatalog.ts) and its alias resolver (src/lib/
+#           providerMigration.ts) do not exist (US-11.AC2).
 #
 # WHY COMMENTS ARE STRIPPED FIRST
 #
@@ -63,18 +64,20 @@ SYM_STRIP="resolve""StrippedPrefix"
 # MUST_BE_ABSENT: deleted; their return is a regression.
 SPA_MUST_BE_ABSENT=(
   "src/lib/generated/providerCatalog.ts"
+  # T067-13 deleted the alias resolver and rewrote its two consumers onto the
+  # exact-match catalogDisplay.ts::catalogEntryById. Promoted here from
+  # SPA_PENDING in that same commit.
+  "src/lib/providerMigration.ts"
 )
 # SPA_PENDING: NOT yet deleted, and this gate knows it. Each row is a hole,
 # owned by a named task, that CLOSES ITSELF: the script fails if a pending path
 # has already gone, forcing whoever deletes it to move the row into
 # SPA_MUST_BE_ABSENT in the same commit. A hole that cannot outlive its fix.
-#   src/lib/providerMigration.ts — ADR-067 T067-13 (blocked on ADR-068 B5's
-#   importer rewrite; src/components/settings/ProvidersSection.tsx is the sole
-#   remaining consumer). Until then the SPA still alias-resolves stored ids,
-#   which the backend does not (FR-030).
-SPA_PENDING=(
-  "src/lib/providerMigration.ts"
-)
+#
+# EMPTY, and that is the finished state: every SPA artefact US-11.AC2 names is
+# now in SPA_MUST_BE_ABSENT. Add a row here only for a NEW artefact whose
+# deletion is scheduled but not yet landed.
+SPA_PENDING=()
 
 usage() { sed -n '2,60p' "${BASH_SOURCE[0]}"; }
 
@@ -278,7 +281,7 @@ run_scan() { # run_scan <repo_root>  -> 0 clean, 1 offenders, 2 cannot run
       add "         GET /providers/catalog and nothing else."
     fi
   done
-  for f in "${SPA_PENDING[@]}"; do
+  for f in ${SPA_PENDING[@]+"${SPA_PENDING[@]}"}; do
     if [ ! -e "$f" ]; then
       add "[AC2]    $f is gone — good. Now move it from SPA_PENDING into"
       add "         SPA_MUST_BE_ABSENT in $NAME (same commit), so the gate keeps"
@@ -340,8 +343,7 @@ func marshal(c *Provider) any {
 
 type Provider struct{}
 GO
-    # SPA: the pending file must be present for the clean case.
-    printf 'export const x = 1\n' > "$tmp/case/src/lib/providerMigration.ts"
+    # SPA: every artefact US-11.AC2 names is absent in the clean case.
   }
 
   expect() { # expect <label> <want_rc>
@@ -429,8 +431,8 @@ GO
   expect "AC2: bundled SPA catalog back" 1
 
   fixture
-  rm -f "$tmp/case/src/lib/providerMigration.ts"
-  expect "AC2: pending row must be promoted once it is deleted" 1
+  printf 'export const x = 1\n' > "$tmp/case/src/lib/providerMigration.ts"
+  expect "AC2: alias resolver back" 1
 
   fixture
   rm -rf "$tmp/case/pkg/config"

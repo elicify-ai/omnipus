@@ -484,8 +484,6 @@ components:
       $ref: ./components/schemas/SlashCommand.yaml
     ActivityEvent:
       $ref: ./components/schemas/ActivityEvent.yaml
-    ProviderCatalogEntry:
-      $ref: ./components/schemas/ProviderCatalogEntry.yaml
     UploadedFile:
       type: object
       description: >
