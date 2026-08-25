@@ -81,6 +81,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
     putDefaultModel: vi.fn(),
     reAuth: vi.fn(),
     signOutProvider: vi.fn(),
+    fetchSignInStatus: vi.fn(),
     isApiError: actual.isApiError,
   }
 })
@@ -92,6 +93,58 @@ vi.mock('@/components/providers/SignInDialog', () => ({
     open ? (
       <div data-testid="sign-in-dialog-stub">
         {providerLabel} ({providerId})
+      </div>
+    ) : null,
+}))
+
+// ManageSignInDialog and ReSignInDialog (T068-26) are unit-tested in full in
+// their own files — here we only need to assert handleManage() dispatches to
+// the right one with the right target, and that Sign out (surfaced by the
+// stub, same as the real dialog's own button) reaches the shared mutation.
+vi.mock('@/components/providers/ManageSignInDialog', () => ({
+  ManageSignInDialog: ({
+    open,
+    providerLabel,
+    accountLabel,
+    onSignOut,
+    signingOut,
+  }: {
+    open: boolean
+    providerLabel: string
+    accountLabel?: string
+    onSignOut: () => void
+    signingOut?: boolean
+  }) =>
+    open ? (
+      <div data-testid="manage-sign-in-dialog-stub">
+        {providerLabel} {accountLabel ? `(${accountLabel})` : '(no account label)'}
+        <button
+          type="button"
+          onClick={onSignOut}
+          disabled={signingOut}
+          data-testid="manage-sign-out-btn-stub"
+        >
+          Sign out
+        </button>
+      </div>
+    ) : null,
+}))
+
+vi.mock('@/components/providers/ReSignInDialog', () => ({
+  ReSignInDialog: ({
+    open,
+    providerId,
+    providerLabel,
+    cliKind,
+  }: {
+    open: boolean
+    providerId: string
+    providerLabel: string
+    cliKind: string
+  }) =>
+    open ? (
+      <div data-testid="re-sign-in-dialog-stub">
+        {providerLabel} ({providerId}) [{cliKind}]
       </div>
     ) : null,
 }))
@@ -1224,13 +1277,17 @@ describe('ProvidersSection — FR-033 draft-key preservation (US-8)', () => {
 })
 
 // ---------------------------------------------------------------------------
-// ADR-068 §8b sign-in row states (T068-33) — signed_in / expired / Sign out.
-// Gated primarily on the registry catalog entry's `auth_methods` (see
-// ProviderRow.tsx's isSignInCapable). `openai-chatgpt` and `codex-cli` are
-// two of the shared fixture's `auth_methods: ["sign_in"]` rows, so these
-// fixtures exercise the catalog signal itself; the configured row's own
-// `auth_method: "sign_in"` field is carried too, which is the fallback
-// isSignInCapable takes for an id absent from the catalog.
+// ADR-068 §8b sign-in row states (T068-33 initial signed_in/expired/Sign-out
+// wiring; T068-26 replaces the row copy and action with Manage +
+// ManageSignInDialog / ReSignInDialog). Gated primarily on the registry
+// catalog entry's `auth_methods` (see ProviderRow.tsx's isSignInCapable).
+// `openai-chatgpt` and `codex-cli` are two of the shared fixture's
+// `auth_methods: ["sign_in"]` rows, so these fixtures exercise the catalog
+// signal itself; the configured row's own `auth_method: "sign_in"` field is
+// carried too, which is the fallback isSignInCapable takes for an id absent
+// from the catalog. `codex-cli` also resolves `cli_kind: "codex"` from the
+// shared catalog fixture (providers-catalog.json), which is what routes its
+// `expired` Manage click to ReSignInDialog instead of SignInDialog.
 // ---------------------------------------------------------------------------
 
 const SIGNED_IN_PROVIDER = {
@@ -1244,6 +1301,19 @@ const SIGNED_IN_PROVIDER = {
   models: [],
 }
 
+const SIGNED_IN_NO_LABEL_PROVIDER = {
+  ...CONFIGURED_BASE,
+  id: 'openai-chatgpt',
+  name: 'openai-chatgpt',
+  display_name: 'openai-chatgpt',
+  status: 'signed_in',
+  auth_method: 'sign_in',
+  models: [],
+}
+
+// codex-cli — a `cli_login` row: the shared providers-catalog.json fixture
+// resolves its entry to `protocol: "cli"`, `cli_kind: "codex"`, which is what
+// routes its `expired` Manage click to ReSignInDialog.
 const EXPIRED_PROVIDER = {
   ...CONFIGURED_BASE,
   id: 'codex-cli',
@@ -1254,41 +1324,91 @@ const EXPIRED_PROVIDER = {
   models: [],
 }
 
+// openai-chatgpt — a `device_code` row: its catalog entry carries no
+// `cli_kind`, so its `expired` Manage click falls back to the ordinary
+// SignInDialog (a fresh device-code approval, not a status re-check).
+const EXPIRED_DEVICE_CODE_PROVIDER = {
+  ...CONFIGURED_BASE,
+  id: 'openai-chatgpt',
+  name: 'openai-chatgpt',
+  display_name: 'openai-chatgpt',
+  status: 'expired',
+  auth_method: 'sign_in',
+  models: [],
+}
+
 describe('ProvidersSection — ADR-068 sign-in row states', () => {
-  it('a signed_in row shows the account label and a Sign out button, not Configure', async () => {
+  it('a signed_in row reads "Signed in · <label>" and Manage opens the account/sign-out dialog (FR-034)', async () => {
     vi.mocked(api.fetchProviders).mockResolvedValue([SIGNED_IN_PROVIDER] as never)
     renderSection()
 
     await waitFor(() => screen.getByTestId('provider-row-openai-chatgpt'))
-    expect(screen.getByTestId('signed-in-badge-openai-chatgpt')).toHaveTextContent('Signed in as user@example.com')
-    expect(screen.getByTestId('sign-out-btn-openai-chatgpt')).toBeInTheDocument()
+    expect(screen.getByTestId('signed-in-badge-openai-chatgpt')).toHaveTextContent('Signed in · user@example.com')
     expect(screen.queryByTestId('configure-btn-openai-chatgpt')).not.toBeInTheDocument()
     expect(screen.queryByTestId('sign-in-btn-openai-chatgpt')).not.toBeInTheDocument()
+
+    const manageBtn = screen.getByTestId('manage-btn-openai-chatgpt')
+    expect(manageBtn).toHaveTextContent('Manage')
+
+    expect(screen.queryByTestId('manage-sign-in-dialog-stub')).not.toBeInTheDocument()
+    fireEvent.click(manageBtn)
+    await waitFor(() => {
+      expect(screen.getByTestId('manage-sign-in-dialog-stub')).toHaveTextContent('user@example.com')
+    })
   })
 
-  it('an expired row shows "Session expired" and "Sign in again", which opens the dialog for that provider', async () => {
+  it('a signed_in row without an account label reads "Signed in" — no e-mail exists in auth.json (MAJ-006)', async () => {
+    vi.mocked(api.fetchProviders).mockResolvedValue([SIGNED_IN_NO_LABEL_PROVIDER] as never)
+    renderSection()
+
+    const badge = await screen.findByTestId('signed-in-badge-openai-chatgpt')
+    expect(badge).toHaveTextContent('Signed in')
+    expect(badge.textContent).not.toContain('·')
+  })
+
+  it('an expired cli_login row (codex-cli) shows "Session expired" and Manage opens the re-sign-in dialog, not SignInDialog', async () => {
     vi.mocked(api.fetchProviders).mockResolvedValue([EXPIRED_PROVIDER] as never)
     renderSection()
 
     await waitFor(() => screen.getByTestId('provider-row-codex-cli'))
     expect(screen.getByTestId('expired-badge-codex-cli')).toHaveTextContent('Session expired')
-    const btn = screen.getByTestId('sign-in-btn-codex-cli')
-    expect(btn).toHaveTextContent('Sign in again')
+    const btn = screen.getByTestId('manage-btn-codex-cli')
+    expect(btn).toHaveTextContent('Manage')
 
-    expect(screen.queryByTestId('sign-in-dialog-stub')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('re-sign-in-dialog-stub')).not.toBeInTheDocument()
     fireEvent.click(btn)
     await waitFor(() => {
-      expect(screen.getByTestId('sign-in-dialog-stub')).toHaveTextContent('codex-cli')
+      const dialog = screen.getByTestId('re-sign-in-dialog-stub')
+      expect(dialog).toHaveTextContent('codex-cli')
+      expect(dialog).toHaveTextContent('[codex]')
     })
+    // No fresh device-code / POST /sign-in flow for an expired cli_login row
+    // (BDD "Expired session routes to re-sign-in", MAJ-006).
+    expect(screen.queryByTestId('sign-in-dialog-stub')).not.toBeInTheDocument()
   })
 
-  it('Sign out calls signOutProvider and refetches the provider list', async () => {
+  it('an expired device_code row (openai-chatgpt, no cli_kind) falls back to SignInDialog on Manage', async () => {
+    vi.mocked(api.fetchProviders).mockResolvedValue([EXPIRED_DEVICE_CODE_PROVIDER] as never)
+    renderSection()
+
+    await waitFor(() => screen.getByTestId('provider-row-openai-chatgpt'))
+    const btn = screen.getByTestId('manage-btn-openai-chatgpt')
+    fireEvent.click(btn)
+    await waitFor(() => {
+      expect(screen.getByTestId('sign-in-dialog-stub')).toHaveTextContent('openai-chatgpt')
+    })
+    expect(screen.queryByTestId('re-sign-in-dialog-stub')).not.toBeInTheDocument()
+  })
+
+  it('Sign out (via Manage) calls signOutProvider, refetches the provider list, and closes the dialog on success', async () => {
     vi.mocked(api.fetchProviders).mockResolvedValue([SIGNED_IN_PROVIDER] as never)
     vi.mocked(api.signOutProvider).mockResolvedValue({ success: true })
     renderSection()
 
-    await waitFor(() => screen.getByTestId('sign-out-btn-openai-chatgpt'))
-    fireEvent.click(screen.getByTestId('sign-out-btn-openai-chatgpt'))
+    await waitFor(() => screen.getByTestId('manage-btn-openai-chatgpt'))
+    fireEvent.click(screen.getByTestId('manage-btn-openai-chatgpt'))
+    await waitFor(() => screen.getByTestId('manage-sign-out-btn-stub'))
+    fireEvent.click(screen.getByTestId('manage-sign-out-btn-stub'))
 
     await waitFor(() => {
       expect(api.signOutProvider).toHaveBeenCalledWith('openai-chatgpt')
@@ -1300,15 +1420,20 @@ describe('ProvidersSection — ADR-068 sign-in row states', () => {
     await waitFor(() => {
       expect(vi.mocked(api.fetchProviders).mock.calls.length).toBeGreaterThan(1)
     })
+    await waitFor(() => {
+      expect(screen.queryByTestId('manage-sign-in-dialog-stub')).not.toBeInTheDocument()
+    })
   })
 
-  it('Sign out surfacing a server-reported failure shows the error, not a false success toast', async () => {
+  it('Sign out surfacing a server-reported failure shows the error and leaves the Manage dialog open', async () => {
     vi.mocked(api.fetchProviders).mockResolvedValue([SIGNED_IN_PROVIDER] as never)
     vi.mocked(api.signOutProvider).mockResolvedValue({ success: false, error: 'could not delete credential' })
     renderSection()
 
-    await waitFor(() => screen.getByTestId('sign-out-btn-openai-chatgpt'))
-    fireEvent.click(screen.getByTestId('sign-out-btn-openai-chatgpt'))
+    await waitFor(() => screen.getByTestId('manage-btn-openai-chatgpt'))
+    fireEvent.click(screen.getByTestId('manage-btn-openai-chatgpt'))
+    await waitFor(() => screen.getByTestId('manage-sign-out-btn-stub'))
+    fireEvent.click(screen.getByTestId('manage-sign-out-btn-stub'))
 
     await waitFor(() => {
       expect(addToast).toHaveBeenCalledWith(
@@ -1316,15 +1441,16 @@ describe('ProvidersSection — ADR-068 sign-in row states', () => {
       )
     })
     expect(addToast).not.toHaveBeenCalledWith(expect.objectContaining({ message: 'Signed out' }))
+    expect(screen.getByTestId('manage-sign-in-dialog-stub')).toBeInTheDocument()
   })
 
-  it('a non-sign-in provider (regression) never shows Sign in/Sign out controls', async () => {
+  it('a non-sign-in provider (regression) never shows Sign in/Manage controls', async () => {
     vi.mocked(api.fetchProviders).mockResolvedValue([ANTHROPIC_PROVIDER] as never)
     renderSection()
 
     await waitFor(() => screen.getByTestId('provider-row-anthropic'))
-    expect(screen.queryByTestId('sign-out-btn-anthropic')).not.toBeInTheDocument()
     expect(screen.queryByTestId('sign-in-btn-anthropic')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('manage-btn-anthropic')).not.toBeInTheDocument()
     expect(screen.getByTestId('configure-btn-anthropic')).toBeInTheDocument()
   })
 

@@ -68,8 +68,10 @@ import { DRAFT_DISCARD_PROMPT, draftCloseDecision, type DraftCloseAction } from 
 import { ReAuthDialog } from './ReAuthDialog'
 import { ProviderValidationBanner } from '@/components/providers/ProviderValidationBanner'
 import { resolveCatalogEntry } from '@/lib/providerMigration'
-import { ProviderRow } from './ProviderRow'
+import { ProviderRow, cliKindOf } from './ProviderRow'
 import { SignInDialog } from '@/components/providers/SignInDialog'
+import { ManageSignInDialog } from '@/components/providers/ManageSignInDialog'
+import { ReSignInDialog } from '@/components/providers/ReSignInDialog'
 import { DefaultModelCard } from './DefaultModelCard'
 import { RemoveProviderDialog } from './RemoveProviderDialog'
 import { ProviderPicker, type PickerSelection } from '@/components/providers/ProviderPicker'
@@ -657,6 +659,17 @@ export function ProvidersSection() {
   const [signInTarget, setSignInTarget] = useState<{ id: string; label: string } | null>(null)
   const [signInOpen, setSignInOpen] = useState(false)
 
+  // Manage / re-sign-in dialog state (ADR-068 FR-034, T068-26) — the two
+  // surfaces a sign-in row's Manage action can open once it has connected at
+  // least once: ManageSignInDialog for `signed_in` (account + Sign out),
+  // ReSignInDialog for `expired` `cli_login` rows (static re-sign-in copy,
+  // status-only Check — see ReSignInDialog.tsx's file header for why this is
+  // not just SignInDialog again). An `expired` `device_code` row (no
+  // cli_kind) falls back to the ordinary SignInDialog via handleManage below,
+  // since it genuinely needs a fresh device-code approval.
+  const [manageTarget, setManageTarget] = useState<{ id: string; label: string; accountLabel?: string } | null>(null)
+  const [reSignInTarget, setReSignInTarget] = useState<{ id: string; label: string; cliKind: 'codex' | 'copilot' } | null>(null)
+
   const { data: providers = [], isLoading, isError: providersError } = useQuery({
     queryKey: ['providers'],
     queryFn: fetchProviders,
@@ -808,6 +821,9 @@ export function ProvidersSection() {
       queryClient.invalidateQueries({ queryKey: ['providers'] })
       if (result.success) {
         addToast({ message: 'Signed out', variant: 'success' })
+        // Close the Manage dialog on a real success — a failure leaves it
+        // open (with the error toast) so the operator can retry.
+        setManageTarget(null)
       } else {
         addToast({ message: result.error ?? 'Sign out failed', variant: 'error' })
       }
@@ -816,6 +832,34 @@ export function ProvidersSection() {
       addToast({ message: getErrorMessage(err, 'Sign out failed'), variant: 'error' })
     },
   })
+
+  // ADR-068 FR-034 — the Manage action for a sign-in row that has connected
+  // at least once. `signed_in` opens the account/sign-out view; `expired`
+  // opens the status-only re-sign-in dialog for cli_login rows (codex-cli,
+  // github-copilot) or, for a device_code row (openai-chatgpt/xai — no
+  // cli_kind), falls back to a fresh SignInDialog since an expired
+  // device-code session needs a brand new approval, not a status re-check.
+  const handleManage = (provider: Provider, label: string) => {
+    const { entry } = resolveCatalogEntry(catalog, provider.id)
+    if (provider.status === 'signed_in') {
+      setManageTarget({ id: provider.id, label, accountLabel: provider.account_label })
+      return
+    }
+    if (provider.status === 'expired') {
+      const cliKind = cliKindOf(provider, entry)
+      if (cliKind) {
+        setReSignInTarget({ id: provider.id, label, cliKind })
+      } else {
+        openSignInDialog(provider.id, label)
+      }
+      return
+    }
+    // Defensive fallback: signInActionLabel() maps `connected`/
+    // `unknown-provider` to "Manage" too for exhaustiveness, but a sign-in
+    // row never actually carries either status. Route to the ordinary
+    // sign-in flow rather than leaving the click inert.
+    openSignInDialog(provider.id, label)
+  }
 
   // ── ADR-068 US-3 — removal ────────────────────────────────────────────────
   //
@@ -1010,9 +1054,8 @@ export function ProvidersSection() {
                   showIcon
                   onConfigure={() => openConfigureSheet(provider)}
                   onSignIn={() => openSignInDialog(provider.id, title)}
-                  onSignOut={() => doSignOut(provider.id)}
+                  onManage={() => handleManage(provider, title)}
                   signingIn={signInOpen && signInTarget?.id === provider.id}
-                  signingOut={isSigningOut}
                   testValidation={testValidation[provider.id]}
                   isDefault={defaultModel?.provider === provider.id}
                   onSetAsDefault={canBeDefault(provider) ? () => openSetAsDefault(provider) : undefined}
@@ -1053,9 +1096,8 @@ export function ProvidersSection() {
                       showIcon={false}
                       onConfigure={() => openConfigureSheet(provider)}
                       onSignIn={() => openSignInDialog(provider.id, entry ? catalogVariantTitle(entry) : displayName(provider, provider.id))}
-                      onSignOut={() => doSignOut(provider.id)}
+                      onManage={() => handleManage(provider, entry ? catalogVariantTitle(entry) : displayName(provider, provider.id))}
                       signingIn={signInOpen && signInTarget?.id === provider.id}
-                      signingOut={isSigningOut}
                       testValidation={testValidation[provider.id]}
                       isDefault={defaultModel?.provider === provider.id}
                       onSetAsDefault={canBeDefault(provider) ? () => openSetAsDefault(provider) : undefined}
@@ -1191,6 +1233,30 @@ export function ProvidersSection() {
           }}
           providerId={signInTarget.id}
           providerLabel={signInTarget.label}
+          onSignedIn={() => {
+            queryClient.invalidateQueries({ queryKey: ['providers'] })
+          }}
+        />
+      )}
+
+      {manageTarget && (
+        <ManageSignInDialog
+          open
+          onOpenChange={(o) => { if (!o) setManageTarget(null) }}
+          providerLabel={manageTarget.label}
+          accountLabel={manageTarget.accountLabel}
+          onSignOut={() => doSignOut(manageTarget.id)}
+          signingOut={isSigningOut}
+        />
+      )}
+
+      {reSignInTarget && (
+        <ReSignInDialog
+          open
+          onOpenChange={(o) => { if (!o) setReSignInTarget(null) }}
+          providerId={reSignInTarget.id}
+          providerLabel={reSignInTarget.label}
+          cliKind={reSignInTarget.cliKind}
           onSignedIn={() => {
             queryClient.invalidateQueries({ queryKey: ['providers'] })
           }}
