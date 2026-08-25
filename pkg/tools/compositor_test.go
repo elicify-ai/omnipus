@@ -79,13 +79,19 @@ func TestFilterToolsByPolicy_GlobalDeny_RemovesTool(t *testing.T) {
 
 	got, policyMap := FilterToolsByPolicy(allPolicyTools(), "core", cfg)
 
-	for _, t := range got {
-		if t.Name() == "search_web" {
-			panic("web_search must be removed when globally denied")
+	// NOTE: the range variable was previously named `t`, shadowing the
+	// *testing.T parameter; a failure inside the loop called panic() instead
+	// of t.Errorf(), which kills the whole test binary with zero `--- FAIL`
+	// lines on failure (indistinguishable from a hang). Renamed to `tool` and
+	// switched to t.Error so a real regression here reports as an ordinary
+	// FAIL.
+	for _, tool := range got {
+		if tool.Name() == "search_web" {
+			t.Error("search_web must be removed when globally denied")
 		}
 	}
 	if _, exists := policyMap["search_web"]; exists {
-		panic("denied tool must not appear in policyMap")
+		t.Error("denied tool must not appear in policyMap")
 	}
 }
 
@@ -239,6 +245,110 @@ func TestFilterToolsByPolicy_UnknownScope_Denied(t *testing.T) {
 	}
 }
 
+// TestFilterToolsByPolicy_UnknownScope_DeniedEvenWithMatchingAllowPolicy is
+// the load-bearing scope-gate test.
+//
+// TestFilterToolsByPolicy_UnknownScope_Denied above (and, before this file
+// was written, effectiveToolPolicyMatrix's sole "unknown-scope" case) both
+// give the unknown-scope tool NO policy entry at all — so
+// resolveEffectivePolicyWith's own no-coverage fail-closed branch
+// ("g == \"\" && a == \"\"" in compositor.go) denies it before passesScopeGate
+// is ever consulted. That was verified directly: with the scope gate
+// short-circuited exactly as `if false && !passesScopeGate(...)` at
+// compositor.go:278, `go test ./pkg/tools/` still reports `ok` — those tests
+// pass through the wrong mechanism and cannot detect the gate's removal.
+//
+// This test isolates the gate: the unknown-scope tool has an EXPLICIT,
+// matching "allow" entry on BOTH the agent and the global side, so the
+// global×agent merge ALONE would resolve it to "allow". Only
+// passesScopeGate's fail-closed default (compositor.go's `default: return
+// false`) can still deny it. Deleting or bypassing the gate makes this test
+// fail.
+//
+// Traces to: pkg/tools/compositor.go passesScopeGate doc comment ("the
+// structural guard that policy cannot bypass"); CLAUDE.md Hard Constraint 6.
+func TestFilterToolsByPolicy_UnknownScope_DeniedEvenWithMatchingAllowPolicy(t *testing.T) {
+	unknownScopeTool := makeScopedTool("mystery_tool", ToolScope("unknown"))
+	knownTool := makeScopedTool("search_web", ScopeGeneral)
+
+	cfg := &ToolPolicyCfg{
+		Policies:       map[string]config.ToolPolicy{"mystery_tool": "allow", "search_web": "allow"},
+		GlobalPolicies: map[string]config.ToolPolicy{"mystery_tool": "allow", "search_web": "allow"},
+	}
+
+	got, policyMap := FilterToolsByPolicy([]Tool{unknownScopeTool, knownTool}, "core", cfg)
+
+	for _, tool := range got {
+		if tool.Name() == "mystery_tool" {
+			t.Error("unknown-scope tool must be denied by the scope gate even when both agent and global policy explicitly allow it")
+		}
+	}
+	if _, exists := policyMap["mystery_tool"]; exists {
+		t.Error("unknown-scope tool must not appear in policyMap even when explicitly allowed by policy")
+	}
+
+	// Differentiation: the known-scope tool carrying the IDENTICAL "allow"
+	// policy must still pass — proves this is a scope-specific denial, not a
+	// blanket failure of FilterToolsByPolicy for this config.
+	found := false
+	for _, tool := range got {
+		if tool.Name() == "search_web" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("known-scope tool with the same explicit allow policy must still pass")
+	}
+	if p, ok := policyMap["search_web"]; !ok || p != "allow" {
+		t.Errorf("expected search_web effective policy 'allow', got %q (ok=%v)", p, ok)
+	}
+}
+
+// TestFilterToolsByPolicy_UnknownScope_WildcardAllow_StillDenied proves the
+// gate survives a WILDCARD allow match too, not just an exact-name entry —
+// wildcard resolution happens inside the same global×agent merge the gate
+// sits in front of.
+func TestFilterToolsByPolicy_UnknownScope_WildcardAllow_StillDenied(t *testing.T) {
+	unknownScopeTool := makeScopedTool("mystery_probe", ToolScope("unknown"))
+
+	cfg := &ToolPolicyCfg{
+		Policies: map[string]config.ToolPolicy{"mystery_*": "allow"},
+	}
+
+	got, policyMap := FilterToolsByPolicy([]Tool{unknownScopeTool}, "core", cfg)
+
+	if len(got) != 0 {
+		t.Errorf("expected unknown-scope tool matched by a wildcard allow to be denied, got %d tool(s) returned", len(got))
+	}
+	if _, exists := policyMap["mystery_probe"]; exists {
+		t.Error("unknown-scope tool matched by wildcard allow must not appear in policyMap")
+	}
+}
+
+// TestFilterToolsByPolicy_ZeroValueScope_DeniedEvenWithMatchingAllowPolicy
+// covers the specific failure mode named in the defect report and in
+// passesScopeGate's own doc comment: a tool whose Scope() method was never
+// given a return value (Go's zero value for ToolScope is "") must be denied
+// exactly like any other unknown scope, even with an explicit matching allow
+// on both sides.
+func TestFilterToolsByPolicy_ZeroValueScope_DeniedEvenWithMatchingAllowPolicy(t *testing.T) {
+	zeroScopeTool := makeScopedTool("unset_scope_tool", ToolScope(""))
+
+	cfg := &ToolPolicyCfg{
+		Policies:       map[string]config.ToolPolicy{"unset_scope_tool": "allow"},
+		GlobalPolicies: map[string]config.ToolPolicy{"unset_scope_tool": "allow"},
+	}
+
+	got, policyMap := FilterToolsByPolicy([]Tool{zeroScopeTool}, "core", cfg)
+
+	if len(got) != 0 {
+		t.Errorf("expected zero-value-scope tool to be denied (fail-closed), got %d tool(s) returned", len(got))
+	}
+	if _, exists := policyMap["unset_scope_tool"]; exists {
+		t.Error("zero-value-scope tool must not appear in policyMap even when explicitly allowed by policy")
+	}
+}
+
 // TestMCPToolAdapter_Execute_TextContent verifies that mcpToolAdapter.Execute
 // forwards the call through MCPCaller and returns concatenated text content.
 func TestMCPToolAdapter_Execute_TextContent(t *testing.T) {
@@ -359,10 +469,14 @@ func TestFilterToolsByPolicy_WildcardSegmentPrecedence(t *testing.T) {
 	}
 	got, policyMap := FilterToolsByPolicy(toolSet, "core", cfg)
 
-	// system.config.set must be denied (removed from result)
-	for _, t := range got {
-		if t.Name() == "system.config.set" {
-			panic("system.config.set must be denied by more-specific wildcard")
+	// system.config.set must be denied (removed from result).
+	// NOTE: range variable renamed `t` -> `tool` (it shadowed *testing.T) and
+	// panic() replaced with t.Error() — an unrecovered panic in a shadowed
+	// loop kills the whole test binary with zero `--- FAIL` lines, which
+	// this project's own conventions say to read as a hang, not a finding.
+	for _, tool := range got {
+		if tool.Name() == "system.config.set" {
+			t.Error("system.config.set must be denied by more-specific wildcard")
 		}
 	}
 	// system.agent.list must be "ask" (matched by system.*)

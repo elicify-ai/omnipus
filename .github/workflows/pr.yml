@@ -473,8 +473,54 @@ jobs:
 
           passes=$(grep -c -- '--- PASS' /tmp/browser-e2e.log || true)
           echo "pkg/tools/browser passing tests: $passes"
-          if [ "$passes" -lt 40 ]; then
-            echo "::error::Only $passes tests passed; expected >=40 real-Chrome-capable tests. Coverage has silently shrunk." >&2
+          # Ratchet, not a magic number: the real count with a working browser
+          # is >=180 (verified against a live run with OMNIPUS_BROWSER_E2E=1),
+          # not the 40 this floor was previously set to — a 40-test floor lets
+          # coverage collapse by ~75% and still pass. Raise this number (never
+          # lower it without re-verifying the true count) as more tests land.
+          if [ "$passes" -lt 180 ]; then
+            echo "::error::Only $passes tests passed; expected >=180 real-Chrome-capable tests. Coverage has silently shrunk." >&2
+            exit 1
+          fi
+
+      - name: Run pkg/gateway real-Chrome tests
+        # Same skip-detection + pass-floor pattern as the pkg/tools/browser
+        # step above, extended to close a second #615-shaped hole: this
+        # package duplicates the skipIfNoBrowser convention as
+        # browserWSSkipIfNoBrowser (pkg/gateway/browser_ws_test.go), and the
+        # main "Tests" job never sets OMNIPUS_BROWSER_E2E — so every test
+        # gated by it, including TestBrowserWS_Input_Navigate_SSRFBlocked_
+        # FullRoundTrip (a security control, not just coverage), has been
+        # running in NO environment at all.
+        #
+        # Targeted -run rather than a whole-package run, deliberately: unlike
+        # pkg/tools/browser (a package that IS the browser feature),
+        # pkg/gateway is a ~2,000-test package where only these four tests
+        # are Chrome-gated. A whole-package pass-floor here would either be
+        # guessed without ever having been measured (this job cannot run the
+        # full gateway suite twice just to derive one), or duplicate the main
+        # "Tests" job's own (now-fixed) assertion pass-for-pass for zero new
+        # signal. Naming the four exactly means the floor below is exact and
+        # verified by grep, not estimated — but it also means a FUTURE test
+        # gated by browserWSSkipIfNoBrowser won't be swept in here
+        # automatically; grep for new call sites the next time this list is
+        # touched.
+        run: |
+          set -euo pipefail
+          go test -v -tags goolm,stdjson -count=1 -timeout 300s \
+            -run '^(TestBrowserWS_Input_Navigate_SSRFBlocked_FullRoundTrip|TestBrowserWS_Control_ControlledByOther_BroadcastsToSecondConnection|TestBrowserWS_Attach_AnnouncesWebRTCAvailabilityOnSameConnection|TestHandleBrowserInspect_Success_MarshalsTagTextHtml)$' \
+            ./pkg/gateway 2>&1 | tee /tmp/gateway-browser-e2e.log
+
+          if grep -qE 'skipping browser E2E test|no managed Chrome for' /tmp/gateway-browser-e2e.log; then
+            echo "::error::browserWSSkipIfNoBrowser skipped — pkg/gateway real-Chrome coverage is NOT running despite OMNIPUS_BROWSER_E2E=1" >&2
+            grep -E 'skipping browser E2E test|no managed Chrome for' /tmp/gateway-browser-e2e.log >&2
+            exit 1
+          fi
+
+          passes=$(grep -c -- '--- PASS' /tmp/gateway-browser-e2e.log || true)
+          echo "pkg/gateway real-Chrome passing tests: $passes"
+          if [ "$passes" -lt 4 ]; then
+            echo "::error::Only $passes of the 4 known browserWSSkipIfNoBrowser-gated pkg/gateway tests passed. Coverage has silently shrunk (or one of the four was renamed/removed without updating this step)." >&2
             exit 1
           fi
 
@@ -1100,6 +1146,20 @@ jobs:
         # manifests under parallel package execution and vanishes under -p 1
         # is the textbook signature of a genuine concurrency bug, not CI
         # flakiness; defense in depth here is cheap.
+        #
+        # --- FAIL carve-out (docs/internal/false-green-patterns.md: "contention
+        # causes timeouts; it does not cause assertion failures. A `--- FAIL`
+        # line is real signal under any load."): the isolated re-run below
+        # exists ONLY for the hang/contention signature — a package that fails
+        # with a bare `FAIL <pkg>` summary and NO per-test `--- FAIL` line
+        # (a timeout, a deadlock, a panic mid-run). A `--- FAIL: TestName` line
+        # means a specific assertion failed, which contention does not cause —
+        # so it is never given a second isolated attempt to "pass clean",
+        # exactly like DATA RACE above. Checked on the whole run's output
+        # rather than per-package, same as the DATA RACE check, and for the
+        # same reason: it must not be possible for a real assertion failure
+        # elsewhere in the run to be laundered by scoping the check too
+        # narrowly.
         run: |
           set +e
           out=$(go test -tags goolm,stdjson -count=1 ./... 2>&1)
@@ -1132,7 +1192,25 @@ jobs:
             fi
             exit 1
           fi
-          # No race detected — now the ordinary short-circuit applies.
+          # Same native-substring reasoning as DATA RACE above — no grep -q on
+          # the multi-megabyte $out.
+          if [[ $out == *"--- FAIL"* ]]; then
+            echo ""
+            echo "=== --- FAIL detected — an assertion failure is never excused by an isolated re-run ==="
+            failed=$(printf '%s\n' "$out" | grep -aE '^FAIL[[:space:]]' | awk '{print $2}' | grep -a '/' | sort -u)
+            if [ -n "$failed" ]; then
+              for p in $failed; do
+                echo "REAL FAILURE (assertion failure detected — never excused): $p"
+              done
+            else
+              echo "REAL FAILURE (assertion failure detected — never excused): --- FAIL detected but no package-level FAIL line matched; see full output above"
+            fi
+            exit 1
+          fi
+          # No race and no assertion failure detected — now the ordinary
+          # short-circuit applies. What reaches the flake filter below is
+          # exclusively the hang/contention signature: a bare `FAIL <pkg>`
+          # summary with no `--- FAIL` line anywhere in the run.
           [ $code -eq 0 ] && exit 0
           failed=$(printf '%s\n' "$out" | grep -aE '^FAIL[[:space:]]' | awk '{print $2}' | grep -a '/' | sort -u)
           [ -z "$failed" ] && exit $code
@@ -1147,6 +1225,52 @@ jobs:
             fi
           done
           exit $rc
+
+      - name: Run pkg/sandbox Landlock tests
+        # Same skip-detection + pass-floor pattern as browser-e2e's
+        # pkg/tools/browser step, applied to a second silent-coverage-loss
+        # exposure: every Landlock-backed test in pkg/sandbox degrades to
+        # t.Skip when the Landlock backend is unavailable (kernel too old,
+        # ABI too low, running as root), and `go test` exits 0 when every one
+        # of them skips — the exact #615 shape. Verified separately that the
+        # dedicated Fly worker's kernel has Landlock compiled out entirely, so
+        # a green from that worker carries zero kernel-sandbox signal; this
+        # step exists so the SAME loss on THIS (GitHub-hosted) runner is loud
+        # instead of silent, whichever way it turns out.
+        #
+        # Targeted -run at the specific tests whose skip path is "the
+        # Landlock backend itself is unavailable" (backend selection, ABI
+        # gate, subprocess enforcement, and the redteam suites that require a
+        # real Landlock-confined child) — not a whole-package run. pkg/sandbox
+        # is a ~230-test package covering Windows Job Objects, macOS
+        # sandbox-exec, and general policy logic that has nothing to do with
+        # Landlock and legitimately skips for unrelated platform reasons; a
+        # blanket skip-ban or a whole-package pass-floor guessed without ever
+        # running it would be exactly the kind of manufactured-green threshold
+        # this task exists to remove. The floor below (10) is exact and
+        # verified by grep, not estimated — but as with the pkg/gateway step
+        # above, a future Landlock-gated test needs adding to this list by
+        # hand; grep for new "Landlock (backend )?not available|Landlock
+        # unavailable|Landlock ABI v4" call sites the next time this is
+        # touched.
+        run: |
+          set -euo pipefail
+          go test -v -tags goolm,stdjson -count=1 -timeout 300s \
+            -run '^(TestSandboxBackend_LinuxFull|TestSandboxBackend_LandlockFallbackChain|TestApplyOnABI4_EINVAL_HardFails|TestLandlock_ApplySubprocess|TestLandlock_BindBlockedSubprocess|TestLandlock_BindAllowedSubprocess|TestLandlock_WorkspaceReroot_StaysInsideBootGrant|TestRedteam_RawTCP_Egress_Blocked|TestRedteam_MasterKey_Exfil_Blocked|TestRedteam_Credentials_Exfil_Blocked)$' \
+            ./pkg/sandbox 2>&1 | tee /tmp/sandbox-landlock.log
+
+          if grep -qE 'Landlock (backend )?not available|Landlock unavailable|Landlock ABI v4' /tmp/sandbox-landlock.log; then
+            echo "::error::Landlock backend unavailable on this runner — pkg/sandbox kernel-sandbox tests are NOT exercising Landlock. This carries zero kernel-sandbox signal even though the job is green." >&2
+            grep -E 'Landlock (backend )?not available|Landlock unavailable|Landlock ABI v4' /tmp/sandbox-landlock.log >&2
+            exit 1
+          fi
+
+          passes=$(grep -c -- '--- PASS' /tmp/sandbox-landlock.log || true)
+          echo "pkg/sandbox Landlock-backed passing tests: $passes"
+          if [ "$passes" -lt 10 ]; then
+            echo "::error::Only $passes of the 10 known Landlock-backed pkg/sandbox tests passed. Coverage has silently shrunk (or one of the ten was renamed/removed without updating this step)." >&2
+            exit 1
+          fi
 
   # Split out of `test` (ADR-067 parallelism pass). Measured on a real run,
   # the single Tests job spent 355s on `go test` and then a further 648s on
@@ -1833,10 +1957,80 @@ jobs:
         # Mirror it onto OPENROUTER_API_KEY so self-managed gateways
         # (tests/e2e/setup.ts startGateway → onboardAdmin) send the same live
         # key instead of sk-test-placeholder, which OpenRouter 400s.
+        #
+        # --reporter=html,list,json ADDS the json reporter on top of
+        # playwright.config.ts's own `reporter: [['html'], ['list']]` — the
+        # CLI --reporter flag fully REPLACES the config's reporter list rather
+        # than appending to it, so html and list are re-listed here with their
+        # defaults (matching the config's own un-configured entries) purely so
+        # the existing playwright-report/ artifact upload below keeps working;
+        # json is the new addition the next step reads. PLAYWRIGHT_JSON_OUTPUT_NAME
+        # routes the json reporter's output to a file instead of stdout.
+        #
+        # Do not treat a green exit code here as the full verdict: Playwright's
+        # own exit status reflects only `unexpected` (failed-after-all-retries)
+        # results. A skipped test and a test that failed once and then passed
+        # under playwright.config.ts's retries: 3 both exit 0 — see the next
+        # step, which reads the json reporter's stats block to catch both.
         env:
           OMNIPUS_URL: http://localhost:6060
           OPENROUTER_API_KEY: ${{ env.OPENROUTER_API_KEY_CI }}
-        run: npx playwright test ${{ matrix.specs }}
+          PLAYWRIGHT_JSON_OUTPUT_NAME: /tmp/pw-results.json
+        run: npx playwright test ${{ matrix.specs }} --reporter=html,list,json
+
+      - name: Fail on skipped or flaky Playwright tests
+        # Two ways this suite went green without being green:
+        #  * skipped>0 — two tests were silently skipped in the last green
+        #    run. `npx playwright test` does not fail on a skip; it's not a
+        #    Playwright "failure" by definition.
+        #  * flaky>0 — retries: 3 (playwright.config.ts) turned a real
+        #    failure green last Saturday: a test that fails once and then
+        #    passes on retry is reported as "flaky", not "unexpected", and
+        #    does not fail the run either.
+        # The json reporter's own stats block is the one place both counts
+        # are unambiguous — read that instead of re-deriving them from
+        # console text. Runs unconditionally (always()) so it still reports
+        # accurately even when the run step above already failed outright.
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ ! -f /tmp/pw-results.json ]; then
+            echo "::error::Playwright JSON report not found at /tmp/pw-results.json — cannot verify skipped/flaky counts" >&2
+            exit 1
+          fi
+          # jq exits 0 and prints "null" (or nothing, on an empty file) for a
+          # missing/malformed key -- set -e does NOT catch that, and the old
+          # `[ "$skipped" -gt 0 ]` check silently evaluated false on a
+          # non-numeric value (stderr: "integer expected"), letting a killed
+          # Playwright run that left an empty or truncated report file pass
+          # this gate. `jq -e` exits 1 on null/absent; the numeric guard below
+          # closes the empty-file case even -e alone doesn't catch. Verified
+          # in isolation (empty file, and valid JSON missing .stats) before
+          # this landed -- both previously passed silently, both now fail.
+          skipped=$(jq -e '.stats.skipped' /tmp/pw-results.json) || { echo "::error::Playwright JSON report has no readable .stats.skipped -- cannot verify coverage" >&2; exit 1; }
+          flaky=$(jq -e '.stats.flaky' /tmp/pw-results.json) || { echo "::error::Playwright JSON report has no readable .stats.flaky -- cannot verify coverage" >&2; exit 1; }
+          expected=$(jq -e '.stats.expected' /tmp/pw-results.json) || { echo "::error::Playwright JSON report has no readable .stats.expected -- cannot verify coverage" >&2; exit 1; }
+          unexpected=$(jq -e '.stats.unexpected' /tmp/pw-results.json) || { echo "::error::Playwright JSON report has no readable .stats.unexpected -- cannot verify coverage" >&2; exit 1; }
+          for statname in skipped flaky expected unexpected; do
+            val="${!statname}"
+            case "$val" in
+              ''|*[!0-9]*)
+                echo "::error::Playwright stats.$statname is not a plain non-negative integer (got: '$val') -- treating report as unverifiable" >&2
+                exit 1
+                ;;
+            esac
+          done
+          echo "Playwright stats: expected=$expected skipped=$skipped flaky=$flaky unexpected=$unexpected"
+          rc=0
+          if [ "$skipped" -gt 0 ]; then
+            echo "::error::$skipped Playwright test(s) were skipped — coverage silently shrank. See docs/internal/false-green-patterns.md." >&2
+            rc=1
+          fi
+          if [ "$flaky" -gt 0 ]; then
+            echo "::error::$flaky Playwright test(s) only passed after a retry (flaky) — retries: 3 masked a real failure. See docs/internal/false-green-patterns.md." >&2
+            rc=1
+          fi
+          exit $rc
 
       - name: Upload Playwright artifacts
         if: failure()

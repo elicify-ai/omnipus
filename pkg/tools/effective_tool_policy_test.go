@@ -181,6 +181,58 @@ func effectiveToolPolicyMatrix() []effectiveToolPolicyMatrixCase {
 			want:      "deny",
 		},
 
+		// --- LOAD-BEARING scope-gate cases: the case immediately above uses
+		//     an EMPTY cfg, so weird_tool has no policy entry on either side —
+		//     resolveEffectivePolicyWith's own no-coverage fail-closed branch
+		//     ("g == \"\" && a == \"\"") denies it independently of
+		//     passesScopeGate. Verified directly: with the scope gate
+		//     short-circuited exactly as `if false && !passesScopeGate(...)`
+		//     at compositor.go:278, `go test ./pkg/tools/` still reports `ok`
+		//     — the case above passes through the wrong mechanism and cannot
+		//     detect the gate's removal.
+		//
+		//     The three cases below give the unknown/zero-value-scope tool an
+		//     EXPLICIT matching "allow" (exact-name or wildcard, agent and/or
+		//     global), so the global×agent merge ALONE would resolve
+		//     "allow". Only the scope gate's fail-closed default can still
+		//     produce "deny" here. Because these cases live in the shared
+		//     matrix, both TestEffectiveToolPolicy_Matrix (the primitive) and
+		//     TestEffectiveToolPolicy_FilterParity (FilterToolsByPolicy) are
+		//     exercised against them automatically.
+		{
+			name: "unknown-scope tool w/ explicit matching allow (both sides)→deny (gate, not merge)",
+			cfg: &ToolPolicyCfg{
+				Policies:       map[string]config.ToolPolicy{"weird_tool_explicit": "allow"},
+				GlobalPolicies: map[string]config.ToolPolicy{"weird_tool_explicit": "allow"},
+			},
+			agentType: "custom",
+			tool:      makeScopedTool("weird_tool_explicit", ToolScope("bogus")),
+			want:      "deny",
+		},
+		{
+			name: "unknown-scope tool matched by wildcard allow→deny (gate, not merge)",
+			cfg: &ToolPolicyCfg{
+				Policies: map[string]config.ToolPolicy{"weird_*": "allow"},
+			},
+			agentType: "custom",
+			tool:      makeScopedTool("weird_tool_wildcard", ToolScope("bogus")),
+			want:      "deny",
+		},
+		{
+			// Zero-value scope (Go's zero value for ToolScope is "") is the
+			// specific "mistyped or unset Scope()" failure mode named in the
+			// gate's own doc comment — must be denied identically to any
+			// other unknown scope, even with an explicit matching allow.
+			name: "zero-value scope tool w/ explicit matching allow (both sides)→deny (gate, not merge)",
+			cfg: &ToolPolicyCfg{
+				Policies:       map[string]config.ToolPolicy{"unset_scope_tool_matrix": "allow"},
+				GlobalPolicies: map[string]config.ToolPolicy{"unset_scope_tool_matrix": "allow"},
+			},
+			agentType: "custom",
+			tool:      makeScopedTool("unset_scope_tool_matrix", ToolScope("")),
+			want:      "deny",
+		},
+
 		// --- WILDCARD cases (F4): the input class whose verdict the unification
 		//     CHANGED for the gateway exec gate (old gateway ignored wildcards).
 		//     Hard-coded expectations pin the now-shared wildcard semantics.

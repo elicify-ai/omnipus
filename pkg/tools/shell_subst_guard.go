@@ -570,7 +570,7 @@ func shellCommandHeadDetailed(seg string) (string, bool, bool) {
 	// un-normalised even though the skipped assignment was case-folded.
 	// Letting it persist marked clean heads as normalised and blocked reads
 	// ADR-068 grants.
-	normalised := false
+	var normalised bool
 	for {
 		normalised = false
 		// Skip leading whitespace and the metacharacters that can precede a
