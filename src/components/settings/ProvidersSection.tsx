@@ -922,7 +922,7 @@ export function ProvidersSection() {
       setPickerOpen(false)
       // Same FR-005 fork as handleProviderConfirm: a sign_in row has no key,
       // so Recent must not drop it into the API-key Sheet either.
-      const { entry: recentEntry } = resolveCatalogEntry(catalog, picked.provider.id)
+      const recentEntry = catalogEntryById(catalog, picked.provider.id)
       if (recentEntry?.auth_methods.includes('sign_in')) {
         openSignInDialog(
           picked.provider.id,
@@ -1209,7 +1209,7 @@ export function ProvidersSection() {
           onOpenChange={(open) => { if (!open) setRemoveTarget(null) }}
           provider={removeTarget}
           displayName={(() => {
-            const { entry } = resolveCatalogEntry(catalog, removeTarget.id)
+            const entry = catalogEntryById(catalog, removeTarget.id)
             return entry ? catalogLabel(entry) : displayName(removeTarget, removeTarget.id)
           })()}
           otherProviders={providers.filter((p) => p.id !== removeTarget.id)}

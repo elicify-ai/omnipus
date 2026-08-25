@@ -27,7 +27,7 @@ import {
   NO_CONTEXT_LENGTH_COPY,
   modelOverrideHref,
 } from '@/lib/modelOverrideLink'
-import { resolveCatalogEntry } from '@/lib/providerMigration'
+import { catalogEntryById } from '@/lib/catalogDisplay'
 import type {
   DefaultModel,
   DefaultModelUpdateRequest,
@@ -101,7 +101,7 @@ export function DefaultModelCard({
     : undefined
   const providerLabel = defaultModel
     ? backingRow
-      ? providerDisplayName(backingRow, resolveCatalogEntry(catalog?.providers ?? [], backingRow.id).entry)
+      ? providerDisplayName(backingRow, catalogEntryById(catalog?.providers ?? [], backingRow.id))
       : defaultModel.provider
     : ABSENT_FIELD
 

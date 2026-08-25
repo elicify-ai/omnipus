@@ -17,8 +17,7 @@
 
 import type { CatalogModel, CatalogProvider, Provider, ProvidersCatalog } from '@/lib/api/generated/openapi-types'
 import type { ModelCatalogGroup } from '@/components/ui/model-selector'
-import { resolveCatalogEntry } from '@/lib/providerMigration'
-import { catalogLabel } from '@/lib/catalogDisplay'
+import { catalogEntryById, catalogLabel } from '@/lib/catalogDisplay'
 
 /** Display name for a configured row: catalog label → wire display name → id. */
 export function providerDisplayName(
@@ -42,7 +41,7 @@ export function slugAsCatalogModel(slug: string): CatalogModel {
   }
 }
 
-export interface ProviderModelGroupsInput {
+export interface ProviderModelGroupsInput { // not-wire-format: local input shape for buildProviderModelGroups, never serialized to or from the gateway
   providers: readonly Provider[]
   catalog?: ProvidersCatalog | null
   /** Appended after the display name, e.g. the row's status. Omit for none. */
@@ -64,7 +63,7 @@ export function buildProviderModelGroups({
   const groups: ModelCatalogGroup[] = []
 
   for (const provider of providers) {
-    const { entry } = resolveCatalogEntry(entries, provider.id)
+    const entry = catalogEntryById(entries, provider.id)
     const catalogModels = entry?.models ?? []
     const models: CatalogModel[] =
       catalogModels.length > 0 ? catalogModels : (provider.models ?? []).map(slugAsCatalogModel)
