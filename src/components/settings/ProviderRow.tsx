@@ -33,18 +33,7 @@ function isSignInCapable(provider: Provider, entry?: CatalogProvider): boolean {
 // Sub-component: a single configured-provider row (flat or inside a group)
 // ---------------------------------------------------------------------------
 
-export function ProviderRow({
-  provider,
-  entry,
-  title,
-  showIcon,
-  onConfigure,
-  onSignIn,
-  onSignOut,
-  signingIn,
-  signingOut,
-  testValidation,
-}: {
+export interface ProviderRowProps {
   provider: Provider
   entry?: CatalogProvider
   title: string
@@ -59,7 +48,32 @@ export function ProviderRow({
   /** True while a sign-out mutation is in flight (any row — the mutation is not per-id). */
   signingOut?: boolean
   testValidation?: ProviderValidation
-}) {
+  /**
+   * ADR-068 FR-019: this row backs `agents.defaults.default_model`. Derived by
+   * the caller from the default-model GET — never from a per-row wire field.
+   */
+  isDefault?: boolean
+  /**
+   * FR-019's row action. Omitted → the action is absent (a row whose provider
+   * cannot serve a turn has nothing to make default).
+   */
+  onSetAsDefault?: () => void
+}
+
+export function ProviderRow({
+  provider,
+  entry,
+  title,
+  showIcon,
+  onConfigure,
+  onSignIn,
+  onSignOut,
+  signingIn,
+  signingOut,
+  testValidation,
+  isDefault = false,
+  onSetAsDefault,
+}: ProviderRowProps) {
   const connected = provider.status === 'connected'
   const signInCapable = isSignInCapable(provider, entry)
   const catalogMode = providerCatalogMode(provider)
@@ -134,6 +148,15 @@ export function ProviderRow({
                 Not configured
               </Badge>
             )}
+            {isDefault && (
+              <Badge
+                variant="muted"
+                className="font-normal"
+                data-testid={`default-badge-${provider.id}`}
+              >
+                Default
+              </Badge>
+            )}
             {!signInCapable && connected && (
               <Badge variant="muted" className="font-normal">
                 {catalogMode === 'live' ? 'Live model list' : 'Manual models'}
@@ -156,6 +179,16 @@ export function ProviderRow({
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
+          {onSetAsDefault && (
+            <button tabIndex={0}
+              type="button"
+              onClick={onSetAsDefault}
+              className="text-xs text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors"
+              data-testid={`set-default-btn-${provider.id}`}
+            >
+              Set as default model…
+            </button>
+          )}
           {signInCapable ? (
             provider.status === 'signed_in' ? (
               <Button

@@ -11,6 +11,9 @@
  *   - FIX-4: real terminology ("Pay-as-you-go API" / "Coding Plan", no "Standard API")
  *   - Migration dataset (resolveCatalogEntry over the fetched catalog)
  *   - Settings-side catalog label consistency (US-7)
+ *   - ADR-068 T068-25 (TDD row 27): the *Default model* card, *Set as default
+ *     model…* from a row, the *Remove provider* flow and its no-Undo guarantee,
+ *     and the shared <ProviderPicker> that replaced the local picker Sheet.
  *
  * Catalog source (ADR-068 FR-037 / T068-05): the registry-fed document from
  * GET /providers/catalog, mocked here via fetchProvidersCatalog with the
@@ -19,9 +22,45 @@
  * `auth_method` / `dependents` / `backs_default` fields.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import * as React from 'react'
+import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest'
 import { act, render, screen, waitFor, fireEvent, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+
+// cmdk (the shared picker and the ModelSelector) needs ResizeObserver and
+// scrollIntoView; jsdom has neither.
+beforeAll(() => {
+  if (typeof window !== 'undefined' && !window.ResizeObserver) {
+    window.ResizeObserver = class ResizeObserver {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
+  }
+  if (!Element.prototype.scrollIntoView) {
+    Element.prototype.scrollIntoView = () => {}
+  }
+  // jsdom reports every element as 0x0, and @tanstack/react-virtual measures
+  // the scroll element with offsetHeight — a zero-height viewport renders zero
+  // rows, which would "pass" a not-rendered assertion for the wrong reason.
+  // Give the picker's virtual viewport the height it has in a browser.
+  Object.defineProperty(HTMLElement.prototype, 'offsetHeight', {
+    configurable: true,
+    get(this: HTMLElement) {
+      return this.getAttribute('data-testid') === 'picker-virtual-viewport' ? 480 : 0
+    },
+  })
+})
+
+// The ModelSelector's popover is stubbed to render in place, so its options are
+// queryable without driving a portal. The selector itself stays real.
+vi.mock('@/components/ui/popover', () => ({
+  Popover: ({ children }: { children: React.ReactNode }) => React.createElement(React.Fragment, null, children),
+  PopoverTrigger: ({ children, asChild }: { children: React.ReactNode; asChild?: boolean }) =>
+    asChild && React.isValidElement(children) ? children : React.createElement('div', null, children),
+  PopoverContent: ({ children }: { children: React.ReactNode }) => React.createElement('div', null, children),
+  PopoverAnchor: ({ children }: { children: React.ReactNode }) => React.createElement('div', null, children),
+}))
 
 const addToast = vi.fn()
 
@@ -37,6 +76,9 @@ vi.mock('@/lib/api', async (importOriginal) => {
     fetchProvidersCatalog: vi.fn(),
     configureProvider: vi.fn(),
     testProvider: vi.fn(),
+    deleteProvider: vi.fn(),
+    getDefaultModel: vi.fn(),
+    putDefaultModel: vi.fn(),
     reAuth: vi.fn(),
     signOutProvider: vi.fn(),
     isApiError: actual.isApiError,
@@ -125,6 +167,8 @@ beforeEach(() => {
   vi.clearAllMocks()
   vi.mocked(api.fetchProviders).mockResolvedValue([ANTHROPIC_PROVIDER] as never)
   vi.mocked(api.fetchProvidersCatalog).mockResolvedValue(PROVIDERS_CATALOG)
+  // A fresh install has no default model; describes that need one override this.
+  vi.mocked(api.getDefaultModel).mockResolvedValue(null as never)
 })
 
 // ---------------------------------------------------------------------------
@@ -155,7 +199,9 @@ describe('ProvidersSection — FIX-3 empty state', () => {
     })
     // The connect form (config Sheet) is not open yet — only the picker.
     expect(screen.queryByTestId('provider-config-sheet')).not.toBeInTheDocument()
-    expect(screen.getByTestId('picker-entry-openai')).toBeInTheDocument()
+    // FR-021: the sheet's contents are the ONE shared picker, not a local list.
+    expect(screen.getByTestId('settings-provider-picker')).toBeInTheDocument()
+    expect(screen.getByTestId('picker-popular-openai')).toBeInTheDocument()
   })
 
   it('selecting a picker entry transitions to the connect form Sheet', async () => {
@@ -163,14 +209,35 @@ describe('ProvidersSection — FIX-3 empty state', () => {
     renderSection()
     await waitFor(() => screen.getByTestId('connect-provider-btn'))
     fireEvent.click(screen.getByTestId('connect-provider-btn'))
-    await waitFor(() => screen.getByTestId('picker-entry-openai'))
-    fireEvent.click(screen.getByTestId('picker-entry-openai'))
+    await waitFor(() => screen.getByTestId('picker-popular-openai'))
+    // First level: the company. Second level (FR-027/FR-028): plan x region x
+    // auth method, confirmed with Continue — that is what settles the id.
+    fireEvent.click(screen.getByTestId('picker-popular-openai'))
+    await waitFor(() => screen.getByTestId('provider-detail-panel'))
+    fireEvent.click(screen.getByTestId('provider-detail-panel-continue'))
     await waitFor(() => {
       expect(screen.getByTestId('provider-config-sheet')).toBeInTheDocument()
     })
     expect(screen.getByTestId('api-key-input-openai')).toBeInTheDocument()
-    // The picker Sheet closed once an entry was chosen.
+    // The picker Sheet closed once a provider was confirmed.
     expect(screen.queryByTestId('provider-picker-sheet')).not.toBeInTheDocument()
+  })
+
+  it('carries the key typed in the second-level panel into the connect form', async () => {
+    vi.mocked(api.fetchProviders).mockResolvedValue([] as never)
+    renderSection()
+    await waitFor(() => screen.getByTestId('connect-provider-btn'))
+    fireEvent.click(screen.getByTestId('connect-provider-btn'))
+    await waitFor(() => screen.getByTestId('picker-popular-openai'))
+    fireEvent.click(screen.getByTestId('picker-popular-openai'))
+    await waitFor(() => screen.getByTestId('provider-detail-panel'))
+    fireEvent.change(screen.getByTestId('provider-detail-panel-api-key-input'), {
+      target: { value: 'sk-typed-in-panel' },
+    })
+    fireEvent.click(screen.getByTestId('provider-detail-panel-continue'))
+
+    await waitFor(() => screen.getByTestId('api-key-input-openai'))
+    expect(screen.getByTestId('api-key-input-openai')).toHaveValue('sk-typed-in-panel')
   })
 })
 
@@ -197,46 +264,60 @@ describe('ProvidersSection — FIX-3 configured-only list', () => {
     expect(screen.getByTestId('connect-provider-btn')).toBeInTheDocument()
   })
 
-  it('the picker excludes already-configured catalog entries', async () => {
-    vi.mocked(api.fetchProviders).mockResolvedValue([ANTHROPIC_PROVIDER] as never)
-    renderSection()
-    await waitFor(() => screen.getByTestId('connect-provider-btn'))
-    fireEvent.click(screen.getByTestId('connect-provider-btn'))
-    await waitFor(() => screen.getByTestId('provider-picker-sheet'))
-    // anthropic is configured — excluded from the picker.
-    expect(screen.queryByTestId('picker-entry-anthropic')).not.toBeInTheDocument()
-    // openai is not configured — still offered.
-    expect(screen.getByTestId('picker-entry-openai')).toBeInTheDocument()
-  })
-
-  it('the picker excludes the canonical entry for an alias-stored provider (z-ai → zai)', async () => {
+  // REPLACES three tests that asserted the local picker Sheet EXCLUDED
+  // already-configured catalog entries (and their aliases), and showed an
+  // "all configured" dead end when nothing was left. The shared picker
+  // (ADR-068 FR-021/FR-022) deliberately does the opposite: every catalog
+  // provider stays offerable — a company can be configured more than once
+  // across plans and regions — and the configured rows are surfaced as
+  // *Recent* instead of being hidden. The still-valid coverage those tests
+  // carried (a configured provider is visibly distinguished in the picker,
+  // search narrows the list, and there is always a way forward) is preserved
+  // below against the shared picker's own surface.
+  it('surfaces an already-configured provider as Recent, and still offers every catalog entry', async () => {
     vi.mocked(api.fetchProviders).mockResolvedValue([
-      { ...CONFIGURED_BASE, id: 'z-ai', name: 'z-ai', display_name: 'z-ai', models: [] },
+      { ...ANTHROPIC_PROVIDER, updated_at: '2026-08-20T10:00:00Z' },
     ] as never)
     renderSection()
     await waitFor(() => screen.getByTestId('connect-provider-btn'))
     fireEvent.click(screen.getByTestId('connect-provider-btn'))
-    await waitFor(() => screen.getByTestId('provider-picker-sheet'))
-    // Stored under the alias 'z-ai' — resolves to the canonical 'zai' entry,
-    // which must be excluded (not offered a second time under its canonical id).
-    expect(screen.queryByTestId('picker-entry-zai')).not.toBeInTheDocument()
-    expect(screen.getByTestId('picker-entry-openai')).toBeInTheDocument()
+    await waitFor(() => screen.getByTestId('settings-provider-picker'))
+
+    expect(screen.getByTestId('picker-recent-anthropic')).toBeInTheDocument()
+    // Not hidden from the catalog band either — a second variant may be wanted.
+    expect(screen.getByTestId('picker-popular-anthropic')).toBeInTheDocument()
+    expect(screen.getByTestId('picker-popular-openai')).toBeInTheDocument()
   })
 
-  it('search filters the picker catalog by company/label', async () => {
+  it('a Recent row opens that provider\'s own config Sheet, not a connect form', async () => {
+    vi.mocked(api.fetchProviders).mockResolvedValue([
+      { ...ANTHROPIC_PROVIDER, updated_at: '2026-08-20T10:00:00Z' },
+    ] as never)
+    renderSection()
+    await waitFor(() => screen.getByTestId('connect-provider-btn'))
+    fireEvent.click(screen.getByTestId('connect-provider-btn'))
+    await waitFor(() => screen.getByTestId('picker-recent-anthropic'))
+    fireEvent.click(screen.getByTestId('picker-recent-anthropic'))
+
+    await waitFor(() => expect(screen.getByTestId('provider-config-sheet')).toBeInTheDocument())
+    expect(screen.getByText('Update the API key for this provider.')).toBeInTheDocument()
+  })
+
+  it('search narrows the shared picker to the matching company', async () => {
     vi.mocked(api.fetchProviders).mockResolvedValue([ANTHROPIC_PROVIDER] as never)
     renderSection()
     await waitFor(() => screen.getByTestId('connect-provider-btn'))
     fireEvent.click(screen.getByTestId('connect-provider-btn'))
-    await waitFor(() => screen.getByTestId('provider-picker-sheet'))
-    fireEvent.change(screen.getByTestId('picker-search-input'), { target: { value: 'zhipu' } })
+    await waitFor(() => screen.getByTestId('picker-search'))
+    fireEvent.change(screen.getByTestId('picker-search'), { target: { value: 'zhipu' } })
+
     await waitFor(() => {
-      expect(screen.getByTestId('picker-entry-zai')).toBeInTheDocument()
+      expect(screen.getByTestId('picker-row-Zhipu AI')).toBeInTheDocument()
     })
-    expect(screen.queryByTestId('picker-entry-openai')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('picker-row-OpenAI')).not.toBeInTheDocument()
   })
 
-  it('shows an "all configured" message when every catalog entry is already configured', async () => {
+  it('never dead-ends: Custom endpoint is offered even when every catalog entry is configured', async () => {
     const allConfigured = CATALOG_PROVIDERS.map((e) => ({
       ...CONFIGURED_BASE,
       id: e.id,
@@ -248,8 +329,10 @@ describe('ProvidersSection — FIX-3 configured-only list', () => {
     renderSection()
     await waitFor(() => screen.getByTestId('connect-provider-btn'))
     fireEvent.click(screen.getByTestId('connect-provider-btn'))
-    await waitFor(() => screen.getByTestId('provider-picker-sheet'))
-    expect(screen.getByText(/all available providers are already configured/i)).toBeInTheDocument()
+    await waitFor(() => screen.getByTestId('settings-provider-picker'))
+
+    expect(screen.getByTestId('picker-custom-endpoint')).toBeInTheDocument()
+    expect(screen.queryByText(/all available providers are already configured/i)).not.toBeInTheDocument()
   })
 })
 
@@ -592,6 +675,8 @@ describe('ProvidersSection — original re-auth tests', () => {
         undefined,
         'reauth_tok',
         undefined,
+        // 7th arg (ADR-068 FR-037): the custom-endpoint pair, absent here.
+        undefined,
       )
     })
   })
@@ -669,6 +754,7 @@ describe('ProvidersSection — manual provider (Sheet)', () => {
         undefined,
         'reauth_tok',
         ['mygw/llama-3.3-70b', 'mygw/mixtral-8x7b'],
+        undefined,
       )
     })
   })
@@ -700,6 +786,7 @@ describe('ProvidersSection — manual provider (Sheet)', () => {
         undefined,
         'reauth_tok',
         [],
+        undefined,
       )
     })
   })
@@ -1241,21 +1328,330 @@ describe('ProvidersSection — ADR-068 sign-in row states', () => {
     expect(screen.getByTestId('configure-btn-anthropic')).toBeInTheDocument()
   })
 
-  it('selecting a sign_in-only catalog entry from the picker opens SignInDialog directly, not the API-key connect Sheet', async () => {
-    // `openai-chatgpt` is one of the shared fixture's three `auth_methods:
+  it('confirming a sign_in auth method from the picker opens SignInDialog directly, not the API-key connect Sheet', async () => {
+    // `openai-chatgpt` is one of the shared fixture's `auth_methods:
     // ["sign_in"]` rows — the same shape the served catalog carries, so this
     // asserts the real FR-005 branch rather than a bespoke entry.
+    //
+    // T068-25 replaced the local ProviderPickerSheet with the shared
+    // two-level ProviderPicker, so the route to this branch is now
+    // tile -> detail panel -> Continue (handleProviderConfirm) rather than a
+    // single click on a flat picker row. The assertion is unchanged: a
+    // sign_in row must never land in the API-key Sheet.
     vi.mocked(api.fetchProviders).mockResolvedValue([] as never)
     renderSection()
 
     await waitFor(() => screen.getByTestId('connect-provider-btn'))
     fireEvent.click(screen.getByTestId('connect-provider-btn'))
-    await waitFor(() => screen.getByTestId('picker-entry-openai-chatgpt'))
-    fireEvent.click(screen.getByTestId('picker-entry-openai-chatgpt'))
+    // `openai-chatgpt` carries its own `company: "ChatGPT"` in the fixture —
+    // it is NOT a variant under the OpenAI tile (that row is api_key-only), so
+    // the route to it is the searchable all-providers list.
+    await waitFor(() => screen.getByTestId('picker-search'))
+    fireEvent.change(screen.getByTestId('picker-search'), { target: { value: 'chatgpt' } })
+    await waitFor(() => screen.getByTestId('picker-row-ChatGPT'))
+    fireEvent.click(screen.getByTestId('picker-row-ChatGPT'))
+
+    await waitFor(() => screen.getByTestId('provider-detail-panel'))
+    // Sign-in is this company's only method, so AuthMethodControl renders no
+    // segmented control (a one-option segment would be a lie) and goes
+    // straight to the Sign in button. That button is the affordance the row
+    // offers, and it is wired to the section's SignInDialog — a click must
+    // open the dialog rather than do nothing.
+    expect(screen.queryByTestId('provider-detail-panel-auth-segment')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByTestId('provider-detail-panel-auth-signin-start'))
 
     await waitFor(() => {
       expect(screen.getByTestId('sign-in-dialog-stub')).toHaveTextContent('openai-chatgpt')
     })
     expect(screen.queryByTestId('provider-config-sheet')).not.toBeInTheDocument()
+  })
+})
+
+// ===========================================================================
+// ADR-068 T068-25 (TDD row 27) — the Default model card, the row action, and
+// the Remove-provider flow.
+// ===========================================================================
+
+const CONNECTED_ANTHROPIC = {
+  ...CONFIGURED_BASE,
+  id: 'anthropic',
+  name: 'anthropic',
+  display_name: 'Anthropic',
+  models: ['claude-sonnet-4-5'],
+}
+
+const CONNECTED_OPENROUTER = {
+  ...CONFIGURED_BASE,
+  id: 'openrouter',
+  name: 'openrouter',
+  display_name: 'OpenRouter',
+  has_models_endpoint: true,
+  models: ['anthropic/claude-sonnet-4.6'],
+}
+
+const DEFAULT_PAIR = {
+  provider: 'openrouter',
+  model: 'z-ai/glm-5.2',
+  context_window: 1048576,
+  window_source: 'catalog',
+}
+
+describe('ProvidersSection — Default model card (FR-019)', () => {
+  it('renders the card FIRST, reading provider · model and window · source', async () => {
+    vi.mocked(api.fetchProviders).mockResolvedValue([CONNECTED_OPENROUTER] as never)
+    vi.mocked(api.getDefaultModel).mockResolvedValue(DEFAULT_PAIR as never)
+    renderSection()
+
+    const card = await screen.findByTestId('default-model-card')
+    expect(within(card).getByText('Default model')).toBeInTheDocument()
+    // The card mounts immediately (skeleton); the pair arrives with the GET.
+    expect(await screen.findByTestId('default-model-provider')).toHaveTextContent('OpenRouter')
+    expect(screen.getByTestId('default-model-model')).toHaveTextContent('z-ai/glm-5.2')
+    expect(screen.getByTestId('default-model-window')).toHaveTextContent('1,048,576')
+    expect(screen.getByTestId('default-model-source')).toHaveTextContent('catalog')
+
+    // "First" is a DOM-order claim, not a vibe: the card precedes every row.
+    const row = await screen.findByTestId('provider-row-openrouter')
+    expect(card.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('renders an em dash for a window and source the server did not send', async () => {
+    vi.mocked(api.fetchProviders).mockResolvedValue([CONNECTED_OPENROUTER] as never)
+    vi.mocked(api.getDefaultModel).mockResolvedValue({
+      provider: 'openrouter',
+      model: 'z-ai/glm-5.2',
+    } as never)
+    renderSection()
+
+    expect(await screen.findByTestId('default-model-window')).toHaveTextContent('—')
+    expect(screen.getByTestId('default-model-source')).toHaveTextContent('—')
+  })
+
+  it('renders an em dash for an exempt row reporting context_window 0', async () => {
+    vi.mocked(api.fetchProviders).mockResolvedValue([CONNECTED_OPENROUTER] as never)
+    vi.mocked(api.getDefaultModel).mockResolvedValue({
+      provider: 'codex-cli',
+      model: 'gpt-5-codex',
+      context_window: 0,
+    } as never)
+    renderSection()
+
+    expect(await screen.findByTestId('default-model-window')).toHaveTextContent('—')
+  })
+
+  it('replaces the number with No context length + the pre-filled overrides link (X-08)', async () => {
+    vi.mocked(api.fetchProviders).mockResolvedValue([CONNECTED_OPENROUTER] as never)
+    vi.mocked(api.getDefaultModel).mockResolvedValue({
+      provider: 'ollama',
+      model: 'llama3.3:70b',
+      window_unknown: true,
+    } as never)
+    renderSection()
+
+    expect(await screen.findByTestId('default-model-window')).toHaveTextContent('No context length')
+    expect(screen.getByTestId('default-model-window-unknown-link')).toHaveAttribute(
+      'href',
+      '/settings?tab=models&provider=ollama&model=llama3.3%3A70b',
+    )
+    expect(screen.queryByTestId('default-model-source')).not.toBeInTheDocument()
+  })
+
+  it('says so plainly when no default model is set yet', async () => {
+    vi.mocked(api.fetchProviders).mockResolvedValue([CONNECTED_OPENROUTER] as never)
+    vi.mocked(api.getDefaultModel).mockResolvedValue(null as never)
+    renderSection()
+
+    expect(await screen.findByTestId('default-model-unset')).toBeInTheDocument()
+    expect(screen.queryByTestId('default-model-window')).not.toBeInTheDocument()
+  })
+
+  it('Change offers models of connected/signed-in providers only, and PUTs the pick', async () => {
+    vi.mocked(api.fetchProviders).mockResolvedValue([
+      CONNECTED_ANTHROPIC,
+      { ...CONNECTED_OPENROUTER, status: 'error' },
+      { ...CONFIGURED_BASE, id: 'groq', name: 'groq', display_name: 'Groq', status: 'disconnected', models: [] },
+    ] as never)
+    vi.mocked(api.getDefaultModel).mockResolvedValue(DEFAULT_PAIR as never)
+    vi.mocked(api.putDefaultModel).mockResolvedValue({
+      provider: 'anthropic',
+      model: 'claude-sonnet-4-5',
+    } as never)
+    renderSection()
+
+    await screen.findByTestId('default-model-provider')
+    // The selector is not mounted until Change is pressed.
+    expect(screen.queryByTestId('default-model-select')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByTestId('default-model-change-btn'))
+
+    await waitFor(() => expect(screen.getByTestId('default-model-select')).toBeInTheDocument())
+    // Anthropic is connected; OpenRouter is in error and Groq disconnected.
+    expect(screen.getByTestId('default-model-option-claude-sonnet-4-5')).toBeInTheDocument()
+    expect(screen.queryByTestId('default-model-option-anthropic/claude-sonnet-4.6')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId('default-model-option-claude-sonnet-4-5'))
+
+    await waitFor(() =>
+      expect(api.putDefaultModel).toHaveBeenCalledWith({
+        provider: 'anthropic',
+        model: 'claude-sonnet-4-5',
+      }),
+    )
+  })
+
+  it('marks the row that backs the default, and only that row', async () => {
+    vi.mocked(api.fetchProviders).mockResolvedValue([
+      CONNECTED_ANTHROPIC,
+      CONNECTED_OPENROUTER,
+    ] as never)
+    vi.mocked(api.getDefaultModel).mockResolvedValue(DEFAULT_PAIR as never)
+    renderSection()
+
+    await screen.findByTestId('provider-row-openrouter')
+    expect(screen.getByTestId('default-badge-openrouter')).toBeInTheDocument()
+    expect(screen.queryByTestId('default-badge-anthropic')).not.toBeInTheDocument()
+  })
+})
+
+describe('ProvidersSection — Set as default from the provider row (FR-019)', () => {
+  it('opens the selector pre-filtered to that provider and performs the same PUT', async () => {
+    vi.mocked(api.fetchProviders).mockResolvedValue([
+      CONNECTED_ANTHROPIC,
+      CONNECTED_OPENROUTER,
+    ] as never)
+    vi.mocked(api.getDefaultModel).mockResolvedValue(DEFAULT_PAIR as never)
+    vi.mocked(api.putDefaultModel).mockResolvedValue({
+      provider: 'anthropic',
+      model: 'claude-sonnet-4-5',
+    } as never)
+    renderSection()
+
+    await screen.findByTestId('provider-row-anthropic')
+    fireEvent.click(screen.getByTestId('set-default-btn-anthropic'))
+
+    await waitFor(() => expect(screen.getByTestId('default-model-select')).toBeInTheDocument())
+    // Pre-filtered: OpenRouter's models are not on offer even though it is connected.
+    expect(screen.getByTestId('default-model-option-claude-sonnet-4-5')).toBeInTheDocument()
+    expect(screen.queryByTestId('default-model-option-anthropic/claude-sonnet-4.6')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId('default-model-option-claude-sonnet-4-5'))
+    await waitFor(() =>
+      expect(api.putDefaultModel).toHaveBeenCalledWith({
+        provider: 'anthropic',
+        model: 'claude-sonnet-4-5',
+      }),
+    )
+  })
+
+  it('offers no row action for a provider that cannot serve a turn', async () => {
+    vi.mocked(api.fetchProviders).mockResolvedValue([
+      { ...CONNECTED_OPENROUTER, status: 'error' },
+    ] as never)
+    renderSection()
+
+    await screen.findByTestId('provider-row-openrouter')
+    expect(screen.queryByTestId('set-default-btn-openrouter')).not.toBeInTheDocument()
+  })
+})
+
+describe('ProvidersSection — Remove provider (FR-010, FR-016, FR-017)', () => {
+  beforeEach(() => {
+    vi.mocked(api.fetchProviders).mockResolvedValue([
+      CONNECTED_ANTHROPIC,
+      CONNECTED_OPENROUTER,
+    ] as never)
+    vi.mocked(api.getDefaultModel).mockResolvedValue(DEFAULT_PAIR as never)
+    vi.mocked(api.deleteProvider).mockResolvedValue({
+      deleted: true,
+      dependents: [],
+      default_changed: false,
+    } as never)
+  })
+
+  async function openRemoveDialog(id: string) {
+    renderSection()
+    await screen.findByTestId(`provider-row-${id}`)
+    fireEvent.click(screen.getByTestId(`configure-btn-${id}`))
+    await waitFor(() => screen.getByTestId(`remove-provider-btn-${id}`))
+    fireEvent.click(screen.getByTestId(`remove-provider-btn-${id}`))
+    await waitFor(() => screen.getByTestId('remove-provider-dialog'))
+  }
+
+  it('the config sheet footer opens the confirmation, titled for that provider', async () => {
+    await openRemoveDialog('anthropic')
+    expect(screen.getByText('Remove Anthropic? Its key will be deleted.')).toBeInTheDocument()
+    // Opening the dialog sends nothing.
+    expect(api.deleteProvider).not.toHaveBeenCalled()
+  })
+
+  it('confirming DELETEs that provider with no replacement default', async () => {
+    await openRemoveDialog('anthropic')
+    fireEvent.click(screen.getByTestId('remove-provider-confirm'))
+
+    await waitFor(() => expect(api.deleteProvider).toHaveBeenCalledWith('anthropic', undefined))
+  })
+
+  it('a default-backing row sends the inline new default with the DELETE', async () => {
+    vi.mocked(api.fetchProviders).mockResolvedValue([
+      CONNECTED_ANTHROPIC,
+      { ...CONNECTED_OPENROUTER, backs_default: true },
+    ] as never)
+    await openRemoveDialog('openrouter')
+
+    expect(screen.getByTestId('remove-provider-confirm')).toBeDisabled()
+    fireEvent.click(screen.getByTestId('new-default-model-claude-sonnet-4-5'))
+    await waitFor(() => expect(screen.getByTestId('remove-provider-confirm')).not.toBeDisabled())
+    fireEvent.click(screen.getByTestId('remove-provider-confirm'))
+
+    await waitFor(() =>
+      expect(api.deleteProvider).toHaveBeenCalledWith('openrouter', {
+        provider: 'anthropic',
+        model: 'claude-sonnet-4-5',
+      }),
+    )
+  })
+
+  it('leaves no Undo behind: no toast action, no restore request, nothing to click', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      await openRemoveDialog('anthropic')
+      fireEvent.click(screen.getByTestId('remove-provider-confirm'))
+      await waitFor(() => expect(api.deleteProvider).toHaveBeenCalledTimes(1))
+      await waitFor(() =>
+        expect(addToast).toHaveBeenCalledWith({ message: 'Provider removed', variant: 'success' }),
+      )
+
+      // FR-017: the toast carries copy and nothing else — no action button.
+      for (const [toast] of addToast.mock.calls) {
+        expect(toast).not.toHaveProperty('action')
+      }
+      expect(screen.queryByText(/undo/i)).not.toBeInTheDocument()
+
+      // …and nothing tries to put the provider back, ever.
+      await act(async () => {
+        vi.advanceTimersByTime(10_000)
+      })
+      expect(api.configureProvider).not.toHaveBeenCalled()
+      expect(api.putDefaultModel).not.toHaveBeenCalled()
+      expect(api.deleteProvider).toHaveBeenCalledTimes(1)
+      expect(screen.queryByText(/undo/i)).not.toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('a failed DELETE reports the server error and keeps the dialog open', async () => {
+    vi.mocked(api.deleteProvider).mockRejectedValue(
+      new api.ApiError(409, 'provider backs the default model; supply new_default'),
+    )
+    await openRemoveDialog('anthropic')
+    fireEvent.click(screen.getByTestId('remove-provider-confirm'))
+
+    await waitFor(() =>
+      expect(addToast).toHaveBeenCalledWith({
+        message: 'provider backs the default model; supply new_default',
+        variant: 'error',
+      }),
+    )
+    expect(screen.getByTestId('remove-provider-dialog')).toBeInTheDocument()
   })
 })

@@ -92,13 +92,18 @@ describe('provider save & connect integration (test #27)', () => {
       expect(reAuth).toHaveBeenCalledWith('my-password')
     })
     await waitFor(() => {
-      // configureProvider(id, apiKey, endpoint?, model?, reAuthToken?, models?)
+      // configureProvider(id, apiKey, endpoint?, model?, reAuthToken?, models?, custom?)
+      // 7th arg (ADR-068 FR-037, T068-25): the custom-endpoint pair, absent
+      // here — every non-custom save now threads it through explicitly (see
+      // the same 7-arg pattern in ProvidersSection.test.tsx's re-auth and
+      // manual-provider describes).
       expect(configureProvider).toHaveBeenCalledWith(
         'anthropic',
         'sk-ant-test-1234',
         undefined,
         undefined,
         'consent-token-abc',
+        undefined,
         undefined,
       )
     })

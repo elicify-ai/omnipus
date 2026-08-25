@@ -52,7 +52,11 @@ import {
   configureProvider,
   testProvider,
   signOutProvider,
+  deleteProvider,
+  getDefaultModel,
+  putDefaultModel,
   getErrorMessage,
+  isApiError,
 } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import { PROVIDER_HINTS } from '@/lib/constants'
@@ -66,10 +70,17 @@ import { ProviderValidationBanner } from '@/components/providers/ProviderValidat
 import { resolveCatalogEntry } from '@/lib/providerMigration'
 import { ProviderRow } from './ProviderRow'
 import { SignInDialog } from '@/components/providers/SignInDialog'
-import { ProviderPickerSheet } from './ProviderPickerSheet'
-import type { CatalogGroup } from './ProviderPickerSheet'
+import { DefaultModelCard } from './DefaultModelCard'
+import { RemoveProviderDialog } from './RemoveProviderDialog'
+import { ProviderPicker, type PickerSelection } from '@/components/providers/ProviderPicker'
+import type { ProviderDetailSelection } from '@/components/providers/ProviderDetailPanel'
+import { USABLE_PROVIDER_STATUSES } from '@/lib/providerStatus'
 import type { ProviderValidation, Provider } from '@/lib/api/generated/openapi-types'
-import type { CatalogProvider } from '@/lib/api/generated/openapi-types'
+import type {
+  CatalogProvider,
+  DefaultModelUpdateRequest,
+  ProviderUpdateRequest,
+} from '@/lib/api/generated/openapi-types'
 
 // A pending provider edit captured before the re-auth prompt; replayed once the
 // consent token is minted. `id` is the id submitted to the PUT (resolveSubmitId).
@@ -83,6 +94,8 @@ type PendingProviderChange = {
   draftKey: string
   key: string
   models?: string[]
+  /** Custom-endpoint pair (FR-037) — set only for a Custom endpoint row. */
+  custom?: Pick<ProviderUpdateRequest, 'api_base' | 'protocol'>
 }
 
 // The item shown in the Sheet — either an existing configured provider (configure
@@ -151,52 +164,6 @@ function groupProviders(catalog: CatalogProvider[], providers: Provider[]): Prov
   return order.map((g) => map.get(g)!)
 }
 
-// The set of catalog entry ids that are already configured — an id is
-// "configured" if ANY fetched provider.id resolves to that entry (via
-// resolveCatalogEntry, including alias matches). Used to exclude entries
-// from the picker (FIX-3). GET /providers returns configured rows only
-// (ADR-068 FR-011a), so the whole response participates.
-function configuredEntryIds(catalog: CatalogProvider[], providers: Provider[]): Set<string> {
-  const ids = new Set<string>()
-  for (const p of providers) {
-    const { entry } = resolveCatalogEntry(catalog, p.id)
-    if (entry) ids.add(entry.id)
-  }
-  return ids
-}
-
-// Catalog entries grouped by company, excluding already-configured ids and
-// filtered by a free-text search (company name, label, or alias). Returns
-// ProviderPickerSheet's CatalogGroup shape — owned there (see its doc
-// comment) since this function only builds the data to hand off to the
-// picker's Sheet; nothing in this file reads a group's fields itself.
-function buildCatalogGroups(catalog: CatalogProvider[], excludeIds: Set<string>, query: string): CatalogGroup[] {
-  const q = query.trim().toLowerCase()
-  const order: string[] = []
-  const map = new Map<string, CatalogGroup>()
-
-  for (const entry of catalog) {
-    if (excludeIds.has(entry.id)) continue
-    if (q) {
-      const haystack = [entry.company, entry.name, catalogLabel(entry), ...entry.aliases]
-        .join(' ')
-        .toLowerCase()
-      if (!haystack.includes(q)) continue
-    }
-    if (!map.has(entry.company)) {
-      order.push(entry.company)
-      map.set(entry.company, {
-        company: entry.company,
-        logoSlug: catalogLogoSlug(entry),
-        entries: [],
-      })
-    }
-    map.get(entry.company)!.entries.push(entry)
-  }
-
-  return order.map((c) => map.get(c)!)
-}
-
 // ---------------------------------------------------------------------------
 // Sub-component: Provider config Sheet (configure OR connect)
 // ---------------------------------------------------------------------------
@@ -226,6 +193,11 @@ interface ProviderConfigSheetProps {
   requestChange: (id: string, draftKey: string, key: string, models?: string[]) => void
   testing: Record<string, boolean>
   handleTest: (id: string) => void
+  /**
+   * ADR-068 US-3: opens the Remove-provider confirmation. Configure mode only —
+   * there is nothing to remove until a provider exists.
+   */
+  onRemove?: (provider: Provider) => void
 }
 
 function ProviderConfigSheet({
@@ -248,6 +220,7 @@ function ProviderConfigSheet({
   requestChange,
   testing,
   handleTest,
+  onRemove,
 }: ProviderConfigSheetProps) {
   // FR-033: an accidental close (Esc / overlay) with a dirty key does not
   // close — it asks. This flag is the inline "Discard key?" prompt's state.
@@ -592,6 +565,17 @@ function ProviderConfigSheet({
                   ) : 'Test'}
                 </button>
               )}
+              {/* ADR-068 US-3 — destructive, so text tier and far from Save. */}
+              {provider && onRemove && (
+                <button tabIndex={0}
+                  type="button"
+                  onClick={() => onRemove(provider)}
+                  className="text-xs text-[var(--color-muted)] hover:text-[var(--color-error)] transition-colors"
+                  data-testid={`remove-provider-btn-${providerId}`}
+                >
+                  Remove provider
+                </button>
+              )}
             </div>
             <div className="flex gap-2">
               <Button
@@ -644,9 +628,15 @@ export function ProvidersSection() {
   const [sheetTarget, setSheetTarget] = useState<SheetTarget | null>(null)
   const [sheetOpen, setSheetOpen] = useState(false)
 
-  // Picker Sheet state (FIX-3)
+  // Picker Sheet state (FIX-3) — the SHEET is local; what it contains is the
+  // one shared <ProviderPicker> onboarding step 3 renders (ADR-068 FR-021).
   const [pickerOpen, setPickerOpen] = useState(false)
-  const [pickerQuery, setPickerQuery] = useState('')
+
+  // ADR-068 US-3/US-4 state: the Remove confirmation and the default-model
+  // selector, the latter openable from the card or from a row action.
+  const [removeTarget, setRemoveTarget] = useState<Provider | null>(null)
+  const [changingDefault, setChangingDefault] = useState(false)
+  const [defaultFilterId, setDefaultFilterId] = useState<string | undefined>(undefined)
 
   const [apiKeys, setApiKeys] = useState<Record<string, string>>({})
   const [showKey, setShowKey] = useState<Record<string, boolean>>({})
@@ -675,12 +665,38 @@ export function ProvidersSection() {
   // Registry-fed catalog (ADR-068 FR-037). The ETag re-validation cadence
   // (Settings open + every 15 min) is the shared policy in
   // providersCatalogQuery.ts — never re-specified at a call site.
-  const { data: catalogDoc } = useQuery(providersCatalogQueryOptions())
+  const {
+    data: catalogDoc,
+    isLoading: catalogLoading,
+    isError: catalogError,
+    refetch: refetchCatalog,
+  } = useQuery(providersCatalogQueryOptions())
   const catalog = useMemo(() => catalogDoc?.providers ?? [], [catalogDoc])
 
+  // ADR-068 FR-018: the global default model. A fresh install has none and the
+  // GET answers 404 — that is the "not set yet" state, NOT a failure, so it
+  // resolves to null instead of rejecting into an error toast.
+  const { data: defaultModel = null, isLoading: defaultModelLoading } = useQuery({
+    queryKey: ['default-model'],
+    queryFn: async () => {
+      try {
+        return await getDefaultModel()
+      } catch (err) {
+        if (isApiError(err) && err.status === 404) return null
+        throw err
+      }
+    },
+  })
+
   const { mutate: applyChange, isPending: isSaving } = useMutation({
-    mutationFn: ({ id, key, token, models }: { id: string; draftKey: string; key: string; token: string; models?: string[] }) =>
-      configureProvider(id, key === '' ? undefined : key, undefined, undefined, token, models),
+    mutationFn: ({ id, key, token, models, custom }: {
+      id: string
+      draftKey: string
+      key: string
+      token: string
+      models?: string[]
+      custom?: Pick<ProviderUpdateRequest, 'api_base' | 'protocol'>
+    }) => configureProvider(id, key === '' ? undefined : key, undefined, undefined, token, models, custom),
     // Destructure `draftKey` (NOT `id`) — the canonical draft-state key set by
     // requestChange, so the typed key / validation banner is cleared under the
     // SAME key the Sheet is reading from, regardless of which literal id the
@@ -721,15 +737,28 @@ export function ProvidersSection() {
     },
   })
 
-  const requestChange = (id: string, draftKey: string, key: string, models?: string[]) => {
+  const requestChange = (
+    id: string,
+    draftKey: string,
+    key: string,
+    models?: string[],
+    custom?: Pick<ProviderUpdateRequest, 'api_base' | 'protocol'>,
+  ) => {
     setSaveValidation((prev) => ({ ...prev, [draftKey]: undefined }))
-    setPending({ id, draftKey, key, models })
+    setPending({ id, draftKey, key, models, custom })
     setReauthOpen(true)
   }
 
   const onReAuthConfirmed = (token: string) => {
     if (!pending) return
-    applyChange({ id: pending.id, draftKey: pending.draftKey, key: pending.key, token, models: pending.models })
+    applyChange({
+      id: pending.id,
+      draftKey: pending.draftKey,
+      key: pending.key,
+      token,
+      models: pending.models,
+      custom: pending.custom,
+    })
   }
 
   const handleTest = async (id: string) => {
@@ -765,7 +794,6 @@ export function ProvidersSection() {
   }
 
   const openPicker = () => {
-    setPickerQuery('')
     setPickerOpen(true)
   }
 
@@ -789,16 +817,123 @@ export function ProvidersSection() {
     },
   })
 
+  // ── ADR-068 US-3 — removal ────────────────────────────────────────────────
+  //
+  // There is no Undo and no client-side retention of the key (FR-017): the
+  // success toast carries a message and NOTHING else, and the only follow-up
+  // request is the refetch of the two queries the removal invalidated. The
+  // DELETE response is authoritative for the post-removal state (FR-012), so
+  // the dialog closes on it rather than on an optimistic guess.
+  const { mutate: removeProvider, isPending: isRemoving } = useMutation({
+    mutationFn: ({ id, newDefault }: { id: string; newDefault?: DefaultModelUpdateRequest }) =>
+      deleteProvider(id, newDefault),
+    onSuccess: (result) => {
+      setRemoveTarget(null)
+      setSheetOpen(false)
+      queryClient.invalidateQueries({ queryKey: ['providers'] })
+      if (result.default_changed) {
+        queryClient.invalidateQueries({ queryKey: ['default-model'] })
+      }
+      addToast({ message: 'Provider removed', variant: 'success' })
+    },
+    onError: (err: Error) => {
+      addToast({ message: getErrorMessage(err, 'Could not remove the provider'), variant: 'error' })
+    },
+  })
+
+  // ── ADR-068 US-4 — the default model ─────────────────────────────────────
+  const { mutate: saveDefaultModel, isPending: isSavingDefault } = useMutation({
+    mutationFn: (pair: DefaultModelUpdateRequest) => putDefaultModel(pair),
+    onSuccess: () => {
+      setChangingDefault(false)
+      setDefaultFilterId(undefined)
+      queryClient.invalidateQueries({ queryKey: ['default-model'] })
+      // backs_default moves with it, so the rows are stale too.
+      queryClient.invalidateQueries({ queryKey: ['providers'] })
+      addToast({ message: 'Default model updated', variant: 'success' })
+    },
+    onError: (err: Error) => {
+      addToast({ message: getErrorMessage(err, 'Could not change the default model'), variant: 'error' })
+    },
+  })
+
+  // FR-019's row action: the same selector as the card, pre-filtered to one row.
+  const openSetAsDefault = (provider: Provider) => {
+    setDefaultFilterId(provider.id)
+    setChangingDefault(true)
+  }
+
+  // ── The shared picker's selections (FR-021) ───────────────────────────────
+  //
+  // A tile or list row opens the second-level panel and comes back through
+  // `handleProviderConfirm`; only Recent and Custom settle anything here.
+  const handlePickerSelect = (picked: PickerSelection) => {
+    if (picked.kind === 'recent') {
+      setPickerOpen(false)
+      // Same FR-005 fork as handleProviderConfirm: a sign_in row has no key,
+      // so Recent must not drop it into the API-key Sheet either.
+      const { entry: recentEntry } = resolveCatalogEntry(catalog, picked.provider.id)
+      if (recentEntry?.auth_methods.includes('sign_in')) {
+        openSignInDialog(
+          picked.provider.id,
+          catalogVariantTitle(recentEntry),
+        )
+        return
+      }
+      openConfigureSheet(picked.provider)
+      return
+    }
+    if (picked.kind === 'custom') {
+      // The Custom endpoint panel already collected everything the PUT needs —
+      // id, base URL, protocol and key — so this goes straight to the re-auth
+      // gate rather than through a second form that would re-ask for the key.
+      setPickerOpen(false)
+      requestChange(picked.draft.id, picked.draft.id, picked.draft.api_key, undefined, {
+        api_base: picked.draft.api_base,
+        protocol: picked.draft.protocol,
+      })
+    }
+  }
+
+  // ADR-068 FR-005: the detail panel's own *Sign in* button, which resolves a
+  // company + sign-in method to ONE catalog id (openai-chatgpt / codex-cli /
+  // github-copilot). Without this the button renders and does nothing.
+  const handlePickerSignIn = (providerId: string) => {
+    const entry = catalog.find((c) => c.id === providerId)
+    setPickerOpen(false)
+    openSignInDialog(providerId, entry ? catalogLabel(entry) : providerId)
+  }
+
+  // The panel resolved plan x region x auth method to ONE catalog id.
+  //
+  // `sign_in` lands here too and opens the same sheet: the Settings sign-in
+  // panel is T068-26's deliverable and replaces this sheet's body for those
+  // rows. Routing it to the provider's own sheet keeps the seam visible
+  // instead of leaving *Continue* inert.
+  const handleProviderConfirm = (confirmed: ProviderDetailSelection) => {
+    const entry = catalog.find((c) => c.id === confirmed.providerId)
+    setPickerOpen(false)
+    if (!entry) return
+    // ADR-068 FR-005: a catalog row offering sign_in (openai-chatgpt /
+    // codex-cli / github-copilot) opens the SignInDialog directly — there is
+    // no key to type, so routing it to the API-key connect Sheet would leave
+    // the user staring at a field they cannot fill.
+    if (entry.auth_methods.includes('sign_in')) {
+      openSignInDialog(entry.id, catalogLabel(entry))
+      return
+    }
+    if (confirmed.apiKey) {
+      setApiKeys((prev) => ({ ...prev, [entry.id]: confirmed.apiKey as string }))
+    }
+    openConnectSheet(entry)
+  }
+
   // GET /providers returns configured providers only (ADR-068 FR-011a).
   const groups = groupProviders(catalog, providers)
   const hasConfigured = providers.length > 0
 
-  const excludeIds = useMemo(() => configuredEntryIds(catalog, providers), [catalog, providers])
-  const catalogGroups = useMemo(
-    () => buildCatalogGroups(catalog, excludeIds, pickerQuery),
-    [catalog, excludeIds, pickerQuery],
-  )
-  const allConfigured = catalog.length > 0 && excludeIds.size >= catalog.length
+  // FR-019: only a provider that can serve a turn is offered the row action.
+  const canBeDefault = (provider: Provider) => USABLE_PROVIDER_STATUSES.includes(provider.status)
 
   return (
     <div className="space-y-4">
@@ -826,6 +961,23 @@ export function ProvidersSection() {
           </Button>
         )}
       </div>
+
+      {/* ADR-068 FR-019 — the default-model control lives HERE and nowhere
+          else, and it is the first card on the screen. */}
+      <DefaultModelCard
+        defaultModel={defaultModel}
+        providers={providers}
+        catalog={catalogDoc}
+        status={defaultModelLoading ? 'loading' : 'ready'}
+        isSaving={isSavingDefault}
+        filterToProviderId={defaultFilterId}
+        changing={changingDefault}
+        onChangingChange={(next) => {
+          setChangingDefault(next)
+          if (!next) setDefaultFilterId(undefined)
+        }}
+        onChange={(pair) => saveDefaultModel(pair)}
+      />
 
       {providersError ? (
         <p className="text-sm text-red-400" data-testid="providers-error">
@@ -862,6 +1014,8 @@ export function ProvidersSection() {
                   signingIn={signInOpen && signInTarget?.id === provider.id}
                   signingOut={isSigningOut}
                   testValidation={testValidation[provider.id]}
+                  isDefault={defaultModel?.provider === provider.id}
+                  onSetAsDefault={canBeDefault(provider) ? () => openSetAsDefault(provider) : undefined}
                 />
               )
             }
@@ -903,6 +1057,8 @@ export function ProvidersSection() {
                       signingIn={signInOpen && signInTarget?.id === provider.id}
                       signingOut={isSigningOut}
                       testValidation={testValidation[provider.id]}
+                      isDefault={defaultModel?.provider === provider.id}
+                      onSetAsDefault={canBeDefault(provider) ? () => openSetAsDefault(provider) : undefined}
                     />
                   ))}
                 </div>
@@ -931,26 +1087,39 @@ export function ProvidersSection() {
         </div>
       )}
 
-      {/* Provider picker Sheet (FIX-3) */}
-      <ProviderPickerSheet
-        open={pickerOpen}
-        onOpenChange={setPickerOpen}
-        query={pickerQuery}
-        onQueryChange={setPickerQuery}
-        groups={catalogGroups}
-        allConfigured={allConfigured}
-        onSelect={(entry) => {
-          setPickerOpen(false)
-          // ADR-068 FR-005: a catalog row offering sign_in (openai-chatgpt /
-          // codex-cli / xai once configured) opens the SignInDialog directly
-          // instead of the API-key connect Sheet — there is no key to type.
-          if (entry.auth_methods.includes('sign_in')) {
-            openSignInDialog(entry.id, catalogLabel(entry))
-          } else {
-            openConnectSheet(entry)
-          }
-        }}
-      />
+      {/* Provider picker Sheet (FIX-3) — the sheet is Settings' own container;
+          its contents are the ONE shared picker (ADR-068 FR-021). */}
+      <Sheet open={pickerOpen} onOpenChange={setPickerOpen}>
+        <SheetContent
+          side="right"
+          widthClass="w-[90vw] sm:max-w-lg"
+          className="flex h-full flex-col p-0"
+          data-testid="provider-picker-sheet"
+        >
+          <SheetHeader className="px-6 pr-14">
+            <SheetTitle>Connect a provider</SheetTitle>
+          </SheetHeader>
+          <SheetDescription className="px-6 pt-2">
+            Pick the provider whose key or account you want to use.
+          </SheetDescription>
+          <div className="flex-1 overflow-y-auto px-6 py-4">
+            <ProviderPicker
+              data-testid="settings-provider-picker"
+              catalog={catalogDoc}
+              configured={providers}
+              status={catalogLoading ? 'loading' : catalogError ? 'error' : 'ready'}
+              onRetry={() => { void refetchCatalog() }}
+              onSelect={handlePickerSelect}
+              onProviderConfirm={handleProviderConfirm}
+              onSignIn={handlePickerSignIn}
+              autoFocus={false}
+            />
+            {/* FR-014: brand marks are rendered above, so the disclaimer rides
+                with them. */}
+            <BrandDisclaimer className="mt-4" />
+          </div>
+        </SheetContent>
+      </Sheet>
 
       {/* Provider config/connect Sheet */}
       <ProviderConfigSheet
@@ -983,7 +1152,24 @@ export function ProvidersSection() {
         requestChange={requestChange}
         testing={testing}
         handleTest={handleTest}
+        onRemove={(provider) => setRemoveTarget(provider)}
       />
+
+      {removeTarget && (
+        <RemoveProviderDialog
+          open
+          onOpenChange={(open) => { if (!open) setRemoveTarget(null) }}
+          provider={removeTarget}
+          displayName={(() => {
+            const { entry } = resolveCatalogEntry(catalog, removeTarget.id)
+            return entry ? catalogLabel(entry) : displayName(removeTarget, removeTarget.id)
+          })()}
+          otherProviders={providers.filter((p) => p.id !== removeTarget.id)}
+          catalog={catalogDoc}
+          isRemoving={isRemoving}
+          onConfirm={(newDefault) => removeProvider({ id: removeTarget.id, newDefault })}
+        />
+      )}
 
       <ReAuthDialog
         open={reauthOpen}

@@ -79,6 +79,9 @@ import {
   StorageStats as StorageStatsSchema,
   // Newly wired schemas:
   Provider as ProviderSchema,
+  // ADR-068 FR-010/FR-018 (contract-first #8):
+  ProviderDeleteResponse as ProviderDeleteResponseSchema,
+  DefaultModel as DefaultModelSchema,
   ProvidersCatalog as ProvidersCatalogSchema,
   CliDetect as CliDetectSchema,
   // ADR-068 §8b sign-in wire shapes (T068-33/T068-34):
@@ -318,6 +321,12 @@ import type {
   ProvidersCatalog,
   CatalogProvider,
   ProviderUpdateRequest,
+  // ADR-068 FR-010/FR-012/FR-018 — provider removal + the default-model pair:
+  ProviderDeleteRequest,
+  ProviderDeleteResponse,
+  ProviderDependent,
+  DefaultModel,
+  DefaultModelUpdateRequest,
   CliDetect,
   CliDetectEntry,
   CliValidateRequest,
@@ -515,6 +524,11 @@ export type {
   Provider,
   ProvidersCatalog,
   CatalogProvider,
+  ProviderDeleteRequest,
+  ProviderDeleteResponse,
+  ProviderDependent,
+  DefaultModel,
+  DefaultModelUpdateRequest,
   CliDetect,
   CliDetectEntry,
   CliValidateRequest,
@@ -2316,6 +2330,10 @@ export function configureProvider(
   model?: string,
   reAuthToken?: string,
   models?: string[],
+  // ADR-068 FR-037: an operator-named custom endpoint carries its own base URL
+  // and wire protocol — both are contract fields on ProviderUpdateRequest, and
+  // the server requires the pair to admit an id that is not in the catalog.
+  custom?: Pick<ProviderUpdateRequest, 'api_base' | 'protocol'>,
 ): Promise<Provider> {
   // ProviderUpdateRequest (contract): api_key/model are strings, models is the
   // operator-supplied slug catalogue for endpoint-less providers. `endpoint` is
@@ -2326,11 +2344,54 @@ export function configureProvider(
   if (endpoint !== undefined) body.endpoint = endpoint
   if (model !== undefined) body.model = model
   if (models !== undefined) body.models = models
+  if (custom?.api_base !== undefined) body.api_base = custom.api_base
+  if (custom?.protocol !== undefined) body.protocol = custom.protocol
   return request<Provider>(`/providers/${id}`, {
     method: 'PUT',
     headers: reAuthToken ? { [REAUTH_HEADER]: reAuthToken } : undefined,
     body: JSON.stringify(body),
   }, ProviderSchema as ZodType<Provider>)
+}
+
+// ── Provider removal + the global default model (ADR-068 US-3 / US-4) ────────
+//
+// deleteProvider removes the configured row AND its stored key. There is no
+// Undo and no dry run (FR-017): the secret is gone the moment the server
+// answers 200, so nothing here retains it and no caller is offered a restore.
+//
+// `newDefault` is required by the server (409 otherwise) when the provider
+// backs the default model — the dialog collects it inline. The RESPONSE is
+// authoritative for the post-removal state: the server recomputes dependents
+// and backs_default under the config lock, so a dependent that appeared while
+// the dialog was open still comes back here (FR-012).
+export function deleteProvider(
+  id: string,
+  newDefault?: DefaultModelUpdateRequest,
+): Promise<ProviderDeleteResponse> {
+  const body: ProviderDeleteRequest | undefined = newDefault ? { new_default: newDefault } : undefined
+  return request<ProviderDeleteResponse>(
+    `/providers/${id}`,
+    { method: 'DELETE', ...(body ? { body: JSON.stringify(body) } : {}) },
+    ProviderDeleteResponseSchema as ZodType<ProviderDeleteResponse>,
+  )
+}
+
+// getDefaultModel reads agents.defaults.default_model as a (provider, model)
+// pair with ADR-066's resolved window and its source. A fresh install has no
+// default: the GET answers 404 and this rejects with an ApiError the caller
+// renders as "not set" — never as a failure toast.
+export function getDefaultModel(): Promise<DefaultModel> {
+  return request<DefaultModel>('/providers/default-model', undefined, DefaultModelSchema as ZodType<DefaultModel>)
+}
+
+// putDefaultModel writes the pair. Takes effect on the next turn, with no
+// gateway restart (FR-018).
+export function putDefaultModel(pair: DefaultModelUpdateRequest): Promise<DefaultModel> {
+  return request<DefaultModel>(
+    '/providers/default-model',
+    { method: 'PUT', body: JSON.stringify(pair) },
+    DefaultModelSchema as ZodType<DefaultModel>,
+  )
 }
 
 export function testProvider(id: string): Promise<OperationResult> {
