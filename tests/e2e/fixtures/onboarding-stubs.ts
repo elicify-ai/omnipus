@@ -159,3 +159,65 @@ export function popularTiles(): Array<{ id: string; company: string }> {
   }
   return out
 }
+
+/** Everything a device-code sign-in run observed on the wire. */
+export interface SignInWireLog {
+  /** Provider ids POST /providers/{id}/sign-in was started for, newest last. */
+  starts: string[]
+  /** Bodies of every POST /providers/{id}/sign-in/poll, newest last. */
+  polls: Array<Record<string, unknown>>
+}
+
+/**
+ * Stub the ADR-068 §8b device-code sign-in routes (T068-33) so the shared
+ * `SignInDialog` can be driven without a real vendor round trip.
+ *
+ * The dialog is held deliberately in its `device_code` PENDING state: the poll
+ * always answers `pending`, which is the state the accessibility rows need
+ * (link + code + live status all on screen at once). `interval_seconds: 30` is
+ * the contract's maximum, so at most one poll fires inside a test's lifetime.
+ *
+ * `GET .../sign-in/status` answers `not_signed_in` for `codex-cli`, which is
+ * what keeps FR-047's secondary *Use my existing Codex login* link OUT of the
+ * DOM — the axe rows then measure the dialog's own, always-present controls.
+ */
+export async function stubProviderSignIn(page: Page): Promise<SignInWireLog> {
+  const log: SignInWireLog = { starts: [], polls: [] }
+
+  await page.route('**/api/v1/providers/*/sign-in', async (route: Route) => {
+    if (route.request().method() !== 'POST') return route.continue()
+    const id = new URL(route.request().url()).pathname.split('/').slice(-2)[0] ?? ''
+    log.starts.push(id)
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        method: 'device_code',
+        verification_url: 'https://auth.openai.com/codex/device',
+        user_code: 'WDJB-MJHT',
+        device_auth_id: 'das_e2e_0001',
+        expires_at: new Date(Date.now() + 15 * 60_000).toISOString(),
+        interval_seconds: 30,
+      }),
+    })
+  })
+
+  await page.route('**/api/v1/providers/*/sign-in/poll', async (route: Route) => {
+    log.polls.push((route.request().postDataJSON() ?? {}) as Record<string, unknown>)
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ state: 'pending' }),
+    })
+  })
+
+  await page.route('**/api/v1/providers/*/sign-in/status', async (route: Route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ state: 'not_signed_in' }),
+    })
+  })
+
+  return log
+}

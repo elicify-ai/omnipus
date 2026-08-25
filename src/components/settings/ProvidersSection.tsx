@@ -51,6 +51,7 @@ import {
   fetchProviders,
   configureProvider,
   testProvider,
+  signOutProvider,
   getErrorMessage,
 } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
@@ -64,6 +65,7 @@ import { ReAuthDialog } from './ReAuthDialog'
 import { ProviderValidationBanner } from '@/components/providers/ProviderValidationBanner'
 import { resolveCatalogEntry } from '@/lib/providerMigration'
 import { ProviderRow } from './ProviderRow'
+import { SignInDialog } from '@/components/providers/SignInDialog'
 import { ProviderPickerSheet } from './ProviderPickerSheet'
 import type { CatalogGroup } from './ProviderPickerSheet'
 import type { ProviderValidation, Provider } from '@/lib/api/generated/openapi-types'
@@ -660,6 +662,11 @@ export function ProvidersSection() {
   const [pending, setPending] = useState<PendingProviderChange | null>(null)
   const [reauthOpen, setReauthOpen] = useState(false)
 
+  // Sign-in dialog state (ADR-068 §8b, T068-33) — which provider row's
+  // SignInDialog is open, if any.
+  const [signInTarget, setSignInTarget] = useState<{ id: string; label: string } | null>(null)
+  const [signInOpen, setSignInOpen] = useState(false)
+
   const { data: providers = [], isLoading, isError: providersError } = useQuery({
     queryKey: ['providers'],
     queryFn: fetchProviders,
@@ -762,6 +769,26 @@ export function ProvidersSection() {
     setPickerOpen(true)
   }
 
+  const openSignInDialog = (id: string, label: string) => {
+    setSignInTarget({ id, label })
+    setSignInOpen(true)
+  }
+
+  const { mutate: doSignOut, isPending: isSigningOut } = useMutation({
+    mutationFn: (id: string) => signOutProvider(id),
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ['providers'] })
+      if (result.success) {
+        addToast({ message: 'Signed out', variant: 'success' })
+      } else {
+        addToast({ message: result.error ?? 'Sign out failed', variant: 'error' })
+      }
+    },
+    onError: (err: Error) => {
+      addToast({ message: getErrorMessage(err, 'Sign out failed'), variant: 'error' })
+    },
+  })
+
   // GET /providers returns configured providers only (ADR-068 FR-011a).
   const groups = groupProviders(catalog, providers)
   const hasConfigured = providers.length > 0
@@ -830,6 +857,10 @@ export function ProvidersSection() {
                   title={title}
                   showIcon
                   onConfigure={() => openConfigureSheet(provider)}
+                  onSignIn={() => openSignInDialog(provider.id, title)}
+                  onSignOut={() => doSignOut(provider.id)}
+                  signingIn={signInOpen && signInTarget?.id === provider.id}
+                  signingOut={isSigningOut}
                   testValidation={testValidation[provider.id]}
                 />
               )
@@ -867,6 +898,10 @@ export function ProvidersSection() {
                       title={entry ? catalogVariantTitle(entry) : displayName(provider, provider.id)}
                       showIcon={false}
                       onConfigure={() => openConfigureSheet(provider)}
+                      onSignIn={() => openSignInDialog(provider.id, entry ? catalogVariantTitle(entry) : displayName(provider, provider.id))}
+                      onSignOut={() => doSignOut(provider.id)}
+                      signingIn={signInOpen && signInTarget?.id === provider.id}
+                      signingOut={isSigningOut}
                       testValidation={testValidation[provider.id]}
                     />
                   ))}
@@ -906,7 +941,14 @@ export function ProvidersSection() {
         allConfigured={allConfigured}
         onSelect={(entry) => {
           setPickerOpen(false)
-          openConnectSheet(entry)
+          // ADR-068 FR-005: a catalog row offering sign_in (openai-chatgpt /
+          // codex-cli / xai once configured) opens the SignInDialog directly
+          // instead of the API-key connect Sheet — there is no key to type.
+          if (entry.auth_methods.includes('sign_in')) {
+            openSignInDialog(entry.id, catalogLabel(entry))
+          } else {
+            openConnectSheet(entry)
+          }
         }}
       />
 
@@ -953,6 +995,21 @@ export function ProvidersSection() {
         description="Re-type your password to change this provider's API key."
         onConfirmed={onReAuthConfirmed}
       />
+
+      {signInTarget && (
+        <SignInDialog
+          open={signInOpen}
+          onOpenChange={(o) => {
+            setSignInOpen(o)
+            if (!o) setSignInTarget(null)
+          }}
+          providerId={signInTarget.id}
+          providerLabel={signInTarget.label}
+          onSignedIn={() => {
+            queryClient.invalidateQueries({ queryKey: ['providers'] })
+          }}
+        />
+      )}
     </div>
   )
 }

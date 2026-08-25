@@ -27,6 +27,7 @@ import { queryClient } from '@/lib/queryClient'
 import { ProviderValidationBanner } from '@/components/providers/ProviderValidationBanner'
 import { ProviderPicker, type PickerSelection } from '@/components/providers/ProviderPicker'
 import type { ProviderDetailSelection } from '@/components/providers/ProviderDetailPanel'
+import { SignInDialog } from '@/components/providers/SignInDialog'
 import type { AuthMethod } from '@/components/providers/AuthMethodControl'
 import type {
   CatalogProvider,
@@ -272,6 +273,12 @@ function OnboardingWizard() {
   const [completed, setCompleted] = useState(false)
   // Step 3 — the confirmed provider row (null while the picker is open).
   const [selection, setSelection] = useState<ProviderSelection | null>(null)
+  // Step 3 sign-in (ADR-068 §8b, FR-045/FR-050) — the SAME SignInDialog
+  // Settings → Providers uses. FR-050 makes the five sign-in routes reachable
+  // while onboarding is incomplete, which is what lets an operator sign in
+  // here before any admin account exists to authenticate as.
+  const [signInTarget, setSignInTarget] = useState<{ id: string; label: string } | null>(null)
+  const [signInOpen, setSignInOpen] = useState(false)
   // FR-029: no model is pre-selected, ever. This starts empty and only the
   // operator's own pick fills it.
   const [selectedModel, setSelectedModel] = useState('')
@@ -353,6 +360,27 @@ function OnboardingWizard() {
       setProbeStatus('error')
       setProbeError(err instanceof Error ? err.message : String(err))
     }
+  }
+
+  /**
+   * Opens the sign-in dialog for a `sign_in` catalog row — from the picker's
+   * second-level *Sign in* button, or from the confirmed summary row.
+   */
+  const openSignInDialog = (providerId: string, label?: string) => {
+    const entry = catalogEntryById(providers, providerId)
+    setSignInTarget({ id: providerId, label: label ?? entry?.name ?? entry?.company ?? providerId })
+    setSignInOpen(true)
+  }
+
+  /**
+   * A completed sign-in changes what the probe would say. Re-run it for the
+   * model already on screen so *Finish* reflects the new session without the
+   * operator having to re-pick the model — FR-036's gate is unchanged: Finish
+   * still needs a PASSED probe, and a sign_in probe passes only when the
+   * gateway reports the session as signed in (400 `field=auth` otherwise).
+   */
+  const handleSignedIn = () => {
+    if (selectedModel.trim()) void runProbe(selectedModel)
   }
 
   /** The picker's second-level panel confirmed a catalog row (FR-027/FR-028). */
@@ -669,6 +697,7 @@ function OnboardingWizard() {
                 selection={selection}
                 onPickerSelect={handlePickerSelect}
                 onProviderConfirm={handleProviderConfirm}
+                onSignIn={openSignInDialog}
                 onChangeProvider={handleChangeProvider}
                 selectedModel={selectedModel}
                 onSelectModel={handleSelectModel}
@@ -687,6 +716,22 @@ function OnboardingWizard() {
         </AnimatePresence>
       </div>
       </div>
+
+      {/* The shared sign-in dialog (T068-33). Rendered at the wizard level, not
+          inside the animated step, so a step transition cannot unmount an open
+          device-code session mid-poll. */}
+      {signInTarget && (
+        <SignInDialog
+          open={signInOpen}
+          onOpenChange={(next) => {
+            setSignInOpen(next)
+            if (!next) setSignInTarget(null)
+          }}
+          providerId={signInTarget.id}
+          providerLabel={signInTarget.label}
+          onSignedIn={handleSignedIn}
+        />
+      )}
     </div>
   )
 }
@@ -999,6 +1044,7 @@ function ProviderStep({
   selection,
   onPickerSelect,
   onProviderConfirm,
+  onSignIn,
   onChangeProvider,
   selectedModel,
   onSelectModel,
@@ -1019,6 +1065,7 @@ function ProviderStep({
   selection: ProviderSelection | null
   onPickerSelect: (selection: PickerSelection) => void
   onProviderConfirm: (selection: ProviderDetailSelection) => void
+  onSignIn: (providerId: string, label?: string) => void
   onChangeProvider: () => void
   selectedModel: string
   onSelectModel: (model: string, autoProbe: boolean) => void
@@ -1096,6 +1143,7 @@ function ProviderStep({
           onRetry={onRetryCatalog}
           onSelect={onPickerSelect}
           onProviderConfirm={onProviderConfirm}
+          onSignIn={onSignIn}
           autoFocus={false}
         />
       )}
@@ -1134,6 +1182,21 @@ function ProviderStep({
               <p className="text-xs" style={{ color: 'var(--color-muted)' }}>
                 {signIn ? 'Signed in with the provider' : 'API key'}
               </p>
+              {/* FR-045: the sign-in path has nothing to type — the dialog is
+                  the whole interaction, and it must be reachable again after
+                  the row is confirmed (a session can lapse mid-onboarding). */}
+              {signIn && (
+                <button
+                  type="button"
+                  tabIndex={0}
+                  data-testid="onboarding-sign-in-btn"
+                  onClick={() => onSignIn(selection.providerId, selection.displayName)}
+                  className="mt-1 text-xs font-medium px-2 py-1 rounded border"
+                  style={{ borderColor: 'var(--color-accent)', color: 'var(--color-accent)' }}
+                >
+                  Sign in
+                </button>
+              )}
             </div>
           </div>
           <button
