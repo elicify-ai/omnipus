@@ -4972,7 +4972,29 @@ func stopAndCleanupServices(runningServices *services, shutdownTimeout time.Dura
 	// ADR-067 W3: stop every knowledge drift schedule and close every open
 	// collection index. Keyed by $OMNIPUS_HOME rather than carried on
 	// runningServices — see knowledgeLifecycles' doc comment.
-	stopKnowledgeLifecycles()
+	//
+	// RELOAD MUST NOT STOP IT — same rule as the channel manager above, and
+	// for a sharper reason. startKnowledgeLifecycle has exactly ONE production
+	// call site (setupAndStartServices, boot only); restartServices does not
+	// mention knowledge at all. So a reload that stopped the lifecycle would
+	// never get one back, a.knowledgeLifecycle() would return nil for the rest
+	// of the process's life, and AttachMountAsync's nil-receiver guard — right
+	// for a harness that wires no lifecycle — would turn every later mount
+	// into a silent no-op. Mounting a vault would 201 and index nothing, with
+	// no error and no log line, until the process restarted. That shipped and
+	// was found in manual testing; see
+	// docs/internal/design/knowledge-lifecycle-reload-survival-2026-08-24.md.
+	//
+	// Nothing the lifecycle captured goes stale across a reload: homePath is
+	// fixed for the process, wsHandler is never rebuilt, and the drift
+	// notifier closes over agentLoop.GetConfig, which reads the CURRENT config
+	// off the same *AgentLoop that handleConfigReload mutates in place. If a
+	// config key ever needs to reach the lifecycle live (a drift-interval knob
+	// is the obvious candidate — see setupAndStartServices), restart it from
+	// restartServices rather than deleting this guard.
+	if !isReload {
+		stopKnowledgeLifecycles()
+	}
 	if runningServices.PlanEngine != nil {
 		runningServices.PlanEngine.Stop()
 	}
