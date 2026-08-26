@@ -171,7 +171,7 @@ func (r RecordReport) Valid() bool {
 
 // Errors returns only the error-severity findings.
 func (r RecordReport) Errors() []Finding {
-	out := []Finding{}
+	out := make([]Finding, 0, len(r.Findings))
 	for _, f := range r.Findings {
 		if f.Severity == SeverityError {
 			out = append(out, f)
@@ -198,7 +198,11 @@ func (r *ValidationReport) Valid() bool {
 
 // Findings flattens every finding across every record.
 func (r *ValidationReport) Findings() []Finding {
-	out := []Finding{}
+	n := 0
+	for _, rec := range r.Records {
+		n += len(rec.Findings)
+	}
+	out := make([]Finding, 0, n)
 	for _, rec := range r.Records {
 		out = append(out, rec.Findings...)
 	}

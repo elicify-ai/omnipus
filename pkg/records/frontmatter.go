@@ -157,7 +157,17 @@ func ParseFrontmatter(src []byte) (Frontmatter, error) {
 			continue
 		}
 		fm.Keys = append(fm.Keys, key)
-		fm.Values[key] = convertYAMLNode(v, startLine)
+		node, why := convertYAMLNodeFailure(v, startLine)
+		if why != "" {
+			// A bounded conversion refused. Fail the WHOLE frontmatter rather
+			// than keeping a partial map: a note whose properties silently
+			// went missing would validate as an ordinary note and vanish from
+			// answers that still report complete — the exact defect ADR-068
+			// exists to remove. Reported by name instead.
+			return Frontmatter{Present: true, Values: map[string]Node{}},
+				fmt.Errorf("frontmatter could not be read: %s (property %q, line %d)", why, key, k.Line+startLine-1)
+		}
+		fm.Values[key] = node
 	}
 	return fm, nil
 }
@@ -176,13 +186,71 @@ func yamlKindName(k yaml.Kind) string {
 
 // convertYAMLNode turns a yaml.Node into our lexical Node, resolving aliases so
 // an anchor/alias pair does not read as an empty value.
-func convertYAMLNode(n *yaml.Node, lineOffset int) Node {
-	if n == nil {
+// convertBudget bounds a single frontmatter conversion.
+//
+// TWO DISTINCT ATTACKS, ONE CONTROL. A YAML alias may point at an ancestor,
+// so following aliases blindly recurses forever: a six-line note
+// (`a: &x` / `  - *x`) produced `fatal error: stack overflow` with 94
+// convertYAMLNode frames. That is a FATAL runtime error, not a panic —
+// recover() cannot catch it, so one note in the operator's vault takes the
+// whole gateway down. Separately, aliases that each reference several earlier
+// aliases expand multiplicatively ("billion laughs"): 210 bytes of frontmatter
+// produced 66,430 nodes and 8.3 MB of heap, roughly 40,000x, with each added
+// line multiplying by nine again.
+//
+// A depth cap alone stops the cycle but not the amplification, and a visited
+// set alone stops the cycle but not a legitimately deep document. So the
+// budget counts NODES PRODUCED, which bounds both, and a cycle is additionally
+// cut at the alias edge by the active-alias set so the error names the real
+// cause rather than reporting an exhausted budget.
+//
+// Exceeding either limit is not silent: conversion stops and the caller marks
+// the note unparseable, which is a finding a report names — the outcome
+// ParseRecord's contract promises. Both limits are far above any hand-written
+// frontmatter; the operator's own 751-note vault peaks in the low hundreds.
+type convertBudget struct {
+	nodes  int                 // remaining node allowance
+	active map[*yaml.Node]bool // aliases currently being expanded, for cycle detection
+	failed string              // non-empty once a limit was hit
+}
+
+const convertMaxNodes = 50_000
+
+// convertYAMLNodeFailure is the ONLY conversion entry point. An earlier
+// unbounded convertYAMLNode existed alongside it and was removed: two entry
+// points meant a caller could take the unguarded one, which is how CRIT-001
+// reached the tree in the first place.
+//
+// It converts and reports why it stopped, if it did. The
+// caller turns a non-empty reason into a parse error so the note is reported
+// by name rather than silently appearing to have empty frontmatter.
+func convertYAMLNodeFailure(n *yaml.Node, lineOffset int) (Node, string) {
+	b := &convertBudget{nodes: convertMaxNodes, active: map[*yaml.Node]bool{}}
+	out := convertYAMLNodeBounded(n, lineOffset, b)
+	return out, b.failed
+}
+
+func convertYAMLNodeBounded(n *yaml.Node, lineOffset int, b *convertBudget) Node {
+	if n == nil || b.failed != "" {
 		return Node{Kind: KindNull}
 	}
-	if n.Kind == yaml.AliasNode && n.Alias != nil {
-		return convertYAMLNode(n.Alias, lineOffset)
+	if b.nodes <= 0 {
+		b.failed = "frontmatter expands to more than 50000 nodes; refusing to read it"
+		return Node{Kind: KindNull}
 	}
+	b.nodes--
+
+	if n.Kind == yaml.AliasNode && n.Alias != nil {
+		if b.active[n.Alias] {
+			b.failed = "frontmatter contains a YAML alias that refers to itself"
+			return Node{Kind: KindNull}
+		}
+		b.active[n.Alias] = true
+		out := convertYAMLNodeBounded(n.Alias, lineOffset, b)
+		delete(b.active, n.Alias)
+		return out
+	}
+
 	out := Node{Tag: n.Tag, Line: n.Line + lineOffset - 1}
 	switch n.Kind {
 	case yaml.ScalarNode:
@@ -197,7 +265,10 @@ func convertYAMLNode(n *yaml.Node, lineOffset int) Node {
 		out.Kind = KindSequence
 		out.Items = make([]Node, 0, len(n.Content))
 		for _, c := range n.Content {
-			out.Items = append(out.Items, convertYAMLNode(c, lineOffset))
+			out.Items = append(out.Items, convertYAMLNodeBounded(c, lineOffset, b))
+			if b.failed != "" {
+				return Node{Kind: KindNull}
+			}
 		}
 	case yaml.MappingNode:
 		out.Kind = KindMapping
@@ -208,7 +279,10 @@ func convertYAMLNode(n *yaml.Node, lineOffset int) Node {
 				continue
 			}
 			out.Keys = append(out.Keys, key)
-			out.Fields[key] = convertYAMLNode(n.Content[i+1], lineOffset)
+			out.Fields[key] = convertYAMLNodeBounded(n.Content[i+1], lineOffset, b)
+			if b.failed != "" {
+				return Node{Kind: KindNull}
+			}
 		}
 	default:
 		out.Kind = KindNull
