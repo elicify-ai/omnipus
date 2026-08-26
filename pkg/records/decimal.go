@@ -77,6 +77,87 @@ const maxDecimalScale = 100
 // fallback and so REPORT errScaleTooLarge rather than doing the work.
 const maxRescaleGap = 2 * maxDecimalScale
 
+// maxRenderableScale bounds how far String will let the SCALE drive the length
+// of its output. Past it the value is abbreviated rather than written out.
+//
+// THE SHAPE, WHICH IS THE SAME ONE maxRescaleGap FIXED IN align/rescale. Both
+// of String's branches turn the scale into that many literal characters:
+//
+//	scale < 0   pow10(-scale) and multiply — 10^n, the same unbounded factor
+//	            rescale used to build. NewDecimal(1, math.MinInt32) asks for
+//	            10^2147483648, about 890 MB, and then renders it as a
+//	            2,147,483,649-character string on top.
+//	scale > 0   strings.Repeat("0", scale-len(digits)+1) — a DIFFERENT
+//	            mechanism with the identical property. NewDecimal(1,
+//	            math.MaxInt32) allocates 2 GB of '0' bytes and no pow10 is
+//	            involved at all.
+//
+// The second one is why this bound is stated over the scale rather than bolted
+// onto pow10: a guard on pow10 would have fixed the negative half and left the
+// positive half — which is exactly the case-shaped fix that left this defect
+// behind in the first place. The rule is about the WORK, not the mechanism:
+// String may do work proportional to the value's OWN digit count, because those
+// digits are the value's information and rendering them is the job; it may not
+// do work proportional to a caller-supplied scale, because those characters
+// carry no information the scale itself did not already carry.
+//
+// WHY ±maxDecimalScale IS THE RIGHT PLACE FOR IT, AND WHY NOTHING REAL MOVES.
+// It is not a new number: it is the package's existing value domain, restated.
+// ParseDecimal yields scale in [-maxDecimalScale, +maxDecimalScale] (the upper
+// end checked directly, the lower end because parseExponent caps the exponent
+// before negating it); money is tighter still at [0, maxMoneyScale]; and
+// rescale — the only other producer, and so the only way Add and Sub can move a
+// scale — refuses any target above maxDecimalScale and never lowers one. So
+// EVERY Decimal a vault file can produce, and every Decimal this package
+// derives from one, renders through the plain path byte for byte as before.
+// Only a hand-built NewDecimal/DecimalFromInt64 reaches the abbreviation, which
+// is precisely the population that reaches cmpUnaligned for the same reason.
+//
+// WHY ABBREVIATE RATHER THAN BOUND THE VALUE DOMAIN. Bounding Decimal's scale
+// at construction was considered and rejected, and the reasoning is the same
+// one that put maxRescaleGap on the work instead of on the value: NewDecimal
+// returns no error, so a bound there could only clamp (silently wrong — the one
+// failure mode this file exists to prevent), panic (R-11 requires comparison to
+// be total), or break the API. It would also contradict cmpUnaligned, whose
+// entire premise is that an out-of-bound scale is a LEGAL value that compares
+// exactly. A renderer's inability to print something is not a reason to make it
+// unrepresentable; the renderer says so instead.
+const maxRenderableScale = maxDecimalScale
+
+// renderScaleOutOfRange is String's disposition for a scale it will not write
+// out: NAME the value instead of printing it.
+//
+// It loses nothing. (unscaled, scale) IS the value by definition — it is the
+// same pair Unscaled() and Scale() return, and the same pair RecordMoney puts
+// on the wire — so this abbreviates the RENDERING without abbreviating the
+// number. A truncated digit string ("1000000…") could not say that: 10^1000 and
+// 10^10000000 truncate to the same text.
+//
+// WHY IT IS NOT EXPONENT NOTATION ("1e-2147483648"), WHICH WAS THE OBVIOUS
+// ALTERNATIVE. That form is exact too, and shorter, and it is still wrong here,
+// because it would emit something that LOOKS like a literal this package
+// accepts and is not:
+//
+//   - ParseDecimal REFUSES it. parseExponent caps the exponent at
+//     maxDecimalScale and at four digits, so "1e-2147483648" comes back as
+//     errScaleTooLarge. Today every in-domain String() output re-parses to an
+//     equal value; emitting exponent notation would break that for exactly the
+//     values a reader is most likely to want to copy.
+//   - MONEY refuses exponent notation BY RULE (parseMoneyAmount rule 1), and
+//     the error it raises when it does quotes d.String() as the plain form the
+//     operator should type instead: "write it out in full, e.g. %s". A String
+//     that answers in exponent notation makes that message advise the very
+//     notation it is rejecting.
+//
+// So the marker is deliberately not number-shaped at all — angle brackets and
+// prose, no bare digit run a parser or a reader could lift out and mistake for
+// the value. A caller who feeds this to a number parser gets a loud rejection,
+// which is the correct outcome; the danger this avoids is the quiet one.
+func renderScaleOutOfRange(n *big.Int, scale int32) string {
+	return fmt.Sprintf("<unscaled %s at scale %d: beyond the maximum of %d decimal places, not written out in full>",
+		n.String(), scale, maxRenderableScale)
+}
+
 // maxMoneyScale bounds a MONEY value's declared scale, and is deliberately
 // tighter than maxDecimalScale. It matches RecordMoney.yaml's `maximum: 12`
 // exactly: a money value that Go accepts but the wire cannot carry is a value
@@ -129,8 +210,20 @@ func (d Decimal) Sign() int { return d.int().Sign() }
 // String renders the value in plain decimal notation, preserving scale.
 // 349.98 at scale 2 renders "349.98"; the same value at scale 4 renders
 // "349.9800", because the scale is part of what was declared.
+//
+// Beyond ±maxDecimalScale it renders the ABBREVIATED form instead — see
+// renderScaleOutOfRange, and see maxRenderableScale for why the bound is where
+// it is and why abbreviating is the right disposition rather than a compromise.
 func (d Decimal) String() string {
 	n := d.int()
+
+	// The bound is checked BEFORE either branch below, because both branches
+	// materialise scale-many characters and both were unbounded. See
+	// maxRenderableScale.
+	if d.scale > maxRenderableScale || d.scale < -maxRenderableScale {
+		return renderScaleOutOfRange(n, d.scale)
+	}
+
 	if d.scale <= 0 {
 		if d.scale == 0 {
 			return n.String()
@@ -164,6 +257,14 @@ func (d Decimal) String() string {
 // that wrap would not panic — it would render a value SILENTLY WRONG, which is
 // the one failure mode this file exists to prevent. Widening to int64 makes the
 // negation total.
+//
+// n is UNBOUNDED here on purpose — 10^n is an unbounded allocation and this
+// function is not the place to decide how much is too much. Every caller bounds
+// its own n before calling, and each does so against the quantity that is
+// actually meaningful to it: rescale against maxRescaleGap (a distance between
+// two scales), String against maxRenderableScale (a single scale). Collapsing
+// those into one guard inside pow10 would have to pick one of the two bounds
+// and would be wrong for the other caller.
 func pow10(n int64) *big.Int {
 	return new(big.Int).Exp(big.NewInt(10), big.NewInt(n), nil)
 }
