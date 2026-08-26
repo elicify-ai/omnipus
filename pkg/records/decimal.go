@@ -44,6 +44,13 @@ type Decimal struct {
 // rather than silently rounded (this package never rounds).
 const maxDecimalScale = 100
 
+// maxMoneyScale bounds a MONEY value's declared scale, and is deliberately
+// tighter than maxDecimalScale. It matches RecordMoney.yaml's `maximum: 12`
+// exactly: a money value that Go accepts but the wire cannot carry is a value
+// an operator can write to disk and then never read back through the API.
+// Twelve is far past any real currency — ISO-4217 tops out at four.
+const maxMoneyScale = 12
+
 // errScaleTooLarge is returned rather than rounding. Rounding money silently is
 // the class of defect ADR-068 exists to remove.
 var errScaleTooLarge = fmt.Errorf("decimal scale exceeds the maximum of %d", maxDecimalScale)
@@ -180,12 +187,43 @@ func (d Decimal) Sub(o Decimal) (Decimal, error) {
 // reach; it never panics, because R-11 requires comparison to be total.
 func (d Decimal) Cmp(o Decimal) int {
 	a, b, err := align(d, o)
-	if err != nil {
-		// Both operands came from bounded parsing, so this is unreachable in
-		// practice. Degrade to a sign comparison rather than panicking.
-		return d.int().Sign() - o.int().Sign()
+	if err == nil {
+		return a.int().Cmp(b.int())
 	}
-	return a.int().Cmp(b.int())
+
+	// Alignment failed, which means the two scales are too far apart to bring
+	// to a common one. The old fallback returned `d.Sign() - o.Sign()`, on the
+	// stated premise that "both operands came from bounded parsing, so this is
+	// unreachable in practice". That premise is not enforced by the type:
+	// NewDecimal is exported and accepts any scale. The observable result was
+	// that NewDecimal(1, 200) and NewDecimal(999, 199) compared EQUAL — two
+	// clearly different numbers reported as the same one, silently, in the
+	// comparison path money flows through. It also returned values outside
+	// {-1,0,1}, contradicting this method's own contract.
+	//
+	// Compare by magnitude instead. Sign dominates; when signs agree, the
+	// larger EXPONENT of the leading digit wins, which is decided by
+	// (digits - scale). Only when those tie do we fall back to comparing the
+	// unscaled digits, and that case is exact.
+	ds, os := d.int().Sign(), o.int().Sign()
+	switch {
+	case ds != os:
+		if ds < os {
+			return -1
+		}
+		return 1
+	case ds == 0:
+		return 0
+	}
+	dMag := len(new(big.Int).Abs(d.int()).String()) - int(d.scale)
+	oMag := len(new(big.Int).Abs(o.int()).String()) - int(o.scale)
+	if dMag != oMag {
+		if (dMag < oMag) == (ds > 0) {
+			return -1
+		}
+		return 1
+	}
+	return d.int().Cmp(o.int())
 }
 
 // Equal reports value equality (scale-insensitive).

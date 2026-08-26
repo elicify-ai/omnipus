@@ -386,8 +386,12 @@ func parseMoneyMapping(p *Property, n Node) (TypedValue, *ValueError) {
 		return TypedValue{}, moneyValueError(p, raw, fmt.Errorf("`scale` must be a whole number, found %q", scaleNode.Text), FindingMoneyMalformed)
 	}
 	scale := scaleDec.Unscaled()
-	if !scale.IsInt64() || scale.Int64() < 0 || scale.Int64() > maxDecimalScale {
-		return TypedValue{}, moneyValueError(p, raw, fmt.Errorf("`scale` must be between 0 and %d, found %q", maxDecimalScale, scaleNode.Text), FindingMoneyMalformed)
+	// Bounded by maxMoneyScale, NOT maxDecimalScale. The wire caps `scale` at 12
+	// (RecordMoney.yaml), so a value with scale 13..100 validated in Go and then
+	// could not be serialised at all — accepted on disk, unrepresentable to a
+	// caller. The two bounds are now the same number for that reason.
+	if !scale.IsInt64() || scale.Int64() < 0 || scale.Int64() > maxMoneyScale {
+		return TypedValue{}, moneyValueError(p, raw, fmt.Errorf("`scale` must be between 0 and %d, found %q", maxMoneyScale, scaleNode.Text), FindingMoneyMalformed)
 	}
 	if !isIntegerLiteral(amountNode.Text) {
 		return TypedValue{}, moneyValueError(p, raw,
