@@ -106,20 +106,35 @@ var oracleDisposition = map[PropertyType]map[Operator]bool{
 // stageValues' declared order deliberately contradicts its lexical order:
 // lexically "lost" < "won"; by declared position "won"(1) < "lost"(2). Any
 // comparator that falls back to spelling fails R-5 against this fixture.
+//
+// The Position FIELD is deliberately LEFT UNSET on every value, and that is
+// load-bearing. It used to be hand-filled to 0/1/2 — matching the slice index —
+// and while it was, this table could not detect a comparator that ordered by
+// the field instead of by Property.EnumPosition, because under that fixture the
+// two authorities give the same answer. One did, and the whole 30,324-cell
+// table passed while `todo < done` on a struct-literal property answered FALSE.
+// A fixture that fills in a field cannot catch code that depends on the field
+// being filled in.
+//
+// Position is stamped only by the schema loader and NewProperty. Zero on every
+// value is exactly what a Property assembled from a struct literal carries —
+// the construction Property.EnumPosition's doc comment explicitly supports — so
+// with the field unset, every enum cell in this table now exercises it.
 var stageValues = []EnumValue{
-	{Name: "lead", Position: 0},
-	{Name: "won", Position: 1},
-	{Name: "lost", Position: 2},
+	{Name: "lead"},
+	{Name: "won"},
+	{Name: "lost"},
 }
 
+// testProperty builds the fixture property as a plain STRUCT LITERAL: the
+// unexported valuePos cache is left nil, so EnumPosition answers by scanning
+// Values. That is the path a consumer of this package gets and the path the
+// defect lived on; the cached path is exercised by every test in this package
+// that goes through LoadSchemas or NewProperty.
 func testProperty(name string, t PropertyType, many bool) *Property {
 	p := &Property{Name: name, Type: t, Many: many, RecordType: "fixture"}
 	if t == TypeEnum {
 		p.Values = append([]EnumValue(nil), stageValues...)
-		p.valuePos = map[string]int{}
-		for _, v := range p.Values {
-			p.valuePos[v.Name] = v.Position
-		}
 	}
 	return p
 }
@@ -853,7 +868,7 @@ func TestComparison_R5_EnumOrdersByDeclaredPositionNotSpelling(t *testing.T) {
 	// of the failure it prevents is a column holding `Won`, `won` and
 	// `Closed Won` — and when it does, they are TWO values, not one. A
 	// case-insensitive equality would silently merge them.
-	caseSet := []EnumValue{{Name: "won", Position: 0}, {Name: "Won", Position: 1}}
+	caseSet := []EnumValue{{Name: "won"}, {Name: "Won"}}
 	caseProp := &Property{Name: "stage_case", Type: TypeEnum, Values: caseSet, RecordType: "fixture"}
 	lower := present(caseProp, TypedValue{Type: TypeEnum, Raw: "won", Enum: caseSet[0]})
 	upper := present(caseProp, TypedValue{Type: TypeEnum, Raw: "Won", Enum: caseSet[1]})
@@ -870,7 +885,7 @@ func TestComparison_R5_EnumOrdersByDeclaredPositionNotSpelling(t *testing.T) {
 	// this asserts the comparator's backstop reports rather than inventing an
 	// ordering between two unrelated position numbers.
 	// SPEC GAP, REPORTED: §8 states no outcome for this case.
-	otherSet := []EnumValue{{Name: "todo", Position: 0}, {Name: "doing", Position: 1}, {Name: "done", Position: 2}}
+	otherSet := []EnumValue{{Name: "todo"}, {Name: "doing"}, {Name: "done"}}
 	otherProp := &Property{Name: "status", Type: TypeEnum, Values: otherSet, RecordType: "fixture"}
 	crossGot, crossProblems := c.Evaluate(OpLess, won,
 		present(otherProp, TypedValue{Type: TypeEnum, Raw: "doing", Enum: otherSet[1]}))

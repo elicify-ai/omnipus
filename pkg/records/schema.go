@@ -115,8 +115,21 @@ type EnumValue struct {
 	// is not `active` (DS-1). D4's reason: auto-accepting a near-miss is how
 	// one column comes to hold `Won`, `won` and `Closed Won`.
 	Name string
-	// Position is the declared index. FR-010: sorting follows THIS, not the
-	// alphabet, because otherwise operators encode order into strings.
+	// Position is the declared index, zero-based. FR-010: order is DATA, so it
+	// travels with the value instead of being encoded into the spelling — the
+	// "1-Pending / 7-DoNotContact" prefix hack exists only because a tool sorted
+	// lexically and offered no other way to state sequence.
+	//
+	// It is OUTPUT, never the ordering authority. Only the schema loader and
+	// NewProperty stamp it; a Property built with a plain struct literal — which
+	// EnumPosition explicitly supports — leaves it zero on every value. Ask
+	// Property.EnumPosition for an ordinal. Nothing in this package may read
+	// this field to decide an order, and enum_position_authority_test.go fails
+	// the build if anything starts to.
+	//
+	// It stayed a struct field because it is a required field of the wire type
+	// (contracts/components/schemas/EnumValueDef.yaml) that a caller serialising
+	// a schema must fill in.
 	Position int
 	// Group is D4's optional lifecycle bucket (open / done / cancelled) so
 	// "is this finished?" is answerable across types with different vocabularies.
@@ -167,7 +180,17 @@ type Property struct {
 }
 
 // EnumPosition returns a value's declared position and whether it is in the
-// set. This is the ordering oracle for FR-010 and §8 R-5.
+// set. This is the ordering oracle for FR-010 and §8 R-5 — the SOLE one. Every
+// caller that needs an enum ordinal asks here: value.go's parse, filter.go's
+// SortByEnumOrder, and compare_oracle.go's R-5 ordering. There is no second way
+// to learn it, and the EnumValue.Position field is not one.
+//
+// It was, briefly, and the two authorities agreed only by accident: this method
+// returns the SLICE INDEX, the field is stamped only by the loader and
+// NewProperty, and the comparator read the field. Against the struct-literal
+// Property the paragraph below blesses, every field was zero, so `todo < done`
+// answered FALSE — silently — while SortByEnumOrder on the same property
+// ordered the same values correctly.
 //
 // The position returned is the index into Values, which is the DECLARED order —
 // FR-010's "sorting follows position, not the alphabet". Callers index Values

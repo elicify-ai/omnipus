@@ -378,6 +378,13 @@ func literalOperand(prop *Property, literal *TypedValue) PropertyValue {
 // "the oracle does not order these two values" — different declared types (R-1),
 // an operator no rule defines for the type, or any reported problem such as
 // cross-currency money (R-6).
+//
+// ENUM IS ALWAYS ok=false HERE, deliberately. R-5 orders an enum by its position
+// in a DECLARED set, and two bare TypedValues carry no set between them — see
+// singletonOperand. Ordering them anyway would mean ranking `won` against
+// `blocked` from an unrelated vocabulary, so the oracle refuses. Order enum
+// values through the property that declares them: SortByEnumOrder, or
+// Comparator.Evaluate with real PropertyValue operands.
 func Compare(a, b TypedValue) (cmp int, ok bool) {
 	var c Comparator
 	left := singletonOperand(a)
@@ -406,8 +413,21 @@ func Compare(a, b TypedValue) (cmp int, ok bool) {
 
 // singletonOperand wraps one typed value as a scalar operand. The synthesised
 // property carries only the declared type, which is all the oracle reads for
-// every type except enum — and for enum both sides are synthesised the same
-// way, so R-5's shared-value-set precondition holds by construction.
+// every type except enum.
+//
+// For enum it carries NO declared value set, and that is not an oversight — a
+// bare TypedValue does not know which set it came from, so there is nothing
+// truthful to put there. R-5's precondition is therefore genuinely UNSATISFIED
+// here, and the oracle refuses and reports rather than ordering.
+//
+// The comment this replaces claimed the opposite: "for enum both sides are
+// synthesised the same way, so R-5's shared-value-set precondition holds by
+// construction." Both sides were indeed synthesised the same way — both with an
+// EMPTY set — so enumSetsAgree compared nothing against nothing and passed. The
+// precondition was defeated, not satisfied, and `won` from one declared set
+// then ordered against `blocked` from an unrelated one as though the two shared
+// a vocabulary. That is precisely the comparison CompareEnumSetsDiffer exists to
+// refuse.
 func singletonOperand(v TypedValue) PropertyValue {
 	return PropertyValue{
 		Property: &Property{Type: v.Type},

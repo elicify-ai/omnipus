@@ -64,10 +64,13 @@ const (
 	// CompareArityNotDefined is an operator applied across a list/scalar arity
 	// boundary that §8 does not define. R-9 defines exactly one such case.
 	CompareArityNotDefined ComparisonProblemCode = "operator_not_defined_across_arity"
-	// CompareEnumSetsDiffer is two enum operands drawn from different declared
-	// value sets, so R-5's "declared position" has no shared meaning. FR-009
-	// scopes a property to its record type, so FR-023 validation should reject
-	// this before evaluation; this is the backstop.
+	// CompareEnumSetsDiffer is R-5's precondition failing: the two enum operands
+	// cannot be shown to be drawn from ONE declared value set, so "declared
+	// position" has no shared meaning. That covers two cases — sets that differ,
+	// and an operand carrying NO declared set at all, which is not agreement
+	// with anything (see enumSetsAgree). FR-009 scopes a property to its record
+	// type, so FR-023 validation should reject the first before evaluation; this
+	// is the backstop.
 	CompareEnumSetsDiffer ComparisonProblemCode = "enum_sets_differ"
 	// CompareRelationUnresolved is a relation whose wikilink the index could not
 	// resolve to a record identity. R-8 compares by identity, so without one
@@ -460,7 +463,7 @@ func (c Comparator) evaluateScalar(op Operator, typ PropertyType, a, b TypedValu
 		if op == OpEqual {
 			return a.Enum.Name == b.Enum.Name, nil // R-5: exact-case equality
 		}
-		return orderingHolds(op, compareInt(a.Enum.Position, b.Enum.Position)), nil // R-5: declared position
+		return c.enumOrdering(op, a, b, la, rb) // R-5: declared position
 	case TypeMoney:
 		cmp, ok := CompareMoney(a.Money, b.Money)
 		if !ok {
@@ -481,11 +484,73 @@ func (c Comparator) evaluateScalar(op Operator, typ PropertyType, a, b TypedValu
 	}
 }
 
+// enumOrdering is R-5's ordering half, and it exists to keep the package
+// honest about WHERE an enum value's ordinal comes from.
+//
+// There must be exactly ONE way to learn that ordinal, and it is
+// Property.EnumPosition — the index into the property's declared Values. This
+// function therefore ASKS the property; it does not read the EnumValue.Position
+// field off the operand.
+//
+// It used to read the field, and the two authorities agreed only by accident.
+// EnumPosition answers from the declared slice — including by scanning Values
+// when the O(1) cache was never built, which is exactly the Property a consumer
+// gets from a plain struct literal. The Position FIELD is stamped only by the
+// schema loader and NewProperty. So for an externally-built property every
+// Position was the zero value, and `todo < done` came back FALSE with nothing
+// reported, while SortByEnumOrder — which goes through EnumPosition — sorted
+// the same three values correctly. Two answers, one property, no complaint:
+// the silent-wrong-answer class this oracle exists to remove.
+//
+// A name the property does not declare is FR-011 non-conformance, not a
+// position of zero. R-4 already refuses a non-conforming OPERAND; this catches
+// the same defect one level in, where the operand's state says present but the
+// value it carries is not a member of the set its own property declares.
+func (c Comparator) enumOrdering(op Operator, a, b TypedValue, la, rb PropertyValue) (bool, []ComparisonProblem) {
+	leftPos, leftOK := la.Property.EnumPosition(a.Enum.Name)
+	rightPos, rightOK := rb.Property.EnumPosition(b.Enum.Name)
+
+	var problems []ComparisonProblem
+	if !leftOK {
+		problems = append(problems, enumValueNotDeclaredProblem(op, "left", a.Enum.Name, la))
+	}
+	if !rightOK {
+		problems = append(problems, enumValueNotDeclaredProblem(op, "right", b.Enum.Name, rb))
+	}
+	if len(problems) > 0 {
+		return false, problems
+	}
+	return orderingHolds(op, compareInt(leftPos, rightPos)), nil
+}
+
+func enumValueNotDeclaredProblem(op Operator, side, value string, pv PropertyValue) ComparisonProblem {
+	return ComparisonProblem{
+		Code:     CompareNonConforming,
+		Operator: op,
+		Type:     TypeEnum,
+		Property: pv.Property.Name,
+		Side:     side,
+		Detail: fmt.Sprintf("%s operand's value %q is not one of the values %q declares (%s), so R-5's declared position does not exist for it",
+			side, value, pv.Property.Name, strings.Join(pv.Property.PermittedValues(), ", ")),
+	}
+}
+
 // enumSetsAgree enforces R-5's precondition: "declared position" only means
 // something when both operands are drawn from ONE declared set.
+//
+// An EMPTY declared set is not agreement. Two properties that declare no values
+// at all are not "drawn from one set" — they are drawn from no set, and R-5 has
+// nothing to stand on. Treating empty-equals-empty as agreement made the
+// precondition VACUOUSLY satisfiable: filter.go's singletonOperand synthesised
+// both sides as `&Property{Type: v.Type}`, so two enum values from genuinely
+// different declared sets sailed past this check and were then ordered against
+// each other — the exact comparison CompareEnumSetsDiffer exists to refuse.
 func (c Comparator) enumSetsAgree(op Operator, la, rb PropertyValue) []ComparisonProblem {
 	leftSet := la.Property.PermittedValues()
 	rightSet := rb.Property.PermittedValues()
+	if len(leftSet) == 0 || len(rightSet) == 0 {
+		return []ComparisonProblem{enumNoDeclaredSetProblem(op, la, rb)}
+	}
 	if len(leftSet) != len(rightSet) {
 		return []ComparisonProblem{enumSetProblem(op, la)}
 	}
@@ -504,6 +569,32 @@ func enumSetProblem(op Operator, pv PropertyValue) ComparisonProblem {
 		Type:     TypeEnum,
 		Property: pv.Property.Name,
 		Detail:   "the two enum operands are not drawn from one declared value set, so declared position has no shared meaning",
+	}
+}
+
+// enumNoDeclaredSetProblem reports the empty-set half of R-5's precondition. It
+// names the side (or sides) that declared nothing, because "sets differ" would
+// send a caller looking for a mismatch that is not there.
+func enumNoDeclaredSetProblem(op Operator, la, rb PropertyValue) ComparisonProblem {
+	var detail string
+	leftEmpty := len(la.Property.Values) == 0
+	rightEmpty := len(rb.Property.Values) == 0
+	switch {
+	case leftEmpty && rightEmpty:
+		detail = "neither enum operand carries a declared value set, so R-5's declared position has no set to be a position in; compare through the record type's declared property"
+	case leftEmpty:
+		detail = fmt.Sprintf("the left enum operand carries no declared value set, so it cannot be shown to be drawn from the same set as the right (%s)",
+			strings.Join(rb.Property.PermittedValues(), ", "))
+	default:
+		detail = fmt.Sprintf("the right enum operand carries no declared value set, so it cannot be shown to be drawn from the same set as the left (%s)",
+			strings.Join(la.Property.PermittedValues(), ", "))
+	}
+	return ComparisonProblem{
+		Code:     CompareEnumSetsDiffer,
+		Operator: op,
+		Type:     TypeEnum,
+		Property: la.Property.Name,
+		Detail:   detail,
 	}
 }
 
