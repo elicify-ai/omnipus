@@ -37,13 +37,80 @@ type Money struct {
 }
 
 // Scale reports the number of minor-unit digits this value was declared with.
+//
+// For any money value this package PARSED, the result is in [0, maxMoneyScale]
+// — parseMoneyAmount guarantees it, and RecordMoney.yaml requires it
+// (`scale: minimum 0, maximum 12`).
 func (m Money) Scale() int32 { return m.Amount.Scale() }
 
 // String renders "349.98 SGD".
 func (m Money) String() string { return m.Amount.String() + " " + m.Currency }
 
-// MinorUnits returns the amount as an integer count of minor units at Scale.
+// MinorUnits returns the amount as an integer count of minor units at Scale,
+// which is what RecordMoney.amount carries on the wire (ADR-068 O-2).
+//
+// The pair (MinorUnits, Scale) is only meaningful if MinorUnits x 10^-Scale is
+// the value — and that is exactly what a NEGATIVE scale breaks. "1e3 USD" once
+// parsed to unscaled=1, scale=-3, so MinorUnits said "1" for one thousand
+// dollars: a wire encoding built from this pair would have been off by 1000x,
+// with nothing anywhere to notice. parseMoneyAmount now refuses exponent
+// notation outright, which is the only way a money value could acquire a
+// negative scale, so the identity holds for every accepted input.
 func (m Money) MinorUnits() string { return m.Amount.Unscaled().String() }
+
+// ---------------------------------------------------------------------------
+// Parsing a money AMOUNT — stricter than parsing a plain number
+// ---------------------------------------------------------------------------
+
+// parseMoneyAmount parses the amount half of a money value from its lexical
+// form. It is ParseDecimal plus the two rules money has and a plain `number`
+// does not.
+//
+// Every form whose scale is INFERRED from the amount's own text goes through
+// here — the inline "349.98 SGD" and "SGD 349.98" forms and the
+// {amount, currency} mapping alike. That is the point: the reported defect was
+// the mapping being bounded and the inline form not, and a bound enforced on
+// one path and not the other is not a bound.
+//
+// The one form that does NOT come through here is {amount, currency, scale},
+// where the scale is DECLARED rather than inferred. It cannot reach either
+// failure this function prevents: parseMoneyMapping requires its amount to be
+// an integer literal (which excludes exponent notation and any fractional
+// digits) and checks the declared scale against maxMoneyScale directly.
+//
+// Rule 1 — NO EXPONENT NOTATION. RecordMoney.amount's pattern is
+// `^-?(0|[1-9][0-9]*)$`: integer minor units, "no exponent" stated outright.
+// Accepting "1e3 USD" produced unscaled=1 at scale -3, and the wire has no way
+// to say scale -3 (`minimum: 0`). The value was accepted on disk and could not
+// be read back through the API — the failure this bound exists to remove. It
+// is REFUSED rather than normalised to 1000 at scale 0 because this package
+// does not reshape money values (value.go: "NOTHING IS COERCED"), and the fix
+// is one keystroke: write 1000 USD.
+//
+// Rule 2 — SCALE BOUNDED BY maxMoneyScale, not maxDecimalScale. Same reason,
+// same failure: RecordMoney.scale caps at 12, so a money value at scale 31
+// validated in Go and then could not be serialised at all.
+//
+// A `number` property keeps both liberties — 1e3 and 40 decimal places are
+// fine there — because nothing on the wire constrains it the way RecordMoney
+// constrains money.
+func parseMoneyAmount(text string) (Decimal, error) {
+	s := strings.TrimSpace(text)
+
+	d, err := ParseDecimal(s)
+	if err != nil {
+		// Not a number at all. Report that first: "0x1e" is malformed, not an
+		// exponent, and saying so would send the operator to the wrong fix.
+		return Decimal{}, err
+	}
+	if strings.ContainsAny(s, "eE") {
+		return Decimal{}, fmt.Errorf("%w: %q uses exponent notation, which a money amount does not accept (write it out in full, e.g. %s)", errNotADecimal, text, d.String())
+	}
+	if d.Scale() > maxMoneyScale {
+		return Decimal{}, fmt.Errorf("money amount %q has %d decimal places; a money value carries at most %d (ADR-068 O-2 / RecordMoney.scale), and rounding it here would be exactly the silent change this package refuses to make", text, d.Scale(), maxMoneyScale)
+	}
+	return d, nil
+}
 
 // ---------------------------------------------------------------------------
 // Errors that must stay distinguishable — callers report each differently.
@@ -97,18 +164,13 @@ func SumMoney(values []Money) (total Money, ok bool, err error) {
 	}
 
 	// Collect the distinct currencies FIRST, so the refusal can name all of
-	// them rather than only the first two encountered.
-	seen := map[string]struct{}{}
-	for _, v := range values {
-		seen[v.Currency] = struct{}{}
-	}
-	if len(seen) > 1 {
-		list := make([]string, 0, len(seen))
-		for c := range seen {
-			list = append(list, c)
-		}
-		sort.Strings(list)
-		return Money{}, false, &CrossCurrencyError{Currencies: list}
+	// them rather than only the first two encountered. CurrenciesPresent is
+	// the one place that list is built — SumMoney used to build its own copy
+	// of the same loop, which is how two answers to one question start to
+	// disagree.
+	currencies := CurrenciesPresent(values)
+	if len(currencies) > 1 {
+		return Money{}, false, &CrossCurrencyError{Currencies: currencies}
 	}
 
 	sum := values[0].Amount
@@ -122,8 +184,14 @@ func SumMoney(values []Money) (total Money, ok bool, err error) {
 	return Money{Amount: sum, Currency: values[0].Currency}, true, nil
 }
 
-// CurrenciesPresent lists the distinct currencies in a set, sorted. Callers
-// building a problem list use it to report what a refused total contained.
+// CurrenciesPresent lists the distinct currencies in a set, sorted, with no
+// duplicates. An empty input gives an empty (non-nil) list, not nil, so a
+// caller can range over it and marshal it without a special case.
+//
+// It is what fills RecordAggregateResult.currencies_present, and it is what
+// SumMoney puts in its FR-014 refusal — the refusal and the report therefore
+// name the same currencies in the same order by construction, rather than by
+// two loops agreeing.
 func CurrenciesPresent(values []Money) []string {
 	seen := map[string]struct{}{}
 	for _, v := range values {

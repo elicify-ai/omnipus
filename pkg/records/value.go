@@ -312,6 +312,19 @@ func parseNumberValue(p *Property, n Node) (TypedValue, *ValueError) {
 // UNITS, so `amount` alongside an explicit `scale` must be an integer. Reading
 // `349.98` with `scale: 2` as either 349.98 or 3.4998 is a coin toss, and this
 // package does not toss coins over money.
+//
+// Whichever form it arrives in, an accepted money value ends up inside the
+// bounds RecordMoney.yaml imposes — scale 0..maxMoneyScale, no exponent — and
+// there are two roads to that, both of which must stay closed:
+//
+//	SCALE INFERRED   the inline forms and {amount, currency} parse their
+//	                 amount through parseMoneyAmount (money.go), which applies
+//	                 both bounds. Bounding one of these and not the others is
+//	                 the defect this arrangement exists to prevent.
+//	SCALE DECLARED   {amount, currency, scale} never reaches parseMoneyAmount.
+//	                 It cannot breach either bound: the amount must be an
+//	                 integer literal (no exponent, no fractional digits) and
+//	                 the declared scale is range-checked below.
 func parseMoneyValue(p *Property, n Node) (TypedValue, *ValueError) {
 	switch n.Kind {
 	case KindScalar:
@@ -341,9 +354,17 @@ func parseMoneyScalar(p *Property, n Node) (TypedValue, *ValueError) {
 			// Then it is probably written currency-first.
 			amountText, currency = fields[1], fields[0]
 		}
-		d, err := ParseDecimal(amountText)
-		if err != nil {
+		// Two steps, deliberately. ParseDecimal answers "is this field the
+		// amount at all?", which is what decides the swap above; only then does
+		// parseMoneyAmount apply money's own bounds. Collapsing them would make
+		// "1e3 USD" look like a currency-first value and report the currency as
+		// malformed, which is not where the operator's fix is.
+		if _, err := ParseDecimal(amountText); err != nil {
 			return TypedValue{}, moneyValueError(p, n.Text, fmt.Errorf("%q is not an amount", amountText), FindingMoneyMalformed)
+		}
+		d, err := parseMoneyAmount(amountText)
+		if err != nil {
+			return TypedValue{}, moneyValueError(p, n.Text, err, FindingMoneyMalformed)
 		}
 		if err := ValidateCurrency(currency); err != nil {
 			return TypedValue{}, moneyValueError(p, n.Text, err, FindingMoneyBadCurrency)
@@ -371,9 +392,12 @@ func parseMoneyMapping(p *Property, n Node) (TypedValue, *ValueError) {
 	}
 
 	if !hasScale {
-		d, err := ParseDecimal(amountNode.Text)
+		// parseMoneyAmount, not ParseDecimal: this branch infers the scale from
+		// the amount's own fractional digits, so it is the branch that could
+		// mint a scale the wire cannot carry.
+		d, err := parseMoneyAmount(amountNode.Text)
 		if err != nil {
-			return TypedValue{}, moneyValueError(p, raw, fmt.Errorf("`amount` %q is not a number", amountNode.Text), FindingMoneyMalformed)
+			return TypedValue{}, moneyValueError(p, raw, fmt.Errorf("`amount` %q: %w", amountNode.Text, err), FindingMoneyMalformed)
 		}
 		return TypedValue{Type: TypeMoney, Raw: raw, Money: Money{Amount: d, Currency: currencyNode.Text}}, nil
 	}

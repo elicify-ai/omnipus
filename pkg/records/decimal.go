@@ -104,7 +104,7 @@ func (d Decimal) String() string {
 		}
 		// Negative scale means trailing implicit zeros (e.g. 1e3 parsed as
 		// unscaled=1, scale=-3). Materialise them so the text is unambiguous.
-		out := new(big.Int).Mul(new(big.Int).Abs(n), pow10(-d.scale))
+		out := new(big.Int).Mul(new(big.Int).Abs(n), pow10(-int64(d.scale)))
 		if n.Sign() < 0 {
 			return "-" + out.String()
 		}
@@ -124,8 +124,15 @@ func (d Decimal) String() string {
 }
 
 // pow10 returns 10^n as a big.Int. n must be >= 0.
-func pow10(n int32) *big.Int {
-	return new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(n)), nil)
+//
+// The parameter is int64 rather than int32 deliberately: every caller derives n
+// by NEGATING a scale, and negating math.MinInt32 in int32 arithmetic wraps
+// back to a negative number. big.Int.Exp answers 1 for a negative exponent, so
+// that wrap would not panic — it would render a value SILENTLY WRONG, which is
+// the one failure mode this file exists to prevent. Widening to int64 makes the
+// negation total.
+func pow10(n int64) *big.Int {
+	return new(big.Int).Exp(big.NewInt(10), big.NewInt(n), nil)
 }
 
 // rescale returns an equivalent Decimal at the target scale. It only ever
@@ -141,7 +148,7 @@ func (d Decimal) rescale(target int32) (Decimal, error) {
 	if target > maxDecimalScale {
 		return Decimal{}, errScaleTooLarge
 	}
-	factor := pow10(target - d.scale)
+	factor := pow10(int64(target) - int64(d.scale))
 	return Decimal{unscaled: new(big.Int).Mul(d.int(), factor), scale: target}, nil
 }
 
@@ -182,29 +189,49 @@ func (d Decimal) Sub(o Decimal) (Decimal, error) {
 }
 
 // Cmp compares two Decimals by VALUE, not by representation: 349.98 and
-// 349.9800 are equal. Returns -1, 0 or +1. On an alignment failure (a scale
-// beyond the bound) it falls back to comparing at the highest scale it can
-// reach; it never panics, because R-11 requires comparison to be total.
+// 349.9800 are equal. Returns -1, 0 or +1, always.
+//
+// Aligning to a common scale is the fast path. When align refuses — the scales
+// are further apart than maxDecimalScale allows, which only a hand-built
+// Decimal can reach — cmpUnaligned answers the SAME question exactly, without
+// rescaling. Neither path approximates and neither path panics, which is what
+// §8 R-11 means by comparison being total.
 func (d Decimal) Cmp(o Decimal) int {
 	a, b, err := align(d, o)
 	if err == nil {
 		return a.int().Cmp(b.int())
 	}
 
-	// Alignment failed, which means the two scales are too far apart to bring
-	// to a common one. The old fallback returned `d.Sign() - o.Sign()`, on the
-	// stated premise that "both operands came from bounded parsing, so this is
-	// unreachable in practice". That premise is not enforced by the type:
-	// NewDecimal is exported and accepts any scale. The observable result was
-	// that NewDecimal(1, 200) and NewDecimal(999, 199) compared EQUAL — two
-	// clearly different numbers reported as the same one, silently, in the
-	// comparison path money flows through. It also returned values outside
-	// {-1,0,1}, contradicting this method's own contract.
-	//
-	// Compare by magnitude instead. Sign dominates; when signs agree, the
-	// larger EXPONENT of the leading digit wins, which is decided by
-	// (digits - scale). Only when those tie do we fall back to comparing the
-	// unscaled digits, and that case is exact.
+	return cmpUnaligned(d, o)
+}
+
+// cmpUnaligned compares two Decimals EXACTLY without bringing them to a common
+// scale. It is Cmp's fallback for the case align refuses (a scale beyond
+// maxDecimalScale), and it is exact for EVERY input, not just the ones that
+// motivated it.
+//
+// Two defects preceded it, and they are mirror images of each other, so this
+// third attempt states the invariant rather than the cases:
+//
+//	FIRST  the fallback was `d.Sign() - o.Sign()`, excused by "both operands
+//	       came from bounded parsing". NewDecimal is exported and takes any
+//	       scale, so that was never true: 1e-200 and 9.99e-197 compared EQUAL.
+//	SECOND the fallback compared MAGNITUDE and then, on a tie, the raw unscaled
+//	       digits — ignoring that a tie is precisely the case where the scales
+//	       still DIFFER. NewDecimal(15,200) and NewDecimal(150,201) are the same
+//	       number, 1.5e-199, and it reported them unequal.
+//
+// The invariant that makes this one exact: write |x| as 0.<digits> x 10^E with
+// E = len(digits) - scale. The digits carry no leading zero (a big.Int never
+// renders one), so E orders the magnitudes outright. When two values share E
+// they differ only in their FRACTION, and right-padding both digit strings with
+// zeros to a common length makes lexicographic order identical to numeric
+// order. Padding is bounded by the operands' own digit counts, never by the
+// scale gap, so an adversarial scale cannot turn a comparison into a
+// multi-gigabyte allocation the way naive rescaling would.
+//
+// Sign is applied last, once, to the magnitude verdict.
+func cmpUnaligned(d, o Decimal) int {
 	ds, os := d.int().Sign(), o.int().Sign()
 	switch {
 	case ds != os:
@@ -213,17 +240,37 @@ func (d Decimal) Cmp(o Decimal) int {
 		}
 		return 1
 	case ds == 0:
+		// Both zero, at whatever scales: equal.
 		return 0
 	}
-	dMag := len(new(big.Int).Abs(d.int()).String()) - int(d.scale)
-	oMag := len(new(big.Int).Abs(o.int()).String()) - int(o.scale)
-	if dMag != oMag {
-		if (dMag < oMag) == (ds > 0) {
-			return -1
+
+	dDigits := new(big.Int).Abs(d.int()).String()
+	oDigits := new(big.Int).Abs(o.int()).String()
+
+	// int64 throughout: len is an int and scale an int32, and on a 32-bit
+	// platform int(len) - int(scale) can overflow. This cannot.
+	dExp := int64(len(dDigits)) - int64(d.scale)
+	oExp := int64(len(oDigits)) - int64(o.scale)
+
+	var mag int
+	switch {
+	case dExp > oExp:
+		mag = 1
+	case dExp < oExp:
+		mag = -1
+	default:
+		if pad := len(oDigits) - len(dDigits); pad > 0 {
+			dDigits += strings.Repeat("0", pad)
+		} else if pad < 0 {
+			oDigits += strings.Repeat("0", -pad)
 		}
-		return 1
+		mag = strings.Compare(dDigits, oDigits)
 	}
-	return d.int().Cmp(o.int())
+
+	if ds < 0 {
+		return -mag
+	}
+	return mag
 }
 
 // Equal reports value equality (scale-insensitive).

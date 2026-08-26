@@ -48,6 +48,14 @@
 // point. `number` is held to the same standard, because FR/DS-1 requires
 // 2^53+1 to survive exactly and a float64 cannot represent it.
 //
-// The mechanical guard is decimal_no_float_test.go, which greps this package's
-// own source for float types.
+// The mechanical guard is decimal_no_float_test.go. It does NOT grep — this
+// line used to say it did, and named a file that did not exist, which is the
+// worse of the two errors: it asserted an enforcement a reader could not find.
+// The guard parses every .go file in this package with go/ast (comments off,
+// so prose like the paragraph above is not an offence) and fails on three
+// things: an identifier naming a binary float type, an identifier containing
+// "Float" (big.NewFloat, strconv.ParseFloat, SetFloat64, ...), and an untyped
+// floating-point literal such as `x := 349.98`. The last two were added after
+// a review found the identifier-only version would pass a package containing
+// exactly `big.NewFloat(349.98)`.
 package records
