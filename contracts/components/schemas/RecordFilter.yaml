@@ -124,34 +124,54 @@ properties:
   include_absent:
     type: boolean
     description: >
-      Whether records where the property is ABSENT satisfy this clause.
-
-      Defaulted by the SERVER per FR-008, not by the client, and the default is
-      a function of `negate`: a NEGATED clause INCLUDES absent records unless
-      this is explicitly false, and a non-negated clause excludes them unless
-      this is explicitly true. That default is the correction of a real
-      failure — "days I did not meditate" otherwise omits every day with no
-      value, precisely the days being asked about. Omitted means "use the
-      default for this clause"; present means the caller has overridden it
-      deliberately.
+      Whether records where the property is ABSENT still satisfy this clause.
+      MEANINGFUL ONLY WHEN `negate` IS TRUE.
 
 
-      `include_absent: false` on a negated clause is the wire spelling of the
-      engine's opt-out (`records.Filter.ExcludeAbsent`). The two are one
-      setting stated from opposite ends, not two independent knobs, so this
-      schema carries no separate `exclude_absent` field — a second field
-      meaning the same thing is how a contract starts contradicting itself.
+      On a NEGATED clause (FR-008): absent records are INCLUDED by default,
+      because "days I did not meditate" must contain the days carrying no
+      value at all — precisely the days being asked about. Send
+      `include_absent: false` to opt out. That opt-out is the wire spelling of
+      the engine's `records.Filter.ExcludeAbsent`, which holds
+      `!include_absent`; this schema therefore carries no separate
+      `exclude_absent` field, because a second field meaning the same thing is
+      how a contract starts contradicting itself.
 
 
-      `op: is_absent` is exempt: it TESTS absence, so absence is its subject
-      rather than a case to re-admit, and this field does not apply to it.
+      On a NON-NEGATED clause: absent records NEVER satisfy the clause, and
+      this field is IGNORED — no value of it can admit them. §8 R-2 makes a
+      comparison with an absent operand false for every operator except
+      `is_absent`, and `records.Filter.MatchWith` returns that verdict
+      unchanged when the clause is not negated: `ExcludeAbsent` is read only
+      inside its `f.Negate` branch, and no field on `records.Filter` admits an
+      absent record to a POSITIVE clause.
 
 
-      Corrected 2026-08-25: this description previously defined its default in
-      terms of "a NEGATIVE clause (neq, not_in)" — operators this schema does
-      not offer and the engine never implemented, leaving the field's default
-      keyed to something no caller could send.
-    example: true
+      That is OUT OF SCOPE, not an unbuilt feature — nothing is owed here and
+      no engine change is pending. FR-008 mandates inclusion for NEGATIVE
+      filters only, and "status is done, or has no status at all" is a UNION
+      of two clauses rather than one clause with a knob: ask it as
+      {op: eq, values: ["done"]} together with {op: is_absent}.
+
+
+      `op: is_absent` is exempt at either polarity: it TESTS absence, so
+      absence is its subject rather than a case to re-admit.
+
+
+      Carries no JSON Schema `default:`, for the reason spelled out on
+      `negate`: openapi-typescript promotes a defaulted property to REQUIRED
+      while oapi-codegen still emits an optional pointer, so a `default:` here
+      would split the two generated languages on one field. Omitted means "the
+      default for this clause", which is the FR-008 inclusion above.
+
+
+      Corrected 2026-08-26: this description previously claimed "a non-negated
+      clause excludes them unless this is explicitly true" — i.e. that
+      `include_absent: true` admits absent records to a POSITIVE clause. No
+      code performs that and none is planned. A handler written to the old
+      wording would have had to drop the flag silently or grow a SECOND engine
+      field, which is the very duplication the paragraph above refuses.
+    example: false
   via:
     type: array
     maxItems: 2

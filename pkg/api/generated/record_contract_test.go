@@ -559,3 +559,204 @@ func TestContract_RecordQueryResponse_RefusalCarriesNoPartialAnswer(t *testing.T
 	assert.Contains(t, string(raw), `"problems":[`)
 	assert.Contains(t, string(raw), `"refused":true`)
 }
+
+// ── `include_absent` is scoped to negation, and says so ──────────────────────
+// Traces to: contracts/components/schemas/RecordFilter.yaml, FR-008,
+// spec §8 R-2, pkg/records/filter.go::Filter.MatchWith.
+//
+// THE RULING THESE TESTS PIN, so it cannot be reworded back by accident:
+//
+// `include_absent` is meaningful ONLY on a negated clause. On a NON-NEGATED
+// clause an absent record can never satisfy the predicate, whatever the flag
+// says, and the flag is inert.
+//
+// That is not an opinion about what would be nice — it is the only thing the
+// engine can express. `records.Filter.ExcludeAbsent` is read at exactly one
+// place, inside the `if f.Negate` branch of `Filter.MatchWith`'s StateAbsent
+// case. The positive branch returns the oracle's verdict unchanged, and §8 R-2
+// makes that verdict false for every operator except `is_absent`. No field on
+// `records.Filter` admits an absent record to a positive clause, and FR-008
+// asks for none: it mandates inclusion for NEGATIVE filters only.
+//
+// The schema previously asserted the opposite — "a non-negated clause excludes
+// them unless this is explicitly true". A handler written to that sentence had
+// two options and both are defects: drop the flag silently, or add a SECOND
+// engine field meaning what ExcludeAbsent already means. The same paragraph
+// warned against exactly that second field, which is how the contradiction
+// surfaced.
+//
+// Prose is what a handler author actually reads, so prose is what is asserted
+// here. The structural facts (no second field, optional in all three generated
+// languages) are asserted alongside it, because either half alone is
+// defeatable.
+
+type recordFilterPropDoc struct {
+	Type        string `yaml:"type"`
+	Description string `yaml:"description"`
+	// Default is a *bool so "absent" stays distinguishable from "false". The
+	// whole point of the assertion below is that the key is ABSENT.
+	Default *bool `yaml:"default"`
+}
+
+func recordFilterPropDocs(t *testing.T) map[string]recordFilterPropDoc {
+	t.Helper()
+
+	path := filepath.Join(contractsDir(), "components", "schemas", "RecordFilter.yaml")
+	raw, err := os.ReadFile(path)
+	require.NoError(t, err)
+
+	var doc struct {
+		Properties map[string]recordFilterPropDoc `yaml:"properties"`
+	}
+	require.NoError(t, yaml.Unmarshal(raw, &doc))
+	return doc.Properties
+}
+
+// normalizeProse collapses the folded-scalar line wrapping so an assertion
+// about a SENTENCE does not break when someone re-wraps the YAML block.
+func normalizeProse(s string) string {
+	return strings.ToLower(strings.Join(strings.Fields(s), " "))
+}
+
+func TestContract_RecordFilter_IncludeAbsentIsScopedToNegation(t *testing.T) {
+	props := recordFilterPropDocs(t)
+	prop, ok := props["include_absent"]
+	require.True(t, ok, "RecordFilter must declare `include_absent`")
+	assert.Equal(t, "boolean", prop.Type)
+
+	prose := normalizeProse(prop.Description)
+
+	// The scoping itself. Each of these is a sentence a handler author has to
+	// be able to find, and together they are mutually exclusive with the
+	// retracted "positive clauses can include absent records" reading.
+	for _, must := range []string{
+		"meaningful only when `negate` is true",
+		"on a non-negated clause: absent records never satisfy the clause",
+		"this field is ignored",
+		"no field on `records.filter` admits an absent record to a positive clause",
+	} {
+		assert.Contains(t, prose, must,
+			"`include_absent` must state that it is scoped to negation. "+
+				"`records.Filter.ExcludeAbsent` is read ONLY inside the `if f.Negate` "+
+				"branch of Filter.MatchWith, so a positive clause cannot honour this "+
+				"flag at all; a description implying otherwise sends a handler author "+
+				"looking for an engine field that does not exist")
+	}
+
+	// The out-of-scope ruling must be stated as a ruling, not left to read as
+	// an omission. "Not yet built" and "not owed" are different promises and a
+	// caller cannot act on the wrong one.
+	assert.Contains(t, prose, "out of scope",
+		"the positive-clause case must be declared OUT OF SCOPE explicitly. "+
+			"FR-008 mandates absence-inclusion for negative filters only, so no "+
+			"engine change is pending — leaving that unsaid invites someone to "+
+			"'finish' a feature nobody asked for")
+
+	// The exact retracted sentence, which must not return. The correction note
+	// quotes it as `"a non-negated clause ...` (no leading "and"), so this
+	// matches the original wording only.
+	assert.NotContains(t, prose, "and a non-negated clause excludes them",
+		"the retracted claim is back: `include_absent: true` does NOT admit "+
+			"absent records to a non-negated clause, and no code performs it")
+}
+
+func TestContract_RecordFilter_HasNoSecondAbsenceKnob(t *testing.T) {
+	props := recordFilterPropDocs(t)
+
+	_, hasExclude := props["exclude_absent"]
+	assert.False(t, hasExclude,
+		"RecordFilter must carry NO `exclude_absent` field. It would be the "+
+			"engine's `records.Filter.ExcludeAbsent` stated a second time — "+
+			"`ExcludeAbsent == !include_absent` — and two fields for one setting "+
+			"is how a contract starts contradicting itself. Narrowing "+
+			"`include_absent` to negated clauses is what removes the pressure to "+
+			"add this; adding it anyway reintroduces the contradiction")
+
+	typ := reflect.TypeOf(RecordFilter{})
+	for i := 0; i < typ.NumField(); i++ {
+		name := strings.Split(typ.Field(i).Tag.Get("json"), ",")[0]
+		assert.NotEqual(t, "exclude_absent", name,
+			"the generated Go type grew an `exclude_absent` field")
+	}
+}
+
+func TestContract_RecordFilter_AbsenceFlagsAgreeAcrossLanguages(t *testing.T) {
+	// The default trap: a JSON Schema `default:` on a boolean makes
+	// openapi-typescript promote the property to REQUIRED while oapi-codegen
+	// keeps it an optional pointer — a split no single-language check catches.
+	// Both absence flags are asserted, in all three artifacts.
+	props := recordFilterPropDocs(t)
+	for _, name := range []string{"include_absent", "negate"} {
+		prop, ok := props[name]
+		require.True(t, ok, "RecordFilter must declare `%s`", name)
+		assert.Nil(t, prop.Default,
+			"`%s` must carry NO JSON Schema `default:`. openapi-typescript "+
+				"promotes a defaulted property to REQUIRED; oapi-codegen does not. "+
+				"The default belongs in prose, where both languages read it the "+
+				"same way", name)
+	}
+
+	// Go: optional pointer, so "absent" stays distinguishable from "false".
+	typ := reflect.TypeOf(RecordFilter{})
+	seen := map[string]bool{}
+	for i := 0; i < typ.NumField(); i++ {
+		f := typ.Field(i)
+		name := strings.Split(f.Tag.Get("json"), ",")[0]
+		if name != "include_absent" && name != "negate" {
+			continue
+		}
+		seen[name] = true
+		assert.Equal(t, reflect.Pointer, f.Type.Kind(),
+			"generated Go `%s` must be *bool, not bool", name)
+		assert.Equal(t, reflect.Bool, f.Type.Elem().Kind())
+		assert.Contains(t, f.Tag.Get("json"), "omitempty",
+			"generated Go `%s` must be omitempty", name)
+	}
+	assert.True(t, seen["include_absent"] && seen["negate"],
+		"generated RecordFilter is missing an absence flag — a schema change "+
+			"nobody regenerated, or a generated file edited by hand")
+
+	// TypeScript + Zod, read from the committed artifacts. A Go test reaching
+	// into the SPA's generated files is deliberate: the cross-language split
+	// this guards against is invisible from either side alone.
+	root := filepath.Join(contractsDir(), "..")
+	tsRaw, err := os.ReadFile(filepath.Join(root, "src", "lib", "api", "generated", "openapi-types.ts"))
+	require.NoError(t, err)
+	assert.Contains(t, string(tsRaw), "include_absent?: boolean;",
+		"generated TypeScript must keep `include_absent` OPTIONAL. If it became "+
+			"required, a `default:` was added to the schema and the two languages "+
+			"now disagree about the same field")
+	assert.Contains(t, string(tsRaw), "negate?: boolean;",
+		"generated TypeScript must keep `negate` optional")
+
+	zodRaw, err := os.ReadFile(filepath.Join(root, "src", "lib", "api", "generated", "schemas.ts"))
+	require.NoError(t, err)
+	assert.Contains(t, string(zodRaw), "include_absent: z.boolean().optional(),",
+		"generated Zod must keep `include_absent` optional — the SPA edge "+
+			"validates every payload with it, so a required flag would reject "+
+			"clauses the Go handler accepts")
+	assert.Contains(t, string(zodRaw), "negate: z.boolean().optional(),",
+		"generated Zod must keep `negate` optional")
+}
+
+func TestContract_RecordFilter_IncludeAbsentOnPositiveClauseIsInertNotInvalid(t *testing.T) {
+	// The ruling is that the flag is IGNORED on a non-negated clause — not
+	// that the payload is rejected. Rejection would be a third semantic,
+	// invented here and implemented nowhere: nothing in pkg/records inspects
+	// the pairing, and RecordFilter has no `dependentSchemas` to express it.
+	// This test pins "inert", so nobody later reads "meaningful only when
+	// negate is true" as a licence to add a schema-level refusal by accident.
+	raw := []byte(`{"property":"status","op":"eq","values":[{"type":"text","text":"done"}],"include_absent":true}`)
+	err := validateAgainstComponentSchemaRawJSON(t, "RecordFilter", raw)
+	assert.NoError(t, err,
+		"`include_absent` on a non-negated clause must remain schema-VALID and "+
+			"simply have no effect. Making it invalid is a rule no code enforces")
+
+	// And the case that does carry meaning stays expressible.
+	negated := []byte(`{"property":"status","op":"eq","values":[{"type":"text","text":"done"}],"negate":true,"include_absent":false}`)
+	err = validateAgainstComponentSchemaRawJSON(t, "RecordFilter", negated)
+	assert.NoError(t, err,
+		"{negate: true, include_absent: false} is FR-008's opt-out — the one "+
+			"combination in which this flag changes an answer, and the wire "+
+			"spelling of records.Filter.ExcludeAbsent")
+}
