@@ -332,11 +332,19 @@ func TestMoney_NoBinary64InThePath(t *testing.T) {
 
 // moneyForms enumerates every syntax a money AMOUNT can arrive in. The bound
 // tests below sweep all of them, because the defect these tests exist for was
-// not "the bound is wrong" — it was "the bound was applied to one of the two
-// paths, and the one it missed is the form a real vault actually contains".
-// Enumerating the forms in one place is what makes a NEW form's omission
-// visible: add a parse form without adding it here and the sweep still passes,
-// so the list is the thing to keep honest.
+// not "the bound is wrong" — it was "the bound was applied to one of the paths,
+// and the one it missed is the form a real vault actually contains".
+//
+// This list used to carry three entries against a parser with four paths, and
+// its own comment conceded the gap: "add a parse form without adding it here
+// and the sweep still passes, so the list is the thing to keep honest". A list
+// kept honest by hand is the same defect one level up — the uncovered fourth
+// path is exactly where the silently-dropped `scal:` key was then found.
+//
+// The list is no longer on its honour. TestMoney_EveryAcceptedFormAppearsInTheSweep
+// reads value.go and counts the places that can BUILD an accepted money value;
+// a fifth path cannot be added without that count changing and failing, with a
+// message pointing back here.
 var moneyForms = []struct {
 	name string
 	node func(amount string) Node
@@ -354,6 +362,50 @@ var moneyForms = []struct {
 			Fields: map[string]Node{"amount": {Kind: KindScalar, Text: a}, "currency": {Kind: KindScalar, Text: "USD"}},
 		}
 	}},
+	{"mapping, scale declared", declaredScaleNode},
+}
+
+// declaredScaleNode expresses the SAME VALUE as the other three forms in the
+// {amount, currency, scale} minor-units notation, so one sweep can drive all
+// four: "1.001" becomes {amount: 1001, currency: USD, scale: 3}.
+//
+// An amount that is not a plain decimal literal — an exponent, a thousands
+// separator, junk — has no minor-units rendering, so it is passed through
+// verbatim at scale 0. That is the point: the sweep then asks this path the
+// same question it asks the others ("is this refused, and does the refusal say
+// why?") rather than quietly skipping the input it cannot translate.
+func declaredScaleNode(amount string) Node {
+	minor, scale := amount, 0
+	if i := strings.IndexByte(amount, '.'); i >= 0 && isPlainDecimalLiteral(amount) {
+		minor = amount[:i] + amount[i+1:]
+		scale = len(amount) - i - 1
+	}
+	return Node{
+		Kind: KindMapping,
+		Keys: []string{"amount", "currency", "scale"},
+		Fields: map[string]Node{
+			"amount":   {Kind: KindScalar, Text: minor},
+			"currency": {Kind: KindScalar, Text: "USD"},
+			"scale":    {Kind: KindScalar, Text: itoaTest(scale)},
+		},
+	}
+}
+
+// isPlainDecimalLiteral reports whether the text is `-?digits[.digits]` and
+// nothing else — no exponent, no separators. Only such a literal can be
+// re-expressed as minor units plus a scale without changing its value.
+func isPlainDecimalLiteral(s string) bool {
+	s = strings.TrimPrefix(strings.TrimPrefix(s, "-"), "+")
+	intPart, fracPart, hasDot := strings.Cut(s, ".")
+	if intPart == "" || (hasDot && fracPart == "") {
+		return false
+	}
+	for _, r := range intPart + fracPart {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // amountWithScale builds an amount literal carrying exactly n fractional
@@ -548,8 +600,10 @@ func TestMoney_MinorUnitsAlwaysDescribesTheValue(t *testing.T) {
 		}
 	}
 
-	// The explicit-scale mapping form takes its scale directly rather than
-	// inferring it, so it is checked separately — same invariant.
+	// The explicit-scale form is now swept above like every other form, which
+	// re-expresses each amount in minor units. This block asserts the other half
+	// of O-2 that the re-expression cannot: minor units written DIRECTLY survive
+	// verbatim, at every scale the wire allows, with no rescaling on the way in.
 	for scale := 0; scale <= maxMoneyScale; scale++ {
 		node := Node{
 			Kind: KindMapping,

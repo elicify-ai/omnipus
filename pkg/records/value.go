@@ -6,6 +6,7 @@ package records
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 )
@@ -307,6 +308,12 @@ func parseNumberValue(p *Property, n Node) (TypedValue, *ValueError) {
 //	arr: 349.98                                       REJECTED — no currency (FR-012)
 //	arr: {amount: 349.98}                             REJECTED — no currency (FR-012)
 //	arr: {amount: 349.98, currency: SGD, scale: 2}    REJECTED — ambiguous
+//	arr: {amount: 34998, currency: SGD, scal: 2}      REJECTED — unknown key `scal`
+//
+// That last one is the whole reason the key set is closed. Read only the keys
+// it recognises and the parser answers 34998 SGD to a note that says 349.98 —
+// a hundredfold error from one dropped letter, with nothing reported. Every
+// rejection here names the token the operator actually has to change.
 //
 // The last one matters: ADR-068 O-2 defines the stored amount as INTEGER MINOR
 // UNITS, so `amount` alongside an explicit `scale` must be an integer. Reading
@@ -349,17 +356,28 @@ func parseMoneyScalar(p *Property, n Node) (TypedValue, *ValueError) {
 		// the "two loose fields nothing keeps together" failure D3 names.
 		return TypedValue{}, moneyValueError(p, n.Text, &MissingCurrencyError{Amount: fields[0]}, FindingMoneyNoCurrency)
 	case 2:
-		amountText, currency := fields[0], fields[1]
-		if _, err := ParseDecimal(amountText); err != nil {
-			// Then it is probably written currency-first.
-			amountText, currency = fields[1], fields[0]
-		}
 		// Two steps, deliberately. ParseDecimal answers "is this field the
-		// amount at all?", which is what decides the swap above; only then does
-		// parseMoneyAmount apply money's own bounds. Collapsing them would make
-		// "1e3 USD" look like a currency-first value and report the currency as
-		// malformed, which is not where the operator's fix is.
-		if _, err := ParseDecimal(amountText); err != nil {
+		// amount at all?", which is what decides the currency-first swap below;
+		// only then does parseMoneyAmount apply money's own bounds. Collapsing
+		// them would make "1e3 USD" look like a currency-first value and report
+		// the currency as malformed, which is not where the operator's fix is.
+		amountText, currency := fields[0], fields[1]
+		_, amountErr := ParseDecimal(amountText)
+		if amountErr != nil {
+			// "SGD 349.98" is a form a human really writes, so the other order
+			// is tried — but ONLY when the other field genuinely IS an amount.
+			//
+			// Swapping on ANY first-field failure is what made every non-exponent
+			// malformation name the wrong token: "1,000 USD" reported `"USD" is
+			// not an amount`, sending the operator to fix the one field that was
+			// correct while the thousands separator they actually mistyped went
+			// unnamed. The swap now has to earn itself.
+			if _, err := ParseDecimal(fields[1]); err == nil {
+				amountText, currency = fields[1], fields[0]
+				amountErr = nil
+			}
+		}
+		if amountErr != nil {
 			return TypedValue{}, moneyValueError(p, n.Text, fmt.Errorf("%q is not an amount", amountText), FindingMoneyMalformed)
 		}
 		d, err := parseMoneyAmount(amountText)
@@ -381,11 +399,47 @@ func parseMoneyMapping(p *Property, n Node) (TypedValue, *ValueError) {
 
 	raw := renderMoneyMapping(n)
 
-	if !hasAmount || amountNode.Kind != KindScalar {
-		return TypedValue{}, moneyValueError(p, raw, fmt.Errorf("no `amount`"), FindingMoneyMalformed)
+	// FIRST, before any key is read for its value: a key this parser does not
+	// know is a key whose meaning was thrown away.
+	//
+	// `{amount: 34998, currency: SGD, scal: 2}` used to parse as 34998 SGD —
+	// thirty-five thousand dollars where the author wrote three hundred and
+	// forty-nine ninety-eight — with no finding and no warning, because the
+	// parser read the three keys it recognised and never looked at the fourth.
+	// One dropped letter, a hundredfold error, silence.
+	//
+	// RecordMoney.yaml is `additionalProperties: false`, so the wire refuses
+	// exactly this. The Go parser now refuses it too, at the same strictness and
+	// naming the key, because an author who writes something meaningful must
+	// never be told nothing when we throw it away.
+	if unknown := unknownMoneyKeys(n); len(unknown) > 0 {
+		return TypedValue{}, moneyValueError(p, raw,
+			fmt.Errorf("unknown %s %s in a money value; a money mapping carries only `amount`, `currency` and `scale` (a mistyped key would otherwise be dropped in silence, changing what the value means)",
+				pluralise("key", len(unknown)), quoteJoin(unknown)),
+			FindingMoneyMalformed)
 	}
-	if !hasCurrency || currencyNode.Kind != KindScalar || strings.TrimSpace(currencyNode.Text) == "" {
+
+	switch {
+	case !hasAmount || amountNode.Kind == KindNull:
+		// FR-007/R-3: an explicit null is ABSENT, so it reports as absent.
+		return TypedValue{}, moneyValueError(p, raw, fmt.Errorf("no `amount`"), FindingMoneyMalformed)
+	case amountNode.Kind != KindScalar:
+		// The amount IS there — saying "no `amount`" here told the operator to
+		// add a field they had already written. Name the shape instead.
+		return TypedValue{}, moneyValueError(p, raw,
+			fmt.Errorf("`amount` holds %s; a money amount is a single value", amountNode.Kind),
+			FindingMoneyMalformed)
+	}
+
+	switch {
+	case !hasCurrency || currencyNode.Kind == KindNull || (currencyNode.Kind == KindScalar && strings.TrimSpace(currencyNode.Text) == ""):
 		return TypedValue{}, moneyValueError(p, raw, &MissingCurrencyError{Amount: amountNode.Text}, FindingMoneyNoCurrency)
+	case currencyNode.Kind != KindScalar:
+		// Same split, same reason: `currency: [SGD]` is a currency written in
+		// the wrong shape, not a missing one.
+		return TypedValue{}, moneyValueError(p, raw,
+			fmt.Errorf("`currency` holds %s; a currency is a single ISO-4217 code, e.g. SGD", currencyNode.Kind),
+			FindingMoneyMalformed)
 	}
 	if err := ValidateCurrency(currencyNode.Text); err != nil {
 		return TypedValue{}, moneyValueError(p, raw, err, FindingMoneyBadCurrency)
@@ -418,6 +472,18 @@ func parseMoneyMapping(p *Property, n Node) (TypedValue, *ValueError) {
 		return TypedValue{}, moneyValueError(p, raw, fmt.Errorf("`scale` must be between 0 and %d, found %q", maxMoneyScale, scaleNode.Text), FindingMoneyMalformed)
 	}
 	if !isIntegerLiteral(amountNode.Text) {
+		// Three distinct faults live behind "not an integer literal", and an
+		// operator fixes each differently. Collapsing them into the ambiguity
+		// message told someone who wrote `1e3` to "write the amount in minor
+		// units" — which they had, in the one notation money does not accept.
+		switch _, derr := ParseDecimal(amountNode.Text); {
+		case derr != nil:
+			return TypedValue{}, moneyValueError(p, raw, fmt.Errorf("`amount` %q is not a whole number of minor units", amountNode.Text), FindingMoneyMalformed)
+		case strings.ContainsAny(amountNode.Text, "eE"):
+			return TypedValue{}, moneyValueError(p, raw,
+				fmt.Errorf("`amount` %q uses exponent notation, which a money amount does not accept (write the minor units out in full)", amountNode.Text),
+				FindingMoneyMalformed)
+		}
 		return TypedValue{}, moneyValueError(p, raw,
 			fmt.Errorf("`amount` is %q, but a declared `scale` means the amount is an integer count of minor units (ADR-068 O-2) — write {amount: %s, currency: %s} and let the scale be inferred, or write the amount in minor units",
 				amountNode.Text, amountNode.Text, currencyNode.Text), FindingMoneyMalformed)
@@ -430,6 +496,69 @@ func parseMoneyMapping(p *Property, n Node) (TypedValue, *ValueError) {
 	// carrying that scale — no division, no float, exact by construction.
 	value := NewDecimal(minor.Unscaled(), int32(scale.Int64()))
 	return TypedValue{Type: TypeMoney, Raw: raw, Money: Money{Amount: value, Currency: currencyNode.Text}}, nil
+}
+
+// moneyMappingKeys is the CLOSED set of keys a money mapping may carry. It is
+// the same closed set RecordMoney.yaml declares with `additionalProperties:
+// false` — kept here as data, so the Go parser and the wire refuse the same
+// mappings rather than disagreeing about which files are readable.
+var moneyMappingKeys = map[string]struct{}{
+	"amount":   {},
+	"currency": {},
+	"scale":    {},
+}
+
+// unknownMoneyKeys lists every key of a money mapping that is not in that
+// closed set, in the order the author wrote them.
+//
+// Keys is the document order the frontmatter parser records and Fields is what
+// the money parser actually reads from; production fills both, but a key
+// reaching one and not the other is still a key the author wrote, so neither
+// route escapes the check.
+func unknownMoneyKeys(n Node) []string {
+	var unknown []string
+	seen := make(map[string]struct{}, len(n.Keys))
+	for _, k := range n.Keys {
+		if _, dup := seen[k]; dup {
+			continue
+		}
+		seen[k] = struct{}{}
+		if _, known := moneyMappingKeys[k]; !known {
+			unknown = append(unknown, k)
+		}
+	}
+	// Map iteration has no order, so anything found only here is sorted before
+	// it joins the list — a rejection that reorders itself between runs is not
+	// something an operator can diff.
+	var unordered []string
+	for k := range n.Fields {
+		if _, listed := seen[k]; listed {
+			continue
+		}
+		if _, known := moneyMappingKeys[k]; !known {
+			unordered = append(unordered, k)
+		}
+	}
+	sort.Strings(unordered)
+	return append(unknown, unordered...)
+}
+
+// quoteJoin renders a list of names as `a`, `b`, `c` for a report.
+func quoteJoin(names []string) string {
+	quoted := make([]string, 0, len(names))
+	for _, n := range names {
+		quoted = append(quoted, "`"+n+"`")
+	}
+	return strings.Join(quoted, ", ")
+}
+
+// pluralise adds an "s" for any count that is not one, so a rejection reads as
+// a sentence rather than as "1 keys".
+func pluralise(word string, n int) string {
+	if n == 1 {
+		return word
+	}
+	return word + "s"
 }
 
 func renderMoneyMapping(n Node) string {
