@@ -60,7 +60,7 @@ func requiredJSONField(t *testing.T, typ reflect.Type, jsonName string) reflect.
 			continue
 		}
 
-		assert.NotEqual(t, reflect.Ptr, f.Type.Kind(),
+		assert.NotEqual(t, reflect.Pointer, f.Type.Kind(),
 			"%s.%s (json:%q) is a POINTER. A pointer field is absent-able: it "+
 				"marshals to null or, with omitempty, disappears — which is the "+
 				"optional field ADR-068 D19 forbids.", typ.Name(), f.Name, jsonName)
@@ -274,6 +274,20 @@ func TestContract_RecordMoney_AmountIsAStringNotANumber(t *testing.T) {
 		"all three travel together or the value means nothing (FR-012)")
 }
 
+// validMinorUnitsAmount is 1,250,000.00 USD expressed the ONE way the contract
+// permits: an integer count of minor units, with `scale` — not the spelling of
+// this string — putting the decimal point back (value = amount x 10^-scale).
+//
+// Every currency-rule test below reuses this constant, and that reuse is the
+// point rather than tidiness. Those tests previously all sent "1250000.00",
+// which the corrected `amount` pattern rejects outright: each one passed
+// because of its AMOUNT and would have gone on passing with the currency
+// pattern and the `required` list deleted from the schema entirely. A shared
+// constant that TestContract_RecordMoney_RejectionFixturesAreAmountValid
+// independently proves valid is what keeps the currency rule the only thing
+// those tests can be failing on.
+const validMinorUnitsAmount = "125000000"
+
 func TestContract_RecordMoney_Populated(t *testing.T) {
 	// Decoded rather than written as a struct literal, for the same reason the
 	// query-response fixtures are: if `amount` ever became a JSON number, a
@@ -281,28 +295,55 @@ func TestContract_RecordMoney_Populated(t *testing.T) {
 	// Decoding turns that same change into a visible test failure instead.
 	var m RecordMoney
 	require.NoError(t, json.Unmarshal(
-		[]byte(`{"amount":"1250000.00","currency":"USD","scale":2}`), &m),
-		"a decimal-string amount must decode into the generated type; if this "+
+		[]byte(`{"amount":"`+validMinorUnitsAmount+`","currency":"USD","scale":2}`), &m),
+		"a minor-units string amount must decode into the generated type; if this "+
 			"fails, RecordMoney.Amount is no longer a string")
 	mustPassComponent(t, "RecordMoney", m)
+}
+
+// TestContract_RecordMoney_RejectionFixturesAreAmountValid is the oracle guard
+// for the two currency tests that follow. It asserts the amount they send is
+// schema-VALID on its own, so that when they observe a rejection the amount
+// cannot be the cause. Without it, a future amount-pattern change silently
+// converts both of them back into tests of the amount rule wearing a currency
+// rule's name — which is precisely the state this file was found in.
+func TestContract_RecordMoney_RejectionFixturesAreAmountValid(t *testing.T) {
+	raw := []byte(`{"amount":"` + validMinorUnitsAmount + `","currency":"USD","scale":2}`)
+	err := validateAgainstComponentSchemaRawJSON(t, "RecordMoney", raw)
+	assert.NoError(t, err,
+		"the amount shared by the currency-rule tests must itself be valid, or "+
+			"those tests prove nothing about currency")
 }
 
 func TestContract_RecordMoney_NumericAmountRejected(t *testing.T) {
 	// The shape a careless producer emits. It must not validate, or the
 	// float-free guarantee is decorative.
-	raw := []byte(`{"amount":1250000.00,"currency":"USD","scale":2}`)
+	raw := []byte(`{"amount":125000000,"currency":"USD","scale":2}`)
 	err := validateAgainstComponentSchemaRawJSON(t, "RecordMoney", raw)
-	assert.Error(t, err, "a JSON number amount must be rejected; amount is a decimal string")
+	assert.Error(t, err, "a JSON number amount must be rejected; amount is a minor-units string")
+}
+
+func TestContract_RecordMoney_DecimalAmountRejected(t *testing.T) {
+	// "1250000.00" is the pre-correction spelling: a decimal string whose
+	// fractional digits were required to equal `scale`. It is now INVALID, and
+	// this test is what stops it drifting back in — the same three-field object
+	// meaning 349.98 in one artifact and 3.4998 in another is the disagreement
+	// ADR-068 O-2 resolved.
+	raw := []byte(`{"amount":"1250000.00","currency":"USD","scale":2}`)
+	err := validateAgainstComponentSchemaRawJSON(t, "RecordMoney", raw)
+	assert.Error(t, err,
+		"a decimal-point amount must be rejected; amount is an integer count of "+
+			"minor units and `scale` is what positions the point")
 }
 
 func TestContract_RecordMoney_MissingCurrencyRejected(t *testing.T) {
-	raw := []byte(`{"amount":"1250000.00","scale":2}`)
+	raw := []byte(`{"amount":"` + validMinorUnitsAmount + `","scale":2}`)
 	err := validateAgainstComponentSchemaRawJSON(t, "RecordMoney", raw)
 	assert.Error(t, err, "a money value missing currency must be rejected (FR-012)")
 }
 
 func TestContract_RecordMoney_LowercaseCurrencyRejected(t *testing.T) {
-	raw := []byte(`{"amount":"1250000.00","currency":"usd","scale":2}`)
+	raw := []byte(`{"amount":"` + validMinorUnitsAmount + `","currency":"usd","scale":2}`)
 	err := validateAgainstComponentSchemaRawJSON(t, "RecordMoney", raw)
 	assert.Error(t, err, "ISO-4217 codes are upper case; accepting both spellings forks the currency")
 }
@@ -312,7 +353,123 @@ func TestContract_RecordMoney_ExponentAmountRejected(t *testing.T) {
 	// like when someone stringifies it. Accepting it would readmit the float.
 	raw := []byte(`{"amount":"1.25e6","currency":"USD","scale":2}`)
 	err := validateAgainstComponentSchemaRawJSON(t, "RecordMoney", raw)
-	assert.Error(t, err, "exponent notation is a stringified float, not a decimal amount")
+	assert.Error(t, err, "exponent notation is a stringified float, not an integer amount")
+}
+
+// ── Negation must be expressible on the wire ─────────────────────────────────
+// Traces to: contracts/components/schemas/RecordFilter.yaml, FR-008, ADR-068 D3.2.
+//
+// The engine negates with a single flag (`records.Filter.Negate`) and offers no
+// `neq`/`not_in` operators. The contract agreed with the engine about the
+// operators and then omitted the flag, so with `additionalProperties: false`
+// there was NO way to write a negative clause at all — FR-008's motivating
+// question, "days I did not meditate", had no wire representation, while the
+// schema's own prose asserted the flag existed. These tests are what make that
+// a caught error rather than a discovery.
+
+// recordFilterSchemaProperties reads RecordFilter's declared property names
+// straight from the contract, for the same reason componentSchemaRequired does:
+// it fires the moment the YAML loses the field, without waiting for anyone to
+// regenerate.
+func recordFilterSchemaProperties(t *testing.T) map[string]struct {
+	Type string `yaml:"type"`
+} {
+	t.Helper()
+
+	path := filepath.Join(contractsDir(), "components", "schemas", "RecordFilter.yaml")
+	raw, err := os.ReadFile(path)
+	require.NoError(t, err)
+
+	var doc struct {
+		Properties map[string]struct {
+			Type string `yaml:"type"`
+		} `yaml:"properties"`
+	}
+	require.NoError(t, yaml.Unmarshal(raw, &doc))
+	return doc.Properties
+}
+
+func TestContract_RecordFilter_NegateIsDeclared(t *testing.T) {
+	props := recordFilterSchemaProperties(t)
+
+	negate, ok := props["negate"]
+	require.True(t, ok,
+		"RecordFilter must declare a `negate` property. The op enum deliberately "+
+			"carries no neq/not_in and the schema's own text says negation is "+
+			"\"the separate negate flag\" — without the property that sentence "+
+			"describes something no caller can send")
+	assert.Equal(t, "boolean", negate.Type)
+
+	// And the generated Go type, which is what a handler actually reads.
+	typ := reflect.TypeOf(RecordFilter{})
+	var found bool
+	for i := 0; i < typ.NumField(); i++ {
+		if strings.Split(typ.Field(i).Tag.Get("json"), ",")[0] == "negate" {
+			found = true
+			assert.Equal(t, reflect.Pointer, typ.Field(i).Type.Kind(),
+				"Negate is an OPTIONAL flag: absent must be distinguishable from "+
+					"an explicit false, so the generated field is *bool")
+			assert.Equal(t, reflect.Bool, typ.Field(i).Type.Elem().Kind())
+		}
+	}
+	assert.True(t, found,
+		"the generated RecordFilter has no `negate` json field — a schema change "+
+			"nobody regenerated, or a generated file edited by hand")
+}
+
+func TestContract_RecordFilter_NegatedClauseValidates(t *testing.T) {
+	// The end-to-end proof: `additionalProperties: false` means an undeclared
+	// field is a hard rejection, so this payload validating is the whole
+	// difference between negation being expressible and not.
+	raw := []byte(`{"property":"meditated","op":"eq","values":[{"type":"text","text":"yes"}],"negate":true}`)
+	err := validateAgainstComponentSchemaRawJSON(t, "RecordFilter", raw)
+	assert.NoError(t, err,
+		"FR-008's motivating query — \"days I did not meditate\" — must be a valid "+
+			"filter clause. RecordFilter is additionalProperties:false, so an "+
+			"undeclared `negate` makes this payload schema-INVALID")
+}
+
+func TestContract_RecordFilter_IsPresentIsSpelledAsNegatedIsAbsent(t *testing.T) {
+	// `is_present` is in neither the enum nor the engine. The flag is how the
+	// question is asked, and this asserts BOTH halves so removing either is
+	// caught: the operator stays out, and the spelling that replaces it works.
+	raw := []byte(`{"property":"status","op":"is_absent","negate":true}`)
+	err := validateAgainstComponentSchemaRawJSON(t, "RecordFilter", raw)
+	assert.NoError(t, err, "{op: is_absent, negate: true} is how presence is tested")
+
+	notAnOperator := []byte(`{"property":"status","op":"is_present"}`)
+	err = validateAgainstComponentSchemaRawJSON(t, "RecordFilter", notAnOperator)
+	assert.Error(t, err,
+		"`is_present` must NOT be an operator: the engine implements no such "+
+			"operator, and an enum value with no implementation behind it is a "+
+			"clause that validates and then cannot be evaluated")
+}
+
+func TestContract_RecordFilter_OperatorEnumMatchesTheEngine(t *testing.T) {
+	// The op enum is the exact set records.Operators declares. Stated here as a
+	// literal rather than imported from pkg/records, so the two are independent
+	// copies that cannot drift quietly in the same edit.
+	path := filepath.Join(contractsDir(), "components", "schemas", "RecordFilter.yaml")
+	raw, err := os.ReadFile(path)
+	require.NoError(t, err)
+
+	var doc struct {
+		Properties struct {
+			Op struct {
+				Enum []string `yaml:"enum"`
+			} `yaml:"op"`
+		} `yaml:"properties"`
+	}
+	require.NoError(t, yaml.Unmarshal(raw, &doc))
+
+	assert.ElementsMatch(t,
+		[]string{"eq", "lt", "lte", "gt", "gte", "contains", "is_absent"},
+		doc.Properties.Op.Enum,
+		"the op enum must be exactly the operators pkg/records implements "+
+			"(records.Operators). `neq`/`not_in` are the negate flag; `in` is "+
+			"`contains`; `is_present` is {is_absent, negate:true}. An extra value "+
+			"here is a clause that validates and cannot be evaluated; a missing "+
+			"one is a spec rule with no wire representation")
 }
 
 // ── The seven property types are closed ──────────────────────────────────────

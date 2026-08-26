@@ -4,7 +4,7 @@ description: >
   value (ADR-068 D3, FR-012). A value missing currency is REJECTED — two loose
   fields that nothing keeps together is the failure this type closes.
 
-  The amount is a DECIMAL STRING and never a JSON number. `type: number` in
+  The amount is an INTEGER STRING and never a JSON number. `type: number` in
   this contract generates a Go float32 (float64 only with `format: double`)
   and a JavaScript number, and binary floating point cannot represent 0.1
   exactly — so a total that must be exact
@@ -14,12 +14,20 @@ description: >
   representation that survives both the wire and the two generated languages
   without a lossy hop.
 
-  `scale` states how many fractional digits the amount is DECLARED to carry,
-  so "10.00" USD (scale 2) is distinguishable from "10" USD (scale 0) and the
-  amount converts losslessly to and from integer minor units (ADR-068 O-2's
-  resolution): minor units = amount x 10^scale, exactly, with no rounding.
-  The fractional digit count of `amount` MUST equal `scale`; a mismatch is a
-  validation finding, not something the server silently normalises.
+  THE AMOUNT IS ALREADY IN MINOR UNITS (ADR-068 O-2's resolution). It carries
+  no decimal point at all — `pattern` rejects one — and `scale` says where the
+  reader must put it: value = amount x 10^-scale, exactly, with no rounding.
+  {amount "1000", scale 2} is 10.00 USD; {amount "10", scale 0} is 10 USD; the
+  two are distinguishable because `scale` differs, not because the amount is
+  spelled differently. There is no "fractional digit count" rule to satisfy —
+  a decimal amount such as "10.00" is schema-INVALID, not a scale mismatch.
+
+  Corrected 2026-08-25, second pass: this paragraph previously required the
+  fractional digits of `amount` to equal `scale`, illustrated it with the now
+  ILLEGAL "10.00", and stated the conversion INVERTED (minor units = amount x
+  10^scale). Read together with the corrected `amount` pattern below, the one
+  artifact said two different things about the same three fields — the exact
+  defect the minor-units fix was filed to end.
 
   Summing money is exact WITHIN one currency. A sum ACROSS currencies is
   REFUSED with the currencies present listed (FR-014) — see
@@ -68,8 +76,15 @@ properties:
     minimum: 0
     maximum: 12
     description: >
-      Declared number of fractional digits. 2 for most currencies, 0 for JPY,
-      3 for KWD, and higher where an operator's convention needs it. Declared
-      rather than inferred from the currency, because the vault's convention —
-      not the product — decides how precisely it records a figure (D0).
+      How many of `amount`'s trailing digits are FRACTIONAL — the power of ten
+      that turns minor units back into the figure a person reads: value =
+      amount x 10^-scale. 2 for most currencies, 0 for JPY, 3 for KWD, and
+      higher where an operator's convention needs it. Declared rather than
+      inferred from the currency, because the vault's convention — not the
+      product — decides how precisely it records a figure (D0).
+
+
+      It is NOT a constraint on how `amount` is spelled: `amount` never
+      contains a decimal point, so scale cannot be checked against it and a
+      "fractional digit count mismatch" is not a finding this type can raise.
     example: 2

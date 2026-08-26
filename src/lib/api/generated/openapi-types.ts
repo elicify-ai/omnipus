@@ -4667,7 +4667,7 @@ export interface components {
              */
             name: string;
             /**
-             * @description "text" — prose. Never validated and never queried for equality (D3), so a filter on a text property supports only is_absent / is_present; full-text retrieval is ADR-067's search surface, not this one. "enum" — one of a closed, ordered set (`values`). "relation" — a typed edge to another record (D5); `to` names the target record type and `inverse` names the derived reverse direction. "date" — a day or an instant, comparable. "number" — a quantity; `unit` is declared metadata, never glued into the property name. "money" — amount + ISO-4217 currency + scale as one value (RecordMoney). "person" — a relation to a person record, kept distinct from a name typed as text so one vault cannot model the same concept both ways.
+             * @description "text" — prose. Never validated and never queried for equality or order (D3), so a filter on a text property supports exactly two operators: `contains` (case-sensitive substring matching, §8 R-10) and `is_absent`. "Is it present?" is {op: is_absent, negate: true}; there is no `is_present` operator. Full-text retrieval is ADR-067's search surface, not this one. "enum" — one of a closed, ordered set (`values`). "relation" — a typed edge to another record (D5); `to` names the target record type and `inverse` names the derived reverse direction. "date" — a day or an instant, comparable. "number" — a quantity; `unit` is declared metadata, never glued into the property name. "money" — amount + ISO-4217 currency + scale as one value (RecordMoney). "person" — a relation to a person record, kept distinct from a name typed as text so one vault cannot model the same concept both ways.
              * @example enum
              * @enum {string}
              */
@@ -4705,7 +4705,7 @@ export interface components {
              */
             unit?: string;
             /**
-             * @description Declared decimal scale for a "money" property — the fractional digit count every RecordMoney value of this property must carry (FR-012). Present only when type is "money".
+             * @description Declared decimal scale for a "money" property — the power of ten that turns every RecordMoney value of this property from minor units back into the figure a person reads: value = amount x 10^-scale (FR-012). Present only when type is "money". `RecordMoney.amount` is an integer count of minor units and carries no decimal point, so this is NOT a "fractional digit count" the amount's spelling has to match.
              * @example 2
              */
             scale?: number;
@@ -4835,8 +4835,9 @@ export interface components {
         /**
          * RecordMoney
          * @description A money value: amount, ISO-4217 currency and declared scale carried as ONE value (ADR-068 D3, FR-012). A value missing currency is REJECTED — two loose fields that nothing keeps together is the failure this type closes.
-         *     The amount is a DECIMAL STRING and never a JSON number. `type: number` in this contract generates a Go float32 (float64 only with `format: double`) and a JavaScript number, and binary floating point cannot represent 0.1 exactly — so a total that must be exact would drift by an amount nobody can see until it is reconciled against a bank. FR-013 requires exact decimal arithmetic and FR-020b forbids a binary float ANYWHERE in the storage or retrieval path; a string is the only representation that survives both the wire and the two generated languages without a lossy hop.
-         *     `scale` states how many fractional digits the amount is DECLARED to carry, so "10.00" USD (scale 2) is distinguishable from "10" USD (scale 0) and the amount converts losslessly to and from integer minor units (ADR-068 O-2's resolution): minor units = amount x 10^scale, exactly, with no rounding. The fractional digit count of `amount` MUST equal `scale`; a mismatch is a validation finding, not something the server silently normalises.
+         *     The amount is an INTEGER STRING and never a JSON number. `type: number` in this contract generates a Go float32 (float64 only with `format: double`) and a JavaScript number, and binary floating point cannot represent 0.1 exactly — so a total that must be exact would drift by an amount nobody can see until it is reconciled against a bank. FR-013 requires exact decimal arithmetic and FR-020b forbids a binary float ANYWHERE in the storage or retrieval path; a string is the only representation that survives both the wire and the two generated languages without a lossy hop.
+         *     THE AMOUNT IS ALREADY IN MINOR UNITS (ADR-068 O-2's resolution). It carries no decimal point at all — `pattern` rejects one — and `scale` says where the reader must put it: value = amount x 10^-scale, exactly, with no rounding. {amount "1000", scale 2} is 10.00 USD; {amount "10", scale 0} is 10 USD; the two are distinguishable because `scale` differs, not because the amount is spelled differently. There is no "fractional digit count" rule to satisfy — a decimal amount such as "10.00" is schema-INVALID, not a scale mismatch.
+         *     Corrected 2026-08-25, second pass: this paragraph previously required the fractional digits of `amount` to equal `scale`, illustrated it with the now ILLEGAL "10.00", and stated the conversion INVERTED (minor units = amount x 10^scale). Read together with the corrected `amount` pattern below, the one artifact said two different things about the same three fields — the exact defect the minor-units fix was filed to end.
          *     Summing money is exact WITHIN one currency. A sum ACROSS currencies is REFUSED with the currencies present listed (FR-014) — see RecordAggregateResult.currencies_present. There is no FX conversion and no rate table in this ADR.
          */
         RecordMoney: {
@@ -4855,7 +4856,9 @@ export interface components {
              */
             currency: string;
             /**
-             * @description Declared number of fractional digits. 2 for most currencies, 0 for JPY, 3 for KWD, and higher where an operator's convention needs it. Declared rather than inferred from the currency, because the vault's convention — not the product — decides how precisely it records a figure (D0).
+             * @description How many of `amount`'s trailing digits are FRACTIONAL — the power of ten that turns minor units back into the figure a person reads: value = amount x 10^-scale. 2 for most currencies, 0 for JPY, 3 for KWD, and higher where an operator's convention needs it. Declared rather than inferred from the currency, because the vault's convention — not the product — decides how precisely it records a figure (D0).
+             *
+             *     It is NOT a constraint on how `amount` is spelled: `amount` never contains a decimal point, so scale cannot be checked against it and a "fractional digit count mismatch" is not a finding this type can raise.
              * @example 2
              */
             scale: number;
@@ -5010,7 +5013,8 @@ export interface components {
          * RecordFilter
          * @description One structured filter clause (ADR-068 D13, FR-022). The query surface takes a STRUCTURED filter object and deliberately accepts no text query language: a query language would have to be parsed, and a parse failure that degrades to "returns nothing" is the silent-empty-result failure this ADR exists to end.
          *     Every property name and enum value here is validated against the schema BEFORE evaluation (FR-023). A clause naming something the schema does not declare REJECTS the query with the valid names listed — it MUST NOT return zero records (FR-024), because a typo and a genuinely empty result look identical and the caller cannot tell which it got.
-         *     A "text" property supports only is_absent / is_present: text is prose, never validated and never compared for equality (D3). Relevance search over prose is ADR-067's surface, not this one.
+         *     A "text" property supports exactly two operators: `contains` — case-sensitive substring matching (§8 R-10) — and `is_absent`. Equality and ordering are NOT defined for text, because text is prose, never validated and never compared for equality (D3); `eq`/`lt`/`lte`/`gt`/`gte` on a text property are REFUSED with the reason named, not answered. Relevance search over prose is ADR-067's surface, not this one.
+         *     Corrected 2026-08-25: this paragraph previously read "supports only is_absent / is_present". `is_present` is in neither this schema's `op` enum nor the engine's operator set, and `contains` — which the engine DOES define for text (compare_oracle.go's operatorDefinedForType[text][contains] is true, with cell-by-cell truth-table coverage) — was missing. "Is it present?" is spelled {op: is_absent, negate: true}.
          */
         RecordFilter: {
             /**
@@ -5031,8 +5035,29 @@ export interface components {
             /** @description Operand values. Empty or omitted for is_absent; exactly one for every other operator. The engine takes a single lexical literal — the same text a frontmatter file would hold — so it is parsed by the same code path as a record's own value (§8 R-12). */
             values?: components["schemas"]["RecordValue"][];
             /**
+             * @description Invert this clause. `status != done` is {op: eq, values: ["done"], negate: true}, and "is it present?" is {op: is_absent, negate: true}.
+             *
+             *     Negation is a FLAG rather than a family of `not_` operators (no `neq`, no `not_in`) so that there is exactly one place negation is applied and exactly one place FR-008's absence rule can be forgotten — which mirrors the engine, where `records.Filter.Negate` is a single bool consulted at one point in `Filter.MatchWith`.
+             *
+             *     Two consequences the caller must be able to predict:
+             *
+             *     (a) FR-008 — a negated clause INCLUDES records where the property is absent, because "days I did not meditate" must contain the days with no value at all, which are precisely the days being asked about. Override with `include_absent: false`.
+             *
+             *     (b) Negation does NOT re-admit a comparison that could not be made. A non-conforming value (§8 R-4), an unresolved relation (R-8), a cross-currency money comparison (R-6) or an operator undefined for the declared type is REPORTED in `problems` and the record EXCLUDED — from the negated clause as well as the plain one. Counting a corrupt value as "not done" by double negation would be a silent wrong answer.
+             *
+             *     Omitted is identical to false: an unset flag can never turn a clause into its opposite. Stated in prose rather than as a JSON Schema `default:` deliberately — openapi-typescript promotes a defaulted property to REQUIRED, which would have made `negate` mandatory in TypeScript while oapi-codegen still emitted an optional `*bool`, so the two generated languages would disagree about the same field.
+             * @example true
+             */
+            negate?: boolean;
+            /**
              * @description Whether records where the property is ABSENT satisfy this clause.
-             *     Defaulted by the server per FR-008, not by the client: a NEGATIVE clause (neq, not_in) INCLUDES absent records unless this is explicitly false, and a positive clause excludes them unless this is explicitly true. That default is the correction of a real failure — "days I did not meditate" currently omits every day with no value, precisely the days being asked about. Omitted means "use the default for this operator"; present means the caller has overridden it deliberately.
+             *     Defaulted by the SERVER per FR-008, not by the client, and the default is a function of `negate`: a NEGATED clause INCLUDES absent records unless this is explicitly false, and a non-negated clause excludes them unless this is explicitly true. That default is the correction of a real failure — "days I did not meditate" otherwise omits every day with no value, precisely the days being asked about. Omitted means "use the default for this clause"; present means the caller has overridden it deliberately.
+             *
+             *     `include_absent: false` on a negated clause is the wire spelling of the engine's opt-out (`records.Filter.ExcludeAbsent`). The two are one setting stated from opposite ends, not two independent knobs, so this schema carries no separate `exclude_absent` field — a second field meaning the same thing is how a contract starts contradicting itself.
+             *
+             *     `op: is_absent` is exempt: it TESTS absence, so absence is its subject rather than a case to re-admit, and this field does not apply to it.
+             *
+             *     Corrected 2026-08-25: this description previously defined its default in terms of "a NEGATIVE clause (neq, not_in)" — operators this schema does not offer and the engine never implemented, leaving the field's default keyed to something no caller could send.
              * @example true
              */
             include_absent?: boolean;

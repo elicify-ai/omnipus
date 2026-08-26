@@ -45,9 +45,12 @@ properties:
       - money
       - person
     description: >
-      "text" — prose. Never validated and never queried for equality (D3), so
-      a filter on a text property supports only is_absent / is_present;
-      full-text retrieval is ADR-067's search surface, not this one.
+      "text" — prose. Never validated and never queried for equality or order
+      (D3), so a filter on a text property supports exactly two operators:
+      `contains` (case-sensitive substring matching, §8 R-10) and `is_absent`.
+      "Is it present?" is {op: is_absent, negate: true}; there is no
+      `is_present` operator. Full-text retrieval is ADR-067's search surface,
+      not this one.
       "enum" — one of a closed, ordered set (`values`).
       "relation" — a typed edge to another record (D5); `to` names the target
       record type and `inverse` names the derived reverse direction.
@@ -111,7 +114,10 @@ properties:
     minimum: 0
     maximum: 12
     description: >
-      Declared decimal scale for a "money" property — the fractional digit
-      count every RecordMoney value of this property must carry (FR-012).
-      Present only when type is "money".
+      Declared decimal scale for a "money" property — the power of ten that
+      turns every RecordMoney value of this property from minor units back
+      into the figure a person reads: value = amount x 10^-scale (FR-012).
+      Present only when type is "money". `RecordMoney.amount` is an integer
+      count of minor units and carries no decimal point, so this is NOT a
+      "fractional digit count" the amount's spelling has to match.
     example: 2

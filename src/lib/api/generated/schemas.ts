@@ -384,6 +384,7 @@ type RecordFilter = {
   property: string;
   op: "eq" | "lt" | "lte" | "gt" | "gte" | "contains" | "is_absent";
   values?: Array<RecordValue> | undefined;
+  negate?: boolean | undefined;
   include_absent?: boolean | undefined;
   via?: Array<string> | undefined;
 };
@@ -3950,6 +3951,7 @@ export const RecordFilter: z.ZodType<RecordFilter> = z.object({
   property: z.string().min(1),
   op: z.enum(["eq", "lt", "lte", "gt", "gte", "contains", "is_absent"]),
   values: z.array(RecordValue).optional(),
+  negate: z.boolean().optional(),
   include_absent: z.boolean().optional(),
   via: z.array(z.string().min(1)).max(2).optional(),
 });
