@@ -6065,19 +6065,38 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 				unknownProviderMsg = fmt.Sprintf("unknown provider %q", name)
 				models = []string{}
 			}
+			// ADR-068 FR-034 (T068-14 gap fix): a configured sign_in row's
+			// real status/account_label, using ONLY the cheap local check —
+			// no vendor fan-out for a background list render. Skipped when
+			// unknown-provider already won above (nothing to look up for an
+			// id the catalog does not carry) — cheapSignInRowStatus's own
+			// doc comment covers why github-copilot never pays a premium
+			// request here.
+			var signInAccountLabel *string
+			if unknownProviderMsg == "" && providerAuthMethod[name] == config.AuthMethodSignIn {
+				if signInState, label, known := a.cheapSignInRowStatus(name); known {
+					status = signInState
+					if label != "" {
+						labelCopy := label
+						signInAccountLabel = &labelCopy
+					}
+				}
+			}
 			// ADR-068 FR-009 (T068-15): a `github-copilot` row is backed by
 			// the vendor CLI, not an API key, so the key-derived status above
 			// says nothing useful about it. When the CLI is absent from this
 			// machine the row stays `disconnected` and carries the operator
-			// hint. Whether the operator is SIGNED IN is not computed here —
-			// that check runs the CLI and costs a premium request, so it is
-			// the explicit Check sign-in action only.
+			// hint. Whether the operator is SIGNED IN is never computed by
+			// running the CLI here — that check costs a premium request, so
+			// it stays the explicit Check sign-in action's alone
+			// (cheapSignInRowStatus never reports "known" for a cli_login id
+			// other than codex-cli, github-copilot included).
 			copilotHint := copilotRowHint(name)
 			hasEndpointCopy := hasEndpoint
 			// ADR-068 T068-08: the row's auth method comes from the config row
 			// (closed set api_key | sign_in — Validate rejects anything else);
-			// api_key when unset. account_label stays absent until T068-14's
-			// sign-in status computation lands (zero value per FR-024).
+			// api_key when unset. account_label is populated above when the
+			// cheap sign-in status check found a signed_in/expired session.
 			authMethod := gen.ProviderAuthMethodApiKey
 			if providerAuthMethod[name] == config.AuthMethodSignIn {
 				authMethod = gen.ProviderAuthMethodSignIn
@@ -6092,6 +6111,7 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 				// advisory here; T068-09's DELETE recomputes them under
 				// configMu and its response is authoritative (MAJ-018).
 				AuthMethod:   authMethod,
+				AccountLabel: signInAccountLabel,
 				Dependents:   computeProviderDependents(cfg, name),
 				BacksDefault: providerBacksDefault(cfg, name),
 				UpdatedAt:    providerUpdatedAt[name],
@@ -6198,6 +6218,25 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 		if !decodeAndValidate(w, r, "ProviderUpdateRequest", &req, validateEnabled) {
 			return
 		}
+		// ADR-068 (T068-14 gap fix; contracts/components/schemas/
+		// ProviderUpdateRequest.yaml `auth_method`): sign_in is accepted only
+		// for a provider whose catalog row declares it, and must not be
+		// combined with api_key. Reuses signInMethodFor — the same helper
+		// the five sign-in routes gate on — so this PUT and POST
+		// .../sign-in never disagree about which providers support sign-in.
+		wantsSignIn := req.AuthMethod != nil && *req.AuthMethod == gen.ProviderUpdateRequestAuthMethodSignIn
+		if wantsSignIn {
+			if req.ApiKey != nil && *req.ApiKey != "" {
+				jsonErrField(w, http.StatusBadRequest,
+					"auth_method sign_in must not be combined with api_key", "auth_method")
+				return
+			}
+			if _, ok := a.signInMethodFor(providerID); !ok {
+				jsonErrField(w, http.StatusBadRequest,
+					"provider does not support sign-in", "auth_method")
+				return
+			}
+		}
 		// Bounds enforcement (M-slug): cap the model list inline so the limits
 		// hold even when schema validation is skipped (validate_inbound=false is
 		// the default). Mirrors the inline name/description caps in
@@ -6252,8 +6291,11 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if !found {
-			// New provider — api_key is required.
-			if req.ApiKey == nil || *req.ApiKey == "" {
+			// New provider — api_key is required, UNLESS the row
+			// authenticates via sign_in (T068-14 gap fix): a sign_in row has
+			// no key to give — its credential lives in the encrypted OAuth
+			// entry the sign-in handlers write, never here.
+			if !wantsSignIn && (req.ApiKey == nil || *req.ApiKey == "") {
 				jsonErr(w, http.StatusUnprocessableEntity, "api_key is required")
 				return
 			}
@@ -6395,6 +6437,13 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 						}
 					}
 					model["provider"] = providerID
+					// ADR-068 (T068-14 gap fix): persist the requested
+					// auth_method verbatim — the field this gap never wrote,
+					// which is why a signed-in ChatGPT session never
+					// materialized a provider row for GET /providers to show.
+					if req.AuthMethod != nil {
+						model["auth_method"] = string(*req.AuthMethod)
+					}
 					applyProviderIdentity(model, reqAPIBase, reqProtocol, isCustomRow)
 					updated = true
 					break
@@ -6407,10 +6456,15 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 					modelVal = *req.Model
 				}
 				newEntry := map[string]any{
-					"provider":    providerID,
-					"model":       modelVal,
-					"api_key_ref": credRefName,
-					"updated_at":  putStampStr,
+					"provider":   providerID,
+					"model":      modelVal,
+					"updated_at": putStampStr,
+				}
+				if credRefName != "" {
+					newEntry["api_key_ref"] = credRefName
+				}
+				if req.AuthMethod != nil {
+					newEntry["auth_method"] = string(*req.AuthMethod)
 				}
 				if len(userModelsJSON) > 0 {
 					newEntry["models"] = userModelsJSON
@@ -6474,13 +6528,27 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 				respModels = []string{}
 			}
 		}
+		// ADR-068 (T068-14 gap fix): a sign_in row was not just given an
+		// api_key, so the api_key-flavoured "connected"/api_key defaults
+		// below would misreport it. Reuse the same cheap local check GET
+		// /providers uses (no vendor fan-out) — falls back to disconnected
+		// when the operator has not completed sign-in yet.
+		respStatus := gen.ProviderStatusConnected
+		respAuthMethod := gen.ProviderAuthMethodApiKey
+		if wantsSignIn {
+			respAuthMethod = gen.ProviderAuthMethodSignIn
+			respStatus = gen.ProviderStatusDisconnected
+			if state, _, known := a.cheapSignInRowStatus(providerID); known {
+				respStatus = state
+			}
+		}
 		providerResp := gen.Provider{
 			Id:                providerID,
 			Name:              providerID,
-			Status:            gen.ProviderStatusConnected,
+			Status:            respStatus,
 			Models:            respModels,
 			HasModelsEndpoint: &hasEndpoint,
-			AuthMethod:        gen.ProviderAuthMethodApiKey,
+			AuthMethod:        respAuthMethod,
 			Dependents:        []gen.ProviderDependent{},
 			BacksDefault:      providerBacksDefault(a.agentLoop.GetConfig(), providerID),
 			UpdatedAt:         &putStamp,

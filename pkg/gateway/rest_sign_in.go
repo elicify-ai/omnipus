@@ -608,6 +608,59 @@ func (a *restAPI) deviceCodeStatus(providerID string) gen.SignInStatus {
 	return resp
 }
 
+// cheapSignInRowStatus answers "is this configured sign_in row signed in"
+// using ONLY cheap, local checks — no vendor call — for GET /providers'
+// list render (ADR-068 T068-14 gap fix) and the PUT /providers/{id}
+// sign_in response. device_code providers (openai-chatgpt/xai) are
+// answered by peeking the stored "<vendor>_OAUTH" credential with no
+// refresh attempt and no network I/O (providers_pkg.PeekStoreOAuthCred, in
+// contrast to deviceCodeStatus/NewStoreOAuthTokenSource which may refresh
+// against the vendor — that cost belongs to the explicit sign-in status
+// poll, never a list render). cli_login providers reuse cliLoginStatus,
+// which itself only reads a local file for codex-cli and is a constant
+// not_signed_in for any other cli_login id — github-copilot included,
+// deliberately: the real Copilot check runs the vendor CLI and spends a
+// PREMIUM request against the operator's subscription (see
+// rest_signin_copilot.go's handleCopilotSignInStatus doc comment); that
+// cost belongs exclusively to the operator's explicit "Check sign-in"
+// action. known is false whenever this cheap path has nothing more to say
+// than the row's key-derived default (not signed in / unsupported
+// provider) — callers must leave the row's existing status untouched.
+func (a *restAPI) cheapSignInRowStatus(providerID string) (state gen.ProviderStatus, accountLabel string, known bool) {
+	method, ok := a.signInMethodFor(providerID)
+	if !ok {
+		return "", "", false
+	}
+	if method == "cli_login" {
+		st := cliLoginStatus(providerID)
+		label := ""
+		if st.AccountLabel != nil {
+			label = *st.AccountLabel
+		}
+		switch st.State {
+		case gen.SignInStatusStateSignedIn:
+			return gen.ProviderStatusSignedIn, label, true
+		case gen.SignInStatusStateExpired:
+			return gen.ProviderStatusExpired, label, true
+		default:
+			return "", "", false
+		}
+	}
+	// device_code: peek the stored credential only — no refresh, no vendor call.
+	store, err := a.resolveSignInCredStore()
+	if err != nil {
+		return "", "", false
+	}
+	cred, err := providers_pkg.PeekStoreOAuthCred(providerID, store)
+	if err != nil || cred == nil {
+		return "", "", false
+	}
+	if !cred.ExpiresAt.IsZero() && time.Now().After(cred.ExpiresAt) {
+		return gen.ProviderStatusExpired, cred.AccountID, true
+	}
+	return gen.ProviderStatusSignedIn, cred.AccountID, true
+}
+
 // handleProviderSignInStatus implements GET /providers/{id}/sign-in/status (FR-009).
 func (a *restAPI) handleProviderSignInStatus(w http.ResponseWriter, r *http.Request, providerID string) {
 	if err := validateEntityID(providerID); err != nil || len(providerID) > maxProviderIDLen {

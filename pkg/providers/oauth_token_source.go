@@ -313,6 +313,35 @@ func NewStoreOAuthTokenSource(
 	}
 }
 
+// PeekedOAuthCred is the subset of a stored device-code OAuth credential a
+// cheap, local status check needs — never the tokens themselves (those never
+// leave NewStoreOAuthTokenSource's closure).
+type PeekedOAuthCred struct {
+	AccountID string
+	ExpiresAt time.Time
+}
+
+// PeekStoreOAuthCred reads providerID's stored "<vendor>_OAUTH" credential
+// with NO refresh attempt and NO network call — unlike
+// NewStoreOAuthTokenSource's closure, which refreshes an expiring token
+// against the vendor. It exists for callers that need to answer "is this row
+// signed in" as cheaply as possible, e.g. GET /providers' list render
+// (ADR-068 T068-14 gap fix), which must never fan out to a vendor for every
+// configured row. Returns (nil, nil) when nothing is stored for this
+// provider — "not signed in" is not an error here, mirroring
+// readStoreOAuthCred's own convention.
+func PeekStoreOAuthCred(providerID string, store *credentials.Store) (*PeekedOAuthCred, error) {
+	entryName := credentials.OAuthEntryName(OAuthVendorID(providerID))
+	cred, err := readStoreOAuthCred(store, entryName)
+	if err != nil {
+		return nil, err
+	}
+	if cred == nil {
+		return nil, nil
+	}
+	return &PeekedOAuthCred{AccountID: cred.AccountID, ExpiresAt: cred.ExpiresAt}, nil
+}
+
 // oauthEntrySuffix matches the "_OAUTH" suffix credentials.OAuthEntryName
 // appends. Duplicated as a literal (rather than importing credentials just
 // for the constant) because both packages already share the format via that
