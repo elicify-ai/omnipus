@@ -360,9 +360,40 @@ type PropertyValue struct {
 	// Values holds the conforming values. A scalar property has at most one;
 	// a `many` property has zero or more, in document order. An EMPTY LIST is
 	// StatePresent with zero values — R-3: an empty list is a value, not absence.
+	//
+	// It is a FILTERED slice: a non-conforming element is reported and skipped,
+	// so an index into Values is NOT an index into the file. Anything that
+	// reports a position must go through SourcePosition.
 	Values []TypedValue
+	// SourceIndex[i] is the 0-based position of Values[i] among the property's
+	// SOURCE elements — the position the operator sees in their own file.
+	//
+	// It exists because Values is filtered. With `tags: [{a: b}, dup, dup]` the
+	// mapping is dropped as non-conforming, so the two duplicates sit at Values
+	// indexes 0 and 1 while the file has them at lines 2 and 3. A finding that
+	// reported the Values index would send the operator to the wrong line of
+	// their own note — and every position after ANY dropped element is wrong,
+	// not just the first. Read it via SourcePosition, never directly.
+	//
+	// len(SourceIndex) == len(Values) for every PropertyValue that came out of
+	// ResolveProperty. It is empty on a hand-built one, which SourcePosition
+	// handles.
+	SourceIndex []int
 	// Findings holds what went wrong, if anything.
 	Findings []Finding
+}
+
+// SourcePosition maps an index into Values back to the element position in the
+// source file — what a finding must name.
+//
+// It falls back to i for a PropertyValue that was assembled by hand rather than
+// resolved from a record (filter.go synthesises literal operands this way).
+// Those carry exactly one unfiltered value, so i is already the source position.
+func (pv PropertyValue) SourcePosition(i int) int {
+	if i >= 0 && i < len(pv.SourceIndex) {
+		return pv.SourceIndex[i]
+	}
+	return i
 }
 
 // ResolveProperty reads one declared property off a record: its state, its
@@ -449,6 +480,10 @@ func ResolveProperty(rec Record, prop *Property) PropertyValue {
 			continue
 		}
 		pv.Values = append(pv.Values, tv)
+		// i is the SOURCE element index — `elements` is the file's own list,
+		// unfiltered. Recording it here is what keeps a later position report
+		// honest once a non-conforming element above has been skipped.
+		pv.SourceIndex = append(pv.SourceIndex, i)
 	}
 	return pv
 }
@@ -485,25 +520,30 @@ func validateProperty(rec Record, report RecordReport, prop *Property, opts Vali
 
 	findings := pv.Findings
 	if opts.ReportDuplicateListValues && prop.Many && len(pv.Values) > 1 {
+		// Both positions are SOURCE positions. pv.Values is filtered — an
+		// element that failed to parse was reported and dropped — so its index
+		// stops matching the file the moment anything above it is dropped, and
+		// a warning that names the wrong element is worse than no warning.
 		seen := map[string]int{}
 		for i, v := range pv.Values {
 			key := v.String()
+			pos := pv.SourcePosition(i)
 			if first, dup := seen[key]; dup {
 				findings = append(findings, Finding{
 					RecordPath:   rec.Path,
 					RecordType:   report.Type,
 					RecordID:     report.ID,
 					Property:     prop.Name,
-					ElementIndex: i,
+					ElementIndex: pos,
 					Code:         FindingDuplicateListValue,
 					Severity:     SeverityWarning,
-					Reason:       fmt.Sprintf("property %q holds %q at positions %d and %d", prop.Name, key, first, i),
+					Reason:       fmt.Sprintf("property %q holds %q at positions %d and %d", prop.Name, key, first, pos),
 					Expected:     prop.ExpectedShape(),
 					Got:          key,
 				})
 				continue
 			}
-			seen[key] = i
+			seen[key] = pos
 		}
 	}
 	return findings

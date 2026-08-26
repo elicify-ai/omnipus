@@ -139,7 +139,15 @@ type Property struct {
 
 	// Values is the enum's ordered set. Empty for every other type.
 	Values []EnumValue
-	// valuePos indexes Values by exact name for O(1) membership and ordering.
+	// valuePos is a CACHE of Values, keyed by exact name, for O(1) membership
+	// and ordering. It is derived state and never the authority: EnumPosition
+	// answers from Values when it is nil, so a Property built with a plain
+	// struct literal outside this package behaves exactly like a parsed one.
+	//
+	// It used to be the authority, and that made an externally-built enum
+	// property unusable: EnumPosition returned (0, false) for every value, so
+	// every legitimately declared value was rejected as impermissible — with a
+	// message listing the permitted values, i.e. the very value being rejected.
 	valuePos map[string]int
 
 	// To is the target record type for `relation` and (optionally) `person`.
@@ -160,12 +168,27 @@ type Property struct {
 
 // EnumPosition returns a value's declared position and whether it is in the
 // set. This is the ordering oracle for FR-010 and §8 R-5.
+//
+// The position returned is the index into Values, which is the DECLARED order —
+// FR-010's "sorting follows position, not the alphabet". Callers index Values
+// with it (value.go's enum parse does), so it must be the slice index and not
+// an EnumValue.Position a caller may have filled in by hand.
+//
+// When the valuePos cache has not been built — a Property assembled outside
+// this package — the answer is scanned out of Values instead of being wrong.
+// An enum's declared set is a handful of values; a linear scan of it costs
+// nothing next to reporting every one of them as impermissible.
 func (p *Property) EnumPosition(value string) (int, bool) {
-	if p.valuePos == nil {
-		return 0, false
+	if p.valuePos != nil {
+		i, ok := p.valuePos[value]
+		return i, ok
 	}
-	i, ok := p.valuePos[value]
-	return i, ok
+	for i, v := range p.Values {
+		if v.Name == value {
+			return i, true
+		}
+	}
+	return 0, false
 }
 
 // PermittedValues lists an enum's declared values in order — what FR-011
@@ -615,40 +638,125 @@ func parseProperty(recordType, name string, node *yaml.Node) (*Property, error) 
 		RecordType: recordType,
 	}
 
-	switch pt {
-	case TypeEnum:
-		if len(decl.Values) == 0 {
-			return nil, fmt.Errorf("an enum must declare its `values`; an enum with no values can never be satisfied")
-		}
-		p.valuePos = make(map[string]int, len(decl.Values))
+	// `values` is enum-only. This check sits OUTSIDE the type switch below on
+	// purpose: it used to be the switch's `default:` arm, which meant any type
+	// with its own `case` skipped it entirely. `relation` had one, so
+	// `{type: relation, to: person, values: [a, b]}` was ACCEPTED and the
+	// values silently discarded — while the identical `person` declaration,
+	// which had no case, was correctly refused. An author who writes something
+	// meaningful must never be told nothing when we throw it away.
+	if pt != TypeEnum && len(decl.Values) > 0 {
+		return nil, errValuesOnlyOnEnum(pt)
+	}
+	if pt == TypeEnum {
 		for i, vn := range decl.Values {
 			ev, err := parseEnumValue(vn, i)
 			if err != nil {
 				return nil, err
 			}
-			if _, dup := p.valuePos[ev.Name]; dup {
-				return nil, fmt.Errorf("enum value %q is declared twice; declared position is the sort order (FR-010), so a repeat has no defined position", ev.Name)
-			}
-			p.valuePos[ev.Name] = i
 			p.Values = append(p.Values, ev)
-		}
-	case TypeRelation:
-		if p.To == "" {
-			return nil, fmt.Errorf("a relation must declare its target record type with `to:`; without it the target type cannot be checked (FR-034)")
-		}
-	default:
-		if len(decl.Values) > 0 {
-			return nil, fmt.Errorf("`values` is only meaningful on an enum, not on a %s", pt)
 		}
 	}
 
-	if pt != TypeNumber && p.Unit != "" {
-		return nil, fmt.Errorf("`unit` is only meaningful on a number, not on a %s", pt)
-	}
-	if pt != TypeRelation && pt != TypePerson && (p.To != "" || p.Inverse != "") {
-		return nil, fmt.Errorf("`to`/`inverse` are only meaningful on a relation or person, not on a %s", pt)
+	// Every remaining cross-field rule — and the derived valuePos index — comes
+	// from finalize, which NewProperty runs too. The two construction paths
+	// therefore cannot drift apart on what a valid declaration is.
+	if err := p.finalize(); err != nil {
+		return nil, err
 	}
 	return p, nil
+}
+
+func errValuesOnlyOnEnum(pt PropertyType) error {
+	return fmt.Errorf("`values` is only meaningful on an enum, not on a %s", pt)
+}
+
+// finalize applies every cross-field rule a property declaration must satisfy
+// and populates the derived valuePos index. It is the single definition of "a
+// well-formed Property", shared by the schema loader and NewProperty.
+//
+// It is written against the Property's own exported fields rather than against
+// a YAML declaration, so a hand-built property is held to exactly the same
+// rules as a parsed one.
+func (p *Property) finalize() error {
+	switch p.Type {
+	case TypeEnum:
+		if len(p.Values) == 0 {
+			return fmt.Errorf("an enum must declare its `values`; an enum with no values can never be satisfied")
+		}
+		pos := make(map[string]int, len(p.Values))
+		for i, v := range p.Values {
+			if strings.TrimSpace(v.Name) == "" {
+				return fmt.Errorf("enum value at position %d is empty", i)
+			}
+			if _, dup := pos[v.Name]; dup {
+				return fmt.Errorf("enum value %q is declared twice; declared position is the sort order (FR-010), so a repeat has no defined position", v.Name)
+			}
+			pos[v.Name] = i
+		}
+		p.valuePos = pos
+	case TypeRelation:
+		if p.To == "" {
+			return fmt.Errorf("a relation must declare its target record type with `to:`; without it the target type cannot be checked (FR-034)")
+		}
+	}
+
+	if p.Type != TypeEnum && len(p.Values) > 0 {
+		return errValuesOnlyOnEnum(p.Type)
+	}
+	if p.Type != TypeNumber && p.Unit != "" {
+		return fmt.Errorf("`unit` is only meaningful on a number, not on a %s", p.Type)
+	}
+	if p.Type != TypeRelation && p.Type != TypePerson && (p.To != "" || p.Inverse != "") {
+		return fmt.Errorf("`to`/`inverse` are only meaningful on a relation or person, not on a %s", p.Type)
+	}
+	return nil
+}
+
+// NewProperty builds a Property from a hand-written declaration — the path a
+// consumer of this package takes when the schema does not come from a file
+// (a test fixture, a generated schema, an in-memory record type).
+//
+// It exists because a Property carries derived state, and a struct literal
+// cannot fill it in from outside the package. EnumPosition tolerates that (it
+// scans Values instead), but this is the path that gets the O(1) index AND,
+// more importantly, the same rejections the schema loader applies: a relation
+// with no `to:`, a `unit` on anything but a number, `values` on anything but an
+// enum, a duplicate or empty enum value. A caller that skips it gets a working
+// property; a caller that uses it also gets told when the declaration is wrong.
+//
+// decl is taken by value and copied, so the returned Property shares nothing
+// with the caller's. EnumValue.Position is normalised to the declared order
+// (FR-010: position IS the order values are declared in), matching exactly what
+// the loader stamps.
+func NewProperty(decl Property) (*Property, error) {
+	p := decl
+	p.Name = strings.TrimSpace(p.Name)
+	p.To = strings.TrimSpace(p.To)
+	p.Inverse = strings.TrimSpace(p.Inverse)
+	p.Unit = strings.TrimSpace(p.Unit)
+	p.RecordType = strings.TrimSpace(p.RecordType)
+	p.valuePos = nil // derived state is ours to compute, never the caller's
+
+	if p.Name == "" {
+		return nil, fmt.Errorf("a property must declare a name")
+	}
+	if p.Type == "" {
+		return nil, fmt.Errorf("property %q declares no type; one of %s is required", p.Name, strings.Join(propertyTypeNames(), ", "))
+	}
+	if !isKnownPropertyType(p.Type) {
+		return nil, fmt.Errorf("property %q: type %q is not a supported property type; the supported types are %s", p.Name, p.Type, strings.Join(propertyTypeNames(), ", "))
+	}
+
+	p.Values = append([]EnumValue(nil), decl.Values...)
+	for i := range p.Values {
+		p.Values[i].Position = i
+	}
+
+	if err := p.finalize(); err != nil {
+		return nil, fmt.Errorf("property %q: %w", p.Name, err)
+	}
+	return &p, nil
 }
 
 // parseEnumValue accepts either the short form (`values: [prospect, active]`)
