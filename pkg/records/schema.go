@@ -115,6 +115,11 @@ type EnumValue struct {
 	// is not `active` (DS-1). D4's reason: auto-accepting a near-miss is how
 	// one column comes to hold `Won`, `won` and `Closed Won`.
 	Name string
+	// Label is the human-readable display name (EnumValueDef.label). Absent
+	// means render Name. Display data only — it carries no rule and no
+	// ordering meaning; Position and EnumPosition remain the sole authorities
+	// on order.
+	Label string
 	// Position is the declared index, zero-based. FR-010: order is DATA, so it
 	// travels with the value instead of being encoded into the spelling — the
 	// "1-Pending / 7-DoNotContact" prefix hack exists only because a tool sorted
@@ -149,6 +154,17 @@ type Property struct {
 	// Required means a record must carry a value. Absent (or explicitly null)
 	// then fails validation.
 	Required bool
+
+	// Label is the human-readable display name (PropertyDef.label). Absent
+	// means render Name, so no consumer has to invent its own fallback.
+	//
+	// Display data: there is no type it is invalid on and no bound the
+	// contract states, so it has no rule in finalize. It is a FIELD, rather
+	// than a key the parser skips, because the contract has always defined it
+	// and the parser used to drop it in silence — `label: Status` produced no
+	// label, no rejection and no warning, which is the exact fault the
+	// `values`-on-a-non-enum check in parseProperty was written to end.
+	Label string
 
 	// Values is the enum's ordered set. Empty for every other type.
 	Values []EnumValue
@@ -367,6 +383,11 @@ const (
 	RejectDuplicateType      SchemaRejectionCode = "schema_duplicate_type"
 	RejectNoProperties       SchemaRejectionCode = "schema_no_properties"
 	RejectBadProperty        SchemaRejectionCode = "schema_bad_property"
+	// RejectUnknownKey is a key the schema file is not entitled to mention —
+	// at the top level or inside `identity`. A property-level unknown key is
+	// reported as RejectBadProperty instead, because the property it belongs
+	// to is the thing an operator has to go and fix.
+	RejectUnknownKey SchemaRejectionCode = "schema_unknown_key"
 )
 
 // SchemaRejection is one refused schema file.
@@ -563,9 +584,20 @@ func ParseSchema(path string, data []byte) (*Schema, *SchemaRejection) {
 		}
 	}
 
-	var sf schemaFile
-	if err := yaml.Unmarshal(data, &sf); err != nil {
+	// Decoded through a yaml.Node rather than straight into schemaFile so the
+	// file's OWN key list survives the decode — see checkDeclaredKeys. An
+	// empty file yields a zero-Kind node and no error, exactly as unmarshalling
+	// into the struct did, so it still falls through to the FR-002 rejection
+	// below rather than being reported as broken YAML.
+	var root yaml.Node
+	if err := yaml.Unmarshal(data, &root); err != nil {
 		return nil, reject(RejectInvalidYAML, "", "the schema file is not valid YAML: %v", err)
+	}
+	var sf schemaFile
+	if root.Kind != 0 {
+		if err := root.Decode(&sf); err != nil {
+			return nil, reject(RejectInvalidYAML, "", "the schema file is not valid YAML: %v", err)
+		}
 	}
 
 	// FR-002 — the version is mandatory, and "0" is not a substitute for
@@ -583,6 +615,19 @@ func ParseSchema(path string, data []byte) (*Schema, *SchemaRejection) {
 		return nil, reject(RejectMissingType, "", "the schema declares no `type`, so there is no record type for it to describe")
 	}
 	recordType := strings.TrimSpace(sf.Type)
+
+	// After the version checks, deliberately: a key this release does not know
+	// inside a schema_version it does not know is an unsupported VERSION, and
+	// saying "unknown key `x`" about a version 2 file would send the operator
+	// to fix the wrong thing.
+	if err := checkDeclaredKeys("a schema file", &root, schemaFileKeys); err != nil {
+		return nil, reject(RejectUnknownKey, recordType, "%v", err)
+	}
+	if idNode := mappingValue(&root, "identity"); idNode != nil {
+		if err := checkDeclaredKeys("an `identity` block", idNode, identityDeclKeys); err != nil {
+			return nil, reject(RejectUnknownKey, recordType, "%v", err)
+		}
+	}
 
 	if sf.Properties.Kind == 0 || len(sf.Properties.Content) == 0 {
 		return nil, reject(RejectNoProperties, recordType, "the schema declares no properties")
@@ -622,11 +667,244 @@ func ParseSchema(path string, data []byte) (*Schema, *SchemaRejection) {
 	return sc, nil
 }
 
+// ---------------------------------------------------------------------------
+// Declared keys — PARSED or REFUSED, never a silent third state
+//
+// yaml.v3 drops a key that has no field to decode into, without an error and
+// without a warning. That is how `label:` on a property declaration went
+// nowhere for the whole life of this parser: the contract has always defined
+// it (contracts/components/schemas/PropertyDef.yaml), the author wrote it, and
+// the schema came back without it. `scale:` went the same way, and its
+// `maximum: 12` matching this package's maxMoneyScale made it look verified
+// while nothing read it.
+//
+// parseProperty already refuses `values` on a non-enum for exactly this
+// reason — "an author who writes something meaningful must never be told
+// nothing when we throw it away" — and value.go closes the same hole for a
+// money mapping's {amount, currency, scale}. This section generalises it so
+// the next key added to the contract cannot reopen it: every key a declaration
+// may mention is listed, with what the parser DOES with it.
+//
+//	declKeyParsed   read, and it changes the resulting Property/Schema
+//	declKeyRefused  rejected, with its own reason naming the key
+//
+// A key in neither state is UNKNOWN and is rejected by name. Adding a key to
+// the contract without adding it here fails
+// TestSchema_EveryContractPropertyKeyIsHandled, which reads the contract file
+// itself rather than a transcription of it.
+// ---------------------------------------------------------------------------
+
+type declKeyKind int
+
+const (
+	declKeyParsed declKeyKind = iota
+	declKeyRefused
+)
+
+// declKey is one entitled key and its fate.
+type declKey struct {
+	kind declKeyKind
+	// reason is the refusal, in the operator's words. Non-empty EXACTLY when
+	// kind is declKeyRefused; TestSchema_RefusedKeysCarryAReason holds that.
+	reason string
+}
+
+// propertyDeclKeys is the closed key set of one property declaration.
+//
+// `name` is absent on purpose: in a schema FILE the property name is the map
+// key the declaration hangs off, not a key inside it. It is a field of the
+// PropertyDef WIRE type, which is this same declaration flattened.
+var propertyDeclKeys = map[string]declKey{
+	"type":     {kind: declKeyParsed},
+	"many":     {kind: declKeyParsed},
+	"required": {kind: declKeyParsed},
+	"label":    {kind: declKeyParsed},
+	"values":   {kind: declKeyParsed},
+	"to":       {kind: declKeyParsed},
+	"inverse":  {kind: declKeyParsed},
+	"unit":     {kind: declKeyParsed},
+
+	// REFUSED, and the refusal is the honest answer rather than the cautious
+	// one. PropertyDef.yaml says a property's `scale` is the scale "every
+	// RecordMoney value of this property" carries — a CONSTRAINT on values.
+	// Nothing in this package enforces it: money scale is per-value, either
+	// declared in the {amount, currency, scale} mapping or inferred from the
+	// figure's own spelling (value.go's parseMoneyValue), and no value-parse
+	// path consults its Property's declaration. Storing the number and
+	// enforcing nothing would be this same silent-drop defect wearing a
+	// getter: the author would be promised a guarantee that does not exist.
+	//
+	// It is not implementable here either, honestly. FR-012 — the requirement
+	// the contract cites — is about a VALUE carrying amount, currency and
+	// scale together; it says nothing about a property-level declaration. And
+	// the only wire code that could report a violation, RecordProblem's
+	// `money_scale_mismatch`, still describes the retracted "fractional digit
+	// count" rule that RecordMoney.yaml's 2026-08-25 correction says cannot be
+	// a finding at all. Implementing against contract text that contradicts
+	// itself would be inventing a semantic, which is worse than refusing one.
+	"scale": {
+		kind: declKeyRefused,
+		reason: "is not a property-level declaration in this release: nothing enforces it, " +
+			"so accepting it would silently promise that every value of this property carries that scale. " +
+			"Declare the scale on the value instead — {amount: 34998, currency: SGD, scale: 2} — " +
+			"or write \"349.98 SGD\" and let it be inferred from the figure",
+	},
+}
+
+// schemaFileKeys is the closed key set of a schema file's top level.
+//
+// It is NOT RecordType.yaml's key list, and the divergence is deliberate
+// rather than drift: the wire type flattens `identity: {prefix: WI}` into
+// `identity_prefix` and adds `source_path`, which is the loader's own answer
+// about where the file was, never something a file declares about itself.
+var schemaFileKeys = map[string]declKey{
+	"schema_version": {kind: declKeyParsed},
+	"type":           {kind: declKeyParsed},
+	"label":          {kind: declKeyParsed},
+	"identity":       {kind: declKeyParsed},
+	"properties":     {kind: declKeyParsed},
+}
+
+// identityDeclKeys is the closed key set of the `identity` block (D7).
+var identityDeclKeys = map[string]declKey{
+	"prefix": {kind: declKeyParsed},
+}
+
+// enumValueDeclKeys is the closed key set of an enum value's LONG form.
+//
+// The short form (`values: [draft, shipped]`) is a scalar and has no keys.
+// These are EnumValueDef.yaml's keys with two differences that are the file
+// format's, not omissions: the file spells the token `name` where the wire
+// spells it `value`, and `position` is never written by hand — FR-010 makes it
+// the declared index, which the loader stamps.
+var enumValueDeclKeys = map[string]declKey{
+	"name":  {kind: declKeyParsed},
+	"label": {kind: declKeyParsed},
+	"group": {kind: declKeyParsed},
+}
+
+// checkDeclaredKeys rejects any key `node` is not entitled to mention.
+//
+// An unknown key is named, and so is the permitted set — a rejection that does
+// not say what IS allowed makes the operator go and read our source. A refused
+// key gets its OWN reason instead of "unknown": the operator wrote a key we
+// publish, and calling it unknown would be a second lie on top of the first.
+//
+// A node that is not a mapping is left alone; the caller's own decode reports
+// that shape in its own words.
+func checkDeclaredKeys(what string, node *yaml.Node, entitled map[string]declKey) error {
+	for _, k := range declaredKeys(node) {
+		e, ok := entitled[k]
+		if !ok {
+			return fmt.Errorf("unknown key %q in %s; it carries only %s (an unrecognised key would otherwise be dropped in silence, changing what the declaration means)",
+				k, what, strings.Join(entitledKeyNames(entitled), ", "))
+		}
+		if e.kind == declKeyRefused {
+			return fmt.Errorf("`%s` %s", k, e.reason)
+		}
+	}
+	return nil
+}
+
+// entitledKeyNames lists a key set in a stable order, for the message above.
+func entitledKeyNames(entitled map[string]declKey) []string {
+	out := make([]string, 0, len(entitled))
+	for k := range entitled {
+		out = append(out, "`"+k+"`")
+	}
+	sort.Strings(out)
+	return out
+}
+
+// mergeKey is YAML's merge key. It is not a key OF the declaration — it names
+// mappings whose keys are merged into it — so the merged keys are what get
+// checked. yaml.v3 honours `<<` when it decodes, so a schema that shares a
+// block of defaults across properties works today; reporting `<<` itself as
+// unknown would refuse that schema for using a feature it already had.
+const mergeKey = "<<"
+
+// declaredKeys returns every key a mapping node effectively declares, in
+// declaration order, with `<<` merges resolved into the keys they contribute.
+//
+// It follows an alias and unwraps a document so an anchored declaration
+// (`status: *shared`) is checked like any other. Without that, one `*anchor`
+// would walk every rule in this file straight past — the check would read a
+// node with no Content and find nothing to object to.
+func declaredKeys(node *yaml.Node) []string {
+	return appendDeclaredKeys(nil, node, 0)
+}
+
+// maxDeclaredKeyDepth bounds merge/alias following. yaml.v3 already refuses a
+// recursive anchor while parsing, so this is insurance for hand-built nodes
+// rather than a limit any real schema can reach.
+const maxDeclaredKeyDepth = 8
+
+func appendDeclaredKeys(out []string, node *yaml.Node, depth int) []string {
+	node = resolveNode(node)
+	if node == nil || depth > maxDeclaredKeyDepth {
+		return out
+	}
+	if node.Kind == yaml.SequenceNode {
+		// `<<: [*a, *b]` — a merge from several sources.
+		for _, item := range node.Content {
+			out = appendDeclaredKeys(out, item, depth+1)
+		}
+		return out
+	}
+	if node.Kind != yaml.MappingNode {
+		return out
+	}
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		if k := node.Content[i].Value; k != mergeKey {
+			out = append(out, k)
+			continue
+		}
+		out = appendDeclaredKeys(out, node.Content[i+1], depth+1)
+	}
+	return out
+}
+
+// mappingValue returns the value node a mapping holds under key, or nil.
+func mappingValue(node *yaml.Node, key string) *yaml.Node {
+	node = resolveNode(node)
+	if node == nil || node.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		if node.Content[i].Value == key {
+			return node.Content[i+1]
+		}
+	}
+	return nil
+}
+
+// resolveNode unwraps documents and follows aliases to the node that actually
+// holds the content. The loop is bounded by yaml.v3's own alias-depth limit —
+// it refuses a recursive anchor at parse time, so this cannot spin.
+func resolveNode(node *yaml.Node) *yaml.Node {
+	for node != nil {
+		switch {
+		case node.Kind == yaml.AliasNode:
+			node = node.Alias
+		case node.Kind == yaml.DocumentNode && len(node.Content) > 0:
+			node = node.Content[0]
+		default:
+			return node
+		}
+	}
+	return nil
+}
+
 // propertyDecl is one property's declaration.
+//
+// Its fields are the declKeyParsed half of propertyDeclKeys and nothing else.
+// `scale` deliberately has NO field here: it is declKeyRefused, and a field
+// would make it decodable and therefore droppable again.
 type propertyDecl struct {
 	Type     string      `yaml:"type"`
 	Many     bool        `yaml:"many"`
 	Required bool        `yaml:"required"`
+	Label    string      `yaml:"label"`
 	Values   []yaml.Node `yaml:"values"`
 	To       string      `yaml:"to"`
 	Inverse  string      `yaml:"inverse"`
@@ -634,6 +912,14 @@ type propertyDecl struct {
 }
 
 func parseProperty(recordType, name string, node *yaml.Node) (*Property, error) {
+	// Before the decode, not after: yaml.v3 discards a key it has no field for
+	// without a word, so the decoded struct can no longer tell us what the
+	// author actually wrote. The key list is the only place that knowledge
+	// still exists.
+	if err := checkDeclaredKeys("a property declaration", node, propertyDeclKeys); err != nil {
+		return nil, err
+	}
+
 	var decl propertyDecl
 	if err := node.Decode(&decl); err != nil {
 		return nil, fmt.Errorf("declaration is not readable: %v", err)
@@ -655,6 +941,7 @@ func parseProperty(recordType, name string, node *yaml.Node) (*Property, error) 
 		Type:       pt,
 		Many:       decl.Many, // FR-006: arity is declared, and `many` absent means scalar
 		Required:   decl.Required,
+		Label:      strings.TrimSpace(decl.Label),
 		To:         strings.TrimSpace(decl.To),
 		Inverse:    strings.TrimSpace(decl.Inverse),
 		Unit:       strings.TrimSpace(decl.Unit),
@@ -755,6 +1042,7 @@ func (p *Property) finalize() error {
 func NewProperty(decl Property) (*Property, error) {
 	p := decl
 	p.Name = strings.TrimSpace(p.Name)
+	p.Label = strings.TrimSpace(p.Label)
 	p.To = strings.TrimSpace(p.To)
 	p.Inverse = strings.TrimSpace(p.Inverse)
 	p.Unit = strings.TrimSpace(p.Unit)
@@ -793,8 +1081,12 @@ func parseEnumValue(n yaml.Node, position int) (EnumValue, error) {
 		}
 		return EnumValue{Name: n.Value, Position: position}, nil
 	case yaml.MappingNode:
+		if err := checkDeclaredKeys("an enum value", &n, enumValueDeclKeys); err != nil {
+			return EnumValue{}, fmt.Errorf("enum value at position %d: %v", position, err)
+		}
 		var long struct {
 			Name  string `yaml:"name"`
+			Label string `yaml:"label"`
 			Group string `yaml:"group"`
 		}
 		if err := n.Decode(&long); err != nil {
@@ -803,7 +1095,12 @@ func parseEnumValue(n yaml.Node, position int) (EnumValue, error) {
 		if strings.TrimSpace(long.Name) == "" {
 			return EnumValue{}, fmt.Errorf("enum value at position %d declares no `name`", position)
 		}
-		return EnumValue{Name: long.Name, Position: position, Group: long.Group}, nil
+		return EnumValue{
+			Name:     long.Name,
+			Label:    strings.TrimSpace(long.Label),
+			Position: position,
+			Group:    long.Group,
+		}, nil
 	}
 	return EnumValue{}, fmt.Errorf("enum value at position %d must be a name or a {name, group} mapping", position)
 }
