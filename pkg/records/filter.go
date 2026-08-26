@@ -176,6 +176,32 @@ func (f Filter) Validate(schema *Schema) (*Property, *TypedValue, error) {
 		return prop, nil, nil
 	}
 
+	// FR-024, applied to the OPERATOR as well as the property name.
+	//
+	// Without this check a filter naming an operator that is not defined for
+	// the property's declared type was ACCEPTED here, and then every record
+	// returned Matched=false plus one identical comparison problem. A caller
+	// asking `name > "Acme"` on a text property got an empty answer and 5,000
+	// copies of the same complaint instead of one refusal naming the operators
+	// that would have worked — the exact silently-empty result FR-024 exists to
+	// end, arriving through the operator rather than the property name.
+	//
+	// R-13 owns the arity dimension; this owns the type dimension. Both refuse
+	// up front rather than per record.
+	if !prop.Many && !operatorDefinedForType[prop.Type][f.Op] {
+		valid := make([]string, 0, len(Operators))
+		for _, o := range Operators {
+			if operatorDefinedForType[prop.Type][o] {
+				valid = append(valid, string(o))
+			}
+		}
+		return nil, nil, &QueryError{
+			Property:   f.Property,
+			Reason:     fmt.Sprintf("operator %q is not defined for a %s property", f.Op, prop.Type),
+			ValidNames: valid,
+		}
+	}
+
 	// The literal goes through ParseValue — the same function a record's own
 	// value goes through — so an enum literal outside the declared set is
 	// rejected here with the permitted values listed (FR-011 + FR-024), rather

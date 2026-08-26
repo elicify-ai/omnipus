@@ -76,11 +76,42 @@ func TestFilter_AbsentIsDistinctAndIncludedByNegation(t *testing.T) {
 	t.Run("FR-007 absent never equals a value", func(t *testing.T) {
 		// §8 R-2: a comparison where either side is absent is FALSE for every
 		// operator except `is absent`.
-		for _, op := range []Operator{OpEqual, OpLess, OpLessOrEqual, OpGreater, OpGreaterOrEqual, OpContains} {
+		//
+		// The operators listed are those DEFINED for an enum. R-2 is an
+		// EVALUATION rule; whether an operator is defined for the type is a
+		// VALIDATION rule that runs first, so an undefined operator never
+		// reaches R-2 at all. That case is asserted separately below — it must
+		// be REFUSED, which is a stronger outcome than R-2's false.
+		//
+		// This list previously included OpContains, which is not defined for an
+		// enum. It passed only because an undefined operator used to evaluate
+		// to a silent false — the behaviour FR-024 exists to remove.
+		for _, op := range []Operator{OpEqual, OpLess, OpLessOrEqual, OpGreater, OpGreaterOrEqual} {
 			f := Filter{Property: "status", Op: op, Literal: "done"}
 			if match(t, f, absent).Matched {
 				t.Fatalf("§8 R-2: `status %s done` must be false when status is absent", op)
 			}
+		}
+	})
+
+	t.Run("FR-024 an operator undefined for the type is REFUSED, not silently empty", func(t *testing.T) {
+		// `contains` is substring matching on text and whole-element membership
+		// on a list. Neither applies to a scalar enum, so it is not defined
+		// there. Before this was checked, such a filter was accepted and then
+		// every record returned false with one identical complaint attached —
+		// a caller got an empty answer and 5,000 copies of the same problem
+		// instead of one refusal naming what would have worked.
+		f := Filter{Property: "status", Op: OpContains, Literal: "done"}
+		_, _, err := f.Validate(sc)
+		if err == nil {
+			t.Fatal("`status contains done` on an enum must be refused at validation, not evaluated to an empty result")
+		}
+		var qe *QueryError
+		if !errors.As(err, &qe) {
+			t.Fatalf("the refusal must be a QueryError so a caller can read it; got %T", err)
+		}
+		if len(qe.ValidNames) == 0 {
+			t.Fatal("the refusal must NAME the operators that would have worked — that is the whole of FR-024")
 		}
 	})
 
