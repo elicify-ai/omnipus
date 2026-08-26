@@ -145,27 +145,57 @@ func ParseFrontmatter(src []byte) (Frontmatter, error) {
 		return fm, fmt.Errorf("frontmatter must be a mapping of properties, found %s", yamlKindName(root.Kind))
 	}
 
+	// ONE budget for the WHOLE DOCUMENT, threaded through every key.
+	//
+	// This is load-bearing and it is the whole reason the budget is created
+	// here rather than inside the converter. A per-PROPERTY budget bounds
+	// nothing: the properties of one note are unbounded in number, so a
+	// document made of many individually-legal properties accumulated without
+	// any limit at all. Measured on the per-property version: 10 KB of
+	// frontmatter (1,000 properties, each expanding to ~8,200 nodes — every one
+	// of them comfortably under the per-property allowance) allocated 842 MB
+	// and reported NO error, and the trees stayed retained on Values. That is
+	// ~83,000x, larger than the 40,000x the original amplification bug was
+	// filed for and silent where the original at least died loudly.
+	//
+	// Do not move this back inside convertYAMLNodeFailure.
+	budget := newConvertBudget()
+
+	// refuse fails the WHOLE frontmatter rather than keeping a partial map: a
+	// note whose properties silently went missing would validate as an ordinary
+	// note and vanish from answers that still report complete — the exact
+	// defect ADR-068 exists to remove. Named, with the reason, instead.
+	refuse := func(why, key string, line int) (Frontmatter, error) {
+		return Frontmatter{Present: true, Values: map[string]Node{}},
+			fmt.Errorf("frontmatter could not be read: %s (property %q, line %d)", why, key, line)
+	}
+
 	for i := 0; i+1 < len(root.Content); i += 2 {
 		k := root.Content[i]
 		v := root.Content[i+1]
 		key := k.Value
+		line := k.Line + startLine - 1
+
+		// Charge the key itself, so the budget covers the whole document and
+		// not merely the values that reach the converter. The duplicate-key
+		// path below converts nothing but still produces a Problems string;
+		// left uncharged, a document of a hundred thousand duplicate keys would
+		// build a hundred thousand report strings against a budget it never
+		// touched.
+		if !budget.charge() {
+			return refuse(budget.failed, key, line)
+		}
 		if _, dup := fm.Values[key]; dup {
 			// YAML keeps one of them and says nothing. We keep the FIRST (so
 			// the result is deterministic) and report, because a duplicate key
 			// means the file says two things and the reader cannot see which won.
-			fm.Problems = append(fm.Problems, fmt.Sprintf("property %q is declared more than once in the frontmatter (line %d); the first occurrence is used", key, k.Line+startLine-1))
+			fm.Problems = append(fm.Problems, fmt.Sprintf("property %q is declared more than once in the frontmatter (line %d); the first occurrence is used", key, line))
 			continue
 		}
 		fm.Keys = append(fm.Keys, key)
-		node, why := convertYAMLNodeFailure(v, startLine)
+		node, why := convertYAMLNodeFailure(v, startLine, budget)
 		if why != "" {
-			// A bounded conversion refused. Fail the WHOLE frontmatter rather
-			// than keeping a partial map: a note whose properties silently
-			// went missing would validate as an ordinary note and vanish from
-			// answers that still report complete — the exact defect ADR-068
-			// exists to remove. Reported by name instead.
-			return Frontmatter{Present: true, Values: map[string]Node{}},
-				fmt.Errorf("frontmatter could not be read: %s (property %q, line %d)", why, key, k.Line+startLine-1)
+			return refuse(why, key, line)
 		}
 		fm.Values[key] = node
 	}
@@ -184,9 +214,14 @@ func yamlKindName(k yaml.Kind) string {
 	return "an unsupported YAML construct"
 }
 
-// convertYAMLNode turns a yaml.Node into our lexical Node, resolving aliases so
-// an anchor/alias pair does not read as an empty value.
-// convertBudget bounds a single frontmatter conversion.
+// convertBudget bounds ONE WHOLE FRONTMATTER DOCUMENT's conversion.
+//
+// THE SCOPE IS THE POINT. This used to be created per PROPERTY, which bounds
+// nothing an attacker cares about: a note may carry any number of properties,
+// so a document of many individually-legal properties accumulated freely.
+// 10 KB of frontmatter allocated 842 MB with no error reported. The budget is
+// therefore created once, in ParseFrontmatter, and threaded through every key
+// of the document — including the keys the duplicate-key path never converts.
 //
 // TWO DISTINCT ATTACKS, ONE CONTROL. A YAML alias may point at an ancestor,
 // so following aliases blindly recurses forever: a six-line note
@@ -206,39 +241,78 @@ func yamlKindName(k yaml.Kind) string {
 //
 // Exceeding either limit is not silent: conversion stops and the caller marks
 // the note unparseable, which is a finding a report names — the outcome
-// ParseRecord's contract promises. Both limits are far above any hand-written
-// frontmatter; the operator's own 751-note vault peaks in the low hundreds.
+// ParseRecord's contract promises.
+//
+// WHY A NODE COUNT AND NOT A BYTE COUNT. A byte bound was considered and
+// deliberately not added, on measurement rather than taste. Retained memory
+// here is (nodes x per-node cost) + (unique scalar text). Measured per-node
+// cost across the three shapes this converter can produce: 213 B/node for
+// sequences of scalars, 378 B/node for mappings (each allocates a Go map),
+// 294 B/node for alias-heavy text. So the node count already bounds the first
+// term to within a 1.8x constant. The second term cannot be amplified at all:
+// `out.Text = n.Value` copies a string HEADER, so a thousand aliases to one
+// 200 KB scalar share a single backing array — measured, 8,200 aliases to a
+// 200-byte scalar retained 294 B/node, not 200 B of text per node. Unique
+// scalar text is therefore bounded by the source file's own size and is not an
+// amplification. A second bound would add a second number to keep in agreement
+// with this one without covering anything this one misses.
+//
+// What the measurement DID change is the number. 50,000 was chosen when the
+// budget was per-property; per-document it authorises ~19 MB of retained tree
+// for a single note at the worst measured shape. 20,000 caps that at ~7.6 MB
+// while staying far above any real note: the operator's own 751-note vault
+// peaks in the LOW HUNDREDS of nodes, so this is ~65x the observed ceiling and
+// still admits a generated index note carrying a 5,000-item list.
 type convertBudget struct {
-	nodes  int                 // remaining node allowance
+	nodes  int                 // remaining node allowance for the whole document
 	active map[*yaml.Node]bool // aliases currently being expanded, for cycle detection
 	failed string              // non-empty once a limit was hit
 }
 
-const convertMaxNodes = 50_000
+const convertMaxNodes = 20_000
+
+func newConvertBudget() *convertBudget {
+	return &convertBudget{nodes: convertMaxNodes, active: map[*yaml.Node]bool{}}
+}
+
+// charge draws one node from the document's allowance, reporting whether the
+// caller may proceed. It records the refusal reason on first exhaustion so
+// every later call short-circuits against the SAME reason.
+func (b *convertBudget) charge() bool {
+	if b.failed != "" {
+		return false
+	}
+	if b.nodes <= 0 {
+		b.failed = fmt.Sprintf("frontmatter expands to more than %d nodes across the whole note; refusing to read it", convertMaxNodes)
+		return false
+	}
+	b.nodes--
+	return true
+}
 
 // convertYAMLNodeFailure is the ONLY conversion entry point. An earlier
 // unbounded convertYAMLNode existed alongside it and was removed: two entry
 // points meant a caller could take the unguarded one, which is how CRIT-001
 // reached the tree in the first place.
 //
-// It converts and reports why it stopped, if it did. The
-// caller turns a non-empty reason into a parse error so the note is reported
-// by name rather than silently appearing to have empty frontmatter.
-func convertYAMLNodeFailure(n *yaml.Node, lineOffset int) (Node, string) {
-	b := &convertBudget{nodes: convertMaxNodes, active: map[*yaml.Node]bool{}}
+// The budget is a PARAMETER, not something this function allocates. That is
+// deliberate and is the fix for the accumulation defect: allocating it here is
+// what made the bound per-property, and a signature that hands it in makes the
+// document-wide scope visible at the call site instead of hidden one frame
+// down.
+//
+// It converts and reports why it stopped, if it did. The caller turns a
+// non-empty reason into a parse error so the note is reported by name rather
+// than silently appearing to have empty frontmatter.
+func convertYAMLNodeFailure(n *yaml.Node, lineOffset int, b *convertBudget) (Node, string) {
 	out := convertYAMLNodeBounded(n, lineOffset, b)
 	return out, b.failed
 }
 
 func convertYAMLNodeBounded(n *yaml.Node, lineOffset int, b *convertBudget) Node {
-	if n == nil || b.failed != "" {
+	if n == nil || !b.charge() {
 		return Node{Kind: KindNull}
 	}
-	if b.nodes <= 0 {
-		b.failed = "frontmatter expands to more than 50000 nodes; refusing to read it"
-		return Node{Kind: KindNull}
-	}
-	b.nodes--
 
 	if n.Kind == yaml.AliasNode && n.Alias != nil {
 		if b.active[n.Alias] {
