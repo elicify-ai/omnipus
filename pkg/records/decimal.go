@@ -42,7 +42,40 @@ type Decimal struct {
 // text — a denial-of-service seam, not a numeric one. A vault holding money and
 // measurements does not need more than this, and exceeding it is REPORTED
 // rather than silently rounded (this package never rounds).
+//
+// It is also the half-width of the scale range ParseDecimal can produce, which
+// is what maxRescaleGap is derived from — see there.
 const maxDecimalScale = 100
+
+// maxRescaleGap bounds the DISTANCE a rescale may travel, which is the quantity
+// that actually sizes the 10^n factor. maxDecimalScale bounds the DESTINATION,
+// and the two are independent: a target of 0 is legal at ANY distance, so a
+// far-negative scale aligning against scale 0 passed the destination check and
+// then built the factor in full. Measured, for a single Cmp against 1:
+//
+//	scale -1000        3.5 KB
+//	scale -100000      329 KB
+//	scale -1000000     2.7 MB      (76 ms)
+//	scale -10000000    33 MB       (3.1 SECONDS)
+//
+// and NewDecimal(1, math.MinInt32) would ask for 10^2147483648, about 890 MB.
+//
+// WHY IT IS TWICE maxDecimalScale, AND NOT maxDecimalScale ITSELF. The gap is a
+// difference between two scales, so its bound has to admit the widest pair of
+// IN-DOMAIN scales, not a single one. ParseDecimal yields scale in
+// [-maxDecimalScale, +maxDecimalScale] — the upper end checked directly, the
+// lower end because parseExponent caps the exponent at maxDecimalScale before
+// negating it — so `1e100` (scale -100) and `1e-100` (scale +100) are both
+// ordinary parsed values whose gap is 200. Bounding the gap at maxDecimalScale
+// would have made SumMoney REFUSE that pair: a legitimate total, denied by a
+// guard aimed at hand-built values. Twice the scale bound is therefore the
+// tightest bound that refuses nothing a vault file can express, and it still
+// caps the factor at 10^200 — an 84-byte integer.
+//
+// Bounding the gap costs no correctness for comparison, because Cmp's fallback
+// (cmpUnaligned) is exact for exactly these pairs. Add and Sub have no such
+// fallback and so REPORT errScaleTooLarge rather than doing the work.
+const maxRescaleGap = 2 * maxDecimalScale
 
 // maxMoneyScale bounds a MONEY value's declared scale, and is deliberately
 // tighter than maxDecimalScale. It matches RecordMoney.yaml's `maximum: 12`
@@ -138,6 +171,14 @@ func pow10(n int64) *big.Int {
 // rescale returns an equivalent Decimal at the target scale. It only ever
 // scales UP (adding zeros), which is exact; it refuses to scale down because
 // that would discard digits.
+//
+// It refuses on either bound — maxDecimalScale on the target scale, and
+// maxRescaleGap on the distance travelled. The gap check lives here rather than
+// in align because this is the function that builds the 10^n factor: bounding
+// the work where the work happens covers every caller, present and future. For
+// align's two calls the two placements are equivalent, since align refuses when
+// either operand's rescale does and the larger gap is always
+// target - min(a.scale, b.scale).
 func (d Decimal) rescale(target int32) (Decimal, error) {
 	if target == d.scale {
 		return d, nil
@@ -148,12 +189,25 @@ func (d Decimal) rescale(target int32) (Decimal, error) {
 	if target > maxDecimalScale {
 		return Decimal{}, errScaleTooLarge
 	}
-	factor := pow10(int64(target) - int64(d.scale))
+	// int64: target and d.scale are both int32, and target - d.scale in int32
+	// arithmetic overflows for a far-negative scale — the very input this bound
+	// exists to refuse. Widening makes the subtraction total.
+	gap := int64(target) - int64(d.scale)
+	if gap > maxRescaleGap {
+		// Wrapped, not bare: errScaleTooLarge's own text names maxDecimalScale,
+		// which is the wrong number for THIS refusal and would send a reader
+		// looking for a scale of 101 when the scales might be 0 and -10000000.
+		// The sentinel is preserved for errors.Is; only the detail is added.
+		return Decimal{}, fmt.Errorf("%w: the two scales are %d apart, more than the maximum gap of %d", errScaleTooLarge, gap, maxRescaleGap)
+	}
+	factor := pow10(gap)
 	return Decimal{unscaled: new(big.Int).Mul(d.int(), factor), scale: target}, nil
 }
 
 // align brings two Decimals to a common scale — the larger of the two, so the
-// alignment is always exact.
+// alignment is always exact. It refuses, rather than doing unbounded work, when
+// either operand would have to travel further than maxRescaleGap to get there —
+// see rescale.
 func align(a, b Decimal) (Decimal, Decimal, error) {
 	target := a.scale
 	if b.scale > target {
@@ -171,6 +225,13 @@ func align(a, b Decimal) (Decimal, Decimal, error) {
 }
 
 // Add returns a + b, exactly. The result carries the larger of the two scales.
+//
+// Unlike Cmp there is no unaligned fallback — a sum genuinely needs the common
+// scale — so a pair whose scales are further apart than maxRescaleGap is
+// REPORTED as errScaleTooLarge rather than materialised. Refusing is the whole
+// point: the alternative is not a slow answer, it is an arbitrarily large one.
+// No pair of PARSED values can reach that bound (see maxRescaleGap), so this
+// refusal is unreachable from vault data and only a hand-built Decimal sees it.
 func (d Decimal) Add(o Decimal) (Decimal, error) {
 	a, b, err := align(d, o)
 	if err != nil {
@@ -179,7 +240,8 @@ func (d Decimal) Add(o Decimal) (Decimal, error) {
 	return Decimal{unscaled: new(big.Int).Add(a.int(), b.int()), scale: a.scale}, nil
 }
 
-// Sub returns a - b, exactly.
+// Sub returns a - b, exactly. Like Add, it REPORTS errScaleTooLarge on a scale
+// gap beyond maxRescaleGap rather than doing unbounded work.
 func (d Decimal) Sub(o Decimal) (Decimal, error) {
 	a, b, err := align(d, o)
 	if err != nil {
@@ -191,11 +253,19 @@ func (d Decimal) Sub(o Decimal) (Decimal, error) {
 // Cmp compares two Decimals by VALUE, not by representation: 349.98 and
 // 349.9800 are equal. Returns -1, 0 or +1, always.
 //
-// Aligning to a common scale is the fast path. When align refuses — the scales
-// are further apart than maxDecimalScale allows, which only a hand-built
-// Decimal can reach — cmpUnaligned answers the SAME question exactly, without
-// rescaling. Neither path approximates and neither path panics, which is what
-// §8 R-11 means by comparison being total.
+// Aligning to a common scale is the fast path. When align refuses — either
+// operand's scale is beyond maxDecimalScale, or the DISTANCE between them is
+// beyond maxRescaleGap, neither of which a parsed value can reach —
+// cmpUnaligned answers the SAME question exactly, without rescaling.
+//
+// Neither path approximates, neither path panics, and neither path does work
+// unbounded by its operands' own digit counts. That third clause used to be
+// false and its absence was the defect: align bounded only the TARGET scale, so
+// Cmp against zero at scale -10_000_000 built a 33 MB integer and took 3.1
+// seconds before ever reaching the fallback that would have answered it in
+// microseconds. "Never returns" is not one of the outcomes §8 R-11 permits when
+// it calls comparison total, so the bound on the gap is part of R-11, not an
+// optimisation layered over it.
 func (d Decimal) Cmp(o Decimal) int {
 	a, b, err := align(d, o)
 	if err == nil {
@@ -227,8 +297,15 @@ func (d Decimal) Cmp(o Decimal) int {
 // they differ only in their FRACTION, and right-padding both digit strings with
 // zeros to a common length makes lexicographic order identical to numeric
 // order. Padding is bounded by the operands' own digit counts, never by the
-// scale gap, so an adversarial scale cannot turn a comparison into a
-// multi-gigabyte allocation the way naive rescaling would.
+// scale gap.
+//
+// That bound is why an adversarial scale cannot turn a comparison into a
+// multi-gigabyte allocation — but only because Cmp now REACHES this function
+// for such a pair. The claim was previously made here and was false in
+// practice: align bounded the target scale and not the gap, so it accepted the
+// adversarial pair and did the multi-gigabyte rescale itself, and this
+// guarded path ran only after the unguarded one had already paid. A fallback
+// is worth nothing until the fast path declines the cases it exists to catch.
 //
 // Sign is applied last, once, to the magnitude verdict.
 func cmpUnaligned(d, o Decimal) int {

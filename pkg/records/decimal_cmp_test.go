@@ -76,6 +76,28 @@ func usesUnalignedPath(a, b Decimal) bool {
 	return err != nil
 }
 
+// refusedForScaleGapOnly reports whether this pair is refused by align because
+// of the DISTANCE between the two scales, and NOT because either scale is
+// itself beyond maxDecimalScale.
+//
+// This is the region the gap bound newly moved onto the fallback: the
+// target-only bound that preceded it aligned every one of these pairs happily,
+// which is how a single Cmp came to cost 33 MB. Distinguishing it from the
+// pre-existing unaligned region matters, because the sweeps' existing
+// `unaligned` counter was already in the thousands BEFORE the gap bound
+// existed — asserting on that number alone would prove nothing about the new
+// behaviour and would stay green if the gap check were deleted.
+func refusedForScaleGapOnly(a, b Decimal) bool {
+	if !usesUnalignedPath(a, b) {
+		return false
+	}
+	target := a.scale
+	if b.scale > target {
+		target = b.scale
+	}
+	return target <= maxDecimalScale
+}
+
 // TestDecimal_CmpMatchesAnExactRationalOracle is the class-level proof: over a
 // dense cross product of unscaled magnitudes and scales — including the pairs
 // that cannot be aligned — Cmp agrees with exact rational arithmetic on every
@@ -89,7 +111,15 @@ func TestDecimal_CmpMatchesAnExactRationalOracle(t *testing.T) {
 	// Scales chosen to sit on both sides of maxDecimalScale and to make the
 	// "same magnitude exponent, different scale" case common — that is the tie
 	// v2 got wrong.
-	scales := []int32{-101, -3, 0, 1, 2, 12, 99, 100, 101, 150, 199, 200, 201, 300}
+	//
+	// The far-NEGATIVE scales are here for the gap bound. A pair like
+	// (-400, 0) aligns to a target of 0, which is legal at any distance, so the
+	// target-only bound accepted it and built 10^400; the gap bound refuses it
+	// and routes it to cmpUnaligned. Those pairs are numerically unremarkable —
+	// which is the point: the oracle has to confirm the fallback returns the
+	// SAME answers the rescaling path used to, or the fix would have bought
+	// speed with correctness.
+	scales := []int32{-400, -250, -150, -102, -101, -3, 0, 1, 2, 12, 99, 100, 101, 150, 199, 200, 201, 300}
 
 	values := make([]Decimal, 0, len(unscaledText)*len(scales))
 	for _, txt := range unscaledText {
@@ -102,15 +132,20 @@ func TestDecimal_CmpMatchesAnExactRationalOracle(t *testing.T) {
 		}
 	}
 
-	unaligned := 0
+	unaligned, gapRefused := 0, 0
 	for i := range values {
 		for j := range values {
 			if usesUnalignedPath(values[i], values[j]) {
 				unaligned++
 			}
+			if refusedForScaleGapOnly(values[i], values[j]) {
+				gapRefused++
+			}
 			checkAgainstOracle(t, "cross product", values[i], values[j])
 		}
 	}
+
+	t.Logf("cross product: %d pairs, %d reached the unaligned fallback, %d of those for the scale gap alone", len(values)*len(values), unaligned, gapRefused)
 
 	if len(values) < 200 {
 		t.Fatalf("the sweep built only %d values; it is not dense enough to be evidence", len(values))
@@ -118,6 +153,10 @@ func TestDecimal_CmpMatchesAnExactRationalOracle(t *testing.T) {
 	if unaligned < 1000 {
 		t.Fatalf("only %d of %d pairs reached the unaligned fallback — this sweep is not testing the code path it exists to test",
 			unaligned, len(values)*len(values))
+	}
+	if gapRefused < 1000 {
+		t.Fatalf("only %d of %d pairs were refused for the SCALE GAP alone — the sweep is not covering the region the gap bound moved onto the fallback, so it would stay green with that bound deleted",
+			gapRefused, len(values)*len(values))
 	}
 }
 
@@ -145,16 +184,25 @@ func TestDecimal_CmpMatchesTheOracleOnRandomPairs(t *testing.T) {
 		case 1:
 			n.SetInt64(0)
 		}
-		// Concentrated around the alignment bound so both paths get worked.
-		return NewDecimal(n, int32(rng.Intn(420)-120))
+		// Concentrated around BOTH alignment bounds so every path gets worked.
+		// The negative end reaches -400 deliberately: align refuses on the
+		// scale GAP once it exceeds maxRescaleGap, and a gap that wide needs one
+		// operand at least maxRescaleGap below a target of <= maxDecimalScale.
+		// A range of [-120, 299] produced that shape in 62 of 20000 draws — the
+		// generator has to be widened with the bound, or the sweep quietly stops
+		// covering the region it is here to cover.
+		return NewDecimal(n, int32(rng.Intn(700)-400))
 	}
 
-	unaligned := 0
+	unaligned, gapRefused := 0, 0
 	const iterations = 20000
 	for i := 0; i < iterations; i++ {
 		a, b := randomDecimal(), randomDecimal()
 		if usesUnalignedPath(a, b) {
 			unaligned++
+		}
+		if refusedForScaleGapOnly(a, b) {
+			gapRefused++
 		}
 		checkAgainstOracle(t, "random sweep", a, b)
 
@@ -169,8 +217,13 @@ func TestDecimal_CmpMatchesTheOracleOnRandomPairs(t *testing.T) {
 		}
 		checkAgainstOracle(t, "same value, larger scale", a, shifted)
 	}
+	t.Logf("random sweep: %d pairs, %d reached the unaligned fallback, %d of those for the scale gap alone", iterations, unaligned, gapRefused)
+
 	if unaligned < iterations/20 {
 		t.Fatalf("only %d of %d random pairs reached the unaligned fallback — the generator is not covering it", unaligned, iterations)
+	}
+	if gapRefused < iterations/20 {
+		t.Fatalf("only %d of %d random pairs were refused for the SCALE GAP alone — the generator is not covering the region the gap bound moved onto the fallback", gapRefused, iterations)
 	}
 }
 
