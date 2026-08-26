@@ -79,6 +79,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
     deleteProvider: vi.fn(),
     getDefaultModel: vi.fn(),
     putDefaultModel: vi.fn(),
+    checkEntitlement: vi.fn(),
     reAuth: vi.fn(),
     signOutProvider: vi.fn(),
     fetchSignInStatus: vi.fn(),
@@ -1835,5 +1836,229 @@ describe('ProvidersSection — Remove provider (FR-010, FR-016, FR-017)', () => 
       }),
     )
     expect(screen.getByTestId('remove-provider-dialog')).toBeInTheDocument()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// ADR-068 FR-031/T068-27 — "Check with my account" (TDD row 27, row-expand
+// entitlement describes) + FR-032 row expand (limits + window source).
+// ---------------------------------------------------------------------------
+
+// A configured OpenAI row whose catalog entry's models are overridden to the
+// exact A/B/C dataset the spec's "Check with my account greys unavailable
+// models" scenario names, so the test asserts the literal scenario rather
+// than an approximation built from the real fixture's gpt-5/gpt-5-mini/o4-mini.
+const ENTITLEMENT_PROVIDER = {
+  ...CONFIGURED_BASE,
+  id: 'openai',
+  name: 'openai',
+  display_name: 'OpenAI',
+  models: [],
+}
+
+function catalogWithModels(providerId: string, models: unknown[]) {
+  return {
+    ...PROVIDERS_CATALOG,
+    providers: PROVIDERS_CATALOG.providers.map((p) =>
+      p.id === providerId ? { ...p, models } : p,
+    ),
+  }
+}
+
+const MODEL_A = {
+  id: 'A', name: 'Model A', context_window: 128000, max_output_tokens: 4096,
+  input_modalities: ['text'], tool_call: true, status: 'active',
+}
+const MODEL_B = {
+  id: 'B', name: 'Model B', context_window: 128000, max_output_tokens: 4096,
+  input_modalities: ['text'], tool_call: true, status: 'active',
+}
+const MODEL_C = {
+  id: 'C', name: 'Model C', context_window: 200000, max_output_tokens: 8192,
+  input_modalities: ['text', 'image', 'pdf'], tool_call: true, status: 'active',
+}
+
+const ENTITLEMENT_RESPONSE = {
+  models: [
+    { id: 'A', entitled: true, limits: 'known' },
+    { id: 'B', entitled: false, limits: 'known' },
+    { id: 'C', entitled: true, limits: 'known' },
+    { id: 'Z', entitled: true, limits: 'unknown' },
+  ],
+  checked_at: '2026-08-22T10:15:00Z',
+  cached: false,
+}
+
+async function expandRow(id: string) {
+  fireEvent.click(screen.getByTestId(`provider-row-expand-toggle-${id}`))
+  await waitFor(() => screen.getByTestId(`model-limits-${id}`))
+}
+
+describe('ProvidersSection — Check with my account (FR-031)', () => {
+  beforeEach(() => {
+    vi.mocked(api.fetchProviders).mockResolvedValue([ENTITLEMENT_PROVIDER] as never)
+    vi.mocked(api.fetchProvidersCatalog).mockResolvedValue(
+      catalogWithModels('openai', [MODEL_A, MODEL_B, MODEL_C]) as never,
+    )
+  })
+
+  it('greys models the key cannot reach and flags catalog-unknown models as limits unknown', async () => {
+    vi.mocked(api.checkEntitlement).mockResolvedValue(ENTITLEMENT_RESPONSE as never)
+    renderSection()
+
+    await screen.findByTestId('provider-row-openai')
+    fireEvent.click(screen.getByTestId('check-entitlement-btn-openai'))
+    await waitFor(() => expect(api.checkEntitlement).toHaveBeenCalledWith('openai'))
+
+    await expandRow('openai')
+
+    // B: in the catalog, absent from the live listing → greyed, "not
+    // available on this key".
+    expect(screen.getByTestId('model-limit-not-entitled-openai-B')).toHaveTextContent(
+      'not available on this key',
+    )
+    // A and C are entitled — no "not available" badge for either.
+    expect(screen.queryByTestId('model-limit-not-entitled-openai-A')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('model-limit-not-entitled-openai-C')).not.toBeInTheDocument()
+    // Z: the provider reported it, the catalog does not carry it → "limits unknown".
+    expect(screen.getByTestId('model-limit-limits-unknown-openai-Z')).toHaveTextContent(
+      'limits unknown',
+    )
+    expect(screen.getByTestId('model-limit-row-openai-Z')).toBeInTheDocument()
+
+    // Exactly one upstream request; a second click is a client-side no-op —
+    // the result already in hand is shown, nothing new is requested.
+    expect(api.checkEntitlement).toHaveBeenCalledTimes(1)
+    fireEvent.click(screen.getByTestId('check-entitlement-btn-openai'))
+    expect(api.checkEntitlement).toHaveBeenCalledTimes(1)
+  })
+
+  it('upstream failure leaves the list unchanged and shows an inline warning', async () => {
+    vi.mocked(api.checkEntitlement).mockRejectedValue(
+      new api.ApiError(502, 'could not fetch upstream model list: status 429'),
+    )
+    renderSection()
+
+    await screen.findByTestId('provider-row-openai')
+    fireEvent.click(screen.getByTestId('check-entitlement-btn-openai'))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('entitlement-error-openai')).toHaveTextContent(
+        'could not fetch upstream model list: status 429',
+      )
+    })
+
+    await expandRow('openai')
+    // Nothing is greyed — the list is unchanged.
+    expect(screen.queryByTestId('model-limit-not-entitled-openai-A')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('model-limit-not-entitled-openai-B')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('model-limit-not-entitled-openai-C')).not.toBeInTheDocument()
+  })
+
+  it('is not offered for a cli-protocol row (409 by construction)', async () => {
+    vi.mocked(api.fetchProviders).mockResolvedValue([
+      { ...ENTITLEMENT_PROVIDER, id: 'codex-cli', name: 'codex-cli', protocol: 'cli' },
+    ] as never)
+    renderSection()
+    await screen.findByTestId('provider-row-codex-cli')
+    expect(screen.queryByTestId('check-entitlement-btn-codex-cli')).not.toBeInTheDocument()
+  })
+
+  it('is not offered for a custom row (no catalog entry to intersect against)', async () => {
+    vi.mocked(api.fetchProviders).mockResolvedValue([
+      { ...ENTITLEMENT_PROVIDER, id: 'my-custom', name: 'my-custom', custom: true },
+    ] as never)
+    renderSection()
+    await screen.findByTestId('provider-row-my-custom')
+    expect(screen.queryByTestId('check-entitlement-btn-my-custom')).not.toBeInTheDocument()
+  })
+
+  it('discards an in-flight result if the row is deleted before it resolves', async () => {
+    let resolveCheck: (value: unknown) => void = () => {}
+    vi.mocked(api.checkEntitlement).mockReturnValue(
+      new Promise((resolve) => { resolveCheck = resolve }) as never,
+    )
+    vi.mocked(api.deleteProvider).mockResolvedValue({
+      deleted: true,
+      dependents: [],
+      default_changed: false,
+    } as never)
+    renderSection()
+
+    await screen.findByTestId('provider-row-openai')
+    fireEvent.click(screen.getByTestId('check-entitlement-btn-openai'))
+    await waitFor(() => expect(api.checkEntitlement).toHaveBeenCalledWith('openai'))
+
+    // Provider removed while the check is still in flight — GET /providers
+    // now returns nothing, exactly the "row no longer exists" edge case.
+    vi.mocked(api.fetchProviders).mockResolvedValue([] as never)
+    fireEvent.click(screen.getByTestId('configure-btn-openai'))
+    await waitFor(() => screen.getByTestId('remove-provider-btn-openai'))
+    fireEvent.click(screen.getByTestId('remove-provider-btn-openai'))
+    await waitFor(() => screen.getByTestId('remove-provider-dialog'))
+    fireEvent.click(screen.getByTestId('remove-provider-confirm'))
+    await waitFor(() => expect(api.deleteProvider).toHaveBeenCalledWith('openai', undefined))
+    await waitFor(() => expect(screen.getByTestId('providers-empty-state')).toBeInTheDocument())
+
+    // The in-flight entitlement result lands AFTER the row is gone — it must
+    // not resurrect the row or throw.
+    await act(async () => {
+      resolveCheck(ENTITLEMENT_RESPONSE)
+      await Promise.resolve()
+    })
+    expect(screen.queryByTestId('provider-row-openai')).not.toBeInTheDocument()
+  })
+})
+
+describe('ProvidersSection — Row expand shows limits and window source (FR-032)', () => {
+  it('shows context_window · max_output_tokens · image · PDF and renders — for an unresolved window source', async () => {
+    vi.mocked(api.fetchProviders).mockResolvedValue([ENTITLEMENT_PROVIDER] as never)
+    vi.mocked(api.fetchProvidersCatalog).mockResolvedValue(
+      catalogWithModels('openai', [MODEL_A, MODEL_C]) as never,
+    )
+    renderSection()
+
+    await screen.findByTestId('provider-row-openai')
+    await expandRow('openai')
+
+    expect(screen.getByTestId('model-limit-window-openai-A')).toHaveTextContent('128,000')
+    expect(screen.getByTestId('model-limit-output-openai-A')).toHaveTextContent('4,096')
+    // Model A carries only "text" — no image/PDF support.
+    expect(screen.getByTestId('model-limit-image-openai-A')).toHaveTextContent('—')
+    expect(screen.getByTestId('model-limit-pdf-openai-A')).toHaveTextContent('—')
+    // Model C carries image + pdf.
+    expect(screen.getByTestId('model-limit-image-openai-C')).toHaveTextContent('Image')
+    expect(screen.getByTestId('model-limit-pdf-openai-C')).toHaveTextContent('PDF')
+    // Before ADR-066 D9 lands, the fixture carries no window_source — the
+    // cell renders the em dash, never a guess.
+    expect(screen.getByTestId('model-limit-source-openai-A')).toHaveTextContent('—')
+  })
+
+  it('renders the resolved value once a model carries window_source', async () => {
+    vi.mocked(api.fetchProviders).mockResolvedValue([ENTITLEMENT_PROVIDER] as never)
+    vi.mocked(api.fetchProvidersCatalog).mockResolvedValue(
+      catalogWithModels('openai', [{ ...MODEL_A, window_source: 'catalog' }]) as never,
+    )
+    renderSection()
+
+    await screen.findByTestId('provider-row-openai')
+    await expandRow('openai')
+
+    expect(screen.getByTestId('model-limit-source-openai-A')).toHaveTextContent('catalog')
+  })
+
+  it('a local model with window_unknown renders "No context length" with a pre-filled Settings → Models link (X-08)', async () => {
+    vi.mocked(api.fetchProviders).mockResolvedValue([ENTITLEMENT_PROVIDER] as never)
+    vi.mocked(api.fetchProvidersCatalog).mockResolvedValue(
+      catalogWithModels('openai', [{ ...MODEL_A, window_unknown: true }]) as never,
+    )
+    renderSection()
+
+    await screen.findByTestId('provider-row-openai')
+    await expandRow('openai')
+
+    expect(screen.getByTestId('model-limit-window-openai-A')).toHaveTextContent('No context length')
+    const link = screen.getByTestId('model-limit-window-unknown-link-openai-A')
+    expect(link).toHaveAttribute('href', '/settings?tab=models&provider=openai&model=A')
   })
 })

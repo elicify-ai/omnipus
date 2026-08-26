@@ -88,6 +88,8 @@ import {
   SignInStartResponse as SignInStartResponseSchema,
   SignInStatus as SignInStatusSchema,
   SignInPollResponse as SignInPollResponseSchema,
+  // ADR-068 FR-031/T068-27: "Check with my account".
+  EntitlementResponse as EntitlementResponseSchema,
   // external-executor-cli-path-detection spec (ADR-030): create-time validate.
   CliValidateResponse as CliValidateResponseSchema,
   // Agent System P0 fix: real auto-applied CLI flags (replaces misleading
@@ -349,6 +351,8 @@ import type {
   SignInStatus,
   SignInPollRequest,
   SignInPollResponse,
+  // ADR-068 FR-031/T068-27: "Check with my account".
+  EntitlementResponse,
   // New wire types (contract-first #8):
   Task,
   McpServer,
@@ -2396,6 +2400,20 @@ export function putDefaultModel(pair: DefaultModelUpdateRequest): Promise<Defaul
 
 export function testProvider(id: string): Promise<OperationResult> {
   return request<OperationResult>(`/providers/${id}/test`, { method: 'POST' }, OperationResultSchema as ZodType<OperationResult>)
+}
+
+// checkEntitlement — "Check with my account" (ADR-068 FR-031, T068-27): one
+// live listing call made with this provider's own stored key, intersected
+// with the served catalog. 409 for protocol "cli" and custom rows (nothing to
+// list with); 422 when no key resolves; 502 `{"error":"could not fetch
+// upstream model list: status <n>"}` on an upstream non-2xx with nothing
+// cached — surfaced by the caller as an inline warning, never a client retry.
+export function checkEntitlement(id: string): Promise<EntitlementResponse> {
+  return request<EntitlementResponse>(
+    `/providers/${id}/entitlement`,
+    { method: 'POST' },
+    EntitlementResponseSchema as ZodType<EntitlementResponse>,
+  )
 }
 
 // ── Provider sign-in (device code / CLI login, ADR-068 §8b, T068-33) ────────

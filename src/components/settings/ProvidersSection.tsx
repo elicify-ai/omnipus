@@ -56,6 +56,7 @@ import {
   deleteProvider,
   getDefaultModel,
   putDefaultModel,
+  checkEntitlement,
   getErrorMessage,
   isApiError,
 } from '@/lib/api'
@@ -75,7 +76,7 @@ import { providersCatalogQueryOptions } from '@/lib/providersCatalogQuery'
 import { DRAFT_DISCARD_PROMPT, draftCloseDecision, type DraftCloseAction } from '@/hooks/use-draft-guard'
 import { ReAuthDialog } from './ReAuthDialog'
 import { ProviderValidationBanner } from '@/components/providers/ProviderValidationBanner'
-import { ProviderRow, cliKindOf } from './ProviderRow'
+import { ProviderRow, cliKindOf, isEntitlementEligible } from './ProviderRow'
 import { SignInDialog } from '@/components/providers/SignInDialog'
 import { ManageSignInDialog } from '@/components/providers/ManageSignInDialog'
 import { ReSignInDialog } from '@/components/providers/ReSignInDialog'
@@ -89,6 +90,7 @@ import type {
   CatalogProvider,
   DefaultModelUpdateRequest,
   ProviderUpdateRequest,
+  EntitlementResponse,
 } from '@/lib/api/generated/openapi-types'
 
 // A pending provider edit captured before the re-auth prompt; replayed once the
@@ -658,6 +660,11 @@ export function ProvidersSection() {
   const [draftModels, setDraftModels] = useState<Record<string, string[]>>({})
   const [newModel, setNewModel] = useState<Record<string, string>>({})
 
+  // ADR-068 FR-031/T068-27 — "Check with my account", keyed by provider id.
+  const [entitlements, setEntitlements] = useState<Record<string, EntitlementResponse>>({})
+  const [checkingEntitlement, setCheckingEntitlement] = useState<Record<string, boolean>>({})
+  const [entitlementErrors, setEntitlementErrors] = useState<Record<string, string | undefined>>({})
+
   const [pending, setPending] = useState<PendingProviderChange | null>(null)
   const [reauthOpen, setReauthOpen] = useState(false)
 
@@ -720,9 +727,22 @@ export function ProvidersSection() {
     // Destructure `draftKey` (NOT `id`) — the draft-state key set by
     // requestChange, so the typed key / validation banner is cleared under the
     // SAME key the Sheet is reading from, regardless of which literal id the
-    // PUT actually submitted (BUG #2: previously cleared by mutation `id`).
-    onSuccess: (provider, { draftKey }) => {
+    // PUT actually submitted (BUG #2: previously cleared by mutation `id`,
+    // which can diverge from the draft key on alias storage).
+    onSuccess: (provider, { draftKey, key }) => {
       queryClient.invalidateQueries({ queryKey: ['providers'] })
+      // FR-031's eviction rule mirrored client-side: a PUT that actually
+      // changed the key invalidates any entitlement result already shown for
+      // this row — the previous "Check with my account" result was made
+      // against a key that no longer applies.
+      if (key !== '') {
+        setEntitlements((prev) => {
+          if (!(provider.id in prev)) return prev
+          const rest = { ...prev }
+          delete rest[provider.id]
+          return rest
+        })
+      }
       const validation = provider.validation
       if (validation?.outcome === 'invalid_key') {
         // invalid_key is the ONE outcome the contract says blocks a usable
@@ -801,6 +821,42 @@ export function ProvidersSection() {
     }
   }
 
+  // ── ADR-068 FR-031/T068-27 — "Check with my account" ────────────────────
+  //
+  // A second click on a provider that already has a result is a no-op: FR-031's
+  // own client-side half of "cached" is never re-asking the server for a
+  // result it is already holding (the backend's own process-cache is what the
+  // Go integration test's "cached: true, no upstream request" covers).
+  //
+  // Edge case (docs/internal/specs/adr-068-providers-ux-spec.md, "Deleting a
+  // provider while Check is in flight"): the in-flight result is discarded on
+  // arrival if the row no longer exists. `providers` here is a closure over
+  // the query's last render, which can be stale by the time this resolves —
+  // reading the LIVE cache at completion time is what makes the discard
+  // correct rather than racy.
+  const { mutate: runEntitlementCheck } = useMutation({
+    mutationFn: (id: string) => checkEntitlement(id),
+    onMutate: (id: string) => {
+      setCheckingEntitlement((prev) => ({ ...prev, [id]: true }))
+      setEntitlementErrors((prev) => ({ ...prev, [id]: undefined }))
+    },
+    onSuccess: (result, id) => {
+      setCheckingEntitlement((prev) => ({ ...prev, [id]: false }))
+      const current = queryClient.getQueryData<Provider[]>(['providers']) ?? []
+      if (!current.some((p) => p.id === id)) return // discarded — row no longer exists
+      setEntitlements((prev) => ({ ...prev, [id]: result }))
+    },
+    onError: (err: Error, id: string) => {
+      setCheckingEntitlement((prev) => ({ ...prev, [id]: false }))
+      setEntitlementErrors((prev) => ({ ...prev, [id]: getErrorMessage(err, 'could not fetch upstream model list') }))
+    },
+  })
+
+  const handleCheckEntitlement = (id: string) => {
+    if (entitlements[id]) return // already have a result — no new request (FR-031's DoD)
+    runEntitlementCheck(id)
+  }
+
   const openConfigureSheet = (provider: Provider) => {
     const entry = catalogEntryById(catalog, provider.id)
     setSheetTarget({ mode: 'configure', provider, entry })
@@ -877,13 +933,27 @@ export function ProvidersSection() {
   const { mutate: removeProvider, isPending: isRemoving } = useMutation({
     mutationFn: ({ id, newDefault }: { id: string; newDefault?: DefaultModelUpdateRequest }) =>
       deleteProvider(id, newDefault),
-    onSuccess: (result) => {
+    onSuccess: (result, { id }) => {
       setRemoveTarget(null)
       setSheetOpen(false)
       queryClient.invalidateQueries({ queryKey: ['providers'] })
       if (result.default_changed) {
         queryClient.invalidateQueries({ queryKey: ['default-model'] })
       }
+      // The row is gone — its stale entitlement bookkeeping goes with it
+      // (the process-side cache eviction is the server's; this is ours).
+      setEntitlements((prev) => {
+        if (!(id in prev)) return prev
+        const rest = { ...prev }
+        delete rest[id]
+        return rest
+      })
+      setEntitlementErrors((prev) => {
+        if (!(id in prev)) return prev
+        const rest = { ...prev }
+        delete rest[id]
+        return rest
+      })
       addToast({ message: 'Provider removed', variant: 'success' })
     },
     onError: (err: Error) => {
@@ -1065,6 +1135,10 @@ export function ProvidersSection() {
                   testValidation={testValidation[provider.id]}
                   isDefault={defaultModel?.provider === provider.id}
                   onSetAsDefault={canBeDefault(provider) ? () => openSetAsDefault(provider) : undefined}
+                  onCheckEntitlement={isEntitlementEligible(provider) ? () => handleCheckEntitlement(provider.id) : undefined}
+                  checkingEntitlement={checkingEntitlement[provider.id]}
+                  entitlement={entitlements[provider.id]}
+                  entitlementError={entitlementErrors[provider.id]}
                 />
               )
             }
@@ -1107,6 +1181,10 @@ export function ProvidersSection() {
                       testValidation={testValidation[provider.id]}
                       isDefault={defaultModel?.provider === provider.id}
                       onSetAsDefault={canBeDefault(provider) ? () => openSetAsDefault(provider) : undefined}
+                      onCheckEntitlement={isEntitlementEligible(provider) ? () => handleCheckEntitlement(provider.id) : undefined}
+                      checkingEntitlement={checkingEntitlement[provider.id]}
+                      entitlement={entitlements[provider.id]}
+                      entitlementError={entitlementErrors[provider.id]}
                     />
                   ))}
                 </div>

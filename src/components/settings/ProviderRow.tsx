@@ -1,13 +1,30 @@
 import type { ReactNode } from 'react'
-import { CheckCircle, XCircle, Warning, CaretRight, Circle, Globe, Question, SpinnerGap } from '@phosphor-icons/react'
+import { useState } from 'react'
+import {
+  CheckCircle,
+  XCircle,
+  Warning,
+  CaretRight,
+  CaretDown,
+  Circle,
+  Globe,
+  Question,
+  SpinnerGap,
+  ArrowsClockwise,
+} from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { BrandIcon } from '@/components/ui/brand-icon'
 import { providerCatalogMode } from '@/lib/agents/providerCatalog'
 import { ProviderValidationBanner } from '@/components/providers/ProviderValidationBanner'
-import { providerStatusLabel, type ProviderStatus } from '@/lib/providerStatus'
-import type { ProviderValidation, Provider } from '@/lib/api/generated/openapi-types'
-import type { CatalogProvider } from '@/lib/api/generated/openapi-types'
+import { providerStatusLabel, isProviderUsable, type ProviderStatus } from '@/lib/providerStatus'
+import {
+  MODEL_OVERRIDE_LINK_TEXT,
+  NO_CONTEXT_LENGTH_COPY,
+  modelOverrideHref,
+} from '@/lib/modelOverrideLink'
+import type { ProviderValidation, Provider, EntitlementResponse } from '@/lib/api/generated/openapi-types'
+import type { CatalogProvider, CatalogModel } from '@/lib/api/generated/openapi-types'
 import { catalogLogoSlug, catalogSubtitle } from '@/lib/catalogDisplay'
 
 // See ProvidersSection.tsx's file header for the FIX-N legend. `entry` is the
@@ -43,6 +60,137 @@ function isSignInCapable(provider: Provider, entry?: CatalogProvider): boolean {
 // need a fresh device-code approval (SignInDialog) once expired.
 function cliKindOf(provider: Provider, entry?: CatalogProvider): 'codex' | 'copilot' | undefined {
   return entry?.cli_kind ?? provider.cli_kind
+}
+
+// ADR-068 FR-031: "Check with my account" makes ONE live listing call with
+// the provider's own key. The gateway 409s for protocol "cli" (codex-cli,
+// github-copilot — there is no key to list with, only a subprocess) and for
+// custom rows (no catalog entry to intersect against), so the control is
+// never offered for either — clicking a button that is guaranteed to 409
+// would just trade one dead end for another. Anything else that can serve a
+// turn right now (connected or signed_in, ADR-068 FR-019's usable set) is
+// offered the control.
+export function isEntitlementEligible(provider: Provider): boolean {
+  if (provider.custom) return false
+  if (provider.protocol === 'cli') return false
+  return isProviderUsable(provider.status)
+}
+
+/** What an absent numeric field renders as — same em dash the Default-model card uses. */
+const ABSENT_FIELD = '—'
+const TOKEN_FORMAT = new Intl.NumberFormat('en-US')
+
+function formatTokenCount(n: number | undefined): string {
+  return n !== undefined && n > 0 ? TOKEN_FORMAT.format(n) : ABSENT_FIELD
+}
+
+// One row of the expanded model-limits list (FR-032): either a catalog model
+// (window/output/modality data available) or an entitlement-only model the
+// provider reported that the catalog does not carry (BDD "Z" — limits always
+// unknown by construction, since there is no catalog row to read them from).
+interface ModelLimitRow {
+  id: string
+  name?: string
+  contextWindow?: number
+  maxOutputTokens?: number
+  supportsImage?: boolean
+  supportsPdf?: boolean
+  windowSource?: CatalogModel['window_source']
+  windowUnknown?: boolean
+  /** undefined = no "Check with my account" result yet for this provider. */
+  entitled?: boolean
+  limitsUnknown?: boolean
+}
+
+// Merges the catalog entry's models with an (optional) entitlement result
+// (FR-031/FR-032): every catalog model, annotated with its entitlement state
+// when known, PLUS any model the entitlement check reported that the catalog
+// does not carry (limits always "unknown" for those — there is nothing to
+// read the limits from).
+function buildModelLimitRows(entry: CatalogProvider | undefined, entitlement: EntitlementResponse | undefined): ModelLimitRow[] {
+  const catalogModels = entry?.models ?? []
+  const entitlementById = new Map((entitlement?.models ?? []).map((m) => [m.id, m]))
+  const catalogIds = new Set(catalogModels.map((m) => m.id))
+
+  const rows: ModelLimitRow[] = catalogModels.map((m) => {
+    const ent = entitlementById.get(m.id)
+    return {
+      id: m.id,
+      name: m.name,
+      contextWindow: m.context_window,
+      maxOutputTokens: m.max_output_tokens,
+      supportsImage: m.input_modalities.includes('image'),
+      supportsPdf: m.input_modalities.includes('pdf'),
+      windowSource: m.window_source,
+      windowUnknown: m.window_unknown === true,
+      entitled: ent?.entitled,
+      limitsUnknown: ent ? ent.limits === 'unknown' : undefined,
+    }
+  })
+
+  const extraRows: ModelLimitRow[] = (entitlement?.models ?? [])
+    .filter((m) => !catalogIds.has(m.id))
+    .map((m) => ({ id: m.id, entitled: m.entitled, limitsUnknown: true }))
+
+  return [...rows, ...extraRows]
+}
+
+function ModelLimitLine({ providerId, row }: { providerId: string; row: ModelLimitRow }) {
+  const notEntitled = row.entitled === false
+  return (
+    <div
+      className="flex flex-wrap items-center gap-x-3 gap-y-1 py-1.5 border-b border-[var(--color-border)] last:border-0"
+      data-testid={`model-limit-row-${providerId}-${row.id}`}
+    >
+      <span
+        className="text-xs font-mono text-[var(--color-secondary)] min-w-0 truncate"
+        data-testid={`model-limit-id-${providerId}-${row.id}`}
+      >
+        {row.name ?? row.id}
+      </span>
+      {notEntitled && (
+        // FR-031: greyed with the literal copy — plain --color-muted text
+        // (never a reduced-opacity treatment), so the state stays ≥ 4.5:1
+        // against the row background instead of washing out below AA.
+        <Badge variant="muted" className="font-normal" data-testid={`model-limit-not-entitled-${providerId}-${row.id}`}>
+          not available on this key
+        </Badge>
+      )}
+      {row.limitsUnknown === true && (
+        <Badge variant="muted" className="font-normal" data-testid={`model-limit-limits-unknown-${providerId}-${row.id}`}>
+          limits unknown
+        </Badge>
+      )}
+      <div className="flex flex-wrap items-center gap-x-2 text-xs text-[var(--color-muted)]">
+        {row.windowUnknown ? (
+          <>
+            <span data-testid={`model-limit-window-${providerId}-${row.id}`}>{NO_CONTEXT_LENGTH_COPY}</span>
+            <a
+              tabIndex={0}
+              href={modelOverrideHref(providerId, row.id)}
+              data-testid={`model-limit-window-unknown-link-${providerId}-${row.id}`}
+              className="underline underline-offset-2"
+              style={{ color: 'var(--color-accent)' }}
+            >
+              {MODEL_OVERRIDE_LINK_TEXT}
+            </a>
+          </>
+        ) : (
+          <>
+            <span data-testid={`model-limit-window-${providerId}-${row.id}`}>{formatTokenCount(row.contextWindow)}</span>
+            <span aria-hidden="true">·</span>
+            <span data-testid={`model-limit-output-${providerId}-${row.id}`}>{formatTokenCount(row.maxOutputTokens)}</span>
+            <span aria-hidden="true">·</span>
+            <span data-testid={`model-limit-image-${providerId}-${row.id}`}>{row.supportsImage ? 'Image' : ABSENT_FIELD}</span>
+            <span aria-hidden="true">·</span>
+            <span data-testid={`model-limit-pdf-${providerId}-${row.id}`}>{row.supportsPdf ? 'PDF' : ABSENT_FIELD}</span>
+            <span aria-hidden="true">·</span>
+            <span data-testid={`model-limit-source-${providerId}-${row.id}`}>{row.windowSource ?? ABSENT_FIELD}</span>
+          </>
+        )}
+      </div>
+    </div>
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -196,6 +344,21 @@ export interface ProviderRowProps {
    * cannot serve a turn has nothing to make default).
    */
   onSetAsDefault?: () => void
+  /**
+   * ADR-068 FR-031/T068-27: "Check with my account". Fires the entitlement
+   * check owned by ProvidersSection (queryClient lives there, so an in-flight
+   * result can be discarded if the row's provider is deleted before it
+   * lands). Undefined when the provider is not entitlement-eligible
+   * (isEntitlementEligible) — the control is omitted entirely rather than
+   * rendered disabled, matching the row's other conditional actions.
+   */
+  onCheckEntitlement?: () => void
+  /** True while the entitlement mutation for this provider id is in flight. */
+  checkingEntitlement?: boolean
+  /** The last entitlement result for this provider id, if any. */
+  entitlement?: EntitlementResponse
+  /** FR-031's failure path: "leaves the list unchanged... with an inline warning". */
+  entitlementError?: string
 }
 
 export function ProviderRow({
@@ -210,11 +373,17 @@ export function ProviderRow({
   testValidation,
   isDefault = false,
   onSetAsDefault,
+  onCheckEntitlement,
+  checkingEntitlement = false,
+  entitlement,
+  entitlementError,
 }: ProviderRowProps) {
+  const [expanded, setExpanded] = useState(false)
   const connected = provider.status === 'connected'
   const signInCapable = isSignInCapable(provider, entry)
   const catalogMode = providerCatalogMode(provider)
   const subtitle = entry ? catalogSubtitle(entry) : undefined
+  const limitRows = buildModelLimitRows(entry, entitlement)
   const badge = statusBadge(provider.status, provider.id, {
     signInCapable,
     accountLabel: provider.account_label,
@@ -247,12 +416,22 @@ export function ProviderRow({
         )}
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
-            <span
-              className="text-sm font-medium text-[var(--color-secondary)]"
-              data-testid={`provider-row-title-${provider.id}`}
+            <button
+              tabIndex={0}
+              type="button"
+              onClick={() => setExpanded((v) => !v)}
+              aria-expanded={expanded}
+              aria-controls={`model-limits-${provider.id}`}
+              className="flex items-center gap-1 text-sm font-medium text-[var(--color-secondary)] hover:text-[var(--color-accent)] transition-colors"
+              data-testid={`provider-row-expand-toggle-${provider.id}`}
             >
-              {title}
-            </span>
+              <CaretDown
+                size={12}
+                className={`shrink-0 transition-transform duration-150 text-[var(--color-muted)] ${expanded ? 'rotate-0' : '-rotate-90'}`}
+                aria-hidden="true"
+              />
+              <span data-testid={`provider-row-title-${provider.id}`}>{title}</span>
+            </button>
             <Badge data-testid={badge.testId} variant={badge.variant} className="gap-1">
               {badge.icon}
               {badge.text}
@@ -288,6 +467,21 @@ export function ProviderRow({
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
+          {onCheckEntitlement && (
+            <button
+              tabIndex={0}
+              type="button"
+              onClick={onCheckEntitlement}
+              disabled={checkingEntitlement}
+              className="flex items-center gap-1 text-xs text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors disabled:opacity-50"
+              data-testid={`check-entitlement-btn-${provider.id}`}
+            >
+              {checkingEntitlement ? (
+                <ArrowsClockwise size={12} className="animate-spin" />
+              ) : null}
+              Check with my account
+            </button>
+          )}
           {onSetAsDefault && (
             <button tabIndex={0}
               type="button"
@@ -327,6 +521,40 @@ export function ProviderRow({
           )}
         </div>
       </div>
+
+      {/* FR-031 inline warning — the list stays unchanged (nothing greyed) on
+          an upstream failure; this is the only visible effect. */}
+      {entitlementError && (
+        <p
+          role="alert"
+          aria-live="assertive"
+          className="px-4 pb-2 text-xs text-[var(--color-error)]"
+          data-testid={`entitlement-error-${provider.id}`}
+        >
+          {entitlementError}
+        </p>
+      )}
+
+      {/* FR-032 row expand: catalog window · output · image · PDF and the
+          window-source cell, annotated with the last "Check with my
+          account" result for this provider (if any). */}
+      {expanded && (
+        <div
+          id={`model-limits-${provider.id}`}
+          className="border-t border-[var(--color-border)] px-4 py-2 bg-[var(--color-surface-2)]"
+          data-testid={`model-limits-${provider.id}`}
+        >
+          {limitRows.length > 0 ? (
+            limitRows.map((row) => (
+              <ModelLimitLine key={row.id} providerId={provider.id} row={row} />
+            ))
+          ) : (
+            <p className="text-xs text-[var(--color-muted)] py-1.5" data-testid={`model-limits-empty-${provider.id}`}>
+              No catalog data available for this provider.
+            </p>
+          )}
+        </div>
+      )}
     </div>
   )
 }
