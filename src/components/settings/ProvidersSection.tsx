@@ -846,7 +846,7 @@ export function ProvidersSection() {
   // cli_kind), falls back to a fresh SignInDialog since an expired
   // device-code session needs a brand new approval, not a status re-check.
   const handleManage = (provider: Provider, label: string) => {
-    const { entry } = resolveCatalogEntry(catalog, provider.id)
+    const entry = catalogEntryById(catalog, provider.id)
     if (provider.status === 'signed_in') {
       setManageTarget({ id: provider.id, label, accountLabel: provider.account_label })
       return
