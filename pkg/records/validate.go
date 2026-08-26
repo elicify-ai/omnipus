@@ -242,7 +242,23 @@ type ValidateOptions struct {
 	// ReportDuplicateListValues adds a WARNING when a list property holds the
 	// same value twice. Off by default: a repeat is legal, occasionally
 	// intentional, and never ambiguous.
+	//
+	// "The same value" means what spec §8 means by it — see
+	// duplicateListFindings. It is NOT "the same text".
 	ReportDuplicateListValues bool
+
+	// ResolveRelation supplies the record identity behind a wikilink, for the
+	// duplicate check's §8 R-8 comparison of `relation` and `person` values.
+	//
+	// It is the comparator's own seam (compare_oracle.go's RelationResolver),
+	// handed through rather than reimplemented, so a caller that HAS a vault
+	// index gets real identity: two different note names the index resolved to
+	// one record are one value, and a list naming it twice is a repeat.
+	//
+	// nil is the ordinary case — validation is a per-record operation and most
+	// callers have no index. It then falls back to linkTargetIsIdentity, which
+	// is the most any single record can know on its own.
+	ResolveRelation RelationResolver
 }
 
 // ValidateRecord validates ONE record against a schema set.
@@ -520,33 +536,169 @@ func validateProperty(rec Record, report RecordReport, prop *Property, opts Vali
 
 	findings := pv.Findings
 	if opts.ReportDuplicateListValues && prop.Many && len(pv.Values) > 1 {
-		// Both positions are SOURCE positions. pv.Values is filtered — an
-		// element that failed to parse was reported and dropped — so its index
-		// stops matching the file the moment anything above it is dropped, and
-		// a warning that names the wrong element is worse than no warning.
-		seen := map[string]int{}
-		for i, v := range pv.Values {
-			key := v.String()
-			pos := pv.SourcePosition(i)
-			if first, dup := seen[key]; dup {
-				findings = append(findings, Finding{
-					RecordPath:   rec.Path,
-					RecordType:   report.Type,
-					RecordID:     report.ID,
-					Property:     prop.Name,
-					ElementIndex: pos,
-					Code:         FindingDuplicateListValue,
-					Severity:     SeverityWarning,
-					Reason:       fmt.Sprintf("property %q holds %q at positions %d and %d", prop.Name, key, first, pos),
-					Expected:     prop.ExpectedShape(),
-					Got:          key,
-				})
-				continue
-			}
-			seen[key] = pos
-		}
+		findings = append(findings, duplicateListFindings(rec, report, prop, pv, opts)...)
 	}
 	return findings
+}
+
+// linkTargetIsIdentity is the relation identity available to a record on its
+// own, with no vault index: the link's own target.
+//
+// value.go states the split this rests on, and it is not restated here — it is
+// USED here. Wikilink.Target is "the join key"; Wikilink.Display "is NEVER
+// identity"; ParseWikilink puts neither the `|alias` nor the `#heading` into
+// Target. So `[[Acme]]`, `[[Acme|Acme Corp]]` and `[[Acme#Billing]]` are one
+// target, which is exactly R-8's answer for them.
+//
+// What it CANNOT know is aliasing — that `[[Acme]]` and `[[Acme Corporation Pte
+// Ltd]]` are one note. Only an index knows that, and a caller holding one passes
+// it as ValidateOptions.ResolveRelation instead of this.
+func linkTargetIsIdentity(l Wikilink) (string, bool) {
+	if l.Target == "" {
+		return "", false
+	}
+	return l.Target, true
+}
+
+// duplicateListFindings reports a `many` property that holds one value twice.
+//
+// ---------------------------------------------------------------------------
+// IT ASKS THE COMPARATOR. THERE IS NO SECOND ANSWER TO "ARE THESE THE SAME".
+//
+// This function used to key a map on `TypedValue.String()`. That method is the
+// REPORT RENDERER — it exists so a finding can quote a value — and using it as
+// an identity made this the package's second equality implementation, the exact
+// arrangement filter.go's header forbids at length and for the same reason: the
+// verified comparator sits off the path while an unverified one does the work.
+//
+// It did not merely risk drifting; it was already wrong for five of the seven
+// declared types, and silently:
+//
+//	R-8  `[[Acme]]` and `[[Acme|Acme Corp]]` are ONE record listed twice — a
+//	     display alias is presentation. Under the string key: two values, no
+//	     warning. Same for `person`.
+//	R-7  `2026-01-01` and `2026-01-01T00:00:00Z` are one instant. Two values.
+//	     `1.0` and `1.00` are one number. Two values.
+//	R-6  `10.0 USD` and `USD 10.00` are one amount. Two values.
+//
+// Every one of those is precisely what this check exists to report, and it
+// reported none of them.
+//
+// WHY elementsEqual AND NOT Compare. Compare is an ORDERING view, and §8 gives
+// `text` no ordering and no scalar equality, so routing through it would stop
+// reporting repeats in a `many text` list — a regression on the one type the
+// string key did handle. elementsEqual is R-9's whole-element equality, defined
+// for every declared type; membership in a list and repetition in a list are
+// the same question asked twice.
+//
+// A REFUSED COMPARISON IS NOT A DUPLICATE, AND NOT A FINDING. The oracle
+// returns a problem rather than a boolean when it cannot decide — mixed
+// currencies in one list (R-6), a link no resolver could place (R-8). Both are
+// legal data. This check reports what it KNOWS repeats; it does not guess, and
+// it does not convert the oracle's problem into a conformance fault, because
+// neither of those is a fault of THIS record. That disposition is pinned by
+// test, not left to be rediscovered.
+//
+// COST, AND IT IS A REAL ONE. The map was O(n) on a hash of the rendering.
+// Comparator equality has no hash — R-8 identity is a property of a resolver,
+// not of any one value in isolation — so this compares each element against the
+// DISTINCT values seen so far: O(n x k), worst case O(n^2) when every element
+// differs. Measured (BenchmarkDuplicateListFindings, figures and machine in its
+// comment): a 1,000-element all-distinct `many relation` list costs ~23ms to
+// scan, against well under a millisecond for the map that got it wrong; a
+// 100-element one costs ~0.3ms. Ten times the list is about seventy-five times
+// the scan, so the corner is real and it arrives somewhere in the high
+// hundreds.
+//
+// Three things make that affordable, and they should be checked before anyone
+// relaxes them. The check is opt-in and OFF by default, so a caller pays
+// nothing unless they asked the question. It runs when a vault is audited, not
+// per query and not per keystroke. And a list of a thousand values in ONE
+// property of ONE note is already an unusual note. If a caller ever does need
+// this at scale, the answer is to bound the work explicitly (a size cap that
+// REPORTS itself, not one that silently stops looking) — not to reintroduce a
+// hash of the rendering, which is where this started.
+// ---------------------------------------------------------------------------
+func duplicateListFindings(rec Record, report RecordReport, prop *Property, pv PropertyValue, opts ValidateOptions) []Finding {
+	resolve := opts.ResolveRelation
+	if resolve == nil {
+		resolve = linkTargetIsIdentity
+	}
+	c := Comparator{ResolveRelation: resolve}
+
+	// One entry per DISTINCT value, holding the first element that carried it.
+	// Comparing against representatives rather than against every earlier
+	// element is what keeps a list of repeats linear; it rests on the oracle's
+	// equality being transitive, which it is for every type it decides (each is
+	// equality of a resolved id, an instant, an exact decimal or an exact name).
+	type occurrence struct {
+		value TypedValue
+		pos   int
+	}
+	firsts := make([]occurrence, 0, len(pv.Values))
+
+	var out []Finding
+	for i, v := range pv.Values {
+		// SOURCE positions throughout. pv.Values is filtered — an element that
+		// failed to parse was reported and dropped — so its index stops
+		// matching the file the moment anything above it is dropped, and a
+		// warning that names the wrong element is worse than no warning.
+		pos := pv.SourcePosition(i)
+
+		first, repeat := -1, false
+		for j := range firsts {
+			// OpContains is the operator elementsEqual implements (R-9); it is
+			// carried only so a problem the oracle reports names the rule it
+			// came from. Both operands are this same property, so R-5's
+			// shared-value-set precondition holds by construction.
+			equal, problems := c.elementsEqual(OpContains, prop.Type, firsts[j].value, v, pv, pv)
+			if len(problems) > 0 {
+				continue // undecidable, therefore not known to repeat
+			}
+			if equal {
+				first, repeat = j, true
+				break
+			}
+		}
+		if !repeat {
+			firsts = append(firsts, occurrence{value: v, pos: pos})
+			continue
+		}
+		out = append(out, Finding{
+			RecordPath:   rec.Path,
+			RecordType:   report.Type,
+			RecordID:     report.ID,
+			Property:     prop.Name,
+			ElementIndex: pos,
+			Code:         FindingDuplicateListValue,
+			Severity:     SeverityWarning,
+			Reason:       duplicateReason(prop, firsts[first].value, firsts[first].pos, v, pos),
+			Expected:     prop.ExpectedShape(),
+			Got:          v.String(),
+		})
+	}
+	return out
+}
+
+// duplicateReason writes the warning.
+//
+// It has two forms because identity equality admits a case the string key could
+// not produce: the two elements are ONE value and the file spells them
+// differently. Quoting one spelling and reporting it "at positions 0 and 1"
+// would send the operator to a line that does not contain the text they were
+// just shown — so when the spellings differ, both are named.
+//
+// The `a == b` below is NOT an equality test and must not be mistaken for one —
+// by the time this is called the comparator has ALREADY ruled these two the same
+// value. It asks a rendering question: do they LOOK the same to a reader? That
+// is a legitimate use of String(), which is what String() is for.
+func duplicateReason(prop *Property, first TypedValue, firstPos int, repeat TypedValue, repeatPos int) string {
+	a, b := first.String(), repeat.String()
+	if a == b {
+		return fmt.Sprintf("property %q holds %q at positions %d and %d", prop.Name, b, firstPos, repeatPos)
+	}
+	return fmt.Sprintf("property %q holds one value at positions %d and %d, written two ways: %q and %q — they are the same %s and only the spelling differs",
+		prop.Name, firstPos, repeatPos, a, b, prop.Type)
 }
 
 // Validate validates many records against a schema set, one report per record.
