@@ -497,6 +497,7 @@ are what a human reviews.**
 | **R-10** | `contains` on text is **substring** matching, case-sensitive. |
 | **R-11** | Comparison is **total and never panics**: every type pair × every operator yields a boolean or a reported problem. There is no third outcome. |
 | **R-12** | Every rule above applies **identically** whether the value came from a query literal or from a record. |
+| **R-13** | Against a **`many` property, only `contains` and `is absent` are defined.** Equality and ordering (`=`, `!=`, `<`, `<=`, `>`, `>=`) are **not defined** and are reported as a problem naming the remedy — "`segment` holds many values; use `contains`". They are NOT silently treated as membership. *Added 2026-08-25 after the type-system agent surfaced the gap rather than routing around it: `segment != vendor` had no defined answer.* **Why refuse rather than help:** treating `=` as membership is the implicit coercion this design removes everywhere else, and an agent that gets a helpful answer to a malformed query never learns the schema. The refusal names the fix, exactly as FR-024 does for an unknown property. |
 
 **AC-8.1** — the generated table covers every declared type × every declared type × every
 operator, plus absent and non-conforming on both sides, and every expected value traces to a

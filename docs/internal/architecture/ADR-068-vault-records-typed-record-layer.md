@@ -331,8 +331,17 @@ matters because the ID is the join key: a collision silently merges two records.
 
 ### D8 — System fields are namespaced; the operator's fields are not
 
-Fields Omnipus maintains carry an `omni_` prefix (`omni_id`, `omni_indexed_at`). Fields the
-operator declares in their schema carry no prefix and are never renamed by us.
+Fields that are **meaningless without Omnipus** carry an `omni_` prefix — index timestamps,
+content hashes, internal bookkeeping. Fields that remain useful if Omnipus is uninstalled carry
+**no prefix** and are never renamed by us.
+
+**The record identifier is unprefixed: `id`, not `omni_id`.** *(Ruling 2026-08-25, resolving a
+contradiction between this decision and D7 that the type-system agent surfaced.)* We mint it,
+but it is not our bookkeeping — it is a business identifier the operator quotes in prose, in a
+commit message and out loud (D7's whole argument for `DEAL-142` over a UUID). It stays
+meaningful with Omnipus removed, so by the test above it is the operator's field, not ours.
+
+The prefix rule is therefore **"would this survive us?"**, not "did we write it?".
 
 **Why:** taken directly from the best-reasoned artifact in the research — a plugin that
 prefixes its control fields `prm-` while deliberately leaving `email`, `phone` and `company`
