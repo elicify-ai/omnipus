@@ -13,7 +13,7 @@ import (
 // ---------------------------------------------------------------------------
 // THE ORACLE
 //
-// Spec §8 states twelve rules, R-1..R-12, and says: "The oracle is these rules.
+// Spec §8 states thirteen rules, R-1..R-13, and says: "The oracle is these rules.
 // Every cell is generated from them, and the rules — not the cells — are what a
 // human reviews."
 //
@@ -283,7 +283,7 @@ func operandFor(s operandState, rows map[PropertyType]sweepRow, side string) Pro
 }
 
 // oracleExpect returns the expected boolean and the expected multiset of problem
-// codes for one cell, computed ONLY from R-1..R-12 and the two hand-written
+// codes for one cell, computed ONLY from R-1..R-13 and the two hand-written
 // tables. The ladder is the rules' precedence; each step cites its rule.
 func oracleExpect(op Operator, l, r operandState, row sweepRow) (bool, []ComparisonProblemCode) {
 	// R-3 — `is absent` is true exactly when the property has no value, and
@@ -394,7 +394,7 @@ func TestComparisonTruthTable(t *testing.T) {
 					gotResult, gotProblems := c.Evaluate(op, lv, rv)
 
 					if gotResult != wantResult {
-						t.Errorf("[%s] %s %s %s = %v, want %v (oracle: the R-1..R-12 ladder in oracleExpect)",
+						t.Errorf("[%s] %s %s %s = %v, want %v (oracle: the R-1..R-13 ladder in oracleExpect)",
 							sw, l.name, op, r.name, gotResult, wantResult)
 					}
 					if !codesEqual(problemCodes(gotProblems), wantCodes) {

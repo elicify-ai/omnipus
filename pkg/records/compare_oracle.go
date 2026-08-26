@@ -19,7 +19,7 @@ import (
 // stops protecting them. During research a first-attempt overload made `3 > 2`
 // evaluate to FALSE with nothing reporting an error.
 //
-// The defence is spec §8's twelve rules, R-1..R-12. Every branch below cites the
+// The defence is spec §8's thirteen rules, R-1..R-13. Every branch below cites the
 // rule it implements, and compare_truthtable_test.go generates its expected
 // values from those rules — never from this code.
 //
@@ -223,10 +223,23 @@ func nonConformingComparisonProblem(op Operator, side string, pv PropertyValue) 
 // `tags contains "Acme"` into a substring match against "Acme Ltd", which is
 // precisely what R-9 forbids.
 //
-// SPEC GAP, REPORTED NOT RESOLVED: §8 states nothing about any other operator
-// against a list, nor about `contains` when BOTH sides are lists. The
-// provisional behaviour is false plus a reported problem, chosen because §3's
-// behavioural contract makes silence the defect. It is one branch to change.
+// R-13 governs everything else here. Against a `many` property only `contains`
+// and `is absent` are defined; equality and ordering are REFUSED, and the
+// refusal must name the remedy so the caller can fix the query rather than
+// puzzle over an empty answer.
+//
+// The rule deliberately does NOT treat `=` as membership. That would be the
+// implicit coercion this design removes everywhere else, and an agent handed a
+// helpful answer to a malformed query never learns the schema. Refusing while
+// naming `contains` is the same shape FR-024 uses for an unknown property.
+//
+// (An earlier comment here read "SPEC GAP, REPORTED NOT RESOLVED: §8 states
+// nothing about any other operator against a list". That was true when written
+// and became false when R-13 was added; the dispositions were already correct,
+// but the message named neither the remedy nor the property.)
+//
+// `contains` with BOTH sides a list is still undefined and still refused —
+// R-13 covers a list against a scalar. That refusal names its own reason.
 func (c Comparator) evaluateAcrossArity(op Operator, left, right PropertyValue) (bool, []ComparisonProblem) {
 	if op == OpContains && left.Property.Many && !right.Property.Many {
 		needle := right.Values[0]
@@ -246,8 +259,18 @@ func (c Comparator) evaluateAcrossArity(op Operator, left, right PropertyValue) 
 		Operator: op,
 		Type:     left.Property.Type,
 		Property: left.Property.Name,
-		Detail:   "no rule defines this operator across this list/scalar arity boundary",
+		Detail:   arityRefusalDetail(op, left.Property),
 	}}
+}
+
+// arityRefusalDetail builds R-13's message. It names the property and the
+// remedy, because "not defined" alone leaves a caller with an empty answer and
+// no idea what to do about it.
+func arityRefusalDetail(op Operator, p *Property) string {
+	if p.Many {
+		return fmt.Sprintf("%q holds many values; %s is not defined against a list — use contains", p.Name, op)
+	}
+	return fmt.Sprintf("%q holds a single value; %s cannot compare it against a list", p.Name, op)
 }
 
 // elementsEqual is R-9's whole-element membership test.

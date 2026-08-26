@@ -33,29 +33,43 @@ properties:
     type: string
     enum:
       - eq
-      - neq
-      - in
-      - not_in
       - lt
       - lte
       - gt
       - gte
+      - contains
       - is_absent
-      - is_present
     description: >
-      "eq" / "neq" — equality against a single value.
-      "in" / "not_in" — membership in `values`.
-      "lt" / "lte" / "gt" / "gte" — ordered comparison. Valid on date, number
-      and money; on an enum it compares DECLARED POSITION, not spelling
-      (FR-010). Money compares only within one currency.
-      "is_absent" / "is_present" — the third state (D3.2), tested explicitly.
-      These are the only operators valid on a "text" property (D3).
-    example: "neq"
+      The comparison to apply. This set is exactly the operators the engine
+      implements and the §8 truth table covers — no more and no fewer.
+
+
+      `contains` is whole-element membership on a list (§8 R-9) and substring
+      matching on text (§8 R-10). It is NEVER substring matching on a list.
+      Against a `many` property it is one of only two defined operators; the
+      rest are refused with the remedy named (§8 R-13).
+
+
+      Corrected 2026-08-25. This enum previously read
+      [eq, neq, in, not_in, lt, lte, gt, gte, is_absent, is_present]:
+      it OMITTED `contains` — a spec rule with cell-by-cell truth-table
+      coverage and no wire representation at all — while offering `neq`,
+      `in`, `not_in` and `is_present`, none of which the engine implements.
+      Negation is not an operator here; it is the separate `negate` flag, so
+      `status != done` is {op: eq, negate: true} and `neq` was redundant as
+      well as unimplemented.
+      Ordered comparison (lt/lte/gt/gte) is valid on date, number and money; on
+      an enum it compares DECLARED POSITION, not spelling (FR-010), and money
+      compares only within one currency (R-6). `is_absent` tests the third
+      state (D3.2) explicitly.
+    example: "eq"
   values:
     type: array
     description: >
-      Operand values. Empty or omitted for is_absent / is_present; exactly one
-      for eq, neq and the ordered comparisons; one or more for in / not_in.
+      Operand values. Empty or omitted for is_absent; exactly one for every
+      other operator. The engine takes a single lexical literal — the same text
+      a frontmatter file would hold — so it is parsed by the same code path as
+      a record's own value (§8 R-12).
     items:
       $ref: "./RecordValue.yaml"
       x-go-type: RecordValue

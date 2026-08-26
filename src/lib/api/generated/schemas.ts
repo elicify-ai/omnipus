@@ -382,17 +382,7 @@ type RecordQueryRequest = {
 };
 type RecordFilter = {
   property: string;
-  op:
-    | "eq"
-    | "neq"
-    | "in"
-    | "not_in"
-    | "lt"
-    | "lte"
-    | "gt"
-    | "gte"
-    | "is_absent"
-    | "is_present";
+  op: "eq" | "lt" | "lte" | "gt" | "gte" | "contains" | "is_absent";
   values?: Array<RecordValue> | undefined;
   include_absent?: boolean | undefined;
   via?: Array<string> | undefined;
@@ -3914,7 +3904,7 @@ export const RecordMoney: z.ZodType<RecordMoney> = z.object({
     .string()
     .min(1)
     .max(40)
-    .regex(/^-?(0|[1-9][0-9]*)(\.[0-9]+)?$/),
+    .regex(/^-?(0|[1-9][0-9]*)$/),
   currency: z.string().regex(/^[A-Z]{3}$/),
   scale: z.number().int().gte(0).lte(12),
 });
@@ -3958,18 +3948,7 @@ export const VaultRecord: z.ZodType<VaultRecord> = z.object({
 });
 export const RecordFilter: z.ZodType<RecordFilter> = z.object({
   property: z.string().min(1),
-  op: z.enum([
-    "eq",
-    "neq",
-    "in",
-    "not_in",
-    "lt",
-    "lte",
-    "gt",
-    "gte",
-    "is_absent",
-    "is_present",
-  ]),
+  op: z.enum(["eq", "lt", "lte", "gt", "gte", "contains", "is_absent"]),
   values: z.array(RecordValue).optional(),
   include_absent: z.boolean().optional(),
   via: z.array(z.string().min(1)).max(2).optional(),

@@ -4841,8 +4841,12 @@ export interface components {
          */
         RecordMoney: {
             /**
-             * @description The exact decimal amount as a string. Never a JSON number. Optional leading minus, no thousands separators, no exponent, no currency symbol. The number of digits after the decimal point MUST equal `scale`.
-             * @example 1250000.00
+             * @description The amount as an INTEGER COUNT OF MINOR UNITS, rendered as a string. Never a JSON number, and never a decimal fraction: with `scale: 2`, "34998" means 349.98. Optional leading minus, no decimal point, no thousands separators, no exponent, no currency symbol.
+             *
+             *     A string rather than a JSON number because a JSON number is an IEEE-754 double in most parsers, and the whole point of this type is that no float ever touches an amount (ADR-068 D3, FR-020b).
+             *
+             *     Corrected 2026-08-25: this field previously specified a decimal string whose fractional digits had to equal `scale` (example "1250000.00"), which contradicted ADR-068 O-2 and the Go parser. The same three-field object therefore meant 349.98 on disk and 3.4998 on the wire, with nothing to detect the disagreement.
+             * @example 34998
              */
             amount: string;
             /**
@@ -5015,12 +5019,16 @@ export interface components {
              */
             property: string;
             /**
-             * @description "eq" / "neq" — equality against a single value. "in" / "not_in" — membership in `values`. "lt" / "lte" / "gt" / "gte" — ordered comparison. Valid on date, number and money; on an enum it compares DECLARED POSITION, not spelling (FR-010). Money compares only within one currency. "is_absent" / "is_present" — the third state (D3.2), tested explicitly. These are the only operators valid on a "text" property (D3).
-             * @example neq
+             * @description The comparison to apply. This set is exactly the operators the engine implements and the §8 truth table covers — no more and no fewer.
+             *
+             *     `contains` is whole-element membership on a list (§8 R-9) and substring matching on text (§8 R-10). It is NEVER substring matching on a list. Against a `many` property it is one of only two defined operators; the rest are refused with the remedy named (§8 R-13).
+             *
+             *     Corrected 2026-08-25. This enum previously read [eq, neq, in, not_in, lt, lte, gt, gte, is_absent, is_present]: it OMITTED `contains` — a spec rule with cell-by-cell truth-table coverage and no wire representation at all — while offering `neq`, `in`, `not_in` and `is_present`, none of which the engine implements. Negation is not an operator here; it is the separate `negate` flag, so `status != done` is {op: eq, negate: true} and `neq` was redundant as well as unimplemented. Ordered comparison (lt/lte/gt/gte) is valid on date, number and money; on an enum it compares DECLARED POSITION, not spelling (FR-010), and money compares only within one currency (R-6). `is_absent` tests the third state (D3.2) explicitly.
+             * @example eq
              * @enum {string}
              */
-            op: "eq" | "neq" | "in" | "not_in" | "lt" | "lte" | "gt" | "gte" | "is_absent" | "is_present";
-            /** @description Operand values. Empty or omitted for is_absent / is_present; exactly one for eq, neq and the ordered comparisons; one or more for in / not_in. */
+            op: "eq" | "lt" | "lte" | "gt" | "gte" | "contains" | "is_absent";
+            /** @description Operand values. Empty or omitted for is_absent; exactly one for every other operator. The engine takes a single lexical literal — the same text a frontmatter file would hold — so it is parsed by the same code path as a record's own value (§8 R-12). */
             values?: components["schemas"]["RecordValue"][];
             /**
              * @description Whether records where the property is ABSENT satisfy this clause.

@@ -36,12 +36,25 @@ properties:
     type: string
     minLength: 1
     maxLength: 40
-    pattern: '^-?(0|[1-9][0-9]*)(\.[0-9]+)?$'
+    pattern: '^-?(0|[1-9][0-9]*)$'
     description: >
-      The exact decimal amount as a string. Never a JSON number. Optional
-      leading minus, no thousands separators, no exponent, no currency symbol.
-      The number of digits after the decimal point MUST equal `scale`.
-    example: "1250000.00"
+      The amount as an INTEGER COUNT OF MINOR UNITS, rendered as a string.
+      Never a JSON number, and never a decimal fraction: with `scale: 2`,
+      "34998" means 349.98. Optional leading minus, no decimal point, no
+      thousands separators, no exponent, no currency symbol.
+
+
+      A string rather than a JSON number because a JSON number is an IEEE-754
+      double in most parsers, and the whole point of this type is that no
+      float ever touches an amount (ADR-068 D3, FR-020b).
+
+
+      Corrected 2026-08-25: this field previously specified a decimal string
+      whose fractional digits had to equal `scale` (example "1250000.00"),
+      which contradicted ADR-068 O-2 and the Go parser. The same three-field
+      object therefore meant 349.98 on disk and 3.4998 on the wire, with
+      nothing to detect the disagreement.
+    example: "34998"
   currency:
     type: string
     pattern: '^[A-Z]{3}$'
