@@ -25,20 +25,59 @@ import (
 // things a reviewer should read:
 //
 //  1. oracleDisposition — for each declared type, which operators the rules
-//     DEFINE. It restates compare_oracle.go's operatorDefinedForType
-//     independently, so a one-sided edit to either cannot land quietly
-//     (TestComparison_DispositionMatchesSpec).
+//     DEFINE for a SCALAR operand. It restates compare_oracle.go's
+//     operatorDefinedForType independently, so a one-sided edit to either
+//     cannot land quietly (TestComparison_DispositionMatchesSpec).
 //  2. sweepRows — for each declared type in each of three sweeps, the ordering
 //     and membership relationship between the two fixture values, hand-derived
 //     from the rule named in the row.
 //
-// From those two, the table generates 3 sweeps x 9 operand states x 9 operand
-// states x 7 operators = 1,701 cells and asserts the comparator matches each.
+// From those two, the table generates
+// 3 sweeps x 38 operand states x 38 operand states x 7 operators = 30,324 cells
+// and asserts the comparator matches each.
+//
+// ---------------------------------------------------------------------------
+// THE ARITY DIMENSION IS INSIDE THE TABLE, AND MUST STAY THERE
+//
+// It was not, and that was this design's weakest structural point. Every
+// operand the table generated was a SCALAR: `operandFor` called
+// `testProperty(..., false)` unconditionally, so all 1,701 cells were
+// scalar-against-scalar. `evaluateAcrossArity` — a whole second refusal path
+// with its own precedence — sat outside the generated space, covered by three
+// hand-written cases. The generated table is the mechanism that stops the
+// oracle and the implementation drifting apart; a branch it never reaches is a
+// branch nothing holds to the rules.
+//
+// So the 9 operand states became 38: for each of the seven declared types a
+// scalar, an empty list, a one-element list, a two-element list and a list
+// carrying a non-conforming element, plus absent (scalar), absent (list) and
+// present-but-non-conforming. The arity RULES are stated in oracleExpect from
+// §8 — R-13 first, then R-9's membership — never from what the code does.
+//
+// The two rules, in the order they apply:
+//
+//	R-13  Against a `many` property, only `contains` and `is absent` are
+//	      defined. `is absent` is answered by R-3 before arity is reached, so
+//	      `contains` is the only survivor; every other list/scalar combination
+//	      is refused and REPORTED.
+//	R-9   `contains` on a list is WHOLE-ELEMENT membership of a scalar needle,
+//	      and is never substring matching. The `equal` column of sweepRows is
+//	      that element equality — which is why the text row of sweepGreater
+//	      ("Acme Ltd" against needle "Acme") is a false the table now checks:
+//	      a membership test written with strings.Contains fails that cell.
+//
+// R-13 is checked BEFORE oracleDisposition, mirroring §8's own precedence:
+// operatorDefinedForType is documented as being "for SCALAR operands", so it
+// has no authority over a list. Reversing the two would refuse
+// `sizes contains 3` — `contains` is undefined for a scalar number and defined
+// against a list of them.
 // ---------------------------------------------------------------------------
 
-// oracleDisposition: does a numbered rule DEFINE this operator for this type?
-// Authority per row is given in compare_oracle.go's operatorDefinedForType; the
-// two are stated separately on purpose and must agree.
+// oracleDisposition: does a numbered rule DEFINE this operator for this type,
+// for a SCALAR operand? Authority per row is given in compare_oracle.go's
+// operatorDefinedForType; the two are stated separately on purpose and must
+// agree. Arity is NOT this table's business — R-13 governs a `many` property
+// and is applied before this table is consulted (see oracleExpect).
 var oracleDisposition = map[PropertyType]map[Operator]bool{
 	// R-10 defines `contains` on text as case-sensitive substring matching.
 	// ADR-068 D3 defines text as "prose; never validated, never queried for
@@ -183,8 +222,19 @@ const (
 )
 
 // sweepRow is the hand-derived answer for one declared type in one sweep.
-// equal/less/greater describe the relationship between left and right; contains
-// is R-10's substring answer, meaningful only for text.
+//
+//	equal          — whether left and right are the SAME VALUE. This carries two
+//	                 rules at once: the scalar `eq` answer for the types whose
+//	                 disposition defines it, and R-9's whole-element membership
+//	                 test for every type, text included. R-9 requires element
+//	                 equality even where D3 leaves scalar text equality
+//	                 undefined, so this column is meaningful on every row.
+//	less, greater  — the ordering, for the types a rule gives one.
+//	containsScalar — R-10's SUBSTRING answer, meaningful only for scalar text.
+//	                 It is deliberately NOT the list answer: sweepGreater's text
+//	                 row has containsScalar true and equal false, so a list
+//	                 membership implemented as a substring search disagrees with
+//	                 the oracle on that cell.
 type sweepRow struct {
 	left           TypedValue
 	right          TypedValue
@@ -241,45 +291,138 @@ func sweepRows(t *testing.T) map[sweep]map[PropertyType]sweepRow {
 	}
 }
 
-// operandState is one row/column of the table: the seven declared types, plus
-// absent, plus present-but-non-conforming. AC-8.1 requires all nine on both sides.
+// listShape is which of the sweep's two fixture values a PRESENT operand
+// carries. It is the arity dimension of the table, and it is stated here in
+// terms of the sweep values so the expected membership answer can be derived
+// from sweepRow's `equal` column rather than looked up per cell.
+type listShape int
+
+const (
+	// shapeOne — a scalar property holding this side's own sweep value. The
+	// only shape a `many: false` property can have.
+	shapeOne listShape = iota
+	// shapeEmptyList — `many: true` holding zero values. D3.1/R-3: an empty
+	// list is a VALUE (StatePresent), not absence, and R-9 says it contains
+	// nothing.
+	shapeEmptyList
+	// shapeOneList — `many: true` holding this side's own sweep value, so
+	// membership of the OTHER side's value is exactly sweepRow.equal.
+	shapeOneList
+	// shapeTwoList — `many: true` holding BOTH sweep values, so membership of
+	// either side's value is true. This is the "found, and not only at index 0"
+	// case; equality being reflexive is what makes it derivable.
+	shapeTwoList
+	// shapeDirtyList — `many: true`, one element parsed and one did not.
+	// ResolveProperty produces exactly this: State becomes NonConforming while
+	// the conforming values are still accumulated in Values (validate.go's
+	// element loop). R-4 governs it, and the fact that Values is non-empty must
+	// not tempt anything into comparing them anyway.
+	shapeDirtyList
+)
+
+var listShapeNames = map[listShape]string{
+	shapeOne:       "",
+	shapeEmptyList: "_list_empty",
+	shapeOneList:   "_list_one",
+	shapeTwoList:   "_list_two",
+	shapeDirtyList: "_list_nonconforming",
+}
+
+// operandState is one row/column of the table: the seven declared types in each
+// of five arity shapes, plus absent (scalar), absent (list), plus
+// present-but-non-conforming. AC-8.1 requires the whole set on both sides.
 type operandState struct {
 	name    string
 	typ     PropertyType
+	many    bool
+	shape   listShape
 	absent  bool
 	nonConf bool
 }
 
 func operandStates() []operandState {
-	states := make([]operandState, 0, 9)
+	states := make([]operandState, 0, 38)
 	for _, t := range PropertyTypes {
-		states = append(states, operandState{name: string(t), typ: t})
+		for _, sh := range []listShape{shapeOne, shapeEmptyList, shapeOneList, shapeTwoList, shapeDirtyList} {
+			states = append(states, operandState{
+				name:    string(t) + listShapeNames[sh],
+				typ:     t,
+				many:    sh != shapeOne,
+				shape:   sh,
+				nonConf: sh == shapeDirtyList,
+			})
+		}
 	}
 	// The absent and non-conforming carriers must declare SOME type, because a
 	// property always has one. R-2/R-3/R-4 preempt R-1's type check, so the
 	// carrier cannot change any expected value —
 	// TestComparison_AbsentAndNonConformingAreTypeIndependent proves that across
 	// all seven carriers rather than assuming it.
+	//
+	// `absent_list` is here because absence and arity are independent: a
+	// declared `many` property with no key at all is absent, not an empty list,
+	// and R-2/R-3 must reach it before R-13 does.
 	states = append(states,
 		operandState{name: "absent", typ: TypeNumber, absent: true},
+		operandState{name: "absent_list", typ: TypeNumber, many: true, absent: true},
 		operandState{name: "non_conforming", typ: TypeNumber, nonConf: true},
 	)
 	return states
 }
 
 func operandFor(s operandState, rows map[PropertyType]sweepRow, side string) PropertyValue {
-	p := testProperty("fixture_"+string(s.typ), s.typ, false)
-	switch {
-	case s.absent:
+	p := testProperty("fixture_"+string(s.typ), s.typ, s.many)
+	if s.absent {
 		return absentOperand(p)
-	case s.nonConf:
-		return nonConformingOperand(p)
-	default:
-		if side == "left" {
-			return present(p, rows[s.typ].left)
-		}
-		return present(p, rows[s.typ].right)
 	}
+	row := rows[s.typ]
+	mine := row.left
+	if side == "right" {
+		mine = row.right
+	}
+	switch s.shape {
+	case shapeEmptyList:
+		return presentList(p)
+	case shapeOneList:
+		return presentList(p, mine)
+	case shapeTwoList:
+		return presentList(p, row.left, row.right)
+	case shapeDirtyList:
+		// The shape ResolveProperty really produces for a list with one bad
+		// element: non-conforming, findings attached, conforming values kept.
+		pv := presentList(p, mine)
+		pv.State = StateNonConforming
+		pv.Findings = []Finding{{Property: p.Name, Code: FindingWrongShape, Severity: SeverityError, ElementIndex: 1}}
+		return pv
+	}
+	if s.nonConf {
+		return nonConformingOperand(p)
+	}
+	return present(p, mine)
+}
+
+// oracleMembership is R-9, hand-derived: whole-element membership of the RIGHT
+// operand's single value in the LEFT operand's list. It reads sweepRow.equal —
+// the element-equality column — and never a substring.
+//
+// It is only ever asked about a left `many` operand against a right scalar,
+// because R-13 refuses every other list/scalar combination before this is
+// reached.
+func oracleMembership(l operandState, row sweepRow) bool {
+	switch l.shape {
+	case shapeEmptyList:
+		return false // R-9: an empty list contains nothing.
+	case shapeOneList:
+		// The list holds the LEFT sweep value; the needle is the RIGHT one.
+		return row.equal
+	case shapeTwoList:
+		// The list holds both sweep values, so it holds the needle itself.
+		// Element equality is reflexive for every declared type: same text,
+		// same enum name, an equal decimal, the same instant, the same resolved
+		// record identity, the same amount in the same currency.
+		return true
+	}
+	panic("oracle: membership asked about a shape that is not a present list — R-13 should have refused first")
 }
 
 // oracleExpect returns the expected boolean and the expected multiset of problem
@@ -312,9 +455,31 @@ func oracleExpect(op Operator, l, r operandState, row sweepRow) (bool, []Compari
 	}
 
 	// R-1 — different declared types: false. Never an error, never a coercion,
-	// and not a reported problem.
+	// and not a reported problem. Arity is NOT part of the declared type, so a
+	// `many text` and a scalar text are the SAME type and fall through to R-13
+	// below rather than being an ordinary false here.
 	if l.typ != r.typ {
 		return false, nil
+	}
+
+	// R-13 — the arity dimension, and it is decided BEFORE the scalar
+	// disposition table because operatorDefinedForType has authority over
+	// scalars only.
+	//
+	// "Against a `many` property, only `contains` and `is absent` are defined."
+	// `is absent` was answered by R-3 at the top, so `contains` is the only
+	// operator that survives here, and only in R-9's shape: a LIST haystack and
+	// a SCALAR needle. Every other combination — an ordering against a list, a
+	// list against a list, a scalar haystack — is refused and REPORTED, because
+	// a silent false is the empty answer R-13 exists to stop.
+	//
+	// The rule deliberately does not treat `=` as membership. That would be the
+	// implicit coercion this design removes everywhere else.
+	if l.many || r.many {
+		if op == OpContains && l.many && !r.many {
+			return oracleMembership(l, row), nil // R-9
+		}
+		return false, []ComparisonProblemCode{CompareArityNotDefined}
 	}
 
 	// Operators no rule defines for this type. SPEC GAP, REPORTED: §8 states no
@@ -371,27 +536,43 @@ func codesEqual(a, b []ComparisonProblemCode) bool {
 
 // TestComparisonTruthTable is spec §7 test 6 and §8's first-class deliverable.
 //
-// AC-8.1: every declared type x every declared type x every operator, plus
-// absent and non-conforming on both sides, with every expected value traced to a
-// numbered rule through oracleExpect and the two hand-written tables above.
+// AC-8.1: every declared type x every declared type x every operator, in every
+// arity shape on both sides, plus absent and non-conforming on both sides, with
+// every expected value traced to a numbered rule through oracleExpect and the
+// two hand-written tables above.
 func TestComparisonTruthTable(t *testing.T) {
 	c := testComparator()
 	all := sweepRows(t)
 	states := operandStates()
 	sweeps := []sweep{sweepLess, sweepEqual, sweepGreater}
 
-	cells := 0
+	cells, multiValue, membershipTrue, membershipFalse := 0, 0, 0, 0
 	for _, sw := range sweeps {
 		rows := all[sw]
 		for _, l := range states {
 			for _, r := range states {
 				for _, op := range Operators {
 					cells++
+					if l.many || r.many {
+						multiValue++
+					}
 					lv := operandFor(l, rows, "left")
 					rv := operandFor(r, rows, "right")
 
 					wantResult, wantCodes := oracleExpect(op, l, r, rows[l.typ])
 					gotResult, gotProblems := c.Evaluate(op, lv, rv)
+
+					// Count the cells where R-9 membership actually answered,
+					// each way. A membership test that always said false would
+					// otherwise satisfy most of the arity space silently.
+					if op == OpContains && l.many && !r.many && l.typ == r.typ &&
+						!l.absent && !r.absent && !l.nonConf && !r.nonConf {
+						if wantResult {
+							membershipTrue++
+						} else {
+							membershipFalse++
+						}
+					}
 
 					if gotResult != wantResult {
 						t.Errorf("[%s] %s %s %s = %v, want %v (oracle: the R-1..R-13 ladder in oracleExpect)",
@@ -410,11 +591,34 @@ func TestComparisonTruthTable(t *testing.T) {
 	if cells != wantCells {
 		t.Fatalf("generated %d cells, want %d", cells, wantCells)
 	}
-	// AC-8.1's shape guard: adding a declared type or an operator without
-	// extending the table changes this number, loudly.
-	if wantCells != 3*9*9*7 {
-		t.Fatalf("table shape changed: %d cells; AC-8.1 requires 9 operand states x 9 x every operator", wantCells)
+	// AC-8.1's shape guard: adding a declared type, an arity shape or an
+	// operator without extending the table changes this number, loudly.
+	//
+	// 38 = 7 declared types x 5 arity shapes (scalar, empty list, one-element
+	// list, two-element list, list with a non-conforming element) + absent
+	// scalar + absent list + non-conforming scalar.
+	if wantCells != 3*38*38*7 {
+		t.Fatalf("table shape changed: %d cells; AC-8.1 requires 38 operand states x 38 x every operator", wantCells)
 	}
+	// The arity dimension used to be entirely OUTSIDE this table — every cell
+	// was scalar-against-scalar, and `evaluateAcrossArity` was covered by three
+	// hand-written cases. These guards make that regression impossible to
+	// reintroduce by quietly shrinking operandStates back to nine.
+	if multiValue == 0 {
+		t.Fatalf("the table generated ZERO multi-value cells; the arity dimension is outside it again")
+	}
+	if wantMulti := 3 * (38*38 - 9*9) * 7; multiValue != wantMulti {
+		t.Fatalf("multi-value cells = %d, want %d (every pairing where either side is a `many` property)",
+			multiValue, wantMulti)
+	}
+	// R-9 must answer BOTH ways, or "membership" is indistinguishable from a
+	// constant.
+	if membershipTrue == 0 || membershipFalse == 0 {
+		t.Fatalf("R-9 membership answered true in %d cells and false in %d; both must be non-zero or the table proves nothing about membership",
+			membershipTrue, membershipFalse)
+	}
+	t.Logf("truth table: %d cells, %d of them multi-value (%d scalar-only); R-9 membership answered true in %d and false in %d",
+		cells, multiValue, cells-multiValue, membershipTrue, membershipFalse)
 }
 
 // TestComparison_ThreeGreaterThanTwo is AC-8.3, asserted by name because it is

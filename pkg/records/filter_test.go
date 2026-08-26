@@ -255,30 +255,69 @@ func TestFilter_ListSemantics(t *testing.T) {
 		}
 	})
 
-	t.Run("§8 states no rule for equality across a list/scalar boundary, so it is REFUSED and reported", func(t *testing.T) {
-		// This is a deliberate, reported SPEC GAP, not an implementation
-		// choice. §8's only rule about lists is R-9 (`contains` is
-		// whole-element membership). Nothing defines `segment = vendor` when
-		// segment is a list, so the oracle refuses and says so.
+	t.Run("§8 R-13: equality across a list/scalar boundary is REFUSED, once, before any record is read", func(t *testing.T) {
+		// §8's rules about lists are R-9 (`contains` is whole-element
+		// membership) and R-13 (against a `many` property, only `contains` and
+		// `is absent` are defined). Nothing defines `segment = vendor` when
+		// segment is a list, so the query is refused.
 		//
-		// The load-bearing part is the NEGATIVE case. A refused comparison
+		// This sub-test used to assert the refusal arrived as a per-record
+		// ComparisonProblem — `match()` succeeded and the verdict came back
+		// inside the MatchResult. That WAS the behaviour, and it was the defect:
+		// a vault of 5,000 widgets produced 5,000 identical complaints and an
+		// empty answer instead of one rejection naming the remedy. The refusal
+		// is now raised by Filter.Validate before the record is touched
+		// (filter_r13_validate_test.go owns that guarantee in full); what this
+		// sub-test keeps is the LIST-SEMANTICS half of it.
+		//
+		// The load-bearing part remains the NEGATIVE case. A refused comparison
 		// must NOT be re-included by negation: `segment != vendor` on
-		// [vendor, customer] returning true would be a silent wrong answer
-		// about a record that IS a vendor.
-		neg := Filter{Property: "segment", Op: OpEqual, Negate: true, Literal: "vendor"}
-		res := match(t, neg, both)
-		if res.Matched {
-			t.Fatalf("a comparison the oracle refused must not be swept in by negation")
+		// [vendor, customer] answering true would be a silent wrong answer
+		// about a record that IS a vendor. An up-front refusal is strictly
+		// stronger than the old exclusion — no answer is produced at all.
+		for _, f := range []Filter{
+			{Property: "segment", Op: OpEqual, Negate: true, Literal: "vendor"},
+			{Property: "segment", Op: OpEqual, Literal: "vendor"},
+		} {
+			res, err := f.Match(sc, both)
+			if err == nil {
+				t.Fatalf("R-13: `segment eq vendor` (negate=%v) must be refused; got Matched=%v with %d comparison problems",
+					f.Negate, res.Matched, len(res.ComparisonProblems))
+			}
+			if res.Matched {
+				t.Fatalf("a comparison the oracle refused must not be swept in by negation")
+			}
+			var qe *QueryError
+			if !errors.As(err, &qe) {
+				t.Fatalf("expected a *QueryError; got %T: %v", err, err)
+			}
+			// FR-024's shape: the rejection names the property and the remedy.
+			for _, want := range []string{"segment", string(OpContains)} {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("the refusal must name %q; got %q", want, err.Error())
+				}
+			}
 		}
-		if len(res.ComparisonProblems) == 0 {
-			t.Fatalf("the refusal must be REPORTED, not silent")
+
+		// Defence in depth: the ORACLE still refuses the same comparison, for
+		// anyone driving the Comparator directly rather than through a query.
+		// Deleting the Validate guard must not leave the oracle silent, and
+		// deleting the oracle guard must not leave Validate as the only wall.
+		segment, ok := sc.Property("segment")
+		if !ok {
+			t.Fatalf("fixture schema lost its `segment` property")
 		}
-		if got := res.ComparisonProblems[0].Code; got != CompareArityNotDefined {
-			t.Fatalf("expected %q, got %q", CompareArityNotDefined, got)
+		left := ResolveProperty(both, segment)
+		scalar := *segment
+		scalar.Many = false
+		right := PropertyValue{Property: &scalar, State: StatePresent,
+			Values: []TypedValue{{Type: TypeEnum, Raw: "vendor", Enum: scalar.Values[0]}}}
+		got, probs := Comparator{}.Evaluate(OpEqual, left, right)
+		if got {
+			t.Fatalf("R-13: the oracle must not answer `list eq scalar` true")
 		}
-		pos := Filter{Property: "segment", Op: OpEqual, Literal: "vendor"}
-		if match(t, pos, both).Matched {
-			t.Fatalf("the positive form is refused too")
+		if len(probs) != 1 || probs[0].Code != CompareArityNotDefined {
+			t.Fatalf("expected one %q from the oracle, got %v", CompareArityNotDefined, problemCodes(probs))
 		}
 	})
 

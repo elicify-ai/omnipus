@@ -239,7 +239,11 @@ func nonConformingComparisonProblem(op Operator, side string, pv PropertyValue) 
 // but the message named neither the remedy nor the property.)
 //
 // `contains` with BOTH sides a list is still undefined and still refused —
-// R-13 covers a list against a scalar. That refusal names its own reason.
+// R-9 defines membership of a SCALAR needle in a list, and R-13 defines nothing
+// else against a list. That refusal names its own reason: telling the caller to
+// "use contains" when the operator already IS contains is advice they cannot
+// act on, so arityRefusalDetail special-cases it and names the real remedy —
+// give the needle as a single value.
 func (c Comparator) evaluateAcrossArity(op Operator, left, right PropertyValue) (bool, []ComparisonProblem) {
 	if op == OpContains && left.Property.Many && !right.Property.Many {
 		needle := right.Values[0]
@@ -267,10 +271,16 @@ func (c Comparator) evaluateAcrossArity(op Operator, left, right PropertyValue) 
 // remedy, because "not defined" alone leaves a caller with an empty answer and
 // no idea what to do about it.
 func arityRefusalDetail(op Operator, p *Property) string {
-	if p.Many {
-		return fmt.Sprintf("%q holds many values; %s is not defined against a list — use contains", p.Name, op)
+	if !p.Many {
+		return fmt.Sprintf("%q holds a single value; %s cannot compare it against a list", p.Name, op)
 	}
-	return fmt.Sprintf("%q holds a single value; %s cannot compare it against a list", p.Name, op)
+	if op == OpContains {
+		// Reaching here means BOTH sides were lists. "Use contains" would be
+		// advice the caller has already taken; the actionable part is that R-9's
+		// needle is one value, not a list of them.
+		return fmt.Sprintf("%q holds many values; contains tests membership of ONE value in that list, so the value compared against must be a single value, not a list", p.Name)
+	}
+	return fmt.Sprintf("%q holds many values; %s is not defined against a list — use contains", p.Name, op)
 }
 
 // elementsEqual is R-9's whole-element membership test.

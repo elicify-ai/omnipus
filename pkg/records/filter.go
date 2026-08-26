@@ -178,23 +178,51 @@ func (f Filter) Validate(schema *Schema) (*Property, *TypedValue, error) {
 
 	// FR-024, applied to the OPERATOR as well as the property name.
 	//
-	// Without this check a filter naming an operator that is not defined for
-	// the property's declared type was ACCEPTED here, and then every record
-	// returned Matched=false plus one identical comparison problem. A caller
-	// asking `name > "Acme"` on a text property got an empty answer and 5,000
-	// copies of the same complaint instead of one refusal naming the operators
-	// that would have worked — the exact silently-empty result FR-024 exists to
-	// end, arriving through the operator rather than the property name.
+	// Without this check a filter naming an operator that no rule defines for
+	// the property was ACCEPTED here, and then every record returned
+	// Matched=false plus one identical comparison problem. A caller asking
+	// `name > "Acme"` on a text property got an empty answer and 5,000 copies of
+	// the same complaint instead of one refusal naming the operators that would
+	// have worked — the exact silently-empty result FR-024 exists to end,
+	// arriving through the operator rather than the property name.
 	//
-	// R-13 owns the arity dimension; this owns the type dimension. Both refuse
-	// up front rather than per record.
-	if !prop.Many && !operatorDefinedForType[prop.Type][f.Op] {
+	// TWO dimensions decide this, and they are checked in the SAME ORDER the
+	// oracle applies them (Comparator.Evaluate branches on arity before it
+	// consults operatorDefinedForType, which is documented as being "for SCALAR
+	// operands"). Checking them the other way round would refuse
+	// `sizes contains 3` — `contains` is not defined for scalar number, but
+	// R-9/R-13 define it against a list of them.
+	//
+	//	ARITY (R-13) — against a `many` property, only `contains` and
+	//	               `is absent` are defined. `is absent` already returned
+	//	               above, so `contains` is the only survivor here.
+	//	TYPE          — for a scalar, operatorDefinedForType is the authority.
+	//
+	// HISTORY, because the shape of the bug is easy to reintroduce: this guard
+	// read `if !prop.Many && !operatorDefinedForType[prop.Type][f.Op]`. The
+	// `!prop.Many` made a MANY property skip the check entirely, so `gt` against
+	// a `many text` property validated clean and produced one identical
+	// CompareArityNotDefined per record — the very per-record flood the comment
+	// above it claimed R-13 had ended. Regression: filter_r13_validate_test.go.
+	if prop.Many {
+		if f.Op != OpContains {
+			return nil, nil, &QueryError{
+				Property: f.Property,
+				// arityRefusalDetail is the oracle's own R-13 sentence, reused
+				// verbatim so the up-front refusal and the per-record backstop
+				// cannot describe the same rule in two different ways.
+				Reason:     arityRefusalDetail(f.Op, prop),
+				ValidNames: []string{string(OpContains), string(OpIsAbsent)},
+			}
+		}
+	} else if !operatorDefinedForType[prop.Type][f.Op] {
 		valid := make([]string, 0, len(Operators))
 		for _, o := range Operators {
 			if operatorDefinedForType[prop.Type][o] {
 				valid = append(valid, string(o))
 			}
 		}
+		valid = append(valid, string(OpIsAbsent)) // R-3 is defined for every type.
 		return nil, nil, &QueryError{
 			Property:   f.Property,
 			Reason:     fmt.Sprintf("operator %q is not defined for a %s property", f.Op, prop.Type),
