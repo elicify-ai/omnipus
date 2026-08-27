@@ -378,14 +378,30 @@ func (a *restAPI) preAuthOnboardingWindowOpen(r *http.Request) bool {
 // (auth.go) — deliberately not dev_mode_bypass, which is an authentication
 // BYPASS rather than an authority and must never widen a pre-auth window.
 func (a *restAPI) hasAuthenticationAuthority(r *http.Request) bool {
-	cfg := configFromContext(r.Context())
-	if cfg == nil && a.agentLoop != nil {
-		cfg = a.agentLoop.GetConfig()
-	}
+	cfg := a.requestConfigSnapshot(r)
 	if cfg != nil && len(cfg.Gateway.Users) > 0 {
 		return true
 	}
 	return strings.TrimSpace(os.Getenv("OMNIPUS_BEARER_TOKEN")) != ""
+}
+
+// requestConfigSnapshot resolves the config this request must be judged
+// against: the per-request snapshot configSnapshotMiddleware installed
+// (race-free across a hot-reload), falling back to the live config for the
+// call paths that never ran that middleware (context-only test calls, and any
+// route registered outside the snapshot chain).
+//
+// Returns nil when neither is available. Every caller must treat nil as
+// "cannot tell" and fail closed — an auth decision made against a config we
+// could not read is not a decision.
+func (a *restAPI) requestConfigSnapshot(r *http.Request) *config.Config {
+	if cfg := configFromContext(r.Context()); cfg != nil {
+		return cfg
+	}
+	if a.agentLoop != nil {
+		return a.agentLoop.GetConfig()
+	}
+	return nil
 }
 
 // requestPrincipalAuthenticated reports whether the request carries a real
@@ -399,14 +415,28 @@ func (a *restAPI) hasAuthenticationAuthority(r *http.Request) bool {
 // WITHOUT putting anything in the context. Its legacy OMNIPUS_BEARER_TOKEN
 // branch calls `handler(w, r)` on a successful constant-time match — the
 // caller is authenticated, but structurally indistinguishable downstream from
-// an anonymous one. checkBearerAuth (auth.go) treats that same token as a
-// valid admin principal for every withAuth route, so without this check the
-// documented headless/CI deployment mode (OMNIPUS_BEARER_TOKEN with no
-// Gateway.Users rows — CLAUDE.md's credential-provisioning section) would be
-// refused by an authorization gate on an optional-auth route while sailing
-// through every ordinary one. Recognising a credential the gateway already
-// accepts is not a widening: an anonymous caller has no token to present, and
-// the comparison is constant-time.
+// an anonymous one. It exists for the documented headless/CI deployment mode
+// (OMNIPUS_BEARER_TOKEN as the only credential — CLAUDE.md's
+// credential-provisioning section), which would otherwise be refused by an
+// authorization gate on an optional-auth route.
+//
+// bearerAccountsConfigured is the SAME gate checkBearerAuth (auth.go) applies
+// before its own env fallback, and it is load-bearing here. An earlier version
+// of this comment claimed checkBearerAuth "treats that same token as a valid
+// admin principal for every withAuth route" — that was false on every install
+// past first boot. `omnipus gateway` mints Gateway.CLIToken at startup
+// (clitoken.EnsureCLIToken), which makes bearerAccountsConfigured true, and
+// from that moment checkBearerAuth refuses the env fallback outright. Without
+// the same gate here, a stale OMNIPUS_BEARER_TOKEN that the rest of the
+// product correctly 401s still authenticated on exactly the FR-050-gated
+// provider routes — including POST /providers/{id}/sign-in, which mints a real
+// device code against the vendor. Observed live in UAT, 2026-08-27.
+//
+// Once any account-based auth exists, the env fallback is dead everywhere:
+// there is a real credential to present instead. With no accounts configured
+// it still authenticates — that is the first-boot/CI case the flag exists for.
+// A config we cannot read is treated as "accounts exist" (fail closed): an
+// auth decision made against an unknown config is not a decision.
 //
 // dev_mode_bypass is deliberately NOT an authority here. It is an
 // authentication BYPASS, and the project's own RequireNotBypass middleware
@@ -415,6 +445,23 @@ func (a *restAPI) hasAuthenticationAuthority(r *http.Request) bool {
 func (a *restAPI) requestPrincipalAuthenticated(r *http.Request) bool {
 	if r.Context().Value(UserContextKey{}) != nil {
 		return true
+	}
+	return a.envBearerTokenAuthenticates(r)
+}
+
+// envBearerTokenAuthenticates reports whether r presents the legacy
+// OMNIPUS_BEARER_TOKEN credential AND that credential is still an authority on
+// this instance. It is the single definition of "the env fallback applies",
+// shared by requestPrincipalAuthenticated and withOptionalAuth's env branch so
+// the two can never disagree about the same token.
+//
+// See requestPrincipalAuthenticated's doc for why bearerAccountsConfigured
+// gates it, and auth.go's checkBearerAuth for the identical gate on the
+// withAuth path.
+func (a *restAPI) envBearerTokenAuthenticates(r *http.Request) bool {
+	cfg := a.requestConfigSnapshot(r)
+	if cfg == nil || bearerAccountsConfigured(cfg) {
+		return false
 	}
 	envToken := strings.TrimSpace(os.Getenv("OMNIPUS_BEARER_TOKEN"))
 	if envToken == "" {
@@ -509,9 +556,14 @@ func (a *restAPI) withOptionalAuth(handler http.HandlerFunc) http.HandlerFunc {
 				return
 			}
 			// Token present but matched neither — treat as anonymous (optional auth).
-			// Legacy env var fallback
-			required := os.Getenv("OMNIPUS_BEARER_TOKEN")
-			if required != "" && subtle.ConstantTimeCompare([]byte(rawToken), []byte(required)) == 1 {
+			// Legacy env var fallback, via the shared predicate so this branch
+			// and requestPrincipalAuthenticated (which routes gate on
+			// downstream) can never disagree about the same token. Refused
+			// once account-based auth exists, exactly as checkBearerAuth
+			// refuses it — falling through to the cookie lookup below instead
+			// of short-circuiting a legitimately logged-in browser session
+			// into an anonymous one on the strength of a stale env token.
+			if a.envBearerTokenAuthenticates(r) {
 				a.setCORSHeaders(w, r)
 				handler(w, r)
 				return
