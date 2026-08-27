@@ -117,7 +117,7 @@ func (a *restAPI) deleteProvider(w http.ResponseWriter, r *http.Request, provide
 		}
 	}
 
-	resp, status, errMsg, errField := a.runProviderDelete(providerID, req.NewDefault)
+	resp, status, errMsg, errField := a.runProviderDelete(r, providerID, req.NewDefault)
 	switch {
 	case status == http.StatusOK:
 		// Step 5 — reload AND wait, outside the config lock (the same
@@ -168,7 +168,7 @@ func (a *restAPI) providerDeleteStoreUsable() error {
 //     the body is the retryable {deleted:false} contract shape;
 //   - resp nil, status 4xx: a guard refused; errMsg/errField carry the body.
 func (a *restAPI) runProviderDelete(
-	providerID string, newDefault *gen.DefaultModelUpdateRequest,
+	r *http.Request, providerID string, newDefault *gen.DefaultModelUpdateRequest,
 ) (resp *gen.ProviderDeleteResponse, status int, errMsg, errField string) {
 	a.configMu.Lock()
 	defer a.configMu.Unlock()
@@ -343,9 +343,23 @@ func (a *restAPI) runProviderDelete(
 	// (openai-chatgpt → openai, ADR-068 FR-007), and that mapping is what
 	// every writer of the entry uses. Deriving the name any other way here
 	// would silently miss the only row that actually has one today.
+	//
+	// O7: that vendor mapping is many-to-one (openai AND openai-chatgpt
+	// both resolve to vendor "openai"), so it must NOT be used to decide
+	// which row's DELETE gets to remove the entry — only the row that can
+	// actually SOURCE a sign-in for that vendor
+	// (providers_pkg.OAuthEntryOwner) may. Deleting the plain "openai"
+	// api_key row must never destroy a still-configured "openai-chatgpt"
+	// row's live ChatGPT grant; oauthRef stays "" (nothing to remove) when
+	// providerID isn't the owner.
 	credRef := providerID + "_API_KEY"
-	oauthRef := credentials.OAuthEntryName(providers_pkg.OAuthVendorID(providerID))
-	for _, ref := range []string{credRef, oauthRef} {
+	refsToDelete := []string{credRef}
+	var oauthRef string
+	if providers_pkg.OAuthEntryOwner(providerID) {
+		oauthRef = credentials.OAuthEntryName(providers_pkg.OAuthVendorID(providerID))
+		refsToDelete = append(refsToDelete, oauthRef)
+	}
+	for _, ref := range refsToDelete {
 		if err := a.removeStoredCredential(ref); err != nil {
 			slog.Error("rest: provider delete: credential delete failed",
 				"provider_id", providerID, "credential_ref", ref, "error", err)
@@ -357,13 +371,26 @@ func (a *restAPI) runProviderDelete(
 	// Best-effort like every other gateway audit emission: losing the log
 	// line must not strand a half-deleted retryable state that is actually
 	// complete.
+	//
+	// O6: actor + source_ip, matching the shape auditCopilotProbe
+	// (rest_signin_copilot.go) already uses. This route is reachable during
+	// the FR-050 pre-auth window (like every /providers/{id}/sign-in
+	// sibling), so an entry with neither was indistinguishable from an
+	// authenticated admin's own deletion — the operator investigating "who
+	// deleted my provider" (O7's exact scenario, where the consequence can
+	// be losing a live OAuth grant) had nothing to go on. auditActor
+	// returns "" for an anonymous pre-auth caller, its documented default,
+	// never a guess.
 	if a.auditor != nil {
 		details := map[string]any{
-			"provider":             providerID,
-			"credential_ref":       credRef,
-			"oauth_credential_ref": oauthRef,
-			"dependents":           len(dependents),
-			"default_changed":      defaultChanged,
+			"provider":        providerID,
+			"credential_ref":  credRef,
+			"dependents":      len(dependents),
+			"default_changed": defaultChanged,
+			"source_ip":       a.clientIPWithLiveFallback(r),
+		}
+		if oauthRef != "" {
+			details["oauth_credential_ref"] = oauthRef
 		}
 		if defaultChanged {
 			details["old_default_provider"] = oldPair.Provider
@@ -374,6 +401,7 @@ func (a *restAPI) runProviderDelete(
 		if err := a.auditor.Log(&audit.Entry{
 			Event:    EventProviderDeleted,
 			Decision: audit.DecisionAllow,
+			User:     auditActor(r),
 			Details:  details,
 		}); err != nil {
 			slog.Warn("audit write failed", "event", EventProviderDeleted, "error", err)

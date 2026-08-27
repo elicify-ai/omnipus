@@ -810,22 +810,32 @@ func (a *restAPI) handleProviderSignOut(w http.ResponseWriter, r *http.Request, 
 		jsonErr(w, http.StatusServiceUnavailable, "credential store unavailable")
 		return
 	}
-	// providers_pkg.DeleteStoreOAuthCred, not a bare store.Delete: the
-	// delete has to be ordered against an in-flight refresh exchange, or
-	// sign-out is not a revocation. A refresh that started before the
-	// operator clicked Sign out used to complete AFTER the delete and write
-	// a fresh access+refresh pair straight back — the UI said "not signed
-	// in", the audit log below recorded provider.signed_out, and the grant
-	// the operator believed they had destroyed was live again with nothing
-	// surfacing it. See that function's threat note. It can block for as
-	// long as one bounded vendor exchange; that is the price of the ordering.
-	if delErr := providers_pkg.DeleteStoreOAuthCred(providerID, store); delErr != nil {
-		var notFound *credentials.NotFoundError
-		if !errors.As(delErr, &notFound) {
-			jsonErr(w, http.StatusInternalServerError, "failed to sign out")
-			return
+	// O7: only a row that can actually SOURCE a device-code sign-in for its
+	// vendor (providers_pkg.OAuthEntryOwner) may remove that vendor's
+	// stored grant. providers_pkg.OAuthVendorID is many-to-one (openai AND
+	// openai-chatgpt both resolve to vendor "openai"), so without this
+	// gate, DELETE /providers/openai/sign-in — called against a row that
+	// never signs in at all — destroyed a still-configured
+	// openai-chatgpt row's live ChatGPT grant. A non-owning id has nothing
+	// of its own to revoke, so this is a no-op success, not a failure.
+	if providers_pkg.OAuthEntryOwner(providerID) {
+		// providers_pkg.DeleteStoreOAuthCred, not a bare store.Delete: the
+		// delete has to be ordered against an in-flight refresh exchange, or
+		// sign-out is not a revocation. A refresh that started before the
+		// operator clicked Sign out used to complete AFTER the delete and write
+		// a fresh access+refresh pair straight back — the UI said "not signed
+		// in", the audit log below recorded provider.signed_out, and the grant
+		// the operator believed they had destroyed was live again with nothing
+		// surfacing it. See that function's threat note. It can block for as
+		// long as one bounded vendor exchange; that is the price of the ordering.
+		if delErr := providers_pkg.DeleteStoreOAuthCred(providerID, store); delErr != nil {
+			var notFound *credentials.NotFoundError
+			if !errors.As(delErr, &notFound) {
+				jsonErr(w, http.StatusInternalServerError, "failed to sign out")
+				return
+			}
+			// NotFound = success (FR-048).
 		}
-		// NotFound = success (FR-048).
 	}
 	a.reRegisterOAuthSensitiveValues(store)
 	if a.auditor != nil {

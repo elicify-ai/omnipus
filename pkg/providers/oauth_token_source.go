@@ -70,6 +70,39 @@ func OAuthVendorID(providerID string) string {
 	return providerID
 }
 
+// OAuthEntryOwner reports whether providerID is a row whose OWN device-code
+// sign-in flow can write credentials.OAuthEntryName(OAuthVendorID(providerID))
+// — i.e. whether deleting or signing THIS row out is entitled to remove
+// that entry (ADR-068 FR-007, O7 follow-up).
+//
+// This is narrower than "OAuthVendorID(providerID) resolves to a vendor
+// id": OAuthVendorID answers "where would providerID's own tokens live,"
+// which is well-defined for every id (identity for most, aliased for
+// openai-chatgpt) — but a plain API-key row is never the SOURCE of a
+// sign-in, so it must never claim ownership of the vendor entry its id
+// happens to collide with. Concretely: "openai" (the api_key row) and
+// "openai-chatgpt" (the sign-in row) both resolve OAuthVendorID to
+// "openai", but only "openai-chatgpt" ever calls SaveStoreOAuthCred —
+// deleting the "openai" row must never destroy a live ChatGPT grant that
+// belongs to a still-configured "openai-chatgpt" row.
+//
+// Deliberately independent of any catalog document or live env
+// resolvability (e.g. auth.XAIOAuthConfig() failing because a client id
+// was unset) — this is a fixed structural fact about which ids the
+// sign-in code path (pkg/gateway/rest_sign_in.go's oauthConfigFor) ever
+// dispatches a device-code exchange for, not a runtime capability check.
+// Add a new id here only when a new sign-in SOURCE is wired into that
+// switch — never for a plain api_key row, however its id compares to
+// OAuthVendorID.
+func OAuthEntryOwner(providerID string) bool {
+	switch providerID {
+	case "openai-chatgpt", "xai":
+		return true
+	default:
+		return false
+	}
+}
+
 // storeOAuthCred is the JSON shape persisted under
 // credentials.OAuthEntryName(vendorID) in the encrypted credential store —
 // ADR-068 FR-007/FR-046. Never config.json, never the vendor's own

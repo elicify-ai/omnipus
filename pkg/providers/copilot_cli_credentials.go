@@ -116,9 +116,12 @@ var copilotNotSignedInMarkers = []string{
 }
 
 // CopilotSignIn asks the GitHub Copilot CLI whether it holds a usable login
-// (ADR-068 FR-009). command is the catalog row's `cli_path` override; empty
-// means the default `copilot` on PATH. workspace, when set, is the directory
-// the check runs in.
+// (ADR-068 FR-009). command is an explicit override for the Copilot binary
+// name/path; empty means the default `copilot` on PATH. It is NOT sourced
+// from a catalog row field — catalog.Provider carries no `cli_path`, and
+// every call site passes "" unconditionally today, so an operator with
+// `copilot` installed off PATH currently has no way to point this at it.
+// workspace, when set, is the directory the check runs in.
 //
 // Cost: one premium request against the operator's Copilot subscription when
 // they ARE signed in — see the block comment above. Call it from the operator's

@@ -17,8 +17,16 @@ import (
 
 // NewCliProviderForKind returns the subprocess driver named by a catalog row's
 // `cli_kind` (ADR-068 FR-003, X-14): `codex` -> CodexCliProvider,
-// `copilot` -> CopilotCliProvider. cliPath is the row's optional `cli_path`
-// override; empty means the vendor's default binary name on PATH.
+// `copilot` -> CopilotCliProvider. cliPath is an explicit override for the
+// Copilot binary name/path; empty means the vendor's default binary name on
+// PATH. It is NOT a catalog row field — catalog.Provider (pkg/providers/
+// catalog/document.go) carries no `cli_path`, nothing parses one out of the
+// catalog document, and both call sites (CreateProviderFromConfig below,
+// and the onboarding probe in pkg/gateway/rest_onboarding.go) pass ""
+// unconditionally today, so there is currently no way to steer this. Do not
+// confuse it with the unrelated, functioning
+// config.ExecutorConfig.CLIPath used by subagent_3p external-CLI dispatch
+// (pkg/agent/runner) — same name, different mechanism.
 //
 // It is the ONE place a kind maps to a constructor; `case ProtocolCLI` in
 // CreateProviderFromConfig calls it with the row's own kind and never with a

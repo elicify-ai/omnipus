@@ -80,8 +80,12 @@ func NewCopilotCliProvider(workspace string) *CopilotCliProvider {
 }
 
 // NewCopilotCliProviderWithCommand creates a Copilot CLI provider that runs an
-// explicit binary path — the catalog row's `cli_path` override. An empty
-// command falls back to the default `copilot` on PATH.
+// explicit binary name/path. This is a plain Go parameter, not a catalog row
+// field — catalog.Provider carries no `cli_path`, and both callers
+// (CreateProviderFromConfig and the onboarding probe) pass "" unconditionally
+// today, so there is currently no way for an operator to point this at a
+// `copilot` binary installed off PATH; a row reports `cli_missing` instead.
+// An empty command falls back to the default `copilot` on PATH.
 func NewCopilotCliProviderWithCommand(command, workspace string) *CopilotCliProvider {
 	if command == "" {
 		command = CopilotCLICommand

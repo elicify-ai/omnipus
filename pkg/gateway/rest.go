@@ -6295,6 +6295,19 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 				fmt.Sprintf("unknown provider %q", sub), "id")
 			return
 		}
+		// O16: reject an id containing a path separator BEFORE it can ever
+		// be written. DELETE /api/v1/providers/{id} only matches
+		// `!strings.Contains(sub, "/")` (see the MethodDelete case above),
+		// so a row this PUT let through with a "/" in its id — e.g.
+		// PUT /api/v1/providers/a/b, where sub == "a/b" — could be created
+		// but could never be routed to a DELETE again; the row became
+		// permanently stuck in config.json. validateEntityID also rejects
+		// ".." and NUL, both equally unwelcome in a value that ends up as a
+		// providers[].provider string and a "<id>_API_KEY" credential ref.
+		if err := validateEntityID(sub); err != nil || len(sub) > maxProviderIDLen {
+			jsonErrField(w, http.StatusBadRequest, "invalid provider id", "id")
+			return
+		}
 		// Allow unauthenticated access during onboarding so the wizard can
 		// configure the provider before the admin user exists. M3: the window
 		// closes on an unknown onboarding state as well as a complete one —
