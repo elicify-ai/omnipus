@@ -1409,7 +1409,7 @@ paths:
     post:
       operationId: probeProvider
       summary: Test a provider API key and list available models
-      description: 'Non-persistent probe: accepts an API key in the request body, tests it against the provider''s /models endpoint, and returns the model list. Nothing is written to disk. Available only during onboarding (returns 409 after onboarding completes). CSRF-exempt.
+      description: 'Non-persistent probe: accepts an API key in the request body, tests it against the provider''s /models endpoint, and returns the model list. Nothing is written to disk. CSRF-exempt. Available only while the pre-auth onboarding window is open, and it returns 409 whenever that window is closed - onboarding already complete, the onboarding state unreadable, the config unreadable, or the instance already having an authentication authority (a configured user or OMNIPUS_BEARER_TOKEN). The refusal is 409 rather than 401 for every one of those reasons, including for an authenticated admin: once the window is closed no credential makes this call legal, and the standard PUT /providers/{id} + GET /providers flow replaces it. The refusal body is identical across reasons; the specific reason is recorded in the audit log. With auth sign_in the probe spends one real, billed vendor completion using the operator''s own saved login, which is why the window must close on uncertainty. Rate-limited: 3 requests per minute per IP (shared with /onboarding/complete) -> 429.
 
         '
       tags:
@@ -1434,6 +1434,8 @@ paths:
           $ref: '#/components/responses/400BadRequest'
         '409':
           $ref: '#/components/responses/409Conflict'
+        '429':
+          $ref: '#/components/responses/429TooManyRequests'
   /sessions:
     get:
       operationId: listSessions
