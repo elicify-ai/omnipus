@@ -32,6 +32,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -49,6 +50,26 @@ import (
 
 // ── scaffolding ─────────────────────────────────────────────────────────────
 
+// uniqueTestSourceIP hands every request in this file its own source address.
+//
+// The sign-in and anonymous-provider-list rate limiters (signInStartLimiter,
+// providerListAnonLimiter et al., rest_auth.go) are PROCESS-GLOBAL and keyed
+// by client IP, and every httptest.NewRequest otherwise arrives from the same
+// default 192.0.2.1. A new test that exercises a rate-limited route therefore
+// spends budget the pre-existing tests need, and the package fails on
+// whichever test happens to run past the ceiling — not on the one that spent
+// it. Caught exactly that way on the CI worker: with these tests added,
+// TestSignIn_CopilotDispatchDoesNotLeakToOtherProviders saw 429 instead of
+// 200 (signInStartLimiter is 10/minute).
+//
+// TEST-NET-3 (203.0.113.0/24, RFC 5737) is reserved for documentation and is
+// never routable, so it cannot collide with a real address.
+var testSourceIPCounter atomic.Int64
+
+func uniqueTestSourceIP() string {
+	return fmt.Sprintf("203.0.113.%d:1234", testSourceIPCounter.Add(1)%254+1)
+}
+
 // viaRealMux issues one request through the production route table with the
 // config snapshot configSnapshotMiddleware would have installed. An empty
 // authHeader sends no Authorization header at all.
@@ -57,6 +78,7 @@ func viaRealMux(t *testing.T, api *restAPI, method, path, authHeader string) *ht
 	mux := http.NewServeMux()
 	api.registerAdditionalEndpoints(&testMuxRegistrar{mux: mux})
 	req := httptest.NewRequest(method, path, nil)
+	req.RemoteAddr = uniqueTestSourceIP()
 	if authHeader != "" {
 		req.Header.Set("Authorization", authHeader)
 	}
@@ -180,6 +202,7 @@ func TestEnvBearerToken_RefusedOnceAccountBasedAuthExists(t *testing.T) {
 		mux := http.NewServeMux()
 		api.registerAdditionalEndpoints(&testMuxRegistrar{mux: mux})
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/providers", nil)
+		req.RemoteAddr = uniqueTestSourceIP()
 		req.Header.Set("Authorization", "Bearer stale-env-token")
 		req.AddCookie(&http.Cookie{Name: middleware.SessionCookieName, Value: sessionPlaintext})
 		req = req.WithContext(context.WithValue(req.Context(), ctxkey.ConfigContextKey{}, cfg))
@@ -303,6 +326,7 @@ func TestPreAuthOnboardingWindow_UnchangedByEnvTokenNarrowing(t *testing.T) {
 		require.False(t, api.onboardingMgr.IsComplete(), "precondition: onboarding incomplete")
 
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/providers", nil)
+		req.RemoteAddr = uniqueTestSourceIP()
 		req = req.WithContext(context.WithValue(req.Context(),
 			ctxkey.ConfigContextKey{}, api.agentLoop.GetConfig()))
 		assert.False(t, api.preAuthOnboardingWindowOpen(req),
