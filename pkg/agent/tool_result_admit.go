@@ -444,7 +444,7 @@ func (al *AgentLoop) admitToolResult(ts *turnState, adm toolResultAdmission) adm
 
 	window := archived
 	if overCap {
-		window.Content = cutHeadAndTail(archived.Content, capChars, capMarkOrEmpty(adm.Tool, adm.ToolCallID, line, archived.Content, archive))
+		window.Content = cutHeadAndTail(archived.Content, capChars, capMarkOrEmpty(adm.Tool, adm.ToolCallID, line, archived.Content, turnNumberForArchiveLine(archive, line)))
 		if persist && line >= 0 {
 			// Record WHICH surface produced the live cut: the window carries
 			// no IsError, so without this the reload re-cuts a failure at
@@ -483,8 +483,8 @@ func (al *AgentLoop) admitToolResult(ts *turnState, adm toolResultAdmission) adm
 // capMarkOrEmpty builds the capped mark; a marshal failure (already reported
 // by buildRecallMark) degrades to an empty mark so the result is still cut
 // to the cap — bounded first, annotated second.
-func capMarkOrEmpty(tool, toolCallID string, line int, content string, archive []memory.ArchivedMessage) string {
-	mark, err := buildRecallMark("capped", tool, toolCallID, line, content, archive)
+func capMarkOrEmpty(tool, toolCallID string, line int, content string, turn int) string {
+	mark, err := buildRecallMark("capped", tool, toolCallID, line, content, turn)
 	if err != nil {
 		return ""
 	}

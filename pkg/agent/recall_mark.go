@@ -35,17 +35,17 @@ import (
 // `full` is never a mark (it is ToolCall.content_state's default and only
 // ever read from the transcript).
 //
-// archive is the session archive as read by memory.Store.ReadArchive (skip
-// ignored) — only the lines BEFORE archiveLine are consulted, to count the
-// role:user lines that define the turn number. Callers pass the whole
-// archive; this function never mutates it.
-func buildRecallMark(state, tool, toolCallID string, archiveLine int, content string, archive []memory.ArchivedMessage) (string, error) {
+// turn is the 1-based turn number the mark cites (FR-018) — callers compute
+// it themselves (typically via turnNumberForArchiveLine against whatever
+// archive they have in scope, or a value they already tracked) rather than
+// handing this function an archive to re-derive it from.
+func buildRecallMark(state, tool, toolCallID string, archiveLine int, content string, turn int) (string, error) {
 	params := tools.RecallMarkParams{
 		Tool:        tool,
 		ToolCallID:  toolCallID,
 		ArchiveLine: archiveLine,
 		SizeChars:   len([]rune(content)),
-		Turn:        turnNumberForArchiveLine(archive, archiveLine),
+		Turn:        turn,
 	}
 	var (
 		encoded []byte

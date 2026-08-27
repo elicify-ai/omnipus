@@ -41,7 +41,7 @@ func TestRecallMark_SingleProducerSanitised(t *testing.T) {
 
 	for _, state := range []string{"emptied", "capped"} {
 		t.Run(state, func(t *testing.T) {
-			mark, err := buildRecallMark(state, hostileName, hostileID, 6, content, archive)
+			mark, err := buildRecallMark(state, hostileName, hostileID, 6, content, turnNumberForArchiveLine(archive, 6))
 			require.NoError(t, err)
 
 			var parsed map[string]any
@@ -85,7 +85,7 @@ func TestRecallMark_SingleProducerSanitised(t *testing.T) {
 	})
 
 	t.Run("unknown state is refused", func(t *testing.T) {
-		_, err := buildRecallMark("full", "t", "c", 0, "x", nil)
+		_, err := buildRecallMark("full", "t", "c", 0, "x", 1)
 		require.Error(t, err)
 	})
 

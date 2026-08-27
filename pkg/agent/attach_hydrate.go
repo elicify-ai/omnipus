@@ -519,7 +519,13 @@ func (al *AgentLoop) hydratedToolResultMessage(owner string, tc *session.ToolCal
 		}
 	}
 	policy := capPolicyFor(cs, budget)
+	// No archive available here; line is always -1, which makes
+	// turnNumberForArchiveLine return 1 regardless of what archive is
+	// passed — this call site's turn is always reported as 1 by
+	// construction, matching current behavior.
 	content, _ := projectToolResult(marshalToolResult(tc), policy.effectiveCap(surfaceBuiltinSuccess, 1),
-		func(full string) string { return capMarkOrEmpty(tc.Tool, string(tc.ID), -1, full, nil) })
+		func(full string) string {
+			return capMarkOrEmpty(tc.Tool, string(tc.ID), -1, full, turnNumberForArchiveLine(nil, -1))
+		})
 	return toolResultMessage(string(tc.ID), content, nil)
 }

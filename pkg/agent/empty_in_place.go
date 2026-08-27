@@ -174,7 +174,7 @@ func emptyOldestFirst(
 		line := lineOf(i)
 		tool, _ := owningToolCall(msgs, i, m.ToolCallID)
 		full := markSourceContent(m, line, archive)
-		mark, err := buildRecallMark("emptied", tool, m.ToolCallID, line, full, archive)
+		mark, err := buildRecallMark("emptied", tool, m.ToolCallID, line, full, turnNumberForArchiveLine(archive, line))
 		if err != nil {
 			// buildRecallMark reported the marshal failure. The content is
 			// still gone — the window must not keep bytes the persisted

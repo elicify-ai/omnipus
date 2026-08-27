@@ -326,6 +326,51 @@ func packageStringConstants(files map[string]*ast.File) map[string]string {
 	return out
 }
 
+// compositeEltType returns the ELEMENT type carried by an array/slice, map,
+// or pointer type. Go elides the type on every non-outermost element of a
+// composite literal — `[]providers.Message{{Role: "tool"}}`'s INNER
+// `{Role: "tool"}` has ast.CompositeLit.Type == nil; only the OUTER
+// literal's Type field carries `[]providers.Message` (an *ast.ArrayType).
+// Without this resolution step an element literal inside such a
+// slice/array/map is invisible to isProvidersMessageType, since it is
+// asked about a nil Type and nil never matches *ast.SelectorExpr (O20).
+func compositeEltType(enclosing ast.Expr) ast.Expr {
+	switch v := enclosing.(type) {
+	case *ast.ArrayType:
+		return v.Elt
+	case *ast.MapType:
+		return v.Value
+	case *ast.StarExpr:
+		return v.X
+	}
+	return nil
+}
+
+// resolveRoleAssignValue attempts to statically resolve a `.Role = <expr>`
+// assignment's RHS to its string value. ok=false means the value could not
+// be proven — a function call (`m.Role = roleFor(x)`), a field/selector
+// read, a local variable, or an identifier that is not a known
+// same-package string constant. The AssignStmt scan below FAILS CLOSED on
+// !ok: an unrecognised construction is a possible violation, not a value
+// resolvesToTool silently returns false for and the caller waves through
+// (O20 — "resolvesToTool only understands string literals and same-package
+// constants, so `m.Role = roleFor(x)` is invisible too").
+func resolveRoleAssignValue(e ast.Expr, consts map[string]string) (string, bool) {
+	switch v := e.(type) {
+	case *ast.BasicLit:
+		if v.Kind == token.STRING {
+			if s, uerr := strconv.Unquote(v.Value); uerr == nil {
+				return s, true
+			}
+		}
+	case *ast.Ident:
+		if s, found := consts[v.Name]; found {
+			return s, true
+		}
+	}
+	return "", false
+}
+
 // scanChokePointBypasses walks the ACTUAL syntax tree of every non-test .go
 // file in dir and reports every structural way a role:"tool"
 // providers.Message can reach the window OUTSIDE chokePointAllowedFiles
@@ -345,6 +390,13 @@ func packageStringConstants(files map[string]*ast.File) map[string]string {
 //     regex never saw it.
 //   - a producer in ANY file (every non-test file is scanned, not just
 //     loop.go).
+//   - an element literal inside `[]providers.Message{{Role: "tool"}}` or a
+//     `map[string]providers.Message{...}` value, whose own Type is elided
+//     by Go and therefore nil — resolved via compositeEltType from the
+//     enclosing array/map's Type (O20).
+//   - an unresolvable `.Role = <expr>` assignment (a call, a field read, a
+//     local variable) — resolveRoleAssignValue fails CLOSED on these
+//     rather than silently treating "can't tell" as "not tool" (O20).
 func scanChokePointBypasses(t *testing.T, dir string) []chokePointViolation {
 	t.Helper()
 	fset := token.NewFileSet()
@@ -431,7 +483,24 @@ func scanChokePointBypasses(t *testing.T, dir string) []chokePointViolation {
 				return true
 			})
 		}
+		// typeCtxStack tracks, at every point during the walk, the type of
+		// the nearest enclosing composite literal — needed to resolve an
+		// elided CompositeLit's own type (see compositeEltType). Per the
+		// ast.Inspect doc, f(nil) is called EXACTLY ONCE after all of a
+		// visited node's children are done, which is a reliable 1:1 pop for
+		// every push below (one push per node visited, since this walk
+		// always returns true and therefore always descends).
+		var typeCtxStack []ast.Expr
 		ast.Inspect(f, func(n ast.Node) bool {
+			if n == nil {
+				typeCtxStack = typeCtxStack[:len(typeCtxStack)-1]
+				return true
+			}
+			ctx := ast.Expr(nil)
+			if len(typeCtxStack) > 0 {
+				ctx = typeCtxStack[len(typeCtxStack)-1]
+			}
+			pushType := ctx // default: pass the parent's context through unchanged
 			switch v := n.(type) {
 			case *ast.CallExpr:
 				if name == "attach_hydrate.go" {
@@ -444,39 +513,62 @@ func scanChokePointBypasses(t *testing.T, dir string) []chokePointViolation {
 					})
 				}
 			case *ast.CompositeLit:
-				if !isProvidersMessageType(v.Type) {
-					return true
+				// O20: v.Type is nil for every non-outermost element of a
+				// composite literal (`[]providers.Message{{Role: "tool"}}`'s
+				// inner `{Role: "tool"}}`) — resolve it from the enclosing
+				// array/map/pointer type instead of silently treating a nil
+				// Type as "not providers.Message".
+				resolvedType := v.Type
+				if resolvedType == nil {
+					resolvedType = compositeEltType(ctx)
 				}
-				for _, elt := range v.Elts {
-					kv, ok := elt.(*ast.KeyValueExpr)
-					if !ok {
-						continue
-					}
-					key, ok := kv.Key.(*ast.Ident)
-					if !ok || key.Name != "Role" {
-						continue
-					}
-					if resolvesToTool(kv.Value) {
-						violations = append(violations, chokePointViolation{
-							file: name, pos: fset.Position(v.Pos()).String(),
-							kind: "constructs a role:tool providers.Message literal outside the choke point",
-						})
+				if isProvidersMessageType(resolvedType) {
+					for _, elt := range v.Elts {
+						kv, ok := elt.(*ast.KeyValueExpr)
+						if !ok {
+							continue
+						}
+						key, ok := kv.Key.(*ast.Ident)
+						if !ok || key.Name != "Role" {
+							continue
+						}
+						if resolvesToTool(kv.Value) {
+							violations = append(violations, chokePointViolation{
+								file: name, pos: fset.Position(v.Pos()).String(),
+								kind: "constructs a role:tool providers.Message literal outside the choke point",
+							})
+						}
 					}
 				}
+				pushType = resolvedType
 			case *ast.AssignStmt:
 				for i, lhs := range v.Lhs {
 					sel, ok := lhs.(*ast.SelectorExpr)
 					if !ok || sel.Sel.Name != "Role" || i >= len(v.Rhs) {
 						continue
 					}
-					if resolvesToTool(v.Rhs[i]) {
+					// O20: FAIL CLOSED. resolveRoleAssignValue's ok==false
+					// (a call like roleFor(x), a field read, a local var —
+					// anything that isn't a literal or a known same-package
+					// const) is itself flagged as a possible violation,
+					// rather than silently passed the way the old
+					// resolvesToTool(...)==false path did.
+					val, resolved := resolveRoleAssignValue(v.Rhs[i], stringConsts)
+					switch {
+					case resolved && val == "tool":
 						violations = append(violations, chokePointViolation{
 							file: name, pos: fset.Position(v.Pos()).String(),
 							kind: `assigns .Role = "tool" outside the choke point`,
 						})
+					case !resolved:
+						violations = append(violations, chokePointViolation{
+							file: name, pos: fset.Position(v.Pos()).String(),
+							kind: `assigns .Role to a statically-unresolvable value outside the choke point (fails closed: cannot prove it is not "tool")`,
+						})
 					}
 				}
 			}
+			typeCtxStack = append(typeCtxStack, pushType)
 			return true
 		})
 	}
@@ -639,6 +731,140 @@ func TestChokePoint_ProducerListByGrep(t *testing.T) {
 	repairSrc, err := os.ReadFile("repair.go")
 	require.NoError(t, err)
 	assert.Contains(t, strings.ToLower(string(repairSrc)), "exempt from the choke point", "repair.go must annotate its exemption")
+}
+
+// TestChokePoint_ProducerListByGrep_CatchesTwoPreviouslyInvisibleForms pins
+// the O20 fix (2026-08-27 review): before this fix, scanChokePointBypasses
+// missed (1) a role:"tool" providers.Message element literal inside a
+// `[]providers.Message{...}`/`map[...]providers.Message{...}` composite
+// literal — its own ast.CompositeLit.Type is nil (elided by Go), and the
+// old isProvidersMessageType type-asserted that nil straight to
+// *ast.SelectorExpr and failed — and (2) a `.Role = <expr>` assignment
+// whose RHS is not a string literal or a same-package constant (e.g. a
+// function call `m.Role = roleFor(x)`), which the old resolvesToTool
+// silently reported as "not tool" instead of failing closed.
+//
+// Both fixtures below reproduce, in isolation, exactly the constructions
+// O20 named. scanChokePointBypasses is exercised directly against a synth
+// fixture dir (not the real pkg/agent tree) so this test asserts on the
+// detector's OWN behavior, not on whether real code happens to contain a
+// violation today.
+func TestChokePoint_ProducerListByGrep_CatchesTwoPreviouslyInvisibleForms(t *testing.T) {
+	t.Run("array-literal element with elided Type (O20 form 1)", func(t *testing.T) {
+		dir := t.TempDir()
+		src := `package agent
+
+func bypassViaArrayLiteral() {
+	var messages []providers.Message
+	messages = append(messages, []providers.Message{{Role: "tool", Content: "x", ToolCallID: "c1"}}...)
+	_ = messages
+}
+`
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "bypass.go"), []byte(src), 0o600))
+		violations := scanChokePointBypasses(t, dir)
+		require.Len(t, violations, 1, "the array-literal element must be caught now that the elided Type is resolved: %+v", violations)
+		assert.Contains(t, violations[0].kind, "constructs a role:tool providers.Message literal")
+
+		t.Run("no false positive: a NON-tool role inside the same array-literal shape", func(t *testing.T) {
+			cleanDir := t.TempDir()
+			cleanSrc := `package agent
+
+func legitArrayLiteral() []providers.Message {
+	return []providers.Message{{Role: "user", Content: "hi"}, {Role: "assistant", Content: "yo"}}
+}
+`
+			require.NoError(t, os.WriteFile(filepath.Join(cleanDir, "clean.go"), []byte(cleanSrc), 0o600))
+			assert.Empty(t, scanChokePointBypasses(t, cleanDir), "user/assistant roles in the same array-literal shape must not be flagged")
+		})
+
+		t.Run("no false positive: an array literal of an unrelated element type", func(t *testing.T) {
+			otherDir := t.TempDir()
+			otherSrc := `package agent
+
+type widget struct{ Role string }
+
+func unrelatedArrayLiteral() []widget {
+	return []widget{{Role: "tool"}}
+}
+`
+			require.NoError(t, os.WriteFile(filepath.Join(otherDir, "other.go"), []byte(otherSrc), 0o600))
+			assert.Empty(t, scanChokePointBypasses(t, otherDir), "a Role:\"tool\" field on a non-providers.Message element type must not be flagged")
+		})
+	})
+
+	t.Run("map-literal value with elided Type, same elision bug (O20 form 1 variant)", func(t *testing.T) {
+		dir := t.TempDir()
+		src := `package agent
+
+func bypassViaMapLiteral() map[string]providers.Message {
+	return map[string]providers.Message{"k": {Role: "tool", Content: "x"}}
+}
+`
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "bypass.go"), []byte(src), 0o600))
+		violations := scanChokePointBypasses(t, dir)
+		require.Len(t, violations, 1, "the map-literal value must be caught now that the elided Type is resolved: %+v", violations)
+	})
+
+	t.Run("dynamic .Role assignment fails closed (O20 form 2)", func(t *testing.T) {
+		dir := t.TempDir()
+		src := `package agent
+
+func roleFor(x bool) string {
+	if x {
+		return "tool"
+	}
+	return "user"
+}
+
+func bypassViaDynamicAssign(m *providers.Message) {
+	m.Role = roleFor(true)
+}
+`
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "bypass.go"), []byte(src), 0o600))
+		violations := scanChokePointBypasses(t, dir)
+		require.Len(t, violations, 1, "an unresolvable RHS must fail closed, not be silently waved through: %+v", violations)
+		assert.Contains(t, violations[0].kind, "fails closed")
+
+		t.Run("no false positive: assigning a resolvable non-tool literal", func(t *testing.T) {
+			cleanDir := t.TempDir()
+			cleanSrc := `package agent
+
+func legitAssign(m *providers.Message) {
+	m.Role = "user"
+}
+`
+			require.NoError(t, os.WriteFile(filepath.Join(cleanDir, "clean.go"), []byte(cleanSrc), 0o600))
+			assert.Empty(t, scanChokePointBypasses(t, cleanDir), "a resolvable, non-tool literal assignment must not be flagged")
+		})
+
+		t.Run("no false positive: assigning a resolvable same-package const", func(t *testing.T) {
+			cleanDir := t.TempDir()
+			cleanSrc := `package agent
+
+const roleUser = "user"
+
+func legitConstAssign(m *providers.Message) {
+	m.Role = roleUser
+}
+`
+			require.NoError(t, os.WriteFile(filepath.Join(cleanDir, "clean.go"), []byte(cleanSrc), 0o600))
+			assert.Empty(t, scanChokePointBypasses(t, cleanDir), "a resolvable same-package const assignment must not be flagged")
+		})
+
+		t.Run("still catches the resolvable direct literal (regression guard)", func(t *testing.T) {
+			litDir := t.TempDir()
+			litSrc := `package agent
+
+func directLiteralAssign(m *providers.Message) {
+	m.Role = "tool"
+}
+`
+			require.NoError(t, os.WriteFile(filepath.Join(litDir, "bypass.go"), []byte(litSrc), 0o600))
+			violations := scanChokePointBypasses(t, litDir)
+			require.Len(t, violations, 1)
+			assert.Equal(t, `assigns .Role = "tool" outside the choke point`, violations[0].kind)
+		})
+	})
 }
 
 // B-12 / DS-1 #3: the incident-size MCP result enters at ≤ 62,500 chars, the

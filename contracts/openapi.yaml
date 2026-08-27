@@ -4601,8 +4601,21 @@ paths:
         `{"error":"provider does not support sign-in"}` when the provider's
         catalog row does not list `sign_in` in `auth_methods`, and for `xai`
         specifically when no client id is configured. Rate-limited like the
-        auth endpoints. adminWrap: 401 unauthenticated, 503 under dev-mode
-        bypass.
+        auth endpoints. Requires authentication — except inside ADR-068
+        FR-050's pre-auth window: while onboarding is incomplete AND this
+        instance has no authentication authority yet (no configured users,
+        no OMNIPUS_BEARER_TOKEN), an anonymous caller is admitted past the
+        authentication check too, because onboarding step 3 needs a working
+        sign-in flow before any admin account exists to authenticate as.
+        That window fails CLOSED — an unreadable or unparseable onboarding
+        state counts as complete, not as a fresh install. Outside the
+        window an unauthenticated caller gets 401 unconditionally. The
+        route's own authorization layer (requireAdminAuthz) enforces ONLY
+        the dev-mode-bypass guard, not authentication, so any caller who
+        reaches it — authenticated, or anonymous inside the pre-auth window
+        — gets 503 under dev-mode bypass and otherwise proceeds: inside the
+        window an anonymous caller can mint a real device code or trigger a
+        vendor CLI login prompt exactly as an authenticated caller could.
       tags:
       - Providers
       security:
@@ -4638,8 +4651,23 @@ paths:
         entry is success), emits audit event `provider.signed_out`, and the
         row returns to `not_signed_in`. Only meaningful for `device_code`
         providers — `cli_login` providers hold no Omnipus-side credential to
-        delete and this is a no-op success for them too. adminWrap: 401
-        unauthenticated, 503 under dev-mode bypass.
+        delete and this is a no-op success for them too. Requires
+        authentication — except inside ADR-068 FR-050's pre-auth window:
+        while onboarding is incomplete AND this instance has no
+        authentication authority yet (no configured users, no
+        OMNIPUS_BEARER_TOKEN), an anonymous caller is admitted past the
+        authentication check too, for the same reason its POST sibling is
+        (onboarding step 3 needs a working sign-in flow before any admin
+        account exists to authenticate as). That window fails CLOSED — an
+        unreadable or unparseable onboarding state counts as complete, not
+        as a fresh install. Outside the window an unauthenticated caller
+        gets 401 unconditionally. The route's own authorization layer
+        (requireAdminAuthz) enforces ONLY the dev-mode-bypass guard, not
+        authentication, so any caller who reaches it — authenticated, or
+        anonymous inside the pre-auth window — gets 503 under dev-mode
+        bypass and otherwise proceeds: inside the window an anonymous
+        caller can revoke another account's vendor sign-in before any admin
+        account exists.
       tags:
       - Providers
       security:
@@ -4682,7 +4710,20 @@ paths:
         while an open device-code session awaits approval. A missing CLI
         binary is reported on the Provider row as `disconnected`, not here.
         Returns 400 `{"error":"provider does not support sign-in"}` for
-        providers without `sign_in`. adminWrap: 401 / 503 under bypass.
+        providers without `sign_in`. Requires authentication — except
+        inside ADR-068 FR-050's pre-auth window: while onboarding is
+        incomplete AND this instance has no authentication authority yet
+        (no configured users, no OMNIPUS_BEARER_TOKEN), an anonymous caller
+        is admitted past the authentication check too, for the same reason
+        its sibling sign-in routes are (onboarding step 3 needs a working
+        sign-in flow before any admin account exists to authenticate as).
+        That window fails CLOSED — an unreadable or unparseable onboarding
+        state counts as complete, not as a fresh install. Outside the
+        window an unauthenticated caller gets 401 unconditionally. The
+        route's own authorization layer (requireAdminAuthz) enforces ONLY
+        the dev-mode-bypass guard, not authentication, so any caller who
+        reaches it — authenticated, or anonymous inside the pre-auth window
+        — gets 503 under dev-mode bypass and otherwise proceeds.
       tags:
       - Providers
       security:
@@ -4721,8 +4762,22 @@ paths:
         `expires_at` (ceiling 15 minutes) and is single-use — an
         unknown or already-resolved `device_auth_id` returns 404. Never
         returns the vendor's device code. Rate-limited like the auth
-        endpoints. adminWrap: 401 unauthenticated, 503 under dev-mode
-        bypass.
+        endpoints. Requires authentication — except inside ADR-068 FR-050's
+        pre-auth window: while onboarding is incomplete AND this instance
+        has no authentication authority yet (no configured users, no
+        OMNIPUS_BEARER_TOKEN), an anonymous caller is admitted past the
+        authentication check too, for the same reason its sibling sign-in
+        routes are (onboarding step 3 needs a working sign-in flow before
+        any admin account exists to authenticate as). That window fails
+        CLOSED — an unreadable or unparseable onboarding state counts as
+        complete, not as a fresh install. Outside the window an
+        unauthenticated caller gets 401 unconditionally. The route's own
+        authorization layer (requireAdminAuthz) enforces ONLY the
+        dev-mode-bypass guard, not authentication, so any caller who
+        reaches it — authenticated, or anonymous inside the pre-auth window
+        — gets 503 under dev-mode bypass and otherwise proceeds: inside the
+        window an anonymous caller can complete another account's
+        device-code sign-in before any admin account exists.
       tags:
       - Providers
       security:
@@ -4769,8 +4824,22 @@ paths:
         ends at the copied token's `exp` with no further refresh. The
         source file's bytes and mtime are left unchanged (read-only,
         FR-007). Returns 404 `{"error":"no codex login found"}` when the
-        file is absent or unreadable. adminWrap: 401 unauthenticated, 503
-        under dev-mode bypass.
+        file is absent or unreadable. Requires authentication — except
+        inside ADR-068 FR-050's pre-auth window: while onboarding is
+        incomplete AND this instance has no authentication authority yet
+        (no configured users, no OMNIPUS_BEARER_TOKEN), an anonymous caller
+        is admitted past the authentication check too, for the same reason
+        its sibling sign-in routes are (onboarding step 3 needs a working
+        sign-in flow before any admin account exists to authenticate as).
+        That window fails CLOSED — an unreadable or unparseable onboarding
+        state counts as complete, not as a fresh install. Outside the
+        window an unauthenticated caller gets 401 unconditionally. The
+        route's own authorization layer (requireAdminAuthz) enforces ONLY
+        the dev-mode-bypass guard, not authentication, so any caller who
+        reaches it — authenticated, or anonymous inside the pre-auth window
+        — gets 503 under dev-mode bypass and otherwise proceeds: inside the
+        window an anonymous caller can write a live vendor credential into
+        the encrypted store before any admin account exists.
       tags:
       - Providers
       security:

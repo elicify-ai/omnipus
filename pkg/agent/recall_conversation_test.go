@@ -1268,3 +1268,205 @@ func TestRecallConversation_CatalogMirrorParametersInSync(t *testing.T) {
 			"pkg/tools/recall_conversation_meta.go in sync with pkg/agent/recall_conversation.go", got, want)
 	}
 }
+
+// --- O15: cap marks on re-injected recall pages must cite the REAL turn ----
+//
+// Before the fix, buildRecallSpanMessages (turn_range/query/time mode) and
+// executeToolCallID (tool_call_id mode) both passed nil as capMarkOrEmpty's
+// archive argument. turnNumberForArchiveLine(nil, line) always returns 1
+// regardless of line (the loop over a nil/empty archive never executes), so
+// every capped mark on a re-injected page read "turn":1 even when the
+// result was really from turn 3, 4, or later. The fix threads the ALREADY
+// KNOWN correct turn number (ordinals[i] in buildRecallSpanMessages,
+// hit.TurnNum/turnNum in executeToolCallID) straight into the mark instead
+// of re-deriving it from an archive that was never passed.
+
+// TestRecallConversation_CapMarkCarriesRealTurn pins the fix in
+// buildRecallSpanMessages with TWO DIFFERENT captured turns in the SAME
+// span — the only way to prove the turn number varies with the result
+// rather than being hardcoded, since a single-turn test cannot distinguish
+// "correctly computed" from "coincidentally 1". It also guards the
+// numbering CONVENTION, not just non-1-ness: an earlier version of this
+// fix used the raw conversational ordinal (ordinals[i] = 2, 4), which is
+// off by one against turnNumberForArchiveLine's "1 + user lines strictly
+// preceding" convention used by every OTHER mark-producing call site
+// (tool_result_admit.go, projection.go, empty_in_place.go,
+// midturn_budget.go, and executeToolCallID's hit.TurnNum) — see
+// recall_mark_test.go's "turn number counts only preceding user lines"
+// subtest for the same +1 arithmetic pinned independently. Expecting 3 and
+// 5 here (not 2 and 4) catches a regression back to that inconsistent
+// convention, not just a regression back to hardcoded 1.
+//
+// Exercised by calling buildRecallSpanMessages directly (not through
+// Execute/turn_range): two oversized (capped) tool results cannot coexist
+// in one recallRangeTokens=8000 budget through the public API — a single
+// capped-size result (>64,000 chars, ~16,000+ estimated tokens) already
+// exceeds the WHOLE turn_range token budget on its own, so Execute's
+// budget-selection step would always drop the second of two oversized
+// turns before buildRecallSpanMessages ever saw both, regardless of the
+// O15 bug. Building keptIdxs/turns/ordinals/archive by hand is the only
+// way to get two genuinely capped results into one span for this
+// assertion.
+func TestRecallConversation_CapMarkCarriesRealTurn(t *testing.T) {
+	bigA := strings.Repeat("A", 70_000) // over the 64,000-char builtin-success cap
+	bigB := strings.Repeat("B", 70_000)
+
+	turns := []archiveTurn{
+		{startIdx: 0, msgs: []memory.ArchivedMessage{makeUserMsg("turn one"), makeAssistantMsg("assistant one")}},
+		{startIdx: 2, msgs: []memory.ArchivedMessage{
+			makeUserMsg("turn two"),
+			makeAssistantWithTool("looking that up", "call_a", "read_file"),
+			makeToolResultMsg("call_a", bigA),
+		}},
+		{startIdx: 5, msgs: []memory.ArchivedMessage{makeUserMsg("turn three"), makeAssistantMsg("assistant three")}},
+		{startIdx: 7, msgs: []memory.ArchivedMessage{
+			makeUserMsg("turn four"),
+			makeAssistantWithTool("looking that up too", "call_b", "read_file"),
+			makeToolResultMsg("call_b", bigB),
+		}},
+	}
+	// archive is turns flattened in order — its indices must line up with
+	// each archiveTurn.startIdx above (0, 2, 5, 7), which they do by
+	// construction here.
+	var archive []memory.ArchivedMessage
+	for _, trn := range turns {
+		archive = append(archive, trn.msgs...)
+	}
+	// Recall turns 2 and 4 (0-based idx 1 and 3), bypassing Execute's
+	// token-budget selection — see the func doc above for why.
+	keptIdxs := []int{1, 3}
+	ordinals := []int{2, 4}
+	policy := capPolicyFor(config.ContextSettings{}, 0) // budget 0: no clamp; shipped default 64,000-char builtin-success cap
+
+	msgs := buildRecallSpanMessages(keptIdxs, turns, ordinals, policy, archive)
+
+	// bigA's tool result is archive line 4 (turns[1].startIdx=2 + j=2); two
+	// user lines (idx0, idx2) strictly precede it -> turnNumberForArchiveLine
+	// = 3. bigB's tool result is archive line 9 (turns[3].startIdx=7 + j=2);
+	// four user lines (idx0, idx2, idx5, idx7) strictly precede it -> 5.
+	var sawTurn3, sawTurn5 bool
+	for _, m := range msgs {
+		if m.Role != "tool" {
+			continue
+		}
+		switch {
+		case strings.Contains(m.Content, `"turn":3`):
+			sawTurn3 = true
+		case strings.Contains(m.Content, `"turn":5`):
+			sawTurn5 = true
+		case strings.Contains(m.Content, `"turn":1`), strings.Contains(m.Content, `"turn":2`), strings.Contains(m.Content, `"turn":4`):
+			t.Errorf("a re-injected result reported the wrong turn (O15 hardcoded-1 bug, or the off-by-one ordinals[i] convention): %.200s", m.Content)
+		}
+	}
+	if !sawTurn3 {
+		t.Errorf("the turn-2 (bigA) result's cap mark must cite turn 3 (O15 + turnNumberForArchiveLine convention)")
+	}
+	if !sawTurn5 {
+		t.Errorf("the turn-4 (bigB) result's cap mark must cite turn 5 (O15 + turnNumberForArchiveLine convention)")
+	}
+}
+
+// TestRecallConversation_TurnRange_CapMarkCitesRealTurn is the end-to-end
+// counterpart of the direct unit test above: it drives the REAL public
+// entry point (Execute with turn_range) for a result that lives in
+// conversational turn 3 (not turn 1), so a hardcoded fallback to 1 is
+// distinguishable from the correct answer. turn_range "3-3" selects a
+// single turn, which Execute's budget selection always keeps regardless of
+// size (the first selected turn is never dropped by the token cap), so
+// this — unlike the two-turn case above — is reachable through Execute
+// directly.
+//
+// Expected mark is "turn":4, not "turn":3: turnNumberForArchiveLine (what
+// the fix now routes through) is 1 + the count of role:user lines
+// STRICTLY BEFORE the tool result's line, and that count includes the
+// result's OWN turn's opening user line — three user lines (turn one, turn
+// two, turn three) precede this tool result, so 3+1=4. See
+// TestRecallConversation_CapMarkCarriesRealTurn's doc for the same
+// arithmetic verified directly against buildRecallSpanMessages, and
+// recall_mark_test.go's "turn number counts only preceding user lines" for
+// the identical convention pinned independently against buildRecallMark.
+func TestRecallConversation_TurnRange_CapMarkCitesRealTurn(t *testing.T) {
+	big := strings.Repeat("Q", 70_000)
+	archive := &stubArchive{msgs: []memory.ArchivedMessage{
+		makeUserMsg("turn one"), makeAssistantMsg("assistant one"),
+		makeUserMsg("turn two"), makeAssistantMsg("assistant two"),
+		makeUserMsg("turn three"),
+		makeAssistantWithTool("looking that up", "call_big", "read_file"),
+		makeToolResultMsg("call_big", big),
+	}}
+	setter := newStubSpanSetter()
+	tool := makeTool(archive, setter)
+
+	result := tool.Execute(makeCtx("sess-range3"), map[string]any{"turn_range": "3-3"})
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", result.ForLLM)
+	}
+	span := setter.spans["sess-range3"]
+	if span == nil {
+		t.Fatal("no span installed")
+	}
+	combined := joinSpanContent(span)
+	if !strings.Contains(combined, `"turn":4`) {
+		t.Errorf("cap mark for the turn-3 (conversational) result must cite turn 4 (turnNumberForArchiveLine convention, O15), got a mark elsewhere in: %.400s", combined)
+	}
+	if strings.Contains(combined, `"turn":1`) {
+		t.Errorf("cap mark must not fall back to the hardcoded turn 1 (O15 regression): %.400s", combined)
+	}
+}
+
+// TestRecallConversation_ToolCallID_SpanCitesRealTurn covers executeToolCallID
+// (the tool_call_id / paging mode), the OTHER call site O15 named. Its
+// span.FromTurn/ToTurn/Ordinals are built from the exact same local turnNum
+// variable (sourced from the streaming scan's hit.TurnNum) that also feeds
+// the page's cap-mark closure — so a wrong turnNum here is the same defect
+// class the mark would show, and is what O15's bug actually broke (both
+// were being computed from turnNumberForArchiveLine(nil, ...) == 1 before
+// the fix routed the mark through the closure over an already-known value
+// instead).
+//
+// The mark closure itself is a documented backstop that "must never fire"
+// (recallPageReserve computes the framing allowance at the worst-case digit
+// width for any valid offset/length, so the actual framing can never
+// exceed it) — confirmed by reading the source, not asserted here — so it
+// cannot be forced to render through the public API without contriving an
+// impossible page size. This test instead proves turnNum itself, which the
+// closure would receive verbatim, is the real (non-1, non-hardcoded) value.
+//
+// Expected turn is 4, not 3: hit.TurnNum (like turnNumberForArchiveLine,
+// which it mirrors exactly — see recall_mark_test.go's "turn number counts
+// only preceding user lines" subtest for the same +1 arithmetic pinned
+// against a hand-built archive) is 1 + the count of role:user lines
+// STRICTLY BEFORE the tool result's own line — and that count includes the
+// result's OWN owning turn's user line, not just the turns before it. Three
+// user lines (turn one / turn two / turn three) precede the tool result
+// here, so TurnNum = 3 + 1 = 4. This offset is pre-existing, untouched by
+// the O15 fix, and shared by every OTHER buildRecallMark call site in the
+// codebase — not something to "correct" here.
+func TestRecallConversation_ToolCallID_SpanCitesRealTurn(t *testing.T) {
+	const id = "call_x"
+	archive := &scanArchive{msgs: []memory.ArchivedMessage{
+		makeUserMsg("turn one"), makeAssistantMsg("assistant one"),
+		makeUserMsg("turn two"), makeAssistantMsg("assistant two"),
+		makeUserMsg("turn three"),
+		makeAssistantWithTool("", id, "read_file"),
+		makeToolResultMsg(id, "small result content"),
+	}}
+	setter := newStubSpanSetter()
+	tool := makeTool(archive, setter)
+
+	res := tool.Execute(makeCtx("sess-turn4"), map[string]any{"tool_call_id": id})
+	if res.IsError {
+		t.Fatalf("unexpected error: %s", res.ForLLM)
+	}
+	span, ok := setter.spans["sess-turn4"]
+	if !ok {
+		t.Fatal("no span installed")
+	}
+	const wantTurn = 4
+	if span.FromTurn != wantTurn || span.ToTurn != wantTurn {
+		t.Errorf("expected FromTurn=ToTurn=%d, got %d/%d (O15: hardcoded-turn-1 regression)", wantTurn, span.FromTurn, span.ToTurn)
+	}
+	if len(span.Ordinals) != 1 || span.Ordinals[0] != wantTurn {
+		t.Errorf("span ordinals must be [%d], got %v (O15: hardcoded-turn-1 regression)", wantTurn, span.Ordinals)
+	}
+}

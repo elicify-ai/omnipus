@@ -99,6 +99,205 @@ func TestFactory_NoVendorCases(t *testing.T) {
 		}
 		return true
 	})
+
+	// ── no if/else-if ladder emulates the banned vendor switch (O17) ─────
+	// collectSwitches above only ever finds *ast.SwitchStmt nodes, so a
+	// `case "z-ai", "zhipu":`-shaped vendor dispatch spelled as
+	// `if cfg.Provider == "z-ai" { ... } else if cfg.Provider == "zhipu"
+	// { ... }` changes neither the switch count nor its case set and would
+	// pass untouched. scanVendorLadder closes that gap.
+	for _, v := range scanVendorLadder(fset, file) {
+		t.Errorf("%s: an if/else-if ladder compares to a string literal — a vendor case in `if` "+
+			"clothing; ADR-067 D11 removed vendor branching, not just vendor `switch` cases", v.pos)
+	}
+}
+
+// vendorLadderViolation is one if/else-if chain scanVendorLadder judged to
+// be a vendor switch in disguise (O17).
+type vendorLadderViolation struct {
+	pos string
+}
+
+// scanVendorLadder finds every if/else-if ladder (2+ branches linked by
+// `else if`) in file where at least one branch's condition contains a
+// `==`/`!=` comparison against a string literal — the if-statement
+// equivalent of `switch id { case "z-ai": ...; case "zhipu": ... }`.
+//
+// A LONE `if` (Else == nil, or a single trailing plain `else` block with no
+// further `else if`) is deliberately NOT flagged: factory_provider.go has
+// exactly one such case today — `if cfg.Provider == "openai-chatgpt" { ...
+// }` inside CreateProviderFromConfig, a reviewed, single-branch OAuth
+// special case (ADR-068 §8b) with no case-like, multi-branch structure to
+// it. Only a genuine ladder — two or more branches chained by `else if` —
+// resembles a vendor switch; that is the shape O17 named.
+func scanVendorLadder(fset *token.FileSet, file *ast.File) []vendorLadderViolation {
+	var out []vendorLadderViolation
+	consumed := map[*ast.IfStmt]bool{}
+	ast.Inspect(file, func(n ast.Node) bool {
+		ifStmt, ok := n.(*ast.IfStmt)
+		if !ok || consumed[ifStmt] {
+			return true
+		}
+		chain := []*ast.IfStmt{ifStmt}
+		cur := ifStmt
+		for cur.Else != nil {
+			next, ok := cur.Else.(*ast.IfStmt)
+			if !ok {
+				break
+			}
+			chain = append(chain, next)
+			cur = next
+		}
+		for _, link := range chain {
+			consumed[link] = true
+		}
+		if len(chain) < 2 {
+			return true
+		}
+		for _, link := range chain {
+			if exprHasStringCompare(link.Cond) {
+				out = append(out, vendorLadderViolation{pos: fset.Position(ifStmt.Pos()).String()})
+				break
+			}
+		}
+		return true
+	})
+	return out
+}
+
+// exprHasStringCompare reports whether e contains a `==`/`!=` comparison
+// against a string literal anywhere within it, so a combined condition like
+// `cfg.Provider == "z-ai" || cfg.Provider == "zhipu"` inside one `if` also
+// counts as vendor-shaped.
+func exprHasStringCompare(e ast.Expr) bool {
+	found := false
+	ast.Inspect(e, func(n ast.Node) bool {
+		be, ok := n.(*ast.BinaryExpr)
+		if !ok || (be.Op != token.EQL && be.Op != token.NEQ) {
+			return true
+		}
+		if isStringBasicLit(be.X) || isStringBasicLit(be.Y) {
+			found = true
+		}
+		return true
+	})
+	return found
+}
+
+func isStringBasicLit(e ast.Expr) bool {
+	lit, ok := e.(*ast.BasicLit)
+	return ok && lit.Kind == token.STRING
+}
+
+// TestFactory_NoVendorCases_CatchesIfElseLadder pins the O17 fix in
+// isolation: scanVendorLadder is exercised directly against synthetic
+// sources (parser.ParseFile accepts source text with no file on disk, so no
+// fixture directory is needed), independent of whether real code today
+// happens to contain a violation.
+func TestFactory_NoVendorCases_CatchesIfElseLadder(t *testing.T) {
+	parse := func(t *testing.T, src string) (*token.FileSet, *ast.File) {
+		t.Helper()
+		fset := token.NewFileSet()
+		file, err := parser.ParseFile(fset, "fixture.go", src, 0)
+		if err != nil {
+			t.Fatalf("parse fixture: %v", err)
+		}
+		return fset, file
+	}
+
+	t.Run("an if/else-if ladder on a vendor id is caught", func(t *testing.T) {
+		fset, file := parse(t, `package providers
+
+func dispatch(cfg *config.ModelConfig) int {
+	if cfg.Provider == "z-ai" {
+		return 1
+	} else if cfg.Provider == "zhipu" {
+		return 2
+	} else {
+		return 0
+	}
+}
+`)
+		violations := scanVendorLadder(fset, file)
+		if len(violations) != 1 {
+			t.Fatalf("want exactly 1 violation, got %d: %+v", len(violations), violations)
+		}
+	})
+
+	t.Run("a combined-condition ladder (||) is also caught", func(t *testing.T) {
+		fset, file := parse(t, `package providers
+
+func dispatch(cfg *config.ModelConfig) int {
+	if cfg.Provider == "z-ai" || cfg.Provider == "zhipu" {
+		return 1
+	} else if cfg.Provider == "anthropic" {
+		return 2
+	}
+	return 0
+}
+`)
+		if len(scanVendorLadder(fset, file)) != 1 {
+			t.Fatalf("combined-condition ladder must be caught: %+v", scanVendorLadder(fset, file))
+		}
+	})
+
+	t.Run("no false positive: a lone if with no else-if chain", func(t *testing.T) {
+		fset, file := parse(t, `package providers
+
+func dispatch(cfg *config.ModelConfig) {
+	if cfg.Provider == "openai-chatgpt" {
+		return
+	}
+}
+`)
+		if v := scanVendorLadder(fset, file); len(v) != 0 {
+			t.Errorf("a lone if (no else-if chain) must not be flagged as a ladder: %+v", v)
+		}
+	})
+
+	t.Run("no false positive: an if/else-if ladder with no string comparison", func(t *testing.T) {
+		fset, file := parse(t, `package providers
+
+func dispatch(n int) int {
+	if n == 1 {
+		return 1
+	} else if n == 2 {
+		return 2
+	}
+	return 0
+}
+`)
+		if v := scanVendorLadder(fset, file); len(v) != 0 {
+			t.Errorf("an int-comparison ladder must not be flagged: %+v", v)
+		}
+	})
+
+	t.Run("no false positive: a plain if/else with a single condition (not a ladder)", func(t *testing.T) {
+		fset, file := parse(t, `package providers
+
+func dispatch(cfg *config.ModelConfig) int {
+	if cfg.Provider == "openai-chatgpt" {
+		return 1
+	} else {
+		return 0
+	}
+}
+`)
+		if v := scanVendorLadder(fset, file); len(v) != 0 {
+			t.Errorf("a single-condition if/else (no else-if) must not be flagged: %+v", v)
+		}
+	})
+
+	t.Run("real factory_provider.go has no such ladder", func(t *testing.T) {
+		fset := token.NewFileSet()
+		file, err := parser.ParseFile(fset, "factory_provider.go", nil, parser.ParseComments)
+		if err != nil {
+			t.Fatalf("parse factory_provider.go: %v", err)
+		}
+		if v := scanVendorLadder(fset, file); len(v) != 0 {
+			t.Errorf("factory_provider.go must have zero vendor-ladder violations: %+v", v)
+		}
+	})
 }
 
 // TestFactory_NoRetiredHelpers asserts the five deleted symbols stay deleted.

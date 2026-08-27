@@ -308,7 +308,7 @@ func (al *AgentLoop) midTurnPassCanSucceed(
 		line := lineOf(i)
 		tool, _ := owningToolCall(residue, i, m.ToolCallID)
 		full := markSourceContent(m, line, archive)
-		mark, err := buildRecallMark("emptied", tool, m.ToolCallID, line, full, archive)
+		mark, err := buildRecallMark("emptied", tool, m.ToolCallID, line, full, turnNumberForArchiveLine(archive, line))
 		if err != nil {
 			// buildRecallMark reported the marshal failure; mirror
 			// emptyOldestFirst's own fallback (empty_in_place.go) so the

@@ -432,7 +432,7 @@ func (t *RecallConversationTool) Execute(ctx context.Context, args map[string]an
 		ordinals[i] = idx + 1
 	}
 
-	spanMsgs := buildRecallSpanMessages(keptIdxs, turns, ordinals, t.recallCapPolicy())
+	spanMsgs := buildRecallSpanMessages(keptIdxs, turns, ordinals, t.recallCapPolicy(), archived)
 	// M7: use newRecallSpan so Tokens is always Σ estimateMessageTokens(Msgs).
 	span := newRecallSpan(fromTurnNum, toTurnNum, spanMsgs, ordinals)
 
@@ -510,6 +510,7 @@ func buildRecallSpanMessages(
 	turns []archiveTurn,
 	ordinals []int,
 	policy resultCapPolicy,
+	archive []memory.ArchivedMessage,
 ) []providers.Message {
 	// demarcation marker (FR-019): honest about contiguous vs sparse coverage.
 	var markerText string
@@ -599,9 +600,10 @@ func buildRecallSpanMessages(
 				// — so the model can page the full content.
 				archiveLine := trn.startIdx + j
 				toolName, _ := owningToolCall(out, len(out), m.ToolCallID)
+				turnNum := turnNumberForArchiveLine(archive, archiveLine)
 				m.Content, _ = projectToolResult(m.Content, policy.effectiveCap(surfaceBuiltinSuccess, 1),
 					func(full string) string {
-						return capMarkOrEmpty(toolName, originalID, archiveLine, full, nil)
+						return capMarkOrEmpty(toolName, originalID, archiveLine, full, turnNum)
 					})
 			}
 			out = append(out, m)
@@ -955,7 +957,7 @@ func (t *RecallConversationTool) executeToolCallID(
 	page.ToolCallID = recallID
 	page.ToolCalls = nil
 	pageBody, pageCut := projectToolResult(pageContent, capChars,
-		func(full string) string { return capMarkOrEmpty(provName, id, line, full, nil) })
+		func(full string) string { return capMarkOrEmpty(provName, id, line, full, turnNum) })
 	page.Content = pageBody
 	if pageCut {
 		slog.Warn("recall_conversation: page cut by the result cap after framing — page sizing is wrong",

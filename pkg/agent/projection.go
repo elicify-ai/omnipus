@@ -74,13 +74,13 @@ func projectMessages(
 			capChars := pc.policy.effectiveCap(
 				toolResultSurfaceFor(tool, state == memory.ProjectionCappedFailure), parallelN)
 			out[i].Content, _ = projectToolResult(m.Content, capChars, func(full string) string {
-				return capMarkOrEmpty(tool, m.ToolCallID, line, full, pc.archive)
+				return capMarkOrEmpty(tool, m.ToolCallID, line, full, turnNumberForArchiveLine(pc.archive, line))
 			})
 		case memory.ProjectionEmptied:
 			// Size from the archive line (the full result), not from the
 			// handed-in copy — same source the live pass uses
 			// (empty_in_place.go's markSourceContent), same bytes.
-			mark, err := buildRecallMark("emptied", tool, m.ToolCallID, line, markSourceContent(m, line, pc.archive), pc.archive)
+			mark, err := buildRecallMark("emptied", tool, m.ToolCallID, line, markSourceContent(m, line, pc.archive), turnNumberForArchiveLine(pc.archive, line))
 			if err != nil {
 				// buildRecallMark already reported the marshal failure. An
 				// empty content is still "emptied" — the window must not
