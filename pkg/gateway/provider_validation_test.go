@@ -624,7 +624,7 @@ func TestAudit_ProbeAndTestNotAudited(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/probe-provider", strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
-		api.HandleOnboardingProbeProvider(w, req)
+		api.HandleOnboardingProbeProvider(w, withFreshInstallConfig(req))
 		require.Equal(t, http.StatusOK, w.Code)
 	})
 
@@ -935,7 +935,7 @@ func TestOnboardingProbe_NoCreditWarns(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/probe-provider", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
-	api.HandleOnboardingProbeProvider(w, req)
+	api.HandleOnboardingProbeProvider(w, withFreshInstallConfig(req))
 
 	require.Equal(t, http.StatusOK, w.Code)
 	var resp gen.ProbeProviderResponse

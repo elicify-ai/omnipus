@@ -841,6 +841,28 @@ func TestHandleCompleteOnboarding_ConcurrentDifferentUsers(t *testing.T) {
 
 // probeProviderWithUpstream points the probe at a stub httptest server that
 // mimics the OpenAI /v1/models shape. Used to avoid hitting real provider APIs.
+// withFreshInstallConfig injects the per-request config snapshot that
+// configSnapshotMiddleware installs on EVERY real request (gateway.go wraps
+// the whole handler chain with it), carrying what a fresh install actually
+// has: a config with no gateway.users, i.e. no authentication authority yet.
+//
+// Required by any test that calls an /onboarding handler DIRECTLY instead of
+// through the mux, on an api built with a nil agentLoop. Those handlers' shared
+// pre-auth window gate fails CLOSED when it can find no config at all to judge
+// the request against — a config you cannot read cannot tell you whether users
+// exist, so "unknown" must never mean "open" (see preAuthOnboardingWindowGate).
+//
+// Production can never reach that branch: withOptionalAuth would have
+// nil-dereferenced a.agentLoop long before the handler ran, so an instance with
+// neither a snapshot nor a loop does not exist outside a direct-call test. This
+// helper closes that fidelity gap rather than relaxing the gate — without it
+// these tests are answered 409 by the gate whatever they meant to assert, and
+// TestHandleOnboardingProbeProvider_AlreadyComplete in particular would pass
+// for the wrong reason.
+func withFreshInstallConfig(r *http.Request) *http.Request {
+	return r.WithContext(withConfigSnapshot(r.Context(), &config.Config{}))
+}
+
 func probeProviderWithUpstream(t *testing.T, upstream string, body string, api *restAPI) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/probe-provider",
@@ -848,7 +870,7 @@ func probeProviderWithUpstream(t *testing.T, upstream string, body string, api *
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	_ = upstream
-	api.HandleOnboardingProbeProvider(w, req)
+	api.HandleOnboardingProbeProvider(w, withFreshInstallConfig(req))
 	return w
 }
 
@@ -1071,7 +1093,7 @@ func TestHandleOnboardingProbeProvider_WrongMethod(t *testing.T) {
 	for _, m := range []string{http.MethodGet, http.MethodPut, http.MethodDelete} {
 		req := httptest.NewRequest(m, "/api/v1/onboarding/probe-provider", nil)
 		w := httptest.NewRecorder()
-		api.HandleOnboardingProbeProvider(w, req)
+		api.HandleOnboardingProbeProvider(w, withFreshInstallConfig(req))
 		assert.Equal(t, http.StatusMethodNotAllowed, w.Code,
 			"verb %s must be rejected", m)
 	}
@@ -1117,7 +1139,7 @@ func TestHandleOnboardingProbeProvider_PublicModelsBadKey(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
-	api.HandleOnboardingProbeProvider(w, req)
+	api.HandleOnboardingProbeProvider(w, withFreshInstallConfig(req))
 
 	assert.Equal(t, http.StatusOK, w.Code)
 	var resp map[string]any
@@ -1170,7 +1192,7 @@ func TestHandleOnboardingProbeProvider_PublicModelsGoodKey(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
-	api.HandleOnboardingProbeProvider(w, req)
+	api.HandleOnboardingProbeProvider(w, withFreshInstallConfig(req))
 
 	assert.Equal(t, http.StatusOK, w.Code)
 	var resp map[string]any
@@ -1233,7 +1255,7 @@ func TestHandleOnboardingProbeProvider_SSRFBlocksInternalEndpoint(t *testing.T) 
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
-	api.HandleOnboardingProbeProvider(w, req)
+	api.HandleOnboardingProbeProvider(w, withFreshInstallConfig(req))
 
 	assert.Equal(t, http.StatusUnprocessableEntity, w.Code, "body=%s", w.Body.String())
 	var resp map[string]any
@@ -1272,7 +1294,7 @@ func TestHandleOnboardingProbeProvider_SSRFAllowsAllowlistedLoopback(t *testing.
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
-	api.HandleOnboardingProbeProvider(w, req)
+	api.HandleOnboardingProbeProvider(w, withFreshInstallConfig(req))
 
 	assert.Equal(t, http.StatusOK, w.Code)
 	var resp map[string]any
@@ -1551,7 +1573,7 @@ func TestHandleOnboardingProbeProvider_EmptyModelsWarns(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
-	api.HandleOnboardingProbeProvider(w, req)
+	api.HandleOnboardingProbeProvider(w, withFreshInstallConfig(req))
 
 	assert.Equal(t, http.StatusOK, w.Code)
 	var resp map[string]any
