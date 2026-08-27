@@ -494,3 +494,44 @@ func TestOnboardingComplete_ReservedLiteralID(t *testing.T) {
 	assert.Equal(t, "id", m["field"])
 	assert.False(t, api.onboardingMgr.IsComplete(), "nothing may be persisted on a reserved id")
 }
+
+// TestDefaultModel_PutAudit_RecordsActorAndSourceIP is a follow-up to O6
+// (see pkg/gateway/rest_sign_in_findings_test.go): the
+// provider.default_model.changed audit entry must carry the authenticated
+// actor (User) and the caller's source_ip, matching the pattern already
+// applied to the sign-in emitters and auditCopilotProbe
+// (rest_signin_copilot.go). Without this, an operator investigating who
+// changed the default model finds an entry indistinguishable from an
+// anonymous or dev-mode-bypass caller.
+func TestDefaultModel_PutAudit_RecordsActorAndSourceIP(t *testing.T) {
+	rows := []*config.ModelConfig{
+		{
+			Name: "before", Provider: "provider-a", Model: "model-before",
+			APIBase: "https://a.example/v1", Protocol: "openai-compatible",
+		},
+		{
+			Name: "after", Provider: "provider-b", Model: "model-after",
+			APIBase: "https://b.example/v1", Protocol: "openai-compatible",
+		},
+	}
+	api, _, auditDir := newDefaultModelAPI(
+		t, config.DefaultModel{Provider: "provider-a", Model: "model-before"}, rows, &restMockProvider{})
+
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/providers/default-model",
+		strings.NewReader(`{"provider":"provider-b","model":"model-after"}`))
+	r.Header.Set("Content-Type", "application/json")
+	r.RemoteAddr = "203.0.113.77:6060"
+	r = r.WithContext(context.WithValue(r.Context(), ctxkey.UserContextKey{}, &config.UserConfig{Username: "dana"}))
+	w := httptest.NewRecorder()
+	api.HandleDefaultModel(w, r)
+	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+
+	found := findAuditEvent(t, auditDir, "provider.default_model.changed")
+	require.NotNil(t, found, "audit entry provider.default_model.changed must exist")
+	assert.Equal(t, "dana", found["user"],
+		"the audit entry must record the authenticated actor, not be indistinguishable from an anonymous caller")
+	details, ok := found["details"].(map[string]any)
+	require.True(t, ok, "entry must carry a details object")
+	assert.Equal(t, "203.0.113.77", details["source_ip"],
+		"the audit entry must record the caller's source_ip")
+}
