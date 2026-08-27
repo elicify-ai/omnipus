@@ -149,17 +149,51 @@ func registerEntitlementCacheInvalidation(cat *catalog.Catalog, api *restAPI) {
 // handleProviderEntitlement answers POST /api/v1/providers/{id}/entitlement.
 // The caller (HandleProviders) has already split the id off the path.
 //
-// Rate limiting: the route rides the SAME dispatcher, and therefore the same
-// middleware chain, as POST /providers/{id}/test — which is what FR-021's
-// "rate-limited like /test" asks for. Giving this one route a limiter of its
-// own would make it stricter than the endpoint it is specified to match.
+// Rate limiting (O3): providerEntitlementLimiter, 30/minute per IP —
+// FR-021's "rate-limited like /test" at /test's own ceiling, in its own
+// bucket (see the limiter's doc comment in rest_auth.go for why the bucket is
+// separate). contracts/openapi.yaml has declared a 429 on this operation
+// since ADR-067; until this limiter existed that declaration was fiction and
+// the route had no ceiling of any kind. An earlier version of this comment
+// argued a dedicated limiter "would make it stricter than the endpoint it is
+// specified to match" — that was only true because /test had no limiter
+// either. Both have one now.
 func (a *restAPI) handleProviderEntitlement(w http.ResponseWriter, r *http.Request, providerID string) {
-	// Same auth posture as /test: an authenticated user once onboarding is
-	// complete. Pre-onboarding there is no user to be, and nothing
-	// configured to check either — the 404 below answers that case.
-	onboardingDone := a.onboardingMgr != nil && a.onboardingMgr.IsComplete()
-	if onboardingDone && r.Context().Value(UserContextKey{}) == nil {
+	// O3. This route does NOT need the ADR-068 FR-050 pre-auth window, and
+	// keeping one was the whole defect. The gate here used to be the fail-OPEN
+	// `a.onboardingMgr.IsComplete()` idiom: on any state.json load failure the
+	// manager keeps its fresh-install zero value, so a truncated, unreadable
+	// or restored-from-backup state file silently made this route anonymous on
+	// a long-onboarded instance — where, unlike during onboarding, providers
+	// ARE configured and each call spends one real upstream listing request
+	// with the operator's own stored key.
+	//
+	// FR-050 exists for exactly one premise: onboarding step 3 needs a working
+	// provider flow BEFORE an admin account exists. That premise never applied
+	// here. "Check with my account" is a Settings-screen button
+	// (src/components/settings/ProvidersSection.tsx is its only caller); the
+	// onboarding wizard never calls it, and could not use it if it tried,
+	// since it operates on a CONFIGURED provider row and nothing is configured
+	// until POST /onboarding/complete writes config.json. So the correct
+	// posture is the one the contract already declares — `security:
+	// BearerAuth`, 401 — with no window at all, and closing it costs the
+	// first-run flow nothing.
+	//
+	// requestPrincipalAuthenticated, not a bare UserContextKey lookup: the
+	// context key is empty for the documented headless OMNIPUS_BEARER_TOKEN
+	// deployment mode, whose operator is genuinely authenticated and was being
+	// 401'd here.
+	if !a.requestPrincipalAuthenticated(r) {
 		jsonErr(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	// The limiter runs AFTER the auth gate, the opposite order to /test. Only
+	// an authenticated caller can reach the upstream call this bounds, so
+	// refusing anonymous callers first keeps an anonymous flood from
+	// exhausting a real operator's per-IP budget behind the same NAT address.
+	// /test is reachable anonymously during the onboarding window, so its
+	// limiter is the only bound there and must run first.
+	if !rateLimitAllows(w, r, providerEntitlementLimiter) {
 		return
 	}
 	if providerID == "" || isReservedProviderPathSegment(providerID) {
