@@ -231,6 +231,31 @@ var (
 	// start/auth one because the sign-in dialog legitimately re-reads
 	// status alongside every poll.
 	signInStatusLimiter = newAPIRateLimiter(60, 1*time.Minute)
+	// /api/v1/providers/openai-chatgpt/sign-in/import — 10 requests/minute
+	// per IP (M2). This route was called BARE while its four FR-050 siblings
+	// were all wrapped. It is the most write-heavy of the five: every call
+	// re-reads the Codex CLI credential, rewrites the whole encrypted
+	// credentials.json, and re-registers every OAuth value with the
+	// sensitive-value replacer. Matches signInStartLimiter's ceiling — an
+	// import is a one-off operator action with no polling cadence at all.
+	signInImportLimiter = newAPIRateLimiter(10, 1*time.Minute)
+	// DELETE /api/v1/providers/{id}/sign-in — 10 requests/minute per IP
+	// (M2). Also previously bare. Each sign-out nils the process-wide
+	// sensitive-data replacer cache, so the next scrub pays a full
+	// reflection walk of Config under a write lock; an unbounded anonymous
+	// caller could hold the gateway in permanent rebuild churn. Signing out
+	// is a one-off operator action, so it shares the start/import ceiling
+	// rather than the polling one.
+	signInSignOutLimiter = newAPIRateLimiter(10, 1*time.Minute)
+	// GET /api/v1/providers (the list branch) for UNAUTHENTICATED callers
+	// only — 60 requests/minute per IP (C1). Post-onboarding the list is
+	// 401 for anonymous callers and this limiter is never reached;
+	// pre-onboarding it bounds an anonymous client that would otherwise be
+	// able to drive the branch's per-provider upstream /models fetches with
+	// no ceiling whatsoever. Authenticated callers (the Settings screen,
+	// which re-lists on every provider edit) are deliberately not limited
+	// here — they already passed the auth gate.
+	providerListAnonLimiter = newAPIRateLimiter(60, 1*time.Minute)
 )
 
 // clientIP extracts the client IP from the request for rate-limiting and
@@ -302,6 +327,79 @@ func (a *restAPI) clientIPWithLiveFallback(r *http.Request) string {
 		}
 	}
 	return canonicalRemoteIP(r, false)
+}
+
+// preAuthOnboardingWindowOpen reports whether the ADR-068 FR-050 pre-auth
+// window is open — that is, whether a request carrying NO authenticated
+// identity may still reach a provider route that would otherwise require one.
+//
+// FR-050 exists for exactly one reason: onboarding step 3 needs a working
+// provider/sign-in flow BEFORE any admin account exists to authenticate as.
+// The window must therefore close the instant either half of that premise
+// stops holding, and it must close on UNCERTAINTY too.
+//
+// This replaces the bare `a.onboardingMgr != nil && a.onboardingMgr.IsComplete()`
+// test, which failed OPEN (M3). onboarding.NewManager keeps the zero value —
+// OnboardingComplete=false, i.e. "fresh install" — on ANY load failure: an
+// unreadable state.json logs one WARN and proceeds, and an unparseable one is
+// renamed aside and reset. On a long-onboarded instance that silently reopened
+// all five sign-in routes, DELETE (destroys the OAuth grant) and import
+// (writes to the credential store) included, unauthenticated, for the whole
+// process lifetime. Three independent signals now have to agree before the
+// window is treated as open:
+//
+//  1. onboardingStateUnknown — captured in gateway.go BEFORE the manager is
+//     constructed (the manager renames a corrupt file away, so the ambiguity
+//     is unobservable afterwards). An unreadable or unparseable state.json is
+//     "unknown", never "fresh install". A MISSING file stays a genuine fresh
+//     install: that is what a first launch actually looks like.
+//  2. The onboarding manager itself must not report completion.
+//  3. The instance must have no authentication authority yet — no configured
+//     users and no OMNIPUS_BEARER_TOKEN. This is the signal a corrupt
+//     state.json cannot erase, because it lives in config.json/the
+//     environment: if somebody CAN authenticate here, the "no admin account
+//     exists yet" premise is false whatever state.json says.
+//
+// A nil onboardingMgr (test constructions only — gateway.go always sets one)
+// is treated as signal 2 satisfied, leaving signals 1 and 3 to decide.
+func (a *restAPI) preAuthOnboardingWindowOpen(r *http.Request) bool {
+	if a.onboardingStateUnknown {
+		return false
+	}
+	if a.onboardingMgr != nil && a.onboardingMgr.IsComplete() {
+		return false
+	}
+	return !a.hasAuthenticationAuthority(r)
+}
+
+// hasAuthenticationAuthority reports whether this gateway has anything a
+// caller could authenticate AS: a configured user, or the OMNIPUS_BEARER_TOKEN
+// env credential. It mirrors the two authorities checkBearerAuth consults
+// (auth.go) — deliberately not dev_mode_bypass, which is an authentication
+// BYPASS rather than an authority and must never widen a pre-auth window.
+func (a *restAPI) hasAuthenticationAuthority(r *http.Request) bool {
+	cfg := configFromContext(r.Context())
+	if cfg == nil && a.agentLoop != nil {
+		cfg = a.agentLoop.GetConfig()
+	}
+	if cfg != nil && len(cfg.Gateway.Users) > 0 {
+		return true
+	}
+	return strings.TrimSpace(os.Getenv("OMNIPUS_BEARER_TOKEN")) != ""
+}
+
+// requireAuthOutsideOnboarding is the shared gate for the provider routes that
+// FR-050 makes reachable pre-auth. It writes 401 and returns false when the
+// caller is anonymous and the pre-auth window is closed (or of unknown state).
+func (a *restAPI) requireAuthOutsideOnboarding(w http.ResponseWriter, r *http.Request) bool {
+	if r.Context().Value(UserContextKey{}) != nil {
+		return true
+	}
+	if a.preAuthOnboardingWindowOpen(r) {
+		return true
+	}
+	jsonErr(w, http.StatusUnauthorized, "authentication required")
+	return false
 }
 
 // withRateLimit wraps a handler with per-IP rate limiting. On limit exceeded,

@@ -7053,6 +7053,10 @@ Includes session_start events from all agent stores and task lifecycle events.
     alias: "listProviders",
     description: `Returns all configured LLM providers with connection status and available model list.
 Model lists are fetched live from each provider&#x27;s upstream /models endpoint when an API key is present.
+
+Requires authentication. The one exception is ADR-068 FR-050&#x27;s pre-auth window: while onboarding is incomplete AND this instance has no authentication authority yet (no configured users, no OMNIPUS_BEARER_TOKEN), an anonymous caller is answered, because there is no admin account to authenticate as. That window fails CLOSED — an unreadable or unparseable onboarding state counts as complete, not as a fresh install. Outside it an anonymous caller gets 401.
+
+An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; is never present (it is the operator&#x27;s own vendor account identifier) and &#x60;dependents&#x60; is always the empty array (it enumerates the operator&#x27;s agent roster). Both are populated only for an authenticated caller. An anonymous caller is additionally rate-limited to 60 requests/minute per IP, since each call fans out to one upstream /models fetch per configured provider.
 `,
     requestFormat: "json",
     response: z.array(Provider),

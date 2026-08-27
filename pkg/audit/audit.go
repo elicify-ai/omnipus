@@ -195,8 +195,17 @@ func IsValidEventName(e EventName) bool {
 		// "provider.credential_swept" is emitted by the boot-time sweep of
 		// orphaned `<id>_API_KEY` credentials whose provider row is gone
 		// (ADR-068 FR-010 last clause, T068-10).
+		// "provider.sign_in_status_checked" is emitted once per Copilot
+		// sign-in probe (pkg/gateway/rest_signin_copilot.go). That probe
+		// execs the vendor CLI and spends one premium request billed to the
+		// operator when a session exists, and ADR-068 FR-050 makes its route
+		// reachable pre-auth while onboarding is incomplete, so every call
+		// has to be attributable after the fact: details carry the actor
+		// (empty for an anonymous pre-auth caller), source_ip, the resulting
+		// state, and whether the answer came from the cost-avoiding cache.
 		"provider.deleted",
 		"provider.credential_swept",
+		"provider.sign_in_status_checked",
 		// pkg/tools/memory.go: long-term memory write events.
 		// "memory.remember" and "memory.retrospective" are the success-path
 		// events; "memory.rate_limited" is emitted by the v0.2 #155 item 6

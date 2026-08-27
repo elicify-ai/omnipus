@@ -796,6 +796,43 @@ func oauthSensitiveValueRegistrar(getCfg func() *config.Config, store *credentia
 // Never fatal: a locked store, a List failure, or a Delete failure is logged
 // and boot proceeds — the sweep is housekeeping, not a boot gate. A nil
 // auditor (sandbox.audit_log disabled) skips only the audit emission.
+// onboardingStateUnreadable reports whether the onboarding state file exists
+// but cannot be turned into a trustworthy answer to "has this instance been
+// onboarded?" — it is unreadable (permissions, I/O error, a directory in its
+// place) or it is not valid JSON.
+//
+// This MUST be called before onboarding.NewManager (M3): that constructor
+// swallows both cases into OnboardingComplete=false and, for the parse
+// failure, renames the file aside — after which a caller can no longer tell a
+// corrupted long-onboarded instance from a genuine first launch, and the
+// FR-050 pre-auth provider routes reopen unauthenticated for the process
+// lifetime.
+//
+// A MISSING file is NOT unknown: absence is exactly what a real fresh install
+// looks like, and returning true for it would break every first launch.
+//
+// Structural validity (json.Valid) is the whole test on purpose. Whether the
+// parsed document says complete or incomplete is the manager's business; this
+// function answers only "is the manager's answer derived from real data?".
+func onboardingStateUnreadable(home string) bool {
+	statePath := filepath.Join(home, "system", "state.json")
+	data, err := os.ReadFile(statePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false // never onboarded — the genuine fresh-install case
+		}
+		slog.Warn("gateway: onboarding state unreadable — pre-auth provider routes will stay closed",
+			"path", statePath, "error", err)
+		return true
+	}
+	if !json.Valid(data) {
+		slog.Warn("gateway: onboarding state is not valid JSON — pre-auth provider routes will stay closed",
+			"path", statePath)
+		return true
+	}
+	return false
+}
+
 func sweepOrphanedProviderCredentials(cfg *config.Config, store *credentials.Store, auditor *audit.Logger) {
 	if cfg == nil || store == nil || store.IsLocked() {
 		return
@@ -4476,6 +4513,14 @@ func setupAndStartServices(
 	})
 
 	// REST API endpoints for frontend data.
+	//
+	// M3: sample the onboarding state file's READABILITY before constructing
+	// the manager. onboarding.NewManager treats every load failure as a fresh
+	// install (and renames an unparseable file aside), so this is the only
+	// moment at which "corrupt/unreadable" is distinguishable from "genuinely
+	// never onboarded". The FR-050 pre-auth provider routes fail closed on
+	// the unknown case — see preAuthOnboardingWindowOpen (rest_auth.go).
+	onboardingStateUnknown := onboardingStateUnreadable(homePath)
 	onboardingMgr := onboarding.NewManager(homePath)
 	tStore := agent.GetTaskStore(agentLoop)
 	tExecutor := agent.GetTaskExecutor(agentLoop)
@@ -4778,26 +4823,28 @@ func setupAndStartServices(
 		providerCatalog: providerCatalog, // ADR-067: the booted catalog (nil in non-boot tests)
 		allowedOrigin:   allowedOrigin,
 		onboardingMgr:   onboardingMgr,
-		homePath:        homePath,
-		taskStore:       tStore,
-		taskExecutor:    tExecutor,
-		planStore:       planStore, // ADR-049 D1: Plans REST surface (rest_plans.go) + plan_id FK check
-		credStore:       credStore,
-		mediaStore:      runningServices.MediaStore,
-		ssrfChecker:     agent.GetSSRFChecker(agentLoop), // SEC-24: nil when SSRF disabled
-		sandboxResult:   sandboxResult,                   // immutable post-boot snapshot
-		appliedConfig:   mustDeepCopyConfig(cfg),         // boot-time snapshot for pending-restart diff
-		servedSubdirs:   runningServices.servedSubdirs,   // web_serve static-mode token registry
-		devServers:      runningServices.devServers,      // web_serve dev-mode process registry
-		approvalReg:     approvalReg,                     // in-process tool-approval registry (FR-016)
-		builtinRegistry: builtinReg,                      // M16: central builtin registry (FR-001)
-		mcpRegistry:     mcpReg,                          // M16: central MCP registry (FR-001)
-		skillRegistry:   skillRegistry,                   // ClawHub marketplace (search + install-by-slug)
-		allowGodMode:    allowGodMode,                    // god-mode latch (2)
-		notifStore:      runningServices.notifStore,      // #264: notification center
-		auditor:         agentLoop.AuditLogger(),         // shared audit logger for REST mutations
-		selfWriteReg:    selfWriteReg,                    // suppress watcher reload on app-initiated writes
-		taskLock:        task.TaskFileLock,               // shared striped lock for board task RMW
+		// M3: "unknown" is not "fresh install" — see the field's doc comment.
+		onboardingStateUnknown: onboardingStateUnknown,
+		homePath:               homePath,
+		taskStore:              tStore,
+		taskExecutor:           tExecutor,
+		planStore:              planStore, // ADR-049 D1: Plans REST surface (rest_plans.go) + plan_id FK check
+		credStore:              credStore,
+		mediaStore:             runningServices.MediaStore,
+		ssrfChecker:            agent.GetSSRFChecker(agentLoop), // SEC-24: nil when SSRF disabled
+		sandboxResult:          sandboxResult,                   // immutable post-boot snapshot
+		appliedConfig:          mustDeepCopyConfig(cfg),         // boot-time snapshot for pending-restart diff
+		servedSubdirs:          runningServices.servedSubdirs,   // web_serve static-mode token registry
+		devServers:             runningServices.devServers,      // web_serve dev-mode process registry
+		approvalReg:            approvalReg,                     // in-process tool-approval registry (FR-016)
+		builtinRegistry:        builtinReg,                      // M16: central builtin registry (FR-001)
+		mcpRegistry:            mcpReg,                          // M16: central MCP registry (FR-001)
+		skillRegistry:          skillRegistry,                   // ClawHub marketplace (search + install-by-slug)
+		allowGodMode:           allowGodMode,                    // god-mode latch (2)
+		notifStore:             runningServices.notifStore,      // #264: notification center
+		auditor:                agentLoop.AuditLogger(),         // shared audit logger for REST mutations
+		selfWriteReg:           selfWriteReg,                    // suppress watcher reload on app-initiated writes
+		taskLock:               task.TaskFileLock,               // shared striped lock for board task RMW
 	}
 	api.cronService.Store(runningServices.CronService) // #264: schedules CRUD (atomic.Pointer)
 	// ADR-067 FR-037 (T067-11): a catalog refresh invalidates the

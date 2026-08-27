@@ -97,10 +97,25 @@ type restAPI struct {
 	agentLoop     *agent.AgentLoop
 	allowedOrigin string
 	onboardingMgr *onboarding.Manager // manages first-launch + doctor state
-	homePath      string              // ~/.omnipus — root of the data directory
-	configMu      sync.Mutex          // guards safeUpdateConfigJSON (read-modify-write cycle)
-	taskStore     *task.Store         // unified task persistence
-	taskExecutor  *agent.TaskExecutor // task execution engine
+	// onboardingStateUnknown records that system/state.json existed at boot
+	// but could NOT be read or parsed, so this instance's onboarding status
+	// is genuinely unknown rather than "fresh install" (M3). It is sampled in
+	// gateway.go immediately BEFORE onboarding.NewManager, because the
+	// manager renames a corrupt state file aside and resets to the fresh
+	// install zero value — after that the ambiguity is unobservable. The
+	// FR-050 pre-auth window treats unknown as CLOSED; see
+	// preAuthOnboardingWindowOpen (rest_auth.go). False in test
+	// constructions, which is correct: they have no corrupt state file.
+	onboardingStateUnknown bool
+	// copilotProbe bounds the cost of the GitHub Copilot sign-in probe (C2):
+	// one concurrent vendor-CLI exec at a time, and one premium request per
+	// cache TTL rather than one per HTTP call. Zero value is ready; see
+	// copilotProbeGuard (rest_signin_copilot.go).
+	copilotProbe copilotProbeGuard
+	homePath     string              // ~/.omnipus — root of the data directory
+	configMu     sync.Mutex          // guards safeUpdateConfigJSON (read-modify-write cycle)
+	taskStore    *task.Store         // unified task persistence
+	taskExecutor *agent.TaskExecutor // task execution engine
 	// planStore is the Plan entity persistence (ADR-049 D1, pkg/plan), shared
 	// with the pkg/agent PlanEngine (both hold the SAME *plan.Store instance,
 	// constructed once at boot — setupAndStartServices). Nil in test setups
@@ -1715,6 +1730,21 @@ func strVal(m map[string]any, key string) string {
 // with which to reach it: no credential, no endpoint, no model list, no PUT
 // stamp and no auth method. The moment any of those is present, an operator
 // has touched the row and it is a configuration.
+// anonRedactedDependents returns the provider's real dependent list for an
+// authenticated caller and an EMPTY (never nil) list for an anonymous one.
+//
+// C1: `dependents` enumerates every agent id and name bound to the provider —
+// the operator's roster, which an unauthenticated reader has no business
+// enumerating. Provider.yaml marks the field required with "always present
+// (empty array when none)", so the anonymous answer is `[]`, which is
+// contract-valid and indistinguishable from a provider nothing depends on.
+func anonRedactedDependents(authed bool, cfg *config.Config, providerID string) []gen.ProviderDependent {
+	if !authed {
+		return []gen.ProviderDependent{}
+	}
+	return computeProviderDependents(cfg, providerID)
+}
+
 func isSeedTemplateRow(m *config.ModelConfig) bool {
 	if m == nil {
 		return true
@@ -5956,6 +5986,52 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 		// carries a `provider` identity — PUT /providers/{id} and onboarding
 		// completion stamp it on every row they write (template or new), and
 		// ADR-067 makes it the only provider identity.
+		//
+		// C1 — AUTHORIZATION. This branch is the one branch of HandleProviders
+		// that used to carry no gate at all. The shared route is registered
+		// withOptionalAuth (an anonymous caller passes straight through), and
+		// every sibling verb carries its own inline gate — PUT and /test gate
+		// on onboardingDone, the five sign-in routes gate on FR-050, DELETE
+		// 401s unconditionally — so the list, and only the list, stayed
+		// anonymous forever. On a fully onboarded production gateway an
+		// unauthenticated GET returned the whole provider inventory, each
+		// row's status and updated_at, the full `dependents` list (every agent
+		// id and name referencing the provider) and — once T068-14 wired
+		// cheapSignInRowStatus into this branch — the `account_label` of the
+		// operator's live ChatGPT/xAI session. contracts/openapi.yaml has
+		// always declared `security: [BearerAuth: []]` for listProviders, so
+		// implementation and contract disagreed; this restores the contract.
+		//
+		// The gate is requireAuthOutsideOnboarding, the same FR-050 shape the
+		// sibling branches use (fail-closed on unknown onboarding state — see
+		// preAuthOnboardingWindowOpen, M3) rather than an unconditional 401,
+		// so an onboarding client that has no admin account to authenticate
+		// as is not locked out of a read the wizard may need.
+		//
+		// What an ANONYMOUS caller gets is deliberately reduced (see
+		// `authed` below): never account_label, and never dependents. The
+		// SPA needs neither pre-auth — the wizard reads the catalog
+		// (GET /providers/catalog) and POSTs /onboarding/probe-provider;
+		// fetchProviders (src/lib/api.ts) is called only by the Settings
+		// screens, which run authenticated.
+		if !a.requireAuthOutsideOnboarding(w, r) {
+			return
+		}
+		authed := r.Context().Value(UserContextKey{}) != nil
+		if !authed {
+			// Pre-onboarding anonymous reads get a ceiling; this branch fans
+			// out to a live upstream /models fetch per configured provider.
+			// Authenticated callers are not limited here (see
+			// providerListAnonLimiter's doc comment in rest_auth.go).
+			ip := clientIP(r)
+			if !providerListAnonLimiter.allow(ip) {
+				retryAfter := providerListAnonLimiter.retryAfter(ip)
+				w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
+				jsonErr(w, http.StatusTooManyRequests,
+					fmt.Sprintf("rate limit exceeded, retry after %d seconds", retryAfter))
+				return
+			}
+		}
 		cfg := a.agentLoop.GetConfig()
 		// providerUserModels holds the operator-supplied catalog slugs for
 		// providers that have no live /models endpoint (UAT model-catalog fix).
@@ -6072,8 +6148,15 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 			// id the catalog does not carry) — cheapSignInRowStatus's own
 			// doc comment covers why github-copilot never pays a premium
 			// request here.
+			//
+			// C1: skipped entirely for an ANONYMOUS caller. account_label is
+			// the operator's own vendor account identifier (Provider.yaml:
+			// "account identifier of the signed-in session") and must never
+			// reach an unauthenticated response — not redacted downstream,
+			// not fetched at all, so the anonymous path also stops touching
+			// the credential store to peek stored OAuth material.
 			var signInAccountLabel *string
-			if unknownProviderMsg == "" && providerAuthMethod[name] == config.AuthMethodSignIn {
+			if authed && unknownProviderMsg == "" && providerAuthMethod[name] == config.AuthMethodSignIn {
 				if signInState, label, known := a.cheapSignInRowStatus(name); known {
 					status = signInState
 					if label != "" {
@@ -6112,7 +6195,12 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 				// configMu and its response is authoritative (MAJ-018).
 				AuthMethod:   authMethod,
 				AccountLabel: signInAccountLabel,
-				Dependents:   computeProviderDependents(cfg, name),
+				// C1: `dependents` names every agent that references this
+				// provider — the operator's roster. Provider.yaml requires
+				// the field, so an anonymous caller gets the empty array
+				// rather than a missing key: contract-valid, and it tells an
+				// unauthenticated reader nothing about who runs here.
+				Dependents:   anonRedactedDependents(authed, cfg, name),
 				BacksDefault: providerBacksDefault(cfg, name),
 				UpdatedAt:    providerUpdatedAt[name],
 				// ADR-067 identity fields (T067-10): the wire row now
@@ -6195,10 +6283,10 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// Allow unauthenticated access during onboarding so the wizard can
-		// configure the provider before the admin user exists.
-		onboardingDone := a.onboardingMgr != nil && a.onboardingMgr.IsComplete()
-		if onboardingDone && r.Context().Value(UserContextKey{}) == nil {
-			jsonErr(w, http.StatusUnauthorized, "authentication required")
+		// configure the provider before the admin user exists. M3: the window
+		// closes on an unknown onboarding state as well as a complete one —
+		// see preAuthOnboardingWindowOpen (rest_auth.go).
+		if !a.requireAuthOutsideOnboarding(w, r) {
 			return
 		}
 		// Re-auth gate (Spec-6 FR-12.2 / FR-6.6): a model/provider API-key mutation
@@ -6613,9 +6701,15 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 		// onboarding is complete these revert to the contract's normal
 		// adminWrap posture: 401 unauthenticated, 503 under dev-mode
 		// bypass.
-		onboardingDone := a.onboardingMgr != nil && a.onboardingMgr.IsComplete()
-		if onboardingDone && r.Context().Value(UserContextKey{}) == nil {
-			jsonErr(w, http.StatusUnauthorized, "authentication required")
+		//
+		// M3: the gate is requireAuthOutsideOnboarding, not a bare
+		// IsComplete() test. IsComplete() fails OPEN — onboarding.NewManager
+		// keeps OnboardingComplete=false on any load error and resets an
+		// unparseable state.json — so one corrupt file silently reopened all
+		// five of these routes, DELETE (destroys the OAuth grant) and import
+		// (writes the credential store) included, unauthenticated, on a
+		// long-onboarded instance. See preAuthOnboardingWindowOpen.
+		if !a.requireAuthOutsideOnboarding(w, r) {
 			return
 		}
 		a.requireAdminAuthz(func(w http.ResponseWriter, r *http.Request) {
@@ -6643,7 +6737,12 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 					a.handleProviderSignInPoll(w, r, strings.TrimSuffix(sub, "/sign-in/poll"))
 				})(w, r)
 			case r.Method == http.MethodPost && sub == "openai-chatgpt/sign-in/import":
-				a.handleProviderSignInImport(w, r)
+				// M2: this route was called BARE while its four FR-050
+				// siblings were all wrapped. Every call rewrites the whole
+				// encrypted credentials.json and re-registers every OAuth
+				// value with the sensitive-value replacer — see
+				// signInImportLimiter (rest_auth.go).
+				withRateLimit(signInImportLimiter, a.handleProviderSignInImport)(w, r)
 			case r.Method == http.MethodPost && strings.HasSuffix(sub, "/sign-in"):
 				// FR-008: "rate-limited like the auth endpoints". codex-cli,
 				// openai-chatgpt, and any other sign_in row land here —
@@ -6665,7 +6764,14 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 				// cli_login provider like github-copilot, which never has a
 				// "<id>_OAUTH" entry to begin with — Omnipus never sees or
 				// stores its credential.
-				a.handleProviderSignOut(w, r, strings.TrimSuffix(sub, "/sign-in"))
+				//
+				// M2: also previously bare. Not harmless in aggregate — each
+				// call nils the process-wide sensitive-data replacer cache,
+				// so the next scrub pays a full reflection walk of Config
+				// under a write lock. See signInSignOutLimiter (rest_auth.go).
+				withRateLimit(signInSignOutLimiter, func(w http.ResponseWriter, r *http.Request) {
+					a.handleProviderSignOut(w, r, strings.TrimSuffix(sub, "/sign-in"))
+				})(w, r)
 			}
 		})(w, r)
 
@@ -6679,10 +6785,9 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 
 	case r.Method == http.MethodPost && strings.HasSuffix(sub, "/test"):
 		// POST /api/v1/providers/{id}/test — verify the provider has a valid API key.
-		// Allow unauthenticated access during onboarding (same reason as PUT above).
-		onboardingDone := a.onboardingMgr != nil && a.onboardingMgr.IsComplete()
-		if onboardingDone && r.Context().Value(UserContextKey{}) == nil {
-			jsonErr(w, http.StatusUnauthorized, "authentication required")
+		// Allow unauthenticated access during onboarding (same reason as PUT
+		// above, and the same M3 fail-closed window).
+		if !a.requireAuthOutsideOnboarding(w, r) {
 			return
 		}
 		// Read from disk directly to avoid stale in-memory config after async reload.
