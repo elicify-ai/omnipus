@@ -24,10 +24,18 @@ func CreateProvider(cfg *config.Config) (LLMProvider, string, error) {
 		return nil, "", fmt.Errorf("no providers configured. Please add entries to model_list in your config")
 	}
 
-	// Resolve the default (provider, model) pair EXACTLY (ADR-068 D14.1).
-	modelCfg, err := cfg.GetModelConfig(pair.Provider, pair.Model)
-	if err != nil {
-		return nil, "", fmt.Errorf("default model %q not found in providers: %w", model, err)
+	// Resolve the default (provider, model) pair (ADR-068 D14.1): a row
+	// whose own Model field equals the pair exactly, OR a row that legitimately
+	// SERVES it via its Models[] list, the X-13/X-17/X-22 custom/local
+	// bypass, or the served catalog (ResolveDefaultModelRow — see its doc
+	// for why config.GetModelConfig alone is not enough here). Uses the
+	// process-installed catalog: the same document the gateway's own
+	// default-model PUT validates against (providers.SetCatalog installs it
+	// at boot from the identical variable gateway.go hands to restAPI), so a
+	// pair that PUT accepted is guaranteed to resolve here too.
+	modelCfg, ok := ResolveDefaultModelRow(cfg, ProviderCatalog(), pair.Provider, pair.Model)
+	if !ok {
+		return nil, "", fmt.Errorf("default model %q not found in providers", model)
 	}
 
 	// Inject global workspace if not set in model config

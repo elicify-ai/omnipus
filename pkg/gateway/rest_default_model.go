@@ -28,6 +28,7 @@ import (
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
 )
 
@@ -147,20 +148,28 @@ func (a *restAPI) putDefaultModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Model in the served catalog for that provider — except custom/local
-	// rows (X-13/X-17), where any non-empty model is accepted with NO live
-	// call (X-22). A configured row whose id the served catalog does not
-	// contain is an operator-named custom row; with no catalog document
-	// loaded at all (E7) there is nothing to check against and the check is
-	// skipped rather than rejecting every model.
-	if a.providerCatalog != nil && a.providerCatalog.Document() != nil {
-		if catRow, known := a.providerCatalog.Provider(providerID); known {
-			if !catRow.Custom && catRow.Locality != catalog.LocalityLocal &&
-				!a.providerCatalog.Resolve(providerID, model).Found() {
-				jsonErrField(w, http.StatusBadRequest, "model not in catalog for provider", "model")
-				return
-			}
+	// Model must be one the configured row can actually SERVE — the same
+	// question providers.CreateProvider (the boot/reload path) asks via
+	// ResolveDefaultModelRow: an exact match on the row's legacy Model
+	// field, the row's own Models[] list, the X-13/X-17/X-22 custom/local
+	// bypass (any non-empty model, no live call), or — for a known,
+	// non-custom, non-local catalog row — the served catalog. Calling the
+	// SAME function CreateProvider calls (rather than a separately
+	// hand-rolled catalog check) is load-bearing: it is what guarantees a
+	// pair this PUT accepts with 200 is guaranteed to boot, and a pair it
+	// cannot apply is rejected here instead of corrupting config.json (see
+	// ResolveDefaultModelRow's doc for the incident this closes).
+	if _, ok := providers.ResolveDefaultModelRow(cfg, a.providerCatalog, providerID, model); !ok {
+		msg := "model not offered by provider"
+		if catRow, known := providerCatalogRow(a.providerCatalog, providerID); known &&
+			!catRow.Custom && catRow.Locality != catalog.LocalityLocal {
+			// Preserve the more specific, existing wording for the common
+			// case: a known cloud provider whose served catalog simply does
+			// not carry this model id.
+			msg = "model not in catalog for provider"
 		}
+		jsonErrField(w, http.StatusBadRequest, msg, "model")
+		return
 	}
 
 	oldPair := cfg.Agents.Defaults.DefaultModel
@@ -209,6 +218,18 @@ func (a *restAPI) putDefaultModel(w http.ResponseWriter, r *http.Request) {
 
 	fresh := a.agentLoop.GetConfig()
 	jsonOK(w, defaultModelResponse(fresh, fresh.Agents.Defaults.DefaultModel))
+}
+
+// providerCatalogRow looks up id in cat, tolerating a nil catalog (no
+// document loaded at all — E7) by reporting "not known" rather than
+// panicking. Used only to choose the more specific error message on a
+// rejected default-model PUT; the accept/reject decision itself is
+// providers.ResolveDefaultModelRow's alone.
+func providerCatalogRow(cat *catalog.Catalog, id string) (catalog.Provider, bool) {
+	if cat == nil {
+		return catalog.Provider{}, false
+	}
+	return cat.Provider(id)
 }
 
 // providerConfiguredAndUsable reports whether id names a configured
