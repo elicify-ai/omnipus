@@ -256,7 +256,7 @@ var (
 	// which re-lists on every provider edit) are deliberately not limited
 	// here — they already passed the auth gate.
 	providerListAnonLimiter = newAPIRateLimiter(60, 1*time.Minute)
-	// PUT /api/v1/providers/{id} — 30 requests/minute per IP (O5). This route
+	// PUT /api/v1/providers/{id} — 60 requests/minute per IP (O5). This route
 	// had NO ceiling at all while being reachable pre-auth (FR-050 keeps it
 	// open so the first-run wizard can configure a provider before an admin
 	// account exists to authenticate as — see the PUT branch in rest.go).
@@ -265,19 +265,26 @@ var (
 	// and then triggerReloadAndWaitOutcome, which SYNCHRONOUSLY rebuilds the
 	// whole agent registry and blocks the response until it confirms. An
 	// anonymous client could therefore hold a fresh install in permanent
-	// rebuild churn with a trivial loop. 30/min is ~1 per 2s: far above any
-	// human "Save" cadence (an operator adding five providers spends five
-	// requests) and far below what sustained abuse needs.
-	providerConfigWriteLimiter = newAPIRateLimiter(30, 1*time.Minute)
-	// POST /api/v1/providers/{id}/test — 30 requests/minute per IP (O5).
+	// rebuild churn with a trivial loop.
+	//
+	// The ceiling is providerListAnonLimiter's, deliberately: that limiter
+	// was set at 60/min for the SAME dispatcher's other anonymous,
+	// pre-onboarding, upstream-touching branch, and there is no reason for
+	// two branches of one handler to disagree about what an abusive rate is.
+	// It is ~1 request per second — orders of magnitude above any human
+	// "Save" cadence (an operator adding five providers spends five
+	// requests) and far below what sustained rebuild churn needs.
+	providerConfigWriteLimiter = newAPIRateLimiter(60, 1*time.Minute)
+	// POST /api/v1/providers/{id}/test — 60 requests/minute per IP (O5).
 	// Also previously bare and also pre-auth reachable. Every call resolves
-	// the stored credential and spends one real upstream request against the
-	// provider with the OPERATOR's key, so an unbounded anonymous caller can
-	// burn the operator's billable quota. A Test button is a one-off click;
-	// it shares providerConfigWriteLimiter's ceiling rather than a tighter
-	// one because the SPA legitimately tests right after a save.
-	providerTestLimiter = newAPIRateLimiter(30, 1*time.Minute)
-	// POST /api/v1/providers/{id}/entitlement — 30 requests/minute per IP
+	// the provider's STORED credential and spends one real upstream request
+	// with the OPERATOR's key, so an unbounded anonymous caller can burn
+	// billable quota that is not theirs. Shares providerConfigWriteLimiter's
+	// ceiling for the same reason it does — one dispatcher, one idea of an
+	// abusive rate — and because the SPA legitimately tests right after a
+	// save, so a tighter bucket here would 429 an ordinary two-click edit.
+	providerTestLimiter = newAPIRateLimiter(60, 1*time.Minute)
+	// POST /api/v1/providers/{id}/entitlement — 60 requests/minute per IP
 	// (O3). contracts/openapi.yaml has declared this route "Rate-limited like
 	// /providers/{id}/test" and declared a 429 response since ADR-067; no
 	// limiter was ever wired, so the declaration was fiction. Matches
@@ -286,7 +293,7 @@ var (
 	// entitlement is not (see handleProviderEntitlement), so a shared bucket
 	// would let an anonymous /test flood exhaust an authenticated operator's
 	// entitlement budget from the same NAT address.
-	providerEntitlementLimiter = newAPIRateLimiter(30, 1*time.Minute)
+	providerEntitlementLimiter = newAPIRateLimiter(60, 1*time.Minute)
 )
 
 // rateLimitAllows applies limiter to r from INSIDE a handler, for the routes

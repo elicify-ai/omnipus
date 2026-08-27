@@ -1588,7 +1588,7 @@ export interface paths {
         get?: never;
         /**
          * Add or update an LLM provider configuration
-         * @description Adds or updates an LLM provider entry. On new providers, api_key is required. On existing providers, api_key may be omitted to keep the current key. The API key is stored encrypted (AES-256-GCM) in credentials.json. Available before and after onboarding — while onboarding is incomplete and the instance has no authentication authority the route is reachable without a credential, so the wizard can configure a provider before an admin account exists. Rate-limited: 30 requests per minute per IP -> 429. The call is synchronous through a full agent-registry rebuild. The id must be a catalog id (ADR-067 registry identity) or, when the body carries api_base + protocol (openai-compatible | anthropic), an operator-named custom row (Provider.custom: true); any other id → 400 `unknown provider "<id>"`. A tier "unsupported" catalog provider → 400 with its unsupported_reason. The reserved path segments "catalog" and "default-model" are dispatched to their own routes before this one and are never valid provider ids.
+         * @description Adds or updates an LLM provider entry. On new providers, api_key is required. On existing providers, api_key may be omitted to keep the current key. The API key is stored encrypted (AES-256-GCM) in credentials.json. Available before and after onboarding — while onboarding is incomplete and the instance has no authentication authority the route is reachable without a credential, so the wizard can configure a provider before an admin account exists. Rate-limited: 60 requests per minute per IP -> 429. The call is synchronous through a full agent-registry rebuild. The id must be a catalog id (ADR-067 registry identity) or, when the body carries api_base + protocol (openai-compatible | anthropic), an operator-named custom row (Provider.custom: true); any other id → 400 `unknown provider "<id>"`. A tier "unsupported" catalog provider → 400 with its unsupported_reason. The reserved path segments "catalog" and "default-model" are dispatched to their own routes before this one and are never valid provider ids.
          */
         put: operations["updateProvider"];
         post?: never;
@@ -1611,7 +1611,7 @@ export interface paths {
         };
         /**
          * Test provider API key configuration
-         * @description Verifies that an API key is configured for the given provider without making an upstream call. Returns success=false with an error message if no key is configured. Available before and after onboarding — while onboarding is incomplete and the instance has no authentication authority the route is reachable without a credential. Rate-limited: 30 requests per minute per IP -> 429.
+         * @description Verifies that an API key is configured for the given provider without making an upstream call. Returns success=false with an error message if no key is configured. Available before and after onboarding — while onboarding is incomplete and the instance has no authentication authority the route is reachable without a credential. Rate-limited: 60 requests per minute per IP -> 429.
          */
         get: operations["testProvider"];
         put?: never;
