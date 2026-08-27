@@ -41,7 +41,23 @@ export interface PickerCompanyRow {
   company: string
   /** Every catalog entry sharing this company, in catalog order. */
   variants: CatalogProvider[]
-  /** The variant a one-click selection lands on: the first, in catalog order. */
+  /**
+   * The variant a one-click selection lands on: the company's `tier: popular`
+   * variant when it has one, else the first in catalog order.
+   *
+   * A `tier: popular` row IS the picker's own notion of "this company's
+   * primary, most-common form" — a company row is a Popular tile in the
+   * first place because one of its variants carries that tier (see
+   * `popular` below). Preferring it here keeps the tile's testid
+   * (`picker-popular-${row.primary.id}` in ProviderPicker.tsx) and its
+   * PickerSelection payload aligned with the row it visually represents,
+   * rather than an accident of the underlying array's order — e.g. the
+   * served catalog sorts its `providers[]` alphabetically by id, so a
+   * standard-tier sibling whose id happens to sort earlier than the
+   * popular-tier row (OpenAI's `codex-cli` before `openai`) would otherwise
+   * become "primary" for reasons that have nothing to do with which variant
+   * the company's Popular tile is meant to represent.
+   */
   primary: CatalogProvider
   /** True when EVERY variant is `tier: unsupported` — shown, but disabled (FR-025). */
   disabled: boolean
@@ -153,10 +169,11 @@ export function toCompanyRows(providers: readonly CatalogProvider[]): PickerComp
     const aliases = distinct(variants.flatMap((v) => v.aliases ?? []))
     const unsupported = variants.filter((v) => v.tier === 'unsupported')
     const disabled = unsupported.length === variants.length && variants.length > 0
+    const popularVariant = variants.find((v) => v.tier === 'popular')
     return {
       company,
       variants,
-      primary: variants[0],
+      primary: popularVariant ?? variants[0],
       disabled,
       unsupportedReason: disabled ? unsupported[0].unsupported_reason : undefined,
       plans,

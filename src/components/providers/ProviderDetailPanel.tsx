@@ -23,18 +23,85 @@
 //     state this panel never has.
 //
 //  3. Which auth methods exist is CATALOG data, never a SPA branch. The sign-in
-//     options are the company's own `sign_in` variants in catalog order, so
-//     Anthropic and Google render no sign-in control at all (ADR-068 §8b
-//     decision 4) and xAI gains one the day its catalog row carries `sign_in`
-//     (FR-049) with no code change here. Where a vendor's rows are grouped
-//     under one company — as the served catalog groups OpenAI's — the two
-//     sign-in rows become the FR-006 radio pair with the first, `openai-chatgpt`,
-//     pre-selected.
+//     options are the company's own `sign_in` variants, so Anthropic and
+//     Google render no sign-in control at all (ADR-068 §8b decision 4) and
+//     xAI gains one the day its catalog row carries `sign_in` (FR-049) with
+//     no code change here — a company with exactly one variant is never
+//     reordered or filtered by `signInOptionsFor` below, whatever its
+//     `auth_methods`. Where a vendor's rows are grouped under one company —
+//     as the served catalog groups OpenAI's — the FR-006 pair
+//     (`openai-chatgpt`, `codex-cli`) is in FR-006's own priority order
+//     (`SIGN_IN_HELPER_COPY`'s key order in AuthMethodControl.tsx), not raw
+//     catalog-array order: the served catalog sorts its `providers[]`
+//     alphabetically by id, which is a presentation accident, not a spec
+//     decision, and has twice put the wrong id first (`codex-cli` sorts
+//     before `openai-chatgpt`) or included an id FR-006 never named at all
+//     (the plain `openai` API-key row spuriously also carries `sign_in` in
+//     the served catalog — a data bug this panel does not trust blindly: a
+//     variant offering BOTH `api_key` and `sign_in` is excluded from the
+//     radio group whenever a SIBLING of the same company is a dedicated,
+//     sign-in-only row — see `signInOptionsFor`'s doc comment).
 
 import * as React from 'react'
-import { AuthMethodControl, type AuthMethod, type SignInOption } from './AuthMethodControl'
+import {
+  AuthMethodControl,
+  SIGN_IN_HELPER_COPY,
+  type AuthMethod,
+  type SignInOption,
+} from './AuthMethodControl'
+import type { CatalogProvider } from '@/lib/api/generated/openapi-types'
 import type { PickerCompanyRow } from './provider-picker-model'
 import { inferRegionFromLocale, regionLabel } from './region-inference'
+
+/**
+ * FR-006's exact pair, in priority order, for a company's sign-in variants —
+ * defensive against two ways the served catalog has shipped wrong (both
+ * UAT-confirmed on a real running instance, ADR-068 FR-006):
+ *
+ *  1. Catalog array ORDER is alphabetical by provider id, an assembly-job
+ *     presentation detail, not a spec decision — it has put `codex-cli`
+ *     ahead of `openai-chatgpt` (sorts under "c" vs "o") even though FR-006
+ *     names `openai-chatgpt` as the default.
+ *  2. A variant that ALSO offers `api_key` is a general-purpose row (the
+ *     picker's Popular tile primary, `resolvedVariant`'s api_key fallback),
+ *     never a dedicated sign-in identity — it has no entry in
+ *     `SIGN_IN_HELPER_COPY` and would render as an unlabelled, redundant
+ *     third radio (OpenAI's own `openai` API-key row spuriously also
+ *     carries `sign_in`). When a SIBLING of the same company is a DEDICATED
+ *     sign-in row (`sign_in` only, no `api_key`), that sibling — not the
+ *     dual-purpose row — is what FR-006 means by "the pair", so the
+ *     dual-purpose row is dropped from the radio group in favour of it.
+ *
+ * Neither rule ever removes a company's ONLY sign-in-capable variant (a
+ * single dual-purpose row, e.g. xAI, has no sign-in-only sibling to prefer,
+ * so it passes through unchanged — FR-049's "xAI gains one the day its
+ * catalog row carries sign_in, no code change here" still holds exactly).
+ * Priority among the survivors comes from `SIGN_IN_HELPER_COPY`'s own key
+ * order — the copy table FR-006 already owns — rather than a second,
+ * parallel list; an id that table does not name keeps its catalog-order
+ * position, appended after every named id.
+ */
+export function signInOptionsFor(variants: readonly CatalogProvider[]): SignInOption[] {
+  const signInCapable = variants.filter((v) => v.auth_methods.includes('sign_in'))
+  const hasDedicatedSignIn = signInCapable.some((v) => !v.auth_methods.includes('api_key'))
+  const eligible = hasDedicatedSignIn
+    ? signInCapable.filter((v) => !v.auth_methods.includes('api_key'))
+    : signInCapable
+
+  const priority = Object.keys(SIGN_IN_HELPER_COPY)
+  const ranked = eligible
+    .map((variant, index) => ({ variant, index }))
+    .sort((a, b) => {
+      const ai = priority.indexOf(a.variant.id)
+      const bi = priority.indexOf(b.variant.id)
+      if (ai === -1 && bi === -1) return a.index - b.index // stable: catalog order
+      if (ai === -1) return 1
+      if (bi === -1) return -1
+      return ai - bi
+    })
+
+  return ranked.map(({ variant }) => ({ providerId: variant.id, label: variant.name }))
+}
 
 /** What the panel emits on *Continue* — one configurable provider row. */
 export interface ProviderDetailSelection {
@@ -155,10 +222,7 @@ export function ProviderDetailPanel({
   const [apiKey, setApiKey] = React.useState<string>('')
 
   const signInOptions: SignInOption[] = React.useMemo(
-    () =>
-      company.variants
-        .filter((variant) => variant.auth_methods.includes('sign_in'))
-        .map((variant) => ({ providerId: variant.id, label: variant.name })),
+    () => signInOptionsFor(company.variants),
     [company.variants],
   )
   const apiKeyOffered = React.useMemo(

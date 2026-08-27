@@ -399,6 +399,34 @@ describe('SignInDialog — accessibility (FR-045 WCAG constraints)', () => {
     const outside = screen.getByTestId('outside-btn')
     expect(outside.closest('[aria-hidden="true"]')).not.toBeNull()
   })
+
+  it('announces "Waiting for you to approve this sign-in…" exactly once, not twice (UAT-confirmed defect)', async () => {
+    vi.mocked(api.startSignIn).mockResolvedValue(DEVICE_CODE_RESPONSE)
+    vi.mocked(api.pollSignIn).mockResolvedValue({ state: 'pending' })
+    renderDialog()
+
+    await waitFor(() => screen.getByTestId('user-code'))
+
+    // The text exists twice in the DOM — once as the FR-045 sr-only
+    // aria-live="polite" status line (the single source of truth every phase
+    // shares), once as the visible spinner copy next to the code — but only
+    // ONE of those two must be exposed to assistive tech. A screen reader
+    // that reads both would announce the identical sentence twice for the
+    // same state, which is exactly what UAT observed on a real instance.
+    const matches = screen.getAllByText('Waiting for you to approve this sign-in…')
+    expect(matches).toHaveLength(2)
+
+    const live = screen.getByTestId('sign-in-status')
+    expect(live).toHaveAttribute('aria-live', 'polite')
+    expect(live).toHaveTextContent('Waiting for you to approve this sign-in…')
+    expect(live).not.toHaveAttribute('aria-hidden')
+
+    const visible = screen.getByTestId('device-code-waiting')
+    expect(visible).toHaveTextContent('Waiting for you to approve this sign-in…')
+    // The visible spinner+copy is the DUPLICATE — it must be pulled out of
+    // the accessibility tree so only `sign-in-status` above is announced.
+    expect(visible).toHaveAttribute('aria-hidden', 'true')
+  })
 })
 
 describe('SignInDialog — start failure', () => {
