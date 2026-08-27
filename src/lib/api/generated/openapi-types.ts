@@ -235,7 +235,7 @@ export interface paths {
         put?: never;
         /**
          * Test a provider API key and list available models
-         * @description Non-persistent probe: accepts an API key in the request body, tests it against the provider's /models endpoint, and returns the model list. Nothing is written to disk. Available only during onboarding (returns 409 after onboarding completes). CSRF-exempt.
+         * @description Non-persistent probe: accepts an API key in the request body, tests it against the provider's /models endpoint, and returns the model list. Nothing is written to disk. CSRF-exempt. Available only while the pre-auth onboarding window is open, and it returns 409 whenever that window is closed - onboarding already complete, the onboarding state unreadable, the config unreadable, or the instance already having an authentication authority (a configured user or OMNIPUS_BEARER_TOKEN). The refusal is 409 rather than 401 for every one of those reasons, including for an authenticated admin: once the window is closed no credential makes this call legal, and the standard PUT /providers/{id} + GET /providers flow replaces it. The refusal body is identical across reasons; the specific reason is recorded in the audit log. With auth sign_in the probe spends one real, billed vendor completion using the operator's own saved login, which is why the window must close on uncertainty. Rate-limited: 3 requests per minute per IP (shared with /onboarding/complete) -> 429.
          */
         post: operations["probeProvider"];
         delete?: never;
@@ -1588,7 +1588,7 @@ export interface paths {
         get?: never;
         /**
          * Add or update an LLM provider configuration
-         * @description Adds or updates an LLM provider entry. On new providers, api_key is required. On existing providers, api_key may be omitted to keep the current key. The API key is stored encrypted (AES-256-GCM) in credentials.json. Available before and after onboarding. The id must be a catalog id (ADR-067 registry identity) or, when the body carries api_base + protocol (openai-compatible | anthropic), an operator-named custom row (Provider.custom: true); any other id → 400 `unknown provider "<id>"`. A tier "unsupported" catalog provider → 400 with its unsupported_reason. The reserved path segments "catalog" and "default-model" are dispatched to their own routes before this one and are never valid provider ids.
+         * @description Adds or updates an LLM provider entry. On new providers, api_key is required. On existing providers, api_key may be omitted to keep the current key. The API key is stored encrypted (AES-256-GCM) in credentials.json. Available before and after onboarding — while onboarding is incomplete and the instance has no authentication authority the route is reachable without a credential, so the wizard can configure a provider before an admin account exists. Rate-limited: 30 requests per minute per IP -> 429. The call is synchronous through a full agent-registry rebuild. The id must be a catalog id (ADR-067 registry identity) or, when the body carries api_base + protocol (openai-compatible | anthropic), an operator-named custom row (Provider.custom: true); any other id → 400 `unknown provider "<id>"`. A tier "unsupported" catalog provider → 400 with its unsupported_reason. The reserved path segments "catalog" and "default-model" are dispatched to their own routes before this one and are never valid provider ids.
          */
         put: operations["updateProvider"];
         post?: never;
@@ -1611,7 +1611,7 @@ export interface paths {
         };
         /**
          * Test provider API key configuration
-         * @description Verifies that an API key is configured for the given provider without making an upstream call. Returns success=false with an error message if no key is configured. Available before and after onboarding.
+         * @description Verifies that an API key is configured for the given provider without making an upstream call. Returns success=false with an error message if no key is configured. Available before and after onboarding — while onboarding is incomplete and the instance has no authentication authority the route is reachable without a credential. Rate-limited: 30 requests per minute per IP -> 429.
          */
         get: operations["testProvider"];
         put?: never;
@@ -12336,6 +12336,7 @@ export interface operations {
             };
             400: components["responses"]["400BadRequest"];
             409: components["responses"]["409Conflict"];
+            429: components["responses"]["429TooManyRequests"];
         };
     };
     listSessions: {
@@ -15462,6 +15463,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            429: components["responses"]["429TooManyRequests"];
             /** @description Credential store locked. */
             503: {
                 headers: {
@@ -15550,6 +15552,7 @@ export interface operations {
                 };
             };
             401: components["responses"]["401Unauthorized"];
+            429: components["responses"]["429TooManyRequests"];
         };
     };
     startProviderSignIn: {
