@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -152,6 +153,11 @@ func doOAuthPost(cfg OAuthProviderConfig, endpoint, contentType string, body []b
 	timeout := cfg.httpTimeout()
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 
+	if err := validateOAuthEndpoint(endpoint); err != nil {
+		cancel()
+		return nil, nil, err
+	}
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		cancel()
@@ -169,6 +175,54 @@ func doOAuthPost(cfg OAuthProviderConfig, endpoint, contentType string, body []b
 		return nil, nil, err
 	}
 	return resp, cancel, nil
+}
+
+// validateOAuthEndpoint constrains the URL doOAuthPost will dial.
+//
+// Every endpoint is built from OAuthProviderConfig.Issuer, which is either a
+// compile-time constant (OpenAI) or an operator-set environment variable
+// (OMNIPUS_XAI_OAUTH_ISSUER). It is never derived from a request, so this is
+// not a user-controlled SSRF sink — but "not request-derived" is an argument
+// about today's callers, and a silent typo or a future caller passing an
+// attacker-influenced issuer would turn this into one. Validating here makes
+// the property structural instead of a claim in a comment, which is also what
+// the earlier per-call `#nosec G107` annotations were standing in for before
+// the four call sites were consolidated into doOAuthPost.
+//
+// https is required, with one deliberate exception: a loopback host may use
+// http, because the test suite drives these flows against httptest servers and
+// an operator may point a local xAI-compatible issuer at 127.0.0.1. This
+// mirrors the catalog loader's own URL rule, which likewise permits loopback
+// only for local rows.
+func validateOAuthEndpoint(endpoint string) error {
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return fmt.Errorf("oauth endpoint is not a valid URL: %w", err)
+	}
+	if u.Host == "" {
+		return fmt.Errorf("oauth endpoint %q has no host", endpoint)
+	}
+	if u.Scheme == "https" {
+		return nil
+	}
+	if u.Scheme == "http" && isLoopbackHost(u.Hostname()) {
+		return nil
+	}
+	return fmt.Errorf(
+		"oauth endpoint %q must use https (http is permitted only for a loopback host)",
+		endpoint,
+	)
+}
+
+// isLoopbackHost reports whether a URL hostname refers to the local machine.
+func isLoopbackHost(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	return false
 }
 
 // readOAuthBody drains a bounded prefix of an OAuth response body.
