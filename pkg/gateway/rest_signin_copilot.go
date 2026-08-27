@@ -171,6 +171,13 @@ func (a *restAPI) handleCopilotSignInStatus(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if !a.copilotProbe.acquire() {
+		// Logged like withRateLimit's own 429 (rest_auth.go): a burst of
+		// these is the signature of the C2 abuse pattern, and it is the only
+		// trace it leaves — a refused call never reaches auditCopilotProbe,
+		// because nothing was probed and nothing was spent.
+		slog.Warn("api: copilot sign-in probe refused, another is already running",
+			"ip", a.clientIPWithLiveFallback(r), "path", r.URL.Path,
+			"retry_after", copilotProbeRetryAfterSeconds)
 		w.Header().Set("Retry-After", strconv.Itoa(copilotProbeRetryAfterSeconds))
 		jsonErr(w, http.StatusTooManyRequests,
 			fmt.Sprintf("a Copilot sign-in check is already running, retry after %d seconds",
