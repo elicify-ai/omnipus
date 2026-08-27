@@ -258,3 +258,51 @@ describe('ProviderDetailPanel — auth method in the same step (FR-005, FR-028)'
     expect(onSignIn).toHaveBeenCalledWith('openai-chatgpt')
   })
 })
+
+// F2 (UAT-confirmed, same real-instance walkthrough as F1 above): the served
+// catalog's plain "openai" (API-key) row spuriously ALSO carries `sign_in` in
+// its `auth_methods` — a data bug distinct from this fixture, which keeps
+// "openai" api_key-only (see `catalogRow('openai').auth_methods` above). This
+// suite reproduces that exact shape locally so the panel's defence against it
+// is under test even while the shared fixture stays clean.
+describe('ProviderDetailPanel — defends against a dual api_key+sign_in row with a dedicated sibling (FR-006 F2)', () => {
+  function openAiFamilyRowWithBuggyOpenAI(): PickerCompanyRow {
+    const variants: CatalogProvider[] = [
+      { ...catalogRow('codex-cli'), company: 'OpenAI' },
+      { ...catalogRow('openai'), company: 'OpenAI', auth_methods: ['api_key', 'sign_in'] },
+      { ...catalogRow('openai-chatgpt'), company: 'OpenAI' },
+    ]
+    return toCompanyRows(variants)[0]
+  }
+
+  it('renders exactly the FR-006 pair — the dual-purpose "openai" row never becomes a third radio', () => {
+    render(<ProviderDetailPanel company={openAiFamilyRowWithBuggyOpenAI()} locale="en-US" />)
+
+    const radiogroup = screen.getByTestId('provider-detail-panel-auth-signin-options')
+    const radios = within(radiogroup).getAllByRole('radio') as HTMLInputElement[]
+    expect(radios.map((r) => r.value)).toEqual(['openai-chatgpt', 'codex-cli'])
+    expect(
+      screen.queryByTestId('provider-detail-panel-auth-signin-option-openai'),
+    ).not.toBeInTheDocument()
+
+    const checked = radios.find((r) => r.checked)
+    expect(checked?.value).toBe('openai-chatgpt')
+  })
+
+  it('still offers "openai" through the API-key segment — the row is excluded only from the sign-in radios', async () => {
+    const onConfirm = vi.fn()
+    render(
+      <ProviderDetailPanel
+        company={openAiFamilyRowWithBuggyOpenAI()}
+        locale="en-US"
+        onConfirm={onConfirm}
+      />,
+    )
+    await userEvent.click(screen.getByTestId('provider-detail-panel-auth-segment-api_key'))
+    await userEvent.type(screen.getByTestId('provider-detail-panel-api-key-input'), 'sk-test')
+    await userEvent.click(screen.getByTestId('provider-detail-panel-continue'))
+    expect(onConfirm).toHaveBeenLastCalledWith(
+      expect.objectContaining({ providerId: 'openai', authMethod: 'api_key', apiKey: 'sk-test' }),
+    )
+  })
+})

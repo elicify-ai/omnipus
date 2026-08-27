@@ -372,7 +372,15 @@ export function SignInDialog({
                   </Button>
                 </div>
               </div>
-              <div className="flex items-center gap-2 text-sm text-[var(--color-muted)]" data-testid="device-code-waiting">
+              {/* Same words as the sr-only aria-live="polite" status line above
+                  (FR-045's single source of truth) — hidden from the
+                  accessibility tree so a screen reader announces it once, not
+                  twice, while sighted operators still see the spinner + copy. */}
+              <div
+                className="flex items-center gap-2 text-sm text-[var(--color-muted)]"
+                data-testid="device-code-waiting"
+                aria-hidden="true"
+              >
                 <SpinnerGap size={13} className="animate-spin" />
                 Waiting for you to approve this sign-in…
               </div>
