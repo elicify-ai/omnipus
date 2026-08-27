@@ -249,6 +249,15 @@ func decodeOnboardingCompleteBody(
 // recorded where it belongs — the audit log and the server log.
 const onboardingClosedMsg = "onboarding already complete"
 
+// probeWindowClosedMsg is POST /onboarding/probe-provider's refusal body. It
+// is the message that route already returned for "onboarding complete", now
+// used for EVERY closed-window reason for the same anti-oracle reason
+// onboardingClosedMsg is (see above): a caller who reaches a closed window
+// learns only that the window is closed and what to use instead, never which
+// of the four signals closed it.
+const probeWindowClosedMsg = "onboarding already complete — " +
+	"use PUT /api/v1/providers/{id} and GET /api/v1/providers to add providers"
+
 // errOnboardingUsernameTaken is the sentinel the config mutation returns when
 // the requested admin username already exists in gateway.users. See
 // onboardingWindowGate for why this is defence in depth rather than the
@@ -305,44 +314,75 @@ var errOnboardingUsernameTaken = errors.New("onboarding: username already exists
 // wire vocabulary. (A 401 would additionally be read by the SPA as session
 // expiry and force a logout — see rest_providers_catalog_test.go.)
 func (a *restAPI) onboardingWindowGate(w http.ResponseWriter, r *http.Request) bool {
+	return a.preAuthOnboardingWindowGate(w, r, onboardingCompleteRoute, onboardingClosedMsg)
+}
+
+// Route labels for the audit record written by preAuthOnboardingWindowGate.
+// They are the wire paths, so a forensic reader never has to map a Go symbol
+// back to an endpoint.
+const (
+	onboardingCompleteRoute = "/api/v1/onboarding/complete"
+	onboardingProbeRoute    = "/api/v1/onboarding/probe-provider"
+)
+
+// preAuthOnboardingWindowGate is the shared body of every ADR-068 FR-050
+// pre-auth window gate on an /onboarding/* route: the decision, the refusal
+// status, the server log and the SEC-15 audit record, parameterised only by
+// which route is being refused and what the caller is told.
+//
+// It exists so onboarding/complete and onboarding/probe-provider cannot drift
+// apart, and — more importantly — so neither of them grows a second opinion
+// about what "the pre-auth window is open" means. The decision itself is
+// always preAuthOnboardingWindowOpen (rest_auth.go); this function never
+// re-derives it. See onboardingWindowGate's comment above for the full
+// rationale behind each of the three signals, the 409, and the shared refusal
+// body.
+//
+// Callers MUST invoke this before reading the request body: an
+// unauthenticated body is attacker-controlled input and must not be parsed
+// ahead of the authorization decision.
+func (a *restAPI) preAuthOnboardingWindowGate(
+	w http.ResponseWriter, r *http.Request, route, refusalMsg string,
+) bool {
+	sourceIP := a.clientIPWithLiveFallback(r)
 	// A config we cannot read cannot tell us whether users exist, and
 	// hasAuthenticationAuthority reports a nil snapshot as "no authority" —
-	// which would OPEN the window on the one route that mints authority. Same
-	// reasoning as the unknown-state signal below: an unreadable config is
-	// indistinguishable from an instance full of accounts. Refuse.
+	// which would OPEN the window, including on the one route that mints
+	// authority. Same reasoning as the unknown-state signal: an unreadable
+	// config is indistinguishable from an instance full of accounts. Refuse.
 	if a.requestConfigSnapshot(r) == nil {
 		slog.Warn("onboarding: refused — no readable config to judge the request against",
-			"source_ip", a.clientIPWithLiveFallback(r))
-		jsonErr(w, http.StatusConflict, onboardingClosedMsg)
+			"route", route, "source_ip", sourceIP)
+		jsonErr(w, http.StatusConflict, refusalMsg)
 		return false
 	}
 	if a.preAuthOnboardingWindowOpen(r) {
 		return true
 	}
 	reason := a.onboardingClosedReason(r)
-	sourceIP := a.clientIPWithLiveFallback(r)
 	slog.Warn("onboarding: refused — the pre-auth onboarding window is closed",
-		"reason", reason, "source_ip", sourceIP)
+		"route", route, "reason", reason, "source_ip", sourceIP)
 	if a.auditor != nil {
-		// No username is recorded: the gate runs before the body is read, on
-		// purpose (see HandleCompleteOnboarding phase 0). What matters
-		// forensically is that an admin-minting attempt reached a closed
-		// window, when, and from where.
+		// No request field is recorded: the gate runs before the body is read,
+		// on purpose (see HandleCompleteOnboarding phase 0). What matters
+		// forensically is that a request reached a closed window, on which
+		// route, when, and from where.
 		if err := a.auditor.Log(&audit.Entry{
 			Event:    audit.EventOnboardingRefused,
 			Decision: audit.DecisionDeny,
 			Details: map[string]any{
 				"reason":    reason,
 				"source_ip": sourceIP,
-				"route":     "/api/v1/onboarding/complete",
+				"route":     route,
 			},
-			PolicyRule: "onboarding.complete requires an open pre-auth window " +
-				"(readable onboarding state, onboarding not complete, and no existing authentication authority)",
+			PolicyRule: route + " requires an open pre-auth window " +
+				"(readable config, readable onboarding state, onboarding not complete, " +
+				"and no existing authentication authority)",
 		}); err != nil {
 			slog.Warn("audit write failed", "event", audit.EventOnboardingRefused, "error", err)
 		}
 	}
-	jsonErr(w, http.StatusConflict, onboardingClosedMsg)
+	jsonErr(w, http.StatusConflict, refusalMsg)
 	return false
 }
 
@@ -1193,13 +1233,39 @@ func (a *restAPI) HandleOnboardingProbeProvider(w http.ResponseWriter, r *http.R
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	// Gate: only usable during bootstrap. Once onboarding is complete the
-	// endpoint still exists (CSRF-exempt path can't be removed dynamically)
-	// but it refuses to serve — admins with a cookie use the standard
-	// /providers/{id} PUT + GET /providers flow instead.
-	if a.onboardingMgr != nil && a.onboardingMgr.IsComplete() {
-		jsonErr(w, http.StatusConflict,
-			"onboarding already complete — use PUT /api/v1/providers/{id} and GET /api/v1/providers to add providers")
+	// Gate: only usable during bootstrap. Once the pre-auth window is closed
+	// the endpoint still exists (a CSRF-exempt path can't be removed
+	// dynamically) but it refuses to serve — admins with a cookie use the
+	// standard /providers/{id} PUT + GET /providers flow instead.
+	//
+	// O4. This gate used to be `a.onboardingMgr.IsComplete()` and nothing
+	// else — the same idiom ADR-068 FR-050/M3 already replaced on the five
+	// sign-in routes and 4335e043 replaced on /onboarding/complete, for the
+	// same reason: it fails OPEN. onboarding.NewManager keeps the fresh-install
+	// zero value (OnboardingComplete=false) on ANY load failure and renames an
+	// unparseable state.json aside, so a partial write, a disk error, a botched
+	// chmod or a restored backup silently reopens this route, unauthenticated,
+	// on a long-onboarded instance for the whole process lifetime.
+	//
+	// This route was deliberately left out of the /onboarding/complete fix
+	// because it mints no authority. It still MUST close, because it spends
+	// the operator's money: with `auth: "sign_in"` the probe never looks at
+	// the request body for a credential at all — it reads the operator's OWN
+	// saved vendor login (Codex auth.json, or the Copilot CLI's stored token)
+	// and spends one real, billed completion per call, and on a cli_kind row
+	// spawns a subprocess to do it. An anonymous caller on a reopened window
+	// can burn Copilot premium requests or ChatGPT quota that is not theirs.
+	// The `auth: "api_key"` path carries the caller's own key, so its cost is
+	// an outbound request rather than the operator's balance — but it rides
+	// the same gate.
+	//
+	// Deliberately BEFORE the request body is read, and with no exception for
+	// an authenticated admin: the contract's answer once onboarding is
+	// complete is 409 for everyone (there is a better route by then), so this
+	// is a state conflict, not a failed authentication challenge. One refusal
+	// message for every closed-window reason keeps the divergent state from
+	// becoming an oracle; the reason goes to the audit log.
+	if !a.preAuthOnboardingWindowGate(w, r, onboardingProbeRoute, probeWindowClosedMsg) {
 		return
 	}
 
