@@ -226,12 +226,12 @@ Legend: **P0** = release-blocking per the spec's user-story priorities (US-1, 2,
 ### T068-20 — Shared `ProviderPicker` component (cmdk, virtualised, unsupported-disabled, Custom endpoint, error state) — P1
 - **Files:** create `src/components/providers/ProviderPicker.tsx`, `ProviderPicker.test.tsx`, `provider-picker-search.test.ts`, `CustomEndpointPanel.tsx` (fields `id`, `api_base`, `protocol` select, key; saved row recognised by `custom: true`); TS discriminated union `tile | recent | row | custom`; `@tanstack/react-virtual` + cmdk `Command` with `shouldFilter={false}`.
 - **FRs:** FR-021 (one component, under `src/components/providers/`), FR-022, FR-023 (`aria-setsize`/`aria-posinset`; ≤ visible + 10 rows), FR-024 (Custom endpoint panel), FR-025, FR-026 (Home/End by index via `scrollToIndex` then focus), FR-037 (error state with Retry; Custom still selectable), Accessibility rows (keyboard, `role="group"`, no colour-only state; Phosphor only — no emoji).
-- **BDD:** Picker opens with 8 Popular tiles and a collapsed list; Search expands and filters the full list; Expanded list is letter-grouped and virtualised (≤ 22 in the 480 px / 40 px fixture); Unsupported provider is visible, disabled, with reason (`cloud-iam` → "needs request signing", never the raw enum); Custom endpoint is last; Recently used row appears; Keyboard-only selection; Catalog unavailable in the picker.
+- **BDD:** Picker opens with 12 Popular tiles and a collapsed list (amended 2026-08-25, catalog repo commit `b50f5a6`: `groq` demoted to standard, `ollama` promoted); Search expands and filters the full list; Expanded list is letter-grouped and virtualised (≤ 22 in the 480 px / 40 px fixture); Unsupported provider is visible, disabled, with reason (`cloud-iam` → "needs request signing", never the raw enum); Custom endpoint is last; Recently used row appears; Keyboard-only selection; Catalog unavailable in the picker.
 - **Tests first:** TDD rows 25 `ProviderPicker.test.tsx`, 25a `provider-picker-search.test.ts`.
 - **Gate:** `spa`.
 - **Depends-on:** T068-19.
 - **Size:** L.
-- **DoD:** SC-005 vitest bound (≤ 22) holds; `data-testid="picker-popular-*"` × 8 and `picker-all-toggle` with `aria-expanded` present; `performance.mark` recorded on open.
+- **DoD:** SC-005 vitest bound (≤ 22) holds; `data-testid="picker-popular-*"` × 12 and `picker-all-toggle` with `aria-expanded` present; `performance.mark` recorded on open.
 
 ### T068-21 — Second-level panel: plan/region `aria-pressed` groups with locale default, and `AuthMethodControl` (segmented + OpenAI radio pair) — P1
 - **Files:** create `src/components/providers/ProviderDetailPanel.tsx`, `AuthMethodControl.tsx`, `AuthMethodControl.test.tsx`; modify `ProviderPicker.tsx` (opens the panel on select).

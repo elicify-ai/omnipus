@@ -132,7 +132,7 @@ Omnipus speaks exactly two wire protocols today — **OpenAI-compatible HTTP** (
 
 ### 4.2 The tiers
 
-- **Popular (pinned, ~6–8):** the OpenCode shape — `openai`, `openrouter`, `anthropic` (API key), `google` (API key), `xai`, `groq`, `mistral`, `deepseek`. Named, probed, guided, tested.
+- **Popular (pinned, ~6–8; amended 2026-08-25, catalog repo commit `b50f5a6` — the set is now twelve, usage-backed):** the OpenCode shape — `openai`, `openrouter`, `anthropic` (API key), `google` (API key), `xai`, `groq`, `mistral`, `deepseek`. Named, probed, guided, tested. **Superseded:** re-picked against real OpenRouter model-author token share (mid-2026) plus two deliberate product choices — `groq` demoted (an inference host, not a model author, so it appears in no author-usage ranking; it stays a fully selectable standard-tier provider) and `ollama` promoted (local-model support, on brand for a self-hosted, no-telemetry product). The pinned twelve, in catalog order: `openai`, `anthropic`, `google`, `openrouter`, `deepseek`, `zai`, `minimax`, `moonshotai`, `alibaba`, `xai`, `mistral`, `ollama`.
 - **Everything else (~155):** selectable behind "show all providers", reachable through D11's protocol dispatch (§3) with URL, key variable and limits from the table. Best-effort; no probe, no onboarding hint, no test matrix.
 - **Unsupported (~5):** the cloud-IAM set above, shown with the reason.
 - **Custom endpoint stays** (any OpenAI- or Anthropic-compatible URL).

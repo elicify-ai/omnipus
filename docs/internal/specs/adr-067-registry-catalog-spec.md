@@ -246,7 +246,7 @@ The SPA and any client read the same document the gateway uses, through a contra
 ### US-8 — Tiers are data: every provider selectable, Popular pinned, cloud-IAM visible-disabled, custom endpoint — **P1**
 The operator can pick any registry provider; the picker knows which are popular and which are unsupported from the document, not from code. *Why P1:* the data must exist for ADR-068's UI; the UI itself is out of scope. *Independent test:* inspect the document and the endpoint output.
 
-1. **Given** the document, **When** providers are listed, **Then** each carries `tier ∈ {popular, standard, unsupported}` `[A-9]`; the popular set is `openai, openrouter, anthropic, google, xai, groq, mistral, deepseek` (ADR §4.2, ~8 pinned).
+1. **Given** the document, **When** providers are listed, **Then** each carries `tier ∈ {popular, standard, unsupported}` `[A-9]`; the popular set is `openai, anthropic, google, openrouter, deepseek, zai, minimax, moonshotai, alibaba, xai, mistral, ollama` (ADR §4.2, twelve pinned; amended 2026-08-25, catalog repo commit `b50f5a6`: groq demoted, ollama promoted).
 2. **Given** a cloud-IAM provider (`amazon-bedrock`, `google-vertex`, `google-vertex-anthropic`, `watsonx`, `sap-ai-core`), **When** listed, **Then** `tier: unsupported` with `unsupported_reason: cloud-iam`, and **When** configured via PUT, **Then** 400 with the reason.
 3. **Given** a standard-tier provider, **When** configured with a key, **Then** it is accepted and reachable through protocol dispatch with no probe requirement.
 4. **Given** an operator-named custom row (`my-proxy`, `custom: true`), **When** configured with `api_base` and a protocol, **Then** it is accepted; `api_base` or `protocol` missing → 400.
@@ -419,7 +419,7 @@ Then the document carries 128000 and `disputed: true` `[A-22]`, and an issue is 
 **Scenario (AP): override supplies a URL for a dedicated-SDK provider** — Traces to US-2.AC3
 Given models.dev has `groq` with no `api`
 When the job publishes
-Then `groq.api` is the override's URL and `groq.tier` is `popular`.
+Then `groq.api` is the override's URL and `groq.tier` is `standard` (amended 2026-08-25, catalog repo commit `b50f5a6`: groq demoted from the popular tier — an inference host, not a model author, so it has no author-usage ranking; the override-URL mechanism this scenario tests is unaffected).
 
 **Scenario (HP): local-file providers appear with the registry shape** — Traces to US-2.AC4
 Given the document
@@ -996,7 +996,7 @@ This feature **modifies existing functionality**.
 - **FR-015** An unknown provider id MUST produce `ErrUnknownProvider` whose message names the id and never a canonical alternative.
 - **FR-016** Boot MUST succeed with unknown providers; the provider row reports `unknown-provider` `[A-16]`. An agent is `degraded_reason: needs_provider` **iff its primary provider is unknown** (or fails exact-match, FR-036); it then refuses turns with error kind `needs_provider` (logged at WARN) and zero upstream requests. An unknown provider referenced only by a fallback is dropped from the pool with one WARN naming the agent and the provider; the agent runs on the remaining pool.
 - **FR-017** `GET /api/v1/providers/catalog` MUST return a pre-serialised byte slice cached at apply time with `version`, `updated_at`, the document's free-text `source`, `served_from ∈ {embedded, pulled}`, `stale` (true when `updated_at` > 14 days); `ETag: "<sha256>"` quoted strong, `Cache-Control: private, max-age=0, must-revalidate`, no content negotiation; 304 on an exactly matching `If-None-Match` (weak/unquoted → 200); bytes and ETag swapped atomically as one pair; 401 unauthenticated; 503 when no catalog `[A-1]`.
-- **FR-018** Tier and unsupported reason MUST be data in the document; the popular set is `{openai, openrouter, anthropic, google, xai, groq, mistral, deepseek}` `[A-9]`.
+- **FR-018** Tier and unsupported reason MUST be data in the document; the popular set is `{openai, anthropic, google, openrouter, deepseek, zai, minimax, moonshotai, alibaba, xai, mistral, ollama}` `[A-9]` (amended 2026-08-25, catalog repo commit `b50f5a6`: twelve, usage-backed; groq demoted, ollama promoted).
 - **FR-019** Configuring or probing a `tier: unsupported` provider MUST return 400 with the reason.
 - **FR-020** The providers API MUST list models for `locality = cloud` providers from the catalog with no outbound call; for `locality = local` providers (FR-039) from the live endpoint.
 - **FR-021** `POST /api/v1/providers/{id}/entitlement` MUST call the protocol's listing once (`openai-compatible`/`google` → `GET {api}/models`; `anthropic` → `GET {api}/v1/models` with `x-api-key` + `anthropic-version`; `ollama` → `/api/tags`), intersect with the catalog, annotate entitlement, surface extra models as limits-unknown, and cache by `SHA-256(providerID + ":" + credentialRefName)` — the ref name, never the secret — for the process lifetime, evicting on provider DELETE, on a PUT that changes `api_key`/`api_key_ref` (not on a PUT that only bumps `updated_at`), and on catalog refresh; `cli` and custom rows → 409; no resolvable key → 422; upstream non-2xx → 502 `{"error":"could not fetch upstream model list: status <n>"}` with nothing cached; rate-limited like `/test` `[A-13]` (X-03, X-12).

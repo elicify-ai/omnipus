@@ -1,6 +1,6 @@
 // TDD row 8 — TestPickerModel (ADR-068 FR-022, FR-023, FR-024).
 //
-// Oracles: the "Picker opens with 8 Popular tiles and a collapsed list",
+// Oracles: the "Picker opens with 12 Popular tiles and a collapsed list",
 // "Search expands and filters the full list", "Expanded list is letter-grouped
 // and virtualised", "Recently used row appears" and "Custom endpoint is last"
 // scenarios, plus the "Picker search" dataset rows 1-10, in
@@ -54,26 +54,34 @@ function configuredProvider(over: Partial<Provider> & { id: string }): Provider 
 
 describe('TestPickerModel', () => {
   describe('Popular band (FR-022)', () => {
-    it('renders exactly 8 tiles, one per popular company, in catalog order', () => {
+    it('renders exactly 12 tiles, one per popular company, in catalog order', () => {
+      // Twelve, usage-backed (catalog repo commit b50f5a6): groq demoted (an
+      // inference host, not a model author); ollama promoted (local-model
+      // support, on brand for a self-hosted product).
       const model = build()
       expect(model.popular.map((row) => row.company)).toEqual([
         'OpenAI',
         'Anthropic',
         'OpenRouter',
         'Google Gemini',
-        'Groq',
         'DeepSeek',
         'xAI',
         'Zhipu AI',
+        'Moonshot AI',
+        'MiniMax',
+        'Alibaba Cloud',
+        'Ollama',
+        'Mistral AI',
       ])
+      expect(model.popular.map((row) => row.company)).not.toContain('Groq')
     })
 
     it('follows the catalog, not a SPA constant — retiering re-derives the band', () => {
-      // The scenario's own fixture edit: groq becomes standard, cerebras popular.
+      // The scenario's own fixture edit: ollama becomes standard, cerebras popular.
       const edited: ProvidersCatalog = {
         ...catalog,
         providers: catalog.providers.map((provider) =>
-          provider.id === 'groq'
+          provider.id === 'ollama'
             ? { ...provider, tier: 'standard' as const }
             : provider.id === 'cerebras'
               ? { ...provider, tier: 'popular' as const }
@@ -81,9 +89,9 @@ describe('TestPickerModel', () => {
         ),
       }
       const companies = buildPickerModel({ catalog: edited }).popular.map((row) => row.company)
-      expect(companies).not.toContain('Groq')
+      expect(companies).not.toContain('Ollama')
       expect(companies).toContain('Cerebras')
-      expect(companies).toHaveLength(8)
+      expect(companies).toHaveLength(12)
       // Catalog order still, so Cerebras lands where cerebras sits in the document.
       const catalogOrder = edited.providers.filter((p) => p.tier === 'popular').map((p) => p.company)
       expect(companies).toEqual(catalogOrder)
@@ -107,9 +115,9 @@ describe('TestPickerModel', () => {
     it('counts "All providers (N)" as the catalog entries that are not Popular tiles', () => {
       const model = build()
       const popularEntries = catalog.providers.filter((p) => p.tier === 'popular').length
-      expect(popularEntries).toBe(8)
+      expect(popularEntries).toBe(12)
       expect(model.allProvidersCount).toBe(catalog.providers.length - popularEntries)
-      expect(model.allProvidersCount).toBe(182)
+      expect(model.allProvidersCount).toBe(178)
     })
   })
 

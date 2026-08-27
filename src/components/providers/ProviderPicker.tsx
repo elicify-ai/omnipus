@@ -40,7 +40,7 @@
 //  3. `aria-setsize` on a rendered option is the number of rows in the
 //     virtualised set — i.e. one per company row currently in the filtered
 //     list. The "All providers (N)" toggle shows a DIFFERENT number, the
-//     catalog's non-Popular entry count (182 in the fixture), because that
+//     catalog's non-Popular entry count (178 in the fixture), because that
 //     counts catalog entries while a row counts companies. Deliberate: an
 //     `aria-setsize` that disagreed with the `aria-posinset` range would be
 //     invalid ARIA, and 4.1.2 is a tested constraint here.

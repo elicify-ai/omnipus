@@ -2,7 +2,7 @@
  * ProviderPicker.test.tsx — ADR-068 spec TDD plan row 25.
  *
  * Scenarios covered (spec §"User Story 5"):
- *   • Picker opens with 8 Popular tiles and a collapsed list
+ *   • Picker opens with 12 Popular tiles and a collapsed list
  *   • Search expands and filters the full list (component level; the dataset
  *     rows live in provider-picker-search.test.ts, row 25a)
  *   • Expanded list is letter-grouped and virtualised (SC-005: ≤ 22 options in
@@ -121,23 +121,23 @@ afterEach(() => {
 })
 
 describe('ProviderPicker — Popular tiles and the collapsed list', () => {
-  it('renders exactly 8 Popular tiles, one per popular company, in catalog order', () => {
+  it('renders exactly 12 Popular tiles, one per popular company, in catalog order', () => {
     renderPicker()
     const ids = popularIdsInCatalogOrder(PROVIDERS_CATALOG)
-    expect(ids).toHaveLength(8)
+    expect(ids).toHaveLength(12)
 
     const tiles = screen.getAllByTestId(/^picker-popular-/)
-    expect(tiles).toHaveLength(8)
+    expect(tiles).toHaveLength(12)
     expect(tiles.map((t) => t.getAttribute('data-testid'))).toEqual(
       ids.map((id) => `picker-popular-${id}`),
     )
   })
 
-  it('shows "All providers (182)" collapsed, with the list hidden', () => {
+  it('shows "All providers (178)" collapsed, with the list hidden', () => {
     renderPicker()
     const toggle = screen.getByTestId('picker-all-toggle')
-    // 190 catalog entries minus the 8 popular ones.
-    expect(toggle).toHaveTextContent('All providers (182)')
+    // 190 catalog entries minus the 12 popular ones.
+    expect(toggle).toHaveTextContent('All providers (178)')
     expect(toggle).toHaveAttribute('aria-expanded', 'false')
     expect(screen.queryAllByTestId(/^picker-row-/)).toHaveLength(0)
   })
@@ -146,7 +146,7 @@ describe('ProviderPicker — Popular tiles and the collapsed list', () => {
     const mutated: ProvidersCatalog = {
       ...PROVIDERS_CATALOG,
       providers: PROVIDERS_CATALOG.providers.map((p): CatalogProvider => {
-        if (p.id === 'groq') return { ...p, tier: 'standard' }
+        if (p.id === 'ollama') return { ...p, tier: 'standard' }
         if (p.id === 'cerebras') return { ...p, tier: 'popular' }
         return p
       }),
@@ -154,9 +154,9 @@ describe('ProviderPicker — Popular tiles and the collapsed list', () => {
     expect(mutated.providers.some((p) => p.id === 'cerebras')).toBe(true)
 
     renderPicker({ catalog: mutated })
-    expect(screen.queryByTestId('picker-popular-groq')).toBeNull()
+    expect(screen.queryByTestId('picker-popular-ollama')).toBeNull()
     expect(screen.getByTestId('picker-popular-cerebras')).toBeInTheDocument()
-    expect(screen.getAllByTestId(/^picker-popular-/)).toHaveLength(8)
+    expect(screen.getAllByTestId(/^picker-popular-/)).toHaveLength(12)
   })
 
   it('records a performance mark when it opens', () => {
@@ -352,8 +352,8 @@ describe('ProviderPicker — keyboard (FR-026)', () => {
     fireEvent.click(screen.getByTestId('picker-all-toggle'))
     screen.getByTestId('picker-search').focus()
 
-    // 8 tiles, no recent rows — the 9th ArrowDown enters the letter list.
-    await user.keyboard('{ArrowDown}'.repeat(9))
+    // 12 tiles, no recent rows — the 13th ArrowDown enters the letter list.
+    await user.keyboard('{ArrowDown}'.repeat(13))
     expect(onVirtualScrollToIndex).toHaveBeenCalled()
     await user.keyboard('{Enter}')
     expect(onSelect).toHaveBeenCalledTimes(1)

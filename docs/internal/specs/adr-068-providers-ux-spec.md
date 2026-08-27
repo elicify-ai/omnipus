@@ -218,11 +218,11 @@ An operator choosing a provider — in onboarding step 3 or in Settings — sees
 
 **Why this priority**: the UX review verdict is FAIL at 190 with the current flat grids; without it US-2/US-4 land on an unusable surface.
 
-**Independent Test**: render the picker with a 190-entry catalog fixture; assert 8 Popular tiles, collapsed *All providers (N)*, that typing expands the list, that Bedrock is `aria-disabled` with a reason, and that the rendered row count in the expanded list is bounded (virtualised).
+**Independent Test**: render the picker with a 190-entry catalog fixture; assert 12 Popular tiles, collapsed *All providers (N)*, that typing expands the list, that Bedrock is `aria-disabled` with a reason, and that the rendered row count in the expanded list is bounded (virtualised).
 
 **Acceptance Scenarios**:
 
-1. **Given** the catalog has ≥9 providers, **When** the picker opens, **Then** exactly 8 Popular tiles render in a fixed order, and below them the section *All providers (`<count>`)* is collapsed.
+1. **Given** the catalog has ≥9 providers, **When** the picker opens, **Then** exactly 12 Popular tiles render in a fixed order, and below them the section *All providers (`<count>`)* is collapsed.
 2. **Given** the picker is open and the search field is empty, **When** the operator types a query, **Then** the *All providers* list expands and shows only providers whose `company`, `name`, plan, region or alias matches, case-insensitively (the catalog's `company` field — S67 adds it, X-10 — is the grouping key; one tile/row per company, its plan × region variants are the catalog providers sharing that `company`); with no match an empty state *"No provider matches `<query>`"* shows with *Custom endpoint* still available.
 3. **Given** the picker is open, **When** the operator expands *All providers* without a query, **Then** rows are grouped under letter headers (A–Z, then `#`) and the DOM contains at most the visible window of rows plus overscan, not all ~190.
 4. **Given** an unsupported provider (e.g. Amazon Bedrock), **When** it appears in the list, **Then** it is rendered `aria-disabled="true"` with the copy mapped from S67's `unsupported_reason` enum (`cloud-iam` → *"needs request signing"*; the enum value is never shown raw — X-10), is not selectable, and is never hidden by default.
@@ -308,7 +308,7 @@ Every byte crossing the gateway/SPA boundary for this feature is defined in `con
 ## Behavioral Contract
 
 Primary flows:
-- When the operator opens a provider picker, the system shows 8 Popular tiles, Recent, search, a collapsed *All providers (N)* and *Custom endpoint* last.
+- When the operator opens a provider picker, the system shows 12 Popular tiles, Recent, search, a collapsed *All providers (N)* and *Custom endpoint* last.
 - When a provider's catalog entry lists `sign_in`, the system offers Sign in (pre-selected) and API key; otherwise API key only.
 - When the operator confirms removal of a provider, the system deletes the configuration and its stored key, lists and leaves dependents without a model, and offers no Undo.
 - When the operator changes the default model, the system persists it and the next default-routed turn uses it without restart.
@@ -474,7 +474,7 @@ No new nominal Go types beyond the generated wire types. Provider ids, model ids
 4. `npm run build && rm -rf pkg/gateway/spa && cp -r dist/spa/* pkg/gateway/spa/ && CGO_ENABLED=0 go build -tags goolm,stdjson -o /tmp/omnipus ./cmd/omnipus/`
 5. `export OMNIPUS_HOME=/tmp/omnipus-e2e-test && rm -rf "$OMNIPUS_HOME" && mkdir -p "$OMNIPUS_HOME" && OMNIPUS_BEARER_TOKEN="" /tmp/omnipus gateway --allow-empty`
 
-**Expected first-run behaviour**: onboarding step 3 shows the shared picker with 8 Popular tiles and no pre-selected model.
+**Expected first-run behaviour**: onboarding step 3 shows the shared picker with 12 Popular tiles and no pre-selected model.
 
 **Common first-run failures**: port 5000 in use (set `gateway.port`); building without `-tags goolm,stdjson` fails on `pkg/channels/matrix` (missing tag, not a bug); stale `pkg/gateway/spa/` serves the old picker.
 
@@ -545,7 +545,7 @@ No new nominal Go types beyond the generated wire types. Provider ids, model ids
 #### Background
 
 - **Given** the gateway is running with an unlocked credential store
-- **And** the providers-catalog GET serves the 190-entry fixture with the 8 Popular ids pinned
+- **And** the providers-catalog GET serves the 190-entry fixture with the 12 Popular ids pinned
 
 ---
 
@@ -932,16 +932,16 @@ No new nominal Go types beyond the generated wire types. Provider ids, model ids
 
 ---
 
-#### Scenario: Picker opens with 8 Popular tiles and a collapsed list
+#### Scenario: Picker opens with 12 Popular tiles and a collapsed list
 
 **Traces to**: User Story 5, Acceptance Scenario 1
 **Category**: Happy Path
 
 - **Given** the picker is opened from onboarding step 3
 - **When** it renders
-- **Then** exactly 8 elements with `data-testid^="picker-popular-"` exist — one per catalog provider with `tier: popular`, in catalog order (the fixture's: openai, anthropic, openrouter, google, xai, groq, mistral, deepseek)
-- **And** an element `data-testid="picker-all-toggle"` reads *All providers (182)* and `aria-expanded="false"`
-- **And** changing the fixture so `groq` is `tier: standard` and `cerebras` is `tier: popular` re-renders the band accordingly with no SPA code change
+- **Then** exactly 12 elements with `data-testid^="picker-popular-"` exist — one per catalog provider with `tier: popular`, in catalog order (the fixture's: openai, anthropic, openrouter, google, deepseek, xai, zai, moonshot, minimax, alibaba, ollama, mistral — amended 2026-08-25, catalog repo commit `b50f5a6`: `groq` demoted to standard, `ollama` promoted)
+- **And** an element `data-testid="picker-all-toggle"` reads *All providers (178)* and `aria-expanded="false"`
+- **And** changing the fixture so `ollama` is `tier: standard` and `cerebras` is `tier: popular` re-renders the band accordingly with no SPA code change
 
 #### Scenario: Search expands and filters the full list
 
@@ -959,10 +959,10 @@ No new nominal Go types beyond the generated wire types. Provider ids, model ids
 **Category**: Happy Path
 
 - **Given** the picker is open
-- **When** the operator activates *All providers (182)*
+- **When** the operator activates *All providers (178)*
 - **Then** letter headers appear in A→Z order followed by `#`
 - **And** with the 480 px / 40 px-row fixture the count of elements `[role="option"]` in the DOM is ≤ 22
-- **And** each rendered option has `aria-setsize="182"` and a distinct `aria-posinset`
+- **And** each rendered option has `aria-setsize="178"` and a distinct `aria-posinset`
 - **And** cmdk is mounted with `shouldFilter={false}`; pressing `End` calls the virtualiser's scroll-to-index for the last row and then focuses it
 
 #### Scenario: Unsupported provider is visible, disabled, with reason
@@ -1266,7 +1266,7 @@ Conventions: Go tests run as `CGO_ENABLED=0 go test -tags goolm,stdjson -run '^T
 | 5 | `TestRecommendedChipSelection` (`model-ordering.test.ts`) | Unit (TS) | At most three Recommended chips per provider | eligibility + tie-break |
 | 6 | `TestModelOrdering` (`model-ordering.test.ts`) | Unit (TS) | Models ordered by vendor then release date | group + date desc + undated last |
 | 7 | `TestRegionFromLocale` (`region-inference.test.ts`) | Unit (TS) | Region inferred from locale | outline rows incl. `zh-TW`, `zh-HK`, `zh-SG`, `en-GB` |
-| 8 | `TestPickerModel` (`provider-picker-model.test.ts`) | Unit (TS) | Picker opens with 8 Popular…; Search expands…; Custom endpoint is last | pure data transform: tiers, recent, search over company/plan/region/alias, letter groups, custom last |
+| 8 | `TestPickerModel` (`provider-picker-model.test.ts`) | Unit (TS) | Picker opens with 12 Popular…; Search expands…; Custom endpoint is last | pure data transform: tiers, recent, search over company/plan/region/alias, letter groups, custom last |
 | 9 | `TestDraftGuard` (`use-draft-guard.test.ts`) | Unit (TS) | Close behaviour by draft state | whitespace = empty; saved = clean |
 | 10 | `TestDeleteProvider_Unused200` | Integration (Go) | Remove an unused provider after one confirmation | 200 body, config row gone, `<id>_API_KEY` gone; variant with the key pre-deleted (NotFoundError tolerated); audit entry `provider.deleted` with ref name only |
 | 10a | `TestDeleteProvider_PartialFailureNoOrphanSecret` | Integration (Go) | DELETE partial failure leaves no orphaned secret and a retry succeeds | inject config-write failure → 500, key present, dependents cleared; retry → 200; also inject an entity-update failure on agent 2 of 3 → 500, retry succeeds |
@@ -1384,7 +1384,7 @@ Conventions: Go tests run as `CGO_ENABLED=0 go test -tags goolm,stdjson -run '^T
 
 | # | Input | Boundary Type | Expected Output | Traces to | Notes |
 |---|---|---|---|---|---|
-| 1 | `""` | Empty | collapsed | Picker opens with 8 Popular tiles… | |
+| 1 | `""` | Empty | collapsed | Picker opens with 12 Popular tiles… | |
 | 2 | `"   "` | Whitespace | collapsed | Search expands and filters… | trimmed |
 | 3 | `"z"` | Single char | expands; all with z | Search expands and filters… | |
 | 4 | `"Coding Plan"` | Case | plan matches | Search expands and filters… | |
@@ -1575,8 +1575,8 @@ This feature **modifies existing functionality**.
 | FR-018 | US-4 | Change default model takes effect…; Default-model PUT validation | TestDefaultModel_PutResolvesAtTurnTime; TestDefaultModel_PutValidation |
 | FR-019 | US-4 | Default model card shows…; Set as default from the provider row | ProvidersSection.test.tsx; providers.spec.ts |
 | FR-020 | US-4, US-1 | Fresh install seeds no default model; Onboarding complete with sign-in (reload guard); Change default model takes effect… | TestOnboardingComplete_AuthMethod; TestDefaultModel_PutResolvesAtTurnTime |
-| FR-021 | US-5 | Picker opens with 8 Popular tiles…; Recently used row appears | ProviderPicker.test.tsx; onboarding.spec.ts |
-| FR-022 | US-5 | Picker opens with 8 Popular tiles…; Search expands…; Custom endpoint is last | TestPickerModel; ProviderPicker.test.tsx |
+| FR-021 | US-5 | Picker opens with 12 Popular tiles…; Recently used row appears | ProviderPicker.test.tsx; onboarding.spec.ts |
+| FR-022 | US-5 | Picker opens with 12 Popular tiles…; Search expands…; Custom endpoint is last | TestPickerModel; ProviderPicker.test.tsx |
 | FR-023 | US-5 | Expanded list is letter-grouped and virtualised | ProviderPicker.test.tsx; accessibility.spec.ts |
 | FR-024 | US-5 | Search expands and filters the full list | TestPickerModel; provider-picker-search.test.ts |
 | FR-025 | US-5 | Unsupported provider is visible, disabled, with reason | ProviderPicker.test.tsx |
@@ -1774,7 +1774,7 @@ Findings of `cross-spec-review-adr-066-067-068.md` assigned to S68 / A68 (plus t
 - ADR-066 D9 supplies window/source values; until it lands the card shows `—`. Source vocabulary is `operator | live | catalog | floor` (D8 "learned" dropped).
 - ADR-067 owns `GET /providers/catalog`, `POST /providers/{id}/entitlement`, `Provider.status: unknown-provider`, `Agent.degraded_reason`, and the catalog id rule; this spec consumes them and lists them verbatim where both specs must agree.
 - `DefaultModel.yaml` is the persisted shape of `agents.defaults.default_model` and the wire shape of the default-model GET; `agents.defaults.model_name` no longer exists.
-- The Popular set is the 8 ids in ADR-067 §4.2 and pass-2 MIN-008.
+- The Popular set is the 12 ids in ADR-067 §4.2 (amended 2026-08-25, catalog repo commit `b50f5a6`: `openai`, `anthropic`, `google`, `openrouter`, `deepseek`, `zai`, `minimax`, `moonshotai`, `alibaba`, `xai`, `mistral`, `ollama` — `groq` demoted to standard, `ollama` promoted) and pass-2 MIN-008.
 - The vendor CLIs (`codex`, Copilot CLI) are installed by the operator; Omnipus never installs them.
 - No Windows-specific behaviour: file locking caveats in CLAUDE.md apply to `config.json` writes as they do to every store today.
 - Out of scope: xAI sign-in implementation (gated), the catalog assembly job, context-window resolution, any agent-form change beyond rendering *needs a model*.
