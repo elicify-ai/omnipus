@@ -7375,10 +7375,10 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
     ],
   },
   {
-    method: "get",
+    method: "post",
     path: "/providers/:id/test",
     alias: "testProvider",
-    description: `Verifies that an API key is configured for the given provider without making an upstream call. Returns success&#x3D;false with an error message if no key is configured. Available before and after onboarding — while onboarding is incomplete and the instance has no authentication authority the route is reachable without a credential. Rate-limited: 60 requests per minute per IP -&gt; 429.
+    description: `Resolves the provider&#x27;s stored API key and probes it with ONE real upstream request (providers.ValidateKey), returning success&#x3D;false with an error message when no key is configured, when the credential ref cannot be resolved, or when the provider rejects the key. Available before and after onboarding — while onboarding is incomplete and the instance has no authentication authority the route is reachable without a credential. Rate-limited: 60 requests per minute per IP -&gt; 429.
 `,
     requestFormat: "json",
     parameters: [
