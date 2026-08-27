@@ -29,6 +29,24 @@
 // (typedTurnExit: one ERROR line, EventKindError, transcript entry) with NO
 // further provider call.
 //
+// FR-032 amendment (regression fix, C1-residue, 2026-08-27): the guard's
+// "un-emptiable residue" judges only the WINDOW (tool defs + the pinned/
+// floor messages, every eligible result emptied) — never the ephemeral
+// system notes C1 (4d357904) added to `total` (scratchpad, workspace
+// instructions/AGENT.md, web-rendering, compressed manifest). Those notes
+// are un-emptiable AND non-window: folding them into the guard's own
+// predicate meant an oversized-but-legal AGENT.md alone (D9's 262,144-byte
+// cap has no budget-aware clamp) made the residue exceed B on EVERY
+// tool-calling turn on that workspace, forever — turning "unreachable by
+// construction" (§7) into an ordinary configuration state, not the injected
+// fault this fatal exit is reserved for. The notes still count toward the
+// TRIGGER and the 80% TARGET (C1 is not undone — the check still fires and
+// still tries to shed what it can); when they are the ONLY reason `total`
+// still exceeds B after full emptying, the check logs one ERROR
+// (contextResidueOverflowsTotal) and returns nil — the provider's own
+// context_too_long (ADR-051) is the backstop, per §8: "nothing size-related
+// is turn-fatal once D4–D6 are in."
+//
 // Order for one result (FR-033): ingest bound → filter → cap/clamp +
 // encoded-line bound → archive append + state (all inside admitToolResult)
 // → THIS CHECK → D5 empty → assemble → call.
@@ -59,6 +77,19 @@ var midTurnChecksTotal atomic.Int64
 // MidTurnBudgetChecksTotal returns the number of mid-turn D6 checks that
 // evaluated their trigger conditions (exempt/NoHistory turns do not count).
 func MidTurnBudgetChecksTotal() int64 { return midTurnChecksTotal.Load() }
+
+// contextResidueOverflowsTotal counts mid-turn checks where the emptiable
+// WINDOW itself (tool defs + the pinned/floor messages, every eligible tool
+// result emptied) fits B, but the un-emptiable ephemeral system notes
+// (ephemeralSystemNoteTokens — AGENT.md above all) alone push the request
+// over. This is a static configuration condition (an oversized AGENT.md,
+// typically), never the injected fault FR-032 reserves the thrash-guard's
+// fatal exit for — see the FR-032 amendment note on midTurnWindowCheck's
+// final guard. Exported for test assertions and the /metrics handler.
+var contextResidueOverflowsTotal atomic.Int64
+
+// ContextResidueOverflowsTotal returns the count above.
+func ContextResidueOverflowsTotal() int64 { return contextResidueOverflowsTotal.Load() }
 
 // absoluteShareTokens converts the operator's absolute_trigger_chars into
 // the estimator-token threshold of FR-029's share condition
@@ -230,7 +261,23 @@ func (al *AgentLoop) midTurnWindowCheck(
 	// (~120+ estimator tokens each, buildRecallMark/recall_mark.go) and lets
 	// this pre-check pass a band the real post-pass guard then refuses,
 	// after the marks are already persisted.
-	if !al.midTurnPassCanSucceed(ts, messages, toolDefs, lineOf, archive, budget, absShare, noteTokens, totalFired, shareFired) {
+	//
+	// FR-032 amendment (regression fix, C1-residue, 2026-08-27): noteTokens
+	// is deliberately EXCLUDED from this predicate. C1 (4d357904) made
+	// noteTokens un-emptiable AND added it to the residue this pre-check
+	// refuses on — so an oversized-but-legal AGENT.md (D9's 262,144-byte
+	// cap, no budget-aware clamp) alone made the residue exceed B on every
+	// tool-calling turn, forever, on that workspace: "unreachable by
+	// construction" (§7) became reachable by ordinary configuration, not
+	// the injected fault FR-032 reserves this fatal exit for. The window
+	// portion — everything D5 could ever have emptied, fully emptied — is
+	// what this predicate judges; the notes still ride on `total`/`fits`
+	// below (the trigger and the target still see them, so C1 is not
+	// undone: the check still fires and still tries to shed what it can),
+	// but a residue that is over budget ONLY because of the un-emptiable
+	// notes is not this guard's failure to report — see the final guard's
+	// own amendment note for where that case is actually surfaced.
+	if !al.midTurnPassCanSucceed(ts, messages, toolDefs, lineOf, archive, budget, absShare, totalFired, shareFired) {
 		return messages, fmt.Errorf(
 			"%w: the un-emptiable residue alone exceeds the budget "+
 				"(total=%d budget=%d share=%d absolute_share=%d agent_id=%s session_key=%s)",
@@ -256,12 +303,40 @@ func (al *AgentLoop) midTurnWindowCheck(
 	// FR-032: the guard re-checks the TRIGGER conditions, not the target —
 	// an unreachable target with every trigger back under its threshold is
 	// B-36b: the turn simply continues.
-	total = requestTokens(messages, toolDefs) + noteTokens
+	//
+	// FR-032 amendment (regression fix, C1-residue): windowTokens is the
+	// request MINUS the un-emptiable ephemeral notes — everything D5 could
+	// ever have emptied, now fully emptied. That is the only quantity this
+	// guard may kill the turn over: a window that still doesn't fit after
+	// every eligible result is gone is the genuine "non-tool message itself
+	// oversized" case §7 calls unreachable except by an injected fault.
+	// `total` (window + noteTokens) is still computed and logged — the
+	// notes are real request bytes and a real cause of overflow — but when
+	// they are the ONLY reason total exceeds B, that is a static
+	// configuration condition (an oversized AGENT.md, typically), not the
+	// injected fault this fatal exit is reserved for (ADR-066 §7 "unreachable
+	// by construction", §8 "nothing size-related is turn-fatal once D4–D6
+	// are in"). Log loudly — an operator needs to know AGENT.md is
+	// oversized — and let the provider's own context_too_long (ADR-051
+	// translate_error.go) be the backstop, exactly as it was before C1 made
+	// noteTokens visible to this check at all.
+	windowTokens := requestTokens(messages, toolDefs)
+	total = windowTokens + noteTokens
 	share = toolResultShareTokens(messages)
-	if total > budget || share > absShare {
+	if windowTokens > budget || share > absShare {
 		return messages, fmt.Errorf(
 			"%w: total=%d budget=%d share=%d absolute_share=%d (agent_id=%s session_key=%s)",
 			ErrContextUnrecoverable, total, budget, share, absShare, ts.agent.ID, ts.sessionKey)
+	}
+	if total > budget {
+		contextResidueOverflowsTotal.Add(1)
+		logger.ErrorCF("agent",
+			"mid-turn window check: un-emptiable system-note overhead alone exceeds the context budget; "+
+				"continuing turn, provider's own context error is the backstop",
+			map[string]any{
+				"total": total, "budget": budget, "window_tokens": windowTokens,
+				"note_tokens": noteTokens, "agent_id": ts.agent.ID, "session_key": ts.sessionKey,
+			})
 	}
 	return messages, nil
 }
@@ -292,7 +367,7 @@ func (al *AgentLoop) midTurnPassCanSucceed(
 	toolDefs []providers.ToolDefinition,
 	lineOf func(int) int,
 	archive []memory.ArchivedMessage,
-	budget, absShare, noteTokens int,
+	budget, absShare int,
 	totalFired, shareFired bool,
 ) bool {
 	if ts.agent.Sessions == nil {
@@ -318,7 +393,14 @@ func (al *AgentLoop) midTurnPassCanSucceed(
 		}
 		residue[i].Content = mark
 	}
-	if totalFired && requestTokens(residue, toolDefs)+noteTokens > budget {
+	// FR-032 amendment (regression fix, C1-residue): noteTokens is
+	// deliberately NOT added here — see the call site's doc comment. This
+	// predicate judges only what D5 could ever have emptied (residue) plus
+	// the un-emptiable WINDOW surface (toolDefs, the pinned/floor messages)
+	// requestTokens already folds in; the ephemeral system notes are a
+	// separate, non-window addend the final guard in midTurnWindowCheck
+	// accounts for on its own terms.
+	if totalFired && requestTokens(residue, toolDefs) > budget {
 		return false
 	}
 	if shareFired && toolResultShareTokens(residue) > absShare {
