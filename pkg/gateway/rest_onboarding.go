@@ -305,6 +305,17 @@ var errOnboardingUsernameTaken = errors.New("onboarding: username already exists
 // wire vocabulary. (A 401 would additionally be read by the SPA as session
 // expiry and force a logout — see rest_providers_catalog_test.go.)
 func (a *restAPI) onboardingWindowGate(w http.ResponseWriter, r *http.Request) bool {
+	// A config we cannot read cannot tell us whether users exist, and
+	// hasAuthenticationAuthority reports a nil snapshot as "no authority" —
+	// which would OPEN the window on the one route that mints authority. Same
+	// reasoning as the unknown-state signal below: an unreadable config is
+	// indistinguishable from an instance full of accounts. Refuse.
+	if a.requestConfigSnapshot(r) == nil {
+		slog.Warn("onboarding: refused — no readable config to judge the request against",
+			"source_ip", a.clientIPWithLiveFallback(r))
+		jsonErr(w, http.StatusConflict, onboardingClosedMsg)
+		return false
+	}
 	if a.preAuthOnboardingWindowOpen(r) {
 		return true
 	}
