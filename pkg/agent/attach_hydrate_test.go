@@ -10,8 +10,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/memory"
+	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
@@ -708,4 +713,166 @@ func TestHydrateAgentHistoryFromTranscript_UnreadableArchiveIsNotFlaggedHydrated
 		t.Fatal("an archive that could not be read must never be flagged hydrated: the flag is " +
 			"one-way and permanently disables recall by tool_call_id for the whole session")
 	}
+}
+
+// raceyFakeSessionStore is a minimal session.SessionStore fake purpose-built
+// to reproduce M5 deterministically, without depending on real goroutine
+// timing (which false-green-patterns.md flags as an unreliable proof — see
+// "A stopwatch is not a proof of logic"). It simulates the EXACT race the
+// finding describes: hydration's own FR-045 pre-check (a real ReadArchive
+// call, via agentArchiveHasLines) sees the archive genuinely empty, but by
+// the time SetHistory executes, a "foreign" write — standing in for the
+// session's own first live turn appending its own user message, running on
+// another goroutine — has already landed. Real SessionWriter.SetHistory is
+// fire-and-forget and silently refuses (ErrArchiveNotEmpty, swallowed) once
+// that has happened; this fake reproduces exactly that effect by writing the
+// foreign content INSIDE SetHistory itself, at the one moment production
+// code cannot observe it happening.
+type raceyFakeSessionStore struct {
+	archive        []providers.Message
+	foreignContent []providers.Message // injected the moment SetHistory is called
+	hydrated       bool
+	setHistoryCall int
+}
+
+func (f *raceyFakeSessionStore) GetHistory(string) []providers.Message { return f.archive }
+
+func (f *raceyFakeSessionStore) ReadArchive(context.Context, string) ([]memory.ArchivedMessage, error) {
+	out := make([]memory.ArchivedMessage, len(f.archive))
+	for i, m := range f.archive {
+		out[i] = memory.ArchivedMessage{Message: m}
+	}
+	return out, nil
+}
+
+func (f *raceyFakeSessionStore) Projection(string) memory.ProjectionMeta {
+	return memory.ProjectionMeta{Hydrated: f.hydrated}
+}
+
+func (f *raceyFakeSessionStore) AddMessage(_, role, content string) {
+	f.archive = append(f.archive, providers.Message{Role: role, Content: content})
+}
+func (f *raceyFakeSessionStore) AddFullMessage(_ string, msg providers.Message) {
+	f.archive = append(f.archive, msg)
+}
+
+// SetHistory reproduces SessionWriter's real contract: it fills only an
+// EMPTY archive and is fire-and-forget (no error surfaces to the caller).
+// The race: between the caller's own pre-check and THIS call, foreignContent
+// (if set) is simulated as having landed first — so the write this call
+// actually intended (history) is REFUSED, exactly like the real
+// ErrArchiveNotEmpty path, and the caller has no way to tell from the return
+// value.
+func (f *raceyFakeSessionStore) SetHistory(_ string, history []providers.Message) {
+	f.setHistoryCall++
+	if len(f.foreignContent) > 0 {
+		f.archive = f.foreignContent // the race: someone else's write wins
+		return
+	}
+	if len(f.archive) > 0 {
+		return // real ErrArchiveNotEmpty refusal — a no-op, swallowed
+	}
+	f.archive = history
+}
+
+func (f *raceyFakeSessionStore) TruncateHistory(string, int)                             {}
+func (f *raceyFakeSessionStore) RollbackAppended(string, int, int, memory.ProjectionSet) {}
+func (f *raceyFakeSessionStore) SetProjectionState(string, memory.ProjectionKey, memory.ProjectionState) {
+}
+func (f *raceyFakeSessionStore) MarkHydrated(string) { f.hydrated = true }
+func (f *raceyFakeSessionStore) Save(string) error   { return nil }
+func (f *raceyFakeSessionStore) Close() error        { return nil }
+
+var _ session.SessionStore = (*raceyFakeSessionStore)(nil)
+
+// TestHydrateOneAgent_ForeignWriteRacesIn_NotMarkedHydrated — M5: a live
+// turn's own first append can land between HydrateAgentHistoryFromTranscript's
+// FR-045 empty check and its SetHistory call. SetHistory is fire-and-forget,
+// so hydration has no direct signal that ITS write was refused. Before this
+// fix, the post-write check was "is the archive non-empty now" — which the
+// foreign write alone satisfies — so the session got permanently
+// MarkHydrated'd on the strength of someone ELSE's write. Every later
+// recall_conversation(tool_call_id) on that session then answers "session
+// was rebuilt from the transcript" — turning every real [capped]/[emptied]
+// mark into a dead pointer — while the operator log claims hydration
+// succeeded.
+func TestHydrateOneAgent_ForeignWriteRacesIn_NotMarkedHydrated(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("OMNIPUS_HOME", home)
+	cfg := &config.Config{}
+	msgBus := bus.NewMessageBus()
+	al := mustNewAgentLoop(t, cfg, msgBus, &mockProvider{})
+	t.Cleanup(func() { al.Close() })
+
+	const agentID = "mia"
+	ag := NewAgentInstance(&config.AgentConfig{ID: agentID, Name: agentID}, &cfg.Agents.Defaults, cfg, &mockProvider{})
+	ag.Home = filepath.Join(home, "agents", agentID)
+	ag.ContextBuilder = NewContextBuilder(ag.Home).WithAgentInfo(agentID, agentID)
+
+	fake := &raceyFakeSessionStore{
+		// The live turn's own first message, standing in for whatever landed
+		// on another goroutine between the check and the write.
+		foreignContent: []providers.Message{{Role: "user", Content: "hey, are you there?"}},
+	}
+	ag.Sessions = fake
+
+	hydrationPayload := []providers.Message{
+		{Role: "user", Content: "deploy host?"},
+		{Role: "assistant", Content: "prod-east-1"},
+	}
+	al.hydrateOneAgent(ag, agentID, "sess-race", hydrateSessionKey(agentID, "sess-race"), hydrationPayload)
+
+	require.Equal(t, 1, fake.setHistoryCall, "the write must still be attempted")
+	assert.False(t, fake.hydrated,
+		"M5: a foreign write raced in — this must NOT be marked hydrated, or recall_conversation "+
+			"permanently answers 'session was rebuilt' for a session that is actually live")
+	assert.Equal(t, fake.foreignContent, fake.archive,
+		"the foreign content must be left exactly as it was — hydration must not clobber a live write")
+}
+
+// TestArchiveMatchesHydratedMessages — M5: the pure verification predicate.
+// The old post-write check was `len(archived) > 0` — true for ANY write by
+// ANY actor. archiveMatchesHydratedMessages must distinguish "my hydration
+// payload landed" from "someone else's write landed instead", even though
+// both leave a non-empty archive.
+func TestArchiveMatchesHydratedMessages(t *testing.T) {
+	payload := []providers.Message{
+		{Role: "user", Content: "deploy host?"},
+		{Role: "assistant", Content: "prod-east-1"},
+	}
+
+	t.Run("exact match: my own write landed", func(t *testing.T) {
+		archived := []memory.ArchivedMessage{
+			{Message: providers.Message{Role: "user", Content: "deploy host?"}},
+			{Message: providers.Message{Role: "assistant", Content: "prod-east-1"}},
+		}
+		assert.True(t, archiveMatchesHydratedMessages(archived, payload))
+	})
+
+	t.Run("M5: a foreign write — the old bare non-empty check would be fooled", func(t *testing.T) {
+		foreign := []memory.ArchivedMessage{
+			{Message: providers.Message{Role: "user", Content: "hey, are you there?"}},
+		}
+		oldCheckWouldSayWrote := len(foreign) > 0
+		require.True(t, oldCheckWouldSayWrote, "precondition: the old check is fooled by this exact input")
+		assert.False(t, archiveMatchesHydratedMessages(foreign, payload),
+			"a foreign write must never be mistaken for the hydration payload landing")
+	})
+
+	t.Run("length mismatch alone refuses", func(t *testing.T) {
+		archived := []memory.ArchivedMessage{{Message: providers.Message{Role: "user", Content: "deploy host?"}}}
+		assert.False(t, archiveMatchesHydratedMessages(archived, payload))
+	})
+
+	t.Run("same length, different tool_call_id refuses", func(t *testing.T) {
+		archived := []memory.ArchivedMessage{
+			{Message: providers.Message{Role: "tool", Content: "result", ToolCallID: "call_other"}},
+		}
+		got := []providers.Message{{Role: "tool", Content: "result", ToolCallID: "call_mine"}}
+		assert.False(t, archiveMatchesHydratedMessages(archived, got))
+	})
+
+	t.Run("empty payload matches empty archive", func(t *testing.T) {
+		assert.True(t, archiveMatchesHydratedMessages(nil, nil))
+	})
 }

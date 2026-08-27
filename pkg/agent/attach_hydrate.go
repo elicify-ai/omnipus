@@ -21,9 +21,23 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/memory"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/task"
 )
+
+// hydrationLock serializes concurrent HydrateAgentHistoryFromTranscript
+// attempts for the same per-agent session key (M5). Two inbound messages for
+// the same session can both reach the "self-heal" hydrate trigger in
+// processMessage concurrently; without this, both goroutines could run the
+// FR-045 empty check before either has written, both proceed, and the loser's
+// SetHistory silently no-ops against SessionWriter's fire-and-forget contract
+// (ErrArchiveNotEmpty swallowed inside pkg/session — see the write-landed
+// check below for why that matters here). Reuses the project's canonical
+// striped-mutex pattern (pkg/task/lock.go::StripedLock, already used by
+// pkg/memory's sessionLock) rather than inventing a new one.
+var hydrationLock = &task.StripedLock{}
 
 // hydrateSessionKey is the per-agent SessionStore key for a transcript session.
 func hydrateSessionKey(agentID, sessionID string) string {
@@ -307,54 +321,100 @@ func (al *AgentLoop) HydrateAgentHistoryFromTranscript(sessionID string) error {
 			continue
 		}
 		key := hydrateSessionKey(agentID, sessionID)
-		// FR-045: fill only an empty archive. A non-empty one is the live
-		// record — bytes, Skip and flags stay exactly as they are. An
-		// UNREADABLE one is not empty either: hydrating it would flag a real
-		// session hydrated on the strength of a write that SetHistory
-		// refuses.
-		hasLines, known := agentArchiveHasLines(ag, key)
-		if hasLines || !known {
-			logger.InfoCF("agent.attach", "skip hydration; agent archive is non-empty or unreadable",
-				map[string]any{
-					"agent_id": agentID, "session_key": key,
-					"session_id": sessionID, "archive_readable": known,
-				})
-			continue
-		}
-		ag.Sessions.SetHistory(key, msgs)
-		// SessionWriter.SetHistory is fire-and-forget and JSONLStore refuses a
-		// non-empty archive (ErrArchiveNotEmpty), so the ONLY way to know the
-		// write landed is to look. MarkHydrated is documented one-way: flagging
-		// a session whose fill never happened permanently answers every
-		// recall_conversation(tool_call_id) with "session was rebuilt from the
-		// transcript", turning every [capped]/[emptied] mark into a dead
-		// pointer — while the operator log claims hydration succeeded.
-		if wrote, readable := agentArchiveHasLines(ag, key); !wrote || !readable {
-			logger.ErrorCF("agent.attach", "hydration write did not land; not marking hydrated",
-				map[string]any{
-					"agent_id": agentID, "session_key": key,
-					"session_id": sessionID, "message_count": len(msgs),
-					"archive_readable": readable,
-				})
-			continue
-		}
-		// FR-048: recall by tool_call_id cannot promise the original result
-		// bytes for a transcript-rebuilt archive.
-		ag.Sessions.MarkHydrated(key)
-		if err := ag.Sessions.Save(key); err != nil {
-			logger.WarnCF("agent.attach", "save hydrated history failed",
-				map[string]any{"agent_id": agentID, "session_key": key, "error": err.Error()})
-		} else {
-			logger.InfoCF("agent.attach", "hydrated agent history from transcript",
-				map[string]any{
-					"agent_id":      agentID,
-					"session_key":   key,
-					"session_id":    sessionID,
-					"message_count": len(msgs),
-				})
-		}
+		al.hydrateOneAgent(ag, agentID, sessionID, key, msgs)
 	}
 	return nil
+}
+
+// hydrateOneAgent runs the FR-045/FR-048 check-write-verify-mark sequence for
+// one agent's reconstructed history. M5: the whole sequence is serialized per
+// session key via hydrationLock, so two concurrent hydration attempts for the
+// SAME session (e.g. two inbound messages both tripping processMessage's
+// self-heal trigger) cannot interleave their empty-check and write.
+func (al *AgentLoop) hydrateOneAgent(ag *AgentInstance, agentID, sessionID, key string, msgs []providers.Message) {
+	mu := hydrationLock.Get(key)
+	mu.Lock()
+	defer mu.Unlock()
+
+	// FR-045: fill only an empty archive. A non-empty one is the live
+	// record — bytes, Skip and flags stay exactly as they are. An
+	// UNREADABLE one is not empty either: hydrating it would flag a real
+	// session hydrated on the strength of a write that SetHistory refuses.
+	hasLines, known := agentArchiveHasLines(ag, key)
+	if hasLines || !known {
+		logger.InfoCF("agent.attach", "skip hydration; agent archive is non-empty or unreadable",
+			map[string]any{
+				"agent_id": agentID, "session_key": key,
+				"session_id": sessionID, "archive_readable": known,
+			})
+		return
+	}
+	ag.Sessions.SetHistory(key, msgs)
+	// M5: SessionWriter.SetHistory is fire-and-forget by interface contract
+	// (pkg/session logs and swallows ErrArchiveNotEmpty internally), so this
+	// call site has NO direct signal of whether ITS OWN write actually
+	// landed. hydrationLock above closes the hydrate-vs-hydrate half of the
+	// race entirely (two concurrent hydration attempts for this key can no
+	// longer interleave); it does not close a race against a DIFFERENT actor
+	// — e.g. this session's own first live turn, running on another
+	// goroutine, appending its user message to the same key between the
+	// FR-045 check above and here. A bare "is the archive non-empty now"
+	// re-read cannot tell the two apart: ANY write by ANYONE flips it — which
+	// is exactly how a live archive used to get permanently MarkHydrated'd
+	// (every later recall_conversation(tool_call_id) then answers "session
+	// was rebuilt", turning every real [capped]/[emptied] mark into a dead
+	// pointer, while the operator log claims hydration succeeded).
+	// Comparing the read-back CONTENT against the exact payload this call
+	// intended to write is a far stronger signal — it is fooled only by
+	// another writer producing byte-identical role/content/tool_call_id
+	// sequences, which a live turn's own message never will. This is still
+	// an inference from a re-read, not a true write acknowledgement from
+	// SetHistory: the fully authoritative fix is SessionWriter.SetHistory
+	// itself reporting success/failure — a pkg/session interface change,
+	// out of scope where this function lives (pkg/agent).
+	archived, err := ag.Sessions.ReadArchive(context.Background(), key)
+	if err != nil || !archiveMatchesHydratedMessages(archived, msgs) {
+		logger.ErrorCF("agent.attach", "hydration write did not land; not marking hydrated",
+			map[string]any{
+				"agent_id": agentID, "session_key": key,
+				"session_id": sessionID, "message_count": len(msgs),
+				"archive_readable": err == nil,
+			})
+		return
+	}
+	// FR-048: recall by tool_call_id cannot promise the original result
+	// bytes for a transcript-rebuilt archive.
+	ag.Sessions.MarkHydrated(key)
+	if err := ag.Sessions.Save(key); err != nil {
+		logger.WarnCF("agent.attach", "save hydrated history failed",
+			map[string]any{"agent_id": agentID, "session_key": key, "error": err.Error()})
+		return
+	}
+	logger.InfoCF("agent.attach", "hydrated agent history from transcript",
+		map[string]any{
+			"agent_id":      agentID,
+			"session_key":   key,
+			"session_id":    sessionID,
+			"message_count": len(msgs),
+		})
+}
+
+// archiveMatchesHydratedMessages reports whether archived is EXACTLY the
+// hydration payload this call intended to write — same length, and every
+// message's Role, Content and ToolCallID equal (M5). Used in place of a bare
+// non-empty check to tell "my write landed" apart from "someone else's write
+// landed first" — see hydrateOneAgent's doc comment for the full rationale.
+func archiveMatchesHydratedMessages(archived []memory.ArchivedMessage, msgs []providers.Message) bool {
+	if len(archived) != len(msgs) {
+		return false
+	}
+	for i, m := range msgs {
+		a := archived[i]
+		if a.Role != m.Role || a.Content != m.Content || a.ToolCallID != m.ToolCallID {
+			return false
+		}
+	}
+	return true
 }
 
 // attachStandaloneToolCall implements FR-046 for one recorded call: the call
