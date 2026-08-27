@@ -6286,6 +6286,19 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 		})(w, r)
 
 	case r.Method == http.MethodPut && sub != "" && !strings.HasSuffix(sub, "/test"):
+		// O5: rate limit FIRST, before any other work on this branch. FR-050
+		// keeps this route reachable with no credential while onboarding is
+		// incomplete (see requireAuthOutsideOnboarding below), and it is one
+		// of the most expensive requests the gateway serves — an outbound
+		// ValidateKey call, a config.json rewrite, and then
+		// triggerReloadAndWaitOutcome, which rebuilds the ENTIRE agent
+		// registry synchronously and holds the response until it confirms.
+		// With no ceiling at all, one anonymous client could keep a fresh
+		// install in permanent rebuild churn. The limiter is the only bound
+		// on that caller, so nothing may run ahead of it.
+		if !rateLimitAllows(w, r, providerConfigWriteLimiter) {
+			return
+		}
 		// PUT /api/v1/providers/{id} — update or insert a provider entry.
 		// Reserved path segments are never provider ids (MAJ-002): reject
 		// BEFORE auth-gating or decoding so no request shape can upsert a
@@ -6807,9 +6820,22 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 		// intersected with the catalog and cached for the process. The
 		// retired POST /providers/{id}/refresh-models is NOT its ancestor:
 		// that route is gone entirely (T067-01/T067-10) and must not return.
+		//
+		// O3: unlike PUT and /test, this route has NO FR-050 pre-auth window —
+		// authentication is required unconditionally, and the rate limiter
+		// lives inside the handler. See handleProviderEntitlement.
 		a.handleProviderEntitlement(w, r, strings.TrimSuffix(sub, "/entitlement"))
 
 	case r.Method == http.MethodPost && strings.HasSuffix(sub, "/test"):
+		// O5: rate limit FIRST, for the same reason as the PUT branch — this
+		// route is pre-auth reachable and had no ceiling. Unlike the probe on
+		// /onboarding/probe-provider, which carries the caller's own key in
+		// the body, /test resolves the provider's STORED credential and spends
+		// one real upstream request with the OPERATOR's key, so an unbounded
+		// anonymous caller burns quota that is not theirs.
+		if !rateLimitAllows(w, r, providerTestLimiter) {
+			return
+		}
 		// POST /api/v1/providers/{id}/test — verify the provider has a valid API key.
 		// Allow unauthenticated access during onboarding (same reason as PUT
 		// above, and the same M3 fail-closed window).

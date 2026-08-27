@@ -83,12 +83,18 @@ const (
 	// never logged. Decision is always allow (the refusal path emits
 	// EventOnboardingRefused instead).
 	EventOnboardingAdminCreated = "onboarding.admin_created"
-	// EventOnboardingRefused records an admin-minting attempt that the
+	// EventOnboardingRefused records a request that the ADR-068 FR-050
 	// pre-auth onboarding window refused: the instance already has an
 	// authentication authority, onboarding is already complete, its onboarding
-	// state is unknown, or the requested username already exists. Details
-	// carry {reason, source_ip, route} plus `username` on the one reason that
-	// has already parsed the body. Decision is always deny.
+	// state is unknown, its config could not be read, or (on
+	// /onboarding/complete only) the requested username already exists.
+	// Details carry {reason, source_ip, route} plus `username` on the one
+	// reason that has already parsed the body. Decision is always deny.
+	//
+	// `route` distinguishes the two endpoints that emit it:
+	// /api/v1/onboarding/complete, which MINTS an authentication authority,
+	// and /api/v1/onboarding/probe-provider, which spends the operator's
+	// billable vendor quota on an `auth: sign_in` probe.
 	EventOnboardingRefused = "onboarding.refused"
 )
 
