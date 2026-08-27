@@ -17,6 +17,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -310,6 +311,57 @@ func TestMidTurnBudget_TriggerTargetStop(t *testing.T) {
 			"no projection state may be persisted on a turn the guard is certain to kill: "+
 				"typedTurnExit never rolls it back")
 	})
+}
+
+// TestMidTurnBudget_C1_CallMessagesInjections — ADR-066 D6, C1 (CRITICAL):
+// both budget sites must measure the request the provider ACTUALLY receives
+// (loop.go's callMessages), not the raw window (messages). callMessages is
+// assembled by injecting the scratchpad note, the workspace instructions
+// note (AGENT.md — up to 262,144 bytes, no budget-aware cap), the
+// web-rendering note and the compressed manifest note AFTER both budget
+// checks run, so a large AGENT.md alone can leave `messages` fitting B while
+// the real request blows past it — the provider then returns
+// context_too_long on a window the engine believed it was protecting
+// (the ADR's §1 incident class, reintroduced).
+func TestMidTurnBudget_C1_CallMessagesInjections(t *testing.T) {
+	al, agent := midTurnFixture(t, 40_000, 0)
+	budget := agentContextBudget(agent)
+	require.Positive(t, budget)
+
+	// A workspace whose AGENT.md, once injected, alone exceeds the entire
+	// budget — sized off proseOfTokens so its estimator cost is
+	// deterministic and directly comparable to budget.
+	home := os.Getenv(config.EnvHome)
+	require.NotEmpty(t, home, "midTurnFixture must set OMNIPUS_HOME")
+	wsID := "big-instructions-ws"
+	wsDir := filepath.Join(home, "workspaces", wsID)
+	require.NoError(t, os.MkdirAll(wsDir, 0o755))
+	agentMD := proseOfTokens(budget * 6 / 5) // ~1.2x budget in estimator tokens
+	require.NoError(t, os.WriteFile(filepath.Join(wsDir, "AGENT.md"), []byte(agentMD), 0o644))
+
+	key := "midturn-c1-callmessages"
+	// A tiny conversation with NO tool results: `messages` alone fits B
+	// comfortably, and there is nothing eligible for the D5 pass to empty —
+	// so if the check fires at all it can only be because it saw the
+	// injected note weight, and the only possible outcome is the FR-032
+	// guard (nothing eligible to empty means the pass cannot help).
+	window, ts := seedMidTurn(t, agent, key, []providers.Message{
+		{Role: "user", Content: "hello"},
+		{Role: "assistant", Content: "hi there"},
+	})
+	ts.opts.WorkspaceID = wsID
+
+	require.LessOrEqual(t, requestTokens(window, nil), budget,
+		"precondition: messages alone fits B — the C1 bug is invisible without this")
+	require.Greater(t, al.ephemeralSystemNoteTokens(ts), budget,
+		"precondition: the injected workspace-instructions note alone exceeds B")
+
+	_, err := al.midTurnWindowCheck(ts, window, nil)
+	require.Error(t, err, "C1: the check must fire once it measures what callMessages actually sends — "+
+		"silently returning nil here is the reintroduced ADR §1 incident (a provider context_too_long "+
+		"on a window the engine believed it was protecting)")
+	assert.True(t, errors.Is(err, ErrContextUnrecoverable),
+		"nothing is eligible to empty (no tool results), so the outcome must be the FR-032 guard, got %v", err)
 }
 
 // midTurnLineResolverForTest builds the same resolver midTurnWindowCheck

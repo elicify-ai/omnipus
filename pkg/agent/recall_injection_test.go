@@ -339,11 +339,31 @@ func TestRunTurn_RecallReplacedInSameTurn_OneMarker(t *testing.T) {
 }
 
 // TestRecallSpanFits_ExactBudget — DS-10 #3: a span whose total lands
-// exactly on B is injected (<=, not <).
+// exactly on B is injected (<=, not <). The share args are set generously
+// slack (0 window share, absoluteShare far above spanShareTokens) so these
+// cases isolate the total trigger.
 func TestRecallSpanFits_ExactBudget(t *testing.T) {
-	require.True(t, recallSpanFits(100, 60, 10, 30), "total == B must fit")
-	require.False(t, recallSpanFits(100, 60, 10, 31), "total == B+1 must not fit")
-	require.True(t, recallSpanFits(100, 0, 0, 1))
+	require.True(t, recallSpanFits(100, 60, 10, 30, 1000, 0, 0), "total == B must fit")
+	require.False(t, recallSpanFits(100, 60, 10, 31, 1000, 0, 0), "total == B+1 must not fit")
+	require.True(t, recallSpanFits(100, 0, 0, 1, 1000, 0, 0))
+}
+
+// TestRecallSpanFits_ShareTrigger — M3: recallSpanFits must refuse a span
+// that fits the total but pushes the tool-result SHARE of the slice past
+// absoluteShare — D6's second trigger (midturn_budget.go). Before this fix
+// recallSpanFits checked only the total, so a span like this was admitted
+// and spliced, its receipt told the model the text was "now in your
+// context", and midTurnWindowCheck — which checks BOTH triggers and runs
+// immediately after the splice — then dropped it under the share trigger,
+// withdrawing exactly what the receipt just promised.
+func TestRecallSpanFits_ShareTrigger(t *testing.T) {
+	// Total: 60 (window) + 10 (tools) + 5 (span) = 75 <= 100 (budget): fits.
+	// Share: 90 (window) + 20 (span) = 110 > 100 (absoluteShare): does not.
+	require.False(t, recallSpanFits(100, 60, 10, 5, 100, 90, 20),
+		"total fits but share exceeds absoluteShare — must be refused, not admitted then withdrawn")
+	// Share at exactly absoluteShare fits (<=, mirrors the total trigger's own <=).
+	require.True(t, recallSpanFits(100, 60, 10, 5, 100, 80, 20), "share == absoluteShare must fit")
+	require.False(t, recallSpanFits(100, 60, 10, 5, 100, 80, 21), "share == absoluteShare+1 must not fit")
 }
 
 // countPageMarkers returns how many messages in req carry the tool_call_id

@@ -8,6 +8,7 @@ package agent
 import (
 	"fmt"
 
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 )
@@ -43,12 +44,34 @@ import (
 // (pkg/agent/recall_conversation.go). The tool loop keys D5.4 on it.
 const recallConversationToolName = "recall_conversation"
 
-// recallSpanFits is the D5.4 fit check: the span fits when the live window,
-// the tool surface the turn actually sends, and the span together are at
-// most B — the same inequality windowTrim's suffix walk uses (<=, so a
-// total landing exactly on B fits; DS-10 #3).
-func recallSpanFits(budget, windowTokens, toolSurfaceTokens, spanTokens int) bool {
-	return windowTokens+toolSurfaceTokens+spanTokens <= budget
+// recallSpanFits is the D5.4 fit check. M3: it must evaluate BOTH of D6's
+// trigger conditions (midturn_budget.go), not just the total. Before this,
+// a span that fit `total <= budget` but pushed the tool-result SHARE of the
+// slice past absoluteShare was admitted here, spliced, and its receipt told
+// the model "their text is now in your context" (recall_conversation.go) —
+// only for midTurnWindowCheck, which runs immediately after the splice and
+// checks both triggers, to then fire on the share condition and call
+// dropRecallSpan("pressure"), withdrawing exactly what the receipt just
+// promised. Checking both triggers here means a span that cannot ultimately
+// stay is refused honestly up front — the FR-042 non-fit text, never the
+// promise-then-withdraw sequence.
+//
+//   - total fits ⇔ windowTokens + toolSurfaceTokens + spanTokens <= budget
+//     (the same inequality windowTrim's suffix walk uses, <=, so a total
+//     landing exactly on B fits; DS-10 #3).
+//   - share fits ⇔ windowShareTokens + spanShareTokens <= absoluteShare
+//     (D6's second trigger, mirrored with the same <=).
+func recallSpanFits(
+	budget, windowTokens, toolSurfaceTokens, spanTokens int,
+	absoluteShare, windowShareTokens, spanShareTokens int,
+) bool {
+	if windowTokens+toolSurfaceTokens+spanTokens > budget {
+		return false
+	}
+	if windowShareTokens+spanShareTokens > absoluteShare {
+		return false
+	}
+	return true
 }
 
 // recallNonFitText is the FR-042 tool-result text for a span that does not
@@ -111,6 +134,7 @@ func (al *AgentLoop) decideRecallInjection(
 
 	inject := true
 	windowTokens, toolTokens, budget := 0, 0, 0
+	windowShareTokens, spanShareTokens, absShare := 0, 0, 0
 	if !ts.agent.budgetChecksExempt() {
 		// The window the next request will carry: the current slice minus
 		// the pinned core at [0] and minus the block a replaced span
@@ -122,26 +146,41 @@ func (al *AgentLoop) decideRecallInjection(
 		}
 		// The result's own cost is estimated from its text alone: the real
 		// role:"tool" message is built by the choke point (admitToolResult),
-		// never here (FR-009, TestChokePoint_ProducerListByGrep).
-		windowTokens = sumMessageTokens(tail) + estimateMessageTokens(providers.Message{Content: content})
+		// never here (FR-009, TestChokePoint_ProducerListByGrep). It is
+		// always a role:"tool" result once admitted, so it counts toward
+		// the share trigger too (M3).
+		resultTokens := estimateMessageTokens(providers.Message{Content: content})
+		windowTokens = sumMessageTokens(tail) + resultTokens
 		toolTokens = al.sentToolSurfaceTokens(ts.agent, ts.sessionKey)
 		budget = agentContextBudget(ts.agent)
-		inject = recallSpanFits(budget, windowTokens, toolTokens, span.Tokens)
+
+		cs := config.DefaultContextSettings()
+		if cfg := al.GetConfig(); cfg != nil {
+			cs = cfg.Context
+		}
+		absShare = absoluteShareTokens(cs)
+		windowShareTokens = toolResultShareTokens(tail) + resultTokens
+		spanShareTokens = toolResultShareTokens(span.Msgs)
+
+		inject = recallSpanFits(budget, windowTokens, toolTokens, span.Tokens, absShare, windowShareTokens, spanShareTokens)
 	}
 
 	if !inject {
 		al.dropRecallSpan(ts.sessionKey, "pressure")
 		logger.InfoCF("agent", "recall span refused: does not fit the window budget; not injected",
 			map[string]any{
-				"agent_id":      ts.agent.ID,
-				"session_key":   ts.sessionKey,
-				"turns":         len(span.Ordinals),
-				"from_turn":     span.FromTurn,
-				"to_turn":       span.ToTurn,
-				"span_tokens":   span.Tokens,
-				"window_tokens": windowTokens,
-				"tool_tokens":   toolTokens,
-				"budget":        budget,
+				"agent_id":            ts.agent.ID,
+				"session_key":         ts.sessionKey,
+				"turns":               len(span.Ordinals),
+				"from_turn":           span.FromTurn,
+				"to_turn":             span.ToTurn,
+				"span_tokens":         span.Tokens,
+				"window_tokens":       windowTokens,
+				"tool_tokens":         toolTokens,
+				"budget":              budget,
+				"window_share_tokens": windowShareTokens,
+				"span_share_tokens":   spanShareTokens,
+				"absolute_share":      absShare,
 			})
 		return recallInjectionDecision{span: span, inject: false, content: recallNonFitText(span)}
 	}

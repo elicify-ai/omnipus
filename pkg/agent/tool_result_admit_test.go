@@ -8,9 +8,13 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
-	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -247,43 +251,390 @@ func TestChokePoint_FilterThenCap_AtRealCuts(t *testing.T) {
 	assert.Equal(t, runes(strings.ReplaceAll(content, secret, "[FILTERED]")), runes(archived), "archive is the full filtered content, not the capped form")
 }
 
-// Test 11 — FR-009: every role:"tool" producer routes through the choke
-// point. Enforced by grep: the ONLY non-test files in pkg/agent allowed to
-// construct a `Role: "tool"` message literal are the choke point itself and
-// the exempt repair placeholder (bounded by construction). Every former
-// producer file must call the choke point instead.
-func TestChokePoint_ProducerListByGrep(t *testing.T) {
-	literal := regexp.MustCompile(`Role:\s*"tool"`)
-	allowed := map[string]bool{
-		"tool_result_admit.go": true, // the choke point
-		"repair.go":            true, // exempt: orphan-repair placeholder, bounded by construction
-	}
-	entries, err := os.ReadDir(".")
+// chokePointAllowedFiles are the only non-test files in pkg/agent permitted
+// to construct a role:"tool" providers.Message directly: the choke point
+// itself and the exempt orphan-repair placeholder (bounded by construction).
+var chokePointAllowedFiles = map[string]bool{
+	"tool_result_admit.go": true, // the choke point
+	"repair.go":            true, // exempt: orphan-repair placeholder, bounded by construction
+}
+
+// attachHydrateExemptFunc is the name of the one function in
+// attach_hydrate.go permitted to call toolResultMessage() directly — see
+// the exemption's full rationale where it is applied, in
+// scanChokePointBypasses.
+const attachHydrateExemptFunc = "hydratedToolResultMessage"
+
+// chokePointViolation is one structural finding from an FR-009 AST scan.
+type chokePointViolation struct {
+	file string
+	pos  string
+	kind string
+}
+
+// packageGoFiles parses every non-test .go file directly under dir and
+// returns them keyed by base filename.
+func packageGoFiles(t *testing.T, fset *token.FileSet, dir string) map[string]*ast.File {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
 	require.NoError(t, err)
-	violations := []string{}
+	files := map[string]*ast.File{}
 	for _, e := range entries {
 		name := e.Name()
 		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
 			continue
 		}
-		src, readErr := os.ReadFile(filepath.Join(".", name))
-		require.NoError(t, readErr)
-		if n := len(literal.FindAll(src, -1)); n > 0 && !allowed[name] {
-			violations = append(violations, name)
+		f, perr := parser.ParseFile(fset, filepath.Join(dir, name), nil, 0)
+		require.NoErrorf(t, perr, "parsing %s", name)
+		files[name] = f
+	}
+	return files
+}
+
+// packageStringConstants collects every same-package const/var declared with
+// a bare string-literal value (`const roleTool = "tool"`), across every file
+// in files, so a Role field set to an IDENTIFIER can be resolved to the
+// value it actually carries — not just the ones spelled as a literal.
+func packageStringConstants(files map[string]*ast.File) map[string]string {
+	out := map[string]string{}
+	for _, f := range files {
+		for _, decl := range f.Decls {
+			gd, ok := decl.(*ast.GenDecl)
+			if !ok || (gd.Tok != token.CONST && gd.Tok != token.VAR) {
+				continue
+			}
+			for _, spec := range gd.Specs {
+				vs, ok := spec.(*ast.ValueSpec)
+				if !ok {
+					continue
+				}
+				for i, name := range vs.Names {
+					if i >= len(vs.Values) {
+						continue
+					}
+					lit, ok := vs.Values[i].(*ast.BasicLit)
+					if !ok || lit.Kind != token.STRING {
+						continue
+					}
+					if v, uerr := strconv.Unquote(lit.Value); uerr == nil {
+						out[name.Name] = v
+					}
+				}
+			}
 		}
 	}
-	assert.Empty(t, violations, "files constructing role:tool messages outside the choke point (FR-009)")
+	return out
+}
 
-	// The former producers must call the choke point.
+// scanChokePointBypasses walks the ACTUAL syntax tree of every non-test .go
+// file in dir and reports every structural way a role:"tool"
+// providers.Message can reach the window OUTSIDE chokePointAllowedFiles
+// (FR-009). Unlike a regex over raw source text (the previous form of this
+// check), this is immune to:
+//
+//   - reformatting (extra whitespace inside `Role:  "tool"` — regex already
+//     tolerated this one, but the failure modes below did not).
+//   - calling the choke point's OWN constructor (toolResultMessage) from a
+//     DIFFERENT file, instead of writing the struct literal directly —
+//     zero occurrences of the literal string "tool" appear in that file.
+//   - hiding the literal behind a same-package string constant/var
+//     (`const roleTool = "tool"`; `Role: roleTool`) — resolved via
+//     packageStringConstants, so the alias is not a hiding place.
+//   - a plain field assignment after construction (`m.Role = "tool"`) —
+//     which is not a composite-literal field at all, so a literal-scan
+//     regex never saw it.
+//   - a producer in ANY file (every non-test file is scanned, not just
+//     loop.go).
+func scanChokePointBypasses(t *testing.T, dir string) []chokePointViolation {
+	t.Helper()
+	fset := token.NewFileSet()
+	files := packageGoFiles(t, fset, dir)
+	stringConsts := packageStringConstants(files)
+
+	resolvesToTool := func(e ast.Expr) bool {
+		switch v := e.(type) {
+		case *ast.BasicLit:
+			if v.Kind == token.STRING {
+				if s, uerr := strconv.Unquote(v.Value); uerr == nil {
+					return s == "tool"
+				}
+			}
+		case *ast.Ident:
+			return stringConsts[v.Name] == "tool"
+		}
+		return false
+	}
+	isProvidersMessageType := func(e ast.Expr) bool {
+		sel, ok := e.(*ast.SelectorExpr)
+		if !ok {
+			return false
+		}
+		id, ok := sel.X.(*ast.Ident)
+		return ok && id.Name == "providers" && sel.Sel.Name == "Message"
+	}
+
+	var violations []chokePointViolation
+	for name, f := range files {
+		if chokePointAllowedFiles[name] {
+			continue
+		}
+		// attachHydrateExemptFunc (attach_hydrate.go's hydratedToolResultMessage)
+		// is the ONE function anywhere outside the choke point permitted to
+		// call toolResultMessage() directly: it reconstructs a tool message
+		// from an ALREADY-transcript-recorded call during session hydration
+		// — there is no live archive to append to; the transcript IS the
+		// durable record — and, unlike a genuine bypass, its content is
+		// routed through the choke point's OWN cap function
+		// (projectToolResult) first. The exemption is scoped to THIS ONE
+		// FUNCTION, never the whole file: any other function in
+		// attach_hydrate.go calling toolResultMessage, or this function
+		// doing so without ALSO calling projectToolResult, still violates.
+		if name == "attach_hydrate.go" {
+			ast.Inspect(f, func(n ast.Node) bool {
+				fn, ok := n.(*ast.FuncDecl)
+				if !ok || fn.Body == nil {
+					return true
+				}
+				callsToolResultMessage, callsProjectToolResult := false, false
+				var toolResultMessageCallPos token.Pos
+				ast.Inspect(fn.Body, func(n ast.Node) bool {
+					call, ok := n.(*ast.CallExpr)
+					if !ok {
+						return true
+					}
+					id, ok := call.Fun.(*ast.Ident)
+					if !ok {
+						return true
+					}
+					switch id.Name {
+					case "toolResultMessage":
+						callsToolResultMessage = true
+						toolResultMessageCallPos = call.Pos()
+					case "projectToolResult":
+						callsProjectToolResult = true
+					}
+					return true
+				})
+				if !callsToolResultMessage {
+					return true
+				}
+				if fn.Name.Name == attachHydrateExemptFunc && callsProjectToolResult {
+					return true // the one sanctioned, capped call site
+				}
+				violations = append(violations, chokePointViolation{
+					file: name, pos: fset.Position(toolResultMessageCallPos).String(),
+					kind: fmt.Sprintf(
+						"calls toolResultMessage() outside the choke point file, in %s "+
+							"(only %s calling projectToolResult first is exempt)",
+						fn.Name.Name, attachHydrateExemptFunc),
+				})
+				return true
+			})
+		}
+		ast.Inspect(f, func(n ast.Node) bool {
+			switch v := n.(type) {
+			case *ast.CallExpr:
+				if name == "attach_hydrate.go" {
+					break // handled above with function-scoped context
+				}
+				if id, ok := v.Fun.(*ast.Ident); ok && id.Name == "toolResultMessage" {
+					violations = append(violations, chokePointViolation{
+						file: name, pos: fset.Position(v.Pos()).String(),
+						kind: "calls toolResultMessage() outside the choke point file",
+					})
+				}
+			case *ast.CompositeLit:
+				if !isProvidersMessageType(v.Type) {
+					return true
+				}
+				for _, elt := range v.Elts {
+					kv, ok := elt.(*ast.KeyValueExpr)
+					if !ok {
+						continue
+					}
+					key, ok := kv.Key.(*ast.Ident)
+					if !ok || key.Name != "Role" {
+						continue
+					}
+					if resolvesToTool(kv.Value) {
+						violations = append(violations, chokePointViolation{
+							file: name, pos: fset.Position(v.Pos()).String(),
+							kind: "constructs a role:tool providers.Message literal outside the choke point",
+						})
+					}
+				}
+			case *ast.AssignStmt:
+				for i, lhs := range v.Lhs {
+					sel, ok := lhs.(*ast.SelectorExpr)
+					if !ok || sel.Sel.Name != "Role" || i >= len(v.Rhs) {
+						continue
+					}
+					if resolvesToTool(v.Rhs[i]) {
+						violations = append(violations, chokePointViolation{
+							file: name, pos: fset.Position(v.Pos()).String(),
+							kind: `assigns .Role = "tool" outside the choke point`,
+						})
+					}
+				}
+			}
+			return true
+		})
+	}
+	return violations
+}
+
+// identFieldReferencedAfter reports whether varName.field is referenced
+// anywhere in body at a position strictly after `after`.
+func identFieldReferencedAfter(body ast.Node, varName, field string, after token.Pos) bool {
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		sel, ok := n.(*ast.SelectorExpr)
+		if !ok || sel.Pos() <= after {
+			return true
+		}
+		if id, ok := sel.X.(*ast.Ident); ok && id.Name == varName && sel.Sel.Name == field {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
+}
+
+// scanDiscardedChokePointResults finds every `X := al.admitToolResult(...)`
+// (or `X, ... :=`) in path whose result's .Message field is never
+// referenced anywhere later in the SAME enclosing function — the "keep the
+// call, but build the appended message some other way" bypass, which a
+// call-COUNT check cannot see: the count stays the same whether or not the
+// returned, capped/filtered/archived message is what actually gets used.
+func scanDiscardedChokePointResults(t *testing.T, path string) []chokePointViolation {
+	t.Helper()
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, path, nil, 0)
+	require.NoError(t, err)
+
+	var violations []chokePointViolation
+	ast.Inspect(f, func(n ast.Node) bool {
+		fn, ok := n.(*ast.FuncDecl)
+		if !ok || fn.Body == nil {
+			return true
+		}
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			as, ok := n.(*ast.AssignStmt)
+			if !ok {
+				return true
+			}
+			for i, rhs := range as.Rhs {
+				call, ok := rhs.(*ast.CallExpr)
+				if !ok {
+					continue
+				}
+				sel, ok := call.Fun.(*ast.SelectorExpr)
+				if !ok || sel.Sel.Name != "admitToolResult" {
+					continue
+				}
+				if i >= len(as.Lhs) {
+					continue
+				}
+				varName, ok := as.Lhs[i].(*ast.Ident)
+				if !ok || varName.Name == "_" {
+					continue
+				}
+				if !identFieldReferencedAfter(fn.Body, varName.Name, "Message", as.Pos()) {
+					violations = append(violations, chokePointViolation{
+						file: filepath.Base(path), pos: fset.Position(call.Pos()).String(),
+						kind: "admitToolResult() result's .Message is never used (var " + varName.Name + ")",
+					})
+				}
+			}
+			return true
+		})
+		return true
+	})
+	return violations
+}
+
+// fileCallsFunction reports whether path's AST contains an ACTUAL call to
+// funcName — a bare call (`funcName(...)`) or a method/selector call
+// (`x.funcName(...)`). Unlike a raw substring scan over the file's text, a
+// mention of funcName inside a comment does not satisfy this: comments are
+// stored separately from the expression tree, so ast.Inspect never visits
+// them.
+func fileCallsFunction(t *testing.T, path, funcName string) bool {
+	t.Helper()
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, path, nil, 0)
+	require.NoError(t, err)
+	found := false
+	ast.Inspect(f, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		switch fn := call.Fun.(type) {
+		case *ast.Ident:
+			if fn.Name == funcName {
+				found = true
+			}
+		case *ast.SelectorExpr:
+			if fn.Sel.Name == funcName {
+				found = true
+			}
+		}
+		return true
+	})
+	return found
+}
+
+// Test 11 — FR-009: every role:"tool" producer routes through the choke
+// point. M4: this used to be enforced by a source-text regex
+// (`Role:\s*"tool"`), which is grep-shaped rather than property-shaped — a
+// 2026-08-27 review found five distinct edits that keep a pure text/
+// substring scan green while an uncapped, unarchived tool result reaches
+// the window: calling the choke
+// point's own constructor from a new file, hiding the literal behind a
+// same-package string constant, a post-construction field assignment, a
+// call whose result is thrown away without the count changing, and a
+// comment-only mention of the required call. scanChokePointBypasses,
+// scanDiscardedChokePointResults and fileCallsFunction replace the text
+// scan with an AST walk that closes all five: it constrains the PROPERTY
+// (every role:tool providers.Message construction, and every choke-point
+// call's actual use), not the spelling of one particular way to violate it.
+// The name is kept (rather than renamed to e.g. …ProducerListStructural)
+// because production comments in this package cite it by name
+// (tool_result_admit.go, repair.go, recall_injection.go) and the ADR-066
+// spec docs this task is not scoped to edit cite it too; only this
+// function's OWN doc comment needed to stop claiming "grep".
+func TestChokePoint_ProducerListByGrep(t *testing.T) {
+	violations := scanChokePointBypasses(t, ".")
+	var vmsgs []string
+	for _, v := range violations {
+		vmsgs = append(vmsgs, fmt.Sprintf("%s (%s): %s", v.file, v.pos, v.kind))
+	}
+	assert.Empty(t, vmsgs, "files constructing role:tool messages outside the choke point (FR-009):\n%s", strings.Join(vmsgs, "\n"))
+
+	discarded := scanDiscardedChokePointResults(t, "loop.go")
+	var dmsgs []string
+	for _, v := range discarded {
+		dmsgs = append(dmsgs, fmt.Sprintf("%s: %s", v.pos, v.kind))
+	}
+	assert.Empty(t, dmsgs, "admitToolResult() call(s) whose result is discarded in loop.go:\n%s", strings.Join(dmsgs, "\n"))
+
+	// A floor, not the enforcement mechanism: scanChokePointBypasses and
+	// scanDiscardedChokePointResults above are what actually prove the
+	// property. This just confirms no call site was silently deleted; a
+	// legitimate new call site is expected to raise the floor, not fail it.
 	loopSrc, err := os.ReadFile("loop.go")
 	require.NoError(t, err)
 	calls := strings.Count(string(loopSrc), "al.admitToolResult(ts,")
-	assert.Equal(t, 10, calls, "loop.go: success path + seven denied sites + skipped site + the T066-15 argument-refusal site (FR-016) = 10 choke-point calls")
+	assert.GreaterOrEqual(t, calls, 10, "loop.go: success path + seven denied sites + skipped site + the T066-15 argument-refusal site (FR-016) = at least 10 choke-point calls")
 
-	for _, f := range []string{"attach_hydrate.go", "recall_conversation.go"} {
-		src, readErr := os.ReadFile(f)
-		require.NoError(t, readErr)
-		assert.Contains(t, string(src), "projectToolResult(", "%s must route its tool messages through the choke point's cap", f)
+	for _, fname := range []string{"attach_hydrate.go", "recall_conversation.go"} {
+		assert.True(t, fileCallsFunction(t, fname, "projectToolResult"),
+			"%s must actually CALL the choke point's cap (projectToolResult), not merely mention it", fname)
 	}
 	repairSrc, err := os.ReadFile("repair.go")
 	require.NoError(t, err)
