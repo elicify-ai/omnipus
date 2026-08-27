@@ -875,11 +875,41 @@ func sweepOrphanedProviderCredentials(cfg *config.Config, store *credentials.Sto
 		if ref := strings.TrimSpace(row.APIKeyRef); ref != "" {
 			referenced[ref] = struct{}{}
 		}
-		if isSeedTemplateRow(row) {
+		id := strings.TrimSpace(row.Provider)
+		if id == "" {
 			continue
 		}
-		if id := strings.TrimSpace(row.Provider); id != "" {
+		seedShaped := isSeedTemplateRow(row)
+		if !seedShaped {
 			configured[id] = struct{}{}
+		}
+		// The OAUTH keep-set needs a NARROWER filter than the API_KEY one,
+		// and the asymmetric-risk rule above is why.
+		//
+		// A sign_in row legitimately has no api_key_ref, no api_base and no
+		// models — a sign-in provider authenticates with a vendor session,
+		// not a key — so it can be seed-SHAPED while being a real,
+		// operator-configured row holding a live OAuth grant. Filtering the
+		// vendor keep-set on seed shape alone would let the boot sweep
+		// delete that grant, which is unrecoverable and strictly worse than
+		// the orphan M1 set out to reclaim. (The first version of this fix
+		// did exactly that; TestCredentialSweep_OrphanedOAuthEntries caught
+		// it.)
+		//
+		// A row is therefore kept out of the vendor keep-set only when it is
+		// seed-shaped AND its id maps to its own vendor identity. That
+		// second clause is exactly what the shipped seed cannot satisfy for
+		// the one grant that matters: `openai_OAUTH` belongs to vendor
+		// `openai`, reached only from the sign-in row `openai-chatgpt`
+		// (OAuthVendorID maps it), never from the seeded api-key row
+		// `openai` (which maps to itself). So the seeded template stops
+		// shielding `openai_OAUTH` — the M1 defect — while every row that
+		// could actually own an OAuth entry still protects it.
+		//
+		// A row that declares auth_method sign_in is never seed-shaped
+		// (isSeedTemplateRow tests AuthMethod), so real sign-in rows are
+		// covered by the ordinary path regardless of their id mapping.
+		if !seedShaped || providers.OAuthVendorID(id) != id {
 			// A vendor entry can back MORE THAN ONE row (openai-chatgpt and
 			// any future OpenAI-family sign-in row share `openai_OAUTH`), so
 			// the keep-set is keyed on the vendor, not the row id.

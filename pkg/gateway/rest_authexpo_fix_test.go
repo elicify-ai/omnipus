@@ -645,6 +645,41 @@ func TestSweepOrphanedProviderCredentials_SweepsOAuthBehindASeedTemplateRow(t *t
 		"a seeded template row must not protect openai_API_KEY from the orphan sweep")
 }
 
+// TestSweepOrphanedProviderCredentials_SeedShapedSignInRowStillProtectsItsGrant
+// is the guard on the M1 fix itself, for a mistake the fix made on its first
+// attempt and the existing suite caught: filtering the vendor keep-set on
+// isSeedTemplateRow ALONE deletes live OAuth grants.
+//
+// A sign_in row legitimately carries no api_key_ref, no api_base and no
+// models — it authenticates with a vendor session, not a key — so it can be
+// seed-SHAPED while being a real, operator-configured row whose grant is
+// live. Sweeping that is unrecoverable, and strictly worse than the orphan
+// M1 set out to reclaim. The row's id mapping to a DIFFERENT vendor is what
+// distinguishes it from the shipped api-key seed.
+func TestSweepOrphanedProviderCredentials_SeedShapedSignInRowStillProtectsItsGrant(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("OMNIPUS_MASTER_KEY", testMasterKey)
+	store := credentials.NewStore(filepath.Join(home, "credentials.json"))
+	require.NoError(t, credentials.Unlock(store))
+
+	oauthName := credentials.OAuthEntryName("openai")
+	require.NoError(t, store.Set(oauthName, `{"access_token":"live","refresh_token":"live-refresh"}`))
+
+	// Deliberately the MINIMAL sign-in row: no auth_method, no api_key_ref,
+	// no api_base, no models. isSeedTemplateRow says "template"; it is not.
+	cfg := &config.Config{Providers: []*config.ModelConfig{
+		{Name: "openai-chatgpt", Provider: "openai-chatgpt", Model: "gpt-5.2"},
+	}}
+	require.True(t, isSeedTemplateRow(cfg.Providers[0]),
+		"precondition: this real sign-in row is seed-SHAPED — that is the whole trap")
+
+	sweepOrphanedProviderCredentials(cfg, store, nil)
+
+	_, err := store.Get(oauthName)
+	assert.NoError(t, err,
+		"a configured sign-in row must protect its vendor's live OAuth grant even when seed-shaped")
+}
+
 // TestSweepOrphanedProviderCredentials_KeepsConfiguredAndReferenced pins the
 // two keep-sets the M1 filter must NOT weaken. Wrongly deleting a live secret
 // is unrecoverable; failing to sweep is merely untidy.
