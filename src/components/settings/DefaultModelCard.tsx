@@ -55,8 +55,18 @@ export interface DefaultModelCardProps {
   onChange: (pair: DefaultModelUpdateRequest) => void
   /** True while that PUT is in flight. */
   isSaving?: boolean
-  /** GET state — `loading` renders the skeleton rather than a false "not set". */
-  status?: 'loading' | 'ready'
+  /**
+   * GET state:
+   *  - `loading` renders the skeleton.
+   *  - `error` — the GET itself failed (not a 404 — the caller already
+   *    resolves that to a genuine `defaultModel: null`). Renders a distinct
+   *    "could not load" message instead of the empty-state copy, because
+   *    telling the operator there is no default when the request simply
+   *    failed (O11) risks them setting one and clobbering a default that
+   *    was there all along, merely unreadable at that moment.
+   *  - `ready` — the GET settled, one way or the other.
+   */
+  status?: 'loading' | 'ready' | 'error'
   /**
    * Pre-selects one provider in the *Change* selector (FR-019's row action,
    * *Set as default model…*). Undefined = every usable provider is offered.
@@ -130,6 +140,10 @@ export function DefaultModelCard({
               className="mt-1.5 h-4 w-40 animate-pulse rounded bg-[var(--color-surface-2)]"
               data-testid="default-model-loading"
             />
+          ) : status === 'error' ? (
+            <p className="mt-1 text-sm text-red-400" data-testid="default-model-error">
+              Could not load the default model. Please try again.
+            </p>
           ) : defaultModel ? (
             <p className="mt-1 text-sm text-[var(--color-secondary)]">
               <span data-testid="default-model-provider">{providerLabel}</span>

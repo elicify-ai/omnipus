@@ -703,7 +703,19 @@ export function ProvidersSection() {
   // ADR-068 FR-018: the global default model. A fresh install has none and the
   // GET answers 404 — that is the "not set yet" state, NOT a failure, so it
   // resolves to null instead of rejecting into an error toast.
-  const { data: defaultModel = null, isLoading: defaultModelLoading } = useQuery({
+  //
+  // O11: any OTHER failure (5xx, network) is a real fetch failure, not
+  // evidence there is no default — it must NOT render as the same "not set"
+  // copy as a genuine 404, or an operator could act on that false belief and
+  // clobber a default that was there all along. `isError` distinguishes the
+  // two so DefaultModelCard can render its own distinct error state; the
+  // query keeps the package-wide bounded retry (shouldRetryQuery, queryClient.ts)
+  // rather than retrying forever.
+  const {
+    data: defaultModel = null,
+    isLoading: defaultModelLoading,
+    isError: defaultModelError,
+  } = useQuery({
     queryKey: ['default-model'],
     queryFn: async () => {
       try {
@@ -1088,7 +1100,7 @@ export function ProvidersSection() {
         defaultModel={defaultModel}
         providers={providers}
         catalog={catalogDoc}
-        status={defaultModelLoading ? 'loading' : 'ready'}
+        status={defaultModelLoading ? 'loading' : defaultModelError ? 'error' : 'ready'}
         isSaving={isSavingDefault}
         filterToProviderId={defaultFilterId}
         changing={changingDefault}
