@@ -236,6 +236,124 @@ func decodeOnboardingCompleteBody(
 	return body, choice, true
 }
 
+// onboardingClosedMsg is the ONE refusal body POST /onboarding/complete emits
+// for every closed-window reason — already complete, an authentication
+// authority already exists, or the onboarding state is unknown.
+//
+// It is deliberately identical across all three. The divergent state this
+// endpoint's authority gate exists to defend against (users in config.json,
+// onboarding.completed=false in state.json) is otherwise invisible to an
+// anonymous caller: GET /api/v1/state would report onboarding_complete=false,
+// so a reason-specific message here would be the one oracle telling an
+// attacker "this instance is in the interesting state". The reason is
+// recorded where it belongs — the audit log and the server log.
+const onboardingClosedMsg = "onboarding already complete"
+
+// errOnboardingUsernameTaken is the sentinel the config mutation returns when
+// the requested admin username already exists in gateway.users. See
+// onboardingWindowGate for why this is defence in depth rather than the
+// primary control.
+var errOnboardingUsernameTaken = errors.New("onboarding: username already exists")
+
+// onboardingWindowGate is the authority gate for POST /onboarding/complete.
+// It writes the refusal response and returns false when the request must not
+// proceed.
+//
+// THE DEFECT THIS CLOSES. Until this gate existed, the endpoint gated on the
+// onboarding flag ALONE — `onboardingMgr.ReserveComplete()` and nothing else.
+// That made it the only pre-auth route that never asked whether an
+// authentication authority was already present, which is precisely backwards:
+// it is the one route that MINTS authority. Reproduced live on a real binary:
+// with a legitimate admin already in config.json and system/state.json's
+// onboarding.completed forced back to false, an anonymous POST returned 200,
+// appended a second admin to gateway.users and handed the caller its bearer
+// token — while every ordinary route on the same instance correctly 401'd.
+//
+// The divergent state is not theoretical. onboarding.NewManager keeps the
+// zero value (OnboardingComplete=false, i.e. "fresh install") on ANY load
+// failure — an unparseable state.json is renamed aside and reset. A partial
+// write, a disk error, a botched chmod or a restored backup therefore returns
+// the flag to false while config.json still holds every user. ADR-068 FR-050
+// already hardened the five sign-in routes against exactly this by making
+// their gate fail CLOSED; this route never received that treatment.
+//
+// The fix reuses that same gate rather than writing a parallel check, so
+// "the pre-auth window is open" has exactly ONE definition in this codebase
+// (preAuthOnboardingWindowOpen, rest_auth.go). Its three signals all apply
+// here unchanged:
+//
+//  1. onboardingStateUnknown — an existing but unreadable/unparseable
+//     state.json is "unknown", never "fresh install". This route fails closed
+//     on unknown, and that is deliberate: an unreadable state.json is
+//     indistinguishable from the attack above, and refusing is recoverable
+//     while minting an admin is not. It also cannot break a genuine first
+//     run, because a MISSING state.json (what a first launch actually looks
+//     like) is not "unknown". The degradation is bounded and self-healing:
+//     the manager has already renamed the corrupt file aside, so the next
+//     restart sees a missing file and onboarding proceeds normally.
+//  2. The onboarding manager must not report completion.
+//  3. The instance must have no authentication authority — no configured user
+//     and no OMNIPUS_BEARER_TOKEN. This is the signal a corrupt state.json
+//     cannot erase, because it lives in config.json and the environment.
+//
+// Status code: 409, not 401. 401 invites the caller to retry with
+// credentials, and no credential makes minting a second admin through the
+// first-run wizard legal — an authenticated admin gets the same refusal, and
+// this is a state conflict rather than a failed authentication challenge.
+// 409 is also already what this endpoint returns for "already complete" and
+// already declared in contracts/openapi.yaml, so the refusal needs no new
+// wire vocabulary. (A 401 would additionally be read by the SPA as session
+// expiry and force a logout — see rest_providers_catalog_test.go.)
+func (a *restAPI) onboardingWindowGate(w http.ResponseWriter, r *http.Request) bool {
+	if a.preAuthOnboardingWindowOpen(r) {
+		return true
+	}
+	reason := a.onboardingClosedReason(r)
+	sourceIP := a.clientIPWithLiveFallback(r)
+	slog.Warn("onboarding: refused — the pre-auth onboarding window is closed",
+		"reason", reason, "source_ip", sourceIP)
+	if a.auditor != nil {
+		// No username is recorded: the gate runs before the body is read, on
+		// purpose (see HandleCompleteOnboarding phase 0). What matters
+		// forensically is that an admin-minting attempt reached a closed
+		// window, when, and from where.
+		if err := a.auditor.Log(&audit.Entry{
+			Event:    audit.EventOnboardingRefused,
+			Decision: audit.DecisionDeny,
+			Details: map[string]any{
+				"reason":    reason,
+				"source_ip": sourceIP,
+				"route":     "/api/v1/onboarding/complete",
+			},
+			PolicyRule: "onboarding.complete requires an open pre-auth window " +
+				"(readable onboarding state, onboarding not complete, and no existing authentication authority)",
+		}); err != nil {
+			slog.Warn("audit write failed", "event", audit.EventOnboardingRefused, "error", err)
+		}
+	}
+	jsonErr(w, http.StatusConflict, onboardingClosedMsg)
+	return false
+}
+
+// onboardingClosedReason labels WHY the window is closed, for the audit log
+// and the server log only. It never makes the decision — that is
+// preAuthOnboardingWindowOpen's job, and duplicating it here is exactly the
+// parallel-definition drift this fix set out to avoid.
+func (a *restAPI) onboardingClosedReason(r *http.Request) string {
+	switch {
+	case a.onboardingStateUnknown:
+		return "onboarding_state_unknown"
+	case a.onboardingMgr != nil && a.onboardingMgr.IsComplete():
+		return "onboarding_already_complete"
+	case a.hasAuthenticationAuthority(r):
+		return "authentication_authority_exists"
+	default:
+		// Unreachable while this is only called on the !open branch; a
+		// non-empty label is still better than an empty audit field.
+		return "window_closed"
+	}
+}
+
 // HandleCompleteOnboarding handles POST /api/v1/onboarding/complete.
 //
 // Two-phase commit invariant:
@@ -253,9 +371,22 @@ func decodeOnboardingCompleteBody(
 // This ordering guarantees state.json is NEVER written before config.json,
 // preventing the "bricked instance" scenario where state says complete but
 // config has no admin user (e.g., disk-full mid-write).
+//
+// Phase 0 — authority gate: before either phase, the FR-050 pre-auth window
+// must be OPEN. See onboardingWindowGate below for why the onboarding flag
+// alone was never a sufficient gate on the one route that mints authority.
 func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	// Phase 0: refuse outright if this instance already has an authentication
+	// authority (or its onboarding state is unknown). Deliberately BEFORE
+	// ReserveComplete and before the request body is read at all — an
+	// unauthenticated body is attacker-controlled input and must not be parsed
+	// ahead of the authorization decision.
+	if !a.onboardingWindowGate(w, r) {
 		return
 	}
 
@@ -567,19 +698,36 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 				return fmt.Errorf("gateway.users is not an array")
 			}
 		}
-		// Check for duplicate username. If the same admin already exists (e.g.,
-		// from a partial commit where config was saved but state.json wasn't),
-		// treat as idempotent success: overwrite the hashes so the caller gets
-		// a working session with the newly generated token.
+		// Duplicate username: REFUSE. This branch used to treat a name
+		// collision as "idempotent success" and overwrite the existing row's
+		// password_hash and tokens, on the theory that the only way to reach
+		// it was a partial commit by the same operator retrying. It was also
+		// a silent account takeover: an anonymous caller who reached this
+		// handler and named an EXISTING user replaced that user's password
+		// with one of their own choosing — the original password then 401'd
+		// and the attacker's worked, with nothing written anywhere to say
+		// why. (Confirmed in UAT.)
+		//
+		// The phase-0 authority gate already makes this unreachable over
+		// HTTP: existing users mean existing authority, which closes the
+		// window before the body is even read. This stays as defence in
+		// depth — creating an admin must never mutate a different account's
+		// credentials as a side effect, whatever gate ran upstream.
+		//
+		// The partial-commit case this branch was written for is not lost:
+		// the operator's account and the password they chose are already in
+		// config.json (config.json is written before the cookie is issued and
+		// before state.json is committed), so they sign in at /auth/login
+		// with the credentials they just typed. Only the one-shot bearer
+		// token from the 200 response is forfeited, and the session cookie
+		// login issues a working session anyway.
 		for _, u := range users {
 			um, ok := u.(map[string]any)
 			if !ok {
 				continue
 			}
 			if um["username"] == body.Admin.Username {
-				um["password_hash"] = string(passwordHash)
-				um["tokens"] = tokenEntry
-				return nil
+				return errOnboardingUsernameTaken
 			}
 		}
 		users = append(users, newUser)
@@ -591,9 +739,63 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 		return nil
 	}); err != nil {
 		// config.json write failed — defer will release the reservation so a retry is possible.
+		if errors.Is(err, errOnboardingUsernameTaken) {
+			// A name collision is a client-visible conflict, not a server
+			// fault: report it as one rather than laundering it into a 500.
+			// It shares onboardingClosedMsg for the same anti-oracle reason
+			// the gate does — the response must not confirm which usernames
+			// already exist on this instance.
+			slog.Warn("onboarding: refused — requested admin username already exists",
+				"username", body.Admin.Username, "source_ip", a.clientIPWithLiveFallback(r))
+			if a.auditor != nil {
+				if auditErr := a.auditor.Log(&audit.Entry{
+					Event:    audit.EventOnboardingRefused,
+					Decision: audit.DecisionDeny,
+					Details: map[string]any{
+						"reason":    "username_exists",
+						"username":  body.Admin.Username,
+						"source_ip": a.clientIPWithLiveFallback(r),
+						"route":     "/api/v1/onboarding/complete",
+					},
+					PolicyRule: "onboarding.complete must never overwrite an existing account's credentials",
+				}); auditErr != nil {
+					slog.Warn("audit write failed", "event", audit.EventOnboardingRefused, "error", auditErr)
+				}
+			}
+			jsonErr(w, http.StatusConflict, onboardingClosedMsg)
+			return
+		}
 		slog.Error("onboarding: complete transaction failed", "error", err)
 		jsonErr(w, http.StatusInternalServerError, "onboarding failed")
 		return
+	}
+
+	// SEC-15: the admin account now exists on disk. This is the single moment
+	// this product creates an authentication authority out of nothing, and
+	// until now it left no audit record at all — UAT found neither the
+	// creation nor the password change of the takeover variant anywhere in
+	// the log. Emitted here, immediately after the config.json commit and
+	// before any of the remaining best-effort steps (cookies, state.json,
+	// reload), so the record exists even if one of those subsequently fails.
+	// The password and the issued token are never logged; the username, the
+	// source IP and the provider the account was created alongside are.
+	if a.auditor != nil {
+		if auditErr := a.auditor.Log(&audit.Entry{
+			Event:    audit.EventOnboardingAdminCreated,
+			Decision: audit.DecisionAllow,
+			User:     body.Admin.Username,
+			Details: map[string]any{
+				"username":    body.Admin.Username,
+				"source_ip":   a.clientIPWithLiveFallback(r),
+				"provider":    provider.ID,
+				"auth_method": provider.AuthMethod,
+				"route":       "/api/v1/onboarding/complete",
+			},
+			PolicyRule: "onboarding.complete admitted: pre-auth onboarding window was open " +
+				"(no pre-existing authentication authority)",
+		}); auditErr != nil {
+			slog.Warn("audit write failed", "event", audit.EventOnboardingAdminCreated, "error", auditErr)
+		}
 	}
 
 	// FR-011: issue the omnipus-session cookie bound to the new admin's

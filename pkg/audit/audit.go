@@ -75,6 +75,21 @@ const (
 	// deny otherwise (missing binary, handshake/timeout/turn-cap failure, or a
 	// denied/errored run).
 	EventExecutorSmokeTest = "executor.smoke_test"
+	// EventOnboardingAdminCreated records the creation of the first
+	// administrator account by POST /api/v1/onboarding/complete — the single
+	// point at which this product mints an authentication authority from an
+	// unauthenticated request. Details carry {username, source_ip, provider,
+	// auth_method, route}; the chosen password and the issued bearer token are
+	// never logged. Decision is always allow (the refusal path emits
+	// EventOnboardingRefused instead).
+	EventOnboardingAdminCreated = "onboarding.admin_created"
+	// EventOnboardingRefused records an admin-minting attempt that the
+	// pre-auth onboarding window refused: the instance already has an
+	// authentication authority, onboarding is already complete, its onboarding
+	// state is unknown, or the requested username already exists. Details
+	// carry {reason, source_ip, route} plus `username` on the one reason that
+	// has already parsed the body. Decision is always deny.
+	EventOnboardingRefused = "onboarding.refused"
 )
 
 // Decision values for audit entries. Values are Decision-compatible
@@ -118,6 +133,9 @@ func IsValidEventName(e EventName) bool {
 		EventChannelPairing,
 		EventCliValidate,
 		EventExecutorSmokeTest,
+		// First-run onboarding authority events (pkg/gateway/rest_onboarding.go).
+		EventOnboardingAdminCreated,
+		EventOnboardingRefused,
 		// Tool Registry redesign event names from events.go. These are
 		// emitted from the agent loop and the policy package.
 		EventToolPolicyDenyAttempted,
