@@ -256,7 +256,56 @@ var (
 	// which re-lists on every provider edit) are deliberately not limited
 	// here — they already passed the auth gate.
 	providerListAnonLimiter = newAPIRateLimiter(60, 1*time.Minute)
+	// PUT /api/v1/providers/{id} — 30 requests/minute per IP (O5). This route
+	// had NO ceiling at all while being reachable pre-auth (FR-050 keeps it
+	// open so the first-run wizard can configure a provider before an admin
+	// account exists to authenticate as — see the PUT branch in rest.go).
+	// It is one of the most expensive requests this gateway serves: one
+	// outbound ValidateKey call to the provider, a full config.json rewrite,
+	// and then triggerReloadAndWaitOutcome, which SYNCHRONOUSLY rebuilds the
+	// whole agent registry and blocks the response until it confirms. An
+	// anonymous client could therefore hold a fresh install in permanent
+	// rebuild churn with a trivial loop. 30/min is ~1 per 2s: far above any
+	// human "Save" cadence (an operator adding five providers spends five
+	// requests) and far below what sustained abuse needs.
+	providerConfigWriteLimiter = newAPIRateLimiter(30, 1*time.Minute)
+	// POST /api/v1/providers/{id}/test — 30 requests/minute per IP (O5).
+	// Also previously bare and also pre-auth reachable. Every call resolves
+	// the stored credential and spends one real upstream request against the
+	// provider with the OPERATOR's key, so an unbounded anonymous caller can
+	// burn the operator's billable quota. A Test button is a one-off click;
+	// it shares providerConfigWriteLimiter's ceiling rather than a tighter
+	// one because the SPA legitimately tests right after a save.
+	providerTestLimiter = newAPIRateLimiter(30, 1*time.Minute)
+	// POST /api/v1/providers/{id}/entitlement — 30 requests/minute per IP
+	// (O3). contracts/openapi.yaml has declared this route "Rate-limited like
+	// /providers/{id}/test" and declared a 429 response since ADR-067; no
+	// limiter was ever wired, so the declaration was fiction. Matches
+	// providerTestLimiter's ceiling as the contract says, but keeps its OWN
+	// bucket: /test is reachable anonymously during the onboarding window and
+	// entitlement is not (see handleProviderEntitlement), so a shared bucket
+	// would let an anonymous /test flood exhaust an authenticated operator's
+	// entitlement budget from the same NAT address.
+	providerEntitlementLimiter = newAPIRateLimiter(30, 1*time.Minute)
 )
+
+// rateLimitAllows applies limiter to r from INSIDE a handler, for the routes
+// that are dispatched by a switch in a shared prefix handler
+// (HandleProviders) rather than wrapped at registration time. It returns true
+// when the request may proceed; on refusal it has already written the 429,
+// the Retry-After header and the warn log.
+//
+// It delegates to withRateLimit rather than re-implementing the refusal so
+// the inline and wrapped forms can never drift apart in status code, body
+// wording, header or logging — the duplication this replaces is exactly how
+// two spellings of "rate limited" end up disagreeing.
+func rateLimitAllows(w http.ResponseWriter, r *http.Request, limiter *apiRateLimiter) bool {
+	allowed := false
+	withRateLimit(limiter, func(http.ResponseWriter, *http.Request) {
+		allowed = true
+	})(w, r)
+	return allowed
+}
 
 // clientIP extracts the client IP from the request for rate-limiting and
 // audit-log purposes.
