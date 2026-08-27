@@ -1632,9 +1632,11 @@ describe('ProvidersSection — Default model card (FR-019)', () => {
     renderSection()
 
     expect(await screen.findByTestId('default-model-window')).toHaveTextContent('No context length')
+    // O10: hash-prefixed so following it under the app's hash router is an
+    // in-page navigation, not a full reload landing on the wrong screen.
     expect(screen.getByTestId('default-model-window-unknown-link')).toHaveAttribute(
       'href',
-      '/settings?tab=models&provider=ollama&model=llama3.3%3A70b',
+      '/#/settings?tab=models&provider=ollama&model=llama3.3%3A70b',
     )
     expect(screen.queryByTestId('default-model-source')).not.toBeInTheDocument()
   })
@@ -1646,6 +1648,53 @@ describe('ProvidersSection — Default model card (FR-019)', () => {
 
     expect(await screen.findByTestId('default-model-unset')).toBeInTheDocument()
     expect(screen.queryByTestId('default-model-window')).not.toBeInTheDocument()
+  })
+
+  // O11: a failed GET must never render as the same "No default model yet"
+  // copy as a genuine empty state — that's a false statement of fact an
+  // operator could act on by setting a default and clobbering the one that
+  // was actually there but merely unreadable at that moment. These three
+  // cases assert on what the reader actually SEES in each state, because the
+  // defect was exactly that two of the three rendered identically.
+  describe('default-model GET failure is distinct from "no default set" (O11)', () => {
+    it('loaded WITH a value: shows the pair, not an error and not "not set"', async () => {
+      vi.mocked(api.fetchProviders).mockResolvedValue([CONNECTED_OPENROUTER] as never)
+      vi.mocked(api.getDefaultModel).mockResolvedValue(DEFAULT_PAIR as never)
+      renderSection()
+
+      expect(await screen.findByTestId('default-model-provider')).toHaveTextContent('OpenRouter')
+      expect(screen.getByTestId('default-model-model')).toHaveTextContent('z-ai/glm-5.2')
+      expect(screen.queryByTestId('default-model-unset')).not.toBeInTheDocument()
+      expect(screen.queryByTestId('default-model-error')).not.toBeInTheDocument()
+    })
+
+    it('loaded EMPTY (404 → null): shows the genuine "not set" copy, not an error', async () => {
+      vi.mocked(api.fetchProviders).mockResolvedValue([CONNECTED_OPENROUTER] as never)
+      vi.mocked(api.getDefaultModel).mockResolvedValue(null as never)
+      renderSection()
+
+      expect(await screen.findByTestId('default-model-unset')).toHaveTextContent(
+        'No default model yet — pick one so new agents have somewhere to run.',
+      )
+      expect(screen.queryByTestId('default-model-error')).not.toBeInTheDocument()
+      expect(screen.queryByTestId('default-model-provider')).not.toBeInTheDocument()
+    })
+
+    it('FAILED (non-404 error): shows a distinct "could not load" message, never the "not set" copy', async () => {
+      vi.mocked(api.fetchProviders).mockResolvedValue([CONNECTED_OPENROUTER] as never)
+      vi.mocked(api.getDefaultModel).mockRejectedValue(
+        new api.ApiError(500, 'The server is unavailable. Please try again in a moment.'),
+      )
+      renderSection()
+
+      // The bug: this used to render `default-model-unset` with the false
+      // "No default model yet" claim on a fetch failure. It must not.
+      expect(await screen.findByTestId('default-model-error')).toHaveTextContent(
+        'Could not load the default model. Please try again.',
+      )
+      expect(screen.queryByTestId('default-model-unset')).not.toBeInTheDocument()
+      expect(screen.queryByTestId('default-model-provider')).not.toBeInTheDocument()
+    })
   })
 
   it('Change offers models of connected/signed-in providers only, and PUTs the pick', async () => {
@@ -2059,6 +2108,8 @@ describe('ProvidersSection — Row expand shows limits and window source (FR-032
 
     expect(screen.getByTestId('model-limit-window-openai-A')).toHaveTextContent('No context length')
     const link = screen.getByTestId('model-limit-window-unknown-link-openai-A')
-    expect(link).toHaveAttribute('href', '/settings?tab=models&provider=openai&model=A')
+    // O10: hash-prefixed so following it under the app's hash router is an
+    // in-page navigation, not a full reload landing on the wrong screen.
+    expect(link).toHaveAttribute('href', '/#/settings?tab=models&provider=openai&model=A')
   })
 })
