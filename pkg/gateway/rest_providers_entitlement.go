@@ -149,7 +149,7 @@ func registerEntitlementCacheInvalidation(cat *catalog.Catalog, api *restAPI) {
 // handleProviderEntitlement answers POST /api/v1/providers/{id}/entitlement.
 // The caller (HandleProviders) has already split the id off the path.
 //
-// Rate limiting (O3): providerEntitlementLimiter, 30/minute per IP —
+// Rate limiting (O3): providerEntitlementLimiter, 60/minute per IP —
 // FR-021's "rate-limited like /test" at /test's own ceiling, in its own
 // bucket (see the limiter's doc comment in rest_auth.go for why the bucket is
 // separate). contracts/openapi.yaml has declared a 429 on this operation
