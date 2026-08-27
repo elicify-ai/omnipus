@@ -20,13 +20,17 @@ describe('providers-catalog.json fixture', () => {
     expect(new Set(CATALOG_PROVIDERS.map((p) => p.id)).size).toBe(190)
   })
 
-  it('has exactly 8 popular providers, each a distinct company (FR-022)', () => {
+  it('has exactly 12 popular providers, each a distinct company (FR-022, twelve usage-backed)', () => {
+    // Popular tier per catalog repo commit b50f5a6: groq demoted (an
+    // inference host, not a model author — no author-usage ranking); ollama
+    // promoted (local-model support, on brand for a self-hosted product).
     const popular = CATALOG_PROVIDERS.filter((p) => p.tier === 'popular')
-    expect(popular).toHaveLength(8)
-    expect(new Set(popular.map((p) => p.company)).size).toBe(8)
+    expect(popular).toHaveLength(12)
+    expect(new Set(popular.map((p) => p.company)).size).toBe(12)
     expect(popular.map((p) => p.id).sort()).toEqual(
-      ['anthropic', 'deepseek', 'google', 'groq', 'openai', 'openrouter', 'xai', 'zai'],
+      ['alibaba', 'anthropic', 'deepseek', 'google', 'minimax', 'mistral', 'moonshot', 'ollama', 'openai', 'openrouter', 'xai', 'zai'],
     )
+    expect(popular.map((p) => p.id)).not.toContain('groq')
   })
 
   it('marks bedrock unsupported with the cloud-iam reason (FR-025)', () => {

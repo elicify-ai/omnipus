@@ -84,8 +84,14 @@ func TestEmbeddedSnapshot_Valid_And_Bounded(t *testing.T) {
 func TestEmbeddedSnapshot_PopularTier(t *testing.T) {
 	doc := parseEmbedded(t)
 
-	// FR-018 [A-9]: the popular set is pinned by name.
-	want := []string{"anthropic", "deepseek", "google", "groq", "mistral", "openai", "openrouter", "xai"}
+	// FR-018 [A-9]: the popular set is pinned by name. Twelve, usage-backed
+	// (catalog repo commit b50f5a6): groq demoted to standard (an inference
+	// host, not a model author, so it has no author-usage ranking); ollama
+	// promoted (local-model support, on brand for a self-hosted product).
+	want := []string{
+		"alibaba", "anthropic", "deepseek", "google", "minimax", "mistral",
+		"moonshotai", "ollama", "openai", "openrouter", "xai", "zai",
+	}
 
 	var got []string
 	for _, p := range doc.Providers {

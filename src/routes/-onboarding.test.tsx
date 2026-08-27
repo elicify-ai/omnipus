@@ -335,10 +335,10 @@ describe('OnboardingWizard — step 3 renders the shared provider picker (FR-021
     expect(src).toContain("from '@/components/providers/ProviderPicker'")
   })
 
-  it('step 3 mounts ProviderPicker with the fetched catalog (8 Popular tiles)', async () => {
+  it('step 3 mounts ProviderPicker with the fetched catalog (12 Popular tiles)', async () => {
     await goToStep3()
     const popular = screen.getByTestId('picker-popular')
-    expect(within(popular).getAllByRole('button')).toHaveLength(8)
+    expect(within(popular).getAllByRole('button')).toHaveLength(12)
     expect(screen.getByTestId('picker-popular-anthropic')).toBeInTheDocument()
   })
 

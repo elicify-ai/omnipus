@@ -294,7 +294,7 @@
       "env": [
         "GROQ_API_KEY"
       ],
-      "tier": "popular",
+      "tier": "standard",
       "auth_methods": [
         "api_key"
       ],
@@ -525,7 +525,7 @@
       "api": "https://api.moonshot.ai/v1",
       "protocol": "openai-compatible",
       "region": "intl",
-      "tier": "standard",
+      "tier": "popular",
       "auth_methods": [
         "api_key"
       ],
@@ -583,7 +583,7 @@
       "api": "https://api.minimax.io/v1",
       "protocol": "openai-compatible",
       "region": "intl",
-      "tier": "standard",
+      "tier": "popular",
       "auth_methods": [
         "api_key"
       ],
@@ -639,7 +639,7 @@
       "api": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
       "protocol": "openai-compatible",
       "region": "intl",
-      "tier": "standard",
+      "tier": "popular",
       "auth_methods": [
         "api_key"
       ],
@@ -782,7 +782,7 @@
       "company": "Ollama",
       "api": "http://localhost:11434/v1",
       "protocol": "ollama",
-      "tier": "standard",
+      "tier": "popular",
       "auth_methods": [
         "api_key"
       ],
@@ -2210,7 +2210,7 @@
       "api": "https://api.mistral.ai/v1",
       "protocol": "openai-compatible",
       "region": "eu",
-      "tier": "standard",
+      "tier": "popular",
       "auth_methods": [
         "api_key"
       ],
