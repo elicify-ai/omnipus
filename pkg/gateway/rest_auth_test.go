@@ -1614,15 +1614,36 @@ func TestClientIP_IgnoresSpoofedXFFByDefault(t *testing.T) {
 
 // TestClientIP_HonorsXFFWhenTrustXFFConfigured verifies the behind-a-trusted-
 // proxy use case still works: when the config snapshot has Gateway.TrustXFF
-// true, X-Forwarded-For is honored (first comma-separated entry).
+// true, X-Forwarded-For is honored — specifically its RIGHTMOST entry, the
+// one hop the trusted proxy wrote itself (M4).
+//
+// The fixture models what the documented nginx deployment actually delivers.
+// `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for` APPENDS the
+// connecting peer to whatever the client already sent, so a client that sends
+// `X-Forwarded-For: 6.6.6.6` arrives as `6.6.6.6, <its real address>`. The
+// previous version of this test used `198.51.100.42, 10.0.0.1` and asserted
+// the leftmost entry — a header shape nginx never produces, and an assertion
+// that pinned the attacker-controlled half of a real one.
 func TestClientIP_HonorsXFFWhenTrustXFFConfigured(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", nil)
 	req.RemoteAddr = "10.0.0.1:443" // the trusted reverse proxy's address
-	req.Header.Set("X-Forwarded-For", "198.51.100.42, 10.0.0.1")
+	// "6.6.6.6" is the client's own forged claim; nginx appended its real
+	// address after it.
+	req.Header.Set("X-Forwarded-For", "6.6.6.6, 198.51.100.42")
 	req = req.WithContext(contextWithTrustXFF(true))
 
 	assert.Equal(t, "198.51.100.42", clientIP(req),
-		"TrustXFF: true must honor the first X-Forwarded-For entry (real client, not the proxy)")
+		"TrustXFF: true must honor the trusted rightmost X-Forwarded-For entry, never the client's forged claim")
+
+	// A single-entry header (Caddy's documented header_up
+	// X-Forwarded-For {remote_host}, which REPLACES rather than appends) is
+	// unaffected by the change.
+	single := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", nil)
+	single.RemoteAddr = "10.0.0.1:443"
+	single.Header.Set("X-Forwarded-For", "198.51.100.42")
+	single = single.WithContext(contextWithTrustXFF(true))
+	assert.Equal(t, "198.51.100.42", clientIP(single),
+		"a single-entry X-Forwarded-For is the real client under either reading")
 }
 
 // TestClientIP_StripsPortFromRemoteAddr verifies the second bug fix: the

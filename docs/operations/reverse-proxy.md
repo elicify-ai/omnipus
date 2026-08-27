@@ -144,9 +144,13 @@ When a trusted reverse proxy (nginx, Caddy, etc.) sits in front, set:
 }
 ```
 
-With `trust_xff: true` the gateway reads `X-Forwarded-For` for the audit `remote_ip` field, which gives the real client IP rather than the proxy's loopback address.
+With `trust_xff: true` the gateway reads `X-Forwarded-For` for the audit `remote_ip` field and for every rate-limit bucket (login brute-force protection and the provider sign-in limiters), which gives the real client IP rather than the proxy's loopback address.
 
-**Security note:** Only enable `trust_xff` when all traffic to the gateway port passes through your controlled proxy. If any external client can reach the gateway port directly, they can supply a spoofed `X-Forwarded-For` header and insert a fake IP into audit logs.
+**Which entry is used: the rightmost one.** `X-Forwarded-For` is a list, and only its last entry is written by the proxy the gateway trusts — every entry to the left of it was supplied by whatever sent the request. The nginx line above uses `$proxy_add_x_forwarded_for`, which *appends* the connecting peer to whatever the client already sent: a client that sends `X-Forwarded-For: 6.6.6.6` arrives at the gateway as `6.6.6.6, <its real address>`. Reading the leftmost entry would therefore read a value the client chose, letting it forge its audit IP and get a fresh rate-limit bucket on every request. The gateway reads the **rightmost** entry instead. Caddy's `header_up X-Forwarded-For {remote_host}` *replaces* the header with the peer address, so its single entry is both leftmost and rightmost — that configuration is unaffected either way.
+
+**Multi-hop chains (e.g. a CDN in front of nginx) are not supported by this flag.** The rightmost entry is the innermost proxy's view, so with a CDN in front you will see the CDN edge address, not the origin client. This is deliberate: the gateway never prefers a value it cannot trust over one it can. If you need true client IPs behind a chain, terminate it at a single proxy you control (so the gateway's peer *is* the client's last untrusted hop), or leave `trust_xff` off.
+
+**Security note:** Only enable `trust_xff` when all traffic to the gateway port passes through your controlled proxy. If any external client can reach the gateway port directly, they can connect without going through the proxy at all and supply a fully-forged `X-Forwarded-For` header — the rightmost-entry rule protects against a client *behind* your proxy, not against one that bypasses it.
 
 ### Loopback-gated endpoints behind a same-host proxy (added 2026-07-18)
 

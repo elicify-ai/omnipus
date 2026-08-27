@@ -140,11 +140,19 @@ func TestCanonicalRemoteIP_PrefersForwardedFor(t *testing.T) {
 			want:     "203.0.113.1",
 		},
 		{
-			name:     "trustXFF=true multi-hop XFF first",
+			// M4: the RIGHTMOST entry is the one the trusted proxy wrote
+			// itself. The documented nginx idiom
+			// (X-Forwarded-For $proxy_add_x_forwarded_for) APPENDS the peer
+			// to whatever the client sent, so this header is what a client
+			// claiming to be 203.0.113.1 produces when its real address is
+			// 10.0.0.5 — reading the leftmost entry read the client's own
+			// string and let it forge its audit remote_ip and its
+			// rate-limit bucket at will.
+			name:     "trustXFF=true multi-hop uses the proxy-appended hop, not the client's claim",
 			xff:      "203.0.113.1, 10.0.0.5",
 			ra:       "10.0.0.1:1234",
 			trustXFF: true,
-			want:     "203.0.113.1",
+			want:     "10.0.0.5",
 		},
 		{name: "trustXFF=true no XFF strips port", xff: "", ra: "10.0.0.1:1234", trustXFF: true, want: "10.0.0.1"},
 		{name: "trustXFF=true no XFF no port", xff: "", ra: "10.0.0.1", trustXFF: true, want: "10.0.0.1"},
