@@ -64,6 +64,38 @@ type deviceCodeSession struct {
 // server-side lifetime, applied even if the vendor reports a longer one.
 const deviceCodeSessionMaxTTL = 15 * time.Minute
 
+// minSignInIntervalSeconds and maxSignInIntervalSeconds bound
+// interval_seconds on every wire response that carries it
+// (SignInStartResponseDeviceCode, SignInPollResponse) — see
+// contracts/components/schemas/SignInStartResponseDeviceCode.yaml and
+// SignInPollResponse.yaml, both `minimum: 1` / `maximum: 30`. The SPA's
+// generated Zod schema enforces the same bound and throws on a value outside
+// it, so every producer (session start, the poll path's slow_down widening,
+// and its own-computed fallback when the session already vanished) MUST
+// clamp through clampSignInIntervalSeconds rather than emit the vendor's or
+// an arithmetically-widened value unclamped.
+const (
+	minSignInIntervalSeconds = 1
+	maxSignInIntervalSeconds = 30
+)
+
+// clampSignInIntervalSeconds bounds v to
+// [minSignInIntervalSeconds, maxSignInIntervalSeconds] — the contract's
+// declared range for interval_seconds. Every producer of that field in this
+// file MUST route through this helper: neither a vendor-advertised interval
+// (which can exceed 30, e.g. a 60s interval on session start) nor a
+// repeatedly slow_down-widened one (5 -> 10 -> 20 -> 40 after three
+// back-offs) may reach the wire unclamped.
+func clampSignInIntervalSeconds(v int) int {
+	if v < minSignInIntervalSeconds {
+		return minSignInIntervalSeconds
+	}
+	if v > maxSignInIntervalSeconds {
+		return maxSignInIntervalSeconds
+	}
+	return v
+}
+
 // --- device-code session store -------------------------------------------
 //
 // CONCURRENCY CONTRACT — one lock, and no pointer ever escapes it.
@@ -151,6 +183,7 @@ func (a *restAPI) widenDeviceSessionInterval(handle string) (widened int, ok boo
 	if widened <= sess.intervalSeconds {
 		widened = sess.intervalSeconds + 5
 	}
+	widened = clampSignInIntervalSeconds(widened)
 	sess.intervalSeconds = widened
 	return widened, true
 }
@@ -401,6 +434,7 @@ func (a *restAPI) handleProviderSignInStart(w http.ResponseWriter, r *http.Reque
 	if interval < 1 {
 		interval = 5
 	}
+	interval = clampSignInIntervalSeconds(interval)
 	now := time.Now()
 	expiresAt := now.Add(deviceCodeSessionMaxTTL)
 	a.putDeviceSession(handle, deviceCodeSession{
@@ -486,7 +520,11 @@ func (a *restAPI) handleProviderSignInPoll(w http.ResponseWriter, r *http.Reques
 			if logErr := a.auditor.Log(&audit.Entry{
 				Event:    "provider.signed_in",
 				Decision: audit.DecisionAllow,
-				Details:  map[string]any{"provider": providerID},
+				User:     auditActor(r),
+				Details: map[string]any{
+					"provider":  providerID,
+					"source_ip": a.clientIPWithLiveFallback(r),
+				},
 			}); logErr != nil {
 				slogWarnAuditFailed("provider.signed_in", logErr)
 			}
@@ -508,6 +546,7 @@ func (a *restAPI) handleProviderSignInPoll(w http.ResponseWriter, r *http.Reques
 			if newInterval <= sess.intervalSeconds {
 				newInterval = sess.intervalSeconds + 5
 			}
+			newInterval = clampSignInIntervalSeconds(newInterval)
 		}
 		jsonOK(w, gen.SignInPollResponse{
 			State:           gen.SignInPollResponseStatePending,
@@ -705,7 +744,7 @@ func (a *restAPI) handleProviderSignInStatus(w http.ResponseWriter, r *http.Requ
 
 // handleProviderSignInImport implements POST /providers/openai-chatgpt/sign-in/import (FR-047).
 func (a *restAPI) handleProviderSignInImport(w http.ResponseWriter, r *http.Request) {
-	token, accountID, _, err := providers_pkg.ReadCodexCliCredentials()
+	token, accountID, mtimeExpiry, err := providers_pkg.ReadCodexCliCredentials()
 	if err != nil {
 		jsonErr(w, http.StatusNotFound, "no codex login found")
 		return
@@ -715,9 +754,23 @@ func (a *restAPI) handleProviderSignInImport(w http.ResponseWriter, r *http.Requ
 		jsonErr(w, http.StatusServiceUnavailable, "credential store unavailable")
 		return
 	}
-	var expiresAt time.Time
+	// Prefer the JWT's own exp claim; fall back to
+	// ReadCodexCliCredentials' auth.json-mtime+1h estimate (its documented
+	// contract — see that function's doc comment) rather than leaving
+	// expiresAt at its zero value. A zero ExpiresAt makes
+	// needsOAuthRefresh treat the imported credential as "never needs
+	// refresh" by design, so a non-JWT token would be reported signed-in
+	// forever and only surface as a raw 401 from CodexProvider.Chat once it
+	// actually expired — never routed through ErrProviderNeedsSignIn. If
+	// somehow neither source produces a usable expiry, reject the import
+	// outright rather than silently persisting an unbounded credential.
+	expiresAt := mtimeExpiry
 	if exp, ok := jwtUnverifiedExpiry(token); ok {
 		expiresAt = exp
+	}
+	if expiresAt.IsZero() {
+		jsonErr(w, http.StatusUnprocessableEntity, "could not establish an expiry for the imported credential")
+		return
 	}
 	if setErr := providers_pkg.WriteStoreOAuthCredential("openai-chatgpt", store, providers_pkg.OAuthCredential{
 		// FR-047: no refresh token is imported — this session ends at exp.
@@ -733,7 +786,12 @@ func (a *restAPI) handleProviderSignInImport(w http.ResponseWriter, r *http.Requ
 		if logErr := a.auditor.Log(&audit.Entry{
 			Event:    "provider.signed_in",
 			Decision: audit.DecisionAllow,
-			Details:  map[string]any{"provider": "openai-chatgpt", "via": "codex_cli_import"},
+			User:     auditActor(r),
+			Details: map[string]any{
+				"provider":  "openai-chatgpt",
+				"via":       "codex_cli_import",
+				"source_ip": a.clientIPWithLiveFallback(r),
+			},
 		}); logErr != nil {
 			slogWarnAuditFailed("provider.signed_in", logErr)
 		}
@@ -774,7 +832,11 @@ func (a *restAPI) handleProviderSignOut(w http.ResponseWriter, r *http.Request, 
 		if logErr := a.auditor.Log(&audit.Entry{
 			Event:    "provider.signed_out",
 			Decision: audit.DecisionAllow,
-			Details:  map[string]any{"provider": providerID},
+			User:     auditActor(r),
+			Details: map[string]any{
+				"provider":  providerID,
+				"source_ip": a.clientIPWithLiveFallback(r),
+			},
 		}); logErr != nil {
 			slogWarnAuditFailed("provider.signed_out", logErr)
 		}
