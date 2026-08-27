@@ -1139,7 +1139,12 @@ jobs:
 
       - name: Seed gateway config
         # providers is a flat array of ModelConfig entries (see pkg/config/config.go).
-        # agents.defaults.model_name must match one provider entry's model_name.
+        # Each row's `provider` (catalog id) is EXPLICIT and REQUIRED — the old
+        # "<protocol>/<model>" prefix-splitting migration was deleted (ADR-067
+        # FR-034, C1 fix): a row with no `provider` fails config load with
+        # "provider is required" instead of being guessed. `model` is the bare
+        # catalog model id. agents.defaults.default_model must match one provider
+        # entry's (provider, model) pair exactly.
         # dev_mode_bypass unblocks onboarding endpoints that require bearer auth
         # before an admin account exists (CLAUDE.md "Build & E2E Testing").
         #
@@ -1170,14 +1175,17 @@ jobs:
             },
             "agents": {
               "defaults": {
-                "model_name": "openrouter-glm",
+                "default_model": {
+                  "provider": "openrouter",
+                  "model": "z-ai/glm-5.2"
+                },
                 "auto_recap_enabled": true
               }
             },
             "providers": [
               {
-                "model_name": "openrouter-glm",
-                "model": "openrouter/z-ai/glm-5.2",
+                "provider": "openrouter",
+                "model": "z-ai/glm-5.2",
                 "api_base": "https://openrouter.ai/api/v1",
                 "api_key_ref": "OPENROUTER_API_KEY"
               }
@@ -1247,13 +1255,14 @@ jobs:
         # and the agent's model lookup picks this newer entry. If a placeholder
         # key goes in here, every LLM call 401s even though the seed provider
         # has a valid key.
-        # Model must match the seeded provider's model_name alias so the
-        # onboarding handler updates the existing entry instead of overwriting
-        # agent defaults with a non-aliased model path.
+        # Model must match the seeded provider's (provider, model) pair — the
+        # exact key ADR-067's GetModelConfig matches on — so the onboarding
+        # handler updates the existing entry instead of writing a second,
+        # divergent one.
         run: |
           set -euo pipefail
           jq -n --arg key "${OPENROUTER_API_KEY_CI}" \
-            '{provider:{id:"openrouter",api_key:$key,model:"openrouter/z-ai/glm-5.2"},admin:{username:"admin",password:"admin123"}}' \
+            '{provider:{id:"openrouter",api_key:$key,model:"z-ai/glm-5.2"},admin:{username:"admin",password:"admin123"}}' \
             | curl -sf -X POST http://localhost:6060/api/v1/onboarding/complete \
                 -H 'Content-Type: application/json' \
                 -d @- \
