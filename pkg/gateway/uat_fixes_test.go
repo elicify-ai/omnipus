@@ -482,12 +482,24 @@ func putProviderRaw(t *testing.T, api *restAPI, id, body string) *httptest.Respo
 	return w
 }
 
+// getProviders lists providers as the SETTINGS SCREEN does — authenticated.
+//
+// The authentication is not incidental scaffolding. GET /api/v1/providers now
+// answers an anonymous caller with a REDUCED row (no account_label, no
+// dependents) and 401s one entirely once onboarding is complete (C1: the list
+// branch previously carried no authorization gate at all, so an
+// unauthenticated curl on a production gateway returned the whole inventory
+// including the operator's live vendor account_label). Every caller of this
+// helper asserts the full, authenticated row shape that the SPA's
+// fetchProviders (src/lib/api.ts, called only from the Settings screens)
+// actually receives, so the helper models that caller.
 func getProviders(t *testing.T, api *restAPI) []gen.Provider {
 	t.Helper()
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/providers", nil)
 	r.URL.Path = "/api/v1/providers"
-	api.HandleProviders(w, r)
+	ctx := context.WithValue(r.Context(), UserContextKey{}, &config.UserConfig{Username: "admin"})
+	api.HandleProviders(w, r.WithContext(ctx))
 	require.Equal(t, http.StatusOK, w.Code, "GET providers must be 200; body=%s", w.Body.String())
 	var provs []gen.Provider
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &provs))
