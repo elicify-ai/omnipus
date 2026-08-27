@@ -45,6 +45,8 @@ import {
   fetchSignInStatus,
   importCodexLogin,
   getErrorMessage,
+  isApiError,
+  ApiSchemaError,
 } from '@/lib/api'
 import type { SignInStatus } from '@/lib/api/generated/openapi-types'
 
@@ -61,6 +63,50 @@ type Phase =
   | { kind: 'expired' }
   | { kind: 'denied' }
   | { kind: 'error'; message: string }
+
+/**
+ * O9: the device-code poll loop must survive a transient hiccup — a dropped
+ * connection, a 502 from a proxy sitting in front of the gateway, or a
+ * response that fails Zod validation because of the filed backend defect
+ * where `interval_seconds` can be emitted above the contract's `maximum: 30`
+ * — without losing the code the operator already approved on the vendor's
+ * page. It must NOT survive a genuinely terminal outcome.
+ *
+ * The key fact that makes this classification safe: a real vendor decision
+ * (`access_denied`, `expired_token`) is never thrown here at all. The
+ * gateway (`rest_sign_in.go::handleProviderSignInPoll`) maps both onto
+ * `SignInPollResponse.state` (`denied` / `expired`) on an ordinary 200,
+ * handled by `tick()`'s success path below — so it never reaches this
+ * catch. Anything that DOES throw is therefore a transport/server failure,
+ * not the operator's own answer, and the question is only whether it looks
+ * like a blip or a dead session:
+ *
+ *   - transient (retry): status 0 (browser couldn't reach the gateway),
+ *     any 5xx (including the gateway's own documented 502 "could not reach
+ *     the provider to check sign-in status"), 429 (rate-limited — back off,
+ *     don't give up), and `ApiSchemaError` (the body parsed as JSON but
+ *     failed the generated schema — most likely the `interval_seconds`
+ *     defect above; the poll itself plausibly succeeded, only its shape
+ *     didn't validate, so losing an approved code over that would be worse
+ *     than retrying).
+ *   - terminal (stop now): 400/401/403/404 and anything else. A 404 here
+ *     specifically means "unknown or expired device_auth_id" — the
+ *     device-code session itself is gone server-side, and retrying the same
+ *     id can never succeed.
+ */
+export function isTransientSignInPollError(err: unknown): boolean {
+  if (err instanceof ApiSchemaError) return true
+  if (isApiError(err)) return err.isNetworkError() || err.isServerError() || err.isRateLimited()
+  return false
+}
+
+/**
+ * Consecutive transient poll failures tolerated before the loop gives up.
+ * Bounded so a genuinely dead gateway still surfaces an error instead of
+ * polling forever — 5 consecutive failures at the (never-shrinking) poll
+ * interval is enough to ride out a blip without masking a real outage.
+ */
+const MAX_CONSECUTIVE_TRANSIENT_POLL_FAILURES = 5
 
 export function SignInDialog({
   open,
@@ -171,12 +217,17 @@ export function SignInDialog({
     let cancelled = false
     let timeoutId: ReturnType<typeof setTimeout> | undefined
     let intervalMs = Math.max(1, startIntervalSeconds) * 1000
+    // O9: consecutive TRANSIENT failures only — any successful poll (even a
+    // still-pending one) resets this, so one blip an hour into a long-lived
+    // session never accumulates toward the bound.
+    let consecutiveTransientFailures = 0
 
     const tick = async () => {
       if (cancelled) return
       try {
         const result = await pollSignIn(providerId, deviceAuthId)
         if (cancelled) return
+        consecutiveTransientFailures = 0
         if (result.interval_seconds) {
           // Never speed up — a slow_down response only ever raises the floor.
           intervalMs = Math.max(intervalMs, result.interval_seconds * 1000)
@@ -200,6 +251,16 @@ export function SignInDialog({
         timeoutId = setTimeout(() => { void tick() }, intervalMs)
       } catch (err) {
         if (cancelled) return
+        if (
+          isTransientSignInPollError(err) &&
+          consecutiveTransientFailures < MAX_CONSECUTIVE_TRANSIENT_POLL_FAILURES
+        ) {
+          // A blip — the operator's already-approved code is still good.
+          // Keep polling at the last-known interval rather than losing it.
+          consecutiveTransientFailures += 1
+          timeoutId = setTimeout(() => { void tick() }, intervalMs)
+          return
+        }
         setPhase({ kind: 'error', message: getErrorMessage(err, 'Sign-in check failed') })
       }
     }
