@@ -6727,7 +6727,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "post",
     path: "/onboarding/probe-provider",
     alias: "probeProvider",
-    description: `Non-persistent probe: accepts an API key in the request body, tests it against the provider&#x27;s /models endpoint, and returns the model list. Nothing is written to disk. Available only during onboarding (returns 409 after onboarding completes). CSRF-exempt.
+    description: `Non-persistent probe: accepts an API key in the request body, tests it against the provider&#x27;s /models endpoint, and returns the model list. Nothing is written to disk. CSRF-exempt. Available only while the pre-auth onboarding window is open, and it returns 409 whenever that window is closed - onboarding already complete, the onboarding state unreadable, the config unreadable, or the instance already having an authentication authority (a configured user or OMNIPUS_BEARER_TOKEN). The refusal is 409 rather than 401 for every one of those reasons, including for an authenticated admin: once the window is closed no credential makes this call legal, and the standard PUT /providers/{id} + GET /providers flow replaces it. The refusal body is identical across reasons; the specific reason is recorded in the audit log. With auth sign_in the probe spends one real, billed vendor completion using the operator&#x27;s own saved login, which is why the window must close on uncertainty. Rate-limited: 3 requests per minute per IP (shared with /onboarding/complete) -&gt; 429.
 `,
     requestFormat: "json",
     parameters: [
@@ -6747,6 +6747,11 @@ Includes session_start events from all agent stores and task lifecycle events.
       {
         status: 409,
         description: `Conflict — e.g. resource already exists.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 429,
+        description: `Rate limit exceeded.`,
         schema: ErrorResponse,
       },
     ],
@@ -7077,7 +7082,7 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
     method: "put",
     path: "/providers/:id",
     alias: "updateProvider",
-    description: `Adds or updates an LLM provider entry. On new providers, api_key is required. On existing providers, api_key may be omitted to keep the current key. The API key is stored encrypted (AES-256-GCM) in credentials.json. Available before and after onboarding. The id must be a catalog id (ADR-067 registry identity) or, when the body carries api_base + protocol (openai-compatible | anthropic), an operator-named custom row (Provider.custom: true); any other id → 400 &#x60;unknown provider &quot;&lt;id&gt;&quot;&#x60;. A tier &quot;unsupported&quot; catalog provider → 400 with its unsupported_reason. The reserved path segments &quot;catalog&quot; and &quot;default-model&quot; are dispatched to their own routes before this one and are never valid provider ids.
+    description: `Adds or updates an LLM provider entry. On new providers, api_key is required. On existing providers, api_key may be omitted to keep the current key. The API key is stored encrypted (AES-256-GCM) in credentials.json. Available before and after onboarding — while onboarding is incomplete and the instance has no authentication authority the route is reachable without a credential, so the wizard can configure a provider before an admin account exists. Rate-limited: 30 requests per minute per IP -&gt; 429. The call is synchronous through a full agent-registry rebuild. The id must be a catalog id (ADR-067 registry identity) or, when the body carries api_base + protocol (openai-compatible | anthropic), an operator-named custom row (Provider.custom: true); any other id → 400 &#x60;unknown provider &quot;&lt;id&gt;&quot;&#x60;. A tier &quot;unsupported&quot; catalog provider → 400 with its unsupported_reason. The reserved path segments &quot;catalog&quot; and &quot;default-model&quot; are dispatched to their own routes before this one and are never valid provider ids.
 `,
     requestFormat: "json",
     parameters: [
@@ -7107,6 +7112,11 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
       {
         status: 422,
         description: `api_key required for new providers.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 429,
+        description: `Rate limit exceeded.`,
         schema: ErrorResponse,
       },
       {
@@ -7368,7 +7378,7 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
     method: "get",
     path: "/providers/:id/test",
     alias: "testProvider",
-    description: `Verifies that an API key is configured for the given provider without making an upstream call. Returns success&#x3D;false with an error message if no key is configured. Available before and after onboarding.
+    description: `Verifies that an API key is configured for the given provider without making an upstream call. Returns success&#x3D;false with an error message if no key is configured. Available before and after onboarding — while onboarding is incomplete and the instance has no authentication authority the route is reachable without a credential. Rate-limited: 30 requests per minute per IP -&gt; 429.
 `,
     requestFormat: "json",
     parameters: [
@@ -7383,6 +7393,11 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
       {
         status: 401,
         description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 429,
+        description: `Rate limit exceeded.`,
         schema: ErrorResponse,
       },
     ],
