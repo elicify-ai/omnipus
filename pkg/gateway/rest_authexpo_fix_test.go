@@ -380,6 +380,61 @@ func TestPreAuthWindow_ClosedWhenAnAuthenticationAuthorityExists(t *testing.T) {
 	})
 }
 
+// TestDevModeBypass_GrantsNoAdditionalAccessOnFR050GatedRoutes pins a second
+// UAT finding surfaced while fixing the /providers/catalog release blocker
+// above (live repro, 2026-08-27): with gateway.dev_mode_bypass=true and
+// onboarding COMPLETE, GET /api/v1/providers/catalog returned 200 (it was
+// still registered under withAuth at the time — checkBearerAuth's bypass
+// short-circuit, auth.go, supplies the synthetic _dev_bypass identity)
+// while GET /api/v1/providers returned 401 (already withOptionalAuth +
+// requireAuthOutsideOnboarding — bypass supplies no identity on that path;
+// hasAuthenticationAuthority's own doc comment says this is deliberate, and
+// preAuthOnboardingWindowOpen's window is closed once onboarding is
+// complete regardless). The two sibling provider routes disagreed about
+// whether the identical anonymous caller was authenticated.
+//
+// Moving /providers/catalog onto the SAME withOptionalAuth +
+// requireAuthOutsideOnboarding shape /providers already used (this file's
+// C1 fix, and this commit's catalog fix) resolves that disagreement: both
+// routes now fail closed under bypass once onboarding is complete, which is
+// what hasAuthenticationAuthority's rationale already required — dev bypass
+// must never give an FR-050-gated route MORE access than an anonymous
+// caller gets. checkBearerAuth's OWN bypass grant (used by plain withAuth
+// routes) is a separate, older, deliberate design for driving the SPA
+// pre-login locally (CLAUDE.md "Running the embedded SPA") and is
+// deliberately left untouched here — broadening hasAuthenticationAuthority
+// to match it would be a security-boundary policy change belonging to a
+// dedicated review, not a side effect of this bug fix.
+//
+// This test does not change that policy; it pins the now-CONSISTENT
+// behavior across both routes so a future edit that reintroduces a
+// disagreement between them is caught.
+func TestDevModeBypass_GrantsNoAdditionalAccessOnFR050GatedRoutes(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+	api.providerCatalog = freshCatalog(t)
+	completeOnboarding(t, api)
+
+	cfg := api.agentLoop.GetConfig()
+	cfg.Gateway.DevModeBypass = true
+
+	mux := http.NewServeMux()
+	api.registerAdditionalEndpoints(&testMuxRegistrar{mux: mux})
+
+	for _, path := range []string{"/api/v1/providers/catalog", "/api/v1/providers"} {
+		t.Run(path, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, path, nil)
+			ctx := context.WithValue(req.Context(), ctxkey.ConfigContextKey{}, cfg)
+			w := httptest.NewRecorder()
+			mux.ServeHTTP(w, req.WithContext(ctx))
+
+			assert.Equal(t, http.StatusUnauthorized, w.Code,
+				"dev_mode_bypass must not grant an FR-050-gated route access once "+
+					"onboarding is complete and no real identity is configured; body=%s",
+				w.Body.String())
+		})
+	}
+}
+
 // ---------------------------------------------------------------------------
 // C2 — the Copilot probe was pollable and billed to the operator
 // ---------------------------------------------------------------------------

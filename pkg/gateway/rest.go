@@ -5361,13 +5361,22 @@ func (a *restAPI) registerAdditionalEndpoints(cm httpHandlerRegistrar) {
 	// /providers/{id} upsert branch.
 	cm.RegisterHTTPHandler("/api/v1/providers/default-model", a.adminWrap(a.HandleDefaultModel))
 	// GET /api/v1/providers/catalog (ADR-067 FR-017, T067-10). Its own
-	// exact path under withAuth, registered ahead of the /providers/
-	// subtree dispatcher: "catalog" is a reserved path segment and is
-	// never a provider id, and the exact match always beats the prefix.
-	// Plain withAuth rather than adminWrap — this is a READ of the same
-	// public registry document the binary ships embedded, so a dev-mode
-	// bypass 503 would only break local development for no gain.
-	cm.RegisterHTTPHandler("/api/v1/providers/catalog", a.withAuth(a.HandleProvidersCatalog))
+	// exact path, registered ahead of the /providers/ subtree dispatcher:
+	// "catalog" is a reserved path segment and is never a provider id, and
+	// the exact match always beats the prefix.
+	//
+	// withOptionalAuth, not withAuth: the onboarding wizard's provider
+	// picker (src/routes/onboarding.tsx) calls this route to render its
+	// list BEFORE any admin account exists to authenticate as — the same
+	// FR-050 shape as GET /providers (see the C1 comment on that branch
+	// below). The handler gates itself with requireAuthOutsideOnboarding,
+	// the shared fail-closed FR-050 gate, rather than leaving the route
+	// wide open. Unlike /providers there is no reduction to make for an
+	// anonymous caller inside the window: the catalog is public vendor
+	// metadata (provider/model ids, tiers, context windows) with no
+	// operator secret or account-specific field anywhere in it, so the
+	// full document is served either way.
+	cm.RegisterHTTPHandler("/api/v1/providers/catalog", a.withOptionalAuth(a.HandleProvidersCatalog))
 	cm.RegisterHTTPHandler("/api/v1/providers", a.withOptionalAuth(a.HandleProviders))
 	cm.RegisterHTTPHandler("/api/v1/providers/", a.withOptionalAuth(a.HandleProviders))
 	cm.RegisterHTTPHandler("/api/v1/mcp-servers", a.withAuth(a.HandleMCPServers))

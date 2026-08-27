@@ -56,10 +56,24 @@ const (
 // HandleProvidersCatalog answers GET /api/v1/providers/catalog (FR-017,
 // US-7.AC1–AC4, DS-5 rows 1–4).
 //
-// It is registered on its OWN exact path under withAuth, ahead of the
-// /api/v1/providers/ subtree dispatcher — "catalog" is a reserved path
-// segment and is never a provider id — so the 401 for an unauthenticated
-// caller (US-7.AC2) is the middleware's, not this function's.
+// It is registered on its OWN exact path, ahead of the /api/v1/providers/
+// subtree dispatcher — "catalog" is a reserved path segment and is never a
+// provider id. The route is registered withOptionalAuth (an anonymous
+// caller reaches this function at all), so the 401 for an unauthenticated
+// caller outside the pre-auth window (US-7.AC2) is THIS function's, via
+// requireAuthOutsideOnboarding below — not the middleware's.
+//
+// requireAuthOutsideOnboarding is the same FR-050 gate the GET /providers
+// list uses (see the C1 comment on that branch, rest.go): the onboarding
+// wizard's provider picker needs this route to render its list before any
+// admin account exists to authenticate as, and the gate fails CLOSED on an
+// unreadable/unparseable onboarding state (M3) rather than reopening the
+// window. Unlike /providers there is no anonymous-response reduction —
+// this document is public vendor metadata (provider ids, model ids,
+// tiers, context windows) sourced from the registry the binary ships
+// embedded; it carries no operator secret, credential, or account-specific
+// field, so the full document is what both an anonymous and an
+// authenticated caller receive.
 //
 // The body is written verbatim from the snapshot the catalog published:
 // bytes and ETag are read as ONE ServedCatalog value, so a concurrent
@@ -68,6 +82,9 @@ const (
 func (a *restAPI) HandleProvidersCatalog(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if !a.requireAuthOutsideOnboarding(w, r) {
 		return
 	}
 	if a.providerCatalog == nil {

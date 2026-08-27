@@ -201,13 +201,51 @@ func TestRestProvidersCatalog_GET(t *testing.T) {
 		assert.Equal(t, first.ETag, second.ETag)
 	})
 
-	t.Run("row 2: an unauthenticated request is 401", func(t *testing.T) {
+	t.Run("row 2: the FR-050 pre-auth window still serves the catalog to an anonymous caller", func(t *testing.T) {
+		// RELEASE BLOCKER regression (UAT, 2026-08): before this fix the
+		// route was registered under withAuth unconditionally, so a FRESH
+		// INSTALL — onboarding incomplete, no users, no
+		// OMNIPUS_BEARER_TOKEN, i.e. no admin account exists yet to
+		// authenticate as — 401'd here. The onboarding wizard's provider
+		// picker (src/routes/onboarding.tsx, providersCatalogQueryOptions)
+		// calls exactly this route to render its ~200 providers; the SPA
+		// treats a confirmed 401 as session expiry and force-logs-out
+		// (src/routes/-app-auth.test.ts), so a brand-new install redirected
+		// straight to /#/login and onboarding was unreachable. This test
+		// exercises the real middleware chain (withOptionalAuth +
+		// requireAuthOutsideOnboarding), not the handler alone, so a
+		// regression back to withAuth fails it.
 		api := newTestRestAPIWithHome(t)
 		api.providerCatalog = freshCatalog(t)
 
-		// The 401 is withAuth's, so the route's real middleware chain is
-		// what this exercises — a handler-only call would prove nothing.
-		handler := api.withAuth(api.HandleProvidersCatalog)
+		handler := api.withOptionalAuth(api.HandleProvidersCatalog)
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodGet, "/api/v1/providers/catalog", nil)
+		ctx := context.WithValue(r.Context(), ctxkey.ConfigContextKey{}, api.agentLoop.GetConfig())
+		handler(w, r.WithContext(ctx))
+
+		require.Equal(t, http.StatusOK, w.Code,
+			"a fresh install with no admin account yet must still be able to render the onboarding "+
+				"provider picker; body=%s", w.Body.String())
+		var got gen.ProvidersCatalog
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+		assert.NotEmpty(t, got.Providers, "the picker needs a non-empty provider list to render")
+		assert.Contains(t, w.Body.String(), "skyprov")
+	})
+
+	t.Run("row 2b: an unauthenticated request is 401 once onboarding is complete", func(t *testing.T) {
+		// The other half of FR-050: the window must close the instant an
+		// admin account could exist. The gate is requireAuthOutsideOnboarding
+		// (the same FR-050 shape GET /providers uses), not an unconditional
+		// 401 — see the C1 comment on that branch (rest.go) — but outside
+		// the window the effect is identical to the pre-fix unconditional
+		// gate.
+		api := newTestRestAPIWithHome(t)
+		api.providerCatalog = freshCatalog(t)
+		require.NoError(t, api.onboardingMgr.CompleteOnboarding())
+		require.True(t, api.onboardingMgr.IsComplete())
+
+		handler := api.withOptionalAuth(api.HandleProvidersCatalog)
 		w := httptest.NewRecorder()
 		r := httptest.NewRequest(http.MethodGet, "/api/v1/providers/catalog", nil)
 		ctx := context.WithValue(r.Context(), ctxkey.ConfigContextKey{}, api.agentLoop.GetConfig())
@@ -215,7 +253,24 @@ func TestRestProvidersCatalog_GET(t *testing.T) {
 
 		assert.Equal(t, http.StatusUnauthorized, w.Code, "body=%s", w.Body.String())
 		assert.NotContains(t, w.Body.String(), "skyprov",
-			"an unauthenticated caller must not see the document")
+			"an unauthenticated caller must not see the document once onboarding is complete")
+	})
+
+	t.Run("row 2c: an authenticated caller still gets the catalog once onboarding is complete", func(t *testing.T) {
+		api := newTestRestAPIWithHome(t)
+		api.providerCatalog = freshCatalog(t)
+		require.NoError(t, api.onboardingMgr.CompleteOnboarding())
+
+		handler := api.withOptionalAuth(api.HandleProvidersCatalog)
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodGet, "/api/v1/providers/catalog", nil)
+		ctx := context.WithValue(r.Context(), ctxkey.ConfigContextKey{}, api.agentLoop.GetConfig())
+		ctx = context.WithValue(ctx, UserContextKey{}, &config.UserConfig{Username: "admin"})
+		handler(w, r.WithContext(ctx))
+
+		require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+		assert.Contains(t, w.Body.String(), "skyprov",
+			"the Settings screen must still be able to read the catalog once onboarded")
 	})
 
 	t.Run("row 3: If-None-Match with the current ETag is 304 with no body", func(t *testing.T) {
@@ -287,6 +342,60 @@ func TestRestProvidersCatalog_GET(t *testing.T) {
 		r := httptest.NewRequest(http.MethodDelete, "/api/v1/providers/catalog", nil)
 		api.HandleProvidersCatalog(w, r)
 		assert.Equal(t, http.StatusMethodNotAllowed, w.Code)
+	})
+}
+
+// TestProvidersCatalog_RealMux_FreshInstallCanReachTheCatalog is the
+// end-to-end proof for the UAT-reported release blocker: "fresh install
+// cannot onboard". Reproduced live: GET /api/v1/providers/catalog 401'd on a
+// clean $OMNIPUS_HOME with onboarding_complete=false, so the onboarding
+// wizard's provider picker (src/routes/onboarding.tsx) could never render,
+// the SPA read the 401 as session expiry and force-logged-out
+// (src/routes/-app-auth.test.ts), and the fresh install was stuck at
+// /#/login for an account that never existed.
+//
+// Unlike rows 2/2b/2c above (which call the handler behind a hand-picked
+// middleware wrapper), this test exercises the PRODUCTION
+// registerAdditionalEndpoints route table through a real *http.ServeMux —
+// the exact call gateway.go makes at startup (see testMuxRegistrar,
+// routes_admin_test.go). It therefore fails on EITHER half of a regression:
+// reverting the registration line back to withAuth, or reverting the
+// internal requireAuthOutsideOnboarding gate.
+func TestProvidersCatalog_RealMux_FreshInstallCanReachTheCatalog(t *testing.T) {
+	getCatalogViaRealMux := func(t *testing.T, api *restAPI) *httptest.ResponseRecorder {
+		t.Helper()
+		mux := http.NewServeMux()
+		api.registerAdditionalEndpoints(&testMuxRegistrar{mux: mux})
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/providers/catalog", nil)
+		ctx := context.WithValue(req.Context(), ctxkey.ConfigContextKey{}, api.agentLoop.GetConfig())
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req.WithContext(ctx))
+		return w
+	}
+
+	t.Run("fresh install: onboarding incomplete, no admin account yet — anonymous GET is 200 with providers", func(t *testing.T) {
+		api := newTestRestAPIWithHome(t)
+		api.providerCatalog = freshCatalog(t)
+
+		w := getCatalogViaRealMux(t, api)
+
+		require.Equal(t, http.StatusOK, w.Code,
+			"a fresh install's onboarding provider picker must reach the real "+
+				"production route; body=%s", w.Body.String())
+		var got gen.ProvidersCatalog
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+		assert.NotEmpty(t, got.Providers, "the picker needs a non-empty provider list to render")
+	})
+
+	t.Run("onboarded instance: anonymous GET is 401", func(t *testing.T) {
+		api := newTestRestAPIWithHome(t)
+		api.providerCatalog = freshCatalog(t)
+		require.NoError(t, api.onboardingMgr.CompleteOnboarding())
+
+		w := getCatalogViaRealMux(t, api)
+
+		assert.Equal(t, http.StatusUnauthorized, w.Code, "body=%s", w.Body.String())
+		assert.NotContains(t, w.Body.String(), "skyprov")
 	})
 }
 

@@ -4306,6 +4306,18 @@ paths:
         DISPATCH ORDER: "catalog" is a reserved path segment — this route MUST
         be matched before the /providers/{id} handler, and "catalog" is never a
         valid provider id.
+        Requires authentication. The one exception is ADR-068 FR-050's pre-auth
+        window: while onboarding is incomplete AND this instance has no
+        authentication authority yet (no configured users, no
+        OMNIPUS_BEARER_TOKEN), an anonymous caller is answered, because the
+        onboarding wizard's provider picker needs this document before any
+        admin account exists to authenticate as. That window fails CLOSED — an
+        unreadable or unparseable onboarding state counts as complete, not as a
+        fresh install. Outside it an anonymous caller gets 401. Unlike
+        listProviders there is no response reduction inside the window: this
+        document is public vendor metadata (provider ids, model ids, tiers,
+        context windows) with no operator secret or account-specific field, so
+        an anonymous and an authenticated caller receive the identical body.
       tags:
       - Providers
       security:
