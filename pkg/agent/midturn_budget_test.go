@@ -323,6 +323,21 @@ func TestMidTurnBudget_TriggerTargetStop(t *testing.T) {
 // the real request blows past it — the provider then returns
 // context_too_long on a window the engine believed it was protecting
 // (the ADR's §1 incident class, reintroduced).
+//
+// REPLACED 2026-08-27 (FR-032 residue regression, C1's own follow-on bug):
+// this test used to assert ErrContextUnrecoverable here — that pinned the
+// regression C1 (4d357904) itself introduced. With NO tool result in the
+// window at all there is nothing D5 could ever empty, so folding noteTokens
+// into the FR-032 thrash-guard predicate meant EVERY turn on a workspace
+// with a large-but-legal AGENT.md died the same way, forever (ADR-066 §7's
+// "unreachable by construction" made ordinary by a config value, not an
+// injected fault). C1's actual claim — the check must still SEE the
+// note-inflated total — is preserved and asserted below via
+// ContextResidueOverflowsTotal: the overflow is detected and logged, not
+// silently ignored, but it is no longer turn-fatal (§8: "nothing
+// size-related is turn-fatal once D4–D6 are in"). The companion test
+// TestMidTurnBudget_C1_NotesStillTriggerEmptying proves noteTokens still
+// drive real D5 work when there IS something eligible to empty.
 func TestMidTurnBudget_C1_CallMessagesInjections(t *testing.T) {
 	al, agent := midTurnFixture(t, 40_000, 0)
 	budget := agentContextBudget(agent)
@@ -342,9 +357,10 @@ func TestMidTurnBudget_C1_CallMessagesInjections(t *testing.T) {
 	key := "midturn-c1-callmessages"
 	// A tiny conversation with NO tool results: `messages` alone fits B
 	// comfortably, and there is nothing eligible for the D5 pass to empty —
-	// so if the check fires at all it can only be because it saw the
-	// injected note weight, and the only possible outcome is the FR-032
-	// guard (nothing eligible to empty means the pass cannot help).
+	// the window portion is therefore trivially under B no matter what the
+	// notes cost. If the check fires at all here it can only be because it
+	// saw the injected note weight (C1); the correct outcome is now "log
+	// and continue", never the FR-032 guard.
 	window, ts := seedMidTurn(t, agent, key, []providers.Message{
 		{Role: "user", Content: "hello"},
 		{Role: "assistant", Content: "hi there"},
@@ -356,12 +372,130 @@ func TestMidTurnBudget_C1_CallMessagesInjections(t *testing.T) {
 	require.Greater(t, al.ephemeralSystemNoteTokens(ts), budget,
 		"precondition: the injected workspace-instructions note alone exceeds B")
 
-	_, err := al.midTurnWindowCheck(ts, window, nil)
-	require.Error(t, err, "C1: the check must fire once it measures what callMessages actually sends — "+
-		"silently returning nil here is the reintroduced ADR §1 incident (a provider context_too_long "+
-		"on a window the engine believed it was protecting)")
-	assert.True(t, errors.Is(err, ErrContextUnrecoverable),
-		"nothing is eligible to empty (no tool results), so the outcome must be the FR-032 guard, got %v", err)
+	before := ContextResidueOverflowsTotal()
+	out, err := al.midTurnWindowCheck(ts, window, nil)
+	require.NoError(t, err, "FR-032 amendment: a note-only overflow (nothing eligible to empty, "+
+		"window fits without the notes) must not end the turn — the provider's own context error "+
+		"is the backstop, not this guard")
+	assert.Equal(t, window, out, "nothing was eligible to empty; the slice is returned unchanged")
+	assert.Greater(t, ContextResidueOverflowsTotal(), before,
+		"C1 preserved: the check still measured and logged the note-inflated total instead of "+
+			"silently treating the turn as fitting")
+}
+
+// TestMidTurnBudget_C1_NotesStillTriggerEmptying — companion to the C1 test
+// above: proves noteTokens are still wired into the TRIGGER and the 80%
+// TARGET (the FR-032 amendment excludes them only from the thrash-guard's
+// fatal predicate, never from `total`/`fits`). An agent whose bare
+// `messages` comfortably fit B, but whose real request (messages + the
+// injected AGENT.md note) does not, must still empty the one ELIGIBLE tool
+// result it can reach — if noteTokens had been dropped from the trigger
+// instead of just the guard, `messages` alone already fits B and the check
+// would return at its very first comparison, emptying nothing.
+func TestMidTurnBudget_C1_NotesStillTriggerEmptying(t *testing.T) {
+	al, agent := midTurnFixture(t, 40_000, 0)
+	budget := agentContextBudget(agent)
+	require.Positive(t, budget)
+
+	home := os.Getenv(config.EnvHome)
+	require.NotEmpty(t, home, "midTurnFixture must set OMNIPUS_HOME")
+	wsID := "c1-not-regressed-ws"
+	wsDir := filepath.Join(home, "workspaces", wsID)
+	require.NoError(t, os.MkdirAll(wsDir, 0o755))
+	// Sized so the note alone (~0.6B) is comfortably under B, but combined
+	// with the eligible result (~0.5B) the total exceeds B — while the bare
+	// window (no notes) does not.
+	agentMD := proseOfTokens(budget * 6 / 10)
+	require.NoError(t, os.WriteFile(filepath.Join(wsDir, "AGENT.md"), []byte(agentMD), 0o644))
+
+	key := "midturn-c1-not-regressed"
+	eligible := proseOfTokens(budget / 2) // an older step's result
+	window, ts := seedMidTurn(t, agent, key, []providers.Message{
+		{Role: "user", Content: "first"},
+		{Role: "assistant", ToolCalls: []providers.ToolCall{toolCallFor("e1", "a")}},
+		{Role: "tool", ToolCallID: "e1", Content: eligible},
+		{Role: "assistant", ToolCalls: []providers.ToolCall{toolCallFor("f1", "b")}},
+		{Role: "tool", ToolCallID: "f1", Content: "tiny floor"},
+	})
+	ts.opts.WorkspaceID = wsID
+
+	windowOnly := requestTokens(window, nil)
+	require.LessOrEqual(t, windowOnly, budget,
+		"precondition: the bare messages slice alone fits B — the C1 bug is invisible without this")
+	noteTokens := al.ephemeralSystemNoteTokens(ts)
+	require.Positive(t, noteTokens)
+	require.Greater(t, windowOnly+noteTokens, budget,
+		"precondition: total (window + the un-emptiable note) exceeds B — the trigger fires (C1)")
+
+	before := ContextEmptiesTotal()
+	out, err := al.midTurnWindowCheck(ts, window, nil)
+	require.NoError(t, err, "the window (after emptying the one eligible result) fits B on its own; "+
+		"only the un-emptiable note pushes total over — not fatal per the FR-032 amendment")
+	assert.Greater(t, ContextEmptiesTotal(), before,
+		"C1 not regressed: the check must still have measured the note-inflated total and emptied "+
+			"the eligible result — proof that noteTokens still drive the trigger and target, not just "+
+			"logging")
+	assert.Contains(t, out[2].Content, `"content_state":"emptied"`, "the one eligible result was emptied")
+	assert.Equal(t, "tiny floor", out[4].Content, "the floor set is never touched")
+}
+
+// TestMidTurnBudget_ResidueRegression_NotesAloneDoNotEndTurn — direct
+// regression test for the FR-032 residue bug the C1 fix (4d357904)
+// introduced: it added noteTokens (the un-emptiable ephemeral system
+// notes — scratchpad, AGENT.md, web-rendering, compressed manifest) to the
+// residue midTurnPassCanSucceed refuses on, making those notes count
+// against the thrash guard even though D5 can never touch them. A
+// large-but-legal AGENT.md (D9's 262,144-byte cap has no budget-aware
+// clamp) then made every tool-calling turn on that workspace end with
+// ErrContextUnrecoverable — permanently, since the cause is static
+// configuration, not an injected fault (ADR-066 §7).
+//
+// Scenario, mirroring the reported worked example: the ONLY tool result
+// present IS the entire floor set (the last assistant step's own result —
+// never eligible for D5, so nothing at all can be emptied), sized near the
+// D4 clamp; the workspace's AGENT.md, once injected, is large enough that
+// notes + floor exceed B, but the floor alone (the window, minus the
+// un-emptiable notes) fits comfortably under B on its own.
+func TestMidTurnBudget_ResidueRegression_NotesAloneDoNotEndTurn(t *testing.T) {
+	al, agent := midTurnFixture(t, 40_000, 0)
+	budget := agentContextBudget(agent)
+	require.Positive(t, budget)
+
+	home := os.Getenv(config.EnvHome)
+	require.NotEmpty(t, home, "midTurnFixture must set OMNIPUS_HOME")
+	wsID := "residue-regression-ws"
+	wsDir := filepath.Join(home, "workspaces", wsID)
+	require.NoError(t, os.MkdirAll(wsDir, 0o755))
+	agentMD := proseOfTokens(budget * 7 / 10) // ~0.7B, mirrors the reported ~16,000/23,033
+	require.NoError(t, os.WriteFile(filepath.Join(wsDir, "AGENT.md"), []byte(agentMD), 0o644))
+
+	key := "midturn-residue-regression"
+	floor := proseOfTokens(budget / 2) // ~0.5B, mirrors the D4-clamp-sized single result
+	window, ts := seedMidTurn(t, agent, key, []providers.Message{
+		{Role: "user", Content: "run the one tool"},
+		{Role: "assistant", ToolCalls: []providers.ToolCall{toolCallFor("f1", "a")}},
+		{Role: "tool", ToolCallID: "f1", Content: floor},
+	})
+	ts.opts.WorkspaceID = wsID
+
+	windowOnly := requestTokens(window, nil)
+	require.LessOrEqual(t, windowOnly, budget,
+		"precondition: the window itself already fits B — the single result IS the floor, so nothing "+
+			"is eligible to empty and the D5 pass can only ever be a no-op here")
+	noteTokens := al.ephemeralSystemNoteTokens(ts)
+	require.Positive(t, noteTokens)
+	require.Greater(t, windowOnly+noteTokens, budget,
+		"precondition: total (window + the un-emptiable notes) exceeds B — the trigger still fires (C1)")
+
+	before := ContextResidueOverflowsTotal()
+	out, err := al.midTurnWindowCheck(ts, window, nil)
+	require.NoError(t, err,
+		"REGRESSION: FR-032's fatal exit is reserved for an injected fault (a non-tool message itself "+
+			"oversized), never for a configuration-size condition like an oversized AGENT.md — the un-emptiable "+
+			"notes must not end an otherwise-fitting turn")
+	assert.Equal(t, floor, out[2].Content, "nothing was eligible to empty — the floor content is untouched")
+	assert.Greater(t, ContextResidueOverflowsTotal(), before,
+		"the overflow is still observed and logged (one ERROR), never silently swallowed")
 }
 
 // midTurnLineResolverForTest builds the same resolver midTurnWindowCheck
