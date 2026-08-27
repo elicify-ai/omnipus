@@ -51,9 +51,22 @@ export function catalogLabel(entry: CatalogProvider): string {
   return `${entry.name}${plan}${region}`
 }
 
-/** "<billing model> · <endpoint host>" shown under the label. */
+/**
+ * "<billing model> · <endpoint host>" shown under the label.
+ *
+ * A `locality: local` row (Ollama, vLLM, LM Studio — ADR-067 FR-039) runs on
+ * the operator's own machine and is never billed per token, so it gets its
+ * own copy rather than the cloud "Pay-as-you-go" line every other row shares
+ * (UAT: the Ollama picker row previously read "Pay-as-you-go, per token",
+ * which is simply false for a local endpoint).
+ */
 export function catalogSubtitle(entry: CatalogProvider): string {
-  const billing = entry.plan === 'coding-plan' ? 'Subscription (Coding Plan)' : 'Pay-as-you-go, per token'
+  const billing =
+    entry.locality === 'local'
+      ? 'Local — no account needed'
+      : entry.plan === 'coding-plan'
+        ? 'Subscription (Coding Plan)'
+        : 'Pay-as-you-go, per token'
   return `${billing} · ${catalogEndpointHint(entry)}`
 }
 

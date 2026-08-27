@@ -85,6 +85,7 @@ vi.mock('@/assets/logo/omnipus-avatar.svg?url', () => ({ default: '/test-avatar.
 
 import { probeProvider, completeOnboardingTransaction, fetchProvidersCatalog } from '@/lib/api'
 import { evaluatePasswordStrength, friendlyProbeError, PROVIDERS_REQUIRING_ENDPOINT, ONBOARDING_MODEL_LABEL } from './onboarding'
+import { LOCAL_PROVIDER_CREDENTIAL } from '@/components/providers/ProviderDetailPanel'
 import type { ProbeProviderRequest } from '@/lib/api/generated/openapi-types'
 import { readFileSync } from 'fs'
 import { join, dirname } from 'path'
@@ -421,6 +422,63 @@ describe('OnboardingWizard — step 3 renders the shared provider picker (FR-021
 
     expect(screen.getByTestId('onboarding-needs-endpoint')).toBeInTheDocument()
     expect(screen.getByTestId('onboarding-probe-button')).toBeDisabled()
+  })
+})
+
+// =====================================================================
+// Scenario: a `locality: local` provider (Ollama) needs no credential
+// (ADR-067 FR-039). UAT-confirmed blocker: Ollama's catalog row declares
+// `auth_methods: ["api_key"]` (the enum has no "none"), and before this fix
+// onboarding therefore forced the operator to invent a fake key to clear the
+// Finish gate — or blocked them outright. The fixture's `ollama` row carries
+// `locality: "local"` (src/test/fixtures/providers-catalog.json).
+// =====================================================================
+
+describe('OnboardingWizard — local provider needs no credential (FR-039)', () => {
+  it('Ollama shows no API-key field and no "Add an API key" gate', async () => {
+    await goToStep3()
+    await openPanelForCompany('Ollama', 'ollama')
+
+    // No key input anywhere in the panel — a local endpoint has nothing to type.
+    expect(screen.queryByTestId('provider-detail-panel-api-key-input')).not.toBeInTheDocument()
+    expect(screen.getByTestId('provider-detail-panel-no-key-needed')).toBeInTheDocument()
+
+    // Confirm with nothing typed — the exact interaction the UAT screenshot
+    // shows as broken (Finish stuck disabled behind a fabricated-key demand).
+    fireEvent.click(screen.getByTestId('provider-detail-panel-continue'))
+    await waitFor(() => screen.getByTestId('onboarding-provider-summary'))
+
+    expect(screen.queryByTestId('onboarding-key-missing')).not.toBeInTheDocument()
+    expect(screen.getByTestId('onboarding-probe-button')).not.toBeDisabled()
+
+    // Subtitle is corrected too — a local endpoint is never "Pay-as-you-go".
+    const entry = CATALOG_PROVIDERS.find((e) => e.id === 'ollama')!
+    expect(entry.locality).toBe('local')
+    const summary = screen.getByTestId('onboarding-provider-summary')
+    expect(within(summary).queryByText(/Pay-as-you-go/)).not.toBeInTheDocument()
+    expect(within(summary).getByText(catalogSubtitle(entry))).toBeInTheDocument()
+    expect(catalogSubtitle(entry)).toMatch(/^Local —/)
+  })
+
+  it('completes the probe and enables Finish with no operator-supplied key', async () => {
+    vi.mocked(probeProvider).mockResolvedValue({ success: true, probed_model: 'ollama-default' })
+    await goToStep3()
+    await openPanelForCompany('Ollama', 'ollama')
+    fireEvent.click(screen.getByTestId('provider-detail-panel-continue'))
+    await waitFor(() => screen.getByTestId('onboarding-provider-summary'))
+
+    await pickModel('ollama-default')
+    await waitFor(() => expect(probeProvider).toHaveBeenCalled())
+
+    // The gateway's api_key contract still requires a non-empty string
+    // (pkg/gateway/rest_onboarding.go: "api_key is required") — the SPA
+    // supplies the fixed, non-secret placeholder rather than making the
+    // operator invent one.
+    const req = lastProbeRequest()
+    expect(req.auth).toBe('api_key')
+    expect(req.api_key).toBe(LOCAL_PROVIDER_CREDENTIAL)
+
+    await waitFor(() => expect(finishButton()).not.toBeDisabled())
   })
 })
 

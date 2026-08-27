@@ -1096,6 +1096,11 @@ function ProviderStep({
     : undefined
 
   const signIn = selection?.authMethod === 'sign_in'
+  // ADR-067 FR-039 — a `locality: local` row (Ollama, vLLM, LM Studio) needs
+  // no credential; ProviderDetailPanel already substitutes
+  // LOCAL_PROVIDER_CREDENTIAL for the typed key on this path, so this only
+  // drives copy — never the Finish gate below (see keyMissing).
+  const isLocal = entry?.locality === 'local'
   const missingCli =
     signIn && probeStatus === 'error' && probeErrorIsMissingCli(probeError)
       ? cliBinaryName(entry)
@@ -1112,8 +1117,11 @@ function ProviderStep({
   // Error prevention (the invariant the retired "Connect is disabled when the
   // API key is empty" test carried): a key-path probe with no key can only come
   // back as an upstream auth failure the operator cannot act on, so it is never
-  // sent — not on a model pick, not from the button.
-  const keyMissing = !!selection && !signIn && selection.apiKey.trim() === ''
+  // sent — not on a model pick, not from the button. `isLocal` is excluded
+  // defensively even though ProviderDetailPanel never leaves `apiKey` empty
+  // for a local row — this gate must never re-block Ollama/vLLM/LM Studio if
+  // that invariant ever slips.
+  const keyMissing = !!selection && !signIn && !isLocal && selection.apiKey.trim() === ''
   const probeBlocked = keyMissing || needsCustomEndpoint
 
   return (
@@ -1179,7 +1187,7 @@ function ProviderStep({
                 </p>
               )}
               <p className="text-xs" style={{ color: 'var(--color-muted)' }}>
-                {signIn ? 'Signed in with the provider' : 'API key'}
+                {signIn ? 'Signed in with the provider' : isLocal ? 'No key needed — runs locally' : 'API key'}
               </p>
               {/* FR-045: the sign-in path has nothing to type — the dialog is
                   the whole interaction, and it must be reachable again after

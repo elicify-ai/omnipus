@@ -85,6 +85,31 @@ export interface ProviderDetailPanelProps {
  */
 export const BASE_PLAN_LABEL = 'Standard'
 
+/**
+ * Stand-in credential persisted for a `locality: local` row's `api_key`
+ * (Ollama, vLLM, LM Studio — ADR-067 FR-039).
+ *
+ * The wire contract (OnboardingCompleteRequest / ProbeProviderRequest, both
+ * ADR-068 discriminated unions) has exactly two `auth_method` variants,
+ * `api_key` and `sign_in` — there is no third "none" variant, and widening
+ * that contract is a cross-repo change to the provider-catalog assembly job
+ * (AUTH_METHODS enum) plus a coordinated backend release, not something this
+ * screen can do on its own. A local endpoint's `auth_methods` is `["api_key"]`
+ * for the same reason: it is the only method the enum has to offer.
+ *
+ * Until that widening ships, this panel resolves the gap the way the wire
+ * format allows: it still sends `auth_method: "api_key"`, but with THIS fixed,
+ * non-secret string rather than asking the operator to invent one. A local
+ * server (Ollama's OpenAI-compatible endpoint, vLLM, LM Studio) does not
+ * validate the Authorization header at all, so the placeholder is functionally
+ * inert — it exists only to satisfy the backend's non-empty `api_key`
+ * requirement (`pkg/gateway/rest_onboarding.go`: "provider.api_key is
+ * required" / "api_key is required"), never to gate access. It is not user
+ * data: the operator never sees or types it, and it is never treated as a
+ * live secret worth protecting.
+ */
+export const LOCAL_PROVIDER_CREDENTIAL = 'local-no-credential-required'
+
 /** Human copy for a plan label; the catalog ships kebab-case codes. */
 export function planLabel(plan: string): string {
   if (plan.length === 0) return BASE_PLAN_LABEL
@@ -155,12 +180,19 @@ export function ProviderDetailPanel({
     return match ?? company.primary
   }, [company, planOptions, plan, region])
 
+  // ADR-067 FR-039: a local endpoint needs no credential at all. The catalog
+  // still declares `auth_methods: ["api_key"]` for it (the enum has no `none`
+  // — see LOCAL_PROVIDER_CREDENTIAL above), so the field is hidden and the
+  // fixed placeholder stands in for whatever the operator would otherwise
+  // have had to invent.
+  const isLocal = resolvedVariant.locality === 'local'
+
   const selection: ProviderDetailSelection = {
     providerId: authMethod === 'sign_in' && signInProviderId ? signInProviderId : resolvedVariant.id,
     authMethod,
     plan: plan.length > 0 ? plan : undefined,
     region: company.regions.length > 0 ? region : undefined,
-    apiKey: authMethod === 'api_key' ? apiKey : undefined,
+    apiKey: authMethod === 'api_key' ? (isLocal ? LOCAL_PROVIDER_CREDENTIAL : apiKey) : undefined,
   }
 
   // `onChange` reports the live draft; it must not fire during render.
@@ -275,7 +307,20 @@ export function ProviderDetailPanel({
         onSignInProviderChange={setSignInProviderId}
         onSignIn={onSignIn}
         apiKeyField={
-          apiKeyField ?? (
+          apiKeyField ??
+          (isLocal ? (
+            // FR-039: a local endpoint (Ollama, vLLM, LM Studio) needs no
+            // credential — asking the operator to invent one is the exact
+            // UAT-confirmed blocker this branch replaces. No input renders;
+            // LOCAL_PROVIDER_CREDENTIAL stands in on `selection.apiKey`.
+            <p
+              data-testid={`${testId}-no-key-needed`}
+              className="text-xs"
+              style={{ color: 'var(--color-muted)' }}
+            >
+              Runs on your machine — no API key needed.
+            </p>
+          ) : (
             <label className="flex flex-col gap-1 text-xs" htmlFor={`${testId}-api-key-input`}>
               API key
               <input
@@ -289,7 +334,7 @@ export function ProviderDetailPanel({
                 style={{ borderColor: 'var(--color-border)' }}
               />
             </label>
-          )
+          ))
         }
       />
 
