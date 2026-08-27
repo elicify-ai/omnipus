@@ -1328,7 +1328,11 @@ func TestRecallConversation_CapMarkCarriesRealTurn(t *testing.T) {
 	// archive is turns flattened in order — its indices must line up with
 	// each archiveTurn.startIdx above (0, 2, 5, 7), which they do by
 	// construction here.
-	var archive []memory.ArchivedMessage
+	archiveLen := 0
+	for _, trn := range turns {
+		archiveLen += len(trn.msgs)
+	}
+	archive := make([]memory.ArchivedMessage, 0, archiveLen)
 	for _, trn := range turns {
 		archive = append(archive, trn.msgs...)
 	}
