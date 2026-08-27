@@ -59,6 +59,19 @@ export interface StartGatewayOptions {
   adminPassword?: string;
   /** Extra gateway args (e.g. '--sandbox=off') */
   extraArgs?: string[];
+  /**
+   * When true, startGateway() boots the gateway and waits for /health but
+   * does NOT call onboardAdmin() before returning — the caller gets back a
+   * genuine fresh-install instance (onboarding incomplete, no users
+   * configured) to drive itself. GatewayHandle.adminUsername/adminPassword
+   * are still populated with the values the caller would need to onboard
+   * with later (via the exported onboardAdmin() helper), even though no
+   * account exists yet.
+   *
+   * Every other startGateway() caller is unaffected — default is false,
+   * preserving the existing "boot + onboard" contract.
+   */
+  skipOnboarding?: boolean;
 }
 
 /**
@@ -148,8 +161,11 @@ export async function startGateway(opts: StartGatewayOptions): Promise<GatewayHa
   // gw.bootErr every iteration (see pollUntilHealthy's checkFatalError).
   await waitForHealth(baseURL, 15_000, proc);
 
-  // Onboard the first admin.
-  await onboardAdmin(baseURL, adminUsername, adminPassword);
+  // Onboard the first admin — unless the caller explicitly wants the raw,
+  // un-onboarded instance (skipOnboarding: true).
+  if (!opts.skipOnboarding) {
+    await onboardAdmin(baseURL, adminUsername, adminPassword);
+  }
 
   return { process: proc, homeDir, port: opts.port, baseURL, adminUsername, adminPassword };
 }
