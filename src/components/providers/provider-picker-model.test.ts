@@ -98,10 +98,37 @@ describe('TestPickerModel', () => {
         'zhipuai',
         'zhipuai-coding-plan',
       ])
-      // The one-click target is the first variant in catalog order.
+      // The one-click target is the first variant in catalog order — which,
+      // in this fixture, also happens to be the tier: popular row.
       expect(zhipu!.primary.id).toBe('zai')
       expect(zhipu!.plans).toEqual(['coding-plan'])
       expect(zhipu!.regions).toEqual(['intl', 'china'])
+    })
+
+    // ADR-068 FR-006 — UAT-confirmed defect on a real running instance: the
+    // popular OpenAI tile carried data-testid "picker-popular-codex-cli"
+    // instead of "picker-popular-openai". Root cause: the served catalog's
+    // providers[] array sorts alphabetically by id, which is an assembly-job
+    // presentation detail (not a spec decision) and put the standard-tier
+    // "codex-cli" ahead of the popular-tier "openai" within the OpenAI
+    // company group — `primary` used to mean "first in that array", so it
+    // silently inherited the wrong row.
+    it('picks the tier: popular variant as primary even when it is not first in catalog order (FR-006)', () => {
+      const row = toCompanyRows([
+        catalogProvider({ id: 'codex-cli', name: 'Codex CLI', company: 'OpenAI', tier: 'standard', auth_methods: ['sign_in'] }),
+        catalogProvider({ id: 'openai', name: 'OpenAI', company: 'OpenAI', tier: 'popular', auth_methods: ['api_key'] }),
+        catalogProvider({ id: 'openai-chatgpt', name: 'ChatGPT (subscription)', company: 'OpenAI', tier: 'standard', auth_methods: ['sign_in'] }),
+      ])[0]
+      expect(row.variants.map((v) => v.id)).toEqual(['codex-cli', 'openai', 'openai-chatgpt'])
+      expect(row.primary.id).toBe('openai')
+    })
+
+    it('falls back to the first variant in catalog order when no variant is tier: popular', () => {
+      const row = toCompanyRows([
+        catalogProvider({ id: 'acme-b', company: 'Acme', tier: 'standard' }),
+        catalogProvider({ id: 'acme-a', company: 'Acme', tier: 'standard' }),
+      ])[0]
+      expect(row.primary.id).toBe('acme-b')
     })
 
     it('counts "All providers (N)" as the catalog entries that are not Popular tiles', () => {
