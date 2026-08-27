@@ -321,7 +321,7 @@ func postProbe(t *testing.T, api *restAPI, body string) *httptest.ResponseRecord
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/probe-provider",
 		strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
-	api.HandleOnboardingProbeProvider(w, r)
+	api.HandleOnboardingProbeProvider(w, withFreshInstallConfig(r))
 	return w
 }
 
