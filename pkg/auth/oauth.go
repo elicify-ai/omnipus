@@ -169,6 +169,14 @@ func doOAuthPost(cfg OAuthProviderConfig, endpoint, contentType string, body []b
 	// http.DefaultTransport, so the connection pool is still shared. Only the
 	// timeout is per-call.
 	client := &http.Client{Timeout: timeout}
+	// #nosec G704 -- this is the dispatch point gosec's taint analysis is
+	// (correctly) flagging as the sink. endpoint was gated by
+	// validateOAuthEndpoint at the top of this function, which is the sole
+	// entry point for all four OAuth call sites: it rejects any URL that is
+	// not https, save for an explicit loopback-http exception. gosec cannot
+	// model that check as a sanitizer because it returns only an error rather
+	// than a re-derived value, so the annotation records the guarantee the
+	// linter cannot see. Do not remove it without also removing that call.
 	resp, err := client.Do(req)
 	if err != nil {
 		cancel()
