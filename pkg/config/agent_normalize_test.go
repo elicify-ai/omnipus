@@ -1,10 +1,12 @@
-// Omnipus — proves NormalizeAgentRoster applies both agent-roster
-// normalization passes (NormalizeFallbacks + migrateAgentPrimaryProvider) to
-// a roster that was populated OUTSIDE loadConfigInternal's own load-time
-// loop — i.e. exactly the shape pkg/gateway's
-// populateAgentsListFromEntityStore[Strict] bridge (and cmd/omnipus's
-// equivalent loaders) hands it after reading agents back from the per-entity
-// store (ADR-054).
+// Omnipus — proves NormalizeAgentRoster applies its agent-roster
+// normalization pass (NormalizeFallbacks) to a roster that was populated
+// OUTSIDE loadConfigInternal's own load-time loop — i.e. exactly the shape
+// pkg/gateway's populateAgentsListFromEntityStore[Strict] bridge (and
+// cmd/omnipus's equivalent loaders) hands it after reading agents back from
+// the per-entity store (ADR-054). It also proves the deleted
+// migrateAgentPrimaryProvider split (C1 fix, ADR-067 FR-034) stays deleted:
+// a combined "provider/model" primary slug must survive verbatim, not get
+// split.
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
@@ -17,14 +19,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestNormalizeAgentRoster_AppliesBothPasses proves an entity-loaded agent
-// with (a) a combined "provider/model" primary slug and (b) a legacy
-// no-provider fallback entry gets BOTH normalized in one call — the exact
-// gap identified against pkg/gateway/rest.go:3234-3242, which persists a
-// FallbackModel with an empty Provider and relies on "the next load" to
-// resolve it. Before this helper existed, nothing did that for
-// entity-loaded agents.
-func TestNormalizeAgentRoster_AppliesBothPasses(t *testing.T) {
+// TestNormalizeAgentRoster_FallbackResolvedPrimaryUntouched proves an
+// entity-loaded agent with (a) a combined "provider/model" primary slug and
+// (b) a legacy no-provider fallback entry gets ONLY the fallback normalized —
+// the exact gap identified against pkg/gateway/rest.go:3234-3242, which
+// persists a FallbackModel with an empty Provider and relies on "the next
+// load" to resolve it. Before this helper existed, nothing did that for
+// entity-loaded agents. The primary model's combined slug (C1 fix, ADR-067
+// FR-034) must survive completely verbatim — there is no migration left that
+// splits it.
+func TestNormalizeAgentRoster_FallbackResolvedPrimaryUntouched(t *testing.T) {
 	cfg := &Config{
 		Providers: []*ModelConfig{
 			{
@@ -49,13 +53,14 @@ func TestNormalizeAgentRoster_AppliesBothPasses(t *testing.T) {
 
 	mc := cfg.Agents.List[0].Model
 	require.NotNil(t, mc)
-	assert.Equal(t, "openrouter", mc.Provider,
-		"primary-model provider split (migrateAgentPrimaryProvider) must run on entity-loaded agents")
-	assert.Equal(t, "google/gemini-2.5-flash", mc.Primary)
+	assert.Equal(t, "", mc.Provider,
+		"the primary-model provider split is deleted (C1 fix) — Provider must stay empty")
+	assert.Equal(t, "openrouter/google/gemini-2.5-flash", mc.Primary,
+		"a combined primary slug must survive completely verbatim, never truncated")
 
 	require.Len(t, cfg.Agents.List[0].FallbackModels, 1)
 	assert.Equal(t, "openrouter", cfg.Agents.List[0].FallbackModels[0].Provider,
-		"fallback-model provider resolution (NormalizeFallbacks) must run on entity-loaded agents")
+		"fallback-model provider resolution (NormalizeFallbacks) must still run on entity-loaded agents")
 	assert.Equal(t, "glm-5.2", cfg.Agents.List[0].FallbackModels[0].Model)
 }
 

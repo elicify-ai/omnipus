@@ -94,7 +94,20 @@ usage() { sed -n '2,60p' "${BASH_SOURCE[0]}"; }
 # `grep -rnE '_migrated|alias|deprecat|retired'`, which by being case-sensitive
 # cannot see a Go-idiomatic `Aliases`/`AliasTable`/`Deprecated` at all.
 #
-# Two exemptions, both token-scoped rather than file- or package-scoped:
+# WIDENED (C1/C2 fix): the literal pattern also missed a real provider-identity
+# migration — `knownProviderProtocols` / `migrateProviderFields` /
+# `migrateAgentPrimaryProvider` (pkg/config/config.go) silently split a
+# "provider/model" prefix off a bare model id and rerouted it to whatever
+# provider the prefix happened to name, at a measured wrong-vendor rate,
+# because the token in that code is `migrate`, not `_migrated`, and the gate
+# never went red. The pattern now also carries bare `migrat` (covers
+# `migrate`/`migrated`/`migration`/`Migrate`, `_migrated` included), `legacy`,
+# `backcompat` and `back_compat`, so the SAME class of "we still carry the old
+# shape / we still translate the old id" machinery is caught regardless of
+# which of these near-synonymous English words the author reached for.
+#
+# Three exemptions, all token- or exact-line-scoped, never file- or
+# package-scoped:
 #
 #   1. pkg/providers/catalog/**  may owe a match to `aliases` or `retired` and
 #      nothing else (A-3, FR-030). Remove those two tokens from the line; if it
@@ -104,6 +117,17 @@ usage() { sed -n '2,60p' "${BASH_SOURCE[0]}"; }
 #      Marshal/UnmarshalJSON body to shed the method set — is not provider
 #      machinery. The exemption applies only in a file that actually declares
 #      it, and only to the standalone identifier `Alias`.
+#   3. GENERIC_EXEMPT_LINES (below): pkg/config carries several OTHER, already-
+#      reviewed migration/legacy-format mechanisms that have nothing to do with
+#      provider IDENTITY — CLI bearer-token relocation, the ADR-054
+#      entities/agents.list strip, the legacy `[]string` FallbackModel wire
+#      shape, channel-config legacy flags, per-agent mailbox legacy shape, and
+#      bcrypt token verification against one legacy hash. Widening the pattern
+#      to catch C1 also lit these up. Each is exempted by its EXACT
+#      (comment-stripped, trimmed) line text — never by file, package or bare
+#      word — so a genuinely new match anywhere, including in these same
+#      files, still trips the gate unless its literal text is already listed.
+#      Keep it SHORT: every row is a hole in SC-009.
 #
 # stdout: one `path:line: text` per violation. Empty stdout means clean.
 sc009_scan() {
@@ -112,11 +136,69 @@ import os
 import re
 import sys
 
-PATTERN = re.compile(r'_migrated|alias|deprecat|retired', re.IGNORECASE)
+PATTERN = re.compile(
+    r'_migrated|alias|deprecat|retired|legacy|backcompat|back_compat|migrat',
+    re.IGNORECASE)
 CATALOG_TOKENS = re.compile(r'aliases|retired', re.IGNORECASE)
 JSON_IDIOM_DECL = re.compile(r'^\s*type\s+Alias\s+[A-Za-z_][A-Za-z0-9_]*\s*$')
 BARE_ALIAS = re.compile(r'\bAlias\b')
 CATALOG_PREFIX = os.path.join('pkg', 'providers', 'catalog') + os.sep
+
+# GENERIC_EXEMPT_LINES: exact-text exemptions for already-reviewed
+# migration/legacy-format mechanisms in pkg/config that are NOT provider
+# identity (see exemption 3 in the module header above). Keyed by path
+# relative to the repo root (forward slashes), value is the SET of exact
+# comment-stripped, trimmed line texts allowed in that file. A line matching
+# PATTERN whose stripped text is not byte-identical to an entry here is still
+# a violation — including a DIFFERENT line in the same file.
+GENERIC_EXEMPT_LINES = {
+    'pkg/config/cli_token_migration.go': {
+        'const legacyCLIUsername = "cli"',
+        'func migrateCLITokenOutOfUsers(cfg *Config, cfgPath string, onSelfHeal SelfHealWriteHook) {',
+        'if cfg.Gateway.Users[i].Username == legacyCLIUsername {',
+        'legacy := cfg.Gateway.Users[idx]',
+        'case len(legacy.Tokens) > 0 && !legacy.Tokens[len(legacy.Tokens)-1].Hash.IsZero():',
+        'last := legacy.Tokens[len(legacy.Tokens)-1]',
+        'case !legacy.TokenHash.IsZero():',
+        'entry = &TokenEntry{Hash: legacy.TokenHash}',
+        'logger.InfoF("relocating legacy \\"cli\\" Gateway.Users entry to Gateway.CLIToken "+',
+        'written, healErr := migrateCLITokenOnDisk(cfgPath)',
+        '"runtime behavior is still correct (in-memory state is migrated), "+',
+        'func migrateCLITokenOnDisk(path string) ([]byte, error) {',
+        'return nil, fmt.Errorf("read config for CLI-token migration: %w", err)',
+        'return nil, fmt.Errorf("parse config for CLI-token migration: %w", unmarshalErr)',
+        'if username, _ := um["username"].(string); username == legacyCLIUsername {',
+        'return nil, fmt.Errorf("serialize config for CLI-token migration: %w", err)',
+        'return nil, fmt.Errorf("write config for CLI-token migration: %w", writeErr)',
+    },
+    'pkg/config/config.go': {
+        'var legacy []string',
+        'if err := json.Unmarshal(data, &legacy); err == nil {',
+        'out := make(FallbackModelSlice, len(legacy))',
+        'for i, s := range legacy {',
+        'slog.Warn("config: unknown channel type in channels map — ignoring legacy or unsupported section",',
+        'return fmt.Errorf("mailboxes: legacy entry for agent %q: %w", agentID, err)',
+        'slog.Warn("config: dropping legacy mailbox without workspace_id (unreachable)",',
+        'return fmt.Errorf("mailboxes: agent %q entry is malformed (mixed legacy/nested shape)", agentID)',
+        'func VerifyTokenAgainst(tokens []TokenEntry, legacyHash BcryptHash, raw string) error {',
+        'if len(tokens) == 0 && legacyHash.IsZero() {',
+        'if !legacyHash.IsZero() && legacyHash.Verify(raw) == nil {',
+        'cfg.migrateChannelConfigs()',
+        'stripLegacyAgentsList(cfg, path, onSelfHeal)',
+        'migrateCLITokenOutOfUsers(cfg, path, onSelfHeal)',
+        'func (c *Config) migrateChannelConfigs() {',
+    },
+    'pkg/config/legacy_agents_list.go': {
+        'func stripLegacyAgentsList(cfg *Config, cfgPath string, onSelfHeal SelfHealWriteHook) {',
+        'logger.WarnF("failed to strip legacy agents.list from config.json on disk; runtime "+',
+        'logger.WarnF("config: dropping legacy agents.list entries for core agent IDs from "+',
+        'logger.WarnF("config: dropping legacy agents.list entries for custom agent IDs from "+',
+        '"no migration is performed (operator-accepted, no back-compat) — these agent IDs are "+',
+    },
+    'pkg/config/validate.go': {
+        '"(migration from pre-DefaultPolicy-removal config shape; CLAUDE.md hard constraint 6 — "+',
+    },
+}
 
 
 def strip_comments(src: str) -> str:
@@ -190,8 +272,13 @@ def main() -> int:
                 scanned += 1
                 json_idiom = any(JSON_IDIOM_DECL.match(ln) for ln in src.splitlines())
                 in_catalog = os.path.normpath(path).startswith(CATALOG_PREFIX)
+                rel = os.path.normpath(path).replace(os.sep, '/')
+                exempt_lines = GENERIC_EXEMPT_LINES.get(rel)
                 for lineno, line in enumerate(strip_comments(src).splitlines(), 1):
                     if not PATTERN.search(line):
+                        continue
+                    stripped = line.strip()
+                    if exempt_lines is not None and stripped in exempt_lines:
                         continue
                     probe = line
                     if in_catalog:
@@ -199,7 +286,7 @@ def main() -> int:
                     if json_idiom:
                         probe = BARE_ALIAS.sub('', probe)
                     if PATTERN.search(probe):
-                        print('%s:%d: %s' % (path, lineno, line.strip()))
+                        print('%s:%d: %s' % (path, lineno, stripped))
     if scanned == 0:
         print('sc009_scan: no non-test .go files under %s' % ', '.join(roots), file=sys.stderr)
         return 2
@@ -424,6 +511,70 @@ func marshal(c *Row) any {
 type Row struct{}
 GO
   expect "SC-009: the json Alias idiom does not license a real alias table" 1
+
+  # ── C2 fix: mutation cases for the widened tokens ──────────────────────────
+  # Each plants a violation that used ONLY the literal `_migrated|alias|
+  # deprecat|retired` pattern would have missed — proving the widening (which
+  # is what let the real C1 defect, migrateProviderFields /
+  # migrateAgentPrimaryProvider, slip past this gate for real) actually bites.
+
+  fixture
+  cat > "$tmp/case/pkg/config/protomigrate.go" <<'GO'
+package config
+
+// A provider-shaped migration function using only the bare word "migrate" —
+// no "_migrated", "alias", "deprecat" or "retired" anywhere on the line.
+func migrateFallbackProtocol(id string) string { return id }
+GO
+  expect "SC-009: bare 'migrat' token (the exact C1 miss) in pkg/config" 1
+
+  fixture
+  cat > "$tmp/case/pkg/providers/protolegacy.go" <<'GO'
+package providers
+
+const legacyProtocolPrefix = "openrouter/"
+GO
+  expect "SC-009: 'legacy' token in pkg/providers" 1
+
+  fixture
+  cat > "$tmp/case/pkg/config/protobackcompat.go" <<'GO'
+package config
+
+const backcompatProviderShim = true
+GO
+  expect "SC-009: 'backcompat' token in pkg/config" 1
+
+  fixture
+  cat > "$tmp/case/pkg/providers/protoback.go" <<'GO'
+package providers
+
+var back_compatProviderMap = map[string]string{}
+GO
+  expect "SC-009: 'back_compat' token in pkg/providers" 1
+
+  # ── C2 fix: GENERIC_EXEMPT_LINES precision (exact-line, not file-wide) ─────
+
+  fixture
+  cat > "$tmp/case/pkg/config/cli_token_migration.go" <<'GO'
+package config
+
+const legacyCLIUsername = "cli"
+
+func migrateCLITokenOnDisk(path string) ([]byte, error) {
+	return nil, nil
+}
+GO
+  expect "SC-009: GENERIC_EXEMPT_LINES's own listed lines pass clean" 0
+
+  fixture
+  cat > "$tmp/case/pkg/config/cli_token_migration.go" <<'GO'
+package config
+
+const legacyCLIUsername = "cli"
+
+func migrateSomethingElseEntirely(x string) string { return x }
+GO
+  expect "SC-009: an unlisted line in an exempted file still trips the gate" 1
 
   fixture
   mkdir -p "$tmp/case/src/lib/generated"

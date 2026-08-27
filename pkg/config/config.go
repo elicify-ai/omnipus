@@ -782,9 +782,12 @@ type AgentModelConfig struct {
 	// Provider is the explicit routing key for the primary model (O3 two-field
 	// model), mirroring FallbackModel.Provider. When set, model resolution uses it
 	// directly and never infers a provider from the slug. Empty means "resolve via
-	// the default/passthrough provider" (legacy single-slug behavior). The
-	// config-load migration (migrateAgentPrimaryProvider) splits a combined slug
-	// such as "openrouter/google/gemini-2.5-flash" into Primary + Provider.
+	// the default/passthrough provider" (legacy single-slug behavior). A `/`
+	// inside Primary is DATA, never a "<protocol>/<model>" prefix — there is no
+	// config-load migration that splits it (C1 fix, ADR-067 FR-034; the former
+	// migrateAgentPrimaryProvider split routed models to the wrong vendor and was
+	// deleted). A bare-string Primary that needs an explicit provider legitimately
+	// trips the pre-turn needs_provider gate (ADR-067 T067-09) instead.
 	Provider string `json:"provider,omitempty"`
 }
 
@@ -984,7 +987,12 @@ func NormalizeFallbacks(cfg *Config, in []FallbackModel) []FallbackModel {
 //
 // Step 3 cannot call providers.IsPassthroughProvider directly — pkg/providers
 // already imports pkg/config, so the reverse direction would be a cycle. The
-// 3-line check below mirrors that helper byte-for-byte; keep them in sync.
+// check below mirrors that helper's passthrough-name list, but the provider-id
+// comparison itself is exact after TrimSpace with no case folding (ADR-067
+// FR-036: every provider-id comparison in pkg/agent, pkg/gateway, pkg/providers
+// — and this in-package duplicate — MUST be exact). pkg/providers' own copy is
+// deliberately case-insensitive on the name (its own doc comment says so) and
+// is out of scope here; the two are no longer byte-identical by design.
 func resolveFallbackProvider(cfg *Config, slug string) string {
 	provider, _ := ResolveSlugProvider(cfg, slug)
 	return provider
@@ -1024,10 +1032,10 @@ func ResolveSlugProvider(cfg *Config, slug string) (provider string, viaPassthro
 		if p == nil {
 			continue
 		}
-		provName := strings.ToLower(strings.TrimSpace(p.Provider))
+		provName := strings.TrimSpace(p.Provider)
 		if provName == "openrouter" || provName == "vivgrid" ||
 			strings.Contains(strings.ToLower(p.APIBase), "openrouter.ai") {
-			return strings.TrimSpace(p.Provider), true
+			return provName, true
 		}
 	}
 
@@ -4160,12 +4168,20 @@ func loadConfigInternal(path string, store CredentialStore, onSelfHeal SelfHealW
 		cfg.Agents.Defaults.Home = filepath.Join(OmnipusHomeDir(), pkg.WorkspaceName)
 	}
 
-	migrateProviderFields(cfg)
-	// O3 two-field model: split an existing combined primary slug
-	// ("openrouter/google/gemini-2.5-flash") into {primary, provider} so routing
-	// uses the explicit provider. Idempotent; runs after migrateProviderFields so
-	// the provider protocol set is consistent across model_list and agents.
-	migrateAgentPrimaryProvider(cfg)
+	// C1 fix (ADR-067 FR-034): the O3 "provider/model" prefix-splitting
+	// migrations (migrateProviderFields for model_list, migrateAgentPrimaryProvider
+	// for the per-agent primary model) are deleted, greenfield — no migration is
+	// owed. A `/` inside Model/Primary is DATA, never a routing-protocol prefix
+	// (see ModelConfig.Model's doc comment above); splitting on a stale table of
+	// "known" protocol slugs silently rerouted models whose bare id happened to
+	// start with a live provider id (e.g. "google/gemini-2.5-pro") to the WRONG
+	// vendor with no error. A model_list row that still carries the old
+	// "<protocol>/<model>" shape with an empty Provider now fails
+	// ValidateProviders ("provider is required") instead of being silently
+	// resolved — a clean, visible config error. An agent's bare-string Primary
+	// keeps its full id with Provider empty, which legitimately trips the
+	// pre-turn needs_provider gate (ADR-067 T067-09) so the operator picks a
+	// provider explicitly.
 
 	// ADR-054 D1/D2/§11 checklist item 8: agents are no longer entities inside
 	// config.json — drop any legacy agents.list content (loudly, in-memory AND
@@ -4250,72 +4266,32 @@ func loadConfigInternal(path string, store CredentialStore, onSelfHeal SelfHealW
 	return cfg, nil
 }
 
-// knownProviderProtocols is the set of leading slug segments treated as an
-// explicit provider/routing protocol when splitting a combined "provider/model"
-// slug. Shared by migrateProviderFields (model_list) and
-// migrateAgentPrimaryProvider (per-agent primary model, O3).
-var knownProviderProtocols = map[string]bool{
-	"openai": true, "openrouter": true, "anthropic": true, "anthropic-messages": true,
-	"google": true, "gemini": true, "groq": true, "deepseek": true, "mistral": true,
-	"minimax": true, "moonshot": true, "zhipu": true, "nvidia": true, "qwen": true,
-	"qwen-intl": true, "qwen-international": true, "dashscope-intl": true,
-	"qwen-us": true, "dashscope-us": true,
-	"ollama": true, "cerebras": true, "azure": true, "azure-openai": true,
-	"litellm": true, "vllm": true, "bedrock": true,
-	"coding-plan": true, "alibaba-coding": true, "qwen-coding": true, "mimo": true,
-	"novita": true, "vivgrid": true, "volcengine": true, "modelscope": true,
-	"longcat": true, "avian": true, "shengsuanyun": true,
-}
-
-// migrateProviderFields splits old-format Model fields (e.g. "openrouter/anthropic/claude-opus-4")
-// into separate Provider and Model fields for backward compatibility.
-func migrateProviderFields(cfg *Config) {
-	for _, p := range cfg.Providers {
-		if p.Provider != "" {
-			continue
-		}
-		protocol, modelID, found := strings.Cut(p.Model, "/")
-		if found && knownProviderProtocols[protocol] {
-			p.Provider = protocol
-			p.Model = modelID
-		}
-	}
-}
-
-// migrateAgentPrimaryProvider implements the O3 two-field model migration for the
-// PRIMARY agent model. It splits an existing combined primary slug — e.g.
-// "openrouter/google/gemini-2.5-flash" — into Primary="google/gemini-2.5-flash"
-// plus Provider="openrouter", so resolution can key off the explicit provider
-// (never inferred). It is idempotent and conservative:
+// C1 fix (ADR-067 FR-034, confirmed-critical defect): knownProviderProtocols,
+// migrateProviderFields (model_list) and migrateAgentPrimaryProvider (per-agent
+// primary model, O3) are DELETED, greenfield — no migration is owed for this
+// shape. The deleted table still held retired protocol spellings
+// (anthropic-messages, gemini, qwen-intl, dashscope-intl, azure-openai,
+// bedrock, coding-plan, alibaba-coding, mimo, ...) and both functions split
+// ANY bare model id whose leading path segment happened to collide with a
+// live provider id — e.g. a legacy bare-string primary of
+// "google/gemini-2.5-pro" (AgentModelConfig.UnmarshalJSON leaves Provider=""
+// for that form) silently became Primary="gemini-2.5-pro", Provider="google",
+// even though the operator never named a provider at all. Measured against
+// the shipped 202-provider catalog: 196/360 OpenRouter model ids collided
+// with the table, 88 of those split into a VALID pair at a DIFFERENT vendor
+// (the turn then succeeded silently on the wrong provider, wrong credential,
+// wrong bill) and the remaining 16 minted a retired id no longer in the
+// catalog (ErrUnknownProvider naming an id the operator never typed). This
+// directly contradicted ModelConfig.Model's own doc comment (below): "a `/`
+// inside it is data, not a prefix ... it is never split."
 //
-//   - skips agents whose Model is nil or whose Primary is empty;
-//   - skips when Provider is already set (already migrated, or operator-supplied);
-//   - only splits when the FIRST slug segment is a known provider protocol AND
-//     there is a remaining model path after it (so a bare "gpt-4o", or a
-//     vendor-prefixed "meta-llama/llama-3-70b" — where "meta-llama" is a model
-//     vendor that is NOT in knownProviderProtocols — is left untouched, because
-//     its leading segment is not a configured provider protocol).
-//
-// NOTE: a leading segment like "google" or "openai" IS a known protocol, so
-// "google/gemini-2.5-flash" DOES split (Provider="google",
-// Primary="gemini-2.5-flash"). Use a non-protocol vendor prefix as the
-// "untouched" example, not a real provider name.
-//
-// Mirrors migrateProviderFields (model_list) using the same protocol set so the
-// two stay consistent.
-func migrateAgentPrimaryProvider(cfg *Config) {
-	for i := range cfg.Agents.List {
-		mc := cfg.Agents.List[i].Model
-		if mc == nil || mc.Primary == "" || mc.Provider != "" {
-			continue
-		}
-		protocol, rest, found := strings.Cut(mc.Primary, "/")
-		if found && rest != "" && knownProviderProtocols[protocol] {
-			mc.Provider = protocol
-			mc.Primary = rest
-		}
-	}
-}
+// What remains instead: a slash in Model/Primary is always data. A model_list
+// row that still carries the old "<protocol>/<model>" shape with an empty
+// Provider now fails ValidateProviders ("provider is required") — a clean,
+// visible config error instead of a silent wrong-vendor route. An agent's
+// bare-string Primary keeps its full id verbatim with Provider empty, which
+// legitimately trips the pre-turn needs_provider gate (ADR-067 T067-09) so
+// the operator picks a provider explicitly.
 
 func (c *Config) migrateChannelConfigs() {
 	// Discord: mention_only -> group_trigger.mention_only (preserved from the typed singleton era).
