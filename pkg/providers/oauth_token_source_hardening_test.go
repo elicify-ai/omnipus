@@ -14,16 +14,32 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/credentials"
 )
 
-// resetOAuthRefreshLocks clears the process-wide keyed mutex map so one test's
-// lock for an entry name cannot be observed by the next. The map is a
-// deliberate package-level singleton (that is the whole point of the fix), so
-// tests that care about its identity must reset it explicitly.
-func resetOAuthRefreshLocks(t *testing.T) {
+// resetOAuthTokenSourceState clears BOTH process-wide singletons the store
+// OAuth token source keeps, so nothing one test leaves behind is observed by
+// the next:
+//
+//   - oauthRefreshLocks, the keyed mutex map (a deliberate singleton — that
+//     is the whole point of the single-flight fix), so one test's lock for an
+//     entry name is not the next test's lock.
+//   - registeredOAuthTokens, the fast-path registration memo, so a token this
+//     test registers cannot suppress a registration the NEXT test asserts.
+//     That is not hypothetical: several tests here refresh the same
+//     OPENAI_OAUTH entry to the same fixture string "new-access-token", and
+//     the memo — correctly, in production, where a vendor never reissues a
+//     byte-identical token and the value is still in the store either way —
+//     would treat the second one as already registered.
+//
+// Tests that care about either singleton's identity must reset it explicitly.
+func resetOAuthTokenSourceState(t *testing.T) {
 	t.Helper()
 	reset := func() {
 		oauthRefreshLocksMu.Lock()
-		defer oauthRefreshLocksMu.Unlock()
 		oauthRefreshLocks = make(map[string]*sync.Mutex)
+		oauthRefreshLocksMu.Unlock()
+
+		registeredOAuthTokensMu.Lock()
+		registeredOAuthTokens = make(map[string]string)
+		registeredOAuthTokensMu.Unlock()
 	}
 	reset()
 	t.Cleanup(reset)
@@ -45,7 +61,7 @@ func resetOAuthRefreshLocks(t *testing.T) {
 // The oracle is the vendor's own call count: exactly one exchange, no matter
 // how many independently-constructed sources ask at once.
 func TestStoreOAuthTokenSource_SingleFlightAcrossIndependentSources(t *testing.T) {
-	resetOAuthRefreshLocks(t)
+	resetOAuthTokenSourceState(t)
 
 	store := newTestOAuthStore(t)
 	entryName := credentials.OAuthEntryName(OAuthVendorID("openai-chatgpt"))
@@ -130,7 +146,7 @@ func TestStoreOAuthTokenSource_SingleFlightAcrossIndependentSources(t *testing.T
 // sources built under different provider ids that resolve to the same entry
 // must still share one lock.
 func TestStoreOAuthTokenSource_KeyedByVendorEntryNotProviderID(t *testing.T) {
-	resetOAuthRefreshLocks(t)
+	resetOAuthTokenSourceState(t)
 	a := oauthRefreshLock(credentials.OAuthEntryName(OAuthVendorID("openai-chatgpt")))
 	b := oauthRefreshLock(credentials.OAuthEntryName(OAuthVendorID("openai")))
 	if a != b {
@@ -149,7 +165,7 @@ func TestStoreOAuthTokenSource_KeyedByVendorEntryNotProviderID(t *testing.T) {
 // the OLD, superseded token while the live one travelled unprotected until the
 // next boot, sign-in, or sign-in-status poll.
 func TestStoreOAuthTokenSource_RegistersRefreshedTokensAsSensitive(t *testing.T) {
-	resetOAuthRefreshLocks(t)
+	resetOAuthTokenSourceState(t)
 
 	store := newTestOAuthStore(t)
 	entryName := credentials.OAuthEntryName(OAuthVendorID("openai-chatgpt"))
@@ -246,7 +262,7 @@ func TestSensitiveValueRegistrar_DefaultsToNoOp(t *testing.T) {
 // The vendor handler here performs that concurrent write, so by the time the
 // exchange returns the store already holds something newer.
 func TestStoreOAuthTokenSource_DoesNotClobberNewerCredential(t *testing.T) {
-	resetOAuthRefreshLocks(t)
+	resetOAuthTokenSourceState(t)
 
 	store := newTestOAuthStore(t)
 	entryName := credentials.OAuthEntryName(OAuthVendorID("openai-chatgpt"))
@@ -332,7 +348,7 @@ func TestStoreOAuthTokenSource_DoesNotClobberNewerCredential(t *testing.T) {
 // With the exchange bounded, a hung vendor costs each caller one bounded
 // stall and nothing more.
 func TestStoreOAuthTokenSource_HungVendorReleasesTheLock(t *testing.T) {
-	resetOAuthRefreshLocks(t)
+	resetOAuthTokenSourceState(t)
 
 	store := newTestOAuthStore(t)
 	entryName := credentials.OAuthEntryName(OAuthVendorID("openai-chatgpt"))

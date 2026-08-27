@@ -276,6 +276,41 @@ var oauthConfigFor = func(providerID string) (auth.OAuthProviderConfig, error) {
 	}
 }
 
+// signInRefreshOAuthConfig resolves the OAuth config for any sign-in path
+// that may end up REFRESHING — i.e. any path that constructs a
+// providers.NewStoreOAuthTokenSource — and bounds it at
+// providers.MaxOAuthRefreshLockHold.
+//
+// The bound is not about this request's own latency. The refresh runs while
+// holding the process-wide per-vendor lock that live agent turns and DELETE
+// .../sign-in queue behind, so whoever holds it longest sets the stall
+// everyone inherits. The agent path bounded itself at 20s explicitly, "so a
+// hung vendor costs one turn"; the status poll did not, and quietly ran on
+// the auth package's 30s interactive default — which made the agent's
+// tighter bound not a ceiling at all, because an agent turn could be queued
+// behind a status poll holding the same mutex for 30s. Both now read one
+// constant, declared next to the lock it governs.
+//
+// oauthConfigFor stays the vendor-endpoint seam tests swap; this wrapper is
+// deliberately separate so a test that points the gateway at an httptest
+// server does not have to remember to restate the bound.
+func signInRefreshOAuthConfig(providerID string) (auth.OAuthProviderConfig, error) {
+	cfg, err := oauthConfigFor(providerID)
+	if err != nil {
+		return auth.OAuthProviderConfig{}, err
+	}
+	cfg.Timeout = providers_pkg.MaxOAuthRefreshLockHold
+	return cfg, nil
+}
+
+// newStoreOAuthTokenSource is the token-source constructor the sign-in status
+// path uses. A package-level var (mirroring oauthConfigFor just above) purely
+// so a test can observe the config this file actually hands to it — the
+// lock-hold bound is only meaningful if it reaches the token source, and a
+// client-side deadline is not something the fake vendor on the other end can
+// see.
+var newStoreOAuthTokenSource = providers_pkg.NewStoreOAuthTokenSource
+
 // resolveSignInCredStore returns the shared unlocked credential store,
 // falling back to opening one directly the same way storeCredential does —
 // so sign-in works even in the (test-only) configuration where a.credStore
@@ -437,23 +472,12 @@ func (a *restAPI) handleProviderSignInPoll(w http.ResponseWriter, r *http.Reques
 			jsonErr(w, http.StatusServiceUnavailable, "credential store unavailable")
 			return
 		}
-		entryName := credentials.OAuthEntryName(providers_pkg.OAuthVendorID(providerID))
-		blob, marshalErr := json.Marshal(struct {
-			AccessToken  string    `json:"access_token"`
-			RefreshToken string    `json:"refresh_token,omitempty"`
-			AccountID    string    `json:"account_id,omitempty"`
-			ExpiresAt    time.Time `json:"expires_at,omitempty"`
-		}{
+		if setErr := providers_pkg.WriteStoreOAuthCredential(providerID, store, providers_pkg.OAuthCredential{
 			AccessToken:  cred.AccessToken,
 			RefreshToken: cred.RefreshToken,
 			AccountID:    cred.AccountID,
 			ExpiresAt:    cred.ExpiresAt,
-		})
-		if marshalErr != nil {
-			jsonErr(w, http.StatusInternalServerError, "failed to encode credential")
-			return
-		}
-		if setErr := store.Set(entryName, string(blob)); setErr != nil {
+		}); setErr != nil {
 			jsonErr(w, http.StatusInternalServerError, "failed to store credential")
 			return
 		}
@@ -582,11 +606,11 @@ func (a *restAPI) deviceCodeStatus(providerID string) gen.SignInStatus {
 		return gen.SignInStatus{State: gen.SignInStatusStatePending}
 	}
 
-	oauthCfg, cfgErr := oauthConfigFor(providerID)
-	tokenSource := providers_pkg.NewStoreOAuthTokenSource(providerID, store, oauthCfg)
+	oauthCfg, cfgErr := signInRefreshOAuthConfig(providerID)
 	if cfgErr != nil {
 		return gen.SignInStatus{State: gen.SignInStatusStateNotSignedIn}
 	}
+	tokenSource := newStoreOAuthTokenSource(providerID, store, oauthCfg)
 	accessToken, accountID, srcErr := tokenSource()
 	if srcErr != nil {
 		if errors.Is(srcErr, providers_pkg.ErrProviderNeedsSignIn) {
@@ -691,27 +715,16 @@ func (a *restAPI) handleProviderSignInImport(w http.ResponseWriter, r *http.Requ
 		jsonErr(w, http.StatusServiceUnavailable, "credential store unavailable")
 		return
 	}
-	entryName := credentials.OAuthEntryName(providers_pkg.OAuthVendorID("openai-chatgpt"))
 	var expiresAt time.Time
 	if exp, ok := jwtUnverifiedExpiry(token); ok {
 		expiresAt = exp
 	}
-	blob, marshalErr := json.Marshal(struct {
-		AccessToken  string    `json:"access_token"`
-		RefreshToken string    `json:"refresh_token,omitempty"`
-		AccountID    string    `json:"account_id,omitempty"`
-		ExpiresAt    time.Time `json:"expires_at,omitempty"`
-	}{
+	if setErr := providers_pkg.WriteStoreOAuthCredential("openai-chatgpt", store, providers_pkg.OAuthCredential{
 		// FR-047: no refresh token is imported — this session ends at exp.
 		AccessToken: token,
 		AccountID:   accountID,
 		ExpiresAt:   expiresAt,
-	})
-	if marshalErr != nil {
-		jsonErr(w, http.StatusInternalServerError, "failed to encode credential")
-		return
-	}
-	if setErr := store.Set(entryName, string(blob)); setErr != nil {
+	}); setErr != nil {
 		jsonErr(w, http.StatusInternalServerError, "failed to store credential")
 		return
 	}
@@ -739,8 +752,16 @@ func (a *restAPI) handleProviderSignOut(w http.ResponseWriter, r *http.Request, 
 		jsonErr(w, http.StatusServiceUnavailable, "credential store unavailable")
 		return
 	}
-	entryName := credentials.OAuthEntryName(providers_pkg.OAuthVendorID(providerID))
-	if delErr := store.Delete(entryName); delErr != nil {
+	// providers_pkg.DeleteStoreOAuthCred, not a bare store.Delete: the
+	// delete has to be ordered against an in-flight refresh exchange, or
+	// sign-out is not a revocation. A refresh that started before the
+	// operator clicked Sign out used to complete AFTER the delete and write
+	// a fresh access+refresh pair straight back — the UI said "not signed
+	// in", the audit log below recorded provider.signed_out, and the grant
+	// the operator believed they had destroyed was live again with nothing
+	// surfacing it. See that function's threat note. It can block for as
+	// long as one bounded vendor exchange; that is the price of the ordering.
+	if delErr := providers_pkg.DeleteStoreOAuthCred(providerID, store); delErr != nil {
 		var notFound *credentials.NotFoundError
 		if !errors.As(delErr, &notFound) {
 			jsonErr(w, http.StatusInternalServerError, "failed to sign out")

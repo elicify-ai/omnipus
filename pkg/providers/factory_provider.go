@@ -8,7 +8,6 @@ package providers
 import (
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/auth"
 	"github.com/elicify-ai/omnipus/pkg/config"
@@ -164,7 +163,13 @@ func requireKey(cfg *config.ModelConfig, row resolvedRow) error {
 // operator is watching a spinner: here nobody is watching, the caller is a
 // turn in progress, and the call is made while holding the per-vendor refresh
 // lock every other turn on this provider needs.
-const agentOAuthRefreshTimeout = 20 * time.Second
+//
+// It is now an alias of MaxOAuthRefreshLockHold rather than its own literal.
+// The bound only ever meant anything as a ceiling on how long ANY caller may
+// hold that lock, and while it was a private 20s here the sign-in status poll
+// ran on the auth package's 30s default and quietly became the real ceiling
+// for agent turns queued behind it.
+const agentOAuthRefreshTimeout = MaxOAuthRefreshLockHold
 
 // CreateProviderFromConfig builds the LLM transport for one provider config.
 //
