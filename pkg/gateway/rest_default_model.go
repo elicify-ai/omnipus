@@ -193,11 +193,13 @@ func (a *restAPI) putDefaultModel(w http.ResponseWriter, r *http.Request) {
 		if err := a.auditor.Log(&audit.Entry{
 			Event:    EventProviderDefaultModelChanged,
 			Decision: audit.DecisionAllow,
+			User:     auditActor(r),
 			Details: map[string]any{
 				"old_provider": oldPair.Provider,
 				"old_model":    oldPair.Model,
 				"new_provider": providerID,
 				"new_model":    model,
+				"source_ip":    a.clientIPWithLiveFallback(r),
 			},
 		}); err != nil {
 			slog.Warn("audit write failed", "event", EventProviderDefaultModelChanged, "error", err)
