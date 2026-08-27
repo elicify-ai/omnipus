@@ -32,7 +32,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
 })
 
 import * as api from '@/lib/api'
-import { SignInDialog } from './SignInDialog'
+import { SignInDialog, isTransientSignInPollError } from './SignInDialog'
 
 const CLI_LOGIN_RESPONSE = {
   method: 'cli_login' as const,
@@ -361,6 +361,213 @@ describe('SignInDialog — device_code', () => {
     await waitFor(() => screen.getByTestId('user-code'))
     await waitFor(() => expect(api.fetchSignInStatus).toHaveBeenCalledWith('codex-cli'))
     expect(screen.queryByTestId('import-codex-login-btn')).not.toBeInTheDocument()
+  })
+})
+
+// ── O9: a single transient poll failure must not kill device-code sign-in
+// and invalidate a code the operator already approved (code-review finding,
+// major). Before the fix, `tick()`'s catch treated ANY thrown error as
+// terminal — a dropped connection, a 502 from a proxy, or (the concrete,
+// filed backend defect) a `SignInPollResponse` whose `interval_seconds`
+// exceeds the contract's `maximum: 30` and fails the generated Zod schema —
+// permanently stopped polling and dropped straight to the `error` phase,
+// even though the operator's approval on the vendor's page was still good.
+describe('isTransientSignInPollError — classification (O9)', () => {
+  it('classifies network failures, 5xx, 429, and schema-validation failures as transient', () => {
+    expect(isTransientSignInPollError(new api.ApiError(0, 'Network unavailable.'))).toBe(true)
+    expect(
+      isTransientSignInPollError(
+        new api.ApiError(502, 'could not reach the provider to check sign-in status'),
+      ),
+    ).toBe(true)
+    expect(isTransientSignInPollError(new api.ApiError(503, 'credential store unavailable'))).toBe(true)
+    expect(isTransientSignInPollError(new api.ApiError(429, 'Too many requests.'))).toBe(true)
+    expect(
+      isTransientSignInPollError(
+        new api.ApiSchemaError(
+          'POST /api/v1/providers/openai-chatgpt/sign-in/poll',
+          [{ path: ['interval_seconds'], message: 'Number must be less than or equal to 30' }],
+          { state: 'pending', interval_seconds: 45 },
+        ),
+      ),
+    ).toBe(true)
+  })
+
+  it('classifies a dead/unknown device-code session and unrecognised errors as terminal', () => {
+    expect(isTransientSignInPollError(new api.ApiError(404, 'unknown or expired device_auth_id'))).toBe(
+      false,
+    )
+    expect(isTransientSignInPollError(new api.ApiError(400, 'device_auth_id is required'))).toBe(false)
+    expect(isTransientSignInPollError(new Error('boom'))).toBe(false)
+  })
+})
+
+describe('SignInDialog — device_code polling resilience (O9)', () => {
+  // The outer file's `beforeEach(() => vi.clearAllMocks())` clears call/result
+  // history but — per Vitest's own contract — does NOT drain a mock's queued
+  // `mockResolvedValueOnce`/`mockRejectedValueOnce` entries. These tests
+  // deliberately queue MULTIPLE once-values per test (to script a failure
+  // then a recovery), and several exist specifically to prove the loop stops
+  // retrying at some point — so a queued value can legitimately go unconsumed
+  // within a test. Left unreset, that leftover would leak into and pollute
+  // the NEXT test's assertions. `mockReset()` (which does clear the once
+  // queue) keeps every test in this block isolated regardless of how many of
+  // a previous test's queued responses were actually consumed.
+  beforeEach(() => {
+    vi.mocked(api.pollSignIn).mockReset()
+    vi.mocked(api.startSignIn).mockReset()
+    vi.mocked(api.fetchSignInStatus).mockReset()
+  })
+
+  it('rides out a single transient poll failure (502) and still reaches signed_in — the approved code is not lost', async () => {
+    vi.useFakeTimers()
+    vi.mocked(api.startSignIn).mockResolvedValue(DEVICE_CODE_RESPONSE)
+    vi.mocked(api.pollSignIn)
+      .mockRejectedValueOnce(
+        new api.ApiError(502, 'could not reach the provider to check sign-in status'),
+      )
+      .mockResolvedValueOnce({ state: 'pending' })
+      .mockResolvedValueOnce({ state: 'signed_in' })
+    vi.mocked(api.fetchSignInStatus).mockResolvedValue({ state: 'signed_in', account_label: 'user@example.com' })
+    const { onSignedIn } = renderDialog()
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+
+    // First poll: transient 502. Must NOT drop to the error state — the
+    // dialog stays exactly where the operator left it, code still visible.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000)
+    })
+    expect(api.pollSignIn).toHaveBeenCalledTimes(1)
+    expect(screen.getByTestId('user-code')).toHaveTextContent('WDJB-MJHT')
+    expect(screen.queryByTestId('sign-in-failure')).not.toBeInTheDocument()
+
+    // Second poll: pending — the retry loop kept going on its own.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000)
+    })
+    expect(api.pollSignIn).toHaveBeenCalledTimes(2)
+
+    // Third poll: signed_in — the operator's earlier approval was never lost.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000)
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    expect(screen.getByTestId('sign-in-success')).toHaveTextContent('Signed in as user@example.com')
+    expect(onSignedIn).toHaveBeenCalledWith({ state: 'signed_in', account_label: 'user@example.com' })
+  })
+
+  it('rides out an ApiSchemaError from a malformed poll response (interval_seconds over the contract max)', async () => {
+    vi.useFakeTimers()
+    vi.mocked(api.startSignIn).mockResolvedValue(DEVICE_CODE_RESPONSE)
+    vi.mocked(api.pollSignIn)
+      .mockRejectedValueOnce(
+        new api.ApiSchemaError(
+          'POST /api/v1/providers/openai-chatgpt/sign-in/poll',
+          [{ path: ['interval_seconds'], message: 'Number must be less than or equal to 30' }],
+          { state: 'pending', interval_seconds: 45 },
+        ),
+      )
+      .mockResolvedValueOnce({ state: 'signed_in' })
+    vi.mocked(api.fetchSignInStatus).mockResolvedValue({ state: 'signed_in', account_label: 'user@example.com' })
+    const { onSignedIn } = renderDialog()
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000)
+    })
+    expect(api.pollSignIn).toHaveBeenCalledTimes(1)
+    expect(screen.queryByTestId('sign-in-failure')).not.toBeInTheDocument()
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000)
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    expect(screen.getByTestId('sign-in-success')).toHaveTextContent('Signed in as user@example.com')
+    expect(onSignedIn).toHaveBeenCalled()
+  })
+
+  it('gives up after enough CONSECUTIVE transient failures — bounded, not infinite retry', async () => {
+    vi.useFakeTimers()
+    vi.mocked(api.startSignIn).mockResolvedValue(DEVICE_CODE_RESPONSE)
+    vi.mocked(api.pollSignIn).mockRejectedValue(
+      new api.ApiError(0, 'Network unavailable. Check your connection.'),
+    )
+    renderDialog()
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    // 6 attempts: the 1st plus 5 tolerated consecutive-failure retries.
+    for (let i = 0; i < 6; i++) {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5000)
+      })
+    }
+    expect(api.pollSignIn).toHaveBeenCalledTimes(6)
+    expect(screen.getByTestId('sign-in-failure')).toBeInTheDocument()
+
+    // Having given up, it must not schedule yet another attempt.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000)
+    })
+    expect(api.pollSignIn).toHaveBeenCalledTimes(6)
+  })
+
+  it('a terminal poll failure (404 unknown/expired device_auth_id) still stops immediately', async () => {
+    vi.useFakeTimers()
+    vi.mocked(api.startSignIn).mockResolvedValue(DEVICE_CODE_RESPONSE)
+    vi.mocked(api.pollSignIn).mockRejectedValue(
+      new api.ApiError(404, 'unknown or expired device_auth_id'),
+    )
+    renderDialog()
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000)
+    })
+
+    expect(api.pollSignIn).toHaveBeenCalledTimes(1)
+    expect(screen.getByTestId('sign-in-failure')).toHaveTextContent('unknown or expired device_auth_id')
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000)
+    })
+    expect(api.pollSignIn).toHaveBeenCalledTimes(1)
+  })
+
+  it('a transient failure followed by a genuine denial still ends in denied, not error', async () => {
+    // Confirms the fix does not blur "denied" (a real 200 response) with a
+    // retried transient failure — the two must never be conflated.
+    vi.useFakeTimers()
+    vi.mocked(api.startSignIn).mockResolvedValue(DEVICE_CODE_RESPONSE)
+    vi.mocked(api.pollSignIn)
+      .mockRejectedValueOnce(new api.ApiError(0, 'Network unavailable.'))
+      .mockResolvedValueOnce({ state: 'denied' })
+    renderDialog()
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000)
+    })
+    expect(api.pollSignIn).toHaveBeenCalledTimes(1)
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000)
+    })
+    expect(screen.getByTestId('sign-in-failure')).toHaveTextContent(/denied/i)
   })
 })
 

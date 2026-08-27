@@ -350,7 +350,30 @@ export function ProviderPicker({
   const showList = model.expanded && status === 'ready'
 
   return (
-    <div data-testid={testId} onKeyDownCapture={handleKeyDownCapture} className="flex flex-col gap-3">
+    <div data-testid={testId} className="flex flex-col gap-3">
+      {/*
+       * The capture-phase handler below owns Home/End/Arrow/Enter for the
+       * picker's OWN rows (FR-026, MAJ-013 — see the file header). It must
+       * never also see those keys when they originate inside a nested panel
+       * (ProviderDetailPanel's plan/region buttons and its API-key input;
+       * CustomEndpointPanel's form fields) — a text field there needs its own
+       * Home/End for cursor movement, and Enter needs to submit ITS form, not
+       * re-trigger `select(activeRef)` on whatever picker row happened to be
+       * active underneath.
+       *
+       * Enumerating tag names (skip when `event.target` is an <input>, etc.)
+       * is exactly the kind of check that silently stops working the next
+       * time a nested panel adds a new interactive element — nobody updates a
+       * remote condition like that when they add a field. Scoping the
+       * listener to a DOM subtree that structurally EXCLUDES the nested
+       * panels is durable instead: `ProviderDetailPanel` and
+       * `CustomEndpointPanel` are deliberately rendered as siblings of this
+       * inner wrapper (below), not descendants of it, so the capture phase
+       * (root -> target) never reaches this handler for a key that started
+       * inside either panel — no target inspection needed, and it stays
+       * correct automatically as those panels grow.
+       */}
+      <div onKeyDownCapture={handleKeyDownCapture} className="contents">
       {/* ── Popular tiles (FR-022) ─────────────────────────────────────── */}
       <div
         role="group"
@@ -569,6 +592,7 @@ export function ProviderPicker({
           </div>
         </div>
       </Command>
+      </div>
 
       {detailCompany && onProviderConfirm && (
         <ProviderDetailPanel

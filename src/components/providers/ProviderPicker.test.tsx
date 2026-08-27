@@ -492,3 +492,79 @@ describe('ProviderPicker — second-level panel (FR-027/FR-028)', () => {
     expect(onProviderConfirm).not.toHaveBeenCalled()
   })
 })
+
+// ── O8: the picker's capture-phase key handler must not reach into its own
+// nested panels (code-review finding, major). Before the fix, Home/End were
+// intercepted by ProviderPicker's outer capture-phase `onKeyDownCapture`
+// no matter where focus was — including inside ProviderDetailPanel's API-key
+// field or CustomEndpointPanel's form fields — because those panels were
+// rendered as DOM DESCENDANTS of the element carrying the listener. The
+// clearest observable symptom (there is nothing else to assert against in
+// jsdom, which does not implement real text-cursor movement) is that the
+// picker's OWN `moveTo()` programmatically steals focus onto one of its own
+// rows: `Home` used to call `moveTo(0)` and focus the first Popular tile;
+// `End` used to call `moveTo(sequence.length - 1)` and focus the Custom
+// endpoint row. Post-fix, the nested panels are DOM siblings of the listener
+// (see the file's own comment above the `return`), so the capture phase
+// never reaches the handler for a key that started inside either panel and
+// focus simply never moves.
+describe('ProviderPicker — nested panel keyboard isolation (O8)', () => {
+  it('Home/End inside the detail panel API-key field stay in the field', async () => {
+    const onProviderConfirm = vi.fn()
+    renderPicker({ onProviderConfirm })
+    const user = userEvent.setup()
+    await user.type(screen.getByTestId('picker-search'), 'zhipu')
+    fireEvent.click(screen.getByTestId('picker-row-Zhipu AI'))
+
+    const input = await screen.findByTestId('provider-detail-panel-api-key-input')
+    await user.click(input)
+    expect(input).toHaveFocus()
+
+    fireEvent.keyDown(input, { key: 'Home', code: 'Home' })
+    expect(document.activeElement).toBe(input)
+    // None of the picker's own Popular tiles took focus — the pre-fix bug's
+    // tell: `moveTo(0)` focusing whatever the first row in the sequence was.
+    expect(screen.getAllByTestId(/^picker-popular-/).some((t) => t === document.activeElement)).toBe(
+      false,
+    )
+
+    fireEvent.keyDown(input, { key: 'End', code: 'End' })
+    expect(document.activeElement).toBe(input)
+    expect(document.activeElement).not.toBe(screen.getByTestId('picker-custom-endpoint'))
+  })
+
+  it('Home/End inside the Custom endpoint form fields stay in the field', async () => {
+    renderPicker()
+    fireEvent.click(screen.getByTestId('picker-custom-endpoint'))
+
+    const idInput = await screen.findByTestId('custom-endpoint-id')
+    const user = userEvent.setup()
+    await user.click(idInput)
+    expect(idInput).toHaveFocus()
+
+    fireEvent.keyDown(idInput, { key: 'Home', code: 'Home' })
+    expect(document.activeElement).toBe(idInput)
+
+    fireEvent.keyDown(idInput, { key: 'End', code: 'End' })
+    expect(document.activeElement).toBe(idInput)
+
+    const apiBaseInput = screen.getByTestId('custom-endpoint-api-base')
+    await user.click(apiBaseInput)
+    fireEvent.keyDown(apiBaseInput, { key: 'Home', code: 'Home' })
+    expect(document.activeElement).toBe(apiBaseInput)
+  })
+
+  it('Home/End on the picker itself (not inside a nested panel) still navigate rows', async () => {
+    // Guards against an over-broad fix (e.g. disabling the capture handler
+    // entirely): the picker's OWN Home/End behaviour, pinned by the existing
+    // "End focuses Custom endpoint…" test above, must be unaffected.
+    renderPicker()
+    const user = userEvent.setup()
+    expect(screen.getByTestId('picker-search')).toHaveFocus()
+    await user.keyboard('{End}')
+    expect(screen.getByTestId('picker-custom-endpoint')).toHaveFocus()
+    await user.keyboard('{Home}')
+    const firstTileId = popularIdsInCatalogOrder(PROVIDERS_CATALOG)[0]
+    expect(screen.getByTestId(`picker-popular-${firstTileId}`)).toHaveFocus()
+  })
+})
