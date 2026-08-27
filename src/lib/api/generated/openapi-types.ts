@@ -1609,13 +1609,13 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        get?: never;
+        put?: never;
         /**
          * Test provider API key configuration
-         * @description Verifies that an API key is configured for the given provider without making an upstream call. Returns success=false with an error message if no key is configured. Available before and after onboarding — while onboarding is incomplete and the instance has no authentication authority the route is reachable without a credential. Rate-limited: 60 requests per minute per IP -> 429.
+         * @description Resolves the provider's stored API key and probes it with ONE real upstream request (providers.ValidateKey), returning success=false with an error message when no key is configured, when the credential ref cannot be resolved, or when the provider rejects the key. Available before and after onboarding — while onboarding is incomplete and the instance has no authentication authority the route is reachable without a credential. Rate-limited: 60 requests per minute per IP -> 429.
          */
-        get: operations["testProvider"];
-        put?: never;
-        post?: never;
+        post: operations["testProvider"];
         delete?: never;
         options?: never;
         head?: never;
