@@ -812,15 +812,41 @@ func sweepOrphanedProviderCredentials(cfg *config.Config, store *credentials.Sto
 		if row == nil {
 			continue
 		}
+		// M1: a SEEDED TEMPLATE row is not a configured provider and must
+		// never populate the keep-set. pkg/config/defaults.go seeds ~10
+		// permanent keyless template rows (model + api_base, no credential
+		// ref, no auth_method) — including `{Provider: "openai"}`. Without
+		// this filter `configuredVendors["openai"]` was populated on EVERY
+		// install, so `openai_OAUTH` — the only OAuth grant the product
+		// currently issues — was structurally unsweepable, and `<id>_API_KEY`
+		// was unsweepable for every seeded id. The orphan this sweep exists
+		// to reclaim (process dies between the config write and the
+		// credential delete during provider removal, leaving a live access
+		// AND refresh token with nothing in the UI referencing it) was
+		// therefore precisely the orphan it declined to touch.
+		//
+		// isSeedTemplateRow (rest.go) is the SAME predicate every other
+		// consumer of cfg.Providers applies — GET /providers' list branch
+		// among them — so "configured" means one thing across the package.
+		//
+		// The filter narrows the id/vendor keep-sets ONLY. The `referenced`
+		// keep-set below stays unconditional: a row carrying an api_key_ref
+		// is by definition not a keyless template, but the belt-and-braces
+		// "keep any name a row points at, whatever its shape" rule must not
+		// acquire an exception — wrongly deleting a live secret is
+		// unrecoverable, failing to sweep is harmless.
+		if ref := strings.TrimSpace(row.APIKeyRef); ref != "" {
+			referenced[ref] = struct{}{}
+		}
+		if isSeedTemplateRow(row) {
+			continue
+		}
 		if id := strings.TrimSpace(row.Provider); id != "" {
 			configured[id] = struct{}{}
 			// A vendor entry can back MORE THAN ONE row (openai-chatgpt and
 			// any future OpenAI-family sign-in row share `openai_OAUTH`), so
 			// the keep-set is keyed on the vendor, not the row id.
 			configuredVendors[providers.OAuthVendorID(id)] = struct{}{}
-		}
-		if ref := strings.TrimSpace(row.APIKeyRef); ref != "" {
-			referenced[ref] = struct{}{}
 		}
 	}
 	for _, name := range names {

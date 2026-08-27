@@ -345,10 +345,38 @@ func sanitisePreviewPath(urlPath, token string) string {
 
 // canonicalRemoteIP returns the client IP address for an HTTP request.
 //
-// When trustXFF is true (gateway.trust_xff in config), the first entry of
-// X-Forwarded-For is used — appropriate when the gateway is behind a single
-// trusted reverse proxy. Operators with multi-hop proxy chains should configure
-// their inner proxy to set X-Forwarded-For to the outermost client IP.
+// When trustXFF is true (gateway.trust_xff in config), the RIGHTMOST entry of
+// X-Forwarded-For is used — the one hop in the list the trusted reverse proxy
+// wrote itself, and therefore the only entry in the header a client cannot
+// choose.
+//
+// Why rightmost and not leftmost (M4 fix): the standard nginx idiom this
+// project documents is
+//
+//	proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+//
+// which APPENDS the connecting peer to whatever the client already sent. A
+// client that sends `X-Forwarded-For: 6.6.6.6` therefore reaches the gateway
+// as `6.6.6.6, <real client>`: reading the LEFTMOST entry read the attacker's
+// own string. That is the exact spoofing bug clientIP's own doc comment
+// (rest_auth.go) describes as fixed — every sign-in limiter
+// (signInStartLimiter / signInPollLimiter / signInStatusLimiter),
+// globalLoginLimiter's brute-force protection, and the audit `source_ip`
+// field were all defeatable by sending a fresh X-Forwarded-For per request on
+// any trust_xff deployment. Reading the rightmost entry keys them on the
+// address the trusted proxy actually observed. Caddy's documented
+// `header_up X-Forwarded-For {remote_host}` REPLACES the header with the peer,
+// so its single entry is both leftmost and rightmost — unchanged by this fix.
+//
+// Multi-hop chains (e.g. a CDN in front of nginx) now resolve to the innermost
+// proxy's view — the CDN edge address — rather than the true origin client.
+// That is a deliberate accuracy-for-integrity trade: an attacker-controlled
+// value is never preferred over a trusted one. Such operators must terminate
+// the chain at one proxy they control, or run without trust_xff.
+//
+// An empty rightmost entry (a trailing comma, a header of only whitespace)
+// yields "" here and falls through to r.RemoteAddr — fail-closed, never an
+// empty rate-limit key that every caller would share.
 //
 // When trustXFF is false (the default), X-Forwarded-For is ignored and
 // r.RemoteAddr is used exclusively. This prevents clients from spoofing
@@ -356,12 +384,8 @@ func sanitisePreviewPath(urlPath, token string) string {
 // See docs/operations/reverse-proxy.md for enabling this flag.
 func canonicalRemoteIP(r *http.Request, trustXFF bool) string {
 	if trustXFF {
-		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-			// First comma-separated entry is the originating client.
-			if idx := strings.Index(xff, ","); idx > 0 {
-				return strings.TrimSpace(xff[:idx])
-			}
-			return strings.TrimSpace(xff)
+		if ip := rightmostForwardedFor(r.Header.Get("X-Forwarded-For")); ip != "" {
+			return ip
 		}
 	}
 	// Strip port from RemoteAddr if present.
@@ -370,4 +394,15 @@ func canonicalRemoteIP(r *http.Request, trustXFF bool) string {
 		return r.RemoteAddr
 	}
 	return host
+}
+
+// rightmostForwardedFor returns the last comma-separated entry of an
+// X-Forwarded-For header value, trimmed, or "" when the header is empty or
+// its last entry is blank. See canonicalRemoteIP for why the last entry — and
+// only the last entry — is the trustworthy one.
+func rightmostForwardedFor(xff string) string {
+	if idx := strings.LastIndex(xff, ","); idx >= 0 {
+		return strings.TrimSpace(xff[idx+1:])
+	}
+	return strings.TrimSpace(xff)
 }
