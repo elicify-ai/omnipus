@@ -610,14 +610,14 @@ func fileCallsFunction(t *testing.T, path, funcName string) bool {
 // function's OWN doc comment needed to stop claiming "grep".
 func TestChokePoint_ProducerListByGrep(t *testing.T) {
 	violations := scanChokePointBypasses(t, ".")
-	var vmsgs []string
+	vmsgs := make([]string, 0, len(violations))
 	for _, v := range violations {
 		vmsgs = append(vmsgs, fmt.Sprintf("%s (%s): %s", v.file, v.pos, v.kind))
 	}
 	assert.Empty(t, vmsgs, "files constructing role:tool messages outside the choke point (FR-009):\n%s", strings.Join(vmsgs, "\n"))
 
 	discarded := scanDiscardedChokePointResults(t, "loop.go")
-	var dmsgs []string
+	dmsgs := make([]string, 0, len(discarded))
 	for _, v := range discarded {
 		dmsgs = append(dmsgs, fmt.Sprintf("%s: %s", v.pos, v.kind))
 	}

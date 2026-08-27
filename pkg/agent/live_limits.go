@@ -376,6 +376,13 @@ func (ll *LiveLimits) fetchModelList(ctx context.Context, t liveTarget, path str
 // fetchOllama reads the loaded window from /api/ps, then the architecture
 // maximum from /api/show. The native API is at the row's host: the catalog
 // `api` is the OpenAI-compatible http://host:11434/v1 and /v1 is dropped.
+//
+// /api/ps and /api/show are two INDEPENDENT data sources (loaded window vs.
+// architecture maximum) — a failure of the first (network hiccup, the model
+// isn't currently loaded, a non-2xx) must not abort before the second is
+// even tried. It is logged and swallowed here, not returned, so this rung
+// still answers from /api/show exactly as it would if /api/ps had simply
+// found no match.
 func (ll *LiveLimits) fetchOllama(ctx context.Context, t liveTarget) (int, error) {
 	host := strings.TrimSuffix(strings.TrimSuffix(t.baseURL, "/"), "/v1")
 	if body, err := ll.do(ctx, http.MethodGet, host+"/api/ps", nil, nil); err == nil {
@@ -392,7 +399,8 @@ func (ll *LiveLimits) fetchOllama(ctx context.Context, t liveTarget) (int, error
 			}
 		}
 	} else {
-		return 0, err
+		logger.DebugCF("agent", "Ollama /api/ps failed; falling back to /api/show",
+			map[string]any{"host": host, "model": t.model, "error": err.Error()})
 	}
 	payload, _ := json.Marshal(map[string]string{"model": t.model})
 	body, err := ll.do(ctx, http.MethodPost, host+"/api/show", payload, func(req *http.Request) {

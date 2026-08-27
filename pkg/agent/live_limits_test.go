@@ -48,6 +48,11 @@ type liveTestUpstream struct {
 	ollamaPS     []map[string]any
 	ollamaShow   map[string]any
 	status       int
+	// psStatus, when non-zero, overrides `status` for GET /api/ps ONLY — so a
+	// test can fail /api/ps while /api/show still answers normally (the
+	// live_limits.go fetchOllama fall-through fix: an /api/ps failure must
+	// not abort before /api/show is even tried).
+	psStatus int
 }
 
 func newLiveTestUpstream(t *testing.T) *liveTestUpstream {
@@ -59,8 +64,12 @@ func newLiveTestUpstream(t *testing.T) *liveTestUpstream {
 		u.paths = append(u.paths, r.URL.Path)
 		u.headers = append(u.headers, r.Header.Clone())
 		u.mu.Unlock()
-		if u.status != http.StatusOK {
-			w.WriteHeader(u.status)
+		effectiveStatus := u.status
+		if u.psStatus != 0 && strings.HasSuffix(r.URL.Path, "/api/ps") {
+			effectiveStatus = u.psStatus
+		}
+		if effectiveStatus != http.StatusOK {
+			w.WriteHeader(effectiveStatus)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -406,6 +415,26 @@ func TestLiveLimits_OllamaLoadedWindow(t *testing.T) {
 		w, ok := ll.Lookup("ollama", "http://localhost:11434/v1", "llama3.2:1b")
 		assert.True(t, ok)
 		assert.Equal(t, 131072, w)
+	})
+
+	t.Run("minor: /api/ps failure falls through to /api/show, not aborted", func(t *testing.T) {
+		up := newLiveTestUpstream(t)
+		up.psStatus = http.StatusInternalServerError // /api/ps errors; /api/show still answers
+		up.ollamaShow = map[string]any{
+			"details":    map[string]any{"family": "llama"},
+			"model_info": map[string]any{"general.architecture": "llama", "llama.context_length": 65536, "llama.block_count": 16},
+		}
+		ll := newTestLiveLimits(t, up, clock, noCredential, "")
+		ll.Lookup("ollama", "http://localhost:11434/v1", "llama3.2:1b")
+		ll.Wait()
+		up.mu.Lock()
+		paths := append([]string(nil), up.paths...)
+		up.mu.Unlock()
+		assert.Equal(t, []string{"/api/ps", "/api/show"}, paths,
+			"an /api/ps failure must not abort the rung before /api/show is even tried")
+		w, ok := ll.Lookup("ollama", "http://localhost:11434/v1", "llama3.2:1b")
+		assert.True(t, ok, "the architecture maximum from /api/show must still be usable")
+		assert.Equal(t, 65536, w)
 	})
 
 	t.Run("a bare tag matches Ollama's :latest normalisation", func(t *testing.T) {
