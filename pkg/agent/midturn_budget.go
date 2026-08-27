@@ -46,7 +46,9 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/memory"
 	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // midTurnChecksTotal counts mid-turn window-check evaluations (B-33: N tool
@@ -70,6 +72,63 @@ func absoluteShareTokens(cs config.ContextSettings) int {
 		chars = config.DefaultAbsoluteTriggerChars
 	}
 	return chars * 2 / 5
+}
+
+// ephemeralSystemNoteTokens estimates the token cost of the ephemeral
+// system notes runTurn injects into callMessages before the request that is
+// ACTUALLY sent to the provider (C1): the scratchpad note, the workspace
+// instructions note (AGENT.md — up to 262,144 bytes, ~104,857 estimator
+// tokens, with no budget-aware cap), and the web-rendering note (loop.go's
+// callMessages assembly — buildScratchpadNote / injectWorkspaceInstructions
+// / injectWebRenderingNote, all called on `repairedHistory`, never on the
+// `messages` slice either budget site measures). `messages` never carries
+// these notes — each injector returns a FRESH slice built strictly AFTER
+// both budget checks run — so requestTokens/sumRequestMessageTokens alone
+// under-measure the real request by however large AGENT.md is. A large
+// AGENT.md (up to the 256 KB cap) can by itself push the assembled request
+// tens of thousands of tokens past what either check saw, producing a
+// provider context_too_long on a window the engine believed it was
+// protecting — exactly the ADR's §1 incident class.
+//
+// The fourth ephemeral note — the compressed tool manifest — is charged
+// separately (manifestNoteTokens below, mid-turn only): the pre-turn site
+// already folds it into sentToolSurfaceTokens' own measurement, so adding
+// it here too would double-count it there.
+func (al *AgentLoop) ephemeralSystemNoteTokens(ts *turnState) int {
+	if ts == nil || ts.agent == nil {
+		return 0
+	}
+	tokens := 0
+	add := func(note string) {
+		if note != "" {
+			tokens += estimateMessageTokens(providers.Message{Role: "system", Content: note})
+		}
+	}
+	add(al.buildScratchpadNote(ts.agent.ID))
+	add(buildWorkspaceInstructionsNote(ts.opts.WorkspaceID))
+	add(buildWebRenderingNote(ts.channel))
+	return tokens
+}
+
+// manifestNoteTokens estimates the token cost of the compressed tool
+// manifest note (tool_manifest.go) when it will actually be injected. It
+// mirrors sentToolSurfaceTokens' own manifest-note measurement — the same
+// tool universe (agent.Tools.GetAll()), the same loaded-tools lookup, the
+// same builder (tools.BuildCompressedManifest) — so the two estimates
+// cannot drift apart. Mid-turn only: see ephemeralSystemNoteTokens' doc
+// comment for why the pre-turn site must NOT also call this (it would
+// double-count the manifest cost already inside sentToolSurfaceTokens).
+func (al *AgentLoop) manifestNoteTokens(ts *turnState, cfg *config.Config) int {
+	if ts == nil || ts.agent == nil || ts.agent.Tools == nil || cfg == nil || !cfg.Tools.Manifest.Compressed {
+		return 0
+	}
+	sessionID := manifestSessionID(ts.opts.TranscriptSessionID, ts.sessionKey)
+	loaded := al.sessionLoadedTools(sessionID)
+	note := tools.BuildCompressedManifest(ts.agent.Tools.GetAll(), loaded)
+	if note == "" {
+		return 0
+	}
+	return estimateMessageTokens(providers.Message{Role: "system", Content: note})
 }
 
 // midTurnWindowCheck is the D6 mid-turn site. messages is the in-memory
@@ -100,15 +159,24 @@ func (al *AgentLoop) midTurnWindowCheck(
 		return messages, nil
 	}
 	budget := agentContextBudget(ts.agent)
+	cfg := al.GetConfig()
 	cs := config.DefaultContextSettings()
-	if cfg := al.GetConfig(); cfg != nil {
+	if cfg != nil {
 		cs = cfg.Context
 	}
 	absShare := absoluteShareTokens(cs)
 
+	// C1: `total` must measure the request that is ACTUALLY sent — the
+	// pinned core + window + injected ephemeral notes (scratchpad, workspace
+	// instructions, web-rendering, compressed manifest) — not just the raw
+	// window `requestTokens` sees. noteTokens is computed once per check;
+	// none of these notes depend on the emptying pass below, so the same
+	// value is added at every re-measurement in this function.
+	noteTokens := al.ephemeralSystemNoteTokens(ts) + al.manifestNoteTokens(ts, cfg)
+
 	midTurnChecksTotal.Add(1)
 
-	total := requestTokens(messages, toolDefs)
+	total := requestTokens(messages, toolDefs) + noteTokens
 	share := toolResultShareTokens(messages)
 	totalFired := total > budget
 	shareFired := share > absShare
@@ -121,7 +189,7 @@ func (al *AgentLoop) midTurnWindowCheck(
 	if ts.injectedRecallSpan != nil {
 		messages = removeInjectedRecallBlock(ts, messages, true)
 		al.dropRecallSpan(ts.sessionKey, "pressure")
-		total = requestTokens(messages, toolDefs)
+		total = requestTokens(messages, toolDefs) + noteTokens
 		share = toolResultShareTokens(messages)
 		totalFired = total > budget
 		shareFired = share > absShare
@@ -156,10 +224,13 @@ func (al *AgentLoop) midTurnWindowCheck(
 	// forever: the marks become permanent and every later turn on the session
 	// dies the same way. Refuse before touching anything instead.
 	//
-	// The residue is measured with the candidates' content removed entirely —
-	// an optimistic lower bound, so this can only refuse a pass that could
-	// not have worked.
-	if !al.midTurnPassCanSucceed(ts, messages, toolDefs, lineOf, budget, absShare, totalFired, shareFired) {
+	// The residue is measured with the candidates' content replaced by the
+	// SAME recall mark emptyOldestFirst would build for them (M2) — never
+	// content-removed-entirely, which undercounts by the mark's own cost
+	// (~120+ estimator tokens each, buildRecallMark/recall_mark.go) and lets
+	// this pre-check pass a band the real post-pass guard then refuses,
+	// after the marks are already persisted.
+	if !al.midTurnPassCanSucceed(ts, messages, toolDefs, lineOf, archive, budget, absShare, noteTokens, totalFired, shareFired) {
 		return messages, fmt.Errorf(
 			"%w: the un-emptiable residue alone exceeds the budget "+
 				"(total=%d budget=%d share=%d absolute_share=%d agent_id=%s session_key=%s)",
@@ -168,9 +239,11 @@ func (al *AgentLoop) midTurnWindowCheck(
 
 	// Target = 80 % of each condition that fired (FR-029). The un-fired
 	// condition imposes nothing — its own trigger still guards it on the
-	// next check.
+	// next check. noteTokens rides along on every `total`-shaped comparison
+	// here too (C1) — the ephemeral notes are un-emptiable, so they are a
+	// constant addend, never a candidate for emptyInPlace.
 	fits := func(m []providers.Message) bool {
-		if totalFired && requestTokens(m, toolDefs) > budget*4/5 {
+		if totalFired && requestTokens(m, toolDefs)+noteTokens > budget*4/5 {
 			return false
 		}
 		if shareFired && toolResultShareTokens(m) > absShare*4/5 {
@@ -183,7 +256,7 @@ func (al *AgentLoop) midTurnWindowCheck(
 	// FR-032: the guard re-checks the TRIGGER conditions, not the target —
 	// an unreachable target with every trigger back under its threshold is
 	// B-36b: the turn simply continues.
-	total = requestTokens(messages, toolDefs)
+	total = requestTokens(messages, toolDefs) + noteTokens
 	share = toolResultShareTokens(messages)
 	if total > budget || share > absShare {
 		return messages, fmt.Errorf(
@@ -197,12 +270,29 @@ func (al *AgentLoop) midTurnWindowCheck(
 // bring the fired trigger conditions back under their thresholds. See the
 // FR-032 pre-check in midTurnWindowCheck for why this runs BEFORE the pass
 // rather than as an after-the-fact guard.
+//
+// M2: the residue models each candidate's post-emptying content as the SAME
+// recall mark emptyOldestFirst (empty_in_place.go) would build for it — the
+// mark REPLACES the content, it does not remove it, and the mark is real
+// request bytes (~120+ estimator tokens each: a JSON payload with the tool
+// name, tool_call_id, archive line, size and a recall_conversation hint).
+// A pre-check that assumed zero-cost emptying (residue[i].Content = "")
+// under-measured the true post-pass total by N × the mark cost: any state
+// where the fired trigger's margin was smaller than that would pass this
+// pre-check, run the whole D5 pass, persist every (tool_call_id,
+// archive_line) → emptied entry, and STILL have the post-pass guard in
+// midTurnWindowCheck fire — on a turn typedTurnExit never rolls back, so
+// those marks survive forever and poison every later turn on the session.
+// Building the mark via the SAME producer (buildRecallMark) the real pass
+// calls, with the same inputs, makes this exact rather than an estimate
+// that can drift out of sync with what emptyOldestFirst actually writes.
 func (al *AgentLoop) midTurnPassCanSucceed(
 	ts *turnState,
 	messages []providers.Message,
 	toolDefs []providers.ToolDefinition,
 	lineOf func(int) int,
-	budget, absShare int,
+	archive []memory.ArchivedMessage,
+	budget, absShare, noteTokens int,
 	totalFired, shareFired bool,
 ) bool {
 	if ts.agent.Sessions == nil {
@@ -214,9 +304,21 @@ func (al *AgentLoop) midTurnPassCanSucceed(
 	residue := make([]providers.Message, len(messages))
 	copy(residue, messages)
 	for _, i := range candidates {
-		residue[i].Content = ""
+		m := residue[i]
+		line := lineOf(i)
+		tool, _ := owningToolCall(residue, i, m.ToolCallID)
+		full := markSourceContent(m, line, archive)
+		mark, err := buildRecallMark("emptied", tool, m.ToolCallID, line, full, archive)
+		if err != nil {
+			// buildRecallMark reported the marshal failure; mirror
+			// emptyOldestFirst's own fallback (empty_in_place.go) so the
+			// residue estimate stays consistent with what the real pass
+			// would persist in this rare failure case.
+			mark = ""
+		}
+		residue[i].Content = mark
 	}
-	if totalFired && requestTokens(residue, toolDefs) > budget {
+	if totalFired && requestTokens(residue, toolDefs)+noteTokens > budget {
 		return false
 	}
 	if shareFired && toolResultShareTokens(residue) > absShare {

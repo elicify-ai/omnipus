@@ -8287,7 +8287,18 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 		// site used to, fired the check on a conversation that fit and had
 		// windowTrim evict one turn per turn.
 		toolDefsTokens := al.sentToolSurfaceTokens(ts.agent, ts.sessionKey)
-		if isOverContextBudgetTokens(agentContextBudget(ts.agent), messages, toolDefsTokens) {
+		// C1: `messages` never carries the ephemeral system notes runTurn
+		// injects into callMessages before the request that is actually
+		// sent (scratchpad, workspace instructions — AGENT.md, up to
+		// 262,144 bytes with no budget-aware cap — and the web-rendering
+		// note); the compressed manifest note is already folded into
+		// toolDefsTokens above. Without ephemeralSystemNoteTokens here, a
+		// large AGENT.md alone can push the assembled request tens of
+		// thousands of tokens past what this check saw, producing a
+		// provider context_too_long on a window this check believed it was
+		// protecting.
+		nonMessageTokens := toolDefsTokens + al.ephemeralSystemNoteTokens(ts)
+		if isOverContextBudgetTokens(agentContextBudget(ts.agent), messages, nonMessageTokens) {
 			logger.WarnCF("agent", "Proactive window trim: context budget exceeded before LLM call",
 				map[string]any{"session_key": ts.sessionKey})
 			if compression, ok := al.windowTrim(ts.agent, ts.sessionKey); ok {
