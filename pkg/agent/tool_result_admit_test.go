@@ -532,6 +532,33 @@ func scanChokePointBypasses(t *testing.T, dir string) []chokePointViolation {
 						if !ok || key.Name != "Role" {
 							continue
 						}
+						// DELIBERATE, BOUNDED GAP (O20 follow-up, recorded
+						// 2026-08-27 review): unlike the AssignStmt case
+						// below, this composite-literal check is NOT
+						// fail-closed — resolvesToTool only flags a Role
+						// field that resolves to a literal or const "tool";
+						// an unresolvable value (a variable, a function
+						// call) is silently treated as "not tool" here.
+						// Extending fail-closed to this site was evaluated
+						// and rejected for THIS task: it would flag two
+						// existing, verified-safe dynamic-role composite
+						// literals — subturn.go's ephemeralSessionStore.
+						// AddMessage(_, role, content string), a generic
+						// session.SessionStore passthrough with no current
+						// caller passing "tool" (grepped repo-wide), and
+						// verifier_adjudication.go's
+						// renderTranscriptEntriesForWindow, whose role
+						// comes from session.TranscriptEntry.Role, which is
+						// documented (daypartition.go) as "user" | "assistant"
+						// | "system" only — tool invocations use a separate
+						// EntryTypeToolCall + ToolCalls field, never
+						// Role:"tool" on a TranscriptEntry. If either of
+						// those invariants ever changes, this gap becomes
+						// exploitable; a future, deliberate fail-closed
+						// extension here should either add narrow,
+						// justified exemptions for those two sites (mirroring
+						// attachHydrateExemptFunc's pattern above) or first
+						// confirm neither invariant still holds.
 						if resolvesToTool(kv.Value) {
 							violations = append(violations, chokePointViolation{
 								file: name, pos: fset.Position(v.Pos()).String(),
