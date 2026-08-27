@@ -241,6 +241,39 @@ func TestProviderList_AnonymousIsRateLimited(t *testing.T) {
 		"the anonymous ceiling must not lock out an authenticated caller")
 }
 
+// TestProviderList_EnvBearerTokenCallerIsNotLockedOut guards the C1 gate
+// against over-reach. withOptionalAuth's legacy OMNIPUS_BEARER_TOKEN branch
+// calls the handler with NO UserContextKey on a successful match, so a naive
+// "no user in context => 401" gate would refuse the documented headless/CI
+// deployment mode (an env token with no Gateway.Users rows) on a route that
+// every ordinary withAuth endpoint serves it happily.
+//
+// The wrong token must still be refused, so this pins both directions.
+func TestProviderList_EnvBearerTokenCallerIsNotLockedOut(t *testing.T) {
+	api, _ := newAuthMethodOnboardingAPI(t)
+	completeOnboarding(t, api)
+	t.Setenv("OMNIPUS_BEARER_TOKEN", "headless-ci-token")
+
+	listWithAuthHeader := func(header string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/providers", nil)
+		if header != "" {
+			req.Header.Set("Authorization", header)
+		}
+		req = req.WithContext(context.WithValue(req.Context(),
+			ctxkey.ConfigContextKey{}, api.agentLoop.GetConfig()))
+		w := httptest.NewRecorder()
+		api.HandleProviders(w, req)
+		return w
+	}
+
+	assert.Equal(t, http.StatusOK, listWithAuthHeader("Bearer headless-ci-token").Code,
+		"an env-token principal is authenticated and must be served")
+	assert.Equal(t, http.StatusUnauthorized, listWithAuthHeader("Bearer wrong-token").Code,
+		"a non-matching bearer token must not pass the gate")
+	assert.Equal(t, http.StatusUnauthorized, listWithAuthHeader("").Code,
+		"no credential at all must still be 401")
+}
+
 // ---------------------------------------------------------------------------
 // M3 — the FR-050 gate failed OPEN
 // ---------------------------------------------------------------------------

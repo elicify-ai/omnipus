@@ -388,11 +388,51 @@ func (a *restAPI) hasAuthenticationAuthority(r *http.Request) bool {
 	return strings.TrimSpace(os.Getenv("OMNIPUS_BEARER_TOKEN")) != ""
 }
 
+// requestPrincipalAuthenticated reports whether the request carries a real
+// authenticated principal.
+//
+// UserContextKey covers every identity withOptionalAuth resolves: a bearer
+// token matching a Gateway.Users row or a CLI token, and the SPA's
+// omnipus-session cookie.
+//
+// The env-token check covers the one principal withOptionalAuth accepts
+// WITHOUT putting anything in the context. Its legacy OMNIPUS_BEARER_TOKEN
+// branch calls `handler(w, r)` on a successful constant-time match — the
+// caller is authenticated, but structurally indistinguishable downstream from
+// an anonymous one. checkBearerAuth (auth.go) treats that same token as a
+// valid admin principal for every withAuth route, so without this check the
+// documented headless/CI deployment mode (OMNIPUS_BEARER_TOKEN with no
+// Gateway.Users rows — CLAUDE.md's credential-provisioning section) would be
+// refused by an authorization gate on an optional-auth route while sailing
+// through every ordinary one. Recognising a credential the gateway already
+// accepts is not a widening: an anonymous caller has no token to present, and
+// the comparison is constant-time.
+//
+// dev_mode_bypass is deliberately NOT an authority here. It is an
+// authentication BYPASS, and the project's own RequireNotBypass middleware
+// establishes that a bypassed request gets LESS access on high-blast-radius
+// routes, never more.
+func (a *restAPI) requestPrincipalAuthenticated(r *http.Request) bool {
+	if r.Context().Value(UserContextKey{}) != nil {
+		return true
+	}
+	envToken := strings.TrimSpace(os.Getenv("OMNIPUS_BEARER_TOKEN"))
+	if envToken == "" {
+		return false
+	}
+	raw, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+	if !ok {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(raw), []byte(envToken)) == 1
+}
+
 // requireAuthOutsideOnboarding is the shared gate for the provider routes that
 // FR-050 makes reachable pre-auth. It writes 401 and returns false when the
-// caller is anonymous and the pre-auth window is closed (or of unknown state).
+// caller has no authenticated principal and the pre-auth window is closed (or
+// of unknown state).
 func (a *restAPI) requireAuthOutsideOnboarding(w http.ResponseWriter, r *http.Request) bool {
-	if r.Context().Value(UserContextKey{}) != nil {
+	if a.requestPrincipalAuthenticated(r) {
 		return true
 	}
 	if a.preAuthOnboardingWindowOpen(r) {

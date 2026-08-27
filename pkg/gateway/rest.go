@@ -6017,7 +6017,11 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 		if !a.requireAuthOutsideOnboarding(w, r) {
 			return
 		}
-		authed := r.Context().Value(UserContextKey{}) != nil
+		// `authed` decides the row REDUCTION below, and must recognise the
+		// same principals the gate above accepted — otherwise an
+		// env-token-authenticated headless caller would pass the gate and
+		// then be served the anonymous, redacted rows.
+		authed := a.requestPrincipalAuthenticated(r)
 		if !authed {
 			// Pre-onboarding anonymous reads get a ceiling; this branch fans
 			// out to a live upstream /models fetch per configured provider.
