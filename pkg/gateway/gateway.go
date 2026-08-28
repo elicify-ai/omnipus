@@ -1941,6 +1941,47 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 			"source", godModeSource)
 	}
 
+	// ADR-067 T067-07: boot the ONE provider catalog for this process. Boot
+	// performs no network I/O — it parses the embedded snapshot, reads the
+	// persisted last-known-good from $OMNIPUS_HOME/providers_catalog.json,
+	// and serves whichever is valid and newest (E6). It never fails: with
+	// neither usable, the catalog serves nothing, every lookup misses, and
+	// the media path stays optimistic (E7).
+	//
+	// It must happen HERE — before createStartupProvider, not merely before
+	// NewAgentLoop as the comment used to say. createStartupProvider's
+	// providers.CreateProvider resolves agents.defaults.default_model
+	// (ResolveDefaultModelRow, rung 4) against providers.ProviderCatalog(),
+	// which reads back whatever providers.SetCatalog installed. Boot+
+	// SetCatalog previously ran AFTER createStartupProvider: ProviderCatalog()
+	// then always fell back to the lazily-parsed EMBEDDED snapshot, silently
+	// ignoring both the persisted last-known-good and the fact that the
+	// gateway was about to install a richer catalog moments later. A default
+	// model the SPA's picker legitimately offers (from the refreshed
+	// providers_catalog.json, or a live provider probe newer than the
+	// embedded snapshot) would then boot-fail with "default model ... not
+	// found in providers" even though the very next lines of this function
+	// would have resolved it correctly. Moving the boot here makes
+	// createStartupProvider — like NewAgentLoop and its ADR-066
+	// ResolveWindow rung 5 — see the actually-installed catalog instead of
+	// the embedded-only fallback.
+	//
+	// The startup pull and the 24 h ticker are NOT started here; they start
+	// after the listener is bound (see setupAndStartServices).
+	providerCatalog := catalog.Boot(
+		context.Background(),
+		catalog.EmbeddedSnapshot,
+		catalog.NewGHReleasePuller(),
+		catalog.NewFileStore(homePath),
+		catalogLogAdapter{},
+	)
+	agent.SetWindowCatalog(providerCatalog)
+	// ADR-067 FR-012: the provider FACTORY dispatches on the protocol this
+	// same document carries, so it must read the same instance — otherwise
+	// the gateway would resolve windows from the pulled document while
+	// constructing transports from the embedded snapshot.
+	providers.SetCatalog(providerCatalog)
+
 	// Build the real LLM provider. The test_harness override hook + scripted-
 	// scenario fallback was removed 2026-05-10; tests now run against real
 	// OpenRouter via the configured provider entry.
@@ -2038,35 +2079,6 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// involvement at all. See its doc comment for why this call site — not
 	// coreagent.SeedConfig itself — is where it lives.
 	seedSystemAgentEagerSouls(cfg)
-
-	// ADR-067 T067-07: boot the ONE provider catalog for this process. Boot
-	// performs no network I/O — it parses the embedded snapshot, reads the
-	// persisted last-known-good from $OMNIPUS_HOME/providers_catalog.json,
-	// and serves whichever is valid and newest (E6). It never fails: with
-	// neither usable, the catalog serves nothing, every lookup misses, and
-	// the media path stays optimistic (E7).
-	//
-	// It must happen HERE, before NewAgentLoop, because NewAgentLoop builds
-	// every agent instance and each construction runs ADR-066's ResolveWindow
-	// ladder — whose rung 5 is this catalog. Installing it afterwards would
-	// leave every agent's window resolved from the floor at boot and only
-	// corrected at the next reload.
-	//
-	// The startup pull and the 24 h ticker are NOT started here; they start
-	// after the listener is bound (see setupAndStartServices).
-	providerCatalog := catalog.Boot(
-		context.Background(),
-		catalog.EmbeddedSnapshot,
-		catalog.NewGHReleasePuller(),
-		catalog.NewFileStore(homePath),
-		catalogLogAdapter{},
-	)
-	agent.SetWindowCatalog(providerCatalog)
-	// ADR-067 FR-012: the provider FACTORY dispatches on the protocol this
-	// same document carries, so it must read the same instance — otherwise
-	// the gateway would resolve windows from the pulled document while
-	// constructing transports from the embedded snapshot.
-	providers.SetCatalog(providerCatalog)
 
 	msgBus := bus.NewMessageBus()
 	var agentLoop *agent.AgentLoop
