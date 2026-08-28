@@ -310,6 +310,120 @@ describe('OnboardingWizard — password step', () => {
 })
 
 // =====================================================================
+// Scenario: the admin username/password fields work with password managers
+//
+// A password manager keys a credential-creation prompt off two signals: the
+// field sits inside a real <form>, and its autocomplete token is one the
+// spec defines for that purpose. Per the WHATWG HTML Standard's autofill
+// detail tokens (§ "Autofill detail tokens" — username fields use
+// "username"; a password field used when CREATING an account, and any
+// confirm/repeat field alongside it, both use "new-password"), those are the
+// exact tokens this form must carry. Because this is a hash-router SPA, a
+// real browser form submission (native navigation) would be destructive, so
+// onSubmit must call preventDefault().
+//
+// jsdom has no JS-visible hook for the browser-native "pressing Enter in a
+// text field implicitly submits the form" behaviour (it's UA chrome, not a
+// dispatchable DOM event — confirmed empirically: a raw `keydown`/`keypress`
+// Enter dispatch never fires the form's `submit` listener under jsdom 29).
+// So "Enter-to-submit does the right thing" is verified the only way that's
+// actually meaningful for code under test: (a) each step's form has exactly
+// one ENABLED type="submit" button — the element a real browser's implicit
+// submission targets — and no other button in that form is submit-typed, and
+// (b) driving jsdom's real click-triggered submission algorithm (which,
+// unlike a synthetic `fireEvent.submit`, does exercise the same internal path
+// a real Enter key's implicit submission would) proves onSubmit both fires
+// the validated continue handler AND suppresses the default action.
+// =====================================================================
+
+describe('OnboardingWizard — admin credential fields work with password managers', () => {
+  it('wraps the step 1 username field in a real <form>', async () => {
+    await renderWizard()
+    const usernameInput = screen.getByLabelText(/username/i)
+    const form = usernameInput.closest('form')
+    expect(form).not.toBeNull()
+    expect(form?.tagName).toBe('FORM')
+  })
+
+  it('wraps the step 2 password + confirm fields in the same real <form>', async () => {
+    await renderWizard()
+    await advanceNameToPassword()
+    const passwordInput = screen.getByLabelText(/^password$/i)
+    const confirmInput = screen.getByLabelText(/confirm password/i)
+    const form = passwordInput.closest('form')
+    expect(form).not.toBeNull()
+    expect(form?.tagName).toBe('FORM')
+    // Both credential fields must live in the SAME form — a manager sees
+    // them as separate credential prompts otherwise.
+    expect(confirmInput.closest('form')).toBe(form)
+  })
+
+  it('sets the WHATWG-spec autofill tokens on username and password fields', async () => {
+    await renderWizard()
+    expect(screen.getByLabelText(/username/i)).toHaveAttribute('autocomplete', 'username')
+    await advanceNameToPassword()
+    expect(screen.getByLabelText(/^password$/i)).toHaveAttribute('autocomplete', 'new-password')
+    expect(screen.getByLabelText(/confirm password/i)).toHaveAttribute('autocomplete', 'new-password')
+  })
+
+  it('each credential-step form has exactly one enabled submit button, so Enter reaches the right handler', async () => {
+    await renderWizard()
+    fireEvent.change(screen.getByLabelText(/username/i), { target: { value: 'admin' } })
+    let form = screen.getByLabelText(/username/i).closest('form') as HTMLFormElement
+    let submitButtons = within(form)
+      .getAllByRole('button')
+      .filter((b) => b.getAttribute('type') === 'submit')
+    expect(submitButtons).toHaveLength(1)
+    expect(submitButtons[0]).toHaveTextContent(/continue/i)
+    expect(submitButtons[0]).not.toBeDisabled()
+
+    await advanceNameToPassword()
+    fireEvent.change(screen.getByLabelText(/^password$/i), { target: { value: 'password123' } })
+    fireEvent.change(screen.getByLabelText(/confirm password/i), { target: { value: 'password123' } })
+    form = screen.getByLabelText(/^password$/i).closest('form') as HTMLFormElement
+    submitButtons = within(form)
+      .getAllByRole('button')
+      .filter((b) => b.getAttribute('type') === 'submit')
+    expect(submitButtons).toHaveLength(1)
+    expect(submitButtons[0]).toHaveTextContent(/continue/i)
+    expect(submitButtons[0]).not.toBeDisabled()
+    // Back is a real step-navigation control, not a credential submit — it
+    // must not race the Continue handler when Enter is pressed.
+    expect(within(form).getByRole('button', { name: /back/i })).toHaveAttribute('type', 'button')
+  })
+
+  it('submitting step 1 runs the validated continue handler without a native page navigation', async () => {
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
+    try {
+      await renderWizard()
+      fireEvent.change(screen.getByLabelText(/username/i), { target: { value: 'admin' } })
+      fireEvent.click(screen.getByRole('button', { name: /continue/i }))
+      await waitFor(() => screen.getByText(/set your password/i))
+      const written = stderrSpy.mock.calls.map((c) => String(c[0])).join('')
+      expect(written).not.toMatch(/HTMLFormElement.*requestSubmit/i)
+    } finally {
+      stderrSpy.mockRestore()
+    }
+  })
+
+  it('submitting step 2 runs the validated continue handler without a native page navigation', async () => {
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
+    try {
+      await renderWizard()
+      await advanceNameToPassword()
+      fireEvent.change(screen.getByLabelText(/^password$/i), { target: { value: 'password123' } })
+      fireEvent.change(screen.getByLabelText(/confirm password/i), { target: { value: 'password123' } })
+      fireEvent.click(screen.getByRole('button', { name: /continue/i }))
+      await waitFor(() => screen.getByText(/add a model key/i))
+      const written = stderrSpy.mock.calls.map((c) => String(c[0])).join('')
+      expect(written).not.toMatch(/HTMLFormElement.*requestSubmit/i)
+    } finally {
+      stderrSpy.mockRestore()
+    }
+  })
+})
+
+// =====================================================================
 // Scenario: Provider selection (Step 3)
 // =====================================================================
 // =====================================================================
