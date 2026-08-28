@@ -17,8 +17,9 @@ properties:
   name:    { type: text }
   status:  { type: enum, values: [todo, doing, done] }
   segment: { type: enum, values: [vendor, customer, partner], many: true }
-  count:   { type: number }
-  arr:     { type: money }
+  count:   { type: integer }
+  price:   { type: decimal }
+  when:    { type: date }
 `
 
 func filterSchema(t *testing.T) (*SchemaSet, *Schema) {
@@ -53,10 +54,14 @@ func TestFilter_AbsentIsDistinctAndIncludedByNegation(t *testing.T) {
 	}
 
 	t.Run("FR-007 absent is a distinct state, not a value", func(t *testing.T) {
-		// `status is absent` is true for the absent record and false for every
+		// `status IS NULL` is true for the absent record and false for every
 		// record that holds a value — including the one holding a value that
 		// does not conform.
-		f := Filter{Property: "status", Op: OpIsAbsent}
+		//
+		// `IS NULL` replaces the invented `is_absent` and keeps its exemption
+		// (FR-022b): it is one of the two operators absence does not make false.
+		f := Filter{Property: "status", Op: OpIsNull}
+		notNull := Filter{Property: "status", Op: OpIsNotNull}
 		for _, tc := range []struct {
 			rec  Record
 			want bool
@@ -68,43 +73,50 @@ func TestFilter_AbsentIsDistinctAndIncludedByNegation(t *testing.T) {
 			{corrupt, false}, // something IS written there; it is just wrong
 		} {
 			if got := match(t, f, tc.rec).Matched; got != tc.want {
-				t.Fatalf("FR-007: `status is absent` on %s: want %v, got %v", tc.rec.Path, tc.want, got)
+				t.Fatalf("FR-007: `status IS NULL` on %s: want %v, got %v", tc.rec.Path, tc.want, got)
+			}
+			// R-3: IS NOT NULL is the exact complement, at every state.
+			if got := match(t, notNull, tc.rec).Matched; got == tc.want {
+				t.Fatalf("R-3: `status IS NOT NULL` on %s: want %v, got %v", tc.rec.Path, !tc.want, got)
 			}
 		}
 	})
 
 	t.Run("FR-007 absent never equals a value", func(t *testing.T) {
 		// §8 R-2: a comparison where either side is absent is FALSE for every
-		// operator except `is absent`.
+		// operator except `IS NULL` and `IS NOT NULL`.
 		//
-		// The operators listed are those DEFINED for an enum. R-2 is an
-		// EVALUATION rule; whether an operator is defined for the type is a
-		// VALIDATION rule that runs first, so an undefined operator never
-		// reaches R-2 at all. That case is asserted separately below — it must
-		// be REFUSED, which is a stronger outcome than R-2's false.
-		//
-		// This list previously included OpContains, which is not defined for an
-		// enum. It passed only because an undefined operator used to evaluate
-		// to a silent false — the behaviour FR-024 exists to remove.
-		for _, op := range []Operator{OpEqual, OpLess, OpLessOrEqual, OpGreater, OpGreaterOrEqual} {
+		// `<>` IS IN THIS LIST AND IS NOT AN EXCEPTION (R-2, ruled explicitly in
+		// review round 6's C-7). In SQL `x <> 'v'` over a NULL `x` excludes the
+		// row, and ruling R-B adopts SQL's semantics along with its names. The
+		// capability moves one level up, to `Negate` — asserted below.
+		for _, op := range []Operator{OpEqual, OpNotEqual, OpLess, OpLessOrEqual, OpGreater, OpGreaterOrEqual, OpLike} {
 			f := Filter{Property: "status", Op: op, Literal: "done"}
+			if op == OpLike {
+				f.Literal = "done%"
+			}
 			if match(t, f, absent).Matched {
 				t.Fatalf("§8 R-2: `status %s done` must be false when status is absent", op)
 			}
 		}
+		// And `IN`, whose value is a set.
+		if match(t, Filter{Property: "status", Op: OpIn, Literals: []string{"done", "todo"}}, absent).Matched {
+			t.Fatalf("§8 R-2: `status IN (done, todo)` must be false when status is absent")
+		}
 	})
 
 	t.Run("FR-024 an operator undefined for the type is REFUSED, not silently empty", func(t *testing.T) {
-		// `contains` is substring matching on text and whole-element membership
-		// on a list. Neither applies to a scalar enum, so it is not defined
-		// there. Before this was checked, such a filter was accepted and then
-		// every record returned false with one identical complaint attached —
-		// a caller got an empty answer and 5,000 copies of the same problem
-		// instead of one refusal naming what would have worked.
-		f := Filter{Property: "status", Op: OpContains, Literal: "done"}
+		// `LIKE` is a pattern match over text. A date has no pattern form — SQL
+		// only reaches one by coercing the date to a string, and this design
+		// coerces nothing (R-1). Before the disposition was checked at validate
+		// time, such a filter was accepted and then every record returned false
+		// with one identical complaint attached: a caller got an empty answer
+		// and 5,000 copies of the same problem instead of one refusal naming
+		// what would have worked.
+		f := Filter{Property: "when", Op: OpLike, Literal: "2026%"}
 		_, _, err := f.Validate(sc)
 		if err == nil {
-			t.Fatal("`status contains done` on an enum must be refused at validation, not evaluated to an empty result")
+			t.Fatal("`when LIKE 2026%` on a date must be refused at validation, not evaluated to an empty result")
 		}
 		var qe *QueryError
 		if !errors.As(err, &qe) {
@@ -113,24 +125,49 @@ func TestFilter_AbsentIsDistinctAndIncludedByNegation(t *testing.T) {
 		if len(qe.ValidNames) == 0 {
 			t.Fatal("the refusal must NAME the operators that would have worked — that is the whole of FR-024")
 		}
+		// FR-022c: it lists the supported operators, every time.
+		if len(qe.Supported) == 0 {
+			t.Fatal("FR-022c: the refusal must list the supported operators")
+		}
+		for _, want := range []string{string(OpEqual), string(OpLess), string(OpIsNull)} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("the refusal must list %q as available on a date; got %q", want, err.Error())
+			}
+		}
 	})
 
 	t.Run("FR-008 a negative filter INCLUDES the absent record", func(t *testing.T) {
-		// This is the requirement in one assertion. `status is not done` must
+		// This is the requirement in one assertion. `not(status = done)` must
 		// return the record that has no status at all.
 		f := Filter{Property: "status", Op: OpEqual, Negate: true, Literal: "done"}
 
 		if !match(t, f, absent).Matched {
-			t.Fatalf("FR-008: `status != done` must INCLUDE a record whose status is absent")
+			t.Fatalf("FR-008: `not(status = done)` must INCLUDE a record whose status is absent")
 		}
 		if !match(t, f, nullValued).Matched {
 			t.Fatalf("FR-008: an explicitly empty key is absence and must be included too")
 		}
 		if !match(t, f, todo).Matched {
-			t.Fatalf("`status != done` must include a record whose status is todo")
+			t.Fatalf("`not(status = done)` must include a record whose status is todo")
 		}
 		if match(t, f, done).Matched {
-			t.Fatalf("`status != done` must exclude a record whose status IS done")
+			t.Fatalf("`not(status = done)` must exclude a record whose status IS done")
+		}
+
+		// THE DISTINCTION THAT MAKES R-2's C-7 RULING LIVEABLE. The `<>` LEAF
+		// does NOT include the absent record — it is a leaf, and R-2 governs it
+		// like every other operator. `Negate` is a tree. Both are useful and
+		// they are not the same question, which is why the vocabulary keeps
+		// them apart instead of overloading one.
+		leaf := Filter{Property: "status", Op: OpNotEqual, Literal: "done"}
+		if match(t, leaf, absent).Matched {
+			t.Fatalf("R-2/C-7: a `<>` LEAF must NOT include a record whose status is absent")
+		}
+		if !match(t, leaf, todo).Matched {
+			t.Fatalf("`status <> done` must match a record whose status is todo")
+		}
+		if match(t, leaf, done).Matched {
+			t.Fatalf("`status <> done` must not match a record whose status IS done")
 		}
 	})
 
@@ -156,9 +193,10 @@ func TestFilter_AbsentIsDistinctAndIncludedByNegation(t *testing.T) {
 	})
 
 	t.Run("§8 R-4 a non-conforming value is REPORTED and excluded, not swept in", func(t *testing.T) {
-		// `shipped` is not in the declared set. R-4: it is false for every
-		// operator AND the record is added to the problem list. Including it
-		// in a negative filter would be a silent wrong answer.
+		// `shipped` is not in the declared set, not even case-insensitively.
+		// R-4: it is false for every operator AND the record is added to the
+		// problem list. Including it in a negative filter would be a silent
+		// wrong answer.
 		neg := Filter{Property: "status", Op: OpEqual, Negate: true, Literal: "done"}
 		res := match(t, neg, corrupt)
 		if res.Matched {
@@ -206,7 +244,7 @@ func TestFilter_AbsentIsDistinctAndIncludedByNegation(t *testing.T) {
 		if !errors.As(err, &qe) {
 			t.Fatalf("expected a *QueryError; got %T", err)
 		}
-		for _, name := range []string{"name", "status", "segment", "count", "arr"} {
+		for _, name := range []string{"name", "status", "segment", "count", "price"} {
 			if !strings.Contains(err.Error(), name) {
 				t.Fatalf("FR-024 requires the valid property names listed; %q missing from %q", name, err.Error())
 			}
@@ -225,9 +263,19 @@ func TestFilter_AbsentIsDistinctAndIncludedByNegation(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run("FR-011a a literal resolves case-insensitively, and the query still works", func(t *testing.T) {
+		// R-5/R-D: resolving `DONE` TO `done` collapses two spellings into one
+		// value rather than creating a second. A caller who types the value in a
+		// different case gets the records, not a rejection.
+		f := Filter{Property: "status", Op: OpEqual, Literal: "DONE"}
+		if !match(t, f, done).Matched {
+			t.Fatalf("FR-011a: `status = DONE` must match a record whose status is `done`")
+		}
+	})
 }
 
-// TestFilter_ListSemantics covers §8 R-9 and the negation-of-a-list rule.
+// TestFilter_ListSemantics covers §8 R-9 and R-13 in SQL's vocabulary.
 func TestFilter_ListSemantics(t *testing.T) {
 	_, sc := filterSchema(t)
 	both := ParseRecord("both.md", []byte("---\ntype: widget\nsegment: [vendor, customer]\n---\n"))
@@ -243,45 +291,52 @@ func TestFilter_ListSemantics(t *testing.T) {
 		return res
 	}
 
-	t.Run("§8 R-9 contains on a list is whole-element membership", func(t *testing.T) {
-		if !match(t, Filter{Property: "segment", Op: OpContains, Literal: "vendor"}, both).Matched {
-			t.Fatalf("`segment contains vendor` must match [vendor, customer]")
+	t.Run("R-9 `=` against a list is EXACT whole-element membership", func(t *testing.T) {
+		// This is the question the invented `contains` operator could not
+		// answer without a convention nobody had seen. In SQL's vocabulary the
+		// caller chooses: `=` is exact, `LIKE` with `%` is partial.
+		if !match(t, Filter{Property: "segment", Op: OpEqual, Literal: "vendor"}, both).Matched {
+			t.Fatalf("`segment = vendor` must match [vendor, customer]")
 		}
-		if !match(t, Filter{Property: "segment", Op: OpContains, Literal: "customer"}, both).Matched {
+		if !match(t, Filter{Property: "segment", Op: OpEqual, Literal: "customer"}, both).Matched {
 			t.Fatalf("membership must find any element, not only the first")
 		}
-		if match(t, Filter{Property: "segment", Op: OpContains, Literal: "partner"}, both).Matched {
+		if match(t, Filter{Property: "segment", Op: OpEqual, Literal: "partner"}, both).Matched {
 			t.Fatalf("`partner` is not an element of [vendor, customer]")
 		}
 	})
 
-	t.Run("§8 R-13: equality across a list/scalar boundary is REFUSED, once, before any record is read", func(t *testing.T) {
-		// §8's rules about lists are R-9 (`contains` is whole-element
-		// membership) and R-13 (against a `many` property, only `contains` and
-		// `is absent` are defined). Nothing defines `segment = vendor` when
-		// segment is a list, so the query is refused.
+	t.Run("R-9 `IN` against a list is membership in a SET", func(t *testing.T) {
+		if !match(t, Filter{Property: "segment", Op: OpIn, Literals: []string{"partner", "customer"}}, both).Matched {
+			t.Fatalf("`segment IN (partner, customer)` must match [vendor, customer]")
+		}
+		if match(t, Filter{Property: "segment", Op: OpIn, Literals: []string{"partner"}}, both).Matched {
+			t.Fatalf("`segment IN (partner)` must not match [vendor, customer]")
+		}
+		// A single-element array means the same as `=` (FR-022d).
+		single := match(t, Filter{Property: "segment", Op: OpIn, Literals: []string{"vendor"}}, both).Matched
+		equal := match(t, Filter{Property: "segment", Op: OpEqual, Literal: "vendor"}, both).Matched
+		if single != equal {
+			t.Fatalf("FR-022d: a single-element `IN` must mean the same as `=`; got %v vs %v", single, equal)
+		}
+	})
+
+	t.Run("R-13 an ORDERING operator against a list is refused, once, before any record is read", func(t *testing.T) {
+		// R-13 as NARROWED by ruling R-B: most of what it used to refuse now has
+		// a defined answer. The refusal survives only where the question is
+		// genuinely undefined — "is this list greater than `vendor`?" has no
+		// answer in any vocabulary.
 		//
-		// This sub-test used to assert the refusal arrived as a per-record
-		// ComparisonProblem — `match()` succeeded and the verdict came back
-		// inside the MatchResult. That WAS the behaviour, and it was the defect:
-		// a vault of 5,000 widgets produced 5,000 identical complaints and an
-		// empty answer instead of one rejection naming the remedy. The refusal
-		// is now raised by Filter.Validate before the record is touched
-		// (filter_r13_validate_test.go owns that guarantee in full); what this
-		// sub-test keeps is the LIST-SEMANTICS half of it.
-		//
-		// The load-bearing part remains the NEGATIVE case. A refused comparison
-		// must NOT be re-included by negation: `segment != vendor` on
-		// [vendor, customer] answering true would be a silent wrong answer
-		// about a record that IS a vendor. An up-front refusal is strictly
-		// stronger than the old exclusion — no answer is produced at all.
+		// The load-bearing part is the NEGATIVE case. A refused comparison must
+		// NOT be re-included by negation: `not(segment > vendor)` answering true
+		// would be a confident answer to a question nobody can state.
 		for _, f := range []Filter{
-			{Property: "segment", Op: OpEqual, Negate: true, Literal: "vendor"},
-			{Property: "segment", Op: OpEqual, Literal: "vendor"},
+			{Property: "segment", Op: OpGreater, Negate: true, Literal: "vendor"},
+			{Property: "segment", Op: OpGreater, Literal: "vendor"},
 		} {
 			res, err := f.Match(sc, both)
 			if err == nil {
-				t.Fatalf("R-13: `segment eq vendor` (negate=%v) must be refused; got Matched=%v with %d comparison problems",
+				t.Fatalf("R-13: `segment > vendor` (negate=%v) must be refused; got Matched=%v with %d comparison problems",
 					f.Negate, res.Matched, len(res.ComparisonProblems))
 			}
 			if res.Matched {
@@ -292,7 +347,7 @@ func TestFilter_ListSemantics(t *testing.T) {
 				t.Fatalf("expected a *QueryError; got %T: %v", err, err)
 			}
 			// FR-024's shape: the rejection names the property and the remedy.
-			for _, want := range []string{"segment", string(OpContains)} {
+			for _, want := range []string{"segment", string(OpEqual), string(OpIn), string(OpLike)} {
 				if !strings.Contains(err.Error(), want) {
 					t.Fatalf("the refusal must name %q; got %q", want, err.Error())
 				}
@@ -312,9 +367,9 @@ func TestFilter_ListSemantics(t *testing.T) {
 		scalar.Many = false
 		right := PropertyValue{Property: &scalar, State: StatePresent,
 			Values: []TypedValue{{Type: TypeEnum, Raw: "vendor", Enum: scalar.Values[0]}}}
-		got, probs := Comparator{}.Evaluate(OpEqual, left, right)
+		got, probs := Comparator{}.Evaluate(OpGreater, left, right)
 		if got {
-			t.Fatalf("R-13: the oracle must not answer `list eq scalar` true")
+			t.Fatalf("R-13: the oracle must not answer `list > scalar` true")
 		}
 		if len(probs) != 1 || probs[0].Code != CompareArityNotDefined {
 			t.Fatalf("expected one %q from the oracle, got %v", CompareArityNotDefined, problemCodes(probs))
@@ -322,15 +377,20 @@ func TestFilter_ListSemantics(t *testing.T) {
 	})
 
 	t.Run("R-3 an empty list is a value, not absence", func(t *testing.T) {
-		res := match(t, Filter{Property: "segment", Op: OpIsAbsent}, empty)
+		res := match(t, Filter{Property: "segment", Op: OpIsNull}, empty)
 		if res.Matched {
-			t.Fatalf("§8 R-3: an empty list is a VALUE, so `is absent` must be false")
+			t.Fatalf("§8 R-3: an empty list is a VALUE, so `IS NULL` must be false")
 		}
 		if res.State != StatePresent {
 			t.Fatalf("expected %v, got %v", StatePresent, res.State)
 		}
-		if !match(t, Filter{Property: "segment", Op: OpIsAbsent}, none).Matched {
+		if !match(t, Filter{Property: "segment", Op: OpIsNull}, none).Matched {
 			t.Fatalf("a missing key IS absent")
+		}
+		// And an empty list matches no element-wise predicate: it contains
+		// nothing (R-9), which is a different fact from being absent.
+		if match(t, Filter{Property: "segment", Op: OpEqual, Literal: "vendor"}, empty).Matched {
+			t.Fatalf("R-9: an empty list contains nothing")
 		}
 	})
 }
@@ -340,7 +400,7 @@ func TestFilter_ListSemantics(t *testing.T) {
 // comparator reachable only from a test.
 func TestCompare_ThroughTheRealFilterPath(t *testing.T) {
 	_, sc := filterSchema(t)
-	three := ParseRecord("three.md", []byte("---\ntype: widget\nname: n\ncount: 3\n---\n"))
+	three := ParseRecord("three.md", []byte("---\ntype: widget\nname: n\ncount: 3\nprice: 2.50\n---\n"))
 
 	match := func(t *testing.T, f Filter, rec Record) MatchResult {
 		t.Helper()
@@ -363,22 +423,12 @@ func TestCompare_ThroughTheRealFilterPath(t *testing.T) {
 		if !match(t, Filter{Property: "count", Op: OpEqual, Literal: "3"}, three).Matched {
 			t.Fatalf("`count = 3` must match")
 		}
-	})
-
-	t.Run("R-6 a cross-currency comparison is refused and reported, not answered", func(t *testing.T) {
-		eur := ParseRecord("eur.md", []byte("---\ntype: widget\narr: 100.00 EUR\n---\n"))
-		res := match(t, Filter{Property: "arr", Op: OpGreater, Literal: "1.00 SGD"}, eur)
-		if res.Matched {
-			t.Fatalf("§8 R-6: money compares only within one currency")
-		}
-		if len(res.ComparisonProblems) == 0 {
-			t.Fatalf("the refusal must reach the caller; ADR-068 O-2 forbids conversion, so silence here is the defect")
-		}
-		if got := res.ComparisonProblems[0].Code; got != CompareCrossCurrency {
-			t.Fatalf("expected %q, got %q", CompareCrossCurrency, got)
-		}
-		if !res.Matched && len(res.ComparisonProblems[0].Currencies) != 2 {
-			t.Fatalf("the problem must name the currencies present; got %v", res.ComparisonProblems[0].Currencies)
+		// R-1's other worked example: an integer literal written with a decimal
+		// point still compares numerically, because integer and decimal are ONE
+		// declared type for comparison. (The literal is parsed against the
+		// INTEGER property, so this also asserts the parser accepts it.)
+		if !match(t, Filter{Property: "price", Op: OpEqual, Literal: "2.500"}, three).Matched {
+			t.Fatalf("R-1/FR-013: `price = 2.500` must match a price of 2.50 — scale is storage, not identity")
 		}
 	})
 
@@ -387,16 +437,16 @@ func TestCompare_ThroughTheRealFilterPath(t *testing.T) {
 		// come from one declared property, which is FR-009 doing its job. So
 		// this drives the oracle directly, with differently-typed operands.
 		//
-		// The PAIRS here are chosen deliberately. An earlier version used only
-		// text-vs-number, and that assertion passed even with R-1 deleted:
-		// text has no ordering defined, so the comparison was refused for a
-		// different reason and the test could not tell the two apart. Each pair
-		// below is one where removing R-1 yields a confident WRONG answer
-		// rather than an incidental refusal — number-vs-money reads money's
-		// zero-valued Number field and reports 2 > 0.
+		// THE PAIRS ARE CHOSEN SO THAT DELETING R-1 GIVES A CONFIDENT WRONG
+		// ANSWER rather than an incidental refusal. That mattered before and it
+		// matters more now: ruling R-D gave TEXT a lexical ordering, so a
+		// text-vs-number pair no longer fails for the accidental reason that
+		// text had no order. Each pair below dispatches on the LEFT operand's
+		// domain and then reads a ZERO-VALUED field off the right one — an empty
+		// string, a zero instant — and answers with total confidence.
 		count, _ := sc.Property("count")
 		name, _ := sc.Property("name")
-		arr, _ := sc.Property("arr")
+		when, _ := sc.Property("when")
 		status, _ := sc.Property("status")
 
 		parse := func(p *Property, text string) TypedValue {
@@ -412,16 +462,28 @@ func TestCompare_ThroughTheRealFilterPath(t *testing.T) {
 			name string
 			a, b TypedValue
 		}{
-			{"text vs number", parse(name, "3"), parse(count, "2")},
-			{"number vs money", parse(count, "2"), parse(arr, "1.00 EUR")},
-			{"money vs number", parse(arr, "1.00 EUR"), parse(count, "2")},
-			{"enum vs number", parse(status, "doing"), parse(count, "2")},
-			{"number vs enum", parse(count, "2"), parse(status, "doing")},
+			{"text vs integer", parse(name, "3"), parse(count, "2")},
+			{"integer vs text", parse(count, "2"), parse(name, "3")},
+			{"text vs date", parse(name, "zzz"), parse(when, "2026-01-01")},
+			{"date vs text", parse(when, "2026-01-01"), parse(name, "zzz")},
+			{"date vs integer", parse(when, "2026-01-01"), parse(count, "2")},
+			{"enum vs integer", parse(status, "doing"), parse(count, "2")},
+			{"integer vs enum", parse(count, "2"), parse(status, "doing")},
 		}
 		for _, pair := range pairs {
 			if cmp, ok := Compare(pair.a, pair.b); ok {
 				t.Fatalf("§8 R-1: %s must not compare; got (%d, true)", pair.name, cmp)
 			}
+		}
+
+		// ...and the TWO pairs R-1 unifies MUST compare, or the rule has been
+		// applied as a blanket type check instead of as the rule it is.
+		price, _ := sc.Property("price")
+		if cmp, ok := Compare(parse(count, "3"), parse(price, "3.0")); !ok || cmp != 0 {
+			t.Fatalf("R-1: integer 3 and decimal 3.0 are ONE declared type; got (%d, %v)", cmp, ok)
+		}
+		if cmp, ok := Compare(parse(name, "done"), parse(status, "done")); !ok || cmp != 0 {
+			t.Fatalf("R-1: text `done` and enum `done` are ONE declared type; got (%d, %v)", cmp, ok)
 		}
 	})
 

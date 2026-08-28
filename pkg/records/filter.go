@@ -468,23 +468,27 @@ func (f Filter) Validate(schema *Schema) (*Property, []TypedValue, error) {
 	}
 	if !operatorDefinedForType[prop.Type][f.Op] {
 		return nil, nil, &QueryError{
-			Property:   f.Property,
-			Reason:     fmt.Sprintf("operator %q is not defined for a %s property", string(f.Op), prop.Type),
+			Property: f.Property,
+			// The PROPERTY is named as well as the type, because FR-024's shape
+			// is "reject, and say what would have worked" and a caller with a
+			// dozen leaves in a filter tree cannot act on "a relation property".
+			Reason:     fmt.Sprintf("operator %q is not defined for %q, which is a %s property", string(f.Op), f.Property, prop.Type),
 			ValidNames: definedOperatorNames(prop.Type),
 			Supported:  definedOperatorNames(prop.Type),
 			Remedy:     unsupportedRemedy(f.Op),
 		}
 	}
 	if prop.Many && isOrderingOperator(f.Op) {
+		remedies := elementWiseOperatorNames(prop.Type)
 		return nil, nil, &QueryError{
 			Property: f.Property,
 			// The oracle's own R-13 sentence, reused verbatim so the up-front
 			// refusal and the per-record backstop cannot describe one rule in
 			// two different ways.
 			Reason: arityRefusalDetail(f.Op,
-				PropertyValue{Property: prop}, PropertyValue{Property: prop}),
-			ValidNames: []string{string(OpEqual), string(OpNotEqual), string(OpIn), string(OpLike), string(OpIsNull), string(OpIsNotNull)},
-			Supported:  []string{string(OpEqual), string(OpNotEqual), string(OpIn), string(OpLike), string(OpIsNull), string(OpIsNotNull)},
+				PropertyValue{Property: prop}, PropertyValue{Property: prop}, remedies),
+			ValidNames: remedies,
+			Supported:  remedies,
 		}
 	}
 
@@ -516,6 +520,26 @@ func (f Filter) Validate(schema *Schema) (*Property, []TypedValue, error) {
 	// more actionable than N copies of the same complaint, and it is the posture
 	// FR-024 takes for every other malformed input. Recorded here rather than
 	// left to be discovered as a divergence.
+	// A `LIKE` PATTERN IS NOT A VALUE OF THE DECLARED TYPE, and this is the one
+	// place the two must be told apart.
+	//
+	// `status LIKE 'do%'` against an `enum` declaring `todo, doing, done` is a
+	// legitimate query — R-9's "LIKE matches an element by pattern", R-1's
+	// unification of text with enum — but `do%` is not one of the declared
+	// values and never will be. Running the pattern through ParseValue rejected
+	// it as an impermissible enum value, which refused the query for a reason
+	// that was not true: nothing was wrong with it.
+	//
+	// So the pattern is carried as TEXT. That does not weaken R-12 (one set of
+	// rules whatever the value's provenance): the pattern is not a value being
+	// compared, it is the shape values are compared AGAINST, and SQL's `LIKE`
+	// takes a pattern string on the right for the same reason. The disposition
+	// check above has already refused `LIKE` for every type that has no pattern
+	// form, so this branch is only ever reached for text and enum.
+	if f.Op == OpLike {
+		return prop, []TypedValue{{Type: TypeText, Raw: f.Literal, Text: f.Literal}}, nil
+	}
+
 	literals := f.literalTexts()
 	parsed := make([]TypedValue, 0, len(literals))
 	for _, text := range literals {
@@ -638,7 +662,7 @@ func (f Filter) MatchWith(c Comparator, schema *Schema, rec Record) (MatchResult
 	left := ResolveProperty(rec, prop)
 	res := MatchResult{State: left.State, Problems: left.Findings}
 
-	right := literalOperand(prop, literals)
+	right := literalOperand(prop, f.Op, literals)
 	answer, cproblems := c.Evaluate(f.Op, left, right)
 	res.ComparisonProblems = cproblems
 
@@ -699,7 +723,19 @@ func (f Filter) MatchWith(c Comparator, schema *Schema, rec Record) (MatchResult
 // No literal at all (the `IS NULL` case, which reads only the left operand)
 // yields an absent operand rather than a zero PropertyValue, so nothing
 // downstream has to tolerate a nil Property.
-func literalOperand(prop *Property, literals []TypedValue) PropertyValue {
+func literalOperand(prop *Property, op Operator, literals []TypedValue) PropertyValue {
+	if op == OpLike {
+		// The pattern side is TEXT, never the declared type — see Validate's
+		// note. Carrying it as an enum operand would put it in front of R-5's
+		// declared-membership check, which a pattern can never satisfy. R-1
+		// makes text and enum ONE comparison type, so the comparison itself is
+		// unaffected.
+		pattern := &Property{Name: prop.Name, Type: TypeText, RecordType: prop.RecordType}
+		if len(literals) == 0 {
+			return PropertyValue{Property: pattern, State: StateAbsent}
+		}
+		return PropertyValue{Property: pattern, State: StatePresent, Values: append([]TypedValue(nil), literals...)}
+	}
 	clone := *prop
 	clone.Many = len(literals) > 1
 	if len(literals) == 0 {

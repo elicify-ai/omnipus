@@ -447,9 +447,20 @@ func TestPropertyIndexGuard_NoCallerSwallowsTheRefusal(t *testing.T) {
 
 	sort.Slice(violations, func(i, j int) bool { return violations[i].Pos < violations[j].Pos })
 	for _, v := range violations {
-		t.Errorf("%s: %s() swallows the properties-index refusal.\n    %s.\n"+
-			"    Return the error unchanged (or wrapped with %%w). If this call really is "+
-			"handled and the guard cannot see it, put %s on the call line.",
+		// The message has to survive being read by someone who has never heard
+		// of ADR-068 and did not expect a test in pkg/records to fail their
+		// change. It therefore says what they did, why it matters, what to type
+		// instead, and where the rule comes from — in that order.
+		t.Errorf("%s: %s() swallows the properties-index refusal.\n"+
+			"    WHAT: %s.\n"+
+			"    WHY:  on linux/mipsle there is no properties index, so this path must tell the "+
+			"operator the query cannot be answered. Returning a zero value tells them instead that "+
+			"there is nothing to find, which is a confidently wrong answer.\n"+
+			"    FIX:  return the error unchanged, or wrapped with %%w so errors.Is still finds it.\n"+
+			"    RULE: ADR-068 D16.2a / spec FR-020h. The seam is records.RequirePropertyIndex "+
+			"(pkg/records/propindex_stub.go); this guard is pkg/records/propindex_caller_guard_test.go.\n"+
+			"    If this call really is handled and the guard cannot see the shape, put %s on the "+
+			"call line — it is greppable on purpose, so keep it rare.",
 			v.Pos, v.Caller, v.Reason, guardEscapeComment)
 	}
 	t.Logf("scanned %d non-test Go files; %d contain a %s call site; %d violations",

@@ -22,20 +22,21 @@ import (
 //
 // The second is the one a caller experiences. `Filter.Validate` used to guard
 // the operator/type disposition with `if !prop.Many && !operatorDefinedForType…`
-// — and that `!prop.Many` meant a MANY property skipped the check entirely.
-// `gt` against a `many text` property validated clean, and then every record
-// produced one identical CompareArityNotDefined problem: 5,000 copies of the
-// same complaint and an empty result set, which is precisely the defect FR-024
-// exists to end.
-//
-// The comment sitting above that guard claimed "R-13 owns the arity dimension;
-// this owns the type dimension. Both refuse up front rather than per record."
-// The first half of that sentence was true, the second was false, and a comment
-// asserting a guarantee nothing implements is worse than no comment at all.
+// — and that `!prop.Many` meant a MANY property skipped the check entirely. An
+// ordering operator against a `many text` property validated clean, and then
+// every record produced one identical CompareArityNotDefined problem: 5,000
+// copies of the same complaint and an empty result set, which is precisely the
+// defect FR-024 exists to end.
 //
 // The per-record refusal is still there and still tested (compare_r13_test.go)
 // — defence in depth for anyone driving the Comparator directly. It is no
 // longer the primary surface.
+//
+// R-13's REFUSAL SET SHRANK under ruling R-B: only the four ORDERING operators
+// are refused against a list now. Everything else is defined element-wise, and
+// the second test below is what stops the fix being "refuse everything against a
+// list", which would pass every assertion in the first while making list queries
+// impossible.
 // ---------------------------------------------------------------------------
 
 const r13ValidateFixture = `
@@ -46,12 +47,12 @@ properties:
   notes:   { type: text, many: true }
   status:  { type: enum, values: [todo, doing, done] }
   segment: { type: enum, values: [vendor, customer, partner], many: true }
-  count:   { type: number }
-  sizes:   { type: number, many: true }
+  count:   { type: integer }
+  sizes:   { type: integer, many: true }
+  amounts: { type: decimal, many: true }
   when:    { type: date, many: true }
   owners:  { type: person, many: true }
   linked:  { type: relation, to: widget, many: true }
-  budgets: { type: money, many: true }
 `
 
 func r13ValidateSchema(t *testing.T) *Schema {
@@ -64,17 +65,17 @@ func r13ValidateSchema(t *testing.T) *Schema {
 	return sc
 }
 
-// manyProperties is every `many` property in the fixture, one per declared
-// type, so the refusal is proven for the whole type axis rather than for text
-// alone.
+// manyProperties is every `many` property in the fixture, covering every
+// declared type that can hold one, so the refusal is proven for the whole type
+// axis rather than for text alone.
 var manyProperties = map[string]PropertyType{
 	"notes":   TypeText,
 	"segment": TypeEnum,
-	"sizes":   TypeNumber,
+	"sizes":   TypeInteger,
+	"amounts": TypeDecimal,
 	"when":    TypeDate,
 	"owners":  TypePerson,
 	"linked":  TypeRelation,
-	"budgets": TypeMoney,
 }
 
 // literalFor is a value that PARSES for the property's declared type, so the
@@ -84,24 +85,23 @@ var manyProperties = map[string]PropertyType{
 var literalFor = map[PropertyType]string{
 	TypeText:     "anything",
 	TypeEnum:     "vendor",
-	TypeNumber:   "3",
+	TypeInteger:  "3",
+	TypeDecimal:  "3.5",
 	TypeDate:     "2026-01-01",
 	TypePerson:   "[[Ada Lovelace]]",
 	TypeRelation: "[[Acme Ltd]]",
-	TypeMoney:    "10.00 USD",
 }
 
-// TestFilter_R13_RefusedOnceAtValidateTime is the regression for the finding
-// above: the refusal must happen ONCE, at validate time, before any record is
-// touched — not once per record.
-func TestFilter_R13_RefusedOnceAtValidateTime(t *testing.T) {
+// TestFilter_R13_OrderingRefusedOnceAtValidateTime is the regression for the
+// finding above: the refusal must happen ONCE, at validate time, before any
+// record is touched — not once per record.
+func TestFilter_R13_OrderingRefusedOnceAtValidateTime(t *testing.T) {
 	sc := r13ValidateSchema(t)
 
-	// R-13: against a `many` property only `contains` and `is absent` are
-	// defined. Everything else is refused. `is absent` is exempt because R-3
-	// makes it the one operator absence does not answer false, and it asks
-	// about the PROPERTY, not about any element.
-	refused := []Operator{OpEqual, OpLess, OpLessOrEqual, OpGreater, OpGreaterOrEqual}
+	// R-13 as narrowed: only the four ORDERING operators are refused against a
+	// `many` property. "Is this list greater than `vendor`?" has no answer in
+	// any vocabulary; everything else does.
+	refused := []Operator{OpLess, OpLessOrEqual, OpGreater, OpGreaterOrEqual}
 
 	for name, typ := range manyProperties {
 		for _, op := range refused {
@@ -109,11 +109,11 @@ func TestFilter_R13_RefusedOnceAtValidateTime(t *testing.T) {
 				t.Run(name+"/"+string(op), func(t *testing.T) {
 					f := Filter{Property: name, Op: op, Negate: negate, Literal: literalFor[typ]}
 
-					prop, lit, err := f.Validate(sc)
+					prop, lits, err := f.Validate(sc)
 					if err == nil {
 						t.Fatalf("R-13 VIOLATED: `%s %s` against a `many %s` property validated clean "+
-							"(prop=%v literal=%v). It must be refused ONCE here, not reported once per record.",
-							name, op, typ, prop != nil, lit != nil)
+							"(prop=%v literals=%d). It must be refused ONCE here, not reported once per record.",
+							name, op, typ, prop != nil, len(lits))
 					}
 
 					var qe *QueryError
@@ -121,18 +121,36 @@ func TestFilter_R13_RefusedOnceAtValidateTime(t *testing.T) {
 						t.Fatalf("expected a *QueryError so the caller can read the valid names; got %T: %v", err, err)
 					}
 					msg := err.Error()
-					// FR-024's shape: name the property and name the remedy.
+					// FR-024's shape: name the property, the operator, and the
+					// remedy — all three, because two of them leave the caller
+					// with a complaint and no fix.
 					if !strings.Contains(msg, name) {
 						t.Fatalf("the refusal must NAME the property so the caller can find it.\ngot: %s", msg)
 					}
-					if !strings.Contains(msg, string(OpContains)) {
-						t.Fatalf("the refusal must name the REMEDY (`contains`) — that is what R-13 exists for.\ngot: %s", msg)
-					}
-					if !strings.Contains(msg, string(OpIsAbsent)) {
-						t.Fatalf("`is absent` is the OTHER operator R-13 defines against a list; the refusal must list it too.\ngot: %s", msg)
-					}
 					if !strings.Contains(msg, string(op)) {
 						t.Fatalf("the refusal must name the operator that was rejected.\ngot: %s", msg)
+					}
+					// The remedy list is the type's OWN element-wise
+					// disposition, not R-13's three examples. Against a `many
+					// text` property that is `=`, `<>`, `LIKE`, `IN`; against a
+					// `many date` it is the same minus `LIKE`, because a date
+					// has no pattern form and naming `LIKE` would send the
+					// caller to an operator that refuses them a second time.
+					//
+					// Deriving it here rather than hardcoding it is what makes
+					// this assertion hold for BOTH refusal paths: relation and
+					// person have no ordering at all, so their refusal comes
+					// from the TYPE disposition one step earlier and lists the
+					// same set.
+					for _, remedy := range elementWiseOperatorNames(typ) {
+						if !strings.Contains(msg, remedy) {
+							t.Fatalf("the refusal must name the REMEDY %q — every operator that WOULD have worked.\ngot: %s",
+								remedy, msg)
+						}
+					}
+					if strings.Contains(msg, string(OpLike)) && !operatorDefinedForType[typ][OpLike] {
+						t.Fatalf("the refusal names `LIKE` as a remedy for a %s, which does not define it; a remedy that does not work is worse than none.\ngot: %s",
+							typ, msg)
 					}
 				})
 			}
@@ -140,31 +158,61 @@ func TestFilter_R13_RefusedOnceAtValidateTime(t *testing.T) {
 	}
 }
 
-// TestFilter_R13_ContainsAndIsAbsentStillValidate is the converse, and it is
+// TestFilter_R13_ElementWiseOperatorsStillValidate is the converse, and it is
 // the half that stops the fix from being "refuse everything against a list".
-// A refusal that also refuses the two operators R-13 DEFINES would pass every
-// assertion above while making list queries impossible.
-func TestFilter_R13_ContainsAndIsAbsentStillValidate(t *testing.T) {
+func TestFilter_R13_ElementWiseOperatorsStillValidate(t *testing.T) {
 	sc := r13ValidateSchema(t)
 
 	for name, typ := range manyProperties {
-		t.Run(name+"/contains", func(t *testing.T) {
-			f := Filter{Property: name, Op: OpContains, Literal: literalFor[typ]}
-			prop, lit, err := f.Validate(sc)
+		lit := literalFor[typ]
+		t.Run(name+"/=", func(t *testing.T) {
+			f := Filter{Property: name, Op: OpEqual, Literal: lit}
+			prop, lits, err := f.Validate(sc)
 			if err != nil {
-				t.Fatalf("R-9/R-13: `contains` IS defined against a `many %s` property; got %v", typ, err)
+				t.Fatalf("R-9/R-13: `=` IS defined against a `many %s` property; got %v", typ, err)
 			}
 			if prop == nil || !prop.Many {
 				t.Fatalf("validate must return the declared `many` property; got %+v", prop)
 			}
-			if lit == nil {
-				t.Fatalf("validate must return the parsed literal for `contains`")
+			if len(lits) != 1 {
+				t.Fatalf("validate must return the one parsed literal; got %d", len(lits))
 			}
 		})
-		t.Run(name+"/is_absent", func(t *testing.T) {
-			f := Filter{Property: name, Op: OpIsAbsent}
-			if _, _, err := f.Validate(sc); err != nil {
-				t.Fatalf("R-3/R-13: `is absent` IS defined against a `many %s` property; got %v", typ, err)
+		t.Run(name+"/<>", func(t *testing.T) {
+			if _, _, err := (Filter{Property: name, Op: OpNotEqual, Literal: lit}).Validate(sc); err != nil {
+				t.Fatalf("R-13: `<>` IS defined against a `many %s` property; got %v", typ, err)
+			}
+		})
+		t.Run(name+"/IN", func(t *testing.T) {
+			if _, _, err := (Filter{Property: name, Op: OpIn, Literals: []string{lit}}).Validate(sc); err != nil {
+				t.Fatalf("R-13: `IN` IS defined against a `many %s` property; got %v", typ, err)
+			}
+		})
+		t.Run(name+"/IS NULL", func(t *testing.T) {
+			if _, _, err := (Filter{Property: name, Op: OpIsNull}).Validate(sc); err != nil {
+				t.Fatalf("R-3/R-13: `IS NULL` IS defined against a `many %s` property; got %v", typ, err)
+			}
+			if _, _, err := (Filter{Property: name, Op: OpIsNotNull}).Validate(sc); err != nil {
+				t.Fatalf("R-3/R-13: `IS NOT NULL` IS defined against a `many %s` property; got %v", typ, err)
+			}
+		})
+		// `LIKE` is defined against a list only where the TYPE defines it —
+		// text and enum. That is the type disposition, not the arity rule, and
+		// the two must not be confused: a `many date` property refuses `LIKE`
+		// because a date has no pattern form, not because it is a list.
+		t.Run(name+"/LIKE", func(t *testing.T) {
+			_, _, err := (Filter{Property: name, Op: OpLike, Literal: "any%"}).Validate(sc)
+			defined := operatorDefinedForType[typ][OpLike]
+			if defined && err != nil {
+				t.Fatalf("R-9: `LIKE` IS defined against a `many %s` property; got %v", typ, err)
+			}
+			if !defined {
+				if err == nil {
+					t.Fatalf("`LIKE` is not defined for a %s at any arity; it must be refused", typ)
+				}
+				if !strings.Contains(err.Error(), string(typ)) {
+					t.Fatalf("the refusal must name the TYPE, not the arity — the caller's fix is different.\ngot: %s", err)
+				}
 			}
 		})
 	}
@@ -176,9 +224,10 @@ func TestFilter_R13_ContainsAndIsAbsentStillValidate(t *testing.T) {
 		op   Operator
 		lit  string
 	}{
-		{"status", OpGreater, "todo"}, // R-5 — enum orders by declared position
+		{"status", OpGreater, "todo"}, // R-5/R-E — enum orders lexically
 		{"count", OpGreater, "3"},     // AC-8.3
-		{"name", OpContains, "Acme"},  // R-10
+		{"name", OpLike, "Acme%"},     // R-10
+		{"name", OpEqual, "Acme"},     // R-10 — `=` on text IS defined now
 	} {
 		if _, _, err := (Filter{Property: tc.prop, Op: tc.op, Literal: tc.lit}).Validate(sc); err != nil {
 			t.Fatalf("the scalar disposition regressed: `%s %s` was refused: %v", tc.prop, tc.op, err)
@@ -197,9 +246,9 @@ func TestFilter_R13_RefusalIsNotPerRecord(t *testing.T) {
 	rec := ParseRecord("w.md", []byte("---\ntype: widget\nsegment: [vendor, customer]\n---\n"))
 
 	for _, f := range []Filter{
-		{Property: "segment", Op: OpEqual, Literal: "vendor"},
-		{Property: "segment", Op: OpEqual, Negate: true, Literal: "vendor"},
 		{Property: "segment", Op: OpGreater, Literal: "vendor"},
+		{Property: "segment", Op: OpGreater, Negate: true, Literal: "vendor"},
+		{Property: "segment", Op: OpLessOrEqual, Literal: "vendor"},
 	} {
 		res, err := f.Match(sc, rec)
 		if err == nil {
@@ -213,6 +262,25 @@ func TestFilter_R13_RefusalIsNotPerRecord(t *testing.T) {
 		}
 		if res.Matched {
 			t.Fatalf("a refused query must never report a match")
+		}
+	}
+
+	// And the operators R-13 now DEFINES reach the record and answer.
+	for _, tc := range []struct {
+		f    Filter
+		want bool
+	}{
+		{Filter{Property: "segment", Op: OpEqual, Literal: "vendor"}, true},
+		{Filter{Property: "segment", Op: OpEqual, Literal: "partner"}, false},
+		{Filter{Property: "segment", Op: OpIn, Literals: []string{"partner", "customer"}}, true},
+		{Filter{Property: "segment", Op: OpNotEqual, Literal: "vendor"}, true}, // customer differs
+	} {
+		res, err := tc.f.Match(sc, rec)
+		if err != nil {
+			t.Fatalf("`segment %s` must be accepted under the narrowed R-13; got %v", tc.f.Op, err)
+		}
+		if res.Matched != tc.want {
+			t.Errorf("`segment %s %v` = %v, want %v", tc.f.Op, tc.f.Literal+strings.Join(tc.f.Literals, ","), res.Matched, tc.want)
 		}
 	}
 }

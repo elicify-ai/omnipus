@@ -240,13 +240,14 @@ func (c Comparator) Evaluate(op Operator, left, right PropertyValue) (bool, []Co
 	// operators are refused. The refusal names the remedy, because "not defined"
 	// alone leaves a caller with an empty answer and nothing to do about it.
 	if (left.Property.Many || right.Property.Many) && isOrderingOperator(op) {
+		remedies := elementWiseOperatorNames(left.Property.Type)
 		return false, []ComparisonProblem{{
 			Code:      CompareArityNotDefined,
 			Operator:  op,
 			Type:      left.Property.Type,
 			Property:  manyPropertyName(left, right),
-			Detail:    arityRefusalDetail(op, left, right),
-			Supported: []string{string(OpEqual), string(OpNotEqual), string(OpIn), string(OpLike), string(OpIsNull), string(OpIsNotNull)},
+			Detail:    arityRefusalDetail(op, left, right, remedies),
+			Supported: remedies,
 		}}
 	}
 
@@ -326,13 +327,36 @@ func manyPropertyName(left, right PropertyValue) string {
 // arityRefusalDetail is R-13's message, quoted from the rule itself: "`segment`
 // holds many values; ordering comparisons are not defined over a list — use
 // `=`, `IN` or `LIKE`".
-func arityRefusalDetail(op Operator, left, right PropertyValue) string {
+//
+// The remedy list is COMPUTED from the type's own disposition rather than
+// written out as the rule's three examples. R-13's sentence is about a `many
+// text` property, where `LIKE` happens to be defined; against a `many date` it
+// is not, and naming it would send the caller to an operator that refuses them
+// a second time — a remedy that does not work is worse than no remedy, because
+// they will try it.
+func arityRefusalDetail(op Operator, left, right PropertyValue, remedies []string) string {
 	name := manyPropertyName(left, right)
 	if name == "" {
 		name = "the property"
 	}
-	return fmt.Sprintf("%q holds many values; ordering comparisons (%s) are not defined over a list — use =, IN or LIKE",
-		name, op)
+	return fmt.Sprintf("%q holds many values; ordering comparisons (%s) are not defined over a list — use %s",
+		name, op, strings.Join(remedies, ", "))
+}
+
+// elementWiseOperatorNames is what R-13 leaves available against a `many`
+// property of this declared type: the type's own disposition, minus the four
+// ordering operators it removes.
+func elementWiseOperatorNames(t PropertyType) []string {
+	names := make([]string, 0, len(Operators))
+	for _, op := range Operators {
+		if isOrderingOperator(op) {
+			continue
+		}
+		if op == OpIsNull || op == OpIsNotNull || operatorDefinedForType[t][op] {
+			names = append(names, string(op))
+		}
+	}
+	return names
 }
 
 func nonConformingComparisonProblem(op Operator, side string, pv PropertyValue) ComparisonProblem {
@@ -436,27 +460,18 @@ func (c Comparator) declaredMembership(op Operator, left, right PropertyValue) [
 			continue
 		}
 		for _, v := range side.pv.Values {
-			if !enumDeclares(side.pv.Property, v.Enum.Name) {
+			// Property.ResolveEnum is the SOLE membership oracle for an enum
+			// (schema.go). It folds with FoldKey, so `Won` resolves TO `won`
+			// rather than creating a second value — which is the thing D4
+			// actually forbids. Asking it here rather than scanning Values is
+			// what keeps there being exactly one answer to "is this declared?".
+			if _, declared := side.pv.Property.ResolveEnum(v.Enum.Name); !declared {
 				problems = append(problems, enumValueNotDeclaredProblem(op, side.name, v.Enum.Name, side.pv))
 				break
 			}
 		}
 	}
 	return problems
-}
-
-// enumDeclares resolves a spelling to a declared value CASE-INSENSITIVELY
-// (R-5, ruling R-D). Resolving `Won` TO `won` collapses two spellings into one
-// value rather than creating a second, which is the thing ADR-068 D4 actually
-// forbids.
-func enumDeclares(p *Property, name string) bool {
-	want := FoldKey(name)
-	for _, v := range p.Values {
-		if FoldKey(v.Name) == want {
-			return true
-		}
-	}
-	return false
 }
 
 func enumValueNotDeclaredProblem(op Operator, side, value string, pv PropertyValue) ComparisonProblem {
