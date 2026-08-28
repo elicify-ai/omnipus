@@ -331,8 +331,19 @@ func trimToBudget(resp *generated.VaultFindResponse) {
 	if len(Render(*resp)) <= ResponseBudgetBytes {
 		return
 	}
+	carried := 0
+	if resp.Elided != nil {
+		carried = *resp.Elided
+	}
 	dropped := 0
 	var summary []string
+
+	// THE ACCOUNTING IS UPDATED INSIDE THE LOOP, not after it.
+	//
+	// Setting it afterwards measured a response that did not yet contain the
+	// "… N more rows" line, then added roughly sixty bytes of it and returned
+	// over budget — measured at 4,126 against a 4,000-byte cap. A budget check
+	// that does not measure the thing it is about to add is not a budget check.
 	for len(resp.Rows) > minRenderedRows && len(Render(*resp)) > ResponseBudgetBytes {
 		last := resp.Rows[len(resp.Rows)-1]
 		resp.Rows = resp.Rows[:len(resp.Rows)-1]
@@ -340,17 +351,10 @@ func trimToBudget(resp *generated.VaultFindResponse) {
 			summary = append(summary, rowID(last))
 		}
 		dropped++
-	}
-	if dropped == 0 {
-		return
-	}
-	resp.Counts.Shown = len(resp.Rows)
-	total := dropped
-	if resp.Elided != nil {
-		total += *resp.Elided
-	}
-	resp.Elided = &total
-	if len(summary) > 0 {
+
+		resp.Counts.Shown = len(resp.Rows)
+		total := carried + dropped
+		resp.Elided = &total
 		s := strings.Join(summary, " · ")
 		if dropped > len(summary) {
 			s += " · …"

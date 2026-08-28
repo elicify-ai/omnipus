@@ -76,7 +76,15 @@ func (q *query) echo() string {
 		parts = append(parts, "view="+q.view)
 	}
 	if q.filter != nil {
-		parts = append(parts, "filter=("+q.filter.text+")")
+		// buildCombinator already parenthesises a multi-child node, so wrapping
+		// unconditionally produced `filter=((a AND b))`. The echo is what a
+		// reader checks their own query against; noise in it is noise in the
+		// one line that is supposed to remove doubt.
+		text := q.filter.text
+		if !strings.HasPrefix(text, "(") {
+			text = "(" + text + ")"
+		}
+		parts = append(parts, "filter="+text)
 	}
 	if q.near != "" {
 		parts = append(parts, fmt.Sprintf("near=%s hops=%d", q.near, q.hops))

@@ -322,22 +322,30 @@ func findingProblem(recordID, path string, f records.Finding) generated.RecordPr
 // happens for a note indexed before the evidence columns were populated. The
 // fallback is a WORSE message, not a missing one: an exclusion is always
 // reported, and it always names the record and the path.
-func withEvidence(p generated.RecordProblem, property, got, expected string) generated.RecordProblem {
+func withEvidence(p generated.RecordProblem, property, declaredType, got, expected string) generated.RecordProblem {
 	if got == "" && expected == "" {
 		return p
 	}
-	switch {
-	case got != "" && expected != "":
-		p.Reason = fmt.Sprintf("%s is %q where %s is required", property, got, expected)
-		p.Expected = str(expected)
-		p.Fix = str("open the note and write a valid " + expected + " for " + property)
-	case got != "":
-		p.Reason = fmt.Sprintf("%s is %q, which cannot be read as its declared type", property, got)
-		p.Fix = str("open the note and correct " + property)
-	default:
-		p.Reason = fmt.Sprintf("%s does not hold %s", property, expected)
-		p.Expected = str(expected)
-		p.Fix = str("open the note and write a valid " + expected + " for " + property)
+	// THE SENTENCE USES THE DECLARED TYPE; THE FULL SHAPE GOES ON THE WIRE.
+	//
+	// records.Finding.Expected is written for a validation report and reads
+	// "a single decimal (an exact number, at most 100 decimal places)". Dropped
+	// into a problem line twice — once as the requirement and once as the
+	// remedy — it buries the two facts that matter, which are the property and
+	// the value. The type name is the terse form a reader acts on; the long
+	// shape is kept on p.Expected, where a caller that wants it can read it.
+	kind := declaredType
+	if kind == "" {
+		kind = "valid value"
 	}
+	if expected != "" {
+		p.Expected = str(expected)
+	}
+	if got != "" {
+		p.Reason = fmt.Sprintf("%s is %q where a %s is required", property, got, kind)
+	} else {
+		p.Reason = fmt.Sprintf("%s does not hold a %s", property, kind)
+	}
+	p.Fix = str(fmt.Sprintf("write a %s for %s", kind, property))
 	return p
 }

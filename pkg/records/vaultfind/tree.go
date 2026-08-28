@@ -339,7 +339,7 @@ func evalLeaf(c records.Comparator, cand candidate, pf records.PreparedFilter) e
 		// malformed VALUE, and dressing it as one would send the reader to
 		// correct a value that is perfectly well written.
 		if cp.Code == records.CompareNonConforming {
-			p = withEvidence(p, prop.Name, got, expected)
+			p = withEvidence(p, prop.Name, string(prop.Type), got, expected)
 		}
 		problems = append(problems, p)
 	}
