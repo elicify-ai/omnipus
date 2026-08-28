@@ -1472,3 +1472,329 @@ func parseIncludeSections(raw any) (map[string]bool, error) {
 	}
 	return out, nil
 }
+
+// ---------------------------------------------------------------------------
+// vault_read — the TOOL ADAPTER half (ADR-068 D15.3, spec §4.1.3)
+//
+// Same split as vault_describe above: the response shape, the renderer and
+// the pure section/byte logic live in vault_read.go with no `pkg/tools`
+// import; this is the adapter that resolves scope, touches the filesystem
+// and the link graph, and hands the assembled ReadData to RenderRead.
+// ---------------------------------------------------------------------------
+
+// ReadTool is vault_read.
+type ReadTool struct {
+	tools.BaseTool
+	deps ToolDeps
+}
+
+// NewReadTool builds the tool.
+func NewReadTool(deps ToolDeps) *ReadTool {
+	if deps.RateLimiter == nil {
+		deps.RateLimiter = NewRetrievalRateLimiter(RetrievalRateLimitConfig{})
+	}
+	return &ReadTool{deps: deps}
+}
+
+// Name is the registered tool name.
+func (t *ReadTool) Name() string { return "vault_read" }
+
+// Description is what the model reads before deciding whether to call.
+func (t *ReadTool) Description() string {
+	return "Read one note in full, or one of its headed sections. Returns the parsed " +
+		"frontmatter — any value that violates the note's own schema is flagged in place, " +
+		"never silently dropped, and the note still reads — the body (or the one section " +
+		"asked for), and every link the note makes and every link that points back to it. " +
+		"Also returns the note's version token: send it back unchanged to vault_edit; this " +
+		"is the only supported way to obtain one, no failing write required. Reads only."
+}
+
+// Scope classifies the tool for per-agent visibility filtering.
+func (t *ReadTool) Scope() tools.ToolScope { return tools.ScopeGeneral }
+
+// Category groups the tool in the picker UI.
+func (t *ReadTool) Category() tools.ToolCategory { return tools.CategoryMemory }
+
+// readArgNames is every argument this tool accepts (spec §4.1.3's table).
+var readArgNames = []string{"path", "section", "include", "max_bytes", "collection"}
+
+// Parameters is the JSON schema the model fills in.
+func (t *ReadTool) Parameters() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"path": map[string]any{
+				"type":        "string",
+				"description": "Note path within scope.",
+			},
+			"section": map[string]any{
+				"type": "string",
+				"description": "One heading to read instead of the whole note. An unknown heading is " +
+					"refused, listing the headings actually present.",
+			},
+			"include": map[string]any{
+				"type":        "array",
+				"items":       map[string]any{"type": "string", "enum": ReadIncludeOrder},
+				"description": "Trim the response. Default: all four.",
+			},
+			"max_bytes": map[string]any{
+				"type": "integer",
+				"description": fmt.Sprintf(
+					"Bounds the body/section content only — the version token, frontmatter and any "+
+						"refusal are never bounded by this. Truncation is always stated, never silent. Default %d.",
+					ReadDefaultMaxBytes),
+			},
+			"collection": map[string]any{
+				"type":        "string",
+				"description": "Which knowledge base, by name. Unset when your workspace has one.",
+			},
+		},
+		"required": []string{"path"},
+	}
+}
+
+// Execute runs one read.
+func (t *ReadTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
+	if unknown := unknownArgs(args, readArgNames); len(unknown) > 0 {
+		return tools.ErrorResult(fmt.Sprintf(
+			"vault_read: unknown argument(s) %s; accepted: %s",
+			strings.Join(unknown, ", "), strings.Join(readArgNames, ", ")))
+	}
+	if res := checkRetrievalRate(t.deps.RateLimiter, t.Name(), tools.ToolAgentID(ctx)); res != nil {
+		return res
+	}
+
+	notePath := normalizeRel(strings.TrimSpace(stringArg(args["path"])))
+	if notePath == "" {
+		return tools.ErrorResult("vault_read: 'path' is required")
+	}
+
+	included, err := parseReadInclude(args["include"])
+	if err != nil {
+		return tools.ErrorResult("vault_read: " + err.Error())
+	}
+
+	maxBytes := intArg(args["max_bytes"], ReadDefaultMaxBytes)
+	if maxBytes <= 0 {
+		maxBytes = ReadDefaultMaxBytes
+	}
+
+	section := strings.TrimSpace(stringArg(args["section"]))
+
+	// ResolveTurnScope, not ResolveScope(…, ToolWorkspaceID(ctx)) — see
+	// scope_turn.go and DescribeTool's identical call for why.
+	scope, _ := ResolveTurnScope(ctx, t.deps.Home)
+	collectionRef := strings.TrimSpace(stringArg(args["collection"]))
+	col, ok := scope.Select(collectionRef)
+	if !ok {
+		return tools.ErrorResult(fmt.Sprintf(
+			"vault_read: no knowledge base %q is mounted into this workspace; in scope: %s",
+			collectionRef, joinOrNone(scope.Names())))
+	}
+
+	data, rerr := t.gather(col, notePath, section, included, maxBytes)
+	if rerr != nil {
+		return tools.ErrorResult("vault_read: " + rerr.Error())
+	}
+	return tools.NewToolResult(RenderRead(*data))
+}
+
+// gather does the reads: containment, the file itself, the section split, the
+// schema-typed frontmatter projection and — only when asked for — the whole-
+// collection link graph.
+func (t *ReadTool) gather(
+	col ScopedCollection,
+	notePath, section string,
+	included map[string]bool,
+	maxBytes int,
+) (*ReadData, error) {
+	root, err := NewCollectionRoot(OSLinkFS(), col.Root)
+	if err != nil {
+		return nil, err
+	}
+	fsys := OSLinkFS()
+	abs, err := root.ResolveContained(fsys, notePath)
+	if err != nil {
+		return nil, err
+	}
+
+	// FR-043/FR-044 applied at the read boundary, mirroring
+	// TestSearchTool_SymlinkedHitIsRefusedNotFollowed and version.go's own
+	// readNoteVersionAbs: a symlink or a directory named as `path` is refused
+	// outright rather than opened, never followed.
+	fi, statErr := fsys.Lstat(abs)
+	switch {
+	case statErr != nil:
+		return nil, fmt.Errorf("no note at %s", notePath)
+	case !fi.Mode().IsRegular():
+		return nil, fmt.Errorf("%s is not a regular file (a symlink or a directory cannot be read this way)", notePath)
+	}
+
+	content, err := ReadNoteContent(fsys, abs)
+	if err != nil {
+		return nil, err
+	}
+
+	// FR-074 — the version token is computed from THESE bytes, the exact
+	// bytes this response renders from, so token and content can never
+	// disagree by construction (see vault_read.go's file header).
+	data := &ReadData{
+		Path:     notePath,
+		Version:  string(ComputeVersionToken(content)),
+		Included: included,
+		MaxBytes: maxBytes,
+	}
+
+	bodyStart, fm, fmErr := t.splitFrontmatter(content)
+	if fmErr != "" {
+		data.FrontmatterParseError = fmErr
+	} else if fm.Present {
+		data.FrontmatterPresent = true
+		data.FrontmatterProblems = fm.Problems
+		rec := records.Record{Path: notePath, Frontmatter: fm}
+		data.TypeName = rec.TypeName()
+		var schema *records.Schema
+		if data.TypeName != "" {
+			schemas, _, serr := records.LoadSchemas(root.Path())
+			if serr != nil {
+				return nil, fmt.Errorf("loading record schemas: %w", serr)
+			}
+			if sc, ok := schemas.Get(data.TypeName); ok {
+				schema = sc
+				data.TypeRecognised = true
+			}
+		}
+		data.Properties = projectReadProperties(rec, fm, schema)
+	}
+
+	start, end := bodyStart, len(content)
+	if section != "" {
+		headings := ExtractHeadings(content)
+		hStart, hEnd, ok := findHeadingSpan(content, headings, section)
+		if !ok {
+			return nil, &readSectionError{path: notePath, requested: section, headings: headings}
+		}
+		start, end = hStart, hEnd
+		data.Section = section
+		data.IsSection = true
+	}
+	fullBody := content[start:end]
+	data.BodyTotalBytes = len(fullBody)
+	data.Body = truncateUTF8(string(fullBody), maxBytes)
+	data.BodyTruncated = len(data.Body) < len(fullBody)
+
+	if included[ReadIncludeLinks] || included[ReadIncludeBacklinks] {
+		g, gerr := BuildLinkGraph(fsys, root)
+		if gerr != nil {
+			return nil, fmt.Errorf("building link graph: %w", gerr)
+		}
+		if included[ReadIncludeLinks] {
+			data.Links = toReadLinks(g.Links(notePath), false)
+		}
+		if included[ReadIncludeBacklinks] {
+			data.Backlinks = toReadLinks(g.Backlinks(notePath), true)
+		}
+	}
+	return data, nil
+}
+
+// splitFrontmatter locates the byte offset where a note's body starts and
+// parses its frontmatter, both from the SAME block-detection rule fmParse
+// uses for the authoring path — so vault_read's body/frontmatter split can
+// never disagree with what vault_edit later splices into.
+//
+// fmParse and records.ParseFrontmatter agree on every TERMINATED block (both
+// require the first line to be exactly "---" and then scan for a closing
+// "---"/"..." line) — but they diverge on an UNTERMINATED one: fmParse
+// reports it as an error, while records.ParseFrontmatter treats the rest of
+// the file as one giant frontmatter block (its own doc comment: "treat what
+// we have as the block"). fields.go's indexer already resolves that
+// divergence by falling back to "ordinary note, whole file is body" on the
+// fmParse error rather than trusting the records-package reading — this
+// mirrors that choice exactly, so a note vault_read shows as unparsed
+// frontmatter is the same note the index already treats that way.
+func (t *ReadTool) splitFrontmatter(content []byte) (bodyStart int, fm records.Frontmatter, parseErr string) {
+	blk, ferr := fmParse(content)
+	switch {
+	case ferr != nil:
+		return 0, records.Frontmatter{}, "the opening '---' fence has no closing fence; the whole note is shown as body"
+	case !blk.present:
+		return 0, records.Frontmatter{}, ""
+	default:
+		_, afterFence, ok := authorLineAt(content, blk.innerEnd)
+		if !ok {
+			afterFence = len(content)
+		}
+		parsed, perr := records.ParseFrontmatter(content)
+		if perr != nil {
+			return afterFence, records.Frontmatter{}, perr.Error()
+		}
+		return afterFence, parsed, ""
+	}
+}
+
+// toReadLinks projects graph.go's ResolvedLink into vault_read's own render
+// shape.
+func toReadLinks(in []ResolvedLink, backlinks bool) []ReadLink {
+	_ = backlinks // both directions render through the same projection
+	out := make([]ReadLink, 0, len(in))
+	for _, l := range in {
+		out = append(out, ReadLink{
+			To:         l.To,
+			From:       l.From,
+			Form:       l.Raw,
+			Alias:      l.Alias,
+			Heading:    l.Heading,
+			Resolved:   l.State == ResolveResolved,
+			Reason:     string(l.Reason),
+			Ambiguous:  l.Ambiguous,
+			Candidates: l.Candidates,
+			Line:       l.Line,
+		})
+	}
+	return out
+}
+
+// parseReadInclude reads `include`, refusing a member outside ReadIncludeOrder
+// with the valid members listed — the same posture parseIncludeSections takes
+// for vault_describe.
+func parseReadInclude(raw any) (map[string]bool, error) {
+	if raw == nil {
+		return allReadIncludes(), nil
+	}
+	list, ok := raw.([]any)
+	if !ok {
+		return nil, fmt.Errorf("include must be a list of %s", strings.Join(ReadIncludeOrder, ", "))
+	}
+	if len(list) == 0 {
+		return allReadIncludes(), nil
+	}
+	out := map[string]bool{}
+	for _, item := range list {
+		s, isStr := item.(string)
+		if !isStr {
+			return nil, fmt.Errorf("include must be a list of %s", strings.Join(ReadIncludeOrder, ", "))
+		}
+		s = strings.ToLower(strings.TrimSpace(s))
+		valid := false
+		for _, known := range ReadIncludeOrder {
+			if s == known {
+				valid = true
+				break
+			}
+		}
+		if !valid {
+			return nil, fmt.Errorf("unknown include member %q; accepted: %s", s, strings.Join(ReadIncludeOrder, ", "))
+		}
+		out[s] = true
+	}
+	return out, nil
+}
+
+func allReadIncludes() map[string]bool {
+	out := make(map[string]bool, len(ReadIncludeOrder))
+	for _, s := range ReadIncludeOrder {
+		out[s] = true
+	}
+	return out
+}
