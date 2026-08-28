@@ -1757,7 +1757,7 @@ broader thing has been given a wrong answer with no error channel.
 | FR-004, 004a, 009 | US-1 | 1.2 | `TestSchema_TypesAreScopedToRecordType`; `TestSchema_NoDomainVocabularyInBinary` |
 | FR-006 | US-1 | 1.4 | `TestValidate_ArityViolationIsReported` |
 | FR-007, 008 | US-2 | edge | `TestFilter_AbsentIsDistinctAndIncludedByNegation` |
-| FR-010, 011, 011a, 011b | US-1 | 1.3 | `TestEnum_OrdersLexicallyAndResolvesCaseInsensitively`; `TestFilter_CaseFoldIsUnicodeNotASCII` |
+| FR-010, 011, 011a, 011b | US-1 | 1.3 | `TestEnum_OrdersLexicallyAndResolvesCaseInsensitively`; `TestFilter_CaseFoldIsFullUnicode`; `TestFilter_ComparatorDoesNotUseStdlibFolding`; **FR-011c** joins this row (revision 6) |
 | FR-012, FR-013 | US-2 | 2.3 | `TestNumeric_IntegerBoundAndDecimalScaleRefused` *(FR-014 is **retired** — `money` is deleted)* |
 | FR-015, 015a, 016..019a | US-12 | 12.1–12.5 | `TestSchemaAuthoring_LivesInVaultConfigure` — *and revision 5 closes M-23's gap here: FR-015 had no row and no test, while being new mechanism (schemas live outside the scanner's walk, so change-tracking must be built)* |
 | FR-018a | US-12 | 12.4 | `TestConfigure_DeclaresNoVersionToken` |
@@ -1792,7 +1792,7 @@ broader thing has been given a wrong answer with no error channel.
 | FR-076 | US-3 | — | `TestFind_NearComposesWithFilters` |
 | FR-076a | US-10 | — | `TestFind_TasksAreIndexedRowsNotAWalk` |
 | FR-077 | US-4 | 4.4 | `TestAudit_VaultEditAndRestructureCarryOperation` |
-| FR-079, 128 | — | — | `TestTools_DescriptionTokenBudget` |
+| FR-079, 128 | — | — | `TestTools_DescriptionBudgetIsReviewedNotEnforced` *(revision 6, M-35 — §6 named `TestTools_DescriptionTokenBudget`, whose name mandates runtime enforcement of a budget FR-127b says is NEVER enforced at runtime; §7 test 38 wins)* |
 | FR-080, 080a, 081, 082 | — | — | `TestToolPolicy_ZeroRepairedPairsOnFreshInstall` |
 | FR-083, 084 | US-12 | 12.2, 12.4 | `TestToolPolicy_ThreeWriteTiersAreIndependent` |
 | FR-110, 110a, 110b | US-10 | 10.1 | `TestSearch_RankingIsBM25Behaviourally` |
