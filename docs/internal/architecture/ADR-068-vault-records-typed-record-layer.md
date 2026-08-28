@@ -543,8 +543,11 @@ shape that returns records alone.
 ```
 
 A query that excludes records because they fail their declared type **names them, with the
-reason and the expected shape**. A total spanning several currencies is refused, with the
-currencies listed, rather than summed (D3, `money`).
+reason and the expected shape**. ~~A total spanning several currencies is refused, with the
+currencies listed, rather than summed (D3, `money`).~~ **DELETED, revision 7 — there is no
+`money` type (D3, O-2 superseded), so a cross-currency total has no subject.** What survives is
+the general rule that case was one instance of: **every total states its scope, and it is
+computed over the full evaluated set rather than the rendered page.**
 
 **Why:** this is the inverse of §1.3, and it is the requirement the whole ADR exists to serve.
 The community's accepted debugging advice today is *"keep testing until something is
@@ -2156,13 +2159,37 @@ This is the part that is easy to get backwards. Tool *count* costs selection acc
 Tool *descriptions* cost **tokens on every turn, forever**, for every agent that has the tool —
 whether or not it is ever called.
 
-**Budget ~150 tokens per tool description.** Push operation detail down into **parameter
-descriptions and error messages**, which are paid only when relevant: an agent learns the
-`set_property` arity rule from the error it gets, not from a paragraph every other agent carries
-on every turn. Learn-on-demand, not learn-in-advance.
+**Budget ~150 tokens per tool description.** Push operation detail down into **error messages**,
+which really are paid only when relevant: an agent learns an arity rule from the error it gets, not
+from a paragraph every other agent carries on every turn. Learn-on-demand, not learn-in-advance.
 
-*(Six tools at ~150 tokens is ~900 tokens of permanent context. Eighteen would have been ~2,700.
-The sixth tool D15.6 adds costs ~150 of those, which is the whole of its standing price.)*
+> **CORRECTED IN REVISION 7, and the correction bites this decision's own argument.** Revision 6
+> said detail belongs in *"parameter descriptions and error messages, which are paid only when
+> relevant"*. **Parameter descriptions are paid on EVERY request.** Verified: `ToolsToProviderDefs`
+> (`pkg/tools/registry.go:542`) builds `providers.ToolFunctionDefinition{Name, Description,
+> Parameters}` at `:557-560`, where `Parameters` is **the whole schema map, verbatim**, sourced from
+> `ToolToSchema` (`pkg/tools/base.go:431-440`) which passes `tool.Parameters()` through untouched,
+> and it is rebuilt per LLM request at `pkg/agent/loop.go:8346`. **There is no per-parameter lazy
+> loading anywhere.** The one nuance that survives: tool-def compression
+> (`pkg/agent/tool_manifest.go:141`, ending in the same `ToolsToProviderDefs` at `:176`) gates
+> **which tools** are sent, not the schema fidelity of a sent tool — so "paid only when used" is
+> true at **whole-tool** granularity under compression and false at **parameter** granularity,
+> always.
+>
+> **So the ~900 figure counts the wrong thing.** The standing per-turn cost of a `vault_*` tool is
+> description prose **plus its entire JSON parameter schema**, and `vault_find` alone declares
+> fifteen parameters plus a recursive filter-tree schema. **~900 tokens is a FLOOR, and by an
+> unknown multiple.** *(D15.6 separately cites "~750 for the surface as a whole", which is the
+> **five**-tool figure and is stale as well as measuring the wrong thing.)*
+>
+> **Consequence, and it is a real constraint rather than a footnote: neither this decision nor
+> D15.0 may argue "six tools are affordable" from the 900 until the serialised six-tool definition
+> set is MEASURED IN BYTES.** That measurement is a W5 obligation and an exit criterion. **The
+> requirement that survives is stronger, not weaker:** keep parameter schemas terse, because they
+> are not free, and push detail into error messages, which are.
+
+*(Six tools at ~150 tokens is ~900 tokens of description prose. Eighteen would have been ~2,700.
+The direction is right; the absolute figure is a floor — see the correction above.)*
 
 ### D23 — Schema and view authoring are ordinary writes; mounting is not
 
