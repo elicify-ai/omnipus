@@ -1517,7 +1517,7 @@ politeness limit (D16.3).*
 | Condition | Status |
 |---|---|
 | **C-1** — bump `zapx/v17` to ≥ v17.1.4 **and force a rebuild of existing indexes** | **Half discharged, half scheduled.** The pins are in (`go.mod:12`, `go.mod:107`). The rebuild is not, and revision 6 **splits it out of the wave sequence** — see D20. |
-| **C-2** — *"Evaluate streamed, never materialised"* (3–6× lower peak RSS, no time penalty) | **CARRIED FORWARD, and it still applies.** Revision 5 never mentioned it. Pushing predicates into SQLite changes *where* rows are selected, not whether the surviving rows are streamed to the renderer: a `GROUP BY` over 10,000 rows still returns a result set that must not be materialised whole. **W1 exit criterion:** the query path holds no more than one page of rows in memory at once, asserted by peak RSS at the cap, not by inspection. |
+| **C-2** — *"Evaluate streamed, never materialised"* (3–6× lower peak RSS, no time penalty) | **CARRIED FORWARD, and it still applies.** Revision 5 never mentioned it. **RESTATED, revision 8 (spec review round 6, survivor 4): revision 7's illustration described a SQL `GROUP BY`, and under D16.6 as ruled NO `GROUP BY` IS EMITTED** — the spec's AC-8.10 fails the build if one appears. **The rule is unchanged and binds HARDER, not softer.** Grouping, aggregation and sorting are now **Go** passes, so what must not be materialised whole is the **Go** grouping structure over the evaluated candidate population. **And one part of it is genuinely unbounded and is stated as such rather than absorbed:** the group-key set is bounded for an `enum` (a closed set) and for the two group levels D-grouping permits, but the **distinct-value count of a `text` group key is bounded by nothing**, so grouping 50,000 records by a free-text property builds a map with up to 50,000 entries. **W1 exit criterion:** the query path holds no more than one page of rows in memory at once, asserted by peak RSS at **both** bounds (10,000 survivors and 50,000 evaluated candidates), not by inspection — and the free-text grouping map is measured with them. |
 | **C-3** — *"Enforce FR-064's 10,000-record cap as a hard precondition, and count candidates before retrieving anything"* | **UPHELD. Revision 5's relaxation is withdrawn.** |
 
 **On C-3 specifically.** Revision 5 wrote that *"the cap becomes a politeness limit again rather
@@ -1572,11 +1572,19 @@ This also removes a live inconsistency: D15.5b, D16.3 and FR-064 now say the sam
    D20 says the one budget that holds is ADR-067's < 64 MB steady-state RSS, *"and the properties
    index is inside it too."* That budget was measured for **bleve alone** — idle 12.9–15.1 MB,
    23.6–24.0 MB streamed at the cap (spike §5.1, §5.3). The two-index design keeps all of that
-   and adds SQLite's page cache, its temp b-trees for `GROUP BY`/`ORDER BY`, and its connection
-   state. **None of that is measured.** Asserting the inherited budget over an unmeasured store
-   is the same move the latency argument made, and it is withdrawn the same way: the budget is
-   the **target**, not a property this ADR claims. **W1 exit criterion:** both indexes, idle and
-   at the 10,000-record cap, inside 64 MB — measured, on Linux as well as macOS.
+   and adds costs on **both** sides. **CORRECTED, revision 8 (spec review round 6, survivor 5):
+   revision 6 charged the budget for *"SQLite's temp b-trees for `GROUP BY`/`ORDER BY`"*, and under
+   D16.6 as ruled **neither clause is emitted, so no such b-tree exists.** What the budget actually
+   carries, none of it measured: **on the SQLite side**, the page cache, the connection state, and
+   whatever the narrowing select's `LIMIT`/`OFFSET` costs; **on the Go side — and this is the half
+   revision 7 lost when it deleted the SQL clauses without re-charging their replacements** — the
+   candidate stream's working set, the grouping map (unbounded for a free-text group key, D16.3a
+   C-2), the sort buffer for a full ordering pass, and the per-candidate folded forms. **The cost
+   did not vanish with the SQL clauses; it MOVED ACROSS THE BOUNDARY, to the side nobody has
+   measured.** Asserting the inherited budget over an unmeasured store is the same move the latency
+   argument made, and it is withdrawn the same way: the budget is the **target**, not a property
+   this ADR claims. **W1 exit criterion:** both indexes, idle and at **both** candidate bounds
+   (10,000 survivors and 50,000 evaluated), inside 64 MB — measured, on Linux as well as macOS.
 
 ### D16.5 — The freshness token, SPECIFIED. This is the finding revision 5 got most wrong.
 
