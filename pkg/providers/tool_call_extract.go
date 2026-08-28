@@ -11,9 +11,10 @@ import (
 func findMatchingBrace(text string, pos int) int {
 	depth := 0
 	for i := pos; i < len(text); i++ {
-		if text[i] == '{' {
+		switch text[i] {
+		case '{':
 			depth++
-		} else if text[i] == '}' {
+		case '}':
 			depth--
 			if depth == 0 {
 				return i + 1

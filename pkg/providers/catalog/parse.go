@@ -106,7 +106,7 @@ func invalid(path, format string, args ...any) error {
 func ParseDocument(data []byte) (*Document, error) {
 	var dto documentDTO
 	if err := json.Unmarshal(data, &dto); err != nil {
-		return nil, fmt.Errorf("%w: decode: %v", ErrInvalid, err)
+		return nil, fmt.Errorf("%w: decode: %w", ErrInvalid, err)
 	}
 	if dto.SchemaVersion != SchemaVersion {
 		return nil, fmt.Errorf("%w: schema_version %q (want %q): %w",

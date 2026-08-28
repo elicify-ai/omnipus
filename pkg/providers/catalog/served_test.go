@@ -40,7 +40,7 @@ func TestServed_QuotedStrongETagMatchesBody(t *testing.T) {
 func TestServed_EnvelopeShape(t *testing.T) {
 	// E9: unicode survives byte-for-byte through load and serve.
 	m := fixtureMap(t)
-	provider(m, providerIndex(t, m, "zai"))["name"] = "智谱 AI"
+	provider(t, m, providerIndex(t, m, "zai"))["name"] = "智谱 AI"
 	c := mustCatalog(t, encode(t, m))
 
 	s, ok := c.Served()
@@ -60,18 +60,23 @@ func TestServed_EnvelopeShape(t *testing.T) {
 	assert.Equal(t, "embedded", env["served_from"])
 	assert.Equal(t, false, env["stale"])
 
-	provs := env["providers"].([]any)
+	provs, ok := env["providers"].([]any)
+	require.True(t, ok, "envelope 'providers' is not a list: %T", env["providers"])
 	require.NotEmpty(t, provs)
 	for _, p := range provs {
-		row := p.(map[string]any)
+		row, ok := p.(map[string]any)
+		require.True(t, ok, "provider entry is not a map: %T", p)
 		for _, key := range []string{"id", "name", "company", "api", "tier", "auth_methods", "aliases", "locality", "models"} {
 			assert.Contains(t, row, key, "CatalogProvider.yaml requires %q on %v", key, row["id"])
 		}
 		// Required arrays must be arrays, never null.
 		assert.NotNil(t, row["aliases"], "aliases must be [] not null on %v", row["id"])
 		assert.NotNil(t, row["models"], "models must be [] not null on %v", row["id"])
-		for _, mm := range row["models"].([]any) {
-			mrow := mm.(map[string]any)
+		modelRows, ok := row["models"].([]any)
+		require.True(t, ok, "provider %v 'models' is not a list: %T", row["id"], row["models"])
+		for _, mm := range modelRows {
+			mrow, ok := mm.(map[string]any)
+			require.True(t, ok, "model entry is not a map: %T", mm)
 			for _, key := range []string{"id", "name", "context_window", "max_output_tokens", "input_modalities", "tool_call", "status"} {
 				assert.Contains(t, mrow, key, "CatalogModel.yaml requires %q", key)
 			}

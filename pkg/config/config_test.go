@@ -382,8 +382,15 @@ func TestSaveConfig_WritesZeroDefaultModelPair(t *testing.T) {
 	if err := json.Unmarshal(data, &top); err != nil {
 		t.Fatalf("saved config is not JSON: %v", err)
 	}
-	defaults := top["agents"].(map[string]any)["defaults"].(map[string]any)
-	if _, ok := defaults["model_name"]; ok {
+	agents, ok := top["agents"].(map[string]any)
+	if !ok {
+		t.Fatalf("saved config's agents is not a map: %T", top["agents"])
+	}
+	defaults, ok := agents["defaults"].(map[string]any)
+	if !ok {
+		t.Fatalf("saved config's agents.defaults is not a map: %T", agents["defaults"])
+	}
+	if _, hasModelName := defaults["model_name"]; hasModelName {
 		t.Fatalf("saved config must not carry agents.defaults.model_name: %s", string(data))
 	}
 	dm, ok := defaults["default_model"].(map[string]any)

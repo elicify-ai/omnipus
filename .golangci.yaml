@@ -292,6 +292,19 @@ linters:
       - linters:
           - nilnil
         path: ^pkg/tools/browser/webrtc/turnserver(_stub)?\.go$
+      # nilnil: readStoreOAuthCred/PeekStoreOAuthCred in oauth_token_source.go
+      # deliberately return (nil, nil) for "nothing is stored for this
+      # provider" — documented at each declaration. This is not "success with
+      # an ambiguous empty result": every caller branches on the nil pointer
+      # itself (never on error) to mean "not signed in", and one caller
+      # (rest_sign_in.go's signInStatusFor) collapses err != nil and cred ==
+      # nil into the identical "unknown status" response, so a sentinel error
+      # would not let it distinguish anything it does not already handle the
+      # same way. Converting to a sentinel would only rename the nil check to
+      # an errors.Is check without changing behavior at any call site.
+      - linters:
+          - nilnil
+        path: ^pkg/providers/oauth_token_source\.go$
       - linters:
           - lll
         source: '^//go:generate '
