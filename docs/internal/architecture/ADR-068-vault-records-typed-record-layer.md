@@ -1449,9 +1449,13 @@ compares them, and a mismatch sets `complete: false`"* — followed by *"Mitigat
   per build, and a mismatch discards the manifest and rebuilds (`manifest.go:113-115`).
 - No query result carries anything of the kind. `IndexHit` is exactly
   `Path`/`Kind`/`Score`/`Offset`/`Segment` (`pkg/knowledge/index.go:159-173`).
-- `VersionToken` (`pkg/knowledge/author.go:309-323`) is a **per-note compare-and-swap token on
-  the authoring path** — `ComputeVersionToken(src)`, consumed by `checkVersion` at
-  `author.go:667`. It is never attached to a read.
+- **`VersionToken` is `pkg/knowledge/version.go:101`** — `type VersionToken string` — a **per-note
+  compare-and-swap token on the authoring path**, consumed by `checkVersion` at `author.go:667` and
+  never attached to a read; `NoteContentVersion` (`pkg/knowledge/author.go:322-324`) is the helper
+  that computes one. ***Revision 6 cited `author.go:309-323` and that was wrong twice — wrong file
+  for the type, wrong lines for the helper (`:306-321` is its doc comment). The distinction between
+  the authoring CAS token and the freshness token is this decision's whole argument, so citing the
+  wrong symbol weakened exactly the point being made.***
 
 So the mitigation for the new failure mode was **neither structural nor tested** — it was a
 sentence. Written into the revision whose declared subject is not doing that, three paragraphs
@@ -1471,21 +1475,75 @@ note changes.
 |---|---|
 | **What is the token?** | The note's content SHA-256 — `ManifestEntry.Hash`. Not an integer, not a generation counter. |
 | **Per-index or per-note?** | **Per-note, deliberately.** A whole-index generation would report *every* answer stale while any agent is writing anywhere in the vault, which trains D13's problem channel into noise — the failure D22.2 warns about, arriving from the other side. Per-note flags only the notes actually mid-write. |
-| **Where is it stored on the SQLite side?** | One `source_hash` column per record row, written in the same transaction as the row, holding the hash the indexer computed for that note in that pass. |
-| **What does the comparison do?** | For every hit `vault_find` is about to return, it compares the row's `source_hash` against `Manifest.Get(path).Hash`. **Equal → the two indexes have seen the same bytes.** Unequal, or the manifest entry is missing, or its hash is empty → the record goes into `problems` with staleness as the reason, and `complete: false`. |
-| **What does it cost?** | One map lookup per returned hit, against an in-memory map, bounded by the page size (max 200, D15.5b). Not per candidate — per *hit*. |
-| **When is it written relative to the index commit?** | Notes are the source of truth, so ordering is chosen to make the failure detectable rather than to make it impossible: **bleve document → SQLite row (with hash) → manifest entry**, manifest last. The manifest is already written last today and already re-indexes on a missing entry. |
-| **What happens on partial write failure?** | **Both directions are caught by the one comparison, which is why it is worth having.** SQLite committed, bleve/manifest not: the manifest still holds the *previous* hash, so it differs from the row's — flagged. bleve committed, SQLite not: the row still holds the previous hash while the manifest holds the new one — flagged. A row with no manifest entry at all (note deleted, row orphaned) — flagged, and `check_integrity` reports it as an orphaned row. |
+| **Where is it stored on the SQLite side?** | One `source_hash` column per record row, written in the same transaction as the row, holding the hash the indexer computed for that note in that pass. **And on the bleve side, revision 7: a stored field on `indexDoc` carrying the same hash** — see "what must be BUILT". |
+| **What does the comparison do?** | For every hit `vault_find` is about to return, it compares the row's `source_hash` against **the hash the text index holds for that document** (revision 7 — revision 6 said `Manifest.Get(path).Hash`, and the manifest is not on the query path). **Equal → the two indexes have seen the same bytes.** Unequal, or the value is missing or empty → the record goes into `problems` with **"the two indexes disagree"** as the reason, and `complete: false`. |
+| **What does it cost?** | **REVISED, revision 7 — revision 6's answer costed a mechanism that does not exist.** A **stored-field fetch** per returned hit, bounded by the page size (max 200, D15.5b), plus 64 bytes of hex per document in the bleve index. Not per candidate — per *hit*. **Neither has been measured** (A-13). |
+| **When is it written relative to the index commit?** | **REVISED, revision 7 — the ordering below is REVERSED from revision 6's, which made the reachable failure undetectable.** **SQLite row (with hash) → bleve document → manifest entry.** The derivation and the failure-point table are under "what must be BUILT" below. |
+| **What happens on partial write failure?** | **REVISED, revision 7. Revision 6's claim that "both directions are caught" was FALSE, and both cases it described were unreachable under its own ordering.** Under the corrected ordering, **every partial failure is detected**, at the cost of false positives — which is the safe direction. The failure-point table is below. A row with no manifest entry at all (note deleted, row orphaned) is flagged, and `check_integrity` reports it as an orphaned row. |
 | **What about attachments?** | `ManifestEntry.Hash` is deliberately **empty for attachments** (`manifest.go:62-65`: FR-039a forbids opening one, and hashing is opening). Records are notes, so this does not arise — but the rule is written for the case anyway: **an empty hash is unknown freshness, which is flagged, never assumed fresh.** |
 
 **What must be BUILT, named so it is not mistaken for something that exists:**
 
 1. A `source_hash` column on every record row, and the write-path change that populates it.
-2. A query-path lookup from `IndexHit.Path` into the live `Manifest`. *(`IndexHit` itself need not
-   gain a field — `Manifest.Get` already takes the relative path the hit carries. That is the
-   cheaper of the two options and it needs no wire change.)*
-3. The `problems` entry, its reason string, and its `complete: false`.
-4. A re-queue of any note whose two hashes disagree, so a flagged record does not stay flagged.
+2. ~~A query-path lookup from `IndexHit.Path` into the live `Manifest`.~~ **WITHDRAWN IN REVISION 7
+   — there is no live `Manifest`, and this was the fourth wrong storage assumption in this
+   document's history, inside the decision written to fix the third.** Verified: `Index`
+   (`pkg/knowledge/index.go:350`) holds `idx`/`dir`/`blevePath`/`manifestPath`/`root`/`mu`/`regKey`
+   and **no manifest field**; `LoadManifest` (`manifest.go:101`) has exactly **two** production call
+   sites — `index.go:751` inside `SyncWith` and `drift.go:218` inside `CheckDrift` — both binding it
+   to a function-local and dropping it on return; and `Manifest` (`manifest.go:74`) has **no
+   mutex**, `Get` (`:175`), `Put` (`:181`) and `Remove` (`:189`) being bare map operations. So the
+   *"one map lookup per returned hit, against an in-memory map"* this decision budgeted is neither
+   in memory at query time nor safe to share with a concurrent indexer. **Revision 6 called this
+   "the cheaper of the two options"; it is not an option at all as described.**
+3. **REPLACES 2, revision 7: the hash rides on the bleve document as a stored field.** D21.2 already
+   reopens `indexDoc` — a closed five-field struct (`pkg/knowledge/index.go:583-589`) — to add
+   title, name, headings, property keys and property values. Adding a sixth field carrying the
+   content hash, with `Store: true`, and retrieving it on search is **the same work already
+   scheduled for W2**. The comparison then reads two values that both arrive with the hit. **No
+   shared mutable state, no lock discipline, no manifest parse — and it compares the thing the
+   requirement is actually about (have the two indexes seen the same bytes?) rather than a proxy
+   for it through a third store.** *(The manifest-cache variant is recorded and **not taken**: it
+   needs a `*Manifest` cached on `Index`, a mutex `Manifest` does not have, and a lock order against
+   `Index.mu` that nobody has designed. Strictly more work, weaker answer.)*
+4. The `problems` entry, its reason string, and its `complete: false`. **The reason string must say
+   "the two indexes disagree", not "the properties index is stale"** — the comparison establishes
+   disagreement, not which side is behind, and claiming the second is a precision the mechanism does
+   not have.
+5. A re-queue of any note whose two hashes disagree, so a flagged record does not stay flagged —
+   **debounced and de-duplicated**, at most one outstanding request per path with a 60-second
+   cooldown. A note under active editing diverges on every query, and an unbounded re-queue turns
+   every query of it into an indexing job.
+
+**The write ordering is RE-DERIVED in revision 7, because revision 6's made the reachable failure
+undetectable.** Revision 6 specified *bleve → SQLite row → manifest, manifest last*, and claimed
+both directions were caught. **Trace it: a failure after bleve and before SQLite leaves the SQLite
+row and the manifest BOTH at the old hash, so they compare EQUAL and the answer is reported
+complete over a stale row.** That is the reachable case and it was the undetected one — and the two
+cases revision 6 described are each *unreachable* under its own ordering (the first requires the
+manifest written despite the SQLite step failing, which manifest-last forbids; the second requires
+bleve not committed under an ordering that puts bleve first). **The ordering is now: SQLite row
+first, then the bleve document, then the manifest.**
+
+| Failure point | SQLite row | bleve | Compare | Detected? |
+|---|---|---|---|---|
+| before the SQLite write | old | old | equal | not a divergence — nothing was written |
+| SQLite write fails, later steps proceed | old | new | differ | **yes** |
+| after SQLite, before bleve | new | old | differ | **yes** |
+| after bleve, before manifest | new | new | equal | **yes for the comparison that matters** — the two indexes agree; the manifest lags and `SyncWith` re-indexes on a missing entry |
+| all three complete | new | new | equal | correct |
+
+**Putting the writer that can fail FIRST costs false positives, and that is the direction to err
+in.** A record flagged "possibly stale" while SQLite is actually ahead of bleve is a caveat on a
+correct answer. A record reported fresh while it is stale is the failure this ADR exists to remove.
+
+**A-13 (LIVE, spec) — the mechanism is DESIGNED, not verified, and it is carried as a stated open
+risk rather than closed.** Whether bleve returns a stored field cheaply on this hit path, and
+whether `Store: true` on a 64-byte field at 100,000 documents is acceptable against D20's W0
+rebuild, are **open**. Both are answerable by the W2 work that reopens the same struct. **This ADR
+has been wrong about storage four times by assuming; a stated gap is worth more than a fifth
+guess**, and the spec's test 62 (`vault_find` concurrent with `SyncWith` under `-race`) is what
+proves the concurrency question is gone rather than moved.
 
 **AC-16.5 — the acceptance criterion tests DIVERGENCE, not rebuild.** W1's exit criterion in
 revision 5 was *"deleting the properties index and reopening rebuilds it with identical query
