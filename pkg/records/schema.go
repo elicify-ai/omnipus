@@ -153,7 +153,7 @@ func propertyTypeNames() []string {
 type EnumValue struct {
 	// Name is the value exactly as declared, and it is what a report renders
 	// (FR-011c). Matching a WRITTEN value against it is case-INSENSITIVE in
-	// full Unicode (FR-011a, Fold) — `Won` in a note resolves TO a declared
+	// full Unicode (FR-011a, FoldKey) — `Won` in a note resolves TO a declared
 	// `won`, collapsing two spellings into one value. That is not the thing D4
 	// forbids: D4 forbids auto-creating a SECOND de-facto value, which is what
 	// Notion's multi-select does on any typo.
@@ -234,7 +234,7 @@ type Property struct {
 // second way to learn the answer.
 //
 // Matching is CASE-INSENSITIVE in FULL UNICODE (FR-011a, R-5), performed by
-// Fold — never strings.ToLower and never strings.EqualFold, both of which get
+// FoldKey — never strings.ToLower and never strings.EqualFold, both of which get
 // German ß wrong and disagree with each other on Greek (see fold.go). A note
 // that writes `Won` against a declared `won` resolves to `won`; the file keeps
 // its own spelling and the report renders the DECLARED name (FR-011c), so two
@@ -250,7 +250,7 @@ type Property struct {
 // a linear scan costs nothing next to reporting every one of them as
 // impermissible.
 func (p *Property) ResolveEnum(value string) (EnumValue, bool) {
-	key := Fold(value)
+	key := FoldKey(value)
 	if p.foldIndex != nil {
 		i, ok := p.foldIndex[key]
 		if !ok {
@@ -259,7 +259,7 @@ func (p *Property) ResolveEnum(value string) (EnumValue, bool) {
 		return p.Values[i], true
 	}
 	for _, v := range p.Values {
-		if Fold(v.Name) == key {
+		if FoldKey(v.Name) == key {
 			return v, true
 		}
 	}

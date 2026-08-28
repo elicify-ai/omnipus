@@ -6,17 +6,21 @@ package records
 
 import (
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 )
 
 // enumFixture uses a value set whose DECLARED order is deliberately not its
-// alphabetical order, so a test that passes cannot be passing by coincidence.
+// lexical order, so a test that passes cannot be passing by coincidence.
 //
-//	declared:      prospect, active, dormant, churned
-//	alphabetical:  active, churned, dormant, prospect
+//	declared:  prospect, active, dormant, churned
+//	lexical:   active, churned, dormant, prospect
 //
-// Every position differs. FR-010 says sorting follows the declared position.
+// Every position differs. Under ADR-068 D4 as revised, declared order is what
+// a REJECTION lists and nothing else; SORTING is lexical over the folded value
+// (R-5). The two orders disagreeing on every element is what makes each of the
+// assertions below discriminating.
 const enumFixture = `
 schema_version: 1
 type: widget
@@ -31,72 +35,93 @@ properties:
       - { name: abandoned, group: cancelled }
 `
 
-// TestEnum_OrderedAndClosed covers FR-010 and FR-011 — spec §7 test 2, US-1
+// TestEnum_ClosedAndLexical covers FR-010 and FR-011 — spec §7 test 2, US-1
 // scenario 1.3, and DS-1's `Active` row.
-func TestEnum_OrderedAndClosed(t *testing.T) {
+//
+// The name changed with the ruling. It was TestEnum_OrderedAndClosed, and
+// "Ordered" was the half ADR-068 D4 WITHDREW: *"the enum ordering is following
+// SQLite standard; if we need different ordering we need to prefix the
+// content."* "Closed" is unchanged and is the half D4's evidence supports.
+func TestEnum_ClosedAndLexical(t *testing.T) {
 	set := loadSet(t, map[string]string{"widget.yaml": enumFixture})
 	widget, _ := set.Get("widget")
 	status, _ := widget.Property("status")
 
-	t.Run("FR-010 values keep their declared order, not the alphabet", func(t *testing.T) {
+	t.Run("PermittedValues keeps the FILE's declared order, because a rejection reads back the way the operator wrote it", func(t *testing.T) {
 		want := []string{"prospect", "active", "dormant", "churned"}
 		if got := status.PermittedValues(); !reflect.DeepEqual(got, want) {
-			t.Fatalf("FR-010: declared order must be preserved; want %v, got %v", want, got)
+			t.Fatalf("declared order must be preserved in the permitted list; want %v, got %v", want, got)
 		}
-		for i, v := range want {
-			pos, ok := status.EnumPosition(v)
-			if !ok {
-				t.Fatalf("%q must be in the declared set", v)
-			}
-			if pos != i {
-				t.Fatalf("FR-010: %q is declared at position %d, EnumPosition said %d", v, i, pos)
-			}
-		}
+		// Declared order is REPORTING data and nothing more. It must not have
+		// become the sort order again: these two orders differ on every
+		// element, so a sort that returned the declared order would be caught
+		// by the lexical assertion below.
 	})
 
-	t.Run("FR-010 sorting follows declared position, not lexical order", func(t *testing.T) {
-		// Start from the alphabetical order so a no-op sort would leave it
-		// alphabetical and fail.
-		values := []string{"active", "churned", "dormant", "prospect"}
-		SortByEnumOrder(status, values)
-		want := []string{"prospect", "active", "dormant", "churned"}
+	t.Run("R-5 sorting is LEXICAL over the folded value, NOT the declared position", func(t *testing.T) {
+		// Start from the declared order, so an implementation that restored
+		// the ordinal — or one that did not sort at all — leaves it declared
+		// and fails.
+		values := append([]string(nil), status.PermittedValues()...)
+		sort.Slice(values, func(i, j int) bool { return FoldLess(values[i], values[j]) })
+		want := []string{"active", "churned", "dormant", "prospect"}
 		if !reflect.DeepEqual(values, want) {
-			t.Fatalf("FR-010: sorting must follow declared position; want %v, got %v", want, values)
+			t.Fatalf("R-5: an enum sorts lexically; want %v, got %v — the declared order is %v and must NOT be the answer",
+				want, values, status.PermittedValues())
 		}
 	})
 
-	t.Run("FR-010 ordering uses position, through a real filter: `status < churned` matches prospect", func(t *testing.T) {
-		// Alphabetically churned < prospect. By declared position the reverse.
-		// ADR-068 D4: ordering is data, not spelling. Driven through
-		// Filter.Match so it exercises the path a real query takes.
-		prospect := ParseRecord("p.md", []byte("---\ntype: widget\nstatus: prospect\n---\n"))
-		dormant := ParseRecord("d.md", []byte("---\ntype: widget\nstatus: dormant\n---\n"))
+	t.Run("R-5(c) the sort KEY is the folded form, so case does not split one value into three places", func(t *testing.T) {
+		// The executed evidence D4 records: "Won" < "lost" is TRUE on raw
+		// bytes and FALSE folded. Byte order over raw values puts every
+		// capitalised value before every lowercase one, which would render
+		// `Won`, `won` and `WON` in three places while grouping collapsed them
+		// into one.
+		if !("Won" < "lost") {
+			t.Fatal("fixture assumption broken: raw byte order must put \"Won\" before \"lost\"")
+		}
+		if FoldLess("Won", "lost") {
+			t.Fatal("R-5(c): the sort key must be the FOLDED form — folded, \"won\" sorts AFTER \"lost\"; sorting raw bytes is the defect")
+		}
+	})
 
-		f := Filter{Property: "status", Op: OpLess, Literal: "churned"}
-		res, err := f.Match(widget, prospect)
-		if err != nil {
-			t.Fatalf("%v", err)
+	t.Run("R-5(d) ties on the folded key break on raw bytes, so the order is TOTAL and deterministic", func(t *testing.T) {
+		// Without the tie-break the order is only partial, and SC-014's
+		// byte-identical-across-rebuild assertion stops holding the moment two
+		// values fold alike.
+		if FoldKey("Won") != FoldKey("won") {
+			t.Fatal("fixture assumption broken: \"Won\" and \"won\" must fold alike")
 		}
-		if !res.Matched {
-			t.Fatalf("FR-010 / §8 R-5: `prospect` is declared before `churned`, so `status < churned` must match; a lexical comparator would say false")
+		if !FoldLess("Won", "won") {
+			t.Fatal("R-5(d): a tie on the folded key must break on RAW bytes, and \"Won\" < \"won\" byte-wise")
 		}
-		res, err = f.Match(widget, dormant)
-		if err != nil {
-			t.Fatalf("%v", err)
+		if FoldLess("won", "Won") {
+			t.Fatal("R-5(d): the tie-break must be antisymmetric — both directions cannot be true")
 		}
-		if !res.Matched {
-			t.Fatalf("`dormant` is declared before `churned` too")
+		if FoldCompare("Won", "Won") != 0 {
+			t.Fatal("R-5(d): a value must compare equal to itself")
+		}
+	})
+
+	t.Run("D4's cost, asserted rather than described: a domain order is a VALUE PREFIX", func(t *testing.T) {
+		// ADR-068 D4 adopts the `1-Pending…7-DoNotContact` prefix hack as the
+		// mechanism, and is explicit that this is a real cost it accepts. The
+		// assertion is here so the mechanism is verified rather than merely
+		// promised: with the prefix, lexical order IS domain order.
+		prefixed := []string{"3-proposal", "1-lead", "4-won", "2-qualified"}
+		sort.Slice(prefixed, func(i, j int) bool { return FoldLess(prefixed[i], prefixed[j]) })
+		want := []string{"1-lead", "2-qualified", "3-proposal", "4-won"}
+		if !reflect.DeepEqual(prefixed, want) {
+			t.Fatalf("D4: prefixing is the ONLY way to get a domain order now; want %v, got %v", want, prefixed)
 		}
 
-		// And the reverse direction, which a lexical comparator would get right
-		// by accident above but wrong here.
-		gt := Filter{Property: "status", Op: OpGreater, Literal: "prospect"}
-		res, err = gt.Match(widget, dormant)
-		if err != nil {
-			t.Fatalf("%v", err)
-		}
-		if !res.Matched {
-			t.Fatalf("FR-010: `dormant` is declared after `prospect`, so `status > prospect` must match — lexically it is the other way round")
+		// And the unprefixed version of the same vocabulary does NOT come out
+		// in domain order — which is exactly why the prefix is required. A
+		// reader who doubts the cost is real can see it here.
+		bare := []string{"proposal", "lead", "won", "qualified"}
+		sort.Slice(bare, func(i, j int) bool { return FoldLess(bare[i], bare[j]) })
+		if reflect.DeepEqual(bare, []string{"lead", "qualified", "proposal", "won"}) {
+			t.Fatal("the fixture no longer demonstrates the cost: this vocabulary must NOT sort into domain order without a prefix")
 		}
 	})
 
@@ -125,17 +150,60 @@ func TestEnum_OrderedAndClosed(t *testing.T) {
 		}
 	})
 
-	t.Run("FR-011 matching is exact, including case", func(t *testing.T) {
-		// DS-1: `Active` against enum(prospect, active) is REJECTED. ADR-068
-		// D4: auto-accepting the near-miss is how one column comes to hold
-		// `Won`, `won` and `Closed Won`.
+	t.Run("FR-011a matching RESOLVES case-insensitively, and renders the DECLARED spelling", func(t *testing.T) {
+		// REVERSED by operator ruling R-D. This subtest previously asserted
+		// that `Active` is REJECTED against enum(..., active, ...). It is not:
+		// resolving `Active` TO `active` collapses two spellings into ONE
+		// value, which is not what D4 forbids — D4 forbids auto-creating a
+		// SECOND de-facto value, the way Notion's multi-select does on a typo.
 		rec := ParseRecord("notes/b.md", []byte("---\ntype: widget\nstatus: Active\n---\n"))
-		rep := ValidateRecord(set, rec, ValidateOptions{})
-		if rep.Valid() {
-			t.Fatalf("DS-1 / D4: `Active` must be rejected against enum(..., active, ...) — matching is case-exact")
+		if r := ValidateRecord(set, rec, ValidateOptions{}); !r.Valid() {
+			t.Fatalf("FR-011a: `Active` must RESOLVE to the declared `active`, not be rejected; findings: %v", r.Errors())
 		}
-		if got := rep.Errors()[0].Code; got != FindingEnumNotPermitted {
-			t.Fatalf("expected %q, got %q", FindingEnumNotPermitted, got)
+
+		declared, ok := status.ResolveEnum("Active")
+		if !ok {
+			t.Fatal("FR-011a: ResolveEnum must resolve `Active` to the declared value")
+		}
+		if declared.Name != "active" {
+			t.Fatalf("FR-011a: resolution must yield the DECLARED spelling so grouping and equality agree; got %q, want \"active\"", declared.Name)
+		}
+
+		// The file keeps its own spelling — FR-011c — so a report can quote
+		// what the operator actually wrote.
+		prop, _ := widget.Property("status")
+		tv, verr := ParseValue(prop, Node{Kind: KindScalar, Text: "Active"})
+		if verr != nil {
+			t.Fatalf("ParseValue: %v", verr)
+		}
+		if tv.Raw != "Active" {
+			t.Fatalf("FR-011c: Raw must keep the file's spelling; got %q", tv.Raw)
+		}
+		if tv.Enum.Name != "active" {
+			t.Fatalf("the typed value must carry the DECLARED name; got %q", tv.Enum.Name)
+		}
+	})
+
+	t.Run("FR-011a resolution is FULL Unicode, not ASCII and not a stdlib fold", func(t *testing.T) {
+		// The discriminating case: German ß. `strings.EqualFold` answers false
+		// here and so does `strings.ToLower`, so an implementation using
+		// either fails this subtest while passing every ASCII one.
+		root := writeVaultSchema(t, "", "de.yaml",
+			"schema_version: 1\ntype: de\nproperties:\n  s: { type: enum, values: [strasse] }\n")
+		set, report, err := LoadSchemas(root)
+		if err != nil {
+			t.Fatalf("LoadSchemas: %v", err)
+		}
+		if !report.OK() {
+			t.Fatalf("fixture schema must load: %v", report.Rejections)
+		}
+		de, _ := set.Get("de")
+		p, _ := de.Property("s")
+		if _, ok := p.ResolveEnum("STRASSE"); !ok {
+			t.Fatal("FR-011a: `STRASSE` must resolve to `strasse` — plain ASCII folding")
+		}
+		if _, ok := p.ResolveEnum("Straße"); !ok {
+			t.Fatal("FR-011a: `Straße` must resolve to `strasse` under FULL Unicode folding; strings.ToLower and strings.EqualFold both answer NO here, and neither is permitted")
 		}
 	})
 
@@ -172,14 +240,52 @@ func TestEnum_OrderedAndClosed(t *testing.T) {
 		}
 	})
 
-	t.Run("FR-010 a repeated enum value is rejected — a repeat has no position", func(t *testing.T) {
+	t.Run("a repeated enum value is rejected", func(t *testing.T) {
 		root := writeVaultSchema(t, "", "bad.yaml", "schema_version: 1\ntype: bad\nproperties:\n  s: { type: enum, values: [a, b, a] }\n")
 		_, report, err := LoadSchemas(root)
 		if err != nil {
 			t.Fatalf("LoadSchemas: %v", err)
 		}
 		if report.OK() {
-			t.Fatalf("FR-010 makes declared position the sort order, so a duplicate value must be rejected")
+			t.Fatalf("a value declared twice must be rejected")
+		}
+	})
+
+	t.Run("two enum values differing ONLY by case are rejected — under FR-011a they are one value", func(t *testing.T) {
+		// This rejection did not exist before the case ruling and is created by
+		// it. With case-insensitive resolution, declaring both `Won` and `won`
+		// gives ResolveEnum two right answers; the map would hand back
+		// whichever was indexed last, silently. The author has to choose which
+		// spelling their reports render.
+		root := writeVaultSchema(t, "", "dupcase.yaml", "schema_version: 1\ntype: dupcase\nproperties:\n  s: { type: enum, values: [Won, won] }\n")
+		_, report, err := LoadSchemas(root)
+		if err != nil {
+			t.Fatalf("LoadSchemas: %v", err)
+		}
+		if report.OK() {
+			t.Fatal("FR-011a: `Won` and `won` fold to one value, so declaring both must be rejected rather than resolved arbitrarily")
+		}
+		var msg string
+		for _, r := range report.Rejections {
+			msg += r.Reason
+		}
+		if !strings.Contains(msg, "Won") || !strings.Contains(msg, "won") {
+			t.Fatalf("the rejection must name BOTH spellings so the author knows which to remove; got %q", msg)
+		}
+	})
+
+	t.Run("full-Unicode duplicate detection: two enum values folding alike across scripts are rejected", func(t *testing.T) {
+		// The ASCII case above passes under strings.ToLower too. This one does
+		// not: `straße` and `STRASSE` fold to one value only under FULL
+		// folding, so an implementation using a stdlib fold accepts a schema
+		// with two values that are really one.
+		root := writeVaultSchema(t, "", "dupfold.yaml", "schema_version: 1\ntype: dupfold\nproperties:\n  s: { type: enum, values: [straße, STRASSE] }\n")
+		_, report, err := LoadSchemas(root)
+		if err != nil {
+			t.Fatalf("LoadSchemas: %v", err)
+		}
+		if report.OK() {
+			t.Fatal("FR-011a: `straße` and `STRASSE` are ONE value under full Unicode folding; declaring both must be rejected")
 		}
 	})
 }

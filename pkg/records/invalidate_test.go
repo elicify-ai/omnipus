@@ -175,7 +175,7 @@ properties:
 		if err != nil || !rep1.OK() {
 			t.Fatalf("%v / %v", err, rep1.Rejections)
 		}
-		writeVaultSchema(t, relRoot, "company.yaml", "schema_version: 1\ntype: company\nproperties:\n  name: { type: text }\n  size: { type: number }\n")
+		writeVaultSchema(t, relRoot, "company.yaml", "schema_version: 1\ntype: company\nproperties:\n  name: { type: text }\n  size: { type: integer }\n")
 		s2, set2, rep2, err := SnapshotSchemas(relRoot)
 		if err != nil || !rep2.OK() {
 			t.Fatalf("%v / %v", err, rep2.Rejections)

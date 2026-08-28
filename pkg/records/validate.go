@@ -649,11 +649,12 @@ func duplicateListFindings(rec Record, report RecordReport, prop *Property, pv P
 
 		first, repeat := -1, false
 		for j := range firsts {
-			// OpContains is the operator elementsEqual implements (R-9); it is
-			// carried only so a problem the oracle reports names the rule it
-			// came from. Both operands are this same property, so R-5's
-			// shared-value-set precondition holds by construction.
-			equal, problems := c.elementsEqual(OpContains, prop.Type, firsts[j].value, v, pv, pv)
+			// OpEqual is R-9's element-wise equality — against a `many`
+			// property, `=` matches an element exactly. It is carried only so
+			// a problem the oracle reports names the rule it came from. Both
+			// operands are this same property, so R-5's shared-value-set
+			// precondition holds by construction.
+			equal, problems := c.compareElements(OpEqual, firsts[j].value, v, pv, pv)
 			if len(problems) > 0 {
 				continue // undecidable, therefore not known to repeat
 			}

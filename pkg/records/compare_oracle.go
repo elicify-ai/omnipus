@@ -6,7 +6,6 @@ package records
 
 import (
 	"fmt"
-	"sort"
 	"strings"
 )
 
@@ -80,13 +79,6 @@ const (
 	// CompareNonConforming is R-4: a present value that does not conform to its
 	// declared type. False for every operator AND reported. Silence is the defect.
 	CompareNonConforming ComparisonProblemCode = "non_conforming_value"
-	// CompareCrossCurrency is R-6: money compared across currencies.
-	//
-	// RETIRING: ruling O-2 (ADR-068 revision 7) deletes the `money` type
-	// outright, and R-6 is retired with it. The code survives only for as long
-	// as TypeMoney does; when the type goes, so do this constant and
-	// crossCurrencyProblem. Nothing new may be built on it.
-	CompareCrossCurrency ComparisonProblemCode = "cross_currency"
 	// CompareOperatorNotDefined is an operator the rules do not define for this
 	// declared type. See operatorDefinedForType for the per-type authority.
 	CompareOperatorNotDefined ComparisonProblemCode = "operator_not_defined_for_type"
@@ -114,9 +106,6 @@ type ComparisonProblem struct {
 	Property string
 	// Side is "left" or "right" when one operand is responsible, else "".
 	Side string
-	// Currencies lists, sorted, every currency present in a cross-currency
-	// comparison. Retiring with R-6 and the `money` type.
-	Currencies []string
 	// Detail is the human sentence.
 	Detail string
 	// Supported lists FR-022b's operators that WOULD have worked here, so a
@@ -133,9 +122,6 @@ func (p ComparisonProblem) String() string {
 	b.WriteString(string(p.Code))
 	b.WriteString(": ")
 	b.WriteString(p.Detail)
-	if len(p.Currencies) > 0 {
-		b.WriteString(" (" + strings.Join(p.Currencies, ", ") + ")")
-	}
 	if p.Remedy != "" {
 		b.WriteString("; " + p.Remedy)
 	}
@@ -287,10 +273,15 @@ func (c Comparator) Evaluate(op Operator, left, right PropertyValue) (bool, []Co
 // name, so that operatorDefinedForType can stay keyed by declared type and a
 // reader can look a row up by the name they already have.
 func comparisonDomain(t PropertyType) PropertyType {
-	switch t {
-	case TypeEnum:
+	switch {
+	case t == TypeEnum:
 		// An enum compares as the text it is.
 		return TypeText
+	case isNumericType(t):
+		// `integer` and `decimal` share one field and one order (value.go's
+		// TypedValue.Number); the declared type decides the BOUNDS, not the
+		// comparison domain.
+		return TypeDecimal
 	}
 	return t
 }
@@ -497,15 +488,10 @@ func (c Comparator) compareElements(op Operator, a, b TypedValue, la, rb Propert
 		return equalityAnswer(op, equal), nil
 	case TypeDate:
 		return orderingHolds(op, compareInstant(a, b)), nil // R-7
-	case TypeNumber:
+	case TypeInteger, TypeDecimal:
+		// R-1 makes these ONE declared type for comparison, so one branch:
+		// `3 = 3.0` is true and an integer compares with a decimal numerically.
 		return orderingHolds(op, a.Number.Cmp(b.Number)), nil
-	case TypeMoney:
-		// R-6, retiring with the `money` type (ruling O-2).
-		cmp, ok := CompareMoney(a.Money, b.Money)
-		if !ok {
-			return false, []ComparisonProblem{crossCurrencyProblem(op, a.Money, b.Money, la)}
-		}
-		return orderingHolds(op, cmp), nil
 	default:
 		return false, []ComparisonProblem{{
 			Code:      CompareOperatorNotDefined,
@@ -617,19 +603,6 @@ func unresolvedRelationProblem(op Operator, side string, link Wikilink, pv Prope
 	}
 }
 
-func crossCurrencyProblem(op Operator, a, b Money, pv PropertyValue) ComparisonProblem {
-	currencies := []string{a.Currency, b.Currency}
-	sort.Strings(currencies)
-	return ComparisonProblem{
-		Code:       CompareCrossCurrency,
-		Operator:   op,
-		Type:       TypeMoney,
-		Property:   pv.Property.Name,
-		Currencies: currencies,
-		Detail:     "money compares only within one currency; no conversion is performed (ADR-068 O-2)",
-	}
-}
-
 // operatorDefinedForType is the disposition of each operator for each declared
 // type. FR-022b's ten operators, seven declared types.
 //
@@ -670,9 +643,11 @@ func crossCurrencyProblem(op Operator, a, b Money, pv PropertyValue) ComparisonP
 //   - date — R-7: compares as an instant, so ordering and equality both hold.
 //     `LIKE` is NOT defined: SQL would reach it by coercing the date to text,
 //     and this design coerces nothing (R-1).
-//   - number — R-1's own worked example and AC-8.3 ("3 > 2 is TRUE") require the
-//     full ordering family. `LIKE` is undefined for the same reason as `date`.
-//   - money — R-6, retiring with the type under ruling O-2.
+//   - integer, decimal — R-1's own worked example and AC-8.3 ("3 > 2 is TRUE")
+//     require the full ordering family, and R-1 makes the two ONE comparison
+//     type, so their rows MUST be identical. `LIKE` is undefined for the same
+//     reason as `date`. TestComparison_DomainMatesShareOneRow holds the
+//     identity, so a one-sided edit cannot land.
 //
 // `IN` is defined wherever `=` is, and for the same reason: it IS `=` over a set.
 var operatorDefinedForType = map[PropertyType]map[Operator]bool{
@@ -701,12 +676,12 @@ var operatorDefinedForType = map[PropertyType]map[Operator]bool{
 		OpLess: true, OpLessOrEqual: true, OpGreater: true, OpGreaterOrEqual: true,
 		OpLike: false, OpIn: true,
 	},
-	TypeNumber: {
+	TypeInteger: {
 		OpEqual: true, OpNotEqual: true,
 		OpLess: true, OpLessOrEqual: true, OpGreater: true, OpGreaterOrEqual: true,
 		OpLike: false, OpIn: true,
 	},
-	TypeMoney: {
+	TypeDecimal: {
 		OpEqual: true, OpNotEqual: true,
 		OpLess: true, OpLessOrEqual: true, OpGreater: true, OpGreaterOrEqual: true,
 		OpLike: false, OpIn: true,

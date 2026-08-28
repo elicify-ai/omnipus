@@ -73,8 +73,8 @@ func TestDecimal_AlignRefusesAnUnboundedScaleGap(t *testing.T) {
 
 		// The widest pair ParseDecimal can produce: 1e100 and 1e-100. This row
 		// is the one that sets maxRescaleGap's value — bounding the gap at
-		// maxDecimalScale instead would refuse it, and SumMoney would start
-		// rejecting a legitimate total.
+		// maxDecimalScale instead would refuse it, and any total over that pair
+		// would start reporting a legitimate sum as an error.
 		{"the widest gap two parsed values can present", -maxDecimalScale, maxDecimalScale, false},
 		{"one step wider than parsing can reach", -(maxDecimalScale + 1), maxDecimalScale, true},
 
@@ -172,8 +172,8 @@ func min32(a, b int32) int32 {
 // The gap is a DIFFERENCE between two scales, so bounding it at maxDecimalScale
 // — the bound on a SINGLE scale — is off by a factor of two: `1e100` parses to
 // scale -100 and `1e-100` to scale +100, both ordinary, and their gap is 200.
-// With the tighter bound SumMoney refuses that pair outright, turning a
-// legitimate total into an error. That is a worse defect than the slow
+// With the tighter bound Add refuses that pair outright, turning a legitimate
+// total into an error. That is a worse defect than the slow
 // comparison being fixed, and it would have shipped silently, because every
 // other test in this file uses hand-built Decimals where the narrowing is
 // invisible.
@@ -228,55 +228,13 @@ func TestDecimal_TheGapBoundRefusesNothingParsingCanProduce(t *testing.T) {
 					a.Unscaled(), a.Scale(), b.Unscaled(), b.Scale(), err)
 			}
 			if _, err := a.Add(b); err != nil {
-				t.Fatalf("Add refused two PARSED values (%s@%d and %s@%d) with %v — SumMoney would report this as a failed total", a.Unscaled(), a.Scale(), b.Unscaled(), b.Scale(), err)
+				t.Fatalf("Add refused two PARSED values (%s@%d and %s@%d) with %v — a total over these two values would be reported as a failure", a.Unscaled(), a.Scale(), b.Unscaled(), b.Scale(), err)
 			}
 			if _, err := a.Sub(b); err != nil {
 				t.Fatalf("Sub refused two PARSED values (%s@%d and %s@%d) with %v", a.Unscaled(), a.Scale(), b.Unscaled(), b.Scale(), err)
 			}
 			checkAgainstOracle(t, "parsed pair", a, b)
 		}
-	}
-}
-
-// TestSumMoney_TotalsTheWidestParseableScaleSpread drives the same boundary
-// through the ONLY production caller of Add, so the property is asserted where
-// a regression would actually be felt rather than only at the arithmetic layer.
-func TestSumMoney_TotalsTheWidestParseableScaleSpread(t *testing.T) {
-	// Same currency, scales at both ends of the parseable range: a gap of
-	// exactly maxRescaleGap.
-	big1, err := ParseDecimal("1e100")
-	if err != nil {
-		t.Fatalf("ParseDecimal(1e100): %v", err)
-	}
-	tiny, err := ParseDecimal("1e-100")
-	if err != nil {
-		t.Fatalf("ParseDecimal(1e-100): %v", err)
-	}
-	// Errorf, not Fatalf — see the note in the sibling test: the SumMoney call
-	// below is the evidence that matters, so let it run and speak for itself.
-	if gap := int64(tiny.Scale()) - int64(big1.Scale()); gap != maxRescaleGap {
-		t.Errorf("fixture gap is %d, want exactly maxRescaleGap (%d) — this test is meant to sit ON the bound", gap, maxRescaleGap)
-	}
-
-	total, ok, err := SumMoney([]Money{
-		{Amount: big1, Currency: "SGD"},
-		{Amount: tiny, Currency: "SGD"},
-	})
-	if err != nil {
-		t.Fatalf("SumMoney refused a two-value total spanning the parseable scale range: %v — this is the user-visible shape of a gap bound set one factor of two too tight", err)
-	}
-	if !ok {
-		t.Fatal("SumMoney reported ok=false for a non-empty, single-currency set")
-	}
-
-	// The total must be EXACT, not merely produced: 10^100 + 10^-100 carries
-	// 201 significant digits and this package never rounds.
-	wantRat := new(big.Rat).Add(ratOf(big1), ratOf(tiny))
-	if got := ratOf(total.Amount); got.Cmp(wantRat) != 0 {
-		t.Fatalf("SumMoney total = %s, want %s — the sum survived the bound but lost digits", got.RatString(), wantRat.RatString())
-	}
-	if total.Currency != "SGD" {
-		t.Fatalf("total currency = %q, want SGD", total.Currency)
 	}
 }
 
