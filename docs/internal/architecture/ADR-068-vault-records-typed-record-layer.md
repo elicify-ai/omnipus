@@ -1,6 +1,6 @@
 # ADR-068 — Vault records: a typed record layer with relations
 
-- **Status:** Proposed (2026-08-28) — **revision 10**, recording **three operator rulings raised by the Stage 1 implementers who hit them while building the read path** (**D16.6a**, new), together with the AC-8.10 wording defects the same reading exposed. **Two of the three were CONTRADICTIONS in the implementing specification, not under-specifications** — it required a statement in one place and failed the build for it in another — and the implementers emitted the required statement and reported the conflict upward rather than violating the guard quietly. **What revision 10 changes is set out immediately below.** *Revision 9 followed the UAT author's read of revision 8 / spec Draft 6 (`../specs/uat-vault-records-2026-08-28.md`, 99 cases over sixteen Parts) surfaced ten under-specifications that different implementers would each have guessed at differently; what revision 9 changed is set out below the revision-10 block.* *Revision 8 followed grill pass 2* over the implementing specification (BLOCK: 11 critical, 42 major, 14 minor — `../specs/vault-records-spec-2026-08-25-review-round6.md`) and one further operator ruling (**Unicode case folding is REQUIRED**). Revision 7 followed grill pass 1 over the implementing specification (BLOCK: 19 critical, 41 major, 17 minor) and **nine operator rulings**. **Revision 7 is mostly a DELETION, and that is the headline.** The largest ruling reverses D16.2b: **the properties index NARROWS CANDIDATES; our own tested comparator DECIDES.** SQLite evaluates no comparison. That makes D16.6's nine violations **not applicable rather than defeated** — a stronger and far simpler position than nine deliberate defeats, **none of which was verified and zero of the seven the spec had specified turned out to be sufficient.** Also deleted: the **`money` type** in full (D3, O-2 — the requirement is a precise decimal and an int64, not a currency-carrying value); **enum ordering by declared position** (D4's second clause, replaced by SQLite's own lexical order with a value prefix for domain order); and our **invented filter-operator vocabulary**, replaced by SQL's (O-3, amended). Added: `number` splits into **`integer` and `decimal`**; **case-insensitive matching is a feature**, and it is a comparator rule because SQLite folds no non-ASCII at all; **no hardcoded domain vocabulary anywhere** (D0, strengthened with the operator's "empty database, all capabilities, nothing predefined"); and the corrections grill pass 1 earned — a re-derived freshness ordering with its residual carried as a **stated open risk**, four wrong code citations, and a tool-cost argument computed against the wrong denominator.
+- **Status:** Proposed (2026-08-28) — **revision 11**, recording the operator's ruling on **what a ranking evaluation is allowed to CONCLUDE when the query set it requires does not exist** (**D21.3a**, new), together with the anti-rigging clause that ruling depends on and one baseline correction this document owed the specification. **What revision 11 changes is set out immediately below; the revision-10 block follows it.** *Revision 10 recorded three operator rulings raised by the Stage 1 implementers who hit them while building the read path (**D16.6a**, new), together with the AC-8.10 wording defects the same reading exposed. **Two of the three were CONTRADICTIONS in the implementing specification, not under-specifications** — it required a statement in one place and failed the build for it in another — and the implementers emitted the required statement and reported the conflict upward rather than violating the guard quietly. the revision-10 block sits immediately below the revision-11 one.* *Revision 9 followed the UAT author's read of revision 8 / spec Draft 6 (`../specs/uat-vault-records-2026-08-28.md`, 99 cases over sixteen Parts) surfaced ten under-specifications that different implementers would each have guessed at differently; what revision 9 changed is set out below the revision-10 block.* *Revision 8 followed grill pass 2* over the implementing specification (BLOCK: 11 critical, 42 major, 14 minor — `../specs/vault-records-spec-2026-08-25-review-round6.md`) and one further operator ruling (**Unicode case folding is REQUIRED**). Revision 7 followed grill pass 1 over the implementing specification (BLOCK: 19 critical, 41 major, 17 minor) and **nine operator rulings**. **Revision 7 is mostly a DELETION, and that is the headline.** The largest ruling reverses D16.2b: **the properties index NARROWS CANDIDATES; our own tested comparator DECIDES.** SQLite evaluates no comparison. That makes D16.6's nine violations **not applicable rather than defeated** — a stronger and far simpler position than nine deliberate defeats, **none of which was verified and zero of the seven the spec had specified turned out to be sufficient.** Also deleted: the **`money` type** in full (D3, O-2 — the requirement is a precise decimal and an int64, not a currency-carrying value); **enum ordering by declared position** (D4's second clause, replaced by SQLite's own lexical order with a value prefix for domain order); and our **invented filter-operator vocabulary**, replaced by SQL's (O-3, amended). Added: `number` splits into **`integer` and `decimal`**; **case-insensitive matching is a feature**, and it is a comparator rule because SQLite folds no non-ASCII at all; **no hardcoded domain vocabulary anywhere** (D0, strengthened with the operator's "empty database, all capabilities, nothing predefined"); and the corrections grill pass 1 earned — a re-derived freshness ordering with its residual carried as a **stated open risk**, four wrong code citations, and a tool-cost argument computed against the wrong denominator.
   - *Revision 6:* after a fifth adversarial review (BLOCK: 8 critical, 25 major, 3 minor — `ADR-068-vault-records-typed-record-layer-review-round5.md`). Revision 5's own headline numbers were wrong: the catalog is **98 tools, not 102**, and the two-index staleness mitigation named a **freshness token that does not exist**. Both are repaired below, the second by specifying the mechanism rather than asserting it again. The agent tool surface grows from five `vault_*` tools to **six** — the control plane gets its own policy lever (D15.6). D16's latency argument is **withdrawn as unevidenced**; the capability argument, which is the one that survives, now carries the decision alone. And **D16.6 is new**: SQLite's default semantics contradict **nine of the thirteen** comparison rules the spec's §8 oracle defines, eight of them silently — the strongest single consideration bearing on D16, which revision 5 omitted entirely while the implementing spec carried it.
   - *Revision 5:* three-agent design council; D16 resolved to a two-index design; nine `record_*` tools cut to five `vault_*`; D21, D22, D23 added.
   - *Revision 4 and earlier:* proposed 2026-08-25 after three adversarial reviews (BLOCK each time: 7, 8, then 10 critical). Revision 1 made three false claims about existing code (D14, D16, D18); all three are corrected in place and the corrections are marked. D16 had been wrong three times and was deliberately left unresolved behind a measured spike.
@@ -11,6 +11,37 @@
   - *"`repairAndValidateToolPolicyCoverage` emits **two** WARNs, not one."* It emits **`1 + N`** — one at `pkg/gateway/gateway.go:975`, plus one per repaired agent at `pkg/config/validate.go:576` — and **zero** when nothing needed repair. The **citation** half of the same finding is upheld: the function is at `gateway.go:968`, not in `pkg/config/validate.go`.
 
   A review is evidence, not an oracle, and complying with a wrong finding would be the same failure as ignoring a right one.
+- **What revision 11 changes. All of it lands in one new decision, D21.3a, because all of it is
+  about the same thing: the D21.3 ranking fusion's ship gate demanded evidence that does not
+  exist, and nothing said what a substitute is allowed to conclude.**
+  - **(a) The gate gets TWO NAMED BRANCHES, and they are not symmetric (D21.3a; spec FR-113).**
+    **Branch A** — a human-graded 0/1/2 query set — is **authoritative in both directions**.
+    **Branch B** — a substituted self-generated known-item set — is **ONE-DIRECTIONAL: it MUST
+    veto a fusion that regresses and MUST NOT authorise one that improves.** Under Branch B the
+    fusion ships **BUILT, MEASURED and DEFAULTED OFF**. **A substituted measurement permitted to
+    authorise would be worse than no measurement**, because it manufactures the confidence the
+    gate existed to withhold.
+  - **(b) The asymmetry needs TWO reasons, not one, and they cover different signals (D21.3a).**
+    The query-independence premise reaches recency and backlink degree and **does not reach**
+    field weighting or the name prior; for those the reason is the **task** — a known-item task is
+    not the graded-relevance task. Resting the whole rule on the first premise, as the ruling was
+    first stated, left the two signals most likely to move the number unaccounted for.
+  - **(c) An ANTI-RIGGING clause, recorded with its reasoning rather than only its rule
+    (D21.3a; spec FR-113).** Recency and backlink degree MUST be statistically independent of
+    ground-truth selection, **asserted by a test, not claimed in prose** — because otherwise the
+    cheapest way to make the backlink signal look good is to seed the corpus so the answer is
+    always a hub. **It is not hypothetical:** a corpus generated at 520 notes indexed 430, a
+    non-injective name pairing having let 90 notes overwrite each other with no error anywhere.
+    **The fixture silently lost 17% of itself and still looked fine.**
+  - **(d) The deciding BASELINE was contradicted between this document and the specification
+    (D21.3a).** D21.3 said *"plain BM25"*; the spec said *"plain BM25F"*. **BM25F is itself part
+    of the change under test**, so deciding against BM25F alone grants the field weighting for
+    free. D21.3's wording wins; both columns are reported and the status quo decides.
+  - **(e) W2's exit criterion was stated as a two-state gate and the live branch is not one.**
+    Three outcomes: **default on**, **built and off**, **not shipped at all**. Corrected in the
+    wave table in place.
+  - **Current status, stated so nobody infers it: BRANCH B is live.** `FusionEnabledByDefault =
+    false` (`pkg/knowledge/rank.go`). Flipping the constant is not how the fusion is turned on.
 - **What revision 10 changes. All of it lands in one new decision, D16.6a, because all of it is
   about the same thing: how ruling R-A is ENFORCED, and whether the artifact that enforces it
   admits the design it was written to protect.**
@@ -2305,7 +2336,7 @@ did not do is act on it.)*
 | Wave | Delivers | Exit criterion |
 |---|---|---|
 | **W1** | Schema files, the seven types, arity/presence/scope, validation. The SQLite properties index (D16.2) with **`source_hash` and the divergence check specified in D16.5**, its rebuild-from-notes path, and the **platform stub and refusal** (D16.2a). `vault_describe` including `check_integrity` and its bounds. **The catalog-count assertion (D15.0).** **Updating `CLAUDE.md` and ADR-067 §A2 (D16.4 item 1).** | **AC-16.5** — a record whose two indexes disagree is reported `complete: false` and named, in **both** divergence directions; deleting the properties index and reopening rebuilds it with identical query results; **both indexes, idle and at the cap, measured inside 64 MB on Linux and macOS**; a query on a SQLite-less build refuses by name and never returns empty; `CLAUDE.md:66` no longer says SQLite is isolated to WhatsApp |
-| **W2** | Fielded indexing (D21.2) **including the freshness stored field (D16.5) — and W1's stated FALLBACK while it is unverified, revision 8 (spec review round 6, M-28): until this wave lands, W1 reports every record `complete: false` with staleness-unknown as the reason, rather than shipping a freshness comparison whose two open questions are answered a wave later**, the **`ScoringModel` correction and the thirteen documentation corrections** (D21.1), BM25F weighting + RRF (D21.3), the tokenizer resolution (D21.5). `vault_find` — plain words, typed filters, grouping, `kind: task`, the problem report, **and the comparator that decides them (D16.2b as reversed)**. | a query over a typed corpus returns records + a populated `problems` array; a type mismatch is never a silent empty result; a field query on a property key is possible at all, which it is not today; **no `.go` file in the tree attributes BM25 to bleve while `ScoringModel` is unset**; **AC-16.6's six-mutation table is produced as an ARTIFACT, not a pass**; **D21.3's fusion clears its nDCG@10 threshold or does not ship**; **A-13 is answered — the stored-field freshness mechanism holds, or it does not and is replaced before W3** |
+| **W2** | Fielded indexing (D21.2) **including the freshness stored field (D16.5) — and W1's stated FALLBACK while it is unverified, revision 8 (spec review round 6, M-28): until this wave lands, W1 reports every record `complete: false` with staleness-unknown as the reason, rather than shipping a freshness comparison whose two open questions are answered a wave later**, the **`ScoringModel` correction and the thirteen documentation corrections** (D21.1), BM25F weighting + RRF (D21.3), the tokenizer resolution (D21.5). `vault_find` — plain words, typed filters, grouping, `kind: task`, the problem report, **and the comparator that decides them (D16.2b as reversed)**. | a query over a typed corpus returns records + a populated `problems` array; a type mismatch is never a silent empty result; a field query on a property key is possible at all, which it is not today; **no `.go` file in the tree attributes BM25 to bleve while `ScoringModel` is unset**; **AC-16.6's six-mutation table is produced as an ARTIFACT, not a pass**; **D21.3's fusion reaches ONE OF THREE outcomes and the artifact says which (D21.3a, revision 11): DEFAULT ON if a human-graded set clears the threshold, BUILT AND OFF if a substituted known-item set shows no harm, NOT SHIPPED AT ALL on a regression** *(revision 10 wrote this as a two-state gate, which the live branch is not)*; **A-13 is answered — the stored-field freshness mechanism holds, or it does not and is replaced before W3** |
 | **W3** | Relations, inverses, relation grouping; `near` + `hops` and its **composition with filters** (D15.3). `vault_read`. | the §1.2 two-hop question is one call with no hand-maintained state; "notes mentioning pricing within 2 hops of `[[Acme]]`" is one call |
 | **W4** | `vault_edit`: byte-preserving writes, the **list-valued splice** (D14), `create`'s `template` argument, and the two **unbuilt primitives** — `replace_body` and the **trash CONVENTION** (where a trashed note goes, what happens to inbound links, whether the index forgets it immediately) — each with its own FR (D14.1). Derived interaction history (D17). | write-read-back is byte-identical outside the patched span; a `replace_body` whose anchor is ambiguous is refused, naming both matches; the trash convention is written down and reviewed before any tool exposes it |
 | **W5** | `vault_restructure`: rename, move, and the trash **operation**. `vault_configure`: record-type and saved-view authoring (D15.6, D23). The D18 policy seeding and its ACs. **The write-path rate limiter (D15.5b).** **Retiring the nine `knowledge_*` names** — from `allStaticToolNames` (`pkg/coreagent/core.go:357-482`), from the global ceiling (`pkg/config/defaults.go`), from all five seed maps that carry them, and from every skill and prompt that names one. | an operator can forbid restructuring while permitting edits **and forbid schema authoring while permitting both**, with a test proving all three policies are independently settable; **after this wave no `knowledge_*` name exists anywhere in the catalog or any seed map, and the catalog assertion reads 95** |
@@ -2425,6 +2456,72 @@ principled answer, and RRF removes the question rather than answering it badly.
 > each well-established individually; *this combination, on vault data, is not something we have
 > measured or found measured.* It is a reasoned starting point and must be treated as one — W2
 > should ship it behind a comparison against plain BM25, not assume the fusion helps.
+
+**D21.3a — What the fusion's ship gate is allowed to CONCLUDE when the query set it requires
+does not exist. NEW, revision 11.**
+
+D21.3's exit criterion above is sound and is unchanged. What neither this decision nor the
+implementing specification anticipated is the ordinary case: **the evaluation FR-113 demands
+needs a query set *"written by a human, reviewed by a second"* with graded 0/1/2 judgements,
+and no such set exists.** Authorship cannot be manufactured. An implementer reaching W2 has to
+choose between measuring nothing and measuring something else, and **the specification said
+nothing about what "something else" is allowed to conclude — which is the entire question.**
+
+**The ruling: two branches, and they are not symmetric.**
+
+- **Branch A — human-graded (0/1/2), authored by one person and reviewed by a second.** The
+  measurement is **authoritative in both directions**: the fusion becomes the default **if and
+  only if** mean nDCG@10 improves by ≥ 0.03 absolute and the fusion's 10th percentile does not
+  fall below the baseline's.
+- **Branch B — a SELF-GENERATED KNOWN-ITEM set may be substituted** (sample a sentence from a
+  note, reduce it to the query a person would type, ground truth is the note it came from).
+  **Its verdict is ONE-DIRECTIONAL: it MUST veto a fusion that regresses, and it MUST NOT
+  authorise one that improves.** Under Branch B the fusion ships **BUILT, MEASURED and DEFAULTED
+  OFF**, with the ablation table committed as an artifact.
+
+**Why the asymmetry, and why one reason is not enough to carry it.** The veto is sound because
+relevance is established by **provenance** — no ranking under test had a hand in deciding the
+right answer. The refusal to authorise needs **two** reasons, because they cover different
+signals. For the **query-independent** signals (recency, backlink degree) the corpus is built so
+they carry no information about which note is ground truth, so a flat or positive result is
+evidence of **no harm** and can be nothing else. For the **query-dependent** signals (field
+weighting, the name prior) that premise does not apply at all, and the reason is the **task**:
+a known-item task is not the graded-relevance task, and binary provenance judgements are not the
+0/1/2 judgements the 0.03 threshold was calibrated against. *An earlier statement of this ruling
+rested the whole one-directional rule on the query-independence premise alone, which would have
+left the two signals most likely to move the number unaccounted for by its own reasoning.*
+
+**The anti-rigging clause, which Branch B depends on.** The corpus MUST be constructed so that
+recency and backlink degree are statistically independent of ground-truth selection, and that
+independence MUST be **asserted by a test rather than claimed in prose** — because without it
+the cheapest way to make the backlink signal look good is to seed the corpus so the answer is
+always a hub, and nothing in the previous wording forbade it. **This is not hypothetical.** The
+first generated corpus produced **520 notes and indexed 430**: a non-injective entity-name
+pairing let **90 notes silently overwrite each other with no error anywhere**, and it skewed the
+independence property itself (ground truth 6.10 mean backlinks against a corpus mean of 3.63,
+because the survivors were disproportionately hubs). **The fixture silently lost 17% of itself
+and still looked fine** — and a corpus that quietly shrinks produces metrics computed over a
+population nobody described, which makes every number downstream confidently wrong. The full
+worked example, the two size assertions it obliges, and the honest limit of the independence
+guard itself are in the specification's FR-113.
+
+**A correction this revision owes the specification: the deciding BASELINE.** D21.3 worded the
+comparison against *"plain BM25"* and the specification worded it against *"plain BM25F"*. The
+difference is not pedantic — **BM25F field weighting is itself part of the change under test**,
+so deciding against BM25F alone silently grants the field weighting for free. **Both columns are
+reported; the one that decides is the status quo, plain unweighted BM25** — the ranking real
+users have today. D21.3's wording was the right one and the specification is amended to match.
+
+**Current status, so no reader has to infer it: BRANCH B is live.** No human-graded set exists;
+the fusion is built, measured against a self-generated known-item set, and **defaulted off**
+(`FusionEnabledByDefault = false`, `pkg/knowledge/rank.go`). **Flipping that constant is not how
+the fusion is turned on** — producing a Branch A query set is, and the ablation must be re-run
+against it. The constant and the evidence are held together by an assertion, not by prose: the
+eval fails if the two ever disagree in either direction.
+
+**Consequence for the wave plan.** W2's exit criterion is no longer *"clears the threshold or does
+not ship"*. There are **three** outcomes: **default on** (Branch A cleared), **built and off**
+(Branch B, no harm shown), **not shipped at all** (either branch, a regression).
 
 **D21.4 — Query expansion (RM3 / pseudo-relevance feedback) only on retry, never by default.**
 
@@ -3027,7 +3124,10 @@ its own ADR rather than an implementation note.
 - **Two operations in D15.3 are unbuilt primitives, not relabellings** (D14.1): body-replace
   needs anchor-ambiguity rules, trash needs a soft-delete convention. Both are real design work.
 - **The D21.3 signal mix is unmeasured on vault data** and is flagged in place as our own
-  composition rather than a benchmarked result.
+  composition rather than a benchmarked result. *(Amended, revision 11: it is now MEASURED, but
+  only one-directionally — a self-generated known-item eval that can veto the fusion and cannot
+  authorise it. The claim above stands for the direction that matters: nothing has shown the mix
+  HELPS. See D21.3a.)*
 
 *Added in revision 6:*
 
@@ -3137,6 +3237,9 @@ its own ADR rather than an implementation note.
 - **It does not claim the D21.3 ranking composition is benchmarked.** BM25F and Reciprocal Rank
   Fusion are each established; *this* mix of four signals over vault data is **our composition**,
   and D21.3 says so in place. W2 must compare it against plain BM25 rather than assume it helps.
+  *(Revision 11: W2 did compare it — against a substituted known-item set, because the human-graded
+  set FR-113 requires does not exist. That comparison is competent to VETO and not to AUTHORISE,
+  so the fusion ships defaulted OFF and this bullet still holds unchanged. D21.3a.)*
 - **It does not claim the two-index design is measured.** The spike measured the design this ADR
   did **not** take (D16.3). The two-index write path, concurrent queries and every non-macOS
   platform are unmeasured, exactly as the spike's own §6.1 records for its own numbers. D20
