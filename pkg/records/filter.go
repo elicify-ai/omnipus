@@ -671,12 +671,83 @@ func (f Filter) Match(schema *Schema, rec Record) (MatchResult, error) {
 //     negative filter unless the caller opted out.
 //  4. Otherwise the oracle's answer stands, negated if asked.
 func (f Filter) MatchWith(c Comparator, schema *Schema, rec Record) (MatchResult, error) {
-	prop, literals, err := f.Validate(schema)
+	pf, err := f.Prepare(schema)
 	if err != nil {
 		return MatchResult{}, err
 	}
+	return pf.MatchValue(c, ResolveProperty(rec, pf.Property)), nil
+}
 
-	left := ResolveProperty(rec, prop)
+// MatchValue evaluates a filter against an ALREADY-RESOLVED left operand.
+//
+// It is for callers whose values did not come from frontmatter. The candidate
+// stream (pkg/records/propindex) decodes a record's values out of the index
+// through StoredProp.Typed, so it has a PropertyValue and no Record — and
+// rebuilding a Frontmatter to feed MatchWith would be a SECOND DECODE PATH,
+// which is the same class of defect as a second comparator.
+//
+// It validates on every call (FR-023). A caller applying one filter to many
+// records should Prepare once and use PreparedFilter.MatchValue instead; this
+// form exists so a single-shot caller does not have to think about it.
+func (f Filter) MatchValue(c Comparator, schema *Schema, left PropertyValue) (MatchResult, error) {
+	pf, err := f.Prepare(schema)
+	if err != nil {
+		return MatchResult{}, err
+	}
+	return pf.MatchValue(c, left), nil
+}
+
+// PreparedFilter is a filter that has been validated against a schema ONCE and
+// can then be applied to many already-resolved property values.
+//
+// It exists for the candidate-stream evaluation path (pkg/records/propindex):
+// there, a record's values arrive DECODED FROM THE INDEX rather than parsed from
+// frontmatter, so there is no Record to hand to MatchWith — and FR-023 requires
+// the filter to be validated before any record is touched, which per-record
+// re-validation would turn into a per-record cost over a population bounded only
+// by FR-064's B1 (50,000).
+//
+// It is a SEAM, not a second implementation. MatchValue below holds the whole
+// decision, and MatchWith reaches it through the same door — the arrangement
+// filter.go's header forbids reintroducing is a second COMPARISON, and there is
+// still exactly one. Mutating any branch of MatchValue must break both callers;
+// if it breaks only one, a copy has grown back.
+type PreparedFilter struct {
+	// Filter is the predicate as the caller wrote it.
+	Filter Filter
+	// Property is the DECLARED property the filter names — the same pointer the
+	// resolved value must carry, so the comparator sees one declaration.
+	Property *Property
+	// literals is the parsed right-hand side: none for the unary two, one for a
+	// scalar operator, `IN`'s whole set otherwise. Unexported because a caller
+	// that could rewrite it could change the comparison without revalidating it.
+	literals []TypedValue
+}
+
+// Prepare validates a filter against a record type's schema (FR-023) and
+// returns the reusable form. The error is Validate's, unchanged.
+func (f Filter) Prepare(schema *Schema) (PreparedFilter, error) {
+	prop, literals, err := f.Validate(schema)
+	if err != nil {
+		return PreparedFilter{}, err
+	}
+	return PreparedFilter{Filter: f, Property: prop, literals: literals}, nil
+}
+
+// MatchValue evaluates the prepared filter against an already-resolved property
+// value. It is where the four cases documented on MatchWith actually live.
+//
+// left.Property is overwritten with the prepared declaration rather than
+// trusted: the comparator's type disposition, arity rule and enum-membership
+// check all read it, and a caller that resolved the value against a stale or
+// hand-built Property would silently get a comparison governed by the wrong
+// declaration.
+func (pf PreparedFilter) MatchValue(c Comparator, left PropertyValue) MatchResult {
+	f := pf.Filter
+	left.Property = pf.Property
+	literals := pf.literals
+	prop := pf.Property
+
 	res := MatchResult{State: left.State, Problems: left.Findings}
 
 	right := literalOperand(prop, f.Op, literals)
@@ -688,14 +759,14 @@ func (f Filter) MatchWith(c Comparator, schema *Schema, rec Record) (MatchResult
 	switch f.Op {
 	case OpIsNull, OpIsNotNull:
 		res.Matched = answer != f.Negate
-		return res, nil
+		return res
 	}
 
 	// (2) the oracle could not compare — R-4, R-8, or an operator no rule
 	// defines. Excluded and reported, NEVER re-included by negation.
 	if left.State == StateNonConforming || len(cproblems) > 0 {
 		res.Matched = false
-		return res, nil
+		return res
 	}
 
 	// (3) absent — §8 R-2 already gave the comparison's verdict; FR-008 now
@@ -716,12 +787,12 @@ func (f Filter) MatchWith(c Comparator, schema *Schema, rec Record) (MatchResult
 			// explicit opt-out the requirement provides for.
 			res.Matched = !answer && !f.ExcludeAbsent
 		}
-		return res, nil
+		return res
 	}
 
 	// (4) the oracle's answer.
 	res.Matched = answer != f.Negate
-	return res, nil
+	return res
 }
 
 // literalOperand wraps the query's literal values as the right-hand operand.
