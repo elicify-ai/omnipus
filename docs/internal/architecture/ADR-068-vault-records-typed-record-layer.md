@@ -198,7 +198,7 @@ properties:
   segment:     { type: enum,   values: [vendor, customer, partner], many: true }
   owner:       { type: person }
   website:     { type: text }
-  arr:         { type: money }
+  arr:         { type: decimal, unit: GBP }   # revision 7: `money` is deleted; a unit is metadata
 ```
 
 **Why a file and not a UI:** Notion added schema audit logging in 2026 — Enterprise-only,
@@ -1849,7 +1849,7 @@ did not do is act on it.)*
 | Wave | Delivers | Exit criterion |
 |---|---|---|
 | **W1** | Schema files, the seven types, arity/presence/scope, validation. The SQLite properties index (D16.2) with **`source_hash` and the divergence check specified in D16.5**, its rebuild-from-notes path, and the **platform stub and refusal** (D16.2a). `vault_describe` including `check_integrity` and its bounds. **The catalog-count assertion (D15.0).** **Updating `CLAUDE.md` and ADR-067 §A2 (D16.4 item 1).** | **AC-16.5** — a record whose two indexes disagree is reported `complete: false` and named, in **both** divergence directions; deleting the properties index and reopening rebuilds it with identical query results; **both indexes, idle and at the cap, measured inside 64 MB on Linux and macOS**; a query on a SQLite-less build refuses by name and never returns empty; `CLAUDE.md:66` no longer says SQLite is isolated to WhatsApp |
-| **W2** | Fielded indexing (D21.2), the **`ScoringModel` correction and the thirteen documentation corrections** (D21.1), BM25F weighting + RRF (D21.3), the tokenizer resolution (D21.5). `vault_find` — plain words, typed filters, grouping, `kind: task`, the problem report. | a query over a typed corpus returns records + a populated `problems` array; a type mismatch is never a silent empty result; a field query on a property key is possible at all, which it is not today; **no `.go` file in the tree attributes BM25 to bleve while `ScoringModel` is unset** |
+| **W2** | Fielded indexing (D21.2) **including the freshness stored field (D16.5)**, the **`ScoringModel` correction and the thirteen documentation corrections** (D21.1), BM25F weighting + RRF (D21.3), the tokenizer resolution (D21.5). `vault_find` — plain words, typed filters, grouping, `kind: task`, the problem report, **and the comparator that decides them (D16.2b as reversed)**. | a query over a typed corpus returns records + a populated `problems` array; a type mismatch is never a silent empty result; a field query on a property key is possible at all, which it is not today; **no `.go` file in the tree attributes BM25 to bleve while `ScoringModel` is unset**; **AC-16.6's six-mutation table is produced as an ARTIFACT, not a pass**; **D21.3's fusion clears its nDCG@10 threshold or does not ship**; **A-13 is answered — the stored-field freshness mechanism holds, or it does not and is replaced before W3** |
 | **W3** | Relations, inverses, relation grouping; `near` + `hops` and its **composition with filters** (D15.3). `vault_read`. | the §1.2 two-hop question is one call with no hand-maintained state; "notes mentioning pricing within 2 hops of `[[Acme]]`" is one call |
 | **W4** | `vault_edit`: byte-preserving writes, the **list-valued splice** (D14), `create`'s `template` argument, and the two **unbuilt primitives** — `replace_body` and the **trash CONVENTION** (where a trashed note goes, what happens to inbound links, whether the index forgets it immediately) — each with its own FR (D14.1). Derived interaction history (D17). | write-read-back is byte-identical outside the patched span; a `replace_body` whose anchor is ambiguous is refused, naming both matches; the trash convention is written down and reviewed before any tool exposes it |
 | **W5** | `vault_restructure`: rename, move, and the trash **operation**. `vault_configure`: record-type and saved-view authoring (D15.6, D23). The D18 policy seeding and its ACs. **The write-path rate limiter (D15.5b).** **Retiring the nine `knowledge_*` names** — from `allStaticToolNames` (`pkg/coreagent/core.go:357-482`), from the global ceiling (`pkg/config/defaults.go`), from all five seed maps that carry them, and from every skill and prompt that names one. | an operator can forbid restructuring while permitting edits **and forbid schema authoring while permitting both**, with a test proving all three policies are independently settable; **after this wave no `knowledge_*` name exists anywhere in the catalog or any seed map, and the catalog assertion reads 95** |
@@ -2128,8 +2128,14 @@ comes to believe a property exists on a note that does not have it.
 > rather than inferred. The property being protected is unchanged: a reader must never take a
 > borrowed or derived value for one the file itself contains.
 
-**D22.5 — Totals state their scope.** *"2 matched, GBP only"* — **never a bare number.** This is
-D13's cross-currency refusal (O-2) carried into the rendering, where it is actually read.
+**D22.5 — Totals state their scope.** *"sum(arr) = 673,000.00 over 12 of 12 rows"* — **never a bare
+number.** *Revision 7: the example was "2 matched, GBP only", carrying D13's cross-currency refusal
+into the rendering. `money` is deleted (D3, O-2 superseded), so the currency clause goes — **the
+scope clause is the load-bearing half and it stays.*** **And revision 7 adds the half that was
+missing: a total MUST be computed over the FULL EVALUATED SET, never the rendered page.** The spec's
+own worked example reported a total *"over 5 of 12 rows"* against a header stating fourteen
+evaluated — a page-scoped number labelled a total, which is a wrong answer to the question §1.2
+motivates, and nothing anywhere said which set an aggregate covered.
 
 **D22.6 — Every response ends in addressable next actions.** In an agentic loop **each response
 is a prompt for the next call.** A response that terminates in data terminates the loop; one
@@ -2522,10 +2528,15 @@ its own ADR rather than an implementation note.
   > `func(any, any) bool` comparator overload** — the specific thing that made `3 > 2` evaluate
   > false. That is the claim, and it is smaller and true.
   >
-  > **D16.6 narrows it once more, and further.** Beyond the four non-native semantics, SQLite's
-  > defaults **actively contradict** nine of the thirteen comparison rules. The comparator
-  > overload genuinely disappears; the semantics it was carrying do not — they move into the
-  > query compiler, where the same wrong answers are reachable by a different route.
+  > **D16.6 narrowed it once more in revision 6, and revision 7 resolves it.** Beyond the four
+  > non-native semantics, SQLite's defaults **actively contradict ten** of the comparison rules.
+  > Revision 6 concluded that the comparator overload disappears while the semantics it carried move
+  > *into the query compiler, where the same wrong answers are reachable by a different route* —
+  > **and grill pass 1 then demonstrated exactly that**, finding zero of seven specified defeats
+  > sufficient and a tenth violation nobody had. **Revision 7's ruling closes the route rather than
+  > policing it: there is no query compiler, because SQLite does not decide a comparison.** The
+  > `func(any, any) bool` overload still disappears — the comparator has declared types and a closed
+  > rule set — and the semantics stay in the one place a truth table can reach them.
 
 ### 4.2 Cost
 
