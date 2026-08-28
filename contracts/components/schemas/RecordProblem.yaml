@@ -39,6 +39,7 @@ properties:
       - integer_out_of_range
       - candidate_cap_exceeded
       - hop_limit_exceeded
+      - hop_traversal_bound_exceeded
       - page_size_clamped
       - scope_truncated
       - aggregate_refused
@@ -91,6 +92,19 @@ properties:
       and NO partial answer is returned (FR-064).
       "hop_limit_exceeded" — more than two relation hops were requested
       (FR-065).
+      "hop_traversal_bound_exceeded" — building the relation graph `near`/`hops`
+      walks (undirected, every resolved edge in workspace scope, because a path
+      between two record types crosses the query's own `type`/`kind` narrowing
+      by definition) visited more than 50,000 relation-edge rows before the scan
+      that assembles it finished. A DIFFERENT cause from "evaluation_bound_exceeded"
+      and "candidate_cap_exceeded", which both count RECORDS; this counts EDGES,
+      and the store exposes no pre-scan count over them (ruling R-A keeps every
+      aggregate off the SQL path), so it is a streaming abort in FR-064's B2
+      pattern that borrows FR-065a's B1-sized ceiling of 50,000 — "the same
+      ceiling ... so there is one number to reason about". No partial
+      neighbourhood is ever returned; the remedy narrows `near` or drops a hop
+      level, never "add a filter", which does not shrink the graph scan at all
+      (FR-076).
       "page_size_clamped" — the requested page size exceeded the cap and was
       reduced; the clamp is REPORTED, never silent (FR-063).
       "scope_truncated" — workspace scope resolution was itself incomplete

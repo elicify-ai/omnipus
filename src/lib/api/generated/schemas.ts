@@ -326,6 +326,7 @@ type RecordProblem = {
     | "integer_out_of_range"
     | "candidate_cap_exceeded"
     | "hop_limit_exceeded"
+    | "hop_traversal_bound_exceeded"
     | "page_size_clamped"
     | "scope_truncated"
     | "aggregate_refused"
@@ -4040,6 +4041,7 @@ export const RecordProblem: z.ZodType<RecordProblem> = z.object({
     "integer_out_of_range",
     "candidate_cap_exceeded",
     "hop_limit_exceeded",
+    "hop_traversal_bound_exceeded",
     "page_size_clamped",
     "scope_truncated",
     "aggregate_refused",
