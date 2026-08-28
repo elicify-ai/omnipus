@@ -653,3 +653,66 @@ func joinOrNone(names []string) string {
 	}
 	return strings.Join(names, ", ")
 }
+
+// ViewFilterLiterals renders one filter clause's operand values as display
+// text, in the order they were declared.
+//
+// It lives here rather than in the renderer because RecordValue is a
+// seven-field tagged union and a consumer that reached into it directly would
+// have to know which field each type populates — knowledge every consumer
+// would then hold a slightly different version of. There is one reader of that
+// union, and it is this function.
+//
+// A relation or person value renders as its wikilink, which is what is written
+// on disk (D5.1) and therefore what an operator recognises.
+func ViewFilterLiterals(f generated.RecordFilter) []string {
+	if f.Values == nil {
+		return nil
+	}
+	out := make([]string, 0, len(*f.Values))
+	for _, v := range *f.Values {
+		if lit := viewFilterLiteral(v); lit != "" {
+			out = append(out, lit)
+		}
+	}
+	return out
+}
+
+func viewFilterLiteral(v generated.RecordValue) string {
+	switch PropertyType(v.Type) {
+	case TypeText:
+		return derefOrEmpty(v.Text)
+	case TypeEnum:
+		return derefOrEmpty(v.Enum)
+	case TypeDate:
+		return derefOrEmpty(v.Date)
+	case TypeInteger:
+		return derefOrEmpty(v.Integer)
+	case TypeDecimal:
+		return derefOrEmpty(v.Decimal)
+	case TypeRelation:
+		return refLink(v.Relation)
+	case TypePerson:
+		return refLink(v.Person)
+	default:
+		// An unrecognised tag renders as the tag itself rather than as
+		// nothing. A silently empty literal would make two different filters
+		// render identically, which is the one thing a display of a saved
+		// query must never do.
+		return "<" + string(v.Type) + ">"
+	}
+}
+
+func refLink(r *generated.RecordRef) string {
+	if r == nil {
+		return ""
+	}
+	return "[[" + r.Link + "]]"
+}
+
+func derefOrEmpty(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
+}
