@@ -870,6 +870,53 @@ must be argued as one. A change that only regenerates cells is an implementation
 
 **AC-8.3** — `3 > 2` is `true`. Stated explicitly because it is the case that actually failed.
 
+### 8.1 What ADR-068 revision 5 changes here — assessed rule by rule
+
+**All thirteen rules survive unchanged in meaning.** Neither the five-tool surface nor the
+retrieval decisions touch them, and the reasons are worth stating rather than assumed:
+
+- **The tool surface changes who calls the comparator, not what it decides.** `vault_find`
+  replaces `record_query` as the caller; the filter object it accepts (FR-022) is the same
+  structured shape, validated against the schema before evaluation (FR-023). A rule about whether
+  `"3" > 2` holds cannot be affected by the name of the tool that asked.
+- **Retrieval decides ORDER; the rules decide MEMBERSHIP.** BM25-vs-TF-IDF (FR-110), fielded
+  indexing (FR-111) and RRF fusion (FR-112) rank records that already matched. A ranking change
+  that altered which records matched would be a defect, and **AC-8.6 asserts it does not.**
+- **The tokenizer question (FR-116) does not reach R-10.** `contains` on text is substring
+  matching over the **raw property value**, not over the analysed text index. Stemming,
+  stopwords and Unicode segmentation are properties of the ranking path; they must not leak into
+  comparison, or `contains "running"` would match `run` and the rule would have silently changed.
+- **R-13 gains a second reason to exist.** It was written because `segment != vendor` had no
+  defined answer. Under FR-021 a `many` property lives in a child table, where SQL equality
+  against a join **silently behaves as membership** — precisely the implicit coercion R-13 refuses.
+
+**What DOES change is the surface the rules are enforced on, and this is the important part.**
+FR-021 moves membership from a Go comparator into SQLite. **SQLite's default semantics violate
+five of the thirteen rules outright.** Each must be defeated deliberately in the query compiler;
+none is defeated by choosing SQLite carefully.
+
+| Rule | SQLite's own behaviour | What this specification requires instead |
+|---|---|---|
+| **R-1** | Comparison across storage classes never errors and never yields false: INTEGER and REAL sort **before** TEXT, so `'3' > 2` is **true** | One typed column per declared property, and a declared-type guard **before** the comparison reaches SQL. `'3' > 2` is `false` because the types differ (AC-8.3's sibling case) |
+| **R-2 / R-3** | `x = 'y'` over NULL yields NULL, and `NOT (x = 'y')` yields NULL too — so a negative filter **drops** absent rows | FR-008 requires absent rows to be **included** by a negative filter. Negation MUST compile to `(x IS NULL OR x <> ?)`. This single line is the difference between "days I did not meditate" answering the question and omitting exactly the days asked about |
+| **R-4** | A non-conforming value is stored as whatever it parsed to and compares silently | FR-021a: non-conforming values are stored flagged, never in the typed column, and every query touching that property emits a problem row |
+| **R-6** | `money` as one number compares and sums across currencies without complaint | Amount (integer minor units), currency and scale in separate columns; cross-currency comparison and `SUM` are refused **in the query compiler**, not left to SQL |
+| **R-9 / R-10** | `LIKE '%vendor%'` is substring **and case-insensitive for ASCII**, so it matches `vendors` and `Vendor` | `contains` on a list is a **row equality join** against the child table; `contains` on text compiles to `instr(col, ?) > 0`, which is case-sensitive. **`LIKE` is forbidden in the compiled filter path** |
+| **R-5** | Enums order lexically | The declared ordinal is stored in its own column and `ORDER BY` uses it (FR-010) |
+| **R-11** | Totality holds for comparisons, but a SQL error is a third outcome the rule forbids | Any store error is caught and rendered as a problem row; it never propagates as a third outcome |
+
+- **AC-8.4** — the truth table runs against the **real query path** — schema → filter object →
+  compiled query → store — not against a Go comparator in isolation. A truth table that passes
+  over a comparator the product does not use proves nothing about the product.
+- **AC-8.5** — the table is run twice: once against a freshly built properties index and once
+  after a delete-and-rebuild (FR-020a). Identical results both times.
+- **AC-8.6** — **membership is invariant under ranking.** The same filter run with plain BM25 and
+  with the FR-112 fusion returns the same **set** of records, differing only in order. This is the
+  test that keeps D21's work from quietly becoming a filtering change.
+- **AC-8.7** — a lint or test asserts **zero occurrences of `LIKE`** in the compiled filter path,
+  because R-10's case-sensitivity is one careless operator away from being lost and nothing else
+  would report it.
+
 ## 9. Holdout evaluation scenarios
 
 **Not for use during development.** Not referenced in §6 or §7.
