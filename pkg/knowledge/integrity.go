@@ -230,21 +230,21 @@ func joinOrNone(names []string) string {
 // findingSink accumulates findings under the per-category cap while counting
 // every one of them, so a clamp can always quote the number it hid.
 //
-// The cap is a FIELD rather than a constant read directly, so a test can drive
-// the clamp at a small corpus AND a separate test can pin the production
-// constant. Both are asserted: a cap only ever set from a test is a cap that
-// could be anything in production.
+// The limit is a FIELD rather than a constant read directly, so a test can
+// drive the clamp at a small corpus AND a separate test can pin the production
+// constant. Both are asserted: a bound only ever set from a test is a bound
+// that could be anything in production.
 type findingSink struct {
-	cap    int
+	limit  int
 	byCat  map[IntegrityCategory]*CategoryResult
 	catSet []IntegrityCategory
 }
 
-func newFindingSink(cap int) *findingSink {
-	if cap < 0 {
-		cap = 0
+func newFindingSink(perCategory int) *findingSink {
+	if perCategory < 0 {
+		perCategory = 0
 	}
-	s := &findingSink{cap: cap, byCat: map[IntegrityCategory]*CategoryResult{}}
+	s := &findingSink{limit: perCategory, byCat: map[IntegrityCategory]*CategoryResult{}}
 	for _, c := range IntegrityCategories {
 		s.byCat[c] = &CategoryResult{Category: c}
 		s.catSet = append(s.catSet, c)
@@ -253,15 +253,15 @@ func newFindingSink(cap int) *findingSink {
 }
 
 // add records one finding. It ALWAYS increments Total; it appends only while
-// there is room. Counting past the cap is the whole reason the clamp line can
-// name a real number.
+// there is room. Counting past the limit is the whole reason the clamp line
+// can name a real number.
 func (s *findingSink) add(cat IntegrityCategory, path, detail string) {
 	c, ok := s.byCat[cat]
 	if !ok {
 		return
 	}
 	c.Total++
-	if len(c.Findings) < s.cap {
+	if len(c.Findings) < s.limit {
 		c.Findings = append(c.Findings, IntegrityFinding{Category: cat, Path: path, Detail: detail})
 	}
 }
@@ -640,8 +640,8 @@ func CheckIntegrity(ctx context.Context, opts IntegrityOptions) (*IntegrityRepor
 			notes++
 		}
 	}
-	if err := checkSweepLimit(opts.CollectionName, notes, sweepLimit); err != nil {
-		return nil, err
+	if limitErr := checkSweepLimit(opts.CollectionName, notes, sweepLimit); limitErr != nil {
+		return nil, limitErr
 	}
 
 	graph, err := BuildLinkGraph(opts.FS, opts.Root)

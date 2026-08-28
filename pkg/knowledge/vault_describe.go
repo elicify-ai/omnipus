@@ -351,7 +351,7 @@ func renderViews(b *strings.Builder, d DescribeData) {
 func renderViewBody(v *records.SavedView) string {
 	var parts []string
 	if v.Def.Filters != nil && len(*v.Def.Filters) > 0 {
-		var clauses []string
+		clauses := make([]string, 0, len(*v.Def.Filters))
 		for _, f := range *v.Def.Filters {
 			clause := f.Property + " " + string(f.Op)
 			if lit := renderFilterLiterals(records.ViewFilterLiterals(f)); lit != "" {
@@ -371,7 +371,7 @@ func renderViewBody(v *records.SavedView) string {
 		parts = append(parts, "group "+strings.Join(*v.Def.GroupBy, ", "))
 	}
 	if v.Def.Sort != nil && len(*v.Def.Sort) > 0 {
-		var keys []string
+		keys := make([]string, 0, len(*v.Def.Sort))
 		for _, s := range *v.Def.Sort {
 			keys = append(keys, s.Property+" "+string(s.Direction))
 		}
@@ -381,7 +381,7 @@ func renderViewBody(v *records.SavedView) string {
 		parts = append(parts, "show "+strings.Join(*v.Def.Properties, ", "))
 	}
 	if v.Def.Aggregates != nil && len(*v.Def.Aggregates) > 0 {
-		var aggs []string
+		aggs := make([]string, 0, len(*v.Def.Aggregates))
 		for _, a := range *v.Def.Aggregates {
 			s := string(a.Op)
 			if a.Property != nil && *a.Property != "" {
