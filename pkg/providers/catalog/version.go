@@ -49,7 +49,7 @@ func ParseVersion(s string) (Version, error) {
 		if err != nil {
 			// Unreachable after the regex match except for a fourth
 			// component too long for uint64; still a malformed version.
-			return Version{}, fmt.Errorf("%w: %q component %d: %v", ErrInvalidVersion, s, i, err)
+			return Version{}, fmt.Errorf("%w: %q component %d: %w", ErrInvalidVersion, s, i, err)
 		}
 		v.parts[i] = n
 	}

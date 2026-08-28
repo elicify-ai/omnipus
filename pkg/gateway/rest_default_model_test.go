@@ -230,7 +230,10 @@ func TestDefaultModel_PutResolvesAtTurnTime(t *testing.T) {
 	require.NoError(t, err)
 	var cfgRaw map[string]any
 	require.NoError(t, json.Unmarshal(raw, &cfgRaw))
-	defaults := cfgRaw["agents"].(map[string]any)["defaults"].(map[string]any)
+	agentsRaw, ok := cfgRaw["agents"].(map[string]any)
+	require.True(t, ok, "config.json agents is not a map: %T", cfgRaw["agents"])
+	defaults, ok := agentsRaw["defaults"].(map[string]any)
+	require.True(t, ok, "config.json agents.defaults is not a map: %T", agentsRaw["defaults"])
 	_, hasAlias := defaults["model_name"]
 	assert.False(t, hasAlias, "config.json must carry no agents.defaults.model_name key: %s", raw)
 	assert.Equal(t, map[string]any{"provider": "provider-b", "model": "model-after"},

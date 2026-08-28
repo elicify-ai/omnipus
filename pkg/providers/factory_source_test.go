@@ -9,7 +9,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"io/fs"
+	"os"
 	"sort"
 	"strings"
 	"testing"
@@ -306,11 +306,16 @@ func dispatch(cfg *config.ModelConfig) int {
 // would let a vendor id back into Go code through a side door.
 func TestFactory_NoRetiredHelpers(t *testing.T) {
 	fset := token.NewFileSet()
-	pkgs, err := parser.ParseDir(fset, ".", func(fi fs.FileInfo) bool {
-		return !strings.HasSuffix(fi.Name(), "_test.go")
-	}, 0)
+
+	// parser.ParseDir is deprecated (does not consider build tags when
+	// grouping files into packages) — but this test never used the package
+	// grouping it produced anyway, only the flat set of per-file ASTs, so a
+	// direct directory listing + per-file parser.ParseFile is a strict
+	// simplification, not a behavior change: every non-test .go file in this
+	// directory is still scanned, build tags and all.
+	entries, err := os.ReadDir(".")
 	if err != nil {
-		t.Fatalf("parse package: %v", err)
+		t.Fatalf("read package dir: %v", err)
 	}
 
 	// The last entry's name is assembled rather than written whole: this file
@@ -328,13 +333,19 @@ func TestFactory_NoRetiredHelpers(t *testing.T) {
 	}
 	retired["resolve"+"StrippedPrefix"] = "prefix stripping is gone; a miss is a miss (FR-003)"
 
-	for _, pkg := range pkgs {
-		for path, file := range pkg.Files {
-			for _, decl := range file.Decls {
-				for _, name := range declaredNames(decl) {
-					if why, dead := retired[name]; dead {
-						t.Errorf("%s redeclares the retired symbol %q — %s", path, name, why)
-					}
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(fset, name, nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", name, err)
+		}
+		for _, decl := range file.Decls {
+			for _, declName := range declaredNames(decl) {
+				if why, dead := retired[declName]; dead {
+					t.Errorf("%s redeclares the retired symbol %q — %s", name, declName, why)
 				}
 			}
 		}
