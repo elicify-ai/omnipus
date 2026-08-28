@@ -1757,8 +1757,8 @@ are what a human reviews.**
 | # | Rule |
 |---|---|
 | **R-1** | A comparison between values of **different declared types** is `false`. Never an error, never a coercion. `"3" > 2` is false because one is text and one is a number. **`integer` and `decimal` are ONE declared type for this rule** *(revision 5)*: an author chooses the storage, not a distinct comparison domain, so `3 = 3.0` is **true** and an `integer` compares with a `decimal` numerically. R-1 separates text from numbers, not int64 from arbitrary precision. |
-| **R-2** | A comparison where **either side is absent** is `false`, for every operator except `is absent`. |
-| **R-3** | `is absent` is `true` exactly when the property has no value, and `false` otherwise. An empty string, an empty list and a zero are values, not absence. |
+| **R-2** | A comparison where **either side is absent** is `false`, for every operator except `IS NULL`. **This is the rule that makes FR-008 right by construction rather than by a compiler pass** *(revision 5)*: because a comparison over an absent side is a real `false`, `NOT(false)` is `true`, so a negative filter includes the absent records **at any depth of the filter tree**. SQL's three-valued `NOT(NULL) = NULL` is what made this need a leaf rewrite *and* a normalisation pass, neither of which the comparator needs — see §8.1. |
+| **R-3** | `IS NULL` is `true` exactly when the property has no value, and `false` otherwise; `IS NOT NULL` is its complement. An empty string, an empty list and a zero are **values**, not absence. *(Revision 5: the operator is named in SQL's vocabulary per ruling R-B; the rule is unchanged.)* |
 | **R-4** | A value present but **not conforming to its declared type** does not compare. It is `false` for every operator **and** the record is added to the query's problem list. Silence here is the defect. |
 | **R-5** | **REVERSED, revision 5 (operator rulings R-E and R-D).** `enum` is a **closed set**, and it **orders lexically — SQLite's own ordering — not by declared position.** A domain order is expressed by **prefixing the values** (`1-lead`, `2-qualified`). Equality resolves a value **case-insensitively** (Unicode, in Go — FR-011a) to a declared value; a value resolving to none of them is a reported problem. *(Two changes: "compares by declared position" is withdrawn by R-E, deleting the ordinal column and its bookkeeping; "equality is exact-case" is withdrawn by R-D, because resolving `Won` **to** `won` collapses two spellings into one value rather than creating a second, which is the thing D4 actually forbids.)* |
 | ~~**R-6**~~ | **RETIRED, revision 5 (operator ruling 1) — `money` is deleted from the type system, so this rule has no subject.** *Was: "`money` compares only within one currency. Across currencies every operator is `false` and the query reports the currencies present."* **The number is retired rather than reused**, so an older test name, commit or review that says "R-6" resolves here rather than to a different rule wearing the number. Removed with it: R-6's §8.1 defeat row, every R-6 cell of AC-8.1's generated table, `TestMoney_RefusesCrossCurrencySum`, and the "cross-currency `MIN`/`MAX`/`AVG`/`ORDER BY`" gap the grill raised as C-3 I-4 and C-10 — all four had `money` as their only subject. **The rule count is therefore twelve declared rules of which one is retired**, not thirteen; §8.1 and AC-8.1 are restated accordingly. |
@@ -2020,7 +2020,10 @@ naive join → **300**, truth **200**.
 10. Open the collection panel on a vault whose index completed before the browser connected;
     confirm it shows the completed state rather than "no progress".
 11. Run the same corpus through plain BM25 and through the FR-112 fusion; have a human judge the
-    top 10 for 20 real queries. If the fusion does not win, FR-113 says it does not ship.
+    top 10 for 20 real queries. **This is a SANITY CHECK, not the ship gate, and revision 5 marks it
+    as such because revision 4 left the two readable as the same thing.** FR-113's gate is the
+    committed 30-query set measured as **nDCG@10** against a stated threshold; **this holdout MUST
+    NOT be substituted for it**, and §9 is explicitly not for use during development.
 12. On a real vault that already uses an undeclared convention such as `type: meeting`, declare a
     schema for that type and confirm the response names the count of notes just converted and
     every one that newly fails validation — before the operator discovers it from a validation
@@ -2031,7 +2034,19 @@ naive join → **300**, truth **200**.
 14. Take the twenty most natural questions a person would ask this vault, phrase each as a
     **negative** — "which X have I not done", "which records have no owner" — and confirm every
     one returns the absent rows. This is the R-2 failure in the form a user would meet it, and it
-    is the case SQLite's defaults get backwards (§8.1).
+    is the case SQLite's defaults get backwards (§8.1). **A FIXTURE VERSION IS PROMOTED INTO §7 as
+    test 50, revision 5** — this is the strongest verification instrument in the document and it was
+    sitting in the section marked "not for use during development", where it could not catch
+    anything before release. The holdout stays as well; a twenty-question human pass over a real
+    vault is not the same evidence as a fixture.
+15. **NEW, revision 5.** On a vault whose values are not English — German, Polish, Greek or Turkish
+    — confirm that `=` and `LIKE` match across case for **non-ASCII** letters. **This is the one
+    that fails silently under any SQLite-side case fold**, and no English-language corpus can
+    detect it (FR-011a, §8.1's Unicode receipt).
+16. **NEW, revision 5.** Ask for a total over a vault holding more records than the 10,000-record
+    candidate cap, and confirm the aggregate-only path answers it rather than refusing (FR-064a).
+    **This is ADR-068 §1.2's own motivating question at a scale the spec claims to support**, and
+    under revision 4's bounds it was unanswerable by construction.
 
 ---
 
