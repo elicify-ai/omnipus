@@ -115,6 +115,16 @@ func explainResponse(q *query, echo string) generated.VaultFindResponse {
 		})
 	}
 
+	if q.near != "" {
+		plan = append(plan, generated.VaultFindPlanStep{
+			Stage:  generated.Retrieve,
+			Source: sourcePtr(generated.VaultFindPlanStepSourcePropertiesIndex),
+			Detail: fmt.Sprintf("relation graph walked from %s, undirected, up to %d hop(s) — "+
+				"the reachable set is then INTERSECTED with the typed set, exactly like words",
+				q.near, q.hops),
+		})
+	}
+
 	if q.filter != nil {
 		for _, leaf := range q.filter.leaves() {
 			p := leaf.Property
