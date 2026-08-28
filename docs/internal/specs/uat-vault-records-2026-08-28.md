@@ -2,12 +2,24 @@
 
 **Branch:** `feat/library-improvements`
 **Date:** 2026-08-28
-**Covers:** ADR-068 revision 8; `vault-records-spec-2026-08-25.md` Draft 6
+**Covers:** ADR-068 revision 11; `vault-records-spec-2026-08-25.md` Draft 9;
+`vault-trash-convention-2026-08-28.md`
 **Audience:** a human tester with the app in front of them. No Go, no terminal beyond
 starting the binary, no reading of source code.
 **Previous round:** `uat-library-records-2026-08-26.md` and its results
 `uat-results-2026-08-27.md`. Every defect that round found is carried forward here as a
 numbered case, because those are the ones that recur.
+
+**Extended, later the same day.** Parts 0–O below are unchanged from the version this plan
+started as (ADR-068 revision 8 / Draft 6) except for a small number of new cases inserted at
+the end of an existing part — B-7, B-8, F-10.6, F-18, F-19 and I-9 — each added because the
+ADR or spec moved between revision 8 and revision 11 in a way the original cases did not
+cover. **Part P is entirely new.** It extends Case J-3 (which stays as written and still
+passes/fails on its own terms) into the full trash convention that landed today in
+`vault-trash-convention-2026-08-28.md`, including two cases that check for a **live,
+currently-unfixed defect** the convention document itself reports — read Part P's own
+preamble before running P-8 and P-9. Nothing already in Parts 0–O was removed, renumbered or
+reworded.
 
 ---
 
@@ -245,9 +257,15 @@ you mark the rest **Blocked — feature absent** instead of failing them.*
 | `vault_find` present | + Parts C, D, E, F, G (except the health-view halves) |
 | `vault_read` present | + the read halves of Part I |
 | `vault_edit` present | + Part I |
-| `vault_restructure` present | + Part J |
+| `vault_restructure` present | + Part J, and P-1/P-2/P-7/P-8/P-9 of Part P (the `trash` half — P-8 and P-9 are runnable as soon as `move` and `trash` exist, even before `restore` does) |
+| `vault_restructure` present, and its `restore` op specifically | + the rest of Part P (P-3 through P-6, P-11) |
 | `vault_configure` present | + Part K, Part L |
 | A record table or health view in Library | + Part N |
+
+**Part P-10 (the retention purge) has no routing row above and is not unlocked by any tool
+existing.** It is design intent with no built mechanism yet — see its own preamble. Do not mark
+it Blocked; mark it **NOT-YET-TESTABLE**, which is a different, deliberate label used nowhere
+else in this plan.
 
 **Both lists in 0.1 and 0.2 matter.** The end state is **six `vault_*` names and zero
 `knowledge_*` names**. Seeing all fifteen at once is a normal mid-flight state today and is
@@ -726,6 +744,66 @@ approximate it.*
 |---|---|---|
 | B-6.1 | Run `check_integrity` on such a build | It states **by name** which categories it could not run and why, and does **not** report zero findings for them |
 
+### Case B-7 — The sixth kind: an index row with no note behind it
+
+*Why this matters: Case B-4 names five kinds of finding, but the design commits to **six** —
+duplicate identifiers, unresolved relations, wrong-type relations, broken wikilinks, orphan
+**notes**, and **rows in the properties index with no note behind them**. That sixth kind is
+easy to lose because its name is one word away from a kind you already checked in B-4.6 — read
+the next paragraph before you run this, so you do not mark the two the same thing.*
+
+**Do not confuse this with B-4.6.** An **orphan note** (B-4.6) is a real file — `Notes/scratch.md`
+exists on disk, and nothing links to it. An **orphan row** is the opposite direction of wrong: a
+row still sitting in the internal properties table for a file that **no longer exists at all**.
+One is a note with no neighbours; the other is bookkeeping for a note that is gone. If your report
+says "orphan" for both without naming which, that is not a usable report.
+
+| Step | Do this | Expect |
+|---|---|---|
+| B-7.1 | With Vault Alpha fully indexed, note `SP-0002`'s path (`Specimens/moss.md`) | — |
+| B-7.2 | Using your **file manager**, not any Omnipus tool, delete `Specimens/moss.md` from disk | The file is gone |
+| B-7.3 | **Immediately** — before waiting long enough for an ordinary re-index to notice — call `check_integrity` | Either the row has already been reconciled away (re-index was faster than you), **or** `SP-0002` is reported under a finding naming it a properties-index row with no note behind it |
+| B-7.4 | If B-7.3 caught it: wait a short while and run `check_integrity` again | The finding is gone. A note deleted outside the app is exactly the case this finding exists to catch, and it self-heals once the ordinary sync catches up |
+| B-7.5 | Compare the wording of this finding against the B-4.6 orphan-note finding | The two use **visibly different language** — a reader must be able to tell "this file exists and nothing points to it" apart from "this row exists and no file backs it" without cross-referencing this plan |
+
+**Fail if:** the finding never appears at all (try again — this is a timing-sensitive case, and
+say so if it takes more than two or three attempts); the finding is worded identically to an
+orphan-note finding; or the row survives after the vault has clearly had time to reconcile.
+
+*If you cannot reproduce this after several attempts, mark it **Blocked — could not force the
+condition** and say how many attempts and how long you waited between them. Do not report a pass
+you could not produce.*
+
+### Case B-8 — Telling a clamp from a refusal
+
+*Why this matters: `check_integrity` has two different bounds and two different words for what
+happens when each is hit. **A per-category clamp still answers** — it shows what it found and
+says how much more there was. **A sweep-size refusal answers nothing** — it declines the whole
+sweep and tells you how to scope it down. A tester who cannot tell the two apart will report a
+refusal as "it only found some of the problems" (wrong — it found none, on purpose) or a clamp as
+"it silently gave up" (also wrong — it told you). Read this table before running either half.*
+
+| | Per-category clamp | Whole-sweep refusal |
+|---|---|---|
+| Trigger | more than 500 findings in one category (e.g. `broken link`) | more than 100,000 notes in the scope being swept |
+| What comes back | the findings it has, up to 500 of them, **plus** the true total and the scope that would narrow it | **no findings at all** for any category, plus the note count it stopped at and the scope argument to use instead |
+| How to tell them apart in the response | a "showing 500 of N" line sits **next to real findings** | there are **no findings to look at** — the whole response is the refusal |
+
+| Step | Do this | Expect |
+|---|---|---|
+| B-8.1 | If you have a vault with more than 500 genuine problems of one kind, run `check_integrity` over it | A clamped response matching the left column above, with the "showing 500 of N" line naming the real total |
+| B-8.2 | If you have a vault (or a scope argument) with more than 100,000 notes, run `check_integrity` unscoped over it | A refusal matching the right column above — zero findings shown, the note count named, and the scope argument that would let it complete |
+| B-8.3 | Whichever of B-8.1 / B-8.2 you could run, re-read the response and confirm which column it matches | It matches exactly one column, not a blend of both |
+
+**Fail if:** a refusal response includes any findings at all (that would make it a clamp wearing a
+refusal's wording); or a clamped response omits the "showing N of M" line, leaving you unable to
+tell whether you are looking at everything or a fraction of it.
+
+*Neither bound is reachable by typing fixture files by hand — 500 broken records or 100,000 notes
+is bulk-generation territory. If you do not have a large fixture, mark this **Blocked — fixture
+too small** for whichever half you could not run, and say so for each half separately: it is
+entirely possible to have one and not the other.*
+
 ---
 
 ## Part C — The seven property types
@@ -1159,6 +1237,7 @@ is how an agent comes to believe a property exists on a note that does not have 
 | F-10.3 | `group_by` on `tags` (a `many` property) | `SP-0001`, which holds `fragile` and `sealed`, appears under **both** groups |
 | F-10.4 | `group_by` with three properties | Refused, naming the two-level limit |
 | F-10.5 | `group_by` on a **relation** | Supported — grouping by a relation is not a degraded case |
+| F-10.6 | Make F-10.5 concrete: `group_by` = `["expedition"]` over `type` = `specimen` | **Two** groups: `Northern sweep` holding `SP-0001` and `SP-0002`; `Coastal survey` holding `SP-0003`. Not a bare "supported" — the actual membership matches the fixture |
 
 ### Case F-11 — Totals state their scope, and count each record once
 
@@ -1244,6 +1323,47 @@ carefully here, then spot-check it throughout.*
 
 **Fail if:** completeness arrives after the rows; the response is JSON; a problem row says only
 "3 records excluded" without naming them; or there is no next-actions block.
+
+### Case F-18 — Group totals can legitimately add up to more than the records you matched
+
+*Read this before you run it, or you will file it as a bug. A record with several values in a
+`group_by` property appears in **every** group it belongs to (Case F-10.3). The direct
+consequence — stated here explicitly because nobody reading a total-vs-total mismatch would
+otherwise guess it — is that the **sum of the group counts can be larger than the number of
+records the query matched**. That is correct. It is not the same claim as F-11's rule, which says
+a record contributes to any **one** group's total only once; this case is about **across**
+groups, not within one.*
+
+| Step | Do this | Expect |
+|---|---|---|
+| F-18.1 | `vault_find` `type` = `specimen`, **no filter** | The three clean records: `SP-0001`, `SP-0002`, `SP-0003` |
+| F-18.2 | Count how many of them have a `tags` value at all | Two — `SP-0001` (`fragile`, `sealed`) and `SP-0002` (`loaned`). `SP-0003` has none |
+| F-18.3 | `vault_find` `type` = `specimen`, `group_by` = `["tags"]` | Three groups: `fragile` (1), `sealed` (1), `loaned` (1) |
+| F-18.4 | Add the three group counts together | **3** |
+| F-18.5 | Compare that to F-18.2's count of **2** records that actually hold a `tags` value | They do **not** match, and that is correct — `SP-0001` was counted once in `fragile` and once again in `sealed`. It is the same record, counted in two places, not two records |
+
+**Do not report F-18.4 disagreeing with F-18.2 as a bug.** It is the direct and required
+consequence of F-10.3. **Fail this case only if** the two group counts (`fragile` and `sealed`)
+do **not** both include `SP-0001`, or if any single group's own count is wrong — i.e. if
+`fragile`'s count is anything other than 1.
+
+### Case F-19 — A filter this complicated is refused, not evaluated
+
+*A filter tree is itself an unbounded input — nothing stops a caller from nesting hundreds of
+conditions — so it carries its own limit, separate from every other bound in this plan: **64
+leaf conditions, or 8 levels of nesting**, whichever is hit first.*
+
+| Step | Do this | Expect |
+|---|---|---|
+| F-19.1 | Build a filter with **65** leaves under one `"all"` — the simplest way is 65 copies of `{"property":"count","op":">","value":-1}` joined by `"all"` | **Refused**, naming the 64-leaf bound and the count your filter actually reached (65) |
+| F-19.2 | Build a filter nested **9** levels deep (each level a single-child `"all":[ ... ]` wrapping the next), with one real leaf at the bottom | **Refused**, naming the depth bound (8) and the depth reached |
+| F-19.3 | Now trim F-19.1 to exactly 64 leaves | Accepted and evaluated normally |
+| F-19.4 | Trim F-19.2 to exactly 8 levels | Accepted and evaluated normally |
+
+**Fail if:** either oversized filter is silently evaluated (slowly or otherwise) instead of
+refused; the refusal does not name which of the two bounds was exceeded; or a filter at exactly
+the stated bound (F-19.3, F-19.4) is refused. The boundary itself must work — this plan does not
+want a bound that is actually 63 or 7 because of an off-by-one.
 
 ---
 
@@ -1487,6 +1607,26 @@ single refusal in this plan, and it is cheap.
 
 **Fail if:** a misrouted operation is silently performed by the wrong tool. The tool boundary is
 the policy boundary, and a tool that quietly does its neighbour's job destroys the boundary.
+
+### Case I-9 — `replace_body`, the ordinary case
+
+*Case H-3 only exercises `replace_body`'s refusal, for an anchor that matches twice. This case is
+the operation actually working: one unambiguous anchor, and a `line_range` alternative — both of
+which H-3.4 uses in passing without checking either one's own behaviour.*
+
+| Step | Do this | Expect |
+|---|---|---|
+| I-9.1 | Take a note with two headings, `## Notes` and `## Summary`, each with a paragraph under it. Copy the file so you can compare | — |
+| I-9.2 | `vault_edit` `replace_body` with anchor `## Summary`, replacing its content with new text | Succeeds |
+| I-9.3 | Compare the file with your copy | Only the span under `## Summary` changed. The `## Notes` heading, its paragraph, and the `## Summary` heading line itself are **byte-identical** to before |
+| I-9.4 | Read the response | It states what was replaced — the anchor and the span it covered — not just "done" |
+| I-9.5 | Now address the same note by `line_range` instead of an anchor, replacing a specific span of lines | Succeeds, and again only those lines change |
+| I-9.6 | `replace_body` with an anchor that does not exist in the note (`## Nonexistent`) | Refused, **listing the headings that are actually present** — the same shape of refusal as `vault_read`'s I-1.5 |
+| I-9.7 | Check the file after I-9.6's refusal | Unchanged |
+
+**Fail if:** any byte outside the replaced span moved (a heading reordered, a blank line added or
+removed, the untouched section re-serialised); the refusal in I-9.6 does not name the real
+headings; or the file changed after a refused call.
 
 ---
 
@@ -1827,9 +1967,235 @@ the console.
 
 ---
 
+## Part P — The trash convention
+
+*This part extends Case J-3, which already exercises `trash`/`restore` at a basic level and
+stays in force exactly as written — do not skip it in favour of this part, run both. What follows
+comes from `vault-trash-convention-2026-08-28.md`, a design note landed today that assembles six
+already-normative behaviours into one document a reviewer — and a tester — can read end to end,
+and additionally names **five findings against the current code**, one of which is a live way to
+destroy a note permanently with no trace. Cases P-8 and P-9 test for that finding directly. **Read
+their preambles before you run them** — they involve an operation that, if the finding is real,
+cannot be undone by anything in this plan.
+
+**Before running anything below:** back up Vault Alpha (`cp -r /tmp/uat-vault-alpha
+/tmp/uat-vault-alpha-backup`). Everything else in this plan is recoverable by re-typing a fixture
+file. Part P is not, if P-8 or P-9 finds what the design document warns they might.*
+
+### Case P-1 — Where a trashed note goes, and what does not happen to it
+
+| Step | Do this | Expect |
+|---|---|---|
+| P-1.1 | Note the exact byte content of `Expeditions/coastal-survey.md` | — |
+| P-1.2 | `vault_restructure` `trash` it | Succeeds |
+| P-1.3 | Look in `/tmp/uat-vault-alpha/.omnipus-vault/trash/` | A folder named with a **colon-free** timestamp (`20260828T...Z` — no `:` characters), containing the note at its **original relative path** inside that folder, e.g. `.../trash/20260828T.../Expeditions/coastal-survey.md` |
+| P-1.4 | Open that file in a text editor | **Byte-identical** to what you noted in P-1.1. Nothing was added, rewritten, or stamped into it |
+| P-1.5 | `vault_describe` afterwards | The trash location does not appear as a mounted collection, a record type, or anything else queryable — it is bookkeeping, not vault content |
+
+**Fail if:** the file's bytes changed in any way; the timestamp folder contains a colon (`:`) —
+this specifically breaks on Windows, so it is worth checking carefully even if you are not on
+one; or the trashed note is reachable through any of the ordinary `vault_find`/`vault_read` paths.
+
+### Case P-2 — Inbound links are not repaired, and the response says exactly what broke
+
+*Extends J-3.1/J-3.2. `Expeditions/coastal-survey.md` is linked from `Specimens/lichen.md`
+(`SP-0003`) — use that if you have not already trashed it in J-3.*
+
+| Step | Do this | Expect |
+|---|---|---|
+| P-2.1 | Before trashing, confirm which notes link to `Expeditions/coastal-survey.md` | `Specimens/lichen.md` |
+| P-2.2 | `vault_restructure` `trash` it | Succeeds |
+| P-2.3 | Read the response | It names the **count** of now-unrepairable inbound links (1) and **lists** `Specimens/lichen.md` by path |
+| P-2.4 | Open `Specimens/lichen.md` on disk | **Unchanged.** Trash does not rewrite the notes that pointed at what it removed — there is nothing to repair them *to* |
+
+**Fail if:** the response is silent about the broken link, names only a count with no list, or
+`lichen.md` was rewritten.
+
+### Case P-3 — A trashed target gets its own explanation, not its own category
+
+*This is the part of the design that is easy to get wrong in a way that looks like an
+improvement: adding a **third** kind of finding for "points at something trashed" would actually
+be worse, because it would erase whether the broken link was a typed relation or an ordinary
+wikilink — and those two need different fixes. Read this before you run `check_integrity` below.*
+
+| Step | Do this | Expect |
+|---|---|---|
+| P-3.1 | With `Expeditions/coastal-survey.md` trashed (P-2) and `SP-0003`'s `expedition` relation now pointing at it | — |
+| P-3.2 | Run `check_integrity` | `SP-0003`'s relation is reported under the **same category** it would be in for any other unresolved relation — not a new, separate "trashed" category |
+| P-3.3 | Read that specific finding's text | It says the relation is unresolved, **and additionally** says the target was trashed, when, and that it is restorable — extra information on an existing finding, not a new kind of finding |
+| P-3.4 | Count the categories `check_integrity` reports overall | The same set as Case B-4 — this did not add a seventh kind |
+
+**Fail if:** a new category (something like "trashed reference") appears that was not one of the
+kinds B-4/B-7 named; or the finding fails to say the target was trashed at all, leaving a reader
+to think it is an ordinary broken relation with no faster fix available.
+
+### Case P-4 — The index forgets a trashed note immediately, with no window
+
+*Why this matters, and why it might fail: the design document itself flags this as the weakest
+part of the current build — the obvious implementation relies on the **next scheduled re-index**
+noticing the note is gone, which is not the same guarantee as "immediately", and leaves a real gap
+where a search returns a note the user just told the system to throw away. **This case is
+deliberately built so that only the immediate mechanism can pass it** — do not let any indexing
+activity happen between the trash call and the check.*
+
+| Step | Do this | Expect |
+|---|---|---|
+| P-4.1 | Pick a specimen you have not touched yet and confirm `vault_find` returns it by a word unique to its body | It is found |
+| P-4.2 | `vault_restructure` `trash` it | Succeeds |
+| P-4.3 | **Without pausing, without triggering any other indexing action, and without waiting** — immediately repeat the exact same `vault_find` query | The trashed note is **not** returned |
+| P-4.4 | Immediately search for it by its identifier too | Also not returned |
+| P-4.5 | `check_integrity` immediately afterward | The trashed note does **not** appear as an orphan row (B-7) — trashing removed its properties row along with removing it from the text index, in the same operation |
+
+**Fail if:** the note is still returned by P-4.3 or P-4.4 — even once, even briefly. This is the
+one case in this part where "it worked the second time" is not reassuring: a window that closes
+in under a second is still a window, and it is the exact failure this case is built to catch. If
+you find one, note how many attempts it took to observe and how many did not show it.
+
+### Case P-5 — Restoring, addressed by the path you remember
+
+| Step | Do this | Expect |
+|---|---|---|
+| P-5.1 | With `Expeditions/coastal-survey.md` trashed | — |
+| P-5.2 | `vault_restructure` `restore` it, addressed by its **original** path — `Expeditions/coastal-survey.md`, not any path under `.omnipus-vault/trash/` | Succeeds |
+| P-5.3 | Look at the note's `id` | `EX-0002` — the **same** identifier it had before, not a new one |
+| P-5.4 | `vault_find` for it | Found again, resolvable |
+| P-5.5 | `SP-0003`'s `expedition` relation | Resolves again, and P-3's trashed-target annotation is gone from `check_integrity` |
+| P-5.6 | Trash the same note **twice in a row** (trash it, then trash it again after a moment) | The second call succeeds and reports it was **already trashed once**, naming **both** timestamps — the earlier one and the new one |
+| P-5.7 | `restore` it with **no** `trashed_at` argument | Restores the **most recent** of the two trashed copies, and the response says which timestamp it took and names the older one it left behind |
+| P-5.8 | `restore` again, this time naming the older timestamp explicitly | Restores that specific copy instead |
+
+**Fail if:** restore requires you to know or supply a trash-internal path rather than the note's
+own original path; the double-trash in P-5.6 is silently accepted with no mention of the earlier
+copy; or P-5.7 restores the wrong one, or does not say which one it restored.
+
+### Case P-6 — The four restore refusals
+
+| Step | Do this | Expect |
+|---|---|---|
+| P-6.1 | `restore` a path that was never trashed, e.g. `Specimens/fern.md` | Refused: `no trashed note at Specimens/fern.md`, and it tells you where to look — `vault_describe` reports the trash contents |
+| P-6.2 | Trash a note, then **create a new note at that same original path** before restoring, then attempt the restore | Refused, naming **both** paths — the live note occupying the spot and the trashed one that cannot land there |
+| P-6.3 | After a genuine restore (P-5), run `check_integrity` | The restored identifier is **not** reported as a duplicate. It was never reissued — it is the same record coming back, not a second one wearing its old name |
+| P-6.4 | If you can construct it: hand-edit a path inside the trash folder so it no longer matches its own record (rename the timestamp folder, or move the note within it) | The subsequent `restore` is refused rather than writing to whatever the edited path implies. Mark this **Blocked — could not construct the condition** if you cannot arrange it by hand |
+
+**Fail if:** P-6.1's refusal does not point you at where the trash contents are reported; P-6.2
+restores into the collision silently, or refuses without naming both paths; or P-6.3 reports the
+restored record as a duplicate of itself.
+
+### Case P-7 — There is no way to delete a note permanently through any tool
+
+*The design is explicit that no agent-facing operation of any of the six tools ever permanently
+deletes a note — not a `purge` operation, not a `force` flag on `trash`, nothing. This is a
+negative case: you are checking that something does **not** exist.*
+
+| Step | Do this | Expect |
+|---|---|---|
+| P-7.1 | Ask an agent: *"Is there any way to permanently delete a note right now, skipping the trash? List every tool and operation you have that could do it."* | It reports none exists |
+| P-7.2 | Ask `vault_restructure` to `trash` with any argument resembling `permanent`, `force`, `skip_trash` or `purge` | Either the argument is refused as unrecognised, or it is silently ignored and the note is trashed normally (recoverable) — **never** actually permanently deleted |
+| P-7.3 | Look at every tool's own parameter list across everything you have exercised in this plan | No tool declares a permanent-delete parameter of any name |
+
+**Fail if:** any argument, on any tool, causes a note to be unrecoverably gone with no trash entry
+at all. That is not a refusal-wording defect — treat it exactly as seriously as Case P-8.
+
+### Case P-8 — CRITICAL: moving a note into the vault's own bookkeeping folder must be refused
+
+*Read this whole preamble before running it. The trash convention document names this as a
+**live, currently-unfixed defect (finding F1, severity blocker)**, not a hypothetical: today,
+`vault_restructure`'s `rename` and `move` do not check whether their destination lands inside
+`.omnipus-vault/`. If that is still true on your build, moving a note there makes it vanish —
+no trash entry, no audit record, no restore path, nothing recoverable by anything in this plan.
+This case is designed to surface that safely: it uses a note you can afford to lose.*
+
+**Preparation — do this before P-8.1, not after:**
+
+1. Create a brand-new, disposable note for this case alone — do **not** reuse a fixture note this
+   plan needs elsewhere. Something like `Specimens/throwaway-for-p8.md` with a single line of text
+   you will recognise.
+2. Confirm you can find it with `vault_find` or a plain search first.
+
+| Step | Do this | Expect |
+|---|---|---|
+| P-8.1 | Ask `vault_restructure` to `move` the throwaway note to a destination **inside** `.omnipus-vault/` — e.g. `.omnipus-vault/records/throwaway-for-p8.md` | The **correct** behaviour is a **refusal**, naming `.omnipus-vault/` as a reserved location |
+| P-8.2 | If it was refused | Check the file is still at its original path, untouched. **Pass**, and you have confirmed the defect is fixed |
+| P-8.3 | If it was **accepted** | **Do not panic and do not try to fix it yourself.** Look at `/tmp/uat-vault-alpha/.omnipus-vault/records/throwaway-for-p8.md` on disk directly, with a file manager, outside the app |
+| P-8.4 | If the file is sitting there as an ordinary file | It has left the vault's search, link graph and properties index (both walkers skip that directory by name), with **no trash entry, no audit log entry, and no restore path from inside the app**. This is the finding — report it as **CRITICAL**, quote the exact call you made and its response, and note that the file itself is recoverable by hand right now (dragging it back out with a file manager) even though no Omnipus tool can do it |
+
+**This case tests for the defect existing, and either answer is a legitimate, useful result.** A
+refusal at P-8.1 means the defect described in the design document has already been fixed on your
+build — say so plainly, it is good news, not a wasted case. Acceptance at P-8.1 confirms a
+currently-known, currently-unfixed way to permanently destroy vault content through a tool an
+operator may have granted for ordinary reorganising. Either way, do not stop here without checking
+P-8.4's manual recovery step, because that is what tells a reader whether the data is truly gone
+or merely unreachable from inside the app.
+
+### Case P-9 — CRITICAL: trashing something inside the vault's own bookkeeping folder must be refused
+
+*The same missing guard, the other direction. Trashing a path inside `.omnipus-vault/` would move
+the vault's own state — a schema file, a saved view, another note's trash entry — into the trash,
+which is at best confusing and at worst corrupts the schema an operator is relying on. Use the
+same disposable-fixture discipline as P-8: do not point this at a schema file you need later in
+this plan.*
+
+| Step | Do this | Expect |
+|---|---|---|
+| P-9.1 | Make a throwaway copy of one schema file, e.g. duplicate `keeper.yaml` as `keeper-copy.yaml` in the same `.omnipus-vault/records/` folder, so you have a disposable target inside the bookkeeping directory | — |
+| P-9.2 | Ask `vault_restructure` to `trash` `.omnipus-vault/records/keeper-copy.yaml` | **Correct** behaviour is a **refusal**, naming `.omnipus-vault/` as off-limits to `trash` |
+| P-9.3 | If accepted instead | Check whether `keeper-copy.yaml` moved into `.omnipus-vault/trash/…`. If it did, this is a real but lower-severity finding than P-8 (the file is still recoverable through the ordinary restore path, since it never left `.omnipus-vault/`) — report it, quoting the call and response, but you do not need the same alarm as P-8 |
+
+**Fail if:** the operation is accepted with no refusal. Note in your report whether the resulting
+location was still inside `.omnipus-vault/` (recoverable) or, worse, somewhere `restore` could not
+find it.
+
+### Case P-10 — The 30-day retention purge: not yet testable, and here is what correct will look like
+
+*Mark this **NOT-YET-TESTABLE** rather than attempting to run it. The design document itself
+states that nothing today names who runs the purge, when, or what it is permitted to delete — it
+is design intent with no implementation yet. Do not invent a way to trigger it; there is not
+supposed to be an agent-facing one. This case exists so that whoever runs this plan again once
+the sweep ships knows exactly what to check.*
+
+| When it ships, check | Expect |
+|---|---|
+| Whether a trash entry older than the retention window (30 days by default) survives a sweep | It does not — it is deleted for good |
+| Whether the sweep touches anything it did not itself write into `.omnipus-vault/trash/` | It must not. Anything under that folder without a valid receipt (see P-11) is reported and left alone, never deleted on the strength of its location alone |
+| Whether the retention window is configurable | It should be, per the design's recommendation, with a stated default |
+| Whether the **first** purge that ever runs on a vault is reported somewhere visible | It should be — a scheduled deletion of the user's own files on a timer they did not explicitly set should not be silent the first time it happens |
+| Whether any agent tool can trigger, shorten, or bypass the purge | It must not be able to. This stays true even after the sweep ships — only a human-facing surface (Settings, or the operator's own file access) should touch retention |
+
+Do not attempt to force 30 days of elapsed time or fabricate a trash entry with a backdated
+timestamp to test this early — that tests a mechanism that has not been specified yet, and a
+result either way would not mean anything.
+
+### Case P-11 — The trash receipt is bookkeeping, not a tool surface
+
+*Each trashed note is designed to carry a small `entry.json` receipt beside it, recording the
+original path, timestamp, acting agent, and (for a record) its type and identifier. This is
+plumbing that other operations rely on — it is not something an agent is meant to read or write
+directly.*
+
+| Step | Do this | Expect |
+|---|---|---|
+| P-11.1 | Trash a note, then look inside its timestamped folder under `.omnipus-vault/trash/` with a file manager | An `entry.json` file sits beside the note |
+| P-11.2 | Open it in a text editor | Readable JSON naming the original path, the timestamp, and (if the note was a record) its identifier |
+| P-11.3 | Look through every agent tool's parameter list for anything that reads or writes `entry.json` directly | Nothing does. The receipt is consumed internally by `restore`, `check_integrity`'s annotation (P-3), and `vault_describe`'s trash report — never exposed as its own read or write target |
+| P-11.4 | `vault_describe` on a vault with something in its trash | Reports the trash contents (count, and total size) without you having to open any receipt yourself |
+
+**Fail if:** any tool exposes a direct read or write of `entry.json`, or `vault_describe` cannot
+report the trash contents without a receipt being manually inspected first.
+
+---
+
 ## How to report
 
-For every numbered case: **Pass**, **Fail**, or **Blocked**.
+For every numbered case: **Pass**, **Fail**, **Blocked**, or — for Part P-10 only —
+**NOT-YET-TESTABLE**.
+
+**NOT-YET-TESTABLE is not a synonym for Blocked, and the two must not be used interchangeably.**
+*Blocked* means the tool exists in principle but this particular attempt could not exercise it —
+the feature is absent from this build, the condition could not be forced, or the fixture was too
+small. *NOT-YET-TESTABLE* means there is no mechanism anywhere yet for this behaviour to attach
+to — no operation, no trigger, nothing in the design that names an actor. Do not attempt to
+improvise a way to test it, and do not report it as Blocked: say NOT-YET-TESTABLE, and say why,
+exactly as Part P-10 does.
 
 For a **Fail**, give:
 
@@ -1875,6 +2241,8 @@ fixture, say what you observed *and* that you suspect it, and let someone else d
 | A-10 | Awkward content | prior Case 6 | shipped |
 | A-11 | Readable errors | prior F8 | shipped |
 | B-1..B-6 | `vault_describe`, `check_integrity` | D15.3, D15.5b, §4.1.1, FR-075/075a | W1 |
+| B-7 | The sixth `check_integrity` kind: orphan rows | D15.3 revision 6, D16.5 (orphaned row ruling) | W1 |
+| B-8 | Clamp vs refusal on `check_integrity`'s two bounds | D15.5b (`check_integrity findings`, `check_integrity notes swept` rows) | W1 |
 | C-1..C-3 | text, enum, relation | D3, D4, D5, D5.1 | W1/W3 |
 | C-4 | date, strict ISO | FR-021d, R-H | W1 |
 | C-5 | integer, int64 bound | D3, FR-012 | W1 |
@@ -1903,6 +2271,8 @@ fixture, say what you observed *and* that you suspect it, and let someone else d
 | F-15 | Clamps and cursors | D15.5b | W2 |
 | F-16 | Candidate caps | D16.3a C-3, FR-064/064a | W2 |
 | F-17 | Response shape | D22.1..D22.7, §4.2 | W2 |
+| F-18 | Group totals can sum past the matched-record count | FR-027/028/028a | W2 |
+| F-19 | The filter tree's own bound: 64 leaves / depth 8 | FR-023c | W2 |
 | G-1..G-5 | The honesty contract | D13, FR-025/025a/026 | W2/W6 |
 | G-6 | Two indexes disagreeing | D16.5, AC-16.5, AC-F5 | W1/W2 |
 | G-7 | The workspace-scoping exception | D13.1, AC-F4, FR-062 | W1 |
@@ -1917,6 +2287,7 @@ fixture, say what you observed *and* that you suspect it, and let someone else d
 | I-6 | Stale token refused and audited | D15.5c, AC-15.5c | W4 |
 | I-7 | Refusals leave the file alone | §3 behavioural contract | W4 |
 | I-8 | Wrong tool, right advice | D15.1, §4.1.4 refusal table | W4/W5 |
+| I-9 | `replace_body`, the ordinary anchor- and line-range-addressed case | D14.1, FR-047 | W4 |
 | J-1..J-3 | rename, move, trash | D15.3, FR-048/048a | W5 |
 | J-4 | No version token on a cascade | D15.5c, AC-15.5d, AC-X3 | W5 |
 | J-5 | Wrong tool | FR-070d/070e | W5 |
@@ -1934,3 +2305,14 @@ fixture, say what you observed *and* that you suspect it, and let someone else d
 | N-3 | Index state snapshot | FR-020f, FR-020g | W6 |
 | N-4 | `.base` importer is not a tool | D15.4, O-1, FR-100..103 | W6 |
 | O-1..O-4 | Cross-cutting | — | — |
+| P-1 | Trash storage location, path format, byte-untouched | FR-048; trash convention §1 | W5 |
+| P-2 | Inbound links not repaired, count and list named | FR-048; trash convention §2 | W5 |
+| P-3 | A trashed target annotates its existing category, not a new one | trash convention §2 | W5 |
+| P-4 | Immediate index removal, no intervening-scan window | FR-048; trash convention §3, finding F4 | W5 |
+| P-5 | Restore by original path, newest-first, `trashed_at` | FR-048a; trash convention §4, finding F3 | W5 |
+| P-6 | The four restore refusals | FR-038a, FR-048a, FR-048b; trash convention §4 | W5 |
+| P-7 | No permanent-delete operation exists on any tool | trash convention §6 | W5 |
+| P-8 | CRITICAL: `move` into `.omnipus-vault/` must be refused | trash convention §8 finding F1 (blocker) | W5 |
+| P-9 | CRITICAL: `trash` of a path inside `.omnipus-vault/` must be refused | trash convention §8 finding F6 | W5 |
+| P-10 | Retention purge — not yet testable | trash convention §6, §8 finding F5 | W5 (unbuilt) |
+| P-11 | The trash receipt is internal plumbing, not a tool surface | trash convention §7 | W5 |
