@@ -374,6 +374,21 @@ func TestDurableC1_RestartChangedStateReJudges(t *testing.T) {
 		activeCounters: make(map[string]ActiveCounterFunc), verifierRegistry: NewVerifierSessionRegistry(),
 		judgeSema: newDispatchSemaphore(defaultPlanJudgeConcurrency),
 	}
+	// Stop() drains judgeWG/wakeWG (plan_engine.go's own doc comment on Stop
+	// names this exact failure mode: "in tests, a wake turn writing its
+	// session/transcript into an already-removed temp dir"). This test's
+	// bootReconcile->beginPlanJudgeRound launches the judge round on its own
+	// goroutine, and a met verdict here goes on to synthesize the plan and
+	// dispatch an origin-less owner-wake turn on WAKEWG's own goroutine — both
+	// still running after the assertions below return unless drained. Without
+	// this, t.TempDir()'s automatic RemoveAll races that still-running
+	// goroutine's writes into plans/, surfacing as a nondeterministic
+	// "TempDir RemoveAll cleanup: ... directory not empty" failure (reproduced
+	// under back-to-back stress, unrelated to the assertions this test makes).
+	// Safe unconditionally: pe was never Start()ed, so Stop's WaitGroup drain
+	// is the only thing that runs, and it returns immediately when both
+	// counters are already zero.
+	t.Cleanup(pe.Stop)
 	pe.bootReconcile(context.Background())
 
 	// The signature changed -> a round MUST fire (the persisted gate does not
