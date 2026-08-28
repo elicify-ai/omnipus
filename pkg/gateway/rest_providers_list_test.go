@@ -87,7 +87,7 @@ func TestListProviders_ConfiguredOnly(t *testing.T) {
 
 		w := httptest.NewRecorder()
 		r := httptest.NewRequest(http.MethodGet, "/api/v1/providers", nil)
-		api.HandleProviders(w, r)
+		api.HandleProviders(w, isolateRateLimit(t, r))
 		require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
 		// Provider.yaml requires an array: the body must be `[]`, not `null`
 		// and not the retired `{"id":"default"}` filler row.
@@ -167,7 +167,7 @@ func TestListProviders_ConfiguredOnly(t *testing.T) {
 		r := httptest.NewRequest(http.MethodDelete, "/api/v1/providers/groq", nil)
 		ctx := context.WithValue(r.Context(), ctxkey.ConfigContextKey{}, api.agentLoop.GetConfig())
 		ctx = context.WithValue(ctx, UserContextKey{}, &config.UserConfig{Username: "admin"})
-		api.HandleProviders(w, r.WithContext(ctx))
+		api.HandleProviders(w, isolateRateLimit(t, r.WithContext(ctx)))
 		assert.Equal(t, http.StatusNotFound, w.Code, "body=%s", w.Body.String())
 	})
 }

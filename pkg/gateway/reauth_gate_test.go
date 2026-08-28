@@ -213,7 +213,7 @@ func TestProvidersPUT_RequiresReAuth(t *testing.T) {
 	r.Header.Set("Content-Type", "application/json")
 	r = withReAuthAdminNoToken(r)
 	w := httptest.NewRecorder()
-	api.HandleProviders(w, r)
+	api.HandleProviders(w, isolateRateLimit(t, r))
 	assert.Equal(t, http.StatusForbidden, w.Code,
 		"provider-key PUT without a re-auth token must be 403; body=%s", w.Body.String())
 	assert.Contains(t, strings.ToLower(w.Body.String()), "re-typing your password")

@@ -359,7 +359,7 @@ func TestHandleProviders_CorruptedCredential_IsErrorStatus(t *testing.T) {
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/providers", nil)
 	r.URL.Path = "/api/v1/providers"
-	api.HandleProviders(w, r)
+	api.HandleProviders(w, isolateRateLimit(t, r))
 
 	require.Equal(t, http.StatusOK, w.Code)
 	var providers []map[string]any

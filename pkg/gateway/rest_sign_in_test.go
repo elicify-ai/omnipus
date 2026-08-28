@@ -93,7 +93,7 @@ func doJSON(t *testing.T, api *restAPI, method, path string, body any) *httptest
 	cfg := api.agentLoop.GetConfig()
 	r = r.WithContext(context.WithValue(r.Context(), configContextKey{}, cfg))
 	w := httptest.NewRecorder()
-	api.HandleProviders(w, r)
+	api.HandleProviders(w, isolateRateLimit(t, r))
 	return w
 }
 

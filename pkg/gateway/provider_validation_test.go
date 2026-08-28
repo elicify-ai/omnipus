@@ -185,7 +185,7 @@ func doPutProvider(t *testing.T, api *restAPI, id, body string) *httptest.Respon
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/providers/"+id, strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
 	r.URL.Path = "/api/v1/providers/" + id
-	api.HandleProviders(w, r)
+	api.HandleProviders(w, isolateRateLimit(t, r))
 	return w
 }
 
@@ -195,7 +195,7 @@ func doProviderTest(t *testing.T, api *restAPI, id string) *httptest.ResponseRec
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/providers/"+id+"/test", nil)
 	r.URL.Path = "/api/v1/providers/" + id + "/test"
-	api.HandleProviders(w, r)
+	api.HandleProviders(w, isolateRateLimit(t, r))
 	return w
 }
 
@@ -878,7 +878,7 @@ func TestPutProvider_ReauthTokenBurnedOn422(t *testing.T) {
 	req.URL.Path = "/api/v1/providers/my-proxy"
 
 	w1 := httptest.NewRecorder()
-	api.HandleProviders(w1, req)
+	api.HandleProviders(w1, isolateRateLimit(t, req))
 
 	// Step 2: first request must return 422 (InvalidKey blocks save).
 	assert.Equal(t, http.StatusUnprocessableEntity, w1.Code,
@@ -899,7 +899,7 @@ func TestPutProvider_ReauthTokenBurnedOn422(t *testing.T) {
 	req2.Header.Set(reAuthHeader, token)
 	req2.URL.Path = "/api/v1/providers/my-proxy"
 	w2 := httptest.NewRecorder()
-	api.HandleProviders(w2, req2)
+	api.HandleProviders(w2, isolateRateLimit(t, req2))
 	assert.Equal(t, http.StatusForbidden, w2.Code,
 		"retry with stale token must be rejected at the re-auth gate (403); body=%s", w2.Body.String())
 }

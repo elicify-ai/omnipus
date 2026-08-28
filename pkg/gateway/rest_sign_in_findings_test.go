@@ -58,7 +58,7 @@ func doJSONAs(t *testing.T, api *restAPI, method, path, remoteAddr, username str
 	ctx = context.WithValue(ctx, UserContextKey{}, &config.UserConfig{Username: username})
 	r = r.WithContext(ctx)
 	w := httptest.NewRecorder()
-	api.HandleProviders(w, r)
+	api.HandleProviders(w, isolateRateLimit(t, r))
 	return w
 }
 

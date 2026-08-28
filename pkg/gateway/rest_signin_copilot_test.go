@@ -68,7 +68,7 @@ func adminRequest(t *testing.T, api *restAPI, method, path string) *httptest.Res
 	ctx := context.WithValue(req.Context(), UserContextKey{}, &config.UserConfig{Username: "admin"})
 	ctx = context.WithValue(ctx, ctxkey.ConfigContextKey{}, api.agentLoop.GetConfig())
 	w := httptest.NewRecorder()
-	api.HandleProviders(w, req.WithContext(ctx))
+	api.HandleProviders(w, isolateRateLimit(t, req.WithContext(ctx)))
 	return w
 }
 
@@ -156,7 +156,7 @@ To authenticate, you can use any of the following methods:
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		ctx := context.WithValue(req.Context(), ctxkey.ConfigContextKey{}, api.agentLoop.GetConfig())
 		w := httptest.NewRecorder()
-		api.HandleProviders(w, req.WithContext(ctx))
+		api.HandleProviders(w, isolateRateLimit(t, req.WithContext(ctx)))
 		assert.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
 	})
 
@@ -166,7 +166,7 @@ To authenticate, you can use any of the following methods:
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		ctx := context.WithValue(req.Context(), ctxkey.ConfigContextKey{}, api.agentLoop.GetConfig())
 		w := httptest.NewRecorder()
-		api.HandleProviders(w, req.WithContext(ctx))
+		api.HandleProviders(w, isolateRateLimit(t, req.WithContext(ctx)))
 		assert.Equal(t, http.StatusUnauthorized, w.Code)
 	})
 
@@ -178,7 +178,7 @@ To authenticate, you can use any of the following methods:
 		ctx := context.WithValue(req.Context(), UserContextKey{}, &config.UserConfig{Username: "admin"})
 		ctx = context.WithValue(ctx, ctxkey.ConfigContextKey{}, &bypassCfg)
 		w := httptest.NewRecorder()
-		api.HandleProviders(w, req.WithContext(ctx))
+		api.HandleProviders(w, isolateRateLimit(t, req.WithContext(ctx)))
 		assert.Equal(t, http.StatusServiceUnavailable, w.Code)
 	})
 }
@@ -289,7 +289,7 @@ func TestSignInStatus_CopilotRowReportsDisconnected(t *testing.T) {
 	ctx := context.WithValue(req.Context(), UserContextKey{}, &config.UserConfig{Username: "admin"})
 	ctx = context.WithValue(ctx, ctxkey.ConfigContextKey{}, api.agentLoop.GetConfig())
 	w := httptest.NewRecorder()
-	api.HandleProviders(w, req.WithContext(ctx))
+	api.HandleProviders(w, isolateRateLimit(t, req.WithContext(ctx)))
 	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
 
 	var rows []gen.Provider

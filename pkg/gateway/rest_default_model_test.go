@@ -447,7 +447,7 @@ func TestDefaultModel_ReservedLiterals(t *testing.T) {
 			r := httptest.NewRequest(http.MethodPut, "/api/v1/providers/"+id,
 				strings.NewReader(`{"api_key":"sk-test"}`))
 			w := httptest.NewRecorder()
-			api.HandleProviders(w, r)
+			api.HandleProviders(w, isolateRateLimit(t, r))
 			require.Equal(t, http.StatusBadRequest, w.Code, "id=%s body=%s", id, w.Body.String())
 			m := errBody(t, w)
 			assert.Equal(t, "id", m["field"], "id=%s", id)
@@ -458,7 +458,7 @@ func TestDefaultModel_ReservedLiterals(t *testing.T) {
 	t.Run("DELETE /providers/catalog → 404", func(t *testing.T) {
 		r := httptest.NewRequest(http.MethodDelete, "/api/v1/providers/catalog", nil)
 		w := httptest.NewRecorder()
-		api.HandleProviders(w, r)
+		api.HandleProviders(w, isolateRateLimit(t, r))
 		assert.Equal(t, http.StatusNotFound, w.Code, "body=%s", w.Body.String())
 	})
 }

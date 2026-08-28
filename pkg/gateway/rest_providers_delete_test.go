@@ -141,7 +141,7 @@ func doProviderDelete(
 	}
 	r = r.WithContext(ctx)
 	w := httptest.NewRecorder()
-	api.HandleProviders(w, r)
+	api.HandleProviders(w, isolateRateLimit(t, r))
 	return w
 }
 
