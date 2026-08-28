@@ -415,6 +415,22 @@ func boolInt(b bool) int {
 // READ PATH — every statement below is narrowing, and only narrowing.
 // ---------------------------------------------------------------------------
 
+const (
+	remedyB1 = "narrow the scope to a collection or path prefix, or narrow the kind"
+	remedyB2 = "add or tighten a filter, or use the aggregate-only path"
+)
+
+// escapeLikePrefix turns a resolved path prefix into a LIKE pattern.
+//
+// The pattern is built HERE, from an already-resolved root, and the escape
+// character is declared on the statement itself. A caller cannot inject a
+// wildcard through it, which is the whole reason AC-8.10 permits `path LIKE ?`
+// at all: the pattern is caller-INDEPENDENT.
+func escapeLikePrefix(prefix string) string {
+	r := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+	return r.Replace(prefix) + "%"
+}
+
 // narrowing builds the WHERE clause. Read what it can produce: three equality
 // or prefix predicates over three indexed columns, and nothing else. There is no
 // code path here that can take a property name or a property value, because no

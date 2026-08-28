@@ -51,7 +51,7 @@ func TestAssembly_OneRecordIsVisitedOnceWithItsOwnValues(t *testing.T) {
 		var want int
 		if _, err := fmt.Sscanf(c.RecordID, "PL-%04d", &want); err != nil {
 			t.Errorf("%s has an unreadable identifier %q", c.Path, c.RecordID)
-			return Rejected, nil
+			return Rejected, err
 		}
 		if len(sp.Elems) != want {
 			t.Errorf("%s (%s) carries %d labels, want %d — the join fan-out was not collapsed per record",

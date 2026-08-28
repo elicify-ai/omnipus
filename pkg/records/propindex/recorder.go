@@ -57,14 +57,11 @@ type Recorder struct {
 // NewRecorder returns an empty recorder.
 func NewRecorder() *Recorder { return &Recorder{} }
 
-func (r *Recorder) record(phase Phase, sql string) {
-	if r == nil {
-		return
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.stmts = append(r.stmts, Statement{Phase: phase, SQL: sql})
-}
+// The write half — record — lives in sqlgate.go, beside the only code that may
+// call it. The type is here, untagged, because Options carries it on BOTH halves
+// of the platform gate; the method is not, because on a build with no store
+// there is nothing to record and an unused writer would be exactly the dead code
+// this package refuses to carry.
 
 // Statements returns everything captured so far, in order.
 func (r *Recorder) Statements() []Statement {

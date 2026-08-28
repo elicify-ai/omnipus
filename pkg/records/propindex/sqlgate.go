@@ -22,6 +22,17 @@ import (
 // `.QueryContext(` or `.QueryRowContext(` appears outside this file.
 // ---------------------------------------------------------------------------
 
+// record appends one statement. It is here rather than in recorder.go so the
+// no-SQLite build carries no writer it never calls.
+func (r *Recorder) record(phase Phase, sql string) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.stmts = append(r.stmts, Statement{Phase: phase, SQL: sql})
+}
+
 func (ix *Index) exec(ctx context.Context, phase Phase, query string, args ...any) (sql.Result, error) {
 	ix.rec.record(phase, query)
 	return ix.db.ExecContext(ctx, query, args...)

@@ -9,7 +9,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/records"
 )
@@ -77,11 +76,6 @@ func IsBoundExceeded(err error) bool {
 	var be *BoundError
 	return errors.As(err, &be)
 }
-
-const (
-	remedyB1 = "narrow the scope to a collection or path prefix, or narrow the kind"
-	remedyB2 = "add or tighten a filter, or use the aggregate-only path"
-)
 
 // Options configures Open. It lives here rather than beside the SQLite
 // implementation because BOTH halves of the platform gate take it, and a
@@ -344,15 +338,4 @@ func (f Freshness) Reason() string {
 		return "the freshness of this note is unknown; one of the two indexes holds no content hash for it"
 	}
 	return ""
-}
-
-// escapeLikePrefix turns a resolved path prefix into a LIKE pattern.
-//
-// The pattern is built HERE, from an already-resolved root, and the escape
-// character is declared on the statement itself. A caller cannot inject a
-// wildcard through it, which is the whole reason AC-8.10 permits `path LIKE ?`
-// at all: the pattern is caller-INDEPENDENT.
-func escapeLikePrefix(prefix string) string {
-	r := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
-	return r.Replace(prefix) + "%"
 }
