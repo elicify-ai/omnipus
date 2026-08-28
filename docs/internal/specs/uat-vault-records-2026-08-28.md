@@ -442,3 +442,286 @@ Part C is about to put much stranger content into the same pipeline.*
 *Previous round: **F8 (minor)** — mount rejections were correct but surfaced as
 `400: workspace: mount target is not an existing directory: "/private/…": stat /private/…`,
 truncated mid-word.*
+
+---
+
+## The fixture notes
+
+*Everything from Part B onward needs these. Create them in Vault Alpha with a text editor.
+Type them exactly, including the deliberately wrong values — the wrong ones are the point.*
+
+**Clean records** — `/tmp/uat-vault-alpha/Specimens/`
+
+```markdown
+<!-- Specimens/fern.md -->
+---
+type: specimen
+id: SP-0001
+label: Bracken frond
+condition: dry
+tags: [fragile, sealed]
+collected_on: 2026-03-14
+count: 12
+mass_g: 4.500
+expedition: "[[Northern sweep]]"
+---
+Collected on the ridge. Notes about pricing of transport crates.
+```
+
+```markdown
+<!-- Specimens/moss.md -->
+---
+type: specimen
+id: SP-0002
+label: Cushion moss
+condition: damp
+tags: [loaned]
+collected_on: 2026-04-02
+count: 3
+mass_g: 0.125
+expedition: "[[Northern sweep]]"
+---
+Second sample.
+```
+
+```markdown
+<!-- Specimens/lichen.md -->
+---
+type: specimen
+id: SP-0003
+label: Crustose lichen
+
+# note: condition is deliberately absent on this record
+count: 0
+mass_g: 12.345678901234567890123456789012
+expedition: "[[Coastal survey]]"
+---
+Zero count is a value, not an absence.
+```
+
+```markdown
+<!-- Expeditions/northern-sweep.md -->
+---
+type: expedition
+id: EX-0001
+label: Northern sweep
+region: northern
+started: 2026-03-01
+---
+```
+
+```markdown
+<!-- Expeditions/coastal-survey.md -->
+---
+type: expedition
+id: EX-0002
+label: Coastal survey
+region: coastal
+started: 2026-04-01
+---
+```
+
+**Deliberately broken records** — `/tmp/uat-vault-alpha/Specimens/broken/`
+
+```markdown
+<!-- broken/b1.md -->  count is not a number
+---
+type: specimen
+id: SP-0101
+label: Bad count
+count: "many"
+---
+```
+
+```markdown
+<!-- broken/b2.md -->  mass_g carries a unit
+---
+type: specimen
+id: SP-0102
+label: Bad mass
+mass_g: "2.5kg"
+---
+```
+
+```markdown
+<!-- broken/b3.md -->  ambiguous date, and an enum value that is not declared
+---
+type: specimen
+id: SP-0103
+label: Bad date
+collected_on: 03/04/2026
+condition: soggy
+---
+```
+
+```markdown
+<!-- broken/b4.md -->  relation stored as text, not a wikilink
+---
+type: specimen
+id: SP-0104
+label: Text relation
+expedition: "Northern sweep"
+---
+```
+
+```markdown
+<!-- broken/b5.md -->  relation to a note of the wrong type
+---
+type: specimen
+id: SP-0105
+label: Wrong-type relation
+expedition: "[[Bracken frond]]"
+---
+```
+
+```markdown
+<!-- broken/b6.md -->  relation to a note that does not exist
+---
+type: specimen
+id: SP-0106
+label: Dangling relation
+expedition: "[[Southern traverse]]"
+---
+```
+
+```markdown
+<!-- broken/b7.md -->  integer above the 64-bit bound
+---
+type: specimen
+id: SP-0107
+label: Too big
+count: 9223372036854775808
+---
+```
+
+```markdown
+<!-- broken/b8.md -->  a scalar property given a list
+---
+type: specimen
+id: SP-0108
+label: List in a scalar
+condition: [dry, damp]
+---
+```
+
+**Two records sharing one identifier** — for the duplicate-id check
+
+```markdown
+<!-- broken/dup-a.md -->
+---
+type: specimen
+id: SP-0900
+label: Duplicate A
+---
+```
+
+```markdown
+<!-- broken/dup-b.md -->
+---
+type: specimen
+id: SP-0900
+label: Duplicate B
+---
+```
+
+**An orphan and a broken ordinary wikilink** — these are notes, not records
+
+```markdown
+<!-- Notes/scratch.md -->  nothing links here, and it links nowhere
+Just some text.
+```
+
+```markdown
+<!-- Notes/journal.md -->
+A note that points at [[A note that does not exist]].
+```
+
+**Folding and ordering records** — `/tmp/uat-vault-alpha/Tokens/`
+
+Create six `token` notes with `word` set, one each, spelled in the **opposite case** to the
+declared value: `STRASSE`, `ΣΊΣΥΦΟΣ`, `MÜLLER`, `ŁÓDŹ`, `file` (declared `ﬁle`), and
+`İSTANBUL`. Give each a `label` holding the same string.
+
+Create four more with `phase` set to `ember`, `azure`, `cinder`, `dune`, and four with
+`ranked` set to `1-ember`, `2-azure`, `3-cinder`, `4-dune`.
+
+Create three with `mood` set to `calm`, `Calm` and `CALM` respectively.
+
+---
+
+## Part B — `vault_describe`
+
+*The mandatory cheap first call. An agent that has not called it is guessing at property names.*
+
+### Case B-1 — Orientation on a vault with schemas
+
+| Step | Do this | Expect |
+|---|---|---|
+| B-1.1 | Ask an agent to call `vault_describe` on Vault Alpha | A response listing: index freshness, the collections in scope, the four record types, saved views, templates |
+| B-1.2 | Read the property table for `specimen` | Each property with its **type**, its arity (`many` or not), and whether it is required |
+| B-1.3 | Look at how `count` and `mass_g` are rendered | `integer` and `decimal` appear as **two distinct types**. Not "number" for both, not "numeric" |
+| B-1.4 | Look at the id prefix | `SP` is shown for `specimen`, `EX` for `expedition` |
+| B-1.5 | Look at `condition`'s enum values | All four are listed |
+| B-1.6 | Look at the whole response | It is **compact text**. No JSON object anywhere in it |
+
+**Fail if:** `integer` and `decimal` are collapsed into one displayed type; the id prefix is
+missing; the response is a JSON blob; or any record type, property or enum value the vault did
+not declare appears in it.
+
+### Case B-2 — The response must not imply an enum order
+
+*Why this matters: enum ordering is **lexical**, not the order values are declared in
+(Part E). A reader who infers a sort order from the sequence `vault_describe` prints will be
+wrong, so the response has to say so.*
+
+| Step | Do this | Expect |
+|---|---|---|
+| B-2.1 | Look at `token.phase`'s value list in the describe output | The response states, in words, that the set is unordered and that a sort order must not be inferred from the sequence shown |
+
+**Fail if:** the values are printed as a bare list with nothing said about ordering.
+
+### Case B-3 — Refusals name what is valid
+
+| Step | Do this | Expect |
+|---|---|---|
+| B-3.1 | Call `vault_describe` with `record_type` = `specimne` (a typo) | A **refusal** listing the declared types: `expedition, keeper, specimen, token` |
+| B-3.2 | Call `vault_describe` with `collection` = a name that is not mounted | A refusal listing the collections in scope |
+
+**Fail if:** either returns an empty description, an empty success, or an error that does not
+name the valid options.
+
+### Case B-4 — `check_integrity` finds all six kinds of problem
+
+| Step | Do this | Expect |
+|---|---|---|
+| B-4.1 | Call `vault_describe` with `check_integrity` = true | A findings block, grouped by kind, every finding naming a path |
+| B-4.2 | Look for the **duplicate identifier** | `SP-0900` is reported naming **both** `broken/dup-a.md` and `broken/dup-b.md`, and stating that neither is preferred |
+| B-4.3 | Look for the **unresolved relation** | `SP-0106`'s `[[Southern traverse]]` is named as resolving to nothing |
+| B-4.4 | Look for the **wrong-type relation** | `SP-0105`'s expedition points at a note of type `specimen`, where `expedition` was declared |
+| B-4.5 | Look for the **broken ordinary wikilink** | `Notes/journal.md` → `[[A note that does not exist]]`. This is a plain note, not a record — it must still be found |
+| B-4.6 | Look for the **orphan** | `Notes/scratch.md` |
+| B-4.7 | Count the sweep | The response states how many notes were swept and over what scope |
+
+**Fail if:** any of the six kinds is missing; the duplicate report picks a winner; the ordinary
+wikilink check is absent (that capability exists today under a different name and must not be
+lost); or the response reports "0 findings" for a category it could not actually check.
+
+### Case B-5 — `check_integrity` is bounded, and says so
+
+| Step | Do this | Expect |
+|---|---|---|
+| B-5.1 | Run `check_integrity` scoped to `record_type` = `specimen` | Only specimen findings; the scope is stated |
+| B-5.2 | If you have a very large folder, run it unscoped over that | Either it completes and states the sweep size, or it is **refused** naming the collection, the limit, and the scoped remedy |
+
+**Fail if:** a sweep silently truncates, or a clamped category is shown without a "showing N of
+M" line naming the real total.
+
+### Case B-6 — What `check_integrity` cannot check, it names
+
+*This one is only reachable if you have been given a build without the properties index
+(`linux/mipsle`). If you have not, mark it **Blocked — no such build available**. Do not
+approximate it.*
+
+| Step | Do this | Expect |
+|---|---|---|
+| B-6.1 | Run `check_integrity` on such a build | It states **by name** which categories it could not run and why, and does **not** report zero findings for them |
