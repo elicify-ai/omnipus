@@ -725,3 +725,163 @@ approximate it.*
 | Step | Do this | Expect |
 |---|---|---|
 | B-6.1 | Run `check_integrity` on such a build | It states **by name** which categories it could not run and why, and does **not** report zero findings for them |
+
+---
+
+## Part C — The seven property types
+
+*There are exactly seven: `text`, `enum`, `relation`, `date`, `integer`, `decimal`, `person`.
+These seven names are **ours** and are shipped. Every other name in this plan — `specimen`,
+`condition`, `dry` — belongs to the vault. Keep the two straight; a product that ships a
+record type is a defect, and a product that fails to ship a property type is a different one.*
+
+### Case C-1 — `text`
+
+| Step | Do this | Expect |
+|---|---|---|
+| C-1.1 | `vault_find` with `filter` = `{"property":"label","op":"LIKE","value":"%frond%"}` | `SP-0001` |
+| C-1.2 | Same with `op` = `=` and `value` = `Bracken frond` | `SP-0001` |
+| C-1.3 | Same with `value` = `bracken FROND` | `SP-0001` — text matching is case-insensitive |
+
+### Case C-2 — `enum` is closed
+
+| Step | Do this | Expect |
+|---|---|---|
+| C-2.1 | Ask `vault_edit` to set `condition` = `soggy` on `Specimens/fern.md` | **Refused**, naming the permitted values: `ambient, damp, dry, frozen` |
+| C-2.2 | Check the file afterwards | Unchanged |
+| C-2.3 | `vault_find` on `condition` = `soggy` | **Refused**, naming the permitted values — not an empty result |
+| C-2.4 | Look at `SP-0103` (fixture `b3`, which already holds `soggy` on disk) | It is **reported as a bad value**, named, with the permitted set and the fix — it is not silently dropped, and it does not silently become a fifth permitted value |
+| C-2.5 | Now run `vault_describe` again | `condition` still has exactly four values. `soggy` did **not** join them |
+
+**Fail if:** an invented value is accepted, is auto-created as a new option, or causes the
+record to vanish from results with no problem row.
+
+### Case C-3 — `relation`
+
+| Step | Do this | Expect |
+|---|---|---|
+| C-3.1 | `vault_read` `Specimens/fern.md` | `expedition` shows as a resolved link to `Northern sweep` |
+| C-3.2 | `vault_read` `Expeditions/northern-sweep.md` | Its `specimens` inverse lists `SP-0001` and `SP-0002` |
+| C-3.3 | Open `Expeditions/northern-sweep.md` in a text editor | The inverse is **not written into the file**. The file has no `specimens:` key |
+| C-3.4 | `SP-0104` (relation stored as plain text) | Reported: text where a relation was declared, with the fix naming the wikilink form |
+| C-3.5 | `SP-0105` (relation to a note of the wrong type) | Reported as wrong-type, not silently accepted |
+| C-3.6 | `SP-0106` (relation to a note that does not exist) | Reported as unresolved, not rendered as a group of one |
+
+**Fail if:** the inverse appears in the file on disk; or any of C-3.4 to C-3.6 is accepted
+silently.
+
+### Case C-4 — `date` is strict ISO, and never guessed
+
+| Step | Do this | Expect |
+|---|---|---|
+| C-4.1 | `SP-0103` holds `collected_on: 03/04/2026` | **Reported** as ambiguous, with both readings named and the instruction to write `2026-04-03` or `2026-03-04`. Never guessed |
+| C-4.2 | Ask `vault_edit` to write `collected_on` = `2026-9-1` | **Refused**, naming zero-padding and the corrected form `2026-09-01` |
+| C-4.3 | `vault_find` with `collected_on` `>=` `2026-04-01` | `SP-0002` (2026-04-02) is in; `SP-0001` (2026-03-14) is out |
+| C-4.4 | Ask for the same range written as `01/04/2026` | Refused the same way as C-4.1 |
+
+**Fail if:** any date format outside `YYYY-MM-DD` is accepted, or an ambiguous one is silently
+interpreted either way.
+
+### Case C-5 — `integer` is int64, and overflow is refused
+
+*Changed recently: the old `number` type is gone, split into `integer` and `decimal`.*
+
+| Step | Do this | Expect |
+|---|---|---|
+| C-5.1 | `vault_find` with `count` `>` `5` | `SP-0001` (12). `SP-0002` (3) and `SP-0003` (0) are out |
+| C-5.2 | Confirm `SP-0003` with `count: 0` is out of C-5.1 but **in** a query for `count` `IS NOT NULL` | Zero is a value, not an absence |
+| C-5.3 | Ask `vault_edit` to set `count` = `9223372036854775808` | **Refused**, naming the bound `9223372036854775807` and suggesting `decimal` if the value is genuinely larger |
+| C-5.4 | Read `SP-0107` (which already holds that value on disk) | Reported as a bad value naming the bound. **Not** silently saturated to `9223372036854775807`, and not widened to a decimal |
+| C-5.5 | Query `count` `=` `9223372036854775807` | Does **not** match `SP-0107` |
+| C-5.6 | Try declaring an `integer` property with `scale: 2` in a schema | Refused: an integer has no scale, and the message says to declare it `decimal` |
+
+**Fail if:** an out-of-range integer is accepted at any layer, silently clipped to the bound,
+or silently promoted to a decimal. Any of the three is a change to a number nobody asked for.
+
+### Case C-6 — `decimal` is exact, and never rounded to fit
+
+| Step | Do this | Expect |
+|---|---|---|
+| C-6.1 | `vault_read` `Specimens/lichen.md` | `mass_g` reads back **exactly** `12.345678901234567890123456789012` — every digit, no rounding, no `1.2345678901234568e+01` |
+| C-6.2 | `vault_find` with `mass_g` `>` `1` | `SP-0001` (4.500) and `SP-0003` are in; `SP-0002` (0.125) is out |
+| C-6.3 | Compare `mass_g` `=` `4.5` against the stored `4.500` | They match — trailing zeros do not change the number |
+| C-6.4 | Look at how `4.500` renders in a result row | Rendered at the declared scale (3 places) |
+| C-6.5 | Ask `vault_edit` to write a `mass_g` with **140 decimal places** | **Refused**, naming the 100-place bound **and the value's own scale**. Never rounded to fit |
+| C-6.6 | `SP-0102` (`mass_g: "2.5kg"`) | Reported as a bad value: a unit glued to a number, with the fix naming what to write |
+| C-6.7 | Compare an `integer` against a `decimal`: query `count` `=` `12.0` | Matches `SP-0001` (`count: 12`). The split decides storage, not a comparison domain |
+
+**Fail if:** any decimal changes value between write and read; a value is rounded to satisfy a
+bound instead of refused; or any rendered number shows floating-point artefacts.
+
+### Case C-7 — `person`
+
+| Step | Do this | Expect |
+|---|---|---|
+| C-7.1 | Create a `keeper` note and set `curator` on a specimen to point at it | Accepted |
+| C-7.2 | `vault_read` the specimen | `curator` resolves to the keeper note, distinctly from a name typed as text |
+| C-7.3 | Set `curator` to a bare name (`curator: Alex`) instead of a link | Reported: a person property is a link to a record, not a typed name |
+
+*If the tool refuses `type: person` outright, or has no way to say **which** record type a
+person resolves to, mark this **Blocked** and quote the message. The specification does not
+settle that question and it may not be answerable yet.*
+
+### Case C-8 — `money` no longer exists
+
+*Why this matters: `money` was deleted from the design. Code implementing it is still in the
+tree. A type that is half-removed is exactly the sort of thing that survives into a release.*
+
+| Step | Do this | Expect |
+|---|---|---|
+| C-8.1 | Ask `vault_configure` to create a record type with a property declared `{ type: money }` | **Refused**, and the message lists the permitted types: `text, enum, relation, date, integer, decimal, person` |
+| C-8.2 | Look at that list carefully | `money` is **not** in it. Neither is `number` |
+| C-8.3 | Try `{ type: number }` | Refused the same way |
+| C-8.4 | Try `{ type: decimal, unit: GBP }` | `unit` is not a schema key. Either the whole declaration is refused naming the permitted keys, **or** `unit` is ignored — but it must not behave as a currency |
+| C-8.5 | Search the entire UI and every tool response you have collected for the words "currency", "ISO-4217", "GBP" or "minor units" | Nothing |
+| C-8.6 | Run `vault_describe` and read the property-type list | Exactly seven types |
+
+**Fail if:** `money` or `number` is accepted anywhere; a currency concept appears in any
+response; or the type list has any count other than seven.
+
+### Case C-9 — Arity is declared, and a scalar never silently becomes a list
+
+| Step | Do this | Expect |
+|---|---|---|
+| C-9.1 | `SP-0108` holds `condition: [dry, damp]` on a scalar property | Reported: the property holds one value, got a list of 2, with the fix naming both options (send one value, or declare `many: true`) |
+| C-9.2 | Ask `vault_edit` to write a list into `condition` | Refused the same way; the file is unchanged |
+| C-9.3 | Ask `vault_edit` to write a list into `tags` (declared `many: true`) | Accepted |
+| C-9.4 | Query `tags` `=` `fragile` | `SP-0001` — `=` matches an **element** of a list |
+| C-9.5 | Query `tags` `IN` `["loaned","sealed"]` | `SP-0001` and `SP-0002` |
+| C-9.6 | Query `tags` `>` `f` | **Refused**: ordering comparisons are not defined over a list, naming `=`, `IN` and `LIKE` as what to use instead |
+
+**Fail if:** a scalar accepts a list; a `many` property refuses a list; or an ordering operator
+over a list returns a result instead of a refusal.
+
+### Case C-10 — Absent is a state of its own
+
+*Why this matters: the "days I did not meditate" problem. A negative filter that quietly omits
+every record with no value omits precisely the records being asked about.*
+
+`SP-0003` has **no** `condition`. Use it throughout.
+
+| Step | Do this | Expect |
+|---|---|---|
+| C-10.1 | `filter` = `{"property":"condition","op":"IS NULL"}` | `SP-0003` is returned |
+| C-10.2 | `filter` = `{"property":"condition","op":"IS NOT NULL"}` | `SP-0001`, `SP-0002`; `SP-0003` is **not** there |
+| C-10.3 | `filter` = `{"not":{"property":"condition","op":"=","value":"dry"}}` | `SP-0003` **is included** — a negative *tree* includes the absent |
+| C-10.4 | `filter` = `{"property":"condition","op":"<>","value":"dry"}` | `SP-0003` is **not** included — a `<>` *leaf* does not match an absent property |
+| C-10.5 | Read C-10.3 and C-10.4 together | They deliberately differ. If they behave the same, one of them is wrong |
+| C-10.6 | Nest it: `{"not":{"all":[{"property":"condition","op":"=","value":"dry"},{"property":"count","op":">","value":5}]}}` | `SP-0003` is still included. The rule holds at depth, not only at the top leaf |
+
+**Fail if:** C-10.3 and C-10.4 give the same answer; or C-10.6 drops the record with the absent
+property while C-10.3 kept it.
+
+### Case C-11 — Property types are scoped to their record type
+
+| Step | Do this | Expect |
+|---|---|---|
+| C-11.1 | Note that `specimen.label` and `expedition.label` are separate declarations | — |
+| C-11.2 | Ask `vault_configure` to change `expedition.label` to an `enum` | Accepted (it is that type's own declaration) |
+| C-11.3 | `vault_describe` afterwards | `specimen.label` is **still `text`**. It did not follow |
+
+**Fail if:** changing a property on one record type changes the same-named property on another.
+That is the vault-wide property binding this design exists to avoid.
