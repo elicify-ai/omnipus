@@ -792,9 +792,17 @@ func TestComparisonTruthTable(t *testing.T) {
 					// well-formed operands. An operator that never answers true
 					// — or never false — is indistinguishable from a constant,
 					// and would satisfy most of this table silently.
-					if !l.absent && !r.absent && !l.nonConf && !r.nonConf &&
-						oracleDomain(l.typ) == oracleDomain(r.typ) && oracleDisposition[l.typ][op] &&
-						!((l.many || r.many) && isOrderingOperator(op)) {
+					// R-3 preempts everything for the unary two, so they are
+					// counted over the WHOLE space rather than over the
+					// disposition-gated part of it. Excluding them logged
+					// "answered true in 0 cells", which reads as untested and
+					// is not: their value is asserted in every one of the
+					// 5,776 cells they appear in.
+					counted := op == OpIsNull || op == OpIsNotNull ||
+						(!l.absent && !r.absent && !l.nonConf && !r.nonConf &&
+							oracleDomain(l.typ) == oracleDomain(r.typ) && oracleDisposition[l.typ][op] &&
+							!((l.many || r.many) && isOrderingOperator(op)))
+					if counted {
 						n := answered[op]
 						if wantResult {
 							n[1]++
@@ -854,9 +862,6 @@ func TestComparisonTruthTable(t *testing.T) {
 	// Every operator must answer BOTH ways somewhere in the well-formed space,
 	// or it is indistinguishable from a constant.
 	for _, op := range Operators {
-		if op == OpIsNull || op == OpIsNotNull {
-			continue // R-3 answers these outside the disposition-gated space counted above.
-		}
 		n := answered[op]
 		if n[0] == 0 || n[1] == 0 {
 			t.Errorf("operator %s answered false in %d cells and true in %d; both must be non-zero or the table proves nothing about it",
