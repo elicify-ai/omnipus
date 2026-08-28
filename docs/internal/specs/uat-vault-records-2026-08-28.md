@@ -16,10 +16,12 @@ the end of an existing part — B-7, B-8, F-10.6, F-18, F-19 and I-9 — each ad
 ADR or spec moved between revision 8 and revision 11 in a way the original cases did not
 cover. **Part P is entirely new.** It extends Case J-3 (which stays as written and still
 passes/fails on its own terms) into the full trash convention that landed today in
-`vault-trash-convention-2026-08-28.md`, including two cases that check for a **live,
-currently-unfixed defect** the convention document itself reports — read Part P's own
-preamble before running P-8 and P-9. Nothing already in Parts 0–O was removed, renumbered or
-reworded.
+`vault-trash-convention-2026-08-28.md`. Two of its cases, P-8 and P-9, are **regression checks**
+for a data-loss defect the convention document reported as live and unfixed — it was found and
+fixed later the same day, and their expected result is a plain refusal with nothing moved; read
+Part P's own preamble for the one detail that matters (creating the destination directory first,
+so the case exercises the real guard rather than an unrelated, incidental refusal). Nothing
+already in Parts 0–O was removed, renumbered or reworded.
 
 ---
 
@@ -1973,14 +1975,13 @@ the console.
 stays in force exactly as written — do not skip it in favour of this part, run both. What follows
 comes from `vault-trash-convention-2026-08-28.md`, a design note landed today that assembles six
 already-normative behaviours into one document a reviewer — and a tester — can read end to end,
-and additionally names **five findings against the current code**, one of which is a live way to
-destroy a note permanently with no trace. Cases P-8 and P-9 test for that finding directly. **Read
-their preambles before you run them** — they involve an operation that, if the finding is real,
-cannot be undone by anything in this plan.
-
-**Before running anything below:** back up Vault Alpha (`cp -r /tmp/uat-vault-alpha
-/tmp/uat-vault-alpha-backup`). Everything else in this plan is recoverable by re-typing a fixture
-file. Part P is not, if P-8 or P-9 finds what the design document warns they might.*
+and additionally names **six findings against the current code**. One of them — a live way for
+`move` to bypass trash entirely and permanently destroy a note — was found and **fixed the same
+day**, before this plan was extended (commit `883c26d7`,
+`TestRename_RefusesToolStateDirectoriesInBothDirections`). Cases P-8 and P-9 are the regression
+checks for that fix: their expected outcome is a plain refusal with nothing moved, and neither
+needs a backup or a throwaway fixture — the whole point is that nothing is destroyed. Nothing
+else in this part carries that history; run it in the ordinary way.*
 
 ### Case P-1 — Where a trashed note goes, and what does not happen to it
 
@@ -2094,56 +2095,69 @@ negative case: you are checking that something does **not** exist.*
 | P-7.3 | Look at every tool's own parameter list across everything you have exercised in this plan | No tool declares a permanent-delete parameter of any name |
 
 **Fail if:** any argument, on any tool, causes a note to be unrecoverably gone with no trash entry
-at all. That is not a refusal-wording defect — treat it exactly as seriously as Case P-8.
+at all. That is not a refusal-wording defect — treat it with the same severity as any other
+permanent, unrecoverable data loss reported anywhere in this plan.
 
-### Case P-8 — CRITICAL: moving a note into the vault's own bookkeeping folder must be refused
+### Case P-8 — REGRESSION: a move into the vault's own bookkeeping folder is refused
 
-*Read this whole preamble before running it. The trash convention document names this as a
-**live, currently-unfixed defect (finding F1, severity blocker)**, not a hypothetical: today,
-`vault_restructure`'s `rename` and `move` do not check whether their destination lands inside
-`.omnipus-vault/`. If that is still true on your build, moving a note there makes it vanish —
-no trash entry, no audit record, no restore path, nothing recoverable by anything in this plan.
-This case is designed to surface that safely: it uses a note you can afford to lose.*
+*This defect is already fixed — verified before this case was rewritten. `Renamer.Plan`
+(`pkg/knowledge/rename.go`) now calls `authorRefuseReserved` on **both** the source and the
+destination of every `rename`/`move`, at **any** depth, for **both** `.omnipus-vault/` and
+`.obsidian/` — commit `883c26d7`, `TestRename_RefusesToolStateDirectoriesInBothDirections`.
+Before the fix, a move into `.omnipus-vault/` was an untracked hard delete: the note left
+search, the link graph and the properties index with no trash entry, no audit record and no
+restore path. This case exists so that fix stays fixed — it is a regression check, not an
+attempt to reproduce data loss, and it needs no backup and no throwaway fixture: the expected
+outcome is that nothing moves.*
 
-**Preparation — do this before P-8.1, not after:**
-
-1. Create a brand-new, disposable note for this case alone — do **not** reuse a fixture note this
-   plan needs elsewhere. Something like `Specimens/throwaway-for-p8.md` with a single line of text
-   you will recognise.
-2. Confirm you can find it with `vault_find` or a plain search first.
-
-| Step | Do this | Expect |
-|---|---|---|
-| P-8.1 | Ask `vault_restructure` to `move` the throwaway note to a destination **inside** `.omnipus-vault/` — e.g. `.omnipus-vault/records/throwaway-for-p8.md` | The **correct** behaviour is a **refusal**, naming `.omnipus-vault/` as a reserved location |
-| P-8.2 | If it was refused | Check the file is still at its original path, untouched. **Pass**, and you have confirmed the defect is fixed |
-| P-8.3 | If it was **accepted** | **Do not panic and do not try to fix it yourself.** Look at `/tmp/uat-vault-alpha/.omnipus-vault/records/throwaway-for-p8.md` on disk directly, with a file manager, outside the app |
-| P-8.4 | If the file is sitting there as an ordinary file | It has left the vault's search, link graph and properties index (both walkers skip that directory by name), with **no trash entry, no audit log entry, and no restore path from inside the app**. This is the finding — report it as **CRITICAL**, quote the exact call you made and its response, and note that the file itself is recoverable by hand right now (dragging it back out with a file manager) even though no Omnipus tool can do it |
-
-**This case tests for the defect existing, and either answer is a legitimate, useful result.** A
-refusal at P-8.1 means the defect described in the design document has already been fixed on your
-build — say so plainly, it is good news, not a wasted case. Acceptance at P-8.1 confirms a
-currently-known, currently-unfixed way to permanently destroy vault content through a tool an
-operator may have granted for ordinary reorganising. Either way, do not stop here without checking
-P-8.4's manual recovery step, because that is what tells a reader whether the data is truly gone
-or merely unreachable from inside the app.
-
-### Case P-9 — CRITICAL: trashing something inside the vault's own bookkeeping folder must be refused
-
-*The same missing guard, the other direction. Trashing a path inside `.omnipus-vault/` would move
-the vault's own state — a schema file, a saved view, another note's trash entry — into the trash,
-which is at best confusing and at worst corrupts the schema an operator is relying on. Use the
-same disposable-fixture discipline as P-8: do not point this at a schema file you need later in
-this plan.*
+**One step below exists to remove a mask, not to set up the scenario. Read it before skipping
+it.** Before the fix, this exact move was refused too — but for the wrong reason: the
+destination folder didn't exist yet, so it failed on an ordinary "destination directory does
+not exist" error that has nothing to do with the guard. A tester who does not create the
+destination directory first will see *a* refusal either way, and will pass this case whether or
+not the real guard is present. Step P-8.1 removes that mask. (Once `trash` itself is built,
+`.omnipus-vault/trash/` always exists and the mask disappears on its own — do not rely on that
+happening yet.)
 
 | Step | Do this | Expect |
 |---|---|---|
-| P-9.1 | Make a throwaway copy of one schema file, e.g. duplicate `keeper.yaml` as `keeper-copy.yaml` in the same `.omnipus-vault/records/` folder, so you have a disposable target inside the bookkeeping directory | — |
-| P-9.2 | Ask `vault_restructure` to `trash` `.omnipus-vault/records/keeper-copy.yaml` | **Correct** behaviour is a **refusal**, naming `.omnipus-vault/` as off-limits to `trash` |
-| P-9.3 | If accepted instead | Check whether `keeper-copy.yaml` moved into `.omnipus-vault/trash/…`. If it did, this is a real but lower-severity finding than P-8 (the file is still recoverable through the ordinary restore path, since it never left `.omnipus-vault/`) — report it, quoting the call and response, but you do not need the same alarm as P-8 |
+| P-8.1 | Using your file manager, create the folder `/tmp/uat-vault-alpha/.omnipus-vault/trash/` if it does not already exist | The folder exists, empty |
+| P-8.2 | Ask `vault_restructure` to `move` `Specimens/moss.md` to `.omnipus-vault/trash/moss.md` | **Refused** |
+| P-8.3 | Read the refusal | It names the **reserved location** specifically — `.omnipus-vault/` (or your build's equivalent wording) — not a generic error, and not "destination directory does not exist" |
+| P-8.4 | Check `Specimens/moss.md` on disk | Still at its original path, byte-identical to before the call |
+| P-8.5 | `vault_find` for it | Still found, normally |
+| P-8.6 | If you want the fuller picture: repeat P-8.2 with a destination inside `.obsidian/` instead, and again with a **nested** reserved path such as `Notes/.obsidian/plugins/moss.md` | Both refused the same way. The guard applies at any depth, not only at the top level |
 
-**Fail if:** the operation is accepted with no refusal. Note in your report whether the resulting
-location was still inside `.omnipus-vault/` (recoverable) or, worse, somewhere `restore` could not
-find it.
+**Fail if:** the move at P-8.2 is **accepted** — this is the live-data-loss defect returning.
+Report it as **CRITICAL**, quote the exact call and its response verbatim, and stop there; do
+not attempt further moves into `.omnipus-vault/` "to confirm" it, one demonstration is enough
+and each one risks another note. Also fail if the refusal happens but does not name the reserved
+location specifically (a refusal for the wrong reason is indistinguishable from the
+destination-missing mask described above, and would pass this case against broken code); or if
+the source file was touched in any way despite being refused.
+
+### Case P-9 — REGRESSION: a move *out of* the bookkeeping folder is refused on the source side
+
+*The mirror direction, checked separately because the guard has to catch it on the **source**
+side rather than the destination side, and that is a different code path succeeding for the
+same reason. This is also why `restore` (Case P-5) cannot be, and is not, implemented as an
+ordinary `move`/`rename` call: the general-purpose `move` this case exercises refuses **any**
+crossing of `.omnipus-vault/`'s boundary, in or out — which is exactly right for `move`, and
+exactly why `restore` has to be its own dedicated, narrower operation with its own containment
+checks (FR-048b), rather than a thin wrapper over the tool this case is testing.*
+
+| Step | Do this | Expect |
+|---|---|---|
+| P-9.1 | Note that `.omnipus-vault/records/keeper.yaml` exists as a real schema file | — |
+| P-9.2 | Ask `vault_restructure` to `move` `.omnipus-vault/records/keeper.yaml` to `Keepers/keeper-schema-moved.yaml` | **Refused** |
+| P-9.3 | Read the refusal | It names the reserved location (`.omnipus-vault/`) specifically, this time as the **source** side, not the destination |
+| P-9.4 | Check `.omnipus-vault/records/keeper.yaml` on disk | Unchanged, and no new file exists at `Keepers/keeper-schema-moved.yaml` |
+| P-9.5 | `vault_describe` afterward | The `keeper` record type is exactly as it was — nothing about it changed |
+
+**Fail if:** the move is accepted — report as **CRITICAL**, since it would mean an agent holding
+only `vault_restructure: allow` could relocate or exfiltrate the vault's own schema files, saved
+views, or another note's trash entry, with none of the tier-boundary protections Part L exists to
+provide; or the refusal fires but does not name the reserved location.
 
 ### Case P-10 — The 30-day retention purge: not yet testable, and here is what correct will look like
 
@@ -2312,7 +2326,7 @@ fixture, say what you observed *and* that you suspect it, and let someone else d
 | P-5 | Restore by original path, newest-first, `trashed_at` | FR-048a; trash convention §4, finding F3 | W5 |
 | P-6 | The four restore refusals | FR-038a, FR-048a, FR-048b; trash convention §4 | W5 |
 | P-7 | No permanent-delete operation exists on any tool | trash convention §6 | W5 |
-| P-8 | CRITICAL: `move` into `.omnipus-vault/` must be refused | trash convention §8 finding F1 (blocker) | W5 |
-| P-9 | CRITICAL: `trash` of a path inside `.omnipus-vault/` must be refused | trash convention §8 finding F6 | W5 |
+| P-8 | REGRESSION: `move` into `.omnipus-vault/` is refused | trash convention §8 finding F1 (blocker, fixed 883c26d7) | W5 |
+| P-9 | REGRESSION: `move` out of `.omnipus-vault/` is refused on the source side | trash convention §8 findings F1/F6 (fixed 883c26d7) | W5 |
 | P-10 | Retention purge — not yet testable | trash convention §6, §8 finding F5 | W5 (unbuilt) |
 | P-11 | The trash receipt is internal plumbing, not a tool surface | trash convention §7 | W5 |
