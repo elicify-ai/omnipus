@@ -1742,11 +1742,36 @@ claim to have independently reproduced published research. The vault-token estim
 > 55.2%** (arXiv 2605.15184) — **as large a swing as replacing the retriever entirely.**
 
 That reframes the response format from presentation to mechanism. A retrieval system that finds
-the right notes and renders them badly is a worse retrieval system. Accordingly:
+the right notes and renders them badly is a worse retrieval system.
+
+> **D22.0 — What the two citations support, and what they do not. New in revision 6, because
+> revision 5 used both beyond their warrant and §6 caveated neither.**
+>
+> - **The 93.1% → 55.2% finding is about WHERE results are put** — inline in the conversation
+>   versus written to a file the model must open. It establishes that **delivery is mechanism, not
+>   presentation**, and that is a large and well-evidenced claim. It says **nothing about
+>   compact text versus JSON**, which is a question about *format* at the same delivery site.
+>   Revision 5 used it to justify D22.1. **That is an inference, and it is now labelled one.**
+> - **Notion's ~91% reduction is a measurement over a SCHEMA surface** — a structured, bounded,
+>   highly repetitive object where JSON's key repetition is most of the payload. Revision 4
+>   correctly cited it for `record_schema`. Revision 5 extended it to *"every result from all five
+>   tools"*, including record rows carrying unbounded property values and free-text excerpts,
+>   **where the compression ratio has no particular reason to transfer.**
+>
+> **What survives, and it is enough to keep every decision below:** delivery format is part of
+> retrieval design (finding 1, directly); a schema rendered as compact text costs far fewer
+> tokens than the same schema as JSON (finding 2, directly); and **every specific rule in D22.2
+> through D22.6 stands on its own reasoning**, which is about what a model can act on, not about
+> a measured ratio. **The decisions are kept. The warrant is corrected.**
+
+Accordingly:
 
 **D22.1 — Compact text, never JSON, to the model.** Revision 4 made this call for
-`record_schema` alone (Notion's measured ~91% context-token reduction); it now applies to
-**every result from all five tools**.
+`record_schema` alone (Notion's measured ~91% context-token reduction, which is a schema
+measurement and is load-bearing here); it now applies to **every result from all six tools**,
+**as a reasoned extension rather than a measured one** (D22.0). The saving on a schema is
+evidenced; the saving on a page of record rows is expected and unmeasured, and if it turns out to
+be small the rules in D22.2–D22.6 are why the format stays anyway.
 
 > **This does not touch the wire.** The type crossing the gateway/SPA boundary **remains a
 > contract-defined JSON schema per Hard Constraint #8** — `RecordQueryResponse` and the rest of
@@ -1764,9 +1789,15 @@ a caveat arriving after them is a correction competing with a conclusion.
 without a second call.
 
 **D22.4 — Joined values are marked as borrowed.** A value pulled through a relation renders as
-`company [[Acme]]: …`, **never merged into the row's own columns.** The row is still one real
-file, and blurring that is how an agent comes to believe a property exists on a note that does
-not have it.
+`company [[Acme]]: …`, **never merged into the row's own columns.** Blurring that is how an agent
+comes to believe a property exists on a note that does not have it.
+
+> **Amended in revision 6.** Revision 5 wrote *"the row is still one real file"*. That holds for
+> notes and records; it does **not** hold for `kind: task`, where many rows come from one file
+> (D15.3). The rule is therefore: **a row is one real thing at a path** — a note, or a checkbox
+> line within one — and a task row always renders its line number so the distinction is visible
+> rather than inferred. The property being protected is unchanged: a reader must never take a
+> borrowed or derived value for one the file itself contains.
 
 **D22.5 — Totals state their scope.** *"2 matched, GBP only"* — **never a bare number.** This is
 D13's cross-currency refusal (O-2) carried into the rendering, where it is actually read.
@@ -1775,9 +1806,23 @@ D13's cross-currency refusal (O-2) carried into the rendering, where it is actua
 is a prompt for the next call.** A response that terminates in data terminates the loop; one
 that ends in *"narrow by `status`, or `near: [[Acme]] hops:2`"* continues it.
 
-**D22.7 — Token budget.** ~50–80 tokens per hit; ~1,000 tokens default; **hard cap 4,000, with
-truncation stated in the header** (D22.2, and D15.5b's rule that every breach is reported). A
-`minimal` mode at ~20 tokens/hit for wide scans.
+**D22.7 — Response budget, expressed in BYTES.** ~200–320 bytes per hit; ~4,000 bytes default;
+**hard cap 16,000 bytes, with truncation stated in the header** (D22.2, and D15.5b's rule that
+every breach is reported). A `minimal` mode at ~80 bytes/hit for wide scans.
+
+> **Changed from tokens to bytes in revision 6, and the reason is D21.5.** Revision 5 set a
+> *"hard cap 4,000 tokens"*. **A token cap needs a tokenizer to enforce it, and D21.5 is a
+> decision about three tokenizers that disagree** — none of which is the model's, which is the
+> only one that would make the number mean what it says. Enforcing a token budget with any
+> tokenizer we own would produce a cap that is wrong by an unknown margin in an unknown
+> direction, on every provider, and would silently change meaning when a provider changed
+> tokenizer.
+>
+> **Bytes are exact, provider-independent, and enforceable at the point of truncation.** The
+> figures above are the token figures at a conservative ~4 bytes/token so the intent is
+> unchanged; they are a budget for *rendering*, not an accounting of what the model is billed.
+> *(Nothing else in D22 depends on the unit. D22.8's ~150-token description budget is a design
+> guideline for a human writing prose, not a runtime check, so it stays in tokens.)*
 
 **D22.8 — Tool DESCRIPTIONS are the binding constraint, not tool count.**
 
@@ -1790,8 +1835,8 @@ descriptions and error messages**, which are paid only when relevant: an agent l
 `set_property` arity rule from the error it gets, not from a paragraph every other agent carries
 on every turn. Learn-on-demand, not learn-in-advance.
 
-*(Five tools at ~150 tokens is ~750 tokens of permanent context. Eighteen would have been
-~2,700.)*
+*(Six tools at ~150 tokens is ~900 tokens of permanent context. Eighteen would have been ~2,700.
+The sixth tool D15.6 adds costs ~150 of those, which is the whole of its standing price.)*
 
 ### D23 — Schema and view authoring are ordinary writes; mounting is not
 
