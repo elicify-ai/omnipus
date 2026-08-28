@@ -2034,17 +2034,47 @@ naive join → **300**, truth **200**.
 | ~~A-8~~ | **RESOLVED 2026-08-28, in this spec's favour — the unit is BYTES.** Revision 3 raised it: budgets of ~50–80/hit, 1,000 default and 4,000 cap are meaningless without naming the counter, and the likely assumption is the serving model's tokenizer, which varies per provider. **ADR-068 revision 6's D22.7 concedes the point in the same words** and changes the unit: *"a token cap needs a tokenizer to enforce it, and D21.5 is a decision about three tokenizers that disagree — none of which is the model's."* FR-127 is now ~200–320 bytes/hit, ~4,000 default, 16,000 cap — the same intent at a conservative ~4 bytes/token. FR-127b names the unit and binds the tests to it. **One carve-out survives:** FR-079/FR-128's ~150-token description budget stays in tokens, because it is authoring guidance for a human, never a runtime check. |
 | ~~A-9~~ | **RESOLVED 2026-08-28, in this spec's favour.** Revision 3 read ADR-068 D20's two listings of `trash` as: the **primitive and its convention** land in W4, the **`vault_restructure` operation** exposing it lands in W5, and said that if the ADR meant otherwise the spec should be corrected rather than reconciled. **ADR-068 revision 6's D20 adopts exactly that split in its own words** — *"the convention is W4 design work, the operation is W5"* — and names the failure it avoids: shipping part of a tier-5 tool before W5 defines the tool or seeds its policy. FR-048 is unchanged and is now the ADR's reading too. |
 | **A-10** | **PARTLY RESOLVED, revision 4, and narrowed.** The half that was a real defect is fixed: `create_record_type` no longer sits inside `vault_edit` at all — it is `vault_configure` (FR-016), so granting `vault_edit` no longer silently grants the type system. **The residual is genuine and stays LIVE:** granting `vault_edit` still grants `replace_body` as well as `set_property`, and an operator reading the tool name will not infer that. FR-070c and FR-079 now require every tool description to name its **widest** operation rather than its most common one — `replace_body` for `vault_edit`, `delete_record_type` for `vault_configure`, `trash` for `vault_restructure`. **Needs:** a review that the six shipped descriptions actually do this, at W5, not an assertion here that they will. |
-| **A-11** | **LIVE, new in revision 4. The nine SQLite-semantics defeats are specified and none is verified.** §8.1 gives the defeat for each of the nine rules SQLite's defaults contradict; ADR-068 D16.6 gives the same list. **Every one of them is a line of a query compiler nobody has written**, and eight of the nine fail in the quiet direction, so the absence of a defeat produces a passing test suite and a wrong product. AC-8.4/SC-024 is the control, and it is only a control if it is **mutation-checked** against the real compiled path. **Needs:** W2 to report the mutation run, not the pass. |
+| ~~A-11~~ | **RESOLVED 2026-08-28 by operator ruling R-A, and resolved by DELETING THE CLASS rather than mitigating it.** *Revision 4 raised it: the nine SQLite-semantics defeats are specified and none is verified; every one is a line of a query compiler nobody has written; eight of nine fail in the quiet direction, so the absence of a defeat produces a passing test suite and a wrong product. Grill pass 1 then found that **zero of the seven specified defeats were sufficient as written**, plus a tenth violation (join fan-out) that made every count and total over a filtered multi-value list wrong. That is two rounds of a specified defeat differing from a verified one, which is exactly what A-11 predicted.* **The ruling removes the compiler: SQLite narrows candidates, our own tested comparator decides (§8.1).** There is no line to forget because there is no query compiler. **What survives as an obligation, and it is smaller and different:** AC-8.4b's **six** comparator mutations, reported as a mutation table at W2 rather than a pass. **What does NOT survive:** the eleven defeats, AC-8.4a, AC-8.7, AC-8.8 and FR-023a/FR-028a's SQL mechanisms — all withdrawn, listed in §8.1's deletion table so the shrinkage is auditable.
+| **A-13** | **LIVE, new in revision 5. FR-020c's freshness mechanism is designed, not verified — and it is the FOURTH mechanism this FR has had.** The three before it were each asserted rather than checked: a shared freshness token that did not exist; `manifestVersion`, which is a struct-schema constant; and a *"live `Manifest`"* query-path lookup, where `Index` holds no manifest field, `LoadManifest` has two call sites both inside `SyncWith`/`CheckDrift`, and `Manifest` has no mutex. **Revision 5 puts the hash on the bleve document as a stored field instead**, which is real work on a struct FR-111 already reopens — but whether bleve returns a stored field cheaply on this hit path, and whether `Store: true` on a 64-byte field at 100,000 documents is acceptable against FR-020e's rebuild, are **open**. **Needs:** W2's fielded-indexing work to answer both, and test 62's `-race` run to prove the concurrency question is gone rather than moved. **Carried as a stated open risk deliberately: a known gap is worth more than a fifth assumed mechanism.**
+| **A-14** | **LIVE, new in revision 5 (operator ruling R-A). Nobody has measured the GO evaluation path over the two-index design.** Filtering, grouping and totals move back to Go (FR-021), so cost scales with **candidates** rather than with results, and the Unicode case fold (FR-011a) adds a `strings.ToLower` per operand per comparison over a set FR-064 caps at 10,000. FR-064a's aggregate-only exemption raises that to the supported vault size for one query shape. **The bound is a refusal, not a hope** — FR-064 and FR-066a are unchanged and were set for exactly this reason. **Needs:** W1 to measure the Go path at the 10,000-record cap and at FR-064a's 50,000, with peak RSS (FR-066b), on Linux as well as macOS. *This is the cost the ruling accepts, stated up front rather than discovered.* |
 | **A-12** | **LIVE, new in revision 4. The properties-index write path is now carrying a second obligation nobody has measured.** FR-020c adds a `source_hash` column written in the same transaction as every record row, and FR-076a adds a checkbox row per task line. A-7 already flags the two-index write path as unmeasured; these widen what is unmeasured rather than narrowing it. **Needs:** W1 and W2 to measure the write path **with** `source_hash` and task rows present, not a bare record write. |
 
 **A-4 and A-5 were specification defects and are now resolved by descoping the decisions that
 caused them** (ADR-068 D11, D12). **A-6, revision 2's live blocker, is resolved — W1 is
 unblocked**, with its rationale corrected in revision 4 to capability alone.
 
-**Revision 4's closing count. A-8 and A-9 are both closed, and both closed the way this spec
-argued** — ADR-068 revision 6 adopted this document's reading in each case rather than the other
-way round. A-10 is halved. Four items stay live and **none of them blocks W1**: A-7 and A-12 are
-measurement W1 and W2 perform, A-10's residual is a description review at W5, and A-11 is a
-verification obligation on W2 that already has its acceptance criterion written (AC-8.4, SC-024).
-The one thing a reader should carry away from this table is A-11: **a specified defeat and a
-verified defeat are different things, and eight of the nine failures look identical to success.**
+**Revision 5's closing count.** A-8 and A-9 closed in revision 4, both the way this spec argued.
+**A-11 closes here, and it closes by deletion rather than by verification** — the operator ruling
+that moves comparison out of SQLite removes the class of failure A-11 named, and it does so after
+grill pass 1 established that zero of the seven specified defeats were sufficient and that a tenth
+violation existed. A-10 stays halved. **Five items are live — A-7, A-10, A-12, A-13, A-14 — and
+none of them blocks W1**: A-7, A-12 and A-14 are measurements W1 and W2 perform, A-10's residual is
+a description review at W5, and A-13 is answered by the same W2 work that reopens `indexDoc`.
+
+**The one thing a reader should carry away from this table is now A-13, and it replaces A-11's
+lesson with a sharper one.** A-11 said a specified defeat and a verified defeat are different
+things. **A-13 says something worse: FR-020c has now had four mechanisms, and the first three were
+each described in normative text as though they already worked.** The fourth is designed rather
+than described, its unbuilt parts are named, and its open questions are written down here instead
+of being resolved by confidence. **That is the difference this document is trying to hold onto, and
+it is easier to lose on a revision that is mostly deleting things than on one that is adding
+them.**
+
+---
+
+## 11. Wave plan
+
+**NEW, revision 5.** *The specification referenced W0–W6 eleven times and contained no wave plan,
+so the wave assignment of any individual FR was unreviewable and the document was not implementable
+without ADR-068 open alongside it (the grill's M-29).* Waves are ADR-068 D20's; this table maps
+this specification's requirements onto them.
+
+| Wave | This spec's requirements | Exit criterion additions from revision 5 |
+|---|---|---|
+| **W0** | FR-020e | *(unchanged — the F-0 index rebuild, independent of everything else)* |
+| **W1** | FR-001..FR-011b, FR-012..FR-013, FR-015, FR-015a, FR-020, FR-020a..FR-020c1, FR-020h..FR-020j, FR-021, FR-021a..FR-021d, FR-036..FR-039, FR-060..FR-062a, FR-075, FR-075a | **A-14's measurement**: the Go evaluation path at the 10,000-record cap and at FR-064a's 50,000, peak RSS, Linux **and** macOS. FR-020i's version assertion. **The `go-test-nosqlite` CI job exists and is a required check** |
+| **W2** | FR-004a, FR-022..FR-029, FR-063..FR-067a, FR-073, FR-076, FR-076a, FR-110..FR-117, R-1..R-13 as FR-200..FR-212 | **AC-8.4b's six-mutation table, reported as an artifact.** FR-113's nDCG@10 run with its per-query table and its ship/no-ship verdict. **A-13's answer**: whether the stored-field freshness mechanism holds. FR-049b's counters exist |
+| **W3** | FR-030..FR-035, FR-065, FR-074 | *(unchanged)* |
+| **W4** | FR-040..FR-048, FR-050..FR-053 | The trash **convention** including FR-048a's colon-free path, retention and restore semantics — written down and reviewed **before** W5 exposes the operation |
+| **W5** | FR-016..FR-019a, FR-043a, FR-048a's `restore` operation, FR-049a, FR-070..FR-084, FR-090..FR-092, FR-127..FR-128 | **FR-049a's migration scan reports EMPTY.** FR-079's serialised six-tool definition set is **measured in bytes** and written back into FR-128. A-10's description review |
+| **W6** | FR-020f, FR-025a's health view, FR-100..FR-103 | FR-025a's two surfaces agree, asserted by test 58 |
