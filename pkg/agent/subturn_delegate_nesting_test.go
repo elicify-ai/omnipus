@@ -25,7 +25,7 @@
 // ROOT CAUSE: pkg/agent/subturn.go's spawnSubTurn built every delegated
 // child's tool registry via:
 //
-//	agent.Tools = execSource.Tools.CloneExcept(tools.ExcludedDelegate, tools.ExcludedHandoff)
+//	agent.Tools = execSource.Tools.CloneExcept(tools.ExcludedDelegate, tools.ExcludedSwitchAgent)
 //
 // — a registry-level filter that made "delegate" ENTIRELY ABSENT from the map
 // backing the child's own ts.agent.Tools (FR-H-006, "one level only", owner
@@ -55,7 +55,7 @@
 // "delegate" failed closed, BEFORE DelegateTool.Execute (and therefore its
 // real trust-set/mode/depth gate) was ever reached.
 //
-// THE FIX: spawnSubTurn now calls CloneExcept(tools.ExcludedHandoff) only.
+// THE FIX: spawnSubTurn now calls CloneExcept(tools.ExcludedSwitchAgent) only.
 // "delegate" is retained in every delegated child's own tool registry from
 // the moment it is cloned (delegate is registered via Register(), so it is
 // IsCore=true and always present in GetAll() — no TTL/promotion needed), so
@@ -63,7 +63,8 @@
 // nested delegate call reaches DelegateTool.Execute's real trust-set/mode/
 // depth gate (delegationDenyBackground/Await, SetDelegationDepthResolver) —
 // exactly the checks that MUST still apply and now finally get the chance to.
-// "hand_off" remains excluded (a distinct, still-valid concern: a nested
+// "switch_agent" (ADR-071 D4 renamed hand_off + return_to_default to this
+// one tool) remains excluded (a distinct, still-valid concern: a nested
 // sub-turn hijacking the ACTIVE parent session's agent).
 //
 // THIS TEST proves the fix end-to-end through the REAL production path: a

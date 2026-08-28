@@ -366,7 +366,7 @@ var allStaticToolNames = []string{
 	// on an override key absent from it.
 	"list_mounts",
 	"search_web", "fetch_url",
-	"send_message", "hand_off", "return_to_default", "send_file",
+	"send_message", "switch_agent", "send_file",
 	"find_skills", "install_skill",
 	"delegate", "message_parent",
 	"list_tasks", "create_task", "update_task", "delete_task", "list_agents",
@@ -818,9 +818,8 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			"run_retrospective":   allow,
 			"recall_conversation": allow,
 			// Communication / handoff (hand back to Mia/Jim when out of scope).
-			"send_message":      allow,
-			"hand_off":          allow,
-			"return_to_default": allow,
+			"send_message": allow,
+			"switch_agent": allow,
 			// Skill discovery + authoring (FR-9.2). Authoring/install are
 			// consent-gated (ask) so every skill-tree write routes through approval.
 			"find_skills":   allow,
@@ -858,12 +857,11 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 		ask := config.ToolPolicyAsk
 		return denyAllThenOverride(map[string]config.ToolPolicy{
 			// Converse / route.
-			"send_message":      allow,
-			"hand_off":          allow,
-			"return_to_default": allow,
-			"list_agents":       allow, // knows who to route to
-			"send_file":         allow, // share an artifact in chat
-			"navigate":          allow, // drive the UI ("show me my agents")
+			"send_message": allow,
+			"switch_agent": allow,
+			"list_agents":  allow, // knows who to route to
+			"send_file":    allow, // share an artifact in chat
+			"navigate":     allow, // drive the UI ("show me my agents")
 			// Memory — her signature (memory-rich, cross-workspace recall).
 			"remember":            allow,
 			"recall_memory":       allow,
@@ -952,10 +950,9 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			// allow here to mirror delegate's posture exactly.
 			"message_parent": allow,
 			// Present / route / share an artifact.
-			"send_message":      allow,
-			"hand_off":          allow,
-			"return_to_default": allow,
-			"send_file":         allow,
+			"send_message": allow,
+			"switch_agent": allow,
+			"send_file":    allow,
 			// Working aids (his summarize skill; a research checklist).
 			"find_skills": allow,
 			"set_todos":   allow,
@@ -1008,10 +1005,9 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			// one universally-registered tool, governed by this policy alone).
 			"bash": allow,
 			// Communication / routing.
-			"send_message":      allow,
-			"send_file":         allow,
-			"hand_off":          allow,
-			"return_to_default": allow,
+			"send_message": allow,
+			"send_file":    allow,
+			"switch_agent": allow,
 			// Persistent memory (carries planning context across sessions).
 			"remember":            allow,
 			"recall_memory":       allow,
@@ -2091,7 +2087,7 @@ func Jim() *CoreAgent {
 			"send_message", "send_file",
 			"create_task", "update_task", "list_tasks",
 			"cron", "delegate", "message_parent",
-			"hand_off", "return_to_default",
+			"switch_agent",
 		},
 	}
 }
@@ -2112,7 +2108,7 @@ func Ava() *CoreAgent {
 			"send_message",
 			"create_agent", "update_agent", "delete_agent",
 			"list_models",
-			"hand_off", "return_to_default",
+			"switch_agent",
 		},
 	}
 }
@@ -2131,7 +2127,7 @@ func Mia() *CoreAgent {
 			"read_file", "list_directory",
 			"search_web", "fetch_url",
 			"send_message",
-			"hand_off", "return_to_default",
+			"switch_agent",
 		},
 	}
 }
@@ -2150,7 +2146,7 @@ func Ray() *CoreAgent {
 			"read_file", "write_file", "edit_file", "list_directory",
 			"search_web", "fetch_url",
 			"send_message", "send_file",
-			"hand_off", "return_to_default",
+			"switch_agent",
 		},
 	}
 }
@@ -2159,8 +2155,8 @@ func Ray() *CoreAgent {
 // tier (Type=worker), NOT a base/core agent: never a chat target, no heartbeat,
 // never the default, invoked only via delegation. It carries a native executor
 // (set in SeedConfig) and a leaner tool set focused on getting one delegated
-// task done and reporting back. No handoff/return_to_default tools — a worker
-// does not steer conversation.
+// task done and reporting back. No switch_agent tool — a worker does not
+// steer conversation.
 func Worker() *CoreAgent {
 	return &CoreAgent{
 		ID:       IDWorker,

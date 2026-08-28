@@ -917,6 +917,21 @@ var (
 // what "remaining gaps" means for it (abort boot vs. reject the reload and
 // keep serving the previous config).
 func repairAndValidateToolPolicyCoverage(cfg *config.Config) []config.CoverageGap {
+	// ADR-071 §5.3.5a: this migration MUST run FIRST, before
+	// RepairIncompleteToolPolicyCoverage below — not merely before the
+	// validator. The repair backfills any (agent, tool) pair with no policy
+	// entry to an explicit "deny" (correct, fail-closed, for its own
+	// purpose), and ToolSearch/switch_agent are new names with no policy
+	// entry anywhere until this migration folds the retired load_tool /
+	// hand_off / return_to_default keys forward. Sequenced any later, the
+	// first post-upgrade boot would silently deny both on every agent —
+	// boot succeeds with no gap and no abort, and every agent silently
+	// loses hand-off (and, after D3, ToolSearch denies 71% of the catalog).
+	if config.MigrateLegacyToolPolicyKeys(cfg) {
+		slog.Info("gateway: migrated legacy tool-policy keys to their ADR-071 replacements",
+			"migrations", "load_tool->ToolSearch, hand_off/return_to_default->switch_agent",
+		)
+	}
 	knownTools := buildKnownBuiltinToolNames()
 	if repaired := config.RepairIncompleteToolPolicyCoverage(cfg, knownTools); len(repaired) > 0 {
 		agentIDs := make(map[string]struct{}, len(repaired))

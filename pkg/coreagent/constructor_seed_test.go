@@ -44,7 +44,7 @@ func TestBoot_ConstructorSeedDispositionMap(t *testing.T) {
 				"create_agent", "update_agent", "list_agents",
 				"list_models", "search_web", "fetch_url",
 				"remember", "recall_memory", "run_retrospective",
-				"send_message", "hand_off", "return_to_default",
+				"send_message", "switch_agent",
 				"find_skills", "list_skills",
 				"update_workspace", "list_workspaces", "get_workspace",
 			},
@@ -53,7 +53,7 @@ func TestBoot_ConstructorSeedDispositionMap(t *testing.T) {
 		{
 			id: IDMia,
 			expectExtraAllows: []string{
-				"send_message", "hand_off", "return_to_default", "list_agents",
+				"send_message", "switch_agent", "list_agents",
 				"send_file", "navigate",
 				"remember", "recall_memory", "run_retrospective",
 				"create_task", "update_task", "list_tasks", "set_todos",
@@ -71,7 +71,7 @@ func TestBoot_ConstructorSeedDispositionMap(t *testing.T) {
 				"read_file", "list_directory", "write_file", "append_file", "edit_file",
 				"delegate",
 				"remember", "recall_memory", "run_retrospective",
-				"send_message", "hand_off", "return_to_default", "send_file",
+				"send_message", "switch_agent", "send_file",
 				"find_skills", "set_todos",
 			},
 		},
@@ -86,7 +86,7 @@ func TestBoot_ConstructorSeedDispositionMap(t *testing.T) {
 				// Execution (ADR-036: exec/workspace_shell/workspace_shell_bg merged into "bash").
 				"bash", "serve_web",
 				// Communication / routing.
-				"send_message", "send_file", "hand_off", "return_to_default",
+				"send_message", "send_file", "switch_agent",
 				// Memory.
 				"remember", "recall_memory", "run_retrospective", "set_todos",
 				// Delegation.

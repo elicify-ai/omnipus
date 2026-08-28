@@ -2552,6 +2552,18 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusUnprocessableEntity, "name is required")
 		return
 	}
+	// ADR-071 §5.1.3 part 2: "default" (case-insensitive) is reserved — it is
+	// the switch_agent target sentinel that always means "the configured
+	// default agent". Rejecting it at the create boundary makes the id/name
+	// collision impossible going forward, rather than merely documented (the
+	// part 3 upgrade-time WARN below covers agents that predate this check).
+	// Create's id is always a fresh uuid.New().String() (never operator-
+	// chosen), so only the name half of this rule is reachable here.
+	if strings.EqualFold(name, tools.SwitchAgentDefaultTarget) {
+		jsonErr(w, http.StatusBadRequest,
+			fmt.Sprintf("agent name %q is reserved — it collides with switch_agent's target:%q sentinel", name, tools.SwitchAgentDefaultTarget))
+		return
+	}
 	// subagent_3p executor.cli_path: required (spec §9.2), whitespace-only
 	// rejected. The schema requires the `executor` object itself to be
 	// present for this variant, but its nested cli/cli_path properties are
@@ -3139,6 +3151,17 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 	var req gen.AgentUpdateRequest
 	validateEnabled := cfg.Gateway.ValidateInbound
 	if !decodeAndValidate(w, r, "AgentUpdateRequest", &req, validateEnabled) {
+		return
+	}
+	// ADR-071 §5.1.3 part 2: "default" (case-insensitive) is reserved — see
+	// the identical check in createAgent for the full rationale. An agent's
+	// id is never editable via PUT (it comes from the URL path, matched
+	// against cfg.Agents.List above), so only the name half is reachable
+	// here too; a pre-existing agent literally id'd "default" is covered by
+	// the boot-time WARN (part 3), not this rejection.
+	if req.Name != nil && strings.EqualFold(strings.TrimSpace(*req.Name), tools.SwitchAgentDefaultTarget) {
+		jsonErr(w, http.StatusBadRequest,
+			fmt.Sprintf("agent name %q is reserved — it collides with switch_agent's target:%q sentinel", strings.TrimSpace(*req.Name), tools.SwitchAgentDefaultTarget))
 		return
 	}
 	// Timestamp applied to the persisted agent on every successful save.
