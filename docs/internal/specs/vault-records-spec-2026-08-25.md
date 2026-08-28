@@ -1120,10 +1120,8 @@ against a fixture schema the test itself declares — not these particular words
 - **AC-F2** — `near` composed with `words` and `filter` returns the intersection. A test asserts a
   record inside the hop radius but failing the filter is **absent**, and one matching the filter
   but outside the radius is **absent** (FR-076).
-- **AC-F3** — `explain: true` performs no evaluation: a corpus mutation between two identical
-  `explain` calls changes nothing in the response except index generation.
-- **AC-F4** — an out-of-scope vault yields `COMPLETE: yes — 0 records` and no other signal
-  (FR-062).
+- **AC-F3** — **STRENGTHENED, revision 5 — as worded it passed for a constant-returning stub.** `explain: true` MUST (a) return a plan naming **every property the query touches and the index each will be answered from**, so a stub returns the wrong thing rather than nothing; (b) be **unchanged by a corpus mutation** between two identical calls, over a mutation **chosen to change the plan if evaluation were happening** — a mutation that happens not to change the plan proves nothing and the fixture must exclude that case; and (c) perform **zero** candidate retrievals, asserted at the store boundary by the same counter AC-8.4 uses. *(Revision 4 asserted only (b), unqualified.)* Only `index_epoch` (FR-020j) may differ between the two calls.
+- **AC-F4** — **REWORDED, revision 5 — "and no other signal" was unsatisfiable.** An out-of-scope vault yields `COMPLETE: yes — 0 records` and **no signal distinguishing scoping from an empty vault** (FR-062). *Revision 4's "no other signal" contradicted FR-122's mandatory `QUERY:` echo and FR-126's mandatory `NEXT` block, both of which §4.2's own zero-hit example carries.* **And the carve-out ADR-068 D13.1 records MUST be stated here rather than left to be discovered:** workspace scoping is the **one exception** to §3's headline *"names what it excluded"* guarantee — a caller can receive `complete: true` over zero records while records exist. That is deliberate (FR-062 requires it) and it means the completeness verdict is honest about everything **except** scope. D13.1's own reasoning applies: an unstated exception to a headline guarantee is how a guarantee stops being believed.
 - **AC-F5** — a record whose row `source_hash` differs from `ManifestEntry.Hash` is returned **with**
   `COMPLETE: no`, named in `PROBLEMS` with staleness as the reason, in **both** divergence
   directions (FR-020c). A record with no manifest entry is flagged the same way.
@@ -1228,9 +1226,29 @@ ADR-068 D23.4 records the asymmetry: a schema change writes **one** file, so rev
 undoes it, which is not true of trash. Grouping the two would have implied a severity schema
 authoring does not have.)*
 
-**Trash stays in this tier even though it is a soft delete.** A recoverable bin fixes the trashed
-note's own recoverability; it does nothing for the N notes whose links just broke. Recoverability
-and blast radius are different axes, and only the second one decides the tier.
+**Trash stays in this tier, and revision 5 replaces the reason.** *Revision 4 said "recoverability
+and blast radius are different axes, and only the second one decides the tier", which answers a
+question nobody asked and never applies either criterion to `trash` at all.* Under C-A and C-B as
+written, **`trash` is C-B, not C-A** — it moves one file and FR-048 explicitly does not repair
+inbound links, so it writes bytes into no file the caller did not name, while breaking N notes'
+relations without writing them. **It stays here because FR-070e's mechanical rule decides it: it
+writes a note, and `vault_configure` writes only `.omnipus-vault/`.** Putting a note-destroying
+operation behind the schema tool would mean an operator granting type authoring also grants
+deletion. **So this tier is not "the C-A tier"** — that framing is withdrawn; it is the tier for
+operations reaching beyond one named note, of which C-A is the common but not the only shape. The
+full per-operation record is FR-070d.
+
+**Normative refusal wording — NEW, revision 5.** *§4.1.5 had no refusal table at all, while §7 test
+37 asserted that every schema and view op is refused by `vault_restructure` naming `vault_configure`
+— a behaviour this section never specified.*
+
+| Condition | Message |
+|---|---|
+| A schema or view op sent here (C-B) | `create_record_type changes what existing notes mean; use vault_configure` |
+| A one-file note edit sent here | `set_property writes one note; use vault_edit` |
+| Version token supplied (§4.1.5, AC-X3) | `vault_restructure takes no expect_version: a single-file token cannot guard a rename that rewrites inbound links in notes you did not name. Re-read with vault_read and re-send` |
+| `restore` of a path not in the trash (FR-048a) | `no trashed note at Deals/Acme.md; vault_describe reports the trash contents` |
+| Trash of an already-trashed path (FR-048a) | `Deals/Acme.md was already trashed at 20260825T091500Z; this copy is at 20260826T120000Z` |
 
 Every response MUST state the cascade in counts before the next-actions block:
 
@@ -1420,12 +1438,10 @@ The system reports the vocabulary it holds and **stops there** — it does not e
 the caller's behalf (FR-114). A user who searched for one thing and received results for a
 broader thing has been given a wrong answer with no error channel.
 
-- **AC-P1** — a response whose `COMPLETE` line reads `no` and whose `PROBLEMS` block is empty is
-  a defect: the reason is either named or the verdict is wrong.
+- **AC-P1** — a response whose `COMPLETE` line reads `no` and whose `PROBLEMS` block is empty is a defect: the reason is either named or the verdict is wrong. **PROMOTED TO A TEST, revision 5:** this was an invariant with no test in §7 asserting it (the grill's m-10). It is now asserted **over every response every test in §7 produces**, by a shared helper every `vault_find` test calls — the one place it is cheap to enforce and the one place it will actually catch a regression.
 - **AC-P2** — the four blocks appear in the order `header → rows → totals → problems → next`, and
   a test asserts the order rather than the presence.
-- **AC-P3** — rendering is a **projection**: the same wire object rendered twice is
-  byte-identical, and every fact in the text is present in the wire object (FR-120).
+- **AC-P3** — **REWRITTEN, revision 5 — both halves were unusable.** *"The same wire object rendered twice is byte-identical"* asserts that a pure function is deterministic, which cannot fail; *"every fact in the text is present in the wire object"* is untestable as worded, there being no enumeration of "facts". The criterion is now **mechanical and falsifiable**: **every field the renderer reads MUST be reachable from the generated wire type** (`pkg/api/generated/`), asserted by a test that renders from a **zero-valued** wire object and asserts the output contains no literal that is not either a constant of the renderer or a field of that type. A renderer that reaches around the contract — a second lookup, a store call, a computed value not on the wire — produces a literal with no source and fails. *(This is FR-092 as a test, and it is the assertion Hard Constraint #8 actually needs.)*
 - **AC-P4** — the response is measured in **bytes of rendered UTF-8** and the measurement in the
   test is the same unit the implementation enforces (FR-127b). A test that counts tokens fails
   this criterion even if it passes.
@@ -2061,6 +2077,53 @@ it is easier to lose on a revision that is mostly deleting things than on one th
 them.**
 
 ---
+
+## 10a. Code and contracts made dead by revision 5 — marked for deletion, not deleted here
+
+**This specification does not delete code.** The surfaces below become dead when W1 lands, and they
+are enumerated so the deletion is a scheduled task with a reviewer rather than something a future
+reader trips over. **Verified against the tree at revision time** — every path, line count and
+symbol below was read, not recalled.
+
+**Operator ruling 1 — `money` is deleted from the type system (FR-014).** `pkg/records` holds a
+real, tested money implementation; it is not a stub.
+
+| Surface | Size | Disposition |
+|---|---|---|
+| `pkg/records/money.go` | 281 lines | **DELETE.** `SumMoney` (`:161`), `CurrenciesPresent` (`:195`), the ISO-4217 handling and the `maxMoneyScale` check at `:109-110` |
+| `pkg/records/money_test.go` | 767 lines | **DELETE** |
+| `pkg/records/money_refusal_test.go` | 394 lines | **DELETE** |
+| `pkg/records/money_parse_paths_test.go` | 115 lines | **DELETE** |
+| `const maxMoneyScale = 12` | `pkg/records/decimal.go:166` | **DELETE.** *(It is defined in `decimal.go`, not `money.go` — worth stating, because deleting `money.go` alone leaves it behind, and inheriting **12** as `decimal`'s bound is exactly what FR-013 forbids.)* |
+| `TypeMoney` | `pkg/records/schema.go:78`, referenced at `schema.go:77,88,257`; `value.go:67,150,390,456,498`; `compare_oracle.go:309,371,432,467` | **DELETE**, with `TypeNumber` (`schema.go:76`) **REPLACED** by `TypeInteger` and `TypeDecimal` (FR-004) |
+| `contracts/components/schemas/RecordMoney.yaml` | — | **DELETE**, with its references at `contracts/openapi.yaml:279-280`, `RecordValue.yaml:75-76` (`$ref` and `x-go-type`), the `money` enum member in `RecordValue.yaml:32` and `RecordPropertyValue.yaml:44`, `RecordAggregateResult.yaml:64`'s currencies field, `RecordFilter.yaml:71-72,111`'s money clauses, and `PropertyDef.yaml:60,118,120` |
+| Generated | `pkg/api/generated/openapi_types.gen.go:3558,3572,3849,3863` | **REGENERATED**, never hand-edited — `scripts/gen-contracts.sh`, committed in the same atomic commit as the spec change (Hard Constraint #8, step 4) |
+
+**`pkg/records/decimal.go` (588 lines) SURVIVES INTACT and is the valuable core.** It is
+`math/big`-based (`decimal.go:10`, `Decimal` = `unscaled *big.Int` + `scale int32` at `:36-38`),
+`maxDecimalScale = 100` (`:48`) becomes `decimal`'s declared bound under FR-013, and
+`float64`/`float32` appear on exactly two lines of the file, **both comments** (`:19`, `:462`) —
+zero binary float in executable code, guarded by `decimal_no_float_test.go`. Its test suite
+(`decimal_test.go`, `decimal_cmp_test.go`, `decimal_scale_gap_test.go`,
+`decimal_string_bounds_test.go`, `decimal_no_float_test.go`) survives with it. **Three of those
+files reference `maxMoneyScale` in comments or fixtures and need those references removed**, not
+the files deleted.
+
+**Operator ruling R-B — the invented operator vocabulary is replaced (FR-022b).**
+`pkg/records/filter.go:83-93` declares `OpEqual`/`OpLess`/`OpLessOrEqual`/`OpGreater`/
+`OpGreaterOrEqual`/`OpContains`/`OpIsAbsent`. All seven are **REPLACED** by the ten SQL operators,
+and `filter_test.go`, `filter_r13_validate_test.go` and `compare_truthtable_test.go` move with them.
+**`compare_truthtable_test.go` (1,236 lines) is regenerated rather than edited** — it is generated
+from the rules (AC-8.2), and the rules changed.
+
+**Operator ruling R-E — the enum ordinal is deleted (FR-010).** Whatever holds declared position in
+`pkg/records/schema.go` and `enum_position_authority_test.go` (230 lines) /
+`external_enum_ordering_test.go` (373 lines) is dead; enum ordering is lexical and needs no stored
+position. **These two test files are the ones most likely to be "fixed" into passing rather than
+deleted**, so the deletion is named here.
+
+**Nothing above is deleted by this document.** Each is a W1 or W2 task with the FR that killed it
+cited in the commit.
 
 ## 11. Wave plan
 
