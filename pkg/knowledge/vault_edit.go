@@ -98,15 +98,15 @@ var vaultEditOps = []string{opCreate, opSetProperty, opAppendSection, opLink, op
 // of these names here is refused, never attempted under a different
 // argument shape — see FR-070b, AC-E2, and this file's header.
 var vaultEditRedirect = map[string]string{
-	"rename":              "rename cascades to notes you did not name; use vault_restructure",
-	"move":                "move cascades to notes you did not name; use vault_restructure",
-	"trash":               "trash cascades to notes you did not name; use vault_restructure",
-	"restore":             "restore cascades to notes you did not name; use vault_restructure",
-	"create_record_type":  "create_record_type changes what existing notes mean; use vault_configure",
-	"edit_record_type":    "edit_record_type changes what existing notes mean; use vault_configure",
-	"delete_record_type":  "delete_record_type changes what existing notes mean; use vault_configure",
-	"write_view":          "write_view changes what existing notes mean; use vault_configure",
-	"delete_view":         "delete_view changes what existing notes mean; use vault_configure",
+	"rename":             "rename cascades to notes you did not name; use vault_restructure",
+	"move":               "move cascades to notes you did not name; use vault_restructure",
+	"trash":              "trash cascades to notes you did not name; use vault_restructure",
+	"restore":            "restore cascades to notes you did not name; use vault_restructure",
+	"create_record_type": "create_record_type changes what existing notes mean; use vault_configure",
+	"edit_record_type":   "edit_record_type changes what existing notes mean; use vault_configure",
+	"delete_record_type": "delete_record_type changes what existing notes mean; use vault_configure",
+	"write_view":         "write_view changes what existing notes mean; use vault_configure",
+	"delete_view":        "delete_view changes what existing notes mean; use vault_configure",
 }
 
 // EditTool is vault_edit.
@@ -424,10 +424,16 @@ func (t *EditTool) execSetProperty(target mutationTarget, args map[string]any) *
 	if property == "" {
 		return t.deps.refuse(AuthorOpEdit, target, []string{rel}, "'property' is required")
 	}
+	// expect is handed to EditNote unchanged, including when empty:
+	// EditNote's own FR-106 compare-and-swap refuses an empty token itself
+	// (author.go's checkVersion, "EMPTY IS REFUSED TOO") with a
+	// *ConflictError this file already renders via vaultEditFailure. A
+	// second, tool-level "'expect_version' is required" check here was
+	// dead weight — mutation-testing it (disabling the check) left every
+	// missing-token case refused exactly as before, because EditNote was
+	// always the layer actually deciding it. Removed rather than kept as
+	// unverified redundancy.
 	expect := strings.TrimSpace(stringArg(args["expect_version"]))
-	if expect == "" {
-		return t.deps.refuse(AuthorOpEdit, target, []string{rel}, "'expect_version' is required")
-	}
 	listOp := strings.TrimSpace(stringArg(args["list_op"]))
 	if listOp != "" && listOp != "add" && listOp != "remove" {
 		return t.deps.refuse(AuthorOpEdit, target, []string{rel},
@@ -484,10 +490,16 @@ func (t *EditTool) execAppendSection(target mutationTarget, args map[string]any)
 	if heading == "" {
 		return t.deps.refuse(AuthorOpEdit, target, []string{rel}, "'heading' is required")
 	}
+	// expect is handed to EditNote unchanged, including when empty:
+	// EditNote's own FR-106 compare-and-swap refuses an empty token itself
+	// (author.go's checkVersion, "EMPTY IS REFUSED TOO") with a
+	// *ConflictError this file already renders via vaultEditFailure. A
+	// second, tool-level "'expect_version' is required" check here was
+	// dead weight — mutation-testing it (disabling the check) left every
+	// missing-token case refused exactly as before, because EditNote was
+	// always the layer actually deciding it. Removed rather than kept as
+	// unverified redundancy.
 	expect := strings.TrimSpace(stringArg(args["expect_version"]))
-	if expect == "" {
-		return t.deps.refuse(AuthorOpEdit, target, []string{rel}, "'expect_version' is required")
-	}
 	level := 2
 	if raw, ok := args["level"]; ok && raw != nil {
 		level = intArg(raw, 2)
@@ -533,10 +545,16 @@ func (t *EditTool) execLink(target mutationTarget, args map[string]any) *tools.T
 		return t.deps.refuse(AuthorOpEdit, target, []string{rel},
 			fmt.Sprintf("the link target %q is not inside this collection", linkTarget))
 	}
+	// expect is handed to EditNote unchanged, including when empty:
+	// EditNote's own FR-106 compare-and-swap refuses an empty token itself
+	// (author.go's checkVersion, "EMPTY IS REFUSED TOO") with a
+	// *ConflictError this file already renders via vaultEditFailure. A
+	// second, tool-level "'expect_version' is required" check here was
+	// dead weight — mutation-testing it (disabling the check) left every
+	// missing-token case refused exactly as before, because EditNote was
+	// always the layer actually deciding it. Removed rather than kept as
+	// unverified redundancy.
 	expect := strings.TrimSpace(stringArg(args["expect_version"]))
-	if expect == "" {
-		return t.deps.refuse(AuthorOpEdit, target, []string{rel}, "'expect_version' is required")
-	}
 	relation := strings.TrimSpace(stringArg(args["relation"]))
 
 	var edit NoteEdit
@@ -574,10 +592,16 @@ func (t *EditTool) execReplaceBody(target mutationTarget, args map[string]any) *
 	if err != nil {
 		return t.deps.refuse(AuthorOpEdit, target, nil, err.Error())
 	}
+	// expect is handed to EditNote unchanged, including when empty:
+	// EditNote's own FR-106 compare-and-swap refuses an empty token itself
+	// (author.go's checkVersion, "EMPTY IS REFUSED TOO") with a
+	// *ConflictError this file already renders via vaultEditFailure. A
+	// second, tool-level "'expect_version' is required" check here was
+	// dead weight — mutation-testing it (disabling the check) left every
+	// missing-token case refused exactly as before, because EditNote was
+	// always the layer actually deciding it. Removed rather than kept as
+	// unverified redundancy.
 	expect := strings.TrimSpace(stringArg(args["expect_version"]))
-	if expect == "" {
-		return t.deps.refuse(AuthorOpEdit, target, []string{rel}, "'expect_version' is required")
-	}
 	anchor := stringArg(args["anchor"])
 	body := stringArg(args["body"])
 

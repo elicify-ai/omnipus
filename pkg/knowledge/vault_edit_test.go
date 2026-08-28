@@ -298,6 +298,16 @@ func TestVaultEdit_MissingExpectVersion_Refused(t *testing.T) {
 	if !res.IsError {
 		t.Fatalf("a write with no expect_version must be refused")
 	}
+	// The refusal is EditNote's own FR-106 compare-and-swap (author.go's
+	// checkVersion, "EMPTY IS REFUSED TOO") — there is no separate
+	// tool-level check to name here, and asserting the FR-106 wording
+	// proves that layer, not just "some error came back", actually fired.
+	if !strings.Contains(res.ForLLM, "version token") {
+		t.Fatalf("refusal must be FR-106's own (naming the version token), got: %s", res.ForLLM)
+	}
+	if !strings.Contains(a4Read(t, root, "Note.md"), "status: draft") {
+		t.Fatalf("a refused write must not change the file")
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -439,6 +449,56 @@ func TestVaultEdit_CrossTierOps_RedirectByName(t *testing.T) {
 		if !strings.Contains(res.ForLLM, c.want) {
 			t.Fatalf("op %q must name %s, got: %s", c.op, c.want, res.ForLLM)
 		}
+	}
+}
+
+// TestVaultEdit_CrossTierRedirect_FiresRegardlessOfArgumentShape is the
+// guarantee the file header states in words ("refused, never attempted
+// under a different argument shape") turned into an assertion. Dispatch is
+// entirely by the `op` STRING (Execute's switch), before any other argument
+// is inspected — so a cascading op name is refused even when it arrives
+// dressed as a different op's arguments, and a permitted op is not derailed
+// into cascading behaviour by rename-shaped arguments riding along with it.
+func TestVaultEdit_CrossTierRedirect_FiresRegardlessOfArgumentShape(t *testing.T) {
+	home, ws, root := a4Fixture(t, "kb")
+	deps, _ := a4Deps(home)
+	tool := veTool(deps)
+	a4Note(t, root, "Note.md", "---\nstatus: draft\n---\nBody.\n")
+	v := a4Version(t, root, "Note.md")
+
+	// op: "rename" carrying set_property's own argument shape (property,
+	// value, expect_version) must still be redirected by name — the
+	// redirect map is consulted before any of those fields is read.
+	res := tool.Execute(a4Ctx("mia", ws), map[string]any{
+		"collection": "kb", "op": "rename", "path": "Note.md",
+		"property": "status", "value": "active", "expect_version": v,
+	})
+	if !res.IsError || !strings.Contains(res.ForLLM, "vault_restructure") {
+		t.Fatalf("op %q with set_property-shaped arguments must still redirect to vault_restructure, got: %s (IsError=%v)",
+			"rename", res.ForLLM, res.IsError)
+	}
+	if got := a4Read(t, root, "Note.md"); got != "---\nstatus: draft\n---\nBody.\n" {
+		t.Fatalf("a redirected op must never write, got: %s", got)
+	}
+
+	// The converse: op: "set_property" carrying rename/move's own argument
+	// names (new_name, dest) must NOT be derailed into a cascade — it is
+	// still an ordinary property write on the ONE named path, and those
+	// extra fields are simply ignored.
+	res2 := tool.Execute(a4Ctx("mia", ws), map[string]any{
+		"collection": "kb", "op": "set_property", "path": "Note.md",
+		"property": "status", "value": "active", "expect_version": v,
+		"new_name": "Renamed.md", "dest": "elsewhere/Note.md",
+	})
+	require.False(t, res2.IsError, "set_property must not be derailed by rename-shaped extra args: %s", res2.ForLLM)
+	if _, err := os.Stat(filepath.Join(root, "Renamed.md")); err == nil {
+		t.Fatalf("a 'new_name' argument on set_property must never cause a rename")
+	}
+	if _, err := os.Stat(filepath.Join(root, "elsewhere", "Note.md")); err == nil {
+		t.Fatalf("a 'dest' argument on set_property must never cause a move")
+	}
+	if !strings.Contains(a4Read(t, root, "Note.md"), "status: active") {
+		t.Fatalf("the ordinary property write must still have applied to Note.md")
 	}
 }
 
