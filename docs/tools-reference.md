@@ -64,8 +64,7 @@ Tasks are stored per-agent as JSON files; concurrency goes through the `fileutil
 | `subagent` | Execute a subagent task synchronously and return the result. | `pkg/tools/subagent.go:333`. |
 | `spawn` | Spawn a subagent asynchronously in the background. | `pkg/tools/spawn.go:38`. |
 | `spawn_status` | Get the status of spawned subagents. | `pkg/tools/spawn_status.go:24`. |
-| `handoff` | Hand the conversation off to another agent. The receiving agent's prompt and tools take over. | `pkg/tools/handoff.go:99`. |
-| `return_to_default` | Return control to the default agent after a handoff. | `pkg/tools/handoff.go:312`. |
+| `switch_agent` | Switch the active agent for this session — hand off to a named agent (`target: <agent_id>`) or return to the default agent (`target: "default"`). Replaces the retired `hand_off` / `return_to_default` pair (ADR-071 D4). | `pkg/tools/handoff.go`. |
 
 ### Browser
 
@@ -121,8 +120,7 @@ There is no separate `cron_list` or `cron_delete` builtin — `cron` is one tool
 
 | Tool | What it does | Notes |
 |---|---|---|
-| `tool_search_tool_regex` | Search hidden tools by regex against name or description. Returns JSON schemas. | `pkg/tools/search_tool.go:30`. |
-| `tool_search_tool_bm25` | BM25 keyword search across the same surface. | `pkg/tools/search_tool.go:94`. |
+| `ToolSearch` | Load a hidden/lazy tool by exact name, or search the hidden-tool catalog by keyword (BM25) and auto-load the best match(es). Renamed from `load_tool` (ADR-071 D1); the `tool_search_tool_regex`/`tool_search_tool_bm25` pair this table previously listed predates the `load_tool` consolidation and no longer exists as separate tools. | `pkg/tools/tools_tool.go`. |
 
 These exist so an agent can opt into a large hidden-tool surface on demand rather than paying the context cost up front.
 
