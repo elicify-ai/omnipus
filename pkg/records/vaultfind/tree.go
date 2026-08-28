@@ -162,7 +162,7 @@ func buildLeaf(n generated.VaultFilterNode, schema *records.Schema) (*node, *Ref
 	if err != nil {
 		var qe *records.QueryError
 		if errors.As(err, &qe) {
-			return nil, refuse(fromQueryError(qe), err)
+			return nil, refuse(fromQueryError(qe, f), err)
 		}
 		return nil, refuse(problem(generated.TypeMismatch,
 			fmt.Sprintf("the filter on %q could not be prepared: %v", *n.Property, err),

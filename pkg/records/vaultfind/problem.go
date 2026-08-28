@@ -105,9 +105,17 @@ func refuse(p generated.RecordProblem, cause error) *Refusal {
 
 // fromQueryError maps a records.QueryError onto the problem the response
 // carries, choosing the code from what the engine actually objected to.
-func fromQueryError(qe *records.QueryError) generated.RecordProblem {
+//
+// The LEAF is passed in as well as the error, and that is the point of this
+// signature: the two most specific causes — an empty `IN` list and a
+// pattern-less `LIKE` — are identifiable from the OPERATOR AND OPERANDS, with no
+// reference to the engine's wording at all. An earlier version of this function
+// matched on the message text and mis-filed the empty `IN` list as a generic
+// type mismatch the day the engine said "a non-empty array" rather than "an
+// empty list". Structure first, text only where structure cannot tell.
+func fromQueryError(qe *records.QueryError, f records.Filter) generated.RecordProblem {
 	reason := qe.Error()
-	code := classifyQueryError(qe)
+	code := classifyQueryError(qe, f)
 
 	p := generated.RecordProblem{Code: code, Reason: reason, Records: []string{}}
 	if qe.Property != "" {
@@ -124,15 +132,23 @@ func fromQueryError(qe *records.QueryError) generated.RecordProblem {
 // classifyQueryError picks the wire code. The order matters: the more specific
 // causes are tested before the general ones, so `IN` with an empty list is
 // reported as an empty IN list rather than as a generic bad value.
-func classifyQueryError(qe *records.QueryError) generated.RecordProblemCode {
+func classifyQueryError(qe *records.QueryError, f records.Filter) generated.RecordProblemCode {
+	// STRUCTURAL FIRST — these two are decided by the leaf, not by the message.
+	switch f.Op {
+	case records.OpIn:
+		if len(f.Literals) == 0 {
+			return generated.EmptyInList
+		}
+	case records.OpLike:
+		if f.Literal == "" || f.Literal == "%" {
+			return generated.EmptyLikePattern
+		}
+	}
+
 	r := qe.Reason
 	switch {
 	case strings.Contains(r, "is not a supported operator"):
 		return generated.UnsupportedOperator
-	case strings.Contains(r, "matches every value"):
-		return generated.EmptyLikePattern
-	case strings.Contains(r, "empty list"), strings.Contains(r, "IN was given"):
-		return generated.EmptyInList
 	case strings.Contains(r, "ordering comparisons are not defined"),
 		strings.Contains(r, "holds many values"):
 		return generated.OrderingOnManyProperty
