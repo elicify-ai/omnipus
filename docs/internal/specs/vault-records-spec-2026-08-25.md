@@ -604,12 +604,62 @@ as "no progress has arrived" for a fully indexed collection.
 > **R-F — NO HARDCODED DOMAIN VOCABULARY, ANYWHERE. NEW, revision 5, operator ruling, and it
 > governs how the whole of the rest of this document must be read.**
 >
-> **`company`, `deal`, `meeting`, `person`, `status`, `stage`, `arr`, `open`, `won`, `lost`,
+> **`company`, `deal`, `meeting`, `status`, `stage`, `arr`, `open`, `won`, `lost`,
 > `prospect`, `Acme`, `Northwind`, `CO-0142`, `DEAL-0117` — every one of these is an ILLUSTRATION
 > of what a vault MIGHT define. NONE of them is anything the product ships, seeds, defaults to,
-> validates against, or knows the name of.** They appear roughly thirty times below and fourteen
-> times in ADR-068, always as examples, and an implementer skimming forty-odd mentions of "deal"
-> could reasonably conclude otherwise. **They must not.**
+> validates against, or knows the name of.**
+>
+> **`person` was REMOVED from that list in revision 6 (review round 6, M-24), because it is FALSE
+> of `person` and the error was load-bearing.** FR-004 ships `person` as one of the **seven property
+> TYPES**, and ADR-068 D0 carried the same list with the same error. An implementer following R-F
+> literally would have deleted a shipped type. **The two axes must not be confused, and they are
+> now stated separately:**
+>
+> | Axis | Whose vocabulary | Examples | Shipped? |
+> |---|---|---|---|
+> | **Property TYPE names** | **OURS** | `text`, `enum`, `relation`, `date`, `integer`, `decimal`, **`person`** | **YES — all seven, FR-004** |
+> | **Record type names, property names, enum values, identifier prefixes** | **THE VAULT'S** | `company`, `deal`, `status`, `won`, `CO-0142` | **NO — none, ever, FR-004a** |
+>
+> `meeting` has the mirror problem and it is fixed the same way: R-F called it an illustration while
+> §4.1.6's refusal table called the same string contract. It is an **illustration**; §4.1.6 is
+> corrected (M-25).
+>
+> **HOW OFTEN THE ILLUSTRATIONS APPEAR — the real figure, because revision 5's was wrong by an
+> order of magnitude and that understatement was doing work.** Revision 5 said *"roughly thirty
+> times below and fourteen times in ADR-068"*; ADR-068 D0 said *"fourteen times [in the ADR] and
+> thirty-three times [in the specification]"*. **Counted whole-word, case-insensitively, over the
+> list above:** **313 in this specification and 135 in ADR-068.** Reproducible:
+>
+> ```
+> grep -oiwE 'company|companies|deal|deals|meeting|meetings|status|stage|arr|open|won|lost|prospect|Acme|Northwind|CO-0142|DEAL-0117' <file> | wc -l
+> ```
+>
+> Restricting to the terms with no ordinary-English reading (dropping `status`, `stage` and `open`):
+> **243 and 90.** *(Review round 6 reported 288 and 119 over a slightly different word set; the
+> figures differ in the third digit and agree completely on the point — the stated counts were
+> understated roughly tenfold. Both counts are given here with the command that produces them so
+> the next reviewer does not have to re-derive a third number.)*
+>
+> **What that number means, said plainly rather than absorbed.** R-F's own justification is *"a rule
+> that is stated once and then quietly undermined by every example is a rule that will be broken by
+> someone acting in good faith"*. At **313** occurrences an implementer meets the vocabulary
+> **twenty times** for every time they meet this boxed disclaimer. **A marker at the front is doing
+> very little work, and saying otherwise would be the same kind of unchecked claim this rule
+> exists to catch.** The structural answer — replacing the running examples with an obviously
+> non-domain vocabulary (`widget`/`gizmo`, or an abstract `type_a`/`prop_1`) — would discharge R-F
+> **by construction** instead of by disclaimer, which is exactly the argument this document makes
+> for preferring a Go comparator over nine SQL defeats, turned on its own prose.
+>
+> **DECISION, revision 6: the replacement is ACCEPTED IN PRINCIPLE and DEFERRED, with the reason
+> and the schedule stated rather than left as silence.** It is a ~450-occurrence mechanical edit
+> across two documents whose cross-references, refusal strings, worked example (§4.2) and datasets
+> all quote the vocabulary; done in the same pass as eleven CRITICAL semantic corrections it would
+> make both sets of changes unreviewable, and a botched find-and-replace inside a normative refusal
+> string is a worse defect than the one it fixes. **It is scheduled as its own task with its own
+> review, as W0's second deliverable** (§11), with a stated exit criterion: the counts above,
+> re-run, return **zero** outside a single explicitly-marked illustrative appendix. **Until then
+> R-F is discharged by the markers (M-25), which is the weaker instrument, and this paragraph is
+> the record that we know it is weaker.**
 >
 > The operator's framing, which is sharper than anything this document had: **"a generic vault
 > system where enums like that must very clearly be defined by agents and not hard coded — like an
@@ -619,18 +669,50 @@ as "no progress has arrived" for a fully indexed collection.
 > vault ships convention"* — and the ADR's revision 7 strengthens D0 with the operator's wording.
 > **What is new is that it is now testable:** **FR-004a** requires it, and a test asserts it.
 >
-> - **FR-004a** **NEW, revision 5.** The shipped binary MUST contain **no domain vocabulary**: no
->   seeded record type, no seeded enum value, no seeded property name, no seeded view, no seeded
+> - **FR-004a** **NEW, revision 5; TEST RESPECIFIED AND THE \"VERIFIED CLEAN\" CLAIM WITHDRAWN,
+>   revision 6 (review round 6, C-10).** The shipped binary MUST contain **no domain vocabulary**:
+>   no seeded record type, no seeded enum value, no seeded property name, no seeded view, no seeded
 >   identifier prefix. A fresh install has **zero** record types, and a vault with no
->   `.omnipus-vault/records/` directory is a working vault of ordinary notes (FR-005). **A test
->   asserts that no CRM or other domain term appears in any non-test file of the record packages**,
->   over a denylist including at least `company`, `deal`, `contact`, `lead`, `opportunity`,
->   `pipeline`, `prospect`, `stage`, `arr`, `crm`. *(Verified at revision time: the code is already
->   clean — zero domain vocabulary outside tests in `pkg/records` and `pkg/knowledge`. The test
->   exists to keep it that way, not to fix something.)*
-> - Test fixtures MAY use domain vocabulary, and DS-1..DS-3 do. **Fixtures are excluded from
->   FR-004a's denylist by path**, and the exclusion is narrow and named rather than a general
->   "except where inconvenient".
+>   `.omnipus-vault/records/` directory is a working vault of ordinary notes (FR-005).
+>   - **WITHDRAWN: *"Verified at revision time: the code is already clean — zero domain vocabulary
+>     outside tests in `pkg/records` and `pkg/knowledge`."*** It does not reproduce as stated, and
+>     it was the kind of unchecked assertion this document exists to remove. **Re-executed for
+>     revision 6:** `grep -rInwiE 'company|deal|contact|lead|opportunity|pipeline|prospect|stage|arr|crm'`
+>     over non-test `.go` files in those two packages returns **44 hits**.
+>   - **AND THE UNDERLYING CLAIM IS NEVERTHELESS TRUE, which is why the fix is to the TEST and not
+>     to the code.** Every one of the 44 was read. **Zero are declared enum values, type names,
+>     seeded schemas or default config.** They are: prose in **doc comments** (`pkg/records/doc.go:12`,
+>     `invalidate.go:139-141`, `schema.go:1073-1074`, `value.go:304-311`, `money.go:240`), the word
+>     **`stage`** used 19 times in `pkg/knowledge` for ordinary ADR-067 implementation stages
+>     (`index.go:1`, `scan.go:1`, `tools.go:32`, …), **`arr`** inside a YAML illustration in
+>     `frontmatter.go:22`, and one local variable `lead` in `pkg/knowledge/rename.go:710` meaning
+>     *leading whitespace*. **The code ships no domain vocabulary. The GREP was the wrong
+>     instrument.**
+>   - **The most consequential hit is the one that proves the test unpassable:** `pkg/records/doc.go:12`
+>     reads *"declares NO record types of its own — no company, no contact, no deal, no…"*. **That is
+>     the D0 statement itself.** A test written to revision 5's words red-lights the build on the
+>     sentence asserting the opposite of hardcoding — and a test that fails on day one for a reason
+>     nobody accepts is a test that gets weakened until it asserts nothing.
+>   - **THE TEST, RESPECIFIED to what the requirement actually cares about, which is decidable:**
+>     a test asserts that **`coreagent.SeedConfig`, the default config (`pkg/config/defaults.go`),
+>     and the shipped schema and saved-view directories contain ZERO record types, ZERO enum values,
+>     ZERO property names and ZERO identifier prefixes** — over **declared identifiers and literal
+>     data, never over comments**. The subject is **seeded data**, which is what R-F is about;
+>     `.omnipus-vault/records/` on a fresh install is empty, and that is assertable exactly.
+>   - **The denylist, if a lexical check is kept alongside it, is NARROWED to terms with no
+>     plausible non-domain use** — `crm`, `opportunity`, `prospect`, `deal`, `company` — and
+>     **`stage`, `lead`, `arr`, `pipeline` and `contact` are DROPPED, deliberately, with the reason
+>     recorded here so nobody re-adds them:** they are ordinary English and ordinary programming
+>     vocabulary, they produce false positives **structurally rather than incidentally**, and the
+>     count grows every time someone writes `stage` in a comment. A denylist that must be weakened
+>     to stay green is worse than no denylist.
+>   - **Scope, stated in both directions (M-27):** the lexical check runs over **declared
+>     identifiers and string literals in non-test `.go` files, `pkg/config/defaults.go`, and the
+>     shipped `.omnipus-vault/` seed directories**. **Excluded by path:** `*_test.go`, `testdata/`,
+>     and **comments and doc comments in any file**. *(Revision 5 said the fixture exclusion was
+>     "narrow and named rather than a general 'except where inconvenient'" and then named no path —
+>     which is precisely the claim that needs the name.)*
+> - Test fixtures MAY use domain vocabulary, and DS-1..DS-3 do, under the path exclusion above.
 
 ### Schema and types
 
