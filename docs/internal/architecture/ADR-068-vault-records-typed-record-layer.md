@@ -730,6 +730,34 @@ cascading tier.
 > **C-B (meaning).** Does this operation change what already-existing files *mean* — their
 > validity, their type, or how a query renders them — without writing them?
 
+> **REVISION 7 ADDS A THIRD, MECHANICAL CRITERION — because the semantic pair mis-decided three
+> operations across two revisions, including in the revision that added the second criterion to
+> stop exactly that.** Revision 6 said revision 5's defect was *"switching readings between two
+> rows of the same table"* and that naming both criteria fixes it. **The implementing spec then
+> named both criteria and applied only C-A to `link`, to `create` and to `trash`** — the identical
+> fault, one layer up. `link` makes a derived inverse resolve for a note nobody named (**C-B**);
+> `create` silences a dangling-relation finding on a note nobody named (**C-B**); `trash` moves one
+> file, repairs no inbound links, and therefore writes bytes into **no** file the caller did not
+> name — so it is **not C-A at all**, while breaking N notes' relations without writing them, which
+> is **C-B**. All three were defended on C-A alone or, in `trash`'s case, on an axis nobody asked
+> about (*"recoverability and blast radius are different axes"*).
+>
+> **C-C (path).** **Does this operation write into `.omnipus-vault/`?** If yes it is
+> `vault_configure`; if it writes a note it is not.
+>
+> One path-shaped rule, **testable in CI over the emitted write path**, with exactly one exception
+> — `.seq`, already stated below. It decides all three of the operations the semantic pair
+> mis-decided, and it decides them without argument. **The semantic criteria are NOT replaced**:
+> they remain the reviewer's tool for a *new* operation, where a mechanical rule can only classify
+> something already designed. **But where the two disagree, C-C decides**, and the disagreement is
+> recorded per operation — the spec's FR-070d is that record, and FR-070e is C-C.
+>
+> **Why a mechanical rule earns its place here specifically.** This ADR's own history is the
+> argument: a criterion that requires judgement was applied inconsistently in revision 5, was
+> corrected by adding a second criterion in revision 6, and was **still** applied inconsistently in
+> the document implementing revision 6. **Three attempts at a judgement-based rule is enough
+> evidence that the rule needs something under it that cannot be read two ways.**
+
 A `set_property` on `Acme.md` changes `Acme.md`: neither. A rename of `Acme.md` rewrites inbound
 wikilinks in N other notes the agent never mentioned and may never have read: **C-A**. Editing
 `company.yaml` writes one file and re-validates every note that declares `type: company`:
@@ -1006,7 +1034,12 @@ costs selection accuracy, so the sixth definition must earn its place. It does:
   reduction. The evidence D15.0 cites is about catalogs of 50 and 200; nothing in it turns on 94
   versus 95.
 - **D22.8's ~150-token description budget puts the standing cost at ~150 tokens per agent
-  per turn**, against ~750 for the surface as a whole. It is the cheapest lever this ADR buys.
+  per turn**, against **~900** for the six-tool surface as a whole. *(Revision 7: ~750 was the
+  **five**-tool figure and was stale. And per D22.8's correction, **~900 counts description prose
+  only** — the whole parameter schema ships on every request, so the real standing cost is a floor
+  by an unknown multiple, unmeasured until W5. **This bullet's "cheapest lever" claim rests on a
+  RATIO between one tool and six, which the correction does not disturb — but the absolute figure
+  must not be quoted as an affordability argument.**)*
 - **It is the only lever that expresses a real posture.** D15.2's whole thesis is that a tool
   boundary is worth having exactly when an operator would want to grant one side and not the
   other. "Edit the notes, do not redefine what a note *is*" is that, unambiguously — and it is
