@@ -722,13 +722,13 @@ badly is a worse retrieval system.
 
 ## 4.1 Tool specifications — normative
 
-The five tools below are the **whole** agent-facing surface of the vault. Parameters are
+The **six** tools below are the **whole** agent-facing surface of the vault. Parameters are
 normative: a name not listed here does not exist, and an argument the schema does not declare is
 rejected with the accepted argument names listed (the same posture FR-024 takes for an unknown
 property).
 
 Every response is compact text (FR-072). Every response begins with its completeness verdict
-(FR-121) and ends with next actions (FR-125). Errors are returned as a **refusal the model can
+(FR-121) and ends with next actions (FR-126). Errors are returned as a **refusal the model can
 act on**, never as an empty success.
 
 ### 4.1.1 `vault_describe` — READ, orientation and integrity
@@ -741,27 +741,42 @@ and a guessed property name is the failure FR-024 exists to prevent.
 | `collection` | string | all in scope | Narrow to one collection. Unknown name → refusal listing the collections in scope. |
 | `record_type` | string | — | Return the full property table for one type only. |
 | `include` | list of `types \| views \| templates \| index` | all | Trim the response. |
-| `check_integrity` | bool | `false` | Run the whole-vault sweep (FR-075). |
+| `check_integrity` | bool | `false` | Run the integrity sweep (FR-075). Scoped by `collection` / `record_type` when either is given (FR-075a). |
 | `detail` | `minimal \| standard` | `standard` | `minimal` omits property descriptions and enum value lists. |
 
 **Response sections, in order:** index freshness → collections → record types (name, label, id
 prefix, property table: name, type, arity, required, enum values in declared order) → saved
 views → templates → integrity findings when requested.
 
-**Integrity findings** are grouped by kind and every finding names a path:
+**Integrity findings** are grouped by kind and every finding names a path. **Five categories, each
+capped at 500 findings (FR-075a):**
 
 ```
-INTEGRITY: 3 findings
+INTEGRITY: 6 findings (scope: whole vault, 4,182 notes swept)
   duplicate id   CO-0142 — Companies/Acme.md and Companies/Acme (old).md; neither is preferred
-  unresolved     DEAL-0091 company → [[Acme Corp.]] — no note resolves; nearest: Companies/Acme Ltd.md
-  wrong type     DEAL-0104 company → [[Q3 planning]] is a note of type meeting, expected company
+  unresolved     DEAL-0091 company -> [[Acme Corp.]] — no note resolves; nearest: Companies/Acme Ltd.md
+  wrong type     DEAL-0104 company -> [[Q3 planning]] is a note of type meeting, expected company
+  broken link    Notes/2026-08-14.md -> [[Q2 retro]] — no note resolves (ordinary wikilink, not a relation)
+  orphan         Notes/scratch.md — no note links to it and it links to none
+  orphan row     properties index holds DEAL-0221 at Deals/old.md; no note exists at that path
 ```
+
+**Normative clamp and refusal wording:**
+
+| Condition | Message |
+|---|---|
+| Category clamped (FR-075a) | `broken link: showing 500 of 1,842 — narrow with collection=<name> or record_type=<name>` |
+| Sweep too large (FR-075a) | `collection 'Archive' holds 214,900 notes; the sweep limit is 100,000 — run check_integrity with record_type=<name>, or on a narrower collection` |
+| No properties index on this build (FR-020h) | `typed integrity checks are unavailable on linux/mipsle: this build has no properties index. Duplicate identifiers, relation targets and orphan rows cannot be checked here; wikilink and orphan checks still run` |
 
 - **AC-D1** — `check_integrity` on a vault with a duplicate identifier names **both** paths and
   states that neither is preferred (FR-039, ADR-068 D7.1).
 - **AC-D2** — `vault_describe` with an unknown `record_type` is refused with the declared type
   names listed; it does not return an empty description.
 - **AC-D3** — the response never contains a JSON object (FR-072).
+- **AC-D4** — an unscoped `check_integrity` over a collection above the sweep limit is **refused**, naming the collection and the scoped remedy; it never returns a partial sweep presented as whole (FR-075a).
+- **AC-D5** — a vault with a broken **ordinary wikilink** and no records at all still produces a finding. This is the capability `knowledge_graph`'s retirement would otherwise have lost (FR-075).
+- **AC-D6** — on a build without SQLite, `check_integrity` states which categories it could not run **by name**, and does not report zero findings for them (FR-020h).
 
 ### 4.1.2 `vault_find` — READ, the one retrieval path
 
@@ -785,7 +800,7 @@ link-neighbourhood traversal. There is **no second retrieval tool**.
 | `explain` | bool | `false` | Report the plan; evaluate nothing (FR-073). |
 | `limit` | int | `50` | Clamped at 200, clamp reported (FR-063). |
 | `cursor` | opaque string | — | An unhonourable cursor is an error, never a silent restart. |
-| `detail` | `minimal \| standard` | `standard` | `minimal` ≈ 20 tokens/hit (FR-126). |
+| `detail` | `minimal \| standard` | `standard` | `minimal` ≈ 80 bytes/hit (FR-127). |
 
 **Filter shape** — a tree of `{all: [...]}`, `{any: [...]}`, `{not: {...}}` over leaves
 `{property, op, value}`, with `op` ∈ `is, is_not, lt, lte, gt, gte, contains, is_absent,
@@ -803,6 +818,9 @@ is_present`. No text query language exists and none is accepted (FR-022).
 | Aggregate over a refused set | `no total is returned over a refused candidate set` |
 | Cross-currency total | `2 currencies present (GBP, USD); no combined total is returned` |
 | Stale cursor | `that cursor was issued against index generation 8802; the index is now at 8814 — re-run the query` |
+| Stale record (FR-020c) | `DEAL-0117: the properties index and the note on disk disagree (indexed 3f9a…, on disk 71c4…) — this record is being re-indexed; re-run to confirm` |
+| No manifest entry (FR-020c) | `DEAL-0221: no indexed note at Deals/old.md — the row is orphaned; run vault_describe check_integrity` |
+| Typed query on a SQLite-less build (FR-020h) | `typed filters are unavailable on linux/mipsle: this build has no properties index. Plain-word search and vault_read still work` |
 
 - **AC-F1** — every refusal above names the remedy in the same string. A refusal that states only
   what went wrong fails this criterion.
@@ -813,6 +831,13 @@ is_present`. No text query language exists and none is accepted (FR-022).
   `explain` calls changes nothing in the response except index generation.
 - **AC-F4** — an out-of-scope vault yields `COMPLETE: yes — 0 records` and no other signal
   (FR-062).
+- **AC-F5** — a record whose row `source_hash` differs from `ManifestEntry.Hash` is returned **with**
+  `COMPLETE: no`, named in `PROBLEMS` with staleness as the reason, in **both** divergence
+  directions (FR-020c). A record with no manifest entry is flagged the same way.
+- **AC-F6** — on a build without a properties index, a typed filter is **refused by name**; a test
+  asserts the response is not an empty success (FR-020h).
+- **AC-F7** — `kind: task` returns rows carrying `path`, `line`, `status` and `text`, each
+  rendered with its line number, and no collection walk occurs (FR-076a).
 
 ### 4.1.3 `vault_read` — READ, a note or one section of one
 
@@ -847,8 +872,10 @@ Writes **only** `path` (FR-070b). Every op on an existing file requires `expect_
 | `append_section` | `path`, `heading`, `body`, `level` (default 2), `once` (bool), `expect_version` | Maps to `AppendSectionAt` / `AppendSectionOnce`. |
 | `replace_body` | `path`, `anchor` **or** `line_range`, `body`, `expect_version` | **Unbuilt primitive** — FR-047. |
 | `link` | `path`, `target`, `alias`, `section`, `relation` (property name), `expect_version` | Writes the **source** only; the inverse is derived (FR-032). |
-| `write_view` | `view` (name), `definition`, `expect_version` when replacing | A view file changes no note (FR-018). |
-| `create_record_type` | `type`, `definition` | **New** type only; nothing existing is reinterpreted (FR-016). |
+
+*(Revision 4: `write_view` and `create_record_type` are **removed from this tool**. Both are
+`vault_configure` operations — FR-016, FR-018. Revision 3 placed them here on the ground that a
+new schema file reinterprets nothing, which is false under ADR-068 D1; see FR-016.)*
 
 `link` belongs to this tier because a relation is stored once, on the source (FR-030). Linking
 `Deal.md` to `[[Acme]]` writes `Deal.md` and never touches `Acme.md` — it looks like a two-file
@@ -862,12 +889,18 @@ operation and is a one-file operation.
 | Multi-line clobber (FR-040b) | `segment currently spans 3 lines; a scalar write would delete them — no change made. Send a list value instead` |
 | Ambiguous anchor (FR-047) | `anchor "## Pricing" appears twice in Deals/Acme.md (lines 14 and 88) — no change made; give a unique anchor or a line_range` |
 | Schema violation (FR-042) | `deal.status holds one value; got a list of 2 — send a single value, or declare many: true in .omnipus-vault/records/deal.yaml` |
-| Cascading op sent here | `rename cascades to notes you did not name; use vault_restructure` |
+| Cascading op sent here (C-A) | `rename cascades to notes you did not name; use vault_restructure` |
+| Schema or view op sent here (C-B) | `create_record_type changes what existing notes mean; use vault_configure` |
 
 - **AC-E1** — after any successful `vault_edit`, exactly one file has a changed mtime and hash.
   This is FR-070b as a test, and it is the tier's definition.
-- **AC-E2** — `create_record_type` on a type that already exists is refused, naming
-  `vault_restructure` as the tool for changing one (FR-017).
+- **AC-E2** — `create_record_type` or `write_view` sent to `vault_edit` is refused, naming
+  `vault_configure` (FR-016, FR-018). An agent holding `vault_edit: allow` and
+  `vault_configure: deny` **cannot** create a record type — the posture revision 3 claimed and
+  did not deliver.
+- **AC-E2a** — the one accepted multi-file case is asserted rather than assumed: after a `create`,
+  exactly **two** paths changed — the note and `.omnipus-vault/records/.seq` — and no third
+  (FR-036a). AC-E1's one-file assertion is read with this exception, not against it.
 - **AC-E3** — an ambiguous `replace_body` anchor leaves the file byte-identical.
 
 ### 4.1.5 `vault_restructure` — WRITE, cascades
@@ -879,8 +912,12 @@ The only tool permitted to change a file the caller did not name.
 | `rename` | `path`, `new_name`, `expect_version` | Inbound wikilinks in N notes are rewritten (ADR-067 D10). |
 | `move` | `path`, `dest`, `expect_version` | Same. |
 | `trash` | `path`, `expect_version` | Inbound links **cannot** be repaired — FR-048. |
-| `edit_record_type` | `type`, `definition`, `expect_version` | Every existing record of that type is reinterpreted (FR-015, FR-017). |
-| `delete_record_type` | `type`, `expect_version` | Same cascade, larger. |
+
+*(Revision 4: `edit_record_type` and `delete_record_type` are **removed from this tool** and are
+`vault_configure` operations — FR-017. They cascade in **meaning** (C-B), not in bytes (C-A), and
+ADR-068 D23.4 records the asymmetry: a schema change writes **one** file, so reverting that file
+undoes it, which is not true of trash. Grouping the two would have implied a severity schema
+authoring does not have.)*
 
 **Trash stays in this tier even though it is a soft delete.** A recoverable bin fixes the trashed
 note's own recoverability; it does nothing for the N notes whose links just broke. Recoverability
@@ -894,10 +931,16 @@ CASCADE: 7 notes rewritten (inbound wikilinks), 1 note moved
 
 - **AC-X1** — a `trash` response names the count of now-unrepairable inbound links and lists
   the linking notes up to the page limit (FR-048).
-- **AC-X2** — `edit_record_type` reports how many existing records change validity as a result,
-  in both directions (newly invalid, newly valid).
-- **AC-X3** — an operator policy of `vault_edit: allow` + `vault_restructure: deny` permits
+- **AC-X2** — an operator policy of `vault_edit: allow` + `vault_restructure: deny` permits
   `set_property` and refuses `rename` in the same session (FR-083).
+- **AC-X3** — `vault_restructure` declares **no** `expect_version` on any cascading op that cannot
+  honour it, and its description says so (FR-018a's sibling rule, ADR-068 AC-15.5d). *Today
+  `knowledge_rename` and `knowledge_move` take no `expect_version` and return none — verified:
+  neither `RenameTool.Parameters` (`pkg/knowledge/authoring_tools.go:852-871`) nor
+  `MoveTool.Parameters` (`:904-927`) declares the field — while the shipped parameter description
+  at `authoring_tools.go:413-422` tells the model that "every knowledge tool that touches a note
+  returns one as `version`". That is **false for the two highest-blast-radius tools in the set**.
+  It is pre-existing and adjacent; it is named here so it is not lost.*
 
 ---
 
