@@ -513,20 +513,39 @@ as "no progress has arrived" for a fully indexed collection.
 - **FR-013** Money arithmetic MUST be exact decimal.
 - **FR-014** The system MUST refuse to sum money across currencies and MUST list the currencies present.
 
-- **FR-015** A change to a schema file MUST invalidate affected records and trigger revalidation. Schemas live under a directory the scanner does not walk, so no manifest entry or mtime exists for them; the system MUST track them explicitly rather than inheriting note-scanning behaviour. *(Unchanged in meaning. **Now cited by ADR-068 D23.3** as the reason an existing-record-type change sits in `vault_restructure`: it retroactively reinterprets every record of that type.)*
+- **FR-015** A change to a schema file MUST invalidate affected records and trigger revalidation. Schemas live under a directory the scanner does not walk, so no manifest entry or mtime exists for them; the system MUST track them explicitly rather than inheriting note-scanning behaviour. *(Unchanged in meaning. **Cited by ADR-068 D23.3** as the reason an existing-record-type change sits in a cascading tier: it retroactively reinterprets every record of that type. **Revision 4: that tier is `vault_configure`, not `vault_restructure`** — the reasoning is unchanged, the destination moved, and the same reasoning now also carries **creating a new type**, per FR-016.)*
 
-### Schema and view authoring (ADR-068 D23)
+### Schema and view authoring (ADR-068 D23, D15.6)
 
 Schema and view authoring is **ordinary agent work, governed by ordinary tool policy**. An agent
 with write-enabled tools manages the vault completely, and that explicitly includes creating and
 changing record types and saved views. There is no bespoke approval flow, no
 `request_schema_change`, and no UI-ratifies step.
 
-- **FR-016** Creating a **new** record type MUST be an operation of `vault_edit`. A new schema file changes no existing note's meaning, so it cannot cascade.
-- **FR-017** Changing or deleting an **existing** record type MUST be an operation of `vault_restructure`, because FR-015 makes it reinterpret every existing record of that type — notes the agent never named change status.
-- **FR-018** Creating or editing a **saved view** MUST be an operation of `vault_edit`. A view is a query definition in its own file and changes no note.
+**What it is NOT is an operation of `vault_edit`, and revision 3 had that wrong.** Policy resolves
+on the tool **name** alone (FR-070c), so putting schema authoring inside `vault_edit` made the
+posture *"this agent may edit notes freely, but may not redefine what a note is"* **inexpressible**
+— while revision 3's own FR-083 told an operator that restricting `vault_restructure` protected
+schemas. It did not: an agent holding `vault_edit: allow` could create arbitrary record types.
+A control described as working while it does not is the failure class this document exists to
+remove. **Every schema and view operation therefore lives in `vault_configure`** (ADR-068 D15.6).
+
+**The two criteria, because one was being read two ways** (ADR-068 D15.1, revised). Either alone
+puts an operation in a cascading tier:
+
+> **C-A (bytes).** Does this operation write bytes into files the agent did not name?
+> **C-B (meaning).** Does this operation change what already-existing files *mean* — their
+> validity, their type, or how a query renders them — **without writing them**?
+
+`vault_restructure` is C-A. `vault_configure` is C-B. `vault_edit` is neither, and its one
+accepted exception is `.seq` (FR-036a).
+
+- **FR-016** **MEANING CHANGED, revision 4 (ADR-068 D15.6).** Creating a **new** record type MUST be an operation of **`vault_configure`**, and the response MUST name the count of pre-existing notes that have just become validated records as a result. *Previously: an operation of `vault_edit`, on the stated ground that a new schema file changes no existing note's meaning.* **That ground was false under ADR-068 D1**: a note becomes a record by declaring `type:` in frontmatter, and a note whose declared type matches no schema is an ordinary note (FR-005). Writing `.omnipus-vault/records/company.yaml` therefore converts **every pre-existing note already carrying `type: company`** into an indexed, queryable, validated record — and any of them missing a `required: true` property becomes a validation finding nobody asked for. That is **C-B**, and it is invisible in the diff: one new twelve-line YAML file, hundreds of notes changed in meaning.
+- **FR-017** **MEANING CHANGED, revision 4.** Changing or deleting an **existing** record type MUST be an operation of **`vault_configure`**, because FR-015 makes it reinterpret every existing record of that type. *Previously: `vault_restructure`.*
+- **FR-018** **MEANING CHANGED, revision 4.** Creating or editing a **saved view** MUST be an operation of **`vault_configure`**. *Previously: `vault_edit`.* A view writes no note, but it changes what a query returns, which is **C-B in its weakest form** — and a view is part of the same control plane as the schema, so an operator granting one grants the other knowingly.
+- **FR-018a** `vault_configure` MUST NOT declare an `expect_version` parameter, and a test MUST assert its absence (ADR-068 D15.5c, AC-15.5d). A single-file content hash cannot honestly guard a change whose blast radius is every note declaring the type. Its safety is policy, plus the audit entry (FR-077), plus `check_integrity` (FR-075) — never optimistic concurrency it cannot honour.
 - **FR-019** The system MUST NOT add any agent-callable mount operation. Mounting a folder stays `request_mount` (`pkg/coreagent/core.go:367`), seeded `ask` everywhere (ADR-063 FR-7.2). A second mount path would route around a control ADR-063 deliberately placed.
-- **FR-019a** No policy default may be presented as a prohibition. `vault_restructure` is seeded `ask` across the roster, and an operator MAY set it to `allow` — including for schema changes. A conservative default is not a ban.
+- **FR-019a** No policy default may be presented as a prohibition. `vault_restructure` **and `vault_configure`** are seeded `ask` across the base roster, and an operator MAY set either to `allow` — including for schema changes. A conservative default is not a ban (ADR-068 D23.5).
 
 ### Index and query
 
