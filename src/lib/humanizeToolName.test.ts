@@ -57,6 +57,25 @@ describe('humanizeToolName — ADR-071 D1 discovery-tool rename', () => {
   })
 })
 
+// ADR-071 D4: `hand_off` and `return_to_default` are merged into one tool,
+// `switch_agent(target, note?)`. The new canonical name gets its own label;
+// both retired pre-merge names stay mapped so old, already-persisted
+// session transcripts (never migrated) still render a readable label
+// instead of falling through to the raw id.
+describe('humanizeToolName — ADR-071 D4 switch_agent merge', () => {
+  it('maps the new canonical name switch_agent → Switch agent', () => {
+    expect(humanizeToolName('switch_agent')).toBe('Switch agent')
+  })
+
+  it('retains the legacy hand_off alias so pre-merge transcripts still render readably', () => {
+    expect(humanizeToolName('hand_off')).toBe('Hand off')
+  })
+
+  it('retains the legacy handoff alias so pre-merge transcripts still render readably', () => {
+    expect(humanizeToolName('handoff')).toBe('Hand off')
+  })
+})
+
 describe('humanizeToolName — generic fallback', () => {
   it('strips a leading namespace and title-cases the remainder', () => {
     // system.task.update → "Task update"

@@ -285,7 +285,7 @@ test(
     // Route to Jim: the default agent Mia is a guide whose policy excludes the
     // `delegate` tool (verified in CI: `ToolSearch(load): ... Rejected: delegate — denied
     // by this agent's policy`) and whose persona declines to delegate — she answers
-    // in prose offering create_task/hand_off instead, so no SubagentBlock ever
+    // in prose offering create_task/switch_agent instead, so no SubagentBlock ever
     // renders. Every delegate-dependent spec switches to Jim (see subagent.spec.ts
     // startFreshChat); Jim is the general-purpose task agent and can delegate.
     await selectAgent(page, /Jim/i);

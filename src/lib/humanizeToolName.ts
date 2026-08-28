@@ -1,7 +1,7 @@
 // Humanized, sentence-case labels for tool-call chips.
 //
 // Tool IDs use snake_case (`recall_memory`, `browser_navigate`,
-// `create_task`) and special verbs (`hand_off`). The collapsed chip
+// `create_task`) and special verbs (`switch_agent`). The collapsed chip
 // should show a readable label; the expanded chip still shows the raw ID so
 // power users see the real tool name.
 //
@@ -18,12 +18,18 @@ const EXPLICIT_LABELS: Record<string, string> = {
   recall: 'Recall memory',
   // New canonical names
   run_retrospective: 'Retrospective',
-  hand_off: 'Hand off',
+  // ADR-071 D4: `hand_off` and `return_to_default` are merged into one
+  // tool, `switch_agent(target, note?)` — see §5.1 of the ADR.
+  switch_agent: 'Switch agent',
   // ADR-036: `delegate` replaces spawn / run_subagent / check_spawn_status
   // (one unified delegation tool — see §3.2).
   delegate: 'Delegate task',
-  // Legacy names (backward compat with old session transcripts)
+  // Legacy names (backward compat with old session transcripts). `hand_off`
+  // and `handoff` were the pre-ADR-071 names (`return_to_default`'s literal
+  // is not mapped here — the generic fallback already renders it as "Return
+  // to default", so no explicit entry is needed for it to stay readable).
   retrospective: 'Retrospective',
+  hand_off: 'Hand off',
   handoff: 'Hand off',
   run_subagent: 'Run subagent',
   check_spawn_status: 'Check spawn status',

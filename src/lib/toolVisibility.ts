@@ -161,8 +161,15 @@ export function shouldRenderToolCall(
     // stays a readable, exhaustive table — a future reader can see at a
     // glance these were a deliberate inclusion, not an oversight.
 
-    case 'hand_off':
-    case 'return_to_default':
+    case 'switch_agent':
+      // ADR-071 D4: `hand_off` and `return_to_default` are merged into one
+      // tool, `switch_agent(target, note?)`. Both predecessors were always
+      // visible (no isError exception, no params-based branching) in this
+      // classifier, so the merge needs no reconciliation here — it is a
+      // straight rename of one always-visible case, asserted explicitly
+      // (rather than left to the `default:` fallthrough, which happens to
+      // fail open into the same `true`) per ADR-071 §5.2.2c.
+      return true
     case 'remember':
     case 'write_agent_metadata':
     case 'get_usage':
