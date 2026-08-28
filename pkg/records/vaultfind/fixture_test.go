@@ -321,13 +321,6 @@ func firstLine(s string) string {
 	return s
 }
 
-func deref(s *string) string {
-	if s == nil {
-		return ""
-	}
-	return *s
-}
-
 // rowIDs is what a test asserts against — the identifiers, in order.
 func rowIDs(resp generated.VaultFindResponse) []string {
 	out := make([]string, 0, len(resp.Rows))

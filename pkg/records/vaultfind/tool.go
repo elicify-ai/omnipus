@@ -174,7 +174,10 @@ func Parameters() map[string]any {
 func Call(ctx context.Context, d Deps, raw []byte) (string, error) {
 	req, r := decodeRequest(raw)
 	if r != nil {
-		return Render(refusalResponse(generated.VaultFindRequest{}, "", r)), r
+		// The arguments could not be decoded, so the echo is the bytes as sent —
+		// which is the only honest report of what arrived, and the one a caller
+		// needs in order to see their own typo.
+		return Render(refusalResponse(req, "arguments as sent: "+string(raw), r)), r
 	}
 	resp, err := Find(ctx, d, req)
 	return Render(resp), err

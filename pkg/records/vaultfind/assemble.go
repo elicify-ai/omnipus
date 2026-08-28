@@ -427,3 +427,118 @@ func cursorOffset(s string) int {
 	}
 	return off
 }
+
+// rawEcho renders the query AS RECEIVED, for a response that was refused before
+// the query could be validated into an executable form.
+//
+// It exists because FR-122's echo was EMPTY on every early refusal — the shape
+// where a caller most needs to see what arrived. "unknown property conditon"
+// with no echo leaves them unable to tell whether the tool saw the argument they
+// think they sent, which is precisely the doubt the echo exists to remove.
+//
+// It reads only the wire request and reports what is PRESENT, never a default:
+// a default shown on a query that never ran would be a claim about execution
+// that did not happen.
+func rawEcho(req generated.VaultFindRequest) string {
+	var parts []string
+	if req.Type != nil {
+		parts = append(parts, "type="+*req.Type)
+	}
+	if req.Kind != nil {
+		parts = append(parts, "kind="+string(*req.Kind))
+	}
+	if req.Words != nil {
+		parts = append(parts, `words="`+*req.Words+`"`)
+	}
+	if req.View != nil {
+		parts = append(parts, "view="+*req.View)
+	}
+	if req.Filter != nil {
+		parts = append(parts, "filter="+describeNode(*req.Filter))
+	}
+	if req.Near != nil {
+		parts = append(parts, "near="+*req.Near)
+	}
+	if req.Hops != nil {
+		parts = append(parts, fmt.Sprintf("hops=%d", *req.Hops))
+	}
+	if req.Join != nil {
+		parts = append(parts, "join="+strings.Join(*req.Join, ","))
+	}
+	if req.GroupBy != nil {
+		parts = append(parts, "group_by="+strings.Join(*req.GroupBy, ","))
+	}
+	if req.Select != nil {
+		parts = append(parts, "select="+strings.Join(*req.Select, ","))
+	}
+	if req.Sort != nil {
+		for _, k := range *req.Sort {
+			dir := "asc"
+			if k.Direction != nil {
+				dir = string(*k.Direction)
+			}
+			parts = append(parts, "sort="+k.Property+" "+dir)
+		}
+	}
+	if req.Aggregate != nil {
+		for _, a := range *req.Aggregate {
+			label := string(a.Op) + "()"
+			if a.Property != nil {
+				label = string(a.Op) + "(" + *a.Property + ")"
+			}
+			parts = append(parts, "aggregate="+label)
+		}
+	}
+	if req.Explain != nil && *req.Explain {
+		parts = append(parts, "explain=true")
+	}
+	if req.Limit != nil {
+		parts = append(parts, fmt.Sprintf("limit=%d", *req.Limit))
+	}
+	if req.Cursor != nil {
+		parts = append(parts, `cursor="`+*req.Cursor+`"`)
+	}
+	if req.Detail != nil {
+		parts = append(parts, "detail="+string(*req.Detail))
+	}
+	if len(parts) == 0 {
+		return "(no arguments)"
+	}
+	return strings.Join(parts, "  ")
+}
+
+// describeNode renders an UNVALIDATED filter node. It cannot use node.text —
+// that is built during validation, which is the step that failed — so it walks
+// the wire shape directly and quotes the caller's own spelling, mistakes and all.
+func describeNode(n generated.VaultFilterNode) string {
+	switch {
+	case n.All != nil:
+		return "(" + joinNodes(*n.All, " AND ") + ")"
+	case n.Any != nil:
+		return "(" + joinNodes(*n.Any, " OR ") + ")"
+	case n.Not != nil:
+		return "NOT " + describeNode(*n.Not)
+	}
+	property, op := "?", "?"
+	if n.Property != nil {
+		property = *n.Property
+	}
+	if n.Op != nil {
+		op = string(*n.Op)
+	}
+	switch {
+	case n.Values != nil:
+		return property + " " + op + " (" + strings.Join(*n.Values, ", ") + ")"
+	case n.Value != nil:
+		return property + " " + op + " '" + *n.Value + "'"
+	}
+	return property + " " + op
+}
+
+func joinNodes(in []generated.VaultFilterNode, sep string) string {
+	parts := make([]string, 0, len(in))
+	for i := range in {
+		parts = append(parts, describeNode(in[i]))
+	}
+	return strings.Join(parts, sep)
+}

@@ -73,6 +73,15 @@ func IsRefusal(err error) bool {
 // difference between "no fix" and "a fix that renders as nothing".
 func str(s string) *string { return &s }
 
+// deref reads an optional wire string. Every optional field on the wire is a
+// pointer, and a nil one means "not set" rather than "empty".
+func deref(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
+}
+
 // problem builds one entry. Reason and fix are both required by the caller's
 // discipline rather than by the type, so this is the one place to notice a
 // problem being built without a remedy.

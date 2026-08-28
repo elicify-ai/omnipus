@@ -292,3 +292,31 @@ func lineContaining(out, needle string) string {
 	}
 	return ""
 }
+
+// TestRender_RefusalArtifact publishes the literal bytes a model receives when
+// its query is refused.
+//
+// It is a rendered ARTIFACT rather than a set of substring assertions because
+// the refusal path is where the response format earns its keep: a refusal the
+// model cannot read is a refusal it cannot act on, and the next call then gets
+// composed out of prose.
+func TestRender_RefusalArtifact(t *testing.T) {
+	f := newFixture(t)
+	f.plant(1, "growing", "41.25")
+
+	resp := mustRefuse(t, f.deps(), req(withType("plant"), withFilter(leaf("conditon", "=", "growing"))))
+	out := Render(resp)
+	t.Logf("\n────────── a refused query, as the model reads it ──────────\n%s"+
+		"────────────────────────────────────────────────────────────", out)
+
+	// The three things that make it actionable, asserted rather than admired.
+	if !strings.Contains(out, "conditon") {
+		t.Errorf("the refusal does not quote what the caller wrote:\n%s", out)
+	}
+	if !strings.Contains(out, "condition") {
+		t.Errorf("the refusal does not offer the name that would have worked:\n%s", out)
+	}
+	if !strings.Contains(out, "vault_describe") {
+		t.Errorf("the refusal does not give the caller a call to make next:\n%s", out)
+	}
+}

@@ -45,8 +45,13 @@ func refusalResponse(_ generated.VaultFindRequest, echo string, r *RefusalError)
 // "what is actually declared here" — alongside the specific remedy.
 func refusalActions(r *RefusalError) []generated.VaultFindAction {
 	out := []generated.VaultFindAction{}
-	if r.Problem.Fix != nil && *r.Problem.Fix != "" {
-		out = append(out, generated.VaultFindAction{Label: "fix", Call: *r.Problem.Fix})
+	// ONLY A REAL CALL BELONGS HERE. The fix prose is already rendered inline
+	// with the problem; repeating it under NEXT filled the block with sentences
+	// like "call vault_describe to see the declared properties", which is advice
+	// wearing the shape of a command and leaves the model to compose the call
+	// itself — the exact step FR-126 exists to remove.
+	if fix := deref(r.Problem.Fix); strings.HasPrefix(fix, "vault_") {
+		out = append(out, generated.VaultFindAction{Label: "fix", Call: fix})
 	}
 	switch r.Problem.Code {
 	case generated.UnknownProperty, generated.UnknownEnumValue, generated.UnknownRecordType:

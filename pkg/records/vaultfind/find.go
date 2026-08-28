@@ -108,16 +108,20 @@ func Find(ctx context.Context, d Deps, req generated.VaultFindRequest) (generate
 		ref := refuse(problem(generated.IndexUnavailable,
 			"no text index is wired into this vault, so no answer can be checked for freshness",
 			"re-open the vault; run vault_describe check_integrity to see the index state"), nil)
-		return refusalResponse(req, "", ref), ref
+		return refusalResponse(req, rawEcho(req), ref), ref
 	}
 
 	if r := applyView(&req, d.Views); r != nil {
-		return refusalResponse(req, "", r), r
+		return refusalResponse(req, rawEcho(req), r), r
 	}
 
 	q, r := parse(req, set)
 	if r != nil {
-		return refusalResponse(req, "", r), r
+		// The echo is the RAW request here, not the executable one: parse is the
+		// step that failed, so there is no "as executed" form to report. A
+		// caller refused for an unknown property still has to be able to see
+		// that the tool received the argument they think they sent.
+		return refusalResponse(req, rawEcho(req), r), r
 	}
 	echo := q.echo()
 
