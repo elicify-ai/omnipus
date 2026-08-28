@@ -1690,3 +1690,247 @@ dies quietly and nothing in the UI says why.
 
 **Fail if:** the agent silently produces a plausible-sounding answer as though the operation had
 happened. A denied write reported as done is worse than a denied write.
+
+---
+
+## Part M — No hardcoded domain vocabulary
+
+*A fresh install ships **no** record types. Not one, not even as an overridable default. What a
+vault contains is that vault's business, and the product is supposed to know nothing about it.
+The reason this gets its own part: the design documents use business vocabulary hundreds of
+times as illustration, and an implementer skimming them could easily conclude the product knows
+what a "company" is.*
+
+### Case M-1 — An empty install is really empty
+
+| Step | Do this | Expect |
+|---|---|---|
+| M-1.1 | On the clean install, mount **Vault Beta** (no `.omnipus-vault` folder at all) | Mounts and indexes as an ordinary set of notes |
+| M-1.2 | `vault_describe` on it | **Zero record types. Zero enum values. Zero saved views. Zero identifier prefixes.** Not an error — a working vault of ordinary notes |
+| M-1.3 | `vault_find` `type` = `company` | Refused — no such record type is declared |
+| M-1.4 | Repeat with `contact`, `deal`, `lead`, `task`, `project`, `person`, `note` | **Every one refused.** None of them is quietly known |
+| M-1.5 | Ask an agent: *"What record types does this vault have?"* | It says none, and does not invent a plausible set |
+| M-1.6 | Look at every filter dropdown, template list and empty state in the Library UI | No pre-populated record types, no suggested property names, no example enum values that came from us |
+
+**Fail if:** any record type, property name, enum value or identifier prefix exists that the
+vault did not declare. **A single one is a finding** — a shipped default becomes the de-facto
+standard and stops being questioned.
+
+*Note the one legitimate exception: the seven **property type** names (`text`, `enum`,
+`relation`, `date`, `integer`, `decimal`, `person`) are ours and are supposed to be there.
+`person` is a property type, not a record type. Do not report it.*
+
+### Case M-2 — Two vaults with unrelated vocabularies
+
+| Step | Do this | Expect |
+|---|---|---|
+| M-2.1 | Keep Vault Alpha (`specimen`, `expedition`, `keeper`, `token`) mounted | — |
+| M-2.2 | In Vault Beta, define a completely different vocabulary — say `recipe` with `heat` and `serves`, and `venue` | Works identically |
+| M-2.3 | Query each | Each vault sees only its own types |
+| M-2.4 | Compare the two experiences | Neither is smoother, better-supported or better-rendered than the other |
+
+**Fail if:** one vocabulary works better than the other, or a type name in one vault appears in
+the other's describe output.
+
+### Case M-3 — The product never invents a prefix
+
+Covered by I-2.8. Re-check here: a type with no declared `id_prefix` gets identifiers that are
+the counter alone — never a prefix derived from the type name (`SP` from `specimen`, `RE` from
+`recipe`). Deriving one would be the product inventing the vault's vocabulary.
+
+---
+
+## Part N — The human surface
+
+*These are W6 deliverables. If the screens are not there yet, mark them **Blocked — feature
+absent** and move on. A test script for a screen that does not exist is worse than no script.*
+
+### Case N-1 — The record table
+
+| Step | Do this | Expect |
+|---|---|---|
+| N-1.1 | Open the record table for `specimen` in the Library | Rows, with the schema's properties as columns |
+| N-1.2 | Group by `condition` | Groups render |
+| N-1.3 | Group by `tags` (multi-value) | `SP-0001` appears under both its groups |
+| N-1.4 | Group by `expedition` (a relation) | Groups render |
+| N-1.5 | Look at the problem banner | It names the excluded records — not just a count |
+| N-1.6 | Click through the banner | A drill-down listing them, each with its reason and fix |
+| N-1.7 | Edit a cell | The note on disk changes, and nothing else in the file moves (the byte-preservation rule of I-3 applies here too) |
+| N-1.8 | Open a record's related-records panel | Its relations and derived inverses are shown, marked as derived |
+| N-1.9 | Sort by an enum column | Lexical order (Part E) |
+| N-1.10 | Look for anything the vault did not declare | Nothing |
+
+### Case N-2 — The health view agrees with the answers
+
+Covered by G-2 and G-3. Additionally:
+
+| Step | Do this | Expect |
+|---|---|---|
+| N-2.1 | With two vaults mounted into **different workspaces**, open the health view from one workspace | It shows findings for **that workspace's** vaults only. An out-of-scope finding is invisible, not redacted |
+
+### Case N-3 — Index state (see also A-3)
+
+| Step | Do this | Expect |
+|---|---|---|
+| N-3.1 | Open Library in a fresh browser long after an index completed | The real state — phase, counts, completion — not "no progress has arrived" |
+| N-3.2 | Compare against what a `vault_find` response says about freshness | The two agree. They are supposed to come from one source |
+
+### Case N-4 — The `.base` importer is not an agent tool
+
+| Step | Do this | Expect |
+|---|---|---|
+| N-4.1 | Look through every agent's tool list for anything resembling a view/base importer | **It is not there.** It is an operator/CLI one-shot, deliberately |
+| N-4.2 | If an operator import path exists, import a `.base` file with an expression that cannot be translated | The untranslatable expression is reported **verbatim**, for a human to read and judge. Never approximated, never silently dropped |
+
+---
+
+## Part O — Cross-cutting checks
+
+*Run these throughout, not once.*
+
+### Case O-1 — The console
+
+| Step | Do this | Expect |
+|---|---|---|
+| O-1.1 | Prove your capture works (§4.4) at the start | Both probes visible |
+| O-1.2 | Watch the console through the whole run | No errors. WebSocket reconnect **warnings** are normal and are not findings |
+| O-1.3 | Prove your capture works again at the end | Both probes visible |
+| O-1.4 | If either probe failed at the end | You cannot report "no console errors" for this run. Say so |
+
+Two known noises that are **not** findings on their own, recorded so you do not chase them: a
+WS reconnect warning, and an `ERR_ABORTED` on a `DELETE` that returned 204 during unmount. The
+second means you cannot use `ERR_ABORTED` as a failure signal for unmounts — check the row, not
+the console.
+
+### Case O-2 — One process, one session
+
+| Step | Do this | Expect |
+|---|---|---|
+| O-2.1 | Do not restart the gateway at any point | You did not have to |
+| O-2.2 | If you did have to | Record what forced it, what you had just done, and what changed afterwards. **This is a finding, not a footnote** |
+
+### Case O-3 — Two vaults at once
+
+| Step | Do this | Expect |
+|---|---|---|
+| O-3.1 | Keep Alpha and Beta mounted throughout | Both listed |
+| O-3.2 | Search a term present in both | You can tell which vault each result came from |
+| O-3.3 | Unmount one | The other keeps working and its results are unaffected |
+| O-3.4 | Query a record type declared only in Alpha, from Beta's context | Refused naming Beta's declared types — not Alpha's results |
+
+### Case O-4 — Nothing leaks between the parts
+
+| Step | Do this | Expect |
+|---|---|---|
+| O-4.1 | At the end, run `vault_describe` on Alpha one more time | The schemas are as you left them — no type, property, enum value or view appeared that you did not create |
+| O-4.2 | Run `check_integrity` one more time | The findings are the ones you know about. Nothing new appeared from the run itself |
+
+---
+
+## How to report
+
+For every numbered case: **Pass**, **Fail**, or **Blocked**.
+
+For a **Fail**, give:
+
+1. What you did, step by step, precisely enough that someone else can repeat it exactly.
+2. What you expected.
+3. What actually happened — **the tool result verbatim**, not the agent's summary of it.
+4. Any console error, copied character for character.
+5. Whether it happened again on retry, and how many times out of how many.
+
+For a **Blocked**, give the reason in one of these forms:
+
+- *Feature absent* — the tool or screen does not exist yet (say which, and what Part 0 showed).
+- *Could not force the condition* — say what you tried.
+- *Fixture too small / no such build* — say what would be needed.
+
+**State plainly what your sign-off does and does not cover.** If Part 0 showed three of the six
+tools, then passing every runnable case means those three behave; it says nothing about the
+other three, and nothing about the record layer as a whole. The previous round's results opened
+with exactly that paragraph and it was the most useful thing in them.
+
+**Do not diagnose, do not work around, do not read the source.** "I restarted and then it
+worked" is a finding. "Probably my fixture" is not an acceptable dismissal — if you suspect the
+fixture, say what you observed *and* that you suspect it, and let someone else decide.
+
+**Assume every failure is real.**
+
+---
+
+## Appendix — Case index and what each traces to
+
+| Case | Subject | ADR-068 / spec reference | Earliest wave |
+|---|---|---|---|
+| Part 0 | What exists today | D15.3, D20 | — |
+| A-1 | Mount and index | ADR-067; prior F2 | shipped |
+| A-2 | Not a knowledge base | prior F6 | shipped |
+| A-3 | Index state for a late arrival | §2.7.2, FR-020f, US-13 | W6 |
+| A-4 | Indexing after a settings change | prior Case 2 | shipped |
+| A-5 | Image embeds | prior F4 | shipped |
+| A-6 | HTML preview | prior F3 | shipped |
+| A-7 | "Changed since indexed" | prior F5 | shipped |
+| A-8 | Unmount mid-index | prior F7 | shipped |
+| A-9 | Gateway stays up | prior F1 | shipped |
+| A-10 | Awkward content | prior Case 6 | shipped |
+| A-11 | Readable errors | prior F8 | shipped |
+| B-1..B-6 | `vault_describe`, `check_integrity` | D15.3, D15.5b, §4.1.1, FR-075/075a | W1 |
+| C-1..C-3 | text, enum, relation | D3, D4, D5, D5.1 | W1/W3 |
+| C-4 | date, strict ISO | FR-021d, R-H | W1 |
+| C-5 | integer, int64 bound | D3, FR-012 | W1 |
+| C-6 | decimal, exact, 100 places | D3, FR-013 | W1 |
+| C-7 | person | D3 | W1 |
+| C-8 | `money` is gone | D3 revision 7, O-2 superseded | W1 |
+| C-9 | Arity | D3.1, FR-042 | W1 |
+| C-10 | Absent is a state | D3.2, R-2/R-3, §4.1.2 `<>` row | W2 |
+| C-11 | Types scoped to record type | D3.3 | W1 |
+| D-1 | The six folding pairs | AC-8.9, FR-011a, D16.6 Unicode receipt | W2 |
+| D-2 | Enum resolution folds | D4, FR-011 | W1 |
+| D-3 | One value, one group, one sort position | D4 revision 8 (folded sort key) | W2 |
+| D-4 | `LIKE` folding and rune count | FR-011a, FR-022b, DS-4 | W2 |
+| D-5 | Identifiers are byte-exact | D16.6 R-8 | W2 |
+| E-1..E-4 | Lexical enum ordering | D4 as revised, §4.1.2 `sort` row | W2 |
+| F-1..F-5 | The SQL operator set | O-3 amended, §4.1.2 filter table | W2 |
+| F-6 | Unsupported constructs refused | FR-022c | W2 |
+| F-7 | Unknown names refused | FR-024, AC-F1 | W2 |
+| F-8 | `near` composed with filters | D15.3, FR-076, AC-F2 | W3 |
+| F-9 | Borrowed values marked | D22.4, FR-124 | W2 |
+| F-10 | Grouping | D10, FR-027/028/029 | W2 |
+| F-11 | Totals state scope, count once | D22.5, FR-028a | W2 |
+| F-12 | `explain` evaluates nothing | AC-F3, FR-073 | W2 |
+| F-13 | `kind: task` | D15.3, D22.4 amended, AC-F7 | W2 |
+| F-14 | Zero hits, near-miss vocabulary | D21.4, FR-114 | W2 |
+| F-15 | Clamps and cursors | D15.5b | W2 |
+| F-16 | Candidate caps | D16.3a C-3, FR-064/064a | W2 |
+| F-17 | Response shape | D22.1..D22.7, §4.2 | W2 |
+| G-1..G-5 | The honesty contract | D13, FR-025/025a/026 | W2/W6 |
+| G-6 | Two indexes disagreeing | D16.5, AC-16.5, AC-F5 | W1/W2 |
+| G-7 | The workspace-scoping exception | D13.1, AC-F4, FR-062 | W1 |
+| H-1 | Unknown property | FR-024 | W2 |
+| H-2 | SQLite-less build | D16.2a, FR-020h, AC-F6 | W1 |
+| H-3 | Ambiguous anchor | D14.1, FR-047, AC-E3 | W4 |
+| I-1 | `vault_read` and the version token | D15.3, AC-R1/R2/R3 | W3 |
+| I-2 | Identifier allocation | D7, D7.1, AC-7.1/7.2, FR-036b/038 | W1/W4 |
+| I-3 | Byte-preserving writes | D14, AC-14.1 | W4 |
+| I-4 | Multi-line clobber refused | D14, AC-14.2, FR-040b | W4 |
+| I-5 | Edit operations, link stores once | D5, D15.3, FR-030/032 | W4 |
+| I-6 | Stale token refused and audited | D15.5c, AC-15.5c | W4 |
+| I-7 | Refusals leave the file alone | §3 behavioural contract | W4 |
+| I-8 | Wrong tool, right advice | D15.1, §4.1.4 refusal table | W4/W5 |
+| J-1..J-3 | rename, move, trash | D15.3, FR-048/048a | W5 |
+| J-4 | No version token on a cascade | D15.5c, AC-15.5d, AC-X3 | W5 |
+| J-5 | Wrong tool | FR-070d/070e | W5 |
+| K-1 | Creating a type converts notes | D15.6, AC-C1 | W5 |
+| K-2 | Change and delete a type | FR-015/017, AC-C4 | W5 |
+| K-3 | Views | D10, FR-018 | W5 |
+| K-4 | Schema validation | FR-002/003/004 | W5 |
+| K-5 | No token, audit every call | FR-018a, AC-C3/C5/C6 | W5 |
+| L-1..L-4 | Three independent policies | D15.2, D18, D20 W5 exit criterion, AC-X2, AC-C2 | W5 |
+| L-5 | Seed posture | D18, AC-18.1/18.2 | W5 |
+| L-6 | A denial is visible | D18 | W5 |
+| M-1..M-3 | No domain vocabulary | D0, D0.1, FR-004a, R-F | W0/W1 |
+| N-1 | Record table | D20 W6 | W6 |
+| N-2 | Health view scope | FR-025a, FR-025b | W6 |
+| N-3 | Index state snapshot | FR-020f, FR-020g | W6 |
+| N-4 | `.base` importer is not a tool | D15.4, O-1, FR-100..103 | W6 |
+| O-1..O-4 | Cross-cutting | — | — |
