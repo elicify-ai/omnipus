@@ -50,8 +50,8 @@ carries the same note in place.
 | FR-020 | BLOCKED on the D16 spike | typed properties in a SQLite properties index | §6, §7 regression |
 | FR-020a | the bleve-mapping no-op guard | derived and disposable: rebuild yields identical results *(the guard survives as **FR-020d**)* | §6 |
 | FR-021 | filtering evaluated **in Go** over the candidate set | evaluated **in the properties index** over typed columns | ADR-068 D21.5, the storage spike C-3, §6 |
-| FR-070 | nine `record_*` tools | five `vault_*` tools | §6, §7 test 18, SC-011 |
-| FR-072 | compact text for `record_schema` | compact text for **every** result of all five | §6, §7 |
+| FR-070 | nine `record_*` tools | five `vault_*` tools *(superseded by revision 4: **six**)* | §6, §7 test 18, SC-011 |
+| FR-072 | compact text for `record_schema` | compact text for **every** result of all five *(superseded by revision 4: **all six**)* | §6, §7 |
 | FR-073 | a `record_explain` **tool** | an `explain` **flag** on `vault_find` | §6, §7 |
 | FR-100 | an agent tool `record_view_import` | an **operator/CLI** one-shot | §6, §7 test 20, SC-010 |
 | SC-005 | "1,000 distinct identifiers **and zero sequence gaps**" | 1,000 distinct identifiers; **gaps permitted, repeats fail** | contradicted FR-038 and ADR-068 D7.1 — a defect, not a wording change |
@@ -1468,6 +1468,17 @@ opt-out — and the whole risk is that the line is easy to forget and nothing re
     confirm it shows the completed state rather than "no progress".
 11. Run the same corpus through plain BM25 and through the FR-112 fusion; have a human judge the
     top 10 for 20 real queries. If the fusion does not win, FR-113 says it does not ship.
+12. On a real vault that already uses an undeclared convention such as `type: meeting`, declare a
+    schema for that type and confirm the response names the count of notes just converted and
+    every one that newly fails validation — before the operator discovers it from a validation
+    report they did not ask for (AC-C1).
+13. Build for `linux/mipsle` and confirm the binary builds, the gateway boots, `vault_read` and
+    plain-word `vault_find` work, and every typed filter refuses **naming the platform** rather
+    than returning an empty result (FR-020h).
+14. Take the twenty most natural questions a person would ask this vault, phrase each as a
+    **negative** — "which X have I not done", "which records have no owner" — and confirm every
+    one returns the absent rows. This is the R-2 failure in the form a user would meet it, and it
+    is the case SQLite's defaults get backwards (§8.1).
 
 ---
 
