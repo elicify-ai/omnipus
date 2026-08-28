@@ -1046,22 +1046,49 @@ link-neighbourhood traversal. There is **no second retrieval tool**.
 | `cursor` | opaque string | — | An unhonourable cursor is an error, never a silent restart. |
 | `detail` | `minimal \| standard` | `standard` | `minimal` ≈ 80 bytes/hit (FR-127). |
 
-**Filter shape** — a tree of `{all: [...]}`, `{any: [...]}`, `{not: {...}}` over leaves
-`{property, op, value}`, with `op` ∈ `is, is_not, lt, lte, gt, gte, contains, is_absent,
-is_present`. No text query language exists and none is accepted (FR-022).
+**Filter shape — REWRITTEN, revision 5 (operator ruling R-B).** A tree of `{all: [...]}`,
+`{any: [...]}`, `{not: {...}}` over leaves `{property, op, value}`, with `op` drawn from **SQL's own
+vocabulary**:
+
+| `op` | Meaning | Notes |
+|---|---|---|
+| `=` | equal | case-insensitive on text and enum labels (FR-011a); element-wise on a `many` property (R-9) |
+| `<>` | not equal | includes records where the property is absent, unless excluded (FR-008) |
+| `<` `<=` `>` `>=` | ordered comparison | undefined against a `many` property and reported as a problem (R-13) |
+| `LIKE` | pattern match | `%` and `_` are SQL's wildcards, `\` escapes. Case-insensitive. An empty pattern or a bare `%` is refused (FR-022a) |
+| `IN` | membership in a supplied list | `value` is a list |
+| `IS NULL` | the property is absent | the one operator absence does not make `false`; exempt from FR-008 |
+| `IS NOT NULL` | the property has a value | an empty string, an empty list and a zero are values (R-3) |
+
+*Previously `is, is_not, lt, lte, gt, gte, contains, is_absent, is_present` — names we invented,
+which have appeared in a model's training data zero times. **The filter is still a structured object
+and there is still no parser and no text query language** (FR-022, ADR-068 O-3, amended not
+overturned); only the operator spelling changes. Any other SQL construct — `JOIN`, a subquery,
+`COALESCE`, `CASE`, `BETWEEN`, a function call — is **refused naming the supported set and the
+parameter that does the job** (FR-022c), never parsed and never silently dropped.*
 
 **Normative refusal wording.** These strings are contract, not illustration; a test asserts them.
+
+*(Every type, property and value name below is an **illustration of what a vault might define** —
+see R-F. The product ships none of them. **What a test asserts is the SHAPE and the remedy clause**,
+against a fixture schema the test itself declares — not these particular words.)*
 
 | Condition | Message |
 |---|---|
 | Unknown property | `unknown property 'ownr' on record type 'company'; declared: name, status, segment, owner, website, arr` |
-| Unknown enum value | `'Won' is not a value of deal.status; permitted, in order: open, won, lost` |
-| Equality on a `many` property (R-13) | `segment holds many values; use contains` |
+| Unknown enum value | `'Wonn' is not a value of deal.status; permitted: lost, open, won` *(revision 5: "in order" is dropped — R-E makes ordering lexical, so the list is simply the declared set, and `'Won'` is no longer a refusal because R-D resolves it case-insensitively to `won`)* |
+| Ordering operator on a `many` property (R-13) | `segment holds many values; ordering comparisons are not defined over a list — use =, IN or LIKE` |
+| Unsupported SQL construct (FR-022c) | `'BETWEEN' is not a supported operator; supported: =, <>, <, <=, >, >=, LIKE, IN, IS NULL, IS NOT NULL — express a range as two leaves, >= and <=` |
+| Unsupported SQL construct, parameter remedy (FR-022c) | `'JOIN' is not expressible in a filter; use the join parameter to borrow columns through a relation, or group_by to group by one` |
+| Empty `LIKE` pattern (FR-022a) | `a LIKE pattern of '' or '%' matches every record; use IS NOT NULL if that is what you meant` |
 | Third hop | `hops=3 exceeds the limit of 2; run a second vault_find from one of these results` |
-| Candidate cap | `this query selects 24,180 records; the limit is 10,000 — add a filter on status (7 values) or a narrower type` |
+| Candidate cap, row-returning query | `this query selects 24,180 records; the limit is 10,000 — add a filter on status (7 values) or a narrower type. An aggregate-only query (no select, no limit) is exempt` |
 | Aggregate over a refused set | `no total is returned over a refused candidate set` |
-| Cross-currency total | `2 currencies present (GBP, USD); no combined total is returned` |
-| Stale cursor | `that cursor was issued against index generation 8802; the index is now at 8814 — re-run the query` |
+| Bad date format (FR-021d) | `closed_on is '03/04/2026'; the date format is ambiguous and will not be guessed — write 2026-04-03 or 2026-03-04` |
+| Unpadded date (FR-021d) | `closed_on is '2026-9-1'; month and day must be zero-padded — write 2026-09-01` |
+| Integer out of range (FR-012) | `headcount is 9223372036854775808; an integer property holds at most 9223372036854775807 — declare the property as decimal if the value is genuinely larger` |
+| Decimal scale exceeded (FR-013) | `ratio has 140 decimal places; a decimal property carries at most 100. The value is not rounded to fit — shorten it` |
+| Stale cursor | `that cursor was issued against index_epoch 8802; the index is now at 8814 — re-run the query` |
 | Stale record (FR-020c) | `DEAL-0117: the properties index and the note on disk disagree (indexed 3f9a…, on disk 71c4…) — this record is being re-indexed; re-run to confirm` |
 | No manifest entry (FR-020c) | `DEAL-0221: no indexed note at Deals/old.md — the row is orphaned; run vault_describe check_integrity` |
 | Typed query on a SQLite-less build (FR-020h) | `typed filters are unavailable on linux/mipsle: this build has no properties index. Plain-word search and vault_read still work` |
