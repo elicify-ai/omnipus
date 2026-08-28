@@ -139,26 +139,68 @@ sharper than anything this decision had:**
 
 **This does not change D0; it makes D0 TESTABLE, and it says why that was necessary.** D0 already
 forbade shipped record types. What it did not do was reckon with its own prose: **this ADR uses CRM
-vocabulary fourteen times and the implementing specification thirty-three times**, always as
-illustration, and an implementer skimming forty-odd mentions of "deal", "company", "stage" and
-"arr" could reasonably conclude the product knows what those are. **A rule that is stated once and
-then quietly undermined by every example is a rule that will be broken by someone acting in good
-faith.** So:
+vocabulary 135 times and the implementing specification 313 times** — *(corrected in revision 8; see
+the counts note below)* — always as illustration, and an implementer skimming several hundred
+mentions of "deal", "company", "stage" and "arr" could reasonably conclude the product knows what
+those are. **A rule that is stated once and then quietly undermined by every example is a rule that
+will be broken by someone acting in good faith.** So:
 
-- **Every occurrence of `company`, `deal`, `contact`, `lead`, `meeting`, `person`, `status`,
+> **THE COUNTS ARE CORRECTED, revision 8 (spec review round 6, M-26), because revision 7's figures
+> were wrong by roughly an order of magnitude and the understatement was doing work.** Revision 7
+> said *"this ADR uses CRM vocabulary **fourteen** times and the implementing specification
+> **thirty-three** times"*. Counted whole-word, case-insensitively, over the list below:
+> **135 in this ADR and 313 in the specification**; over the subset with no ordinary-English reading
+> (dropping `status`, `stage`, `open`): **90 and 243**. Reproducible with
+> `grep -oiwE 'company|companies|deal|deals|meeting|meetings|status|stage|arr|open|won|lost|prospect|Acme|Northwind|CO-0142|DEAL-0117' <file> | wc -l`.
+> **At those numbers a marker is the weaker instrument, and this ADR says so rather than absorbing
+> it:** the structural answer is to replace the running example vocabulary with something obviously
+> non-domain, which would discharge this rule **by construction** — the same argument this ADR makes
+> for preferring one Go comparator over nine SQL defeats, turned on its own prose. It is **accepted
+> in principle and scheduled as W0's second deliverable** in the specification's §11, with the
+> counts above as its exit criterion. Until then the markers carry it, and this paragraph is the
+> record that we know they carry it less well than a replacement would.
+
+- **Every occurrence of `company`, `deal`, `contact`, `lead`, `meeting`, `status`,
   `stage`, `arr`, `open`, `won`, `lost`, `prospect`, `Acme`, `Northwind`, `CO-0142`, `DEAL-0117`
   and their kin, in this ADR and in the specification, is an ILLUSTRATION OF WHAT A VAULT MIGHT
   DEFINE.** None is shipped, seeded, defaulted to, validated against, or known by name to any
   compiled artifact. **The spec states this in a boxed note before its requirements begin, and
   every table of illustrative strings carries the same marker.**
+- **`person` IS REMOVED FROM THAT LIST, revision 8 (spec review round 6, M-24) — it was FALSE of
+  `person`, and an implementer following the list literally would have deleted a shipped feature.**
+  `person` is one of the **seven property TYPES** D2 declares and FR-004 ships. **Two axes, and they
+  must not be confused:**
+
+  | Axis | Whose vocabulary | Examples | Shipped? |
+  |---|---|---|---|
+  | **Property TYPE names** | **OURS** | `text`, `enum`, `relation`, `date`, `integer`, `decimal`, **`person`** | **YES — all seven** |
+  | Record type names, property names, enum values, id prefixes | **THE VAULT'S** | `company`, `deal`, `status`, `won`, `CO-0142` | **NO — none, ever** |
+
+  `meeting` has the mirror problem in the specification — illustration in one table, contract in
+  another — and is fixed there the same way: it is an **illustration**.
 - **A fresh install has ZERO record types**, zero seeded enum values, zero seeded property names,
   zero seeded views and zero seeded identifier prefixes. A vault with no `.omnipus-vault/records/`
   directory is a working vault of ordinary notes (D1's premise, unchanged).
-- **A denylist test asserts it** over every non-test file of the record packages — spec **FR-004a**
-  and its test 54. **Verified at revision time: the code is already clean.** Zero domain vocabulary
-  outside tests in `pkg/records` and `pkg/knowledge`. **The test exists to keep it that way**, not
-  to repair something — and it is worth having precisely because the documentation drifted from the
-  rule while the code did not.
+- **A test asserts it — and the TEST IS RESPECIFIED and the "verified clean" CLAIM IS WITHDRAWN,
+  revision 8 (spec review round 6, C-10).** Revision 7 required *"a denylist test … over every
+  non-test file of the record packages"* and asserted *"Verified at revision time: the code is
+  already clean."* **The claim does not reproduce.** A whole-word grep over non-test `.go` files in
+  `pkg/records` and `pkg/knowledge` returns **44 hits** — and **the first of them is
+  `pkg/records/doc.go:12`, which is the D0 STATEMENT ITSELF** (*"declares NO record types of its own
+  — no company, no contact, no deal…"*). **A test written to revision 7's words red-lights the build
+  on the sentence asserting the opposite of hardcoding, on the day it lands** — and a test that
+  fails on day one for a reason nobody accepts is a test that gets weakened until it asserts
+  nothing.
+  **The underlying claim is nevertheless TRUE, which is why the fix is to the TEST and not to the
+  code.** All 44 were read: **zero are declared enum values, type names, seeded schemas or default
+  config.** They are doc-comment prose (`doc.go:12`, `invalidate.go:139-141`, `schema.go:1073-1074`,
+  `value.go:304-311`), the word `stage` used 19 times in `pkg/knowledge` for ordinary ADR-067
+  implementation stages, `arr` inside a YAML illustration in `frontmatter.go:22`, and one local
+  variable `lead` in `rename.go:710` meaning *leading whitespace*. **The code ships no domain
+  vocabulary. The grep was the wrong instrument.** The test now asserts what D0 is actually about:
+  **`coreagent.SeedConfig`, the default config and the shipped schema/view directories contain zero
+  record types, zero enum values, zero property names and zero identifier prefixes** — over
+  **declared identifiers and literal data, never over comments**. Spec **FR-004a** and its test 54.
 - Test fixtures may use domain vocabulary, and they do. **Fixtures are excluded by path**, narrowly
   and by name, rather than by a general "except where inconvenient".
 
@@ -198,8 +240,25 @@ properties:
   segment:     { type: enum,   values: [vendor, customer, partner], many: true }
   owner:       { type: person }
   website:     { type: text }
-  arr:         { type: decimal, unit: GBP }   # revision 7: `money` is deleted; a unit is metadata
+  arr:         { type: decimal, scale: 2 }    # revision 8: `unit: GBP` REMOVED — see the note below
 ```
+
+> **`unit: GBP` IS REMOVED FROM THIS EXAMPLE, revision 8 (spec review round 6, m-12), and the
+> reason matters more than the edit.** Revision 7 wrote `arr: { type: decimal, unit: GBP }` in the
+> canonical schema example, in **the same revision that deleted the `money` type** — and **no FR, no
+> wire schema and no test anywhere defines a `unit` key.** It was currency-shaped residue that
+> survived the sweep by being an example rather than a requirement, and a canonical example is
+> exactly where an undefined key becomes a de-facto feature: the next implementer sees it in the
+> ADR's own schema and parses it.
+>
+> **Ruling: `unit` is NOT a schema key.** A vault that wants a unit expresses it the way it
+> expresses everything else — as its own convention, in a property of its own (`arr_unit: { type:
+> enum, values: [GBP, EUR] }`), or in the property's name. **That is D0 working correctly**, and
+> inventing a `unit` key would be the product knowing something about the vault's domain.
+> `scale`, which replaces it above, **is** a real key: it is FR-013's declared decimal scale, it is
+> what makes `180,000.00` render with two places rather than one (the spec's m-10), and it is
+> bounded at 100 by `pkg/records/decimal.go:48`.
+
 
 **Why a file and not a UI:** Notion added schema audit logging in 2026 — Enterprise-only,
 365-day retention, and it does **not capture previous values**. A plain file is diffable by a
@@ -1663,6 +1722,7 @@ trigger rather than a silent change of meaning.)*
 | **R-9 / R-10** | `SELECT 'ACME' LIKE '%acme%';` → **`1`**. `SELECT 'vendors,partner' LIKE '%vendor%';` → **`1`** | **Half of this is now DESIRED** — case-insensitivity is a feature by operator ruling — and the operator vocabulary adopts `LIKE`'s own semantics (O-3, amended). **But SQLite's folding is ASCII-ONLY**, and that is a second, independent argument for the ruling arriving from a direction nobody was looking in — see the Unicode receipt below |
 | **R-11** | `9223372036854775807 + 1` → **REAL**, silently. `1/0` → **NULL**, silently. `unixepoch('bad')` → **NULL**. `SUM` over an empty set → **NULL**. But `SUM` **overflow** → a hard `integer overflow` that aborts the statement. And `CAST('9223372036854775808' AS INTEGER)` → **`9223372036854775807`**, saturated silently | **Five outcomes for one arithmetic, four of them silent.** Revision 6 said *"a SQL error is a third outcome"* and specified catching errors — **which reaches exactly one of the five.** None is reachable now: no arithmetic is emitted, no `CAST` is used to admit a numeric string (range-checking is Go-side, before emission), no date is parsed by SQL. **What survives into the design is narrow and real:** a **store** error — a corrupt index, a closed database — must be caught at the boundary and rendered as a problem row |
 | **R-12** | `SELECT 3 = '3'` → **0** between literals; the same comparison against an INTEGER column → **1**. `'2' > 3` → **1** and **0** respectively. A `BLOB`-affinity column restores literal behaviour | **Revision 6 listed R-12 among the rules, did not list it among the violations, and it is violated** — grill pass 1's C-5. Comparison affinity converts a TEXT operand **only when the other side is a typed column**, so identical values and an identical operator give **opposite answers depending on operand provenance**, and the answer also depends on the DDL. **One comparator means one provenance**, and the rule is satisfied by there being nothing to disagree |
+| **R-8** | **ADDED, revision 8 (spec review round 6, M-6) — this row did not exist, and FIVE places in the specification plus this ADR's own text sent readers to find it.** A `TEXT COLLATE NOCASE` column folds ASCII case, so a relation-**identifier** column declared `NOCASE` makes `CO-0142` and `co-0142` **one key** — two legitimately distinct targets then collide on a `UNIQUE` constraint, which is loud but is a data-loss refusal for a case nobody chose. Verified: over a `NOCASE` column holding `ACME`/`acme`/`Acme`, `WHERE name='acme'` returns **all three** and `COUNT(DISTINCT name)` returns **1** | **Unreachable, and the SPLIT SURVIVES AS A COMPARATOR RULE.** Relation **paths** fold (`cases.Fold()`, full Unicode); relation **identifiers** are compared **byte-exactly by the comparator**, with no folding. **No collation is involved on either side.** *(Revision 7 specified this as two SQLite columns with two collations and enforced it with AC-8.8 — a `BINARY`-collation assertion over emitted DDL — which revision 7 then DELETED as having SQL-side comparison as its only subject. The rule survived and its enforcement did not; the spec's §7 test 63 restores enforcement at the layer that now decides.)* |
 | *(join fan-out — the tenth)* | A record carrying two matching values of a `many` property joins **twice**: `COUNT(*)` → **2**, `SUM(amount)` → **200**, where truth is **1** and **100** | **The worst finding of grill pass 1 and it was not in revision 6 at all.** Aggregation is now Go-side over a set of records, each visited once. **Worth recording because the obvious fix was itself a trap:** `SUM(DISTINCT)` deduplicates on **value**, not row identity, so two distinct records sharing an amount collapse into one — it returned **100** against a truth of 200 while the naive join returned 300. It errs in the direction that *looks* conservative, which makes it the harder wrong answer to catch in review |
 
 **The Unicode receipt, because it decides where the case fold lives.** Across fourteen upper/lower
@@ -1674,11 +1734,26 @@ limitation wearing a different hat. Confirmed structurally as well as behavioura
 compile_options` carries no `ENABLE_ICU`, `icu_load_collation` does not exist, and the binary
 carries `OMIT_LOAD_EXTENSION`. **There is no Unicode-aware option inside SQLite here at all.**
 
-**Go's `strings.ToLower` is Unicode-aware.** So the case-insensitive matching the operator asked for
-is something the comparator can deliver correctly and SQLite cannot deliver at all. **A vault in
-German, Polish, Greek or Turkish would have received case-insensitive matching for its ASCII words
-and silent case-sensitivity for the rest** — a guarantee holding for one alphabet, which is exactly
-the failure class §1.3 catalogues.
+**A vault in German, Polish, Greek or Turkish would have received case-insensitive matching for its
+ASCII words and silent case-sensitivity for the rest** — a guarantee holding for one alphabet, which
+is exactly the failure class §1.3 catalogues. So the case-insensitive matching the operator asked
+for is something the comparator can deliver and SQLite cannot deliver at all.
+
+**AND THE COMPARATOR MUST BE TOLD WHICH FUNCTION, revision 8 (spec review round 6, C-1) — because
+revision 7's answer here was WRONG and it was wrong in the same way as the receipt above.** Revision
+7 said *"Go's `strings.ToLower` is Unicode-aware"* and treated that as settling it. **Unicode-aware
+is not full case folding, and the Go standard library performs only SIMPLE folding.** Executed:
+`strings.ToLower("straße") != strings.ToLower("STRASSE")`, and `strings.EqualFold("straße","STRASSE")`
+is **false** too; `strings.ToLower("ΣΟΦΟΣ")` is `σοφοσ`, not `σοφος`, so the two stdlib functions
+**disagree with each other** on Greek; and `strings.ToLower` collapses Turkish `İ` onto `i`, which is
+a **wrong match** rather than a missing one. **The mechanism is `golang.org/x/text/cases.Fold()`** —
+full Unicode folding, locale-free, stateless and concurrency-safe (`cases.go:86-87`), already an
+indirect dependency at `go.mod:167` with several of its sibling packages already linked into the
+binary, and costing a **measured ≈274 KiB** for the `cases` subpackage itself. Hard Constraint #1 is
+satisfied — no new module, no CGo. **This ADR caught this exact failure class in SQLite and then
+committed it one layer up in Go; the correction is recorded here rather than only in the spec,
+because the wrong sentence is in the ADR's own receipt.** Spec **FR-011a** and **AC-8.9** carry the
+six literal pairs, including the Turkish one asserted as a **negative**.
 
 **What the properties index is still FOR, so this does not read as "delete SQLite".** It **narrows**:
 `type = 'deal'`, `path` prefix within scope, `kind = 'task'`, the relation child table's `rec_id`
@@ -2609,18 +2684,42 @@ its own ADR rather than an implementation note.
 *Added in revision 6:*
 
 - **SQLite's DEFAULT semantics contradict TEN of the comparison rules, and nine of the ten fail
-  silently** (D16.6). ***Revision 7: this is now a REASON, not a cost — the ruling that SQLite
-  narrows rather than decides makes every one of them unreachable. The bullet is kept, restated,
-  because the reasoning is what justifies the ruling.*** `'3' > 2` is **true** in SQL; `NOT (status = 'done')` **drops**
-  every absent row, so FR-008's *"which days did I not meditate?"* returns **zero**; `'ACME' LIKE
-  '%acme%'` is **true**; enums order lexically, so `stage >= qualified` drops `proposal`; and
-  `SUM` adds USD to JPY without complaint. Each is defeatable and D16.6 gives the defeat, but each
-  must be **deliberately** defeated in the query compiler — the correct behaviour is never the
-  default. **This is the largest single correctness cost of D16** and it was absent from revision
-  5 entirely, carried only by the implementing spec (its §8.1). The truth table therefore
-  runs against the **real compiled query path** (AC-8.4), not a Go comparator: after D16.2b the
-  product does not use one for filtering, and a table that passes over an unused comparator proves
-  nothing.
+  silently** (D16.6). ***Revision 7 said "this is now a REASON, not a cost … the bullet is kept,
+  RESTATED" and then left the body unchanged. Revision 8 performs the restatement the note promised
+  (spec review round 6, C-11), because every clause below the note was the REVERSED position and a
+  reader who implemented from this bullet built a SQL query compiler.*** The receipts, kept **as
+  reasons**: `'3' > 2` is **true** in SQL; `NOT (status = 'done')` **drops** every absent row, so
+  FR-008's *"which days did I not meditate?"* returns **zero**; `'ACME' LIKE '%acme%'` is **true**;
+  and SQLite folds **ASCII only**, so a non-English vault gets case-insensitive matching for its
+  ASCII words and silent case-**sensitivity** for the rest.
+
+  **What each of those is now:** an argument for **D16.2b as reversed** — SQLite narrows, the Go
+  comparator decides — and therefore **unreachable**, not defeated. **DELETED from this bullet in
+  revision 8, with the reason in each case:**
+  - *"each must be **deliberately defeated in the query compiler** — the correct behaviour is never
+    the default"* — **there is no query compiler.** This was the single most consequential sentence
+    in the ADR's Consequences section and it instructed the reader to build the thing the ruling
+    deletes.
+  - *"The truth table therefore runs against the **real compiled query path** (AC-8.4), not a Go
+    comparator: after D16.2b the product does not use one for filtering, and a table that passes
+    over an unused comparator proves nothing."* — **exactly inverted.** **The truth table runs
+    against the comparator the product uses (AC-16.6, and the spec's AC-8.4 as reverted).** It is
+    the compiled path that does not exist.
+  - *"`SUM` adds **USD to JPY** without complaint"* — a **money orphan**, in the revision that
+    claims to have swept them. There is no `money` type (D-money), so there is no cross-currency
+    `SUM`.
+  - *"enums order lexically, so `stage >= qualified` drops `proposal`"* — **listed as a VIOLATION
+    when D4 as revised makes lexical ordering THE SPECIFICATION** (ruling R-E: a domain order is a
+    value prefix). It is moved out of the violation list and into D4's own record, where it is a
+    consequence of the design rather than evidence against it.
+
+  **What survives, and it is the strongest form of the argument:** ten default semantics, nine of
+  them silent, is not a list of things to work around — it is the measurement that says the
+  workaround layer should not exist. **This was the largest single correctness cost of D16 under
+  revision 6, and under the ruling it is the largest single argument FOR the ruling.** The
+  implementing specification's §8.1 carries the receipts; **its AC-8.10 and test 39a carry the
+  enforcement**, which is new in its revision 6 and which this ADR now depends on: nothing else in
+  either document can detect a comparison that quietly goes back to SQL.
 - ~~**Four of this ADR's semantics are NOT native SQL, and the translation layer that carries them
   is the risk D16.2 moved rather than removed.**~~ **WITHDRAWN IN REVISION 7 — there is no
   translation layer, because SQL carries none of this ADR's semantics.** The four are recorded
