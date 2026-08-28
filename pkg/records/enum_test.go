@@ -6,7 +6,6 @@ package records
 
 import (
 	"reflect"
-	"sort"
 	"strings"
 	"testing"
 )
@@ -63,7 +62,7 @@ func TestEnum_ClosedAndLexical(t *testing.T) {
 		// the ordinal — or one that did not sort at all — leaves it declared
 		// and fails.
 		values := append([]string(nil), status.PermittedValues()...)
-		sort.Slice(values, func(i, j int) bool { return FoldLess(values[i], values[j]) })
+		SortValuesBySortKey(values)
 		want := []string{"active", "churned", "dormant", "prospect"}
 		if !reflect.DeepEqual(values, want) {
 			t.Fatalf("R-5: an enum sorts lexically; want %v, got %v — the declared order is %v and must NOT be the answer",
@@ -109,7 +108,7 @@ func TestEnum_ClosedAndLexical(t *testing.T) {
 		// assertion is here so the mechanism is verified rather than merely
 		// promised: with the prefix, lexical order IS domain order.
 		prefixed := []string{"3-proposal", "1-lead", "4-won", "2-qualified"}
-		sort.Slice(prefixed, func(i, j int) bool { return FoldLess(prefixed[i], prefixed[j]) })
+		SortValuesBySortKey(prefixed)
 		want := []string{"1-lead", "2-qualified", "3-proposal", "4-won"}
 		if !reflect.DeepEqual(prefixed, want) {
 			t.Fatalf("D4: prefixing is the ONLY way to get a domain order now; want %v, got %v", want, prefixed)
@@ -119,7 +118,7 @@ func TestEnum_ClosedAndLexical(t *testing.T) {
 		// in domain order — which is exactly why the prefix is required. A
 		// reader who doubts the cost is real can see it here.
 		bare := []string{"proposal", "lead", "won", "qualified"}
-		sort.Slice(bare, func(i, j int) bool { return FoldLess(bare[i], bare[j]) })
+		SortValuesBySortKey(bare)
 		if reflect.DeepEqual(bare, []string{"lead", "qualified", "proposal", "won"}) {
 			t.Fatal("the fixture no longer demonstrates the cost: this vocabulary must NOT sort into domain order without a prefix")
 		}

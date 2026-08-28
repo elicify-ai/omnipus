@@ -391,4 +391,3 @@ func TestDecimalString_AbbreviationNamesBothHalvesOfTheValue(t *testing.T) {
 		t.Fatalf("scales %d and %d both render as %q — the abbreviation is not distinguishing values", math.MinInt32, math.MinInt32+1, got)
 	}
 }
-

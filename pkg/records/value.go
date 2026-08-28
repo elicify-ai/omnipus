@@ -6,7 +6,6 @@ package records
 
 import (
 	"fmt"
-	"math"
 	"strings"
 	"time"
 
@@ -151,9 +150,19 @@ func FoldLess(a, b string) bool {
 	return a < b
 }
 
-// FoldCompare is FoldLess as a three-way comparison, for callers that need to
-// feed sort.Slice or a comparator returning -1/0/+1. It is the same total
-// order: folded key first, raw bytes as the tie-break.
+// FoldCompare is FoldLess as a three-way comparison, for callers that need
+// -1/0/+1. It is the same total order: folded key first, raw bytes as the
+// tie-break.
+//
+// NEITHER THIS NOR FoldLess MAY IMPLEMENT THE `<` OPERATOR, and the reason is
+// the tie-break. `<` and `=` must agree: under FR-011a `won = Won` is TRUE, so
+// `won < Won` must be FALSE. FoldLess answers TRUE for that pair, deliberately
+// — a SORT has to resolve the tie or its output is not deterministic, which
+// R-11 and SC-014 both require. An OPERATOR must not invent one.
+//
+// So the split is: an operator compares FOLDED KEYS ONLY and stops there; a
+// sort uses this total order. Using this function for `<` makes `won = Won`
+// and `won < Won` both true at once.
 func FoldCompare(a, b string) int {
 	fa, fb := FoldKey(a), FoldKey(b)
 	switch {
@@ -508,7 +517,7 @@ func parseIntegerValue(p *Property, n Node) (TypedValue, *ValueError) {
 	case !exact:
 		return TypedValue{}, &ValueError{
 			Code:     FindingIntegerOutOfRange,
-			Reason:   fmt.Sprintf("property %q holds %q, which is outside the range of a 64-bit integer (%d to %d); it is refused rather than truncated or widened to a float", p.Name, n.Text, math.MinInt64, math.MaxInt64),
+			Reason:   fmt.Sprintf("property %q holds %q, which is outside the range of a 64-bit integer (%d to %d); it is refused rather than truncated or widened to a float", p.Name, n.Text, MinInteger, MaxInteger),
 			Expected: p.ExpectedShape(),
 			Got:      n.Text,
 		}

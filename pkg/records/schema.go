@@ -8,7 +8,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -293,7 +292,7 @@ func (p *Property) ExpectedShape() string {
 			base = string(p.Type) + ` (a quoted wikilink, e.g. "[[Target]]")`
 		}
 	case TypeInteger:
-		base = fmt.Sprintf("integer (a whole number between %d and %d)", math.MinInt64, math.MaxInt64)
+		base = fmt.Sprintf("integer (a whole number between %d and %d)", MinInteger, MaxInteger)
 	case TypeDecimal:
 		base = fmt.Sprintf("decimal (an exact number, at most %d decimal places)", maxDecimalScale)
 	case TypeDate:

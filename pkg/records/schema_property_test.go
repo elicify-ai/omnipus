@@ -151,9 +151,7 @@ func TestSchema_NewPropertyIndexesEnumValues(t *testing.T) {
 		Name:       "status",
 		Type:       TypeEnum,
 		RecordType: "widget",
-		// Positions left at zero on purpose: FR-010 says position IS the order
-		// values are declared in, so the constructor stamps them.
-		Values: []EnumValue{{Name: "todo"}, {Name: "doing", Group: "open"}, {Name: "done"}},
+		Values:     []EnumValue{{Name: "todo"}, {Name: "doing", Group: "open"}, {Name: "done"}},
 	})
 	if err != nil {
 		t.Fatalf("NewProperty: %v", err)
@@ -164,23 +162,35 @@ func TestSchema_NewPropertyIndexesEnumValues(t *testing.T) {
 	parsed, _ := sc.Property("status")
 
 	for i, name := range []string{"todo", "doing", "done"} {
-		gotPos, ok := built.EnumPosition(name)
+		gotVal, ok := built.ResolveEnum(name)
 		if !ok {
 			t.Fatalf("a value the property itself declares must be in its set; %q was not", name)
 		}
-		wantPos, _ := parsed.EnumPosition(name)
-		if gotPos != i || wantPos != i {
-			t.Fatalf("%q is declared at position %d; built said %d, parsed said %d", name, i, gotPos, wantPos)
+		wantVal, ok := parsed.ResolveEnum(name)
+		if !ok {
+			t.Fatalf("the PARSED property must resolve %q too", name)
 		}
-		if built.Values[i].Position != i {
-			t.Fatalf("EnumValue.Position must mirror the declared order; Values[%d].Position = %d", i, built.Values[i].Position)
+		if gotVal.Name != name || wantVal.Name != name {
+			t.Fatalf("%q must resolve to itself; built said %q, parsed said %q", name, gotVal.Name, wantVal.Name)
+		}
+		if built.Values[i].Name != name {
+			t.Fatalf("declared order must be preserved for reporting; Values[%d].Name = %q, want %q", i, built.Values[i].Name, name)
 		}
 	}
 	if built.Values[1].Group != "open" {
 		t.Fatalf("the constructor must not lose an enum value's lifecycle group; got %q", built.Values[1].Group)
 	}
-	if _, ok := built.EnumPosition("Done"); ok {
-		t.Fatalf("D4: enum matching is EXACT-CASE; `Done` must not resolve to `done`")
+	// REVERSED by ruling R-D. This assertion previously required `Done` NOT to
+	// resolve, on the ground that enum matching was exact-case. It is now
+	// case-INSENSITIVE (FR-011a) and must resolve to the DECLARED spelling —
+	// resolving `Done` to `done` collapses two spellings into one value, which
+	// is not what D4 forbids.
+	resolved, ok := built.ResolveEnum("Done")
+	if !ok {
+		t.Fatal("FR-011a: enum matching ignores case; `Done` must resolve to the declared `done`")
+	}
+	if resolved.Name != "done" {
+		t.Fatalf("resolution must yield the DECLARED spelling, not the caller's; got %q", resolved.Name)
 	}
 	if built.PermittedValues()[0] != "todo" || len(built.PermittedValues()) != 3 {
 		t.Fatalf("PermittedValues must list the declared set in order; got %v", built.PermittedValues())
@@ -197,7 +207,7 @@ func TestSchema_NewPropertyIndexesEnumValues(t *testing.T) {
 	if p.Values[0].Name != "x" {
 		t.Fatalf("NewProperty must copy the caller's values; the property now says %q", p.Values[0].Name)
 	}
-	if _, ok := p.EnumPosition("x"); !ok {
+	if _, ok := p.ResolveEnum("x"); !ok {
 		t.Fatalf("the index must still resolve %q after the caller mutated their own slice", "x")
 	}
 }

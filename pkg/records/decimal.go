@@ -7,6 +7,7 @@ package records
 import (
 	"errors"
 	"fmt"
+	"math"
 	"math/big"
 	"strings"
 )
@@ -279,6 +280,24 @@ func (d Decimal) Int64() (int64, bool) {
 	}
 	return n.Int64(), true
 }
+
+// MinInteger and MaxInteger are the bounds of the `integer` property type
+// (FR-013), and they are DELIBERATELY TYPED int64 rather than used as
+// math.MinInt64 / math.MaxInt64 at each call site.
+//
+// The reason is a portability bug this package actually shipped, not a style
+// preference. math.MinInt64 and math.MaxInt64 are UNTYPED constants, and
+// fmt.Sprintf's %d verb defaults a bare untyped constant to `int` — which is
+// 32 BITS on linux/mipsle, the one shipped 32-bit target. Two call sites
+// naming them directly made `pkg/records` fail to COMPILE there ("overflows
+// int"), on a target no host build and no `go build ./...` on an amd64 or
+// arm64 machine can see. Naming a typed constant instead makes the width part
+// of the identifier, so the class cannot come back by someone writing the
+// obvious thing.
+const (
+	MinInteger int64 = math.MinInt64
+	MaxInteger int64 = math.MaxInt64
+)
 
 // maxInt64Digits is the decimal digit count of math.MaxInt64
 // (9223372036854775807). A magnitude needing more digits than this cannot be an

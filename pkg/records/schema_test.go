@@ -275,7 +275,7 @@ properties:
 schema_version: 1
 type: beta
 properties:
-  status: { type: number }
+  status: { type: integer }
 `)
 		set, report, err := LoadSchemas(root)
 		if err != nil || !report.OK() {
@@ -288,15 +288,15 @@ properties:
 		if ap.Type != TypeEnum {
 			t.Fatalf("alpha.status must be enum, got %q", ap.Type)
 		}
-		if bp.Type != TypeNumber {
-			t.Fatalf("FR-009: beta.status must be number and unrelated to alpha.status, got %q", bp.Type)
+		if bp.Type != TypeInteger {
+			t.Fatalf("FR-009: beta.status must be integer and unrelated to alpha.status, got %q", bp.Type)
 		}
 		if ap.RecordType != "alpha" || bp.RecordType != "beta" {
 			t.Fatalf("a property must know its owning record type; got %q and %q", ap.RecordType, bp.RecordType)
 		}
 
 		// The behavioural consequence: a value valid for one is a fault for the
-		// other. `open` is a permitted alpha status and is not a number.
+		// other. `open` is a permitted alpha status and is not an integer.
 		rec := ParseRecord("beta/one.md", []byte("---\ntype: beta\nstatus: open\n---\n"))
 		rep := ValidateRecord(set, rec, ValidateOptions{})
 		if rep.Valid() {

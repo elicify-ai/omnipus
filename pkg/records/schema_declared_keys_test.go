@@ -17,11 +17,13 @@ import (
 // ---------------------------------------------------------------------------
 // WHY THIS FILE EXISTS
 //
-// yaml.v3 drops a key it has no field for, in silence. `label` and `scale`
+// yaml.v3 drops a key it has no field for, in silence. `label` and a `scale`
 // were both defined by contracts/components/schemas/PropertyDef.yaml and both
 // went nowhere: an author who wrote `label: Status` got no label, no rejection
-// and no warning. `scale`'s `maximum: 12` even matched this package's
-// maxMoneyScale, which made it look verified while nothing read it.
+// and no warning. `scale`'s wire `maximum: 12` even matched a Go constant of
+// the same value, which made it look VERIFIED while nothing read it — a number
+// agreeing with a number is not an enforcement. (`scale` and the type it
+// belonged to are both deleted now; the lesson is why this file exists.)
 //
 // One fix would have been to parse those two keys. That leaves the CLASS open —
 // the third contract key added would land in the same silence. So the parser
@@ -121,8 +123,7 @@ var contractKeyProbes = map[string]contractKeyProbe{
 	"values":   {base: "type: enum", extra: "values: [draft, shipped]"},
 	"to":       {base: "type: relation", extra: "to: company"},
 	"inverse":  {base: "type: relation, to: company", extra: "inverse: deals"},
-	"unit":     {base: "type: number", extra: "unit: minutes"},
-	"scale":    {base: "type: money", extra: "scale: 2"},
+	"unit":     {base: "type: integer", extra: "unit: minutes"},
 }
 
 // contractKeySkips are the keys a behavioural probe cannot express, each with
@@ -291,69 +292,57 @@ func TestSchema_PropertyLabelIsParsed(t *testing.T) {
 	})
 }
 
-// TestSchema_PropertyScaleIsRefused covers the second dropped key.
+// TestSchema_PropertyScaleIsRejected covers the second dropped key.
 //
-// The decision recorded here is that a property-level `scale` is REFUSED, not
-// parsed. Money scale is per-VALUE in this package — declared in the
-// {amount, currency, scale} mapping or inferred from the figure's spelling —
-// and no value-parse path consults its property's declaration. Storing the
-// number and enforcing nothing would be the same silent drop with a getter
-// bolted on: the author would believe every value of the property was held to
-// that scale, and none would be.
-func TestSchema_PropertyScaleIsRefused(t *testing.T) {
-	t.Run("a money property declaring a scale is rejected, naming the key", func(t *testing.T) {
-		_, reason := parseFixtureProperty(t, "type: money, scale: 2")
+// THE DISPOSITION CHANGED WITH THE TYPE, and the change is worth stating rather
+// than quietly editing. `scale` used to be a declKeyRefused entry with its own
+// reason, because it was a property-level declaration for the `money` type and
+// nothing enforced it. ADR-068 D3 deletes that type, so `scale` is now simply
+// an UNKNOWN key: there is no remedy to point the author at, because there is
+// no per-value form to send them to any more.
+//
+// What survives unchanged is the property this whole file exists for — a key
+// the parser does not read is REJECTED BY NAME, never dropped in silence.
+func TestSchema_PropertyScaleIsRejected(t *testing.T) {
+	t.Run("a property declaring a scale is rejected, naming the key", func(t *testing.T) {
+		_, reason := parseFixtureProperty(t, "type: decimal, scale: 2")
 		if reason == "" {
-			t.Fatalf("`scale` must not be accepted while nothing enforces it")
+			t.Fatalf("`scale` must not be accepted while nothing reads it")
 		}
 		if !strings.Contains(reason, "scale") {
 			t.Fatalf("the rejection must name the key the operator has to change; got %q", reason)
 		}
-		// The message has to be actionable, not merely correct: it must point
-		// at the form that DOES work.
-		if !strings.Contains(reason, "amount") || !strings.Contains(reason, "currency") {
-			t.Fatalf("the rejection must show the per-value form that works; got %q", reason)
+		// A rejection that does not say what IS allowed makes the operator go
+		// and read our source. The unknown-key path lists the permitted set.
+		for _, k := range []string{"type", "many", "required", "unit"} {
+			if !strings.Contains(reason, k) {
+				t.Fatalf("the rejection must list what a property declaration DOES carry; %q is missing from %q", k, reason)
+			}
 		}
 	})
 
-	t.Run("the refusal does not depend on the property type", func(t *testing.T) {
-		// `scale` on a non-money property is doubly wrong; it must not be the
-		// case that only money declarations are checked.
+	t.Run("the rejection does not depend on the property type", func(t *testing.T) {
+		// It must not be the case that only numeric declarations are checked.
 		_, reason := parseFixtureProperty(t, "type: text, scale: 2")
 		if reason == "" || !strings.Contains(reason, "scale") {
 			t.Fatalf("`scale` on a text property must be rejected naming the key; got %q", reason)
 		}
 	})
 
-	t.Run("a money property with no scale still loads", func(t *testing.T) {
-		p, reason := parseFixtureProperty(t, "type: money")
+	t.Run("a decimal with no scale still loads, and its bound is the parser's own", func(t *testing.T) {
+		p, reason := parseFixtureProperty(t, "type: decimal")
 		if reason != "" {
-			t.Fatalf("refusing `scale` must not make money undeclarable; rejected: %s", reason)
+			t.Fatalf("rejecting `scale` must not make decimal undeclarable; rejected: %s", reason)
 		}
-		if p.Type != TypeMoney {
-			t.Fatalf("Type = %q, want money", p.Type)
+		if p.Type != TypeDecimal {
+			t.Fatalf("Type = %q, want decimal", p.Type)
 		}
-	})
-
-	t.Run("a money VALUE may still declare its own scale", func(t *testing.T) {
-		// The mechanism the refusal points the operator at has to actually
-		// work, or the message is a dead end.
-		rec := ParseRecord("a.md", []byte("---\ntype: fixture\namt: {amount: 34998, currency: SGD, scale: 2}\n---\n"))
-		sc, rej := ParseSchema("fixture.yaml", []byte("schema_version: 1\ntype: fixture\nproperties:\n  amt: {type: money}\n"))
-		if rej != nil {
-			t.Fatalf("fixture schema rejected: %s", rej.Reason)
-		}
-		p, _ := sc.Property("amt")
-		node, ok := rec.Frontmatter.Get("amt")
-		if !ok {
-			t.Fatalf("the fixture record has no `amt`")
-		}
-		tv, verr := ParseValue(p, node)
-		if verr != nil {
-			t.Fatalf("the per-value form the refusal recommends must parse: %v", verr)
-		}
-		if got := tv.Money.String(); got != "349.98 SGD" {
-			t.Fatalf("{amount: 34998, scale: 2} is 349.98 SGD; got %s", got)
+		// FR-013: the bound is maxDecimalScale, and it is enforced per VALUE.
+		// The retired 12-place, currency-shaped bound must NOT have been
+		// inherited — 20 decimal places is past 12 and well inside 100.
+		node := Node{Kind: KindScalar, Text: "0.12345678901234567890"}
+		if _, verr := ParseValue(p, node); verr != nil {
+			t.Fatalf("FR-013: a decimal must carry far more than twelve places; %q was refused: %v", node.Text, verr)
 		}
 	})
 }
@@ -475,9 +464,10 @@ func TestSchema_EnumValueLabelIsParsed(t *testing.T) {
 	if p.Values[1].Label != "" || p.Values[1].Name != "shipped" {
 		t.Fatalf("the short form must still work: %+v", p.Values[1])
 	}
-	// Ordering is still Position/EnumPosition's job, and a label is not part of it.
-	if i, ok := p.EnumPosition("shipped"); !ok || i != 1 {
-		t.Fatalf("EnumPosition(shipped) = %d, %v; want 1, true", i, ok)
+	// Membership is ResolveEnum's job, and a label is not part of it.
+	v, ok := p.ResolveEnum("shipped")
+	if !ok || v.Name != "shipped" {
+		t.Fatalf("ResolveEnum(shipped) = %+v, %v; want the declared value, true", v, ok)
 	}
 }
 
