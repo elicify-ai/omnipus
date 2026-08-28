@@ -472,9 +472,17 @@ quoted and unquoted scalars, and nested sub-records.
 
 **D14.1 — `edit` and `delete` are UNBUILT PRIMITIVES and each needs its own FR.**
 
-*New in revision 5.* D15.3 lists `vault_edit` and `vault_restructure` operations in compact
-tables, and a reader skimming those tables will reasonably assume they are relabellings of
-things that exist. **Two of them are not.** Verified against the tree:
+*New in revision 5; framing corrected in revision 6.* D15.3 lists `vault_edit` and
+`vault_restructure` operations in compact tables, and a reader skimming those tables will
+reasonably assume they are relabellings of things that exist. **Two of them are not.**
+
+> **Revision 6:** revision 5's version of this paragraph warned against misreading a table
+> row — `replace_body` — that its own table did not contain. `vault_edit`'s operation list read
+> *"create, set_property, append_section, link"*. So a primitive this ADR requires appeared in no
+> tool at all, and the warning pointed at nothing. `replace_body` is now listed in D15.3. The
+> other unbuilt primitive, `trash`, **was** in the table all along.
+
+Verified against the tree:
 
 | Exists today | Where |
 |---|---|
@@ -914,18 +922,112 @@ addition, and the question stopped being asked.
 
 **On the dependency question, which is the one a reader will check first:**
 `modernc.org/sqlite v1.46.1` is a **direct dependency already** — `go.mod:64`, in the main
-require block, not the indirect one. It is linked into the binary today for WhatsApp and Matrix
-session storage. So this is **no new runtime dependency, no CGo, and the single-binary
-constraint (Hard Constraint #1, #2) is preserved.**
+require block, not the indirect one. So this is **no new runtime dependency, no CGo, and the
+single-binary constraint (Hard Constraint #1, #2) is preserved.**
+
+**It is linked into the binary today by two channels, and revision 6 cites both** — revision 5
+asserted this without a citation, in the one decision where its own verification standard mattered
+most:
+
+- **WhatsApp**, via `whatsmeow`: `pkg/channels/whatsapp_native/whatsapp_native.go:1`.
+- **Matrix**, directly: `pkg/channels/matrix/matrix.go:31` imports `_ "modernc.org/sqlite"`,
+  `matrix.go:43` names the driver `sqliteDriver = "sqlite"`, and `matrix.go:343` opens it with
+  `sql.Open(sqliteDriver, connStr)` for the E2EE crypto store.
+
+> **REJECTED, in part — round-5 review M-24.** The review's fix was *"cite it or drop `and
+> Matrix`"*, on the grounds that `CLAUDE.md:62` says whatsmeow only and `channel_matrix.go:21-23`
+> mentions SQLite only in a build-unavailability context. **The claim is true and the citation is
+> the fix; dropping it would have made the ADR less accurate, not more.** `CLAUDE.md:62` is the
+> stale document here — which D16.4 already schedules for correction. This is worth marking
+> because "an uncited claim" and "a false claim" are different defects with different remedies,
+> and revision 5 committed the first, not the second.
+
+**D16.2a — Platform posture. Hard Constraint #4, addressed rather than assumed.**
+
+*New in revision 6. Revision 5 said nothing about this, which was the review's C-3 and is a real
+gap: making the properties index depend on SQLite means the record layer cannot exist wherever
+SQLite cannot build, and "it doesn't compile" is not an answer an operator can act on.*
+
+`modernc.org/sqlite` **cannot build on three targets**, and the repo already documents each:
+
+| Target | Evidence |
+|---|---|
+| `linux/mipsle` (softfloat) | `pkg/gateway/channel_matrix.go:20-22` — *"modernc.org/sqlite/modernc.org/libc also lacks a working build path for our mipsle + softfloat target"* |
+| `netbsd/*` | `channel_matrix.go:23-25` — *"modernc.org/sqlite v1.46.1 fails to compile due to broken generated mutex code on NetBSD"* |
+| `freebsd/arm` | `channel_matrix.go:26-28` — *"modernc.org/libc v1.67.6 fails to compile due to broken generated 32-bit FreeBSD code"* |
+
+Both existing consumers are gated against exactly that set:
+`whatsapp_native.go:1` is `//go:build !lite && !mipsle && !netbsd && !(freebsd && arm)`;
+`channel_matrix.go:1` is `//go:build !mipsle && !netbsd && !(freebsd && arm) && (goolm || cgo)`.
+
+**Three consequences, each stated so it can be argued with:**
+
+1. **`-tags lite` KEEPS records.** The `lite` tag drops whatsmeow only. Matrix is not `lite`-gated,
+   and `make build-lite` builds with `$(GO_BUILD_TAGS),lite` = `goolm,stdjson,lite`
+   (`Makefile:205-213`), so SQLite is still linked. *A reasonable reader assumes the opposite —
+   `lite` sounds like it drops the heavy dependency — so it is worth stating outright.*
+2. **Exactly one SHIPPED binary lacks SQLite: `linux/mipsle`.** It is the only Makefile target
+   built with `GO_BUILD_TAGS_NO_GOOLM` (`Makefile:210`, `:234`), which drops Matrix as well as
+   WhatsApp. `netbsd` and `freebsd/arm` are **not shipped at all** by `make build-all` — they are
+   source-buildable targets, so the exposure there is a person compiling from source, not a
+   release artifact.
+3. **On a target without SQLite, records are UNAVAILABLE and say so.** The record layer degrades
+   the way ADR-067's channels already do: a build-tagged stub registers, the gateway boots, and
+   **every `vault_*` call that needs the properties index returns a refusal naming the platform**
+   — never an empty result, which would be D13's headline failure. `vault_read` and the plain-text
+   half of `vault_find` keep working, because they resolve through bleve; typed filters, relation
+   joins, grouping and aggregation do not. The precedent is
+   `pkg/channels/whatsapp_native/whatsapp_native_stub.go`, whose header states the same posture
+   for the same reason: *"REST callers use this to know native WhatsApp is unavailable on this
+   build/arch and must NOT offer it."*
+
+**This is a product decision, and it is being made here rather than discovered in a build
+failure:** records are a feature of the SQLite-capable builds. Putting them on `linux/mipsle` —
+a softfloat router-class target — would mean a second storage backend for one embedded platform,
+which is a worse trade than an honest refusal. **W1 owns the stub and the refusal string.**
 
 **The properties index is DERIVED and DISPOSABLE.** Delete it and it rebuilds from the notes.
 **Notes remain the sole source of truth** — this is D8's no-lock-in rule and D9's
 never-store-derived-values rule applied to the store itself. Nothing is in SQLite that is not
-reconstructible from Markdown.
+reconstructible from Markdown. *(This is also what makes D16.2a survivable: a vault carried from
+a SQLite-capable machine to `linux/mipsle` loses a capability, never data.)*
 
 What it buys that Go-over-bleve does not: **joins, `OR`, `GROUP BY` and aggregates, without our
-writing a query engine.** It answers §3.6 without a separate aggregation store, because it *is*
-the aggregation store, folded into the design rather than bolted beside it.
+writing a general expression evaluator.** It answers §3.6 without a separate aggregation store,
+because it *is* the aggregation store, folded into the design rather than bolted beside it.
+
+**D16.2b — Which store answers a filter. One sentence, because revision 5 never gave it.**
+
+> **The properties index answers every typed predicate — membership, filtering, joining,
+> grouping, aggregation. bleve answers text relevance, and nothing else.**
+
+D21.2's fielded indexing (*"property keys, property values… as distinct fields"*) exists so that
+**free-text search over frontmatter works** — so that searching the word `prospect` finds a note
+whose frontmatter says `status: prospect`, which today it does only by accident, as loose body
+prose (D21.2). It is **not** a second typed-filter path, and `vault_find` never consults it for
+one. Revision 5 decided both in the same revision without either referencing the other, which
+left three generations able to disagree instead of two.
+
+**D16.2c — This resolves against FR-021, and the spec has already moved.**
+
+Revision 5's D16.2 contradicted the implementing spec's FR-021 (*"filtering, grouping and
+aggregation MUST be evaluated in Go over the retrieved candidate set"*) without noticing, while
+D21.5 built its tokenizer-hazard argument on that same requirement.
+
+> **REJECTED, in part — round-5 review C-4's tail.** The review states *"`spec:274-275` still
+> marks FR-020/FR-020a **BLOCKED on ADR-068 D16's spike**"*, *"`spec:20` still asserts
+> per-property fields are impossible"*, and *"No wave owns updating the spec."* **All three were
+> true of the commit the review read (`b4a957e1`) and are false of the tree now.**
+> `vault-records-spec-2026-08-25.md` is at **Draft revision 3**, realigned to ADR-068 revision 5
+> after it committed: FR-020 and FR-020a are unblocked and respecified (`spec:460-461`), FR-021 is
+> **explicitly marked MEANING CHANGED** to *"evaluated in the properties index, over typed
+> columns"* (`spec:468`), and the spec carries a whole "FRs whose meaning changed, and what cited
+> them" table (`spec:20-25`) built for exactly this. The review was reading a stale target, which
+> is a normal hazard of a moving branch and not a fault in the review.
+
+So the resolution is **FR-021 changes, and it already has.** What remains for this ADR is to say
+so, and to record the one thing the spec's own note gets right that revision 5 missed: **the
+tokenizer hazard survives the change.** D21.5 is re-derived on that basis below.
 
 **D16.3 — This overrides the spike's stated recommendation. The grounds, stated plainly.**
 
