@@ -1607,9 +1607,9 @@ DEAL-0161  Acme training package   status open   arr  88,000.00   company [[Acme
 DEAL-0134  Acme platform add-on    status open   arr  70,000.00   company [[Acme Ltd]]: status active
 DEAL-0140  Acme support uplift     status open   arr  62,000.00   company [[Acme Ltd]]: status active
 DEAL-0102  Northwind pricing pilot status open   arr  58,000.00   company [[Northwind]]: status prospect
-… 5 more rows
+… 5 more rows (57,000.00 · 56,000.00 · 55,000.00 · 54,000.00 · 53,000.00)
 
-TOTALS: sum(arr) = 673,000.00 over 12 of 12 rows
+TOTALS: sum(arr) = 1,051,000.00 over 14 of 14 evaluated rows (12 shown)
 
 PROBLEMS (3)
   DEAL-0052  arr is '50k' where a decimal is required — write 50000
@@ -1623,6 +1623,45 @@ NEXT
   fix        vault_read path="Deals/DEAL-0052.md"   then vault_edit set_property arr=50000
 ```
 
+**THE FIXTURE IS PUBLISHED, revision 6 (review round 6, M-40), because a normative worked example
+whose arithmetic cannot be checked is not normative.** §7 test 25 *"diffs against §4.2's literal
+example"*, and §4.2's annotation table certifies it line by line — so the numbers have to be
+derivable, not asserted. The fourteen evaluated `arr` values, in the `desc` order the query asks
+for:
+
+| # | Record | `arr` | State |
+|---|---|---|---|
+| 1–7 | `DEAL-0117`, `-0155`, `-0121`, `-0161`, `-0134`, `-0140`, `-0102` | 180,000 · 120,000 · 95,000 · 88,000 · 70,000 · 62,000 · 58,000 | **rendered in full above** — subtotal **673,000** |
+| 8–12 | five more | 57,000 · 56,000 · 55,000 · 54,000 · 53,000 | **shown but elided** by the byte budget's row cap — subtotal **275,000** |
+| 13–14 | two more | 52,000 · 51,000 | **evaluated, NOT shown** — beyond the response byte budget (FR-127) — subtotal **103,000** |
+| 15–17 | `DEAL-0052`, `-0088`, `-0093` | — | **selected but NOT evaluable** — the three in `PROBLEMS` |
+
+**17 selected · 3 unevaluable · 14 evaluated · 12 shown.** `sum` over the **evaluated** set is
+`673,000 + 275,000 + 103,000` = **1,051,000.00**; over the **shown** set it would be **948,000.00**.
+
+**Two defects in revision 5's example are fixed by that table, and both were real.**
+1. **M-40 — the total was arithmetically impossible.** The seven rendered rows sum to exactly
+   673,000, revision 5 then said *"… 5 more rows"* under a filter of `arr >= 50000`, and gave the
+   12-row total as **673,000**. The five hidden rows must contribute at least 250,000, so the stated
+   total was **less than the rows it claimed to cover**. Nothing in the document could catch it,
+   because the fixture was never written down.
+2. **M-39 — `TOTALS` was page-scoped, which is the exact defect FR-125a exists to remove.** FR-125a:
+   *"An aggregate MUST be computed over the **full evaluated set**, never over the rendered page …
+   and a test asserts [the two counts] are computed from different numbers."* Revision 5's header
+   said 14 evaluated and its total said `over 12 of 12 rows` — **the same number twice**, so the
+   test FR-125a mandates could not have failed. **They now differ (14 vs 12, 1,051,000 vs 948,000),
+   which is what makes the assertion capable of failing.**
+
+**m-10 — the rendering rule for a `decimal`, stated rather than inherited from money.** Revision 5
+rendered `arr` as `180,000.00` — two fixed decimal places on a `decimal` property with **no declared
+scale**, which is currency-shaped formatting that outlived the currency. **The rule:** a `decimal`
+renders at its property's **declared `scale`** where the schema declares one, and otherwise **at the
+value's own scale as written in the note** (FR-046's render-what-the-file-says principle). This
+example's fixture schema declares `arr: { type: decimal, scale: 2 }`, which is what makes
+`180,000.00` correct here — **and it is a property of this fixture, not of `decimal`.** Thousands
+separators are a rendering choice of the compact-text projection (FR-072) and never part of a
+stored or compared value.
+
 | Line | Required by | Why it is there and not elsewhere |
 |---|---|---|
 | `COMPLETE:` first | FR-121 | The verdict precedes the evidence, so no conclusion forms before the caveat arrives. |
@@ -1630,7 +1669,7 @@ NEXT
 | `INDEX:` freshness | FR-020c | Freshness is **per returned record**, not per index (ADR-068 D16.5): each row's `source_hash` is compared against **the bleve document's stored `source_hash`** (corrected, revision 6, C-2 — revision 5's annotation named `ManifestEntry.Hash`, which FR-020c removes from the query path). A record that fails moves to `PROBLEMS` and the verdict becomes `no`. The count is an assertion, not decoration — and per FR-020c1 it covers **what the query returned, not what it did not**. |
 | Rows | FR-127 | ~200–320 **bytes** each; the row count shown is what the budget allowed, and the shortfall is in the header. |
 | `company [[Acme Ltd]]: status active` | FR-124 | Borrowed, visibly. It is not a `deal` property and must never render as one. |
-| `TOTALS:` | FR-125 | **REWRITTEN, revision 5.** Scoped in the same sentence as the number — `over 12 of 12 rows` — so a reader can see the total covers every rendered row. *Revision 4's line read `sum(arr) = GBP 465,000.00 over 5 of 12 rows — GBP only; 7 rows are USD and are not included`, which was the grill's C-9: §4.1.2's refusal table said a cross-currency total returns **nothing** while this artifact returned **one**, and both were labelled contract with a test behind them. Under operator ruling 1 the contradiction is **dissolved rather than adjudicated** — there is no currency, so neither artifact has a subject.* **The scope clause survives and is the load-bearing half:** a total that does not say what it covers is a bare number, which FR-125 forbids. **And it MUST be computed over the full evaluated set, never the rendered page** (FR-125a) — revision 4's example scoped its total to 12 shown rows while the header said 14 were evaluated, which is a page-scoped number labelled a total. |
+| `TOTALS:` | FR-125, **FR-125a** | **CORRECTED TWICE, revision 6 (review round 6, M-39 and M-40).** Scoped in the same sentence as the number — `over 14 of 14 evaluated rows (12 shown)` — so a reader can see the total covers every EVALUATED row. *Revision 4's line read `sum(arr) = GBP 465,000.00 over 5 of 12 rows — GBP only; 7 rows are USD and are not included`, which was the grill's C-9: §4.1.2's refusal table said a cross-currency total returns **nothing** while this artifact returned **one**, and both were labelled contract with a test behind them. Under operator ruling 1 the contradiction is **dissolved rather than adjudicated** — there is no currency, so neither artifact has a subject.* **The scope clause survives and is the load-bearing half:** a total that does not say what it covers is a bare number, which FR-125 forbids. **And it MUST be computed over the full evaluated set, never the rendered page** (FR-125a) — revision 4's example scoped its total to 12 shown rows while the header said 14 were evaluated, which is a page-scoped number labelled a total. |
 | `PROBLEMS` | FR-025, FR-026, FR-123 | Each line is one record, one reason, one fix. |
 | `NEXT` | FR-126 | Four addressable calls; the loop continues without the model inventing arguments. |
 
