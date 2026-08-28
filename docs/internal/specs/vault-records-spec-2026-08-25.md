@@ -827,7 +827,12 @@ no new runtime dependency, no CGo, and Hard Constraints #1 and #2 hold.
 - **FR-040b** A scalar write targeting a key whose current value spans multiple lines MUST be refused and the file left unmodified, because the existing key-splice removes continuation lines and would silently delete the value.
 - **FR-041** A write MUST leave the file byte-identical outside the patched span.
 - **FR-042** A write violating the schema MUST be rejected with the expected shape named, leaving the file unmodified.
-- **FR-043** A write MUST carry ADR-067 D14's version token; a stale token MUST be refused and the refusal audited.
+- **FR-043** **SCOPED, revision 5.** A **`vault_edit`** write against an existing file MUST carry ADR-067 D14's version token; a stale token MUST be refused and the refusal audited. *Previously unqualified, which contradicted FR-018a (which exempts `vault_configure`) and §4.1.5's own parameter table. **The two exceptions are named here rather than left implicit:** `vault_configure` (FR-018a, AC-C3) and `vault_restructure` (§4.1.5, AC-X3, ADR-068 AC-15.5d) declare no `expect_version`, on the same ground — a single-file token cannot honestly guard a cascade. `vault_edit`'s `create` is a third case and needs no token, there being no prior version to compare against.*
+- **FR-043a** **NEW, revision 5 — `vault_configure` had NO concurrency control at all, and the refusal it relied on is a check-then-write race.** FR-018a's argument for removing `expect_version` is sound as far as it goes, but it removed the protection a token *can* give and put nothing in its place: **two agents concurrently issuing `create_record_type company` both pass the "already declared" check and both write `.omnipus-vault/records/company.yaml` — a silent lost update on the file that defines the type system, with no error, no detection, and an audit trail showing two successful writes and no anomaly.** FR-003's duplicate-type protection does not help, because `create_record_type` writes one path per type so the collision is *within* one file rather than across two; and FR-037's cross-process flock covers `.seq` only. The requirement is:
+  - **`create_record_type` MUST create its file with `O_EXCL`.** A second concurrent create loses the race and receives FR-016's "already declared" refusal, which is the correct answer and is now produced by the filesystem rather than by a check that can be overtaken.
+  - **`edit_record_type`, `delete_record_type`, `write_view` and `delete_view` MUST use a content-hash compare-and-swap over the file they write**, refusing on mismatch with the current hash named. **This is documented as guarding THE FILE and explicitly NOT the cascade** — which is honest, and is not the thing FR-018a rejects. FR-018a rejects a token that *claims* to guard a change to every note declaring the type; a CAS that says "this schema file changed under you" claims exactly what it delivers.
+  - **It is not exposed as a caller parameter.** The hash is read and re-checked inside the write, so no `expect_version` appears in the tool schema (AC-C3 stands) and no caller has to hold one.
+  - **AC-C7** — two concurrent `create_record_type` calls for one type produce **one** file and **one** refusal, never two writes. **AC-C8** — an `edit_record_type` whose file changed between read and write is refused naming the current state, and the file is unmodified.
 - **FR-044** Every mutating `vault_*` tool MUST emit an audit entry per ADR-067 D19, named per FR-077.
 - **FR-045** Relations MUST be modified through distinct add, remove and replace operations; replace MUST be named explicitly.
 - **FR-046** Derived values MUST NOT be written into frontmatter.
@@ -1181,9 +1186,25 @@ The only tool permitted to change a file the caller did not name.
 
 | `op` | Additional parameters | Cascade |
 |---|---|---|
-| `rename` | `path`, `new_name`, `expect_version` | Inbound wikilinks in N notes are rewritten (ADR-067 D10). |
-| `move` | `path`, `dest`, `expect_version` | Same. |
-| `trash` | `path`, `expect_version` | Inbound links **cannot** be repaired — FR-048. |
+| `rename` | `path`, `new_name` | Inbound wikilinks in N notes are rewritten (ADR-067 D10). |
+| `move` | `path`, `dest` | Same. |
+| `trash` | `path` | Inbound links **cannot** be repaired — FR-048. |
+
+> **`expect_version` is REMOVED from all three, revision 5 — the table and AC-X3 said opposite
+> things and the table was wrong.** Revision 4 declared `expect_version` on every row above while
+> AC-X3 in the same section asserted *"`vault_restructure` declares **no** `expect_version` on any
+> cascading op that cannot honour it"* — and **every** operation of `vault_restructure` is a
+> cascading operation, that being the tier's definition. ADR-068 AC-15.5d sides with AC-X3
+> (*"a test asserts no `expect_version` parameter is declared on either"*), and today's shipping
+> code already behaves that way: neither `RenameTool.Parameters`
+> (`pkg/knowledge/authoring_tools.go:852-871`) nor `MoveTool.Parameters` (`:904-927`) declares the
+> field. **The table is corrected to match.** A single-file content hash cannot honestly guard a
+> change whose blast radius is N notes, and a compare-and-swap that guards one of the things it
+> affects is worse than none, because it reads as a guarantee.
+>
+> **FR-043 is scoped in the same change**, because as revision 4 wrote it — *"A write MUST carry
+> ADR-067 D14's version token; a stale token MUST be refused"*, unqualified — it directly
+> contradicted FR-018a's exemption for `vault_configure` and now this table too.
 
 *(Revision 4: `edit_record_type` and `delete_record_type` are **removed from this tool** and are
 `vault_configure` operations — FR-017. They cascade in **meaning** (C-B), not in bytes (C-A), and
@@ -1258,8 +1279,9 @@ asserts them.
 | Type does not exist (FR-017) | `no record type 'compnay' is declared; declared types: company, deal, meeting, person` |
 | Schema missing `schema_version` (FR-002) | `schema for 'company' has no schema_version; add schema_version: 1` |
 | Two files declare one type (FR-003) | `record type 'deal' is declared in .omnipus-vault/records/deal.yaml and .omnipus-vault/records/deals.yaml; delete one` |
-| Unknown property type (FR-004) | `property 'closed' declares type 'boolean'; permitted: text, enum, relation, date, number, money, person` |
-| Enum with no declared order (FR-010) | `enum property 'status' must declare its values in order; sorting follows declared position, not spelling` |
+| Unknown property type (FR-004) | `property 'closed' declares type 'boolean'; permitted: text, enum, relation, date, integer, decimal, person` *(revision 5: `number` and `money` are gone, `integer` and `decimal` are in — FR-004)* |
+| ~~Enum with no declared order (FR-010)~~ | **DELETED, revision 5 (operator ruling R-E).** Declaring an enum in any order is now valid; ordering is lexical and a domain order is expressed by prefixing the values. |
+| Integer property declaring a scale (FR-012) | `property 'headcount' declares type integer and scale 2; an integer property has no scale — declare it as decimal` |
 | A cascading-in-bytes op sent here (C-A) | `rename writes notes you did not name; use vault_restructure` |
 | A one-file note edit sent here | `set_property writes one note; use vault_edit` |
 | Version token supplied (FR-018a) | `vault_configure takes no expect_version: a single-file token cannot guard a change to every note declaring this type. Re-read with vault_describe and re-send` |
