@@ -113,9 +113,27 @@ Parallel fixers, then full CI. Iterate until every job passes. **Real defects, n
 
 ## Standing rules for every agent
 
-1. **Mutation-verify every test.** Break the thing it guards, watch it fail, restore, confirm green.
+1. **Mutation-verify every test — and when the test is a GUARD, mutate PRODUCTION code, not a fixture.**
+   Break the thing it guards, watch it fail, restore, confirm green. **A guard can pass every fixture
+   and still be blind to the exact bug it exists to catch**, because fixtures are written to match the
+   author's mental model and are therefore minimal — real code is not.
+   *Worked example, Stage 1.* The caller guard for the properties-index refusal
+   (`pkg/records/propindex_caller_guard_test.go`) first asked *"does the error name appear in any
+   return of the enclosing function"*. Nine synthetic fixtures passed. Mutating a **real** call site
+   — `pkg/records/propindex/sqlite.go`'s `Open`, guard clause changed to `return nil, nil`, the exact
+   FR-020h bug — left the guard **silent**: `Open` reuses `err` for its later `sql.Open` failure, so a
+   legitimate return forty lines below covered the swallowed branch. No fixture would ever carry that
+   incidental reuse. The rule is now branch-scoped.
+   **Cheapest check: apply the mutation to a copy of a real caller, never only to a fixture you wrote.**
+   *(This belongs in `docs/internal/false-green-patterns.md`, which is on the release lineage and not on
+   this branch — fold it in when the two meet.)*
 2. **Capture exit codes without a pipe** — `cmd > log 2>&1; echo "exit=$?"`.
 3. **Commit incrementally.** This machine has slept mid-write five times today and killed four agents at the research→write boundary.
 4. **Never run the full Go suite** — it OOMs. Build tags `goolm,stdjson` are mandatory.
 5. **Author as the human**, no agent co-author trailer — the CLA gate hard-fails on it.
 6. **No deferrals.** A finding is fixed or it is a stated open risk with a reason. Never "later".
+7. **A guard that cries wolf gets disabled — so pin the false positives too.** Over-tightening is the
+   obvious over-correction to rule 1 and is its own defect: the same Stage 1 guard's first
+   branch-scoped rule flagged `err := Require(...); return nil, err`, which propagates correctly.
+   Every guard needs **negative** fixtures — correct shapes asserted NOT to fire — or the next person
+   it trips spuriously will delete it rather than debug it.

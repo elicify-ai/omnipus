@@ -463,7 +463,7 @@ func TestPropertyIndexGuard_NoCallerSwallowsTheRefusal(t *testing.T) {
 			"call line — it is greppable on purpose, so keep it rare.",
 			v.Pos, v.Caller, v.Reason, guardEscapeComment)
 	}
-	t.Logf("scanned %d non-test Go files; %d contain a %s call site; %d violations",
+	t.Logf("scanned %d non-test Go files; %d contain a %s call site; %d violation(s)",
 		scanned, withCalls, guardFuncName, len(violations))
 }
 
