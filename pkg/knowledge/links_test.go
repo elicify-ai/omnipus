@@ -663,14 +663,21 @@ var allowedToolsSelectors = []string{
 	"CategoryMemory",    // a category constant
 	"ErrorResult",       // constructs a ToolResult
 	"MemoryRateLimiter", // the limiter type reused by FR-055
-	"ScopeGeneral",      // a scope constant
-	"SilentResult",      // constructs a ToolResult
-	"Tool",              // the interface being implemented
-	"ToolAgentID",       // reads the calling agent id out of the context
-	"ToolCategory",      // a type
-	"ToolResult",        // the result type
-	"ToolScope",         // a type
-	"ToolWorkspaceID",   // reads the calling workspace id out of the context
+	// NewToolResult wraps a string in a ToolResult and does nothing else
+	// (pkg/tools/result.go). vault_describe needs it because its response is
+	// COMPACT TEXT the model must SEE (FR-072), where SilentResult's content
+	// is withheld from the transcript. Reviewed against this list's own rule:
+	// it takes a string, returns a struct, and touches no provider, no
+	// registry and no client.
+	"NewToolResult",
+	"ScopeGeneral",    // a scope constant
+	"SilentResult",    // constructs a ToolResult
+	"Tool",            // the interface being implemented
+	"ToolAgentID",     // reads the calling agent id out of the context
+	"ToolCategory",    // a type
+	"ToolResult",      // the result type
+	"ToolScope",       // a type
+	"ToolWorkspaceID", // reads the calling workspace id out of the context
 }
 
 // TestKnowledge_NoLanguageModelInTheGraphPath is spec test 33 (US-11 AS-4,
