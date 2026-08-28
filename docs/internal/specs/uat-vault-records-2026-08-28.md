@@ -253,3 +253,192 @@ you mark the rest **Blocked — feature absent** instead of failing them.*
 `knowledge_*` names**. Seeing all fifteen at once is a normal mid-flight state today and is
 **not** a finding *yet* — but record the counts, because "the old nine were never removed" is
 a shipped defect and someone has to be the one who noticed.
+
+---
+
+## Part A — The library, and every defect the last round found
+
+*These run whatever state the record layer is in. Five of the eight are re-runs of confirmed
+findings from 2026-08-27; they are here because a fixed defect that comes back is the most
+expensive kind, and because three of them are the exact traps that made the last round's own
+test fixtures silently wrong.*
+
+### Case A-1 — Mount a vault and watch it index
+
+| Step | Do this | Expect |
+|---|---|---|
+| A-1.1 | Go to **Library** | Loads with no console error |
+| A-1.2 | Mount **Vault Alpha** (`/tmp/uat-vault-alpha`) | The mount is accepted |
+| A-1.3 | Watch the screen **without refreshing** | Indexing progress appears **on its own**, within a few seconds, and advances |
+| A-1.4 | Wait for it to finish | Progress reaches completion, and a note count is shown that is plausible for the folder |
+
+**Fail if:** progress never appears; progress appears only after a manual refresh; the count is
+zero for a folder that clearly has notes; you must restart the app to make indexing start; or
+there is no note count anywhere in the UI.
+
+*Previous round: **FAIL** (F2). Indexing worked; the progress display never appeared, at any
+vault size, and the banner permanently read "No indexing progress has arrived since you opened
+it". There was no note count anywhere.*
+
+### Case A-2 — A folder that is not a knowledge base must say so
+
+*Why this matters: this is the defect that made the previous round's own fixtures wrong. A
+plain folder mounts, gets a `MOUNTED` badge, is counted in the mount total, and indexes
+**nothing** — and the only signal is the absence of two things you would have to already know
+to look for.*
+
+| Step | Do this | Expect |
+|---|---|---|
+| A-2.1 | Mount **Vault Gamma** (`/tmp/uat-vault-gamma`, no `.obsidian`) | Either the mount is refused with a message saying what is missing, **or** it is accepted and the UI says plainly, before or immediately after mounting, that this folder will not be indexed and what would make it a knowledge base |
+| A-2.2 | Look at the Gamma row in the mount list beside the Alpha row | You can tell them apart **without** clicking into either |
+| A-2.3 | Open Gamma's detail view | It states its status; it does not merely omit the search box |
+| A-2.4 | Search for a word you know is in a Gamma note | Either a result, or an explicit "this folder is not indexed because…" — never a bare "no results" |
+
+**Fail if:** Gamma is indistinguishable from Alpha at any of these four points, or a search
+over an unindexable folder reports an ordinary empty result.
+
+*Previous round: **FAIL** (F6), confirmed by two testers.*
+
+### Case A-3 — Index state for someone who arrives late
+
+*Why this matters: progress is delivered live only. A browser that connects **after** an index
+finished has nothing to receive — so it renders "no progress has arrived" about an index that
+completed successfully hours ago, permanently. For any fast index that is the normal case, not
+the edge case.*
+
+| Step | Do this | Expect |
+|---|---|---|
+| A-3.1 | With Alpha fully indexed, **reload the page** | The Library shows Alpha's real, completed state |
+| A-3.2 | Open the app in a **second browser window** (or a private window) and go to Library | Same completed state, immediately |
+| A-3.3 | Compare what the panel says with what a search reports about index freshness | The two agree |
+
+**Fail if:** either window shows "no indexing progress has arrived", an empty state, or an
+unknown state, for a collection that has finished indexing.
+
+### Case A-4 — Indexing still works after a settings change
+
+*Why this matters: this exact defect shipped once. Changing a setting triggers an internal
+reload; the reload killed the indexing service and never restarted it. Mounting a vault
+afterwards returned success and indexed nothing — no error, no log line — until the process
+was restarted.*
+
+| Step | Do this | Expect |
+|---|---|---|
+| A-4.1 | Go to **Settings**, change any setting, save | Saved confirmation |
+| A-4.2 | Return to **Library** and mount **Vault Beta** | The mount is accepted |
+| A-4.3 | Watch without refreshing and **without restarting** | Progress appears and completes, exactly as in A-1 |
+| A-4.4 | Search for a word you know is in a Beta note | The note is found |
+
+**Fail if:** the second vault reports success but never indexes. **Do not restart the app to
+make it work** — restarting is what hides this defect, and hiding it is the whole reason this
+case exists.
+
+*Previous round: **PASS**.*
+
+### Case A-5 — Embedded images
+
+| Step | Do this | Expect |
+|---|---|---|
+| A-5.1 | Put an image in Alpha and a note embedding it (`![[picture.png]]`) | — |
+| A-5.2 | After indexing, open the note in the preview panel | The image is **displayed** — a real image, not a text link, not a broken icon |
+| A-5.3 | Try a note whose image sits in a subfolder | Also displays |
+| A-5.4 | Try a note embedding an image that does not exist | Degrades visibly: you can **tell it apart** from a working embed |
+
+**Fail if:** the embed renders as a link; clicking that link 404s a file you can see in the
+listing; or a missing embed renders identically to a present one.
+
+**Check the preview panel, not a raw URL.** They behave differently and a raw URL passing is
+not evidence about the panel.
+
+*Previous round: **FAIL** (F4). Zero `<img>` elements; the generated link dropped the mount
+prefix, so `vault-a/picture.png` returned 200 and the emitted `picture.png` returned 404. A
+missing embed rendered identically to a present one.*
+
+### Case A-6 — HTML files
+
+| Step | Do this | Expect |
+|---|---|---|
+| A-6.1 | Put an `.html` file with a heading and a paragraph into Alpha | — |
+| A-6.2 | After indexing, open it in the library | Its readable text is shown |
+| A-6.3 | Search for a word that appears only in that file | The file is found |
+
+**Fail if:** the panel says "preview unavailable" — especially if the content itself loads
+(you can check in the network tab: a 200 with a visible "unavailable" message is the failure),
+or the file shows raw markup, or its text is not searchable.
+
+*Previous round: **FAIL** (F3). "Preview unavailable … needs the isolated preview endpoint,
+which this build does not serve yet", while the content fetch returned 200. 3 of 3 attempts.*
+
+### Case A-7 — "The file changed since it was indexed", for files that never changed
+
+| Step | Do this | Expect |
+|---|---|---|
+| A-7.1 | Search for a fragment of a **filename** in Alpha | Results, each with a real excerpt |
+| A-7.2 | Search for a word from the **body** of the same file | Results, each with a real excerpt |
+| A-7.3 | Compare the two | Both behave the same way |
+
+**Fail if:** the filename search reports "No excerpt: the file changed since it was indexed"
+for a file that nothing has written to — particularly when a body-word search on the *same
+file, in the same session, seconds apart* returns a full excerpt.
+
+*Previous round: **FAIL** (F5). Reproduced on every markdown file matched by filename, twice.*
+
+### Case A-8 — Unmounting mid-index
+
+| Step | Do this | Expect |
+|---|---|---|
+| A-8.1 | Mount a large folder (several thousand notes if you have one) | Indexing starts |
+| A-8.2 | About three seconds in, unmount it | The confirmation dialog closes cleanly |
+| A-8.3 | Watch the mount list **without reloading**, for a full minute | The row disappears |
+| A-8.4 | Now reload | It is still gone (i.e. step A-8.3 was telling the truth) |
+
+**Fail if:** the row stays, still badged `MOUNTED`, until you reload; the dialog stays painted;
+or the page stops responding.
+
+*Previous round: **FAIL** (F7), 3 of 3 attempts, the stale row persisting 50–70 seconds. Not a
+size problem — the same vault unmounted after indexing updated in 3 seconds.*
+
+### Case A-9 — The gateway stays up
+
+*Why this matters: the previous round saw the process terminate on its own with **exit code 0**
+— no panic, nothing in the panic log — while the UI sat idle. The user loses their session with
+no message and no indication anything is wrong. Two independent testers, two occurrences.*
+
+| Step | Do this | Expect |
+|---|---|---|
+| A-9.1 | At the end of every part of this plan, check the app still responds | It does |
+| A-9.2 | If it stopped responding, check whether the process is still alive | It is |
+
+**Fail if:** the gateway exits on its own at any point during the run. Record what you had just
+done, the wall-clock time, and the last few lines of
+`/tmp/omnipus-uat-records/logs/gateway.log`. **Do not investigate further** — the log lines are
+the finding.
+
+### Case A-10 — Awkward but legitimate content
+
+| Step | Do this | Expect |
+|---|---|---|
+| A-10.1 | A note with a single line a few thousand characters long | Handled |
+| A-10.2 | A note with accented and non-Latin characters in the body **and in the filename** | Displayed correctly everywhere: list row, preview header, body, search excerpt |
+| A-10.3 | A note with frontmatter and an empty body | Handled, not an error |
+| A-10.4 | A file with an unknown extension (`.xyz`) | Ignored quietly or reported clearly — never a crash, never a silent vanish |
+| A-10.5 | An Obsidian `.base` file | Handled: rendered, or refused with a message saying what it is |
+| A-10.6 | A folder with several hundred notes | Indexes without freezing the UI |
+
+*Previous round: **PASS** on all of these. They are re-run because they are cheap and because
+Part C is about to put much stranger content into the same pipeline.*
+
+### Case A-11 — Error messages a person can read
+
+| Step | Do this | Expect |
+|---|---|---|
+| A-11.1 | Try to mount a path that does not exist | A refusal in plain language, not truncated mid-word |
+| A-11.2 | Try to mount a file instead of a folder | Same |
+| A-11.3 | Mount the same folder twice | Handled with a clear message |
+
+**Fail if:** the message is a raw error string with Go package names, a status code and a
+`stat` call in it, or is cut off mid-sentence.
+
+*Previous round: **F8 (minor)** — mount rejections were correct but surfaced as
+`400: workspace: mount target is not an existing directory: "/private/…": stat /private/…`,
+truncated mid-word.*
