@@ -1,6 +1,6 @@
 # ADR-068 — Vault records: a typed record layer with relations
 
-- **Status:** Proposed (2026-08-28) — **revision 9**, after the UAT author's read of revision 8 / spec Draft 6 (`../specs/uat-vault-records-2026-08-28.md`, 99 cases over sixteen Parts) surfaced ten under-specifications that different implementers would each have guessed at differently. **What revision 9 changes is set out immediately below.** *Revision 8 followed grill pass 2* over the implementing specification (BLOCK: 11 critical, 42 major, 14 minor — `../specs/vault-records-spec-2026-08-25-review-round6.md`) and one further operator ruling (**Unicode case folding is REQUIRED**). Revision 7 followed grill pass 1 over the implementing specification (BLOCK: 19 critical, 41 major, 17 minor) and **nine operator rulings**. **Revision 7 is mostly a DELETION, and that is the headline.** The largest ruling reverses D16.2b: **the properties index NARROWS CANDIDATES; our own tested comparator DECIDES.** SQLite evaluates no comparison. That makes D16.6's nine violations **not applicable rather than defeated** — a stronger and far simpler position than nine deliberate defeats, **none of which was verified and zero of the seven the spec had specified turned out to be sufficient.** Also deleted: the **`money` type** in full (D3, O-2 — the requirement is a precise decimal and an int64, not a currency-carrying value); **enum ordering by declared position** (D4's second clause, replaced by SQLite's own lexical order with a value prefix for domain order); and our **invented filter-operator vocabulary**, replaced by SQL's (O-3, amended). Added: `number` splits into **`integer` and `decimal`**; **case-insensitive matching is a feature**, and it is a comparator rule because SQLite folds no non-ASCII at all; **no hardcoded domain vocabulary anywhere** (D0, strengthened with the operator's "empty database, all capabilities, nothing predefined"); and the corrections grill pass 1 earned — a re-derived freshness ordering with its residual carried as a **stated open risk**, four wrong code citations, and a tool-cost argument computed against the wrong denominator.
+- **Status:** Proposed (2026-08-28) — **revision 10**, recording **three operator rulings raised by the Stage 1 implementers who hit them while building the read path** (**D16.6a**, new), together with the AC-8.10 wording defects the same reading exposed. **Two of the three were CONTRADICTIONS in the implementing specification, not under-specifications** — it required a statement in one place and failed the build for it in another — and the implementers emitted the required statement and reported the conflict upward rather than violating the guard quietly. **What revision 10 changes is set out immediately below.** *Revision 9 followed the UAT author's read of revision 8 / spec Draft 6 (`../specs/uat-vault-records-2026-08-28.md`, 99 cases over sixteen Parts) surfaced ten under-specifications that different implementers would each have guessed at differently; what revision 9 changed is set out below the revision-10 block.* *Revision 8 followed grill pass 2* over the implementing specification (BLOCK: 11 critical, 42 major, 14 minor — `../specs/vault-records-spec-2026-08-25-review-round6.md`) and one further operator ruling (**Unicode case folding is REQUIRED**). Revision 7 followed grill pass 1 over the implementing specification (BLOCK: 19 critical, 41 major, 17 minor) and **nine operator rulings**. **Revision 7 is mostly a DELETION, and that is the headline.** The largest ruling reverses D16.2b: **the properties index NARROWS CANDIDATES; our own tested comparator DECIDES.** SQLite evaluates no comparison. That makes D16.6's nine violations **not applicable rather than defeated** — a stronger and far simpler position than nine deliberate defeats, **none of which was verified and zero of the seven the spec had specified turned out to be sufficient.** Also deleted: the **`money` type** in full (D3, O-2 — the requirement is a precise decimal and an int64, not a currency-carrying value); **enum ordering by declared position** (D4's second clause, replaced by SQLite's own lexical order with a value prefix for domain order); and our **invented filter-operator vocabulary**, replaced by SQL's (O-3, amended). Added: `number` splits into **`integer` and `decimal`**; **case-insensitive matching is a feature**, and it is a comparator rule because SQLite folds no non-ASCII at all; **no hardcoded domain vocabulary anywhere** (D0, strengthened with the operator's "empty database, all capabilities, nothing predefined"); and the corrections grill pass 1 earned — a re-derived freshness ordering with its residual carried as a **stated open risk**, four wrong code citations, and a tool-cost argument computed against the wrong denominator.
   - *Revision 6:* after a fifth adversarial review (BLOCK: 8 critical, 25 major, 3 minor — `ADR-068-vault-records-typed-record-layer-review-round5.md`). Revision 5's own headline numbers were wrong: the catalog is **98 tools, not 102**, and the two-index staleness mitigation named a **freshness token that does not exist**. Both are repaired below, the second by specifying the mechanism rather than asserting it again. The agent tool surface grows from five `vault_*` tools to **six** — the control plane gets its own policy lever (D15.6). D16's latency argument is **withdrawn as unevidenced**; the capability argument, which is the one that survives, now carries the decision alone. And **D16.6 is new**: SQLite's default semantics contradict **nine of the thirteen** comparison rules the spec's §8 oracle defines, eight of them silently — the strongest single consideration bearing on D16, which revision 5 omitted entirely while the implementing spec carried it.
   - *Revision 5:* three-agent design council; D16 resolved to a two-index design; nine `record_*` tools cut to five `vault_*`; D21, D22, D23 added.
   - *Revision 4 and earlier:* proposed 2026-08-25 after three adversarial reviews (BLOCK each time: 7, 8, then 10 critical). Revision 1 made three false claims about existing code (D14, D16, D18); all three are corrected in place and the corrections are marked. D16 had been wrong three times and was deliberately left unresolved behind a measured spike.
@@ -11,6 +11,40 @@
   - *"`repairAndValidateToolPolicyCoverage` emits **two** WARNs, not one."* It emits **`1 + N`** — one at `pkg/gateway/gateway.go:975`, plus one per repaired agent at `pkg/config/validate.go:576` — and **zero** when nothing needed repair. The **citation** half of the same finding is upheld: the function is at `gateway.go:968`, not in `pkg/config/validate.go`.
 
   A review is evidence, not an oracle, and complying with a wrong finding would be the same failure as ignoring a right one.
+- **What revision 10 changes. All of it lands in one new decision, D16.6a, because all of it is
+  about the same thing: how ruling R-A is ENFORCED, and whether the artifact that enforces it
+  admits the design it was written to protect.**
+  - **(a) `COUNT(*)` becomes a named, bounded exception to the narrowing allow-list's aggregate ban
+    (D16.6a; spec AC-8.10, FR-064).** The spec required it for the B1 evaluation bound and forbade
+    it in the guard, so the bound this ADR's cost argument rests on was unimplementable without
+    breaking the build. **The reasoning is the part that stops it widening: `COUNT(*)` counts rows
+    of `notes` — a population — not an answer.** A `COUNT` over a value column, and every other
+    aggregate, stay banned; every aggregate the operator can ask for runs in Go.
+  - **(b) The child-table join exception is generalised from RELATIONS to CHILD TABLES (D16.6a;
+    spec AC-8.10).** The stated reason — *"assembles a record's `many` values into one row set"* —
+    is a property of a child table, and `note_props`, `note_tasks` and `note_relations` all need
+    the identical join. **A guard built from the literal words fails three of the four statements
+    the store emits.** The permitted shape is now `<child>.note_id = <parent>.note_id` and no other
+    operand shape, with the REASON as the governing text.
+  - **(c) A `LIKE` pattern is carried as text rather than interpreted in the declared type (D16.6a;
+    spec FR-022e, new AC-22e.5).** As written, FR-022e refused `status LIKE 'do%'` on an `enum` —
+    making R-9 unsatisfiable on the `enum` half of a comparison type R-1 unifies with `text`, and
+    naming a fault the query does not have. **A pattern is the shape values are compared against,
+    not a value being compared.**
+  - **(d) Two column names in this document were wrong, in the paragraph that defines what the
+    properties index is FOR (D16.6).** It said `type` and `rec_id`; the schema declares
+    `record_type` and keys every child table on `note_id`. The spec's allow-list inherited both.
+    **In an allow-list a wrong column name is not cosmetic** — it decides whether the guard admits
+    the design or blocks it.
+  - **(e) The R-A control is stated as the THREE-part thing it already is (new AC-16.6a).** The
+    construct check was specified; the value-column check and the one-path-to-the-driver check were
+    shipped with no home in either document. **A control specified as one third of itself can be
+    deleted two thirds of the way and still look present** — the exact failure D16.6 already
+    records once.
+  - **(f) One watch-point recorded, not a defect:** the B1 count and the candidate stream query
+    different things and agree only by two unasserted structural coincidences. **They diverge
+    silently the day `Selector` grows a property predicate — which is the same day ruling R-A
+    breaks.** The guard now fails on `Selector` growing a field at all.
 - **What revision 9 changes. Three of the four are corrections to this document's own claims, and
   one is drift between this document and the specification it governs.**
   - **(a) `person`'s target type is RULED and it is OPTIONAL (D3, new D3.4 — UAT C-7).** Revision 8
@@ -1972,11 +2006,109 @@ because the wrong sentence is in the ADR's own receipt.** Spec **FR-011a** and *
 six literal pairs, including the Turkish one asserted as a **negative**.
 
 **What the properties index is still FOR, so this does not read as "delete SQLite".** It **narrows**:
-`type = 'deal'`, `path` prefix within scope, `kind = 'task'`, the relation child table's `rec_id`
-join for **reachability**. These are set-membership questions over indexed columns, they are what an
-index is good at, and **none is a comparison governed by R-1..R-13.** D16.2's gain stands: the
-general `func(any, any) bool` comparator over an expression engine does not need to be written, and
-a query does not materialise documents that cannot match.
+`record_type = 'deal'`, `path` prefix within scope, `kind = 'task'`, and the **child-table
+`note_id` join** that assembles a record's rows — for a relation, that is the join that yields
+**reachability**. These are set-membership questions over indexed columns, they are what an index is
+good at, and **none is a comparison governed by R-1..R-13.** D16.2's gain stands: the general
+`func(any, any) bool` comparator over an expression engine does not need to be written, and a query
+does not materialise documents that cannot match. *(**Revision 10 corrects two column names in this
+paragraph.** It said `type` and `rec_id`; the shipped schema declares `record_type` on `notes` and
+keys every child table on `note_id` — `pkg/records/propindex/sqlite.go`'s DDL and
+`::narrowing`. The spec's AC-8.10 carried the same two wrong names into the allow-list that
+enforces this decision, where a wrong column name is not cosmetic: it is the difference between a
+guard that admits the design and one that blocks it. See D16.6a.)*
+
+### D16.6a — Ruling R-A's ENFORCEMENT: what the narrowing allow-list admits, and why. **NEW, revision 10.**
+
+> **Three rulings, all raised by Stage 1 implementers who hit them while building the read path.
+> Two of the three were CONTRADICTIONS in the implementing specification rather than
+> under-specifications — it required a statement in one place and failed the build for it in
+> another — and that distinction is the reason this gets its own decision rather than a line in a
+> table. An ambiguity makes two implementers disagree with each other. A contradiction makes every
+> implementer choose which half of the specification to break, and the only visible outcome is
+> whichever half they chose.** In both cases the implementer emitted the required statement and
+> reported the conflict upward rather than violating the guard quietly. That is the handling this
+> design needs and could not have relied on.
+
+**Ruling 1 — `COUNT(*)` is a NAMED, BOUNDED exception to AC-8.10's aggregate ban.** The spec's
+FR-064 B1 row specifies the evaluation bound's mechanism as *"`COUNT(*)` over the narrowing
+predicates only … one index-bound aggregate; genuinely cheap and genuinely pre-retrieval"*, while
+AC-8.10's allow-list banned aggregate functions without excepting it. **B1 is the bound this ADR's
+whole cost argument rests on and it is unimplementable without that statement.**
+
+**The reasoning is what keeps the exception from widening, and it is the sentence to quote when
+someone proposes the next one: `COUNT(*)` counts rows of `notes` — a POPULATION — not an ANSWER.**
+It totals nothing the operator asked about and it names no property. **Every aggregate the operator
+CAN request runs in Go over the candidate stream**, one record visited once — which is not a
+preference but the fix for the tenth violation D16.6 records above, where a join fan-out made
+`COUNT` return 2 and `SUM` return 200 against a truth of 1 and 100. **A `COUNT` over a value column
+is an answer about values and stays banned**, as does every other aggregate function. Shipped at
+`pkg/records/propindex/sqlite.go::Index.CountCandidates`.
+
+**Ruling 2 — the join exception is about CHILD TABLES, not about RELATIONS.** AC-8.10's allow-list
+named *"the relation child table's `rec_id` join predicate"* and gave as its reason *"assembles a
+record's `many` values into one row set; the fan-out is de-duplicated in Go"*. **That reason is a
+property of a child table and has nothing to do with relations specifically.** `note_props` needs
+the identical join for the identical purpose, and so do `note_tasks` and `note_relations`
+(`pkg/records/propindex/sqlite.go::Index.Candidates`, `::Index.Tasks`, `::Index.Relations`) — three
+of the four read-path statements this design emits would have tripped a guard built from the literal
+words.
+
+**The exception is therefore restated as a SHAPE governed by that reason: an equality between a
+parent's `note_id` and a child's `note_id`, and no other operand shape.** Not *"a join predicate"*,
+which would admit any join; not *"a relation join"*, which excludes most of the read path. **A join
+between two CHILD tables is not admitted** despite sharing the column name — the reason is
+*assembly around a parent row*, and a child-to-child join produces a cross-product the
+parent-anchored assembly does not de-duplicate. **The reason is the governing text and the example
+is subordinate to it**, because deriving the general case from Draft 7's example is precisely what
+produced Draft 7's wording.
+
+**Ruling 3 — a `LIKE` pattern is a PATTERN, not a value of the declared type, so it is carried as
+text.** The spec's FR-022e (Draft 7) interprets a query literal in the property's declared type and
+refuses one that cannot be so interpreted. **Applied literally to `LIKE` that breaks R-9:**
+`status LIKE 'do%'` on an `enum` declaring `todo, doing, done` would be refused, because `do%` is
+not a declared value and never will be — making R-9's *"`LIKE` matches an element by pattern"*
+unsatisfiable on the `enum` half of a comparison type **R-1 unifies with `text`**. Half a comparison
+type would lose an operator the vocabulary grants it, and the refusal would name a fault the query
+does not have.
+
+**Three reasons this is a carve-out rather than a hole.** SQL's own `LIKE` takes a pattern string on
+the right for the same reason, and ruling R-B adopted SQL's vocabulary deliberately. The
+operator-disposition check already refuses `LIKE` for every declared type with no pattern form, so
+the carve-out cannot leak past `text` and `enum`. And R-1 already makes those two one comparison
+type, so nothing else shifts. **R-12 is untouched** — it is a rule about the rules, there is still
+one comparison path, and the right-hand operand of `LIKE` was never a value on either side of the
+provenance question. Shipped at `pkg/records/filter.go::Filter.Validate`, which returns the pattern
+as a text value ahead of the loop that interprets every other literal in its declared type.
+
+**What the allow-list admits after these rulings, stated once so it can be checked against the code
+rather than re-derived:** `record_type = ?`; `kind = ?`; `path LIKE ? ESCAPE '\'` over a
+caller-independent, escaped prefix; a `<child>.note_id = <parent>.note_id` join; and `COUNT(*)`.
+**That is exactly the vocabulary of the four statements the store emits** — the B1 count, the
+candidate stream, the task stream and the relation stream — **and nothing more.** A sixth
+allow-listed form, `LIMIT` / `OFFSET`, is admitted on paper and **emitted by nothing**; the spec
+records it as dead along with the obligation on whoever revives it.
+
+**AC-16.6a — the control is THREE-part, and the specification described one part.** AC-8.10 lists
+forbidden CONSTRUCTS. Two further obligations are shipped and had no home in either document:
+**no predicate may mention a COLUMN that holds a property value** (which catches a comparison
+written with an operator the construct list happens not to spell), and **the recorder must be
+unavoidable** — one file reaches the driver, asserted by reading the package's own source. **A
+control specified as one third of itself can be deleted two thirds of the way and still look
+present**, which is the failure mode D16.6 already records once: revision 5 deleted both artifacts
+that could detect an SQL-side comparison in the same revision whose headline was that one such
+comparison reopens every violation.
+
+**And one watch-point, recorded because it is a trap rather than a defect.**
+`::Index.CountCandidates` queries `notes`; `::Index.Candidates` queries `notes LEFT JOIN
+note_props`. **They agree on the population today only because the `WHERE` clause is the identical
+output of the shared `::narrowing` helper and the join is LEFT** — neither reason is asserted
+anywhere. **They diverge silently the day anyone adds a property predicate to `Selector`, and that
+is the same day ruling R-A breaks**, because a property predicate in `Selector` *is* a comparison
+delegated to SQL. One field, three simultaneous failures, none of them loud. The guard is
+strengthened to fail on `Selector` growing a field **at all** rather than to inspect what a new
+field does: the field's arrival is the detectable event, and every consequence of it is a
+specification change rather than an implementation.
 
 **The cost, stated up front rather than discovered.** Filtering, grouping and totals run in Go over
 the candidate set, so **a query matching very many records is slower than one pushing predicates
