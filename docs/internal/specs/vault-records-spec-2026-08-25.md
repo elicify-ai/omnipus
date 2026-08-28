@@ -15,6 +15,23 @@ fielded indexing, RRF fusion, retry-only expansion, one tokenizer (FR-110..FR-11
 the model reads is specified as mechanism rather than presentation, with a literal worked example
 (§4.2). Schema and view authoring become ordinary writes (FR-016..FR-019a).
 
+**FRs whose meaning changed, and what cited them.** Nothing below was renumbered silently; each
+carries the same note in place.
+
+| FR | Was | Is | Cited by |
+|---|---|---|---|
+| FR-020 | BLOCKED on the D16 spike | typed properties in a SQLite properties index | §6, §7 regression |
+| FR-020a | the bleve-mapping no-op guard | derived and disposable: rebuild yields identical results *(the guard survives as **FR-020d**)* | §6 |
+| FR-021 | filtering evaluated **in Go** over the candidate set | evaluated **in the properties index** over typed columns | ADR-068 D21.5, the storage spike C-3, §6 |
+| FR-070 | nine `record_*` tools | five `vault_*` tools | §6, §7 test 18, SC-011 |
+| FR-072 | compact text for `record_schema` | compact text for **every** result of all five | §6, §7 |
+| FR-073 | a `record_explain` **tool** | an `explain` **flag** on `vault_find` | §6, §7 |
+| FR-100 | an agent tool `record_view_import` | an **operator/CLI** one-shot | §6, §7 test 20, SC-010 |
+| SC-005 | "1,000 distinct identifiers **and zero sequence gaps**" | 1,000 distinct identifiers; **gaps permitted, repeats fail** | contradicted FR-038 and ADR-068 D7.1 — a defect, not a wording change |
+
+FR-015 keeps its meaning and **gains a citation**: ADR-068 D23.3 now rests on it to place an
+existing-record-type change in the cascading tier.
+
 ---
 
 ## 0. What already exists, and is reused
@@ -480,7 +497,7 @@ no new runtime dependency, no CGo, and Hard Constraints #1 and #2 hold.
 - **FR-041** A write MUST leave the file byte-identical outside the patched span.
 - **FR-042** A write violating the schema MUST be rejected with the expected shape named, leaving the file unmodified.
 - **FR-043** A write MUST carry ADR-067 D14's version token; a stale token MUST be refused and the refusal audited.
-- **FR-044** Every mutating record tool MUST emit an audit entry per ADR-067 D19.
+- **FR-044** Every mutating `vault_*` tool MUST emit an audit entry per ADR-067 D19, named per FR-077.
 - **FR-045** Relations MUST be modified through distinct add, remove and replace operations; replace MUST be named explicitly.
 - **FR-046** Derived values MUST NOT be written into frontmatter.
 
@@ -506,7 +523,7 @@ editor. Its name invites exactly the misreading these two FRs exist to prevent.
 
 ### Scope and bounds
 
-- **FR-060** Every record tool MUST resolve through the calling agent's workspace scope.
+- **FR-060** Every one of the five `vault_*` tools MUST resolve through the calling agent's workspace scope: agent → workspace → `AllowedMountRoots(home, workspaceID)` → records within those roots. Records are a **stronger** read primitive than search — typed fields, relations and aggregation across them — so the boundary ADR-067 D7 drew applies with no exception.
 - **FR-061** An out-of-scope record MUST yield an empty result, never a permission error.
 - **FR-062** The scoped-out case MUST be indistinguishable from an empty vault.
 - **FR-062a** When scope resolution is itself incomplete — ADR-067's `Scope.Truncated()` — the query MUST report incompleteness with that reason. A query that could not resolve every mount MUST NOT report success, or a whole mounted folder can go missing while the answer claims to be complete.
@@ -535,7 +552,7 @@ editor. Its name invites exactly the misreading these two FRs exist to prevent.
 - **FR-083** `vault_edit` and `vault_restructure` MUST be **independently settable**. A test MUST prove an operator can permit editing while forbidding restructuring. **This fixes a live defect:** today `knowledge_rename` and `knowledge_move` sit in the same `ask` bucket as `knowledge_append_section` (`pkg/coreagent/core.go:800-808`, `pkg/config/defaults.go:637-646`), despite the first two rewriting inbound wikilinks across the whole vault and the third appending to one file. An operator granting "vault writes" today grants vault-wide restructuring in the same gesture, with nothing in the tool surface signalling the difference.
 - **FR-084** Every retired `knowledge_*` name MUST be removed from the catalog (`pkg/coreagent/core.go:475-482`), from the global ceiling (`pkg/config/defaults.go:637-646`) and from every per-agent seed in the same change. A name left behind in a seed map is a policy entry for a tool that no longer exists, which is a coverage gap wearing a valid-looking entry.
 - **FR-081** A test MUST assert **zero repaired pairs** on a fresh install — not zero gaps after repair.
-- **FR-082** The global tool-policy ceiling for every record tool MUST be stated explicitly in the seed. Repair backfills a *missing agent entry* to `deny`; what can silently grant is the **global ceiling**, which the seed sets per tool. Revision 1's rationale ("absence grants in a sparse map") named the wrong mechanism.
+- **FR-082** The global tool-policy ceiling for every `vault_*` tool MUST be stated explicitly in the seed (`pkg/config/defaults.go`). Repair backfills a *missing agent entry* to `deny`; what can silently grant is the **global ceiling**, which the seed sets per tool. Revision 1's rationale ("absence grants in a sparse map") named the wrong mechanism.
 - **FR-090** Every wire type MUST be defined in `contracts/` before Go or TS code exists.
 - **FR-091** The completeness verdict and problem list MUST be required fields in the response schema.
 
