@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync/atomic"
 )
 
 // ManifestTier classifies how a tool is presented to the LLM when the manifest
@@ -38,25 +39,38 @@ const (
 // as full callable defs (ManifestFull). These are the tools the agent reaches
 // for in every or nearly-every turn. The list is intentionally small so the
 // compressed surface contains the long tail.
+//
+// ADR-071 D3 §4.1 (17 names, "as of 2026-08-27" against the 89-name post-D4
+// catalog): `bash`, `navigate`, `create_task`, `update_task` moved OUT to the
+// new previewed tier (Tier 2, see previewedLazyToolNames below) — removing
+// bash's permanent visibility advantage over narrower purpose-built tools,
+// and demoting the two task-mutation verbs while `delegate`/`list_tasks`
+// stay Full so ADR-053's ordering (delegate must be at least as visible as
+// the task tools) holds with a wider margin. `list_mounts`, `send_file`,
+// `message_parent`, `recall_conversation` moved IN — conversational-control
+// and addressing primitives with no natural discovery moment, and (for
+// recall_conversation) the agent's only route back to history evicted by
+// ADR-028's windowTrim, where an invisible recall tool reads to the user as
+// the agent having forgotten. Membership is pinned by TestVisibility_TierArithmetic
+// — do not hand-edit this map without updating that test's literal list too.
 var fullManifestToolNames = map[string]struct{}{
-	"read_file":         {},
-	"write_file":        {},
-	"edit_file":         {},
-	"list_directory":    {},
-	"bash":              {}, // ADR-036: exec/workspace_shell/workspace_shell_bg merged into "bash".
-	"search_web":        {},
-	"fetch_url":         {},
-	"send_message":      {},
-	"hand_off":          {},
-	"return_to_default": {},
-	"remember":          {},
-	"recall_memory":     {},
-	"set_todos":         {},
-	"navigate":          {},
-	"create_task":       {},
-	"list_tasks":        {},
-	"update_task":       {},
-	"delegate":          {}, // ADR-053: must be as visible as create_task/list_tasks/update_task,
+	"read_file":           {},
+	"write_file":          {},
+	"edit_file":           {},
+	"list_directory":      {},
+	"list_mounts":         {}, // ADR-071 D3: promoted from lazy — addressing primitive, no discovery moment.
+	"search_web":          {},
+	"fetch_url":           {},
+	"send_message":        {},
+	"switch_agent":        {}, // ADR-071 D4: hand_off/return_to_default merged into switch_agent.
+	"send_file":           {}, // ADR-071 D3: promoted from lazy.
+	"message_parent":      {}, // ADR-071 D3: promoted from lazy.
+	"remember":            {},
+	"recall_memory":       {},
+	"recall_conversation": {}, // ADR-071 D3: promoted — recall must not cost a discovery round trip.
+	"set_todos":           {},
+	"list_tasks":          {},
+	"delegate":            {}, // ADR-053: must be as visible as create_task/list_tasks/update_task,
 	// otherwise the model reaches for the task route because it is the only
 	// one it can see as a callable def (measured 304s vs 20-80s for delegate).
 }
@@ -89,6 +103,99 @@ func ToolManifestTier(name string) ManifestTier {
 func IsFullManifestTool(name string) bool {
 	_, ok := fullManifestToolNames[name]
 	return ok
+}
+
+// ManifestVisibility controls whether a ManifestLazy tool appears as a
+// preview line in the compressed manifest block (ADR-071 D3 §4.4). It is a
+// SECOND axis, orthogonal to ManifestTier: it is only meaningful for
+// ManifestLazy tools, and callers must resolve the tier first. Full and
+// Infra tools have no manifest presence at all, so visibility does not apply
+// to them.
+//
+// Do NOT fold this into ManifestTier as a fourth constant:
+// SnapshotSearchableTools admits a core tool into the BM25 corpus on
+// `ToolManifestTier(name) == ManifestLazy`, so a separate TIER value would
+// silently delete every search-only tool from the search index — the one
+// mechanism by which it is reachable at all. The corpus is the set of tools
+// that exist to be found, not the set a given agent may see or load; both of
+// those are decided downstream of ranking (see also §3.2.2's identical
+// lesson for policy).
+type ManifestVisibility int
+
+const (
+	// ManifestPreviewed — Tier 2: one `name — description` line in the block.
+	ManifestPreviewed ManifestVisibility = iota
+	// ManifestSearchOnly — Tier 3: no line in the block; reachable only via
+	// ToolSearch (exact name or query). Still policy-governed and still in
+	// the BM25 corpus. Once loaded it stays loaded for the rest of the
+	// session: static tools are IsCore, and PromoteTools/TickTTL are no-ops
+	// on core entries, so the registry TTL never applies here (ADR-071
+	// §1.1.1 / FR-037).
+	ManifestSearchOnly
+)
+
+// previewedLazyToolNames is the exact 8-name Tier 2 set (ADR-071 D3 §4.1):
+// lazy tools that still render a preview line in the compressed manifest
+// block. Everything else lazy resolves to ManifestSearchOnly. Membership is
+// pinned by TestVisibility_PreviewedSetIsExactlyEight — adding a tool here
+// (or removing one) without updating that test's literal list is a build
+// failure by design (FR-034).
+var previewedLazyToolNames = map[string]struct{}{
+	"list_agents":   {},
+	"list_jobs":     {},
+	"serve_web":     {},
+	"navigate":      {},
+	"get_workspace": {},
+	"bash":          {}, // ADR-071 D3: demoted from Full — see fullManifestToolNames doc.
+	"create_task":   {},
+	"update_task":   {},
+}
+
+// previewAllLazy backs the PreviewAllLazy config revert (ADR-071 §4.3.1b,
+// FR-042): a time-boxed kill switch that restores the pre-D3 behavior where
+// every findable lazy tool renders a preview line. Set via SetPreviewAllLazy,
+// which callers invoke with the live cfg.Tools.Manifest.PreviewAllLazy value
+// on every turn (a single atomic store) so the revert is live and does not
+// require a restart, mirroring cfg.Tools.Manifest.Compressed's own per-turn
+// read elsewhere in this codebase.
+var previewAllLazy atomic.Bool
+
+// SetPreviewAllLazy sets the live PreviewAllLazy revert flag consulted by
+// ToolManifestVisibility. Safe to call on every turn; default is false (the
+// three-tier split is active). This flag is explicitly time-boxed (FR-043):
+// it exists to survive the operator's observation window for the two
+// ToolSearch detection counters (omnipus_toolsearch_zero_result_total,
+// omnipus_toolsearch_no_followup_total, see compositor.go), not forever, and
+// must be deleted in the same change that acts on that data.
+func SetPreviewAllLazy(v bool) {
+	previewAllLazy.Store(v)
+}
+
+// ToolManifestVisibility returns the visibility of a lazy-tier tool
+// (ADR-071 D3 §4.4). Defined only for ManifestLazy names; callers must check
+// the tier first via ToolManifestTier. When the PreviewAllLazy revert is set,
+// every lazy tool resolves to ManifestPreviewed — read HERE, inside the
+// single chokepoint, so both manifest-block builders inherit the revert with
+// no second branch of their own (FR-042).
+func ToolManifestVisibility(name string) ManifestVisibility {
+	if previewAllLazy.Load() {
+		return ManifestPreviewed
+	}
+	if _, ok := previewedLazyToolNames[name]; ok {
+		return ManifestPreviewed
+	}
+	return ManifestSearchOnly
+}
+
+// PreviewedLazyToolNames returns a sorted copy of the Tier 2 (previewed)
+// tool name set. Exported for tests and tooling that needs to enumerate it.
+func PreviewedLazyToolNames() []string {
+	names := make([]string, 0, len(previewedLazyToolNames))
+	for n := range previewedLazyToolNames {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // FullManifestToolNames returns a sorted copy of the full-manifest tool name
@@ -145,6 +252,14 @@ func BuildCompressedManifest(lazyTools []Tool, loaded map[string]bool) string {
 		if ToolManifestTier(n) != ManifestLazy {
 			continue
 		}
+		// ADR-071 D3 §4.4: search-only (Tier 3) lazy tools get zero preview
+		// text — they stay fully registered, policy-governed and findable by
+		// ToolSearch, but invisible until the agent goes looking. The filter
+		// lives here (inside the builder) rather than in the caller so it has
+		// exactly one owner; see the ADR's "Where the filter lives" note.
+		if ToolManifestVisibility(n) != ManifestPreviewed {
+			continue
+		}
 		if loaded[n] {
 			continue
 		}
@@ -175,8 +290,13 @@ func BuildCompressedManifest(lazyTools []Tool, loaded map[string]bool) string {
 
 	var sb strings.Builder
 	sb.WriteString("# More tools (load before use)\n")
+	// FR-044: state plainly that more tools exist than are listed here (the
+	// search-only Tier 3 set is deliberately unlisted, ADR-071 D3 §4.3) and
+	// that ToolSearch's `query` finds them by description. Kept to exactly
+	// one line — FR-033 requires the header stay at 2 lines total, so this
+	// wording is a reword of the existing second line, never a third.
 	sb.WriteString(
-		"These tools are available but not loaded. To use one, call `ToolSearch` with its exact name in `names` (or describe what you need in `query`) to load it, then call it.\n",
+		"These tools are available but not loaded — call `ToolSearch` with its exact name in `names` to load one, then call it. Many more tools than are listed here exist; describe what you need in `query` to find and load them.\n",
 	)
 
 	for _, cat := range cats {

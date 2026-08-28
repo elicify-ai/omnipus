@@ -3405,6 +3405,27 @@ type ManifestConfig struct {
 	// Default: true (enabled). When false, every tool is sent full (legacy behavior).
 	// Controlled at runtime via PUT /api/v1/performance (tools_on_demand field).
 	Compressed bool `json:"compressed" yaml:"compressed,omitempty"`
+
+	// PreviewAllLazy reverts ADR-071 D3's three-tier visibility split: when
+	// true, tools.ToolManifestVisibility returns ManifestPreviewed for EVERY
+	// ManifestLazy tool, restoring the pre-D3 behavior where the whole lazy
+	// catalog (Tier 2 + Tier 3) appears as preview lines in the compressed
+	// manifest block. Default: false (the three-tier split — 17 always-listed,
+	// 8 previewed, 63 search-only — is active on a fresh install and on every
+	// upgrade). It does NOT revert User Story 1's permission filtering of
+	// ToolSearch results, nor the per-(agent,session) scoping of the loaded-
+	// tool set (ADR-071 §4.6) — those hold regardless of this flag.
+	//
+	// This is a stored-configuration dial, not an environment variable and
+	// not a settings-screen control, read live inside ToolManifestVisibility
+	// on every turn (no restart needed to flip it). It is explicitly
+	// time-boxed (FR-043): it exists only to survive the operator observation
+	// window for the omnipus_toolsearch_zero_result_total and
+	// omnipus_toolsearch_no_followup_total detection counters
+	// (pkg/gateway/metrics.go) — once those counters have produced enough
+	// data to validate the split or motivate a widened Tier 2, this field
+	// MUST be deleted in the same change that acts on that data.
+	PreviewAllLazy bool `json:"preview_all_lazy,omitempty" yaml:"preview_all_lazy,omitempty"`
 }
 
 // RunInWorkspaceConfig holds dev-mode configuration for the web_serve tool.

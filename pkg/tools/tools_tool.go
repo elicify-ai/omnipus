@@ -144,12 +144,14 @@ func (t *ToolsTool) execSearchAndLoad(ctx context.Context, query string) *ToolRe
 	cached := t.getOrBuildEngine()
 	if cached == nil {
 		logger.DebugCF("discovery", "ToolSearch(query/bm25): no hidden tools available", nil)
+		recordToolSearchZeroResult()
 		return SilentResult("No tools found matching the query.")
 	}
 
 	ranked := cached.engine.Search(query, t.maxSearchResults)
 	if len(ranked) == 0 {
 		logger.DebugCF("discovery", "ToolSearch(query/bm25): no matches", map[string]any{"query": query})
+		recordToolSearchZeroResult()
 		return SilentResult("No tools found matching the query.")
 	}
 
@@ -171,6 +173,12 @@ func (t *ToolsTool) execSearchAndLoad(ctx context.Context, query string) *ToolRe
 	var schemas map[string]any
 
 	if t.canLoad != nil && t.markLoaded != nil {
+		// ADR-071 §4.3.1(a): mark this ctx as a query-path (by-description)
+		// promotion BEFORE calling markLoaded, so the agent-loop closure can
+		// record a pending search-follow-up entry (FR-038a) — never done on
+		// the exact-name `names` path. One-line, ranking/search logic
+		// untouched (D2 owns that; this is the D3-owned detection wiring).
+		ctx = WithSearchPromotion(ctx)
 		for _, m := range matches {
 			name := m.Name
 			if ok, reason := t.canLoad(ctx, name); !ok {
@@ -190,6 +198,20 @@ func (t *ToolsTool) execSearchAndLoad(ctx context.Context, query string) *ToolRe
 				break
 			}
 		}
+	}
+
+	if loadedName == "" {
+		// ADR-071 §4.3.1(a): the query path found ranked matches but none
+		// resolved to a usable tool — either no resolver was wired, or every
+		// candidate was denied by policy / failed to resolve. This is the
+		// interim, D3-owned fire condition: today `matches` is the full
+		// unfiltered ranked list (D2/§3.2.2 has not yet landed on this
+		// branch), so "loadedName == ''" is the closest available proxy for
+		// "the policy-loadable result set is empty". D2 will materialize a
+		// true policy-filtered match list and should re-home this call to
+		// fire on `len(policyFilteredMatches) == 0` directly — see the D2
+		// workstream notes.
+		recordToolSearchZeroResult()
 	}
 
 	// Build response JSON.

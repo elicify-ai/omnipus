@@ -498,14 +498,40 @@ type AgentLoop struct {
 	channelSessionIdx sync.Map
 
 	// loadedTools tracks which lazy tools have been on-demand loaded by the
-	// manifest optimization (cfg.Tools.Manifest.Compressed) for each session.
-	// Key: manifest session ID (transcript session ID, or the session key when
-	// transcripts are disabled — see manifestSessionID). Value: map[string]bool
-	// (tool name → loaded). Protected by loadedToolsMu. A new session ID lazily
-	// creates a fresh set on first load; entries are evicted by forgetSession on
-	// CloseSession (transcript sessions). Only populated when Compressed is true.
+	// manifest optimization (cfg.Tools.Manifest.Compressed) for each
+	// (agent, session) bucket. Key: manifestBucketKey(agentID, transcriptID,
+	// sessionKey) — ADR-071 D3 §4.6 narrowed this from a session-only key so
+	// a switch_agent mid-session no longer lets the incoming agent inherit
+	// the outgoing agent's loaded Tier 3 tools. Value: map[string]bool (tool
+	// name → loaded). Protected by loadedToolsMu. A new bucket lazily creates
+	// a fresh set on first load; entries are evicted by forgetSession's
+	// suffix sweep on CloseSession (transcript sessions). Only populated when
+	// Compressed is true.
 	loadedTools   map[string]map[string]bool
 	loadedToolsMu sync.Mutex
+
+	// pendingSearchPromotions is a side table of loadedTools (ADR-071
+	// §4.3.1a): bucket key → tool name → the turn index (bucketTurnCounter
+	// value) at which ToolSearch's query (by-description) path promoted it.
+	// Written only on the query path (never on an exact-name `names` load —
+	// FR-038a); cleared when the tool is invoked; swept for staleness at the
+	// same per-turn point that already calls TickTTL(). Purely observational
+	// — nothing here evicts anything from loadedTools or changes what is
+	// callable. Protected by loadedToolsMu (shares the mutex with loadedTools
+	// since both are written/read together at the same call sites; the mutex
+	// does NOT enumerate the map, so forgetSession's suffix sweep must reach
+	// this map explicitly — see forgetSession).
+	pendingSearchPromotions map[string]map[string]int
+
+	// bucketTurnCounter tracks a monotonically increasing turn index per
+	// (agent, session) bucket, incremented once per TickTTL call for that
+	// bucket (ADR-071 §4.3.1a). It backs pendingSearchPromotions' "turn
+	// index" write/sweep. A plain per-bucket counter rather than ts.iteration
+	// because ts.iteration resets with every new turnState (one per runTurn
+	// call), while the no-followup horizon must be counted across the whole
+	// conversation. Protected by loadedToolsMu; swept alongside the two maps
+	// above by forgetSession.
+	bucketTurnCounter map[string]int
 
 	// lastTurnResultMu guards lastTurnResult.  Written by runAgentLoop after
 	// every turn; read by tests to assert turnFailed without threading the flag
@@ -785,17 +811,19 @@ func NewAgentLoop(
 
 	eventBus := NewEventBus()
 	al := &AgentLoop{
-		bus:                    msgBus,
-		cfg:                    cfg,
-		registry:               registry,
-		state:                  stateManager,
-		eventBus:               eventBus,
-		fallback:               fallbackChain,
-		cmdRegistry:            commands.NewRegistry(commands.BuiltinDefinitions()),
-		steering:               newSteeringQueue(parseSteeringMode(cfg.Agents.Defaults.SteeringMode)),
-		contextBuilderRegistry: NewContextBuilderRegistry(),
-		loadedTools:            make(map[string]map[string]bool),
-		browserMgrs:            make(map[string]*browser.BrowserManager),
+		bus:                     msgBus,
+		cfg:                     cfg,
+		registry:                registry,
+		state:                   stateManager,
+		eventBus:                eventBus,
+		fallback:                fallbackChain,
+		cmdRegistry:             commands.NewRegistry(commands.BuiltinDefinitions()),
+		steering:                newSteeringQueue(parseSteeringMode(cfg.Agents.Defaults.SteeringMode)),
+		contextBuilderRegistry:  NewContextBuilderRegistry(),
+		loadedTools:             make(map[string]map[string]bool),
+		pendingSearchPromotions: make(map[string]map[string]int),
+		bucketTurnCounter:       make(map[string]int),
+		browserMgrs:             make(map[string]*browser.BrowserManager),
 	}
 	// Concurrency-gate consolidation (2026-08-04): session admission's cap is
 	// resolved LIVE from the SAME central authority TaskExecutor's dispatch
@@ -1797,10 +1825,10 @@ func registerSharedTools(
 			}
 			// No configured override — fall through to the registry's own
 			// resolution ladder (lexicographically-first non-worker agent)
-			// rather than a hardcoded name; ReturnToDefaultTool.Execute
-			// already handles an empty result as "no default agent
-			// configured" rather than silently switching to a name that
-			// doesn't exist.
+			// rather than a hardcoded name; SwitchAgentTool.Execute's
+			// target:"default" branch already handles an empty result as
+			// "no default agent configured" rather than silently switching
+			// to a name that doesn't exist.
 			// liveRegistry, not the `registry` parameter this closure could
 			// capture: that one is the boot-time instance, and a full registry
 			// rebuild (TriggerReload, e.g. after the default agent changes)
@@ -1818,8 +1846,7 @@ func registerSharedTools(
 		// sharedStore is the shared session store; tools handle a nil store by
 		// skipping transcript ops (nil only occurs in tests without a store).
 		sharedStore := al.GetSessionStore()
-		agent.Tools.RegisterReplacing(tools.NewHandoffTool(getRegistryReader, sharedStore, getContextWindow, onHandoffFrontend))
-		agent.Tools.RegisterReplacing(tools.NewReturnToDefaultTool(sharedStore, getDefaultAgent, onHandoffFrontend))
+		agent.Tools.RegisterReplacing(tools.NewSwitchAgentTool(getRegistryReader, sharedStore, getContextWindow, getDefaultAgent, onHandoffFrontend))
 
 		// Send file tool (outbound media via MediaStore — store injected later by SetMediaStore).
 		sendFileTool := tools.NewSendFileTool(
@@ -1922,7 +1949,7 @@ func registerSharedTools(
 			})
 			// W2: action:"status" live-progress snapshot for a running native
 			// task. sharedStore mirrors the exact store wiring
-			// NewHandoffTool already uses just above (line ~1469) — the same
+			// NewSwitchAgentTool already uses just above (line ~1469) — the same
 			// *session.UnifiedStore delegated children's transcript entries
 			// are actually written to. It is a plain value captured once at
 			// registration time (NOT a live func()), so it does not itself
@@ -1937,8 +1964,8 @@ func registerSharedTools(
 			// would panic on a nil receiver. Only wire the store when non-nil so
 			// a running-native status snapshot degrades to prompt-only instead
 			// of crashing the whole action:"status" call. (The sibling
-			// NewHandoffTool/NewReturnToDefaultTool wiring above shares this
-			// pre-existing latent pattern; tracked separately.)
+			// NewSwitchAgentTool wiring above shares this pre-existing latent
+			// pattern; tracked separately.)
 			if sharedStore != nil {
 				delegateTool.SetSessionStore(sharedStore)
 			}
@@ -2690,11 +2717,29 @@ func registerSharedTools(
 						}
 
 						// Mark only the successfully resolved names as loaded.
-						sessionID := manifestSessionID(
+						// ADR-071 D3 §4.6: the bucket is (agent, session), not
+						// session alone — callerID is the same value already
+						// resolved above (tools.ToolAgentID(ctx), falling back
+						// to capturedAgentID), matching what the readers
+						// (buildCompressedToolDefs/buildToolManifestNote) derive
+						// from ts.agent.ID.
+						bucket := manifestBucketKey(
+							callerID,
 							tools.ToolTranscriptSessionID(ctx),
 							tools.ToolSessionKey(ctx),
 						)
-						al.markToolsLoaded(sessionID, loadedOK)
+						al.markToolsLoaded(bucket, loadedOK)
+
+						// ADR-071 §4.3.1(a) FR-038/FR-038a: record a pending
+						// search-follow-up entry for each newly-promoted name,
+						// but ONLY on the query (by-description) path — an
+						// exact-name `names` load is the model deliberately
+						// naming a tool it already knows about, and recording
+						// it would reintroduce the false-positive floor r3/r4
+						// diagnosed and corrected (see the ADR's MIN-001 note).
+						if tools.IsSearchPromotion(ctx) {
+							al.recordPendingSearchPromotions(bucket, loadedOK)
+						}
 						return schemas, rejected
 					},
 				)
@@ -7741,13 +7786,13 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	turnCtx = WithAgentLoop(turnCtx, al)
 	// SEC-15: Inject agent ID so audit entries carry the agent identity.
 	turnCtx = tools.WithAgentID(turnCtx, ts.agent.ID)
-	// Inject session key so handoff/return_to_default tools can address the session.
+	// Inject session key so switch_agent can address the session.
 	if ts.sessionKey == "" {
-		logger.WarnCF("agent", "runTurn: sessionKey is empty — handoff tool will not work",
+		logger.WarnCF("agent", "runTurn: sessionKey is empty — switch_agent tool will not work",
 			map[string]any{"agent_id": ts.agentID, "chat_id": ts.chatID})
 	}
 	turnCtx = tools.WithSessionKey(turnCtx, ts.sessionKey)
-	// Inject the actual session ID (directory name) for the handoff tool.
+	// Inject the actual session ID (directory name) for the switch_agent tool.
 	// The session key is a routing key; the transcript session ID is the
 	// real session directory (e.g., "session_01KP30THP63YFESKGECYYHYQWY").
 	turnCtx = tools.WithTranscriptSessionID(turnCtx, ts.opts.TranscriptSessionID)
@@ -10306,6 +10351,13 @@ turnLoop:
 				}
 			}
 
+			// ADR-071 §4.3.1(a) "Clear": a tool about to be dispatched is, by
+			// definition, no longer an abandoned promotion — delete any
+			// pending search-follow-up entry for it under this agent's
+			// bucket. Runs unconditionally (harmless no-op when there is no
+			// pending entry, e.g. a full-tier tool or a by-name load).
+			al.clearPendingSearchPromotion(manifestBucketKey(ts.agent.ID, ts.opts.TranscriptSessionID, ts.sessionKey), toolName)
+
 			toolStart := time.Now()
 			// Inject the current tool call's ID into the context so that tools like
 			// spawn can read it as their parentSpawnCallID when they in turn call
@@ -10811,6 +10863,10 @@ turnLoop:
 		logger.DebugCF("agent", "TTL tick after tool execution", map[string]any{
 			"agent_id": ts.agent.ID, "iteration": iteration,
 		})
+		// ADR-071 §4.3.1(a): advance and sweep this bucket's search-promotion
+		// horizon at the same per-turn point that just ticked the (unrelated)
+		// MCP discovery TTL above.
+		al.tickSearchPromotionHorizon(manifestBucketKey(ts.agent.ID, ts.opts.TranscriptSessionID, ts.sessionKey))
 	}
 
 	if steerMsgs := al.dequeueSteeringMessagesForScope(ts.sessionKey); len(steerMsgs) > 0 {
@@ -12869,17 +12925,61 @@ func (al *AgentLoop) sessionLoadedTools(sessionID string) map[string]bool {
 	return out
 }
 
-// forgetSession removes the session's loaded-tool entry from the manifest map,
-// preventing unbounded memory growth. Called from CloseSession with the same
-// key that the manifest system uses (manifestSessionID derivation).
-// Safe for concurrent access — protected by loadedToolsMu. No-op for unknown keys.
+// forgetSession removes every (agent, session) bucket belonging to sessionID
+// from the loaded-tool map and its pendingSearchPromotions/bucketTurnCounter
+// siblings, preventing unbounded memory growth. Called from CloseSession with
+// the transcript sessionID — the same value manifestBucketKey's session
+// component derives from.
+//
+// ADR-071 D3 §4.6 point 4: since loadedTools is now keyed by
+// manifestBucketKey(agentID, transcriptID, sessionKey) — a composite key —
+// an exact-match `delete(al.loadedTools, sessionID)` would match nothing and
+// silently reintroduce the unbounded growth this function exists to prevent.
+// This is now a suffix sweep for every key ending in
+// manifestBucketKeySep+sessionID, mirroring the O(n) recallSpans scan two
+// lines below (same justification: session close is a cold path, not the hot
+// turn path).
+//
+// §4.3.1(a) r5: the same sweep MUST cover pendingSearchPromotions too — it is
+// not swept by virtue of sharing loadedToolsMu (the mutex protects the maps,
+// it does not enumerate them). Every entry found there is, by definition, a
+// promotion abandoned before its follow-up horizon elapsed (the session is
+// closing), so it is tallied and counted via
+// tools.RecordToolSearchNoFollowUp() — count-then-delete in the same critical
+// section, and the recorder call made AFTER releasing the lock so no
+// cross-package call happens under it.
+//
+// Safe for concurrent access — protected by loadedToolsMu. No-op for the
+// empty key.
 func (al *AgentLoop) forgetSession(sessionID string) {
 	if sessionID == "" {
 		return
 	}
+	suffix := manifestBucketKeySep + sessionID
+
 	al.loadedToolsMu.Lock()
-	defer al.loadedToolsMu.Unlock()
-	delete(al.loadedTools, sessionID)
+	for key := range al.loadedTools {
+		if key == sessionID || strings.HasSuffix(key, suffix) {
+			delete(al.loadedTools, key)
+		}
+	}
+	var abandonedPromotions int
+	for key, pending := range al.pendingSearchPromotions {
+		if key == sessionID || strings.HasSuffix(key, suffix) {
+			abandonedPromotions += len(pending)
+			delete(al.pendingSearchPromotions, key)
+		}
+	}
+	for key := range al.bucketTurnCounter {
+		if key == sessionID || strings.HasSuffix(key, suffix) {
+			delete(al.bucketTurnCounter, key)
+		}
+	}
+	al.loadedToolsMu.Unlock()
+
+	for i := 0; i < abandonedPromotions; i++ {
+		tools.RecordToolSearchNoFollowUp()
+	}
 
 	// MINOR fix: clean up recall spans for this session so recallSpans sync.Map
 	// does not grow without bound as sessions are closed (FR-019). The span key
@@ -12888,15 +12988,99 @@ func (al *AgentLoop) forgetSession(sessionID string) {
 	// contains the sessionID as a suffix so we delete spans regardless of agentID.
 	// The scan is safe here because forgetSession is on the session-close path
 	// (not the hot turn path), so the O(n) Range is acceptable.
-	suffix := ":session:" + sessionID
+	recallSuffix := ":session:" + sessionID
 	al.recallSpans.Range(func(k, _ any) bool {
 		if key, ok := k.(string); ok {
-			if key == sessionID || strings.HasSuffix(key, suffix) {
+			if key == sessionID || strings.HasSuffix(key, recallSuffix) {
 				al.recallSpans.Delete(key)
 			}
 		}
 		return true
 	})
+}
+
+// searchPromotionHorizonTurns is the number of turns a query-path ToolSearch
+// promotion may sit unused before it counts toward
+// omnipus_toolsearch_no_followup_total (ADR-071 §4.3.1a, FR-038).
+//
+// This is a NEW, INDEPENDENT literal — it MUST NOT be derived from, coupled
+// to, or merged with cfg.Tools.MCP.Discovery.TTL, whose default is also 5.
+// The equal value is a coincidence of two separate choices: the MCP TTL
+// decides when an externally-provided tool stops being callable; this
+// horizon decides only when an unused static discovery is COUNTED, and
+// withdraws nothing from anyone. They are also not operator-equivalent — the
+// MCP TTL is operator-configurable and an operator who has tuned it away
+// from 5 must not see this horizon move with it. Conflating the two is the
+// exact defect ADR-071 §1.1.1 records as its own worst mistake.
+const searchPromotionHorizonTurns = 5
+
+// recordPendingSearchPromotions records each newly query-path-promoted name
+// in names against bucket's current turn index, for later no-followup
+// detection (ADR-071 §4.3.1a). Only ever called from the markLoaded closure
+// when tools.IsSearchPromotion(ctx) is true — an exact-name `names` load
+// must never reach here (FR-038a). No-op for an empty bucket or names.
+// Safe for concurrent access — protected by loadedToolsMu.
+func (al *AgentLoop) recordPendingSearchPromotions(bucket string, names []string) {
+	if bucket == "" || len(names) == 0 {
+		return
+	}
+	al.loadedToolsMu.Lock()
+	defer al.loadedToolsMu.Unlock()
+	if al.pendingSearchPromotions[bucket] == nil {
+		al.pendingSearchPromotions[bucket] = make(map[string]int, len(names))
+	}
+	turn := al.bucketTurnCounter[bucket]
+	for _, n := range names {
+		al.pendingSearchPromotions[bucket][n] = turn
+	}
+}
+
+// clearPendingSearchPromotion deletes bucket's pending-discovery record for
+// name, if any, because it is about to be invoked (ADR-071 §4.3.1a "Clear").
+// Called from the tool-dispatch site on every call regardless of tier — a
+// no-op map delete when there is no pending entry for name.
+// Safe for concurrent access — protected by loadedToolsMu.
+func (al *AgentLoop) clearPendingSearchPromotion(bucket, name string) {
+	if bucket == "" || name == "" {
+		return
+	}
+	al.loadedToolsMu.Lock()
+	defer al.loadedToolsMu.Unlock()
+	if pending := al.pendingSearchPromotions[bucket]; pending != nil {
+		delete(pending, name)
+	}
+}
+
+// tickSearchPromotionHorizon advances bucket's turn counter by one and
+// sweeps its pendingSearchPromotions entries for staleness (ADR-071
+// §4.3.1a). Called at the same per-turn point that already calls
+// ts.agent.Tools.TickTTL() — one existing call site. Any entry whose
+// recorded turn index is more than searchPromotionHorizonTurns turns old
+// increments omnipus_toolsearch_no_followup_total exactly once and is
+// deleted (deleting on fire is what makes it fire exactly once per wasted
+// promotion, not every turn thereafter). Purely observational: nothing is
+// evicted from loadedTools, nothing changes about which tools are callable.
+// No-op for the empty bucket.
+func (al *AgentLoop) tickSearchPromotionHorizon(bucket string) {
+	if bucket == "" {
+		return
+	}
+	al.loadedToolsMu.Lock()
+	al.bucketTurnCounter[bucket]++
+	current := al.bucketTurnCounter[bucket]
+	pending := al.pendingSearchPromotions[bucket]
+	var stale int
+	for name, recordedTurn := range pending {
+		if current-recordedTurn > searchPromotionHorizonTurns {
+			delete(pending, name)
+			stale++
+		}
+	}
+	al.loadedToolsMu.Unlock()
+
+	for i := 0; i < stale; i++ {
+		tools.RecordToolSearchNoFollowUp()
+	}
 }
 
 // ChannelOwnership returns the stored resolver, or nil before wiring.

@@ -88,6 +88,19 @@ func fakeTurnStateNoTranscript(agent *AgentInstance, sessionKey string) *turnSta
 	}
 }
 
+// bucketFor mirrors what buildCompressedToolDefs/buildToolManifestNote derive
+// internally (manifestBucketKey(ts.agent.ID, ts.opts.TranscriptSessionID,
+// ts.sessionKey)) for a turnState built via fakeTurnState(agent, sessionID)
+// — which sets BOTH the transcript id and the session key to sessionID.
+// ADR-071 D3 §4.6 narrowed the loaded-tool bucket from session-only to
+// (agent, session), so any test that calls al.markToolsLoaded directly (to
+// seed state ahead of a build call) must write under the SAME composite key
+// the reader will look up, or the seeded state silently lands in a bucket
+// nothing ever reads.
+func bucketFor(agent *AgentInstance, sessionID string) string {
+	return manifestBucketKey(agent.ID, sessionID, sessionID)
+}
+
 // ─── Session state tests ────────────────────────────────────────────────────
 
 // TestMarkToolsLoaded_BasicRoundTrip proves that markToolsLoaded records names
@@ -175,8 +188,9 @@ func TestCompressedToolDefs_FullTierAlwaysPresent(t *testing.T) {
 		defNames[d.Function.Name] = true
 	}
 
-	// Full-tier tools that Jim is allowed must be present.
-	for _, name := range []string{"read_file", "send_message", "bash"} {
+	// Full-tier tools that Jim is allowed must be present. ADR-071 D3 demoted
+	// "bash" from Full to previewed (Tier 2) — see TestManifestTier_D3Reclassification.
+	for _, name := range []string{"read_file", "send_message", "delegate"} {
 		assert.True(t, defNames[name], "full-tier tool %q must be in compressed defs", name)
 	}
 }
@@ -241,7 +255,7 @@ func TestCompressedToolDefs_LazyToolAppearsAfterLoad(t *testing.T) {
 	require.NotEmpty(t, lazyName)
 
 	sessionID := "sess-load"
-	al.markToolsLoaded(sessionID, []string{lazyName})
+	al.markToolsLoaded(bucketFor(jimAgent, sessionID), []string{lazyName})
 
 	ts := fakeTurnState(jimAgent, sessionID)
 	defs := al.buildCompressedToolDefs(ts, policyFiltered)
@@ -276,7 +290,7 @@ func TestCompressedToolDefs_DifferentSessionNoInheritance(t *testing.T) {
 	}
 	require.NotEmpty(t, lazyName)
 
-	al.markToolsLoaded("sess-A", []string{lazyName})
+	al.markToolsLoaded(bucketFor(jimAgent, "sess-A"), []string{lazyName})
 
 	// Session B must not see the loaded tool.
 	tsB := fakeTurnState(jimAgent, "sess-B")
@@ -432,18 +446,22 @@ func TestBuildToolManifestNote_LoadedToolsExcluded(t *testing.T) {
 	allTools := jimAgent.Tools.GetAll()
 	policyFiltered, _ := tools.FilterToolsByPolicy(allTools, jimAgent.AgentType, jimAgent.LoadToolPolicy())
 
-	// Find a lazy tool to load.
+	// Find a PREVIEWED lazy tool to load (ADR-071 D3): a search-only (Tier 3)
+	// tool would never appear in the note regardless of loaded status, which
+	// would make this test pass vacuously without exercising the "loaded"
+	// exclusion at all.
 	var lazyName string
-	for _, t := range policyFiltered {
-		if tools.ToolManifestTier(t.Name()) == tools.ManifestLazy {
-			lazyName = t.Name()
+	for _, tl := range policyFiltered {
+		if tools.ToolManifestTier(tl.Name()) == tools.ManifestLazy &&
+			tools.ToolManifestVisibility(tl.Name()) == tools.ManifestPreviewed {
+			lazyName = tl.Name()
 			break
 		}
 	}
-	require.NotEmpty(t, lazyName)
+	require.NotEmpty(t, lazyName, "Jim must have at least one previewed lazy tool")
 
 	sessionID := "sess-loaded-exclude"
-	al.markToolsLoaded(sessionID, []string{lazyName})
+	al.markToolsLoaded(bucketFor(jimAgent, sessionID), []string{lazyName})
 
 	ts := fakeTurnState(jimAgent, sessionID)
 	note := al.buildToolManifestNote(ts, policyFiltered)
@@ -478,7 +496,7 @@ func TestBuildToolManifestNote_EmptyWhenAllLoaded(t *testing.T) {
 	if len(lazyNames) == 0 {
 		t.Skip("Mia has no lazy tools — skip")
 	}
-	al.markToolsLoaded(sessionID, lazyNames)
+	al.markToolsLoaded(bucketFor(miaAgent, sessionID), lazyNames)
 
 	ts := fakeTurnState(miaAgent, sessionID)
 	note := al.buildToolManifestNote(ts, policyFiltered)
@@ -489,11 +507,19 @@ func TestBuildToolManifestNote_EmptyWhenAllLoaded(t *testing.T) {
 
 // TestReachabilityInvariant_AllCoreAgents proves that for each core agent,
 // every policy-allowed tool is reachable: it is either in the compressed defs
-// (full/infra) OR it is in the manifest note (lazy, loadable).
+// (full/infra), previewed in the manifest note (Tier 2), or — per ADR-071 D3
+// — deliberately invisible-but-findable (Tier 3, search-only): NOT listed in
+// the note, because that is the entire point of Tier 3, but still fully
+// registered and policy-governed (verified elsewhere by
+// TestVisibility_SearchOnlyToolsRemainInSearchIndex, which checks the actual
+// search index rather than the note).
 //
-// No allowed tool may be silently unreachable — this is the critical invariant.
-// Non-vacuous: asserts each agent has ≥1 FULL-tier AND ≥1 LAZY-tier tool so
-// both switch arms are exercised, and an empty policyFiltered set fails loudly.
+// No allowed tool may be silently unreachable through a channel it claims to
+// use — this is the critical invariant, narrowed by D3 from "every lazy tool
+// is in the note" to "every previewed tool is in the note AND every
+// search-only tool is NOT". Non-vacuous: asserts each agent has ≥1 FULL-tier
+// AND ≥1 LAZY-tier tool so both switch arms are exercised, and an empty
+// policyFiltered set fails loudly.
 func TestReachabilityInvariant_AllCoreAgents(t *testing.T) {
 	cfg := newCompressedCfg(t)
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &mockProvider{})
@@ -558,10 +584,17 @@ func TestReachabilityInvariant_AllCoreAgents(t *testing.T) {
 					assert.True(t, defNames[name],
 						"agent %q: full/infra tool %q must be in compressed defs", agentID, name)
 				case tools.ManifestLazy:
-					// Must appear in the manifest note (as a loadable entry).
-					// The entry format is "  - <name>".
-					assert.Contains(t, note, "  - "+name,
-						"agent %q: lazy tool %q must appear in manifest note", agentID, name)
+					// ADR-071 D3: a lazy tool's reachability channel now
+					// depends on its visibility. The entry format is
+					// "  - <name>".
+					switch tools.ToolManifestVisibility(name) {
+					case tools.ManifestPreviewed:
+						assert.Contains(t, note, "  - "+name,
+							"agent %q: previewed lazy tool %q must appear in manifest note", agentID, name)
+					case tools.ManifestSearchOnly:
+						assert.NotContains(t, note, "  - "+name,
+							"agent %q: search-only lazy tool %q must NOT appear in manifest note (ADR-071 D3) — it is reachable only via ToolSearch", agentID, name)
+					}
 				}
 			}
 		})
@@ -672,34 +705,37 @@ func TestCanLoad_FullTierNotLoadable(t *testing.T) {
 // cannot be loaded via ToolSearch (cannot bypass policy via load).
 //
 // Note: read_file is ManifestFull — full-tier tools now return a no-op success
-// (C2 fix) regardless of policy. This test uses send_file (ManifestLazy,
-// registered for all agents via registerSharedTools) which is NOT in Ava's
-// explicit allow-list. If send_file appears in Ava's policy-filtered set,
-// that is itself a regression that must fail loudly.
+// (C2 fix) regardless of policy. This test used to hardcode "send_file" as its
+// denied-lazy example, but ADR-071 D3 promoted send_file to Full tier — so the
+// candidate is now found DYNAMICALLY: any tool registered on Ava's registry
+// that is ManifestLazy AND absent from her policy-filtered set. This is
+// future-proof against further tier reclassification, unlike a hardcoded name.
 func TestCanLoad_PolicyDeniedToolRejected(t *testing.T) {
 	cfg := newCompressedCfg(t)
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &mockProvider{})
 	defer al.Close()
 
-	// Ava has deny-by-default; send_file is a lazy tool not in her allow list.
+	// Ava has deny-by-default.
 	avaAgent, ok := al.registry.GetAgent("ava")
 	require.True(t, ok)
 
-	// send_file must be lazy-tier (not full-tier) for this test.
-	require.Equal(t, tools.ManifestLazy, tools.ToolManifestTier("send_file"),
-		"send_file must be ManifestLazy — update this test if the tool tier changes")
-
-	// Structural guarantee: send_file must NOT be in Ava's policy-filtered set.
-	// If this assertion fails, the test should fail loudly — it means the Ava
-	// policy was changed to allow send_file, which would invalidate the
-	// security assertion below. Do NOT replace this with t.Skip.
 	allTools := avaAgent.Tools.GetAll()
 	policyFiltered, _ := tools.FilterToolsByPolicy(allTools, avaAgent.AgentType, avaAgent.LoadToolPolicy())
+	allowed := make(map[string]bool, len(policyFiltered))
 	for _, tool := range policyFiltered {
-		require.NotEqual(t, "send_file", tool.Name(),
-			"POLICY REGRESSION: send_file must NOT be allowed for ava (deny-by-default). "+
-				"If this assertion breaks, the Ava policy changed — verify the intent in core.go and update this test.")
+		allowed[tool.Name()] = true
 	}
+
+	var deniedLazyName string
+	for _, tool := range allTools {
+		if tools.ToolManifestTier(tool.Name()) == tools.ManifestLazy && !allowed[tool.Name()] {
+			deniedLazyName = tool.Name()
+			break
+		}
+	}
+	require.NotEmpty(t, deniedLazyName,
+		"ava must have at least one registered ManifestLazy tool that policy denies — "+
+			"if this is empty, ava's deny-by-default posture has regressed to allow-everything")
 
 	ctx := tools.WithAgentID(context.Background(), "ava")
 	ctx = tools.WithTranscriptSessionID(ctx, "sess-denied")
@@ -709,9 +745,9 @@ func TestCanLoad_PolicyDeniedToolRejected(t *testing.T) {
 	tt, ok := toolsToolRaw.(*tools.ToolsTool)
 	require.True(t, ok)
 
-	result := tt.Execute(ctx, map[string]any{"names": []any{"send_file"}})
+	result := tt.Execute(ctx, map[string]any{"names": []any{deniedLazyName}})
 	assert.True(t, result.IsError,
-		"send_file must be rejected for ava (policy denied); got: %s", result.ForLLM)
+		"%s must be rejected for ava (policy denied); got: %s", deniedLazyName, result.ForLLM)
 }
 
 // ─── FIX 2 regression: session-ID consistency ──────────────────────────────
@@ -719,14 +755,17 @@ func TestCanLoad_PolicyDeniedToolRejected(t *testing.T) {
 // TestSessionID_NoTranscript_LoadedToolsVisible is the regression test for
 // FIX 2. It proves that when TranscriptSessionID is empty (transcript disabled)
 // but sessionKey is set, tools marked loaded via the writer's derivation
-// (manifestSessionID("", sessionKey) == sessionKey) are visible to the readers
-// (buildCompressedToolDefs, buildToolManifestNote) that also use manifestSessionID.
+// (manifestBucketKey(agentID, "", sessionKey) — ADR-071 D3 §4.6 added the
+// agent-id component on top of the original manifestSessionID("",
+// sessionKey) == sessionKey fallback) are visible to the readers
+// (buildCompressedToolDefs, buildToolManifestNote) that also use
+// manifestBucketKey with the same agent id (ts.agent.ID).
 //
 // Before FIX 2: readers used ts.opts.TranscriptSessionID directly (""), so
 // they looked up the "" bucket while the writer stored under sessionKey →
 // loaded tools were invisible to the model.
-// After FIX 2: both sides call manifestSessionID("", sessionKey) == sessionKey
-// → same bucket, loaded tools visible.
+// After FIX 2 (and after D3 §4.6's later narrowing to include the agent id):
+// both sides derive the same (agent, session) bucket → loaded tools visible.
 func TestSessionID_NoTranscript_LoadedToolsVisible(t *testing.T) {
 	cfg := newCompressedCfg(t)
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &mockProvider{})
@@ -750,8 +789,12 @@ func TestSessionID_NoTranscript_LoadedToolsVisible(t *testing.T) {
 
 	sessionKey := "agent:jim:session:no-transcript-sess"
 
-	// Simulate the writer: markToolsLoaded using manifestSessionID("", sessionKey).
-	writerKey := manifestSessionID("", sessionKey)
+	// Simulate the writer: markToolsLoaded using
+	// manifestBucketKey(agentID, "", sessionKey) — ADR-071 D3 §4.6 narrowed
+	// the bucket to (agent, session), so the writer must carry the same
+	// agent id the reader (fakeTurnStateNoTranscript below) will derive from
+	// ts.agent.ID.
+	writerKey := manifestBucketKey(jimAgent.ID, "", sessionKey)
 	al.markToolsLoaded(writerKey, []string{lazyName})
 
 	// Build turnState as the reader would see it: no transcript ID, session key set.
@@ -1286,7 +1329,7 @@ func TestTokenWin_ByteSizeMaterially(t *testing.T) {
 		maxLoads = 5
 	}
 	for i := 0; i < maxLoads; i++ {
-		al.markToolsLoaded(sessionID, []string{lazyNames[i]})
+		al.markToolsLoaded(bucketFor(jimAgent, sessionID), []string{lazyNames[i]})
 
 		ts := fakeTurnState(jimAgent, sessionID)
 		defs := al.buildCompressedToolDefs(ts, policyFiltered)
@@ -1334,7 +1377,7 @@ func TestTokenWin_LoadingAllLazyReachesFullSize(t *testing.T) {
 	require.NotEmpty(t, lazyNames)
 
 	sessionID := "sess-all-lazy-loaded"
-	al.markToolsLoaded(sessionID, lazyNames)
+	al.markToolsLoaded(bucketFor(jimAgent, sessionID), lazyNames)
 
 	// Baseline: policy-filtered set as provider defs.
 	pfDefs := tools.ToolsToProviderDefs(policyFiltered)
@@ -1425,6 +1468,79 @@ func TestSearchThenLoad_Reachability(t *testing.T) {
 		"query-then-load chain: lazy tool %q must be callable after ToolSearch{names:[...]}.Execute", lazyName)
 }
 
+// TestVisibility_SearchOnlyToolFoundByDescriptionBecomesUsable is FR-031a's
+// dynamic-promotion half (distinct from the static index-membership property
+// TestVisibility_SearchOnlyToolsRemainInSearchIndex in pkg/tools asserts): a
+// search-only (Tier 3) tool found via ToolSearch's QUERY (by-description)
+// path — not the by-name path TestSearchThenLoad_Reachability exercises — is
+// (a) made usable by that search and (b) its full callable schema is present
+// in the next turn's callable set (ADR-071 §4.4, User Story 4 Acceptance
+// Scenario 2 / FR-031a).
+//
+// Drives the REAL query+auto-load path in tools_tool.go's execSearchAndLoad
+// against jim's real, production-registered tool set — not a synthetic
+// fixture — so this also exercises the real BM25 ranking. The query is
+// deliberately generic ("take a screenshot of the browser") rather than
+// pinned to one exact tool name, and the assertions are made against
+// WHICHEVER tool the real ranking auto-loads, so the test is not coupled to
+// D2's (not-yet-implemented) ambiguity-band ranking changes — only to the
+// property that a query-path promotion makes SOME tool usable end to end.
+func TestVisibility_SearchOnlyToolFoundByDescriptionBecomesUsable(t *testing.T) {
+	cfg := newCompressedCfg(t)
+	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &mockProvider{})
+	defer al.Close()
+
+	jimAgent, ok := al.registry.GetAgent("jim")
+	require.True(t, ok)
+
+	allTools := jimAgent.Tools.GetAll()
+	policyFiltered, _ := tools.FilterToolsByPolicy(allTools, jimAgent.AgentType, jimAgent.LoadToolPolicy())
+
+	transcriptID := "sess-query-promote-d3"
+
+	// Before the query: nothing new is loaded, so the manifest note is
+	// unaffected by this test's own future actions (baseline).
+	tsBefore := fakeTurnState(jimAgent, transcriptID)
+	defsBefore := al.buildCompressedToolDefs(tsBefore, policyFiltered)
+	beforeNames := make(map[string]bool, len(defsBefore))
+	for _, d := range defsBefore {
+		beforeNames[d.Function.Name] = true
+	}
+
+	toolsToolRaw, ok := jimAgent.Tools.Get("ToolSearch")
+	require.True(t, ok, "`ToolSearch` infra tool must be registered for jim in compressed mode")
+	tt, ok := toolsToolRaw.(*tools.ToolsTool)
+	require.True(t, ok, "`ToolSearch` infra tool must be *tools.ToolsTool")
+
+	ctx := tools.WithAgentID(context.Background(), "jim")
+	ctx = tools.WithTranscriptSessionID(ctx, transcriptID)
+	ctx = tools.WithSessionKey(ctx, transcriptID)
+
+	queryResult := tt.Execute(ctx, map[string]any{"query": "take a screenshot of the current browser tab"})
+	require.False(t, queryResult.IsError, "ToolSearch{query:...} must not error; got: %s", queryResult.ForLLM)
+	require.Contains(t, queryResult.ForLLM, "Loaded the best match",
+		"the query must auto-load a match against jim's real tool set; got: %s", queryResult.ForLLM)
+
+	// After the query: buildCompressedToolDefs must contain EXACTLY ONE new
+	// name relative to the baseline (the auto-loaded match), proving the
+	// query-path promotion reached the manifest builder end to end.
+	tsAfter := fakeTurnState(jimAgent, transcriptID)
+	defsAfter := al.buildCompressedToolDefs(tsAfter, policyFiltered)
+
+	var newlyCallable []string
+	for _, d := range defsAfter {
+		if !beforeNames[d.Function.Name] {
+			newlyCallable = append(newlyCallable, d.Function.Name)
+		}
+	}
+	require.Len(t, newlyCallable, 1,
+		"exactly one new tool must become callable after the query-path promotion; got %v", newlyCallable)
+
+	promoted := newlyCallable[0]
+	assert.Equal(t, tools.ManifestLazy, tools.ToolManifestTier(promoted),
+		"the auto-loaded tool %q must have been ManifestLazy before promotion (that is the whole point of the discovery path)", promoted)
+}
+
 // ─── Part A §5a — Manifest determinism under load churn ───────────────────
 
 // TestManifestDeterminism_LoadSameToolTwice proves that loading the same lazy
@@ -1459,13 +1575,13 @@ func TestManifestDeterminism_LoadSameToolTwice(t *testing.T) {
 	sessionID := "sess-idempotent-load"
 
 	// Load the tool once.
-	al.markToolsLoaded(sessionID, []string{lazyName})
+	al.markToolsLoaded(bucketFor(jimAgent, sessionID), []string{lazyName})
 	ts1 := fakeTurnState(jimAgent, sessionID)
 	defs1 := al.buildCompressedToolDefs(ts1, policyFiltered)
 	note1 := al.buildToolManifestNote(ts1, policyFiltered)
 
 	// Load the same tool again (idempotent).
-	al.markToolsLoaded(sessionID, []string{lazyName})
+	al.markToolsLoaded(bucketFor(jimAgent, sessionID), []string{lazyName})
 	ts2 := fakeTurnState(jimAgent, sessionID)
 	defs2 := al.buildCompressedToolDefs(ts2, policyFiltered)
 	note2 := al.buildToolManifestNote(ts2, policyFiltered)
@@ -1512,7 +1628,7 @@ func TestManifestDeterminism_LoadChurn(t *testing.T) {
 	sessionID := "sess-churn"
 	for _, tool := range policyFiltered {
 		if tools.ToolManifestTier(tool.Name()) == tools.ManifestLazy {
-			al.markToolsLoaded(sessionID, []string{tool.Name()})
+			al.markToolsLoaded(bucketFor(jimAgent, sessionID), []string{tool.Name()})
 			break
 		}
 	}
@@ -1600,27 +1716,37 @@ func TestCanLoad_HiddenMCPTool_AllowDefaultAgent(t *testing.T) {
 // in the test harness), so Mia's policy-filtered set never contained `navigate`
 // and the Full-tier assertion branch was never exercised for that tool.
 //
-// This test injects a minimal stub of `navigate` (implementing tools.Tool with
-// Name()=="navigate") directly into Mia's registry — bypassing the circular-dep
-// import restriction on pkg/sysagent/tools — then asserts that:
-//  1. After promotion (round 2), ToolManifestTier("navigate") == ManifestFull.
-//  2. For an agent that allows `navigate` and has it registered, `navigate` appears
-//     in buildCompressedToolDefs on turn 1 WITHOUT any prior markToolsLoaded call.
-//  3. `navigate` does NOT appear in the manifest note (it is not a lazy tool).
+// This test originally proved `navigate` was promoted to ManifestFull (round 2
+// of feat/0.1.0-uat-fixes). ADR-071 D3 §4.1 REVERSED that promotion: navigate
+// moved back down to the lazy tier, specifically the new previewed (Tier 2)
+// subdivision, to remove its permanent visibility advantage now that the
+// full-tier set is being kept small deliberately. This test is rewritten
+// (not deleted, per this codebase's regression-history convention) to pin the
+// NEW behavior:
+//  1. ToolManifestTier("navigate") == ManifestLazy (not Full).
+//  2. ToolManifestVisibility("navigate") == ManifestPreviewed (Tier 2, not
+//     search-only) — it still gets a preview line, just not a callable def
+//     every turn.
+//  3. On turn 1, with no prior markToolsLoaded call, navigate is NOT in
+//     buildCompressedToolDefs's output (it must be found/loaded first).
+//  4. navigate DOES appear in the manifest note as a preview entry.
+//  5. After a markToolsLoaded call for navigate, it appears in
+//     buildCompressedToolDefs — proving it is still fully reachable, just one
+//     tier down from where round-2 of feat/0.1.0-uat-fixes left it.
 //
-// This test FAILS on the pre-promotion code where `navigate` was ManifestLazy:
-// without a markToolsLoaded call the lazy gate would exclude `navigate` from the
-// sent defs, so assertion (2) would fail.
-//
-// Traces to: feat/0.1.0-uat-fixes round-2 manifest promotion of `navigate`;
-// pkg/tools/manifest.go fullManifestToolNames.
-func TestMiaNavigate_FullTierDirectlyCallable(t *testing.T) {
-	// Precondition: ToolManifestTier classification is the single source of truth.
-	// If this assertion fails, the promotion was reverted — everything else is moot.
-	require.Equal(t, tools.ManifestFull, tools.ToolManifestTier("navigate"),
-		"PROMOTION REGRESSION: ToolManifestTier(\"navigate\") must be ManifestFull "+
-			"(was promoted in round 2 of feat/0.1.0-uat-fixes). "+
-			"If this assertion breaks, navigate was removed from fullManifestToolNames in pkg/tools/manifest.go.")
+// Traces to: ADR-071 D3 §4.1 (bash/navigate/create_task/update_task leave the
+// always-listed set); pkg/tools/manifest.go fullManifestToolNames/previewedLazyToolNames.
+func TestMiaNavigate_DemotedToPreviewedTier(t *testing.T) {
+	// Precondition: ToolManifestTier/Visibility classification is the single
+	// source of truth. If either assertion fails, ADR-071 D3's reclassification
+	// of navigate was reverted — everything else here is moot.
+	require.Equal(t, tools.ManifestLazy, tools.ToolManifestTier("navigate"),
+		"ADR-071 D3 REGRESSION: ToolManifestTier(\"navigate\") must be ManifestLazy "+
+			"(demoted from Full in D3 §4.1). If this assertion breaks, navigate was "+
+			"re-added to fullManifestToolNames in pkg/tools/manifest.go.")
+	require.Equal(t, tools.ManifestPreviewed, tools.ToolManifestVisibility("navigate"),
+		"ADR-071 D3 REGRESSION: ToolManifestVisibility(\"navigate\") must be ManifestPreviewed "+
+			"(it is one of the 8 Tier 2 names in previewedLazyToolNames).")
 
 	cfg := newCompressedCfg(t)
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &mockProvider{})
@@ -1632,7 +1758,8 @@ func TestMiaNavigate_FullTierDirectlyCallable(t *testing.T) {
 	// navigate is NOT registered in the test harness (it is a sysagent tool wired
 	// via WireSysagentDeps, which is not called in unit tests — that would create
 	// a circular import: pkg/agent → pkg/sysagent/tools → pkg/agent).
-	// Inject a minimal stub so we can verify the Full-tier path without the circular dep.
+	// Inject a minimal stub so we can verify the previewed-tier path without the
+	// circular dep.
 	navigateStub := &fakeNavigateTool{}
 	miaAgent.Tools.Register(navigateStub)
 
@@ -1654,8 +1781,10 @@ func TestMiaNavigate_FullTierDirectlyCallable(t *testing.T) {
 		"POLICY REGRESSION: `navigate` must be in Mia's policy-filtered set. "+
 			"Check IDMia policy in pkg/coreagent/core.go — navigate must be explicitly allowed.")
 
-	// Turn 1: no markToolsLoaded call — navigate must be in compressed defs as Full-tier.
-	ts := fakeTurnState(miaAgent, "sess-mia-navigate-gap1")
+	sessionID := "sess-mia-navigate-d3"
+
+	// Turn 1: no markToolsLoaded call — navigate must NOT be directly callable.
+	ts := fakeTurnState(miaAgent, sessionID)
 	defs := al.buildCompressedToolDefs(ts, policyFiltered)
 
 	defNames := make(map[string]bool, len(defs))
@@ -1663,22 +1792,33 @@ func TestMiaNavigate_FullTierDirectlyCallable(t *testing.T) {
 		defNames[d.Function.Name] = true
 	}
 
-	// DIFFERENTIATION CONTROL: send_message (also Full-tier, always registered) must be
-	// in defs — proves the Full-tier path itself works (not a vacuous assertion).
+	// DIFFERENTIATION CONTROL: send_message (Full-tier, always registered) must be
+	// in defs — proves the Full-tier path itself still works (not a vacuous assertion).
 	assert.True(t, defNames["send_message"],
 		"send_message (Full-tier, always registered) must be in Mia's compressed defs as a control")
 
-	// PRIMARY ASSERTION: navigate must appear WITHOUT any prior markToolsLoaded call.
-	// This fails on pre-promotion code where navigate was ManifestLazy.
-	assert.True(t, defNames["navigate"],
-		"GAP1: `navigate` (ManifestFull after promotion) must appear in Mia's compressed defs "+
-			"on turn 1 WITHOUT any prior markToolsLoaded call. "+
-			"This fails on pre-promotion code where navigate was ManifestLazy — proving the promotion matters.")
+	// PRIMARY ASSERTION: navigate must NOT appear without a prior load — it now
+	// pays the same one-time discovery cost as bash/create_task/update_task.
+	assert.False(t, defNames["navigate"],
+		"ADR-071 D3: `navigate` (now ManifestLazy/ManifestPreviewed) must NOT appear in "+
+			"Mia's compressed defs on turn 1 without a prior markToolsLoaded call.")
 
-	// COMPLEMENT: navigate must NOT appear in the manifest note (it is not lazy/loadable).
+	// navigate DOES appear in the manifest note as a preview entry (Tier 2).
 	note := al.buildToolManifestNote(ts, policyFiltered)
-	assert.NotContains(t, note, "  - navigate",
-		"navigate (Full-tier) must NOT appear in the manifest note (only lazy tools are listed there)")
+	assert.Contains(t, note, "  - navigate",
+		"navigate (previewed lazy) must appear in the manifest note as a preview entry")
+
+	// After a load, navigate becomes callable — it remains fully reachable,
+	// just one deliberate discovery round trip away.
+	al.markToolsLoaded(bucketFor(miaAgent, sessionID), []string{"navigate"})
+	tsAfter := fakeTurnState(miaAgent, sessionID)
+	defsAfter := al.buildCompressedToolDefs(tsAfter, policyFiltered)
+	defNamesAfter := make(map[string]bool, len(defsAfter))
+	for _, d := range defsAfter {
+		defNamesAfter[d.Function.Name] = true
+	}
+	assert.True(t, defNamesAfter["navigate"],
+		"navigate must become callable after markToolsLoaded — it is demoted, not unreachable")
 }
 
 // fakeNavigateTool is a minimal stub that satisfies the tools.Tool interface
@@ -1701,44 +1841,40 @@ func (f *fakeNavigateTool) Execute(_ context.Context, _ map[string]any) *tools.T
 	return &tools.ToolResult{ForLLM: "stub"}
 }
 
-// ─── GAP 2 regression: promoted tools callable on turn 1 without load ────────
+// ─── GAP 2 / ADR-071 D3: task tools split across Full and Previewed tiers ────
 
-// TestPromotedTaskTools_CallableOnTurn1_NoLoad closes the coverage gap where no
-// test proved that `create_task`, `list_tasks`, `update_task` (promoted to
-// ManifestFull in round 2 of feat/0.1.0-uat-fixes) are callable on turn 1
-// WITHOUT a prior markToolsLoaded call.
-//
-// The pre-existing C2 (TestManifestTier_PromotedTools_C2) only checked the tier
-// lookup in ISOLATION; it did not run buildCompressedToolDefs and therefore could
-// not detect a regression where the tools remained ManifestFull in the tier table
-// but the production code path somehow still treated them as lazy.
-//
-// This test:
-//  1. Asserts ToolManifestTier returns ManifestFull for each promoted tool
-//     (single source of truth — fails fast if promotion was reverted).
+// TestPromotedTaskTools_CallableOnTurn1_NoLoad originally proved that
+// `create_task`, `list_tasks`, `update_task` (all promoted to ManifestFull in
+// round 2 of feat/0.1.0-uat-fixes) were callable on turn 1 without a prior
+// markToolsLoaded call. ADR-071 D3 §4.1/§4.2 SPLIT that trio: `list_tasks`
+// stays Full (a read the agent needs to orient itself), while `create_task`
+// and `update_task` drop to the previewed lazy tier (Tier 2) — deliberately,
+// so `delegate` keeps a wider visibility margin over the task-mutation verbs
+// per ADR-053's measured ordering. This test is rewritten to pin the SPLIT
+// tier behavior rather than the old "all three are Full" one:
+//  1. Asserts ToolManifestTier: list_tasks == ManifestFull; create_task and
+//     update_task == ManifestLazy (with ManifestVisibility == ManifestPreviewed).
 //  2. Calls buildCompressedToolDefs on turn 1 (no markToolsLoaded) and asserts
-//     each promoted tool appears in the sent defs.
-//  3. Asserts none of the promoted tools appear in the manifest note (they must
-//     not be listed as "load before use").
-//  4. Tests both Jim (who allows all three) and Mia (who allows all three), using
-//     DIFFERENT agent instances to prove the assertion is not hardcoded.
+//     list_tasks IS in the sent defs, while create_task/update_task are NOT.
+//  3. Asserts list_tasks does NOT appear in the manifest note (Full tier has
+//     no manifest presence), while create_task/update_task DO (previewed).
+//  4. Tests both Jim and Mia, using DIFFERENT agent instances to prove the
+//     assertion is not hardcoded.
 //
-// This test FAILS on the pre-promotion code where these tools were ManifestLazy:
-// without a markToolsLoaded call the lazy gate would exclude them from the sent
-// defs, so assertion (2) would fail for both agents.
-//
-// Traces to: feat/0.1.0-uat-fixes round-2 manifest promotion; pkg/tools/manifest.go
-// fullManifestToolNames; pkg/agent/loop.go registerSharedTools task-tools block.
+// Traces to: ADR-071 D3 §4.1/§4.2; pkg/tools/manifest.go
+// fullManifestToolNames/previewedLazyToolNames; pkg/agent/loop.go
+// registerSharedTools task-tools block.
 func TestPromotedTaskTools_CallableOnTurn1_NoLoad(t *testing.T) {
-	promotedTools := []string{"create_task", "list_tasks", "update_task"}
-
-	// Precondition: tier classification must be ManifestFull for all promoted tools.
-	// Fails fast if any promotion was reverted in pkg/tools/manifest.go.
-	for _, name := range promotedTools {
-		require.Equal(t, tools.ManifestFull, tools.ToolManifestTier(name),
-			"PROMOTION REGRESSION: ToolManifestTier(%q) must be ManifestFull. "+
-				"If this assertion breaks, %q was removed from fullManifestToolNames — "+
-				"the promotion that let Mia/Jim call tasks on turn 1 was reverted.", name, name)
+	// Precondition: the D3 tier split, fails fast if reverted.
+	require.Equal(t, tools.ManifestFull, tools.ToolManifestTier("list_tasks"),
+		"ADR-071 D3 REGRESSION: ToolManifestTier(\"list_tasks\") must stay ManifestFull.")
+	for _, name := range []string{"create_task", "update_task"} {
+		require.Equal(t, tools.ManifestLazy, tools.ToolManifestTier(name),
+			"ADR-071 D3 REGRESSION: ToolManifestTier(%q) must be ManifestLazy "+
+				"(demoted from Full in D3 §4.1). If this assertion breaks, %q was "+
+				"re-added to fullManifestToolNames.", name, name)
+		require.Equal(t, tools.ManifestPreviewed, tools.ToolManifestVisibility(name),
+			"ADR-071 D3 REGRESSION: ToolManifestVisibility(%q) must be ManifestPreviewed.", name)
 	}
 
 	cfg := newCompressedCfg(t)
@@ -1755,6 +1891,7 @@ func TestPromotedTaskTools_CallableOnTurn1_NoLoad(t *testing.T) {
 		{agentID: "jim", sessionID: "sess-gap2-jim"},
 		{agentID: "mia", sessionID: "sess-gap2-mia"},
 	}
+	taskTools := []string{"create_task", "list_tasks", "update_task"}
 
 	for _, tc := range tests {
 		t.Run(tc.agentID, func(t *testing.T) {
@@ -1764,13 +1901,13 @@ func TestPromotedTaskTools_CallableOnTurn1_NoLoad(t *testing.T) {
 			allTools := agentInst.Tools.GetAll()
 			policyFiltered, _ := tools.FilterToolsByPolicy(allTools, agentInst.AgentType, agentInst.LoadToolPolicy())
 
-			// Non-vacuous: all promoted tools must be in the policy-filtered set.
+			// Non-vacuous: all three task tools must be in the policy-filtered set.
 			// If any is missing, the policy for this agent no longer allows it — check core.go.
 			pfNames := make(map[string]bool, len(policyFiltered))
 			for _, t2 := range policyFiltered {
 				pfNames[t2.Name()] = true
 			}
-			for _, name := range promotedTools {
+			for _, name := range taskTools {
 				require.True(t, pfNames[name],
 					"POLICY REGRESSION: agent %q — %q must be in policy-filtered set. "+
 						"Check the agent's allow-policy in pkg/coreagent/core.go.", tc.agentID, name)
@@ -1778,7 +1915,7 @@ func TestPromotedTaskTools_CallableOnTurn1_NoLoad(t *testing.T) {
 
 			// Also confirm the tools are registered in the test harness
 			// (the taskStore is initialized from tmpDir in newCompressedCfg via NewAgentLoop).
-			for _, name := range promotedTools {
+			for _, name := range taskTools {
 				_, registered := agentInst.Tools.Get(name)
 				require.True(t, registered,
 					"REGISTRATION GAP: agent %q — %q must be registered in the test harness. "+
@@ -1786,10 +1923,7 @@ func TestPromotedTaskTools_CallableOnTurn1_NoLoad(t *testing.T) {
 						"in NewAgentLoop; if this fails, the taskStore or tool registration changed.", tc.agentID, name)
 			}
 
-			// Turn 1: NO markToolsLoaded call — promoted Full-tier tools must be
-			// in the sent defs immediately. This is the property the promotion delivers.
-			// Pre-promotion code: these tools were ManifestLazy → NOT in defs here → FAIL.
-			// Post-promotion code: ManifestFull → always in defs → PASS.
+			// Turn 1: NO markToolsLoaded call.
 			ts := fakeTurnState(agentInst, tc.sessionID)
 			defs := al.buildCompressedToolDefs(ts, policyFiltered)
 
@@ -1798,40 +1932,52 @@ func TestPromotedTaskTools_CallableOnTurn1_NoLoad(t *testing.T) {
 				defNames[d.Function.Name] = true
 			}
 
-			for _, name := range promotedTools {
-				assert.True(t, defNames[name],
-					"GAP2: agent %q — %q (ManifestFull after promotion) must appear in "+
-						"buildCompressedToolDefs on turn 1 WITHOUT any prior markToolsLoaded call. "+
-						"This FAILS on pre-promotion code where %q was ManifestLazy.", tc.agentID, name, name)
+			// list_tasks (Full) is directly callable without a load.
+			assert.True(t, defNames["list_tasks"],
+				"agent %q: list_tasks (ManifestFull) must appear in buildCompressedToolDefs "+
+					"on turn 1 without a prior markToolsLoaded call.", tc.agentID)
+			// create_task/update_task (now previewed lazy) are NOT — they pay the
+			// one-time discovery cost D3 introduced.
+			for _, name := range []string{"create_task", "update_task"} {
+				assert.False(t, defNames[name],
+					"ADR-071 D3: agent %q — %q (now ManifestLazy/ManifestPreviewed) must NOT "+
+						"appear in buildCompressedToolDefs on turn 1 without a load.", tc.agentID, name)
 			}
 
-			// COMPLEMENT: promoted tools must NOT appear in the manifest note.
-			// They are Full-tier (always callable), not lazy (load-before-use).
 			note := al.buildToolManifestNote(ts, policyFiltered)
-			for _, name := range promotedTools {
-				assert.NotContains(t, note, "  - "+name,
-					"agent %q — %q (Full-tier) must NOT appear in the manifest note "+
-						"(only lazy tools are listed as 'load before use')", tc.agentID, name)
+			// list_tasks (Full) has no manifest-block presence at all.
+			assert.NotContains(t, note, "  - list_tasks",
+				"agent %q: list_tasks (Full-tier) must NOT appear in the manifest note", tc.agentID)
+			// create_task/update_task (previewed) DO appear as preview entries.
+			for _, name := range []string{"create_task", "update_task"} {
+				assert.Contains(t, note, "  - "+name,
+					"agent %q: %q (previewed lazy) must appear in the manifest note as a preview entry", tc.agentID, name)
 			}
 		})
 	}
 }
 
 // TestPromotedTaskTools_DifferentiationCheck is the explicit differentiation test:
-// it proves the Full-tier assertions above are NOT vacuous by showing that a
-// genuinely-lazy tool (find_skills, which is in Mia's policy-filtered set and is
-// ManifestLazy) does NOT appear in defs on turn 1 without a load call.
+// it proves the Full/previewed/search-only assertions above are NOT vacuous by
+// showing that a genuinely SEARCH-ONLY tool (find_skills — ManifestLazy AND
+// ManifestSearchOnly, in Mia's policy-filtered set) does NOT appear in defs on
+// turn 1 without a load call, AND does NOT appear in the manifest note either
+// (the D3 property create_task/update_task deliberately do NOT share).
 //
-// This guards against a regression where buildCompressedToolDefs accidentally sends
-// ALL tools (making the "not lazy" assertion vacuously true). If this test passes
-// alongside TestPromotedTaskTools_CallableOnTurn1_NoLoad, the distinction between
-// Full-tier (always sent) and Lazy-tier (requires load) is exercised in a single run.
+// This guards against a regression where buildCompressedToolDefs accidentally
+// sends ALL tools (making the "not directly callable" assertions vacuously
+// true), and against a regression where the manifest note accidentally lists
+// every lazy tool regardless of visibility (making the "previewed only"
+// distinction above vacuous).
 //
-// Traces to: feat/0.1.0-uat-fixes round-2; QA anti-shortcut: differentiation test.
+// Traces to: ADR-071 D3 §4.1/§4.4; QA anti-shortcut: differentiation test.
 func TestPromotedTaskTools_DifferentiationCheck(t *testing.T) {
-	// find_skills is ManifestLazy and in Mia's allow-list — it is the control tool.
+	// find_skills is ManifestLazy AND ManifestSearchOnly (Tier 3) and in Mia's
+	// allow-list — it is the control tool for BOTH properties under test.
 	require.Equal(t, tools.ManifestLazy, tools.ToolManifestTier("find_skills"),
 		"find_skills must be ManifestLazy for this differentiation test to be valid")
+	require.Equal(t, tools.ManifestSearchOnly, tools.ToolManifestVisibility("find_skills"),
+		"find_skills must be ManifestSearchOnly (Tier 3) for this differentiation test to be valid")
 
 	cfg := newCompressedCfg(t)
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &mockProvider{})
@@ -1854,7 +2000,7 @@ func TestPromotedTaskTools_DifferentiationCheck(t *testing.T) {
 	require.True(t, findSkillsPresent,
 		"find_skills must be in Mia's policy-filtered set for this differentiation test to be meaningful")
 
-	// Turn 1: no load call. Full-tier promoted tools must be in defs; find_skills must NOT be.
+	// Turn 1: no load call.
 	ts := fakeTurnState(miaAgent, "sess-gap2-diff")
 	defs := al.buildCompressedToolDefs(ts, policyFiltered)
 
@@ -1863,18 +2009,31 @@ func TestPromotedTaskTools_DifferentiationCheck(t *testing.T) {
 		defNames[d.Function.Name] = true
 	}
 
-	// Full-tier promoted tools are present (the positive case).
-	for _, name := range []string{"create_task", "list_tasks", "update_task"} {
-		assert.True(t, defNames[name],
-			"promoted tool %q (ManifestFull) must be in defs on turn 1", name)
+	// list_tasks (Full) is present (the positive case).
+	assert.True(t, defNames["list_tasks"],
+		"list_tasks (ManifestFull) must be in defs on turn 1")
+
+	// create_task/update_task (previewed lazy) and find_skills (search-only lazy)
+	// are all absent from defs without a load — the negative case for defs.
+	for _, name := range []string{"create_task", "update_task", "find_skills"} {
+		assert.False(t, defNames[name],
+			"DIFFERENTIATION: %q (lazy) must NOT be in defs on turn 1 without a load call. "+
+				"If this assertion fails, buildCompressedToolDefs sends ALL tools regardless of tier — "+
+				"the positive assertion above is then vacuous and the manifest optimization is broken.", name)
 	}
 
-	// find_skills is absent (the negative case — proves buildCompressedToolDefs
-	// does NOT just dump all tools, making the positive assertions above non-vacuous).
-	assert.False(t, defNames["find_skills"],
-		"DIFFERENTIATION: find_skills (ManifestLazy) must NOT be in defs on turn 1 without a load call. "+
-			"If this assertion fails, buildCompressedToolDefs sends ALL tools regardless of tier — "+
-			"the positive assertions above are then vacuous and the manifest optimization is broken.")
+	note := al.buildToolManifestNote(ts, policyFiltered)
+	// create_task/update_task (previewed) DO appear in the note.
+	for _, name := range []string{"create_task", "update_task"} {
+		assert.Contains(t, note, "  - "+name,
+			"DIFFERENTIATION: %q (previewed lazy) must appear in the manifest note", name)
+	}
+	// find_skills (search-only) does NOT — proving the previewed-vs-search-only
+	// split inside the manifest note is real, not vacuous.
+	assert.NotContains(t, note, "  - find_skills",
+		"DIFFERENTIATION: find_skills (search-only lazy) must NOT appear in the manifest note. "+
+			"If this assertion fails, the ManifestSearchOnly filter in BuildCompressedManifest is not "+
+			"actually filtering anything, and every lazy tool renders a preview line regardless of D3.")
 }
 
 // ─── Live-toggle regression: ToolSearch always registered ────────────────────
