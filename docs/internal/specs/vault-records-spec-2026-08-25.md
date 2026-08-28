@@ -1894,6 +1894,51 @@ Order is unit → integration → e2e; within a level, dependencies first.
 | 63 | `TestFreshness_EveryPartialWriteFailurePointIsDetectable` | integration | FR-020c — **NEW, revision 5.** Table-driven over each failure point of the SQLite → bleve → manifest ordering, **stating for each whether it is detectable**. Revision 4's ordering made the reachable failure undetectable and its criterion tested an unreachable one |
 | 64 | `TestTrash_RestoreRetentionAndWindowsSafePath` | integration | FR-048a — **NEW, revision 5.** A trashed note restores to its original path; the trash directory name contains **no colon**; a second trash of one path produces a second copy **and says so**; purge removes a 31-day-old entry |
 | 65 | `TestMigration_NoRetiredKnowledgeToolNamesRemain` | integration | FR-049a — **NEW, revision 5.** The boot-time scan reports every skill, prompt and seeded policy naming a retired `knowledge_*` tool; the report being empty is W5's exit criterion |
+| 39a | `TestQuery_NoComparisonIsDelegatedToSQL` | integration | **AC-8.10, ruling R-A — NEW, revision 6 (review round 6, C-5). THE control that makes R-A a property rather than an intention, and the highest-priority new test in this revision.** A query-boundary recorder captures every SQL statement the properties index executes for a corpus exercising all ten operators, `group_by`, `aggregate`, `sort` and `join`, and **fails on any comparison operator, `LIKE`, `IN`, `GROUP BY`, `ORDER BY`, aggregate function or `COLLATE` outside AC-8.10's named narrowing allow-list**. It replaces the deleted test 39 at the **store boundary** rather than in a compiler, so it survives the compiler's deletion and cannot be satisfied by a bypassed comparator. **CI treatment follows test 42's template**: name the job, the tag combination (`goolm,stdjson`) and the make target, and put it on the required-checks list |
+| 53a | `TestFilter_ComparatorDoesNotUseStdlibFolding` | unit | FR-011a, FR-011b — **NEW, revision 6.** Defined at test 53 above |
+| 63 | `TestStorage_IdentifierColumnDoesNotFold` | unit | **R-8 — NEW, revision 6 (review round 6, M-5).** Two records whose identifiers differ only in case (`CO-0142` / `co-0142`) coexist, are returned separately by the narrowing select, and compare **unequal** in the comparator. **Replaces the deleted AC-8.8 at the layer that now decides.** If a `BINARY` collation is declared on the narrowing column as a storage note, this test is what asserts it, and it asserts the OUTCOME (two distinct records survive), not the DDL |
+| 66 | `TestScope_TruncatedResolutionReportsIncomplete` | integration | FR-062a — **SCHEDULED, revision 6 (review round 6, M-34).** It is the **P0 scope guarantee** revision 5 itself described as having had *"no test, no AC and no SC"*, and it then left it in §6 with no §7 schedule |
+| 67 | `TestValue_NonConformingIsFlaggedNotAbsent` | unit | FR-021a, FR-021b — **SCHEDULED, revision 6 (M-34).** *"FR-021a is the whole of the R-4 defeat and had no test at all"* — and still had no schedule |
+| 68 | `TestTools_ConfigureWritesOnlyVaultControlPlane` | integration | FR-070e, **FR-070e's two named exceptions (M-42)** — **SCHEDULED, revision 6 (M-34).** The mechanical rule adopted *because* the semantic criteria mis-decided three operations |
+| 69 | `TestStorage_LinkedSQLiteVersionIsAsserted` | unit | FR-020i — **SCHEDULED, revision 6 (M-34)** |
+| 70 | `TestObservability_CountersAndDegradedRebuildHeader` | integration | FR-049b — **SCHEDULED, revision 6 (M-34)** |
+| 71 | `TestRender_TextIsAProjectionOfTheWireObject` | unit | AC-P3 — **SCHEDULED, revision 6 (M-34).** One of the rewritten ACs pass 1 asked for, left unscheduled |
+| 72 | `TestReadPath_RateLimited` | integration | FR-067a — **SCHEDULED, revision 6 (M-34)** |
+| 73 | `TestIndex_PropsRoundTripsExactDecimal` | unit | FR-013, FR-020b — **SCHEDULED, revision 6 (M-34)** |
+| 74 | `TestQuery_AllValidCorpusReportsComplete` | integration | US-2.1 — **SCHEDULED, revision 6 (M-34)** |
+| 75 | `TestFind_ThirdHopRefused` | integration | FR-065, US-3.5 — **SCHEDULED, revision 6 (M-34)** |
+| 76 | `TestSchema_UndeclaredTypeIsAnOrdinaryNote` | unit | FR-005, US-1.1 — **SCHEDULED, revision 6 (M-34)** |
+| 77 | `TestSchema_TypesAreScopedToRecordType` | unit | FR-009 — **SCHEDULED, revision 6 (M-34)** |
+| 78 | `TestTools_NamesHaveNoDots` | unit | §0 correction 2 — **SCHEDULED, revision 6 (M-34)** |
+| 79 | `TestTools_NoAgentCallableMountOperation` | integration | FR-019, US-12.5 — **SCHEDULED, revision 6 (M-34)** |
+| 80 | `TestAudit_VaultEditAndRestructureCarryOperation` | integration | FR-071, FR-077 — **SCHEDULED, revision 6 (M-34)** |
+| 81 | `TestDerived_NeverWrittenToFrontmatter` | unit | §3 non-behaviours — **SCHEDULED, revision 6 (M-34)** |
+| 82 | `TestDescribe_CheckIntegrityNamesBothPaths` | integration | FR-039, FR-075, US-5.3 — **SCHEDULED, revision 6 (M-34)** |
+| 83 | `TestWrite_ListSpliceAndMultiLineClobberRefused` | unit | FR-040a, FR-047 — **SCHEDULED, revision 6 (M-34)** |
+| 84 | `TestRelate_ReplaceMustBeNamed` | unit | FR-030..FR-035 — **SCHEDULED, revision 6 (M-34)** |
+| 85 | `TestRetrieval_NoEmbeddingDependency` | unit | FR-117 — **SCHEDULED, revision 6 (M-34)** |
+| 86 | `TestFind_ExplainEvaluatesNothing` | integration | FR-073, AC-F3 — **SCHEDULED, revision 6 (M-34)**, and it carries **unasked question 5**: `explain: true` on a SQLite-less build. **RULED: `explain` ANSWERS** — it evaluates nothing, so there is nothing for FR-020h to refuse, and refusing a plan request would deny the caller the one response that explains why their typed query is unavailable. The plan MUST name the unavailability. AC-D6 and AC-F6 gain this case |
+| 87 | `TestImport_NotRegisteredAsAgentTool` | unit | FR-103 — **SCHEDULED, revision 6 (M-34)** |
+| 88 | `BenchmarkBounds_PeakRSSAtCap` | **benchmark** | SC-007, FR-066b — **SCHEDULED, revision 6 (M-34)**, and **reclassified**: §6 named it `TestBounds_PeakRSSAtCap`, but a peak-RSS measurement is a benchmark with a W1 write-back obligation, exactly as test 21 was reclassified. Measured at **both** bounds — B2's 10,000 and FR-064a's 50,000 |
+
+**M-34 — TWENTY-FIVE tests were named in §6 and scheduled nowhere, and they are scheduled above.**
+§6 named 86 distinct identifiers; §7 scheduled 73; twenty-five of §6's were absent, **including
+several the revision itself added to close pass-1 findings**. §7 is the ordered implementation list
+(*"Order is unit → integration → e2e; within a level, dependencies first"*), so **a test in §6 and
+not in §7 has a requirement and no schedule** — which is how a P0 guarantee comes to have a
+traceability row and no build step. *(Review round 6 counted 26; the twenty-sixth,
+`TestFilter_CaseFoldIsUnicodeNotASCII`, is test 53 under its old name and is repointed rather than
+added — see M-35's sibling below.)*
+
+**M-35 — §6 and §7 named DIFFERENT tests for the same requirement, with OPPOSITE semantics, and §7
+wins.** §6's FR-079/FR-128 row named **`TestTools_DescriptionTokenBudget`**; §7 test 38 is
+**`TestTools_DescriptionBudgetIsReviewedNotEnforced`**, and its entire point is that the ~150-token
+budget *"becomes a review checklist item at W5"* because FR-127b says it is *"never enforced at
+runtime"* and *"a test MUST NOT conflate"* the two units. **A test implemented to §6's name enforces
+the budget at runtime — the exact defect test 38 was rewritten to remove.** §6 takes test 38's name.
+The same correction is applied to §6's `TestFilter_CaseFoldIsUnicodeNotASCII`, which is now test
+53's `TestFilter_CaseFoldIsFullUnicode` (C-1).
+
 
 ### Test datasets
 
