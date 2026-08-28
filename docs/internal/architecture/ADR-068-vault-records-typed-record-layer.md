@@ -1372,13 +1372,13 @@ write path do not depend on the storage outcome and remain valid, as revision 4 
 ### D16.6 — SQLite's DEFAULT semantics contradict nine of the thirteen comparison rules. Every contradiction is defeatable; none is defeated by default.
 
 *New in revision 6. This is the single strongest consideration bearing on D16, and revision 5
-did not carry it at all — the implementing spec did (`vault-records-spec-2026-08-25.md` §8.1,
-`spec:1123-1135`) and this ADR did not, which is exactly backwards: **the document that decides
+did not carry it at all — the implementing spec did (`vault-records-spec-2026-08-25.md` §8.1's
+rule-by-rule table) and this ADR did not, which is exactly backwards: **the document that decides
 to adopt SQLite is the document that must record what adopting it costs.** A reader of the ADR
 alone would take D16 and never learn that the engine it chose reverses, by default, the rules
 the type system exists to guarantee.*
 
-**The rules are the spec's §8 comparison oracle (R-1..R-13, `spec:1077-1091`), which is the
+**The rules are the spec's §8 comparison oracle (R-1..R-13, its §8 rule table), which is the
 normative statement of what a comparison in this product means.** D16.2b makes the properties
 index answer *every* typed predicate, so from W1 onward those rules are enforced by emitted SQL
 rather than by a Go comparator. The rules did not change. **The surface they are enforced on
@@ -1390,7 +1390,7 @@ below was run; the observed result is what is quoted.
 | Rule | What the rule requires | What SQLite does by default | The concrete consequence |
 |---|---|---|---|
 | **R-1** | A comparison across declared types is `false` | `SELECT '3' > 2;` → **`1` (true)**. Storage-class ordering puts INTEGER/REAL before TEXT, so *any* text value outranks *any* number | The exact case **AC-8.3** was written for after it failed once already in a Go comparator, failing again in SQL. A numeric filter over a property one note typed as a string silently includes or excludes that note |
-| **R-2 / R-3** | A negative filter **includes** absent records (FR-008, `spec:428`); `is absent` is the only operator absence answers | Over a row with `status` NULL: `WHERE NOT (status = 'done')` → **0 rows**. The guarded form `WHERE (status IS NULL OR status <> 'done')` → **1 row** | **This is the sharpest one. FR-008 exists so that "which days did I not meditate?" returns the days with no entry. Under SQLite's default negation it returns ZERO rows** — the question is answered with a confident, empty, wrong answer, and the rows omitted are precisely the rows asked about. §1.3 names this failure class as the reason this ADR exists; the engine chosen to implement it reintroduces it |
+| **R-2 / R-3** | A negative filter **includes** absent records (FR-008); `is absent` is the only operator absence answers | Over a row with `status` NULL: `WHERE NOT (status = 'done')` → **0 rows**. The guarded form `WHERE (status IS NULL OR status <> 'done')` → **1 row** | **This is the sharpest one. FR-008 exists so that "which days did I not meditate?" returns the days with no entry. Under SQLite's default negation it returns ZERO rows** — the question is answered with a confident, empty, wrong answer, and the rows omitted are precisely the rows asked about. §1.3 names this failure class as the reason this ADR exists; the engine chosen to implement it reintroduces it |
 | **R-4** | A non-conforming value compares `false` **and** raises a problem | A value that parsed to something else is stored as whatever it parsed to and compares silently, with no error | The malformed record is scored against the filter as though it were well-formed, and nothing in the answer says so. D13's headline promise — every answer is complete or names what it excluded — is broken without a symptom |
 | **R-5** | `enum` orders by **declared position** (D4) | `ORDER BY` over a TEXT column is lexical. Declared `lead < qualified < proposal < won` sorts as **`lead, proposal, qualified, won`** | `stage >= qualified` — "deals at qualified or beyond" — **silently drops every `proposal` deal**, because `'proposal' < 'qualified'` alphabetically. A pipeline report that is wrong in the direction of looking healthier than it is |
 | **R-6** | `money` compares and sums only **within one currency**; across currencies the operators are `false` and the currencies are reported (O-2) | `SELECT sum(amt) FROM m;` over 100 USD and 100 JPY → **`200.0`** | A total that is not a quantity of anything, presented as a number. No aggregate in SQL expresses "refuse" |
@@ -1415,7 +1415,7 @@ setting.**
 | **R-5** | The declared ordinal is a **column of its own**, maintained in step with the schema file, and `ORDER BY` uses the ordinal, never the label (FR-010) |
 | **R-6** | Amount (integer minor units), currency and scale are **separate columns**, and cross-currency comparison and `SUM` are **refused in the compiler**, before any SQL is emitted. This is the one that cannot be pushed down at all — "refuse" is not an aggregate |
 | **R-9** | A **child-table equality join**, not a string operation. Whole-element membership is a row match |
-| **R-10** | **`instr(col, ?) > 0`**, which is case-sensitive. **Zero occurrences of `LIKE` in the compiled filter path** — asserted by lint or test (**AC-8.7**, test 39 at `spec:1002`), because R-10's case-sensitivity is one careless operator away from being lost and nothing else would report it |
+| **R-10** | **`instr(col, ?) > 0`**, which is case-sensitive. **Zero occurrences of `LIKE` in the compiled filter path** — asserted by lint or test (**AC-8.7**, and its §7 test `TestFilter_NoLikeInCompiledPath`), because R-10's case-sensitivity is one careless operator away from being lost and nothing else would report it |
 | **R-11** | Every store error is caught at the query boundary and rendered as a **problem row**. It never propagates as a third outcome |
 
 **This does NOT overturn D16.** Each contradiction is defeatable, all nine defeats are known, and
@@ -1427,8 +1427,8 @@ in the query compiler, and a compiler that forgets one produces a product that i
 at all; this table names the nine that SQL expresses **and gets backwards**. They are different
 lists and both are real.
 
-**AC-16.6 — the truth table must run against the real compiled query path.** This is **AC-8.4**
-(`spec:1137-1139`) and it is restated here because it is the criterion that makes the difference
+**AC-16.6 — the truth table must run against the real compiled query path.** This is **AC-8.4** (spec §8.1)
+and it is restated here because it is the criterion that makes the difference
 between the nine defeats being verified and being believed: *schema → filter object → compiled
 query → store*, never against a Go comparator in isolation. **A truth table that passes over a
 comparator the product does not use proves nothing about the product** — and after D16.2b, the
@@ -1436,9 +1436,10 @@ product does not use one for filtering. **AC-8.5** additionally runs it against 
 built index and a delete-and-rebuild, and **AC-8.6** asserts membership is invariant under
 ranking, so a D21 change cannot quietly become a filtering change.
 
-**Cross-reference, not duplication.** The normative rules are `spec:1077-1091`; the rule-by-rule
-SQLite assessment is `spec:1123-1135`; the acceptance criteria are AC-8.1..AC-8.7 at
-`spec:1093-1147`. **This ADR states the decision and the risk; the spec states the cells and the
+**Cross-reference, not duplication.** The normative rules are the spec's §8 rule table; the
+rule-by-rule SQLite assessment is its §8.1; the acceptance criteria are AC-8.1..AC-8.7, also §8.
+**Section references, not line numbers, deliberately** — the spec moves, and this ADR's own
+verification standard is worth less if its citations rot. **This ADR states the decision and the risk; the spec states the cells and the
 tests.** Where the two disagree the spec is the implementing document and is corrected there.
 
 ### D17 — Interaction history is derived, not maintained
@@ -2302,7 +2303,7 @@ its own ADR rather than an implementation note.
   `SUM` adds USD to JPY without complaint. Each is defeatable and D16.6 gives the defeat, but each
   must be **deliberately** defeated in the query compiler — the correct behaviour is never the
   default. **This is the largest single correctness cost of D16** and it was absent from revision
-  5 entirely, carried only by the implementing spec (`spec:1123-1135`). The truth table therefore
+  5 entirely, carried only by the implementing spec (its §8.1). The truth table therefore
   runs against the **real compiled query path** (AC-8.4), not a Go comparator: after D16.2b the
   product does not use one for filtering, and a table that passes over an unused comparator proves
   nothing.
