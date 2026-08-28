@@ -350,7 +350,22 @@ func TestDurableC1_RestartChangedStateReJudges(t *testing.T) {
 	// signature is now DIFFERENT from the persisted one.
 	mustCreateTask(t, ts, &task.Task{ID: "t-b", Title: "t-b", WorkspaceID: "ws", PlanID: "plan-chg", Status: task.StatusDone})
 
+	// judgeCalled is signaled the instant JudgeCriteria is invoked, so the
+	// wait below is event-driven rather than a fixed wall-clock poll.
+	// bootReconcile's beginPlanJudgeRound dispatches the round via `go
+	// pe.runPlanJudgeRound(...)` (plan_engine.go), so SOME asynchrony is
+	// unavoidable — this channel is what makes waiting for it deterministic
+	// instead of racy against an arbitrary poll interval/deadline pair.
+	// Buffered 1: fakePlanJudge.JudgeCriteria records the call under its own
+	// mutex BEFORE invoking resultFn, so by the time this fires
+	// judge.callCount() is already 1 — no separate poll of callCount is
+	// needed to make that read safe.
+	judgeCalled := make(chan struct{}, 1)
 	judge := &fakePlanJudge{resultFn: func(in JudgeCriteriaInput) JudgeCriteriaResult {
+		select {
+		case judgeCalled <- struct{}{}:
+		default:
+		}
 		return JudgeCriteriaResult{Verdict: &task.JudgeVerdict{Met: true}}
 	}}
 	pe := &PlanEngine{
@@ -362,10 +377,18 @@ func TestDurableC1_RestartChangedStateReJudges(t *testing.T) {
 	pe.bootReconcile(context.Background())
 
 	// The signature changed -> a round MUST fire (the persisted gate does not
-	// match the new member set).
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) && judge.callCount() == 0 {
-		time.Sleep(10 * time.Millisecond)
+	// match the new member set). 5s is a generous safety net against a
+	// genuine hang, not a tight bound to race against — the event fires
+	// within microseconds of the goroutine launch on a healthy system, this
+	// only needs to be large enough to absorb real scheduling contention
+	// without itself becoming a source of flakes (a prior 2s wall-clock poll
+	// budget for this same wait was observed failing under package-suite
+	// load; see pkg/agent's flaky-suite root-cause report).
+	select {
+	case <-judgeCalled:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("judge calls = %d, want 1 (changed all-terminal state MUST re-judge) — "+
+			"JudgeCriteria never fired within 5s", judge.callCount())
 	}
 	if judge.callCount() != 1 {
 		t.Fatalf("judge calls = %d, want 1 (changed all-terminal state MUST re-judge)", judge.callCount())

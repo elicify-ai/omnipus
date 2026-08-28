@@ -313,8 +313,18 @@ vet-windows: generate
 	@GOOS=windows GOARCH=amd64 $(GO) vet $(GOFLAGS) ./...
 
 ## test: Test Go code
+# -timeout 30m is REQUIRED, not cosmetic: go test's default is 10m PER PACKAGE
+# TEST BINARY, and pkg/agent alone (400+ test files) measured ~19min (1142s)
+# on an uncontended machine, well past that default. Without an explicit
+# override, the default fires first and panics naming whatever test happened
+# to be in flight at that instant — a false-lead generator, not a real
+# failure signal (it sent one investigation chasing an innocent test,
+# TestMemory_RecallScoreOrdering, that had nothing to do with the actual
+# defect). 30m gives real headroom above the measured 19min baseline for a
+# loaded machine. See deploy/ci-worker/runci.sh's run_gotest/run_gorace for
+# the same fix applied to the CI worker's own gates.
 test: generate
-	@$(GO) test $(GOFLAGS) ./...
+	@$(GO) test $(GOFLAGS) -timeout 30m ./...
 
 ## fmt: Format Go code
 fmt:

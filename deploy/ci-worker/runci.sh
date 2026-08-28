@@ -308,7 +308,18 @@ run_gotest() {
   # — a navigation timeout, not a broken SSRF guard. The flake filter correctly
   # refused to excuse it (it failed both runs), which is exactly why the gate
   # must not measure something GitHub does not.
-  local out; out=$(CI=true GOMAXPROCS=4 CGO_ENABLED=0 go test -tags "$TAGS" -count=1 -p 2 ./... 2>&1)
+  #
+  # -timeout 1800s is REQUIRED: go test's default is 10m PER PACKAGE TEST
+  # BINARY, and pkg/agent alone (400+ test files) measured ~19min (1142s) on
+  # an UNCONTENDED machine — this gate runs it under -p 2 (two package
+  # binaries sharing CPU/disk), which is worse. Without an explicit override
+  # the 10m default fires first and panics naming whatever test happened to
+  # be in flight at that instant, not the actual slow package — observed on
+  # this worker as a false lead that sent an investigation chasing an
+  # innocent test with nothing to do with the real timing. 1800s matches
+  # run_gorace's 900s with the extra margin plain (non-race) execution
+  # doesn't strictly need but a loaded shared worker does.
+  local out; out=$(CI=true GOMAXPROCS=4 CGO_ENABLED=0 go test -tags "$TAGS" -count=1 -timeout 1800s -p 2 ./... 2>&1)
   local code=$?
   echo "$out"
   # DATA RACE carve-out — checked BEFORE the exit-code short-circuit, because a
@@ -341,7 +352,13 @@ run_gotest() {
     # CI=true here too: the isolated re-run must measure the same thing as the
     # contended run, or a package that only failed because it launched a real
     # Chrome would be re-run without one and stamped a flake (or vice versa).
-    if CI=true CGO_ENABLED=0 go test -tags "$TAGS" -count=1 -p 1 "$p" >/tmp/rr.log 2>&1; then
+    # -timeout 1800s: same reasoning as the contended run above — an
+    # isolated -p 1 re-run of a slow package (e.g. pkg/agent, ~19min
+    # uncontended) is just as exposed to go test's 10m-per-binary default,
+    # and this IS the exact re-run that would otherwise stamp such a package
+    # "REAL FAILURE (same test failed BOTH runs)" on a timeout artifact
+    # rather than a genuine repeat failure.
+    if CI=true CGO_ENABLED=0 go test -tags "$TAGS" -count=1 -timeout 1800s -p 1 "$p" >/tmp/rr.log 2>&1; then
       echo "FLAKE (passed isolated): $p"
       echo "  contended-run failures (each one is a REAL BUG that has not been diagnosed yet):"
       echo "$run1" | sed 's/^/    /'

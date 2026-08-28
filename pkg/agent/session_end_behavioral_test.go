@@ -180,11 +180,20 @@ func TestRunRecap_HappyPath_PersistsLastSessionAndRetro(t *testing.T) {
 	// AppendRetro. Calling t.Fatalf on ENOENT causes a spurious failure under
 	// parallel-sibling load (the goroutine has less CPU time between the two
 	// sequential writes). Only non-"not found" errors are fatal.
+	// AppendRetro (memory.go) os.OpenFile(O_CREATE)s the retro path, then
+	// writes its content in a separate syscall — os.ReadDir can observe the
+	// just-created (still-empty) filename before the content lands. Treating
+	// "the filename showed up" as proof the write is complete and reading it
+	// exactly once (the previous shape of this loop) is a genuine TOCTOU
+	// race, reproduced directly in the sibling test this pattern was copied
+	// from (idle_timeout_seam_test.go — see its fix for the reproduction).
+	// Keep polling — re-reading the file — until its CONTENT actually
+	// contains what this test asserts on, not just its directory entry.
 	sessionsDir := filepath.Join(ag.Home, ".omnipus", "retros")
-	var foundRetro bool
 	var retroBytes []byte
+	var sawRetroFile bool
 	retroDeadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(retroDeadline) && !foundRetro {
+	for time.Now().Before(retroDeadline) {
 		dateDirs, err := os.ReadDir(sessionsDir)
 		if err != nil {
 			if !os.IsNotExist(err) {
@@ -194,6 +203,8 @@ func TestRunRecap_HappyPath_PersistsLastSessionAndRetro(t *testing.T) {
 			time.Sleep(20 * time.Millisecond)
 			continue
 		}
+		var content []byte
+		var found bool
 		for _, d := range dateDirs {
 			if !d.IsDir() {
 				continue
@@ -201,20 +212,24 @@ func TestRunRecap_HappyPath_PersistsLastSessionAndRetro(t *testing.T) {
 			files, _ := os.ReadDir(filepath.Join(sessionsDir, d.Name()))
 			for _, f := range files {
 				if strings.HasSuffix(f.Name(), "_retro.md") {
-					foundRetro = true
-					retroBytes, _ = os.ReadFile(filepath.Join(sessionsDir, d.Name(), f.Name()))
-					break
+					found = true
+					data, readErr := os.ReadFile(filepath.Join(sessionsDir, d.Name(), f.Name()))
+					if readErr == nil {
+						content = data
+					}
 				}
 			}
-			if foundRetro {
-				break
-			}
 		}
-		if !foundRetro {
-			time.Sleep(20 * time.Millisecond)
+		if found {
+			sawRetroFile = true
+			retroBytes = content
 		}
+		if found && strings.Contains(string(content), "trigger=explicit") && strings.Contains(string(content), "fallback=false") {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
-	if !foundRetro {
+	if !sawRetroFile {
 		t.Fatal("no _retro.md file was produced in the happy path within 5s")
 	}
 	if !strings.Contains(string(retroBytes), "trigger=explicit") {
@@ -266,11 +281,25 @@ func TestRunRecap_JSONParseError_WritesFallback(t *testing.T) {
 
 	// Wait for a retro to land (it will, via the fallback path).
 	// Spec-5: retros are now in <workspace>/.omnipus/retros/<date>/.
+	//
+	// AppendRetro (memory.go) os.OpenFile(O_CREATE)s the retro path, then
+	// writes its content in a separate syscall — os.ReadDir can observe the
+	// just-created (still-empty) filename before the content lands. The
+	// previous shape of this loop treated "the filename showed up" as proof
+	// the write was complete, capturing retroPath and reading it exactly
+	// ONCE, outside the loop, with no retry — a genuine TOCTOU race,
+	// reproduced directly on this exact assertion (parse-error retro must be
+	// fallback=true; got: <empty>) under package-suite load. Keep polling —
+	// re-reading the file — until its CONTENT actually contains what this
+	// test asserts on, not just its directory entry.
 	deadline := time.Now().Add(5 * time.Second)
-	var retroPath string
+	var retro string
+	var sawRetroFile bool
 	for time.Now().Before(deadline) {
 		sessionsDir := filepath.Join(ag.Home, ".omnipus", "retros")
 		dateDirs, _ := os.ReadDir(sessionsDir)
+		var content string
+		var found bool
 		for _, d := range dateDirs {
 			if !d.IsDir() {
 				continue
@@ -278,20 +307,26 @@ func TestRunRecap_JSONParseError_WritesFallback(t *testing.T) {
 			files, _ := os.ReadDir(filepath.Join(sessionsDir, d.Name()))
 			for _, f := range files {
 				if strings.HasSuffix(f.Name(), "_retro.md") {
-					retroPath = filepath.Join(sessionsDir, d.Name(), f.Name())
+					found = true
+					data, readErr := os.ReadFile(filepath.Join(sessionsDir, d.Name(), f.Name()))
+					if readErr == nil {
+						content = string(data)
+					}
 				}
 			}
 		}
-		if retroPath != "" {
+		if found {
+			sawRetroFile = true
+			retro = content
+		}
+		if found && strings.Contains(content, "fallback=true") && strings.Contains(content, "json_parse_error") && strings.Contains(content, "Tool calls:") {
 			break
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	if retroPath == "" {
+	if !sawRetroFile {
 		t.Fatal("fallback retro not produced within deadline")
 	}
-	data, _ := os.ReadFile(retroPath)
-	retro := string(data)
 	if !strings.Contains(retro, "fallback=true") {
 		t.Errorf("parse-error retro must be fallback=true; got:\n%s", retro)
 	}

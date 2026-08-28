@@ -266,10 +266,24 @@ func TestEvidenceGate_SteeringDeliveredToRedispatchedPrompt(t *testing.T) {
 // (streak=1, AttemptCount stays 0); dispatch 2 hits
 // evidenceGateMaxConsecutiveRejections (streak=2) and routes through
 // consumeAttemptOrExhaust, which exhausts immediately (newAttempt=1 is not <
-// maxAttempts=1) and marks the task Failed. A short 2s deadline (not the 5s
-// waitForCompletionContractTerminal default) is deliberate — this test's
-// whole point is proving the loop does NOT run away, so it must fail fast if
-// the bound regresses, not just eventually.
+// maxAttempts=1) and marks the task Failed.
+//
+// Deadline sizing: this used to be a HARD 2s bound, deliberately shorter than
+// waitForCompletionContractTerminal's 5s default, on the theory that the
+// test's whole point is proving the loop does NOT run away and so it should
+// fail fast if the bound regresses. In practice the two real dispatches this
+// path performs go through the full session-create + transcript-append file
+// I/O path (fsync per write), and were observed passing at 1.98s against
+// that 2s bound on ordinary (non-isolated) CI hardware — a ~1% margin, i.e.
+// a coin flip, not a deadline. Reproduced failing at exactly this assertion
+// under package-suite load (see pkg/agent's flaky-suite root-cause report).
+// 10s preserves the "must not run away" intent — an actual livelock
+// regression re-dispatches through the same real file-I/O path on EVERY
+// retry with no bound at all (the pre-fix behavior this test guards against;
+// see its own history: "would time out (or loop until the process is
+// killed)"), so it blows well past 10s just as reliably as it blew past 2s —
+// while giving the two-real-dispatch happy path roughly 5x the margin
+// observed necessary, instead of a margin so thin normal jitter trips it.
 func TestEvidenceGate_NeverEmittedMarker_TerminatesWithinBudget(t *testing.T) {
 	worker := &scriptedProvider{
 		responseBody: "did the work\nTASK_STATUS: success\nTASK_SUMMARY: I finished it.",
@@ -291,7 +305,7 @@ func TestEvidenceGate_NeverEmittedMarker_TerminatesWithinBudget(t *testing.T) {
 		t.Fatalf("ExecuteTask: %v", err)
 	}
 
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(10 * time.Second)
 	var final *task.Task
 	for time.Now().Before(deadline) {
 		got, err := al.taskStore.Get(tk.ID)
@@ -305,7 +319,7 @@ func TestEvidenceGate_NeverEmittedMarker_TerminatesWithinBudget(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	if final == nil {
-		t.Fatal("task never reached a terminal status within 2s — the evidence-marker gate is looping " +
+		t.Fatal("task never reached a terminal status within 10s — the evidence-marker gate is looping " +
 			"without a bound (livelock)")
 	}
 	if final.Status != task.StatusFailed {
