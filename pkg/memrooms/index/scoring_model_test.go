@@ -200,22 +200,22 @@ func TestScoringModel_RebuildRecreatesTheMapping(t *testing.T) {
 
 	// Swap in a TF-IDF index under the same path, as if this handle had been
 	// opened before D21.1. Rebuild must not merely repopulate it.
-	if err := ri.idx.Close(); err != nil {
-		t.Fatalf("close live index: %v", err)
+	if closeErr := ri.idx.Close(); closeErr != nil {
+		t.Fatalf("close live index: %v", closeErr)
 	}
-	if err := os.RemoveAll(ri.idxPath); err != nil {
-		t.Fatalf("remove live index: %v", err)
+	if rmErr := os.RemoveAll(ri.idxPath); rmErr != nil {
+		t.Fatalf("remove live index: %v", rmErr)
 	}
 	stale := buildMapping()
 	stale.ScoringModel = ""
-	staleIdx, err := bleve.NewUsing(ri.idxPath, stale, scorch.Name, scorch.Name, scorchOpenConfig())
-	if err != nil {
-		t.Fatalf("create stale index: %v", err)
+	staleIdx, newErr := bleve.NewUsing(ri.idxPath, stale, scorch.Name, scorch.Name, scorchOpenConfig())
+	if newErr != nil {
+		t.Fatalf("create stale index: %v", newErr)
 	}
 	ri.idx = staleIdx
 
-	if err := ri.Rebuild(); err != nil {
-		t.Fatalf("Rebuild: %v", err)
+	if rebuildErr := ri.Rebuild(); rebuildErr != nil {
+		t.Fatalf("Rebuild: %v", rebuildErr)
 	}
 
 	hits, err := ri.Search(smTerm, 10)
