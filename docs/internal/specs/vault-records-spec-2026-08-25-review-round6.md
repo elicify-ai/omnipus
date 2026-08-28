@@ -1,0 +1,436 @@
+# Grill review — vault-records specification, PASS 2
+
+- **Target:** `docs/internal/specs/vault-records-spec-2026-08-25.md` — Draft revision 5 (2,174 lines)
+- **Authority read first:** `docs/internal/architecture/ADR-068-vault-records-typed-record-layer.md` — revision 7 (2,755 lines)
+- **Prior review:** `vault-records-spec-2026-08-25-review.md` (pass 1: BLOCK — 19 CRITICAL, 41 MAJOR, 17 MINOR)
+- **Date:** 2026-08-26 · **Mode:** `plan-spec`
+- **Method:** every SQLite claim re-executed against `sqlite3` 3.51.0; the linked engine version re-verified through `modernc.org/sqlite` itself; every Go case-folding claim executed; every code citation checked against the tree at `03e71909`.
+
+---
+
+## Verdict: **BLOCK**
+
+| Severity | Count |
+|---|---|
+| CRITICAL | 11 |
+| MAJOR | 31 |
+| MINOR | 14 |
+| OBSERVATION | 5 |
+
+---
+
+## The question the brief asked first: did a SQL-side comparison survive?
+
+**Yes. Seven of them, in normative text, and one of the seven is mandated in so many words.**
+
+The ruling is enforced by prose alone. **No acceptance criterion and no test anywhere in the
+document asserts that SQLite performs no comparison** — and the only two artifacts that ever
+inspected emitted SQL or DDL (§7 test 39 `TestFilter_NoLikeInCompiledPath`, and AC-8.8's
+`BINARY`-collation assertion over emitted DDL) were both **deleted in this revision**, as having
+"SQL-side comparison as their only subject". The revision removed its own instrumentation for the
+property it now depends on entirely.
+
+| # | Surviving SQL-side evaluation | Where | Severity |
+|---|---|---|---|
+| 1 | *"the `COUNT`/`SUM` is **pushed entirely into SQLite** and no candidate is retrieved"* | **FR-064a** (`:897`) | C-3 |
+| 2 | The candidate count is *"a `COUNT(*)` over **the compiled `WHERE` clause**, taken before any row is materialised"* | **FR-064** (`:895`), §7 test 47 | C-4 |
+| 3 | The conformance flag *"MUST be consulted at comparison time **and at `ORDER BY` time**"* | **FR-021b** (`:791`) | M-7 |
+| 4 | *"a **`GROUP BY`** over 10,000 rows still returns a result set that must not be materialised whole"* | **FR-066b** (`:904`) | M-7 |
+| 5 | The RSS budget still charges *"SQLite's page cache, its temp b-trees for **`GROUP BY`/`ORDER BY`**, and its connection state"* | **SC-007** (`:1484`) | M-7 |
+| 6 | *"it **orders lexically — SQLite's own ordering**"* / *"an enum sorts lexically, **like SQLite**"* | **R-5** (`:1779`), FR-010 (`:636`), §4.1.2 `sort` row (`:1079`) | M-7 |
+| 7 | The relation-identifier side *"is matched exactly, **on a `BINARY` column**"* | **R-8** (`:1782`) — and its only test was deleted | M-5 |
+
+Items 1 and 2 are the serious ones. Item 1 **reopens grill pass 1's worst finding by name**: a SQL
+`COUNT`/`SUM` over a candidate set that includes the relation child table is exactly the join
+fan-out that returned 2 and 200 where truth was 1 and 100. Item 2 makes the document's single most
+consequential bound — the one A-14 leans on as *"a refusal, not a hope"* — unimplementable as
+specified.
+
+And the document contradicts itself on item 1 within its own §8.1: *"FR-064a's aggregate-only
+exemption is the one place the cap is relaxed, which is now a **Go** scan over a candidate stream
+**rather than a SQLite pushdown**"* (`:1879-1880`). Two normative statements, opposite mechanisms,
+one requirement.
+
+---
+
+## Executive summary
+
+Revision 5 is a genuine improvement and the deletions were the right call. The receipts reproduce:
+I re-executed every SQLite claim in §8.1/§8.1b against `sqlite3` 3.51.0 and **every one holds**,
+including the corrected `NOT (a=1 OR b=2)` → one row that pass 1 got wrong. I opened a database
+through `modernc.org/sqlite v1.46.1` (`go.mod:64`) and it reports `sqlite_version()` = **3.51.2** —
+the spec's rejection of pass 1's 3.53.3 figure is **correct**. The type-count arithmetic is
+**correct** (−`money` −`number` +`integer` +`decimal` = seven). `allStaticToolNames` is **98
+identifiers, 98 unique, 9 of them `knowledge_*`** — counted; 98 − 9 + 6 = 95 is right.
+`resolveToolPolicyAtExec` really is at `loop.go:12418`. The citation discipline is markedly better
+than pass 1 found.
+
+What went wrong is what the brief anticipated: **the deletions were not finished.** Seven SQL-side
+evaluations survive. Three normative places still require the withdrawn Go-side fold column and one
+of them states the **opposite outcome** from the requirement that replaced it. The §8 rule table —
+promoted to numbered requirements — still mandates the withdrawn integer-epoch date storage.
+Pass 1's C-1 is **not closed**: §1's reuse table retains verbatim the sentence C-1 flagged, and four
+normative places including a mandatory AC still compare against `ManifestEntry.Hash`, the mechanism
+FR-020c spends nine bullets disproving.
+
+Two failures are worse than leftovers, because they are new assertions made with the same confidence
+the document exists to eliminate:
+
+- **FR-011a's mechanism cannot deliver what FR-011a promises.** The spec correctly established by
+  execution that SQLite folds ASCII only, then asserted that `strings.ToLower` gives *"full-Unicode
+  case insensitivity for free"*. **I executed it.** It does not. `strings.ToLower` is *simple* case
+  folding, not full: the spec's own named test case — §7 test 53's `= 'straße'` matches `STRASSE` —
+  is **false**, under `strings.ToLower` and under `strings.EqualFold` alike. Greek final sigma is
+  **false**. Turkish dotless i is wrong. **Three of the four languages holdout scenario 15 names
+  fail.** The document caught this exact failure class in SQLite and then committed it in Go.
+
+- **FR-004a's denylist test cannot pass, and the "verified clean" claim behind it does not
+  reproduce.** Both documents state *"the code is already clean — zero domain vocabulary outside
+  tests in `pkg/records` and `pkg/knowledge`"*. There are **49 whole-word hits in non-test files**,
+  including `pkg/records/doc.go:12` — which is the D0 statement itself. A test written to FR-004a's
+  words red-lights the build on the day it lands.
+
+---
+
+## 1. CRITICAL findings
+
+### C-1 — FR-011a's mechanism cannot deliver full-Unicode case insensitivity. Verified by execution.
+
+**Lens:** Incorrectness · **Sections:** FR-011a, R-10, SC-002d, §7 test 53, §9 scenario 15, DS-1
+
+FR-011a (`:642`): *"**`strings.ToLower` is Unicode-aware**, so this is full-Unicode case
+insensitivity for free, in the place the ruling asks for it."* §7 test 53 (`:1638`) makes it
+normative: *"`LIKE 'äcm%'` matches `ÄCME`; **`= 'straße'` matches `STRASSE` per Go's folding**."*
+
+Executed on this machine, Go stdlib:
+
+| Pair | `ToLower(a)==ToLower(b)` | `EqualFold(a,b)` |
+|---|---|---|
+| `straße` / `STRASSE` | **false** | **false** |
+| `ΣΟΦΟΣ` / `σοφος` (Greek final sigma) | **false** | true |
+| `İstanbul` / `istanbul` | true | **false** |
+| `äcme` / `ÄCME` | true | true |
+| `ŁÓDŹ` / `łódź` | true | true |
+
+`strings.ToLower("STRASSE")` is `strasse`; `strings.ToLower("straße")` is `straße`. Go's stdlib
+implements **simple** case folding; `ß → ss` is **full** case folding, which neither `ToLower` nor
+`EqualFold` performs. `strings.ToLower("ΣΟΦΟΣ")` is `σοφοσ`, not `σοφος`.
+
+**Three consequences:**
+
+1. **§7 test 53 is a test that cannot pass as written.** It is one of the revision's flagship new
+   tests and its fixture requirement (*"MUST include non-ASCII pairs"*) is the right instinct.
+2. **Holdout scenario 15 names "German, Polish, Greek or Turkish".** Under `strings.ToLower`, Polish
+   works and **German, Greek and Turkish do not**. The scenario the spec added to catch a
+   silent-ASCII-only fold would catch a silent simple-folding-only fold — after release.
+3. **FR-011b's vocabulary has no word for what is actually being shipped.** It requires any surface
+   delivering only ASCII folding to say so. This surface is neither ASCII-only nor full-Unicode; it
+   is *simple Unicode folding*, and the document has no term for it and makes the stronger claim.
+
+**Fix.** State the mechanism as **`strings.EqualFold`** for `=`/`<>` (it is simple case folding, and
+it fixes Greek final sigma and Kelvin-sign-class pairs that `ToLower` gets wrong), state explicitly
+that **full case folding — `ß`/`ss`, `ﬁ`/`fi` — is NOT performed and why**, and **delete `straße`
+/ `STRASSE` from test 53** or move it to an explicit negative case asserting it does *not* match.
+Note that `EqualFold` breaks Turkish `İ`/`i` where `ToLower` happens to work, so a per-operator
+decision is required and must be written down. Add `İstanbul`/`istanbul`, `ΣΟΦΟΣ`/`σοφος` and
+`straße`/`STRASSE` to DS-1 with their **verified** expectations, so the bound is in the dataset
+rather than in a claim. `LIKE`'s fold is a third question — a pattern matcher cannot use
+`EqualFold` directly — and is unaddressed.
+
+### C-2 — Pass 1's C-1 is NOT closed. Two contradictory freshness mechanisms are both normative.
+
+**Lens:** Inconsistency · **Sections:** §1 table (`:232`), FR-020c, constraint table (`:584`), AC-F5, §4.2 annotation, test 32
+
+FR-020c (`:751-754`) spends nine bullets establishing that the manifest is **not** on the query
+path — `Index` holds no manifest field, `LoadManifest` has two call sites both inside
+`SyncWith`/`CheckDrift`, `Manifest` has no mutex — and concludes: *"The mechanism is therefore
+respecified, and it **removes the manifest from the query path** rather than putting it there. **The
+hash rides on the bleve document as a stored field.**"*
+
+**Four other normative places still specify the disproven mechanism**, and one of them is the exact
+sentence pass 1's C-1 named:
+
+| Place | Text | Status |
+|---|---|---|
+| §1 reuse table (`:232`) | `knowledge.Manifest` — **"read on the query path"** … *"The new work is the lookup and the column, not the value"* | **verbatim unchanged from the commit pass 1 reviewed** |
+| Constraint table (`:584`) | *"the properties row's `source_hash` versus **`ManifestEntry.Hash`**"* | contradicts FR-020c |
+| **AC-F5** (`:1141`) | *"a record whose row `source_hash` differs from **`ManifestEntry.Hash`**"* | a mandatory AC that tests the wrong side |
+| §4.2 annotation (`:1424`) | *"each row's `source_hash` is compared against **`ManifestEntry.Hash`**"* | the normative worked example |
+
+An implementer following AC-F5 builds the mechanism FR-020c proves does not work, against a
+`Manifest` with no mutex, on the query path, under concurrent `SyncWith`. That is a data race, and
+test 62 (`-race`, added in this revision to catch exactly this) traces to FR-020c — so the race is
+built by AC-F5 and hunted by test 62.
+
+**This is A-13's own lesson, live in the document that states it.** A-13 says FR-020c has had four
+mechanisms and *"the first three were each described in normative text as though they already
+worked"*. The fourth is now described in one place and the third in four.
+
+**Fix.** Rewrite §1's `knowledge.Manifest` row to **"read by the indexer, NOT on the query path"**
+and delete *"The new work is the lookup and the column, not the value"*. Rewrite the constraint
+table, AC-F5 and §4.2's annotation to compare the SQLite row's `source_hash` against **the bleve
+document's stored `source_hash`**. Add `indexDoc.source_hash` to §1's *"what must be built"* list.
+
+### C-3 — FR-064a mandates a SQLite-side aggregate, reopening join fan-out by name.
+
+**Lens:** Inconsistency / Incorrectness · **Sections:** FR-064a, FR-021, FR-028a, §8.1, SC-002a, test 59
+
+FR-064a (`:897`): *"An aggregate-only query materialises **one result row**: the `COUNT`/`SUM` is
+**pushed entirely into SQLite** and no candidate is retrieved."*
+
+FR-021 (`:787`): *"**What moves back to Go:** every operator in FR-022b's vocabulary, every
+grouping, **every aggregate**, and the `many`-arity fan-out."*
+
+§8.1 (`:1879`): *"FR-064a's aggregate-only exemption … is now a **Go** scan over a candidate stream
+**rather than a SQLite pushdown**."*
+
+FR-064a is the only requirement in the document that still commands SQL to compute a value, and it
+commands it for **the one query shape with no row-level check on the answer** — no rows are
+returned, so no reader can sanity-check the total. It is also the shape where the deleted defect
+lives: FR-028a's own receipt is a `SUM` over a join with a `many` property returning **200 where
+truth is 100**, and FR-064a's exempt path is the aggregate over the largest candidate populations
+in the system (up to 50,000). SC-002a and test 51 assert the record-counted-once property; **test 59
+asserts FR-064a's exempt path returns `COMPLETE: yes`** and asserts nothing about de-duplication.
+
+**Fix.** Delete the pushdown sentence. Restate FR-064a's rationale in the terms §8.1 already uses:
+the aggregate-only path is exempt from FR-064 because it **streams** candidates through the Go
+aggregation pass and materialises one result row, not because it avoids retrieving them. Then state
+the cost honestly — it retrieves up to 50,000 candidates — and hand it to A-14, which currently
+believes the exemption is free. Add FR-028a's de-duplication assertion to test 59.
+
+### C-4 — FR-064's candidate count is unimplementable: there is no compiled `WHERE` clause.
+
+**Lens:** Infeasibility · **Sections:** FR-064, FR-066a, §7 test 47, A-14, §5 refusal table
+
+FR-064 (`:895`): *"the candidate set is **the rows surviving the filter**, before paging, joins,
+grouping and ranking … It is counted by a **`COUNT(*)` over the compiled `WHERE` clause**, taken
+**before any row is materialised** (§7 test 47)."*
+
+Under R-A the filter is never compiled to SQL. SQLite narrows by type, path prefix and kind only.
+So "the rows surviving the filter" is a quantity **only the Go comparator can produce**, and the Go
+comparator produces it by evaluating candidates — which is materialising them. The requirement, its
+acceptance criterion (FR-066a: *"a HARD precondition, counted BEFORE retrieval"*), its test (47:
+*"a 24,000-candidate query is refused without materialising one row"*) and its refusal string
+(`:1123`: *"this query selects 24,180 records"*) are all written for a mechanism the ruling deleted.
+
+**This is the load-bearing bound of the whole design.** §8.1's honest cost paragraph, A-14, FR-066a
+and FR-066b all rest on *"FR-064's 10,000-candidate cap is a **refusal**, not a politeness limit,
+and it was set for exactly this reason"*. If the cap can only be enforced *after* doing the work it
+bounds, it does not bound anything — the Go path can be handed an arbitrary population and the only
+protection is that it refuses after paying.
+
+**Fix.** Decide and write down which of these the design takes, because they are materially
+different products:
+- **(a) A pre-filter narrowing count.** `COUNT(*)` over what SQLite *can* answer — type, path,
+  kind — refusing above the cap. Honest, cheap, and enforceable before retrieval, but it refuses
+  queries whose filter would have selected three records out of a large type. Say so.
+- **(b) A streaming abort.** The comparator counts survivors as it evaluates and aborts at 10,000.
+  Enforceable, but **not** "before any row is materialised" — FR-066a, test 47 and the refusal
+  string must all be rewritten, and A-14's bound becomes "cost is capped at 10,000 *evaluations*",
+  which is a different and weaker claim.
+
+Whichever is chosen, restate FR-064's definition of "candidate" to match it and rewrite test 47.
+
+### C-5 — Nothing asserts that SQLite performs no comparison. The instrumentation was deleted.
+
+**Lens:** Incompleteness · **Sections:** §8.1's deletion table, AC-8.4, AC-8.4b, SC-024, §7 tests 39/42, §6
+
+The revision's central claim is that *"a single surviving SQL-side comparison reopens every
+violation"* — and it is right. The document then removes every mechanical check that could detect
+one:
+
+- **§7 test 39** (`TestFilter_NoLikeInCompiledPath`) — deleted; it inspected the emitted filter path.
+- **AC-8.8** — deleted; *"a `BINARY`-collation assertion over emitted DDL"*.
+- **AC-8.4a** — deleted; a mutation per defeat.
+
+What replaces them: AC-8.4's *"no post-filter escape"* (a row-count identity that detects double
+filtering, not SQL-side filtering) and AC-8.4b's six comparator mutations (which mutate Go and say
+nothing about SQL). **Neither can fail if the whole filter is compiled to SQL and the comparator is
+bypassed** — the row counts still balance and the comparator's mutations are unreached.
+
+Seven surviving SQL-side evaluations are listed at the head of this review. Each got into a
+revision *whose headline is this ruling*, and nothing in the document would catch an eighth.
+
+**Fix.** Add a required test — the analogue of the deleted test 39, at the store boundary rather
+than in the compiler:
+
+> **`TestQuery_NoComparisonIsDelegatedToSQL`** — a query-boundary recorder captures every SQL
+> statement the properties index executes for a corpus exercising all ten operators, `group_by`,
+> `aggregate`, `sort` and `join`. It asserts that **no captured statement contains any comparison
+> operator, `LIKE`, `IN`, `GROUP BY`, `ORDER BY`, an aggregate function, or `COLLATE`** outside a
+> named allow-list of narrowing predicates (`type = ?`, `path LIKE ?` for prefix scope, `kind = ?`,
+> the relation child table's `rec_id` join). Adding a statement to that allow-list is a
+> specification change requiring the argument AC-8.2 demands.
+
+This is the one control that makes R-A a property rather than an intention, and it is cheap.
+
+### C-6 — R-7 still MANDATES the storage FR-021d withdrew, and cites a row that no longer contains it.
+
+**Lens:** Inconsistency · **Sections:** §8 R-7 (`:1781`), FR-021d (`:793`), §8.1 deletion table (`:1823`), §6
+
+The §8 rule table is the highest-risk artifact in the document and §6 promotes it to numbered
+requirements. R-7 reads, in full and unstruck:
+
+> *"**A `date` MUST be stored as a signed integer epoch with a declared precision, never as text**
+> — see §8.1's R-7 row."*
+
+FR-021d (`:793`) withdraws precisely this: *"the storage form is not load-bearing and the
+requirement is withdrawn."* §8.1's deletion table (`:1823`) agrees: *"R-7's integer-epoch storage
+(**FR-021d**) — **WITHDRAWN as a storage requirement**."* And §8.1's R-7 row, which R-7 points the
+reader at for the storage specification, no longer contains one.
+
+A MUST in the rule table, pointing at a row that contradicts it, in the one table the document says
+*"the rules — not the cells — are what a human reviews"*.
+
+**Fix.** Replace R-7's second sentence with the parsing rule: *"A `date` value MUST be parsed in Go
+per FR-021d's strict ISO-8601 grammar; a value that does not parse is a reported problem (R-4), not
+a comparison. Storage form is unconstrained."*
+
+### C-7 — `<>` and R-2 specify opposite answers for an absent property.
+
+**Lens:** Ambiguity / Inconsistency · **Sections:** §4.1.2 filter table (`:1094`), R-2 (`:1776`), FR-008, DS-4 row E, DS-5
+
+| Artifact | Says |
+|---|---|
+| **R-2** (`:1776`) | *"A comparison where **either side is absent** is `false`, **for every operator except `IS NULL`**."* |
+| **§4.1.2 filter table** (`:1094`) | *"`<>` not equal — **includes records where the property is absent**, unless excluded (FR-008)"* |
+| **DS-4 row E** (`:1691`) | *"absent — `IS NULL` is true; **a `<>` filter includes it** (FR-008)"* |
+
+`<>` is a leaf operator. Under R-2 it evaluates to `false` over an absent side, so the record does
+**not** match. Under the filter table and DS-4 it does. Both are normative and
+`TestComparisonTruthTable` generates its cells **from R-2**, while DS-4 is the dataset the same test
+suite runs.
+
+R-2's own explanation is about `{not: {...}}` — *"`NOT(false)` is `true`, so a negative filter
+includes the absent records"* — which is correct and is what DS-5 tests. **`<>` is not `not`.** The
+document conflates a negated *tree* with a not-equal *leaf*, and FR-008's phrase "a negative filter"
+is ambiguous between them. This is the single most consequential cell in the truth table, and the
+spec's own motivating question (*"which days did I not meditate?"*) can be phrased either way.
+
+**Fix.** Rule on it explicitly and in one place. Either:
+- **(a) `<>` is R-2-governed** — absent yields `false`, and the way to include absent records is
+  `{any: [{p, "<>", v}, {p, "IS NULL"}]}` or `{not: {p, "=", v}}`. Then correct the filter table and
+  DS-4 row E, and add a DS-4 row asserting `<>` **excludes** absent. This is SQL's semantics and is
+  the more defensible answer given R-B.
+- **(b) `<>` is exempt from R-2 like `IS NULL`** — then amend R-2's exception list to name both, say
+  so in R-3, and explain why `<` `>` `<=` `>=` are not also exempt.
+
+Whichever, add the chosen case to DS-5 as a compound too, since a tree walker and a leaf evaluator
+can disagree.
+
+### C-8 — Three normative places require the WITHDRAWN fold column, and one states the opposite outcome from FR-011a.
+
+**Lens:** Inconsistency · **Sections:** edge-case table (`:477`), §3 non-behaviours (`:565`), constraint table (`:579`), FR-011a, R-10, SC-002d, DS-1
+
+FR-011a (`:643`) withdraws the derived `<col>_fold` SQLite column in as many words: *"**Withdrawn**
+— under ruling R-A there is nothing to compare it against."* §8.1's deletion table (`:1824`)
+confirms: *"R-9/R-10's `instr()` and the **FR-011a** fold column — **WITHDRAWN**."*
+
+Three places still depend on it, and the first **inverts the requirement**:
+
+| Place | Text | Problem |
+|---|---|---|
+| **Edge-case table** (`:477`) | *Enum value differing only in **non-ASCII** case (`Ätä` vs `ätä`) — **does NOT resolve** … this depends on the Go-side **fold column** being built … a build without the fold column reports these as **non-conforming**"* | **States the opposite of FR-011a, R-10, SC-002d, test 53 and DS-1's `ÄKTIV` row**, all of which require non-ASCII case to resolve unconditionally |
+| §3 non-behaviours (`:565`) | *"Unicode folding requires the Go-side **fold column** FR-011a specifies"* | FR-011a specifies a function, not a column |
+| Constraint table (`:579`) | *"**ASCII-only where it rests on SQLite**; Unicode requires the Go-side **fold column** (FR-011a)"* | nothing rests on SQLite any more |
+
+DS-1 (`:1661`) is unambiguous the other way: *"`ÄKTIV` — **accepted — resolves to `äktiv`**"*. An
+implementer reading the edge-case table builds a conditional behaviour gated on a column that does
+not exist; an implementer reading DS-1 builds unconditional Go folding. Both are following
+normative text.
+
+**Fix.** Rewrite the edge-case row to *"resolves to the declared value, unconditionally — the fold
+is in the comparator (FR-011a), not in SQLite"*, and add the row that is actually load-bearing now:
+*"Enum value differing by a **full**-case-folding pair (`ß`/`ss`) — **does NOT resolve**; see C-1."*
+Delete "fold column" from `:565` and `:579`.
+
+### C-9 — §10a's money inventory is incomplete. Two live wire-enum members survive it.
+
+**Lens:** Incompleteness · **Sections:** §10a (`:2112-2131`), FR-014, Hard Constraint #8
+
+§10a claims to be exhaustive so *"the deletion is a scheduled task with a reviewer rather than
+something a future reader trips over"*, and asserts *"Verified against the tree at revision time —
+every path, line count and symbol below was read, not recalled."* Grepped against the tree:
+
+| Surviving money/currency surface | §10a lists it? |
+|---|---|
+| **`contracts/components/schemas/RecordProblem.yaml:38-39`** — the enum members **`cross_currency`** and **`money_scale_mismatch`**, plus their prose at `:67-69` | **NO** |
+| `RecordAggregate.yaml:27-28`, `RecordSort.yaml:10`, `RecordGroup.yaml:64` | **NO** |
+| `src/lib/api/generated/schemas.ts:319-320`, `:3875-3876` — the generated **runtime Zod** union carrying both members, plus a `RecordMoney` object schema and a `currency` regex (18 hits in the file) | **NO** — §10a's "Generated" row names only four lines of the **Go** file |
+| `src/lib/api/generated/openapi-types.ts` (31 hits) | **NO** |
+| `pkg/api/generated/openapi_types.gen.go` | listed as **four lines**; the file carries far more |
+
+`cross_currency` and `money_scale_mismatch` are **not comments**. They are live wire-contract enum
+members that generate a Go constant, a TypeScript union member and a **runtime Zod validator** that
+the SPA edge uses to accept or drop payloads. They are the machine-readable residue of the requirement
+FR-014 retired, and under Hard Constraint #8 they cannot be removed by hand — the spec change and
+the regenerated artifacts must land in one atomic commit, which is a task nobody has been given.
+
+**Fix.** Extend §10a with a `contracts/` and a `src/lib/api/generated/` row enumerating every hit,
+name `RecordProblem.yaml`'s two enum members explicitly as the highest-value deletions, and add the
+regeneration of **both** generated trees (Go and TS) to the W1 task with `make verify-contracts` as
+its exit criterion. Also add the **`number` → `integer` + `decimal`** contract change, which §10a
+does not mention at all: `contracts/` currently declares a `number` property-type enum member and
+**no `integer` and no `decimal` anywhere**, so FR-004's change has no contract task scheduled.
+
+### C-10 — FR-004a's test cannot pass, and its "verified clean" claim does not reproduce.
+
+**Lens:** Incorrectness / Infeasibility · **Sections:** FR-004a (`:612-620`), §7 test 54, SC-002e, ADR D0 (`:157-160`)
+
+FR-004a requires *"a test asserts that **no** CRM or other domain term appears in **any non-test
+file** of the record packages, over a denylist including at least `company`, `deal`, `contact`,
+`lead`, `opportunity`, `pipeline`, `prospect`, `stage`, `arr`, `crm`"*, and both documents state:
+*"**Verified at revision time: the code is already clean** — zero domain vocabulary outside tests in
+`pkg/records` and `pkg/knowledge`."*
+
+Grepped whole-word, case-insensitively, over non-test `.go` files in those two packages:
+**49 hits**, including —
+
+- **`pkg/records/doc.go:12`** — the sentence *"we ship mechanism, the vault ships convention"*
+  illustrated with `deal`/`company`. **The D0 statement itself trips FR-004a's denylist.**
+- `pkg/knowledge/` — `stage` (19 hits, ordinary pipeline-stage naming), `lead` (a local variable),
+  `contact`, `arr` as a whole word.
+
+`stage`, `lead`, `arr`, `pipeline` and `contact` are ordinary English and ordinary programming
+vocabulary. A denylist over them produces false positives structurally, not incidentally, and it
+grows every time someone writes `stage` in a comment. The test as specified is both **failing on
+day one** and **destined to be weakened into uselessness** by whoever has to make it green.
+
+**Fix.** Three changes: (a) **withdraw the "verified clean" claim** from both documents — it does
+not reproduce and it is the kind of unchecked assertion this document exists to remove; (b) narrow
+the denylist to terms with **no plausible non-domain use** (`crm`, `opportunity`, `prospect`,
+`deal`, `company`) and drop `stage`/`lead`/`arr`/`pipeline`/`contact` explicitly, with the reason
+recorded so nobody re-adds them; (c) scope the test to what the requirement actually cares about —
+**seeded data**: assert that `SeedConfig`, the default config, and the shipped schema/view
+directories contain zero record types, zero enum values, zero property names and zero identifier
+prefixes. That is FR-004a's real subject and it is decidable. Add `pkg/records/doc.go`'s prose to
+the excluded-by-path list or rewrite it in neutral terms.
+
+### C-11 — ADR-068 §4 retains revision 6's reversed position verbatim, marked "restated" and not restated.
+
+**Lens:** Inconsistency · **Sections:** ADR-068 §4 Consequences (`:2610-2622`), D16.2b, D16.6, AC-16.6
+
+The bullet carries a revision-7 note — *"**this is now a REASON, not a cost** … The bullet is kept,
+**restated**, because the reasoning is what justifies the ruling"* — and the body was then left
+unchanged. It still reads:
+
+> *"Each is defeatable and D16.6 gives the defeat, but each must be **deliberately defeated in the
+> query compiler** — the correct behaviour is never the default. This is the largest single
+> correctness cost of D16 … **The truth table therefore runs against the real compiled query path
+> (AC-8.4), not a Go comparator: after D16.2b the product does not use one for filtering, and a
+> table that passes over an unused comparator proves nothing.**"*
+
+Every clause is the reversed position. It names the reversed D16.2b as live authority, mandates the
+deleted compiled-SQL truth-table target, and asserts the product does not use a Go comparator —
+against D16.2b as reversed, D16.6 as rewritten, AC-16.6 as revised, and the spec's AC-8.4. It also
+carries a **money orphan** the revision claims to have swept (*"`SUM` adds **USD to JPY** without
+complaint"*) and lists lexical enum ordering as a violation (*"enums order lexically, so `stage >=
+qualified` drops `proposal`"*) when D4 as revised makes lexical ordering **the specification**.
+
+The ADR is the authority document. A reader who implements from §4 Consequences builds a SQL query
+compiler.
+
+**Fix.** Restate the bullet as the note promises: keep the receipts as reasons, delete *"must be
+deliberately defeated in the query compiler"*, delete the whole final sentence and replace it with
+*"The truth table therefore runs against the comparator the product uses (AC-16.6)."* Delete the
+USD/JPY clause. Move the enum-ordering clause out of the violation list into D4's own record.
