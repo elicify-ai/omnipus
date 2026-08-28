@@ -942,6 +942,76 @@ CASCADE: 7 notes rewritten (inbound wikilinks), 1 note moved
   returns one as `version`". That is **false for the two highest-blast-radius tools in the set**.
   It is pre-existing and adjacent; it is named here so it is not lost.*
 
+### 4.1.6 `vault_configure` — WRITE, cascades in meaning
+
+**New in revision 4 (ADR-068 D15.6).** The control plane: record types and saved views. It is the
+only tool that changes what already-existing notes **mean**, and it is a separate tool for exactly
+one reason — policy resolves on the tool **name** (FR-070c), so a control plane folded into
+`vault_edit` cannot be granted or withheld on its own.
+
+**It writes one file** — a schema or a view — **and reinterprets many notes.** That is C-B, and it
+is the opposite shape to `vault_restructure`, which writes many files and reinterprets none.
+
+| `op` | Additional parameters | Cascade in meaning |
+|---|---|---|
+| `create_record_type` | `type`, `definition` | Every pre-existing note already declaring `type:` becomes a validated record (FR-016). |
+| `edit_record_type` | `type`, `definition` | Every existing record of that type is revalidated (FR-015, FR-017). |
+| `delete_record_type` | `type` | Every record of that type reverts to an ordinary note (FR-005, FR-017). |
+| `write_view` | `view` (name), `definition` | Changes what a saved query returns; changes no note (FR-018). |
+| `delete_view` | `view` | Same, in reverse. |
+
+**No `expect_version` parameter exists on this tool, on any operation** (FR-018a). A single-file
+content hash cannot honestly guard a change whose blast radius is every note declaring the type,
+and a compare-and-swap that guards one of the things it affects is worse than none, because it
+reads as a guarantee. Safety here is policy (FR-080a), plus the audit entry (FR-077), plus
+`check_integrity` (FR-075).
+
+**Every response MUST state the cascade in meaning, in counts, before the next-actions block.**
+This is the requirement that makes C-B visible at all — the file diff shows one small YAML file
+and nothing else:
+
+```
+CASCADE (meaning): 47 notes now match record type 'meeting'
+  41 validate clean
+   6 newly reported: required property 'date' is absent
+  0 records lost validity
+```
+
+**Normative refusal and report wording.** These strings are contract, not illustration; a test
+asserts them.
+
+| Condition | Message |
+|---|---|
+| Type already exists (FR-016) | `record type 'company' is already declared in .omnipus-vault/records/company.yaml; use op=edit_record_type to change it` |
+| Type does not exist (FR-017) | `no record type 'compnay' is declared; declared types: company, deal, meeting, person` |
+| Schema missing `schema_version` (FR-002) | `schema for 'company' has no schema_version; add schema_version: 1` |
+| Two files declare one type (FR-003) | `record type 'deal' is declared in .omnipus-vault/records/deal.yaml and .omnipus-vault/records/deals.yaml; delete one` |
+| Unknown property type (FR-004) | `property 'closed' declares type 'boolean'; permitted: text, enum, relation, date, number, money, person` |
+| Enum with no declared order (FR-010) | `enum property 'status' must declare its values in order; sorting follows declared position, not spelling` |
+| A cascading-in-bytes op sent here (C-A) | `rename writes notes you did not name; use vault_restructure` |
+| A one-file note edit sent here | `set_property writes one note; use vault_edit` |
+| Version token supplied (FR-018a) | `vault_configure takes no expect_version: a single-file token cannot guard a change to every note declaring this type. Re-read with vault_describe and re-send` |
+| No properties index on this build (FR-020h) | `record types cannot be declared on linux/mipsle: this build has no properties index. The schema file would be written and never enforced` |
+
+- **AC-C1** — **creating a new record type on a vault that already contains notes declaring that
+  type reports the count of notes converted, and names the ones that newly fail validation.** A
+  response that reports only "type created" fails this criterion. *This is the acceptance test for
+  the defect ADR-068 D15.6 corrects: an operator whose vault already uses `type: meeting` as a
+  personal convention, whose agent then authors a `meeting` schema, must not discover the
+  conversion from a validation report over hundreds of notes they never asked to be validated.*
+- **AC-C2** — an agent holding `vault_edit: allow` and `vault_configure: deny` **cannot** create,
+  change or delete a record type or a saved view, by any route. This is the posture revision 3
+  described and did not deliver (FR-083).
+- **AC-C3** — `vault_configure` declares no `expect_version` parameter; a test asserts its absence
+  in the tool schema, not merely its absence from the documentation (FR-018a, ADR-068 AC-15.5d).
+- **AC-C4** — `delete_record_type` reports how many records revert to ordinary notes, and a
+  subsequent `vault_find type=<deleted>` is **refused** naming the declared types, never returning
+  an empty result (FR-024).
+- **AC-C5** — every `vault_configure` call emits a `vault.configure` audit entry carrying the
+  operation, agent, workspace, target and outcome, including on refusal (FR-077).
+- **AC-C6** — the tool description names its **widest** operation, `delete_record_type`, not its
+  most common one (FR-079, FR-070c).
+
 ---
 
 ## 4.2 The `vault_find` response — a literal worked example, normative
