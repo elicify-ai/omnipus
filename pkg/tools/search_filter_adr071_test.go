@@ -68,7 +68,7 @@ func TestCRIT201_DeniedMidListAbsentFromAnswer(t *testing.T) {
 			t.Errorf("permitted tool %q must be present in the answer; got: %s", name, res.ForLLM)
 		}
 	}
-	if !(idxA < idxC && idxC < idxD && idxD < idxE) {
+	if idxA >= idxC || idxC >= idxD || idxD >= idxE {
 		t.Errorf("permitted results must keep their unfiltered relative order (A<C<D<E); got indices A=%d C=%d D=%d E=%d",
 			idxA, idxC, idxD, idxE)
 	}

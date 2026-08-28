@@ -2263,8 +2263,8 @@ func TestRegistrationGuard_DerivesFromInfraNames(t *testing.T) {
 
 	before := make(map[string]tools.Tool, len(infraNames))
 	for _, name := range infraNames {
-		tool, ok := agent.Tools.Get(name)
-		require.True(t, ok, "infra tool %q must be registered after NewAgentLoop", name)
+		tool, found := agent.Tools.Get(name)
+		require.True(t, found, "infra tool %q must be registered after NewAgentLoop", name)
 		before[name] = tool
 	}
 
