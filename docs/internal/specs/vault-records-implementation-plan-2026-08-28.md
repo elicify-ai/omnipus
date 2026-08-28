@@ -127,12 +127,44 @@ Parallel fixers, then full CI. Iterate until every job passes. **Real defects, n
    **Cheapest check: apply the mutation to a copy of a real caller, never only to a fixture you wrote.**
    *(This belongs in `docs/internal/false-green-patterns.md`, which is on the release lineage and not on
    this branch — fold it in when the two meet.)*
-2. **Capture exit codes without a pipe** — `cmd > log 2>&1; echo "exit=$?"`.
-3. **Commit incrementally.** This machine has slept mid-write five times today and killed four agents at the research→write boundary.
-4. **Never run the full Go suite** — it OOMs. Build tags `goolm,stdjson` are mandatory.
-5. **Author as the human**, no agent co-author trailer — the CLA gate hard-fails on it.
-6. **No deferrals.** A finding is fixed or it is a stated open risk with a reason. Never "later".
-7. **A guard that cries wolf gets disabled — so pin the false positives too.** Over-tightening is the
+2. **A pattern-matching guard must be probed ADVERSARIALLY, not just fixtured — start with whitespace.**
+   Extending the fixture set cannot find this class, because a fixture and the guard that passes it
+   were written by the same person in the same sitting, in the same style. **Fixtures carry the
+   spacing their author happened to type; real code carries whatever was typed.**
+   *Worked example, Stage 2.* The AC-8.10 emitted-SQL guard
+   (`pkg/records/propindex/sqlgate_test.go`) exists to prove no comparison reaches SQLite. Its
+   comparison-operator regex spelled the operators as `\s=\s`, `\s<\s`, `\s>\s` — **whitespace
+   required on both sides**. So every one of these was reported CLEAN by the control whose entire
+   purpose is to catch them:
+   `WHERE p.v_text=?` · `WHERE p.v_num>?` · `WHERE p.v_num<10` · `ON p.note_id=n.note_id AND p.v_text='x'`
+   Twelve deliberate violation fixtures passed, 100% green, while the hole was open. It was found by
+   feeding the guard hostile inputs, not by adding a thirteenth fixture.
+   **Cheapest check: take each fixture the guard already catches and re-run it with the whitespace
+   removed, the operator spelled differently, and the construct nested one level down.** Two further
+   shapes no fixture covered and this probe found immediately: a correlated subquery hiding the
+   comparison inside `EXISTS (SELECT 1 … AND p.v_text = ?)`, and a scalar function doing the
+   comparing (`WHERE instr(n.path, ?) > 0`). Both are how a determined implementer gets a predicate
+   past a regex **without meaning to**.
+   Fix pattern: canonicalise before matching (`normaliseOperators`) rather than enumerating spellings
+   — an allow-list benefits equally, so `record_type=?` is recognised as the legitimate narrowing
+   predicate it is instead of flagged for its spacing. Then pin the unspaced forms as fixtures so
+   removing the canonicalisation fails loudly rather than silently reopening the blind spot.
+3. **Capture exit codes without a pipe** — `cmd > log 2>&1; echo "exit=$?"`.
+   Corollary, learned in Stage 2: **`go vet` is not a build check.** It printed
+   `import cycle not allowed in test` and exited **0**. Only `go test` proves a test binary links.
+4. **Commit COMPILING states incrementally.** This machine has slept mid-write five times today and
+   killed four agents at the research→write boundary. In a shared worktree an uncommitted broken
+   build is not a private state — it is a stop-the-world event for every agent whose tests import the
+   package, and they cannot tell whose edit caused it without asking.
+   **When someone else's uncommitted work breaks your verification, do not guess at their
+   half-written symbols and do not edit their files.** Verify against your own committed HEAD in a
+   detached worktree — `git worktree add --detach /tmp/verify HEAD` — which contains only committed
+   work, so their untracked files do not exist there. Mutate freely, `git checkout -- .` to restore.
+   State the SHA in any mutation table produced this way: it describes the version tested.
+6. **Never run the full Go suite** — it OOMs. Build tags `goolm,stdjson` are mandatory.
+7. **Author as the human**, no agent co-author trailer — the CLA gate hard-fails on it.
+8. **No deferrals.** A finding is fixed or it is a stated open risk with a reason. Never "later".
+9. **A guard that cries wolf gets disabled — so pin the false positives too.** Over-tightening is the
    obvious over-correction to rule 1 and is its own defect: the same Stage 1 guard's first
    branch-scoped rule flagged `err := Require(...); return nil, err`, which propagates correctly.
    Every guard needs **negative** fixtures — correct shapes asserted NOT to fire — or the next person
