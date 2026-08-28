@@ -1129,20 +1129,25 @@ broader thing has been given a wrong answer with no error channel.
 - **SC-005** **CORRECTED, revision 3.** 1,000 records created concurrently across two POSIX processes yield 1,000 **distinct** identifiers. **Gaps are permitted; a repeat is a failure.** *Revision 2 demanded "zero sequence gaps", which directly contradicts FR-038 and ADR-068 D7.1: deleting a record burns its identifier permanently, so a gap is the correct outcome and reconciling to max to close it would make an existing relation resolve to a different record. This was a specification defect, not a wording preference.*
 - **SC-005a** Deleting the highest-numbered record and creating a new one yields an identifier **above** the deleted one, never equal to it.
 - **SC-006** An agent in workspace A retrieves zero records from a vault mounted only into workspace B, and cannot distinguish it from an empty vault.
-- **SC-007** *(No latency or memory target is stated. The spike measured the **bleve-plus-Go design this specification did not take**; quoting its numbers as targets for the two-index design would repeat revision 1's error in a new costume. Targets arrive when W1 has the SQLite path measured. The one budget that holds is inherited: ADR-067's < 64 MB steady-state RSS, which the properties index lives inside.)*
+- **SC-007** **CORRECTED, revision 4.** *(No latency target is stated. The spike measured the **bleve-plus-Go design this specification did not take**; quoting its numbers as targets for the two-index design would repeat revision 1's error in a new costume. Targets arrive when W1 has the SQLite path measured.)* **The 64 MB budget is a TARGET, not an inherited property.** Revision 3 wrote that ADR-067's < 64 MB steady-state RSS holds and "the properties index lives inside it". That budget was measured for **bleve alone** — idle 12.9–15.1 MB, 23.6–24.0 MB streamed at the cap (spike §5.1, §5.3) — and the two-index design keeps all of it and **adds** SQLite's page cache, its temp b-trees for `GROUP BY`/`ORDER BY`, and its connection state, none of which is measured. **W1 exit criterion:** both indexes, idle and at the 10,000-record cap, inside 64 MB, measured on **Linux as well as macOS** (ADR-068 D16.4 item 4).
 - **SC-009** Zero tool-policy pairs are repaired on a fresh install, across all ten seeded agents.
 - **SC-010** A `.base` file containing one unsupported expression imports — **via the operator/CLI one-shot** — with that expression reported verbatim and the rest translated.
-- **SC-011** The static builtin catalog contains exactly five `vault_*` names and zero `knowledge_*` names, and `allStaticToolNames` has 98 entries.
-- **SC-012** An operator policy of `vault_edit: allow`, `vault_restructure: deny` permits a property write and refuses a rename, in one session, proven by test.
+- **SC-011** **CORRECTED, revision 4.** The static builtin catalog contains exactly **six** `vault_*` names and zero `knowledge_*` names, and `allStaticToolNames` has **95** entries. *(Revision 3 said five and 98. 98 is the count **today**, before any change — re-counted at `pkg/coreagent/core.go:358-482`: 98 quoted identifiers, 98 unique, 9 `knowledge_*`. After the swap: 98 − 9 + 6 = 95.)*
+- **SC-012** **WIDENED, revision 4.** All three write policies are independently settable, proven by test in one session: `vault_edit: allow` + `vault_restructure: deny` permits a property write and refuses a rename; `vault_edit: allow` + `vault_configure: deny` permits a property write and refuses `create_record_type`.
 - **SC-013** Every successful `vault_edit` changes exactly one file on disk.
 - **SC-014** Deleting the properties index and reopening the vault reproduces byte-identical query results for a 30-query fixture suite.
-- **SC-015** A query run while the two indexes are at different generations reports `COMPLETE: no` with staleness named, and never reports success.
+- **SC-015** **CORRECTED, revision 4 — it tests DIVERGENCE, not rebuild, and in both directions.** A record row is written; the note is then modified and re-indexed into **bleve only** (the SQLite write suppressed); a `vault_find` returning that record reports `COMPLETE: no` with the record named and staleness given as the reason. The symmetric case — SQLite updated, bleve not — is asserted the same way. *Revision 3's criterion could be satisfied by a generation counter that does not exist; ADR-068 revision 5's W1 exit criterion was "delete the properties index and reopen rebuilds it with identical results", **which would have passed with the mitigation entirely absent**. SC-014 keeps the rebuild criterion because it tests a different property — FR-020a's disposability.*
 - **SC-016** `ScoringModel` is asserted to be BM25 by test, and the seven stale doc comments naming BM25 are corrected in the same change.
 - **SC-017** A field query on a frontmatter property key returns the records holding it — a query that is not expressible at all today.
 - **SC-018** The FR-112 fusion is compared against plain BM25 on the fixture corpus and the comparison is recorded; the same filter returns the same **set** under both (AC-8.6).
 - **SC-019** An agent obtains a version token via `vault_read` and completes a write with zero failed writes in between.
 - **SC-020** A client mounting the collection panel after indexing completed renders the completed state, and it matches the freshness `vault_find` reports for the same collection.
 - **SC-021** A `vault_find` response over a partial answer places its completeness verdict on line 1, and a test asserts block order `header → rows → totals → problems → next`.
+- **SC-022** **NEW, revision 4.** Creating a record type on a vault holding 47 notes that already declare that type reports **47** converted and names the 6 that newly fail validation. A response reading only "type created" fails (AC-C1).
+- **SC-023** **NEW, revision 4.** On a build without the properties index, every typed filter, join, grouping and aggregation call **refuses by name**, and zero of them return an empty success (FR-020h, AC-F6).
+- **SC-024** **NEW, revision 4.** The truth table of §8 runs against the **compiled query path** — schema → filter object → compiled query → store — and a mutation to the compiler (removing the `IS NULL` arm of a negation, or swapping `instr()` for `LIKE`) makes it fail (AC-8.4, AC-8.7).
+- **SC-025** **NEW, revision 4.** Response budgets are asserted in **bytes of rendered UTF-8**, by the same measurement the implementation enforces (FR-127b, AC-P4).
+- **SC-026** **NEW, revision 4.** An unscoped `check_integrity` over a collection above 100,000 notes is refused naming the collection and the scoped remedy; a category above 500 findings reports the clamp with the count that would have been returned (FR-075a).
 
 ---
 
@@ -1156,9 +1161,11 @@ broader thing has been given a wrong answer with no error channel.
 | FR-007, 008 | US-2 | edge | `TestFilter_AbsentIsDistinctAndIncludedByNegation` |
 | FR-010, 011 | US-1 | 1.3 | `TestEnum_OrderedAndClosed` |
 | FR-012..014 | US-2 | 2.3 | `TestMoney_RefusesCrossCurrencySum` |
-| FR-016..019a | US-12 | 12.1–12.4 | `TestSchemaAuthoring_TierPlacement` |
+| FR-016..019a | US-12 | 12.1–12.5 | `TestSchemaAuthoring_LivesInVaultConfigure` |
+| FR-018a | US-12 | 12.4 | `TestConfigure_DeclaresNoVersionToken` |
 | FR-020, 020a, 021 | US-2 | — | `TestPropsIndex_RebuildIsResultIdentical`; `TestIndex_PropsRoundTripsExactDecimal` — a money value survives the index unchanged; a float64 path fails it |
-| FR-020c, 020g | US-13 | 13.2 | `TestIndexes_GenerationMismatchIsIncomplete` |
+| FR-020c, 020c1, 020g | US-13 | 13.2 | `TestIndexes_SourceHashDivergenceIsIncomplete` |
+| FR-020h | — | — | `TestRecords_RefuseByNameWithoutSQLite` |
 | FR-020d, 020e | — | — | `TestIndex_StaleFormatIsRebuiltNotOpened`; `TestIndex_PersistedMappingAsserted` |
 | FR-020f | US-13 | 13.1 | `TestIndexState_SnapshotMatchesLiveFrame` |
 | FR-022..024 | US-2 | 2.4 | `TestQuery_UnknownPropertyIsRejectedNotEmpty` |
@@ -1172,20 +1179,24 @@ broader thing has been given a wrong answer with no error channel.
 | FR-046 | — | — | `TestDerived_NeverWrittenToFrontmatter` |
 | FR-050..053 | US-6 | 6.1–6.4 | `TestInteraction_ExclusionRules` |
 | FR-060..062 | US-8 | 8.1, 8.2 | `TestScope_CrossWorkspaceReturnsEmpty` |
-| FR-063..066 | US-2 | 2.5 | `TestBounds_RefusalNotTruncation` |
+| FR-063..066b | US-2 | 2.5 | `TestBounds_RefusalNotTruncation`; `TestBounds_CandidateCountedBeforeRetrieval`; `TestBounds_PeakRSSAtCap` |
+| FR-067 | — | — | `TestWritePath_RateLimited` |
+| FR-036a | US-1 | — | `TestCreate_WritesNoteAndSeqAndNothingElse` |
 | FR-047 | US-4 | — | `TestReplaceBody_AmbiguousAnchorIsRefused` |
 | FR-048, 049 | US-4 | — | `TestTrash_ConventionAndUnrepairableLinksReported` |
-| FR-070, 070a, 078 | — | — | `TestTools_ExactlyFiveVaultToolsAndNoKnowledgeNames` |
+| FR-070, 070a, 078 | — | — | `TestTools_ExactlySixVaultToolsAndNoKnowledgeNames` |
 | FR-070b, 070c, 071 | — | — | `TestTools_EditWritesOnlyNamedFile`; `TestTools_NamesHaveNoDots` |
-| FR-072, 120..128 | US-11 | 11.1–11.4 | `TestRender_CompactTextContract` |
+| FR-072, 120..128 | US-11 | 11.1–11.4 | `TestRender_CompactTextContract`; `TestRender_BudgetIsMeasuredInBytes` |
 | FR-073 | US-2 | — | `TestFind_ExplainEvaluatesNothing` |
 | FR-074 | US-9 | 9.1–9.3 | `TestRead_ReturnsUsableVersionToken` |
-| FR-075 | US-5 | 5.3 | `TestDescribe_CheckIntegrityNamesBothPaths` |
+| FR-075 | US-5 | 5.3 | `TestDescribe_CheckIntegrityNamesBothPaths`; `TestDescribe_ReportsOrdinaryBrokenWikilinks` |
+| FR-075a | — | — | `TestDescribe_CheckIntegrityIsBounded` |
 | FR-076 | US-3 | — | `TestFind_NearComposesWithFilters` |
+| FR-076a | US-10 | — | `TestFind_TasksAreIndexedRowsNotAWalk` |
 | FR-077 | US-4 | 4.4 | `TestAudit_VaultEditAndRestructureCarryOperation` |
 | FR-079, 128 | — | — | `TestTools_DescriptionTokenBudget` |
 | FR-080, 080a, 081, 082 | — | — | `TestToolPolicy_ZeroRepairedPairsOnFreshInstall` |
-| FR-083, 084 | US-12 | 12.2 | `TestToolPolicy_EditAndRestructureAreIndependent` |
+| FR-083, 084 | US-12 | 12.2, 12.4 | `TestToolPolicy_ThreeWriteTiersAreIndependent` |
 | FR-110, 110a | US-10 | 10.1 | `TestSearch_ScoringModelIsBM25` |
 | FR-111 | US-10 | 10.3 | `TestIndex_FieldedAndFrontmatterStripped` |
 | FR-112, 113 | US-10 | 10.4 | `TestRank_FusionComparedAgainstPlainBM25` |
