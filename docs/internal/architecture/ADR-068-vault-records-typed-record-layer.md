@@ -1473,78 +1473,118 @@ verdict covers what it returned, not what it did not.**
 write path do not depend on the storage outcome and remain valid, as revision 4 predicted.
 
 
-### D16.6 — SQLite's DEFAULT semantics contradict nine of the thirteen comparison rules. Every contradiction is defeatable; none is defeated by default.
+### D16.6 — SQLite's DEFAULT semantics contradict ten of the comparison rules. **REVISION 7: that is why SQLite does not decide a comparison, rather than a list of things to defeat.**
 
-*New in revision 6. This is the single strongest consideration bearing on D16, and revision 5
-did not carry it at all — the implementing spec did (`vault-records-spec-2026-08-25.md` §8.1's
-rule-by-rule table) and this ADR did not, which is exactly backwards: **the document that decides
-to adopt SQLite is the document that must record what adopting it costs.** A reader of the ADR
-alone would take D16 and never learn that the engine it chose reverses, by default, the rules
-the type system exists to guarantee.*
+> **REWRITTEN IN FULL, revision 7, by operator ruling — and this is the single largest change in
+> the revision.** Revision 6 listed nine violations and, beside each, a **defeat**: a line of a
+> query compiler that would make SQL behave the way the comparison oracle requires. **That entire
+> right-hand column is withdrawn.** The ruling: **the properties index NARROWS CANDIDATES; our own
+> tested comparator DECIDES.** SQLite answers *"which notes declare this type?"* and hands back
+> candidate rows; the comparator applies R-1..R-13 to them. **No comparison is delegated.**
+>
+> **This reverses D16.2b**, whose one sentence was *"the properties index answers every typed
+> predicate"*, and it restores the implementing spec's FR-021 to its original meaning — evaluation
+> in Go. **The spec had it right before revision 3 moved it, and it is restored rather than
+> corrected.**
 
-**The rules are the spec's §8 comparison oracle (R-1..R-13, its §8 rule table), which is the
-normative statement of what a comparison in this product means.** D16.2b makes the properties
-index answer *every* typed predicate, so from W1 onward those rules are enforced by emitted SQL
-rather than by a Go comparator. The rules did not change. **The surface they are enforced on
-did, and that surface disagrees with nine of them out of the box.**
+**Why the ruling is right, and it is worth arguing rather than asserting, because revision 6 argued
+the opposite.** Revision 6's position was that each contradiction is defeatable, all nine defeats
+are known, and the shape of the work is therefore clear. **Two things happened to that position:**
 
-**Verified by direct execution against `sqlite3` 3.51.0, not read from documentation.** Each row
-below was run; the observed result is what is quoted.
+1. **Grill pass 1 checked the defeats. Zero of the seven specified were sufficient as written**, and
+   it found a **tenth** violation nobody had — **join fan-out**, which made `COUNT` and `SUM` over a
+   filtered multi-value list return **2 and 200 where truth was 1 and 100**, silently, by a factor
+   varying per record. Every count and every total over a filtered list of a `many` property was
+   wrong.
+2. **The pattern, not the individual errors, is the finding.** Revision 6 itself wrote — about a
+   different mechanism, two decisions above — *"a mechanism this ADR relies on either exists and is
+   cited, or is specified as NEW WORK with what it costs, never named as though it already
+   worked."* **Nine defeats named in a normative table, none of them written, eight failing in the
+   quiet direction, is the same shape.** A-11 in the specification said so in as many words: *"a
+   specified defeat and a verified defeat are different things, and eight of the nine failures look
+   identical to success."*
 
-| Rule | What the rule requires | What SQLite does by default | The concrete consequence |
-|---|---|---|---|
-| **R-1** | A comparison across declared types is `false` | `SELECT '3' > 2;` → **`1` (true)**. Storage-class ordering puts INTEGER/REAL before TEXT, so *any* text value outranks *any* number | The exact case **AC-8.3** was written for after it failed once already in a Go comparator, failing again in SQL. A numeric filter over a property one note typed as a string silently includes or excludes that note |
-| **R-2 / R-3** | A negative filter **includes** absent records (FR-008); `is absent` is the only operator absence answers | Over a row with `status` NULL: `WHERE NOT (status = 'done')` → **0 rows**. The guarded form `WHERE (status IS NULL OR status <> 'done')` → **1 row** | **This is the sharpest one. FR-008 exists so that "which days did I not meditate?" returns the days with no entry. Under SQLite's default negation it returns ZERO rows** — the question is answered with a confident, empty, wrong answer, and the rows omitted are precisely the rows asked about. §1.3 names this failure class as the reason this ADR exists; the engine chosen to implement it reintroduces it |
-| **R-4** | A non-conforming value compares `false` **and** raises a problem | A value that parsed to something else is stored as whatever it parsed to and compares silently, with no error | The malformed record is scored against the filter as though it were well-formed, and nothing in the answer says so. D13's headline promise — every answer is complete or names what it excluded — is broken without a symptom |
-| **R-5** | `enum` orders by **declared position** (D4) | `ORDER BY` over a TEXT column is lexical. Declared `lead < qualified < proposal < won` sorts as **`lead, proposal, qualified, won`** | `stage >= qualified` — "deals at qualified or beyond" — **silently drops every `proposal` deal**, because `'proposal' < 'qualified'` alphabetically. A pipeline report that is wrong in the direction of looking healthier than it is |
-| **R-6** | `money` compares and sums only **within one currency**; across currencies the operators are `false` and the currencies are reported (O-2) | `SELECT sum(amt) FROM m;` over 100 USD and 100 JPY → **`200.0`** | A total that is not a quantity of anything, presented as a number. No aggregate in SQL expresses "refuse" |
-| **R-9 / R-10** | `contains` on a list is **whole-element** membership; `contains` on text is **case-sensitive** substring | `SELECT 'ACME' LIKE '%acme%';` → **`1` (true)**. `SELECT 'vendors,partner' LIKE '%vendor%';` → **`1` (true)** | The natural SQL spelling of `contains` is `LIKE`, and `LIKE` is wrong twice over: case-insensitive for ASCII (R-10) and substring rather than element (R-9). `segment contains vendor` matches `vendors`, and `name contains acme` matches `ACME`. Both look like the feature working |
-| **R-11** | Comparison is total: a boolean or a reported problem, never a third outcome | A SQL error is a third outcome. `SELECT no_such_fn(1);` → `Error: no such function`, exit 1 | **The one exception to the pattern below**, and it is the benign one: it fails loudly. It still breaks R-11, because an error escaping the query path is neither a boolean nor a problem row |
+**The ruling removes the class rather than mitigating it.** There is no query compiler to forget a
+line, because the thing that decides is the comparator that already exists, is already tested, and
+is the subject of the spec's §8 rule table. **Nine deliberate defeats, each of which must be
+written, none of which was verified, is a worse position than one comparator that is.**
 
-**Eight of the nine fail in the QUIET direction, and that is why this is a first-class risk
-rather than an implementation detail.** R-1, R-2, R-3, R-4, R-5, R-6, R-9 and R-10 each produce a
-**wrong answer that looks exactly like a right one** — no error, no empty result, no warning, no
-`complete: false`. §1.3 of this ADR is titled *"The failure mode is silence, in both products"*;
-these are eight new ways to produce that silence, arriving inside the store chosen to eliminate
-it. Only R-11 announces itself, and only by escaping as an error the caller did not ask for.
+**The receipts are KEPT, and their status changes.** They were *"what we must defeat"*; they are now
+*"why we do not delegate"*. Taken by direct execution against the **`sqlite3` CLI 3.51.0** and
+re-executed identically through **`modernc.org/sqlite v1.46.1`**, which reports `sqlite_version()`
+= **3.51.2** — verified by opening a database through the driver, not read from documentation and
+not assumed. *(Grill pass 1 said the shipped engine reports 3.53.3 and that the receipts were two
+minor versions stale. That does not reproduce; see the status block. The **standard** behind the
+finding is adopted: the engine and version are named here, and a test asserts the linked version,
+because affinity and collation behaviour is version-sensitive and a driver bump must be a review
+trigger rather than a silent change of meaning.)*
 
-**The defeats. Each is specific, each is a line of the query compiler, and none of them is a
-setting.**
+| Rule | What SQLite does by default | Why that is now a REASON, not a task |
+|---|---|---|
+| **R-1** | `SELECT '3' > 2;` → **`1` (true)**. Storage-class ordering puts INTEGER/REAL before TEXT, so *any* text value outranks *any* number. And an `INTEGER`-affinity column holding `'3abc'` keeps `typeof = 'text'` and still answers `'3abc' > 2` → **`1`** | **SQLite has affinity, not types.** R-1 is a statement about *declared* types, which SQLite does not have — so no configuration of it can express R-1. Revision 6's defeat put "one typed column per declared property" beside a Go-side guard as co-equal halves; **the column half does no work**, which grill pass 1 established and which the receipt above shows directly |
+| **R-2 / R-3** | Over a row with `status` NULL: `WHERE NOT (status = 'done')` → **0 rows**. Over a five-row fixture, `NOT (a=1 AND b=2)` returns **1 row** where the NULL-safe rewrite returns **4** | **This is the sharpest one and it is the clearest argument for the ruling.** SQL's `NOT` is three-valued: `NOT(NULL)` is `NULL`, which is not `TRUE`, so absent rows fall out of every negation. **In Go it is right by construction:** R-2 makes a comparison with an absent side `false`, so `NOT(false)` is `true` and D3.2's *"which days did I not meditate?"* returns the days with no entry — at any depth of the filter tree. **In SQL it needed a leaf rewrite AND a normalisation pass, and revision 6 specified only the first.** `(x IS NULL OR x <> ?)` covers a leaf; the grammar is a tree, and the natural implementation — compile the subtree, wrap it in `NOT (...)` — drops every NULL-bearing row however correct each leaf is |
+| **R-4** | A value that parsed to something else is stored as whatever it parsed to and compares silently | Unreachable: a non-conforming value never reaches a comparison, because the comparator holds the conformance flag and R-4 is one of its rules. *(One thing grill pass 1 found survives into the design: "never in the typed column" leaves NULL there, and NULL is the **absence** representation — so a **separate** conformance flag is required, consulted at comparison **and ordering** time. Spec FR-021b)* |
+| **R-5** | `ORDER BY` over a TEXT column is lexical: declared `lead < qualified < proposal < won` sorts as `lead, proposal, qualified, won` | **No longer a violation at all.** D4 as revised adopts exactly this ordering; a domain order is a value prefix. **The row that was the most-cited example of SQLite getting it wrong is now the specification** |
+| ~~**R-6**~~ | *(retired — `money` is deleted, D3)* | *(no reason: no subject)* |
+| **R-7** | Two spellings of one instant compare unequal and order anyway (`'2026-08-27T00:00:00+02:00'` vs `'2026-08-26T22:00:00Z'`, both epoch `1787781600`: `=` → **0**, `>` → **1**); fractional seconds invert (`Z` at 0x5A sorts after `.` at 0x2E) **even in an all-UTC corpus**; the `T`-vs-space separator reorders; any non-UTC offset breaks ordering. `unixepoch('not-a-date')` **and** `unixepoch('2026-8-26')` both return **NULL, with no error** | **Revision 6 listed no defeat for R-7 at all and it is violated four ways** — grill pass 1's C-6. Under the ruling, comparison is Go-side over parsed instants and none of it applies. **The `unixepoch` NULL is why parsing is never delegated either:** a parse failure returning NULL is indistinguishable from absence, which would collapse R-4 into R-2/R-3 in storage |
+| **R-9 / R-10** | `SELECT 'ACME' LIKE '%acme%';` → **`1`**. `SELECT 'vendors,partner' LIKE '%vendor%';` → **`1`** | **Half of this is now DESIRED** — case-insensitivity is a feature by operator ruling — and the operator vocabulary adopts `LIKE`'s own semantics (O-3, amended). **But SQLite's folding is ASCII-ONLY**, and that is a second, independent argument for the ruling arriving from a direction nobody was looking in — see the Unicode receipt below |
+| **R-11** | `9223372036854775807 + 1` → **REAL**, silently. `1/0` → **NULL**, silently. `unixepoch('bad')` → **NULL**. `SUM` over an empty set → **NULL**. But `SUM` **overflow** → a hard `integer overflow` that aborts the statement. And `CAST('9223372036854775808' AS INTEGER)` → **`9223372036854775807`**, saturated silently | **Five outcomes for one arithmetic, four of them silent.** Revision 6 said *"a SQL error is a third outcome"* and specified catching errors — **which reaches exactly one of the five.** None is reachable now: no arithmetic is emitted, no `CAST` is used to admit a numeric string (range-checking is Go-side, before emission), no date is parsed by SQL. **What survives into the design is narrow and real:** a **store** error — a corrupt index, a closed database — must be caught at the boundary and rendered as a problem row |
+| **R-12** | `SELECT 3 = '3'` → **0** between literals; the same comparison against an INTEGER column → **1**. `'2' > 3` → **1** and **0** respectively. A `BLOB`-affinity column restores literal behaviour | **Revision 6 listed R-12 among the rules, did not list it among the violations, and it is violated** — grill pass 1's C-5. Comparison affinity converts a TEXT operand **only when the other side is a typed column**, so identical values and an identical operator give **opposite answers depending on operand provenance**, and the answer also depends on the DDL. **One comparator means one provenance**, and the rule is satisfied by there being nothing to disagree |
+| *(join fan-out — the tenth)* | A record carrying two matching values of a `many` property joins **twice**: `COUNT(*)` → **2**, `SUM(amount)` → **200**, where truth is **1** and **100** | **The worst finding of grill pass 1 and it was not in revision 6 at all.** Aggregation is now Go-side over a set of records, each visited once. **Worth recording because the obvious fix was itself a trap:** `SUM(DISTINCT)` deduplicates on **value**, not row identity, so two distinct records sharing an amount collapse into one — it returned **100** against a truth of 200 while the naive join returned 300. It errs in the direction that *looks* conservative, which makes it the harder wrong answer to catch in review |
 
-| Rule | Defeat |
-|---|---|
-| **R-1** | **Never compare across storage classes at all.** One typed column per declared property, and a declared-type guard in the compiler **before** the predicate reaches SQL — a type mismatch is decided in Go and never emitted. SQLite's comparison is not made correct; it is not asked the question |
-| **R-2 / R-3** | Negation compiles to **`(x IS NULL OR x <> ?)`**, always, with no operator-level opt-out. One line, and it is the difference between FR-008 working and FR-008 being decorative |
-| **R-4** | Non-conforming values are **never written to the typed column** (FR-021a). They are stored flagged, and every query touching that property emits a problem row. The comparison cannot go wrong because the wrong value is not there to be compared |
-| **R-5** | The declared ordinal is a **column of its own**, maintained in step with the schema file, and `ORDER BY` uses the ordinal, never the label (FR-010) |
-| **R-6** | Amount (integer minor units), currency and scale are **separate columns**, and cross-currency comparison and `SUM` are **refused in the compiler**, before any SQL is emitted. This is the one that cannot be pushed down at all — "refuse" is not an aggregate |
-| **R-9** | A **child-table equality join**, not a string operation. Whole-element membership is a row match |
-| **R-10** | **`instr(col, ?) > 0`**, which is case-sensitive. **Zero occurrences of `LIKE` in the compiled filter path** — asserted by lint or test (**AC-8.7**, and its §7 test `TestFilter_NoLikeInCompiledPath`), because R-10's case-sensitivity is one careless operator away from being lost and nothing else would report it |
-| **R-11** | Every store error is caught at the query boundary and rendered as a **problem row**. It never propagates as a third outcome |
+**The Unicode receipt, because it decides where the case fold lives.** Across fourteen upper/lower
+pairs (`A/a`, `Z/z`, `Ä/ä`, `É/é`, `Ñ/ñ`, `Ø/ø`, `Ç/ç`, `Å/å`, `Σ/σ`, `Д/д`, `İ/i`, `Ł/ł`, `Ż/ż`,
+`Ć/ć`), **`COLLATE NOCASE`, `LIKE` and `lower()` each folded the two ASCII pairs and ZERO of the
+twelve non-ASCII pairs.** `lower()` returned every non-ASCII input **byte-for-byte unchanged**
+(`hex('Ä')` = `hex(lower('Ä'))` = `C384`), so it is not a workaround for `NOCASE` — it is the same
+limitation wearing a different hat. Confirmed structurally as well as behaviourally: `PRAGMA
+compile_options` carries no `ENABLE_ICU`, `icu_load_collation` does not exist, and the binary
+carries `OMIT_LOAD_EXTENSION`. **There is no Unicode-aware option inside SQLite here at all.**
 
-**This does NOT overturn D16.** Each contradiction is defeatable, all nine defeats are known, and
-none requires an engine we do not have. What it establishes is the shape of the work: **D16.2's
-gain was that the general `func(any, any) bool` comparator does not need to be written — not that
-the semantics come for free.** They do not. Every one of the nine must be **deliberately** defeated
-in the query compiler, and a compiler that forgets one produces a product that is wrong in the way
-§1.3 catalogues. §4.2's four-row table names the four semantics that are *not expressible* in SQL
-at all; this table names the nine that SQL expresses **and gets backwards**. They are different
-lists and both are real.
+**Go's `strings.ToLower` is Unicode-aware.** So the case-insensitive matching the operator asked for
+is something the comparator can deliver correctly and SQLite cannot deliver at all. **A vault in
+German, Polish, Greek or Turkish would have received case-insensitive matching for its ASCII words
+and silent case-sensitivity for the rest** — a guarantee holding for one alphabet, which is exactly
+the failure class §1.3 catalogues.
 
-**AC-16.6 — the truth table must run against the real compiled query path.** This is **AC-8.4** (spec §8.1)
-and it is restated here because it is the criterion that makes the difference
-between the nine defeats being verified and being believed: *schema → filter object → compiled
-query → store*, never against a Go comparator in isolation. **A truth table that passes over a
-comparator the product does not use proves nothing about the product** — and after D16.2b, the
-product does not use one for filtering. **AC-8.5** additionally runs it against both a freshly
-built index and a delete-and-rebuild, and **AC-8.6** asserts membership is invariant under
-ranking, so a D21 change cannot quietly become a filtering change.
+**What the properties index is still FOR, so this does not read as "delete SQLite".** It **narrows**:
+`type = 'deal'`, `path` prefix within scope, `kind = 'task'`, the relation child table's `rec_id`
+join for **reachability**. These are set-membership questions over indexed columns, they are what an
+index is good at, and **none is a comparison governed by R-1..R-13.** D16.2's gain stands: the
+general `func(any, any) bool` comparator over an expression engine does not need to be written, and
+a query does not materialise documents that cannot match.
+
+**The cost, stated up front rather than discovered.** Filtering, grouping and totals run in Go over
+the candidate set, so **a query matching very many records is slower than one pushing predicates
+down, and the cost scales with candidates rather than results.** Two things bound it and neither is
+a hope: **D16.3a's condition C-3 — the 10,000-candidate cap — is a refusal, not a politeness
+limit**, and it was set for exactly this reason; and a vault is a few thousand notes, not a
+database. **Nobody has measured the Go path over the two-index design.** W1 measures it, at the cap
+and at the aggregate-only path's higher bound, with peak RSS, on Linux as well as macOS. The
+implementing spec carries it as **A-14**.
+
+**AC-16.6 — REVISED.** The truth table must run against **the comparator the product uses**, driven
+through the real path: *schema → filter object → candidate set → comparator*. This is spec
+**AC-8.4**, and revision 6 required the opposite — the compiled SQL path — on D16.2b's ground that
+the product would not use a Go comparator. **It will.** Two obligations survive the reversal
+unchanged, because neither was ever about SQL:
+
+- **No post-filter escape.** A row count taken at the **candidate boundary** must equal rendered
+  rows plus problem rows plus comparator rejections, attributable per record. An implementation
+  that filters in two places, the second silently correcting the first, fails.
+- **Mutation-checked, per rule.** Spec **AC-8.4b** names **six** comparator mutations — remove R-2's
+  absent-side rule; remove R-4's non-conforming rule; remove R-11's totality guard; remove the case
+  fold; remove `LIKE`'s wildcard handling; remove the `many` de-duplication in the aggregate pass —
+  **each of which must kill a named cell**, reported as a mutation table rather than a pass.
+  *(Revision 6's SC-024 named **two** mutations for **nine** defeats, and a compiler missing seven
+  of the nine passed both. That is deleted with the defeats.)*
 
 **Cross-reference, not duplication.** The normative rules are the spec's §8 rule table; the
-rule-by-rule SQLite assessment is its §8.1; the acceptance criteria are AC-8.1..AC-8.7, also §8.
-**Section references, not line numbers, deliberately** — the spec moves, and this ADR's own
-verification standard is worth less if its citations rot. **This ADR states the decision and the risk; the spec states the cells and the
-tests.** Where the two disagree the spec is the implementing document and is corrected there.
+rule-by-rule assessment and the executed receipts are its §8.1 and §8.1b; the acceptance criteria
+are AC-8.1..AC-8.6, also §8. **Section references, not line numbers, deliberately** — the spec
+moves, and this ADR's verification standard is worth less if its citations rot. **This ADR states
+the decision and the risk; the spec states the cells and the tests.** Where the two disagree the
+spec is the implementing document and is corrected there.
 
 ### D17 — Interaction history is derived, not maintained
 
