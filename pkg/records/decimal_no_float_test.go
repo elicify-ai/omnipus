@@ -137,7 +137,7 @@ func TestDecimal_NoBinaryFPTypesInThePackage(t *testing.T) {
 	// This file is scanned like every other, so it must itself stay free of
 	// banned identifiers — the banned NAMES live here only as string literals.
 	if len(offences) > 0 {
-		t.Fatalf("FR-013 / FR-020b: money and number must never touch binary floating point, but %d offence(s) were found across %d files:\n  %s",
+		t.Fatalf("FR-013 / FR-020b: integer and decimal must never touch binary floating point, but %d offence(s) were found across %d files:\n  %s",
 			len(offences), scanned, strings.Join(offences, "\n  "))
 	}
 }

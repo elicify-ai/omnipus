@@ -115,7 +115,7 @@ func TestDecimal_RejectsWhatIsNotANumber(t *testing.T) {
 		"0x1f",
 		"1,000",
 		"1_000",
-		"349.98 SGD", // money has its own parser; a glued currency is ambiguous
+		"60 minutes", // a unit belongs in the property declaration, never glued on
 		"12abc",
 		"1e",
 		"1e2.5",
