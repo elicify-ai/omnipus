@@ -1805,11 +1805,24 @@ var ErrUnknownField = errors.New("knowledge: unknown index field")
 // term must be folded the same way — which foldFieldTerm does here rather than
 // leaving each caller to remember.
 //
-// It is a TERM query, not a match query: the caller is naming an exact value,
-// and running it through an analyzer would stem `status` to `statu` and quietly
-// stop matching. For prose fields (title, headings, body, prop_value) the term
-// must therefore be a single analysed token; a caller wanting prose matching
-// wants Search, which is the front door.
+// # IT IS A MATCH QUERY, AND A TERM QUERY WOULD BE THE OBVIOUS WRONG ANSWER
+//
+// A field query names an exact value, so a raw term query looks right. It is
+// not: a term query performs NO analysis, while every prose field in this index
+// was written through the `en` analyzer, which lowercases and Porter-stems. A
+// term query for `renewal` against the headings field looks for the literal
+// term "renewal" in a dictionary that only ever contains "renew", and finds
+// nothing — zero hits, no error, the exact failure shape this method exists to
+// remove. (Measured, not reasoned: the first version of this method was a term
+// query and five of these tests failed on precisely that.)
+//
+// A match query analyses the caller's term with THE FIELD'S OWN analyzer, which
+// is the only rule that is right for every field at once — stemming for the
+// prose fields, and the whole string as one term for the keyword ones, with no
+// per-field branch here that could disagree with the mapping.
+//
+// The operator is AND: a multi-word field query asks for a field containing all
+// of those words, not any of them. OR is what Search is for.
 //
 // THIS IS NOT A TYPED FILTER. ADR-068 D16.2b as reversed is explicit: the
 // properties index narrows candidates and our own tested comparator decides
@@ -1827,8 +1840,9 @@ func (ix *Index) SearchField(field, term string, limit int) ([]IndexHit, error) 
 		limit = 20
 	}
 
-	tq := bleveQuery.NewTermQuery(foldFieldTerm(field, term))
+	tq := bleveQuery.NewMatchQuery(foldFieldTerm(field, term))
 	tq.SetField(field)
+	tq.SetOperator(bleveQuery.MatchQueryOperatorAnd)
 
 	// Segments collapse to one hit per file exactly as they do for Search, and
 	// for the same reason: a property declared once in a note that happens to
