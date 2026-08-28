@@ -1,6 +1,8 @@
 # ADR-068 — Vault records: a typed record layer with relations
 
-- **Status:** Proposed (2026-08-25) — **revision 4**, after three adversarial reviews (BLOCK each time: 7, 8, then 10 critical). **D16 is deliberately unresolved and gated behind a measured spike** — see D16 for why three attempts to settle it on paper each rested on an unverified property of existing code, after adversarial review (`ADR-068-…-review.md`, verdict BLOCK: 7 critical, 25 major, 13 minor, 5 observations). Revision 1 made three false claims about existing code (D14, D16, D18); all three are corrected in place and the corrections are marked.
+- **Status:** Proposed (2026-08-28) — **revision 5**, after a three-agent design council (three rounds of argument, grounded in the codebase and in August 2026 retrieval research). **D16 is now RESOLVED** — the spike reported (`../design/adr068-storage-spike-2026-08-25.md`) and D16 records both its answer and the one place this ADR overrides its recommendation, with the grounds. The agent tool surface is **cut from nine `record_*` tools to five `vault_*` tools that also subsume the nine existing `knowledge_*` tools** (D15). Three decisions are added: retrieval and ranking (D21), the response the model actually reads (D22), and schema/view authoring (D23).
+  - *Revision 4 and earlier:* proposed 2026-08-25 after three adversarial reviews (BLOCK each time: 7, 8, then 10 critical). Revision 1 made three false claims about existing code (D14, D16, D18); all three are corrected in place and the corrections are marked. D16 had been wrong three times and was deliberately left unresolved behind a measured spike.
+- **Revision 5 verification standard:** every claim about our own code below cites `file:symbol` or `file:line` and was read at revision time. Two claims put to the council did **not** survive that check and are recorded as not-confirmed rather than quietly dropped — see §2.D21.1 (which *did* confirm) and **§2.6, the alleged indexing-progress defect (NOT confirmed)**. This ADR's history is three revisions of asserting properties of code nobody had read; repeating that in the revision that fixes it would be the same failure wearing a better hat.
 - **Implements:** founder direction 2026-08-24 ("we need something similar to bases for master data like our CRM"); explicit decision **not** to pursue Obsidian `.base` compatibility
 - **Builds on:** [ADR-067](ADR-067-omnipus-knowledge-base-and-render-first-preview.md) (knowledge base, index, tools, preview), [ADR-063](ADR-063-unified-file-access-engine-and-mounts.md) (mounts), [ADR-037](ADR-037-remove-global-delegation-policy.md) (workspace = trust boundary), [ADR-054](ADR-054-entity-config-separation.md) §5 (flock platform limits)
 - **Supersedes in intent:** the `.base`-evaluator direction explored on 2026-08-24 and abandoned — see §3.1
@@ -76,11 +78,18 @@ absent relation type. Every one carries a documented cost.
 
 ### 1.5 Scope boundary with ADR-067
 
-ADR-067 owns: the index engine, full-text search, the link graph, the note reader, preview,
-and the `knowledge_*` tools. **This ADR owns: record types, the property type system,
-relations as typed edges, views over records, and the nine `record_*` tools.** Where they meet —
-the index — records are stored fields in ADR-067's bleve index, with aggregation
-evaluated in Go; there is no second store (D16).
+ADR-067 owns: the index engine, full-text search, the link graph, the note reader and preview.
+**This ADR owns: record types, the property type system, relations as typed edges, views over
+records, retrieval and ranking (D21), and the agent tool surface over all of it.**
+
+**Revision 5 moves the tool boundary.** ADR-067's nine `knowledge_*` tools are **subsumed**, not
+sat beside: this ADR now owns **five `vault_*` tools** that replace both the nine `record_*`
+tools revision 4 proposed and the nine `knowledge_*` tools that ship today (D15). ADR-067 keeps
+the *engine*; it stops owning the *tool surface*.
+
+Where they meet — the index — revision 5 resolves D16 to a **two-index design**: bleve keeps
+text, and a derived, disposable properties index in pure-Go SQLite holds typed properties and
+relations. Notes remain the sole source of truth.
 
 ---
 
@@ -104,8 +113,9 @@ no basis for. Vaults differ enormously; that is the normal case, not the edge ca
 **What this constrains elsewhere in this ADR:**
 
 - D17's interaction history specifies **how a mention is interpreted** (a correctness rule),
-  never **where an interaction is stored** (a convention). `record_log` writes a record of a
-  vault-declared type; it does not impose a shape.
+  never **where an interaction is stored** (a convention). An interaction is created by
+  `vault_edit` as a record of a vault-declared type; the product does not impose a shape.
+  *(Revision 5: this bullet named `record_log`, which D15.4 deletes.)*
 - No decision here may name a specific record type as though the product knows about it.
   Examples in this document are illustrative of the mechanism only.
 - The mechanism must be complete enough that a skill can describe any reasonable convention
@@ -231,7 +241,7 @@ mistake made by hand, and it drifts the first time anyone forgets.
 
 Relations reference **record identity** (D7), not display text, so a rename cannot break one
 and cannot fork a group. A relation whose target does not exist is **reported by
-`record_validate`**, never silently rendered as a distinct group of one.
+`vault_describe`'s `check_integrity`**, never silently rendered as a distinct group of one.
 
 **Cardinality is declared and enforced** (`many: true` or not). Notion's relations are
 many-to-many at the engine level with one-to-many available only as a naming convention.
@@ -248,7 +258,7 @@ this undefined and D5 contradicted D7 (identity vs wikilink). Resolved:
   rename, so the on-disk form stays correct; and the ID is stable, so the index does not
   care whether the rewrite has happened yet.
 - **An unresolvable or ambiguous wikilink is a validation finding**, named by
-  `record_validate` with the offending record and the reason. It is never silently treated as
+  `vault_describe`'s `check_integrity` with the offending record and the reason. It is never silently treated as
   a distinct group of one — the failure §1.3 records for broken links today.
 - **A relation to a file that exists but is not a record of the declared target type** is
   likewise a finding, not a silent drop.
@@ -306,7 +316,7 @@ matters because the ID is the join key: a collision silently merges two records.
   processes against one vault can therefore collide. This is inherited from ADR-054's audit of six
   existing stores, not introduced here. **The reconcile does not fix it** — reconcile heals a
   *lost counter*; it cannot un-write two records that already share an identifier.
-  What we ship instead is honest detection: `record_validate` reports duplicate identifiers,
+  What we ship instead is honest detection: `vault_describe`'s `check_integrity` reports duplicate identifiers,
   names both files, and refuses to choose between them. The exposure window is between the
   collision and the next validation run, and it is documented rather than papered over.
 - **On open, the counter is raised to at least `max(existing id for that type)`, never
@@ -320,7 +330,7 @@ matters because the ID is the join key: a collision silently merges two records.
 - **Gaps in the sequence are expected and acceptable; reuse is not.** Deleting a record burns
   its identifier permanently. Any acceptance criterion demanding "zero gaps" contradicts this
   and is wrong — AC-7.1 is restated below.
-- **A duplicate ID is a hard validation error**, reported by `record_validate` with both
+- **A duplicate ID is a hard validation error**, reported by `vault_describe`'s `check_integrity` with both
   offending paths. It is never resolved by silently preferring one.
 
 **AC-7.1** — 1,000 records created concurrently across two OS processes on POSIX yield 1,000
@@ -402,7 +412,7 @@ appears in.
 
 ### D13 — Every query answer is complete, or names what it excluded
 
-`record_query` returns records **and** a problem report in the same response. There is no call
+`vault_find` returns records **and** a problem report in the same response. There is no call
 shape that returns records alone.
 
 ```json
@@ -458,25 +468,210 @@ refused, and the file is unmodified.
 original outside the patched span, over a fixture corpus including comments, blank lines,
 quoted and unquoted scalars, and nested sub-records.
 
-### D15 — The agent tool surface
+**D14.1 — `edit` and `delete` are UNBUILT PRIMITIVES and each needs its own FR.**
 
-Nine tools. All are `record_*` and all are contract-first (D19).
+*New in revision 5.* D15.3 lists `vault_edit` and `vault_restructure` operations in compact
+tables, and a reader skimming those tables will reasonably assume they are relabellings of
+things that exist. **Two of them are not.** Verified against the tree:
 
-(Revision 2 said "eight" while O-1's resolution added `record_view_import` — corrected.)
+| Exists today | Where |
+|---|---|
+| `SetProperty(key, value string)` | `pkg/knowledge/author.go:766` |
+| `AppendSection(heading, body)` | `pkg/knowledge/author.go:799` |
+| `AppendSectionAt(level, heading, body)` | `pkg/knowledge/author.go:813` |
+| `AddWikilink(target, alias, section)` | `pkg/knowledge/authoring_tools.go:1103` |
+| `AppendSectionOnce(level, heading, body)` | `pkg/knowledge/authoring_tools.go:1129` |
 
-| Tool | Does | Notes |
-|---|---|---|
-| `record_schema` | returns record types, properties, types, enum values, required fields | **compact text, not JSON.** Notion measured a ~91% context-token reduction moving their AI surface from JSON schema objects to a compact textual schema |
-| `record_query` | filter, group, follow relations; returns records + problem report | D13 |
-| `record_explain` | what a query *would* return, and which properties it could not evaluate — without running it | the cheap defence against a confident wrong answer |
-| `record_write` | typed, validated write; file preserved | D14 |
-| `record_relate` | `add` / `remove` / `replace` as **three distinct verbs** | `replace` must be named explicitly. Notion offers only replace, so the ordinary read-then-write pattern deletes relations and returns success |
-| `record_log` | record that an interaction happened, with type, date and the records involved | D17 |
-| `record_view_write` | create or edit a saved view; rejected if it names a property or enum value that does not exist | |
-| `record_validate` | run the schema across records; report failures per record with reasons | turns "the view looks wrong" into a clearable worklist |
-| `record_view_import` | one-shot translation of a `.base` file; reports every expression it could not translate, verbatim | O-1. Not a query path — see O-1's resolution |
+**Every one of these exported `NoteEdit` constructors is additive.** There is **no body-replace
+and no delete/trash primitive anywhere in the package.**
 
-### D15.1 — Scope, bounds and refusal (closing ADR-067's C-4 for records)
+*Precision, because this ADR's own standard demands it:* the `NoteEdit` **type** is
+`func(src []byte) ([]byte, error)` (`pkg/knowledge/author.go:540`), which is general enough to
+express anything. It is the **shipped constructors** that are uniformly additive. `EditNote`
+(`pkg/knowledge/author.go:620`) is **a harness that applies those additive edits in order**, not
+an editor — the name invites exactly the misreading this paragraph exists to prevent.
+
+So two operations in D15.3 are new work with real design content:
+
+1. **Body-replace** needs **anchor-text or line-range addressing, with its own ambiguity rules.**
+   *What happens when the anchor text appears twice?* Refusing and naming both matches is
+   probably right — it is the D13 posture — but it is a decision, not an implementation detail,
+   and it must be made in an FR rather than by whoever writes the function.
+2. **Trash** needs a **soft-delete convention that does not exist**: where a trashed note goes,
+   what happens to the inbound links D15.3 notes cannot be repaired, and whether the index
+   forgets it immediately.
+
+**Neither may be listed as a sub-bullet of an existing tool as though it were a relabelling.**
+D20 places both in W4 with FRs of their own. This ADR has three prior revisions of assuming
+capabilities existed; these two are named so revision 5 does not add a fourth.
+
+### D15 — The agent tool surface: five `vault_*` tools, subsuming `knowledge_*`
+
+**Revised 2026-08-28 (revision 5).** Revision 4 specified nine `record_*` tools. That is
+withdrawn. The surface is **five `vault_*` tools**, and they **also replace the nine
+`knowledge_*` tools that ship today**. All are contract-first (D19).
+
+**D15.0 — Why the count is a design constraint and not bookkeeping.**
+
+The static builtin catalog is **102 tools** — `allStaticToolNames`
+(`pkg/coreagent/core.go:357-483`), counted at revision time, not estimated. Nine of those are
+already `knowledge_*`: `knowledge_search`, `knowledge_graph`, `knowledge_tasks`,
+`knowledge_create`, `knowledge_link`, `knowledge_set_property`, `knowledge_append_section`,
+`knowledge_move`, `knowledge_rename`.
+
+Shipping nine `record_*` tools **alongside** those nine would have put roughly **20 tool
+definitions on one subsystem** and taken the catalog to 111.
+
+The published evidence on tool-selection accuracy is consistent and unkind: selection accuracy
+holds around 50 tools (84–95%) and collapses by 200 (41%); Block cut one server from 30 tools to
+2, and GitHub Copilot from 40 to 13, both with *measured improvement*. We are already in the
+band where every added definition is paid for on every turn by every agent.
+
+**18 → 5 is the decision.** Not 18 → 14, and not "add nine now and consolidate later" — a tool
+name in a seeded policy map is a compatibility surface, and the cheapest moment to not have 18
+of them is before any exist.
+
+**D15.1 — The split criterion is BLAST RADIUS. This is the load-bearing idea of the whole
+tool surface.**
+
+The tempting criterion is *additive vs destructive*. It is wrong, and it is worth saying why,
+because it is the split a reviewer will reach for: `set_property` **overwrites** a value and is
+still perfectly safe. Destructiveness is not the axis.
+
+The axis is:
+
+> **Does this operation touch only the file the agent named, or does it cascade to files the
+> agent never named?**
+
+A `set_property` on `Acme.md` changes `Acme.md`. A rename of `Acme.md` rewrites inbound
+wikilinks in N other notes the agent never mentioned and may never have read. Those are
+different kinds of act, and an operator reasoning about risk cares about exactly that
+difference.
+
+**D15.2 — Why the split must exist at all: policy resolves on the NAME only.**
+
+This is the constraint that decides the shape, and it is verified rather than assumed:
+
+```go
+func (al *AgentLoop) resolveToolPolicyAtExec(
+	ts *turnState,
+	toolName string,
+	filterTimePolicyMap map[string]string,
+) string
+```
+
+— `pkg/agent/loop.go:12418`. It takes a **tool name**. It does not take the call's arguments
+and it does not take an operation discriminator. There is no seam anywhere in that path where a
+policy could say *allow `vault_write` when `op=set_property`, ask when `op=trash`*.
+
+Therefore a single consolidated `vault_write` carrying an eight-operation enum could only be
+**allowed or denied as a whole**. An operator wanting "this agent may correct a property but may
+not restructure the vault" would have no lever at all.
+
+**So consolidating by NOUN conflicts with Hard Constraint #6; consolidating by RISK does not.**
+Grouping every vault mutation under one name would make the policy entry meaningless while
+still satisfying the letter of the coverage rule — an explicit entry that no longer expresses
+an enforceable decision. Grouping by blast radius keeps the entry meaningful:
+
+> **The tool boundary becomes the policy boundary.**
+
+**Record this as a design win, not a limitation.** Hard Constraint #6 acted as a *forcing
+function*: it refused the shape that would have been convenient (one write tool, one policy
+entry, an enum doing the real work) and pushed us to a surface where the thing an operator
+grants is the thing an operator actually means. The constraint made the design better. That is
+worth writing down, because the reflex when a constraint blocks a shape is to record it as a
+cost.
+
+**D15.3 — The five.**
+
+| # | Tool | Tier | Does |
+|---|---|---|---|
+| 1 | `vault_describe` | READ | orientation + integrity |
+| 2 | `vault_find` | READ | the one retrieval path |
+| 3 | `vault_read` | READ | a note, or one section of one |
+| 4 | `vault_edit` | WRITE — one named file | create, set property, append section, link |
+| 5 | `vault_restructure` | WRITE — **cascades** | rename, move, trash |
+
+**1. `vault_describe` (READ).** Collections in scope, record types with their typed properties
+and enum values, saved views, templates, and index freshness. **Compact text, not JSON** —
+Notion measured a ~91% context-token reduction moving their AI surface from JSON schema objects
+to a compact textual schema; revision 4 already made this call for `record_schema` and D22 now
+extends it to every result.
+
+It is the **mandatory cheap first call**: an agent that has not called it is guessing at
+property names, and a guessed property name is the failure D13 exists to prevent.
+
+It also carries **`check_integrity`** — an argument-free whole-vault health sweep reporting
+duplicate identifiers (D7.1), unresolved relations (D5.1), and orphans. This absorbs
+`record_schema` and the vault-wide sweep half of `record_validate`.
+
+**2. `vault_find` (READ). The ONE retrieval path.** Plain words, typed filters, saved views,
+relation joins, `kind:'task'`, and `near: <path>` with `hops` for "within N link steps". It
+absorbs `record_query`, `record_explain` (now an `explain: true` flag rather than a tool),
+`knowledge_search`, `knowledge_tasks`, and link-neighbourhood traversal.
+
+**`near` COMPOSES with filters, and that composition is the capability worth having.** It makes
+
+> *"notes mentioning pricing within 2 hops of `[[Acme]]`"*
+
+one call. **No system surveyed in this ADR's research can express that query** — not Dataview,
+not Obsidian Bases, not Notion, not Tana, not mdbase. Each has text search *or* graph
+traversal; none composes them. *(Claim scope: this is a statement about the corpus §1 surveyed,
+not a universal claim about every tool that exists.)*
+
+**3. `vault_read` (READ).** A full note or one named section: parsed typed frontmatter, body,
+version token, and links + backlinks inline.
+
+**This does not exist today in any form.** That absence is not cosmetic — it is why an agent
+must **leave the audited `knowledge_*` boundary entirely**, dropping to `read_file`, to read a
+note it just found through `knowledge_search`. And because ADR-067's write path requires a
+version token (`EditNoteRequest.ExpectVersion`, `pkg/knowledge/author.go:552-560`, where empty is
+refused too), with no read that returns one an agent's only way to *obtain* a version token is
+to **send a write it knows will fail** and harvest the token from the `*ConflictError`. A
+deliberately-failed write as the supported way to read a value is a design defect, and closing
+it is most of this tool's justification.
+
+**4. `vault_edit` (WRITE — one named file).** `create`, `set_property`, `append_section`,
+`link`. Plus, per D23, `create` / `edit` of a **saved view** and `create` of a **new record
+type**.
+
+Every operation writes **only the file named in `path`**. That is the tier's whole definition
+and it is checkable at review time.
+
+`set_property` takes **scalar and list** values — today's scalar-only limit (`SetProperty(key,
+value string)`, `pkg/knowledge/author.go:766`) is closed here, per D14's list-splice
+requirement.
+
+**Why `link` belongs in this tier and not the next:** a link is stored **once, on the SOURCE
+note** (D5.1) and the inverse is derived (D5). Linking `Deal.md` to `[[Acme]]` writes
+`Deal.md` and **never touches `Acme.md`**. It looks like a two-file operation and is a one-file
+operation. Had we stored both sides — Notion's mistake, quoted in D5 — `link` would have
+belonged in tier 5.
+
+**5. `vault_restructure` (WRITE — cascades).** `rename`, `move`, `trash`. Plus, per D23,
+changing an **existing** record type.
+
+**Trash stays in this tier even when it is a soft delete, and the reasoning generalises.** The
+objection is natural: *a recoverable bin makes trash safe, so it belongs with the ordinary
+edits.* It does not, because:
+
+> A recoverable bin fixes the **trashed note's own recoverability**. It does nothing whatsoever
+> for the **N other notes whose links just broke**.
+
+Rename at least *repairs* inbound links (ADR-067 D10 rewrites them). Trash has **nothing to
+repair them to**. So trash is, if anything, the worse cascade of the two.
+
+**Recoverability and blast radius are different axes.** Conflating them is how a "safe because
+undoable" argument smuggles a vault-wide operation into a per-file tier.
+
+**D15.4 — Retired from the agent surface entirely.**
+
+| Retired | Why |
+|---|---|
+| `record_view_import` | → an **operator/CLI one-shot**. FR-101 requires every untranslatable expression to be reported **verbatim for a human to read and judge**. That is a UI act with a human in it by definition, and it should not cost a permanent slot in a 102-tool catalog that every agent pays for on every turn. O-1's resolution stands; only its delivery surface changes. |
+| `record_log` | → **deleted, not relocated.** D17 already makes interaction history **derived** from mentions. A dedicated logging tool therefore serves only the residual case of an interaction with no note behind it — at permanent catalog cost, and in tension with D9's rule that derived values are computed rather than written. |
+
+### D15.5 — Scope, bounds and refusal (closing ADR-067's C-4 for records)
 
 ADR-067's own review was blocked partly because multi-vault search crossed the workspace
 isolation boundary; it closed that with D7's workspace scoping and a negative test, now
@@ -484,16 +679,16 @@ implemented as `pkg/knowledge/scope.go` (`Scope.WorkspaceID`, `.Roots`, `.Contai
 `.Truncated`). Records are a **stronger** read primitive — typed fields, relations, and
 aggregation across them — so the same boundary applies with no exception.
 
-**D15.1a — Workspace scoping.** Every record tool resolves through the calling agent's
+**D15.5a — Workspace scoping.** Every one of the five `vault_*` tools resolves through the calling agent's
 workspace: agent → workspace → `AllowedMountRoots(home, workspaceID)` → records within those
 roots. A record in a vault mounted only into another workspace is **not visible**, and the
 out-of-scope answer is an **empty result, not a permission error** — mirroring ADR-067
 FR-052/FR-053, so the error channel cannot be used to probe for records the caller may not see.
 
-**AC-15.1a** — an agent in workspace A gets zero records from a vault mounted only in
+**AC-15.5a** — an agent in workspace A gets zero records from a vault mounted only in
 workspace B, and cannot distinguish that from the vault being empty.
 
-**D15.1b — Every bound is stated and every breach is a refusal.** §1.3 of this ADR cites
+**D15.5b — Every bound is stated and every breach is a refusal.** §1.3 of this ADR cites
 Notion's silent truncation as motivating evidence; shipping our own would be indefensible.
 
 | Bound | Value | On breach |
@@ -509,20 +704,29 @@ Notion's silent truncation as motivating evidence; shipping our own would be ind
 caller that ignores `problems` still cannot mistake a bounded answer for a whole one, because
 `complete` is a required field (D19).
 
-**D15.1c — Writes carry ADR-067's version token and are audited.** Revision 1's write path
+**D15.5c — Writes carry ADR-067's version token and are audited.** Revision 1's write path
 bypassed both. A record write takes the same opaque content-hash version token ADR-067 D14
 defines; a stale token is **refused and the refusal is audited** (ADR-067 AC-14.2). Every
-mutating record tool emits an audit entry per ADR-067 D19 — `record.write`, `record.relate`,
-`record.log`, `record.view.write` — carrying agent, workspace, record ID and outcome.
+mutating `vault_*` tool emits an audit entry per ADR-067 D19 — **`vault.edit` and
+`vault.restructure`, each carrying its operation** — with agent, workspace, record ID and
+outcome. *(Revision 5: the audit event carries the operation even though the tool policy cannot
+read it (D15.2). Policy resolves before the call on the name; the audit record is written after
+it, where the operation is known. Naming them apart keeps the audit log readable without
+implying a policy lever that does not exist.)*
 
-**AC-15.1c** — a write with a stale version token is refused, and an audit entry exists for
+**`vault_read` supplies the version token** a write needs (D15.3), which is what makes the
+compare-and-swap contract usable rather than a failed-write ritual.
+
+**AC-15.5c** — a write with a stale version token is refused, and an audit entry exists for
 the refusal.
 
-### D16 — **UNRESOLVED.** Storage and retrieval require a measured spike before any design is accepted
+### D16 — **RESOLVED 2026-08-28: a two-index design.** bleve keeps text; a derived SQLite index holds properties
 
-**This decision has been wrong three times, in three consecutive reviews, and each error was a
-property of the code that was assumed rather than measured.** Recording that honestly is more
-useful than a fourth guess.
+**This decision was wrong three times, in three consecutive reviews, and each error was a
+property of the code that was assumed rather than measured.** Recording that honestly was more
+useful than a fourth guess — so revision 4 took none, and gated the decision behind a spike.
+**The spike has reported** (`../design/adr068-storage-spike-2026-08-25.md`). The table of prior
+errors is kept below because it is the reason the spike existed.
 
 | Revision | Claim | Why it was wrong |
 |---|---|---|
@@ -537,30 +741,110 @@ every document, breach the candidate cap, and be refused. The per-property desig
 mapping question unmissable; collapsing to a single field made it look like an ordinary struct
 addition, and the question stopped being asked.
 
-**Decision: none is taken here.** W1 is gated behind a spike that answers three questions with
-measurements, not reasoning:
+**D16.1 — What the spike measured.**
 
-| # | Question | Exit criterion |
+| # | Question | Answer |
 |---|---|---|
-| **S-1** | How are record candidates selected? | A named, indexed field (or fields) that narrows to one record type, demonstrated end-to-end, with the measured selectivity at 50,000 records |
-| **S-2** | How does an existing index acquire a new field? | A demonstrated upgrade of an index created before the change — either a real format version that forces a rebuild, or a mapping-application path that does not exist today. **A silent no-op must be shown to be impossible** |
-| **S-3** | What does Go-side evaluation actually cost? | Measured wall-clock and peak RSS for decode + filter + group over 50,000 records. ADR-068's ~794 ns/record figure covers expression evaluation only, **not** JSON decode or stored-field retrieval, and must not be cited as if it did |
+| **S-1** | How are record candidates selected? | **An indexed field works.** A `record_type` keyword field selects exactly its population in **0.10–5.07 ms over a 100,000-document index**, cost tracking the *hit count* rather than index size. A `[]string` `record_props` field carries runtime-named `name\x1fvalue` terms **even with `Dynamic=false`**, narrowing the largest type from 25,000 to 5,018 in ~3 ms. Revision 2's "per-property fields are impossible" was true and its conclusion did not follow. |
+| **S-2** | How does an existing index acquire a new field? | **It does not on its own — the silent no-op was REPRODUCED and is real.** `bleve.OpenUsing` takes no mapping argument; the mapping is persisted in the store. Same code, same document, same query: **1 hit on a fresh index, 0 hits and `err=nil` on an existing one.** Two guards close it (G1 format version, G2 persisted-mapping assertion); G2 catches the case G1 misses when a developer forgets to bump the constant. |
+| **S-3** | What does Go-side evaluation cost? | **Expression evaluation is 0.5–0.9% of the true per-record cost.** Retrieval and decode are the other ~99%. The ~794 ns/record figure revision 2 quoted as a sizing basis is off by roughly **two orders of magnitude** against a measured total of 33,000–48,000 ns/record. |
+| **F-0** | *(not asked for — found anyway)* | **bleve v2.6.0's pinned `zapx/v17 v17.1.2` writes corrupt segments at 100,000 documents**, panicking an unrecovered `slice bounds out of range` through `indexImpl.Search`. Reproduced with the **shipping mapping and no record fields at all** — an ADR-067 defect ADR-068 merely tripped over. |
 
-**The spike selects between two designs, and it is allowed to select the second.** If S-1 or
-S-2 has no acceptable answer within bleve, or S-3 misses the < 48 MB budget, then §3.6's
-dedicated aggregation store is the design — and taking it **supersedes ADR-067 A2 and amends
-the CLAUDE.md house rule**, in its own ADR, explicitly. That is a legitimate outcome, not a
-failure of this one.
+**F-0 is already fixed on this branch and that is verified, not assumed:** `go.mod:12` now pins
+`github.com/blevesearch/bleve/v2 v2.6.1` and `go.mod:107` pins
+`github.com/blevesearch/zapx/v17 v17.2.3`, both above the v17.1.4 that carries upstream's fix
+(`blevesearch/zapx` PR #409). The spike's condition C-1 is discharged. Its second half —
+**force a rebuild of existing indexes**, because segments already written stay corrupt — is
+**not** discharged by the version bump and is carried into D20 as work.
 
-**Nothing downstream of storage may be specified as settled until the spike reports.** The
-record model (D1–D15), the tool surface, scoping and the write path are unaffected by the
-outcome and remain valid.
+**D16.2 — The decision: two indexes.**
+
+- **bleve keeps TEXT.** It already does this, it does it well, and D21 improves its ranking
+  rather than replacing it.
+- **A properties index in pure-Go SQLite** holds typed properties, relations, and derived child
+  tables.
+
+**On the dependency question, which is the one a reader will check first:**
+`modernc.org/sqlite v1.46.1` is a **direct dependency already** — `go.mod:64`, in the main
+require block, not the indirect one. It is linked into the binary today for WhatsApp and Matrix
+session storage. So this is **no new runtime dependency, no CGo, and the single-binary
+constraint (Hard Constraint #1, #2) is preserved.**
+
+**The properties index is DERIVED and DISPOSABLE.** Delete it and it rebuilds from the notes.
+**Notes remain the sole source of truth** — this is D8's no-lock-in rule and D9's
+never-store-derived-values rule applied to the store itself. Nothing is in SQLite that is not
+reconstructible from Markdown.
+
+What it buys that Go-over-bleve does not: **joins, `OR`, `GROUP BY` and aggregates, without our
+writing a query engine.** It answers §3.6 without a separate aggregation store, because it *is*
+the aggregation store, folded into the design rather than bolted beside it.
+
+**D16.3 — This overrides the spike's stated recommendation. The grounds, stated plainly.**
+
+The spike recommends **(a) bleve** and says §3.6's store is "not needed on these numbers". This
+ADR takes the other option, and pretending otherwise would be the exact dishonesty D13 exists
+to prevent. So:
+
+- **The spike answered the question D16 asked, and on that question bleve passes.** D16 gated on
+  **memory**. Streamed evaluation at the 10,000-record cap measures 23.6–24.0 MB peak RSS,
+  comfortably inside ADR-067's 64 MB budget. That result is accepted, not disputed.
+- **We reopen it on grounds the spike itself named as outside its scope**, quoting its §6.1:
+  *"~460 ms of CPU for a 10,000-record query is not fast. It fits the memory budget, which is
+  what D16 gated on, but a dedicated aggregation store would be substantially quicker. If
+  interactive latency later becomes the binding constraint rather than memory, §3.6 should be
+  reconsidered on that basis — it is not reopened here because latency is not what D16 asked
+  about."* We are reconsidering it on exactly that basis.
+- **S-3 is the argument for the override, not against it.** Decode is ~99% of the cost because
+  every candidate is retrieved as JSON and unmarshalled into `map[string]any` before Go can
+  filter it. A typed properties index does not pay that cost at all: the filter, the join, the
+  group and the aggregate happen inside the store, over typed columns, and only the surviving
+  rows are materialised. The measurement that vindicates bleve on memory is the same
+  measurement that identifies where the time goes.
+- **Capability, not only speed.** FR-021 and §3.6 want joins, `OR`, `GROUP BY` and aggregates.
+  Over bleve these are all Go-side, which means we own an expression engine — and §4.2 already
+  records that the expression layer's null and type semantics are *the highest-risk component
+  in this ADR*, with a first-attempt comparator overload making `3 > 2` evaluate to **false**.
+  Choosing the option that requires less of that code is a correctness argument, not a
+  convenience one.
+- **The cap stops being load-bearing for memory.** The spike's C-3 notes FR-064's 10,000-record
+  cap is what keeps the design inside ADR-067's budget. With aggregation pushed into the store,
+  the cap becomes a politeness limit again rather than the thing preventing a breach.
+
+**D16.4 — What this costs, named rather than skipped.**
+
+1. **It widens the CLAUDE.md house rule that *"SQLite is isolated to WhatsApp session storage
+   only."*** That widening is **deliberate and is recorded here** as the decision that makes it.
+   It also overturns **ADR-067's rejected alternative A2**, whose stated reason was "no gain
+   over scorch" — assessed for *search*, where it was correct. For *records* the gain is
+   aggregation, which scorch cannot do at all, so the premise does not transfer. §3.6 always
+   said this deserved an explicit decision rather than an implementation note; this is it.
+2. **Two indexes can disagree, and that is a new failure mode of exactly the class this ADR
+   exists to prevent.** A text index and a properties index that have seen different generations
+   of the same note produce a confidently wrong answer. **Mitigation is mandatory and structural,
+   not test coverage:** the properties index carries the same freshness token the text index
+   does, `vault_find` compares them, and a mismatch sets `complete: false` (D13) naming staleness
+   as the reason. An answer computed across two indexes at different generations must never be
+   reported as complete.
+3. **The spike did not measure the write path, concurrent queries, property counts above 10 per
+   record, or any non-macOS platform** (its §6.1). The two-index write path — one note, two index
+   updates — is precisely the unmeasured area, and D20 places it where it gets measured rather
+   than assumed. **This ADR has been wrong three times by assuming exactly this kind of thing.**
+
+**Unchanged by this resolution.** The record model (D1–D15), the tool surface, scoping and the
+write path do not depend on the storage outcome and remain valid, as revision 4 predicted.
 
 ### D17 — Interaction history is derived, not maintained
 
 An interaction is a record of whatever type the vault declares for the purpose — the product
-does not define one (D0). `record_log` creates a record of that declared type and relates it to
-the records involved; **it does not impose a file location, a naming scheme, or a shape.**
+does not define one (D0). It is created by **`vault_edit`** like any other record and related to
+the records involved; **the product does not impose a file location, a naming scheme, or a
+shape.**
+
+> **Revision 5 deleted the dedicated `record_log` tool** (D15.4). The reasoning is D17's own: if
+> interaction history is **derived** from mentions, a dedicated logging tool serves only the
+> residual case of an interaction with no note behind it — and that case is served by creating a
+> note, which `vault_edit` already does. A permanent slot in a 102-tool catalog is too high a
+> price for a verb that is a special case of `create`.
 
 What the product *does* fix is how a mention is **interpreted**, because that is a correctness
 rule rather than a convention:
@@ -592,7 +876,7 @@ the only signal.**
 So seeding is not protected by a boot abort. It is protected only by being written down and
 tested. Accordingly:
 
-**AC-18.1** — a test enumerates the nine record tools and asserts an explicit, literal,
+**AC-18.1** — a test enumerates the **five `vault_*` tools** and asserts an explicit, literal,
 wildcard-free policy entry for **every seeded agent**, not only the four base agents. Coverage
 runs over all ten agents `coreagent.SeedConfig` creates (`mia`, `jim`, `ava`, `ray`, `worker`,
 `planner`, `explorer`, `researcher`, `judge`, `plansupervisor`). `worker`'s map is sparse, and
@@ -602,13 +886,33 @@ tools it should not have.
 **AC-18.2** — a test asserts the WARN-backfill path is never reached for these tools on a
 fresh install, by asserting zero repaired pairs rather than zero gaps after repair.
 
-Seed posture, following ADR-067 D17's precedent — reads `allow` for the four base agents;
-writes `allow` for Jim and Ava, `ask` for Mia and Ray:
+**Seed posture, revised 2026-08-28 to the D15.1 blast-radius tiers:**
 
-| Tool | Mia | Jim | Ava | Ray | worker / others |
-|---|---|---|---|---|---|
-| `record_schema`, `record_query`, `record_explain`, `record_validate` | allow | allow | allow | allow | explicit `deny` unless a case is made |
-| `record_write`, `record_relate`, `record_log`, `record_view_write`, `record_view_import` | ask | allow | allow | ask | explicit `deny` |
+| Tool | Tier | Mia | Jim | Ava | Ray | worker / others |
+|---|---|---|---|---|---|---|
+| `vault_describe`, `vault_find`, `vault_read` | READ | allow | allow | allow | allow | `deny` |
+| `vault_edit` | WRITE — one named file | **ask** | allow | allow | **ask** | `deny` |
+| `vault_restructure` | WRITE — **cascades** | **ask** | **ask** | **ask** | **ask** | `deny` |
+
+**Reads are `allow` roster-wide, and the existing reasoning is kept unchanged:** a prompt in
+front of a read that another tool already permits is a prompt that protects nothing. An agent
+denied `vault_read` still has `read_file`. The prompt would train the operator to click through
+without buying a single unit of safety.
+
+**`vault_restructure` gets its own line, and that is the point of splitting it out.** It
+defaults more restrictively than `vault_edit` so that **an operator can forbid restructuring
+while permitting edits** — a posture that is simply inexpressible today, and would have stayed
+inexpressible under a consolidated `vault_write` (D15.2).
+
+**This FIXES a live defect, stated as such.** Today `knowledge_rename` and `knowledge_move` sit
+in the **same `ask` bucket** as `knowledge_append_section`, despite the first two rewriting
+inbound wikilinks across the whole vault and the third appending to one file. An operator who
+grants "vault writes" today grants vault-wide restructuring in the same gesture, with nothing in
+the tool surface signalling the difference. The tiering is not new taxonomy for its own sake; it
+is the missing distinction.
+
+**Workers stay `deny` on all five** — unchanged from revision 4, and now explicitly including
+the read tools.
 
 ### D19 — Contract-first wire types (Hard Constraint #8)
 
@@ -621,16 +925,318 @@ code: `RecordSchema`, `RecordType`, `PropertyDef`, `RecordQueryRequest`, `Record
 guarantee has to be structural: a client cannot receive records without also receiving the
 completeness verdict.
 
+**Revision 5 additions.** The five-tool surface adds `VaultDescribeResponse`,
+`VaultFindRequest` / `VaultFindResponse`, `VaultReadResponse` (carrying the version token
+`vault_edit` requires — D15.3), `VaultEditRequest` and `VaultRestructureRequest`. The
+`Record*` schemas above remain the record-model types those requests carry; only the
+tool-shaped envelopes are renamed.
+
+**D22 does not weaken this decision, and the distinction matters.** D22.1 makes tool results
+**compact text to the model**. The **wire type is unchanged**: still contract-defined, still
+generated into `pkg/api/generated/` and `src/lib/api/generated/`, still verified by
+`make verify-contracts`. The compact rendering is produced **from** the validated wire object at
+the tool-result boundary — it is a projection of the contract, never a replacement for it, and
+never a hand-written parallel struct (Hard Constraint #8).
+
 ### D20 — Sequencing
+
+**Revised 2026-08-28. Operator directive, explicit: NO quick wins — build the full
+best-in-class system.** The sequence below is therefore ordered for **the whole thing**, not for
+cheap partial value. There is deliberately **no "quick wins" wave**: the TF-IDF correction
+(D21.1) and the index rebuild F-0 requires (D16.1) ride along **inside the waves they belong
+to**, because a one-line fix shipped outside the design it belongs to is how a system acquires
+changes nobody can explain later.
 
 | Wave | Delivers | Exit criterion |
 |---|---|---|
-| **W1** | Schema files, the seven types, arity/presence/scope, validation, `record_schema` + `record_validate` | a schema violation is reported per record with the expected shape named |
-| **W2** | Index tables, `record_query` with filters and grouping, the problem report | a query over a typed corpus returns records + a populated `problems` array; a type mismatch is never a silent empty result |
-| **W3** | Relations, inverses, relation grouping, `record_relate` | the §1.2 two-hop question is one call with no hand-maintained state |
-| **W4** | `record_write` byte-preserving writes, `record_log`, derived interaction history | write-read-back is byte-identical outside the patched span |
-| **W5** | The human surface: record table, grouping, related-records panel, problem banner, drill-down, cell edit | the banner names excluded records and the drill-down lists them |
-| **W6** | Saved views (D10) and `record_view_import` (O-1) | a `.base` file imports, with every untranslatable expression reported verbatim |
+| **W1** | Schema files, the seven types, arity/presence/scope, validation. The SQLite properties index (D16.2) with its freshness token, its rebuild-from-notes path, and the two-index staleness check (D16.4 item 2). `vault_describe` including `check_integrity`. | a schema violation is reported per record with the expected shape named; deleting the properties index and reopening rebuilds it with identical query results |
+| **W2** | Fielded indexing (D21.2), the **`ScoringModel` correction** (D21.1), BM25F weighting + RRF (D21.3), the shared tokenizer resolution (D21.5). The **index rebuild** F-0 requires (D16.1). `vault_find` — plain words, typed filters, grouping, the problem report. | a query over a typed corpus returns records + a populated `problems` array; a type mismatch is never a silent empty result; a field query on a property key is possible at all, which it is not today |
+| **W3** | Relations, inverses, relation grouping; `near` + `hops` and its **composition with filters** (D15.3). `vault_read`. | the §1.2 two-hop question is one call with no hand-maintained state; "notes mentioning pricing within 2 hops of `[[Acme]]`" is one call |
+| **W4** | `vault_edit`: byte-preserving writes, the **list-valued splice** (D14), and the two **unbuilt primitives** — body-replace and trash — each with its own FR (D14.1). Derived interaction history (D17). Saved-view and record-type authoring (D23). | write-read-back is byte-identical outside the patched span; a body-replace whose anchor is ambiguous is refused, naming both matches |
+| **W5** | `vault_restructure`: rename, move, trash, existing-record-type change. The D18 policy seeding and its two ACs. | an operator can forbid restructuring while permitting edits, and a test proves the two policies are independently settable |
+| **W6** | The human surface: record table, grouping, related-records panel, problem banner, drill-down, cell edit. The **operator/CLI** saved-view importer (D15.4, O-1). | the banner names excluded records and the drill-down lists them; a `.base` file imports with every untranslatable expression reported verbatim |
+
+**Performance targets: none stated, deliberately — and revision 5 does not change this.**
+
+Revision 2 carried latency and memory numbers derived from a ~794 ns/record figure that
+measured **expression evaluation only**. D16.1 now records the measured reality: that phase is
+**0.5–0.9% of true cost**, so the numbers were off by roughly two orders of magnitude.
+
+The spike produced real numbers, but they measure the **bleve-plus-Go design this ADR did not
+take** (D16.3). Quoting them as targets for the two-index design would repeat the original
+error in a new costume. Targets arrive when W1 has the SQLite path measured.
+
+The one budget that **does** hold is inherited and unchanged: ADR-067's < 64 MB steady-state
+RSS for the index, in this same process. Record work lives inside it, and the properties index
+is inside it too.
+
+### D21 — Retrieval: lexical ranking done properly, and no embeddings, permanently
+
+**New in revision 5.** ADR-067 shipped retrieval; nobody had audited what it actually ranks
+with. Doing so found a defect and a structural gap.
+
+**D21.1 — A DEFECT: vault search is scoring TF-IDF, not BM25.**
+
+Verified, and this one *did* survive checking:
+
+- `const DefaultScoringModel = TFIDFScoring` —
+  `bleve_index_api@v1.4.1/indexing_options.go:37`.
+- **`ScoringModel` is set NOWHERE in `pkg/`.** A repository-wide grep returns zero
+  assignments. The default therefore stands everywhere.
+
+Meanwhile the code says otherwise, in at least seven doc comments across three packages:
+
+| Location | Claims |
+|---|---|
+| `pkg/knowledge/index.go:164` | *"Score is the BM25 score of the file's BEST segment."* |
+| `pkg/knowledge/index.go:1062` | *"Search runs a BM25 query…"* |
+| `pkg/memrooms/index/index.go:19` | *"Recall: BM25 ranking via **bleve's default BM25 scorer**"* — the default is TF-IDF |
+| `pkg/memrooms/index/index.go:249-250` | *"executes a BM25 full-text query… ordered by descending BM25 score"* |
+| `pkg/agent/memory.go:620` | *"searches the specified room scope for query using bleve BM25 (FR-7.4)"* |
+| `pkg/agent/retro_bm25.go:14` | retro BM25 parameters *"match bleve's defaults"* |
+| `pkg/agent/retro_bm25.go:24` | the retro ranker exists to match *"the BM25 similarity ranking bleve provides for long-term memories"* |
+
+The last two are the ones that matter beyond documentation hygiene: `retro_bm25.go` builds a
+**cross-subsystem score-comparability argument on a false premise.** It hand-rolls BM25 with
+`k1=1.2, b=0.75` specifically so retrospective ranking is commensurate with bleve's — and
+bleve is not producing BM25 scores at all.
+
+**The fix is one line.** It is not cosmetic: **it changes rankings**, because BM25's saturation
+and length normalisation are exactly what TF-IDF lacks. It therefore ships inside W2 with the
+fielded-indexing work whose ranking it affects, not as a detached one-liner.
+
+**D21.2 — The index has no fields worth ranking.**
+
+`indexDoc` is a closed five-field struct — `Path`, `Name`, `Kind`, `Offset`, `Body`
+(`pkg/knowledge/index.go:583-589`). And **frontmatter is not stripped**: there is no
+frontmatter-stripping step anywhere in the indexing path, so YAML flows into `Body` as prose.
+
+The consequence is concrete. Given `status: prospect` in frontmatter, the index holds the loose
+tokens `status` and `prospect` in the body text. **No field query is possible** — yet a search
+for "prospect" returns the note and reports `Complete: true`. The system is confidently
+answering a question it cannot represent.
+
+Fielded indexing — title, name, headings, property keys, property values, body as **distinct
+fields** — is therefore **green field**. There is nothing to migrate away from, which makes this
+cheaper than it sounds and is a reason to do it properly now rather than incrementally.
+
+**D21.3 — BM25F-style field weighting, fused with Reciprocal Rank Fusion.**
+
+Ranking combines four signals:
+
+1. **BM25 over weighted fields** (BM25F-style — title and name weigh more than body);
+2. **exact / prefix name match** — the "I know what it's called" case, which pure BM25 ranks
+   poorly;
+3. **recency**;
+4. **link-graph backlink degree** — a note many notes point at is more likely the canonical one.
+
+They are combined with **Reciprocal Rank Fusion**, which **operates on ranks rather than
+scores, so no score normalisation is required.** That is the property worth having: normalising
+a BM25 score against a recency score against a degree count is a tuning problem with no
+principled answer, and RRF removes the question rather than answering it badly.
+
+> **This specific signal mix is OUR COMPOSITION, not a benchmarked whole.** BM25F and RRF are
+> each well-established individually; *this combination, on vault data, is not something we have
+> measured or found measured.* It is a reasoned starting point and must be treated as one — W2
+> should ship it behind a comparison against plain BM25, not assume the fusion helps.
+
+**D21.4 — Query expansion (RM3 / pseudo-relevance feedback) only on retry, never by default.**
+
+Two independent reasons, and either alone is sufficient:
+
+1. **PRF assumes first-pass precision and amplifies error when it is absent.** It takes the top
+   results on faith and expands the query with their terms. If the first pass was wrong, the
+   second pass is confidently wronger.
+2. **Silently expanding a query answers a question nobody asked**, which breaks the D13 honesty
+   contract directly. A user who searched for one thing and received results for a broader thing
+   has been given a wrong answer with no error channel — §1.3's failure mode, reintroduced by us.
+
+**On zero hits, surface near-miss VOCABULARY instead of guessing:** *"no matches; nearest indexed
+terms: `prospect`, `prospecting`, `prospects`"* — and let the agent reformulate. That respects
+the agentic loop (D22) instead of pre-empting it, and it tells the truth about why the query
+failed.
+
+**D21.5 — A tokenizer hazard: dormant today, live the moment Go-side ranking ships.**
+
+**Three notions of "a term" coexist in this codebase right now:**
+
+| Tokenizer | Rule | `"don't"` becomes |
+|---|---|---|
+| `pkg/utils/bm25.go:216` — `bm25Tokenize` | `strings.Fields` (whitespace), then `strings.Trim` of **edge** ASCII punctuation `.,;:!?"'()/\-_` | `["don't"]` — the apostrophe is interior, so it survives |
+| `pkg/agent/retro_bm25.go:71` — `retroTokenize` | `strings.FieldsFunc` splitting on every non-letter, non-number **rune** | `["don","t"]` — split at the apostrophe |
+| bleve's `en` analyzer | Unicode segmentation + **Porter stemming** + stopword removal | a stemmed form, and `"don't"` may be dropped as a stopword entirely |
+
+*(The brief that prompted this decision stated the split without saying which tokenizer did
+which; the table above is from reading both functions. `bm25Tokenize` is the one that keeps the
+contraction whole, because it trims edges only.)*
+
+This is **harmless today** only because the three never rank the same corpus. **FR-021 already
+requires Go-side evaluation over the candidate set** — so bleve selects candidates with one
+notion of a term and Go ranks them with another. The mismatch **will** become live, and its
+symptom is the worst kind: a document that matched during selection scores as though the query
+term were absent. No error, just a ranking that is quietly wrong.
+
+**Required before Go-side ranking ships (W2):** either
+
+- **one shared token function**, threaded through the `NewBM25Engine` call site
+  (`pkg/utils/bm25.go:72`; the existing caller is `pkg/tools/search_tool.go:41`); or
+- **an explicit, documented decision that the Go pass is deliberately unstemmed**, stating why
+  and what it costs.
+
+Either is acceptable. **Silence is not** — that is the choice being made by default today.
+
+**D21.6 — Why no embeddings is correct, with evidence.**
+
+The constraint against embeddings is usually defended as a footprint decision. It does not need
+to be, and defending it that way concedes a point that the evidence does not require:
+
+- **Claude Code dropped its vector index** — agentic lexical search retrieved code better.
+- ***"Is Grep All You Need?"*** (arXiv 2605.15184) — inline grep beat inline vector retrieval on
+  **every harness-model pair tested**, by up to **86.2% vs 62.9%** at the widest.
+- ***"BM25 Wins at Scale"*** (arXiv 2607.26497) — file-system agentic exploration wins below
+  ~10M corpus tokens and BM25 wins above it, with graph-RAG **construction** costing up to
+  ~102B tokens.
+
+**A 5,000-note vault is roughly 0.5–3M corpus tokens.** That sits *permanently* in the regime
+where the agentic loop over good lexical ranking wins — not near a boundary we might cross, but
+an order of magnitude inside it.
+
+> **The constraint is the winning position, not a compromise.** We are not doing lexical
+> retrieval because we cannot afford embeddings. We would choose lexical retrieval at this scale
+> with an unlimited budget.
+
+*(Scope: these are cited findings, consistent with §6's standing caveat that this ADR does not
+claim to have independently reproduced published research. The vault-token estimate is ours.)*
+
+### D22 — The response the model reads is part of the retrieval design
+
+**New in revision 5,** and it records the single most surprising finding put to the council:
+
+> Changing result delivery from **inline** to **file-based** collapsed accuracy from **93.1% to
+> 55.2%** (arXiv 2605.15184) — **as large a swing as replacing the retriever entirely.**
+
+That reframes the response format from presentation to mechanism. A retrieval system that finds
+the right notes and renders them badly is a worse retrieval system. Accordingly:
+
+**D22.1 — Compact text, never JSON, to the model.** Revision 4 made this call for
+`record_schema` alone (Notion's measured ~91% context-token reduction); it now applies to
+**every result from all five tools**.
+
+> **This does not touch the wire.** The type crossing the gateway/SPA boundary **remains a
+> contract-defined JSON schema per Hard Constraint #8** — `RecordQueryResponse` and the rest of
+> D19 are unchanged, generated, and validated. What changes is the **rendering inside the
+> tool-result content block the model reads.** These are two different surfaces and this ADR
+> changes exactly one of them.
+
+**D22.2 — Completeness FIRST, in the header, not last.** D13 requires the completeness verdict;
+D22 fixes where it goes. **The model must not have to read to the bottom of a table to learn the
+answer was partial** — a model that has read 40 rows has already begun composing an answer, and
+a caveat arriving after them is a correction competing with a conclusion.
+
+**D22.3 — Exclusions named inline, WITH the fix.** Not *"3 records excluded"* but
+*"`CO-0052`: value is `'50k'` where a number is required."* The reader must be able to act
+without a second call.
+
+**D22.4 — Joined values are marked as borrowed.** A value pulled through a relation renders as
+`company [[Acme]]: …`, **never merged into the row's own columns.** The row is still one real
+file, and blurring that is how an agent comes to believe a property exists on a note that does
+not have it.
+
+**D22.5 — Totals state their scope.** *"2 matched, GBP only"* — **never a bare number.** This is
+D13's cross-currency refusal (O-2) carried into the rendering, where it is actually read.
+
+**D22.6 — Every response ends in addressable next actions.** In an agentic loop **each response
+is a prompt for the next call.** A response that terminates in data terminates the loop; one
+that ends in *"narrow by `status`, or `near: [[Acme]] hops:2`"* continues it.
+
+**D22.7 — Token budget.** ~50–80 tokens per hit; ~1,000 tokens default; **hard cap 4,000, with
+truncation stated in the header** (D22.2, and D15.5b's rule that every breach is reported). A
+`minimal` mode at ~20 tokens/hit for wide scans.
+
+**D22.8 — Tool DESCRIPTIONS are the binding constraint, not tool count.**
+
+This is the part that is easy to get backwards. Tool *count* costs selection accuracy (D15.0).
+Tool *descriptions* cost **tokens on every turn, forever**, for every agent that has the tool —
+whether or not it is ever called.
+
+**Budget ~150 tokens per tool description.** Push operation detail down into **parameter
+descriptions and error messages**, which are paid only when relevant: an agent learns the
+`set_property` arity rule from the error it gets, not from a paragraph every other agent carries
+on every turn. Learn-on-demand, not learn-in-advance.
+
+*(Five tools at ~150 tokens is ~750 tokens of permanent context. Eighteen would have been
+~2,700.)*
+
+### D23 — Schema and view authoring are ordinary writes; mounting is not
+
+**New in revision 5, and corrected mid-drafting after an operator ruling.** The correction is
+recorded because the first framing was wrong in an instructive way.
+
+**D23.1 — Mounting: reuse `request_mount`, do not reinvent it.**
+
+The operator-approval pattern **already exists** and is verified:
+
+```go
+// request_mount (ADR-063 FR-7.2): seeded "ask" everywhere — the whole
+// point is that the operator approves each folder.
+"request_mount",
+```
+
+— `pkg/coreagent/core.go:365-367`. It is in the static catalog, seeded `ask` **everywhere**.
+
+**Mounting a folder therefore stays `request_mount`, unchanged.** This ADR specifies **no new
+agent-callable mount**, and no `vault_*` tool mounts anything. Adding a second mount path would
+give the vault surface a way around a control ADR-063 deliberately placed.
+
+**D23.2 — Schema and view authoring: ordinary writes, governed by ordinary tool policy.**
+
+An earlier draft of this decision proposed a bespoke *propose-and-approve* flow for schema
+changes, by analogy with `request_mount`. **That was wrong, and the operator corrected it
+directly:**
+
+> *"i was talking about mounting, what is scheme change? the agents should be able to manage the
+> vault completely when they have the write enabled tools, that includes creating and changing
+> bases"*
+
+So: **an agent with write-enabled tools manages the vault completely — and that explicitly
+includes creating and changing record types and creating and changing saved views (bases).**
+There is no separate approval mechanism, no `request_schema_change`, and no UI-ratifies step.
+These are writes, and writes are already governed.
+
+**D23.3 — Placement falls out of the blast-radius criterion with no special case.**
+
+| Operation | Tier | Why |
+|---|---|---|
+| Create or edit a **saved view / base** | `vault_edit` | A view is a query definition in its own file. It **changes no note**, so it cannot cascade. |
+| Create a **NEW record type** | `vault_edit` | A new schema file. **Nothing that already exists is reinterpreted** — no note changes meaning. |
+| Change an **EXISTING record type** | `vault_restructure` | **FR-015: a schema change retroactively reinterprets every existing record of that type.** Notes the agent never named change meaning. That is precisely what tier 5 is for. |
+| Delete a record type | `vault_restructure` | Same cascade, more of it. |
+
+**This is evidence the criterion is the right one, and worth recording as such.** The
+blast-radius test was derived for notes — edit one file versus cascade to many. It was then
+applied to a *different kind of object entirely*, schema files, and **classified them correctly
+with no special-casing and no new rule.** A criterion that generalises to a case it was not
+designed for is doing real work rather than describing decisions already made.
+
+The practical consequence: **an operator who wants to protect schemas sets `vault_restructure`
+restrictively — the same lever that protects renames and trash.** No bespoke approval path, no
+second mechanism to reason about.
+
+**D23.4 — One honest asymmetry within tier 5.** A schema change cascades in **meaning**; rename
+and trash cascade in **bytes**. A schema change also **writes only one file**, so reverting that
+file undoes it — which is not true of trash. So an existing-record-type change is the *least*
+destructive member of tier 5.
+
+It still belongs there: **notes the agent never named change status**, which is the criterion,
+and D15.3 already establishes (for trash) that **recoverability and blast radius are different
+axes**. The asymmetry is recorded so nobody later reads the grouping as a claim that these
+operations are equally dangerous.
+
+**D23.5 — Dropped from the earlier draft: "a schema change must never be `allow` for anyone."**
+That was over-reach. **An operator may absolutely grant it.** The *default* is conservative
+(D18's `ask` across the roster for `vault_restructure`), but the decision is the operator's,
+consistent with how every other write policy in this system works. A default is not a
+prohibition, and this ADR should not smuggle one in as if it were.
 
 **Performance targets: none stated, deliberately.**
 
@@ -644,6 +1250,52 @@ latency or memory target, and none may be quoted from it.
 
 The one budget that **does** hold is inherited and unchanged: ADR-067's < 64 MB steady-state
 RSS for the index, in this same process. Record work lives inside it.
+
+---
+
+## 2.6 A defect alleged during this council — investigated and **NOT CONFIRMED**
+
+*New in revision 5.* The council was asked to record, as a found defect, that vault **indexing
+progress is emitted but throttled into invisibility**: that `DefaultProgressInterval = 200ms`
+plus a coalescer that sets `lastAt` at construction means **an index completing in under 200 ms
+emits ZERO frames**, matching a manual observation that the UI reported no indexing progress.
+The proposed fix was **edge-triggered emission at both ends** — a first frame immediately on
+phase entry, and a terminal frame regardless of throttle — landed inside `progressCoalescer` so
+every consumer inherits it.
+
+**The two cited facts are true. The conclusion drawn from them is not, and the proposed fix is
+already implemented at both ends.**
+
+| Claim | Verified? | What the code actually does |
+|---|---|---|
+| `DefaultProgressInterval = 200 * time.Millisecond` | **True** | `pkg/knowledge/index.go:242` |
+| The coalescer sets `lastAt: now()` at construction, commented *"The clock starts now, so the first update waits a whole interval"* | **True** | `pkg/knowledge/index.go:301-304` |
+| A leading-edge frame is missing | **FALSE** | `pkg/gateway/knowledge_lifecycle.go:836` emits a frame **immediately on `BeginIndexing`, before `syncWith` runs.** The `lastAt: now()` line is *deliberate and correct*: the leading edge is emitted one line earlier by the caller, and firing the coalescer too would duplicate it in the same millisecond — which is precisely what its comment says. |
+| A terminal frame is missing | **FALSE** | `progress.flush(stats.Indexed + stats.Unchanged)` — `pkg/knowledge/index.go:829`. **`flush` bypasses the interval check entirely** (`index.go:325-330`). `SyncOptions.ProgressInterval`'s own doc comment (`index.go:228-230`) states the contract: *"The final call of a run ignores it, so a run shorter than one interval still reports its result exactly once rather than not at all."* `tracker.Finish` (`knowledge_lifecycle.go:845`) emits again after it. |
+| *"An index completing in under 200 ms emits ZERO frames"* | **FALSE for any non-empty collection** | It emits a leading frame **and** a terminal frame. |
+
+**The only genuine zero-frame cases are both deliberate and documented:**
+
+1. **An empty collection** (`total == 0`). `firstIndex` guards the leading frame with
+   `if total > 0`, and its comment states the intent: *"BeginIndexing(0) returns the tracker to
+   idle rather than entering a phase whose only rendering would be '0 of 0', so an empty
+   collection deliberately never produces an indexing frame at all."* `flush(0)` then also
+   returns early on its `indexed == c.lastN` guard.
+2. **An incremental / reconcile run.** The running report is wired into `firstIndex` only —
+   *"the running report is wired here and not in reconcile: an incremental run has no measured
+   denominator, and a count that rises against no total is not progress, it is a number nobody
+   can read."*
+
+Either is a far likelier explanation of the manual observation than a throttle bug.
+
+**Why this is recorded rather than quietly dropped.** This ADR's D16 table exists because three
+consecutive revisions asserted properties of code that nobody had read. **Writing an unverified
+defect into the revision whose whole subject is verified retrieval would have been that same
+failure, committed while correcting it.** The finding is kept as a finding of *no defect*.
+
+**What is left over, and it is small:** if an operator should be told that an empty collection
+indexed successfully, that is a **product decision about empty-state rendering**, not a
+throttling fix, and it belongs in W6's human surface. No change is made to `progressCoalescer`.
 
 ---
 
@@ -665,6 +1317,30 @@ releases, and **zero third-party implementations exist** — so there is no conf
 test against. A faithful implementation would be wrong in ways we could not detect, and
 silently producing a plausible-but-different answer is exactly what this ADR exists to prevent.
 
+**Reinforced 2026-08-28 by explicit operator direction**, which settles the priority the two
+arguments above only imply:
+
+> *"the tools must be really really good optimised for our vault even if that means to sacrifice
+> obsidian support; I'd rather have an obsidian import functionality than tools that cannot be
+> best in class."*
+
+That is decisive for revision 5's shape. D15's five-tool surface, D21's fielded index, and
+D22's compact rendering are all designed against *our* vault, and several of them — `near`
+composed with filters (D15.3), property-key field queries (D21.2) — are not expressible in
+`.base` at all. A compatibility constraint would have forbidden the best parts of this design.
+
+**And the import story is already shipped, which removes the usual cost of this choice.**
+Mount-in-place already covers Obsidian and generic Markdown + frontmatter vaults with **no
+import code whatsoever**: `.obsidian/` is *detected and never written*
+(`pkg/knowledge/detect.go:100` — *"HasObsidianMarker reports a `.obsidian/` DIRECTORY at the
+root"*; `detect.go:134-135` further refuses to follow a symlink named `.obsidian`). An operator
+points Omnipus at an existing Obsidian vault and it works, without conversion and without
+Omnipus writing into Obsidian's own directory.
+
+So the launch import story is **mounting, and it exists**. The highest-value importer still worth
+building is therefore the narrow one: the **one-shot saved-view importer** (D15.4, O-1) — which
+is exactly where revision 5 puts it, as an operator/CLI tool rather than a permanent agent tool.
+
 ### 3.2 Adopt an existing open-source project as the foundation
 
 **Rejected — none is usable.** SiYuan is architecturally the closest (Go kernel, files on
@@ -684,7 +1360,18 @@ corpus, and an agent cannot tell a stale derived value from a fact.
 **Rejected.** See D6. Notion's own hiring guidance is a flat table with an enum, and treating
 that as a degraded model would produce a worse fit for a common shape.
 
-### 3.6 A dedicated aggregation store (the D16 fallback)
+### 3.6 A dedicated aggregation store (the D16 fallback) — **TAKEN in revision 5**
+
+> **Superseded 2026-08-28.** This alternative is **no longer an alternative** — D16.2 adopts it,
+> in the two-index form (bleve keeps text; a derived, disposable SQLite index holds properties
+> and relations). The section is kept because its argument is the one D16.3 relies on, and
+> because this ADR's convention is to leave the reasoning visible rather than rewrite it once
+> the answer is known. **The two conditions it set are both now discharged explicitly:** the
+> ADR-067 A2 overturn and the CLAUDE.md widening are recorded in **D16.4**, in this ADR, rather
+> than deferred to another one — the "own ADR" this section asked for is the revision you are
+> reading.
+
+**The original text, unchanged:**
 
 **Not taken now; named so the fallback is not a silent choice later.** If the D16 RSS bound
 cannot be met, records need a store that aggregates natively. `modernc.org/sqlite` is already
@@ -714,8 +1401,23 @@ uneditable in the GUI — a two-representation problem worth avoiding until ther
 - A schema violation is a named, per-record, fixable report — not an empty result set.
 - Renaming a record cannot break references to it.
 - Derived values cannot go stale, because they are not stored.
-- The vault remains a plain set of Markdown notes; uninstalling Omnipus loses the index and
+- The vault remains a plain set of Markdown notes; uninstalling Omnipus loses the indexes and
   nothing else.
+
+*Added in revision 5:*
+
+- **The vault subsystem costs 5 tool definitions instead of 18** — a catalog of 98 rather than
+  111 (D15.0), in a regime where selection accuracy is already the binding constraint.
+- **The tool boundary is the policy boundary** (D15.2). An operator can permit editing while
+  forbidding restructuring — a posture that is inexpressible today (D18).
+- **An agent can read a note through an audited tool**, and obtain a version token without
+  sending a write it knows will fail (D15.3).
+- **"Notes mentioning X within 2 hops of `[[Y]]`" is one call** — a query no system in this
+  ADR's research corpus can express (D15.3).
+- **Search will rank with BM25 rather than TF-IDF**, and over real fields rather than
+  frontmatter flattened into prose (D21.1, D21.2).
+- **Joins, `OR`, `GROUP BY` and aggregates come from a store that already does them**, so the
+  expression engine §4.2 names as this ADR's highest-risk component shrinks (D16.2).
 
 ### 4.2 Cost
 
@@ -734,6 +1436,24 @@ uneditable in the GUI — a two-representation problem worth avoiding until ther
   per file for now, which is the same wall the incumbents hit; we have simply not promised
   otherwise.
 
+*Added in revision 5:*
+
+- **A second index exists, and two indexes can disagree** (D16.4). This is a genuinely new
+  failure mode of exactly the class §1.3 catalogues, and it is why the freshness-token
+  comparison is structural rather than a test.
+- **The CLAUDE.md rule isolating SQLite to WhatsApp session storage is widened**, and ADR-067's
+  A2 is overturned (D16.4). Recorded here rather than discovered in a diff.
+- **This ADR decides against its own spike's recommendation** (D16.3). The grounds are the
+  spike's own out-of-scope note, but a future reader must be able to see that the override
+  happened and judge it — hence D16.3 rather than a quiet adoption.
+- **Nine `knowledge_*` tool names are retired.** Any prompt, skill or seeded policy referencing
+  them must move. The migration is cheap now and gets more expensive with every vault that
+  ships.
+- **Two operations in D15.3 are unbuilt primitives, not relabellings** (D14.1): body-replace
+  needs anchor-ambiguity rules, trash needs a soft-delete convention. Both are real design work.
+- **The D21.3 signal mix is unmeasured on vault data** and is flagged in place as our own
+  composition rather than a benchmarked result.
+
 ### 4.3 Explicitly out of scope
 
 - **Obsidian `.base` compatibility** — see §3.1. If interop is wanted later it arrives as a
@@ -751,9 +1471,9 @@ uneditable in the GUI — a two-representation problem worth avoiding until ther
 
 | ID | Question | Why it matters | Owner |
 |---|---|---|---|
-| ~~O-1~~ | **RESOLVED 2026-08-25 — one-way importer.** `record_view_import` reads a `.base` file and translates the filters, order and grouping it recognises into a native view. Anything it cannot translate is **reported by name**, never silently dropped or approximated. It is a one-shot translation, not a live read path: we do not take on tracking a format that broke five times in eight weeks. Lands in W6. | Founder |
+| ~~O-1~~ | **RESOLVED 2026-08-25 — one-way importer.** `record_view_import` reads a `.base` file and translates the filters, order and grouping it recognises into a native view. Anything it cannot translate is **reported by name**, never silently dropped or approximated. It is a one-shot translation, not a live read path: we do not take on tracking a format that broke five times in eight weeks. Lands in W6. **Revision 5: the resolution stands; the delivery surface moves from an agent tool to an operator/CLI one-shot (D15.4), because FR-101's verbatim report exists to be read and judged by a human.** | Founder |
 | ~~O-2~~ | **RESOLVED 2026-08-25 — correct totals with honest gaps.** `money` is amount (integer minor units) + ISO-4217 currency + declared scale, with exact decimal arithmetic. Sums within one currency are exact; sums **across** currencies are refused with the currencies listed. **No FX conversion, no rate table, no periods, no ledger semantics, no amount audit trail.** Those would change the record model and belong to their own ADR. | Founder |
-| ~~O-3~~ | **RESOLVED 2026-08-25 — structured JSON only, no query language.** `record_query` takes a typed filter object; every field name, enum value and relation target is validated against the schema before evaluation, so a typo is a rejection naming the valid options rather than an empty result. **No text query language and no parser** — Notion's ~91% token saving is real but it buys a parser we would own, and D13's whole premise is that a malformed query must fail loudly. Revisit only if transcript token cost becomes a measured problem. | Architect |
+| ~~O-3~~ | **RESOLVED 2026-08-25 — structured JSON only, no query language.** `record_query` takes a typed filter object; every field name, enum value and relation target is validated against the schema before evaluation, so a typo is a rejection naming the valid options rather than an empty result. **No text query language and no parser** — Notion's ~91% token saving is real but it buys a parser we would own, and D13's whole premise is that a malformed query must fail loudly. Revisit only if transcript token cost becomes a measured problem. **Revision 5: unchanged, and note it governs the query INPUT only — D22.1's compact-text rule is about the RESPONSE the model reads, and the two do not conflict.** The tool is now `vault_find`. | Architect |
 | ~~O-4~~ | **RESOLVED 2026-08-25 — in the vault.** Schemas live at `<vault>/.omnipus-vault/records/<type>.yaml`, beside the notes they describe. They travel with the operator's data, diff in the same git history as the notes, and survive uninstalling Omnipus — which D8's no-lock-in rule requires. Accepted cost: we write into the operator's folder, and the vault may not be a git repo, so D2's "lives in git" claim is **conditional on the operator's own setup** and must not be stated as a guarantee. | Architect |
 | ~~O-5~~ | **RESOLVED 2026-08-25 — one rule: the target is missing.** A relation whose target cannot be resolved is reported as missing, whether it was deleted, moved out of the vault, or on an unmounted drive. We deliberately do **not** distinguish the causes: we do not control the filesystem, an operator can delete a note in Finder at any time, and a system that claimed to tell "deleted" from "unreachable" would be guessing. The report names the record and the unresolvable target; deciding what happened is the operator's. | Founder |
 | ~~O-6~~ | **RESOLVED 2026-08-25 — vault-wide, one definition per vault.** A record type means the same thing everywhere its vault is mounted. Schemas live in the vault (O-4) and travel with it, so a per-workspace override would separate a record from the definition that validates it and make "is this record valid?" a question with two answers. Accepted cost: two teams sharing a vault cannot extend a type independently — they change it for both, in a file they can both see and diff. | Founder |
@@ -770,3 +1490,22 @@ uneditable in the GUI — a two-representation problem worth avoiding until ther
   a claim with no threshold cannot be falsified.
 - It does not claim the byte-splice write approach is proven at scale. It is proven possible;
   D14 states the acceptance criterion that would prove it.
+
+*Added in revision 5:*
+
+- **It does not claim the D21.3 ranking composition is benchmarked.** BM25F and Reciprocal Rank
+  Fusion are each established; *this* mix of four signals over vault data is **our composition**,
+  and D21.3 says so in place. W2 must compare it against plain BM25 rather than assume it helps.
+- **It does not claim the two-index design is measured.** The spike measured the design this ADR
+  did **not** take (D16.3). The two-index write path, concurrent queries and every non-macOS
+  platform are unmeasured, exactly as the spike's own §6.1 records for its own numbers. D20
+  places that measurement in W1, before anything is built on top of it.
+- **It does not claim the tool-count research transfers exactly.** The 50-tool / 200-tool
+  accuracy figures and the Block and Copilot consolidations are cited findings about other
+  systems' catalogs. The direction is clear and consistent across sources; the specific
+  thresholds are not ours and were not reproduced here.
+- **It does not claim `vault_find`'s composed `near` + filter query is unprecedented in
+  general** — only that **no system in this ADR's surveyed corpus** (Dataview, Obsidian Bases,
+  Notion, Tana, mdbase) can express it.
+- **It makes no claim about indexing-progress emission beyond what §2.6 verified**, where an
+  alleged defect was investigated and **not confirmed**.
