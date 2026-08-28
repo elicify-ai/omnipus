@@ -606,7 +606,7 @@ func (al *AgentLoop) registerServerTools(
 			// pass above unregisters any changed/removed server's tools
 			// first, so a name that is already registered here belongs to a
 			// server whose config didn't change this pass. Skipping it
-			// preserves a TTL-promoted (load_tool) tool's visibility instead
+			// preserves a TTL-promoted (ToolSearch) tool's visibility instead
 			// of resetting it to hidden on every reconcile, and eliminates a
 			// Register/RegisterHidden log line + version bump on every pass
 			// for servers that never changed. GetIncludingHidden is used

@@ -381,7 +381,7 @@ func DefaultConfig() *Config {
 				"read_message":        "allow",
 				"send_email":          "allow",
 				"reply":               "allow",
-				"load_tool":           "allow",
+				"ToolSearch":          "allow",
 
 				// --- Browser automation tools ---
 				"browser_navigate":   "allow",

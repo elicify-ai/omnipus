@@ -14,12 +14,12 @@ interface ToolCallBadgeProps {
   /**
    * Which chat surface is rendering this badge — selects the visibility
    * policy (Fix 2, user-approved 2026-07-16). Defaults to 'thread': the
-   * hidden-by-default noisy-infra set (load_tool, background delegate/bash
+   * hidden-by-default noisy-infra set (ToolSearch, background delegate/bash
    * dispatch, status polls) via shouldRenderToolCall — used by MessageItem's
    * historical list and SubagentBlock's nested steps. 'panel' swaps in
    * shouldRenderToolCallInPanel — ActivityPanel is the designated home for
    * that same noisy detail, so its default INVERTS to show everything except
-   * `load_tool`. Kept as a prop switch (not a second component) so the two
+   * `ToolSearch`. Kept as a prop switch (not a second component) so the two
    * policies never leak into each other's call sites.
    */
   surface?: 'thread' | 'panel'
@@ -44,16 +44,16 @@ export function ToolCallBadge({ toolCall, surface = 'thread' }: ToolCallBadgePro
   const [expanded, setExpanded] = useState(false)
 
   // Client-side render gate (verbose-chat off by default): hides noisy
-  // background infra calls (load_tool, background delegate/bash dispatch,
+  // background infra calls (ToolSearch, background delegate/bash dispatch,
   // status polls) unless the user has opted into verbose chat. surface=
   // 'thread' (MessageItem's historical list, SubagentBlock's nested steps)
   // uses shouldRenderToolCall, whose error/marshal-failure override is now
-  // per-tool-class (see that function's doc comment) — load_tool still
+  // per-tool-class (see that function's doc comment) — ToolSearch still
   // forces visible on error, but delegate/background-bash do NOT (that
   // failure is left to the calling agent's own response text). surface=
   // 'panel' (ActivityPanel's expanded native-agent step rows) uses
   // shouldRenderToolCallInPanel instead — an inverted, outcome-blind policy
-  // that shows everything except load_tool, since the panel is the
+  // that shows everything except ToolSearch, since the panel is the
   // designated transparency surface for exactly what the thread hides,
   // failures included. That transparency is scoped to steps belonging to a
   // span that made it into the panel at all (running or retained in

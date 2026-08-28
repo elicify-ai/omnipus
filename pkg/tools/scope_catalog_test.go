@@ -8,7 +8,7 @@
 // builtin tool must return a known, non-zero ToolScope.
 //
 // Before this file, every real tool's Scope() method was at 0% direct
-// coverage in this package — only email_test.go:306 and load_tool_test.go:282
+// coverage in this package — only email_test.go:306 and ToolSearch_test.go:282
 // happened to touch a real tool's Scope() indirectly, and neither is a
 // dedicated scope assertion. Nothing verified that a shipped tool declares
 // the scope the design says it should. A tool with a mistyped, unset, or

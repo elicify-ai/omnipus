@@ -6,14 +6,14 @@
 import { describe, it, expect } from 'vitest'
 import { shouldRenderToolCall, shouldRenderSubagentSpan, shouldRenderToolCallInPanel } from './toolVisibility'
 
-describe('shouldRenderToolCall — load_tool', () => {
+describe('shouldRenderToolCall — ToolSearch', () => {
   it.each([
     [undefined, false, false],
     [{}, false, false],
     [undefined, true, true],
     [{}, true, true],
   ])('params=%o verbose=%s → %s', (params, verbose, expected) => {
-    expect(shouldRenderToolCall('load_tool', params as Record<string, unknown> | undefined, verbose)).toBe(
+    expect(shouldRenderToolCall('ToolSearch', params as Record<string, unknown> | undefined, verbose)).toBe(
       expected,
     )
   })
@@ -84,8 +84,8 @@ describe('shouldRenderToolCall — mcp_* and unknown tools (default fallthrough,
 })
 
 describe('shouldRenderToolCall — verbose override', () => {
-  it('load_tool becomes visible when verbose', () => {
-    expect(shouldRenderToolCall('load_tool', undefined, true)).toBe(true)
+  it('ToolSearch becomes visible when verbose', () => {
+    expect(shouldRenderToolCall('ToolSearch', undefined, true)).toBe(true)
   })
 
   it('a hidden background bash call becomes visible when verbose', () => {
@@ -103,19 +103,19 @@ describe('shouldRenderToolCall — verbose override', () => {
 })
 
 // ── isError override — now a PER-TOOL-CLASS decision (revised 2026-07-16),
-// not a blanket short-circuit. `load_tool` keeps the override (nothing else
+// not a blanket short-circuit. `ToolSearch` keeps the override (nothing else
 // narrates its failure). `delegate` and the background-dispatch/poll/read
 // sub-cases of `bash` deliberately do NOT: a subagent/background-shell
 // failure is returned to the CALLING agent's own turn as the tool result —
 // that agent explains it in its own response text — and the raw failure
 // stays fully transparent in the ActivityPanel slide-out
-// (shouldRenderToolCallInPanel shows everything but load_tool). Only verbose
+// (shouldRenderToolCallInPanel shows everything but ToolSearch). Only verbose
 // chat brings these specific rows back into the thread. ──────────────────
 
-describe('shouldRenderToolCall — isError override still forces load_tool visibility', () => {
+describe('shouldRenderToolCall — isError override still forces ToolSearch visibility', () => {
   it.each<[string, Record<string, unknown> | undefined]>([
-    ['load_tool', undefined],
-    ['load_tool', {}],
+    ['ToolSearch', undefined],
+    ['ToolSearch', {}],
   ])('tool=%s params=%o is visible when isError=true', (tool, params) => {
     expect(shouldRenderToolCall(tool, params, false, true)).toBe(true)
   })
@@ -173,7 +173,7 @@ describe('shouldRenderToolCall — isError=false explicit is a no-op (regression
   // Confirms passing isError=false explicitly reproduces the exact same
   // classifications as omitting the parameter entirely.
   it.each<[string, Record<string, unknown> | undefined, boolean]>([
-    ['load_tool', undefined, false],
+    ['ToolSearch', undefined, false],
     ['delegate', undefined, false],
     ['delegate', { async: false }, false], // no longer forced visible (see describe block above)
     ['bash', { run_in_background: true }, false],
@@ -218,17 +218,17 @@ describe('shouldRenderSubagentSpan — verbose-only, no failed-state exception',
 
 // ── shouldRenderToolCallInPanel — ActivityPanel-only policy (Fix 2,
 // user-approved 2026-07-16): INVERTED from the thread — show everything
-// except load_tool by default; verbose reveals load_tool too. This is the
+// except ToolSearch by default; verbose reveals ToolSearch too. This is the
 // transparency valve for exactly what the thread hides (including failed
 // delegate/background-bash rows, by design). ──────────────────────────────
 
 describe('shouldRenderToolCallInPanel', () => {
-  it('hides load_tool by default', () => {
-    expect(shouldRenderToolCallInPanel('load_tool', false)).toBe(false)
+  it('hides ToolSearch by default', () => {
+    expect(shouldRenderToolCallInPanel('ToolSearch', false)).toBe(false)
   })
 
-  it('shows load_tool when verbose chat is enabled', () => {
-    expect(shouldRenderToolCallInPanel('load_tool', true)).toBe(true)
+  it('shows ToolSearch when verbose chat is enabled', () => {
+    expect(shouldRenderToolCallInPanel('ToolSearch', true)).toBe(true)
   })
 
   it.each(['delegate', 'bash', 'read_file', 'mcp_some_tool'])(

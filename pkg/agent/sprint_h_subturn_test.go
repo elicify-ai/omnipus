@@ -10,7 +10,7 @@
 // registry-level omission. See the doc comment on the CloneExcept call site
 // in subturn.go for the full rationale (the old blanket exclusion silently
 // defeated the depth-cap + trust-graph system that already exists, and did
-// so via a confusing path: load_tool reported a fabricated success for
+// so via a confusing path: ToolSearch reported a fabricated success for
 // "delegate" while the child's OWN tool registry never actually gained it —
 // pkg/agent/subturn_delegate_nesting_test.go is the regression test proving
 // the fix). "hand_off" is still excluded — a nested sub-turn hijacking the

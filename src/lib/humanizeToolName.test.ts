@@ -42,6 +42,21 @@ describe('humanizeToolName — ADR-036 bash/delegate consolidation', () => {
   })
 })
 
+// ADR-071 D1 / spec FR-015 (W-D1 test 6): the discovery capability's display
+// label must be reachable under BOTH the new canonical name ("ToolSearch")
+// and the retired pre-rename name ("load_tool"), so a conversation
+// transcript recorded before the rename still renders a readable label
+// instead of falling through to the raw identifier.
+describe('humanizeToolName — ADR-071 D1 discovery-tool rename', () => {
+  it('maps the new canonical name ToolSearch → Find & load tools', () => {
+    expect(humanizeToolName('ToolSearch')).toBe('Find & load tools')
+  })
+
+  it('retains the legacy load_tool alias so pre-rename transcripts still render readably', () => {
+    expect(humanizeToolName('load_tool')).toBe('Find & load tools')
+  })
+})
+
 describe('humanizeToolName — generic fallback', () => {
   it('strips a leading namespace and title-cases the remainder', () => {
     // system.task.update → "Task update"

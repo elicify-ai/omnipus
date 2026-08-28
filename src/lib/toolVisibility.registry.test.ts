@@ -77,7 +77,7 @@
 // own docstring calls "a deliberate, meaningful action" a chat reader would
 // want to see (reading a file, searching the web, navigating a page,
 // writing a file) — the opposite of the "noisy background infra" the
-// existing hide-list cases (`load_tool`, `delegate` action=run/status,
+// existing hide-list cases (`ToolSearch`, `delegate` action=run/status,
 // `bash` action=poll/read) target. Inventing a hide-list entry for one of
 // these just to give the test something to exercise would be fabricating
 // product intent to reach green, which is exactly the failure mode this

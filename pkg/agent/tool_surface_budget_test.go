@@ -111,7 +111,7 @@ func TestSentToolSurface_LoadedLazyToolIsChargedFully(t *testing.T) {
 
 	before := al.sentToolSurfaceTokens(agent, "sess-load")
 
-	// Mark one lazy tool loaded for this session, as load_tool would.
+	// Mark one lazy tool loaded for this session, as ToolSearch would.
 	al.loadedToolsMu.Lock()
 	if al.loadedTools == nil {
 		al.loadedTools = map[string]map[string]bool{}

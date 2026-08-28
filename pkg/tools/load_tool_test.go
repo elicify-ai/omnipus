@@ -3,7 +3,7 @@
 // Copyright (c) 2026 Omnipus contributors
 
 // Tests for the names/load path of the unified ToolsTool.
-// All behavioral assertions from the former load_tool_test.go are preserved.
+// All behavioral assertions from the former ToolSearch_test.go are preserved.
 
 package tools
 
@@ -276,8 +276,8 @@ func TestToolsTool_Load_SliceOfStringsDirect(t *testing.T) {
 
 func TestToolsTool_Metadata(t *testing.T) {
 	tt := NewToolsTool(nil, 5, 10)
-	if tt.Name() != "load_tool" {
-		t.Errorf("Name() = %q, want %q", tt.Name(), "load_tool")
+	if tt.Name() != "ToolSearch" {
+		t.Errorf("Name() = %q, want %q", tt.Name(), "ToolSearch")
 	}
 	if tt.Scope() != ScopeGeneral {
 		t.Errorf("Scope() = %q, want ScopeGeneral", tt.Scope())
@@ -326,21 +326,38 @@ func TestToolsTool_Metadata(t *testing.T) {
 	}
 }
 
+// TestToolsTool_NameIsRenamed pins ADR-071 D1 / spec FR-010 (W-D1 test 9):
+// the tool's identity answers to its new name, and the retired name is gone.
+// Kept as its own dedicated test — distinct from TestToolsTool_Metadata,
+// which exercises Name() only incidentally alongside Scope/Category/schema —
+// so a future revert of ToolsTool.Name() is caught by a test whose whole
+// point is the rename, not one that would keep passing after a
+// find-and-replace on an unrelated assertion.
+func TestToolsTool_NameIsRenamed(t *testing.T) {
+	tt := NewToolsTool(nil, 5, 10)
+	if got := tt.Name(); got != "ToolSearch" {
+		t.Errorf("Name() = %q, want %q", got, "ToolSearch")
+	}
+	if tt.Name() == "load_tool" {
+		t.Error("Name() must not answer to the retired \"load_tool\" name")
+	}
+}
+
 func TestToolsTool_TierIsInfra(t *testing.T) {
-	if ToolManifestTier("load_tool") != ManifestInfra {
-		t.Error("'load_tool' must have ManifestInfra tier")
+	if ToolManifestTier("ToolSearch") != ManifestInfra {
+		t.Error("'ToolSearch' must have ManifestInfra tier")
 	}
 }
 
 func TestToolsTool_NotInManifest(t *testing.T) {
-	// A manifest built with the 'load_tool' infra tool present should not list it as an entry.
+	// A manifest built with the 'ToolSearch' infra tool present should not list it as an entry.
 	toolList := []Tool{
 		NewToolsTool(nil, 5, 10),
 		&fakeManifestTool{name: "create_agent", desc: "Create.", cat: CategoryAgents},
 	}
 	got := BuildCompressedManifest(toolList, nil)
-	if strings.Contains(got, "  - load_tool") {
-		t.Error("BuildCompressedManifest must NOT include 'load_tool' (infra) as a manifest entry")
+	if strings.Contains(got, "  - ToolSearch") {
+		t.Error("BuildCompressedManifest must NOT include 'ToolSearch' (infra) as a manifest entry")
 	}
 }
 

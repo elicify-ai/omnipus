@@ -1,4 +1,4 @@
-// Omnipus — reproduction tests for load_tool bugs C2/C3/C4 and message normalization B.
+// Omnipus — reproduction tests for ToolSearch bugs C2/C3/C4 and message normalization B.
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
@@ -26,10 +26,10 @@ func loadToolFor(t *testing.T, al *AgentLoop, agentID string) *tools.ToolsTool {
 	t.Helper()
 	ag, ok := al.registry.GetAgent(agentID)
 	require.True(t, ok, "agent %q must exist", agentID)
-	raw, ok := ag.Tools.Get("load_tool")
-	require.True(t, ok, "load_tool must be registered for %q", agentID)
+	raw, ok := ag.Tools.Get("ToolSearch")
+	require.True(t, ok, "ToolSearch must be registered for %q", agentID)
 	tt, ok := raw.(*tools.ToolsTool)
-	require.True(t, ok, "load_tool must be *tools.ToolsTool")
+	require.True(t, ok, "ToolSearch must be *tools.ToolsTool")
 	return tt
 }
 
@@ -41,7 +41,7 @@ func execCtx(agentID, sessionID string) context.Context {
 // ── C2: Full-tier tools must return no-op SUCCESS (not error) ─────────────────
 
 // TestLoadTool_FullTierReturnsNoopSuccess reproduces C2:
-// load_tool{names:["search_web"]} for Jim currently returns an error
+// ToolSearch{names:["search_web"]} for Jim currently returns an error
 // ("unknown or not available") instead of a graceful no-op success.
 func TestLoadTool_FullTierReturnsNoopSuccess(t *testing.T) {
 	cfg := newCompressedCfg(t)
@@ -70,7 +70,7 @@ func TestLoadTool_FullTierReturnsNoopSuccess(t *testing.T) {
 // ── C3: Policy-denied tools must give a clear reason ─────────────────────────
 
 // TestLoadTool_PolicyDeniedCarriesReason reproduces C3:
-// load_tool{names:["send_file"]} for Ava currently says
+// ToolSearch{names:["send_file"]} for Ava currently says
 // "unknown or not available" instead of "denied by … policy".
 //
 // Note: we use send_file (ManifestLazy, registered for all agents via
@@ -114,7 +114,7 @@ func TestLoadTool_PolicyDeniedCarriesReason(t *testing.T) {
 // ── C4: Unknown names must suggest the correct name ──────────────────────────
 
 // TestLoadTool_UnknownNameSuggestsAlternative reproduces C4:
-// load_tool{names:["task_update"]} (hallucinated — real name is "update_task")
+// ToolSearch{names:["task_update"]} (hallucinated — real name is "update_task")
 // currently says "unknown or not available" with no hint.
 func TestLoadTool_UnknownNameSuggestsAlternative(t *testing.T) {
 	cfg := newCompressedCfg(t)

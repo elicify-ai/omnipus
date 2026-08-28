@@ -132,7 +132,7 @@ describe('SubagentBlock_Expanded_NestedToolCallsInOrder', () => {
 // default surface='thread' policy (shouldRenderToolCall, toolVisibility.ts)
 // — the SAME hidden-by-default noisy-infra set the top-level thread applies
 // everywhere else (background bash poll/read, background delegate dispatch,
-// load_tool). This is deliberately unchanged by Fix 2's panel-inversion
+// ToolSearch). This is deliberately unchanged by Fix 2's panel-inversion
 // policy, which only applies to ActivityPanel's own ToolCallBadge usage
 // (surface='panel') — see ActivityPanel.test.tsx for that side.
 //

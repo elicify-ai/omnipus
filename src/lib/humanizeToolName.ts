@@ -98,11 +98,16 @@ const EXPLICIT_LABELS: Record<string, string> = {
   write_agent_metadata: 'Write agent metadata',
   // Token usage
   get_usage: 'Get token usage',
-  // Tool discovery — canonical loader tool (renamed tools → load_tool, 2026-06-26).
-  // The canonical name is `load_tool`; it finds and loads tool schemas on demand.
-  load_tool: 'Find & load tools',
+  // Tool discovery — canonical loader tool (renamed tools → load_tool,
+  // 2026-06-26; renamed load_tool → ToolSearch, ADR-071 D1).
+  // The canonical name is `ToolSearch`; it finds and loads tool schemas on demand.
+  ToolSearch: 'Find & load tools',
   // Legacy names kept for backward compat with old session transcripts only.
-  // Do NOT use these names for new tool calls — the canonical name is `load_tool`.
+  // Do NOT use these names for new tool calls — the canonical name is
+  // `ToolSearch`. `load_tool` is retained ONLY so a conversation transcript
+  // recorded before the ADR-071 D1 rename still renders a readable label
+  // instead of falling through to the raw identifier (FR-015).
+  load_tool: 'Find & load tools',
   /* retired: search_tools_bm25 → 'Search tools (BM25)' */
   /* retired: search_tools_regex → 'Search tools (regex)' */
   /* retired: tools → 'Tools (search & load)' (§-consolidation intermediate name) */

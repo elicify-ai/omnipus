@@ -46,11 +46,11 @@ import (
 // FilterToolsByPolicy uses at defs-assembly time — so the gateway exec gate and
 // the loop's sent-defs view can never drift. It builds the resolver inputs (the
 // sandbox global floor + the agent's builtin policy) from cfg. The primitive
-// encapsulates, in order: (1) infra force-allow (load_tool → allow,
+// encapsulates, in order: (1) infra force-allow (ToolSearch → allow,
 // unconditional — infra tools are registration-gated, not policy-gated, so they
 // stay executable for EVERY agent including deny-by-default Ava/Mia/Ray, or
 // every lazy tool becomes unreachable at exec time), (2) the scope gate, and
-// (3) global×agent strictest-wins (deny > ask > allow). The tools that load_tool
+// (3) global×agent strictest-wins (deny > ask > allow). The tools that ToolSearch
 // *loads* stay independently policy-gated when they are actually called.
 //
 // BEHAVIOR CHANGE (intentional): this does NOT preserve the OLD gateway exec

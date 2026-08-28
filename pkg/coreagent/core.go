@@ -374,7 +374,7 @@ var allStaticToolNames = []string{
 	"serve_web",
 	"set_todos",
 	"read_inbox", "search_email", "read_message", "send_email", "reply",
-	"load_tool",
+	"ToolSearch",
 	// ADR-056 — the unified read-only background-job roster (plans owned,
 	// subagents delegated, standalone tasks assigned to or created by the
 	// caller). Listed in the general block because that is what it is

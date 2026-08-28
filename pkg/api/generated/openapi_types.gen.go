@@ -6486,7 +6486,7 @@ type AgentToolEntry struct {
 	// EffectivePolicy The policy actually enforced at LLM-call time after global policy overrides are applied.
 	EffectivePolicy AgentToolEntryEffectivePolicy `json:"effective_policy"`
 
-	// ManifestTier How the tool is presented to the LLM when the manifest optimization is active. "full" = always sent as a callable tool definition every turn; "compressed" = listed by name only in the system context, schema fetched on demand via load_tool; "infra" = always-callable discovery tool (load_tool / search_tools_*) that drives the manifest mechanism itself and never appears in the manifest block.
+	// ManifestTier How the tool is presented to the LLM when the manifest optimization is active. "full" = always sent as a callable tool definition every turn; "compressed" = listed by name only in the system context, schema fetched on demand via ToolSearch; "infra" = always-callable discovery tool (ToolSearch) that drives the manifest mechanism itself and never appears in the manifest block.
 	ManifestTier AgentToolEntryManifestTier `json:"manifest_tier"`
 
 	// Name Canonical tool name.
@@ -6499,7 +6499,7 @@ type AgentToolEntryConfiguredPolicy string
 // AgentToolEntryEffectivePolicy The policy actually enforced at LLM-call time after global policy overrides are applied.
 type AgentToolEntryEffectivePolicy string
 
-// AgentToolEntryManifestTier How the tool is presented to the LLM when the manifest optimization is active. "full" = always sent as a callable tool definition every turn; "compressed" = listed by name only in the system context, schema fetched on demand via load_tool; "infra" = always-callable discovery tool (load_tool / search_tools_*) that drives the manifest mechanism itself and never appears in the manifest block.
+// AgentToolEntryManifestTier How the tool is presented to the LLM when the manifest optimization is active. "full" = always sent as a callable tool definition every turn; "compressed" = listed by name only in the system context, schema fetched on demand via ToolSearch; "infra" = always-callable discovery tool (ToolSearch) that drives the manifest mechanism itself and never appears in the manifest block.
 type AgentToolEntryManifestTier string
 
 // AgentToolsCfg Per-agent tool configuration governing which builtin tools are accessible and which MCP servers are bound (config.AgentToolsCfg on the Go side, AgentToolsCfg interface in src/lib/api.ts).
@@ -6557,7 +6557,7 @@ type AgentToolsResponse struct {
 		// EffectivePolicy The policy actually enforced at LLM-call time after global policy overrides are applied.
 		EffectivePolicy AgentToolsResponseToolsEffectivePolicy `json:"effective_policy"`
 
-		// ManifestTier How the tool is presented to the LLM when the manifest optimization is active. "full" = always sent as a callable tool definition every turn; "compressed" = listed by name only in the system context, schema fetched on demand via load_tool; "infra" = always-callable discovery tool (load_tool / search_tools_*) that drives the manifest mechanism itself and never appears in the manifest block.
+		// ManifestTier How the tool is presented to the LLM when the manifest optimization is active. "full" = always sent as a callable tool definition every turn; "compressed" = listed by name only in the system context, schema fetched on demand via ToolSearch; "infra" = always-callable discovery tool (ToolSearch) that drives the manifest mechanism itself and never appears in the manifest block.
 		ManifestTier AgentToolsResponseToolsManifestTier `json:"manifest_tier"`
 
 		// Name Canonical tool name.
@@ -6577,7 +6577,7 @@ type AgentToolsResponseToolsConfiguredPolicy string
 // AgentToolsResponseToolsEffectivePolicy The policy actually enforced at LLM-call time after global policy overrides are applied.
 type AgentToolsResponseToolsEffectivePolicy string
 
-// AgentToolsResponseToolsManifestTier How the tool is presented to the LLM when the manifest optimization is active. "full" = always sent as a callable tool definition every turn; "compressed" = listed by name only in the system context, schema fetched on demand via load_tool; "infra" = always-callable discovery tool (load_tool / search_tools_*) that drives the manifest mechanism itself and never appears in the manifest block.
+// AgentToolsResponseToolsManifestTier How the tool is presented to the LLM when the manifest optimization is active. "full" = always sent as a callable tool definition every turn; "compressed" = listed by name only in the system context, schema fetched on demand via ToolSearch; "infra" = always-callable discovery tool (ToolSearch) that drives the manifest mechanism itself and never appears in the manifest block.
 type AgentToolsResponseToolsManifestTier string
 
 // AgentToolsUpdateRequest Request body for PUT /api/v1/agents/{id}/tools. Replaces the agent's tool policy configuration. Supports both the current policy format (builtin.policies, a complete map) and the legacy explicit/inherit mode format (builtin.mode + builtin.visible) for backward compatibility. Legacy fields are converted to policy format server-side before persisting.

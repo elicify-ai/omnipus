@@ -465,7 +465,7 @@ async function assertCancelCascadesToSubagent(
   //      denies `delegate` (pkg/coreagent/core.go:793 — deny-by-default, and
   //      `delegate` is deliberately not in her allow-list; this is correct
   //      least-privilege, not a regression). Gateway log, 4×:
-  //      `load_tool(load): no valid tools to load. Rejected: delegate —
+  //      `ToolSearch(load): no valid tools to load. Rejected: delegate —
   //      denied by this agent's policy`. No subagent ever ran, so the
   //      ActivityBar never mounted and the 150s wait below timed out.
   //

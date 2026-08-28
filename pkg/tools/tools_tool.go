@@ -1,4 +1,4 @@
-// Omnipus — load_tool: unified discovery and load infra tool (v0.1.0)
+// Omnipus — ToolSearch: unified discovery and load infra tool (v0.1.0)
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
@@ -6,8 +6,8 @@
 // It is the single infra tool that replaces the former search_tools_bm25
 // and search_tools_regex tools. Intent is inferred from which parameter is present:
 //
-//   - load_tool{ names: [string] } — LOAD those tools: fetch schemas + make callable.
-//   - load_tool{ query: string }   — SEARCH (BM25) over the hidden/lazy corpus,
+//   - ToolSearch{ names: [string] } — LOAD those tools: fetch schemas + make callable.
+//   - ToolSearch{ query: string }   — SEARCH (BM25) over the hidden/lazy corpus,
 //     auto-load the top hit, return schemas + full match list.
 //
 // See docs/internal/design/unified-tools-tool-2026-06.md for the full spec.
@@ -76,7 +76,7 @@ func (t *ToolsTool) SetResolver(
 	t.markLoaded = markLoaded
 }
 
-func (t *ToolsTool) Name() string           { return "load_tool" }
+func (t *ToolsTool) Name() string           { return "ToolSearch" }
 func (t *ToolsTool) Scope() ToolScope       { return ScopeGeneral }
 func (t *ToolsTool) Category() ToolCategory { return CategoryToolDiscovery }
 
@@ -113,7 +113,7 @@ func (t *ToolsTool) Execute(ctx context.Context, args map[string]any) *ToolResul
 	// Parse names — may be []string or []any.
 	names, namesErr := parseNamesArg(args)
 	if namesErr != nil {
-		return ErrorResult(fmt.Sprintf("load_tool: 'names' must be an array of strings: %v", namesErr))
+		return ErrorResult(fmt.Sprintf("ToolSearch: 'names' must be an array of strings: %v", namesErr))
 	}
 
 	// Precedence: names present and non-empty → load path.
@@ -129,7 +129,7 @@ func (t *ToolsTool) Execute(ctx context.Context, args map[string]any) *ToolResul
 
 	// Neither provided.
 	return ErrorResult(
-		"load_tool: provide either 'names' (to load tools by name) or 'query' (to find a tool by what it does)",
+		"ToolSearch: provide either 'names' (to load tools by name) or 'query' (to find a tool by what it does)",
 	)
 }
 
@@ -139,17 +139,17 @@ func (t *ToolsTool) execSearchAndLoad(ctx context.Context, query string) *ToolRe
 	if t.registry == nil {
 		return SilentResult("No tools found matching the query.")
 	}
-	logger.DebugCF("discovery", "load_tool(query/bm25)", map[string]any{"query": query})
+	logger.DebugCF("discovery", "ToolSearch(query/bm25)", map[string]any{"query": query})
 
 	cached := t.getOrBuildEngine()
 	if cached == nil {
-		logger.DebugCF("discovery", "load_tool(query/bm25): no hidden tools available", nil)
+		logger.DebugCF("discovery", "ToolSearch(query/bm25): no hidden tools available", nil)
 		return SilentResult("No tools found matching the query.")
 	}
 
 	ranked := cached.engine.Search(query, t.maxSearchResults)
 	if len(ranked) == 0 {
-		logger.DebugCF("discovery", "load_tool(query/bm25): no matches", map[string]any{"query": query})
+		logger.DebugCF("discovery", "ToolSearch(query/bm25): no matches", map[string]any{"query": query})
 		return SilentResult("No tools found matching the query.")
 	}
 
@@ -162,7 +162,7 @@ func (t *ToolsTool) execSearchAndLoad(ctx context.Context, query string) *ToolRe
 		}
 	}
 
-	logger.InfoCF("discovery", "load_tool(query/bm25) completed",
+	logger.InfoCF("discovery", "ToolSearch(query/bm25) completed",
 		map[string]any{"query": query, "results": len(matches)})
 
 	// Auto-load the top hit. Walk the ranked list until one passes canLoad.
@@ -174,7 +174,7 @@ func (t *ToolsTool) execSearchAndLoad(ctx context.Context, query string) *ToolRe
 		for _, m := range matches {
 			name := m.Name
 			if ok, reason := t.canLoad(ctx, name); !ok {
-				logger.DebugCF("discovery", "load_tool(query): top hit not loadable, trying next",
+				logger.DebugCF("discovery", "ToolSearch(query): top hit not loadable, trying next",
 					map[string]any{"name": name, "reason": reason})
 				continue
 			}
@@ -203,7 +203,7 @@ func (t *ToolsTool) execSearchAndLoad(ctx context.Context, query string) *ToolRe
 
 	encoded, err := json.Marshal(resp)
 	if err != nil {
-		return ErrorResult(fmt.Sprintf("load_tool(query): failed to encode result: %v", err))
+		return ErrorResult(fmt.Sprintf("ToolSearch(query): failed to encode result: %v", err))
 	}
 
 	var msg string
@@ -218,7 +218,7 @@ func (t *ToolsTool) execSearchAndLoad(ctx context.Context, query string) *ToolRe
 		// No resolver or all results denied by policy.
 		b, _ := json.Marshal(matches)
 		msg = fmt.Sprintf(
-			"Found %d tools:\n%s\n\nTo use one, call `load_tool` with its exact name in `names` (or describe what you need in `query`) to load it, then call it.",
+			"Found %d tools:\n%s\n\nTo use one, call `ToolSearch` with its exact name in `names` (or describe what you need in `query`) to load it, then call it.",
 			len(matches),
 			string(b),
 		)
@@ -231,7 +231,7 @@ func (t *ToolsTool) execSearchAndLoad(ctx context.Context, query string) *ToolRe
 
 func (t *ToolsTool) execLoad(ctx context.Context, names []string) *ToolResult {
 	if t.canLoad == nil || t.markLoaded == nil {
-		return ErrorResult("load_tool(load): resolver not set — internal configuration error")
+		return ErrorResult("ToolSearch(load): resolver not set — internal configuration error")
 	}
 
 	// Full-tier and infra tools are already in the model's callable set — loading
@@ -284,7 +284,7 @@ func (t *ToolsTool) execLoad(ctx context.Context, names []string) *ToolResult {
 			// Include any "already available" hints so the model still knows
 			// about the tools it CAN call.
 			allMsgs := append(fullTierRejections, fullTierHints...)
-			return ErrorResult(fmt.Sprintf("load_tool(load): %s", strings.Join(allMsgs, "; ")))
+			return ErrorResult(fmt.Sprintf("ToolSearch(load): %s", strings.Join(allMsgs, "; ")))
 		}
 		if len(fullTierHints) > 0 {
 			return SilentResult(strings.Join(fullTierHints, "\n"))
@@ -310,7 +310,7 @@ func (t *ToolsTool) execLoad(ctx context.Context, names []string) *ToolResult {
 	}
 
 	if len(accepted) == 0 {
-		msg := fmt.Sprintf("load_tool(load): no valid tools to load. Rejected: %s", strings.Join(preRejected, "; "))
+		msg := fmt.Sprintf("ToolSearch(load): no valid tools to load. Rejected: %s", strings.Join(preRejected, "; "))
 		return ErrorResult(msg)
 	}
 
@@ -321,7 +321,7 @@ func (t *ToolsTool) execLoad(ctx context.Context, names []string) *ToolResult {
 	// Together they make both hidden-MCP and in-process-lazy tools callable.
 	if t.registry != nil {
 		t.registry.PromoteTools(accepted, t.ttl)
-		logger.InfoCF("discovery", "load_tool(load): promoted tools",
+		logger.InfoCF("discovery", "ToolSearch(load): promoted tools",
 			map[string]any{"tools": accepted, "ttl": t.ttl})
 	}
 
@@ -338,7 +338,7 @@ func (t *ToolsTool) execLoad(ctx context.Context, names []string) *ToolResult {
 
 	if len(loadedNames) == 0 {
 		msg := fmt.Sprintf(
-			"load_tool(load): failed to load requested tools. Rejected: %s",
+			"ToolSearch(load): failed to load requested tools. Rejected: %s",
 			strings.Join(allRejected, "; "),
 		)
 		return ErrorResult(msg)
@@ -361,7 +361,7 @@ func (t *ToolsTool) execLoad(ctx context.Context, names []string) *ToolResult {
 	}
 	encoded, err := json.Marshal(result)
 	if err != nil {
-		return ErrorResult(fmt.Sprintf("load_tool(load): failed to encode result: %v", err))
+		return ErrorResult(fmt.Sprintf("ToolSearch(load): failed to encode result: %v", err))
 	}
 
 	return SilentResult(string(encoded))
@@ -398,7 +398,7 @@ func (t *ToolsTool) getOrBuildEngine() *bm25CachedEngine {
 		cached = &bm25CachedEngine{engine: nil, version: snap.Version}
 	} else {
 		cached = &bm25CachedEngine{engine: buildBM25Engine(docs), version: snap.Version}
-		logger.DebugCF("discovery", "load_tool BM25 engine rebuilt",
+		logger.DebugCF("discovery", "ToolSearch BM25 engine rebuilt",
 			map[string]any{"docs": len(docs), "version": snap.Version})
 	}
 	t.cached.Store(cached)

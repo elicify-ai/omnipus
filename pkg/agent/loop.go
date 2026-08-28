@@ -2523,7 +2523,7 @@ func registerSharedTools(
 				map[string]any{"agent_id": agentID})
 		}
 
-		// Register the unified `load_tool` infra tool (search + load paths).
+		// Register the unified `ToolSearch` infra tool (search + load paths).
 		// Replaces the former search_tools_bm25 + search_tools_regex + standalone load_tool trio.
 		// The resolver uses context-aware closures so per-session and per-agent state
 		// is read from the tool ctx at call time, avoiding data races on the shared
@@ -2533,14 +2533,14 @@ func registerSharedTools(
 		// or MCP discovery settings. Registration is cheap and harmless when unused.
 		//
 		// Why unconditional: the tools_on_demand PUT endpoint flips Compressed live via
-		// SwapConfig without re-running agent registration. If load_tool was only registered
-		// when Compressed=true at boot, a false→true live toggle would leave load_tool absent
-		// from the registry, causing Get("load_tool") to return !ok in buildCompressedToolDefs
+		// SwapConfig without re-running agent registration. If ToolSearch was only registered
+		// when Compressed=true at boot, a false→true live toggle would leave ToolSearch absent
+		// from the registry, causing Get("ToolSearch") to return !ok in buildCompressedToolDefs
 		// and ensureInfraToolsExecutable — every lazy tool silently unreachable, no error logged.
 		// The "no restart needed" promise the UI makes becomes false.
 		//
 		// When Compressed is OFF at turn time, the per-turn gates (cfg.Tools.Manifest.Compressed
-		// at lines ~5049, ~5115, ~5026) skip the compressed paths entirely: load_tool is never
+		// at lines ~5049, ~5115, ~5026) skip the compressed paths entirely: ToolSearch is never
 		// sent to the model and never force-added to policyFiltered. For an agent whose tools
 		// mostly resolve to deny it is also stripped by FilterToolsByPolicy in the uncompressed
 		// path (not in allow-list), so no spurious callable appears. For an agent whose tools
@@ -2548,8 +2548,17 @@ func registerSharedTools(
 		// (the model has all tools anyway).
 		//
 		// Guard against double-registration in case the MCP init path already added it.
+		// Derives the name(s) to check from tools.InfraManifestToolNames() rather than a
+		// hardcoded literal, so this guard cannot silently stop guarding on a future rename.
 		{
-			if _, alreadyTools := agent.Tools.Get("load_tool"); !alreadyTools {
+			alreadyTools := true
+			for _, infraName := range tools.InfraManifestToolNames() {
+				if _, ok := agent.Tools.Get(infraName); !ok {
+					alreadyTools = false
+					break
+				}
+			}
+			if !alreadyTools {
 				capturedAgentID := agentID
 
 				ttl := cfg.Tools.MCP.Discovery.TTL
@@ -2566,7 +2575,7 @@ func registerSharedTools(
 					// canLoad returns (true, "") when name is a policy-allowed LAZY tool for
 					// the calling agent. Full/infra tools are handled before this call (they
 					// return a no-op success in execLoad). When denied, the returned reason
-					// string is surfaced verbatim in the load_tool error message.
+					// string is surfaced verbatim in the ToolSearch error message.
 					func(ctx context.Context, name string) (bool, string) {
 						callerID := tools.ToolAgentID(ctx)
 						if callerID == "" {
@@ -4749,7 +4758,7 @@ func (al *AgentLoop) BrowserManagers() []*browser.BrowserManager {
 // authoritative primitive (tools.EffectiveToolPolicy) AND the SAME live policy
 // snapshot (the agent instance's LoadToolPolicy) that the agent loop's
 // FilterToolsByPolicy uses at defs-assembly time, so the two can never diverge.
-// It encapsulates, in order: (1) infra force-allow (load_tool → allow,
+// It encapsulates, in order: (1) infra force-allow (ToolSearch → allow,
 // unconditional), (2) the scope gate (fail-closed for unknown scopes), and
 // (3) global×agent strictest-wins (deny > ask > allow, god-mode, wildcards).
 //
@@ -8360,15 +8369,15 @@ turnLoop:
 		allAgentTools := ts.agent.Tools.GetAll()
 		policyFilteredTools, filterTimePolicyMap := tools.FilterToolsByPolicy(allAgentTools, ts.agent.AgentType, ts.agent.LoadToolPolicy())
 
-		// The unified `load_tool` infra tool is registration-gated, NOT policy-gated:
+		// The unified `ToolSearch` infra tool is registration-gated, NOT policy-gated:
 		// when compressed mode is on it must be callable by EVERY agent — including
-		// deny-by-default agents (Ava/Mia/Ray) — or the model is shown `load_tool` in
+		// deny-by-default agents (Ava/Mia/Ray) — or the model is shown `ToolSearch` in
 		// its defs but its EXECUTION is denied, leaving every lazy tool permanently
 		// unreachable. Force it into both the sent defs (policyFilteredTools) and
 		// the execution-time policy snapshot (filterTimePolicyMap, consulted by
 		// resolveToolPolicyAtExec) as "allow". This mirrors the defs force-include
 		// in buildCompressedToolDefs at the authorization layer. (Found by live
-		// validation: a deny-by-default agent called load_tool and the exec gate
+		// validation: a deny-by-default agent called ToolSearch and the exec gate
 		// denied it — reachability broke.)
 		policyFilteredTools = ensureInfraToolsExecutable(
 			ts.agent.Tools, policyFilteredTools, filterTimePolicyMap)
@@ -8420,11 +8429,11 @@ turnLoop:
 		if cfg.Tools.Manifest.Compressed {
 			providerToolDefs = al.buildCompressedToolDefs(ts, policyFilteredTools)
 		} else {
-			// Non-compressed defs path: strip manifest infra tools (load_tool)
+			// Non-compressed defs path: strip manifest infra tools (ToolSearch)
 			// before surfacing defs to the model. The unified resolver
 			// (tools.EffectiveToolPolicy) force-allows infra UNCONDITIONALLY, so
-			// load_tool is now present in policyFilteredTools even when
-			// compression is off; but load_tool exists only to drive the
+			// ToolSearch is now present in policyFilteredTools even when
+			// compression is off; but ToolSearch exists only to drive the
 			// compressed manifest mechanism and has no function when compression is
 			// off, so the model never sees it here regardless of what the agent's
 			// tool-policy map resolves for it (see stripInfraToolDefs for the
@@ -11279,7 +11288,7 @@ func (al *AgentLoop) assembleMessages(
 // three groups are sent (buildCompressedToolDefs, tool_manifest.go):
 //
 //   - ManifestFull  — full schema, every turn
-//   - ManifestInfra — full schema (load_tool is always callable)
+//   - ManifestInfra — full schema (ToolSearch is always callable)
 //   - ManifestLazy  — full schema ONLY while loaded this session; otherwise it
 //     is one line in the compact manifest block, ~25x cheaper
 //
@@ -12537,7 +12546,7 @@ func (al *AgentLoop) resolveToolPolicyAtExec(
 // effective policy for toolName using FilterToolsByPolicy. Returns "" if the
 // tool is not found in the agent's registered tools.
 func (al *AgentLoop) resolveSingleToolPolicy(ts *turnState, toolName string) string {
-	// The unified `load_tool` infra tool is registration-gated, not policy-gated:
+	// The unified `ToolSearch` infra tool is registration-gated, not policy-gated:
 	// it only exists on the agent when compressed mode or MCP discovery is on,
 	// and when present it MUST always be executable — it drives the manifest
 	// mechanism itself, so denying it makes every lazy tool unreachable. Treat a

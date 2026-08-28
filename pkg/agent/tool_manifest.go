@@ -14,7 +14,7 @@ import (
 // resolveSessionID: prefer the transcript session ID when available (it is a
 // stable, unique session directory name); fall back to the session key when the
 // transcript is disabled (TranscriptSessionID == ""). Both the writer
-// (markToolsLoaded, driven from the `load_tool` closure in the agent loop) and
+// (markToolsLoaded, driven from the `ToolSearch` closure in the agent loop) and
 // the readers (buildCompressedToolDefs, buildToolManifestNote) must call this
 // helper with the same two inputs so they always resolve to the same bucket —
 // a mismatch causes loaded tools to become invisible to the model.
@@ -56,7 +56,7 @@ type infraToolGetter interface {
 	Get(name string) (tools.Tool, bool)
 }
 
-// ensureInfraToolsExecutable guarantees the manifest infra tools (`load_tool`)
+// ensureInfraToolsExecutable guarantees the manifest infra tools (`ToolSearch`)
 // are present in the policy-filtered slice and marked "allow" in policyMap so
 // the execution gate authorizes them for EVERY agent — including deny-by-default
 // agents (Ava/Mia/Ray).
@@ -69,7 +69,7 @@ type infraToolGetter interface {
 // infra tool only if the resolver somehow omitted it (e.g. a test that builds a
 // policy map by hand and passes a registry whose Get returns the tool).
 // Reachability does not depend on the manifest being compressed (when
-// compressed is off, load_tool is stripped from the SENT defs on the
+// compressed is off, ToolSearch is stripped from the SENT defs on the
 // non-compressed path in runTurn, so its allow verdict is moot and surfacing
 // nothing to the model). agentTools==nil is still a no-op (nothing to look the
 // tool up from).
@@ -94,19 +94,19 @@ func ensureInfraToolsExecutable(
 }
 
 // stripInfraToolDefs returns the subset of tools with manifest infra tools
-// (load_tool) removed. Used on the NON-compressed defs path: load_tool is the
+// (ToolSearch) removed. Used on the NON-compressed defs path: ToolSearch is the
 // driver of the compressed manifest mechanism and has no function when
 // compression is off, so the model never sees it there — regardless of what
 // the agent's own tool-policy map resolves for it.
 //
 // Unification note (#438): the single resolver now force-allows infra
-// UNCONDITIONALLY, so FilterToolsByPolicy keeps load_tool in the filtered slice
+// UNCONDITIONALLY, so FilterToolsByPolicy keeps ToolSearch in the filtered slice
 // for EVERY agent. This path strips it so it is not surfaced uncompressed. For
 // an agent whose tools mostly resolve to deny, this matches the old behavior
-// (the old filter dropped load_tool, so it was never sent uncompressed). For
+// (the old filter dropped ToolSearch, so it was never sent uncompressed). For
 // an agent whose tools mostly resolve to allow it is a deliberate, narrow
-// change: the old path DID send load_tool uncompressed, the new path does not
-// — correct, because an uncompressed turn has no load_tool affordance (no
+// change: the old path DID send ToolSearch uncompressed, the new path does not
+// — correct, because an uncompressed turn has no ToolSearch affordance (no
 // manifest block telling the model to use it). The strip touches ONLY infra
 // tools; every other tool's surfaced verdict is unchanged.
 func stripInfraToolDefs(in []tools.Tool) []tools.Tool {

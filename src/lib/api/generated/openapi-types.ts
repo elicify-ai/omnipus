@@ -4918,7 +4918,7 @@ export interface components {
              */
             effective_policy: "allow" | "ask" | "deny";
             /**
-             * @description How the tool is presented to the LLM when the manifest optimization is active. "full" = always sent as a callable tool definition every turn; "compressed" = listed by name only in the system context, schema fetched on demand via load_tool; "infra" = always-callable discovery tool (load_tool / search_tools_*) that drives the manifest mechanism itself and never appears in the manifest block.
+             * @description How the tool is presented to the LLM when the manifest optimization is active. "full" = always sent as a callable tool definition every turn; "compressed" = listed by name only in the system context, schema fetched on demand via ToolSearch; "infra" = always-callable discovery tool (ToolSearch) that drives the manifest mechanism itself and never appears in the manifest block.
              * @example full
              * @enum {string}
              */

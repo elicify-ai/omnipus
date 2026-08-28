@@ -228,16 +228,16 @@ func ResolveEffectivePolicy(cfg *ToolPolicyCfg, toolName string) string {
 // in this exact order:
 //
 //  1. INFRA FORCE-ALLOW (unconditional): if ToolManifestTier(toolName) ==
-//     ManifestInfra (currently exactly {load_tool}), the verdict is "allow" no
+//     ManifestInfra (currently exactly {ToolSearch}), the verdict is "allow" no
 //     matter what the agent or global policy says. Infra tools are
 //     registration-gated, not policy-gated — a deny-by-default agent (Ava/Mia/
-//     Ray) never lists load_tool in its allow-set, so without this force-allow
+//     Ray) never lists ToolSearch in its allow-set, so without this force-allow
 //     every lazy/load-on-demand tool becomes unreachable at EXECUTION time (the
-//     model is shown load_tool but the exec gate denies it). The force-allow is
+//     model is shown ToolSearch but the exec gate denies it). The force-allow is
 //     UNCONDITIONAL — it does NOT depend on cfg.Tools.Manifest.Compressed. This
-//     is safe: when Compressed is off, load_tool is never surfaced to the model
+//     is safe: when Compressed is off, ToolSearch is never surfaced to the model
 //     (buildCompressedToolDefs is not invoked, and the manifest block that
-//     advertises load_tool is not injected), so its resolution is moot and
+//     advertises ToolSearch is not injected), so its resolution is moot and
 //     force-allowing it changes no observable behavior. When Compressed is on,
 //     this is exactly the reachability fix.
 //
@@ -292,7 +292,7 @@ func effectiveToolPolicyWith(
 // view and the gateway's exec gate cannot diverge.
 //
 // Resolution order (see effectiveToolPolicyWith for the full rationale):
-//  1. infra force-allow (load_tool → "allow", unconditional)
+//  1. infra force-allow (ToolSearch → "allow", unconditional)
 //  2. scope gate (unknown scope → "deny"; ScopeCore/ScopeGeneral defer to merge)
 //  3. global×agent strictest-wins merge (deny > ask > allow, god-mode, wildcards)
 //

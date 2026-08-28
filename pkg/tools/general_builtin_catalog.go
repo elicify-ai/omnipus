@@ -204,7 +204,7 @@ func GeneralBuiltinMetadata() []Tool {
 	// all five; nil transport is safe (Execute guards tp==nil; Description static).
 	out = append(out, EmailToolset(nil)...)
 
-	// Unified tool-discovery + load infra (CategoryToolDiscovery): the `load_tool`
+	// Unified tool-discovery + load infra (CategoryToolDiscovery): the `ToolSearch`
 	// infra tool is registered per-agent whenever compressed manifest mode is enabled
 	// OR MCP discovery is enabled (ManifestInfra tier — never appears in the
 	// manifest block; always callable when registered). The metadata instance

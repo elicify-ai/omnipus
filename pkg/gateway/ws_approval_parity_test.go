@@ -121,7 +121,7 @@ func parityCases() []parityCase {
 		// ava: mostly-deny fixture (Ava-like) — every tool below has an
 		// explicit Policies entry in buildParityConfig; none rely on a
 		// default any more (CLAUDE.md hard constraint 6).
-		{"ava/load_tool(infra)", "load_tool", tools.ScopeGeneral, "ava", "custom", "allow"},
+		{"ava/ToolSearch(infra)", "ToolSearch", tools.ScopeGeneral, "ava", "custom", "allow"},
 		{"ava/allowed", "search_web", tools.ScopeGeneral, "ava", "custom", "allow"},
 		{"ava/denied-unlisted", "send_message", tools.ScopeGeneral, "ava", "custom", "deny"},
 		{"ava/ask", "fetch_url", tools.ScopeGeneral, "ava", "custom", "ask"},
@@ -130,7 +130,7 @@ func parityCases() []parityCase {
 		{"ava/global-deny-floor-wins", "send_message_blocked", tools.ScopeGeneral, "ava", "custom", "deny"},
 
 		// jim: mostly-allow fixture (Jim-like) — same note as above.
-		{"jim/load_tool(infra)", "load_tool", tools.ScopeGeneral, "jim", "custom", "allow"},
+		{"jim/ToolSearch(infra)", "ToolSearch", tools.ScopeGeneral, "jim", "custom", "allow"},
 		{"jim/unlisted-allow", "search_web", tools.ScopeGeneral, "jim", "custom", "allow"},
 		{"jim/explicit-deny", "exec", tools.ScopeCore, "jim", "custom", "deny"},
 		{"jim/explicit-ask", "fetch_url", tools.ScopeGeneral, "jim", "custom", "ask"},

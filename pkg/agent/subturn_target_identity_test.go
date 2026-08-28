@@ -575,7 +575,7 @@ func TestSpawnSubTurn_NativeDispatch_AdoptsFullTargetIdentityIncludingModel(t *t
 	}
 	// ID DOES come from the TARGET too — this is what tools.WithAgentID
 	// threads into the tool-execution context (loop.go), which is what
-	// load_tool's canLoad resolver and the audit/tool-approval/transcript
+	// ToolSearch's canLoad resolver and the audit/tool-approval/transcript
 	// attribution all key off. A native sub-turn attributed to the parent's
 	// ID is the wrong-audit-attribution half of the identity bug.
 	if sawAgentID != target.ID {
@@ -642,7 +642,7 @@ func (p *policyCapturingProvider) snapshot() (verdict string, agentNil, policyNi
 // LoadToolPolicy() returned nil there — FilterToolsByPolicy treats nil as an
 // empty policy, which fails EVERY tool closed to deny
 // (resolveEffectivePolicyWith: no entry on either side -> deny). Separately,
-// load_tool's canLoad resolver looked up "the calling agent" via a fresh
+// ToolSearch's canLoad resolver looked up "the calling agent" via a fresh
 // registry lookup keyed by tools.ToolAgentID(ctx) — which, before the
 // identity half of this fix, was still the PARENT's ID for native dispatch —
 // so the load-gate and the execution-gate disagreed about whose policy

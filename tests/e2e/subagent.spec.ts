@@ -364,7 +364,7 @@ test(
 //    ADR-052 wave1 (f9bcfae7) the catalog also contains `create_task` +
 //    `run_task`. `create_task` is a FULL-manifest tool (pkg/tools/manifest.go —
 //    always sent as a callable def) while `delegate` is LAZY (needs a
-//    `load_tool` round-trip first), so the model is structurally biased toward
+//    `ToolSearch` round-trip first), so the model is structurally biased toward
 //    the task route. In the failing run Jim said "I'll delegate this to Worker"
 //    and then reached for create_task + run_task; `run_task` blocked the parent
 //    turn for 304 SECONDS, busting the 300s budget by 4s. The passing retry used
@@ -427,7 +427,7 @@ test(
     // actually complete (see the RC6 note above). `list_directory` on "." is
     // the agent's own workspace root and is known-permitted; `/tmp` is not.
     // No "do not call any other tool" guardrail here: `delegate` is a LAZY
-    // manifest tool, so the model legitimately calls `load_tool` first.
+    // manifest tool, so the model legitimately calls `ToolSearch` first.
     await input.fill(
       [
         'Use the `delegate` tool exactly once to hand this to a subagent:',

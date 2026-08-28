@@ -208,7 +208,7 @@ describe('ActivityPanel — final result / interrupt reason (Fix 2)', () => {
   // exercised for RUNNING items (see "ActivityPanel — expandable native
   // row" above) — this pins the same behavior for a FINISHED
   // (recentlyFinished) item, whose steps are just as reachable.
-  it('an expanded finished item shows its (non-load_tool) steps', () => {
+  it('an expanded finished item shows its (non-ToolSearch) steps', () => {
     const visibleStep = {
       kind: 'tool' as const,
       tool: { id: 'fin1', call_id: 'fin1', tool: 'fs.list', params: { path: '/tmp' }, status: 'success' as const, result: 'a.txt' },
@@ -228,10 +228,10 @@ describe('ActivityPanel — final result / interrupt reason (Fix 2)', () => {
     expect(badge).toHaveAttribute('data-tool', 'fs.list')
   })
 
-  it('an expanded finished item HIDES a load_tool step by default (non-verbose) but shows other steps', () => {
+  it('an expanded finished item HIDES a ToolSearch step by default (non-verbose) but shows other steps', () => {
     const loadToolStep = {
       kind: 'tool' as const,
-      tool: { id: 'fin2', call_id: 'fin2', tool: 'load_tool', params: { name: 'web_search' }, status: 'success' as const, result: 'ok' },
+      tool: { id: 'fin2', call_id: 'fin2', tool: 'ToolSearch', params: { name: 'web_search' }, status: 'success' as const, result: 'ok' },
     }
     const visibleStep = {
       kind: 'tool' as const,
@@ -273,13 +273,13 @@ describe('ActivityPanel — final result / interrupt reason (Fix 2)', () => {
 // ── Fix 2 (2026-07-16, revised same day): panel-only step visibility ───────
 // The panel is the designated transparency surface for exactly the detail
 // the thread hides by default — its default INVERTS to show everything
-// except `load_tool` (shouldRenderToolCallInPanel, toolVisibility.ts),
+// except `ToolSearch` (shouldRenderToolCallInPanel, toolVisibility.ts),
 // rather than applying the thread's shouldRenderToolCall hidden-set (which
 // would hide a bash poll/read step, a background delegate dispatch, etc.).
 // ToolCallBadge is told to use this policy via surface="panel" — see
 // ActivityPanel.tsx's step-mapping.
 
-describe('ActivityPanel — panel-only step visibility policy (shows all but load_tool)', () => {
+describe('ActivityPanel — panel-only step visibility policy (shows all but ToolSearch)', () => {
   function makeToolStep(overrides: Partial<import('@/lib/api').ToolCall & { call_id: string }> = {}) {
     return {
       kind: 'tool' as const,
@@ -310,8 +310,8 @@ describe('ActivityPanel — panel-only step visibility policy (shows all but loa
     expect(badge).toHaveAttribute('data-tool', 'bash')
   })
 
-  it('HIDES a load_tool step by default (non-verbose)', () => {
-    const loadToolStep = makeToolStep({ id: 'lt1', call_id: 'lt1', tool: 'load_tool' })
+  it('HIDES a ToolSearch step by default (non-verbose)', () => {
+    const loadToolStep = makeToolStep({ id: 'lt1', call_id: 'lt1', tool: 'ToolSearch' })
     render(
       <ActivityPanel
         open
@@ -324,11 +324,11 @@ describe('ActivityPanel — panel-only step visibility policy (shows all but loa
     expect(screen.queryByTestId('tool-call-badge')).not.toBeInTheDocument()
   })
 
-  it('SHOWS a load_tool step once verbose chat is enabled', () => {
+  it('SHOWS a ToolSearch step once verbose chat is enabled', () => {
     act(() => {
       useChatPreferencesStore.setState({ verboseChatEnabled: true })
     })
-    const loadToolStep = makeToolStep({ id: 'lt1', call_id: 'lt1', tool: 'load_tool' })
+    const loadToolStep = makeToolStep({ id: 'lt1', call_id: 'lt1', tool: 'ToolSearch' })
     render(
       <ActivityPanel
         open
@@ -340,7 +340,7 @@ describe('ActivityPanel — panel-only step visibility policy (shows all but loa
     fireEvent.click(screen.getByRole('button', { expanded: false }))
     const badge = screen.getByTestId('tool-call-badge')
     expect(badge).toBeInTheDocument()
-    expect(badge).toHaveAttribute('data-tool', 'load_tool')
+    expect(badge).toHaveAttribute('data-tool', 'ToolSearch')
   })
 
   it('SHOWS a failed (error-status) delegate step — the panel is the transparency surface for exactly what the thread hides on failure', () => {

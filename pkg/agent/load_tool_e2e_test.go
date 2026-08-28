@@ -1,14 +1,14 @@
-// Omnipus — load_tool end-to-end message-history integrity test (v0.1.0)
+// Omnipus — ToolSearch end-to-end message-history integrity test (v0.1.0)
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
 // TestLoadTool_EndToEndMessageHistoryIntegrity drives a two-turn scenario that
 // exercises the regression that commit 769c719e introduced: an orphaned tool
-// result in the message history after a load_tool call. The test:
+// result in the message history after a ToolSearch call. The test:
 //
 //  1. Uses a ScenarioProvider scripted for three LLM turns:
-//     Turn 1: the model calls load_tool (a lazy tool it wants to activate).
-//     Turn 2: after load_tool succeeds, the model calls the now-loaded tool.
+//     Turn 1: the model calls ToolSearch (a lazy tool it wants to activate).
+//     Turn 2: after ToolSearch succeeds, the model calls the now-loaded tool.
 //     Turn 3: the tool call resolves; the model emits a plain-text conclusion.
 //
 //  2. After the full conversation, the messages captured by the ScenarioProvider
@@ -169,13 +169,13 @@ func newE2ECfg(t *testing.T, workspaceDir string) *config.Config {
 	return cfg
 }
 
-// TestLoadTool_EndToEndMessageHistoryIntegrity drives the two-turn load_tool
+// TestLoadTool_EndToEndMessageHistoryIntegrity drives the two-turn ToolSearch
 // scenario and asserts that the message history passed to ALL LLM calls is
 // normalization-valid (no orphan tool results, no empty assistants).
 //
 // Scripted scenario (three Chat steps via ScenarioProvider):
 //
-//	Step 1 → model calls load_tool(names:["find_skills"])
+//	Step 1 → model calls ToolSearch(names:["find_skills"])
 //	Step 2 → model calls find_skills(query:"test")  [now loaded]
 //	Step 3 → model emits a plain-text conclusion
 //
@@ -190,13 +190,13 @@ func TestLoadTool_EndToEndMessageHistoryIntegrity(t *testing.T) {
 
 	// find_skills is ManifestLazy and policy-allowed for Jim. It is a good
 	// candidate: it is a real registered tool, not a synthetic placeholder,
-	// so the agent loop goes through the full load_tool → register → execute path.
+	// so the agent loop goes through the full ToolSearch → register → execute path.
 	const lazyTool = "find_skills"
 
 	// ScenarioProvider: three steps as described above.
 	// WithToolCall generates the ToolCall ID as "<name>-0".
 	scenario := testutil.NewScenario().
-		WithToolCall("load_tool", `{"names":["find_skills"]}`).
+		WithToolCall("ToolSearch", `{"names":["find_skills"]}`).
 		WithToolCall(lazyTool, `{"query":"test"}`).
 		WithText("Done. Here are the skills I found.")
 
@@ -229,10 +229,10 @@ func TestLoadTool_EndToEndMessageHistoryIntegrity(t *testing.T) {
 
 	// Exactly 3 LLM calls: one per scripted step.
 	assert.Equal(t, 3, recorder.CallCount(),
-		"expected exactly 3 LLM calls (load_tool step + find_skills step + conclusion step)")
+		"expected exactly 3 LLM calls (ToolSearch step + find_skills step + conclusion step)")
 
 	// ── Assert history validity at the SECOND LLM call (call index 1) ───────
-	// Call #2 receives the history after load_tool executed — this is the
+	// Call #2 receives the history after ToolSearch executed — this is the
 	// critical moment where an orphan tool-result could appear if the loop
 	// inserts a tool-result without a matching assistant ToolCall entry.
 	// Asserting here means a transient orphan cannot hide behind a subsequent
@@ -241,8 +241,8 @@ func TestLoadTool_EndToEndMessageHistoryIntegrity(t *testing.T) {
 	require.NotNil(t, call2Messages,
 		"recorder must have captured messages for the 2nd LLM call (index 1)")
 
-	assertNoOrphanToolResults(t, "2nd LLM call (after load_tool)", call2Messages)
-	assertNormalizationIsNoop(t, "2nd LLM call (after load_tool)", call2Messages)
+	assertNoOrphanToolResults(t, "2nd LLM call (after ToolSearch)", call2Messages)
+	assertNormalizationIsNoop(t, "2nd LLM call (after ToolSearch)", call2Messages)
 
 	// ── Inspect the message history passed to the FINAL (3rd) LLM call ──────
 	// The final call's history contains the full accumulated messages including
@@ -259,17 +259,17 @@ func TestLoadTool_EndToEndMessageHistoryIntegrity(t *testing.T) {
 
 	// ── Tool-presence sanity checks ──────────────────────────────────────────
 
-	// The load_tool call must appear in the final history.
+	// The ToolSearch call must appear in the final history.
 	foundLoadTool := false
 	for _, m := range finalMessages {
 		for _, tc := range m.ToolCalls {
-			if tc.Function != nil && tc.Function.Name == "load_tool" {
+			if tc.Function != nil && tc.Function.Name == "ToolSearch" {
 				foundLoadTool = true
 			}
 		}
 	}
 	assert.True(t, foundLoadTool,
-		"load_tool call must appear in the message history sent to the final LLM call")
+		"ToolSearch call must appear in the message history sent to the final LLM call")
 
 	// The find_skills call must also appear (proving it was loaded and invoked).
 	foundFindSkills := false

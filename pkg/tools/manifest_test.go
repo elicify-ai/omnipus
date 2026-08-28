@@ -54,14 +54,14 @@ func TestIsFullManifestTool(t *testing.T) {
 	if IsFullManifestTool("create_agent") {
 		t.Error("IsFullManifestTool(create_agent) = true, want false")
 	}
-	if IsFullManifestTool("load_tool") {
-		t.Error("IsFullManifestTool(load_tool) = true, want false (it is Infra)")
+	if IsFullManifestTool("ToolSearch") {
+		t.Error("IsFullManifestTool(ToolSearch) = true, want false (it is Infra)")
 	}
 }
 
 func TestToolManifestTier_InfraSet(t *testing.T) {
-	// The unified `load_tool` tool is the sole infra tool.
-	infraNames := []string{"load_tool"}
+	// The unified `ToolSearch` tool is the sole infra tool.
+	infraNames := []string{"ToolSearch"}
 	for _, n := range infraNames {
 		got := ToolManifestTier(n)
 		if got != ManifestInfra {
@@ -74,6 +74,28 @@ func TestToolManifestTier_InfraSet(t *testing.T) {
 		if got != ManifestLazy {
 			t.Errorf("ToolManifestTier(%q) = %v, want ManifestLazy (no longer infra)", n, got)
 		}
+	}
+}
+
+// TestInfraManifestToolNames_ContainsRenamedTool pins the D1 rename
+// (ADR-071 D1, spec FR-010, W-D1 test 7) at the classifier map key:
+// InfraManifestToolNames() must expose "ToolSearch" and must never expose
+// the retired "load_tool" name, so a future edit that reverts the map key
+// (or reintroduces the old literal alongside it) fails this test rather than
+// silently reopening the rename.
+func TestInfraManifestToolNames_ContainsRenamedTool(t *testing.T) {
+	names := InfraManifestToolNames()
+	found := false
+	for _, n := range names {
+		if n == "ToolSearch" {
+			found = true
+		}
+		if n == "load_tool" {
+			t.Errorf("InfraManifestToolNames() contains retired name %q", n)
+		}
+	}
+	if !found {
+		t.Errorf("InfraManifestToolNames() = %v, want it to contain \"ToolSearch\"", names)
 	}
 }
 
@@ -150,7 +172,7 @@ func TestBuildCompressedManifest_Basic(t *testing.T) {
 		// full tool — must be excluded
 		&fakeManifestTool{name: "read_file", desc: "Read a file.", cat: CategoryFilesystem},
 		// infra tool — must be excluded
-		&fakeManifestTool{name: "load_tool", desc: "Discover and load tools.", cat: CategoryToolDiscovery},
+		&fakeManifestTool{name: "ToolSearch", desc: "Discover and load tools.", cat: CategoryToolDiscovery},
 	}
 
 	got := BuildCompressedManifest(toolList, nil)
@@ -174,15 +196,15 @@ func TestBuildCompressedManifest_Basic(t *testing.T) {
 	if strings.Contains(got, "  - read_file") {
 		t.Error("manifest must NOT contain full-tier tool read_file as an entry")
 	}
-	if strings.Contains(got, "  - load_tool") {
-		t.Error("manifest must NOT contain infra tool 'load_tool' as an entry")
+	if strings.Contains(got, "  - ToolSearch") {
+		t.Error("manifest must NOT contain infra tool 'ToolSearch' as an entry")
 	}
 	// The manifest header prose uses the new tool name.
 	if strings.Contains(got, "action='load'") {
 		t.Error("manifest header must NOT mention \"action='load'\" (removed: no action param)")
 	}
-	if !strings.Contains(got, "load_tool") {
-		t.Errorf("manifest header must mention 'load_tool'; got: %s", got)
+	if !strings.Contains(got, "ToolSearch") {
+		t.Errorf("manifest header must mention 'ToolSearch'; got: %s", got)
 	}
 	if !strings.Contains(got, "names") || !strings.Contains(got, "query") {
 		t.Errorf("manifest header must mention 'names' and 'query' (new param-inferred wording); got: %s", got)
@@ -209,7 +231,7 @@ func TestBuildCompressedManifest_EmptyWhenAllExcluded(t *testing.T) {
 	// Only full and infra tools — manifest must be empty.
 	toolList := []Tool{
 		&fakeManifestTool{name: "read_file", desc: "Read.", cat: CategoryFilesystem},
-		&fakeManifestTool{name: "load_tool", desc: "Discover and load tools.", cat: CategoryToolDiscovery},
+		&fakeManifestTool{name: "ToolSearch", desc: "Discover and load tools.", cat: CategoryToolDiscovery},
 	}
 	got := BuildCompressedManifest(toolList, nil)
 	if got != "" {
@@ -405,12 +427,12 @@ func TestManifestTier_PromotedTools_C2(t *testing.T) {
 	}
 
 	// The infra loader must be ManifestInfra (not Full, not Lazy).
-	got := ToolManifestTier("load_tool")
+	got := ToolManifestTier("ToolSearch")
 	if got != ManifestInfra {
-		t.Errorf("C2: ToolManifestTier(\"load_tool\") = %v, want ManifestInfra", got)
+		t.Errorf("C2: ToolManifestTier(\"ToolSearch\") = %v, want ManifestInfra", got)
 	}
-	if IsFullManifestTool("load_tool") {
-		t.Error("C2: IsFullManifestTool(\"load_tool\") = true, want false (it is ManifestInfra, not Full)")
+	if IsFullManifestTool("ToolSearch") {
+		t.Error("C2: IsFullManifestTool(\"ToolSearch\") = true, want false (it is ManifestInfra, not Full)")
 	}
 
 	// Confirm none of the four was accidentally also infra.
@@ -423,10 +445,10 @@ func TestManifestTier_PromotedTools_C2(t *testing.T) {
 
 // TestInfraManifestToolNames_Set asserts the infra accessor returns the expected
 // sorted set (single source of truth consumed by the loop's force-include).
-// The set is just {"load_tool"}.
+// The set is just {"ToolSearch"}.
 func TestInfraManifestToolNames_Set(t *testing.T) {
 	got := InfraManifestToolNames()
-	want := []string{"load_tool"}
+	want := []string{"ToolSearch"}
 	if len(got) != len(want) {
 		t.Fatalf("InfraManifestToolNames() = %v, want %v", got, want)
 	}

@@ -447,3 +447,74 @@ func TestToolsTool_Query_AutoLoad_MakesToolCallable(t *testing.T) {
 		t.Error("mcp_target must be callable (Get-able) after tools{query:...} auto-loads it")
 	}
 }
+
+// TestDiscoveryTool_ByNameAndByDescriptionUnchanged pins ADR-071 D1 / spec
+// FR-010 (W-D1 test 12): the rename is name-only — both the by-name ("names")
+// and by-description ("query") paths behave identically to their pre-rename
+// mechanics on the SAME tool instance, now answering to "ToolSearch". This is
+// the integration-level parity check the spec's Independent Test for User
+// Story 2 asks for ("Rename nothing else. Confirm the capability answers to
+// its new name for both the by-name and by-description paths").
+func TestDiscoveryTool_ByNameAndByDescriptionUnchanged(t *testing.T) {
+	reg := NewToolRegistry()
+	reg.RegisterHidden(&mockSearchableTool{name: "mcp_by_name", desc: "loadable directly by exact name"})
+	reg.RegisterHidden(&mockSearchableTool{name: "mcp_by_desc", desc: "discoverable only by describing intent"})
+
+	var markedLoaded []string
+	available := map[string]struct{}{"mcp_by_name": {}, "mcp_by_desc": {}}
+	tt := NewToolsTool(reg, 5, 10)
+	tt.SetResolver(
+		func(_ context.Context, name string) (bool, string) {
+			if _, ok := available[name]; ok {
+				return true, ""
+			}
+			return false, name + " — not available in test"
+		},
+		func(_ context.Context, names []string) (map[string]any, []string) {
+			markedLoaded = append(markedLoaded, names...)
+			sc := make(map[string]any, len(names))
+			for _, n := range names {
+				sc[n] = map[string]any{"name": n}
+			}
+			return sc, nil
+		},
+	)
+
+	if got := tt.Name(); got != "ToolSearch" {
+		t.Fatalf("Name() = %q, want %q", got, "ToolSearch")
+	}
+
+	ctx := context.Background()
+
+	// By-name path: "names" resolves and loads the exact tool, unchanged.
+	byName := tt.Execute(ctx, map[string]any{"names": []any{"mcp_by_name"}})
+	if byName.IsError {
+		t.Fatalf("by-name path failed under the renamed tool: %s", byName.ForLLM)
+	}
+	if !strings.Contains(byName.ForLLM, "mcp_by_name") {
+		t.Errorf("by-name result must mention the loaded tool; got: %s", byName.ForLLM)
+	}
+	if _, ok := reg.Get("mcp_by_name"); !ok {
+		t.Error("by-name path must promote the hidden tool (PromoteTools), same as before the rename")
+	}
+
+	// By-description path: "query" still ranks, auto-loads the top hit, and
+	// returns the full match list — same shape as before the rename.
+	byDesc := tt.Execute(ctx, map[string]any{"query": "describing intent"})
+	if byDesc.IsError {
+		t.Fatalf("by-description path failed under the renamed tool: %s", byDesc.ForLLM)
+	}
+	if !strings.Contains(byDesc.ForLLM, "mcp_by_desc") {
+		t.Errorf("by-description result must mention the matched tool; got: %s", byDesc.ForLLM)
+	}
+	if !strings.Contains(byDesc.ForLLM, `"loaded"`) {
+		t.Errorf("by-description result must include the auto-loaded 'loaded' field; got: %s", byDesc.ForLLM)
+	}
+	if _, ok := reg.Get("mcp_by_desc"); !ok {
+		t.Error("by-description path must promote its auto-loaded top hit, same as before the rename")
+	}
+
+	if len(markedLoaded) != 2 {
+		t.Errorf("markLoaded must have been called for both tools across the two paths; got: %v", markedLoaded)
+	}
+}
