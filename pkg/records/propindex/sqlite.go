@@ -520,12 +520,12 @@ func (ix *Index) streamCandidates(ctx context.Context, q string, args []any, vis
 
 	for rows.Next() {
 		var (
-			id                                     int64
-			path, recordType, sourceHash           string
-			recordID                               []byte
-			prop, vtype                            sql.NullString
-			elem, state, quoted                    sql.NullInt64
-			vText, vNum, vTime, vLink, vRaw        []byte
+			id                              int64
+			path, recordType, sourceHash    string
+			recordID                        []byte
+			prop, vtype                     sql.NullString
+			elem, state, quoted             sql.NullInt64
+			vText, vNum, vTime, vLink, vRaw []byte
 		)
 		if err := rows.Scan(&id, &path, &recordType, &recordID, &sourceHash,
 			&prop, &elem, &state, &vtype, &vText, &vNum, &vTime, &vLink, &vRaw, &quoted); err != nil {
@@ -657,9 +657,9 @@ func (ix *Index) Relations(ctx context.Context, sel Selector, visit func(Relatio
 
 	for rows.Next() {
 		var (
-			hit                             RelationHit
-			recordID                        []byte
-			target, heading, display, raw   []byte
+			hit                           RelationHit
+			recordID                      []byte
+			target, heading, display, raw []byte
 		)
 		if err := rows.Scan(&hit.Path, &hit.RecordType, &recordID, &hit.SourceHash,
 			&hit.Relation.Prop, &hit.Relation.Elem, &target, &heading, &display, &raw); err != nil {
