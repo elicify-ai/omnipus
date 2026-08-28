@@ -88,11 +88,12 @@ func preGateHome(t *testing.T, agentIDs ...string) string {
 	return tmpHome
 }
 
-// runPreGateTurn drives one scheduled turn at agentID and returns the turn
-// error plus every ErrorPayload the loop emitted. ProcessScheduled pins the
-// acting agent directly (no routing), which is what lets one loop drive
-// several differently-degraded agents in the same config.
-func (f *preGateFixture) runPreGateTurn(t *testing.T, agentID string) (error, []ErrorPayload, []Event) {
+// runPreGateTurn drives one scheduled turn at agentID and returns every
+// ErrorPayload the loop emitted, the full event stream, and the turn error
+// (last, per ST1008). ProcessScheduled pins the acting agent directly (no
+// routing), which is what lets one loop drive several differently-degraded
+// agents in the same config.
+func (f *preGateFixture) runPreGateTurn(t *testing.T, agentID string) ([]ErrorPayload, []Event, error) {
 	t.Helper()
 
 	sub := f.loop.SubscribeEvents(32)
@@ -113,7 +114,7 @@ func (f *preGateFixture) runPreGateTurn(t *testing.T, agentID string) (error, []
 			payloads = append(payloads, p)
 		}
 	}
-	return procErr, payloads, events
+	return payloads, events, procErr
 }
 
 // errorCodes returns the codes carried by every emitted ErrorPayload, for
@@ -231,7 +232,7 @@ func TestTurn_ModelUnassignedTypedError(t *testing.T) {
 		"fixture precondition: the earlier provider gate must NOT apply, or this test passes for the wrong reason")
 	require.True(t, agentA.needsModelSnapshot(), "the instance must carry the needs_model state")
 
-	procErr, payloads, events := f.runPreGateTurn(t, "agent-a")
+	payloads, events, procErr := f.runPreGateTurn(t, "agent-a")
 
 	require.Error(t, procErr, "a turn on an agent with no model must be refused")
 	assert.True(t, errors.Is(procErr, ErrAgentModelUnassigned),
@@ -306,7 +307,7 @@ func TestTurn_PreTurnGateOrder(t *testing.T) {
 		require.True(t, agentB.needsModelSnapshot(),
 			"fixture precondition: stage 2 ALSO applies — SC-013's 'both apply' case")
 
-		procErr, payloads, events := f.runPreGateTurn(t, "agent-b")
+		payloads, events, procErr := f.runPreGateTurn(t, "agent-b")
 
 		require.Error(t, procErr)
 		assert.True(t, errors.Is(procErr, ErrAgentNeedsProvider),
@@ -331,7 +332,7 @@ func TestTurn_PreTurnGateOrder(t *testing.T) {
 		require.False(t, needsProvider, "fixture precondition: stage 1 does NOT apply")
 		require.True(t, agentA.needsModelSnapshot(), "fixture precondition: stage 2 applies")
 
-		procErr, payloads, events := f.runPreGateTurn(t, "agent-a")
+		payloads, events, procErr := f.runPreGateTurn(t, "agent-a")
 
 		require.Error(t, procErr)
 		assert.True(t, errors.Is(procErr, ErrAgentModelUnassigned),
@@ -384,7 +385,7 @@ func TestTurn_PreTurnGateOrder(t *testing.T) {
 		require.False(t, agentC.needsModelSnapshot(), "fixture precondition: stage 2 does NOT apply")
 		require.True(t, agentC.WindowUnknown, "fixture precondition: stage 3 applies")
 
-		procErr, payloads, events := f.runPreGateTurn(t, "agent-c")
+		payloads, events, procErr := f.runPreGateTurn(t, "agent-c")
 
 		require.Error(t, procErr)
 		assert.True(t, errors.Is(procErr, ErrContextWindowUnknown),

@@ -78,7 +78,9 @@ func TestDeleteProvider_OpenAIRowNeverDeletesChatGPTGrant(t *testing.T) {
 
 	w := doProviderDelete(t, api, "openai", "", cfg, true)
 	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
-	assert.True(t, deleteRespBody(t, w)["deleted"].(bool))
+	deletedVal, ok := deleteRespBody(t, w)["deleted"].(bool)
+	require.True(t, ok, "response 'deleted' field is not a bool: %v", deleteRespBody(t, w)["deleted"])
+	assert.True(t, deletedVal)
 
 	assert.NotContains(t, diskProviderIDs(t, tmpDir), "openai", "the deleted row must be gone")
 	assert.Contains(t, diskProviderIDs(t, tmpDir), "openai-chatgpt",

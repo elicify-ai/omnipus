@@ -89,11 +89,18 @@ func TestConfig_NoModelNameDefaultKey(t *testing.T) {
 	if err := json.Unmarshal(raw, &top); err != nil {
 		t.Fatal(err)
 	}
-	defaults := top["agents"].(map[string]any)["defaults"].(map[string]any)
-	if _, ok := defaults["model_name"]; ok {
+	agents, ok := top["agents"].(map[string]any)
+	if !ok {
+		t.Fatalf("marshaled config's agents is not a map: %T", top["agents"])
+	}
+	defaults, ok := agents["defaults"].(map[string]any)
+	if !ok {
+		t.Fatalf("marshaled config's agents.defaults is not a map: %T", agents["defaults"])
+	}
+	if _, hasModelName := defaults["model_name"]; hasModelName {
 		t.Fatal("agents.defaults.model_name must not exist in the config schema (CRIT-001)")
 	}
-	if _, ok := defaults["provider"]; ok {
+	if _, hasProvider := defaults["provider"]; hasProvider {
 		t.Fatal("agents.defaults.provider was folded into default_model and must not be serialized on its own")
 	}
 	dm, ok := defaults["default_model"].(map[string]any)

@@ -336,7 +336,11 @@ func TestCopilotCliProvider_FactoryDispatchByCliKind(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewCliProviderForKind() error: %v", err)
 		}
-		if got := p.(*CopilotCliProvider).command; got != "/opt/bin/copilot" {
+		cp, ok := p.(*CopilotCliProvider)
+		if !ok {
+			t.Fatalf("NewCliProviderForKind(CLIKindCopilot) returned %T, want *CopilotCliProvider", p)
+		}
+		if got := cp.command; got != "/opt/bin/copilot" {
 			t.Errorf("command = %q, want the cli_path override", got)
 		}
 	})

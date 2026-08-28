@@ -66,7 +66,9 @@ func TestDeleteProvider_RemovesOAuthCredential(t *testing.T) {
 
 	w := doProviderDelete(t, api, "openai-chatgpt", "", cfg, true)
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
-	assert.True(t, deleteRespBody(t, w)["deleted"].(bool))
+	deletedVal, ok := deleteRespBody(t, w)["deleted"].(bool)
+	require.True(t, ok, "response 'deleted' field is not a bool: %v", deleteRespBody(t, w)["deleted"])
+	assert.True(t, deletedVal)
 	assert.NotContains(t, diskProviderIDs(t, tmpDir), "openai-chatgpt")
 
 	assert.False(t, credentialExists(t, api, "openai-chatgpt_API_KEY"),
@@ -98,7 +100,9 @@ func TestDeleteProvider_MissingOAuthEntryIsSuccess(t *testing.T) {
 
 	w := doProviderDelete(t, api, "openrouter", "", cfg, true)
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
-	assert.True(t, deleteRespBody(t, w)["deleted"].(bool))
+	deletedVal, ok := deleteRespBody(t, w)["deleted"].(bool)
+	require.True(t, ok, "response 'deleted' field is not a bool: %v", deleteRespBody(t, w)["deleted"])
+	assert.True(t, deletedVal)
 	assert.NotContains(t, diskProviderIDs(t, tmpDir), "openrouter")
 	assert.False(t, credentialExists(t, api, "openrouter_API_KEY"))
 	assert.False(t, credentialExists(t, api, credentials.OAuthEntryName("openrouter")))
