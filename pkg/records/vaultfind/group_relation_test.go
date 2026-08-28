@@ -1,0 +1,309 @@
+// Omnipus — ADR-068 D5/D10, R-8, FR-028, FR-029: grouping by a relation
+// compares by target IDENTITY, and an unresolved value is reported, never
+// silently rendered as its own group.
+// License: MIT
+// Copyright (c) 2026 Omnipus contributors
+
+//go:build !records_no_sqlite && !mipsle && !netbsd && !(freebsd && arm)
+
+package vaultfind
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/records"
+	"github.com/elicify-ai/omnipus/pkg/records/propindex"
+)
+
+// ---------------------------------------------------------------------------
+// A THIRD, INDEPENDENT FIXTURE
+//
+// near_test.go's nearFixture already proves this file's exact pattern is the
+// right one — a test-controlled resolver stub, because the production
+// wikilink resolver (pkg/vaultprops) is out of this package's scope (doc.go).
+// This is its OWN declaration rather than a reuse of nearFixture: both are
+// Stage 3 work landing in the same package concurrently, and a shared
+// mutable fixture two agents both extend is exactly the shared-state risk
+// the coordinator's rules exist to avoid. Same "greenhouse" vocabulary
+// (ADR-068 D0), independently declared.
+// ---------------------------------------------------------------------------
+
+const groupBedYAML = `
+schema_version: 1
+type: bed
+label: Bed
+identity:
+  prefix: BED
+properties:
+  name: { type: text, required: true }
+`
+
+const groupPlantYAML = `
+schema_version: 1
+type: plant
+label: Plant
+identity:
+  prefix: PL
+properties:
+  species: { type: text, required: true }
+  bed:     { type: relation, to: bed, inverse: plants }
+`
+
+func groupSchemaSet(t *testing.T) *records.SchemaSet {
+	t.Helper()
+	root := t.TempDir()
+	dir := records.SchemaDir(root)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "bed.yaml"), []byte(groupBedYAML), 0o600); err != nil {
+		t.Fatalf("WriteFile(bed.yaml): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "plant.yaml"), []byte(groupPlantYAML), 0o600); err != nil {
+		t.Fatalf("WriteFile(plant.yaml): %v", err)
+	}
+	set, report, err := records.LoadSchemas(root)
+	if err != nil {
+		t.Fatalf("LoadSchemas: %v", err)
+	}
+	if !report.OK() {
+		t.Fatalf("the fixture schema was rejected: %v", report.Rejections)
+	}
+	return set
+}
+
+type groupFixture struct {
+	t       *testing.T
+	store   propindex.Store
+	set     *records.SchemaSet
+	text    *stubText
+	targets map[string]string // wikilink Target text -> record identity
+}
+
+func newGroupFixture(t *testing.T) *groupFixture {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "properties.db")
+	store, err := propindex.Open(context.Background(), path, propindex.Options{})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	})
+	return &groupFixture{
+		t: t, store: store, set: groupSchemaSet(t),
+		text:    &stubText{hits: map[string]TextHit{}},
+		targets: map[string]string{},
+	}
+}
+
+func (f *groupFixture) write(path, src string) {
+	f.t.Helper()
+	b := []byte(src)
+	rec := records.ParseRecord(path, b)
+	sc, _ := f.set.Get(rec.TypeName())
+	rows := propindex.BuildNoteRows(rec, sc, b, propindex.SourceHash(b))
+	if err := f.store.UpsertNote(context.Background(), rows); err != nil {
+		f.t.Fatalf("UpsertNote(%s): %v", path, err)
+	}
+	f.text.hits[path] = TextHit{Path: path, SourceHash: rows.SourceHash, Score: 1}
+}
+
+// bed writes a bed record and registers EVERY name it may legally be
+// addressed by — a real vault can hold several wikilinks to one target
+// (a rename ADR-067 D10 has not yet rewritten everywhere, or a deliberate
+// [[Target|alias]]), and D5/R-8's whole claim is that grouping must not
+// care which spelling a particular source record happened to use.
+func (f *groupFixture) bed(id string, names ...string) {
+	f.t.Helper()
+	primary := names[0]
+	f.write(fmt.Sprintf("garden/beds/%s.md", id), fmt.Sprintf(`---
+type: bed
+id: %s
+name: %s
+---
+`, id, primary))
+	for _, n := range names {
+		f.targets[n] = id
+	}
+}
+
+func (f *groupFixture) plant(id, species, bedTarget string) {
+	f.t.Helper()
+	f.write(fmt.Sprintf("garden/plants/%s.md", id), fmt.Sprintf(`---
+type: plant
+id: %s
+species: %s
+bed: "[[%s]]"
+---
+`, id, species, bedTarget))
+}
+
+func (f *groupFixture) resolve(w records.Wikilink) (string, bool) {
+	id, ok := f.targets[w.Target]
+	return id, ok
+}
+
+func (f *groupFixture) deps() Deps {
+	return Deps{Schemas: f.set, Store: f.store, Text: f.text, Resolve: f.resolve, Epoch: 1}
+}
+
+// ---------------------------------------------------------------------------
+
+// TestGroupByRelation_IdentityNotDisplayText is D5/R-8 applied to FR-029: two
+// plants whose `bed` wikilink names the SAME target through TWO DIFFERENT
+// spellings ("Greenhouse" and the alias "The Big Greenhouse") land in ONE
+// group, because grouping compares the resolved record identity, not the
+// wikilink's own text.
+func TestGroupByRelation_IdentityNotDisplayText(t *testing.T) {
+	f := newGroupFixture(t)
+	f.bed("BED-GH", "Greenhouse", "The Big Greenhouse")
+	f.plant("PL-0001", "Monstera", "Greenhouse")
+	f.plant("PL-0002", "Fern", "The Big Greenhouse")
+
+	groups := []string{"bed"}
+	r := req(withType("plant"))
+	r.GroupBy = &groups
+	resp := mustFind(t, f.deps(), r)
+
+	if resp.Groups == nil {
+		t.Fatalf("no groups were returned")
+	}
+	if got := len(*resp.Groups); got != 1 {
+		t.Fatalf("got %d groups for two spellings of ONE target, want 1: %+v", got, *resp.Groups)
+	}
+	g := (*resp.Groups)[0]
+	if g.Count != 2 {
+		t.Errorf("group count = %d, want 2 (both plants, one target, one group)", g.Count)
+	}
+}
+
+// TestGroupByRelation_UnresolvedIsExcludedAndReported is D5's own sentence:
+// "reported... never silently rendered as a distinct group of one." A plant
+// whose bed wikilink names nothing the resolver knows about must NOT form a
+// group by itself, must NOT be folded into the "absent" group (it HAS a
+// value — the value simply does not resolve), and MUST be named in the
+// problem list.
+func TestGroupByRelation_UnresolvedIsExcludedAndReported(t *testing.T) {
+	f := newGroupFixture(t)
+	f.bed("BED-GH", "Greenhouse")
+	f.plant("PL-0001", "Monstera", "Greenhouse")
+	f.plant("PL-0002", "Fern", "Nonexistent Bed")
+
+	groups := []string{"bed"}
+	r := req(withType("plant"))
+	r.GroupBy = &groups
+	resp, err := Find(context.Background(), f.deps(), r)
+	if err != nil {
+		t.Fatalf("Find: unexpected refusal: %v", err)
+	}
+	assertResponseInvariants(t, resp)
+
+	if resp.Groups == nil {
+		t.Fatalf("no groups were returned")
+	}
+	for _, g := range *resp.Groups {
+		if g.Absent != nil && *g.Absent {
+			t.Errorf("PL-0002's unresolved bed landed in the ABSENT group — it HAS a value, "+
+				"it simply does not resolve; folding it into absence misreports it: %+v", g)
+		}
+		for _, p := range g.Paths {
+			if p == "garden/plants/PL-0002.md" {
+				t.Errorf("PL-0002 (unresolved bed) appears in group %q — D5 forbids a "+
+					"silent group of one for an unresolved relation", g.Key)
+			}
+		}
+	}
+	// Exactly one real group (Greenhouse, PL-0001 only).
+	if got := len(*resp.Groups); got != 1 {
+		t.Fatalf("got %d groups, want 1 (PL-0002's unresolved value forms none): %+v", got, *resp.Groups)
+	}
+	if (*resp.Groups)[0].Count != 1 {
+		t.Errorf("Greenhouse group count = %d, want 1 (PL-0001 only)", (*resp.Groups)[0].Count)
+	}
+
+	found := false
+	for _, p := range resp.Problems {
+		if p.Code == generated.DanglingRelation {
+			for _, rec := range p.Records {
+				if rec == "PL-0002" {
+					found = true
+				}
+			}
+		}
+	}
+	if !found {
+		t.Errorf("PL-0002's unresolved bed was not reported as a dangling_relation problem: %+v", resp.Problems)
+	}
+	// COMPLETE must say no — a query that silently dropped a record from
+	// grouping without saying so is exactly AC-P1's failure.
+	if resp.Complete {
+		t.Errorf("COMPLETE is true despite an unresolved relation being excluded from grouping")
+	}
+}
+
+// TestGroupByText_FoldsAcrossRecords proves the sibling fix this change made
+// while it was already rewriting the bucket-identity code: FR-011a requires
+// text matching to be case-INSENSITIVE, and grouping is a form of equality
+// (R-5's whole argument, applied to `text` rather than `enum`) — two records
+// spelling the SAME value in different case must land in ONE group, not
+// fork on the raw bytes.
+func TestGroupByText_FoldsAcrossRecords(t *testing.T) {
+	f := newGroupFixture(t)
+	f.bed("BED-GH", "Greenhouse")
+	f.plant("PL-0001", "Monstera", "Greenhouse")
+	f.plant("PL-0002", "monstera", "Greenhouse")
+	f.plant("PL-0003", "MONSTERA", "Greenhouse")
+
+	groups := []string{"species"}
+	r := req(withType("plant"))
+	r.GroupBy = &groups
+	resp := mustFind(t, f.deps(), r)
+
+	if resp.Groups == nil {
+		t.Fatalf("no groups were returned")
+	}
+	if got := len(*resp.Groups); got != 1 {
+		names := make([]string, 0, got)
+		for _, g := range *resp.Groups {
+			names = append(names, fmt.Sprintf("%q(%d)", g.Key, g.Count))
+		}
+		t.Fatalf("got %d groups for three spellings of one text value, want 1: %v", got, names)
+	}
+	if (*resp.Groups)[0].Count != 3 {
+		t.Errorf("group count = %d, want 3", (*resp.Groups)[0].Count)
+	}
+}
+
+// TestGroupByRelation_NoResolverDegradesRatherThanExcludesEverything proves
+// the stated degraded mode: with NO resolver wired at all (Deps.Resolve is
+// nil, as it legitimately is on a caller that never set one up), grouping by
+// a relation still runs — folded on the raw wikilink text — rather than
+// silently excluding every relation value from every group. The degradation
+// is visible elsewhere in the same response (a filter on the relation would
+// report CompareRelationUnresolved); grouping choosing to return NOTHING
+// here would be a second, worse silence layered on top of the first.
+func TestGroupByRelation_NoResolverDegradesRatherThanExcludesEverything(t *testing.T) {
+	f := newGroupFixture(t)
+	f.bed("BED-GH", "Greenhouse")
+	f.plant("PL-0001", "Monstera", "Greenhouse")
+
+	d := f.deps()
+	d.Resolve = nil
+
+	groups := []string{"bed"}
+	r := req(withType("plant"))
+	r.GroupBy = &groups
+	resp := mustFind(t, d, r)
+
+	if resp.Groups == nil || len(*resp.Groups) != 1 {
+		t.Fatalf("grouping with no resolver returned %v groups, want exactly 1 (degraded, not empty)", resp.Groups)
+	}
+}

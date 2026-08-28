@@ -74,6 +74,18 @@ type query struct {
 	cursor     string
 	minimal    bool
 
+	// resolve maps a wikilink to a record identity — D5.1's wikilink -> file
+	// -> record id, the SAME seam the comparator's R-8 comparisons run
+	// through (compare_oracle.go's Comparator.ResolveRelation). Grouping by a
+	// relation (FR-029) needs it too: D5/R-8's rule is that a relation
+	// compares by target identity, never by display text, and grouping is a
+	// form of equality — two spellings of the same target (an alias, or a
+	// stale wikilink not yet rewritten by ADR-067 D10's rename) must land in
+	// ONE group, not fork into two. Set once, in Find, from Deps.Resolve; a
+	// nil value is legal and degrades relation grouping to the folded raw
+	// link text, which is worse but not silent (see project.go's groupKeys).
+	resolve records.RelationResolver
+
 	// touched is every property the query names, in first-mention order. It is
 	// what `explain` reports and what the schema check ranges over.
 	touched []string

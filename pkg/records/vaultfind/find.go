@@ -123,6 +123,10 @@ func Find(ctx context.Context, d Deps, req generated.VaultFindRequest) (generate
 		// that the tool received the argument they think they sent.
 		return refusalResponse(req, rawEcho(req), r), r
 	}
+	// D5.1 / R-8: grouping by a relation compares by target identity, not by
+	// the wikilink's own text, same as the comparator. d.Resolve may be nil —
+	// project.go degrades rather than panicking.
+	q.resolve = d.Resolve
 	echo := q.echo()
 
 	// THE PLATFORM GATE, BEFORE ANY RETRIEVAL.
@@ -269,6 +273,26 @@ func findRecords(ctx context.Context, d Deps, q *query, echo string) (generated.
 		}
 	}
 
+	// `near`/`hops` runs AFTER words for the same reason B1/B2 run after both:
+	// it is the most expensive narrowing input (a graph walk, not an index
+	// lookup), so a query already known to be zero-hit from the cheaper words
+	// check never pays for it. It produces a RECORD-IDENTITY set the candidate
+	// stream then intersects — the same shape wordPaths already is, so `visit`
+	// composes the two with one extra membership test rather than a second
+	// mechanism (FR-076: near MUST NOT bypass, weaken or replace any filter
+	// supplied alongside it, in either direction — AC-F2).
+	var nearSet map[string]bool
+	if q.near != "" {
+		reached, r := nearReachable(ctx, d, q)
+		if r != nil {
+			return refusalResponse(generated.VaultFindRequest{}, echo, r), r
+		}
+		if len(reached) == 0 {
+			return zeroHitResponse(ctx, d, q, echo), nil
+		}
+		nearSet = reached
+	}
+
 	if d.Store == nil {
 		ref := refuse(problem(generated.IndexUnavailable,
 			"the properties index is not open, so no record can be read",
@@ -303,7 +327,7 @@ func findRecords(ctx context.Context, d Deps, q *query, echo string) (generated.
 	}
 
 	cmp := records.Comparator{ResolveRelation: d.Resolve}
-	ev := &evaluation{q: q, cmp: cmp, words: wordPaths}
+	ev := &evaluation{q: q, cmp: cmp, words: wordPaths, near: nearSet}
 
 	// ── B2: bound MEMORY, during evaluation ─────────────────────────────────
 	//
@@ -350,6 +374,13 @@ type evaluation struct {
 	q     *query
 	cmp   records.Comparator
 	words map[string]TextHit
+	// near is the reachable-record-identity set nearReachable computed, nil
+	// when the query carried no `near`. It narrows exactly the way words does
+	// — a candidate outside it is never selected at all, not "selected and
+	// excluded" — so near and words compose as an intersection with each
+	// other and with the typed filter (FR-076, AC-F2), never as a filter one
+	// of them could weaken.
+	near map[string]bool
 
 	selected    int
 	survivors   []survivor
@@ -380,6 +411,17 @@ func (e *evaluation) visit(c propindex.Candidate) (propindex.Verdict, error) {
 			return propindex.Rejected, nil
 		}
 		hit, hasText = h, true
+	}
+
+	// The near/hops half is the SECOND intersection, same shape as words: an
+	// ordinary note (no declared type, RecordID empty) can never be a graph
+	// node — relation edges only connect record identities (D7) — so it is
+	// correctly excluded here whenever `near` narrowed at all, without a
+	// special case.
+	if e.near != nil {
+		if c.RecordID == "" || !e.near[c.RecordID] {
+			return propindex.Rejected, nil
+		}
 	}
 
 	e.selected++

@@ -207,6 +207,17 @@ func (e *evaluation) assemble(ctx context.Context, d Deps, echo string) generate
 	// TOTALS FIRST, over every evaluated row — never over the page.
 	totals := computeTotals(q, e.survivors)
 
+	// GROUPS, before e.problems is read into the response below: a relation
+	// value groupKeys could not resolve is reported into e.problems by
+	// buildGroups itself (D5 — "reported, never silently rendered as a
+	// distinct group of one"), and that report has to land before the
+	// Problems field is set or it would silently miss the response it
+	// belongs to.
+	var groups []generated.VaultFindGroup
+	if len(q.groupBy) > 0 {
+		groups = buildGroups(q, e)
+	}
+
 	// FRESHNESS, per returned record (FR-020c). It is computed over the rows
 	// this response RETURNS, which is what FR-020c1 scopes it to.
 	page := e.survivors
@@ -281,8 +292,7 @@ func (e *evaluation) assemble(ctx context.Context, d Deps, echo string) generate
 		},
 	}
 	if len(q.groupBy) > 0 {
-		g := buildGroups(q, e.survivors)
-		resp.Groups = &g
+		resp.Groups = &groups
 	}
 	if q.clamped {
 		t := true
