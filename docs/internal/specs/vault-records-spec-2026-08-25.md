@@ -1231,7 +1231,7 @@ Order is unit → integration → e2e; within a level, dependencies first.
 | 15 | `TestScope_CrossWorkspaceReturnsEmpty` | integration | FR-060..062 |
 | 16 | `TestBounds_RefusalNotTruncation` | integration | FR-063..066 |
 | 17 | `TestToolPolicy_ZeroRepairedPairsOnFreshInstall` | integration | FR-081 |
-| 18 | `TestTools_ExactlyFiveVaultToolsAndNoKnowledgeNames` | unit | FR-070, 070a, 071, 078 — **REPLACES revision 2's nine-tool test.** Asserts the five names are registered, that none contains a dot, that **no `knowledge_*` name survives** in the catalog, the global ceiling or any seed, and that `allStaticToolNames` has 98 entries. A name-only check would duplicate an existing green assertion over 35 tools and pass today with zero vault tools, so registration is asserted first |
+| 18 | `TestTools_ExactlySixVaultToolsAndNoKnowledgeNames` | unit | FR-070, 070a, 071, 078 — **REPLACES revision 3's five-tool test, which replaced revision 2's nine-tool test.** Asserts the **six** names are registered, that none contains a dot, that **no `knowledge_*` name survives** in the catalog, the global ceiling or any seed, and that `allStaticToolNames` has **95** entries. A name-only check would duplicate an existing green assertion over 35 tools and pass today with zero vault tools, so registration is asserted first |
 | 19 | `TestContract_CompletenessFieldsAreRequired` | unit | FR-091 |
 | 20 | `TestImport_UntranslatedExpressionIsReported` | integration | FR-100..103 |
 | 21 | `TestRecords_PerfAtFiftyThousand` | e2e | *(no threshold until W1 measures the SQLite path — SC-007)* |
@@ -1245,14 +1245,24 @@ Order is unit → integration → e2e; within a level, dependencies first.
 | 29 | `TestSearch_ZeroHitsReportsVocabularyNotExpansion` | integration | FR-114, FR-115 |
 | 30 | `TestTokenizer_OneNotionOfATerm` | unit | FR-116 — asserts one shared function, or fails with the recorded decision as the only permitted alternative |
 | 31 | `TestPropsIndex_RebuildIsResultIdentical` | integration | FR-020a, SC-014 |
-| 32 | `TestIndexes_GenerationMismatchIsIncomplete` | integration | FR-020c — forces a generation skew and asserts `complete: false` with staleness named |
+| 32 | `TestIndexes_SourceHashDivergenceIsIncomplete` | integration | FR-020c — **tests divergence, not rebuild, in BOTH directions.** Writes a row, re-indexes the modified note into bleve only (SQLite write suppressed), asserts the returning `vault_find` reports `complete: false` with the record named and staleness as the reason; then the symmetric case. A rebuild-only criterion would pass with the mitigation absent. Also asserts an orphaned row (no manifest entry) and an empty hash are both flagged, never assumed fresh |
 | 33 | `TestIndexState_SnapshotMatchesLiveFrame` | integration | FR-020f, FR-020g — a client that never received a frame renders the same state as one that did |
 | 34 | `TestReplaceBody_AmbiguousAnchorIsRefused` | unit | FR-047 — both line numbers named, file byte-identical |
 | 35 | `TestTrash_ConventionAndUnrepairableLinksReported` | integration | FR-048 |
 | 36 | `TestToolPolicy_EditAndRestructureAreIndependent` | integration | FR-083, SC-012 |
-| 37 | `TestSchemaAuthoring_TierPlacement` | integration | FR-016, FR-017, FR-018 — new type via `vault_edit`, existing type refused there and accepted by `vault_restructure` |
+| 37 | `TestSchemaAuthoring_LivesInVaultConfigure` | integration | FR-016, FR-017, FR-018 — **REPLACES revision 3's `TestSchemaAuthoring_TierPlacement`, which asserted the wrong placement.** Every schema and view op is refused by `vault_edit` **and** `vault_restructure`, naming `vault_configure`, and accepted by `vault_configure`. Creating a new type over a vault already holding notes of that type asserts the conversion count and the newly-failing records (AC-C1) |
 | 38 | `TestTools_DescriptionTokenBudget` | unit | FR-079, FR-128 |
-| 39 | `TestFilter_NoLikeInCompiledPath` | unit | AC-8.7 |
+| 39 | `TestFilter_NoLikeInCompiledPath` | unit | AC-8.7 — asserts **zero** occurrences of `LIKE` in the compiled filter path. R-10's case-sensitivity is one careless operator away from being lost and nothing else would report it |
+| 40 | `TestConfigure_DeclaresNoVersionToken` | unit | FR-018a, AC-C3 — asserts `expect_version` is absent from the **tool schema**, not merely from the prose |
+| 41 | `TestToolPolicy_ThreeWriteTiersAreIndependent` | integration | FR-083, SC-012 — `vault_edit` / `vault_restructure` / `vault_configure` set independently; the `edit: allow, configure: deny` case asserts `create_record_type` is refused |
+| 42 | `TestRecords_RefuseByNameWithoutSQLite` | unit | FR-020h, SC-023 — build-tagged; every typed call refuses naming the platform, and none returns an empty success |
+| 43 | `TestDescribe_CheckIntegrityIsBounded` | integration | FR-075a, SC-026 — the 500-per-category clamp is reported with the would-be count; the 100,000-note sweep is refused naming the scoped remedy |
+| 44 | `TestDescribe_ReportsOrdinaryBrokenWikilinks` | integration | FR-075 — a vault with **no records at all** still produces broken-link and orphan findings. This is the capability `knowledge_graph`'s retirement would otherwise lose |
+| 45 | `TestFind_TasksAreIndexedRowsNotAWalk` | integration | FR-076a — task rows carry `path`/`line`/`status`/`text`, render with the line number, and **no collection walk occurs**; a fixture with 6,000 files (above `TasksMaxFiles = 5000`) returns tasks from all of them |
+| 46 | `TestRender_BudgetIsMeasuredInBytes` | unit | FR-127, FR-127b, AC-P4 — the assertion counts bytes of rendered UTF-8, and the same function the renderer enforces with |
+| 47 | `TestBounds_CandidateCountedBeforeRetrieval` | integration | FR-066a — the count happens before any document is retrieved; a 24,000-candidate query is refused without materialising one row |
+| 48 | `TestWritePath_RateLimited` | integration | FR-067 — `vault_edit`, `vault_restructure` and `vault_configure` each 429 with `Retry-After`. **Asserts the limiter is reached at all**, because today no write `Execute` consults one |
+| 49 | `TestCreate_WritesNoteAndSeqAndNothingElse` | integration | FR-036a — exactly two paths change on `create`; a third is a failure |
 
 ### Test datasets
 
@@ -1352,10 +1362,11 @@ must be argued as one. A change that only regenerates cells is an implementation
 
 **AC-8.3** — `3 > 2` is `true`. Stated explicitly because it is the case that actually failed.
 
-### 8.1 What ADR-068 revision 5 changes here — assessed rule by rule
+### 8.1 What the storage decision changes here — assessed rule by rule
 
-**All thirteen rules survive unchanged in meaning.** Neither the five-tool surface nor the
-retrieval decisions touch them, and the reasons are worth stating rather than assumed:
+**All thirteen rules survive unchanged in meaning.** Neither the `vault_*` tool surface — five in
+ADR-068 revision 5, six in revision 6 — nor the retrieval decisions touch them, and the reasons
+are worth stating rather than assumed:
 
 - **The tool surface changes who calls the comparator, not what it decides.** `vault_find`
   replaces `record_query` as the caller; the filter object it accepts (FR-022) is the same
@@ -1373,9 +1384,23 @@ retrieval decisions touch them, and the reasons are worth stating rather than as
   against a join **silently behaves as membership** — precisely the implicit coercion R-13 refuses.
 
 **What DOES change is the surface the rules are enforced on, and this is the important part.**
-FR-021 moves membership from a Go comparator into SQLite. **SQLite's default semantics violate
-five of the thirteen rules outright.** Each must be defeated deliberately in the query compiler;
-none is defeated by choosing SQLite carefully.
+FR-021 moves membership from a Go comparator into SQLite. **SQLite's default semantics contradict
+NINE of the thirteen rules**, at the seven defeat sites tabulated below. Each must be defeated
+deliberately in the query compiler; none is defeated by choosing SQLite carefully.
+
+> **Two corrections in revision 4.** (a) Revision 3's prose said *"five of the thirteen"* while its
+> own table already covered nine rules across seven rows — an undercount against itself; the count
+> is corrected, the table is unchanged in substance. (b) **ADR-068 now carries this**, as **D16.6**,
+> verified by direct execution against `sqlite3` 3.51.0. Until revision 6 it lived only here, which
+> was backwards: the document that decides to adopt SQLite is the document that must record what
+> adopting it costs, and a reader of the ADR alone would have taken D16 without learning that the
+> engine reverses the rules by default. **The ADR states the decision and the risk; this section
+> states the cells and the tests. Neither duplicates the other.**
+
+**Eight of the nine fail in the QUIET direction** — a wrong answer that looks exactly like a right
+one, with no error, no empty result and no `complete: false`. Only R-11 announces itself, and only
+by escaping as an error the caller did not ask for. That asymmetry is why this is a first-class
+risk rather than an implementation detail.
 
 | Rule | SQLite's own behaviour | What this specification requires instead |
 |---|---|---|
