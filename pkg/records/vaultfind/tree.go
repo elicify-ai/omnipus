@@ -54,7 +54,7 @@ type node struct {
 }
 
 // buildNode converts one wire node, refusing anything ambiguous.
-func buildNode(n generated.VaultFilterNode, schema *records.Schema) (*node, *Refusal) {
+func buildNode(n generated.VaultFilterNode, schema *records.Schema) (*node, *RefusalError) {
 	forms := 0
 	if n.All != nil {
 		forms++
@@ -99,7 +99,7 @@ func buildNode(n generated.VaultFilterNode, schema *records.Schema) (*node, *Ref
 	return buildLeaf(n, schema)
 }
 
-func buildCombinator(k nodeKind, joiner string, in []generated.VaultFilterNode, schema *records.Schema) (*node, *Refusal) {
+func buildCombinator(k nodeKind, joiner string, in []generated.VaultFilterNode, schema *records.Schema) (*node, *RefusalError) {
 	if len(in) == 0 {
 		// An empty `all` is vacuously true and an empty `any` vacuously false,
 		// and neither is what a caller who wrote `{all: []}` meant. Guessing
@@ -136,7 +136,7 @@ func buildCombinator(k nodeKind, joiner string, in []generated.VaultFilterNode, 
 // records.QueryError into a wire code and passes the message through unchanged,
 // because two places owning one refusal's wording is how the tool's copy goes
 // stale the day the engine's improves.
-func buildLeaf(n generated.VaultFilterNode, schema *records.Schema) (*node, *Refusal) {
+func buildLeaf(n generated.VaultFilterNode, schema *records.Schema) (*node, *RefusalError) {
 	if n.Property == nil || *n.Property == "" {
 		return nil, refuse(problem(generated.UnknownProperty,
 			"a filter leaf names no property",

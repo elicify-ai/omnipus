@@ -21,7 +21,7 @@ import (
 // its remedy, and next actions. `refused: true` with `complete: false` is the
 // pair a caller branches on — "here is none of it, narrow and re-ask" as
 // distinct from "here is some of it".
-func refusalResponse(_ generated.VaultFindRequest, echo string, r *Refusal) generated.VaultFindResponse {
+func refusalResponse(_ generated.VaultFindRequest, echo string, r *RefusalError) generated.VaultFindResponse {
 	resp := generated.VaultFindResponse{
 		Complete:       false,
 		CompleteReason: str("the query was refused; no records were evaluated"),
@@ -43,7 +43,7 @@ func refusalResponse(_ generated.VaultFindRequest, echo string, r *Refusal) gene
 // call from a sentence, and composing it is where it invents a property name.
 // So every refusal offers vault_describe — the orientation call that answers
 // "what is actually declared here" — alongside the specific remedy.
-func refusalActions(r *Refusal) []generated.VaultFindAction {
+func refusalActions(r *RefusalError) []generated.VaultFindAction {
 	out := []generated.VaultFindAction{}
 	if r.Problem.Fix != nil && *r.Problem.Fix != "" {
 		out = append(out, generated.VaultFindAction{Label: "fix", Call: *r.Problem.Fix})

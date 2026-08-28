@@ -187,7 +187,7 @@ func Call(ctx context.Context, d Deps, raw []byte) (string, error) {
 // accept `where:` or `sql:` or a misspelled `filtr:` and answer a DIFFERENT
 // question from the one asked, with nothing saying so. The first pass into a
 // map is what makes the drop visible.
-func decodeRequest(raw []byte) (generated.VaultFindRequest, *Refusal) {
+func decodeRequest(raw []byte) (generated.VaultFindRequest, *RefusalError) {
 	var req generated.VaultFindRequest
 	if len(raw) == 0 {
 		return req, nil

@@ -93,10 +93,10 @@ type aggregate struct {
 
 // parse validates a request completely BEFORE anything is retrieved (FR-023).
 //
-// Every failure here returns a *Refusal carrying the remedy. None of them
+// Every failure here returns a *RefusalError carrying the remedy. None of them
 // returns an empty result: "no matches" and "you spelled it wrong" are
 // indistinguishable to a caller, and the second is far more common.
-func parse(req generated.VaultFindRequest, set *records.SchemaSet) (*query, *Refusal) {
+func parse(req generated.VaultFindRequest, set *records.SchemaSet) (*query, *RefusalError) {
 	q := &query{
 		kind:  KindNote,
 		limit: DefaultLimit,
@@ -156,7 +156,7 @@ func parse(req generated.VaultFindRequest, set *records.SchemaSet) (*query, *Ref
 // wire. It is enforced AGAIN here because a schema violation surfaces as "your
 // body was invalid", which tells the caller nothing about the bound or the
 // remedy — and Go's generated type carries a plain *int that no decoder checks.
-func (q *query) applyHops(req generated.VaultFindRequest) *Refusal {
+func (q *query) applyHops(req generated.VaultFindRequest) *RefusalError {
 	if req.Hops == nil {
 		if q.near != "" {
 			q.hops = 1
@@ -187,7 +187,7 @@ func (q *query) applyHops(req generated.VaultFindRequest) *Refusal {
 // applyLimit clamps rather than rejects, and RECORDS the clamp. FR-063: silent
 // truncation is the incumbent behaviour this design cites as motivating
 // evidence, and shipping our own would be indefensible.
-func (q *query) applyLimit(req generated.VaultFindRequest) *Refusal {
+func (q *query) applyLimit(req generated.VaultFindRequest) *RefusalError {
 	if req.Limit == nil {
 		return nil
 	}
@@ -208,7 +208,7 @@ func (q *query) applyLimit(req generated.VaultFindRequest) *Refusal {
 }
 
 // resolveType is FR-024 for the record type itself.
-func (q *query) resolveType(req generated.VaultFindRequest, set *records.SchemaSet) *Refusal {
+func (q *query) resolveType(req generated.VaultFindRequest, set *records.SchemaSet) *RefusalError {
 	if req.Type == nil || *req.Type == "" {
 		return nil
 	}
@@ -239,7 +239,7 @@ func (q *query) resolveType(req generated.VaultFindRequest, set *records.SchemaS
 // once, before any record is touched — which is FR-023, and which is also why
 // the engine takes records.PreparedFilter into the candidate loop rather than
 // re-validating 50,000 times.
-func (q *query) applyFilter(req generated.VaultFindRequest) *Refusal {
+func (q *query) applyFilter(req generated.VaultFindRequest) *RefusalError {
 	if req.Filter == nil {
 		return nil
 	}
@@ -260,8 +260,8 @@ func (q *query) applyFilter(req generated.VaultFindRequest) *Refusal {
 
 // applyColumns validates select / sort / group_by / join / aggregate against the
 // schema. Each is FR-024's posture: named, listed, never silently dropped.
-func (q *query) applyColumns(req generated.VaultFindRequest) *Refusal {
-	lookup := func(kind, name string) (*records.Property, *Refusal) {
+func (q *query) applyColumns(req generated.VaultFindRequest) *RefusalError {
+	lookup := func(kind, name string) (*records.Property, *RefusalError) {
 		if q.schema == nil {
 			return nil, refuse(problem(generated.UnsupportedParameter,
 				fmt.Sprintf("%s names the property %q, but no record type was given", kind, name),

@@ -186,6 +186,14 @@ func (s *stubText) NearestTerms(_ context.Context, _ string, _ int) ([]generated
 	return s.terms, nil
 }
 
+// notNode lives HERE rather than in the untagged builders file because only the
+// SQLite-tagged tests negate a subtree — and an unused helper under the other
+// tag set is a lint failure, which is the linter correctly noticing that the
+// untagged file had grown something only one build needs.
+func notNode(inner generated.VaultFilterNode) generated.VaultFilterNode {
+	return generated.VaultFilterNode{Not: &inner}
+}
+
 // ---------------------------------------------------------------------------
 // ASSERTIONS EVERY vault_find TEST SHARES
 // ---------------------------------------------------------------------------

@@ -94,7 +94,7 @@ type Deps struct {
 // Find answers one query.
 //
 // IT RETURNS BOTH A RESPONSE AND AN ERROR ON A REFUSAL, and both halves are
-// load-bearing — see the note on Refusal. The response is what the model reads
+// load-bearing — see the note on RefusalError. The response is what the model reads
 // and can act on; the error is what stops a caller mistaking a refusal for an
 // answer. What it never returns is a successful empty result over a question it
 // could not answer.
@@ -155,7 +155,7 @@ func Find(ctx context.Context, d Deps, req generated.VaultFindRequest) (generate
 // applyView expands a saved view UNDER the caller's own arguments, so `filter`
 // refines the view rather than replacing it (spec 4.1.2: "a saved view, applied
 // first; filter refines it").
-func applyView(req *generated.VaultFindRequest, loader ViewLoader) *Refusal {
+func applyView(req *generated.VaultFindRequest, loader ViewLoader) *RefusalError {
 	if req.View == nil || *req.View == "" {
 		return nil
 	}
@@ -222,7 +222,7 @@ func applyView(req *generated.VaultFindRequest, loader ViewLoader) *Refusal {
 // checkCursor refuses a cursor issued against a different index generation.
 // FR-020c: an unhonourable cursor is an ERROR, never a silent restart — a silent
 // restart returns page one while the caller believes it is reading page four.
-func checkCursor(cursor string, epoch int64) *Refusal {
+func checkCursor(cursor string, epoch int64) *RefusalError {
 	off, issued, ok := decodeCursor(cursor)
 	if !ok {
 		return refuse(problem(generated.StaleCursor,

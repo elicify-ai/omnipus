@@ -20,9 +20,8 @@ import (
 // a time" is a property of the STREAM, and a memo that outlived the record would
 // quietly break it.
 type candidate struct {
-	rows  propindex.Candidate
-	memo  map[string]records.PropertyValue
-	stale bool
+	rows propindex.Candidate
+	memo map[string]records.PropertyValue
 }
 
 func newCandidate(c propindex.Candidate) candidate {

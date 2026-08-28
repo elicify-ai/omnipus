@@ -42,8 +42,4 @@ func leaf(property, op string, value ...string) generated.VaultFilterNode {
 	return n
 }
 
-func notNode(inner generated.VaultFilterNode) generated.VaultFilterNode {
-	return generated.VaultFilterNode{Not: &inner}
-}
-
 func strPtr(s string) *string { return &s }

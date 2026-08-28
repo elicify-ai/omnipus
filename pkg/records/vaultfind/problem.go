@@ -34,8 +34,11 @@ import (
 // `(emptyResponse, nil)` and letting the operator conclude their vault is empty.
 // ---------------------------------------------------------------------------
 
-// Refusal is a query that produced no answer, with the reason and the remedy.
-type Refusal struct {
+// RefusalError is a query that produced no answer, with the reason and the remedy.
+//
+// The name carries the `Error` suffix because it IS an error and callers branch
+// on it; `Refusal` alone read as a value type and the linter was right to say so.
+type RefusalError struct {
 	// Problem is what goes in the response's problem list. Its Fix is not
 	// optional: a bound, a bad operator or an unavailable index is never
 	// reported without the instruction that resolves it.
@@ -45,7 +48,7 @@ type Refusal struct {
 	cause error
 }
 
-func (r *Refusal) Error() string {
+func (r *RefusalError) Error() string {
 	msg := r.Problem.Reason
 	if r.Problem.Fix != nil && *r.Problem.Fix != "" {
 		msg += " — " + *r.Problem.Fix
@@ -56,11 +59,11 @@ func (r *Refusal) Error() string {
 // Unwrap keeps errors.Is working through the refusal. records.RequirePropertyIndex's
 // error is wrapped and NOT replaced, so the platform name survives to the caller
 // and AssertRefusesWhenIndexUnavailable's three checks all pass.
-func (r *Refusal) Unwrap() error { return r.cause }
+func (r *RefusalError) Unwrap() error { return r.cause }
 
 // IsRefusal reports whether err is a vault_find refusal.
 func IsRefusal(err error) bool {
-	var r *Refusal
+	var r *RefusalError
 	return errors.As(err, &r)
 }
 
@@ -86,8 +89,8 @@ func problem(code generated.RecordProblemCode, reason, fix string, records_ ...s
 }
 
 // refuse wraps a problem as the error half of the pair.
-func refuse(p generated.RecordProblem, cause error) *Refusal {
-	return &Refusal{Problem: p, cause: cause}
+func refuse(p generated.RecordProblem, cause error) *RefusalError {
+	return &RefusalError{Problem: p, cause: cause}
 }
 
 // ---------------------------------------------------------------------------
