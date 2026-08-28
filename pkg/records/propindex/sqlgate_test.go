@@ -568,6 +568,27 @@ func TestSQLGate_TheCountedPopulationIsTheRetrievedPopulation(t *testing.T) {
 			t.Fatalf("selector %+v: captured count=%v stream=%v from %d statements; "+
 				"this comparison needs both", sel, sawCount, sawStream, len(stmts))
 		}
+		// The WHERE clauses agreeing is only HALF of "the same population".
+		// The other half is the JOIN KIND, and it is invisible to the
+		// comparison below: turning `LEFT JOIN` into `JOIN` leaves both WHERE
+		// clauses byte-identical while silently dropping every note that has no
+		// property rows — which is FR-005's ordinary note, the MAJORITY of every
+		// real vault. B1 would then count a population containing them and the
+		// stream would visit one that does not.
+		//
+		// Asserted here, next to the WHERE comparison, because the two failures
+		// are the same failure and a reader who finds one should find the other.
+		for _, s := range stmts {
+			if strings.Contains(s, "note_props") && !strings.Contains(s, "LEFT JOIN") {
+				t.Errorf(
+					"selector %+v: the candidate stream joins note_props with an INNER join.\n"+
+						"  statement: %s\n"+
+						"Every note with no property rows disappears from the answer — FR-005's ordinary "+
+						"note, which is most of a real vault — while B1 goes on counting them. The WHERE "+
+						"clauses stay identical, so nothing else here would notice.", sel, s)
+			}
+		}
+
 		if counted != retrieved {
 			t.Errorf(
 				"selector %+v: the population B1 COUNTS is not the population the stream RETRIEVES.\n"+
