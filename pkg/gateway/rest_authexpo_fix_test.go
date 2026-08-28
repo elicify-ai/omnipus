@@ -81,7 +81,7 @@ func listProvidersAs(t *testing.T, api *restAPI, user, remoteAddr string) *httpt
 		ctx = context.WithValue(ctx, UserContextKey{}, &config.UserConfig{Username: user})
 	}
 	w := httptest.NewRecorder()
-	api.HandleProviders(w, req.WithContext(ctx))
+	api.HandleProviders(w, isolateRateLimit(t, req.WithContext(ctx)))
 	return w
 }
 
@@ -262,7 +262,7 @@ func TestProviderList_EnvBearerTokenCallerIsNotLockedOut(t *testing.T) {
 		req = req.WithContext(context.WithValue(req.Context(),
 			ctxkey.ConfigContextKey{}, api.agentLoop.GetConfig()))
 		w := httptest.NewRecorder()
-		api.HandleProviders(w, req)
+		api.HandleProviders(w, isolateRateLimit(t, req))
 		return w
 	}
 
@@ -306,7 +306,7 @@ func TestPreAuthWindow_ClosedWhenOnboardingStateUnknown(t *testing.T) {
 		"an unknown onboarding state must NOT be treated as a fresh install")
 
 	w := httptest.NewRecorder()
-	api.HandleProviders(w, req)
+	api.HandleProviders(w, isolateRateLimit(t, req))
 	assert.Equal(t, http.StatusUnauthorized, w.Code,
 		"with the state unknown, an anonymous provider read must 401; body=%s", w.Body.String())
 }
@@ -364,7 +364,7 @@ func TestPreAuthWindow_ClosedWhenAnAuthenticationAuthorityExists(t *testing.T) {
 
 		assert.False(t, api.preAuthOnboardingWindowOpen(req))
 		w := httptest.NewRecorder()
-		api.HandleProviders(w, req)
+		api.HandleProviders(w, isolateRateLimit(t, req))
 		assert.Equal(t, http.StatusUnauthorized, w.Code, "body=%s", w.Body.String())
 	})
 
@@ -625,7 +625,7 @@ func TestCopilotProbe_IsAudited(t *testing.T) {
 	req = req.WithContext(context.WithValue(req.Context(),
 		ctxkey.ConfigContextKey{}, api.agentLoop.GetConfig()))
 	w := httptest.NewRecorder()
-	api.HandleProviders(w, req)
+	api.HandleProviders(w, isolateRateLimit(t, req))
 	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
 
 	entries := readAuditEntries(t, auditDir, EventProviderSignInStatusChecked)
@@ -650,7 +650,7 @@ func TestCopilotProbe_IsAudited(t *testing.T) {
 		&config.UserConfig{Username: "admin"})
 	ctx2 = context.WithValue(ctx2, ctxkey.ConfigContextKey{}, api2.agentLoop.GetConfig())
 	w2 := httptest.NewRecorder()
-	api2.HandleProviders(w2, req2.WithContext(ctx2))
+	api2.HandleProviders(w2, isolateRateLimit(t, req2.WithContext(ctx2)))
 	require.Equal(t, http.StatusOK, w2.Code, "body=%s", w2.Body.String())
 
 	entries2 := readAuditEntries(t, auditDir2, EventProviderSignInStatusChecked)
@@ -808,7 +808,7 @@ func hammerProviderRoute(t *testing.T, api *restAPI, method, path, remoteAddr st
 		req.RemoteAddr = remoteAddr
 		req = req.WithContext(context.WithValue(req.Context(), ctxkey.ConfigContextKey{}, cfg))
 		w := httptest.NewRecorder()
-		api.HandleProviders(w, req)
+		api.HandleProviders(w, isolateRateLimit(t, req))
 		code = w.Code
 		if code == http.StatusTooManyRequests {
 			return code

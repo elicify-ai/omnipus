@@ -478,7 +478,7 @@ func putProviderRaw(t *testing.T, api *restAPI, id, body string) *httptest.Respo
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/providers/"+id, strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
 	r.URL.Path = "/api/v1/providers/" + id
-	api.HandleProviders(w, r)
+	api.HandleProviders(w, isolateRateLimit(t, r))
 	return w
 }
 
@@ -499,7 +499,7 @@ func getProviders(t *testing.T, api *restAPI) []gen.Provider {
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/providers", nil)
 	r.URL.Path = "/api/v1/providers"
 	ctx := context.WithValue(r.Context(), UserContextKey{}, &config.UserConfig{Username: "admin"})
-	api.HandleProviders(w, r.WithContext(ctx))
+	api.HandleProviders(w, isolateRateLimit(t, r.WithContext(ctx)))
 	require.Equal(t, http.StatusOK, w.Code, "GET providers must be 200; body=%s", w.Body.String())
 	var provs []gen.Provider
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &provs))

@@ -197,7 +197,7 @@ func TestProviderSignInRoutes_AuthGating(t *testing.T) {
 			req := httptest.NewRequest(rt.method, rt.path, nil)
 			ctx := context.WithValue(req.Context(), ctxkey.ConfigContextKey{}, api.agentLoop.GetConfig())
 			w := httptest.NewRecorder()
-			api.HandleProviders(w, req.WithContext(ctx))
+			api.HandleProviders(w, isolateRateLimit(t, req.WithContext(ctx)))
 			assert.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
 
 			// Onboarding still incomplete, dev-mode bypass active -> 503
@@ -207,7 +207,7 @@ func TestProviderSignInRoutes_AuthGating(t *testing.T) {
 			req = httptest.NewRequest(rt.method, rt.path, nil)
 			ctx = context.WithValue(req.Context(), ctxkey.ConfigContextKey{}, &bypassCfg)
 			w = httptest.NewRecorder()
-			api.HandleProviders(w, req.WithContext(ctx))
+			api.HandleProviders(w, isolateRateLimit(t, req.WithContext(ctx)))
 			assert.Equal(t, http.StatusServiceUnavailable, w.Code)
 
 			// Onboarding complete, unauthenticated -> 401.
@@ -215,7 +215,7 @@ func TestProviderSignInRoutes_AuthGating(t *testing.T) {
 			req = httptest.NewRequest(rt.method, rt.path, nil)
 			ctx = context.WithValue(req.Context(), ctxkey.ConfigContextKey{}, api.agentLoop.GetConfig())
 			w = httptest.NewRecorder()
-			api.HandleProviders(w, req.WithContext(ctx))
+			api.HandleProviders(w, isolateRateLimit(t, req.WithContext(ctx)))
 			assert.Equal(t, http.StatusUnauthorized, w.Code)
 		})
 	}

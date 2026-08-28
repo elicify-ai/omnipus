@@ -108,7 +108,7 @@ func TestSignOut_RevokesEvenWhileARefreshIsInFlight(t *testing.T) {
 	signOutDone := make(chan struct{})
 	go func() {
 		defer close(signOutDone)
-		api.HandleProviders(signOutRec, signOutReq)
+		api.HandleProviders(signOutRec, isolateRateLimit(t, signOutReq))
 	}()
 
 	// Long enough that an unsynchronised delete — a local file write taking

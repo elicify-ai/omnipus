@@ -161,7 +161,7 @@ func signInStatusFromIP(t *testing.T, api *restAPI, providerID, remoteAddr strin
 	r.RemoteAddr = remoteAddr
 	r = r.WithContext(context.WithValue(r.Context(), configContextKey{}, api.agentLoop.GetConfig()))
 	w := httptest.NewRecorder()
-	api.HandleProviders(w, r)
+	api.HandleProviders(w, isolateRateLimit(t, r))
 	return w
 }
 

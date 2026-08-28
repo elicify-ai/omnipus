@@ -255,7 +255,7 @@ func TestProviders_BackwardCompatPlaintextAPIKey(t *testing.T) {
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/providers", nil)
 	r.URL.Path = "/api/v1/providers"
-	api.HandleProviders(w, r)
+	api.HandleProviders(w, isolateRateLimit(t, r))
 
 	require.Equal(t, http.StatusOK, w.Code, "GET /providers must return 200 for old plaintext api_key config")
 	var providers []map[string]any
@@ -450,7 +450,7 @@ func TestProviderPUT_StoresAPIKeyRef(t *testing.T) {
 	req.Header.Set(reAuthHeader, provTok)
 	w := httptest.NewRecorder()
 
-	api.HandleProviders(w, req)
+	api.HandleProviders(w, isolateRateLimit(t, req))
 
 	// NOTE: The handler returns 500 when TriggerReload fails (even though data was persisted).
 	// This is a production bug in HandleProviders PUT: reload failure should not undo the write.
@@ -531,7 +531,7 @@ func TestProviderPUT_RefusesWhenNoMasterKey(t *testing.T) {
 	req.Header.Set(reAuthHeader, provTok)
 	w := httptest.NewRecorder()
 
-	api.HandleProviders(w, req)
+	api.HandleProviders(w, isolateRateLimit(t, req))
 
 	// SEC-23: must refuse — no plaintext fallback.
 	assert.Equal(t, http.StatusServiceUnavailable, w.Code,
@@ -610,7 +610,7 @@ func TestProviderGET_ResolvesAPIKeyRefFromCredStore(t *testing.T) {
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/providers", nil)
 	r.URL.Path = "/api/v1/providers"
-	apiWithRef.HandleProviders(w, r)
+	apiWithRef.HandleProviders(w, isolateRateLimit(t, r))
 
 	require.Equal(t, http.StatusOK, w.Code, "GET /providers must return 200")
 	var providers []map[string]any

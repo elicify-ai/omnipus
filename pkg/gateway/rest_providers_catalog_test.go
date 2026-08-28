@@ -329,7 +329,7 @@ func TestRestProvidersCatalog_GET(t *testing.T) {
 		for _, id := range []string{"my-proxy", "ghost"} {
 			w := httptest.NewRecorder()
 			r := httptest.NewRequest(http.MethodPost, "/api/v1/providers/"+id+"/refresh-models", nil)
-			api.HandleProviders(w, r)
+			api.HandleProviders(w, isolateRateLimit(t, r))
 			assert.Equal(t, http.StatusMethodNotAllowed, w.Code,
 				"refresh-models must be gone for %q; body=%s", id, w.Body.String())
 		}
@@ -592,7 +592,7 @@ func TestRestProviders_GET_ConfiguredOnly(t *testing.T) {
 
 		w := httptest.NewRecorder()
 		r := httptest.NewRequest(http.MethodGet, "/api/v1/providers", nil)
-		api.HandleProviders(w, r)
+		api.HandleProviders(w, isolateRateLimit(t, r))
 		require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
 		assert.Equal(t, "[]", trimJSON(w.Body.Bytes()))
 	})

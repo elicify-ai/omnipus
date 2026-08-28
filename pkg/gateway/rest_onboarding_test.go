@@ -1353,7 +1353,7 @@ func TestProviderTest_HonorsConfiguredAPIBase(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/providers/openai/test", nil)
 	w := httptest.NewRecorder()
-	api.HandleProviders(w, req)
+	api.HandleProviders(w, isolateRateLimit(t, req))
 
 	assert.Equal(t, http.StatusOK, w.Code)
 	var resp map[string]any
@@ -1382,7 +1382,7 @@ func TestProviderTest_ConfiguredAPIBaseRejectsBadKey(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/providers/openai/test", nil)
 	w := httptest.NewRecorder()
-	api.HandleProviders(w, req)
+	api.HandleProviders(w, isolateRateLimit(t, req))
 
 	assert.Equal(t, http.StatusOK, w.Code)
 	var resp map[string]any
@@ -1419,7 +1419,7 @@ func TestProviderTest_SSRFBlocksInternalAPIBase(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/providers/openai/test", nil)
 	w := httptest.NewRecorder()
-	api.HandleProviders(w, req)
+	api.HandleProviders(w, isolateRateLimit(t, req))
 
 	assert.Equal(t, http.StatusOK, w.Code)
 	var resp map[string]any
@@ -1466,7 +1466,7 @@ func TestProviderTest_CredentialVaultUnreadable(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/providers/openai/test", nil)
 	w := httptest.NewRecorder()
-	api.HandleProviders(w, req)
+	api.HandleProviders(w, isolateRateLimit(t, req))
 
 	assert.Equal(t, http.StatusOK, w.Code)
 	var resp map[string]any
@@ -1524,7 +1524,7 @@ func TestProviderTest_CredentialRefNotFound(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/providers/openai/test", nil)
 	w := httptest.NewRecorder()
-	api.HandleProviders(w, req)
+	api.HandleProviders(w, isolateRateLimit(t, req))
 
 	assert.Equal(t, http.StatusOK, w.Code)
 	var resp map[string]any

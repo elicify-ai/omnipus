@@ -236,7 +236,7 @@ func postEntitlement(t *testing.T, api *restAPI, id string) *httptest.ResponseRe
 	ctx := context.WithValue(r.Context(), ctxkey.ConfigContextKey{}, api.agentLoop.GetConfig())
 	ctx = context.WithValue(ctx, UserContextKey{}, &config.UserConfig{Username: "admin"})
 	w := httptest.NewRecorder()
-	api.HandleProviders(w, r.WithContext(ctx))
+	api.HandleProviders(w, isolateRateLimit(t, r.WithContext(ctx)))
 	return w
 }
 
@@ -547,6 +547,6 @@ func putProviderForEntitlement(t *testing.T, api *restAPI, id, body string) {
 	r.Header.Set("Content-Type", "application/json")
 	ctx := context.WithValue(r.Context(), ctxkey.ConfigContextKey{}, api.agentLoop.GetConfig())
 	w := httptest.NewRecorder()
-	api.HandleProviders(w, r.WithContext(ctx))
+	api.HandleProviders(w, isolateRateLimit(t, r.WithContext(ctx)))
 	require.Equal(t, http.StatusOK, w.Code, "PUT body=%s", w.Body.String())
 }
