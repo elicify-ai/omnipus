@@ -73,6 +73,7 @@ import (
 	bleveIndexAPI "github.com/blevesearch/bleve_index_api"
 
 	"github.com/elicify-ai/omnipus/pkg/fileutil"
+	"github.com/elicify-ai/omnipus/pkg/records"
 )
 
 const (
@@ -155,7 +156,38 @@ const (
 	fieldKind   = "kind"
 	fieldOffset = "offset"
 	fieldBody   = "body"
+
+	// The fielded half of the document (ADR-068 D21.2). Every one of these is
+	// a FIXED field name; the operator's own property names are terms inside
+	// fieldPropKey / fieldProp, never fields of their own. See fields.go for
+	// why that is what keeps the mapping closed.
+	fieldTitle      = "title"
+	fieldHeadings   = "headings"
+	fieldPropKey    = "prop_key"
+	fieldPropValue  = "prop_value"
+	fieldProp       = "prop"
+	fieldSourceHash = "source_hash"
 )
+
+// queryableFields is the closed set of fields SearchField will accept.
+//
+// It is an allow-list rather than a validation of the string, because the
+// alternative — passing a caller's field name to bleve — turns a typo into a
+// query that matches nothing and reports no error, which is the exact failure
+// shape ADR-068 §1.3 catalogues. fieldSourceHash and fieldOffset are absent on
+// purpose: they are stored, not indexed, so a query against either would return
+// nothing however it were spelled.
+var queryableFields = map[string]struct{}{
+	fieldPath:      {},
+	fieldName:      {},
+	fieldKind:      {},
+	fieldTitle:     {},
+	fieldHeadings:  {},
+	fieldPropKey:   {},
+	fieldPropValue: {},
+	fieldProp:      {},
+	fieldBody:      {},
+}
 
 // openFileForRead is the SINGLE seam through which this package reads file
 // contents. It exists so a test can count content reads by path and prove
@@ -183,6 +215,21 @@ type IndexHit struct {
 	// Segment is the ordinal of the best-scoring segment (0 for any file that
 	// produced a single document).
 	Segment int
+	// SourceHash is the hex SHA-256 of the note's contents AS THE TEXT INDEX
+	// LAST READ THEM — ADR-068 D16.5's freshness token, arriving with the hit
+	// rather than being looked up afterwards.
+	//
+	// It is what the properties index's own `source_hash` column is compared
+	// against: equal means the two indexes have seen the same bytes; different,
+	// missing or empty means they have not, and the record goes into `problems`
+	// with "the two indexes disagree" and `complete: false`. The comparison
+	// establishes DISAGREEMENT, not which side is behind — claiming the second
+	// is a precision the mechanism does not have.
+	//
+	// It is EMPTY for an attachment, always and by construction: FR-039a
+	// forbids opening one and hashing is opening. An empty hash is unknown
+	// freshness, which is flagged, never assumed fresh.
+	SourceHash string
 }
 
 // SyncStats reports what one reconcile actually did. Every field is a count a
@@ -618,7 +665,14 @@ func closeIndexQuietly(bidx bleve.Index, path string) {
 // the notes on disk are the source of truth and the index is derived data.
 // Getting this wrong in the cautious direction is a slow start-up. Getting it
 // wrong in the other direction is a crash in the gateway.
-const indexFormatVersion = 2
+// Version 3 is ADR-068 D21.2 + D16.5: the document gained title, headings,
+// prop_key, prop_value, prop and a stored source_hash, and the body field
+// stopped carrying the frontmatter block. Every one of those is also a MAPPING
+// change, so G2 sees it too — but G1 fires before the index is even opened, and
+// an index written under version 2 holds documents whose body text still
+// contains the YAML and whose property fields do not exist at all. A field
+// query against one of those documents returns zero hits and no error.
+const indexFormatVersion = 3
 
 // indexFormat is the sidecar's content. It is deliberately one integer: a
 // record with more in it is a record with more ways to disagree with itself,
@@ -960,11 +1014,78 @@ func buildIndexMapping() *bleveMapping.IndexMappingImpl {
 	offset.IncludeInAll = false
 	offset.DocValues = false
 
+	// ADR-068 D21.2's fields. THE MAPPING STAYS CLOSED: these are six fixed
+	// names, and an operator's own property names arrive as TERMS inside
+	// prop_key / prop rather than as fields. fields.go states the reasoning at
+	// length, because "index the property keys" reads like a request for a
+	// dynamic mapping and it is not one.
+	title := bleve.NewTextFieldMapping()
+	title.Analyzer = "en"
+	title.Store = false
+	title.IncludeTermVectors = false
+	title.IncludeInAll = false
+	title.DocValues = false
+
+	headings := bleve.NewTextFieldMapping()
+	headings.Analyzer = "en"
+	headings.Store = false
+	headings.IncludeTermVectors = false
+	headings.IncludeInAll = false
+	headings.DocValues = false
+
+	// Keyword, because a property key is an identifier and must not be stemmed:
+	// `status` and `statuses` are two different properties, and the `en`
+	// analyzer maps both to "statu".
+	propKey := bleve.NewTextFieldMapping()
+	propKey.Analyzer = "keyword"
+	propKey.Store = false
+	propKey.IncludeTermVectors = false
+	propKey.IncludeInAll = false
+	propKey.DocValues = false
+
+	// Prose, because a property VALUE is read by a person: a search for
+	// "prospect" should find `status: prospecting`.
+	propValue := bleve.NewTextFieldMapping()
+	propValue.Analyzer = "en"
+	propValue.Store = false
+	propValue.IncludeTermVectors = false
+	propValue.IncludeInAll = false
+	propValue.DocValues = false
+
+	// Keyword for the same reason as propKey, and doubly so: the whole
+	// `key=value` string is one term, which is what makes an exact pair query
+	// exact.
+	prop := bleve.NewTextFieldMapping()
+	prop.Analyzer = "keyword"
+	prop.Store = false
+	prop.IncludeTermVectors = false
+	prop.IncludeInAll = false
+	prop.DocValues = false
+
+	// D16.5's freshness token: STORED AND NOT INDEXED. Nobody searches for a
+	// hash, and indexing 100,000 distinct 64-byte terms would buy a query
+	// nobody issues at the cost of a term dictionary entry per document. It is
+	// exactly the shape `offset` already has, which is why the retrieval path
+	// for it is a path this package has already proven.
+	sourceHash := bleve.NewTextFieldMapping()
+	sourceHash.Analyzer = "keyword"
+	sourceHash.Store = true
+	sourceHash.Index = false
+	sourceHash.IncludeTermVectors = false
+	sourceHash.IncludeInAll = false
+	sourceHash.DocValues = false
+
 	doc := bleve.NewDocumentMapping()
 	doc.AddFieldMappingsAt(fieldPath, pathField)
 	doc.AddFieldMappingsAt(fieldName, name)
 	doc.AddFieldMappingsAt(fieldKind, kind)
 	doc.AddFieldMappingsAt(fieldOffset, offset)
+	doc.AddFieldMappingsAt(fieldTitle, title)
+	doc.AddFieldMappingsAt(fieldHeadings, headings)
+	doc.AddFieldMappingsAt(fieldPropKey, propKey)
+	doc.AddFieldMappingsAt(fieldPropValue, propValue)
+	doc.AddFieldMappingsAt(fieldProp, prop)
+	doc.AddFieldMappingsAt(fieldSourceHash, sourceHash)
 	doc.AddFieldMappingsAt(fieldBody, body)
 	doc.Dynamic = false
 
@@ -975,12 +1096,53 @@ func buildIndexMapping() *bleveMapping.IndexMappingImpl {
 }
 
 // indexDoc is one index document — one SEGMENT of a note, or one attachment.
+//
+// It was a closed five-field struct (path, name, kind, offset, body) and
+// ADR-068 D21.2 reopens it: without a title field a title match cannot outrank
+// a passing body mention, and without a property-key field a field query on a
+// property key is IMPOSSIBLE rather than slow.
+//
+// Which fields are per-NOTE and which are per-SEGMENT is a decision, not an
+// accident. Title, the property fields and the source hash identify the NOTE,
+// so they are replicated onto every one of its segments — search collapses a
+// note's segments into one hit scored by its best segment, and a title that
+// lived only on segment 0 would be invisible to a query that matched segment 3.
+// Body, headings and offset describe the SEGMENT, and stay segment-local.
+//
+// PropKeys and Props are slices on purpose. bleve indexes each element of a
+// string slice as a separate value of the same field, which is what gives a
+// multi-valued keyword field its terms; joining them into one string under a
+// keyword analyzer would produce the single useless term "status due owner".
 type indexDoc struct {
-	Path   string  `json:"path"`
-	Name   string  `json:"name"`
-	Kind   string  `json:"kind"`
-	Offset float64 `json:"offset"`
-	Body   string  `json:"body"`
+	Path       string   `json:"path"`
+	Name       string   `json:"name"`
+	Kind       string   `json:"kind"`
+	Offset     float64  `json:"offset"`
+	Title      string   `json:"title"`
+	Headings   string   `json:"headings"`
+	PropKeys   []string `json:"prop_key"`
+	PropValues string   `json:"prop_value"`
+	Props      []string `json:"prop"`
+	SourceHash string   `json:"source_hash"`
+	Body       string   `json:"body"`
+}
+
+// indexedBytes is how much analysable text this document carries.
+//
+// batchState.add bounds a batch by this rather than by len(Body), and that
+// matters now that a document is more than its body: the batch bound exists to
+// keep peak memory a property of IndexSegmentSize, and a bound that counts only
+// one of eleven fields is a bound that stopped being true the moment the other
+// ten were added.
+func (d indexDoc) indexedBytes() int {
+	n := len(d.Body) + len(d.Title) + len(d.Headings) + len(d.PropValues) + len(d.Name)
+	for _, k := range d.PropKeys {
+		n += len(k)
+	}
+	for _, p := range d.Props {
+		n += len(p)
+	}
+	return n
 }
 
 // segmentDocID is the bleve document id for one segment of one file. The
@@ -1057,7 +1219,7 @@ func (b *batchState) add(id string, doc indexDoc) error {
 		return fmt.Errorf("knowledge: batch index %s: %w", id, err)
 	}
 	b.docs++
-	b.bytes += len(doc.Body)
+	b.bytes += doc.indexedBytes()
 	if b.docs >= indexBatchMaxDocs || b.bytes >= indexBatchMaxBytes {
 		return b.commit()
 	}
@@ -1270,7 +1432,14 @@ func (ix *Index) indexAttachment(batch *batchState, entry ScanEntry) (ManifestEn
 		Name:   nameTokensFor(entry.RelPath),
 		Kind:   string(ScanKindAttachment),
 		Offset: 0,
-		Body:   "",
+		// The filename stem is the only title an attachment can have without
+		// opening it, and opening it is what FR-039a forbids.
+		Title: stemTitle(entry.RelPath),
+		// No headings, no properties and NO SOURCE HASH. The empty hash is not
+		// an oversight to be tidied up later: hashing means reading, so an
+		// attachment's freshness is genuinely unknown, and D16.5 requires
+		// unknown freshness to be flagged rather than assumed fresh.
+		Body: "",
 	}
 	if err := batch.add(segmentDocID(entry.RelPath, 0), doc); err != nil {
 		return ManifestEntry{}, err
@@ -1287,14 +1456,44 @@ func (ix *Index) indexAttachment(batch *batchState, entry ScanEntry) (ManifestEn
 
 // indexNote streams a note into consecutive segment documents (FR-034a).
 //
-// One pass over the file does three things: it hashes the bytes, it cuts them
-// into segments of at most IndexSegmentSize, and it hands each segment to the
-// bounded batch. Peak memory is a function of IndexSegmentSize, not of the
-// file's size — which is the whole point, and the reason this does not simply
-// read the note and index it as one document the way pkg/memrooms/index does.
+// The segmenting pass cuts the file into segments of at most IndexSegmentSize,
+// strips the frontmatter block from the first one (D21.2), extracts the note's
+// title, headings and properties into their own fields, and hands each segment
+// to the bounded batch. Peak memory is a function of IndexSegmentSize, not of
+// the file's size — which is the whole point, and the reason this does not
+// simply read the note and index it as one document the way pkg/memrooms/index
+// does.
 //
 // A note of ANY size is indexed in full. Nothing is refused, skipped or
 // truncated.
+//
+// # WHY THIS READS THE FILE TWICE, WHICH IT DID NOT USED TO
+//
+// The content hash was computed DURING the segmenting pass, because the only
+// thing that needed it was the manifest entry returned at the end. ADR-068
+// D16.5 changes that: the hash is now a STORED FIELD ON EVERY SEGMENT
+// DOCUMENT, so that `vault_find` can compare it against the properties index's
+// `source_hash` column on the hit itself, with no manifest parse and no shared
+// mutable state on the query path.
+//
+// Segment 0 is written to the batch long before the file's last byte is read,
+// so a single-pass hash is not available when the document that must carry it
+// is built. The three ways out and why this is the one taken:
+//
+//   - buffer the note's documents until the hash is known — unbounded memory,
+//     which is the one property FR-034a exists to guarantee;
+//   - put the hash only on segment 0 — search collapses to the BEST segment,
+//     which is routinely not segment 0, so the hit would carry no hash and
+//     D16.5 would report unknown freshness for a note that is perfectly fresh;
+//   - read the file twice. Costed and measured rather than assumed: the first
+//     pass is pure sequential I/O through SHA-256 with no analysis, against a
+//     second pass whose bleve analysis costs roughly ninety times the bytes it
+//     is handed (see IndexSegmentSize). One open, two reads, one seek.
+//
+// A file that CHANGES between the two passes yields a hash that does not
+// describe the indexed bytes. That is a false "the two indexes disagree" on the
+// next query and a re-index on the next reconcile, which is the safe direction —
+// D16.5 chooses false positives over a record reported fresh while stale.
 func (ix *Index) indexNote(batch *batchState, entry ScanEntry) (ManifestEntry, error) {
 	absPath := filepath.Join(ix.root, filepath.FromSlash(entry.RelPath))
 	f, err := openFileForRead(absPath)
@@ -1303,8 +1502,26 @@ func (ix *Index) indexNote(batch *batchState, entry ScanEntry) (ManifestEntry, e
 	}
 	defer func() { _ = f.Close() }()
 
-	hasher := sha256.New()
+	sourceHash, hashedBytes, err := hashReader(f)
+	if err != nil {
+		return ManifestEntry{}, fmt.Errorf("read note %s: %w", entry.RelPath, err)
+	}
+	// FR-111 asked on the hashing pass, which is strictly earlier than it used
+	// to be asked: a cloud placeholder that reads as a clean zero-byte EOF for a
+	// file stat says has content is now refused BEFORE any document is written,
+	// rather than after. The classification is lifecycle.go's, not a second copy
+	// of the rule — two independent classifications drift, and the direction
+	// they drift in is "one of them starts calling an evicted file empty".
+	if cErr := ClassifyContentFailure(absPath, entry.Size, hashedBytes, nil); cErr != nil {
+		return ManifestEntry{}, cErr
+	}
+	if _, sErr := f.Seek(0, io.SeekStart); sErr != nil {
+		return ManifestEntry{}, fmt.Errorf("rewind note %s: %w", entry.RelPath, sErr)
+	}
+
 	name := nameTokensFor(entry.RelPath)
+	nf := noteFields{Title: stemTitle(entry.RelPath)}
+	headings := newHeadingCollector()
 
 	buf := make([]byte, IndexSegmentSize)
 	carry := 0        // bytes held over from the previous read (a partial line)
@@ -1322,9 +1539,6 @@ func (ix *Index) indexNote(batch *batchState, entry ScanEntry) (ManifestEntry, e
 		if readErr != nil {
 			eof = true
 		}
-		// Hash exactly the bytes just read, in file order, so the hash is over
-		// the file's true contents regardless of how they were segmented.
-		hasher.Write(buf[carry : carry+n])
 		totalRead += n
 		filled := carry + n
 
@@ -1343,12 +1557,42 @@ func (ix *Index) indexNote(batch *batchState, entry ScanEntry) (ManifestEntry, e
 			}
 		}
 
+		// The frontmatter is located ONCE, on the first buffer, and the body
+		// field of segment 0 starts after it. Everything downstream of this
+		// line is why `status: prospect` stops arriving as the loose prose
+		// tokens "status" and "prospect" (D21.2).
+		skip := 0
+		if ordinal == 0 {
+			nf, skip = extractNoteFields(buf[:filled], entry.RelPath)
+			if nf.Truncated != "" {
+				slog.Warn("knowledge: note indexed with incomplete fields",
+					"collection", ix.root, "path", entry.RelPath, "reason", nf.Truncated)
+			}
+			if skip > cut {
+				// The block's closing fence is the last line of this segment
+				// and carries no terminator. The segment is entirely
+				// frontmatter: it holds the note's fields and no body.
+				skip = cut
+			}
+		}
+
+		// The heading scanner is fed the ORIGINAL bytes, frontmatter included,
+		// because it is the thing that knows frontmatter contains no headings —
+		// and because skipping them would desynchronise its line counter.
+		headingText := headings.feed(buf[:cut], offset)
+
 		if err := batch.add(segmentDocID(entry.RelPath, ordinal), indexDoc{
-			Path:   entry.RelPath,
-			Name:   name,
-			Kind:   string(ScanKindNote),
-			Offset: float64(offset),
-			Body:   string(buf[:cut]),
+			Path:       entry.RelPath,
+			Name:       name,
+			Kind:       string(ScanKindNote),
+			Offset:     float64(offset + int64(skip)),
+			Title:      nf.Title,
+			Headings:   headingText,
+			PropKeys:   nf.PropKeys,
+			PropValues: nf.PropValues,
+			Props:      nf.Props,
+			SourceHash: sourceHash,
+			Body:       string(buf[skip:cut]),
 		}); err != nil {
 			return ManifestEntry{}, err
 		}
@@ -1362,34 +1606,27 @@ func (ix *Index) indexNote(batch *batchState, entry ScanEntry) (ManifestEntry, e
 		}
 	}
 
-	// FR-111, and it has to be asked before the empty-note branch below or it
-	// is not asked at all.
-	//
-	// There are two ways a cloud provider's placeholder reads as nothing. The
-	// loud one — open or read returns an error — is already handled: the error
-	// propagates, the sync loop records a ScanProblem and leaves the note out
-	// of the index. The QUIET one is a clean EOF at zero bytes for a file stat
-	// says has content, and it used to fall straight through into "an empty
-	// note is still a note" and be indexed as an EMPTY document: the index
-	// then answers "this note contains nothing" about a file that may contain
-	// anything, which is exactly the outcome FR-111 forbids.
-	//
-	// The classification is lifecycle.go's, not a second copy of the rule.
-	// Two independent classifications would drift, and the direction they
-	// drift in is "one of them starts calling an evicted file empty".
+	// Asked a second time, over the segmenting pass's own byte count. The
+	// hashing pass has already cleared this file, so a failure here means the
+	// note stopped being readable BETWEEN the two passes — which is exactly the
+	// eviction race the single-pass version could not see at all.
 	if cErr := ClassifyContentFailure(absPath, entry.Size, totalRead, nil); cErr != nil {
 		return ManifestEntry{}, cErr
 	}
 
 	if !wroteAny {
 		// An empty note is still a note: it must be addressable, carry an
-		// outline and appear in the graph. It gets one empty document.
+		// outline and appear in the graph. It gets one empty document — which
+		// still carries its title and its source hash, so an empty note is
+		// findable by name and its freshness is known rather than unknown.
 		if err := batch.add(segmentDocID(entry.RelPath, 0), indexDoc{
-			Path:   entry.RelPath,
-			Name:   name,
-			Kind:   string(ScanKindNote),
-			Offset: 0,
-			Body:   "",
+			Path:       entry.RelPath,
+			Name:       name,
+			Kind:       string(ScanKindNote),
+			Offset:     0,
+			Title:      nf.Title,
+			SourceHash: sourceHash,
+			Body:       "",
 		}); err != nil {
 			return ManifestEntry{}, err
 		}
@@ -1401,9 +1638,24 @@ func (ix *Index) indexNote(batch *batchState, entry ScanEntry) (ManifestEntry, e
 		Kind:         ScanKindNote,
 		Size:         entry.Size,
 		ModTimeNanos: entry.ModTimeNanos,
-		Hash:         hex.EncodeToString(hasher.Sum(nil)),
+		Hash:         sourceHash,
 		Segments:     ordinal,
 	}, nil
+}
+
+// hashReader streams r through SHA-256 and reports the hex digest and how many
+// bytes it consumed.
+//
+// The byte count is not incidental: it is what FR-111's ClassifyContentFailure
+// needs to tell an empty note from a cloud placeholder that read as nothing.
+func hashReader(r io.Reader) (string, int, error) {
+	h := sha256.New()
+	buf := make([]byte, 1<<20)
+	n, err := io.CopyBuffer(h, r, buf)
+	if err != nil {
+		return "", int(n), err
+	}
+	return hex.EncodeToString(h.Sum(nil)), int(n), nil
 }
 
 // hashFile streams a note through SHA-256 without holding it in memory. Used
@@ -1525,30 +1777,150 @@ func (ix *Index) SearchFiltered(query string, limit int, keep func(relPath strin
 	}
 }
 
+// ErrUnknownField means a field query named a field the index does not have.
+//
+// It is an ERROR rather than an empty result, and that is the entire point of
+// the allow-list behind it. bleve answers a query against a field it has never
+// heard of with zero hits and no error, which is indistinguishable from "no
+// note matches" — the confidently-wrong-answer shape ADR-068 §1.3 catalogues.
+var ErrUnknownField = errors.New("knowledge: unknown index field")
+
+// SearchField runs an exact TERM query against one field and returns at most
+// limit results, one per file.
+//
+// This is ADR-068 D21.2's exit criterion, and the criterion is that it is
+// possible AT ALL: before fielded indexing there was no field to query. A
+// property key lived in the body as a loose prose token, so "which notes
+// declare a `status`?" could only be asked as a full-text search for the word
+// "status", which also matches every note that merely uses the word in a
+// sentence — and reported Complete: true while doing it.
+//
+// Two field names are worth naming here because they are the ones a caller
+// actually wants:
+//
+//	SearchField(fieldPropKey, "status", 20)          // notes that HAVE a status
+//	SearchField(fieldProp, "status=prospect", 20)    // notes whose status IS prospect
+//
+// Both are keyword-analysed and case-folded at index time by fields.go, so the
+// term must be folded the same way — which foldFieldTerm does here rather than
+// leaving each caller to remember.
+//
+// It is a TERM query, not a match query: the caller is naming an exact value,
+// and running it through an analyzer would stem `status` to `statu` and quietly
+// stop matching. For prose fields (title, headings, body, prop_value) the term
+// must therefore be a single analysed token; a caller wanting prose matching
+// wants Search, which is the front door.
+//
+// THIS IS NOT A TYPED FILTER. ADR-068 D16.2b as reversed is explicit: the
+// properties index narrows candidates and our own tested comparator decides
+// every typed comparison. This narrows text candidates. It does not compare
+// dates, it does not compare numbers, and no caller may treat a hit from it as
+// a comparison having been evaluated.
+func (ix *Index) SearchField(field, term string, limit int) ([]IndexHit, error) {
+	if _, ok := queryableFields[field]; !ok {
+		return nil, fmt.Errorf("%w: %q", ErrUnknownField, field)
+	}
+	if strings.TrimSpace(term) == "" {
+		return nil, fmt.Errorf("knowledge: field query on %q has no term", field)
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+
+	tq := bleveQuery.NewTermQuery(foldFieldTerm(field, term))
+	tq.SetField(field)
+
+	// Segments collapse to one hit per file exactly as they do for Search, and
+	// for the same reason: a property declared once in a note that happens to
+	// be five segments long is one note, not five.
+	fetch := limit * 4
+	if fetch < 20 {
+		fetch = 20
+	}
+	if fetch > indexSearchMaxFetch {
+		fetch = indexSearchMaxFetch
+	}
+	hits, _, err := ix.runSearch(tq, fetch, fmt.Sprintf("%s:%s", field, term))
+	if err != nil {
+		return nil, err
+	}
+	collapsed := collapseSegmentHits(hits)
+	if len(collapsed) > limit {
+		collapsed = collapsed[:limit]
+	}
+	return collapsed, nil
+}
+
+// foldFieldTerm applies to a query term the same transformation fields.go
+// applied to the indexed one.
+//
+// Only the two fields that are written folded are folded here. Folding a `path`
+// or a `kind` term would silently change what a caller asked for, and folding a
+// prose field's term does nothing the analyzer has not already done.
+func foldFieldTerm(field, term string) string {
+	switch field {
+	case fieldPropKey, fieldProp:
+		return records.FoldKey(strings.TrimSpace(term))
+	default:
+		return term
+	}
+}
+
 // searchRaw executes one bleve query and returns the raw per-SEGMENT hits.
 func (ix *Index) searchRaw(query string, size int) ([]IndexHit, uint64, error) {
-	var req *bleve.SearchRequest
+	var q bleveQuery.Query
 	if strings.TrimSpace(query) == "" {
-		req = bleve.NewSearchRequestOptions(bleve.NewMatchAllQuery(), size, 0, false)
+		q = bleve.NewMatchAllQuery()
 	} else {
 		// Explicit per-field match queries, for the reason pkg/memrooms/index
 		// documents: a plain match query targets the composite _all field,
 		// whose analyzer does not match the field-level mapping, and returns
 		// nothing even when the terms are present.
-		qs := make([]bleveQuery.Query, 0, 3)
-		for _, field := range []string{fieldName, fieldPath, fieldBody} {
+		fields := []string{
+			fieldName, fieldPath, fieldBody,
+			// D21.2's fields. A term in a note's title, one of its headings or
+			// one of its property values is now a reason to return the note,
+			// where before the title and the headings were only findable
+			// because they happened to also be body text and the property
+			// values were findable as prose that had lost its key.
+			fieldTitle, fieldHeadings, fieldPropValue,
+			// prop_key is keyword-analysed, so a match query against it asks
+			// "is the whole query string the name of a property this note
+			// declares?". A search for `status` therefore finds every note
+			// that HAS a status, which is a question the index could not
+			// answer at all before.
+			fieldPropKey,
+		}
+		qs := make([]bleveQuery.Query, 0, len(fields))
+		for _, field := range fields {
 			mq := bleveQuery.NewMatchQuery(query)
 			mq.SetField(field)
 			qs = append(qs, mq)
 		}
-		req = bleve.NewSearchRequestOptions(bleve.NewDisjunctionQuery(qs...), size, 0, false)
+		q = bleve.NewDisjunctionQuery(qs...)
 	}
-	req.Fields = []string{fieldPath, fieldKind, fieldOffset}
+	return ix.runSearch(q, size, query)
+}
+
+// runSearch executes one bleve query and decodes its hits.
+//
+// It is shared by the free-text path and the field-query path so that the
+// retrieved stored fields and the tie-break are decided ONCE. Two copies of
+// req.Fields is how a field gets added to one search path and not the other,
+// and the symptom of that is a hit whose SourceHash is empty for no reason the
+// caller can see — reported by D16.5 as "the two indexes disagree" about a note
+// that is perfectly fresh.
+//
+// label appears in the error only; it is what the caller asked for, in whatever
+// form makes the failure readable.
+func (ix *Index) runSearch(q bleveQuery.Query, size int, label string) ([]IndexHit, uint64, error) {
+	req := bleve.NewSearchRequestOptions(q, size, 0, false)
+	req.Fields = []string{fieldPath, fieldKind, fieldOffset, fieldSourceHash}
 	req.SortBy([]string{"-_score", "_id"}) // deterministic ties (FR-046)
 
 	res, err := ix.idx.Search(req)
 	if err != nil {
-		return nil, 0, fmt.Errorf("knowledge: search %q: %w", query, err)
+		return nil, 0, fmt.Errorf("knowledge: search %q: %w", label, err)
 	}
 	out := make([]IndexHit, 0, len(res.Hits))
 	for _, h := range res.Hits {
@@ -1562,6 +1934,12 @@ func (ix *Index) searchRaw(query string, size int) ([]IndexHit, uint64, error) {
 		}
 		if v, ok := h.Fields[fieldOffset].(float64); ok {
 			hit.Offset = int64(v)
+		}
+		// D16.5. A missing or empty value is left empty rather than defaulted:
+		// unknown freshness must reach the caller as unknown, because the
+		// caller's rule is to flag it, and a default would make it look known.
+		if v, ok := h.Fields[fieldSourceHash].(string); ok {
+			hit.SourceHash = v
 		}
 		out = append(out, hit)
 	}

@@ -1025,33 +1025,19 @@ func titleFor(absPath, relPath string) string {
 	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
 		return fallback
 	}
-	lines := strings.Split(string(head[:n]), "\n")
 
-	inFrontmatter := len(lines) > 0 && strings.TrimSpace(lines[0]) == "---"
-	for i, line := range lines {
-		trimmed := strings.TrimRight(line, "\r")
-		if inFrontmatter && i > 0 {
-			if strings.TrimSpace(trimmed) == "---" {
-				inFrontmatter = false
-				continue
-			}
-			if rest, ok := strings.CutPrefix(trimmed, "title:"); ok {
-				if v := strings.Trim(strings.TrimSpace(rest), `"'`); v != "" {
-					return v
-				}
-			}
-			continue
-		}
-		if inFrontmatter {
-			continue
-		}
-		if rest, ok := strings.CutPrefix(trimmed, "# "); ok {
-			if v := strings.TrimSpace(rest); v != "" {
-				return v
-			}
-		}
+	// ONE title derivation, not two. This used to be a line scanner of its own,
+	// and ADR-068 D21.2 added a second one on the indexing path when `title`
+	// became an indexed field. Two derivations mean a note that RANKS on the
+	// title bleve holds and DISPLAYS the different title this function found —
+	// no error, just a result that argues with itself. extractNoteFields is the
+	// one implementation; this call site supplies 8 KiB of head, the indexer
+	// supplies its whole first segment.
+	nf, _ := extractNoteFields(head[:n], relPath)
+	if nf.Title == "" {
+		return fallback
 	}
-	return fallback
+	return nf.Title
 }
 
 // ---------------------------------------------------------------------------
