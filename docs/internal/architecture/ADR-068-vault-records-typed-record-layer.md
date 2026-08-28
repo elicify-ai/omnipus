@@ -130,6 +130,38 @@ no basis for. Vaults differ enormously; that is the normal case, not the edge ca
 - The mechanism must be complete enough that a skill can describe any reasonable convention
   without asking us to change code.
 
+**D0.1 — STRENGTHENED, revision 7, operator ruling, in the operator's own words because they are
+sharper than anything this decision had:**
+
+> **"We should not have any hardcoded CRM enums at all. We create a generic vault system where
+> enums like that must very clearly be defined by agents and not hard coded — like an empty
+> database, all capabilities but nothing predefined."**
+
+**This does not change D0; it makes D0 TESTABLE, and it says why that was necessary.** D0 already
+forbade shipped record types. What it did not do was reckon with its own prose: **this ADR uses CRM
+vocabulary fourteen times and the implementing specification thirty-three times**, always as
+illustration, and an implementer skimming forty-odd mentions of "deal", "company", "stage" and
+"arr" could reasonably conclude the product knows what those are. **A rule that is stated once and
+then quietly undermined by every example is a rule that will be broken by someone acting in good
+faith.** So:
+
+- **Every occurrence of `company`, `deal`, `contact`, `lead`, `meeting`, `person`, `status`,
+  `stage`, `arr`, `open`, `won`, `lost`, `prospect`, `Acme`, `Northwind`, `CO-0142`, `DEAL-0117`
+  and their kin, in this ADR and in the specification, is an ILLUSTRATION OF WHAT A VAULT MIGHT
+  DEFINE.** None is shipped, seeded, defaulted to, validated against, or known by name to any
+  compiled artifact. **The spec states this in a boxed note before its requirements begin, and
+  every table of illustrative strings carries the same marker.**
+- **A fresh install has ZERO record types**, zero seeded enum values, zero seeded property names,
+  zero seeded views and zero seeded identifier prefixes. A vault with no `.omnipus-vault/records/`
+  directory is a working vault of ordinary notes (D1's premise, unchanged).
+- **A denylist test asserts it** over every non-test file of the record packages — spec **FR-004a**
+  and its test 54. **Verified at revision time: the code is already clean.** Zero domain vocabulary
+  outside tests in `pkg/records` and `pkg/knowledge`. **The test exists to keep it that way**, not
+  to repair something — and it is worth having precisely because the documentation drifted from the
+  rule while the code did not.
+- Test fixtures may use domain vocabulary, and they do. **Fixtures are excluded by path**, narrowly
+  and by name, rather than by a general "except where inconvenient".
+
 ### D1 — A record is a note with a declared record type
 
 A record is an ordinary Markdown file with YAML frontmatter, in the operator's own vault.
@@ -187,9 +219,46 @@ schemas make that failure worse, not better.
 | `enum` | one of a declared, **ordered** value set | the `1-Pending…7-DoNotContact` prefix hack (§1.4) |
 | `relation` | a typed edge to another record (D5) | the five-step workaround (§1.2) |
 | `date` | a day or an instant, comparable | `last_contacted` stored as text, silently unmatchable |
-| `number` | a quantity, with `unit` declared as metadata rather than glued into the property name | `exercise: 60 minutes` — text to one engine, duration to another, sortable in neither |
-| `money` | amount + ISO-4217 currency + scale, as **one** value | two loose fields nothing keeps together, over binary floats |
+| `integer` | a signed 64-bit whole number, bound-checked and refused outside int64 | a count silently widened to a float, or a large identifier silently truncated |
+| `decimal` | an exact, arbitrary-precision number, `unit` declared as metadata rather than glued into the property name | `exercise: 60 minutes` — text to one engine, duration to another, sortable in neither. And every quantity that a binary float rounds without saying so |
 | `person` | a relation to a person record, distinct from a name typed as text | the same concept modelled both ways in one vault |
+
+> **REVISED IN REVISION 7 BY OPERATOR RULING, and the count did not change even though two types
+> did.** `money` — *"amount + ISO-4217 currency + scale, as **one** value"* — is **DELETED**, and
+> `number` is **SPLIT** into `integer` and `decimal`. The requirement, verbatim: *"we do not need a
+> real money type with currency, only a precise decimal datatype and also an integer 64 datatype."*
+>
+> **The arithmetic is worth stating because it is easy to get wrong in the other direction:**
+> −1 (`money`) −1 (`number`) +2 = **still seven types**. What changed is the membership, not the
+> count. This heading stays "Seven property types" and is not stale.
+>
+> **Why the split, rather than one `number` type:** with one numeric type the index must infer a
+> column type from the first value it sees, so the same property could be an integer column in one
+> vault and a text column in another, and `2` versus `2.0` would compare differently depending on
+> which note was indexed first. **The author chooses; the storage follows the schema.** For
+> comparison purposes the two are **one declared type** (spec R-1): `3 = 3.0` is true, and an
+> `integer` compares with a `decimal` numerically. The split decides storage and bounds, not a
+> comparison domain.
+>
+> **`decimal`'s precision bound is 100 places, and it is deliberately generous.** The retired
+> `money` type bounded scale at **12** (`maxMoneyScale`, `pkg/records/decimal.go:166`) — a
+> currency-shaped limit for a type that is not currency-shaped. **That bound is deleted with money
+> and must not be inherited.** `decimal` takes the parser's own `maxDecimalScale = 100`
+> (`decimal.go:48`), which is already enforced and already has a property test sweeping every scale
+> in `[-100, +100]`. A value above it is **refused naming the bound and its own scale, never
+> rounded** — rounding to satisfy a bound is a silent change to a number.
+>
+> **`pkg/records/decimal.go` (588 lines) survives money's removal intact and is the valuable core:**
+> `math/big`-based, `Decimal` = `unscaled *big.Int` + `scale int32`, with `float64`/`float32`
+> appearing on exactly two lines of the file, **both comments**. `pkg/records/money.go` (281 lines)
+> and its three test files (1,276 lines) become dead — the specification's §10a enumerates them,
+> with `RecordMoney.yaml` and its contract references, as scheduled deletions.
+>
+> **What goes with `money`, so nothing is left dangling:** O-2's cross-currency refusal, D16.6's
+> R-6 row, D13's cross-currency sentence, D22.5's example, the spec's R-6 rule, FR-012/013/014 in
+> their old meanings, `CurrenciesPresent`, ISO-4217 handling and every currency-first/amount-first
+> parsing path. **Multi-currency conversion, previously "pending O-2", is now out of scope
+> permanently** — there is no money type to convert.
 
 Every property additionally declares three things whose absence is what actually breaks
 queries:
@@ -215,17 +284,45 @@ value — precisely the days being asked about.
 vaults carry `prm-tier`, `habits-reading`, `health_sleep_total_minutes`. Namespacing to work
 around a tool limitation is not a convention worth inheriting.
 
-### D4 — Enums are closed and ordered; ordering is data, not spelling
+### D4 — Enums are closed. Ordering is SQLite's, and a domain order is a value prefix.
 
-An enum declares its values in order. Sorting an enum column sorts by declared position.
-Writing a value outside the set is **rejected**, with the permitted values named in the error.
+> **TITLE AND SECOND CLAUSE REVISED IN REVISION 7 BY OPERATOR RULING.** The heading was *"Enums are
+> closed and ordered; ordering is data, not spelling"*. **The "ordered" half is withdrawn**; the
+> ruling: *"the enum ordering is following SQLite standard; if we need different ordering we need
+> to prefix the content."* **"Closed" is unchanged and is the half D4's evidence actually
+> supports.**
 
-**Why closed:** an agent writing `Won` where the schema says `won` must be corrected, not
-silently create a second de-facto value. Notion's multi-select auto-creates an option on any
-typo; the observable result in real vaults is `Won`, `won` and `Closed Won` in one column.
+An enum declares its permitted values as a **set**. Writing a value outside the set is
+**rejected**, with the permitted values named in the error. **Sorting an enum column sorts
+lexically — SQLite's own ordering.** An author who wants a domain order writes it into the values:
+`1-lead`, `2-qualified`, `3-proposal`, `4-won`.
 
-**Why ordered:** because otherwise operators encode order into strings, and it leaks into
-every rendering.
+**Why closed:** an agent writing an invented value must be corrected, not silently create a second
+de-facto value. Notion's multi-select auto-creates an option on any typo; the observable result in
+real vaults is three spellings of one state in one column.
+
+**Case-folding is NOT the thing "closed" forbids, and revision 7 says so explicitly because the
+spec previously read it that way.** Under the case-insensitivity ruling, a value differing only in
+case **resolves to** the declared value — collapsing two spellings into **one**. Auto-creating a
+new option invents a **second**. D4 forbids the second. The specification's revision 4 had enum
+equality as exact-case, which rejected a value D4 has no quarrel with.
+
+**What the ordering ruling deletes:** a derived ordinal column, the schema bookkeeping that kept it
+in step with the file, the `NULLS LAST` requirement that came with it (SQLite sorts NULL first
+ascending, so a value with no ordinal headed page one), and an unwritten rebuild obligation — an
+enum **reorder** changed the derived ordinal for every record of the type, and no requirement
+anywhere said the index had to be rebuilt for it.
+
+**The cost is real and is accepted rather than glossed.** §1.4 of this ADR cites the
+`1-Pending…7-DoNotContact` prefix hack as a **documented failure** of the incumbents, and this
+ruling adopts it as the mechanism. **The trade is visibility.** The prefix sits in the operator's
+own file and does exactly what it looks like it does. A derived ordinal was a second source of
+truth for the order, invisible in the vault, drifting from the schema file on every reorder, and
+capable of changing the ordering of every existing report while the cascade block reported *"0
+records lost validity"*. **A convention the operator can see and change beats a mechanism they
+cannot see and we have to maintain** — and the incumbents' version of this hack was bad because
+their column types were bound vault-wide and unfixable, not because a prefix is a bad way to say
+"this comes first".
 
 Enums carry an optional `group` (`open` / `done` / `cancelled`) so that "is this finished?"
 is answerable across record types with different vocabularies.
