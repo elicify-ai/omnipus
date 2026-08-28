@@ -773,7 +773,7 @@ sequencing is now the main lever left"* — was dropped in revision 1. Reinstate
 | # | Alternative | Why rejected |
 |---|---|---|
 | A1 | `pkg/utils/bm25.go` (as #632 proposes) | Re-indexes the whole corpus per query |
-| A2 | SQLite FTS5, as `ev` uses | A second SQLite user against the house rule, for no gain over scorch |
+| A2 | SQLite FTS5, as `ev` uses | A second SQLite user against the house rule, for no gain over scorch. **⚠️ SUPERSEDED IN PART, 2026-08-28 — see the note below the table** |
 | A3 | `.obsidian/`-only detection | A folder Obsidian never opened silently isn't a KB; names a vendor as the sole marker of an Omnipus feature |
 | A4 | Omnipus writes `.obsidian/` | Fabricating another application's config directory. Unnecessary |
 | A5 | `fsnotify` watcher | New dependency, least reliable on cloud-synced folders — exactly where needed |
@@ -795,6 +795,40 @@ sequencing is now the main lever left"* — was dropped in revision 1. Reinstate
 | **A23** | **A commercial PDF SDK** (PDF.js Express, Apryse, Nutrient) | Richer annotation and real digital signatures out of the box, but proprietary and paid — a poor fit for a community MIT project, and it would be the only non-open component in the stack |
 | A15 | **Index keyed by workspace+mount** | Would produce N indexes over one corpus and make D13's revoke destroy a sibling workspace's index |
 | A16 | **Blanket relative-link fix across all markdown** | Would make model-authored relative hrefs live links on the gateway origin (D16) |
+
+> **A2 — SUPERSEDED IN PART by ADR-068 D16 / D16.4 item 1, 2026-08-28.**
+>
+> A2's rejection **still stands for what it was actually about: full-text SEARCH.** Nothing here
+> is reversed. Search remains scorch + bleve; no FTS5 table exists, and proposing one still has to
+> get past A2.
+>
+> What has changed is the premise, not the verdict. A2 gave two reasons, and only the first
+> survives contact with a different problem:
+>
+> 1. *"For no gain over scorch"* — assessed **for search**, where it was correct and remains
+>    correct. ADR-068's use is the vault's **typed record layer**, whose requirement is
+>    aggregation: joins, `OR`, grouping and aggregates over declared, typed properties. Scorch
+>    cannot do any of that at any price, so "no gain" does not transfer to it. ADR-068 D16 adopts
+>    a **derived, disposable** SQLite properties index for that, and only that: it narrows
+>    candidates, while the comparator in `pkg/records` decides every comparison (D16.2b as ruled in
+>    revision 7). Notes remain the sole source of truth — delete the index and it rebuilds.
+> 2. *"A second SQLite user against the house rule"* — **the house rule itself was already
+>    inaccurate when A2 was written.** `CLAUDE.md` said SQLite was isolated to WhatsApp session
+>    storage, and Matrix's E2EE crypto store had been a second user for some time
+>    (`pkg/channels/matrix/matrix.go:31` imports `modernc.org/sqlite`; `:343` opens the store with
+>    `sql.Open(sqliteDriver, connStr)`). A2 therefore counted the properties index as the second
+>    user when it would have been the third. The rule has now been corrected rather than quietly
+>    broken: `CLAUDE.md`'s Storage paragraph reads *"SQLite is used for WhatsApp and Matrix session
+>    storage and for the vault's derived properties index (ADR-068 D16); it is not a general
+>    application store"*, which is the boundary that was actually meant.
+>
+> **The cost this incurs is recorded where it is paid, not here:** ADR-068 D16.4 (two indexes can
+> disagree; the divergence check is D16.5), D16.2a (SQLite cannot build on `linux/mipsle`,
+> `netbsd/*` or `freebsd/arm`, so records refuse **by name** there and never return an empty
+> result) and D16.6 (why SQL evaluates no comparison).
+>
+> Recorded here so that an agent reading ADR-067 alone does not treat the properties index as a
+> violation of a decision this project had already made.
 
 ---
 
