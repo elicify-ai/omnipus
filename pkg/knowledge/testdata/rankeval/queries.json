@@ -1,0 +1,604 @@
+{
+  "queries": [
+    {
+      "id": "uniform-00",
+      "condition": "uniform",
+      "question": "What do the notes say about retention review lowfield ledger programme approved?",
+      "query": "retention review lowfield ledger programme approved",
+      "relevant": {
+        "projects/Lowfield Ledger Programme.md": 2
+      },
+      "source_sentence": "The retention review for Lowfield Ledger Programme approved the retention window ahead of 2026 Q2."
+    },
+    {
+      "id": "uniform-01",
+      "condition": "uniform",
+      "question": "What do the notes say about staffing review lowfield quarry deferred audit?",
+      "query": "staffing review lowfield quarry deferred audit",
+      "relevant": {
+        "projects/Lowfield Quarry Programme.md": 2
+      },
+      "source_sentence": "The staffing review for Lowfield Quarry deferred the audit trail ahead of 2026 Q1."
+    },
+    {
+      "id": "uniform-02",
+      "condition": "uniform",
+      "question": "What do the notes say about forecasting review ashgrove ledger narrowed renewal?",
+      "query": "forecasting review ashgrove ledger narrowed renewal",
+      "relevant": {
+        "companies/Ashgrove Ledger.md": 2
+      },
+      "source_sentence": "The forecasting review for Ashgrove Ledger narrowed the renewal date ahead of 2026 Q4."
+    },
+    {
+      "id": "uniform-03",
+      "condition": "uniform",
+      "question": "What do the notes say about retention review kestrel beacon ratified discount?",
+      "query": "retention review kestrel beacon ratified discount",
+      "relevant": {
+        "decisions/Decision 063 retention.md": 2
+      },
+      "source_sentence": "The retention review for Kestrel Beacon ratified the discount tier ahead of 2026 Q4."
+    },
+    {
+      "id": "uniform-04",
+      "condition": "uniform",
+      "question": "What do the notes say about ongoing staffing work continues affect retention?",
+      "query": "ongoing staffing work continues affect retention",
+      "relevant": {
+        "meetings/Thornbury Compass Sync 189.md": 2
+      },
+      "source_sentence": "Ongoing staffing work continues to affect the retention window across the portfolio."
+    },
+    {
+      "id": "uniform-05",
+      "condition": "uniform",
+      "question": "What do the notes say about ongoing security work continues affect sandbox?",
+      "query": "ongoing security work continues affect sandbox",
+      "relevant": {
+        "projects/Redmoor Beacon Programme.md": 2
+      },
+      "source_sentence": "Ongoing security work continues to affect the sandbox policy across the portfolio."
+    },
+    {
+      "id": "uniform-06",
+      "condition": "uniform",
+      "question": "What do the notes say about ongoing pricing work continues affect data?",
+      "query": "ongoing pricing work continues affect data",
+      "relevant": {
+        "projects/Pinehurst Foundry Programme.md": 2
+      },
+      "source_sentence": "Ongoing pricing work continues to affect the data model across the portfolio."
+    },
+    {
+      "id": "uniform-07",
+      "condition": "uniform",
+      "question": "What do the notes say about ongoing compliance work continues affect renewal?",
+      "query": "ongoing compliance work continues affect renewal",
+      "relevant": {
+        "meetings/Pinehurst Beacon Sync 002.md": 2
+      },
+      "source_sentence": "Ongoing compliance work continues to affect the renewal date across the portfolio."
+    },
+    {
+      "id": "uniform-08",
+      "condition": "uniform",
+      "question": "What do the notes say about ongoing migration work continues affect pilot?",
+      "query": "ongoing migration work continues affect pilot",
+      "relevant": {
+        "people/Eleni Duarte.md": 2
+      },
+      "source_sentence": "Ongoing migration work continues to affect the pilot cohort across the portfolio."
+    },
+    {
+      "id": "uniform-09",
+      "condition": "uniform",
+      "question": "What do the notes say about procurement review osian bergstrom rejected rollout?",
+      "query": "procurement review osian bergstrom rejected rollout",
+      "relevant": {
+        "people/Osian Bergstrom.md": 2
+      },
+      "source_sentence": "The procurement review for Osian Bergstrom rejected the rollout plan ahead of 2026 Q3."
+    },
+    {
+      "id": "uniform-10",
+      "condition": "uniform",
+      "question": "What do the notes say about retention review mikael achebe postponed support?",
+      "query": "retention review mikael achebe postponed support",
+      "relevant": {
+        "meetings/Thornbury Foundry Sync 051.md": 2
+      },
+      "source_sentence": "The retention review for Mikael Achebe postponed the support rota ahead of 2026 Q2."
+    },
+    {
+      "id": "uniform-11",
+      "condition": "uniform",
+      "question": "What do the notes say about security review harbour quarry revisited data?",
+      "query": "security review harbour quarry revisited data",
+      "relevant": {
+        "meetings/Harbour Quarry Sync 211.md": 2
+      },
+      "source_sentence": "The security review for Harbour Quarry revisited the data model ahead of 2026 Q1."
+    },
+    {
+      "id": "uniform-12",
+      "condition": "uniform",
+      "question": "What do the notes say about ongoing billing work continues affect data?",
+      "query": "ongoing billing work continues affect data",
+      "relevant": {
+        "meetings/Thornbury Ledger Sync 008.md": 2
+      },
+      "source_sentence": "Ongoing billing work continues to affect the data model across the portfolio."
+    },
+    {
+      "id": "uniform-13",
+      "condition": "uniform",
+      "question": "What do the notes say about latency review pinehurst atlas programme documented?",
+      "query": "latency review pinehurst atlas programme documented",
+      "relevant": {
+        "projects/Pinehurst Atlas Programme.md": 2
+      },
+      "source_sentence": "The latency review for Pinehurst Atlas Programme documented the retention window ahead of 2026 Q3."
+    },
+    {
+      "id": "uniform-14",
+      "condition": "uniform",
+      "question": "What do the notes say about staffing review alina bergstrom revisited renewal?",
+      "query": "staffing review alina bergstrom revisited renewal",
+      "relevant": {
+        "people/Alina Bergstrom.md": 2
+      },
+      "source_sentence": "The staffing review for Alina Bergstrom revisited the renewal date ahead of 2026 Q4."
+    },
+    {
+      "id": "uniform-15",
+      "condition": "uniform",
+      "question": "What do the notes say about latency review tomasz bergstrom escalated support?",
+      "query": "latency review tomasz bergstrom escalated support",
+      "relevant": {
+        "meetings/Ashgrove Foundry Sync 178.md": 2
+      },
+      "source_sentence": "The latency review for Tomasz Bergstrom escalated the support rota ahead of 2026 Q3."
+    },
+    {
+      "id": "uniform-16",
+      "condition": "uniform",
+      "question": "What do the notes say about security review kwame duarte ratified retention?",
+      "query": "security review kwame duarte ratified retention",
+      "relevant": {
+        "meetings/Harbour Quarry Sync 198.md": 2
+      },
+      "source_sentence": "The security review for Kwame Duarte ratified the retention window ahead of 2026 Q1."
+    },
+    {
+      "id": "uniform-17",
+      "condition": "uniform",
+      "question": "What do the notes say about security review harbour quarry ratified pilot?",
+      "query": "security review harbour quarry ratified pilot",
+      "relevant": {
+        "meetings/Harbour Quarry Sync 198.md": 2
+      },
+      "source_sentence": "The security review for Harbour Quarry ratified the pilot cohort ahead of 2026 Q2."
+    },
+    {
+      "id": "uniform-18",
+      "condition": "uniform",
+      "question": "What do the notes say about ongoing retention work continues affect support?",
+      "query": "ongoing retention work continues affect support",
+      "relevant": {
+        "meetings/Harbour Foundry Sync 227.md": 2
+      },
+      "source_sentence": "Ongoing retention work continues to affect the support rota across the portfolio."
+    },
+    {
+      "id": "uniform-19",
+      "condition": "uniform",
+      "question": "What do the notes say about ongoing staffing work continues affect discount?",
+      "query": "ongoing staffing work continues affect discount",
+      "relevant": {
+        "projects/Blackstone Beacon Programme.md": 2
+      },
+      "source_sentence": "Ongoing staffing work continues to affect the discount tier across the portfolio."
+    },
+    {
+      "id": "uniform-20",
+      "condition": "uniform",
+      "question": "What do the notes say about compliance review eleni achebe postponed audit?",
+      "query": "compliance review eleni achebe postponed audit",
+      "relevant": {
+        "people/Eleni Achebe.md": 2
+      },
+      "source_sentence": "The compliance review for Eleni Achebe postponed the audit trail ahead of 2026 Q4."
+    },
+    {
+      "id": "uniform-21",
+      "condition": "uniform",
+      "question": "What do the notes say about billing review pinehurst atlas approved data?",
+      "query": "billing review pinehurst atlas approved data",
+      "relevant": {
+        "companies/Pinehurst Atlas.md": 2
+      },
+      "source_sentence": "The billing review for Pinehurst Atlas approved the data model ahead of 2026 Q4."
+    },
+    {
+      "id": "uniform-22",
+      "condition": "uniform",
+      "question": "What do the notes say about retention review meridian beacon narrowed audit?",
+      "query": "retention review meridian beacon narrowed audit",
+      "relevant": {
+        "meetings/Meridian Beacon Sync 201.md": 2
+      },
+      "source_sentence": "The retention review for Meridian Beacon narrowed the audit trail ahead of 2026 Q3."
+    },
+    {
+      "id": "uniform-23",
+      "condition": "uniform",
+      "question": "What do the notes say about latency review dmitri duarte approved retention?",
+      "query": "latency review dmitri duarte approved retention",
+      "relevant": {
+        "meetings/Redmoor Quarry Sync 188.md": 2
+      },
+      "source_sentence": "The latency review for Dmitri Duarte approved the retention window ahead of 2026 Q1."
+    },
+    {
+      "id": "uniform-24",
+      "condition": "uniform",
+      "question": "What do the notes say about procurement review osian calloway deferred pilot?",
+      "query": "procurement review osian calloway deferred pilot",
+      "relevant": {
+        "meetings/Lowfield Foundry Sync 054.md": 2
+      },
+      "source_sentence": "The procurement review for Osian Calloway deferred the pilot cohort ahead of 2026 Q2."
+    },
+    {
+      "id": "uniform-25",
+      "condition": "uniform",
+      "question": "What do the notes say about procurement review quentin achebe rescoped discount?",
+      "query": "procurement review quentin achebe rescoped discount",
+      "relevant": {
+        "meetings/Kestrel Beacon Sync 042.md": 2
+      },
+      "source_sentence": "The procurement review for Quentin Achebe rescoped the discount tier ahead of 2026 Q1."
+    },
+    {
+      "id": "uniform-26",
+      "condition": "uniform",
+      "question": "What do the notes say about compliance review blackstone quarry rescoped rollout?",
+      "query": "compliance review blackstone quarry rescoped rollout",
+      "relevant": {
+        "projects/Blackstone Quarry Programme.md": 2
+      },
+      "source_sentence": "The compliance review for Blackstone Quarry rescoped the rollout plan ahead of 2026 Q2."
+    },
+    {
+      "id": "uniform-27",
+      "condition": "uniform",
+      "question": "What do the notes say about migration review petra achebe escalated rollout?",
+      "query": "migration review petra achebe escalated rollout",
+      "relevant": {
+        "meetings/Blackstone Ledger Sync 012.md": 2
+      },
+      "source_sentence": "The migration review for Petra Achebe escalated the rollout plan ahead of 2026 Q1."
+    },
+    {
+      "id": "uniform-28",
+      "condition": "uniform",
+      "question": "What do the notes say about ongoing retention work continues affect retention?",
+      "query": "ongoing retention work continues affect retention",
+      "relevant": {
+        "projects/Thornbury Foundry Programme.md": 2
+      },
+      "source_sentence": "Ongoing retention work continues to affect the retention window across the portfolio."
+    },
+    {
+      "id": "uniform-29",
+      "condition": "uniform",
+      "question": "What do the notes say about retention review harbour quarry programme postponed?",
+      "query": "retention review harbour quarry programme postponed",
+      "relevant": {
+        "projects/Harbour Quarry Programme.md": 2
+      },
+      "source_sentence": "The retention review for Harbour Quarry Programme postponed the sandbox policy ahead of 2026 Q2."
+    },
+    {
+      "id": "popular-00",
+      "condition": "popular",
+      "question": "What do the notes say about migration review kestrel atlas deferred sandbox?",
+      "query": "migration review kestrel atlas deferred sandbox",
+      "relevant": {
+        "projects/Kestrel Atlas Programme.md": 2
+      },
+      "source_sentence": "The migration review for Kestrel Atlas deferred the sandbox policy ahead of 2026 Q2."
+    },
+    {
+      "id": "popular-01",
+      "condition": "popular",
+      "question": "What do the notes say about security review jolanta duarte postponed handover?",
+      "query": "security review jolanta duarte postponed handover",
+      "relevant": {
+        "people/Jolanta Duarte.md": 2
+      },
+      "source_sentence": "The security review for Jolanta Duarte postponed the handover checklist ahead of 2026 Q2."
+    },
+    {
+      "id": "popular-02",
+      "condition": "popular",
+      "question": "What do the notes say about latency review thornbury compass narrowed renewal?",
+      "query": "latency review thornbury compass narrowed renewal",
+      "relevant": {
+        "companies/Thornbury Compass.md": 2
+      },
+      "source_sentence": "The latency review for Thornbury Compass narrowed the renewal date ahead of 2026 Q4."
+    },
+    {
+      "id": "popular-03",
+      "condition": "popular",
+      "question": "What do the notes say about staffing review alina bergstrom revisited renewal?",
+      "query": "staffing review alina bergstrom revisited renewal",
+      "relevant": {
+        "people/Alina Bergstrom.md": 2
+      },
+      "source_sentence": "The staffing review for Alina Bergstrom revisited the renewal date ahead of 2026 Q4."
+    },
+    {
+      "id": "popular-04",
+      "condition": "popular",
+      "question": "What do the notes say about forecasting review harbour ledger revisited support?",
+      "query": "forecasting review harbour ledger revisited support",
+      "relevant": {
+        "companies/Harbour Ledger.md": 2
+      },
+      "source_sentence": "The forecasting review for Harbour Ledger revisited the support rota ahead of 2026 Q2."
+    },
+    {
+      "id": "popular-05",
+      "condition": "popular",
+      "question": "What do the notes say about pricing review pinehurst ledger programme postponed?",
+      "query": "pricing review pinehurst ledger programme postponed",
+      "relevant": {
+        "projects/Pinehurst Ledger Programme.md": 2
+      },
+      "source_sentence": "The pricing review for Pinehurst Ledger Programme postponed the support rota ahead of 2026 Q2."
+    },
+    {
+      "id": "popular-06",
+      "condition": "popular",
+      "question": "What do the notes say about ongoing pricing work continues affect discount?",
+      "query": "ongoing pricing work continues affect discount",
+      "relevant": {
+        "projects/Kestrel Compass Programme.md": 2
+      },
+      "source_sentence": "Ongoing pricing work continues to affect the discount tier across the portfolio."
+    },
+    {
+      "id": "popular-07",
+      "condition": "popular",
+      "question": "What do the notes say about security review kestrel foundry programme deferred?",
+      "query": "security review kestrel foundry programme deferred",
+      "relevant": {
+        "projects/Kestrel Foundry Programme.md": 2
+      },
+      "source_sentence": "The security review for Kestrel Foundry Programme deferred the sandbox policy ahead of 2026 Q1."
+    },
+    {
+      "id": "popular-08",
+      "condition": "popular",
+      "question": "What do the notes say about compliance review pinehurst compass documented invoicing?",
+      "query": "compliance review pinehurst compass documented invoicing",
+      "relevant": {
+        "companies/Pinehurst Compass.md": 2
+      },
+      "source_sentence": "The compliance review for Pinehurst Compass documented the invoicing cadence ahead of 2026 Q3."
+    },
+    {
+      "id": "popular-09",
+      "condition": "popular",
+      "question": "What do the notes say about localisation review dmitri bergstrom narrowed retention?",
+      "query": "localisation review dmitri bergstrom narrowed retention",
+      "relevant": {
+        "people/Dmitri Bergstrom.md": 2
+      },
+      "source_sentence": "The localisation review for Dmitri Bergstrom narrowed the retention window ahead of 2026 Q3."
+    },
+    {
+      "id": "popular-10",
+      "condition": "popular",
+      "question": "What do the notes say about ongoing migration work continues affect escalation?",
+      "query": "ongoing migration work continues affect escalation",
+      "relevant": {
+        "people/Halima Duarte.md": 2
+      },
+      "source_sentence": "Ongoing migration work continues to affect the escalation path across the portfolio."
+    },
+    {
+      "id": "popular-11",
+      "condition": "popular",
+      "question": "What do the notes say about ongoing procurement work continues affect invoicing?",
+      "query": "ongoing procurement work continues affect invoicing",
+      "relevant": {
+        "people/Lucia Bergstrom.md": 2
+      },
+      "source_sentence": "Ongoing procurement work continues to affect the invoicing cadence across the portfolio."
+    },
+    {
+      "id": "popular-12",
+      "condition": "popular",
+      "question": "What do the notes say about pricing review mikael duarte revisited retention?",
+      "query": "pricing review mikael duarte revisited retention",
+      "relevant": {
+        "people/Mikael Duarte.md": 2
+      },
+      "source_sentence": "The pricing review for Mikael Duarte revisited the retention window ahead of 2026 Q3."
+    },
+    {
+      "id": "popular-13",
+      "condition": "popular",
+      "question": "What do the notes say about retention review harbour compass rejected retention?",
+      "query": "retention review harbour compass rejected retention",
+      "relevant": {
+        "projects/Harbour Compass Programme.md": 2
+      },
+      "source_sentence": "The retention review for Harbour Compass rejected the retention window ahead of 2026 Q4."
+    },
+    {
+      "id": "popular-14",
+      "condition": "popular",
+      "question": "What do the notes say about ongoing security work continues affect discount?",
+      "query": "ongoing security work continues affect discount",
+      "relevant": {
+        "people/Noor Achebe.md": 2
+      },
+      "source_sentence": "Ongoing security work continues to affect the discount tier across the portfolio."
+    },
+    {
+      "id": "popular-15",
+      "condition": "popular",
+      "question": "What do the notes say about ongoing retention work continues affect data?",
+      "query": "ongoing retention work continues affect data",
+      "relevant": {
+        "people/Petra Bergstrom.md": 2
+      },
+      "source_sentence": "Ongoing retention work continues to affect the data model across the portfolio."
+    },
+    {
+      "id": "popular-16",
+      "condition": "popular",
+      "question": "What do the notes say about pricing review mikael achebe approved sandbox?",
+      "query": "pricing review mikael achebe approved sandbox",
+      "relevant": {
+        "people/Mikael Achebe.md": 2
+      },
+      "source_sentence": "The pricing review for Mikael Achebe approved the sandbox policy ahead of 2026 Q1."
+    },
+    {
+      "id": "popular-17",
+      "condition": "popular",
+      "question": "What do the notes say about ongoing compliance work continues affect audit?",
+      "query": "ongoing compliance work continues affect audit",
+      "relevant": {
+        "projects/Pinehurst Compass Programme.md": 2
+      },
+      "source_sentence": "Ongoing compliance work continues to affect the audit trail across the portfolio."
+    },
+    {
+      "id": "popular-18",
+      "condition": "popular",
+      "question": "What do the notes say about billing review lowfield ledger deferred support?",
+      "query": "billing review lowfield ledger deferred support",
+      "relevant": {
+        "projects/Lowfield Ledger Programme.md": 2
+      },
+      "source_sentence": "The billing review for Lowfield Ledger deferred the support rota ahead of 2026 Q2."
+    },
+    {
+      "id": "popular-19",
+      "condition": "popular",
+      "question": "What do the notes say about ongoing latency work continues affect handover?",
+      "query": "ongoing latency work continues affect handover",
+      "relevant": {
+        "companies/Ashgrove Atlas.md": 2
+      },
+      "source_sentence": "Ongoing latency work continues to affect the handover checklist across the portfolio."
+    },
+    {
+      "id": "popular-20",
+      "condition": "popular",
+      "question": "What do the notes say about latency review rasmus achebe deferred escalation?",
+      "query": "latency review rasmus achebe deferred escalation",
+      "relevant": {
+        "people/Rasmus Achebe.md": 2
+      },
+      "source_sentence": "The latency review for Rasmus Achebe deferred the escalation path ahead of 2026 Q4."
+    },
+    {
+      "id": "popular-21",
+      "condition": "popular",
+      "question": "What do the notes say about latency review ashgrove quarry programme narrowed?",
+      "query": "latency review ashgrove quarry programme narrowed",
+      "relevant": {
+        "projects/Ashgrove Quarry Programme.md": 2
+      },
+      "source_sentence": "The latency review for Ashgrove Quarry Programme narrowed the handover checklist ahead of 2026 Q1."
+    },
+    {
+      "id": "popular-22",
+      "condition": "popular",
+      "question": "What do the notes say about latency review noor calloway ratified sandbox?",
+      "query": "latency review noor calloway ratified sandbox",
+      "relevant": {
+        "people/Noor Calloway.md": 2
+      },
+      "source_sentence": "The latency review for Noor Calloway ratified the sandbox policy ahead of 2026 Q1."
+    },
+    {
+      "id": "popular-23",
+      "condition": "popular",
+      "question": "What do the notes say about retention review blackstone compass programme escalated?",
+      "query": "retention review blackstone compass programme escalated",
+      "relevant": {
+        "projects/Blackstone Compass Programme.md": 2
+      },
+      "source_sentence": "The retention review for Blackstone Compass Programme escalated the rollout plan ahead of 2026 Q4."
+    },
+    {
+      "id": "popular-24",
+      "condition": "popular",
+      "question": "What do the notes say about ongoing localisation work continues affect pilot?",
+      "query": "ongoing localisation work continues affect pilot",
+      "relevant": {
+        "people/Sunniva Bergstrom.md": 2
+      },
+      "source_sentence": "Ongoing localisation work continues to affect the pilot cohort across the portfolio."
+    },
+    {
+      "id": "popular-25",
+      "condition": "popular",
+      "question": "What do the notes say about localisation review ashgrove atlas documented discount?",
+      "query": "localisation review ashgrove atlas documented discount",
+      "relevant": {
+        "projects/Ashgrove Atlas Programme.md": 2
+      },
+      "source_sentence": "The localisation review for Ashgrove Atlas documented the discount tier ahead of 2026 Q1."
+    },
+    {
+      "id": "popular-26",
+      "condition": "popular",
+      "question": "What do the notes say about ongoing staffing work continues affect data?",
+      "query": "ongoing staffing work continues affect data",
+      "relevant": {
+        "projects/Pinehurst Ledger Programme.md": 2
+      },
+      "source_sentence": "Ongoing staffing work continues to affect the data model across the portfolio."
+    },
+    {
+      "id": "popular-27",
+      "condition": "popular",
+      "question": "What do the notes say about latency review ashgrove quarry programme narrowed?",
+      "query": "latency review ashgrove quarry programme narrowed",
+      "relevant": {
+        "projects/Ashgrove Quarry Programme.md": 2
+      },
+      "source_sentence": "The latency review for Ashgrove Quarry Programme narrowed the handover checklist ahead of 2026 Q1."
+    },
+    {
+      "id": "popular-28",
+      "condition": "popular",
+      "question": "What do the notes say about latency review thornbury beacon revisited renewal?",
+      "query": "latency review thornbury beacon revisited renewal",
+      "relevant": {
+        "projects/Thornbury Beacon Programme.md": 2
+      },
+      "source_sentence": "The latency review for Thornbury Beacon revisited the renewal date ahead of 2026 Q3."
+    },
+    {
+      "id": "popular-29",
+      "condition": "popular",
+      "question": "What do the notes say about ongoing billing work continues affect support?",
+      "query": "ongoing billing work continues affect support",
+      "relevant": {
+        "people/Kwame Duarte.md": 2
+      },
+      "source_sentence": "Ongoing billing work continues to affect the support rota across the portfolio."
+    }
+  ]
+}
