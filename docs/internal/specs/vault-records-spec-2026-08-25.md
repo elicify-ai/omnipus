@@ -1477,37 +1477,37 @@ broader thing has been given a wrong answer with no error channel.
 | FR | Story | Scenario | Test |
 |---|---|---|---|
 | FR-001..003 | US-1 | 1.5 | `TestSchema_LoadAndReject` |
-| FR-004, 009 | US-1 | 1.2 | `TestSchema_TypesAreScopedToRecordType` |
+| FR-004, 004a, 009 | US-1 | 1.2 | `TestSchema_TypesAreScopedToRecordType`; `TestSchema_NoDomainVocabularyInBinary` |
 | FR-006 | US-1 | 1.4 | `TestValidate_ArityViolationIsReported` |
 | FR-007, 008 | US-2 | edge | `TestFilter_AbsentIsDistinctAndIncludedByNegation` |
-| FR-010, 011 | US-1 | 1.3 | `TestEnum_OrderedAndClosed` |
-| FR-012..014 | US-2 | 2.3 | `TestMoney_RefusesCrossCurrencySum` |
-| FR-016..019a | US-12 | 12.1–12.5 | `TestSchemaAuthoring_LivesInVaultConfigure` |
+| FR-010, 011, 011a, 011b | US-1 | 1.3 | `TestEnum_OrdersLexicallyAndResolvesCaseInsensitively`; `TestFilter_CaseFoldIsUnicodeNotASCII` |
+| FR-012, FR-013 | US-2 | 2.3 | `TestNumeric_IntegerBoundAndDecimalScaleRefused` *(FR-014 is **retired** — `money` is deleted)* |
+| FR-015, 015a, 016..019a | US-12 | 12.1–12.5 | `TestSchemaAuthoring_LivesInVaultConfigure` — *and revision 5 closes M-23's gap here: FR-015 had no row and no test, while being new mechanism (schemas live outside the scanner's walk, so change-tracking must be built)* |
 | FR-018a | US-12 | 12.4 | `TestConfigure_DeclaresNoVersionToken` |
 | FR-020, 020a, 021 | US-2 | — | `TestPropsIndex_RebuildIsResultIdentical`; `TestIndex_PropsRoundTripsExactDecimal` — a money value survives the index unchanged; a float64 path fails it |
-| FR-020c, 020c1, 020g | US-13 | 13.2 | `TestIndexes_SourceHashDivergenceIsIncomplete` |
+| FR-020c, 020c1, 020g, 020i, 020j | US-13 | 13.2 | `TestIndexes_SourceHashDivergenceIsIncomplete`; `TestFreshness_ConcurrentQueryDuringSync`; `TestFreshness_EveryPartialWriteFailurePointIsDetectable`; `TestStorage_LinkedSQLiteVersionIsAsserted` |
 | FR-020h | — | — | `TestRecords_RefuseByNameWithoutSQLite` |
 | FR-020d, 020e | — | — | `TestIndex_StaleFormatIsRebuiltNotOpened`; `TestIndex_PersistedMappingAsserted` |
 | FR-020f | US-13 | 13.1 | `TestIndexState_SnapshotMatchesLiveFrame` |
-| FR-022..024 | US-2 | 2.4 | `TestQuery_UnknownPropertyIsRejectedNotEmpty` |
-| FR-025, 026 | US-2 | 2.2 | `TestQuery_ProblemsAreNamedNotDropped` |
-| FR-027..029 | US-2 | 2.6 | `TestGroup_MultiValueAppearsInEveryGroup` |
+| FR-022, 022a, 022b, 022c, 023, 023b, 024 | US-2 | 2.4 | `TestQuery_UnknownPropertyIsRejectedNotEmpty`; `TestFilter_SQLOperatorVocabularyAndRefusals`; `TestFilter_CompoundNegationIncludesAbsent` |
+| FR-025, 025a, 026 | US-2 | 2.2 | `TestQuery_ProblemsAreNamedNotDropped`; `TestProblems_QueryAndHealthViewAgree`; `TestQuery_ProblemListClampsWithCount` |
+| FR-027..029, 028a | US-2 | 2.6 | `TestGroup_MultiValueAppearsInEveryGroup`; `TestAggregate_ManyValuePropertyCountsRecordOnce` |
 | FR-030..035 | US-3 | 3.1–3.4 | `TestRelation_InverseIsDerivedAndSurvivesRename` |
 | FR-036..039 | US-5 | 5.1–5.4 | `TestID_ConcurrentAllocationIsCollisionFree` |
 | FR-040..042 | US-4 | 4.1, 4.2 | `TestWrite_ByteIdenticalOutsidePatchedSpan` |
-| FR-043, 044 | US-4 | 4.3, 4.4 | `TestWrite_StaleTokenRefusedAndAudited` |
+| FR-043, 043a, 044 | US-4 | 4.3, 4.4 | `TestWrite_StaleTokenRefusedAndAudited`; `TestConfigure_ConcurrentCreateRecordTypeIsExclusive` |
 | FR-045 | US-4 | — | `TestRelate_ReplaceMustBeNamed` |
 | FR-046 | — | — | `TestDerived_NeverWrittenToFrontmatter` |
 | FR-050..053 | US-6 | 6.1–6.4 | `TestInteraction_ExclusionRules` |
 | FR-060..062 | US-8 | 8.1, 8.2 | `TestScope_CrossWorkspaceReturnsEmpty` |
-| FR-063..066b | US-2 | 2.5 | `TestBounds_RefusalNotTruncation`; `TestBounds_CandidateCountedBeforeRetrieval`; `TestBounds_PeakRSSAtCap` |
-| FR-067 | — | — | `TestWritePath_RateLimited` |
+| FR-063..066b, 064a | US-2 | 2.5 | `TestBounds_RefusalNotTruncation`; `TestBounds_CandidateCountedBeforeRetrieval`; `TestBounds_PeakRSSAtCap`; `TestBounds_AggregateOnlyIsExemptFromCandidateCap` |
+| FR-067, 067a | — | — | `TestWritePath_RateLimited`; `TestReadPath_RateLimited` |
 | FR-036a | US-1 | — | `TestCreate_WritesNoteAndSeqAndNothingElse` |
 | FR-047 | US-4 | — | `TestReplaceBody_AmbiguousAnchorIsRefused` |
-| FR-048, 049 | US-4 | — | `TestTrash_ConventionAndUnrepairableLinksReported` |
+| FR-048, 048a, 049, 049a, 049b, 049c | US-4 | — | `TestTrash_ConventionAndUnrepairableLinksReported`; `TestTrash_RestoreRetentionAndWindowsSafePath`; `TestMigration_NoRetiredKnowledgeToolNamesRemain`; `TestObservability_CountersAndDegradedRebuildHeader` |
 | FR-070, 070a, 078 | — | — | `TestTools_ExactlySixVaultToolsAndNoKnowledgeNames` |
-| FR-070b, 070c, 071 | — | — | `TestTools_EditWritesOnlyNamedFile`; `TestTools_NamesHaveNoDots` |
-| FR-072, 120..128 | US-11 | 11.1–11.4 | `TestRender_CompactTextContract`; `TestRender_BudgetIsMeasuredInBytes` |
+| FR-070b..070e, 071 | — | — | `TestTools_EditWritesOnlyNamedFile`; `TestTools_NamesHaveNoDots`; `TestTools_ConfigureWritesOnlyVaultControlPlane` — *FR-070e's mechanical criterion is CI-testable over the emitted write path, which is why it was adopted* |
+| FR-072, 072a, 120..128, 125a, 127c | US-11 | 11.1–11.4 | `TestRender_CompactTextContract`; `TestRender_BudgetIsMeasuredInBytes`; `TestRender_BudgetAllocationOrder` |
 | FR-073 | US-2 | — | `TestFind_ExplainEvaluatesNothing` |
 | FR-074 | US-9 | 9.1–9.3 | `TestRead_ReturnsUsableVersionToken` |
 | FR-075 | US-5 | 5.3 | `TestDescribe_CheckIntegrityNamesBothPaths`; `TestDescribe_ReportsOrdinaryBrokenWikilinks` |
@@ -1518,14 +1518,30 @@ broader thing has been given a wrong answer with no error channel.
 | FR-079, 128 | — | — | `TestTools_DescriptionTokenBudget` |
 | FR-080, 080a, 081, 082 | — | — | `TestToolPolicy_ZeroRepairedPairsOnFreshInstall` |
 | FR-083, 084 | US-12 | 12.2, 12.4 | `TestToolPolicy_ThreeWriteTiersAreIndependent` |
-| FR-110, 110a | US-10 | 10.1 | `TestSearch_ScoringModelIsBM25` |
+| FR-110, 110a, 110b | US-10 | 10.1 | `TestSearch_RankingIsBM25Behaviourally` |
 | FR-111 | US-10 | 10.3 | `TestIndex_FieldedAndFrontmatterStripped` |
-| FR-112, 113 | US-10 | 10.4 | `TestRank_FusionComparedAgainstPlainBM25` |
+| FR-112, 113 | US-10 | 10.4 | `TestRank_FusionMeetsNDCGThreshold` |
 | FR-114, 115 | US-10 | 10.2 | `TestSearch_ZeroHitsReportsVocabularyNotExpansion` |
 | FR-116 | — | — | `TestTokenizer_OneNotionOfATerm` |
 | FR-117 | — | — | `TestRetrieval_NoEmbeddingDependency` |
 | FR-090, 091 | — | — | `TestContract_CompletenessFieldsAreRequired` |
 | FR-100..103 | US-7 | 7.1–7.3 | `TestImport_UntranslatedExpressionIsReported`; `TestImport_NotRegisteredAsAgentTool` |
+
+**Rows added in revision 5 to close M-23 — nine FRs had no row and no test, and two of them mattered a great deal.**
+
+| FR | Story | Scenario | Test |
+|---|---|---|---|
+| FR-005 | US-1 | 1.1 | `TestSchema_UndeclaredTypeIsAnOrdinaryNote` — *US-1.1 was also an orphaned scenario (M-25); this closes both* |
+| FR-019 | — | 12.5 | `TestTools_NoAgentCallableMountOperation` |
+| FR-021a, 021b, 021c, 021d | US-2 | 2.2 | `TestValue_NonConformingIsFlaggedNotAbsent`; `TestDate_StrictISOAndAmbiguousRefused` — **FR-021a is the whole of the R-4 defeat and had no test at all** |
+| FR-040a, 040b | US-4 | 4.1 | `TestWrite_ListSpliceAndMultiLineClobberRefused` |
+| FR-062a | US-8 | 8.1 | `TestScope_TruncatedResolutionReportsIncomplete` — **a P0-scope guarantee that had no test, no AC and no SC**: a whole mounted folder can go missing while the answer claims to be complete |
+| FR-092 | — | — | `TestRender_TextIsAProjectionOfTheWireObject` |
+| FR-004a | US-1 | — | `TestSchema_NoDomainVocabularyInBinary` |
+| FR-025a | US-2 | 2.2 | `TestProblems_QueryAndHealthViewAgree` |
+| R-1..R-13 | US-2 | — | `TestComparisonTruthTable` — **the rules are PROMOTED to numbered requirements as FR-200..FR-212** (M-24), one per rule, so that the highest-risk item in the document appears in this matrix rather than being traced to "see §8". AC-8.1..AC-8.6 and AC-8.8 trace here too |
+
+**Orphaned acceptance scenarios closed (M-25):** US-1.1 above; **US-2.1** (all-valid corpus ⇒ complete true) → `TestQuery_AllValidCorpusReportsComplete`; **US-3.5** (third hop refused) → `TestFind_ThirdHopRefused`, which revision 4 mapped under US-2.5 and which is FR-065's refusal, not FR-064's.
 
 ---
 
@@ -1603,20 +1619,68 @@ Order is unit → integration → e2e; within a level, dependencies first.
 
 ### Test datasets
 
-**DS-1 — property values.** Traces to FR-006, 007, 011, 012.
+**DS-1 — property values.** Traces to FR-006, 007, 010, 011, 011a, 012, 013, 021d.
+*(Every type and value name here is a fixture, not product vocabulary — R-F.)*
 
 | Value | Property type | Expected | Traces |
 |---|---|---|---|
 | `active` | enum(prospect,active) | accepted | 1.3 |
-| `Active` | enum(prospect,active) | **rejected** — case-exact | edge |
+| `Active` | enum(prospect,active) | **ACCEPTED — resolves to `active`** *(REVERSED, revision 5, ruling R-D. Was "rejected — case-exact")* | 1.3 |
+| `ÄKTIV` | enum(äktiv,passiv) | **accepted — resolves to `äktiv`.** **This row is the one that fails over any SQLite-side fold**, and it is in the dataset for that reason (FR-011a) | edge |
+| `Actve` | enum(prospect,active) | **rejected** — resolves to nothing; permitted values listed | 1.3 |
 | absent | enum | absent, not a value | 1.4 |
 | `[a, b]` | enum scalar | **rejected** — arity | 1.4 |
 | `""` | text | accepted, distinct from absent | edge |
-| `349.98` + `SGD` | money | accepted | 2.3 |
-| `349.98`, no currency | money | **rejected** | edge |
-| `PLACEHOLDER — unknown` | number | **rejected**, record named | 2.2 |
+| `349.98` | decimal | accepted, exact | 2.3 |
+| 100 zeros after the point | decimal | accepted — at the bound (`maxDecimalScale`, `pkg/records/decimal.go:48`) | edge |
+| 101 places after the point | decimal | **rejected** naming the bound and the value's own scale; **never rounded** | edge |
+| `9223372036854775807` | integer | accepted — int64 max | edge |
+| `9223372036854775808` | integer | **rejected** naming the bound; **never `CAST`** (SQLite would saturate silently) | edge |
+| `-9223372036854775808` | integer | accepted — int64 min | edge |
+| `3.5` | integer | **rejected** — a fractional part; the remedy names `decimal` | edge |
+| `PLACEHOLDER — unknown` | decimal | **rejected**, record named | 2.2 |
+| 2^53+1 | decimal | accepted, exact — the value a binary float would silently round | edge |
+| `2026-09-01` | date | accepted — a day | edge |
+| `2026-09-01T14:30Z` | date | accepted — an instant; **equal to the day above** per R-7 | edge |
+| `2026-9-1` | date | **rejected** — *"month and day must be zero-padded"* | edge |
+| `03/04/2026` | date | **rejected** — *"ambiguous and will not be guessed"* | edge |
 | `2026-13-45` | date | rejected | edge |
-| 2^53+1 | number | accepted, exact | edge |
+
+**DS-4 — multi-value (`many`) properties. NEW, revision 5.** Traces to FR-028, FR-028a, R-9, R-13,
+SC-002a. **There was no dataset for `many` arity at all**, which is how the join-fan-out defect
+survived every review until grill pass 1.
+
+| Record | `tags` (many) | Expectation |
+|---|---|---|
+| A | `[vendor]` | matches `= 'vendor'`; contributes **1** to `count` and its own value to `sum` |
+| B | `[vendor, vendors]` | matches `IN ('vendor','vendors')` and contributes **1** to `count`, **not 2** — the fan-out case |
+| C | `[Vendor]` | matches `= 'vendor'` — element matching is case-insensitive (R-9, R-10) |
+| D | `[]` | an empty list is a **value**, not absence (R-3): `IS NULL` is false, `IS NOT NULL` is true |
+| E | absent | `IS NULL` is true; a `<>` filter **includes** it (FR-008) |
+| B, F | both worth the same amount | `sum` is the sum of both — the case `SUM(DISTINCT)` gets wrong |
+| any | `< 'vendor'` | **refused** — ordering is undefined over a list (R-13), with `=`/`IN`/`LIKE` named |
+
+**DS-5 — absence across a nested boolean tree. NEW, revision 5.** Traces to FR-008, FR-023b,
+SC-002b. **Revision 4 had no dataset for NULL across a tree**, so every negation case it tested was
+leaf-shaped.
+
+| Record | `a` | `b` | `{not:{all:[a=1,b=2]}}` | `{not:{any:[a=1,b=2]}}` |
+|---|---|---|---|---|
+| 1 | 1 | 2 | excluded | excluded |
+| 2 | 9 | 9 | **included** | **included** |
+| 3 | absent | 2 | **included** | excluded |
+| 4 | 1 | absent | **included** | excluded |
+| 5 | absent | absent | **included** | **included** |
+
+*Rows 3, 4 and 5 are the ones a tri-state evaluator drops. Under SQL's `NOT` the first column
+returns row 2 alone and the second returns row 2 alone; under R-2's `false`-for-absent rule and a
+real `bool`, the expectations above hold.*
+
+**DS-6 — concurrency. NEW, revision 5.** Traces to FR-037, FR-043a, FR-020c, A-13. Two processes
+creating records concurrently (test 11); two agents calling `create_record_type` for one type
+concurrently (test 57); a `vault_find` running concurrently with `SyncWith` under `-race`
+(test 62). **Revision 4 had no concurrency dataset**, and holdout scenario 6 — which covers
+concurrent writes — is explicitly not for use during development.
 
 **DS-2 — relation targets.** Traces to FR-030..034.
 
