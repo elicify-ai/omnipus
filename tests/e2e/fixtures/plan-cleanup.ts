@@ -77,18 +77,22 @@ export const test = base.extend<{
   // Test-scoped, freshly empty per attempt — a test pushes into this array
   // as it creates each Plan; the array itself is never shared across tests
   // or across retries of the same test (each attempt gets its own).
-  // No destructured `{}` param here (that trips `no-empty-pattern`): neither
-  // fixture depends on any other fixture, so the first (fixtures) argument
-  // is simply left unnamed-but-typed via a leading placeholder. TypeScript's
-  // inference for `base.extend<Fixtures>({...})` comes from the option
-  // object's position/generic, not from destructuring the first param, so
-  // this is not a behavior change — just not naming an argument we never
-  // read.
-  createdPlanIds: async (_fixtures, use) => {
+  // The first (fixtures) argument MUST be a destructuring pattern. Playwright
+  // parses this signature statically to work out which fixtures each one
+  // depends on, and rejects a plain identifier at load time with
+  // "First argument must use the object destructuring pattern" — which fails
+  // the whole spec file before a single test runs. `{}` is therefore load-
+  // bearing, not style; the eslint no-empty-pattern rule is disabled rather
+  // than satisfied. (Regression: 03d27695 replaced it with `_fixtures` on the
+  // stated belief that it was "not a behavior change"; it took the entire
+  // llm-conformance e2e shard down.)
+  // eslint-disable-next-line no-empty-pattern
+  createdPlanIds: async ({}, use) => {
     const ids: string[] = []
     await use(ids)
   },
-  createdTaskIds: async (_fixtures, use) => {
+  // eslint-disable-next-line no-empty-pattern
+  createdTaskIds: async ({}, use) => {
     const ids: string[] = []
     await use(ids)
   },
