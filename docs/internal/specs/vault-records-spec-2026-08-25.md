@@ -32,7 +32,10 @@ review names.
 | M-2 — *"FR-110 still lists revision 5's seven doc comments"* | **Upheld**, and corrected to thirteen (FR-110, FR-110a, FR-110b, SC-016). |
 | C-9 — *"§4.1.2 refuses a cross-currency total while §4.2 renders one"* | **Dissolved, not adjudicated.** Under ruling (1) there is no currency, so neither artifact has a subject. Both are rewritten; the contradiction cannot recur because the concept is gone. |
 | C-7 — *"`COLLATE NOCASE` defeats R-10"* | **Inverted by ruling (3).** `NOCASE` is now the specified implementation for text and enum columns. The half of C-7 that survives is real and is kept: `NOCASE` on a **relation-identifier** column collides two distinct ids, so identifier columns stay `BINARY` (§8.1, R-8 row). |
-| M-37 — *"the receipts were taken on `sqlite3` 3.51.0, the shipped engine is 3.53.3"* | **Upheld.** §8.1's receipts are re-taken and the engine is named in place. |
+| M-37 — *"the receipts were taken on `sqlite3` 3.51.0; the shipped engine reports **3.53.3**"* | **The concern is upheld; the number is REJECTED with evidence.** `modernc.org/sqlite v1.46.1` (`go.mod:64`) was opened through the real Go driver and asked `select sqlite_version()`. It answers **`3.51.2`**, not 3.53.3 — a **patch** ahead of the 3.51.0 CLI the receipts were taken on, not two minor versions. The review's figure does not reproduce. The **standard** behind the finding is right and is adopted anyway: §8.1 now names both engines and both versions in place, and FR-020i adds a test asserting the linked version, because affinity and collation behaviour *is* version-sensitive and a silent engine bump must not silently move the semantics. |
+| C-7's second half — *"a `NOCASE` relation-id column makes `rec_ABC` and `rec_abc` the same key"* | **Upheld and load-bearing**, and it is why ruling (3) is applied per column rather than per database. See §8.1's R-8 row. |
+| C-3 I-1 — *"`SELECT id FROM t WHERE NOT (a=1 OR b=2)` returns **ZERO rows**"* | **REJECTED — the cell does not reproduce.** Over the review's own fixture it returns **one row** (`id 2`), not zero: `NOT(NULL OR TRUE)` is `FALSE` and `NOT(NULL OR NULL)` is `NULL`, so rows 3, 4 and 5 drop while row 2 survives. The **finding is still correct and still CRITICAL** — the correct De Morgan answer is **four** rows (2, 3, 4, 5), so three rows are silently dropped — but the receipt is restated at its true value in §8.1a, because a wrong number in a document about wrong numbers is not a small thing. |
+| M-38 — *"`repairAndValidateToolPolicyCoverage` is at `pkg/gateway/gateway.go:968`… It also emits **two** WARNs, not one"* | **Citation upheld, WARN count REJECTED.** The path correction is right (§0 correction 3 is fixed). The count is not two and is not fixed: it is **`1 + N`**, where the 1 is `gateway.go:975` and `N` is one per repaired agent from `pkg/config/validate.go:576`, and it is **0** when nothing needed repair. §0 now states the shape rather than a number. |
 
 **What revision 3 changed, in one paragraph.** The agent surface is `vault_*` tools split by
 **blast radius**, not nine `record_*` tools and not the nine `knowledge_*` tools shipping today
@@ -139,12 +142,32 @@ corrected in revision 3:**
    Markdown (FR-020a).
 2. Tool names contain **no dots** — `vault_find`, not `vault.find`. A §7 invariant test asserts
    zero dots across builtin tool names. *(The audit **event** names `vault.edit` and
-   `vault.restructure` carry a dot deliberately and are not tool names — FR-071.)*
-3. **Boot does not abort** on a tool-policy coverage gap. `repairAndValidateToolPolicyCoverage`
-   (`pkg/config/validate.go`) calls `RepairIncompleteToolPolicyCoverage` **first**, backfilling
-   every gap to `deny` with one WARN, and validates after — so a forgotten tool ships silently
-   denied, with the feature dead and a log line as the only signal. Seeding is protected by being
-   written down and tested (FR-080, FR-081), not by a boot abort.
+   `vault.restructure` carry a dot deliberately and are not tool names — FR-071.)* **Revision 5
+   removes a wrong rationale that was attached to this correction.** An earlier draft said dots
+   *"are already stripped at the provider boundary — `SanitizeToolName` replaces `.` and `:` with
+   `_`"*. Verified: `SanitizeToolName` (`pkg/tools/registry.go:569`) is
+   `strings.ReplaceAll(name, ".", "_")` — **it replaces dots only. Colons are not replaced**,
+   despite its own doc comment at `:567-568` claiming both. The requirement is unaffected; the
+   citation was repeating a false comment, which is the failure this document is about.
+3. **CORRECTED, revision 5 — the citation was wrong and the conclusion was too strong.**
+   `repairAndValidateToolPolicyCoverage` is defined at **`pkg/gateway/gateway.go:968`**, not in
+   `pkg/config/validate.go` (which names it only in a doc comment at `:489` and `:494`, so a reader
+   auditing the claim there finds prose and no call). It has two production call sites —
+   `gateway.go:2061` (boot) and `gateway.go:3483` (hot reload). What it does, precisely:
+   - It calls `config.RepairIncompleteToolPolicyCoverage` (`pkg/config/validate.go:525`) **first**,
+     which backfills every gap to `deny` (`validate.go:565`) — **so a forgotten tool ships silently
+     denied, with the feature dead and a log line as the only signal. That half of the original
+     correction stands and is the half that matters to FR-080/FR-081.**
+   - It then hard-validates the remainder, and **boot DOES abort** on any residual gap the repair
+     could not close (`gateway.go:2065-2068`); a reload rejects the new config and stays degraded
+     (`gateway.go:3486-3492`). *"Boot does not abort" was too strong: **backfill-then-continue is
+     the normal path; abort is the residual backstop.***
+   - **The WARN count is not a fixed number**, and revision 4's "one WARN" was wrong in the same way
+     the grill's proposed "two" is: it is **`1 + N`** — one at `gateway.go:975`, plus one per
+     repaired agent at `pkg/config/validate.go:576` — and **`0`** when nothing needed repair.
+
+   Seeding is therefore protected by being written down and tested (FR-080, FR-081), not by a boot
+   abort that the repair pass has already made unreachable for the gaps this specification creates.
 
 **The nine `knowledge_*` names retire into the six. This mapping is the migration:**
 
@@ -239,8 +262,10 @@ response names them rather than silently omitting them.
 2. **Given** a corpus where some records hold a non-numeric value in a numeric property,
    **When** an aggregate runs over that property, **Then** the response reports incompleteness,
    names the offending records, and states the reason.
-3. **Given** records in four currencies, **When** a total is requested, **Then** no combined
-   total is returned; the currencies present are listed instead.
+3. **REPLACED, revision 5** *(was the cross-currency refusal; `money` is deleted — FR-014)*.
+   **Given** a `decimal` property holding a value with more than 100 decimal places, **When** it is
+   written, **Then** it is refused naming the bound and the value's own scale, and it is **not**
+   rounded to fit (FR-013).
 4. **Given** a filter naming a property that does not exist in the schema, **When** it runs,
    **Then** the query is rejected with the valid property names listed — it does not return
    zero records.
@@ -432,10 +457,12 @@ as "no progress has arrived" for a fully indexed collection.
 | Condition | Expected |
 |---|---|
 | Property absent entirely | distinct from any value; `is absent` matches it; a negative filter includes it unless excluded |
-| Enum value differing only in case | rejected — the schema set is exact |
+| Enum value differing only in ASCII case | **REVERSED, revision 5 (operator ruling 3):** it **resolves** to the declared value and is conforming. `Won` is the declared value `won`; it sorts by `won`'s ordinal and renders as the file spells it. It does **not** create a second de-facto value, which is what D4 actually forbids (FR-011) |
+| Enum value differing only in **non-ASCII** case (`Ätä` vs `ätä`) | **does NOT resolve** — stock SQLite folds no non-ASCII case, so this depends on the Go-side fold column being built. Specified in §8.1, R-10/R-5 rows; a build without the fold column reports these as non-conforming rather than matching them (FR-011a) |
 | Record type declared in two schema files | both rejected, both paths named |
 | Relation to a record in another workspace's vault | invisible; treated as dangling within scope |
-| Money property with amount but no currency | rejected at write |
+| `integer` property holding a value above int64 | rejected at write, naming the bound (FR-012). Never `CAST` — a `CAST('9223372036854775808' AS INTEGER)` **saturates silently at int64 max** with no error (§8.1 receipt) |
+| `decimal` property with more than 100 decimal places | rejected at write, naming the bound and the value's scale (FR-013); never rounded |
 | Vault is not a git repository | schemas still work; no version history is claimed |
 | Windows, two processes allocating IDs | collision possible (`fileutil.WithFlock` is a documented no-op — `pkg/fileutil/flock_windows.go`). **NOT healed by reconcile** — reconcile heals a lost counter, it cannot un-write two records that already share an identifier. Detected and reported by `vault_describe check_integrity`, which names both files and refuses to choose. Accepted, inherited from ADR-054 §5, not introduced here |
 | Two indexes at different generations | the answer is reported **incomplete**, naming staleness (FR-020c) — never rendered as a complete answer |
@@ -529,7 +556,7 @@ as "no progress has arrived" for a fully indexed collection.
 - **FR-001** The system MUST load record-type schemas from `<vault>/.omnipus-vault/records/<type>.yaml`.
 - **FR-002** The system MUST reject a schema without `schema_version`.
 - **FR-003** The system MUST reject two schema files declaring the same record type, naming both paths.
-- **FR-004** The system MUST support exactly these property types: `text`, `enum`, `relation`, `date`, `number`, `money`, `person`.
+- **FR-004** **MEANING CHANGED, revision 5 (operator ruling).** The system MUST support exactly these **seven** property types: `text`, `enum`, `relation`, `date`, `integer`, `decimal`, `person`. *Previously: `text`, `enum`, `relation`, `date`, `number`, `money`, `person`. **`money` is deleted from the type system** — the operator's requirement is "a precise decimal datatype and also an integer 64 datatype", not a currency-carrying value; and **`number` is split into `integer` and `decimal`**, because one numeric type forces the index to infer a column type from the first value it sees. **The count is unchanged at seven; the membership changed** — −1 (`money`) −1 (`number`) +2 (`integer`, `decimal`). Anywhere this document previously said "seven property types" it still says seven, and it is not a stale figure.*
 - **FR-005** The system MUST treat a note whose `type` matches no schema as an ordinary note, without error.
 - **FR-006** Each property MUST declare arity, and the system MUST reject a value of the wrong arity.
 - **FR-007** The system MUST distinguish an absent property from every value of that property.
@@ -537,9 +564,21 @@ as "no progress has arrived" for a fully indexed collection.
 - **FR-009** Property types MUST be scoped to their record type; the same name in two types is unrelated.
 - **FR-010** An enum MUST declare its values in order, and sorting MUST follow declared position, not lexical order.
 - **FR-011** The system MUST reject an enum value outside the declared set, listing the permitted values.
-- **FR-012** A `money` value MUST carry amount, ISO-4217 currency and declared scale together; a value missing currency MUST be rejected.
-- **FR-013** Money arithmetic MUST be exact decimal.
-- **FR-014** The system MUST refuse to sum money across currencies and MUST list the currencies present.
+#### The two numeric types (revision 5, operator ruling)
+
+An author **chooses** `integer` or `decimal` in the schema. **There is no inference from the first
+value seen**, and this is the point of the split rather than a side effect of it: with one `number`
+type the properties index would have to decide a column type from data, so the same property could
+land in an INTEGER column in one vault and a TEXT column in another, and `2` and `2.0` would compare
+differently depending on which note happened to be indexed first. The schema decides; the column
+follows the schema.
+
+- **FR-012** **MEANING CHANGED, revision 5 — this FR was `money`; `money` is deleted.** An `integer` property MUST hold a signed 64-bit integer, and the accepted range MUST be exactly **−9,223,372,036,854,775,808 to 9,223,372,036,854,775,807** inclusive. A value outside that range, or a value carrying a fractional part, MUST be **refused with the bound named** — never truncated, never rounded, and never widened to `decimal` on the system's initiative. *(SQLite's INTEGER storage class is exactly int64 and stores the whole range losslessly, so the storage bound and the type bound are the same number and there is no second limit to reconcile. What SQLite does **not** do is refuse an overflow: scalar `9223372036854775807 + 1` silently becomes a REAL — see §8.1a, R-11a.)*
+- **FR-013** **MEANING CHANGED, revision 5.** A `decimal` property MUST be **exact and arbitrary-precision**, and no value of it may pass through a binary floating-point representation anywhere in the parse, storage, comparison, ordering or aggregation path. *Previously: "Money arithmetic MUST be exact decimal" — the guarantee survives its subject.*
+  - **The declared-scale bound is `maxDecimalScale = 100`** (`pkg/records/decimal.go:48`) — **100 digits after the point**, and the choice is deliberate and generous. The retired `money` type bounded scale at `maxMoneyScale = 12` (`decimal.go:166`); **that bound is deleted with money and MUST NOT be inherited by `decimal`.** Twelve places is a currency-shaped limit and this type is not currency-shaped: a `decimal` property is as likely to hold a scientific measurement, a ratio, or a coordinate as a price. 100 is what the existing parser already enforces and already has a property test over the full symmetric range (`pkg/records/decimal_string_bounds_test.go`, which sweeps every scale in `[-100, +100]`), so adopting it costs nothing and removes a bound nobody could justify.
+  - **A value whose scale exceeds 100 MUST be refused, naming the bound and the value's own scale.** It MUST NOT be rounded to fit. Rounding to satisfy a bound is a silent change to a number, which is the failure class this document exists to remove.
+  - `pkg/records/decimal.go` (588 lines, `math/big`-based, with `pkg/records/decimal_no_float_test.go` asserting no binary float appears anywhere in the path) **is the implementation and survives money's removal unchanged.** It is the valuable half of the retired work.
+- **FR-014** **RETIRED, revision 5 — `money` is deleted, so cross-currency summation has no subject.** *Previously: "The system MUST refuse to sum money across currencies and MUST list the currencies present." **The number is retired rather than reused**, so that a reader meeting `FR-014` in an older document, a commit message or a test name finds this entry and not a different requirement wearing the same identifier. Everything that depended on it goes with it: US-2 scenario 3, the behavioural-contract cross-currency bullet, the `Cross-currency total` refusal string in §4.1.2, §4.2's `GBP only` total, **R-6** and its §8.1 defeat row, `TestMoney_RefusesCrossCurrencySum` (§7 test 4), and the `CurrenciesPresent` field. All are removed in this revision, not left as dead references.*
 
 - **FR-015** A change to a schema file MUST invalidate affected records and trigger revalidation. Schemas live under a directory the scanner does not walk, so no manifest entry or mtime exists for them; the system MUST track them explicitly rather than inheriting note-scanning behaviour. *(Unchanged in meaning. **Cited by ADR-068 D23.3** as the reason an existing-record-type change sits in a cascading tier: it retroactively reinterprets every record of that type. **Revision 4: that tier is `vault_configure`, not `vault_restructure`** — the reasoning is unchanged, the destination moved, and the same reasoning now also carries **creating a new type**, per FR-016.)*
 
