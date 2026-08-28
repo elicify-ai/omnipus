@@ -29,6 +29,7 @@ import (
 
 	"github.com/blevesearch/bleve/v2"
 	bleveMapping "github.com/blevesearch/bleve/v2/mapping"
+	bleveQuery "github.com/blevesearch/bleve/v2/search/query"
 )
 
 // d21Note is a note in the shape D21.2 is about: frontmatter carrying property
@@ -597,6 +598,33 @@ func TestNoteLevelFieldsAreOnEverySegment(t *testing.T) {
 	}
 	if got := d21FieldPaths(t, ix, fieldPropKey, "status"); len(got) != 1 {
 		t.Errorf("prop_key field query over a segmented note = %v, want [long.md]", got)
+	}
+
+	// THE ASSERTIONS ABOVE DO NOT ACTUALLY PROVE REPLICATION, and a mutation
+	// proved they do not: writing the note-level fields onto segment 0 ONLY
+	// left both of them passing, because Search collapses a note's segments
+	// into one result and segment 0 still carried the field. A collapsed
+	// result cannot see how many documents produced it — by construction.
+	//
+	// So this looks at the RAW segment hits, where replication is directly
+	// observable: a note-level field must produce one hit per segment. What it
+	// buys is ranking. The collapsed hit takes its SCORE from the best segment,
+	// so a title present only on segment 0 leaves a note that matched on
+	// segment 3 ranked as though it had no title at all — which is precisely
+	// what D21.3's field weighting is being built on top of.
+	for _, field := range []string{fieldTitle, fieldPropKey, fieldPropValue} {
+		term := map[string]string{fieldTitle: "ledger", fieldPropKey: "status", fieldPropValue: "prospect"}[field]
+		q := bleveQuery.NewMatchQuery(term)
+		q.SetField(field)
+		raw, _, err := ix.runSearch(q, indexSearchMaxFetch, field+":"+term)
+		if err != nil {
+			t.Fatalf("runSearch(%s): %v", field, err)
+		}
+		if len(raw) != stats.Segments {
+			t.Errorf("field %q produced %d segment documents, want %d (one per segment) — "+
+				"a note-level field present on only some segments makes the collapsed hit's score "+
+				"depend on which segment happened to win", field, len(raw), stats.Segments)
+		}
 	}
 }
 
