@@ -31,9 +31,10 @@ properties:
   refused:
     type: boolean
     description: >
-      True when NO figure is returned. Set for a cross-currency sum (FR-014),
-      for an aggregate over a refused candidate set (FR-066), and whenever a
-      figure could not be computed exactly. When true, `value` and `count` are
+      True when NO figure is returned. Set for an aggregate over a refused
+      candidate set (FR-066), and whenever a figure could not be computed
+      exactly — an exactness this contract can promise because every numeric
+      value on the wire is a decimal string, never a binary float. When true, `value` and `count` are
       absent and the reason is in the response's `problems`.
     example: false
   count:
@@ -58,14 +59,3 @@ properties:
       in the response's `problems` (FR-026) — this field is the headline, not
       a substitute for the list.
     example: 22
-  currencies_present:
-    type: array
-    description: >
-      The currencies found, listed when a money sum is refused for spanning
-      more than one (FR-014). Listing them is the actionable half of the
-      refusal: the caller can re-ask per currency. There is no FX conversion
-      and no rate table in this ADR.
-    items:
-      type: string
-      pattern: '^[A-Z]{3}$'
-    example: ["USD", "EUR", "GBP", "JPY"]

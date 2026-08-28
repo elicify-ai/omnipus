@@ -286,7 +286,14 @@ type RecordType = {
 };
 type PropertyDef = {
   name: string;
-  type: "text" | "enum" | "relation" | "date" | "number" | "money" | "person";
+  type:
+    | "text"
+    | "enum"
+    | "relation"
+    | "date"
+    | "integer"
+    | "decimal"
+    | "person";
   many: boolean;
   required: boolean;
   label?: string | undefined;
@@ -294,7 +301,6 @@ type PropertyDef = {
   to?: string | undefined;
   inverse?: string | undefined;
   unit?: string | undefined;
-  scale?: number | undefined;
 };
 type EnumValueDef = {
   value: string;
@@ -316,8 +322,8 @@ type RecordProblem = {
     | "relation_type_mismatch"
     | "cardinality_violation"
     | "duplicate_id"
-    | "cross_currency"
-    | "money_scale_mismatch"
+    | "integer_not_whole"
+    | "integer_out_of_range"
     | "candidate_cap_exceeded"
     | "hop_limit_exceeded"
     | "page_size_clamped"
@@ -343,18 +349,25 @@ type VaultRecord = {
 type RecordPropertyValue = {
   property: string;
   type?:
-    | ("text" | "enum" | "relation" | "date" | "number" | "money" | "person")
+    | ("text" | "enum" | "relation" | "date" | "integer" | "decimal" | "person")
     | undefined;
   values: Array<RecordValue>;
 };
 type RecordValue = {
-  type: "text" | "enum" | "relation" | "date" | "number" | "money" | "person";
+  type:
+    | "text"
+    | "enum"
+    | "relation"
+    | "date"
+    | "integer"
+    | "decimal"
+    | "person";
   text?: string | undefined;
   enum?: string | undefined;
   relation?: RecordRef | undefined;
   date?: string | undefined;
-  number?: string | undefined;
-  money?: RecordMoney | undefined;
+  integer?: string | undefined;
+  decimal?: string | undefined;
   person?: RecordRef | undefined;
 };
 type RecordRef = {
@@ -363,11 +376,6 @@ type RecordRef = {
   id?: string | undefined;
   type?: string | undefined;
   title?: string | undefined;
-};
-type RecordMoney = {
-  amount: string;
-  currency: string;
-  scale: number;
 };
 type RecordQueryRequest = {
   type: string;
@@ -428,7 +436,6 @@ type RecordAggregateResult = {
   count?: number | undefined;
   value?: RecordValue | undefined;
   excluded_records?: number | undefined;
-  currencies_present?: Array<string> | undefined;
 };
 type RecordWriteRequest = {
   type: string;
@@ -3837,8 +3844,8 @@ export const PropertyDef: z.ZodType<PropertyDef> = z.object({
     "enum",
     "relation",
     "date",
-    "number",
-    "money",
+    "integer",
+    "decimal",
     "person",
   ]),
   many: z.boolean(),
@@ -3848,7 +3855,6 @@ export const PropertyDef: z.ZodType<PropertyDef> = z.object({
   to: z.string().min(1).optional(),
   inverse: z.string().min(1).optional(),
   unit: z.string().optional(),
-  scale: z.number().int().gte(0).lte(12).optional(),
 });
 export const RecordType: z.ZodType<RecordType> = z.object({
   schema_version: z.number().int().gte(1),
@@ -3872,8 +3878,8 @@ export const RecordProblem: z.ZodType<RecordProblem> = z.object({
     "relation_type_mismatch",
     "cardinality_violation",
     "duplicate_id",
-    "cross_currency",
-    "money_scale_mismatch",
+    "integer_not_whole",
+    "integer_out_of_range",
     "candidate_cap_exceeded",
     "hop_limit_exceeded",
     "page_size_clamped",
@@ -3900,42 +3906,38 @@ export const RecordRef: z.ZodType<RecordRef> = z.object({
   type: z.string().min(1).optional(),
   title: z.string().optional(),
 });
-export const RecordMoney: z.ZodType<RecordMoney> = z.object({
-  amount: z
-    .string()
-    .min(1)
-    .max(40)
-    .regex(/^-?(0|[1-9][0-9]*)$/),
-  currency: z.string().regex(/^[A-Z]{3}$/),
-  scale: z.number().int().gte(0).lte(12),
-});
 export const RecordValue: z.ZodType<RecordValue> = z.object({
   type: z.enum([
     "text",
     "enum",
     "relation",
     "date",
-    "number",
-    "money",
+    "integer",
+    "decimal",
     "person",
   ]),
   text: z.string().optional(),
   enum: z.string().min(1).optional(),
   relation: RecordRef.optional(),
   date: z.string().min(8).max(40).optional(),
-  number: z
+  integer: z
     .string()
     .min(1)
-    .max(40)
+    .max(20)
+    .regex(/^-?(0|[1-9][0-9]*)$/)
+    .optional(),
+  decimal: z
+    .string()
+    .min(1)
+    .max(120)
     .regex(/^-?(0|[1-9][0-9]*)(\.[0-9]+)?$/)
     .optional(),
-  money: RecordMoney.optional(),
   person: RecordRef.optional(),
 });
 export const RecordPropertyValue: z.ZodType<RecordPropertyValue> = z.object({
   property: z.string().min(1),
   type: z
-    .enum(["text", "enum", "relation", "date", "number", "money", "person"])
+    .enum(["text", "enum", "relation", "date", "integer", "decimal", "person"])
     .optional(),
   values: z.array(RecordValue),
 });
@@ -3988,7 +3990,6 @@ export const RecordAggregateResult: z.ZodType<RecordAggregateResult> = z.object(
     count: z.number().int().gte(0).optional(),
     value: RecordValue.optional(),
     excluded_records: z.number().int().gte(0).optional(),
-    currencies_present: z.array(z.string().regex(/^[A-Z]{3}$/)).optional(),
   }
 );
 export const RecordGroup: z.ZodType<RecordGroup> = z.object({

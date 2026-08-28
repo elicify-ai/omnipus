@@ -4655,7 +4655,7 @@ export interface components {
         };
         /**
          * PropertyDef
-         * @description One declared property of a record type (ADR-068 D2, D3). Seven property types exist and no more: text, enum, relation, date, number, money, person.
+         * @description One declared property of a record type (ADR-068 D2, D3). Seven property types exist and no more: text, enum, relation, date, integer, decimal, person. The membership changed in ADR-068 revision 7 and the COUNT did not: `money` was deleted and `number` was split into `integer` and `decimal`.
          *     ARITY AND PRESENCE ARE BOTH REQUIRED FIELDS, deliberately. `many` and `required` carry no default and are never inferred, because the single most-reported failure in the research corpus is a scalar property silently becoming a list the moment a second value is added — after which every query written against it returns nothing, with no error (D3.1). A property whose arity is merely "absent" reproduces exactly that ambiguity on the wire.
          *     Property types are scoped to their record type (D3.3, FR-009): `status` on one type and `status` on another are unrelated declarations. This contract therefore never carries a vault-wide property table.
          *     ADR-068 D0: the product ships NO record types and NO properties of its own. Every PropertyDef on the wire came from a schema file the operator's vault declared. The names used in the examples here are illustrative of the mechanism only.
@@ -4667,11 +4667,11 @@ export interface components {
              */
             name: string;
             /**
-             * @description "text" — prose. Never validated and never queried for equality or order (D3), so a filter on a text property supports exactly two operators: `contains` (case-sensitive substring matching, §8 R-10) and `is_absent`. "Is it present?" is {op: is_absent, negate: true}; there is no `is_present` operator. Full-text retrieval is ADR-067's search surface, not this one. "enum" — one of a closed, ordered set (`values`). "relation" — a typed edge to another record (D5); `to` names the target record type and `inverse` names the derived reverse direction. "date" — a day or an instant, comparable. "number" — a quantity; `unit` is declared metadata, never glued into the property name. "money" — amount + ISO-4217 currency + scale as one value (RecordMoney). "person" — a relation to a person record, kept distinct from a name typed as text so one vault cannot model the same concept both ways.
+             * @description "text" — prose. Never validated and never queried for equality or order (D3), so a filter on a text property supports exactly two operators: `contains` (case-sensitive substring matching, §8 R-10) and `is_absent`. "Is it present?" is {op: is_absent, negate: true}; there is no `is_present` operator. Full-text retrieval is ADR-067's search surface, not this one. "enum" — one of a closed SET (`values`). The set is closed; it is not ordered — sorting is lexical over the folded value (D4, R-5), and an author who wants a domain order prefixes the values: `1-lead`, `2-qualified`. "relation" — a typed edge to another record (D5); `to` names the target record type and `inverse` names the derived reverse direction. "date" — a day or an instant, comparable. "integer" — a signed 64-bit whole number, bound-checked and REFUSED outside int64 rather than saturated or widened to a float. `unit` is declared metadata, never glued into the property name. "decimal" — an exact, arbitrary-precision number, at most 100 decimal places; a value past the bound is refused naming it, never rounded. `unit` applies here too. "person" — a relation to a person record, kept distinct from a name typed as text so one vault cannot model the same concept both ways.
              * @example enum
              * @enum {string}
              */
-            type: "text" | "enum" | "relation" | "date" | "number" | "money" | "person";
+            type: "text" | "enum" | "relation" | "date" | "integer" | "decimal" | "person";
             /**
              * @description Declared ARITY (D3.1). True means a list, false means a scalar. Writing a list to a scalar property is rejected with the expected shape named (FR-006), rather than silently widening the property.
              * @example false
@@ -4687,7 +4687,7 @@ export interface components {
              * @example Status
              */
             label?: string;
-            /** @description The closed, ordered value set. Present only when type is "enum", and then non-empty. Order here IS the sort order (FR-010). */
+            /** @description The closed value set. Present only when type is "enum", and then non-empty. THIS ORDER IS NOT THE SORT ORDER — it is the order a REJECTION lists the permitted values in, so the operator reads their own file back. Sorting is lexical over the folded value (R-5); a domain order is expressed by prefixing the values. */
             values?: components["schemas"]["EnumValueDef"][];
             /**
              * @description Target record type name. Present only when type is "relation" or "person". A relation pointing at a note that exists but is not of this type is a validation finding, not a silent accept (FR-034).
@@ -4700,15 +4700,10 @@ export interface components {
              */
             inverse?: string;
             /**
-             * @description Unit of measure for a "number" property, declared as metadata rather than glued into the property name (D3). Absent means unitless.
+             * @description Unit of measure for an "integer" or "decimal" property, declared as metadata rather than glued into the property name (D3). Absent means unitless.
              * @example minutes
              */
             unit?: string;
-            /**
-             * @description Declared decimal scale for a "money" property — the power of ten that turns every RecordMoney value of this property from minor units back into the figure a person reads: value = amount x 10^-scale (FR-012). Present only when type is "money". `RecordMoney.amount` is an integer count of minor units and carries no decimal point, so this is NOT a "fractional digit count" the amount's spelling has to match.
-             * @example 2
-             */
-            scale?: number;
         };
         /**
          * EnumValueDef
@@ -4788,26 +4783,26 @@ export interface components {
             property: string;
             /**
              * @description The declared property type, echoed by the server on reads. Optional on a write request, where the schema is the authority.
-             * @example money
+             * @example decimal
              * @enum {string}
              */
-            type?: "text" | "enum" | "relation" | "date" | "number" | "money" | "person";
+            type?: "text" | "enum" | "relation" | "date" | "integer" | "decimal" | "person";
             /** @description The values held. Always present — an empty array, never null. Empty means the property is ABSENT on this record (D3.2), which a filter can test for explicitly and which a negative filter includes by default (FR-008). */
             values: components["schemas"]["RecordValue"][];
         };
         /**
          * RecordValue
          * @description ONE value of one property, tagged with the property type that governs it (ADR-068 D3). Exactly one of the seven value fields is populated, and which one is named by `type`.
-         *     Numbers and money are carried as DECIMAL STRINGS, never as JSON numbers. `type: number` in this contract generates a Go float32 (float64 only with `format: double`) and a JavaScript number; binary floating point cannot represent 0.1 exactly, so a value would drift on a round trip that nobody performed deliberately. FR-020b forbids a binary float anywhere in the storage or retrieval path, and the wire is part of that path.
+         *     NUMBERS ARE CARRIED AS DECIMAL STRINGS, never as JSON numbers — both `integer` and `decimal`. A JSON `type: number` in this contract generates a Go float32 (float64 only with `format: double`) and a JavaScript number; binary floating point cannot represent 0.1 exactly, and it cannot represent 2^53+1 at all, so a value would drift on a round trip nobody performed deliberately. FR-020b forbids a binary float anywhere in the storage or retrieval path, and the wire is part of that path.
          *     ABSENCE IS NOT A VALUE. A property with no value carries no RecordValue at all — its RecordPropertyValue.values array is empty (D3.2, FR-007). This matters: "days I did not meditate" must be answerable, and it is not answerable in a model where absent and false are the same state.
          */
         RecordValue: {
             /**
              * @description Which of the seven property types governs this value, and therefore which field below is populated.
-             * @example money
+             * @example decimal
              * @enum {string}
              */
-            type: "text" | "enum" | "relation" | "date" | "number" | "money" | "person";
+            type: "text" | "enum" | "relation" | "date" | "integer" | "decimal" | "person";
             /**
              * @description Populated when type is "text". Prose; never compared for equality (D3).
              * @example Introduced by a mutual contact at a conference.
@@ -4825,43 +4820,16 @@ export interface components {
              */
             date?: string;
             /**
-             * @description Populated when type is "number". A decimal STRING for the same reason as money: a JSON number becomes a binary float in both generated languages, and a quantity that cannot survive a round trip unchanged is not a quantity a caller can reconcile. The unit, if any, is declared once on the PropertyDef and is never glued into the value.
+             * @description Populated when type is "integer". A signed 64-bit whole number, carried as a decimal STRING: a JSON number becomes a binary float in both generated languages, and a float64 cannot represent 2^53+1 — precisely the large-identifier case this type exists to keep exact (FR-013). A value outside int64 is REFUSED, never saturated and never widened. The unit, if any, is declared once on the PropertyDef and is never glued into the value.
              * @example 60
              */
-            number?: string;
-            money?: components["schemas"]["RecordMoney"];
+            integer?: string;
+            /**
+             * @description Populated when type is "decimal". An exact, arbitrary-precision number carried as a decimal STRING, for the same reason as `integer`: a quantity that cannot survive a round trip unchanged is not a quantity a caller can reconcile. At most 100 decimal places (FR-013) — deliberately generous; a value past the bound is refused naming it, never rounded, because rounding to satisfy a bound is a silent change to a number. `maxLength` admits a 100-place value with a sign, a leading digit and the point. The unit, if any, is declared once on the PropertyDef and is never glued into the value.
+             * @example 349.98
+             */
+            decimal?: string;
             person?: components["schemas"]["RecordRef"];
-        };
-        /**
-         * RecordMoney
-         * @description A money value: amount, ISO-4217 currency and declared scale carried as ONE value (ADR-068 D3, FR-012). A value missing currency is REJECTED — two loose fields that nothing keeps together is the failure this type closes.
-         *     The amount is an INTEGER STRING and never a JSON number. `type: number` in this contract generates a Go float32 (float64 only with `format: double`) and a JavaScript number, and binary floating point cannot represent 0.1 exactly — so a total that must be exact would drift by an amount nobody can see until it is reconciled against a bank. FR-013 requires exact decimal arithmetic and FR-020b forbids a binary float ANYWHERE in the storage or retrieval path; a string is the only representation that survives both the wire and the two generated languages without a lossy hop.
-         *     THE AMOUNT IS ALREADY IN MINOR UNITS (ADR-068 O-2's resolution). It carries no decimal point at all — `pattern` rejects one — and `scale` says where the reader must put it: value = amount x 10^-scale, exactly, with no rounding. {amount "1000", scale 2} is 10.00 USD; {amount "10", scale 0} is 10 USD; the two are distinguishable because `scale` differs, not because the amount is spelled differently. There is no "fractional digit count" rule to satisfy — a decimal amount such as "10.00" is schema-INVALID, not a scale mismatch.
-         *     Corrected 2026-08-25, second pass: this paragraph previously required the fractional digits of `amount` to equal `scale`, illustrated it with the now ILLEGAL "10.00", and stated the conversion INVERTED (minor units = amount x 10^scale). Read together with the corrected `amount` pattern below, the one artifact said two different things about the same three fields — the exact defect the minor-units fix was filed to end.
-         *     Summing money is exact WITHIN one currency. A sum ACROSS currencies is REFUSED with the currencies present listed (FR-014) — see RecordAggregateResult.currencies_present. There is no FX conversion and no rate table in this ADR.
-         */
-        RecordMoney: {
-            /**
-             * @description The amount as an INTEGER COUNT OF MINOR UNITS, rendered as a string. Never a JSON number, and never a decimal fraction: with `scale: 2`, "34998" means 349.98. Optional leading minus, no decimal point, no thousands separators, no exponent, no currency symbol.
-             *
-             *     A string rather than a JSON number because a JSON number is an IEEE-754 double in most parsers, and the whole point of this type is that no float ever touches an amount (ADR-068 D3, FR-020b).
-             *
-             *     Corrected 2026-08-25: this field previously specified a decimal string whose fractional digits had to equal `scale` (example "1250000.00"), which contradicted ADR-068 O-2 and the Go parser. The same three-field object therefore meant 349.98 on disk and 3.4998 on the wire, with nothing to detect the disagreement.
-             * @example 34998
-             */
-            amount: string;
-            /**
-             * @description ISO-4217 alphabetic currency code, upper case. Mandatory: a money value without a currency is rejected (FR-012), because an amount alone cannot be compared, sorted or summed against anything.
-             * @example USD
-             */
-            currency: string;
-            /**
-             * @description How many of `amount`'s trailing digits are FRACTIONAL — the power of ten that turns minor units back into the figure a person reads: value = amount x 10^-scale. 2 for most currencies, 0 for JPY, 3 for KWD, and higher where an operator's convention needs it. Declared rather than inferred from the currency, because the vault's convention — not the product — decides how precisely it records a figure (D0).
-             *
-             *     It is NOT a constraint on how `amount` is spelled: `amount` never contains a decimal point, so scale cannot be checked against it and a "fractional digit count mismatch" is not a finding this type can raise.
-             * @example 2
-             */
-            scale: number;
         };
         /**
          * RecordRef
@@ -5027,7 +4995,7 @@ export interface components {
              *
              *     `contains` is whole-element membership on a list (§8 R-9) and substring matching on text (§8 R-10). It is NEVER substring matching on a list. Against a `many` property it is one of only two defined operators; the rest are refused with the remedy named (§8 R-13).
              *
-             *     Corrected 2026-08-25. This enum previously read [eq, neq, in, not_in, lt, lte, gt, gte, is_absent, is_present]: it OMITTED `contains` — a spec rule with cell-by-cell truth-table coverage and no wire representation at all — while offering `neq`, `in`, `not_in` and `is_present`, none of which the engine implements. Negation is not an operator here; it is the separate `negate` flag, so `status != done` is {op: eq, negate: true} and `neq` was redundant as well as unimplemented. Ordered comparison (lt/lte/gt/gte) is valid on date, number and money; on an enum it compares DECLARED POSITION, not spelling (FR-010), and money compares only within one currency (R-6). `is_absent` tests the third state (D3.2) explicitly.
+             *     Corrected 2026-08-25. This enum previously read [eq, neq, in, not_in, lt, lte, gt, gte, is_absent, is_present]: it OMITTED `contains` — a spec rule with cell-by-cell truth-table coverage and no wire representation at all — while offering `neq`, `in`, `not_in` and `is_present`, none of which the engine implements. Negation is not an operator here; it is the separate `negate` flag, so `status != done` is {op: eq, negate: true} and `neq` was redundant as well as unimplemented. Ordered comparison (lt/lte/gt/gte) is valid on date, integer and decimal — and `integer` and `decimal` are ONE comparison domain, so 3 and 3.0 compare equal (§8 R-1). On an enum it is LEXICAL over the folded value (R-5): there is no declared-position ordinal, and a domain order is expressed by prefixing the values. `is_absent` tests the third state (D3.2) explicitly.
              * @example eq
              * @enum {string}
              */
@@ -5043,7 +5011,7 @@ export interface components {
              *
              *     (a) FR-008 — a negated clause INCLUDES records where the property is absent, because "days I did not meditate" must contain the days with no value at all, which are precisely the days being asked about. Override with `include_absent: false`.
              *
-             *     (b) Negation does NOT re-admit a comparison that could not be made. A non-conforming value (§8 R-4), an unresolved relation (R-8), a cross-currency money comparison (R-6) or an operator undefined for the declared type is REPORTED in `problems` and the record EXCLUDED — from the negated clause as well as the plain one. Counting a corrupt value as "not done" by double negation would be a silent wrong answer.
+             *     (b) Negation does NOT re-admit a comparison that could not be made. A non-conforming value (§8 R-4), an unresolved relation (R-8) or an operator undefined for the declared type is REPORTED in `problems` and the record EXCLUDED — from the negated clause as well as the plain one. Counting a corrupt value as "not done" by double negation would be a silent wrong answer.
              *
              *     Omitted is identical to false: an unset flag can never turn a clause into its opposite. Stated in prose rather than as a JSON Schema `default:` deliberately — openapi-typescript promotes a defaulted property to REQUIRED, which would have made `negate` mandatory in TypeScript while oapi-codegen still emitted an optional `*bool`, so the two generated languages would disagree about the same field.
              * @example true
@@ -5076,9 +5044,9 @@ export interface components {
         };
         /**
          * RecordSort
-         * @description One sort key (ADR-068 D4, FR-010).
-         *     An ENUM property sorts by its DECLARED POSITION, never lexically. That is the whole reason position is data: operators otherwise encode order into the spelling — "1-Pending", "7-DoNotContact" — and the encoding then leaks into every rendering that shows the value.
-         *     Money sorts only within one currency; a sort spanning currencies is reported as a problem rather than ordered by a number that means different things in each row.
+         * @description One sort key (ADR-068 D4, FR-010, §8 R-5).
+         *     SORTING IS LEXICAL, and the SORT KEY IS THE FOLDED VALUE. An enum is no exception — there is no declared-position ordinal, and an author who wants a domain order writes it into the values: "1-lead", "2-qualified". The prefix sits in the operator's own file and does exactly what it looks like it does.
+         *     Two clauses of R-5 a caller can rely on. The key is the FOLDED form, not the raw bytes, so "Won", "won" and "WON" — one value under case-insensitive matching — sort to one place instead of three while grouping collapses them into one group. TIES on the folded key break on RAW BYTE ORDER, so the order is TOTAL and byte-identical across runs and rebuilds. What renders is always the file's own spelling, never the sort key.
          */
         RecordSort: {
             /**
@@ -5087,7 +5055,7 @@ export interface components {
              */
             property: string;
             /**
-             * @description Ascending or descending. For an enum, along declared position.
+             * @description Ascending or descending, along the lexical order described above.
              * @example asc
              * @enum {string}
              */
@@ -5101,7 +5069,7 @@ export interface components {
          */
         RecordAggregate: {
             /**
-             * @description "count" — number of matched records; the only op valid with no property. "sum" — exact decimal total. Across several currencies it is REFUSED with the currencies listed, never summed (FR-014). "min" / "max" — extreme value, by declared position for an enum.
+             * @description "count" — number of matched records; the only op valid with no property. "sum" — exact decimal total, computed in arbitrary precision and never through a binary float (FR-020b). "min" / "max" — extreme value; for an enum that is the lexical extreme over the folded value (R-5), not a declared position.
              * @example sum
              * @enum {string}
              */
@@ -5130,7 +5098,7 @@ export interface components {
              */
             property?: string;
             /**
-             * @description True when NO figure is returned. Set for a cross-currency sum (FR-014), for an aggregate over a refused candidate set (FR-066), and whenever a figure could not be computed exactly. When true, `value` and `count` are absent and the reason is in the response's `problems`.
+             * @description True when NO figure is returned. Set for an aggregate over a refused candidate set (FR-066), and whenever a figure could not be computed exactly — an exactness this contract can promise because every numeric value on the wire is a decimal string, never a binary float. When true, `value` and `count` are absent and the reason is in the response's `problems`.
              * @example false
              */
             refused: boolean;
@@ -5147,16 +5115,6 @@ export interface components {
              * @example 22
              */
             excluded_records?: number;
-            /**
-             * @description The currencies found, listed when a money sum is refused for spanning more than one (FR-014). Listing them is the actionable half of the refusal: the caller can re-ask per currency. There is no FX conversion and no rate table in this ADR.
-             * @example [
-             *       "USD",
-             *       "EUR",
-             *       "GBP",
-             *       "JPY"
-             *     ]
-             */
-            currencies_present?: string[];
         };
         /**
          * RecordGroup
@@ -5182,7 +5140,7 @@ export interface components {
              *     ]
              */
             record_ids: string[];
-            /** @description Per-group aggregate results, in the order requested. A refusal inside one group is stated on that group, so a single cross-currency group cannot silently void the totals of the others. */
+            /** @description Per-group aggregate results, in the order requested. A refusal inside one group is stated on THAT group, so one group whose values could not be totalled cannot silently void the totals of the others. */
             aggregates?: components["schemas"]["RecordAggregateResult"][];
         };
         /**
@@ -5216,11 +5174,11 @@ export interface components {
          */
         RecordProblem: {
             /**
-             * @description Machine-readable cause, so a caller can branch without parsing prose. "missing_schema_version" — a schema file lacking schema_version; no records of that type are validated against it (FR-002). "duplicate_type_declaration" — two schema files declare the same record type; both paths are named in `paths` (FR-003). "unknown_property" / "unknown_enum_value" — a query named something the schema does not declare. The query is REJECTED with the valid names listed; it never returns an empty result set (FR-024). "missing_required" — a required property is absent from a record. "arity_violation" — a list where a scalar was declared, or the reverse (FR-006). "enum_violation" — a value outside the declared, closed set (FR-011). "type_mismatch" — the stored value cannot be read as its declared type. "dangling_relation" — the relation target does not exist (FR-033). "relation_type_mismatch" — the target exists but is not of the declared target type (FR-034). "cardinality_violation" — more values than the declared cardinality permits (FR-035). "duplicate_id" — two records share an identifier; both paths are named (FR-039). "cross_currency" — a money total spanning several currencies was REFUSED, not summed (FR-014). "money_scale_mismatch" — the amount's fractional digit count disagrees with the declared scale (FR-012). "candidate_cap_exceeded" — the candidate set exceeded the 10,000-record materialisation bound; the query is refused with a narrowing instruction and NO partial answer is returned (FR-064). "hop_limit_exceeded" — more than two relation hops were requested (FR-065). "page_size_clamped" — the requested page size exceeded the cap and was reduced; the clamp is REPORTED, never silent (FR-063). "scope_truncated" — workspace scope resolution was itself incomplete (ADR-067 Scope.Truncated), so a whole mounted folder may be missing. The answer MUST NOT claim success (FR-062a). "aggregate_refused" — no aggregate is returned over a refused candidate set; it is never partial (FR-066). "index_unavailable" — the index predates record support and cannot hold the properties queried. A silent no-op returning complete:true over zero properties is impossible (FR-020a).
+             * @description Machine-readable cause, so a caller can branch without parsing prose. "missing_schema_version" — a schema file lacking schema_version; no records of that type are validated against it (FR-002). "duplicate_type_declaration" — two schema files declare the same record type; both paths are named in `paths` (FR-003). "unknown_property" / "unknown_enum_value" — a query named something the schema does not declare. The query is REJECTED with the valid names listed; it never returns an empty result set (FR-024). "missing_required" — a required property is absent from a record. "arity_violation" — a list where a scalar was declared, or the reverse (FR-006). "enum_violation" — a value outside the declared, closed set (FR-011). "type_mismatch" — the stored value cannot be read as its declared type. "dangling_relation" — the relation target does not exist (FR-033). "relation_type_mismatch" — the target exists but is not of the declared target type (FR-034). "cardinality_violation" — more values than the declared cardinality permits (FR-035). "duplicate_id" — two records share an identifier; both paths are named (FR-039). "integer_not_whole" — a fractional value in an "integer" property. It is a DIFFERENT cause from "type_mismatch" because the value parses perfectly well as a number: the fault is the declared type, and the remedy is to declare the property "decimal", not to fix the digits (FR-013). "integer_out_of_range" — a whole number outside signed 64-bit range in an "integer" property. REFUSED naming the bound, never saturated to the maximum and never widened to a binary float (FR-013). "candidate_cap_exceeded" — the candidate set exceeded the 10,000-record materialisation bound; the query is refused with a narrowing instruction and NO partial answer is returned (FR-064). "hop_limit_exceeded" — more than two relation hops were requested (FR-065). "page_size_clamped" — the requested page size exceeded the cap and was reduced; the clamp is REPORTED, never silent (FR-063). "scope_truncated" — workspace scope resolution was itself incomplete (ADR-067 Scope.Truncated), so a whole mounted folder may be missing. The answer MUST NOT claim success (FR-062a). "aggregate_refused" — no aggregate is returned over a refused candidate set; it is never partial (FR-066). "index_unavailable" — the index predates record support and cannot hold the properties queried. A silent no-op returning complete:true over zero properties is impossible (FR-020a).
              * @example type_mismatch
              * @enum {string}
              */
-            code: "missing_schema_version" | "duplicate_type_declaration" | "unknown_property" | "unknown_enum_value" | "missing_required" | "arity_violation" | "enum_violation" | "type_mismatch" | "dangling_relation" | "relation_type_mismatch" | "cardinality_violation" | "duplicate_id" | "cross_currency" | "money_scale_mismatch" | "candidate_cap_exceeded" | "hop_limit_exceeded" | "page_size_clamped" | "scope_truncated" | "aggregate_refused" | "index_unavailable";
+            code: "missing_schema_version" | "duplicate_type_declaration" | "unknown_property" | "unknown_enum_value" | "missing_required" | "arity_violation" | "enum_violation" | "type_mismatch" | "dangling_relation" | "relation_type_mismatch" | "cardinality_violation" | "duplicate_id" | "integer_not_whole" | "integer_out_of_range" | "candidate_cap_exceeded" | "hop_limit_exceeded" | "page_size_clamped" | "scope_truncated" | "aggregate_refused" | "index_unavailable";
             /**
              * @description Human-readable statement of what went wrong, ready to render. Never empty — a problem with no reason is indistinguishable from silence, which is the failure this type exists to end.
              * @example company is text, not a relation — cannot be resolved
@@ -19041,7 +18999,6 @@ export type EnumValueDef = components["schemas"]["EnumValueDef"];
 export type VaultRecord = components["schemas"]["VaultRecord"];
 export type RecordPropertyValue = components["schemas"]["RecordPropertyValue"];
 export type RecordValue = components["schemas"]["RecordValue"];
-export type RecordMoney = components["schemas"]["RecordMoney"];
 export type RecordRef = components["schemas"]["RecordRef"];
 export type RecordQueryRequest = components["schemas"]["RecordQueryRequest"];
 export type RecordQueryResponse = components["schemas"]["RecordQueryResponse"];

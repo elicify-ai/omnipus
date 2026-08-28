@@ -1,15 +1,18 @@
 title: RecordSort
 description: >
-  One sort key (ADR-068 D4, FR-010).
+  One sort key (ADR-068 D4, FR-010, §8 R-5).
 
-  An ENUM property sorts by its DECLARED POSITION, never lexically. That is the
-  whole reason position is data: operators otherwise encode order into the
-  spelling — "1-Pending", "7-DoNotContact" — and the encoding then leaks into
-  every rendering that shows the value.
+  SORTING IS LEXICAL, and the SORT KEY IS THE FOLDED VALUE. An enum is no
+  exception — there is no declared-position ordinal, and an author who wants a
+  domain order writes it into the values: "1-lead", "2-qualified". The prefix
+  sits in the operator's own file and does exactly what it looks like it does.
 
-  Money sorts only within one currency; a sort spanning currencies is reported
-  as a problem rather than ordered by a number that means different things in
-  each row.
+  Two clauses of R-5 a caller can rely on. The key is the FOLDED form, not the
+  raw bytes, so "Won", "won" and "WON" — one value under case-insensitive
+  matching — sort to one place instead of three while grouping collapses them
+  into one group. TIES on the folded key break on RAW BYTE ORDER, so the order
+  is TOTAL and byte-identical across runs and rebuilds. What renders is always
+  the file's own spelling, never the sort key.
 type: object
 additionalProperties: false
 required:
@@ -26,5 +29,5 @@ properties:
     enum:
       - asc
       - desc
-    description: Ascending or descending. For an enum, along declared position.
+    description: Ascending or descending, along the lexical order described above.
     example: "asc"

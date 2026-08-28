@@ -24,9 +24,10 @@ properties:
       - max
     description: >
       "count" — number of matched records; the only op valid with no property.
-      "sum" — exact decimal total. Across several currencies it is REFUSED
-      with the currencies listed, never summed (FR-014).
-      "min" / "max" — extreme value, by declared position for an enum.
+      "sum" — exact decimal total, computed in arbitrary precision and never
+      through a binary float (FR-020b).
+      "min" / "max" — extreme value; for an enum that is the lexical extreme
+      over the folded value (R-5), not a declared position.
     example: "sum"
   property:
     type: string

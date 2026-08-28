@@ -46,6 +46,25 @@ import (
 // anyway; checking only the Go type would miss a schema loosening that nobody
 // has regenerated yet. The pair is the test.
 
+// jsonField finds a field of typ by its json tag name, making NO claim about
+// whether it is optional.
+//
+// It is deliberately separate from requiredJSONField below: an OPTIONAL wire
+// field is legitimately a pointer with omitempty (exactly one of RecordValue's
+// seven value fields is populated, so six of them must be absent), and running
+// the required-field assertions over one would fail for a reason that is not a
+// defect. Sharing one helper would have forced either a weakened
+// requiredJSONField or a wrong expectation here.
+func jsonField(typ reflect.Type, jsonName string) (reflect.StructField, bool) {
+	for i := 0; i < typ.NumField(); i++ {
+		f := typ.Field(i)
+		if strings.Split(f.Tag.Get("json"), ",")[0] == jsonName {
+			return f, true
+		}
+	}
+	return reflect.StructField{}, false
+}
+
 // requiredJSONField finds a field of typ by its json tag name and asserts it is
 // present, non-pointer and NOT omitempty — i.e. that marshaling the zero value
 // of typ still emits the key.
@@ -247,113 +266,90 @@ func TestContract_RecordQueryResponse_MissingProblemsRejected(t *testing.T) {
 			"no problem list is an unfalsifiable claim")
 }
 
-// ── Money can never become a float ───────────────────────────────────────────
-// Traces to: contracts/components/schemas/RecordMoney.yaml, FR-012, FR-013, FR-020b.
-
-func TestContract_RecordMoney_AmountIsAStringNotANumber(t *testing.T) {
-	typ := reflect.TypeOf(RecordMoney{})
-
-	amount := requiredJSONField(t, typ, "amount")
-	assert.Equal(t, reflect.String, amount.Type.Kind(),
-		"RecordMoney.Amount must be a string. `type: number` in the contract "+
-			"generates a Go float32 — float64 only with format: double — and a "+
-			"JavaScript number, and binary floating "+
-			"point cannot represent 0.1 exactly — FR-020b forbids a binary float "+
-			"anywhere in the path, and the wire is part of the path")
-
-	currency := requiredJSONField(t, typ, "currency")
-	assert.Equal(t, reflect.String, currency.Type.Kind())
-
-	// Scale is an integer and required: it is what makes the decimal string
-	// convertible to integer minor units without a rounding decision.
-	scale := requiredJSONField(t, typ, "scale")
-	assert.Equal(t, reflect.Int, scale.Type.Kind())
-
-	required := componentSchemaRequired(t, "RecordMoney")
-	assert.ElementsMatch(t, []string{"amount", "currency", "scale"}, required,
-		"all three travel together or the value means nothing (FR-012)")
-}
-
-// validMinorUnitsAmount is 1,250,000.00 USD expressed the ONE way the contract
-// permits: an integer count of minor units, with `scale` — not the spelling of
-// this string — putting the decimal point back (value = amount x 10^-scale).
+// ── A number can never become a float ────────────────────────────────────────
+// Traces to: contracts/components/schemas/RecordValue.yaml, FR-013, FR-020b.
 //
-// Every currency-rule test below reuses this constant, and that reuse is the
-// point rather than tidiness. Those tests previously all sent "1250000.00",
-// which the corrected `amount` pattern rejects outright: each one passed
-// because of its AMOUNT and would have gone on passing with the currency
-// pattern and the `required` list deleted from the schema entirely. A shared
-// constant that TestContract_RecordMoney_RejectionFixturesAreAmountValid
-// independently proves valid is what keeps the currency rule the only thing
-// those tests can be failing on.
-const validMinorUnitsAmount = "125000000"
+// REPLACES the RecordMoney block. `money` was deleted from the type system
+// (ADR-068 D3, operator ruling 1) and `number` was split into `integer` and
+// `decimal`, so RecordMoney.yaml and every test of it went with the type. What
+// SURVIVES is the rule those tests actually protected, and it is the valuable
+// half: a numeric value on the wire is a decimal STRING, never a JSON number.
+// `type: number` in the contract generates a Go float32 — float64 only with
+// `format: double` — and a JavaScript number, and binary floating point cannot
+// represent 0.1 exactly or 2^53+1 at all.
 
-func TestContract_RecordMoney_Populated(t *testing.T) {
-	// Decoded rather than written as a struct literal, for the same reason the
-	// query-response fixtures are: if `amount` ever became a JSON number, a
-	// literal would stop COMPILING and the assertions above would never run.
-	// Decoding turns that same change into a visible test failure instead.
-	var m RecordMoney
-	require.NoError(t, json.Unmarshal(
-		[]byte(`{"amount":"`+validMinorUnitsAmount+`","currency":"USD","scale":2}`), &m),
-		"a minor-units string amount must decode into the generated type; if this "+
-			"fails, RecordMoney.Amount is no longer a string")
-	mustPassComponent(t, "RecordMoney", m)
+func TestContract_RecordValue_NumericFieldsAreStringsNotNumbers(t *testing.T) {
+	typ := reflect.TypeOf(RecordValue{})
+
+	for _, field := range []string{"integer", "decimal"} {
+		f, ok := jsonField(typ, field)
+		require.True(t, ok, "RecordValue must carry a %q field", field)
+		kind := f.Type.Kind()
+		if kind == reflect.Ptr {
+			kind = f.Type.Elem().Kind()
+		}
+		assert.Equal(t, reflect.String, kind,
+			"RecordValue.%s must be a STRING. `type: number` in the contract generates a "+
+				"Go float32 and a JavaScript number; binary floating point cannot represent "+
+				"0.1 exactly nor 2^53+1 at all, and FR-020b forbids a binary float anywhere "+
+				"in the path — the wire is part of the path", field)
+	}
 }
 
-// TestContract_RecordMoney_RejectionFixturesAreAmountValid is the oracle guard
-// for the two currency tests that follow. It asserts the amount they send is
-// schema-VALID on its own, so that when they observe a rejection the amount
-// cannot be the cause. Without it, a future amount-pattern change silently
-// converts both of them back into tests of the amount rule wearing a currency
-// rule's name — which is precisely the state this file was found in.
-func TestContract_RecordMoney_RejectionFixturesAreAmountValid(t *testing.T) {
-	raw := []byte(`{"amount":"` + validMinorUnitsAmount + `","currency":"USD","scale":2}`)
-	err := validateAgainstComponentSchemaRawJSON(t, "RecordMoney", raw)
+func TestContract_RecordValue_IntegerRejectsAFractionalValue(t *testing.T) {
+	// `integer` is int64. A fractional value is not one, and admitting it on
+	// the wire would mean the boundary disagreed with the parser about what
+	// the declared type means.
+	raw := []byte(`{"type":"integer","integer":"3.5"}`)
+	err := validateAgainstComponentSchemaRawJSON(t, "RecordValue", raw)
+	assert.Error(t, err, "an integer value carries no decimal point (FR-013)")
+}
+
+func TestContract_RecordValue_IntegerRejectsANumericLiteral(t *testing.T) {
+	// The whole point of the string carrier: a JSON number here becomes a
+	// binary float in both generated languages before any code of ours sees it.
+	raw := []byte(`{"type":"integer","integer":9007199254740993}`)
+	err := validateAgainstComponentSchemaRawJSON(t, "RecordValue", raw)
+	assert.Error(t, err, "a JSON number readmits the binary float FR-020b forbids")
+}
+
+func TestContract_RecordValue_IntegerRejectsExponentNotation(t *testing.T) {
+	// "1.25e6" is what a float looks like after a JSON round trip when someone
+	// stringifies it. Accepting it would readmit the float wearing a string.
+	raw := []byte(`{"type":"integer","integer":"1.25e6"}`)
+	err := validateAgainstComponentSchemaRawJSON(t, "RecordValue", raw)
+	assert.Error(t, err, "exponent notation is a stringified float, not an integer")
+}
+
+func TestContract_RecordValue_DecimalAcceptsFarMoreThanTwelvePlaces(t *testing.T) {
+	// FR-013's bound is 100 places. Twelve was the RETIRED money bound — a
+	// currency-shaped limit for a type that is not currency-shaped — and
+	// ADR-068 D3 is explicit that it must not be inherited. Thirteen places is
+	// the first value that would fail if it had been.
+	raw := []byte(`{"type":"decimal","decimal":"0.1234567890123"}`)
+	err := validateAgainstComponentSchemaRawJSON(t, "RecordValue", raw)
 	assert.NoError(t, err,
-		"the amount shared by the currency-rule tests must itself be valid, or "+
-			"those tests prove nothing about currency")
+		"FR-013: a decimal carries up to 100 places; rejecting 13 means the retired "+
+			"12-place money bound was inherited")
 }
 
-func TestContract_RecordMoney_NumericAmountRejected(t *testing.T) {
-	// The shape a careless producer emits. It must not validate, or the
-	// float-free guarantee is decorative.
-	raw := []byte(`{"amount":125000000,"currency":"USD","scale":2}`)
-	err := validateAgainstComponentSchemaRawJSON(t, "RecordMoney", raw)
-	assert.Error(t, err, "a JSON number amount must be rejected; amount is a minor-units string")
-}
-
-func TestContract_RecordMoney_DecimalAmountRejected(t *testing.T) {
-	// "1250000.00" is the pre-correction spelling: a decimal string whose
-	// fractional digits were required to equal `scale`. It is now INVALID, and
-	// this test is what stops it drifting back in — the same three-field object
-	// meaning 349.98 in one artifact and 3.4998 in another is the disagreement
-	// ADR-068 O-2 resolved.
-	raw := []byte(`{"amount":"1250000.00","currency":"USD","scale":2}`)
-	err := validateAgainstComponentSchemaRawJSON(t, "RecordMoney", raw)
+func TestContract_RecordValue_DecimalRejectsANumericLiteral(t *testing.T) {
+	raw := []byte(`{"type":"decimal","decimal":349.98}`)
+	err := validateAgainstComponentSchemaRawJSON(t, "RecordValue", raw)
 	assert.Error(t, err,
-		"a decimal-point amount must be rejected; amount is an integer count of "+
-			"minor units and `scale` is what positions the point")
+		"349.98 is not representable in binary floating point; a JSON number here is the "+
+			"exact defect FR-020b names")
 }
 
-func TestContract_RecordMoney_MissingCurrencyRejected(t *testing.T) {
-	raw := []byte(`{"amount":"` + validMinorUnitsAmount + `","scale":2}`)
-	err := validateAgainstComponentSchemaRawJSON(t, "RecordMoney", raw)
-	assert.Error(t, err, "a money value missing currency must be rejected (FR-012)")
-}
-
-func TestContract_RecordMoney_LowercaseCurrencyRejected(t *testing.T) {
-	raw := []byte(`{"amount":"` + validMinorUnitsAmount + `","currency":"usd","scale":2}`)
-	err := validateAgainstComponentSchemaRawJSON(t, "RecordMoney", raw)
-	assert.Error(t, err, "ISO-4217 codes are upper case; accepting both spellings forks the currency")
-}
-
-func TestContract_RecordMoney_ExponentAmountRejected(t *testing.T) {
-	// "1.25e6" is what a float that has been through a JSON round trip looks
-	// like when someone stringifies it. Accepting it would readmit the float.
-	raw := []byte(`{"amount":"1.25e6","currency":"USD","scale":2}`)
-	err := validateAgainstComponentSchemaRawJSON(t, "RecordMoney", raw)
-	assert.Error(t, err, "exponent notation is a stringified float, not an integer amount")
+func TestContract_RecordValue_RetiredTypesAreGone(t *testing.T) {
+	// `money` and `number` are RETIRED. A wire enum that still admitted them
+	// would let a client send a value describing a concept that no longer
+	// exists, and the SPA's generated Zod validator would accept it.
+	for _, retired := range []string{"money", "number"} {
+		raw := []byte(`{"type":"` + retired + `"}`)
+		err := validateAgainstComponentSchemaRawJSON(t, "RecordValue", raw)
+		assert.Error(t, err, "%q is a retired property type and must not validate", retired)
+	}
 }
 
 // ── Negation must be expressible on the wire ─────────────────────────────────
@@ -491,9 +487,11 @@ func TestContract_PropertyDef_SevenTypesExactly(t *testing.T) {
 	require.NoError(t, yaml.Unmarshal(raw, &doc))
 
 	assert.ElementsMatch(t,
-		[]string{"text", "enum", "relation", "date", "number", "money", "person"},
+		[]string{"text", "enum", "relation", "date", "integer", "decimal", "person"},
 		doc.Properties.Type.Enum,
-		"FR-004: exactly these seven property types, no more and no fewer")
+		"FR-004: exactly these seven property types, no more and no fewer. The MEMBERSHIP "+
+			"changed in ADR-068 revision 7 and the COUNT did not: `money` deleted, `number` "+
+			"split into `integer` and `decimal` — minus one, minus one, plus two.")
 }
 
 // TestContract_PropertyDef_ArityAndPresenceAreRequired guards D3.1. `many`

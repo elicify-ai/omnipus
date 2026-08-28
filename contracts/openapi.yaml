@@ -276,8 +276,6 @@ components:
       $ref: ./components/schemas/RecordPropertyValue.yaml
     RecordValue:
       $ref: ./components/schemas/RecordValue.yaml
-    RecordMoney:
-      $ref: ./components/schemas/RecordMoney.yaml
     RecordRef:
       $ref: ./components/schemas/RecordRef.yaml
     RecordQueryRequest:

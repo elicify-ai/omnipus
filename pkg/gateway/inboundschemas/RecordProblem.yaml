@@ -35,8 +35,8 @@ properties:
       - relation_type_mismatch
       - cardinality_violation
       - duplicate_id
-      - cross_currency
-      - money_scale_mismatch
+      - integer_not_whole
+      - integer_out_of_range
       - candidate_cap_exceeded
       - hop_limit_exceeded
       - page_size_clamped
@@ -64,10 +64,13 @@ properties:
       permits (FR-035).
       "duplicate_id" — two records share an identifier; both paths are named
       (FR-039).
-      "cross_currency" — a money total spanning several currencies was
-      REFUSED, not summed (FR-014).
-      "money_scale_mismatch" — the amount's fractional digit count disagrees
-      with the declared scale (FR-012).
+      "integer_not_whole" — a fractional value in an "integer" property. It is
+      a DIFFERENT cause from "type_mismatch" because the value parses perfectly
+      well as a number: the fault is the declared type, and the remedy is to
+      declare the property "decimal", not to fix the digits (FR-013).
+      "integer_out_of_range" — a whole number outside signed 64-bit range in an
+      "integer" property. REFUSED naming the bound, never saturated to the
+      maximum and never widened to a binary float (FR-013).
       "candidate_cap_exceeded" — the candidate set exceeded the 10,000-record
       materialisation bound; the query is refused with a narrowing instruction
       and NO partial answer is returned (FR-064).

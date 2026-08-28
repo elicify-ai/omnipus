@@ -61,8 +61,8 @@ properties:
     type: array
     description: >
       Per-group aggregate results, in the order requested. A refusal inside one
-      group is stated on that group, so a single cross-currency group cannot
-      silently void the totals of the others.
+      group is stated on THAT group, so one group whose values could not be
+      totalled cannot silently void the totals of the others.
     items:
       $ref: "./RecordAggregateResult.yaml"
       x-go-type: RecordAggregateResult

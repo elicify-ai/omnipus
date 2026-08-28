@@ -1,7 +1,9 @@
 title: PropertyDef
 description: >
   One declared property of a record type (ADR-068 D2, D3). Seven property
-  types exist and no more: text, enum, relation, date, number, money, person.
+  types exist and no more: text, enum, relation, date, integer, decimal,
+  person. The membership changed in ADR-068 revision 7 and the COUNT did not:
+  `money` was deleted and `number` was split into `integer` and `decimal`.
 
   ARITY AND PRESENCE ARE BOTH REQUIRED FIELDS, deliberately. `many` and
   `required` carry no default and are never inferred, because the single
@@ -41,8 +43,8 @@ properties:
       - enum
       - relation
       - date
-      - number
-      - money
+      - integer
+      - decimal
       - person
     description: >
       "text" — prose. Never validated and never queried for equality or order
@@ -51,13 +53,19 @@ properties:
       "Is it present?" is {op: is_absent, negate: true}; there is no
       `is_present` operator. Full-text retrieval is ADR-067's search surface,
       not this one.
-      "enum" — one of a closed, ordered set (`values`).
+      "enum" — one of a closed SET (`values`). The set is closed; it is not
+      ordered — sorting is lexical over the folded value (D4, R-5), and an
+      author who wants a domain order prefixes the values: `1-lead`,
+      `2-qualified`.
       "relation" — a typed edge to another record (D5); `to` names the target
       record type and `inverse` names the derived reverse direction.
       "date" — a day or an instant, comparable.
-      "number" — a quantity; `unit` is declared metadata, never glued into the
-      property name.
-      "money" — amount + ISO-4217 currency + scale as one value (RecordMoney).
+      "integer" — a signed 64-bit whole number, bound-checked and REFUSED
+      outside int64 rather than saturated or widened to a float. `unit` is
+      declared metadata, never glued into the property name.
+      "decimal" — an exact, arbitrary-precision number, at most 100 decimal
+      places; a value past the bound is refused naming it, never rounded.
+      `unit` applies here too.
       "person" — a relation to a person record, kept distinct from a name
       typed as text so one vault cannot model the same concept both ways.
     example: "enum"
@@ -82,8 +90,11 @@ properties:
   values:
     type: array
     description: >
-      The closed, ordered value set. Present only when type is "enum", and
-      then non-empty. Order here IS the sort order (FR-010).
+      The closed value set. Present only when type is "enum", and then
+      non-empty. THIS ORDER IS NOT THE SORT ORDER — it is the order a REJECTION
+      lists the permitted values in, so the operator reads their own file back.
+      Sorting is lexical over the folded value (R-5); a domain order is
+      expressed by prefixing the values.
     items:
       $ref: "./EnumValueDef.yaml"
       x-go-type: EnumValueDef
@@ -106,18 +117,7 @@ properties:
   unit:
     type: string
     description: >
-      Unit of measure for a "number" property, declared as metadata rather
-      than glued into the property name (D3). Absent means unitless.
+      Unit of measure for an "integer" or "decimal" property, declared as
+      metadata rather than glued into the property name (D3). Absent means
+      unitless.
     example: "minutes"
-  scale:
-    type: integer
-    minimum: 0
-    maximum: 12
-    description: >
-      Declared decimal scale for a "money" property — the power of ten that
-      turns every RecordMoney value of this property from minor units back
-      into the figure a person reads: value = amount x 10^-scale (FR-012).
-      Present only when type is "money". `RecordMoney.amount` is an integer
-      count of minor units and carries no decimal point, so this is NOT a
-      "fractional digit count" the amount's spelling has to match.
-    example: 2

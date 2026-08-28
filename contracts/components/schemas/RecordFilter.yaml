@@ -68,10 +68,12 @@ properties:
       Negation is not an operator here; it is the separate `negate` flag, so
       `status != done` is {op: eq, negate: true} and `neq` was redundant as
       well as unimplemented.
-      Ordered comparison (lt/lte/gt/gte) is valid on date, number and money; on
-      an enum it compares DECLARED POSITION, not spelling (FR-010), and money
-      compares only within one currency (R-6). `is_absent` tests the third
-      state (D3.2) explicitly.
+      Ordered comparison (lt/lte/gt/gte) is valid on date, integer and decimal
+      — and `integer` and `decimal` are ONE comparison domain, so 3 and 3.0
+      compare equal (§8 R-1). On an enum it is LEXICAL over the folded value
+      (R-5): there is no declared-position ordinal, and a domain order is
+      expressed by prefixing the values. `is_absent` tests the third state
+      (D3.2) explicitly.
     example: "eq"
   values:
     type: array
@@ -107,9 +109,9 @@ properties:
 
 
       (b) Negation does NOT re-admit a comparison that could not be made. A
-      non-conforming value (§8 R-4), an unresolved relation (R-8), a
-      cross-currency money comparison (R-6) or an operator undefined for the
-      declared type is REPORTED in `problems` and the record EXCLUDED — from
+      non-conforming value (§8 R-4), an unresolved relation (R-8) or an
+      operator undefined for the declared type is REPORTED in `problems` and
+      the record EXCLUDED — from
       the negated clause as well as the plain one. Counting a corrupt value as
       "not done" by double negation would be a silent wrong answer.
 

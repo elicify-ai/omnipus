@@ -40,13 +40,13 @@ properties:
       - enum
       - relation
       - date
-      - number
-      - money
+      - integer
+      - decimal
       - person
     description: >
       The declared property type, echoed by the server on reads. Optional on a
       write request, where the schema is the authority.
-    example: "money"
+    example: "decimal"
   values:
     type: array
     description: >

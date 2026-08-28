@@ -3554,9 +3554,9 @@ func (e PromptGuardUpdateResponseAppliedLevel) Valid() bool {
 // Defines values for PropertyDefType.
 const (
 	PropertyDefTypeDate     PropertyDefType = "date"
+	PropertyDefTypeDecimal  PropertyDefType = "decimal"
 	PropertyDefTypeEnum     PropertyDefType = "enum"
-	PropertyDefTypeMoney    PropertyDefType = "money"
-	PropertyDefTypeNumber   PropertyDefType = "number"
+	PropertyDefTypeInteger  PropertyDefType = "integer"
 	PropertyDefTypePerson   PropertyDefType = "person"
 	PropertyDefTypeRelation PropertyDefType = "relation"
 	PropertyDefTypeText     PropertyDefType = "text"
@@ -3567,11 +3567,11 @@ func (e PropertyDefType) Valid() bool {
 	switch e {
 	case PropertyDefTypeDate:
 		return true
+	case PropertyDefTypeDecimal:
+		return true
 	case PropertyDefTypeEnum:
 		return true
-	case PropertyDefTypeMoney:
-		return true
-	case PropertyDefTypeNumber:
+	case PropertyDefTypeInteger:
 		return true
 	case PropertyDefTypePerson:
 		return true
@@ -3776,16 +3776,16 @@ const (
 	ArityViolation           RecordProblemCode = "arity_violation"
 	CandidateCapExceeded     RecordProblemCode = "candidate_cap_exceeded"
 	CardinalityViolation     RecordProblemCode = "cardinality_violation"
-	CrossCurrency            RecordProblemCode = "cross_currency"
 	DanglingRelation         RecordProblemCode = "dangling_relation"
 	DuplicateId              RecordProblemCode = "duplicate_id"
 	DuplicateTypeDeclaration RecordProblemCode = "duplicate_type_declaration"
 	EnumViolation            RecordProblemCode = "enum_violation"
 	HopLimitExceeded         RecordProblemCode = "hop_limit_exceeded"
 	IndexUnavailable         RecordProblemCode = "index_unavailable"
+	IntegerNotWhole          RecordProblemCode = "integer_not_whole"
+	IntegerOutOfRange        RecordProblemCode = "integer_out_of_range"
 	MissingRequired          RecordProblemCode = "missing_required"
 	MissingSchemaVersion     RecordProblemCode = "missing_schema_version"
-	MoneyScaleMismatch       RecordProblemCode = "money_scale_mismatch"
 	PageSizeClamped          RecordProblemCode = "page_size_clamped"
 	RelationTypeMismatch     RecordProblemCode = "relation_type_mismatch"
 	ScopeTruncated           RecordProblemCode = "scope_truncated"
@@ -3805,8 +3805,6 @@ func (e RecordProblemCode) Valid() bool {
 		return true
 	case CardinalityViolation:
 		return true
-	case CrossCurrency:
-		return true
 	case DanglingRelation:
 		return true
 	case DuplicateId:
@@ -3819,11 +3817,13 @@ func (e RecordProblemCode) Valid() bool {
 		return true
 	case IndexUnavailable:
 		return true
+	case IntegerNotWhole:
+		return true
+	case IntegerOutOfRange:
+		return true
 	case MissingRequired:
 		return true
 	case MissingSchemaVersion:
-		return true
-	case MoneyScaleMismatch:
 		return true
 	case PageSizeClamped:
 		return true
@@ -3845,9 +3845,9 @@ func (e RecordProblemCode) Valid() bool {
 // Defines values for RecordPropertyValueType.
 const (
 	RecordPropertyValueTypeDate     RecordPropertyValueType = "date"
+	RecordPropertyValueTypeDecimal  RecordPropertyValueType = "decimal"
 	RecordPropertyValueTypeEnum     RecordPropertyValueType = "enum"
-	RecordPropertyValueTypeMoney    RecordPropertyValueType = "money"
-	RecordPropertyValueTypeNumber   RecordPropertyValueType = "number"
+	RecordPropertyValueTypeInteger  RecordPropertyValueType = "integer"
 	RecordPropertyValueTypePerson   RecordPropertyValueType = "person"
 	RecordPropertyValueTypeRelation RecordPropertyValueType = "relation"
 	RecordPropertyValueTypeText     RecordPropertyValueType = "text"
@@ -3858,11 +3858,11 @@ func (e RecordPropertyValueType) Valid() bool {
 	switch e {
 	case RecordPropertyValueTypeDate:
 		return true
+	case RecordPropertyValueTypeDecimal:
+		return true
 	case RecordPropertyValueTypeEnum:
 		return true
-	case RecordPropertyValueTypeMoney:
-		return true
-	case RecordPropertyValueTypeNumber:
+	case RecordPropertyValueTypeInteger:
 		return true
 	case RecordPropertyValueTypePerson:
 		return true
@@ -3896,9 +3896,9 @@ func (e RecordSortDirection) Valid() bool {
 // Defines values for RecordValueType.
 const (
 	Date     RecordValueType = "date"
+	Decimal  RecordValueType = "decimal"
 	Enum     RecordValueType = "enum"
-	Money    RecordValueType = "money"
-	Number   RecordValueType = "number"
+	Integer  RecordValueType = "integer"
 	Person   RecordValueType = "person"
 	Relation RecordValueType = "relation"
 	Text     RecordValueType = "text"
@@ -3909,11 +3909,11 @@ func (e RecordValueType) Valid() bool {
 	switch e {
 	case Date:
 		return true
+	case Decimal:
+		return true
 	case Enum:
 		return true
-	case Money:
-		return true
-	case Number:
+	case Integer:
 		return true
 	case Person:
 		return true
@@ -11457,7 +11457,7 @@ type PromptGuardUpdateResponse struct {
 // PromptGuardUpdateResponseAppliedLevel The prompt guard level now active.
 type PromptGuardUpdateResponseAppliedLevel string
 
-// PropertyDef One declared property of a record type (ADR-068 D2, D3). Seven property types exist and no more: text, enum, relation, date, number, money, person.
+// PropertyDef One declared property of a record type (ADR-068 D2, D3). Seven property types exist and no more: text, enum, relation, date, integer, decimal, person. The membership changed in ADR-068 revision 7 and the COUNT did not: `money` was deleted and `number` was split into `integer` and `decimal`.
 // ARITY AND PRESENCE ARE BOTH REQUIRED FIELDS, deliberately. `many` and `required` carry no default and are never inferred, because the single most-reported failure in the research corpus is a scalar property silently becoming a list the moment a second value is added — after which every query written against it returns nothing, with no error (D3.1). A property whose arity is merely "absent" reproduces exactly that ambiguity on the wire.
 // Property types are scoped to their record type (D3.3, FR-009): `status` on one type and `status` on another are unrelated declarations. This contract therefore never carries a vault-wide property table.
 // ADR-068 D0: the product ships NO record types and NO properties of its own. Every PropertyDef on the wire came from a schema file the operator's vault declared. The names used in the examples here are illustrative of the mechanism only.
@@ -11477,23 +11477,20 @@ type PropertyDef struct {
 	// Required True when a record of this type MUST carry the property. A record missing a required property is named by validation with the property and the reason (RecordProblem.code = missing_required).
 	Required bool `json:"required"`
 
-	// Scale Declared decimal scale for a "money" property — the power of ten that turns every RecordMoney value of this property from minor units back into the figure a person reads: value = amount x 10^-scale (FR-012). Present only when type is "money". `RecordMoney.amount` is an integer count of minor units and carries no decimal point, so this is NOT a "fractional digit count" the amount's spelling has to match.
-	Scale *int `json:"scale,omitempty"`
-
 	// To Target record type name. Present only when type is "relation" or "person". A relation pointing at a note that exists but is not of this type is a validation finding, not a silent accept (FR-034).
 	To *string `json:"to,omitempty"`
 
-	// Type "text" — prose. Never validated and never queried for equality or order (D3), so a filter on a text property supports exactly two operators: `contains` (case-sensitive substring matching, §8 R-10) and `is_absent`. "Is it present?" is {op: is_absent, negate: true}; there is no `is_present` operator. Full-text retrieval is ADR-067's search surface, not this one. "enum" — one of a closed, ordered set (`values`). "relation" — a typed edge to another record (D5); `to` names the target record type and `inverse` names the derived reverse direction. "date" — a day or an instant, comparable. "number" — a quantity; `unit` is declared metadata, never glued into the property name. "money" — amount + ISO-4217 currency + scale as one value (RecordMoney). "person" — a relation to a person record, kept distinct from a name typed as text so one vault cannot model the same concept both ways.
+	// Type "text" — prose. Never validated and never queried for equality or order (D3), so a filter on a text property supports exactly two operators: `contains` (case-sensitive substring matching, §8 R-10) and `is_absent`. "Is it present?" is {op: is_absent, negate: true}; there is no `is_present` operator. Full-text retrieval is ADR-067's search surface, not this one. "enum" — one of a closed SET (`values`). The set is closed; it is not ordered — sorting is lexical over the folded value (D4, R-5), and an author who wants a domain order prefixes the values: `1-lead`, `2-qualified`. "relation" — a typed edge to another record (D5); `to` names the target record type and `inverse` names the derived reverse direction. "date" — a day or an instant, comparable. "integer" — a signed 64-bit whole number, bound-checked and REFUSED outside int64 rather than saturated or widened to a float. `unit` is declared metadata, never glued into the property name. "decimal" — an exact, arbitrary-precision number, at most 100 decimal places; a value past the bound is refused naming it, never rounded. `unit` applies here too. "person" — a relation to a person record, kept distinct from a name typed as text so one vault cannot model the same concept both ways.
 	Type PropertyDefType `json:"type"`
 
-	// Unit Unit of measure for a "number" property, declared as metadata rather than glued into the property name (D3). Absent means unitless.
+	// Unit Unit of measure for an "integer" or "decimal" property, declared as metadata rather than glued into the property name (D3). Absent means unitless.
 	Unit *string `json:"unit,omitempty"`
 
-	// Values The closed, ordered value set. Present only when type is "enum", and then non-empty. Order here IS the sort order (FR-010).
+	// Values The closed value set. Present only when type is "enum", and then non-empty. THIS ORDER IS NOT THE SORT ORDER — it is the order a REJECTION lists the permitted values in, so the operator reads their own file back. Sorting is lexical over the folded value (R-5); a domain order is expressed by prefixing the values.
 	Values *[]EnumValueDef `json:"values,omitempty"`
 }
 
-// PropertyDefType "text" — prose. Never validated and never queried for equality or order (D3), so a filter on a text property supports exactly two operators: `contains` (case-sensitive substring matching, §8 R-10) and `is_absent`. "Is it present?" is {op: is_absent, negate: true}; there is no `is_present` operator. Full-text retrieval is ADR-067's search surface, not this one. "enum" — one of a closed, ordered set (`values`). "relation" — a typed edge to another record (D5); `to` names the target record type and `inverse` names the derived reverse direction. "date" — a day or an instant, comparable. "number" — a quantity; `unit` is declared metadata, never glued into the property name. "money" — amount + ISO-4217 currency + scale as one value (RecordMoney). "person" — a relation to a person record, kept distinct from a name typed as text so one vault cannot model the same concept both ways.
+// PropertyDefType "text" — prose. Never validated and never queried for equality or order (D3), so a filter on a text property supports exactly two operators: `contains` (case-sensitive substring matching, §8 R-10) and `is_absent`. "Is it present?" is {op: is_absent, negate: true}; there is no `is_present` operator. Full-text retrieval is ADR-067's search surface, not this one. "enum" — one of a closed SET (`values`). The set is closed; it is not ordered — sorting is lexical over the folded value (D4, R-5), and an author who wants a domain order prefixes the values: `1-lead`, `2-qualified`. "relation" — a typed edge to another record (D5); `to` names the target record type and `inverse` names the derived reverse direction. "date" — a day or an instant, comparable. "integer" — a signed 64-bit whole number, bound-checked and REFUSED outside int64 rather than saturated or widened to a float. `unit` is declared metadata, never glued into the property name. "decimal" — an exact, arbitrary-precision number, at most 100 decimal places; a value past the bound is refused naming it, never rounded. `unit` applies here too. "person" — a relation to a person record, kept distinct from a name typed as text so one vault cannot model the same concept both ways.
 type PropertyDefType string
 
 // Provider A single LLM provider entry as returned by GET /providers and PUT /providers/{id}. Describes the provider's connection status, the resolved model list, and any non-fatal warnings encountered when fetching the upstream model catalogue.
@@ -11683,14 +11680,14 @@ type ReAuthResponse struct {
 // There is deliberately NO "avg". A mean over exact decimals is not itself exact — it reintroduces a rounding decision at the one point where this design promises there is none (FR-013) — and a caller that wants one can compute it from `count` and `sum` with a rounding rule it chose. Offering avg here would be offering a number whose precision nobody declared.
 // No aggregate is returned at all over a refused candidate set (FR-066); it is never partial.
 type RecordAggregate struct {
-	// Op "count" — number of matched records; the only op valid with no property. "sum" — exact decimal total. Across several currencies it is REFUSED with the currencies listed, never summed (FR-014). "min" / "max" — extreme value, by declared position for an enum.
+	// Op "count" — number of matched records; the only op valid with no property. "sum" — exact decimal total, computed in arbitrary precision and never through a binary float (FR-020b). "min" / "max" — extreme value; for an enum that is the lexical extreme over the folded value (R-5), not a declared position.
 	Op RecordAggregateOp `json:"op"`
 
 	// Property The property to aggregate. Required for sum, min and max; omitted for count. Validated against the schema before evaluation (FR-023).
 	Property *string `json:"property,omitempty"`
 }
 
-// RecordAggregateOp "count" — number of matched records; the only op valid with no property. "sum" — exact decimal total. Across several currencies it is REFUSED with the currencies listed, never summed (FR-014). "min" / "max" — extreme value, by declared position for an enum.
+// RecordAggregateOp "count" — number of matched records; the only op valid with no property. "sum" — exact decimal total, computed in arbitrary precision and never through a binary float (FR-020b). "min" / "max" — extreme value; for an enum that is the lexical extreme over the folded value (R-5), not a declared position.
 type RecordAggregateOp string
 
 // RecordAggregateResult The outcome of one requested aggregate — WHICH MAY BE A REFUSAL, stated as such (ADR-068 D13, FR-014, FR-066).
@@ -11698,9 +11695,6 @@ type RecordAggregateOp string
 type RecordAggregateResult struct {
 	// Count The count, when op is "count" and refused is false. Also the number of records that CONTRIBUTED to a sum, min or max, so a caller can see how many were excluded without subtracting.
 	Count *int64 `json:"count,omitempty"`
-
-	// CurrenciesPresent The currencies found, listed when a money sum is refused for spanning more than one (FR-014). Listing them is the actionable half of the refusal: the caller can re-ask per currency. There is no FX conversion and no rate table in this ADR.
-	CurrenciesPresent *[]string `json:"currencies_present,omitempty"`
 
 	// ExcludedRecords How many matched records were excluded from this aggregate because their value could not be read as the declared type. Every one of them is named in the response's `problems` (FR-026) — this field is the headline, not a substitute for the list.
 	ExcludedRecords *int64 `json:"excluded_records,omitempty"`
@@ -11711,11 +11705,11 @@ type RecordAggregateResult struct {
 	// Property The property aggregated. Absent for count.
 	Property *string `json:"property,omitempty"`
 
-	// Refused True when NO figure is returned. Set for a cross-currency sum (FR-014), for an aggregate over a refused candidate set (FR-066), and whenever a figure could not be computed exactly. When true, `value` and `count` are absent and the reason is in the response's `problems`.
+	// Refused True when NO figure is returned. Set for an aggregate over a refused candidate set (FR-066), and whenever a figure could not be computed exactly — an exactness this contract can promise because every numeric value on the wire is a decimal string, never a binary float. When true, `value` and `count` are absent and the reason is in the response's `problems`.
 	Refused bool `json:"refused"`
 
 	// Value ONE value of one property, tagged with the property type that governs it (ADR-068 D3). Exactly one of the seven value fields is populated, and which one is named by `type`.
-	// Numbers and money are carried as DECIMAL STRINGS, never as JSON numbers. `type: number` in this contract generates a Go float32 (float64 only with `format: double`) and a JavaScript number; binary floating point cannot represent 0.1 exactly, so a value would drift on a round trip that nobody performed deliberately. FR-020b forbids a binary float anywhere in the storage or retrieval path, and the wire is part of that path.
+	// NUMBERS ARE CARRIED AS DECIMAL STRINGS, never as JSON numbers — both `integer` and `decimal`. A JSON `type: number` in this contract generates a Go float32 (float64 only with `format: double`) and a JavaScript number; binary floating point cannot represent 0.1 exactly, and it cannot represent 2^53+1 at all, so a value would drift on a round trip nobody performed deliberately. FR-020b forbids a binary float anywhere in the storage or retrieval path, and the wire is part of that path.
 	// ABSENCE IS NOT A VALUE. A property with no value carries no RecordValue at all — its RecordPropertyValue.values array is empty (D3.2, FR-007). This matters: "days I did not meditate" must be answerable, and it is not answerable in a model where absent and false are the same state.
 	Value *RecordValue `json:"value,omitempty"`
 }
@@ -11751,7 +11745,7 @@ type RecordFilter struct {
 	//
 	// (a) FR-008 — a negated clause INCLUDES records where the property is absent, because "days I did not meditate" must contain the days with no value at all, which are precisely the days being asked about. Override with `include_absent: false`.
 	//
-	// (b) Negation does NOT re-admit a comparison that could not be made. A non-conforming value (§8 R-4), an unresolved relation (R-8), a cross-currency money comparison (R-6) or an operator undefined for the declared type is REPORTED in `problems` and the record EXCLUDED — from the negated clause as well as the plain one. Counting a corrupt value as "not done" by double negation would be a silent wrong answer.
+	// (b) Negation does NOT re-admit a comparison that could not be made. A non-conforming value (§8 R-4), an unresolved relation (R-8) or an operator undefined for the declared type is REPORTED in `problems` and the record EXCLUDED — from the negated clause as well as the plain one. Counting a corrupt value as "not done" by double negation would be a silent wrong answer.
 	//
 	// Omitted is identical to false: an unset flag can never turn a clause into its opposite. Stated in prose rather than as a JSON Schema `default:` deliberately — openapi-typescript promotes a defaulted property to REQUIRED, which would have made `negate` mandatory in TypeScript while oapi-codegen still emitted an optional `*bool`, so the two generated languages would disagree about the same field.
 	Negate *bool `json:"negate,omitempty"`
@@ -11760,7 +11754,7 @@ type RecordFilter struct {
 	//
 	// `contains` is whole-element membership on a list (§8 R-9) and substring matching on text (§8 R-10). It is NEVER substring matching on a list. Against a `many` property it is one of only two defined operators; the rest are refused with the remedy named (§8 R-13).
 	//
-	// Corrected 2026-08-25. This enum previously read [eq, neq, in, not_in, lt, lte, gt, gte, is_absent, is_present]: it OMITTED `contains` — a spec rule with cell-by-cell truth-table coverage and no wire representation at all — while offering `neq`, `in`, `not_in` and `is_present`, none of which the engine implements. Negation is not an operator here; it is the separate `negate` flag, so `status != done` is {op: eq, negate: true} and `neq` was redundant as well as unimplemented. Ordered comparison (lt/lte/gt/gte) is valid on date, number and money; on an enum it compares DECLARED POSITION, not spelling (FR-010), and money compares only within one currency (R-6). `is_absent` tests the third state (D3.2) explicitly.
+	// Corrected 2026-08-25. This enum previously read [eq, neq, in, not_in, lt, lte, gt, gte, is_absent, is_present]: it OMITTED `contains` — a spec rule with cell-by-cell truth-table coverage and no wire representation at all — while offering `neq`, `in`, `not_in` and `is_present`, none of which the engine implements. Negation is not an operator here; it is the separate `negate` flag, so `status != done` is {op: eq, negate: true} and `neq` was redundant as well as unimplemented. Ordered comparison (lt/lte/gt/gte) is valid on date, integer and decimal — and `integer` and `decimal` are ONE comparison domain, so 3 and 3.0 compare equal (§8 R-1). On an enum it is LEXICAL over the folded value (R-5): there is no declared-position ordinal, and a domain order is expressed by prefixing the values. `is_absent` tests the third state (D3.2) explicitly.
 	Op RecordFilterOp `json:"op"`
 
 	// Property The declared property to filter on, in the record type reached after following `via`. Property types are scoped to their record type (D3.3), so this name is resolved against that type's schema and no other.
@@ -11777,7 +11771,7 @@ type RecordFilter struct {
 //
 // `contains` is whole-element membership on a list (§8 R-9) and substring matching on text (§8 R-10). It is NEVER substring matching on a list. Against a `many` property it is one of only two defined operators; the rest are refused with the remedy named (§8 R-13).
 //
-// Corrected 2026-08-25. This enum previously read [eq, neq, in, not_in, lt, lte, gt, gte, is_absent, is_present]: it OMITTED `contains` — a spec rule with cell-by-cell truth-table coverage and no wire representation at all — while offering `neq`, `in`, `not_in` and `is_present`, none of which the engine implements. Negation is not an operator here; it is the separate `negate` flag, so `status != done` is {op: eq, negate: true} and `neq` was redundant as well as unimplemented. Ordered comparison (lt/lte/gt/gte) is valid on date, number and money; on an enum it compares DECLARED POSITION, not spelling (FR-010), and money compares only within one currency (R-6). `is_absent` tests the third state (D3.2) explicitly.
+// Corrected 2026-08-25. This enum previously read [eq, neq, in, not_in, lt, lte, gt, gte, is_absent, is_present]: it OMITTED `contains` — a spec rule with cell-by-cell truth-table coverage and no wire representation at all — while offering `neq`, `in`, `not_in` and `is_present`, none of which the engine implements. Negation is not an operator here; it is the separate `negate` flag, so `status != done` is {op: eq, negate: true} and `neq` was redundant as well as unimplemented. Ordered comparison (lt/lte/gt/gte) is valid on date, integer and decimal — and `integer` and `decimal` are ONE comparison domain, so 3 and 3.0 compare equal (§8 R-1). On an enum it is LEXICAL over the folded value (R-5): there is no declared-position ordinal, and a domain order is expressed by prefixing the values. `is_absent` tests the third state (D3.2) explicitly.
 type RecordFilterOp string
 
 // RecordGroup One group of matched records (ADR-068 D10, FR-027 to FR-029).
@@ -11785,7 +11779,7 @@ type RecordFilterOp string
 // A record with several values in the grouping property APPEARS IN EVERY GROUP IT BELONGS TO (FR-028). This is a deliberate departure from Obsidian, whose single combined group ("Finance Business" for a record tagged Finance and Business) is confirmed intentional by its authors and is useless for the categorisation case it appears in. The consequence is that the group counts can sum to MORE than the number of matched records; that is correct, not a double count.
 // Grouping by a RELATION is supported (FR-029). Notion's own answer to this is "Not currently", which is why their first-party guidance flattens relations into selects; we do not inherit the constraint that caused it.
 type RecordGroup struct {
-	// Aggregates Per-group aggregate results, in the order requested. A refusal inside one group is stated on that group, so a single cross-currency group cannot silently void the totals of the others.
+	// Aggregates Per-group aggregate results, in the order requested. A refusal inside one group is stated on THAT group, so one group whose values could not be totalled cannot silently void the totals of the others.
 	Aggregates *[]RecordAggregateResult `json:"aggregates,omitempty"`
 
 	// Count Records in this group. May sum across groups to more than the total matched, when a multi-value property placed a record in several groups (FR-028).
@@ -11811,38 +11805,16 @@ type RecordGroupKey struct {
 	Property string `json:"property"`
 
 	// Value ONE value of one property, tagged with the property type that governs it (ADR-068 D3). Exactly one of the seven value fields is populated, and which one is named by `type`.
-	// Numbers and money are carried as DECIMAL STRINGS, never as JSON numbers. `type: number` in this contract generates a Go float32 (float64 only with `format: double`) and a JavaScript number; binary floating point cannot represent 0.1 exactly, so a value would drift on a round trip that nobody performed deliberately. FR-020b forbids a binary float anywhere in the storage or retrieval path, and the wire is part of that path.
+	// NUMBERS ARE CARRIED AS DECIMAL STRINGS, never as JSON numbers — both `integer` and `decimal`. A JSON `type: number` in this contract generates a Go float32 (float64 only with `format: double`) and a JavaScript number; binary floating point cannot represent 0.1 exactly, and it cannot represent 2^53+1 at all, so a value would drift on a round trip nobody performed deliberately. FR-020b forbids a binary float anywhere in the storage or retrieval path, and the wire is part of that path.
 	// ABSENCE IS NOT A VALUE. A property with no value carries no RecordValue at all — its RecordPropertyValue.values array is empty (D3.2, FR-007). This matters: "days I did not meditate" must be answerable, and it is not answerable in a model where absent and false are the same state.
 	Value *RecordValue `json:"value,omitempty"`
-}
-
-// RecordMoney A money value: amount, ISO-4217 currency and declared scale carried as ONE value (ADR-068 D3, FR-012). A value missing currency is REJECTED — two loose fields that nothing keeps together is the failure this type closes.
-// The amount is an INTEGER STRING and never a JSON number. `type: number` in this contract generates a Go float32 (float64 only with `format: double`) and a JavaScript number, and binary floating point cannot represent 0.1 exactly — so a total that must be exact would drift by an amount nobody can see until it is reconciled against a bank. FR-013 requires exact decimal arithmetic and FR-020b forbids a binary float ANYWHERE in the storage or retrieval path; a string is the only representation that survives both the wire and the two generated languages without a lossy hop.
-// THE AMOUNT IS ALREADY IN MINOR UNITS (ADR-068 O-2's resolution). It carries no decimal point at all — `pattern` rejects one — and `scale` says where the reader must put it: value = amount x 10^-scale, exactly, with no rounding. {amount "1000", scale 2} is 10.00 USD; {amount "10", scale 0} is 10 USD; the two are distinguishable because `scale` differs, not because the amount is spelled differently. There is no "fractional digit count" rule to satisfy — a decimal amount such as "10.00" is schema-INVALID, not a scale mismatch.
-// Corrected 2026-08-25, second pass: this paragraph previously required the fractional digits of `amount` to equal `scale`, illustrated it with the now ILLEGAL "10.00", and stated the conversion INVERTED (minor units = amount x 10^scale). Read together with the corrected `amount` pattern below, the one artifact said two different things about the same three fields — the exact defect the minor-units fix was filed to end.
-// Summing money is exact WITHIN one currency. A sum ACROSS currencies is REFUSED with the currencies present listed (FR-014) — see RecordAggregateResult.currencies_present. There is no FX conversion and no rate table in this ADR.
-type RecordMoney struct {
-	// Amount The amount as an INTEGER COUNT OF MINOR UNITS, rendered as a string. Never a JSON number, and never a decimal fraction: with `scale: 2`, "34998" means 349.98. Optional leading minus, no decimal point, no thousands separators, no exponent, no currency symbol.
-	//
-	// A string rather than a JSON number because a JSON number is an IEEE-754 double in most parsers, and the whole point of this type is that no float ever touches an amount (ADR-068 D3, FR-020b).
-	//
-	// Corrected 2026-08-25: this field previously specified a decimal string whose fractional digits had to equal `scale` (example "1250000.00"), which contradicted ADR-068 O-2 and the Go parser. The same three-field object therefore meant 349.98 on disk and 3.4998 on the wire, with nothing to detect the disagreement.
-	Amount string `json:"amount"`
-
-	// Currency ISO-4217 alphabetic currency code, upper case. Mandatory: a money value without a currency is rejected (FR-012), because an amount alone cannot be compared, sorted or summed against anything.
-	Currency string `json:"currency"`
-
-	// Scale How many of `amount`'s trailing digits are FRACTIONAL — the power of ten that turns minor units back into the figure a person reads: value = amount x 10^-scale. 2 for most currencies, 0 for JPY, 3 for KWD, and higher where an operator's convention needs it. Declared rather than inferred from the currency, because the vault's convention — not the product — decides how precisely it records a figure (D0).
-	//
-	// It is NOT a constraint on how `amount` is spelled: `amount` never contains a decimal point, so scale cannot be checked against it and a "fractional digit count mismatch" is not a finding this type can raise.
-	Scale int `json:"scale"`
 }
 
 // RecordProblem One thing a record operation could not do, named rather than dropped (ADR-068 D13). This is the type the whole ADR exists to serve: the failure mode being corrected is SILENCE — a query that quietly omits the records it could not understand and returns a confident total over what is left.
 // A problem names the records affected, the reason, and where possible the expected shape and the remedy. The community's accepted debugging advice for the incumbent tools today is "keep testing until something is returned"; that is what a system with no error channel forces on people.
 // A RecordProblem is NOT an HTTP error. Bounded, refused and partially evaluated answers all arrive as a normal response carrying `complete: false` and one or more of these (D15.1b).
 type RecordProblem struct {
-	// Code Machine-readable cause, so a caller can branch without parsing prose. "missing_schema_version" — a schema file lacking schema_version; no records of that type are validated against it (FR-002). "duplicate_type_declaration" — two schema files declare the same record type; both paths are named in `paths` (FR-003). "unknown_property" / "unknown_enum_value" — a query named something the schema does not declare. The query is REJECTED with the valid names listed; it never returns an empty result set (FR-024). "missing_required" — a required property is absent from a record. "arity_violation" — a list where a scalar was declared, or the reverse (FR-006). "enum_violation" — a value outside the declared, closed set (FR-011). "type_mismatch" — the stored value cannot be read as its declared type. "dangling_relation" — the relation target does not exist (FR-033). "relation_type_mismatch" — the target exists but is not of the declared target type (FR-034). "cardinality_violation" — more values than the declared cardinality permits (FR-035). "duplicate_id" — two records share an identifier; both paths are named (FR-039). "cross_currency" — a money total spanning several currencies was REFUSED, not summed (FR-014). "money_scale_mismatch" — the amount's fractional digit count disagrees with the declared scale (FR-012). "candidate_cap_exceeded" — the candidate set exceeded the 10,000-record materialisation bound; the query is refused with a narrowing instruction and NO partial answer is returned (FR-064). "hop_limit_exceeded" — more than two relation hops were requested (FR-065). "page_size_clamped" — the requested page size exceeded the cap and was reduced; the clamp is REPORTED, never silent (FR-063). "scope_truncated" — workspace scope resolution was itself incomplete (ADR-067 Scope.Truncated), so a whole mounted folder may be missing. The answer MUST NOT claim success (FR-062a). "aggregate_refused" — no aggregate is returned over a refused candidate set; it is never partial (FR-066). "index_unavailable" — the index predates record support and cannot hold the properties queried. A silent no-op returning complete:true over zero properties is impossible (FR-020a).
+	// Code Machine-readable cause, so a caller can branch without parsing prose. "missing_schema_version" — a schema file lacking schema_version; no records of that type are validated against it (FR-002). "duplicate_type_declaration" — two schema files declare the same record type; both paths are named in `paths` (FR-003). "unknown_property" / "unknown_enum_value" — a query named something the schema does not declare. The query is REJECTED with the valid names listed; it never returns an empty result set (FR-024). "missing_required" — a required property is absent from a record. "arity_violation" — a list where a scalar was declared, or the reverse (FR-006). "enum_violation" — a value outside the declared, closed set (FR-011). "type_mismatch" — the stored value cannot be read as its declared type. "dangling_relation" — the relation target does not exist (FR-033). "relation_type_mismatch" — the target exists but is not of the declared target type (FR-034). "cardinality_violation" — more values than the declared cardinality permits (FR-035). "duplicate_id" — two records share an identifier; both paths are named (FR-039). "integer_not_whole" — a fractional value in an "integer" property. It is a DIFFERENT cause from "type_mismatch" because the value parses perfectly well as a number: the fault is the declared type, and the remedy is to declare the property "decimal", not to fix the digits (FR-013). "integer_out_of_range" — a whole number outside signed 64-bit range in an "integer" property. REFUSED naming the bound, never saturated to the maximum and never widened to a binary float (FR-013). "candidate_cap_exceeded" — the candidate set exceeded the 10,000-record materialisation bound; the query is refused with a narrowing instruction and NO partial answer is returned (FR-064). "hop_limit_exceeded" — more than two relation hops were requested (FR-065). "page_size_clamped" — the requested page size exceeded the cap and was reduced; the clamp is REPORTED, never silent (FR-063). "scope_truncated" — workspace scope resolution was itself incomplete (ADR-067 Scope.Truncated), so a whole mounted folder may be missing. The answer MUST NOT claim success (FR-062a). "aggregate_refused" — no aggregate is returned over a refused candidate set; it is never partial (FR-066). "index_unavailable" — the index predates record support and cannot hold the properties queried. A silent no-op returning complete:true over zero properties is impossible (FR-020a).
 	Code RecordProblemCode `json:"code"`
 
 	// Expected The shape that WAS expected, stated plainly. A rejection that does not say what correct looks like leaves the caller guessing (FR-042).
@@ -11867,7 +11839,7 @@ type RecordProblem struct {
 	Records []string `json:"records"`
 }
 
-// RecordProblemCode Machine-readable cause, so a caller can branch without parsing prose. "missing_schema_version" — a schema file lacking schema_version; no records of that type are validated against it (FR-002). "duplicate_type_declaration" — two schema files declare the same record type; both paths are named in `paths` (FR-003). "unknown_property" / "unknown_enum_value" — a query named something the schema does not declare. The query is REJECTED with the valid names listed; it never returns an empty result set (FR-024). "missing_required" — a required property is absent from a record. "arity_violation" — a list where a scalar was declared, or the reverse (FR-006). "enum_violation" — a value outside the declared, closed set (FR-011). "type_mismatch" — the stored value cannot be read as its declared type. "dangling_relation" — the relation target does not exist (FR-033). "relation_type_mismatch" — the target exists but is not of the declared target type (FR-034). "cardinality_violation" — more values than the declared cardinality permits (FR-035). "duplicate_id" — two records share an identifier; both paths are named (FR-039). "cross_currency" — a money total spanning several currencies was REFUSED, not summed (FR-014). "money_scale_mismatch" — the amount's fractional digit count disagrees with the declared scale (FR-012). "candidate_cap_exceeded" — the candidate set exceeded the 10,000-record materialisation bound; the query is refused with a narrowing instruction and NO partial answer is returned (FR-064). "hop_limit_exceeded" — more than two relation hops were requested (FR-065). "page_size_clamped" — the requested page size exceeded the cap and was reduced; the clamp is REPORTED, never silent (FR-063). "scope_truncated" — workspace scope resolution was itself incomplete (ADR-067 Scope.Truncated), so a whole mounted folder may be missing. The answer MUST NOT claim success (FR-062a). "aggregate_refused" — no aggregate is returned over a refused candidate set; it is never partial (FR-066). "index_unavailable" — the index predates record support and cannot hold the properties queried. A silent no-op returning complete:true over zero properties is impossible (FR-020a).
+// RecordProblemCode Machine-readable cause, so a caller can branch without parsing prose. "missing_schema_version" — a schema file lacking schema_version; no records of that type are validated against it (FR-002). "duplicate_type_declaration" — two schema files declare the same record type; both paths are named in `paths` (FR-003). "unknown_property" / "unknown_enum_value" — a query named something the schema does not declare. The query is REJECTED with the valid names listed; it never returns an empty result set (FR-024). "missing_required" — a required property is absent from a record. "arity_violation" — a list where a scalar was declared, or the reverse (FR-006). "enum_violation" — a value outside the declared, closed set (FR-011). "type_mismatch" — the stored value cannot be read as its declared type. "dangling_relation" — the relation target does not exist (FR-033). "relation_type_mismatch" — the target exists but is not of the declared target type (FR-034). "cardinality_violation" — more values than the declared cardinality permits (FR-035). "duplicate_id" — two records share an identifier; both paths are named (FR-039). "integer_not_whole" — a fractional value in an "integer" property. It is a DIFFERENT cause from "type_mismatch" because the value parses perfectly well as a number: the fault is the declared type, and the remedy is to declare the property "decimal", not to fix the digits (FR-013). "integer_out_of_range" — a whole number outside signed 64-bit range in an "integer" property. REFUSED naming the bound, never saturated to the maximum and never widened to a binary float (FR-013). "candidate_cap_exceeded" — the candidate set exceeded the 10,000-record materialisation bound; the query is refused with a narrowing instruction and NO partial answer is returned (FR-064). "hop_limit_exceeded" — more than two relation hops were requested (FR-065). "page_size_clamped" — the requested page size exceeded the cap and was reduced; the clamp is REPORTED, never silent (FR-063). "scope_truncated" — workspace scope resolution was itself incomplete (ADR-067 Scope.Truncated), so a whole mounted folder may be missing. The answer MUST NOT claim success (FR-062a). "aggregate_refused" — no aggregate is returned over a refused candidate set; it is never partial (FR-066). "index_unavailable" — the index predates record support and cannot hold the properties queried. A silent no-op returning complete:true over zero properties is impossible (FR-020a).
 type RecordProblemCode string
 
 // RecordPropertyValue One property of one record, with all of its values (ADR-068 D3).
@@ -11997,18 +11969,18 @@ type RecordSchema struct {
 	Types []RecordType `json:"types"`
 }
 
-// RecordSort One sort key (ADR-068 D4, FR-010).
-// An ENUM property sorts by its DECLARED POSITION, never lexically. That is the whole reason position is data: operators otherwise encode order into the spelling — "1-Pending", "7-DoNotContact" — and the encoding then leaks into every rendering that shows the value.
-// Money sorts only within one currency; a sort spanning currencies is reported as a problem rather than ordered by a number that means different things in each row.
+// RecordSort One sort key (ADR-068 D4, FR-010, §8 R-5).
+// SORTING IS LEXICAL, and the SORT KEY IS THE FOLDED VALUE. An enum is no exception — there is no declared-position ordinal, and an author who wants a domain order writes it into the values: "1-lead", "2-qualified". The prefix sits in the operator's own file and does exactly what it looks like it does.
+// Two clauses of R-5 a caller can rely on. The key is the FOLDED form, not the raw bytes, so "Won", "won" and "WON" — one value under case-insensitive matching — sort to one place instead of three while grouping collapses them into one group. TIES on the folded key break on RAW BYTE ORDER, so the order is TOTAL and byte-identical across runs and rebuilds. What renders is always the file's own spelling, never the sort key.
 type RecordSort struct {
-	// Direction Ascending or descending. For an enum, along declared position.
+	// Direction Ascending or descending, along the lexical order described above.
 	Direction RecordSortDirection `json:"direction"`
 
 	// Property The declared property to sort by, validated against the schema first (FR-023).
 	Property string `json:"property"`
 }
 
-// RecordSortDirection Ascending or descending. For an enum, along declared position.
+// RecordSortDirection Ascending or descending, along the lexical order described above.
 type RecordSortDirection string
 
 // RecordType One record type as declared by the vault in `<vault>/.omnipus-vault/records/<type>.yaml` (ADR-068 D2).
@@ -12035,24 +12007,20 @@ type RecordType struct {
 }
 
 // RecordValue ONE value of one property, tagged with the property type that governs it (ADR-068 D3). Exactly one of the seven value fields is populated, and which one is named by `type`.
-// Numbers and money are carried as DECIMAL STRINGS, never as JSON numbers. `type: number` in this contract generates a Go float32 (float64 only with `format: double`) and a JavaScript number; binary floating point cannot represent 0.1 exactly, so a value would drift on a round trip that nobody performed deliberately. FR-020b forbids a binary float anywhere in the storage or retrieval path, and the wire is part of that path.
+// NUMBERS ARE CARRIED AS DECIMAL STRINGS, never as JSON numbers — both `integer` and `decimal`. A JSON `type: number` in this contract generates a Go float32 (float64 only with `format: double`) and a JavaScript number; binary floating point cannot represent 0.1 exactly, and it cannot represent 2^53+1 at all, so a value would drift on a round trip nobody performed deliberately. FR-020b forbids a binary float anywhere in the storage or retrieval path, and the wire is part of that path.
 // ABSENCE IS NOT A VALUE. A property with no value carries no RecordValue at all — its RecordPropertyValue.values array is empty (D3.2, FR-007). This matters: "days I did not meditate" must be answerable, and it is not answerable in a model where absent and false are the same state.
 type RecordValue struct {
 	// Date Populated when type is "date". Either a calendar day as YYYY-MM-DD or an instant as RFC 3339. Comparable in both forms — the failure this closes is a date stored as free text, which sorts and filters as nothing.
 	Date *string `json:"date,omitempty"`
 
+	// Decimal Populated when type is "decimal". An exact, arbitrary-precision number carried as a decimal STRING, for the same reason as `integer`: a quantity that cannot survive a round trip unchanged is not a quantity a caller can reconcile. At most 100 decimal places (FR-013) — deliberately generous; a value past the bound is refused naming it, never rounded, because rounding to satisfy a bound is a silent change to a number. `maxLength` admits a 100-place value with a sign, a leading digit and the point. The unit, if any, is declared once on the PropertyDef and is never glued into the value.
+	Decimal *string `json:"decimal,omitempty"`
+
 	// Enum Populated when type is "enum". The declared token, which MUST appear in the property's declared value set; anything else is rejected with the permitted values named (FR-011).
 	Enum *string `json:"enum,omitempty"`
 
-	// Money A money value: amount, ISO-4217 currency and declared scale carried as ONE value (ADR-068 D3, FR-012). A value missing currency is REJECTED — two loose fields that nothing keeps together is the failure this type closes.
-	// The amount is an INTEGER STRING and never a JSON number. `type: number` in this contract generates a Go float32 (float64 only with `format: double`) and a JavaScript number, and binary floating point cannot represent 0.1 exactly — so a total that must be exact would drift by an amount nobody can see until it is reconciled against a bank. FR-013 requires exact decimal arithmetic and FR-020b forbids a binary float ANYWHERE in the storage or retrieval path; a string is the only representation that survives both the wire and the two generated languages without a lossy hop.
-	// THE AMOUNT IS ALREADY IN MINOR UNITS (ADR-068 O-2's resolution). It carries no decimal point at all — `pattern` rejects one — and `scale` says where the reader must put it: value = amount x 10^-scale, exactly, with no rounding. {amount "1000", scale 2} is 10.00 USD; {amount "10", scale 0} is 10 USD; the two are distinguishable because `scale` differs, not because the amount is spelled differently. There is no "fractional digit count" rule to satisfy — a decimal amount such as "10.00" is schema-INVALID, not a scale mismatch.
-	// Corrected 2026-08-25, second pass: this paragraph previously required the fractional digits of `amount` to equal `scale`, illustrated it with the now ILLEGAL "10.00", and stated the conversion INVERTED (minor units = amount x 10^scale). Read together with the corrected `amount` pattern below, the one artifact said two different things about the same three fields — the exact defect the minor-units fix was filed to end.
-	// Summing money is exact WITHIN one currency. A sum ACROSS currencies is REFUSED with the currencies present listed (FR-014) — see RecordAggregateResult.currencies_present. There is no FX conversion and no rate table in this ADR.
-	Money *RecordMoney `json:"money,omitempty"`
-
-	// Number Populated when type is "number". A decimal STRING for the same reason as money: a JSON number becomes a binary float in both generated languages, and a quantity that cannot survive a round trip unchanged is not a quantity a caller can reconcile. The unit, if any, is declared once on the PropertyDef and is never glued into the value.
-	Number *string `json:"number,omitempty"`
+	// Integer Populated when type is "integer". A signed 64-bit whole number, carried as a decimal STRING: a JSON number becomes a binary float in both generated languages, and a float64 cannot represent 2^53+1 — precisely the large-identifier case this type exists to keep exact (FR-013). A value outside int64 is REFUSED, never saturated and never widened. The unit, if any, is declared once on the PropertyDef and is never glued into the value.
+	Integer *string `json:"integer,omitempty"`
 
 	// Person A reference from one record to another — the wire form of a "relation" or "person" value (ADR-068 D5, D5.1).
 	// What is stored ON DISK is a quoted wikilink, and nothing else. It renders and navigates in Obsidian and carries no Omnipus-specific encoding, so removing Omnipus leaves a working link (D8's no-lock-in promise). What the INDEX joins on is the target's record ID, resolved by following the wikilink to a file and reading its id — so a rename cannot break a relation from either direction.
