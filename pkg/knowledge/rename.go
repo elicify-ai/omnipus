@@ -422,6 +422,26 @@ func (r *Renamer) Plan(req RenameRequest) (*RenamePlan, error) {
 		if IsAbsoluteTarget(side.p) {
 			return nil, fmt.Errorf("%w: %s %q is absolute", ErrRenameInvalidPath, side.label, side.p)
 		}
+		// A move must not cross into a tool-state directory, in EITHER
+		// direction. ResolveContained below cannot catch this: .omnipus-vault/
+		// and .obsidian/ are INSIDE the collection root, so containment holds
+		// and the move is accepted.
+		//
+		// Into one, the note lands where no walker descends
+		// (scanSkippedDirNames) — it vanishes from search, backlinks and the
+		// orphan check at once. That is a hard delete with no trash entry, no
+		// link accounting and no restore, reachable through an operation named
+		// "move". Out of one, it is a restore that skips every check the real
+		// restore path performs.
+		//
+		// This was previously masked by the incidental "destination directory
+		// does not exist" refusal — which disappears the moment trash exists,
+		// because trash lives at .omnipus-vault/trash/. CreateNote has always
+		// refused these paths via authorRefuseReserved; the move path simply
+		// never called it.
+		if rerr := authorRefuseReserved(side.p); rerr != nil {
+			return nil, fmt.Errorf("%s: %w", side.label, rerr)
+		}
 	}
 
 	// FR-043 on both ends, on the real path, before anything else is decided.
