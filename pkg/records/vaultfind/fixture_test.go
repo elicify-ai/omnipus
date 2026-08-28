@@ -187,43 +187,6 @@ func (s *stubText) NearestTerms(_ context.Context, _ string, _ int) ([]generated
 }
 
 // ---------------------------------------------------------------------------
-// REQUEST BUILDERS — small, so a test reads as the question it is asking
-// ---------------------------------------------------------------------------
-
-func req(mut ...func(*generated.VaultFindRequest)) generated.VaultFindRequest {
-	r := generated.VaultFindRequest{}
-	for _, m := range mut {
-		m(&r)
-	}
-	return r
-}
-
-func withType(t string) func(*generated.VaultFindRequest) {
-	return func(r *generated.VaultFindRequest) { r.Type = &t }
-}
-
-func withFilter(n generated.VaultFilterNode) func(*generated.VaultFindRequest) {
-	return func(r *generated.VaultFindRequest) { r.Filter = &n }
-}
-
-func leaf(property, op string, value ...string) generated.VaultFilterNode {
-	o := generated.VaultFilterNodeOp(op)
-	n := generated.VaultFilterNode{Property: &property, Op: &o}
-	switch {
-	case op == "IN":
-		vs := append([]string{}, value...)
-		n.Values = &vs
-	case len(value) == 1:
-		n.Value = &value[0]
-	}
-	return n
-}
-
-func notNode(inner generated.VaultFilterNode) generated.VaultFilterNode {
-	return generated.VaultFilterNode{Not: &inner}
-}
-
-// ---------------------------------------------------------------------------
 // ASSERTIONS EVERY vault_find TEST SHARES
 // ---------------------------------------------------------------------------
 
