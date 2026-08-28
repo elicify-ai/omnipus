@@ -85,7 +85,7 @@ ADR-067 owns: the index engine, full-text search, the link graph, the note reade
 records, retrieval and ranking (D21), and the agent tool surface over all of it.**
 
 **Revision 5 moves the tool boundary.** ADR-067's nine `knowledge_*` tools are **subsumed**, not
-sat beside: this ADR now owns **five `vault_*` tools** that replace both the nine `record_*`
+sat beside: this ADR now owns **six `vault_*` tools** that replace both the nine `record_*`
 tools revision 4 proposed and the nine `knowledge_*` tools that ship today (D15). ADR-067 keeps
 the *engine*; it stops owning the *tool surface*.
 
@@ -545,10 +545,11 @@ So two operations in D15.3 are new work with real design content:
 D20 places both in W4 with FRs of their own. This ADR has three prior revisions of assuming
 capabilities existed; these two are named so revision 5 does not add a fourth.
 
-### D15 — The agent tool surface: five `vault_*` tools, subsuming `knowledge_*`
+### D15 — The agent tool surface: six `vault_*` tools, subsuming `knowledge_*`
 
 **Revised 2026-08-28 (revision 5).** Revision 4 specified nine `record_*` tools. That is
-withdrawn. The surface is **five `vault_*` tools**, and they **also replace the nine
+withdrawn. The surface is **six `vault_*` tools** (five in revision 5; D15.6 adds the sixth),
+and they **also replace the nine
 `knowledge_*` tools that ship today**. All are contract-first (D19).
 
 **D15.0 — Why the count is a design constraint and not bookkeeping.**
@@ -595,7 +596,7 @@ holds around 50 tools (84–95%) and collapses by 200 (41%); Block cut one serve
 2, and GitHub Copilot from 40 to 13, both with *measured improvement*. We are already in the
 band where every added definition is paid for on every turn by every agent.
 
-**18 → 5 is the decision.** Not 18 → 14, and not "add nine now and consolidate later" — a tool
+**18 → 6 is the decision.** Not 18 → 14, and not "add nine now and consolidate later" — a tool
 name in a seeded policy map is a compatibility surface, and the cheapest moment to not have 18
 of them is before any exist.
 
@@ -929,7 +930,7 @@ implemented as `pkg/knowledge/scope.go` (`Scope.WorkspaceID`, `.Roots`, `.Contai
 `.Truncated`). Records are a **stronger** read primitive — typed fields, relations, and
 aggregation across them — so the same boundary applies with no exception.
 
-**D15.5a — Workspace scoping.** Every one of the five `vault_*` tools resolves through the calling agent's
+**D15.5a — Workspace scoping.** Every one of the six `vault_*` tools resolves through the calling agent's
 workspace: agent → workspace → `AllowedMountRoots(home, workspaceID)` → records within those
 roots. A record in a vault mounted only into another workspace is **not visible**, and the
 out-of-scope answer is an **empty result, not a permission error** — mirroring ADR-067
@@ -1529,7 +1530,7 @@ did not do is act on it.)*
 | **W2** | Fielded indexing (D21.2), the **`ScoringModel` correction and the thirteen documentation corrections** (D21.1), BM25F weighting + RRF (D21.3), the tokenizer resolution (D21.5). `vault_find` — plain words, typed filters, grouping, `kind: task`, the problem report. | a query over a typed corpus returns records + a populated `problems` array; a type mismatch is never a silent empty result; a field query on a property key is possible at all, which it is not today; **no `.go` file in the tree attributes BM25 to bleve while `ScoringModel` is unset** |
 | **W3** | Relations, inverses, relation grouping; `near` + `hops` and its **composition with filters** (D15.3). `vault_read`. | the §1.2 two-hop question is one call with no hand-maintained state; "notes mentioning pricing within 2 hops of `[[Acme]]`" is one call |
 | **W4** | `vault_edit`: byte-preserving writes, the **list-valued splice** (D14), `create`'s `template` argument, and the two **unbuilt primitives** — `replace_body` and the **trash CONVENTION** (where a trashed note goes, what happens to inbound links, whether the index forgets it immediately) — each with its own FR (D14.1). Derived interaction history (D17). | write-read-back is byte-identical outside the patched span; a `replace_body` whose anchor is ambiguous is refused, naming both matches; the trash convention is written down and reviewed before any tool exposes it |
-| **W5** | `vault_restructure`: rename, move, and the trash **operation**. `vault_configure`: record-type and saved-view authoring (D15.6, D23). The D18 policy seeding and its ACs. **The write-path rate limiter (D15.5b).** **Retiring the nine `knowledge_*` names** — from `allStaticToolNames` (`pkg/coreagent/core.go:357-482`), from the global ceiling (`pkg/config/defaults.go`), from all five per-agent seed maps, and from every skill and prompt that names one. | an operator can forbid restructuring while permitting edits **and forbid schema authoring while permitting both**, with a test proving all three policies are independently settable; **after this wave no `knowledge_*` name exists anywhere in the catalog or any seed map, and the catalog assertion reads 95** |
+| **W5** | `vault_restructure`: rename, move, and the trash **operation**. `vault_configure`: record-type and saved-view authoring (D15.6, D23). The D18 policy seeding and its ACs. **The write-path rate limiter (D15.5b).** **Retiring the nine `knowledge_*` names** — from `allStaticToolNames` (`pkg/coreagent/core.go:357-482`), from the global ceiling (`pkg/config/defaults.go`), from all five seed maps that carry them, and from every skill and prompt that names one. | an operator can forbid restructuring while permitting edits **and forbid schema authoring while permitting both**, with a test proving all three policies are independently settable; **after this wave no `knowledge_*` name exists anywhere in the catalog or any seed map, and the catalog assertion reads 95** |
 | **W6** | The human surface: record table, grouping, related-records panel, problem banner, drill-down, cell edit. **The index-state snapshot (§2.7).** The **operator/CLI** saved-view importer (D15.4, O-1). | the banner names excluded records and the drill-down lists them; **a client connecting after an index completed renders its real state rather than "no progress has arrived"**; a `.base` file imports with every untranslatable expression reported verbatim |
 
 **Two scheduling defects revision 5 carried, both fixed above:**
@@ -2060,7 +2061,7 @@ arguments above only imply:
 > obsidian support; I'd rather have an obsidian import functionality than tools that cannot be
 > best in class."*
 
-That is decisive for revision 5's shape. D15's five-tool surface, D21's fielded index, and
+That is decisive for the shape from revision 5 onward. D15's six-tool surface, D21's fielded index, and
 D22's compact rendering are all designed against *our* vault, and several of them — `near`
 composed with filters (D15.3), property-key field queries (D21.2) — are not expressible in
 `.base` at all. A compatibility constraint would have forbidden the best parts of this design.
