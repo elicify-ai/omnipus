@@ -3,7 +3,7 @@
 - **Target:** `docs/internal/specs/vault-records-spec-2026-08-25.md` — Draft revision 5 (2,174 lines)
 - **Authority read first:** `docs/internal/architecture/ADR-068-vault-records-typed-record-layer.md` — revision 7 (2,755 lines)
 - **Prior review:** `vault-records-spec-2026-08-25-review.md` (pass 1: BLOCK — 19 CRITICAL, 41 MAJOR, 17 MINOR)
-- **Date:** 2026-08-26 · **Mode:** `plan-spec`
+- **Date:** 2026-08-28 · **Mode:** `plan-spec`
 - **Method:** every SQLite claim re-executed against `sqlite3` 3.51.0; the linked engine version re-verified through `modernc.org/sqlite` itself; every Go case-folding claim executed; every code citation checked against the tree at `03e71909`.
 
 ---
@@ -13,7 +13,7 @@
 | Severity | Count |
 |---|---|
 | CRITICAL | 11 |
-| MAJOR | 31 |
+| MAJOR | 42 |
 | MINOR | 14 |
 | OBSERVATION | 5 |
 
@@ -443,14 +443,18 @@ USD/JPY clause. Move the enum-ordering clause out of the violation list into D4'
 |---|---|---|
 | 1 | Comparisons in Go; SQLite only narrows | **NOT CLEAN — 7 survivors, 2 CRITICAL.** See the table at the head of this review, C-3, C-4, C-5, C-6, M-5, M-7 |
 | 2 | SQL operator vocabulary, structured object, no parser | **MOSTLY CLEAN — one unimplementable requirement.** Vocabulary is consistent everywhere; R-9/R-10 restated correctly; O-3's amendment is coherent in both documents. **FR-022c cannot be satisfied without the parser O-3 forbids** — M-12 |
-| 3 | Enum ordering lexical; ordinal bookkeeping gone | **MOSTLY CLEAN — D4's title IS fixed in ADR revision 7.** Four vestiges survive: M-17, M-18, M-19, M-20 |
+| 3 | Enum ordering lexical; ordinal bookkeeping gone | **MOSTLY CLEAN — D4's title IS fixed in ADR revision 7.** Five vestiges survive: M-15, M-16, M-17, M-18, M-19 |
 | 4 | Money deleted entirely; type count stays seven | **ARITHMETIC CORRECT, INVENTORY INCOMPLETE.** −1 −1 +2 = seven verified. Two **live wire-enum members** survive §10a — C-9 |
 | 5 | Case-insensitivity is a Go-only feature | **DIAGNOSIS CORRECT, MECHANISM WRONG.** SQLite's ASCII-only fold is verified and correctly stated. `strings.ToLower` cannot deliver what is claimed — **C-1**. FR-011's enum treatment is resolved (M-17 is a vestige, not a contradiction) |
-| 6 | No hardcoded domain vocabulary | **NOT ACHIEVED.** The test cannot pass (C-10); four normative tables carry no marker and one declares CRM strings as contract (M-16); `person` is simultaneously illustration and shipped type (M-14); both documents' own counts are wrong by ~10× (M-15) |
+| 6 | No hardcoded domain vocabulary | **NOT ACHIEVED.** The test cannot pass (C-10); four normative tables carry no marker and one declares CRM strings as contract (M-25); `person` is simultaneously illustration and shipped type (M-24); both documents' own counts are wrong by ~10× (M-26) |
 
 ---
 
 ## 3. MAJOR findings
+
+> **Numbering.** This review's MAJOR findings run **M-5..M-46** and are grouped by the brief's
+> verification items; M-1..M-4 are unused. Findings from the *previous* review are always written
+> **"pass 1's M-n"** or quoted from the spec, so the two sets never collide.
 
 ### Item 1 — remaining SQL-side leftovers
 
@@ -1066,7 +1070,7 @@ run in production. The last of those is a real caveat and stating it costs one s
 
 ## Verdict and next action
 
-**BLOCK** — 11 CRITICAL, 31 MAJOR, 14 MINOR, 5 OBSERVATION.
+**BLOCK** — 11 CRITICAL, 42 MAJOR, 14 MINOR, 5 OBSERVATION.
 
 The rulings were right and most of the deletion was executed well. What blocks is that the largest
 ruling is **not finished and not instrumented**: seven SQL-side evaluations survive in normative
