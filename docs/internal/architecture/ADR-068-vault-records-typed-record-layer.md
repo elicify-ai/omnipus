@@ -437,6 +437,27 @@ currencies listed, rather than summed (D3, `money`).
 The community's accepted debugging advice today is *"keep testing until something is
 returned."* That is what a system with no error channel forces on people.
 
+**D13.1 — There is exactly ONE exception to "names what it excluded", and it is stated here
+rather than buried in the decision that makes it.** *(New in revision 6.)*
+
+**Workspace scoping (D15.5a) is a silent exclusion.** A vault mounted only into another workspace
+returns an **empty result, not a permission error**, and by design the caller *cannot distinguish
+it from the vault being empty* — that is AC-15.5a, word for word. So a caller can receive
+`complete: true` over zero records while records exist that were deliberately withheld: a
+confidently wrong answer, which is §1.3's failure class and D13's own prohibition.
+
+**The security argument wins, and it is not close.** Naming an excluded record — even as an
+opaque count — turns the error channel into a probing oracle: an agent in workspace A could
+enumerate what exists in workspace B by watching the exclusion count move. ADR-067's
+FR-052/FR-053 settled this for search and the reasoning transfers unchanged. **Honesty about
+what a query excluded is a rule about the caller's own scope. It was never a rule about the
+boundary of that scope, and it cannot be one without dissolving the boundary.**
+
+Recorded because an unstated exception to a headline guarantee is how a guarantee stops being
+believed — and because a reader who finds this collision themselves, in a document that claims
+*"there is no call shape that returns records alone"*, will reasonably wonder what else was not
+mentioned.
+
 ### D14 — Writes preserve the file
 
 A write modifies the values it was asked to modify. Comments, key order, blank lines, quoting
@@ -676,14 +697,78 @@ extends it to every result.
 It is the **mandatory cheap first call**: an agent that has not called it is guessing at
 property names, and a guessed property name is the failure D13 exists to prevent.
 
-It also carries **`check_integrity`** — an argument-free whole-vault health sweep reporting
-duplicate identifiers (D7.1), unresolved relations (D5.1), and orphans. This absorbs
-`record_schema` and the vault-wide sweep half of `record_validate`.
+It also carries **`check_integrity`** — a whole-vault health sweep. This absorbs `record_schema`
+and the vault-wide sweep half of `record_validate`.
+
+**`check_integrity` reports, and revision 6 widens the list:** duplicate identifiers (D7.1),
+unresolved and mistyped **relations** (D5.1), **unresolved ordinary wikilinks and orphan notes**,
+and rows in the properties index with no note behind them (D16.5).
+
+> **The wikilink half is new in revision 6, and it closes a capability loss revision 5 did not
+> notice.** `knowledge_graph`'s five operations are `links`, `backlinks`, `unresolved`, `orphans`,
+> `neighborhood` (`pkg/knowledge/tools.go:643-647`). Revision 5 mapped `neighborhood` onto
+> `vault_find`'s `near`/`hops` and `links`/`backlinks` onto `vault_read`'s inline links — but
+> `unresolved` and `orphans` today cover **ordinary wikilinks across the whole vault**, and
+> revision 5's `check_integrity` covered only typed *relations*. **Most notes in a vault are not
+> records**, so a vault-wide broken-link report would have had no home in the new surface at all.
+> Naming it here is cheaper than discovering it after the nine `knowledge_*` names are gone.
+
+**`check_integrity` is BOUNDED, and revision 6 states the bounds** — revision 5 called it *"an
+argument-free whole-vault health sweep"* and D15.5b's bounds table omitted it entirely, which
+would have made it the most expensive operation in the ADR and the only one with no stated limit,
+in a document whose §1.3 headline evidence is unbounded operations returning silently wrong
+answers.
+
+> **Partial correction to the round-5 review (M-5).** The review says *"Today's nearest equivalent
+> is bounded: `knowledge_graph` clamps `hops ≤ 3` and `max_nodes ≤ 500`."* **Those clamps apply to
+> `neighborhood` only** — `pkg/knowledge/tools.go:812-826` reads them inside `case
+> GraphOpNeighborhood`, and `MaxNeighborhoodHops = 3` / `MaxNeighborhoodNodes = 500` live in
+> `pkg/knowledge/graph.go:36-38`, applied in `graph.go:307-315`. The whole-vault sweeps are
+> `resp.Links = toGraphLinks(g.Unresolved())` and `resp.Nodes = g.Orphans()`
+> (`tools.go:809-811`) — **no clamp at all**. So this is a **pre-existing unbounded surface being
+> inherited**, not a new one being introduced. The finding stands regardless: inheriting an
+> unbounded sweep into a tool this ADR advertises as bounded would be worse than shipping one.
+
+`check_integrity` therefore takes **an optional scope** — a record type, or a collection — and
+its bounds are in D15.5b's table with everything else. Unscoped is permitted and is the common
+case; it is the *unbounded* part that is not.
 
 **2. `vault_find` (READ). The ONE retrieval path.** Plain words, typed filters, saved views,
-relation joins, `kind:'task'`, and `near: <path>` with `hops` for "within N link steps". It
+relation joins, `kind: task`, and `near: <path>` with `hops` for "within N link steps". It
 absorbs `record_query`, `record_explain` (now an `explain: true` flag rather than a tool),
 `knowledge_search`, `knowledge_tasks`, and link-neighbourhood traversal.
+
+**`kind: task` — the mechanism, because revision 5 promised the absorption and specified
+nothing.** *(New in revision 6; the review's largest unbacked-claim finding, and it was right.)*
+
+The gap is real: this ADR's own D16 table states that `indexDoc.Kind` only ever holds `note` or
+`attachment` (`pkg/knowledge/scan.go:45,48`), so a `kind` filter over today's index selects
+nothing. And what `knowledge_tasks` actually does is not a record query at all — it walks the
+collection with `WalkContained` (`pkg/knowledge/authoring_tools.go:1398`), reads each file
+(`:1420`), matches `^[ \t]*[-*+][ \t]+\[([ xX])\][ \t]*(.*)$` per line, bounds itself at
+`TasksMaxFiles = 5000` (`:1246`, clamp reported at `:1420-1425`), and returns **many rows per
+file** — `path` / `line` / `status` / `text` per checkbox. **That does not fit D22.4's "the row is
+still one real file" model**, which is the model the whole response format is built on.
+
+Two options were open. **A checkbox is indexed as its own row, in the properties index.**
+
+- A task row carries `path`, `line`, `status` (`open` / `done`), `text`, and the `source_hash`
+  D16.5 requires — the same shape every other row has, so the freshness comparison, the bounds,
+  the pagination and the rendering all apply unchanged.
+- **D22.4's rule is amended, narrowly and explicitly**: a row is one real *thing at a path* — a
+  note, or a checkbox line within one. A task row renders with its line number, so a reader is
+  never able to mistake it for the note. **That is a genuine amendment to D22.4 and is marked as
+  one rather than absorbed silently.**
+- **The regex walk does not survive.** `TasksMaxFiles = 5000` is a bound on *reading*, and it
+  exists because the walk re-reads every file on every call. An indexed task disappears from the
+  query path entirely, and D15.5b's ordinary bounds replace that one.
+- **Cost, stated:** checkbox extraction joins the indexing pass, so indexing does slightly more
+  work per note. That is the trade — a per-index cost paid once for a per-query cost paid every
+  time, over a corpus D15.5b caps at 100,000 notes.
+
+The rejected option was *"`vault_find` keeps a whole-collection regex walk for `kind: task`"*,
+which would have needed its own bound, its own cap, its own rendering, and its own
+completeness story — four exceptions to make one tool absorb another, which is not absorption.
 
 **`near` COMPOSES with filters, and that composition is the capability worth having.** It makes
 
@@ -851,10 +936,31 @@ Notion's silent truncation as motivating evidence; shipping our own would be ind
 |---|---|---|
 | Results per page | default 50, max 200 | clamped, and the clamp is **reported** in the response |
 | Pagination | cursor-based | a cursor that cannot be honoured is an error, never a silent restart |
-| Candidate set materialised | 10,000 records | **refused** with a narrowing instruction naming the filter that would help |
+| Candidate set counted before retrieval | 10,000 records | **refused** with a narrowing instruction naming the filter that would help. Hard, per the spike's C-3 (D16.3a) |
 | Relation hops per query | 2 | refused; deeper traversal is a follow-up query, not an implicit walk |
 | Aggregation over a refused set | — | never partial. No total is returned at all |
-| Rate limit | shared with ADR-067's `knowledgeRESTLimiter` | 429 with `Retry-After` |
+| **`check_integrity` findings** *(new)* | 500 per category | reported as clamped, with the count that would have been returned and the scope argument that narrows it |
+| **`check_integrity` notes swept** *(new)* | 100,000 | refused, naming the collection; the scoped form is the remedy |
+| Rate limit | **new work — see below** | 429 with `Retry-After` |
+
+**The rate-limit row is CORRECTED in revision 6, and the correction is the interesting part.**
+Revision 5 wrote *"shared with ADR-067's `knowledgeRESTLimiter`"*, which reads as inheritance
+from a shipped control. It is not:
+
+- `knowledgeRESTLimiter` (`pkg/gateway/rest_knowledge.go:90`) is consulted at exactly one place —
+  `rest_knowledge.go:691` — on the **REST** path. No agent tool touches it.
+- The agent-tool path uses `checkRetrievalRate`, and a repository grep finds **three** call sites:
+  `pkg/knowledge/tools.go:610` and `:749` (the two read tools), and
+  `pkg/knowledge/authoring_tools.go:1330` (`knowledge_tasks`, which is a read).
+- **The six authoring WRITE tools call neither.** `AuthoringDeps.RateLimiter` is declared
+  (`authoring_tools.go:136`) and defaulted (`:157-159`), and its own doc comment says what it is
+  for: *"RateLimiter bounds `knowledge_tasks`, which is a read"* (`:133`). No write `Execute`
+  consults it.
+
+So `vault_edit`, `vault_restructure` and `vault_configure` inherit **no** rate limit from the
+surface revision 5 named. **A write-path limiter is new work, owned by W5 with the policy
+seeding.** *(This is a third instance of the same habit: a control named as inherited, which on
+reading turns out not to cover the case. It is worth counting them.)*
 
 `complete: false` (D13) is set for **every** one of these, with the reason and the remedy. A
 caller that ignores `problems` still cannot mistake a bounded answer for a whole one, because
@@ -863,12 +969,42 @@ caller that ignores `problems` still cannot mistake a bounded answer for a whole
 **D15.5c — Writes carry ADR-067's version token and are audited.** Revision 1's write path
 bypassed both. A record write takes the same opaque content-hash version token ADR-067 D14
 defines; a stale token is **refused and the refusal is audited** (ADR-067 AC-14.2). Every
-mutating `vault_*` tool emits an audit entry per ADR-067 D19 — **`vault.edit` and
-`vault.restructure`, each carrying its operation** — with agent, workspace, record ID and
+mutating tool emits an audit entry per ADR-067 D19 — **`vault.edit`, `vault.restructure` and
+`vault.configure`, each carrying its operation** — with agent, workspace, record ID and
 outcome. *(Revision 5: the audit event carries the operation even though the tool policy cannot
 read it (D15.2). Policy resolves before the call on the name; the audit record is written after
 it, where the operation is known. Naming them apart keeps the audit log readable without
 implying a policy lever that does not exist.)*
+
+**The compare-and-swap contract covers `vault_edit` ONLY, and revision 6 says so instead of
+implying otherwise.** Revision 5 wrote *"Every mutating `vault_*` tool… takes the same opaque
+content-hash version token"*, which is not achievable and was not true of the tools being
+replaced:
+
+- **Today `knowledge_rename` and `knowledge_move` take no `expect_version` and return none.**
+  Verified: neither `RenameTool.Parameters` (`pkg/knowledge/authoring_tools.go:852-871`) nor
+  `MoveTool.Parameters` (`:904-927`) declares the field.
+- **More fundamentally, a single-file content hash cannot guard a cascade.** A rename rewrites
+  inbound links in N files; a token over the renamed file says nothing about the other N−1. A CAS
+  that guards one of the files it writes is worse than no CAS, because it reads as a guarantee.
+
+So, stated plainly:
+
+> **`vault_edit` is compare-and-swap. `vault_restructure` and `vault_configure` are NOT.**
+> A cascading write takes no version token, and its safety comes from being a **tier-5 policy
+> decision an operator made deliberately**, plus the audit entry, plus `check_integrity` — not
+> from optimistic concurrency it cannot honestly offer.
+
+**Related, and worth an issue of its own because it is shipped and live:** the parameter
+description at `pkg/knowledge/authoring_tools.go:413-422` tells the model that *"every knowledge
+tool that touches a note returns one as `version`"*. That is **false for `knowledge_rename` and
+`knowledge_move`** — the two highest-blast-radius tools in the set. The model is being handed a
+false invariant about exactly the tools where it matters most. It is pre-existing and adjacent, so
+it is not fixed by this ADR; it is named so it is not lost.
+
+**AC-15.5d** — `vault_restructure`'s and `vault_configure`'s tool descriptions state that they
+take no version token, and a test asserts no `expect_version` parameter is declared on either. A
+capability that is deliberately absent should be absent in the schema too, not merely undocumented.
 
 **`vault_read` supplies the version token** a write needs (D15.3), which is what makes the
 compare-and-swap contract usable rather than a failed-write ritual.
