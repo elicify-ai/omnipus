@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -291,8 +292,10 @@ func (p *Property) ExpectedShape() string {
 		} else {
 			base = string(p.Type) + ` (a quoted wikilink, e.g. "[[Target]]")`
 		}
-	case TypeMoney:
-		base = `money (amount and ISO-4217 currency together, e.g. "349.98 SGD" or {amount: 34998, currency: SGD, scale: 2})`
+	case TypeInteger:
+		base = fmt.Sprintf("integer (a whole number between %d and %d)", math.MinInt64, math.MaxInt64)
+	case TypeDecimal:
+		base = fmt.Sprintf("decimal (an exact number, at most %d decimal places)", maxDecimalScale)
 	case TypeDate:
 		base = "date (YYYY-MM-DD, or an RFC-3339 instant)"
 	}
@@ -711,16 +714,17 @@ func ParseSchema(path string, data []byte) (*Schema, *SchemaRejection) {
 // without a warning. That is how `label:` on a property declaration went
 // nowhere for the whole life of this parser: the contract has always defined
 // it (contracts/components/schemas/PropertyDef.yaml), the author wrote it, and
-// the schema came back without it. `scale:` went the same way, and its
-// `maximum: 12` matching this package's maxMoneyScale made it look verified
-// while nothing read it.
+// the schema came back without it. A `scale:` key went the same way for the
+// whole life of the type that used it, and its wire `maximum: 12` matching a Go
+// constant of the same value made it look VERIFIED while nothing read it — a
+// number agreeing with a number is not an enforcement. (Both that key and its
+// type are gone; the lesson is why this section exists.)
 //
 // parseProperty already refuses `values` on a non-enum for exactly this
 // reason — "an author who writes something meaningful must never be told
-// nothing when we throw it away" — and value.go closes the same hole for a
-// money mapping's {amount, currency, scale}. This section generalises it so
-// the next key added to the contract cannot reopen it: every key a declaration
-// may mention is listed, with what the parser DOES with it.
+// nothing when we throw it away". This section generalises it so the next key
+// added to the contract cannot reopen it: every key a declaration may mention
+// is listed, with what the parser DOES with it.
 //
 //	declKeyParsed   read, and it changes the resulting Property/Schema
 //	declKeyRefused  rejected, with its own reason naming the key
@@ -761,31 +765,19 @@ var propertyDeclKeys = map[string]declKey{
 	"inverse":  {kind: declKeyParsed},
 	"unit":     {kind: declKeyParsed},
 
-	// REFUSED, and the refusal is the honest answer rather than the cautious
-	// one. PropertyDef.yaml says a property's `scale` is the scale "every
-	// RecordMoney value of this property" carries — a CONSTRAINT on values.
-	// Nothing in this package enforces it: money scale is per-value, either
-	// declared in the {amount, currency, scale} mapping or inferred from the
-	// figure's own spelling (value.go's parseMoneyValue), and no value-parse
-	// path consults its Property's declaration. Storing the number and
-	// enforcing nothing would be this same silent-drop defect wearing a
-	// getter: the author would be promised a guarantee that does not exist.
+	// `scale` USED to live here as a declKeyRefused entry. It is now simply
+	// UNKNOWN, and that is the correct answer rather than a loosening: it was
+	// a property-level declaration for a type ADR-068 D3 deleted. A key naming
+	// a type that no longer exists cannot be "refused with a reason" — there is
+	// no remedy to point the author at. It falls through to the unknown-key
+	// rejection, which names the key and lists what a property declaration DOES
+	// carry.
 	//
-	// It is not implementable here either, honestly. FR-012 — the requirement
-	// the contract cites — is about a VALUE carrying amount, currency and
-	// scale together; it says nothing about a property-level declaration. And
-	// the only wire code that could report a violation, RecordProblem's
-	// `money_scale_mismatch`, still describes the retracted "fractional digit
-	// count" rule that RecordMoney.yaml's 2026-08-25 correction says cannot be
-	// a finding at all. Implementing against contract text that contradicts
-	// itself would be inventing a semantic, which is worse than refusing one.
-	"scale": {
-		kind: declKeyRefused,
-		reason: "is not a property-level declaration in this release: nothing enforces it, " +
-			"so accepting it would silently promise that every value of this property carries that scale. " +
-			"Declare the scale on the value instead — {amount: 34998, currency: SGD, scale: 2} — " +
-			"or write \"349.98 SGD\" and let it be inferred from the figure",
-	},
+	// A `decimal` deliberately does NOT gain a property-level scale in its
+	// place. The bound is maxDecimalScale and it is enforced per VALUE at
+	// parse time; a second, per-property bound would be a constraint nothing
+	// reads, which is exactly the silent-drop defect this whole section
+	// exists to prevent.
 }
 
 // schemaFileKeys is the closed key set of a schema file's top level.
@@ -935,7 +927,7 @@ func resolveNode(node *yaml.Node) *yaml.Node {
 // propertyDecl is one property's declaration.
 //
 // Its fields are the declKeyParsed half of propertyDeclKeys and nothing else.
-// `scale` deliberately has NO field here: it is declKeyRefused, and a field
+// A key that is not declKeyParsed deliberately has NO field here: a field
 // would make it decodable and therefore droppable again.
 type propertyDecl struct {
 	Type     string      `yaml:"type"`
@@ -1031,17 +1023,29 @@ func (p *Property) finalize() error {
 		if len(p.Values) == 0 {
 			return fmt.Errorf("an enum must declare its `values`; an enum with no values can never be satisfied")
 		}
-		pos := make(map[string]int, len(p.Values))
+		// The index is keyed by the FOLDED name, because that is how a written
+		// value resolves (FR-011a) — and it is therefore also where a
+		// duplicate has to be detected. Two values that fold to the same key
+		// ARE one value under R-5: declaring both `Won` and `won` would give
+		// ResolveEnum two right answers and let the map hand back whichever
+		// was indexed last, silently. It is refused, naming both spellings,
+		// because the author has to choose which one their reports render.
+		idx := make(map[string]int, len(p.Values))
 		for i, v := range p.Values {
 			if strings.TrimSpace(v.Name) == "" {
 				return fmt.Errorf("enum value at position %d is empty", i)
 			}
-			if _, dup := pos[v.Name]; dup {
-				return fmt.Errorf("enum value %q is declared twice; declared position is the sort order (FR-010), so a repeat has no defined position", v.Name)
+			key := FoldKey(v.Name)
+			if j, dup := idx[key]; dup {
+				if p.Values[j].Name == v.Name {
+					return fmt.Errorf("enum value %q is declared twice", v.Name)
+				}
+				return fmt.Errorf("enum values %q and %q differ only by case, and matching is case-insensitive (FR-011a), so they are one value; declare one of them",
+					p.Values[j].Name, v.Name)
 			}
-			pos[v.Name] = i
+			idx[key] = i
 		}
-		p.valuePos = pos
+		p.foldIndex = idx
 	case TypeRelation:
 		if p.To == "" {
 			return fmt.Errorf("a relation must declare its target record type with `to:`; without it the target type cannot be checked (FR-034)")
@@ -1051,8 +1055,8 @@ func (p *Property) finalize() error {
 	if p.Type != TypeEnum && len(p.Values) > 0 {
 		return errValuesOnlyOnEnum(p.Type)
 	}
-	if p.Type != TypeNumber && p.Unit != "" {
-		return fmt.Errorf("`unit` is only meaningful on a number, not on a %s", p.Type)
+	if !isNumericType(p.Type) && p.Unit != "" {
+		return fmt.Errorf("`unit` is only meaningful on an integer or a decimal, not on a %s", p.Type)
 	}
 	if p.Type != TypeRelation && p.Type != TypePerson && (p.To != "" || p.Inverse != "") {
 		return fmt.Errorf("`to`/`inverse` are only meaningful on a relation or person, not on a %s", p.Type)
@@ -1065,17 +1069,16 @@ func (p *Property) finalize() error {
 // (a test fixture, a generated schema, an in-memory record type).
 //
 // It exists because a Property carries derived state, and a struct literal
-// cannot fill it in from outside the package. EnumPosition tolerates that (it
-// scans Values instead), but this is the path that gets the O(1) index AND,
-// more importantly, the same rejections the schema loader applies: a relation
-// with no `to:`, a `unit` on anything but a number, `values` on anything but an
-// enum, a duplicate or empty enum value. A caller that skips it gets a working
-// property; a caller that uses it also gets told when the declaration is wrong.
+// cannot fill it in from outside the package. ResolveEnum tolerates that (it
+// scans Values instead), but this is the path that gets the O(1) folded index
+// AND, more importantly, the same rejections the schema loader applies: a
+// relation with no `to:`, a `unit` on anything but a number, `values` on
+// anything but an enum, an empty enum value, and two enum values that differ
+// only by case. A caller that skips it gets a working property; a caller that
+// uses it also gets told when the declaration is wrong.
 //
 // decl is taken by value and copied, so the returned Property shares nothing
-// with the caller's. EnumValue.Position is normalised to the declared order
-// (FR-010: position IS the order values are declared in), matching exactly what
-// the loader stamps.
+// with the caller's.
 func NewProperty(decl Property) (*Property, error) {
 	p := decl
 	p.Name = strings.TrimSpace(p.Name)
@@ -1084,7 +1087,7 @@ func NewProperty(decl Property) (*Property, error) {
 	p.Inverse = strings.TrimSpace(p.Inverse)
 	p.Unit = strings.TrimSpace(p.Unit)
 	p.RecordType = strings.TrimSpace(p.RecordType)
-	p.valuePos = nil // derived state is ours to compute, never the caller's
+	p.foldIndex = nil // derived state is ours to compute, never the caller's
 
 	if p.Name == "" {
 		return nil, fmt.Errorf("a property must declare a name")
@@ -1097,9 +1100,6 @@ func NewProperty(decl Property) (*Property, error) {
 	}
 
 	p.Values = append([]EnumValue(nil), decl.Values...)
-	for i := range p.Values {
-		p.Values[i].Position = i
-	}
 
 	if err := p.finalize(); err != nil {
 		return nil, fmt.Errorf("property %q: %w", p.Name, err)
@@ -1116,7 +1116,7 @@ func parseEnumValue(n yaml.Node, position int) (EnumValue, error) {
 		if strings.TrimSpace(n.Value) == "" {
 			return EnumValue{}, fmt.Errorf("enum value at position %d is empty", position)
 		}
-		return EnumValue{Name: n.Value, Position: position}, nil
+		return EnumValue{Name: n.Value}, nil
 	case yaml.MappingNode:
 		if err := checkDeclaredKeys("an enum value", &n, enumValueDeclKeys); err != nil {
 			return EnumValue{}, fmt.Errorf("enum value at position %d: %v", position, err)
@@ -1133,10 +1133,9 @@ func parseEnumValue(n yaml.Node, position int) (EnumValue, error) {
 			return EnumValue{}, fmt.Errorf("enum value at position %d declares no `name`", position)
 		}
 		return EnumValue{
-			Name:     long.Name,
-			Label:    strings.TrimSpace(long.Label),
-			Position: position,
-			Group:    long.Group,
+			Name:  long.Name,
+			Label: strings.TrimSpace(long.Label),
+			Group: long.Group,
 		}, nil
 	}
 	return EnumValue{}, fmt.Errorf("enum value at position %d must be a name or a {name, group} mapping", position)

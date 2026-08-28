@@ -1,4 +1,4 @@
-// Omnipus — ADR-068 D3/O-2: exact decimal arithmetic for `number` and `money`.
+// Omnipus — ADR-068 D3: exact decimal arithmetic for `integer` and `decimal`.
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
@@ -14,10 +14,10 @@ import (
 // ---------------------------------------------------------------------------
 // WHY THIS FILE EXISTS
 //
-// FR-013: money arithmetic MUST be exact decimal. FR-020b: money MUST never be
-// converted to a binary floating-point number anywhere in the path. DS-1 also
-// requires the `number` type to hold 2^53+1 exactly, which rules float64 out
-// for plain numbers too.
+// FR-013: a `decimal` MUST be exact and arbitrary-precision. FR-020b: it MUST
+// never be converted to a binary floating-point number anywhere in the path.
+// DS-1 additionally requires 2^53+1 to survive exactly, which rules float64 out
+// for `integer` too.
 //
 // So there is exactly one numeric representation in this package, and it is
 // this one: an arbitrary-precision integer plus a decimal scale. `349.98` is
@@ -39,9 +39,14 @@ type Decimal struct {
 
 // maxDecimalScale bounds how far a value may be rescaled. Rescaling multiplies
 // by 10^n, so an unbounded scale is an unbounded allocation driven by input
-// text — a denial-of-service seam, not a numeric one. A vault holding money and
-// measurements does not need more than this, and exceeding it is REPORTED
-// rather than silently rounded (this package never rounds).
+// text — a denial-of-service seam, not a numeric one. Exceeding it is REPORTED
+// naming the bound, never silently rounded (this package never rounds).
+//
+// One hundred places is DELIBERATELY GENEROUS, and that is a decision rather
+// than an arbitrary round number: it is the bound the operator asked for —
+// "make sure its precision after digits is high enough to be precise" — and it
+// replaced a 12-place, currency-shaped bound that was deleted along with the
+// type that needed it (ADR-068 D3). Do not tighten it back toward twelve.
 //
 // It is also the half-width of the scale range ParseDecimal can produce, which
 // is what maxRescaleGap is derived from — see there.
@@ -67,8 +72,8 @@ const maxDecimalScale = 100
 // lower end because parseExponent caps the exponent at maxDecimalScale before
 // negating it — so `1e100` (scale -100) and `1e-100` (scale +100) are both
 // ordinary parsed values whose gap is 200. Bounding the gap at maxDecimalScale
-// would have made SumMoney REFUSE that pair: a legitimate total, denied by a
-// guard aimed at hand-built values. Twice the scale bound is therefore the
+// would have made a legitimate Add or Sub over that pair REFUSE — a real
+// total, denied by a guard aimed at hand-built values. Twice the scale bound is therefore the
 // tightest bound that refuses nothing a vault file can express, and it still
 // caps the factor at 10^200 — an 84-byte integer.
 //
@@ -105,8 +110,7 @@ const maxRescaleGap = 2 * maxDecimalScale
 // It is not a new number: it is the package's existing value domain, restated.
 // ParseDecimal yields scale in [-maxDecimalScale, +maxDecimalScale] (the upper
 // end checked directly, the lower end because parseExponent caps the exponent
-// before negating it); money is tighter still at [0, maxMoneyScale]; and
-// rescale — the only other producer, and so the only way Add and Sub can move a
+// before negating it); and rescale — the only other producer, and so the only way Add and Sub can move a
 // scale — refuses any target above maxDecimalScale and never lowers one. So
 // EVERY Decimal a vault file can produce, and every Decimal this package
 // derives from one, renders through the plain path byte for byte as before.
@@ -128,9 +132,8 @@ const maxRenderableScale = maxDecimalScale
 // out: NAME the value instead of printing it.
 //
 // It loses nothing. (unscaled, scale) IS the value by definition — it is the
-// same pair Unscaled() and Scale() return, and the same pair RecordMoney puts
-// on the wire — so this abbreviates the RENDERING without abbreviating the
-// number. A truncated digit string ("1000000…") could not say that: 10^1000 and
+// same pair Unscaled() and Scale() return — so this abbreviates the RENDERING
+// without abbreviating the number. A truncated digit string ("1000000…") could not say that: 10^1000 and
 // 10^10000000 truncate to the same text.
 //
 // WHY IT IS NOT EXPONENT NOTATION ("1e-2147483648"), WHICH WAS THE OBVIOUS
@@ -143,11 +146,10 @@ const maxRenderableScale = maxDecimalScale
 //     errScaleTooLarge. Today every in-domain String() output re-parses to an
 //     equal value; emitting exponent notation would break that for exactly the
 //     values a reader is most likely to want to copy.
-//   - MONEY refuses exponent notation BY RULE (parseMoneyAmount rule 1), and
-//     the error it raises when it does quotes d.String() as the plain form the
-//     operator should type instead: "write it out in full, e.g. %s". A String
-//     that answers in exponent notation makes that message advise the very
-//     notation it is rejecting.
+//   - Any rule that REFUSES exponent notation quotes d.String() as the plain
+//     form the operator should type instead — "write it out in full, e.g. %s".
+//     A String that answers in exponent notation makes such a message advise
+//     the very notation it is rejecting.
 //
 // So the marker is deliberately not number-shaped at all — angle brackets and
 // prose, no bare digit run a parser or a reader could lift out and mistake for
@@ -158,15 +160,16 @@ func renderScaleOutOfRange(n *big.Int, scale int32) string {
 		n.String(), scale, maxRenderableScale)
 }
 
-// maxMoneyScale bounds a MONEY value's declared scale, and is deliberately
-// tighter than maxDecimalScale. It matches RecordMoney.yaml's `maximum: 12`
-// exactly: a money value that Go accepts but the wire cannot carry is a value
-// an operator can write to disk and then never read back through the API.
-// Twelve is far past any real currency — ISO-4217 tops out at four.
-const maxMoneyScale = 12
-
-// errScaleTooLarge is returned rather than rounding. Rounding money silently is
-// the class of defect ADR-068 exists to remove.
+// errScaleTooLarge is returned rather than rounding. Silently rounding a number
+// is the class of defect ADR-068 exists to remove.
+//
+// maxDecimalScale (100) is `decimal`'s ONLY scale bound. A second, tighter one
+// used to sit here — maxMoneyScale = 12, matching RecordMoney.yaml's
+// `maximum: 12` — and it DIED WITH THE MONEY TYPE (ADR-068 D3, operator ruling
+// 1). It must not be inherited as decimal's bound: twelve places is a
+// CURRENCY-shaped limit, and the operator's requirement for this type is the
+// opposite — "make sure its precision after digits is high enough to be
+// precise".
 var errScaleTooLarge = fmt.Errorf("decimal scale exceeds the maximum of %d", maxDecimalScale)
 
 // NewDecimal builds a Decimal from unscaled units and a scale.
@@ -182,8 +185,8 @@ func DecimalFromInt64(v int64, scale int32) Decimal {
 	return Decimal{unscaled: big.NewInt(v), scale: scale}
 }
 
-// Unscaled returns a copy of the unscaled integer. For a money value this is
-// the amount in minor units (ADR-068 O-2).
+// Unscaled returns a copy of the unscaled integer — the value's digits without
+// their decimal point. With Scale it IS the value: v = unscaled x 10^-scale.
 func (d Decimal) Unscaled() *big.Int {
 	if d.unscaled == nil {
 		return big.NewInt(0)
@@ -200,6 +203,87 @@ func (d Decimal) int() *big.Int {
 	}
 	return d.unscaled
 }
+
+// IsFractional reports whether the value has a non-zero fractional part — i.e.
+// whether it is something other than a whole number.
+//
+// It is NOT "Scale() > 0". `3.0` has scale 1 and is a whole number; `3.5` has
+// scale 1 and is not. Answering from the scale alone would reject `3.0` in an
+// `integer` property, which is a value the author plainly wrote as whole, and
+// would accept nothing extra in exchange. The question is about the VALUE, so
+// it is answered by dividing out the scale and checking the remainder.
+//
+// A negative scale (`3e2`, scale -2) is a whole number by construction — the
+// value is unscaled x 10^|scale| — so it is never fractional.
+func (d Decimal) IsFractional() bool {
+	if d.scale <= 0 || d.IsZero() {
+		return false
+	}
+	if int64(d.scale) > maxRescaleGap {
+		// Beyond the gap bound pow10 would allocate without limit. A value with
+		// more than maxRescaleGap decimal places and a non-zero unscaled part
+		// cannot be whole: the unscaled integer would need at least that many
+		// trailing zeros, and it has fewer digits than that in every case this
+		// package can construct short of a deliberate hand-built value. Saying
+		// "fractional" here refuses it as a non-whole number, which is the safe
+		// direction — the alternative is doing unbounded work to answer.
+		return true
+	}
+	var rem big.Int
+	rem.Mod(new(big.Int).Abs(d.int()), pow10(int64(d.scale)))
+	return rem.Sign() != 0
+}
+
+// Int64 returns the value as an int64, and reports whether that is EXACT.
+//
+// exact is false in two distinguishable situations, and a caller that needs to
+// tell them apart asks IsFractional:
+//
+//	the value has a fractional part      3.5 — no int64 represents it
+//	the value is outside int64's range   9223372036854775808 — one past MaxInt64
+//
+// On !exact the returned int64 is ZERO, never a truncated or saturated stand-in.
+// That is the whole point of the method: SQLite's CAST saturates
+// '9223372036854775808' to MaxInt64 in silence and a float64 would round it, and
+// ADR-068 D3 names precisely that — "a large identifier silently truncated" — as
+// the failure the `integer` type closes. A wrong number that looks right is
+// worse than a refusal, so this returns a value no caller can mistake for the
+// answer alongside a flag it cannot ignore.
+func (d Decimal) Int64() (int64, bool) {
+	if d.IsFractional() {
+		return 0, false
+	}
+	n := new(big.Int).Set(d.int())
+	switch {
+	case n.Sign() == 0:
+		return 0, true
+	case d.scale > 0:
+		// Exact: IsFractional already established the remainder is zero, so
+		// this division discards nothing. rescale is deliberately NOT used —
+		// it refuses every target BELOW the current scale, so rescale(0) would
+		// reject `3.0` and this method would answer "not an integer" to a value
+		// the author plainly wrote as one.
+		n.Quo(n, pow10(int64(d.scale)))
+	case d.scale < 0:
+		// The value is unscaled x 10^|scale|. int64 holds at most 19 digits, so
+		// past that the answer is "out of range" and the multiplication is work
+		// with a known conclusion — pow10 would allocate for a scale of
+		// -2147483648 before anything checked the result.
+		if int64(-d.scale) > maxInt64Digits {
+			return 0, false
+		}
+		n.Mul(n, pow10(int64(-d.scale)))
+	}
+	if !n.IsInt64() {
+		return 0, false
+	}
+	return n.Int64(), true
+}
+
+// maxInt64Digits is the decimal digit count of math.MaxInt64
+// (9223372036854775807). A magnitude needing more digits than this cannot be an
+// int64, which makes it a cheap pre-check before any 10^n factor is built.
+const maxInt64Digits = 19
 
 // IsZero reports whether the value is exactly zero, at any scale.
 func (d Decimal) IsZero() bool { return d.int().Sign() == 0 }
@@ -468,9 +552,9 @@ var errNotADecimal = errors.New("not a decimal number")
 // readability convention we would be guessing at.
 //
 // Rejected loudly: empty text, ".", "1.2.3", "NaN", "Inf", "0x1f", "1,000",
-// and anything with trailing text such as "349.98 SGD" (money has its own
-// parser; a bare number with a currency glued on is exactly the ambiguity
-// FR-012 exists to stop).
+// and anything with trailing text such as "60 minutes". A unit belongs in the
+// property's `unit:` declaration, never glued onto the figure — that is D3's
+// `exercise: 60 minutes` failure, and accepting it here would recreate it.
 func ParseDecimal(text string) (Decimal, error) {
 	s := strings.TrimSpace(text)
 	if s == "" {
@@ -570,19 +654,4 @@ func allASCIIDigits(s string) bool {
 		}
 	}
 	return true
-}
-
-// isIntegerLiteral reports whether the text is a plain integer with no decimal
-// point and no exponent. Money's minor-units form (FR-012 / ADR-068 O-2)
-// requires this: `{amount: 34998, scale: 2}` means 349.98, and an amount
-// written as `349.98` alongside an explicit scale is ambiguous, not helpful.
-func isIntegerLiteral(text string) bool {
-	s := strings.TrimSpace(text)
-	if s == "" {
-		return false
-	}
-	if s[0] == '+' || s[0] == '-' {
-		s = s[1:]
-	}
-	return s != "" && allASCIIDigits(s)
 }

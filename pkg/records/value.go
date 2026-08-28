@@ -6,7 +6,7 @@ package records
 
 import (
 	"fmt"
-	"sort"
+	"math"
 	"strings"
 	"time"
 
@@ -27,11 +27,11 @@ import (
 //     nudged into shape. §8 R-4: a non-conforming value compares false for
 //     every operator AND the record is reported. Silence is the defect.
 //
-//  2. NOTHING BECOMES A FLOAT. `number` and `money` parse from source text
-//     into Decimal (decimal.go). FR-020b is a promise about the whole path,
-//     and this is the only place in the path that touches numeric text.
+//  2. NOTHING BECOMES A FLOAT. `decimal` parses from source text straight
+//     into Decimal (decimal.go) and `integer` into an int64 — neither ever
+//     touches a float64. FR-020b is a promise about the whole path, and this
+//     is the only place in the path that touches numeric text.
 // ---------------------------------------------------------------------------
-
 
 // ---------------------------------------------------------------------------
 // CASE FOLDING — the ONE function (FR-011a)
@@ -178,18 +178,24 @@ type TypedValue struct {
 
 	// Text carries a `text` value.
 	Text string
-	// Enum carries an `enum` value, INCLUDING its declared position — FR-010's
-	// sort key travels with the value so no later code has to re-derive it and
-	// get it wrong.
+	// Enum carries the DECLARED enum value a written value resolved to
+	// (FR-011a). It is the schema's spelling, not the file's — the file's is in
+	// Raw — so grouping and equality agree even when three notes spell one
+	// state three ways.
 	Enum EnumValue
 	// Link carries a `relation` or `person` value.
 	Link Wikilink
 	// Date carries a `date` value.
 	Date DateValue
-	// Number carries a `number` value, exactly.
+	// Number carries an `integer` or a `decimal` value, exactly. §8 R-1 makes
+	// the two ONE declared type for comparison, so they share one field and
+	// `3 = 3.0` is true; the declared type decides the BOUNDS, not a separate
+	// comparison domain.
+	//
+	// For an `integer` the Decimal always has scale 0 and always fits int64 —
+	// Int64 returns it without loss. For a `decimal` the scale is bounded by
+	// maxDecimalScale and the magnitude is unbounded.
 	Number Decimal
-	// Money carries a `money` value, exactly, with its currency attached.
-	Money Money
 }
 
 // String renders a value for a report.
@@ -201,10 +207,8 @@ func (v TypedValue) String() string {
 		return v.Link.String()
 	case TypeDate:
 		return v.Date.String()
-	case TypeNumber:
+	case TypeInteger, TypeDecimal:
 		return v.Number.String()
-	case TypeMoney:
-		return v.Money.String()
 	}
 	return v.Text
 }
@@ -284,10 +288,10 @@ func ParseValue(p *Property, n Node) (TypedValue, *ValueError) {
 		return parseLinkValue(p, n)
 	case TypeDate:
 		return parseDateValue(p, n)
-	case TypeNumber:
-		return parseNumberValue(p, n)
-	case TypeMoney:
-		return parseMoneyValue(p, n)
+	case TypeInteger:
+		return parseIntegerValue(p, n)
+	case TypeDecimal:
+		return parseDecimalValue(p, n)
 	}
 	return TypedValue{}, &ValueError{
 		Code:     FindingUnsupportedType,
@@ -321,20 +325,26 @@ func parseEnumValueNode(p *Property, n Node) (TypedValue, *ValueError) {
 	if err := mustBeScalar(p, n); err != nil {
 		return TypedValue{}, err
 	}
-	pos, ok := p.EnumPosition(n.Text)
+	declared, ok := p.ResolveEnum(n.Text)
 	if !ok {
 		// FR-011 — reject, listing the permitted values. Matching is
-		// EXACT-CASE, so `Active` fails against `active` and says so, rather
-		// than quietly creating a second de-facto value (D4).
+		// case-INSENSITIVE in full Unicode (FR-011a), so `Active` RESOLVES to a
+		// declared `active` and only a value that matches none of them is
+		// rejected. The message says so, because "not one of the declared
+		// values" over a case difference would send the author to fix the one
+		// thing that is not wrong.
 		return TypedValue{}, &ValueError{
 			Code:      FindingEnumNotPermitted,
-			Reason:    fmt.Sprintf("property %q holds %q, which is not one of the declared values for this enum (matching is exact, including case)", p.Name, n.Text),
+			Reason:    fmt.Sprintf("property %q holds %q, which is not one of the declared values for this enum (matching ignores case)", p.Name, n.Text),
 			Expected:  p.ExpectedShape(),
 			Got:       n.Text,
 			Permitted: p.PermittedValues(),
 		}
 	}
-	return TypedValue{Type: TypeEnum, Raw: n.Text, Enum: p.Values[pos]}, nil
+	// Raw keeps the file's own spelling — FR-011c renders that, never the
+	// declared one — while Enum carries the DECLARED value, which is what
+	// equality and grouping compare.
+	return TypedValue{Type: TypeEnum, Raw: n.Text, Enum: declared}, nil
 }
 
 func parseLinkValue(p *Property, n Node) (TypedValue, *ValueError) {
@@ -418,7 +428,19 @@ func parseDateValue(p *Property, n Node) (TypedValue, *ValueError) {
 	}
 }
 
-func parseNumberValue(p *Property, n Node) (TypedValue, *ValueError) {
+// parseDecimalValue reads a `decimal`: an exact number of arbitrary magnitude,
+// with at most maxDecimalScale fractional places.
+//
+// The bound is maxDecimalScale (100) and it is DELIBERATELY GENEROUS. The
+// retired `money` type bounded scale at 12 — a currency-shaped limit for a type
+// that is not currency-shaped — and ADR-068 D3 is explicit that the bound dies
+// with money and must not be inherited: "make sure its precision after digits
+// is high enough to be precise".
+//
+// A value beyond the bound is REFUSED, naming the bound and its own scale. It
+// is never rounded to fit: rounding to satisfy a bound is a silent change to a
+// number, which is the whole class of failure this type exists to close.
+func parseDecimalValue(p *Property, n Node) (TypedValue, *ValueError) {
 	if err := mustBeScalar(p, n); err != nil {
 		return TypedValue{}, err
 	}
@@ -427,292 +449,73 @@ func parseNumberValue(p *Property, n Node) (TypedValue, *ValueError) {
 		// DS-1's `PLACEHOLDER — unknown` in a numeric property lands here, and
 		// FR-026 requires the RECORD to be named when this excludes it from an
 		// aggregate. The caller attaches the record; this names the value.
+		//
+		// The parser's own error is carried through rather than flattened to
+		// "is not a number", because it is the half that says WHICH rule was
+		// broken — a thousands separator, an exponent out of range, a scale
+		// past the bound — and the operator's fix differs for each.
 		return TypedValue{}, &ValueError{
 			Code:     FindingNotANumber,
-			Reason:   fmt.Sprintf("property %q holds %q, which is not a number", p.Name, n.Text),
+			Reason:   fmt.Sprintf("property %q holds %q, which is not a decimal: %v", p.Name, n.Text, err),
 			Expected: p.ExpectedShape(),
 			Got:      n.Text,
 		}
 	}
-	return TypedValue{Type: TypeNumber, Raw: n.Text, Number: d}, nil
+	return TypedValue{Type: TypeDecimal, Raw: n.Text, Number: d}, nil
 }
 
-// parseMoneyValue accepts the two forms a human actually writes, and rejects
-// the one that loses information.
+// parseIntegerValue reads an `integer`: a signed 64-bit whole number.
 //
-//	arr: "349.98 SGD"                                 accepted (scale inferred: 2)
-//	arr: "SGD 349.98"                                 accepted
-//	arr: {amount: 349.98, currency: SGD}              accepted (scale inferred: 2)
-//	arr: {amount: 34998, currency: SGD, scale: 2}     accepted (minor units, O-2)
-//	arr: 349.98                                       REJECTED — no currency (FR-012)
-//	arr: {amount: 349.98}                             REJECTED — no currency (FR-012)
-//	arr: {amount: 349.98, currency: SGD, scale: 2}    REJECTED — ambiguous
-//	arr: {amount: 34998, currency: SGD, scal: 2}      REJECTED — unknown key `scal`
+// TWO REFUSALS, and they are different faults with different fixes, so they get
+// different sentences:
 //
-// That last one is the whole reason the key set is closed. Read only the keys
-// it recognises and the parser answers 34998 SGD to a note that says 349.98 —
-// a hundredfold error from one dropped letter, with nothing reported. Every
-// rejection here names the token the operator actually has to change.
+//	FRACTIONAL   `3.5` in an integer property. The author declared a whole
+//	             number and wrote a fraction. Truncating to 3 or rounding to 4
+//	             would both be a silent change to the value, so neither happens
+//	             — the remedy named is to declare the property `decimal`.
+//	OUT OF RANGE `9223372036854775808` is one past int64. It is REFUSED, naming
+//	             the bound. This is D3's "a large identifier silently truncated"
+//	             — SQLite saturates such a CAST to MaxInt64 without a word, and
+//	             a binary float would round it; neither is acceptable, so the
+//	             answer is a refusal.
 //
-// The last one matters: ADR-068 O-2 defines the stored amount as INTEGER MINOR
-// UNITS, so `amount` alongside an explicit `scale` must be an integer. Reading
-// `349.98` with `scale: 2` as either 349.98 or 3.4998 is a coin toss, and this
-// package does not toss coins over money.
-//
-// Whichever form it arrives in, an accepted money value ends up inside the
-// bounds RecordMoney.yaml imposes — scale 0..maxMoneyScale, no exponent — and
-// there are two roads to that, both of which must stay closed:
-//
-//	SCALE INFERRED   the inline forms and {amount, currency} parse their
-//	                 amount through parseMoneyAmount (money.go), which applies
-//	                 both bounds. Bounding one of these and not the others is
-//	                 the defect this arrangement exists to prevent.
-//	SCALE DECLARED   {amount, currency, scale} never reaches parseMoneyAmount.
-//	                 It cannot breach either bound: the amount must be an
-//	                 integer literal (no exponent, no fractional digits) and
-//	                 the declared scale is range-checked below.
-func parseMoneyValue(p *Property, n Node) (TypedValue, *ValueError) {
-	switch n.Kind {
-	case KindScalar:
-		return parseMoneyScalar(p, n)
-	case KindMapping:
-		return parseMoneyMapping(p, n)
+// The value is parsed through ParseDecimal, not strconv.ParseInt, so an integer
+// and a decimal accept exactly the same NOTATION (R-1 makes them one comparison
+// type, and two parsers would eventually disagree about what a number looks
+// like). The int64 range is then a bound applied on top, not a second grammar.
+func parseIntegerValue(p *Property, n Node) (TypedValue, *ValueError) {
+	if err := mustBeScalar(p, n); err != nil {
+		return TypedValue{}, err
 	}
-	return TypedValue{}, &ValueError{
-		Code:     FindingWrongShape,
-		Reason:   fmt.Sprintf("property %q holds %s", p.Name, n.Kind),
-		Expected: p.ExpectedShape(),
-		Got:      n.Kind.String(),
+	d, err := ParseDecimal(n.Text)
+	if err != nil {
+		return TypedValue{}, &ValueError{
+			Code:     FindingNotANumber,
+			Reason:   fmt.Sprintf("property %q holds %q, which is not an integer: %v", p.Name, n.Text, err),
+			Expected: p.ExpectedShape(),
+			Got:      n.Text,
+		}
 	}
-}
-
-func parseMoneyScalar(p *Property, n Node) (TypedValue, *ValueError) {
-	fields := strings.Fields(strings.TrimSpace(n.Text))
-	switch len(fields) {
-	case 1:
-		// A bare amount. FR-012 is explicit: a money value missing its
-		// currency is REJECTED. Assuming a vault currency here is precisely
-		// the "two loose fields nothing keeps together" failure D3 names.
-		return TypedValue{}, moneyValueError(p, n.Text, &MissingCurrencyError{Amount: fields[0]}, FindingMoneyNoCurrency)
-	case 2:
-		// Two steps, deliberately. ParseDecimal answers "is this field the
-		// amount at all?", which is what decides the currency-first swap below;
-		// only then does parseMoneyAmount apply money's own bounds. Collapsing
-		// them would make "1e3 USD" look like a currency-first value and report
-		// the currency as malformed, which is not where the operator's fix is.
-		amountText, currency := fields[0], fields[1]
-		_, amountErr := ParseDecimal(amountText)
-		if amountErr != nil {
-			// "SGD 349.98" is a form a human really writes, so the other order
-			// is tried — but ONLY when the other field genuinely IS an amount.
-			//
-			// Swapping on ANY first-field failure is what made every non-exponent
-			// malformation name the wrong token: "1,000 USD" reported `"USD" is
-			// not an amount`, sending the operator to fix the one field that was
-			// correct while the thousands separator they actually mistyped went
-			// unnamed. The swap now has to earn itself.
-			if _, err := ParseDecimal(fields[1]); err == nil {
-				amountText, currency = fields[1], fields[0]
-				amountErr = nil
-			}
-		}
-		if amountErr != nil {
-			return TypedValue{}, moneyValueError(p, n.Text, fmt.Errorf("%q is not an amount", amountText), FindingMoneyMalformed)
-		}
-		d, err := parseMoneyAmount(amountText)
-		if err != nil {
-			return TypedValue{}, moneyValueError(p, n.Text, err, FindingMoneyMalformed)
-		}
-		if err := ValidateCurrency(currency); err != nil {
-			return TypedValue{}, moneyValueError(p, n.Text, err, FindingMoneyBadCurrency)
-		}
-		return TypedValue{Type: TypeMoney, Raw: n.Text, Money: Money{Amount: d, Currency: currency}}, nil
-	}
-	return TypedValue{}, moneyValueError(p, n.Text, fmt.Errorf("%q is not an amount and a currency", n.Text), FindingMoneyMalformed)
-}
-
-func parseMoneyMapping(p *Property, n Node) (TypedValue, *ValueError) {
-	amountNode, hasAmount := n.Fields["amount"]
-	currencyNode, hasCurrency := n.Fields["currency"]
-	scaleNode, hasScale := n.Fields["scale"]
-
-	raw := renderMoneyMapping(n)
-
-	// FIRST, before any key is read for its value: a key this parser does not
-	// know is a key whose meaning was thrown away.
-	//
-	// `{amount: 34998, currency: SGD, scal: 2}` used to parse as 34998 SGD —
-	// thirty-five thousand dollars where the author wrote three hundred and
-	// forty-nine ninety-eight — with no finding and no warning, because the
-	// parser read the three keys it recognised and never looked at the fourth.
-	// One dropped letter, a hundredfold error, silence.
-	//
-	// RecordMoney.yaml is `additionalProperties: false`, so the wire refuses
-	// exactly this. The Go parser now refuses it too, at the same strictness and
-	// naming the key, because an author who writes something meaningful must
-	// never be told nothing when we throw it away.
-	if unknown := unknownMoneyKeys(n); len(unknown) > 0 {
-		return TypedValue{}, moneyValueError(p, raw,
-			fmt.Errorf("unknown %s %s in a money value; a money mapping carries only `amount`, `currency` and `scale` (a mistyped key would otherwise be dropped in silence, changing what the value means)",
-				pluralise("key", len(unknown)), quoteJoin(unknown)),
-			FindingMoneyMalformed)
-	}
-
+	whole, exact := d.Int64()
 	switch {
-	case !hasAmount || amountNode.Kind == KindNull:
-		// FR-007/R-3: an explicit null is ABSENT, so it reports as absent.
-		return TypedValue{}, moneyValueError(p, raw, fmt.Errorf("no `amount`"), FindingMoneyMalformed)
-	case amountNode.Kind != KindScalar:
-		// The amount IS there — saying "no `amount`" here told the operator to
-		// add a field they had already written. Name the shape instead.
-		return TypedValue{}, moneyValueError(p, raw,
-			fmt.Errorf("`amount` holds %s; a money amount is a single value", amountNode.Kind),
-			FindingMoneyMalformed)
-	}
-
-	switch {
-	case !hasCurrency || currencyNode.Kind == KindNull || (currencyNode.Kind == KindScalar && strings.TrimSpace(currencyNode.Text) == ""):
-		return TypedValue{}, moneyValueError(p, raw, &MissingCurrencyError{Amount: amountNode.Text}, FindingMoneyNoCurrency)
-	case currencyNode.Kind != KindScalar:
-		// Same split, same reason: `currency: [SGD]` is a currency written in
-		// the wrong shape, not a missing one.
-		return TypedValue{}, moneyValueError(p, raw,
-			fmt.Errorf("`currency` holds %s; a currency is a single ISO-4217 code, e.g. SGD", currencyNode.Kind),
-			FindingMoneyMalformed)
-	}
-	if err := ValidateCurrency(currencyNode.Text); err != nil {
-		return TypedValue{}, moneyValueError(p, raw, err, FindingMoneyBadCurrency)
-	}
-
-	if !hasScale {
-		// parseMoneyAmount, not ParseDecimal: this branch infers the scale from
-		// the amount's own fractional digits, so it is the branch that could
-		// mint a scale the wire cannot carry.
-		d, err := parseMoneyAmount(amountNode.Text)
-		if err != nil {
-			return TypedValue{}, moneyValueError(p, raw, fmt.Errorf("`amount` %q: %w", amountNode.Text, err), FindingMoneyMalformed)
+	case !exact && d.IsFractional():
+		return TypedValue{}, &ValueError{
+			Code:     FindingIntegerNotWhole,
+			Reason:   fmt.Sprintf("property %q holds %q, which is not a whole number; an integer property is never rounded or truncated to fit, so either write a whole number or declare the property `decimal`", p.Name, n.Text),
+			Expected: p.ExpectedShape(),
+			Got:      n.Text,
 		}
-		return TypedValue{Type: TypeMoney, Raw: raw, Money: Money{Amount: d, Currency: currencyNode.Text}}, nil
-	}
-
-	if scaleNode.Kind != KindScalar || !isIntegerLiteral(scaleNode.Text) {
-		return TypedValue{}, moneyValueError(p, raw, fmt.Errorf("`scale` must be a whole number of minor-unit digits, found %q", scaleNode.Text), FindingMoneyMalformed)
-	}
-	scaleDec, err := ParseDecimal(scaleNode.Text)
-	if err != nil || scaleDec.Scale() != 0 {
-		return TypedValue{}, moneyValueError(p, raw, fmt.Errorf("`scale` must be a whole number, found %q", scaleNode.Text), FindingMoneyMalformed)
-	}
-	scale := scaleDec.Unscaled()
-	// Bounded by maxMoneyScale, NOT maxDecimalScale. The wire caps `scale` at 12
-	// (RecordMoney.yaml), so a value with scale 13..100 validated in Go and then
-	// could not be serialised at all — accepted on disk, unrepresentable to a
-	// caller. The two bounds are now the same number for that reason.
-	if !scale.IsInt64() || scale.Int64() < 0 || scale.Int64() > maxMoneyScale {
-		return TypedValue{}, moneyValueError(p, raw, fmt.Errorf("`scale` must be between 0 and %d, found %q", maxMoneyScale, scaleNode.Text), FindingMoneyMalformed)
-	}
-	if !isIntegerLiteral(amountNode.Text) {
-		// Three distinct faults live behind "not an integer literal", and an
-		// operator fixes each differently. Collapsing them into the ambiguity
-		// message told someone who wrote `1e3` to "write the amount in minor
-		// units" — which they had, in the one notation money does not accept.
-		switch _, derr := ParseDecimal(amountNode.Text); {
-		case derr != nil:
-			return TypedValue{}, moneyValueError(p, raw, fmt.Errorf("`amount` %q is not a whole number of minor units", amountNode.Text), FindingMoneyMalformed)
-		case strings.ContainsAny(amountNode.Text, "eE"):
-			return TypedValue{}, moneyValueError(p, raw,
-				fmt.Errorf("`amount` %q uses exponent notation, which a money amount does not accept (write the minor units out in full)", amountNode.Text),
-				FindingMoneyMalformed)
-		}
-		return TypedValue{}, moneyValueError(p, raw,
-			fmt.Errorf("`amount` is %q, but a declared `scale` means the amount is an integer count of minor units (ADR-068 O-2) — write {amount: %s, currency: %s} and let the scale be inferred, or write the amount in minor units",
-				amountNode.Text, amountNode.Text, currencyNode.Text), FindingMoneyMalformed)
-	}
-	minor, derr := ParseDecimal(amountNode.Text)
-	if derr != nil {
-		return TypedValue{}, moneyValueError(p, raw, fmt.Errorf("`amount` %q is not a whole number of minor units", amountNode.Text), FindingMoneyMalformed)
-	}
-	// The amount is in minor units at `scale`, so the Decimal is that integer
-	// carrying that scale — no division, no float, exact by construction.
-	value := NewDecimal(minor.Unscaled(), int32(scale.Int64()))
-	return TypedValue{Type: TypeMoney, Raw: raw, Money: Money{Amount: value, Currency: currencyNode.Text}}, nil
-}
-
-// moneyMappingKeys is the CLOSED set of keys a money mapping may carry. It is
-// the same closed set RecordMoney.yaml declares with `additionalProperties:
-// false` — kept here as data, so the Go parser and the wire refuse the same
-// mappings rather than disagreeing about which files are readable.
-var moneyMappingKeys = map[string]struct{}{
-	"amount":   {},
-	"currency": {},
-	"scale":    {},
-}
-
-// unknownMoneyKeys lists every key of a money mapping that is not in that
-// closed set, in the order the author wrote them.
-//
-// Keys is the document order the frontmatter parser records and Fields is what
-// the money parser actually reads from; production fills both, but a key
-// reaching one and not the other is still a key the author wrote, so neither
-// route escapes the check.
-func unknownMoneyKeys(n Node) []string {
-	var unknown []string
-	seen := make(map[string]struct{}, len(n.Keys))
-	for _, k := range n.Keys {
-		if _, dup := seen[k]; dup {
-			continue
-		}
-		seen[k] = struct{}{}
-		if _, known := moneyMappingKeys[k]; !known {
-			unknown = append(unknown, k)
+	case !exact:
+		return TypedValue{}, &ValueError{
+			Code:     FindingIntegerOutOfRange,
+			Reason:   fmt.Sprintf("property %q holds %q, which is outside the range of a 64-bit integer (%d to %d); it is refused rather than truncated or widened to a float", p.Name, n.Text, math.MinInt64, math.MaxInt64),
+			Expected: p.ExpectedShape(),
+			Got:      n.Text,
 		}
 	}
-	// Map iteration has no order, so anything found only here is sorted before
-	// it joins the list — a rejection that reorders itself between runs is not
-	// something an operator can diff.
-	var unordered []string
-	for k := range n.Fields {
-		if _, listed := seen[k]; listed {
-			continue
-		}
-		if _, known := moneyMappingKeys[k]; !known {
-			unordered = append(unordered, k)
-		}
-	}
-	sort.Strings(unordered)
-	return append(unknown, unordered...)
-}
-
-// quoteJoin renders a list of names as `a`, `b`, `c` for a report.
-func quoteJoin(names []string) string {
-	quoted := make([]string, 0, len(names))
-	for _, n := range names {
-		quoted = append(quoted, "`"+n+"`")
-	}
-	return strings.Join(quoted, ", ")
-}
-
-// pluralise adds an "s" for any count that is not one, so a rejection reads as
-// a sentence rather than as "1 keys".
-func pluralise(word string, n int) string {
-	if n == 1 {
-		return word
-	}
-	return word + "s"
-}
-
-func renderMoneyMapping(n Node) string {
-	parts := make([]string, 0, len(n.Keys))
-	for _, k := range n.Keys {
-		parts = append(parts, k+": "+n.Fields[k].Text)
-	}
-	return "{" + strings.Join(parts, ", ") + "}"
-}
-
-func moneyValueError(p *Property, raw string, cause error, code FindingCode) *ValueError {
-	return &ValueError{
-		Code:     code,
-		Reason:   fmt.Sprintf("property %q: %v", p.Name, cause),
-		Expected: p.ExpectedShape(),
-		Got:      raw,
-	}
+	// Re-made at scale 0 from the int64, so an integer value is canonical
+	// however it was spelled: `3`, `3.0` and `3e0` all become the same Decimal,
+	// and R-1's "3 = 3.0 is true" holds without the comparator special-casing
+	// the pair.
+	return TypedValue{Type: TypeInteger, Raw: n.Text, Number: DecimalFromInt64(whole, 0)}, nil
 }

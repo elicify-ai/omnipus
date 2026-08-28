@@ -53,7 +53,9 @@ const (
 	KindScalar
 	// KindSequence is a YAML list. This is what FR-006's arity check turns on.
 	KindSequence
-	// KindMapping is a nested mapping — used by `money`'s explicit form.
+	// KindMapping is a nested mapping. No property type accepts one, so it
+	// exists to be REPORTED: a mapping where a scalar was declared is a shape
+	// error naming the expected shape, never a silent skip.
 	KindMapping
 )
 

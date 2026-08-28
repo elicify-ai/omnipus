@@ -19,29 +19,55 @@ import (
 // stops protecting them. During research a first-attempt overload made `3 > 2`
 // evaluate to FALSE with nothing reporting an error.
 //
-// The defence is spec §8's thirteen rules, R-1..R-13. Every branch below cites the
-// rule it implements, and compare_truthtable_test.go generates its expected
+// The defence is spec §8's thirteen rules, R-1..R-13. Every branch below cites
+// the rule it implements, and compare_truthtable_test.go generates its expected
 // values from those rules — never from this code.
 //
-// HOW THIS RELATES TO filter.go's Compare
+// ---------------------------------------------------------------------------
+// EVERY COMPARISON IS DECIDED HERE, IN GO. SQLITE DECIDES NOTHING.
 //
-// filter.go's `Compare(a, b TypedValue) (int, bool)` is a three-valued ordering
-// over two CONFORMING values, written to serve FR-007/FR-008 matching. It cannot
-// express §8 on its own for three reasons, and this file exists to close them:
+// ADR-068 ruling R-A (revision 7), spec §8.1: "the properties index NARROWS
+// CANDIDATES; our own tested comparator DECIDES." SQLite answers set-membership
+// questions over indexed columns — which notes are `type: deal`, which paths are
+// in scope — and hands back candidate rows. Every predicate in R-1..R-13 is then
+// applied HERE.
 //
-//  1. It has no operand states. R-2 (absent), R-3 (`is absent`) and R-4
-//     (non-conforming) are rules about the OPERAND, not about the ordering, so
-//     they need an operand type that can BE absent. That is PropertyValue.
-//  2. It reports nothing. `ok=false` collapses "different declared types"
-//     (R-1 — an ordinary false), "cross-currency" (R-6 — the query MUST report
-//     the currencies present) and "this operator is not defined for this type"
-//     into one silent false. §3's behavioural contract makes that silence the
-//     defect this ADR exists to remove.
-//  3. It has no per-operator disposition. An ordering exists for every type in
-//     it, including ones no rule gives an order to.
+// That is not a preference, it is the only way three of the rules can hold at
+// all:
+//
+//   - R-2/FR-008. SQL's `NOT` is three-valued, so `NOT(NULL)` is `NULL` and every
+//     absent row falls out of a negation. A Go comparator returning a real
+//     `bool` makes `NOT(false)` true by construction, at any depth of the tree.
+//   - R-10/FR-011a. SQLite's `COLLATE NOCASE`, `LIKE` and `lower()` fold the two
+//     ASCII pairs of the spec's fourteen-pair receipt and ZERO of the twelve
+//     non-ASCII ones; there is no `ENABLE_ICU` in the linked build. Unicode case
+//     folding is something this comparator can deliver and SQLite cannot.
+//   - R-12. Comparison affinity makes `3 = '3'` false between two literals and
+//     true between a column and a literal. One comparator is one provenance.
+//
+// So: no comparison operator, no `LIKE`, no `IN`, no `ORDER BY`, no `GROUP BY`,
+// no aggregate and no `COLLATE` may be emitted into SQL for the purpose of
+// DECIDING anything. If you are adding a code path that pushes a predicate down
+// to the store, you are reintroducing the class of defect this file exists to
+// remove.
+//
+// ---------------------------------------------------------------------------
+// THE OPERATOR VOCABULARY IS SQL'S (ADR-068 O-3 as amended, spec FR-022b)
+//
+// It used to be ours — `eq` / `lt` / `lte` / `gt` / `gte` / `contains` /
+// `is_absent` — and the argument for replacing them is retrieval accuracy, not
+// style: that vocabulary has appeared in a model's training data zero times and
+// SQL's an enormous number of times. A model choosing `LIKE` is recalling; a
+// model choosing `contains` was guessing.
+//
+// O-3 is AMENDED, NOT OVERTURNED. Both halves of its resolution still hold: the
+// filter is a STRUCTURED OBJECT and there is NO PARSER. Only the spelling of the
+// operator inside the JSON changed. `{property: "tags", op: "LIKE", value:
+// "vend%"}` is an object, not a WHERE clause, and nothing in this package
+// recognises SQL text.
 //
 // ADR-068 D0: this file ships MECHANISM. Every record type, property name, enum
-// value, currency and relation target it is exercised with is fixture data.
+// value and relation target it is exercised with is fixture data.
 // ---------------------------------------------------------------------------
 
 // ComparisonProblemCode classifies why a comparison could not compare.
@@ -54,30 +80,26 @@ const (
 	// CompareNonConforming is R-4: a present value that does not conform to its
 	// declared type. False for every operator AND reported. Silence is the defect.
 	CompareNonConforming ComparisonProblemCode = "non_conforming_value"
-	// CompareCrossCurrency is R-6: money compared across currencies. Every
-	// operator is false and the currencies present are named, because a caller
-	// who is not told will read the false as "not greater" (FR-014).
+	// CompareCrossCurrency is R-6: money compared across currencies.
+	//
+	// RETIRING: ruling O-2 (ADR-068 revision 7) deletes the `money` type
+	// outright, and R-6 is retired with it. The code survives only for as long
+	// as TypeMoney does; when the type goes, so do this constant and
+	// crossCurrencyProblem. Nothing new may be built on it.
 	CompareCrossCurrency ComparisonProblemCode = "cross_currency"
 	// CompareOperatorNotDefined is an operator the rules do not define for this
 	// declared type. See operatorDefinedForType for the per-type authority.
 	CompareOperatorNotDefined ComparisonProblemCode = "operator_not_defined_for_type"
-	// CompareArityNotDefined is an operator applied across a list/scalar arity
-	// boundary that §8 does not define. R-9 defines exactly one such case.
+	// CompareArityNotDefined is R-13: an ORDERING operator against a `many`
+	// property. `=`, `<>`, `IN` and `LIKE` are defined there and never produce
+	// this code.
 	CompareArityNotDefined ComparisonProblemCode = "operator_not_defined_across_arity"
-	// CompareEnumSetsDiffer is R-5's precondition failing: the two enum operands
-	// cannot be shown to be drawn from ONE declared value set, so "declared
-	// position" has no shared meaning. That covers two cases — sets that differ,
-	// and an operand carrying NO declared set at all, which is not agreement
-	// with anything (see enumSetsAgree). FR-009 scopes a property to its record
-	// type, so FR-023 validation should reject the first before evaluation; this
-	// is the backstop.
-	CompareEnumSetsDiffer ComparisonProblemCode = "enum_sets_differ"
 	// CompareRelationUnresolved is a relation whose wikilink the index could not
 	// resolve to a record identity. R-8 compares by identity, so without one
 	// there is nothing to compare (ADR-068 O-5: reported as missing, the cause
 	// is not guessed at).
 	CompareRelationUnresolved ComparisonProblemCode = "relation_target_unresolved"
-	// CompareUnknownOperator is an operator outside the declared set.
+	// CompareUnknownOperator is an operator outside FR-022b's closed ten.
 	CompareUnknownOperator ComparisonProblemCode = "unknown_operator"
 )
 
@@ -93,17 +115,34 @@ type ComparisonProblem struct {
 	// Side is "left" or "right" when one operand is responsible, else "".
 	Side string
 	// Currencies lists, sorted, every currency present in a cross-currency
-	// comparison. R-6 requires the query to report them.
+	// comparison. Retiring with R-6 and the `money` type.
 	Currencies []string
 	// Detail is the human sentence.
 	Detail string
+	// Supported lists FR-022b's operators that WOULD have worked here, so a
+	// refusal never leaves the caller guessing. FR-022c: "in every case the
+	// refusal lists the supported operators."
+	Supported []string
+	// Remedy names the parameter or the operator that does the job instead —
+	// `join` for a relation, `group_by` for grouping, `aggregate` for a total.
+	Remedy string
 }
 
 func (p ComparisonProblem) String() string {
+	var b strings.Builder
+	b.WriteString(string(p.Code))
+	b.WriteString(": ")
+	b.WriteString(p.Detail)
 	if len(p.Currencies) > 0 {
-		return string(p.Code) + ": " + p.Detail + " (" + strings.Join(p.Currencies, ", ") + ")"
+		b.WriteString(" (" + strings.Join(p.Currencies, ", ") + ")")
 	}
-	return string(p.Code) + ": " + p.Detail
+	if p.Remedy != "" {
+		b.WriteString("; " + p.Remedy)
+	}
+	if len(p.Supported) > 0 {
+		b.WriteString("; supported operators are " + strings.Join(p.Supported, ", "))
+	}
+	return b.String()
 }
 
 // RelationResolver maps an on-disk wikilink (D5.1) to the record identity the
@@ -132,30 +171,48 @@ type Comparator struct {
 // constructed properly.
 //
 // The ladder below IS the rule precedence. Reordering it changes semantics.
+//
+// ONE PRECEDENCE CHANGE FROM THE PRE-SQL-VOCABULARY VERSION, stated because it
+// is deliberate: the TYPE disposition is now consulted BEFORE the arity rule,
+// where it used to come after. The old order was forced by `contains`, an
+// operator that was undefined for a scalar number and defined against a list of
+// them — so consulting the scalar table first would have refused
+// `sizes contains 3`. FR-022b's vocabulary has no such inversion: `=`, `<>`,
+// `IN` and `LIKE` are defined for a type at BOTH arities, and R-13 removes only
+// the four ordering operators from a `many` property. With the inversion gone,
+// type-first produces the more actionable message — `LIKE` against a `many date`
+// property is refused as "LIKE is not defined for a date property", which is the
+// fix, rather than as an arity complaint the caller cannot act on.
 func (c Comparator) Evaluate(op Operator, left, right PropertyValue) (bool, []ComparisonProblem) {
 	if !isKnownOperator(op) {
-		return false, []ComparisonProblem{{
-			Code:     CompareUnknownOperator,
-			Operator: op,
-			Detail:   fmt.Sprintf("operator %q is not one of the declared operators", string(op)),
-		}}
+		return false, []ComparisonProblem{unknownOperatorProblem(op)}
 	}
 
 	left, right = normalizeOperand(left), normalizeOperand(right)
 
-	// R-3 — `is absent` is true exactly when the property has no value, and false
-	// otherwise. An empty string, an empty list and a zero are values, not
-	// absence; so is a corrupt value (something IS written there, it is wrong).
-	// It is unary: it asks about one property, so the right operand is not read.
-	if op == OpIsAbsent {
+	// R-3 — `IS NULL` is true exactly when the property has no value, and false
+	// otherwise; `IS NOT NULL` is its complement. An empty string, an empty list
+	// and a zero are VALUES, not absence; so is a corrupt value (something IS
+	// written there, it is just wrong).
+	//
+	// These two are unary: they ask about one property, so the right operand is
+	// not read. They are also the ONLY exemptions from R-2 — `<>` is NOT one,
+	// ruled explicitly in spec §8 R-2 (review round 6, C-7), because SQL's
+	// `x <> 'v'` over a NULL `x` excludes the row and adopting SQL's names
+	// without SQL's semantics is exactly what ruling R-B forbids.
+	switch op {
+	case OpIsNull:
 		return left.State == StateAbsent, nil
+	case OpIsNotNull:
+		return left.State != StateAbsent, nil
 	}
 
-	// R-2 — either side absent: false for every remaining operator. Absence is a
-	// legitimate state, not a defect, so nothing is reported. FR-008's rule that
-	// a NEGATIVE filter re-includes absent records is applied a layer up, in
-	// Filter.Match — see filter.go's header. Comparison and matching are two
-	// different things and this is the comparison.
+	// R-2 — either side absent: false for every remaining operator, `<>`
+	// included. Absence is a legitimate state, not a defect, so nothing is
+	// reported. FR-008's rule that a NEGATIVE filter re-includes absent records
+	// is applied a layer up, in Filter.Match — see filter.go's header.
+	// Comparison and matching are two different things and this is the
+	// comparison.
 	if left.State == StateAbsent || right.State == StateAbsent {
 		return false, nil
 	}
@@ -176,14 +233,77 @@ func (c Comparator) Evaluate(op Operator, left, right PropertyValue) (bool, []Co
 	// R-1 — different declared types are false. Never an error, never a
 	// coercion, and deliberately not a reported problem either: `"3" > 2` is an
 	// ordinary false, not a defect in anybody's data.
-	if left.Property.Type != right.Property.Type {
+	//
+	// TWO PAIRS ARE ONE TYPE for this rule and comparisonDomain is where that
+	// lives: `text`/`enum` and `integer`/`decimal`. Every other pair — including
+	// `relation` against `person`, which both hold a wikilink — is different.
+	if comparisonDomain(left.Property.Type) != comparisonDomain(right.Property.Type) {
 		return false, nil
 	}
 
-	if left.Property.Many || right.Property.Many {
-		return c.evaluateAcrossArity(op, left, right)
+	// The type disposition. An operator no rule defines for this declared type
+	// is false AND reported, never a silent false: §3's behavioural contract
+	// makes the silence the defect, and FR-022c requires the refusal to name
+	// what WOULD have worked.
+	if !operatorDefinedForType[left.Property.Type][op] {
+		return false, []ComparisonProblem{operatorNotDefinedProblem(op, left)}
 	}
-	return c.evaluateScalar(op, left.Property.Type, left.Values[0], right.Values[0], left, right)
+
+	// R-13 — the arity rule. Against a `many` property `=`, `<>`, `IN` and
+	// `LIKE` are DEFINED (element-wise, R-9), and only the four ORDERING
+	// operators are refused. The refusal names the remedy, because "not defined"
+	// alone leaves a caller with an empty answer and nothing to do about it.
+	if (left.Property.Many || right.Property.Many) && isOrderingOperator(op) {
+		return false, []ComparisonProblem{{
+			Code:      CompareArityNotDefined,
+			Operator:  op,
+			Type:      left.Property.Type,
+			Property:  manyPropertyName(left, right),
+			Detail:    arityRefusalDetail(op, left, right),
+			Supported: []string{string(OpEqual), string(OpNotEqual), string(OpIn), string(OpLike), string(OpIsNull), string(OpIsNotNull)},
+		}}
+	}
+
+	return c.evaluateElementwise(op, left, right)
+}
+
+// comparisonDomain collapses the declared types that R-1 says are ONE type for
+// comparison purposes onto a single key.
+//
+// R-1, as amended in revision 6: "`text` and `enum` are ONE declared type for
+// comparison purposes, and `integer` and `decimal` are ONE; every other pair is
+// different."
+//
+//   - text/enum. An enum value IS text drawn from a closed set. It folds with the
+//     same function (FR-011a), it sorts with the same lexical rule (R-5), and
+//     refusing `text = enum` would make a filter break the moment an author
+//     tightened a `text` property into an `enum` — a schema change that should
+//     narrow what VALIDATES, not what COMPARES.
+//   - integer/decimal. An author chooses the storage, not a distinct comparison
+//     domain, so `3 = 3.0` is true. R-1 separates text from numbers, not int64
+//     from arbitrary precision.
+//
+// The domain key is deliberately one of the member types rather than a synthetic
+// name, so that operatorDefinedForType can stay keyed by declared type and a
+// reader can look a row up by the name they already have.
+func comparisonDomain(t PropertyType) PropertyType {
+	switch t {
+	case TypeEnum:
+		// An enum compares as the text it is.
+		return TypeText
+	}
+	return t
+}
+
+// isOrderingOperator is R-13's subject: the four operators a list has no answer
+// for. "Is this list greater than `vendor`?" has no answer in any vocabulary,
+// which is the one place R-13's refusal survives ruling R-B.
+func isOrderingOperator(op Operator) bool {
+	switch op {
+	case OpLess, OpLessOrEqual, OpGreater, OpGreaterOrEqual:
+		return true
+	}
+	return false
 }
 
 // normalizeOperand enforces R-11 structurally. A PropertyValue can reach the
@@ -205,6 +325,25 @@ func normalizeOperand(pv PropertyValue) PropertyValue {
 	return pv
 }
 
+func manyPropertyName(left, right PropertyValue) string {
+	if left.Property.Many {
+		return left.Property.Name
+	}
+	return right.Property.Name
+}
+
+// arityRefusalDetail is R-13's message, quoted from the rule itself: "`segment`
+// holds many values; ordering comparisons are not defined over a list — use
+// `=`, `IN` or `LIKE`".
+func arityRefusalDetail(op Operator, left, right PropertyValue) string {
+	name := manyPropertyName(left, right)
+	if name == "" {
+		name = "the property"
+	}
+	return fmt.Sprintf("%q holds many values; ordering comparisons (%s) are not defined over a list — use =, IN or LIKE",
+		name, op)
+}
+
 func nonConformingComparisonProblem(op Operator, side string, pv PropertyValue) ComparisonProblem {
 	return ComparisonProblem{
 		Code:     CompareNonConforming,
@@ -217,112 +356,228 @@ func nonConformingComparisonProblem(op Operator, side string, pv PropertyValue) 
 	}
 }
 
-// evaluateAcrossArity handles a list on either side.
+func operatorNotDefinedProblem(op Operator, pv PropertyValue) ComparisonProblem {
+	return ComparisonProblem{
+		Code:      CompareOperatorNotDefined,
+		Operator:  op,
+		Type:      pv.Property.Type,
+		Property:  pv.Property.Name,
+		Detail:    fmt.Sprintf("no rule in spec §8 defines operator %q for declared type %q", string(op), string(pv.Property.Type)),
+		Supported: definedOperatorNames(pv.Property.Type),
+		Remedy:    unsupportedRemedy(op),
+	}
+}
+
+func unknownOperatorProblem(op Operator) ComparisonProblem {
+	return ComparisonProblem{
+		Code:      CompareUnknownOperator,
+		Operator:  op,
+		Detail:    fmt.Sprintf("%q is not one of the supported operators", string(op)),
+		Supported: OperatorNames(),
+		Remedy:    unsupportedRemedy(op),
+	}
+}
+
+// evaluateElementwise is R-9, generalised to the four operators R-13 defines
+// against a `many` property.
 //
-// R-9 is the only rule §8 states about lists: `contains` on a list is
-// WHOLE-ELEMENT membership, and it is never substring matching. That single
-// sentence is why this function exists rather than the list being flattened into
-// the scalar path — flattening a text list into text `contains` turns
-// `tags contains "Acme"` into a substring match against "Acme Ltd", which is
-// precisely what R-9 forbids.
+// R-9: "Against a `many` property, `=` matches an element exactly and `IN`
+// matches any element of a list; `LIKE` matches an element by pattern."
+// R-13: those operators "mean what R-9 says: element-wise, with the record
+// matching if ANY element matches."
 //
-// R-13 governs everything else here. Against a `many` property only `contains`
-// and `is absent` are defined; equality and ordering are REFUSED, and the
-// refusal must name the remedy so the caller can fix the query rather than
-// puzzle over an empty answer.
+// A scalar operand is a one-element list here, so there is exactly ONE loop and
+// the scalar case is not a separate code path that could drift from the list
+// case. That matters more than it looks: the previous version had membership and
+// scalar equality as two different notions of "equal", and the list one had to
+// be written a second time for every declared type.
 //
-// The rule deliberately does NOT treat `=` as membership. That would be the
-// implicit coercion this design removes everywhere else, and an agent handed a
-// helpful answer to a malformed query never learns the schema. Refusing while
-// naming `contains` is the same shape FR-024 uses for an unknown property.
-//
-// (An earlier comment here read "SPEC GAP, REPORTED NOT RESOLVED: §8 states
-// nothing about any other operator against a list". That was true when written
-// and became false when R-13 was added; the dispositions were already correct,
-// but the message named neither the remedy nor the property.)
-//
-// `contains` with BOTH sides a list is still undefined and still refused —
-// R-9 defines membership of a SCALAR needle in a list, and R-13 defines nothing
-// else against a list. That refusal names its own reason: telling the caller to
-// "use contains" when the operator already IS contains is advice they cannot
-// act on, so arityRefusalDetail special-cases it and names the real remedy —
-// give the needle as a single value.
-func (c Comparator) evaluateAcrossArity(op Operator, left, right PropertyValue) (bool, []ComparisonProblem) {
-	if op == OpContains && left.Property.Many && !right.Property.Many {
-		needle := right.Values[0]
-		for _, item := range left.Values {
-			equal, problems := c.elementsEqual(op, left.Property.Type, item, needle, left, right)
+//   - An empty list is a VALUE and it contains nothing, so zero iterations means
+//     false with nothing reported (R-3 and R-9 agree on this).
+//   - `IN`'s right operand is the list of candidate values. It is therefore the
+//     SAME operation as `=` at this layer, which is exactly what SQL's `IN` is;
+//     the two differ in the shape of the value the FILTER accepts (a scalar
+//     versus a non-empty array — FR-022d), not in what the comparator does.
+//   - A pair the oracle could not compare is REPORTED and the whole comparison
+//     is false. It is never skipped in the hope that a later element matches:
+//     that would return a plausible answer computed over data we know is broken.
+func (c Comparator) evaluateElementwise(op Operator, left, right PropertyValue) (bool, []ComparisonProblem) {
+	if problems := c.declaredMembership(op, left, right); len(problems) > 0 {
+		return false, problems
+	}
+	match := false
+	for _, a := range left.Values {
+		for _, b := range right.Values {
+			ok, problems := c.compareElements(op, a, b, left, right)
 			if len(problems) > 0 {
 				return false, problems
 			}
-			if equal {
-				return true, nil
+			if ok {
+				match = true
 			}
 		}
-		return false, nil
 	}
-	return false, []ComparisonProblem{{
-		Code:     CompareArityNotDefined,
-		Operator: op,
-		Type:     left.Property.Type,
-		Property: left.Property.Name,
-		Detail:   arityRefusalDetail(op, left.Property),
-	}}
+	return match, nil
 }
 
-// arityRefusalDetail builds R-13's message. It names the property and the
-// remedy, because "not defined" alone leaves a caller with an empty answer and
-// no idea what to do about it.
-func arityRefusalDetail(op Operator, p *Property) string {
-	if !p.Many {
-		return fmt.Sprintf("%q holds a single value; %s cannot compare it against a list", p.Name, op)
-	}
-	if op == OpContains {
-		// Reaching here means BOTH sides were lists. "Use contains" would be
-		// advice the caller has already taken; the actionable part is that R-9's
-		// needle is one value, not a list of them.
-		return fmt.Sprintf("%q holds many values; contains tests membership of ONE value in that list, so the value compared against must be a single value, not a list", p.Name)
-	}
-	return fmt.Sprintf("%q holds many values; %s is not defined against a list — use contains", p.Name, op)
-}
-
-// elementsEqual is R-9's whole-element membership test.
+// declaredMembership is R-5's conformance half: "Equality resolves a value
+// case-insensitively to a declared value; a value resolving to none of them is a
+// REPORTED PROBLEM."
 //
-// It is deliberately a DIFFERENT notion from the `eq` operator's disposition:
-// R-9 requires element equality for every declared type, including text, whose
-// scalar `eq` operator no rule defines (see operatorDefinedForType).
-func (c Comparator) elementsEqual(op Operator, typ PropertyType, a, b TypedValue, la, rb PropertyValue) (bool, []ComparisonProblem) {
-	switch typ {
+// It applies to the ENUM side only, and that asymmetry is R-1's, stated
+// verbatim: "A `text` value that is not a declared member of the `enum` still
+// compares (it is a value, not a non-conformance on the text side); the enum
+// side's own non-membership is R-4's business."
+//
+// A property that declares no value set at all is not checked, because there is
+// nothing to check against. Under the pre-R-E design that hole was fatal — R-5
+// ordered by DECLARED POSITION, so a missing set meant a missing ordinal and two
+// values from unrelated vocabularies were silently ranked against each other.
+// Ruling R-E deletes declared position entirely: order is lexical, it needs no
+// set, and CompareEnumSetsDiffer is retired with the machinery it guarded.
+func (c Comparator) declaredMembership(op Operator, left, right PropertyValue) []ComparisonProblem {
+	var problems []ComparisonProblem
+	for _, side := range []struct {
+		name string
+		pv   PropertyValue
+	}{{"left", left}, {"right", right}} {
+		if side.pv.Property.Type != TypeEnum || len(side.pv.Property.Values) == 0 {
+			continue
+		}
+		for _, v := range side.pv.Values {
+			if !enumDeclares(side.pv.Property, v.Enum.Name) {
+				problems = append(problems, enumValueNotDeclaredProblem(op, side.name, v.Enum.Name, side.pv))
+				break
+			}
+		}
+	}
+	return problems
+}
+
+// enumDeclares resolves a spelling to a declared value CASE-INSENSITIVELY
+// (R-5, ruling R-D). Resolving `Won` TO `won` collapses two spellings into one
+// value rather than creating a second, which is the thing ADR-068 D4 actually
+// forbids.
+func enumDeclares(p *Property, name string) bool {
+	want := FoldKey(name)
+	for _, v := range p.Values {
+		if FoldKey(v.Name) == want {
+			return true
+		}
+	}
+	return false
+}
+
+func enumValueNotDeclaredProblem(op Operator, side, value string, pv PropertyValue) ComparisonProblem {
+	return ComparisonProblem{
+		Code:     CompareNonConforming,
+		Operator: op,
+		Type:     TypeEnum,
+		Property: pv.Property.Name,
+		Side:     side,
+		Detail: fmt.Sprintf("%s operand's value %q is not one of the values %q declares (%s), even case-insensitively",
+			side, value, pv.Property.Name, strings.Join(pv.Property.PermittedValues(), ", ")),
+	}
+}
+
+// compareElements is the per-value-pair answer, dispatched on the comparison
+// DOMAIN rather than the declared type, so `text` against `enum` and `integer`
+// against `decimal` take the same branch their domain-mate does (R-1).
+func (c Comparator) compareElements(op Operator, a, b TypedValue, la, rb PropertyValue) (bool, []ComparisonProblem) {
+	switch comparisonDomain(la.Property.Type) {
 	case TypeText:
-		return a.Text == b.Text, nil
-	case TypeEnum:
-		if problems := c.enumSetsAgree(op, la, rb); len(problems) > 0 {
+		return textualAnswer(op, a, b), nil
+	case TypeRelation, TypePerson:
+		// R-8 — by target identity, never by display text. Only equality and
+		// membership reach here; ordering was refused by the disposition.
+		equal, problems := c.relationsEqual(op, a, b, la, rb)
+		if len(problems) > 0 {
 			return false, problems
 		}
-		return a.Enum.Name == b.Enum.Name, nil // R-5: equality is exact-case
-	case TypeNumber:
-		return a.Number.Cmp(b.Number) == 0, nil
+		return equalityAnswer(op, equal), nil
 	case TypeDate:
-		return a.Date.Instant.Equal(b.Date.Instant), nil // R-7
-	case TypeRelation, TypePerson:
-		return c.relationsEqual(op, a, b, la, rb)
+		return orderingHolds(op, compareInstant(a, b)), nil // R-7
+	case TypeNumber:
+		return orderingHolds(op, a.Number.Cmp(b.Number)), nil
 	case TypeMoney:
+		// R-6, retiring with the `money` type (ruling O-2).
 		cmp, ok := CompareMoney(a.Money, b.Money)
 		if !ok {
-			return false, []ComparisonProblem{crossCurrencyProblem(op, a.Money, b.Money, la)} // R-6
+			return false, []ComparisonProblem{crossCurrencyProblem(op, a.Money, b.Money, la)}
 		}
-		return cmp == 0, nil
+		return orderingHolds(op, cmp), nil
 	default:
 		return false, []ComparisonProblem{{
-			Code:     CompareOperatorNotDefined,
-			Operator: op,
-			Type:     typ,
-			Detail:   "membership is not defined for this declared type",
+			Code:      CompareOperatorNotDefined,
+			Operator:  op,
+			Type:      la.Property.Type,
+			Property:  la.Property.Name,
+			Detail:    "declared type has no comparison defined",
+			Supported: OperatorNames(),
 		}}
 	}
 }
 
+// textualForm is the string an operand of the textual domain compares AS: the
+// prose for `text`, the value's own spelling for `enum`. R-1 unifies the two, so
+// there has to be exactly one function that says which string that is.
+func textualForm(v TypedValue) string {
+	if v.Type == TypeEnum {
+		return v.Enum.Name
+	}
+	return v.Text
+}
+
+// textualAnswer is R-5's ordering half and R-10 in full.
+//
+//	R-10  On text, `=` is EXACT and `LIKE` is PATTERNED, `%` and `_` meaning
+//	      what they mean in SQL — and BOTH are case-INSENSITIVE.
+//	R-5   `enum` orders LEXICALLY (ruling R-E; declared position is withdrawn),
+//	      and the sort key is the FOLDED form, not the raw bytes.
+//
+// The fold is FoldKey — `golang.org/x/text/cases.Fold()`, Unicode FULL case
+// folding (FR-011a). `strings.ToLower` and `strings.EqualFold` are FORBIDDEN
+// here and neither is a permitted "simplification": executed, `straße` against
+// `STRASSE` is false under both, the two disagree on Greek final sigma, and
+// `ToLower` collapses Turkish `İ` onto `i`, which is a WRONG MATCH rather than a
+// missing one.
+//
+// ORDERING USES THE FOLDED KEY ALONE, WITH NO TIE-BREAK, and that is deliberate.
+// R-5(d)'s raw-byte tie-break exists so that SORTING a result set is total and
+// deterministic; applying it to the `<` OPERATOR would make `won = Won` true and
+// `won < Won` true at the same time. The two consumers of the order are
+// different: the operator asks "is this less?", the sort asks "which comes
+// first?", and only the second needs to break a tie it is required to resolve.
+// SortByEnumOrder carries the tie-break; this function must not.
+func textualAnswer(op Operator, a, b TypedValue) bool {
+	subject := FoldKey(textualForm(a))
+	if op == OpLike {
+		return likeMatch(subject, textualForm(b))
+	}
+	return orderingHolds(op, strings.Compare(subject, FoldKey(textualForm(b))))
+}
+
+// equalityAnswer maps an element-equality verdict onto the operators that are
+// defined purely in terms of it — everything except the four ordering ones,
+// which never reach here for a type whose disposition refuses them.
+func equalityAnswer(op Operator, equal bool) bool {
+	switch op {
+	case OpEqual, OpIn:
+		return equal
+	case OpNotEqual:
+		return !equal
+	}
+	return false
+}
+
 // relationsEqual is R-8: compare by target identity, never by display text.
+//
+// The identifier the resolver returns is compared BYTE-EXACTLY, with no folding
+// applied, and that is a rule rather than an oversight (R-8, restated in
+// revision 6): folding would make `CO-0142` and `co-0142` one key, and two
+// legitimately distinct targets could then not coexist. The PATH/NAME side is
+// where folding belongs, and it belongs to whoever implements the resolver —
+// which also removes a real macOS-vs-Linux divergence in wikilink resolution.
 func (c Comparator) relationsEqual(op Operator, a, b TypedValue, la, rb PropertyValue) (bool, []ComparisonProblem) {
 	leftID, leftOK := c.resolve(a.Link)
 	rightID, rightOK := c.resolve(b.Link)
@@ -376,226 +631,99 @@ func crossCurrencyProblem(op Operator, a, b Money, pv PropertyValue) ComparisonP
 }
 
 // operatorDefinedForType is the disposition of each operator for each declared
-// type, for SCALAR operands.
+// type. FR-022b's ten operators, seven declared types.
 //
 // AC-8.2: a change to this table is a SPECIFICATION change and must be argued as
 // one. A change that only moves cells in the generated table is an
 // implementation detail. compare_truthtable_test.go states this table a second
 // time, independently, from the rules — so neither copy can drift quietly.
 //
+// IT IS ARITY-INDEPENDENT, which it was not before. It used to be documented as
+// "for SCALAR operands", because `contains` was undefined for a scalar number and
+// defined against a list of them. FR-022b has no such inversion, so this table is
+// now a statement about the DECLARED TYPE alone and R-13 is applied separately,
+// afterwards. TestComparison_DispositionIsArityIndependent holds that.
+//
+// `IS NULL` and `IS NOT NULL` never reach this table: R-3 preempts them in
+// Evaluate, for every type and every arity.
+//
 // Authority, row by row:
 //
-//   - text — ADR-068 D3's type table reads, verbatim: "prose; never validated,
-//     never queried for equality". So neither equality nor ordering is defined,
-//     and R-10 gives `contains` as case-sensitive substring matching.
-//     ** SPEC GAP, REPORTED: §8 itself never says text equality is undefined,
-//     D3 is the only authority for it, schema.go's TypeText comment paraphrases
-//     D3 as "never compared for ordering" (dropping the equality clause), and
-//     R-9 does require whole-element equality for text INSIDE a list. If review
-//     rules that `name = "Acme"` must be ordinary string equality, this is a
-//     one-cell change here and in the test's copy. **
-//   - enum — R-5: ordering by declared position, equality exact-case.
-//   - relation — R-8 gives equality by target identity. No rule gives record
-//     identity an ORDER, so ordering is undefined. SPEC GAP, REPORTED.
+//   - text — R-10, restated by ruling R-B/R-D: "On text, `=` is exact and `LIKE`
+//     is patterned, `%` and `_` meaning what they mean in SQL — and both are
+//     case-INSENSITIVE." Ordering is lexical, inherited from R-5 through R-1's
+//     unification of `text` with `enum`: the two are ONE declared type for
+//     comparison, and a type cannot both have and lack an order. *(This is the
+//     one cell in the table that no rule states in so many words. It is
+//     recorded here as a derived consequence rather than a judgement call: the
+//     alternative — `enum < enum` defined while `text < text` is not — makes
+//     `text < enum` unanswerable, and `sort` is a first-class `vault_find`
+//     parameter over any property.)*
+//   - enum — R-5 as reversed by ruling R-E: a closed set that orders LEXICALLY,
+//     equality resolving case-insensitively to a declared value. Domain order is
+//     expressed by prefixing the values (`1-lead`, `2-qualified`), which is
+//     visible in the operator's own file and does what it appears to do.
+//   - relation — R-8 gives equality by target identity. No rule gives a record
+//     identity an ORDER, and none should: `CO-0002 > CO-0001` is an artefact of
+//     the identifier scheme, not a fact about the records.
 //   - person — ADR-068 D3 defines person as a relation, so it inherits R-8.
 //   - date — R-7: compares as an instant, so ordering and equality both hold.
+//     `LIKE` is NOT defined: SQL would reach it by coercing the date to text,
+//     and this design coerces nothing (R-1).
 //   - number — R-1's own worked example and AC-8.3 ("3 > 2 is TRUE") require the
-//     full ordering family.
-//   - money — R-6: every operator compares, but only within one currency.
-//   - `contains` on any non-text scalar is defined by no rule. SPEC GAP, REPORTED.
-//   - `is_absent` never reaches this table: R-3 preempts it in Evaluate.
+//     full ordering family. `LIKE` is undefined for the same reason as `date`.
+//   - money — R-6, retiring with the type under ruling O-2.
+//
+// `IN` is defined wherever `=` is, and for the same reason: it IS `=` over a set.
 var operatorDefinedForType = map[PropertyType]map[Operator]bool{
 	TypeText: {
-		OpEqual: false, OpLess: false, OpLessOrEqual: false,
-		OpGreater: false, OpGreaterOrEqual: false, OpContains: true,
+		OpEqual: true, OpNotEqual: true,
+		OpLess: true, OpLessOrEqual: true, OpGreater: true, OpGreaterOrEqual: true,
+		OpLike: true, OpIn: true,
 	},
 	TypeEnum: {
-		OpEqual: true, OpLess: true, OpLessOrEqual: true,
-		OpGreater: true, OpGreaterOrEqual: true, OpContains: false,
+		OpEqual: true, OpNotEqual: true,
+		OpLess: true, OpLessOrEqual: true, OpGreater: true, OpGreaterOrEqual: true,
+		OpLike: true, OpIn: true,
 	},
 	TypeRelation: {
-		OpEqual: true, OpLess: false, OpLessOrEqual: false,
-		OpGreater: false, OpGreaterOrEqual: false, OpContains: false,
+		OpEqual: true, OpNotEqual: true,
+		OpLess: false, OpLessOrEqual: false, OpGreater: false, OpGreaterOrEqual: false,
+		OpLike: false, OpIn: true,
 	},
 	TypePerson: {
-		OpEqual: true, OpLess: false, OpLessOrEqual: false,
-		OpGreater: false, OpGreaterOrEqual: false, OpContains: false,
+		OpEqual: true, OpNotEqual: true,
+		OpLess: false, OpLessOrEqual: false, OpGreater: false, OpGreaterOrEqual: false,
+		OpLike: false, OpIn: true,
 	},
 	TypeDate: {
-		OpEqual: true, OpLess: true, OpLessOrEqual: true,
-		OpGreater: true, OpGreaterOrEqual: true, OpContains: false,
+		OpEqual: true, OpNotEqual: true,
+		OpLess: true, OpLessOrEqual: true, OpGreater: true, OpGreaterOrEqual: true,
+		OpLike: false, OpIn: true,
 	},
 	TypeNumber: {
-		OpEqual: true, OpLess: true, OpLessOrEqual: true,
-		OpGreater: true, OpGreaterOrEqual: true, OpContains: false,
+		OpEqual: true, OpNotEqual: true,
+		OpLess: true, OpLessOrEqual: true, OpGreater: true, OpGreaterOrEqual: true,
+		OpLike: false, OpIn: true,
 	},
 	TypeMoney: {
-		OpEqual: true, OpLess: true, OpLessOrEqual: true,
-		OpGreater: true, OpGreaterOrEqual: true, OpContains: false,
+		OpEqual: true, OpNotEqual: true,
+		OpLess: true, OpLessOrEqual: true, OpGreater: true, OpGreaterOrEqual: true,
+		OpLike: false, OpIn: true,
 	},
 }
 
-func (c Comparator) evaluateScalar(op Operator, typ PropertyType, a, b TypedValue, la, rb PropertyValue) (bool, []ComparisonProblem) {
-	if !operatorDefinedForType[typ][op] {
-		return false, []ComparisonProblem{{
-			Code:     CompareOperatorNotDefined,
-			Operator: op,
-			Type:     typ,
-			Property: la.Property.Name,
-			Detail: fmt.Sprintf("no rule in spec §8 defines operator %q for declared type %q",
-				string(op), string(typ)),
-		}}
-	}
-
-	if op == OpContains {
-		// R-10 — `contains` on text is substring matching, CASE-SENSITIVE.
-		return strings.Contains(a.Text, b.Text), nil
-	}
-
-	switch typ {
-	case TypeRelation, TypePerson:
-		// R-8 — by target identity. Only OpEqual is defined here.
-		return c.relationsEqual(op, a, b, la, rb)
-	case TypeEnum:
-		if problems := c.enumSetsAgree(op, la, rb); len(problems) > 0 {
-			return false, problems
-		}
-		if op == OpEqual {
-			return a.Enum.Name == b.Enum.Name, nil // R-5: exact-case equality
-		}
-		return c.enumOrdering(op, a, b, la, rb) // R-5: declared position
-	case TypeMoney:
-		cmp, ok := CompareMoney(a.Money, b.Money)
-		if !ok {
-			return false, []ComparisonProblem{crossCurrencyProblem(op, a.Money, b.Money, la)} // R-6
-		}
-		return orderingHolds(op, cmp), nil
-	case TypeDate:
-		return orderingHolds(op, compareInstant(a, b)), nil // R-7
-	case TypeNumber:
-		return orderingHolds(op, a.Number.Cmp(b.Number)), nil
-	default:
-		return false, []ComparisonProblem{{
-			Code:     CompareOperatorNotDefined,
-			Operator: op,
-			Type:     typ,
-			Detail:   "declared type has no comparison defined",
-		}}
-	}
-}
-
-// enumOrdering is R-5's ordering half, and it exists to keep the package
-// honest about WHERE an enum value's ordinal comes from.
-//
-// There must be exactly ONE way to learn that ordinal, and it is
-// Property.EnumPosition — the index into the property's declared Values. This
-// function therefore ASKS the property; it does not read the EnumValue.Position
-// field off the operand.
-//
-// It used to read the field, and the two authorities agreed only by accident.
-// EnumPosition answers from the declared slice — including by scanning Values
-// when the O(1) cache was never built, which is exactly the Property a consumer
-// gets from a plain struct literal. The Position FIELD is stamped only by the
-// schema loader and NewProperty. So for an externally-built property every
-// Position was the zero value, and `todo < done` came back FALSE with nothing
-// reported, while SortByEnumOrder — which goes through EnumPosition — sorted
-// the same three values correctly. Two answers, one property, no complaint:
-// the silent-wrong-answer class this oracle exists to remove.
-//
-// A name the property does not declare is FR-011 non-conformance, not a
-// position of zero. R-4 already refuses a non-conforming OPERAND; this catches
-// the same defect one level in, where the operand's state says present but the
-// value it carries is not a member of the set its own property declares.
-func (c Comparator) enumOrdering(op Operator, a, b TypedValue, la, rb PropertyValue) (bool, []ComparisonProblem) {
-	leftPos, leftOK := la.Property.EnumPosition(a.Enum.Name)
-	rightPos, rightOK := rb.Property.EnumPosition(b.Enum.Name)
-
-	var problems []ComparisonProblem
-	if !leftOK {
-		problems = append(problems, enumValueNotDeclaredProblem(op, "left", a.Enum.Name, la))
-	}
-	if !rightOK {
-		problems = append(problems, enumValueNotDeclaredProblem(op, "right", b.Enum.Name, rb))
-	}
-	if len(problems) > 0 {
-		return false, problems
-	}
-	return orderingHolds(op, compareInt(leftPos, rightPos)), nil
-}
-
-func enumValueNotDeclaredProblem(op Operator, side, value string, pv PropertyValue) ComparisonProblem {
-	return ComparisonProblem{
-		Code:     CompareNonConforming,
-		Operator: op,
-		Type:     TypeEnum,
-		Property: pv.Property.Name,
-		Side:     side,
-		Detail: fmt.Sprintf("%s operand's value %q is not one of the values %q declares (%s), so R-5's declared position does not exist for it",
-			side, value, pv.Property.Name, strings.Join(pv.Property.PermittedValues(), ", ")),
-	}
-}
-
-// enumSetsAgree enforces R-5's precondition: "declared position" only means
-// something when both operands are drawn from ONE declared set.
-//
-// An EMPTY declared set is not agreement. Two properties that declare no values
-// at all are not "drawn from one set" — they are drawn from no set, and R-5 has
-// nothing to stand on. Treating empty-equals-empty as agreement made the
-// precondition VACUOUSLY satisfiable: filter.go's singletonOperand synthesised
-// both sides as `&Property{Type: v.Type}`, so two enum values from genuinely
-// different declared sets sailed past this check and were then ordered against
-// each other — the exact comparison CompareEnumSetsDiffer exists to refuse.
-func (c Comparator) enumSetsAgree(op Operator, la, rb PropertyValue) []ComparisonProblem {
-	leftSet := la.Property.PermittedValues()
-	rightSet := rb.Property.PermittedValues()
-	if len(leftSet) == 0 || len(rightSet) == 0 {
-		return []ComparisonProblem{enumNoDeclaredSetProblem(op, la, rb)}
-	}
-	if len(leftSet) != len(rightSet) {
-		return []ComparisonProblem{enumSetProblem(op, la)}
-	}
-	for i := range leftSet {
-		if leftSet[i] != rightSet[i] {
-			return []ComparisonProblem{enumSetProblem(op, la)}
+// definedOperatorNames lists, in FR-022b's declared order, the operators that
+// WOULD have worked against this declared type. Every refusal carries it —
+// FR-022c: "in every case the refusal lists the supported operators."
+func definedOperatorNames(t PropertyType) []string {
+	names := make([]string, 0, len(Operators))
+	for _, op := range Operators {
+		if op == OpIsNull || op == OpIsNotNull || operatorDefinedForType[t][op] {
+			names = append(names, string(op))
 		}
 	}
-	return nil
-}
-
-func enumSetProblem(op Operator, pv PropertyValue) ComparisonProblem {
-	return ComparisonProblem{
-		Code:     CompareEnumSetsDiffer,
-		Operator: op,
-		Type:     TypeEnum,
-		Property: pv.Property.Name,
-		Detail:   "the two enum operands are not drawn from one declared value set, so declared position has no shared meaning",
-	}
-}
-
-// enumNoDeclaredSetProblem reports the empty-set half of R-5's precondition. It
-// names the side (or sides) that declared nothing, because "sets differ" would
-// send a caller looking for a mismatch that is not there.
-func enumNoDeclaredSetProblem(op Operator, la, rb PropertyValue) ComparisonProblem {
-	var detail string
-	leftEmpty := len(la.Property.Values) == 0
-	rightEmpty := len(rb.Property.Values) == 0
-	switch {
-	case leftEmpty && rightEmpty:
-		detail = "neither enum operand carries a declared value set, so R-5's declared position has no set to be a position in; compare through the record type's declared property"
-	case leftEmpty:
-		detail = fmt.Sprintf("the left enum operand carries no declared value set, so it cannot be shown to be drawn from the same set as the right (%s)",
-			strings.Join(rb.Property.PermittedValues(), ", "))
-	default:
-		detail = fmt.Sprintf("the right enum operand carries no declared value set, so it cannot be shown to be drawn from the same set as the left (%s)",
-			strings.Join(la.Property.PermittedValues(), ", "))
-	}
-	return ComparisonProblem{
-		Code:     CompareEnumSetsDiffer,
-		Operator: op,
-		Type:     TypeEnum,
-		Property: la.Property.Name,
-		Detail:   detail,
-	}
+	return names
 }
 
 func compareInstant(a, b TypedValue) int {
@@ -608,10 +736,16 @@ func compareInstant(a, b TypedValue) int {
 	return 0
 }
 
+// orderingHolds turns a three-valued comparison into the answer for one
+// operator. `<>` is the negation of `=` HERE, over two present, conforming,
+// same-domain values — which is the only place the two are complements. R-2
+// already removed the absent case, where `<>` is false rather than true.
 func orderingHolds(op Operator, cmp int) bool {
 	switch op {
-	case OpEqual:
+	case OpEqual, OpIn:
 		return cmp == 0
+	case OpNotEqual:
+		return cmp != 0
 	case OpLess:
 		return cmp < 0
 	case OpLessOrEqual:

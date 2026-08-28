@@ -29,7 +29,6 @@ import (
 //	        zero, not false, not an empty list.
 //	FR-011  an enum value outside the declared set is rejected, listing the
 //	        permitted values.
-//	FR-012  a money value with no currency is rejected.
 //	FR-005  a note whose type matches no schema is an ORDINARY NOTE. It is
 //	        reported as unrecognised, with zero findings, and that is success.
 // ---------------------------------------------------------------------------
@@ -61,12 +60,15 @@ const (
 	// FindingNotANumber — a non-numeric value in a numeric property. DS-1's
 	// `PLACEHOLDER — unknown` lands here.
 	FindingNotANumber FindingCode = "not_a_number"
-	// FindingMoneyNoCurrency — FR-012.
-	FindingMoneyNoCurrency FindingCode = "money_missing_currency"
-	// FindingMoneyBadCurrency — a code that is not ISO-4217.
-	FindingMoneyBadCurrency FindingCode = "money_unknown_currency"
-	// FindingMoneyMalformed — a money value that is neither of the accepted forms.
-	FindingMoneyMalformed FindingCode = "money_malformed"
+	// FindingIntegerNotWhole — a fractional value in an `integer` property.
+	// It is a SEPARATE code from FindingNotANumber because `3.5` parses
+	// perfectly well as a number: the fault is the declared type, and the
+	// remedy is to declare the property `decimal`, not to fix the digits.
+	FindingIntegerNotWhole FindingCode = "integer_not_whole"
+	// FindingIntegerOutOfRange — a whole number outside int64 in an `integer`
+	// property (FR-013). D3's "a large identifier silently truncated": it is
+	// refused naming the bound, never saturated and never widened to a float.
+	FindingIntegerOutOfRange FindingCode = "integer_out_of_range"
 	// FindingUndeclaredProperty — a frontmatter key with no declaration. OFF by
 	// default; see ValidateOptions.
 	FindingUndeclaredProperty FindingCode = "undeclared_property"
@@ -592,9 +594,9 @@ func linkTargetIsIdentity(l Wikilink) (string, bool) {
 // the same question asked twice.
 //
 // A REFUSED COMPARISON IS NOT A DUPLICATE, AND NOT A FINDING. The oracle
-// returns a problem rather than a boolean when it cannot decide — mixed
-// currencies in one list (R-6), a link no resolver could place (R-8). Both are
-// legal data. This check reports what it KNOWS repeats; it does not guess, and
+// returns a problem rather than a boolean when it cannot decide — a value that
+// does not conform to its declared type (R-4), a link no resolver could place
+// (R-8). Both are legal data. This check reports what it KNOWS repeats; it does not guess, and
 // it does not convert the oracle's problem into a conformance fault, because
 // neither of those is a fault of THIS record. That disposition is pinned by
 // test, not left to be rediscovered.
