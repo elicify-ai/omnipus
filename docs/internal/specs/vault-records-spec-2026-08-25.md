@@ -1,10 +1,38 @@
 # Vault records — specification
 
-- **Implements:** [ADR-068](../architecture/ADR-068-vault-records-typed-record-layer.md) **revision 6** (2026-08-28; read at `b442a920`, plus **D16.6**, which lands in the same change as this spec revision)
+- **Implements:** [ADR-068](../architecture/ADR-068-vault-records-typed-record-layer.md) **revision 7** (2026-08-28)
 - **Builds on:** [ADR-067](../architecture/ADR-067-omnipus-knowledge-base-and-render-first-preview.md) — `pkg/knowledge` is **reused, never duplicated**
-- **Date:** 2026-08-25; **revised 2026-08-28** to ADR-068 revision 6
+- **Date:** 2026-08-25; **revised 2026-08-28** to ADR-068 revision 7
 - **Branch:** `feat/library-improvements`
-- **Status:** Draft revision 4. Revision 2 followed round-2 review (BLOCK: 8 critical, 21 major); revision 3 realigned to ADR-068 revision 5 — the five-tool `vault_*` surface, the two-index storage resolution, and the retrieval and response-format decisions (D21, D22, D23). **Revision 4 realigns to ADR-068 revision 6**: a **sixth tool** (`vault_configure`), **two named blast-radius criteria** (C-A and C-B) instead of one, a **specified** freshness token, a **platform posture**, a **W0 wave**, and response budgets in **bytes**.
+- **Status:** Draft revision 5. Revision 2 followed round-2 review (BLOCK: 8 critical, 21 major); revision 3 realigned to ADR-068 revision 5; revision 4 realigned to ADR-068 revision 6 — a sixth tool (`vault_configure`), two named blast-radius criteria, a specified freshness token, a platform posture, a W0 wave, and byte budgets. **Revision 5 follows grill pass 1 (BLOCK: 19 critical, 41 major, 17 minor — `vault-records-spec-2026-08-25-review.md`) and three operator rulings that delete work.**
+
+**What revision 5 changes, in one paragraph.** Three operator rulings land first because they remove
+material rather than add it. **(1) There is no `money` type.** The requirement is *"a precise decimal
+datatype and also an integer 64 datatype"*, not a currency-carrying money value — so `money` is
+deleted from the type system, `R-6` is **retired** with its defeats, acceptance criteria and tests,
+and every cross-currency behaviour goes with it. **(2) `number` is replaced by two types the author
+chooses between — `integer` (int64) and `decimal` (exact, arbitrary precision)** — so the index
+column type is decided by the schema and never inferred from the first value seen. **(3)
+Case-insensitive matching is a FEATURE**: SQLite's ASCII-folding `LIKE` and `COLLATE NOCASE` stop
+being defects and become the implementation, `R-10` is rewritten around them, and the prohibition on
+`LIKE` (and its acceptance criterion AC-8.7 and test 39) is deleted. Beyond the rulings, revision 5
+closes the grill's criticals: a **tenth** SQLite violation (join fan-out, §8.1a) that made every
+count and total over a filtered multi-value list wrong; a defeat for **R-7** (dates), which had
+none; **De Morgan normalisation before SQL emission**, without which the R-2 defeat only covers
+leaves; a per-defeat mutation obligation (AC-8.4a); a re-derived freshness ordering, with the part
+that is still not designed carried as a **stated open risk** rather than a fourth assumed mechanism;
+and the ten normative contradictions, nine vacuous acceptance criteria and four wrong citations the
+review names.
+
+**Where the review is wrong, and it is said here rather than silently ignored.**
+
+| Review claim | Verdict |
+|---|---|
+| *"Property type count changes from seven"* (the ruling's framing) | **Arithmetically false, and the spec says so rather than restating a wrong number.** Seven were declared: `text`, `enum`, `relation`, `date`, `number`, `money`, `person`. Deleting `money` and splitting `number` into `integer` and `decimal` is −2 +2. The count stays **seven**; the **membership** changed. Restating "six" or "eight" anywhere would be a new defect. |
+| M-2 — *"FR-110 still lists revision 5's seven doc comments"* | **Upheld**, and corrected to thirteen (FR-110, FR-110a, FR-110b, SC-016). |
+| C-9 — *"§4.1.2 refuses a cross-currency total while §4.2 renders one"* | **Dissolved, not adjudicated.** Under ruling (1) there is no currency, so neither artifact has a subject. Both are rewritten; the contradiction cannot recur because the concept is gone. |
+| C-7 — *"`COLLATE NOCASE` defeats R-10"* | **Inverted by ruling (3).** `NOCASE` is now the specified implementation for text and enum columns. The half of C-7 that survives is real and is kept: `NOCASE` on a **relation-identifier** column collides two distinct ids, so identifier columns stay `BINARY` (§8.1, R-8 row). |
+| M-37 — *"the receipts were taken on `sqlite3` 3.51.0, the shipped engine is 3.53.3"* | **Upheld.** §8.1's receipts are re-taken and the engine is named in place. |
 
 **What revision 3 changed, in one paragraph.** The agent surface is `vault_*` tools split by
 **blast radius**, not nine `record_*` tools and not the nine `knowledge_*` tools shipping today
