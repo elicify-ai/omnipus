@@ -70,6 +70,7 @@ import (
 	"github.com/blevesearch/bleve/v2/index/scorch"
 	bleveMapping "github.com/blevesearch/bleve/v2/mapping"
 	bleveQuery "github.com/blevesearch/bleve/v2/search/query"
+	bleveIndexAPI "github.com/blevesearch/bleve_index_api"
 
 	"github.com/elicify-ai/omnipus/pkg/fileutil"
 )
@@ -170,7 +171,10 @@ type IndexHit struct {
 	Path string
 	// Kind is note or attachment.
 	Kind ScanKind
-	// Score is the BM25 score of the file's BEST segment.
+	// Score is the relevance score of the file's BEST segment. It is a BM25
+	// score because buildIndexMapping sets the scoring model explicitly; bleve's
+	// default is TF-IDF (ADR-068 D21.1). Scores are comparable only within one
+	// result set — BM25 is not normalised across queries or across indexes.
 	Score float64
 	// Offset is the absolute byte offset, within the file, of the start of the
 	// best-scoring segment. FR-050a's query-time excerpt re-read starts here;
@@ -601,11 +605,20 @@ func closeIndexQuietly(bidx bleve.Index, path string) {
 //     the guard that does not depend on this constant being bumped — but a bump
 //     is cheaper to reason about and fires before the index is even opened.
 //
+// Version 2 is the second case: ADR-068 D21.1 set the mapping's ScoringModel to
+// BM25, having found that bleve was scoring TF-IDF everywhere while thirteen
+// places in the tree said otherwise. The scoring model is a property of the
+// PERSISTED mapping, so an index written under version 1 keeps scoring TF-IDF
+// however the code is compiled. Nothing fails; the ranking is simply not the
+// one the code asks for. That is why it is both a bump here and a comparison in
+// mappingDrift — a scoring change that does not force a rebuild is a change
+// that has not happened.
+//
 // A rebuild costs one full re-index of the collection and never costs an answer:
 // the notes on disk are the source of truth and the index is derived data.
 // Getting this wrong in the cautious direction is a slow start-up. Getting it
 // wrong in the other direction is a crash in the gateway.
-const indexFormatVersion = 1
+const indexFormatVersion = 2
 
 // indexFormat is the sidecar's content. It is deliberately one integer: a
 // record with more in it is a record with more ways to disagree with itself,
@@ -718,15 +731,31 @@ func mappingDrift(persisted bleveMapping.IndexMapping) string {
 	impl, ok := persisted.(*bleveMapping.IndexMappingImpl)
 	if !ok {
 		// Every field the code declares has been checked; only the reverse
-		// direction and the dynamic settings are unreachable. Say so out loud
-		// rather than reporting a clean comparison that was not made.
+		// direction, the dynamic settings and the scoring model are
+		// unreachable. Say so out loud rather than reporting a clean
+		// comparison that was not made.
 		slog.Warn("knowledge: persisted mapping is not an IndexMappingImpl; "+
-			"undeclared-field and dynamic-setting drift cannot be checked",
+			"undeclared-field, dynamic-setting and scoring-model drift cannot be checked",
 			"type", fmt.Sprintf("%T", persisted))
 		return ""
 	}
 	if impl.DefaultMapping == nil {
 		return "the persisted mapping has no default document mapping"
+	}
+	// The scoring model decides how every hit is RANKED, and bleve reads it from
+	// this persisted mapping rather than from the mapping the code now builds
+	// (index_impl.go loads the stored mapping at open; isBM25Enabled then asks
+	// that object, not ours). An index written before ADR-068 D21.1 therefore
+	// keeps scoring TF-IDF for the rest of its life with no error and no empty
+	// result to notice — a silent wrong answer, which is the whole reason this
+	// function is a comparison rather than an error check.
+	//
+	// Empty is compared as bleve resolves it, not as a string: "" means
+	// DefaultScoringModel (TF-IDF), so an empty persisted model and an explicit
+	// "tf-idf" are the same index and must not be reported as drift.
+	if gotModel, wantModel := effectiveScoringModel(impl), effectiveScoringModel(want); gotModel != wantModel {
+		return fmt.Sprintf("the persisted mapping scores with %q and the code declares %q",
+			gotModel, wantModel)
 	}
 	if impl.DefaultMapping.Dynamic != want.DefaultMapping.Dynamic {
 		return fmt.Sprintf("the persisted default document mapping has dynamic=%t, the code declares dynamic=%t",
@@ -752,6 +781,23 @@ func mappingDrift(persisted bleveMapping.IndexMapping) string {
 		return fmt.Sprintf("field %q is in the persisted mapping and the code no longer declares it", extra[0])
 	}
 	return ""
+}
+
+// effectiveScoringModel reports the scoring model an index mapping ACTUALLY
+// ranks with, resolving the empty string the way bleve does rather than
+// treating it as a distinct value. bleve's isBM25Enabled tests the field
+// against "bm25" and everything else — empty included — falls through to
+// index.DefaultScoringModel, which is TF-IDF.
+//
+// Comparing the raw strings instead would report drift between an index written
+// with "" and code declaring "tf-idf" when the two rank identically, and a
+// guard that fires on a difference that does not exist is a guard that gets
+// switched off.
+func effectiveScoringModel(m *bleveMapping.IndexMappingImpl) string {
+	if m == nil || m.ScoringModel == "" {
+		return bleveIndexAPI.DefaultScoringModel
+	}
+	return m.ScoringModel
 }
 
 // fieldMappingDrift compares one field's settings. The order of the checks is
@@ -860,8 +906,25 @@ func enforceEntryPermissions(path string, d fs.DirEntry, walkErr error) error {
 // indexing cost to serve queries this package never issues: like
 // pkg/memrooms/index, we query the real fields explicitly, because a match
 // query against _all silently returns nothing when the field analyzers differ.
+//
+// ScoringModel is set EXPLICITLY to BM25 (ADR-068 D21.1). bleve's default is
+// TF-IDF (`DefaultScoringModel = TFIDFScoring`, bleve_index_api
+// indexing_options.go), and leaving this field empty is not "unspecified" — it
+// is a positive choice of TF-IDF, which is what this package shipped with while
+// its own comments claimed BM25. The difference is not cosmetic: BM25 saturates
+// term frequency, so a note that repeats a term twenty times stops accruing
+// score, whereas TF-IDF keeps rewarding it. Over a note collection that is the
+// difference between ranking the note ABOUT a topic first and ranking the note
+// that merely says the word most often first.
+//
+// This is also why indexFormatVersion is bumped alongside it and why
+// mappingDrift compares it: the scoring model is read from the mapping
+// PERSISTED IN THE INDEX (bleve resolves it via isBM25Enabled over the mapping
+// loaded at open, not the mapping the code builds), so without a forced rebuild
+// this line would change nothing whatsoever on any index already on disk.
 func buildIndexMapping() *bleveMapping.IndexMappingImpl {
 	m := bleve.NewIndexMapping()
+	m.ScoringModel = bleveIndexAPI.BM25Scoring
 
 	body := bleve.NewTextFieldMapping()
 	body.Analyzer = "en"
@@ -1391,7 +1454,11 @@ func nameTokensFor(relPath string) string {
 // segment of a very large note could pull the whole index into memory.
 const indexSearchMaxFetch = 2048
 
-// Search runs a BM25 query and returns at most limit results, ONE PER FILE.
+// Search runs a query and returns at most limit results, ONE PER FILE. Hits are
+// scored with BM25, which is in force because buildIndexMapping asks for it by
+// name and the index was built under that mapping — bleve's default is TF-IDF
+// (ADR-068 D21.1), and the model is read from the mapping persisted in the
+// index, not from the one the code holds.
 //
 // FR-034a's segments are an implementation detail of bounded memory and must
 // never reach the caller: a term appearing in three segments of one note is one

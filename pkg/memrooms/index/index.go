@@ -16,8 +16,11 @@
 //   - Documents: one bleve document per memory, using the memory ID as the
 //     document ID. Fields indexed: title (keyword+text), body (text), tags (text),
 //     type (keyword), status (keyword), author (keyword).
-//   - Recall: BM25 ranking via bleve's default BM25 scorer. Top-N results
-//     returned as []SearchHit with (ID, Score).
+//   - Recall: BM25 ranking. bleve's DEFAULT scorer is TF-IDF, not BM25
+//     (`DefaultScoringModel = TFIDFScoring`), so buildMapping sets
+//     ScoringModel to BM25 explicitly — see ADR-068 D21.1, which found this
+//     package scoring TF-IDF while this comment claimed otherwise. Top-N
+//     results returned as []SearchHit with (ID, Score).
 //
 // This package does NOT import pkg/agent or pkg/tools — it only knows about
 // pkg/memrooms types.
@@ -37,6 +40,7 @@ import (
 	"github.com/blevesearch/bleve/v2/index/scorch"
 	bleveMapping "github.com/blevesearch/bleve/v2/mapping"
 	bleveQuery "github.com/blevesearch/bleve/v2/search/query"
+	bleveIndexAPI "github.com/blevesearch/bleve_index_api"
 
 	"github.com/elicify-ai/omnipus/pkg/memrooms"
 )
@@ -64,7 +68,8 @@ const (
 type SearchHit struct {
 	// ID is the memory ID (filename without .md extension).
 	ID string
-	// Score is the BM25 relevance score (higher = more relevant).
+	// Score is the BM25 relevance score (higher = more relevant). BM25 is in
+	// force only because buildMapping asks for it by name; see ADR-068 D21.1.
 	Score float64
 }
 
@@ -85,7 +90,16 @@ const boltOpenTimeout = "5s"
 // because scorch is internally goroutine-safe for concurrent reads + a single
 // serialized writer (mu).
 type RoomIndex struct {
+	// handleMu guards the idx POINTER, not the index's own concurrency (scorch
+	// handles that itself). Rebuild replaces the handle — it must recreate the
+	// index directory, because the mapping is fixed at creation and re-adding
+	// documents to an already-open index cannot change it — so the pointer is
+	// no longer write-once and the lock-free reads in Search/DocCount would be
+	// a data race. Readers take RLock for the duration of their call, which
+	// also closes the pre-existing use-after-Close window on the same field.
+	handleMu    sync.RWMutex
 	idx         bleve.Index
+	idxPath     string
 	memoriesDir string
 	mu          sync.Mutex // serializes Index() / Rebuild() calls
 
@@ -126,7 +140,7 @@ func OpenOrCreate(room memrooms.Room) (*RoomIndex, error) {
 			}
 		}
 
-		ri := &RoomIndex{idx: idx, memoriesDir: room.MemoriesDir}
+		ri := &RoomIndex{idx: idx, idxPath: idxPath, memoriesDir: room.MemoriesDir}
 
 		// Rebuild index content from .md sources if the index is empty.
 		// This handles the case where the index dir was deleted externally.
@@ -174,14 +188,75 @@ func openOrCreateAt(idxPath string) (bleve.Index, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The mapping written at creation is authoritative for the life of the
+	// index: bleve.OpenUsing takes no mapping argument, and bleve resolves the
+	// scoring model from that persisted object rather than from the mapping
+	// this code builds now. An index created before ADR-068 D21.1 therefore
+	// goes on scoring TF-IDF forever, with no error and no empty result to
+	// notice. Nothing else in this package looks for that, so without this
+	// check the D21.1 fix would apply only to rooms created after it shipped.
+	if drift := mappingScoringDrift(idx.Mapping()); drift != "" {
+		slog.Warn("memrooms/index: index on disk was built with a different scoring model; rebuilding",
+			"path", idxPath, "reason", drift)
+		if closeErr := idx.Close(); closeErr != nil {
+			return nil, fmt.Errorf("memrooms/index: close stale-scoring index %s: %w", idxPath, closeErr)
+		}
+		if rmErr := os.RemoveAll(idxPath); rmErr != nil {
+			return nil, fmt.Errorf("memrooms/index: remove stale-scoring index %s: %w", idxPath, rmErr)
+		}
+		return bleve.NewUsing(idxPath, buildMapping(), scorch.Name, scorch.Name, scorchOpenConfig())
+	}
 	return idx, nil
+}
+
+// mappingScoringDrift reports, in a sentence, why the scoring model persisted
+// in an index differs from the one buildMapping now declares — or "" when they
+// agree.
+//
+// It compares the EFFECTIVE model rather than the raw string, because bleve
+// treats the empty string as DefaultScoringModel: an index written with "" and
+// code declaring "tf-idf" rank identically and must not be reported as drift.
+// A guard that fires on a difference that does not exist is a guard somebody
+// switches off.
+func mappingScoringDrift(persisted bleveMapping.IndexMapping) string {
+	got, ok := persisted.(*bleveMapping.IndexMappingImpl)
+	if !ok {
+		// Say so rather than reporting a clean comparison that was not made.
+		slog.Warn("memrooms/index: persisted mapping is not an IndexMappingImpl; "+
+			"scoring-model drift cannot be checked",
+			"type", fmt.Sprintf("%T", persisted))
+		return ""
+	}
+	gotModel, wantModel := effectiveScoringModel(got), effectiveScoringModel(buildMapping())
+	if gotModel == wantModel {
+		return ""
+	}
+	return fmt.Sprintf("the persisted mapping scores with %q and the code declares %q", gotModel, wantModel)
+}
+
+// effectiveScoringModel resolves an index mapping's scoring model the way bleve
+// does: anything that is not exactly "bm25" — the empty string included — falls
+// through to index.DefaultScoringModel, which is TF-IDF.
+func effectiveScoringModel(m *bleveMapping.IndexMappingImpl) string {
+	if m == nil || m.ScoringModel == "" {
+		return bleveIndexAPI.DefaultScoringModel
+	}
+	return m.ScoringModel
 }
 
 // buildMapping returns the bleve IndexMapping for memory documents.
 // Text fields use the default "en" analyzer (Porter stemmer + stopwords).
 // Keyword fields use keyword analyzer (exact match, no stemming).
+//
+// ScoringModel is set EXPLICITLY (ADR-068 D21.1). Leaving it empty selects
+// bleve's default, which is TF-IDF, not BM25 — this package ranked memory
+// recall with TF-IDF for its whole life while five comments in this file said
+// BM25. The scoring model is a property of the mapping PERSISTED in the index,
+// so it is also what mappingScoringDrift compares at open: an index created
+// before this line keeps scoring TF-IDF no matter how the code is compiled.
 func buildMapping() *bleveMapping.IndexMappingImpl {
 	m := bleve.NewIndexMapping()
+	m.ScoringModel = bleveIndexAPI.BM25Scoring
 
 	textField := bleve.NewTextFieldMapping()
 	textField.Analyzer = "en"
@@ -246,8 +321,9 @@ func (ri *RoomIndex) Delete(id string) error {
 	return nil
 }
 
-// Search executes a BM25 full-text query against the index.
-// Returns up to limit results ordered by descending BM25 score.
+// Search executes a full-text query against the index, scored with BM25 as
+// requested by buildMapping (bleve's own default is TF-IDF — ADR-068 D21.1).
+// Returns up to limit results ordered by descending score.
 // When query is empty, returns all documents (unranked, up to limit).
 // Safe for concurrent reads.
 func (ri *RoomIndex) Search(query string, limit int) ([]SearchHit, error) {
@@ -264,7 +340,7 @@ func (ri *RoomIndex) Search(query string, limit int) ([]SearchHit, error) {
 		mq := bleve.NewMatchAllQuery()
 		req = bleve.NewSearchRequestOptions(mq, limit, 0, false)
 	} else {
-		// BM25 over the text fields explicitly (title, body, tags).
+		// Query the text fields explicitly (title, body, tags).
 		// We build a disjunction of per-field match queries so that the
 		// "en" analyzer mapping is honored for each field.  A plain
 		// bleve.NewMatchQuery targets the _all composite field whose
@@ -281,7 +357,12 @@ func (ri *RoomIndex) Search(query string, limit int) ([]SearchHit, error) {
 	}
 	req.Fields = []string{} // scores only — we fetch full content from .md
 
+	// RLock for the whole call: Rebuild swaps the handle and closes the old one,
+	// so reading the pointer and then using it without the lock would race with
+	// a rebuild and could search an index that has just been closed.
+	ri.handleMu.RLock()
 	res, err := ri.idx.Search(req)
+	ri.handleMu.RUnlock()
 	if err != nil {
 		return nil, fmt.Errorf("memrooms/index: search %q: %w", query, err)
 	}
@@ -296,9 +377,49 @@ func (ri *RoomIndex) Search(query string, limit int) ([]SearchHit, error) {
 // Rebuild wipes and recreates the bleve index from the room's .md files.
 // Call this after corruption or when the index is suspected stale.
 // Safe to call concurrently — serialized by the internal mu lock.
+//
+// It recreates the index DIRECTORY, not just its contents. That distinction is
+// the whole point: bleve fixes a mapping at creation and bleve.OpenUsing takes
+// no mapping argument, so re-adding every document to an already-open index —
+// which is what this method used to do — leaves the old mapping, the old
+// analyzers and the old scoring model exactly where they were. A rebuild that
+// cannot pick up a mapping change is a rebuild in name only, and it sat next to
+// the ADR-068 D21.1 scoring defect it would have been asked to repair.
+//
+// If recreation fails the handle is left closed and every later call errors,
+// which is the honest outcome: a RoomIndex whose directory has been removed and
+// not recreated has nothing to search, and reporting success would be the
+// silent-empty-result failure this package keeps having to design against.
 func (ri *RoomIndex) Rebuild() error {
 	ri.mu.Lock()
 	defer ri.mu.Unlock()
+
+	if ri.idxPath == "" {
+		// No path to recreate from: repopulate in place and say why the mapping
+		// is not refreshed, rather than pretending a full rebuild happened.
+		slog.Warn("memrooms/index: rebuilding contents only; index path unknown so the mapping is not refreshed",
+			"memories_dir", ri.memoriesDir)
+		return ri.rebuildLocked()
+	}
+
+	ri.handleMu.Lock()
+	defer ri.handleMu.Unlock()
+
+	if err := ri.idx.Close(); err != nil {
+		return fmt.Errorf("memrooms/index: close index before rebuild %s: %w", ri.idxPath, err)
+	}
+	if err := os.RemoveAll(ri.idxPath); err != nil {
+		return fmt.Errorf("memrooms/index: remove index for rebuild %s: %w", ri.idxPath, err)
+	}
+	if err := os.MkdirAll(filepath.Dir(ri.idxPath), 0o700); err != nil {
+		return fmt.Errorf("memrooms/index: create index parent dir %s: %w", filepath.Dir(ri.idxPath), err)
+	}
+	fresh, err := bleve.NewUsing(ri.idxPath, buildMapping(), scorch.Name, scorch.Name, scorchOpenConfig())
+	if err != nil {
+		return fmt.Errorf("memrooms/index: recreate index %s: %w", ri.idxPath, err)
+	}
+	ri.idx = fresh
+
 	return ri.rebuildLocked()
 }
 
@@ -336,6 +457,8 @@ func (ri *RoomIndex) rebuildLocked() error {
 
 // DocCount returns the number of indexed documents. Useful for diagnostics.
 func (ri *RoomIndex) DocCount() (uint64, error) {
+	ri.handleMu.RLock()
+	defer ri.handleMu.RUnlock()
 	return ri.idx.DocCount()
 }
 
@@ -360,6 +483,11 @@ func (ri *RoomIndex) Close() error {
 func (ri *RoomIndex) closeUnderlying() error {
 	ri.mu.Lock()
 	defer ri.mu.Unlock()
+	// handleMu too, so a Search already in flight finishes against a live index
+	// rather than one closed underneath it. Index/Delete need no handleMu: mu
+	// already serializes them against Rebuild, the only writer of the pointer.
+	ri.handleMu.Lock()
+	defer ri.handleMu.Unlock()
 	if err := ri.idx.Close(); err != nil {
 		return fmt.Errorf("memrooms/index: close: %w", err)
 	}

@@ -298,7 +298,13 @@ func (ms *MemoryStore) roomIndexLocked(room memrooms.Room) *memindex.RoomIndex {
 	var openErr error
 	ri, openErr = memindex.OpenOrCreate(room)
 	if openErr != nil {
-		logger.WarnCF("agent.memory", "roomIndex: failed to open bleve index; BM25 disabled for room",
+		// Say what the operator loses, not which algorithm stops. Until ADR-068
+		// D21.1 this line read "BM25 disabled for room", which was untrue twice
+		// over: bleve was scoring TF-IDF, and "disabled" implied a ranked search
+		// the operator had and has now lost. What actually happens is that
+		// recall falls back to an unranked substring scan.
+		logger.WarnCF("agent.memory",
+			"roomIndex: failed to open bleve index; recall for this room falls back to unranked substring scan",
 			map[string]any{"room_root": room.Root, "error": openErr.Error()})
 		return nil
 	}
@@ -617,8 +623,11 @@ func (ms *MemoryStore) SearchEntries(query string, limit int) ([]LongTermEntry, 
 	return ms.SearchEntriesInScope(query, limit, memrooms.RoomScopeBoth)
 }
 
-// SearchEntriesInScope searches the specified room scope for query using bleve BM25 (FR-7.4).
-// Falls back to substring scan when the bleve index is unavailable.
+// SearchEntriesInScope searches the specified room scope for query using the
+// bleve index (FR-7.4), which ranks with BM25 — but only because
+// pkg/memrooms/index's mapping asks for it by name; bleve's own default is
+// TF-IDF (ADR-068 D21.1).
+// Falls back to an unranked substring scan when the bleve index is unavailable.
 // On each successful recall, appends a CounterRecord (op=access) to counters.jsonl (FR-7.5).
 func (ms *MemoryStore) SearchEntriesInScope(
 	query string,
@@ -671,7 +680,8 @@ func (ms *MemoryStore) SearchEntriesInScope(
 
 	for _, t := range targets {
 		if t.ri != nil {
-			// BM25 path (FR-7.4). Hold indexMu across the Search() call to guard
+			// Ranked-index path (FR-7.4; BM25 per the mapping — ADR-068 D21.1).
+			// Hold indexMu across the Search() call to guard
 			// the bleve index against a concurrent Close(): Close() closes every
 			// RoomIndex under indexMu, so releasing the lock before t.ri.Search()
 			// would risk a use-after-close. This mirrors the append path
@@ -743,7 +753,9 @@ func (ms *MemoryStore) SearchEntriesInScope(
 		}
 	}
 
-	// Sort by BM25 score descending (ties: newest-first by mtime).
+	// Sort by index relevance score descending (ties: newest-first by mtime).
+	// The scores are bleve's, so they are BM25 for any index built since
+	// ADR-068 D21.1 set the mapping's scoring model, and TF-IDF before it.
 	dirs := make([]string, 0, len(targets))
 	for _, t := range targets {
 		dirs = append(dirs, t.room.MemoriesDir)
