@@ -1,0 +1,85 @@
+title: VaultFindRow
+description: >
+  One row of a `vault_find` answer (spec 4.2, D22.4 as amended by ADR-068 D15.3).
+
+  A row is ONE REAL THING AT A PATH — a note, or a checkbox line within one.
+  The checkbox case is a deliberate, narrow amendment rather than a silent
+  absorption: `kind: task` returns many rows per file, so a task row carries
+  `line` and `status` and renders with its line number, and a reader is
+  therefore never able to mistake it for the note that contains it.
+type: object
+additionalProperties: false
+required:
+  - path
+  - title
+  - cells
+  - joins
+properties:
+  id:
+    type: string
+    minLength: 1
+    description: >
+      The record identifier, byte-exact and NEVER case-folded: `CO-0142` and
+      `co-0142` are two distinct records (R-8). Absent on an ordinary note,
+      which is the majority of every real vault and not an error (FR-005) —
+      such a row is addressed by `path`.
+    example: "DEAL-0117"
+  path:
+    type: string
+    minLength: 1
+    description: >
+      The vault-relative path. Always present, because it is what the caller
+      passes to `vault_read` next, and a row a caller cannot address is a row
+      that ends the loop.
+    example: "Deals/DEAL-0117.md"
+  title:
+    type: string
+    description: >
+      The note's display title.
+    example: "Acme renewal FY27"
+  line:
+    type: integer
+    minimum: 1
+    description: >
+      TASK ROWS ONLY. The 1-based line of the checkbox, counted from the first
+      byte of the file including any frontmatter block, because that is the
+      line the operator's editor shows.
+    example: 42
+  status:
+    type: string
+    enum: [open, done]
+    description: TASK ROWS ONLY. The checkbox state.
+    example: "open"
+  text:
+    type: string
+    description: TASK ROWS ONLY. The checkbox text, trimmed.
+    example: "chase the renewal quote"
+  cells:
+    type: array
+    description: >
+      The row's OWN columns, in `select` order or the schema's declaration
+      order. Always present — an empty array, never null.
+    items:
+      $ref: "./VaultFindCell.yaml"
+      x-go-type: VaultFindCell
+  joins:
+    type: array
+    description: >
+      Values borrowed through a relation, rendered visibly as borrowed and
+      never merged into `cells`. Always present — an empty array, never null.
+    items:
+      $ref: "./VaultFindJoin.yaml"
+      x-go-type: VaultFindJoin
+  stale:
+    type: boolean
+    description: >
+      True when this row's `source_hash` does not agree with the text index's,
+      or when either side holds no hash at all. Omitted means the two indexes
+      agree.
+
+
+      The reason a stale row is RETURNED and FLAGGED rather than dropped is
+      that dropping it would make the answer quietly smaller with nothing
+      saying so. A flagged row moves the response's completeness verdict to
+      `no` and appears in `problems` by name.
+    example: true

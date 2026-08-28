@@ -302,6 +302,395 @@ components:
       $ref: ./components/schemas/RelationWriteRequest.yaml
     ViewDef:
       $ref: ./components/schemas/ViewDef.yaml
+    # ── vault_find — ADR-068 D15.3, spec 4.1.2 and 4.2 ──────────────────────
+    # The ONE retrieval path. These types supersede the RecordQuery* family
+    # above for the agent-facing surface: that family predates ruling R-B (the
+    # SQL operator vocabulary) and ruling R-E (lexical enum order), and spec
+    # section 10a marks it for deletion once its last consumer is gone. It is
+    # left generated here rather than deleted in the same change, because
+    # deleting a contract and writing its replacement in one commit leaves no
+    # revision in which either can be reviewed against the other.
+    #
+    # TWO OF THESE ARE HOSTED INLINE, and it is the ADR-034 exception rather
+    # than a lapse. VaultFilterNode is RECURSIVE, and oapi-codegen v2.7.0
+    # inlines a cross-file $ref at its use site — so a cross-file SELF-ref
+    # expands until the generator dies with a stack overflow (measured: it does,
+    # every time). An internal '#/components/schemas/...' ref resolves to the
+    # named type instead, so VaultFilterNode and the request that references it
+    # live here. Everything non-recursive stays one-file-per-schema as usual.
+    #
+    # VaultFindGroup deliberately does NOT recurse: its second level is the
+    # distinct, childless VaultFindSubgroup. Two levels is the stated limit
+    # (FR-027), and a self-referential schema would advertise a nesting depth
+    # the engine refuses.
+    VaultFindRequest:
+      title: VaultFindRequest
+      description: >
+        A call to `vault_find` — the ONE retrieval path (ADR-068 D15.3, spec 4.1.2).
+        It absorbs `record_query`, `record_explain`, `knowledge_search`,
+        `knowledge_tasks` and link-neighbourhood traversal. There is no second
+        retrieval tool, and there is no call shape that returns rows without the
+        verdict on them.
+
+        HOSTED INLINE rather than in its own file because it references the recursive
+        VaultFilterNode by internal `#/components/schemas/` reference — see that
+        schema's note for why a cross-file reference cannot be used there.
+
+        A parameter name this schema does not declare is REFUSED listing the accepted
+        names (FR-022c), never ignored. Silently dropping an argument is how a caller
+        comes to believe a constraint was applied that never was.
+
+        Scope is not negotiable by the caller. Every vault tool resolves through the
+        CALLING AGENT'S workspace (FR-060); notes in a vault mounted only into another
+        workspace are invisible, and that case is deliberately indistinguishable from
+        an empty vault (FR-062) so the error channel cannot be used to probe for what
+        the caller may not see. Scope is resolved BEFORE any refusal is built, so the
+        valid-names list in an error can never disclose a schema outside it.
+      type: object
+      additionalProperties: false
+      properties:
+        words:
+          type: string
+          minLength: 1
+          description: >
+            Free text, ranked (FR-112). Composes with every other parameter: the
+            answer is the INTERSECTION, never a union. When `words` finds nothing the
+            response reports the vocabulary the index actually holds and STOPS there
+            — it does not broaden the query on the caller's behalf (FR-114), because
+            a user who searched for one thing and silently received results for a
+            broader thing has been given a wrong answer with no error channel.
+          example: "pricing"
+        type:
+          type: string
+          minLength: 1
+          description: >
+            The record type to search. Unknown → refusal listing the declared types
+            (FR-024), never an empty result.
+          example: "deal"
+        kind:
+          type: string
+          enum: [note, record, task, attachment]
+          description: >
+            What sort of row to return. Omitted means `note`.
+
+
+            `task` is the replacement for `knowledge_tasks` and it returns CHECKBOX
+            LINES, not notes: each row carries `path`, `line`, `status` and `text`,
+            and renders with its line number so a reader can never mistake it for the
+            note that contains it (FR-076a). This narrowly amends the rule that a row
+            is one note: a row is one real THING AT A PATH — a note, or a checkbox
+            line within one. The whole-collection regex walk that `knowledge_tasks`
+            performed does not survive; checkboxes are indexed, so the ordinary
+            bounds apply and the old 5,000-file read cap is gone.
+          example: "task"
+        filter:
+          description: >
+            A structured filter tree. Applied AFTER `view` when both are given, so a
+            saved view is refined rather than replaced.
+          allOf:
+            - $ref: '#/components/schemas/VaultFilterNode'
+        view:
+          type: string
+          minLength: 1
+          description: >
+            A saved view, applied first. Unknown name → refusal listing the saved
+            views in scope.
+          example: "open-pipeline"
+        near:
+          type: string
+          minLength: 1
+          description: >
+            A note path or wikilink. Restricts the answer to notes within `hops` link
+            steps of it. It COMPOSES with `words` and `filter` — that composition is
+            the capability worth having, and no system this design surveyed can
+            express it: each has text search OR graph traversal, none composes them.
+          example: "Companies/Acme Ltd.md"
+        hops:
+          type: integer
+          minimum: 1
+          maximum: 2
+          description: >
+            Link steps from `near`. Meaningful only with `near`; omitted means 1. A
+            third hop is REFUSED naming the limit and the remedy (FR-065) rather than
+            walked implicitly, because a deeper traversal is a follow-up query the
+            caller should make knowingly.
+          example: 2
+        join:
+          type: array
+          description: >
+            Relation properties whose columns to BORROW onto each row (FR-124). A
+            borrowed value renders visibly as borrowed and is never merged into the
+            row's own columns: it is not a property of this record and must never
+            read as one.
+          items:
+            type: string
+            minLength: 1
+          example: ["company"]
+        group_by:
+          type: array
+          maxItems: 2
+          description: >
+            Group the answer, outermost first. Two levels (FR-027); grouping by a
+            relation is supported (FR-029); a record holding several values appears
+            in every group it belongs to (FR-028).
+          items:
+            type: string
+            minLength: 1
+          example: ["company", "status"]
+        sort:
+          type: array
+          description: >
+            Sort keys in order. Omitted sorts by relevance.
+
+
+            An enum sorts LEXICALLY over its case-folded form, so `Won`, `won` and
+            `WON` sort together exactly as they group together (ruling R-E, R-5c);
+            ties on the folded key break on raw bytes so the order is deterministic.
+            There is no declared-position ordinal — a domain order is expressed by
+            prefixing the declared values (`1-lead`, `2-qualified`), which is visible
+            in the operator's own file and does exactly what it appears to do.
+
+
+            The sort is computed in Go by the comparator, never by an emitted
+            `ORDER BY` (ruling R-A).
+          items:
+            $ref: "./components/schemas/VaultFindSort.yaml"
+            x-go-type: VaultFindSort
+        select:
+          type: array
+          description: >
+            Which properties to render as columns. Omitted uses the schema's own
+            declaration order, so a report reads the way the operator wrote it.
+            Narrowing this changes what is RENDERED, never what is matched.
+          items:
+            type: string
+            minLength: 1
+          example: ["status", "arr"]
+        aggregate:
+          type: array
+          description: >
+            Totals to compute. Each states its own scope in the rendered response; a
+            total that does not say what it covers is a bare number (FR-125). Every
+            total is computed over the FULL EVALUATED SET, never over the rendered
+            page (FR-125a). No total is returned over a refused candidate set.
+          items:
+            $ref: "./components/schemas/VaultFindAggregate.yaml"
+            x-go-type: VaultFindAggregate
+        explain:
+          type: boolean
+          description: >
+            Report the plan and EVALUATE NOTHING (FR-073). Omitted means false.
+
+
+            An `explain` response names every property the query touches and the
+            index each would be answered from, performs ZERO candidate retrievals,
+            and carries no `index_epoch` — a plan is not a result, so it should not
+            observe an epoch at all. Two `explain` calls over an unchanged schema are
+            byte-identical, including across a corpus mutation, which is what makes
+            the assertion capable of failing against an implementation that quietly
+            evaluates.
+          example: true
+        limit:
+          type: integer
+          minimum: 1
+          description: >
+            Rows per page. Omitted means 50. A value above the cap of 200 is CLAMPED
+            and the clamp is REPORTED (FR-063) — deliberately no `maximum` here, so
+            an over-large request comes back with a stated clamp rather than a bare
+            schema error that says nothing about what was applied.
+          example: 50
+        cursor:
+          type: string
+          minLength: 1
+          description: >
+            Opaque pagination cursor from a previous response. A cursor that cannot
+            be honoured is an ERROR naming the epoch it was issued against
+            (FR-020c), never a silent restart — a silent restart returns page one
+            while the caller believes it is reading page four.
+          example: "c2FnZTI"
+        detail:
+          type: string
+          enum: [minimal, standard]
+          description: >
+            Rendering density. Omitted means `standard`. `minimal` drops columns and
+            borrowed values to roughly 80 bytes per hit; the completeness header and
+            the problem COUNT always survive the trim, because the caveat is the one
+            thing a shorter answer must not lose.
+          example: "minimal"
+    VaultFilterNode:
+      title: VaultFilterNode
+      description: >
+        One node of a `vault_find` filter tree (ADR-068 D15.3, spec FR-022, ruling
+        R-B). A node is EITHER a boolean combinator — `all`, `any`, `not` — OR a leaf
+        carrying `property`, `op` and `value`. Exactly one form per node; a node that
+        sets both a combinator and a leaf field is REFUSED, never silently resolved to
+        one of them.
+
+        HOSTED INLINE HERE, NOT IN ITS OWN FILE, and the reason is mechanical: this
+        schema is RECURSIVE — `all`, `any` and `not` take VaultFilterNode children —
+        and oapi-codegen v2.7.0 INLINES a cross-file $ref at its use site, so a
+        cross-file SELF-reference expands until the generator dies with a stack
+        overflow. An internal `#/components/schemas/` reference resolves to the named
+        type instead. This is the same exception, for the same reason, that ADR-034
+        records for the discriminated unions.
+
+        THE OPERATORS ARE SQL'S, AND THAT IS THE WHOLE POINT (ruling R-B, revision 5).
+        They replaced seven we invented — `eq`, `lt`, `lte`, `gt`, `gte`, `contains`,
+        `is_absent` — and the argument is retrieval accuracy rather than style: our
+        vocabulary has appeared in a model's training data zero times and SQL's an
+        enormous number of times, so a model reaching for `LIKE` is recalling where a
+        model reaching for `contains` was guessing.
+
+        BOTH HALVES OF ADR-068 O-3 STILL HOLD, AMENDED NOT OVERTURNED. This is a
+        STRUCTURED OBJECT and there is NO PARSER. Nothing recognises SQL text. A model
+        fluent in SQL that puts `JOIN`, `BETWEEN`, `COALESCE`, a `CASE` or a subquery
+        in the operator position is REFUSED BY NAME, listing the ten supported
+        operators and naming the parameter that does the job instead (FR-022c) — never
+        parsed, never silently dropped, and never answered with an empty result set.
+
+        AND NOTHING HERE IS EVALUATED BY SQLITE (ruling R-A). The properties index
+        narrows candidates on record type, note kind and path prefix; every comparison
+        in this tree is then decided in Go by the tested comparator. Three of spec
+        section 8's rules cannot hold otherwise: SQL's `NOT` is three-valued so every
+        absent row falls out of a negation, SQLite's `LIKE` and `COLLATE NOCASE` fold
+        two of the fourteen case pairs the spec requires and none of the twelve
+        non-ASCII ones, and comparison affinity makes `3 = '3'` answer differently
+        depending on which side is a column.
+      type: object
+      additionalProperties: false
+      properties:
+        all:
+          type: array
+          minItems: 1
+          description: Every child must hold. Conjunction.
+          items:
+            $ref: '#/components/schemas/VaultFilterNode'
+        any:
+          type: array
+          minItems: 1
+          description: At least one child must hold. Disjunction.
+          items:
+            $ref: '#/components/schemas/VaultFilterNode'
+        not:
+          description: >
+            The child must NOT hold. This is the TREE negation, and it is not a
+            synonym for the `<>` leaf — the distinction is ruled explicitly in spec
+            section 8 R-2 and it decides what happens to records that never said.
+
+
+            `{not: {p, "=", v}}` INCLUDES records where `p` is absent (FR-008): "days
+            I did not meditate" must contain the days carrying no value at all,
+            precisely the days being asked about. `{p, "<>", v}` EXCLUDES them,
+            because in SQL `x <> 'v'` over a NULL `x` drops the row, and adopting
+            SQL's names without SQL's semantics is exactly what ruling R-B forbids.
+
+
+            A comparison that could not be MADE is not re-admitted by negation
+            either. A non-conforming value (R-4), an unresolved relation (R-8) or an
+            operator no rule defines for the declared type is REPORTED in `problems`
+            and the record EXCLUDED — from the negated node as well as the plain one.
+            Counting a corrupt value as "not done" by double negation would be a
+            silent wrong answer, which is the failure this whole surface exists to
+            remove.
+          allOf:
+            - $ref: '#/components/schemas/VaultFilterNode'
+        property:
+          type: string
+          minLength: 1
+          description: >
+            LEAF FORM. The declared property to compare, resolved against the queried
+            record type's schema and no other (property types are scoped to their
+            record type, D3.3). A name the schema does not declare REJECTS the query
+            with the declared names listed (FR-024) — it MUST NOT return zero
+            records, because a typo and a genuinely empty result look identical to
+            the caller and the typo is far more common.
+          example: "status"
+        op:
+          type: string
+          enum:
+            - "="
+            - "<>"
+            - "<"
+            - "<="
+            - ">"
+            - ">="
+            - "LIKE"
+            - "IN"
+            - "IS NULL"
+            - "IS NOT NULL"
+          description: >
+            LEAF FORM. The comparison, spelled as SQL spells it. These ten are exactly
+            what the engine implements and the section 8 truth table covers — no more
+            and no fewer.
+
+
+            `=` and `<>` are case-insensitive on text and enum labels (FR-011a) and
+            element-wise on a `many` property (R-9). The four ordering operators are
+            UNDEFINED against a `many` property and are refused naming the remedy
+            rather than answered (R-13). `LIKE` is anchored to the WHOLE value, never
+            a substring: `%` and `_` are the wildcards, `\` escapes, and a pattern
+            with no unescaped wildcard is exactly `=`. `IN` is `=` over a set and its
+            `values` list must be non-empty. `IS NULL` is the one operator an absent
+            operand does not make false, and `IS NOT NULL` is its complement — an
+            empty string, an empty list and a zero are all VALUES, not absence (R-3).
+          example: "="
+        value:
+          type: string
+          description: >
+            LEAF FORM, every operator except `IN`, `IS NULL` and `IS NOT NULL`. The
+            operand in LEXICAL form — the same text a frontmatter file would hold — so
+            it is read by exactly the same parser as a record's own value (R-12: the
+            rules apply identically whether a value came from a query literal or from
+            a note).
+
+
+            It is a string on the wire for that reason, and the reason is not
+            convenience. A JSON number would arrive already parsed by a JSON decoder
+            into a binary float, at which point a decimal property's exactness is
+            gone before the engine ever sees it. A literal that cannot be read in the
+            property's declared type is REFUSED naming both (FR-022e), never coerced.
+          example: "open"
+        values:
+          type: array
+          minItems: 1
+          description: >
+            LEAF FORM, `IN` only. The candidate set, in the same lexical form as
+            `value`. It MUST be non-empty: an empty `IN` list can match nothing, so
+            honouring one would return zero records for a query the caller believes
+            selects something — the silent empty result this surface exists to
+            prevent, arriving through a different door. It is REFUSED instead
+            (FR-022d). A single-element list means `=`.
+          items:
+            type: string
+          example: ["open", "won"]
+    VaultFindResponse:
+      $ref: ./components/schemas/VaultFindResponse.yaml
+    VaultFindSort:
+      $ref: ./components/schemas/VaultFindSort.yaml
+    VaultFindAggregate:
+      $ref: ./components/schemas/VaultFindAggregate.yaml
+    VaultFindRow:
+      $ref: ./components/schemas/VaultFindRow.yaml
+    VaultFindCell:
+      $ref: ./components/schemas/VaultFindCell.yaml
+    VaultFindJoin:
+      $ref: ./components/schemas/VaultFindJoin.yaml
+    VaultFindGroup:
+      $ref: ./components/schemas/VaultFindGroup.yaml
+    VaultFindSubgroup:
+      $ref: ./components/schemas/VaultFindSubgroup.yaml
+    VaultFindTotal:
+      $ref: ./components/schemas/VaultFindTotal.yaml
+    VaultFindAction:
+      $ref: ./components/schemas/VaultFindAction.yaml
+    VaultFindCounts:
+      $ref: ./components/schemas/VaultFindCounts.yaml
+    VaultFindPlanStep:
+      $ref: ./components/schemas/VaultFindPlanStep.yaml
+    VaultIndexState:
+      $ref: ./components/schemas/VaultIndexState.yaml
+    VaultTermCount:
+      $ref: ./components/schemas/VaultTermCount.yaml
     ValidationReport:
       $ref: ./components/schemas/ValidationReport.yaml
     Agent:

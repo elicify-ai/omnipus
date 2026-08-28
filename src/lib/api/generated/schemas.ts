@@ -329,7 +329,22 @@ type RecordProblem = {
     | "page_size_clamped"
     | "scope_truncated"
     | "aggregate_refused"
-    | "index_unavailable";
+    | "index_unavailable"
+    | "evaluation_bound_exceeded"
+    | "unsupported_operator"
+    | "unsupported_parameter"
+    | "empty_like_pattern"
+    | "empty_in_list"
+    | "literal_type_mismatch"
+    | "ordering_on_many_property"
+    | "comparison_undefined"
+    | "date_format_ambiguous"
+    | "decimal_scale_exceeded"
+    | "stale_record"
+    | "orphan_row"
+    | "stale_cursor"
+    | "unknown_view"
+    | "unknown_record_type";
   reason: string;
   records: Array<string>;
   property?: string | undefined;
@@ -457,6 +472,149 @@ type ViewDef = {
   limit?: number | undefined;
   source?: string | undefined;
   untranslated?: Array<string> | undefined;
+};
+type VaultFindRequest = Partial<{
+  words: string;
+  type: string;
+  kind: "note" | "record" | "task" | "attachment";
+  filter: VaultFilterNode;
+  view: string;
+  near: string;
+  hops: number;
+  join: Array<string>;
+  group_by: Array<string>;
+  sort: Array<VaultFindSort>;
+  select: Array<string>;
+  aggregate: Array<VaultFindAggregate>;
+  explain: boolean;
+  limit: number;
+  cursor: string;
+  detail: "minimal" | "standard";
+}>;
+type VaultFindSort = {
+  property: string;
+  direction?: ("asc" | "desc") | undefined;
+};
+type VaultFindAggregate = {
+  op: "count" | "sum" | "min" | "max";
+  property?: string | undefined;
+};
+type VaultFilterNode = Partial<{
+  all: Array<VaultFilterNode>;
+  any: Array<VaultFilterNode>;
+  not: VaultFilterNode;
+  property: string;
+  op:
+    | "="
+    | "<>"
+    | "<"
+    | "<="
+    | ">"
+    | ">="
+    | "LIKE"
+    | "IN"
+    | "IS NULL"
+    | "IS NOT NULL";
+  value: string;
+  values: Array<string>;
+}>;
+type VaultFindResponse = {
+  complete: boolean;
+  complete_reason?: string | undefined;
+  refused: boolean;
+  counts: VaultFindCounts;
+  query_echo: string;
+  index?: VaultIndexState | undefined;
+  rows: Array<VaultFindRow>;
+  elided?: number | undefined;
+  elided_summary?: string | undefined;
+  groups?: Array<VaultFindGroup> | undefined;
+  totals: Array<VaultFindTotal>;
+  problems: Array<RecordProblem>;
+  next: Array<VaultFindAction>;
+  nearest_terms?: Array<VaultTermCount> | undefined;
+  plan?: Array<VaultFindPlanStep> | undefined;
+  next_cursor?: string | undefined;
+  limit_applied?: number | undefined;
+  limit_clamped?: boolean | undefined;
+  limit_requested?: number | undefined;
+};
+type VaultFindCounts = {
+  selected: number;
+  evaluated: number;
+  shown: number;
+};
+type VaultIndexState = {
+  returned: number;
+  agreeing: number;
+  epoch?: number | undefined;
+};
+type VaultFindRow = {
+  id?: string | undefined;
+  path: string;
+  title: string;
+  line?: number | undefined;
+  status?: ("open" | "done") | undefined;
+  text?: string | undefined;
+  cells: Array<VaultFindCell>;
+  joins: Array<VaultFindJoin>;
+  stale?: boolean | undefined;
+};
+type VaultFindCell = {
+  property: string;
+  value: string;
+};
+type VaultFindJoin = {
+  relation: string;
+  target: string;
+  cells: Array<VaultFindCell>;
+};
+type VaultFindGroup = {
+  property: string;
+  key: string;
+  absent?: boolean | undefined;
+  count: number;
+  paths: Array<string>;
+  subgroups?: Array<VaultFindSubgroup> | undefined;
+};
+type VaultFindSubgroup = {
+  property: string;
+  key: string;
+  absent?: boolean | undefined;
+  count: number;
+  paths: Array<string>;
+};
+type VaultFindTotal = {
+  op: "count" | "sum" | "min" | "max";
+  label: string;
+  value: string;
+  scope: string;
+  refused?: boolean | undefined;
+};
+type VaultFindAction = {
+  label: string;
+  call: string;
+};
+type VaultTermCount = {
+  term: string;
+  documents: number;
+};
+type VaultFindPlanStep = {
+  stage:
+    | "scope"
+    | "narrow"
+    | "retrieve"
+    | "compare"
+    | "join"
+    | "group"
+    | "sort"
+    | "aggregate"
+    | "render";
+  property?: string | undefined;
+  source?:
+    | ("properties_index" | "text_index" | "go_comparator" | "schema" | "none")
+    | undefined;
+  detail: string;
 };
 type ValidationReport = {
   complete: boolean;
@@ -3886,6 +4044,21 @@ export const RecordProblem: z.ZodType<RecordProblem> = z.object({
     "scope_truncated",
     "aggregate_refused",
     "index_unavailable",
+    "evaluation_bound_exceeded",
+    "unsupported_operator",
+    "unsupported_parameter",
+    "empty_like_pattern",
+    "empty_in_list",
+    "literal_type_mismatch",
+    "ordering_on_many_property",
+    "comparison_undefined",
+    "date_format_ambiguous",
+    "decimal_scale_exceeded",
+    "stale_record",
+    "orphan_row",
+    "stale_cursor",
+    "unknown_view",
+    "unknown_record_type",
   ]),
   reason: z.string().min(1),
   records: z.array(z.string().min(1)),
@@ -4038,6 +4211,157 @@ export const ViewDef: z.ZodType<ViewDef> = z.object({
   limit: z.number().int().gte(1).optional(),
   source: z.string().optional(),
   untranslated: z.array(z.string().min(1)).optional(),
+});
+export const VaultFilterNode: z.ZodType<VaultFilterNode> = z.lazy(() =>
+  z
+    .object({
+      all: z.array(VaultFilterNode).min(1),
+      any: z.array(VaultFilterNode).min(1),
+      not: VaultFilterNode,
+      property: z.string().min(1),
+      op: z.enum([
+        "=",
+        "<>",
+        "<",
+        "<=",
+        ">",
+        ">=",
+        "LIKE",
+        "IN",
+        "IS NULL",
+        "IS NOT NULL",
+      ]),
+      value: z.string(),
+      values: z.array(z.string()).min(1),
+    })
+    .partial()
+);
+export const VaultFindSort: z.ZodType<VaultFindSort> = z.object({
+  property: z.string().min(1),
+  direction: z.enum(["asc", "desc"]).optional(),
+});
+export const VaultFindAggregate: z.ZodType<VaultFindAggregate> = z.object({
+  op: z.enum(["count", "sum", "min", "max"]),
+  property: z.string().min(1).optional(),
+});
+export const VaultFindRequest: z.ZodType<VaultFindRequest> = z
+  .object({
+    words: z.string().min(1),
+    type: z.string().min(1),
+    kind: z.enum(["note", "record", "task", "attachment"]),
+    filter: VaultFilterNode,
+    view: z.string().min(1),
+    near: z.string().min(1),
+    hops: z.number().int().gte(1).lte(2),
+    join: z.array(z.string().min(1)),
+    group_by: z.array(z.string().min(1)).max(2),
+    sort: z.array(VaultFindSort),
+    select: z.array(z.string().min(1)),
+    aggregate: z.array(VaultFindAggregate),
+    explain: z.boolean(),
+    limit: z.number().int().gte(1),
+    cursor: z.string().min(1),
+    detail: z.enum(["minimal", "standard"]),
+  })
+  .partial();
+export const VaultFindCounts: z.ZodType<VaultFindCounts> = z.object({
+  selected: z.number().int().gte(0),
+  evaluated: z.number().int().gte(0),
+  shown: z.number().int().gte(0),
+});
+export const VaultIndexState: z.ZodType<VaultIndexState> = z.object({
+  returned: z.number().int().gte(0),
+  agreeing: z.number().int().gte(0),
+  epoch: z.number().int().gte(0).optional(),
+});
+export const VaultFindCell: z.ZodType<VaultFindCell> = z.object({
+  property: z.string().min(1),
+  value: z.string(),
+});
+export const VaultFindJoin: z.ZodType<VaultFindJoin> = z.object({
+  relation: z.string().min(1),
+  target: z.string().min(1),
+  cells: z.array(VaultFindCell),
+});
+export const VaultFindRow: z.ZodType<VaultFindRow> = z.object({
+  id: z.string().min(1).optional(),
+  path: z.string().min(1),
+  title: z.string(),
+  line: z.number().int().gte(1).optional(),
+  status: z.enum(["open", "done"]).optional(),
+  text: z.string().optional(),
+  cells: z.array(VaultFindCell),
+  joins: z.array(VaultFindJoin),
+  stale: z.boolean().optional(),
+});
+export const VaultFindSubgroup: z.ZodType<VaultFindSubgroup> = z.object({
+  property: z.string().min(1),
+  key: z.string(),
+  absent: z.boolean().optional(),
+  count: z.number().int().gte(0),
+  paths: z.array(z.string().min(1)),
+});
+export const VaultFindGroup: z.ZodType<VaultFindGroup> = z.object({
+  property: z.string().min(1),
+  key: z.string(),
+  absent: z.boolean().optional(),
+  count: z.number().int().gte(0),
+  paths: z.array(z.string().min(1)),
+  subgroups: z.array(VaultFindSubgroup).optional(),
+});
+export const VaultFindTotal: z.ZodType<VaultFindTotal> = z.object({
+  op: z.enum(["count", "sum", "min", "max"]),
+  label: z.string().min(1),
+  value: z.string(),
+  scope: z.string().min(1),
+  refused: z.boolean().optional(),
+});
+export const VaultFindAction: z.ZodType<VaultFindAction> = z.object({
+  label: z.string().min(1),
+  call: z.string().min(1),
+});
+export const VaultTermCount: z.ZodType<VaultTermCount> = z.object({
+  term: z.string().min(1),
+  documents: z.number().int().gte(1),
+});
+export const VaultFindPlanStep: z.ZodType<VaultFindPlanStep> = z.object({
+  stage: z.enum([
+    "scope",
+    "narrow",
+    "retrieve",
+    "compare",
+    "join",
+    "group",
+    "sort",
+    "aggregate",
+    "render",
+  ]),
+  property: z.string().min(1).optional(),
+  source: z
+    .enum(["properties_index", "text_index", "go_comparator", "schema", "none"])
+    .optional(),
+  detail: z.string().min(1),
+});
+export const VaultFindResponse: z.ZodType<VaultFindResponse> = z.object({
+  complete: z.boolean(),
+  complete_reason: z.string().optional(),
+  refused: z.boolean(),
+  counts: VaultFindCounts,
+  query_echo: z.string(),
+  index: VaultIndexState.optional(),
+  rows: z.array(VaultFindRow),
+  elided: z.number().int().gte(1).optional(),
+  elided_summary: z.string().optional(),
+  groups: z.array(VaultFindGroup).optional(),
+  totals: z.array(VaultFindTotal),
+  problems: z.array(RecordProblem),
+  next: z.array(VaultFindAction),
+  nearest_terms: z.array(VaultTermCount).optional(),
+  plan: z.array(VaultFindPlanStep).optional(),
+  next_cursor: z.string().min(1).optional(),
+  limit_applied: z.number().int().gte(1).optional(),
+  limit_clamped: z.boolean().optional(),
+  limit_requested: z.number().int().gte(1).optional(),
 });
 export const ValidationReport: z.ZodType<ValidationReport> = z.object({
   complete: z.boolean(),

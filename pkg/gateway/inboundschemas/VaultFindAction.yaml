@@ -1,0 +1,27 @@
+title: VaultFindAction
+description: >
+  One addressable next call (spec FR-126).
+
+  In an agentic loop every response is the prompt for the next call, so a
+  response that ends without one forces the model to invent arguments — and an
+  invented property name is the failure the whole schema check exists to
+  prevent. Each action is a CALL the caller can issue verbatim, not a
+  description of one.
+type: object
+additionalProperties: false
+required:
+  - label
+  - call
+properties:
+  label:
+    type: string
+    minLength: 1
+    description: >
+      What this call is for, in one word where possible — `page`, `narrow`,
+      `widen`, `fix`, `retry`.
+    example: "narrow"
+  call:
+    type: string
+    minLength: 1
+    description: The call, ready to issue.
+    example: "vault_find type=deal filter=(status = 'open' AND arr >= 100000)"

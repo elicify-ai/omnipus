@@ -1,0 +1,41 @@
+title: VaultFindCounts
+description: >
+  The four numbers a completeness verdict is built from (spec FR-121, FR-125a).
+
+  They are separate fields because they are separate facts and they routinely
+  disagree. A design in which they cannot disagree is a design whose test for
+  FR-125a cannot fail — which is precisely the defect an earlier revision of the
+  worked example shipped, stating "14 evaluated" in its header and "over 12 of
+  12 rows" in its total, the same number twice.
+
+  selected >= evaluated >= shown, always. `selected - evaluated` is the count of
+  records that were narrowed to but could not be read, and every one of them is
+  named in `problems`.
+type: object
+additionalProperties: false
+required:
+  - selected
+  - evaluated
+  - shown
+properties:
+  selected:
+    type: integer
+    minimum: 0
+    description: >
+      Records the narrowing predicates selected — the candidate population,
+      before any comparison was made.
+    example: 17
+  evaluated:
+    type: integer
+    minimum: 0
+    description: >
+      Records the comparator could actually read and decide on. Every total is
+      computed over THIS set.
+    example: 14
+  shown:
+    type: integer
+    minimum: 0
+    description: >
+      Rows the byte budget allowed into this response. Never larger than
+      `evaluated`, and smaller whenever the budget bit.
+    example: 12

@@ -1657,19 +1657,19 @@ func (e KnowledgeBaseInfoDetectionErrorCode) Valid() bool {
 
 // Defines values for KnowledgeBaseInfoMarker.
 const (
-	None         KnowledgeBaseInfoMarker = "none"
-	Obsidian     KnowledgeBaseInfoMarker = "obsidian"
-	OmnipusVault KnowledgeBaseInfoMarker = "omnipus_vault"
+	KnowledgeBaseInfoMarkerNone         KnowledgeBaseInfoMarker = "none"
+	KnowledgeBaseInfoMarkerObsidian     KnowledgeBaseInfoMarker = "obsidian"
+	KnowledgeBaseInfoMarkerOmnipusVault KnowledgeBaseInfoMarker = "omnipus_vault"
 )
 
 // Valid indicates whether the value is a known member of the KnowledgeBaseInfoMarker enum.
 func (e KnowledgeBaseInfoMarker) Valid() bool {
 	switch e {
-	case None:
+	case KnowledgeBaseInfoMarkerNone:
 		return true
-	case Obsidian:
+	case KnowledgeBaseInfoMarkerObsidian:
 		return true
-	case OmnipusVault:
+	case KnowledgeBaseInfoMarkerOmnipusVault:
 		return true
 	default:
 		return false
@@ -3776,22 +3776,37 @@ const (
 	ArityViolation           RecordProblemCode = "arity_violation"
 	CandidateCapExceeded     RecordProblemCode = "candidate_cap_exceeded"
 	CardinalityViolation     RecordProblemCode = "cardinality_violation"
+	ComparisonUndefined      RecordProblemCode = "comparison_undefined"
 	DanglingRelation         RecordProblemCode = "dangling_relation"
+	DateFormatAmbiguous      RecordProblemCode = "date_format_ambiguous"
+	DecimalScaleExceeded     RecordProblemCode = "decimal_scale_exceeded"
 	DuplicateId              RecordProblemCode = "duplicate_id"
 	DuplicateTypeDeclaration RecordProblemCode = "duplicate_type_declaration"
+	EmptyInList              RecordProblemCode = "empty_in_list"
+	EmptyLikePattern         RecordProblemCode = "empty_like_pattern"
 	EnumViolation            RecordProblemCode = "enum_violation"
+	EvaluationBoundExceeded  RecordProblemCode = "evaluation_bound_exceeded"
 	HopLimitExceeded         RecordProblemCode = "hop_limit_exceeded"
 	IndexUnavailable         RecordProblemCode = "index_unavailable"
 	IntegerNotWhole          RecordProblemCode = "integer_not_whole"
 	IntegerOutOfRange        RecordProblemCode = "integer_out_of_range"
+	LiteralTypeMismatch      RecordProblemCode = "literal_type_mismatch"
 	MissingRequired          RecordProblemCode = "missing_required"
 	MissingSchemaVersion     RecordProblemCode = "missing_schema_version"
+	OrderingOnManyProperty   RecordProblemCode = "ordering_on_many_property"
+	OrphanRow                RecordProblemCode = "orphan_row"
 	PageSizeClamped          RecordProblemCode = "page_size_clamped"
 	RelationTypeMismatch     RecordProblemCode = "relation_type_mismatch"
 	ScopeTruncated           RecordProblemCode = "scope_truncated"
+	StaleCursor              RecordProblemCode = "stale_cursor"
+	StaleRecord              RecordProblemCode = "stale_record"
 	TypeMismatch             RecordProblemCode = "type_mismatch"
 	UnknownEnumValue         RecordProblemCode = "unknown_enum_value"
 	UnknownProperty          RecordProblemCode = "unknown_property"
+	UnknownRecordType        RecordProblemCode = "unknown_record_type"
+	UnknownView              RecordProblemCode = "unknown_view"
+	UnsupportedOperator      RecordProblemCode = "unsupported_operator"
+	UnsupportedParameter     RecordProblemCode = "unsupported_parameter"
 )
 
 // Valid indicates whether the value is a known member of the RecordProblemCode enum.
@@ -3805,13 +3820,25 @@ func (e RecordProblemCode) Valid() bool {
 		return true
 	case CardinalityViolation:
 		return true
+	case ComparisonUndefined:
+		return true
 	case DanglingRelation:
+		return true
+	case DateFormatAmbiguous:
+		return true
+	case DecimalScaleExceeded:
 		return true
 	case DuplicateId:
 		return true
 	case DuplicateTypeDeclaration:
 		return true
+	case EmptyInList:
+		return true
+	case EmptyLikePattern:
+		return true
 	case EnumViolation:
+		return true
+	case EvaluationBoundExceeded:
 		return true
 	case HopLimitExceeded:
 		return true
@@ -3821,9 +3848,15 @@ func (e RecordProblemCode) Valid() bool {
 		return true
 	case IntegerOutOfRange:
 		return true
+	case LiteralTypeMismatch:
+		return true
 	case MissingRequired:
 		return true
 	case MissingSchemaVersion:
+		return true
+	case OrderingOnManyProperty:
+		return true
+	case OrphanRow:
 		return true
 	case PageSizeClamped:
 		return true
@@ -3831,11 +3864,23 @@ func (e RecordProblemCode) Valid() bool {
 		return true
 	case ScopeTruncated:
 		return true
+	case StaleCursor:
+		return true
+	case StaleRecord:
+		return true
 	case TypeMismatch:
 		return true
 	case UnknownEnumValue:
 		return true
 	case UnknownProperty:
+		return true
+	case UnknownRecordType:
+		return true
+	case UnknownView:
+		return true
+	case UnsupportedOperator:
+		return true
+	case UnsupportedParameter:
 		return true
 	default:
 		return false
@@ -3877,16 +3922,16 @@ func (e RecordPropertyValueType) Valid() bool {
 
 // Defines values for RecordSortDirection.
 const (
-	Asc  RecordSortDirection = "asc"
-	Desc RecordSortDirection = "desc"
+	RecordSortDirectionAsc  RecordSortDirection = "asc"
+	RecordSortDirectionDesc RecordSortDirection = "desc"
 )
 
 // Valid indicates whether the value is a known member of the RecordSortDirection enum.
 func (e RecordSortDirection) Valid() bool {
 	switch e {
-	case Asc:
+	case RecordSortDirectionAsc:
 		return true
-	case Desc:
+	case RecordSortDirectionDesc:
 		return true
 	default:
 		return false
@@ -4081,16 +4126,16 @@ func (e SandboxConfigUpdateMode) Valid() bool {
 
 // Defines values for SandboxStatusFilesystemModel.
 const (
-	Confined SandboxStatusFilesystemModel = "confined"
-	Open     SandboxStatusFilesystemModel = "open"
+	SandboxStatusFilesystemModelConfined SandboxStatusFilesystemModel = "confined"
+	SandboxStatusFilesystemModelOpen     SandboxStatusFilesystemModel = "open"
 )
 
 // Valid indicates whether the value is a known member of the SandboxStatusFilesystemModel enum.
 func (e SandboxStatusFilesystemModel) Valid() bool {
 	switch e {
-	case Confined:
+	case SandboxStatusFilesystemModelConfined:
 		return true
-	case Open:
+	case SandboxStatusFilesystemModelOpen:
 		return true
 	default:
 		return false
@@ -6188,6 +6233,240 @@ func (e ToolRegistryEntrySource) Valid() bool {
 	}
 }
 
+// Defines values for VaultFilterNodeOp.
+const (
+	Equal               VaultFilterNodeOp = "="
+	GreaterThan         VaultFilterNodeOp = ">"
+	GreaterThanEqual    VaultFilterNodeOp = ">="
+	IN                  VaultFilterNodeOp = "IN"
+	ISNOTNULL           VaultFilterNodeOp = "IS NOT NULL"
+	ISNULL              VaultFilterNodeOp = "IS NULL"
+	LIKE                VaultFilterNodeOp = "LIKE"
+	LessThan            VaultFilterNodeOp = "<"
+	LessThanEqual       VaultFilterNodeOp = "<="
+	LessThanGreaterThan VaultFilterNodeOp = "<>"
+)
+
+// Valid indicates whether the value is a known member of the VaultFilterNodeOp enum.
+func (e VaultFilterNodeOp) Valid() bool {
+	switch e {
+	case Equal:
+		return true
+	case GreaterThan:
+		return true
+	case GreaterThanEqual:
+		return true
+	case IN:
+		return true
+	case ISNOTNULL:
+		return true
+	case ISNULL:
+		return true
+	case LIKE:
+		return true
+	case LessThan:
+		return true
+	case LessThanEqual:
+		return true
+	case LessThanGreaterThan:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for VaultFindAggregateOp.
+const (
+	VaultFindAggregateOpCount VaultFindAggregateOp = "count"
+	VaultFindAggregateOpMax   VaultFindAggregateOp = "max"
+	VaultFindAggregateOpMin   VaultFindAggregateOp = "min"
+	VaultFindAggregateOpSum   VaultFindAggregateOp = "sum"
+)
+
+// Valid indicates whether the value is a known member of the VaultFindAggregateOp enum.
+func (e VaultFindAggregateOp) Valid() bool {
+	switch e {
+	case VaultFindAggregateOpCount:
+		return true
+	case VaultFindAggregateOpMax:
+		return true
+	case VaultFindAggregateOpMin:
+		return true
+	case VaultFindAggregateOpSum:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for VaultFindPlanStepSource.
+const (
+	VaultFindPlanStepSourceGoComparator    VaultFindPlanStepSource = "go_comparator"
+	VaultFindPlanStepSourceNone            VaultFindPlanStepSource = "none"
+	VaultFindPlanStepSourcePropertiesIndex VaultFindPlanStepSource = "properties_index"
+	VaultFindPlanStepSourceSchema          VaultFindPlanStepSource = "schema"
+	VaultFindPlanStepSourceTextIndex       VaultFindPlanStepSource = "text_index"
+)
+
+// Valid indicates whether the value is a known member of the VaultFindPlanStepSource enum.
+func (e VaultFindPlanStepSource) Valid() bool {
+	switch e {
+	case VaultFindPlanStepSourceGoComparator:
+		return true
+	case VaultFindPlanStepSourceNone:
+		return true
+	case VaultFindPlanStepSourcePropertiesIndex:
+		return true
+	case VaultFindPlanStepSourceSchema:
+		return true
+	case VaultFindPlanStepSourceTextIndex:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for VaultFindPlanStepStage.
+const (
+	Aggregate VaultFindPlanStepStage = "aggregate"
+	Compare   VaultFindPlanStepStage = "compare"
+	Group     VaultFindPlanStepStage = "group"
+	Join      VaultFindPlanStepStage = "join"
+	Narrow    VaultFindPlanStepStage = "narrow"
+	Render    VaultFindPlanStepStage = "render"
+	Retrieve  VaultFindPlanStepStage = "retrieve"
+	Scope     VaultFindPlanStepStage = "scope"
+	Sort      VaultFindPlanStepStage = "sort"
+)
+
+// Valid indicates whether the value is a known member of the VaultFindPlanStepStage enum.
+func (e VaultFindPlanStepStage) Valid() bool {
+	switch e {
+	case Aggregate:
+		return true
+	case Compare:
+		return true
+	case Group:
+		return true
+	case Join:
+		return true
+	case Narrow:
+		return true
+	case Render:
+		return true
+	case Retrieve:
+		return true
+	case Scope:
+		return true
+	case Sort:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for VaultFindRequestDetail.
+const (
+	Minimal  VaultFindRequestDetail = "minimal"
+	Standard VaultFindRequestDetail = "standard"
+)
+
+// Valid indicates whether the value is a known member of the VaultFindRequestDetail enum.
+func (e VaultFindRequestDetail) Valid() bool {
+	switch e {
+	case Minimal:
+		return true
+	case Standard:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for VaultFindRequestKind.
+const (
+	VaultFindRequestKindAttachment VaultFindRequestKind = "attachment"
+	VaultFindRequestKindNote       VaultFindRequestKind = "note"
+	VaultFindRequestKindRecord     VaultFindRequestKind = "record"
+	VaultFindRequestKindTask       VaultFindRequestKind = "task"
+)
+
+// Valid indicates whether the value is a known member of the VaultFindRequestKind enum.
+func (e VaultFindRequestKind) Valid() bool {
+	switch e {
+	case VaultFindRequestKindAttachment:
+		return true
+	case VaultFindRequestKindNote:
+		return true
+	case VaultFindRequestKindRecord:
+		return true
+	case VaultFindRequestKindTask:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for VaultFindRowStatus.
+const (
+	VaultFindRowStatusDone VaultFindRowStatus = "done"
+	VaultFindRowStatusOpen VaultFindRowStatus = "open"
+)
+
+// Valid indicates whether the value is a known member of the VaultFindRowStatus enum.
+func (e VaultFindRowStatus) Valid() bool {
+	switch e {
+	case VaultFindRowStatusDone:
+		return true
+	case VaultFindRowStatusOpen:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for VaultFindSortDirection.
+const (
+	VaultFindSortDirectionAsc  VaultFindSortDirection = "asc"
+	VaultFindSortDirectionDesc VaultFindSortDirection = "desc"
+)
+
+// Valid indicates whether the value is a known member of the VaultFindSortDirection enum.
+func (e VaultFindSortDirection) Valid() bool {
+	switch e {
+	case VaultFindSortDirectionAsc:
+		return true
+	case VaultFindSortDirectionDesc:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for VaultFindTotalOp.
+const (
+	VaultFindTotalOpCount VaultFindTotalOp = "count"
+	VaultFindTotalOpMax   VaultFindTotalOp = "max"
+	VaultFindTotalOpMin   VaultFindTotalOp = "min"
+	VaultFindTotalOpSum   VaultFindTotalOp = "sum"
+)
+
+// Valid indicates whether the value is a known member of the VaultFindTotalOp enum.
+func (e VaultFindTotalOp) Valid() bool {
+	switch e {
+	case VaultFindTotalOpCount:
+		return true
+	case VaultFindTotalOpMax:
+		return true
+	case VaultFindTotalOpMin:
+		return true
+	case VaultFindTotalOpSum:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for WorkspaceMountsStatus.
 const (
 	WorkspaceMountsStatusBroken WorkspaceMountsStatus = "broken"
@@ -6316,19 +6595,19 @@ func (e WorkspaceUpdateRequestStatus) Valid() bool {
 
 // Defines values for ListCommandsParamsSurface.
 const (
-	Channel ListCommandsParamsSurface = "channel"
-	Cli     ListCommandsParamsSurface = "cli"
-	Web     ListCommandsParamsSurface = "web"
+	ListCommandsParamsSurfaceChannel ListCommandsParamsSurface = "channel"
+	ListCommandsParamsSurfaceCli     ListCommandsParamsSurface = "cli"
+	ListCommandsParamsSurfaceWeb     ListCommandsParamsSurface = "web"
 )
 
 // Valid indicates whether the value is a known member of the ListCommandsParamsSurface enum.
 func (e ListCommandsParamsSurface) Valid() bool {
 	switch e {
-	case Channel:
+	case ListCommandsParamsSurfaceChannel:
 		return true
-	case Cli:
+	case ListCommandsParamsSurfaceCli:
 		return true
-	case Web:
+	case ListCommandsParamsSurfaceWeb:
 		return true
 	default:
 		return false
@@ -11814,7 +12093,7 @@ type RecordGroupKey struct {
 // A problem names the records affected, the reason, and where possible the expected shape and the remedy. The community's accepted debugging advice for the incumbent tools today is "keep testing until something is returned"; that is what a system with no error channel forces on people.
 // A RecordProblem is NOT an HTTP error. Bounded, refused and partially evaluated answers all arrive as a normal response carrying `complete: false` and one or more of these (D15.1b).
 type RecordProblem struct {
-	// Code Machine-readable cause, so a caller can branch without parsing prose. "missing_schema_version" — a schema file lacking schema_version; no records of that type are validated against it (FR-002). "duplicate_type_declaration" — two schema files declare the same record type; both paths are named in `paths` (FR-003). "unknown_property" / "unknown_enum_value" — a query named something the schema does not declare. The query is REJECTED with the valid names listed; it never returns an empty result set (FR-024). "missing_required" — a required property is absent from a record. "arity_violation" — a list where a scalar was declared, or the reverse (FR-006). "enum_violation" — a value outside the declared, closed set (FR-011). "type_mismatch" — the stored value cannot be read as its declared type. "dangling_relation" — the relation target does not exist (FR-033). "relation_type_mismatch" — the target exists but is not of the declared target type (FR-034). "cardinality_violation" — more values than the declared cardinality permits (FR-035). "duplicate_id" — two records share an identifier; both paths are named (FR-039). "integer_not_whole" — a fractional value in an "integer" property. It is a DIFFERENT cause from "type_mismatch" because the value parses perfectly well as a number: the fault is the declared type, and the remedy is to declare the property "decimal", not to fix the digits (FR-013). "integer_out_of_range" — a whole number outside signed 64-bit range in an "integer" property. REFUSED naming the bound, never saturated to the maximum and never widened to a binary float (FR-013). "candidate_cap_exceeded" — the candidate set exceeded the 10,000-record materialisation bound; the query is refused with a narrowing instruction and NO partial answer is returned (FR-064). "hop_limit_exceeded" — more than two relation hops were requested (FR-065). "page_size_clamped" — the requested page size exceeded the cap and was reduced; the clamp is REPORTED, never silent (FR-063). "scope_truncated" — workspace scope resolution was itself incomplete (ADR-067 Scope.Truncated), so a whole mounted folder may be missing. The answer MUST NOT claim success (FR-062a). "aggregate_refused" — no aggregate is returned over a refused candidate set; it is never partial (FR-066). "index_unavailable" — the index predates record support and cannot hold the properties queried. A silent no-op returning complete:true over zero properties is impossible (FR-020a).
+	// Code Machine-readable cause, so a caller can branch without parsing prose. "missing_schema_version" — a schema file lacking schema_version; no records of that type are validated against it (FR-002). "duplicate_type_declaration" — two schema files declare the same record type; both paths are named in `paths` (FR-003). "unknown_property" / "unknown_enum_value" — a query named something the schema does not declare. The query is REJECTED with the valid names listed; it never returns an empty result set (FR-024). "missing_required" — a required property is absent from a record. "arity_violation" — a list where a scalar was declared, or the reverse (FR-006). "enum_violation" — a value outside the declared, closed set (FR-011). "type_mismatch" — the stored value cannot be read as its declared type. "dangling_relation" — the relation target does not exist (FR-033). "relation_type_mismatch" — the target exists but is not of the declared target type (FR-034). "cardinality_violation" — more values than the declared cardinality permits (FR-035). "duplicate_id" — two records share an identifier; both paths are named (FR-039). "integer_not_whole" — a fractional value in an "integer" property. It is a DIFFERENT cause from "type_mismatch" because the value parses perfectly well as a number: the fault is the declared type, and the remedy is to declare the property "decimal", not to fix the digits (FR-013). "integer_out_of_range" — a whole number outside signed 64-bit range in an "integer" property. REFUSED naming the bound, never saturated to the maximum and never widened to a binary float (FR-013). "candidate_cap_exceeded" — the candidate set exceeded the 10,000-record materialisation bound; the query is refused with a narrowing instruction and NO partial answer is returned (FR-064). "hop_limit_exceeded" — more than two relation hops were requested (FR-065). "page_size_clamped" — the requested page size exceeded the cap and was reduced; the clamp is REPORTED, never silent (FR-063). "scope_truncated" — workspace scope resolution was itself incomplete (ADR-067 Scope.Truncated), so a whole mounted folder may be missing. The answer MUST NOT claim success (FR-062a). "aggregate_refused" — no aggregate is returned over a refused candidate set; it is never partial (FR-066). "index_unavailable" — the index predates record support and cannot hold the properties queried. A silent no-op returning complete:true over zero properties is impossible (FR-020a). "evaluation_bound_exceeded" — FR-064's B1. The narrowed CANDIDATE population exceeded 50,000 before anything was retrieved. It is a DIFFERENT cause from "candidate_cap_exceeded", which is B2 and counts SURVIVORS during evaluation, and the two must stay distinct because they name different remedies: B1 is reduced by narrowing the scope or the kind, and NOT by adding a filter, which does not change the number that fired. B1's count is exact and is quoted; B2's is not, because the count aborts at the cap and never reaches a true total — quoting one would state a number nobody computed. "unsupported_operator" — a SQL construct the filter does not implement (JOIN, BETWEEN, COALESCE, CASE, a subquery, a function call). REFUSED naming the ten supported operators and the parameter that does the job instead (FR-022c) — never parsed, never silently dropped. "unsupported_parameter" — an argument name the request does not declare, refused with the accepted names listed rather than ignored (FR-022c). "empty_like_pattern" — a LIKE pattern of '' or '%', which matches every record; refused naming IS NOT NULL as the operator that means it (FR-022a). "empty_in_list" — IN was given an empty list, which can match nothing (FR-022d). "literal_type_mismatch" — a literal that cannot be read in the property's declared type (FR-022e). Never coerced. "ordering_on_many_property" — an ordering comparison against a list- valued property, which section 8 R-13 leaves undefined; refused naming =, IN and LIKE as the operators that are defined there. "comparison_undefined" — the comparison oracle could not decide this pair: a non-conforming value (R-4), an unresolved relation (R-8), or an operator no rule defines for the declared type. The record is EXCLUDED and NAMED, and it is not re-admitted by negation — counting a corrupt value as "not done" by double negation would be a silent wrong answer. "date_format_ambiguous" — a date whose format cannot be read without guessing, or whose month or day is not zero-padded (FR-021d). It is never guessed. "decimal_scale_exceeded" — more decimal places than a decimal property carries. The value is NOT rounded to fit (FR-013). "stale_record" — this row's source_hash and the text index's disagree, or one side holds none (FR-020c). Reported as a DISAGREEMENT, never as "the properties index is stale": the comparison establishes that the two differ, not which is behind. "orphan_row" — the properties index holds a row for a path where no indexed note exists (D16.5). "stale_cursor" — the cursor was issued against a different index epoch. An ERROR, never a silent restart from page one. "unknown_view" — a saved view name the vault does not define, refused with the views in scope listed. "unknown_record_type" — a record type the schema set does not declare, refused with the declared types listed (FR-024).
 	Code RecordProblemCode `json:"code"`
 
 	// Expected The shape that WAS expected, stated plainly. A rejection that does not say what correct looks like leaves the caller guessing (FR-042).
@@ -11839,7 +12118,7 @@ type RecordProblem struct {
 	Records []string `json:"records"`
 }
 
-// RecordProblemCode Machine-readable cause, so a caller can branch without parsing prose. "missing_schema_version" — a schema file lacking schema_version; no records of that type are validated against it (FR-002). "duplicate_type_declaration" — two schema files declare the same record type; both paths are named in `paths` (FR-003). "unknown_property" / "unknown_enum_value" — a query named something the schema does not declare. The query is REJECTED with the valid names listed; it never returns an empty result set (FR-024). "missing_required" — a required property is absent from a record. "arity_violation" — a list where a scalar was declared, or the reverse (FR-006). "enum_violation" — a value outside the declared, closed set (FR-011). "type_mismatch" — the stored value cannot be read as its declared type. "dangling_relation" — the relation target does not exist (FR-033). "relation_type_mismatch" — the target exists but is not of the declared target type (FR-034). "cardinality_violation" — more values than the declared cardinality permits (FR-035). "duplicate_id" — two records share an identifier; both paths are named (FR-039). "integer_not_whole" — a fractional value in an "integer" property. It is a DIFFERENT cause from "type_mismatch" because the value parses perfectly well as a number: the fault is the declared type, and the remedy is to declare the property "decimal", not to fix the digits (FR-013). "integer_out_of_range" — a whole number outside signed 64-bit range in an "integer" property. REFUSED naming the bound, never saturated to the maximum and never widened to a binary float (FR-013). "candidate_cap_exceeded" — the candidate set exceeded the 10,000-record materialisation bound; the query is refused with a narrowing instruction and NO partial answer is returned (FR-064). "hop_limit_exceeded" — more than two relation hops were requested (FR-065). "page_size_clamped" — the requested page size exceeded the cap and was reduced; the clamp is REPORTED, never silent (FR-063). "scope_truncated" — workspace scope resolution was itself incomplete (ADR-067 Scope.Truncated), so a whole mounted folder may be missing. The answer MUST NOT claim success (FR-062a). "aggregate_refused" — no aggregate is returned over a refused candidate set; it is never partial (FR-066). "index_unavailable" — the index predates record support and cannot hold the properties queried. A silent no-op returning complete:true over zero properties is impossible (FR-020a).
+// RecordProblemCode Machine-readable cause, so a caller can branch without parsing prose. "missing_schema_version" — a schema file lacking schema_version; no records of that type are validated against it (FR-002). "duplicate_type_declaration" — two schema files declare the same record type; both paths are named in `paths` (FR-003). "unknown_property" / "unknown_enum_value" — a query named something the schema does not declare. The query is REJECTED with the valid names listed; it never returns an empty result set (FR-024). "missing_required" — a required property is absent from a record. "arity_violation" — a list where a scalar was declared, or the reverse (FR-006). "enum_violation" — a value outside the declared, closed set (FR-011). "type_mismatch" — the stored value cannot be read as its declared type. "dangling_relation" — the relation target does not exist (FR-033). "relation_type_mismatch" — the target exists but is not of the declared target type (FR-034). "cardinality_violation" — more values than the declared cardinality permits (FR-035). "duplicate_id" — two records share an identifier; both paths are named (FR-039). "integer_not_whole" — a fractional value in an "integer" property. It is a DIFFERENT cause from "type_mismatch" because the value parses perfectly well as a number: the fault is the declared type, and the remedy is to declare the property "decimal", not to fix the digits (FR-013). "integer_out_of_range" — a whole number outside signed 64-bit range in an "integer" property. REFUSED naming the bound, never saturated to the maximum and never widened to a binary float (FR-013). "candidate_cap_exceeded" — the candidate set exceeded the 10,000-record materialisation bound; the query is refused with a narrowing instruction and NO partial answer is returned (FR-064). "hop_limit_exceeded" — more than two relation hops were requested (FR-065). "page_size_clamped" — the requested page size exceeded the cap and was reduced; the clamp is REPORTED, never silent (FR-063). "scope_truncated" — workspace scope resolution was itself incomplete (ADR-067 Scope.Truncated), so a whole mounted folder may be missing. The answer MUST NOT claim success (FR-062a). "aggregate_refused" — no aggregate is returned over a refused candidate set; it is never partial (FR-066). "index_unavailable" — the index predates record support and cannot hold the properties queried. A silent no-op returning complete:true over zero properties is impossible (FR-020a). "evaluation_bound_exceeded" — FR-064's B1. The narrowed CANDIDATE population exceeded 50,000 before anything was retrieved. It is a DIFFERENT cause from "candidate_cap_exceeded", which is B2 and counts SURVIVORS during evaluation, and the two must stay distinct because they name different remedies: B1 is reduced by narrowing the scope or the kind, and NOT by adding a filter, which does not change the number that fired. B1's count is exact and is quoted; B2's is not, because the count aborts at the cap and never reaches a true total — quoting one would state a number nobody computed. "unsupported_operator" — a SQL construct the filter does not implement (JOIN, BETWEEN, COALESCE, CASE, a subquery, a function call). REFUSED naming the ten supported operators and the parameter that does the job instead (FR-022c) — never parsed, never silently dropped. "unsupported_parameter" — an argument name the request does not declare, refused with the accepted names listed rather than ignored (FR-022c). "empty_like_pattern" — a LIKE pattern of ” or '%', which matches every record; refused naming IS NOT NULL as the operator that means it (FR-022a). "empty_in_list" — IN was given an empty list, which can match nothing (FR-022d). "literal_type_mismatch" — a literal that cannot be read in the property's declared type (FR-022e). Never coerced. "ordering_on_many_property" — an ordering comparison against a list- valued property, which section 8 R-13 leaves undefined; refused naming =, IN and LIKE as the operators that are defined there. "comparison_undefined" — the comparison oracle could not decide this pair: a non-conforming value (R-4), an unresolved relation (R-8), or an operator no rule defines for the declared type. The record is EXCLUDED and NAMED, and it is not re-admitted by negation — counting a corrupt value as "not done" by double negation would be a silent wrong answer. "date_format_ambiguous" — a date whose format cannot be read without guessing, or whose month or day is not zero-padded (FR-021d). It is never guessed. "decimal_scale_exceeded" — more decimal places than a decimal property carries. The value is NOT rounded to fit (FR-013). "stale_record" — this row's source_hash and the text index's disagree, or one side holds none (FR-020c). Reported as a DISAGREEMENT, never as "the properties index is stale": the comparison establishes that the two differ, not which is behind. "orphan_row" — the properties index holds a row for a path where no indexed note exists (D16.5). "stale_cursor" — the cursor was issued against a different index epoch. An ERROR, never a silent restart from page one. "unknown_view" — a saved view name the vault does not define, refused with the views in scope listed. "unknown_record_type" — a record type the schema set does not declare, refused with the declared types listed (FR-024).
 type RecordProblemCode string
 
 // RecordPropertyValue One property of one record, with all of its values (ADR-068 D3).
@@ -14934,6 +15213,409 @@ type ValidationReport struct {
 	TypesChecked int64 `json:"types_checked"`
 }
 
+// VaultFilterNode One node of a `vault_find` filter tree (ADR-068 D15.3, spec FR-022, ruling R-B). A node is EITHER a boolean combinator — `all`, `any`, `not` — OR a leaf carrying `property`, `op` and `value`. Exactly one form per node; a node that sets both a combinator and a leaf field is REFUSED, never silently resolved to one of them.
+// HOSTED INLINE HERE, NOT IN ITS OWN FILE, and the reason is mechanical: this schema is RECURSIVE — `all`, `any` and `not` take VaultFilterNode children — and oapi-codegen v2.7.0 INLINES a cross-file $ref at its use site, so a cross-file SELF-reference expands until the generator dies with a stack overflow. An internal `#/components/schemas/` reference resolves to the named type instead. This is the same exception, for the same reason, that ADR-034 records for the discriminated unions.
+// THE OPERATORS ARE SQL'S, AND THAT IS THE WHOLE POINT (ruling R-B, revision 5). They replaced seven we invented — `eq`, `lt`, `lte`, `gt`, `gte`, `contains`, `is_absent` — and the argument is retrieval accuracy rather than style: our vocabulary has appeared in a model's training data zero times and SQL's an enormous number of times, so a model reaching for `LIKE` is recalling where a model reaching for `contains` was guessing.
+// BOTH HALVES OF ADR-068 O-3 STILL HOLD, AMENDED NOT OVERTURNED. This is a STRUCTURED OBJECT and there is NO PARSER. Nothing recognises SQL text. A model fluent in SQL that puts `JOIN`, `BETWEEN`, `COALESCE`, a `CASE` or a subquery in the operator position is REFUSED BY NAME, listing the ten supported operators and naming the parameter that does the job instead (FR-022c) — never parsed, never silently dropped, and never answered with an empty result set.
+// AND NOTHING HERE IS EVALUATED BY SQLITE (ruling R-A). The properties index narrows candidates on record type, note kind and path prefix; every comparison in this tree is then decided in Go by the tested comparator. Three of spec section 8's rules cannot hold otherwise: SQL's `NOT` is three-valued so every absent row falls out of a negation, SQLite's `LIKE` and `COLLATE NOCASE` fold two of the fourteen case pairs the spec requires and none of the twelve non-ASCII ones, and comparison affinity makes `3 = '3'` answer differently depending on which side is a column.
+type VaultFilterNode struct {
+	// All Every child must hold. Conjunction.
+	All *[]VaultFilterNode `json:"all,omitempty"`
+
+	// Any At least one child must hold. Disjunction.
+	Any *[]VaultFilterNode `json:"any,omitempty"`
+
+	// Not The child must NOT hold. This is the TREE negation, and it is not a synonym for the `<>` leaf — the distinction is ruled explicitly in spec section 8 R-2 and it decides what happens to records that never said.
+	//
+	// `{not: {p, "=", v}}` INCLUDES records where `p` is absent (FR-008): "days I did not meditate" must contain the days carrying no value at all, precisely the days being asked about. `{p, "<>", v}` EXCLUDES them, because in SQL `x <> 'v'` over a NULL `x` drops the row, and adopting SQL's names without SQL's semantics is exactly what ruling R-B forbids.
+	//
+	// A comparison that could not be MADE is not re-admitted by negation either. A non-conforming value (R-4), an unresolved relation (R-8) or an operator no rule defines for the declared type is REPORTED in `problems` and the record EXCLUDED — from the negated node as well as the plain one. Counting a corrupt value as "not done" by double negation would be a silent wrong answer, which is the failure this whole surface exists to remove.
+	Not *VaultFilterNode `json:"not,omitempty"`
+
+	// Op LEAF FORM. The comparison, spelled as SQL spells it. These ten are exactly what the engine implements and the section 8 truth table covers — no more and no fewer.
+	//
+	// `=` and `<>` are case-insensitive on text and enum labels (FR-011a) and element-wise on a `many` property (R-9). The four ordering operators are UNDEFINED against a `many` property and are refused naming the remedy rather than answered (R-13). `LIKE` is anchored to the WHOLE value, never a substring: `%` and `_` are the wildcards, `\` escapes, and a pattern with no unescaped wildcard is exactly `=`. `IN` is `=` over a set and its `values` list must be non-empty. `IS NULL` is the one operator an absent operand does not make false, and `IS NOT NULL` is its complement — an empty string, an empty list and a zero are all VALUES, not absence (R-3).
+	Op *VaultFilterNodeOp `json:"op,omitempty"`
+
+	// Property LEAF FORM. The declared property to compare, resolved against the queried record type's schema and no other (property types are scoped to their record type, D3.3). A name the schema does not declare REJECTS the query with the declared names listed (FR-024) — it MUST NOT return zero records, because a typo and a genuinely empty result look identical to the caller and the typo is far more common.
+	Property *string `json:"property,omitempty"`
+
+	// Value LEAF FORM, every operator except `IN`, `IS NULL` and `IS NOT NULL`. The operand in LEXICAL form — the same text a frontmatter file would hold — so it is read by exactly the same parser as a record's own value (R-12: the rules apply identically whether a value came from a query literal or from a note).
+	//
+	// It is a string on the wire for that reason, and the reason is not convenience. A JSON number would arrive already parsed by a JSON decoder into a binary float, at which point a decimal property's exactness is gone before the engine ever sees it. A literal that cannot be read in the property's declared type is REFUSED naming both (FR-022e), never coerced.
+	Value *string `json:"value,omitempty"`
+
+	// Values LEAF FORM, `IN` only. The candidate set, in the same lexical form as `value`. It MUST be non-empty: an empty `IN` list can match nothing, so honouring one would return zero records for a query the caller believes selects something — the silent empty result this surface exists to prevent, arriving through a different door. It is REFUSED instead (FR-022d). A single-element list means `=`.
+	Values *[]string `json:"values,omitempty"`
+}
+
+// VaultFilterNodeOp LEAF FORM. The comparison, spelled as SQL spells it. These ten are exactly what the engine implements and the section 8 truth table covers — no more and no fewer.
+//
+// `=` and `<>` are case-insensitive on text and enum labels (FR-011a) and element-wise on a `many` property (R-9). The four ordering operators are UNDEFINED against a `many` property and are refused naming the remedy rather than answered (R-13). `LIKE` is anchored to the WHOLE value, never a substring: `%` and `_` are the wildcards, `\` escapes, and a pattern with no unescaped wildcard is exactly `=`. `IN` is `=` over a set and its `values` list must be non-empty. `IS NULL` is the one operator an absent operand does not make false, and `IS NOT NULL` is its complement — an empty string, an empty list and a zero are all VALUES, not absence (R-3).
+type VaultFilterNodeOp string
+
+// VaultFindAction One addressable next call (spec FR-126).
+// In an agentic loop every response is the prompt for the next call, so a response that ends without one forces the model to invent arguments — and an invented property name is the failure the whole schema check exists to prevent. Each action is a CALL the caller can issue verbatim, not a description of one.
+type VaultFindAction struct {
+	// Call The call, ready to issue.
+	Call string `json:"call"`
+
+	// Label What this call is for, in one word where possible — `page`, `narrow`, `widen`, `fix`, `retry`.
+	Label string `json:"label"`
+}
+
+// VaultFindAggregate One total to compute over the matched set (spec FR-123, FR-125, FR-125a).
+type VaultFindAggregate struct {
+	// Op The reduction. `count` needs no property and counts evaluated rows; the other three require one and are defined only over `integer` and `decimal` properties, which are ONE comparison domain (R-1).
+	Op VaultFindAggregateOp `json:"op"`
+
+	// Property The property to reduce. Required for `sum`, `min` and `max`; forbidden for `count`, which counts rows rather than values.
+	Property *string `json:"property,omitempty"`
+}
+
+// VaultFindAggregateOp The reduction. `count` needs no property and counts evaluated rows; the other three require one and are defined only over `integer` and `decimal` properties, which are ONE comparison domain (R-1).
+type VaultFindAggregateOp string
+
+// VaultFindCell One rendered column of one row (spec 4.2). The value is TEXT, exactly as it will be shown, and never a JSON number — a decimal that round-tripped through a binary float would render digits the note does not contain, and the whole type system exists to stop that.
+// A `decimal` renders at its property's DECLARED scale where the schema declares one, and otherwise at the value's own scale as written in the note. Thousands separators are a choice of the compact-text projection and are never part of a stored or compared value.
+type VaultFindCell struct {
+	Property string `json:"property"`
+
+	// Value The rendered value. An EMPTY STRING is a legitimate rendering — of an empty string property, or of a property the record leaves absent — so a renderer must not treat empty as "omit this cell".
+	Value string `json:"value"`
+}
+
+// VaultFindCounts The four numbers a completeness verdict is built from (spec FR-121, FR-125a).
+// They are separate fields because they are separate facts and they routinely disagree. A design in which they cannot disagree is a design whose test for FR-125a cannot fail — which is precisely the defect an earlier revision of the worked example shipped, stating "14 evaluated" in its header and "over 12 of 12 rows" in its total, the same number twice.
+// selected >= evaluated >= shown, always. `selected - evaluated` is the count of records that were narrowed to but could not be read, and every one of them is named in `problems`.
+type VaultFindCounts struct {
+	// Evaluated Records the comparator could actually read and decide on. Every total is computed over THIS set.
+	Evaluated int `json:"evaluated"`
+
+	// Selected Records the narrowing predicates selected — the candidate population, before any comparison was made.
+	Selected int `json:"selected"`
+
+	// Shown Rows the byte budget allowed into this response. Never larger than `evaluated`, and smaller whenever the budget bit.
+	Shown int `json:"shown"`
+}
+
+// VaultFindGroup One group of a grouped answer (spec FR-027, FR-028, FR-029).
+// A record holding SEVERAL values of the grouped property appears in EVERY group it belongs to (FR-028), so the group counts legitimately sum to more than the row count. That is why each group states its own count rather than leaving a reader to add them up: the sum of the parts is not the size of the whole, and a rendering that implied otherwise would be arithmetically wrong.
+type VaultFindGroup struct {
+	// Absent True when this group holds the records where the property is ABSENT, which `key` alone cannot express — an empty string is itself a value (R-3) and must not collide with absence.
+	Absent *bool `json:"absent,omitempty"`
+
+	// Count Evaluated records in this group.
+	Count int `json:"count"`
+
+	// Key The group's value, rendered. An EMPTY key is the ABSENT group — the records that carry no value for this property at all. It is a real group and it is labelled as absence rather than dropped: the records nobody recorded a value for are frequently the ones being asked about.
+	Key string `json:"key"`
+
+	// Paths The member rows, by path. Always present — an empty array, never null. Groups reference rows rather than repeating them, so a record that landed in three groups is still rendered once.
+	Paths []string `json:"paths"`
+
+	// Property The property this level groups by.
+	Property string `json:"property"`
+
+	// Subgroups The second grouping level, when `group_by` named two.
+	//
+	// It refs a DISTINCT, childless type rather than this one. That is deliberate and it is not a codegen workaround: two levels is the stated limit (FR-027), and a self-referential schema would advertise unbounded nesting — a depth the engine refuses and no caller can reach. A contract should not describe a shape the system will not produce.
+	Subgroups *[]VaultFindSubgroup `json:"subgroups,omitempty"`
+}
+
+// VaultFindJoin Columns BORROWED onto a row through a relation (spec FR-124).
+// It is a separate structure rather than extra cells on the row because the rendering rule is a correctness rule, not a layout preference: a borrowed value MUST render visibly as borrowed — `company [[Acme Ltd]]: status active` — and must never be merged into the row's own columns. It is not a property of this record, and a reader who takes it for one has been told something false about the record in front of them.
+type VaultFindJoin struct {
+	// Cells The borrowed columns. Always present — an empty array, never null — so a relation that resolved to a note carrying none of the requested properties still renders as a resolved relation rather than vanishing.
+	Cells []VaultFindCell `json:"cells"`
+
+	// Relation The relation property the values were borrowed through.
+	Relation string `json:"relation"`
+
+	// Target The related note, as written — the wikilink the row points at.
+	Target string `json:"target"`
+}
+
+// VaultFindPlanStep One line of an `explain` plan (spec FR-073, AC-F3).
+// The plan names EVERY property the query touches and the index each will be answered from. That specificity is the point: a criterion that only asked for "a plan" passed for a constant-returning stub, so the plan must be derived from the actual request and schema, and it must be BYTE-IDENTICAL across a corpus mutation chosen to change it if evaluation were happening.
+type VaultFindPlanStep struct {
+	// Detail What the step does, in one clause.
+	Detail string `json:"detail"`
+
+	// Property The property this step touches, when it touches one.
+	Property *string `json:"property,omitempty"`
+
+	// Source Where the step is answered from. `properties_index` NARROWS — record type, note kind, path prefix, nothing else. `go_comparator` DECIDES every comparison. A plan that shows a comparison sourced from `properties_index` is reporting a ruling violation.
+	Source *VaultFindPlanStepSource `json:"source,omitempty"`
+
+	// Stage Which phase of the pipeline this step describes.
+	Stage VaultFindPlanStepStage `json:"stage"`
+}
+
+// VaultFindPlanStepSource Where the step is answered from. `properties_index` NARROWS — record type, note kind, path prefix, nothing else. `go_comparator` DECIDES every comparison. A plan that shows a comparison sourced from `properties_index` is reporting a ruling violation.
+type VaultFindPlanStepSource string
+
+// VaultFindPlanStepStage Which phase of the pipeline this step describes.
+type VaultFindPlanStepStage string
+
+// VaultFindRequest A call to `vault_find` — the ONE retrieval path (ADR-068 D15.3, spec 4.1.2). It absorbs `record_query`, `record_explain`, `knowledge_search`, `knowledge_tasks` and link-neighbourhood traversal. There is no second retrieval tool, and there is no call shape that returns rows without the verdict on them.
+// HOSTED INLINE rather than in its own file because it references the recursive VaultFilterNode by internal `#/components/schemas/` reference — see that schema's note for why a cross-file reference cannot be used there.
+// A parameter name this schema does not declare is REFUSED listing the accepted names (FR-022c), never ignored. Silently dropping an argument is how a caller comes to believe a constraint was applied that never was.
+// Scope is not negotiable by the caller. Every vault tool resolves through the CALLING AGENT'S workspace (FR-060); notes in a vault mounted only into another workspace are invisible, and that case is deliberately indistinguishable from an empty vault (FR-062) so the error channel cannot be used to probe for what the caller may not see. Scope is resolved BEFORE any refusal is built, so the valid-names list in an error can never disclose a schema outside it.
+type VaultFindRequest struct {
+	// Aggregate Totals to compute. Each states its own scope in the rendered response; a total that does not say what it covers is a bare number (FR-125). Every total is computed over the FULL EVALUATED SET, never over the rendered page (FR-125a). No total is returned over a refused candidate set.
+	Aggregate *[]VaultFindAggregate `json:"aggregate,omitempty"`
+
+	// Cursor Opaque pagination cursor from a previous response. A cursor that cannot be honoured is an ERROR naming the epoch it was issued against (FR-020c), never a silent restart — a silent restart returns page one while the caller believes it is reading page four.
+	Cursor *string `json:"cursor,omitempty"`
+
+	// Detail Rendering density. Omitted means `standard`. `minimal` drops columns and borrowed values to roughly 80 bytes per hit; the completeness header and the problem COUNT always survive the trim, because the caveat is the one thing a shorter answer must not lose.
+	Detail *VaultFindRequestDetail `json:"detail,omitempty"`
+
+	// Explain Report the plan and EVALUATE NOTHING (FR-073). Omitted means false.
+	//
+	// An `explain` response names every property the query touches and the index each would be answered from, performs ZERO candidate retrievals, and carries no `index_epoch` — a plan is not a result, so it should not observe an epoch at all. Two `explain` calls over an unchanged schema are byte-identical, including across a corpus mutation, which is what makes the assertion capable of failing against an implementation that quietly evaluates.
+	Explain *bool `json:"explain,omitempty"`
+
+	// Filter A structured filter tree. Applied AFTER `view` when both are given, so a saved view is refined rather than replaced.
+	Filter *VaultFilterNode `json:"filter,omitempty"`
+
+	// GroupBy Group the answer, outermost first. Two levels (FR-027); grouping by a relation is supported (FR-029); a record holding several values appears in every group it belongs to (FR-028).
+	GroupBy *[]string `json:"group_by,omitempty"`
+
+	// Hops Link steps from `near`. Meaningful only with `near`; omitted means 1. A third hop is REFUSED naming the limit and the remedy (FR-065) rather than walked implicitly, because a deeper traversal is a follow-up query the caller should make knowingly.
+	Hops *int `json:"hops,omitempty"`
+
+	// Join Relation properties whose columns to BORROW onto each row (FR-124). A borrowed value renders visibly as borrowed and is never merged into the row's own columns: it is not a property of this record and must never read as one.
+	Join *[]string `json:"join,omitempty"`
+
+	// Kind What sort of row to return. Omitted means `note`.
+	//
+	// `task` is the replacement for `knowledge_tasks` and it returns CHECKBOX LINES, not notes: each row carries `path`, `line`, `status` and `text`, and renders with its line number so a reader can never mistake it for the note that contains it (FR-076a). This narrowly amends the rule that a row is one note: a row is one real THING AT A PATH — a note, or a checkbox line within one. The whole-collection regex walk that `knowledge_tasks` performed does not survive; checkboxes are indexed, so the ordinary bounds apply and the old 5,000-file read cap is gone.
+	Kind *VaultFindRequestKind `json:"kind,omitempty"`
+
+	// Limit Rows per page. Omitted means 50. A value above the cap of 200 is CLAMPED and the clamp is REPORTED (FR-063) — deliberately no `maximum` here, so an over-large request comes back with a stated clamp rather than a bare schema error that says nothing about what was applied.
+	Limit *int `json:"limit,omitempty"`
+
+	// Near A note path or wikilink. Restricts the answer to notes within `hops` link steps of it. It COMPOSES with `words` and `filter` — that composition is the capability worth having, and no system this design surveyed can express it: each has text search OR graph traversal, none composes them.
+	Near *string `json:"near,omitempty"`
+
+	// Select Which properties to render as columns. Omitted uses the schema's own declaration order, so a report reads the way the operator wrote it. Narrowing this changes what is RENDERED, never what is matched.
+	Select *[]string `json:"select,omitempty"`
+
+	// Sort Sort keys in order. Omitted sorts by relevance.
+	//
+	// An enum sorts LEXICALLY over its case-folded form, so `Won`, `won` and `WON` sort together exactly as they group together (ruling R-E, R-5c); ties on the folded key break on raw bytes so the order is deterministic. There is no declared-position ordinal — a domain order is expressed by prefixing the declared values (`1-lead`, `2-qualified`), which is visible in the operator's own file and does exactly what it appears to do.
+	//
+	// The sort is computed in Go by the comparator, never by an emitted `ORDER BY` (ruling R-A).
+	Sort *[]VaultFindSort `json:"sort,omitempty"`
+
+	// Type The record type to search. Unknown → refusal listing the declared types (FR-024), never an empty result.
+	Type *string `json:"type,omitempty"`
+
+	// View A saved view, applied first. Unknown name → refusal listing the saved views in scope.
+	View *string `json:"view,omitempty"`
+
+	// Words Free text, ranked (FR-112). Composes with every other parameter: the answer is the INTERSECTION, never a union. When `words` finds nothing the response reports the vocabulary the index actually holds and STOPS there — it does not broaden the query on the caller's behalf (FR-114), because a user who searched for one thing and silently received results for a broader thing has been given a wrong answer with no error channel.
+	Words *string `json:"words,omitempty"`
+}
+
+// VaultFindRequestDetail Rendering density. Omitted means `standard`. `minimal` drops columns and borrowed values to roughly 80 bytes per hit; the completeness header and the problem COUNT always survive the trim, because the caveat is the one thing a shorter answer must not lose.
+type VaultFindRequestDetail string
+
+// VaultFindRequestKind What sort of row to return. Omitted means `note`.
+//
+// `task` is the replacement for `knowledge_tasks` and it returns CHECKBOX LINES, not notes: each row carries `path`, `line`, `status` and `text`, and renders with its line number so a reader can never mistake it for the note that contains it (FR-076a). This narrowly amends the rule that a row is one note: a row is one real THING AT A PATH — a note, or a checkbox line within one. The whole-collection regex walk that `knowledge_tasks` performed does not survive; checkboxes are indexed, so the ordinary bounds apply and the old 5,000-file read cap is gone.
+type VaultFindRequestKind string
+
+// VaultFindResponse The answer to `vault_find` — rows AND the account of everything the query could not include, in the SAME response (ADR-068 D13, D22; spec FR-025, FR-121).
+// THERE IS NO CALL SHAPE THAT RETURNS ROWS ALONE. `complete`, `counts`, `problems`, `rows`, `totals` and `next` are REQUIRED, and that is the load-bearing decision of this contract. If any were optional a caller could hold a total without the caveats attached to it, a producer could omit them and still be conformant, and the generated types would carry them as nullable — at which point the guarantee is a convention, and conventions are exactly what fail silently.
+// THE RENDERING IS PART OF THE CONTRACT, not a presentation detail. This object is projected to COMPACT TEXT for the model, never to JSON: measurement puts the reduction from a JSON schema object to compact text at roughly 91% of the context tokens, and moving results from inline text to a file collapsed agent accuracy from 93.1% to 55.2% — as large a swing as changing the retriever. The projection is fixed:
+//
+//  1. COMPLETENESS FIRST, in the header. The verdict precedes the evidence so
+//     that no conclusion forms before the caveat arrives. A reader must never
+//     have to reach the bottom of a table to learn the answer was partial.
+//  2. The query ECHOED AS EXECUTED, so a clamp or a default is visible without
+//     a second call.
+//  3. Rows. Borrowed values marked visibly as borrowed, never merged in.
+//  4. Totals, each stating its scope in the same sentence as its number.
+//  5. Problems — one record, one reason, one FIX, inline. "value is '50k'
+//     where a number is required" and not "3 records excluded".
+//  6. NEXT: addressable calls. In an agentic loop every response is the prompt
+//     for the next call.
+//
+// A REFUSAL ARRIVES HERE, not as a transport error, and never as an empty success: `refused: true` with no rows and the remedy in `problems`. An out-of-scope query is not an error either — it returns no rows with `complete: true`, deliberately indistinguishable from an empty vault.
+type VaultFindResponse struct {
+	// Complete REQUIRED. True only when the query covered everything it was asked to cover: nothing excluded for a type violation, no clamp, no refusal, no stale row, no truncated scope, no unavailable index.
+	//
+	// A response whose `complete` is false and whose `problems` is EMPTY is a defect: either the reason is named or the verdict is wrong.
+	//
+	// THE ONE STATED EXCEPTION IS WORKSPACE SCOPE. A caller can receive `complete: true` over zero rows while records exist in a vault mounted only into another workspace. That is deliberate and required, and it means the verdict is honest about everything EXCEPT scope. It is written down here rather than left to be discovered, because an unstated exception to a headline guarantee is how a guarantee stops being believed.
+	Complete bool `json:"complete"`
+
+	// CompleteReason Why the verdict is what it is, ready to render on the header line immediately after it. Empty when `complete` is true.
+	CompleteReason *string `json:"complete_reason,omitempty"`
+
+	// Counts REQUIRED. The numbers behind the verdict.
+	Counts VaultFindCounts `json:"counts"`
+
+	// Elided Rows that were evaluated and are being reported as existing, but which the byte budget could not render. Absent when nothing was elided. It is stated rather than dropped so the row count on screen never reads as the size of the answer.
+	Elided *int `json:"elided,omitempty"`
+
+	// ElidedSummary A one-line trace of the elided rows — enough for a reader to see the shape of what was cut without paging. Empty when nothing was elided.
+	ElidedSummary *string `json:"elided_summary,omitempty"`
+
+	// Groups Grouped results, present only when the request carried `group_by`. Rows stay in `rows`; groups reference them by path.
+	Groups *[]VaultFindGroup `json:"groups,omitempty"`
+
+	// Index Per-record freshness across the two indexes. ABSENT on an `explain` response, which evaluates nothing and therefore observes no epoch.
+	Index *VaultIndexState `json:"index,omitempty"`
+
+	// LimitApplied The page size actually used.
+	LimitApplied *int `json:"limit_applied,omitempty"`
+
+	// LimitClamped True when the requested page size exceeded the cap of 200 and was reduced. The clamp is REPORTED, never silent — silent truncation is the incumbent behaviour this design cites as motivating evidence, and shipping our own would be indefensible.
+	LimitClamped *bool `json:"limit_clamped,omitempty"`
+
+	// LimitRequested What the caller asked for. Present only when `limit_clamped` is true, so the caller can see exactly what was refused.
+	LimitRequested *int `json:"limit_requested,omitempty"`
+
+	// NearestTerms On a zero-hit word search, the vocabulary the index actually holds. Reported INSTEAD of broadening the query, never as well as.
+	NearestTerms *[]VaultTermCount `json:"nearest_terms,omitempty"`
+
+	// Next REQUIRED. Addressable follow-up calls. Always present — an empty array, never null. A response that ends without one forces the model to invent arguments, and an invented property name is the failure the schema check exists to prevent.
+	Next []VaultFindAction `json:"next"`
+
+	// NextCursor Opaque cursor for the next page. Absent means this was the last page.
+	NextCursor *string `json:"next_cursor,omitempty"`
+
+	// Plan Present only on an `explain` response, and then INSTEAD of any evaluation — zero candidate retrievals occur.
+	Plan *[]VaultFindPlanStep `json:"plan,omitempty"`
+
+	// Problems REQUIRED. Everything the query could not include, and why. Always present — an EMPTY array, never null and never absent, so "no problems" is stated rather than inferred.
+	//
+	// Each entry names the records affected, the reason, and the FIX. A problem list that says only what went wrong fails the requirement: an exclusion is reported with its remedy in the same line, because the reader's next action is the point of telling them at all.
+	Problems []RecordProblem `json:"problems"`
+
+	// QueryEcho REQUIRED. The query AS EXECUTED, including defaults filled in and clamps applied — so a caller sees what actually ran rather than what it sent. Empty only when there was nothing to echo, which no real call produces.
+	QueryEcho string `json:"query_echo"`
+
+	// Refused REQUIRED. True when the query was refused outright and NO answer was computed — a bound exceeded, a third hop, an unsupported operator, a capability this build does not have. Rows are then empty, no total is returned, and `problems` carries the remedy.
+	//
+	// Distinct from `complete: false`, which also covers a partial answer that WAS computed. A caller must be able to tell "here is some of it" from "here is none of it, narrow and re-ask" without parsing prose.
+	Refused bool `json:"refused"`
+
+	// Rows REQUIRED. The matched rows in the requested order. Always present — an empty array, never null.
+	Rows []VaultFindRow `json:"rows"`
+
+	// Totals REQUIRED. Computed totals, each carrying the scope it covers. Always present — an empty array, never null, so "no totals were asked for" is stated rather than inferred from a missing field.
+	Totals []VaultFindTotal `json:"totals"`
+}
+
+// VaultFindRow One row of a `vault_find` answer (spec 4.2, D22.4 as amended by ADR-068 D15.3).
+// A row is ONE REAL THING AT A PATH — a note, or a checkbox line within one. The checkbox case is a deliberate, narrow amendment rather than a silent absorption: `kind: task` returns many rows per file, so a task row carries `line` and `status` and renders with its line number, and a reader is therefore never able to mistake it for the note that contains it.
+type VaultFindRow struct {
+	// Cells The row's OWN columns, in `select` order or the schema's declaration order. Always present — an empty array, never null.
+	Cells []VaultFindCell `json:"cells"`
+
+	// Id The record identifier, byte-exact and NEVER case-folded: `CO-0142` and `co-0142` are two distinct records (R-8). Absent on an ordinary note, which is the majority of every real vault and not an error (FR-005) — such a row is addressed by `path`.
+	Id *string `json:"id,omitempty"`
+
+	// Joins Values borrowed through a relation, rendered visibly as borrowed and never merged into `cells`. Always present — an empty array, never null.
+	Joins []VaultFindJoin `json:"joins"`
+
+	// Line TASK ROWS ONLY. The 1-based line of the checkbox, counted from the first byte of the file including any frontmatter block, because that is the line the operator's editor shows.
+	Line *int `json:"line,omitempty"`
+
+	// Path The vault-relative path. Always present, because it is what the caller passes to `vault_read` next, and a row a caller cannot address is a row that ends the loop.
+	Path string `json:"path"`
+
+	// Stale True when this row's `source_hash` does not agree with the text index's, or when either side holds no hash at all. Omitted means the two indexes agree.
+	//
+	// The reason a stale row is RETURNED and FLAGGED rather than dropped is that dropping it would make the answer quietly smaller with nothing saying so. A flagged row moves the response's completeness verdict to `no` and appears in `problems` by name.
+	Stale *bool `json:"stale,omitempty"`
+
+	// Status TASK ROWS ONLY. The checkbox state.
+	Status *VaultFindRowStatus `json:"status,omitempty"`
+
+	// Text TASK ROWS ONLY. The checkbox text, trimmed.
+	Text *string `json:"text,omitempty"`
+
+	// Title The note's display title.
+	Title string `json:"title"`
+}
+
+// VaultFindRowStatus TASK ROWS ONLY. The checkbox state.
+type VaultFindRowStatus string
+
+// VaultFindSort One sort key (spec 4.1.2, ruling R-E). Computed in Go by the comparator, never by an emitted `ORDER BY` — SQLite's collations fold two of the fourteen case pairs the spec requires and none of the twelve non-ASCII ones, so a sort delegated to the store would order differently from the equality that grouped the same values.
+type VaultFindSort struct {
+	// Direction Omitted means `asc`. Stated in prose rather than as a JSON Schema `default:` deliberately: openapi-typescript promotes a defaulted property to REQUIRED while oapi-codegen still emits an optional field, so a `default:` here would split the two generated languages on one field.
+	Direction *VaultFindSortDirection `json:"direction,omitempty"`
+
+	// Property The declared property to sort on. Unknown → refusal listing the declared names (FR-024).
+	Property string `json:"property"`
+}
+
+// VaultFindSortDirection Omitted means `asc`. Stated in prose rather than as a JSON Schema `default:` deliberately: openapi-typescript promotes a defaulted property to REQUIRED while oapi-codegen still emits an optional field, so a `default:` here would split the two generated languages on one field.
+type VaultFindSortDirection string
+
+// VaultFindSubgroup The INNER level of a two-level grouping (spec FR-027).
+// It carries no children of its own, which is how the two-level limit is expressed in the contract rather than only in the engine. A record holding several values of the grouped property appears in every subgroup it belongs to (FR-028), so subgroup counts can sum to more than the parent's count — which is why each states its own.
+type VaultFindSubgroup struct {
+	// Absent True when this group holds the records where the property is absent.
+	Absent *bool `json:"absent,omitempty"`
+
+	// Count Evaluated records in this subgroup.
+	Count int `json:"count"`
+
+	// Key The group's value, rendered. An empty key is the ABSENT group; read it with `absent`, because an empty string is itself a value (R-3) and must not collide with absence.
+	Key string `json:"key"`
+
+	// Paths The member rows, by path. Always present — an empty array, never null.
+	Paths []string `json:"paths"`
+
+	// Property The property this level groups by.
+	Property string `json:"property"`
+}
+
+// VaultFindTotal One computed total, WITH THE SCOPE IT COVERS (spec FR-125, FR-125a).
+// `scope` is not decoration and it is not optional. A total that does not say what it covers is a bare number, and a bare number over a partially-evaluated set is the confidently-wrong answer this whole surface exists to remove. The scope clause is rendered in the SAME SENTENCE as the value, so a reader cannot acquire the number without the qualification.
+// The value is computed over the FULL EVALUATED SET, never over the rendered page. Those two counts genuinely differ whenever the byte budget elides rows, and a design where they cannot differ is a design whose test for this cannot fail.
+type VaultFindTotal struct {
+	// Label The total as named in the request, e.g. `sum(arr)`.
+	Label string           `json:"label"`
+	Op    VaultFindTotalOp `json:"op"`
+
+	// Refused True when no total could be returned — over a refused candidate set, or over a property whose values could not all be read. A refused total is PRESENT and marked, never omitted: an absent total reads as "there was nothing to add up".
+	Refused *bool `json:"refused,omitempty"`
+
+	// Scope What the number covers, ready to render immediately after it.
+	Scope string `json:"scope"`
+
+	// Value The exact result as text. Never a JSON number: a decimal total that round-tripped through a binary float would state digits nobody computed. EMPTY when `refused` is true — a refused total carries no value, rather than a zero a reader would take for an answer.
+	Value string `json:"value"`
+}
+
+// VaultFindTotalOp defines model for VaultFindTotal.Op.
+type VaultFindTotalOp string
+
+// VaultIndexState What the two indexes say about the rows THIS response returned (spec FR-020c, FR-020c1, ADR-068 D16.5).
+// Freshness is PER RETURNED RECORD, not per index. Each row's `source_hash` from the properties index is compared against the bleve document's stored `source_hash`; a row that fails moves to `problems` and the completeness verdict becomes `no`.
+// The reason a disagreement is reported as "the two indexes disagree" and never as "the properties index is stale" is that the comparison establishes DISAGREEMENT, not which side is behind. Claiming the second is a precision the mechanism does not have.
+// An EMPTY hash on either side is UNKNOWN freshness, which is flagged — never assumed fresh. That case is real rather than theoretical: an attachment is deliberately indexed with no hash, because its bytes must not be opened.
+// The count covers WHAT THE QUERY RETURNED, NOT WHAT IT DID NOT (FR-020c1). This is one of exactly two stated exceptions to the headline guarantee that a response names everything it excluded; the other is workspace scope.
+type VaultIndexState struct {
+	// Agreeing Of those, how many had matching hashes on both sides. Equal to `returned` in the healthy case; anything less means named rows are in `problems`.
+	Agreeing int `json:"agreeing"`
+
+	// Epoch The properties index's generation counter, which a cursor is issued against. ABSENT on an `explain` response: explain evaluates nothing, so it observes no epoch, and two explain calls over an unchanged schema are byte-identical.
+	Epoch *int64 `json:"epoch,omitempty"`
+
+	// Returned Rows in this response whose freshness was checked.
+	Returned int `json:"returned"`
+}
+
 // VaultRecord One record: an ordinary Markdown note in the operator's own vault that declares a record type in its frontmatter (ADR-068 D1). There is no separate database — a record IS the note, and a note whose type matches no schema is simply an ordinary note, not an error (FR-005).
 // Derived values — counts, sums, last-interaction dates, relation inverses — are NEVER present as stored properties here (D9, FR-046). They are computed at query time, because an agent reading frontmatter cannot tell a stale derived value from a fact, and every hand-maintained derived field found in the research is wrong in somebody's vault right now.
 // NAMED VaultRecord, NOT Record. A component named "Record" generates a TypeScript `export type Record = ...` that shadows the built-in Record<K, V> utility type throughout the generated module, and tsc then fails with "Type 'Record' is not generic" on every unrelated use of it in the same file. That is a property of the generator's output, so no hand-edit could survive a regeneration.
@@ -14955,6 +15637,14 @@ type VaultRecord struct {
 
 	// VersionToken ADR-067 D14's opaque content-hash version token for this note. Present on reads, and required back on a write; a stale token is REFUSED and the refusal is audited (FR-043). Opaque — never parsed, compared only for equality.
 	VersionToken *string `json:"version_token,omitempty"`
+}
+
+// VaultTermCount One term the text index actually holds, with its document frequency (spec FR-114, FR-115).
+// It is what a zero-hit answer reports INSTEAD of broadening the query. The system states the vocabulary it has and stops: a user who searched for one thing and silently received results for a broader thing has been given a wrong answer with no error channel.
+type VaultTermCount struct {
+	// Documents How many indexed notes contain it.
+	Documents int    `json:"documents"`
+	Term      string `json:"term"`
 }
 
 // VersionResponse Response from GET /api/v1/version. Returns build identity information. Used by the frontend to detect version drift and show "New version available" prompts (issue #110). No authentication required.

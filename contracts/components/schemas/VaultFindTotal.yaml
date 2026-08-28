@@ -1,0 +1,53 @@
+title: VaultFindTotal
+description: >
+  One computed total, WITH THE SCOPE IT COVERS (spec FR-125, FR-125a).
+
+  `scope` is not decoration and it is not optional. A total that does not say
+  what it covers is a bare number, and a bare number over a partially-evaluated
+  set is the confidently-wrong answer this whole surface exists to remove. The
+  scope clause is rendered in the SAME SENTENCE as the value, so a reader cannot
+  acquire the number without the qualification.
+
+  The value is computed over the FULL EVALUATED SET, never over the rendered
+  page. Those two counts genuinely differ whenever the byte budget elides rows,
+  and a design where they cannot differ is a design whose test for this cannot
+  fail.
+type: object
+additionalProperties: false
+required:
+  - op
+  - label
+  - value
+  - scope
+properties:
+  op:
+    type: string
+    enum: [count, sum, min, max]
+    example: "sum"
+  label:
+    type: string
+    minLength: 1
+    description: The total as named in the request, e.g. `sum(arr)`.
+    example: "sum(arr)"
+  value:
+    type: string
+    description: >
+      The exact result as text. Never a JSON number: a decimal total that
+      round-tripped through a binary float would state digits nobody computed.
+      EMPTY when `refused` is true — a refused total carries no value, rather
+      than a zero a reader would take for an answer.
+    example: "1,051,000.00"
+  scope:
+    type: string
+    minLength: 1
+    description: >
+      What the number covers, ready to render immediately after it.
+    example: "over 14 of 14 evaluated rows (12 shown)"
+  refused:
+    type: boolean
+    description: >
+      True when no total could be returned — over a refused candidate set, or
+      over a property whose values could not all be read. A refused total is
+      PRESENT and marked, never omitted: an absent total reads as "there was
+      nothing to add up".
+    example: false

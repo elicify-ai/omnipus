@@ -43,6 +43,21 @@ properties:
       - scope_truncated
       - aggregate_refused
       - index_unavailable
+      - evaluation_bound_exceeded
+      - unsupported_operator
+      - unsupported_parameter
+      - empty_like_pattern
+      - empty_in_list
+      - literal_type_mismatch
+      - ordering_on_many_property
+      - comparison_undefined
+      - date_format_ambiguous
+      - decimal_scale_exceeded
+      - stale_record
+      - orphan_row
+      - stale_cursor
+      - unknown_view
+      - unknown_record_type
     description: >
       Machine-readable cause, so a caller can branch without parsing prose.
       "missing_schema_version" — a schema file lacking schema_version; no
@@ -86,6 +101,53 @@ properties:
       "index_unavailable" — the index predates record support and cannot hold
       the properties queried. A silent no-op returning complete:true over zero
       properties is impossible (FR-020a).
+      "evaluation_bound_exceeded" — FR-064's B1. The narrowed CANDIDATE
+      population exceeded 50,000 before anything was retrieved. It is a
+      DIFFERENT cause from "candidate_cap_exceeded", which is B2 and counts
+      SURVIVORS during evaluation, and the two must stay distinct because they
+      name different remedies: B1 is reduced by narrowing the scope or the
+      kind, and NOT by adding a filter, which does not change the number that
+      fired. B1's count is exact and is quoted; B2's is not, because the count
+      aborts at the cap and never reaches a true total — quoting one would
+      state a number nobody computed.
+      "unsupported_operator" — a SQL construct the filter does not implement
+      (JOIN, BETWEEN, COALESCE, CASE, a subquery, a function call). REFUSED
+      naming the ten supported operators and the parameter that does the job
+      instead (FR-022c) — never parsed, never silently dropped.
+      "unsupported_parameter" — an argument name the request does not declare,
+      refused with the accepted names listed rather than ignored (FR-022c).
+      "empty_like_pattern" — a LIKE pattern of '' or '%', which matches every
+      record; refused naming IS NOT NULL as the operator that means it
+      (FR-022a).
+      "empty_in_list" — IN was given an empty list, which can match nothing
+      (FR-022d).
+      "literal_type_mismatch" — a literal that cannot be read in the property's
+      declared type (FR-022e). Never coerced.
+      "ordering_on_many_property" — an ordering comparison against a list-
+      valued property, which section 8 R-13 leaves undefined; refused naming
+      =, IN and LIKE as the operators that are defined there.
+      "comparison_undefined" — the comparison oracle could not decide this
+      pair: a non-conforming value (R-4), an unresolved relation (R-8), or an
+      operator no rule defines for the declared type. The record is EXCLUDED
+      and NAMED, and it is not re-admitted by negation — counting a corrupt
+      value as "not done" by double negation would be a silent wrong answer.
+      "date_format_ambiguous" — a date whose format cannot be read without
+      guessing, or whose month or day is not zero-padded (FR-021d). It is
+      never guessed.
+      "decimal_scale_exceeded" — more decimal places than a decimal property
+      carries. The value is NOT rounded to fit (FR-013).
+      "stale_record" — this row's source_hash and the text index's disagree, or
+      one side holds none (FR-020c). Reported as a DISAGREEMENT, never as "the
+      properties index is stale": the comparison establishes that the two
+      differ, not which is behind.
+      "orphan_row" — the properties index holds a row for a path where no
+      indexed note exists (D16.5).
+      "stale_cursor" — the cursor was issued against a different index epoch.
+      An ERROR, never a silent restart from page one.
+      "unknown_view" — a saved view name the vault does not define, refused
+      with the views in scope listed.
+      "unknown_record_type" — a record type the schema set does not declare,
+      refused with the declared types listed (FR-024).
     example: "type_mismatch"
   reason:
     type: string

@@ -1,0 +1,51 @@
+title: VaultIndexState
+description: >
+  What the two indexes say about the rows THIS response returned (spec FR-020c,
+  FR-020c1, ADR-068 D16.5).
+
+  Freshness is PER RETURNED RECORD, not per index. Each row's `source_hash` from
+  the properties index is compared against the bleve document's stored
+  `source_hash`; a row that fails moves to `problems` and the completeness
+  verdict becomes `no`.
+
+  The reason a disagreement is reported as "the two indexes disagree" and never
+  as "the properties index is stale" is that the comparison establishes
+  DISAGREEMENT, not which side is behind. Claiming the second is a precision the
+  mechanism does not have.
+
+  An EMPTY hash on either side is UNKNOWN freshness, which is flagged — never
+  assumed fresh. That case is real rather than theoretical: an attachment is
+  deliberately indexed with no hash, because its bytes must not be opened.
+
+  The count covers WHAT THE QUERY RETURNED, NOT WHAT IT DID NOT (FR-020c1).
+  This is one of exactly two stated exceptions to the headline guarantee that a
+  response names everything it excluded; the other is workspace scope.
+type: object
+additionalProperties: false
+required:
+  - returned
+  - agreeing
+properties:
+  returned:
+    type: integer
+    minimum: 0
+    description: Rows in this response whose freshness was checked.
+    example: 12
+  agreeing:
+    type: integer
+    minimum: 0
+    description: >
+      Of those, how many had matching hashes on both sides. Equal to
+      `returned` in the healthy case; anything less means named rows are in
+      `problems`.
+    example: 12
+  epoch:
+    type: integer
+    format: int64
+    minimum: 0
+    description: >
+      The properties index's generation counter, which a cursor is issued
+      against. ABSENT on an `explain` response: explain evaluates nothing, so
+      it observes no epoch, and two explain calls over an unchanged schema are
+      byte-identical.
+    example: 8814

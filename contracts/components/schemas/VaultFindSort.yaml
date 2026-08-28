@@ -1,0 +1,28 @@
+title: VaultFindSort
+description: >
+  One sort key (spec 4.1.2, ruling R-E). Computed in Go by the comparator, never
+  by an emitted `ORDER BY` — SQLite's collations fold two of the fourteen case
+  pairs the spec requires and none of the twelve non-ASCII ones, so a sort
+  delegated to the store would order differently from the equality that grouped
+  the same values.
+type: object
+additionalProperties: false
+required:
+  - property
+properties:
+  property:
+    type: string
+    minLength: 1
+    description: >
+      The declared property to sort on. Unknown → refusal listing the declared
+      names (FR-024).
+    example: "arr"
+  direction:
+    type: string
+    enum: [asc, desc]
+    description: >
+      Omitted means `asc`. Stated in prose rather than as a JSON Schema
+      `default:` deliberately: openapi-typescript promotes a defaulted property
+      to REQUIRED while oapi-codegen still emits an optional field, so a
+      `default:` here would split the two generated languages on one field.
+    example: "desc"

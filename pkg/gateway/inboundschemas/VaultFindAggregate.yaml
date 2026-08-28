@@ -1,0 +1,23 @@
+title: VaultFindAggregate
+description: >
+  One total to compute over the matched set (spec FR-123, FR-125, FR-125a).
+type: object
+additionalProperties: false
+required:
+  - op
+properties:
+  op:
+    type: string
+    enum: [count, sum, min, max]
+    description: >
+      The reduction. `count` needs no property and counts evaluated rows; the
+      other three require one and are defined only over `integer` and `decimal`
+      properties, which are ONE comparison domain (R-1).
+    example: "sum"
+  property:
+    type: string
+    minLength: 1
+    description: >
+      The property to reduce. Required for `sum`, `min` and `max`; forbidden
+      for `count`, which counts rows rather than values.
+    example: "arr"

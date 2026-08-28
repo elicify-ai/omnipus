@@ -1,0 +1,214 @@
+title: VaultFindResponse
+description: >
+  The answer to `vault_find` — rows AND the account of everything the query
+  could not include, in the SAME response (ADR-068 D13, D22; spec FR-025,
+  FR-121).
+
+  THERE IS NO CALL SHAPE THAT RETURNS ROWS ALONE. `complete`, `counts`,
+  `problems`, `rows`, `totals` and `next` are REQUIRED, and that is the
+  load-bearing decision of this contract. If any were optional a caller could
+  hold a total without the caveats attached to it, a producer could omit them
+  and still be conformant, and the generated types would carry them as nullable
+  — at which point the guarantee is a convention, and conventions are exactly
+  what fail silently.
+
+  THE RENDERING IS PART OF THE CONTRACT, not a presentation detail. This object
+  is projected to COMPACT TEXT for the model, never to JSON: measurement puts
+  the reduction from a JSON schema object to compact text at roughly 91% of the
+  context tokens, and moving results from inline text to a file collapsed agent
+  accuracy from 93.1% to 55.2% — as large a swing as changing the retriever. The
+  projection is fixed:
+
+    1. COMPLETENESS FIRST, in the header. The verdict precedes the evidence so
+       that no conclusion forms before the caveat arrives. A reader must never
+       have to reach the bottom of a table to learn the answer was partial.
+    2. The query ECHOED AS EXECUTED, so a clamp or a default is visible without
+       a second call.
+    3. Rows. Borrowed values marked visibly as borrowed, never merged in.
+    4. Totals, each stating its scope in the same sentence as its number.
+    5. Problems — one record, one reason, one FIX, inline. "value is '50k'
+       where a number is required" and not "3 records excluded".
+    6. NEXT: addressable calls. In an agentic loop every response is the prompt
+       for the next call.
+
+  A REFUSAL ARRIVES HERE, not as a transport error, and never as an empty
+  success: `refused: true` with no rows and the remedy in `problems`. An
+  out-of-scope query is not an error either — it returns no rows with
+  `complete: true`, deliberately indistinguishable from an empty vault.
+type: object
+additionalProperties: false
+required:
+  - complete
+  - refused
+  - counts
+  - query_echo
+  - rows
+  - totals
+  - problems
+  - next
+properties:
+  complete:
+    type: boolean
+    description: >
+      REQUIRED. True only when the query covered everything it was asked to
+      cover: nothing excluded for a type violation, no clamp, no refusal, no
+      stale row, no truncated scope, no unavailable index.
+
+
+      A response whose `complete` is false and whose `problems` is EMPTY is a
+      defect: either the reason is named or the verdict is wrong.
+
+
+      THE ONE STATED EXCEPTION IS WORKSPACE SCOPE. A caller can receive
+      `complete: true` over zero rows while records exist in a vault mounted
+      only into another workspace. That is deliberate and required, and it
+      means the verdict is honest about everything EXCEPT scope. It is written
+      down here rather than left to be discovered, because an unstated
+      exception to a headline guarantee is how a guarantee stops being
+      believed.
+    example: false
+  complete_reason:
+    type: string
+    description: >
+      Why the verdict is what it is, ready to render on the header line
+      immediately after it. Empty when `complete` is true.
+    example: "3 of 17 selected records could not be evaluated"
+  refused:
+    type: boolean
+    description: >
+      REQUIRED. True when the query was refused outright and NO answer was
+      computed — a bound exceeded, a third hop, an unsupported operator, a
+      capability this build does not have. Rows are then empty, no total is
+      returned, and `problems` carries the remedy.
+
+
+      Distinct from `complete: false`, which also covers a partial answer that
+      WAS computed. A caller must be able to tell "here is some of it" from
+      "here is none of it, narrow and re-ask" without parsing prose.
+    example: false
+  counts:
+    description: REQUIRED. The numbers behind the verdict.
+    allOf:
+      - $ref: "./VaultFindCounts.yaml"
+        x-go-type: VaultFindCounts
+  query_echo:
+    type: string
+    description: >
+      REQUIRED. The query AS EXECUTED, including defaults filled in and clamps
+      applied — so a caller sees what actually ran rather than what it sent.
+      Empty only when there was nothing to echo, which no real call produces.
+    example: "type=deal words=\"pricing\" filter=(status = 'open' AND arr >= 50000) limit=50"
+  index:
+    description: >
+      Per-record freshness across the two indexes. ABSENT on an `explain`
+      response, which evaluates nothing and therefore observes no epoch.
+    allOf:
+      - $ref: "./VaultIndexState.yaml"
+        x-go-type: VaultIndexState
+  rows:
+    type: array
+    description: >
+      REQUIRED. The matched rows in the requested order. Always present — an
+      empty array, never null.
+    items:
+      $ref: "./VaultFindRow.yaml"
+      x-go-type: VaultFindRow
+  elided:
+    type: integer
+    minimum: 1
+    description: >
+      Rows that were evaluated and are being reported as existing, but which
+      the byte budget could not render. Absent when nothing was elided. It is
+      stated rather than dropped so the row count on screen never reads as the
+      size of the answer.
+    example: 5
+  elided_summary:
+    type: string
+    description: >
+      A one-line trace of the elided rows — enough for a reader to see the
+      shape of what was cut without paging. Empty when nothing was elided.
+    example: "57,000.00 · 56,000.00 · 55,000.00"
+  groups:
+    type: array
+    description: >
+      Grouped results, present only when the request carried `group_by`. Rows
+      stay in `rows`; groups reference them by path.
+    items:
+      $ref: "./VaultFindGroup.yaml"
+      x-go-type: VaultFindGroup
+  totals:
+    type: array
+    description: >
+      REQUIRED. Computed totals, each carrying the scope it covers. Always
+      present — an empty array, never null, so "no totals were asked for" is
+      stated rather than inferred from a missing field.
+    items:
+      $ref: "./VaultFindTotal.yaml"
+      x-go-type: VaultFindTotal
+  problems:
+    type: array
+    description: >
+      REQUIRED. Everything the query could not include, and why. Always present
+      — an EMPTY array, never null and never absent, so "no problems" is stated
+      rather than inferred.
+
+
+      Each entry names the records affected, the reason, and the FIX. A problem
+      list that says only what went wrong fails the requirement: an exclusion
+      is reported with its remedy in the same line, because the reader's next
+      action is the point of telling them at all.
+    items:
+      $ref: "./RecordProblem.yaml"
+      x-go-type: RecordProblem
+  next:
+    type: array
+    description: >
+      REQUIRED. Addressable follow-up calls. Always present — an empty array,
+      never null. A response that ends without one forces the model to invent
+      arguments, and an invented property name is the failure the schema check
+      exists to prevent.
+    items:
+      $ref: "./VaultFindAction.yaml"
+      x-go-type: VaultFindAction
+  nearest_terms:
+    type: array
+    description: >
+      On a zero-hit word search, the vocabulary the index actually holds.
+      Reported INSTEAD of broadening the query, never as well as.
+    items:
+      $ref: "./VaultTermCount.yaml"
+      x-go-type: VaultTermCount
+  plan:
+    type: array
+    description: >
+      Present only on an `explain` response, and then INSTEAD of any evaluation
+      — zero candidate retrievals occur.
+    items:
+      $ref: "./VaultFindPlanStep.yaml"
+      x-go-type: VaultFindPlanStep
+  next_cursor:
+    type: string
+    minLength: 1
+    description: >
+      Opaque cursor for the next page. Absent means this was the last page.
+    example: "c2FnZTI"
+  limit_applied:
+    type: integer
+    minimum: 1
+    description: The page size actually used.
+    example: 50
+  limit_clamped:
+    type: boolean
+    description: >
+      True when the requested page size exceeded the cap of 200 and was
+      reduced. The clamp is REPORTED, never silent — silent truncation is the
+      incumbent behaviour this design cites as motivating evidence, and
+      shipping our own would be indefensible.
+    example: false
+  limit_requested:
+    type: integer
+    minimum: 1
+    description: >
+      What the caller asked for. Present only when `limit_clamped` is true, so
+      the caller can see exactly what was refused.
+    example: 5000
