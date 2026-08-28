@@ -478,6 +478,33 @@ func TestReadTool_SymlinkedPathIsRefusedNotFollowed(t *testing.T) {
 	assert.NotContains(t, msg, "BEGIN RSA PRIVATE KEY", "the target's bytes must never reach the response")
 }
 
+// TestReadTool_InCollectionSymlinkIsRefusedNotFollowed isolates the
+// IsRegular() check from ResolveContained's own outside-collection guard: the
+// symlink here points at ANOTHER real file inside the same collection, so
+// containment alone would happily resolve and open it. Only the explicit
+// "named path must itself be a regular file" check refuses this one — the
+// same posture readNoteVersionAbs (version.go) and the search boundary
+// (TestSearchTool_SymlinkedHitIsRefusedNotFollowed) already take.
+func TestReadTool_InCollectionSymlinkIsRefusedNotFollowed(t *testing.T) {
+	if os.Getenv("GOOS") == "windows" {
+		t.Skip("symlinks are not universally available on the CI Windows image")
+	}
+	root := t.TempDir()
+	readFixtureVault(t, root)
+
+	target := filepath.Join(root, "Notes", "Ordinary.md")
+	linkPath := filepath.Join(root, "Notes", "Alias.md")
+	if err := os.Symlink(target, linkPath); err != nil {
+		t.Skipf("symlinks unavailable on this platform/filesystem: %v", err)
+	}
+
+	ctx, deps := readCtxAndDeps(t, root)
+	res := NewReadTool(deps).Execute(ctx, map[string]any{"path": "Notes/Alias.md"})
+	require.NotNil(t, res)
+	require.True(t, res.IsError, "a symlink named directly must be refused even when its target is inside the collection")
+	assert.Contains(t, resultText(res), "only through a symbolic link")
+}
+
 func TestReadTool_RateLimited(t *testing.T) {
 	root := t.TempDir()
 	readFixtureVault(t, root)

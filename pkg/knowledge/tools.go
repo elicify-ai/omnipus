@@ -1613,21 +1613,34 @@ func (t *ReadTool) gather(
 		return nil, err
 	}
 	fsys := OSLinkFS()
-	abs, err := root.ResolveContained(fsys, notePath)
+
+	// FR-043/FR-044 applied at the read boundary, through the SAME primitive
+	// SearchTool's own retrieval boundary uses (tools.go's retrievalPath,
+	// proven by TestSearchTool_SymlinkedHitIsRefusedNotFollowed): a symlink
+	// ANYWHERE on the way to `path` — including the leaf itself — is refused
+	// rather than followed. ResolveContained alone is not enough here: it
+	// resolves through a symlink to the real file it points at, so an
+	// IsRegular check on the RESOLVED path can never observe that a symlink
+	// was involved at all — the resolved path is always a regular file when
+	// one exists at the far end. retrievalPath is the one place that also
+	// compares against the un-resolved lexical join, which is what actually
+	// detects the link.
+	abs, err := retrievalPath(fsys, root, notePath)
 	if err != nil {
 		return nil, err
 	}
-
-	// FR-043/FR-044 applied at the read boundary, mirroring
-	// TestSearchTool_SymlinkedHitIsRefusedNotFollowed and version.go's own
-	// readNoteVersionAbs: a symlink or a directory named as `path` is refused
-	// outright rather than opened, never followed.
 	fi, statErr := fsys.Lstat(abs)
 	switch {
 	case statErr != nil:
 		return nil, fmt.Errorf("no note at %s", notePath)
+	case fi.IsDir():
+		return nil, fmt.Errorf("%s is a directory, not a note", notePath)
 	case !fi.Mode().IsRegular():
-		return nil, fmt.Errorf("%s is not a regular file (a symlink or a directory cannot be read this way)", notePath)
+		// Defensive rather than reachable: retrievalPath already refuses
+		// every symlink in the chain, so what remains here is the exotic
+		// non-regular case (socket, device, named pipe) — still named rather
+		// than left to fail unexplained inside ReadNoteContent.
+		return nil, fmt.Errorf("%s is not a regular file", notePath)
 	}
 
 	content, err := ReadNoteContent(fsys, abs)
