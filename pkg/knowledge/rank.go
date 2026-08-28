@@ -813,10 +813,19 @@ func (ix *Index) FusedSearch(query string, limit int, cfg FusionConfig, src Rank
 	for _, f := range fused {
 		h, ok := byPath[f.Path]
 		if !ok {
-			// Unreachable by construction — every fused path came from the pool
-			// — but a silent drop here would be a missing result with no error,
-			// so the invariant is enforced rather than assumed.
-			continue
+			// Unreachable by construction — every fused path came from the pool.
+			//
+			// It is an ERROR rather than a skip, and that distinction is load
+			// bearing. A `continue` here silently absorbs the exact bug the
+			// retriever/prior split exists to prevent: wire a prior as a
+			// corpus-wide retriever and it starts nominating documents the
+			// query never matched, and this loop would quietly drop them and
+			// return a short result list with no explanation. Verified by
+			// mutation — with a `continue`, making recency retrieve corpus-wide
+			// leaves TestFusedSearch_PriorsCannotIntroduceADocument PASSING.
+			return nil, fmt.Errorf(
+				"knowledge: rank fusion produced %q, which no retriever returned: "+
+					"a prior has been wired as a retriever (see rank.go's header)", f.Path)
 		}
 		h.Score = f.Score
 		out = append(out, h)

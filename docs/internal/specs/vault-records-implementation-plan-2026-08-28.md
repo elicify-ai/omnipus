@@ -149,10 +149,35 @@ Parallel fixers, then full CI. Iterate until every job passes. **Real defects, n
    — an allow-list benefits equally, so `record_type=?` is recognised as the legitimate narrowing
    predicate it is instead of flagged for its spacing. Then pin the unspaced forms as fixtures so
    removing the canonicalisation fails loudly rather than silently reopening the blind spot.
-3. **Capture exit codes without a pipe** — `cmd > log 2>&1; echo "exit=$?"`.
+3. **A null result means nothing until the instrument is shown to have the POWER to detect the effect.**
+   This is the same failure as rules 1 and 2 and it is the worst-behaved member of the family,
+   because **its output is indistinguishable from a careful negative finding.** A collision that
+   shrinks a corpus at least leaves a wrong count somewhere. A blind instrument returns a clean,
+   plausible, publishable zero — and a reader has no way to tell "we measured this and it does not
+   help" from "this measurement could not have said anything else."
+   *Worked example, Stage 2 (D21.3 ranking).* The BM25F field-weighting row of the ablation came back
+   **byte-identical to the plain-BM25 baseline on all 60 committed queries.** Read as a result, that
+   is a clean null: field weighting does not help. It was not a result. Every note in the generated
+   corpus repeated its own title inside its own body, so **title and body agreed on every document**,
+   and re-weighting two fields that agree cannot reorder anything. The corpus was structurally
+   incapable of expressing the effect the row claimed to measure. Had it been reported, we would have
+   shipped without field weighting on the strength of a measurement that could not have said
+   otherwise.
+   A second instance in the same file, same session: the exact/prefix **name signal** compared the
+   whole query phrase against the note name, so it fired on **0 of 60** real multi-term queries. Its
+   ablation row was likewise identical to the row without it.
+   **The trap underneath: a whole-metric power check does not cover a per-signal blind spot.** There
+   WAS a headroom guard (`TestRank_EvalHasHeadroom`, asserting the baseline is neither at ceiling nor
+   at floor) and it passed throughout. Aggregate headroom says the eval can detect *something*; it
+   says nothing about whether the corpus can express *this signal*.
+   **Cheapest check: before trusting any null, plant a positive and confirm the instrument detects
+   it** — construct the case the signal exists to decide, and assert the outcome changes. If it does
+   not, the signal is broken or the corpus is blind, and either way the null is uninformative.
+   Written as a test per signal, not once per suite.
+4. **Capture exit codes without a pipe** — `cmd > log 2>&1; echo "exit=$?"`.
    Corollary, learned in Stage 2: **`go vet` is not a build check.** It printed
    `import cycle not allowed in test` and exited **0**. Only `go test` proves a test binary links.
-4. **Commit COMPILING states incrementally.** This machine has slept mid-write five times today and
+5. **Commit COMPILING states incrementally.** This machine has slept mid-write five times today and
    killed four agents at the research→write boundary. In a shared worktree an uncommitted broken
    build is not a private state — it is a stop-the-world event for every agent whose tests import the
    package, and they cannot tell whose edit caused it without asking.
