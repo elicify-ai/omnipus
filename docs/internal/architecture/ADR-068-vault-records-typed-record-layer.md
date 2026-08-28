@@ -2537,8 +2537,10 @@ its own ADR rather than an implementation note.
 
 *Added in revision 6:*
 
-- **SQLite's DEFAULT semantics contradict NINE of the thirteen comparison rules, and eight of the
-  nine fail silently** (D16.6). `'3' > 2` is **true** in SQL; `NOT (status = 'done')` **drops**
+- **SQLite's DEFAULT semantics contradict TEN of the comparison rules, and nine of the ten fail
+  silently** (D16.6). ***Revision 7: this is now a REASON, not a cost — the ruling that SQLite
+  narrows rather than decides makes every one of them unreachable. The bullet is kept, restated,
+  because the reasoning is what justifies the ruling.*** `'3' > 2` is **true** in SQL; `NOT (status = 'done')` **drops**
   every absent row, so FR-008's *"which days did I not meditate?"* returns **zero**; `'ACME' LIKE
   '%acme%'` is **true**; enums order lexically, so `stage >= qualified` drops `proposal`; and
   `SUM` adds USD to JPY without complaint. Each is defeatable and D16.6 gives the defeat, but each
@@ -2548,20 +2550,25 @@ its own ADR rather than an implementation note.
   runs against the **real compiled query path** (AC-8.4), not a Go comparator: after D16.2b the
   product does not use one for filtering, and a table that passes over an unused comparator proves
   nothing.
-- **Four of this ADR's semantics are NOT native SQL, and the translation layer that carries them
-  is the risk D16.2 moved rather than removed.** Named so they are costed:
+- ~~**Four of this ADR's semantics are NOT native SQL, and the translation layer that carries them
+  is the risk D16.2 moved rather than removed.**~~ **WITHDRAWN IN REVISION 7 — there is no
+  translation layer, because SQL carries none of this ADR's semantics.** The four are recorded
+  below with what became of them, because two were retired outright and the other two are the
+  clearest statement of why the ruling is right:
 
-  | Semantic | Why SQL does not give it |
-  |---|---|
-  | **D3.2** — a negative filter *includes* absent records by default | SQL's `<>` **excludes** `NULL`. Every negative predicate must be emitted as `(x <> v OR x IS NULL)`, and forgetting it reproduces §1.3's checkbox failure exactly |
-  | **D4** — enums sort by **declared position**, not spelling | needs an ordinal join or a generated ordinal column, maintained in step with the schema file |
-  | **D10** — multi-value grouping puts one record under **both** groups | needs an unnest; the naive `GROUP BY` produces Obsidian's "Finance Business" defect, which D10 exists to avoid |
-  | **O-2** — cross-currency sums are **refused**, not summed | no aggregate expresses "refuse"; the refusal must be decided before the SQL is emitted |
+  | Semantic | Revision 6 said SQL does not give it because | Revision 7 |
+  |---|---|---|
+  | **D3.2** — a negative filter *includes* absent records | SQL's `<>` **excludes** `NULL`, so every negative predicate must be emitted as `(x <> v OR x IS NULL)`, and forgetting it reproduces §1.3's checkbox failure | **N/A — and this is the sharpest argument for the ruling.** Revision 6's rewrite covers a *leaf*; the filter grammar is a *tree*, and `NOT (subtree)` in SQL drops every NULL-bearing row however correct each leaf is. **In Go it is right by construction**: R-2 makes an absent-side comparison `false`, so `NOT(false)` is `true`, at any depth |
+  | ~~**D4**~~ — enums sort by declared position | needed an ordinal join or a generated ordinal column | **RETIRED** — enums sort lexically, which is what SQL already does (D4, revised) |
+  | **D10** — multi-value grouping puts one record under **both** groups | needs an unnest; the naive `GROUP BY` produces Obsidian's "Finance Business" defect | **N/A — and revision 6 named only half of it.** Grill pass 1 found the other half: the naive **join** also inflates every `COUNT` and `SUM` over a filtered multi-value list — **2 and 200 where truth is 1 and 100**. Neither half is reachable now; both are properties of aggregating in SQL |
+  | ~~**O-2**~~ — cross-currency sums are refused | no aggregate expresses "refuse" | **RETIRED** — there is no `money` type (D3, O-2 superseded) |
 
-  **The `3 > 2` failure class does not disappear; it changes address** — from a Go comparator to
-  a SQL generator, where the symptom is the same (a wrong answer, no error) and the test surface
-  is the same exhaustive truth table §4.2 already requires. That table is still a deliverable, and
-  it now covers emitted SQL as well as Go comparisons.
+  **The `3 > 2` failure class does not change address after all — it stays where it was.**
+  *Revision 6 wrote that it moves "from a Go comparator to a SQL generator, where the symptom is the
+  same and the test surface is the same exhaustive truth table". **Revision 7 keeps it in the Go
+  comparator**, which is where the truth table can actually reach it: the table now runs against the
+  comparator the product uses (AC-16.6), not against emitted SQL, and that is not a weakening — it
+  is the difference between testing the decision surface and testing a translation of it.*
 - **A sixth tool exists** (D15.6). One more definition in the catalog and ~150 more tokens of
   standing context per agent that has it, bought deliberately — see D15.6 for the trade.
 - **The write path gets a rate limiter it does not have today** (D15.5b). Revision 5 recorded this
@@ -2578,7 +2585,7 @@ its own ADR rather than an implementation note.
 - **Board, calendar, gallery and map views** — one view type (table) until a real case appears.
 - **Charts** — the numeric layer is second-class even in Notion, whose charts cannot display
   rollups at all.
-- **Multi-currency conversion** — pending O-2.
+- **Multi-currency conversion** — **permanently out of scope, revision 7.** *Was "pending O-2".* There is no `money` type to convert (D3, O-2 superseded). If a currency-aware type is ever wanted it arrives as a new property type in its own ADR, with the rate-source question answered first.
 - **Inbound capture** from mail and calendar — high value, separate feature, separate ADR.
 
 ---
@@ -2588,8 +2595,8 @@ its own ADR rather than an implementation note.
 | ID | Question | Why it matters | Owner |
 |---|---|---|---|
 | ~~O-1~~ | **RESOLVED 2026-08-25 — one-way importer.** `record_view_import` reads a `.base` file and translates the filters, order and grouping it recognises into a native view. Anything it cannot translate is **reported by name**, never silently dropped or approximated. It is a one-shot translation, not a live read path: we do not take on tracking a format that broke five times in eight weeks. Lands in W6. **Revision 5: the resolution stands; the delivery surface moves from an agent tool to an operator/CLI one-shot (D15.4), because FR-101's verbatim report exists to be read and judged by a human.** | Founder |
-| ~~O-2~~ | **RESOLVED 2026-08-25 — correct totals with honest gaps.** `money` is amount (integer minor units) + ISO-4217 currency + declared scale, with exact decimal arithmetic. Sums within one currency are exact; sums **across** currencies are refused with the currencies listed. **No FX conversion, no rate table, no periods, no ledger semantics, no amount audit trail.** Those would change the record model and belong to their own ADR. | Founder |
-| ~~O-3~~ | **RESOLVED 2026-08-25 — structured JSON only, no query language.** `record_query` takes a typed filter object; every field name, enum value and relation target is validated against the schema before evaluation, so a typo is a rejection naming the valid options rather than an empty result. **No text query language and no parser** — Notion's ~91% token saving is real but it buys a parser we would own, and D13's whole premise is that a malformed query must fail loudly. Revisit only if transcript token cost becomes a measured problem. **Revision 5: unchanged, and note it governs the query INPUT only — D22.1's compact-text rule is about the RESPONSE the model reads, and the two do not conflict.** The tool is now `vault_find`. | Architect |
+| ~~O-2~~ | **SUPERSEDED 2026-08-28, revision 7, operator ruling — THERE IS NO MONEY TYPE.** *Was: resolved 2026-08-25 as amount (integer minor units) + ISO-4217 currency + declared scale, with cross-currency sums refused and the currencies listed.* The requirement, verbatim: *"we do not need a real money type with currency, only a precise decimal datatype and also an integer 64 datatype."* **`money` is deleted from D3; `number` splits into `integer` and `decimal`.** Everything O-2 resolved goes with it: the cross-currency refusal, `CurrenciesPresent`, ISO-4217 handling, currency-first/amount-first parsing, and the `maxMoneyScale = 12` bound — **which must NOT be inherited by `decimal`**, whose bound is the parser's own `maxDecimalScale = 100`. **What survives is the part worth keeping and it survives unchanged: exact decimal arithmetic with no binary floating point anywhere in the path**, already implemented in `pkg/records/decimal.go` over `math/big`. **Multi-currency conversion moves from "pending O-2" to permanently out of scope** — there is nothing to convert. | Founder |
+| ~~O-3~~ | **AMENDED 2026-08-28, revision 7, operator ruling — the resolution HOLDS; the operator VOCABULARY inside the structured object changes to SQL's.** *The amendment is recorded here rather than left to read as a contradiction with the spec.* **Both halves of the resolution stand: no text query language, and no parser.** What changes is the spelling of the operators in the JSON: `=`, `<>`, `<`, `<=`, `>`, `>=`, `LIKE`, `IN`, `IS NULL`, `IS NOT NULL` replace the invented `eq`/`lt`/`lte`/`gt`/`gte`/`contains`/`is_absent` (`pkg/records/filter.go:83-93`), each carrying **SQL's own meaning** — so `{property: "tags", op: "LIKE", value: "vend%"}`. **The argument is retrieval accuracy, not style: our vocabulary has appeared in a model's training data zero times and SQL's an enormous number of times.** A model choosing from a name it has never seen is guessing; a model choosing `LIKE` is recalling — the same class of argument D22.0 makes about the response format, applied to the request side. **It also settles the list-matching question without inventing a convention:** `=` is exact, `LIKE` with `%` is partial, `IN` is membership, and the caller chooses — which is what the spec's R-9/R-10/R-13 were trying and failing to give them with one overloaded operator. **And a SQL construct we do not support — `JOIN`, a subquery, `COALESCE`, `CASE`, `BETWEEN` — is REFUSED naming the supported set and the parameter that does the job**, never parsed, never silently dropped, never an empty result. *(Original resolution follows.)* **RESOLVED 2026-08-25 — structured JSON only, no query language.** `record_query` takes a typed filter object; every field name, enum value and relation target is validated against the schema before evaluation, so a typo is a rejection naming the valid options rather than an empty result. **No text query language and no parser** — Notion's ~91% token saving is real but it buys a parser we would own, and D13's whole premise is that a malformed query must fail loudly. Revisit only if transcript token cost becomes a measured problem. **Revision 5: unchanged, and note it governs the query INPUT only — D22.1's compact-text rule is about the RESPONSE the model reads, and the two do not conflict.** The tool is now `vault_find`. | Architect |
 | ~~O-4~~ | **RESOLVED 2026-08-25 — in the vault.** Schemas live at `<vault>/.omnipus-vault/records/<type>.yaml`, beside the notes they describe. They travel with the operator's data, diff in the same git history as the notes, and survive uninstalling Omnipus — which D8's no-lock-in rule requires. Accepted cost: we write into the operator's folder, and the vault may not be a git repo, so D2's "lives in git" claim is **conditional on the operator's own setup** and must not be stated as a guarantee. | Architect |
 | ~~O-5~~ | **RESOLVED 2026-08-25 — one rule: the target is missing.** A relation whose target cannot be resolved is reported as missing, whether it was deleted, moved out of the vault, or on an unmounted drive. We deliberately do **not** distinguish the causes: we do not control the filesystem, an operator can delete a note in Finder at any time, and a system that claimed to tell "deleted" from "unreachable" would be guessing. The report names the record and the unresolvable target; deciding what happened is the operator's. | Founder |
 | ~~O-6~~ | **RESOLVED 2026-08-25 — vault-wide, one definition per vault.** A record type means the same thing everywhere its vault is mounted. Schemas live in the vault (O-4) and travel with it, so a per-workspace override would separate a record from the definition that validates it and make "is this record valid?" a question with two answers. Accepted cost: two teams sharing a vault cannot extend a type independently — they change it for both, in a file they can both see and diff. | Founder |
