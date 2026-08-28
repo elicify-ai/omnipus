@@ -1850,6 +1850,12 @@ The sixth tool D15.6 adds costs ~150 of those, which is the whole of its standin
 **New in revision 5, and corrected mid-drafting after an operator ruling.** The correction is
 recorded because the first framing was wrong in an instructive way.
 
+> **Revision 6 keeps D23's ruling and changes only where the writes live.** They are still
+> **ordinary writes governed by ordinary tool policy** — no approval flow, no
+> `request_schema_change`, no UI-ratifies step. What changed is that they are governed by
+> **their own** policy entry (`vault_configure`, D15.6) rather than sharing `vault_edit`'s. That
+> is more operator control, not a new gate on the agent.
+
 **D23.1 — Mounting: reuse `request_mount`, do not reinvent it.**
 
 The operator-approval pattern **already exists** and is verified:
