@@ -24,6 +24,22 @@ that is still not designed carried as a **stated open risk** rather than a fourt
 and the ten normative contradictions, nine vacuous acceptance criteria and four wrong citations the
 review names.
 
+**Nine operator rulings landed mid-revision and several DELETE work this revision had already
+done. They are recorded here in full, because a reader meeting a withdrawn requirement needs to
+find the ruling that withdrew it.**
+
+| # | Ruling | What it deleted |
+|---|---|---|
+| **R-A** | **Comparisons are decided in OUR OWN CODE. SQLite only narrows candidates.** SQLite answers *"which notes are of this type?"* and hands back candidates; our own tested comparator applies R-1..R-13 to them. **SQLite decides nothing.** | **The largest deletion in the revision.** All eleven SQLite defeats §8.1 had grown to; FR-023a (De Morgan before emission); FR-028a's `EXISTS` semi-join; FR-011a's fold **column**; FR-021d's epoch storage; AC-8.4a, AC-8.7, AC-8.8. FR-021 **reverts** to Go evaluation. D16.2b is reversed. **The join-fan-out finding, R-7's missing defeat, the insufficient defeats and AC-8.4's escape hatch all become N/A rather than fixed** |
+| **R-B** | **SQL operator names and semantics, not our invented ones** — `=`, `<>`, `<`, `<=`, `>`, `>=`, `LIKE`, `IN`, `IS NULL`, `IS NOT NULL` | `eq`/`lt`/`lte`/`gt`/`gte`/`contains`/`is_absent` (`pkg/records/filter.go:83-93`). R-9, R-10 and R-13 are restated; R-13 narrows to the ordering operators alone |
+| **R-C** | **Unsupported SQL is REFUSED, naming what IS supported** | — (adds FR-022c) |
+| **R-D** | **Case-insensitive matching is a FEATURE** | The `LIKE` prohibition, AC-8.7, test 39, and R-10's case-sensitivity. FR-011's exact-case enum treatment is **resolved against it**: enum equality is case-insensitive too |
+| **R-E** | **Enum ordering follows SQLite's — lexical. Custom order is a value prefix** | R-5's ordinal column, its `NULLS LAST` requirement, its rebuild obligation, and §4.1.6's "must declare its values in order" refusal. **ADR-068 D4's title is now wrong in its second clause** and is corrected in ADR revision 7 |
+| **R-F** | **No hardcoded domain vocabulary, anywhere** — *"an empty database, all capabilities but nothing predefined"* | Nothing in code (verified clean); it makes every illustrative name in this document **unmistakably an illustration**, and makes the rule testable (FR-004a) |
+| **R-G** | **Bad values reported in the answer AND in a vault health view**, and the two must agree | — (adds FR-025a) |
+| **R-H** | **Strict ISO dates; reject the rest.** `2026-9-1` and `03/04/2026` are bad values with the fix named; ambiguous formats are never guessed | FR-021d's storage requirement, replaced by a parsing requirement |
+| **(money)** | **No money type** — a precise decimal and an int64 | Recorded in the paragraph above; §10a lists the code and contracts it makes dead |
+
 **Where the review is wrong, and it is said here rather than silently ignored.**
 
 | Review claim | Verdict |
