@@ -474,7 +474,7 @@ as "no progress has arrived" for a fully indexed collection.
 | Condition | Expected |
 |---|---|
 | Property absent entirely | distinct from any value; `is absent` matches it; a negative filter includes it unless excluded |
-| Enum value differing only in ASCII case | **REVERSED, revision 5 (operator ruling 3):** it **resolves** to the declared value and is conforming. `Won` is the declared value `won`; it sorts by `won`'s ordinal and renders as the file spells it. It does **not** create a second de-facto value, which is what D4 actually forbids (FR-011) |
+| Enum value differing only in ASCII case | **REVERSED, revision 5 (operator ruling 3):** it **resolves** to the declared value and is conforming. `Won` is the declared value `won`; it **sorts by `won`'s folded sort key** (revision 6, M-15/M-16 — revision 5 said "`won`'s ordinal", the thing R-E deletes) and renders as the file spells it. It does **not** create a second de-facto value, which is what D4 actually forbids (FR-011) |
 | Enum value differing only in **non-ASCII** case (`Ätä` vs `ätä`) | **CORRECTED, revision 6 — revision 5's row stated the OPPOSITE of the requirement.** It **resolves** to the declared value, **unconditionally**. The fold is in the comparator (`cases.Fold()`, FR-011a), not in SQLite, so there is no build in which it does not resolve and no column it depends on. *(Revision 5 said it "does NOT resolve" and gated it on the Go-side fold column FR-011a itself withdraws; DS-1's `ÄKTIV` row, SC-002d, R-5, R-10 and §7 test 53 all required the opposite. An implementer following the old row built a conditional behaviour on a column that does not exist.)* |
 | Enum or text value differing by a **FULL**-case-folding pair (`straße` vs `STRASSE`, `ﬁle` vs `file`) | **resolves — and only because the mechanism is `cases.Fold()`.** Under `strings.ToLower` or `strings.EqualFold` — revision 5's mechanism and review round 6's proposed remedy respectively — **both of these are `false`** (executed; see FR-011a's table). This row exists so that a later "simplification" back to a stdlib call is caught by a test rather than by a user (§7 test 53) |
 | Enum or text value differing by the **Turkish dotted `İ`** (`İstanbul` vs `istanbul`) | **does NOT resolve, and MUST NOT.** They are different letters; `cases.Fold()` keeps them distinct while `strings.ToLower` collapses them. Asserted as a **negative** case (AC-8.9, §7 test 53, DS-1) so that the correct answer cannot be mistaken for a folding gap |
@@ -498,8 +498,13 @@ as "no progress has arrived" for a fully indexed collection.
   above 100 places — the system **refuses and names the bound**. It never truncates, rounds or
   saturates. *(Replaces the cross-currency bullet, deleted with `money` — FR-014.)*
 - When text, an enum value or a relation **path** is matched, the match is **case-insensitive**
-  (operator ruling, revision 5). Record **identifiers** are matched exactly — see §8.1's R-8 row for
-  why that one column is different.
+  (operator ruling, revision 5). Record **identifiers** are matched **byte-exactly by the
+  comparator** — the reasoning is in **FR-011a and in R-8's own row in §8's rule table**. *(Revision
+  6, review round 6, M-6: revision 5 sent the reader to "§8.1's R-8 row" from five places and
+  **§8.1's table has no R-8 row** — it has R-1, R-2/R-3, R-5, R-7, R-9/R-10, R-11, R-12 and join
+  fan-out, and ADR-068 D16.6's table has none either. A reader sent to find the reasoning found
+  nothing. All five references are repointed; nothing was "different about that column", because
+  under ruling R-A no column decides anything.)*
 - When a filter names an unknown property or enum value, the system **rejects the query** and
   lists the valid names.
 - When a bound is exceeded, the system **refuses** and states which bound and how to narrow.
@@ -730,7 +735,7 @@ as "no progress has arrived" for a fully indexed collection.
   - **The cost is real and is accepted rather than glossed.** ADR-068 §1.4 cites the `1-Pending…7-DoNotContact` prefix hack as a **documented failure** of the incumbents, and this ruling adopts it as the mechanism. **The trade is visibility:** the prefix is in the operator's own file and does exactly what it looks like it does, where a derived ordinal was a second source of truth for the order, invisible in the vault, and drifted on every reorder. A convention the operator can see and change beats a mechanism they cannot.
   - **ADR-068 D4's title — "Enums are closed and ordered; ordering is data, not spelling" — is now wrong in its second clause** and is corrected in ADR revision 7. **Closed** is unchanged and is the half D4's evidence supports.
   - **The refusal string changes.** `enum property 'status' must declare its values in order` is deleted from §4.1.6; declaring an enum in any order is now valid.
-- **FR-011** **MEANING CHANGED, revision 5 (operator ruling 3).** The system MUST **resolve** an enum value to a declared value **case-insensitively**, and MUST reject a value that resolves to none of them, listing the permitted values. *Previously the resolution was exact-case, which made `Won` a rejection. Under ruling 3 it resolves to `won`.* **Two consequences are normative:** the value it resolves to supplies the **ordinal** (FR-010, R-5), so ordering is unaffected by spelling; and the **file's own spelling is what renders**, because the note is the source of truth and this system does not rewrite a file it was not asked to change (FR-046's sibling rule). *(This does not weaken D4: D4 forbids **auto-creating** a second value, and folding does the opposite — it collapses two spellings into one. §7 test 2 and DS-1's `Active` row are corrected, not merely re-labelled.)*
+- **FR-011** **MEANING CHANGED, revision 5 (operator ruling 3).** The system MUST **resolve** an enum value to a declared value **case-insensitively**, and MUST reject a value that resolves to none of them, listing the permitted values. *Previously the resolution was exact-case, which made `Won` a rejection. Under ruling 3 it resolves to `won`.* **Two consequences are normative:** the value it resolves to supplies the **sort key** (FR-010, R-5), so ordering is unaffected by spelling *(revision 6, review round 6, M-15: revision 5 said "ordinal", which FR-010 deletes twelve lines above)*; and the **file's own spelling is what renders**, because the note is the source of truth and this system does not rewrite a file it was not asked to change (FR-046's sibling rule). *(This does not weaken D4: D4 forbids **auto-creating** a second value, and folding does the opposite — it collapses two spellings into one. §7 test 2 and DS-1's `Active` row are corrected, not merely re-labelled.)*
 - **FR-011a** **NEW, revision 5 (operator rulings R-D and R-A). MECHANISM CORRECTED, revision 6 — revision 5's mechanism did not do what revision 5 said it did, and this was established by execution, not by argument.** **Case-insensitive matching is a property of the comparator, in Go, over Unicode — not a collation, and not a derived column.** Every `=`, `<>`, `LIKE` and `IN` comparison on `text`, on an `enum` label and on a relation **path** MUST fold both sides with **one shared Go function**, and that function MUST be **`golang.org/x/text/cases.Fold()`** — Unicode **FULL** case folding. **`strings.ToLower` and `strings.EqualFold` are both FORBIDDEN for this purpose**, and a test asserts neither appears in the comparator (§7 test 53a).
   - **What revision 5 claimed, and why it was false.** Revision 5 said *"`strings.ToLower` is Unicode-aware, so this is full-Unicode case insensitivity for free"*. **Unicode-aware is not the same property as full case folding, and the Go standard library implements only SIMPLE folding.** Worse, its two candidate methods fail in **opposite** directions, so there is no safe standard-library default. Executed on this machine, Go 1.26.6, against `golang.org/x/text v0.41.0`:
 
@@ -1086,7 +1091,7 @@ editor. Its name invites exactly the misreading these two FRs exist to prevent.
   - **The requirement that survives the correction is stronger, not weaker:** push detail into **error messages**, which really are paid on use, and keep parameter schemas terse — because they are not.
 - **FR-080** Every one of the **six** `vault_*` tools MUST have an explicit, literal, wildcard-free policy entry for **every** seeded agent — all ten `coreagent.SeedConfig` creates (`mia`, `jim`, `ava`, `ray`, `worker`, `planner`, `explorer`, `researcher`, `judge`, `plansupervisor`), not only the four base agents. `worker`'s map is sparse, and in a sparse map **absence grants**.
 - **FR-080a** **EXTENDED, revision 4.** The seeded posture MUST be: `vault_describe` / `vault_find` / `vault_read` **allow** for Mia, Jim, Ava and Ray and **deny** for workers and the rest; `vault_edit` **ask** for Mia and Ray, **allow** for Jim and Ava, **deny** elsewhere; `vault_restructure` **ask** for all four base agents and **deny** elsewhere; **`vault_configure` ask for all four base agents and deny elsewhere**. Reads are `allow` roster-wide because a prompt in front of a read that `read_file` already permits protects nothing and trains the operator to click through the prompts that do.
-- **FR-080b** **NEW, revision 4.** Workers are **`deny` on all six**, reads included, and the reasoning MUST be recorded rather than assumed: the reads-are-`allow` argument turns on `allow` versus `ask` and is about **prompting**, not **granting**. `deny` removes the capability instead of removing a prompt. Workers are delegation-only executors whose task comes from a parent that has already done the vault reading, so granting them the vault surface widens what a delegated sub-turn can reach for no gain in what it can accomplish. **The cost is real and is accepted:** a worker that genuinely needs a note reaches for `read_file`, and that read leaves the audited boundary. The remedy is the one available for every seed — an operator flips it. This is a default, not a wall.
+- **FR-080b** **NEW, revision 4; TRACED, revision 6 (review round 6, M-37) — it appeared in no §6 row and no §7 test, and it is the only seeded-policy requirement with no assertion behind it, while being a security posture with a stated cost. It joins the FR-080 traceability row and §7 test 17.** Workers are **`deny` on all six**, reads included, and the reasoning MUST be recorded rather than assumed: the reads-are-`allow` argument turns on `allow` versus `ask` and is about **prompting**, not **granting**. `deny` removes the capability instead of removing a prompt. Workers are delegation-only executors whose task comes from a parent that has already done the vault reading, so granting them the vault surface widens what a delegated sub-turn can reach for no gain in what it can accomplish. **The cost is real and is accepted:** a worker that genuinely needs a note reaches for `read_file`, and that read leaves the audited boundary. The remedy is the one available for every seed — an operator flips it. This is a default, not a wall.
 - **FR-083** **WIDENED, revision 4.** `vault_edit`, `vault_restructure` and **`vault_configure`** MUST be **independently settable**, and a test MUST prove **all three** policies are independently settable — specifically that an operator can permit editing while forbidding restructuring **and** forbid schema authoring while permitting both. **This fixes a live defect:** today `knowledge_rename` and `knowledge_move` sit in the same `ask` bucket as `knowledge_append_section` (`pkg/coreagent/core.go:800-808`, `pkg/config/defaults.go:637-646`), despite the first two rewriting inbound wikilinks across the whole vault and the third appending to one file. **And revision 4 states the defect more strongly, because it is worse than revision 3 said:** the same-`ask`-bucket claim holds for **Mia** (`pkg/coreagent/core.go:1056-1058`) and **Ray** (`:1149-1151`) only. For **Ava** (`:976-978`), **Jim** (`:1296-1298`) and the **global ceiling** (`pkg/config/defaults.go:644-646`) all three are **`allow`** — vault-wide restructuring outright permitted with no prompt at all. So the defect is not "the prompt does not distinguish"; it is **"for two of the four base agents there is no prompt"**, and FR-080a is therefore a **tightening** for Ava and Jim, not a re-labelling.
 - **FR-084** Every retired `knowledge_*` name MUST be removed from the catalog (`pkg/coreagent/core.go:475-482`), from the global ceiling (`pkg/config/defaults.go:637-646`) and from every per-agent seed in the same change. A name left behind in a seed map is a policy entry for a tool that no longer exists, which is a coverage gap wearing a valid-looking entry.
 - **FR-081** A test MUST assert **zero repaired pairs** on a fresh install — not zero gaps after repair.
@@ -1185,7 +1190,7 @@ and a guessed property name is the failure FR-024 exists to prevent.
 | `detail` | `minimal \| standard` | `standard` | `minimal` omits property descriptions and enum value lists. |
 
 **Response sections, in order:** index freshness → collections → record types (name, label, id
-prefix, property table: name, type, arity, required, enum values in declared order) → saved
+prefix, property table: name, type, arity, required, **enum values, as declared — the set is UNORDERED and a reader MUST NOT infer a sort order from the response's own sequence**) → saved
 views → templates → integrity findings when requested.
 
 **Integrity findings** are grouped by kind and every finding names a path. **Five categories, each
@@ -1772,7 +1777,7 @@ broader thing has been given a wrong answer with no error channel.
 | FR-092 | — | — | `TestRender_TextIsAProjectionOfTheWireObject` |
 | FR-004a | US-1 | — | `TestSchema_NoDomainVocabularyInBinary` |
 | FR-025a | US-2 | 2.2 | `TestProblems_QueryAndHealthViewAgree` |
-| R-1..R-13 | US-2 | — | `TestComparisonTruthTable` — **the rules are PROMOTED to numbered requirements as FR-200..FR-212** (M-24), one per rule, so that the highest-risk item in the document appears in this matrix rather than being traced to "see §8". AC-8.1..AC-8.6 and AC-8.8 trace here too |
+| **FR-200..FR-212** (= R-1..R-13) | US-2 | — | `TestComparisonTruthTable` — **the rules are PROMOTED to numbered requirements as FR-200..FR-212** (M-24), one per rule, so that the highest-risk item in the document appears in this matrix rather than being traced to "see §8". AC-8.1..AC-8.6 and AC-8.8 trace here too |
 
 **Orphaned acceptance scenarios closed (M-25):** US-1.1 above; **US-2.1** (all-valid corpus ⇒ complete true) → `TestQuery_AllValidCorpusReportsComplete`; **US-3.5** (third hop refused) → `TestFind_ThirdHopRefused`, which revision 4 mapped under US-2.5 and which is FR-065's refusal, not FR-064's.
 
@@ -1785,7 +1790,7 @@ Order is unit → integration → e2e; within a level, dependencies first.
 | # | Test | Level | Traces |
 |---|---|---|---|
 | 1 | `TestSchema_LoadAndReject` | unit | FR-001..003 |
-| 2 | `TestEnum_OrderedAndClosed` | unit | FR-010, 011 |
+| ~~2~~ | ~~`TestEnum_OrderedAndClosed`~~ | ~~unit~~ | **DELETED, revision 6 (review round 6, M-18)** — a duplicate of test 56 whose **name asserts the withdrawn requirement**, and §6's traceability row already names only test 56. Deleted rather than renamed, on the same ground as tests 36 and 39: a test named for a deleted semantics is a test that gets written to its name |
 | 3 | `TestValidate_ArityViolationIsReported` | unit | FR-006 |
 | 4 | `TestNumeric_IntegerBoundAndDecimalScaleRefused` | unit | FR-012, FR-013 — **REPLACES `TestMoney_RefusesCrossCurrencySum`, deleted with `money` (operator ruling 1).** int64+1 is refused naming the bound and is never `CAST`; a 101-place decimal is refused naming the bound and its own scale, and is never rounded |
 | 5 | `TestFilter_AbsentIsDistinctAndIncludedByNegation` | unit | FR-007, 008 |
@@ -1987,6 +1992,26 @@ failure the test exists to prevent.
 
 **The oracle is these rules. Every cell is generated from them, and the rules — not the cells —
 are what a human reviews.**
+
+> **THE PROMOTION IS PERFORMED HERE, revision 6 (review round 6, M-32) — revision 5 ANNOUNCED it in
+> §6 and in §11's W2 row and then defined no `FR-2xx` anywhere, so §6 still traced the highest-risk
+> item in the document to a table by prose reference, which is the defect the promotion was written
+> to close.** The mapping is **one-to-one and closes no gap**, so the retired rule keeps its number
+> rather than everything below it shifting:
+>
+> | FR | Rule | | FR | Rule | | FR | Rule |
+> |---|---|---|---|---|---|---|---|
+> | **FR-200** | R-1 | | **FR-205** | **R-6 — RETIRED** (money) | | **FR-210** | R-11 |
+> | **FR-201** | R-2 | | **FR-206** | R-7 | | **FR-211** | R-12 |
+> | **FR-202** | R-3 | | **FR-207** | R-8 | | **FR-212** | R-13 |
+> | **FR-203** | R-4 | | **FR-208** | R-9 | | | |
+> | **FR-204** | R-5 | | **FR-209** | R-10 | | | |
+>
+> **`FR-205` is retired alongside `R-6` and MUST NOT be reused** — the same treatment FR-014 gets,
+> and for the same reason: an older test name or commit that says `FR-205` must resolve here rather
+> than to a different requirement wearing the number. **Thirteen numbers, thirteen declared rules,
+> twelve live** (M-33). Both identifiers are valid in citations; `R-n` stays the readable name and
+> `FR-2nn` is what §6's traceability matrix and §11's wave table carry.
 
 | # | Rule |
 |---|---|
