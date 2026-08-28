@@ -1478,11 +1478,17 @@ code: `RecordSchema`, `RecordType`, `PropertyDef`, `RecordQueryRequest`, `Record
 guarantee has to be structural: a client cannot receive records without also receiving the
 completeness verdict.
 
-**Revision 5 additions.** The five-tool surface adds `VaultDescribeResponse`,
-`VaultFindRequest` / `VaultFindResponse`, `VaultReadResponse` (carrying the version token
-`vault_edit` requires — D15.3), `VaultEditRequest` and `VaultRestructureRequest`. The
-`Record*` schemas above remain the record-model types those requests carry; only the
-tool-shaped envelopes are renamed.
+**Revision 5 additions, extended in revision 6.** The six-tool surface adds
+`VaultDescribeResponse`, `VaultFindRequest` / `VaultFindResponse`, `VaultReadResponse` (carrying
+the version token `vault_edit` requires — D15.3), `VaultEditRequest`, `VaultRestructureRequest`
+and **`VaultConfigureRequest`** (D15.6). The `Record*` schemas above remain the record-model types
+those requests carry; only the tool-shaped envelopes are renamed.
+
+**Revision 6 adds one more, and it is not a tool envelope: the index-state snapshot §2.7 requires.**
+It **MUST reuse the schema of the existing `knowledge_index_progress` frame** rather than declare
+a parallel one — the live frame and the hydration response are the same information at two
+delivery times, and two schemas for one thing is how the agent-facing and human-facing views come
+to disagree.
 
 **D22 does not weaken this decision, and the distinction matters.** D22.1 makes tool results
 **compact text to the model**. The **wire type is unchanged**: still contract-defined, still
@@ -2090,6 +2096,12 @@ corpus, and an agent cannot tell a stale derived value from a fact.
 **Rejected.** See D6. Notion's own hiring guidance is a flat table with an enum, and treating
 that as a degraded model would produce a worse fit for a common shape.
 
+### 3.5 A visual query builder
+
+**Deferred, not rejected.** Agents author queries; a builder serves a user who cannot write
+one. Notion maintains both a GUI filter builder and a raw form, and complex expressions become
+uneditable in the GUI — a two-representation problem worth avoiding until there is a reason.
+
 ### 3.6 A dedicated aggregation store (the D16 fallback) — **TAKEN in revision 5**
 
 > **Superseded 2026-08-28.** This alternative is **no longer an alternative** — D16.2 adopts it,
@@ -2114,12 +2126,6 @@ WhatsApp session storage only."* A2's stated reason was "no gain over scorch" �
 *search*, where it was correct. For *records* the gain is aggregation, which scorch provably
 cannot do at all, so the premise does not transfer. That is a real argument, and it deserves
 its own ADR rather than an implementation note.
-
-### 3.5 A visual query builder
-
-**Deferred, not rejected.** Agents author queries; a builder serves a user who cannot write
-one. Notion maintains both a GUI filter builder and a raw form, and complex expressions become
-uneditable in the GUI — a two-representation problem worth avoiding until there is a reason.
 
 ---
 
@@ -2149,8 +2155,19 @@ uneditable in the GUI — a two-representation problem worth avoiding until ther
   ADR's research corpus can express (D15.3).
 - **Search will rank with BM25 rather than TF-IDF**, and over real fields rather than
   frontmatter flattened into prose (D21.1, D21.2).
+- **An operator can forbid schema authoring while permitting note edits** (D15.6) — the posture
+  revision 5 promised and did not deliver.
 - **Joins, `OR`, `GROUP BY` and aggregates come from a store that already does them**, so the
-  expression engine §4.2 names as this ADR's highest-risk component shrinks (D16.2).
+  general expression **evaluator** §4.2 names as this ADR's highest-risk component does not need
+  to be written (D16.2).
+
+  > **Narrowed in revision 6.** Revision 5 claimed the risk *"shrinks"*, and D16.2 claimed the
+  > store buys this *"without our writing a query engine"*. **Both overstate it**, and the four
+  > places they overstate it are named in §4.2's cost list rather than left for a reader to find:
+  > four of this ADR's own semantics are **not native SQL**, so a translation layer that carries
+  > them is real code with real correctness risk. What genuinely disappears is the **general
+  > `func(any, any) bool` comparator overload** — the specific thing that made `3 > 2` evaluate
+  > false. That is the claim, and it is smaller and true.
 
 ### 4.2 Cost
 
@@ -2186,6 +2203,30 @@ uneditable in the GUI — a two-representation problem worth avoiding until ther
   needs anchor-ambiguity rules, trash needs a soft-delete convention. Both are real design work.
 - **The D21.3 signal mix is unmeasured on vault data** and is flagged in place as our own
   composition rather than a benchmarked result.
+
+*Added in revision 6:*
+
+- **Four of this ADR's semantics are NOT native SQL, and the translation layer that carries them
+  is the risk D16.2 moved rather than removed.** Named so they are costed:
+
+  | Semantic | Why SQL does not give it |
+  |---|---|
+  | **D3.2** — a negative filter *includes* absent records by default | SQL's `<>` **excludes** `NULL`. Every negative predicate must be emitted as `(x <> v OR x IS NULL)`, and forgetting it reproduces §1.3's checkbox failure exactly |
+  | **D4** — enums sort by **declared position**, not spelling | needs an ordinal join or a generated ordinal column, maintained in step with the schema file |
+  | **D10** — multi-value grouping puts one record under **both** groups | needs an unnest; the naive `GROUP BY` produces Obsidian's "Finance Business" defect, which D10 exists to avoid |
+  | **O-2** — cross-currency sums are **refused**, not summed | no aggregate expresses "refuse"; the refusal must be decided before the SQL is emitted |
+
+  **The `3 > 2` failure class does not disappear; it changes address** — from a Go comparator to
+  a SQL generator, where the symptom is the same (a wrong answer, no error) and the test surface
+  is the same exhaustive truth table §4.2 already requires. That table is still a deliverable, and
+  it now covers emitted SQL as well as Go comparisons.
+- **A sixth tool exists** (D15.6). One more definition in the catalog and ~150 more tokens of
+  standing context per agent that has it, bought deliberately — see D15.6 for the trade.
+- **The write path gets a rate limiter it does not have today** (D15.5b). Revision 5 recorded this
+  as inherited; it is new work.
+- **`vault_restructure` and `vault_configure` offer no compare-and-swap** (D15.5c), because a
+  single-file token cannot honestly guard a cascade. Their safety is policy plus audit plus
+  `check_integrity`.
 
 ### 4.3 Explicitly out of scope
 
@@ -2240,5 +2281,23 @@ uneditable in the GUI — a two-representation problem worth avoiding until ther
 - **It does not claim `vault_find`'s composed `near` + filter query is unprecedented in
   general** — only that **no system in this ADR's surveyed corpus** (Dataview, Obsidian Bases,
   Notion, Tana, mdbase) can express it.
-- **It makes no claim about indexing-progress emission beyond what §2.6 verified**, where an
+- **It makes no claim about indexing-progress emission beyond what §2.7.1 verified**, where an
   alleged defect was investigated and **not confirmed**.
+
+*Added in revision 6:*
+
+- **It does not claim the response-format research transfers exactly (D22.0).** The inline-versus-
+  file finding is about *where* results are delivered and is used here to argue that *how* they are
+  rendered is mechanism — a reasoned extension, not a measured one. Notion's ~91% is a **schema**
+  measurement, load-bearing for `vault_describe` and inferred for everything else. §6 omitted D22
+  entirely in revision 5, which was the one decision resting on a single un-corroborated finding.
+- **It does not claim SQLite is faster than bleve-plus-Go for these queries.** The latency argument
+  is withdrawn (D16.3). Nobody has measured the two-index path.
+- **It does not claim the < 64 MB budget holds for the two-index design.** It is inherited as a
+  target and measured in W1 (D16.4 item 4).
+- **It does not claim the freshness comparison catches every divergence.** It compares returned
+  hits; a record excluded by a stale predicate is not compared (D16.5's residual risk).
+- **It does not claim the record layer works on every target Omnipus builds for.** `linux/mipsle`
+  is the one shipped binary without SQLite, and records refuse by name there (D16.2a).
+- **It does not claim `pkg/knowledge`'s task extraction has been designed.** D15.3 specifies
+  indexed checkbox rows; nobody has built or measured the indexing cost of that (W2).
