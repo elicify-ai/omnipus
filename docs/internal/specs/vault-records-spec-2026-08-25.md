@@ -1016,18 +1016,27 @@ a file whose frontmatter is the entire file.
 
 ### Regression
 
-The record layer is new capability, but **FR-020 modifies `pkg/knowledge/index.go`**, which
-search already depends on. Existing `pkg/knowledge` tests MUST pass unchanged. Seam tests:
+The record layer is new capability, but **FR-111 and FR-110 modify `pkg/knowledge/index.go`**,
+which search already depends on, and **FR-110 changes rankings across three subsystems**.
+Existing `pkg/knowledge` tests MUST pass unchanged. Seam tests:
 
 - `TestIndex_StaleFormatIsRebuiltNotOpened` — an index written at the previous format version
   is rebuilt, not opened. **This is the seam that matters**: `openOrCreateBleve` calls
   `bleve.OpenUsing` and never re-applies the mapping, so without the version bump an upgraded
-  install would query a field that does not exist and report `complete: true`.
-- `TestKnowledgeSearch_ScoringUnchangedByPropsField` — BM25 scores for a fixture corpus are
-  identical before and after. (Note: the weaker "results unaffected" form **cannot fail**,
-  because the new field is stored-not-analysed and every existing field sets
-  `IncludeInAll=false`.)
-- `TestIndex_RebuildWithRecordFields` — a rebuilt index returns identical ranked results.
+  install would query a field that does not exist and report `complete: true`. The spike
+  **reproduced** exactly this: 1 hit on a fresh index, 0 hits and `err == nil` on an existing one.
+- `TestIndex_PersistedMappingAsserted` — the G2 guard (FR-020d). It exists because G1 depends on
+  a developer remembering to bump a constant, and this project has a documented history of guards
+  that pass with the thing they guard deleted.
+- **`TestKnowledgeSearch_RankingChangeIsIntentionalAndBounded`** — **REPLACES revision 2's
+  `TestKnowledgeSearch_ScoringUnchangedByPropsField`, which is now impossible to satisfy.** FR-110
+  changes scores by design: BM25's saturation and length normalisation are exactly what TF-IDF
+  lacks. The honest assertion is therefore not "scores are identical" but: the **matched set** is
+  unchanged (AC-8.6), the ranking change is recorded against a fixture corpus, and the memory-room
+  and retrospective rankers (`pkg/agent/retro_bm25.go`) are re-checked for the comparability claim
+  they make — which was false while bleve produced TF-IDF.
+- `TestIndex_RebuildWithRecordFields` — a rebuilt index returns identical ranked results to a
+  freshly built one at the same generation.
 
 ---
 
@@ -1132,6 +1141,14 @@ none is defeated by choosing SQLite carefully.
    land and neither file is damaged.
 7. Import a real `.base` file containing an unsupported expression; confirm the translated
    view is correct and the untranslated clause is reported verbatim.
+8. Ask a question no incumbent can express — *"notes mentioning pricing within 2 hops of
+   `[[Acme]]`"* — and verify the answer against a manual traversal.
+9. Delete the properties index on a real vault mid-session; confirm the next query rebuilds it
+   and returns the same answer as before the deletion.
+10. Open the collection panel on a vault whose index completed before the browser connected;
+    confirm it shows the completed state rather than "no progress".
+11. Run the same corpus through plain BM25 and through the FR-112 fusion; have a human judge the
+    top 10 for 20 real queries. If the fusion does not win, FR-113 says it does not ship.
 
 ---
 
@@ -1141,10 +1158,18 @@ none is defeated by choosing SQLite carefully.
 |---|---|---|---|
 | ~~A-1~~ | **RESOLVED — one rule.** ADR-068 O-5: an unresolvable target is reported as missing; the cause is not guessed at. |
 | ~~A-2~~ | **RESOLVED — vault-wide.** ADR-068 O-6. FR-024's valid-names list is therefore vault-scoped, which is the same boundary the records themselves sit behind. |
-| ~~A-3~~ | **RESOLVED — not ours to decide.** ADR-068 D0: the product ships mechanism, the vault ships convention. `record_log` writes a record of a vault-declared type and imposes no location or shape. |
+| ~~A-3~~ | **RESOLVED — not ours to decide.** ADR-068 D0: the product ships mechanism, the vault ships convention. **Revision 3: `record_log` is deleted, not relocated** (ADR-068 D15.4). Interaction history is derived from mentions (FR-050..053), so a dedicated logging tool served only the residual case of an interaction with no note behind it — and that case is served by creating a note, which `vault_edit` already does. |
 | ~~A-4~~ | **RESOLVED — deferred.** ADR-068 D11 descoped; no FR needed. The edge-case table's sub-record rows are removed. |
 | ~~A-5~~ | **RESOLVED — deferred.** ADR-068 D12 descoped; likewise. |
 
+| ~~A-6~~ | **RESOLVED 2026-08-28 — the spike reported and D16 is decided.** Two indexes: bleve keeps text, a derived SQLite properties index holds typed properties and relations. FR-020..FR-020g are specified above and W1 is unblocked. Note that ADR-068 **overrides its own spike's recommendation** (its D16.3): the spike said bleve passes, and on the question D16 gated on — memory — it does. The override is taken on latency and capability, grounds the spike itself named as outside its scope. A reader must be able to see that this happened; that is why it is recorded here as well as there. |
+| **A-7** | **LIVE. The two-index write path is unmeasured.** One note, two index updates: ordering, crash consistency and what a torn write leaves behind are all undefined. FR-020a says a rebuild fixes any divergence, which is true and is not a substitute for knowing how often divergence happens. **This ADR's own history is three revisions of assuming exactly this kind of thing.** W1 must measure it — write throughput, concurrent queries, property counts above 10 per record, and at least one non-macOS platform (the spike measured none of these; its §6.1). |
+| **A-8** | **LIVE. Whose tokenizer counts a "token" in FR-127's budget?** The budgets (~50–80/hit, 1,000 default, 4,000 cap) are meaningless without naming the counter. Likely agent assumption: the serving model's tokenizer, which varies per provider. **Needs:** a decision — a fixed reference tokenizer for budget accounting, or byte/character proxies with a stated conversion. Enforced budgets against an unnamed unit are how a cap becomes decorative. |
+| **A-9** | **LIVE, minor. ADR-068 D20 lists `trash` in both W4 and W5.** W4 says "`vault_edit`: … the two unbuilt primitives — body-replace and trash"; W5 says "`vault_restructure`: rename, move, trash". Read here as: the **primitive and its convention** land in W4, the **`vault_restructure` operation** exposing it lands in W5. FR-048 states that reading. If the ADR meant something else, this spec is wrong and should be corrected rather than reconciled. |
+| **A-10** | **LIVE. `vault_edit`'s operation enum has no policy granularity, and that is accepted — but the seeded defaults must be chosen for the *widest* operation in the tier.** FR-070c makes this explicit: granting `vault_edit` grants `create_record_type` and `replace_body` as well as `set_property`. An operator reading the tool name will not infer that. **Needs:** the tool description (FR-079's 150 tokens) to name the widest operation it grants, not the most common one. |
+
 **A-4 and A-5 were specification defects and are now resolved by descoping the decisions that
-caused them** (ADR-068 D11, D12). **A-6 replaces them as the live blocker: FR-020 and FR-020a
-cannot be specified until ADR-068 D16's spike reports.** W1 does not start before then.
+caused them** (ADR-068 D11, D12). **A-6, revision 2's live blocker, is resolved — W1 is
+unblocked.** Three new live items replace it, and none of them blocks W1: A-7 is measurement W1
+itself performs, A-8 is a decision needed before FR-127 can be enforced rather than asserted, and
+A-9 is a sequencing reading that needs confirming.
