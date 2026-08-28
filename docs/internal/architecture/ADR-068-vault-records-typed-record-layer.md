@@ -1245,9 +1245,26 @@ This also removes a live inconsistency: D15.5b, D16.3 and FR-064 now say the sam
 
 1. **It widens the CLAUDE.md house rule that *"SQLite is isolated to WhatsApp session storage
    only."*** That widening is **deliberate and is recorded here** as the decision that makes it.
-   It also overturns **ADR-067's rejected alternative A2**, whose stated reason was "no gain
-   over scorch" — assessed for *search*, where it was correct. For *records* the gain is
-   aggregation, which scorch cannot do at all, so the premise does not transfer. §3.6 always
+
+   > **Revision 6: recording it is not delivering it, and revision 5 only recorded it.** Root
+   > `CLAUDE.md:66` still reads *"SQLite is isolated to WhatsApp session storage only"* and
+   > `:62` still describes `modernc.org/sqlite` as *"pure-Go SQLite **for whatsmeow**"* — both
+   > already inaccurate today, since Matrix uses it too (D16.2). **That file is loaded by every
+   > agent on every session in this repository, and an ADR cannot amend it by describing the
+   > amendment.** The predictable outcome is an agent reading `CLAUDE.md`, finding the
+   > properties index, and treating it as a violation of a live house rule.
+   >
+   > **Both edits are now W1 deliverables with an exit criterion**: `CLAUDE.md:66`'s sentence
+   > becomes *"SQLite is used for WhatsApp and Matrix session storage and for the vault's derived
+   > properties index (ADR-068 D16); it is not a general application store"*, `:62`'s parenthetical
+   > drops "for whatsmeow", and **ADR-067's §A2 row gains a superseded-by note** pointing here.
+   > It is the cheapest item in this ADR and the one most likely to be forgotten, which is why it
+   > has an exit criterion rather than a mention.
+
+   It also overturns **ADR-067's rejected alternative A2** — *"A second SQLite user against the
+   house rule, for no gain over scorch"* (`ADR-067…md:776`). That reason was assessed for
+   *search*, where it was correct. For *records* the gain is aggregation, which scorch cannot do
+   at all, so the premise does not transfer. §3.6 always
    said this deserved an explicit decision rather than an implementation note; this is it.
 2. **Two indexes can disagree, and that is a new failure mode of exactly the class this ADR
    exists to prevent.** A text index and a properties index that have seen different generations
@@ -1478,21 +1495,49 @@ never a hand-written parallel struct (Hard Constraint #8).
 
 **Revised 2026-08-28. Operator directive, explicit: NO quick wins — build the full
 best-in-class system.** The sequence below is therefore ordered for **the whole thing**, not for
-cheap partial value. There is deliberately **no "quick wins" wave**: the TF-IDF correction
-(D21.1) and the index rebuild F-0 requires (D16.1) ride along **inside the waves they belong
-to**, because a one-line fix shipped outside the design it belongs to is how a system acquires
-changes nobody can explain later.
+cheap partial value. There is deliberately no "quick wins" wave: the TF-IDF correction (D21.1)
+rides along inside the wave whose ranking it affects, because a one-line fix shipped outside the
+design it belongs to is how a system acquires changes nobody can explain later.
+
+**W0 — the ONE deliberate exception to that directive, and revision 6 makes it.**
 
 | Wave | Delivers | Exit criterion |
 |---|---|---|
-| **W1** | Schema files, the seven types, arity/presence/scope, validation. The SQLite properties index (D16.2) with its freshness token, its rebuild-from-notes path, and the two-index staleness check (D16.4 item 2). `vault_describe` including `check_integrity`. | a schema violation is reported per record with the expected shape named; deleting the properties index and reopening rebuilds it with identical query results |
-| **W2** | Fielded indexing (D21.2), the **`ScoringModel` correction** (D21.1), BM25F weighting + RRF (D21.3), the shared tokenizer resolution (D21.5). The **index rebuild** F-0 requires (D16.1). `vault_find` — plain words, typed filters, grouping, the problem report. | a query over a typed corpus returns records + a populated `problems` array; a type mismatch is never a silent empty result; a field query on a property key is possible at all, which it is not today |
-| **W3** | Relations, inverses, relation grouping; `near` + `hops` and its **composition with filters** (D15.3). `vault_read`. | the §1.2 two-hop question is one call with no hand-maintained state; "notes mentioning pricing within 2 hops of `[[Acme]]`" is one call |
-| **W4** | `vault_edit`: byte-preserving writes, the **list-valued splice** (D14), and the two **unbuilt primitives** — body-replace and trash — each with its own FR (D14.1). Derived interaction history (D17). Saved-view and record-type authoring (D23). | write-read-back is byte-identical outside the patched span; a body-replace whose anchor is ambiguous is refused, naming both matches |
-| **W5** | `vault_restructure`: rename, move, trash, existing-record-type change. The D18 policy seeding and its two ACs. | an operator can forbid restructuring while permitting edits, and a test proves the two policies are independently settable |
-| **W6** | The human surface: record table, grouping, related-records panel, problem banner, drill-down, cell edit. The **operator/CLI** saved-view importer (D15.4, O-1). | the banner names excluded records and the drill-down lists them; a `.base` file imports with every untranslatable expression reported verbatim |
+| **W0** — ships **independently of ADR-068, ahead of W1** | **The F-0 index rebuild.** `bleve/v2 v2.6.1` (`go.mod:12`) and `zapx/v17 v17.2.3` (`go.mod:107`) are pinned, but **segments already written stay corrupt**: a search over a 100,000-document index panics `slice bounds out of range` **unrecovered through `indexImpl.Search`**, which in the gateway is a process crash. A forced rebuild of existing indexes is the other half of the fix. | an index built under `zapx v17.1.2` at 100,000 documents is rebuilt on upgrade rather than opened, and the search that panicked returns results |
 
-**Performance targets: none stated, deliberately — and revision 5 does not change this.**
+**Why this one is carved out, when the directive says not to.** The no-quick-wins reasoning is
+about coherence: a change shipped away from its design is a change nobody can later explain. That
+argument fits the `ScoringModel` one-liner, which alters ranking and belongs with the ranking
+work. **It does not fit a repair to an operator's crashing index.** The spike says so in as many
+words — *"Blocking, and independent of records — today's index is corrupt at 100,000 documents.
+**Do not let this wait on ADR-068.**"* — and **Hard Constraint #7** does not admit a stylistic
+reason for leaving a live crash in the field behind a design wave. Revision 5 placed it in W2,
+behind schema files and a new storage engine. That was wrong.
+
+*(The version pins are not the fix on their own, and revision 5's D16.1 already said so; what it
+did not do is act on it.)*
+
+| Wave | Delivers | Exit criterion |
+|---|---|---|
+| **W1** | Schema files, the seven types, arity/presence/scope, validation. The SQLite properties index (D16.2) with **`source_hash` and the divergence check specified in D16.5**, its rebuild-from-notes path, and the **platform stub and refusal** (D16.2a). `vault_describe` including `check_integrity` and its bounds. **The catalog-count assertion (D15.0).** **Updating `CLAUDE.md` and ADR-067 §A2 (D16.4 item 1).** | **AC-16.5** — a record whose two indexes disagree is reported `complete: false` and named, in **both** divergence directions; deleting the properties index and reopening rebuilds it with identical query results; **both indexes, idle and at the cap, measured inside 64 MB on Linux and macOS**; a query on a SQLite-less build refuses by name and never returns empty; `CLAUDE.md:66` no longer says SQLite is isolated to WhatsApp |
+| **W2** | Fielded indexing (D21.2), the **`ScoringModel` correction and the thirteen documentation corrections** (D21.1), BM25F weighting + RRF (D21.3), the tokenizer resolution (D21.5). `vault_find` — plain words, typed filters, grouping, `kind: task`, the problem report. | a query over a typed corpus returns records + a populated `problems` array; a type mismatch is never a silent empty result; a field query on a property key is possible at all, which it is not today; **no `.go` file in the tree attributes BM25 to bleve while `ScoringModel` is unset** |
+| **W3** | Relations, inverses, relation grouping; `near` + `hops` and its **composition with filters** (D15.3). `vault_read`. | the §1.2 two-hop question is one call with no hand-maintained state; "notes mentioning pricing within 2 hops of `[[Acme]]`" is one call |
+| **W4** | `vault_edit`: byte-preserving writes, the **list-valued splice** (D14), `create`'s `template` argument, and the two **unbuilt primitives** — `replace_body` and the **trash CONVENTION** (where a trashed note goes, what happens to inbound links, whether the index forgets it immediately) — each with its own FR (D14.1). Derived interaction history (D17). | write-read-back is byte-identical outside the patched span; a `replace_body` whose anchor is ambiguous is refused, naming both matches; the trash convention is written down and reviewed before any tool exposes it |
+| **W5** | `vault_restructure`: rename, move, and the trash **operation**. `vault_configure`: record-type and saved-view authoring (D15.6, D23). The D18 policy seeding and its ACs. **The write-path rate limiter (D15.5b).** **Retiring the nine `knowledge_*` names** — from `allStaticToolNames` (`pkg/coreagent/core.go:357-482`), from the global ceiling (`pkg/config/defaults.go`), from all five per-agent seed maps, and from every skill and prompt that names one. | an operator can forbid restructuring while permitting edits **and forbid schema authoring while permitting both**, with a test proving all three policies are independently settable; **after this wave no `knowledge_*` name exists anywhere in the catalog or any seed map, and the catalog assertion reads 95** |
+| **W6** | The human surface: record table, grouping, related-records panel, problem banner, drill-down, cell edit. **The index-state snapshot (§2.7).** The **operator/CLI** saved-view importer (D15.4, O-1). | the banner names excluded records and the drill-down lists them; **a client connecting after an index completed renders its real state rather than "no progress has arrived"**; a `.base` file imports with every untranslatable expression reported verbatim |
+
+**Two scheduling defects revision 5 carried, both fixed above:**
+
+- **`trash` was in two waves** — W4 as an "unbuilt primitive" and W5 as a `vault_restructure`
+  operation — which would have shipped part of a tier-5 tool before W5 defined the tool or seeded
+  its policy. Split: **the convention is W4 design work, the operation is W5.**
+- **No wave retired the nine `knowledge_*` tools.** §4.2 named the cost; nothing scheduled it.
+  Between W1 and an unowned removal the catalog would have carried **fifteen** vault tools — worse
+  than the 107 D15.0 rejects. It is now W5's, with the count as the exit criterion. *(The
+  implementing spec already requires this — FR-070a and FR-084 — so this is the ADR catching up to
+  its own spec, not new scope.)*
+
+**Performance targets: none stated, deliberately — and revision 6 does not change this.**
 
 Revision 2 carried latency and memory numbers derived from a ~794 ns/record figure that
 measured **expression evaluation only**. D16.1 now records the measured reality: that phase is
@@ -1502,9 +1547,10 @@ The spike produced real numbers, but they measure the **bleve-plus-Go design thi
 take** (D16.3). Quoting them as targets for the two-index design would repeat the original
 error in a new costume. Targets arrive when W1 has the SQLite path measured.
 
-The one budget that **does** hold is inherited and unchanged: ADR-067's < 64 MB steady-state
-RSS for the index, in this same process. Record work lives inside it, and the properties index
-is inside it too.
+**On the 64 MB budget, revision 6 is more careful than revision 5 was.** ADR-067's < 64 MB
+steady-state RSS is **inherited as a target and is not yet a property of this design** — it was
+measured for bleve alone, and the two-index design adds an unmeasured store beside it (D16.4 item
+4). W1 measures it; until then it is what we are aiming at, not what we are claiming.
 
 ### D21 — Retrieval: lexical ranking done properly, and no embeddings, permanently
 
@@ -1783,24 +1829,22 @@ That was over-reach. **An operator may absolutely grant it.** The *default* is c
 consistent with how every other write policy in this system works. A default is not a
 prohibition, and this ADR should not smuggle one in as if it were.
 
-**Performance targets: none stated, deliberately.**
-
-Revision 2 carried latency and memory numbers derived from a ~794 ns/record figure that
-measured **expression evaluation only** — not stored-field retrieval, not JSON decode, not
-index traversal. Presenting them as targets invited meeting a number derived from the wrong
-measurement while the thing an operator actually feels stayed slow.
-
-D16's spike establishes real numbers from measurement. Until it reports, this ADR states no
-latency or memory target, and none may be quoted from it.
-
-The one budget that **does** hold is inherited and unchanged: ADR-067's < 64 MB steady-state
-RSS for the index, in this same process. Record work lives inside it.
-
 ---
 
-## 2.6 A defect alleged during this council — investigated and **NOT CONFIRMED**
+## 2.7 Indexing progress: the alleged defect is NOT CONFIRMED; a different, real one is
 
-*New in revision 5.* The council was asked to record, as a found defect, that vault **indexing
+*New in revision 5; completed in revision 6.* **This is a verification note, not a decision** —
+revision 5 numbered it §2.6, so a reader scanning decisions read it as one.
+
+**The shape of this section matters.** Revision 5 refuted a hypothesis correctly and then
+**guessed at a replacement**, in the section whose entire thesis is not guessing. Revision 6 keeps
+the refutation, deletes the guess, and puts the **verified** cause in its place. The alleged
+defect is still NOT CONFIRMED. The symptom the operator saw is **REAL**, and its cause is a third
+mechanism revision 5 never considered.
+
+### 2.7.1 The alleged defect — NOT CONFIRMED
+
+The council was asked to record, as a found defect, that vault **indexing
 progress is emitted but throttled into invisibility**: that `DefaultProgressInterval = 200ms`
 plus a coalescer that sets `lastAt` at construction means **an index completing in under 200 ms
 emits ZERO frames**, matching a manual observation that the UI reported no indexing progress.
@@ -1831,16 +1875,68 @@ already implemented at both ends.**
    denominator, and a count that rises against no total is not progress, it is a number nobody
    can read."*
 
-Either is a far likelier explanation of the manual observation than a throttle bug.
+> **REMOVED in revision 6.** Revision 5 closed this table with *"Either is a far likelier
+> explanation of the manual observation than a throttle bug."* **That was an unverified causal
+> claim, asserted in the paragraph immediately above one condemning unverified causal claims.**
+> Neither case is in fact the explanation — see below — but the objection stands even if it had
+> been: a section whose standard is "verified or recorded as unverified" does not get to end on
+> "far likelier".
 
-**Why this is recorded rather than quietly dropped.** This ADR's D16 table exists because three
-consecutive revisions asserted properties of code that nobody had read. **Writing an unverified
-defect into the revision whose whole subject is verified retrieval would have been that same
-failure, committed while correcting it.** The finding is kept as a finding of *no defect*.
+### 2.7.2 The real cause — VERIFIED
 
-**What is left over, and it is small:** if an operator should be told that an empty collection
-indexed successfully, that is a **product decision about empty-state rendering**, not a
-throttling fix, and it belongs in W6's human surface. No change is made to `progressCoalescer`.
+**Progress is live-only. There is no snapshot, no replay, and no persistence at any layer.**
+Every step of the delivery path was read at revision time:
+
+| Layer | What it does | Evidence |
+|---|---|---|
+| Gateway broadcast | non-blocking send to **currently connected** sockets; a client with a full buffer is skipped and the frame is dropped | `pkg/gateway/knowledge_lifecycle.go:1114`, drop at `:1131-1136` |
+| Server-side store | **none.** Nothing retains the last frame for a later reader | — |
+| REST | **no endpoint returns index state.** The four knowledge routes are `""`, `search`, `graph`, `outline` | `pkg/gateway/rest_knowledge.go:141-167` |
+| SPA store | `useKnowledgeIndexStore` is **unpersisted**, and is written from exactly one place: the `knowledge_index_progress` WS case | `src/store/knowledgeIndex.ts:43-50`; sole writer `src/store/chat.ts:5075` |
+| Render with no entry | `index_status_unknown` → *"No indexing progress has arrived since you opened it."* | `KnowledgePanel.tsx:138`, `KnowledgeEmptyState.tsx:402` |
+
+**The consequence is worse than a transient gap, and this is the part revision 5 missed
+entirely: a collection indexed once at boot and never touched again renders
+`index_status_unknown` PERMANENTLY, for every client that connects afterwards.** Not until the
+next frame — there is no next frame. Every browser that opens the Library after a quiet index
+sees "no progress has arrived" about an index that finished successfully hours ago.
+
+`KnowledgePanel.tsx:37-39` states the intended contract — *"the gateway emits progress on mount
+and on each drift check, so a browser that opens the Library between two of those events
+legitimately has no news, and absence of news is not news."* That reasoning is sound for a
+**momentary** gap. It does not hold when the gap is unbounded, and "mount" there means the
+*collection* mounting, not the browser's.
+
+**The fix is a hydration, not an emission change.** The snapshot already exists and is simply
+never exposed: `knowledge.SharedProgressTracker(c.root)` (`knowledge_lifecycle.go:762`), already
+converted into exactly the frame shape a client consumes at `:836`. What is missing is a
+request-response path that returns it.
+
+**On the no-polling rule, which is the objection a reader will raise:** the contracts forbid
+*polling* for index state. **One-shot hydration on connect or on mount is a different thing** —
+it is bounded, it happens once, and it exists precisely so the live channel does not have to be
+replayed. Reading the prohibition as forbidding hydration is what left the panel with no way to
+learn anything at all.
+
+**The decision: expose a connect-time or mount-time snapshot, in the SAME shape the live frame
+carries** (one source for both, so the agent-facing and human-facing views cannot drift).
+**Owner: W6, the human surface.** The implementing spec already carries it as **FR-020f**, with
+the same verified cause and the same explicit instruction that this **must not** be fixed by
+changing emission.
+
+**Emission itself is untouched.** `progressCoalescer` is correct, its leading edge is correct,
+and its terminal flush is correct — §2.7.1 verified all three, and nothing in this section
+revises that.
+
+**Why this is recorded at length rather than quietly dropped.** This ADR's D16 table exists
+because three consecutive revisions asserted properties of code that nobody had read. Revision 5
+avoided that failure in the first half of this section and committed it in the second. **The
+finding is kept, and so is the record of the guess**, because a section that quietly replaced its
+own wrong conclusion would teach a future reader nothing.
+
+**What remains genuinely open, and it is small:** whether an operator should be told that an
+*empty* collection indexed successfully. That is a product decision about empty-state rendering,
+not a throttling fix, and it belongs with W6's snapshot work.
 
 ---
 
