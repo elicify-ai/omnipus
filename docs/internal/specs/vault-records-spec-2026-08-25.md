@@ -1,11 +1,42 @@
 # Vault records — specification
 
-- **Implements:** [ADR-068](../architecture/ADR-068-vault-records-typed-record-layer.md) **revision 9** (2026-08-28)
+- **Implements:** [ADR-068](../architecture/ADR-068-vault-records-typed-record-layer.md) **revision 10** (2026-08-28)
 - **Builds on:** [ADR-067](../architecture/ADR-067-omnipus-knowledge-base-and-render-first-preview.md) — `pkg/knowledge` is **reused, never duplicated**
-- **Date:** 2026-08-25; **revised 2026-08-28** to ADR-068 revision 9
+- **Date:** 2026-08-25; **revised 2026-08-28** to ADR-068 revision 10
 - **Branch:** `feat/library-improvements`
-- **Status:** **Draft 7** (2026-08-28), closing the ten under-specifications the UAT author found in ADR-068 revision 8 / Draft 6 (`uat-vault-records-2026-08-28.md`). *Draft 6 followed grill pass 2.* Revision 2 followed round-2 review (BLOCK: 8 critical, 21 major); revision 3 realigned to ADR-068 revision 5; revision 4 realigned to ADR-068 revision 6 — a sixth tool (`vault_configure`), two named blast-radius criteria, a specified freshness token, a platform posture, a W0 wave, and byte budgets. Revision 5 followed grill pass 1 (BLOCK: 19 critical, 41 major, 17 minor) and three operator rulings that delete work. **Revision 6 follows grill pass 2 (BLOCK: 11 critical, 42 major, 14 minor — `vault-records-spec-2026-08-25-review-round6.md`) and one further operator ruling: Unicode case folding is REQUIRED.**
+- **Status:** **Draft 8** (2026-08-28), recording three operator rulings raised by the Stage 1 implementers who hit them while building the read path — **AC-8.10's `COUNT(*)` exception, the child-table join generalisation, and FR-022e's `LIKE` carve-out** — together with three defects in AC-8.10's own wording that the same reading exposed. **What Draft 8 changes is set out immediately below.** *Draft 7 (2026-08-28) closed the ten under-specifications the UAT author found in ADR-068 revision 8 / Draft 6 (`uat-vault-records-2026-08-28.md`). Draft 6 followed grill pass 2.* Revision 2 followed round-2 review (BLOCK: 8 critical, 21 major); revision 3 realigned to ADR-068 revision 5; revision 4 realigned to ADR-068 revision 6 — a sixth tool (`vault_configure`), two named blast-radius criteria, a specified freshness token, a platform posture, a W0 wave, and byte budgets. Revision 5 followed grill pass 1 (BLOCK: 19 critical, 41 major, 17 minor) and three operator rulings that delete work. **Revision 6 follows grill pass 2 (BLOCK: 11 critical, 42 major, 14 minor — `vault-records-spec-2026-08-25-review-round6.md`) and one further operator ruling: Unicode case folding is REQUIRED.**
 
+
+**What Draft 8 changes. Two of the three rulings came from implementers who hit a CONTRADICTION in
+this document rather than an ambiguity — the specification required a thing in one place and failed
+the build for it in another — and that is a different and worse failure than an under-specification.
+An ambiguity makes two implementers disagree; a contradiction makes every implementer choose which
+half of the specification to break.** In both cases the implementer emitted the required statement
+and reported the conflict upward instead of violating the guard silently, which is the handling this
+document wants and could not have relied on.
+
+| # | Ruling | Outcome |
+|---|---|---|
+| **1** | `COUNT(*)` is required by FR-064's B1 and banned by AC-8.10 | **AC-8.10 gains `COUNT(*)` as a NAMED, BOUNDED exception** (§8, AC-8.10; FR-064's B1 row). The reasoning is the part that keeps it from widening: **it counts rows of `notes` — a population — not an answer.** A `COUNT` over a value column, and every other aggregate, remain banned |
+| **2** | AC-8.10's join exception is written about RELATIONS; the reason is about CHILD TABLES | **GENERALISED to `<child>.note_id = <parent>.note_id` and no other operand shape** (§8, AC-8.10). `note_props`, `note_tasks` and `note_relations` all need the identical join for the identical reason; a guard built from Draft 7's literal words fails a correct property join. **The REASON is now the governing text and the example is subordinate to it** |
+| **3** | FR-022e makes `LIKE` on an `enum` unsatisfiable | **A `LIKE` PATTERN IS CARRIED AS TEXT** (§4, FR-022e, new `AC-22e.5`). A pattern is not a value of the declared type; the operator disposition has already refused `LIKE` for every type with no pattern form; and R-1 makes `text`/`enum` one comparison type, so nothing else shifts |
+
+**Plus three defects in AC-8.10's own wording, found by reading it against the shipped read path
+rather than against itself. None was raised as a ruling; all three would have mis-fired the one
+control the whole R-A design rests on.**
+
+| # | Defect | Outcome |
+|---|---|---|
+| **4** | Two allow-list rows name columns that do not exist — `rec_id` and `type` | **CORRECTED to `note_id` and `record_type`** (§8, AC-8.10), the columns the shipped schema actually declares |
+| **5** | The `LIMIT` / `OFFSET` row admits a form nothing emits, and one the control could not match if it did | **RECORDED as dead, with the obligation on whoever revives it** (§8, AC-8.10): the recorder's segment splitter does not split on `LIMIT`, so a paging tail arrives fused to the last `WHERE` conjunct and matches no anchored allow-pattern |
+| **6** | AC-8.10 specified one third of a three-part control | **ALL THREE PARTS NAMED** (§7 test 39a; §8, AC-8.10): the CONSTRUCT half, the COLUMN half (no value column in any predicate), and the UNAVOIDABILITY half (one path to the driver). The last two are shipped and had no home here — **a control specified as one third of itself can be deleted two thirds of the way and still look present** |
+
+**And one watch-point, recorded because it is a trap rather than a defect** (FR-064): `CountCandidates`
+queries `notes` while `Candidates` queries the `LEFT JOIN`. **They agree today only because the
+`WHERE` clause is identical and the join is LEFT — and they diverge silently the day anyone adds a
+property predicate to `Selector`, which is the same day ruling R-A breaks.** §7 test 39a's new part
+(d) fails on `Selector` growing a field at all, because the field's arrival is the detectable event
+and every consequence of it is a specification change rather than an implementation.
 
 **What Draft 7 changes, and the pattern in it is worth naming before the list.** Ten live
 ambiguities were closed. **Five of the ten were already answered — in the CODE, or elsewhere in this
@@ -1048,6 +1079,47 @@ no new runtime dependency, no CGo, and Hard Constraints #1 and #2 hold.
   - **These three shapes MUST be expressed in `RecordQueryRequest`** (FR-090, Hard Constraint #8) rather than enforced only in Go, so that a malformed leaf is refused at the contract edge by the generated Zod validator as well as by the handler.
 - **FR-022e** **NEW, Draft 7 (UAT case F-5.5). A QUERY LITERAL IS INTERPRETED IN THE PROPERTY'S DECLARED TYPE, and a literal that cannot be so interpreted is REFUSED — not `false`.** This closes the one gap that made **R-1** unevaluable in a query: R-1 rules on values of *"different **declared** types", and a record value gets its declared type from the schema while **a literal has no schema**. Nothing said how a literal acquires one, so `{property: "label", op: ">", value: 5}` had no defined answer.
   - **The rule, in two steps.** (1) **Interpretation.** The literal is interpreted **in the declared type of the property it is compared against** — a JSON string against a `date` is parsed by FR-021d's strict ISO-8601 grammar, against an `enum` it is resolved by FR-011's case-insensitive membership, against `relation`/`person` it is read as a wikilink or an identifier (R-8), against `integer`/`decimal` it is parsed as a number. Once interpreted it **is** a value of that declared type, and **R-12 then holds exactly as written**: every rule applies identically whether the value came from a literal or from a record. (2) **Refusal.** A literal that **cannot** be interpreted in that declared type — a JSON number against `text` or `enum`, a JSON string against `integer`/`decimal` that is not a number, a string against `date` that is not ISO-8601, a non-link against `relation`/`person` — is **REFUSED at query validation, before any candidate is retrieved**, in FR-024's pattern: naming the property, its declared type, the literal as supplied, and the form that would have worked.
+  - **A `LIKE` PATTERN IS EXCEPTED, BECAUSE IT IS A PATTERN AND NOT A VALUE OF THE DECLARED TYPE.
+    NEW, Draft 8 — as Draft 7 wrote it, this requirement made `LIKE` on an `enum` unsatisfiable.**
+    Step (1) says a literal compared against an `enum` *"is resolved by FR-011's case-insensitive
+    membership"*, and step (2) refuses one that cannot be. **`status LIKE 'do%'` against an `enum`
+    declaring `todo, doing, done` is therefore REFUSED** — `do%` is not a declared value and never
+    will be — **which refuses a legitimate query for a reason that is not true: nothing is wrong with
+    it.** R-9's *"`LIKE` matches an element **by pattern**"* becomes unreachable on the `enum` half of
+    the textual domain, and R-1 makes `text` and `enum` **one comparison type**, so half a comparison
+    type would lose an operator FR-022b grants it.
+
+    **The rule: a `LIKE` pattern is carried as TEXT, whatever the property's declared type.** It is
+    not interpreted in the declared type and it is not refused for failing to be a value of it.
+
+    **Three reasons this is a carve-out from FR-022e rather than a hole in it.** *(i)* **A pattern is
+    not a value being compared; it is the SHAPE values are compared AGAINST** — SQL's own `LIKE`
+    takes a pattern string on the right for exactly this reason, and this document took SQL's
+    operator vocabulary deliberately (ruling R-B). *(ii)* **The type disposition has already done the
+    work step (2) would otherwise do**: the operator-disposition check refuses `LIKE` outright for
+    every declared type that has no pattern form, so this branch is only ever reached for `text` and
+    `enum` — the carve-out cannot leak into `date`, `integer`, `decimal`, `relation` or `person`.
+    *(iii)* **Nothing else shifts**, because R-1 already unifies `text` and `enum` into one comparison
+    type: a text-carried pattern matched against an `enum` value runs the same folded comparison it
+    would have run against a `text` value.
+
+    **This does not weaken R-12** (*"every rule applies identically whether the value came from a
+    literal or from a record"*). R-12 is a rule about **the rules**, and there is still one
+    comparison path; what changes is that the right-hand operand of `LIKE` was never a value on
+    either side of the provenance question. **And the silent-empty-result failure this requirement
+    exists to remove is not reopened** — the carve-out makes a correct query *work*, it does not make
+    an incorrect one return nothing. FR-022a's empty-pattern refusal still fires on `LIKE ''` and
+    `LIKE '%'`, and FR-022b's wildcard-free equivalence still holds.
+
+    *Shipped and tested:* `pkg/records/filter.go::Filter.Validate` returns the pattern as a
+    `TypeText` value before the `ParseValue` loop that interprets every other literal in the declared
+    type, with the reasoning recorded at the branch.
+  - **AC-22e.5** — `{property: <an enum property declaring `todo, doing, done`>, op: "LIKE", value:
+    "do%"}` is **ACCEPTED** and selects `doing` and `done`. It is **not** refused as an impermissible
+    enum value. The sibling case `{op: "=", value: "do%"}` on the same property **is** refused,
+    naming the permitted values — the two must not be conflated, and a test that asserts only the
+    second would pass with the first broken.
+
   - **Why refusal and not `false`, which is the harder half.** `false` for every record is **indistinguishable from "no matches"**, and telling a caller "no records" when the truth is "your query cannot mean anything" is the exact silent-empty-result failure FR-022a, FR-022d and FR-024 all exist to remove — arriving through a fourth door. It is also knowable **before** any work: the property's declared type is in the schema and the literal is in the request. A refusal is cheap, early and unambiguous; a `false` is late, expensive and a lie.
   - **THIS CORRECTS THE OPERATOR'S OWN PROPOSED RULING, and the correction is narrow.** The proposal was that *"a `text` property compared against `2` treats `2` as the text `\"2\"`"*. **Step (1) above is exactly that instinct and it is adopted; step (2) is where it is rejected.** Retyping a JSON `2` into the text `"2"` is a **coercion**, and R-1's own words are *"Never an error, never a **coercion**"*. **JSON already distinguishes `2` from `"2"`** — a caller who means the text `"2"` has a way to say so and did not use it — so silently retyping the number is the product deciding the caller meant something other than what they wrote. It would also make `label > 5` return the records whose label sorts after `"5"` lexically, which is a plausible-looking answer to a query that was a mistake.
   - **R-1's `"3" > 2` example survives untouched, and its scope is now stated.** R-1 governs **values**, and after this requirement a filter leaf can no longer construct two values of different declared types — the interpretation step unifies them or the refusal step stops the query. **R-1's cross-type cells are therefore reached only by the comparator's own truth table (AC-8.1's type × type axis), which is where R-11's totality obligation lives.** The comparator stays **total and never panics** over every type pair; the query layer simply never hands it a mismatched pair. *That is a stronger position than either alternative: the refusal is at the layer that can name a remedy, and the comparator's totality is preserved as the backstop it was always meant to be.*
@@ -1200,7 +1272,7 @@ editor. Its name invites exactly the misreading these two FRs exist to prevent.
 
   | | **B1 — the EVALUATION bound** | **B2 — the MATERIALISATION bound** |
   |---|---|---|
-  | **What it counts** | the **narrowed** candidate population: `COUNT(*)` over the narrowing predicates **only** — `type`, `path` prefix within scope, `kind` (AC-8.10's allow-list, and nothing else) | the **survivors**: records the comparator has accepted |
+  | **What it counts** | the **narrowed** candidate population: `COUNT(*)` over the narrowing predicates **only** — `record_type`, `path` prefix within scope, `kind` (AC-8.10's allow-list, and nothing else). **This `COUNT(*)` is AC-8.10's NAMED, BOUNDED EXCEPTION to its own aggregate ban (Draft 8) — the two requirements contradicted each other in Draft 7 and no longer do** | the **survivors**: records the comparator has accepted |
   | **Value** | **50,000** — deliberately the supported vault size, not a second independent number to reconcile | **10,000** |
   | **When** | **before any candidate is retrieved.** One index-bound aggregate; genuinely cheap and genuinely pre-retrieval | **during evaluation**, as a streaming abort |
   | **What it protects** | **work** — it is what makes A-14's cost claim true rather than hopeful | **memory** — it is what FR-066b's one-page rule rests on |
@@ -1209,6 +1281,39 @@ editor. Its name invites exactly the misreading these two FRs exist to prevent.
   **Two things are now said plainly that revision 5 said the opposite of.** *(i)* **B2 is NOT "before any row is materialised"** — it cannot be, and FR-066a, §7 test 47 and the refusal string are rewritten to say so. *(ii)* **A-14's bound is correspondingly weaker than revision 5 claimed**: the Go path's worst case is **50,000 candidate evaluations × the filter's leaf count** (FR-023c caps the second factor), not 10,000 evaluations. That is the number W1 must measure, and §11's W1 row already says 50,000 — the wave plan was right and revision 5's reasoning was not.
 
   **The cost of B1 is stated rather than hidden: it can refuse a query whose filter would have selected three records.** A vault with 60,000 notes of one type refuses every row-returning query over that type until the caller narrows by scope or kind, even though the answer was small. That is a real product cost and it is accepted deliberately — the alternative is a bound that is enforced after the work, which is not a bound. **The refusal must therefore NOT say "add a filter on status"**, because under B1 adding a filter does not change the number that fired; a refusal whose remedy does not work is the failure class this document exists to remove.
+
+  **B1's `COUNT(*)` IS PERMITTED IN EMITTED SQL, and Draft 7 forbade it. RESOLVED, Draft 8.** This
+  row requires *"one index-bound aggregate"* while **AC-8.10's allow-list banned aggregate functions
+  and did not except it** — so the specification demanded a statement in one place and failed the
+  build for it in another, over the bound the whole cost argument rests on. **AC-8.10 now carries
+  `COUNT(*)` as a named exception with the reasoning that bounds it** (it counts a *population*, not
+  an *answer*; a `COUNT` over a value column and every other aggregate stay banned). Shipped at
+  `pkg/records/propindex/sqlite.go::Index.CountCandidates`, which emits exactly
+  `SELECT COUNT(*) FROM notes` plus the shared narrowing clause and nothing else.
+
+  **A WATCH-POINT, and it is a trap rather than a defect — record it before someone walks into it.**
+  **B1's count and the candidate stream query DIFFERENT things.**
+  `pkg/records/propindex/sqlite.go::Index.CountCandidates` counts rows of `notes`;
+  `pkg/records/propindex/sqlite.go::Index.Candidates` streams
+  `notes LEFT JOIN note_props`. **They agree on the population today for two reasons and two only:**
+  the `WHERE` clause is the identical output of the shared
+  `pkg/records/propindex/sqlite.go::narrowing` helper (modulo the table alias), and the join is a
+  **LEFT** join, so a record with no declared properties is still counted by one and still streamed by
+  the other. Neither reason is asserted anywhere; both are structural coincidences that hold.
+
+  **They diverge SILENTLY the day anyone adds a property predicate to `Selector`**
+  (`pkg/records/propindex/store.go` — today exactly three fields: `RecordType`, `Kind`, `PathPrefix`).
+  A property predicate has no column on `notes`, so the count would either not apply it — leaving B1
+  counting a population the stream then narrows further, i.e. a bound that no longer bounds what it
+  claims — or it would force the join into the count, at which point `COUNT(*)` counts **rows** and
+  B1's *"BOTH bounds count RECORDS, never rows"* is quietly false by the average `many` arity.
+  **And that is the same day ruling R-A breaks**, because a property predicate in `Selector` *is* a
+  comparison delegated to SQL. **One field, three simultaneous failures, no test failure in the
+  obvious place.** That is why the guard is strengthened to **fail on `Selector` growing a field at
+  all** rather than to inspect what the new field does: the field's arrival is the detectable event,
+  and every consequence of it needs a specification change (this row, AC-8.10's allow-list, and
+  ruling R-A) rather than an implementation.
+
 - **FR-064a** **NEW, revision 5 — this closes the collision between the supported-vault size and the candidate cap.** An **aggregate-only** query — one that requests `aggregate` and/or `group_by` and returns **no rows** — is **exempt from FR-064** and is bounded instead at the supported vault size (50,000 records, the constraint table). *Rationale: the constraint table supports 50,000 records per vault while FR-064 refuses above 10,000 and FR-066 forbids an aggregate over a refused set, so **a vault with 10,001 deals could never obtain a total over its deals, by design, with no escape hatch** — and the refusal's own remedy ("add a filter on status") means running seven queries and adding them by hand, which is precisely the five-manual-steps cost ADR-068 §1.2 cites as the thing this system removes. The two bounds were set for different reasons and never checked against each other.*
   - **Why this is not "raising the cap", which FR-066a rightly forbids.** FR-064 exists because **materialising** rows is what costs memory (FR-066b's one-page rule). **CORRECTED, revision 6 (review round 6, C-3) — revision 5's stated mechanism was a SQLite pushdown, which ruling R-A forbids, and §8.1 said the opposite about the same requirement 980 lines later.** An aggregate-only query **materialises one RESULT row**, and that is the property that matters. **It does NOT avoid retrieving candidates.** The `COUNT`/`SUM` is a **Go scan over a streamed candidate set** — the same comparator, the same de-duplication, the same R-1..R-13 — accumulating into one result row and holding no page of rows. *(Revision 5: *"the `COUNT`/`SUM` is pushed entirely into SQLite and no candidate is retrieved"*. §8.1 in the same revision: *"FR-064a's aggregate-only exemption … is now a **Go** scan over a candidate stream **rather than a SQLite pushdown**"*. Two normative statements, opposite mechanisms, one requirement — and the SQL one was mandated for **the single query shape that returns no rows, so no reader can sanity-check the total against anything**. It is also the shape where the deleted defect lives: FR-028a's own receipt is a `SUM` over a join with a `many` property returning **200 where truth is 100**.)*
 
@@ -1458,7 +1563,7 @@ words. The **property TYPE** names — `text`, `enum`, `relation`, `date`, `inte
 | Unsupported SQL construct, parameter remedy (FR-022c) | `'JOIN' is not expressible in a filter; use the join parameter to borrow columns through a relation, or group_by to group by one` |
 | Empty `LIKE` pattern (FR-022a) | `a LIKE pattern of '' or '%' matches every record; use IS NOT NULL if that is what you meant` |
 | **Empty `IN` list (FR-022d)** — **ADDED in Draft 7 (UAT F-3.4)**; the requirement existed and its refusal string did not, in the one table a tester reads to know what to expect | `IN was given an empty list, which can match nothing; supply at least one value, or use IS NULL to select records with no value` |
-| **A literal that cannot be interpreted in the property's declared type (FR-022e)** — **ADDED in Draft 7 (UAT F-5.5)** | `label is declared text and the value 5 is a number; compare it against a quoted string, or use IS NULL / IS NOT NULL` |
+| **A literal that cannot be interpreted in the property's declared type (FR-022e)** — **ADDED in Draft 7 (UAT F-5.5); a `LIKE` PATTERN IS EXCEPTED and never reaches this refusal (Draft 8)** | `label is declared text and the value 5 is a number; compare it against a quoted string, or use IS NULL / IS NOT NULL` |
 | Third hop | `hops=3 exceeds the limit of 2; run a second vault_find from one of these results` |
 | Candidate cap **B2** (survivors), row-returning query | **CORRECTED, revision 6 (C-4) — revision 5's string named a count no bound produces and a remedy that does not reduce it.** `this query matched more than 10,000 records; the limit is 10,000 — add or tighten a filter, or ask for a total instead (an aggregate-only query returns no rows and is exempt — FR-064a)`. **The string does NOT quote an exact survivor total, because the count aborts at the cap and does not continue to a true total — quoting one would be a number nobody computed.** |
 | Candidate cap **B1** (evaluation), any typed query | **NEW, revision 6 (C-4).** `this query would evaluate 60,412 candidate records of type <T>; the limit is 50,000 — narrow the scope to a collection or path, or narrow the kind`. **This count IS exact and IS taken before retrieval** (one index-bound aggregate over the narrowing predicates), so quoting it is honest. **It does not name "add a filter" as the remedy**, because a filter does not change what B1 counts |
@@ -2071,7 +2176,7 @@ Order is unit → integration → e2e; within a level, dependencies first.
 | 63 | `TestFreshness_EveryPartialWriteFailurePointIsDetectable` | integration | FR-020c — **NEW, revision 5.** Table-driven over each failure point of the SQLite → bleve → manifest ordering, **stating for each whether it is detectable**. Revision 4's ordering made the reachable failure undetectable and its criterion tested an unreachable one |
 | 64 | `TestTrash_RestoreRetentionAndWindowsSafePath` | integration | FR-048a — **NEW, revision 5.** A trashed note restores to its original path; the trash directory name contains **no colon**; a second trash of one path produces a second copy **and says so**; purge removes a 31-day-old entry |
 | 65 | `TestMigration_NoRetiredKnowledgeToolNamesRemain` | integration | FR-049a — **NEW, revision 5.** The boot-time scan reports every skill, prompt and seeded policy naming a retired `knowledge_*` tool; the report being empty is W5's exit criterion |
-| 39a | `TestQuery_NoComparisonIsDelegatedToSQL` | integration | **AC-8.10, ruling R-A — NEW, revision 6 (review round 6, C-5). THE control that makes R-A a property rather than an intention, and the highest-priority new test in this revision.** A query-boundary recorder captures every SQL statement the properties index executes for a corpus exercising all ten operators, `group_by`, `aggregate`, `sort` and `join`, and **fails on any comparison operator, `LIKE`, `IN`, `GROUP BY`, `ORDER BY`, aggregate function or `COLLATE` outside AC-8.10's named narrowing allow-list**. It replaces the deleted test 39 at the **store boundary** rather than in a compiler, so it survives the compiler's deletion and cannot be satisfied by a bypassed comparator. **CI treatment follows test 42's template**: name the job, the tag combination (`goolm,stdjson`) and the make target, and put it on the required-checks list |
+| 39a | `TestQuery_NoComparisonIsDelegatedToSQL` | integration | **AC-8.10, ruling R-A — NEW, revision 6 (review round 6, C-5). THE control that makes R-A a property rather than an intention, and the highest-priority new test in this revision.** A query-boundary recorder captures every SQL statement the properties index executes for a corpus exercising all ten operators, `group_by`, `aggregate`, `sort` and `join`, and **fails on any comparison operator, `LIKE`, `IN`, `GROUP BY`, `ORDER BY`, aggregate function or `COLLATE` outside AC-8.10's named narrowing allow-list**. It replaces the deleted test 39 at the **store boundary** rather than in a compiler, so it survives the compiler's deletion and cannot be satisfied by a bypassed comparator. **THE TEST HAS THREE PARTS, NOT ONE — Draft 8 names the two that had no home in this document, because a control specified as one third of itself is a control that can be deleted two thirds of the way and still look present.** **(a) The CONSTRUCT half**, above — `pkg/records/propindex/sqlgate_test.go::TestQuery_NoComparisonIsDelegatedToSQL`. **(b) The COLUMN half**: no predicate in any read-path statement may mention a column that holds a property value (`v_text`, `v_num`, `v_time`, `v_link`, `v_raw`, `state`, `target`, `record_id`, `status`, `text`) — this catches a comparison written with an operator the construct list happens not to spell (`::TestSQLGate_ReadPathTouchesNoValueColumn`). **(c) The UNAVOIDABILITY half**: a source-reading assertion that no file in the package but the single gate file calls `database/sql`'s execution methods, so the recorder cannot be gone around (`::TestSQLGate_OnlyOnePathToTheDriver`, against `pkg/records/propindex/sqlgate.go`). **Plus (d), NEW in Draft 8: the test MUST fail if `Selector` grows a field** (`pkg/records/propindex/store.go` — today `RecordType`, `Kind`, `PathPrefix`). A fourth field is the single event that breaks ruling R-A, FR-064's B1 count and the `CountCandidates`/`Candidates` agreement **simultaneously and silently** — see FR-064's watch-point. The assertion is on the field set itself rather than on what a new field does, because the field's arrival is the detectable event and every consequence of it is a specification change. **CI treatment follows test 42's template**: name the job, the tag combination (`goolm,stdjson`) and the make target, and put it on the required-checks list |
 | 89 | `TestStorage_IdentifierColumnDoesNotFold` | unit | **R-8 — NEW, revision 6 (review round 6, M-5).** Two records whose identifiers differ only in case (`CO-0142` / `co-0142`) coexist, are returned separately by the narrowing select, and compare **unequal** in the comparator. **Replaces the deleted AC-8.8 at the layer that now decides.** If a `BINARY` collation is declared on the narrowing column as a storage note, this test is what asserts it, and it asserts the OUTCOME (two distinct records survive), not the DDL |
 | 66 | `TestScope_TruncatedResolutionReportsIncomplete` | integration | FR-062a — **SCHEDULED, revision 6 (review round 6, M-34).** It is the **P0 scope guarantee** revision 5 itself described as having had *"no test, no AC and no SC"*, and it then left it in §6 with no §7 schedule |
 | 67 | `TestValue_NonConformingIsFlaggedNotAbsent` | unit | FR-021a, FR-021b — **SCHEDULED, revision 6 (M-34).** *"FR-021a is the whole of the R-4 defeat and had no test at all"* — and still had no schedule |
@@ -2585,14 +2690,86 @@ naive join → **300**, truth **200**.
 
   | Allowed in emitted SQL | Why it is narrowing and not deciding |
   |---|---|
-  | `type = ?` | selects the candidate population by record type; no property value is compared |
-  | `path LIKE ? ` with a caller-independent, escaped prefix | workspace/collection scope (FR-060); the pattern is built by us from a resolved root, never from caller text |
-  | `kind = ?` | note-kind narrowing, same argument as `type` |
-  | the relation child table's `rec_id` join predicate | assembles a record's `many` values into one row set; the fan-out is de-duplicated in Go (SC-002a) |
-  | `LIMIT` / `OFFSET` on the **narrowing** select | paging of candidates, not of results |
+  | `record_type = ?` | selects the candidate population by record type; no property value is compared |
+  | `path LIKE ? ESCAPE '\'` with a caller-independent, escaped prefix | workspace/collection scope (FR-060); the pattern is built by us from a resolved root, never from caller text |
+  | `kind = ?` | note-kind narrowing, same argument as `record_type` |
+  | **a CHILD-TABLE join predicate of the form `<child>.note_id = <parent>.note_id`** — an equality between the `note_id` column of a parent row and the `note_id` column of one of its child tables, and **no other operand shape** | assembles a record's `many` values into one row set; the fan-out is de-duplicated in Go (SC-002a). **The reason is a property of a CHILD TABLE, not of relations** — see the generalisation note below |
+  | **`COUNT(*)`** over the narrowing predicates only — **the one aggregate this design emits** | it counts rows of `notes`: a **population**, not an answer. It totals nothing the operator asked about. Required in as many words by FR-064's B1 row — see the exception note below |
+  | `LIMIT` / `OFFSET` on the **narrowing** select | paging of candidates, not of results. **Nothing emits this today** — see the caveat below |
 
   **Adding a statement to that allow-list is a specification change requiring the argument AC-8.2
-  demands** — not a test edit. The recorder is at the **store boundary**, not inside a compiler, so
+  demands** — not a test edit.
+
+  **THE `COUNT(*)` EXCEPTION — NEW, Draft 8. It is named, bounded, and here is the reasoning that
+  keeps it from widening.** Draft 7 required a `COUNT(*)` in one place and forbade it in another:
+  **FR-064's B1 row** specifies the evaluation bound's mechanism as *"`COUNT(*)` over the narrowing
+  predicates **only** — `type`, `path` prefix within scope, `kind` (AC-8.10's allow-list, and nothing
+  else)"*, and *"One index-bound aggregate; genuinely cheap and genuinely pre-retrieval"* — while this
+  allow-list banned aggregate functions and did not except it. **B1 is the load-bearing bound of the
+  whole design and it is unimplementable without this statement**, so the conflict was not a
+  cosmetic one: an implementer's only two options were to emit it and violate the guard, or to honour
+  the guard and delete the bound. *(The Stage 1 implementer emitted it and added the sixth allow-list
+  row explicitly rather than violating the guard silently, and reported the conflict upward. That is
+  the correct handling and this row ratifies it.)*
+
+  **The reason the exception does not widen, and it is the part to quote when someone proposes the
+  next one: `COUNT(*)` counts ROWS OF `notes` — a POPULATION — not an ANSWER.** It totals nothing the
+  operator asked about, it names no property, and its result is a number about the vault rather than a
+  number about the query's subject. **Every aggregate the operator CAN request — `count`, `sum` and
+  the rest of FR-028's set — runs in Go over the candidate stream**, one record visited once, because
+  a join fan-out made `COUNT(*)` return 2 and `SUM` return 200 where the truth was 1 and 100
+  (SC-002a, FR-028a). **The exception is `COUNT(*)` over the narrowing predicates and nothing else:
+  a `COUNT` over a VALUE COLUMN — `COUNT(v_text)`, `COUNT(DISTINCT p.prop)` — and every other
+  aggregate function remain banned**, because a count over a value column is an answer about values,
+  which is the thing ruling R-A moved to Go. The permitted form is the literal star form.
+
+  **THE CHILD-TABLE GENERALISATION — NEW, Draft 8, and the governing text is the REASON, not the
+  example.** Draft 7's row named *"the relation child table's `rec_id` join predicate"*. **Two things
+  were wrong with it, and the second is the one that matters.**
+  - **It named a column that does not exist.** The shipped schema keys every child table on
+    `note_id`, not `rec_id` (`pkg/records/propindex/sqlite.go` — the `note_props`, `note_relations`
+    and `note_tasks` DDL, each `PRIMARY KEY (note_id, …)`, against `notes.note_id INTEGER PRIMARY
+    KEY`). Draft 7's `type = ?` row carried the same class of error: the column is `record_type`
+    (`pkg/records/propindex/sqlite.go::narrowing`). Both are corrected in the table above.
+  - **It generalised on the wrong axis.** The stated reason — *"assembles a record's `many` values
+    into one row set; the fan-out is de-duplicated in Go"* — **is a property of a CHILD TABLE, and
+    has nothing to do with relations specifically.** `note_props` needs the identical join for the
+    identical reason, and so do `note_tasks` and `note_relations`
+    (`pkg/records/propindex/sqlite.go::Index.Candidates`, `::Index.Tasks`, `::Index.Relations`).
+    A guard built from the literal words rather than the reason **fails a correct property join** —
+    which is a guard that blocks the design it was written to protect.
+
+  **So the exception is stated as a SHAPE governed by that reason: an equality between a parent's
+  `note_id` and a child's `note_id`, and no other operand shape.** Not "a join predicate" (which
+  would admit any join), not "a relation join" (which excludes three of the four statements the store
+  emits). **A join between two CHILD tables is NOT admitted** even though it has the same column
+  names: the reason above is *assembly of a record's values around its parent row*, and a
+  child-to-child join produces a cross-product that the parent-anchored assembly does not
+  de-duplicate. **The next reader is expected to generalise from the reason, not to re-derive it from
+  the example** — that re-derivation is exactly what produced Draft 7's wording.
+
+  **THE `LIMIT` / `OFFSET` ROW IS DEAD TODAY, and this is recorded so whoever revives it is not
+  surprised.** No read path emits `LIMIT` or `OFFSET` — paging is a Go pass over the candidate stream
+  (FR-066b), so the row admits a form nothing produces. **It is also, as the control is currently
+  built, unmatchable**: the recorder checks statement SEGMENTS split on `AND` / `ON` / `WHERE` /
+  `SELECT` / `FROM` / `JOIN` and **not on `LIMIT`**, so a `LIMIT ? OFFSET ?` tail rides along on the
+  final `WHERE` conjunct and arrives as `kind = ? LIMIT ? OFFSET ?`, which no anchored allow-pattern
+  matches. **Whoever adds SQL-side paging must extend the segment splitter in the same commit**, or
+  the control will fail on the one construct this table already blesses.
+
+  **THE CONTROL IS TWO-SIDED, and Draft 7 specified only one side.** The assertion above lists
+  CONSTRUCTS. A predicate that compared a value column using an operator this list happens not to
+  spell would pass it. **The second half of the control lists COLUMNS: no predicate in any read-path
+  statement may mention a column that holds a property value** — `v_text`, `v_num`, `v_time`,
+  `v_link`, `v_raw`, `state`, `target`, `record_id`, `status`, `text`. It is shipped
+  (`pkg/records/propindex/sqlgate_test.go::TestSQLGate_ReadPathTouchesNoValueColumn`) and it had no
+  home in this document. It has one now, and §7 test 39a names both halves.
+
+  **AND THE RECORDER MUST BE UNAVOIDABLE, which is a third obligation and also shipped.** A recorder
+  that can be gone around reports green while the thing it watches happens elsewhere. Every statement
+  reaches the driver through one file, and a source-reading test fails the build if any other file in
+  the package calls `database/sql`'s execution methods directly
+  (`pkg/records/propindex/sqlgate.go`; `pkg/records/propindex/sqlgate_test.go::TestSQLGate_OnlyOnePathToTheDriver`). The recorder is at the **store boundary**, not inside a compiler, so
   it survives the deletion of the compiler and cannot be satisfied by a comparator that is simply
   bypassed. §7 test 39a implements it, and it is named in W1's exit criteria so that it exists
   before there is anything to catch. **Treat §7 test 42's CI discipline as the template**: name the
