@@ -28,7 +28,7 @@ describe('providers-catalog.json fixture', () => {
     expect(popular).toHaveLength(12)
     expect(new Set(popular.map((p) => p.company)).size).toBe(12)
     expect(popular.map((p) => p.id).sort()).toEqual(
-      ['alibaba', 'anthropic', 'deepseek', 'google', 'minimax', 'mistral', 'moonshot', 'ollama', 'openai', 'openrouter', 'xai', 'zai'],
+      ['alibaba', 'anthropic', 'deepseek', 'google', 'minimax', 'mistral', 'moonshotai', 'ollama', 'openai', 'openrouter', 'xai', 'zai'],
     )
     expect(popular.map((p) => p.id)).not.toContain('groq')
   })

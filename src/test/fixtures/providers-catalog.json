@@ -519,7 +519,7 @@
       ]
     },
     {
-      "id": "moonshot",
+      "id": "moonshotai",
       "name": "Moonshot AI",
       "company": "Moonshot AI",
       "api": "https://api.moonshot.ai/v1",
@@ -535,7 +535,7 @@
       "locality": "cloud",
       "models": [
         {
-          "id": "moonshot-default",
+          "id": "moonshotai-default",
           "name": "Moonshot AI default",
           "release_date": "2026-04-15",
           "context_window": 128000,
@@ -549,7 +549,7 @@
       ]
     },
     {
-      "id": "moonshot-cn",
+      "id": "moonshotai-cn",
       "name": "Moonshot AI (China)",
       "company": "Moonshot AI",
       "api": "https://api.moonshot.cn/v1",
@@ -563,7 +563,7 @@
       "locality": "cloud",
       "models": [
         {
-          "id": "moonshot-cn-default",
+          "id": "moonshotai-cn-default",
           "name": "Moonshot AI (China) default",
           "release_date": "2026-04-15",
           "context_window": 128000,
