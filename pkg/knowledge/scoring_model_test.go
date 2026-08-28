@@ -125,8 +125,8 @@ func smRankUnder(t *testing.T, scoringModel string) []string {
 		{Path: smRepeaterPath, Name: "repeater", Kind: string(ScanKindNote), Body: smRepeaterBody()},
 		{Path: smConcisePath, Name: "concise", Kind: string(ScanKindNote), Body: smConciseBody()},
 	} {
-		if err := idx.Index(d.Path, d); err != nil {
-			t.Fatalf("index %s into %s index: %v", d.Path, scoringModel, err)
+		if indexErr := idx.Index(d.Path, d); indexErr != nil {
+			t.Fatalf("index %s into %s index: %v", d.Path, scoringModel, indexErr)
 		}
 	}
 
@@ -240,13 +240,13 @@ func TestScoringModel_StaleIndexIsRebuiltNotReused(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create stale index: %v", err)
 	}
-	if err := staleIdx.Close(); err != nil {
-		t.Fatalf("close stale index: %v", err)
+	if closeErr := staleIdx.Close(); closeErr != nil {
+		t.Fatalf("close stale index: %v", closeErr)
 	}
 	// Stamp the CURRENT format version so G1 is satisfied and any rebuild that
 	// happens must be G2 — the mapping comparison — rather than the version bump.
-	if err := writeIndexFormat(formatPath); err != nil {
-		t.Fatalf("stamp current format: %v", err)
+	if stampErr := writeIndexFormat(formatPath); stampErr != nil {
+		t.Fatalf("stamp current format: %v", stampErr)
 	}
 
 	ix := b2Open(t, home, root)
