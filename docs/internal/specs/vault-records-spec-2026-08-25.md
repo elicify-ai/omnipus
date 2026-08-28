@@ -1149,6 +1149,14 @@ act on**, never as an empty success.
 
 ### 4.1.1 `vault_describe` — READ, orientation and integrity
 
+*(**R-F marker.** Every record-type, property and value name below is an **illustration of what a
+vault might define** — see R-F. The product ships none of them. **What a test asserts is the SHAPE
+and the remedy clause**, against a fixture schema the test itself declares — not these particular
+words. The **property TYPE** names — `text`, `enum`, `relation`, `date`, `integer`, `decimal`,
+`person` — are the exception: those are ours and are shipped, FR-004.)*
+
+*(Marker added revision 6, review round 6, M-25 — §4.1.2 carried it and this section did not, which left four normative tables reading as though their vocabulary were contract.)*
+
 The mandatory cheap first call. An agent that has not called it is guessing at property names,
 and a guessed property name is the failure FR-024 exists to prevent.
 
@@ -1241,9 +1249,11 @@ parameter that does the job** (FR-022c), never parsed and never silently dropped
 
 **Normative refusal wording.** These strings are contract, not illustration; a test asserts them.
 
-*(Every type, property and value name below is an **illustration of what a vault might define** —
-see R-F. The product ships none of them. **What a test asserts is the SHAPE and the remedy clause**,
-against a fixture schema the test itself declares — not these particular words.)*
+*(**R-F marker.** Every record-type, property and value name below is an **illustration of what a
+vault might define** — see R-F. The product ships none of them. **What a test asserts is the SHAPE
+and the remedy clause**, against a fixture schema the test itself declares — not these particular
+words. The **property TYPE** names — `text`, `enum`, `relation`, `date`, `integer`, `decimal`,
+`person` — are the exception: those are ours and are shipped, FR-004.)*
 
 | Condition | Message |
 |---|---|
@@ -1284,6 +1294,14 @@ against a fixture schema the test itself declares — not these particular words
 
 ### 4.1.3 `vault_read` — READ, a note or one section of one
 
+*(**R-F marker.** Every record-type, property and value name below is an **illustration of what a
+vault might define** — see R-F. The product ships none of them. **What a test asserts is the SHAPE
+and the remedy clause**, against a fixture schema the test itself declares — not these particular
+words. The **property TYPE** names — `text`, `enum`, `relation`, `date`, `integer`, `decimal`,
+`person` — are the exception: those are ours and are shipped, FR-004.)*
+
+*(Marker added revision 6, review round 6, M-25 — §4.1.2 carried it and this section did not, which left four normative tables reading as though their vocabulary were contract.)*
+
 | Parameter | Type | Default | Meaning |
 |---|---|---|---|
 | `path` | string | required | Note path within scope. |
@@ -1305,6 +1323,14 @@ Refusals: `no section '## Pricing' in Deals/Acme.md; headings: ## Summary, ## Te
   named per property. Reading is never blocked by a validation finding.
 
 ### 4.1.4 `vault_edit` — WRITE, one named file
+
+*(**R-F marker.** Every record-type, property and value name below is an **illustration of what a
+vault might define** — see R-F. The product ships none of them. **What a test asserts is the SHAPE
+and the remedy clause**, against a fixture schema the test itself declares — not these particular
+words. The **property TYPE** names — `text`, `enum`, `relation`, `date`, `integer`, `decimal`,
+`person` — are the exception: those are ours and are shipped, FR-004.)*
+
+*(Marker added revision 6, review round 6, M-25 — §4.1.2 carried it and this section did not, which left four normative tables reading as though their vocabulary were contract.)*
 
 Writes **only** `path` (FR-070b). Every op on an existing file requires `expect_version`.
 
@@ -1347,6 +1373,14 @@ operation and is a one-file operation.
 - **AC-E3** — an ambiguous `replace_body` anchor leaves the file byte-identical.
 
 ### 4.1.5 `vault_restructure` — WRITE, cascades
+
+*(**R-F marker.** Every record-type, property and value name below is an **illustration of what a
+vault might define** — see R-F. The product ships none of them. **What a test asserts is the SHAPE
+and the remedy clause**, against a fixture schema the test itself declares — not these particular
+words. The **property TYPE** names — `text`, `enum`, `relation`, `date`, `integer`, `decimal`,
+`person` — are the exception: those are ours and are shipped, FR-004.)*
+
+*(Marker added revision 6, review round 6, M-25 — §4.1.2 carried it and this section did not, which left four normative tables reading as though their vocabulary were contract.)*
 
 The only tool permitted to change a file the caller did not name.
 
@@ -1456,8 +1490,23 @@ CASCADE (meaning): 47 notes now match record type 'meeting'
   0 records lost validity
 ```
 
-**Normative refusal and report wording.** These strings are contract, not illustration; a test
-asserts them.
+**Normative refusal and report wording. CORRECTED, revision 6 (review round 6, M-25) — revision 5
+said *"These strings are contract, not illustration; a test asserts them"* over a table containing
+`company`, `deal`, `meeting` and `person`, which is the exact opposite of what §4.1.2's own marker
+says in the same words.** The **shape and the remedy clause** are contract; the **vocabulary is
+illustration**.
+
+*(**R-F marker.** Every record-type, property and value name below is an **illustration of what a
+vault might define** — see R-F. The product ships none of them. **What a test asserts is the SHAPE
+and the remedy clause**, against a fixture schema the test itself declares — not these particular
+words. The **property TYPE** names — `text`, `enum`, `relation`, `date`, `integer`, `decimal`,
+`person` — are the exception: those are ours and are shipped, FR-004.)*
+
+**And this table now HAS an acceptance criterion, which it did not (M-41).** **AC-C9** — every
+refusal and report string below names the remedy in the same string, asserted by §7 test 37 as
+AC-F1 asserts §4.1.2's equivalent table. *(Revision 5 said "a test asserts them" and no test in §7
+did: test 37 asserted tier placement and AC-C1's conversion count, and nothing asserted these ten
+strings at all.)*
 
 | Condition | Message |
 |---|---|
@@ -1787,6 +1836,12 @@ Order is unit → integration → e2e; within a level, dependencies first.
 | 65 | `TestMigration_NoRetiredKnowledgeToolNamesRemain` | integration | FR-049a — **NEW, revision 5.** The boot-time scan reports every skill, prompt and seeded policy naming a retired `knowledge_*` tool; the report being empty is W5's exit criterion |
 
 ### Test datasets
+
+*(**R-F marker.** Every record-type, property and value name below is an **illustration of what a
+vault might define** — see R-F. The product ships none of them. **What a test asserts is the SHAPE
+and the remedy clause**, against a fixture schema the test itself declares — not these particular
+words. The **property TYPE** names — `text`, `enum`, `relation`, `date`, `integer`, `decimal`,
+`person` — are the exception: those are ours and are shipped, FR-004.)*
 
 **DS-1 — property values.** Traces to FR-006, 007, 010, 011, 011a, 012, 013, 021d.
 *(Every type and value name here is a fixture, not product vocabulary — R-F.)*
@@ -2373,7 +2428,25 @@ them.**
 **This specification does not delete code.** The surfaces below become dead when W1 lands, and they
 are enumerated so the deletion is a scheduled task with a reviewer rather than something a future
 reader trips over. **Verified against the tree at revision time** — every path, line count and
-symbol below was read, not recalled.
+symbol below was read, not recalled. **Revision 6 re-executed the whole section against the tree and
+found four defects in it; they are marked in place.**
+
+> **READ THIS FIRST, because it changes how the whole section is executed (review round 6, M-23 /
+> M-46).** **`pkg/records` has ZERO production importers.** `grep -rln '"…/pkg/records"' --include='*.go'`
+> returns exactly two files, and both are its own external tests
+> (`pkg/records/external_enum_ordering_test.go`, `pkg/records/external_property_test.go`).
+> **Three consequences, and each is load-bearing:**
+> 1. **Every deletion below is near-zero-risk** — and, crucially, **the compiler will not find the
+>    callers for you**, because there are none. Whoever executes this list cannot lean on a build
+>    break to tell them they missed something; the list is the only instrument.
+> 2. **It strengthens ruling R-A.** §8.1's *"the comparator that decides is the one that already
+>    exists, is already tested"* is **verified true** — `pkg/records/compare_oracle.go` evaluates
+>    comparisons in Go today and `pkg/records` emits no SQL at all. R-A **restores what exists**
+>    rather than commissioning something new, and saying so with this evidence makes the argument
+>    stronger than it currently reads.
+> 3. **And it is a real caveat, stated rather than swallowed:** the comparator R-A relies on has
+>    **never run in production**. "Already tested" is true; "already proven in service" is not, and
+>    the document should not be read as claiming the second.
 
 **Operator ruling 1 — `money` is deleted from the type system (FR-014).** `pkg/records` holds a
 real, tested money implementation; it is not a stub.
@@ -2388,6 +2461,36 @@ real, tested money implementation; it is not a stub.
 | `TypeMoney` | `pkg/records/schema.go:78`, referenced at `schema.go:77,88,257`; `value.go:67,150,390,456,498`; `compare_oracle.go:309,371,432,467` | **DELETE**, with `TypeNumber` (`schema.go:76`) **REPLACED** by `TypeInteger` and `TypeDecimal` (FR-004) |
 | `contracts/components/schemas/RecordMoney.yaml` | — | **DELETE**, with its references at `contracts/openapi.yaml:279-280`, `RecordValue.yaml:75-76` (`$ref` and `x-go-type`), the `money` enum member in `RecordValue.yaml:32` and `RecordPropertyValue.yaml:44`, `RecordAggregateResult.yaml:64`'s currencies field, `RecordFilter.yaml:71-72,111`'s money clauses, and `PropertyDef.yaml:60,118,120` |
 | Generated | `pkg/api/generated/openapi_types.gen.go:3558,3572,3849,3863` | **REGENERATED**, never hand-edited — `scripts/gen-contracts.sh`, committed in the same atomic commit as the spec change (Hard Constraint #8, step 4) |
+| **`contracts/components/schemas/RecordProblem.yaml`** | `:38-39` (enum members), `:67-69` (prose) | **DELETE the enum members `cross_currency` and `money_scale_mismatch`, and their prose.** **NEW, revision 6 (review round 6, C-9), and these are the HIGHEST-VALUE deletions in the whole section.** They are **not comments**: each generates a Go constant, a TypeScript union member and a **runtime Zod validator the SPA edge uses to accept or drop payloads**. They are live machine-readable residue of the requirement FR-014 retired |
+| `contracts/components/schemas/PropertyDef.yaml` | `:4` (type list prose), `:45` (enum member `money`), `:60` (its description), `:117-120` (`money_scale`) | **DELETE** the `money` enum member, its description and the whole `money_scale` property. **The `:4` prose line must be rewritten, not deleted** — it enumerates the seven types and is where `number` → `integer` + `decimal` also lands (M-22) |
+| `contracts/components/schemas/RecordValue.yaml` | `:7`, `:31` (`number`), `:32` (`money`), `:37`, `:68-69`, `:74-76` | **EDIT.** Delete the `money` enum member, the `money` property with its `$ref`/`x-go-type`, and the money clause of `:68-69`. Replace the `number` enum member with `integer` and `decimal` (M-22). **The decimal-string rule at `:7` and `:69` SURVIVES and must be re-pointed at `decimal`** — it is the FR-020b guarantee and deleting it with money would delete the valuable half |
+| `contracts/components/schemas/RecordPropertyValue.yaml` | `:43` (`number`), `:44` (`money`), `:49` (example) | **EDIT**, same two changes |
+| `contracts/components/schemas/RecordFilter.yaml` | `:71-73`, `:111` | **EDIT.** `:71-72` also carries **two other stale statements** that outlived their requirements and are not money: *"on an enum it compares DECLARED POSITION, not spelling (FR-010)"* — **reversed by ruling R-E** — and the `R-6` citation, a **retired rule**. Three corrections in four lines |
+| `contracts/components/schemas/RecordAggregateResult.yaml` | `:34` (prose), **`:61-70`** (`currencies_present`, the whole property) | **DELETE** the property; **EDIT** `:34`. *(Revision 6, review round 6, M-21: revision 5 cited `:64` for this field. **`:64` is a line inside its description; the field is declared at `:61`.** A deletion list is executed literally, and §10a's own opening sentence claims every line was read. It also missed the file's **second** money reference at `:34`.)* |
+| `contracts/components/schemas/RecordSort.yaml` | `:10` | **EDIT** — deletes a money sentence, and the surrounding sort prose must be checked against R-5's Go-side lexical ordering while it is open |
+| `contracts/components/schemas/RecordGroup.yaml` | `:64` | **EDIT** |
+| **`src/lib/api/generated/schemas.ts`** | **18 hits**, incl. `:319-320` and `:3875-3876` | **REGENERATED.** **NEW, revision 6 (C-9) — §10a listed no SPA surface at all.** This file carries the **runtime Zod** union with both `RecordProblem` members, a `RecordMoney` object schema and a `currency` regex. It is a **validator**, not a type: leaving it means the SPA keeps accepting payloads describing a concept that no longer exists |
+| **`src/lib/api/generated/openapi-types.ts`** | **35 hits** | **REGENERATED.** Same commit |
+| **`pkg/api/generated/openapi_types.gen.go`** | **40 hits**, not four | **REGENERATED.** *(Revision 6: revision 5's row named four lines. The file carries forty.)* |
+
+**FALSE POSITIVES, named so nobody deletes them.** A case-insensitive grep for `currency` matches
+**con·currency**: `contracts/components/schemas/PerformanceSettings.yaml:3,5`,
+`PerformanceSettingsUpdate.yaml:13` and `contracts/openapi.yaml:2906,2929,5944,7992` are **agent
+concurrency settings and have nothing to do with money**. `TokenBudgetStatus.yaml:6` ("no money
+caps") is prose about token budgets. **None of the seven is in scope.** They are listed because the
+next person to run this grep will find them, and an unexplained hit in a deletion list gets deleted.
+
+**M-22 — the `number` → `integer` + `decimal` contract change is scheduled HERE, revision 6, because
+revision 5 scheduled it nowhere.** `contracts/` today declares a `number` property-type enum member
+(`RecordValue.yaml:31`, `RecordPropertyValue.yaml:43`) and **no `integer` and no `decimal` property
+type anywhere**. FR-004's change touches the same three schema files as the money deletion and
+carries the identical Hard-Constraint-#8 obligation, so it belongs in the same atomic commit or it
+will be discovered by `make verify-contracts` failing on somebody else's branch.
+
+**W1 exit criterion for every contract row above (Hard Constraint #8):** the spec change and the
+regenerated `pkg/api/generated/` **and** `src/lib/api/generated/` trees land in **one atomic
+commit**, and **`make verify-contracts` exits 0**. Regeneration is `scripts/gen-contracts.sh`;
+generated files are never hand-edited.
 
 **`pkg/records/decimal.go` (588 lines) SURVIVES INTACT and is the valuable core.** It is
 `math/big`-based (`decimal.go:10`, `Decimal` = `unscaled *big.Int` + `scale int32` at `:36-38`),
@@ -2395,9 +2498,22 @@ real, tested money implementation; it is not a stub.
 `float64`/`float32` appear on exactly two lines of the file, **both comments** (`:19`, `:462`) —
 zero binary float in executable code, guarded by `decimal_no_float_test.go`. Its test suite
 (`decimal_test.go`, `decimal_cmp_test.go`, `decimal_scale_gap_test.go`,
-`decimal_string_bounds_test.go`, `decimal_no_float_test.go`) survives with it. **Three of those
-files reference `maxMoneyScale` in comments or fixtures and need those references removed**, not
-the files deleted.
+`decimal_string_bounds_test.go`, `decimal_no_float_test.go`) survives with it.
+
+**CORRECTED, revision 6 (review round 6, M-20) — revision 5 said *"three of those files reference
+`maxMoneyScale`"* and that is wrong; **one** of the five does. Following revision 5's instruction
+left a reference to a deleted constant in a file nobody was told about.** Re-executed
+(`grep -rn maxMoneyScale pkg/records/`), **every** surviving reference, by path:
+
+| File | Lines | Action |
+|---|---|---|
+| `pkg/records/decimal.go` | `:108`, `:161`, **`:166` (the `const` itself)** | **DELETE the const; edit the two comments.** Already scheduled above |
+| `pkg/records/decimal_string_bounds_test.go` | `:431` | **EDIT** — the only one of the five surviving decimal test files that references it |
+| **`pkg/records/schema_declared_keys_test.go`** | `:24` | **EDIT. NEW, revision 6 — this file was in NEITHER the delete list nor the edit list.** Its comment describes a defect where a wire `maximum: 12` matching `maxMoneyScale` *"made it look verified while nothing read it"* |
+| **`pkg/records/schema.go`** | `:678` | **EDIT. NEW, revision 6** — non-test production file, missed entirely |
+| **`pkg/records/value.go`** | `:324`, `:467`, `:471-472` | **EDIT/DELETE. NEW, revision 6** — `:471` is an executable bound check, not a comment. It goes with `parseMoneyValue` (`:335`), `parseMoneyScalar` (`:350`), `parseMoneyMapping` (`:395`), `unknownMoneyKeys` (`:518`), `renderMoneyMapping` (`:564`) and `moneyValueError` (`:572`), **none of which revision 5 listed** |
+| `pkg/records/money.go`, `money_test.go` | many | already **DELETE** above |
+| `pkg/records/compare_oracle.go` | `crossCurrencyProblem` (`:365`) | **DELETE. NEW, revision 6** — a money symbol outside `money.go`, in the file the ruling makes load-bearing |
 
 **Operator ruling R-B — the invented operator vocabulary is replaced (FR-022b).**
 `pkg/records/filter.go:83-93` declares `OpEqual`/`OpLess`/`OpLessOrEqual`/`OpGreater`/
@@ -2406,11 +2522,25 @@ and `filter_test.go`, `filter_r13_validate_test.go` and `compare_truthtable_test
 **`compare_truthtable_test.go` (1,236 lines) is regenerated rather than edited** — it is generated
 from the rules (AC-8.2), and the rules changed.
 
-**Operator ruling R-E — the enum ordinal is deleted (FR-010).** Whatever holds declared position in
-`pkg/records/schema.go` and `enum_position_authority_test.go` (230 lines) /
-`external_enum_ordering_test.go` (373 lines) is dead; enum ordering is lexical and needs no stored
-position. **These two test files are the ones most likely to be "fixed" into passing rather than
-deleted**, so the deletion is named here.
+**Operator ruling R-E — the enum ordinal is deleted (FR-010).** **ENUMERATED, revision 6 (review
+round 6, M-19): revision 5's row read *"**Whatever** holds declared position in …"* and was the only
+disposition in §10a with no symbols, in a section whose whole purpose is that the deletion be a
+scheduled task rather than a discovery. The symbols exist and are findable:**
+
+| Symbol | Location | Disposition |
+|---|---|---|
+| `EnumValue.Position` (field) | `pkg/records/schema.go:138`, documented `:120-137` | **DELETE the field.** Its doc comment is 18 lines explaining why nothing may read it — all of it dead |
+| `(*Property).EnumPosition` | `pkg/records/schema.go:220`, documented `:198-219` | **DELETE** |
+| `(Comparator).enumOrdering` | `pkg/records/compare_oracle.go:509`, documented `:486-508` | **DELETE.** This is the enum-ordering comparison branch; under R-E an enum orders lexically like any text, so R-5's ordering path is the ordinary one |
+| `SortByEnumOrder` | `pkg/records/filter.go:454` | **DELETE** |
+| `enumValueNotDeclaredProblem` | `pkg/records/compare_oracle.go` (called `:514`) | **KEEP** — a value that resolves to no declared member is still FR-011 non-conformance under R-E. **Named here so it is not deleted along with its caller** |
+| `pkg/records/enum_position_authority_test.go` | 230 lines | **DELETE** |
+| `pkg/records/external_enum_ordering_test.go` | 373 lines | **DELETE** |
+| `pkg/records/schema.go:29` | comment *"FR-010 an enum declares its values IN ORDER; sorting follows position"* | **EDIT** — it states the reversed requirement in the file's header |
+
+**These two test files are the ones most likely to be "fixed" into passing rather than deleted**,
+so the deletion is named here, and **AC-8.4b mutation 5 is the guard**: a comparator that restores
+declared-position ordering must fail a named cell.
 
 **Nothing above is deleted by this document.** Each is a W1 or W2 task with the FR that killed it
 cited in the commit.
