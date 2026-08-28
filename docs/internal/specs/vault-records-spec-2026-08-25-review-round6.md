@@ -609,3 +609,91 @@ position in `pkg/records/schema.go` and [two test files] is dead"*. The symbols 
 findable — the schema-side position fields, the enum-ordering comparison branch in
 `compare_oracle.go`, and the enum-order sort helper — and the section's whole purpose is that the
 deletion be a scheduled task rather than a discovery. **Fix:** enumerate them as the money row does.
+
+### Item 4 — the money deletion
+
+**The arithmetic is right and I checked it.** Seven were declared (`text`, `enum`, `relation`,
+`date`, `number`, `money`, `person`); −`money` −`number` +`integer` +`decimal` = **seven**. Every
+prose occurrence of "seven property types" is therefore correct and not stale. `R-6` is retired
+rather than reused, with the reason stated, and every dependant is named: US-2 scenario 3, the
+behavioural-contract bullet, §4.1.2's refusal string, §4.2's total, the `CurrenciesPresent` field
+and `TestMoney_RefusesCrossCurrencySum`. All are gone from the live text; the surviving mentions are
+inside explicit *"previously"* or *"retired"* clauses, which is the correct treatment. `decimal.go`
+survives with `maxDecimalScale = 100` and the *"must not inherit 12"* warning is exactly right.
+The residue is in the inventory, not the prose:
+
+**M-20 — §10a misidentifies which decimal test files reference `maxMoneyScale`, and misses one file entirely.**
+§10a (`:2139`): *"**Three of those files** reference `maxMoneyScale` in comments or fixtures and need
+those references removed."* Of the five decimal test files it lists, **one** references
+`maxMoneyScale`. The three files in the package that do are `decimal_string_bounds_test.go`,
+`money_test.go` (already scheduled for deletion) and **`schema_declared_keys_test.go`** — which is
+**not in §10a at all**, in neither the delete list nor the edit list. Following §10a's instruction
+leaves a reference to a deleted constant in a file nobody was told about. **Fix:** name the three
+files by path and add `schema_declared_keys_test.go` as an edit.
+
+**M-21 — `RecordAggregateResult.yaml:64` is a wrong citation, in a revision whose header counts four wrong citations it corrected.**
+The currencies field is at `:61`. Minor in isolation; material because §10a's opening sentence is
+*"Verified against the tree at revision time — every path, line count and symbol below was read, not
+recalled"*, and because a deletion list is executed literally.
+
+**M-22 — the `number` → `integer` + `decimal` contract change has no scheduled task.**
+`contracts/` currently declares a `number` property-type enum member and **no `integer` and no
+`decimal` anywhere**. §10a schedules only the money deletions. FR-004's change touches the same three
+schema files as the money deletion and requires the same atomic regeneration under Hard Constraint
+#8. **Fix:** add it to §10a with the enum members named, and to W1's exit criterion.
+
+**M-23 — `pkg/records` is not imported by any production code, and the document never says so.**
+The package is standalone: `money.go`, `decimal.go`, `schema.go`, `value.go`, `compare_oracle.go`
+and `filter.go` are reachable only from their own tests. This is **good news for §10a** — the
+deletions are near-zero-risk — and it is also the single most useful piece of context for whoever
+executes them, because it means the compiler will not find the callers for them. **Fix:** state it in
+§10a's opening. It also strengthens the ruling: `compare_oracle.go` already evaluates comparisons in
+Go and emits no SQL, so R-A restores what exists rather than building something new — the spec's
+*"the comparator that decides is the one that already exists, is already tested"* (`:1835`) is
+**verified true**, and saying so with the evidence would make the argument stronger than it currently
+reads.
+
+### Item 6 — no hardcoded domain vocabulary
+
+Beyond C-10 (the test cannot pass; the "verified clean" claim does not reproduce):
+
+**M-24 — `person` is simultaneously an R-F illustration and a shipped property type.**
+R-F's box (`:597`) names *"`company`, `deal`, `meeting`, **`person`**, `status`, `stage`, `arr`,
+`open`, `won`, `lost`, `prospect`, `Acme`, `Northwind`, `CO-0142`, `DEAL-0117`"* and says **"NONE of
+them is anything the product ships"**. FR-004, thirty lines later: *"The system MUST support exactly
+these seven property types: `text`, `enum`, `relation`, `date`, `integer`, `decimal`, **`person`**."*
+ADR-068 D0 (`:148`) carries the same list with the same error. `meeting` has the mirror problem: R-F
+calls it an illustration, §4.1.6's refusal table calls the same string contract. An implementer
+following R-F removes the `person` type. **Fix:** remove `person` from the R-F list in both documents
+and add a sentence distinguishing the two axes — *"property TYPE names (`text`…`person`) are ours and
+are shipped; record type names, property names and enum values are the vault's and are not"*.
+
+**M-25 — four normative tables carry no R-F marker and one declares CRM strings as contract.**
+§4.1.2's refusal table carries the marker (`:1110-1112`) and does it well — *"what a test asserts is
+the SHAPE and the remedy clause, against a fixture schema the test itself declares"*. **§4.1.1,
+§4.1.3, §4.1.4, §4.1.5 and §4.1.6 do not**, and §4.1.6's (`:1323`) says the opposite in the same
+words the marked one negates: *"**These strings are contract, not illustration; a test asserts
+them**"* — over a table containing `company`, `deal`, `meeting` and `person`. §4.1.1's integrity
+example block, §4.1.4's schema-violation refusal, DS-1 and DS-2 are likewise unmarked. **Fix:**
+propagate §4.1.2's marker verbatim to all five, and rewrite §4.1.6's sentence to §4.1.2's form.
+
+**M-26 — both documents state occurrence counts that are wrong by roughly an order of magnitude.**
+R-F (`:600`): *"They appear **roughly thirty times** below and **fourteen times** in ADR-068."*
+ADR-068 D0 (`:141`): *"this ADR uses CRM vocabulary **fourteen times** and the implementing
+specification **thirty-three times**."* Counted whole-word, case-insensitively, over the vocabulary
+both documents name: **288 in the specification and 119 in the ADR** — `company` 36, `deal` 43,
+`deals` 17, `Acme` 51, `won` 25, `arr` 23 in the spec alone. The rule's own justification is *"a rule
+that is stated once and then quietly undermined by every example is a rule that will be broken by
+someone acting in good faith"*, and the figure that quantifies the undermining is understated
+tenfold. **Fix:** state the real counts, or state none. And treat the real number as an argument for
+**changing the examples**, not only for marking them: at 288 occurrences a boxed note at the front is
+doing very little work. A neutral example vocabulary — `widget`/`gizmo`, or an abstract
+`type_a`/`prop_1` — would discharge R-F structurally instead of by disclaimer, and the operator's
+framing ("an empty database, all capabilities but nothing predefined") argues for exactly that.
+
+**M-27 — FR-004a's fixture carve-out is stated but never located.**
+FR-004a: *"Fixtures are excluded from FR-004a's denylist **by path**, and the exclusion is narrow and
+named rather than a general 'except where inconvenient'."* No path is named. The exclusion is the
+part that decides whether the test is meaningful or theatre, and *"narrow and named"* is precisely
+the claim that needs the name. **Fix:** name the paths (e.g. `*_test.go` and `testdata/`), and state
+what is **not** excluded — non-test `.go`, seeded config, shipped schema and view directories.
