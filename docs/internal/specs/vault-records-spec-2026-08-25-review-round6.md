@@ -697,3 +697,103 @@ named rather than a general 'except where inconvenient'."* No path is named. The
 part that decides whether the test is meaningful or theatre, and *"narrow and named"* is precisely
 the claim that needs the name. **Fix:** name the paths (e.g. `*_test.go` and `testdata/`), and state
 what is **not** excluded — non-test `.go`, seeded config, shipped schema and view directories.
+
+---
+
+## 4. Vacuous acceptance criteria — re-audit against the new design
+
+Pass 1 named nine. **Seven are genuinely closed**, and several of the repairs are better than the
+finding asked for: AC-F3 now requires the plan to name every property and the index answering it,
+a mutation chosen to change the plan, and zero candidate retrievals at the store boundary
+(m-11 closed properly). AC-8.6 now fails when the two rankings do not differ, which is the correct
+inversion. AC-P3 is rewritten from *"a pure function is deterministic"* into a real
+reach-around-the-contract detector. AC-P1 is promoted into a shared helper every `vault_find` test
+calls. Test 21 is reclassified as a benchmark with a W1 write-back obligation. SC-016 and SC-018 are
+rewritten behaviourally. **This is the strongest part of the revision.**
+
+Two survive, and the deletions created three new ones:
+
+| ID | Criterion | Why it cannot fail, or fails against nothing |
+|---|---|---|
+| **V-1** | **AC-8.1's both-provenances axis** | Generates cells for a distinction the design deleted (M-9). Not vacuous — *worse*: it doubles the table and every added cell asserts the same value, so the table's size grows while its discriminating power does not |
+| **V-2** | **AC-8.4b / SC-024's six mutations** | Six mutations for twelve live rules; a comparator wrong on R-1, R-5, R-7, R-8, R-9, R-12 or R-13 passes every one (M-11). SC-024 states the six as sufficient |
+| **V-3** | **AC-F5** | Asserts divergence against `ManifestEntry.Hash`, which FR-020c's respecified mechanism does not consult. It passes only if the implementation ignores FR-020c, and fails if it obeys it (C-2) |
+| **V-4** | **AC-F8 / §7 test 59** | Asserts an aggregate-only query over 24,000 records returns a `sum` with `COMPLETE: yes`. It asserts **nothing about the value**, over the one query shape whose answer no row can corroborate, on the one path still specified as a SQLite pushdown (C-3). A join-fan-out-inflated `sum` passes it |
+| **V-5** | **AC-8.4's "no post-filter escape"** | The row-count identity (candidates = rendered + problems + comparator rejections) detects **double filtering**. It is stated as the control that makes the ruling checkable, and it is satisfied identically whether the single filter ran in Go or in SQL (C-5) |
+
+**AC-D6 and AC-F6 deserve a note the other way.** They are build-tagged, and §7 test 42 does the
+thing this project's own `false-green-patterns.md` demands: it **names the CI job
+(`go-test-nosqlite`), the tag combination, the make target, and requires it on the required-checks
+list**, and explicitly rules out `make build-all`'s `linux/mipsle` target as discharging it. That is
+the correct treatment of a build-tagged test and it should be the template for the missing test in
+C-5.
+
+---
+
+## 5. Open risks — A-13 and A-14
+
+### A-13 (freshness, fourth mechanism) — **specified this time, and that is a real improvement.**
+
+Unlike its three predecessors, the fourth mechanism is *mechanism*: a `source_hash` field on
+`indexDoc` with `Store: true`, its mapping entry, stored-field retrieval on the search path, and the
+SQLite column — each named as **new work** with its cost (64 bytes of hex per document, one
+stored-field fetch per returned hit) and its unknowns stated rather than assumed. The
+manifest-based alternative is recorded and explicitly **not taken**, with the reason. The write
+ordering is re-derived with a five-row detectability table and the "err toward false positives"
+direction argued. The reason string is constrained to what the comparison establishes
+(*"the two indexes disagree"*, not *"the properties index is stale"*). The re-queue is bounded and
+debounced. **This is what the other three should have looked like.**
+
+Three things stop it being closed:
+
+**M-28 — the mechanism is a W1 requirement whose viability is a W2 exit criterion.**
+§11's wave table puts `FR-020..FR-020c1` in **W1** and *"A-13's answer: whether the stored-field
+freshness mechanism holds"* in **W2**. So W1 ships a freshness comparison whose two open questions
+are answered a wave later, and if the answer is no, W1's completeness verdict was built on a
+mechanism being replaced. ADR-068's W2 row says *"A-13 is answered — the stored-field freshness
+mechanism holds, **or it does not and is replaced before W3**"*, which concedes the same thing.
+**Fix:** either move FR-020c to W2 with the fielded-indexing work that reopens `indexDoc` — which is
+where the ADR says the answer comes from — or state W1's fallback explicitly (report every record
+`complete: false` until W2 lands, which is honest and non-silent).
+
+**C-2 above** — four normative places still specify the third mechanism, so the fourth is not the
+only one in the document.
+
+**M-29 — FR-020c1's residual is well named but its documentation obligation has no home.**
+FR-020c1 requires *"The documentation MUST state that a completeness verdict covers what the query
+returned, not what it did not"*. No FR assigns that to a surface — not the tool description
+(FR-079's budget is ~150 tokens and already spoken for), not `vault_describe`, not the response
+header. AC-F4 states a **different** unstated-exception carve-out (scope) in the same spirit and puts
+it nowhere either. **Fix:** put both exceptions in one place — the `COMPLETE:` line's own
+documentation and `vault_find`'s tool description — and name that place in FR-020c1 and AC-F4.
+
+### A-14 (Go evaluation path, unmeasured) — **the cost is stated but NOT bounded.**
+
+A-14 is honest about what is unknown and correct that FR-064/FR-066a were set for this reason. But
+its bound does not hold as specified:
+
+- **The cap cannot be enforced where A-14 needs it** (C-4). If the candidate count can only be taken
+  after Go evaluation, the 10,000 cap bounds the *refusal*, not the *work*.
+- **FR-064a raises the bound to 50,000 for one query shape** and A-14 records this as free, because
+  FR-064a claims a SQLite pushdown (C-3). Corrected, the Go path's worst case is **50,000 candidate
+  evaluations**, not 10,000 — five times the number A-14 asks W1 to measure. §11's W1 row does say
+  *"at the 10,000-record cap **and at FR-064a's 50,000**"*, so the wave plan is right and A-14's own
+  reasoning is not.
+- **Nothing bounds comparisons per candidate.** The cap counts *records*. The filter is an
+  arbitrarily nested tree (FR-023b requires arbitrary nesting explicitly), so the work is candidates
+  × leaves × (a `strings.ToLower` per operand, per FR-011a). A 40-leaf filter over 50,000 candidates
+  is 4M folds, and nothing in the document caps filter tree size, depth or leaf count.
+
+**M-30 — no bound on filter tree size, depth or leaf count.** Every other input is bounded — page
+size, hops, group levels (2), candidates, sweep size, findings per category, response bytes. The
+filter, the one input whose cost multiplies against the candidate cap, is unbounded. **Fix:** state a
+maximum leaf count and maximum depth, refuse above them in FR-024's pattern, and add both to the
+constraint table so A-14's measurement has a defined worst case to measure.
+
+**M-31 — the fold is specified per comparison rather than per candidate.**
+FR-011a: *"one `strings.ToLower` per operand per comparison"*. The record side of a comparison is
+the same value on every evaluation, so folding it once at candidate load (or storing a folded form
+in the row) is the obvious implementation and changes the cost by the leaf count. The document
+neither permits nor forbids it. **Fix:** say that the record side MAY be folded once per candidate
+and that the folded form is never rendered (FR-046's sibling rule) — otherwise an implementer either
+pays the cost the spec names or silently reintroduces the derived column FR-011a withdrew.
