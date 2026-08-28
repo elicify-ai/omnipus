@@ -178,6 +178,7 @@ var stageValues = []EnumValue{
 	{Name: "lead"},
 	{Name: "won"},
 	{Name: "vendors"},
+	{Name: "vendor"},
 	{Name: "vendor%"},
 }
 
@@ -363,9 +364,23 @@ func sweepFixtures(t *testing.T, sw sweep, typ PropertyType, pos valuePos) Typed
 	case sweepGreater:
 		switch typ {
 		case TypeText:
-			return pick(left, tvText("won"), tvText("lead"))
+			// "vendors" against "vendor", and the pair is chosen for LIKE, not
+			// for the ordering. FR-022b: `LIKE` is ANCHORED, so
+			// `'vendors' LIKE 'vendor'` is FALSE — while a SUBSTRING
+			// implementation, which is what an operator that replaced
+			// `contains` most plausibly degrades into, answers TRUE.
+			//
+			// Without this pair the anchoring rule is INVISIBLE to the generated
+			// table: every other sweep's wildcard-free pattern is either equal
+			// to the subject or shares no prefix with it, so substring and
+			// anchored agree on all of them. Verified by mutation — replacing
+			// likeMatch's wildcard-free branch with strings.Contains failed five
+			// hand-written tests and ZERO generated cells until this row
+			// existed. Lexically "vendors" > "vendor", so the ordering half of
+			// the sweep is unaffected.
+			return pick(left, tvText("vendors"), tvText("vendor"))
 		case TypeEnum:
-			return pick(left, tvEnum(t, "won"), tvEnum(t, "lead"))
+			return pick(left, tvEnum(t, "vendors"), tvEnum(t, "vendor"))
 		case TypeRelation:
 			return pick(left, tvLink(TypeRelation, "Beta GmbH"), tvLink(TypeRelation, "Acme Ltd"))
 		case TypePerson:
@@ -966,42 +981,60 @@ func TestComparison_R1_DifferentDeclaredTypes(t *testing.T) {
 	textThree := present(testProperty("label", TypeText, false), tvText("3"))
 	numberTwo := present(testProperty("amount", TypeInteger, false), tvNumber(t, TypeInteger, "2"))
 
-	got, problems := c.Evaluate(OpGreater, textThree, numberTwo)
-	if got {
+	crossGot, crossProblems := c.Evaluate(OpGreater, textThree, numberTwo)
+	if crossGot {
 		t.Errorf(`R-1: "3" > 2 = true, want false`)
 	}
-	if len(problems) != 0 {
-		t.Errorf("R-1: a cross-type comparison is an ordinary false, never an error; got %v", problemCodes(problems))
+	if len(crossProblems) != 0 {
+		t.Errorf("R-1: a cross-type comparison is an ordinary false, never an error; got %v", problemCodes(crossProblems))
 	}
 	// A person and a relation are different declared types even though both hold
 	// a wikilink. R-1 unifies text/enum and integer/decimal and NOTHING else.
 	pv := present(testProperty("owner", TypePerson, false), tvLink(TypePerson, "Ada Lovelace"))
 	rv := present(testProperty("company", TypeRelation, false), tvLink(TypeRelation, "Ada Lovelace"))
-	if got, _ := c.Evaluate(OpEqual, pv, rv); got {
+	if personRelation, _ := c.Evaluate(OpEqual, pv, rv); personRelation {
 		t.Errorf("R-1: person and relation are different declared types and must not compare equal")
 	}
 
-	// UNIFICATION 1 — text and enum are ONE declared type. A filter written
-	// against a `text` property must not break the moment an author tightens it
-	// into an `enum`, which is a schema change that should narrow what
-	// VALIDATES, not what COMPARES.
+	// UNIFICATION 1 — text and enum are ONE declared type.
+	//
+	// THIS LOOKS LIKE IT CONTRADICTS R-1 AND IT DOES NOT, so the rule is quoted
+	// rather than paraphrased. R-1's SECOND sentence is the famous one — "a
+	// comparison between values of different declared types is false, never an
+	// error, never a coercion" — and read alone it says an enum and a text must
+	// not compare. Its FIRST sentence, added in revision 6 (review round 6,
+	// unasked question 2), is the carve-out, and it is not an inference:
+	//
+	//	"`text` and `enum` are ONE declared type for comparison purposes, and
+	//	 `integer` and `decimal` are ONE; every other pair is different."
+	//
+	// with the ground given in the same row: "an `enum` value IS text that
+	// happens to be drawn from a closed set, it folds with the same function
+	// (FR-011a), it sorts with the same lexical rule (R-5), and refusing
+	// `text = enum` would make a filter break the moment an author tightened a
+	// `text` property into an `enum` — a schema change that should narrow what
+	// VALIDATES, not what COMPARES."
+	//
+	// So this is not folding winning over type separation. The two values are
+	// not of different declared types for comparison purposes; R-1 says so
+	// first, and then says what happens to pairs that ARE different.
 	enumProp := testProperty("stage", TypeEnum, false)
 	textProp := testProperty("stage_text", TypeText, false)
-	if got, problems := c.Evaluate(OpEqual, present(enumProp, tvEnum(t, "won")), present(textProp, tvText("won"))); !got || len(problems) != 0 {
-		t.Errorf("R-1: enum `won` = text `won` gave %v/%v, want true and no problems", got, problemCodes(problems))
+	if unifiedGot, unifiedProblems := c.Evaluate(OpEqual, present(enumProp, tvEnum(t, "won")), present(textProp, tvText("won"))); !unifiedGot || len(unifiedProblems) != 0 {
+		t.Errorf("R-1: enum `won` = text `won` gave %v/%v, want true and no problems", unifiedGot, problemCodes(unifiedProblems))
 	}
 	// And it folds across the unification, not only within a type.
-	if got, _ := c.Evaluate(OpEqual, present(enumProp, tvEnum(t, "won")), present(textProp, tvText("WON"))); !got {
+	if foldedGot, _ := c.Evaluate(OpEqual, present(enumProp, tvEnum(t, "won")), present(textProp, tvText("WON"))); !foldedGot {
 		t.Errorf("R-1 + FR-011a: enum `won` = text `WON` = false, want true")
 	}
 	// A TEXT value that is not a declared member of the enum still COMPARES —
 	// it is a value, not a non-conformance on the text side (R-1, verbatim).
-	got, problems = c.Evaluate(OpEqual, present(enumProp, tvEnum(t, "won")), present(textProp, tvText("not-a-declared-value")))
-	if got {
+	undeclaredGot, undeclaredProblems := c.Evaluate(OpEqual, present(enumProp, tvEnum(t, "won")), present(textProp, tvText("not-a-declared-value")))
+	if undeclaredGot {
 		t.Errorf("R-1: enum `won` = text `not-a-declared-value` = true, want false")
 	}
-	if len(problems) != 0 {
-		t.Errorf("R-1: an undeclared value on the TEXT side is a value, not a problem; got %v", problemCodes(problems))
+	if len(undeclaredProblems) != 0 {
+		t.Errorf("R-1: an undeclared value on the TEXT side is a value, not a problem; got %v", problemCodes(undeclaredProblems))
 	}
 
 	// UNIFICATION 2 — integer and decimal are ONE declared type. `3 = 3.0` is
@@ -1546,6 +1579,16 @@ func TestComparison_R10_TextIsExactOrPatternedAndAlwaysCaseInsensitive(t *testin
 // The discriminating property is stated as the spec states it: AC-8.9 fails if
 // the comparator produces the same six answers as `strings.ToLower`, or the same
 // six as `strings.EqualFold`.
+//
+// MUTATION-VERIFIED, AND THE RESULT IS THE REASON THIS TEST EXISTS SEPARATELY.
+// Substituting `strings.ToLower` for FoldKey inside textualAnswer fails THIS
+// TEST AND NOTHING ELSE — zero of the 57,760 generated cells notice, because
+// every textual fixture in the table is ASCII and ToLower is correct on ASCII.
+// The generated table cannot carry this rule; that is not a gap in the table,
+// it is why the spec writes AC-8.9 as six literal pairs instead of leaving the
+// mechanism to be inferred. Removing the fold ENTIRELY does fail the table (45
+// cells), so the table proves that SOME folding happens and this test proves it
+// is the RIGHT folding.
 func TestComparison_AC89_TheComparatorFoldsFully(t *testing.T) {
 	c := testComparator()
 	p := testProperty("name", TypeText, false)
@@ -1664,8 +1707,9 @@ func TestComparison_R11_Deterministic(t *testing.T) {
 	c := testComparator()
 	states := operandStates()
 	var first []string
+	verdicts := len(allSweeps()) * len(states) * len(states) * len(Operators)
 	for run := 0; run < 3; run++ {
-		var seen []string
+		seen := make([]string, 0, verdicts)
 		for _, sw := range allSweeps() {
 			for _, l := range states {
 				lv := operandFor(t, l, sw, posLeft)

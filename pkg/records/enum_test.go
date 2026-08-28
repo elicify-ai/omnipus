@@ -189,14 +189,14 @@ func TestEnum_ClosedAndLexical(t *testing.T) {
 		// either fails this subtest while passing every ASCII one.
 		root := writeVaultSchema(t, "", "de.yaml",
 			"schema_version: 1\ntype: de\nproperties:\n  s: { type: enum, values: [strasse] }\n")
-		set, report, err := LoadSchemas(root)
+		deSet, report, err := LoadSchemas(root)
 		if err != nil {
 			t.Fatalf("LoadSchemas: %v", err)
 		}
 		if !report.OK() {
 			t.Fatalf("fixture schema must load: %v", report.Rejections)
 		}
-		de, _ := set.Get("de")
+		de, _ := deSet.Get("de")
 		p, _ := de.Property("s")
 		if _, ok := p.ResolveEnum("STRASSE"); !ok {
 			t.Fatal("FR-011a: `STRASSE` must resolve to `strasse` — plain ASCII folding")

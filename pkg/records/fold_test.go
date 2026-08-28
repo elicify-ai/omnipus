@@ -120,7 +120,9 @@ func TestFold_AC89Pairs(t *testing.T) {
 // that quietly swapped in a stdlib call fails here even if someone had also
 // edited the expectations above to match it.
 func TestFold_DisagreesWithBothStdlibFunctions(t *testing.T) {
-	var ours, toLower, equalFold []bool
+	ours := make([]bool, 0, len(ac89Pairs))
+	toLower := make([]bool, 0, len(ac89Pairs))
+	equalFold := make([]bool, 0, len(ac89Pairs))
 	for _, p := range ac89Pairs {
 		ours = append(ours, FoldEqual(p.left, p.right))
 		toLower = append(toLower, strings.ToLower(p.left) == strings.ToLower(p.right))
