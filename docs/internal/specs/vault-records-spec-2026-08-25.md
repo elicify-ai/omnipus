@@ -553,8 +553,9 @@ editor. Its name invites exactly the misreading these two FRs exist to prevent.
 - **FR-084** Every retired `knowledge_*` name MUST be removed from the catalog (`pkg/coreagent/core.go:475-482`), from the global ceiling (`pkg/config/defaults.go:637-646`) and from every per-agent seed in the same change. A name left behind in a seed map is a policy entry for a tool that no longer exists, which is a coverage gap wearing a valid-looking entry.
 - **FR-081** A test MUST assert **zero repaired pairs** on a fresh install — not zero gaps after repair.
 - **FR-082** The global tool-policy ceiling for every `vault_*` tool MUST be stated explicitly in the seed (`pkg/config/defaults.go`). Repair backfills a *missing agent entry* to `deny`; what can silently grant is the **global ceiling**, which the seed sets per tool. Revision 1's rationale ("absence grants in a sparse map") named the wrong mechanism.
-- **FR-090** Every wire type MUST be defined in `contracts/` before Go or TS code exists.
-- **FR-091** The completeness verdict and problem list MUST be required fields in the response schema.
+- **FR-090** Every wire type MUST be defined in `contracts/` before Go or TS code exists: the record-model types `RecordSchema`, `RecordType`, `PropertyDef`, `RecordQueryRequest`, `RecordQueryResponse`, `RecordWriteRequest`, `RelationWriteRequest`, `ViewDef`, `ValidationReport`, **plus the revision-3 tool envelopes** `VaultDescribeResponse`, `VaultFindRequest`/`VaultFindResponse`, `VaultReadResponse` (carrying the version token FR-074 requires), `VaultEditRequest`, `VaultRestructureRequest`, and the index-state snapshot FR-020f requires — which MUST reuse the schema of the existing `knowledge_index_progress` frame rather than declaring a parallel one.
+- **FR-091** The completeness verdict and problem list MUST be required fields in the response schema. A client MUST NOT be able to receive records without also receiving the completeness verdict.
+- **FR-092** FR-120's compact rendering MUST NOT weaken FR-090. The wire type stays contract-defined, generated into `pkg/api/generated/` and `src/lib/api/generated/`, and verified by `make verify-contracts`; the text the model reads is a **projection of that validated object** at the tool-result boundary. These are two surfaces and only one of them changes.
 
 ### Retrieval and ranking (ADR-068 D21)
 
