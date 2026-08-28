@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"sync/atomic"
 
+	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 )
 
@@ -120,6 +121,16 @@ func (al *AgentLoop) setRecallSpan(sessionKey string, span *RecallSpan) {
 		return
 	}
 	al.recallSpans.Store(sessionKey, span)
+	// ADR-066 D5.4 (FR-043): every span event logs at INFO with sizes.
+	logger.InfoCF("agent", "recall span set",
+		map[string]any{
+			"session_key": sessionKey,
+			"turns":       len(span.Ordinals),
+			"from_turn":   span.FromTurn,
+			"to_turn":     span.ToTurn,
+			"span_tokens": span.Tokens,
+			"messages":    len(span.Msgs),
+		})
 }
 
 // activeRecallSpan returns the current recall span for a session, or nil.
@@ -136,8 +147,17 @@ func (al *AgentLoop) activeRecallSpan(sessionKey string) *RecallSpan {
 // budget pressure, or replaced/aged). reason is for the
 // recall_span_dropped_total{reason} counter (FR-018).
 func (al *AgentLoop) dropRecallSpan(sessionKey, reason string) {
-	if _, ok := al.recallSpans.LoadAndDelete(sessionKey); ok {
+	if v, ok := al.recallSpans.LoadAndDelete(sessionKey); ok {
 		recordRecallSpanDropped(reason)
+		fields := map[string]any{"session_key": sessionKey, "reason": reason}
+		if span, _ := v.(*RecallSpan); span != nil {
+			fields["turns"] = len(span.Ordinals)
+			fields["from_turn"] = span.FromTurn
+			fields["to_turn"] = span.ToTurn
+			fields["span_tokens"] = span.Tokens
+		}
+		// ADR-066 D5.4 (FR-043): every span event logs at INFO with sizes.
+		logger.InfoCF("agent", "recall span dropped", fields)
 	}
 }
 

@@ -39,7 +39,7 @@ func TestNewAgentInstance_RegistersRequestMount(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              home,
-				ModelName:         "test-model",
+				DefaultModel:      config.DefaultModel{Model: "test-model"},
 				MaxTokens:         256,
 				MaxToolIterations: 3,
 			},

@@ -29,7 +29,7 @@ func TestLoadConfig_LegacyModelListMigration_NoDuplicateOnRoundTrip(t *testing.T
 	legacy := `{
 		"version": 1,
 		"model_list": [
-			{"model_name": "legacy-model", "model": "openai/gpt-4o", "api_base": "https://api.openai.com/v1"}
+			{"provider": "openai", "model": "gpt-4o", "name": "legacy-model"}
 		]
 	}`
 	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
@@ -42,7 +42,7 @@ func TestLoadConfig_LegacyModelListMigration_NoDuplicateOnRoundTrip(t *testing.T
 	}
 
 	// The legacy model_list entry must have been migrated into Providers.
-	if len(cfg.Providers) != 1 || cfg.Providers[0].ModelName != "legacy-model" {
+	if len(cfg.Providers) != 1 || cfg.Providers[0].Name != "legacy-model" {
 		t.Fatalf("expected exactly 1 provider named 'legacy-model' after migration, got %+v", cfg.Providers)
 	}
 
@@ -92,7 +92,7 @@ func TestLoadConfig_LegacyModelListMigration_NoDuplicateOnRoundTrip(t *testing.T
 	if _, ok := reloaded.UnknownFields["model_list"]; ok {
 		t.Fatal("second load must not re-flag 'model_list' as an unknown field")
 	}
-	if len(reloaded.Providers) != 1 || reloaded.Providers[0].ModelName != "legacy-model" {
+	if len(reloaded.Providers) != 1 || reloaded.Providers[0].Name != "legacy-model" {
 		t.Fatalf("expected exactly 1 provider named 'legacy-model' after second load, got %+v", reloaded.Providers)
 	}
 }

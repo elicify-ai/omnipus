@@ -1,0 +1,48 @@
+type: object
+description: >
+  The `api_key` variant of OnboardingCompleteRequest.provider (ADR-068,
+  MAJ-014). Discriminated by `auth_method` following the ADR-034 inline
+  oneOf mechanism; `api_key` is REQUIRED here and is not a property of the
+  sign-in variant.
+required:
+  - auth_method
+  - id
+  - api_key
+additionalProperties: false
+properties:
+  auth_method:
+    type: string
+    enum:
+      - api_key
+    description: Discriminator — this variant authenticates with an API key.
+    example: api_key
+  id:
+    type: string
+    minLength: 1
+    maxLength: 64
+    description: >
+      Provider id (e.g. "anthropic", "openai", "openrouter", "gemini"). Must
+      be a known protocol; unknown values are rejected with 400.
+    example: anthropic
+  api_key:
+    type: string
+    minLength: 1
+    description: API key for the provider. Stored encrypted (AES-256-GCM) in credentials.json.
+    example: sk-ant-...
+  model:
+    type: string
+    minLength: 1
+    maxLength: 256
+    description: >
+      The model chosen for the first agent — the probe-validated pick from
+      step 3, persisted as agents.defaults.default_model together with the
+      provider id.
+    example: claude-sonnet-4-6
+  endpoint:
+    type: string
+    description: >
+      Optional custom API base URL, persisted as the provider entry's api_base.
+      Required for providers that have no fixed default endpoint (e.g. azure,
+      azure-openai — a per-resource host); also usable to override the regional
+      default. When omitted, the provider's built-in default base is used.
+    example: https://my-resource.openai.azure.com/openai/deployments/gpt-4o

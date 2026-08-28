@@ -70,7 +70,8 @@ func buildHeartbeatTestAPI(t *testing.T) (*restAPI, *cron.CronService) {
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+			Defaults: config.AgentDefaults{
+				Home: tmpDir, DefaultModel: config.DefaultModel{Model: "test-model"}, MaxTokens: 4096},
 			List: []config.AgentConfig{
 				{ID: "mia", Name: "Mia", Type: config.AgentTypeCustom},
 				{ID: "jim", Name: "Jim", Type: config.AgentTypeCustom},
@@ -329,7 +330,8 @@ func TestWorkspacePUT_MemberConfigBounds(t *testing.T) {
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+			Defaults: config.AgentDefaults{
+				Home: tmpDir, DefaultModel: config.DefaultModel{Model: "test-model"}, MaxTokens: 4096},
 			List: []config.AgentConfig{
 				{ID: "mia", Name: "Mia", Type: config.AgentTypeCustom},
 				{ID: "worker1", Name: "Worker", Type: config.AgentTypeWorker},
@@ -897,7 +899,8 @@ func TestMemorySettingsPUT_NoSiblingClobber(t *testing.T) {
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "custom-model", MaxTokens: 4096},
+			Defaults: config.AgentDefaults{
+				Home: tmpDir, DefaultModel: config.DefaultModel{Model: "custom-model"}, MaxTokens: 4096},
 		},
 	}
 	al := mustAgentLoop(t, cfg, bus.NewMessageBus(), &restMockProvider{})

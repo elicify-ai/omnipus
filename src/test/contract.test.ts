@@ -62,6 +62,7 @@ describe('API contract: mock shapes satisfy TypeScript interfaces', () => {
       description: 'Built-in core agent with compiled prompt',
       type: 'core' as const,
       locked: true,
+      needs_model: false,
       model: 'claude-opus-4-6',
       status: 'active' as const,
       soul: '',
@@ -84,6 +85,7 @@ describe('API contract: mock shapes satisfy TypeScript interfaces', () => {
       description: '',
       type: 'Main' as const,
       locked: false,
+      needs_model: false,
       model: 'claude-sonnet-4-6',
       status: 'idle' as const,
       soul: '',
@@ -149,6 +151,9 @@ describe('API contract: mock shapes satisfy TypeScript interfaces', () => {
       id: 'anthropic',
       name: 'Anthropic',
       status: 'connected' as const,
+      auth_method: 'api_key',
+      dependents: [],
+      backs_default: false,
       models: ['claude-sonnet-4-6', 'claude-opus-4-6'],
     } satisfies Provider
 
@@ -160,6 +165,9 @@ describe('API contract: mock shapes satisfy TypeScript interfaces', () => {
       id: 'default',
       name: 'Default',
       status: 'disconnected' as const,
+      auth_method: 'api_key',
+      dependents: [],
+      backs_default: false,
       models: [],
     } satisfies Provider
 

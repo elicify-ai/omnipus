@@ -27,12 +27,13 @@ export type LLMErrorAttribution =
   | "config"
   | "ambiguous"
   | "unknown"
+  | "user"
 
 /** The closed attribution vocabulary, in contract order. */
-export const llmErrorAttributionValues = ["model", "provider", "product", "config", "ambiguous", "unknown"] as const
+export const llmErrorAttributionValues = ["model", "provider", "product", "config", "ambiguous", "unknown", "user"] as const
 
 /** Every LLMError code, in contract (enum) order. */
-export const llmErrorCodes = ["media_unsupported", "provider_rejected", "request_too_large", "provider_auth_failed", "rate_limited", "network", "content_policy", "context_too_long", "tool_args", "schema", "agent_not_configured", "workspace_unavailable", "model_unavailable", "unknown"] as const
+export const llmErrorCodes = ["media_unsupported", "provider_rejected", "request_too_large", "provider_auth_failed", "rate_limited", "network", "content_policy", "context_too_long", "tool_args", "schema", "agent_not_configured", "workspace_unavailable", "model_unavailable", "needs_provider", "model_unassigned", "turn_canceled", "turn_timed_out", "context_unrecoverable", "context_window_unknown", "unknown"] as const
 
 /**
  * The sentence a user sees for each code. Exhaustive by construction: codegen
@@ -53,6 +54,12 @@ export const llmErrorUserMessages: Record<LLMErrorCode, string> = {
   agent_not_configured: "This agent isn’t on any workspace yet, so it has nowhere to work. Add it to a workspace team to get started.",
   workspace_unavailable: "This agent’s working folder could not be opened. Check that the disk has space and the folder is writable.",
   model_unavailable: "The model you picked isn’t available for this turn, so this reply used the previous model. Check the model in Settings.",
+  needs_provider: "Your sign-in for this provider expired. Sign in again under Settings → Providers.",
+  model_unassigned: "This agent has no model. Pick one in the agent's settings.",
+  turn_canceled: "This turn was stopped before it finished.",
+  turn_timed_out: "The model provider didn’t finish this turn in time, so it was stopped. Retry — if it keeps happening, open Verbose chat for details.",
+  context_unrecoverable: "We couldn’t fit this turn into the model’s context even after clearing older tool results — that’s a bug on our side, not yours. Start a new session, or open Verbose chat for technical details.",
+  context_window_unknown: "This endpoint did not report a context length for this model. Set it under Settings → Models → Model overrides → Context length.",
   unknown: "This turn didn’t finish, and we can’t tell why. Retry — if it keeps happening, open Verbose chat for details, or try a different model.",
 }
 
@@ -71,5 +78,11 @@ export const llmErrorUserAttributions: Record<LLMErrorCode, LLMErrorAttribution>
   agent_not_configured: "config",
   workspace_unavailable: "config",
   model_unavailable: "config",
+  needs_provider: "user",
+  model_unassigned: "config",
+  turn_canceled: "user",
+  turn_timed_out: "provider",
+  context_unrecoverable: "product",
+  context_window_unknown: "config",
   unknown: "unknown",
 }

@@ -86,6 +86,7 @@ export async function onboardViaAPI(opts: OnboardingOptions): Promise<void> {
     const res = await ctx.post('/api/v1/onboarding/complete', {
       data: {
         provider: {
+          auth_method: 'api_key',
           id: opts.providerID ?? DEFAULT_PROVIDER_ID,
           api_key: apiKey,
           model: opts.model ?? DEFAULT_MODEL,

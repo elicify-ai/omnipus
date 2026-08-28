@@ -752,10 +752,15 @@ func TestBash_LargeOutputTruncation(t *testing.T) {
 	tool, _ := newBashTool(t, false)
 	tool.godMode = true // deterministic, avoids sandbox.Run's own separate cap
 
+	// ADR-066 FR-014 / B-15: a successful command is held to the
+	// builtin-success cap (64,000 chars) plus the truncation marker.
 	result := tool.Execute(bashCtx(t), map[string]any{
-		"command": `python3 -c "print('A' * 20000)" || yes A | head -c 20000`,
+		"command": `python3 -c "print('A' * 100000)" || yes A | head -c 100000`,
 	})
-	assert.LessOrEqual(t, len(result.ForLLM), 12000, "output must be bounded, got %d chars", len(result.ForLLM))
+	assert.False(t, result.IsError, "command must succeed, got %q", result.ForLLM[:min(200, len(result.ForLLM))])
+	assert.LessOrEqual(t, len(result.ForLLM), maxForegroundSuccessOutputLen+100, "output must be bounded, got %d chars", len(result.ForLLM))
+	assert.Greater(t, len(result.ForLLM), maxForegroundOutputLen, "success output must not be held to the failure-path cap")
+	assert.Contains(t, result.ForLLM, "... (truncated,")
 }
 
 // ---------------------------------------------------------------------------

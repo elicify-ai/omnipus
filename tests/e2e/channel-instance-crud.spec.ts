@@ -150,6 +150,9 @@ const AGENT_MIA = {
   soul: '',
   timeout_seconds: 300,
   max_tool_iterations: 25,
+  // Required by Agent.yaml since 36801b44 (ADR-066/067/068); omitting it makes
+  // AgentSchema reject GET /agents. false = healthy (has a usable model).
+  needs_model: false,
 }
 const AGENTS_FIXTURE = [AGENT_MIA]
 
@@ -708,6 +711,9 @@ test(
         soul: '',
         timeout_seconds: 300,
         max_tool_iterations: 25,
+        // Required by Agent.yaml since 36801b44 (ADR-066/067/068); omitting it
+        // makes AgentSchema reject GET /agents. false = healthy.
+        needs_model: false,
       },
     ])
 

@@ -75,7 +75,7 @@ func TestResolveMediaRefsWithOffload_AVIF_CopiesToWorkDir_InjectsPath(t *testing
 			msgs := []providers.Message{
 				{Role: "user", Content: "describe this", Media: []string{ref}},
 			}
-			result := resolveMediaRefsWithOffload(msgs, store, 10*1024*1024, "claude-sonnet-4", sink, nil, nil, "")
+			result := resolveMediaRefsWithOffload(msgs, store, 10*1024*1024, "", "claude-sonnet-4", sink, nil, nil, "")
 
 			require.Len(t, result, 1)
 			// No data URL emitted (undecodable).
@@ -141,7 +141,7 @@ func TestResolveMediaRefsWithOffload_SanitizesTraversalFilename(t *testing.T) {
 
 			result := resolveMediaRefsWithOffload(
 				[]providers.Message{{Role: "user", Media: []string{ref}}},
-				store, 10*1024*1024, "claude-sonnet-4", sink, nil, nil, "")
+				store, 10*1024*1024, "", "claude-sonnet-4", sink, nil, nil, "")
 
 			require.Len(t, result, 1)
 			// The raw payload never appears in content.
@@ -213,7 +213,7 @@ func TestResolveMediaRefsWithOffload_SVGFail_GuidancePlusMarkup(t *testing.T) {
 
 	result := resolveMediaRefsWithOffload(
 		[]providers.Message{{Role: "user", Content: "what is this", Media: []string{ref}}},
-		store, 10*1024*1024, "glm-5.2", sink, nil, nil, "")
+		store, 10*1024*1024, "", "glm-5.2", sink, nil, nil, "")
 
 	require.Len(t, result, 1)
 	content := result[0].Content
@@ -243,7 +243,7 @@ func TestResolveMediaRefsWithOffload_AVIF_NoTextInjection(t *testing.T) {
 
 	result := resolveMediaRefsWithOffload(
 		[]providers.Message{{Role: "user", Media: []string{ref}}},
-		store, 10*1024*1024, "glm-5.2", sink, nil, nil, "")
+		store, 10*1024*1024, "", "glm-5.2", sink, nil, nil, "")
 
 	require.Len(t, result, 1)
 	content := result[0].Content
@@ -393,7 +393,7 @@ func TestOffload_oversizeImage_WithSink_OffloadsNotMarker(t *testing.T) {
 	// maxSize=0 forces oversize → normalization fails → step-5 offload (sink present).
 	result := resolveMediaRefsWithOffload(
 		[]providers.Message{{Role: "user", Media: []string{ref}}},
-		store, 0, "claude-sonnet-4", sink, nil, nil, "")
+		store, 0, "", "claude-sonnet-4", sink, nil, nil, "")
 
 	require.Len(t, result, 1)
 	assert.Empty(t, result[0].Media, "oversize image must not become a data URL")

@@ -1,0 +1,32 @@
+title: ContextModelOverride
+description: >
+  One per-(provider, model) operator override of the context window
+  (ADR-066 D2 rung 2). Keyed on the exact catalog pair; the override can only
+  lower the effective window (min(override, capability)), never raise it.
+  Rows whose provider no longer exists are ignored by the resolver and pruned
+  on the next settings write; DELETE /providers/{id} removes the provider's
+  rows (ADR-068 FR-010 step 2b).
+type: object
+required:
+  - provider
+  - model
+  - context_window
+additionalProperties: false
+properties:
+  provider:
+    type: string
+    minLength: 1
+    maxLength: 64
+    description: Catalog provider id or operator-named custom row id.
+    example: "openrouter"
+  model:
+    type: string
+    minLength: 1
+    maxLength: 256
+    description: Bare catalog model id (no provider prefix).
+    example: "z-ai/glm-5.2"
+  context_window:
+    type: integer
+    minimum: 1
+    description: Context window in tokens. 400 when below 1.
+    example: 200000

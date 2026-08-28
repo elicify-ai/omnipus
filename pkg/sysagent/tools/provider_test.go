@@ -51,8 +51,8 @@ func unmarshalProviderResult(t *testing.T, body string) map[string]any {
 // the key is referenced, injected, and resolvable — not orphaned in the store.
 func TestProviderConfigure_WiresAPIKeyRef(t *testing.T) {
 	cfg := &config.Config{Providers: []*config.ModelConfig{
-		{Provider: "openrouter", Model: "openrouter/auto"},                 // seed, empty ref
-		{Provider: "openrouter", Model: "z-ai/glm", ModelName: "z-ai/glm"}, // seed, empty ref
+		{Provider: "openrouter", Model: "openrouter/auto"},            // seed, empty ref
+		{Provider: "openrouter", Model: "z-ai/glm", Name: "z-ai/glm"}, // seed, empty ref
 	}}
 	deps, store, reloaded := newProviderTestDeps(t, cfg)
 

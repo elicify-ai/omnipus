@@ -440,6 +440,14 @@ type ToolCall struct {
 	// pkg/gateway/replay.go's buildResult for the reader that restores
 	// live/reload parity (RC-5c).
 	Error string `json:"error,omitempty"`
+	// ContentState is the ADR-066 D4/D5 projection state of this call's
+	// result in the model's window — "capped" | "emptied"; empty means full
+	// (the contract's default). Written by pkg/agent's choke point
+	// (tool_result_admit.go) when it cuts a result at the door and by the
+	// D5 emptying pass; mirrors ToolCall.yaml's `content_state`. Result then
+	// holds the PROJECTED text the model saw; the full content stays on the
+	// window archive line and in the gateway tool_results/ store.
+	ContentState string `json:"content_state,omitempty"`
 }
 
 // NewSessionID generates a ULID-based session ID prefixed with "session_".

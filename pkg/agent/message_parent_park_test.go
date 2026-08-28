@@ -184,10 +184,9 @@ func setupC2ParkScenario(t *testing.T) *c2ParkTestHarness {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Provider:  "mock",
-				Home:      t.TempDir(),
-				ModelName: "c2-park-mock",
-				MaxTokens: 4096,
+				Home:         t.TempDir(),
+				DefaultModel: config.DefaultModel{Provider: "mock", Model: "c2-park-mock"},
+				MaxTokens:    4096,
 			},
 			List: []config.AgentConfig{{ID: "mia", Home: t.TempDir()}},
 		},
@@ -206,7 +205,7 @@ func setupC2ParkScenario(t *testing.T) *c2ParkTestHarness {
 	messageParentTool.SetSessionMessagingEnabled(func() bool { return true })
 	al.RegisterTool(messageParentTool)
 
-	delegateTool := tools.NewDelegateTool(cfg.Agents.Defaults.ModelName, cfg.Agents.Defaults.MaxTokens, 0)
+	delegateTool := tools.NewDelegateTool(cfg.Agents.Defaults.DefaultModel.Model, cfg.Agents.Defaults.MaxTokens, 0)
 	// Established test-harness pattern (delegate_sync_toolcall_completion_test.go,
 	// delegate_async_completion_test.go, et al.): a manually-constructed
 	// *tools.DelegateTool registered via al.RegisterTool overwrites the

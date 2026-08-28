@@ -346,8 +346,12 @@ func (al *AgentLoop) runRecap(sessionID, trigger string) {
 	// see a consistent view of the config even if SwapConfig races.
 	snapCfg := al.GetConfig()
 	recapModel := snapCfg.Agents.Defaults.RecapModel
-	if recapModel == "" {
-		recapModel = snapCfg.Agents.Defaults.GetModelName()
+	// When no recap model is configured the default (provider, model) pair is
+	// used as-is — pinned to its own provider, never re-resolved (ADR-068).
+	var recapPinnedProvider string
+	if recapModel == "" && !snapCfg.Agents.Defaults.DefaultModel.IsZero() {
+		recapModel = snapCfg.Agents.Defaults.DefaultModel.Model
+		recapPinnedProvider = snapCfg.Agents.Defaults.DefaultModel.Provider
 	}
 	if recapModel == "" {
 		recapModel = agentInst.Model
@@ -367,9 +371,11 @@ func (al *AgentLoop) runRecap(sessionID, trigger string) {
 	// heuristic stub, and last-session.md loses the real summary. The turn path
 	// resolves Provider; the recap MUST match it.
 	candidates := make([]providers.FallbackCandidate, 0, 1+len(snapCfg.Agents.Defaults.RecapFallbackModels))
-	primaryCandidate := providers.FallbackCandidate{Model: recapModel}
-	if ref, ok := resolveModelRef(snapCfg, recapModel); ok {
-		primaryCandidate = providers.FallbackCandidate{Model: ref.Model, Provider: ref.Provider}
+	primaryCandidate := providers.FallbackCandidate{Model: recapModel, Provider: recapPinnedProvider}
+	if recapPinnedProvider == "" {
+		if ref, ok := resolveModelRef(snapCfg, recapModel); ok {
+			primaryCandidate = providers.FallbackCandidate{Model: ref.Model, Provider: ref.Provider}
+		}
 	}
 	candidates = append(candidates, primaryCandidate)
 	for _, fm := range snapCfg.Agents.Defaults.RecapFallbackModels {
@@ -412,7 +418,10 @@ func (al *AgentLoop) runRecap(sessionID, trigger string) {
 	// FR-007). The agent's own providerPool only contains its turn candidates;
 	// recap candidates are separate config fields and are never included there.
 	// We build a one-off pool here using the same buildProviderPool helper.
-	recapProviderPool := buildProviderPool(snapCfg, candidates)
+	// The agent id is passed for the FR-016 WARNs only; a recap chain is not
+	// the agent's turn chain, so its primaryUnknown verdict is deliberately
+	// NOT projected onto the instance's needs_provider degrade.
+	recapProviderPool := buildProviderPool(snapCfg, candidates, agentInst.ID).pool
 
 	// resolveRecapProvider mirrors GetProviderForCandidate but consults the
 	// one-off recap pool first, then the agent's turn pool (single-passthrough

@@ -173,12 +173,12 @@ func TestConfigGet_LegitimateKeysStillReadable(t *testing.T) {
 		}
 	})
 
-	t.Run("agents.defaults.model_name", func(t *testing.T) {
+	t.Run("agents.defaults.default_model.model", func(t *testing.T) {
 		deps, cfg := newTestDeps()
-		cfg.Agents.Defaults.ModelName = "glm-4.7"
-		m, isErr := readConfig(t, deps, "agents.defaults.model_name")
+		cfg.Agents.Defaults.DefaultModel = config.DefaultModel{Model: "glm-4.7"}
+		m, isErr := readConfig(t, deps, "agents.defaults.default_model.model")
 		if isErr {
-			t.Fatalf("get_config(agents.defaults.model_name) refused: %v", m)
+			t.Fatalf("get_config(agents.defaults.default_model.model) refused: %v", m)
 		}
 		if m["value"] != "glm-4.7" {
 			t.Errorf("value = %v, want glm-4.7", m["value"])

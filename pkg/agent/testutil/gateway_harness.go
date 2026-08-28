@@ -727,15 +727,14 @@ func buildConfig(hc *harnessConfig, homeDir string, port int) *config.Config {
 		},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      homeDir,
-				ModelName: "openrouter-glm",
-				MaxTokens: 4096,
+				Home:         homeDir,
+				DefaultModel: config.DefaultModel{Provider: "openrouter", Model: "z-ai/glm-5v-turbo"},
+				MaxTokens:    4096,
 			},
 		},
 		Providers: []*config.ModelConfig{
 			{
-				ModelName: "openrouter-glm",
-				Model:     "openrouter/z-ai/glm-5v-turbo",
+				Model:     "z-ai/glm-5v-turbo",
 				Provider:  "openrouter",
 				APIBase:   "https://openrouter.ai/api/v1",
 				APIKeyRef: "OPENROUTER_API_KEY",
@@ -760,6 +759,19 @@ func buildConfig(hc *harnessConfig, homeDir string, port int) *config.Config {
 	// mock server — see tests/perf/mock_openrouter_test.go).
 	if hc.apiBase != "" {
 		cfg.Providers[0].APIBase = hc.apiBase
+		// ADR-066 D2/D3: the redirected row now points at a loopback
+		// httptest server. Until the gateway installs the served catalog
+		// (ADR-067 T067-07) the resolver classifies it as a custom row at a
+		// local host — `locality: local` — and a local endpoint that
+		// reports no context window is REFUSED at turn start
+		// (context_window_unknown), never floored. Pin the window the way
+		// an operator would for such an endpoint (D2 rung 3, the global
+		// default; B-10) so the harness turns run. 128000 mirrors the cloud
+		// floor these mocks stood in for before the ladder landed.
+		if cfg.Context.DefaultContextWindow == nil {
+			pinned := 128000
+			cfg.Context.DefaultContextWindow = &pinned
+		}
 	}
 
 	if len(hc.agents) > 0 {

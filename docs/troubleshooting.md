@@ -87,7 +87,7 @@ Known offenders on OpenRouter: `google/gemma-2-9b-it`, most small open-source mo
 
 Known-good defaults are `z-ai/glm-5v-turbo` (the project's standard demo model), `anthropic/claude-3.5-haiku`, `google/gemini-2.5-flash`, and `openai/gpt-4o`.
 
-Change the default in Settings → Providers, or edit `agents.defaults.model_name` in `config.json` to a `model_name` that resolves to one of these in the `providers` array.
+Change the default in Settings → Providers, or edit `agents.defaults.default_model` in `config.json` to the exact `{"provider": ..., "model": ...}` pair of one of these entries in the `providers` array.
 
 ## Provider Model Name Issues
 

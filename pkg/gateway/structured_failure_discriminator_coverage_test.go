@@ -112,6 +112,27 @@ var discriminatorCoverageRegistry = map[string]discriminatorFixture{
 			)
 		},
 	},
+	// ADR-066 T066-04: the two members T066-01's schemas added. The refusal
+	// is toolResult-channel (it IS the tool's result); the recall mark is
+	// defensive over-provisioning exactly like ToolAssemblyDuplicate above.
+	tools.ToolArgumentsTooLargeCode: {
+		schemaName: "ToolArgumentRefusal",
+		build: func() ([]byte, error) {
+			return tools.ToolArgumentRefusalPayload(hugeEscapable, 1_000_000, 64_000)
+		},
+	},
+	tools.ToolResultRecallMarkCode: {
+		schemaName: "ToolResultRecallMark",
+		build: func() ([]byte, error) {
+			return tools.EmptiedMarkPayload(tools.RecallMarkParams{
+				Tool:        hugeEscapable,
+				ToolCallID:  hugeEscapable,
+				ArchiveLine: 41,
+				SizeChars:   1_178_522,
+				Turn:        9,
+			})
+		},
+	},
 }
 
 // ── Minimal self-contained AsyncAPI-fragment schema loader ────────────────

@@ -46,9 +46,9 @@ func TestListMCPServers_EnabledField(t *testing.T) {
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      tmpDir,
-				ModelName: "test-model",
-				MaxTokens: 4096,
+				Home:         tmpDir,
+				DefaultModel: config.DefaultModel{Model: "test-model"},
+				MaxTokens:    4096,
 			},
 		},
 		Tools: config.ToolsConfig{
@@ -269,7 +269,8 @@ func TestPatchMCPServer_EnabledTruePatchFlipsGlobalKillSwitch(t *testing.T) {
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+			Defaults: config.AgentDefaults{
+				Home: tmpDir, DefaultModel: config.DefaultModel{Model: "test-model"}, MaxTokens: 4096},
 		},
 		Tools: config.ToolsConfig{
 			MCP: config.MCPConfig{
@@ -402,7 +403,8 @@ func TestListMCPServers_ReportsToolCountFromRegistry(t *testing.T) {
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+			Defaults: config.AgentDefaults{
+				Home: tmpDir, DefaultModel: config.DefaultModel{Model: "test-model"}, MaxTokens: 4096},
 		},
 		Tools: config.ToolsConfig{
 			MCP: config.MCPConfig{
@@ -461,7 +463,8 @@ func TestListMCPServers_ReturnsNonSecretConfigForEdit(t *testing.T) {
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+			Defaults: config.AgentDefaults{
+				Home: tmpDir, DefaultModel: config.DefaultModel{Model: "test-model"}, MaxTokens: 4096},
 		},
 		Tools: config.ToolsConfig{
 			MCP: config.MCPConfig{
@@ -515,7 +518,8 @@ func TestPatchMCPServer_RejectsTransportMismatch(t *testing.T) {
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+			Defaults: config.AgentDefaults{
+				Home: tmpDir, DefaultModel: config.DefaultModel{Model: "test-model"}, MaxTokens: 4096},
 		},
 		Tools: config.ToolsConfig{
 			MCP: config.MCPConfig{Servers: map[string]config.MCPServerConfig{
@@ -551,7 +555,8 @@ func TestPatchMCPServer_RejectsCommandOnRemote(t *testing.T) {
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+			Defaults: config.AgentDefaults{
+				Home: tmpDir, DefaultModel: config.DefaultModel{Model: "test-model"}, MaxTokens: 4096},
 		},
 		Tools: config.ToolsConfig{
 			MCP: config.MCPConfig{Servers: map[string]config.MCPServerConfig{
@@ -821,7 +826,8 @@ func TestTestMCPServer_SuccessHealsDisconnectedEnabledServer(t *testing.T) {
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+			Defaults: config.AgentDefaults{
+				Home: tmpDir, DefaultModel: config.DefaultModel{Model: "test-model"}, MaxTokens: 4096},
 			// This test asks the registry for the default agent and requires
 			// it: MCP tools are registered onto that agent. There is no
 			// implicit "main" sentinel to be it any more (ADR-064).

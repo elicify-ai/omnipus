@@ -1,0 +1,44 @@
+title: ContextSettingsUpdate
+description: >
+  Partial update body for PUT /api/v1/settings/context (ADR-066 D9). Every
+  field is optional; an omitted field is unchanged. Validation (400 naming
+  the field and the limit): any cap > 150,000 or < 1; absolute_trigger_chars
+  < 1; ingest_bound_bytes ≥ 8,388,608 or < 1; model_overrides[].context_window
+  < 1. Set default_context_window to null to clear it. model_overrides, when
+  present, replaces the whole list.
+type: object
+additionalProperties: false
+properties:
+  mcp_result_cap:
+    type: integer
+    minimum: 1
+    maximum: 150000
+    example: 62500
+  builtin_success_cap:
+    type: integer
+    minimum: 1
+    maximum: 150000
+    example: 64000
+  builtin_failure_cap:
+    type: integer
+    minimum: 1
+    maximum: 150000
+    example: 10000
+  absolute_trigger_chars:
+    type: integer
+    minimum: 1
+    example: 400000
+  ingest_bound_bytes:
+    type: integer
+    minimum: 1
+    maximum: 8388607
+    example: 8000000
+  default_context_window:
+    type: integer
+    minimum: 1
+    nullable: true
+    example: 128000
+  model_overrides:
+    type: array
+    items:
+      $ref: './ContextModelOverride.yaml'

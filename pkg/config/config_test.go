@@ -362,7 +362,10 @@ func TestSaveConfig_FilePermissions(t *testing.T) {
 	}
 }
 
-func TestSaveConfig_IncludesEmptyLegacyModelField(t *testing.T) {
+// TestSaveConfig_WritesZeroDefaultModelPair: a fresh config persists
+// agents.defaults.default_model as the zero (provider, model) pair and never
+// an agents.defaults.model_name key (ADR-068 D14.1 / FR-040).
+func TestSaveConfig_WritesZeroDefaultModelPair(t *testing.T) {
 	tmpDir := t.TempDir()
 	path := filepath.Join(tmpDir, "config.json")
 
@@ -375,9 +378,17 @@ func TestSaveConfig_IncludesEmptyLegacyModelField(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile failed: %v", err)
 	}
-
-	if !strings.Contains(string(data), `"model_name": ""`) {
-		t.Fatalf("saved config should include empty legacy model_name field, got: %s", string(data))
+	var top map[string]any
+	if err := json.Unmarshal(data, &top); err != nil {
+		t.Fatalf("saved config is not JSON: %v", err)
+	}
+	defaults := top["agents"].(map[string]any)["defaults"].(map[string]any)
+	if _, ok := defaults["model_name"]; ok {
+		t.Fatalf("saved config must not carry agents.defaults.model_name: %s", string(data))
+	}
+	dm, ok := defaults["default_model"].(map[string]any)
+	if !ok || dm["provider"] != "" || dm["model"] != "" {
+		t.Fatalf("saved config must carry the zero default_model pair, got: %v", defaults["default_model"])
 	}
 }
 
@@ -426,13 +437,13 @@ func TestSaveConfig_FiltersVirtualModels(t *testing.T) {
 
 	// Manually add a virtual model to Providers (simulating what expandMultiKeyModels does)
 	primaryModel := &ModelConfig{
-		ModelName: "gpt-4",
-		Model:     "openai/gpt-4o",
+		Provider:  "openai",
+		Model:     "gpt-4.1",
 		APIKeyRef: "OPENAI_API_KEY",
 	}
 	virtualModel := &ModelConfig{
-		ModelName: "gpt-4__key_1",
-		Model:     "openai/gpt-4o",
+		Provider:  "openai",
+		Model:     "gpt-4.1",
 		APIKeyRef: "OPENAI_API_KEY_2",
 		isVirtual: true,
 	}
@@ -454,24 +465,27 @@ func TestSaveConfig_FiltersVirtualModels(t *testing.T) {
 		t.Fatalf("expected 1 model after reload, got %d", len(reloaded.Providers))
 	}
 
-	if reloaded.Providers[0].ModelName != "gpt-4" {
-		t.Errorf("expected model_name 'gpt-4', got %q", reloaded.Providers[0].ModelName)
+	if reloaded.Providers[0].APIKeyRef != "OPENAI_API_KEY" {
+		t.Errorf("expected the primary row's key ref, got %q", reloaded.Providers[0].APIKeyRef)
 	}
 
-	// Verify virtual model was not persisted
+	// Verify virtual model was not persisted. Multi-key expansion produces
+	// rows with the SAME (provider, model) pair and a different key ref
+	// (ADR-067: a pair is not unique across rows — that is how load
+	// balancing is expressed), so the virtual row is identified by its ref.
 	for _, m := range reloaded.Providers {
-		if m.ModelName == "gpt-4__key_1" {
-			t.Errorf("virtual model gpt-4__key_1 should not have been saved")
+		if m.APIKeyRef == "OPENAI_API_KEY_2" {
+			t.Errorf("virtual model (key ref OPENAI_API_KEY_2) should not have been saved")
 		}
 	}
 
-	// Verify the saved file does not contain the virtual model name
+	// Verify the saved file does not contain the virtual model's key ref.
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("ReadFile failed: %v", err)
 	}
-	if strings.Contains(string(data), "gpt-4__key_1") {
-		t.Errorf("saved config should not contain virtual model name 'gpt-4__key_1'")
+	if strings.Contains(string(data), "OPENAI_API_KEY_2") {
+		t.Errorf("saved config should not contain the virtual row's key ref")
 	}
 }
 
@@ -656,7 +670,7 @@ func TestLoadConfig_WebToolsProxy(t *testing.T) {
 	configJSON := `{
   "version": 1,
   "agents": {"defaults":{"workspace":"./workspace","model_name":"gpt4","max_tokens":8192,"max_tool_iterations":20}},
-  "providers": [{"model_name":"gpt4","model":"openai/gpt-5.4","api_key_ref":"OPENAI_API_KEY"}],
+  "providers": [{"provider":"openai","model":"gpt-4.1","api_key_ref":"OPENAI_API_KEY"}],
   "tools": {"web":{"proxy":"http://127.0.0.1:7890"}}
 }`
 	if err := os.WriteFile(configPath, []byte(configJSON), 0o600); err != nil {
@@ -941,18 +955,6 @@ func TestLoadConfig_HooksProcessConfig(t *testing.T) {
 }
 
 // TestDefaultConfig_DMScope verifies the default dm_scope value
-// TestDefaultConfig_SummarizationThresholds verifies the SummarizeTokenPercent
-// default. The field survived the legacy-summariser decommission because it
-// also gates and sizes the timeout-recovery windowTrim trigger in
-// pkg/agent/loop.go::runTurn — it is no longer a summarization knob.
-func TestDefaultConfig_SummarizationThresholds(t *testing.T) {
-	cfg := DefaultConfig()
-
-	if cfg.Agents.Defaults.SummarizeTokenPercent != 75 {
-		t.Errorf("SummarizeTokenPercent = %d, want 75", cfg.Agents.Defaults.SummarizeTokenPercent)
-	}
-}
-
 func TestDefaultConfig_DMScope(t *testing.T) {
 	cfg := DefaultConfig()
 
@@ -1236,8 +1238,9 @@ func TestModelConfig_ExtraBodyRoundTrip(t *testing.T) {
 		Version: CurrentVersion,
 		Providers: []*ModelConfig{
 			{
-				ModelName: "test-model",
-				Model:     "openai/test",
+				Name:      "test-model",
+				Provider:  "openai",
+				Model:     "gpt-4.1",
 				APIKeyRef: "TEST_OPENAI_KEY",
 				ExtraBody: map[string]any{"custom_field": "value", "num_field": 42},
 			},
@@ -1264,24 +1267,36 @@ func TestModelConfig_ExtraBodyRoundTrip(t *testing.T) {
 	}
 }
 
-func TestDefaultConfig_MinimaxExtraBody(t *testing.T) {
+// TestDefaultConfig_SeedProviderIDsAreCanonical — T25 (config half): every
+// seed row is keyed by a catalog provider id and a BARE model id, with no
+// protocol prefix and no display alias (ADR-067 FR-011, FR-034).
+//
+// This replaces TestDefaultConfig_MinimaxExtraBody. That test pinned the
+// factory's per-vendor `reasoning_split: true` injection for MiniMax — one
+// of the ~40 vendor cases ADR-067 D11 removed. MiniMax now speaks the
+// Anthropic Messages protocol per its catalog row, which does not carry an
+// OpenAI-shaped extra body at all; an operator who wants extra request
+// fields still sets `extra_body` on their own row.
+func TestDefaultConfig_SeedProviderIDsAreCanonical(t *testing.T) {
 	cfg := DefaultConfig()
-
-	var minimaxCfg *ModelConfig
-	for i := range cfg.Providers {
-		if cfg.Providers[i].Model == "minimax/MiniMax-M2.5" {
-			minimaxCfg = cfg.Providers[i]
-			break
+	if len(cfg.Providers) == 0 {
+		t.Fatal("DefaultConfig() seeded no provider templates")
+	}
+	for i, p := range cfg.Providers {
+		if strings.TrimSpace(p.Provider) == "" {
+			t.Errorf("providers[%d] (%q): no provider id — a row is the pair (provider, model)",
+				i, p.Model)
 		}
-	}
-	if minimaxCfg == nil {
-		t.Fatal("Minimax model not found in Providers")
-	}
-	if minimaxCfg.ExtraBody == nil {
-		t.Fatal("Minimax ExtraBody should not be nil")
-	}
-	if got, ok := minimaxCfg.ExtraBody["reasoning_split"]; !ok || got != true {
-		t.Fatalf("Minimax ExtraBody[reasoning_split] = %v, want true", got)
+		if strings.Contains(p.Model, "/") && p.Provider != "openrouter" &&
+			p.Provider != "nvidia" && p.Provider != "shengsuanyun" &&
+			p.Provider != "avian" && p.Provider != "modelscope" {
+			t.Errorf("providers[%d] (%s): model %q looks protocol-prefixed; Model is a BARE catalog id",
+				i, p.Provider, p.Model)
+		}
+		if p.APIBase != "" {
+			t.Errorf("providers[%d] (%s): seeds carry no api_base — the catalog row supplies the URL",
+				i, p.Provider)
+		}
 	}
 }
 

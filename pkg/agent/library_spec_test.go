@@ -145,7 +145,7 @@ func TestResolveMediaRefs_AnnouncesWorkspaceUpload_UsesRecordedPath(t *testing.T
 	})
 
 	msgs := []providers.Message{{Role: "user", Content: "", Media: []string{ref}}}
-	resolved := resolveMediaRefsWithOffload(msgs, store, 10*1024*1024, "claude-sonnet-4", nil, nil, nil, wsID)
+	resolved := resolveMediaRefsWithOffload(msgs, store, 10*1024*1024, "", "claude-sonnet-4", nil, nil, nil, wsID)
 
 	require.Len(t, resolved, 1)
 	assert.Contains(t, resolved[0].Content,
@@ -180,7 +180,7 @@ func TestResolveMediaRefs_AnnouncesWorkspaceUpload_FallsBackWhenNotRecorded(t *t
 	})
 
 	msgs := []providers.Message{{Role: "user", Content: "", Media: []string{ref}}}
-	resolved := resolveMediaRefsWithOffload(msgs, store, 10*1024*1024, "claude-sonnet-4", nil, nil, nil, wsID)
+	resolved := resolveMediaRefsWithOffload(msgs, store, 10*1024*1024, "", "claude-sonnet-4", nil, nil, nil, wsID)
 
 	require.Len(t, resolved, 1)
 	assert.Contains(t, resolved[0].Content, "[user uploaded: .library/report.png]")
@@ -200,7 +200,7 @@ func TestResolveMediaRefs_NonWorkspaceRef_NoAnnouncement(t *testing.T) {
 	require.False(t, media.IsWorkspaceRef(ref))
 
 	msgs := []providers.Message{{Role: "user", Content: "", Media: []string{ref}}}
-	resolved := resolveMediaRefsWithOffload(msgs, store, 10*1024*1024, "claude-sonnet-4", nil, nil, nil, "")
+	resolved := resolveMediaRefsWithOffload(msgs, store, 10*1024*1024, "", "claude-sonnet-4", nil, nil, nil, "")
 
 	require.Len(t, resolved, 1)
 	assert.NotContains(t, resolved[0].Content, "user uploaded",

@@ -56,7 +56,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/onboarding"
 	"github.com/elicify-ai/omnipus/pkg/plan"
 	providers_pkg "github.com/elicify-ai/omnipus/pkg/providers"
-	"github.com/elicify-ai/omnipus/pkg/providers/capabilities"
+	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
 	"github.com/elicify-ai/omnipus/pkg/security"
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -97,10 +97,25 @@ type restAPI struct {
 	agentLoop     *agent.AgentLoop
 	allowedOrigin string
 	onboardingMgr *onboarding.Manager // manages first-launch + doctor state
-	homePath      string              // ~/.omnipus — root of the data directory
-	configMu      sync.Mutex          // guards safeUpdateConfigJSON (read-modify-write cycle)
-	taskStore     *task.Store         // unified task persistence
-	taskExecutor  *agent.TaskExecutor // task execution engine
+	// onboardingStateUnknown records that system/state.json existed at boot
+	// but could NOT be read or parsed, so this instance's onboarding status
+	// is genuinely unknown rather than "fresh install" (M3). It is sampled in
+	// gateway.go immediately BEFORE onboarding.NewManager, because the
+	// manager renames a corrupt state file aside and resets to the fresh
+	// install zero value — after that the ambiguity is unobservable. The
+	// FR-050 pre-auth window treats unknown as CLOSED; see
+	// preAuthOnboardingWindowOpen (rest_auth.go). False in test
+	// constructions, which is correct: they have no corrupt state file.
+	onboardingStateUnknown bool
+	// copilotProbe bounds the cost of the GitHub Copilot sign-in probe (C2):
+	// one concurrent vendor-CLI exec at a time, and one premium request per
+	// cache TTL rather than one per HTTP call. Zero value is ready; see
+	// copilotProbeGuard (rest_signin_copilot.go).
+	copilotProbe copilotProbeGuard
+	homePath     string              // ~/.omnipus — root of the data directory
+	configMu     sync.Mutex          // guards safeUpdateConfigJSON (read-modify-write cycle)
+	taskStore    *task.Store         // unified task persistence
+	taskExecutor *agent.TaskExecutor // task execution engine
 	// planStore is the Plan entity persistence (ADR-049 D1, pkg/plan), shared
 	// with the pkg/agent PlanEngine (both hold the SAME *plan.Store instance,
 	// constructed once at boot — setupAndStartServices). Nil in test setups
@@ -111,6 +126,38 @@ type restAPI struct {
 	planStore  *plan.Store
 	credStore  *credentials.Store // shared unlocked credential store (injected at boot)
 	mediaStore media.MediaStore   // shared media store for serving media files
+	// providerCatalog is the ADR-067 registry-fed provider catalog. It is the
+	// only authority on whether a configured provider id is KNOWN: a
+	// configured row whose id the served document does not contain is
+	// reported as status=unknown-provider with the generic text
+	// `unknown provider "<id>"` (ADR-068 FR-043 / ADR-067 FR-016). Nil, or
+	// non-nil with no document loaded (the E7 "boots with no catalog" state),
+	// classifies nothing — rows keep their credential-derived status. Wired
+	// at boot by T067-10; until then only tests set it.
+	providerCatalog *catalog.Catalog
+	// entitlements is the ADR-067 FR-021 "Check with my account" cache:
+	// one annotated model list per (provider, credential ref NAME) for the
+	// life of the process, evicted on provider DELETE, on a key-changing
+	// PUT and on a catalog refresh. Its zero value is ready to use — see
+	// rest_providers_entitlement.go.
+	entitlements entitlementCache
+
+	// signInMu guards signInSessions, the in-process store of open
+	// device-code sign-in sessions (ADR-068 FR-008/FR-044, T068-14) — AND
+	// every field of every *deviceCodeSession the map holds. No session
+	// pointer ever escapes the lock: rest_sign_in.go's accessors return
+	// value copies and mutate only inside the critical section. Read the
+	// CONCURRENCY CONTRACT block above putDeviceSession there before
+	// touching either field; handing the live map out is what made
+	// GET .../sign-in/status a pre-auth process-killing fatal. Lazily
+	// initialized on first put — a bare restAPI{} test literal that never
+	// exercises the sign-in routes need not know this field exists.
+	// Single-gateway-process
+	// in-memory state is sufficient: a device-code session's own ceiling is
+	// 15 minutes (FR-044) and Omnipus is a single Go binary, not a
+	// horizontally-scaled fleet.
+	signInMu       sync.Mutex
+	signInSessions map[string]*deviceCodeSession
 	// ssrfChecker enforces SEC-24 SSRF protection on outbound HTTP requests made
 	// by REST handlers (skills installer). Nil when SSRF protection is disabled
 	// in config (sandbox.ssrf.enabled = false). Shared with the agent loop's
@@ -1515,7 +1562,7 @@ func (a *restAPI) testAgentRunner(w http.ResponseWriter, r *http.Request, agentI
 func (a *restAPI) listExecutorDefaults(w http.ResponseWriter) {
 	jsonOK(w, []gen.ExecutorDefaults{
 		{
-			Cli: gen.ClaudeCode,
+			Cli: gen.ExternalCliToolClaudeCode,
 			AutoAppliedFlags: []string{
 				"-p",
 				"--output-format stream-json",
@@ -1528,7 +1575,7 @@ func (a *restAPI) listExecutorDefaults(w http.ResponseWriter) {
 			Notes: "The prompt is delivered via stdin, with no positional prompt argument at all — never via a --prompt flag. --resume/--session-id are never passed; every run starts a fresh claude session. --dangerously-skip-permissions is passed unconditionally (operator decision, issue #488, reversing the original FR-5.3/US-5 stance of using --permission-mode acceptEdits instead) — this matches codex/opencode, which already ran permission-bypassed; see the tracked issue for the sandbox-boundary follow-up this reversal implies for claude specifically. Operator cli_args are appended after this list; a redundant --dangerously-skip-permissions or an attempt to change --output-format away from stream-json is dropped with a WARN (see argsafety.go) — the latter because the driver's own NDJSON stream parser requires stream-json output.",
 		},
 		{
-			Cli: gen.Codex,
+			Cli: gen.ExternalCliToolCodex,
 			AutoAppliedFlags: []string{
 				"--ask-for-approval never",
 				"exec",
@@ -1542,7 +1589,7 @@ func (a *restAPI) listExecutorDefaults(w http.ResponseWriter) {
 			Notes: "--ask-for-approval is a GLOBAL codex flag and must precede the exec subcommand (codex errors if it follows exec); --sandbox is an exec-subcommand flag and is placed after exec instead. The prompt is delivered via stdin — a trailing \"-\" argument — never via a --prompt flag. Operator cli_args are appended after this list; --dangerously-bypass-approvals-and-sandbox, --sandbox danger-full-access, any --ask-for-approval override, and any --json override (bare or \"=false\"-shaped) are dropped with a WARN (see argsafety.go) — the last one because the driver's own NDJSON stream parser requires --json output.",
 		},
 		{
-			Cli: gen.Opencode,
+			Cli: gen.ExternalCliToolOpencode,
 			AutoAppliedFlags: []string{
 				"run",
 				"--format json",
@@ -1673,16 +1720,41 @@ func strVal(m map[string]any, key string) string {
 	return s
 }
 
-// inferProviderName returns the provider name from an explicit Provider field,
-// or infers it from the Model field's "provider/model" format. Falls back to "default".
-func inferProviderName(provider, model string) string {
-	if provider != "" {
-		return provider
+// isSeedTemplateRow reports whether a providers[] entry is a fresh-install
+// TEMPLATE rather than something the operator configured (ADR-067 FR-029).
+//
+// The test used to be `Provider == ""`, because seed templates carried no
+// provider identity at all. ADR-067 FR-011 made the provider id mandatory —
+// a row IS the pair (provider, model) — so identity no longer distinguishes
+// them. What does is that a template names a provider and supplies NOTHING
+// with which to reach it: no credential, no endpoint, no model list, no PUT
+// stamp and no auth method. The moment any of those is present, an operator
+// has touched the row and it is a configuration.
+// anonRedactedDependents returns the provider's real dependent list for an
+// authenticated caller and an EMPTY (never nil) list for an anonymous one.
+//
+// C1: `dependents` enumerates every agent id and name bound to the provider —
+// the operator's roster, which an unauthenticated reader has no business
+// enumerating. Provider.yaml marks the field required with "always present
+// (empty array when none)", so the anonymous answer is `[]`, which is
+// contract-valid and indistinguishable from a provider nothing depends on.
+func anonRedactedDependents(authed bool, cfg *config.Config, providerID string) []gen.ProviderDependent {
+	if !authed {
+		return []gen.ProviderDependent{}
 	}
-	if parts := strings.SplitN(model, "/", 2); len(parts) == 2 {
-		return parts[0]
+	return computeProviderDependents(cfg, providerID)
+}
+
+func isSeedTemplateRow(m *config.ModelConfig) bool {
+	if m == nil {
+		return true
 	}
-	return "default"
+	return strings.TrimSpace(m.Provider) == "" ||
+		(m.APIKeyRef == "" &&
+			m.APIBase == "" &&
+			m.AuthMethod == "" &&
+			m.UpdatedAt == nil &&
+			len(m.Models) == 0)
 }
 
 // Agent response type is defined in contracts/components/schemas/Agent.yaml
@@ -1912,7 +1984,7 @@ func (a *restAPI) listAgents(w http.ResponseWriter) {
 	activeIDs := a.activeAgentIDSet()
 
 	defaults := buildAgentDefaults(cfg)
-	defaultModel := cfg.Agents.Defaults.ModelName
+	defaultModel := cfg.Agents.Defaults.DefaultModel.Model
 	for _, ac := range cfg.Agents.List {
 		model := defaultModel
 		if ac.Model != nil && ac.Model.Primary != "" {
@@ -1947,6 +2019,9 @@ func (a *restAPI) listAgents(w http.ResponseWriter) {
 		ag.Type = coreagent.ToWireType(ac)
 		ag.Locked = ac.Locked
 		applyAgentOverrides(&ag, &ac)
+		// ADR-066 D2/D9: the persisted rung-1 override plus the three derived
+		// read-only window fields the Advanced panel renders.
+		applyAgentContextWindow(&ag, cfg, &ac)
 		ag.Model = &model
 		setAgentModelProvider(&ag, ac.Model)
 		ag.Status = gen.AgentStatus(computeAgentStatus(ac.ID, activeIDs, soul, ac.Locked))
@@ -1959,6 +2034,13 @@ func (a *restAPI) listAgents(w http.ResponseWriter) {
 		// silently disagree with which agent actually receives inbound
 		// messages with no more-specific routing rule.
 		ag.Default = boolPtr(ac.ID == cfg.Agents.Defaults.DefaultAgentID)
+		// ADR-068 FR-014 (T068-08): needs_model is derived, never stored.
+		ag.NeedsModel = agentNeedsModel(cfg, &ac)
+		// ADR-067 FR-016/FR-031 (T067-09): degraded_reason is derived too,
+		// from the SAME predicate the agent runtime's pre-turn gate uses.
+		// Both flags may be true; `needs_provider` wins in copy (the SPA's
+		// concern) and they stay separate fields on the wire.
+		ag.DegradedReason = agentDegradedReason(a.providerCatalog, cfg, &ac)
 		if len(ac.Skills) > 0 {
 			skills := make([]string, len(ac.Skills))
 			copy(skills, ac.Skills)
@@ -1981,7 +2063,7 @@ func (a *restAPI) getAgent(w http.ResponseWriter, id string) {
 
 	for _, ac := range cfg.Agents.List {
 		if ac.ID == id {
-			model := cfg.Agents.Defaults.ModelName
+			model := cfg.Agents.Defaults.DefaultModel.Model
 			if ac.Model != nil && ac.Model.Primary != "" {
 				model = ac.Model.Primary
 			}
@@ -2011,6 +2093,8 @@ func (a *restAPI) getAgent(w http.ResponseWriter, id string) {
 			ag.Type = coreagent.ToWireType(ac)
 			ag.Locked = ac.Locked
 			applyAgentOverrides(&ag, &ac)
+			// ADR-066 D2/D9 — see listAgents.
+			applyAgentContextWindow(&ag, cfg, &ac)
 			ag.Model = &model
 			setAgentModelProvider(&ag, ac.Model)
 			ag.Status = gen.AgentStatus(computeAgentStatus(ac.ID, activeIDs, soul, ac.Locked))
@@ -2018,6 +2102,10 @@ func (a *restAPI) getAgent(w http.ResponseWriter, id string) {
 			// Derived from the settings singleton — see listAgents' comment on
 			// the same line shape for the full rationale.
 			ag.Default = boolPtr(ac.ID == cfg.Agents.Defaults.DefaultAgentID)
+			// ADR-068 FR-014 (T068-08): needs_model is derived, never stored.
+			ag.NeedsModel = agentNeedsModel(cfg, &ac)
+			// ADR-067 FR-016/FR-031 (T067-09) — see listAgents.
+			ag.DegradedReason = agentDegradedReason(a.providerCatalog, cfg, &ac)
 			if len(ac.Skills) > 0 {
 				skills := make([]string, len(ac.Skills))
 				copy(skills, ac.Skills)
@@ -2813,7 +2901,7 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	// Capture the default model name BEFORE the fast upsert to avoid a race
 	// between it (which may swap the live config) and the read below.
-	defaultModelName := a.agentLoop.GetConfig().Agents.Defaults.ModelName
+	defaultModelName := a.agentLoop.GetConfig().Agents.Defaults.DefaultModel.Model
 
 	// Persistence succeeded. Publish the new agent into the live AgentRegistry
 	// BEFORE we answer 201 — via the ADR-054 fast path (issue #571), not a
@@ -3153,6 +3241,27 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 			}
 		}
 	}
+	// ADR-066 D2 rung 1 — context_window_override. The generated *int
+	// collapses "absent" and "null" to nil, but the contract gives them
+	// different meanings ("send null to clear"), so peek the raw body for an
+	// explicit null exactly as the sandbox_profile sniff above does.
+	clearsContextWindowOverride := false
+	if req.ContextWindowOverride != nil {
+		if *req.ContextWindowOverride < 1 {
+			jsonErr(w, http.StatusBadRequest,
+				"context_window_override must be ≥ 1 (send null to clear it)")
+			return
+		}
+	} else {
+		var windowPeek map[string]json.RawMessage
+		if json.Unmarshal(rawBody, &windowPeek) == nil {
+			if v, present := windowPeek["context_window_override"]; present &&
+				string(bytes.TrimSpace(v)) == "null" {
+				clearsContextWindowOverride = true
+			}
+		}
+	}
+
 	// Locked core agents: reject identity and prompt mutations.
 	// Allowed: model selection, heartbeat schedule (enabled/interval), tools (via updateAgentTools).
 	foundAgent := cfg.Agents.List[foundIdx]
@@ -3543,6 +3652,16 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 				if req.MaxToolIterations != nil {
 					agentRec.MaxToolIterations = *req.MaxToolIterations
 				}
+				// ADR-066 D2 rung 1: the per-agent context-window override.
+				// Nil-and-not-null leaves the persisted value untouched; an
+				// explicit null clears it. Without this the PUT returned 200
+				// and changed nothing at all — the ADR-037 anti-pattern.
+				if req.ContextWindowOverride != nil {
+					v := *req.ContextWindowOverride
+					agentRec.ContextWindowOverride = &v
+				} else if clearsContextWindowOverride {
+					agentRec.ContextWindowOverride = nil
+				}
 				// tool_feedback was removed from the wire in W1 (it's now per-channel
 				// runtime behavior driven by pkg/agent/loop.go: webchat skips). The
 				// global config-level agents.defaults.tool_feedback stays.
@@ -3801,7 +3920,12 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 	// AgentLoop.UpsertAgentFast for how the resolver/override/wiring parity
 	// is achieved without that cost; it falls back to the slow, hardened
 	// full reload on any wiring error.
-	needsReload := req.Soul != nil || defaultAgentIDChanged
+	// ADR-066 D2/D9: "every write triggers a registry reload so the next turn
+	// uses the new window" — AgentInstance resolves and CACHES its window at
+	// construction (instance.go), so a bare config swap would leave the
+	// running instance on the old window until a restart.
+	contextWindowOverrideChanged := req.ContextWindowOverride != nil || clearsContextWindowOverride
+	needsReload := req.Soul != nil || defaultAgentIDChanged || contextWindowOverrideChanged
 	var reloadWarning string
 	if needsReload {
 		reloadWarning = a.fastAgentUpsert(id)
@@ -3835,7 +3959,7 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 	soul, _ := readAgentFiles(workspace)
 	// Build the response from defaults, then override with request values.
 	agentID := cfg.Agents.List[foundIdx].ID
-	model := cfg.Agents.Defaults.ModelName
+	model := cfg.Agents.Defaults.DefaultModel.Model
 	if newModel != "" {
 		model = newModel
 	}
@@ -3908,6 +4032,14 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 				// rebuilt it from the just-written config.json, so this reflects
 				// the singleton this exact request just persisted.
 				ag.Default = boolPtr(ac.ID == liveCfg.Agents.Defaults.DefaultAgentID)
+				// ADR-068 FR-014 (T068-08): needs_model is derived, never stored.
+				ag.NeedsModel = agentNeedsModel(liveCfg, &ac)
+				// ADR-067 FR-016/FR-031 (T067-09): the PUT response carries
+				// the degrade the request just cleared (or created) — a
+				// repair is visible in the very response that made it, with
+				// no restart beyond the reload this handler already triggers
+				// (US-6.AC3).
+				ag.DegradedReason = agentDegradedReason(a.providerCatalog, liveCfg, &ac)
 				if len(ac.Skills) > 0 {
 					skills := make([]string, len(ac.Skills))
 					copy(skills, ac.Skills)
@@ -3924,6 +4056,10 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 				// request-value overrides below so an explicit req.MaxToolIterations
 				// (also touched by applyAgentOverrides) still wins.
 				applyAgentOverrides(&ag, &ac)
+				// ADR-066 D2/D9: echo the just-persisted rung-1 override and
+				// re-derive the effective window from liveCfg, so the form
+				// round-trips instead of coming back blank.
+				applyAgentContextWindow(&ag, liveCfg, &ac)
 				break
 			}
 		}
@@ -5215,6 +5351,32 @@ func (a *restAPI) registerAdditionalEndpoints(cm httpHandlerRegistrar) {
 	// attack surface for the non-upload operations.
 	cm.RegisterHTTPHandler("/api/v1/library", a.withUploadAuth(withRateLimit(configLimiter, a.HandleLibrary)))
 	cm.RegisterHTTPHandler("/api/v1/library/", a.withUploadAuth(withRateLimit(configLimiter, a.HandleLibrary)))
+	// GET/PUT /api/v1/providers/default-model (ADR-068 FR-018/FR-042,
+	// T068-11): its OWN route with the high-blast-radius adminWrap chain
+	// (withAuth → RequireNotBypass — 401 unauthenticated, 503 under
+	// dev-mode bypass), registered ahead of the /providers/ prefix
+	// dispatcher. "default-model" is a reserved path segment, never a
+	// provider id (MAJ-002); the dynamic mux matches this exact path before
+	// the subtree prefix below, so a PUT here can never reach the
+	// /providers/{id} upsert branch.
+	cm.RegisterHTTPHandler("/api/v1/providers/default-model", a.adminWrap(a.HandleDefaultModel))
+	// GET /api/v1/providers/catalog (ADR-067 FR-017, T067-10). Its own
+	// exact path, registered ahead of the /providers/ subtree dispatcher:
+	// "catalog" is a reserved path segment and is never a provider id, and
+	// the exact match always beats the prefix.
+	//
+	// withOptionalAuth, not withAuth: the onboarding wizard's provider
+	// picker (src/routes/onboarding.tsx) calls this route to render its
+	// list BEFORE any admin account exists to authenticate as — the same
+	// FR-050 shape as GET /providers (see the C1 comment on that branch
+	// below). The handler gates itself with requireAuthOutsideOnboarding,
+	// the shared fail-closed FR-050 gate, rather than leaving the route
+	// wide open. Unlike /providers there is no reduction to make for an
+	// anonymous caller inside the window: the catalog is public vendor
+	// metadata (provider/model ids, tiers, context windows) with no
+	// operator secret or account-specific field anywhere in it, so the
+	// full document is served either way.
+	cm.RegisterHTTPHandler("/api/v1/providers/catalog", a.withOptionalAuth(a.HandleProvidersCatalog))
 	cm.RegisterHTTPHandler("/api/v1/providers", a.withOptionalAuth(a.HandleProviders))
 	cm.RegisterHTTPHandler("/api/v1/providers/", a.withOptionalAuth(a.HandleProviders))
 	cm.RegisterHTTPHandler("/api/v1/mcp-servers", a.withAuth(a.HandleMCPServers))
@@ -5250,6 +5412,14 @@ func (a *restAPI) registerAdditionalEndpoints(cm httpHandlerRegistrar) {
 	// the live spend accounting; PUT persists the restart-gated ceiling (the live
 	// spend lever is Stop/cancel, not a live token cut — R§8.3e/FR-177).
 	cm.RegisterHTTPHandler("/api/v1/settings/token-budget", a.withAuth(a.HandleTokenBudgetSettings))
+
+	// Context-budget settings endpoint (ADR-066 D9, FR-036 / US-11): the D4
+	// per-surface caps, the D6 absolute trigger, the D10 ingest bound, the D2
+	// global default window and the per-(provider, model) overrides. Same
+	// posture as /settings/memory (withAuth, not RequireNotBypass) per the
+	// contract. This is the operator's only escape from the
+	// context_window_unknown turn refusal, which names it by hand.
+	cm.RegisterHTTPHandler("/api/v1/settings/context", a.withAuth(a.HandleContextSettings))
 
 	// Settings endpoints (Wave 4).
 	// GET /api/v1/audit-log — the audit log contains every privileged action,
@@ -5815,10 +5985,67 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 
 	switch {
 	case r.Method == http.MethodGet && sub == "":
-		// Return provider list derived from config model_list, enriched with
-		// upstream available models for OpenAI-compatible providers.
+		// Return the CONFIGURED providers only (ADR-068 FR-011a, resolution
+		// #16), enriched with upstream available models for OpenAI-compatible
+		// providers. The seeded cfg.Providers templates (pkg/config/defaults.go
+		// — model + api_base, no `provider` identity, no credential ref) are
+		// NOT rows: a row the operator never created is not theirs to manage,
+		// and the SPA used to have to filter the ~10 permanent "disconnected"
+		// template rows out of every list. A row is configured when it
+		// carries a `provider` identity — PUT /providers/{id} and onboarding
+		// completion stamp it on every row they write (template or new), and
+		// ADR-067 makes it the only provider identity.
+		//
+		// C1 — AUTHORIZATION. This branch is the one branch of HandleProviders
+		// that used to carry no gate at all. The shared route is registered
+		// withOptionalAuth (an anonymous caller passes straight through), and
+		// every sibling verb carries its own inline gate — PUT and /test gate
+		// on onboardingDone, the five sign-in routes gate on FR-050, DELETE
+		// 401s unconditionally — so the list, and only the list, stayed
+		// anonymous forever. On a fully onboarded production gateway an
+		// unauthenticated GET returned the whole provider inventory, each
+		// row's status and updated_at, the full `dependents` list (every agent
+		// id and name referencing the provider) and — once T068-14 wired
+		// cheapSignInRowStatus into this branch — the `account_label` of the
+		// operator's live ChatGPT/xAI session. contracts/openapi.yaml has
+		// always declared `security: [BearerAuth: []]` for listProviders, so
+		// implementation and contract disagreed; this restores the contract.
+		//
+		// The gate is requireAuthOutsideOnboarding, the same FR-050 shape the
+		// sibling branches use (fail-closed on unknown onboarding state — see
+		// preAuthOnboardingWindowOpen, M3) rather than an unconditional 401,
+		// so an onboarding client that has no admin account to authenticate
+		// as is not locked out of a read the wizard may need.
+		//
+		// What an ANONYMOUS caller gets is deliberately reduced (see
+		// `authed` below): never account_label, and never dependents. The
+		// SPA needs neither pre-auth — the wizard reads the catalog
+		// (GET /providers/catalog) and POSTs /onboarding/probe-provider;
+		// fetchProviders (src/lib/api.ts) is called only by the Settings
+		// screens, which run authenticated.
+		if !a.requireAuthOutsideOnboarding(w, r) {
+			return
+		}
+		// `authed` decides the row REDUCTION below, and must recognise the
+		// same principals the gate above accepted — otherwise an
+		// env-token-authenticated headless caller would pass the gate and
+		// then be served the anonymous, redacted rows.
+		authed := a.requestPrincipalAuthenticated(r)
+		if !authed {
+			// Pre-onboarding anonymous reads get a ceiling; this branch fans
+			// out to a live upstream /models fetch per configured provider.
+			// Authenticated callers are not limited here (see
+			// providerListAnonLimiter's doc comment in rest_auth.go).
+			ip := clientIP(r)
+			if !providerListAnonLimiter.allow(ip) {
+				retryAfter := providerListAnonLimiter.retryAfter(ip)
+				w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
+				jsonErr(w, http.StatusTooManyRequests,
+					fmt.Sprintf("rate limit exceeded, retry after %d seconds", retryAfter))
+				return
+			}
+		}
 		cfg := a.agentLoop.GetConfig()
-		providerModels := make(map[string][]string)
 		// providerUserModels holds the operator-supplied catalog slugs for
 		// providers that have no live /models endpoint (UAT model-catalog fix).
 		providerUserModels := make(map[string][]string)
@@ -5830,13 +6057,38 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 		// configured at all" were both reported as plain status=disconnected,
 		// indistinguishable to the operator viewing Settings/Providers.
 		providerCredErrors := make(map[string]string)
+		// providerUpdatedAt / providerAuthMethod carry the ADR-068 row fields
+		// (T068-08): the latest PUT stamp across the provider's rows (MAJ-015,
+		// the picker's Recent ordering key) and the row's auth method
+		// (api_key unless a sign_in row exists — T068-14 wires the sign-in
+		// status/account_label on top of this).
+		providerUpdatedAt := make(map[string]*time.Time)
+		providerAuthMethod := make(map[string]string)
+		// providerFirstRow is the representative config row for each
+		// provider — the first non-template one, which carries the
+		// custom/protocol/api_base identity ADR-067 FR-020 and FR-039 read
+		// to decide where this row's model list comes from.
+		providerFirstRow := make(map[string]*config.ModelConfig)
 		providerOrder := make([]string, 0)
+		seen := make(map[string]struct{})
 		for _, m := range cfg.Providers {
-			providerName := inferProviderName(m.Provider, m.Model)
-			if _, exists := providerModels[providerName]; !exists {
-				providerOrder = append(providerOrder, providerName)
+			if isSeedTemplateRow(m) {
+				continue // never configured — not a row (FR-029)
 			}
-			providerModels[providerName] = append(providerModels[providerName], m.ModelName)
+			providerName := m.Provider
+			if _, exists := seen[providerName]; !exists {
+				seen[providerName] = struct{}{}
+				providerOrder = append(providerOrder, providerName)
+				providerFirstRow[providerName] = m
+			}
+			if m.UpdatedAt != nil {
+				if cur := providerUpdatedAt[providerName]; cur == nil || m.UpdatedAt.After(*cur) {
+					providerUpdatedAt[providerName] = m.UpdatedAt
+				}
+			}
+			if providerAuthMethod[providerName] == "" && m.AuthMethod != "" {
+				providerAuthMethod[providerName] = m.AuthMethod
+			}
 			if len(m.Models) > 0 {
 				providerUserModels[providerName] = append(providerUserModels[providerName], m.Models...)
 			}
@@ -5862,48 +6114,24 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 		}
 		providers := make([]gen.Provider, 0, len(providerOrder))
 		for _, name := range providerOrder {
-			var models []string
-			var modelFetchWarning string
-			// A provider "has a live /models endpoint" when it maps to a known
-			// OpenAI-compatible base URL we can query (openrouter, openai, …).
-			// Providers with no known base (custom / unknown gateways) rely on the
-			// operator-supplied catalog slugs.
-			hasEndpoint := providers_pkg.GetDefaultAPIBase(name) != ""
-			// Try to fetch the full model list from the provider's upstream API.
-			if hasEndpoint {
-				if apiKey, ok := providerAPIKeys[name]; ok {
-					baseURL := providers_pkg.GetDefaultAPIBase(name)
-					if upstream, err := providers_pkg.FetchModels(
-						r.Context(),
-						baseURL,
-						apiKey,
-						a.ssrfChk(),
-					); err != nil {
-						slog.Warn("rest: failed to fetch upstream models", "provider", name, "error", err)
-						modelFetchWarning = fmt.Sprintf("could not fetch upstream model list: %v", err)
-					} else if len(
-						upstream,
-					) > 0 {
-						models = upstream
-					}
-				}
-			}
-			// Endpoint-less provider (or upstream fetch failed): use the operator's
-			// supplied catalog slugs as the catalog.
-			if models == nil {
-				if userModels := dedupeNonEmpty(providerUserModels[name]); len(userModels) > 0 {
-					models = userModels
-				}
-			}
-			// Final fallback: the configured default model alias(es). Provider.yaml
-			// requires models:array — nil marshals as null which fails Zod on the SPA.
-			if models == nil {
-				if configured, ok := providerModels[name]; ok && configured != nil {
-					models = configured
-				} else {
-					models = []string{}
-				}
-			}
+			// ADR-067 FR-020 (T067-10): the model list's source is decided
+			// by the row's locality, not by whether a vendor base URL is
+			// hardcoded anywhere. A `locality = cloud` row lists the
+			// CATALOG's models with no outbound call at all (US-9.AC1 —
+			// the list is instant and works offline); only a
+			// `locality = local` row is listed live, because nothing but
+			// that machine knows what has been pulled onto it (US-9.AC3).
+			src := a.resolveProviderRow(name, providerFirstRow[name])
+			models, modelFetchWarning := a.providerModelList(
+				r.Context(), name, src, providerAPIKeys[name], providerUserModels[name])
+			// "Has a live /models endpoint" means "the gateway fills this
+			// list, so the SPA must not present it as an editable slug
+			// list". A custom endpoint never qualifies — its catalogue IS
+			// the operator's slugs. APIBaseFor reads the process catalog,
+			// which the gateway installs from the very document
+			// resolveProviderRow read (providers.SetCatalog at boot), so
+			// the two agree on every real installation.
+			hasEndpoint := !src.custom && providers_pkg.APIBaseFor(name) != ""
 			// FR-104: report Connected only when the provider's API key resolves to
 			// a non-empty credential. providerAPIKeys is populated above for every
 			// provider that has either a resolvable api_key_ref or an inline api_key;
@@ -5912,115 +6140,192 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 			if _, hasKey := providerAPIKeys[name]; hasKey {
 				status = gen.ProviderStatusConnected
 			}
+			// ADR-068 FR-043 / ADR-067 FR-016: a configured row whose id the
+			// served catalog does not contain is unknown-provider, with the
+			// generic text parameterised by the operator's own id (the id is
+			// user data, not a trace — CRIT-003) and an empty model list
+			// (S67 Q4). Classified only when a catalog document is actually
+			// loaded, and never for a custom row — an operator-named
+			// endpoint is not in the catalog BY DESIGN (FR-035, X-13); an
+			// absent catalog (E7) never turns every row unknown.
+			var unknownProviderMsg string
+			if src.unknownProvider() {
+				status = gen.ProviderStatusUnknownProvider
+				unknownProviderMsg = fmt.Sprintf("unknown provider %q", name)
+				models = []string{}
+			}
+			// ADR-068 FR-034 (T068-14 gap fix): a configured sign_in row's
+			// real status/account_label, using ONLY the cheap local check —
+			// no vendor fan-out for a background list render. Skipped when
+			// unknown-provider already won above (nothing to look up for an
+			// id the catalog does not carry) — cheapSignInRowStatus's own
+			// doc comment covers why github-copilot never pays a premium
+			// request here.
+			//
+			// C1: skipped entirely for an ANONYMOUS caller. account_label is
+			// the operator's own vendor account identifier (Provider.yaml:
+			// "account identifier of the signed-in session") and must never
+			// reach an unauthenticated response — not redacted downstream,
+			// not fetched at all, so the anonymous path also stops touching
+			// the credential store to peek stored OAuth material.
+			var signInAccountLabel *string
+			if authed && unknownProviderMsg == "" && providerAuthMethod[name] == config.AuthMethodSignIn {
+				if signInState, label, known := a.cheapSignInRowStatus(name); known {
+					status = signInState
+					if label != "" {
+						labelCopy := label
+						signInAccountLabel = &labelCopy
+					}
+				}
+			}
+			// ADR-068 FR-009 (T068-15): a `github-copilot` row is backed by
+			// the vendor CLI, not an API key, so the key-derived status above
+			// says nothing useful about it. When the CLI is absent from this
+			// machine the row stays `disconnected` and carries the operator
+			// hint. Whether the operator is SIGNED IN is never computed by
+			// running the CLI here — that check costs a premium request, so
+			// it stays the explicit Check sign-in action's alone
+			// (cheapSignInRowStatus never reports "known" for a cli_login id
+			// other than codex-cli, github-copilot included).
+			copilotHint := copilotRowHint(name)
 			hasEndpointCopy := hasEndpoint
+			// ADR-068 T068-08: the row's auth method comes from the config row
+			// (closed set api_key | sign_in — Validate rejects anything else);
+			// api_key when unset. account_label is populated above when the
+			// cheap sign-in status check found a signed_in/expired session.
+			authMethod := gen.ProviderAuthMethodApiKey
+			if providerAuthMethod[name] == config.AuthMethodSignIn {
+				authMethod = gen.ProviderAuthMethodSignIn
+			}
 			p := gen.Provider{
 				Id:                name,
 				Name:              name,
 				Status:            status,
 				Models:            models,
 				HasModelsEndpoint: &hasEndpointCopy,
+				// ADR-068 FR-012 (T068-08): dependents/backs_default are
+				// advisory here; T068-09's DELETE recomputes them under
+				// configMu and its response is authoritative (MAJ-018).
+				AuthMethod:   authMethod,
+				AccountLabel: signInAccountLabel,
+				// C1: `dependents` names every agent that references this
+				// provider — the operator's roster. Provider.yaml requires
+				// the field, so an anonymous caller gets the empty array
+				// rather than a missing key: contract-valid, and it tells an
+				// unauthenticated reader nothing about who runs here.
+				Dependents:   anonRedactedDependents(authed, cfg, name),
+				BacksDefault: providerBacksDefault(cfg, name),
+				UpdatedAt:    providerUpdatedAt[name],
+				// ADR-067 identity fields (T067-10): the wire row now
+				// carries what the catalog says about it, so the SPA never
+				// has to re-derive protocol, locality or grouping.
+				Protocol: providerWireProtocol(src.protocol),
+				Locality: providerWireLocality(src.locality),
+			}
+			if src.custom {
+				customCopy := true
+				p.Custom = &customCopy
+			}
+			if src.known {
+				if company := src.row.Company; company != "" {
+					companyCopy := company
+					p.Company = &companyCopy
+				}
+				if display := src.row.Name; display != "" {
+					displayCopy := display
+					p.DisplayName = &displayCopy
+				}
+				p.CliKind = providerWireCLIKind(src.row.CLIKind)
 			}
 			if modelFetchWarning != "" {
 				p.Warning = &modelFetchWarning
 			}
-			// A credential-resolution failure worse than "not configured" (locked/
-			// undecryptable vault) is reported as status=error with the classified
-			// remediation message, instead of a plain "disconnected" indistinguishable
-			// from a provider that was never configured at all (Task 3 fix).
-			if status != gen.ProviderStatusConnected {
+			switch {
+			case unknownProviderMsg != "":
+				// unknown-provider wins over the credential-derived states: a
+				// key for a provider that does not exist is not "connected".
+				p.Error = &unknownProviderMsg
+			case status != gen.ProviderStatusConnected:
+				// A credential-resolution failure worse than "not configured"
+				// (locked/undecryptable vault) is reported as status=error with
+				// the classified remediation message, instead of a plain
+				// "disconnected" indistinguishable from a provider whose key was
+				// never entered (Task 3 fix).
 				if credErrMsg, ok := providerCredErrors[name]; ok {
 					p.Status = gen.ProviderStatusError
 					p.Error = &credErrMsg
+				} else if copilotHint != "" {
+					p.Error = &copilotHint
 				}
 			}
 			providers = append(providers, p)
 		}
-		if len(providers) == 0 {
-			falseVal := false
-			providers = append(providers, gen.Provider{
-				Id:                "default",
-				Name:              "Default",
-				Status:            gen.ProviderStatusDisconnected,
-				Models:            []string{},
-				HasModelsEndpoint: &falseVal,
-			})
-		}
+		// No configured provider → `[]`, never a synthetic "default" filler
+		// row (a fresh install has nothing to manage yet; the onboarding wizard
+		// creates the first row).
 		jsonOK(w, providers)
 
-	case r.Method == http.MethodGet && sub == "model-capabilities":
-		// GET /api/v1/providers/model-capabilities (D18) — flat list of
-		// {id, modalities} from the in-repo capability catalog
-		// (pkg/providers/capabilities), so the SPA can warn — client-side,
-		// non-blocking — before sending a vision attachment to a model that
-		// cannot see images. Model vision capability is not knowable
-		// client-side at all otherwise. The catalog is optional: a nil
-		// catalog (not yet constructed, e.g. degraded boot) returns an
-		// empty list, never a 500 — the reactive server-side capability
-		// gate (pkg/agent/media_present.go) remains the authoritative
-		// backstop regardless of what this endpoint returns.
-		var catalog *capabilities.Catalog
-		if a.agentLoop != nil {
-			catalog = a.agentLoop.GetCapabilityCatalog()
-		} else {
-			// NewAgentLoop always wires the embedded-seed catalog (loop.go
-			// ~:645), so a.agentLoop == nil is a genuine degraded-boot
-			// shape, never a normal path. The client's
-			// modelLacksImageCapability treats an ABSENT catalog entry as
-			// "assume it can" (FR-026's intentional optimistic default),
-			// so an empty [] response here is wire-identical to "the
-			// catalog legitimately has no entries" — a degraded boot
-			// would otherwise silently produce a blanket all-clear (no
-			// vision warnings for anyone) with zero server-side signal
-			// anywhere. Log it so the degraded state is observable; the
-			// response contract itself is unchanged (still [], never a
-			// 500 — this is an advisory endpoint).
-			slog.Warn("rest: model-capabilities requested with no AgentLoop wired — degraded boot, " +
-				"serving an empty catalog (client-side vision warnings will not fire for any model " +
-				"until this is resolved)")
-		}
-		capsOut := make([]gen.ModelCapabilities, 0)
-		if catalog != nil {
-			for _, snap := range catalog.Models() {
-				modalities := snap.Handle.InputModalities()
-				wireModalities := make([]gen.ModelCapabilitiesModalities, 0, len(modalities))
-				for _, m := range modalities {
-					// The INTERNAL Modality type is deliberately open —
-					// pkg/providers/capabilities/modality.go accepts any
-					// non-empty unknown value so an operator can seed a
-					// modality ("3d", "hologram") ahead of runtime support
-					// (asserted by TestParseSeed_AcceptsUnknownModalities).
-					// The WIRE enum is closed. Casting straight across put an
-					// out-of-enum value on the wire, and the SPA validates with
-					// z.array(z.enum(...)), which rejects the ENTIRE array on a
-					// single bad element — so one forward-compat modality
-					// anywhere in the catalog silently disabled the vision
-					// pre-send warning for EVERY model (both call sites swallow
-					// the failure to console.debug). Drop unrepresentable
-					// values instead: a model with ["text","3d"] correctly
-					// reports ["text"], which is exactly right for this
-					// endpoint's advisory purpose — it lacks "image", so the
-					// warning still fires.
-					wm := gen.ModelCapabilitiesModalities(m)
-					if !wm.Valid() {
-						continue
-					}
-					wireModalities = append(wireModalities, wm)
-				}
-				capsOut = append(capsOut, gen.ModelCapabilities{
-					Id:         snap.ID,
-					Modalities: wireModalities,
-				})
-			}
-		}
-		jsonOK(w, capsOut)
+	case r.Method == http.MethodDelete && isReservedProviderPathSegment(sub):
+		// DELETE on a reserved path segment ("catalog", "model-capabilities";
+		// "default-model" normally dispatches to its own route first) — the
+		// reserved literals are never provider ids, so there is nothing to
+		// delete: 404, per the MAJ-002 scenario rows.
+		jsonErr(w, http.StatusNotFound, "provider not found")
+
+	case r.Method == http.MethodDelete && sub != "" && !strings.Contains(sub, "/"):
+		// DELETE /api/v1/providers/{id} (T068-09, ADR-068 FR-010/FR-011,
+		// rest_providers_delete.go). The shared dispatcher is registered
+		// withOptionalAuth, so the verb carries its own authorization gate
+		// inline (FR-042/MAJ-007): requireAdminAuthz (RequireNotBypass →
+		// 503 under dev-mode bypass) here, and the unconditional 401 for an
+		// unauthenticated caller inside deleteProvider — no pre-onboarding
+		// exception.
+		providerID := sub
+		a.requireAdminAuthz(func(w http.ResponseWriter, r *http.Request) {
+			a.deleteProvider(w, r, providerID)
+		})(w, r)
 
 	case r.Method == http.MethodPut && sub != "" && !strings.HasSuffix(sub, "/test"):
+		// O5: rate limit FIRST, before any other work on this branch. FR-050
+		// keeps this route reachable with no credential while onboarding is
+		// incomplete (see requireAuthOutsideOnboarding below), and it is one
+		// of the most expensive requests the gateway serves — an outbound
+		// ValidateKey call, a config.json rewrite, and then
+		// triggerReloadAndWaitOutcome, which rebuilds the ENTIRE agent
+		// registry synchronously and holds the response until it confirms.
+		// With no ceiling at all, one anonymous client could keep a fresh
+		// install in permanent rebuild churn. The limiter is the only bound
+		// on that caller, so nothing may run ahead of it.
+		if !rateLimitAllows(w, r, providerConfigWriteLimiter) {
+			return
+		}
 		// PUT /api/v1/providers/{id} — update or insert a provider entry.
+		// Reserved path segments are never provider ids (MAJ-002): reject
+		// BEFORE auth-gating or decoding so no request shape can upsert a
+		// provider named "catalog" / "default-model" / "model-capabilities".
+		if isReservedProviderPathSegment(sub) {
+			jsonErrField(w, http.StatusBadRequest,
+				fmt.Sprintf("unknown provider %q", sub), "id")
+			return
+		}
+		// O16: reject an id containing a path separator BEFORE it can ever
+		// be written. DELETE /api/v1/providers/{id} only matches
+		// `!strings.Contains(sub, "/")` (see the MethodDelete case above),
+		// so a row this PUT let through with a "/" in its id — e.g.
+		// PUT /api/v1/providers/a/b, where sub == "a/b" — could be created
+		// but could never be routed to a DELETE again; the row became
+		// permanently stuck in config.json. validateEntityID also rejects
+		// ".." and NUL, both equally unwelcome in a value that ends up as a
+		// providers[].provider string and a "<id>_API_KEY" credential ref.
+		if err := validateEntityID(sub); err != nil || len(sub) > maxProviderIDLen {
+			jsonErrField(w, http.StatusBadRequest, "invalid provider id", "id")
+			return
+		}
 		// Allow unauthenticated access during onboarding so the wizard can
-		// configure the provider before the admin user exists.
-		onboardingDone := a.onboardingMgr != nil && a.onboardingMgr.IsComplete()
-		if onboardingDone && r.Context().Value(UserContextKey{}) == nil {
-			jsonErr(w, http.StatusUnauthorized, "authentication required")
+		// configure the provider before the admin user exists. M3: the window
+		// closes on an unknown onboarding state as well as a complete one —
+		// see preAuthOnboardingWindowOpen (rest_auth.go).
+		if !a.requireAuthOutsideOnboarding(w, r) {
 			return
 		}
 		// Re-auth gate (Spec-6 FR-12.2 / FR-6.6): a model/provider API-key mutation
@@ -6040,6 +6345,25 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 		if !decodeAndValidate(w, r, "ProviderUpdateRequest", &req, validateEnabled) {
 			return
 		}
+		// ADR-068 (T068-14 gap fix; contracts/components/schemas/
+		// ProviderUpdateRequest.yaml `auth_method`): sign_in is accepted only
+		// for a provider whose catalog row declares it, and must not be
+		// combined with api_key. Reuses signInMethodFor — the same helper
+		// the five sign-in routes gate on — so this PUT and POST
+		// .../sign-in never disagree about which providers support sign-in.
+		wantsSignIn := req.AuthMethod != nil && *req.AuthMethod == gen.ProviderUpdateRequestAuthMethodSignIn
+		if wantsSignIn {
+			if req.ApiKey != nil && *req.ApiKey != "" {
+				jsonErrField(w, http.StatusBadRequest,
+					"auth_method sign_in must not be combined with api_key", "auth_method")
+				return
+			}
+			if _, ok := a.signInMethodFor(providerID); !ok {
+				jsonErrField(w, http.StatusBadRequest,
+					"provider does not support sign-in", "auth_method")
+				return
+			}
+		}
 		// Bounds enforcement (M-slug): cap the model list inline so the limits
 		// hold even when schema validation is skipped (validate_inbound=false is
 		// the default). Mirrors the inline name/description caps in
@@ -6058,6 +6382,29 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
+		// ADR-067 FR-019 / FR-035 (T067-10): catalog admission. The id the
+		// operator typed is either a catalog row (accepted unless the
+		// catalog itself marks it unsupported, with the catalog's own
+		// reason), or an operator-named CUSTOM endpoint — accepted only
+		// when it carries both halves of what it takes to reach one, an
+		// api_base and one of the two protocols a base URL fully
+		// describes. Anything else is an unknown provider, and saying so
+		// here is the difference between an obvious 400 and a row that
+		// looks saved and never resolves a model.
+		reqAPIBase := derefStr(req.ApiBase)
+		reqProtocol := derefStr((*string)(req.Protocol))
+		isCustomRow, admitErr := providerAdmission(a.providerCatalog, providerID, reqAPIBase, reqProtocol)
+		if admitErr != nil {
+			field := "id"
+			if errors.Is(admitErr, providers_pkg.ErrUnknownProvider) && reqAPIBase != "" {
+				// The id is unknown AND a base was supplied: what is
+				// missing is the protocol, so point the SPA at that field.
+				field = "protocol"
+			}
+			jsonErrField(w, http.StatusBadRequest, admitErr.Error(), field)
+			return
+		}
+
 		// Check if the provider already exists.
 		cfg := a.agentLoop.GetConfig()
 		found := false
@@ -6065,15 +6412,17 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 			if m.IsVirtual() {
 				continue
 			}
-			pName := inferProviderName(m.Provider, m.Model)
-			if pName == providerID {
+			if strings.TrimSpace(m.Provider) == providerID {
 				found = true
 				break
 			}
 		}
 		if !found {
-			// New provider — api_key is required.
-			if req.ApiKey == nil || *req.ApiKey == "" {
+			// New provider — api_key is required, UNLESS the row
+			// authenticates via sign_in (T068-14 gap fix): a sign_in row has
+			// no key to give — its credential lives in the encrypted OAuth
+			// entry the sign-in handlers write, never here.
+			if !wantsSignIn && (req.ApiKey == nil || *req.ApiKey == "") {
 				jsonErr(w, http.StatusUnprocessableEntity, "api_key is required")
 				return
 			}
@@ -6106,19 +6455,23 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 					"credential store locked: set OMNIPUS_MASTER_KEY or unlock before saving secrets")
 				return
 			}
-			// Resolve the persisted api_base from the in-memory config.
-			var persistedAPIBase string
-			for _, m := range cfg.Providers {
-				if m.IsVirtual() {
-					continue
-				}
-				if inferProviderName(m.Provider, m.Model) == providerID {
-					persistedAPIBase = m.APIBase
-					break
+			// Resolve the base URL to probe: the api_base this very
+			// request supplies wins (a custom row has no other source),
+			// then the persisted one, then the catalog's.
+			persistedAPIBase := reqAPIBase
+			if persistedAPIBase == "" {
+				for _, m := range cfg.Providers {
+					if m.IsVirtual() {
+						continue
+					}
+					if strings.TrimSpace(m.Provider) == providerID {
+						persistedAPIBase = m.APIBase
+						break
+					}
 				}
 			}
 			if persistedAPIBase == "" {
-				persistedAPIBase = providers_pkg.GetDefaultAPIBase(providerID)
+				persistedAPIBase = providers_pkg.APIBaseFor(providerID)
 			}
 			// SSRF-check the persisted api_base before any outbound probe.
 			if persistedAPIBase != "" && a.ssrfChecker != nil {
@@ -6181,6 +6534,10 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 				userModelsJSON = []any{} // explicit clear
 			}
 		}
+		// ADR-068 MAJ-015: every PUT stamps the row's updated_at — the
+		// picker's Recent ordering key (Provider.updated_at).
+		putStamp := time.Now().UTC()
+		putStampStr := putStamp.Format(time.RFC3339)
 		if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
 			providerList, _ := m["providers"].([]any)
 			updated := false
@@ -6189,8 +6546,8 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 				if !ok {
 					continue
 				}
-				pName := inferProviderName(strVal(model, "provider"), strVal(model, "model"))
-				if pName == providerID {
+				if strings.TrimSpace(strVal(model, "provider")) == providerID {
+					model["updated_at"] = putStampStr
 					if req.ApiKey != nil && *req.ApiKey != "" {
 						model["api_key_ref"] = credRefName
 						delete(model, "api_key")
@@ -6207,6 +6564,14 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 						}
 					}
 					model["provider"] = providerID
+					// ADR-068 (T068-14 gap fix): persist the requested
+					// auth_method verbatim — the field this gap never wrote,
+					// which is why a signed-in ChatGPT session never
+					// materialized a provider row for GET /providers to show.
+					if req.AuthMethod != nil {
+						model["auth_method"] = string(*req.AuthMethod)
+					}
+					applyProviderIdentity(model, reqAPIBase, reqProtocol, isCustomRow)
 					updated = true
 					break
 				}
@@ -6218,14 +6583,20 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 					modelVal = *req.Model
 				}
 				newEntry := map[string]any{
-					"model_name":  providerID,
-					"provider":    providerID,
-					"model":       modelVal,
-					"api_key_ref": credRefName,
+					"provider":   providerID,
+					"model":      modelVal,
+					"updated_at": putStampStr,
+				}
+				if credRefName != "" {
+					newEntry["api_key_ref"] = credRefName
+				}
+				if req.AuthMethod != nil {
+					newEntry["auth_method"] = string(*req.AuthMethod)
 				}
 				if len(userModelsJSON) > 0 {
 					newEntry["models"] = userModelsJSON
 				}
+				applyProviderIdentity(newEntry, reqAPIBase, reqProtocol, isCustomRow)
 				m["providers"] = append(providerList, newEntry)
 			}
 			return nil
@@ -6233,6 +6604,14 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 			slog.Error("rest: save config for provider update", "error", err)
 			jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not save config: %v", err))
 			return
+		}
+		// ADR-067 FR-021 (T067-11): a PUT that CHANGED the key invalidates
+		// this provider's cached entitlement — what a different key can
+		// reach is a different fact. A PUT that only bumps updated_at (or
+		// edits the model list) is deliberately NOT an eviction: the key
+		// behind the cached answer is still the same key.
+		if keyChanged {
+			a.entitlements.evictProvider(providerID)
 		}
 		// Trigger reload AND WAIT for it (triggerReloadAndWaitOutcome, not a bare
 		// TriggerReload — mirrors createAgent/updateAgent/deleteAgent/
@@ -6265,7 +6644,10 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 			slog.Warn("rest: reload after provider update did not confirm within the poll window; "+
 				"agents may still be served by the stale cached provider client", "provider_id", providerID)
 		}
-		hasEndpoint := providers_pkg.GetDefaultAPIBase(providerID) != ""
+		// The saved row is a catalog row unless admission classified it as
+		// an operator-named custom endpoint (FR-035); a catalog row's list
+		// is filled by the gateway, a custom row's is the operator's own.
+		hasEndpoint := !isCustomRow && providers_pkg.IsCatalogProvider(providerID)
 		respModels := []string{}
 		if req.Models != nil {
 			respModels = dedupeNonEmpty(*req.Models)
@@ -6273,12 +6655,37 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 				respModels = []string{}
 			}
 		}
+		// ADR-068 (T068-14 gap fix): a sign_in row was not just given an
+		// api_key, so the api_key-flavoured "connected"/api_key defaults
+		// below would misreport it. Reuse the same cheap local check GET
+		// /providers uses (no vendor fan-out) — falls back to disconnected
+		// when the operator has not completed sign-in yet.
+		respStatus := gen.ProviderStatusConnected
+		respAuthMethod := gen.ProviderAuthMethodApiKey
+		if wantsSignIn {
+			respAuthMethod = gen.ProviderAuthMethodSignIn
+			respStatus = gen.ProviderStatusDisconnected
+			if state, _, known := a.cheapSignInRowStatus(providerID); known {
+				respStatus = state
+			}
+		}
 		providerResp := gen.Provider{
 			Id:                providerID,
 			Name:              providerID,
-			Status:            gen.ProviderStatusConnected,
+			Status:            respStatus,
 			Models:            respModels,
 			HasModelsEndpoint: &hasEndpoint,
+			AuthMethod:        respAuthMethod,
+			Dependents:        []gen.ProviderDependent{},
+			BacksDefault:      providerBacksDefault(a.agentLoop.GetConfig(), providerID),
+			UpdatedAt:         &putStamp,
+		}
+		if isCustomRow {
+			customCopy := true
+			providerResp.Custom = &customCopy
+		}
+		if p := providerWireProtocol(catalog.Protocol(reqProtocol)); p != nil {
+			providerResp.Protocol = p
 		}
 		// R-D step 7 / FR-011: attach validation for warning outcomes (NoCredit/Unreachable/Restricted).
 		// Valid outcome and key-absent PUTs carry no validation field.
@@ -6318,15 +6725,121 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 		}
 		jsonOK(w, providerResp)
 
-	case r.Method == http.MethodPost && strings.HasSuffix(sub, "/refresh-models"):
-		a.refreshProviderModels(w, r, strings.TrimSuffix(sub, "/refresh-models"))
+	case r.Method == http.MethodPost && strings.HasSuffix(sub, "/sign-in"),
+		r.Method == http.MethodGet && strings.HasSuffix(sub, "/sign-in/status"),
+		r.Method == http.MethodPost && strings.HasSuffix(sub, "/sign-in/poll"),
+		r.Method == http.MethodPost && sub == "openai-chatgpt/sign-in/import",
+		r.Method == http.MethodDelete && strings.HasSuffix(sub, "/sign-in"):
+		// ADR-068 FR-008/FR-009/FR-044/FR-047/FR-048 (§8b amendment,
+		// 2026-08-23; T068-14). FR-050: these five routes are reachable
+		// PRE-AUTH only while onboarding is incomplete (mirrors the /test
+		// handler's onboardingDone gate above, and CLAUDE.md's documented
+		// "Onboarding does NOT need bypass" list, which already covers
+		// bare /providers) — onboarding step 3 needs a working sign-in
+		// flow before any admin account exists to authenticate as. Once
+		// onboarding is complete these revert to the contract's normal
+		// adminWrap posture: 401 unauthenticated, 503 under dev-mode
+		// bypass.
+		//
+		// M3: the gate is requireAuthOutsideOnboarding, not a bare
+		// IsComplete() test. IsComplete() fails OPEN — onboarding.NewManager
+		// keeps OnboardingComplete=false on any load error and resets an
+		// unparseable state.json — so one corrupt file silently reopened all
+		// five of these routes, DELETE (destroys the OAuth grant) and import
+		// (writes the credential store) included, unauthenticated, on a
+		// long-onboarded instance. See preAuthOnboardingWindowOpen.
+		if !a.requireAuthOutsideOnboarding(w, r) {
+			return
+		}
+		a.requireAdminAuthz(func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			// github-copilot has its own CLI-status-aware handlers (T067-07/
+			// T068-15): a real state via one bounded Copilot CLI invocation,
+			// cost-aware about premium requests. Routed first so they win
+			// over the generic cli_login path below, which would otherwise
+			// also match github-copilot's routes (signInMethodFor classifies
+			// it cli_login) with only a hardcoded command string and no real
+			// status check.
+			case r.Method == http.MethodPost && sub == copilotProviderID+"/sign-in":
+				a.handleCopilotSignInStart(w, r)
+			case r.Method == http.MethodGet && sub == copilotProviderID+"/sign-in/status":
+				// Rate-limited for the same reason as the generic status
+				// route below — this one spawns a Copilot CLI process per
+				// call (see signInStatusLimiter's doc comment).
+				withRateLimit(signInStatusLimiter, a.handleCopilotSignInStatus)(w, r)
+			case r.Method == http.MethodPost && strings.HasSuffix(sub, "/sign-in/poll"):
+				// FR-044: no explicit rate-limit requirement, but a device-code
+				// dialog polls repeatedly by design — signInPollLimiter is a
+				// dedicated, more generous ceiling than start's (see its own
+				// doc comment in rest_auth.go).
+				withRateLimit(signInPollLimiter, func(w http.ResponseWriter, r *http.Request) {
+					a.handleProviderSignInPoll(w, r, strings.TrimSuffix(sub, "/sign-in/poll"))
+				})(w, r)
+			case r.Method == http.MethodPost && sub == "openai-chatgpt/sign-in/import":
+				// M2: this route was called BARE while its four FR-050
+				// siblings were all wrapped. Every call rewrites the whole
+				// encrypted credentials.json and re-registers every OAuth
+				// value with the sensitive-value replacer — see
+				// signInImportLimiter (rest_auth.go).
+				withRateLimit(signInImportLimiter, a.handleProviderSignInImport)(w, r)
+			case r.Method == http.MethodPost && strings.HasSuffix(sub, "/sign-in"):
+				// FR-008: "rate-limited like the auth endpoints". codex-cli,
+				// openai-chatgpt, and any other sign_in row land here —
+				// github-copilot is already routed above.
+				withRateLimit(signInStartLimiter, func(w http.ResponseWriter, r *http.Request) {
+					a.handleProviderSignInStart(w, r, strings.TrimSuffix(sub, "/sign-in"))
+				})(w, r)
+			case r.Method == http.MethodGet && strings.HasSuffix(sub, "/sign-in/status"):
+				// NOT read-only in the way the shape suggests: for a
+				// device_code provider this reaches the stored-OAuth token
+				// source, which refreshes against the vendor within 5
+				// minutes of expiry (FR-046). It needs a ceiling like its
+				// sibling routes — see signInStatusLimiter (rest_auth.go).
+				withRateLimit(signInStatusLimiter, func(w http.ResponseWriter, r *http.Request) {
+					a.handleProviderSignInStatus(w, r, strings.TrimSuffix(sub, "/sign-in/status"))
+				})(w, r)
+			case r.Method == http.MethodDelete && strings.HasSuffix(sub, "/sign-in"):
+				// FR-048 sign-out: harmless no-op (NotFound = success) for a
+				// cli_login provider like github-copilot, which never has a
+				// "<id>_OAUTH" entry to begin with — Omnipus never sees or
+				// stores its credential.
+				//
+				// M2: also previously bare. Not harmless in aggregate — each
+				// call nils the process-wide sensitive-data replacer cache,
+				// so the next scrub pays a full reflection walk of Config
+				// under a write lock. See signInSignOutLimiter (rest_auth.go).
+				withRateLimit(signInSignOutLimiter, func(w http.ResponseWriter, r *http.Request) {
+					a.handleProviderSignOut(w, r, strings.TrimSuffix(sub, "/sign-in"))
+				})(w, r)
+			}
+		})(w, r)
+
+	case r.Method == http.MethodPost && strings.HasSuffix(sub, "/entitlement"):
+		// POST /api/v1/providers/{id}/entitlement (ADR-067 FR-021, T067-11)
+		// — "Check with my account". One live listing call per protocol,
+		// intersected with the catalog and cached for the process. The
+		// retired POST /providers/{id}/refresh-models is NOT its ancestor:
+		// that route is gone entirely (T067-01/T067-10) and must not return.
+		//
+		// O3: unlike PUT and /test, this route has NO FR-050 pre-auth window —
+		// authentication is required unconditionally, and the rate limiter
+		// lives inside the handler. See handleProviderEntitlement.
+		a.handleProviderEntitlement(w, r, strings.TrimSuffix(sub, "/entitlement"))
 
 	case r.Method == http.MethodPost && strings.HasSuffix(sub, "/test"):
+		// O5: rate limit FIRST, for the same reason as the PUT branch — this
+		// route is pre-auth reachable and had no ceiling. Unlike the probe on
+		// /onboarding/probe-provider, which carries the caller's own key in
+		// the body, /test resolves the provider's STORED credential and spends
+		// one real upstream request with the OPERATOR's key, so an unbounded
+		// anonymous caller burns quota that is not theirs.
+		if !rateLimitAllows(w, r, providerTestLimiter) {
+			return
+		}
 		// POST /api/v1/providers/{id}/test — verify the provider has a valid API key.
-		// Allow unauthenticated access during onboarding (same reason as PUT above).
-		onboardingDone := a.onboardingMgr != nil && a.onboardingMgr.IsComplete()
-		if onboardingDone && r.Context().Value(UserContextKey{}) == nil {
-			jsonErr(w, http.StatusUnauthorized, "authentication required")
+		// Allow unauthenticated access during onboarding (same reason as PUT
+		// above, and the same M3 fail-closed window).
+		if !a.requireAuthOutsideOnboarding(w, r) {
 			return
 		}
 		// Read from disk directly to avoid stale in-memory config after async reload.
@@ -6360,8 +6873,7 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 			if !ok {
 				continue
 			}
-			pName := inferProviderName(strVal(modelMap, "provider"), strVal(modelMap, "model"))
-			if pName == providerID {
+			if strings.TrimSpace(strVal(modelMap, "provider")) == providerID {
 				found = true
 				// Capture the provider entry's configured api_base (config.go
 				// `json:"api_base"`). Preferred over the vendor default so a
@@ -6422,7 +6934,7 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 		// (fix #3).
 		baseURL := configuredAPIBase
 		if baseURL == "" {
-			baseURL = providers_pkg.GetDefaultAPIBase(providerID)
+			baseURL = providers_pkg.APIBaseFor(providerID)
 		}
 		if baseURL == "" {
 			// Neither a configured api_base nor a known vendor default — the probe
@@ -6447,9 +6959,18 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		if firstModel == "" {
-			// No model to probe with — the auth call cannot run. Make the skip
-			// observable instead of silently returning success (fix #4).
+		if firstModel == "" && providers_pkg.DefaultProbeModel(providerID) == "" {
+			// No model to probe with ANYWHERE — neither the operator's config
+			// nor the registry catalog offers one, so the auth call cannot
+			// run. Make the skip observable instead of silently returning
+			// success (fix #4).
+			//
+			// ADR-067 FR-022 (T067-12): a configured model is no longer a
+			// precondition. The probe model comes from the CATALOG — the first
+			// active, tool-calling text model of that row in document order —
+			// so a catalog provider whose entry lists no slugs is still fully
+			// verified. Requiring one here used to turn "I have not picked a
+			// model yet" into "your key is fine", untested.
 			slog.Warn("rest: provider test: provider has no model to probe; API key not verified",
 				"provider", providerID)
 			jsonOK(w, gen.OperationResult{Success: true})
@@ -6515,123 +7036,6 @@ func dedupeNonEmpty(in []string) []string {
 		out = append(out, s)
 	}
 	return out
-}
-
-// refreshProviderModels handles POST /api/v1/providers/{id}/refresh-models. For a
-// provider WITH a live /models endpoint it re-fetches the upstream catalog and
-// returns the refreshed Provider. For an endpoint-less provider it returns the
-// stored operator-supplied catalog (nothing to refresh). Requires the provider
-// to be configured (404 otherwise) and an API key to query upstream.
-func (a *restAPI) refreshProviderModels(w http.ResponseWriter, r *http.Request, providerID string) {
-	// Auth: post-onboarding requires an authenticated user (same gate as PUT).
-	onboardingDone := a.onboardingMgr != nil && a.onboardingMgr.IsComplete()
-	if onboardingDone && r.Context().Value(UserContextKey{}) == nil {
-		jsonErr(w, http.StatusUnauthorized, "authentication required")
-		return
-	}
-	if err := validateEntityID(providerID); err != nil {
-		jsonErr(w, http.StatusBadRequest, "invalid provider id")
-		return
-	}
-
-	cfg := a.agentLoop.GetConfig()
-	var (
-		found       bool
-		apiKey      string
-		userModels  []string
-		defaultName string
-		// credResolveErr captures a resolveCredentialRef failure when the provider
-		// entry references an api_key_ref that the credential vault could NOT
-		// resolve. This is distinct from "no key configured" and must surface a
-		// different, actionable message that depends on WHY resolution failed —
-		// see describeCredentialResolutionError, same distinction HandleProviders'
-		// test sub-path makes (~rest.go:5618).
-		credResolveErr error
-	)
-	for _, m := range cfg.Providers {
-		if m.IsVirtual() {
-			continue
-		}
-		if inferProviderName(m.Provider, m.Model) != providerID {
-			continue
-		}
-		found = true
-		if defaultName == "" {
-			defaultName = m.ModelName
-		}
-		if len(m.Models) > 0 {
-			userModels = append(userModels, m.Models...)
-		}
-		if apiKey == "" {
-			resolved := m.APIKey()
-			if resolved == "" && m.APIKeyRef != "" {
-				if v, err := a.resolveCredentialRef(m.APIKeyRef); err != nil {
-					// A ref is present but could not be resolved — do NOT fall
-					// through to "no API key configured" (misleading). The exact
-					// remediation depends on WHY it failed; see
-					// describeCredentialResolutionError below.
-					slog.Warn("rest: refresh-models: credential resolve failed", "ref", m.APIKeyRef, "error", err)
-					credResolveErr = err
-				} else {
-					resolved = v
-				}
-			}
-			apiKey = resolved
-		}
-	}
-	if !found {
-		jsonErr(w, http.StatusNotFound, fmt.Sprintf("provider %q not configured", providerID))
-		return
-	}
-
-	hasEndpoint := providers_pkg.GetDefaultAPIBase(providerID) != ""
-	status := gen.ProviderStatusDisconnected
-	if apiKey != "" {
-		status = gen.ProviderStatusConnected
-	}
-
-	var models []string
-	var warning string
-	if hasEndpoint {
-		if apiKey == "" {
-			if credResolveErr != nil {
-				jsonErr(w, http.StatusUnprocessableEntity, describeCredentialResolutionError(credResolveErr))
-				return
-			}
-			jsonErr(w, http.StatusUnprocessableEntity, "no API key configured for this provider")
-			return
-		}
-		baseURL := providers_pkg.GetDefaultAPIBase(providerID)
-		upstream, err := providers_pkg.FetchModels(r.Context(), baseURL, apiKey, a.ssrfChk())
-		if err != nil {
-			slog.Warn("rest: refresh-models: upstream fetch failed", "provider", providerID, "error", err)
-			warning = fmt.Sprintf("could not fetch upstream model list: %v", err)
-		} else {
-			models = upstream
-		}
-	}
-	// Endpoint-less (or upstream failed): return the stored operator catalog.
-	if models == nil {
-		if um := dedupeNonEmpty(userModels); len(um) > 0 {
-			models = um
-		} else if defaultName != "" {
-			models = []string{defaultName}
-		} else {
-			models = []string{}
-		}
-	}
-
-	resp := gen.Provider{
-		Id:                providerID,
-		Name:              providerID,
-		Status:            status,
-		Models:            models,
-		HasModelsEndpoint: &hasEndpoint,
-	}
-	if warning != "" {
-		resp.Warning = &warning
-	}
-	jsonOK(w, resp)
 }
 
 // --- MCP Servers ---

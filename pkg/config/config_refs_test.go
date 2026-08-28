@@ -360,7 +360,7 @@ func TestChannelConfig_AllRefsRoundTrip(t *testing.T) {
 			name: "provider/api_key_ref",
 			setup: func(c *Config) {
 				c.Providers = []*ModelConfig{
-					{ModelName: "test-model", Model: "openai/gpt-4o", APIKeyRef: "OPENAI_TEST_KEY"},
+					{Provider: "openai", Model: "gpt-4.1", APIKeyRef: "OPENAI_TEST_KEY"},
 				}
 			},
 			verify: func(t *testing.T, c *Config) {

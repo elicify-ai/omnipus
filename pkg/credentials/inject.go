@@ -124,19 +124,19 @@ func InjectFromConfig(cfg *config.Config, store *Store) []error {
 		value, err := store.Get(ref)
 		if err != nil {
 			errs = append(errs, &CredentialRefError{
-				Scope: ScopeProvider, Owner: model.ModelName, Ref: ref, Op: opResolve, Err: err,
+				Scope: ScopeProvider, Owner: model.Provider, Ref: ref, Op: opResolve, Err: err,
 			})
 			continue
 		}
 
 		if err := os.Setenv(ref, value); err != nil {
 			errs = append(errs, &CredentialRefError{
-				Scope: ScopeProvider, Owner: model.ModelName, Ref: ref, Op: opSetEnv, Err: err,
+				Scope: ScopeProvider, Owner: model.Provider, Ref: ref, Op: opSetEnv, Err: err,
 			})
 			continue
 		}
 		injected[ref] = true
-		slog.Debug("credentials: injected", "ref", ref, "provider", model.ModelName)
+		slog.Debug("credentials: injected", "ref", ref, "provider", model.Provider)
 	}
 
 	// Mailbox passwords (M11): email is a TOOL surface, and the per-(agent,

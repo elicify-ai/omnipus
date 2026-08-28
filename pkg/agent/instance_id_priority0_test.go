@@ -55,7 +55,7 @@ func TestInstanceID_DrivesPriority0_EndToEnd_StampedVsTypeKey(t *testing.T) {
 
 	cfg := &config.Config{}
 	cfg.Agents.Defaults.Home = filepath.Join(home, "default-workspace")
-	cfg.Agents.Defaults.ModelName = "test-model"
+	cfg.Agents.Defaults.DefaultModel = config.DefaultModel{Model: "test-model"}
 	cfg.Agents.List = []config.AgentConfig{
 		{ID: "mia", Default: true},
 		{ID: "ray"},

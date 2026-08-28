@@ -20,10 +20,10 @@ func TestFallbackModels_LegacyString_NormalizedToObject(t *testing.T) {
 	cfg := &Config{
 		Providers: []*ModelConfig{
 			{
-				ModelName: "glm-5.2",
-				Model:     "z-ai/glm-5.2",
-				Provider:  "openrouter",
-				APIBase:   "https://openrouter.ai/api/v1",
+				Name:     "glm-5.2",
+				Model:    "z-ai/glm-5.2",
+				Provider: "openrouter",
+				APIBase:  "https://openrouter.ai/api/v1",
 			},
 		},
 	}
@@ -63,10 +63,10 @@ func TestFallbackModels_NewObjectUnchanged_SurvivesNormalize(t *testing.T) {
 	cfg := &Config{
 		Providers: []*ModelConfig{
 			{
-				ModelName: "glm-5.2",
-				Model:     "z-ai/glm-5.2",
-				Provider:  "openrouter",
-				APIBase:   "https://openrouter.ai/api/v1",
+				Name:     "glm-5.2",
+				Model:    "z-ai/glm-5.2",
+				Provider: "openrouter",
+				APIBase:  "https://openrouter.ai/api/v1",
 			},
 		},
 	}
@@ -104,10 +104,10 @@ func TestFallbackModels_BothFormsOrdered_NormalizedInPlace(t *testing.T) {
 	cfg := &Config{
 		Providers: []*ModelConfig{
 			{
-				ModelName: "glm-5.2",
-				Model:     "z-ai/glm-5.2",
-				Provider:  "openrouter",
-				APIBase:   "https://openrouter.ai/api/v1",
+				Name:     "glm-5.2",
+				Model:    "z-ai/glm-5.2",
+				Provider: "openrouter",
+				APIBase:  "https://openrouter.ai/api/v1",
 			},
 		},
 	}
@@ -183,10 +183,10 @@ func TestNormalizeFallbacks_EmptyAndPassThrough(t *testing.T) {
 	cfg := &Config{
 		Providers: []*ModelConfig{
 			{
-				ModelName: "glm-5.2",
-				Model:     "z-ai/glm-5.2",
-				Provider:  "openrouter",
-				APIBase:   "https://openrouter.ai/api/v1",
+				Name:     "glm-5.2",
+				Model:    "z-ai/glm-5.2",
+				Provider: "openrouter",
+				APIBase:  "https://openrouter.ai/api/v1",
 			},
 		},
 	}
@@ -230,18 +230,19 @@ func TestFallbackModels_UnmarshalAbsentField(t *testing.T) {
 }
 
 // TestFallbackModels_UnmarshalExactMatchProvider resolves a legacy string
-// whose slug exactly matches a configured provider's ModelName or Model
-// field. Resolution must use that provider, NOT a passthrough.
+// whose slug exactly matches a configured provider's Model field.
+// Resolution must use that provider, NOT a passthrough. The display-alias
+// rung is gone with ModelConfig.ModelName (ADR-067 X-25), so the ONLY thing
+// a bare slug can match is what the row actually serves.
 //
 // Traces to: Dataset 2 row 3 ("claude-sonnet-4.6" with anthropic provider).
 func TestFallbackModels_UnmarshalExactMatchProvider(t *testing.T) {
 	cfg := &Config{
 		Providers: []*ModelConfig{
 			{
-				ModelName: "claude-sonnet-4.6",
-				Model:     "anthropic/claude-sonnet-4.6",
-				Provider:  "anthropic",
-				APIBase:   "https://api.anthropic.com",
+				Name:     "claude-sonnet-4.6",
+				Model:    "claude-sonnet-4.6",
+				Provider: "anthropic",
 			},
 		},
 	}

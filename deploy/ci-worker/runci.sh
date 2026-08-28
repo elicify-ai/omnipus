@@ -135,7 +135,19 @@ run_lint() {
   bash scripts/check-no-handwritten-wire-types.sh || return 1
   bash scripts/check-no-tool-error-from-status.sh || return 1
   # ADR-061 regression guard: the deleted JPEG screencast path must not return.
-  bash scripts/check-no-jpeg-screencast.sh
+  bash scripts/check-no-jpeg-screencast.sh || return 1
+  # ADR-067 SC-008/SC-009/US-11.AC2 regression guard: no alias, migration or
+  # deprecation machinery in pkg/providers or pkg/config, no folded-away
+  # capabilities package, no bundled SPA catalog. Same reasoning as the guards
+  # above: pr.yml runs it in its own step, so omitting it here lets the worker
+  # report a green lint while GitHub's is red. Self-test first (a guard that
+  # cannot fail is no guard — docs/internal/false-green-patterns.md).
+  bash scripts/check-greenfield-providers.sh --self-test || return 1
+  bash scripts/check-greenfield-providers.sh || return 1
+  # ADR-068 §2.4 regression guard: antigravity / claude-cli / OpenAI device-code
+  # flow leave no trace. Self-check first (a guard that cannot fail is no guard).
+  bash scripts/check-no-removed-providers-selfcheck.sh || return 1
+  bash scripts/check-no-removed-providers.sh
 }
 # Full suite with a flake filter: a package that fails the contended full run but passes when
 # re-run isolated (-p 1) is a timing flake → not a real failure. Fails both = real.
@@ -523,17 +535,25 @@ _e2e_run_shard() {
   # Canonical e2e config with THIS shard's port. Each shard has its own credentials.json
   # under $home, so the shared api_key_ref name ("OPENROUTER_API_KEY") resolves to this
   # shard's key value (seeded next). See pr.yml "Seed gateway config" for the rationale
-  # behind dev_mode_bypass / audit_log / the model_name alias.
+  # behind dev_mode_bypass / audit_log.
+  #
+  # C1 fix (ADR-067 FR-034): providers[] rows are keyed by the EXACT (provider, model)
+  # pair — `provider` is the catalog id ("openrouter"), `model` is the BARE catalog
+  # model id ("z-ai/glm-5.2"). The old "<protocol>/<model>" prefix-splitting migration
+  # was deleted deliberately (it silently mis-routed vendors), so a row with an empty
+  # `provider` now fails ModelConfig.Validate ("provider is required") instead of being
+  # guessed. agents.defaults.default_model is the (provider, model) pair — the retired
+  # model_name alias is gone (ADR-068 CRIT-001).
   cat > "$home/config.json" <<EOF
 {
   "version": 1,
   "gateway": { "port": $port, "dev_mode_bypass": true },
   "sandbox": { "audit_log": true, "tool_policies": { "spawn": "allow" } },
-  "agents": { "defaults": { "model_name": "openrouter-glm", "auto_recap_enabled": true } },
+  "agents": { "defaults": { "default_model": { "provider": "openrouter", "model": "z-ai/glm-5.2" }, "auto_recap_enabled": true } },
   "providers": [
     {
-      "model_name": "openrouter-glm",
-      "model": "openrouter/z-ai/glm-5.2",
+      "provider": "openrouter",
+      "model": "z-ai/glm-5.2",
       "api_base": "https://openrouter.ai/api/v1",
       "api_key_ref": "OPENROUTER_API_KEY"
     }
@@ -568,7 +588,7 @@ EOF
   # Onboarding must pass the REAL key — the handler appends a second provider entry the
   # agent's model lookup then picks; a placeholder would 401 every LLM call.
   jq -n --arg key "$key" \
-    '{provider:{id:"openrouter",api_key:$key,model:"openrouter/z-ai/glm-5.2"},admin:{username:"admin",password:"admin123"}}' \
+    '{provider:{auth_method:"api_key",id:"openrouter",api_key:$key,model:"z-ai/glm-5.2"},admin:{username:"admin",password:"admin123"}}' \
     | curl -sf -X POST "http://localhost:$port/api/v1/onboarding/complete" \
         -H 'Content-Type: application/json' -d @- >/dev/null \
     || { echo "[$name] onboarding failed" >&2; cat "$logf" >&2; return 1; }

@@ -52,9 +52,9 @@ func newOrphanTestAgentLoop(t *testing.T) (*AgentLoop, string) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      tmpDir,
-				ModelName: "orphan-watch-test-model",
-				MaxTokens: 4096,
+				Home:         tmpDir,
+				DefaultModel: config.DefaultModel{Model: "orphan-watch-test-model"},
+				MaxTokens:    4096,
 			},
 			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
@@ -581,9 +581,9 @@ func TestOrphanWatch_Close_StopsTimerAndNeverReaps(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      tmpDir,
-				ModelName: "orphan-watch-close-test",
-				MaxTokens: 4096,
+				Home:         tmpDir,
+				DefaultModel: config.DefaultModel{Model: "orphan-watch-close-test"},
+				MaxTokens:    4096,
 			},
 			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},

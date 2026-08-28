@@ -1,0 +1,17 @@
+title: ContextWindowSource
+description: >
+  Which rung of the ADR-066 D2 resolution ladder produced an effective
+  context window. Owned by ADR-066; $ref'd by Agent.context_window_source,
+  DefaultModel.window_source and CatalogModel.window_source — never an
+  inline enum anywhere else (cross-spec X-06).
+  "operator" = a per-agent, per-(provider, model) or global operator override
+  (ContextSettings); "live" = the provider's own limits endpoint (cached 24 h);
+  "catalog" = the registry-fed providers catalog (ADR-067); "floor" = the
+  conservative cloud floor applied when nothing else knew the window (WARN
+  logged). There is no "learned" value (ADR-066 D8 was not adopted).
+type: string
+enum:
+  - operator
+  - live
+  - catalog
+  - floor

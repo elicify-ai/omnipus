@@ -19,7 +19,7 @@ func TestResolveMessageRoute_ExplicitAgentIDOverridesHandoffOverride(t *testing.
 
 	cfg := &config.Config{}
 	cfg.Agents.Defaults.Home = filepath.Join(home, "default-workspace")
-	cfg.Agents.Defaults.ModelName = "test-model"
+	cfg.Agents.Defaults.DefaultModel = config.DefaultModel{Model: "test-model"}
 
 	msgBus := bus.NewMessageBus()
 	al := mustNewAgentLoop(t, cfg, msgBus, &mockProvider{})
@@ -75,7 +75,7 @@ func TestResolveMessageRoute_HandoffOverrideStillAppliesWhenNoExplicitAgentID(t 
 
 	cfg := &config.Config{}
 	cfg.Agents.Defaults.Home = filepath.Join(home, "default-workspace")
-	cfg.Agents.Defaults.ModelName = "test-model"
+	cfg.Agents.Defaults.DefaultModel = config.DefaultModel{Model: "test-model"}
 
 	msgBus := bus.NewMessageBus()
 	al := mustNewAgentLoop(t, cfg, msgBus, &mockProvider{})
@@ -126,7 +126,7 @@ func TestResolveMessageRoute_ChannelHandoffOverride_RoutesByChatScope(t *testing
 
 	cfg := &config.Config{}
 	cfg.Agents.Defaults.Home = filepath.Join(home, "default-workspace")
-	cfg.Agents.Defaults.ModelName = "test-model"
+	cfg.Agents.Defaults.DefaultModel = config.DefaultModel{Model: "test-model"}
 
 	msgBus := bus.NewMessageBus()
 	al := mustNewAgentLoop(t, cfg, msgBus, &mockProvider{})

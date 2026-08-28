@@ -1,0 +1,29 @@
+title: EntitlementResponse
+description: >
+  Response of POST /api/v1/providers/{id}/entitlement (ADR-067 FR-021,
+  ADR-068 "Check with my account"): the catalog list for the provider
+  annotated with entitlement (entitled true/false, limits "known") plus any
+  models the provider returned that the catalog lacks (limits "unknown").
+  Cached for the gateway process keyed by SHA-256(providerID + ":" +
+  credentialRefName) — the ref name, never the secret — and evicted on
+  provider DELETE, on a key-changing PUT and on catalog refresh.
+type: object
+required:
+  - models
+  - checked_at
+  - cached
+additionalProperties: false
+properties:
+  models:
+    type: array
+    items:
+      $ref: './EntitlementModel.yaml'
+  checked_at:
+    type: string
+    format: date-time
+    description: When the live listing call was made (the cached result keeps the original time).
+    example: "2026-08-22T10:15:00Z"
+  cached:
+    type: boolean
+    description: True when served from the process cache without a new upstream call.
+    example: false

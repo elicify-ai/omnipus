@@ -18,6 +18,8 @@ additionalProperties: false
 #   config     — an operator-fixable setting (credentials, workspace membership).
 #   ambiguous  — could be either side; the copy must say where to look.
 #   unknown    — genuinely unclassified.
+#   user       — the user ended the turn themselves (Stop button, shutdown).
+#                Rendered as a neutral notice, never an error toast (ADR-066 D7).
 x-user-message-attributions:
   - model
   - provider
@@ -25,6 +27,7 @@ x-user-message-attributions:
   - config
   - ambiguous
   - unknown
+  - user
 # ── User-facing copy catalogue (SINGLE SOURCE OF TRUTH) ──────────────────────
 # Every enum value below MUST appear here exactly once, with a non-empty message
 # and an attribution drawn from x-user-message-attributions. Both generators
@@ -86,6 +89,34 @@ x-user-messages:
   model_unavailable:
     message: "The model you picked isn’t available for this turn, so this reply used the previous model. Check the model in Settings."
     attribution: config
+  needs_provider:
+    # ADR-068 FR-046 (2026-08-23 §8b, T068-32): the first real producer of
+    # this code is a device-code provider (openai-chatgpt, xai) whose stored
+    # sign-in could not be refreshed — copy and attribution are FR-046's,
+    # not provider-specific, since the same closure and code serve every
+    # device-code provider. attribution is deliberately `user` here (a
+    # routine re-auth prompt, not an operator setup gap) — NOTE for whoever
+    # wires an ADR-067 "no provider configured at all" pre-turn producer for
+    # this same code later: that scenario reads as `config`, not `user`; the
+    # two have not been reconciled and may need a distinct code instead of
+    # sharing this one.
+    message: "Your sign-in for this provider expired. Sign in again under Settings → Providers."
+    attribution: user
+  model_unassigned:
+    message: "This agent has no model. Pick one in the agent's settings."
+    attribution: config
+  turn_canceled:
+    message: "This turn was stopped before it finished."
+    attribution: user
+  turn_timed_out:
+    message: "The model provider didn’t finish this turn in time, so it was stopped. Retry — if it keeps happening, open Verbose chat for details."
+    attribution: provider
+  context_unrecoverable:
+    message: "We couldn’t fit this turn into the model’s context even after clearing older tool results — that’s a bug on our side, not yours. Start a new session, or open Verbose chat for technical details."
+    attribution: product
+  context_window_unknown:
+    message: "This endpoint did not report a context length for this model. Set it under Settings → Models → Model overrides → Context length."
+    attribution: config
   unknown:
     message: "This turn didn’t finish, and we can’t tell why. Retry — if it keeps happening, open Verbose chat for details, or try a different model."
     attribution: unknown
@@ -106,6 +137,12 @@ properties:
       - agent_not_configured
       - workspace_unavailable
       - model_unavailable
+      - needs_provider
+      - model_unassigned
+      - turn_canceled
+      - turn_timed_out
+      - context_unrecoverable
+      - context_window_unknown
       - unknown
   message:
     type: string

@@ -34,7 +34,9 @@ func (recallConversationMeta) Description() string {
 		"Use this when the user refers to something discussed earlier that you can no longer see " +
 		"above. Find it by keyword (query), by turn numbers (turn_range, e.g. \"5-10\"), or by time. " +
 		"The matching earlier exchanges are brought back so you can read and reference them. " +
-		"Provide exactly one of query, turn_range, or time. " +
+		"To retrieve one capped or emptied TOOL RESULT verbatim, pass the tool_call_id a " +
+		"[capped]/[emptied] mark cites; large results come back one page at a time (offset/length). " +
+		"Provide exactly one of query, turn_range, time, or tool_call_id. " +
 		"Note: to find facts saved across DIFFERENT conversations, use recall_memory instead."
 }
 
@@ -63,6 +65,32 @@ func (recallConversationMeta) Parameters() map[string]any {
 						"description": "End of the time window (Unix seconds or RFC3339). 0 = now.",
 					},
 				},
+			},
+			"tool_call_id": map[string]any{
+				"type": "string",
+				"description": "Bring back one archived tool result by the tool_call_id a " +
+					"[capped]/[emptied] mark cites. Returns one page of the result; the page " +
+					"framing states the total size and the next offset when more remains.",
+			},
+			"max_results": map[string]any{
+				"type": "integer",
+				"description": "Only with query, turn_range or time: the maximum number of turns to " +
+					"bring back (must be >= 1). It only narrows the built-in bound, never widens it.",
+			},
+			"archive_line": map[string]any{
+				"type": "integer",
+				"description": "Only with tool_call_id: the zero-based archive line the mark cites, " +
+					"to disambiguate duplicate ids. When omitted, the most recent line wins.",
+			},
+			"offset": map[string]any{
+				"type": "integer",
+				"description": "Only with tool_call_id: page start in characters into the full " +
+					"result (default 0). Use the next offset the previous page's framing stated.",
+			},
+			"length": map[string]any{
+				"type": "integer",
+				"description": "Only with tool_call_id: page size in characters (min 1); values " +
+					"above the page maximum are clamped to it.",
 			},
 		},
 	}

@@ -15,7 +15,6 @@
         "max_concurrent": 0,
         "max_depth": 0
       },
-      "summarize_token_percent": 0,
       "tool_feedback": {
         "enabled": false,
         "max_args_length": 0

@@ -331,14 +331,9 @@ func assembleBPFMode(blockedNrs []uint32, mode Mode) []unix.SockFilter {
 		remaining := n - i // instructions left after this one before allow
 		prog = append(prog, unix.SockFilter{
 			Code: uint16(bpfJMP | bpfJEQ | bpfK),
-			// Jumps to deny, skipping the remaining JEQs plus the allow.
-			// #nosec G115 -- bounds-checked above: remaining <= n, and assembleBPFMode
-			// returns early with an empty program unless n <= maxBPFJump (255), the
-			// classic-BPF Jt width. A #nosec placed AFTER another trailing comment on
-			// the same line is not seen by gosec — it must be the line's own comment.
-			Jt: uint8(remaining),
-			Jf: 0, // fall through to next JEQ
-			K:  nr,
+			Jt:   uint8(remaining), // #nosec G115 -- jump to deny (skip remaining JEQs + allow); bounds-checked above: remaining <= n, and assembleBPFMode returns early (empty program) unless n <= maxBPFJump (255), the classic-BPF Jt width. The marker must lead the comment: gosec only honours #nosec when it is the first thing in the comment text.
+			Jf:   0,                // fall through to next JEQ
+			K:    nr,
 		})
 	}
 

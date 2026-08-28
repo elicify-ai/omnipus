@@ -92,8 +92,9 @@ func TestSpawnSubTurn_ToolCallTimeHardAbort_RecordsCancelledNotSuccess(t *testin
 	const toolName = "m4_slow_bash"
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Provider: "mock", Home: t.TempDir(), ModelName: "m4-hardabort-mock"},
-			List:     []config.AgentConfig{{ID: "mia"}},
+			Defaults: config.AgentDefaults{
+				Home: t.TempDir(), DefaultModel: config.DefaultModel{Provider: "mock", Model: "m4-hardabort-mock"}},
+			List: []config.AgentConfig{{ID: "mia"}},
 		},
 	}
 	msgBus := bus.NewMessageBus()

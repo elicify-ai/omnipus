@@ -61,9 +61,9 @@ func newTestRestAPIWithHomeAuth(t *testing.T) *restAPI {
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      tmpDir,
-				ModelName: "test-model",
-				MaxTokens: 4096,
+				Home:         tmpDir,
+				DefaultModel: config.DefaultModel{Model: "test-model"},
+				MaxTokens:    4096,
 			},
 		},
 	}
@@ -100,9 +100,9 @@ func TestHandleLogin_Success(t *testing.T) {
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      tmpDir,
-				ModelName: "test-model",
-				MaxTokens: 4096,
+				Home:         tmpDir,
+				DefaultModel: config.DefaultModel{Model: "test-model"},
+				MaxTokens:    4096,
 			},
 		},
 	}
@@ -153,9 +153,9 @@ func newRestAPIWithSingleUser(t *testing.T, username, passwordHash string) *rest
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      tmpDir,
-				ModelName: "test-model",
-				MaxTokens: 4096,
+				Home:         tmpDir,
+				DefaultModel: config.DefaultModel{Model: "test-model"},
+				MaxTokens:    4096,
 			},
 		},
 	}
@@ -294,9 +294,9 @@ func TestHandleLogin_DifferentInputProducesDifferentToken(t *testing.T) {
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      tmpDir,
-				ModelName: "test-model",
-				MaxTokens: 4096,
+				Home:         tmpDir,
+				DefaultModel: config.DefaultModel{Model: "test-model"},
+				MaxTokens:    4096,
 			},
 		},
 	}
@@ -355,9 +355,9 @@ func TestHandleLogin_ConcurrentRequests(t *testing.T) {
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      tmpDir,
-				ModelName: "test-model",
-				MaxTokens: 4096,
+				Home:         tmpDir,
+				DefaultModel: config.DefaultModel{Model: "test-model"},
+				MaxTokens:    4096,
 			},
 		},
 	}
@@ -410,9 +410,9 @@ func TestHandleValidateToken_ValidToken(t *testing.T) {
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      tmpDir,
-				ModelName: "test-model",
-				MaxTokens: 4096,
+				Home:         tmpDir,
+				DefaultModel: config.DefaultModel{Model: "test-model"},
+				MaxTokens:    4096,
 			},
 		},
 	}
@@ -554,9 +554,9 @@ func TestHandleLogin_RateLimitBlocksAtLimit(t *testing.T) {
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      tmpDir,
-				ModelName: "test-model",
-				MaxTokens: 4096,
+				Home:         tmpDir,
+				DefaultModel: config.DefaultModel{Model: "test-model"},
+				MaxTokens:    4096,
 			},
 		},
 	}
@@ -625,9 +625,9 @@ func TestHandleLogin_SpoofedXFFDoesNotBypassLoginRateLimit(t *testing.T) {
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080}, // TrustXFF left at its zero-value default: false
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      tmpDir,
-				ModelName: "test-model",
-				MaxTokens: 4096,
+				Home:         tmpDir,
+				DefaultModel: config.DefaultModel{Model: "test-model"},
+				MaxTokens:    4096,
 			},
 		},
 	}
@@ -701,9 +701,9 @@ func TestHandleLogin_DevModeBypass_DenyByDefault(t *testing.T) {
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      tmpDir,
-				ModelName: "test-model",
-				MaxTokens: 4096,
+				Home:         tmpDir,
+				DefaultModel: config.DefaultModel{Model: "test-model"},
+				MaxTokens:    4096,
 			},
 		},
 	}
@@ -749,9 +749,9 @@ func newTestRestAPIWithUser(t *testing.T, username, password string) (*restAPI, 
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      tmpDir,
-				ModelName: "test-model",
-				MaxTokens: 4096,
+				Home:         tmpDir,
+				DefaultModel: config.DefaultModel{Model: "test-model"},
+				MaxTokens:    4096,
 			},
 		},
 	}
@@ -1070,9 +1070,9 @@ func TestHandleLogout_CLITokenAuth_ReturnsNoContent(t *testing.T) {
 		},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      tmpDir,
-				ModelName: "test-model",
-				MaxTokens: 4096,
+				Home:         tmpDir,
+				DefaultModel: config.DefaultModel{Model: "test-model"},
+				MaxTokens:    4096,
 			},
 		},
 	}
@@ -1660,15 +1660,36 @@ func TestClientIP_IgnoresSpoofedXFFByDefault(t *testing.T) {
 
 // TestClientIP_HonorsXFFWhenTrustXFFConfigured verifies the behind-a-trusted-
 // proxy use case still works: when the config snapshot has Gateway.TrustXFF
-// true, X-Forwarded-For is honored (first comma-separated entry).
+// true, X-Forwarded-For is honored — specifically its RIGHTMOST entry, the
+// one hop the trusted proxy wrote itself (M4).
+//
+// The fixture models what the documented nginx deployment actually delivers.
+// `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for` APPENDS the
+// connecting peer to whatever the client already sent, so a client that sends
+// `X-Forwarded-For: 6.6.6.6` arrives as `6.6.6.6, <its real address>`. The
+// previous version of this test used `198.51.100.42, 10.0.0.1` and asserted
+// the leftmost entry — a header shape nginx never produces, and an assertion
+// that pinned the attacker-controlled half of a real one.
 func TestClientIP_HonorsXFFWhenTrustXFFConfigured(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", nil)
 	req.RemoteAddr = "10.0.0.1:443" // the trusted reverse proxy's address
-	req.Header.Set("X-Forwarded-For", "198.51.100.42, 10.0.0.1")
+	// "6.6.6.6" is the client's own forged claim; nginx appended its real
+	// address after it.
+	req.Header.Set("X-Forwarded-For", "6.6.6.6, 198.51.100.42")
 	req = req.WithContext(contextWithTrustXFF(true))
 
 	assert.Equal(t, "198.51.100.42", clientIP(req),
-		"TrustXFF: true must honor the first X-Forwarded-For entry (real client, not the proxy)")
+		"TrustXFF: true must honor the trusted rightmost X-Forwarded-For entry, never the client's forged claim")
+
+	// A single-entry header (Caddy's documented header_up
+	// X-Forwarded-For {remote_host}, which REPLACES rather than appends) is
+	// unaffected by the change.
+	single := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", nil)
+	single.RemoteAddr = "10.0.0.1:443"
+	single.Header.Set("X-Forwarded-For", "198.51.100.42")
+	single = single.WithContext(contextWithTrustXFF(true))
+	assert.Equal(t, "198.51.100.42", clientIP(single),
+		"a single-entry X-Forwarded-For is the real client under either reading")
 }
 
 // TestClientIP_StripsPortFromRemoteAddr verifies the second bug fix: the
@@ -1805,9 +1826,9 @@ func TestLogin_AfterOnboardingWithoutRestart(t *testing.T) {
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      tmpDir,
-				ModelName: "test-model",
-				MaxTokens: 4096,
+				Home:         tmpDir,
+				DefaultModel: config.DefaultModel{Model: "test-model"},
+				MaxTokens:    4096,
 			},
 		},
 	}
@@ -1835,7 +1856,7 @@ func TestLogin_AfterOnboardingWithoutRestart(t *testing.T) {
 
 	// Step 1: Complete onboarding — writes admin to disk AND refreshes in-memory config.
 	// Use a provider body that passes ValidateProviders (model field required).
-	onboardBody := `{"provider":{"id":"openai","api_key":"sk-test","model":"gpt-4o"},"admin":{"username":"admin","password":"secret123"}}`
+	onboardBody := `{"provider":{"auth_method":"api_key","id":"openai","api_key":"sk-test","model":"gpt-4o"},"admin":{"username":"admin","password":"secret123"}}`
 	onboardBody = hermeticOnboardBody(t, onboardBody)
 	onboardReq := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(onboardBody))
 	onboardReq.Header.Set("Content-Type", "application/json")
@@ -1880,9 +1901,9 @@ func TestHandleValidateToken_TriggerReloadNotConfigured(t *testing.T) {
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      tmpDir,
-				ModelName: "test-model",
-				MaxTokens: 4096,
+				Home:         tmpDir,
+				DefaultModel: config.DefaultModel{Model: "test-model"},
+				MaxTokens:    4096,
 			},
 		},
 	}
@@ -2057,9 +2078,9 @@ func newTestRestAPIForReload(t *testing.T) (*restAPI, *agentLoopWrapper) {
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      tmpDir,
-				ModelName: "test-model",
-				MaxTokens: 4096,
+				Home:         tmpDir,
+				DefaultModel: config.DefaultModel{Model: "test-model"},
+				MaxTokens:    4096,
 			},
 		},
 	}

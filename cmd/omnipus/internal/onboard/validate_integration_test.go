@@ -8,10 +8,10 @@ package onboard
 // Tests #17, #18, #31 from the TDD plan (FR-014/FR-015 / US7 CLI onboard matrix).
 //
 // These tests use an httptest.Server as the provider upstream and point the
-// api_base at it via providers.GetDefaultAPIBase — which we override by
+// api_base at it via providers.APIBaseFor — which we override by
 // building a ValidateInput that already carries the test server URL. The
 // validateAndResolveKey function calls providers.ValidateKey with a BaseURL
-// resolved from providers.GetDefaultAPIBase(providerID); to make the URL
+// resolved from providers.APIBaseFor(providerID); to make the URL
 // injectable without changing public signatures we use a test-private helper
 // that builds a mock Input with a controlled BaseURL.
 //
@@ -436,7 +436,7 @@ func TestCliOnboard_NonInteractive_WrongKey_NotPersisted(t *testing.T) {
 		NonInteractive: true,
 	}
 
-	// applyInput resolves baseURL via providers.GetDefaultAPIBase and passes it to
+	// applyInput resolves baseURL via providers.APIBaseFor and passes it to
 	// validateAndResolveKey. We call the production validateAndResolveKey directly with
 	// the httptest URL (the baseURL seam) and assert that a non-interactive InvalidKey
 	// returns an error — the caller then persists nothing.
@@ -583,7 +583,7 @@ func TestCliOnboard_ValidKey_NoWarning(t *testing.T) {
 // TestCliOnboard_FullApplyInput_SkipVerify drives applyInput end-to-end with
 // SkipVerify=true and asserts that the credential is persisted and state is committed.
 // This exercises the production path (not the test-only validateAndResolveKey).
-// With SkipVerify=true, validateAndResolveKey calls providers.GetDefaultAPIBase — but
+// With SkipVerify=true, validateAndResolveKey calls providers.APIBaseFor — but
 // since skip short-circuits before any network call, the URL is never actually used.
 func TestCliOnboard_FullApplyInput_SkipVerify(t *testing.T) {
 	t.Parallel()

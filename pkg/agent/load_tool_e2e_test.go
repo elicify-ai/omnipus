@@ -154,7 +154,7 @@ func newE2ECfg(t *testing.T, workspaceDir string) *config.Config {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              workspaceDir,
-				ModelName:         "scripted-model",
+				DefaultModel:      config.DefaultModel{Model: "scripted-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},

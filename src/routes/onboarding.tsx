@@ -1,5 +1,6 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useRef } from 'react'
 import { createFileRoute, redirect, useNavigate, useRouteContext } from '@tanstack/react-router'
+import { useQuery } from '@tanstack/react-query'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
   ArrowRight,
@@ -13,26 +14,38 @@ import {
   Key,
   Star,
   ChatCircle,
-  CaretDown,
-  Info,
-  MagnifyingGlass,
 } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { ModelSelector, type ModelGroup } from '@/components/ui/model-selector'
+import { ModelSelector, type ModelCatalogGroup } from '@/components/ui/model-selector'
 import { probeProvider, completeOnboardingTransaction, fetchAppState, isApiError } from '@/lib/api'
-import { pickCapableDefaultModel } from '@/lib/onboarding/defaultModel'
+import { providersCatalogQueryOptions } from '@/lib/providersCatalogQuery'
 import OmnipusAvatar from '@/assets/logo/omnipus-avatar.svg?url'
-import { PROVIDER_HINTS } from '@/lib/constants'
 import { useUiStore } from '@/store/ui'
 import { useAuthStore } from '@/store/auth'
 import { queryClient } from '@/lib/queryClient'
 import { ProviderValidationBanner } from '@/components/providers/ProviderValidationBanner'
-import type { ProviderValidation, ProviderCatalogEntry } from '@/lib/api/generated/openapi-types'
-import { PROVIDER_CATALOG } from '@/lib/generated/providerCatalog'
+import { ProviderPicker, type PickerSelection } from '@/components/providers/ProviderPicker'
+import type { ProviderDetailSelection } from '@/components/providers/ProviderDetailPanel'
+import { SignInDialog } from '@/components/providers/SignInDialog'
+import type { AuthMethod } from '@/components/providers/AuthMethodControl'
+import type {
+  CatalogProvider,
+  OnboardingProviderApiKey,
+  OnboardingProviderSignIn,
+  ProbeProviderRequest,
+  ProviderValidation,
+  ProvidersCatalog,
+} from '@/lib/api/generated/openapi-types'
 import { BrandIcon } from '@/components/ui/brand-icon'
 import { BrandDisclaimer } from '@/components/ui/brand-disclaimer'
 import { PLAN_LABELS, REGION_LABELS } from '@/lib/providerLabels'
+import {
+  catalogEndpointHint,
+  catalogEntryById,
+  catalogLogoSlug,
+  catalogSubtitle,
+} from '@/lib/catalogDisplay'
 
 // First-launch onboarding flow — full-screen, outside AppShell.
 //
@@ -45,20 +58,14 @@ import { PLAN_LABELS, REGION_LABELS } from '@/lib/providerLabels'
 type Step = 1 | 2 | 3
 type TestStatus = 'idle' | 'testing' | 'success' | 'error'
 
-// ── Provider data model (ADR-031 Track 1) ─────────────────────────────────────
+// ── Provider data model (ADR-068 FR-037/FR-021) ──────────────────────────────
 //
-// The picker sources from the shared PROVIDER_CATALOG (src/lib/generated/providerCatalog.ts)
-// instead of a local AVAILABLE_PROVIDERS array. Each ProviderCatalogEntry has:
-//   company, plan ('standard-api'|'coding-plan'), region? ('intl'|'china'|'us'),
-//   wire ('openai-compatible'|'anthropic'), id, label, subtitle, logoSlug, endpointHint.
-//
-// Two-level grouped picker:
-//   L1 — Company tiles (one per distinct company); multi-variant companies show ▾
-//   L2 — Plan + Region segmented controls. Wire (OpenAI- vs Anthropic-compatible)
-//        is NOT shown here — it is an internal config detail surfaced only as an
-//        Endpoint-format toggle inside Settings' config Sheet (provider-ux-fixes-plan
-//        FIX-5); quick-start onboarding always uses the entry's primary (default)
-//        endpoint. Only the resolved subtitle/endpoint hint is shown for context.
+// The picker sources from the registry-fed catalog the gateway serves at
+// GET /api/v1/providers/catalog (src/lib/api.ts::fetchProvidersCatalog) —
+// there is NO bundled catalog (SC-010). Onboarding step 3 renders the ONE
+// shared `ProviderPicker` (first level: Popular tiles / letter-grouped list /
+// Custom endpoint) and its `ProviderDetailPanel` second level (plan, region,
+// auth method), the same pair Settings → Providers renders.
 
 // Providers that REQUIRE a custom endpoint to function. The probe will always
 // return "unknown provider" for these without an endpoint because no fixed
@@ -70,126 +77,44 @@ export const PROVIDERS_REQUIRING_ENDPOINT = new Set(['azure', 'azure-openai'])
 // existing `from './onboarding'` imports (incl. tests) keep working.
 export { PLAN_LABELS, REGION_LABELS }
 
-// Priority companies — surfaced first in the grid (Hick's law: reduce decision overload).
-const PRIORITY_COMPANIES = ['OpenAI', 'Anthropic', 'OpenRouter']
+/**
+ * FR-029, verbatim: the model field's accessible label on onboarding step 3.
+ * Exported so the test asserts the shipped string rather than a copy of it.
+ */
+export const ONBOARDING_MODEL_LABEL = 'Model for your first agent'
 
-// ── Catalog-based grouped-picker helpers ───────────────────────────────────────
+// ── Catalog helpers ───────────────────────────────────────────────────────────
+//
+// ADR-068 T068-24 replaced this file's own two-level company grid with the ONE
+// shared picker (`ProviderPicker` + `ProviderDetailPanel`, FR-021), so the
+// company/plan/region derivation that used to live here now lives in
+// `provider-picker-model.ts` and is exercised by the picker's own tests. What
+// onboarding still needs from the catalog is a single lookup: the row behind
+// the id the picker handed back, so the confirmed-selection summary can show
+// the same catalog-derived subtitle and endpoint hint Settings shows (US-7
+// parity, asserted in onboarding-settings-parity.test.tsx). That lookup is
+// `catalogEntryById` in `@/lib/catalogDisplay` — one exact-match helper shared
+// with Settings (ADR-067 FR-011), never a second copy here.
 
-/** Derive unique company names from the catalog (in declaration order, priority first). */
-function uniqueCompanies(catalog: ProviderCatalogEntry[]): string[] {
-  const seen = new Set<string>()
-  const result: string[] = []
-  for (const e of catalog) {
-    if (!seen.has(e.company)) {
-      seen.add(e.company)
-      result.push(e.company)
-    }
-  }
-  // Priority companies first (stable sort).
-  const rank = (c: string) => {
-    const i = PRIORITY_COMPANIES.indexOf(c)
-    return i === -1 ? PRIORITY_COMPANIES.length : i
-  }
-  return result
-    .map((c, i) => ({ c, i }))
-    .sort((a, b) => rank(a.c) - rank(b.c) || a.i - b.i)
-    .map(({ c }) => c)
+/**
+ * The CLI binary name a sign-in row drives (`codex`, `copilot`), used for the
+ * FR-036 / §8b hint *"`codex` not found on this machine"*. Undefined for a
+ * sign-in row that is not CLI-backed (device-code providers own no binary).
+ */
+export function cliBinaryName(entry: CatalogProvider | undefined): string | undefined {
+  return entry?.cli_kind
 }
 
-/** All catalog entries for a given company. */
-function entriesForCompany(catalog: ProviderCatalogEntry[], company: string): ProviderCatalogEntry[] {
-  return catalog.filter((e) => e.company === company)
+/**
+ * True when a failed sign-in probe failed because the vendor CLI is not on
+ * PATH, rather than because nobody is signed in. The gateway reports the two
+ * differently in prose; the SPA must not conflate them, because the fix is
+ * different (install the CLI vs run its login command).
+ */
+export function probeErrorIsMissingCli(message: string): boolean {
+  return /not found|not installed|no such file|executable file not found/i.test(message)
 }
 
-/** True when a company has more than one catalog entry (needs L2 plan/region UI). */
-function isMultiVariant(catalog: ProviderCatalogEntry[], company: string): boolean {
-  return entriesForCompany(catalog, company).length > 1
-}
-
-/** Plans offered by a company (in catalog order, unique). */
-function plansForCompany(
-  catalog: ProviderCatalogEntry[],
-  company: string,
-): ProviderCatalogEntry['plan'][] {
-  const seen = new Set<ProviderCatalogEntry['plan']>()
-  const result: ProviderCatalogEntry['plan'][] = []
-  for (const e of entriesForCompany(catalog, company)) {
-    if (!seen.has(e.plan)) {
-      seen.add(e.plan)
-      result.push(e.plan)
-    }
-  }
-  return result
-}
-
-/** Regions offered by a company for a given plan (unique, in catalog order). */
-function regionsForPlan(
-  catalog: ProviderCatalogEntry[],
-  company: string,
-  plan: ProviderCatalogEntry['plan'],
-): Array<NonNullable<ProviderCatalogEntry['region']>> {
-  const seen = new Set<NonNullable<ProviderCatalogEntry['region']>>()
-  const result: Array<NonNullable<ProviderCatalogEntry['region']>> = []
-  for (const e of entriesForCompany(catalog, company)) {
-    if (e.plan === plan && e.region !== undefined && !seen.has(e.region)) {
-      seen.add(e.region)
-      result.push(e.region)
-    }
-  }
-  return result
-}
-
-/** Resolve the catalog entry for (company, plan, region). Each dual-wire
- *  provider is now a SINGLE merged catalog entry (the Anthropic-compatible
- *  sibling lives in `anthropic_id`, not as a separate row) — so (company,
- *  plan, region) is unique and no wire-preference tie-break is needed
- *  (provider-ux-fixes-plan FIX-5 / "simplify carefully"). */
-function resolveEntry(
-  catalog: ProviderCatalogEntry[],
-  company: string,
-  plan: ProviderCatalogEntry['plan'],
-  region: ProviderCatalogEntry['region'],
-): ProviderCatalogEntry | undefined {
-  const companyEntries = entriesForCompany(catalog, company)
-  const planCandidates = companyEntries.filter((e) => e.plan === plan)
-  // If no regional split for this plan, return the (unique) match regardless of region.
-  if (planCandidates.every((e) => e.region === undefined)) {
-    return planCandidates[0]
-  }
-  const exactRegionMatch = planCandidates.find((e) => e.region === region)
-  if (!exactRegionMatch && region !== undefined && import.meta.env.DEV) {
-    // Falling back to planCandidates[0] silently substitutes a DIFFERENT
-    // region's entry rather than returning undefined (which would collapse
-    // the API-key panel — see handleSelectRegion's own fallback). Not
-    // triggerable today: every (company, plan, region) combination the L1/L2
-    // UI can produce has a matching catalog entry. Warn loudly in dev so a
-    // future catalog edit that breaks this invariant is caught immediately
-    // instead of silently resolving to the wrong provider id.
-    console.warn(
-      `[onboarding] resolveEntry: no exact region match for ${company}/${plan}/${region} — falling back to ${planCandidates[0]?.id ?? '(none)'}`,
-    )
-  }
-  return exactRegionMatch ?? planCandidates[0]
-}
-
-/** The logoSlug for a company (taken from the first entry). */
-function logoSlugForCompany(catalog: ProviderCatalogEntry[], company: string): string {
-  return entriesForCompany(catalog, company)[0]?.logoSlug ?? ''
-}
-
-/** Filter company tiles by a search term (company name + entry aliases, case-insensitive). */
-function filterCompanies(catalog: ProviderCatalogEntry[], query: string): string[] {
-  const q = query.trim().toLowerCase()
-  const companies = uniqueCompanies(catalog)
-  if (!q) return companies
-  return companies.filter((company) => {
-    if (company.toLowerCase().includes(q)) return true
-    const aliases = catalog
-      .filter((e) => e.company === company)
-      .flatMap((e) => e.aliases ?? [])
-    return aliases.some((a) => a.toLowerCase().includes(q))
-  })
-}
 
 // Lightweight, dependency-free password strength heuristic. Scores on length
 // plus character-class diversity (lower / upper / digit / symbol). Returns a
@@ -305,13 +230,39 @@ const stepVariants = {
   }),
 }
 
+/**
+ * What step 3 holds once the picker's second-level panel is confirmed — one
+ * configurable provider row plus whatever the operator typed for it. A custom
+ * endpoint row carries `apiBase`/`protocol` and no catalog entry; a catalog row
+ * carries the entry and neither.
+ */
+type ProviderSelection = {
+  providerId: string
+  authMethod: AuthMethod
+  /** The catalog row, when the id is a catalog id. Undefined for a custom row. */
+  entry?: CatalogProvider
+  /** Typed key — only ever set on the `api_key` path. */
+  apiKey: string
+  apiBase?: string
+  protocol?: 'openai-compatible' | 'anthropic'
+  /** What the summary calls it: the company for a catalog row, the id otherwise. */
+  displayName: string
+}
+
 function OnboardingWizard() {
   const navigate = useNavigate()
   const { addToast } = useUiStore()
   const { appStateBannerMessage } = useRouteContext({ from: '/onboarding' })
 
-  // Source providers from the shared catalog (ADR-031 Track 1).
-  const providers = PROVIDER_CATALOG
+  // Source providers from the registry-fed catalog (ADR-068 FR-037), on the
+  // shared ETag re-validation policy (providersCatalogQuery.ts).
+  const {
+    data: catalogDoc,
+    isError: catalogError,
+    isLoading: catalogLoading,
+    refetch: refetchCatalog,
+  } = useQuery(providersCatalogQueryOptions())
+  const providers = useMemo(() => catalogDoc?.providers ?? [], [catalogDoc])
 
   const [step, setStep] = useState<Step>(1)
   const [direction, setDirection] = useState(1)
@@ -319,23 +270,26 @@ function OnboardingWizard() {
   // numbered step indicator is hidden and the unnumbered "Meet your Assistant"
   // completion screen is rendered instead.
   const [completed, setCompleted] = useState(false)
-  // selectedProvider is the resolved backend id (the leaf of the L1→L2 selection).
-  // selectedCompany is the L1 company tile; selectedPlan/Region are the L2 controls.
-  const [selectedProvider, setSelectedProvider] = useState('')
-  const [selectedCompany, setSelectedCompany] = useState('')
-  const [selectedPlan, setSelectedPlan] = useState<ProviderCatalogEntry['plan']>('standard-api')
-  const [selectedRegion, setSelectedRegion] = useState<ProviderCatalogEntry['region']>('intl')
-  const [apiKey, setApiKey] = useState('')
-  const [endpoint, setEndpoint] = useState('')
-  const [showKey, setShowKey] = useState(false)
-  const [testStatus, setTestStatus] = useState<TestStatus>('idle')
-  const [testError, setTestError] = useState('')
+  // Step 3 — the confirmed provider row (null while the picker is open).
+  const [selection, setSelection] = useState<ProviderSelection | null>(null)
+  // Step 3 sign-in (ADR-068 §8b, FR-045/FR-050) — the SAME SignInDialog
+  // Settings → Providers uses. FR-050 makes the five sign-in routes reachable
+  // while onboarding is incomplete, which is what lets an operator sign in
+  // here before any admin account exists to authenticate as.
+  const [signInTarget, setSignInTarget] = useState<{ id: string; label: string } | null>(null)
+  const [signInOpen, setSignInOpen] = useState(false)
+  // FR-029: no model is pre-selected, ever. This starts empty and only the
+  // operator's own pick fills it.
   const [selectedModel, setSelectedModel] = useState('')
-  const [availableModels, setAvailableModels] = useState<string[]>([])
+  const [probeStatus, setProbeStatus] = useState<TestStatus>('idle')
+  const [probeError, setProbeError] = useState('')
+  // The model the LAST successful probe actually exercised (FR-036's
+  // `probed_model`). Finish compares it to the current pick, so a probe that
+  // passed for a DIFFERENT model can never enable Finish.
+  const [probedModel, setProbedModel] = useState('')
   const [isSaving, setIsSaving] = useState(false)
-  // Surfaced inline on the model-key step when completeOnboardingTransaction
-  // fails, so the user stays on the step and can retry rather than failing
-  // silently.
+  // Surfaced inline on step 3 when completeOnboardingTransaction fails, so the
+  // user stays on the step and can retry rather than failing silently.
   const [finishError, setFinishError] = useState('')
   // Non-blocking validation warning from the last probe (no_credit / unreachable
   // / restricted). Cleared when the user changes provider or re-probes.
@@ -348,164 +302,144 @@ function OnboardingWizard() {
   const [showAdminPassword, setShowAdminPassword] = useState(false)
   const [adminError, setAdminError] = useState('')
 
-  const providerHintText = selectedProvider ? PROVIDER_HINTS[selectedProvider] : undefined
+  // Monotonic probe id. Changing the model re-probes (FR-029) and a slow first
+  // response must never overwrite a newer one — that is how a passing probe for
+  // an abandoned model would enable Finish for the model on screen.
+  const probeSeq = useRef(0)
 
   const goTo = (next: Step) => {
     setDirection(next > step ? 1 : -1)
     setStep(next)
   }
 
-  // Reset connection state (called when company, plan, or region changes).
-  const resetConnection = () => {
-    setApiKey('')
-    setEndpoint('')
-    setTestStatus('idle')
-    setTestError('')
-    setSelectedModel('')
-    setAvailableModels([])
+  const resetProbe = () => {
+    probeSeq.current += 1
+    setProbeStatus('idle')
+    setProbeError('')
+    setProbedModel('')
     setProbeValidation(undefined)
   }
 
-  // L1: User clicks a company tile. For single-option companies, this immediately
-  // sets the provider id. For multi-variant companies, the L2 panel expands and
-  // the plan/region defaults resolve the first id.
-  const handleSelectCompany = (company: string) => {
-    if (selectedCompany === company) return // already selected, no-op
-    setSelectedCompany(company)
-
-    // Default plan to 'standard-api'; default region to 'intl' (spec defaults).
-    const newPlan: ProviderCatalogEntry['plan'] = 'standard-api'
-    const newRegion: ProviderCatalogEntry['region'] = 'intl'
-    setSelectedPlan(newPlan)
-    setSelectedRegion(newRegion)
-
-    // Resolve the backend id from the defaults.
-    const entry = resolveEntry(providers, company, newPlan, newRegion)
-    const resolvedId = entry?.id ?? entriesForCompany(providers, company)[0]?.id ?? ''
-    setSelectedProvider(resolvedId)
-    resetConnection()
-  }
-
-  // L2: User changes the plan. Re-resolve the id and reset the model list
-  // (stale models from a different endpoint are wrong picks — spec requirement).
-  const handleSelectPlan = (plan: ProviderCatalogEntry['plan']) => {
-    setSelectedPlan(plan)
-    // Check if this plan has regions.
-    const regions = regionsForPlan(providers, selectedCompany, plan)
-    let newRegion = selectedRegion
-    if (regions.length > 0 && !regions.includes(selectedRegion as NonNullable<ProviderCatalogEntry['region']>)) {
-      // Current region not valid for this plan — default to intl or first available.
-      newRegion = regions.includes('intl') ? 'intl' : regions[0]
-      setSelectedRegion(newRegion)
-    }
-    const entry = resolveEntry(providers, selectedCompany, plan, newRegion)
-    const resolvedId = entry?.id ?? entriesForCompany(providers, selectedCompany).find(e => e.plan === plan)?.id ?? ''
-    setSelectedProvider(resolvedId)
-    // Reset model list — changing plan means a different endpoint and different models.
-    setAvailableModels([])
-    setSelectedModel('')
-    if (testStatus !== 'idle') {
-      setTestStatus('idle')
-      setTestError('')
-    }
-  }
-
-  // L2: User changes the region. Re-resolve the id and reset the model list.
-  const handleSelectRegion = (region: ProviderCatalogEntry['region']) => {
-    setSelectedRegion(region)
-    const entry = resolveEntry(providers, selectedCompany, selectedPlan, region)
-    // Fall back to any entry for this company+plan (mirrors handleSelectPlan) so
-    // a region that doesn't resolve can never silently empty selectedProvider
-    // and collapse the API-key panel.
-    const resolvedId =
-      entry?.id ??
-      entriesForCompany(providers, selectedCompany).find((e) => e.plan === selectedPlan)?.id ??
-      ''
-    setSelectedProvider(resolvedId)
-    // Reset model list — different region = different endpoint + different models.
-    setAvailableModels([])
-    setSelectedModel('')
-    if (testStatus !== 'idle') {
-      setTestStatus('idle')
-      setTestError('')
-    }
-  }
-
-  // Legacy: direct provider id selection (kept for backward compat with tests
-  // that click a single-option tile and expect a provider id set).
-  const handleSelectProvider = (id: string) => {
-    setSelectedProvider(id)
-    setApiKey('')
-    setEndpoint('')
-    setTestStatus('idle')
-    setTestError('')
-    setSelectedModel('')
-    setAvailableModels([])
-  }
-
-  const handleApiKeyChange = (k: string) => {
-    setApiKey(k)
-    if (testStatus !== 'idle') {
-      setTestStatus('idle')
-      setTestError('')
-    }
-  }
-
-  const handleEndpointChange = (v: string) => {
-    setEndpoint(v)
-    if (testStatus !== 'idle') {
-      setTestStatus('idle')
-      setTestError('')
-    }
-  }
-
-  const handleTest = async () => {
-    if (!selectedProvider || !apiKey.trim()) return
-    // For providers requiring an endpoint (e.g. Azure), block the probe until
-    // the endpoint field has a value. The Connect button is also disabled in
-    // the UI, but this guard prevents any programmatic bypass.
-    if (PROVIDERS_REQUIRING_ENDPOINT.has(selectedProvider) && !endpoint.trim()) return
-    setTestStatus('testing')
-    setTestError('')
+  /**
+   * FR-029 — probe the CHOSEN auth method for the CHOSEN model. `api_key`
+   * sends the typed key; `sign_in` sends no key at all and the gateway goes
+   * through the CLI's saved login / Copilot session (CRIT-002).
+   */
+  const runProbe = async (model: string, current: ProviderSelection | null = selection) => {
+    if (!current) return
+    const seq = ++probeSeq.current
+    setProbeStatus('testing')
+    setProbeError('')
     setProbeValidation(undefined)
     try {
-      // Non-persistent test + fetch: the server probes the provider with the
-      // supplied key and returns the model list in one response. Nothing is
-      // saved to disk until the user clicks "Complete setup" on step 3, which
-      // fires /onboarding/complete with the full payload atomically.
-      const endpointArg = endpoint.trim() || undefined
-      const result = await probeProvider(selectedProvider, apiKey.trim(), endpointArg)
+      const req: ProbeProviderRequest = {
+        id: current.providerId,
+        auth: current.authMethod,
+        ...(current.authMethod === 'api_key' ? { api_key: current.apiKey } : {}),
+        ...(model.trim() ? { model: model.trim() } : {}),
+        ...(current.apiBase ? { api_base: current.apiBase } : {}),
+        ...(current.protocol ? { protocol: current.protocol } : {}),
+      }
+      const result = await probeProvider(req)
+      // A stale response (the operator changed the model while it was in
+      // flight) is dropped, not applied.
+      if (seq !== probeSeq.current) return
       if (result.success) {
-        setTestStatus('success')
-        // Capture any non-blocking validation warning from the probe result
-        // (no_credit / unreachable / restricted). success=true means proceed.
+        setProbeStatus('success')
+        setProbedModel(result.probed_model ?? model.trim())
         if (result.validation && result.validation.outcome !== 'valid') {
           setProbeValidation(result.validation)
         }
-        if (result.models && result.models.length > 0) {
-          setAvailableModels(result.models)
-          // UAT fix: pre-select a capable default instead of leaving the
-          // field empty or letting the first (often a tiny/preview/404)
-          // entry win. Only seed when the user has not already picked one
-          // this session (so a re-test doesn't clobber a deliberate choice).
-          setSelectedModel((prev) =>
-            prev.trim() !== '' ? prev : pickCapableDefaultModel(result.models ?? []),
-          )
-        }
       } else {
-        setTestStatus('error')
-        setTestError(result.error ?? 'Connection test failed')
+        setProbeStatus('error')
+        setProbeError(result.error ?? 'Connection test failed')
       }
     } catch (err) {
-      setTestStatus('error')
-      setTestError(err instanceof Error ? err.message : String(err))
+      if (seq !== probeSeq.current) return
+      setProbeStatus('error')
+      setProbeError(err instanceof Error ? err.message : String(err))
     }
   }
 
-  // Model selection is kept purely in local state during onboarding. It gets
-  // persisted to the server as part of /onboarding/complete's payload, so we
-  // intentionally do NOT fire a PUT /providers/{id} here — that would require
-  // a __Host-csrf cookie the browser cannot install over plain HTTP.
+  /**
+   * Opens the sign-in dialog for a `sign_in` catalog row — from the picker's
+   * second-level *Sign in* button, or from the confirmed summary row.
+   */
+  const openSignInDialog = (providerId: string, label?: string) => {
+    const entry = catalogEntryById(providers, providerId)
+    setSignInTarget({ id: providerId, label: label ?? entry?.name ?? entry?.company ?? providerId })
+    setSignInOpen(true)
+  }
+
+  /**
+   * A completed sign-in changes what the probe would say. Re-run it for the
+   * model already on screen so *Finish* reflects the new session without the
+   * operator having to re-pick the model — FR-036's gate is unchanged: Finish
+   * still needs a PASSED probe, and a sign_in probe passes only when the
+   * gateway reports the session as signed in (400 `field=auth` otherwise).
+   */
+  const handleSignedIn = () => {
+    if (selectedModel.trim()) void runProbe(selectedModel)
+  }
+
+  /** The picker's second-level panel confirmed a catalog row (FR-027/FR-028). */
+  const handleProviderConfirm = (confirmed: ProviderDetailSelection) => {
+    const entry = catalogEntryById(providers, confirmed.providerId)
+    setSelection({
+      providerId: confirmed.providerId,
+      authMethod: confirmed.authMethod,
+      entry,
+      apiKey: confirmed.apiKey ?? '',
+      displayName: entry?.company ?? confirmed.providerId,
+    })
+    setSelectedModel('')
+    resetProbe()
+    setFinishError('')
+  }
+
+  /**
+   * The picker's first-level selections. Only the Custom endpoint row settles
+   * anything on its own — a tile or list row opens the second-level panel and
+   * arrives here again through `handleProviderConfirm`. FR-037: this is the
+   * path onboarding takes when the catalog GET failed entirely.
+   */
+  const handlePickerSelect = (picked: PickerSelection) => {
+    if (picked.kind !== 'custom') return
+    setSelection({
+      providerId: picked.draft.id,
+      authMethod: 'api_key',
+      entry: catalogEntryById(providers, picked.draft.id),
+      apiKey: picked.draft.api_key,
+      apiBase: picked.draft.api_base,
+      protocol: picked.draft.protocol,
+      displayName: picked.draft.id,
+    })
+    setSelectedModel('')
+    resetProbe()
+    setFinishError('')
+  }
+
+  /** *Change* — back to the picker, with nothing carried over. */
+  const handleChangeProvider = () => {
+    setSelection(null)
+    setSelectedModel('')
+    resetProbe()
+    setFinishError('')
+  }
+
+  // FR-029: choosing a model probes it; changing it re-probes and Finish goes
+  // back to disabled until that probe passes.
+  //
+  // `autoProbe` is false only on the free-text path (a custom endpoint row has
+  // no catalog listing), where the value changes on every keystroke and a probe
+  // per keystroke would be a request storm against the operator's provider. The
+  // reset still happens, so Finish is disabled the moment the slug changes; the
+  // explicit *Check connection* button runs the probe.
+  const handleSelectModel = (model: string, autoProbe: boolean) => {
+    setSelectedModel(model)
+    resetProbe()
+    if (autoProbe && model.trim()) void runProbe(model)
+  }
 
   // Step 1 → 2: validate the username before advancing.
   const handleNameContinue = () => {
@@ -538,18 +472,30 @@ function OnboardingWizard() {
   // surface the error inline on step 3 so the user can retry without losing
   // their place.
   const handleComplete = async () => {
+    if (!selection) return
     setIsSaving(true)
     setFinishError('')
     try {
+      // FR-035 / MAJ-014: the body is the generated discriminated union. The
+      // sign_in variant HAS no api_key property — sending one is a 400, so the
+      // two variants are built separately rather than by deleting a field.
+      const provider: OnboardingProviderApiKey | OnboardingProviderSignIn =
+        selection.authMethod === 'sign_in'
+          ? {
+              auth_method: 'sign_in',
+              id: selection.providerId,
+              model: selectedModel,
+              ...(selection.apiBase ? { endpoint: selection.apiBase } : {}),
+            }
+          : {
+              auth_method: 'api_key',
+              id: selection.providerId,
+              api_key: selection.apiKey,
+              model: selectedModel,
+              ...(selection.apiBase ? { endpoint: selection.apiBase } : {}),
+            }
       const resp = await completeOnboardingTransaction({
-        provider: {
-          id: selectedProvider,
-          api_key: apiKey,
-          model: selectedModel,
-          // Persist a custom endpoint (required for azure; optional regional
-          // override for others) so the saved provider config can reach it.
-          ...(endpoint.trim() ? { endpoint: endpoint.trim() } : {}),
-        },
+        provider,
         admin: {
           username: adminUsername,
           password: adminPassword,
@@ -626,16 +572,18 @@ function OnboardingWizard() {
 
       {/* Safe-centering wrapper: my-auto centers the step block vertically when
           it fits the viewport, but collapses to 0 and lets the page scroll when
-          content overflows (e.g. Step 3 with a multi-variant provider like ZAI
-          expands the plan/region panel + API-key field and would otherwise push
-          the Back / Complete Setup buttons below the fold with no way to scroll
-          — overflow-hidden + justify-center clipped both ends). */}
+          content overflows (the step-3 picker is taller than a phone viewport)
+          — overflow-hidden + justify-center clipped both ends. */}
       <div className="w-full flex flex-col items-center">
       {/* Step indicator — labeled for assistive tech so screen readers announce
           progress. The dots themselves are decorative (aria-hidden); the
           progressbar role + valuenow/min/max + aria-label carry the semantics,
           and the sr-only line gives a plain-text "Step X of N" announcement.
-          Hidden on the unnumbered "Meet your Assistant" completion screen. */}
+          Hidden on the unnumbered "Meet your Assistant" completion screen.
+
+          FR-028: the auth-method control lives INSIDE step 3's second-level
+          panel, so this stays three steps — a fourth numbered step for it is
+          exactly what the FR forbids. */}
       {!completed && (
         <div className="flex flex-col items-center gap-2 mb-12 z-10">
           {/* Visible step counter for sighted users — the dots alone are unlabeled. */}
@@ -740,31 +688,24 @@ function OnboardingWizard() {
               exit="exit"
               transition={{ duration: 0.22, ease: 'easeInOut' }}
             >
-              <ModelKeyStep
-                providers={providers}
-                selectedProvider={selectedProvider}
-                selectedCompany={selectedCompany}
-                selectedPlan={selectedPlan}
-                selectedRegion={selectedRegion}
-                onSelectCompany={handleSelectCompany}
-                onSelectPlan={handleSelectPlan}
-                onSelectRegion={handleSelectRegion}
-                onSelect={handleSelectProvider}
-                apiKey={apiKey}
-                onApiKeyChange={handleApiKeyChange}
-                endpoint={endpoint}
-                onEndpointChange={handleEndpointChange}
-                showKey={showKey}
-                onToggleShowKey={() => setShowKey((v) => !v)}
-                testStatus={testStatus}
-                testError={testError}
-                onTest={handleTest}
+              <ProviderStep
+                catalog={catalogDoc}
+                catalogLoading={catalogLoading}
+                catalogError={catalogError}
+                onRetryCatalog={() => { void refetchCatalog() }}
+                selection={selection}
+                onPickerSelect={handlePickerSelect}
+                onProviderConfirm={handleProviderConfirm}
+                onSignIn={openSignInDialog}
+                onChangeProvider={handleChangeProvider}
+                selectedModel={selectedModel}
+                onSelectModel={handleSelectModel}
+                probeStatus={probeStatus}
+                probeError={probeError}
+                probedModel={probedModel}
+                onReprobe={() => { void runProbe(selectedModel) }}
                 onBack={() => goTo(2)}
                 onComplete={handleComplete}
-                providerHint={providerHintText}
-                availableModels={availableModels}
-                selectedModel={selectedModel}
-                onSelectModel={setSelectedModel}
                 isSaving={isSaving}
                 finishError={finishError}
                 probeValidation={probeValidation}
@@ -774,9 +715,26 @@ function OnboardingWizard() {
         </AnimatePresence>
       </div>
       </div>
+
+      {/* The shared sign-in dialog (T068-33). Rendered at the wizard level, not
+          inside the animated step, so a step transition cannot unmount an open
+          device-code session mid-poll. */}
+      {signInTarget && (
+        <SignInDialog
+          open={signInOpen}
+          onOpenChange={(next) => {
+            setSignInOpen(next)
+            if (!next) setSignInTarget(null)
+          }}
+          providerId={signInTarget.id}
+          providerLabel={signInTarget.label}
+          onSignedIn={handleSignedIn}
+        />
+      )}
     </div>
   )
 }
+
 
 // ── Step 1: What should I call you? ────────────────────────────────────────────
 
@@ -1064,109 +1022,107 @@ function PasswordStep({
   )
 }
 
-// ── Step 3: Add a model key ────────────────────────────────────────────────────
+// ── Step 3: connect a provider ────────────────────────────────────────────────
+//
+// ADR-068 FR-021/FR-028/FR-029. The step is the shared `ProviderPicker` until a
+// row is confirmed, then a short configuration block: what was chosen, the
+// sign-in check where the chosen method is sign-in, and the model field — which
+// starts EMPTY and whose every change re-probes.
+//
+// Why the probe is model-driven rather than a "Connect" button: FR-029 makes
+// the probe a property of the pair (auth method x model), not of the key alone.
+// A key that works and a model that 404s is the exact failure the old
+// "Connect & Load Models" flow shipped to users, because it validated the key
+// and then let them pick any slug from the list.
 
-function ModelKeyStep({
-  providers,
-  selectedProvider,
-  selectedCompany,
-  selectedPlan,
-  selectedRegion,
-  onSelectCompany,
-  onSelectPlan,
-  onSelectRegion,
-  apiKey,
-  onApiKeyChange,
-  endpoint,
-  onEndpointChange,
-  showKey,
-  onToggleShowKey,
-  testStatus,
-  testError,
-  onTest,
-  onBack,
-  onComplete,
-  providerHint,
-  availableModels,
+function ProviderStep({
+  catalog,
+  catalogLoading,
+  catalogError,
+  onRetryCatalog,
+  selection,
+  onPickerSelect,
+  onProviderConfirm,
+  onSignIn,
+  onChangeProvider,
   selectedModel,
   onSelectModel,
+  probeStatus,
+  probeError,
+  probedModel,
+  onReprobe,
+  onBack,
+  onComplete,
   isSaving,
   finishError,
   probeValidation,
 }: {
-  providers: ProviderCatalogEntry[]
-  selectedProvider: string
-  selectedCompany: string
-  selectedPlan: ProviderCatalogEntry['plan']
-  selectedRegion: ProviderCatalogEntry['region']
-  onSelectCompany: (company: string) => void
-  onSelectPlan: (plan: ProviderCatalogEntry['plan']) => void
-  onSelectRegion: (region: ProviderCatalogEntry['region']) => void
-  /** Kept for backward-compat paths (Azure direct click, etc.) */
-  onSelect: (id: string) => void
-  apiKey: string
-  onApiKeyChange: (k: string) => void
-  endpoint: string
-  onEndpointChange: (v: string) => void
-  showKey: boolean
-  onToggleShowKey: () => void
-  testStatus: TestStatus
-  testError: string
-  onTest: () => void
+  catalog: ProvidersCatalog | undefined
+  catalogLoading: boolean
+  catalogError: boolean
+  onRetryCatalog: () => void
+  selection: ProviderSelection | null
+  onPickerSelect: (selection: PickerSelection) => void
+  onProviderConfirm: (selection: ProviderDetailSelection) => void
+  onSignIn: (providerId: string, label?: string) => void
+  onChangeProvider: () => void
+  selectedModel: string
+  onSelectModel: (model: string, autoProbe: boolean) => void
+  probeStatus: TestStatus
+  probeError: string
+  probedModel: string
+  onReprobe: () => void
   onBack: () => void
   onComplete: () => void
-  providerHint?: string
-  availableModels: string[]
-  selectedModel: string
-  onSelectModel: (model: string) => void
   isSaving: boolean
   finishError: string
   probeValidation?: ProviderValidation
 }) {
-  const [searchQuery, setSearchQuery] = useState('')
-  // Provider-picker accordion: once a company is selected the tall search+grid
-  // collapses into a one-line summary (the grid is the single tallest element on
-  // this step), keeping the form short enough to fit the viewport without
-  // scrolling — critical on touch/iPad, where a scrollable form can rubber-band
-  // the submit button back below the fold. "Change" re-expands the grid.
-  const [pickerOpen, setPickerOpen] = useState(() => !selectedCompany)
-
-  // Derive filtered company list (search + stable priority order for the grid).
-  // filterCompanies already returns companies with priority companies first.
-  const filteredCompanies = useMemo(
-    () => filterCompanies(providers, searchQuery),
-    [providers, searchQuery],
-  )
-
-  // Derive L2 options for the selected company.
-  const companyPlans = selectedCompany ? plansForCompany(providers, selectedCompany) : []
-  const currentPlanRegions = selectedCompany
-    ? regionsForPlan(providers, selectedCompany, selectedPlan)
-    : []
-  const hasRegionForPlan = currentPlanRegions.length > 0
-  const multiVariant = selectedCompany ? isMultiVariant(providers, selectedCompany) : false
-
-  // The resolved catalog entry (for endpointHint + wire badge display).
-  const resolvedEntry = selectedCompany
-    ? resolveEntry(providers, selectedCompany, selectedPlan, selectedRegion) ??
-      entriesForCompany(providers, selectedCompany)[0]
+  const entry = selection?.entry
+  const catalogModels = entry?.models ?? []
+  // Catalog mode gives the FR-030 ordering and Recommended chips; a custom
+  // endpoint row has no catalog listing at all, so it falls back to typing the
+  // slug (and to the explicit check button below rather than a probe per
+  // keystroke).
+  const hasCatalogModels = catalogModels.length > 0
+  const catalogGroups: ModelCatalogGroup[] | undefined = hasCatalogModels
+    ? [
+        {
+          providerId: selection?.providerId ?? '',
+          providerName: selection?.displayName ?? '',
+          models: catalogModels,
+        },
+      ]
     : undefined
 
-  // Build providerGroups for the ModelSelector.
-  const providerGroups: ModelGroup[] =
-    availableModels.length > 0 && selectedCompany
-      ? [{ providerName: selectedCompany, models: availableModels }]
-      : []
+  const signIn = selection?.authMethod === 'sign_in'
+  // ADR-067 FR-039 — a `locality: local` row (Ollama, vLLM, LM Studio) needs
+  // no credential; ProviderDetailPanel already substitutes
+  // LOCAL_PROVIDER_CREDENTIAL for the typed key on this path, so this only
+  // drives copy — never the Finish gate below (see keyMissing).
+  const isLocal = entry?.locality === 'local'
+  const missingCli =
+    signIn && probeStatus === 'error' && probeErrorIsMissingCli(probeError)
+      ? cliBinaryName(entry)
+      : undefined
 
-  const continueEnabled = testStatus === 'success' && !!selectedModel.trim()
-  const requiresEndpoint = PROVIDERS_REQUIRING_ENDPOINT.has(selectedProvider)
-  const connectDisabled =
-    !apiKey.trim() ||
-    testStatus === 'testing' ||
-    (requiresEndpoint && !endpoint.trim())
+  // FR-029: Finish needs a model AND a passed probe FOR THAT MODEL.
+  const modelChosen = selectedModel.trim() !== ''
+  const finishEnabled =
+    !!selection && modelChosen && probeStatus === 'success' && probedModel === selectedModel.trim()
 
-  // Friendly name for the error message — use company name if available.
-  const providerDisplayName = selectedCompany || 'the provider'
+  const providerDisplayName = selection?.displayName ?? 'the provider'
+  const needsCustomEndpoint =
+    !!selection && PROVIDERS_REQUIRING_ENDPOINT.has(selection.providerId) && !selection.apiBase
+  // Error prevention (the invariant the retired "Connect is disabled when the
+  // API key is empty" test carried): a key-path probe with no key can only come
+  // back as an upstream auth failure the operator cannot act on, so it is never
+  // sent — not on a model pick, not from the button. `isLocal` is excluded
+  // defensively even though ProviderDetailPanel never leaves `apiKey` empty
+  // for a local row — this gate must never re-block Ollama/vLLM/LM Studio if
+  // that invariant ever slips.
+  const keyMissing = !!selection && !signIn && !isLocal && selection.apiKey.trim() === ''
+  const probeBlocked = keyMissing || needsCustomEndpoint
 
   return (
     <div className="flex flex-col gap-5">
@@ -1185,38 +1141,75 @@ function ModelKeyStep({
         </p>
       </div>
 
-      {/* Selected-provider summary — collapses the search + company grid below
-          it once a company is picked, so this step stays short. */}
-      {selectedCompany && !pickerOpen && (
+      {/* ── The ONE picker (FR-021) ──────────────────────────────────────── */}
+      {!selection && (
+        <ProviderPicker
+          data-testid="onboarding-provider-picker"
+          catalog={catalog}
+          status={catalogLoading ? 'loading' : catalogError ? 'error' : 'ready'}
+          onRetry={onRetryCatalog}
+          onSelect={onPickerSelect}
+          onProviderConfirm={onProviderConfirm}
+          onSignIn={onSignIn}
+          autoFocus={false}
+        />
+      )}
+
+      {/* ── Confirmed row: what was chosen, straight from the catalog ────── */}
+      {selection && (
         <div
+          data-testid="onboarding-provider-summary"
           className="rounded-lg border p-3 flex items-center justify-between gap-2"
           style={{ borderColor: 'var(--color-accent)', backgroundColor: 'rgba(212,175,55,0.06)' }}
         >
           <div className="flex items-center gap-2 min-w-0">
-            <BrandIcon
-              slug={logoSlugForCompany(providers, selectedCompany)}
-              size={18}
-              decorative
-              className="shrink-0"
-            />
+            {entry && (
+              <BrandIcon slug={catalogLogoSlug(entry)} size={18} decorative className="shrink-0" />
+            )}
             <div className="min-w-0">
               <p className="text-sm font-medium truncate" style={{ color: 'var(--color-secondary)' }}>
-                {selectedCompany}
+                {selection.displayName}
               </p>
-              <p className="text-xs truncate" style={{ color: 'var(--color-muted)' }}>
-                {[
-                  PLAN_LABELS[selectedPlan],
-                  hasRegionForPlan && selectedRegion ? REGION_LABELS[selectedRegion] : null,
-                  resolvedEntry?.endpointHint,
-                ]
-                  .filter(Boolean)
-                  .join(' · ')}
+              {/* US-7 parity: the same catalogDisplay derivation Settings uses. */}
+              {entry && (
+                <>
+                  <p className="text-xs truncate" style={{ color: 'var(--color-muted)' }}>
+                    {catalogSubtitle(entry)}
+                  </p>
+                  <p className="text-xs font-mono truncate" style={{ color: 'var(--color-muted)' }}>
+                    → {catalogEndpointHint(entry)}
+                  </p>
+                </>
+              )}
+              {selection.apiBase && (
+                <p className="text-xs font-mono truncate" style={{ color: 'var(--color-muted)' }}>
+                  → {selection.apiBase}
+                </p>
+              )}
+              <p className="text-xs" style={{ color: 'var(--color-muted)' }}>
+                {signIn ? 'Signed in with the provider' : isLocal ? 'No key needed — runs locally' : 'API key'}
               </p>
+              {/* FR-045: the sign-in path has nothing to type — the dialog is
+                  the whole interaction, and it must be reachable again after
+                  the row is confirmed (a session can lapse mid-onboarding). */}
+              {signIn && (
+                <button
+                  type="button"
+                  tabIndex={0}
+                  data-testid="onboarding-sign-in-btn"
+                  onClick={() => onSignIn(selection.providerId, selection.displayName)}
+                  className="mt-1 text-xs font-medium px-2 py-1 rounded border"
+                  style={{ borderColor: 'var(--color-accent)', color: 'var(--color-accent)' }}
+                >
+                  Sign in
+                </button>
+              )}
             </div>
           </div>
-          <button tabIndex={0}
+          <button
             type="button"
-            onClick={() => setPickerOpen(true)}
+            tabIndex={0}
+            onClick={onChangeProvider}
             className="shrink-0 text-xs font-medium px-2.5 py-1.5 rounded transition-colors"
             style={{ color: 'var(--color-accent)' }}
           >
@@ -1225,396 +1218,144 @@ function ModelKeyStep({
         </div>
       )}
 
-      {/* ── L1: Search + company grid ───────────────────────────────────── */}
-      {(pickerOpen || !selectedCompany) && (
-      <div className="space-y-2">
-        {/* Search box — spec: >25 items → searchable (NN/g) */}
-        <div className="relative">
-          <MagnifyingGlass
-            size={13}
-            className="absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none"
-            style={{ color: 'var(--color-muted)' }}
-          />
-          <Input
-            type="search"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search providers… (e.g. kimi, glm, qwen)"
-            className="pl-8 text-sm h-8"
-            aria-label="Search providers"
-          />
-        </div>
+      {/* A provider with no fixed default base cannot be reached from its
+          catalog row alone — say so instead of letting the probe fail with an
+          upstream error nobody can act on. */}
+      {needsCustomEndpoint && (
+        <p
+          data-testid="onboarding-needs-endpoint"
+          className="text-xs"
+          style={{ color: 'var(--color-warning)' }}
+        >
+          {selection?.displayName} needs a per-resource endpoint. Go back and use{' '}
+          <strong>Custom endpoint</strong> to enter it.
+        </p>
+      )}
 
-        {/* Company tiles grid */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2" role="group" aria-label="Choose your provider">
-          {filteredCompanies.map((company) => {
-            const isSelected = selectedCompany === company
-            const multi = isMultiVariant(providers, company)
-            const slug = logoSlugForCompany(providers, company)
-            return (
-              <button tabIndex={0}
-                key={company}
-                type="button"
-                onClick={() => {
-                  onSelectCompany(company)
-                  setPickerOpen(false)
-                }}
-                className="px-3 py-2.5 rounded-lg border text-sm font-medium transition-all duration-150 text-left flex items-center justify-between gap-1"
-                aria-pressed={isSelected}
-                style={
-                  isSelected
-                    ? {
-                        borderColor: 'var(--color-accent)',
-                        backgroundColor: 'rgba(212,175,55,0.09)',
-                        color: 'var(--color-accent)',
-                      }
-                    : {
-                        borderColor: 'var(--color-border)',
-                        backgroundColor: 'var(--color-surface-1)',
-                        color: 'var(--color-secondary)',
-                      }
-                }
-              >
-                <span className="flex items-center gap-1.5 min-w-0">
-                  <BrandIcon slug={slug} size={16} decorative className="shrink-0" />
-                  <span className="truncate">{company}</span>
-                </span>
-                {multi && (
-                  <CaretDown
-                    size={11}
-                    weight="bold"
-                    className="shrink-0 opacity-60"
-                    aria-hidden
-                  />
-                )}
-              </button>
-            )
-          })}
-          {filteredCompanies.length === 0 && (
+      {selection && (
+        <div className="space-y-4">
+          {/* ── Model — empty, labelled, and the probe's subject (FR-029) ─── */}
+          <div className="space-y-1.5">
+            <ModelSelector
+              label={ONBOARDING_MODEL_LABEL}
+              triggerTestId="onboarding-model-select"
+              itemTestIdPrefix="onboarding-model-"
+              models={hasCatalogModels ? catalogModels.map((m) => m.id) : []}
+              catalogGroups={catalogGroups}
+              value={selectedModel}
+              onChange={(model) => onSelectModel(model, hasCatalogModels && !probeBlocked)}
+              constrainToCatalog={hasCatalogModels}
+              allowFreeTextWhenEmpty
+            />
+            <p className="text-xs" style={{ color: 'var(--color-muted)' }}>
+              {hasCatalogModels
+                ? 'Your first agent starts on this model. You can change it later.'
+                : 'Enter the model slug for this provider (e.g. MiniMax-M2.7)'}
+            </p>
+          </div>
+
+          {/* ── The probe of the chosen auth method ──────────────────────── */}
+          {probeStatus === 'testing' && (
             <p
-              className="col-span-2 sm:col-span-3 text-xs text-center py-2"
+              data-testid="onboarding-probe-status"
+              role="status"
+              className="flex items-center gap-2 text-sm"
               style={{ color: 'var(--color-muted)' }}
             >
-              No providers match &ldquo;{searchQuery}&rdquo;
+              <SpinnerGap size={13} className="animate-spin" />
+              {signIn ? 'Checking your sign-in…' : 'Checking your key…'}
+            </p>
+          )}
+
+          {probeStatus === 'success' && (
+            <p
+              data-testid="onboarding-probe-status"
+              role="status"
+              className="flex items-center gap-2 text-sm"
+              style={{ color: 'var(--color-success)' }}
+            >
+              <CheckCircle size={14} weight="fill" />
+              {signIn
+                ? `Signed in — ${probedModel} is ready`
+                : `Key accepted — ${probedModel} is ready`}
+            </p>
+          )}
+
+          {probeStatus === 'error' && (
+            <div
+              data-testid="onboarding-error"
+              role="alert"
+              aria-live="assertive"
+              className="flex items-start gap-2 text-sm"
+              style={{ color: 'var(--color-error)' }}
+            >
+              <XCircle size={14} weight="fill" className="shrink-0 mt-0.5" />
+              <div className="min-w-0 space-y-1">
+                <span>
+                  <span className="sr-only">Error: </span>
+                  {missingCli ? (
+                    <span data-testid="onboarding-cli-missing">
+                      <code>{missingCli}</code> not found on this machine — install it, then check
+                      again.
+                    </span>
+                  ) : (
+                    friendlyProbeError(probeError, providerDisplayName)
+                  )}
+                </span>
+                {probeError && (
+                  <details className="text-xs" style={{ color: 'var(--color-muted)' }}>
+                    <summary tabIndex={0} className="cursor-pointer select-none">
+                      Technical details
+                    </summary>
+                    <p className="mt-1 font-mono break-words">{probeError}</p>
+                  </details>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* The explicit check. For sign-in it is the FR-036 *Check sign-in*
+              affordance (nothing to type, so nothing else would trigger a
+              probe); for a typed key it is the retry after a failure and the
+              trigger for a free-text slug. */}
+          {probeStatus !== 'success' && (
+            <Button
+              variant="outline"
+              className="w-full gap-2 font-headline font-bold"
+              data-testid="onboarding-probe-button"
+              onClick={onReprobe}
+              disabled={probeStatus === 'testing' || probeBlocked}
+            >
+              {probeStatus === 'testing' ? (
+                <>
+                  <SpinnerGap size={13} className="animate-spin" />
+                  Checking…
+                </>
+              ) : signIn ? (
+                'Check sign-in'
+              ) : (
+                'Check connection'
+              )}
+            </Button>
+          )}
+
+          {keyMissing && (
+            <p
+              data-testid="onboarding-key-missing"
+              className="text-xs"
+              style={{ color: 'var(--color-muted)' }}
+            >
+              Add an API key for {providerDisplayName} — use <strong>Change</strong> to go back to
+              the key field.
             </p>
           )}
         </div>
-      </div>
       )}
 
-      {/* ── L2: Plan + Region (inline, only for multi-variant companies) ── */}
-      <AnimatePresence>
-        {selectedCompany && multiVariant && (
-          <motion.div
-            key="plan-region"
-            initial={{ opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: 'auto' }}
-            exit={{ opacity: 0, height: 0 }}
-            transition={{ duration: 0.18 }}
-            className="overflow-hidden"
-          >
-            <div
-              className="rounded-lg border p-3 space-y-3"
-              style={{
-                borderColor: 'var(--color-border)',
-                backgroundColor: 'var(--color-surface-1)',
-              }}
-            >
-              {/* Plan selector */}
-              <div>
-                <p
-                  className="text-xs font-medium mb-1.5"
-                  style={{ color: 'var(--color-muted)' }}
-                >
-                  Plan
-                </p>
-                <div className="flex flex-wrap gap-1.5" role="group" aria-label="Select plan">
-                  {companyPlans.map((plan) => (
-                    <button tabIndex={0}
-                      key={plan}
-                      type="button"
-                      onClick={() => onSelectPlan(plan)}
-                      className="px-2.5 py-1 rounded text-xs font-medium transition-all duration-150"
-                      aria-pressed={selectedPlan === plan}
-                      style={
-                        selectedPlan === plan
-                          ? {
-                              backgroundColor: 'var(--color-accent)',
-                              color: 'var(--color-primary)',
-                              fontWeight: 700,
-                            }
-                          : {
-                              borderColor: 'var(--color-border)',
-                              border: '1px solid',
-                              backgroundColor: 'transparent',
-                              color: 'var(--color-secondary)',
-                            }
-                      }
-                    >
-                      {PLAN_LABELS[plan]}
-                    </button>
-                  ))}
-                </div>
-                {/* Anti-1113 helper — error-prevention copy (spec §"Error prevention") */}
-                <div
-                  className="flex items-start gap-1.5 mt-2 text-xs leading-snug"
-                  style={{ color: 'var(--color-muted)' }}
-                >
-                  <Info size={11} className="shrink-0 mt-px" aria-hidden />
-                  <span>
-                    <strong style={{ color: 'var(--color-secondary)' }}>Coding Plan</strong>{' '}
-                    = your subscription (separate billing).{' '}
-                    <strong style={{ color: 'var(--color-secondary)' }}>
-                      Pay-as-you-go API
-                    </strong>{' '}
-                    bills per token. Wrong plan returns &ldquo;insufficient balance&rdquo;.
-                  </span>
-                </div>
-              </div>
-
-              {/* Region selector — only when the chosen plan has a regional split */}
-              {hasRegionForPlan && (
-                <div>
-                  <p
-                    className="text-xs font-medium mb-1.5"
-                    style={{ color: 'var(--color-muted)' }}
-                  >
-                    Region
-                  </p>
-                  <div className="flex flex-wrap gap-1.5" role="group" aria-label="Select region">
-                    {currentPlanRegions.map((region) => (
-                      <button tabIndex={0}
-                        key={region}
-                        type="button"
-                        onClick={() => onSelectRegion(region)}
-                        className="px-2.5 py-1 rounded text-xs font-medium transition-all duration-150"
-                        aria-pressed={selectedRegion === region}
-                        style={
-                          selectedRegion === region
-                            ? {
-                                backgroundColor: 'var(--color-accent)',
-                                color: 'var(--color-primary)',
-                                fontWeight: 700,
-                              }
-                            : {
-                                borderColor: 'var(--color-border)',
-                                border: '1px solid',
-                                backgroundColor: 'transparent',
-                                color: 'var(--color-secondary)',
-                              }
-                        }
-                      >
-                        {REGION_LABELS[region]}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Endpoint hint/subtitle only — wire (OpenAI- vs Anthropic-compatible)
-                  is an internal config detail, not shown in onboarding
-                  (provider-ux-fixes-plan FIX-5: the toggle lives in Settings). */}
-              {resolvedEntry?.subtitle && (
-                <p className="text-xs truncate" style={{ color: 'var(--color-muted)' }}>
-                  {resolvedEntry.subtitle}
-                </p>
-              )}
-
-              {/* Resolved endpoint hint — recognition + debuggability (spec requirement) */}
-              {resolvedEntry?.endpointHint && (
-                <p className="text-xs font-mono" style={{ color: 'var(--color-muted)' }}>
-                  → {resolvedEntry.endpointHint}
-                </p>
-              )}
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* ── API key — animates in when a provider is resolved ────────────── */}
-      <AnimatePresence>
-        {selectedProvider && (
-          <motion.div
-            key="apikey"
-            initial={{ opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: 'auto' }}
-            exit={{ opacity: 0, height: 0 }}
-            transition={{ duration: 0.2 }}
-            className="overflow-hidden"
-          >
-            <div className="space-y-4">
-              <div>
-                <label
-                  htmlFor="onboarding-api-key"
-                  className="text-xs font-medium mb-1.5 block"
-                  style={{ color: 'var(--color-muted)' }}
-                >
-                  API Key
-                </label>
-                <div className="relative">
-                  <Input
-                    id="onboarding-api-key"
-                    type={showKey ? 'text' : 'password'}
-                    value={apiKey}
-                    onChange={(e) => onApiKeyChange(e.target.value)}
-                    placeholder={providerHint}
-                    className="pr-9 font-mono text-sm"
-                    autoComplete="off"
-                    autoFocus
-                  />
-                  <button tabIndex={0}
-                    type="button"
-                    onClick={onToggleShowKey}
-                    className={EYE_TOGGLE_CLASS}
-                    style={{ color: 'var(--color-muted)' }}
-                    aria-label={showKey ? 'Hide API key' : 'Show API key'}
-                  >
-                    {showKey ? <EyeSlash size={14} /> : <Eye size={14} />}
-                  </button>
-                </div>
-                <p
-                  className="text-xs mt-1.5 font-mono"
-                  style={{ color: 'var(--color-muted)' }}
-                >
-                  Stored encrypted with AES-256-GCM — never in plaintext
-                </p>
-              </div>
-
-              {/* Endpoint input — required for providers with no fixed default
-                  base (e.g. Azure, where each resource has its own host). */}
-              {requiresEndpoint && (
-                <div>
-                  <label
-                    htmlFor="onboarding-endpoint"
-                    className="text-xs font-medium mb-1.5 block"
-                    style={{ color: 'var(--color-muted)' }}
-                  >
-                    API Endpoint <span style={{ color: 'var(--color-error)' }}>*</span>
-                  </label>
-                  <Input
-                    id="onboarding-endpoint"
-                    type="url"
-                    value={endpoint}
-                    onChange={(e) => onEndpointChange(e.target.value)}
-                    placeholder="https://<resource>.openai.azure.com/openai/deployments/<deployment>"
-                    className="font-mono text-sm"
-                    autoComplete="off"
-                  />
-                  <p className="text-xs mt-1.5" style={{ color: 'var(--color-muted)' }}>
-                    {selectedProvider === 'azure' || selectedProvider === 'azure-openai'
-                      ? 'Your Azure OpenAI resource URL (per-deployment endpoint)'
-                      : 'Custom base URL for this provider'}
-                  </p>
-                </div>
-              )}
-
-              {/* Connection feedback — friendly, actionable message at the display
-                  layer; the raw upstream string is preserved behind a collapsible
-                  "Technical details" disclosure. */}
-              {testStatus === 'error' && (
-                <div
-                  data-testid="onboarding-error"
-                  role="alert"
-                  aria-live="assertive"
-                  className="flex items-start gap-2 text-sm"
-                  style={{ color: 'var(--color-error)' }}
-                >
-                  <XCircle size={14} weight="fill" className="shrink-0 mt-0.5" />
-                  <div className="min-w-0 space-y-1">
-                    <span>
-                      <span className="sr-only">Error: </span>
-                      {friendlyProbeError(testError, providerDisplayName)}
-                    </span>
-                    {testError && (
-                      <details className="text-xs" style={{ color: 'var(--color-muted)' }}>
-                        <summary tabIndex={0} className="cursor-pointer select-none">
-                          Technical details
-                        </summary>
-                        <p className="mt-1 font-mono break-words">{testError}</p>
-                      </details>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {/* Connect & Load Models CTA */}
-              {testStatus !== 'success' && (
-                <Button
-                  className="w-full gap-2 font-headline font-bold"
-                  onClick={onTest}
-                  disabled={connectDisabled}
-                >
-                  {testStatus === 'testing' ? (
-                    <>
-                      <SpinnerGap size={13} className="animate-spin" />
-                      Connecting...
-                    </>
-                  ) : testStatus === 'error' ? (
-                    'Retry Connection'
-                  ) : (
-                    'Connect & Load Models'
-                  )}
-                </Button>
-              )}
-
-              {/* Model selection — appears after successful connection */}
-              <AnimatePresence>
-                {testStatus === 'success' && (
-                  <motion.div
-                    key="model-select"
-                    initial={{ opacity: 0, height: 0 }}
-                    animate={{ opacity: 1, height: 'auto' }}
-                    exit={{ opacity: 0, height: 0 }}
-                    transition={{ duration: 0.2 }}
-                    className="overflow-hidden space-y-3"
-                  >
-                    <div
-                      className="flex items-center gap-2 text-sm"
-                      style={{ color: 'var(--color-success)' }}
-                    >
-                      <CheckCircle size={14} weight="fill" />
-                      <span>Connected successfully</span>
-                    </div>
-
-                    <div>
-                      <label
-                        className="text-xs font-medium mb-1.5 block"
-                        style={{ color: 'var(--color-muted)' }}
-                      >
-                        Default Model <span style={{ color: 'var(--color-error)' }}>*</span>
-                      </label>
-                      {/* UAT model-catalog fix: constrained picker. When the
-                          provider returned a live model list the user picks
-                          from it (no free-text). When it has no listing
-                          endpoint (empty list) we allow free-text so the user
-                          can seed the first slug — but never flag it as
-                          "unresolved". */}
-                      <ModelSelector
-                        models={availableModels}
-                        value={selectedModel}
-                        onChange={onSelectModel}
-                        providerGroups={providerGroups}
-                        constrainToCatalog
-                        allowFreeTextWhenEmpty
-                      />
-                      <p className="text-xs mt-1.5" style={{ color: 'var(--color-muted)' }}>
-                        {availableModels.length > 0
-                          ? 'This model will be used by default for agent tasks'
-                          : 'Enter the model slug for this provider (e.g. MiniMax-M2.7)'}
-                      </p>
-                    </div>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* Probe-validation warning banner — shown when the connection probe
-          succeeded with a non-blocking warning (no_credit / unreachable /
-          restricted). The key is accepted; the user can proceed. */}
-      {testStatus === 'success' && probeValidation && (
+      {/* Probe-validation warning banner — shown when the probe succeeded with
+          a non-blocking warning (no_credit / unreachable / restricted). The
+          provider is usable; the user can proceed. */}
+      {probeStatus === 'success' && probeValidation && (
         <ProviderValidationBanner
           validation={probeValidation}
           data-testid="onboarding-probe-validation-banner"
@@ -1649,10 +1390,10 @@ function ModelKeyStep({
           Back
         </Button>
         <Button
-          variant={continueEnabled ? 'default' : 'outline'}
+          variant={finishEnabled ? 'default' : 'outline'}
           className="flex-1 gap-2 font-headline font-bold"
           onClick={onComplete}
-          disabled={!continueEnabled || isSaving}
+          disabled={!finishEnabled || isSaving}
         >
           {isSaving ? (
             <>
@@ -1661,12 +1402,12 @@ function ModelKeyStep({
             </>
           ) : finishError ? (
             <>
-              Retry Setup
+              Retry setup
               <ArrowRight size={14} weight="bold" />
             </>
           ) : (
             <>
-              Complete Setup
+              Finish
               <ArrowRight size={14} weight="bold" />
             </>
           )}
@@ -1675,6 +1416,7 @@ function ModelKeyStep({
     </div>
   )
 }
+
 
 // ── Completion: Meet your Assistant ────────────────────────────────────────────
 //

@@ -176,7 +176,7 @@ func TestProvidersPUT_ReloadCompletesBeforeResponse(t *testing.T) {
 	r.Header.Set("Content-Type", "application/json")
 	r.URL.Path = "/api/v1/providers/mygw"
 	w := httptest.NewRecorder()
-	api.HandleProviders(w, r)
+	api.HandleProviders(w, isolateRateLimit(t, r))
 
 	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
 	assert.False(t, api.agentLoop.IsReloadPending(),

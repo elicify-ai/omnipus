@@ -7,10 +7,47 @@ type LoginResponse = {
   warning?: string | undefined;
 };
 type BearerToken = string;
+type OnboardingCompleteRequest = {
+  provider: OnboardingProviderApiKey | OnboardingProviderSignIn;
+  admin: {
+    username: string;
+    password: string;
+  };
+};
+type OnboardingProviderApiKey = {
+  auth_method: "api_key";
+  id: string;
+  api_key: string;
+  model?: string | undefined;
+  endpoint?: string | undefined;
+};
+type OnboardingProviderSignIn = {
+  auth_method: "sign_in";
+  id: string;
+  model?: string | undefined;
+  endpoint?: string | undefined;
+};
+type SignInStartResponse =
+  | SignInStartResponseCliLogin
+  | SignInStartResponseDeviceCode;
+type SignInStartResponseCliLogin = {
+  method: "cli_login";
+  command: string;
+  instructions: string;
+};
+type SignInStartResponseDeviceCode = {
+  method: "device_code";
+  verification_url: string;
+  user_code: string;
+  device_auth_id: string;
+  expires_at: string;
+  interval_seconds: number;
+};
 type OnboardingCompleteResponse = LoginResponse;
 type ProbeProviderResponse = {
   success: boolean;
   models?: Array<string> | undefined;
+  probed_model?: string | undefined;
   error?: string | undefined;
   validation?: ProviderValidation | undefined;
 };
@@ -129,6 +166,7 @@ type ToolCall = {
   parameters?: {} | undefined;
   result?: {} | undefined;
   parent_tool_call_id?: string | undefined;
+  content_state?: ("full" | "capped" | "emptied") | undefined;
 };
 type JudgeVerdict = {
   id: string;
@@ -209,6 +247,12 @@ type Agent = {
   updated_at?: string | undefined;
   voice?: (string | null) | undefined;
   executor?: ExecutorConfig | undefined;
+  degraded_reason?: "needs_provider" | undefined;
+  needs_model: boolean;
+  context_window_effective?: number | undefined;
+  context_window_source?: ContextWindowSource | undefined;
+  context_window_clamped?: boolean | undefined;
+  context_window_override?: number | undefined;
   memory_enabled?: boolean | undefined;
 };
 type AgentToolsCfg = Partial<{
@@ -255,6 +299,7 @@ type ExecutorConfig = Partial<{
   cli_args: string;
 }>;
 type ExternalCliTool = "claude-code" | "codex" | "opencode";
+type ContextWindowSource = "operator" | "live" | "catalog" | "floor";
 type AgentCreateRequest =
   | AgentCreateRequestMain
   | AgentCreateRequestSubagent
@@ -348,6 +393,7 @@ type AgentUpdateRequest = Partial<{
   description: string;
   model: string;
   provider: string;
+  context_window_override: number | null;
   soul: string;
   heartbeat: string;
   timeout_seconds: number;
@@ -449,7 +495,25 @@ type Provider = {
   id: string;
   name: string;
   display_name?: string | undefined;
-  status: "connected" | "disconnected" | "error";
+  status:
+    | "connected"
+    | "disconnected"
+    | "error"
+    | "unknown-provider"
+    | "signed_in"
+    | "expired";
+  protocol?:
+    | ("openai-compatible" | "anthropic" | "google" | "ollama" | "cli")
+    | undefined;
+  custom?: boolean | undefined;
+  company?: string | undefined;
+  locality?: ("local" | "cloud") | undefined;
+  cli_kind?: ("codex" | "copilot") | undefined;
+  auth_method: "api_key" | "sign_in";
+  account_label?: string | undefined;
+  dependents: Array<ProviderDependent>;
+  backs_default: boolean;
+  updated_at?: string | undefined;
   models: Array<string>;
   has_models_endpoint?: boolean | undefined;
   has_api_key?: boolean | undefined;
@@ -457,6 +521,119 @@ type Provider = {
   error?: string | undefined;
   validation?: ProviderValidation | undefined;
 };
+type ProviderDependent = {
+  id: string;
+  name: string;
+  role: "primary" | "fallback" | "passthrough" | "recap" | "image" | "voice";
+};
+type ProviderDeleteRequest = Partial<{
+  new_default: DefaultModelUpdateRequest;
+}>;
+type DefaultModelUpdateRequest = {
+  provider: string;
+  model: string;
+};
+type ProviderDeleteResponse = {
+  deleted: boolean;
+  dependents: Array<ProviderDependent>;
+  default_changed: boolean;
+  new_default?: DefaultModelUpdateRequest | undefined;
+};
+type DefaultModel = {
+  provider: string;
+  model: string;
+  context_window?: number | undefined;
+  window_source?: ContextWindowSource | undefined;
+  window_unknown?: boolean | undefined;
+};
+type EntitlementResponse = {
+  models: Array<EntitlementModel>;
+  checked_at: string;
+  cached: boolean;
+};
+type EntitlementModel = {
+  id: string;
+  entitled: boolean;
+  limits: "known" | "unknown";
+};
+type ProvidersCatalog = {
+  schema_version: "2.0.0";
+  version: string;
+  updated_at: string;
+  source: string;
+  default_resize_limits: CatalogResizeLimits;
+  providers: Array<CatalogProvider>;
+  served_from: "embedded" | "pulled";
+  stale: boolean;
+};
+type CatalogResizeLimits = {
+  long_edge_px: number;
+  max_bytes: number;
+};
+type CatalogProvider = {
+  id: string;
+  name: string;
+  company: string;
+  api: string;
+  protocol?:
+    | ("openai-compatible" | "anthropic" | "google" | "ollama" | "cli")
+    | undefined;
+  protocols?: Array<CatalogProtocol> | undefined;
+  env?: Array<string> | undefined;
+  region?: string | undefined;
+  plan?: string | undefined;
+  tier: "popular" | "standard" | "unsupported";
+  unsupported_reason?:
+    | ("cloud-iam" | "deployment-url" | "withdrawn")
+    | undefined;
+  auth_methods: Array<"api_key" | "sign_in">;
+  aliases: Array<string>;
+  locality: "local" | "cloud";
+  cli_kind?: ("codex" | "copilot") | undefined;
+  token_source?: string | undefined;
+  resize_limits?: CatalogResizeLimits | undefined;
+  models: Array<CatalogModel>;
+};
+type CatalogProtocol = {
+  protocol: "openai-compatible" | "anthropic" | "google" | "ollama" | "cli";
+  api: string;
+};
+type CatalogModel = {
+  id: string;
+  name: string;
+  release_date?: string | undefined;
+  context_window: number;
+  max_output_tokens: number;
+  input_modalities: Array<"text" | "image" | "pdf" | "audio" | "video">;
+  tool_call: boolean;
+  status: "active" | "retired";
+  disputed?: boolean | undefined;
+  window_source?: ContextWindowSource | undefined;
+  window_unknown?: boolean | undefined;
+};
+type ContextSettings = {
+  mcp_result_cap: number;
+  builtin_success_cap: number;
+  builtin_failure_cap: number;
+  absolute_trigger_chars: number;
+  ingest_bound_bytes: number;
+  default_context_window?: (number | null) | undefined;
+  model_overrides: Array<ContextModelOverride>;
+};
+type ContextModelOverride = {
+  provider: string;
+  model: string;
+  context_window: number;
+};
+type ContextSettingsUpdate = Partial<{
+  mcp_result_cap: number;
+  builtin_success_cap: number;
+  builtin_failure_cap: number;
+  absolute_trigger_chars: number;
+  ingest_bound_bytes: number;
+  default_context_window: number | null;
+  model_overrides: Array<ContextModelOverride>;
+}>;
 type IntegrationProvidersResponse = {
   search: Array<IntegrationProvider>;
   voice: Array<IntegrationProvider>;
@@ -1469,6 +1646,7 @@ export const ErrorResponse = z
   .object({
     error: z.string(),
     code: z.string().optional(),
+    field: z.string().optional(),
     details: z.object({}).partial().passthrough().optional(),
   })
   .passthrough();
@@ -1545,94 +1723,51 @@ export const VoiceProvider = z
     voices_endpoint: z.string().nullish(),
   })
   .passthrough();
-export const OnboardingCompleteRequest = z.object({
-  provider: z
-    .object({
-      id: z.string(),
-      api_key: z.string().min(1),
-      model: z.string().optional(),
-      endpoint: z.string().optional(),
-    })
-    .passthrough(),
-  admin: z
-    .object({
-      username: z
-        .string()
-        .min(2)
-        .max(63)
-        .regex(/^[A-Za-z0-9][A-Za-z0-9._-]{1,62}$/),
-      password: z.string().min(8),
-    })
-    .passthrough(),
-});
+export const OnboardingProviderApiKey =
+  z.object({
+    auth_method: z.literal("api_key"),
+    id: z.string().min(1).max(64),
+    api_key: z.string().min(1),
+    model: z.string().min(1).max(256).optional(),
+    endpoint: z.string().optional(),
+  }) satisfies z.ZodType<OnboardingProviderApiKey>;
+export const OnboardingProviderSignIn =
+  z.object({
+    auth_method: z.literal("sign_in"),
+    id: z.string().min(1).max(64),
+    model: z.string().min(1).max(256).optional(),
+    endpoint: z.string().optional(),
+  }) satisfies z.ZodType<OnboardingProviderSignIn>;
+export const OnboardingCompleteRequest =
+  z.object({
+    provider: z.discriminatedUnion("auth_method", [
+      OnboardingProviderApiKey,
+      OnboardingProviderSignIn,
+    ]),
+    admin: z
+      .object({
+        username: z
+          .string()
+          .min(2)
+          .max(63)
+          .regex(/^[A-Za-z0-9][A-Za-z0-9._-]{1,62}$/),
+        password: z.string().min(8),
+      })
+      .passthrough(),
+  }) satisfies z.ZodType<OnboardingCompleteRequest>;
 export const ProbeProviderRequest = z.object({
-  id: z.enum([
-    "anthropic",
-    "anthropic-messages",
-    "openai",
-    "openrouter",
-    "gemini",
-    "google",
-    "ollama",
-    "azure",
-    "azure-openai",
-    "bedrock",
-    "litellm",
-    "groq",
-    "zhipu",
-    "z-ai",
-    "zai",
-    "z-ai-coding",
-    "glm-coding",
-    "zhipu-coding",
-    "z-ai-anthropic",
-    "zhipu-anthropic",
-    "moonshot-anthropic",
-    "moonshot-cn-anthropic",
-    "minimax-anthropic",
-    "minimax-cn-anthropic",
-    "deepseek-anthropic",
-    "nvidia",
-    "moonshot",
-    "moonshot-cn",
-    "shengsuanyun",
-    "deepseek",
-    "cerebras",
-    "vivgrid",
-    "volcengine",
-    "vllm",
-    "qwen",
-    "qwen-intl",
-    "qwen-international",
-    "dashscope-intl",
-    "qwen-us",
-    "dashscope-us",
-    "mistral",
-    "avian",
-    "longcat",
-    "modelscope",
-    "novita",
-    "coding-plan",
-    "alibaba-coding",
-    "qwen-coding",
-    "mimo",
-    "minimax",
-    "minimax-cn",
-    "coding-plan-anthropic",
-    "alibaba-coding-anthropic",
-    "antigravity",
-    "claude-cli",
-    "claudecli",
-    "codex-cli",
-    "codexcli",
-  ]),
-  api_key: z.string().min(1),
-  endpoint: z.string().optional(),
+  id: z.string().min(1).max(64),
+  auth: z.enum(["api_key", "sign_in"]),
+  api_key: z.string().min(1).optional(),
+  model: z.string().min(1).max(256).optional(),
+  api_base: z.string().max(2048).optional(),
+  protocol: z.enum(["openai-compatible", "anthropic"]).optional(),
 });
 export const ProbeProviderResponse: z.ZodType<ProbeProviderResponse> = z
   .object({
     success: z.boolean(),
     models: z.array(z.string()).optional(),
+    probed_model: z.string().max(256).optional(),
     error: z.string().optional(),
     validation: ProviderValidation.optional(),
   })
@@ -1724,6 +1859,10 @@ export const ToolCall: z.ZodType<ToolCall> = z.object({
   parameters: z.object({}).partial().passthrough().optional(),
   result: z.object({}).partial().passthrough().optional(),
   parent_tool_call_id: z.string().optional(),
+  content_state: z
+    .enum(["full", "capped", "emptied"])
+    .optional()
+    .default("full"),
 });
 export const CriterionVerdict: z.ZodType<CriterionVerdict> = z.object({
   criterion_id: z.string().min(1),
@@ -1846,6 +1985,12 @@ export const ExecutorConfig: z.ZodType<ExecutorConfig> = z
     cli_args: z.string(),
   })
   .partial();
+export const ContextWindowSource = z.enum([
+  "operator",
+  "live",
+  "catalog",
+  "floor",
+]);
 export const Agent: z.ZodType<Agent> = z
   .object({
     id: z.string(),
@@ -1876,6 +2021,12 @@ export const Agent: z.ZodType<Agent> = z
     updated_at: z.string().datetime({ offset: true }).optional(),
     voice: z.string().nullish(),
     executor: ExecutorConfig.optional(),
+    degraded_reason: z.literal("needs_provider").optional(),
+    needs_model: z.boolean(),
+    context_window_effective: z.number().int().gte(0).optional(),
+    context_window_source: ContextWindowSource.optional(),
+    context_window_clamped: z.boolean().optional(),
+    context_window_override: z.number().int().gte(1).optional(),
     memory_enabled: z.boolean().optional().default(true),
   })
   .passthrough();
@@ -1997,6 +2148,7 @@ export const AgentUpdateRequest: z.ZodType<AgentUpdateRequest> = z
     description: z.string(),
     model: z.string(),
     provider: z.string().max(64),
+    context_window_override: z.number().int().gte(1).nullable(),
     soul: z.string().min(1),
     heartbeat: z.string(),
     timeout_seconds: z.number().int(),
@@ -2150,7 +2302,19 @@ export const SessionScopeUpdateResponse = z
     warning: z.string().optional(),
   })
   .passthrough();
-export const HealthResponse = z.object({ status: z.literal("ok") });
+export const HealthResponse = z.object({
+  status: z.enum(["ok", "degraded"]),
+  reason: z.string().optional(),
+  uptime: z.string().optional(),
+  pid: z.number().int().optional(),
+  audit_logger: z.enum(["ok", "unavailable", "unknown"]).optional(),
+  audit_skipped: z.object({}).partial().passthrough().optional(),
+  audit_degraded: z.boolean().optional(),
+  sandbox: z.object({}).partial().passthrough().optional(),
+  catalog: z
+    .object({ degraded: z.boolean(), reason: z.string().optional() })
+    .optional(),
+});
 export const AboutResponse = z.object({
   version: z.string(),
   go_version: z.string(),
@@ -2395,6 +2559,31 @@ export const MemorySettings: z.ZodType<MemorySettings> = z
     memory_retros_days: z.number().int(),
   })
   .partial();
+export const ContextModelOverride: z.ZodType<ContextModelOverride> = z.object({
+  provider: z.string().min(1).max(64),
+  model: z.string().min(1).max(256),
+  context_window: z.number().int().gte(1),
+});
+export const ContextSettings: z.ZodType<ContextSettings> = z.object({
+  mcp_result_cap: z.number().int().gte(1).lte(150000),
+  builtin_success_cap: z.number().int().gte(1).lte(150000),
+  builtin_failure_cap: z.number().int().gte(1).lte(150000),
+  absolute_trigger_chars: z.number().int().gte(1),
+  ingest_bound_bytes: z.number().int().gte(1).lte(8388607),
+  default_context_window: z.number().int().gte(1).nullish(),
+  model_overrides: z.array(ContextModelOverride),
+});
+export const ContextSettingsUpdate: z.ZodType<ContextSettingsUpdate> = z
+  .object({
+    mcp_result_cap: z.number().int().gte(1).lte(150000),
+    builtin_success_cap: z.number().int().gte(1).lte(150000),
+    builtin_failure_cap: z.number().int().gte(1).lte(150000),
+    absolute_trigger_chars: z.number().int().gte(1),
+    ingest_bound_bytes: z.number().int().gte(1).lte(8388607),
+    default_context_window: z.number().int().gte(1).nullable(),
+    model_overrides: z.array(ContextModelOverride),
+  })
+  .partial();
 export const ChannelId = z.string();
 export const ChannelIdentity: z.ZodType<ChannelIdentity> = z.object({
   kind: z.enum(["agent", "user"]),
@@ -2531,11 +2720,44 @@ export const GatewayStatus = z.object({
   daily_cost: z.number().gte(0),
   version: z.string().optional(),
 });
+export const ProviderDependent: z.ZodType<ProviderDependent> = z
+  .object({
+    id: z.string(),
+    name: z.string(),
+    role: z.enum([
+      "primary",
+      "fallback",
+      "passthrough",
+      "recap",
+      "image",
+      "voice",
+    ]),
+  })
+  .passthrough();
 export const Provider: z.ZodType<Provider> = z.object({
   id: z.string(),
   name: z.string(),
   display_name: z.string().optional(),
-  status: z.enum(["connected", "disconnected", "error"]),
+  status: z.enum([
+    "connected",
+    "disconnected",
+    "error",
+    "unknown-provider",
+    "signed_in",
+    "expired",
+  ]),
+  protocol: z
+    .enum(["openai-compatible", "anthropic", "google", "ollama", "cli"])
+    .optional(),
+  custom: z.boolean().optional(),
+  company: z.string().optional(),
+  locality: z.enum(["local", "cloud"]).optional(),
+  cli_kind: z.enum(["codex", "copilot"]).optional(),
+  auth_method: z.enum(["api_key", "sign_in"]),
+  account_label: z.string().max(128).optional(),
+  dependents: z.array(ProviderDependent),
+  backs_default: z.boolean(),
+  updated_at: z.string().datetime({ offset: true }).optional(),
   models: z.array(z.string()),
   has_models_endpoint: z.boolean().optional(),
   has_api_key: z.boolean().optional(),
@@ -2543,16 +2765,148 @@ export const Provider: z.ZodType<Provider> = z.object({
   error: z.string().optional(),
   validation: ProviderValidation.optional(),
 });
+export const CatalogResizeLimits: z.ZodType<CatalogResizeLimits> = z.object({
+  long_edge_px: z.number().int().gte(1),
+  max_bytes: z.number().int().gte(1),
+});
+export const CatalogProtocol: z.ZodType<CatalogProtocol> = z.object({
+  protocol: z.enum([
+    "openai-compatible",
+    "anthropic",
+    "google",
+    "ollama",
+    "cli",
+  ]),
+  api: z.string(),
+});
+export const CatalogModel: z.ZodType<CatalogModel> = z.object({
+  id: z.string().min(1).max(256),
+  name: z.string().min(1),
+  release_date: z.string().optional(),
+  context_window: z.number().int().gte(0),
+  max_output_tokens: z.number().int().gte(0),
+  input_modalities: z
+    .array(z.enum(["text", "image", "pdf", "audio", "video"]))
+    .min(1),
+  tool_call: z.boolean(),
+  status: z.enum(["active", "retired"]),
+  disputed: z.boolean().optional(),
+  window_source: ContextWindowSource.optional(),
+  window_unknown: z.boolean().optional(),
+});
+export const CatalogProvider: z.ZodType<CatalogProvider> = z.object({
+  id: z.string().min(1).max(64),
+  name: z.string().min(1),
+  company: z.string().min(1),
+  api: z.string(),
+  protocol: z
+    .enum(["openai-compatible", "anthropic", "google", "ollama", "cli"])
+    .optional(),
+  protocols: z.array(CatalogProtocol).optional(),
+  env: z.array(z.string()).optional(),
+  region: z.string().optional(),
+  plan: z.string().optional(),
+  tier: z.enum(["popular", "standard", "unsupported"]),
+  unsupported_reason: z
+    .enum(["cloud-iam", "deployment-url", "withdrawn"])
+    .optional(),
+  auth_methods: z.array(z.enum(["api_key", "sign_in"])).min(1),
+  aliases: z.array(z.string()),
+  locality: z.enum(["local", "cloud"]),
+  cli_kind: z.enum(["codex", "copilot"]).optional(),
+  token_source: z.string().optional(),
+  resize_limits: CatalogResizeLimits.optional(),
+  models: z.array(CatalogModel),
+});
+export const ProvidersCatalog: z.ZodType<ProvidersCatalog> = z.object({
+  schema_version: z.literal("2.0.0"),
+  version: z.string().regex(/^v\d{4}\.\d{1,2}\.\d{1,2}(\.\d+)?$/),
+  updated_at: z.string().datetime({ offset: true }),
+  source: z.string().min(1),
+  default_resize_limits: CatalogResizeLimits,
+  providers: z.array(CatalogProvider).min(1),
+  served_from: z.enum(["embedded", "pulled"]),
+  stale: z.boolean(),
+});
+export const DefaultModel: z.ZodType<DefaultModel> = z.object({
+  provider: z.string().max(64),
+  model: z.string().max(256),
+  context_window: z.number().int().gte(0).optional(),
+  window_source: ContextWindowSource.optional(),
+  window_unknown: z.boolean().optional(),
+});
+export const DefaultModelUpdateRequest: z.ZodType<DefaultModelUpdateRequest> =
+  z.object({
+    provider: z.string().min(1).max(64),
+    model: z.string().min(1).max(256),
+  });
 export const ProviderUpdateRequest = z
   .object({
+    protocol: z.enum([
+      "openai-compatible",
+      "anthropic",
+      "google",
+      "ollama",
+      "cli",
+    ]),
+    auth_method: z.enum(["api_key", "sign_in"]),
+    api_base: z.string().max(2048),
     api_key: z.string(),
     model: z.string(),
     models: z.array(z.string().min(1).max(256)).max(500),
   })
   .partial();
-export const ModelCapabilities = z.object({
-  id: z.string(),
-  modalities: z.array(z.enum(["text", "image", "pdf", "audio", "video"])),
+export const ProviderDeleteRequest: z.ZodType<ProviderDeleteRequest> = z
+  .object({ new_default: DefaultModelUpdateRequest })
+  .partial();
+export const ProviderDeleteResponse: z.ZodType<ProviderDeleteResponse> =
+  z.object({
+    deleted: z.boolean(),
+    dependents: z.array(ProviderDependent),
+    default_changed: z.boolean(),
+    new_default: DefaultModelUpdateRequest.optional(),
+  });
+export const SignInStartResponseCliLogin =
+  z.object({
+    method: z.literal("cli_login"),
+    command: z.string().min(1).max(256),
+    instructions: z.string().min(1).max(1024),
+  }) satisfies z.ZodType<SignInStartResponseCliLogin>;
+export const SignInStartResponseDeviceCode =
+  z.object({
+    method: z.literal("device_code"),
+    verification_url: z.string().url(),
+    user_code: z.string().min(1).max(16),
+    device_auth_id: z.string().min(1).max(64),
+    expires_at: z.string().datetime({ offset: true }),
+    interval_seconds: z.number().int().gte(1).lte(30),
+  }) satisfies z.ZodType<SignInStartResponseDeviceCode>;
+export const SignInStartResponse =
+  z.discriminatedUnion("method", [
+    SignInStartResponseCliLogin,
+    SignInStartResponseDeviceCode,
+  ]) satisfies z.ZodType<SignInStartResponse>;
+export const SignInStatus = z.object({
+  state: z.enum(["not_signed_in", "pending", "signed_in", "expired"]),
+  account_label: z.string().max(128).optional(),
+  expires_at: z.string().datetime({ offset: true }).optional(),
+});
+export const SignInPollRequest = z.object({
+  device_auth_id: z.string().min(1).max(64),
+});
+export const SignInPollResponse = z.object({
+  state: z.enum(["pending", "signed_in", "expired", "denied"]),
+  interval_seconds: z.number().int().gte(1).lte(30).optional(),
+});
+export const EntitlementModel: z.ZodType<EntitlementModel> = z.object({
+  id: z.string().min(1).max(256),
+  entitled: z.boolean(),
+  limits: z.enum(["known", "unknown"]),
+});
+export const EntitlementResponse: z.ZodType<EntitlementResponse> = z.object({
+  models: z.array(EntitlementModel),
+  checked_at: z.string().datetime({ offset: true }),
+  cached: z.boolean(),
 });
 export const SlashCommand = z.object({
   name: z.string(),
@@ -3393,19 +3747,6 @@ export const RateLimitConfig = z
   })
   .partial()
   .passthrough();
-export const ProviderCatalogEntry = z.object({
-  id: z.string().min(1),
-  company: z.string().min(1),
-  plan: z.enum(["standard-api", "coding-plan"]),
-  region: z.enum(["intl", "china", "us"]).optional(),
-  wire: z.enum(["openai-compatible", "anthropic"]),
-  endpointHint: z.string().min(1),
-  logoSlug: z.string().min(1),
-  label: z.string().min(1),
-  subtitle: z.string().min(1),
-  aliases: z.array(z.string()).optional(),
-  anthropic_id: z.string().min(1).optional(),
-});
 export const BackupEntry = z.object({
   filename: z.string(),
   size_bytes: z.number().int().gte(0),
@@ -5402,7 +5743,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "get",
     path: "/health",
     alias: "getHealth",
-    description: `Returns HTTP 200 when the gateway is running. No authentication required.
+    description: `Returns HTTP 200 with status &quot;ok&quot; when the gateway is serving, and HTTP 503 with status &quot;degraded&quot; plus a reason on a gateway-fatal condition (agent loop dead, config reload failed, default agent unloadable). The audit_* and catalog fields describe a degraded SUBSYSTEM while the gateway itself is still serving and never change the status code — a stale provider catalog (ADR-067 FR-037) makes the model picker less accurate, it does not take the process out of rotation. No authentication required.
 `,
     requestFormat: "json",
     response: HealthResponse,
@@ -5411,6 +5752,11 @@ Includes session_start events from all agent stores and task lifecycle events.
         status: 404,
         description: `Not used — gateway is always healthy or not reachable.`,
         schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `Gateway is degraded; the body names the reason.`,
+        schema: HealthResponse,
       },
     ],
   },
@@ -6341,7 +6687,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "post",
     path: "/onboarding/complete",
     alias: "completeOnboarding",
-    description: `Two-phase commit: probes the submitted provider API key against the real provider (a billable upstream call, same validator as PUT /providers/{id}), then writes the LLM provider config and admin user to config.json atomically, then marks onboarding complete in state.json. Returns 400 when the provider confirms the key is wrong (invalid_key) — nothing is persisted and the request may be retried with a corrected key. A key the provider could not verify for any other reason (unreachable, no credit, regionally restricted, or no endpoint to probe) does NOT block: onboarding still completes and the response&#x27;s &#x60;warning&#x60; field explains what could not be checked, because this endpoint is the only door into the product and a flaky network must not make it uninstallable. Returns 409 when onboarding is already complete. CSRF-exempt (no cookie exists yet). Rate-limited: 3 requests per IP per minute — a probe can take up to ~25s (model-catalog fetch + completion probe), so a mistyped key costs real wall-clock time before the caller can retry. On success, issues a __Host-csrf cookie so the SPA can immediately make CSRF-protected requests.
+    description: `Two-phase commit: probes the submitted provider API key against the real provider (a billable upstream call, same validator as PUT /providers/{id}), then writes the LLM provider config and admin user to config.json atomically, then marks onboarding complete in state.json. Returns 400 when the provider confirms the key is wrong (invalid_key) — nothing is persisted and the request may be retried with a corrected key. A key the provider could not verify for any other reason (unreachable, no credit, regionally restricted, or no endpoint to probe) does NOT block: onboarding still completes and the response&#x27;s &#x60;warning&#x60; field explains what could not be checked, because this endpoint is the only door into the product and a flaky network must not make it uninstallable. Returns 409 when the pre-auth onboarding window is closed — onboarding is already complete, this instance already has an authentication authority (any configured gateway user, or OMNIPUS_BEARER_TOKEN set), its onboarding state file is unreadable, or the requested admin username already exists. The refusal body is identical for every one of those reasons so an anonymous caller cannot use it to probe the instance&#x27;s state; the reason is recorded in the audit log (onboarding.refused). The authority check is what stops an anonymous caller minting a second administrator on an instance whose state.json was lost or corrupted, and it applies whatever the onboarding flag says. Creating an admin never overwrites an existing account&#x27;s password. CSRF-exempt (no cookie exists yet). Rate-limited: 3 requests per IP per minute — a probe can take up to ~25s (model-catalog fetch + completion probe), so a mistyped key costs real wall-clock time before the caller can retry. On success, issues a __Host-csrf cookie so the SPA can immediately make CSRF-protected requests.
 `,
     requestFormat: "json",
     parameters: [
@@ -6384,7 +6730,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "post",
     path: "/onboarding/probe-provider",
     alias: "probeProvider",
-    description: `Non-persistent probe: accepts an API key in the request body, tests it against the provider&#x27;s /models endpoint, and returns the model list. Nothing is written to disk. Available only during onboarding (returns 409 after onboarding completes). CSRF-exempt.
+    description: `Non-persistent probe: accepts an API key in the request body, tests it against the provider&#x27;s /models endpoint, and returns the model list. Nothing is written to disk. CSRF-exempt. Available only while the pre-auth onboarding window is open, and it returns 409 whenever that window is closed - onboarding already complete, the onboarding state unreadable, the config unreadable, or the instance already having an authentication authority (a configured user or OMNIPUS_BEARER_TOKEN). The refusal is 409 rather than 401 for every one of those reasons, including for an authenticated admin: once the window is closed no credential makes this call legal, and the standard PUT /providers/{id} + GET /providers flow replaces it. The refusal body is identical across reasons; the specific reason is recorded in the audit log. With auth sign_in the probe spends one real, billed vendor completion using the operator&#x27;s own saved login, which is why the window must close on uncertainty. Rate-limited: 3 requests per minute per IP (shared with /onboarding/complete) -&gt; 429.
 `,
     requestFormat: "json",
     parameters: [
@@ -6404,6 +6750,11 @@ Includes session_start events from all agent stores and task lifecycle events.
       {
         status: 409,
         description: `Conflict — e.g. resource already exists.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 429,
+        description: `Rate limit exceeded.`,
         schema: ErrorResponse,
       },
     ],
@@ -6710,6 +7061,10 @@ Includes session_start events from all agent stores and task lifecycle events.
     alias: "listProviders",
     description: `Returns all configured LLM providers with connection status and available model list.
 Model lists are fetched live from each provider&#x27;s upstream /models endpoint when an API key is present.
+
+Requires authentication. The one exception is ADR-068 FR-050&#x27;s pre-auth window: while onboarding is incomplete AND this instance has no authentication authority yet (no configured users, no OMNIPUS_BEARER_TOKEN), an anonymous caller is answered, because there is no admin account to authenticate as. That window fails CLOSED — an unreadable or unparseable onboarding state counts as complete, not as a fresh install. Outside it an anonymous caller gets 401.
+
+An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; is never present (it is the operator&#x27;s own vendor account identifier) and &#x60;dependents&#x60; is always the empty array (it enumerates the operator&#x27;s agent roster). Both are populated only for an authenticated caller. An anonymous caller is additionally rate-limited to 60 requests/minute per IP, since each call fans out to one upstream /models fetch per configured provider.
 `,
     requestFormat: "json",
     response: z.array(Provider),
@@ -6730,7 +7085,7 @@ Model lists are fetched live from each provider&#x27;s upstream /models endpoint
     method: "put",
     path: "/providers/:id",
     alias: "updateProvider",
-    description: `Adds or updates an LLM provider entry. On new providers, api_key is required. On existing providers, api_key may be omitted to keep the current key. The API key is stored encrypted (AES-256-GCM) in credentials.json. Available before and after onboarding.
+    description: `Adds or updates an LLM provider entry. On new providers, api_key is required. On existing providers, api_key may be omitted to keep the current key. The API key is stored encrypted (AES-256-GCM) in credentials.json. Available before and after onboarding — while onboarding is incomplete and the instance has no authentication authority the route is reachable without a credential, so the wizard can configure a provider before an admin account exists. Rate-limited: 60 requests per minute per IP -&gt; 429. The call is synchronous through a full agent-registry rebuild. The id must be a catalog id (ADR-067 registry identity) or, when the body carries api_base + protocol (openai-compatible | anthropic), an operator-named custom row (Provider.custom: true); any other id → 400 &#x60;unknown provider &quot;&lt;id&gt;&quot;&#x60;. A tier &quot;unsupported&quot; catalog provider → 400 with its unsupported_reason. The reserved path segments &quot;catalog&quot; and &quot;default-model&quot; are dispatched to their own routes before this one and are never valid provider ids.
 `,
     requestFormat: "json",
     parameters: [
@@ -6763,6 +7118,11 @@ Model lists are fetched live from each provider&#x27;s upstream /models endpoint
         schema: ErrorResponse,
       },
       {
+        status: 429,
+        description: `Rate limit exceeded.`,
+        schema: ErrorResponse,
+      },
+      {
         status: 503,
         description: `Credential store locked.`,
         schema: ErrorResponse,
@@ -6770,10 +7130,149 @@ Model lists are fetched live from each provider&#x27;s upstream /models endpoint
     ],
   },
   {
-    method: "get",
-    path: "/providers/:id/test",
-    alias: "testProvider",
-    description: `Verifies that an API key is configured for the given provider without making an upstream call. Returns success&#x3D;false with an error message if no key is configured. Available before and after onboarding.
+    method: "delete",
+    path: "/providers/:id",
+    alias: "deleteProvider",
+    description: `Under the config lock and after recomputing dependents / backs_default (the response, not the dialog, is authoritative), runs in order: (1) clear dependents in the agent entity store (primaries cleared, fallback entries removed — never re-pointed); (2) remove the provider row; (2b) remove ContextSettings.model_overrides rows for the provider; (3) delete the &#x60;&lt;id&gt;_API_KEY&#x60; credential (not-found counts as success); (3b) evict the provider&#x27;s entitlement cache entry; (4) audit &#x60;provider.deleted&#x60;; (5) trigger a reload and wait. 404 when the id is not configured (the reserved literals &quot;catalog&quot; and &quot;default-model&quot; are never provider ids); 503 when the credential store is locked (before any change) or under dev-mode bypass (RequireNotBypass via the inline requireAdminAuthz wrapper); 401 with no authenticated user (no pre-onboarding exception); 409 when the provider backs the default model and no valid new_default is supplied; 400 when new_default names the same id or a provider that is not connected | signed_in. A provider that backs the default is never deleted while it backs it, so the last connected provider can never be removed. On a failed step: 500 with deleted false and a retryable state. There is no Undo and no dry run.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: ProviderDeleteRequest.optional(),
+      },
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string().max(64),
+      },
+    ],
+    response: ProviderDeleteResponse,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `Conflict — e.g. resource already exists.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `A deletion step failed; state is retryable.`,
+        schema: ProviderDeleteResponse,
+      },
+      {
+        status: 503,
+        description: `Credential store locked, or dev-mode bypass active.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/providers/:id/entitlement",
+    alias: "checkProviderEntitlement",
+    description: `&quot;Check with my account&quot;: makes ONE live listing call with the provider&#x27;s stored key — openai-compatible / google → &#x60;GET {api}/models&#x60;; anthropic → &#x60;GET {api}/v1/models&#x60; with x-api-key + anthropic-version; ollama → &#x60;/api/tags&#x60; — intersects it with the served catalog and returns every catalog model annotated entitled true/false with limits &quot;known&quot;, plus models the provider returned that the catalog lacks with limits &quot;unknown&quot;. Cached for the gateway process keyed by SHA-256(providerID + &quot;:&quot; + credentialRefName) — the ref name, never the secret — and evicted on provider DELETE, on a PUT that changes the key (not on one that only bumps updated_at) and on catalog refresh. Never called at boot or on a turn. 409 for protocol cli and for custom rows (&#x60;entitlement not supported for this protocol&#x60;); 422 when no key resolves; 502 &#x60;{&quot;error&quot;:&quot;could not fetch upstream model list: status &lt;n&gt;&quot;}&#x60; on an upstream non-2xx with nothing cached. Rate-limited like /providers/{id}/test.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string().max(64),
+      },
+    ],
+    response: EntitlementResponse,
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `Conflict — e.g. resource already exists.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 422,
+        description: `Validation failed — semantically invalid input.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 429,
+        description: `Rate limit exceeded.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 502,
+        description: `Bad gateway — an upstream dependency (e.g. a skill registry) is unreachable or returned an error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/providers/:id/sign-in",
+    alias: "startProviderSignIn",
+    description: `For &#x60;codex-cli&#x60; / &#x60;github-copilot&#x60;: Omnipus never performs or stores the vendor login itself — returns the one instruction the operator needs, the vendor CLI&#x27;s own login command, so the SPA can show it beside a *Check sign-in* button (&#x60;method: cli_login&#x60;). For &#x60;openai-chatgpt&#x60; (and &#x60;xai&#x60; once its catalog row carries &#x60;sign_in&#x60;): Omnipus requests a device code from the vendor itself and returns the verification link, user code, and an opaque &#x60;device_auth_id&#x60; to poll (&#x60;method: device_code&#x60;, FR-044) — the vendor&#x27;s device code and any PKCE verifier never leave the gateway. Returns 400 &#x60;{&quot;error&quot;:&quot;provider does not support sign-in&quot;}&#x60; when the provider&#x27;s catalog row does not list &#x60;sign_in&#x60; in &#x60;auth_methods&#x60;, and for &#x60;xai&#x60; specifically when no client id is configured. Rate-limited like the auth endpoints. Requires authentication — except inside ADR-068 FR-050&#x27;s pre-auth window: while onboarding is incomplete AND this instance has no authentication authority yet (no configured users, no OMNIPUS_BEARER_TOKEN), an anonymous caller is admitted past the authentication check too, because onboarding step 3 needs a working sign-in flow before any admin account exists to authenticate as. That window fails CLOSED — an unreadable or unparseable onboarding state counts as complete, not as a fresh install. Outside the window an unauthenticated caller gets 401 unconditionally. The route&#x27;s own authorization layer (requireAdminAuthz) enforces ONLY the dev-mode-bypass guard, not authentication, so any caller who reaches it — authenticated, or anonymous inside the pre-auth window — gets 503 under dev-mode bypass and otherwise proceeds: inside the window an anonymous caller can mint a real device code or trigger a vendor CLI login prompt exactly as an authenticated caller could.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: SignInStartResponse,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 429,
+        description: `Rate limit exceeded.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `dev_mode_bypass is active (RequireNotBypass guard).`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "delete",
+    path: "/providers/:id/sign-in",
+    alias: "signOutProvider",
+    description: `Deletes the &#x60;&lt;id&gt;_OAUTH&#x60; encrypted credential entry (a missing entry is success), emits audit event &#x60;provider.signed_out&#x60;, and the row returns to &#x60;not_signed_in&#x60;. Only meaningful for &#x60;device_code&#x60; providers — &#x60;cli_login&#x60; providers hold no Omnipus-side credential to delete and this is a no-op success for them too. Requires authentication — except inside ADR-068 FR-050&#x27;s pre-auth window: while onboarding is incomplete AND this instance has no authentication authority yet (no configured users, no OMNIPUS_BEARER_TOKEN), an anonymous caller is admitted past the authentication check too, for the same reason its POST sibling is (onboarding step 3 needs a working sign-in flow before any admin account exists to authenticate as). That window fails CLOSED — an unreadable or unparseable onboarding state counts as complete, not as a fresh install. Outside the window an unauthenticated caller gets 401 unconditionally. The route&#x27;s own authorization layer (requireAdminAuthz) enforces ONLY the dev-mode-bypass guard, not authentication, so any caller who reaches it — authenticated, or anonymous inside the pre-auth window — gets 503 under dev-mode bypass and otherwise proceeds: inside the window an anonymous caller can revoke another account&#x27;s vendor sign-in before any admin account exists.
 `,
     requestFormat: "json",
     parameters: [
@@ -6790,20 +7289,241 @@ Model lists are fetched live from each provider&#x27;s upstream /models endpoint
         description: `Authentication required or credentials invalid.`,
         schema: ErrorResponse,
       },
+      {
+        status: 503,
+        description: `dev_mode_bypass is active (RequireNotBypass guard).`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/providers/:id/sign-in/poll",
+    alias: "pollProviderSignIn",
+    description: `Performs at most ONE vendor poll per call for the device-code session named by &#x60;device_auth_id&#x60; (returned by a prior POST /providers/{id}/sign-in). On &#x60;signed_in&#x60; the gateway has already stored the &#x60;&lt;id&gt;_OAUTH&#x60; credential entry before responding. A device-code session expires server-side at the vendor&#x27;s &#x60;expires_at&#x60; (ceiling 15 minutes) and is single-use — an unknown or already-resolved &#x60;device_auth_id&#x60; returns 404. Never returns the vendor&#x27;s device code. Rate-limited like the auth endpoints. Requires authentication — except inside ADR-068 FR-050&#x27;s pre-auth window: while onboarding is incomplete AND this instance has no authentication authority yet (no configured users, no OMNIPUS_BEARER_TOKEN), an anonymous caller is admitted past the authentication check too, for the same reason its sibling sign-in routes are (onboarding step 3 needs a working sign-in flow before any admin account exists to authenticate as). That window fails CLOSED — an unreadable or unparseable onboarding state counts as complete, not as a fresh install. Outside the window an unauthenticated caller gets 401 unconditionally. The route&#x27;s own authorization layer (requireAdminAuthz) enforces ONLY the dev-mode-bypass guard, not authentication, so any caller who reaches it — authenticated, or anonymous inside the pre-auth window — gets 503 under dev-mode bypass and otherwise proceeds: inside the window an anonymous caller can complete another account&#x27;s device-code sign-in before any admin account exists.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: z.object({ device_auth_id: z.string().min(1).max(64) }),
+      },
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: SignInPollResponse,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 429,
+        description: `Rate limit exceeded.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `dev_mode_bypass is active (RequireNotBypass guard).`,
+        schema: ErrorResponse,
+      },
     ],
   },
   {
     method: "get",
-    path: "/providers/model-capabilities",
-    alias: "listModelCapabilities",
-    description: `Returns the in-repo capability catalog (pkg/providers/capabilities) as a flat list of {id, modalities} pairs (D18). Model vision capability is not knowable client-side at all otherwise — the SPA resolves the target agent&#x27;s model against this list to show a non-blocking warning before sending a vision attachment (e.g. a live-browser annotation, or an image attached via the composer) to a model that cannot accept images. Returns an empty array when the catalog is not constructed (never a 500) — the catalog is optional and the server-side capability gate remains the authoritative backstop regardless.
+    path: "/providers/:id/sign-in/status",
+    alias: "getProviderSignInStatus",
+    description: `For &#x60;cli_login&#x60; providers (codex-cli, github-copilot): reads the vendor CLI&#x27;s saved login (codex &#x60;auth.json&#x60; — only &#x60;tokens.access_token&#x60; for the unverified &#x60;exp&#x60; claim and &#x60;tokens.account_id&#x60; for the label; the Copilot CLI&#x27;s own auth-status) — the file is never modified and no refresh request is ever made (FR-007). For &#x60;device_code&#x60; providers (openai-chatgpt, and xai once its catalog row carries &#x60;sign_in&#x60;): reads the stored &#x60;&lt;id&gt;_OAUTH&#x60; entry in Omnipus&#x27;s own encrypted credential store; &#x60;expired&#x60; means the access token is past &#x60;exp&#x60; AND a refresh attempt failed or no refresh token is available (FR-046). Maps to &#x60;not_signed_in | pending | signed_in | expired&#x60;; &#x60;pending&#x60; only while an open device-code session awaits approval. A missing CLI binary is reported on the Provider row as &#x60;disconnected&#x60;, not here. Returns 400 &#x60;{&quot;error&quot;:&quot;provider does not support sign-in&quot;}&#x60; for providers without &#x60;sign_in&#x60;. Requires authentication — except inside ADR-068 FR-050&#x27;s pre-auth window: while onboarding is incomplete AND this instance has no authentication authority yet (no configured users, no OMNIPUS_BEARER_TOKEN), an anonymous caller is admitted past the authentication check too, for the same reason its sibling sign-in routes are (onboarding step 3 needs a working sign-in flow before any admin account exists to authenticate as). That window fails CLOSED — an unreadable or unparseable onboarding state counts as complete, not as a fresh install. Outside the window an unauthenticated caller gets 401 unconditionally. The route&#x27;s own authorization layer (requireAdminAuthz) enforces ONLY the dev-mode-bypass guard, not authentication, so any caller who reaches it — authenticated, or anonymous inside the pre-auth window — gets 503 under dev-mode bypass and otherwise proceeds.
 `,
     requestFormat: "json",
-    response: z.array(ModelCapabilities),
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: SignInStatus,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `dev_mode_bypass is active (RequireNotBypass guard).`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/providers/:id/test",
+    alias: "testProvider",
+    description: `Resolves the provider&#x27;s stored API key and probes it with ONE real upstream request (providers.ValidateKey), returning success&#x3D;false with an error message when no key is configured, when the credential ref cannot be resolved, or when the provider rejects the key. Available before and after onboarding — while onboarding is incomplete and the instance has no authentication authority the route is reachable without a credential. Rate-limited: 60 requests per minute per IP -&gt; 429.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: OperationResult,
     errors: [
       {
         status: 401,
         description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 429,
+        description: `Rate limit exceeded.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/providers/catalog",
+    alias: "getProvidersCatalog",
+    description: `Returns the full schema-2.0.0 catalog document the gateway itself uses (providers with nested models, tier, protocol(s), unsupported reason, resize limits) plus the serving envelope served_from (embedded | pulled) and stale (updated_at older than 14 days). Served from a pre-serialised byte slice cached at apply time; bytes and ETag are swapped atomically as one pair. Headers: &#x60;ETag: &quot;&lt;sha256&gt;&quot;&#x60; (quoted, strong) and &#x60;Cache-Control: private, max-age&#x3D;0, must-revalidate&#x60;; no content negotiation. A request whose If-None-Match exactly matches the current quoted strong ETag gets 304 with no body; a weak (W/) or unquoted value is treated as no match (200). 503 when the catalog failed to construct at boot (never an empty 200 that looks like &quot;no providers&quot;). The SPA re-validates on Settings open and every 15 minutes. DISPATCH ORDER: &quot;catalog&quot; is a reserved path segment — this route MUST be matched before the /providers/{id} handler, and &quot;catalog&quot; is never a valid provider id. Requires authentication. The one exception is ADR-068 FR-050&#x27;s pre-auth window: while onboarding is incomplete AND this instance has no authentication authority yet (no configured users, no OMNIPUS_BEARER_TOKEN), an anonymous caller is answered, because the onboarding wizard&#x27;s provider picker needs this document before any admin account exists to authenticate as. That window fails CLOSED — an unreadable or unparseable onboarding state counts as complete, not as a fresh install. Outside it an anonymous caller gets 401. Unlike listProviders there is no response reduction inside the window: this document is public vendor metadata (provider ids, model ids, tiers, context windows) with no operator secret or account-specific field, so an anonymous and an authenticated caller receive the identical body.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "If-None-Match",
+        type: "Header",
+        schema: z.string().optional(),
+      },
+    ],
+    response: ProvidersCatalog,
+    errors: [
+      {
+        status: 304,
+        description: `If-None-Match matched the current ETag exactly; no body.`,
+        schema: z.void(),
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `No catalog is available (construction failed at boot).`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/providers/default-model",
+    alias: "getDefaultModel",
+    description: `Returns agents.defaults.default_model as a (provider, model) pair with the resolved context window and its source (ADR-066&#x27;s ResolveWindow(provider, model), absent until it lands). Registered as its own route with adminWrap (withAuth → RequireNotBypass): 401 unauthenticated, 503 under dev-mode bypass. DISPATCH ORDER: &quot;default-model&quot; is a reserved path segment — this route MUST be matched before the /providers/{id} handler, and &quot;default-model&quot; is never a valid provider id.
+`,
+    requestFormat: "json",
+    response: DefaultModel,
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `No default model is set (fresh install before onboarding&#x27;s explicit pick): &#x60;{&quot;error&quot;:&quot;no default model&quot;}&#x60;.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `dev_mode_bypass is active (RequireNotBypass guard).`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "put",
+    path: "/providers/default-model",
+    alias: "updateDefaultModel",
+    description: `Validates that the provider is configured and connected or signed_in (400 &#x60;{&quot;error&quot;:&quot;provider not configured&quot;,&quot;field&quot;:&quot;provider&quot;}&#x60;) and that the model is in the served catalog for that provider (400 &#x60;{&quot;error&quot;:&quot;model not in catalog for provider&quot;,&quot;field&quot;:&quot;model&quot;}&#x60;) — except rows with custom: true or locality: local, where any non-empty model is accepted with no live call. Persists agents.defaults.default_model under the config lock, emits audit provider.default_model.changed, triggers a reload and waits for it (500 &#x60;default model saved but config reload failed: &lt;reason&gt;&#x60; when it does not confirm); takes effect on the next turn. A ProviderUpdateRequest body sent here is a 400 on shape, never a PUT of a provider named &quot;default-model&quot;. adminWrap: 401 / 503 under bypass.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: DefaultModelUpdateRequest,
+      },
+    ],
+    response: DefaultModel,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `dev_mode_bypass is active (RequireNotBypass guard).`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/providers/openai-chatgpt/sign-in/import",
+    alias: "importCodexSignIn",
+    description: `Copies &#x60;tokens.access_token&#x60; + &#x60;tokens.account_id&#x60; from &#x60;~/.codex/auth.json&#x60; into the &#x60;openai_OAUTH&#x60; encrypted credential entry. No refresh token is imported — a session started this way ends at the copied token&#x27;s &#x60;exp&#x60; with no further refresh. The source file&#x27;s bytes and mtime are left unchanged (read-only, FR-007). Returns 404 &#x60;{&quot;error&quot;:&quot;no codex login found&quot;}&#x60; when the file is absent or unreadable. Requires authentication — except inside ADR-068 FR-050&#x27;s pre-auth window: while onboarding is incomplete AND this instance has no authentication authority yet (no configured users, no OMNIPUS_BEARER_TOKEN), an anonymous caller is admitted past the authentication check too, for the same reason its sibling sign-in routes are (onboarding step 3 needs a working sign-in flow before any admin account exists to authenticate as). That window fails CLOSED — an unreadable or unparseable onboarding state counts as complete, not as a fresh install. Outside the window an unauthenticated caller gets 401 unconditionally. The route&#x27;s own authorization layer (requireAdminAuthz) enforces ONLY the dev-mode-bypass guard, not authentication, so any caller who reaches it — authenticated, or anonymous inside the pre-auth window — gets 503 under dev-mode bypass and otherwise proceeds: inside the window an anonymous caller can write a live vendor credential into the encrypted store before any admin account exists.
+`,
+    requestFormat: "json",
+    response: SignInStatus,
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `dev_mode_bypass is active (RequireNotBypass guard).`,
         schema: ErrorResponse,
       },
     ],
@@ -7830,6 +8550,50 @@ Model lists are fetched live from each provider&#x27;s upstream /models endpoint
       {
         status: 405,
         description: `Method not allowed.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/settings/context",
+    alias: "getContextSettings",
+    description: `Returns the per-surface tool-result caps, the absolute trigger, the ingest bound, the global default context window and the per-(provider, model) window overrides. User-facing location: Settings → Models. Readable by any authenticated user (withAuth, the /settings/memory precedent — not RequireNotBypass).
+`,
+    requestFormat: "json",
+    response: ContextSettings,
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "put",
+    path: "/settings/context",
+    alias: "updateContextSettings",
+    description: `Partial update — an omitted field is unchanged; model_overrides, when present, replaces the whole list; default_context_window null clears it. 400 naming the field and the limit on: any cap &gt; 150,000 or &lt; 1; absolute_trigger_chars &lt; 1; ingest_bound_bytes ≥ 8,388,608 or &lt; 1; model_overrides[].context_window &lt; 1. Every 200 write triggers a registry reload so the next turn uses the new values without a restart; overrides whose provider no longer exists are pruned on write. Writable by any authenticated user (withAuth).
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: ContextSettingsUpdate,
+      },
+    ],
+    response: ContextSettings,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
         schema: ErrorResponse,
       },
     ],
@@ -9823,7 +10587,7 @@ export function createApiClient(baseUrl: string, options?: ZodiosOptions) {
 // Do not edit directly — re-run: node scripts/_gen-asyncapi-types.mjs
 // These extend the REST schemas above with all WS frame types.
 
-export const WsFrameType = z.enum(["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "token", "done", "error", "tool_call_start", "tool_call_result", "subagent_start", "subagent_message", "subagent_state", "subagent_end", "task_status_changed", "task_run_status", "replay_message", "replay_error", "rate_limit", "media", "agent_switched", "tool_approval_required", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_close_ack", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_status", "browser_tab_action", "browser_tabs", "browser_viewport", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control", "goal_status", "loop_status", "plan_status", "judge_verdict"]);
+export const WsFrameType = z.enum(["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "token", "done", "error", "tool_call_start", "tool_call_result", "tool_result_projection", "subagent_start", "subagent_message", "subagent_state", "subagent_end", "task_status_changed", "task_run_status", "replay_message", "replay_error", "rate_limit", "media", "agent_switched", "tool_approval_required", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_close_ack", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_status", "browser_tab_action", "browser_tabs", "browser_viewport", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control", "goal_status", "loop_status", "plan_status", "judge_verdict"]);
 
 export const AuthFrame = z
   .object({
@@ -9946,7 +10710,7 @@ export const DoneFrame = z
 
 export const LLMError = z
   .object({
-    code: z.enum(["media_unsupported", "provider_rejected", "request_too_large", "provider_auth_failed", "rate_limited", "network", "content_policy", "context_too_long", "tool_args", "schema", "agent_not_configured", "workspace_unavailable", "model_unavailable", "unknown"]),
+    code: z.enum(["media_unsupported", "provider_rejected", "request_too_large", "provider_auth_failed", "rate_limited", "network", "content_policy", "context_too_long", "tool_args", "schema", "agent_not_configured", "workspace_unavailable", "model_unavailable", "needs_provider", "model_unassigned", "turn_canceled", "turn_timed_out", "context_unrecoverable", "context_window_unknown", "unknown"]),
     message: z.string().min(1).max(4096),
     retryable: z.boolean(),
     detail: z.string().max(2048).optional(),
@@ -9955,7 +10719,7 @@ export const LLMError = z
 
 export const LLMErrorReplay = z
   .object({
-    code: z.enum(["media_unsupported", "provider_rejected", "request_too_large", "provider_auth_failed", "rate_limited", "network", "content_policy", "context_too_long", "tool_args", "schema", "agent_not_configured", "workspace_unavailable", "model_unavailable", "unknown"]),
+    code: z.enum(["media_unsupported", "provider_rejected", "request_too_large", "provider_auth_failed", "rate_limited", "network", "content_policy", "context_too_long", "tool_args", "schema", "agent_not_configured", "workspace_unavailable", "model_unavailable", "needs_provider", "model_unassigned", "turn_canceled", "turn_timed_out", "context_unrecoverable", "context_window_unknown", "unknown"]),
     message: z.string().min(1).max(4096),
     retryable: z.boolean(),
   })
@@ -10043,6 +10807,29 @@ export const ToolAssemblyDuplicate = z
   .object({
     error: z.literal("tool_assembly_duplicate"),
     message: z.string().min(1),
+  })
+  .strict();
+
+export const ToolArgumentRefusal = z
+  .object({
+    error: z.literal("tool_arguments_too_large"),
+    reason: z.string().min(1),
+    tool: z.string().min(1).max(128),
+    size_chars: z.number().int().min(1),
+    cap_chars: z.number().int().min(1),
+  })
+  .strict();
+
+export const ToolResultRecallMark = z
+  .object({
+    error: z.literal("tool_result_recall_mark"),
+    tool: z.string().min(1).max(64),
+    tool_call_id: z.string().min(1).max(64),
+    archive_line: z.number().int().min(0),
+    size_chars: z.number().int().min(1),
+    turn: z.number().int().min(1),
+    content_state: z.enum(["capped", "emptied"]),
+    hint: z.string().min(1),
   })
   .strict();
 
@@ -10171,6 +10958,18 @@ export const ReplayErrorFrame = z
       llm_error: LLMErrorReplay,
     })
     .strict().optional(),
+  })
+  .strict();
+
+export const ToolResultProjectionFrame = z
+  .object({
+    type: z.literal("tool_result_projection"),
+    session_id: z.string().min(1).max(128),
+    tool_call_id: z.string().min(1),
+    archive_line: z.number().int().min(0),
+    content_state: z.enum(["capped", "emptied"]),
+    mark: z.string().max(2048).optional(),
+    producing_session_id: z.string().min(1).optional(),
   })
   .strict();
 
@@ -10602,6 +11401,7 @@ export const WsFrame = z.discriminatedUnion("type", [
   TaskRunStatusFrame,
   ReplayMessageFrame,
   ReplayErrorFrame,
+  ToolResultProjectionFrame,
   RateLimitFrame,
   MediaFrame,
   AgentSwitchedFrame,

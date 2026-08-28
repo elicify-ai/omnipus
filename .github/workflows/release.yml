@@ -26,8 +26,67 @@ on:
         default: false
 
 jobs:
+  catalog-snapshot-age:
+    name: Catalog Snapshot Age Gate
+    # ADR-067 A-15 / FR-006 (spec test T49). The embedded provider catalog is
+    # a committed snapshot of the assembly repository's release document — the
+    # build never fetches it (see pr.yml's hermetic-build job), which means a
+    # release ships whatever was last committed. A stale snapshot is invisible
+    # at runtime and expensive in the field: models the registry has since
+    # added are simply missing, windows are wrong, and a provider added after
+    # the snapshot cannot be configured at all until the operator's first
+    # successful refresh.
+    #
+    # So the age is gated where it can still be fixed — BEFORE the tag is
+    # created, not after the binaries are published. If this fails, refresh
+    # the snapshot from the assembly repository, commit it, and re-run the
+    # release.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Snapshot updated_at is within 14 days
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import datetime, json, sys
+
+          PATH = "pkg/providers/catalog/data/providers_catalog.json"
+          MAX_AGE_DAYS = 14
+
+          with open(PATH, encoding="utf-8") as fh:
+              doc = json.load(fh)
+
+          raw = doc.get("updated_at")
+          if not raw:
+              print(f"{PATH}: no updated_at — cannot age-check the snapshot")
+              sys.exit(1)
+
+          stamp = datetime.datetime.fromisoformat(raw.replace("Z", "+00:00"))
+          if stamp.tzinfo is None:
+              stamp = stamp.replace(tzinfo=datetime.timezone.utc)
+          age = datetime.datetime.now(datetime.timezone.utc) - stamp
+          days = age.total_seconds() / 86400
+
+          print(f"snapshot version={doc.get('version')} updated_at={raw} age={days:.1f}d")
+          if days > MAX_AGE_DAYS:
+              print(
+                  f"FAIL: the embedded catalog snapshot is {days:.1f} days old, over the "
+                  f"{MAX_AGE_DAYS}-day release bound (ADR-067 A-15). Refresh it from the "
+                  "assembly repository's latest release, commit the new "
+                  "pkg/providers/catalog/data/providers_catalog.json, and re-run this release."
+              )
+              sys.exit(1)
+          if days < 0:
+              print(f"FAIL: updated_at {raw} is in the future — the snapshot is not trustworthy")
+              sys.exit(1)
+          PY
+
   create-tag:
     name: Create Git Tag
+    needs: catalog-snapshot-age
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -60,6 +119,31 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ inputs.tag }}
+
+      - name: Provider catalog snapshot age gate (must be ≤ 14 days old)
+        # T067-06 / ADR-067 F-31 + A-15 (spec test T49): a release must not
+        # ship a stale embedded provider catalog. Fails when the committed
+        # snapshot's updated_at is more than 14 days old — merge the scheduled
+        # snapshot-refresh PR from elicify-ai/omnipus-provider-catalog and
+        # re-tag before releasing.
+        shell: bash
+        run: |
+          set -euo pipefail
+          snapshot=pkg/providers/catalog/data/providers_catalog.json
+          updated_at=$(jq -r '.updated_at // empty' "$snapshot")
+          if [ -z "$updated_at" ]; then
+            echo "no updated_at field in $snapshot — not a 2.0.0 catalog document?"
+            exit 1
+          fi
+          now=$(date -u +%s)
+          snap=$(date -u -d "$updated_at" +%s)
+          age_days=$(( (now - snap) / 86400 ))
+          echo "embedded catalog updated_at=$updated_at (${age_days} days old)"
+          if [ "$age_days" -gt 14 ]; then
+            echo "embedded provider catalog snapshot is ${age_days} days old (limit 14):"
+            echo "refresh $snapshot from the assembly repository's latest release before tagging"
+            exit 1
+          fi
 
       - name: Setup Go from go.mod
         id: setup-go

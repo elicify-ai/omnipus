@@ -5,10 +5,19 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
-	"strings"
+	"os"
 	"testing"
 )
+
+// ADR-068 §8b (2026-08-23 amendment): the OpenAI device-code flow deleted by
+// T068-03 (FR-002a) is restored here — the shared Codex client id is the
+// form OpenAI itself endorses, per peer agents. Tests below cover the
+// restored RequestDeviceCode / PollDeviceCodeOnce / ExchangeCodeForTokens
+// trio plus the token-response parser and the store-held refresh path. The
+// browser/PKCE-authorize-URL flow (BuildAuthorizeURL, GenerateState,
+// GeneratePKCE) is NOT restored — the device flow never builds an authorize
+// URL itself and the Headless rule (ADR-068 §8b) forbids a localhost
+// callback, so those symbols would have no caller.
 
 func makeJWTForClaims(t *testing.T, claims map[string]any) string {
 	t.Helper()
@@ -20,72 +29,6 @@ func makeJWTForClaims(t *testing.T, claims map[string]any) string {
 	}
 	payload := base64.RawURLEncoding.EncodeToString(payloadJSON)
 	return header + "." + payload + ".sig"
-}
-
-func TestBuildAuthorizeURL(t *testing.T) {
-	cfg := OAuthProviderConfig{
-		Issuer:     "https://auth.example.com",
-		ClientID:   "test-client-id",
-		Scopes:     "openid profile",
-		Originator: "codex_cli_rs",
-		Port:       1455,
-	}
-	pkce := PKCECodes{
-		CodeVerifier:  "test-verifier",
-		CodeChallenge: "test-challenge",
-	}
-
-	u := BuildAuthorizeURL(cfg, pkce, "test-state", "http://localhost:1455/auth/callback")
-
-	if !strings.HasPrefix(u, "https://auth.example.com/oauth/authorize?") {
-		t.Errorf("URL does not start with expected prefix: %s", u)
-	}
-	if !strings.Contains(u, "client_id=test-client-id") {
-		t.Error("URL missing client_id")
-	}
-	if !strings.Contains(u, "code_challenge=test-challenge") {
-		t.Error("URL missing code_challenge")
-	}
-	if !strings.Contains(u, "code_challenge_method=S256") {
-		t.Error("URL missing code_challenge_method")
-	}
-	if !strings.Contains(u, "state=test-state") {
-		t.Error("URL missing state")
-	}
-	if !strings.Contains(u, "response_type=code") {
-		t.Error("URL missing response_type")
-	}
-	if !strings.Contains(u, "id_token_add_organizations=true") {
-		t.Error("URL missing id_token_add_organizations")
-	}
-	if !strings.Contains(u, "codex_cli_simplified_flow=true") {
-		t.Error("URL missing codex_cli_simplified_flow")
-	}
-	if !strings.Contains(u, "originator=codex_cli_rs") {
-		t.Error("URL missing originator")
-	}
-}
-
-func TestBuildAuthorizeURLOpenAIExtras(t *testing.T) {
-	cfg := OpenAIOAuthConfig()
-	pkce := PKCECodes{CodeVerifier: "test-verifier", CodeChallenge: "test-challenge"}
-
-	u := BuildAuthorizeURL(cfg, pkce, "test-state", "http://localhost:1455/auth/callback")
-	parsed, err := url.Parse(u)
-	if err != nil {
-		t.Fatalf("url.Parse() error: %v", err)
-	}
-	q := parsed.Query()
-
-	if q.Get("id_token_add_organizations") != "true" {
-		t.Errorf("id_token_add_organizations = %q, want true", q.Get("id_token_add_organizations"))
-	}
-	if q.Get("codex_cli_simplified_flow") != "true" {
-		t.Errorf("codex_cli_simplified_flow = %q, want true", q.Get("codex_cli_simplified_flow"))
-	}
-	if q.Get("originator") != "codex_cli_rs" {
-		t.Errorf("originator = %q, want codex_cli_rs", q.Get("originator"))
-	}
 }
 
 func TestParseTokenResponse(t *testing.T) {
@@ -195,59 +138,6 @@ func makeJWTWithAccountID(accountID string) string {
 	return header + "." + payload + ".sig"
 }
 
-func TestExchangeCodeForTokens(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/oauth/token" {
-			http.Error(w, "not found", http.StatusNotFound)
-			return
-		}
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-
-		// Test httptest handler: a ParseForm failure leaves FormValue()
-		// returning empty, which the grant_type check below then rejects
-		// — the error surfaces via the test's own assertions.
-		if ignoredErr := r.ParseForm(); ignoredErr != nil {
-			_ = ignoredErr
-		}
-		if r.FormValue("grant_type") != "authorization_code" {
-			http.Error(w, "invalid grant_type", http.StatusBadRequest)
-			return
-		}
-
-		resp := map[string]any{
-			"access_token":  "mock-access-token",
-			"refresh_token": "mock-refresh-token",
-			"expires_in":    3600,
-		}
-		// Test httptest handler: an Encode failure on a static map literal
-		// is not realistically reachable; if it somehow failed, the client
-		// side would fail the response-decode assertions instead.
-		if ignoredErr := json.NewEncoder(w).Encode(resp); ignoredErr != nil {
-			_ = ignoredErr
-		}
-	}))
-	defer server.Close()
-
-	cfg := OAuthProviderConfig{
-		Issuer:   server.URL,
-		ClientID: "test-client",
-		Scopes:   "openid",
-		Port:     1455,
-	}
-
-	cred, err := ExchangeCodeForTokens(cfg, "test-code", "test-verifier", "http://localhost:1455/auth/callback")
-	if err != nil {
-		t.Fatalf("ExchangeCodeForTokens() error: %v", err)
-	}
-
-	if cred.AccessToken != "mock-access-token" {
-		t.Errorf("AccessToken = %q, want %q", cred.AccessToken, "mock-access-token")
-	}
-}
-
 func TestRefreshAccessToken(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/oauth/token" {
@@ -300,7 +190,7 @@ func TestRefreshAccessToken(t *testing.T) {
 }
 
 func TestRefreshAccessTokenNoRefreshToken(t *testing.T) {
-	cfg := OpenAIOAuthConfig()
+	cfg := OAuthProviderConfig{Issuer: "http://127.0.0.1:0", ClientID: "test-client"}
 	cred := &AuthCredential{
 		AccessToken: "old-token",
 		Provider:    "openai",
@@ -354,8 +244,131 @@ func TestOpenAIOAuthConfig(t *testing.T) {
 	if cfg.ClientID == "" {
 		t.Error("ClientID is empty")
 	}
-	if cfg.Port != 1455 {
-		t.Errorf("Port = %d, want 1455", cfg.Port)
+	if cfg.Scopes == "" {
+		t.Error("Scopes is empty")
+	}
+	// The Port field (and its 1455 value) was vestigial from the DELETED
+	// loopback-callback flow — nothing outside this assertion ever read it,
+	// and it documented a localhost listener ADR-068 forbids. Both are gone;
+	// the assertion that replaces it pins the fields the device-code flow
+	// actually uses.
+}
+
+func TestXAIOAuthConfig_Unset(t *testing.T) {
+	t.Setenv(EnvXAIOAuthClientID, "")
+	t.Setenv(EnvXAIOAuthIssuer, "")
+	t.Setenv(EnvXAIOAuthScopes, "")
+	// Explicitly unset rather than rely on t.Setenv("", "") semantics.
+	if err := os.Unsetenv(EnvXAIOAuthClientID); err != nil {
+		t.Fatalf("Unsetenv: %v", err)
+	}
+
+	_, err := XAIOAuthConfig()
+	if err == nil {
+		t.Fatal("expected ErrNotConfigured, got nil")
+	}
+	if err.Error() == "" {
+		t.Error("error message is empty")
+	}
+}
+
+func TestXAIOAuthConfig_Set(t *testing.T) {
+	t.Setenv(EnvXAIOAuthClientID, "test-xai-client")
+	t.Setenv(EnvXAIOAuthIssuer, "https://accounts.example.com")
+
+	cfg, err := XAIOAuthConfig()
+	if err != nil {
+		t.Fatalf("XAIOAuthConfig() error: %v", err)
+	}
+	if cfg.ClientID != "test-xai-client" {
+		t.Errorf("ClientID = %q, want %q", cfg.ClientID, "test-xai-client")
+	}
+	if cfg.Issuer != "https://accounts.example.com" {
+		t.Errorf("Issuer = %q, want %q", cfg.Issuer, "https://accounts.example.com")
+	}
+	if cfg.Scopes == "" {
+		t.Error("Scopes defaults should not be empty")
+	}
+}
+
+func TestXAIOAuthConfig_DefaultIssuer(t *testing.T) {
+	t.Setenv(EnvXAIOAuthClientID, "test-xai-client")
+	if err := os.Unsetenv(EnvXAIOAuthIssuer); err != nil {
+		t.Fatalf("Unsetenv: %v", err)
+	}
+
+	cfg, err := XAIOAuthConfig()
+	if err != nil {
+		t.Fatalf("XAIOAuthConfig() error: %v", err)
+	}
+	if cfg.Issuer != "https://accounts.x.ai" {
+		t.Errorf("Issuer = %q, want default %q", cfg.Issuer, "https://accounts.x.ai")
+	}
+}
+
+func TestRequestDeviceCode_Parses(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/accounts/deviceauth/usercode" {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		resp := map[string]any{
+			"device_auth_id": "das_test123",
+			"user_code":      "WDJB-MJHT",
+			"interval":       5,
+		}
+		if err := json.NewEncoder(w).Encode(resp); err != nil {
+			t.Errorf("encode: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	cfg := OAuthProviderConfig{Issuer: server.URL, ClientID: "test-client"}
+	info, err := RequestDeviceCode(cfg)
+	if err != nil {
+		t.Fatalf("RequestDeviceCode() error: %v", err)
+	}
+	if info.DeviceAuthID != "das_test123" {
+		t.Errorf("DeviceAuthID = %q, want %q", info.DeviceAuthID, "das_test123")
+	}
+	if info.UserCode != "WDJB-MJHT" {
+		t.Errorf("UserCode = %q, want %q", info.UserCode, "WDJB-MJHT")
+	}
+	if info.Interval != 5 {
+		t.Errorf("Interval = %d, want 5", info.Interval)
+	}
+	if info.VerifyURL != server.URL+"/codex/device" {
+		t.Errorf("VerifyURL = %q, want %q", info.VerifyURL, server.URL+"/codex/device")
+	}
+}
+
+func TestRequestDeviceCode_DefaultInterval(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := map[string]any{"device_auth_id": "das_x", "user_code": "ABCD-1234"}
+		if err := json.NewEncoder(w).Encode(resp); err != nil {
+			t.Errorf("encode: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	info, err := RequestDeviceCode(OAuthProviderConfig{Issuer: server.URL, ClientID: "c"})
+	if err != nil {
+		t.Fatalf("RequestDeviceCode() error: %v", err)
+	}
+	if info.Interval != 5 {
+		t.Errorf("Interval = %d, want default 5", info.Interval)
+	}
+}
+
+func TestRequestDeviceCode_UpstreamFailure(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	_, err := RequestDeviceCode(OAuthProviderConfig{Issuer: server.URL, ClientID: "c"})
+	if err == nil {
+		t.Fatal("expected error on upstream failure")
 	}
 }
 
@@ -366,7 +379,6 @@ func TestParseDeviceCodeResponseIntervalAsNumber(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parseDeviceCodeResponse() error: %v", err)
 	}
-
 	if resp.DeviceAuthID != "abc" {
 		t.Errorf("DeviceAuthID = %q, want %q", resp.DeviceAuthID, "abc")
 	}
@@ -385,7 +397,6 @@ func TestParseDeviceCodeResponseIntervalAsString(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parseDeviceCodeResponse() error: %v", err)
 	}
-
 	if resp.Interval != 5 {
 		t.Errorf("Interval = %d, want %d", resp.Interval, 5)
 	}
@@ -396,5 +407,155 @@ func TestParseDeviceCodeResponseInvalidInterval(t *testing.T) {
 
 	if _, err := parseDeviceCodeResponse(body); err == nil {
 		t.Fatal("expected error for invalid interval")
+	}
+}
+
+// pollServer builds an httptest server backing both the device-poll and
+// token-exchange endpoints, so PollDeviceCodeOnce's full success path can be
+// exercised without a real vendor.
+func pollServer(t *testing.T, pollStatus int, pollBody string) *httptest.Server {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/accounts/deviceauth/token", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(pollStatus)
+		if _, err := w.Write([]byte(pollBody)); err != nil {
+			t.Errorf("write: %v", err)
+		}
+	})
+	mux.HandleFunc("/oauth/token", func(w http.ResponseWriter, r *http.Request) {
+		resp := map[string]any{
+			"access_token":  "device-flow-access-token",
+			"refresh_token": "device-flow-refresh-token",
+			"expires_in":    3600,
+		}
+		if err := json.NewEncoder(w).Encode(resp); err != nil {
+			t.Errorf("encode: %v", err)
+		}
+	})
+	return httptest.NewServer(mux)
+}
+
+func TestPollDeviceCodeOnce_Success(t *testing.T) {
+	body := `{"authorization_code":"code123","code_challenge":"chal","code_verifier":"verif"}`
+	server := pollServer(t, http.StatusOK, body)
+	defer server.Close()
+
+	cfg := OAuthProviderConfig{Issuer: server.URL, ClientID: "c"}
+	cred, outcome, err := PollDeviceCodeOnce(cfg, "openai", "das_1", "USER-CODE")
+	if err != nil {
+		t.Fatalf("PollDeviceCodeOnce() error: %v", err)
+	}
+	if outcome != "" {
+		t.Errorf("outcome = %q, want empty on success", outcome)
+	}
+	if cred == nil {
+		t.Fatal("expected a credential on success")
+	}
+	if cred.AccessToken != "device-flow-access-token" {
+		t.Errorf("AccessToken = %q, want device-flow-access-token", cred.AccessToken)
+	}
+	if cred.Provider != "openai" {
+		t.Errorf("Provider = %q, want %q", cred.Provider, "openai")
+	}
+}
+
+func TestPollDeviceCodeOnce_Pending(t *testing.T) {
+	server := pollServer(t, http.StatusBadRequest, `{"error":"authorization_pending"}`)
+	defer server.Close()
+
+	cred, outcome, err := PollDeviceCodeOnce(OAuthProviderConfig{Issuer: server.URL, ClientID: "c"}, "openai", "das_1", "CODE")
+	if err != nil {
+		t.Fatalf("PollDeviceCodeOnce() error: %v", err)
+	}
+	if cred != nil {
+		t.Error("expected no credential while pending")
+	}
+	if outcome != DeviceCodePollPending {
+		t.Errorf("outcome = %q, want %q", outcome, DeviceCodePollPending)
+	}
+}
+
+func TestPollDeviceCodeOnce_SlowDown(t *testing.T) {
+	server := pollServer(t, http.StatusBadRequest, `{"error":"slow_down"}`)
+	defer server.Close()
+
+	cred, outcome, err := PollDeviceCodeOnce(OAuthProviderConfig{Issuer: server.URL, ClientID: "c"}, "openai", "das_1", "CODE")
+	if err != nil {
+		t.Fatalf("PollDeviceCodeOnce() error: %v", err)
+	}
+	if cred != nil {
+		t.Error("expected no credential on slow_down")
+	}
+	if outcome != DeviceCodePollSlowDown {
+		t.Errorf("outcome = %q, want %q", outcome, DeviceCodePollSlowDown)
+	}
+}
+
+func TestPollDeviceCodeOnce_Denied(t *testing.T) {
+	server := pollServer(t, http.StatusBadRequest, `{"error":"access_denied"}`)
+	defer server.Close()
+
+	cred, outcome, err := PollDeviceCodeOnce(OAuthProviderConfig{Issuer: server.URL, ClientID: "c"}, "openai", "das_1", "CODE")
+	if err != nil {
+		t.Fatalf("PollDeviceCodeOnce() error: %v", err)
+	}
+	if cred != nil {
+		t.Error("expected no credential on denial")
+	}
+	if outcome != DeviceCodePollDenied {
+		t.Errorf("outcome = %q, want %q", outcome, DeviceCodePollDenied)
+	}
+}
+
+func TestPollDeviceCodeOnce_Expired(t *testing.T) {
+	server := pollServer(t, http.StatusBadRequest, `{"error":"expired_token"}`)
+	defer server.Close()
+
+	cred, outcome, err := PollDeviceCodeOnce(OAuthProviderConfig{Issuer: server.URL, ClientID: "c"}, "openai", "das_1", "CODE")
+	if err != nil {
+		t.Fatalf("PollDeviceCodeOnce() error: %v", err)
+	}
+	if cred != nil {
+		t.Error("expected no credential when expired")
+	}
+	if outcome != DeviceCodePollExpired {
+		t.Errorf("outcome = %q, want %q", outcome, DeviceCodePollExpired)
+	}
+}
+
+func TestExchangeCodeForTokens(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/oauth/token" {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		if err := r.ParseForm(); err != nil {
+			t.Errorf("ParseForm: %v", err)
+		}
+		if r.FormValue("grant_type") != "authorization_code" {
+			http.Error(w, "invalid grant_type", http.StatusBadRequest)
+			return
+		}
+		resp := map[string]any{
+			"access_token":  "mock-access-token",
+			"refresh_token": "mock-refresh-token",
+			"expires_in":    3600,
+		}
+		if err := json.NewEncoder(w).Encode(resp); err != nil {
+			t.Errorf("encode: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	cfg := OAuthProviderConfig{Issuer: server.URL, ClientID: "test-client"}
+	cred, err := ExchangeCodeForTokens(cfg, "openai", "test-code", "test-verifier", "http://localhost:1455/auth/callback")
+	if err != nil {
+		t.Fatalf("ExchangeCodeForTokens() error: %v", err)
+	}
+	if cred.AccessToken != "mock-access-token" {
+		t.Errorf("AccessToken = %q, want %q", cred.AccessToken, "mock-access-token")
+	}
+	if cred.Provider != "openai" {
+		t.Errorf("Provider = %q, want %q", cred.Provider, "openai")
 	}
 }

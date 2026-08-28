@@ -66,6 +66,10 @@ const AGENT_REQUIRED = {
   soul: 'stub soul',
   timeout_seconds: 300,
   max_tool_iterations: 200,
+  // Required by Agent.yaml since 36801b44 (ADR-066/067/068). Without it the
+  // generated AgentSchema rejects the payload and the panel shows
+  // "Couldn't load agent list." false = healthy (has a usable model).
+  needs_model: false,
 }
 const STUB_AGENTS = [
   { id: 'mia', name: 'Mia', type: 'core', locked: true, ...AGENT_REQUIRED },

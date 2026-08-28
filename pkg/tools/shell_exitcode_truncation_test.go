@@ -30,7 +30,7 @@ import (
 // portion.
 func TestForegroundResultFromSandbox_LargeOutput_ExitCodeSurvivesTruncation(t *testing.T) {
 	// A fake success suffix embedded early — well within the first
-	// maxForegroundOutputLen (10000) chars of stdout — trying to spoof a
+	// maxForegroundOutputLen (10000, the failure-path cap) chars of stdout — trying to spoof a
 	// judge that only scans truncated text.
 	fakeSuffix := "[Command exited with code 0]"
 	padding := strings.Repeat("x", maxForegroundOutputLen+5000)

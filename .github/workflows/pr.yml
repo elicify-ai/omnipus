@@ -752,6 +752,33 @@ jobs:
         # CLAUDE.md's "Retired surfaces — do NOT reintroduce" rule.
         run: bash scripts/check-no-jpeg-screencast.sh
 
+      - name: Run removed-providers guard self-check
+        # Proves the guard below can still go red (ADR-068 spec SC-001) before
+        # its verdict is trusted — see docs/internal/false-green-patterns.md.
+        run: bash scripts/check-no-removed-providers-selfcheck.sh
+
+      - name: Run removed-providers guard
+        # ADR-068 §2.4: antigravity, claude-cli and the OpenAI device-code flow
+        # are deleted greenfield with no trace outside the historical records in
+        # scripts/no-removed-providers.allow. Branches cut before the deletion
+        # re-add them on merge as an ordinary addition — keep the deletion.
+        run: bash scripts/check-no-removed-providers.sh
+
+      - name: Run ADR-067 greenfield guard self-test
+        # Proves the guard below can still go red (11 planted violations, one
+        # per rule) before its verdict is trusted — see
+        # docs/internal/false-green-patterns.md.
+        run: bash scripts/check-greenfield-providers.sh --self-test
+
+      - name: Run ADR-067 greenfield guard
+        # ADR-067 SC-008 / SC-009 / US-11.AC2: pkg/providers/capabilities is
+        # folded into pkg/providers/catalog, the prefix-stripping resolver is
+        # gone, neither pkg/providers nor pkg/config carries alias / migration
+        # / deprecation machinery, and the SPA's bundled catalog is deleted.
+        # A branch cut before ADR-067 re-adds the alias path on merge as an
+        # ordinary addition — KEEP THE DELETION.
+        run: bash scripts/check-greenfield-providers.sh
+
   verify-contracts:
     name: Verify Contracts
     # Ensure generated wire-format types (TS + Go) match the spec files.
@@ -1077,6 +1104,62 @@ jobs:
         env:
           CGO_ENABLED: "1"
         run: go build -tags goolm,stdjson ./...
+
+
+  hermetic-build:
+    name: Hermetic Build Gate (catalog snapshot)
+    # T067-06 / ADR-067 FR-006, US-2.AC5 (spec test T48): the provider catalog
+    # is a committed, git-tracked snapshot embedded via //go:embed — the build
+    # must never fetch it (or any Go module) from the network. After a
+    # warm-cache step, `make build` runs with GOPROXY=off so any build-time
+    # module fetch fails loudly. The job also pins the snapshot mechanics:
+    # the file is git-tracked, pkg/providers/catalog carries exactly one
+    # //go:embed and no //go:generate that could reach the network.
+    runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: "0"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+
+      - name: Snapshot git-tracked, single go:embed, no go:generate
+        run: |
+          set -euo pipefail
+          git ls-files --error-unmatch pkg/providers/catalog/data/providers_catalog.json
+          embed_count=$(grep -rh --include='*.go' '^//go:embed' pkg/providers/catalog | wc -l)
+          if [ "$embed_count" -ne 1 ]; then
+            echo "expected exactly one //go:embed in pkg/providers/catalog, found $embed_count"
+            grep -rn --include='*.go' '^//go:embed' pkg/providers/catalog || true
+            exit 1
+          fi
+          if grep -rn --include='*.go' '^//go:generate' pkg/providers/catalog; then
+            echo "pkg/providers/catalog must not carry //go:generate directives (hermetic build)"
+            exit 1
+          fi
+
+      - name: Warm Go module cache (the only step allowed to fetch modules)
+        run: go mod download
+
+      - name: Hermetic make build (GOPROXY=off)
+        # GOFLAGS uses the -tags= equals form on purpose: the Makefile's
+        # `GOFLAGS?=` lets this env value override it (so it must carry the
+        # canonical build tags), AND the go tool parses the same value from
+        # the environment, where the space form (`-tags goolm,stdjson`) is
+        # rejected as a non-flag argument.
+        env:
+          GOPROXY: "off"
+          GOFLAGS: "-v -tags=goolm,stdjson -mod=mod"
+        run: make build
 
 
   test:
@@ -1813,7 +1896,12 @@ jobs:
 
       - name: Seed gateway config
         # providers is a flat array of ModelConfig entries (see pkg/config/config.go).
-        # agents.defaults.model_name must match one provider entry's model_name.
+        # Each row's `provider` (catalog id) is EXPLICIT and REQUIRED — the old
+        # "<protocol>/<model>" prefix-splitting migration was deleted (ADR-067
+        # FR-034, C1 fix): a row with no `provider` fails config load with
+        # "provider is required" instead of being guessed. `model` is the bare
+        # catalog model id. agents.defaults.default_model must match one provider
+        # entry's (provider, model) pair exactly.
         # dev_mode_bypass unblocks onboarding endpoints that require bearer auth
         # before an admin account exists (CLAUDE.md "Build & E2E Testing").
         #
@@ -1844,14 +1932,17 @@ jobs:
             },
             "agents": {
               "defaults": {
-                "model_name": "openrouter-glm",
+                "default_model": {
+                  "provider": "openrouter",
+                  "model": "z-ai/glm-5.2"
+                },
                 "auto_recap_enabled": true
               }
             },
             "providers": [
               {
-                "model_name": "openrouter-glm",
-                "model": "openrouter/z-ai/glm-5.2",
+                "provider": "openrouter",
+                "model": "z-ai/glm-5.2",
                 "api_base": "https://openrouter.ai/api/v1",
                 "api_key_ref": "OPENROUTER_API_KEY"
               }
@@ -1921,13 +2012,14 @@ jobs:
         # and the agent's model lookup picks this newer entry. If a placeholder
         # key goes in here, every LLM call 401s even though the seed provider
         # has a valid key.
-        # Model must match the seeded provider's model_name alias so the
-        # onboarding handler updates the existing entry instead of overwriting
-        # agent defaults with a non-aliased model path.
+        # Model must match the seeded provider's (provider, model) pair — the
+        # exact key ADR-067's GetModelConfig matches on — so the onboarding
+        # handler updates the existing entry instead of writing a second,
+        # divergent one.
         run: |
           set -euo pipefail
           jq -n --arg key "${OPENROUTER_API_KEY_CI}" \
-            '{provider:{id:"openrouter",api_key:$key,model:"openrouter/z-ai/glm-5.2"},admin:{username:"admin",password:"admin123"}}' \
+            '{provider:{id:"openrouter",api_key:$key,model:"z-ai/glm-5.2"},admin:{username:"admin",password:"admin123"}}' \
             | curl -sf -X POST http://localhost:6060/api/v1/onboarding/complete \
                 -H 'Content-Type: application/json' \
                 -d @- \

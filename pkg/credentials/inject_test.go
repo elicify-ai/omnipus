@@ -43,7 +43,7 @@ func nestedMailboxesCfg(agentID string, pairs map[string]string) *config.Config 
 }
 
 // providersCfg builds a config.Config whose Providers slice holds
-// *config.ModelConfig entries for the given (ModelName, APIKeyRef) pairs,
+// *config.ModelConfig entries for the given (Name, APIKeyRef) pairs,
 // exercising the cfg.Providers loop in InjectFromConfig (inject.go lines
 // ~33-55) — the loop that resolves each configured provider's APIKeyRef
 // through the credential store and injects the plaintext into the process
@@ -51,7 +51,9 @@ func nestedMailboxesCfg(agentID string, pairs map[string]string) *config.Config 
 func providersCfg(pairs ...[2]string) *config.Config {
 	providers := make([]*config.ModelConfig, 0, len(pairs))
 	for _, p := range pairs {
-		providers = append(providers, &config.ModelConfig{ModelName: p[0], APIKeyRef: p[1]})
+		// The error Owner is the PROVIDER id (ADR-067 X-25 deleted the
+		// `model_name` alias the wrapper used to name).
+		providers = append(providers, &config.ModelConfig{Provider: p[0], APIKeyRef: p[1]})
 	}
 	return &config.Config{Providers: providers}
 }
@@ -300,7 +302,7 @@ func TestInjectFromConfig_ProviderValidAPIKeyRef_InjectsCorrectKey(t *testing.T)
 // TestInjectFromConfig_ProviderMissingCredential_CollectedErrorDoesNotBlockOthers
 // documents the ACTUAL current behavior for a provider whose APIKeyRef does
 // not resolve in the store: the error is collected (naming the provider's
-// ModelName and the missing ref) and returned, but processing continues — a
+// Name and the missing ref) and returned, but processing continues — a
 // sibling provider's valid ref is still injected. This mirrors the
 // cfg.Mailboxes loop's already-tested contract; here it is verified for the
 // cfg.Providers loop specifically.
@@ -331,7 +333,7 @@ func TestInjectFromConfig_ProviderMissingCredential_CollectedErrorDoesNotBlockOt
 		t.Fatalf("error must name the missing ref, got %q", errs[0].Error())
 	}
 	if !strings.Contains(errs[0].Error(), "broken-provider") {
-		t.Fatalf("error must name the failing provider's ModelName, got %q", errs[0].Error())
+		t.Fatalf("error must name the failing provider id, got %q", errs[0].Error())
 	}
 	if got := os.Getenv(okRef); got != "ok-provider-secret" {
 		t.Fatalf(

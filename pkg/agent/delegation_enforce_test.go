@@ -161,8 +161,8 @@ func TestDelegationDistinction_RealWiringThroughCreateTask(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      filepath.Join(home, "agents"),
-				ModelName: "test-model",
+				Home:         filepath.Join(home, "agents"),
+				DefaultModel: config.DefaultModel{Model: "test-model"},
 			},
 			List: []config.AgentConfig{
 				{
@@ -312,7 +312,8 @@ func TestAgentExistsChecker_NilRegistryReturnsNil(t *testing.T) {
 	t.Setenv(config.EnvHome, home)
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Home: filepath.Join(home, "agents"), ModelName: "test-model"},
+			Defaults: config.AgentDefaults{
+				Home: filepath.Join(home, "agents"), DefaultModel: config.DefaultModel{Model: "test-model"}},
 			List: []config.AgentConfig{
 				{ID: "real-agent", Name: "Real", Type: config.AgentTypeCustom,
 					Home: filepath.Join(home, "agents", "real-agent")},

@@ -75,6 +75,7 @@ const mockCoreAgent: Agent = {
   name: 'General Assistant',
   type: 'core',
   locked: false,
+  needs_model: false,
   status: 'active',
   model: 'claude-sonnet-4-6',
   description: 'General purpose assistant',
@@ -92,6 +93,7 @@ const mockLockedCoreAgent: Agent = {
   name: 'Mia',
   type: 'core',
   locked: true,
+  needs_model: false,
   status: 'active',
   model: 'claude-opus-4-6',
   description: 'Core agent with compiled prompt — identity is read-only',
@@ -150,6 +152,7 @@ const mockJudgeAgent: Agent = {
   name: 'Judge',
   type: 'system',
   locked: true,
+  needs_model: false,
   status: 'active',
   model: 'claude-opus-4-6',
   description: 'Impartial acceptance-criteria verifier',
@@ -198,8 +201,8 @@ beforeEach(() => {
   // fallback editor needs ≥2 provider groups to exercise the provider-grouped
   // chip layout (and the per-provider badge attribution).
   vi.mocked(fetchProviders).mockResolvedValue([
-    { id: 'openrouter', name: 'openrouter', display_name: 'OpenRouter', status: 'connected', models: ['z-ai/glm-5.2', 'z-ai/glm-5-turbo'] },
-    { id: 'anthropic', name: 'anthropic', display_name: 'Anthropic', status: 'connected', models: ['claude-sonnet-4-6', 'claude-opus-4-6'] },
+    { id: 'openrouter', name: 'openrouter', display_name: 'OpenRouter', status: 'connected', models: ['z-ai/glm-5.2', 'z-ai/glm-5-turbo'], auth_method: 'api_key', dependents: [], backs_default: false },
+    { id: 'anthropic', name: 'anthropic', display_name: 'Anthropic', status: 'connected', models: ['claude-sonnet-4-6', 'claude-opus-4-6'], auth_method: 'api_key', dependents: [], backs_default: false },
   ])
 })
 

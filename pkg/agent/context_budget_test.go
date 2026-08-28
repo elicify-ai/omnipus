@@ -2,6 +2,9 @@ package agent
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -351,6 +354,12 @@ func TestEstimateToolDefsTokens_ScalesWithCount(t *testing.T) {
 
 // --- isOverContextBudget tests ---
 
+// TestIsOverContextBudget — ADR-066 FR-028: the check compares the assembled
+// request (everything after the pinned system prompt, plus the tool surface)
+// against the ONE budget B handed in by the caller. The pinned core and the
+// output reserve are inside B (B = W − max_tokens − ceil(0.05·W) −
+// pinnedCoreOverhead), so the function itself no longer knows the window or
+// max_tokens — every site computes B the same way and passes it in.
 func TestIsOverContextBudget(t *testing.T) {
 	systemMsg := providers.Message{Role: "system", Content: strings.Repeat("x", 1000)}
 	userMsg := msgUser("hello")
@@ -367,55 +376,109 @@ func TestIsOverContextBudget(t *testing.T) {
 		},
 	}
 
+	// Exact cost of the request the check must count: the three non-pinned
+	// messages plus the tool surface. The pinned system prompt is excluded —
+	// it is already inside B via pinnedCoreOverhead.
+	counted := estimateMessageTokens(smallHistory[1]) + estimateMessageTokens(smallHistory[2]) +
+		estimateMessageTokens(smallHistory[3]) + estimateToolDefsTokens(tools)
+
 	tests := []struct {
-		name          string
-		contextWindow int
-		messages      []providers.Message
-		toolDefs      []providers.ToolDefinition
-		maxTokens     int
-		want          bool
+		name     string
+		budget   int
+		messages []providers.Message
+		toolDefs []providers.ToolDefinition
+		want     bool
 	}{
 		{
-			name:          "within budget",
-			contextWindow: 100000,
-			messages:      smallHistory,
-			toolDefs:      tools,
-			maxTokens:     4096,
-			want:          false,
+			name:     "within budget",
+			budget:   contextBudget(100000, 4096, 0),
+			messages: smallHistory,
+			toolDefs: tools,
+			want:     false,
 		},
 		{
-			name:          "over budget with small window",
-			contextWindow: 100, // very small window
-			messages:      smallHistory,
-			toolDefs:      tools,
-			maxTokens:     4096,
-			want:          true,
+			name:     "over budget with small window",
+			budget:   contextBudget(100, 4096, 0), // negative B: anything is over
+			messages: smallHistory,
+			toolDefs: tools,
+			want:     true,
 		},
 		{
-			name:          "large max_tokens eats budget",
-			contextWindow: 2000,
-			messages:      smallHistory,
-			toolDefs:      tools,
-			maxTokens:     1800, // leaves almost no room
-			want:          true,
+			name: "large max_tokens eats budget",
+			// B = 2000 − 1800 − 100 − pinned(400) < 0: the pinned prompt's
+			// cost is inside B, exactly as agentContextBudget computes it.
+			budget:   contextBudget(2000, 1800, len(systemMsg.Content)*2/5),
+			messages: smallHistory,
+			toolDefs: tools,
+			want:     true,
 		},
 		{
-			name:          "empty messages within budget",
-			contextWindow: 10000,
-			messages:      nil,
-			toolDefs:      nil,
-			maxTokens:     4096,
-			want:          false,
+			name:     "empty messages within budget",
+			budget:   contextBudget(10000, 4096, 0),
+			messages: nil,
+			toolDefs: nil,
+			want:     false,
+		},
+		{
+			name:     "exactly at B is not over",
+			budget:   counted,
+			messages: smallHistory,
+			toolDefs: tools,
+			want:     false,
+		},
+		{
+			name:     "one token past B is over",
+			budget:   counted - 1,
+			messages: smallHistory,
+			toolDefs: tools,
+			want:     true,
+		},
+		{
+			name:     "pinned system prompt is not double-counted",
+			budget:   counted,
+			messages: append([]providers.Message{{Role: "system", Content: strings.Repeat("p", 100000)}}, smallHistory[1:]...),
+			toolDefs: tools,
+			want:     false,
+		},
+		{
+			name:   "injected system notes after the pinned prompt DO count",
+			budget: counted,
+			messages: []providers.Message{
+				systemMsg,
+				{Role: "system", Content: "a note the turn injected"},
+				smallHistory[1], smallHistory[2], smallHistory[3],
+			},
+			toolDefs: tools,
+			want:     true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := isOverContextBudget(tt.contextWindow, tt.messages, tt.toolDefs, tt.maxTokens)
+			got := isOverContextBudget(tt.budget, tt.messages, tt.toolDefs)
 			if got != tt.want {
 				t.Errorf("isOverContextBudget() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+// TestContextBudget_Formula pins FR-028 exactly:
+// B = W − max_tokens − ceil(0.05·W) − pinnedCoreOverhead.
+func TestContextBudget_Formula(t *testing.T) {
+	cases := []struct {
+		w, maxTokens, pinned, want int
+	}{
+		{100000, 4096, 0, 100000 - 4096 - 5000},
+		{100000, 4096, 1500, 100000 - 4096 - 5000 - 1500},
+		{8192, 2048, 1000, 8192 - 2048 - 410 - 1000}, // ceil(409.6) = 410
+		{100, 4096, 0, 100 - 4096 - 5},               // negative is allowed: caller treats as "always over"
+		{1, 0, 0, 0},                                 // ceil(0.05) = 1
+	}
+	for _, c := range cases {
+		if got := contextBudget(c.w, c.maxTokens, c.pinned); got != c.want {
+			t.Errorf("contextBudget(%d, %d, %d) = %d, want %d", c.w, c.maxTokens, c.pinned, got, c.want)
+		}
 	}
 }
 
@@ -508,12 +571,89 @@ func TestIsOverContextBudget_RealisticSession(t *testing.T) {
 	}
 
 	// With a large context window, should be within budget.
-	if isOverContextBudget(131072, messages, tools, 32768) {
+	if isOverContextBudget(contextBudget(131072, 32768, 0), messages, tools) {
 		t.Error("realistic session should be within 131072 context window")
 	}
 
 	// With a tiny context window, should exceed budget.
-	if !isOverContextBudget(500, messages, tools, 32768) {
+	if !isOverContextBudget(contextBudget(500, 32768, 0), messages, tools) {
 		t.Error("realistic session should exceed 500 context window")
 	}
+}
+
+// TestMidTurnBudget_SameBudgetAsWindowTrim — ADR-066 spec test 19 (B-38,
+// B-06; FR-028, FR-004), the "B only, SummarizeTokenPercent absent" half owned
+// by T066-03. T066-13 extends it with the mid-turn site once that site exists.
+//
+// One budget B for every consumer: the pre-turn check, the timeout-recovery
+// check and windowTrim's suffix fit-check all derive B from the same helper
+// (agentContextBudget), and nothing in pkg/agent scales, discounts or gates
+// that budget by the deleted summarize_token_percent knob.
+func TestMidTurnBudget_SameBudgetAsWindowTrim(t *testing.T) {
+	t.Run("agentContextBudget is FR-028 for a real instance", func(t *testing.T) {
+		inst := &AgentInstance{ContextWindow: 100000, MaxTokens: 4096} // no ContextBuilder: pinned core = breadcrumb cap only
+		want := contextBudget(100000, 4096, breadcrumbTokenCap)
+		if got := agentContextBudget(inst); got != want {
+			t.Fatalf("agentContextBudget = %d, want %d", got, want)
+		}
+		if want != 100000-4096-5000-breadcrumbTokenCap {
+			t.Fatalf("formula drifted: %d", want)
+		}
+	})
+
+	t.Run("every isOverContextBudget site in loop.go reads agentContextBudget", func(t *testing.T) {
+		src := readOwnedFileForTest(t, "loop.go")
+		// Both forms of the predicate count: the defs form
+		// (isOverContextBudget) and the measured-token form
+		// (isOverContextBudgetTokens), which the pre-turn and
+		// timeout-recovery sites use so they charge the SENT tool surface —
+		// the one windowTrim measures — instead of the whole registry.
+		calls := regexp.MustCompile(`isOverContextBudget(?:Tokens)?\(\s*([^,]+),`).FindAllStringSubmatch(src, -1)
+		if len(calls) < 2 {
+			t.Fatalf("expected the pre-turn and timeout-recovery sites in loop.go, found %d call(s)", len(calls))
+		}
+		for _, c := range calls {
+			if strings.TrimSpace(c[1]) != "agentContextBudget(ts.agent)" {
+				t.Errorf("isOverContextBudget site passes %q — every site must pass agentContextBudget(ts.agent)", c[1])
+			}
+		}
+		// windowTrim derives its suffix fit-check budget from the same helper.
+		wt := src[strings.Index(src, "func (al *AgentLoop) windowTrim("):]
+		if !strings.Contains(wt, "agentContextBudget(agent)") {
+			t.Error("windowTrim must compute its budget via agentContextBudget(agent), not an inline formula")
+		}
+	})
+
+	t.Run("the mid-turn site reads the same budget (T066-13)", func(t *testing.T) {
+		src := readOwnedFileForTest(t, "midturn_budget.go")
+		if !strings.Contains(src, "agentContextBudget(ts.agent)") {
+			t.Error("midTurnWindowCheck must derive B via agentContextBudget(ts.agent) — the same helper every other site reads (FR-028)")
+		}
+		if strings.Contains(src, "SummarizeTokenPercent") {
+			t.Error("the mid-turn site must not consult the deleted summarize_token_percent")
+		}
+		// The tool loop hands EVERY admitted result to the check: the count
+		// of loop.go call sites must cover the append sites (8 denial-family
+		// + the main result site + the skipped-results site).
+		loopSrc := readOwnedFileForTest(t, "loop.go")
+		if got := strings.Count(loopSrc, "al.midTurnWindowCheck(ts, messages, providerToolDefs)"); got < 10 {
+			t.Errorf("loop.go has %d midTurnWindowCheck sites; every admitted-result append must be followed by the check (want ≥ 10)", got)
+		}
+	})
+
+	t.Run("SummarizeTokenPercent is absent from pkg/agent", func(t *testing.T) {
+		entries, err := os.ReadDir(".")
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, e := range entries {
+			name := e.Name()
+			if e.IsDir() || filepath.Ext(name) != ".go" || strings.HasSuffix(name, "_test.go") {
+				continue
+			}
+			if strings.Contains(readOwnedFileForTest(t, name), "SummarizeTokenPercent") {
+				t.Errorf("%s still references SummarizeTokenPercent (FR-004: deleted)", name)
+			}
+		}
+	})
 }

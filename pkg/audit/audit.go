@@ -75,6 +75,27 @@ const (
 	// deny otherwise (missing binary, handshake/timeout/turn-cap failure, or a
 	// denied/errored run).
 	EventExecutorSmokeTest = "executor.smoke_test"
+	// EventOnboardingAdminCreated records the creation of the first
+	// administrator account by POST /api/v1/onboarding/complete — the single
+	// point at which this product mints an authentication authority from an
+	// unauthenticated request. Details carry {username, source_ip, provider,
+	// auth_method, route}; the chosen password and the issued bearer token are
+	// never logged. Decision is always allow (the refusal path emits
+	// EventOnboardingRefused instead).
+	EventOnboardingAdminCreated = "onboarding.admin_created"
+	// EventOnboardingRefused records a request that the ADR-068 FR-050
+	// pre-auth onboarding window refused: the instance already has an
+	// authentication authority, onboarding is already complete, its onboarding
+	// state is unknown, its config could not be read, or (on
+	// /onboarding/complete only) the requested username already exists.
+	// Details carry {reason, source_ip, route} plus `username` on the one
+	// reason that has already parsed the body. Decision is always deny.
+	//
+	// `route` distinguishes the two endpoints that emit it:
+	// /api/v1/onboarding/complete, which MINTS an authentication authority,
+	// and /api/v1/onboarding/probe-provider, which spends the operator's
+	// billable vendor quota on an `auth: sign_in` probe.
+	EventOnboardingRefused = "onboarding.refused"
 )
 
 // Decision values for audit entries. Values are Decision-compatible
@@ -118,6 +139,9 @@ func IsValidEventName(e EventName) bool {
 		EventChannelPairing,
 		EventCliValidate,
 		EventExecutorSmokeTest,
+		// First-run onboarding authority events (pkg/gateway/rest_onboarding.go).
+		EventOnboardingAdminCreated,
+		EventOnboardingRefused,
 		// Tool Registry redesign event names from events.go. These are
 		// emitted from the agent loop and the policy package.
 		EventToolPolicyDenyAttempted,
@@ -183,6 +207,29 @@ func IsValidEventName(e EventName) bool {
 		// gateway path) and included here to prevent a warn-once on first emission.
 		"provider_key_validated",
 		"provider_key_validation_skipped",
+		// "provider.default_model.changed" is emitted by the
+		// PUT /providers/default-model handler on every successful change of
+		// the global default (provider, model) pair (ADR-068 FR-018, T068-11);
+		// details carry the old and new pairs.
+		"provider.default_model.changed",
+		// "provider.deleted" is emitted once per COMPLETED
+		// DELETE /providers/{id} run (ADR-068 FR-010 step 4, T068-09);
+		// details carry the credential REF NAME (never the value), the
+		// dependents count and any default change.
+		// "provider.credential_swept" is emitted by the boot-time sweep of
+		// orphaned `<id>_API_KEY` credentials whose provider row is gone
+		// (ADR-068 FR-010 last clause, T068-10).
+		// "provider.sign_in_status_checked" is emitted once per Copilot
+		// sign-in probe (pkg/gateway/rest_signin_copilot.go). That probe
+		// execs the vendor CLI and spends one premium request billed to the
+		// operator when a session exists, and ADR-068 FR-050 makes its route
+		// reachable pre-auth while onboarding is incomplete, so every call
+		// has to be attributable after the fact: details carry the actor
+		// (empty for an anonymous pre-auth caller), source_ip, the resulting
+		// state, and whether the answer came from the cost-avoiding cache.
+		"provider.deleted",
+		"provider.credential_swept",
+		"provider.sign_in_status_checked",
 		// pkg/tools/memory.go: long-term memory write events.
 		// "memory.remember" and "memory.retrospective" are the success-path
 		// events; "memory.rate_limited" is emitted by the v0.2 #155 item 6

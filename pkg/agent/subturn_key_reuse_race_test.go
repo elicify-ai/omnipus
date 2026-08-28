@@ -75,7 +75,7 @@ func TestSubTurnKeyReuseRace_CancelStillReachesSurvivingGeneration(t *testing.T)
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              tmpDir,
-				ModelName:         "key-reuse-race-test-model",
+				DefaultModel:      config.DefaultModel{Model: "key-reuse-race-test-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -225,7 +225,7 @@ func TestSubTurnKeyReuseRace_SpawnSubTurnSideCompareAndDelete(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              tmpDir,
-				ModelName:         "key-reuse-race-test-model",
+				DefaultModel:      config.DefaultModel{Model: "key-reuse-race-test-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},

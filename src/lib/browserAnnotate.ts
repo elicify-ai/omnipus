@@ -15,13 +15,10 @@
 // exactly like the composer's own AttachmentAdapter does internally
 // (src/lib/attachment-adapter.ts), just without needing the runtime.
 
-import { uploadFiles, inspectBrowserElement, fetchModelCapabilities, modelLacksImageCapability, ApiSchemaError } from '@/lib/api'
-import type { Agent } from '@/lib/api'
+import { uploadFiles, inspectBrowserElement } from '@/lib/api'
 import { mediaRefURL } from '@/lib/library-attachment'
-import { queryClient } from '@/lib/queryClient'
 import { useChatStore } from '@/store/chat'
 import { useSessionStore } from '@/store/session'
-import { useUiStore } from '@/store/ui'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 
 export interface SubmitAnnotationParams { // not-wire-format: local params for the annotate-submit orchestration, never serialized across the gateway/SPA boundary
@@ -77,45 +74,11 @@ export async function submitAnnotation({ comment, file, point, sessionId, agentI
     throw new AnnotationBusyError('The agent is busy — wait for it to finish, then send.')
   }
 
-  // D18: model vision capability is not knowable client-side at all — warn
-  // (non-blocking) BEFORE uploading when the target agent's resolved model
-  // is known to lack the "image" modality, so the user isn't surprised only
-  // AFTER losing a turn to the model's own rejection. `agents` is read from
-  // the existing `['agents']` react-query cache (shared with useChatAgents)
-  // rather than fetched again here. Best-effort: any failure resolving the
-  // agent's model or fetching the capability catalog must never block the
-  // send — the reactive server-side explanation (loop_media.go) remains the
-  // backstop either way.
-  try {
-    const agents = queryClient.getQueryData<Agent[]>(['agents'])
-    const agentModel = agents?.find((a) => a.id === agentId)?.model
-    if (agentModel) {
-      const caps = await fetchModelCapabilities()
-      if (modelLacksImageCapability(agentModel, caps)) {
-        useUiStore.getState().addToast({
-          message: `${agentModel} may not support image input — it might not be able to see this annotation.`,
-          variant: 'warning',
-        })
-      }
-    }
-  } catch (err) {
-    // Best-effort — a failure here must never block the send. But it must
-    // not vanish into console.debug either: an ApiSchemaError means the
-    // vision pre-send warning is DISABLED FOR EVERY MODEL until the
-    // contract drift is fixed (Constraint #8 requires schema-validation
-    // failures to be visible, not silently swallowed to a success-shaped
-    // no-op), which is a materially different — and more urgent — signal
-    // than an ordinary network hiccup. Distinguish the two rather than
-    // flattening both to the same log line.
-    if (err instanceof ApiSchemaError) {
-      console.warn(
-        '[browser] model-capability check failed schema validation — the vision pre-send warning is disabled for ALL models until this contract drift is fixed:',
-        err,
-      )
-    } else {
-      console.warn('[browser] model-capability check failed (best-effort, send proceeds regardless):', err)
-    }
-  }
+  // No client-side vision pre-send warning here (ADR-068 T068-05): the SPA's
+  // only model-capability source is the registry-fed catalog
+  // (fetchProvidersCatalog → CatalogModel.input_modalities); the pre-send
+  // check is re-added on that source in a later B5 task. The reactive
+  // server-side explanation (loop_media.go) is the backstop meanwhile.
 
   const uploadResult = await uploadFiles(sessionId, [file], useWorkspacesStore.getState().activeWorkspaceId ?? undefined)
   const uploaded = uploadResult.files[0]

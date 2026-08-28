@@ -70,10 +70,15 @@ var SecretEntriesRelative = append(append([]string{}, SecretEntriesAlways...), S
 //	           reads as correct and protects nothing. Before this branch,
 //	           FSScopeConfined refused it for a reason unrelated to secrecy;
 //	           opening reads removed that accidental protection.
-//	auth.json  pkg/auth's AuthStore (pkg/auth/store.go::authFilePath). Holds
-//	           per-provider OAuth AccessToken and RefreshToken as PLAINTEXT
-//	           JSON — it is not routed through the encrypted credential store.
-//	           No case trick and no race needed: a plain read_file.
+//	auth.json  A LEGACY plaintext OAuth store. pkg/auth used to write
+//	           per-provider AccessToken and RefreshToken here as PLAINTEXT
+//	           JSON, outside the encrypted credential store; that writer has
+//	           since been deleted (see AuthCredential in pkg/auth/store.go)
+//	           and nothing in Omnipus creates the file any more. The entry
+//	           stays because deleting the WRITER does not delete the FILE:
+//	           any install that ever ran the old code still has one on disk,
+//	           still full of live-looking tokens, and still one plain
+//	           read_file away — no case trick and no race needed.
 //
 // Neither has any legitimate agent-facing reader: backups are produced and
 // consumed by the gateway's own settings endpoints, and auth.json is read only

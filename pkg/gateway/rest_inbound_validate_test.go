@@ -46,9 +46,9 @@ func newTestRestAPIWithValidation(t *testing.T) *restAPI {
 		},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      tmpDir,
-				ModelName: "test-model",
-				MaxTokens: 4096,
+				Home:         tmpDir,
+				DefaultModel: config.DefaultModel{Model: "test-model"},
+				MaxTokens:    4096,
 			},
 		},
 	}
@@ -448,9 +448,9 @@ func newTestRestAPIWithValidationAndAgent(t *testing.T) *restAPI {
 		},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      tmpDir,
-				ModelName: "test-model",
-				MaxTokens: 4096,
+				Home:         tmpDir,
+				DefaultModel: config.DefaultModel{Model: "test-model"},
+				MaxTokens:    4096,
 			},
 			List: []config.AgentConfig{
 				{
@@ -648,7 +648,7 @@ func TestUpdateAgent_ValidateInbound_EmptyPatchRejected(t *testing.T) {
 // ── Handler integration tests — HandleOnboardingProbeProvider ─────────────────
 
 // TestProbeProvider_ValidateInbound_InvalidBody asserts that POST /onboarding/probe-provider
-// with validate_inbound=true rejects a body missing the required "id" and "api_key" fields.
+// with validate_inbound=true rejects a body missing the required "id" and "auth" fields.
 //
 // BDD:
 //
@@ -660,7 +660,7 @@ func TestUpdateAgent_ValidateInbound_EmptyPatchRejected(t *testing.T) {
 func TestProbeProvider_ValidateInbound_InvalidBody(t *testing.T) {
 	api := newTestRestAPIWithValidation(t)
 
-	// {} is missing required "id" and "api_key" fields.
+	// {} is missing the required "id" and "auth" fields (A-CONTRACT shape).
 	body := `{}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/probe-provider", strings.NewReader(body))
@@ -683,7 +683,7 @@ func TestProbeProvider_ValidateInbound_InvalidBody(t *testing.T) {
 // BDD:
 //
 //	Given validate_inbound=true,
-//	When POST /onboarding/probe-provider body contains {"id":"openai","api_key":"sk-test"},
+//	When POST /onboarding/probe-provider body contains {"id":"openai","auth":"api_key","api_key":"sk-test"},
 //	Then the schema validation passes (not a 400 schema error).
 //
 // Traces to: fix-Q / fix-Y — handler integration test for ProbeProviderRequest validation.
@@ -691,7 +691,7 @@ func TestProbeProvider_ValidateInbound_ValidBody(t *testing.T) {
 	api := newTestRestAPIWithValidation(t)
 
 	// Required fields present and valid types — schema must accept this.
-	body := `{"id":"openai","api_key":"sk-test-key-value"}`
+	body := `{"id":"openai","auth":"api_key","api_key":"sk-test-key-value"}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/probe-provider", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")

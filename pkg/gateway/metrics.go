@@ -24,6 +24,8 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+
+	"github.com/elicify-ai/omnipus/pkg/agent"
 )
 
 // toolMetrics holds all Prometheus-style metrics for the tool registry.
@@ -166,6 +168,18 @@ func (a *restAPI) HandleMetrics(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(&sb, "omnipus_tool_approval_latency_seconds_count{%s} %d\n", label, h.total.Load())
 	}
 	globalToolMetrics.latencyMu.Unlock()
+
+	// omnipus_tool_result_large_total (ADR-066 D4, B-13): tool results
+	// admitted unmodified while over the warn threshold.
+	sb.WriteString("# HELP omnipus_tool_result_large_total Total tool results over the warn threshold but under their cap.\n")
+	sb.WriteString("# TYPE omnipus_tool_result_large_total counter\n")
+	fmt.Fprintf(&sb, "omnipus_tool_result_large_total %d\n", agent.ToolResultLargeTotal())
+
+	// omnipus_context_empties_total (ADR-066 D5, FR-023 / B-27b): tool
+	// results emptied in place by the D5 pass, summed over every pass.
+	sb.WriteString("# HELP omnipus_context_empties_total Total tool results emptied in place to fit the context budget.\n")
+	sb.WriteString("# TYPE omnipus_context_empties_total counter\n")
+	fmt.Fprintf(&sb, "omnipus_context_empties_total %d\n", agent.ContextEmptiesTotal())
 
 	// omnipus_tool_mcp_collision_total
 	sb.WriteString("# HELP omnipus_tool_mcp_collision_total Total MCP tool name collisions.\n")

@@ -1,0 +1,21 @@
+title: CatalogResizeLimits
+description: >
+  Image resize limits applied by the media pipeline before an attachment is
+  sent to a provider (ADR-067 [A-10]). The document carries one default and
+  an optional per-provider value.
+type: object
+required:
+  - long_edge_px
+  - max_bytes
+additionalProperties: false
+properties:
+  long_edge_px:
+    type: integer
+    minimum: 1
+    description: Longest image edge in pixels after resize.
+    example: 2000
+  max_bytes:
+    type: integer
+    minimum: 1
+    description: Maximum encoded image size in bytes.
+    example: 5242880

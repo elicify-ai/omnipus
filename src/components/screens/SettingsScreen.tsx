@@ -10,13 +10,34 @@ import { DevicesSection } from '@/components/settings/DevicesSection'
 import { PerformanceSection } from '@/components/settings/PerformanceSection'
 import { ChatSection } from '@/components/settings/ChatSection'
 import { MemorySection } from '@/components/settings/MemorySection'
+import { ContextSection } from '@/components/settings/ContextSection'
 import { ScreenHeader } from '@/components/layout/ScreenHeader'
 import { fetchAboutInfo, isDevicePairingEnabled } from '@/lib/api'
 // O4: the passive RestartBanner at the top of Settings is replaced by the
 // modal-on-save flow (GatewaySection) + persistent Restart control in Gateway tab.
 // Operators find the restart action under Settings → Gateway.
 
-export function SettingsScreen() {
+export type SettingsTab =
+  | 'providers'
+  | 'models'
+  | 'integrations'
+  | 'security'
+  | 'gateway'
+  | 'data'
+  | 'memory'
+  | 'devices'
+  | 'performance'
+  | 'chat'
+  | 'about'
+
+export interface SettingsScreenProps { // not-wire-format: React props from the route's validated search params
+  /** `?tab=` — which tab opens first (defaults to Providers). */
+  initialTab?: SettingsTab
+  /** `?provider=&model=` — T068-29 / ADR-068 X-08: pre-fill a Models → Model overrides row. */
+  prefillOverride?: { provider: string; model: string }
+}
+
+export function SettingsScreen({ initialTab = 'providers', prefillOverride }: SettingsScreenProps = {}) {
   const { data: aboutInfo, isError: aboutInfoError } = useQuery({
     queryKey: ['about'],
     queryFn: fetchAboutInfo,
@@ -51,10 +72,11 @@ export function SettingsScreen() {
           )}
         </div>
 
-        <Tabs defaultValue="providers">
+        <Tabs defaultValue={initialTab}>
           {/* Sticky tab bar — stays visible while scrolling tab content */}
           <TabsList className="mb-6 flex-wrap h-auto gap-1 sticky top-0 z-10 bg-[var(--color-primary)] py-2 -mx-1 px-1">
             <TabsTrigger data-testid="settings-tab-providers" value="providers">Providers</TabsTrigger>
+            <TabsTrigger data-testid="settings-tab-models" value="models">Models</TabsTrigger>
             <TabsTrigger data-testid="settings-tab-integrations" value="integrations">Integrations</TabsTrigger>
             <TabsTrigger data-testid="settings-tab-security" value="security">Security</TabsTrigger>
             <TabsTrigger value="gateway">Gateway</TabsTrigger>
@@ -68,6 +90,11 @@ export function SettingsScreen() {
 
           <TabsContent value="providers">
             <ProvidersSection />
+          </TabsContent>
+
+          {/* ADR-066 D9 / FR-037 — Settings → Models (context-budget controls) */}
+          <TabsContent value="models">
+            <ContextSection prefillOverride={prefillOverride} />
           </TabsContent>
 
           <TabsContent value="integrations">

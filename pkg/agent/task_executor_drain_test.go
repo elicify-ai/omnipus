@@ -54,7 +54,7 @@ func newDrainTestExecutorWithProvider(t *testing.T, provider providers.LLMProvid
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home: tmpDir, ModelName: "test-model", MaxTokens: 4096, MaxToolIterations: 10,
+				Home: tmpDir, DefaultModel: config.DefaultModel{Model: "test-model"}, MaxTokens: 4096, MaxToolIterations: 10,
 			},
 			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},

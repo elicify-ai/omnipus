@@ -162,7 +162,7 @@ func TestMessageParent_RealSpawnSubTurnContext_ChildCanMessageParent(t *testing.
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              workspaceDir,
-				ModelName:         "mp576-mock",
+				DefaultModel:      config.DefaultModel{Model: "mp576-mock"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -179,7 +179,7 @@ func TestMessageParent_RealSpawnSubTurnContext_ChildCanMessageParent(t *testing.
 	lifecycleStore := session.NewLifecycleStore(filepath.Join(storeDir, "lifecycle"))
 	inboxStore := session.NewMessageInboxStore(filepath.Join(storeDir, "inbox"))
 
-	delegateTool := tools.NewDelegateTool(cfg.Agents.Defaults.ModelName, cfg.Agents.Defaults.MaxTokens, 0)
+	delegateTool := tools.NewDelegateTool(cfg.Agents.Defaults.DefaultModel.Model, cfg.Agents.Defaults.MaxTokens, 0)
 	delegateTool.SetSpawner(NewSubTurnSpawner(al))
 	delegateTool.SetLifecycleStore(lifecycleStore)
 	delegateTool.SetDelegationDenyCheckerBackground(

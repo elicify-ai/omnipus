@@ -7,40 +7,23 @@ package providers
 
 import "strings"
 
-// knownDisplayNames maps lowercase provider IDs to their branded display names.
-// Used by DisplayName to produce human-readable names in FR-7 validation messages.
-var knownDisplayNames = map[string]string{
-	"openrouter": "OpenRouter",
-	"openai":     "OpenAI",
-	"anthropic":  "Anthropic",
-	"gemini":     "Google Gemini",
-	"google":     "Google Gemini",
-	"groq":       "Groq",
-	"deepseek":   "DeepSeek",
-	"zhipu":      "Zhipu AI",
-	"z-ai":       "Z.AI",
-	"moonshot":   "Moonshot",
-	"azure":      "Azure OpenAI",
-}
-
-// DisplayName returns the branded display name for the given provider ID (e.g.
-// "openrouter" → "OpenRouter"). It is the single source of truth for FR-7
-// user-facing messages in the gateway (used at all three ValidateKey call sites).
+// DisplayName returns the catalog's own `name` for a provider id — the single
+// source of truth for the FR-7 user-facing validation messages in the gateway
+// and for any other label built in Go (ADR-067 A-14, FR-030).
 //
-// Note: the interactive CLI onboarding wizard deliberately uses its own
-// providerMenu labels for display (cmd/omnipus/internal/onboard) rather than this
-// map, so a provider may surface a slightly different label in the CLI menu UX.
-//
-// Falls back to title-casing the first letter of the providerID for unknown
-// providers so messages are still readable without a curated entry.
+// An id the catalog does not carry is returned VERBATIM. The old
+// `knownDisplayNames` map and its title-case fallback are gone: a hand-typed
+// branded name is exactly the kind of Go-side provider knowledge ADR-067
+// removed, and title-casing an unknown id ("Z-ai") invented a brand for a
+// provider Omnipus does not know. Echoing the id back is honest and, for an
+// unknown provider, is the only string that cannot mislead.
 func DisplayName(providerID string) string {
-	pid := strings.ToLower(strings.TrimSpace(providerID))
-	if name, ok := knownDisplayNames[pid]; ok {
-		return name
-	}
-	// Title-case fallback for unknown providers.
-	if len(providerID) == 0 {
+	id := strings.TrimSpace(providerID)
+	if id == "" {
 		return providerID
 	}
-	return strings.ToUpper(providerID[:1]) + providerID[1:]
+	if p, ok := CatalogProvider(id); ok && strings.TrimSpace(p.Name) != "" {
+		return p.Name
+	}
+	return id
 }

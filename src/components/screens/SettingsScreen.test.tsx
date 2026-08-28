@@ -39,6 +39,15 @@ vi.mock('@/components/settings/DevicesSection', () => ({ DevicesSection: () => n
 vi.mock('@/components/settings/PerformanceSection', () => ({ PerformanceSection: () => null }))
 vi.mock('@/components/settings/ChatSection', () => ({ ChatSection: () => null }))
 vi.mock('@/components/settings/MemorySection', () => ({ MemorySection: () => null }))
+// T068-29 (ADR-066 D9): the Models tab hosts ContextSection; stub it so the
+// tab/prefill plumbing is tested without its network calls.
+vi.mock('@/components/settings/ContextSection', () => ({
+  ContextSection: (props: { prefillOverride?: { provider: string; model: string } }) => (
+    <div data-testid="context-section-stub">
+      {props.prefillOverride ? `${props.prefillOverride.provider}/${props.prefillOverride.model}` : 'no-prefill'}
+    </div>
+  ),
+}))
 
 // Mock only the fetch/derivation SettingsScreen touches directly.
 vi.mock('@/lib/api', async (importOriginal) => {
@@ -64,10 +73,10 @@ function makeClient() {
   return new QueryClient({ defaultOptions: { queries: { retry: false } } })
 }
 
-function renderScreen() {
+function renderScreen(props: React.ComponentProps<typeof SettingsScreen> = {}) {
   return render(
     <QueryClientProvider client={makeClient()}>
-      <SettingsScreen />
+      <SettingsScreen {...props} />
     </QueryClientProvider>,
   )
 }
@@ -114,5 +123,24 @@ describe('SettingsScreen — about-info fetch-error message', () => {
     renderScreen()
 
     expect(screen.queryByTestId('settings-about-fetch-error')).not.toBeInTheDocument()
+  })
+})
+
+// T068-29 — ADR-066 FR-037: Settings → Models tab; `?tab=models&provider=&model=`
+// (the ADR-068 X-08 link target) opens the tab with a pre-filled override row.
+describe('SettingsScreen — Models tab (ADR-066 D9)', () => {
+  it('exposes a Models tab that hosts ContextSection', async () => {
+    vi.mocked(api.fetchAboutInfo).mockResolvedValue(ABOUT_INFO_OK)
+    renderScreen({ initialTab: 'models' })
+    expect(screen.getByRole('tab', { name: /^models$/i })).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByTestId('context-section-stub')).toHaveTextContent('no-prefill'))
+  })
+
+  it('passes the provider/model pre-fill through to ContextSection', async () => {
+    vi.mocked(api.fetchAboutInfo).mockResolvedValue(ABOUT_INFO_OK)
+    renderScreen({ initialTab: 'models', prefillOverride: { provider: 'ollama', model: 'qwen3:8b' } })
+    await waitFor(() =>
+      expect(screen.getByTestId('context-section-stub')).toHaveTextContent('ollama/qwen3:8b'),
+    )
   })
 })

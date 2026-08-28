@@ -97,7 +97,7 @@ func TestRunAgentLoop_RoundTrip_AfterReopen_PreservesModelAndErrorStatus(t *test
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              workspaceDir,
-				ModelName:         "scripted-model",
+				DefaultModel:      config.DefaultModel{Model: "scripted-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -291,7 +291,7 @@ func TestRunTurn_StampsModelFieldOnAssistantEntry(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              workspaceDir,
-				ModelName:         modelName,
+				DefaultModel:      config.DefaultModel{Model: modelName},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -447,110 +447,26 @@ func TestDecideSwitchCompressAction_EmptyAndNegativeInputs(t *testing.T) {
 }
 
 // =============================================================================
-// W2-27 — Provider tie-break ordering (openrouter vs vivgrid)
+// W2-27 — Provider tie-break ordering: RETIRED by ADR-067 FR-040 (X-24)
 // =============================================================================
 //
-// When both openrouter and vivgrid are configured, the resolver's passthrough
-// fallback picks the FIRST matching passthrough provider in cfg.Providers
-// order. This is "first-wins" — a regression that re-orders the iteration
-// (e.g. via map iteration) would produce a flaky test. We assert the
-// deterministic order matches cfg.Providers[i].Provider == "openrouter" wins
-// over "vivgrid" when openrouter is listed first.
-func TestResolveModelCfg_PassthroughTieBreak_OpenRouterBeforeVivgrid(t *testing.T) {
-	cfg := &config.Config{
-		Providers: []*config.ModelConfig{
-			{
-				ModelName: "or",
-				Model:     "openrouter/auto",
-				Provider:  "openrouter",
-				APIBase:   "https://openrouter.ai/api/v1",
-				APIKeyRef: "OR_KEY",
-			},
-			{
-				ModelName: "vg",
-				Model:     "vivgrid/auto",
-				Provider:  "vivgrid",
-				APIBase:   "https://api.vivgrid.com/v1",
-				APIKeyRef: "VG_KEY",
-			},
-		},
-	}
-
-	// Bare model slug — passthrough picks openrouter (the first match in
-	// iteration order).
-	mc, err := ResolveModelCfg(cfg, "z-ai/glm-5-turbo", "")
-	require.NoError(t, err)
-	require.NotNil(t, mc)
-	assert.Equal(t, "openrouter", mc.Provider,
-		"W2-27 (provider tie-break): openrouter must be picked when listed first; got %q", mc.Provider)
-	assert.Equal(t, "openrouter/z-ai/glm-5-turbo", mc.Model,
-		"resolved model must be prefixed with the chosen passthrough provider; got %q", mc.Model)
-}
-
-func TestResolveModelCfg_PassthroughTieBreak_VivgridOnly(t *testing.T) {
-	cfg := &config.Config{
-		Providers: []*config.ModelConfig{
-			{
-				ModelName: "vg",
-				Model:     "vivgrid/auto",
-				Provider:  "vivgrid",
-				APIBase:   "https://api.vivgrid.com/v1",
-				APIKeyRef: "VG_KEY",
-			},
-		},
-	}
-	mc, err := ResolveModelCfg(cfg, "z-ai/glm-5-turbo", "")
-	require.NoError(t, err)
-	require.NotNil(t, mc)
-	assert.Equal(t, "vivgrid", mc.Provider,
-		"with only vivgrid configured, the bare slug must route through vivgrid; got %q", mc.Provider)
-	assert.Equal(t, "vivgrid/z-ai/glm-5-turbo", mc.Model,
-		"resolved model must be prefixed with vivgrid; got %q", mc.Model)
-}
-
-// =============================================================================
-// W2-27 (revised) — vendor-prefixed slugs route through a passthrough aggregator
-// =============================================================================
+// Three tests lived here — TestResolveModelCfg_PassthroughTieBreak_*
+// (openrouter wins over vivgrid when listed first; vivgrid alone catches
+// everything) and TestResolveModelCfg_VendorPrefixedSlugs_RouteViaPassthrough
+// (thirteen vendor prefixes all routed through the configured aggregator).
+// All three asserted the PASSTHROUGH FALLBACK, and FR-040 deletes it.
 //
-// Supersedes the original W2-27 "additional prefixes are NOT hijacked"
-// assertion, which locked in the regression this test now guards against: with
-// only an OpenRouter (aggregator) provider configured, a vendor-prefixed slug
-// like "anthropic/…" or "google/…" is one of OpenRouter's OWN catalog ids and
-// MUST route through openrouter — it is not a request for a separately
-// configured "anthropic"/"google" provider. The old guard rejected all of
-// these, so every OpenRouter catalog pick silently fell back to the default.
-func TestResolveModelCfg_VendorPrefixedSlugs_RouteViaPassthrough(t *testing.T) {
-	cfg := &config.Config{
-		Providers: []*config.ModelConfig{
-			{
-				ModelName: "or",
-				Model:     "openrouter/auto",
-				Provider:  "openrouter",
-				APIBase:   "https://openrouter.ai/api/v1",
-				APIKeyRef: "OR_KEY",
-			},
-		},
-	}
-
-	// Each of these is a real OpenRouter catalog vendor prefix; with openrouter
-	// configured they must resolve THROUGH openrouter, not error.
-	prefixes := []string{
-		"anthropic", "azure", "azure-openai", "google", "gemini",
-		"bedrock", "cohere", "mistral", "groq", "deepseek",
-		"xai", "perplexity", "openai",
-	}
-	for _, p := range prefixes {
-		t.Run(p, func(t *testing.T) {
-			mc, err := ResolveModelCfg(cfg, p+"/gpt-4o", "")
-			require.NoError(t, err,
-				"vendor-prefixed slug %q/gpt-4o must route through the configured openrouter aggregator", p)
-			require.NotNil(t, mc)
-			require.Equal(t, "openrouter", mc.Provider)
-			require.Equal(t, "openrouter/"+p+"/gpt-4o", mc.Model,
-				"the aggregator provider name is prefixed once; the vendor segment stays part of the slug")
-		})
-	}
-}
+// They are not replaced, because the behaviour they pinned is now a defect:
+// the fallback meant an unmatched model id never failed to resolve — a typo,
+// a retired id, a model from a provider the operator had not configured — it
+// silently became a request to whichever aggregator happened to be first in
+// the list, billed to that aggregator's key. "First-wins tie-break between
+// two aggregators" is the clearest statement of the problem: the answer
+// depended on config ORDER rather than on what anything actually serves.
+//
+// FR-040's replacement is in model_resolution_test.go
+// (TestModelListResolver_PairExactThenUnique): a model resolves through a
+// provider that OFFERS it, uniquely, or it does not resolve at all.
 
 // =============================================================================
 // W2-20 #4 — Status: "error" discriminator (regression-prevention on the
@@ -573,7 +489,7 @@ func TestRunAgentLoop_ErrorEntry_HasStatusErrorField(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              workspaceDir,
-				ModelName:         "scripted-model",
+				DefaultModel:      config.DefaultModel{Model: "scripted-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -648,9 +564,7 @@ func TestRunAgentLoop_ErrorEntry_HasStatusErrorField(t *testing.T) {
 // pointer (rather than a clone) would let callers mutate the live config.
 func TestResolveModelCfg_CloneMutationIndependence(t *testing.T) {
 	original := &config.ModelConfig{
-		ModelName: "or",
-		Model:     "openrouter/auto",
-		APIBase:   "https://openrouter.ai/api/v1",
+		Model:     "z-ai/glm-5.2",
 		APIKeyRef: "OR_KEY",
 		Provider:  "openrouter",
 	}
@@ -658,7 +572,7 @@ func TestResolveModelCfg_CloneMutationIndependence(t *testing.T) {
 		Providers: []*config.ModelConfig{original},
 	}
 
-	mc, err := ResolveModelCfg(cfg, "z-ai/glm-5-turbo", "/some/workspace")
+	mc, err := ResolveModelCfg(cfg, "z-ai/glm-5.2", "/some/workspace")
 	require.NoError(t, err)
 	require.NotNil(t, mc)
 
@@ -702,8 +616,7 @@ func TestApplyAgentModel_SwitchesInPlace_PreservesID(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              t.TempDir(),
-				Provider:          "openai",
-				ModelName:         "local",
+				DefaultModel:      config.DefaultModel{Provider: "openai", Model: "gpt-4.1"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -711,14 +624,14 @@ func TestApplyAgentModel_SwitchesInPlace_PreservesID(t *testing.T) {
 		},
 		Providers: []*config.ModelConfig{
 			{
-				ModelName: "local",
-				Model:     "openai/qwen",
+				Provider:  "openai",
+				Model:     "gpt-4.1",
 				APIBase:   "http://127.0.0.1:1",
 				APIKeyRef: "LOOP_APPLY3_KEY",
 			},
 			{
-				ModelName: "deepseek",
-				Model:     "openrouter/deepseek",
+				Provider:  "deepseek",
+				Model:     "deepseek-chat",
 				APIBase:   "http://127.0.0.1:1",
 				APIKeyRef: "LOOP_APPLY3_KEY",
 			},
@@ -735,7 +648,7 @@ func TestApplyAgentModel_SwitchesInPlace_PreservesID(t *testing.T) {
 	id := before.ID
 	require.NotEmpty(t, id)
 
-	_, err = al.ApplyAgentModel(id, "deepseek")
+	_, err = al.ApplyAgentModel(id, "deepseek-chat")
 	require.NoError(t, err)
 
 	after, ok := al.GetRegistry().GetAgent(id)
@@ -769,7 +682,7 @@ func TestRunAgentLoop_ProviderError_HasStatusErrorField(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              workspaceDir,
-				ModelName:         "scripted-model",
+				DefaultModel:      config.DefaultModel{Model: "scripted-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},

@@ -15,6 +15,7 @@ function makeAgent(overrides: Partial<Agent> = {}): Agent {
     name: 'General Assistant',
     type: 'core',
     locked: false,
+    needs_model: false,
     status: 'active',
     model: 'claude-sonnet-4-6',
     description: 'General purpose assistant',
@@ -155,5 +156,51 @@ describe('AgentCard — default star (sprint/258)', () => {
     expect(
       screen.queryByRole('button', { name: /set .* as default/i }),
     ).not.toBeInTheDocument()
+  })
+})
+
+// T068-28 — ADR-068 FR-014 (SPA half): "needs a model" / "needs a provider" copy.
+// Traces to: adr-068-providers-ux-spec.md — Scenario: Dependents are listed and
+// left without a model (final And: the agent list renders the copy on both rows);
+// precedence per resolution #5 — degraded_reason: needs_provider wins in copy.
+describe('AgentCard — needs a model / needs a provider copy (T068-28, FR-014)', () => {
+  it('renders "needs a model" when needs_model is true', () => {
+    render(<AgentCard agent={makeAgent({ needs_model: true, model: undefined })} />)
+    expect(screen.getByText('needs a model')).toBeInTheDocument()
+    expect(screen.queryByText('needs a provider')).not.toBeInTheDocument()
+  })
+
+  it('renders "needs a provider" (not "needs a model") when degraded_reason needs_provider is also set — precedence, resolution #5', () => {
+    render(
+      <AgentCard
+        agent={makeAgent({ needs_model: true, degraded_reason: 'needs_provider' })}
+      />
+    )
+    expect(screen.getByText('needs a provider')).toBeInTheDocument()
+    expect(screen.queryByText('needs a model')).not.toBeInTheDocument()
+  })
+
+  it('renders "needs a provider" when degraded_reason is set even without needs_model', () => {
+    // ADR-067 FR-016/FR-031: a needs_provider agent refuses turns regardless of needs_model.
+    render(
+      <AgentCard
+        agent={makeAgent({ needs_model: false, degraded_reason: 'needs_provider' })}
+      />
+    )
+    expect(screen.getByText('needs a provider')).toBeInTheDocument()
+    expect(screen.queryByText('needs a model')).not.toBeInTheDocument()
+  })
+
+  it('renders neither copy on a healthy agent', () => {
+    render(<AgentCard agent={makeAgent()} />)
+    expect(screen.queryByText('needs a model')).not.toBeInTheDocument()
+    expect(screen.queryByText('needs a provider')).not.toBeInTheDocument()
+  })
+
+  it('is not colour-only: the copy is literal text, present in the accessible tree', () => {
+    // DoD: no colour-only state — the meaning is carried by the text itself.
+    render(<AgentCard agent={makeAgent({ needs_model: true })} />)
+    const el = screen.getByText('needs a model')
+    expect(el.textContent).toBe('needs a model')
   })
 })

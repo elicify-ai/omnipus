@@ -6,7 +6,7 @@
 // Do not edit directly — re-run: node scripts/_gen-asyncapi-types.mjs
 // These extend the REST schemas above with all WS frame types.
 
-export const WsFrameType = z.enum(["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "token", "done", "error", "tool_call_start", "tool_call_result", "subagent_start", "subagent_message", "subagent_state", "subagent_end", "task_status_changed", "task_run_status", "replay_message", "replay_error", "rate_limit", "media", "agent_switched", "tool_approval_required", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_close_ack", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_status", "browser_tab_action", "browser_tabs", "browser_viewport", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control", "goal_status", "loop_status", "plan_status", "judge_verdict"]);
+export const WsFrameType = z.enum(["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "token", "done", "error", "tool_call_start", "tool_call_result", "tool_result_projection", "subagent_start", "subagent_message", "subagent_state", "subagent_end", "task_status_changed", "task_run_status", "replay_message", "replay_error", "rate_limit", "media", "agent_switched", "tool_approval_required", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_close_ack", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_status", "browser_tab_action", "browser_tabs", "browser_viewport", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control", "goal_status", "loop_status", "plan_status", "judge_verdict"]);
 
 export const AuthFrame = z
   .object({
@@ -116,7 +116,7 @@ export const DoneFrame = z
 
 export const LLMError = z
   .object({
-    code: z.enum(["media_unsupported", "provider_rejected", "request_too_large", "provider_auth_failed", "rate_limited", "network", "content_policy", "context_too_long", "tool_args", "schema", "agent_not_configured", "workspace_unavailable", "model_unavailable", "unknown"]),
+    code: z.enum(["media_unsupported", "provider_rejected", "request_too_large", "provider_auth_failed", "rate_limited", "network", "content_policy", "context_too_long", "tool_args", "schema", "agent_not_configured", "workspace_unavailable", "model_unavailable", "needs_provider", "model_unassigned", "turn_canceled", "turn_timed_out", "context_unrecoverable", "context_window_unknown", "unknown"]),
     message: z.string().min(1).max(4096),
     retryable: z.boolean(),
     detail: z.string().max(2048).optional(),
@@ -125,7 +125,7 @@ export const LLMError = z
 
 export const LLMErrorReplay = z
   .object({
-    code: z.enum(["media_unsupported", "provider_rejected", "request_too_large", "provider_auth_failed", "rate_limited", "network", "content_policy", "context_too_long", "tool_args", "schema", "agent_not_configured", "workspace_unavailable", "model_unavailable", "unknown"]),
+    code: z.enum(["media_unsupported", "provider_rejected", "request_too_large", "provider_auth_failed", "rate_limited", "network", "content_policy", "context_too_long", "tool_args", "schema", "agent_not_configured", "workspace_unavailable", "model_unavailable", "needs_provider", "model_unassigned", "turn_canceled", "turn_timed_out", "context_unrecoverable", "context_window_unknown", "unknown"]),
     message: z.string().min(1).max(4096),
     retryable: z.boolean(),
   })
@@ -213,6 +213,29 @@ export const ToolAssemblyDuplicate = z
   .object({
     error: z.literal("tool_assembly_duplicate"),
     message: z.string().min(1),
+  })
+  .strict();
+
+export const ToolArgumentRefusal = z
+  .object({
+    error: z.literal("tool_arguments_too_large"),
+    reason: z.string().min(1),
+    tool: z.string().min(1).max(128),
+    size_chars: z.number().int().min(1),
+    cap_chars: z.number().int().min(1),
+  })
+  .strict();
+
+export const ToolResultRecallMark = z
+  .object({
+    error: z.literal("tool_result_recall_mark"),
+    tool: z.string().min(1).max(64),
+    tool_call_id: z.string().min(1).max(64),
+    archive_line: z.number().int().min(0),
+    size_chars: z.number().int().min(1),
+    turn: z.number().int().min(1),
+    content_state: z.enum(["capped", "emptied"]),
+    hint: z.string().min(1),
   })
   .strict();
 
@@ -341,6 +364,18 @@ export const ReplayErrorFrame = z
       llm_error: LLMErrorReplay,
     })
     .strict().optional(),
+  })
+  .strict();
+
+export const ToolResultProjectionFrame = z
+  .object({
+    type: z.literal("tool_result_projection"),
+    session_id: z.string().min(1).max(128),
+    tool_call_id: z.string().min(1),
+    archive_line: z.number().int().min(0),
+    content_state: z.enum(["capped", "emptied"]),
+    mark: z.string().max(2048).optional(),
+    producing_session_id: z.string().min(1).optional(),
   })
   .strict();
 
@@ -772,6 +807,7 @@ export const WsFrame = z.discriminatedUnion("type", [
   TaskRunStatusFrame,
   ReplayMessageFrame,
   ReplayErrorFrame,
+  ToolResultProjectionFrame,
   RateLimitFrame,
   MediaFrame,
   AgentSwitchedFrame,

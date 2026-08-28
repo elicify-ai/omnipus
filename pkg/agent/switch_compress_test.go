@@ -29,19 +29,27 @@ import (
 // ApplyAgentModel (which handleModelSwitch now calls to orchestrate the
 // provider+candidates swap alongside Model) can resolve them.
 //
-// The ModelName is the public identifier, and the Model field is the
-// provider-prefixed form ("openai/<name>") so the known-protocol factory can
-// build a stub provider. Protocol = "openai" is a recognized protocol prefix.
+// Each row is the exact pair (openai, <name>) — a catalog provider id and a
+// BARE model id (ADR-067 FR-034). The model ids are invented, which is fine:
+// a row resolves through what IT serves, so the pair is addressable even
+// though the catalog lists no such model under openai.
+//
+// The stub base URL is a NON-loopback, unresolvable host on purpose: this
+// "openai" row is not in the (empty) test catalog, so ADR-066's resolver
+// classifies it through ADR-067's custom-row locality predicate — a
+// loopback host would make it `locality: local`, and a local endpoint with
+// no reported window is refused at turn start (context_window_unknown,
+// D3) rather than floored. These tests model a CLOUD provider whose window
+// nobody knows (→ the 128k floor), so the host must read as public.
 func newSwitchTestAgentLoop(t *testing.T, models ...string) (al *AgentLoop, cfg *config.Config, cleanup func()) {
 	t.Helper()
 	tmpDir := t.TempDir()
 	t.Setenv("SWITCH_TEST_KEY", "switch-test-key")
 	mkProvider := func(name string) *config.ModelConfig {
 		return &config.ModelConfig{
-			ModelName: name,
-			Model:     "openai/" + name,
 			Provider:  "openai",
-			APIBase:   "http://127.0.0.1:1",
+			Model:     name,
+			APIBase:   "http://openai-stub.invalid:1",
 			APIKeyRef: "SWITCH_TEST_KEY",
 		}
 	}
@@ -53,7 +61,7 @@ func newSwitchTestAgentLoop(t *testing.T, models ...string) (al *AgentLoop, cfg 
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              tmpDir,
-				ModelName:         "test-model",
+				DefaultModel:      config.DefaultModel{Provider: "openai", Model: "test-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -193,7 +201,7 @@ func TestSwitchTime_EndToEnd_HappyPath(t *testing.T) {
 	agent.ContextWindow = contextWindow
 	agent.MaxTokens = maxTokens
 	al.mu.Lock()
-	al.cfg.Agents.Defaults.ContextWindow = contextWindow
+	al.cfg.Context.DefaultContextWindow = intPtr(contextWindow)
 	al.mu.Unlock()
 
 	oldModel := agent.Model
@@ -331,7 +339,7 @@ func TestSwitchTime_LLMHistoryHasNoSystemMessage(t *testing.T) {
 	agent.ContextWindow = 8000
 	agent.MaxTokens = 4096
 	al.mu.Lock()
-	al.cfg.Agents.Defaults.ContextWindow = 8000
+	al.cfg.Context.DefaultContextWindow = intPtr(8000)
 	al.mu.Unlock()
 
 	const sessionKey = "llm-no-system-msg"
@@ -391,7 +399,7 @@ func TestSwitchTime_UnknownModel_LogsWarn(t *testing.T) {
 	agent.ContextWindow = 8000
 
 	al.mu.Lock()
-	al.cfg.Agents.Defaults.ContextWindow = 200000
+	al.cfg.Context.DefaultContextWindow = intPtr(200000)
 	al.mu.Unlock()
 
 	const sessionKey = "unknown-model-test"
@@ -577,3 +585,54 @@ func (f *failingProvider) GetDefaultModel() string {
 
 // Reference unused import session to avoid compile error if the file is later trimmed.
 var _ session.UnifiedSessionType = session.SessionTypeChat
+
+// TestApplyAgentModel_MaxTokensDoesNotRatchetDown pins FR-005b's clamp as a
+// FUNCTION of the configured value, not a running minimum.
+//
+// clampMaxTokensForWindow only ever lowers. ApplyAgentModel used to feed the
+// CURRENT (possibly already-clamped) agent.MaxTokens back into it, so the
+// field was monotonically decreasing for the lifetime of the process: a
+// round-trip through a small-window model left the agent permanently capped
+// at that model's window/4 — answers silently truncated on a 200k model, with
+// no log line and no recovery short of a gateway restart.
+func TestApplyAgentModel_MaxTokensDoesNotRatchetDown(t *testing.T) {
+	const (
+		bigModel   = "test-model"
+		smallModel = "openrouter/small-window-model"
+	)
+	al, cfg, cleanup := newSwitchTestAgentLoop(t, bigModel, smallModel)
+	defer cleanup()
+
+	inst := al.GetRegistry().GetDefaultAgent()
+	require.NotNil(t, inst)
+	configured := inst.MaxTokens
+	require.Positive(t, configured)
+
+	// Rung 3 (the global default) is the window every ResolveWindow answers
+	// with here, so switching models is what changes the window.
+	setDefaultWindow := func(w int) {
+		al.mu.Lock()
+		al.cfg.Context.DefaultContextWindow = intPtr(w)
+		al.mu.Unlock()
+		cfg.Context.DefaultContextWindow = intPtr(w)
+	}
+
+	// Down to a window small enough that B would go non-positive: the clamp
+	// fires and MaxTokens drops to window/4.
+	setDefaultWindow(5000)
+	_, err := al.ApplyAgentModel(inst.ID, smallModel)
+	require.NoError(t, err)
+	clamped := inst.MaxTokens
+	require.Less(t, clamped, configured, "precondition: the small window clamps max_tokens down")
+	assert.Equal(t, 5000/4, clamped)
+
+	// Back up to a large window: the clamp must not fire, and the CONFIGURED
+	// value must come back.
+	setDefaultWindow(200_000)
+	_, err = al.ApplyAgentModel(inst.ID, bigModel)
+	require.NoError(t, err)
+
+	assert.Equal(t, configured, inst.MaxTokens,
+		"switching back to a large-window model must restore the configured max_tokens — "+
+			"clamping the already-clamped value ratchets it down permanently")
+}

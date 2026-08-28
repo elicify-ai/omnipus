@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
 func TestLoadOpenClawConfig(t *testing.T) {
@@ -648,11 +650,10 @@ func TestToStandardConfig(t *testing.T) {
 
 	stdCfg := omnipusCfg.ToStandardConfig()
 
-	if stdCfg.Agents.Defaults.Provider != "anthropic" {
-		t.Errorf("expected provider 'anthropic', got '%s'", stdCfg.Agents.Defaults.Provider)
-	}
-	if stdCfg.Agents.Defaults.ModelName != "claude-sonnet-4-20250514" {
-		t.Errorf("expected model name 'claude-sonnet-4-20250514', got '%s'", stdCfg.Agents.Defaults.ModelName)
+	// ADR-068 D14.1: the standard config carries the default as the exact pair.
+	wantDefault := config.DefaultModel{Provider: "anthropic", Model: "claude-sonnet-4-20250514"}
+	if stdCfg.Agents.Defaults.DefaultModel != wantDefault {
+		t.Errorf("expected default_model %+v, got %+v", wantDefault, stdCfg.Agents.Defaults.DefaultModel)
 	}
 	if stdCfg.Agents.Defaults.Home != "~/.omnipus/workspace" {
 		t.Errorf("expected workspace '~/.omnipus/workspace', got '%s'", stdCfg.Agents.Defaults.Home)
@@ -668,7 +669,7 @@ func TestToStandardConfig(t *testing.T) {
 	foundModel := false
 	var foundAPIKey string
 	for _, m := range stdCfg.Providers {
-		if m.ModelName == "claude-sonnet-4-20250514" {
+		if m.Name == "claude-sonnet-4-20250514" {
 			foundModel = true
 			foundAPIKey = m.APIKey()
 			break

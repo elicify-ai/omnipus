@@ -66,7 +66,7 @@ func TestRunTurn_CoreTeamMember_WritesToWorkspaceSharedDir(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              agentWorkspaceDir,
-				ModelName:         "scripted-model",
+				DefaultModel:      config.DefaultModel{Model: "scripted-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 				// Sandboxed (os.Root-relative) file resolution — required for a
@@ -153,7 +153,7 @@ func TestRunTurn_WorkspacelessAgentRefused(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:                agentWorkspaceDir,
-				ModelName:           "scripted-model",
+				DefaultModel:        config.DefaultModel{Model: "scripted-model"},
 				MaxTokens:           4096,
 				MaxToolIterations:   10,
 				RestrictToWorkspace: true,
@@ -226,7 +226,7 @@ func TestRunTurn_WorkspacelessAgentRefused_ViaProcessMessage(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:                agentWorkspaceDir,
-				ModelName:           "scripted-model",
+				DefaultModel:        config.DefaultModel{Model: "scripted-model"},
 				MaxTokens:           4096,
 				MaxToolIterations:   10,
 				RestrictToWorkspace: true,
@@ -303,7 +303,7 @@ func TestRunTurn_WorkspacelessAgentRefused_EmitsTypedError(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:                agentWorkspaceDir,
-				ModelName:           "scripted-model",
+				DefaultModel:        config.DefaultModel{Model: "scripted-model"},
 				MaxTokens:           4096,
 				MaxToolIterations:   10,
 				RestrictToWorkspace: true,
@@ -673,7 +673,7 @@ func TestRunTurn_MemberWorkDirUnavailable_EmitsAndPersistsWorkspaceUnavailable(t
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:                agentWorkspaceDir,
-				ModelName:           "scripted-model",
+				DefaultModel:        config.DefaultModel{Model: "scripted-model"},
 				MaxTokens:           4096,
 				MaxToolIterations:   10,
 				RestrictToWorkspace: true,
@@ -760,7 +760,7 @@ func TestRunTurn_MemberGetsWorkspaceWorkDir(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:                agentWorkspaceDir,
-				ModelName:           "scripted-model",
+				DefaultModel:        config.DefaultModel{Model: "scripted-model"},
 				MaxTokens:           4096,
 				MaxToolIterations:   10,
 				RestrictToWorkspace: true,
@@ -833,7 +833,7 @@ func TestRunTurn_CoreTeamMember_CannotEscapeWorkToWorkspaceRoot(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:                agentWorkspaceDir,
-				ModelName:           "scripted-model",
+				DefaultModel:        config.DefaultModel{Model: "scripted-model"},
 				MaxTokens:           4096,
 				MaxToolIterations:   10,
 				RestrictToWorkspace: true,

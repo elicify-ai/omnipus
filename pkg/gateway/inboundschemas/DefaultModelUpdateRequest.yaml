@@ -1,0 +1,25 @@
+title: DefaultModelUpdateRequest
+description: >
+  Body for PUT /api/v1/providers/default-model (ADR-068 FR-018): exactly the
+  (provider, model) pair. The provider must be configured and connected or
+  signed_in (400 naming the field otherwise); the model must be in the
+  served catalog for that provider, except rows with custom: true or
+  locality: local, where any non-empty model is accepted with no live call.
+  Persisted as agents.defaults.default_model under the config lock; takes
+  effect on the next turn after a reload.
+type: object
+required:
+  - provider
+  - model
+additionalProperties: false
+properties:
+  provider:
+    type: string
+    minLength: 1
+    maxLength: 64
+    example: "anthropic"
+  model:
+    type: string
+    minLength: 1
+    maxLength: 256
+    example: "claude-sonnet-4-6"

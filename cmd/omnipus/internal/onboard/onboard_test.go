@@ -18,6 +18,7 @@ import (
 	"github.com/elicify-ai/omnipus/cmd/omnipus/internal/clitoken"
 	"github.com/elicify-ai/omnipus/pkg/credentials"
 	"github.com/elicify-ai/omnipus/pkg/onboarding"
+	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
 )
 
 // newBufioReader is a convenience wrapper used by menu tests.
@@ -128,9 +129,13 @@ func TestRun_FreshInstall_WritesUsableConfig(t *testing.T) {
 	if entry["provider"] != "openai" {
 		t.Errorf("provider = %v, want openai", entry["provider"])
 	}
-	if entry["model"] != "gpt-4o" {
-		t.Errorf("model = %v, want gpt-4o (default for openai)", entry["model"])
-	}
+	// ADR-067 A-21/FR-022: the wizard's default model comes from the
+	// EMBEDDED CATALOG SNAPSHOT — the provider's first active, tool-calling,
+	// text model — not from a hand-typed per-provider table. Asserting the
+	// PROPERTY rather than a literal slug means a snapshot refresh that
+	// retires the old default cannot leave this test asserting a model the
+	// runtime would 404 on.
+	assertCatalogProbeModel(t, "openai", entry["model"])
 	if entry["api_key_ref"] != "openai_api_key" {
 		t.Errorf("api_key_ref = %v, want openai_api_key", entry["api_key_ref"])
 	}
@@ -139,8 +144,16 @@ func TestRun_FreshInstall_WritesUsableConfig(t *testing.T) {
 	}
 
 	defaults, _ := cfg["agents"].(map[string]any)["defaults"].(map[string]any)
-	if defaults["model_name"] != "gpt-4o" {
-		t.Errorf("agents.defaults.model_name = %v, want gpt-4o", defaults["model_name"])
+	if _, has := defaults["model_name"]; has {
+		t.Errorf("agents.defaults.model_name must not be written (ADR-068 CRIT-001): %v", defaults["model_name"])
+	}
+	dm, _ := defaults["default_model"].(map[string]any)
+	if dm["provider"] != "openai" {
+		t.Errorf("agents.defaults.default_model provider = %v, want openai", dm["provider"])
+	}
+	if dm["model"] != entry["model"] {
+		t.Errorf("agents.defaults.default_model model = %v, want the provider row's %v",
+			dm["model"], entry["model"])
 	}
 
 	gateway, _ := cfg["gateway"].(map[string]any)
@@ -304,8 +317,8 @@ func TestPrompt_UnknownProvider_Rejected(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected unknown-provider error, got nil")
 	}
-	if !strings.Contains(err.Error(), "known protocol") {
-		t.Errorf("expected 'known protocol' error, got: %v", err)
+	if !strings.Contains(err.Error(), `unknown provider "nonexistent-provider"`) {
+		t.Errorf("expected an unknown-provider error naming the typed id, got: %v", err)
 	}
 }
 
@@ -346,7 +359,7 @@ func TestProviderMenu_NumberSelectionReprompt(t *testing.T) {
 			{"1\n", "openrouter", "OpenRouter"},
 			{"2\n", "anthropic", "Anthropic"},
 			{"3\n", "openai", "OpenAI"},
-			{"4\n", "gemini", "Google / Gemini"},
+			{"4\n", "google", "Google Gemini"},
 			{"5\n", "groq", "Groq"},
 			{"6\n", "deepseek", "DeepSeek"},
 		}
@@ -524,9 +537,7 @@ func TestInputFromFlags_ModelDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("inputFromFlags: %v", err)
 	}
-	if in.Model != "claude-sonnet-4-6" {
-		t.Errorf("expected per-provider default model, got %q", in.Model)
-	}
+	assertCatalogProbeModel(t, "anthropic", in.Model)
 }
 
 func TestInputFromFlags_Validation(t *testing.T) {
@@ -543,7 +554,22 @@ func TestInputFromFlags_Validation(t *testing.T) {
 		{
 			name: "unknown provider",
 			f:    inputFlags{providerID: "not-real", apiKey: "k", username: "u", password: "longenoughpw"},
-			want: "known protocol",
+			want: `unknown provider "not-real"`,
+		},
+		{
+			// ADR-067 FR-019 / T067-12: the wizard applies the SAME admission
+			// gate as the gateway, against the EMBEDDED snapshot (A-21) — a
+			// cloud-IAM row is refused with the catalog's own reason, rather
+			// than written into a config whose first turn cannot construct a
+			// provider at all.
+			name: "unsupported provider carries the catalog's reason",
+			f: inputFlags{
+				providerID: "amazon-bedrock",
+				apiKey:     "k",
+				username:   "u",
+				password:   "longenoughpw",
+			},
+			want: "cloud-iam",
 		},
 		{
 			name: "api-key + api-key-stdin both set",
@@ -738,5 +764,48 @@ func TestRunHeadless_AlreadyComplete(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "already complete") {
 		t.Errorf("expected 'already complete' in stdout, got: %s", stdout.String())
+	}
+}
+
+// assertCatalogProbeModel checks that got is the FIRST active, tool-calling,
+// text model the embedded catalog snapshot lists for providerID — the ADR-067
+// FR-022 / A-21 rule, recomputed here from the document rather than read back
+// off the implementation, so the assertion has its own oracle.
+func assertCatalogProbeModel(t *testing.T, providerID string, got any) {
+	t.Helper()
+
+	doc, err := catalog.ParseDocument(catalog.EmbeddedSnapshot)
+	if err != nil {
+		t.Fatalf("parse embedded snapshot: %v", err)
+	}
+	want := ""
+	for i := range doc.Providers {
+		if doc.Providers[i].ID != providerID {
+			continue
+		}
+		for _, m := range doc.Providers[i].Models {
+			if m.Status != catalog.StatusActive || !m.ToolCall {
+				continue
+			}
+			hasText := false
+			for _, mod := range m.InputModalities {
+				if mod == catalog.ModalityText {
+					hasText = true
+					break
+				}
+			}
+			if hasText {
+				want = m.ID
+				break
+			}
+		}
+		break
+	}
+	if want == "" {
+		t.Fatalf("the embedded snapshot lists no probe-eligible model for %q", providerID)
+	}
+	if got != want {
+		t.Errorf("model = %v, want %q — the first active tool-calling text model "+
+			"the catalog lists for %q", got, want, providerID)
 	}
 }

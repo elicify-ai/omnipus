@@ -16,7 +16,7 @@ import (
 	"golang.org/x/image/draw"
 
 	"github.com/elicify-ai/omnipus/pkg/media/resize"
-	"github.com/elicify-ai/omnipus/pkg/providers/capabilities"
+	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
 )
 
 // catalogDefaults are the FR-014 default budget values used throughout
@@ -97,7 +97,7 @@ func clampByte(v float64) float64 {
 // image/png bytes without invoking the JPEG ladder.
 func TestResize_SolidImage_FitsAsPNG(t *testing.T) {
 	img := solidImage(64, 64, color.RGBA{R: 128, G: 64, B: 200, A: 255})
-	result, err := resize.ResizeToFit(img, capabilities.ResizeBudget{
+	result, err := resize.ResizeToFit(img, catalog.ResizeLimits{
 		LongEdgePx: defaultTestLongEdgePx,
 		MaxBytes:   10 * 1024 * 1024,
 	})
@@ -124,7 +124,7 @@ func TestResize_PNGtoJPEGLadder_FitsBudget(t *testing.T) {
 	// below the PNG size but above the largest JPEG quality. The ladder
 	// must select JPEG q90 (the highest quality that fits).
 	img := photoLikeImage(1024, 768)
-	result, err := resize.ResizeToFit(img, capabilities.ResizeBudget{
+	result, err := resize.ResizeToFit(img, catalog.ResizeLimits{
 		LongEdgePx: 7680,
 		MaxBytes:   200 * 1024,
 	})
@@ -150,7 +150,7 @@ func TestResize_LadderFloor_RoutesToStep5(t *testing.T) {
 	// 1000x1000 noisy image. A 100-byte budget is impossible regardless
 	// of quality or size; the ladder must terminate with ErrLadderFloor.
 	img := noisyImage(1000, 1000, 99)
-	_, err := resize.ResizeToFit(img, capabilities.ResizeBudget{
+	_, err := resize.ResizeToFit(img, catalog.ResizeLimits{
 		LongEdgePx: 7680,
 		MaxBytes:   100,
 	})
@@ -166,7 +166,7 @@ func TestResize_LadderFloor_BelowMinLongEdge(t *testing.T) {
 	// 100x100 noisy image, 50-byte budget. Source is already below the
 	// 256px floor — the ladder cannot shrink further.
 	img := noisyImage(100, 100, 7)
-	_, err := resize.ResizeToFit(img, capabilities.ResizeBudget{
+	_, err := resize.ResizeToFit(img, catalog.ResizeLimits{
 		LongEdgePx: 7680,
 		MaxBytes:   50,
 	})
@@ -179,7 +179,7 @@ func TestResize_LadderFloor_BelowMinLongEdge(t *testing.T) {
 // source long edge).
 func TestResize_NoShrink_WhenSourceFits(t *testing.T) {
 	img := solidImage(512, 384, color.RGBA{R: 255, A: 255})
-	result, err := resize.ResizeToFit(img, capabilities.ResizeBudget{
+	result, err := resize.ResizeToFit(img, catalog.ResizeLimits{
 		LongEdgePx: 7680,
 		MaxBytes:   10 * 1024 * 1024,
 	})
@@ -195,7 +195,7 @@ func TestResize_LongEdgeBudget_ShrinksWhenSourceExceeds(t *testing.T) {
 	// 1024x1024 noisy image, budget long edge 512. The pipeline must
 	// shrink the image so its long edge is ≤ 512.
 	img := noisyImage(1024, 1024, 13)
-	result, err := resize.ResizeToFit(img, capabilities.ResizeBudget{
+	result, err := resize.ResizeToFit(img, catalog.ResizeLimits{
 		LongEdgePx: 512,
 		MaxBytes:   10 * 1024 * 1024,
 	})
@@ -219,7 +219,7 @@ func TestResize_ShrinkSequence_FollowsPoint75(t *testing.T) {
 	// must shrink. The result long edge must be on the 0.75× sequence
 	// (1024 → 768 → 576 → ...).
 	img := photoLikeImage(1024, 768)
-	result, err := resize.ResizeToFit(img, capabilities.ResizeBudget{
+	result, err := resize.ResizeToFit(img, catalog.ResizeLimits{
 		LongEdgePx: 7680,
 		MaxBytes:   20 * 1024,
 	})
@@ -245,7 +245,7 @@ func TestResize_ShrinkSequence_LandsOnFloor(t *testing.T) {
 	img := noisyImage(2048, 2048, 200)
 	// Budget that forces many shrinks: 1 byte. The pipeline must terminate
 	// at the floor rather than producing a 1x1 image.
-	_, err := resize.ResizeToFit(img, capabilities.ResizeBudget{
+	_, err := resize.ResizeToFit(img, catalog.ResizeLimits{
 		LongEdgePx: 7680,
 		MaxBytes:   1,
 	})
@@ -257,7 +257,7 @@ func TestResize_ShrinkSequence_LandsOnFloor(t *testing.T) {
 // shrinking. A 4096x3072 solid image is far below the budget.
 func TestResize_DefaultBudget_AcceptsLargeImage(t *testing.T) {
 	img := solidImage(4096, 3072, color.RGBA{R: 200, G: 100, B: 50, A: 255})
-	result, err := resize.ResizeToFit(img, capabilities.ResizeBudget{
+	result, err := resize.ResizeToFit(img, catalog.ResizeLimits{
 		LongEdgePx: defaultTestLongEdgePx,
 		MaxBytes:   defaultTestMaxBytes,
 	})
@@ -275,7 +275,7 @@ func TestResize_LongEdgeBudget_CannotShrinkBelowFloor(t *testing.T) {
 	img := noisyImage(512, 512, 5)
 	// Long-edge budget 64 is below MinLongEdge (256). Even though the
 	// bytes budget is huge, the ladder cannot satisfy both constraints.
-	_, err := resize.ResizeToFit(img, capabilities.ResizeBudget{
+	_, err := resize.ResizeToFit(img, catalog.ResizeLimits{
 		LongEdgePx: 64,
 		MaxBytes:   10 * 1024 * 1024,
 	})
@@ -300,7 +300,7 @@ func TestResize_JPEGQualityLadder_FirstFitWins(t *testing.T) {
 	// Pick a budget below q90 and above q40 — q90 doesn't fit; the
 	// ladder must step down to q80, q70, etc. The first one to fit wins.
 	budget := (q40Size + q90Size) / 2
-	result, err := resize.ResizeToFit(img, capabilities.ResizeBudget{
+	result, err := resize.ResizeToFit(img, catalog.ResizeLimits{
 		LongEdgePx: 7680,
 		MaxBytes:   int64(budget),
 	})
@@ -319,7 +319,7 @@ func TestResize_PNGPreferred_WhenItFits(t *testing.T) {
 	img := solidImage(64, 64, color.RGBA{R: 200, G: 100, B: 50, A: 255})
 
 	// Both PNG and JPEG fit easily; PNG must win.
-	result, err := resize.ResizeToFit(img, capabilities.ResizeBudget{
+	result, err := resize.ResizeToFit(img, catalog.ResizeLimits{
 		LongEdgePx: 7680,
 		MaxBytes:   10 * 1024,
 	})
@@ -331,7 +331,7 @@ func TestResize_PNGPreferred_WhenItFits(t *testing.T) {
 // TestResize_NilImage_ReturnsError guards against nil-image crashes; the
 // pipeline must surface a clear error rather than panic.
 func TestResize_NilImage_ReturnsError(t *testing.T) {
-	_, err := resize.ResizeToFit(nil, capabilities.ResizeBudget{LongEdgePx: 1024, MaxBytes: 1024})
+	_, err := resize.ResizeToFit(nil, catalog.ResizeLimits{LongEdgePx: 1024, MaxBytes: 1024})
 	require.Error(t, err)
 }
 
@@ -340,9 +340,9 @@ func TestResize_NilImage_ReturnsError(t *testing.T) {
 // such a budget).
 func TestResize_InvalidBudget_ReturnsError(t *testing.T) {
 	img := solidImage(10, 10, color.RGBA{})
-	_, err := resize.ResizeToFit(img, capabilities.ResizeBudget{LongEdgePx: 0, MaxBytes: 1024})
+	_, err := resize.ResizeToFit(img, catalog.ResizeLimits{LongEdgePx: 0, MaxBytes: 1024})
 	require.Error(t, err)
-	_, err = resize.ResizeToFit(img, capabilities.ResizeBudget{LongEdgePx: 1024, MaxBytes: 0})
+	_, err = resize.ResizeToFit(img, catalog.ResizeLimits{LongEdgePx: 1024, MaxBytes: 0})
 	require.Error(t, err)
 }
 
@@ -352,7 +352,7 @@ func TestResize_InvalidBudget_ReturnsError(t *testing.T) {
 func TestResize_PreservesAspectRatio(t *testing.T) {
 	src := noisyImage(1600, 800, 0) // aspect 2:1
 	// Force shrinking via budget long edge.
-	result, err := resize.ResizeToFit(src, capabilities.ResizeBudget{
+	result, err := resize.ResizeToFit(src, catalog.ResizeLimits{
 		LongEdgePx: 800,
 		MaxBytes:   10 * 1024 * 1024,
 	})
@@ -376,7 +376,7 @@ func TestResize_PreservesAspectRatio(t *testing.T) {
 // decode back to the expected dimensions.
 func TestResize_PNGOutput_RoundTripsThroughPNG(t *testing.T) {
 	img := solidImage(256, 256, color.RGBA{R: 200, G: 100, B: 50, A: 255})
-	result, err := resize.ResizeToFit(img, capabilities.ResizeBudget{
+	result, err := resize.ResizeToFit(img, catalog.ResizeLimits{
 		LongEdgePx: 7680,
 		MaxBytes:   10 * 1024 * 1024,
 	})
@@ -402,7 +402,7 @@ func TestResize_PNGOutputFromJPEGSource(t *testing.T) {
 	decoded, _, err := image.Decode(&jpegBuf)
 	require.NoError(t, err)
 
-	result, err := resize.ResizeToFit(decoded, capabilities.ResizeBudget{
+	result, err := resize.ResizeToFit(decoded, catalog.ResizeLimits{
 		LongEdgePx: 7680,
 		MaxBytes:   10 * 1024 * 1024,
 	})
@@ -422,7 +422,7 @@ func TestResize_ScalesToRequestedSize(t *testing.T) {
 	// allows the bytes budget to accommodate a fit. Noisy 1024x1024 PNG
 	// is ~36KB; budget 32KB forces shrinking to ~768x768 (~14KB) which
 	// fits within the bytes budget.
-	result, err := resize.ResizeToFit(src, capabilities.ResizeBudget{
+	result, err := resize.ResizeToFit(src, catalog.ResizeLimits{
 		LongEdgePx: 512,
 		MaxBytes:   32 * 1024,
 	})
@@ -458,7 +458,7 @@ func TestResize_CatmullRomKernel_UsedForScaling(t *testing.T) {
 	// The public API shrinks the source to fit the long-edge budget and
 	// exercises the Catmull-Rom kernel. The result is verified to be a
 	// valid (decodable) image smaller than the source.
-	result, err := resize.ResizeToFit(src, capabilities.ResizeBudget{
+	result, err := resize.ResizeToFit(src, catalog.ResizeLimits{
 		LongEdgePx: 384,
 		MaxBytes:   10 * 1024 * 1024,
 	})
@@ -478,7 +478,7 @@ func TestResize_CatmullRomKernel_UsedForScaling(t *testing.T) {
 // here is the round-trip dimensions.
 func TestResize_NoScaleSameSize(t *testing.T) {
 	src := solidImage(64, 64, color.RGBA{R: 1, G: 2, B: 3, A: 255})
-	result, err := resize.ResizeToFit(src, capabilities.ResizeBudget{
+	result, err := resize.ResizeToFit(src, catalog.ResizeLimits{
 		LongEdgePx: 7680,
 		MaxBytes:   10 * 1024 * 1024,
 	})
@@ -492,7 +492,7 @@ func TestResize_NoScaleSameSize(t *testing.T) {
 // silent truncation. The historical pkg/media/resize.Budget stored
 // MaxBytes as int (32 bits on common Go targets); a value like 1<<50
 // would silently truncate to 0 on a 32-bit int cast. With
-// pkg/providers/capabilities.ResizeBudget (MaxBytes int64) the
+// pkg/providers/catalog.ResizeLimits (MaxBytes int64) the
 // comparison runs entirely in int64 space — there is no int cast at
 // the budget boundary, so the comparison is honest and the pipeline
 // returns ErrLadderFloor (not a successful fit) when an int64 budget
@@ -501,12 +501,12 @@ func TestResizeBudget_OverflowSafety(t *testing.T) {
 	// 1<<62 overflows int32 (max ≈ 2.1e9) but fits in int64 (max ≈ 9.2e18).
 	// A pre-TD-M6 int conversion would silently truncate to a small
 	// value (or to 0 on some targets), making the comparison wrong.
-	// With capabilities.ResizeBudget (int64 bytes) the value is honored
+	// With catalog.ResizeLimits (int64 bytes) the value is honored
 	// exactly: the comparison `int64(len(pngData)) <= 1<<62` is trivially
 	// true for any image that can exist in memory, so the PNG path
 	// returns a valid encoding — the budget itself is not silently
 	// truncated, capped, or converted.
-	bigBudget := capabilities.ResizeBudget{
+	bigBudget := catalog.ResizeLimits{
 		LongEdgePx: 7680,
 		MaxBytes:   1 << 62,
 	}
@@ -526,7 +526,7 @@ func TestResizeBudget_OverflowSafety(t *testing.T) {
 	// image impossible to fit. This proves the int64 comparison is
 	// actually consulted (not silently treated as "always > 0" by an
 	// int cast that lost the value).
-	tinyBudget := capabilities.ResizeBudget{
+	tinyBudget := catalog.ResizeLimits{
 		LongEdgePx: 7680,
 		MaxBytes:   1,
 	}
@@ -542,11 +542,11 @@ func TestResizeBudget_OverflowSafety(t *testing.T) {
 // or MaxBytes must surface as an explicit error, never as a silent
 // no-op or a successful fit. The pre-TD-M6 resize package enforced
 // the same on its own Budget type; this test pins the canonical
-// capabilities.ResizeBudget to the same contract.
+// catalog.ResizeLimits to the same contract.
 func TestResizeBudget_NonPositiveRejected(t *testing.T) {
 	img := solidImage(32, 32, color.RGBA{})
 
-	cases := map[string]capabilities.ResizeBudget{
+	cases := map[string]catalog.ResizeLimits{
 		"zero LongEdgePx":     {LongEdgePx: 0, MaxBytes: 1024},
 		"zero MaxBytes":       {LongEdgePx: 1024, MaxBytes: 0},
 		"negative LongEdgePx": {LongEdgePx: -1, MaxBytes: 1024},

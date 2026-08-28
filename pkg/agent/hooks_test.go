@@ -38,7 +38,7 @@ func newHookTestLoop(
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              tmpDir,
-				ModelName:         "test-model",
+				DefaultModel:      config.DefaultModel{Model: "test-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},

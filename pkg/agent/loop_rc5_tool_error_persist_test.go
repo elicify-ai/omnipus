@@ -69,7 +69,7 @@ func TestRunTurn_FailedToolCall_PersistsErrorReasonInTranscript(t *testing.T) {
 
 	cfg := &config.Config{}
 	cfg.Agents.Defaults.Home = filepath.Join(home, "workspace")
-	cfg.Agents.Defaults.ModelName = "scripted-model"
+	cfg.Agents.Defaults.DefaultModel = config.DefaultModel{Model: "scripted-model"}
 	cfg.Agents.Defaults.MaxTokens = 4096
 	cfg.Agents.Defaults.MaxToolIterations = 10
 

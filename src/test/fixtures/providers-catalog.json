@@ -1,0 +1,5440 @@
+{
+  "schema_version": "2.0.0",
+  "version": "v2026.8.22",
+  "updated_at": "2026-08-22T06:00:00Z",
+  "source": "models.dev@2026-08-22 litellm@2026-08-20 overrides@2026-08-22",
+  "default_resize_limits": {
+    "long_edge_px": 7680,
+    "max_bytes": 10485760
+  },
+  "providers": [
+    {
+      "id": "openai",
+      "name": "OpenAI",
+      "company": "OpenAI",
+      "api": "https://api.openai.com/v1",
+      "protocol": "openai-compatible",
+      "env": [
+        "OPENAI_API_KEY"
+      ],
+      "tier": "popular",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "gpt-5",
+          "name": "GPT-5",
+          "release_date": "2026-01-20",
+          "context_window": 400000,
+          "max_output_tokens": 128000,
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "tool_call": true,
+          "status": "active"
+        },
+        {
+          "id": "gpt-5-mini",
+          "name": "GPT-5 mini",
+          "release_date": "2026-01-20",
+          "context_window": 400000,
+          "max_output_tokens": 128000,
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "tool_call": true,
+          "status": "active"
+        },
+        {
+          "id": "o4-mini",
+          "name": "o4-mini",
+          "release_date": "2025-04-16",
+          "context_window": 200000,
+          "max_output_tokens": 100000,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "retired"
+        }
+      ]
+    },
+    {
+      "id": "openai-chatgpt",
+      "name": "ChatGPT (sign in)",
+      "company": "ChatGPT",
+      "api": "https://chatgpt.com/backend-api/codex",
+      "protocol": "openai-compatible",
+      "tier": "standard",
+      "auth_methods": [
+        "sign_in"
+      ],
+      "aliases": [
+        "chatgpt"
+      ],
+      "locality": "cloud",
+      "token_source": "openai-device-code",
+      "models": [
+        {
+          "id": "gpt-5-codex",
+          "name": "GPT-5 Codex",
+          "release_date": "2026-02-10",
+          "context_window": 400000,
+          "max_output_tokens": 128000,
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "codex-cli",
+      "name": "Codex CLI",
+      "company": "Codex CLI",
+      "api": "codex",
+      "protocol": "cli",
+      "tier": "standard",
+      "auth_methods": [
+        "sign_in"
+      ],
+      "aliases": [],
+      "locality": "local",
+      "cli_kind": "codex",
+      "models": [
+        {
+          "id": "gpt-5-codex",
+          "name": "GPT-5 Codex",
+          "release_date": "2026-02-10",
+          "context_window": 400000,
+          "max_output_tokens": 128000,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "anthropic",
+      "name": "Anthropic",
+      "company": "Anthropic",
+      "api": "https://api.anthropic.com/v1",
+      "protocol": "anthropic",
+      "env": [
+        "ANTHROPIC_API_KEY"
+      ],
+      "tier": "popular",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [
+        "anthropic-messages"
+      ],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "claude-sonnet-4-5",
+          "name": "Claude Sonnet 4.5",
+          "release_date": "2026-05-20",
+          "context_window": 200000,
+          "max_output_tokens": 64000,
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "tool_call": true,
+          "status": "active"
+        },
+        {
+          "id": "claude-opus-4-1",
+          "name": "Claude Opus 4.1",
+          "release_date": "2025-08-05",
+          "context_window": 200000,
+          "max_output_tokens": 32000,
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "openrouter",
+      "name": "OpenRouter",
+      "company": "OpenRouter",
+      "api": "https://openrouter.ai/api/v1",
+      "protocol": "openai-compatible",
+      "env": [
+        "OPENROUTER_API_KEY"
+      ],
+      "tier": "popular",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "anthropic/claude-sonnet-4.6",
+          "name": "Claude Sonnet 4.6",
+          "release_date": "2026-02-11",
+          "context_window": 200000,
+          "max_output_tokens": 64000,
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "tool_call": true,
+          "status": "active"
+        },
+        {
+          "id": "anthropic/claude-3.5-haiku",
+          "name": "Claude 3.5 Haiku",
+          "release_date": "2024-10-22",
+          "context_window": 200000,
+          "max_output_tokens": 8192,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        },
+        {
+          "id": "openai/gpt-5.4",
+          "name": "GPT-5.4",
+          "release_date": "2026-03-04",
+          "context_window": 400000,
+          "max_output_tokens": 128000,
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "tool_call": true,
+          "status": "active"
+        },
+        {
+          "id": "x/nodate",
+          "name": "Undated model",
+          "context_window": 32768,
+          "max_output_tokens": 8192,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": false,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "google",
+      "name": "Google Gemini",
+      "company": "Google Gemini",
+      "api": "https://generativelanguage.googleapis.com",
+      "protocol": "google",
+      "env": [
+        "GEMINI_API_KEY"
+      ],
+      "tier": "popular",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [
+        "gemini"
+      ],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "gemini-2.5-pro",
+          "name": "Gemini 2.5 Pro",
+          "release_date": "2025-06-17",
+          "context_window": 1000000,
+          "max_output_tokens": 65536,
+          "input_modalities": [
+            "text",
+            "image",
+            "pdf",
+            "audio",
+            "video"
+          ],
+          "tool_call": true,
+          "status": "active"
+        },
+        {
+          "id": "gemini-2.5-flash",
+          "name": "Gemini 2.5 Flash",
+          "release_date": "2025-06-17",
+          "context_window": 1000000,
+          "max_output_tokens": 65536,
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "groq",
+      "name": "Groq",
+      "company": "Groq",
+      "api": "https://api.groq.com/openai/v1",
+      "protocol": "openai-compatible",
+      "env": [
+        "GROQ_API_KEY"
+      ],
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "llama-4-maverick",
+          "name": "Llama 4 Maverick",
+          "release_date": "2025-04-05",
+          "context_window": 131072,
+          "max_output_tokens": 8192,
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "deepseek",
+      "name": "DeepSeek",
+      "company": "DeepSeek",
+      "api": "https://api.deepseek.com/v1",
+      "protocol": "openai-compatible",
+      "env": [
+        "DEEPSEEK_API_KEY"
+      ],
+      "tier": "popular",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "deepseek-chat",
+          "name": "DeepSeek Chat",
+          "release_date": "2026-01-08",
+          "context_window": 131072,
+          "max_output_tokens": 8192,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "xai",
+      "name": "xAI",
+      "company": "xAI",
+      "api": "https://api.x.ai/v1",
+      "protocol": "openai-compatible",
+      "env": [
+        "XAI_API_KEY"
+      ],
+      "tier": "popular",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [
+        "grok"
+      ],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "grok-4",
+          "name": "Grok 4",
+          "release_date": "2026-03-19",
+          "context_window": 256000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "zai",
+      "name": "Z.AI",
+      "company": "Zhipu AI",
+      "api": "https://api.z.ai/api/paas/v4",
+      "protocol": "openai-compatible",
+      "region": "intl",
+      "tier": "popular",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [
+        "z-ai",
+        "zhipu",
+        "z.ai",
+        "glm",
+        "智谱"
+      ],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "glm-5.2",
+          "name": "GLM-5.2",
+          "release_date": "2026-05-20",
+          "context_window": 1000000,
+          "max_output_tokens": 65536,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        },
+        {
+          "id": "glm-5.2-flash",
+          "name": "GLM-5.2 Flash",
+          "release_date": "2026-05-20",
+          "context_window": 200000,
+          "max_output_tokens": 65536,
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "zai-coding-plan",
+      "name": "Z.AI Coding Plan",
+      "company": "Zhipu AI",
+      "api": "https://api.z.ai/api/coding/paas/v4",
+      "protocol": "openai-compatible",
+      "region": "intl",
+      "plan": "coding-plan",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [
+        "glm-coding",
+        "zhipu-coding"
+      ],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "zai-coding-plan-default",
+          "name": "Z.AI Coding Plan default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "zhipuai",
+      "name": "Zhipu AI (China)",
+      "company": "Zhipu AI",
+      "api": "https://open.bigmodel.cn/api/paas/v4",
+      "protocol": "openai-compatible",
+      "region": "china",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [
+        "bigmodel",
+        "智谱ai"
+      ],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "zhipuai-default",
+          "name": "Zhipu AI (China) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "zhipuai-coding-plan",
+      "name": "Zhipu AI Coding Plan (China)",
+      "company": "Zhipu AI",
+      "api": "https://open.bigmodel.cn/api/coding/paas/v4",
+      "protocol": "openai-compatible",
+      "region": "china",
+      "plan": "coding-plan",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "zhipuai-coding-plan-default",
+          "name": "Zhipu AI Coding Plan (China) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "moonshot",
+      "name": "Moonshot AI",
+      "company": "Moonshot AI",
+      "api": "https://api.moonshot.ai/v1",
+      "protocol": "openai-compatible",
+      "region": "intl",
+      "tier": "popular",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [
+        "kimi"
+      ],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "moonshot-default",
+          "name": "Moonshot AI default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "moonshot-cn",
+      "name": "Moonshot AI (China)",
+      "company": "Moonshot AI",
+      "api": "https://api.moonshot.cn/v1",
+      "protocol": "openai-compatible",
+      "region": "china",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "moonshot-cn-default",
+          "name": "Moonshot AI (China) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "minimax",
+      "name": "MiniMax",
+      "company": "MiniMax",
+      "api": "https://api.minimax.io/v1",
+      "protocol": "openai-compatible",
+      "region": "intl",
+      "tier": "popular",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "minimax-default",
+          "name": "MiniMax default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "minimax-cn",
+      "name": "MiniMax (China)",
+      "company": "MiniMax",
+      "api": "https://api.minimaxi.com/v1",
+      "protocol": "openai-compatible",
+      "region": "china",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "minimax-cn-default",
+          "name": "MiniMax (China) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "alibaba",
+      "name": "Alibaba Cloud Model Studio",
+      "company": "Alibaba Cloud",
+      "api": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+      "protocol": "openai-compatible",
+      "region": "intl",
+      "tier": "popular",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [
+        "qwen",
+        "dashscope"
+      ],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "alibaba-default",
+          "name": "Alibaba Cloud Model Studio default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "alibaba-cn",
+      "name": "Alibaba Cloud Model Studio (China)",
+      "company": "Alibaba Cloud",
+      "api": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "protocol": "openai-compatible",
+      "region": "china",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "alibaba-cn-default",
+          "name": "Alibaba Cloud Model Studio (China) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "alibaba-us",
+      "name": "Alibaba Cloud Model Studio (US)",
+      "company": "Alibaba Cloud",
+      "api": "https://dashscope-us.aliyuncs.com/compatible-mode/v1",
+      "protocol": "openai-compatible",
+      "region": "us",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "alibaba-us-default",
+          "name": "Alibaba Cloud Model Studio (US) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "alibaba-coding-plan",
+      "name": "Alibaba Cloud Coding Plan",
+      "company": "Alibaba Cloud",
+      "api": "https://coding-intl.dashscope.aliyuncs.com/v1",
+      "protocol": "openai-compatible",
+      "plan": "coding-plan",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "alibaba-coding-plan-default",
+          "name": "Alibaba Cloud Coding Plan default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "azure",
+      "name": "Azure OpenAI",
+      "company": "Azure OpenAI",
+      "api": "https://<resource>.openai.azure.com",
+      "protocol": "openai-compatible",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [
+        "azure-openai"
+      ],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "azure-default",
+          "name": "Azure OpenAI default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "ollama",
+      "name": "Ollama",
+      "company": "Ollama",
+      "api": "http://localhost:11434/v1",
+      "protocol": "ollama",
+      "tier": "popular",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "local",
+      "models": [
+        {
+          "id": "ollama-default",
+          "name": "Ollama default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "bedrock",
+      "name": "Amazon Bedrock",
+      "company": "Amazon",
+      "api": "https://bedrock-runtime.us-east-1.amazonaws.com",
+      "protocol": "openai-compatible",
+      "tier": "unsupported",
+      "unsupported_reason": "cloud-iam",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "anthropic.claude-sonnet-4-5-v1:0",
+          "name": "Claude Sonnet 4.5 (Bedrock)",
+          "release_date": "2026-05-20",
+          "context_window": 200000,
+          "max_output_tokens": 64000,
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "github-copilot",
+      "name": "GitHub Copilot",
+      "company": "GitHub",
+      "api": "copilot",
+      "protocol": "cli",
+      "tier": "standard",
+      "auth_methods": [
+        "sign_in"
+      ],
+      "aliases": [
+        "copilot"
+      ],
+      "locality": "local",
+      "cli_kind": "copilot",
+      "models": [
+        {
+          "id": "gpt-5-copilot",
+          "name": "GPT-5 (Copilot)",
+          "release_date": "2026-02-10",
+          "context_window": 128000,
+          "max_output_tokens": 16384,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "01",
+      "name": "01.AI",
+      "company": "01.AI",
+      "api": "https://api.01.ai/v1",
+      "protocol": "openai-compatible",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "01-default",
+          "name": "01.AI default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "302ai",
+      "name": "302.AI",
+      "company": "302.AI",
+      "api": "https://api.302.ai/v1",
+      "protocol": "openai-compatible",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "302ai-default",
+          "name": "302.AI default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "ai21",
+      "name": "AI21 Labs",
+      "company": "AI21 Labs",
+      "api": "https://api.ai21.com/studio/v1",
+      "protocol": "openai-compatible",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "ai21-default",
+          "name": "AI21 Labs default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "aihubmix",
+      "name": "AiHubMix",
+      "company": "AiHubMix",
+      "api": "https://aihubmix.com/v1",
+      "protocol": "openai-compatible",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "aihubmix-default",
+          "name": "AiHubMix default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "aimlapi",
+      "name": "AI/ML API",
+      "company": "AI/ML API",
+      "api": "https://api.aimlapi.com/v1",
+      "protocol": "openai-compatible",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "aimlapi-default",
+          "name": "AI/ML API default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "aleph-alpha",
+      "name": "Aleph Alpha",
+      "company": "Aleph Alpha",
+      "api": "https://api.aleph-alpha.com",
+      "protocol": "openai-compatible",
+      "region": "eu",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "aleph-alpha-default",
+          "name": "Aleph Alpha default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "anyscale",
+      "name": "Anyscale",
+      "company": "Anyscale",
+      "api": "https://api.endpoints.anyscale.com/v1",
+      "protocol": "openai-compatible",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "anyscale-default",
+          "name": "Anyscale default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "arcee",
+      "name": "Arcee AI",
+      "company": "Arcee AI",
+      "api": "https://conductor.arcee.ai/v1",
+      "protocol": "openai-compatible",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "arcee-default",
+          "name": "Arcee AI default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "atlas-cloud",
+      "name": "Atlas Cloud",
+      "company": "Atlas Cloud",
+      "api": "https://api.atlascloud.ai/v1",
+      "protocol": "openai-compatible",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "atlas-cloud-default",
+          "name": "Atlas Cloud default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "atoma",
+      "name": "Atoma",
+      "company": "Atoma",
+      "api": "https://api.atoma.network/v1",
+      "protocol": "openai-compatible",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "atoma-default",
+          "name": "Atoma default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "avian",
+      "name": "Avian",
+      "company": "Avian",
+      "api": "https://api.avian.io/v1",
+      "protocol": "openai-compatible",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "avian-default",
+          "name": "Avian default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "azure-ai-foundry",
+      "name": "Azure AI Foundry",
+      "company": "Azure OpenAI",
+      "api": "https://<project>.services.ai.azure.com",
+      "protocol": "openai-compatible",
+      "tier": "unsupported",
+      "unsupported_reason": "deployment-url",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "azure-ai-foundry-default",
+          "name": "Azure AI Foundry default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "baseten",
+      "name": "Baseten",
+      "company": "Baseten",
+      "api": "https://inference.baseten.co/v1",
+      "protocol": "openai-compatible",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "baseten-default",
+          "name": "Baseten default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "bytedance-ark",
+      "name": "BytePlus ModelArk",
+      "company": "ByteDance",
+      "api": "https://ark.ap-southeast.bytepluses.com/api/v3",
+      "protocol": "openai-compatible",
+      "region": "intl",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "bytedance-ark-default",
+          "name": "BytePlus ModelArk default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "bytedance-ark-cn",
+      "name": "Volcengine Ark",
+      "company": "ByteDance",
+      "api": "https://ark.cn-beijing.volces.com/api/v3",
+      "protocol": "openai-compatible",
+      "region": "china",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [
+        "doubao",
+        "volcengine"
+      ],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "bytedance-ark-cn-default",
+          "name": "Volcengine Ark default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "cent-ml",
+      "name": "CentML",
+      "company": "CentML",
+      "api": "https://api.centml.com/openai/v1",
+      "protocol": "openai-compatible",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "cent-ml-default",
+          "name": "CentML default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "cerebras",
+      "name": "Cerebras",
+      "company": "Cerebras",
+      "api": "https://api.cerebras.ai/v1",
+      "protocol": "openai-compatible",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "cerebras-default",
+          "name": "Cerebras default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "chutes",
+      "name": "Chutes",
+      "company": "Chutes",
+      "api": "https://llm.chutes.ai/v1",
+      "protocol": "openai-compatible",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "chutes-default",
+          "name": "Chutes default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "clarifai",
+      "name": "Clarifai",
+      "company": "Clarifai",
+      "api": "https://api.clarifai.com/v2/ext/openai/v1",
+      "protocol": "openai-compatible",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "clarifai-default",
+          "name": "Clarifai default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "cloudflare-workers-ai",
+      "name": "Cloudflare Workers AI",
+      "company": "Cloudflare",
+      "api": "https://api.cloudflare.com/client/v4/accounts/<account>/ai/v1",
+      "protocol": "openai-compatible",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "cloudflare-workers-ai-default",
+          "name": "Cloudflare Workers AI default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "cohere",
+      "name": "Cohere",
+      "company": "Cohere",
+      "api": "https://api.cohere.ai/compatibility/v1",
+      "protocol": "openai-compatible",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "cohere-default",
+          "name": "Cohere default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "crusoe",
+      "name": "Crusoe",
+      "company": "Crusoe",
+      "api": "https://api.crusoe.ai/v1",
+      "protocol": "openai-compatible",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "crusoe-default",
+          "name": "Crusoe default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "databricks",
+      "name": "Databricks",
+      "company": "Databricks",
+      "api": "https://<workspace>.cloud.databricks.com/serving-endpoints",
+      "protocol": "openai-compatible",
+      "tier": "unsupported",
+      "unsupported_reason": "deployment-url",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "databricks-default",
+          "name": "Databricks default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "deepinfra",
+      "name": "DeepInfra",
+      "company": "DeepInfra",
+      "api": "https://api.deepinfra.com/v1/openai",
+      "protocol": "openai-compatible",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "deepinfra-default",
+          "name": "DeepInfra default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "enfer",
+      "name": "Enfer",
+      "company": "Enfer",
+      "api": "https://api.enfer.ai/v1",
+      "protocol": "openai-compatible",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "enfer-default",
+          "name": "Enfer default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "fastrouter",
+      "name": "FastRouter",
+      "company": "FastRouter",
+      "api": "https://go.fastrouter.ai/api/v1",
+      "protocol": "openai-compatible",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "fastrouter-default",
+          "name": "FastRouter default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "featherless",
+      "name": "Featherless AI",
+      "company": "Featherless AI",
+      "api": "https://api.featherless.ai/v1",
+      "protocol": "openai-compatible",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "featherless-default",
+          "name": "Featherless AI default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "fireworks-ai",
+      "name": "Fireworks AI",
+      "company": "Fireworks AI",
+      "api": "https://api.fireworks.ai/inference/v1",
+      "protocol": "openai-compatible",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "fireworks-ai-default",
+          "name": "Fireworks AI default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "friendli",
+      "name": "FriendliAI",
+      "company": "FriendliAI",
+      "api": "https://api.friendli.ai/serverless/v1",
+      "protocol": "openai-compatible",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "friendli-default",
+          "name": "FriendliAI default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "github-models",
+      "name": "GitHub Models",
+      "company": "GitHub",
+      "api": "https://models.github.ai/inference",
+      "protocol": "openai-compatible",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "github-models-default",
+          "name": "GitHub Models default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "gmicloud",
+      "name": "GMI Cloud",
+      "company": "GMI Cloud",
+      "api": "https://api.gmi-serving.com/v1",
+      "protocol": "openai-compatible",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "gmicloud-default",
+          "name": "GMI Cloud default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "google-vertex",
+      "name": "Google Vertex AI",
+      "company": "Google Cloud",
+      "api": "https://<region>-aiplatform.googleapis.com",
+      "protocol": "openai-compatible",
+      "tier": "unsupported",
+      "unsupported_reason": "cloud-iam",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [
+        "vertex"
+      ],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "google-vertex-default",
+          "name": "Google Vertex AI default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "helicone",
+      "name": "Helicone AI Gateway",
+      "company": "Helicone",
+      "api": "https://ai-gateway.helicone.ai/v1",
+      "protocol": "openai-compatible",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "helicone-default",
+          "name": "Helicone AI Gateway default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "huggingface",
+      "name": "Hugging Face Inference",
+      "company": "Hugging Face",
+      "api": "https://router.huggingface.co/v1",
+      "protocol": "openai-compatible",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [
+        "hf"
+      ],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "huggingface-default",
+          "name": "Hugging Face Inference default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "hyperbolic",
+      "name": "Hyperbolic",
+      "company": "Hyperbolic",
+      "api": "https://api.hyperbolic.xyz/v1",
+      "protocol": "openai-compatible",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "hyperbolic-default",
+          "name": "Hyperbolic default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "ibm-watsonx",
+      "name": "IBM watsonx.ai",
+      "company": "IBM",
+      "api": "https://<region>.ml.cloud.ibm.com",
+      "protocol": "openai-compatible",
+      "tier": "unsupported",
+      "unsupported_reason": "deployment-url",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "ibm-watsonx-default",
+          "name": "IBM watsonx.ai default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "inception",
+      "name": "Inception Labs",
+      "company": "Inception Labs",
+      "api": "https://api.inceptionlabs.ai/v1",
+      "protocol": "openai-compatible",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "inception-default",
+          "name": "Inception Labs default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "inference-net",
+      "name": "Inference.net",
+      "company": "Inference.net",
+      "api": "https://api.inference.net/v1",
+      "protocol": "openai-compatible",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "inference-net-default",
+          "name": "Inference.net default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "infomaniak",
+      "name": "Infomaniak AI Tools",
+      "company": "Infomaniak",
+      "api": "https://api.infomaniak.com/1/ai",
+      "protocol": "openai-compatible",
+      "region": "eu",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "infomaniak-default",
+          "name": "Infomaniak AI Tools default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "jina",
+      "name": "Jina AI",
+      "company": "Jina AI",
+      "api": "https://api.jina.ai/v1",
+      "protocol": "openai-compatible",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "jina-default",
+          "name": "Jina AI default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "kluster-ai",
+      "name": "kluster.ai",
+      "company": "kluster.ai",
+      "api": "https://api.kluster.ai/v1",
+      "protocol": "openai-compatible",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "kluster-ai-default",
+          "name": "kluster.ai default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "lambda",
+      "name": "Lambda",
+      "company": "Lambda",
+      "api": "https://api.lambda.ai/v1",
+      "protocol": "openai-compatible",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "lambda-default",
+          "name": "Lambda default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "launchpad",
+      "name": "Launchpad",
+      "company": "Launchpad",
+      "api": "https://api.launchpad.ai/v1",
+      "protocol": "openai-compatible",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "launchpad-default",
+          "name": "Launchpad default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "lemonfox",
+      "name": "Lemonfox",
+      "company": "Lemonfox",
+      "api": "https://api.lemonfox.ai/v1",
+      "protocol": "openai-compatible",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "lemonfox-default",
+          "name": "Lemonfox default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "lingyiwanwu",
+      "name": "Lingyiwanwu (China)",
+      "company": "01.AI",
+      "api": "https://api.lingyiwanwu.com/v1",
+      "protocol": "openai-compatible",
+      "region": "china",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "lingyiwanwu-default",
+          "name": "Lingyiwanwu (China) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "llama",
+      "name": "Llama API",
+      "company": "Meta",
+      "api": "https://api.llama.com/compat/v1",
+      "protocol": "openai-compatible",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [
+        "meta"
+      ],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "llama-default",
+          "name": "Llama API default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "llamacpp",
+      "name": "llama.cpp",
+      "company": "llama.cpp",
+      "api": "http://localhost:8080/v1",
+      "protocol": "openai-compatible",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "local",
+      "models": [
+        {
+          "id": "llamacpp-default",
+          "name": "llama.cpp default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "lmstudio",
+      "name": "LM Studio",
+      "company": "LM Studio",
+      "api": "http://localhost:1234/v1",
+      "protocol": "openai-compatible",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "local",
+      "models": [
+        {
+          "id": "lmstudio-default",
+          "name": "LM Studio default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "mancer",
+      "name": "Mancer",
+      "company": "Mancer",
+      "api": "https://neuro.mancer.tech/oai/v1",
+      "protocol": "openai-compatible",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "mancer-default",
+          "name": "Mancer default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "mistral",
+      "name": "Mistral AI",
+      "company": "Mistral AI",
+      "api": "https://api.mistral.ai/v1",
+      "protocol": "openai-compatible",
+      "region": "eu",
+      "tier": "popular",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [
+        "lechat"
+      ],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "mistral-default",
+          "name": "Mistral AI default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "modelscope",
+      "name": "ModelScope",
+      "company": "ModelScope",
+      "api": "https://api-inference.modelscope.cn/v1",
+      "protocol": "openai-compatible",
+      "region": "china",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "modelscope-default",
+          "name": "ModelScope default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "moonshot-coding-plan",
+      "name": "Kimi Coding Plan",
+      "company": "Moonshot AI",
+      "api": "https://api.moonshot.ai/coding/v1",
+      "protocol": "openai-compatible",
+      "region": "intl",
+      "plan": "coding-plan",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "moonshot-coding-plan-default",
+          "name": "Kimi Coding Plan default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "morph",
+      "name": "Morph",
+      "company": "Morph",
+      "api": "https://api.morphllm.com/v1",
+      "protocol": "openai-compatible",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "morph-default",
+          "name": "Morph default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "nebius",
+      "name": "Nebius AI Studio",
+      "company": "Nebius",
+      "api": "https://api.studio.nebius.ai/v1",
+      "protocol": "openai-compatible",
+      "region": "eu",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "nebius-default",
+          "name": "Nebius AI Studio default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "nineteen",
+      "name": "Nineteen",
+      "company": "Nineteen",
+      "api": "https://api.nineteen.ai/v1",
+      "protocol": "openai-compatible",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "nineteen-default",
+          "name": "Nineteen default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "novita",
+      "name": "Novita AI",
+      "company": "Novita AI",
+      "api": "https://api.novita.ai/v3/openai",
+      "protocol": "openai-compatible",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "novita-default",
+          "name": "Novita AI default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "nvidia-nim",
+      "name": "NVIDIA NIM",
+      "company": "NVIDIA",
+      "api": "https://integrate.api.nvidia.com/v1",
+      "protocol": "openai-compatible",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [
+        "nim"
+      ],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "nvidia-nim-default",
+          "name": "NVIDIA NIM default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "opencode-zen",
+      "name": "OpenCode Zen",
+      "company": "OpenCode",
+      "api": "https://opencode.ai/zen/v1",
+      "protocol": "openai-compatible",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "opencode-zen-default",
+          "name": "OpenCode Zen default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "ovhcloud",
+      "name": "OVHcloud AI Endpoints",
+      "company": "OVHcloud",
+      "api": "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1",
+      "protocol": "openai-compatible",
+      "region": "eu",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "ovhcloud-default",
+          "name": "OVHcloud AI Endpoints default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "parasail",
+      "name": "Parasail",
+      "company": "Parasail",
+      "api": "https://api.parasail.io/v1",
+      "protocol": "openai-compatible",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "parasail-default",
+          "name": "Parasail default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "perplexity",
+      "name": "Perplexity",
+      "company": "Perplexity",
+      "api": "https://api.perplexity.ai",
+      "protocol": "openai-compatible",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [
+        "pplx"
+      ],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "perplexity-default",
+          "name": "Perplexity default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "poe",
+      "name": "Poe",
+      "company": "Poe",
+      "api": "https://api.poe.com/v1",
+      "protocol": "openai-compatible",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "poe-default",
+          "name": "Poe default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "portkey",
+      "name": "Portkey",
+      "company": "Portkey",
+      "api": "https://api.portkey.ai/v1",
+      "protocol": "openai-compatible",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "portkey-default",
+          "name": "Portkey default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "predibase",
+      "name": "Predibase",
+      "company": "Predibase",
+      "api": "https://serving.app.predibase.com/v1",
+      "protocol": "openai-compatible",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "predibase-default",
+          "name": "Predibase default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "recursal",
+      "name": "Recursal",
+      "company": "Recursal",
+      "api": "https://api.recursal.ai/v1",
+      "protocol": "openai-compatible",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "recursal-default",
+          "name": "Recursal default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "redpill",
+      "name": "RedPill",
+      "company": "RedPill",
+      "api": "https://api.redpill.ai/v1",
+      "protocol": "openai-compatible",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "redpill-default",
+          "name": "RedPill default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "replicate",
+      "name": "Replicate",
+      "company": "Replicate",
+      "api": "https://api.replicate.com/v1",
+      "protocol": "openai-compatible",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "replicate-default",
+          "name": "Replicate default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "requesty",
+      "name": "Requesty",
+      "company": "Requesty",
+      "api": "https://router.requesty.ai/v1",
+      "protocol": "openai-compatible",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "requesty-default",
+          "name": "Requesty default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "sambanova",
+      "name": "SambaNova",
+      "company": "SambaNova",
+      "api": "https://api.sambanova.ai/v1",
+      "protocol": "openai-compatible",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "sambanova-default",
+          "name": "SambaNova default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "scaleway",
+      "name": "Scaleway Generative APIs",
+      "company": "Scaleway",
+      "api": "https://api.scaleway.ai/v1",
+      "protocol": "openai-compatible",
+      "region": "eu",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "scaleway-default",
+          "name": "Scaleway Generative APIs default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "siliconflow",
+      "name": "SiliconFlow",
+      "company": "SiliconFlow",
+      "api": "https://api.siliconflow.com/v1",
+      "protocol": "openai-compatible",
+      "region": "intl",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "siliconflow-default",
+          "name": "SiliconFlow default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "siliconflow-cn",
+      "name": "SiliconFlow (China)",
+      "company": "SiliconFlow",
+      "api": "https://api.siliconflow.cn/v1",
+      "protocol": "openai-compatible",
+      "region": "china",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "siliconflow-cn-default",
+          "name": "SiliconFlow (China) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "snowflake-cortex",
+      "name": "Snowflake Cortex",
+      "company": "Snowflake",
+      "api": "https://<account>.snowflakecomputing.com/api/v2/cortex",
+      "protocol": "openai-compatible",
+      "tier": "unsupported",
+      "unsupported_reason": "deployment-url",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "snowflake-cortex-default",
+          "name": "Snowflake Cortex default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "stepfun",
+      "name": "StepFun",
+      "company": "StepFun",
+      "api": "https://api.stepfun.com/v1",
+      "protocol": "openai-compatible",
+      "region": "china",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "stepfun-default",
+          "name": "StepFun default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "targon",
+      "name": "Targon",
+      "company": "Targon",
+      "api": "https://api.targon.com/v1",
+      "protocol": "openai-compatible",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "targon-default",
+          "name": "Targon default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "tencent-hunyuan",
+      "name": "Tencent Hunyuan",
+      "company": "Tencent",
+      "api": "https://api.hunyuan.cloud.tencent.com/v1",
+      "protocol": "openai-compatible",
+      "region": "china",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "tencent-hunyuan-default",
+          "name": "Tencent Hunyuan default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "together",
+      "name": "Together AI",
+      "company": "Together AI",
+      "api": "https://api.together.xyz/v1",
+      "protocol": "openai-compatible",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "together-default",
+          "name": "Together AI default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "together-legacy",
+      "name": "Together AI (legacy inference)",
+      "company": "Together AI",
+      "api": "https://api.together.xyz/inference",
+      "protocol": "openai-compatible",
+      "tier": "unsupported",
+      "unsupported_reason": "withdrawn",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "together-legacy-default",
+          "name": "Together AI (legacy inference) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "upstage",
+      "name": "Upstage",
+      "company": "Upstage",
+      "api": "https://api.upstage.ai/v1",
+      "protocol": "openai-compatible",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "upstage-default",
+          "name": "Upstage default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "venice",
+      "name": "Venice AI",
+      "company": "Venice AI",
+      "api": "https://api.venice.ai/api/v1",
+      "protocol": "openai-compatible",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "venice-default",
+          "name": "Venice AI default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "vercel-ai-gateway",
+      "name": "Vercel AI Gateway",
+      "company": "Vercel",
+      "api": "https://ai-gateway.vercel.sh/v1",
+      "protocol": "openai-compatible",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "vercel-ai-gateway-default",
+          "name": "Vercel AI Gateway default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "vultr",
+      "name": "Vultr Inference",
+      "company": "Vultr",
+      "api": "https://api.vultrinference.com/v1",
+      "protocol": "openai-compatible",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "vultr-default",
+          "name": "Vultr Inference default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "weights-biases",
+      "name": "W&B Inference",
+      "company": "Weights & Biases",
+      "api": "https://api.inference.wandb.ai/v1",
+      "protocol": "openai-compatible",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "weights-biases-default",
+          "name": "W&B Inference default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "writer",
+      "name": "Writer",
+      "company": "Writer",
+      "api": "https://api.writer.com/v1",
+      "protocol": "openai-compatible",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "writer-default",
+          "name": "Writer default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "xinference",
+      "name": "Xinference",
+      "company": "Xinference",
+      "api": "http://localhost:9997/v1",
+      "protocol": "openai-compatible",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "local",
+      "models": [
+        {
+          "id": "xinference-default",
+          "name": "Xinference default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "together-eu",
+      "name": "Together AI (EU)",
+      "company": "Together AI",
+      "api": "https://api.together.xyz/eu/v1",
+      "protocol": "openai-compatible",
+      "region": "eu",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "together-eu-default",
+          "name": "Together AI (EU) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "fireworks-ai-eu",
+      "name": "Fireworks AI (EU)",
+      "company": "Fireworks AI",
+      "api": "https://api.fireworks.ai/inference/eu/v1",
+      "protocol": "openai-compatible",
+      "region": "eu",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "fireworks-ai-eu-default",
+          "name": "Fireworks AI (EU) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "deepinfra-eu",
+      "name": "DeepInfra (EU)",
+      "company": "DeepInfra",
+      "api": "https://api.deepinfra.com/v1/eu/v1",
+      "protocol": "openai-compatible",
+      "region": "eu",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "deepinfra-eu-default",
+          "name": "DeepInfra (EU) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "nebius-eu",
+      "name": "Nebius (EU)",
+      "company": "Nebius",
+      "api": "https://api.studio.nebius.ai/eu/v1",
+      "protocol": "openai-compatible",
+      "region": "eu",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "nebius-eu-default",
+          "name": "Nebius (EU) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "sambanova-eu",
+      "name": "SambaNova (EU)",
+      "company": "SambaNova",
+      "api": "https://api.sambanova.ai/eu/v1",
+      "protocol": "openai-compatible",
+      "region": "eu",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "sambanova-eu-default",
+          "name": "SambaNova (EU) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "cerebras-eu",
+      "name": "Cerebras (EU)",
+      "company": "Cerebras",
+      "api": "https://api.cerebras.ai/eu/v1",
+      "protocol": "openai-compatible",
+      "region": "eu",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "cerebras-eu-default",
+          "name": "Cerebras (EU) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "baseten-eu",
+      "name": "Baseten (EU)",
+      "company": "Baseten",
+      "api": "https://inference.baseten.co/eu/v1",
+      "protocol": "openai-compatible",
+      "region": "eu",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "baseten-eu-default",
+          "name": "Baseten (EU) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "hyperbolic-eu",
+      "name": "Hyperbolic (EU)",
+      "company": "Hyperbolic",
+      "api": "https://api.hyperbolic.xyz/eu/v1",
+      "protocol": "openai-compatible",
+      "region": "eu",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "hyperbolic-eu-default",
+          "name": "Hyperbolic (EU) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "novita-eu",
+      "name": "Novita AI (EU)",
+      "company": "Novita AI",
+      "api": "https://api.novita.ai/eu/v1",
+      "protocol": "openai-compatible",
+      "region": "eu",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "novita-eu-default",
+          "name": "Novita AI (EU) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "perplexity-eu",
+      "name": "Perplexity (EU)",
+      "company": "Perplexity",
+      "api": "https://api.perplexity.ai/eu/v1",
+      "protocol": "openai-compatible",
+      "region": "eu",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "perplexity-eu-default",
+          "name": "Perplexity (EU) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "mistral-eu",
+      "name": "Mistral AI (EU)",
+      "company": "Mistral AI",
+      "api": "https://api.mistral.ai/eu/v1",
+      "protocol": "openai-compatible",
+      "region": "eu",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "mistral-eu-default",
+          "name": "Mistral AI (EU) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "cohere-eu",
+      "name": "Cohere (EU)",
+      "company": "Cohere",
+      "api": "https://api.cohere.ai/eu/v1",
+      "protocol": "openai-compatible",
+      "region": "eu",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "cohere-eu-default",
+          "name": "Cohere (EU) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "siliconflow-eu",
+      "name": "SiliconFlow (EU)",
+      "company": "SiliconFlow",
+      "api": "https://api.siliconflow.com/eu/v1",
+      "protocol": "openai-compatible",
+      "region": "eu",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "siliconflow-eu-default",
+          "name": "SiliconFlow (EU) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "scaleway-eu",
+      "name": "Scaleway (EU)",
+      "company": "Scaleway",
+      "api": "https://api.scaleway.ai/eu/v1",
+      "protocol": "openai-compatible",
+      "region": "eu",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "scaleway-eu-default",
+          "name": "Scaleway (EU) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "venice-eu",
+      "name": "Venice AI (EU)",
+      "company": "Venice AI",
+      "api": "https://api.venice.ai/api/eu/v1",
+      "protocol": "openai-compatible",
+      "region": "eu",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "venice-eu-default",
+          "name": "Venice AI (EU) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "requesty-eu",
+      "name": "Requesty (EU)",
+      "company": "Requesty",
+      "api": "https://router.requesty.ai/eu/v1",
+      "protocol": "openai-compatible",
+      "region": "eu",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "requesty-eu-default",
+          "name": "Requesty (EU) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "portkey-eu",
+      "name": "Portkey (EU)",
+      "company": "Portkey",
+      "api": "https://api.portkey.ai/eu/v1",
+      "protocol": "openai-compatible",
+      "region": "eu",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "portkey-eu-default",
+          "name": "Portkey (EU) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "vultr-eu",
+      "name": "Vultr Inference (EU)",
+      "company": "Vultr Inference",
+      "api": "https://api.vultrinference.com/eu/v1",
+      "protocol": "openai-compatible",
+      "region": "eu",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "vultr-eu-default",
+          "name": "Vultr Inference (EU) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "upstage-eu",
+      "name": "Upstage (EU)",
+      "company": "Upstage",
+      "api": "https://api.upstage.ai/eu/v1",
+      "protocol": "openai-compatible",
+      "region": "eu",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "upstage-eu-default",
+          "name": "Upstage (EU) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "writer-eu",
+      "name": "Writer (EU)",
+      "company": "Writer",
+      "api": "https://api.writer.com/eu/v1",
+      "protocol": "openai-compatible",
+      "region": "eu",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "writer-eu-default",
+          "name": "Writer (EU) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "jina-eu",
+      "name": "Jina AI (EU)",
+      "company": "Jina AI",
+      "api": "https://api.jina.ai/eu/v1",
+      "protocol": "openai-compatible",
+      "region": "eu",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "jina-eu-default",
+          "name": "Jina AI (EU) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "clarifai-eu",
+      "name": "Clarifai (EU)",
+      "company": "Clarifai",
+      "api": "https://api.clarifai.com/v2/ext/openai/eu/v1",
+      "protocol": "openai-compatible",
+      "region": "eu",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "clarifai-eu-default",
+          "name": "Clarifai (EU) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "parasail-eu",
+      "name": "Parasail (EU)",
+      "company": "Parasail",
+      "api": "https://api.parasail.io/eu/v1",
+      "protocol": "openai-compatible",
+      "region": "eu",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "parasail-eu-default",
+          "name": "Parasail (EU) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "crusoe-eu",
+      "name": "Crusoe (EU)",
+      "company": "Crusoe",
+      "api": "https://api.crusoe.ai/eu/v1",
+      "protocol": "openai-compatible",
+      "region": "eu",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "crusoe-eu-default",
+          "name": "Crusoe (EU) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "lambda-eu",
+      "name": "Lambda (EU)",
+      "company": "Lambda",
+      "api": "https://api.lambda.ai/eu/v1",
+      "protocol": "openai-compatible",
+      "region": "eu",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "lambda-eu-default",
+          "name": "Lambda (EU) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "featherless-eu",
+      "name": "Featherless AI (EU)",
+      "company": "Featherless AI",
+      "api": "https://api.featherless.ai/eu/v1",
+      "protocol": "openai-compatible",
+      "region": "eu",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "featherless-eu-default",
+          "name": "Featherless AI (EU) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "atoma-eu",
+      "name": "Atoma (EU)",
+      "company": "Atoma",
+      "api": "https://api.atoma.network/eu/v1",
+      "protocol": "openai-compatible",
+      "region": "eu",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "atoma-eu-default",
+          "name": "Atoma (EU) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "targon-eu",
+      "name": "Targon (EU)",
+      "company": "Targon",
+      "api": "https://api.targon.com/eu/v1",
+      "protocol": "openai-compatible",
+      "region": "eu",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "targon-eu-default",
+          "name": "Targon (EU) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "avian-eu",
+      "name": "Avian (EU)",
+      "company": "Avian",
+      "api": "https://api.avian.io/eu/v1",
+      "protocol": "openai-compatible",
+      "region": "eu",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "avian-eu-default",
+          "name": "Avian (EU) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "gmicloud-eu",
+      "name": "GMI Cloud (EU)",
+      "company": "GMI Cloud",
+      "api": "https://api.gmi-serving.com/eu/v1",
+      "protocol": "openai-compatible",
+      "region": "eu",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "gmicloud-eu-default",
+          "name": "GMI Cloud (EU) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "together-pro",
+      "name": "Together AI (Pro plan)",
+      "company": "Together AI",
+      "api": "https://api.together.xyz/pro/v1",
+      "protocol": "openai-compatible",
+      "plan": "pro",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "together-pro-default",
+          "name": "Together AI (Pro plan) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "fireworks-ai-pro",
+      "name": "Fireworks AI (Pro plan)",
+      "company": "Fireworks AI",
+      "api": "https://api.fireworks.ai/inference/pro/v1",
+      "protocol": "openai-compatible",
+      "plan": "pro",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "fireworks-ai-pro-default",
+          "name": "Fireworks AI (Pro plan) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "deepinfra-pro",
+      "name": "DeepInfra (Pro plan)",
+      "company": "DeepInfra",
+      "api": "https://api.deepinfra.com/v1/pro/v1",
+      "protocol": "openai-compatible",
+      "plan": "pro",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "deepinfra-pro-default",
+          "name": "DeepInfra (Pro plan) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "nebius-pro",
+      "name": "Nebius (Pro plan)",
+      "company": "Nebius",
+      "api": "https://api.studio.nebius.ai/pro/v1",
+      "protocol": "openai-compatible",
+      "plan": "pro",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "nebius-pro-default",
+          "name": "Nebius (Pro plan) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "sambanova-pro",
+      "name": "SambaNova (Pro plan)",
+      "company": "SambaNova",
+      "api": "https://api.sambanova.ai/pro/v1",
+      "protocol": "openai-compatible",
+      "plan": "pro",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "sambanova-pro-default",
+          "name": "SambaNova (Pro plan) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "cerebras-pro",
+      "name": "Cerebras (Pro plan)",
+      "company": "Cerebras",
+      "api": "https://api.cerebras.ai/pro/v1",
+      "protocol": "openai-compatible",
+      "plan": "pro",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "cerebras-pro-default",
+          "name": "Cerebras (Pro plan) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "baseten-pro",
+      "name": "Baseten (Pro plan)",
+      "company": "Baseten",
+      "api": "https://inference.baseten.co/pro/v1",
+      "protocol": "openai-compatible",
+      "plan": "pro",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "baseten-pro-default",
+          "name": "Baseten (Pro plan) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "hyperbolic-pro",
+      "name": "Hyperbolic (Pro plan)",
+      "company": "Hyperbolic",
+      "api": "https://api.hyperbolic.xyz/pro/v1",
+      "protocol": "openai-compatible",
+      "plan": "pro",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "hyperbolic-pro-default",
+          "name": "Hyperbolic (Pro plan) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "novita-pro",
+      "name": "Novita AI (Pro plan)",
+      "company": "Novita AI",
+      "api": "https://api.novita.ai/pro/v1",
+      "protocol": "openai-compatible",
+      "plan": "pro",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "novita-pro-default",
+          "name": "Novita AI (Pro plan) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "perplexity-pro",
+      "name": "Perplexity (Pro plan)",
+      "company": "Perplexity",
+      "api": "https://api.perplexity.ai/pro/v1",
+      "protocol": "openai-compatible",
+      "plan": "pro",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "perplexity-pro-default",
+          "name": "Perplexity (Pro plan) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "mistral-pro",
+      "name": "Mistral AI (Pro plan)",
+      "company": "Mistral AI",
+      "api": "https://api.mistral.ai/pro/v1",
+      "protocol": "openai-compatible",
+      "plan": "pro",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "mistral-pro-default",
+          "name": "Mistral AI (Pro plan) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "cohere-pro",
+      "name": "Cohere (Pro plan)",
+      "company": "Cohere",
+      "api": "https://api.cohere.ai/pro/v1",
+      "protocol": "openai-compatible",
+      "plan": "pro",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "cohere-pro-default",
+          "name": "Cohere (Pro plan) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "siliconflow-pro",
+      "name": "SiliconFlow (Pro plan)",
+      "company": "SiliconFlow",
+      "api": "https://api.siliconflow.com/pro/v1",
+      "protocol": "openai-compatible",
+      "plan": "pro",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "siliconflow-pro-default",
+          "name": "SiliconFlow (Pro plan) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "scaleway-pro",
+      "name": "Scaleway (Pro plan)",
+      "company": "Scaleway",
+      "api": "https://api.scaleway.ai/pro/v1",
+      "protocol": "openai-compatible",
+      "plan": "pro",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "scaleway-pro-default",
+          "name": "Scaleway (Pro plan) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "venice-pro",
+      "name": "Venice AI (Pro plan)",
+      "company": "Venice AI",
+      "api": "https://api.venice.ai/api/pro/v1",
+      "protocol": "openai-compatible",
+      "plan": "pro",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "venice-pro-default",
+          "name": "Venice AI (Pro plan) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "requesty-pro",
+      "name": "Requesty (Pro plan)",
+      "company": "Requesty",
+      "api": "https://router.requesty.ai/pro/v1",
+      "protocol": "openai-compatible",
+      "plan": "pro",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "requesty-pro-default",
+          "name": "Requesty (Pro plan) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "portkey-pro",
+      "name": "Portkey (Pro plan)",
+      "company": "Portkey",
+      "api": "https://api.portkey.ai/pro/v1",
+      "protocol": "openai-compatible",
+      "plan": "pro",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "portkey-pro-default",
+          "name": "Portkey (Pro plan) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "vultr-pro",
+      "name": "Vultr Inference (Pro plan)",
+      "company": "Vultr Inference",
+      "api": "https://api.vultrinference.com/pro/v1",
+      "protocol": "openai-compatible",
+      "plan": "pro",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "vultr-pro-default",
+          "name": "Vultr Inference (Pro plan) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "upstage-pro",
+      "name": "Upstage (Pro plan)",
+      "company": "Upstage",
+      "api": "https://api.upstage.ai/pro/v1",
+      "protocol": "openai-compatible",
+      "plan": "pro",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "upstage-pro-default",
+          "name": "Upstage (Pro plan) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "writer-pro",
+      "name": "Writer (Pro plan)",
+      "company": "Writer",
+      "api": "https://api.writer.com/pro/v1",
+      "protocol": "openai-compatible",
+      "plan": "pro",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "writer-pro-default",
+          "name": "Writer (Pro plan) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "jina-pro",
+      "name": "Jina AI (Pro plan)",
+      "company": "Jina AI",
+      "api": "https://api.jina.ai/pro/v1",
+      "protocol": "openai-compatible",
+      "plan": "pro",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "jina-pro-default",
+          "name": "Jina AI (Pro plan) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "clarifai-pro",
+      "name": "Clarifai (Pro plan)",
+      "company": "Clarifai",
+      "api": "https://api.clarifai.com/v2/ext/openai/pro/v1",
+      "protocol": "openai-compatible",
+      "plan": "pro",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "clarifai-pro-default",
+          "name": "Clarifai (Pro plan) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "parasail-pro",
+      "name": "Parasail (Pro plan)",
+      "company": "Parasail",
+      "api": "https://api.parasail.io/pro/v1",
+      "protocol": "openai-compatible",
+      "plan": "pro",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "parasail-pro-default",
+          "name": "Parasail (Pro plan) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "crusoe-pro",
+      "name": "Crusoe (Pro plan)",
+      "company": "Crusoe",
+      "api": "https://api.crusoe.ai/pro/v1",
+      "protocol": "openai-compatible",
+      "plan": "pro",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "crusoe-pro-default",
+          "name": "Crusoe (Pro plan) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "lambda-pro",
+      "name": "Lambda (Pro plan)",
+      "company": "Lambda",
+      "api": "https://api.lambda.ai/pro/v1",
+      "protocol": "openai-compatible",
+      "plan": "pro",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "lambda-pro-default",
+          "name": "Lambda (Pro plan) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "featherless-pro",
+      "name": "Featherless AI (Pro plan)",
+      "company": "Featherless AI",
+      "api": "https://api.featherless.ai/pro/v1",
+      "protocol": "openai-compatible",
+      "plan": "pro",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "featherless-pro-default",
+          "name": "Featherless AI (Pro plan) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "atoma-pro",
+      "name": "Atoma (Pro plan)",
+      "company": "Atoma",
+      "api": "https://api.atoma.network/pro/v1",
+      "protocol": "openai-compatible",
+      "plan": "pro",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "atoma-pro-default",
+          "name": "Atoma (Pro plan) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "targon-pro",
+      "name": "Targon (Pro plan)",
+      "company": "Targon",
+      "api": "https://api.targon.com/pro/v1",
+      "protocol": "openai-compatible",
+      "plan": "pro",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "targon-pro-default",
+          "name": "Targon (Pro plan) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "avian-pro",
+      "name": "Avian (Pro plan)",
+      "company": "Avian",
+      "api": "https://api.avian.io/pro/v1",
+      "protocol": "openai-compatible",
+      "plan": "pro",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "avian-pro-default",
+          "name": "Avian (Pro plan) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "gmicloud-pro",
+      "name": "GMI Cloud (Pro plan)",
+      "company": "GMI Cloud",
+      "api": "https://api.gmi-serving.com/pro/v1",
+      "protocol": "openai-compatible",
+      "plan": "pro",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "gmicloud-pro-default",
+          "name": "GMI Cloud (Pro plan) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "together-coding-plan",
+      "name": "Together AI (Coding Plan)",
+      "company": "Together AI",
+      "api": "https://api.together.xyz/coding-plan/v1",
+      "protocol": "openai-compatible",
+      "plan": "coding-plan",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "together-coding-plan-default",
+          "name": "Together AI (Coding Plan) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "fireworks-ai-coding-plan",
+      "name": "Fireworks AI (Coding Plan)",
+      "company": "Fireworks AI",
+      "api": "https://api.fireworks.ai/inference/coding-plan/v1",
+      "protocol": "openai-compatible",
+      "plan": "coding-plan",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "fireworks-ai-coding-plan-default",
+          "name": "Fireworks AI (Coding Plan) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "deepinfra-coding-plan",
+      "name": "DeepInfra (Coding Plan)",
+      "company": "DeepInfra",
+      "api": "https://api.deepinfra.com/v1/coding-plan/v1",
+      "protocol": "openai-compatible",
+      "plan": "coding-plan",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "deepinfra-coding-plan-default",
+          "name": "DeepInfra (Coding Plan) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "nebius-coding-plan",
+      "name": "Nebius (Coding Plan)",
+      "company": "Nebius",
+      "api": "https://api.studio.nebius.ai/coding-plan/v1",
+      "protocol": "openai-compatible",
+      "plan": "coding-plan",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "nebius-coding-plan-default",
+          "name": "Nebius (Coding Plan) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "sambanova-coding-plan",
+      "name": "SambaNova (Coding Plan)",
+      "company": "SambaNova",
+      "api": "https://api.sambanova.ai/coding-plan/v1",
+      "protocol": "openai-compatible",
+      "plan": "coding-plan",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "sambanova-coding-plan-default",
+          "name": "SambaNova (Coding Plan) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "cerebras-coding-plan",
+      "name": "Cerebras (Coding Plan)",
+      "company": "Cerebras",
+      "api": "https://api.cerebras.ai/coding-plan/v1",
+      "protocol": "openai-compatible",
+      "plan": "coding-plan",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "cerebras-coding-plan-default",
+          "name": "Cerebras (Coding Plan) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "baseten-coding-plan",
+      "name": "Baseten (Coding Plan)",
+      "company": "Baseten",
+      "api": "https://inference.baseten.co/coding-plan/v1",
+      "protocol": "openai-compatible",
+      "plan": "coding-plan",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "baseten-coding-plan-default",
+          "name": "Baseten (Coding Plan) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "hyperbolic-coding-plan",
+      "name": "Hyperbolic (Coding Plan)",
+      "company": "Hyperbolic",
+      "api": "https://api.hyperbolic.xyz/coding-plan/v1",
+      "protocol": "openai-compatible",
+      "plan": "coding-plan",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "hyperbolic-coding-plan-default",
+          "name": "Hyperbolic (Coding Plan) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "novita-coding-plan",
+      "name": "Novita AI (Coding Plan)",
+      "company": "Novita AI",
+      "api": "https://api.novita.ai/coding-plan/v1",
+      "protocol": "openai-compatible",
+      "plan": "coding-plan",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "novita-coding-plan-default",
+          "name": "Novita AI (Coding Plan) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "perplexity-coding-plan",
+      "name": "Perplexity (Coding Plan)",
+      "company": "Perplexity",
+      "api": "https://api.perplexity.ai/coding-plan/v1",
+      "protocol": "openai-compatible",
+      "plan": "coding-plan",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "perplexity-coding-plan-default",
+          "name": "Perplexity (Coding Plan) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "mistral-coding-plan",
+      "name": "Mistral AI (Coding Plan)",
+      "company": "Mistral AI",
+      "api": "https://api.mistral.ai/coding-plan/v1",
+      "protocol": "openai-compatible",
+      "plan": "coding-plan",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "mistral-coding-plan-default",
+          "name": "Mistral AI (Coding Plan) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "cohere-coding-plan",
+      "name": "Cohere (Coding Plan)",
+      "company": "Cohere",
+      "api": "https://api.cohere.ai/coding-plan/v1",
+      "protocol": "openai-compatible",
+      "plan": "coding-plan",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "cohere-coding-plan-default",
+          "name": "Cohere (Coding Plan) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "siliconflow-coding-plan",
+      "name": "SiliconFlow (Coding Plan)",
+      "company": "SiliconFlow",
+      "api": "https://api.siliconflow.com/coding-plan/v1",
+      "protocol": "openai-compatible",
+      "plan": "coding-plan",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "siliconflow-coding-plan-default",
+          "name": "SiliconFlow (Coding Plan) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "scaleway-coding-plan",
+      "name": "Scaleway (Coding Plan)",
+      "company": "Scaleway",
+      "api": "https://api.scaleway.ai/coding-plan/v1",
+      "protocol": "openai-compatible",
+      "plan": "coding-plan",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "scaleway-coding-plan-default",
+          "name": "Scaleway (Coding Plan) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "venice-coding-plan",
+      "name": "Venice AI (Coding Plan)",
+      "company": "Venice AI",
+      "api": "https://api.venice.ai/api/coding-plan/v1",
+      "protocol": "openai-compatible",
+      "plan": "coding-plan",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "venice-coding-plan-default",
+          "name": "Venice AI (Coding Plan) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "requesty-coding-plan",
+      "name": "Requesty (Coding Plan)",
+      "company": "Requesty",
+      "api": "https://router.requesty.ai/coding-plan/v1",
+      "protocol": "openai-compatible",
+      "plan": "coding-plan",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "requesty-coding-plan-default",
+          "name": "Requesty (Coding Plan) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "portkey-coding-plan",
+      "name": "Portkey (Coding Plan)",
+      "company": "Portkey",
+      "api": "https://api.portkey.ai/coding-plan/v1",
+      "protocol": "openai-compatible",
+      "plan": "coding-plan",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "portkey-coding-plan-default",
+          "name": "Portkey (Coding Plan) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "vultr-coding-plan",
+      "name": "Vultr Inference (Coding Plan)",
+      "company": "Vultr Inference",
+      "api": "https://api.vultrinference.com/coding-plan/v1",
+      "protocol": "openai-compatible",
+      "plan": "coding-plan",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "vultr-coding-plan-default",
+          "name": "Vultr Inference (Coding Plan) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "upstage-coding-plan",
+      "name": "Upstage (Coding Plan)",
+      "company": "Upstage",
+      "api": "https://api.upstage.ai/coding-plan/v1",
+      "protocol": "openai-compatible",
+      "plan": "coding-plan",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "upstage-coding-plan-default",
+          "name": "Upstage (Coding Plan) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "id": "writer-coding-plan",
+      "name": "Writer (Coding Plan)",
+      "company": "Writer",
+      "api": "https://api.writer.com/coding-plan/v1",
+      "protocol": "openai-compatible",
+      "plan": "coding-plan",
+      "tier": "standard",
+      "auth_methods": [
+        "api_key"
+      ],
+      "aliases": [],
+      "locality": "cloud",
+      "models": [
+        {
+          "id": "writer-coding-plan-default",
+          "name": "Writer (Coding Plan) default",
+          "release_date": "2026-04-15",
+          "context_window": 128000,
+          "max_output_tokens": 32768,
+          "input_modalities": [
+            "text"
+          ],
+          "tool_call": true,
+          "status": "active"
+        }
+      ]
+    }
+  ],
+  "served_from": "embedded",
+  "stale": false
+}

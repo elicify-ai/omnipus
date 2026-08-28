@@ -307,8 +307,10 @@ func TestMigrateFromJSON_ColonInKey(t *testing.T) {
 
 func TestMigrateFromJSON_RetryAfterCrash(t *testing.T) {
 	// Simulates a crash during migration: first run writes messages
-	// but doesn't rename the .json file. Second run must replace
-	// (not duplicate) the messages thanks to SetHistory semantics.
+	// but doesn't rename the .json file. Second run must leave the
+	// already-complete archive alone (not duplicate, not rewrite —
+	// SetHistory refuses a non-empty archive, ADR-066 FR-047) and
+	// finish the rename.
 	sessionsDir := t.TempDir()
 	store := newTestStore(t)
 	ctx := context.Background()

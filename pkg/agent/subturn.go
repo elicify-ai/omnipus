@@ -899,6 +899,14 @@ func spawnSubTurn(
 	execProvider := execSource.Provider
 	execCandidates := execSource.Candidates
 	execThinkingLevel := execSource.ThinkingLevel
+	// ADR-066 D2: the window travels with the quad — it is resolved from
+	// the TARGET's own (provider, model), so the child sees the same
+	// window its provider/model would give it, never the parent's.
+	execContextWindow := execSource.ContextWindow
+	execWindowSource := execSource.WindowSource
+	execWindowClamped := execSource.WindowClamped
+	execWindowExempt := execSource.WindowExempt
+	execWindowUnknown := execSource.WindowUnknown
 	execProviderPool := execSource.providerPool.Load()
 	execSource.mu.RUnlock()
 
@@ -911,29 +919,32 @@ func spawnSubTurn(
 	// and providerPool are unexported atomic fields a struct literal cannot
 	// copy at all, also set below.
 	agent := AgentInstance{
-		ID:                    execSource.ID,
-		Name:                  execSource.Name,
-		Model:                 execModel,
-		Fallbacks:             execSource.Fallbacks,
-		FallbackModels:        execSource.FallbackModels,
-		Home:                  execSource.Home,
-		MaxIterations:         execSource.MaxIterations,
-		MaxTokens:             execSource.MaxTokens,
-		Temperature:           execSource.Temperature,
-		ThinkingLevel:         execThinkingLevel,
-		ContextWindow:         execSource.ContextWindow,
-		SummarizeTokenPercent: execSource.SummarizeTokenPercent,
-		Provider:              execProvider,
-		Sessions:              ephemeralStore,
-		ContextBuilder:        execSource.ContextBuilder,
-		Subagents:             execSource.Subagents,
-		SkillsFilter:          execSource.SkillsFilter,
-		Candidates:            execCandidates,
-		TimeoutSeconds:        execSource.TimeoutSeconds,
-		Router:                execSource.Router,
-		LightCandidates:       execSource.LightCandidates,
-		LightProvider:         execSource.LightProvider,
-		AgentType:             execSource.AgentType,
+		ID:              execSource.ID,
+		Name:            execSource.Name,
+		Model:           execModel,
+		Fallbacks:       execSource.Fallbacks,
+		FallbackModels:  execSource.FallbackModels,
+		Home:            execSource.Home,
+		MaxIterations:   execSource.MaxIterations,
+		MaxTokens:       execSource.MaxTokens,
+		Temperature:     execSource.Temperature,
+		ThinkingLevel:   execThinkingLevel,
+		ContextWindow:   execContextWindow,
+		WindowSource:    execWindowSource,
+		WindowClamped:   execWindowClamped,
+		WindowExempt:    execWindowExempt,
+		WindowUnknown:   execWindowUnknown,
+		Provider:        execProvider,
+		Sessions:        ephemeralStore,
+		ContextBuilder:  execSource.ContextBuilder,
+		Subagents:       execSource.Subagents,
+		SkillsFilter:    execSource.SkillsFilter,
+		Candidates:      execCandidates,
+		TimeoutSeconds:  execSource.TimeoutSeconds,
+		Router:          execSource.Router,
+		LightCandidates: execSource.LightCandidates,
+		LightProvider:   execSource.LightProvider,
+		AgentType:       execSource.AgentType,
 	}
 	// providerPool is tied to the SAME Candidates it was built for — now that
 	// Candidates is execSource's own (above), the pool must match, or
@@ -2099,6 +2110,33 @@ func deliverSubTurnResult(al *AgentLoop, parentTS *turnState, childID string, re
 type ephemeralSessionStore struct {
 	mu      sync.Mutex
 	history []providers.Message
+	// projection / hydrated: in-memory projection state (ADR-066 FR-019);
+	// lives and dies with the sub-turn, never persisted.
+	//
+	// projection is keyed ABSOLUTELY — by (tool_call_id, dropped + relative
+	// index) — while every caller addresses lines RELATIVELY, by the index
+	// ReadArchive reports today. See dropped.
+	projection memory.ProjectionSet
+	hydrated   bool
+	// dropped counts the messages removed from the FRONT of history, by
+	// TruncateHistory and by the maxEphemeralHistorySize ring.
+	//
+	// memory.ProjectionKey.ArchiveLine is documented as "the zero-based
+	// archive line", and every producer derives it from a ReadArchive index
+	// (tool_result_admit.go: line = len(read) - 1). memory.JSONLStore honours
+	// the implied invariant — its archive is append-only and TruncateHistory
+	// only advances Skip, so an index never moves. This store truncates from
+	// the front, which shifts every surviving message's index down while the
+	// recorded keys stay put: after one trim (or one ring wrap) every capped
+	// or emptied sub-turn result silently re-inflated to its FULL content on
+	// the next assembly — so the retry after a provider context overflow sent
+	// MORE than the attempt that had just overflowed.
+	//
+	// dropped restores the invariant without changing the interface: writes
+	// are translated to absolute (+dropped) and reads back to relative
+	// (−dropped), so a key addresses the same MESSAGE for as long as that
+	// message is in the ring.
+	dropped int
 }
 
 // newEphemeralSession returns a session.SessionStore backed by an in-memory
@@ -2164,6 +2202,10 @@ func (e *ephemeralSessionStore) SetHistory(_ string, history []providers.Message
 	defer e.mu.Unlock()
 	e.history = make([]providers.Message, len(history))
 	copy(e.history, history)
+	// A wholesale replacement invalidates every recorded line, exactly as
+	// memory.JSONLStore.SetHistory clears meta.Projection.
+	e.projection = nil
+	e.dropped = 0
 	e.truncateLocked()
 }
 
@@ -2171,6 +2213,7 @@ func (e *ephemeralSessionStore) TruncateHistory(_ string, keepLast int) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if keepLast <= 0 {
+		e.dropped += len(e.history)
 		e.history = nil
 		return
 	}
@@ -2178,6 +2221,7 @@ func (e *ephemeralSessionStore) TruncateHistory(_ string, keepLast int) {
 	if keepLast >= len(e.history) {
 		return
 	}
+	e.dropped += len(e.history) - keepLast
 	e.history = e.history[len(e.history)-keepLast:]
 }
 
@@ -2185,10 +2229,14 @@ func (e *ephemeralSessionStore) Save(_ string) error { return nil }
 func (e *ephemeralSessionStore) Close() error        { return nil }
 
 // RollbackAppended truncates the in-memory history to its first
-// targetArchiveLen messages, discarding anything appended after that point.
+// targetArchiveLen messages, discarding anything appended after that point,
+// and drops in-memory projection entries whose archive_line ≥ targetArchiveLen.
 // targetSkip is accepted for interface compatibility but has no effect: the
 // ephemeral backend is a bounded in-memory ring with no Skip/archive split —
-// there is no eviction cursor to restore.
+// there is no eviction cursor to restore. emptiedSet is likewise a no-op
+// here (ADR-066 FR-020): the ephemeral store keeps its projection state in
+// memory for the lifetime of one sub-turn and is discarded with it, so
+// there is no turn-start restore point to return to.
 //
 // Note: rollback is best-effort when the ephemeral ring has wrapped (i.e. a
 // sub-turn appended >maxEphemeralHistorySize messages and the ring discarded
@@ -2198,7 +2246,7 @@ func (e *ephemeralSessionStore) Close() error        { return nil }
 // (sub-turns are short) and the ephemeral store has no persistent archive.
 //
 // Satisfies session.SessionStore (used by hard-abort turn rollback).
-func (e *ephemeralSessionStore) RollbackAppended(_ string, targetArchiveLen, _ int) {
+func (e *ephemeralSessionStore) RollbackAppended(_ string, targetArchiveLen, _ int, _ memory.ProjectionSet) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if targetArchiveLen < 0 {
@@ -2207,10 +2255,56 @@ func (e *ephemeralSessionStore) RollbackAppended(_ string, targetArchiveLen, _ i
 	if targetArchiveLen < len(e.history) {
 		e.history = e.history[:targetArchiveLen]
 	}
+	// targetArchiveLen is a RELATIVE length; the keys are absolute.
+	for k := range e.projection {
+		if k.ArchiveLine-e.dropped >= targetArchiveLen {
+			delete(e.projection, k)
+		}
+	}
+}
+
+// Projection implements session.SessionStore — the in-memory projection
+// state of this sub-turn (never persisted; FR-019 store half).
+// The returned keys are RELATIVE to the current ring contents — the same
+// index space ReadArchive reports and archiveLineResolver resolves into —
+// so a key keeps addressing its own message across front-truncations. An
+// entry whose message has been dropped out of the ring is omitted.
+func (e *ephemeralSessionStore) Projection(_ string) memory.ProjectionMeta {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	out := make(memory.ProjectionSet, len(e.projection))
+	for k, v := range e.projection {
+		rel := k.ArchiveLine - e.dropped
+		if rel < 0 {
+			continue // the message is no longer in the ring
+		}
+		out[memory.ProjectionKey{ToolCallID: k.ToolCallID, ArchiveLine: rel}] = v
+	}
+	return memory.ProjectionMeta{Entries: out, Hydrated: e.hydrated}
+}
+
+// SetProjectionState implements session.SessionStore (in-memory). The caller
+// addresses the line relatively (len(ReadArchive)-1); it is stored absolutely
+// so a later front-truncation cannot re-point it at a different message.
+func (e *ephemeralSessionStore) SetProjectionState(_ string, pk memory.ProjectionKey, state memory.ProjectionState) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.projection == nil {
+		e.projection = memory.ProjectionSet{}
+	}
+	e.projection[memory.ProjectionKey{ToolCallID: pk.ToolCallID, ArchiveLine: pk.ArchiveLine + e.dropped}] = state
+}
+
+// MarkHydrated implements session.SessionStore (in-memory).
+func (e *ephemeralSessionStore) MarkHydrated(_ string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.hydrated = true
 }
 
 func (e *ephemeralSessionStore) truncateLocked() {
 	if len(e.history) > maxEphemeralHistorySize {
+		e.dropped += len(e.history) - maxEphemeralHistorySize
 		e.history = e.history[len(e.history)-maxEphemeralHistorySize:]
 	}
 }

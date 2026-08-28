@@ -1,0 +1,31 @@
+type: object
+description: >
+  The `cli_login` variant of SignInStartResponse (ADR-068 FR-008, amended
+  2026-08-23 §8b). For `codex-cli` and `github-copilot`: Omnipus never
+  performs or stores the vendor login itself — this returns the one
+  instruction the operator needs, the vendor CLI's own login command, so the
+  SPA can show it beside a *Check sign-in* button.
+required:
+  - method
+  - command
+  - instructions
+additionalProperties: false
+properties:
+  method:
+    type: string
+    enum:
+      - cli_login
+    description: Discriminator — run the vendor CLI's login command.
+    example: cli_login
+  command:
+    type: string
+    minLength: 1
+    maxLength: 256
+    description: The exact command the operator runs in a terminal (e.g. "codex login", "copilot login").
+    example: codex login
+  instructions:
+    type: string
+    minLength: 1
+    maxLength: 1024
+    description: Human-readable guidance shown beside the command, ending with the prompt to click Check sign-in.
+    example: Run `codex login` in a terminal, then click Check sign-in.

@@ -99,7 +99,7 @@ func TestRunTurn_RateLimit_WritesErrorEntryToTranscript(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              workspaceDir,
-				ModelName:         "scripted-model",
+				DefaultModel:      config.DefaultModel{Model: "scripted-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -312,7 +312,7 @@ func TestRunTurn_ProviderError_WritesErrorEntryToTranscript(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              workspaceDir,
-				ModelName:         "scripted-model",
+				DefaultModel:      config.DefaultModel{Model: "scripted-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},

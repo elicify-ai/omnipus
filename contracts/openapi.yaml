@@ -97,8 +97,91 @@ components:
       $ref: ./components/schemas/BrowserInspectResponse.yaml
     ChangePasswordRequest:
       $ref: ./components/schemas/ChangePasswordRequest.yaml
+    # OnboardingCompleteRequest is hosted INLINE here because its `provider`
+    # member is a discriminated union (ADR-068 MAJ-014) and oapi-codegen only
+    # emits named variant structs + As*/From* accessors for a oneOf over
+    # INTERNAL component refs (ADR-034 precedent, AgentCreateRequest). The
+    # inbound-validator twin lives in
+    # contracts/components/schemas/OnboardingCompleteRequest.yaml with file
+    # refs over the same two variants — keep both in lockstep.
     OnboardingCompleteRequest:
-      $ref: ./components/schemas/OnboardingCompleteRequest.yaml
+      type: object
+      title: OnboardingCompleteRequest
+      description: >
+        Body for POST /onboarding/complete. Atomically sets up the first LLM
+        provider and creates the initial admin account. CSRF-exempt (no cookie
+        exists at this point). `provider` is discriminated by `auth_method`:
+        `api_key` requires `api_key`; `sign_in` forbids it (ADR-068 MAJ-014).
+      required:
+        - provider
+        - admin
+      additionalProperties: false
+      properties:
+        provider:
+          description: LLM provider configuration to persist, discriminated by `auth_method`.
+          oneOf:
+            - $ref: '#/components/schemas/OnboardingProviderApiKey'
+            - $ref: '#/components/schemas/OnboardingProviderSignIn'
+          discriminator:
+            propertyName: auth_method
+            mapping:
+              api_key: '#/components/schemas/OnboardingProviderApiKey'
+              sign_in: '#/components/schemas/OnboardingProviderSignIn'
+        admin:
+          type: object
+          description: Initial admin account credentials.
+          required:
+            - username
+            - password
+          properties:
+            username:
+              type: string
+              minLength: 2
+              maxLength: 63
+              pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{1,62}$'
+              description: Admin login name.
+              example: "admin"
+            password:
+              type: string
+              minLength: 8
+              description: Admin password. Minimum 8 characters.
+              example: "s3cr3tpassword"
+    OnboardingProviderApiKey:
+      $ref: ./components/schemas/OnboardingProviderApiKey.yaml
+    OnboardingProviderSignIn:
+      $ref: ./components/schemas/OnboardingProviderSignIn.yaml
+    # SignInStartResponse is a discriminated union hosted INLINE here (not in
+    # a schema file), following the ADR-034 precedent for AgentCreateRequest:
+    # oapi-codegen only generates named variant types + As/From accessors for
+    # a oneOf over INTERNAL component refs. The two variants remain one file
+    # each under contracts/components/schemas/.
+    SignInStartResponse:
+      description: >
+        Response from POST /providers/{id}/sign-in (ADR-068 FR-008, amended
+        2026-08-23 §8b). `cli_login` for codex-cli / github-copilot: the
+        vendor CLI's own login command, run by the operator in a terminal.
+        `device_code` for openai-chatgpt (and xai once its catalog row
+        carries sign_in): Omnipus requests a device code itself and the SPA
+        shows the verification link and user code. Discriminated by
+        `method`.
+      oneOf:
+        - $ref: '#/components/schemas/SignInStartResponseCliLogin'
+        - $ref: '#/components/schemas/SignInStartResponseDeviceCode'
+      discriminator:
+        propertyName: method
+        mapping:
+          cli_login: '#/components/schemas/SignInStartResponseCliLogin'
+          device_code: '#/components/schemas/SignInStartResponseDeviceCode'
+    SignInStartResponseCliLogin:
+      $ref: ./components/schemas/SignInStartResponseCliLogin.yaml
+    SignInStartResponseDeviceCode:
+      $ref: ./components/schemas/SignInStartResponseDeviceCode.yaml
+    SignInStatus:
+      $ref: ./components/schemas/SignInStatus.yaml
+    SignInPollRequest:
+      $ref: ./components/schemas/SignInPollRequest.yaml
+    SignInPollResponse:
+      $ref: ./components/schemas/SignInPollResponse.yaml
     OnboardingCompleteResponse:
       $ref: ./components/schemas/LoginResponse.yaml
     ProbeProviderRequest:
@@ -322,8 +405,38 @@ components:
       $ref: ./components/schemas/PerformanceSettingsUpdate.yaml
     Provider:
       $ref: ./components/schemas/Provider.yaml
-    ModelCapabilities:
-      $ref: ./components/schemas/ModelCapabilities.yaml
+    ProviderDependent:
+      $ref: ./components/schemas/ProviderDependent.yaml
+    ProviderDeleteRequest:
+      $ref: ./components/schemas/ProviderDeleteRequest.yaml
+    ProviderDeleteResponse:
+      $ref: ./components/schemas/ProviderDeleteResponse.yaml
+    DefaultModel:
+      $ref: ./components/schemas/DefaultModel.yaml
+    DefaultModelUpdateRequest:
+      $ref: ./components/schemas/DefaultModelUpdateRequest.yaml
+    EntitlementModel:
+      $ref: ./components/schemas/EntitlementModel.yaml
+    EntitlementResponse:
+      $ref: ./components/schemas/EntitlementResponse.yaml
+    ProvidersCatalog:
+      $ref: ./components/schemas/ProvidersCatalog.yaml
+    CatalogProvider:
+      $ref: ./components/schemas/CatalogProvider.yaml
+    CatalogModel:
+      $ref: ./components/schemas/CatalogModel.yaml
+    CatalogProtocol:
+      $ref: ./components/schemas/CatalogProtocol.yaml
+    CatalogResizeLimits:
+      $ref: ./components/schemas/CatalogResizeLimits.yaml
+    ContextWindowSource:
+      $ref: ./components/schemas/ContextWindowSource.yaml
+    ContextModelOverride:
+      $ref: ./components/schemas/ContextModelOverride.yaml
+    ContextSettings:
+      $ref: ./components/schemas/ContextSettings.yaml
+    ContextSettingsUpdate:
+      $ref: ./components/schemas/ContextSettingsUpdate.yaml
     ReAuthRequest:
       $ref: ./components/schemas/ReAuthRequest.yaml
     ReAuthResponse:
@@ -371,8 +484,6 @@ components:
       $ref: ./components/schemas/SlashCommand.yaml
     ActivityEvent:
       $ref: ./components/schemas/ActivityEvent.yaml
-    ProviderCatalogEntry:
-      $ref: ./components/schemas/ProviderCatalogEntry.yaml
     UploadedFile:
       type: object
       description: >
@@ -1265,7 +1376,7 @@ paths:
     post:
       operationId: completeOnboarding
       summary: Finalize first-run onboarding
-      description: 'Two-phase commit: probes the submitted provider API key against the real provider (a billable upstream call, same validator as PUT /providers/{id}), then writes the LLM provider config and admin user to config.json atomically, then marks onboarding complete in state.json. Returns 400 when the provider confirms the key is wrong (invalid_key) — nothing is persisted and the request may be retried with a corrected key. A key the provider could not verify for any other reason (unreachable, no credit, regionally restricted, or no endpoint to probe) does NOT block: onboarding still completes and the response''s `warning` field explains what could not be checked, because this endpoint is the only door into the product and a flaky network must not make it uninstallable. Returns 409 when onboarding is already complete. CSRF-exempt (no cookie exists yet). Rate-limited: 3 requests per IP per minute — a probe can take up to ~25s (model-catalog fetch + completion probe), so a mistyped key costs real wall-clock time before the caller can retry. On success, issues a __Host-csrf cookie so the SPA can immediately make CSRF-protected requests.
+      description: 'Two-phase commit: probes the submitted provider API key against the real provider (a billable upstream call, same validator as PUT /providers/{id}), then writes the LLM provider config and admin user to config.json atomically, then marks onboarding complete in state.json. Returns 400 when the provider confirms the key is wrong (invalid_key) — nothing is persisted and the request may be retried with a corrected key. A key the provider could not verify for any other reason (unreachable, no credit, regionally restricted, or no endpoint to probe) does NOT block: onboarding still completes and the response''s `warning` field explains what could not be checked, because this endpoint is the only door into the product and a flaky network must not make it uninstallable. Returns 409 when the pre-auth onboarding window is closed — onboarding is already complete, this instance already has an authentication authority (any configured gateway user, or OMNIPUS_BEARER_TOKEN set), its onboarding state file is unreadable, or the requested admin username already exists. The refusal body is identical for every one of those reasons so an anonymous caller cannot use it to probe the instance''s state; the reason is recorded in the audit log (onboarding.refused). The authority check is what stops an anonymous caller minting a second administrator on an instance whose state.json was lost or corrupted, and it applies whatever the onboarding flag says. Creating an admin never overwrites an existing account''s password. CSRF-exempt (no cookie exists yet). Rate-limited: 3 requests per IP per minute — a probe can take up to ~25s (model-catalog fetch + completion probe), so a mistyped key costs real wall-clock time before the caller can retry. On success, issues a __Host-csrf cookie so the SPA can immediately make CSRF-protected requests.
 
         '
       tags:
@@ -1298,7 +1409,7 @@ paths:
     post:
       operationId: probeProvider
       summary: Test a provider API key and list available models
-      description: 'Non-persistent probe: accepts an API key in the request body, tests it against the provider''s /models endpoint, and returns the model list. Nothing is written to disk. Available only during onboarding (returns 409 after onboarding completes). CSRF-exempt.
+      description: 'Non-persistent probe: accepts an API key in the request body, tests it against the provider''s /models endpoint, and returns the model list. Nothing is written to disk. CSRF-exempt. Available only while the pre-auth onboarding window is open, and it returns 409 whenever that window is closed - onboarding already complete, the onboarding state unreadable, the config unreadable, or the instance already having an authentication authority (a configured user or OMNIPUS_BEARER_TOKEN). The refusal is 409 rather than 401 for every one of those reasons, including for an authenticated admin: once the window is closed no credential makes this call legal, and the standard PUT /providers/{id} + GET /providers flow replaces it. The refusal body is identical across reasons; the specific reason is recorded in the audit log. With auth sign_in the probe spends one real, billed vendor completion using the operator''s own saved login, which is why the window must close on uncertainty. Rate-limited: 3 requests per minute per IP (shared with /onboarding/complete) -> 429.
 
         '
       tags:
@@ -1323,6 +1434,8 @@ paths:
           $ref: '#/components/responses/400BadRequest'
         '409':
           $ref: '#/components/responses/409Conflict'
+        '429':
+          $ref: '#/components/responses/429TooManyRequests'
   /sessions:
     get:
       operationId: listSessions
@@ -2112,15 +2225,27 @@ paths:
     get:
       operationId: getHealth
       summary: Health check
-      description: 'Returns HTTP 200 when the gateway is running. No authentication required.
-
-        '
+      description: >
+        Returns HTTP 200 with status "ok" when the gateway is serving, and HTTP
+        503 with status "degraded" plus a reason on a gateway-fatal condition
+        (agent loop dead, config reload failed, default agent unloadable). The
+        audit_* and catalog fields describe a degraded SUBSYSTEM while the
+        gateway itself is still serving and never change the status code — a
+        stale provider catalog (ADR-067 FR-037) makes the model picker less
+        accurate, it does not take the process out of rotation. No
+        authentication required.
       security: []
       tags:
       - Health
       responses:
         '200':
           description: Gateway is healthy.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+        '503':
+          description: Gateway is degraded; the body names the reason.
           content:
             application/json:
               schema:
@@ -2894,6 +3019,62 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+  /settings/context:
+    get:
+      operationId: getContextSettings
+      summary: Get the global context-budget settings (ADR-066 D9)
+      description: >
+        Returns the per-surface tool-result caps, the absolute trigger, the
+        ingest bound, the global default context window and the per-(provider,
+        model) window overrides. User-facing location: Settings → Models.
+        Readable by any authenticated user (withAuth, the /settings/memory
+        precedent — not RequireNotBypass).
+      tags:
+        - Settings
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Current context settings.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContextSettings'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+    put:
+      operationId: updateContextSettings
+      summary: Update the global context-budget settings (ADR-066 D9)
+      description: >
+        Partial update — an omitted field is unchanged; model_overrides, when
+        present, replaces the whole list; default_context_window null clears
+        it. 400 naming the field and the limit on: any cap > 150,000 or < 1;
+        absolute_trigger_chars < 1; ingest_bound_bytes ≥ 8,388,608 or < 1;
+        model_overrides[].context_window < 1. Every 200 write triggers a
+        registry reload so the next turn uses the new values without a
+        restart; overrides whose provider no longer exists are pruned on
+        write. Writable by any authenticated user (withAuth).
+      tags:
+        - Settings
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ContextSettingsUpdate'
+      responses:
+        '200':
+          description: The stored settings after the update.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContextSettings'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
         '401':
           $ref: '#/components/responses/401Unauthorized'
   /channels:
@@ -4085,7 +4266,7 @@ paths:
     get:
       operationId: listProviders
       summary: List configured LLM providers
-      description: "Returns all configured LLM providers with connection status and available model list.\nModel lists are fetched live from each provider's upstream /models endpoint when an API key is present.\n"
+      description: "Returns all configured LLM providers with connection status and available model list.\nModel lists are fetched live from each provider's upstream /models endpoint when an API key is present.\n\nRequires authentication. The one exception is ADR-068 FR-050's pre-auth window: while onboarding is incomplete AND this instance has no authentication authority yet (no configured users, no OMNIPUS_BEARER_TOKEN), an anonymous caller is answered, because there is no admin account to authenticate as. That window fails CLOSED — an unreadable or unparseable onboarding state counts as complete, not as a fresh install. Outside it an anonymous caller gets 401.\n\nAn anonymous response inside that window is REDUCED: `account_label` is never present (it is the operator's own vendor account identifier) and `dependents` is always the empty array (it enumerates the operator's agent roster). Both are populated only for an authenticated caller. An anonymous caller is additionally rate-limited to 60 requests/minute per IP, since each call fans out to one upstream /models fetch per configured provider.\n"
       tags:
       - Providers
       security:
@@ -4107,6 +4288,151 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /providers/catalog:
+    get:
+      operationId: getProvidersCatalog
+      summary: Read the registry-fed providers catalog (ADR-067 FR-017)
+      description: >
+        Returns the full schema-2.0.0 catalog document the gateway itself uses
+        (providers with nested models, tier, protocol(s), unsupported reason,
+        resize limits) plus the serving envelope served_from (embedded | pulled)
+        and stale (updated_at older than 14 days). Served from a pre-serialised
+        byte slice cached at apply time; bytes and ETag are swapped atomically
+        as one pair. Headers: `ETag: "<sha256>"` (quoted, strong) and
+        `Cache-Control: private, max-age=0, must-revalidate`; no content
+        negotiation. A request whose If-None-Match exactly matches the current
+        quoted strong ETag gets 304 with no body; a weak (W/) or unquoted value
+        is treated as no match (200). 503 when the catalog failed to construct
+        at boot (never an empty 200 that looks like "no providers"). The SPA
+        re-validates on Settings open and every 15 minutes.
+        DISPATCH ORDER: "catalog" is a reserved path segment — this route MUST
+        be matched before the /providers/{id} handler, and "catalog" is never a
+        valid provider id.
+        Requires authentication. The one exception is ADR-068 FR-050's pre-auth
+        window: while onboarding is incomplete AND this instance has no
+        authentication authority yet (no configured users, no
+        OMNIPUS_BEARER_TOKEN), an anonymous caller is answered, because the
+        onboarding wizard's provider picker needs this document before any
+        admin account exists to authenticate as. That window fails CLOSED — an
+        unreadable or unparseable onboarding state counts as complete, not as a
+        fresh install. Outside it an anonymous caller gets 401. Unlike
+        listProviders there is no response reduction inside the window: this
+        document is public vendor metadata (provider ids, model ids, tiers,
+        context windows) with no operator secret or account-specific field, so
+        an anonymous and an authenticated caller receive the identical body.
+      tags:
+      - Providers
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: If-None-Match
+        in: header
+        required: false
+        schema:
+          type: string
+        description: The quoted strong ETag from a previous 200. Exact match → 304.
+        example: '"3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"'
+      responses:
+        '200':
+          description: The catalog document with its serving envelope.
+          headers:
+            ETag:
+              schema:
+                type: string
+              description: Quoted strong ETag — the SHA-256 of the served bytes.
+            Cache-Control:
+              schema:
+                type: string
+              description: Always `private, max-age=0, must-revalidate`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProvidersCatalog'
+        '304':
+          description: If-None-Match matched the current ETag exactly; no body.
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '503':
+          description: No catalog is available (construction failed at boot).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /providers/default-model:
+    get:
+      operationId: getDefaultModel
+      summary: Read the global default model (ADR-068 FR-018)
+      description: >
+        Returns agents.defaults.default_model as a (provider, model) pair with
+        the resolved context window and its source (ADR-066's
+        ResolveWindow(provider, model), absent until it lands). Registered as
+        its own route with adminWrap (withAuth → RequireNotBypass): 401
+        unauthenticated, 503 under dev-mode bypass.
+        DISPATCH ORDER: "default-model" is a reserved path segment — this route
+        MUST be matched before the /providers/{id} handler, and "default-model"
+        is never a valid provider id.
+      tags:
+      - Providers
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: The current default model.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DefaultModel'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          description: 'No default model is set (fresh install before onboarding''s explicit pick): `{"error":"no default model"}`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          $ref: '#/components/responses/503BypassActive'
+    put:
+      operationId: updateDefaultModel
+      summary: Set the global default model (ADR-068 FR-018)
+      description: >
+        Validates that the provider is configured and connected or signed_in
+        (400 `{"error":"provider not configured","field":"provider"}`) and that
+        the model is in the served catalog for that provider (400
+        `{"error":"model not in catalog for provider","field":"model"}`) —
+        except rows with custom: true or locality: local, where any non-empty
+        model is accepted with no live call. Persists
+        agents.defaults.default_model under the config lock, emits audit
+        provider.default_model.changed, triggers a reload and waits for it
+        (500 `default model saved but config reload failed: <reason>` when it
+        does not confirm); takes effect on the next turn. A
+        ProviderUpdateRequest body sent here is a 400 on shape, never a PUT of
+        a provider named "default-model". adminWrap: 401 / 503 under bypass.
+      tags:
+      - Providers
+      security:
+      - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DefaultModelUpdateRequest'
+      responses:
+        '200':
+          description: The stored default model, with window fields when resolvable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DefaultModel'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+        '503':
+          $ref: '#/components/responses/503BypassActive'
   /providers/{id}:
     put:
       operationId: updateProvider
@@ -4115,7 +4441,19 @@ paths:
         Adds or updates an LLM provider entry. On new providers, api_key is
         required. On existing providers, api_key may be omitted to keep the
         current key. The API key is stored encrypted (AES-256-GCM) in
-        credentials.json. Available before and after onboarding.
+        credentials.json. Available before and after onboarding — while
+        onboarding is incomplete and the instance has no authentication
+        authority the route is reachable without a credential, so the wizard
+        can configure a provider before an admin account exists.
+        Rate-limited: 60 requests per minute per IP -> 429. The call is
+        synchronous through a full agent-registry rebuild.
+        The id must be a catalog id (ADR-067 registry identity) or, when the
+        body carries api_base + protocol (openai-compatible | anthropic), an
+        operator-named custom row (Provider.custom: true); any other id → 400
+        `unknown provider "<id>"`. A tier "unsupported" catalog provider → 400
+        with its unsupported_reason. The reserved path segments "catalog" and
+        "default-model" are dispatched to their own routes before this one and
+        are never valid provider ids.
       tags:
       - Providers
       parameters:
@@ -4149,20 +4487,96 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/429TooManyRequests'
         '503':
           description: Credential store locked.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+    delete:
+      operationId: deleteProvider
+      summary: Remove a configured provider and its stored key (ADR-068 FR-010)
+      description: >
+        Under the config lock and after recomputing dependents / backs_default
+        (the response, not the dialog, is authoritative), runs in order:
+        (1) clear dependents in the agent entity store (primaries cleared,
+        fallback entries removed — never re-pointed); (2) remove the provider
+        row; (2b) remove ContextSettings.model_overrides rows for the
+        provider; (3) delete the `<id>_API_KEY` credential (not-found counts
+        as success); (3b) evict the provider's entitlement cache entry;
+        (4) audit `provider.deleted`; (5) trigger a reload and wait. 404 when
+        the id is not configured (the reserved literals "catalog" and
+        "default-model" are never provider ids); 503 when the credential store
+        is locked (before any change) or under dev-mode bypass
+        (RequireNotBypass via the inline requireAdminAuthz wrapper); 401 with
+        no authenticated user (no pre-onboarding exception); 409 when the
+        provider backs the default model and no valid new_default is supplied;
+        400 when new_default names the same id or a provider that is not
+        connected | signed_in. A provider that backs the default is never
+        deleted while it backs it, so the last connected provider can never be
+        removed. On a failed step: 500 with deleted false and a retryable
+        state. There is no Undo and no dry run.
+      tags:
+      - Providers
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          maxLength: 64
+        description: Configured provider id (catalog id or custom row id).
+        example: openrouter
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProviderDeleteRequest'
+      responses:
+        '200':
+          description: Provider removed; dependents cleared; key deleted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProviderDeleteResponse'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '409':
+          $ref: '#/components/responses/409Conflict'
+        '500':
+          description: A deletion step failed; state is retryable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProviderDeleteResponse'
+        '503':
+          description: Credential store locked, or dev-mode bypass active.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /providers/{id}/test:
-    get:
+    post:
       operationId: testProvider
       summary: Test provider API key configuration
       description: >
-        Verifies that an API key is configured for the given provider without making an
-        upstream call. Returns success=false with an error message if no key is configured.
-        Available before and after onboarding.
+        Resolves the provider's stored API key and probes it with ONE real
+        upstream request (providers.ValidateKey), returning success=false with
+        an error message when no key is configured, when the credential ref
+        cannot be resolved, or when the provider rejects the key. Available
+        before and after onboarding — while onboarding is incomplete and the
+        instance has no authentication authority the route is reachable
+        without a credential. Rate-limited: 60 requests per minute per IP ->
+        429.
       tags:
       - Providers
       security:
@@ -4184,35 +4598,333 @@ paths:
                 $ref: '#/components/schemas/OperationResult'
         '401':
           $ref: '#/components/responses/401Unauthorized'
-  /providers/model-capabilities:
-    get:
-      operationId: listModelCapabilities
-      summary: List declared input-modality capabilities per model
+        '429':
+          $ref: '#/components/responses/429TooManyRequests'
+  /providers/{id}/sign-in:
+    post:
+      operationId: startProviderSignIn
+      summary: Start a vendor sign-in for a provider (ADR-068 FR-008, amended 2026-08-23 §8b)
       description: >
-        Returns the in-repo capability catalog (pkg/providers/capabilities) as
-        a flat list of {id, modalities} pairs (D18). Model vision capability
-        is not knowable client-side at all otherwise — the SPA resolves the
-        target agent's model against this list to show a non-blocking warning
-        before sending a vision attachment (e.g. a live-browser annotation, or
-        an image attached via the composer) to a model that cannot accept
-        images. Returns an empty array when the catalog is not constructed
-        (never a 500) — the catalog is optional and the server-side capability
-        gate remains the authoritative backstop regardless.
+        For `codex-cli` / `github-copilot`: Omnipus never performs or stores
+        the vendor login itself — returns the one instruction the operator
+        needs, the vendor CLI's own login command, so the SPA can show it
+        beside a *Check sign-in* button (`method: cli_login`). For
+        `openai-chatgpt` (and `xai` once its catalog row carries `sign_in`):
+        Omnipus requests a device code from the vendor itself and returns
+        the verification link, user code, and an opaque `device_auth_id` to
+        poll (`method: device_code`, FR-044) — the vendor's device code and
+        any PKCE verifier never leave the gateway. Returns 400
+        `{"error":"provider does not support sign-in"}` when the provider's
+        catalog row does not list `sign_in` in `auth_methods`, and for `xai`
+        specifically when no client id is configured. Rate-limited like the
+        auth endpoints. Requires authentication — except inside ADR-068
+        FR-050's pre-auth window: while onboarding is incomplete AND this
+        instance has no authentication authority yet (no configured users,
+        no OMNIPUS_BEARER_TOKEN), an anonymous caller is admitted past the
+        authentication check too, because onboarding step 3 needs a working
+        sign-in flow before any admin account exists to authenticate as.
+        That window fails CLOSED — an unreadable or unparseable onboarding
+        state counts as complete, not as a fresh install. Outside the
+        window an unauthenticated caller gets 401 unconditionally. The
+        route's own authorization layer (requireAdminAuthz) enforces ONLY
+        the dev-mode-bypass guard, not authentication, so any caller who
+        reaches it — authenticated, or anonymous inside the pre-auth window
+        — gets 503 under dev-mode bypass and otherwise proceeds: inside the
+        window an anonymous caller can mint a real device code or trigger a
+        vendor CLI login prompt exactly as an authenticated caller could.
+      tags:
+      - Providers
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Provider id whose catalog row declares sign_in (e.g. "codex-cli", "openai-chatgpt", "github-copilot").
+        example: codex-cli
+      responses:
+        '200':
+          description: The sign-in instruction or device-code session for this provider.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SignInStartResponse'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '429':
+          $ref: '#/components/responses/429TooManyRequests'
+        '503':
+          $ref: '#/components/responses/503BypassActive'
+    delete:
+      operationId: signOutProvider
+      summary: Sign out a provider's device-code session (ADR-068 FR-048, added 2026-08-23 §8b)
+      description: >
+        Deletes the `<id>_OAUTH` encrypted credential entry (a missing
+        entry is success), emits audit event `provider.signed_out`, and the
+        row returns to `not_signed_in`. Only meaningful for `device_code`
+        providers — `cli_login` providers hold no Omnipus-side credential to
+        delete and this is a no-op success for them too. Requires
+        authentication — except inside ADR-068 FR-050's pre-auth window:
+        while onboarding is incomplete AND this instance has no
+        authentication authority yet (no configured users, no
+        OMNIPUS_BEARER_TOKEN), an anonymous caller is admitted past the
+        authentication check too, for the same reason its POST sibling is
+        (onboarding step 3 needs a working sign-in flow before any admin
+        account exists to authenticate as). That window fails CLOSED — an
+        unreadable or unparseable onboarding state counts as complete, not
+        as a fresh install. Outside the window an unauthenticated caller
+        gets 401 unconditionally. The route's own authorization layer
+        (requireAdminAuthz) enforces ONLY the dev-mode-bypass guard, not
+        authentication, so any caller who reaches it — authenticated, or
+        anonymous inside the pre-auth window — gets 503 under dev-mode
+        bypass and otherwise proceeds: inside the window an anonymous
+        caller can revoke another account's vendor sign-in before any admin
+        account exists.
+      tags:
+      - Providers
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Provider id to sign out.
+        example: openai-chatgpt
+      responses:
+        '200':
+          description: Sign-out result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OperationResult'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '503':
+          $ref: '#/components/responses/503BypassActive'
+  /providers/{id}/sign-in/status:
+    get:
+      operationId: getProviderSignInStatus
+      summary: Read a provider's vendor sign-in state (ADR-068 FR-009, amended 2026-08-23 §8b)
+      description: >
+        For `cli_login` providers (codex-cli, github-copilot): reads the
+        vendor CLI's saved login (codex `auth.json` — only
+        `tokens.access_token` for the unverified `exp` claim and
+        `tokens.account_id` for the label; the Copilot CLI's own
+        auth-status) — the file is never modified and no refresh request is
+        ever made (FR-007). For `device_code` providers (openai-chatgpt,
+        and xai once its catalog row carries `sign_in`): reads the stored
+        `<id>_OAUTH` entry in Omnipus's own encrypted credential store;
+        `expired` means the access token is past `exp` AND a refresh
+        attempt failed or no refresh token is available (FR-046). Maps to
+        `not_signed_in | pending | signed_in | expired`; `pending` only
+        while an open device-code session awaits approval. A missing CLI
+        binary is reported on the Provider row as `disconnected`, not here.
+        Returns 400 `{"error":"provider does not support sign-in"}` for
+        providers without `sign_in`. Requires authentication — except
+        inside ADR-068 FR-050's pre-auth window: while onboarding is
+        incomplete AND this instance has no authentication authority yet
+        (no configured users, no OMNIPUS_BEARER_TOKEN), an anonymous caller
+        is admitted past the authentication check too, for the same reason
+        its sibling sign-in routes are (onboarding step 3 needs a working
+        sign-in flow before any admin account exists to authenticate as).
+        That window fails CLOSED — an unreadable or unparseable onboarding
+        state counts as complete, not as a fresh install. Outside the
+        window an unauthenticated caller gets 401 unconditionally. The
+        route's own authorization layer (requireAdminAuthz) enforces ONLY
+        the dev-mode-bypass guard, not authentication, so any caller who
+        reaches it — authenticated, or anonymous inside the pre-auth window
+        — gets 503 under dev-mode bypass and otherwise proceeds.
+      tags:
+      - Providers
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Provider id whose catalog row declares sign_in.
+        example: codex-cli
+      responses:
+        '200':
+          description: The current sign-in state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SignInStatus'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '503':
+          $ref: '#/components/responses/503BypassActive'
+  /providers/{id}/sign-in/poll:
+    post:
+      operationId: pollProviderSignIn
+      summary: Poll an open device-code sign-in session (ADR-068 FR-044, added 2026-08-23 §8b)
+      description: >
+        Performs at most ONE vendor poll per call for the device-code
+        session named by `device_auth_id` (returned by a prior POST
+        /providers/{id}/sign-in). On `signed_in` the gateway has already
+        stored the `<id>_OAUTH` credential entry before responding. A
+        device-code session expires server-side at the vendor's
+        `expires_at` (ceiling 15 minutes) and is single-use — an
+        unknown or already-resolved `device_auth_id` returns 404. Never
+        returns the vendor's device code. Rate-limited like the auth
+        endpoints. Requires authentication — except inside ADR-068 FR-050's
+        pre-auth window: while onboarding is incomplete AND this instance
+        has no authentication authority yet (no configured users, no
+        OMNIPUS_BEARER_TOKEN), an anonymous caller is admitted past the
+        authentication check too, for the same reason its sibling sign-in
+        routes are (onboarding step 3 needs a working sign-in flow before
+        any admin account exists to authenticate as). That window fails
+        CLOSED — an unreadable or unparseable onboarding state counts as
+        complete, not as a fresh install. Outside the window an
+        unauthenticated caller gets 401 unconditionally. The route's own
+        authorization layer (requireAdminAuthz) enforces ONLY the
+        dev-mode-bypass guard, not authentication, so any caller who
+        reaches it — authenticated, or anonymous inside the pre-auth window
+        — gets 503 under dev-mode bypass and otherwise proceeds: inside the
+        window an anonymous caller can complete another account's
+        device-code sign-in before any admin account exists.
+      tags:
+      - Providers
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Provider id whose catalog row declares sign_in and uses method device_code.
+        example: openai-chatgpt
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SignInPollRequest'
+      responses:
+        '200':
+          description: The current poll state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SignInPollResponse'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '429':
+          $ref: '#/components/responses/429TooManyRequests'
+        '503':
+          $ref: '#/components/responses/503BypassActive'
+  /providers/openai-chatgpt/sign-in/import:
+    post:
+      operationId: importCodexSignIn
+      summary: Import an existing Codex CLI login for openai-chatgpt (ADR-068 FR-047, added 2026-08-23 §8b)
+      description: >
+        Copies `tokens.access_token` + `tokens.account_id` from
+        `~/.codex/auth.json` into the `openai_OAUTH` encrypted credential
+        entry. No refresh token is imported — a session started this way
+        ends at the copied token's `exp` with no further refresh. The
+        source file's bytes and mtime are left unchanged (read-only,
+        FR-007). Returns 404 `{"error":"no codex login found"}` when the
+        file is absent or unreadable. Requires authentication — except
+        inside ADR-068 FR-050's pre-auth window: while onboarding is
+        incomplete AND this instance has no authentication authority yet
+        (no configured users, no OMNIPUS_BEARER_TOKEN), an anonymous caller
+        is admitted past the authentication check too, for the same reason
+        its sibling sign-in routes are (onboarding step 3 needs a working
+        sign-in flow before any admin account exists to authenticate as).
+        That window fails CLOSED — an unreadable or unparseable onboarding
+        state counts as complete, not as a fresh install. Outside the
+        window an unauthenticated caller gets 401 unconditionally. The
+        route's own authorization layer (requireAdminAuthz) enforces ONLY
+        the dev-mode-bypass guard, not authentication, so any caller who
+        reaches it — authenticated, or anonymous inside the pre-auth window
+        — gets 503 under dev-mode bypass and otherwise proceeds: inside the
+        window an anonymous caller can write a live vendor credential into
+        the encrypted store before any admin account exists.
       tags:
       - Providers
       security:
       - BearerAuth: []
       responses:
         '200':
-          description: Array of per-model capability entries. Empty when the catalog is unavailable.
+          description: The resulting sign-in state after import.
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/ModelCapabilities'
+                $ref: '#/components/schemas/SignInStatus'
         '401':
           $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '503':
+          $ref: '#/components/responses/503BypassActive'
+  /providers/{id}/entitlement:
+    post:
+      operationId: checkProviderEntitlement
+      summary: Check which catalog models this provider's key can use (ADR-067 FR-021)
+      description: >
+        "Check with my account": makes ONE live listing call with the
+        provider's stored key — openai-compatible / google → `GET {api}/models`;
+        anthropic → `GET {api}/v1/models` with x-api-key + anthropic-version;
+        ollama → `/api/tags` — intersects it with the served catalog and
+        returns every catalog model annotated entitled true/false with limits
+        "known", plus models the provider returned that the catalog lacks with
+        limits "unknown". Cached for the gateway process keyed by
+        SHA-256(providerID + ":" + credentialRefName) — the ref name, never
+        the secret — and evicted on provider DELETE, on a PUT that changes the
+        key (not on one that only bumps updated_at) and on catalog refresh.
+        Never called at boot or on a turn. 409 for protocol cli and for custom
+        rows (`entitlement not supported for this protocol`); 422 when no key
+        resolves; 502 `{"error":"could not fetch upstream model list: status
+        <n>"}` on an upstream non-2xx with nothing cached. Rate-limited like
+        /providers/{id}/test.
+      tags:
+      - Providers
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          maxLength: 64
+        description: Configured provider id.
+        example: openrouter
+      responses:
+        '200':
+          description: Catalog models annotated with entitlement.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EntitlementResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '409':
+          $ref: '#/components/responses/409Conflict'
+        '422':
+          $ref: '#/components/responses/422UnprocessableEntity'
+        '429':
+          $ref: '#/components/responses/429TooManyRequests'
+        '502':
+          $ref: '#/components/responses/502BadGateway'
   /commands:
     get:
       operationId: listCommands

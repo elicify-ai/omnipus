@@ -426,9 +426,17 @@ func TestRoutingSessionID_ConsumerSetIsClosed(t *testing.T) {
 	if got := counts[u19BucketPreArm]; got != 3 {
 		t.Errorf("pre-arm key reads = %d, want 3 (FR-016's three direct sites: cancel_prearm.go x2, subturn.go x1)", got)
 	}
-	if got := counts[u19BucketWSStamping]; got != 15 {
-		t.Errorf("WS-payload-stamping reads = %d, want 15 (loop.go x13, subturn.go x2: SubTurnSpawnPayload + "+
-			"SubTurnEndPayload). loop.go grew from 2 to 13 in the 2026-08 UAT remediation: every live "+
+	if got := counts[u19BucketWSStamping]; got != 19 {
+		t.Errorf("WS-payload-stamping reads = %d, want 19 (loop.go x17, subturn.go x2: SubTurnSpawnPayload + "+
+			"SubTurnEndPayload). loop.go grew from 2 to 13 in the 2026-08 UAT remediation, then to 14 when "+
+			"ADR-066 D7 (T066-11) added typedTurnExit's ErrorPayload stamp for the typed turn exits, then to 15 "+
+			"when ADR-066 D3 (T066-09) added runTurn's context_window_unknown pre-turn refusal (the same "+
+			"ErrorPayload shape as the workspace refusal right above it), then to 16 when ADR-067 FR-016 "+
+			"(T067-09) added runTurn's needs_provider pre-turn refusal — the FIRST of the three pre-turn "+
+			"gates — then to 17 when ADR-068 FR-015 (T068-12) added runTurn's model_unassigned "+
+			"pre-turn refusal, the SECOND of those three, completing the ladder "+
+			"(needs_provider → model_unassigned → context_window_unknown). Each emits that same "+
+			"ErrorPayload shape: every live "+
 			"ErrorPayload and RateLimitPayload emit site now stamps SessionID with routingSessionID, "+
 			"because ServeHTTP mints a fresh webchat: uuid per connection — an error carrying only the "+
 			"ChatID was dropped by matchesEvent for a second tab or a reload, which is how a provider 429 "+
@@ -441,9 +449,13 @@ func TestRoutingSessionID_ConsumerSetIsClosed(t *testing.T) {
 			"childTS.routingSessionID = parentTS.routingSessionID assignment)", got)
 	}
 
-	// 9 role-B + 3 pre-arm + 15 WS-stamping + 1 inheritance. Was 17 before the
-	// 2026-08 UAT remediation widened the WS-stamping bucket (see above).
-	const wantTotal = 28
+	// 9 role-B + 3 pre-arm + 19 WS-stamping + 1 inheritance. Was 17 before the
+	// 2026-08 UAT remediation widened the WS-stamping bucket (see above), 28
+	// before ADR-066 D7's typedTurnExit stamp, 29 before ADR-066 D3's
+	// context_window_unknown refusal stamp (T066-09), 30 before ADR-067
+	// FR-016's needs_provider refusal stamp (T067-09), and 31 before ADR-068
+	// FR-015's model_unassigned refusal stamp (T068-12).
+	const wantTotal = 32
 	if len(all) != wantTotal {
 		t.Fatalf("total routingSessionID reads = %d, want exactly %d (the closed consumer set) — "+
 			"either a new read was added outside the four named buckets, or one of the buckets "+

@@ -339,6 +339,8 @@ func allClassifierCodes() []LLMErrorCode {
 		CodeAgentNotConfigured,
 		CodeWorkspaceUnavailable,
 		CodeModelUnavailable,
+		CodeNeedsProvider,
+		CodeContextWindowUnknown,
 		CodeUnknown,
 	}
 }
@@ -507,6 +509,25 @@ func TestTranslateTurnError_AgentHomeUnavailable(t *testing.T) {
 	assert.Equal(t, CodeWorkspaceUnavailable, llm.Code)
 	assert.Equal(t, UserMessageForCode(CodeWorkspaceUnavailable), llm.Message)
 	assert.NotContains(t, llm.Message, "agent_id=sys")
+}
+
+// TestTranslateTurnError_ProviderNeedsSignIn covers ADR-068 FR-046: a
+// device-code provider's store-OAuth token source returns
+// providers.ErrProviderNeedsSignIn (wrapped, as CodexProvider.Chat's
+// "refreshing token: %w" does) when it cannot produce a usable access
+// token, and that must classify as needs_provider — never a silent turn
+// exit, never CodeUnknown.
+func TestTranslateTurnError_ProviderNeedsSignIn(t *testing.T) {
+	wrapped := fmt.Errorf("refreshing token: %w",
+		fmt.Errorf("provider %s needs sign-in: %w", "openai-chatgpt", providers.ErrProviderNeedsSignIn))
+
+	llm := TranslateTurnError(wrapped)
+	assert.Equal(t, CodeNeedsProvider, llm.Code,
+		"a store-OAuth refresh failure must classify as needs_provider, not unknown")
+	assert.False(t, llm.Retryable, "signing in again is the fix; retrying as-is is not")
+	assert.Equal(t, UserMessageForCode(CodeNeedsProvider), llm.Message)
+	assert.Equal(t, generated.LLMErrorAttributionUser, AttributionForCode(CodeNeedsProvider),
+		"FR-046 requires attribution user, not config, for this producer")
 }
 
 // TestUserMessageForCode_NoLegacyAIServiceCopy locks the brand-tone
@@ -890,4 +911,89 @@ func TestProviderError_FormatCompatForClassifyError(t *testing.T) {
 	assert.NotPanics(t, func() {
 		_ = nilPE.Error()
 	}, "nil ProviderError receiver must not panic")
+}
+
+// TestTranslateError_TypedExitsAndAttributions — ADR-066 D7 (T066-11), spec
+// test row 20, B-40 / B-41. The three typed turn exits exist as classifier
+// codes, carry the contract's attribution (`user` is a real vocabulary value),
+// and TranslateTurnError maps the sentinel / context causes onto them instead
+// of falling to `unknown`.
+func TestTranslateError_TypedExitsAndAttributions(t *testing.T) {
+	assert.Equal(t, LLMErrorCode("turn_canceled"), CodeTurnCanceled)
+	assert.Equal(t, LLMErrorCode("turn_timed_out"), CodeTurnTimedOut)
+	assert.Equal(t, LLMErrorCode("context_unrecoverable"), CodeContextUnrecoverable)
+
+	// B-41: attribution is contract-defined; `user` is in the vocabulary.
+	assert.Equal(t, LLMErrorAttribution("user"), AttributionForCode(CodeTurnCanceled))
+	assert.Equal(t, LLMErrorAttribution("provider"), AttributionForCode(CodeTurnTimedOut))
+	assert.Equal(t, LLMErrorAttribution("product"), AttributionForCode(CodeContextUnrecoverable))
+	for _, c := range []LLMErrorCode{CodeTurnCanceled, CodeTurnTimedOut, CodeContextUnrecoverable} {
+		assert.NotEqual(t, UserMessageForCode(CodeUnknown), UserMessageForCode(c),
+			"%s must have its own catalogue copy", c)
+	}
+
+	cases := []struct {
+		name      string
+		err       error
+		wantCode  LLMErrorCode
+		retryable bool
+	}{
+		{"raw context.Canceled", context.Canceled, CodeTurnCanceled, false},
+		{"wrapped context.Canceled", fmt.Errorf("run turn: %w", context.Canceled), CodeTurnCanceled, false},
+		{"ErrTurnCanceled sentinel", fmt.Errorf("x: %w", ErrTurnCanceled), CodeTurnCanceled, false},
+		{"raw DeadlineExceeded", context.DeadlineExceeded, CodeTurnTimedOut, true},
+		{"ErrTurnTimedOut sentinel", fmt.Errorf("x: %w", ErrTurnTimedOut), CodeTurnTimedOut, true},
+		{"ErrContextUnrecoverable sentinel", fmt.Errorf("x: %w", ErrContextUnrecoverable), CodeContextUnrecoverable, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			llm := TranslateTurnError(tc.err)
+			assert.Equal(t, tc.wantCode, llm.Code)
+			assert.Equal(t, UserMessageForCode(tc.wantCode), llm.Message)
+			assert.Equal(t, tc.retryable, llm.Retryable)
+			assert.NotEqual(t, CodeUnknown, llm.Code, "never unknown")
+			assert.Contains(t, llm.Detail, tc.err.Error(),
+				"the raw cause belongs in the Verbose-Chat detail, not the message")
+		})
+	}
+
+	// The exit sentinels stay distinct from each other and from the
+	// workspace sentinels so errors.Is routing cannot cross-match.
+	assert.False(t, errors.Is(ErrTurnCanceled, ErrTurnTimedOut))
+	assert.False(t, errors.Is(ErrContextUnrecoverable, ErrTurnCanceled))
+	assert.False(t, errors.Is(ErrTurnCanceled, ErrAgentNotWorkspaceMember))
+}
+
+// TestTranslateError_NoWindowLearning — ADR-066 spec test 21 (B-07; FR-035,
+// D8 NOT adopted). A provider's context-overflow error is CLASSIFIED as
+// context_too_long for the user and nothing else: no window is parsed out of
+// the text, nothing is written back to any override, and the resolver's
+// answer for the same (provider, model) is identical before and after.
+func TestTranslateError_NoWindowLearning(t *testing.T) {
+	installWindowTestCatalog(t, 1_048_576)
+	installLiveWindowStub(t, nil)
+	cfg := windowTestConfig()
+
+	before := ResolveWindow(cfg, "openrouter", "z-ai/glm-5.2", "mia")
+	require.Equal(t, 1_048_576, before.Window)
+
+	body := "This model's maximum context length is 32768 tokens. However, you requested 1200000 tokens."
+	llm := TranslateLLMError(&ProviderError{Status: 400, Body: body}, body)
+	assert.Equal(t, CodeContextTooLong, llm.Code, "overflow text is classified, and only classified")
+
+	after := ResolveWindow(cfg, "openrouter", "z-ai/glm-5.2", "mia")
+	assert.Equal(t, before, after, "no window may be learned from provider error text (D8 not adopted)")
+	assert.Empty(t, cfg.Context.ModelOverrides, "no override is written back")
+	assert.Nil(t, cfg.Context.DefaultContextWindow)
+	for _, ac := range cfg.Agents.List {
+		assert.Nil(t, ac.ContextWindowOverride)
+	}
+
+	// Source-level guard: the classifier never parses a number out of the
+	// overflow text and translate_error.go never reaches the resolver.
+	src := readOwnedFileForTest(t, "translate_error.go")
+	assert.NotContains(t, src, "ResolveWindow(")
+	assert.NotContains(t, src, "ModelOverrides")
+	assert.NotContains(t, src, "ContextWindowOverride")
+	assert.NotContains(t, src, "strconv.Atoi", "no numeric parsing of provider error bodies")
 }

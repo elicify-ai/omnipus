@@ -1,0 +1,12 @@
+title: ProviderDeleteRequest
+description: >
+  Optional body for DELETE /api/v1/providers/{id} (ADR-068 FR-010/FR-011).
+  new_default is required (409 otherwise) when the provider backs the
+  default model; it must name a different provider that is connected or
+  signed_in (400 otherwise). The server recomputes dependents and
+  backs_default under the config lock — the response is authoritative.
+type: object
+additionalProperties: false
+properties:
+  new_default:
+    $ref: './DefaultModelUpdateRequest.yaml'

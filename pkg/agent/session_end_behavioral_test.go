@@ -882,7 +882,7 @@ func TestRunRecap_ModelResolution_UsesRecapModelField(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Agents.Defaults.AutoRecapEnabled = true
 	cfg.Agents.Defaults.RecapModel = recapModel
-	cfg.Agents.Defaults.ModelName = "default-model" // must NOT be used
+	cfg.Agents.Defaults.DefaultModel = config.DefaultModel{Model: "default-model"} // must NOT be used
 
 	script := &scriptedProvider{
 		responseBody: `{"recap":"ok","went_well":[],"needs_improvement":[],"worth_remembering":[]}`,

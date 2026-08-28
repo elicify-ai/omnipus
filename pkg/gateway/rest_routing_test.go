@@ -96,7 +96,7 @@ func newRoutingTestAPI(t *testing.T) (*restAPI, string) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              tmpDir,
-				ModelName:         "test-model",
+				DefaultModel:      config.DefaultModel{Model: "test-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 20,
 				DefaultAgentID:    "agent-a",
@@ -234,7 +234,7 @@ func TestUpdateAgent_RejectsWorkerAsDefault(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              tmpDir,
-				ModelName:         "test-model",
+				DefaultModel:      config.DefaultModel{Model: "test-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 20,
 			},
@@ -276,7 +276,7 @@ func newChannelRoutingTestAPI(t *testing.T) (*restAPI, string) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              tmpDir,
-				ModelName:         "test-model",
+				DefaultModel:      config.DefaultModel{Model: "test-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 20,
 			},
@@ -509,7 +509,7 @@ func TestSetChannelRouting_RejectsWorkerTarget(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              tmpDir,
-				ModelName:         "test-model",
+				DefaultModel:      config.DefaultModel{Model: "test-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 20,
 			},
@@ -818,7 +818,7 @@ func TestChannelRouting_BindingWinsOverNoGlobalDefault(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              tmpDir,
-				ModelName:         "test-model",
+				DefaultModel:      config.DefaultModel{Model: "test-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 20,
 			},

@@ -13,16 +13,20 @@ import (
 // Default: ~/.codex
 const CodexHomeEnvVar = "CODEX_HOME"
 
-// CodexCliAuth represents the ~/.codex/auth.json file structure.
+// CodexCliAuth represents the subset of the ~/.codex/auth.json file structure
+// that Omnipus reads. Only tokens.access_token and tokens.account_id are
+// modelled (ADR-068 FR-007): refresh_token is deliberately absent — Omnipus
+// never refreshes, writes or proxies the vendor credential file; a session
+// ends at expiry and needs `codex login`.
 type CodexCliAuth struct {
 	Tokens struct {
-		AccessToken  string `json:"access_token"`
-		RefreshToken string `json:"refresh_token"`
-		AccountID    string `json:"account_id"`
+		AccessToken string `json:"access_token"`
+		AccountID   string `json:"account_id"`
 	} `json:"tokens"`
 }
 
-// ReadCodexCliCredentials reads OAuth tokens from the Codex CLI's auth.json file.
+// ReadCodexCliCredentials reads the access token and account id from the Codex
+// CLI's auth.json file. The file is read-only to Omnipus (FR-007).
 // Expiry is estimated as file modification time + 1 hour (same approach as moltbot).
 func ReadCodexCliCredentials() (accessToken, accountID string, expiresAt time.Time, err error) {
 	authPath, err := resolveCodexAuthPath()

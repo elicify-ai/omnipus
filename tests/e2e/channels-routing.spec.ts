@@ -185,6 +185,11 @@ const ROUTING_AGENT_REQUIRED = {
   soul: 'stub soul',
   timeout_seconds: 300,
   max_tool_iterations: 200,
+  // Required by contracts/components/schemas/Agent.yaml since 36801b44
+  // (ADR-066/067/068 wire contracts). Omitting it makes AgentSchema reject the
+  // whole GET /agents payload, so the panel renders "Couldn't load agent list."
+  // instead of routing-agent-select. false = healthy (has a usable model).
+  needs_model: false,
 }
 const ROUTING_STUB_AGENTS = [
   { id: 'mia', name: 'Mia', type: 'core', locked: true, ...ROUTING_AGENT_REQUIRED },

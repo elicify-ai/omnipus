@@ -205,7 +205,114 @@ var (
 	// configLimiter's post-incident ceiling, which calendar navigation
 	// cadence is known to fit.
 	taskReadLimiter = newAPIRateLimiter(240, 1*time.Minute)
+	// /api/v1/providers/{id}/sign-in — 10 requests/minute per IP. ADR-068
+	// FR-008: "rate-limited like the auth endpoints" — matches
+	// reauthLimiter's ceiling. Starting a NEW device-code (or reading a
+	// cli_login instruction) is rare in legitimate use; unlike polling it
+	// has no ongoing-cadence requirement.
+	signInStartLimiter = newAPIRateLimiter(10, 1*time.Minute)
+	// /api/v1/providers/{id}/sign-in/poll — 60 requests/minute per IP. A
+	// DEDICATED, more generous limiter (FR-044 sets no explicit rate but a
+	// device-code dialog legitimately polls at its vendor interval_seconds
+	// — typically ~5s — for up to the 15-minute session ceiling, i.e. up to
+	// ~180 polls per session; 10/min would 429 a single honest sign-in
+	// attempt). Still bounds a runaway/abusive client well below what a
+	// human could trigger by hand.
+	signInPollLimiter = newAPIRateLimiter(60, 1*time.Minute)
+	// /api/v1/providers/{id}/sign-in/status — 60 requests/minute per IP.
+	// This route looked read-only enough to leave unlimited and is not:
+	// for a device_code provider it reaches the stored-OAuth token source,
+	// which REFRESHES against the vendor when the stored token is within 5
+	// minutes of expiry (ADR-068 FR-046), and for github-copilot it spawns
+	// a bounded Copilot CLI invocation (T068-15) — so an unauthenticated
+	// caller (FR-050 makes it pre-auth reachable while onboarding is
+	// incomplete) could drive outbound vendor traffic or process spawns at
+	// will. Shares signInPollLimiter's ceiling rather than the tighter
+	// start/auth one because the sign-in dialog legitimately re-reads
+	// status alongside every poll.
+	signInStatusLimiter = newAPIRateLimiter(60, 1*time.Minute)
+	// /api/v1/providers/openai-chatgpt/sign-in/import — 10 requests/minute
+	// per IP (M2). This route was called BARE while its four FR-050 siblings
+	// were all wrapped. It is the most write-heavy of the five: every call
+	// re-reads the Codex CLI credential, rewrites the whole encrypted
+	// credentials.json, and re-registers every OAuth value with the
+	// sensitive-value replacer. Matches signInStartLimiter's ceiling — an
+	// import is a one-off operator action with no polling cadence at all.
+	signInImportLimiter = newAPIRateLimiter(10, 1*time.Minute)
+	// DELETE /api/v1/providers/{id}/sign-in — 10 requests/minute per IP
+	// (M2). Also previously bare. Each sign-out nils the process-wide
+	// sensitive-data replacer cache, so the next scrub pays a full
+	// reflection walk of Config under a write lock; an unbounded anonymous
+	// caller could hold the gateway in permanent rebuild churn. Signing out
+	// is a one-off operator action, so it shares the start/import ceiling
+	// rather than the polling one.
+	signInSignOutLimiter = newAPIRateLimiter(10, 1*time.Minute)
+	// GET /api/v1/providers (the list branch) for UNAUTHENTICATED callers
+	// only — 60 requests/minute per IP (C1). Post-onboarding the list is
+	// 401 for anonymous callers and this limiter is never reached;
+	// pre-onboarding it bounds an anonymous client that would otherwise be
+	// able to drive the branch's per-provider upstream /models fetches with
+	// no ceiling whatsoever. Authenticated callers (the Settings screen,
+	// which re-lists on every provider edit) are deliberately not limited
+	// here — they already passed the auth gate.
+	providerListAnonLimiter = newAPIRateLimiter(60, 1*time.Minute)
+	// PUT /api/v1/providers/{id} — 60 requests/minute per IP (O5). This route
+	// had NO ceiling at all while being reachable pre-auth (FR-050 keeps it
+	// open so the first-run wizard can configure a provider before an admin
+	// account exists to authenticate as — see the PUT branch in rest.go).
+	// It is one of the most expensive requests this gateway serves: one
+	// outbound ValidateKey call to the provider, a full config.json rewrite,
+	// and then triggerReloadAndWaitOutcome, which SYNCHRONOUSLY rebuilds the
+	// whole agent registry and blocks the response until it confirms. An
+	// anonymous client could therefore hold a fresh install in permanent
+	// rebuild churn with a trivial loop.
+	//
+	// The ceiling is providerListAnonLimiter's, deliberately: that limiter
+	// was set at 60/min for the SAME dispatcher's other anonymous,
+	// pre-onboarding, upstream-touching branch, and there is no reason for
+	// two branches of one handler to disagree about what an abusive rate is.
+	// It is ~1 request per second — orders of magnitude above any human
+	// "Save" cadence (an operator adding five providers spends five
+	// requests) and far below what sustained rebuild churn needs.
+	providerConfigWriteLimiter = newAPIRateLimiter(60, 1*time.Minute)
+	// POST /api/v1/providers/{id}/test — 60 requests/minute per IP (O5).
+	// Also previously bare and also pre-auth reachable. Every call resolves
+	// the provider's STORED credential and spends one real upstream request
+	// with the OPERATOR's key, so an unbounded anonymous caller can burn
+	// billable quota that is not theirs. Shares providerConfigWriteLimiter's
+	// ceiling for the same reason it does — one dispatcher, one idea of an
+	// abusive rate — and because the SPA legitimately tests right after a
+	// save, so a tighter bucket here would 429 an ordinary two-click edit.
+	providerTestLimiter = newAPIRateLimiter(60, 1*time.Minute)
+	// POST /api/v1/providers/{id}/entitlement — 60 requests/minute per IP
+	// (O3). contracts/openapi.yaml has declared this route "Rate-limited like
+	// /providers/{id}/test" and declared a 429 response since ADR-067; no
+	// limiter was ever wired, so the declaration was fiction. Matches
+	// providerTestLimiter's ceiling as the contract says, but keeps its OWN
+	// bucket: /test is reachable anonymously during the onboarding window and
+	// entitlement is not (see handleProviderEntitlement), so a shared bucket
+	// would let an anonymous /test flood exhaust an authenticated operator's
+	// entitlement budget from the same NAT address.
+	providerEntitlementLimiter = newAPIRateLimiter(60, 1*time.Minute)
 )
+
+// rateLimitAllows applies limiter to r from INSIDE a handler, for the routes
+// that are dispatched by a switch in a shared prefix handler
+// (HandleProviders) rather than wrapped at registration time. It returns true
+// when the request may proceed; on refusal it has already written the 429,
+// the Retry-After header and the warn log.
+//
+// It delegates to withRateLimit rather than re-implementing the refusal so
+// the inline and wrapped forms can never drift apart in status code, body
+// wording, header or logging — the duplication this replaces is exactly how
+// two spellings of "rate limited" end up disagreeing.
+func rateLimitAllows(w http.ResponseWriter, r *http.Request, limiter *apiRateLimiter) bool {
+	allowed := false
+	withRateLimit(limiter, func(http.ResponseWriter, *http.Request) {
+		allowed = true
+	})(w, r)
+	return allowed
+}
 
 // clientIP extracts the client IP from the request for rate-limiting and
 // audit-log purposes.
@@ -278,6 +385,166 @@ func (a *restAPI) clientIPWithLiveFallback(r *http.Request) string {
 	return canonicalRemoteIP(r, false)
 }
 
+// preAuthOnboardingWindowOpen reports whether the ADR-068 FR-050 pre-auth
+// window is open — that is, whether a request carrying NO authenticated
+// identity may still reach a provider route that would otherwise require one.
+//
+// FR-050 exists for exactly one reason: onboarding step 3 needs a working
+// provider/sign-in flow BEFORE any admin account exists to authenticate as.
+// The window must therefore close the instant either half of that premise
+// stops holding, and it must close on UNCERTAINTY too.
+//
+// This replaces the bare `a.onboardingMgr != nil && a.onboardingMgr.IsComplete()`
+// test, which failed OPEN (M3). onboarding.NewManager keeps the zero value —
+// OnboardingComplete=false, i.e. "fresh install" — on ANY load failure: an
+// unreadable state.json logs one WARN and proceeds, and an unparseable one is
+// renamed aside and reset. On a long-onboarded instance that silently reopened
+// all five sign-in routes, DELETE (destroys the OAuth grant) and import
+// (writes to the credential store) included, unauthenticated, for the whole
+// process lifetime. Three independent signals now have to agree before the
+// window is treated as open:
+//
+//  1. onboardingStateUnknown — captured in gateway.go BEFORE the manager is
+//     constructed (the manager renames a corrupt file away, so the ambiguity
+//     is unobservable afterwards). An unreadable or unparseable state.json is
+//     "unknown", never "fresh install". A MISSING file stays a genuine fresh
+//     install: that is what a first launch actually looks like.
+//  2. The onboarding manager itself must not report completion.
+//  3. The instance must have no authentication authority yet — no configured
+//     users and no OMNIPUS_BEARER_TOKEN. This is the signal a corrupt
+//     state.json cannot erase, because it lives in config.json/the
+//     environment: if somebody CAN authenticate here, the "no admin account
+//     exists yet" premise is false whatever state.json says.
+//
+// A nil onboardingMgr (test constructions only — gateway.go always sets one)
+// is treated as signal 2 satisfied, leaving signals 1 and 3 to decide.
+func (a *restAPI) preAuthOnboardingWindowOpen(r *http.Request) bool {
+	if a.onboardingStateUnknown {
+		return false
+	}
+	if a.onboardingMgr != nil && a.onboardingMgr.IsComplete() {
+		return false
+	}
+	return !a.hasAuthenticationAuthority(r)
+}
+
+// hasAuthenticationAuthority reports whether this gateway has anything a
+// caller could authenticate AS: a configured user, or the OMNIPUS_BEARER_TOKEN
+// env credential. It mirrors the two authorities checkBearerAuth consults
+// (auth.go) — deliberately not dev_mode_bypass, which is an authentication
+// BYPASS rather than an authority and must never widen a pre-auth window.
+func (a *restAPI) hasAuthenticationAuthority(r *http.Request) bool {
+	cfg := a.requestConfigSnapshot(r)
+	if cfg != nil && len(cfg.Gateway.Users) > 0 {
+		return true
+	}
+	return strings.TrimSpace(os.Getenv("OMNIPUS_BEARER_TOKEN")) != ""
+}
+
+// requestConfigSnapshot resolves the config this request must be judged
+// against: the per-request snapshot configSnapshotMiddleware installed
+// (race-free across a hot-reload), falling back to the live config for the
+// call paths that never ran that middleware (context-only test calls, and any
+// route registered outside the snapshot chain).
+//
+// Returns nil when neither is available. Every caller must treat nil as
+// "cannot tell" and fail closed — an auth decision made against a config we
+// could not read is not a decision.
+func (a *restAPI) requestConfigSnapshot(r *http.Request) *config.Config {
+	if cfg := configFromContext(r.Context()); cfg != nil {
+		return cfg
+	}
+	if a.agentLoop != nil {
+		return a.agentLoop.GetConfig()
+	}
+	return nil
+}
+
+// requestPrincipalAuthenticated reports whether the request carries a real
+// authenticated principal.
+//
+// UserContextKey covers every identity withOptionalAuth resolves: a bearer
+// token matching a Gateway.Users row or a CLI token, and the SPA's
+// omnipus-session cookie.
+//
+// The env-token check covers the one principal withOptionalAuth accepts
+// WITHOUT putting anything in the context. Its legacy OMNIPUS_BEARER_TOKEN
+// branch calls `handler(w, r)` on a successful constant-time match — the
+// caller is authenticated, but structurally indistinguishable downstream from
+// an anonymous one. It exists for the documented headless/CI deployment mode
+// (OMNIPUS_BEARER_TOKEN as the only credential — CLAUDE.md's
+// credential-provisioning section), which would otherwise be refused by an
+// authorization gate on an optional-auth route.
+//
+// bearerAccountsConfigured is the SAME gate checkBearerAuth (auth.go) applies
+// before its own env fallback, and it is load-bearing here. An earlier version
+// of this comment claimed checkBearerAuth "treats that same token as a valid
+// admin principal for every withAuth route" — that was false on every install
+// past first boot. `omnipus gateway` mints Gateway.CLIToken at startup
+// (clitoken.EnsureCLIToken), which makes bearerAccountsConfigured true, and
+// from that moment checkBearerAuth refuses the env fallback outright. Without
+// the same gate here, a stale OMNIPUS_BEARER_TOKEN that the rest of the
+// product correctly 401s still authenticated on exactly the FR-050-gated
+// provider routes — including POST /providers/{id}/sign-in, which mints a real
+// device code against the vendor. Observed live in UAT, 2026-08-27.
+//
+// Once any account-based auth exists, the env fallback is dead everywhere:
+// there is a real credential to present instead. With no accounts configured
+// it still authenticates — that is the first-boot/CI case the flag exists for.
+// A config we cannot read is treated as "accounts exist" (fail closed): an
+// auth decision made against an unknown config is not a decision.
+//
+// dev_mode_bypass is deliberately NOT an authority here. It is an
+// authentication BYPASS, and the project's own RequireNotBypass middleware
+// establishes that a bypassed request gets LESS access on high-blast-radius
+// routes, never more.
+func (a *restAPI) requestPrincipalAuthenticated(r *http.Request) bool {
+	if r.Context().Value(UserContextKey{}) != nil {
+		return true
+	}
+	return a.envBearerTokenAuthenticates(r)
+}
+
+// envBearerTokenAuthenticates reports whether r presents the legacy
+// OMNIPUS_BEARER_TOKEN credential AND that credential is still an authority on
+// this instance. It is the single definition of "the env fallback applies",
+// shared by requestPrincipalAuthenticated and withOptionalAuth's env branch so
+// the two can never disagree about the same token.
+//
+// See requestPrincipalAuthenticated's doc for why bearerAccountsConfigured
+// gates it, and auth.go's checkBearerAuth for the identical gate on the
+// withAuth path.
+func (a *restAPI) envBearerTokenAuthenticates(r *http.Request) bool {
+	cfg := a.requestConfigSnapshot(r)
+	if cfg == nil || bearerAccountsConfigured(cfg) {
+		return false
+	}
+	envToken := strings.TrimSpace(os.Getenv("OMNIPUS_BEARER_TOKEN"))
+	if envToken == "" {
+		return false
+	}
+	raw, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+	if !ok {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(raw), []byte(envToken)) == 1
+}
+
+// requireAuthOutsideOnboarding is the shared gate for the provider routes that
+// FR-050 makes reachable pre-auth. It writes 401 and returns false when the
+// caller has no authenticated principal and the pre-auth window is closed (or
+// of unknown state).
+func (a *restAPI) requireAuthOutsideOnboarding(w http.ResponseWriter, r *http.Request) bool {
+	if a.requestPrincipalAuthenticated(r) {
+		return true
+	}
+	if a.preAuthOnboardingWindowOpen(r) {
+		return true
+	}
+	jsonErr(w, http.StatusUnauthorized, "authentication required")
+	return false
+}
+
 // withRateLimit wraps a handler with per-IP rate limiting. On limit exceeded,
 // returns 429 with a Retry-After header and JSON error body.
 func withRateLimit(limiter *apiRateLimiter, handler http.HandlerFunc) http.HandlerFunc {
@@ -345,9 +612,14 @@ func (a *restAPI) withOptionalAuth(handler http.HandlerFunc) http.HandlerFunc {
 				return
 			}
 			// Token present but matched neither — treat as anonymous (optional auth).
-			// Legacy env var fallback
-			required := os.Getenv("OMNIPUS_BEARER_TOKEN")
-			if required != "" && subtle.ConstantTimeCompare([]byte(rawToken), []byte(required)) == 1 {
+			// Legacy env var fallback, via the shared predicate so this branch
+			// and requestPrincipalAuthenticated (which routes gate on
+			// downstream) can never disagree about the same token. Refused
+			// once account-based auth exists, exactly as checkBearerAuth
+			// refuses it — falling through to the cookie lookup below instead
+			// of short-circuiting a legitimately logged-in browser session
+			// into an anonymous one on the strength of a stale env token.
+			if a.envBearerTokenAuthenticates(r) {
 				a.setCORSHeaders(w, r)
 				handler(w, r)
 				return
@@ -357,7 +629,7 @@ func (a *restAPI) withOptionalAuth(handler http.HandlerFunc) http.HandlerFunc {
 		// token — it authenticates via the omnipus-session HttpOnly cookie. Resolve
 		// it here (the same lookup checkBearerAuth/authenticateWS/browser_ws use) so
 		// optional-auth routes that DO require a user post-onboarding — e.g.
-		// PUT /providers/{id}, POST /providers/{id}/test and /refresh-models, whose
+		// PUT /providers/{id} and POST /providers/{id}/test, whose
 		// handlers 401 when UserContextKey is nil — see the logged-in identity
 		// instead of falling through to anonymous. Like a non-matching bearer above,
 		// a cookie-parse error or no match is NOT a hard 401 here: it falls through

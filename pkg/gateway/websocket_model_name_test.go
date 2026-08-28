@@ -1,6 +1,6 @@
 // websocket_model_name_test.go — unit tests for FR-010 (per-turn model override).
 //
-// The WS handler must forward `MessageFrame.Metadata.ModelName` to the bus as
+// The WS handler must forward `MessageFrame.Metadata.Name` to the bus as
 // `msg.Metadata["model_name"]` so the agent loop's switch-compress path can
 // route THIS turn to the chosen model instead of the agent's default. The
 // tests below drive handleChatMessage directly (no real WS connection) and
@@ -32,9 +32,9 @@ func newTestWSHandlerForModelName(t *testing.T, msgBus *bus.MessageBus) (*WSHand
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080, DevModeBypass: true},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      tmpDir,
-				ModelName: "test-default-model",
-				MaxTokens: 4096,
+				Home:         tmpDir,
+				DefaultModel: config.DefaultModel{Model: "test-default-model"},
+				MaxTokens:    4096,
 			},
 			// A real, chat-target agent ("mia") so the default-agent
 			// resolution most callers of this helper rely on (they pass

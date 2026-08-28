@@ -36,61 +36,63 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/media"
 	"github.com/elicify-ai/omnipus/pkg/media/library"
 	"github.com/elicify-ai/omnipus/pkg/providers"
-	"github.com/elicify-ai/omnipus/pkg/providers/capabilities"
+	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
 )
 
-// textOnlySeedJSON builds a minimal valid capability catalog JSON with one
-// text-only model (no image modality). Used to construct a catalog that
-// fails the step-1 image gate for a specific model.
-func textOnlySeedJSON(t *testing.T, modelID string) []byte {
+// catalogDocJSON builds a minimal valid ADR-067 2.0.0 catalog document with
+// one provider carrying one model with the given input modalities. It is the
+// fixture behind every capability-gate assertion below: the gate resolves by
+// the exact (provider, model) pair, so both halves of the key must be real.
+func catalogDocJSON(t *testing.T, providerID, modelID string, modalities ...string) []byte {
 	t.Helper()
-	seed := map[string]any{
-		"version":               "0.0.1-test",
-		"schema_version":        "1",
+	doc := map[string]any{
+		"schema_version":        "2.0.0",
+		"version":               "v2026.7.23",
 		"updated_at":            "2026-07-23T00:00:00Z",
 		"source":                "test",
-		"default_resize_budget": map[string]any{"long_edge_px": 7680, "max_bytes": 10485760},
-		"models": []map[string]any{
+		"default_resize_limits": map[string]any{"long_edge_px": 7680, "max_bytes": 10485760},
+		"providers": []map[string]any{
 			{
-				"id":               modelID,
-				"provider":         "test",
-				"input_modalities": []string{"text"},
-				"resize_budget":    map[string]any{"long_edge_px": 7680, "max_bytes": 10485760},
+				"id":            providerID,
+				"name":          providerID,
+				"api":           "https://api.example.test/v1",
+				"protocol":      "openai-compatible",
+				"tier":          "standard",
+				"auth_methods":  []string{"api_key"},
+				"resize_limits": map[string]any{"long_edge_px": 7680, "max_bytes": 10485760},
+				"models": []map[string]any{
+					{
+						"id":               modelID,
+						"name":             modelID,
+						"context_window":   128000,
+						"input_modalities": modalities,
+						"tool_call":        true,
+						"status":           "active",
+					},
+				},
 			},
 		},
 	}
-	data, err := json.Marshal(seed)
+	data, err := json.Marshal(doc)
 	require.NoError(t, err)
 	return data
 }
 
-// visionSeedJSON builds a minimal valid catalog where the model HAS the image
-// modality (passes the step-1 gate).
-func visionSeedJSON(t *testing.T, modelID string) []byte {
+// textOnlyCatalogJSON is the fixture whose model FAILS the image gate.
+func textOnlyCatalogJSON(t *testing.T, providerID, modelID string) []byte {
 	t.Helper()
-	seed := map[string]any{
-		"version":               "0.0.1-test",
-		"schema_version":        "1",
-		"updated_at":            "2026-07-23T00:00:00Z",
-		"source":                "test",
-		"default_resize_budget": map[string]any{"long_edge_px": 7680, "max_bytes": 10485760},
-		"models": []map[string]any{
-			{
-				"id":               modelID,
-				"provider":         "test",
-				"input_modalities": []string{"text", "image"},
-				"resize_budget":    map[string]any{"long_edge_px": 7680, "max_bytes": 10485760},
-			},
-		},
-	}
-	data, err := json.Marshal(seed)
-	require.NoError(t, err)
-	return data
+	return catalogDocJSON(t, providerID, modelID, "text")
 }
 
-func mustCatalog(t *testing.T, seedJSON []byte) *capabilities.Catalog {
+// visionCatalogJSON is the fixture whose model PASSES the image gate.
+func visionCatalogJSON(t *testing.T, providerID, modelID string) []byte {
 	t.Helper()
-	c, err := capabilities.NewCatalog(seedJSON, nil, nil, nil)
+	return catalogDocJSON(t, providerID, modelID, "text", "image")
+}
+
+func mustCatalog(t *testing.T, docJSON []byte) *catalog.Catalog {
+	t.Helper()
+	c, err := catalog.NewCatalog(docJSON)
 	require.NoError(t, err)
 	return c
 }
@@ -128,14 +130,14 @@ func TestPresentation_Step1Gate_TextOnlyModel_RoutesToOffload(t *testing.T) {
 	}, "test-scope")
 	require.NoError(t, err)
 
-	catalog := mustCatalog(t, textOnlySeedJSON(t, model))
+	cat := mustCatalog(t, textOnlyCatalogJSON(t, "acme", model))
 	workDir := filepath.Join(t.TempDir(), "work")
 	sink := &offloadSink{workDir: workDir}
 
 	msgs := []providers.Message{
 		{Role: "user", Content: "describe this", Media: []string{ref}},
 	}
-	result := resolveMediaRefsWithOffload(msgs, store, 10*1024*1024, model, sink, catalog, nil, "")
+	result := resolveMediaRefsWithOffload(msgs, store, 10*1024*1024, "acme", model, sink, cat, nil, "")
 
 	require.Len(t, result, 1)
 	// No image data URL — the gate skipped native send.
@@ -160,12 +162,12 @@ func TestPresentation_Step1Gate_VisionModel_Proceeds(t *testing.T) {
 	}, "test-scope")
 	require.NoError(t, err)
 
-	catalog := mustCatalog(t, visionSeedJSON(t, model))
+	cat := mustCatalog(t, visionCatalogJSON(t, "acme", model))
 
 	msgs := []providers.Message{
 		{Role: "user", Content: "describe this", Media: []string{ref}},
 	}
-	result := resolveMediaRefsWithOffload(msgs, store, 10*1024*1024, model, nil, catalog, nil, "")
+	result := resolveMediaRefsWithOffload(msgs, store, 10*1024*1024, "acme", model, nil, cat, nil, "")
 
 	require.Len(t, result, 1)
 	// Step 2 ran: the image is a normalized PNG data URL.
@@ -192,7 +194,7 @@ func TestPresentation_Step1Gate_NilCatalog_Optimistic(t *testing.T) {
 		{Role: "user", Content: "describe this", Media: []string{ref}},
 	}
 	// nil catalog → optimistic → step 2 runs even for an unknown model.
-	result := resolveMediaRefsWithOffload(msgs, store, 10*1024*1024, "some-unknown-model", nil, nil, nil, "")
+	result := resolveMediaRefsWithOffload(msgs, store, 10*1024*1024, "", "some-unknown-model", nil, nil, nil, "")
 
 	require.Len(t, result, 1)
 	require.Len(t, result[0].Media, 1, "nil catalog = optimistic; image is normalized")
@@ -219,14 +221,14 @@ func TestPresentation_Step1Gate_TextOnlyModel_SVG_GetsOffloadPlusMarkup(t *testi
 	}, "test-scope")
 	require.NoError(t, err)
 
-	catalog := mustCatalog(t, textOnlySeedJSON(t, model))
+	cat := mustCatalog(t, textOnlyCatalogJSON(t, "acme", model))
 	workDir := filepath.Join(t.TempDir(), "work")
 	sink := &offloadSink{workDir: workDir}
 
 	msgs := []providers.Message{
 		{Role: "user", Content: "what shape is this", Media: []string{ref}},
 	}
-	result := resolveMediaRefsWithOffload(msgs, store, 10*1024*1024, model, sink, catalog, nil, "")
+	result := resolveMediaRefsWithOffload(msgs, store, 10*1024*1024, "acme", model, sink, cat, nil, "")
 
 	require.Len(t, result, 1)
 	// Gate blocked rasterization: no data URL.
@@ -323,25 +325,96 @@ func TestPresentation_RefcountIncrement_PerSessionDedup(t *testing.T) {
 	inner.mu.Unlock()
 }
 
-// TestModelSupportsImage_NilCatalogOptimistic verifies the FR-026 optimistic
+// TestModelSupportsImage_NilCatalogOptimistic verifies the optimistic
 // default: a nil catalog means the gate always passes.
 func TestModelSupportsImage_NilCatalogOptimistic(t *testing.T) {
-	assert.True(t, modelSupportsImage(nil, "any-model"),
-		"nil catalog → optimistic → image-capable (FR-026)")
+	assert.True(t, modelSupportsImage(nil, "any-provider", "any-model"),
+		"nil catalog → optimistic → image-capable")
 }
 
-// TestModelSupportsImage_CatalogGates verifies the catalog-driven gate.
+// TestModelSupportsImage_CatalogGates verifies the catalog-driven gate and,
+// with it, the ADR-067 FR-003 exact-pair rule: the gate answers for a
+// (provider, model) pair, and the RIGHT model id under the WRONG provider is
+// a miss, not a hit.
 func TestModelSupportsImage_CatalogGates(t *testing.T) {
-	textOnly := mustCatalog(t, textOnlySeedJSON(t, "text-only-model"))
-	vision := mustCatalog(t, visionSeedJSON(t, "vision-model"))
+	textOnly := mustCatalog(t, textOnlyCatalogJSON(t, "acme", "text-only-model"))
+	vision := mustCatalog(t, visionCatalogJSON(t, "acme", "vision-model"))
 
-	assert.False(t, modelSupportsImage(textOnly, "text-only-model"),
+	assert.False(t, modelSupportsImage(textOnly, "acme", "text-only-model"),
 		"catalog says model lacks image → gate blocks")
-	assert.True(t, modelSupportsImage(vision, "vision-model"),
+	assert.True(t, modelSupportsImage(vision, "acme", "vision-model"),
 		"catalog says model has image → gate passes")
-	// Unknown model in a catalog → optimistic (Resolve returns the default).
-	assert.True(t, modelSupportsImage(textOnly, "not-in-catalog"),
-		"unknown model → optimistic (FR-026)")
+	// FR-004: an unknown model resolves optimistically (text + image).
+	assert.True(t, modelSupportsImage(textOnly, "acme", "not-in-catalog"),
+		"unknown model → optimistic")
+	// FR-003: the same model id under a provider that does not carry it is a
+	// miss — never a prefix-stripped or bare-id hit on the other row.
+	assert.True(t, modelSupportsImage(textOnly, "other-provider", "text-only-model"),
+		"right model id, wrong provider → miss → optimistic, never the text-only row")
+}
+
+// TestModelSupportsPDF_MissIsNotOptimistic pins the asymmetry FR-004
+// deliberately creates: a nil catalog is optimistic for every modality, but a
+// catalog MISS is optimistic for text and image only. An unknown model must
+// therefore route a PDF to offload rather than send a document block the
+// provider would reject.
+func TestModelSupportsPDF_MissIsNotOptimistic(t *testing.T) {
+	assert.True(t, modelSupportsPDF(nil, "acme", "any-model"),
+		"nil catalog → optimistic for every modality")
+
+	loaded := mustCatalog(t, catalogDocJSON(t, "acme", "doc-model", "text", "image", "pdf"))
+	assert.True(t, modelSupportsPDF(loaded, "acme", "doc-model"),
+		"catalog says model has pdf → gate passes")
+	assert.False(t, modelSupportsPDF(loaded, "acme", "unknown-model"),
+		"catalog miss → optimistic set is text+image only → pdf gate blocks")
+}
+
+// TestResizeBudgetForModel_HitMissAndNilCatalog pins the FR-004 budget
+// contract the media pipeline depends on: a hit carries the provider's own
+// resize_limits, a miss carries the document default, and no catalog at all
+// carries the package default long edge with the operator's byte cap.
+func TestResizeBudgetForModel_HitMissAndNilCatalog(t *testing.T) {
+	const maxSize = 3 * 1024 * 1024
+
+	doc := map[string]any{
+		"schema_version":        "2.0.0",
+		"version":               "v2026.7.23",
+		"updated_at":            "2026-07-23T00:00:00Z",
+		"source":                "test",
+		"default_resize_limits": map[string]any{"long_edge_px": 7680, "max_bytes": 10485760},
+		"providers": []map[string]any{
+			{
+				"id":            "acme",
+				"name":          "acme",
+				"api":           "https://api.example.test/v1",
+				"protocol":      "openai-compatible",
+				"tier":          "standard",
+				"auth_methods":  []string{"api_key"},
+				"resize_limits": map[string]any{"long_edge_px": 4096, "max_bytes": 5242880},
+				"models": []map[string]any{{
+					"id": "m1", "name": "m1", "context_window": 1000,
+					"input_modalities": []string{"text", "image"},
+					"tool_call":        true, "status": "active",
+				}},
+			},
+		},
+	}
+	data, err := json.Marshal(doc)
+	require.NoError(t, err)
+	cat := mustCatalog(t, data)
+
+	assert.Equal(t,
+		catalog.ResizeLimits{LongEdgePx: 4096, MaxBytes: 5242880},
+		resizeBudgetForModel(cat, "acme", "m1", maxSize),
+		"hit → the provider's own resize_limits")
+	assert.Equal(t,
+		catalog.ResizeLimits{LongEdgePx: 7680, MaxBytes: 10485760},
+		resizeBudgetForModel(cat, "acme", "unknown", maxSize),
+		"miss → the document default_resize_limits")
+	assert.Equal(t,
+		catalog.ResizeLimits{LongEdgePx: catalog.DefaultResizeLimits.LongEdgePx, MaxBytes: maxSize},
+		resizeBudgetForModel(nil, "acme", "m1", maxSize),
+		"no catalog → package default long edge with the operator byte cap")
 }
 
 // ── E2E (env-gated, spec test #33 / #34) ─────────────────────────────────────
@@ -371,12 +444,12 @@ func TestE2E_AnyFileAnyModel_UsefulTurn(t *testing.T) {
 
 	workDir := filepath.Join(t.TempDir(), "work")
 	sink := &offloadSink{workDir: workDir}
-	catalog := mustCatalog(t, visionSeedJSON(t, model))
+	cat := mustCatalog(t, visionCatalogJSON(t, "acme", model))
 
 	msgs := []providers.Message{
 		{Role: "user", Content: "describe this attachment", Media: []string{ref}},
 	}
-	result := resolveMediaRefsWithOffload(msgs, store, 10*1024*1024, model, sink, catalog, nil, "")
+	result := resolveMediaRefsWithOffload(msgs, store, 10*1024*1024, "acme", model, sink, cat, nil, "")
 
 	require.Len(t, result, 1, "chain must produce a result message")
 	// SC-003: useful turn — AVIF routes to offload, not the dead-end marker,
@@ -407,12 +480,12 @@ func TestE2E_TextOnlyModel_ImageSurvivesAsOffload(t *testing.T) {
 
 	workDir := filepath.Join(t.TempDir(), "work")
 	sink := &offloadSink{workDir: workDir}
-	catalog := mustCatalog(t, textOnlySeedJSON(t, model))
+	cat := mustCatalog(t, textOnlyCatalogJSON(t, "acme", model))
 
 	msgs := []providers.Message{
 		{Role: "user", Content: "describe this image", Media: []string{ref}},
 	}
-	result := resolveMediaRefsWithOffload(msgs, store, 10*1024*1024, model, sink, catalog, nil, "")
+	result := resolveMediaRefsWithOffload(msgs, store, 10*1024*1024, "acme", model, sink, cat, nil, "")
 
 	require.Len(t, result, 1, "chain must produce a result message")
 	// The image survives as offload, not as a native send: no data URL.
@@ -455,7 +528,7 @@ func TestNormalizeImage_CachedBySHA256(t *testing.T) {
 
 	// Use the same budget shape the production orchestrator would
 	// produce for this model via resizeBudgetForModel (the FR-014 path).
-	budget := capabilities.ResizeBudget{LongEdgePx: 7680, MaxBytes: 10 * 1024 * 1024}
+	budget := catalog.ResizeLimits{LongEdgePx: 7680, MaxBytes: 10 * 1024 * 1024}
 
 	// First call: populates the cache (FR-004 miss path).
 	dataURL1 := encodeImageToDataURLCached(pngPath, "image/png", info, 10*1024*1024, model, budget)
@@ -479,7 +552,7 @@ func TestNormalizeImage_CachedBySHA256(t *testing.T) {
 	// Third call: distinct budget. The cache key MUST differ (the
 	// budget is part of the key), so the call is a MISS — hit counter
 	// is unchanged across this call.
-	budgetTight := capabilities.ResizeBudget{LongEdgePx: 1024, MaxBytes: 1 * 1024 * 1024}
+	budgetTight := catalog.ResizeLimits{LongEdgePx: 1024, MaxBytes: 1 * 1024 * 1024}
 	hitsBefore3 := library.GlobalNormalizeCacheStats().Hits
 	dataURL3 := encodeImageToDataURLCached(pngPath, "image/png", info, 10*1024*1024, model, budgetTight)
 	hitsAfter3 := library.GlobalNormalizeCacheStats().Hits

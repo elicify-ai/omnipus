@@ -1,0 +1,27 @@
+title: ProviderDeleteResponse
+description: >
+  Response of DELETE /api/v1/providers/{id} (ADR-068 FR-010). deleted is
+  true on success (HTTP 200); on a failed step the server responds 500 with
+  deleted false and a retryable state. dependents lists every reference that
+  was cleared (agent primaries cleared, fallback entries removed) — nothing
+  is re-pointed silently. There is no Undo: the stored key is gone.
+type: object
+required:
+  - deleted
+  - dependents
+  - default_changed
+additionalProperties: false
+properties:
+  deleted:
+    type: boolean
+    example: true
+  dependents:
+    type: array
+    items:
+      $ref: './ProviderDependent.yaml'
+  default_changed:
+    type: boolean
+    description: True when new_default was applied before the removal.
+    example: false
+  new_default:
+    $ref: './DefaultModelUpdateRequest.yaml'

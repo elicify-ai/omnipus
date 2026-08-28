@@ -94,37 +94,30 @@ type providerMenuItem struct {
 // providerMenu is the curated short list shown to the user during interactive
 // onboarding (FR-010/US-8). "Other" (the last entry) has an empty providerID
 // and triggers a raw protocol-id prompt.
+// Every providerID below is an exact CATALOG id (ADR-067 FR-011); the labels
+// are the catalog's own display names. "Other" prompts for any of the ~190
+// remaining catalog ids.
 var providerMenu = []providerMenuItem{
 	{label: "OpenRouter", providerID: "openrouter"},
 	{label: "Anthropic", providerID: "anthropic"},
 	{label: "OpenAI", providerID: "openai"},
-	{label: "Google / Gemini", providerID: "gemini"},
+	{label: "Google Gemini", providerID: "google"},
 	{label: "Groq", providerID: "groq"},
 	{label: "DeepSeek", providerID: "deepseek"},
-	{label: "Other (enter protocol id)", providerID: ""},
+	{label: "Other (enter provider id)", providerID: ""},
 }
 
-// defaultModelFor provides the CLI's per-provider default model when the user
-// doesn't specify one. It is analogous to, but independently maintained from, the
-// REST onboarding defaults (the slug lists are not kept in lockstep — do not assume
-// a single source of truth).
+// defaultModelFor provides the CLI's default model for a provider when the
+// user doesn't name one: the first active, tool-calling, text model the
+// EMBEDDED CATALOG SNAPSHOT lists for that provider (ADR-067 A-21, FR-022).
+//
+// It used to be a six-case table of hand-typed slugs maintained separately
+// from the REST onboarding defaults. Both drifted, and a retired slug there
+// wrote a config whose very first turn 404'd. The snapshot ships in the
+// binary, so this needs no network and cannot disagree with what the runtime
+// will accept.
 func defaultModelFor(providerID string) string {
-	switch providerID {
-	case "anthropic":
-		return "claude-sonnet-4-6"
-	case "gemini", "google":
-		return "gemini-2.5-flash"
-	case "openrouter":
-		return "openrouter/auto"
-	case "groq":
-		return "llama-3.3-70b-versatile"
-	case "deepseek":
-		return "deepseek-chat"
-	case "openai":
-		return "gpt-4o"
-	default:
-		return "gpt-4o"
-	}
+	return providers.DefaultProbeModel(providerID)
 }
 
 // NewOnboardCommand returns the `omnipus onboard` Cobra command.
@@ -298,8 +291,15 @@ func inputFromFlags(stdin io.Reader, f inputFlags) (Input, error) {
 	if f.providerID == "" {
 		return in, errors.New("--provider is required in --non-interactive mode")
 	}
-	if !providers.IsKnownProtocol(f.providerID) {
-		return in, fmt.Errorf("provider %q is not a known protocol", f.providerID)
+	// ADR-067 FR-019/FR-035, A-21: the SAME admission gate the gateway's PUT
+	// and onboarding probe apply, resolved against the EMBEDDED catalog
+	// snapshot (no network, no gateway). The wizard has no --api-base /
+	// --protocol pair, so a custom row cannot be created here and an id the
+	// snapshot does not carry is simply unknown; a `tier: unsupported` row is
+	// refused with the catalog's own reason instead of being written into a
+	// config whose very first turn cannot construct a provider.
+	if _, admitErr := providers.Admit(f.providerID, "", ""); admitErr != nil {
+		return in, admitErr
 	}
 	in.ProviderID = f.providerID
 
@@ -447,25 +447,23 @@ func promptWithValidation(wio wizardIO) (Input, error) {
 	return in, nil
 }
 
-// providerDisplayName returns a human-readable display name for a given
-// providerID, used to construct FR-7 validation messages. It falls back to
-// the title-cased providerID when the provider is not in the curated menu.
+// providerDisplayName returns the display name for a provider id, used in the
+// FR-7 validation messages. The curated menu label wins so the wizard's own
+// wording stays stable; anything else comes from the catalog, and an id the
+// catalog does not carry is echoed verbatim (ADR-067 A-14) — never
+// title-cased into a brand Omnipus does not know.
 func providerDisplayName(providerID string) string {
 	for _, item := range providerMenu {
-		if item.providerID == providerID {
+		if item.providerID != "" && item.providerID == providerID {
 			return item.label
 		}
 	}
-	// Fallback: capitalise the first letter.
-	if len(providerID) == 0 {
-		return providerID
-	}
-	return strings.ToUpper(providerID[:1]) + providerID[1:]
+	return providers.DisplayName(providerID)
 }
 
 // validateAndResolveKey validates in.APIKey against the provider at baseURL before
 // it is persisted, implementing the FR-014/FR-015 policy. The caller resolves baseURL
-// via providers.GetDefaultAPIBase and passes it in, which keeps this function a pure,
+// via providers.APIBaseFor and passes it in, which keeps this function a pure,
 // httptest-injectable seam (the tests exercise it directly — there is no mirror).
 //
 //   - in.SkipVerify == true: no probe; emit R-F slog audit line; return in.APIKey.
@@ -549,7 +547,8 @@ func validateAndResolveKey(ctx context.Context, in Input, wio wizardIO, baseURL 
 //
 // The provider step now presents a numbered menu (FR-010/US-8): the user types
 // a digit (1–N); an out-of-range entry re-prompts without crashing; choosing
-// "Other" prompts for a raw protocol id validated via providers.IsKnownProtocol.
+// "Other" prompts for a raw provider id validated against the embedded
+// catalog snapshot via providers.Admit (ADR-067 A-21).
 func prompt(wio wizardIO) (Input, error) {
 	reader := bufio.NewReader(wio.stdin)
 	in := Input{}
@@ -609,8 +608,8 @@ func prompt(wio wizardIO) (Input, error) {
 
 // promptProviderMenu prints the numbered menu and reads the user's selection,
 // re-prompting on out-of-range or blank input. Returns the selected protocol id.
-// Selecting "Other" prompts for a raw protocol id and validates it via
-// providers.IsKnownProtocol.
+// Selecting "Other" prompts for a raw provider id and admits it against
+// the embedded catalog snapshot (providers.Admit).
 func promptProviderMenu(out io.Writer, reader *bufio.Reader) (string, error) {
 	for {
 		fmt.Fprintln(out, "Select your LLM provider:")
@@ -644,9 +643,13 @@ func promptProviderMenu(out io.Writer, reader *bufio.Reader) (string, error) {
 			if readErr != nil {
 				return "", readErr
 			}
-			rawID = strings.ToLower(strings.TrimSpace(rawID))
-			if !providers.IsKnownProtocol(rawID) {
-				return "", fmt.Errorf("provider %q is not a known protocol", rawID)
+			// Trim only — ids are exact and case-significant (A-19), so
+			// lowercasing here would quietly "fix" a typo into a different
+			// provider than the one the operator typed.
+			rawID = strings.TrimSpace(rawID)
+			// Same admission gate as --non-interactive (ADR-067 FR-019/FR-035).
+			if _, admitErr := providers.Admit(rawID, "", ""); admitErr != nil {
+				return "", admitErr
 			}
 			return rawID, nil
 		}
@@ -710,7 +713,7 @@ func applyInput(in Input, wio wizardIO) error {
 	//    vErr is named distinctly so the idiomatic `if err :=` blocks below do not
 	//    shadow a lingering function-scoped err (govet shadow).
 	resolvedKey, vErr := validateAndResolveKey(
-		context.Background(), in, wio, providers.GetDefaultAPIBase(in.ProviderID))
+		context.Background(), in, wio, providers.APIBaseFor(in.ProviderID))
 	if vErr != nil {
 		return vErr
 	}
@@ -816,7 +819,12 @@ func mutateConfigFile(path string, in Input, credRef, passwordHash, tokenHash st
 	if defaultsMap == nil {
 		defaultsMap = map[string]any{}
 	}
-	defaultsMap["model_name"] = in.Model
+	// ADR-068 D14.1: the default model is the exact (provider, model) pair.
+	delete(defaultsMap, "model_name")
+	defaultsMap["default_model"] = map[string]any{
+		"provider": in.ProviderID,
+		"model":    in.Model,
+	}
 	agentsMap["defaults"] = defaultsMap
 	m["agents"] = agentsMap
 

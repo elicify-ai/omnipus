@@ -6,6 +6,37 @@ description: >
 type: object
 additionalProperties: false
 properties:
+  protocol:
+    type: string
+    enum:
+      - openai-compatible
+      - anthropic
+      - google
+      - ollama
+      - cli
+    description: >
+      Wire protocol to use (ADR-067 FR-013/FR-014). For a catalog provider:
+      optional; absent → the catalog's primary; a protocol the provider does
+      not offer → 400. For a custom row (id not in the catalog): required and
+      restricted to openai-compatible | anthropic (400 otherwise).
+    example: "openai-compatible"
+  auth_method:
+    type: string
+    enum:
+      - api_key
+      - sign_in
+    description: >
+      Auth method for this row (ADR-068). Absent → api_key. sign_in is accepted
+      only for providers whose catalog auth_methods include it (400 otherwise)
+      and must not be combined with api_key.
+    example: "api_key"
+  api_base:
+    type: string
+    maxLength: 2048
+    description: >
+      Explicit base URL. Required for a custom row; optional override for a
+      catalog provider (wins over the catalog row). SSRF-checked.
+    example: "https://my-proxy.example.com/v1"
   api_key:
     type: string
     description: >

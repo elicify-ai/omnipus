@@ -1,0 +1,1927 @@
+{
+  "_comment": "DS-6 seed parity (ADR-067 spec SC-012). One row per model in the retired pkg/providers/capabilities 1.0.0 seed (78 rows, generated from that file at test-authoring time). seed_* is what the pre-ADR-067 media pipeline resolved; expected_* is what the ADR-067 catalog resolves for the same (canonical provider, model) pair. divergence=none rows are the real parity oracle. divergence=corrected rows changed because the registry disagrees with the hand-written seed; divergence=retired rows are absent from the registry snapshot entirely and fall to the FR-004 miss defaults. Every non-none row names its correction_source.",
+  "generated_from": "pkg/providers/capabilities/data/providers_capabilities_seed.json @ 2026-07-28 (schema 1.0.0)",
+  "catalog_snapshot_version": "v2026.8.23.1",
+  "catalog_source": "models.dev@59474c399cd8fad063e6f1cfe32784c1425a65e4 litellm@4e191273508e79f18396a1f307ef776af57d6817 overrides@8abef244b1722eeaf7404fe70582d9f271e0bed3",
+  "counts": {
+    "none": 14,
+    "corrected": 33,
+    "retired": 31
+  },
+  "rows": [
+    {
+      "seed_provider": "openai",
+      "provider": "openai",
+      "model": "gpt-5.4",
+      "seed_input_modalities": [
+        "image",
+        "text"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 8000,
+        "max_bytes": 20971520
+      },
+      "expected_found": true,
+      "expected_input_modalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 8000,
+        "max_bytes": 20971520
+      },
+      "divergence": "corrected",
+      "correction_source": "models.dev@59474c399cd8fad063e6f1cfe32784c1425a65e4"
+    },
+    {
+      "seed_provider": "openai",
+      "provider": "openai",
+      "model": "gpt-5",
+      "seed_input_modalities": [
+        "image",
+        "text"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 8000,
+        "max_bytes": 20971520
+      },
+      "expected_found": true,
+      "expected_input_modalities": [
+        "image",
+        "text"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 8000,
+        "max_bytes": 20971520
+      },
+      "divergence": "none",
+      "correction_source": ""
+    },
+    {
+      "seed_provider": "openai",
+      "provider": "openai",
+      "model": "gpt-5-mini",
+      "seed_input_modalities": [
+        "image",
+        "text"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 8000,
+        "max_bytes": 20971520
+      },
+      "expected_found": true,
+      "expected_input_modalities": [
+        "image",
+        "text"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 8000,
+        "max_bytes": 20971520
+      },
+      "divergence": "none",
+      "correction_source": ""
+    },
+    {
+      "seed_provider": "openai",
+      "provider": "openai",
+      "model": "gpt-5-nano",
+      "seed_input_modalities": [
+        "image",
+        "text"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 8000,
+        "max_bytes": 20971520
+      },
+      "expected_found": true,
+      "expected_input_modalities": [
+        "image",
+        "text"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 8000,
+        "max_bytes": 20971520
+      },
+      "divergence": "none",
+      "correction_source": ""
+    },
+    {
+      "seed_provider": "openai",
+      "provider": "openai",
+      "model": "gpt-4.1",
+      "seed_input_modalities": [
+        "image",
+        "text"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 8000,
+        "max_bytes": 20971520
+      },
+      "expected_found": true,
+      "expected_input_modalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 8000,
+        "max_bytes": 20971520
+      },
+      "divergence": "corrected",
+      "correction_source": "models.dev@59474c399cd8fad063e6f1cfe32784c1425a65e4"
+    },
+    {
+      "seed_provider": "openai",
+      "provider": "openai",
+      "model": "gpt-4.1-mini",
+      "seed_input_modalities": [
+        "image",
+        "text"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 8000,
+        "max_bytes": 20971520
+      },
+      "expected_found": true,
+      "expected_input_modalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 8000,
+        "max_bytes": 20971520
+      },
+      "divergence": "corrected",
+      "correction_source": "models.dev@59474c399cd8fad063e6f1cfe32784c1425a65e4"
+    },
+    {
+      "seed_provider": "openai",
+      "provider": "openai",
+      "model": "gpt-4o",
+      "seed_input_modalities": [
+        "image",
+        "text"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 8000,
+        "max_bytes": 20971520
+      },
+      "expected_found": true,
+      "expected_input_modalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 8000,
+        "max_bytes": 20971520
+      },
+      "divergence": "corrected",
+      "correction_source": "models.dev@59474c399cd8fad063e6f1cfe32784c1425a65e4"
+    },
+    {
+      "seed_provider": "openai",
+      "provider": "openai",
+      "model": "gpt-4o-mini",
+      "seed_input_modalities": [
+        "image",
+        "text"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 8000,
+        "max_bytes": 20971520
+      },
+      "expected_found": true,
+      "expected_input_modalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 8000,
+        "max_bytes": 20971520
+      },
+      "divergence": "corrected",
+      "correction_source": "models.dev@59474c399cd8fad063e6f1cfe32784c1425a65e4"
+    },
+    {
+      "seed_provider": "openai",
+      "provider": "openai",
+      "model": "o1",
+      "seed_input_modalities": [
+        "image",
+        "text"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 8000,
+        "max_bytes": 20971520
+      },
+      "expected_found": true,
+      "expected_input_modalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 8000,
+        "max_bytes": 20971520
+      },
+      "divergence": "corrected",
+      "correction_source": "models.dev@59474c399cd8fad063e6f1cfe32784c1425a65e4"
+    },
+    {
+      "seed_provider": "openai",
+      "provider": "openai",
+      "model": "o1-mini",
+      "seed_input_modalities": [
+        "image",
+        "text"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 8000,
+        "max_bytes": 20971520
+      },
+      "expected_found": false,
+      "expected_input_modalities": [
+        "image",
+        "text"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 7680,
+        "max_bytes": 10485760
+      },
+      "divergence": "retired",
+      "correction_source": "models.dev@59474c399cd8fad063e6f1cfe32784c1425a65e4 (row absent from the registry snapshot; overrides@8abef244b1722eeaf7404fe70582d9f271e0bed3 carries no replacement)"
+    },
+    {
+      "seed_provider": "openai",
+      "provider": "openai",
+      "model": "o3",
+      "seed_input_modalities": [
+        "image",
+        "text"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 8000,
+        "max_bytes": 20971520
+      },
+      "expected_found": true,
+      "expected_input_modalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 8000,
+        "max_bytes": 20971520
+      },
+      "divergence": "corrected",
+      "correction_source": "models.dev@59474c399cd8fad063e6f1cfe32784c1425a65e4"
+    },
+    {
+      "seed_provider": "openai",
+      "provider": "openai",
+      "model": "o3-mini",
+      "seed_input_modalities": [
+        "image",
+        "text"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 8000,
+        "max_bytes": 20971520
+      },
+      "expected_found": true,
+      "expected_input_modalities": [
+        "text"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 8000,
+        "max_bytes": 20971520
+      },
+      "divergence": "corrected",
+      "correction_source": "models.dev@59474c399cd8fad063e6f1cfe32784c1425a65e4"
+    },
+    {
+      "seed_provider": "openai",
+      "provider": "openai",
+      "model": "o4-mini",
+      "seed_input_modalities": [
+        "image",
+        "text"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 8000,
+        "max_bytes": 20971520
+      },
+      "expected_found": true,
+      "expected_input_modalities": [
+        "image",
+        "text"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 8000,
+        "max_bytes": 20971520
+      },
+      "divergence": "none",
+      "correction_source": ""
+    },
+    {
+      "seed_provider": "openai",
+      "provider": "openai",
+      "model": "chatgpt-4o-latest",
+      "seed_input_modalities": [
+        "image",
+        "text"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 8000,
+        "max_bytes": 20971520
+      },
+      "expected_found": false,
+      "expected_input_modalities": [
+        "image",
+        "text"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 7680,
+        "max_bytes": 10485760
+      },
+      "divergence": "retired",
+      "correction_source": "models.dev@59474c399cd8fad063e6f1cfe32784c1425a65e4 (row absent from the registry snapshot; overrides@8abef244b1722eeaf7404fe70582d9f271e0bed3 carries no replacement)"
+    },
+    {
+      "seed_provider": "anthropic",
+      "provider": "anthropic",
+      "model": "claude-fable-5",
+      "seed_input_modalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 8000,
+        "max_bytes": 10485760
+      },
+      "expected_found": true,
+      "expected_input_modalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 8000,
+        "max_bytes": 10485760
+      },
+      "divergence": "none",
+      "correction_source": ""
+    },
+    {
+      "seed_provider": "anthropic",
+      "provider": "anthropic",
+      "model": "claude-opus-5",
+      "seed_input_modalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 8000,
+        "max_bytes": 10485760
+      },
+      "expected_found": true,
+      "expected_input_modalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 8000,
+        "max_bytes": 10485760
+      },
+      "divergence": "none",
+      "correction_source": ""
+    },
+    {
+      "seed_provider": "anthropic",
+      "provider": "anthropic",
+      "model": "claude-sonnet-5",
+      "seed_input_modalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 8000,
+        "max_bytes": 10485760
+      },
+      "expected_found": true,
+      "expected_input_modalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 8000,
+        "max_bytes": 10485760
+      },
+      "divergence": "none",
+      "correction_source": ""
+    },
+    {
+      "seed_provider": "anthropic",
+      "provider": "anthropic",
+      "model": "claude-haiku-4-5",
+      "seed_input_modalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 8000,
+        "max_bytes": 10485760
+      },
+      "expected_found": true,
+      "expected_input_modalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 8000,
+        "max_bytes": 10485760
+      },
+      "divergence": "none",
+      "correction_source": ""
+    },
+    {
+      "seed_provider": "anthropic",
+      "provider": "anthropic",
+      "model": "claude-sonnet-4-6",
+      "seed_input_modalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 8000,
+        "max_bytes": 10485760
+      },
+      "expected_found": true,
+      "expected_input_modalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 8000,
+        "max_bytes": 10485760
+      },
+      "divergence": "none",
+      "correction_source": ""
+    },
+    {
+      "seed_provider": "anthropic",
+      "provider": "anthropic",
+      "model": "claude-opus-4-1",
+      "seed_input_modalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 8000,
+        "max_bytes": 10485760
+      },
+      "expected_found": false,
+      "expected_input_modalities": [
+        "image",
+        "text"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 7680,
+        "max_bytes": 10485760
+      },
+      "divergence": "retired",
+      "correction_source": "models.dev@59474c399cd8fad063e6f1cfe32784c1425a65e4 (row absent from the registry snapshot; overrides@8abef244b1722eeaf7404fe70582d9f271e0bed3 carries no replacement)"
+    },
+    {
+      "seed_provider": "anthropic",
+      "provider": "anthropic",
+      "model": "claude-opus-4-0",
+      "seed_input_modalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 8000,
+        "max_bytes": 10485760
+      },
+      "expected_found": false,
+      "expected_input_modalities": [
+        "image",
+        "text"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 7680,
+        "max_bytes": 10485760
+      },
+      "divergence": "retired",
+      "correction_source": "models.dev@59474c399cd8fad063e6f1cfe32784c1425a65e4 (row absent from the registry snapshot; overrides@8abef244b1722eeaf7404fe70582d9f271e0bed3 carries no replacement)"
+    },
+    {
+      "seed_provider": "anthropic",
+      "provider": "anthropic",
+      "model": "claude-sonnet-4-5",
+      "seed_input_modalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 8000,
+        "max_bytes": 10485760
+      },
+      "expected_found": true,
+      "expected_input_modalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 8000,
+        "max_bytes": 10485760
+      },
+      "divergence": "none",
+      "correction_source": ""
+    },
+    {
+      "seed_provider": "anthropic",
+      "provider": "anthropic",
+      "model": "claude-sonnet-4-0",
+      "seed_input_modalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 8000,
+        "max_bytes": 10485760
+      },
+      "expected_found": false,
+      "expected_input_modalities": [
+        "image",
+        "text"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 7680,
+        "max_bytes": 10485760
+      },
+      "divergence": "retired",
+      "correction_source": "models.dev@59474c399cd8fad063e6f1cfe32784c1425a65e4 (row absent from the registry snapshot; overrides@8abef244b1722eeaf7404fe70582d9f271e0bed3 carries no replacement)"
+    },
+    {
+      "seed_provider": "anthropic",
+      "provider": "anthropic",
+      "model": "claude-3-7-sonnet",
+      "seed_input_modalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 8000,
+        "max_bytes": 10485760
+      },
+      "expected_found": false,
+      "expected_input_modalities": [
+        "image",
+        "text"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 7680,
+        "max_bytes": 10485760
+      },
+      "divergence": "retired",
+      "correction_source": "models.dev@59474c399cd8fad063e6f1cfe32784c1425a65e4 (row absent from the registry snapshot; overrides@8abef244b1722eeaf7404fe70582d9f271e0bed3 carries no replacement)"
+    },
+    {
+      "seed_provider": "anthropic",
+      "provider": "anthropic",
+      "model": "claude-3-5-sonnet",
+      "seed_input_modalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 8000,
+        "max_bytes": 10485760
+      },
+      "expected_found": false,
+      "expected_input_modalities": [
+        "image",
+        "text"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 7680,
+        "max_bytes": 10485760
+      },
+      "divergence": "retired",
+      "correction_source": "models.dev@59474c399cd8fad063e6f1cfe32784c1425a65e4 (row absent from the registry snapshot; overrides@8abef244b1722eeaf7404fe70582d9f271e0bed3 carries no replacement)"
+    },
+    {
+      "seed_provider": "anthropic",
+      "provider": "anthropic",
+      "model": "claude-3-5-haiku",
+      "seed_input_modalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 8000,
+        "max_bytes": 10485760
+      },
+      "expected_found": false,
+      "expected_input_modalities": [
+        "image",
+        "text"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 7680,
+        "max_bytes": 10485760
+      },
+      "divergence": "retired",
+      "correction_source": "models.dev@59474c399cd8fad063e6f1cfe32784c1425a65e4 (row absent from the registry snapshot; overrides@8abef244b1722eeaf7404fe70582d9f271e0bed3 carries no replacement)"
+    },
+    {
+      "seed_provider": "anthropic",
+      "provider": "anthropic",
+      "model": "claude-3-opus",
+      "seed_input_modalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 8000,
+        "max_bytes": 10485760
+      },
+      "expected_found": false,
+      "expected_input_modalities": [
+        "image",
+        "text"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 7680,
+        "max_bytes": 10485760
+      },
+      "divergence": "retired",
+      "correction_source": "models.dev@59474c399cd8fad063e6f1cfe32784c1425a65e4 (row absent from the registry snapshot; overrides@8abef244b1722eeaf7404fe70582d9f271e0bed3 carries no replacement)"
+    },
+    {
+      "seed_provider": "anthropic",
+      "provider": "anthropic",
+      "model": "claude-3-haiku",
+      "seed_input_modalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 8000,
+        "max_bytes": 10485760
+      },
+      "expected_found": false,
+      "expected_input_modalities": [
+        "image",
+        "text"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 7680,
+        "max_bytes": 10485760
+      },
+      "divergence": "retired",
+      "correction_source": "models.dev@59474c399cd8fad063e6f1cfe32784c1425a65e4 (row absent from the registry snapshot; overrides@8abef244b1722eeaf7404fe70582d9f271e0bed3 carries no replacement)"
+    },
+    {
+      "seed_provider": "google",
+      "provider": "google",
+      "model": "gemini-3-pro",
+      "seed_input_modalities": [
+        "audio",
+        "image",
+        "pdf",
+        "text",
+        "video"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 8000,
+        "max_bytes": 20971520
+      },
+      "expected_found": false,
+      "expected_input_modalities": [
+        "image",
+        "text"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 7680,
+        "max_bytes": 10485760
+      },
+      "divergence": "retired",
+      "correction_source": "models.dev@59474c399cd8fad063e6f1cfe32784c1425a65e4 (row absent from the registry snapshot; overrides@8abef244b1722eeaf7404fe70582d9f271e0bed3 carries no replacement)"
+    },
+    {
+      "seed_provider": "google",
+      "provider": "google",
+      "model": "gemini-3-flash",
+      "seed_input_modalities": [
+        "audio",
+        "image",
+        "pdf",
+        "text",
+        "video"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 8000,
+        "max_bytes": 20971520
+      },
+      "expected_found": false,
+      "expected_input_modalities": [
+        "image",
+        "text"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 7680,
+        "max_bytes": 10485760
+      },
+      "divergence": "retired",
+      "correction_source": "models.dev@59474c399cd8fad063e6f1cfe32784c1425a65e4 (row absent from the registry snapshot; overrides@8abef244b1722eeaf7404fe70582d9f271e0bed3 carries no replacement)"
+    },
+    {
+      "seed_provider": "google",
+      "provider": "google",
+      "model": "gemini-2.5-pro",
+      "seed_input_modalities": [
+        "audio",
+        "image",
+        "pdf",
+        "text",
+        "video"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 8000,
+        "max_bytes": 20971520
+      },
+      "expected_found": true,
+      "expected_input_modalities": [
+        "audio",
+        "image",
+        "pdf",
+        "text",
+        "video"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 8000,
+        "max_bytes": 20971520
+      },
+      "divergence": "none",
+      "correction_source": ""
+    },
+    {
+      "seed_provider": "google",
+      "provider": "google",
+      "model": "gemini-2.5-flash",
+      "seed_input_modalities": [
+        "audio",
+        "image",
+        "pdf",
+        "text",
+        "video"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 8000,
+        "max_bytes": 20971520
+      },
+      "expected_found": true,
+      "expected_input_modalities": [
+        "audio",
+        "image",
+        "pdf",
+        "text",
+        "video"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 8000,
+        "max_bytes": 20971520
+      },
+      "divergence": "none",
+      "correction_source": ""
+    },
+    {
+      "seed_provider": "google",
+      "provider": "google",
+      "model": "gemini-2.0-pro",
+      "seed_input_modalities": [
+        "audio",
+        "image",
+        "pdf",
+        "text",
+        "video"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 8000,
+        "max_bytes": 20971520
+      },
+      "expected_found": false,
+      "expected_input_modalities": [
+        "image",
+        "text"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 7680,
+        "max_bytes": 10485760
+      },
+      "divergence": "retired",
+      "correction_source": "models.dev@59474c399cd8fad063e6f1cfe32784c1425a65e4 (row absent from the registry snapshot; overrides@8abef244b1722eeaf7404fe70582d9f271e0bed3 carries no replacement)"
+    },
+    {
+      "seed_provider": "google",
+      "provider": "google",
+      "model": "gemini-2.0-flash",
+      "seed_input_modalities": [
+        "audio",
+        "image",
+        "pdf",
+        "text",
+        "video"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 8000,
+        "max_bytes": 20971520
+      },
+      "expected_found": false,
+      "expected_input_modalities": [
+        "image",
+        "text"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 7680,
+        "max_bytes": 10485760
+      },
+      "divergence": "retired",
+      "correction_source": "models.dev@59474c399cd8fad063e6f1cfe32784c1425a65e4 (row absent from the registry snapshot; overrides@8abef244b1722eeaf7404fe70582d9f271e0bed3 carries no replacement)"
+    },
+    {
+      "seed_provider": "google",
+      "provider": "google",
+      "model": "gemini-1.5-pro",
+      "seed_input_modalities": [
+        "audio",
+        "image",
+        "pdf",
+        "text",
+        "video"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 8000,
+        "max_bytes": 20971520
+      },
+      "expected_found": false,
+      "expected_input_modalities": [
+        "image",
+        "text"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 7680,
+        "max_bytes": 10485760
+      },
+      "divergence": "retired",
+      "correction_source": "models.dev@59474c399cd8fad063e6f1cfe32784c1425a65e4 (row absent from the registry snapshot; overrides@8abef244b1722eeaf7404fe70582d9f271e0bed3 carries no replacement)"
+    },
+    {
+      "seed_provider": "google",
+      "provider": "google",
+      "model": "gemini-1.5-flash",
+      "seed_input_modalities": [
+        "audio",
+        "image",
+        "pdf",
+        "text",
+        "video"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 8000,
+        "max_bytes": 20971520
+      },
+      "expected_found": false,
+      "expected_input_modalities": [
+        "image",
+        "text"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 7680,
+        "max_bytes": 10485760
+      },
+      "divergence": "retired",
+      "correction_source": "models.dev@59474c399cd8fad063e6f1cfe32784c1425a65e4 (row absent from the registry snapshot; overrides@8abef244b1722eeaf7404fe70582d9f271e0bed3 carries no replacement)"
+    },
+    {
+      "seed_provider": "xai",
+      "provider": "xai",
+      "model": "grok-4",
+      "seed_input_modalities": [
+        "image",
+        "text"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 8000,
+        "max_bytes": 20971520
+      },
+      "expected_found": false,
+      "expected_input_modalities": [
+        "image",
+        "text"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 7680,
+        "max_bytes": 10485760
+      },
+      "divergence": "retired",
+      "correction_source": "models.dev@59474c399cd8fad063e6f1cfe32784c1425a65e4 (row absent from the registry snapshot; overrides@8abef244b1722eeaf7404fe70582d9f271e0bed3 carries no replacement)"
+    },
+    {
+      "seed_provider": "xai",
+      "provider": "xai",
+      "model": "grok-3",
+      "seed_input_modalities": [
+        "image",
+        "text"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 8000,
+        "max_bytes": 20971520
+      },
+      "expected_found": false,
+      "expected_input_modalities": [
+        "image",
+        "text"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 7680,
+        "max_bytes": 10485760
+      },
+      "divergence": "retired",
+      "correction_source": "models.dev@59474c399cd8fad063e6f1cfe32784c1425a65e4 (row absent from the registry snapshot; overrides@8abef244b1722eeaf7404fe70582d9f271e0bed3 carries no replacement)"
+    },
+    {
+      "seed_provider": "xai",
+      "provider": "xai",
+      "model": "grok-3-mini",
+      "seed_input_modalities": [
+        "image",
+        "text"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 8000,
+        "max_bytes": 20971520
+      },
+      "expected_found": false,
+      "expected_input_modalities": [
+        "image",
+        "text"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 7680,
+        "max_bytes": 10485760
+      },
+      "divergence": "retired",
+      "correction_source": "models.dev@59474c399cd8fad063e6f1cfe32784c1425a65e4 (row absent from the registry snapshot; overrides@8abef244b1722eeaf7404fe70582d9f271e0bed3 carries no replacement)"
+    },
+    {
+      "seed_provider": "xai",
+      "provider": "xai",
+      "model": "grok-2-vision",
+      "seed_input_modalities": [
+        "image",
+        "text"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 8000,
+        "max_bytes": 20971520
+      },
+      "expected_found": false,
+      "expected_input_modalities": [
+        "image",
+        "text"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 7680,
+        "max_bytes": 10485760
+      },
+      "divergence": "retired",
+      "correction_source": "models.dev@59474c399cd8fad063e6f1cfe32784c1425a65e4 (row absent from the registry snapshot; overrides@8abef244b1722eeaf7404fe70582d9f271e0bed3 carries no replacement)"
+    },
+    {
+      "seed_provider": "mistral",
+      "provider": "mistral",
+      "model": "mistral-large-latest",
+      "seed_input_modalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 8000,
+        "max_bytes": 10485760
+      },
+      "expected_found": true,
+      "expected_input_modalities": [
+        "image",
+        "text"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 8000,
+        "max_bytes": 10485760
+      },
+      "divergence": "corrected",
+      "correction_source": "models.dev@59474c399cd8fad063e6f1cfe32784c1425a65e4"
+    },
+    {
+      "seed_provider": "mistral",
+      "provider": "mistral",
+      "model": "mistral-large-2512",
+      "seed_input_modalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 8000,
+        "max_bytes": 10485760
+      },
+      "expected_found": true,
+      "expected_input_modalities": [
+        "image",
+        "text"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 8000,
+        "max_bytes": 10485760
+      },
+      "divergence": "corrected",
+      "correction_source": "models.dev@59474c399cd8fad063e6f1cfe32784c1425a65e4"
+    },
+    {
+      "seed_provider": "mistral",
+      "provider": "mistral",
+      "model": "mistral-medium-latest",
+      "seed_input_modalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 8000,
+        "max_bytes": 10485760
+      },
+      "expected_found": true,
+      "expected_input_modalities": [
+        "image",
+        "text"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 8000,
+        "max_bytes": 10485760
+      },
+      "divergence": "corrected",
+      "correction_source": "models.dev@59474c399cd8fad063e6f1cfe32784c1425a65e4"
+    },
+    {
+      "seed_provider": "mistral",
+      "provider": "mistral",
+      "model": "mistral-medium-2508",
+      "seed_input_modalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 8000,
+        "max_bytes": 10485760
+      },
+      "expected_found": true,
+      "expected_input_modalities": [
+        "image",
+        "text"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 8000,
+        "max_bytes": 10485760
+      },
+      "divergence": "corrected",
+      "correction_source": "models.dev@59474c399cd8fad063e6f1cfe32784c1425a65e4"
+    },
+    {
+      "seed_provider": "mistral",
+      "provider": "mistral",
+      "model": "mistral-small-latest",
+      "seed_input_modalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 8000,
+        "max_bytes": 10485760
+      },
+      "expected_found": true,
+      "expected_input_modalities": [
+        "image",
+        "text"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 8000,
+        "max_bytes": 10485760
+      },
+      "divergence": "corrected",
+      "correction_source": "models.dev@59474c399cd8fad063e6f1cfe32784c1425a65e4"
+    },
+    {
+      "seed_provider": "mistral",
+      "provider": "mistral",
+      "model": "mistral-small-2506",
+      "seed_input_modalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 8000,
+        "max_bytes": 10485760
+      },
+      "expected_found": true,
+      "expected_input_modalities": [
+        "image",
+        "text"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 8000,
+        "max_bytes": 10485760
+      },
+      "divergence": "corrected",
+      "correction_source": "models.dev@59474c399cd8fad063e6f1cfe32784c1425a65e4"
+    },
+    {
+      "seed_provider": "mistral",
+      "provider": "mistral",
+      "model": "ministral-3b-latest",
+      "seed_input_modalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 8000,
+        "max_bytes": 10485760
+      },
+      "expected_found": true,
+      "expected_input_modalities": [
+        "text"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 8000,
+        "max_bytes": 10485760
+      },
+      "divergence": "corrected",
+      "correction_source": "models.dev@59474c399cd8fad063e6f1cfe32784c1425a65e4"
+    },
+    {
+      "seed_provider": "mistral",
+      "provider": "mistral",
+      "model": "ministral-8b-latest",
+      "seed_input_modalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 8000,
+        "max_bytes": 10485760
+      },
+      "expected_found": true,
+      "expected_input_modalities": [
+        "text"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 8000,
+        "max_bytes": 10485760
+      },
+      "divergence": "corrected",
+      "correction_source": "models.dev@59474c399cd8fad063e6f1cfe32784c1425a65e4"
+    },
+    {
+      "seed_provider": "mistral",
+      "provider": "mistral",
+      "model": "pixtral-large-latest",
+      "seed_input_modalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 8000,
+        "max_bytes": 10485760
+      },
+      "expected_found": true,
+      "expected_input_modalities": [
+        "image",
+        "text"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 8000,
+        "max_bytes": 10485760
+      },
+      "divergence": "corrected",
+      "correction_source": "models.dev@59474c399cd8fad063e6f1cfe32784c1425a65e4"
+    },
+    {
+      "seed_provider": "mistral",
+      "provider": "mistral",
+      "model": "pixtral-12b-2409",
+      "seed_input_modalities": [
+        "image",
+        "pdf",
+        "text"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 8000,
+        "max_bytes": 10485760
+      },
+      "expected_found": false,
+      "expected_input_modalities": [
+        "image",
+        "text"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 7680,
+        "max_bytes": 10485760
+      },
+      "divergence": "retired",
+      "correction_source": "models.dev@59474c399cd8fad063e6f1cfe32784c1425a65e4 (row absent from the registry snapshot; overrides@8abef244b1722eeaf7404fe70582d9f271e0bed3 carries no replacement)"
+    },
+    {
+      "seed_provider": "deepseek",
+      "provider": "deepseek",
+      "model": "deepseek-chat",
+      "seed_input_modalities": [
+        "text"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 7680,
+        "max_bytes": 10485760
+      },
+      "expected_found": true,
+      "expected_input_modalities": [
+        "text"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 7680,
+        "max_bytes": 10485760
+      },
+      "divergence": "none",
+      "correction_source": ""
+    },
+    {
+      "seed_provider": "deepseek",
+      "provider": "deepseek",
+      "model": "deepseek-reasoner",
+      "seed_input_modalities": [
+        "text"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 7680,
+        "max_bytes": 10485760
+      },
+      "expected_found": true,
+      "expected_input_modalities": [
+        "text"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 7680,
+        "max_bytes": 10485760
+      },
+      "divergence": "none",
+      "correction_source": ""
+    },
+    {
+      "seed_provider": "deepseek",
+      "provider": "deepseek",
+      "model": "deepseek-coder",
+      "seed_input_modalities": [
+        "text"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 7680,
+        "max_bytes": 10485760
+      },
+      "expected_found": false,
+      "expected_input_modalities": [
+        "image",
+        "text"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 7680,
+        "max_bytes": 10485760
+      },
+      "divergence": "retired",
+      "correction_source": "models.dev@59474c399cd8fad063e6f1cfe32784c1425a65e4 (row absent from the registry snapshot; overrides@8abef244b1722eeaf7404fe70582d9f271e0bed3 carries no replacement)"
+    },
+    {
+      "seed_provider": "z-ai",
+      "provider": "zai",
+      "model": "glm-5v-turbo",
+      "seed_input_modalities": [
+        "image",
+        "text"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 6000,
+        "max_bytes": 5242880
+      },
+      "expected_found": true,
+      "expected_input_modalities": [
+        "image",
+        "pdf",
+        "text",
+        "video"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 6000,
+        "max_bytes": 5242880
+      },
+      "divergence": "corrected",
+      "correction_source": "models.dev@59474c399cd8fad063e6f1cfe32784c1425a65e4"
+    },
+    {
+      "seed_provider": "z-ai",
+      "provider": "zai",
+      "model": "glm-4.6v",
+      "seed_input_modalities": [
+        "image",
+        "text"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 6000,
+        "max_bytes": 5242880
+      },
+      "expected_found": true,
+      "expected_input_modalities": [
+        "image",
+        "text",
+        "video"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 6000,
+        "max_bytes": 5242880
+      },
+      "divergence": "corrected",
+      "correction_source": "models.dev@59474c399cd8fad063e6f1cfe32784c1425a65e4"
+    },
+    {
+      "seed_provider": "z-ai",
+      "provider": "zai",
+      "model": "glm-4.6v-flash",
+      "seed_input_modalities": [
+        "image",
+        "text"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 6000,
+        "max_bytes": 5242880
+      },
+      "expected_found": false,
+      "expected_input_modalities": [
+        "image",
+        "text"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 7680,
+        "max_bytes": 10485760
+      },
+      "divergence": "retired",
+      "correction_source": "models.dev@59474c399cd8fad063e6f1cfe32784c1425a65e4 (row absent from the registry snapshot; overrides@8abef244b1722eeaf7404fe70582d9f271e0bed3 carries no replacement)"
+    },
+    {
+      "seed_provider": "z-ai",
+      "provider": "zai",
+      "model": "glm-4.6v-flashx",
+      "seed_input_modalities": [
+        "image",
+        "text"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 6000,
+        "max_bytes": 5242880
+      },
+      "expected_found": false,
+      "expected_input_modalities": [
+        "image",
+        "text"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 7680,
+        "max_bytes": 10485760
+      },
+      "divergence": "retired",
+      "correction_source": "models.dev@59474c399cd8fad063e6f1cfe32784c1425a65e4 (row absent from the registry snapshot; overrides@8abef244b1722eeaf7404fe70582d9f271e0bed3 carries no replacement)"
+    },
+    {
+      "seed_provider": "z-ai",
+      "provider": "zai",
+      "model": "glm-4.5v",
+      "seed_input_modalities": [
+        "image",
+        "text"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 6000,
+        "max_bytes": 5242880
+      },
+      "expected_found": true,
+      "expected_input_modalities": [
+        "image",
+        "text",
+        "video"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 6000,
+        "max_bytes": 5242880
+      },
+      "divergence": "corrected",
+      "correction_source": "models.dev@59474c399cd8fad063e6f1cfe32784c1425a65e4"
+    },
+    {
+      "seed_provider": "z-ai",
+      "provider": "zai",
+      "model": "glm-5",
+      "seed_input_modalities": [
+        "text"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 7680,
+        "max_bytes": 10485760
+      },
+      "expected_found": true,
+      "expected_input_modalities": [
+        "text"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 6000,
+        "max_bytes": 5242880
+      },
+      "divergence": "corrected",
+      "correction_source": "models.dev@59474c399cd8fad063e6f1cfe32784c1425a65e4"
+    },
+    {
+      "seed_provider": "z-ai",
+      "provider": "zai",
+      "model": "glm-5.1",
+      "seed_input_modalities": [
+        "text"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 7680,
+        "max_bytes": 10485760
+      },
+      "expected_found": true,
+      "expected_input_modalities": [
+        "text"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 6000,
+        "max_bytes": 5242880
+      },
+      "divergence": "corrected",
+      "correction_source": "models.dev@59474c399cd8fad063e6f1cfe32784c1425a65e4"
+    },
+    {
+      "seed_provider": "z-ai",
+      "provider": "zai",
+      "model": "glm-5.2",
+      "seed_input_modalities": [
+        "text"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 7680,
+        "max_bytes": 10485760
+      },
+      "expected_found": true,
+      "expected_input_modalities": [
+        "text"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 6000,
+        "max_bytes": 5242880
+      },
+      "divergence": "corrected",
+      "correction_source": "models.dev@59474c399cd8fad063e6f1cfe32784c1425a65e4"
+    },
+    {
+      "seed_provider": "z-ai",
+      "provider": "zai",
+      "model": "glm-4.7",
+      "seed_input_modalities": [
+        "text"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 7680,
+        "max_bytes": 10485760
+      },
+      "expected_found": true,
+      "expected_input_modalities": [
+        "text"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 6000,
+        "max_bytes": 5242880
+      },
+      "divergence": "corrected",
+      "correction_source": "models.dev@59474c399cd8fad063e6f1cfe32784c1425a65e4"
+    },
+    {
+      "seed_provider": "z-ai",
+      "provider": "zai",
+      "model": "glm-4.6",
+      "seed_input_modalities": [
+        "text"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 7680,
+        "max_bytes": 10485760
+      },
+      "expected_found": true,
+      "expected_input_modalities": [
+        "text"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 6000,
+        "max_bytes": 5242880
+      },
+      "divergence": "corrected",
+      "correction_source": "models.dev@59474c399cd8fad063e6f1cfe32784c1425a65e4"
+    },
+    {
+      "seed_provider": "z-ai",
+      "provider": "zai",
+      "model": "glm-4.5",
+      "seed_input_modalities": [
+        "text"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 7680,
+        "max_bytes": 10485760
+      },
+      "expected_found": true,
+      "expected_input_modalities": [
+        "text"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 6000,
+        "max_bytes": 5242880
+      },
+      "divergence": "corrected",
+      "correction_source": "models.dev@59474c399cd8fad063e6f1cfe32784c1425a65e4"
+    },
+    {
+      "seed_provider": "moonshot",
+      "provider": "moonshotai",
+      "model": "kimi-k2",
+      "seed_input_modalities": [
+        "text"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 7680,
+        "max_bytes": 10485760
+      },
+      "expected_found": false,
+      "expected_input_modalities": [
+        "image",
+        "text"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 7680,
+        "max_bytes": 10485760
+      },
+      "divergence": "retired",
+      "correction_source": "models.dev@59474c399cd8fad063e6f1cfe32784c1425a65e4 (row absent from the registry snapshot; overrides@8abef244b1722eeaf7404fe70582d9f271e0bed3 carries no replacement)"
+    },
+    {
+      "seed_provider": "moonshot",
+      "provider": "moonshotai",
+      "model": "kimi-k2.5",
+      "seed_input_modalities": [
+        "image",
+        "text"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 8000,
+        "max_bytes": 104857600
+      },
+      "expected_found": true,
+      "expected_input_modalities": [
+        "image",
+        "text",
+        "video"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 8000,
+        "max_bytes": 104857600
+      },
+      "divergence": "corrected",
+      "correction_source": "models.dev@59474c399cd8fad063e6f1cfe32784c1425a65e4"
+    },
+    {
+      "seed_provider": "moonshot",
+      "provider": "moonshotai",
+      "model": "kimi-k3",
+      "seed_input_modalities": [
+        "image",
+        "text"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 8000,
+        "max_bytes": 104857600
+      },
+      "expected_found": true,
+      "expected_input_modalities": [
+        "image",
+        "text",
+        "video"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 8000,
+        "max_bytes": 104857600
+      },
+      "divergence": "corrected",
+      "correction_source": "models.dev@59474c399cd8fad063e6f1cfe32784c1425a65e4"
+    },
+    {
+      "seed_provider": "moonshot",
+      "provider": "moonshotai",
+      "model": "moonshot-v1-8k",
+      "seed_input_modalities": [
+        "text"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 7680,
+        "max_bytes": 10485760
+      },
+      "expected_found": false,
+      "expected_input_modalities": [
+        "image",
+        "text"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 7680,
+        "max_bytes": 10485760
+      },
+      "divergence": "retired",
+      "correction_source": "models.dev@59474c399cd8fad063e6f1cfe32784c1425a65e4 (row absent from the registry snapshot; overrides@8abef244b1722eeaf7404fe70582d9f271e0bed3 carries no replacement)"
+    },
+    {
+      "seed_provider": "moonshot",
+      "provider": "moonshotai",
+      "model": "moonshot-v1-32k",
+      "seed_input_modalities": [
+        "text"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 7680,
+        "max_bytes": 10485760
+      },
+      "expected_found": false,
+      "expected_input_modalities": [
+        "image",
+        "text"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 7680,
+        "max_bytes": 10485760
+      },
+      "divergence": "retired",
+      "correction_source": "models.dev@59474c399cd8fad063e6f1cfe32784c1425a65e4 (row absent from the registry snapshot; overrides@8abef244b1722eeaf7404fe70582d9f271e0bed3 carries no replacement)"
+    },
+    {
+      "seed_provider": "moonshot",
+      "provider": "moonshotai",
+      "model": "moonshot-v1-128k",
+      "seed_input_modalities": [
+        "text"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 7680,
+        "max_bytes": 10485760
+      },
+      "expected_found": false,
+      "expected_input_modalities": [
+        "image",
+        "text"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 7680,
+        "max_bytes": 10485760
+      },
+      "divergence": "retired",
+      "correction_source": "models.dev@59474c399cd8fad063e6f1cfe32784c1425a65e4 (row absent from the registry snapshot; overrides@8abef244b1722eeaf7404fe70582d9f271e0bed3 carries no replacement)"
+    },
+    {
+      "seed_provider": "moonshot",
+      "provider": "moonshotai",
+      "model": "moonshot-v1-8k-vision-preview",
+      "seed_input_modalities": [
+        "image",
+        "text"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 8000,
+        "max_bytes": 104857600
+      },
+      "expected_found": false,
+      "expected_input_modalities": [
+        "image",
+        "text"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 7680,
+        "max_bytes": 10485760
+      },
+      "divergence": "retired",
+      "correction_source": "models.dev@59474c399cd8fad063e6f1cfe32784c1425a65e4 (row absent from the registry snapshot; overrides@8abef244b1722eeaf7404fe70582d9f271e0bed3 carries no replacement)"
+    },
+    {
+      "seed_provider": "moonshot",
+      "provider": "moonshotai",
+      "model": "moonshot-v1-32k-vision-preview",
+      "seed_input_modalities": [
+        "image",
+        "text"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 8000,
+        "max_bytes": 104857600
+      },
+      "expected_found": false,
+      "expected_input_modalities": [
+        "image",
+        "text"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 7680,
+        "max_bytes": 10485760
+      },
+      "divergence": "retired",
+      "correction_source": "models.dev@59474c399cd8fad063e6f1cfe32784c1425a65e4 (row absent from the registry snapshot; overrides@8abef244b1722eeaf7404fe70582d9f271e0bed3 carries no replacement)"
+    },
+    {
+      "seed_provider": "moonshot",
+      "provider": "moonshotai",
+      "model": "moonshot-v1-128k-vision-preview",
+      "seed_input_modalities": [
+        "image",
+        "text"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 8000,
+        "max_bytes": 104857600
+      },
+      "expected_found": false,
+      "expected_input_modalities": [
+        "image",
+        "text"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 7680,
+        "max_bytes": 10485760
+      },
+      "divergence": "retired",
+      "correction_source": "models.dev@59474c399cd8fad063e6f1cfe32784c1425a65e4 (row absent from the registry snapshot; overrides@8abef244b1722eeaf7404fe70582d9f271e0bed3 carries no replacement)"
+    },
+    {
+      "seed_provider": "minimax",
+      "provider": "minimax",
+      "model": "MiniMax-M3",
+      "seed_input_modalities": [
+        "image",
+        "text"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 8000,
+        "max_bytes": 10485760
+      },
+      "expected_found": true,
+      "expected_input_modalities": [
+        "image",
+        "text",
+        "video"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 8000,
+        "max_bytes": 10485760
+      },
+      "divergence": "corrected",
+      "correction_source": "models.dev@59474c399cd8fad063e6f1cfe32784c1425a65e4"
+    },
+    {
+      "seed_provider": "minimax",
+      "provider": "minimax",
+      "model": "MiniMax-M2",
+      "seed_input_modalities": [
+        "text"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 7680,
+        "max_bytes": 10485760
+      },
+      "expected_found": true,
+      "expected_input_modalities": [
+        "text"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 8000,
+        "max_bytes": 10485760
+      },
+      "divergence": "corrected",
+      "correction_source": "models.dev@59474c399cd8fad063e6f1cfe32784c1425a65e4"
+    },
+    {
+      "seed_provider": "minimax",
+      "provider": "minimax",
+      "model": "MiniMax-M2.1",
+      "seed_input_modalities": [
+        "text"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 7680,
+        "max_bytes": 10485760
+      },
+      "expected_found": true,
+      "expected_input_modalities": [
+        "text"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 8000,
+        "max_bytes": 10485760
+      },
+      "divergence": "corrected",
+      "correction_source": "models.dev@59474c399cd8fad063e6f1cfe32784c1425a65e4"
+    },
+    {
+      "seed_provider": "minimax",
+      "provider": "minimax",
+      "model": "MiniMax-M2.5",
+      "seed_input_modalities": [
+        "text"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 7680,
+        "max_bytes": 10485760
+      },
+      "expected_found": true,
+      "expected_input_modalities": [
+        "text"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 8000,
+        "max_bytes": 10485760
+      },
+      "divergence": "corrected",
+      "correction_source": "models.dev@59474c399cd8fad063e6f1cfe32784c1425a65e4"
+    },
+    {
+      "seed_provider": "minimax",
+      "provider": "minimax",
+      "model": "MiniMax-M2.7",
+      "seed_input_modalities": [
+        "text"
+      ],
+      "seed_resize_budget": {
+        "long_edge_px": 7680,
+        "max_bytes": 10485760
+      },
+      "expected_found": true,
+      "expected_input_modalities": [
+        "text"
+      ],
+      "expected_resize_limits": {
+        "long_edge_px": 8000,
+        "max_bytes": 10485760
+      },
+      "divergence": "corrected",
+      "correction_source": "models.dev@59474c399cd8fad063e6f1cfe32784c1425a65e4"
+    }
+  ]
+}

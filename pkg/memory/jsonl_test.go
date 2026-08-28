@@ -286,29 +286,24 @@ func TestTruncateHistory_KeepMoreThanExists(t *testing.T) {
 	}
 }
 
-func TestSetHistory_ReplacesAll(t *testing.T) {
+// TestSetHistory_FillsEmptySession — SetHistory is a first-fill primitive
+// (ADR-066 FR-047): on an empty session it writes the supplied history.
+// Refusal on a non-empty archive is covered by
+// TestSetHistory_RefusesNonEmptyArchive (projection_test.go).
+func TestSetHistory_FillsEmptySession(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()
 
-	// Add some initial messages.
-	for i := 0; i < 5; i++ {
-		err := store.AddMessage(ctx, "replace", "user", "old")
-		if err != nil {
-			t.Fatalf("AddMessage: %v", err)
-		}
-	}
-
-	// Replace with new history.
 	newHistory := []providers.Message{
 		{Role: "user", Content: "new1"},
 		{Role: "assistant", Content: "new2"},
 	}
-	err := store.SetHistory(ctx, "replace", newHistory)
+	err := store.SetHistory(ctx, "fill", newHistory)
 	if err != nil {
 		t.Fatalf("SetHistory: %v", err)
 	}
 
-	history, err := store.GetHistory(ctx, "replace")
+	history, err := store.GetHistory(ctx, "fill")
 	if err != nil {
 		t.Fatalf("GetHistory: %v", err)
 	}
@@ -318,42 +313,17 @@ func TestSetHistory_ReplacesAll(t *testing.T) {
 	if history[0].Content != "new1" || history[1].Content != "new2" {
 		t.Errorf("history = %+v", history)
 	}
-}
 
-func TestSetHistory_ResetsSkip(t *testing.T) {
-	store := newTestStore(t)
-	ctx := context.Background()
-
-	// Add messages and truncate.
-	for i := 0; i < 10; i++ {
-		err := store.AddMessage(ctx, "skip-reset", "user", "old")
-		if err != nil {
-			t.Fatalf("AddMessage: %v", err)
-		}
+	// Appends after the fill continue the same archive (Count reconciled).
+	if err = store.AddMessage(ctx, "fill", "user", "new3"); err != nil {
+		t.Fatalf("AddMessage: %v", err)
 	}
-	err := store.TruncateHistory(ctx, "skip-reset", 3)
-	if err != nil {
-		t.Fatalf("TruncateHistory: %v", err)
-	}
-
-	// SetHistory should reset skip to 0.
-	newHistory := []providers.Message{
-		{Role: "user", Content: "fresh"},
-	}
-	err = store.SetHistory(ctx, "skip-reset", newHistory)
-	if err != nil {
-		t.Fatalf("SetHistory: %v", err)
-	}
-
-	history, err := store.GetHistory(ctx, "skip-reset")
+	history, err = store.GetHistory(ctx, "fill")
 	if err != nil {
 		t.Fatalf("GetHistory: %v", err)
 	}
-	if len(history) != 1 {
-		t.Fatalf("expected 1, got %d", len(history))
-	}
-	if history[0].Content != "fresh" {
-		t.Errorf("content = %q", history[0].Content)
+	if len(history) != 3 || history[2].Content != "new3" {
+		t.Errorf("after append: %+v", history)
 	}
 }
 

@@ -133,7 +133,7 @@ func (t *ProviderConfigureTool) Execute(_ context.Context, args map[string]any) 
 			wired = true
 		}
 		if !wired {
-			np := &config.ModelConfig{Provider: name, ModelName: name, Model: name}
+			np := &config.ModelConfig{Provider: name, Model: name}
 			if apiKey != "" {
 				np.APIKeyRef = ref
 			}
@@ -303,7 +303,7 @@ func (t *ModelsListTool) Execute(_ context.Context, args map[string]any) *tools.
 		Default  bool   `json:"default,omitempty"`
 	}
 
-	defaultModel := cfg.Agents.Defaults.ModelName
+	defaultModel := cfg.Agents.Defaults.DefaultModel
 
 	// Collect unique providers and resolve their API keys.
 	type providerInfo struct {
@@ -350,7 +350,9 @@ func (t *ModelsListTool) Execute(_ context.Context, args map[string]any) *tools.
 	seen := map[string]bool{}
 	var warnings []string
 	for _, pi := range providersSeen {
-		baseURL := providers.GetDefaultAPIBase(pi.name)
+		// ADR-067 FR-012: the base URL is the catalog row's, never a
+		// hand-typed per-vendor switch.
+		baseURL := providers.APIBaseFor(pi.name)
 		if baseURL == "" {
 			warnings = append(warnings, fmt.Sprintf("%s: no API base URL configured", pi.name))
 			continue
@@ -373,14 +375,14 @@ func (t *ModelsListTool) Execute(_ context.Context, args map[string]any) *tools.
 			models = append(models, modelEntry{
 				Model:    m,
 				Provider: pi.name,
-				Default:  m == defaultModel,
+				Default:  pi.name == defaultModel.Provider && m == defaultModel.Model,
 			})
 		}
 	}
 
 	result := map[string]any{
 		"models":        models,
-		"default_model": defaultModel,
+		"default_model": map[string]string{"provider": defaultModel.Provider, "model": defaultModel.Model},
 		"total":         len(models),
 	}
 	if len(warnings) > 0 {

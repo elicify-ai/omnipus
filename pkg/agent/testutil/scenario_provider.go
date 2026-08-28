@@ -36,6 +36,7 @@ type ScenarioProvider struct {
 	callCount    int
 	modelName    string
 	lastMessages []providers.Message
+	allRequests  [][]providers.Message
 }
 
 // NewScenario returns an empty ScenarioProvider. Default model name is "scripted-model".
@@ -157,6 +158,7 @@ func (s *ScenarioProvider) Chat(
 	s.mu.Lock()
 	// Record the messages passed to this Chat call for inspection by tests.
 	s.lastMessages = append([]providers.Message(nil), messages...)
+	s.allRequests = append(s.allRequests, s.lastMessages)
 	if s.idx >= len(s.steps) {
 		s.mu.Unlock()
 		return nil, ErrNoMoreResponses
@@ -181,6 +183,19 @@ func (s *ScenarioProvider) LastMessages() []providers.Message {
 	}
 	cp := make([]providers.Message, len(s.lastMessages))
 	copy(cp, s.lastMessages)
+	return cp
+}
+
+// AllRequests returns a snapshot of the messages passed to EVERY Chat call,
+// in call order (ADR-066 T066-13: the long-turn test asserts every request
+// stayed under the budget B at every iteration, not just the last one).
+// Thread-safe. Each element is the same snapshot LastMessages would have
+// returned right after that call.
+func (s *ScenarioProvider) AllRequests() [][]providers.Message {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cp := make([][]providers.Message, len(s.allRequests))
+	copy(cp, s.allRequests)
 	return cp
 }
 
@@ -211,4 +226,5 @@ func (s *ScenarioProvider) Reset() {
 	defer s.mu.Unlock()
 	s.idx = 0
 	s.callCount = 0
+	s.allRequests = nil
 }

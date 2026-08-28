@@ -380,7 +380,7 @@ func TestAgentLoop_ImageRejection_FriendlyMessage(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              tmpDir,
-				ModelName:         modelName,
+				DefaultModel:      config.DefaultModel{Model: modelName},
 				MaxTokens:         4096,
 				MaxToolIterations: 3,
 			},
@@ -463,7 +463,7 @@ func TestAgentLoop_NonImageError_PropagatesAsError(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              tmpDir,
-				ModelName:         "test-model",
+				DefaultModel:      config.DefaultModel{Model: "test-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 3,
 			},

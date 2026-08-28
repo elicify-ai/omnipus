@@ -224,7 +224,7 @@ func TestSpawnSubTurn_ExternalCLI_WorkerEmptySoulDeliversTaskOnly(t *testing.T) 
 	}
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Provider: "mock", Home: worker.Home},
+			Defaults: config.AgentDefaults{DefaultModel: config.DefaultModel{Provider: "mock"}, Home: worker.Home},
 			List: []config.AgentConfig{
 				{ID: string(coreagent.IDWorker), Type: config.AgentTypeWorker, Home: worker.Home},
 			},

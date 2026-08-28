@@ -2,44 +2,22 @@ type: object
 description: >
   Body for POST /onboarding/complete. Atomically sets up the first LLM provider
   and creates the initial admin account. CSRF-exempt (no cookie exists at this point).
+  NOTE (ADR-068 / ADR-034): `provider` is a discriminated union. This file is
+  the inbound-validator twin (pkg/gateway/inboundschemas); the codegen-facing
+  wrapper is hosted INLINE in contracts/openapi.yaml over the same two
+  variant schemas — keep the two in lockstep.
 required:
   - provider
   - admin
 additionalProperties: false
 properties:
   provider:
-    type: object
-    description: LLM provider configuration to persist.
-    required:
-      - id
-      - api_key
-    properties:
-      id:
-        type: string
-        description: >
-          Provider protocol identifier (e.g. "anthropic", "openai", "openrouter", "gemini").
-          Must be a known protocol; unknown values are rejected with 400.
-        example: "anthropic"
-      api_key:
-        type: string
-        minLength: 1
-        description: API key for the provider. Stored encrypted (AES-256-GCM) in credentials.json.
-        example: "sk-ant-..."
-      model:
-        type: string
-        description: >
-          Default model to use for this provider. When omitted, a sensible default is chosen
-          per provider (e.g. "claude-sonnet-4-6" for anthropic, "gpt-4o" for openai).
-        example: "claude-sonnet-4-6"
-      endpoint:
-        type: string
-        description: >
-          Optional custom API base URL, persisted as the provider entry's api_base.
-          Required for providers that have no fixed default endpoint (e.g. azure,
-          azure-openai — a per-resource host); also usable to override the regional
-          default (e.g. a China vs international host). When omitted, the provider's
-          built-in default base is used.
-        example: "https://my-resource.openai.azure.com/openai/deployments/gpt-4o"
+    description: >
+      LLM provider configuration to persist, discriminated by `auth_method`
+      (ADR-068 MAJ-014): `api_key` requires `api_key`; `sign_in` forbids it.
+    oneOf:
+      - $ref: './OnboardingProviderApiKey.yaml'
+      - $ref: './OnboardingProviderSignIn.yaml'
   admin:
     type: object
     description: Initial admin account credentials.

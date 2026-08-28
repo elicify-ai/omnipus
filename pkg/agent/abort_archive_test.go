@@ -592,7 +592,7 @@ func TestRollbackAppended_MidTurnEviction_HardAbort(t *testing.T) {
 	// With the fix: RollbackAppended(12, 4) restores Skip=4 → GetHistory = 12-4 = 8.
 	//
 	// Phase 5: trigger RollbackAppended directly (mirrors HardAbort's call).
-	agent.Sessions.RollbackAppended(sk, initialArchiveLen, turnStartSkip)
+	agent.Sessions.RollbackAppended(sk, initialArchiveLen, turnStartSkip, nil)
 
 	// Phase 6: assert post-rollback invariants.
 	// Archive must be back to 12 lines.

@@ -29,9 +29,7 @@ import {
   getConfigCoercionCount,
   resetConfigCoercionCount,
   fetchCommands,
-  modelLacksImageCapability,
 } from './api'
-import type { ModelCapabilities } from './api'
 import * as telemetry from './telemetry'
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -1796,15 +1794,16 @@ describe('enableChannel / disableChannel: ChannelEnabledResponse validation (fix
   })
 })
 
-// ── rawToFrontendConfig / frontendToRawConfig round-trip for model_name / provider ──
+// ── rawToFrontendConfig / frontendToRawConfig round-trip for default_model ──
 //
-// Regression guard: agents.defaults.model_name and agents.defaults.provider were
-// previously not threaded through the mapping functions, causing them to be silently
-// dropped when settings were read from the backend or saved back.
+// Regression guard: the agents.defaults default model was previously not
+// threaded through the mapping functions, causing it to be silently dropped
+// when settings were read from the backend or saved back. ADR-068 D14.1: it is
+// now the exact (provider, model) pair at agents.defaults.default_model.
 //
-// Traces to: hotfix/v0.1.1 Wave 4 — api round-trip
+// Traces to: hotfix/v0.1.1 Wave 4 — api round-trip; ADR-068 T068-07
 
-describe('rawToFrontendConfig: preserves agents.defaults.model_name and provider', () => {
+describe('rawToFrontendConfig: preserves agents.defaults.default_model', () => {
   let fetchSpy: ReturnType<typeof vi.fn>
 
   function stubCookieLocal3(value: string) {
@@ -1832,7 +1831,7 @@ describe('rawToFrontendConfig: preserves agents.defaults.model_name and provider
     vi.resetModules()
   })
 
-  it('rawToFrontendConfig preserves agents.defaults.model_name and provider', async () => {
+  it('rawToFrontendConfig preserves agents.defaults.default_model', async () => {
     // Traces to: hotfix/v0.1.1 — agents.defaults fields must survive rawToFrontendConfig
     const wireConfig = {
       gateway: { host: '127.0.0.1', port: 8080 },
@@ -1840,8 +1839,7 @@ describe('rawToFrontendConfig: preserves agents.defaults.model_name and provider
       storage: { retention: { session_days: 90 } },
       agents: {
         defaults: {
-          model_name: 'claude-3-haiku',
-          provider: 'anthropic',
+          default_model: { provider: 'anthropic', model: 'claude-3-haiku' },
         },
       },
     }
@@ -1856,11 +1854,10 @@ describe('rawToFrontendConfig: preserves agents.defaults.model_name and provider
     const { fetchConfig } = await import('./api')
     const config = await fetchConfig()
 
-    expect(config.agents?.defaults?.model_name).toBe('claude-3-haiku')
-    expect(config.agents?.defaults?.provider).toBe('anthropic')
+    expect(config.agents?.defaults?.default_model).toEqual({ provider: 'anthropic', model: 'claude-3-haiku' })
   })
 
-  it('frontendToRawConfig round-trips model_name and provider without dropping them', async () => {
+  it('frontendToRawConfig round-trips default_model without dropping it', async () => {
     // Traces to: hotfix/v0.1.1 — agents.defaults must survive the full fetchConfig→updateConfig round-trip
     const wireConfig = {
       gateway: { host: '127.0.0.1', port: 8080 },
@@ -1868,8 +1865,7 @@ describe('rawToFrontendConfig: preserves agents.defaults.model_name and provider
       storage: { retention: { session_days: 90 } },
       agents: {
         defaults: {
-          model_name: 'claude-3-haiku',
-          provider: 'anthropic',
+          default_model: { provider: 'anthropic', model: 'claude-3-haiku' },
         },
       },
     }
@@ -1892,9 +1888,8 @@ describe('rawToFrontendConfig: preserves agents.defaults.model_name and provider
     const { fetchConfig, updateConfig } = await import('./api')
     const fetchedConfig = await fetchConfig()
 
-    // Confirm the fetched config has the fields.
-    expect(fetchedConfig.agents?.defaults?.model_name).toBe('claude-3-haiku')
-    expect(fetchedConfig.agents?.defaults?.provider).toBe('anthropic')
+    // Confirm the fetched config has the pair.
+    expect(fetchedConfig.agents?.defaults?.default_model).toEqual({ provider: 'anthropic', model: 'claude-3-haiku' })
 
     // Send the config back via updateConfig — the round-trip must preserve the fields
     // in the wire body sent to the backend.
@@ -1904,11 +1899,10 @@ describe('rawToFrontendConfig: preserves agents.defaults.model_name and provider
     const [, putInit] = fetchSpy.mock.calls[1] as [string, RequestInit]
     const putBody = JSON.parse(putInit.body as string) as Record<string, unknown>
 
-    // The wire body must contain agents.defaults with both fields intact.
+    // The wire body must contain agents.defaults with the pair intact.
     const putAgents = putBody.agents as Record<string, unknown>
     const putDefaults = putAgents?.defaults as Record<string, unknown>
-    expect(putDefaults?.model_name).toBe('claude-3-haiku')
-    expect(putDefaults?.provider).toBe('anthropic')
+    expect(putDefaults?.default_model).toEqual({ provider: 'anthropic', model: 'claude-3-haiku' })
   })
 })
 
@@ -2637,54 +2631,3 @@ describe('fetchWorkspaceInstructions / updateWorkspaceInstructions', () => {
   })
 })
 
-// ── modelLacksImageCapability: provider-prefix stripped-lookup fallback ─────
-//
-// Mirrors pkg/providers/capabilities/catalog.go's Catalog.Resolve fix
-// (Resolve/resolveStrippedPrefix + regression tests
-// TestCatalog_Resolve_ProviderPrefixedModel_MatchesBareEntry /
-// _DoublePrefixedModel_MatchesBareEntry / _BareModelUnaffectedByPrefixFallback).
-// Agents' models are provider-prefixed ("z-ai/glm-5.2"); the
-// /providers/model-capabilities catalog is keyed by the BARE id ("glm-5.2").
-// An exact-string-only lookup never matches a prefixed id, so it always fell
-// through to the FR-026 optimistic "assume capable" default and the pre-send
-// warning never fired — the same bug the Go Resolve fix closed, mirrored
-// here so the client and server agree on how a slug resolves.
-//
-// REVERT-PROOF: every "must report lacking" case below fails against the
-// pre-fix exact-match-only implementation (it returns false — optimistic
-// default — instead of true) and passes once the stripped-prefix fallback
-// is added.
-describe('modelLacksImageCapability: provider-prefix fallback (mirrors Go Catalog.Resolve)', () => {
-  const textOnlyGlm: ModelCapabilities = { id: 'glm-5.2', modalities: ['text'] }
-  const gpt4o: ModelCapabilities = { id: 'gpt-4o', modalities: ['text', 'image'] }
-
-  it('resolves a single provider-prefixed id ("z-ai/glm-5.2") against a bare catalog entry ("glm-5.2")', () => {
-    // Live-verified shape (2026-07-28 UAT): GET /agents returns model
-    // "z-ai/glm-5.2"; GET /providers/model-capabilities returns bare "glm-5.2".
-    expect(modelLacksImageCapability('z-ai/glm-5.2', [textOnlyGlm])).toBe(true)
-  })
-
-  it('resolves the double-prefixed onboarding artifact ("openrouter/z-ai/glm-5.2") against the bare entry', () => {
-    // normalizeModel-adjacent onboarding artifact — the fallback must strip
-    // BOTH segments, not just the first, to reach the bare catalog id.
-    expect(modelLacksImageCapability('openrouter/z-ai/glm-5.2', [textOnlyGlm])).toBe(true)
-  })
-
-  it('still resolves exactly for a genuine bare id ("gpt-4o") with no vendor prefix — no over-matching', () => {
-    // gpt-4o supports image — must NOT be reported as lacking it, and the
-    // exact match must win outright without ever reaching the fallback.
-    expect(modelLacksImageCapability('gpt-4o', [gpt4o])).toBe(false)
-  })
-
-  it('does not report lacking capability for a truly unknown model (FR-026 optimistic default preserved)', () => {
-    expect(modelLacksImageCapability('some-vendor/unknown-model-xyz', [textOnlyGlm, gpt4o])).toBe(false)
-  })
-
-  it('does not crash or over-match on a trailing-slash edge case ("z-ai/")', () => {
-    expect(modelLacksImageCapability('z-ai/', [textOnlyGlm])).toBe(false)
-  })
-
-  it('returns false (optimistic) when modelId is undefined', () => {
-    expect(modelLacksImageCapability(undefined, [textOnlyGlm])).toBe(false)
-  })
-})

@@ -135,7 +135,7 @@ multi-provider / multi-protocol coverage. Each was sanity-checked live on 2026-0
 ## OP-1 — Anthropic API, especially for Chinese providers (dual OpenAI + Anthropic endpoints)
 Today we treat almost every provider as OpenAI-compatible (`/chat/completions`), and only
 a few as native Anthropic Messages (`/messages`): `anthropic-messages`,
-`coding-plan-anthropic`/`alibaba-coding-anthropic`, `anthropic` in OAuth mode, `claude-cli`.
+`coding-plan-anthropic`/`alibaba-coding-anthropic`.
 But **several Chinese providers expose BOTH an OpenAI-compatible AND an Anthropic-compatible
 endpoint** (the Anthropic one mainly so Claude Code / Anthropic-SDK clients can point at
 them). Live-confirmed (401 = endpoint exists, needs auth) on 2026-06-26:
@@ -168,8 +168,8 @@ We currently wire only the **OpenAI-compatible** variant for these (`zhipu`/`z-a
    (`/v1beta/openai/`, Bearer) — we use the latter; map which features each supports.
 3. **Vertex AI** (GCP-hosted Gemini, OAuth/service-account auth, region hosts) is not a
    provider — separate from the public Gemini API. Assess demand.
-4. `antigravity` provider defaults to `gemini-3-flash` — clarify its relationship to the
-   Google ecosystem and whether it should surface in onboarding.
+4. *(Item removed: the OAuth-only Google Cloud Code Assist provider it concerned was
+   deleted under ADR-068 §2.4.)*
 
 ## OP-3 — xAI (Grok) ecosystem — NOT currently supported
 xAI / Grok is **not a provider at all** today (absent from `GetDefaultAPIBase`,
