@@ -585,7 +585,14 @@ as "no progress has arrived" for a fully indexed collection.
 - **FR-008** A negative filter MUST include records where the property is absent, unless the query excludes them explicitly.
 - **FR-009** Property types MUST be scoped to their record type; the same name in two types is unrelated.
 - **FR-010** An enum MUST declare its values in order, and sorting MUST follow declared position, not lexical order.
-- **FR-011** The system MUST reject an enum value outside the declared set, listing the permitted values.
+- **FR-011** **MEANING CHANGED, revision 5 (operator ruling 3).** The system MUST **resolve** an enum value to a declared value **case-insensitively**, and MUST reject a value that resolves to none of them, listing the permitted values. *Previously the resolution was exact-case, which made `Won` a rejection. Under ruling 3 it resolves to `won`.* **Two consequences are normative:** the value it resolves to supplies the **ordinal** (FR-010, R-5), so ordering is unaffected by spelling; and the **file's own spelling is what renders**, because the note is the source of truth and this system does not rewrite a file it was not asked to change (FR-046's sibling rule). *(This does not weaken D4: D4 forbids **auto-creating** a second value, and folding does the opposite — it collapses two spellings into one. §7 test 2 and DS-1's `Active` row are corrected, not merely re-labelled.)*
+- **FR-011a** **NEW, revision 5. Case-insensitive matching MUST be implemented by a Go-computed fold column, not by SQLite's collation, and the reason is a measurement rather than a preference.** Every text, enum-label and relation-path column MUST carry a derived `<col>_fold` column holding the value case-folded by **one Go function** (`strings.ToLower`, which is Unicode-aware), and every equality and `contains` predicate on those properties MUST compare the fold column against a needle folded by that same function.
+  - **Why not `COLLATE NOCASE`, `LIKE` or `lower()`:** all three fold **ASCII only**. Executed over fourteen upper/lower pairs, each folded the two ASCII pairs and **zero** of the twelve non-ASCII ones; `lower()` returned every non-ASCII input byte-for-byte unchanged (§8.1a §H). The engine carries no `ENABLE_ICU` and `icu_load_collation` does not exist, so **there is no Unicode-aware option inside SQLite at all here**. A vault in German, Polish, Greek or Turkish would get case-insensitive matching for its ASCII words and silent case-sensitivity for the rest — which is the "works until it doesn't, with no error" shape this document exists to remove.
+  - `COLLATE NOCASE` on those columns is **permitted and is no longer a defect** (it makes the ASCII case work even if a predicate escapes the fold path), but it is **not** the mechanism the requirement rests on.
+  - **The fold column is derived and disposable** like everything else in the properties index (FR-020a): it is recomputed on rebuild and never written to a note.
+  - **The identifier column is excluded, deliberately** — see R-8 and AC-8.8.
+  - **The cost is stated:** one extra TEXT column per foldable property, roughly doubling the properties index's text bytes, and one `strings.ToLower` per value per index pass. **Nobody has measured it** — it joins A-12's W1/W2 measurement obligation.
+- **FR-011b** **NEW, revision 5.** A build that does not carry the fold column MUST NOT present its matching as Unicode-insensitive. Documentation, tool descriptions and the `explain` output MUST state **ASCII-case-insensitive** where that is what is delivered.
 #### The two numeric types (revision 5, operator ruling)
 
 An author **chooses** `integer` or `decimal` in the schema. **There is no inference from the first
@@ -668,13 +675,23 @@ no new runtime dependency, no CGo, and Hard Constraints #1 and #2 hold.
   - **The degradation is a build-tagged stub that registers and refuses**, following `pkg/channels/whatsapp_native/whatsapp_native_stub.go`. `vault_read` and the plain-text half of `vault_find` keep working, because they resolve through bleve. Typed filters, relation joins, grouping and aggregation MUST each return a refusal naming the platform. **An empty result here would be the exact failure this specification exists to remove**, arriving from the build system.
 - **FR-021** **MEANING CHANGED, revision 3 (ADR-068 D16.2/D16.3).** Filtering, grouping, joining and aggregation MUST be evaluated **in the properties index**, over typed columns, so that only surviving rows are materialised. *Previously: "evaluated in Go over the retrieved candidate set". **Cited by:** ADR-068 D21.5 (which builds its tokenizer-hazard argument on Go-side evaluation), the storage spike's C-3, and §6 of this spec. The tokenizer hazard **survives the change**: FR-112's rank fusion is still Go-side, so bleve still selects with one notion of a term while Go ranks with another — see FR-116.* What remains in Go is rank fusion (FR-112), rendering (FR-120) and the problem report (FR-025) — not membership.
 - **FR-021a** Every value the properties index holds MUST be **typed at write time** against the record's schema. A value that does not conform MUST be stored as non-conforming and flagged, never coerced into the typed column, so that R-4 can report it rather than compare it.
+- **FR-021b** **NEW, revision 5 — FR-021a as written collides R-4 with R-2/R-3 and this closes it.** "Never in the typed column" leaves **NULL** in that column, and NULL is the **absence** representation (FR-007), so a non-conforming value and an absent property become indistinguishable in storage. Every typed property MUST therefore carry a **conformance flag column** with three distinguishable states — **present-and-conforming**, **present-and-non-conforming**, **absent** — and that flag MUST be consulted **at comparison time and at `ORDER BY` time**, not only when the problem list is built. A non-conforming value MUST NOT be ordered as though it were absent, and an absent value MUST NOT be reported as a problem.
+- **FR-021c** **NEW, revision 5.** Parsing a value into its typed column MUST happen **in Go, before insert** — never by a SQL function on the way in. Two of SQLite's parsers return **NULL with no error** on malformed input (`unixepoch('not-a-date')` and `unixepoch('2026-8-26')`, both verified, §8.1a §E), and one **saturates silently** (`CAST('9223372036854775808' AS INTEGER)` → int64 max). Any of the three would write an FR-021b non-conformance into the storage cell reserved for absence, defeating FR-021b in the same transaction that FR-021b exists to protect.
+- **FR-021d** **NEW, revision 5. A `date` MUST be stored as a signed integer epoch, with precision declared on the property** (`seconds` by default; `milliseconds` permitted), and all comparison and ordering MUST run on that integer column. The raw text is retained for rendering and for FR-021b's problem line only. *Rationale, verified in §8.1a §E: under TEXT storage two spellings of the same instant compare unequal and order anyway; fractional seconds invert the order (`Z` sorts after `.`) **even in an all-UTC corpus**; the `T`-vs-space separator reorders; and any non-UTC offset breaks ordering outright. R-7 had no defeat at all before this revision.*
 - **FR-022** **`vault_find`** MUST accept a structured filter object; the system MUST NOT accept a text query language (ADR-068 O-3, unchanged in substance — only the tool name moved).
+- **FR-022a** **NEW, revision 5.** A `contains` predicate whose value is the **empty string** MUST be refused, naming `is_present` as the operator that was probably meant. `instr('abc','')` and `instr('','')` both return **1** (§8.1a §B), so an empty needle matches **every row including the empty ones** — a whole-table result returned as though it were a filtered one.
 - **FR-023** Every property name, enum value and relation target in a query MUST be validated against the schema **before** evaluation.
+- **FR-023a** **NEW, revision 5. Negation MUST be pushed to the leaves by De Morgan normalisation BEFORE any SQL is emitted, and the compiler MUST NOT emit a `NOT` over a compound expression at all.** *(This is the hole under §8.1's flagship R-2 defeat: `(x IS NULL OR x <> ?)` is a **leaf** rewrite and the filter grammar §4.1.2 declares is a **tree**, whose normal shape is `{not: {all: [...]}}`. The natural implementation — compile the subtree, wrap it in `NOT (...)` — silently drops every NULL-bearing row however correct each leaf is. Verified: over §8.1a §B's fixture, `NOT (a=1 AND b=2)` returns **one** row where the normalised form returns **four**.)* Normalisation is `NOT(all) → any(NOT …)`, `NOT(any) → all(NOT …)`, `NOT(NOT x) → x`, applied recursively until every `not` sits on a leaf, at which point the leaf rewrite of §8.1's R-2 row applies — **including for the ordered operators**, since `NOT (x > 5)` drops the NULL row exactly as `NOT (x = 5)` does. **AC-8.4a requires a mutation that removes the normalisation pass and a truth-table cell over a compound negation that dies when it does.**
 - **FR-024** A query naming an unknown property or enum value MUST be rejected with valid names listed, and MUST NOT return an empty result set. **Scope MUST be resolved before this rejection**, so the valid-names list never reveals schemas outside the caller's workspace — otherwise the error channel defeats FR-062.
 - **FR-025** Every query response MUST carry a completeness verdict and a problem list as **required** fields.
 - **FR-026** A record excluded from an aggregate MUST be named in the problem list with the reason.
 - **FR-027** Grouping MUST support two levels.
 - **FR-028** Grouping by a multi-value property MUST place a record in every group it belongs to.
+- **FR-028a** **NEW, revision 5 — the tenth SQLite violation, and the one that made every count and total over a filtered list wrong.** **Every aggregate over a filtered set MUST be computed over DISTINCT PARENT ROWS.** The mandated mechanism is a **semi-join** — `... FROM rec r WHERE EXISTS (SELECT 1 FROM <child> t WHERE t.rec_id = r.id AND <predicate>)` — or an aggregate over an explicitly de-duplicated subquery (`SELECT DISTINCT r.id, r.<col> FROM …`). A **plain join with the predicate in the `WHERE` clause is FORBIDDEN as the aggregate's source.**
+  - **Why, verified (§8.1a):** the R-9 defeat is a child-table equality join, which is right for membership and wrong for arithmetic. A record carrying both `vendor` and `vendors` joins **twice**, so `COUNT(*)` returns **2** and `SUM(amount)` returns **200** where the truth is **1** and **100**. Quiet, plausible, and wrong by a factor that varies per record. It reaches `count`, `sum`, `min`, `max`, the `join` parameter and `group_by`.
+  - **Why `EXISTS` and not `COUNT(DISTINCT)`, decided rather than assumed:** `COUNT(DISTINCT r.id)` fixes `count` and has **no working analogue for `sum`**. `SUM(DISTINCT)` deduplicates on **value**, not on row identity, so two genuinely distinct records sharing an amount collapse into one — it returned **100** against a truth of 200 while the naive join returned 300 (both verified). It errs in the direction that *looks* conservative, which makes it the harder wrong answer to catch in review. `EXISTS` is one shape that is correct for every aggregate, present and future.
+  - **`group_by` is the exception and needs both halves.** Grouping by a multi-value property **must** fan out, because FR-028 requires a record under every group it belongs to. The requirement there is: **fan out for membership, then compute each group's aggregate over distinct parent rows within that group.** A `GROUP BY` whose counts are taken over the fanned-out rows produces the defect FR-028 exists to avoid, arriving from the other side.
+  - **AC-8.4a requires a mutation that replaces the semi-join with a plain join, and a truth-table case that dies when it does:** a record gains a **second** matching value of a `many` property, and `count` and `sum` MUST be unchanged.
 - **FR-029** Grouping by a relation MUST be supported.
 
 ### Relations and identity
@@ -1444,7 +1461,12 @@ are what a human reviews.**
 
 **AC-8.1** — the generated table covers every declared type × every declared type × every
 operator, plus absent and non-conforming on both sides, and every expected value traces to a
-numbered rule above.
+numbered rule above. **Revision 5 adds three obligations to the generator, each closing a hole the
+grill found:** every cell is generated in **both provenances** — literal-vs-literal and
+column-vs-literal — because R-12's row shows the two disagree; the type axis is the **seven types
+of FR-004** (`money` cells are deleted, `integer` and `decimal` cells are added, and `integer × decimal`
+is asserted to compare numerically per R-1); and **`many` arity is a third axis**, so the fan-out
+case of §8.1a is generated rather than remembered.
 
 **AC-8.2** — a comparator change that requires editing a **rule** is a specification change and
 must be argued as one. A change that only regenerates cells is an implementation detail.
@@ -1453,9 +1475,10 @@ must be argued as one. A change that only regenerates cells is an implementation
 
 ### 8.1 What the storage decision changes here — assessed rule by rule
 
-**All thirteen rules survive unchanged in meaning.** Neither the `vault_*` tool surface — five in
-ADR-068 revision 5, six in revision 6 — nor the retrieval decisions touch them, and the reasons
-are worth stating rather than assumed:
+**Twelve rules are live; R-6 is retired with `money` (operator ruling 1); three of the twelve —
+R-5, R-10 and R-11 — change in revision 5, and R-7 and R-12 gain defeats they never had.** The
+`vault_*` tool surface and the retrieval decisions still touch none of them, and the reasons are
+worth stating rather than assumed:
 
 - **The tool surface changes who calls the comparator, not what it decides.** `vault_find`
   replaces `record_query` as the caller; the filter object it accepts (FR-022) is the same
@@ -1464,10 +1487,15 @@ are worth stating rather than assumed:
 - **Retrieval decides ORDER; the rules decide MEMBERSHIP.** BM25-vs-TF-IDF (FR-110), fielded
   indexing (FR-111) and RRF fusion (FR-112) rank records that already matched. A ranking change
   that altered which records matched would be a defect, and **AC-8.6 asserts it does not.**
-- **The tokenizer question (FR-116) does not reach R-10.** `contains` on text is substring
-  matching over the **raw property value**, not over the analysed text index. Stemming,
-  stopwords and Unicode segmentation are properties of the ranking path; they must not leak into
-  comparison, or `contains "running"` would match `run` and the rule would have silently changed.
+- **The tokenizer question (FR-116) still does not reach R-10, and revision 5 has to say why more
+  carefully than revision 4 did.** `contains` on text is substring matching over the property
+  value, not over the analysed text index. Stemming, stopwords and Unicode segmentation are
+  properties of the ranking path; they must not leak into comparison, or `contains "running"` would
+  match `run` and the rule would have silently changed. **Case-folding is not a fourth notion of a
+  term and must not be mistaken for one:** FR-011a's fold is `strings.ToLower` over the whole value,
+  a character-level transform that splits nothing and stems nothing. It is the *only* analysis
+  permitted on the comparison path, and FR-116's shared-token-function obligation is unaffected by
+  it.
 - **R-13 gains a second reason to exist.** It was written because `segment != vendor` had no
   defined answer. Under FR-021 a `many` property lives in a child table, where SQL equality
   against a join **silently behaves as membership** — precisely the implicit coercion R-13 refuses.
