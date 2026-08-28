@@ -251,7 +251,7 @@ func (a *restAPI) handleKnowledgeInfo(w http.ResponseWriter, r *http.Request, wo
 		WorkspaceId:     workspaceID,
 		RootPath:        rootPath,
 		IsKnowledgeBase: false,
-		Marker:          gen.None,
+		Marker:          gen.KnowledgeBaseInfoMarkerNone,
 	}
 
 	if _, statErr := root.StatDir(rel); statErr != nil {
@@ -293,11 +293,11 @@ func (a *restAPI) handleKnowledgeInfo(w http.ResponseWriter, r *http.Request, wo
 	switch {
 	case det.HasOmnipusMarker:
 		// Both markers present reports the Omnipus one, per the contract.
-		info.Marker = gen.OmnipusVault
+		info.Marker = gen.KnowledgeBaseInfoMarkerOmnipusVault
 	case det.HasObsidianMarker:
-		info.Marker = gen.Obsidian
+		info.Marker = gen.KnowledgeBaseInfoMarkerObsidian
 	default:
-		info.Marker = gen.None
+		info.Marker = gen.KnowledgeBaseInfoMarkerNone
 	}
 	if !info.IsKnowledgeBase {
 		jsonOK(w, info)
