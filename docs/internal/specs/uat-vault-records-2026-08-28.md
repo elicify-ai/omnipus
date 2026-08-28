@@ -1244,3 +1244,246 @@ carefully here, then spot-check it throughout.*
 
 **Fail if:** completeness arrives after the rows; the response is JSON; a problem row says only
 "3 records excluded" without naming them; or there is no next-actions block.
+
+---
+
+## Part G — The honesty contract
+
+*Every answer states whether it is complete and names what it left out, with the fix. This is
+the requirement the whole design exists to serve, so it gets its own part rather than being
+checked in passing.*
+
+### Case G-1 — A bad value is reported, not dropped
+
+| Step | Do this | Expect |
+|---|---|---|
+| G-1.1 | `vault_find` `type` = `specimen` with **no filter** | The clean records come back, **and** every broken fixture record appears in the problems block |
+| G-1.2 | Read each problem entry | It names the record, the property, **the offending value**, and **the fix** — e.g. `SP-0102: mass_g is '2.5kg' where a decimal is required — write 2.5` |
+| G-1.3 | Read the completeness line | It says the answer is **not** complete, and says so **first** |
+| G-1.4 | Count | The number of records shown plus the number reported as problems accounts for every record you know is in the vault |
+
+**Fail if:** a broken record is silently missing from both the rows and the problems; the
+problem entry states the error without the fix; or the answer claims to be complete.
+
+*This is the difference between "the query returned nothing, keep trying different spellings
+until something comes back" — which is the accepted debugging technique in the products this
+design is reacting to — and a system that tells you what went wrong.*
+
+### Case G-2 — The same bad values appear in the vault health view
+
+*Two surfaces, one truth. The answer is for the machine, at the moment of the wrong answer. The
+health view is for the person, so they can clear a vault in one sitting instead of meeting its
+problems one query at a time.*
+
+| Step | Do this | Expect |
+|---|---|---|
+| G-2.1 | Open the vault health / problems view in the Library UI | It exists, and lists bad values **vault-wide**, grouped by record type and by reason |
+| G-2.2 | Each row | Names the note path, the property, the offending value and the fix |
+| G-2.3 | Compare against Case G-1's problem list | Every problem the query reported also appears here. (The health view may hold **more** — it sweeps the whole vault where a query only checks what it returned. More is correct; missing is not) |
+| G-2.4 | Find a bad value in a property **no query in this plan has touched** | It is in the health view anyway |
+
+**Fail if:** there is no health view (**Blocked — feature absent**); or a problem appears in a
+query's answer and not in the health view.
+
+### Case G-3 — Fixing the note clears both surfaces, with no extra step
+
+| Step | Do this | Expect |
+|---|---|---|
+| G-3.1 | Correct `SP-0102`'s `mass_g` to `2.5` in a text editor | — |
+| G-3.2 | Wait for re-indexing | — |
+| G-3.3 | Re-run Case G-1's query and re-open the health view | The problem is gone from **both**, with no acknowledge/dismiss step anywhere |
+
+**Fail if:** the health view keeps state of its own — a dismissed, acknowledged or snoozed
+finding. The note is the source of truth; a health view holding its own state will drift from
+the vault and start lying.
+
+### Case G-4 — A total over a set with bad values
+
+| Step | Do this | Expect |
+|---|---|---|
+| G-4.1 | `aggregate` `sum` over `mass_g` across all specimens including the broken ones | Every unusable record is **named**, and **no combined figure** is returned for the set |
+| G-4.2 | Now scope the query to the clean records only | A figure, with its scope stated |
+
+**Fail if:** a total is returned over a set that could not be fully evaluated. A number computed
+over an unknown subset is the confidently-wrong answer this design is built to prevent.
+
+### Case G-5 — Long problem lists are clamped honestly
+
+| Step | Do this | Expect |
+|---|---|---|
+| G-5.1 | Create enough broken records that the problem list must be trimmed (a few dozen) | — |
+| G-5.2 | Run a query over them | The list is trimmed **and** carries a line saying how many there really are — "showing 20 of 47" |
+| G-5.3 | Check the "showing N of M" line is itself never dropped | It is always there when trimming happened |
+
+**Fail if:** the list is trimmed silently. "47 records were excluded, 20 named" is a different
+and more alarming verdict than "20 records were excluded", and collapsing them is exactly the
+silent truncation this design refuses to ship.
+
+### Case G-6 — Two indexes disagreeing is reported, not hidden
+
+*The properties index and the text index can be at different generations of the same note. When
+they are, the answer must say so.*
+
+| Step | Do this | Expect |
+|---|---|---|
+| G-6.1 | Edit a specimen note in a text editor while the app runs, then immediately query for it | Either the answer is up to date, **or** the record is named as being mid-re-index, with the answer marked incomplete |
+| G-6.2 | Repeat a few times in quick succession | Never a **confident, complete** answer over the old value |
+| G-6.3 | Wait, re-run | The answer settles to the new value and reports complete |
+
+*Forcing a genuine divergence by hand is not reliably possible. If you cannot get either
+outcome to appear, mark this **Blocked — could not force the condition** and say what you tried.
+Do not report a pass you could not produce.*
+
+### Case G-7 — The one honest exception: another workspace's vault
+
+*Read this before running it. There is exactly **one** case where the completeness verdict does
+not name what it excluded, and it is deliberate.*
+
+| Step | Do this | Expect |
+|---|---|---|
+| G-7.1 | Mount a vault into workspace B only | — |
+| G-7.2 | From an agent in workspace A, query it | **Zero records, and the answer says it is complete.** No permission error, no hint that anything was withheld |
+| G-7.3 | Compare with querying a genuinely empty vault | You **cannot tell them apart**. That is the requirement |
+
+**This is correct. Do not report it as a bug.** Naming what was withheld would let an agent in
+one workspace map the contents of another by watching an exclusion count move.
+
+**But it is only correct if it is written down.** Check: does the tool's own documentation, or
+its response reference, state this exception where a reader will find it? **If the exception is
+nowhere stated, that is a finding** — an unstated exception to a headline guarantee is how the
+guarantee stops being believed.
+
+---
+
+## Part H — Refusal paths
+
+*Three refusals get their own cases because each one is a place where the tempting
+implementation returns an empty result instead.*
+
+### Case H-1 — An unknown property names the valid ones
+
+Covered by F-7.1. Re-check here that the message contains **the full declared property list**,
+not just "unknown property".
+
+### Case H-2 — A build with no properties index refuses by name
+
+*Only reachable on a `linux/mipsle` build. If you have not been given one, mark **Blocked — no
+such build available**.*
+
+| Step | Do this | Expect |
+|---|---|---|
+| H-2.1 | Run a typed filter on such a build | **Refused by name**, stating the platform and saying that plain-word search and `vault_read` still work |
+| H-2.2 | Run a plain-word search on the same build | It works |
+| H-2.3 | Try to create a record type there | Refused, stating that the schema file would be written and never enforced |
+
+**Fail if:** any of these returns an empty result. "It doesn't work here" delivered as zero rows
+is indistinguishable from "there is nothing here".
+
+### Case H-3 — An ambiguous anchor refuses and names both matches
+
+| Step | Do this | Expect |
+|---|---|---|
+| H-3.1 | Create a note with the heading `## Notes` appearing **twice** | — |
+| H-3.2 | Ask `vault_edit` to `replace_body` using `## Notes` as the anchor | **Refused**, naming **both** line numbers and saying no change was made |
+| H-3.3 | Check the file | **Byte-identical** to before |
+| H-3.4 | Retry with a `line_range` instead | Succeeds |
+
+**Fail if:** the first match is silently chosen; or the file changed at all after the refusal.
+
+---
+
+## Part I — `vault_read` and `vault_edit`
+
+### Case I-1 — Reading gives you what writing needs
+
+| Step | Do this | Expect |
+|---|---|---|
+| I-1.1 | `vault_read` `Specimens/fern.md` | A version token, then typed frontmatter parsed against the schema, then the body, then links and backlinks inline |
+| I-1.2 | Immediately `vault_edit` `set_property` using that token | Accepted |
+| I-1.3 | Count the failed writes in between | **Zero.** There must be no path where an agent has to send a write it knows will fail in order to obtain a token |
+| I-1.4 | `vault_read` with `section` = a heading that exists | Just that section |
+| I-1.5 | `vault_read` with `section` = a heading that does not | Refused, **listing the headings that are present** |
+| I-1.6 | `vault_read` one of the broken fixture notes | It **still reads**. The bad value is flagged in place, per property. Reading is never blocked by a validation finding |
+| I-1.7 | `vault_read` a very long note | Truncation is stated in the header, never silent |
+
+### Case I-2 — `create` mints an identifier and touches nothing else
+
+| Step | Do this | Expect |
+|---|---|---|
+| I-2.1 | Note the modification times of the vault's files | — |
+| I-2.2 | `vault_edit` `create` a new specimen | The note is created with an `id` of the form `SP-<number>` |
+| I-2.3 | Check what changed on disk | **Exactly two files**: the new note, and `.omnipus-vault/records/.seq`. Nothing else |
+| I-2.4 | Create an ordinary note with no record type | **Exactly one** file changed |
+| I-2.5 | Create three records in a row | Three distinct identifiers, ascending |
+| I-2.6 | Delete the highest-numbered record, then create another | The new identifier is **above** the deleted one, never equal to it |
+| I-2.7 | Look at the sequence for gaps | Gaps are fine and expected. A **repeat** is a failure |
+| I-2.8 | Create a record of a type whose schema declares **no** `id_prefix` | The identifier is the counter alone. The product must **not** invent a prefix from the type name |
+
+**Fail if:** an identifier is reused after a deletion (a relation written before the deletion
+would then silently resolve to a different record), or a third file changes on a create.
+
+### Case I-3 — Writes preserve the file
+
+| Step | Do this | Expect |
+|---|---|---|
+| I-3.1 | Take a note whose frontmatter has a comment, an unusual key order, a blank line, one single-quoted value and one unquoted one | — |
+| I-3.2 | Copy the file somewhere so you can compare | — |
+| I-3.3 | `vault_edit` `set_property` on one key | Succeeds |
+| I-3.4 | Compare the file with your copy | **Every byte outside the changed value is identical**: the comment survives, key order survives, blank lines survive, quoting style of untouched values survives |
+| I-3.5 | Repeat on the body: `append_section` | Same — nothing outside the appended span moved |
+
+**Fail if:** the file has been re-serialised — comments gone, keys reordered, quotes
+normalised. A writer that degrades the vault a little on every touch is how an operator stops
+trusting it.
+
+### Case I-4 — A scalar write must not silently delete a list
+
+| Step | Do this | Expect |
+|---|---|---|
+| I-4.1 | Take a note whose `tags` spans three lines as a block list | — |
+| I-4.2 | Ask `vault_edit` to write a **single scalar value** into `tags` | **Refused**, saying the value currently spans three lines and that a scalar write would delete them, and naming "send a list value" as the fix |
+| I-4.3 | Check the file | Unchanged |
+| I-4.4 | Now send a list value | Accepted, and the existing list style (block or inline) is preserved |
+
+### Case I-5 — `set_property`, `append_section`, `link`
+
+| Step | Do this | Expect |
+|---|---|---|
+| I-5.1 | `set_property` with a scalar | Accepted |
+| I-5.2 | `set_property` with a list on a `many` property | Accepted |
+| I-5.3 | `append_section` with a heading and body | Appended at the requested level |
+| I-5.4 | `append_section` twice with `once` = true | The second call does not duplicate the section |
+| I-5.5 | `link` `Specimens/moss.md` to `[[Coastal survey]]` through the `expedition` relation | `moss.md` changes |
+| I-5.6 | Check `Expeditions/coastal-survey.md` on disk | **Unchanged.** A relation is stored once, on the source; the inverse is derived |
+| I-5.7 | `vault_read` the coastal survey note | Its `specimens` inverse now includes the moss — derived, not stored |
+
+### Case I-6 — Stale tokens are refused and audited
+
+| Step | Do this | Expect |
+|---|---|---|
+| I-6.1 | `vault_read` a note and keep its token | — |
+| I-6.2 | Change the note in a text editor | — |
+| I-6.3 | `vault_edit` using the old token | **Refused**, naming both the token you hold and the current one, and telling you to re-read and re-apply |
+| I-6.4 | Check the audit log surface in the UI (Settings → Security, or wherever audit entries surface) | The refusal is recorded |
+| I-6.5 | `vault_read` again and retry with the fresh token | Accepted |
+
+### Case I-7 — Schema violations leave the file alone
+
+| Step | Do this | Expect |
+|---|---|---|
+| I-7.1 | Any refused write from Cases C-2, C-4, C-5, C-6, C-9, I-4 | — |
+| I-7.2 | After each one, check the target file | **Byte-identical to before the call.** No partial write, no truncation, no reordered keys |
+
+**Fail if:** any refused write left a mark on the file. This is worth checking after every
+single refusal in this plan, and it is cheap.
+
+### Case I-8 — Wrong tool, right advice
+
+| Step | Do this | Expect |
+|---|---|---|
+| I-8.1 | Ask `vault_edit` to `rename` a note | Refused: renaming cascades to notes you did not name; **use `vault_restructure`** |
+| I-8.2 | Ask `vault_edit` to `create_record_type` | Refused: it changes what existing notes mean; **use `vault_configure`** |
+| I-8.3 | Ask `vault_edit` to `create` with a `template` the vault defines | Accepted, and the template's content is used |
+
+**Fail if:** a misrouted operation is silently performed by the wrong tool. The tool boundary is
+the policy boundary, and a tool that quietly does its neighbour's job destroys the boundary.
