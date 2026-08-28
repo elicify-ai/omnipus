@@ -1043,7 +1043,7 @@ annotation table that follows.
 ```
 COMPLETE: no — 3 of 17 selected records could not be evaluated; 12 of 14 shown (more: cursor c2FnZTI)
 QUERY: type=deal  words="pricing"  filter=(status is open AND arr >= 50000)  near=[[Acme Ltd]] hops=2  join=company  sort=arr desc  limit=50
-INDEX: text gen 8814, properties gen 8814 — agreed
+INDEX: 12 of 12 returned records verified fresh (source_hash matched); collection gen 8814
 
 DEAL-0117  Acme renewal FY27       status open   arr GBP 180,000.00   company [[Acme Ltd]]: status active
 DEAL-0121  Acme expansion EU       status open   arr GBP  95,000.00   company [[Acme Ltd]]: status active
@@ -1072,14 +1072,14 @@ NEXT
 |---|---|---|
 | `COMPLETE:` first | FR-121 | The verdict precedes the evidence, so no conclusion forms before the caveat arrives. |
 | `QUERY:` echo | FR-122 | Shows the query **as executed** — a clamp or default is visible without a second call. |
-| `INDEX:` generations | FR-020c | Two indexes that disagree are named here; `agreed` is an assertion, not decoration. |
-| Rows | FR-127 | ~50–80 tokens each; the row count shown is what the budget allowed, and the shortfall is in the header. |
+| `INDEX:` freshness | FR-020c | Freshness is **per returned record**, not per index (ADR-068 D16.5): each row's `source_hash` is compared against `ManifestEntry.Hash`. A record that fails moves to `PROBLEMS` and the verdict becomes `no`. The count is an assertion, not decoration — and per FR-020c1 it covers **what the query returned, not what it did not**. |
+| Rows | FR-127 | ~200–320 **bytes** each; the row count shown is what the budget allowed, and the shortfall is in the header. |
 | `company [[Acme Ltd]]: status active` | FR-124 | Borrowed, visibly. It is not a `deal` property and must never render as one. |
 | `TOTALS:` | FR-125, FR-014 | Scoped in the same sentence as the number. The USD rows are counted and excluded, not dropped. |
 | `PROBLEMS` | FR-025, FR-026, FR-123 | Each line is one record, one reason, one fix. |
 | `NEXT` | FR-126 | Four addressable calls; the loop continues without the model inventing arguments. |
 
-**`detail: minimal` renders the same query at ~20 tokens per hit** (FR-127) — header and problem
+**`detail: minimal` renders the same query at ~80 bytes per hit** (FR-127) — header and problem
 count survive the trim; columns and joins do not:
 
 ```
@@ -1111,6 +1111,12 @@ broader thing has been given a wrong answer with no error channel.
   a test asserts the order rather than the presence.
 - **AC-P3** — rendering is a **projection**: the same wire object rendered twice is
   byte-identical, and every fact in the text is present in the wire object (FR-120).
+- **AC-P4** — the response is measured in **bytes of rendered UTF-8** and the measurement in the
+  test is the same unit the implementation enforces (FR-127b). A test that counts tokens fails
+  this criterion even if it passes.
+- **AC-P5** — a `vault_configure` response renders its cascade-in-meaning counts in the same
+  block position `vault_restructure` renders its cascade-in-bytes counts: after the rows, before
+  `NEXT` (§4.1.6, AC-P2's order).
 
 ---
 
