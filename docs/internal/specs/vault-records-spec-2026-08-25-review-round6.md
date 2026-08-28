@@ -434,3 +434,178 @@ compiler.
 deliberately defeated in the query compiler"*, delete the whole final sentence and replace it with
 *"The truth table therefore runs against the comparator the product uses (AC-16.6)."* Delete the
 USD/JPY clause. Move the enum-ordering clause out of the violation list into D4's own record.
+
+---
+
+## 2. The six verification items from the brief — verdicts
+
+| # | Item | Verdict |
+|---|---|---|
+| 1 | Comparisons in Go; SQLite only narrows | **NOT CLEAN — 7 survivors, 2 CRITICAL.** See the table at the head of this review, C-3, C-4, C-5, C-6, M-5, M-7 |
+| 2 | SQL operator vocabulary, structured object, no parser | **MOSTLY CLEAN — one unimplementable requirement.** Vocabulary is consistent everywhere; R-9/R-10 restated correctly; O-3's amendment is coherent in both documents. **FR-022c cannot be satisfied without the parser O-3 forbids** — M-12 |
+| 3 | Enum ordering lexical; ordinal bookkeeping gone | **MOSTLY CLEAN — D4's title IS fixed in ADR revision 7.** Four vestiges survive: M-17, M-18, M-19, M-20 |
+| 4 | Money deleted entirely; type count stays seven | **ARITHMETIC CORRECT, INVENTORY INCOMPLETE.** −1 −1 +2 = seven verified. Two **live wire-enum members** survive §10a — C-9 |
+| 5 | Case-insensitivity is a Go-only feature | **DIAGNOSIS CORRECT, MECHANISM WRONG.** SQLite's ASCII-only fold is verified and correctly stated. `strings.ToLower` cannot deliver what is claimed — **C-1**. FR-011's enum treatment is resolved (M-17 is a vestige, not a contradiction) |
+| 6 | No hardcoded domain vocabulary | **NOT ACHIEVED.** The test cannot pass (C-10); four normative tables carry no marker and one declares CRM strings as contract (M-16); `person` is simultaneously illustration and shipped type (M-14); both documents' own counts are wrong by ~10× (M-15) |
+
+---
+
+## 3. MAJOR findings
+
+### Item 1 — remaining SQL-side leftovers
+
+**M-5 — R-8 still mandates a `BINARY` SQLite column and its only test was deleted.**
+R-8 (`:1782`): the identifier side *"is matched **exactly, on a `BINARY` column**"*. Under R-A,
+relation identity is compared by the Go comparator, where "exactly" is a byte comparison and no
+collation exists. Meanwhile AC-8.8 — *"a `BINARY`-collation assertion over emitted DDL"* — was
+**deleted** (`:2013`) as having SQL-side comparison as its only subject. So the rule survives and its
+enforcement does not, and the mechanism it names belongs to the layer that no longer decides.
+**Fix:** restate R-8 as *"the identifier side is compared byte-exactly by the comparator; no folding
+is applied"*, and if a `BINARY` collation is still wanted on the narrowing column, say that
+separately as a storage note with its own assertion.
+
+**M-6 — `§8.1`'s R-8 row does not exist, and five places cite it as authority.**
+§8.1's rewritten table (`:1845-1854`) has rows for R-1, R-2/R-3, R-5, R-7, R-9/R-10, R-11, R-12 and
+join fan-out. **There is no R-8 row.** ADR-068 D16.6's table has none either. Cited as though it
+does: the header table (`:50`, `:52`), §3's behavioural contract (`:499` — *"see §8.1's R-8 row for
+why that one column is different"*), the constraint table (`:579`), and FR-011a (`:644`). A reader
+sent to find the reasoning finds nothing. **Fix:** either add the R-8 row or move its content into
+FR-011a and repoint all five references.
+
+**M-7 — Sorting is never assigned to Go or to SQL, and four artifacts assume SQL.**
+FR-021 (`:787`) enumerates *"what moves back to Go: every operator …, every grouping, every
+aggregate, and the `many`-arity fan-out"* — **sorting is absent from the list**. Four places then
+assume SQLite does it: FR-021b's *"at `ORDER BY` time"*, FR-066b's `GROUP BY` result set, SC-007's
+SQLite `GROUP BY`/`ORDER BY` temp-b-tree budget, and R-5 / FR-010 / §4.1.2's *"SQLite's own
+ordering"*. `sort` is a first-class `vault_find` parameter and ordering **is** comparison — it is
+governed by R-1, R-4, R-5, R-7 and R-13. **Fix:** add sorting to FR-021's list explicitly, restate
+R-5 and FR-010 as *"lexical byte order over the value string — the same order SQLite's `BINARY`
+collation produces, computed in Go"*, delete the `ORDER BY` phrasing from FR-021b, and remove the
+SQLite `GROUP BY`/`ORDER BY` temp-b-tree line from SC-007's budget or explain what still produces one.
+
+**M-8 — Case-INSENSITIVE matching plus case-SENSITIVE ordering is unresolved.**
+Matching folds case (FR-011a); ordering is *"lexical"* (R-5) with no case rule stated. Byte-lexical
+order puts every capitalised value before every lowercase one — `Won` sorts before `lost` (`W`=0x57
+< `l`=0x6C) — so a corpus that FR-011 deliberately allows to hold `Won`, `won` and `WON` as one
+value renders them in three separate places in a sorted result, while `group_by` collapses them into
+one group. Nothing in the document says which. **Fix:** state that ordering uses the **folded** form
+as its key with the file's spelling rendered (mirroring FR-011's render-what-the-file-says rule), and
+add a DS-1 row.
+
+**M-9 — AC-8.1 still requires both provenances, a distinction the design deleted.**
+AC-8.1 (`:1792`): *"every cell is generated in **both provenances** — literal-vs-literal and
+column-vs-literal — because R-12's row shows the two disagree."* §8.1's deletion table (`:1826`):
+*"R-12's literal-vs-column affinity asymmetry — **N/A** — there is one comparison path and one
+provenance."* ADR D16.6 agrees: *"One comparator means one provenance."* AC-8.1 therefore **doubles
+the size of the generated truth table** to exercise a distinction that cannot exist. This is the
+brief's *"an AC written for a defeat that no longer exists"*. **Fix:** delete the both-provenances
+clause; keep the seven-type axis and the `many`-arity axis, both of which are live.
+
+**M-10 — R-12's rule text still claims it "has its own defeat".**
+R-12 (`:1786`): *"**This rule is itself violated by SQLite and now has its own defeat (§8.1, R-12
+row)**."* §8.1's R-12 row is a *reason*, not a defeat, and the deletion table marks R-12 N/A.
+**Fix:** restate as *"SQLite violates this rule; it is unreachable because there is one comparison
+path — §8.1, R-12 row."*
+
+**M-11 — AC-8.4b's six mutations cover six of the twelve live rules, and SC-024 asserts they suffice.**
+The six (`:1994-1997`) mutate R-2, R-4, R-11, R-10's fold, `LIKE`'s wildcards and the aggregate
+de-duplication. **Nothing mutates R-1 (different declared types), R-5 (enum resolution and
+ordering), R-7 (dates), R-8 (relation identity), R-9 (element-wise `many` matching), R-12 or R-13.**
+A comparator that gets any of those seven wrong passes all six mutations, and SC-024 (`:1501`) states
+the criterion as *"**each** of AC-8.4b's six named mutations makes it fail"* — six of twelve is the
+same "insufficient defeats" shape pass 1 found, reincarnated as insufficient mutations. **Fix:** one
+mutation per live rule, twelve in total, each naming the cell it must kill; renumber SC-024 and W2's
+exit criterion to twelve.
+
+### Item 2 — the operator vocabulary
+
+The vocabulary change is done well. `=`/`<>`/`<`/`<=`/`>`/`>=`/`LIKE`/`IN`/`IS NULL`/`IS NOT NULL`
+is used consistently in FR-022b, §4.1.2's filter table and refusal table, R-9, R-10, R-13, DS-4,
+SC-002c, §7 test 52, §4.2's worked example and §10a's replacement note. The old vocabulary survives
+only inside explicit *"previously"* clauses. O-3's amendment is recorded in ADR-068 (`:2670`) in the
+terms the spec claims, and both halves of its resolution (structured JSON, no parser) are restated.
+The `contains`-becomes-`LIKE` argument — one operator with two behaviours, caller chooses — is sound
+and `LIKE`'s wildcard-free-means-exact semantics are correctly described. One requirement does not work:
+
+**M-12 — FR-022c cannot be satisfied without the parser O-3 forbids, and its likely implementation commits the failure it prohibits.**
+FR-022c (`:807`) requires that `JOIN`, **a subquery**, `COALESCE`, `CASE`, `BETWEEN`, `EXISTS`,
+`GROUP_CONCAT` and *"a function call"* each be **refused naming the supported set** — *"never a
+parse error, never a silent empty result, and never a partial evaluation"*. SC-002c and §7 test 52
+assert it.
+
+But the filter is a structured object of `{property, op, value}` with `op` drawn from a closed
+ten-member enum. `BETWEEN` and `JOIN` arrive as an unknown `op` and are refusable by name — those two
+work. **A subquery, `COALESCE`, `CASE` and a function call have nowhere to arrive.** A model reaching
+for them puts them in `value` (`{"property":"arr","op":">","value":"(SELECT max(arr) FROM deals)"}`)
+or in `property`. Then:
+
+- if `property`, FR-024 refuses it as an unknown property — acceptable, though the message names the
+  wrong problem;
+- if `value`, the comparator treats it as a text literal, R-1 makes the comparison `false` against a
+  numeric property, and the query returns **zero records** — **the silent empty result FR-022c
+  explicitly forbids**, produced by the requirement's own default path.
+
+Detecting SQL inside a value string requires recognising SQL, which is the parser ADR-068 O-3 forbids
+and which FR-022 and FR-022b both reaffirm.
+
+**Fix:** scope FR-022c to what the structure can express — **an `op` outside the ten-member enum, and
+a parameter name the schema does not declare** — and say plainly that a SQL fragment smuggled inside
+a `value` is treated as a text literal, which for a typed property makes the comparison `false` under
+R-1 and **puts the record in `PROBLEMS` under R-4 with the value named**. That is a real, reachable,
+non-silent answer and it needs no parser. Then delete "a subquery" and "a function call" from
+FR-022c's list, from SC-002c and from test 52, or restate them as `op`-position cases.
+
+**M-13 — `IS NULL` / `IS NOT NULL` and `IN` have no wire shape.**
+The filter leaf is `{property, op, value}`. `IS NULL` and `IS NOT NULL` take no value; `IN` takes a
+list. Nothing says whether `value` is omitted, `null`, or an empty string for the first pair, and
+`null` is indistinguishable from "the caller sent JSON null" — which matters for a system whose
+central distinction is absence. FR-090 lists `RecordQueryRequest` as a contract type but no schema is
+sketched. **Fix:** state that `value` MUST be **absent** for `IS NULL`/`IS NOT NULL` and that a
+present `value` is refused naming the operator; state that `IN` requires a non-empty array and that
+an empty array is refused (it matches nothing and is the `LIKE ''` failure in another costume,
+FR-022a's sibling case).
+
+**M-14 — `LIKE`'s anchoring, escaping and fold interaction are unspecified.**
+FR-022b says `%`/`_` are wildcards with `\` escaping and that matching is case-insensitive. It does
+not say the match is **whole-value** (SQL's `LIKE` is anchored: `'vendors' LIKE 'vendor'` is
+**false**), which is the single most likely implementation divergence given R-9's phrasing
+*"`LIKE` matches an element **by pattern**"*. Nor does it say how the fold composes with the pattern —
+folding the pattern folds the escape character's operand and can change what `_` matches for
+multi-byte runes. **Fix:** state anchoring explicitly with the `'vendors' LIKE 'vendor'` → false
+example in DS-4, and specify that folding is applied to literal segments of the pattern and to the
+subject, never to the metacharacters.
+
+### Item 3 — enum ordering
+
+**ADR-068 D4's title IS corrected in revision 7** — it now reads *"Enums are closed. Ordering is
+SQLite's, and a domain order is a value prefix."* The spec's claim that it "is corrected in ADR
+revision 7" is accurate. The ordinal column, its `NULLS LAST` requirement, the rebuild obligation and
+§4.1.6's refusal string are all deleted, and §10a schedules the two guard test files. Four vestiges:
+
+**M-15 — FR-011 still says the resolved value "supplies the ordinal".**
+FR-011 (`:641`): *"the value it resolves to supplies the **ordinal** (FR-010, R-5), so ordering is
+unaffected by spelling."* FR-010, twelve lines above, deletes the ordinal. **Fix:** *"the value it
+resolves to supplies the **sort key**"*.
+
+**M-16 — the edge-case table still says `Won` "sorts by `won`'s ordinal".**
+`:476`. Same fix.
+
+**M-17 — §4.1.1's response still returns "enum values in declared order".**
+`:1030`. §4.1.2's refusal table (`:1117`) explicitly records the opposite: *"revision 5: 'in order'
+is dropped — R-E makes ordering lexical, so the list is simply the declared set"*. Two normative
+descriptions of the same response field. **Fix:** *"enum values, as declared"* — and say that the set
+is unordered, so a reader does not infer a sort order from the response's own sequence.
+
+**M-18 — §7 test 2 `TestEnum_OrderedAndClosed` survives alongside test 56 with the deleted semantics in its name.**
+Test 2 (`:1587`) traces FR-010 and FR-011; test 56 (`:1641`)
+`TestEnum_OrdersLexicallyAndResolvesCaseInsensitively` traces FR-010, FR-011 and R-5. §6's
+traceability row names **only** test 56. Test 2 is a duplicate whose name asserts the withdrawn
+requirement, and it is the kind of test that gets written to its name. **Fix:** delete test 2, as
+tests 36 and 39 were deleted, with the same annotation.
+
+**M-19 — §10a's R-E row is the only disposition with no symbols.**
+Every other row in §10a is line-precise. The R-E row (`:2150`) reads *"**Whatever** holds declared
+position in `pkg/records/schema.go` and [two test files] is dead"*. The symbols exist and are
+findable — the schema-side position fields, the enum-ordering comparison branch in
+`compare_oracle.go`, and the enum-order sort helper — and the section's whole purpose is that the
+deletion be a scheduled task rather than a discovery. **Fix:** enumerate them as the money row does.
