@@ -475,8 +475,12 @@ as "no progress has arrived" for a fully indexed collection.
 ## 3. Behavioural contract
 
 - When a query cannot include a record, the system **names that record and the reason**.
-- When a total spans multiple currencies, the system **returns no total** and lists the
-  currencies.
+- When a numeric value exceeds its declared type's bound — an `integer` outside int64, a `decimal`
+  above 100 places — the system **refuses and names the bound**. It never truncates, rounds or
+  saturates. *(Replaces the cross-currency bullet, deleted with `money` — FR-014.)*
+- When text, an enum value or a relation **path** is matched, the match is **case-insensitive**
+  (operator ruling, revision 5). Record **identifiers** are matched exactly — see §8.1's R-8 row for
+  why that one column is different.
 - When a filter names an unknown property or enum value, the system **rejects the query** and
   lists the valid names.
 - When a bound is exceeded, the system **refuses** and states which bound and how to narrow.
@@ -505,10 +509,16 @@ as "no progress has arrived" for a fully indexed collection.
 - The system must **not** write derived values into frontmatter, because a reader cannot then
   distinguish a stale derived value from a fact.
 - The system must **not** auto-create an enum value on write, because that is how one column
-  comes to hold `Won`, `won` and `Closed Won`.
+  comes to hold `Won`, `won` and `Closed Won`. **Case-folding is the opposite of that and is
+  required (revision 5):** resolving `Won` **to** the declared `won` collapses two spellings into
+  one value; auto-creating `Closed Won` invents a second. D4 forbids the second, not the first.
 - The system must **not** re-serialise a file it was asked to make one edit to.
-- The system must **not** convert between currencies, because no rate source is in scope
-  (ADR-068 O-2).
+- The system must **not** silently widen an `integer` to a `decimal`, or round a `decimal` to fit a
+  bound. Either is a change to a number nobody asked for (FR-012, FR-013). *(Replaces "must not
+  convert between currencies", deleted with `money`.)*
+- The system must **not** use `CAST(? AS INTEGER)` to admit a numeric string on the SQL side: it
+  **saturates silently at int64 max** rather than erroring — verified, §8.1a. Range checking is
+  Go-side, before emission.
 - The system must **not** implement a text query language or parser (ADR-068 O-3).
 - The system must **not** read `.base` files at query time — the importer is one-shot
   (ADR-068 O-1).
@@ -525,24 +535,36 @@ as "no progress has arrived" for a fully indexed collection.
   (FR-019).
 - The system must **not** register the `.base` importer as an agent tool (FR-103).
 - The system must **not** let a policy default read as a prohibition (FR-019a).
-- The system must **not** use `LIKE` in the compiled filter path, because it is case-insensitive
-  for ASCII and would silently change R-10 (AC-8.7).
+- ~~The system must **not** use `LIKE` in the compiled filter path, because it is case-insensitive
+  for ASCII and would silently change R-10 (AC-8.7).~~ **DELETED, revision 5 (operator ruling 3).**
+  Case-insensitive matching is the desired behaviour, so the property `LIKE` was banned for is no
+  longer a defect. `LIKE` is permitted. **AC-8.7 and §7 test 39 (`TestFilter_NoLikeInCompiledPath`)
+  are deleted with it, not reworded.** The compiler still does not *use* `LIKE` — §8.1 picks
+  `instr()` over a folded column instead, for a reason that has nothing to do with case (`LIKE`
+  needs `%`/`_` escaping on caller-supplied text, and an unescaped `%` in a needle is a wildcard
+  nobody asked for) — but that is an implementation preference, not a prohibition, and **no test
+  asserts the absence of `LIKE`.**
+- The system must **not** claim its case-insensitive matching is Unicode-aware. It is **ASCII-only**
+  wherever it rests on SQLite (`COLLATE NOCASE`, `LIKE`, `lower()`), verified over fourteen
+  non-ASCII pairs in §8.1a; Unicode folding requires the Go-side fold column FR-011a specifies.
 
 ### Machine-verifiable constraints
 
 | Constraint | Value |
 |---|---|
 | Results per page | default 50, max 200; a clamp is reported in the response |
-| Candidate set materialised | 10,000 records; beyond this the query is **refused** |
+| Candidate set materialised | 10,000 records; beyond this a **row-returning** query is refused (FR-064). **An aggregate-only query is exempt** and is bounded separately at the supported-vault size (FR-064a) |
 | Relation hops | 2; a third is refused |
-| Record layer availability | every SQLite-capable build. `linux/mipsle` is the one shipped binary without it, and it **refuses by name** (FR-020h) |
-| Supported records per vault | 50,000 records. **Note:** the index counts segments, not records, so this is an unknown larger document count; the segment ratio MUST be measured at W2 and recorded here |
+| Record layer availability | every SQLite-capable build. `linux/mipsle` is the one shipped **target** without it — **two binaries**, `omnipus-linux-mipsle` and `omnipus-lite-linux-mipsle` — and both **refuse by name** (FR-020h). *(Revision 5, m-3: "one shipped binary" was one target and two binaries.)* |
+| Supported records per vault | 50,000 records — **and this is now reconciled with the candidate cap rather than left to collide with it (C-14).** 50,000 is the population the vault may hold; 10,000 is the population a **row-returning** query may materialise. They were set for different reasons and never checked against each other, which made ADR-068 §1.2's own motivating question — a pipeline total over more deals than the cap — unanswerable by construction. FR-064a resolves it with an aggregate-only path that returns no rows. **Note:** the index counts segments, not records, so this is an unknown larger document count; the segment ratio MUST be measured at W2 and recorded here |
 | Peak RSS | ADR-067's < 64 MB steady state is inherited as a **TARGET, not a property** — it was measured for bleve alone, and SQLite's page cache, `GROUP BY`/`ORDER BY` temp b-trees and connection state are unmeasured (ADR-068 D16.4 item 4). W1 measures both indexes, idle and at the cap, on Linux **and** macOS. **No record-specific latency target is stated** |
 | Rate limit | **new work for the write path** — `checkRetrievalRate` covers reads only (§1); 429 carries `Retry-After` (FR-067) |
-| Money arithmetic | exact decimal, integer minor units; no binary floating point anywhere in the path |
+| Numeric arithmetic | **REPLACES "Money arithmetic", revision 5.** `integer` is int64, bound-checked in Go and refused outside it (FR-012). `decimal` is exact and arbitrary-precision over `math/big`, declared scale bounded at **100** (`pkg/records/decimal.go:48`), refused above it and never rounded (FR-013). **No binary floating point anywhere in the parse, storage, comparison, ordering or aggregation path** — asserted by `pkg/records/decimal_no_float_test.go` |
+| Case sensitivity | **matching is case-INSENSITIVE** for text, enum values and relation paths (operator ruling). **ASCII-only where it rests on SQLite**; Unicode requires the Go-side fold column (FR-011a). Record identifiers are matched **exactly**, on a `BINARY` column (§8.1, R-8) |
+| SQLite engine | `modernc.org/sqlite v1.46.1` (`go.mod:64`), which reports `sqlite_version()` = **3.51.2** — verified through the driver, not assumed. A test asserts the linked version (FR-020i), because affinity and collation behaviour is version-sensitive |
 | Agent tool count | exactly **6** `vault_*` names; **0** `knowledge_*` names; catalog **98 → 95** |
-| Tool description budget | ~150 tokens each (~**900** total across six, permanent per-turn cost) |
-| Response budget | **BYTES, not tokens**: ~200–320 bytes/hit, ~4,000 default, **16,000 hard cap**; `minimal` ~80 bytes/hit |
+| Tool description budget | ~150 tokens each. **This is a budget for the description PROSE only and it is not the tool surface's standing cost** — see FR-079 and FR-128, corrected in revision 5: the whole JSON parameter schema, every parameter description included, is sent on every request (`pkg/tools/registry.go:557-560`), so the ~900-token figure was computed against the wrong denominator |
+| Response budget | **BYTES, not tokens**: ~200–320 bytes/hit, ~4,000 default, **16,000 hard cap**; `minimal` ~80 bytes/hit. **The cap is allocated, not first-come** — mandatory header and `NEXT` are reserved first, then problems to their own clamp, then rows (FR-127c). Scoped to `vault_find`, `vault_describe` and `vault_configure`; `vault_read` has its own budget (FR-072a) |
 | Index freshness | **per note**: the properties row's `source_hash` versus `ManifestEntry.Hash`; a mismatch, a missing entry or an empty hash forces `complete: false` for that record |
 | Scoring model | BM25, set explicitly. TF-IDF is the library default and is a defect (FR-110) |
 | Embeddings | none, permanently (FR-117) |
