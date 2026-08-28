@@ -249,14 +249,14 @@ var sqlConstructRemedy = map[string]string{
 
 	"BETWEEN": "write two leaves: one `>=` and one `<=`",
 
-	"SELECT":    "the filter is a structured object, not a query string; give `property`, `op` and `value`",
-	"WITH":      "the filter is a structured object, not a query string; give `property`, `op` and `value`",
-	"EXISTS":    "test a property directly with `IS NOT NULL`, or follow the relation with `join`",
+	"SELECT":     "the filter is a structured object, not a query string; give `property`, `op` and `value`",
+	"WITH":       "the filter is a structured object, not a query string; give `property`, `op` and `value`",
+	"EXISTS":     "test a property directly with `IS NOT NULL`, or follow the relation with `join`",
 	"NOT EXISTS": "test a property directly with `IS NULL`, or follow the relation with `join`",
-	"UNION":     "run the queries separately, or express the alternatives as `any`",
-	"INTERSECT": "express the conditions as `all`",
-	"EXCEPT":    "express the exclusion as `not`",
-	"DISTINCT":  "results are already one row per record",
+	"UNION":      "run the queries separately, or express the alternatives as `any`",
+	"INTERSECT":  "express the conditions as `all`",
+	"EXCEPT":     "express the exclusion as `not`",
+	"DISTINCT":   "results are already one row per record",
 
 	"COALESCE": "absence is first-class here: use `IS NULL` or `IS NOT NULL`",
 	"IFNULL":   "absence is first-class here: use `IS NULL` or `IS NOT NULL`",
