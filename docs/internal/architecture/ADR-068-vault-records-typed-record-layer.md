@@ -1,6 +1,6 @@
 # ADR-068 — Vault records: a typed record layer with relations
 
-- **Status:** Proposed (2026-08-28) — **revision 6**, after a fifth adversarial review (BLOCK: 8 critical, 25 major, 3 minor — `ADR-068-vault-records-typed-record-layer-review-round5.md`). Revision 5's own headline numbers were wrong: the catalog is **98 tools, not 102**, and the two-index staleness mitigation named a **freshness token that does not exist**. Both are repaired below, the second by specifying the mechanism rather than asserting it again. The agent tool surface grows from five `vault_*` tools to **six** — the control plane gets its own policy lever (D15.6). D16's latency argument is **withdrawn as unevidenced**; the capability argument, which is the one that survives, now carries the decision alone.
+- **Status:** Proposed (2026-08-28) — **revision 6**, after a fifth adversarial review (BLOCK: 8 critical, 25 major, 3 minor — `ADR-068-vault-records-typed-record-layer-review-round5.md`). Revision 5's own headline numbers were wrong: the catalog is **98 tools, not 102**, and the two-index staleness mitigation named a **freshness token that does not exist**. Both are repaired below, the second by specifying the mechanism rather than asserting it again. The agent tool surface grows from five `vault_*` tools to **six** — the control plane gets its own policy lever (D15.6). D16's latency argument is **withdrawn as unevidenced**; the capability argument, which is the one that survives, now carries the decision alone. And **D16.6 is new**: SQLite's default semantics contradict **nine of the thirteen** comparison rules the spec's §8 oracle defines, eight of them silently — the strongest single consideration bearing on D16, which revision 5 omitted entirely while the implementing spec carried it.
   - *Revision 5:* three-agent design council; D16 resolved to a two-index design; nine `record_*` tools cut to five `vault_*`; D21, D22, D23 added.
   - *Revision 4 and earlier:* proposed 2026-08-25 after three adversarial reviews (BLOCK each time: 7, 8, then 10 critical). Revision 1 made three false claims about existing code (D14, D16, D18); all three are corrected in place and the corrections are marked. D16 had been wrong three times and was deliberately left unresolved behind a measured spike.
 - **Verification standard (revision 5's, restated because revision 5 breached it):** every claim about our own code below cites `file:symbol` or `file:line` and was read at revision time. Revision 5 declared this standard and then broke it twice, in its two load-bearing decisions. **The rule for revision 6 is narrower and harder: a mechanism this ADR relies on either exists and is cited, or is specified as NEW WORK with what it costs — never named as though it already worked.** The freshness token (D16.4) is the test case: it is now specified against the per-file hash the manifest already stores, with the part that must be built named as such.
@@ -2252,6 +2252,11 @@ its own ADR rather than an implementation note.
   > them is real code with real correctness risk. What genuinely disappears is the **general
   > `func(any, any) bool` comparator overload** — the specific thing that made `3 > 2` evaluate
   > false. That is the claim, and it is smaller and true.
+  >
+  > **D16.6 narrows it once more, and further.** Beyond the four non-native semantics, SQLite's
+  > defaults **actively contradict** nine of the thirteen comparison rules. The comparator
+  > overload genuinely disappears; the semantics it was carrying do not — they move into the
+  > query compiler, where the same wrong answers are reachable by a different route.
 
 ### 4.2 Cost
 
