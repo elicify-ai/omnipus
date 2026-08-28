@@ -6,7 +6,7 @@ Omnipus connects to a personal WeChat account using the Tencent iLink REST API v
 
 ## Quick Setup
 
-Open **Channels → Weixin → Configure** in the web UI (`omnipus start`, then visit
+Open **Connectors → Weixin → Configure** in the web UI (`omnipus start`, then visit
 `http://localhost:5000`). A QR code appears in the Configure panel — scan it with the
 WeChat mobile app. On approval the token is saved to the encrypted credential store and
 the channel config is written to `~/.omnipus/config.json` automatically.
@@ -46,7 +46,7 @@ channel.
 
 ## Notes
 
-**Session binding.** The iLink token is bound to a single session. A new QR login on another device will invalidate the existing token. To refresh, open **Channels → Weixin → Configure** in the web UI and complete the QR flow again.
+**Session binding.** The iLink token is bound to a single session. A new QR login on another device will invalidate the existing token. To refresh, open **Connectors → Weixin → Configure** in the web UI and complete the QR flow again.
 
 **Long-poll loop.** The channel uses a `getUpdates`-style long poll (35-second server timeout). On consecutive failures it backs off for 30 seconds. Persisted `get_updates_buf` and context tokens survive gateway restarts (stored under `~/.omnipus/`).
 

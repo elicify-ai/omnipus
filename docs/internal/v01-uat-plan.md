@@ -286,7 +286,7 @@ Fill in the Results Matrix (section 9) as you run each scenario. Use:
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
-| 1 | Navigate to the Connections or Channels screen (sidebar or Settings → Connections/Connectors). | A Connectors UI is displayed showing available channel types. |
+| 1 | Navigate to the **Connectors** screen (sidebar → **Connectors**, i.e. `/#/connectors`; the screen was renamed from "Channels" in `1b95ced6` and `/#/channels` now 404s). | A Connectors UI is displayed showing available channel types. |
 | 2 | Observe the list of channel types. | Channel types include at minimum: Telegram, Slack, Discord, WhatsApp (native), and Email. No "Max" channel type appears. |
 
 **Pass/Fail:** ______
