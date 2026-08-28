@@ -120,8 +120,8 @@ confirm validation accepts one and names the fault in the other.
 
 ### US-2 — Ask a question and get a trustworthy answer (P0)
 
-An agent filters and groups records and receives, in one response, both the records and an
-account of anything the query could not include. It cannot receive a total without also
+An agent filters and groups records with `vault_find` and receives, in one response, both the
+records and an account of anything the query could not include. It cannot receive a total without also
 receiving the caveats attached to it.
 
 **Why P0:** this is the requirement the whole ADR exists to serve.
@@ -213,11 +213,14 @@ remember to update.
 4. **Given** a mention inside an embed, a quote, or a code block, **When** history is
    requested, **Then** it does not count.
 
-### US-7 — Bring existing base files across (P2)
+### US-7 — Bring existing base files across (P2) — operator/CLI, not an agent tool
 
-A one-shot importer translates what it recognises and names what it does not.
+A one-shot importer translates what it recognises and names what it does not. **An operator runs
+it and reads the report**; it is not an agent tool (FR-100, FR-103).
 
-**Why P2:** valuable, but nothing else depends on it.
+**Why P2:** valuable, but nothing else depends on it. And mount-in-place already covers the
+common case with no import code at all — `.obsidian/` is detected and never written
+(`pkg/knowledge/detect.go:100`), so pointing Omnipus at an existing Obsidian vault works today.
 
 1. **Given** a `.base` file using only supported filters, **When** it is imported, **Then** an
    equivalent native view is produced.
@@ -236,6 +239,82 @@ A one-shot importer translates what it recognises and names what it does not.
 2. **Given** the same, **When** the agent inspects the response, **Then** it cannot distinguish
    the scoping from the vault being empty.
 
+### US-9 — Read a note through the front door (P0)
+
+An agent that has found a note can read it, and can obtain the version token a write requires,
+without leaving the audited tool boundary and without sending a write it expects to fail.
+
+**Why P0:** it is the gap that forces every other tool's guarantees to be abandoned mid-task. An
+agent that drops to `read_file` to read a note is outside the scope check, outside the audit
+trail, and outside the typed view of frontmatter.
+
+**Independent test:** find a note, read it, edit it — with zero failed writes in between.
+
+1. **Given** a note found by `vault_find`, **When** it is read, **Then** the response carries a
+   version token an immediately following `vault_edit` accepts.
+2. **Given** a note with a heading, **When** one section is requested, **Then** only that section
+   is returned and the token still covers the whole file.
+3. **Given** a note whose frontmatter violates its schema, **When** it is read, **Then** it reads
+   successfully and the violation is named per property.
+
+### US-10 — A search that ranks properly and admits what it cannot find (P0)
+
+**Why P0:** a wrong answer costs more than no answer, and today a search over frontmatter
+returns the note and reports complete while having no representation of the field at all.
+
+1. **Given** a corpus, **When** a query runs, **Then** ranking uses BM25 over weighted fields,
+   not TF-IDF over one flattened body.
+2. **Given** a query with no matches, **When** it runs, **Then** the nearest indexed terms are
+   reported and the query is **not** silently broadened.
+3. **Given** a note with `status: prospect` in frontmatter, **When** a field query on `status`
+   runs, **Then** it is expressible at all — which it is not today.
+4. **Given** the same filter run under two ranking configurations, **When** both run, **Then**
+   the same set of records matches; only the order differs.
+
+### US-11 — A response the model can act on (P0)
+
+**Why P0:** result delivery moved accuracy 93.1% → 55.2% in the cited study — the same
+magnitude as replacing the retriever. Rendering is mechanism.
+
+1. **Given** a partial answer, **When** it is rendered, **Then** the incompleteness is on the
+   **first** line, not below the rows.
+2. **Given** an excluded record, **When** it is reported, **Then** the fix is in the same line as
+   the exclusion.
+3. **Given** a joined value, **When** it is rendered, **Then** it is visibly borrowed and not
+   merged into the row's own columns.
+4. **Given** any response, **When** it ends, **Then** it ends in at least one call the caller can
+   make next, with arguments filled in.
+
+### US-12 — An agent manages the vault's own schema (P1)
+
+An agent with write-enabled tools creates a record type, edits a saved view, and changes an
+existing type — governed by ordinary tool policy, with no bespoke approval flow.
+
+**Why P1:** the mechanism must be complete enough that a vault's conventions can be expressed
+without asking us to change code (ADR-068 D0).
+
+1. **Given** an agent with `vault_edit`, **When** it creates a new record type, **Then** it
+   succeeds and no existing note changes meaning.
+2. **Given** the same agent **without** `vault_restructure`, **When** it changes an existing
+   record type, **Then** it is refused, naming the tool that would allow it.
+3. **Given** an operator who sets `vault_restructure: allow`, **When** an agent changes a type,
+   **Then** it succeeds — a conservative default is not a prohibition.
+4. **Given** any of these, **When** the agent tries to mount a folder, **Then** the only path is
+   `request_mount`, unchanged.
+
+### US-13 — Index state a late arrival can still see (P1)
+
+A human who opens the collection panel **after** indexing finished sees the same truth as one who
+was watching while it ran.
+
+**Why P1:** for any fast index this is the normal case, not the edge case, and today it renders
+as "no progress has arrived" for a fully indexed collection.
+
+1. **Given** an index that completed before the panel was opened, **When** the panel mounts,
+   **Then** it renders the completed state, not an empty one.
+2. **Given** the same collection, **When** an agent queries it, **Then** the freshness the
+   response header reports and the state the panel shows agree.
+
 ### Edge cases
 
 | Condition | Expected |
@@ -246,7 +325,11 @@ A one-shot importer translates what it recognises and names what it does not.
 | Relation to a record in another workspace's vault | invisible; treated as dangling within scope |
 | Money property with amount but no currency | rejected at write |
 | Vault is not a git repository | schemas still work; no version history is claimed |
-| Windows, two processes allocating IDs | collision possible (flock is a no-op); healed by reconcile, reported by validation |
+| Windows, two processes allocating IDs | collision possible (`fileutil.WithFlock` is a documented no-op — `pkg/fileutil/flock_windows.go`). **NOT healed by reconcile** — reconcile heals a lost counter, it cannot un-write two records that already share an identifier. Detected and reported by `vault_describe check_integrity`, which names both files and refuses to choose. Accepted, inherited from ADR-054 §5, not introduced here |
+| Two indexes at different generations | the answer is reported **incomplete**, naming staleness (FR-020c) — never rendered as a complete answer |
+| A `many` property compared with `=` | refused, naming `contains` (R-13) — never silently treated as membership |
+| An anchor matching twice in a body-replace | refused, both line numbers named, file unmodified (FR-047) |
+| A trashed note with inbound links | trashed anyway; the links are **not** repaired and the count is reported (FR-048) |
 
 ---
 
