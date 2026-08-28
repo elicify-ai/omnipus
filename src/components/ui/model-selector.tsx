@@ -228,6 +228,28 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
   // ModelSelectors are mounted on the same page.
   const descriptionId = React.useId()
 
+  // Catalogue-unreachable escape hatch (dead-end fix). A CONSTRAINED picker
+  // (constrainToCatalog) intentionally cannot hold a non-catalogue value —
+  // that rule is sound when the catalogue loaded and simply doesn't contain
+  // the model. It stops being sound the moment the catalogue itself cannot
+  // be produced at all (the `catalogStatus === 'error'` and the
+  // connected-but-empty branches below): the operator is then blocked from
+  // creating or editing ANY agent, forever, through no typo of their own —
+  // e.g. Ollama configured with no local server running, where the /providers
+  // call succeeds but that row's live model list comes back empty with a
+  // `warning`. Retry (already wired via `onRetryCatalog`) is the first line
+  // of recovery and costs nothing since it doesn't touch the "no free text"
+  // rule at all. `manualOverride` is the deliberate, explicit fallback for
+  // when retry keeps failing (a genuinely down local server won't start
+  // itself): it lets the operator type the exact slug they know is correct,
+  // clearly marked "unresolved" everywhere that value is shown afterward —
+  // the SAME unresolved-chip machinery every unconstrained picker in the
+  // product already uses for a free-text value, not a new, silent
+  // free-for-all. It is reachable ONLY from the two states where the
+  // catalogue could not be produced; a picker whose catalogue loaded fine
+  // still refuses free text exactly as before.
+  const [manualOverride, setManualOverride] = React.useState(false)
+
   // ---------------------------------------------------------------------
   // ADR-068 FR-030 / FR-019 — catalog mode.
   //
@@ -444,6 +466,21 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
   // same non-interactive, click-swallowing element the loading branch was
   // just fixed to stop rendering. Empty-because-loading is not
   // empty-because-there-is-nothing.
+  //
+  // Retry: a provider can report `status: "connected"` (credentials
+  // resolvable) while its live models fetch itself failed (e.g. Ollama
+  // configured with no local server reachable) — the backend represents
+  // that as `models: []` plus a `warning`, NOT as `catalogStatus === 'error'`
+  // (Provider.yaml: "Empty array when the upstream fetch fails ..."). Before
+  // this fix that state was a dead end: the hint explained WHY but gave the
+  // operator no way to try again short of closing the wizard and reopening
+  // it, and the "Missing: Model" gate on Next never lifted. `onRetryCatalog`
+  // re-runs the SAME providers fetch the "error" state's Retry button uses
+  // (`onRetryProviders` → `providersQuery.refetch()`), so a fix made out of
+  // band (starting the local server, correcting the endpoint) becomes
+  // visible without leaving this screen. This does not reopen the no-free-
+  // text rule: retrying can only ever populate the catalogue with real
+  // entries, never make an arbitrary slug selectable.
   if (catalogEmpty && constrainToCatalog && !allowFreeTextWhenEmpty && catalogStatus !== 'loading') {
     const isGhost = variant === 'ghost'
     return (
@@ -452,8 +489,8 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
         aria-disabled="true"
         className={
           isGhost
-            ? 'flex items-center h-7 rounded-md px-1.5 text-xs cursor-not-allowed opacity-70'
-            : 'flex w-full items-center justify-between h-10 rounded-md border px-3 py-2 text-sm cursor-not-allowed opacity-70'
+            ? 'flex items-center gap-1.5 h-7 rounded-md px-1.5 text-xs cursor-not-allowed opacity-70'
+            : 'flex w-full items-center gap-2 h-10 rounded-md border px-3 py-2 text-sm cursor-not-allowed opacity-70'
         }
         style={
           isGhost
@@ -465,9 +502,25 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
               }
         }
       >
-        <span className="truncate text-xs">
+        <span className="truncate text-xs flex-1">
           {emptyCatalogHint ?? 'No models available — connect a provider first'}
         </span>
+        {onRetryCatalog && (
+          <button
+            type="button"
+            onClick={onRetryCatalog}
+            // Explicit tabIndex, opted out of the parent's cursor-not-allowed
+            // styling (this control itself IS actionable — only the picker
+            // as a whole is not). See the `catalogStatus === 'error'` Retry
+            // button above for the identical rationale on tabIndex.
+            tabIndex={tabIndex}
+            data-testid={triggerTestId ? `${triggerTestId}-retry` : undefined}
+            className="shrink-0 cursor-pointer text-xs font-medium underline underline-offset-2 hover:opacity-80"
+            style={{ color: 'var(--color-accent)' }}
+          >
+            Retry
+          </button>
+        )}
       </div>
     )
   }

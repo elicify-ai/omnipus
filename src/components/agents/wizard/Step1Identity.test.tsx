@@ -125,6 +125,63 @@ describe('Step1Identity — model picker, four provider-catalog states', () => {
     expect(screen.getByTestId('wizard-model')).not.toHaveTextContent(/connect a provider/i)
   })
 
+  // Catalogue-fetch-failure dead-end fix. Motivating incident: a provider
+  // (e.g. Ollama) can be "connected" — credentials/config resolvable — while
+  // its own local server is unreachable, so the live models fetch fails and
+  // the backend reports `models: []` + `warning` (Provider.yaml), NOT a
+  // `providersError` (that field is reserved for the /providers request
+  // itself failing). Before this fix, state 3 above was a genuine dead end:
+  // the wizard told the user why but gave them no way to proceed — Next
+  // stayed permanently disabled with "Missing: Model" and creating an agent
+  // was impossible short of closing the wizard, fixing the provider out of
+  // band, and reopening it from scratch.
+  it('state 3 (connected, empty catalog): the user is never permanently stuck — a real Retry is offered and actually unblocks the wizard', () => {
+    const onRetryProviders = vi.fn()
+    const { rerender } = renderWizard({
+      providersLoading: false,
+      connectedProviders: [
+        connectedProvider({
+          id: 'ollama',
+          name: 'ollama',
+          models: [],
+          warning: 'could not fetch upstream model list: dial tcp [::1]:11434: connect: connection refused',
+        }),
+      ],
+      onRetryProviders,
+    })
+
+    // The user sees why, and Next is blocked — but NOT stuck: a Retry exists.
+    expect(screen.getByTestId('wizard-model')).toHaveTextContent(/connection refused/i)
+    expect(screen.getByTestId('wizard-advance-hint')).toHaveTextContent(/missing:.*model/i)
+    const retryButton = screen.getByTestId('wizard-model-retry')
+    expect(retryButton).toBeInTheDocument()
+
+    fireEvent.click(retryButton)
+    expect(onRetryProviders).toHaveBeenCalledTimes(1)
+
+    // The operator started the local Ollama server and the parent's refetch
+    // (triggered by onRetryProviders, simulated here via rerender with the
+    // now-populated provider) lands — the SAME trigger becomes a real,
+    // selectable combobox with no wizard restart required.
+    rerender(
+      <CreateAgentWizard
+        initialType="Main"
+        onSubmit={vi.fn().mockResolvedValue(undefined)}
+        onClose={vi.fn()}
+        connectedProviders={[
+          connectedProvider({ id: 'ollama', name: 'ollama', models: ['llama3.1:8b'] }),
+        ]}
+        providersLoading={false}
+        onRetryProviders={onRetryProviders}
+      />,
+    )
+    const trigger = screen.getByTestId('wizard-model')
+    expect(trigger).toHaveAttribute('role', 'combobox')
+    fireEvent.click(trigger)
+    fireEvent.click(screen.getByText('llama3.1:8b'))
+    expect(screen.getByTestId('wizard-model')).toHaveTextContent('llama3.1:8b')
+  })
+
   it('state 3b (connected, empty catalog, no warning): an honest "no models available" message, not "connect a provider" (no provider IS connected)', () => {
     renderWizard({
       providersLoading: false,

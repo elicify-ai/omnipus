@@ -395,6 +395,93 @@ describe('ModelSelector — constrainToCatalog (UAT model-catalog fix)', () => {
     expect(screen.getByText(/connect a provider to pick a model/i)).toBeInTheDocument()
   })
 
+  // Catalogue-fetch-failure dead-end fix: a provider can be `status:
+  // "connected"` (credentials resolvable) while its live models fetch
+  // itself failed — e.g. Ollama configured with no local server reachable.
+  // The backend represents that as `models: []` + a `warning`, which is
+  // catalogStatus "ready" with an empty catalogue, NOT catalogStatus
+  // "error" (see Provider.yaml). Before this fix that state was a genuine
+  // dead end: the disabled placeholder explained why but offered no way to
+  // try again short of closing and reopening the wizard.
+  it('offers a working Retry in the connected-but-empty-catalog state (not just the outright error state)', () => {
+    const onRetryCatalog = vi.fn()
+    render(
+      <ModelSelector
+        models={[]}
+        value=""
+        onChange={vi.fn()}
+        constrainToCatalog
+        triggerTestId="wizard-model"
+        catalogStatus="ready"
+        onRetryCatalog={onRetryCatalog}
+        emptyCatalogHint="Model list unavailable: could not reach Ollama at http://localhost:11434"
+      />,
+    )
+    // The user sees WHY (the specific hint), not a generic dead end.
+    expect(screen.getByTestId('wizard-model')).toHaveTextContent(
+      /could not reach ollama at http:\/\/localhost:11434/i,
+    )
+    // No free-text escape hatch — the no-non-catalogue-model rule still holds.
+    expect(screen.queryByRole('textbox')).not.toBeInTheDocument()
+    // But a path forward exists: a real, working Retry action.
+    const retryButton = screen.getByTestId('wizard-model-retry')
+    expect(retryButton).toBeInTheDocument()
+    fireEvent.click(retryButton)
+    expect(onRetryCatalog).toHaveBeenCalledTimes(1)
+  })
+
+  it('omits the Retry control in the connected-but-empty-catalog state when onRetryCatalog is not provided', () => {
+    render(
+      <ModelSelector
+        models={[]}
+        value=""
+        onChange={vi.fn()}
+        constrainToCatalog
+        triggerTestId="wizard-model"
+        catalogStatus="ready"
+        emptyCatalogHint="Connected provider has no models available"
+      />,
+    )
+    expect(screen.queryByTestId('wizard-model-retry')).not.toBeInTheDocument()
+  })
+
+  it('replaces the dead-end placeholder with a working combobox once a retry actually repopulates the catalogue', () => {
+    const onRetryCatalog = vi.fn()
+    const { rerender } = render(
+      <ModelSelector
+        models={[]}
+        value=""
+        onChange={vi.fn()}
+        constrainToCatalog
+        triggerTestId="wizard-model"
+        catalogStatus="ready"
+        onRetryCatalog={onRetryCatalog}
+        emptyCatalogHint="Model list unavailable: connection refused"
+      />,
+    )
+    fireEvent.click(screen.getByTestId('wizard-model-retry'))
+    expect(onRetryCatalog).toHaveBeenCalledTimes(1)
+
+    // The provider's server came back up — the parent refetches and now
+    // supplies real models. The user is NOT stuck: the same trigger becomes
+    // the real, selectable combobox with no further action needed.
+    rerender(
+      <ModelSelector
+        models={['llama3.1:8b', 'llama3.1:70b']}
+        value=""
+        onChange={vi.fn()}
+        constrainToCatalog
+        triggerTestId="wizard-model"
+        catalogStatus="ready"
+        onRetryCatalog={onRetryCatalog}
+      />,
+    )
+    const trigger = screen.getByTestId('wizard-model')
+    expect(trigger).toHaveAttribute('role', 'combobox')
+    fireEvent.click(trigger)
+    expect(screen.getByText('llama3.1:8b')).toBeInTheDocument()
+  })
+
   it('allows free-text bootstrap (no warning) when constrained, empty, and allowFreeTextWhenEmpty', () => {
     const onChange = vi.fn()
     render(
