@@ -355,7 +355,7 @@ func TestFilter_FR022d_TheThreeOperatorsThatDoNotTakeAScalarValue(t *testing.T) 
 
 // TestFilter_FR022a_APatternThatFiltersNothingIsRefused is FR-022a.
 //
-// A `LIKE` pattern of `''` or `'%'` matches every value, which is true of LIKE
+// A `LIKE` pattern of `”` or `'%'` matches every value, which is true of LIKE
 // in ANY implementation — the justification is engine-independent. A whole-table
 // result returned as though it were a filtered one is the failure; the refusal
 // names `IS NOT NULL`, which is what the caller almost certainly meant.
