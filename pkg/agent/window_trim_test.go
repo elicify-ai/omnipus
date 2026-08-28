@@ -9,16 +9,20 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/memory"
 	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
 // buildTrimTestAgentLoop builds a minimal AgentLoop whose default agent has
@@ -31,14 +35,18 @@ func buildTrimTestAgentLoop(t *testing.T, contextWindow, maxTokens int) (*AgentL
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              tmpDir,
-				ModelName:         "test-model",
-				ContextWindow:     contextWindow,
+				DefaultModel:      config.DefaultModel{Model: "test-model"},
 				MaxTokens:         maxTokens,
 				MaxToolIterations: 10,
 			},
 			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
+	// ADR-066 D2: the window is resolved by the ladder; the global default
+	// (rung 3) pins it for the test. Tests that need a window smaller than
+	// the FR-005b max_tokens clamp would allow set agent.ContextWindow /
+	// agent.MaxTokens on the instance directly afterwards.
+	cfg.Context.DefaultContextWindow = intPtr(contextWindow)
 	mp := &mockProvider{}
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), mp)
 	return al, cfg
@@ -253,15 +261,27 @@ func TestWindowTrim_SingleHugeTurn_KeepsLastUser(t *testing.T) {
 	al, _ := buildTrimTestAgentLoop(t, cw, mt)
 	const sk = "t3-session"
 
-	// One massive Turn: 2000 chars of user content alone vastly exceeds window.
+	// One massive Turn: three tool steps of 2000 chars each vastly exceed
+	// the window on their own. ADR-066 register #3 / B-21b: the floor keeps
+	// this turn whole, then D5 empties its results oldest-first — all but
+	// the floor set (the last step's result, tc3).
 	hugeContent := strings.Repeat("z", 2000)
-	history := []providers.Message{
+	history := make([]providers.Message, 0, 9)
+	history = append(history,
 		trimTestMsg("user", "small earlier message"),
 		trimTestMsg("assistant", "small response"),
-		trimTestMsg("user", hugeContent),
-		trimTestMsg("assistant", hugeContent),
+		trimTestMsg("user", "do three big things"),
+	)
+	for _, id := range []string{"tc1", "tc2", "tc3"} {
+		history = append(history,
+			providers.Message{Role: "assistant", ToolCalls: []providers.ToolCall{
+				{ID: id, Name: "some_tool", Function: &providers.FunctionCall{Name: "some_tool", Arguments: "{}"}},
+			}},
+			providers.Message{Role: "tool", ToolCallID: id, Content: hugeContent},
+		)
 	}
 	seedHistory(t, al, sk, history)
+	archiveBefore := archiveLineCount(t, al, sk)
 
 	window, result, ok := windowAfterTrim(t, al, sk)
 	require.True(t, ok, "windowTrim must return true even in last-resort path")
@@ -272,6 +292,22 @@ func TestWindowTrim_SingleHugeTurn_KeepsLastUser(t *testing.T) {
 		"FR-003 floor: window[0] must be the last user message")
 	assert.Greater(t, result.DroppedMessages, 0,
 		"DroppedMessages must be positive")
+	assert.Len(t, window, 7, "the kept turn is whole: user + 3 × (assistant, tool)")
+
+	// B-21b: Skip stopped at the floor (the kept turn's user message) — the
+	// emptying that followed is not a cut and moved it no further.
+	agent := al.GetRegistry().GetDefaultAgent()
+	skip := archiveLineCount(t, al, sk) - len(window)
+	assert.Equal(t, 2, skip, "Skip = the floor's position, unchanged by emptying")
+	assert.Equal(t, archiveBefore, archiveLineCount(t, al, sk), "B-23: no archive line changes")
+
+	// Marks present: tc1 and tc2 emptied (oldest first), tc3 is the floor
+	// set and stays. Persisted state keyed by the ARCHIVE line (skip + idx).
+	pm := agent.Sessions.Projection(sk)
+	assert.Equal(t, memory.ProjectionEmptied, pm.Entries[memory.ProjectionKey{ToolCallID: "tc1", ArchiveLine: 4}])
+	assert.Equal(t, memory.ProjectionEmptied, pm.Entries[memory.ProjectionKey{ToolCallID: "tc2", ArchiveLine: 6}])
+	_, tc3Marked := pm.Entries[memory.ProjectionKey{ToolCallID: "tc3", ArchiveLine: 8}]
+	assert.False(t, tc3Marked, "the floor set is never emptied")
 	// Must terminate — not an infinite loop (test itself would hang if it looped).
 }
 
@@ -419,10 +455,11 @@ func TestModelSwitch_ReWindowsNoSummary(t *testing.T) {
 	agent.Sessions.SetHistory(sk, history)
 	require.NoError(t, agent.Sessions.Save(sk))
 
-	// Also set cfg.Agents.Defaults.ContextWindow to the new small window so
-	// handleModelSwitch sees a downsize (decideSwitchCompressAction triggers).
+	// Also set the global default window (ADR-066 D2 rung 3) to the new
+	// small window so handleModelSwitch resolves a downsize through the
+	// ladder (decideSwitchCompressAction triggers).
 	al.mu.Lock()
-	al.cfg.Agents.Defaults.ContextWindow = 4000
+	al.cfg.Context.DefaultContextWindow = intPtr(4000)
 	al.mu.Unlock()
 
 	// Drive the switch to a smaller window.
@@ -464,7 +501,7 @@ func TestModelSwitch_ReWindowsNoSummary(t *testing.T) {
 		ag2.ContextWindow = 100000
 		ag2.MaxTokens = 4096
 		al2.mu.Lock()
-		al2.cfg.Agents.Defaults.ContextWindow = 500 // tiny
+		al2.cfg.Context.DefaultContextWindow = intPtr(500) // tiny
 		al2.mu.Unlock()
 
 		const sk2 = "t19-floor-session"
@@ -530,7 +567,7 @@ func TestModelSwitch_UpsizeKeepsSkipForward(t *testing.T) {
 
 	// Now switch to a MUCH larger model; cfg window >> current conversation.
 	al.mu.Lock()
-	al.cfg.Agents.Defaults.ContextWindow = 200000
+	al.cfg.Context.DefaultContextWindow = intPtr(200000)
 	al.mu.Unlock()
 
 	updatedAgent, err := al.handleModelSwitch(
@@ -564,6 +601,11 @@ func TestDecommission_NoForceCompressionSymbols(t *testing.T) {
 	filesOwned := []string{
 		"loop.go",
 		"context_budget.go",
+		"instance.go",
+		"resolve_window.go",
+		"turn.go",
+		"steering.go",
+		"empty_in_place.go",
 	}
 
 	// These are the patterns that must NOT appear as identifiers or string
@@ -572,6 +614,18 @@ func TestDecommission_NoForceCompressionSymbols(t *testing.T) {
 	forbiddenPatterns := []string{
 		"Emergency compression dropped",
 		"splitHistoryAtTurnMidpoint(",
+		// ADR-066 SC-009 (T066-09): the retired window fallbacks.
+		"maxTokens * 4",
+		"contextWindow = 128000",
+		"newContextWindow = 128000",
+		"SummarizeTokenPercent",
+		"Defaults.ContextWindow",
+		// ADR-066 SC-009 (T066-12, FR-020): the dead "refreshed" restore
+		// point. The restore point is the turn-start triple, captured once
+		// in newTurnState and never moved.
+		"refreshRestorePointFromSession",
+		"restorePointHistory",
+		"captureRestorePoint",
 	}
 
 	// func forceCompression must not exist as a method definition.
@@ -682,7 +736,7 @@ func TestArchive_ModelSwitchPreservesEvicted(t *testing.T) {
 
 	// Downsize: switch to a much smaller model.
 	al.mu.Lock()
-	al.cfg.Agents.Defaults.ContextWindow = 1000
+	al.cfg.Context.DefaultContextWindow = intPtr(1000)
 	al.mu.Unlock()
 
 	_, err := al.handleModelSwitch(context.Background(), agent, sk, newModel, bus.InboundMessage{})
@@ -711,3 +765,133 @@ func TestWindowTrim_SetHistoryNeverCalled(t *testing.T) {
 
 // newSwitchTestAgentLoop is defined in switch_compress_test.go which is also
 // in the agent package — no redefinition needed here.
+
+// TestArchive_AppendOnlyWithAttachStep — ADR-066 FR-048 / B-53d (test 58):
+// the ADR-028 append-only invariant with an attach step. A session is
+// hydrated once from the transcript (empty archive), grows by live turns,
+// is trimmed (Skip advances, no bytes deleted), and is then re-attached:
+// the attach path's hydration must leave the archive byte-identical and
+// meta.skip unchanged. Before D5.5 that re-attach rewrote the whole file
+// and reset skip to 0 (the verified US-15 operator bug).
+func TestArchive_AppendOnlyWithAttachStep(t *testing.T) {
+	h := newHydrateTestHarness(t, "archive-attach")
+	now := time.Now().UTC()
+	h.append(t,
+		session.TranscriptEntry{Role: "user", Content: "first", AgentID: h.agentID, TurnID: "A", Timestamp: now},
+		session.TranscriptEntry{Role: "assistant", Content: "working", AgentID: h.agentID, TurnID: "A", Timestamp: now.Add(time.Second)},
+		standaloneToolCall(h.agentID, "A", "call-1", "bash", map[string]any{"output": "x"}, now.Add(2*time.Second)),
+		session.TranscriptEntry{Role: "assistant", Content: "done", AgentID: h.agentID, TurnID: "A", Timestamp: now.Add(3 * time.Second)},
+	)
+	require.NoError(t, h.al.HydrateAgentHistoryFromTranscript(h.transcriptID))
+	key := h.key()
+	require.Len(t, h.ag.Sessions.GetHistory(key), 4, "hydrated window: user, assistant(+call), tool, assistant")
+
+	// Live turns appended by the turn path, then a trim that advances Skip.
+	big := strings.Repeat("w", 3000)
+	for i := 0; i < 4; i++ {
+		h.ag.Sessions.AddMessage(key, "user", big)
+		h.ag.Sessions.AddMessage(key, "assistant", big)
+	}
+	require.NoError(t, h.ag.Sessions.Save(key))
+	linesBeforeTrim, err := h.ag.Sessions.ReadArchive(context.Background(), key)
+	require.NoError(t, err)
+	require.Len(t, linesBeforeTrim, 12)
+
+	h.ag.ContextWindow = 2000
+	h.ag.MaxTokens = 200
+	_, ok := h.al.windowTrim(h.ag, key)
+	require.True(t, ok, "trim must succeed")
+	windowAfterTrim := len(h.ag.Sessions.GetHistory(key))
+	require.Less(t, windowAfterTrim, 12, "trim must have advanced Skip")
+
+	archiveBytes, err := os.ReadFile(h.archivePath())
+	require.NoError(t, err)
+	metaBytes, err := os.ReadFile(h.metaPath())
+	require.NoError(t, err)
+	var metaBefore struct {
+		Skip int `json:"skip"`
+	}
+	require.NoError(t, json.Unmarshal(metaBytes, &metaBefore))
+	require.Greater(t, metaBefore.Skip, 0)
+
+	// Attach step: what the WS attach_session path does (FR-045).
+	require.True(t, h.al.AgentArchiveNonEmpty(h.transcriptID), "attach pre-check must see the archive")
+	require.NoError(t, h.al.HydrateAgentHistoryFromTranscript(h.transcriptID))
+
+	archiveAfter, err := os.ReadFile(h.archivePath())
+	require.NoError(t, err)
+	assert.Equal(t, string(archiveBytes), string(archiveAfter), "attach must leave the archive byte-identical")
+	metaAfterBytes, err := os.ReadFile(h.metaPath())
+	require.NoError(t, err)
+	var metaAfter struct {
+		Skip int `json:"skip"`
+	}
+	require.NoError(t, json.Unmarshal(metaAfterBytes, &metaAfter))
+	assert.Equal(t, metaBefore.Skip, metaAfter.Skip, "attach must not move Skip")
+	assert.Equal(t, windowAfterTrim, len(h.ag.Sessions.GetHistory(key)), "window unchanged by attach")
+	linesAfter, err := h.ag.Sessions.ReadArchive(context.Background(), key)
+	require.NoError(t, err)
+	assert.Len(t, linesAfter, 12, "no archive line deleted (ADR-028)")
+}
+
+// TestWindowTrim_AlreadyFitsEvictsNothing pins the missing "already fits"
+// guard.
+//
+// windowTrim had no early return: it went straight to the boundary walk and
+// took the smallest boundary b > 0 whose suffix fits, evicting the oldest
+// turn — even when the WHOLE window already fitted. That made every
+// mis-firing caller destructive rather than merely wasteful, and the
+// pre-turn check was exactly such a caller: it charged the full tool
+// registry while windowTrim charges only the sent surface, so on a
+// compressed manifest with lazy tools registered it fired on conversations
+// that fitted comfortably and shaved one turn per turn, silently.
+func TestWindowTrim_AlreadyFitsEvictsNothing(t *testing.T) {
+	const (
+		cw = 100_000
+		mt = 1000
+	)
+	al, _ := buildTrimTestAgentLoop(t, cw, mt)
+	const sessionKey = "fits-session"
+
+	var history []providers.Message
+	for i := 0; i < 4; i++ {
+		history = append(history, makeTurn("small question", "small answer")...)
+	}
+	seedHistory(t, al, sessionKey, history)
+
+	agent := al.GetRegistry().GetDefaultAgent()
+	before := agent.Sessions.GetHistory(sessionKey)
+	require.Len(t, before, len(history), "precondition: the whole window is live")
+
+	result, ok := al.windowTrim(agent, sessionKey)
+
+	assert.False(t, ok, "a window that already fits must not report an eviction")
+	assert.True(t, result.NothingToTrim,
+		"a window that already fits must report NothingToTrim, not silently evict the oldest turn")
+	assert.Equal(t, before, agent.Sessions.GetHistory(sessionKey),
+		"windowTrim must not touch a window that already fits")
+}
+
+// TestBudgetSites_MeasureTheSentToolSurface is the mechanical guard for
+// FR-028's "every budget site compares through one predicate and cannot
+// disagree".
+//
+// The pre-turn check and the timeout-recovery check both built their tool
+// surface as `ts.agent.Tools.ToProviderDefs()` — a full JSON schema for EVERY
+// registered tool — while windowTrim, the function they call on a positive
+// result, measures `al.sentToolSurfaceTokens`, which charges only the tools
+// actually sent under a compressed manifest. With ~15 MCP servers connected
+// the over-count is tens of thousands of tokens, so the check fired on a
+// conversation windowTrim then measured as fitting.
+func TestBudgetSites_MeasureTheSentToolSurface(t *testing.T) {
+	loop := readOwnedFileForTest(t, "loop.go")
+
+	assert.NotContains(t, loop, "toolDefs := ts.agent.Tools.ToProviderDefs()",
+		"a budget site must not charge the whole tool registry — use "+
+			"al.sentToolSurfaceTokens(ts.agent, ts.sessionKey), the surface windowTrim measures")
+	assert.NotContains(t, loop, "isOverContextBudget(agentContextBudget(ts.agent)",
+		"the pre-turn and timeout-recovery sites must compare through "+
+			"isOverContextBudgetTokens with the measured sent surface")
+	assert.Contains(t, loop, "isOverContextBudgetTokens(agentContextBudget(ts.agent)",
+		"the token-count predicate is how those sites share windowTrim's measurement")
+}

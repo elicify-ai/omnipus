@@ -31,6 +31,7 @@ import (
 	"strings"
 	"testing"
 
+	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/credentials"
 )
@@ -164,7 +165,7 @@ func TestGatewayBoot_StaleProviderCredentialDoesNotAbortBoot(t *testing.T) {
 	}
 
 	// Loud, not silent: ERROR naming the provider entry AND the credential.
-	requireSlogRecord(t, logBuf, "ERROR", "openrouter-onboarding", staleRef)
+	requireSlogRecord(t, logBuf, "ERROR", "openrouter", staleRef)
 }
 
 // TestGatewayBoot_OnlyBrokenProviderStillBoots covers the worse shape: the
@@ -202,7 +203,7 @@ func TestGatewayBoot_OnlyBrokenProviderStillBoots(t *testing.T) {
 	if _, _, _, err := bootCredentials(tmpDir, configPath); err != nil {
 		t.Fatalf("boot must survive with NO usable provider at all; got: %v", err)
 	}
-	requireSlogRecord(t, logBuf, "ERROR", "openrouter-auto", staleRef)
+	requireSlogRecord(t, logBuf, "ERROR", "openrouter", staleRef)
 }
 
 // TestCreateStartupProvider_BlockedDefaultModelNamesTheCredential pins the
@@ -217,10 +218,10 @@ func TestCreateStartupProvider_BlockedDefaultModelNamesTheCredential(t *testing.
 
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{ModelName: "openrouter-auto"},
+			Defaults: config.AgentDefaults{DefaultModel: config.DefaultModel{Provider: "openrouter", Model: "openrouter/z-ai/glm-5-turbo"}},
 		},
 		Providers: []*config.ModelConfig{{
-			ModelName: "openrouter-auto",
+			Name:      "openrouter-auto",
 			Model:     "openrouter/z-ai/glm-5-turbo",
 			Provider:  "openrouter",
 			APIBase:   "https://openrouter.ai/api/v1",
@@ -243,7 +244,8 @@ func TestCreateStartupProvider_BlockedDefaultModelNamesTheCredential(t *testing.
 	if chatErr == nil {
 		t.Fatal("a blocked provider must fail every chat turn")
 	}
-	if !strings.Contains(chatErr.Error(), ref) || !strings.Contains(chatErr.Error(), "openrouter-auto") {
+	// The message names the default PAIR (provider/model), never a row alias.
+	if !strings.Contains(chatErr.Error(), ref) || !strings.Contains(chatErr.Error(), "openrouter/openrouter/z-ai/glm-5-turbo") {
 		t.Errorf(
 			"the chat error must name the model and the missing credential so the operator can act; got: %q",
 			chatErr.Error(),
@@ -261,10 +263,10 @@ func TestCreateStartupProvider_ResolvedCredentialIsNotBlocked(t *testing.T) {
 
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{ModelName: "openrouter-auto"},
+			Defaults: config.AgentDefaults{DefaultModel: config.DefaultModel{Provider: "openrouter", Model: "openrouter/z-ai/glm-5-turbo"}},
 		},
 		Providers: []*config.ModelConfig{{
-			ModelName: "openrouter-auto",
+			Name:      "openrouter-auto",
 			Model:     "openrouter/z-ai/glm-5-turbo",
 			Provider:  "openrouter",
 			APIBase:   "https://openrouter.ai/api/v1",
@@ -293,7 +295,7 @@ func TestCreateStartupProvider_LoadBalancedSiblingKeepsModelUsable(t *testing.T)
 
 	entry := func(ref string) *config.ModelConfig {
 		return &config.ModelConfig{
-			ModelName: "openrouter-auto",
+			Name:      "openrouter-auto",
 			Model:     "openrouter/z-ai/glm-5-turbo",
 			Provider:  "openrouter",
 			APIBase:   "https://openrouter.ai/api/v1",
@@ -302,7 +304,7 @@ func TestCreateStartupProvider_LoadBalancedSiblingKeepsModelUsable(t *testing.T)
 	}
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{ModelName: "openrouter-auto"},
+			Defaults: config.AgentDefaults{DefaultModel: config.DefaultModel{Provider: "openrouter", Model: "openrouter/z-ai/glm-5-turbo"}},
 		},
 		Providers: []*config.ModelConfig{entry(badRef), entry(goodRef)},
 	}
@@ -386,7 +388,7 @@ func TestGatewayBoot_WrongMasterKeyProviderCredentialIsFatal(t *testing.T) {
 	// worded as the scoped "credential unusable ... rest of the system
 	// continues" message the NotFoundError-degrade branch emits — that
 	// message would be a lie here.
-	requireSlogRecord(t, logBuf, "ERROR", "openrouter-auto", ref)
+	requireSlogRecord(t, logBuf, "ERROR", "openrouter", ref)
 	for _, line := range strings.Split(logBuf.String(), "\n") {
 		if strings.Contains(line, "rest of the system continues") {
 			t.Errorf(
@@ -435,5 +437,43 @@ func TestGatewayBoot_CorruptCredentialsFileProviderInjectionIsFatal(t *testing.T
 	}
 	if !strings.Contains(err.Error(), "corrupted") {
 		t.Errorf("error must surface the store-file-corrupted cause; got: %q", err.Error())
+	}
+}
+
+// TestProviderCredentialDegraded_GETRowsConfiguredOnly — ADR-068 regression
+// row 4 (X-32): with the credential vault locked, GET /api/v1/providers
+// reports the vault-read error on CONFIGURED rows only. The seed templates
+// (no provider identity, no credential ref) are no longer echoed as
+// "disconnected" rows at all (resolution #16), so a locked vault produces
+// exactly one row: the configured provider, status=error, with the
+// classified remediation message.
+func TestProviderCredentialDegraded_GETRowsConfiguredOnly(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+	// A store that is never unlocked: resolveCredentialRef fails with a
+	// non-NotFound error, the "worse than not configured" branch.
+	api.credStore = credentials.NewStore(filepath.Join(api.homePath, "credentials.json"))
+
+	const ref = "DEGRADED_TEST_T068_04_LOCKED_KEY"
+	t.Setenv(ref, "") // ref configured, nothing injected
+	seedTemplateProviders(t, api, &config.ModelConfig{
+		Name: "mygw", Provider: "mygw", Model: "mygw/llama", APIKeyRef: ref,
+		Models: []string{"mygw/llama"},
+	})
+
+	provs := getProviders(t, api)
+	if len(provs) != 1 {
+		t.Fatalf("locked vault must yield exactly the configured row, no template rows; got %d rows: %+v",
+			len(provs), provs)
+	}
+	row := provs[0]
+	if row.Id != "mygw" {
+		t.Fatalf("row id = %q, want mygw", row.Id)
+	}
+	if row.Status != gen.ProviderStatusError {
+		t.Errorf("status = %q, want %q (locked vault is worse than 'not configured')",
+			row.Status, gen.ProviderStatusError)
+	}
+	if row.Error == nil || !strings.Contains(*row.Error, "credential vault could not be read") {
+		t.Errorf("error must carry the classified vault-read remediation; got %v", row.Error)
 	}
 }

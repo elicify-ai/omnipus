@@ -1,0 +1,66 @@
+title: ProvidersCatalog
+description: >
+  The full registry-fed providers catalog (ADR-067 schema 2.0.0) as served by
+  GET /api/v1/providers/catalog — providers with nested models, tier,
+  protocol(s), unsupported reason and resize limits — plus the gateway's
+  serving envelope: served_from (embedded snapshot or pulled release) and
+  stale (updated_at older than 14 days). The same document feeds the media
+  pipeline, the agent loop's window rung and the validation probe; the SPA
+  consumes only this generated type and re-validates with If-None-Match
+  (strong quoted ETag = SHA-256 of the served bytes) on Settings open and
+  every 15 minutes. The handler's catalog is read-only for windows — any
+  per-model override lives in ContextSettings.model_overrides, never here.
+type: object
+required:
+  - schema_version
+  - version
+  - updated_at
+  - source
+  - default_resize_limits
+  - providers
+  - served_from
+  - stale
+additionalProperties: false
+properties:
+  schema_version:
+    type: string
+    enum:
+      - "2.0.0"
+    description: Document schema version. Only "2.0.0" is accepted on load (FR-001).
+    example: "2.0.0"
+  version:
+    type: string
+    pattern: '^v\d{4}\.\d{1,2}\.\d{1,2}(\.\d+)?$'
+    description: Monotonic release version, vYYYY.M.D[.N], compared numerically (FR-002).
+    example: "v2026.8.22"
+  updated_at:
+    type: string
+    format: date-time
+    description: When the assembly job produced the document (RFC 3339).
+    example: "2026-08-22T03:00:00Z"
+  source:
+    type: string
+    minLength: 1
+    description: Free-text provenance written by the assembly job (upstream registry commit ids). Informational.
+    example: "models.dev@a1b2c3d, litellm@e4f5a6b"
+  default_resize_limits:
+    $ref: './CatalogResizeLimits.yaml'
+  providers:
+    type: array
+    minItems: 1
+    items:
+      $ref: './CatalogProvider.yaml'
+  served_from:
+    type: string
+    enum:
+      - embedded
+      - pulled
+    description: >
+      Gateway envelope (FR-017): "embedded" when serving the committed
+      build-time snapshot, "pulled" when serving a release fetched at
+      startup or by the 24 h refresh.
+    example: "pulled"
+  stale:
+    type: boolean
+    description: Gateway envelope (FR-017) — true when updated_at is older than 14 days.
+    example: false

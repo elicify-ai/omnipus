@@ -31,10 +31,11 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/constants"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/media"
+	"github.com/elicify-ai/omnipus/pkg/memory"
 	"github.com/elicify-ai/omnipus/pkg/plan"
 	"github.com/elicify-ai/omnipus/pkg/policy"
 	"github.com/elicify-ai/omnipus/pkg/providers"
-	"github.com/elicify-ai/omnipus/pkg/providers/capabilities"
+	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
 	"github.com/elicify-ai/omnipus/pkg/providers/protocoltypes"
 	"github.com/elicify-ai/omnipus/pkg/routing"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
@@ -274,13 +275,14 @@ type AgentLoop struct {
 	// (<homePath>/browser/shared-chrome.pid) from it.
 	homePath string
 
-	// capabilityCatalog (ADR-051 Rev 4, Wave 3 T9) is the step-1 capability
-	// gate source for the presentation chain (FR-010). Constructed from the
-	// compiled-in seed at NewAgentLoop time so the gate works without gateway
-	// boot wiring; the gateway may inject a puller-equipped catalog via
-	// SetCapabilityCatalog (FR-025 repo-pull). Nil → optimistic (FR-026).
+	// capabilityCatalog is the step-1 capability-gate source for the
+	// presentation chain (ADR-067 FR-004). The gateway installs the ONE
+	// booted catalog here at boot via SetCapabilityCatalog — the same
+	// instance ResolveWindow and the REST surface read, so the 2 MB embedded
+	// snapshot is parsed once per process. Nil until then, which is the
+	// documented optimistic posture, not a degradation.
 	// Guarded by mu (the struct's primary RWMutex).
-	capabilityCatalog *capabilities.Catalog
+	capabilityCatalog *catalog.Catalog
 
 	// workspaceLibCache (FR-007a) caches per-workspace media libraries for
 	// manifest-refcount accounting. Keyed by workspace ID. Lazily populated
@@ -745,6 +747,55 @@ var ErrWorkspaceWorkDirUnavailable = errors.New("workspace work directory unavai
 // directory is missing or could not be created.
 var ErrAgentHomeUnavailable = errors.New("agent home directory unavailable")
 
+// ErrAgentNeedsProvider is returned by runTurn when the agent's PRIMARY
+// provider id is UNKNOWN (ADR-067 FR-016/FR-038): neither a catalog id nor a
+// constructible custom row — including an id that differs from a configured
+// one only by case, which is exact-compared and therefore unknown (FR-036).
+//
+// The turn is refused with LLMError code needs_provider (attribution
+// `config`), logged at WARN, and ZERO upstream requests are made. It is
+// evaluated FIRST in the pre-turn gate, ahead of ADR-068's model_unassigned
+// and ADR-066's ErrContextWindowUnknown: a provider must exist before a model
+// can, and a model must exist before its window can be sized.
+//
+// The refusal clears the moment the operator re-points the agent at a real
+// provider through the existing agent-update path — no restart beyond the
+// reload that path already triggers (US-6.AC3).
+var ErrAgentNeedsProvider = errors.New("agent's provider is not configured; turn refused")
+
+// ErrAgentModelUnassigned is returned by runTurn when the agent has no model
+// to send the request to (ADR-068 FR-014/FR-015, MAJ-008). Two shapes reach
+// it, and they are exactly the two halves of the derived `needs_model` the
+// gateway projects onto Agent.needs_model:
+//
+//   - the agent pins no primary model and `agents.defaults.default_model`
+//     names none either, so there is literally nothing to call; or
+//   - the model it does pin routes through a provider that is not configured,
+//     which is ADR-067's `needs_provider` state — and that code WINS, because
+//     the pre-turn gate evaluates it first (see below).
+//
+// The turn is refused with LLMError code model_unassigned (attribution
+// `config`) and ZERO upstream requests are made. It is evaluated SECOND in
+// the pre-turn gate: after ADR-067's ErrAgentNeedsProvider (a provider must
+// exist before a model can) and before ADR-066's ErrContextWindowUnknown (a
+// model must exist before its window can be sized). The overlap is not
+// hypothetical — an agent bound to an unknown provider satisfies BOTH
+// predicates, and SC-013 requires it to end with `needs_provider`.
+//
+// The refusal clears as soon as the operator assigns a model through the
+// existing agent-update path, which triggers its own reload.
+var ErrAgentModelUnassigned = errors.New("agent has no model assigned; turn refused")
+
+// ErrContextWindowUnknown is returned by runTurn when the agent's provider is
+// a `locality: local` endpoint that reported no context window and no
+// operator override exists (ADR-066 D3, FR-008). The turn is refused — never
+// run on a guessed window — with LLMError code context_window_unknown
+// (attribution config). It is evaluated THIRD in the pre-turn gate, after
+// ADR-067's needs_provider and ADR-068's model_unassigned. Setting
+// ContextSettings.model_overrides[] for the (provider, model) triggers a
+// reload and clears it without a restart.
+var ErrContextWindowUnknown = errors.New("context window unknown for this model; turn refused")
+
 // perCandidateTimeoutFromConfig derives a per-candidate timeout for the fallback
 // chain from the provider config. It uses the RequestTimeout of the first provider
 // that has a positive RequestTimeout value, falling back to the providers package
@@ -859,23 +910,6 @@ func NewAgentLoop(
 	al.homePath = homePath
 	al.taskStore = task.New(filepath.Join(homePath, "tasks"))
 	al.taskExecutor = newTaskExecutor(al, al.taskStore)
-
-	// ADR-051 Rev 4 (Wave 3 T9): construct the capability catalog from the
-	// compiled-in seed so the step-1 presentation gate (FR-010) works
-	// immediately, without gateway boot wiring. The gateway may later inject
-	// a puller-equipped catalog via SetCapabilityCatalog (FR-025 repo-pull).
-	// A construction failure is non-fatal — nil catalog → optimistic (FR-026).
-	if catalog, catErr := capabilities.NewCatalog(capabilities.EmbeddedSeed(), nil, nil, nil); catErr != nil {
-		logger.WarnCF(
-			"agent",
-			"Capability catalog construction failed; presentation gate degrades to optimistic",
-			map[string]any{
-				"error": catErr.Error(),
-			},
-		)
-	} else {
-		al.capabilityCatalog = catalog
-	}
 
 	// Initialize shared session store at $OMNIPUS_HOME/sessions/.
 	// All new chat sessions are created here (joined session model).
@@ -1706,6 +1740,7 @@ func registerSharedTools(
 		// Per-provider Enabled sub-flags (Brave, Tavily, etc.) are retained because
 		// they select which upstream API is used, not whether the tool exists.
 		searchTool, err := tools.NewWebSearchTool(tools.WebSearchToolOptions{
+			IngestBoundBytes:      cfg.Context.IngestBoundBytes, // ADR-066 D10
 			BraveAPIKeys:          braveKeys(cfg.Tools.Web.Brave.APIKey()),
 			BraveMaxResults:       cfg.Tools.Web.Brave.MaxResults,
 			BraveEnabled:          cfg.Tools.Web.Brave.Enabled,
@@ -1811,12 +1846,22 @@ func registerSharedTools(
 				}
 			}
 		}
+		// The handoff target's window is the one its own instance resolved
+		// through the ADR-066 D2 ladder (its provider, its model, its
+		// override) — never a config default. An unknown target, an exempt
+		// one or an unknown window yields 0: the handoff then transfers no
+		// recent context and the summary line names what was left out.
 		getContextWindow := func(targetAgentID string) int {
-			currentCfg := al.GetConfig()
-			if currentCfg.Agents.Defaults.ContextWindow > 0 {
-				return currentCfg.Agents.Defaults.ContextWindow
+			liveRegistry := al.GetRegistry()
+			if liveRegistry == nil {
+				return 0
 			}
-			return 8192
+			target, ok := liveRegistry.GetAgent(targetAgentID)
+			if !ok || target == nil {
+				return 0
+			}
+			window, _, _ := target.windowSnapshot()
+			return window
 		}
 		getDefaultAgent := func() string {
 			currentCfg := al.GetConfig()
@@ -4756,7 +4801,7 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 
 	logger.InfoCF("agent", "Provider and config reloaded successfully",
 		map[string]any{
-			"model": cfg.Agents.Defaults.GetModelName(),
+			"model": cfg.Agents.Defaults.DefaultModel.String(),
 		})
 
 	return nil
@@ -4770,6 +4815,17 @@ func (al *AgentLoop) GetRegistry() *AgentRegistry {
 }
 
 // GetConfig returns the current config (thread-safe)
+// contextSettings returns the live ADR-066 ContextSettings (caps, trigger,
+// ingest bound) — read per call, so a settings write applies to the next
+// tool result without a restart (US-3.AC11). Satisfies the
+// contextSettingsSource the recall_conversation tool type-asserts.
+func (al *AgentLoop) contextSettings() config.ContextSettings {
+	if cfg := al.GetConfig(); cfg != nil {
+		return cfg.Context
+	}
+	return config.ContextSettings{}
+}
+
 func (al *AgentLoop) GetConfig() *config.Config {
 	al.mu.RLock()
 	defer al.mu.RUnlock()
@@ -4996,7 +5052,7 @@ func (al *AgentLoop) ApplyAgentModel(agentID, model string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to initialize model %q: %w", model, err)
 	}
-	nextCandidates := resolveModelCandidatesForAgent(cfg, cfg.Agents.Defaults.Provider, modelCfg.Model, agent)
+	nextCandidates := resolveModelCandidatesForAgent(cfg, cfg.Agents.Defaults.DefaultModel.Provider, modelCfg.Model, agent)
 	if len(nextCandidates) == 0 {
 		return "", fmt.Errorf("model %q did not resolve to any provider candidates", model)
 	}
@@ -5005,7 +5061,15 @@ func (al *AgentLoop) ApplyAgentModel(agentID, model string) (string, error) {
 	// distinct provider pre-built. The agent's existing pool may carry stale
 	// entries for the previous primary's provider; rebuilding from the new
 	// candidate chain keeps ProviderPool coherent with Candidates.
-	newPool := buildProviderPool(cfg, nextCandidates)
+	newBuild := buildProviderPool(cfg, nextCandidates, agent.ID)
+
+	// ADR-066 D2: the window is part of the model identity. Re-resolve it
+	// through the ONE ladder for the new primary (provider, model) and flip
+	// it inside the same lock as Model / Provider / Candidates so a reader
+	// never pairs the new model with the old window. FR-005b: max_tokens is
+	// re-clamped against the new window so B stays positive.
+	windowProvider, windowModel := primaryWindowPair(nextCandidates, cfg.Agents.Defaults.DefaultModel.Provider, modelCfg.Model)
+	window := ResolveWindow(cfg, windowProvider, windowModel, agent.ID)
 
 	agent.mu.Lock()
 	oldModel := agent.Model
@@ -5014,6 +5078,13 @@ func (al *AgentLoop) ApplyAgentModel(agentID, model string) (string, error) {
 	agent.Provider = nextProvider
 	agent.Candidates = nextCandidates
 	agent.ThinkingLevel = parseThinkingLevel(modelCfg.ThinkingLevel)
+	agent.applyWindowResolutionLocked(window)
+	// From the CONFIGURED max_tokens, never from the current (possibly
+	// already-clamped) field: the clamp only lowers, so re-feeding its own
+	// output ratcheted the value down permanently — a round-trip through a
+	// small-window model left the agent capped at that model's window/4 on a
+	// 200k model, with no log line and no recovery short of a restart.
+	agent.MaxTokens = clampMaxTokensForWindow(window.Window, agent.configuredMaxTokensLocked(), model)
 	// Publish the new pool INSIDE the same lock as the Model + Provider +
 	// Candidates flip. The atomic.Pointer in StoreProviderPool would protect
 	// the pool's map against concurrent read/write on its own, but an
@@ -5023,7 +5094,14 @@ func (al *AgentLoop) ApplyAgentModel(agentID, model string) (string, error) {
 	// while the model field still says OLD. Holding the lock across the
 	// full tuple flip makes (Model, Provider, Candidates, ProviderPool) a
 	// single coherent swap from any reader's perspective.
-	agent.StoreProviderPool(newPool)
+	agent.StoreProviderPool(newBuild.pool)
+	// ADR-067 FR-016: the degrade is part of the model identity too — a
+	// switch onto a provider the catalog does not know must leave the agent
+	// refusing turns, and a switch OFF one must clear the refusal without a
+	// restart (US-6.AC3). Flipped inside the same lock as the rest of the
+	// tuple so a turn never pairs the new model with the old verdict.
+	agent.needsProvider = newBuild.primaryUnknown
+	agent.needsProviderID = newBuild.primaryProvider
 	agent.mu.Unlock()
 
 	// Close the previous provider if it holds resources (e.g. a stateful
@@ -6872,6 +6950,25 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 		return resp, nil, err
 	}
 
+	// ADR-066 D4 / FR-015: the user-message bound, at the one point where an
+	// inbound message becomes a turn — BEFORE routing mints a channel session,
+	// before the transcript write below, before turn registration. Over the
+	// bound, the reply is returned as this message's ordinary response: the
+	// caller (session worker / unroutable path) publishes it on the
+	// originating channel like any assistant reply — no error frame, no
+	// transcript entry, no turn id. Media refs ride in msg.Media and are not
+	// counted. See user_message_bound.go.
+	if reply, refused := al.refuseOversizedUserMessage(msg); refused {
+		logger.InfoCF("agent", "Refused oversized user message before turn start (ADR-066 D4)",
+			map[string]any{
+				"channel":     msg.Channel,
+				"chat_id":     msg.ChatID,
+				"size_chars":  UserMessageChars(msg.Content),
+				"bound_chars": al.UserMessageBound(),
+			})
+		return reply, nil, nil
+	}
+
 	route, agent, routeErr := al.resolveMessageRoute(msg)
 	if routeErr != nil {
 		// ADR-029 FR-028/MAJ-003: emit the drift-drop counter and audit event
@@ -7117,6 +7214,10 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 					}
 				}
 			}
+			// ADR-066 D5.5 (FR-045): this emptiness condition is unchanged;
+			// hydration itself now refuses to touch an agent archive that
+			// already has lines, so a window that is empty only because Skip
+			// reached the end of a non-empty archive is never rebuilt.
 			if needsHydrate {
 				if err := al.HydrateAgentHistoryFromTranscript(transcriptSessionID); err != nil {
 					logger.WarnCF("agent", "self-heal hydrate failed", map[string]any{
@@ -8182,7 +8283,6 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 		// cleaned so the LLM does not see dangling unanswered tool_call entries.
 		history = RecoverOrphanedToolCalls(ts.agent.Sessions, ts.sessionKey, al.auditLogger)
 	}
-	ts.captureRestorePoint(history)
 
 	// Site-1: initial assembly (CRITICAL 2 — error handled inside assembleMessages).
 	messages := al.assembleMessages(
@@ -8201,15 +8301,124 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	// as an offloadSink lets attachments no provider can present (e.g. AVIF/HEIC
 	// with no decoder) be copied into work/ and surfaced as a filesystem path +
 	// guidance instead of dying the turn (ADR-051 Rev 4 FR-020/020a/021).
+	turnProvider, turnModel := ts.agent.primaryModelPair()
 	messages = resolveMediaRefsWithOffload(
-		messages, turnMediaStore, maxMediaSize, ts.agent.Model,
+		messages, turnMediaStore, maxMediaSize, turnProvider, turnModel,
 		&offloadSink{workDir: wsDir}, turnCatalog, turnRefcounter,
 		ts.opts.WorkspaceID,
 	)
 
-	if !ts.opts.NoHistory {
-		toolDefs := ts.agent.Tools.ToProviderDefs()
-		if isOverContextBudget(ts.agent.ContextWindow, messages, toolDefs, ts.agent.MaxTokens) {
+	// ADR-067 FR-016/FR-038 pre-turn gate (FIRST of the three). An agent whose
+	// PRIMARY provider id is unknown cannot reach any upstream at all, so it
+	// is refused here — before the model gate can ask which model, and before
+	// the window gate can ask how big that model's context is. Like the two
+	// gates below it the refusal is a REAL failed turn: turn.start already
+	// went out, the LIFO defers fire on return, and the typed EventKindError
+	// is what the SPA renders. The WARN and the error name the operator's own
+	// spelling of the id and nothing else — never a canonical alternative
+	// (SC-010).
+	if needsProvider, unknownProviderID := ts.agent.needsProviderSnapshot(); needsProvider {
+		turnStatus = TurnEndStatusError
+		providerErr := fmt.Errorf("%w: agent_id=%s provider=%s",
+			ErrAgentNeedsProvider, ts.agent.ID, unknownProviderID)
+		llm := TranslateTurnError(providerErr)
+		logger.WarnCF("agent", "Turn refused: the agent's provider is unknown",
+			map[string]any{"agent_id": ts.agent.ID, "provider": unknownProviderID})
+		al.emitEvent(
+			EventKindError,
+			ts.eventMeta("runTurn", "turn.error"),
+			ErrorPayload{
+				Stage:     "provider",
+				ChatID:    ts.chatID,
+				SessionID: string(ts.routingSessionID),
+				Code:      string(llm.Code),
+				Message:   llm.Message,
+			},
+		)
+		ts.appendClassifiedError(EventKindError.String(), "provider", llm)
+		return turnResult{}, providerErr
+	}
+
+	// ADR-068 FR-014/FR-015 pre-turn gate (SECOND of the three). An agent
+	// with no model to call is refused here — after the provider gate above
+	// (a provider must exist before a model can, SC-013) and before the
+	// window gate below (a model must exist before its window can be sized).
+	// Same shape as its two siblings: a REAL failed turn with turn.start
+	// already out, the LIFO defers firing on return, and a typed
+	// EventKindError the SPA renders. The agent's stored model is NOT
+	// touched — a refusal never re-points an agent at some other model
+	// (US-3.AC4).
+	if ts.agent.needsModelSnapshot() {
+		turnStatus = TurnEndStatusError
+		modelErr := fmt.Errorf("%w: agent_id=%s", ErrAgentModelUnassigned, ts.agent.ID)
+		llm := TranslateTurnError(modelErr)
+		logger.WarnCF("agent", "Turn refused: the agent has no model assigned",
+			map[string]any{"agent_id": ts.agent.ID})
+		al.emitEvent(
+			EventKindError,
+			ts.eventMeta("runTurn", "turn.error"),
+			ErrorPayload{
+				Stage:     "model",
+				ChatID:    ts.chatID,
+				SessionID: string(ts.routingSessionID),
+				Code:      string(llm.Code),
+				Message:   llm.Message,
+			},
+		)
+		ts.appendClassifiedError(EventKindError.String(), "model", llm)
+		return turnResult{}, modelErr
+	}
+
+	// ADR-066 D3 pre-turn gate (FR-008): a local endpoint that reported no
+	// context window is refused, never run on a guessed number. Order:
+	// needs_provider (ADR-067, above) → model_unassigned (ADR-068) →
+	// context_window_unknown (here, third). It sits after the model switch
+	// so a switch onto an unsized local model is refused too, and before
+	// the first budget check so nothing ever computes a budget from W = 0.
+	// Like the workspace gate above, the refusal is a REAL failed turn:
+	// turn.start went out, the LIFO defers fire on return, and the typed
+	// EventKindError is what the SPA renders.
+	if _, windowExempt, windowUnknown := ts.agent.windowSnapshot(); windowUnknown && !windowExempt {
+		turnStatus = TurnEndStatusError
+		windowErr := fmt.Errorf("%w: agent_id=%s model=%s", ErrContextWindowUnknown, ts.agent.ID, ts.agent.Model)
+		llm := TranslateTurnError(windowErr)
+		al.emitEvent(
+			EventKindError,
+			ts.eventMeta("runTurn", "turn.error"),
+			ErrorPayload{
+				Stage:     "context_window",
+				ChatID:    ts.chatID,
+				SessionID: string(ts.routingSessionID),
+				Code:      string(llm.Code),
+				Message:   llm.Message,
+			},
+		)
+		ts.appendClassifiedError(EventKindError.String(), "context_window", llm)
+		return turnResult{}, windowErr
+	}
+
+	// FR-005: an exempt provider (subprocess CLI) manages its own context —
+	// the pre-turn trim and every budget check are skipped.
+	if !ts.opts.NoHistory && !ts.agent.budgetChecksExempt() {
+		// FR-028: the pre-turn check reads the one budget B — the same value
+		// windowTrim fits the suffix against — never the raw window — AND the
+		// same tool surface windowTrim measures (sentToolSurfaceTokens, what
+		// the turn actually sends). Charging the whole registry here, as this
+		// site used to, fired the check on a conversation that fit and had
+		// windowTrim evict one turn per turn.
+		toolDefsTokens := al.sentToolSurfaceTokens(ts.agent, ts.sessionKey)
+		// C1: `messages` never carries the ephemeral system notes runTurn
+		// injects into callMessages before the request that is actually
+		// sent (scratchpad, workspace instructions — AGENT.md, up to
+		// 262,144 bytes with no budget-aware cap — and the web-rendering
+		// note); the compressed manifest note is already folded into
+		// toolDefsTokens above. Without ephemeralSystemNoteTokens here, a
+		// large AGENT.md alone can push the assembled request tens of
+		// thousands of tokens past what this check saw, producing a
+		// provider context_too_long on a window this check believed it was
+		// protecting.
+		nonMessageTokens := toolDefsTokens + al.ephemeralSystemNoteTokens(ts)
+		if isOverContextBudgetTokens(agentContextBudget(ts.agent), messages, nonMessageTokens) {
 			logger.WarnCF("agent", "Proactive window trim: context budget exceeded before LLM call",
 				map[string]any{"session_key": ts.sessionKey})
 			if compression, ok := al.windowTrim(ts.agent, ts.sessionKey); ok {
@@ -8222,7 +8431,6 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 						RemainingMessages: compression.RemainingMessages,
 					},
 				)
-				ts.refreshRestorePointFromSession(ts.agent)
 			}
 			// Site-2: post-proactive-trim assembly.
 			newHistory := ts.agent.Sessions.GetHistory(ts.sessionKey)
@@ -8234,8 +8442,9 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 				ts.media,
 				activeSkillNames(ts.agent, ts.opts),
 			)
+			trimProvider, trimModel := ts.agent.primaryModelPair()
 			messages = resolveMediaRefsWithOffload(
-				messages, turnMediaStore, maxMediaSize, ts.agent.Model,
+				messages, turnMediaStore, maxMediaSize, trimProvider, trimModel,
 				&offloadSink{workDir: wsDir}, turnCatalog, turnRefcounter,
 				ts.opts.WorkspaceID,
 			)
@@ -8254,7 +8463,6 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 		} else {
 			ts.agent.Sessions.AddMessage(ts.sessionKey, rootMsg.Role, rootMsg.Content)
 		}
-		ts.recordPersistedMessage(rootMsg)
 	}
 
 	ts.agent.mu.RLock()
@@ -8266,6 +8474,11 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	ts.agent.mu.RUnlock()
 	pendingMessages := append([]providers.Message(nil), ts.opts.InitialSteeringMessages...)
 	var finalContent string
+	// midTurnGuardErr carries the ADR-066 D6 thrash-guard error out of the
+	// per-result mid-turn window checks below (midturn_budget.go). Declared
+	// before the turnLoop label so the `goto turnLoop` below never jumps
+	// over its declaration.
+	var midTurnGuardErr error
 	emptyResponseRetries := 0
 	const maxEmptyResponseRetries = 1
 
@@ -8376,7 +8589,8 @@ turnLoop:
 		// Inject pending steering messages
 		if len(pendingMessages) > 0 {
 			resolvedPending := resolveMediaRefsWithOffload(
-				pendingMessages, turnMediaStore, maxMediaSize, activeModel,
+				pendingMessages, turnMediaStore, maxMediaSize,
+				candidateProvider(activeCandidates), activeModel,
 				&offloadSink{workDir: wsDir}, turnCatalog, turnRefcounter,
 				ts.opts.WorkspaceID,
 			)
@@ -8388,7 +8602,6 @@ turnLoop:
 					// Persist the original (unresolved) message to session history to preserve
 					// compact media refs; resolved (base64) form is only used for the LLM request.
 					ts.agent.Sessions.AddFullMessage(ts.sessionKey, pm)
-					ts.recordPersistedMessage(pm)
 				}
 				logger.InfoCF("agent", "Injected steering message into context",
 					map[string]any{
@@ -8466,7 +8679,6 @@ turnLoop:
 			syntheticDenyMsg := providers.Message{Role: "system", Content: denyMsg}
 			if !ts.opts.NoHistory {
 				ts.agent.Sessions.AddFullMessage(ts.sessionKey, syntheticDenyMsg)
-				ts.recordPersistedMessage(syntheticDenyMsg)
 			}
 			// ADR-058 §3.2/§10.A3: this branch used to also invoke FR-084's
 			// per-turn synthetic-deny counter-and-abort helper before
@@ -9164,12 +9376,24 @@ turnLoop:
 					},
 				)
 				// Timeout recovery: compact context if it's heavily loaded, then retry once.
-				if !compactionAttemptedOnTimeout && ts.agent.SummarizeTokenPercent > 0 && !ts.opts.NoHistory {
-					toolDefs := ts.agent.Tools.ToProviderDefs()
-					if isOverContextBudget(
-						ts.agent.ContextWindow*ts.agent.SummarizeTokenPercent/100,
-						callMessages, toolDefs, ts.agent.MaxTokens,
-					) {
+				//
+				// FR-028 / B-38: the check reads the one budget B — the retired
+				// summarize_token_percent no longer scales the window here. What
+				// it measures is the request the RETRY would assemble: the
+				// messages of the failed call plus any recall span that became
+				// active during it (the retry re-assembles from the session, so
+				// an active span is part of the next request even though it was
+				// not part of callMessages). windowTrim counts that span the
+				// same way (FR-019 drop-span-first).
+				if !compactionAttemptedOnTimeout && !ts.opts.NoHistory && !ts.agent.budgetChecksExempt() {
+					// The sent surface, not the whole registry — same helper
+					// windowTrim measures with (FR-028; see the pre-turn site).
+					toolDefsTokens := al.sentToolSurfaceTokens(ts.agent, ts.sessionKey)
+					retryMessages := callMessages
+					if span := al.activeRecallSpan(ts.sessionKey); span != nil {
+						retryMessages = append(append([]providers.Message(nil), callMessages...), span.Messages()...)
+					}
+					if isOverContextBudgetTokens(agentContextBudget(ts.agent), retryMessages, toolDefsTokens) {
 						compactionAttemptedOnTimeout = true
 						// windowTrim has three possible outcomes here:
 						//  1. ok=true — a real eviction occurred, either window Turns were
@@ -9202,7 +9426,6 @@ turnLoop:
 									RemainingMessages: compression.RemainingMessages,
 								},
 							)
-							ts.refreshRestorePointFromSession(ts.agent)
 							// Site-3: post-timeout-trim assembly.
 							newHistory := ts.agent.Sessions.GetHistory(ts.sessionKey)
 							messages = al.assembleMessages(turnCtx, ts, newHistory, "", nil, activeSkillNames(ts.agent, ts.opts))
@@ -9332,7 +9555,11 @@ turnLoop:
 					}
 				}
 
-				if compression, ok := al.windowTrim(ts.agent, ts.sessionKey); ok {
+				// force: the PROVIDER rejected this request with a context
+				// error, so our own estimate said it fit and was wrong.
+				// Honouring the "already fits" guard here would make the
+				// retry byte-identical to the call that just failed.
+				if compression, ok := al.windowTrimForce(ts.agent, ts.sessionKey, true); ok {
 					al.emitEvent(
 						EventKindContextCompress,
 						ts.eventMeta("runTurn", "turn.context.compress"),
@@ -9342,7 +9569,6 @@ turnLoop:
 							RemainingMessages: compression.RemainingMessages,
 						},
 					)
-					ts.refreshRestorePointFromSession(ts.agent)
 				} else {
 					// C3: windowTrim returned ok=false (nothing to trim). Mark the
 					// flag so the NEXT retry attempt will break rather than burning more
@@ -9368,11 +9594,12 @@ turnLoop:
 		if err != nil {
 			// C2: check for context cancellation/timeout before reporting a generic
 			// "LLM call failed" error — these are user/system actions, not LLM failures.
-			if errors.Is(err, context.Canceled) {
-				return turnResult{}, fmt.Errorf("turn canceled")
-			}
-			if errors.Is(err, context.DeadlineExceeded) {
-				return turnResult{}, fmt.Errorf("turn timed out")
+			// ADR-066 D7: typed, never silent — see typedTurnExit.
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				var res turnResult
+				var exitErr error
+				res, turnStatus, exitErr = al.typedTurnExit(ts, iteration, llmModel, err)
+				return res, exitErr
 			}
 		}
 		if err != nil {
@@ -9587,11 +9814,12 @@ turnLoop:
 			}
 			// If the inner retry loop set an error, surface it via the outer error path.
 			if err != nil {
-				if errors.Is(err, context.Canceled) {
-					return turnResult{}, fmt.Errorf("turn canceled")
-				}
-				if errors.Is(err, context.DeadlineExceeded) {
-					return turnResult{}, fmt.Errorf("turn timed out")
+				// ADR-066 D7: typed, never silent — see typedTurnExit.
+				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+					var res turnResult
+					var exitErr error
+					res, turnStatus, exitErr = al.typedTurnExit(ts, iteration, llmModel, err)
+					return res, exitErr
 				}
 				turnStatus = TurnEndStatusError
 				// Wave 1 (error-provenance hardening): translate via the
@@ -9669,6 +9897,29 @@ turnLoop:
 				logger.WarnCF("agent", "failed to marshal tool call arguments", map[string]any{"tool": tc.Name, "error": marshalErr.Error()})
 				argumentsJSON = []byte("{}")
 			}
+			// ADR-066 D4×D6 (T066-13): an over-bound arguments string never
+			// enters memory. The dispatch below refuses the call from the
+			// PARSED args (FR-016 — this elision cannot mask that check),
+			// and the refusal result names the real size, so echoing the
+			// full blob into the assistant message would plant budget-
+			// busting bytes in the archive and every later request that D5
+			// can never empty (an assistant message is not a tool result) —
+			// DS-3 #2 at the default window would then trip the D6 guard
+			// that B-19 forbids. The elided echo is what the archive, the
+			// window and every reload all see, so live == reload holds with
+			// no projection entry.
+			if bound := toolArgumentsBound(cfg); UserMessageChars(string(argumentsJSON)) > bound {
+				elided, elideErr := json.Marshal(map[string]any{
+					"_omnipus":   "arguments_elided_over_bound",
+					"size_chars": UserMessageChars(string(argumentsJSON)),
+					"cap_chars":  bound,
+				})
+				if elideErr == nil {
+					argumentsJSON = elided
+				} else {
+					argumentsJSON = []byte("{}")
+				}
+			}
 			extraContent := tc.ExtraContent
 			thoughtSignature := ""
 			if tc.Function != nil {
@@ -9690,7 +9941,6 @@ turnLoop:
 		messages = append(messages, assistantMsg)
 		if !ts.opts.NoHistory {
 			ts.agent.Sessions.AddFullMessage(ts.sessionKey, assistantMsg)
-			ts.recordPersistedMessage(assistantMsg)
 		}
 
 		// Bug #416 fix: persist the narration text the LLM emitted alongside
@@ -9766,15 +10016,19 @@ turnLoop:
 				// (the same shape the headless auto-deny site below relies
 				// on for the identical reason).
 				settleAskToolCallTranscript(ts, session.ToolCallID(tc.ID), toolName, toolArgs, qReason)
-				deniedMsg := providers.Message{
-					Role:       "tool",
-					Content:    payload,
-					ToolCallID: tc.ID,
-				}
+				// ADR-066 D4: denied results enter through the choke point on the
+				// builtin-failure surface (FR-009); it persists the line itself.
+				deniedMsg := al.admitToolResult(ts, toolResultAdmission{
+					Tool: tc.Name, ToolCallID: tc.ID, Content: payload, IsError: true, ParallelN: len(normalizedToolCalls),
+				}).Message
 				messages = append(messages, deniedMsg)
-				if !ts.opts.NoHistory {
-					ts.agent.Sessions.AddFullMessage(ts.sessionKey, deniedMsg)
-					ts.recordPersistedMessage(deniedMsg)
+				// ADR-066 D6 (T066-13): the window check runs after EVERY admitted
+				// result — empty-only mid-turn, Skip never moves; a thrash-guard fire
+				// ends the turn typed with no further provider call (FR-032).
+				if messages, midTurnGuardErr = al.midTurnWindowCheck(ts, messages, providerToolDefs); midTurnGuardErr != nil {
+					res, status, exitErr := al.typedTurnExit(ts, iteration, llmModel, midTurnGuardErr)
+					turnStatus = status
+					return res, exitErr
 				}
 				al.emitEvent(
 					EventKindToolExecSkipped,
@@ -9815,15 +10069,19 @@ turnLoop:
 							Reason: denyContent,
 						},
 					)
-					deniedMsg := providers.Message{
-						Role:       "tool",
-						Content:    denyContent,
-						ToolCallID: tc.ID,
-					}
+					// ADR-066 D4: denied results enter through the choke point on the
+					// builtin-failure surface (FR-009); it persists the line itself.
+					deniedMsg := al.admitToolResult(ts, toolResultAdmission{
+						Tool: tc.Name, ToolCallID: tc.ID, Content: denyContent, IsError: true, ParallelN: len(normalizedToolCalls),
+					}).Message
 					messages = append(messages, deniedMsg)
-					if !ts.opts.NoHistory {
-						ts.agent.Sessions.AddFullMessage(ts.sessionKey, deniedMsg)
-						ts.recordPersistedMessage(deniedMsg)
+					// ADR-066 D6 (T066-13): the window check runs after EVERY admitted
+					// result — empty-only mid-turn, Skip never moves; a thrash-guard fire
+					// ends the turn typed with no further provider call (FR-032).
+					if messages, midTurnGuardErr = al.midTurnWindowCheck(ts, messages, providerToolDefs); midTurnGuardErr != nil {
+						res, status, exitErr := al.typedTurnExit(ts, iteration, llmModel, midTurnGuardErr)
+						turnStatus = status
+						return res, exitErr
 					}
 					// ADR-058 fix: this branch used to `continue` with no
 					// ClassifyDenial, no recordToolDenial and no budget check
@@ -9858,6 +10116,48 @@ turnLoop:
 					turnStatus = TurnEndStatusAborted
 					return al.abortTurn(ts, "before_tool", decision.Reason)
 				}
+			}
+
+			// ADR-066 D4 / FR-016: the tool-argument bound, measured on the
+			// serialised arguments AFTER hooks.BeforeTool (a hook may rewrite
+			// them) and BEFORE any approval round-trip — a call that will be
+			// refused must not cost the user an approval prompt. Over the
+			// cap the tool does not run; the ADR-060-family refusal
+			// (tools.ToolArgumentRefusalResult) enters through the choke
+			// point like any other result and the turn continues — the model
+			// sees the size and the cap and retries smaller. Not a policy
+			// denial: the ledger/quarantine machinery is deliberately not
+			// consulted.
+			if argChars, argCap := serialisedToolArgsChars(toolArgs), toolArgumentsBound(cfg); argChars > argCap {
+				refusal := tools.ToolArgumentRefusalResult(toolName, argChars, argCap)
+				logger.WarnCF("agent", "Tool call refused: serialised arguments exceed the cap (ADR-066 D4)",
+					map[string]any{
+						"agent_id":   ts.agent.ID,
+						"tool":       toolName,
+						"size_chars": argChars,
+						"cap_chars":  argCap,
+					})
+				refusedMsg := al.admitToolResult(ts, toolResultAdmission{
+					Tool: tc.Name, ToolCallID: tc.ID, Content: refusal.ContentForLLM(), IsError: true, ParallelN: len(normalizedToolCalls),
+				}).Message
+				messages = append(messages, refusedMsg)
+				// ADR-066 D6 (T066-13): the window check runs after EVERY admitted
+				// result — empty-only mid-turn, Skip never moves; a thrash-guard fire
+				// ends the turn typed with no further provider call (FR-032).
+				if messages, midTurnGuardErr = al.midTurnWindowCheck(ts, messages, providerToolDefs); midTurnGuardErr != nil {
+					res, status, exitErr := al.typedTurnExit(ts, iteration, llmModel, midTurnGuardErr)
+					turnStatus = status
+					return res, exitErr
+				}
+				al.emitEvent(
+					EventKindToolExecSkipped,
+					ts.eventMeta("runTurn", "turn.tool.skipped"),
+					ToolExecSkippedPayload{
+						Tool:   toolName,
+						Reason: fmt.Sprintf("%s: serialised arguments of %d chars exceed the %d-char cap", tools.ToolArgumentsTooLargeCode, argChars, argCap),
+					},
+				)
+				continue
 			}
 
 			if al.hooks != nil {
@@ -9896,15 +10196,19 @@ turnLoop:
 							Reason: denyContent,
 						},
 					)
-					deniedMsg := providers.Message{
-						Role:       "tool",
-						Content:    denyContent,
-						ToolCallID: tc.ID,
-					}
+					// ADR-066 D4: denied results enter through the choke point on the
+					// builtin-failure surface (FR-009); it persists the line itself.
+					deniedMsg := al.admitToolResult(ts, toolResultAdmission{
+						Tool: tc.Name, ToolCallID: tc.ID, Content: denyContent, IsError: true, ParallelN: len(normalizedToolCalls),
+					}).Message
 					messages = append(messages, deniedMsg)
-					if !ts.opts.NoHistory {
-						ts.agent.Sessions.AddFullMessage(ts.sessionKey, deniedMsg)
-						ts.recordPersistedMessage(deniedMsg)
+					// ADR-066 D6 (T066-13): the window check runs after EVERY admitted
+					// result — empty-only mid-turn, Skip never moves; a thrash-guard fire
+					// ends the turn typed with no further provider call (FR-032).
+					if messages, midTurnGuardErr = al.midTurnWindowCheck(ts, messages, providerToolDefs); midTurnGuardErr != nil {
+						res, status, exitErr := al.typedTurnExit(ts, iteration, llmModel, midTurnGuardErr)
+						turnStatus = status
+						return res, exitErr
 					}
 					// ADR-058 fix: same rationale as the HookActionDenyTool
 					// branch above — this hook-deny path used to bypass the
@@ -9948,15 +10252,19 @@ turnLoop:
 				cls, _ := ClassifyDenial(policyDeniedReason)
 				denyMsg := denialPayloadJSON(toolName, policyDeniedReason, cls)
 				al.emitPolicyDenyAudit(ts, toolName, "deny", "mid_turn_policy_change")
-				deniedMsg := providers.Message{
-					Role:       "tool",
-					Content:    denyMsg,
-					ToolCallID: tc.ID,
-				}
+				// ADR-066 D4: denied results enter through the choke point on the
+				// builtin-failure surface (FR-009); it persists the line itself.
+				deniedMsg := al.admitToolResult(ts, toolResultAdmission{
+					Tool: tc.Name, ToolCallID: tc.ID, Content: denyMsg, IsError: true, ParallelN: len(normalizedToolCalls),
+				}).Message
 				messages = append(messages, deniedMsg)
-				if !ts.opts.NoHistory {
-					ts.agent.Sessions.AddFullMessage(ts.sessionKey, deniedMsg)
-					ts.recordPersistedMessage(deniedMsg)
+				// ADR-066 D6 (T066-13): the window check runs after EVERY admitted
+				// result — empty-only mid-turn, Skip never moves; a thrash-guard fire
+				// ends the turn typed with no further provider call (FR-032).
+				if messages, midTurnGuardErr = al.midTurnWindowCheck(ts, messages, providerToolDefs); midTurnGuardErr != nil {
+					res, status, exitErr := al.typedTurnExit(ts, iteration, llmModel, midTurnGuardErr)
+					turnStatus = status
+					return res, exitErr
 				}
 				al.emitEvent(
 					EventKindToolExecSkipped,
@@ -10031,15 +10339,19 @@ turnLoop:
 					// finds no placeholder, which is exactly this case.
 					settleAskToolCallTranscript(
 						ts, session.ToolCallID(tc.ID), toolName, toolArgs, denialReason)
-					deniedMsg := providers.Message{
-						Role:       "tool",
-						Content:    denyMsg,
-						ToolCallID: tc.ID,
-					}
+					// ADR-066 D4: denied results enter through the choke point on the
+					// builtin-failure surface (FR-009); it persists the line itself.
+					deniedMsg := al.admitToolResult(ts, toolResultAdmission{
+						Tool: tc.Name, ToolCallID: tc.ID, Content: denyMsg, IsError: true, ParallelN: len(normalizedToolCalls),
+					}).Message
 					messages = append(messages, deniedMsg)
-					if !ts.opts.NoHistory {
-						ts.agent.Sessions.AddFullMessage(ts.sessionKey, deniedMsg)
-						ts.recordPersistedMessage(deniedMsg)
+					// ADR-066 D6 (T066-13): the window check runs after EVERY admitted
+					// result — empty-only mid-turn, Skip never moves; a thrash-guard fire
+					// ends the turn typed with no further provider call (FR-032).
+					if messages, midTurnGuardErr = al.midTurnWindowCheck(ts, messages, providerToolDefs); midTurnGuardErr != nil {
+						res, status, exitErr := al.typedTurnExit(ts, iteration, llmModel, midTurnGuardErr)
+						turnStatus = status
+						return res, exitErr
 					}
 					al.emitEvent(
 						EventKindToolExecSkipped,
@@ -10118,15 +10430,19 @@ turnLoop:
 					cls, _ := ClassifyDenial(denialReason)
 					denyMsg := denialPayloadJSON(toolName, denialReason, cls)
 					al.emitPolicyDenyAudit(ts, toolName, "ask", denialReason)
-					deniedMsg := providers.Message{
-						Role:       "tool",
-						Content:    denyMsg,
-						ToolCallID: tc.ID,
-					}
+					// ADR-066 D4: denied results enter through the choke point on the
+					// builtin-failure surface (FR-009); it persists the line itself.
+					deniedMsg := al.admitToolResult(ts, toolResultAdmission{
+						Tool: tc.Name, ToolCallID: tc.ID, Content: denyMsg, IsError: true, ParallelN: len(normalizedToolCalls),
+					}).Message
 					messages = append(messages, deniedMsg)
-					if !ts.opts.NoHistory {
-						ts.agent.Sessions.AddFullMessage(ts.sessionKey, deniedMsg)
-						ts.recordPersistedMessage(deniedMsg)
+					// ADR-066 D6 (T066-13): the window check runs after EVERY admitted
+					// result — empty-only mid-turn, Skip never moves; a thrash-guard fire
+					// ends the turn typed with no further provider call (FR-032).
+					if messages, midTurnGuardErr = al.midTurnWindowCheck(ts, messages, providerToolDefs); midTurnGuardErr != nil {
+						res, status, exitErr := al.typedTurnExit(ts, iteration, llmModel, midTurnGuardErr)
+						turnStatus = status
+						return res, exitErr
 					}
 					al.emitEvent(
 						EventKindToolExecSkipped,
@@ -10342,15 +10658,19 @@ turnLoop:
 					// rate limit above, which aborts the turn entirely.
 					errMsg := fmt.Sprintf("Rate limited: %s (retry after %.0fs)",
 						toolRLResult.PolicyRule, toolRLResult.RetryAfterSeconds)
-					deniedMsg := providers.Message{
-						Role:       "tool",
-						Content:    errMsg,
-						ToolCallID: tc.ID,
-					}
+					// ADR-066 D4: denied results enter through the choke point on the
+					// builtin-failure surface (FR-009); it persists the line itself.
+					deniedMsg := al.admitToolResult(ts, toolResultAdmission{
+						Tool: tc.Name, ToolCallID: tc.ID, Content: errMsg, IsError: true, ParallelN: len(normalizedToolCalls),
+					}).Message
 					messages = append(messages, deniedMsg)
-					if !ts.opts.NoHistory {
-						ts.agent.Sessions.AddFullMessage(ts.sessionKey, deniedMsg)
-						ts.recordPersistedMessage(deniedMsg)
+					// ADR-066 D6 (T066-13): the window check runs after EVERY admitted
+					// result — empty-only mid-turn, Skip never moves; a thrash-guard fire
+					// ends the turn typed with no further provider call (FR-032).
+					if messages, midTurnGuardErr = al.midTurnWindowCheck(ts, messages, providerToolDefs); midTurnGuardErr != nil {
+						res, status, exitErr := al.typedTurnExit(ts, iteration, llmModel, midTurnGuardErr)
+						turnStatus = status
+						return res, exitErr
 					}
 					al.emitEvent(
 						EventKindToolExecSkipped,
@@ -10562,16 +10882,15 @@ turnLoop:
 				}
 			}
 
-			// Filter sensitive data (API keys, tokens, secrets) before sending to LLM
-			if cfg.Tools.IsFilterSensitiveDataEnabled() {
-				contentForLLM = cfg.FilterSensitiveData(contentForLLM)
-			}
-
-			toolResultMsg := providers.Message{
-				Role:       "tool",
-				Content:    contentForLLM,
-				ToolCallID: toolCallID,
-			}
+			// ADR-066 D4 (FR-009, FR-013): the sensitive-data filter now runs
+			// INSIDE the choke point, on the full content, before the cap —
+			// so a secret straddling the head or tail cut is redacted whole
+			// in both the archive and the window (B-16). The choke point
+			// also persists the archive line itself (the mark cites that
+			// line), so the AddFullMessage this site used to do is gone.
+			// Media refs are resolved on a scratch message first so both
+			// the archived and the window form carry them.
+			var mediaMsg providers.Message
 			// Attach inline image data URLs so vision-capable models can SEE the
 			// screenshot/image returned by the tool. Without this the LLM only
 			// gets the placeholder text and cannot reason about the picture.
@@ -10586,8 +10905,29 @@ turnLoop:
 			// guard; the artifact tag at loop.go:8246 is the path-based
 			// fallback hook for the rare "rasterize failed" case.
 			if len(toolResult.Media) > 0 && turnMediaStore != nil {
-				attachToolResultMedia(&toolResultMsg, toolResult.Media, turnMediaStore, maxMediaSize)
+				attachToolResultMedia(&mediaMsg, toolResult.Media, turnMediaStore, maxMediaSize)
 			}
+			// ADR-066 D5.4 (FR-041/FR-042): budget-first recall decision,
+			// BEFORE the choke point so the archive, transcript and events
+			// carry the truthful outcome — the tool's "now in your context"
+			// receipt only when the span will be spliced below, the non-fit
+			// message otherwise. A no-op for every other tool.
+			recallDecision := al.decideRecallInjection(ts, tc.Name, messages, contentForLLM)
+			contentForLLM = recallDecision.content
+			admitted := al.admitToolResult(ts, toolResultAdmission{
+				Tool:       tc.Name,
+				ToolCallID: toolCallID,
+				Content:    contentForLLM,
+				Media:      mediaMsg.Media,
+				IsError:    toolResult.IsError,
+				ParallelN:  len(normalizedToolCalls),
+			})
+			// contentForLLM from here on is the FILTERED full content the
+			// archive holds — what the event sinks and the transcript error
+			// field always carried (the gateway tool_results/ store keeps it
+			// for Verbose chat); the window form is toolResultMsg.
+			contentForLLM = admitted.Archived.Content
+			toolResultMsg := admitted.Message
 			endSID, endProducingSID := u9ToolExecSessionIDs(ts)
 			al.emitEvent(
 				EventKindToolExecEnd,
@@ -10759,11 +11099,41 @@ turnLoop:
 			if toolResult.IsError && tcRecord.Result == nil {
 				tcRecord.Error = truncateRunes(contentForLLM, maxFailClosedOutputChars)
 			}
+			// ADR-066 FR-046: the transcript tool_call entry carries the
+			// BOUNDED result the model saw (the window form) so D5.5
+			// hydration (T066-06) rebuilds a window that is not lossy, plus
+			// the projection state for the SPA's content_state. Only when
+			// nothing richer is there already (media descriptors, the sync
+			// delegate shape, or the failure Error text).
+			if tcRecord.Result == nil && tcRecord.Error == "" {
+				if text := strings.TrimSpace(toolResultMsg.Content); text != "" {
+					tcRecord.Result = map[string]any{"text": text}
+				}
+			}
+			if admitted.Capped {
+				// Always the plain "capped": the SPA-facing content_state
+				// enum (ToolCall.yaml) is full | capped | emptied and does
+				// NOT distinguish the D4 surface. The internal state also
+				// records which cap produced the live bytes
+				// (memory.ProjectionCappedFailure) — that value must never
+				// be written here, it is not on the wire.
+				tcRecord.ContentState = string(memory.ProjectionCapped)
+			}
 			ts.appendToolCallTranscript(tcRecord)
 			messages = append(messages, toolResultMsg)
-			if !ts.opts.NoHistory {
-				ts.agent.Sessions.AddFullMessage(ts.sessionKey, toolResultMsg)
-				ts.recordPersistedMessage(toolResultMsg)
+			// ADR-066 D5.4 (FR-041): the recalled text joins the in-memory
+			// slice HERE — the same mutation point every mid-turn request
+			// is built from — so the provider's next call carries it.
+			if recallDecision.inject {
+				messages = al.spliceRecallSpan(ts, messages, recallDecision.span)
+			}
+			// ADR-066 D6 (T066-13): the window check runs after EVERY admitted
+			// result — empty-only mid-turn, Skip never moves; a thrash-guard fire
+			// ends the turn typed with no further provider call (FR-032).
+			if messages, midTurnGuardErr = al.midTurnWindowCheck(ts, messages, providerToolDefs); midTurnGuardErr != nil {
+				res, status, exitErr := al.typedTurnExit(ts, iteration, llmModel, midTurnGuardErr)
+				turnStatus = status
+				return res, exitErr
 			}
 
 			if steerMsgs := al.dequeueSteeringMessagesForScope(ts.sessionKey); len(steerMsgs) > 0 {
@@ -10817,16 +11187,12 @@ turnLoop:
 								Reason: skipReason,
 							},
 						)
-						skippedMsg := providers.Message{
-							Role:       "tool",
-							Content:    skipMessage,
-							ToolCallID: skippedTC.ID,
-						}
+						// ADR-066 D4: the synthetic skipped result is a builtin-failure
+						// surface result like any denial (FR-009).
+						skippedMsg := al.admitToolResult(ts, toolResultAdmission{
+							Tool: skippedTC.Name, ToolCallID: skippedTC.ID, Content: skipMessage, IsError: true, ParallelN: len(normalizedToolCalls),
+						}).Message
 						messages = append(messages, skippedMsg)
-						if !ts.opts.NoHistory {
-							ts.agent.Sessions.AddFullMessage(ts.sessionKey, skippedMsg)
-							ts.recordPersistedMessage(skippedMsg)
-						}
 					}
 				}
 				if parked {
@@ -10850,6 +11216,14 @@ turnLoop:
 						followUps:  append([]bus.InboundMessage(nil), ts.followUps...),
 						turnFailed: ts.turnFailed,
 					}, nil
+				}
+				// ADR-066 D6 (T066-13): the window check runs after EVERY admitted
+				// result — empty-only mid-turn, Skip never moves; a thrash-guard fire
+				// ends the turn typed with no further provider call (FR-032).
+				if messages, midTurnGuardErr = al.midTurnWindowCheck(ts, messages, providerToolDefs); midTurnGuardErr != nil {
+					res, status, exitErr := al.typedTurnExit(ts, iteration, llmModel, midTurnGuardErr)
+					turnStatus = status
+					return res, exitErr
 				}
 				break
 			}
@@ -10929,7 +11303,6 @@ turnLoop:
 	if !ts.opts.NoHistory {
 		finalMsg := providers.Message{Role: "assistant", Content: finalContent}
 		ts.agent.Sessions.AddMessage(ts.sessionKey, finalMsg.Role, finalMsg.Content)
-		ts.recordPersistedMessage(finalMsg)
 		if err := ts.agent.Sessions.Save(ts.sessionKey); err != nil {
 			turnStatus = TurnEndStatusError
 			// Wave 1: never surface raw err.Error() (session-save is a
@@ -10996,6 +11369,68 @@ turnLoop:
 // headless scheduled run has no live user to "already know" the run stopped
 // early — see ProcessScheduled's comment.
 const hardInterruptAbortReason = "turn canceled by hard interrupt request"
+
+// typedTurnExit (ADR-066 D7, FR-034, SC-006) finalizes a turn that ended
+// because its context was cancelled or its deadline expired while waiting on
+// the provider. These were runTurn's four SILENT return sites — a bare
+// fmt.Errorf("turn canceled") / ("turn timed out") with no log line, no
+// EventKindError and no transcript entry, so the user saw nothing and the
+// session worker rendered the "we can't tell why" copy.
+//
+// Every typed exit produces the three SC-006 artefacts:
+//   - one log line carrying the typed code AND the raw cause (operator triage),
+//   - one EventKindError carrying the typed code (live wire; the deferred
+//     EventKindTurnEnd in runTurn fires on return with the status returned
+//     here — TurnEndStatusAborted for a cancel, which is an intentional user
+//     action and must not mark the turn failed; TurnEndStatusError for a
+//     timeout),
+//   - one transcript entry with the typed code (replay).
+//
+// The returned error wraps BOTH the sentinel (ErrTurnCanceled /
+// ErrTurnTimedOut) and the raw cause, so runAgentLoop / processMessage /
+// session_worker callers that errors.Is the context error keep working and
+// TranslateTurnError classifies the chain to the same code. Never `unknown`.
+func (al *AgentLoop) typedTurnExit(ts *turnState, iteration int, llmModel string, cause error) (turnResult, TurnEndStatus, error) {
+	code, ok := typedExitCode(cause)
+	if !ok {
+		// Not a typed exit — callers only route context errors here; fall
+		// back to the cancel shape rather than inventing an `unknown`.
+		code = CodeTurnCanceled
+	}
+	var (
+		sentinel = ErrTurnCanceled
+		status   = TurnEndStatusAborted
+		level    = logger.WarnCF
+	)
+	switch code {
+	case CodeTurnTimedOut:
+		sentinel, status = ErrTurnTimedOut, TurnEndStatusError
+	case CodeContextUnrecoverable:
+		sentinel, status, level = ErrContextUnrecoverable, TurnEndStatusError, logger.ErrorCF
+	}
+	llm := typedExitError(code, cause)
+
+	al.emitEvent(
+		EventKindError,
+		ts.eventMeta("runTurn", "turn.error"),
+		ErrorPayload{
+			Stage:     "llm",
+			ChatID:    ts.opts.ChatID,
+			Code:      string(llm.Code),
+			Message:   llm.Message,
+			SessionID: string(ts.routingSessionID),
+		},
+	)
+	ts.appendClassifiedError(EventKindError.String(), "runTurn", llm)
+	level("agent", "Turn exited: "+string(code), map[string]any{
+		"agent_id":  ts.agent.ID,
+		"iteration": iteration,
+		"model":     llmModel,
+		"code":      string(code),
+		"cause":     cause.Error(),
+	})
+	return turnResult{status: status}, status, fmt.Errorf("%w: %w", sentinel, cause)
+}
 
 // abortTurn finalizes a hard-aborted turn. It differentiates two cases by
 // reason string, because they need opposite treatment: one is a successful
@@ -11315,6 +11750,20 @@ func (al *AgentLoop) assembleMessages(
 			"Use the recall_conversation tool with a turn_range to retrieve them."
 	} else {
 		breadcrumb = buildBreadcrumb(archive, history, breadcrumbTokenCap)
+		// ADR-066 FR-019: apply the persisted projection state so the
+		// window the provider sees here (turn start, post-trim, reload) is
+		// byte-identical to what the choke point / the D5 emptying pass
+		// produced live. Pure; no-op when nothing was capped or emptied.
+		if pm := ts.agent.Sessions.Projection(ts.sessionKey); len(pm.Entries) > 0 {
+			var cs config.ContextSettings
+			if cfg := al.GetConfig(); cfg != nil {
+				cs = cfg.Context
+			}
+			history = projectMessages(history, archiveLineResolver(archive, history), pm.Entries, projectionContext{
+				policy:  capPolicyFor(cs, agentContextBudget(ts.agent)),
+				archive: archive,
+			})
+		}
 	}
 	// Review B3: a task's TASK_STATUS/TASK_SUMMARY marker instruction
 	// (buildPrompt, task_executor.go) lives only in the task's first user
@@ -11332,7 +11781,12 @@ func (al *AgentLoop) assembleMessages(
 			taskStatusLabel, taskStatusLabel,
 		)
 	}
-	spanMsgs := al.activeRecallSpan(ts.sessionKey).Messages()
+	span := al.activeRecallSpan(ts.sessionKey)
+	// ADR-066 D5.4 (FR-043): this from-scratch assembly includes the active
+	// span exactly once (BuildMessages, after the pinned core). Record it by
+	// identity so the tool-result site never splices it a second time, and
+	// so a same-turn replacement (E20) can find the block to remove.
+	recordAssembledRecallSpan(ts, span, history)
 	return ts.agent.ContextBuilder.BuildMessages(
 		history,
 		userMsg,
@@ -11343,7 +11797,7 @@ func (al *AgentLoop) assembleMessages(
 		ts.opts.SenderID,
 		ts.opts.SenderDisplayName,
 		breadcrumb,
-		spanMsgs,
+		span.Messages(),
 		skillNames...,
 	)
 }
@@ -11452,6 +11906,31 @@ var skipAdvanceTotal atomic.Int64
 // The tool-surface term is what the turn ACTUALLY SENDS, not the whole
 // registry — see sentToolSurfaceTokens.
 func (al *AgentLoop) windowTrim(agent *AgentInstance, sessionKey string) (compressionResult, bool) {
+	return al.windowTrimForce(agent, sessionKey, false)
+}
+
+// windowTrimForce is windowTrim with the "the window already fits, do
+// nothing" guard optionally disabled.
+//
+// force=false (windowTrim, every proactive caller): a caller that measured
+// the budget itself and decided to trim can be WRONG — the pre-turn check
+// historically charged the whole tool registry while this function charges
+// only the sent surface — and without the guard a mis-fired call silently
+// evicted the oldest turn every turn.
+//
+// force=true: the PROVIDER rejected the request with its own context error.
+// Our estimate said it fit and the provider says otherwise, so the estimate
+// is what is wrong; refusing to trim here would leave the retry identical to
+// the call that just failed. This is the documented reactive fallback for
+// "the estimate undershoots reality".
+func (al *AgentLoop) windowTrimForce(
+	agent *AgentInstance, sessionKey string, force bool,
+) (compressionResult, bool) {
+	if agent.budgetChecksExempt() {
+		// FR-005: an exempt provider manages its own context; there is no
+		// budget to fit against, so there is nothing to trim.
+		return compressionResult{NothingToTrim: true}, false
+	}
 	window := agent.Sessions.GetHistory(sessionKey)
 	if len(window) <= 1 {
 		// Nothing to evict: a single-message window cannot be shrunk further.
@@ -11460,6 +11939,33 @@ func (al *AgentLoop) windowTrim(agent *AgentInstance, sessionKey string) (compre
 
 	toolDefsTokens := al.sentToolSurfaceTokens(agent, sessionKey)
 
+	// ADR-066 FR-019: measure the window AS THE PROVIDER SEES IT. GetHistory
+	// returns the archive's raw tail; results the choke point capped or an
+	// earlier pass emptied are projected only at assembly. Counting their
+	// full content here would over-evict (and, on the floor path, re-empty
+	// results that are already marks). One archive read serves the
+	// projection, the floor-path emptying below and the M5 stat.
+	archive, archErr := agent.Sessions.ReadArchive(context.Background(), sessionKey)
+	if archErr != nil {
+		logger.DebugCF("agent", "windowTrim: ReadArchive failed; window measured unprojected, no floor emptying",
+			map[string]any{"session_key": sessionKey, "error": archErr.Error()})
+	}
+	measured := window
+	lineOf := func(int) int { return -1 }
+	if archErr == nil {
+		lineOf = archiveLineResolver(archive, window)
+		if pm := agent.Sessions.Projection(sessionKey); len(pm.Entries) > 0 {
+			var cs config.ContextSettings
+			if cfg := al.GetConfig(); cfg != nil {
+				cs = cfg.Context
+			}
+			measured = projectMessages(window, lineOf, pm.Entries, projectionContext{
+				policy:  capPolicyFor(cs, agentContextBudget(agent)),
+				archive: archive,
+			})
+		}
+	}
+
 	// Recall span tokens — updated after a potential drop below.
 	recallSpan := al.activeRecallSpan(sessionKey)
 	recallSpanTokens := 0
@@ -11467,48 +11973,39 @@ func (al *AgentLoop) windowTrim(agent *AgentInstance, sessionKey string) (compre
 		recallSpanTokens = recallSpan.Tokens
 	}
 
-	contextWindow := agent.ContextWindow
-	if contextWindow <= 0 {
-		contextWindow = 128000
-	}
-	maxTokens := agent.MaxTokens
-
-	// 5% headroom target: budget for the window must leave room for a normal
-	// next-turn response and the 5% slack so we don't immediately re-trim.
-	headroom := (contextWindow + 19) / 20 // ceil(0.05 * contextWindow)
-
-	// M3 fix: subtract pinned-core (system prompt) + breadcrumb overhead so the
-	// suffix fit-check uses the same budget basis as isOverContextBudget (which
-	// counts the system message). On small-window models, omitting these causes
-	// under-eviction — the assembled request is still over budget after trim.
-	//
-	// Estimate the system prompt token cost via the ContextBuilder cache:
-	// the static prompt is already cached, so BuildSystemPromptWithCache is cheap.
-	// We estimate using the same chars-per-token ratio as estimateMessageTokens.
-	var pinnedCoreOverhead int
-	if agent.ContextBuilder != nil {
-		sysPrompt := agent.ContextBuilder.BuildSystemPromptWithCache()
-		// chars*2/5 ≈ tokens — exactly the same heuristic as estimateMessageTokens
-		// (which uses chars*2/5 after adding per-message overhead). chars/4 would
-		// underestimate by ~38%, causing under-eviction on small-window models.
-		pinnedCoreOverhead = len(sysPrompt) * 2 / 5
-	}
-	// breadcrumbTokenCap is the hard cap on the breadcrumb block (~1000 tokens);
-	// use it as a conservative estimate of the breadcrumb overhead.
-	pinnedCoreOverhead += breadcrumbTokenCap
-
-	budget := contextWindow - maxTokens - headroom - pinnedCoreOverhead
+	// The ONE budget B (ADR-066 FR-028): W − max_tokens − ceil(0.05·W) −
+	// pinnedCoreOverhead, resolved by the same helper the pre-turn and
+	// timeout-recovery checks call, so the suffix fit-check below and the
+	// checks that decide to invoke it can never disagree. The 5 % headroom
+	// keeps a just-trimmed window from re-trimming on the very next turn;
+	// the pinned-core term (M3 fix) is what stops under-eviction on
+	// small-window models — the system prompt and breadcrumb are sent every
+	// turn but are not part of `window`.
+	budget := agentContextBudget(agent)
 
 	// FR-019 drop-span-first: if an active span exists and we're over budget,
 	// drop it and re-check. Only evict real window Turns if still over budget.
-	currentWindowTokens := sumMessageTokens(window)
-	if recallSpan != nil && (currentWindowTokens+toolDefsTokens+recallSpanTokens+maxTokens > contextWindow) {
+	currentWindowTokens := sumMessageTokens(measured)
+
+	// Nothing to do: the window already fits. Without this, a caller that
+	// mis-fired (historically the pre-turn check, which charged the whole
+	// tool registry while this function charges only the sent surface) would
+	// still reach the boundary walk below, take the first non-zero boundary
+	// whose suffix fits, and evict the oldest turn — every turn, silently,
+	// on a conversation that never came close to the budget.
+	//
+	// Skipped under force: there the provider itself rejected the request, so
+	// it is our estimate that is wrong, not the window.
+	if !force && currentWindowTokens+toolDefsTokens+recallSpanTokens <= budget {
+		return compressionResult{NothingToTrim: true, RemainingMessages: len(window)}, false
+	}
+
+	if recallSpan != nil && (currentWindowTokens+toolDefsTokens+recallSpanTokens > budget) {
 		al.dropRecallSpan(sessionKey, "pressure")
 		recallSpanTokens = 0
-		// Re-check against the same budget basis used for the suffix fit-check
-		// below (contextWindow − maxTokens − headroom − pinnedCoreOverhead).
-		// Using raw contextWindow here would pass cases that the suffix walk
-		// would still reject, causing unnecessary evictions on the next call.
+		// Re-check against the same budget B used for the suffix fit-check
+		// below. Using the raw window here would pass cases that the suffix
+		// walk would still reject, causing unnecessary evictions on the next call.
 		if currentWindowTokens+toolDefsTokens <= budget {
 			// The recall span alone was the problem: dropping it brought the
 			// window back under budget without evicting any window Turns.
@@ -11532,7 +12029,7 @@ func (al *AgentLoop) windowTrim(agent *AgentInstance, sessionKey string) (compre
 			// Boundary at 0 keeps everything — not a useful cut.
 			continue
 		}
-		suffix := window[b:]
+		suffix := measured[b:]
 		suffixTokens := sumMessageTokens(suffix)
 		if suffixTokens+toolDefsTokens+recallSpanTokens <= budget {
 			cutIdx = b
@@ -11551,6 +12048,7 @@ func (al *AgentLoop) windowTrim(agent *AgentInstance, sessionKey string) (compre
 	// turns (SC-001). The floor keeps window[lastUserIdx:] — the user message and
 	// any following assistant/tool messages — not just the bare user message.
 	var droppedCount int
+	var emptiedCount int
 	if cutIdx >= 0 {
 		// Normal path: tail-of-window keeps are handled by TruncateHistory.
 		// TruncateHistory advances meta.Skip (archive-preserving; zero bytes
@@ -11578,7 +12076,34 @@ func (al *AgentLoop) windowTrim(agent *AgentInstance, sessionKey string) (compre
 		}
 		keepLast := len(window) - keepStart
 		droppedCount = len(window) - keepLast
-		agent.Sessions.TruncateHistory(sessionKey, keepLast)
+		if droppedCount > 0 {
+			agent.Sessions.TruncateHistory(sessionKey, keepLast)
+		}
+
+		// ADR-066 D5, register #3 / B-21b (FR-017): the floor kept an
+		// oversized turn whole. Its tool results — every one whose call is
+		// in the kept slice, EXCEPT the floor set (the results of its last
+		// assistant step) — are emptied oldest-first until the kept turn
+		// fits B, or none is left. Skip does not move again: this is an
+		// empty, not a cut. The pass persists (id, line) → emptied; the
+		// caller's post-trim assembleMessages re-applies it, so the
+		// in-memory copy mutated here is only the fit measurement.
+		if archErr == nil {
+			kept := append([]providers.Message(nil), measured[keepStart:]...)
+			keptLineOf := func(i int) int { return lineOf(keepStart + i) }
+			fits := func(m []providers.Message) bool {
+				return sumMessageTokens(m)+toolDefsTokens+recallSpanTokens <= budget
+			}
+			emptiedCount = len(al.emptyInPlace(
+				al.getActiveTurnState(sessionKey), agent, sessionKey, kept, keptLineOf, archive, fits, emptyingSitePreTurn))
+		}
+	}
+
+	if droppedCount == 0 && emptiedCount == 0 {
+		// The window is already a single turn whose results are all in the
+		// floor set (or already marks): nothing this site may do. Not an
+		// error — D6's clamp keeps that set under B (CRIT-002).
+		return compressionResult{NothingToTrim: true, RemainingMessages: len(window)}, false
 	}
 
 	if saveErr := agent.Sessions.Save(sessionKey); saveErr != nil {
@@ -11590,9 +12115,11 @@ func (al *AgentLoop) windowTrim(agent *AgentInstance, sessionKey string) (compre
 	// The backends' TruncateHistory is fire-and-forget (errors are logged, not
 	// returned). Re-read GetHistory and compare: if the window is the same size
 	// as before, the trim silently failed — log the error and return ok=false so
-	// the caller does not misreport a successful eviction.
+	// the caller does not misreport a successful eviction. An empty-only pass
+	// (droppedCount == 0) shrinks bytes, not the message count, so it is
+	// exempt from the count check.
 	postWindow := agent.Sessions.GetHistory(sessionKey)
-	if len(postWindow) >= len(window) {
+	if droppedCount > 0 && len(postWindow) >= len(window) {
 		logger.ErrorCF("agent", "windowTrim: TruncateHistory did not shrink the window (backend write may have failed)",
 			map[string]any{
 				"session_key": sessionKey,
@@ -11612,32 +12139,22 @@ func (al *AgentLoop) windowTrim(agent *AgentInstance, sessionKey string) (compre
 
 	keptCount := len(postWindow) // use the verified post-trim window size
 
-	// M5 / FR-018: emit context_archive_bytes by reading the full archive.
-	// This is done after the confirmed trim so the stat reflects the actual
-	// post-eviction archive size (which is UNCHANGED — eviction never deletes
-	// bytes from the JSONL file, only advances Skip). The byte count is emitted
-	// as a structured log field so it is observable in production without a
-	// full metrics framework. Only done when we have an archive reader.
-	archiveBytes := int64(-1) // -1 indicates unavailable (sentinel; explained below)
-	if archived, err := agent.Sessions.ReadArchive(context.Background(), sessionKey); err == nil {
-		// Estimate archive size from the number of archived messages (each JSON
-		// line is typically 100–500 bytes; use message count as a proxy).
-		// Actual byte stat requires fs.Stat — not exposed through SessionStore.
-		// For now: count is a proxy observable alongside the real skip value.
-		archiveBytes = int64(len(archived))
-	} else {
-		// M5: ReadArchive error post-eviction — the eviction itself succeeded
-		// (M4 verified the window shrank), but the archive byte stat is
-		// unavailable. Log at DEBUG so operators can correlate -1 in the warn
-		// below with a transient I/O issue without polluting the warn stream.
-		logger.DebugCF("agent", "windowTrim: M5 ReadArchive failed; context_archive_lines will be -1 (sentinel)",
-			map[string]any{"session_key": sessionKey, "error": err.Error()})
+	// M5 / FR-018: emit context_archive_lines from the archive read above.
+	// Eviction never deletes bytes from the JSONL file, only advances Skip,
+	// and emptying never touches it either (ADR-028 / ADR-066 B-23), so the
+	// pre-trim read is the post-trim truth. Actual byte stat requires
+	// fs.Stat — not exposed through SessionStore; the line count is the
+	// proxy observable alongside the real skip value. -1 = unavailable.
+	archiveBytes := int64(-1)
+	if archErr == nil {
+		archiveBytes = int64(len(archive))
 	}
 
 	logger.WarnCF("agent", "windowTrim: evicted oldest Turns from live window",
 		map[string]any{
 			"session_key":            sessionKey,
 			"turns_evicted":          droppedCount,
+			"results_emptied":        emptiedCount,
 			"kept_msgs":              keptCount,
 			"budget":                 budget,
 			"context_archive_lines":  archiveBytes, // FR-018 context_archive_bytes proxy
@@ -11764,47 +12281,33 @@ func (al *AgentLoop) handleModelSwitch(
 	history := agent.Sessions.GetHistory(sessionKey)
 	currentConvTokens := estimateHistoryTokens(history)
 
-	// Resolve the new model's window. ModelConfig itself doesn't carry a
-	// window (the per-agent defaults hold the canonical window), so we read
-	// the configured default from cfg.Agents.Defaults.ContextWindow. On any
-	// miss (cfg nil, model unknown, defaults unset) fall back to the agent's
-	// existing ContextWindow — preserving the historical "treat unknown as
-	// fit" behavior so the next LLM call's windowTrim still fires on overflow.
-	// Force a 128k floor for sub-zero agent defaults so decision logic still
-	// has a sane bound.
-	newContextWindow := agent.ContextWindow
-	if newContextWindow <= 0 {
-		newContextWindow = 128000
-	}
+	// ADR-066 D2: the new model's window comes from the ONE resolver, keyed
+	// by the new primary's (provider, model) and this agent's id — the same
+	// call NewAgentInstance and ApplyAgentModel make, so the switch-time
+	// re-window, the pre-turn trim and the mid-turn check compare against
+	// one budget B (B-06). An unresolvable model keeps the agent's current
+	// window (the "unknown model = no-op switch" behaviour — ApplyAgentModel
+	// below will fail and the turn continues on the previous model), but
+	// the miss MUST be surfaced: discarding it would let a typo'd
+	// `metadata.model_name` silently route the next call through the
+	// agent's PRIMARY model — the exact FR-007 failure mode.
+	newContextWindow, _, _ := agent.windowSnapshot()
 	al.mu.RLock()
 	cfg := al.cfg
 	al.mu.RUnlock()
 	if cfg != nil {
-		// Use ResolveModelCfg to confirm the new model resolves (so we know
-		// it's a real entry in the registry). The actual window still comes
-		// from agent defaults — ModelConfig doesn't carry one. We deliberately
-		// keep the "unknown model = no-op switch" behavior (the next LLM
-		// call will trip on overflow and windowTrim will fire), but
-		// we MUST surface the miss to the operator via a WARN. Discarding the
-		// error (W4-4 silent-failure-A) would let a typo'd `metadata.model_name`
-		// from the operator silently route the next LLM call through the
-		// agent's PRIMARY model — the exact FR-007 failure mode. Logging the
-		// resolve error at WARN with the requested model + agent id gives
-		// operators a breadcrumb to spot the typo at the switch site rather
-		// than several stack frames later.
-		if _, resolveErr := ResolveModelCfg(cfg, newModel, agent.Home); resolveErr != nil {
-			logger.WarnCF("agent", "handleModelSwitch: requested model did not resolve; falling back to agent defaults",
+		if modelCfg, resolveErr := ResolveModelCfg(cfg, newModel, agent.Home); resolveErr != nil {
+			logger.WarnCF("agent", "handleModelSwitch: requested model did not resolve; keeping the current window",
 				map[string]any{
 					"requested_model": newModel,
 					"agent_id":        agent.ID,
 					"resolve_error":   resolveErr.Error(),
 				})
+		} else {
+			candidates := resolveModelCandidatesForAgent(cfg, cfg.Agents.Defaults.DefaultModel.Provider, modelCfg.Model, agent)
+			windowProvider, windowModel := primaryWindowPair(candidates, cfg.Agents.Defaults.DefaultModel.Provider, modelCfg.Model)
+			newContextWindow = ResolveWindow(cfg, windowProvider, windowModel, agent.ID).Window
 		}
-		if cfg.Agents.Defaults.ContextWindow > 0 {
-			newContextWindow = cfg.Agents.Defaults.ContextWindow
-		}
-		// keep the "unknown model = no-op switch" behavior; the next LLM
-		// call's windowTrim will fire on overflow.
 	}
 
 	// FR-011: Re-window via windowTrim when the new model's window is
@@ -11816,13 +12319,17 @@ func (al *AgentLoop) handleModelSwitch(
 	// turns; evicted turns are reachable via recall_conversation.
 	// DOWNSIZE: windowTrim inherits FR-003's last-user-Turn floor (MAJ-06).
 	// No summary is written — breadcrumb in BuildMessages is the only clue.
+	// An exempt or unknown new window (0) is a Noop: nothing to trim against.
 	action := decideSwitchCompressAction(currentConvTokens, newContextWindow)
 	if action == SwitchActionCompress {
 		// Temporarily set the agent's context window to the new model's window
 		// so windowTrim computes the correct budget. We restore it after the
-		// trim; ApplyAgentModel (below) will set the canonical value.
+		// trim; ApplyAgentModel (below) sets the canonical value under the
+		// instance lock together with the rest of the model identity.
+		agent.mu.Lock()
 		oldContextWindow := agent.ContextWindow
 		agent.ContextWindow = newContextWindow
+		agent.mu.Unlock()
 
 		if _, trimOK := al.windowTrim(agent, sessionKey); !trimOK {
 			logger.DebugCF("agent", "handleModelSwitch: windowTrim returned false (history too small to trim)",
@@ -11837,7 +12344,9 @@ func (al *AgentLoop) handleModelSwitch(
 				})
 		}
 
+		agent.mu.Lock()
 		agent.ContextWindow = oldContextWindow
+		agent.mu.Unlock()
 	}
 
 	// 5. Orchestrate the full in-memory model swap under the agent mutex.
@@ -12260,7 +12769,7 @@ func (al *AgentLoop) buildCommandsRuntime(agent *AgentInstance, opts *processOpt
 			agent.mu.RLock()
 			m, c := agent.Model, agent.Candidates
 			agent.mu.RUnlock()
-			return m, resolvedCandidateProvider(c, cfg.Agents.Defaults.Provider)
+			return m, resolvedCandidateProvider(c, cfg.Agents.Defaults.DefaultModel.Provider)
 		}
 		rt.SwitchModel = func(value string) (string, error) {
 			// Shared in-place model switch (#73): same path as the
@@ -12276,8 +12785,7 @@ func (al *AgentLoop) buildCommandsRuntime(agent *AgentInstance, opts *processOpt
 				return fmt.Errorf("sessions not initialized for agent")
 			}
 
-			agent.Sessions.SetHistory(opts.SessionKey, make([]providers.Message, 0))
-			return agent.Sessions.Save(opts.SessionKey)
+			return clearSessionWindow(agent.Sessions, opts.SessionKey)
 		}
 	}
 
@@ -12297,6 +12805,26 @@ func (al *AgentLoop) buildCommandsRuntime(agent *AgentInstance, opts *processOpt
 	rt = rt.WithAgentLoop(al)
 
 	return rt
+}
+
+// clearSessionWindow implements /new (alias /clear): it empties the live
+// window while preserving the archive.
+//
+// It clears with the Skip-advancing primitive, NOT SetHistory. ADR-066 FR-047
+// narrowed SetHistory to a first-fill primitive — an archive-backed store
+// REFUSES it once the archive holds >= 1 line (memory.ErrArchiveNotEmpty) —
+// and because SessionWriter.SetHistory is fire-and-forget the refusal is
+// swallowed into a slog.Error. /clear therefore answered "Chat history
+// cleared!" on CLI and every channel while clearing nothing at all, and the
+// next message was answered with the whole prior conversation still in the
+// window.
+//
+// TruncateHistory(key, 0) sets Skip = Count: the live window is empty, the
+// JSONL archive is untouched (recall by tool_call_id still resolves), and the
+// projection entries below the new Skip are pruned in the same meta write.
+func clearSessionWindow(sessions session.SessionStore, sessionKey string) error {
+	sessions.TruncateHistory(sessionKey, 0)
+	return sessions.Save(sessionKey)
 }
 
 func mapCommandError(result commands.ExecuteResult) string {

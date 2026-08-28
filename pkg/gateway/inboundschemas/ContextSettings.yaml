@@ -1,0 +1,76 @@
+title: ContextSettings
+description: >
+  Global context-budget controls (ADR-066 D9), as returned by
+  GET /api/v1/settings/context and echoed by PUT. User-facing location is
+  Settings → Models. Every successful PUT triggers a registry reload so the
+  next turn uses the new values without a restart. Readable and writable by
+  any authenticated user (withAuth, the /settings/memory precedent — not
+  RequireNotBypass).
+type: object
+required:
+  - mcp_result_cap
+  - builtin_success_cap
+  - builtin_failure_cap
+  - absolute_trigger_chars
+  - ingest_bound_bytes
+  - model_overrides
+additionalProperties: false
+properties:
+  mcp_result_cap:
+    type: integer
+    minimum: 1
+    maximum: 150000
+    description: >
+      Per-result cap (chars) for a successful MCP tool result entering the
+      window (ADR-066 D4 "mcp" surface). Default 62,500; ceiling 150,000.
+    example: 62500
+  builtin_success_cap:
+    type: integer
+    minimum: 1
+    maximum: 150000
+    description: >
+      Per-result cap (chars) for a successful builtin tool result, hydrated
+      attachment, recall page or delegate report (D4 "builtin-success"
+      surface). Default 64,000; ceiling 150,000.
+    example: 64000
+  builtin_failure_cap:
+    type: integer
+    minimum: 1
+    maximum: 150000
+    description: >
+      Per-result cap (chars) for a failed, denied or skipped tool result —
+      builtin or MCP (D4 "builtin-failure" surface). Default 10,000;
+      ceiling 150,000.
+    example: 10000
+  absolute_trigger_chars:
+    type: integer
+    minimum: 1
+    description: >
+      Absolute tool-result share trigger (chars) for the mid-turn window
+      check (D6); the token share is this ÷ 2.5. Default 400,000.
+    example: 400000
+  ingest_bound_bytes:
+    type: integer
+    minimum: 1
+    maximum: 8388607
+    description: >
+      Maximum bytes read from any network or subprocess source at ingest
+      (D10). Must be strictly below 8,388,608 (0.8 × the archive line size).
+      Default 8,000,000.
+    example: 8000000
+  default_context_window:
+    type: integer
+    minimum: 1
+    nullable: true
+    description: >
+      Global default context window (tokens), D2 rung 3 — the single home of
+      this setting (agents.defaults.context_window no longer exists). Absent
+      or null when unset. Clamped to the model's capability on resolution.
+    example: 128000
+  model_overrides:
+    type: array
+    items:
+      $ref: './ContextModelOverride.yaml'
+    description: >
+      Per-(provider, model) context-window overrides (D2 rung 2). Empty
+      array when none.

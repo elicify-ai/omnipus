@@ -309,14 +309,14 @@ func TestConfigSet_AgentsListRejected(t *testing.T) {
 func TestConfigSet_AgentsDefaultsStillWorks(t *testing.T) {
 	deps, cfg := newTestDeps()
 	result := systools.NewConfigSetTool(deps).Execute(context.Background(), map[string]any{
-		"key":   "agents.defaults.model_name",
+		"key":   "agents.defaults.default_model.model",
 		"value": "glm-4.7",
 	})
 	if result.IsError {
-		t.Fatalf("set agents.defaults.model_name failed: %s", result.ForLLM)
+		t.Fatalf("set agents.defaults.default_model.model failed: %s", result.ForLLM)
 	}
-	if cfg.Agents.Defaults.ModelName != "glm-4.7" {
-		t.Errorf("cfg.Agents.Defaults.ModelName = %q, want %q", cfg.Agents.Defaults.ModelName, "glm-4.7")
+	if cfg.Agents.Defaults.DefaultModel.Model != "glm-4.7" {
+		t.Errorf("cfg.Agents.Defaults.DefaultModel.Model = %q, want %q", cfg.Agents.Defaults.DefaultModel.Model, "glm-4.7")
 	}
 }
 

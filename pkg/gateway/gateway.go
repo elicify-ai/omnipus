@@ -75,7 +75,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/plan"
 	"github.com/elicify-ai/omnipus/pkg/policy"
 	"github.com/elicify-ai/omnipus/pkg/providers"
-	"github.com/elicify-ai/omnipus/pkg/providers/capabilities"
+	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/skills"
@@ -691,9 +691,321 @@ func bootCredentials(
 			values = append(values, v)
 		}
 	}
+	// ADR-068 FR-046/security paragraph (T068-32): stored device-code OAuth
+	// tokens (openai_OAUTH, and once configured xai_OAUTH) are not part of
+	// the config-ref-driven bundle above — nothing in config.json references
+	// them — so a restart would otherwise leave a previously-signed-in
+	// session's tokens unscrubbed until the next explicit sign-in. Fold them
+	// in here too.
+	values = append(values, providers.CollectOAuthSensitiveValues(credStore)...)
 	cfg.RegisterSensitiveValues(values)
 
+	// Wire the shared credential store for CreateProviderFromConfig's
+	// openai-chatgpt (device-code) dispatch — see
+	// providers.SetDefaultCredentialStore's doc comment for why this
+	// package-level seam exists instead of threading a *credentials.Store
+	// through every CreateProviderFromConfig call site.
+	providers.SetDefaultCredentialStore(credStore)
+
 	return cfg, bundle, credStore, nil
+}
+
+// wireOAuthSensitiveValueRegistrar installs providers' sensitive-value
+// registration hook (ADR-068 FR-046). See the call site in Run for why the
+// seam exists and why the config is read through a getter rather than
+// captured.
+//
+// getCfg returns the live config (nil-safe); store is the unlocked credential
+// store. Errors are swallowed deliberately — this is housekeeping on a
+// security control, and the alternative to a best-effort re-registration is
+// no re-registration at all.
+func wireOAuthSensitiveValueRegistrar(getCfg func() *config.Config, store *credentials.Store) {
+	providers.SetSensitiveValueRegistrar(oauthSensitiveValueRegistrar(getCfg, store))
+}
+
+// oauthSensitiveValueRegistrar builds the closure wireOAuthSensitiveValueRegistrar
+// installs. Split out so it can be exercised directly: installing it into
+// providers' package-level seam makes it unreachable from a test, and a
+// re-registration that silently registers nothing is exactly the failure this
+// whole seam exists to prevent.
+func oauthSensitiveValueRegistrar(getCfg func() *config.Config, store *credentials.Store) func(values ...string) {
+	return func(values ...string) {
+		if getCfg == nil || store == nil {
+			return
+		}
+		cfg := getCfg()
+		if cfg == nil {
+			return
+		}
+		bundle, _ := credentials.ResolveBundle(cfg, store)
+		complete := make([]string, 0, len(bundle)+len(values)+2)
+		for _, v := range bundle {
+			if v != "" {
+				complete = append(complete, v)
+			}
+		}
+		complete = append(complete, providers.CollectOAuthSensitiveValues(store)...)
+		for _, v := range values {
+			if v != "" {
+				complete = append(complete, v)
+			}
+		}
+		cfg.RegisterSensitiveValues(complete)
+	}
+}
+
+// sweepOrphanedProviderCredentials is T068-10's startup sweep (ADR-068
+// FR-010 last clause, D14.2): delete any `<id>_API_KEY` credential whose
+// provider row is gone from cfg.Providers — greenfield housekeeping for the
+// one gap DELETE /providers/{id} cannot close on its own (a crash between
+// its step 2 config write and step 3 credential delete leaves an orphaned
+// secret; the retry story assumes the operator retries, boot must not).
+// Runs once per boot, after config load + credential-store unlock, as soon
+// as the audit logger exists.
+//
+// It also sweeps orphaned device-code OAuth entries (`<vendor>_OAUTH`,
+// ADR-068 FR-007) — a signed-in provider's stored access AND refresh token
+// for the operator's real vendor account, which is the MORE sensitive of
+// the two secrets a provider row can own. Two rules make this safe:
+//
+//   - the key is the VENDOR, not the provider id. providers.OAuthVendorID
+//     maps openai-chatgpt → openai, and a single vendor entry may legitimately
+//     back several configured rows, so an entry is swept only when NO
+//     configured row maps to its vendor;
+//   - the conservative direction differs from the API-key case and is
+//     stated deliberately. Wrongly deleting an `_API_KEY` is unrecoverable
+//     (Omnipus cannot re-mint the operator's key), which is why that half
+//     stays as narrow as it is. Wrongly deleting an `_OAUTH` entry costs one
+//     "Sign in" click — while LEAVING one costs a live, unrevokable grant
+//     nothing in the UI references any more.
+//
+// The pattern rule (BDD "a <name> that does not match the `<id>_API_KEY`
+// pattern is left untouched") is deliberately conservative — wrongly
+// deleting a live secret is unrecoverable, failing to sweep is harmless:
+//
+//   - only names ending in exactly `_API_KEY` with a provider-id-shaped
+//     `<id>` prefix (lowercase/digits/[-_.], ≤64 — the shape onboarding and
+//     PUT /providers/{id} write via `provider.Id+"_API_KEY"`) are eligible.
+//     This leaves the ALL-UPPERCASE integration refs (BRAVE_API_KEY,
+//     GROQ_API_KEY, ELEVENLABS_API_KEY, …) and every channel/mailbox secret
+//     (`channel_<id>_<field>`, `mailbox_…_password`) untouched;
+//   - a name whose `<id>` matches a configured row's Provider is kept;
+//   - belt-and-braces: a name ANY provider row's api_key_ref points at is
+//     kept even when no row id matches its prefix.
+//
+// Never fatal: a locked store, a List failure, or a Delete failure is logged
+// and boot proceeds — the sweep is housekeeping, not a boot gate. A nil
+// auditor (sandbox.audit_log disabled) skips only the audit emission.
+// onboardingStateUnreadable reports whether the onboarding state file exists
+// but cannot be turned into a trustworthy answer to "has this instance been
+// onboarded?" — it is unreadable (permissions, I/O error, a directory in its
+// place) or it is not valid JSON.
+//
+// This MUST be called before onboarding.NewManager (M3): that constructor
+// swallows both cases into OnboardingComplete=false and, for the parse
+// failure, renames the file aside — after which a caller can no longer tell a
+// corrupted long-onboarded instance from a genuine first launch, and the
+// FR-050 pre-auth provider routes reopen unauthenticated for the process
+// lifetime.
+//
+// A MISSING file is NOT unknown: absence is exactly what a real fresh install
+// looks like, and returning true for it would break every first launch.
+//
+// Structural validity (json.Valid) is the whole test on purpose. Whether the
+// parsed document says complete or incomplete is the manager's business; this
+// function answers only "is the manager's answer derived from real data?".
+func onboardingStateUnreadable(home string) bool {
+	statePath := filepath.Join(home, "system", "state.json")
+	data, err := os.ReadFile(statePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false // never onboarded — the genuine fresh-install case
+		}
+		slog.Warn("gateway: onboarding state unreadable — pre-auth provider routes will stay closed",
+			"path", statePath, "error", err)
+		return true
+	}
+	if !json.Valid(data) {
+		slog.Warn("gateway: onboarding state is not valid JSON — pre-auth provider routes will stay closed",
+			"path", statePath)
+		return true
+	}
+	return false
+}
+
+func sweepOrphanedProviderCredentials(cfg *config.Config, store *credentials.Store, auditor *audit.Logger) {
+	if cfg == nil || store == nil || store.IsLocked() {
+		return
+	}
+	names, err := store.List()
+	if err != nil {
+		slog.Warn("gateway: credential sweep skipped: could not list credentials", "error", err)
+		return
+	}
+	configured := make(map[string]struct{}, len(cfg.Providers))
+	configuredVendors := make(map[string]struct{}, len(cfg.Providers))
+	referenced := make(map[string]struct{}, len(cfg.Providers))
+	for _, row := range cfg.Providers {
+		if row == nil {
+			continue
+		}
+		// M1: a SEEDED TEMPLATE row is not a configured provider and must
+		// never populate the keep-set. pkg/config/defaults.go seeds ~10
+		// permanent keyless template rows (model + api_base, no credential
+		// ref, no auth_method) — including `{Provider: "openai"}`. Without
+		// this filter `configuredVendors["openai"]` was populated on EVERY
+		// install, so `openai_OAUTH` — the only OAuth grant the product
+		// currently issues — was structurally unsweepable, and `<id>_API_KEY`
+		// was unsweepable for every seeded id. The orphan this sweep exists
+		// to reclaim (process dies between the config write and the
+		// credential delete during provider removal, leaving a live access
+		// AND refresh token with nothing in the UI referencing it) was
+		// therefore precisely the orphan it declined to touch.
+		//
+		// isSeedTemplateRow (rest.go) is the SAME predicate every other
+		// consumer of cfg.Providers applies — GET /providers' list branch
+		// among them — so "configured" means one thing across the package.
+		//
+		// The filter narrows the id/vendor keep-sets ONLY. The `referenced`
+		// keep-set below stays unconditional: a row carrying an api_key_ref
+		// is by definition not a keyless template, but the belt-and-braces
+		// "keep any name a row points at, whatever its shape" rule must not
+		// acquire an exception — wrongly deleting a live secret is
+		// unrecoverable, failing to sweep is harmless.
+		if ref := strings.TrimSpace(row.APIKeyRef); ref != "" {
+			referenced[ref] = struct{}{}
+		}
+		id := strings.TrimSpace(row.Provider)
+		if id == "" {
+			continue
+		}
+		seedShaped := isSeedTemplateRow(row)
+		if !seedShaped {
+			configured[id] = struct{}{}
+		}
+		// The OAUTH keep-set needs a NARROWER filter than the API_KEY one,
+		// and the asymmetric-risk rule above is why.
+		//
+		// A sign_in row legitimately has no api_key_ref, no api_base and no
+		// models — a sign-in provider authenticates with a vendor session,
+		// not a key — so it can be seed-SHAPED while being a real,
+		// operator-configured row holding a live OAuth grant. Filtering the
+		// vendor keep-set on seed shape alone would let the boot sweep
+		// delete that grant, which is unrecoverable and strictly worse than
+		// the orphan M1 set out to reclaim. (The first version of this fix
+		// did exactly that; TestCredentialSweep_OrphanedOAuthEntries caught
+		// it.)
+		//
+		// A row is therefore kept out of the vendor keep-set only when it is
+		// seed-shaped AND its id maps to its own vendor identity. That
+		// second clause is exactly what the shipped seed cannot satisfy for
+		// the one grant that matters: `openai_OAUTH` belongs to vendor
+		// `openai`, reached only from the sign-in row `openai-chatgpt`
+		// (OAuthVendorID maps it), never from the seeded api-key row
+		// `openai` (which maps to itself). So the seeded template stops
+		// shielding `openai_OAUTH` — the M1 defect — while every row that
+		// could actually own an OAuth entry still protects it.
+		//
+		// A row that declares auth_method sign_in is never seed-shaped
+		// (isSeedTemplateRow tests AuthMethod), so real sign-in rows are
+		// covered by the ordinary path regardless of their id mapping.
+		if !seedShaped || providers.OAuthVendorID(id) != id {
+			// A vendor entry can back MORE THAN ONE row (openai-chatgpt and
+			// any future OpenAI-family sign-in row share `openai_OAUTH`), so
+			// the keep-set is keyed on the vendor, not the row id.
+			configuredVendors[providers.OAuthVendorID(id)] = struct{}{}
+		}
+	}
+	for _, name := range names {
+		id, sweepable := sweepableOrphanCredential(name, configured, configuredVendors, referenced)
+		if !sweepable {
+			continue
+		}
+		if err := store.Delete(name); err != nil {
+			var nf *credentials.NotFoundError
+			if errors.As(err, &nf) {
+				continue // already gone — absence is success (FR-010 step 3 posture)
+			}
+			slog.Warn("gateway: credential sweep: could not delete orphaned credential",
+				"credential_ref", name, "error", err)
+			continue
+		}
+		// The one INFO line per swept orphan — ref NAME only, never the value.
+		slog.Info("gateway: swept orphaned provider credential",
+			"credential_ref", name, "provider_id", id)
+		if auditor != nil {
+			if err := auditor.Log(&audit.Entry{
+				Event:    EventProviderCredentialSwept,
+				Decision: audit.DecisionAllow,
+				Details: map[string]any{
+					"provider":       id,
+					"credential_ref": name,
+				},
+			}); err != nil {
+				slog.Warn("audit write failed", "event", EventProviderCredentialSwept, "error", err)
+			}
+		}
+	}
+}
+
+// oauthEntrySuffix is the suffix credentials.OAuthEntryName appends, derived
+// from that function itself (it takes the vendor id as its only argument, so
+// the empty id yields the bare suffix) rather than restated as a literal — a
+// rename there cannot silently desync this sweep.
+var oauthEntrySuffix = credentials.OAuthEntryName("")
+
+// sweepableOrphanCredential decides whether a credential-store entry name is
+// an orphaned provider secret the boot sweep may delete, and returns the
+// provider/vendor label to log and audit it under. Everything that is not
+// unambiguously an orphan is left alone — see the rules and the asymmetric
+// risk argument in sweepOrphanedProviderCredentials' doc comment.
+func sweepableOrphanCredential(name string, configured, configuredVendors, referenced map[string]struct{}) (string, bool) {
+	// A name any provider row's api_key_ref points at is kept whatever its
+	// shape — belt-and-braces for a row whose ref was renamed by hand.
+	if _, ok := referenced[name]; ok {
+		return "", false
+	}
+	if id, ok := strings.CutSuffix(name, "_API_KEY"); ok {
+		if !isProviderCredentialID(id) {
+			return "", false
+		}
+		if _, cfgd := configured[id]; cfgd {
+			return "", false
+		}
+		return id, true
+	}
+	if vendor, ok := strings.CutSuffix(name, oauthEntrySuffix); ok {
+		if !isProviderCredentialID(vendor) {
+			return "", false
+		}
+		if _, backed := configuredVendors[vendor]; backed {
+			return "", false
+		}
+		return vendor, true
+	}
+	return "", false
+}
+
+// isProviderCredentialID reports whether id has the shape of a provider row
+// id as written by onboarding and PUT /providers/{id} (catalog ids are
+// models.dev slugs — lowercase letters, digits, '-', '.', '_' — and the
+// contract caps ids at 64 chars). Uppercase prefixes are OUT by design: they
+// belong to the integration refs (BRAVE_API_KEY, …), which are not provider
+// credentials. A custom row id containing uppercase is simply never swept —
+// the conservative direction for housekeeping.
+func isProviderCredentialID(id string) bool {
+	if id == "" || len(id) > 64 {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		c := id[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= '0' && c <= '9', c == '-', c == '_', c == '.':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // RunOptions carries the inputs for the gateway runtime. Kept as a struct
@@ -1647,16 +1959,13 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// Build the real LLM provider. The test_harness override hook + scripted-
 	// scenario fallback was removed 2026-05-10; tests now run against real
 	// OpenRouter via the configured provider entry.
-	provider, modelID, err := createStartupProvider(cfg, allowEmptyStartup)
+	// ADR-068 FR-020: the startup provider's model id is NEVER written back
+	// into agents.defaults.default_model. The old `ModelName == ""` back-fill
+	// guard that lived here was deleted with the alias — the pair is written
+	// only by onboarding completion and the default-model PUT.
+	provider, _, err := createStartupProvider(cfg, allowEmptyStartup)
 	if err != nil {
 		return fmt.Errorf("error creating provider: %w", err)
-	}
-
-	// Only override ModelName if it was empty (first boot / migration).
-	// Don't overwrite an alias (e.g. "openrouter-auto") with the raw model slug
-	// (e.g. "z-ai/glm-5v-turbo") — the alias is what GetModelConfig looks up by.
-	if modelID != "" && cfg.Agents.Defaults.ModelName == "" {
-		cfg.Agents.Defaults.ModelName = modelID
 	}
 
 	// ADR-054 D2/D3: bring in any agents already persisted as entity records
@@ -1745,6 +2054,35 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// coreagent.SeedConfig itself — is where it lives.
 	seedSystemAgentEagerSouls(cfg)
 
+	// ADR-067 T067-07: boot the ONE provider catalog for this process. Boot
+	// performs no network I/O — it parses the embedded snapshot, reads the
+	// persisted last-known-good from $OMNIPUS_HOME/providers_catalog.json,
+	// and serves whichever is valid and newest (E6). It never fails: with
+	// neither usable, the catalog serves nothing, every lookup misses, and
+	// the media path stays optimistic (E7).
+	//
+	// It must happen HERE, before NewAgentLoop, because NewAgentLoop builds
+	// every agent instance and each construction runs ADR-066's ResolveWindow
+	// ladder — whose rung 5 is this catalog. Installing it afterwards would
+	// leave every agent's window resolved from the floor at boot and only
+	// corrected at the next reload.
+	//
+	// The startup pull and the 24 h ticker are NOT started here; they start
+	// after the listener is bound (see setupAndStartServices).
+	providerCatalog := catalog.Boot(
+		context.Background(),
+		catalog.EmbeddedSnapshot,
+		catalog.NewGHReleasePuller(),
+		catalog.NewFileStore(homePath),
+		catalogLogAdapter{},
+	)
+	agent.SetWindowCatalog(providerCatalog)
+	// ADR-067 FR-012: the provider FACTORY dispatches on the protocol this
+	// same document carries, so it must read the same instance — otherwise
+	// the gateway would resolve windows from the pulled document while
+	// constructing transports from the embedded snapshot.
+	providers.SetCatalog(providerCatalog)
+
 	msgBus := bus.NewMessageBus()
 	var agentLoop *agent.AgentLoop
 	agentLoop, err = agent.NewAgentLoop(cfg, msgBus, provider)
@@ -1770,6 +2108,67 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 		}
 		return fmt.Errorf("gateway: agent loop boot failed: %w", err)
 	}
+
+	// T068-10 (ADR-068 FR-010 last clause): startup sweep of orphaned
+	// `<id>_API_KEY` credentials. Config is loaded and the store unlocked
+	// (bootCredentials above); this is the earliest point where the audit
+	// logger exists, so the sweep's provider.credential_swept entries land
+	// in the real audit chain. Synchronous and fast (one store read, at
+	// most a handful of deletes); never fatal.
+	sweepOrphanedProviderCredentials(cfg, credStore, agentLoop.AuditLogger())
+
+	// ADR-068 FR-046: an agent-path OAuth refresh (providers'
+	// NewStoreOAuthTokenSource, invoked mid-turn) mints a NEW access+refresh
+	// pair and persists it. bootCredentials above registered the tokens that
+	// existed AT BOOT; without this hook the scrubber would keep protecting
+	// those superseded values while the live pair travelled unprotected until
+	// the next boot, sign-in or sign-in-status poll.
+	//
+	// pkg/providers cannot do this itself — it has no *config.Config — so it
+	// exposes a one-line registration seam and the gateway fills it in here,
+	// where both the live config and the unlocked store are in scope. Wired
+	// after the agent loop exists so the closure can read the CURRENT config
+	// on every call: a config reload swaps the *config.Config out from under
+	// us, and registering onto the boot-time instance would silently stop
+	// protecting anything after the first reload.
+	//
+	// RegisterSensitiveValues replaces rather than appends, so the closure
+	// recomputes the COMPLETE set (config-ref bundle + every stored
+	// "<vendor>_OAUTH" entry) exactly as boot does; the freshly minted values
+	// it is handed are folded in explicitly so the registration does not
+	// depend on the store write having already landed. Best-effort by
+	// design: a failure here must never break a turn.
+	wireOAuthSensitiveValueRegistrar(func() *config.Config { return agentLoop.GetConfig() }, credStore)
+
+	// Install the same catalog instance on the agent loop: the presentation
+	// gate (ADR-067 FR-004) and ResolveWindow's rung 5 read one document, and
+	// setupAndStartServices reads it back from here for the REST surface and
+	// the refresh loop.
+	agentLoop.SetCapabilityCatalog(providerCatalog)
+
+	// ADR-066 D2 rung 4 (T066-10): install the on-demand, 24 h-cached live
+	// limits query AFTER NewAgentLoop has built every instance, so boot's
+	// own window resolutions never reach the rung (FR-003: never at boot,
+	// never on a timer). Installing performs no I/O; the first resolution
+	// that reaches the rung — the next reload, a settings write, the
+	// catalog projection — starts one background fetch per (provider, base
+	// URL, model) and the live value applies at the resolution after it.
+	// The credential comes from the store via the provider's api_key_ref
+	// (InjectFromConfig's env injection first); a cloud row without one is
+	// skipped, never queried.
+	agent.SetLiveWindowLookup(
+		newLiveLimitsForBoot(homePath, credStore, agentLoop, reloadOnLiveWindow(agentLoop)).Lookup)
+
+	// FR-007 / US-2.AC2: an agent on a `locality: local` row the catalog
+	// cannot size resolved UNKNOWN above (the rung was not installed yet) and
+	// every one of its turns is refused with context_window_unknown. Ask the
+	// rung once for exactly that population, in the background and off the
+	// boot path; when the endpoint answers, reloadOnLiveWindow rebuilds those
+	// agents with the window it reported. Without this a fresh Ollama install
+	// stays refused indefinitely and the refusal points the operator at a
+	// control (Settings → Models → Model overrides) they should not have
+	// needed. Not a timer: one pass, only for agents that are already broken.
+	go primeUnknownWindows(agentLoop)
 
 	// Boot-time browser provisioning: NewAgentLoop above just finished
 	// registering browser tools for every agent (registerSharedTools →
@@ -2556,6 +2955,15 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// it isn't working. cfg.Sandbox.AuditLog=false is a deliberate off-state.
 	runningServices.HealthServer.SetAuditLoggerConfiguredFunc(func() bool {
 		return agentLoop.GetConfig().Sandbox.AuditLog
+	})
+	// ADR-067 FR-037 (T067-10): /health reports the provider catalog
+	// degraded — with the last refresh error — whenever no document is
+	// loaded, the last refresh failed, or the served document is stale
+	// (updated_at older than 14 days). Like audit_degraded it is a FIELD,
+	// not a 503: an out-of-date registry snapshot makes the model picker
+	// less accurate, it does not stop the gateway serving turns.
+	runningServices.HealthServer.SetCatalogStateFunc(func() (bool, string) {
+		return catalogHealthState(providerCatalog)
 	})
 
 	var configReloadChan <-chan *config.Config
@@ -3637,8 +4045,7 @@ func createStartupProvider(
 	cfg *config.Config,
 	allowEmptyStartup bool,
 ) (providers.LLMProvider, string, error) {
-	modelName := cfg.Agents.Defaults.GetModelName()
-	if modelName == "" && allowEmptyStartup {
+	if cfg.Agents.Defaults.DefaultModel.IsZero() && allowEmptyStartup {
 		reason := "no default model configured; gateway started in limited mode"
 		fmt.Printf("⚠ Warning: %s\n", reason)
 		logger.WarnCF("gateway", "Gateway started without default model", map[string]any{
@@ -3673,8 +4080,10 @@ func createStartupProvider(
 // credential is absent from (or unreadable in) the vault, so no request to that
 // provider can succeed.
 //
-// "Every entry" and not "the entry" on purpose: several entries may share one
-// model_name for load balancing (config.GetModelConfig round-robins over them).
+// "Every entry" and not "the entry" on purpose: several entries may carry the
+// same (provider, model) pair for load balancing (config.GetModelConfig
+// round-robins over them). Matching is by the exact pair (ADR-068 D14.1) — a
+// row serving the same model under another provider never backs the default.
 // If any one of them still has a usable key, the model is not blocked and the
 // factory keeps its existing behaviour.
 //
@@ -3702,14 +4111,16 @@ func createStartupProvider(
 // fatal-on-non-NotFoundError behavior without also fixing this message —
 // see the incident note on reportInjectionErrors (2026-08-15).
 func defaultModelCredentialBlocked(cfg *config.Config) (string, bool) {
-	modelName := cfg.Agents.Defaults.GetModelName()
-	if modelName == "" {
+	pair := cfg.Agents.Defaults.DefaultModel
+	if pair.IsZero() {
 		return "", false
 	}
+	wantProvider := strings.TrimSpace(pair.Provider)
+	wantModel := strings.TrimSpace(pair.Model)
 	var missingRef string
 	var candidates int
 	for _, m := range cfg.Providers {
-		if m == nil || m.ModelName != modelName {
+		if m == nil || strings.TrimSpace(m.Provider) != wantProvider || strings.TrimSpace(m.Model) != wantModel {
 			continue
 		}
 		candidates++
@@ -3730,7 +4141,7 @@ func defaultModelCredentialBlocked(cfg *config.Config) (string, bool) {
 	return fmt.Sprintf(
 		"the default model %q cannot be used: its credential %q is missing from the credential vault — "+
 			"re-enter the API key in Settings → Providers (or remove the stale provider entry)",
-		modelName, missingRef,
+		pair.String(), missingRef,
 	), true
 }
 
@@ -4132,6 +4543,14 @@ func setupAndStartServices(
 	})
 
 	// REST API endpoints for frontend data.
+	//
+	// M3: sample the onboarding state file's READABILITY before constructing
+	// the manager. onboarding.NewManager treats every load failure as a fresh
+	// install (and renames an unparseable file aside), so this is the only
+	// moment at which "corrupt/unreadable" is distinguishable from "genuinely
+	// never onboarded". The FR-050 pre-auth provider routes fail closed on
+	// the unknown case — see preAuthOnboardingWindowOpen (rest_auth.go).
+	onboardingStateUnknown := onboardingStateUnreadable(homePath)
 	onboardingMgr := onboarding.NewManager(homePath)
 	tStore := agent.GetTaskStore(agentLoop)
 	tExecutor := agent.GetTaskExecutor(agentLoop)
@@ -4420,74 +4839,48 @@ func setupAndStartServices(
 		})
 	}
 
-	// Build the capability catalog for model media-modality resolution
-	// (FR-024/FR-025/FR-026): seeded from embedded data, refreshed from
-	// the Omnipus GitHub release every 7 days.
-	//
-	// Re-review FIX 1b: capabilities.NewCatalog's `log` parameter used to be
-	// slog.Default() directly, which meant every Warn/Info diagnostic
-	// catalog.go emits (failed pull, degraded/unverified transport
-	// fallback, rejected pulled catalog, version regression, last-known-good
-	// persistence failure) went to the same invisible-on-a-backgrounded-
-	// gateway sink FIX 1 above fixes — but catalog.go is owned by another
-	// agent and out of scope to edit here. capabilityCatalogLogAdapter
-	// satisfies the same minimal (unexported, structurally-matched)
-	// Warn/Info interface catalog.go declares — exactly the way
-	// slog.Default() (a *slog.Logger, which also has Warn/Info methods)
-	// already did — so no change to catalog.go is needed: passing a
-	// differently-backed value that satisfies the same structural interface
-	// is sufficient.
-	capCatalog, catErr := capabilities.NewCatalog(
-		capabilities.EmbeddedSeed(),
-		capabilities.NewGHReleasePuller("elicify-ai", "omnipus", "providers_capabilities.json"),
-		&capFileStore{path: filepath.Join(homePath, "capabilities_catalog.json")},
-		capabilityCatalogLogAdapter{},
-	)
-	if catErr != nil {
-		logger.WarnCF("gateway", "capability catalog construction failed; model modality detection degraded",
-			map[string]any{"error": catErr})
-	} else {
-		agentLoop.SetCapabilityCatalog(capCatalog)
-		// Start the 7-day background refresh (FR-025). Non-fatal: a pull
-		// failure retains last-known-good and is logged but does not abort
-		// the gateway or the refresh loop. Extracted into its own function
-		// (rather than an inline goroutine literal) so the "refresh once
-		// immediately, THEN wait for the ticker" ordering is independently
-		// unit-testable without booting the whole gateway — see
-		// capability_catalog_refresh_test.go.
-		go runCapabilityCatalogRefreshLoop(
-			capCatalog,
-			capabilityCatalogRefreshInterval,
-			capabilityCatalogRefreshTimeout,
-		)
-	}
+	// ADR-067 T067-07: the ONE provider catalog for this process was booted
+	// in Run (before NewAgentLoop, so every agent's window resolution sees
+	// rung 5) and installed on the agent loop. Read it back rather than
+	// building a second one — the embedded snapshot is 2 MB and parsing it
+	// twice would double both boot cost and resident memory for no gain.
+	// nil only in tests that construct services without the boot path; every
+	// consumer below treats nil as "no catalog", never a 500.
+	providerCatalog := agentLoop.GetCapabilityCatalog()
 
 	api := &restAPI{
 		agentLoop:       agentLoop,
+		providerCatalog: providerCatalog, // ADR-067: the booted catalog (nil in non-boot tests)
 		allowedOrigin:   allowedOrigin,
 		onboardingMgr:   onboardingMgr,
-		homePath:        homePath,
-		taskStore:       tStore,
-		taskExecutor:    tExecutor,
-		planStore:       planStore, // ADR-049 D1: Plans REST surface (rest_plans.go) + plan_id FK check
-		credStore:       credStore,
-		mediaStore:      runningServices.MediaStore,
-		ssrfChecker:     agent.GetSSRFChecker(agentLoop), // SEC-24: nil when SSRF disabled
-		sandboxResult:   sandboxResult,                   // immutable post-boot snapshot
-		appliedConfig:   mustDeepCopyConfig(cfg),         // boot-time snapshot for pending-restart diff
-		servedSubdirs:   runningServices.servedSubdirs,   // web_serve static-mode token registry
-		devServers:      runningServices.devServers,      // web_serve dev-mode process registry
-		approvalReg:     approvalReg,                     // in-process tool-approval registry (FR-016)
-		builtinRegistry: builtinReg,                      // M16: central builtin registry (FR-001)
-		mcpRegistry:     mcpReg,                          // M16: central MCP registry (FR-001)
-		skillRegistry:   skillRegistry,                   // ClawHub marketplace (search + install-by-slug)
-		allowGodMode:    allowGodMode,                    // god-mode latch (2)
-		notifStore:      runningServices.notifStore,      // #264: notification center
-		auditor:         agentLoop.AuditLogger(),         // shared audit logger for REST mutations
-		selfWriteReg:    selfWriteReg,                    // suppress watcher reload on app-initiated writes
-		taskLock:        task.TaskFileLock,               // shared striped lock for board task RMW
+		// M3: "unknown" is not "fresh install" — see the field's doc comment.
+		onboardingStateUnknown: onboardingStateUnknown,
+		homePath:               homePath,
+		taskStore:              tStore,
+		taskExecutor:           tExecutor,
+		planStore:              planStore, // ADR-049 D1: Plans REST surface (rest_plans.go) + plan_id FK check
+		credStore:              credStore,
+		mediaStore:             runningServices.MediaStore,
+		ssrfChecker:            agent.GetSSRFChecker(agentLoop), // SEC-24: nil when SSRF disabled
+		sandboxResult:          sandboxResult,                   // immutable post-boot snapshot
+		appliedConfig:          mustDeepCopyConfig(cfg),         // boot-time snapshot for pending-restart diff
+		servedSubdirs:          runningServices.servedSubdirs,   // web_serve static-mode token registry
+		devServers:             runningServices.devServers,      // web_serve dev-mode process registry
+		approvalReg:            approvalReg,                     // in-process tool-approval registry (FR-016)
+		builtinRegistry:        builtinReg,                      // M16: central builtin registry (FR-001)
+		mcpRegistry:            mcpReg,                          // M16: central MCP registry (FR-001)
+		skillRegistry:          skillRegistry,                   // ClawHub marketplace (search + install-by-slug)
+		allowGodMode:           allowGodMode,                    // god-mode latch (2)
+		notifStore:             runningServices.notifStore,      // #264: notification center
+		auditor:                agentLoop.AuditLogger(),         // shared audit logger for REST mutations
+		selfWriteReg:           selfWriteReg,                    // suppress watcher reload on app-initiated writes
+		taskLock:               task.TaskFileLock,               // shared striped lock for board task RMW
 	}
 	api.cronService.Store(runningServices.CronService) // #264: schedules CRUD (atomic.Pointer)
+	// ADR-067 FR-037 (T067-11): a catalog refresh invalidates the
+	// entitlement cache — the intersection behind every cached answer was
+	// computed against a document that is no longer the served one.
+	registerEntitlementCacheInvalidation(providerCatalog, api)
 	// Stash the api ref so RunContextWithOptions can update builtinRegistry
 	// after the M16 live-deps re-population (which creates a fresh *BuiltinRegistry
 	// that would otherwise not reach the already-constructed api).
@@ -4684,6 +5077,22 @@ func setupAndStartServices(
 	// (not restart-gated), so this line only reflects the value at boot time.
 	mainAddr := fmt.Sprintf("%s:%d", cfg.Gateway.Host, cfg.Gateway.Port)
 	slog.Info("gateway listening on " + mainAddr)
+
+	// ADR-067 FR-008: the catalog refresh loop starts HERE — after StartAll
+	// bound the listener — and nowhere earlier. Boot must never wait on the
+	// network for a document the embedded snapshot already provides: an
+	// offline install serves the snapshot and reaches listen at exactly the
+	// same speed as an online one (US-3.AC1). The startup pull is skipped
+	// outright when the persisted last-known-good is less than an hour old,
+	// so a gateway restarted in a loop cannot spend GitHub's unauthenticated
+	// rate limit on a document it already has (F-34).
+	go runCatalogRefreshLoop(
+		providerCatalog,
+		catalog.NewFileStore(homePath),
+		catalogRefreshInterval,
+		catalogRefreshTimeout,
+		catalogStartupSkipWindow,
+	)
 	if cfg.IsPreviewEnabled() {
 		slog.Info("preview enabled: /preview/ served on the main listener")
 	} else {
@@ -4845,53 +5254,37 @@ func setupAndStartServices(
 	return runningServices, nil
 }
 
-// capFileStore implements capabilities.Store by persisting the catalog JSON
-// to a single file on disk. It is a gateway-private type; the capabilities
-// package defines the Store interface.
-type capFileStore struct {
-	path string
-	mu   sync.Mutex
-}
-
-func (s *capFileStore) Read(ctx context.Context) ([]byte, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	data, err := os.ReadFile(s.path)
-	if err != nil {
-		return nil, err
-	}
-	return data, nil
-}
-
-func (s *capFileStore) Write(ctx context.Context, data []byte) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return fileutil.WriteFileAtomic(s.path, data, 0o600)
-}
-
-// capabilityCatalogRefreshInterval and capabilityCatalogRefreshTimeout are
-// the production values for the FR-025 background refresh: pull at most
-// once every 7 days, bound each individual pull attempt to 30s.
+// The production values for the ADR-067 FR-008 background refresh: one pull
+// every 24 h, each attempt bounded to 30 s, and a startup pull skipped
+// entirely when the persisted last-known-good was written less than an hour
+// ago.
 const (
-	capabilityCatalogRefreshInterval = 7 * 24 * time.Hour
-	capabilityCatalogRefreshTimeout  = 30 * time.Second
+	catalogRefreshInterval   = 24 * time.Hour
+	catalogRefreshTimeout    = 30 * time.Second
+	catalogStartupSkipWindow = time.Hour
 )
 
-// capabilityCatalogLogAdapter routes capabilities.NewCatalog's minimal
-// Warn(msg string, args ...any) / Info(msg string, args ...any) logger
-// dependency through pkg/logger instead of log/slog.Default() (re-review
-// FIX 1b — see the doc comment at this type's construction site). args
-// follows log/slog's own alternating-key/value convention, since that is
-// the shape catalog.go's call sites already use (they were written
-// against slog.Logger's Warn/Info signature).
-type capabilityCatalogLogAdapter struct{}
+// catalogLogAdapter routes catalog.Logger's slog-shaped
+// Info/Warn/Error(msg string, args ...any) through pkg/logger instead of
+// log/slog.Default(). slog.SetDefault is never called anywhere in this repo,
+// so log/slog.Default() sits on its zero-value stderr-only handler —
+// invisible on a backgrounded gateway (the documented `./omnipus gateway
+// --allow-empty &` launch form), since nothing routes stderr into
+// $OMNIPUS_HOME/logs/gateway.log. args follows slog's own
+// alternating-key/value convention, which is the shape the catalog package's
+// call sites already use.
+type catalogLogAdapter struct{}
 
-func (capabilityCatalogLogAdapter) Warn(msg string, args ...any) {
-	logger.WarnCF("capabilities", msg, slogArgsToFields(args))
+func (catalogLogAdapter) Info(msg string, args ...any) {
+	logger.InfoCF("catalog", msg, slogArgsToFields(args))
 }
 
-func (capabilityCatalogLogAdapter) Info(msg string, args ...any) {
-	logger.InfoCF("capabilities", msg, slogArgsToFields(args))
+func (catalogLogAdapter) Warn(msg string, args ...any) {
+	logger.WarnCF("catalog", msg, slogArgsToFields(args))
+}
+
+func (catalogLogAdapter) Error(msg string, args ...any) {
+	logger.ErrorCF("catalog", msg, slogArgsToFields(args))
 }
 
 // slogArgsToFields converts a slog-style alternating key/value argument
@@ -4915,55 +5308,73 @@ func slogArgsToFields(args []any) map[string]any {
 	return fields
 }
 
-// runCapabilityCatalogRefreshLoop performs an immediate refresh, then a
-// refresh every interval thereafter, forever. It never returns — the sole
-// caller (setupAndStartServices) invokes it in its own goroutine.
+// persistedCatalogAger reports when the persisted last-known-good was last
+// written. *catalog.FileStore implements it; the parameter is an interface
+// so the skip decision is testable without touching a real clock or a real
+// $OMNIPUS_HOME.
+type persistedCatalogAger interface {
+	ModTime() (time.Time, error)
+}
+
+// skipStartupPull reports whether the FR-008 startup pull should be skipped
+// because the persisted document is younger than window. A missing or
+// unreadable persisted file is NOT a skip — there is nothing to serve from
+// disk, so the pull is exactly what is wanted.
+func skipStartupPull(store persistedCatalogAger, window time.Duration) bool {
+	if store == nil || window <= 0 {
+		return false
+	}
+	mod, err := store.ModTime()
+	if err != nil {
+		return false
+	}
+	return time.Since(mod) < window
+}
+
+// runCatalogRefreshLoop performs the FR-008 startup pull (unless the
+// persisted document is younger than skipWindow), then one pull every
+// interval thereafter, forever. It never returns — the sole caller
+// (setupAndStartServices) invokes it in its own goroutine, AFTER the
+// listener is bound.
 //
-// The immediate call before the ticker loop is load-bearing, not
-// cosmetic: Go's time.Ticker does NOT fire on creation, so a bare
-// `for { select { case <-ticker.C: ... } } }` loop (the previous shape of
-// this code, inlined at the call site) never invokes the puller until
-// `interval` has elapsed — meaning any gateway restarted more often than
-// that (dev pods, containers, k8s rolling deploys, systemd restarts) runs
-// indefinitely on the build-time embedded seed and never refreshes at
-// all. That contradicts both this package's own intent (FR-025) and
-// catalog.go's doc comment, which promises a refresh "on gateway startup
-// and every 7 days". A failed initial refresh does not prevent the ticker
-// loop from starting: last-known-good (the embedded seed, on a fresh
-// catalog) is retained and the failure is logged, exactly like any
-// periodic refresh failure.
+// The pull before the ticker loop is load-bearing, not cosmetic: Go's
+// time.Ticker does not fire on creation, so a bare ticker loop never
+// invokes the puller until interval has elapsed — meaning any gateway
+// restarted more often than that (dev pods, containers, k8s rolling
+// deploys, systemd restarts) would run indefinitely on the build-time
+// snapshot and never refresh at all. The skipWindow is what keeps that
+// startup pull from becoming a rate-limit problem on a restart loop.
 //
-// Extracted as its own function (rather than an inline goroutine literal)
-// specifically so this startup-ordering invariant is unit-testable
-// without booting the whole gateway — see
-// capability_catalog_refresh_test.go, which passes a very long interval
-// and a fake Puller to prove the first Pull happens immediately rather
-// than only after the (never-fired-in-the-test) ticker tick.
-func runCapabilityCatalogRefreshLoop(cat *capabilities.Catalog, interval, refreshTimeout time.Duration) {
+// Every failure is non-fatal by construction: catalog.Refresh retains the
+// currently served document and logs its own reason-keyed WARN, so this
+// loop only records that the attempt failed and carries on ticking.
+func runCatalogRefreshLoop(
+	cat *catalog.Catalog,
+	store persistedCatalogAger,
+	interval, refreshTimeout, skipWindow time.Duration,
+) {
+	if cat == nil {
+		return
+	}
 	refresh := func(failureLogMsg string) {
 		ctx, cancel := context.WithTimeout(context.Background(), refreshTimeout)
 		defer cancel()
 		if err := cat.Refresh(ctx); err != nil {
-			// Re-review FIX 1: this used to be a bare slog.Warn. slog.SetDefault
-			// is never called anywhere in this repo, so log/slog.Default() sits
-			// on its zero-value stderr-only handler — invisible on a
-			// backgrounded gateway (the documented `./omnipus gateway
-			// --allow-empty &` launch form), since nothing routes stderr into
-			// $OMNIPUS_HOME/logs/gateway.log. Route through pkg/logger (the
-			// same structured sink pkg/agent already uses, wired to
-			// gateway.log via logger.EnableFileLogging at this file's own
-			// EnableFileLogging call) so a refresh failure is actually
-			// discoverable.
 			logger.WarnCF("gateway", failureLogMsg, map[string]any{"error": err})
 		}
 	}
 
-	refresh("gateway: capability catalog initial refresh failed; embedded seed retained")
+	if skipStartupPull(store, skipWindow) {
+		logger.InfoCF("gateway", "catalog: startup pull skipped; persisted document is recent",
+			map[string]any{"skip_window": skipWindow.String()})
+	} else {
+		refresh("gateway: catalog startup refresh failed; served document retained")
+	}
 
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for range ticker.C {
-		refresh("gateway: capability catalog refresh failed; last-known-good retained")
+		refresh("gateway: catalog refresh failed; last-known-good retained")
 	}
 }
 
@@ -5014,7 +5425,7 @@ func handleConfigReload(
 ) error {
 	logger.Info("🔄 Config file changed, reloading...")
 
-	newModel := newCfg.Agents.Defaults.ModelName
+	newModel := newCfg.Agents.Defaults.DefaultModel.String()
 
 	logger.Infof(" New model is '%s', recreating provider...", newModel)
 
@@ -5024,7 +5435,7 @@ func handleConfigReload(
 	// Build the real LLM provider on reload. The test_harness override hook
 	// was removed 2026-05-10; reload always recreates the real provider from
 	// the new config's `providers` entry.
-	newProvider, newModelID, err := createStartupProvider(newCfg, allowEmptyStartup)
+	newProvider, _, err := createStartupProvider(newCfg, allowEmptyStartup)
 	if err != nil {
 		logger.Errorf("  ⚠ Error creating new provider: %v", err)
 		logger.Warn("  Attempting to restart services with old provider and config...")
@@ -5046,10 +5457,8 @@ func handleConfigReload(
 		return fmt.Errorf("error creating new provider: %w", err)
 	}
 
-	if newModelID != "" && newCfg.Agents.Defaults.ModelName == "" {
-		newCfg.Agents.Defaults.ModelName = newModelID
-	}
-
+	// ADR-068 FR-020: no reload path back-fills agents.defaults.default_model
+	// (the twin `ModelName == ""` guard was deleted with the alias).
 	reloadCtx, reloadCancel := context.WithTimeout(context.Background(), providerReloadTimeout)
 	defer reloadCancel()
 

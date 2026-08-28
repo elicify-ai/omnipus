@@ -676,6 +676,20 @@ type ToolApprovalRequiredFrame struct {
 	Type               string  `json:"type"`
 }
 
+// ToolArgumentRefusal — ADR-066 D4 / spec FR-016 (T066-01 schema, T066-04 producer): structured tool-result payload returned INSTEAD of executing a tool call whose serialised arguments exceed the builtin success cap (ContextSettings.builtin_success_cap, 64,000 chars by default). The tool does not run, the turn is not fatal, and the model sees the refusal — naming the tool, the size it sent and the cap — so it can retry smaller. ADR-060 family member: inline schema with a const `error` discriminator, one exported *Code constant in pkg/tools/result.go, a single producer routed through marshalWithinBudget, and an entry in scripts/check-no-handwritten-wire-types.sh's KNOWN_STRUCTURED_FAILURE_DISCRIMINATORS register. toolResult-channel (ADR-060 D2): the refusal IS the tool's result, so it passes the D4 choke point like any other result (US-5.AC3) and flows through ToolCallResultFrame.result live and ToolCall.Error on replay — hence its entry in ToolCallResultFrame.result's oneOf below and in pkg/gateway/tool_result_store.go's allow-list (derived from pkg/tools.AllStructuredFailureCodes()). The SPA detector is stream B5's.
+type ToolArgumentRefusal struct {
+	// The cap the arguments exceeded — the live builtin success cap at the time of the call (quoted so a retry can target it; the cap is operator-editable without restart).
+	CapChars int `json:"cap_chars"`
+	// Fixed discriminator the SPA and the gateway allow-list match on.
+	Error string `json:"error"`
+	// Human-readable explanation naming the tool, the serialised size and the cap, and telling the model to retry with smaller arguments. The one field marshalWithinBudget may shrink.
+	Reason string `json:"reason"`
+	// Length in characters of the serialised arguments the model sent.
+	SizeChars int `json:"size_chars"`
+	// The tool whose call was refused, as the model named it.
+	Tool string `json:"tool"`
+}
+
 // ToolAssemblyDuplicate — Structured payload emitted (as message content, role="system", with no ToolCallID) when pkg/agent/loop.go's tool-call dedup invariant guard (checkToolDedupInvariant) finds the assembled tools[] list is not name-unique right before an LLM call, and aborts the turn rather than feeding the LLM a malformed tool list. Before this schema existed the payload was hand-built with fmt.Sprintf's %q verb (the same defect PermissionDenied fixes — see its description) and carried no contract schema, no allow-list entry, and no length budget at all (issue #618, the fourth ungoverned member). ADR-060 D2/D3: this is a `message`-channel payload — it is appended directly to session history and never becomes a tool_call_result frame, so parseStructuredToolFailure can never be invoked on it and it has no SPA detector, BY DESIGN, not as a gap. It is admitted to this file's `oneOf` and to pkg/gateway/tool_result_store.go's structuredFailureDiscriminators allow-list anyway (ADR-060 §7 item 3, "defensive over-provisioning"): the allow-list entry is what enrolls it in the coverage test's schema-and-budget assertions, and the `oneOf` entry keeps the union a complete catalogue of the family even though this member can never actually arrive in a ToolCallResultFrame.result. It is LLM-facing only.
 type ToolAssemblyDuplicate struct {
 	// Fixed discriminator identifying this payload family. Unlike its siblings, this one is never delivered via ToolCallResultFrame.result, so the SPA has no matcher for it — see the schema description.
@@ -693,7 +707,7 @@ type ToolCallResultFrame struct {
 	ParentCallId *string `json:"parent_call_id,omitempty"`
 	// ADR-057 FR-012/FR-013. Present iff it differs from session_id. Class (a) (FR-089): the child turn's own session id when this frame crosses the wire from a delegated child.
 	ProducingSessionId *string `json:"producing_session_id,omitempty"`
-	// Tool return value. Any JSON type or null (null is the contract for error frames). Sentinels TruncatedResult, MarshalErrorResult, and ToolResultRef are alternative shapes. Real oneOf (round-2 hardening, ADR-060 finding F1). The previous revision switched this to `anyOf` reasoning that branch 1's permissive `type: [object, array, ...]` already matched every object, so a genuine oneOf would double-match every $ref sentinel/family member against its own union. That diagnosis was correct but `anyOf` was the wrong fix: under `anyOf` nothing is ever rejected, including a malformed PermissionDenied missing `permanent` — the seven $refs below became unreachable as constraints, which nullifies ADR-060 §7 item 2's own rationale for admitting new members ("when the union is ever made executable, a member missing from it would be the silent-drop failure ADR-058 §7 item 4 warned about" — an anyOf over a universal branch can never be made executable). Fixed here with a real `oneOf`: the single permissive branch is split into (a) an unconditional non-object catch-all (array/string/number/boolean/null — the JSON Schema `required` keyword is inapplicable to non-object instances, so no exclusion is needed there) and (b) an object catch-all that excludes every reserved discriminator key the seven $refs below use — `_truncated`, `_marshal_error`, `_ref`, `error` — via `not: {anyOf: [{required: [...]}, ...]}`. With that split, exactly one branch matches a plain scalar/array/object and exactly one matches a valid named shape; a payload carrying a reserved key but failing its own $ref (e.g. PermissionDenied missing `permanent`) matches none and is correctly rejected, rather than silently passing through branch (b). ADR-034's external-file-$ref constraint does not block this — these are internal `#/components/schemas/...` refs (D4). Verified by compiling this exact file with santhosh-tekuri/jsonschema/v6: pkg/api/generated/contract_test.go wraps one fixture per family member in a real ToolCallResultFrame and validates it end-to-end; pkg/gateway/structured_failure_discriminator_coverage_test.go validates each producer's output standalone and asserts a malformed member is rejected. F13 follow-up hardening: the object catch-all's `error` exclusion below now keys on `error` being a STRING, not merely present — see that branch's own description for why (settleAskToolCallTranscript / spawnSubTurn persist a boolean `error` flag on an ordinary object, which is not an attempt at any of the four `error`-keyed $refs and must still match the catch-all). Regression fixture: pkg/api/generated/tool_call_result_error_key_contract_test.go. Still documentary in the generated artifacts (ADR-060 D6): the asyncapi->Go converter (scripts/gen-asyncapi-go) and the TS/Zod generator both key off "is this schema a oneOf/anyOf with no top-level type", which is unchanged by this edit — TS still emits `result: z.unknown()`, Go still emits `Result any`. So this is a spec-correctness fix (the union now actually constrains what a conformant producer may emit) with no generated-code behavior change; the hand-written detectors (isPermissionDenied and friends) remain the real enforcement at the SPA read boundary.
+	// Tool return value. Any JSON type or null (null is the contract for error frames). Sentinels TruncatedResult, MarshalErrorResult, and ToolResultRef are alternative shapes. Real oneOf (round-2 hardening, ADR-060 finding F1). The previous revision switched this to `anyOf` reasoning that branch 1's permissive `type: [object, array, ...]` already matched every object, so a genuine oneOf would double-match every $ref sentinel/family member against its own union. That diagnosis was correct but `anyOf` was the wrong fix: under `anyOf` nothing is ever rejected, including a malformed PermissionDenied missing `permanent` — the seven $refs below became unreachable as constraints, which nullifies ADR-060 §7 item 2's own rationale for admitting new members ("when the union is ever made executable, a member missing from it would be the silent-drop failure ADR-058 §7 item 4 warned about" — an anyOf over a universal branch can never be made executable). Fixed here with a real `oneOf`: the single permissive branch is split into (a) an unconditional non-object catch-all (array/string/number/boolean/null — the JSON Schema `required` keyword is inapplicable to non-object instances, so no exclusion is needed there) and (b) an object catch-all that excludes every reserved discriminator key the nine $refs below use (seven at ADR-060 time; ADR-066 T066-01 added ToolArgumentRefusal and ToolResultRecallMark) — `_truncated`, `_marshal_error`, `_ref`, `error` — via `not: {anyOf: [{required: [...]}, ...]}`. With that split, exactly one branch matches a plain scalar/array/object and exactly one matches a valid named shape; a payload carrying a reserved key but failing its own $ref (e.g. PermissionDenied missing `permanent`) matches none and is correctly rejected, rather than silently passing through branch (b). ADR-034's external-file-$ref constraint does not block this — these are internal `#/components/schemas/...` refs (D4). Verified by compiling this exact file with santhosh-tekuri/jsonschema/v6: pkg/api/generated/contract_test.go wraps one fixture per family member in a real ToolCallResultFrame and validates it end-to-end; pkg/gateway/structured_failure_discriminator_coverage_test.go validates each producer's output standalone and asserts a malformed member is rejected. F13 follow-up hardening: the object catch-all's `error` exclusion below now keys on `error` being a STRING, not merely present — see that branch's own description for why (settleAskToolCallTranscript / spawnSubTurn persist a boolean `error` flag on an ordinary object, which is not an attempt at any of the four `error`-keyed $refs and must still match the catch-all). Regression fixture: pkg/api/generated/tool_call_result_error_key_contract_test.go. Still documentary in the generated artifacts (ADR-060 D6): the asyncapi->Go converter (scripts/gen-asyncapi-go) and the TS/Zod generator both key off "is this schema a oneOf/anyOf with no top-level type", which is unchanged by this edit — TS still emits `result: z.unknown()`, Go still emits `Result any`. So this is a spec-correctness fix (the union now actually constrains what a conformant producer may emit) with no generated-code behavior change; the hand-written detectors (isPermissionDenied and friends) remain the real enforcement at the SPA read boundary.
 	Result    any    `json:"result"`
 	SessionId string `json:"session_id"`
 	Status    string `json:"status"`
@@ -713,6 +727,42 @@ type ToolCallStartFrame struct {
 	SessionId          string  `json:"session_id"`
 	Tool               string  `json:"tool"`
 	Type               string  `json:"type"`
+}
+
+// ToolResultProjectionFrame — Server → client (ADR-066 D5): a tool result already delivered to this session was capped or emptied in place in the model's window. The archive keeps the full content; the SPA updates its rendering of the matching tool call (recall mark shown only under Verbose chat) and, on reload, learns the same state from ToolCall.content_state on the transcript. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES). Canonical copy — keep in sync by hand with components/schemas/ToolResultProjectionFrame.yaml.
+type ToolResultProjectionFrame struct {
+	// Zero-based index of the tool-result line in the session archive; together with tool_call_id it keys the projection state.
+	ArchiveLine int `json:"archive_line"`
+	// The new projection state. "full" is never pushed — it is the default state and is only ever read from the transcript.
+	ContentState string `json:"content_state"`
+	// The recall mark left in the window (names the tool, the id and the recall_conversation call that restores it). Rendered only under Verbose chat.
+	Mark *string `json:"mark,omitempty"`
+	// ADR-057 FR-012/FR-013 — present iff the projection was produced by a delegated child session different from session_id.
+	ProducingSessionId *string `json:"producing_session_id,omitempty"`
+	SessionId          string  `json:"session_id"`
+	// The projected tool call. Provider-generated ids are not unique across an archive — pair with archive_line.
+	ToolCallId string `json:"tool_call_id"`
+	Type       string `json:"type"`
+}
+
+// ToolResultRecallMark — ADR-066 D5 (and D4, which shares it) / spec FR-018 (T066-01 schema, T066-04 producer): the short deterministic mark that REPLACES a tool result's content in the model's window when the result is emptied in place (content_state=emptied) or admitted head-and-tail capped (content_state=capped). The archive keeps the full content; recall_conversation(tool_call_id=…, archive_line=…) returns it in pages. One schema, one producer (pkg/agent/recall_mark.go via pkg/tools' marshalWithinBudget), two states — the model gets one vocabulary for "this was bigger than what you see" (ADR-066 §5). ADR-060 family member: inline schema, const `error` discriminator, *Code constant, register entry. It is NOT a failure — `error` is the family's discriminator key, nothing more; the tool call succeeded and ToolResult.IsError stays false. Channel (ADR-060 D2): the mark lives in the in-memory window (the providers.Message the LLM reads) and reaches the SPA as ToolResultProjectionFrame.mark (string) and, for a D4-capped result, inside the capped tool_call_result text — so its oneOf entry below is defensive over-provisioning on the ToolAssemblyDuplicate precedent (ADR-060 §7 item 3), keeping the union a complete catalogue of the family. Rendered in the chat thread only under Verbose chat (ADR-066 §12).
+type ToolResultRecallMark struct {
+	// Zero-based index of the tool-result line in the session archive; with tool_call_id it is the key recall_conversation and the meta projection state both use.
+	ArchiveLine int `json:"archive_line"`
+	// Which projection the mark stands in for. `full` is never a mark (it is ToolCall.content_state's default and only ever read from the transcript).
+	ContentState string `json:"content_state"`
+	// Fixed discriminator identifying this payload family. Not a failure — see the schema description.
+	Error string `json:"error"`
+	// The recall hint — the literal recall_conversation call (tool_call_id + archive_line) that returns the content in pages. The one field marshalWithinBudget may shrink.
+	Hint string `json:"hint"`
+	// Length in characters of the full result as written to the archive.
+	SizeChars int `json:"size_chars"`
+	// Tool name, sanitised by the producer to at most 64 printable characters (FR-018).
+	Tool string `json:"tool"`
+	// The result's tool_call_id, sanitised the same way. Provider-generated ids are not unique across an archive — pair with archive_line, exactly as ToolResultProjectionFrame does.
+	ToolCallId string `json:"tool_call_id"`
+	// Turn number = 1 + the count of role:user archive lines preceding the result's line — the same number recall_conversation's turn_range mode addresses.
+	Turn int `json:"turn"`
 }
 
 // ToolResultRef — Sentinel for tool results > 50 KiB but <= 1 MiB whose full body is preserved server-side. SPA fetches via GET /api/v1/tool-results/{ref}.
@@ -764,6 +814,7 @@ const (
 	WsFrameTypeError                    WsFrameType = "error"
 	WsFrameTypeToolCallStart            WsFrameType = "tool_call_start"
 	WsFrameTypeToolCallResult           WsFrameType = "tool_call_result"
+	WsFrameTypeToolResultProjection     WsFrameType = "tool_result_projection"
 	WsFrameTypeSubagentStart            WsFrameType = "subagent_start"
 	WsFrameTypeSubagentMessage          WsFrameType = "subagent_message"
 	WsFrameTypeSubagentState            WsFrameType = "subagent_state"

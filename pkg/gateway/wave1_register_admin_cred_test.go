@@ -45,9 +45,9 @@ func newTestAPIWithHome(t *testing.T) (*restAPI, string) {
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      tmpDir,
-				ModelName: "test-model",
-				MaxTokens: 4096,
+				Home:         tmpDir,
+				DefaultModel: config.DefaultModel{Model: "test-model"},
+				MaxTokens:    4096,
 			},
 		},
 	}
@@ -85,9 +85,9 @@ func newTestAPIWithMasterKey(t *testing.T) (*restAPI, string, string) {
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      tmpDir,
-				ModelName: "test-model",
-				MaxTokens: 4096,
+				Home:         tmpDir,
+				DefaultModel: config.DefaultModel{Model: "test-model"},
+				MaxTokens:    4096,
 			},
 		},
 	}
@@ -109,7 +109,7 @@ func newTestAPIWithMasterKey(t *testing.T) (*restAPI, string, string) {
 // pre-seeds the in-memory AgentLoop config with the given providers slice. Use this
 // when the PUT /providers/{id} handler needs to resolve a specific api_base from the
 // in-memory config (e.g. to point at an httptest stub rather than the live provider
-// endpoint that GetDefaultAPIBase would return). The callers of newTestAPIWithMasterKey
+// endpoint that providers.APIBaseFor would return). The callers of newTestAPIWithMasterKey
 // that do NOT need custom providers are left unchanged.
 func newTestAPIWithMasterKeyAndProviders(t *testing.T, provs []*config.ModelConfig) (*restAPI, string, string) {
 	t.Helper()
@@ -127,9 +127,9 @@ func newTestAPIWithMasterKeyAndProviders(t *testing.T, provs []*config.ModelConf
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      tmpDir,
-				ModelName: "test-model",
-				MaxTokens: 4096,
+				Home:         tmpDir,
+				DefaultModel: config.DefaultModel{Model: "test-model"},
+				MaxTokens:    4096,
 			},
 		},
 		Providers: provs,
@@ -233,13 +233,13 @@ func TestProviders_BackwardCompatPlaintextAPIKey(t *testing.T) {
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      tmpDir,
-				ModelName: "openai",
-				MaxTokens: 4096,
+				Home:         tmpDir,
+				DefaultModel: config.DefaultModel{Provider: "openai", Model: "gpt-4o"},
+				MaxTokens:    4096,
 			},
 		},
 		Providers: []*config.ModelConfig{
-			{ModelName: "openai", Provider: "openai", Model: "gpt-4o", APIKeyRef: "OPENAI_API_KEY"},
+			{Name: "openai", Provider: "openai", Model: "gpt-4o", APIKeyRef: "OPENAI_API_KEY"},
 		},
 	}
 	msgBus := bus.NewMessageBus()
@@ -255,7 +255,7 @@ func TestProviders_BackwardCompatPlaintextAPIKey(t *testing.T) {
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/providers", nil)
 	r.URL.Path = "/api/v1/providers"
-	api.HandleProviders(w, r)
+	api.HandleProviders(w, isolateRateLimit(t, r))
 
 	require.Equal(t, http.StatusOK, w.Code, "GET /providers must return 200 for old plaintext api_key config")
 	var providers []map[string]any
@@ -285,7 +285,7 @@ func TestProviders_BackwardCompatPlaintextAPIKey(t *testing.T) {
 // is available — NOT as plaintext api_key in config.json.
 //
 // BDD: Given OMNIPUS_MASTER_KEY is set (credentials store can be unlocked),
-// When POST /api/v1/onboarding/complete {"provider":{"id":"openai","api_key":"sk-secret"},...} is called,
+// When POST /api/v1/onboarding/complete {"provider":{"auth_method":"api_key","id":"openai","api_key":"sk-secret"},...} is called,
 // Then config.json has "api_key_ref" in the provider entry (not plaintext "api_key"),
 // AND credentials.json contains the API key encrypted under the master key.
 //
@@ -293,7 +293,7 @@ func TestProviders_BackwardCompatPlaintextAPIKey(t *testing.T) {
 func TestOnboarding_CreatesAPIKeyRef(t *testing.T) {
 	api, tmpDir, _ := newTestAPIWithMasterKey(t)
 
-	body := `{"provider":{"id":"anthropic","api_key":"sk-ant-secret-key"},"admin":{"username":"alice","password":"alice1234"}}`
+	body := `{"provider":{"auth_method":"api_key","id":"anthropic","api_key":"sk-ant-secret-key"},"admin":{"username":"alice","password":"alice1234"}}`
 	body = hermeticOnboardBody(t, body)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -373,7 +373,7 @@ func TestOnboarding_RefusesWhenNoMasterKey(t *testing.T) {
 		0o600,
 	))
 
-	body := `{"provider":{"id":"openai","api_key":"sk-fallback-test"},"admin":{"username":"bob","password":"bob12345"}}`
+	body := `{"provider":{"auth_method":"api_key","id":"openai","api_key":"sk-fallback-test"},"admin":{"username":"bob","password":"bob12345"}}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -426,14 +426,14 @@ func TestProviderPUT_StoresAPIKeyRef(t *testing.T) {
 
 	// Seed the in-memory config with an anthropic provider whose api_base points
 	// at the stub. The PUT handler resolves persistedAPIBase from cfg.Providers
-	// first; this overrides the GetDefaultAPIBase("anthropic") = real endpoint
+	// first; this overrides the providers.APIBaseFor("anthropic") = real endpoint
 	// fallback so ValidateKey probes the stub and returns OutcomeValid.
 	api, tmpDir, _ := newTestAPIWithMasterKeyAndProviders(t, []*config.ModelConfig{
 		{
-			ModelName: "anthropic",
-			Provider:  "anthropic",
-			Model:     "claude-3-haiku-20240307",
-			APIBase:   stub.URL,
+			Name:     "anthropic",
+			Provider: "anthropic",
+			Model:    "claude-3-haiku-20240307",
+			APIBase:  stub.URL,
 		},
 	})
 
@@ -450,7 +450,7 @@ func TestProviderPUT_StoresAPIKeyRef(t *testing.T) {
 	req.Header.Set(reAuthHeader, provTok)
 	w := httptest.NewRecorder()
 
-	api.HandleProviders(w, req)
+	api.HandleProviders(w, isolateRateLimit(t, req))
 
 	// NOTE: The handler returns 500 when TriggerReload fails (even though data was persisted).
 	// This is a production bug in HandleProviders PUT: reload failure should not undo the write.
@@ -531,7 +531,7 @@ func TestProviderPUT_RefusesWhenNoMasterKey(t *testing.T) {
 	req.Header.Set(reAuthHeader, provTok)
 	w := httptest.NewRecorder()
 
-	api.HandleProviders(w, req)
+	api.HandleProviders(w, isolateRateLimit(t, req))
 
 	// SEC-23: must refuse — no plaintext fallback.
 	assert.Equal(t, http.StatusServiceUnavailable, w.Code,
@@ -587,13 +587,13 @@ func TestProviderGET_ResolvesAPIKeyRefFromCredStore(t *testing.T) {
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      tmpDir,
-				ModelName: "openai",
-				MaxTokens: 4096,
+				Home:         tmpDir,
+				DefaultModel: config.DefaultModel{Provider: "openai", Model: "gpt-4o"},
+				MaxTokens:    4096,
 			},
 		},
 		Providers: []*config.ModelConfig{
-			{ModelName: "openai", Provider: "openai", Model: "gpt-4o", APIKeyRef: credRef},
+			{Name: "openai", Provider: "openai", Model: "gpt-4o", APIKeyRef: credRef},
 		},
 	}
 	msgBus := bus.NewMessageBus()
@@ -610,7 +610,7 @@ func TestProviderGET_ResolvesAPIKeyRefFromCredStore(t *testing.T) {
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/providers", nil)
 	r.URL.Path = "/api/v1/providers"
-	apiWithRef.HandleProviders(w, r)
+	apiWithRef.HandleProviders(w, isolateRateLimit(t, r))
 
 	require.Equal(t, http.StatusOK, w.Code, "GET /providers must return 200")
 	var providers []map[string]any

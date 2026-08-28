@@ -515,7 +515,6 @@ For complete documentation, see [`security_configuration.md`](security_configura
 | **Vivgrid**             | `vivgrid/`        | `https://api.vivgrid.com/v1`                        | OpenAI    | [Get Key](https://vivgrid.com)                                   |
 | **LongCat**             | `longcat/`        | `https://api.longcat.chat/openai`                   | OpenAI    | [Get Key](https://longcat.chat/platform)                         |
 | **ModelScope (魔搭)**   | `modelscope/`     | `https://api-inference.modelscope.cn/v1`            | OpenAI    | [Get Token](https://modelscope.cn/my/tokens)                     |
-| **Antigravity**         | `antigravity/`    | Google Cloud                                        | Custom    | OAuth only                                                       |
 
 #### Basic Configuration
 

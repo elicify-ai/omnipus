@@ -41,7 +41,6 @@ New to Omnipus? Read these in order.
 | Skills (ClawHub installs, SKILL.md format) | [skills.md](skills.md) |
 | Channels — set up chat platforms & route them to agents | [channels.md](channels.md) |
 | Hooks (subprocess + in-process) | [hooks/README.md](hooks/README.md) |
-| Antigravity provider | [ANTIGRAVITY_USAGE.md](ANTIGRAVITY_USAGE.md) |
 
 ## Configure & operate
 

@@ -1,0 +1,32 @@
+title: EntitlementModel
+description: >
+  One row of an EntitlementResponse: a model the provider's live listing
+  reported, or a catalog model the listing did not, annotated with whether
+  the operator's key can reach it.
+type: object
+required:
+  - id
+  - entitled
+  - limits
+additionalProperties: false
+properties:
+  id:
+    type: string
+    minLength: 1
+    maxLength: 256
+    description: Bare model id as the provider reports it.
+    example: "z-ai/glm-5.2"
+  entitled:
+    type: boolean
+    description: True iff the live listing made with this provider's key returned the model.
+    example: true
+  limits:
+    type: string
+    enum:
+      - known
+      - unknown
+    description: >
+      "known" when the model is in the served catalog (window/output/modality
+      limits available); "unknown" when the provider returned a model the
+      catalog lacks.
+    example: "known"

@@ -123,6 +123,15 @@
       ]
     },
     {
+      "group": "auth-posture",
+      "key_slot": "a",
+      "port": 6069,
+      "solo": true,
+      "specs": [
+        "tests/e2e/fr050-preauth-window.spec.ts"
+      ]
+    },
+    {
       "group": "stubs",
       "key_slot": "a",
       "port": 6064,
@@ -132,6 +141,7 @@
         "tests/e2e/fresh-install.spec.ts",
         "tests/e2e/iframe-preview-warmup.spec.ts",
         "tests/e2e/mcp-add.spec.ts",
+        "tests/e2e/onboarding.spec.ts",
         "tests/e2e/profile-fontsize.spec.ts",
         "tests/e2e/providers.spec.ts",
         "tests/e2e/settings-gateway.spec.ts",

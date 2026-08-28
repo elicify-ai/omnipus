@@ -186,7 +186,7 @@ func TestRetryOnStreamingReset_SingleCandidateTurnSucceeds(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              workspaceDir,
-				ModelName:         "test-model",
+				DefaultModel:      config.DefaultModel{Model: "test-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -242,7 +242,7 @@ func TestRetryOnStreamingReset_GoAwayTurnSucceeds(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              tmpDir,
-				ModelName:         "test-model",
+				DefaultModel:      config.DefaultModel{Model: "test-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -300,7 +300,7 @@ func TestRetryOnStreamingReset_ExhaustsMaxRetries(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              tmpDir,
-				ModelName:         "test-model",
+				DefaultModel:      config.DefaultModel{Model: "test-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -352,7 +352,7 @@ func TestRetryOnStreamingReset_AuthErrorNotRetried(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              tmpDir,
-				ModelName:         "test-model",
+				DefaultModel:      config.DefaultModel{Model: "test-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -404,7 +404,7 @@ func TestRetryOnStreamingReset_ScenarioProviderVariant(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              tmpDir,
-				ModelName:         "scripted-model",
+				DefaultModel:      config.DefaultModel{Model: "scripted-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -438,8 +438,8 @@ func TestRetryOnStreamingReset_ScenarioProviderVariant(t *testing.T) {
 // branch of runTurn's retry loop treated windowTrim's ok=false identically
 // whether it meant "nothing eligible to evict" or "trim mechanism genuinely
 // failed" — unconditionally `break`-ing the ENTIRE retry attempt in both
-// cases. A turn whose assembled context sits over the (SummarizeTokenPercent-
-// scaled) compaction budget but has little/no compressible history (e.g. the
+// cases. A turn whose assembled context sits over the compaction budget B
+// (ADR-066 FR-028) but has little/no compressible history (e.g. the
 // very first turn of a session — a single user message and no prior
 // conversation) hits exactly the "nothing to evict" case: windowTrim's
 // len(window) <= 1 early return. Since the ORIGINAL error that triggered this
@@ -449,9 +449,9 @@ func TestRetryOnStreamingReset_ScenarioProviderVariant(t *testing.T) {
 //
 // This test forces "over budget" deterministically (rather than relying on
 // incidental proximity to a default threshold, which is what made the
-// original regression easy to trip and hard to pin down): ContextWindow=100,
-// SummarizeTokenPercent=100 means the timeout-recovery compaction check uses
-// a 100-token budget, and MaxTokens=4096 alone exceeds it — so
+// original regression easy to trip and hard to pin down): ContextWindow=100
+// and MaxTokens=4096 make the one budget B negative (B = W − max_tokens −
+// ceil(0.05·W) − pinnedCoreOverhead), so
 // isOverContextBudget is true on the very first (single-message) turn,
 // windowTrim has nothing to evict and returns ok=false, and the fix must
 // still let the retry proceed.
@@ -478,19 +478,20 @@ func TestRetryOnStreamingReset_NothingToTrimStillRetries(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      tmpDir,
-				ModelName: "test-model",
-				// Deliberately tiny/scaled so isOverContextBudget is true on
-				// a fresh, single-message turn (100 * 100/100 == 100 <
-				// MaxTokens alone), independent of any default-config edge.
-				ContextWindow:         100,
-				SummarizeTokenPercent: 100,
-				MaxTokens:             4096,
-				MaxToolIterations:     10,
+				Home:              tmpDir,
+				DefaultModel:      config.DefaultModel{Model: "test-model"},
+				MaxTokens:         4096,
+				MaxToolIterations: 10,
 			},
 			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
+	// Deliberately tiny so isOverContextBudget is true on a fresh,
+	// single-message turn (B < 0 even after the FR-005b max_tokens clamp,
+	// because the pinned-core term alone exceeds the window), independent
+	// of any default-config edge. The global default is the ADR-066 D2
+	// ladder's rung 3 (clamped against the floor, so 100 stands).
+	cfg.Context.DefaultContextWindow = intPtr(100)
 
 	msgBus := bus.NewMessageBus()
 	t.Cleanup(func() { msgBus.Close() })
@@ -592,25 +593,21 @@ func TestRetryOnStreamingReset_RecallSpanDropAloneStillRetries(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      tmpDir,
-				ModelName: "test-model",
-				// Raw ContextWindow stays generous so the small initial
-				// (span-free) messages never trip the proactive pre-call
-				// compaction check, which uses the raw window. The tiny
-				// SummarizeTokenPercent instead forces the timeout-recovery
-				// branch's own pre-check (which scales ContextWindow by
-				// SummarizeTokenPercent) to always attempt compaction,
-				// mirroring the technique
-				// TestRetryOnStreamingReset_NothingToTrimStillRetries uses
-				// to force isOverContextBudget deterministically.
-				ContextWindow:         100000,
-				SummarizeTokenPercent: 1,
-				MaxTokens:             2000,
-				MaxToolIterations:     10,
+				Home:         tmpDir,
+				DefaultModel: config.DefaultModel{Model: "test-model"},
+				// The window stays generous so the small initial (span-free)
+				// messages never trip the proactive pre-call check. Both
+				// checks read the ONE budget B (ADR-066 FR-028) — what makes
+				// the timeout-recovery check fire is that it measures the
+				// request the retry would assemble, which now includes the
+				// ~150,000-token recall span injected during the failed call.
+				MaxTokens:         2000,
+				MaxToolIterations: 10,
 			},
 			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
+	cfg.Context.DefaultContextWindow = intPtr(100000)
 
 	msgBus := bus.NewMessageBus()
 	t.Cleanup(func() { msgBus.Close() })

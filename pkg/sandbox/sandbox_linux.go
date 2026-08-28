@@ -277,8 +277,10 @@ func (lb *LinuxBackend) ApplyWithMode(policy SandboxPolicy, mode Mode) error {
 	if errno != 0 {
 		return fmt.Errorf("landlock: create_ruleset failed: %w", errno)
 	}
+	// #nosec G115 -- landlock_create_ruleset(2) returned this fd on the success path (errno is checked directly above). A Linux file descriptor is a small non-negative int the kernel allocates below RLIMIT_NOFILE, so the uintptr the syscall ABI hands back never exceeds what int holds. Hoisted to one conversion so the suppression covers exactly this narrowing and nothing else.
+	rulesetFdInt := int(rulesetFd)
 	defer func() {
-		if closeErr := unix.Close(int(rulesetFd)); closeErr != nil { // #nosec G115 -- rulesetFd is a file descriptor returned by landlock_create_ruleset(2); a kernel fd is bounded by RLIMIT_NOFILE (typically ~1024-1048576) and cannot approach int's range. The uintptr is only because unix.Syscall returns uintptr.
+		if closeErr := unix.Close(rulesetFdInt); closeErr != nil {
 			slog.Debug("Landlock: failed to close ruleset fd", "error", closeErr)
 		}
 	}()
@@ -294,7 +296,7 @@ func (lb *LinuxBackend) ApplyWithMode(policy SandboxPolicy, mode Mode) error {
 	var ruleErrors []error
 	for _, rule := range gatewayRules {
 		rights := lb.accessToLandlockRights(rule.Access)
-		if err := addLandlockPathRule(int(rulesetFd), rule.Path, rights); err != nil { // #nosec G115 -- rulesetFd is a file descriptor returned by landlock_create_ruleset(2); a kernel fd is bounded by RLIMIT_NOFILE (typically ~1024-1048576) and cannot approach int's range. The uintptr is only because unix.Syscall returns uintptr.
+		if err := addLandlockPathRule(rulesetFdInt, rule.Path, rights); err != nil {
 			// ENOENT for system paths (e.g. /lib64 on ARM64) is expected —
 			// the directory simply doesn't exist on that architecture. Log
 			// as a warning and skip rather than aborting sandbox setup.
@@ -318,7 +320,7 @@ func (lb *LinuxBackend) ApplyWithMode(policy SandboxPolicy, mode Mode) error {
 	// listed will be denied with EACCES.
 	if lb.abiVersion >= 4 {
 		for _, rule := range policy.BindPortRules {
-			if err := addLandlockNetPortRule(int(rulesetFd), rule.Port, landlockAccessNetBindTcp); err != nil { // #nosec G115 -- rulesetFd is a file descriptor returned by landlock_create_ruleset(2); a kernel fd is bounded by RLIMIT_NOFILE (typically ~1024-1048576) and cannot approach int's range. The uintptr is only because unix.Syscall returns uintptr.
+			if err := addLandlockNetPortRule(rulesetFdInt, rule.Port, landlockAccessNetBindTcp); err != nil {
 				// B1.4-c: On ABI >=4 the kernel explicitly claims NET_BIND_TCP
 				// support. EINVAL or ENOENT at this point means our syscall
 				// arguments are malformed or the kernel is in an inconsistent
@@ -344,7 +346,7 @@ func (lb *LinuxBackend) ApplyWithMode(policy SandboxPolicy, mode Mode) error {
 		// the same as bind rules — hard error so operators see partial
 		// allow-list silently shipping is impossible.
 		for _, rule := range policy.ConnectPortRules {
-			if err := addLandlockNetPortRule(int(rulesetFd), rule.Port, landlockAccessNetConnectTcp); err != nil { // #nosec G115 -- rulesetFd is a file descriptor returned by landlock_create_ruleset(2); a kernel fd is bounded by RLIMIT_NOFILE (typically ~1024-1048576) and cannot approach int's range. The uintptr is only because unix.Syscall returns uintptr.
+			if err := addLandlockNetPortRule(rulesetFdInt, rule.Port, landlockAccessNetConnectTcp); err != nil {
 				if errors.Is(err, unix.EINVAL) || errors.Is(err, unix.ENOENT) {
 					return fmt.Errorf("landlock: kernel (ABI v%d) rejected net connect rule for port %d: %w"+
 						" — kernel claims net rule support but rejected the syscall; this indicates"+
@@ -542,7 +544,7 @@ func addLandlockPathRule(rulesetFd int, path string, rights uint64) error {
 
 	_, _, errno := unix.Syscall6(
 		sysLandlockAddRule,
-		uintptr(rulesetFd), // #nosec G115 -- rulesetFd is a kernel file descriptor from landlock_create_ruleset(2), bounded by RLIMIT_NOFILE; it cannot approach int/uintptr range. The conversion exists only because unix.Syscall speaks uintptr.
+		uintptr(rulesetFd), // #nosec G115 -- rulesetFd is a Linux file descriptor: non-negative and bounded by RLIMIT_NOFILE, so the widening the syscall ABI requires can neither overflow nor sign-extend into a bogus address.
 		landlockRulePathBeneath,
 		uintptr(unsafe.Pointer(&pathAttr)), // #nosec G103 -- landlock_add_rule(2), LANDLOCK_RULE_PATH_BENEATH: pathAttr is a stack-allocated landlockPathBeneathAttr passed by pointer only for this synchronous syscall; not retained by the kernel past the call.
 		0, 0, 0,
@@ -566,7 +568,7 @@ func addLandlockNetPortRule(rulesetFd int, port uint16, rights uint64) error {
 	}
 	_, _, errno := unix.Syscall6(
 		sysLandlockAddRule,
-		uintptr(rulesetFd), // #nosec G115 -- rulesetFd is a kernel file descriptor from landlock_create_ruleset(2), bounded by RLIMIT_NOFILE; it cannot approach int/uintptr range. The conversion exists only because unix.Syscall speaks uintptr.
+		uintptr(rulesetFd), // #nosec G115 -- rulesetFd is a Linux file descriptor: non-negative and bounded by RLIMIT_NOFILE, so the widening the syscall ABI requires can neither overflow nor sign-extend into a bogus address.
 		landlockRuleNetPort,
 		uintptr(unsafe.Pointer(&attr)), // #nosec G103 -- landlock_add_rule(2), LANDLOCK_RULE_NET_PORT: attr is a stack-allocated landlockNetPortAttr passed by pointer only for this synchronous syscall; not retained by the kernel past the call.
 		0, 0, 0,
@@ -587,10 +589,7 @@ func probeLandlockABIPlatform() int {
 	if errno != 0 {
 		return 0
 	}
-	// #nosec G115 -- version is the Landlock ABI version returned by
-	// landlock_create_ruleset(LANDLOCK_CREATE_RULESET_VERSION); it is a small
-	// positive integer (currently <= 6) and cannot overflow int.
-	return int(version)
+	return int(version) // #nosec G115 -- version is the ABI number landlock_create_ruleset(2) returns for LANDLOCK_CREATE_RULESET_VERSION (errno checked above): a small positive counter — 6 as of Linux 6.10 — never a pointer or a size.
 }
 
 // currentLinuxBackend holds the LinuxBackend that most recently completed
@@ -705,8 +704,10 @@ func (lb *LinuxBackend) RestrictCurrentThreadWithPolicy(policy *SandboxPolicy) e
 	if errno != 0 {
 		return fmt.Errorf("landlock: create_ruleset failed: %w", errno)
 	}
+	// #nosec G115 -- landlock_create_ruleset(2) returned this fd on the success path (errno is checked directly above). A Linux file descriptor is a small non-negative int the kernel allocates below RLIMIT_NOFILE, so the uintptr the syscall ABI hands back never exceeds what int holds. Hoisted to one conversion so the suppression covers exactly this narrowing and nothing else.
+	rulesetFdInt := int(rulesetFd)
 	defer func() {
-		if closeErr := unix.Close(int(rulesetFd)); closeErr != nil { // #nosec G115 -- rulesetFd is a kernel file descriptor from landlock_create_ruleset(2), bounded by RLIMIT_NOFILE; it cannot approach int/uintptr range. The conversion exists only because unix.Syscall speaks uintptr.
+		if closeErr := unix.Close(rulesetFdInt); closeErr != nil {
 			slog.Debug("Landlock: failed to close ruleset fd", "error", closeErr)
 		}
 	}()
@@ -743,7 +744,7 @@ func (lb *LinuxBackend) RestrictCurrentThreadWithPolicy(policy *SandboxPolicy) e
 	}
 	for _, rule := range childRules {
 		rights := lb.accessToLandlockRights(rule.Access)
-		if err := addLandlockPathRule(int(rulesetFd), rule.Path, rights); err != nil { // #nosec G115 -- rulesetFd is a kernel file descriptor from landlock_create_ruleset(2), bounded by RLIMIT_NOFILE; it cannot approach int/uintptr range. The conversion exists only because unix.Syscall speaks uintptr.
+		if err := addLandlockPathRule(rulesetFdInt, rule.Path, rights); err != nil {
 			if errors.Is(err, unix.ENOENT) {
 				continue
 			}
@@ -752,7 +753,7 @@ func (lb *LinuxBackend) RestrictCurrentThreadWithPolicy(policy *SandboxPolicy) e
 	}
 	if lb.abiVersion >= 4 {
 		for _, rule := range effective.BindPortRules {
-			if err := addLandlockNetPortRule(int(rulesetFd), rule.Port, landlockAccessNetBindTcp); err != nil { // #nosec G115 -- rulesetFd is a kernel file descriptor from landlock_create_ruleset(2), bounded by RLIMIT_NOFILE; it cannot approach int/uintptr range. The conversion exists only because unix.Syscall speaks uintptr.
+			if err := addLandlockNetPortRule(rulesetFdInt, rule.Port, landlockAccessNetBindTcp); err != nil {
 				// B1.4-c: same hard-error contract as in ApplyWithMode. On ABI >=4
 				// the kernel explicitly supports net rules; EINVAL/ENOENT here is a
 				// real error that must not be silently swallowed during per-thread
@@ -771,7 +772,7 @@ func (lb *LinuxBackend) RestrictCurrentThreadWithPolicy(policy *SandboxPolicy) e
 		// even though the gateway thread itself was correctly restricted —
 		// the same drift the bind-rule re-add path guards against.
 		for _, rule := range effective.ConnectPortRules {
-			if err := addLandlockNetPortRule(int(rulesetFd), rule.Port, landlockAccessNetConnectTcp); err != nil { // #nosec G115 -- rulesetFd is a kernel file descriptor from landlock_create_ruleset(2), bounded by RLIMIT_NOFILE; it cannot approach int/uintptr range. The conversion exists only because unix.Syscall speaks uintptr.
+			if err := addLandlockNetPortRule(rulesetFdInt, rule.Port, landlockAccessNetConnectTcp); err != nil {
 				if errors.Is(err, unix.EINVAL) || errors.Is(err, unix.ENOENT) {
 					return fmt.Errorf("landlock: kernel (ABI v%d) rejected net connect rule for port %d"+
 						" during per-thread re-apply: %w", lb.abiVersion, rule.Port, err)

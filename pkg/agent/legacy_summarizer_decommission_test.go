@@ -56,11 +56,10 @@ import (
 // path — a plain substring check over raw file text, so it survives any
 // refactor of the surrounding code.
 //
-// NOTE ON WHAT IS DELIBERATELY *NOT* FORBIDDEN: SummarizeTokenPercent. Despite
-// the name it is no longer a summarization knob — it gates and sizes the
-// timeout-recovery windowTrim trigger in loop.go's runTurn. Deleting it breaks
-// timeout recovery. The positive assertion at the bottom of this test pins it
-// in place so a future "finish the cleanup" pass cannot quietly take it.
+// SummarizeTokenPercent used to be the one survivor this test protected (it
+// scaled the timeout-recovery windowTrim trigger). ADR-066 D6 (T066-03)
+// replaced that scaling with the one budget B and deleted the knob, so the
+// closing assertion now forbids it too.
 func TestDecommission_NoLegacySummarizerSymbols(t *testing.T) {
 	filesOwned := []string{
 		"loop.go",
@@ -109,19 +108,16 @@ func TestDecommission_NoLegacySummarizerSymbols(t *testing.T) {
 		}
 	}
 
-	// Positive assertion — SummarizeTokenPercent MUST survive. It is read by
-	// the timeout-recovery compaction gate in runTurn (loop.go) and by
-	// AgentInstance construction (instance.go). If either read disappears,
-	// timeout recovery silently stops compacting and this test fails loudly
-	// instead.
+	// SummarizeTokenPercent — the knob this test once pinned in place as the
+	// timeout-recovery trigger's scale — was deleted by ADR-066 D6 (FR-004,
+	// T066-03): that trigger now reads the one budget B like every other
+	// site, so the percentage has no reader left. Its absence is asserted by
+	// TestMidTurnBudget_SameBudgetAsWindowTrim (context_budget_test.go); the
+	// timeout-recovery gate itself is still exercised by
+	// TestRetryOnStreamingReset_* (streaming_reset_retry_test.go).
 	loopSrc := readOwnedFileForTest(t, "loop.go")
-	assert.Contains(t, loopSrc, "ts.agent.SummarizeTokenPercent",
-		"loop.go MUST still read SummarizeTokenPercent — it gates the "+
-			"timeout-recovery windowTrim trigger, it is not a summarization knob")
-
-	instanceSrc := readOwnedFileForTest(t, "instance.go")
-	assert.Contains(t, instanceSrc, "SummarizeTokenPercent",
-		"instance.go MUST still carry SummarizeTokenPercent onto AgentInstance")
+	assert.NotContains(t, loopSrc, "SummarizeTokenPercent",
+		"loop.go must not reference the deleted SummarizeTokenPercent (FR-004)")
 }
 
 // ---------- TestDecommission_LongConversationMakesNoExtraModelCalls ----------
@@ -181,18 +177,19 @@ func TestDecommission_LongConversationMakesNoExtraModelCalls(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              workspace,
-				ModelName:         "test-model",
+				DefaultModel:      config.DefaultModel{Model: "test-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
-				// Generous window so the proactive windowTrim budget check
-				// never fires. windowTrim makes no LLM calls either way, but
-				// keeping it out of the picture makes the call count mean
-				// exactly one thing: one call per turn, nothing else.
-				ContextWindow: 400000,
 			},
 			List: []config.AgentConfig{{ID: "mia", Home: workspace}},
 		},
 	}
+	// Generous window (ADR-066 D2 rung 3; a cloud row nobody can size is
+	// capped at the floor, which is still generous here) so the proactive
+	// windowTrim budget check never fires. windowTrim makes no LLM calls
+	// either way, but keeping it out of the picture makes the call count
+	// mean exactly one thing: one call per turn, nothing else.
+	cfg.Context.DefaultContextWindow = intPtr(400000)
 
 	provider := &turnCallCountingProvider{}
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), provider)

@@ -108,7 +108,28 @@ func csrfTargets() []csrfTarget {
 // attack-scenario sub-tests to exercise the cookie-auth code path, which is
 // what the CSRF gate actually guards.
 func TestCSRFProtection(t *testing.T) {
-	gw := testutil.StartTestGateway(t, testutil.WithBearerAuth())
+	// Deliberately NOT testutil.WithBearerAuth(): this test seeds its admin by
+	// driving the real onboarding wizard below, and POST /onboarding/complete
+	// now refuses on any instance that already has an authentication authority
+	// — a configured user OR OMNIPUS_BEARER_TOKEN — whatever the onboarding
+	// flag says (see onboardingWindowGate, pkg/gateway/rest_onboarding.go).
+	// WithBearerAuth sets that env token, so onboarding here would 409.
+	//
+	// Do NOT "fix" a future 409 by re-adding WithBearerAuth or by clearing the
+	// env var around the onboarding call: both would paper over the control
+	// that stops an anonymous caller minting an admin on an authenticated
+	// instance. Starting fresh is also the honest production sequence — a real
+	// deployment onboards first and sets OMNIPUS_BEARER_TOKEN afterwards.
+	//
+	// Nothing this test asserts is weakened by the change. Pre-onboarding the
+	// harness sets dev_mode_bypass (no users, no env token), but the instant
+	// onboarding seeds gateway.users, checkBearerAuth requires a token that
+	// matches a user — so auth is genuinely enforced for every sub-test that
+	// depends on it. Verified by mutation: replacing adminToken with a bogus
+	// value makes every happy-path sub-test fail with 401 "invalid Bearer
+	// token". The two attack sub-tests send no Authorization header at all and
+	// are answered by the CSRF middleware, which runs BEFORE auth.
+	gw := testutil.StartTestGateway(t)
 
 	// Use a fixed CSRF token for the happy-path test. The middleware only
 	// compares cookie to header; any value works so long as both legs match.

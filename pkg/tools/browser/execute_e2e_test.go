@@ -519,18 +519,18 @@ func TestExecute_Navigate_PostRedirectSSRF(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Case 5 — browser_get_text 100 KB cap
+// Case 5 — browser_get_text 64,000-char cap (ADR-066 FR-014 / B-15)
 //
 // BDD: Given a fixture page with a >100 KB element,
 //
 //	When browser_get_text.Execute is called on that element,
-//	Then the returned text is capped at 100 KB and ends with the truncation suffix.
+//	Then the returned text is capped at 64,000 chars and ends with the truncation suffix.
 //
-// Traces to: tools.go maxGetTextBytes (line 19)
+// Traces to: tools.go maxGetTextChars / capGetText
 // Issue #445 §3.18 case 5
 // ---------------------------------------------------------------------------
 
-func TestExecute_GetText_100KBCap(t *testing.T) {
+func TestExecute_GetText_64000CharCap(t *testing.T) {
 	skipIfNoBrowser(t)
 
 	srv := executeTestServer(t)
@@ -552,11 +552,10 @@ func TestExecute_GetText_100KBCap(t *testing.T) {
 	text, ok := data["text"].(string)
 	require.True(t, ok, "get_text result must contain a string 'text' field")
 
-	const maxBytes = 100 * 1024 // 100 KB — matches maxGetTextBytes in tools.go
-	assert.LessOrEqual(t, len(text), maxBytes+len("\n[truncated at 100KB]"),
-		"get_text result must not exceed 100 KB + truncation suffix")
-	assert.Contains(t, text, "[truncated at 100KB]",
-		"get_text must append truncation suffix when content exceeds 100 KB")
+	assert.LessOrEqual(t, len(text), maxGetTextChars+len(getTextTruncationSuffix),
+		"get_text result must not exceed 64,000 chars + truncation suffix")
+	assert.Contains(t, text, getTextTruncationSuffix,
+		"get_text must append truncation suffix when content exceeds 64,000 chars")
 }
 
 // ---------------------------------------------------------------------------

@@ -58,7 +58,7 @@ func TestTestHarnessAgentIDs_MixedCaseAgent_NormalizedBeforeSeeding(t *testing.T
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              filepath.Join(home, "default-workspace"),
-				ModelName:         "scripted-model",
+				DefaultModel:      config.DefaultModel{Model: "scripted-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},

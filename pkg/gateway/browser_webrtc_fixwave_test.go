@@ -54,9 +54,9 @@ func newFixWaveHandlerWithAudit(
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080, DevModeBypass: true},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      workspaceDir,
-				ModelName: "test-model",
-				MaxTokens: 4096,
+				Home:         workspaceDir,
+				DefaultModel: config.DefaultModel{Model: "test-model"},
+				MaxTokens:    4096,
 			},
 			// This test resolves the default agent (browser capture is keyed to
 			// it). There is no implicit "main" sentinel to be that agent any

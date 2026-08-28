@@ -5,7 +5,18 @@ import { CaretUpDown, Check, CircleNotch, Keyboard, WarningCircle } from '@phosp
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command'
 import { Input } from '@/components/ui/input'
+import { useVirtualizer } from '@tanstack/react-virtual'
 import { isKnownModelSlugInList } from '@/lib/agents/model-validation'
+import {
+  RECOMMENDED_CHIP_LABEL,
+  orderModels,
+  recommendedModelIds,
+  shouldVirtualiseModelList,
+} from '@/components/ui/model-ordering'
+import type { CatalogModel, components } from '@/lib/api/generated/openapi-types'
+
+/** The six provider statuses, straight off the wire contract (ADR-068 FR-038). */
+export type ProviderStatus = components['schemas']['Provider']['status']
 
 export interface ModelGroup {
   providerName: string
@@ -24,6 +35,38 @@ export interface ModelPair {
    *  backend. Empty string when the provider could not be resolved (e.g. the
    *  group has no `providerId` or the model was entered via free-text). */
   provider: string
+}
+
+/**
+ * ADR-068 FR-030 catalog mode. Where `providerGroups` carries bare slugs, this
+ * carries the catalog rows themselves, which is what ordering by release date
+ * and awarding a "Recommended for chat" chip need — neither is derivable from a
+ * string. Supplying `catalogGroups` switches the list to catalog rendering;
+ * omitting it leaves every existing call site on the string path untouched.
+ */
+export interface ModelCatalogGroup {
+  /** Provider routing key — the configured provider's `id`. */
+  providerId: string
+  /** Display name, used as the vendor heading fallback for bare model ids. */
+  providerName: string
+  /** Connection status, so `filterProviders` can keep connected rows only. */
+  status?: ProviderStatus
+  models: CatalogModel[]
+}
+
+/**
+ * ADR-068 FR-019: narrow which providers the selector offers. Both fields are
+ * ANDed; an omitted or empty field is "no restriction on this axis".
+ *
+ * - Settings → Providers *Change* passes `{ statuses: ['connected', 'signed_in'] }`.
+ * - A row's *Set as default model…* passes `{ providerIds: ['<that row>'] }`.
+ *
+ * `providerIds` also narrows the legacy string `providerGroups`; `statuses`
+ * cannot (a string group carries no status) and is ignored there.
+ */
+export interface ModelSelectorProviderFilter {
+  providerIds?: string[]
+  statuses?: ProviderStatus[]
 }
 
 interface ModelSelectorProps {
@@ -139,9 +182,36 @@ interface ModelSelectorProps {
    */
   open?: boolean
   onOpenChange?: (open: boolean) => void
+  /**
+   * ADR-068 FR-029: the field's accessible name, verbatim. Onboarding passes
+   * "Model for your first agent". With no value the trigger's accessible name
+   * is exactly this string; once a model is chosen the value is appended after
+   * it, so the label still leads the announcement.
+   *
+   * Omitted → the historical "Model selector, …" name, unchanged.
+   */
+  label?: string
+  /** ADR-068 FR-030 catalog mode — see `ModelCatalogGroup`. */
+  catalogGroups?: ModelCatalogGroup[]
+  /** ADR-068 FR-019 — see `ModelSelectorProviderFilter`. */
+  filterProviders?: ModelSelectorProviderFilter
 }
 
-export function ModelSelector({ models, value, onChange, placeholder, disabled, providerGroups, triggerTestId, tabIndex = 0, itemTestIdPrefix, onUnknownModel, onPairChange, showUnresolvedIndicator = true, constrainToCatalog = false, allowFreeTextWhenEmpty = false, emptyCatalogHint, catalogStatus = 'ready', catalogErrorMessage, onRetryCatalog, variant = 'default', open: controlledOpen, onOpenChange: controlledOnOpenChange }: ModelSelectorProps) {
+/** One rendered line of catalog mode: a vendor heading or a pickable model. */
+type CatalogRow =
+  | { kind: 'heading'; key: string; label: string }
+  | {
+      kind: 'model'
+      key: string
+      model: CatalogModel
+      providerId: string
+      recommended: boolean
+    }
+
+/** Height used to lay out the virtualised list, in px. Rows are a fixed size. */
+const CATALOG_ROW_HEIGHT = 32
+
+export function ModelSelector({ models, value, onChange, placeholder, disabled, providerGroups, triggerTestId, tabIndex = 0, itemTestIdPrefix, onUnknownModel, onPairChange, showUnresolvedIndicator = true, constrainToCatalog = false, allowFreeTextWhenEmpty = false, emptyCatalogHint, catalogStatus = 'ready', catalogErrorMessage, onRetryCatalog, variant = 'default', open: controlledOpen, onOpenChange: controlledOnOpenChange, label, catalogGroups, filterProviders }: ModelSelectorProps) {
   const [internalOpen, setInternalOpen] = React.useState(false)
   const isControlled = controlledOpen !== undefined
   const open = isControlled ? controlledOpen : internalOpen
@@ -157,6 +227,126 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
   // points at. useId() guarantees uniqueness even if multiple
   // ModelSelectors are mounted on the same page.
   const descriptionId = React.useId()
+
+  // ---------------------------------------------------------------------
+  // ADR-068 FR-030 / FR-019 — catalog mode.
+  //
+  // Every hook below runs unconditionally and BEFORE this component's early
+  // returns (error state, empty catalogue, text-input fallback). A hook placed
+  // after them would be called on some renders and skipped on others, which
+  // React forbids.
+  // ---------------------------------------------------------------------
+  const catalogMode = catalogGroups !== undefined
+  // Call sites pass `filterProviders` as an inline object literal, so its
+  // identity changes on every render. Memoise on its CONTENT instead.
+  const filterKey = `${(filterProviders?.providerIds ?? []).join(',')}|${(filterProviders?.statuses ?? []).join(',')}`
+
+  const visibleCatalogGroups = React.useMemo<ModelCatalogGroup[]>(() => {
+    if (!catalogGroups) return []
+    const ids = filterProviders?.providerIds
+    const statuses = filterProviders?.statuses
+    return catalogGroups.filter((group) => {
+      if (ids && ids.length > 0 && !ids.includes(group.providerId)) return false
+      if (statuses && statuses.length > 0 && !(group.status && statuses.includes(group.status))) return false
+      return group.models.length > 0
+    })
+    // filterKey stands in for filterProviders (see above).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [catalogGroups, filterKey])
+
+  // FR-019 also narrows the legacy string groups, by id only — a string group
+  // carries no status, so a `statuses` filter cannot apply to it.
+  const effectiveProviderGroups = React.useMemo<ModelGroup[] | undefined>(() => {
+    if (!providerGroups) return providerGroups
+    const ids = filterProviders?.providerIds
+    if (!ids || ids.length === 0) return providerGroups
+    return providerGroups.filter((g) => g.providerId !== undefined && ids.includes(g.providerId))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [providerGroups, filterKey])
+
+  // FR-030 ordering + chips, computed once per catalog change. Recommended is
+  // scoped PER PROVIDER (at most three each), so it is computed inside the
+  // per-group loop rather than over the flattened list.
+  const catalogRows = React.useMemo<CatalogRow[]>(() => {
+    const rows: CatalogRow[] = []
+    const multiProvider = visibleCatalogGroups.length > 1
+    for (const group of visibleCatalogGroups) {
+      const recommended = new Set(recommendedModelIds(group.models))
+      for (const vendorGroup of orderModels(group.models, { fallbackVendor: group.providerName })) {
+        const vendorLabel = vendorGroup.vendor || group.providerName
+        rows.push({
+          kind: 'heading',
+          key: `heading:${group.providerId}:${vendorGroup.vendor}`,
+          // With one provider the vendor alone is unambiguous; with several,
+          // two providers can both expose an "anthropic" vendor group.
+          label:
+            multiProvider && vendorLabel !== group.providerName
+              ? `${group.providerName} · ${vendorLabel}`
+              : vendorLabel,
+        })
+        for (const model of vendorGroup.models) {
+          rows.push({
+            kind: 'model',
+            key: `${group.providerId}:${model.id}`,
+            model,
+            providerId: group.providerId,
+            recommended: recommended.has(model.id),
+          })
+        }
+      }
+    }
+    return rows
+  }, [visibleCatalogGroups])
+
+  // The rows actually on screen: the query drops non-matching models, and any
+  // heading whose whole group went with them.
+  const visibleCatalogRows = React.useMemo<CatalogRow[]>(() => {
+    const needle = query.trim().toLowerCase()
+    if (needle === '') return catalogRows
+    const kept: CatalogRow[] = []
+    for (const row of catalogRows) {
+      if (row.kind === 'heading') {
+        kept.push(row)
+        continue
+      }
+      if (
+        row.model.id.toLowerCase().includes(needle) ||
+        row.model.name.toLowerCase().includes(needle)
+      ) {
+        kept.push(row)
+      }
+    }
+    // Drop headings left with no models under them.
+    return kept.filter(
+      (row, i) => row.kind === 'model' || (kept[i + 1] !== undefined && kept[i + 1].kind === 'model'),
+    )
+  }, [catalogRows, query])
+
+  const catalogModelCount = catalogRows.reduce((n, r) => n + (r.kind === 'model' ? 1 : 0), 0)
+  const visibleCatalogModelCount = visibleCatalogRows.reduce(
+    (n, r) => n + (r.kind === 'model' ? 1 : 0),
+    0,
+  )
+  // aria-posinset is 1-based over the models actually offered, so it has to be
+  // assigned after filtering, not baked into catalogRows.
+  const catalogPositions = React.useMemo(() => {
+    const positions = new Map<string, number>()
+    let pos = 0
+    for (const row of visibleCatalogRows) {
+      if (row.kind === 'model') positions.set(row.key, ++pos)
+    }
+    return positions
+  }, [visibleCatalogRows])
+
+  // FR-030: 100 renders whole, 101 does not.
+  const virtualiseCatalog = catalogMode && shouldVirtualiseModelList(visibleCatalogModelCount)
+  const catalogListRef = React.useRef<HTMLDivElement | null>(null)
+  const catalogVirtualizer = useVirtualizer({
+    count: virtualiseCatalog ? visibleCatalogRows.length : 0,
+    getScrollElement: () => catalogListRef.current,
+    estimateSize: () => CATALOG_ROW_HEIGHT,
+    overscan: 10,
+  })
 
   // Loading / error catalogue states pre-empt every other render path below.
   // A providers fetch that is still in flight, or has failed outright, must
@@ -234,8 +424,12 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
     )
   }
 
+  // Catalog mode counts as "has models" through its own groups; a filter that
+  // matches nothing (FR-019) legitimately lands here as an empty catalogue.
   const catalogEmpty =
-    models.length === 0 && (!providerGroups || providerGroups.every((g) => g.models.length === 0))
+    models.length === 0 &&
+    (!effectiveProviderGroups || effectiveProviderGroups.every((g) => g.models.length === 0)) &&
+    catalogModelCount === 0
 
   // Constrained empty-catalogue state. The operator decision is that a
   // non-catalogue model must not be selectable, so when there is nothing to
@@ -320,9 +514,10 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
   }
 
   // Build the effective flat model list (used for exactMatch check and allModels filter)
-  const allModels: string[] =
-    providerGroups && providerGroups.length > 0
-      ? providerGroups.flatMap((g) => g.models)
+  const allModels: string[] = catalogMode
+    ? visibleCatalogGroups.flatMap((g) => g.models.map((m) => m.id))
+    : effectiveProviderGroups && effectiveProviderGroups.length > 0
+      ? effectiveProviderGroups.flatMap((g) => g.models)
       : models
 
   // W6-C4 / G12: when the current `value` doesn't appear in the flat model
@@ -351,8 +546,8 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
   // providerGroups is provided with at least one non-empty group. This lets
   // the provider name act as a stable visual heading. Previously grouped only
   // when ≥2 providers, which hid the heading for single-provider installs.
-  const groupsWithModels = providerGroups
-    ? providerGroups
+  const groupsWithModels = effectiveProviderGroups
+    ? effectiveProviderGroups
         .filter((g) => g.models.length > 0)
         // O3: sort models within each group alphabetically for consistent discovery.
         .map((g) => ({ ...g, models: [...g.models].sort((a, b) => a.localeCompare(b)) }))
@@ -362,8 +557,12 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
   // O3: resolve the provider routing key for a given model slug by searching
   // the providerGroups array. Returns the group's `providerId` or empty string.
   const resolveProviderId = (modelSlug: string): string => {
-    if (!providerGroups) return ''
-    const group = providerGroups.find((g) => g.models.includes(modelSlug))
+    if (catalogMode) {
+      const group = visibleCatalogGroups.find((g) => g.models.some((m) => m.id === modelSlug))
+      return group?.providerId ?? ''
+    }
+    if (!effectiveProviderGroups) return ''
+    const group = effectiveProviderGroups.find((g) => g.models.includes(modelSlug))
     return group?.providerId ?? ''
   }
 
@@ -381,6 +580,97 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
     setQuery('')
   }
 
+  // FR-030 catalog rendering. Headings are plain rows rather than CommandGroup
+  // headings so that the virtualised and whole lists are the SAME row sequence
+  // — a virtualiser can only window a flat list, and having one code path means
+  // the 101st model cannot render differently from the 100th.
+  const renderCatalogHeading = (row: Extract<CatalogRow, { kind: 'heading' }>) => (
+    <div
+      key={row.key}
+      data-testid="model-selector-vendor-heading"
+      role="presentation"
+      className="px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider"
+      style={{ color: 'var(--color-muted)' }}
+    >
+      {row.label}
+    </div>
+  )
+
+  const renderCatalogItem = (row: Extract<CatalogRow, { kind: 'model' }>) => {
+    const chosen = value === row.model.id
+    return (
+      <CommandItem
+        key={row.key}
+        value={row.model.id}
+        onSelect={() => handleSelect(row.model.id)}
+        data-model={row.model.id}
+        // FR-029: "chosen" is the operator's pick. cmdk's own aria-selected
+        // tracks the keyboard cursor, which lands on the first row the moment
+        // the list opens — it can never answer "did the user choose one?".
+        data-chosen={chosen || undefined}
+        data-recommended={row.recommended || undefined}
+        // Virtualisation puts only a window of rows in the DOM; without these
+        // a screen reader would announce "1 of 11" for a 359-model catalog.
+        aria-setsize={visibleCatalogModelCount}
+        aria-posinset={catalogPositions.get(row.key)}
+        {...(itemTestIdPrefix ? { 'data-testid': `${itemTestIdPrefix}${row.model.id}` } : {})}
+      >
+        <Check
+          size={14}
+          className="mr-2 shrink-0"
+          style={{ opacity: chosen ? 1 : 0, color: 'var(--color-accent)' }}
+        />
+        <span className="min-w-0 flex-1 truncate font-mono text-xs">{row.model.id}</span>
+        {row.recommended && (
+          <span
+            className="ml-2 shrink-0 rounded border px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider"
+            style={{
+              backgroundColor: 'color-mix(in srgb, var(--color-accent) 15%, transparent)',
+              color: 'var(--color-accent)',
+              borderColor: 'color-mix(in srgb, var(--color-accent) 40%, transparent)',
+            }}
+          >
+            {RECOMMENDED_CHIP_LABEL}
+          </span>
+        )}
+      </CommandItem>
+    )
+  }
+
+  const renderCatalogRow = (row: CatalogRow) =>
+    row.kind === 'heading' ? renderCatalogHeading(row) : renderCatalogItem(row)
+
+  const catalogList = virtualiseCatalog ? (
+    // Above model-ordering's virtualisation threshold the list is windowed:
+    // OpenRouter's 359 rows are ~360 DOM nodes of pure scroll cost otherwise.
+    <div
+      style={{ height: catalogVirtualizer.getTotalSize(), width: '100%', position: 'relative' }}
+      data-testid="model-selector-virtual-list"
+    >
+      {catalogVirtualizer.getVirtualItems().map((virtualRow) => {
+        const row = visibleCatalogRows[virtualRow.index]
+        if (!row) return null
+        return (
+          <div
+            key={virtualRow.key}
+            style={{
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              width: '100%',
+              height: virtualRow.size,
+              transform: `translateY(${virtualRow.start}px)`,
+            }}
+          >
+            {renderCatalogRow(row)}
+          </div>
+        )
+      })}
+    </div>
+  ) : (
+    <div className="p-1">{visibleCatalogRows.map(renderCatalogRow)}</div>
+  )
+
   const isGhost = variant === 'ghost'
 
   return (
@@ -391,7 +681,17 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
           role="combobox"
           aria-expanded={open}
           aria-busy={catalogStatus === 'loading' || undefined}
-          aria-label={value ? `Model selector, currently ${value}${valueUnresolved ? ' (unresolved)' : ''}` : `Model selector, ${displayValue}`}
+          aria-label={
+            label
+              // FR-029: with no value the accessible name is the caller's label
+              // verbatim ("Model for your first agent"), nothing appended.
+              ? value
+                ? `${label}, currently ${value}${valueUnresolved ? ' (unresolved)' : ''}`
+                : label
+              : value
+                ? `Model selector, currently ${value}${valueUnresolved ? ' (unresolved)' : ''}`
+                : `Model selector, ${displayValue}`
+          }
           aria-invalid={valueUnresolved || undefined}
           aria-describedby={valueUnresolved ? `${descriptionId}-unresolved` : undefined}
           disabled={disabled}
@@ -472,7 +772,7 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
             value={query}
             onValueChange={setQuery}
           />
-          <CommandList>
+          <CommandList ref={catalogListRef} style={{ maxHeight: 300 }}>
             {catalogStatus === 'loading' ? (
               <div
                 className="flex items-center gap-2 px-3 py-6 text-sm"
@@ -487,7 +787,9 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
             ) : (
               <CommandEmpty>No models found.</CommandEmpty>
             )}
-            {useGrouped ? (
+            {catalogMode ? (
+              catalogList
+            ) : useGrouped ? (
               // ≥2 providers: render one CommandGroup per provider with a heading
               groupsWithModels.map((group) => {
                 const filteredModels = group.models.filter(filterModel)

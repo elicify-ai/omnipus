@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/bus"
+	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
 // wireTestLoopWithGraphAndMaxDepth is a variant of wireTestLoopWithGraph
@@ -20,7 +21,7 @@ import (
 func wireTestLoopWithGraphAndMaxDepth(t *testing.T, agentID string, maxDepth int) *ContextBuilder {
 	t.Helper()
 	cfg := minimalTestConfig(t)
-	cfg.Agents.Defaults.ModelName = "test-model"
+	cfg.Agents.Defaults.DefaultModel = config.DefaultModel{Model: "test-model"}
 	cfg.Agents.Defaults.MaxTokens = 4096
 	if maxDepth > 0 {
 		cfg.Agents.Defaults.SubTurn.MaxDepth = maxDepth

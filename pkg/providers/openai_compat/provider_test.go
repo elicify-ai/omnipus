@@ -445,7 +445,17 @@ func TestProviderChat_LargeHTMLResponsePreviewIsTruncated(t *testing.T) {
 	}
 }
 
-func TestProviderChat_StripsMoonshotPrefixAndNormalizesKimiTemperature(t *testing.T) {
+// TestProviderChat_KimiTemperatureNormalized keeps the Kimi temperature rule
+// and drops the prefix-stripping half of the old test.
+//
+// The retired half — TestProviderChat_StripsGroqOllamaDeepseekVivgridNovitaPrefixes
+// and this test's `moonshot/kimi-k2.5` → `kimi-k2.5` assertion — pinned
+// `normalizeModel`, a thirteen-vendor prefix table applied on the way out to
+// the wire. ADR-067 FR-034 deletes every `provider/` prefix convention on a
+// model id, and the table was actively wrong for the new ids: it turned
+// `deepseek/deepseek-v3.2` (one OpenRouter model) into `deepseek-v3.2` for
+// any non-openrouter host. TestModelSentVerbatim below is the replacement.
+func TestProviderChat_KimiTemperatureNormalized(t *testing.T) {
 	var requestBody map[string]any
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -462,7 +472,7 @@ func TestProviderChat_StripsMoonshotPrefixAndNormalizesKimiTemperature(t *testin
 			},
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 
@@ -471,7 +481,7 @@ func TestProviderChat_StripsMoonshotPrefixAndNormalizesKimiTemperature(t *testin
 		t.Context(),
 		[]Message{{Role: "user", Content: "hi"}},
 		nil,
-		"moonshot/kimi-k2.5",
+		"kimi-k2.5",
 		map[string]any{"temperature": 0.3},
 	)
 	if err != nil {
@@ -486,7 +496,9 @@ func TestProviderChat_StripsMoonshotPrefixAndNormalizesKimiTemperature(t *testin
 	}
 }
 
-func TestProviderChat_StripsGroqOllamaDeepseekVivgridNovitaPrefixes(t *testing.T) {
+// TestProviderChat_ModelReachesTheWireVerbatim is the end-to-end half of
+// TestModelSentVerbatim: the id in the config is the id in the HTTP body.
+func TestProviderChat_ModelReachesTheWireVerbatim(t *testing.T) {
 	var requestBody map[string]any
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -496,74 +508,30 @@ func TestProviderChat_StripsGroqOllamaDeepseekVivgridNovitaPrefixes(t *testing.T
 		}
 		resp := map[string]any{
 			"choices": []map[string]any{
-				{
-					"message":       map[string]any{"content": "ok"},
-					"finish_reason": "stop",
-				},
+				{"message": map[string]any{"content": "ok"}, "finish_reason": "stop"},
 			},
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 
 	p := mustNewProvider(t, "key", server.URL, "")
-	tests := []struct {
-		name      string
-		input     string
-		wantModel string
-	}{
-		{
-			name:      "strips litellm prefix and preserves proxy model name",
-			input:     "litellm/my-proxy-alias",
-			wantModel: "my-proxy-alias",
-		},
-		{
-			name:      "strips groq prefix and keeps nested model",
-			input:     "groq/openai/gpt-oss-120b",
-			wantModel: "openai/gpt-oss-120b",
-		},
-		{
-			name:      "strips ollama prefix",
-			input:     "ollama/qwen2.5:14b",
-			wantModel: "qwen2.5:14b",
-		},
-		{
-			name:      "strips deepseek prefix",
-			input:     "deepseek/deepseek-chat",
-			wantModel: "deepseek-chat",
-		},
-		{
-			name:      "strips vivgrid prefix",
-			input:     "vivgrid/auto",
-			wantModel: "auto",
-		},
-		{
-			name:      "strips novita prefix deepseek model",
-			input:     "novita/deepseek/deepseek-v3.2",
-			wantModel: "deepseek/deepseek-v3.2",
-		},
-		{
-			name:      "strips novita prefix zai model",
-			input:     "novita/zai-org/glm-5",
-			wantModel: "zai-org/glm-5",
-		},
-		{
-			name:      "strips novita prefix minimax model",
-			input:     "novita/minimax/minimax-m2.5",
-			wantModel: "minimax/minimax-m2.5",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			_, err := p.Chat(t.Context(), []Message{{Role: "user", Content: "hi"}}, nil, tt.input, nil)
-			if err != nil {
+	for _, model := range []string{
+		"deepseek/deepseek-v3.2",
+		"zai-org/glm-5",
+		"minimax/minimax-m2.5",
+		"qwen2.5:14b",
+		"openrouter/auto",
+	} {
+		t.Run(model, func(t *testing.T) {
+			if _, err := p.Chat(
+				t.Context(), []Message{{Role: "user", Content: "hi"}}, nil, model, nil,
+			); err != nil {
 				t.Fatalf("Chat() error = %v", err)
 			}
-
-			if requestBody["model"] != tt.wantModel {
-				t.Fatalf("model = %v, want %s", requestBody["model"], tt.wantModel)
+			if requestBody["model"] != model {
+				t.Fatalf("model on the wire = %v, want %q verbatim", requestBody["model"], model)
 			}
 		})
 	}
@@ -629,24 +597,33 @@ func TestProviderChat_AcceptsNumericOptionTypes(t *testing.T) {
 	}
 }
 
-func TestNormalizeModel_UsesAPIBase(t *testing.T) {
-	if got := normalizeModel("deepseek/deepseek-chat", "https://api.deepseek.com/v1"); got != "deepseek-chat" {
-		t.Fatalf("normalizeModel(deepseek) = %q, want %q", got, "deepseek-chat")
-	}
-	if got := normalizeModel("openrouter/auto", "https://openrouter.ai/api/v1"); got != "openrouter/auto" {
-		t.Fatalf("normalizeModel(openrouter) = %q, want %q", got, "openrouter/auto")
-	}
-	if got := normalizeModel("vivgrid/managed", "https://api.vivgrid.com/v1"); got != "managed" {
-		t.Fatalf("normalizeModel(vivgrid) = %q, want %q", got, "managed")
-	}
-	if got := normalizeModel("vivgrid/auto", "https://api.vivgrid.com/v1"); got != "auto" {
-		t.Fatalf("normalizeModel(vivgrid auto) = %q, want %q", got, "auto")
-	}
-	if got := normalizeModel(
-		"novita/deepseek/deepseek-v3.2",
-		"https://api.novita.ai/openai",
-	); got != "deepseek/deepseek-v3.2" {
-		t.Fatalf("normalizeModel(novita) = %q, want %q", got, "deepseek/deepseek-v3.2")
+// TestModelSentVerbatim replaces TestNormalizeModel_UsesAPIBase.
+//
+// `normalizeModel` stripped a `<vendor>/` prefix off the model id for a list
+// of thirteen hosts before sending it upstream. ADR-067 FR-034 deletes every
+// `provider/` prefix convention on a model id: the id is the catalog's, a `/`
+// inside it is DATA (`deepseek/deepseek-v3.2` on OpenRouter is one model),
+// and the transport must send exactly what it was handed.
+//
+// The old helper actively corrupted the new ids — it turned
+// `deepseek/deepseek-v3.2` into `deepseek-v3.2` for any host that was not
+// openrouter.ai, so a correct config produced an upstream 404.
+func TestModelSentVerbatim(t *testing.T) {
+	for _, model := range []string{
+		"deepseek/deepseek-v3.2",
+		"z-ai/glm-5.2",
+		"openrouter/auto",
+		"gpt-4.1",
+		"Qwen/Qwen3-235B-A22B-Instruct-2507",
+	} {
+		t.Run(model, func(t *testing.T) {
+			p := mustNewProvider(t, "key", "https://api.deepseek.com/v1", "")
+			body := p.buildRequestBody(
+				[]Message{{Role: "user", Content: "hi"}}, nil, model, nil)
+			if got := body["model"]; got != model {
+				t.Errorf("model sent upstream = %v, want %q verbatim", got, model)
+			}
+		})
 	}
 }
 

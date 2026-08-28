@@ -28,6 +28,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"strings"
 )
 
 // fallbackModelsInline matches the inline anonymous struct that oapi-codegen
@@ -148,6 +149,20 @@ func run(path string) error {
 	current := original
 	var hardErrors []string
 
+	// Brace-aware rewrites first (ADR-066/067/068 contract commit): these
+	// inline bodies nest other inline structs (CatalogProvider → models[] →
+	// CatalogModel), which a flat `[^}]*?` regex cannot span. Inner-most
+	// shapes are listed first so every outer body is flat by the time it is
+	// matched.
+	for _, rule := range namedTypeRules {
+		next, err := rewriteInlineStruct(current, rule)
+		if err != nil {
+			hardErrors = append(hardErrors, fmt.Sprintf("rewrite %q: %v", rule.name, err))
+			continue
+		}
+		current = next
+	}
+
 	for _, rule := range rewriteRules {
 		// Count how many inline-struct anchors exist in the current text
 		// BEFORE applying the replacement. A non-zero count means we have
@@ -185,6 +200,85 @@ func run(path string) error {
 	}
 
 	return nil
+}
+
+// namedTypeRule describes one inline `<Field> <prefix>struct{...} `json:"<tag>..."`
+// occurrence to replace with `<Field> <prefix><Named>`. mustContain, when
+// non-empty, must appear inside the struct body — it disambiguates fields
+// that share a name and json tag but reference different schemas (both
+// EntitlementResponse.models and CatalogProvider.models are `Models []struct`).
+type namedTypeRule struct {
+	name        string
+	field       string // Go field name, e.g. "Dependents"
+	jsonTag     string // json tag name, e.g. "dependents"
+	named       string // replacement named type, e.g. "ProviderDependent"
+	mustContain string
+}
+
+// namedTypeRules — inner-most shapes first (see run()).
+var namedTypeRules = []namedTypeRule{
+	{name: "catalog_model", field: "Models", jsonTag: "models", named: "CatalogModel", mustContain: "ContextWindow int"},
+	{name: "catalog_protocol", field: "Protocols", jsonTag: "protocols", named: "CatalogProtocol"},
+	{name: "catalog_resize_limits", field: "ResizeLimits", jsonTag: "resize_limits", named: "CatalogResizeLimits"},
+	{name: "catalog_default_resize_limits", field: "DefaultResizeLimits", jsonTag: "default_resize_limits", named: "CatalogResizeLimits"},
+	{name: "catalog_provider", field: "Providers", jsonTag: "providers", named: "CatalogProvider", mustContain: "AuthMethods"},
+	{name: "entitlement_model", field: "Models", jsonTag: "models", named: "EntitlementModel", mustContain: "Entitled bool"},
+	{name: "provider_dependent", field: "Dependents", jsonTag: "dependents", named: "ProviderDependent"},
+	{name: "context_model_override", field: "ModelOverrides", jsonTag: "model_overrides", named: "ContextModelOverride"},
+	{name: "new_default", field: "NewDefault", jsonTag: "new_default", named: "DefaultModelUpdateRequest"},
+}
+
+// rewriteInlineStruct replaces every `<field> <prefix>struct {…} `json:"<tag>…"“
+// whose body satisfies rule.mustContain with `<field> <prefix><named>`,
+// scanning braces so nested inline structs are spanned correctly.
+func rewriteInlineStruct(src string, rule namedTypeRule) (string, error) {
+	head := regexp.MustCompile(`(?m)^(\s*)` + rule.field + `(\s+)(\*\[\]|\[\]|\*|)struct \{`)
+	tag := regexp.MustCompile(`^\s*` + "`json:\"" + rule.jsonTag + `[^"]*"` + "`")
+	var out []byte
+	rest := src
+	for {
+		loc := head.FindStringSubmatchIndex(rest)
+		if loc == nil {
+			out = append(out, rest...)
+			break
+		}
+		open := loc[1] - 1 // index of '{'
+		depth := 0
+		closeIdx := -1
+		for i := open; i < len(rest); i++ {
+			switch rest[i] {
+			case '{':
+				depth++
+			case '}':
+				depth--
+				if depth == 0 {
+					closeIdx = i
+				}
+			}
+			if closeIdx >= 0 {
+				break
+			}
+		}
+		if closeIdx < 0 {
+			return "", fmt.Errorf("unbalanced braces after %q", rule.field)
+		}
+		body := rest[open : closeIdx+1]
+		after := rest[closeIdx+1:]
+		tagLoc := tag.FindStringIndex(after)
+		if tagLoc == nil || (rule.mustContain != "" && !strings.Contains(body, rule.mustContain)) {
+			// Not this rule's shape — keep the text through the '{' and continue after it.
+			out = append(out, rest[:open+1]...)
+			rest = rest[open+1:]
+			continue
+		}
+		indent := rest[loc[2]:loc[3]]
+		gap := rest[loc[4]:loc[5]]
+		prefix := rest[loc[6]:loc[7]]
+		out = append(out, rest[:loc[0]]...)
+		out = append(out, indent+rule.field+gap+prefix+rule.named...)
+		rest = after
+	}
+	return string(out), nil
 }
 
 func main() {

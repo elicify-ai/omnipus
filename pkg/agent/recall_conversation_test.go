@@ -10,9 +10,12 @@ package agent
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/memory"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/tools"
@@ -845,4 +848,629 @@ func countDrops(calls []struct{ key, reason string }, key, reason string) int {
 		}
 	}
 	return n
+}
+
+// --- T066-14: recall by tool_call_id, in pages -------------------------------
+//
+// ADR-066 §6.3 / FR-024…FR-027, FR-043 (per-page injection), FR-046.
+// BDD B-28, B-29, B-29b, B-30, B-31, B-31b, B-53b. Data set DS-6.
+
+// scanArchive is a ConversationArchiveReader that ALSO implements
+// ConversationArchiveScanner and recallProjectionReader, counting how many
+// lines a scan decoded and how many times the whole-archive ReadArchive path
+// was taken — the two numbers B-31b is about.
+type scanArchive struct {
+	msgs     []memory.ArchivedMessage
+	visited  int
+	reads    int
+	hydrated bool
+}
+
+func (s *scanArchive) ReadArchive(_ context.Context, _ string) ([]memory.ArchivedMessage, error) {
+	s.reads++
+	return s.msgs, nil
+}
+
+func (s *scanArchive) ScanArchive(
+	_ context.Context, _ string, fn func(idx int, msg memory.ArchivedMessage) bool,
+) error {
+	for i, m := range s.msgs {
+		s.visited++
+		if !fn(i, m) {
+			return nil
+		}
+	}
+	return nil
+}
+
+func (s *scanArchive) Projection(string) memory.ProjectionMeta {
+	return memory.ProjectionMeta{Hydrated: s.hydrated}
+}
+
+// incidentResult is the DS-6 payload: 1,178,522 characters, the size of the
+// tool result that produced the incident this ADR is about. Every character
+// is ASCII, so rune offsets and byte offsets coincide and a page can be
+// compared against a plain slice of this string.
+func incidentResult() string {
+	return strings.Repeat("incident ", 130_947)[:1_178_522]
+}
+
+// idArchive returns the DS-6 archive: one user line, one assistant tool call
+// for id on tool, and the tool result at archive line 2.
+func idArchive(id, tool, content string) []memory.ArchivedMessage {
+	return []memory.ArchivedMessage{
+		makeUserMsg("find the invoices"),
+		makeAssistantWithTool("", id, tool),
+		makeToolResultMsg(id, content),
+	}
+}
+
+// pageOf returns the recall page message a tool_call_id call installed, and
+// splits its content into the framing line and the payload after it.
+func pageOf(t *testing.T, setter *stubSpanSetter, key string) (msg providers.Message, framing, payload string) {
+	t.Helper()
+	span, ok := setter.spans[key]
+	if !ok {
+		t.Fatalf("no recall span installed for %q", key)
+	}
+	if len(span.Msgs) != 3 {
+		t.Fatalf("page span has %d messages, want marker + assistant + page", len(span.Msgs))
+	}
+	msg = span.Msgs[2]
+	if msg.Role != "tool" {
+		t.Fatalf("page message role = %q, want tool", msg.Role)
+	}
+	nl := strings.IndexByte(msg.Content, '\n')
+	if nl <= 0 {
+		t.Fatalf("page content has no framing line: %.200q", msg.Content)
+	}
+	return msg, msg.Content[:nl], msg.Content[nl+1:]
+}
+
+// TestRecallConversation_ToolCallID_PageFitsAfterFraming — test 26, B-28,
+// DS-6 #1. The first page of a 1,178,522-char archived result: payload =
+// effective cap − framing, the whole message is ≤ the builtin-success cap,
+// and it passes the choke point's cap unmodified.
+func TestRecallConversation_ToolCallID_PageFitsAfterFraming(t *testing.T) {
+	const id = "call_inc"
+	content := incidentResult()
+	archive := &scanArchive{msgs: idArchive(id, "mcp_gmail_search_email", content)}
+	setter := newStubSpanSetter()
+	tool := makeTool(archive, setter)
+
+	res := tool.Execute(makeCtx("sess-page-1"), map[string]any{"tool_call_id": id})
+	if res.IsError {
+		t.Fatalf("unexpected error: %s", res.ForLLM)
+	}
+
+	msg, framing, payload := pageOf(t, setter, "sess-page-1")
+
+	// The whole message — framing included — is inside the cap the recall
+	// page is admitted under (builtin success: recall is a builtin).
+	const capChars = config.DefaultBuiltinSuccessCap
+	if n := utf8.RuneCountInString(msg.Content); n > capChars {
+		t.Fatalf("page message is %d chars, want ≤ %d (B-28)", n, capChars)
+	}
+	// …and it passes the choke point unmodified: the pure cap is a no-op.
+	projected, cut := projectToolResult(msg.Content, capChars, func(string) string { return "[mark]" })
+	if cut || projected != msg.Content {
+		t.Fatalf("B-28: the page must pass the choke point unmodified (cut=%v)", cut)
+	}
+	// The payload really uses the cap — a page must not be token-sized.
+	if len(payload) < 63_000 {
+		t.Fatalf("payload is %d chars; a page must be ~cap − framing, not %d", len(payload), len(payload))
+	}
+	// DS-6 #1: the payload is the head of the archived content.
+	if payload != content[:len(payload)] {
+		t.Fatalf("payload is not the first %d chars of the archived result", len(payload))
+	}
+	// The framing states the total and where the next page starts.
+	if !strings.Contains(framing, "total=1178522") {
+		t.Fatalf("framing must state the total size, got %q", framing)
+	}
+	if !strings.Contains(framing, fmt.Sprintf("next_offset=%d", len(payload))) {
+		t.Fatalf("framing must state the next offset %d, got %q", len(payload), framing)
+	}
+	if !strings.Contains(framing, "tool_call_id="+id) {
+		t.Fatalf("framing must name the tool_call_id, got %q", framing)
+	}
+	// FR-024: the streaming scan served this, not a whole-archive read.
+	if archive.reads != 0 {
+		t.Fatalf("ReadArchive was called %d times; the id mode must stream (B-31b)", archive.reads)
+	}
+}
+
+// TestRecallConversation_ToolCallID_PagingReachesLastByte — test 27, B-29,
+// DS-6 #2…#6. Contiguous pages reproduce the archived result byte for byte;
+// offset at/past the end is an empty page stating the total; offset < 0 and
+// length < 1 are errors; length above the page size is clamped.
+func TestRecallConversation_ToolCallID_PagingReachesLastByte(t *testing.T) {
+	const id, key = "call_inc", "sess-page-2"
+	content := incidentResult()
+	archive := &scanArchive{msgs: idArchive(id, "read_file", content)}
+	setter := newStubSpanSetter()
+	tool := makeTool(archive, setter)
+	ctx := makeCtx(key)
+
+	// DS-6 #2: page from 0 following each page's next_offset to the end.
+	var got strings.Builder
+	offset, pages := 0, 0
+	for {
+		res := tool.Execute(ctx, map[string]any{"tool_call_id": id, "offset": offset})
+		if res.IsError {
+			t.Fatalf("page at offset %d errored: %s", offset, res.ForLLM)
+		}
+		msg, framing, payload := pageOf(t, setter, key)
+		if n := utf8.RuneCountInString(msg.Content); n > config.DefaultBuiltinSuccessCap {
+			t.Fatalf("page at offset %d is %d chars, over the cap", offset, n)
+		}
+		if payload != content[offset:offset+len(payload)] {
+			t.Fatalf("page at offset %d is not the archived slice", offset)
+		}
+		got.WriteString(payload)
+		pages++
+		if pages > 100 {
+			t.Fatalf("paging did not terminate after %d pages", pages)
+		}
+		if strings.Contains(framing, "next_offset=end") {
+			break
+		}
+		offset += len(payload)
+	}
+	if got.String() != content {
+		t.Fatalf("concatenated pages (%d chars over %d pages) != the archived result (%d chars)",
+			got.Len(), pages, len(content))
+	}
+	if pages < 2 {
+		t.Fatalf("a 1,178,522-char result must need more than one page, got %d", pages)
+	}
+
+	// DS-6 #3: offset at the end → an empty page that still states the total.
+	res := tool.Execute(ctx, map[string]any{"tool_call_id": id, "offset": len(content)})
+	if res.IsError {
+		t.Fatalf("offset == total must not be an error: %s", res.ForLLM)
+	}
+	if !strings.Contains(res.ForLLM, "1178522") {
+		t.Fatalf("the empty page must state the total, got %q", res.ForLLM)
+	}
+
+	// DS-6 #4 / #6: invalid paging values are tool errors naming the field.
+	for _, tc := range []struct {
+		name  string
+		args  map[string]any
+		field string
+	}{
+		{"offset -1", map[string]any{"tool_call_id": id, "offset": -1}, "offset"},
+		{"length 0", map[string]any{"tool_call_id": id, "length": 0}, "length"},
+		{"archive_line -1", map[string]any{"tool_call_id": id, "archive_line": -1}, "archive_line"},
+	} {
+		r := tool.Execute(ctx, tc.args)
+		if !r.IsError {
+			t.Fatalf("%s must be a tool error, got %q", tc.name, r.ForLLM)
+		}
+		if !strings.Contains(r.ForLLM, tc.field) {
+			t.Fatalf("%s error must name %q, got %q", tc.name, tc.field, r.ForLLM)
+		}
+	}
+
+	// DS-6 #5: length above the page size is clamped to the page; a smaller
+	// length is honoured exactly.
+	full := tool.Execute(ctx, map[string]any{"tool_call_id": id, "offset": 0})
+	if full.IsError {
+		t.Fatalf("unexpected error: %s", full.ForLLM)
+	}
+	_, _, defaultPayload := pageOf(t, setter, key)
+	clamped := tool.Execute(ctx, map[string]any{"tool_call_id": id, "offset": 0, "length": 70_000})
+	if clamped.IsError {
+		t.Fatalf("unexpected error: %s", clamped.ForLLM)
+	}
+	_, _, clampedPayload := pageOf(t, setter, key)
+	if clampedPayload != defaultPayload {
+		t.Fatalf("length 70,000 must clamp to the page size (%d chars), got %d",
+			len(defaultPayload), len(clampedPayload))
+	}
+	small := tool.Execute(ctx, map[string]any{"tool_call_id": id, "offset": 10, "length": 25})
+	if small.IsError {
+		t.Fatalf("unexpected error: %s", small.ForLLM)
+	}
+	_, _, smallPayload := pageOf(t, setter, key)
+	if smallPayload != content[10:35] {
+		t.Fatalf("length 25 at offset 10 must return exactly chars 10–34, got %d chars", len(smallPayload))
+	}
+}
+
+// TestRecallConversation_ToolCallID_DuplicateIds — test 28, B-29b, DS-6 #7
+// and #8. Provider-generated ids are not unique across an archive: the most
+// recent line wins, and archive_line addresses the older one.
+func TestRecallConversation_ToolCallID_DuplicateIds(t *testing.T) {
+	const id, key = "call_0", "sess-dupe"
+	const older, newer = "OLDER-RESULT-PAYLOAD", "NEWER-RESULT-PAYLOAD"
+	archive := &scanArchive{msgs: []memory.ArchivedMessage{
+		makeUserMsg("first question"),              // 0
+		makeAssistantWithTool("", id, "read_file"), // 1
+		makeToolResultMsg(id, older),               // 2
+		makeUserMsg("second question"),             // 3
+		makeAssistantWithTool("", id, "read_file"), // 4
+		makeToolResultMsg(id, newer),               // 5
+	}}
+	setter := newStubSpanSetter()
+	tool := makeTool(archive, setter)
+	ctx := makeCtx(key)
+
+	// DS-6 #7: no archive_line → the most recent line.
+	if res := tool.Execute(ctx, map[string]any{"tool_call_id": id}); res.IsError {
+		t.Fatalf("unexpected error: %s", res.ForLLM)
+	}
+	_, framing, payload := pageOf(t, setter, key)
+	if payload != newer {
+		t.Fatalf("most recent line must win, got %q", payload)
+	}
+	if !strings.Contains(framing, "archive_line=5") {
+		t.Fatalf("framing must cite archive line 5, got %q", framing)
+	}
+
+	// DS-6 #8: archive_line selects the older line.
+	if res := tool.Execute(ctx, map[string]any{"tool_call_id": id, "archive_line": 2}); res.IsError {
+		t.Fatalf("unexpected error: %s", res.ForLLM)
+	}
+	_, framing, payload = pageOf(t, setter, key)
+	if payload != older {
+		t.Fatalf("archive_line 2 must return the older line, got %q", payload)
+	}
+	if !strings.Contains(framing, "archive_line=2") {
+		t.Fatalf("framing must cite archive line 2, got %q", framing)
+	}
+
+	// An archive_line that holds no such result is an error naming the line.
+	res := tool.Execute(ctx, map[string]any{"tool_call_id": id, "archive_line": 3})
+	if !res.IsError {
+		t.Fatalf("archive_line 3 holds a user message; want an error, got %q", res.ForLLM)
+	}
+	if !strings.Contains(res.ForLLM, "3") || !strings.Contains(res.ForLLM, id) {
+		t.Fatalf("the error must name the line and the id, got %q", res.ForLLM)
+	}
+}
+
+// TestRecallConversation_ToolCallID_ExemptNotFoundExclusiveStreaming —
+// test 29, B-30 / B-31 / B-31b. The addressed page is exempt from the
+// 4,000 / 8,000-token span budgets; an unknown or rolled-back id is a tool
+// error naming it; two modes at once is an error; and the archive is
+// streamed, stopping at the addressed line.
+func TestRecallConversation_ToolCallID_ExemptNotFoundExclusiveStreaming(t *testing.T) {
+	const id = "call_inc"
+	content := incidentResult()
+
+	// B-30: a full page is far over both span budgets and is installed anyway.
+	archive := &scanArchive{msgs: idArchive(id, "read_file", content)}
+	setter := newStubSpanSetter()
+	tool := makeTool(archive, setter)
+	if res := tool.Execute(makeCtx("sess-exempt"), map[string]any{"tool_call_id": id}); res.IsError {
+		t.Fatalf("unexpected error: %s", res.ForLLM)
+	}
+	span := setter.spans["sess-exempt"]
+	if span == nil {
+		t.Fatal("B-30: the page span must be installed")
+	}
+	if span.Tokens <= recallRangeTokens {
+		t.Fatalf("B-30: the page span is %d tokens; the fixture must exceed the %d-token range budget "+
+			"for the exemption to mean anything", span.Tokens, recallRangeTokens)
+	}
+
+	// B-31: an id that is in no archive line — unknown, or from a turn that
+	// aborted and was rolled back (its tool line is gone, the assistant call
+	// with it) — is a tool error naming the id.
+	rolledBack := &scanArchive{msgs: []memory.ArchivedMessage{
+		makeUserMsg("do the thing"),
+		makeAssistantWithTool("", "call_aborted", "read_file"), // call recorded, result never archived
+	}}
+	rbTool := makeTool(rolledBack, newStubSpanSetter())
+	for _, missing := range []string{"call_never_existed", "call_aborted"} {
+		res := rbTool.Execute(makeCtx("sess-missing"), map[string]any{"tool_call_id": missing})
+		if !res.IsError {
+			t.Fatalf("%s must be a tool error, got %q", missing, res.ForLLM)
+		}
+		if !strings.Contains(res.ForLLM, missing) {
+			t.Fatalf("the error must name the id %q, got %q", missing, res.ForLLM)
+		}
+	}
+
+	// B-31: exactly one mode.
+	for _, args := range []map[string]any{
+		{"tool_call_id": id, "query": "invoices"},
+		{"tool_call_id": id, "turn_range": "1-2"},
+		{"tool_call_id": id, "time": map[string]any{"from": 0}},
+	} {
+		res := tool.Execute(makeCtx("sess-modes"), args)
+		if !res.IsError {
+			t.Fatalf("two modes at once must error, got %q", res.ForLLM)
+		}
+		if !strings.Contains(res.ForLLM, "exactly one") {
+			t.Fatalf("the mode error must say exactly one, got %q", res.ForLLM)
+		}
+	}
+
+	// B-31b: the scan streams and stops at the addressed line — the tail of
+	// the archive is never decoded, and the whole-archive path is never taken.
+	long := make([]memory.ArchivedMessage, 0, 203)
+	long = append(long, idArchive(id, "read_file", "PAYLOAD")...)
+	for i := 0; i < 200; i++ {
+		long = append(long, makeUserMsg(fmt.Sprintf("later line %d", i)))
+	}
+	streaming := &scanArchive{msgs: long}
+	sTool := makeTool(streaming, newStubSpanSetter())
+	if res := sTool.Execute(makeCtx("sess-stream"), map[string]any{"tool_call_id": id, "archive_line": 2}); res.IsError {
+		t.Fatalf("unexpected error: %s", res.ForLLM)
+	}
+	if streaming.reads != 0 {
+		t.Fatalf("B-31b: ReadArchive was called %d times; the id mode must stream", streaming.reads)
+	}
+	if streaming.visited != 3 {
+		t.Fatalf("B-31b: the scan decoded %d of %d lines; it must stop at the addressed line",
+			streaming.visited, len(long))
+	}
+}
+
+// TestRecallConversation_ToolCallID_HydratedSessionNotAvailable — B-53b /
+// FR-046. A hydrated archive was rebuilt from the UI transcript, so the
+// original tool-result bytes are not there to page.
+func TestRecallConversation_ToolCallID_HydratedSessionNotAvailable(t *testing.T) {
+	const id = "call_inc"
+	archive := &scanArchive{msgs: idArchive(id, "read_file", "PAYLOAD"), hydrated: true}
+	setter := newStubSpanSetter()
+	tool := makeTool(archive, setter)
+
+	res := tool.Execute(makeCtx("sess-hydrated"), map[string]any{"tool_call_id": id})
+	if !res.IsError {
+		t.Fatalf("recall by id on a hydrated session must be a tool error, got %q", res.ForLLM)
+	}
+	if !strings.Contains(res.ForLLM, "not available — session was rebuilt from the transcript") {
+		t.Fatalf("FR-046 answer required, got %q", res.ForLLM)
+	}
+	if !strings.Contains(res.ForLLM, id) {
+		t.Fatalf("the answer must name the id, got %q", res.ForLLM)
+	}
+	if len(setter.spans) != 0 {
+		t.Fatal("no span may be installed for a hydrated session")
+	}
+}
+
+// TestRecallConversation_CatalogMirrorParametersInSync — pkg/tools carries a
+// metadata-only mirror of this tool (recall_conversation_meta.go) because it
+// cannot import pkg/agent; the catalog and the Constraint #6 coverage
+// universe read the mirror, not the real tool. Its header names
+// pkg/agent/recall_conversation.go as the source of truth, and nothing
+// enforced that until T066-14 found the mirror three modes out of date.
+// pkg/agent CAN see pkg/tools, so the parameter names are compared here.
+func TestRecallConversation_CatalogMirrorParametersInSync(t *testing.T) {
+	live := makeTool(&stubArchive{}, newStubSpanSetter()).Parameters()
+	var mirror map[string]any
+	for _, meta := range tools.GeneralBuiltinMetadata() {
+		if meta.Name() == "recall_conversation" {
+			mirror = meta.Parameters()
+			break
+		}
+	}
+	if mirror == nil {
+		t.Fatal("recall_conversation is missing from the general builtin catalog metadata")
+	}
+	names := func(params map[string]any) []string {
+		props, _ := params["properties"].(map[string]any)
+		out := make([]string, 0, len(props))
+		for k := range props {
+			out = append(out, k)
+		}
+		slices.Sort(out)
+		return out
+	}
+	got, want := names(mirror), names(live)
+	if !slices.Equal(got, want) {
+		t.Fatalf("catalog mirror parameters %v != the real tool's %v — keep "+
+			"pkg/tools/recall_conversation_meta.go in sync with pkg/agent/recall_conversation.go", got, want)
+	}
+}
+
+// --- O15: cap marks on re-injected recall pages must cite the REAL turn ----
+//
+// Before the fix, buildRecallSpanMessages (turn_range/query/time mode) and
+// executeToolCallID (tool_call_id mode) both passed nil as capMarkOrEmpty's
+// archive argument. turnNumberForArchiveLine(nil, line) always returns 1
+// regardless of line (the loop over a nil/empty archive never executes), so
+// every capped mark on a re-injected page read "turn":1 even when the
+// result was really from turn 3, 4, or later. The fix threads the ALREADY
+// KNOWN correct turn number (ordinals[i] in buildRecallSpanMessages,
+// hit.TurnNum/turnNum in executeToolCallID) straight into the mark instead
+// of re-deriving it from an archive that was never passed.
+
+// TestRecallConversation_CapMarkCarriesRealTurn pins the fix in
+// buildRecallSpanMessages with TWO DIFFERENT captured turns in the SAME
+// span — the only way to prove the turn number varies with the result
+// rather than being hardcoded, since a single-turn test cannot distinguish
+// "correctly computed" from "coincidentally 1". It also guards the
+// numbering CONVENTION, not just non-1-ness: an earlier version of this
+// fix used the raw conversational ordinal (ordinals[i] = 2, 4), which is
+// off by one against turnNumberForArchiveLine's "1 + user lines strictly
+// preceding" convention used by every OTHER mark-producing call site
+// (tool_result_admit.go, projection.go, empty_in_place.go,
+// midturn_budget.go, and executeToolCallID's hit.TurnNum) — see
+// recall_mark_test.go's "turn number counts only preceding user lines"
+// subtest for the same +1 arithmetic pinned independently. Expecting 3 and
+// 5 here (not 2 and 4) catches a regression back to that inconsistent
+// convention, not just a regression back to hardcoded 1.
+//
+// Exercised by calling buildRecallSpanMessages directly (not through
+// Execute/turn_range): two oversized (capped) tool results cannot coexist
+// in one recallRangeTokens=8000 budget through the public API — a single
+// capped-size result (>64,000 chars, ~16,000+ estimated tokens) already
+// exceeds the WHOLE turn_range token budget on its own, so Execute's
+// budget-selection step would always drop the second of two oversized
+// turns before buildRecallSpanMessages ever saw both, regardless of the
+// O15 bug. Building keptIdxs/turns/ordinals/archive by hand is the only
+// way to get two genuinely capped results into one span for this
+// assertion.
+func TestRecallConversation_CapMarkCarriesRealTurn(t *testing.T) {
+	bigA := strings.Repeat("A", 70_000) // over the 64,000-char builtin-success cap
+	bigB := strings.Repeat("B", 70_000)
+
+	turns := []archiveTurn{
+		{startIdx: 0, msgs: []memory.ArchivedMessage{makeUserMsg("turn one"), makeAssistantMsg("assistant one")}},
+		{startIdx: 2, msgs: []memory.ArchivedMessage{
+			makeUserMsg("turn two"),
+			makeAssistantWithTool("looking that up", "call_a", "read_file"),
+			makeToolResultMsg("call_a", bigA),
+		}},
+		{startIdx: 5, msgs: []memory.ArchivedMessage{makeUserMsg("turn three"), makeAssistantMsg("assistant three")}},
+		{startIdx: 7, msgs: []memory.ArchivedMessage{
+			makeUserMsg("turn four"),
+			makeAssistantWithTool("looking that up too", "call_b", "read_file"),
+			makeToolResultMsg("call_b", bigB),
+		}},
+	}
+	// archive is turns flattened in order — its indices must line up with
+	// each archiveTurn.startIdx above (0, 2, 5, 7), which they do by
+	// construction here.
+	archiveLen := 0
+	for _, trn := range turns {
+		archiveLen += len(trn.msgs)
+	}
+	archive := make([]memory.ArchivedMessage, 0, archiveLen)
+	for _, trn := range turns {
+		archive = append(archive, trn.msgs...)
+	}
+	// Recall turns 2 and 4 (0-based idx 1 and 3), bypassing Execute's
+	// token-budget selection — see the func doc above for why.
+	keptIdxs := []int{1, 3}
+	ordinals := []int{2, 4}
+	policy := capPolicyFor(config.ContextSettings{}, 0) // budget 0: no clamp; shipped default 64,000-char builtin-success cap
+
+	msgs := buildRecallSpanMessages(keptIdxs, turns, ordinals, policy, archive)
+
+	// bigA's tool result is archive line 4 (turns[1].startIdx=2 + j=2); two
+	// user lines (idx0, idx2) strictly precede it -> turnNumberForArchiveLine
+	// = 3. bigB's tool result is archive line 9 (turns[3].startIdx=7 + j=2);
+	// four user lines (idx0, idx2, idx5, idx7) strictly precede it -> 5.
+	var sawTurn3, sawTurn5 bool
+	for _, m := range msgs {
+		if m.Role != "tool" {
+			continue
+		}
+		switch {
+		case strings.Contains(m.Content, `"turn":3`):
+			sawTurn3 = true
+		case strings.Contains(m.Content, `"turn":5`):
+			sawTurn5 = true
+		case strings.Contains(m.Content, `"turn":1`), strings.Contains(m.Content, `"turn":2`), strings.Contains(m.Content, `"turn":4`):
+			t.Errorf("a re-injected result reported the wrong turn (O15 hardcoded-1 bug, or the off-by-one ordinals[i] convention): %.200s", m.Content)
+		}
+	}
+	if !sawTurn3 {
+		t.Errorf("the turn-2 (bigA) result's cap mark must cite turn 3 (O15 + turnNumberForArchiveLine convention)")
+	}
+	if !sawTurn5 {
+		t.Errorf("the turn-4 (bigB) result's cap mark must cite turn 5 (O15 + turnNumberForArchiveLine convention)")
+	}
+}
+
+// TestRecallConversation_TurnRange_CapMarkCitesRealTurn is the end-to-end
+// counterpart of the direct unit test above: it drives the REAL public
+// entry point (Execute with turn_range) for a result that lives in
+// conversational turn 3 (not turn 1), so a hardcoded fallback to 1 is
+// distinguishable from the correct answer. turn_range "3-3" selects a
+// single turn, which Execute's budget selection always keeps regardless of
+// size (the first selected turn is never dropped by the token cap), so
+// this — unlike the two-turn case above — is reachable through Execute
+// directly.
+//
+// Expected mark is "turn":4, not "turn":3: turnNumberForArchiveLine (what
+// the fix now routes through) is 1 + the count of role:user lines
+// STRICTLY BEFORE the tool result's line, and that count includes the
+// result's OWN turn's opening user line — three user lines (turn one, turn
+// two, turn three) precede this tool result, so 3+1=4. See
+// TestRecallConversation_CapMarkCarriesRealTurn's doc for the same
+// arithmetic verified directly against buildRecallSpanMessages, and
+// recall_mark_test.go's "turn number counts only preceding user lines" for
+// the identical convention pinned independently against buildRecallMark.
+func TestRecallConversation_TurnRange_CapMarkCitesRealTurn(t *testing.T) {
+	big := strings.Repeat("Q", 70_000)
+	archive := &stubArchive{msgs: []memory.ArchivedMessage{
+		makeUserMsg("turn one"), makeAssistantMsg("assistant one"),
+		makeUserMsg("turn two"), makeAssistantMsg("assistant two"),
+		makeUserMsg("turn three"),
+		makeAssistantWithTool("looking that up", "call_big", "read_file"),
+		makeToolResultMsg("call_big", big),
+	}}
+	setter := newStubSpanSetter()
+	tool := makeTool(archive, setter)
+
+	result := tool.Execute(makeCtx("sess-range3"), map[string]any{"turn_range": "3-3"})
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", result.ForLLM)
+	}
+	span := setter.spans["sess-range3"]
+	if span == nil {
+		t.Fatal("no span installed")
+	}
+	combined := joinSpanContent(span)
+	if !strings.Contains(combined, `"turn":4`) {
+		t.Errorf("cap mark for the turn-3 (conversational) result must cite turn 4 (turnNumberForArchiveLine convention, O15), got a mark elsewhere in: %.400s", combined)
+	}
+	if strings.Contains(combined, `"turn":1`) {
+		t.Errorf("cap mark must not fall back to the hardcoded turn 1 (O15 regression): %.400s", combined)
+	}
+}
+
+// TestRecallConversation_ToolCallID_SpanCitesRealTurn covers executeToolCallID
+// (the tool_call_id / paging mode), the OTHER call site O15 named. Its
+// span.FromTurn/ToTurn/Ordinals are built from the exact same local turnNum
+// variable (sourced from the streaming scan's hit.TurnNum) that also feeds
+// the page's cap-mark closure — so a wrong turnNum here is the same defect
+// class the mark would show, and is what O15's bug actually broke (both
+// were being computed from turnNumberForArchiveLine(nil, ...) == 1 before
+// the fix routed the mark through the closure over an already-known value
+// instead).
+//
+// The mark closure itself is a documented backstop that "must never fire"
+// (recallPageReserve computes the framing allowance at the worst-case digit
+// width for any valid offset/length, so the actual framing can never
+// exceed it) — confirmed by reading the source, not asserted here — so it
+// cannot be forced to render through the public API without contriving an
+// impossible page size. This test instead proves turnNum itself, which the
+// closure would receive verbatim, is the real (non-1, non-hardcoded) value.
+//
+// Expected turn is 4, not 3: hit.TurnNum (like turnNumberForArchiveLine,
+// which it mirrors exactly — see recall_mark_test.go's "turn number counts
+// only preceding user lines" subtest for the same +1 arithmetic pinned
+// against a hand-built archive) is 1 + the count of role:user lines
+// STRICTLY BEFORE the tool result's own line — and that count includes the
+// result's OWN owning turn's user line, not just the turns before it. Three
+// user lines (turn one / turn two / turn three) precede the tool result
+// here, so TurnNum = 3 + 1 = 4. This offset is pre-existing, untouched by
+// the O15 fix, and shared by every OTHER buildRecallMark call site in the
+// codebase — not something to "correct" here.
+func TestRecallConversation_ToolCallID_SpanCitesRealTurn(t *testing.T) {
+	const id = "call_x"
+	archive := &scanArchive{msgs: []memory.ArchivedMessage{
+		makeUserMsg("turn one"), makeAssistantMsg("assistant one"),
+		makeUserMsg("turn two"), makeAssistantMsg("assistant two"),
+		makeUserMsg("turn three"),
+		makeAssistantWithTool("", id, "read_file"),
+		makeToolResultMsg(id, "small result content"),
+	}}
+	setter := newStubSpanSetter()
+	tool := makeTool(archive, setter)
+
+	res := tool.Execute(makeCtx("sess-turn4"), map[string]any{"tool_call_id": id})
+	if res.IsError {
+		t.Fatalf("unexpected error: %s", res.ForLLM)
+	}
+	span, ok := setter.spans["sess-turn4"]
+	if !ok {
+		t.Fatal("no span installed")
+	}
+	const wantTurn = 4
+	if span.FromTurn != wantTurn || span.ToTurn != wantTurn {
+		t.Errorf("expected FromTurn=ToTurn=%d, got %d/%d (O15: hardcoded-turn-1 regression)", wantTurn, span.FromTurn, span.ToTurn)
+	}
+	if len(span.Ordinals) != 1 || span.Ordinals[0] != wantTurn {
+		t.Errorf("span ordinals must be [%d], got %v (O15: hardcoded-turn-1 regression)", wantTurn, span.Ordinals)
+	}
 }

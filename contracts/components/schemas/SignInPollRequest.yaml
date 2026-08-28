@@ -1,0 +1,14 @@
+type: object
+description: >
+  Body for POST /providers/{id}/sign-in/poll (ADR-068 FR-044, added
+  2026-08-23 §8b). Identifies which open device-code session to check.
+required:
+  - device_auth_id
+additionalProperties: false
+properties:
+  device_auth_id:
+    type: string
+    minLength: 1
+    maxLength: 64
+    description: The opaque handle returned by POST /providers/{id}/sign-in's device_code response.
+    example: das_9f3a2b1c

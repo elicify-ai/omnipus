@@ -116,7 +116,7 @@ func TestRunTurn_SyncDelegate_PersistsResultOnReload(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              workspaceDir,
-				ModelName:         "content-routed-mock",
+				DefaultModel:      config.DefaultModel{Model: "content-routed-mock"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -128,7 +128,7 @@ func TestRunTurn_SyncDelegate_PersistsResultOnReload(t *testing.T) {
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), provider)
 	t.Cleanup(al.Close)
 
-	delegateTool := tools.NewDelegateTool(cfg.Agents.Defaults.ModelName, cfg.Agents.Defaults.MaxTokens, 0)
+	delegateTool := tools.NewDelegateTool(cfg.Agents.Defaults.DefaultModel.Model, cfg.Agents.Defaults.MaxTokens, 0)
 	delegateTool.SetSpawner(NewSubTurnSpawner(al))
 	// ADR-057 U14 fixture repair: DelegateTool now refuses to start a
 	// delegated session without a durable lifecycle store wired (fail-closed

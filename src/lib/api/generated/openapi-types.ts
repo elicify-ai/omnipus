@@ -215,7 +215,7 @@ export interface paths {
         put?: never;
         /**
          * Finalize first-run onboarding
-         * @description Two-phase commit: probes the submitted provider API key against the real provider (a billable upstream call, same validator as PUT /providers/{id}), then writes the LLM provider config and admin user to config.json atomically, then marks onboarding complete in state.json. Returns 400 when the provider confirms the key is wrong (invalid_key) — nothing is persisted and the request may be retried with a corrected key. A key the provider could not verify for any other reason (unreachable, no credit, regionally restricted, or no endpoint to probe) does NOT block: onboarding still completes and the response's `warning` field explains what could not be checked, because this endpoint is the only door into the product and a flaky network must not make it uninstallable. Returns 409 when onboarding is already complete. CSRF-exempt (no cookie exists yet). Rate-limited: 3 requests per IP per minute — a probe can take up to ~25s (model-catalog fetch + completion probe), so a mistyped key costs real wall-clock time before the caller can retry. On success, issues a __Host-csrf cookie so the SPA can immediately make CSRF-protected requests.
+         * @description Two-phase commit: probes the submitted provider API key against the real provider (a billable upstream call, same validator as PUT /providers/{id}), then writes the LLM provider config and admin user to config.json atomically, then marks onboarding complete in state.json. Returns 400 when the provider confirms the key is wrong (invalid_key) — nothing is persisted and the request may be retried with a corrected key. A key the provider could not verify for any other reason (unreachable, no credit, regionally restricted, or no endpoint to probe) does NOT block: onboarding still completes and the response's `warning` field explains what could not be checked, because this endpoint is the only door into the product and a flaky network must not make it uninstallable. Returns 409 when the pre-auth onboarding window is closed — onboarding is already complete, this instance already has an authentication authority (any configured gateway user, or OMNIPUS_BEARER_TOKEN set), its onboarding state file is unreadable, or the requested admin username already exists. The refusal body is identical for every one of those reasons so an anonymous caller cannot use it to probe the instance's state; the reason is recorded in the audit log (onboarding.refused). The authority check is what stops an anonymous caller minting a second administrator on an instance whose state.json was lost or corrupted, and it applies whatever the onboarding flag says. Creating an admin never overwrites an existing account's password. CSRF-exempt (no cookie exists yet). Rate-limited: 3 requests per IP per minute — a probe can take up to ~25s (model-catalog fetch + completion probe), so a mistyped key costs real wall-clock time before the caller can retry. On success, issues a __Host-csrf cookie so the SPA can immediately make CSRF-protected requests.
          */
         post: operations["completeOnboarding"];
         delete?: never;
@@ -235,7 +235,7 @@ export interface paths {
         put?: never;
         /**
          * Test a provider API key and list available models
-         * @description Non-persistent probe: accepts an API key in the request body, tests it against the provider's /models endpoint, and returns the model list. Nothing is written to disk. Available only during onboarding (returns 409 after onboarding completes). CSRF-exempt.
+         * @description Non-persistent probe: accepts an API key in the request body, tests it against the provider's /models endpoint, and returns the model list. Nothing is written to disk. CSRF-exempt. Available only while the pre-auth onboarding window is open, and it returns 409 whenever that window is closed - onboarding already complete, the onboarding state unreadable, the config unreadable, or the instance already having an authentication authority (a configured user or OMNIPUS_BEARER_TOKEN). The refusal is 409 rather than 401 for every one of those reasons, including for an authenticated admin: once the window is closed no credential makes this call legal, and the standard PUT /providers/{id} + GET /providers flow replaces it. The refusal body is identical across reasons; the specific reason is recorded in the audit log. With auth sign_in the probe spends one real, billed vendor completion using the operator's own saved login, which is why the window must close on uncertainty. Rate-limited: 3 requests per minute per IP (shared with /onboarding/complete) -> 429.
          */
         post: operations["probeProvider"];
         delete?: never;
@@ -545,7 +545,7 @@ export interface paths {
         };
         /**
          * Health check
-         * @description Returns HTTP 200 when the gateway is running. No authentication required.
+         * @description Returns HTTP 200 with status "ok" when the gateway is serving, and HTTP 503 with status "degraded" plus a reason on a gateway-fatal condition (agent loop dead, config reload failed, default agent unloadable). The audit_* and catalog fields describe a degraded SUBSYSTEM while the gateway itself is still serving and never change the status code — a stale provider catalog (ADR-067 FR-037) makes the model picker less accurate, it does not take the process out of rotation. No authentication required.
          */
         get: operations["getHealth"];
         put?: never;
@@ -969,6 +969,30 @@ export interface paths {
          * @description Writes the global memory/recap and retention settings. Reads/writes ONLY the MemorySettings fields — no merge of sibling config sections or secrets (A2/G-02). Writable by any authenticated user (operator decision, no admin gate). Uses safeUpdateConfigJSON server-side to preserve all other config fields including API keys.
          */
         put: operations["updateMemorySettings"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/settings/context": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get the global context-budget settings (ADR-066 D9)
+         * @description Returns the per-surface tool-result caps, the absolute trigger, the ingest bound, the global default context window and the per-(provider, model) window overrides. User-facing location: Settings → Models. Readable by any authenticated user (withAuth, the /settings/memory precedent — not RequireNotBypass).
+         */
+        get: operations["getContextSettings"];
+        /**
+         * Update the global context-budget settings (ADR-066 D9)
+         * @description Partial update — an omitted field is unchanged; model_overrides, when present, replaces the whole list; default_context_window null clears it. 400 naming the field and the limit on: any cap > 150,000 or < 1; absolute_trigger_chars < 1; ingest_bound_bytes ≥ 8,388,608 or < 1; model_overrides[].context_window < 1. Every 200 write triggers a registry reload so the next turn uses the new values without a restart; overrides whose provider no longer exists are pruned on write. Writable by any authenticated user (withAuth).
+         */
+        put: operations["updateContextSettings"];
         post?: never;
         delete?: never;
         options?: never;
@@ -1496,9 +1520,57 @@ export interface paths {
          * List configured LLM providers
          * @description Returns all configured LLM providers with connection status and available model list.
          *     Model lists are fetched live from each provider's upstream /models endpoint when an API key is present.
+         *
+         *     Requires authentication. The one exception is ADR-068 FR-050's pre-auth window: while onboarding is incomplete AND this instance has no authentication authority yet (no configured users, no OMNIPUS_BEARER_TOKEN), an anonymous caller is answered, because there is no admin account to authenticate as. That window fails CLOSED — an unreadable or unparseable onboarding state counts as complete, not as a fresh install. Outside it an anonymous caller gets 401.
+         *
+         *     An anonymous response inside that window is REDUCED: `account_label` is never present (it is the operator's own vendor account identifier) and `dependents` is always the empty array (it enumerates the operator's agent roster). Both are populated only for an authenticated caller. An anonymous caller is additionally rate-limited to 60 requests/minute per IP, since each call fans out to one upstream /models fetch per configured provider.
          */
         get: operations["listProviders"];
         put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/providers/catalog": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read the registry-fed providers catalog (ADR-067 FR-017)
+         * @description Returns the full schema-2.0.0 catalog document the gateway itself uses (providers with nested models, tier, protocol(s), unsupported reason, resize limits) plus the serving envelope served_from (embedded | pulled) and stale (updated_at older than 14 days). Served from a pre-serialised byte slice cached at apply time; bytes and ETag are swapped atomically as one pair. Headers: `ETag: "<sha256>"` (quoted, strong) and `Cache-Control: private, max-age=0, must-revalidate`; no content negotiation. A request whose If-None-Match exactly matches the current quoted strong ETag gets 304 with no body; a weak (W/) or unquoted value is treated as no match (200). 503 when the catalog failed to construct at boot (never an empty 200 that looks like "no providers"). The SPA re-validates on Settings open and every 15 minutes. DISPATCH ORDER: "catalog" is a reserved path segment — this route MUST be matched before the /providers/{id} handler, and "catalog" is never a valid provider id. Requires authentication. The one exception is ADR-068 FR-050's pre-auth window: while onboarding is incomplete AND this instance has no authentication authority yet (no configured users, no OMNIPUS_BEARER_TOKEN), an anonymous caller is answered, because the onboarding wizard's provider picker needs this document before any admin account exists to authenticate as. That window fails CLOSED — an unreadable or unparseable onboarding state counts as complete, not as a fresh install. Outside it an anonymous caller gets 401. Unlike listProviders there is no response reduction inside the window: this document is public vendor metadata (provider ids, model ids, tiers, context windows) with no operator secret or account-specific field, so an anonymous and an authenticated caller receive the identical body.
+         */
+        get: operations["getProvidersCatalog"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/providers/default-model": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read the global default model (ADR-068 FR-018)
+         * @description Returns agents.defaults.default_model as a (provider, model) pair with the resolved context window and its source (ADR-066's ResolveWindow(provider, model), absent until it lands). Registered as its own route with adminWrap (withAuth → RequireNotBypass): 401 unauthenticated, 503 under dev-mode bypass. DISPATCH ORDER: "default-model" is a reserved path segment — this route MUST be matched before the /providers/{id} handler, and "default-model" is never a valid provider id.
+         */
+        get: operations["getDefaultModel"];
+        /**
+         * Set the global default model (ADR-068 FR-018)
+         * @description Validates that the provider is configured and connected or signed_in (400 `{"error":"provider not configured","field":"provider"}`) and that the model is in the served catalog for that provider (400 `{"error":"model not in catalog for provider","field":"model"}`) — except rows with custom: true or locality: local, where any non-empty model is accepted with no live call. Persists agents.defaults.default_model under the config lock, emits audit provider.default_model.changed, triggers a reload and waits for it (500 `default model saved but config reload failed: <reason>` when it does not confirm); takes effect on the next turn. A ProviderUpdateRequest body sent here is a 400 on shape, never a PUT of a provider named "default-model". adminWrap: 401 / 503 under bypass.
+         */
+        put: operations["updateDefaultModel"];
         post?: never;
         delete?: never;
         options?: never;
@@ -1516,11 +1588,15 @@ export interface paths {
         get?: never;
         /**
          * Add or update an LLM provider configuration
-         * @description Adds or updates an LLM provider entry. On new providers, api_key is required. On existing providers, api_key may be omitted to keep the current key. The API key is stored encrypted (AES-256-GCM) in credentials.json. Available before and after onboarding.
+         * @description Adds or updates an LLM provider entry. On new providers, api_key is required. On existing providers, api_key may be omitted to keep the current key. The API key is stored encrypted (AES-256-GCM) in credentials.json. Available before and after onboarding — while onboarding is incomplete and the instance has no authentication authority the route is reachable without a credential, so the wizard can configure a provider before an admin account exists. Rate-limited: 60 requests per minute per IP -> 429. The call is synchronous through a full agent-registry rebuild. The id must be a catalog id (ADR-067 registry identity) or, when the body carries api_base + protocol (openai-compatible | anthropic), an operator-named custom row (Provider.custom: true); any other id → 400 `unknown provider "<id>"`. A tier "unsupported" catalog provider → 400 with its unsupported_reason. The reserved path segments "catalog" and "default-model" are dispatched to their own routes before this one and are never valid provider ids.
          */
         put: operations["updateProvider"];
         post?: never;
-        delete?: never;
+        /**
+         * Remove a configured provider and its stored key (ADR-068 FR-010)
+         * @description Under the config lock and after recomputing dependents / backs_default (the response, not the dialog, is authoritative), runs in order: (1) clear dependents in the agent entity store (primaries cleared, fallback entries removed — never re-pointed); (2) remove the provider row; (2b) remove ContextSettings.model_overrides rows for the provider; (3) delete the `<id>_API_KEY` credential (not-found counts as success); (3b) evict the provider's entitlement cache entry; (4) audit `provider.deleted`; (5) trigger a reload and wait. 404 when the id is not configured (the reserved literals "catalog" and "default-model" are never provider ids); 503 when the credential store is locked (before any change) or under dev-mode bypass (RequireNotBypass via the inline requireAdminAuthz wrapper); 401 with no authenticated user (no pre-onboarding exception); 409 when the provider backs the default model and no valid new_default is supplied; 400 when new_default names the same id or a provider that is not connected | signed_in. A provider that backs the default is never deleted while it backs it, so the last connected provider can never be removed. On a failed step: 500 with deleted false and a retryable state. There is no Undo and no dry run.
+         */
+        delete: operations["deleteProvider"];
         options?: never;
         head?: never;
         patch?: never;
@@ -1533,11 +1609,55 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        get?: never;
+        put?: never;
         /**
          * Test provider API key configuration
-         * @description Verifies that an API key is configured for the given provider without making an upstream call. Returns success=false with an error message if no key is configured. Available before and after onboarding.
+         * @description Resolves the provider's stored API key and probes it with ONE real upstream request (providers.ValidateKey), returning success=false with an error message when no key is configured, when the credential ref cannot be resolved, or when the provider rejects the key. Available before and after onboarding — while onboarding is incomplete and the instance has no authentication authority the route is reachable without a credential. Rate-limited: 60 requests per minute per IP -> 429.
          */
-        get: operations["testProvider"];
+        post: operations["testProvider"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/providers/{id}/sign-in": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start a vendor sign-in for a provider (ADR-068 FR-008, amended 2026-08-23 §8b)
+         * @description For `codex-cli` / `github-copilot`: Omnipus never performs or stores the vendor login itself — returns the one instruction the operator needs, the vendor CLI's own login command, so the SPA can show it beside a *Check sign-in* button (`method: cli_login`). For `openai-chatgpt` (and `xai` once its catalog row carries `sign_in`): Omnipus requests a device code from the vendor itself and returns the verification link, user code, and an opaque `device_auth_id` to poll (`method: device_code`, FR-044) — the vendor's device code and any PKCE verifier never leave the gateway. Returns 400 `{"error":"provider does not support sign-in"}` when the provider's catalog row does not list `sign_in` in `auth_methods`, and for `xai` specifically when no client id is configured. Rate-limited like the auth endpoints. Requires authentication — except inside ADR-068 FR-050's pre-auth window: while onboarding is incomplete AND this instance has no authentication authority yet (no configured users, no OMNIPUS_BEARER_TOKEN), an anonymous caller is admitted past the authentication check too, because onboarding step 3 needs a working sign-in flow before any admin account exists to authenticate as. That window fails CLOSED — an unreadable or unparseable onboarding state counts as complete, not as a fresh install. Outside the window an unauthenticated caller gets 401 unconditionally. The route's own authorization layer (requireAdminAuthz) enforces ONLY the dev-mode-bypass guard, not authentication, so any caller who reaches it — authenticated, or anonymous inside the pre-auth window — gets 503 under dev-mode bypass and otherwise proceeds: inside the window an anonymous caller can mint a real device code or trigger a vendor CLI login prompt exactly as an authenticated caller could.
+         */
+        post: operations["startProviderSignIn"];
+        /**
+         * Sign out a provider's device-code session (ADR-068 FR-048, added 2026-08-23 §8b)
+         * @description Deletes the `<id>_OAUTH` encrypted credential entry (a missing entry is success), emits audit event `provider.signed_out`, and the row returns to `not_signed_in`. Only meaningful for `device_code` providers — `cli_login` providers hold no Omnipus-side credential to delete and this is a no-op success for them too. Requires authentication — except inside ADR-068 FR-050's pre-auth window: while onboarding is incomplete AND this instance has no authentication authority yet (no configured users, no OMNIPUS_BEARER_TOKEN), an anonymous caller is admitted past the authentication check too, for the same reason its POST sibling is (onboarding step 3 needs a working sign-in flow before any admin account exists to authenticate as). That window fails CLOSED — an unreadable or unparseable onboarding state counts as complete, not as a fresh install. Outside the window an unauthenticated caller gets 401 unconditionally. The route's own authorization layer (requireAdminAuthz) enforces ONLY the dev-mode-bypass guard, not authentication, so any caller who reaches it — authenticated, or anonymous inside the pre-auth window — gets 503 under dev-mode bypass and otherwise proceeds: inside the window an anonymous caller can revoke another account's vendor sign-in before any admin account exists.
+         */
+        delete: operations["signOutProvider"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/providers/{id}/sign-in/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read a provider's vendor sign-in state (ADR-068 FR-009, amended 2026-08-23 §8b)
+         * @description For `cli_login` providers (codex-cli, github-copilot): reads the vendor CLI's saved login (codex `auth.json` — only `tokens.access_token` for the unverified `exp` claim and `tokens.account_id` for the label; the Copilot CLI's own auth-status) — the file is never modified and no refresh request is ever made (FR-007). For `device_code` providers (openai-chatgpt, and xai once its catalog row carries `sign_in`): reads the stored `<id>_OAUTH` entry in Omnipus's own encrypted credential store; `expired` means the access token is past `exp` AND a refresh attempt failed or no refresh token is available (FR-046). Maps to `not_signed_in | pending | signed_in | expired`; `pending` only while an open device-code session awaits approval. A missing CLI binary is reported on the Provider row as `disconnected`, not here. Returns 400 `{"error":"provider does not support sign-in"}` for providers without `sign_in`. Requires authentication — except inside ADR-068 FR-050's pre-auth window: while onboarding is incomplete AND this instance has no authentication authority yet (no configured users, no OMNIPUS_BEARER_TOKEN), an anonymous caller is admitted past the authentication check too, for the same reason its sibling sign-in routes are (onboarding step 3 needs a working sign-in flow before any admin account exists to authenticate as). That window fails CLOSED — an unreadable or unparseable onboarding state counts as complete, not as a fresh install. Outside the window an unauthenticated caller gets 401 unconditionally. The route's own authorization layer (requireAdminAuthz) enforces ONLY the dev-mode-bypass guard, not authentication, so any caller who reaches it — authenticated, or anonymous inside the pre-auth window — gets 503 under dev-mode bypass and otherwise proceeds.
+         */
+        get: operations["getProviderSignInStatus"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1546,20 +1666,60 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/providers/model-capabilities": {
+    "/providers/{id}/sign-in/poll": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /**
-         * List declared input-modality capabilities per model
-         * @description Returns the in-repo capability catalog (pkg/providers/capabilities) as a flat list of {id, modalities} pairs (D18). Model vision capability is not knowable client-side at all otherwise — the SPA resolves the target agent's model against this list to show a non-blocking warning before sending a vision attachment (e.g. a live-browser annotation, or an image attached via the composer) to a model that cannot accept images. Returns an empty array when the catalog is not constructed (never a 500) — the catalog is optional and the server-side capability gate remains the authoritative backstop regardless.
-         */
-        get: operations["listModelCapabilities"];
+        get?: never;
         put?: never;
-        post?: never;
+        /**
+         * Poll an open device-code sign-in session (ADR-068 FR-044, added 2026-08-23 §8b)
+         * @description Performs at most ONE vendor poll per call for the device-code session named by `device_auth_id` (returned by a prior POST /providers/{id}/sign-in). On `signed_in` the gateway has already stored the `<id>_OAUTH` credential entry before responding. A device-code session expires server-side at the vendor's `expires_at` (ceiling 15 minutes) and is single-use — an unknown or already-resolved `device_auth_id` returns 404. Never returns the vendor's device code. Rate-limited like the auth endpoints. Requires authentication — except inside ADR-068 FR-050's pre-auth window: while onboarding is incomplete AND this instance has no authentication authority yet (no configured users, no OMNIPUS_BEARER_TOKEN), an anonymous caller is admitted past the authentication check too, for the same reason its sibling sign-in routes are (onboarding step 3 needs a working sign-in flow before any admin account exists to authenticate as). That window fails CLOSED — an unreadable or unparseable onboarding state counts as complete, not as a fresh install. Outside the window an unauthenticated caller gets 401 unconditionally. The route's own authorization layer (requireAdminAuthz) enforces ONLY the dev-mode-bypass guard, not authentication, so any caller who reaches it — authenticated, or anonymous inside the pre-auth window — gets 503 under dev-mode bypass and otherwise proceeds: inside the window an anonymous caller can complete another account's device-code sign-in before any admin account exists.
+         */
+        post: operations["pollProviderSignIn"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/providers/openai-chatgpt/sign-in/import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Import an existing Codex CLI login for openai-chatgpt (ADR-068 FR-047, added 2026-08-23 §8b)
+         * @description Copies `tokens.access_token` + `tokens.account_id` from `~/.codex/auth.json` into the `openai_OAUTH` encrypted credential entry. No refresh token is imported — a session started this way ends at the copied token's `exp` with no further refresh. The source file's bytes and mtime are left unchanged (read-only, FR-007). Returns 404 `{"error":"no codex login found"}` when the file is absent or unreadable. Requires authentication — except inside ADR-068 FR-050's pre-auth window: while onboarding is incomplete AND this instance has no authentication authority yet (no configured users, no OMNIPUS_BEARER_TOKEN), an anonymous caller is admitted past the authentication check too, for the same reason its sibling sign-in routes are (onboarding step 3 needs a working sign-in flow before any admin account exists to authenticate as). That window fails CLOSED — an unreadable or unparseable onboarding state counts as complete, not as a fresh install. Outside the window an unauthenticated caller gets 401 unconditionally. The route's own authorization layer (requireAdminAuthz) enforces ONLY the dev-mode-bypass guard, not authentication, so any caller who reaches it — authenticated, or anonymous inside the pre-auth window — gets 503 under dev-mode bypass and otherwise proceeds: inside the window an anonymous caller can write a live vendor credential into the encrypted store before any admin account exists.
+         */
+        post: operations["importCodexSignIn"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/providers/{id}/entitlement": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Check which catalog models this provider's key can use (ADR-067 FR-021)
+         * @description "Check with my account": makes ONE live listing call with the provider's stored key — openai-compatible / google → `GET {api}/models`; anthropic → `GET {api}/v1/models` with x-api-key + anthropic-version; ollama → `/api/tags` — intersects it with the served catalog and returns every catalog model annotated entitled true/false with limits "known", plus models the provider returned that the catalog lacks with limits "unknown". Cached for the gateway process keyed by SHA-256(providerID + ":" + credentialRefName) — the ref name, never the secret — and evicted on provider DELETE, on a PUT that changes the key (not on one that only bumps updated_at) and on catalog refresh. Never called at boot or on a turn. 409 for protocol cli and for custom rows (`entitlement not supported for this protocol`); 422 when no key resolves; 502 `{"error":"could not fetch upstream model list: status <n>"}` on an upstream non-2xx with nothing cached. Rate-limited like /providers/{id}/test.
+         */
+        post: operations["checkProviderEntitlement"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2979,6 +3139,11 @@ export interface components {
              * @example csrf_missing
              */
             code?: string;
+            /**
+             * @description Names the request field the error is about (ADR-068 validation bodies, e.g. "provider", "model", "id", "auth", "api_key"). Present only on field-attributable 4xx validation errors.
+             * @example provider
+             */
+            field?: string;
             /** @description Optional structured details about the error. */
             details?: {
                 [key: string]: unknown;
@@ -3054,31 +3219,13 @@ export interface components {
              */
             new_password: string;
         };
-        /** @description Body for POST /onboarding/complete. Atomically sets up the first LLM provider and creates the initial admin account. CSRF-exempt (no cookie exists at this point). */
+        /**
+         * OnboardingCompleteRequest
+         * @description Body for POST /onboarding/complete. Atomically sets up the first LLM provider and creates the initial admin account. CSRF-exempt (no cookie exists at this point). `provider` is discriminated by `auth_method`: `api_key` requires `api_key`; `sign_in` forbids it (ADR-068 MAJ-014).
+         */
         OnboardingCompleteRequest: {
-            /** @description LLM provider configuration to persist. */
-            provider: {
-                /**
-                 * @description Provider protocol identifier (e.g. "anthropic", "openai", "openrouter", "gemini"). Must be a known protocol; unknown values are rejected with 400.
-                 * @example anthropic
-                 */
-                id: string;
-                /**
-                 * @description API key for the provider. Stored encrypted (AES-256-GCM) in credentials.json.
-                 * @example sk-ant-...
-                 */
-                api_key: string;
-                /**
-                 * @description Default model to use for this provider. When omitted, a sensible default is chosen per provider (e.g. "claude-sonnet-4-6" for anthropic, "gpt-4o" for openai).
-                 * @example claude-sonnet-4-6
-                 */
-                model?: string;
-                /**
-                 * @description Optional custom API base URL, persisted as the provider entry's api_base. Required for providers that have no fixed default endpoint (e.g. azure, azure-openai — a per-resource host); also usable to override the regional default (e.g. a China vs international host). When omitted, the provider's built-in default base is used.
-                 * @example https://my-resource.openai.azure.com/openai/deployments/gpt-4o
-                 */
-                endpoint?: string;
-            };
+            /** @description LLM provider configuration to persist, discriminated by `auth_method`. */
+            provider: components["schemas"]["OnboardingProviderApiKey"] | components["schemas"]["OnboardingProviderSignIn"];
             /** @description Initial admin account credentials. */
             admin: {
                 /**
@@ -3093,25 +3240,189 @@ export interface components {
                 password: string;
             };
         };
-        OnboardingCompleteResponse: components["schemas"]["LoginResponse"];
-        /** @description Body for POST /onboarding/probe-provider. Tests an API key against a provider and returns available models. Non-persistent — nothing is written to disk. CSRF-exempt. Returns 409 once onboarding is complete. */
-        ProbeProviderRequest: {
+        /** @description The `api_key` variant of OnboardingCompleteRequest.provider (ADR-068, MAJ-014). Discriminated by `auth_method` following the ADR-034 inline oneOf mechanism; `api_key` is REQUIRED here and is not a property of the sign-in variant. */
+        OnboardingProviderApiKey: {
             /**
-             * @description Provider protocol identifier. Must be one of the recognized protocol names that Omnipus can connect to. Validated server-side against the known protocol registry (pkg/providers.IsKnownProtocol).
-             * @example openrouter
+             * @description Discriminator — this variant authenticates with an API key. (enum property replaced by openapi-typescript)
              * @enum {string}
              */
-            id: "anthropic" | "anthropic-messages" | "openai" | "openrouter" | "gemini" | "google" | "ollama" | "azure" | "azure-openai" | "bedrock" | "litellm" | "groq" | "zhipu" | "z-ai" | "zai" | "z-ai-coding" | "glm-coding" | "zhipu-coding" | "z-ai-anthropic" | "zhipu-anthropic" | "moonshot-anthropic" | "moonshot-cn-anthropic" | "minimax-anthropic" | "minimax-cn-anthropic" | "deepseek-anthropic" | "nvidia" | "moonshot" | "moonshot-cn" | "shengsuanyun" | "deepseek" | "cerebras" | "vivgrid" | "volcengine" | "vllm" | "qwen" | "qwen-intl" | "qwen-international" | "dashscope-intl" | "qwen-us" | "dashscope-us" | "mistral" | "avian" | "longcat" | "modelscope" | "novita" | "coding-plan" | "alibaba-coding" | "qwen-coding" | "mimo" | "minimax" | "minimax-cn" | "coding-plan-anthropic" | "alibaba-coding-anthropic" | "antigravity" | "claude-cli" | "claudecli" | "codex-cli" | "codexcli";
+            auth_method: "api_key";
             /**
-             * @description API key to test against the provider.
-             * @example sk-or-...
+             * @description Provider id (e.g. "anthropic", "openai", "openrouter", "gemini"). Must be a known protocol; unknown values are rejected with 400.
+             * @example anthropic
+             */
+            id: string;
+            /**
+             * @description API key for the provider. Stored encrypted (AES-256-GCM) in credentials.json.
+             * @example sk-ant-...
              */
             api_key: string;
             /**
-             * @description Optional override for the provider's API base URL. When omitted, the server uses the provider's well-known default endpoint.
-             * @example https://openrouter.ai/api/v1
+             * @description The model chosen for the first agent — the probe-validated pick from step 3, persisted as agents.defaults.default_model together with the provider id.
+             * @example claude-sonnet-4-6
+             */
+            model?: string;
+            /**
+             * @description Optional custom API base URL, persisted as the provider entry's api_base. Required for providers that have no fixed default endpoint (e.g. azure, azure-openai — a per-resource host); also usable to override the regional default. When omitted, the provider's built-in default base is used.
+             * @example https://my-resource.openai.azure.com/openai/deployments/gpt-4o
              */
             endpoint?: string;
+        };
+        /** @description The `sign_in` variant of OnboardingCompleteRequest.provider (ADR-068, MAJ-014). The vendor CLI holds the login; Omnipus stores no credential, so `api_key` is not a property here and a body carrying one is a schema violation (400 "api_key not allowed with sign_in"). */
+        OnboardingProviderSignIn: {
+            /**
+             * @description Discriminator — this variant uses the vendor CLI's saved login. (enum property replaced by openapi-typescript)
+             * @enum {string}
+             */
+            auth_method: "sign_in";
+            /**
+             * @description Provider id whose catalog row declares `sign_in` in auth_methods (e.g. "codex-cli", "openai-chatgpt", "github-copilot"); any other id is rejected with 400 "provider does not support sign-in".
+             * @example codex-cli
+             */
+            id: string;
+            /**
+             * @description The model chosen for the first agent — the sign-in-probe-validated pick from step 3, persisted as agents.defaults.default_model together with the provider id.
+             * @example gpt-5.4
+             */
+            model?: string;
+            /**
+             * @description Optional custom API base URL, persisted as the provider entry's api_base.
+             * @example https://api.example.com/v1
+             */
+            endpoint?: string;
+        };
+        /** @description Response from POST /providers/{id}/sign-in (ADR-068 FR-008, amended 2026-08-23 §8b). `cli_login` for codex-cli / github-copilot: the vendor CLI's own login command, run by the operator in a terminal. `device_code` for openai-chatgpt (and xai once its catalog row carries sign_in): Omnipus requests a device code itself and the SPA shows the verification link and user code. Discriminated by `method`. */
+        SignInStartResponse: components["schemas"]["SignInStartResponseCliLogin"] | components["schemas"]["SignInStartResponseDeviceCode"];
+        /** @description The `cli_login` variant of SignInStartResponse (ADR-068 FR-008, amended 2026-08-23 §8b). For `codex-cli` and `github-copilot`: Omnipus never performs or stores the vendor login itself — this returns the one instruction the operator needs, the vendor CLI's own login command, so the SPA can show it beside a *Check sign-in* button. */
+        SignInStartResponseCliLogin: {
+            /**
+             * @description Discriminator — run the vendor CLI's login command. (enum property replaced by openapi-typescript)
+             * @enum {string}
+             */
+            method: "cli_login";
+            /**
+             * @description The exact command the operator runs in a terminal (e.g. "codex login", "copilot login").
+             * @example codex login
+             */
+            command: string;
+            /**
+             * @description Human-readable guidance shown beside the command, ending with the prompt to click Check sign-in.
+             * @example Run `codex login` in a terminal, then click Check sign-in.
+             */
+            instructions: string;
+        };
+        /** @description The `device_code` variant of SignInStartResponse (ADR-068 FR-008/FR-044, added 2026-08-23 §8b). For `openai-chatgpt` (and `xai` once its catalog row carries `sign_in`): Omnipus requests a device code from the vendor itself and the SPA renders the verification link and user code for the operator to approve on any device. `device_auth_id` is an opaque server-side handle for POST /providers/{id}/sign-in/poll — the vendor's own device code and any PKCE verifier are held only by the gateway and never appear on the wire. */
+        SignInStartResponseDeviceCode: {
+            /**
+             * @description Discriminator — a device-code session was started; poll for completion. (enum property replaced by openapi-typescript)
+             * @enum {string}
+             */
+            method: "device_code";
+            /**
+             * Format: uri
+             * @description The vendor page the operator opens (new tab) to approve the sign-in.
+             * @example https://auth.openai.com/codex/device
+             */
+            verification_url: string;
+            /**
+             * @description Short code the operator enters (or confirms) on the verification page.
+             * @example WDJB-MJHT
+             */
+            user_code: string;
+            /**
+             * @description Opaque handle identifying this device-code session for POST /providers/{id}/sign-in/poll. Never the vendor's own device code.
+             * @example das_9f3a2b1c
+             */
+            device_auth_id: string;
+            /**
+             * Format: date-time
+             * @description When this device-code session expires server-side (ceiling 15 minutes from start, FR-044). The dialog shows the matching expired end state once past this time.
+             * @example 2026-08-23T12:15:00Z
+             */
+            expires_at: string;
+            /**
+             * @description Minimum seconds between polls. The SPA must never poll faster than this, and must back off when a later poll response raises it (FR-045, vendor slow_down).
+             * @example 5
+             */
+            interval_seconds: number;
+        };
+        /** @description Response from GET /providers/{id}/sign-in/status (ADR-068 FR-009, amended 2026-08-23 §8b). For `cli_login` providers (codex-cli, github-copilot): read from the vendor CLI's saved login only — Omnipus never refreshes that file — `expired` follows the access token's JWT `exp` (decoded unverified, display only) when decodable, else the saved login file being older than one hour. For `device_code` providers (openai-chatgpt, and xai once its catalog row carries `sign_in`): the state comes from the stored `<id>_OAUTH` entry in Omnipus's own encrypted credential store — `expired` means the access token is past `exp` AND a refresh attempt failed or no refresh token is available. `pending` is returned only while a device-code session started by POST /sign-in is open and not yet approved. */
+        SignInStatus: {
+            /**
+             * @description not_signed_in when no saved login / stored OAuth entry exists (or it is unreadable / malformed — logged as a warning); pending while an open device-code session awaits approval; signed_in when a usable login or OAuth entry exists; expired per the per-method rule above.
+             * @example signed_in
+             * @enum {string}
+             */
+            state: "not_signed_in" | "pending" | "signed_in" | "expired";
+            /**
+             * @description Opaque account identifier — `tokens.account_id` for codex-cli, the GitHub login for Copilot when the CLI reports one, or the stored OAuth entry's account_id for device_code providers. Present only when known; never an e-mail.
+             * @example user_abc123
+             */
+            account_label?: string;
+            /**
+             * Format: date-time
+             * @description The access token's expiry when known. Absent otherwise.
+             * @example 2026-09-01T12:00:00Z
+             */
+            expires_at?: string;
+        };
+        /** @description Body for POST /providers/{id}/sign-in/poll (ADR-068 FR-044, added 2026-08-23 §8b). Identifies which open device-code session to check. */
+        SignInPollRequest: {
+            /**
+             * @description The opaque handle returned by POST /providers/{id}/sign-in's device_code response.
+             * @example das_9f3a2b1c
+             */
+            device_auth_id: string;
+        };
+        /** @description Response from POST /providers/{id}/sign-in/poll (ADR-068 FR-044, added 2026-08-23 §8b). The gateway performs at most one vendor poll per call. On `signed_in` the gateway has already stored the `<id>_OAUTH` credential entry before responding. The vendor's device code is never returned here. */
+        SignInPollResponse: {
+            /**
+             * @description pending while the operator has not yet approved the session; signed_in once the OAuth tokens are stored; expired when the device-code session's own expires_at has passed; denied when the operator explicitly declined on the vendor's page.
+             * @example pending
+             * @enum {string}
+             */
+            state: "pending" | "signed_in" | "expired" | "denied";
+            /**
+             * @description Present only when the vendor asked the client to slow down (OAuth device-flow `slow_down`). The SPA must adopt this as its new poll interval and never poll faster (FR-045).
+             * @example 10
+             */
+            interval_seconds?: number;
+        };
+        OnboardingCompleteResponse: components["schemas"]["LoginResponse"];
+        /** @description Body for POST /onboarding/probe-provider. Validates credentials against a provider and returns the probed model. Non-persistent — nothing is written to disk. CSRF-exempt. Returns 409 once onboarding is complete. ONE shape, owned by ADR-067 (id, api_base, protocol) and ADR-068 (auth, api_key, model) — see ADR-067 FR-023 / ADR-068 FR-036. Runtime rules the schema cannot express: id must be in the served catalog OR be accompanied by both api_base and protocol (a custom row) — otherwise 400 naming the field id with the message 'unknown provider "<id>"' and never a list of accepted ids; the reserved literals "catalog" and "default-model" are never valid ids; api_key is required iff auth is api_key (400 naming api_key) and must be absent with auth sign_in; a tier "unsupported" provider → 400 with its unsupported_reason; any api_base passes the SSRF gate (422 when blocked). */
+        ProbeProviderRequest: {
+            /**
+             * @description Provider id — a catalog id (ADR-067 registry identity, e.g. "zai", "openrouter") or an operator-named custom row id (then api_base and protocol are required). Free string validated at runtime against the served catalog; there is no enum and no pattern.
+             * @example openrouter
+             */
+            id: string;
+            /**
+             * @description Which auth method to probe. "api_key" probes with api_key. "sign_in" probes through the CLI's saved login / Copilot session and returns 400 {"error":"not signed in","field":"auth"} when none is present.
+             * @example api_key
+             * @enum {string}
+             */
+            auth: "api_key" | "sign_in";
+            /**
+             * @description API key to test. Required iff auth is api_key; forbidden with sign_in.
+             * @example sk-or-...
+             */
+            api_key?: string;
+            /**
+             * @description Model to probe, used verbatim when present. Absent → the provider's first Recommended catalog model (active, tool-calling, ≥128k window), falling through on model_not_found at most 3 times. The response carries the model actually exercised in probed_model.
+             * @example z-ai/glm-5.2
+             */
+            model?: string;
+            /**
+             * @description Base URL. Required (with protocol) when id is not a catalog id; optional override for a catalog provider. SSRF-checked before any outbound call.
+             * @example https://my-proxy.example.com/v1
+             */
+            api_base?: string;
+            /**
+             * @description Wire protocol for a custom row. Required with api_base when id is not a catalog id.
+             * @example openai-compatible
+             * @enum {string}
+             */
+            protocol?: "openai-compatible" | "anthropic";
         };
         /** @description Response from POST /onboarding/probe-provider. Always HTTP 200. success=true means the API key was accepted; success=false means the upstream rejected it (the error field explains why). */
         ProbeProviderResponse: {
@@ -3128,6 +3439,11 @@ export interface components {
              *     ]
              */
             models?: string[];
+            /**
+             * @description The model actually exercised by the probe (ADR-068 FR-036), so the SPA can tie the result to the pick.
+             * @example z-ai/glm-5.2
+             */
+            probed_model?: string;
             /**
              * @description Human-readable error from the upstream provider. Present only when success=false.
              * @example 401 unauthorized
@@ -3496,6 +3812,13 @@ export interface components {
              * @example tc_01HABC
              */
             parent_tool_call_id?: string;
+            /**
+             * @description ADR-066 D4/D5 projection state of this call's result in the model's window, as persisted in window meta and returned on transcript read. "full" = the result entered unmodified; "capped" = it entered head-and-tail truncated with a mark (the archive line holds the full content); "emptied" = it was later emptied in place, leaving a recall mark. The transcript `result` is the PROJECTED content the model saw; the full content stays in the gateway tool_results/ store for Verbose chat. Absent = full.
+             * @default full
+             * @example full
+             * @enum {string}
+             */
+            content_state: "full" | "capped" | "emptied";
         };
         /** @description File attachment associated with a transcript entry. */
         Attachment: {
@@ -3974,6 +4297,33 @@ export interface components {
              */
             voice?: string | null;
             executor?: components["schemas"]["ExecutorConfig"];
+            /**
+             * @description Present iff the agent cannot run a turn because of its provider binding (ADR-067 FR-016/FR-031): "needs_provider" = the primary model's provider id is neither a catalog id nor a custom row (or fails exact match). Such an agent refuses turns with LLMError code needs_provider and makes zero upstream requests. When both this and needs_model apply, the "needs a provider" copy wins in the UI. Absent when the agent is healthy.
+             * @example needs_provider
+             * @enum {string}
+             */
+            degraded_reason?: "needs_provider";
+            /**
+             * @description Always present, derived (ADR-068 FR-014): true when the agent's primary model is empty or its provider is not configured. The agent list renders "needs a model"; a turn to such an agent is refused with LLMError code model_unassigned and no provider call. Precedence: degraded_reason needs_provider wins in copy.
+             * @example false
+             */
+            needs_model: boolean;
+            /**
+             * @description Read-only (ADR-066 D9): the context window in tokens the agent's turns actually run with, after the D2 ladder and the lower-only clamp. 0 for exempt subprocess-CLI rows. Optional — absent until the resolver lands.
+             * @example 1048576
+             */
+            context_window_effective?: number;
+            context_window_source?: components["schemas"]["ContextWindowSource"];
+            /**
+             * @description Read-only (ADR-066 D2): true when an operator override exceeded the model's capability and was clamped down to it (a WARN names the agent). Optional — absent until the resolver lands.
+             * @example false
+             */
+            context_window_clamped?: boolean;
+            /**
+             * @description Per-agent operator override of the context window (ADR-066 D2 rung 1), as persisted. Lower-only: the effective value is min(override, capability). Absent when no override is set.
+             * @example 200000
+             */
+            context_window_override?: number;
             /**
              * @description Gates ContextBuilder memory injection for this agent (ADR-052 FR-039). Defaults to true for ordinary agents. The seeded Judge (and, by extension, any verifier-role agent) is seeded false — memory OFF produces reproducible, impartial verdicts (same evidence -> same verdict) since injected memory would otherwise vary the outcome between runs.
              * @default true
@@ -4497,6 +4847,11 @@ export interface components {
              * @example openrouter
              */
             provider?: string;
+            /**
+             * @description Per-agent context-window override in tokens (ADR-066 D2 rung 1, D9). Lower-only — clamped to the model's capability on resolution (a WARN names the agent and the clamp). Send null to clear. Every write triggers a registry reload so the next turn uses the new window.
+             * @example 200000
+             */
+            context_window_override?: number | null;
             /**
              * @description New SOUL.md content (agent system prompt). Rejected on locked core agents. Exception (ADR-052 FR-038, soul/rubric unification): accepted for locked `type: system` agents (e.g. the Judge) — for those, this field IS the judging rubric, the only prompt-equivalent field a locked System Agent accepts. Writing this triggers a config reload. Whitespace-only is rejected as minLength violation.
              * @example You are a helpful assistant...
@@ -5582,15 +5937,59 @@ export interface components {
         };
         /**
          * HealthResponse
-         * @description Response from GET /health. Returns HTTP 200 when the gateway is up. No authentication required.
+         * @description Response from GET /health. HTTP 200 with status "ok" when the gateway is serving; HTTP 503 with status "degraded" and a reason when a gateway-fatal condition holds (agent loop dead, config reload failed, default agent unloadable). The audit_* and catalog objects are FIELDS, not status drivers: they describe a subsystem that is degraded while the gateway itself is still serving, so an operator can see the problem without reading logs and without the process being taken out of a load balancer. No authentication required.
          */
         HealthResponse: {
             /**
-             * @description Always "ok" when the gateway is healthy.
+             * @description "ok" when the gateway is serving; "degraded" alongside HTTP 503.
              * @example ok
              * @enum {string}
              */
-            status: "ok";
+            status: "ok" | "degraded";
+            /**
+             * @description Why the gateway is degraded. Present only with status "degraded".
+             * @example config reload failed: invalid provider entry
+             */
+            reason?: string;
+            /**
+             * @description Time since the gateway started, as a Go duration string. Absent on the degraded response.
+             * @example 3h12m5s
+             */
+            uptime?: string;
+            /**
+             * @description Process id of the running gateway.
+             * @example 4711
+             */
+            pid?: number;
+            /**
+             * @description Whether the gateway constructed a working audit logger.
+             * @example ok
+             * @enum {string}
+             */
+            audit_logger?: "ok" | "unavailable" | "unknown";
+            /** @description Cumulative counts of audit writes that fell through to slog because the logger was unavailable or a write failed with audit_fail_closed=false. */
+            audit_skipped?: {
+                [key: string]: unknown;
+            };
+            /**
+             * @description True when the operator asked for audit logging and it is not working, or when audit writes are being dropped. Does not change the HTTP status.
+             * @example false
+             */
+            audit_degraded?: boolean;
+            /** @description Sandbox state ({applied, mode, backend}) once Apply has completed. Absent when no sandbox hook is wired. */
+            sandbox?: {
+                [key: string]: unknown;
+            };
+            /** @description ADR-067 FR-037 — the provider catalog's state. Degraded (with the last refresh error as the reason) when no document is loaded, the last refresh failed, the document arrived over the degraded raw-fallback transport, or the served document is stale (updated_at older than 14 days). Absent when no catalog hook is wired. Does not change the HTTP status: a stale registry snapshot makes the model picker less accurate, it does not stop the gateway serving turns. */
+            catalog?: {
+                /** @example false */
+                degraded: boolean;
+                /**
+                 * @description The catalog's own explanation. Present only when degraded.
+                 * @example catalog: served document is stale: updated_at 2026-08-01T03:00:00Z is 360h0m0s old
+                 */
+                reason?: string;
+            };
         };
         /** @description Gateway runtime status as returned by GET /status (polled by the frontend StatusBar every 15 seconds). Summarises the number of configured agents and channels plus a daily cost accumulator. */
         GatewayStatus: {
@@ -5676,11 +6075,63 @@ export interface components {
              */
             display_name?: string;
             /**
-             * @description "connected" when at least one API key is configured for this provider. "disconnected" when no key is available or on the fallback default entry. "error" when the provider is configured but the upstream returned a non-retryable error.
+             * @description One enumeration of exactly six values, shared verbatim by the ADR-067 and ADR-068 specs (ADR-068 FR-038). "connected" when an API key is configured and resolvable. "disconnected" when no key is available. "error" when the provider is configured but the upstream returned a non-retryable error. "unknown-provider" (ADR-067 FR-016) when the configured id is neither a catalog id nor a custom row — the row's models are [] and agents bound to it carry degraded_reason "needs_provider". "signed_in" / "expired" (ADR-068 FR-034) for sign-in providers with a live / lapsed session. The per-model "no context length" state is CatalogModel.window_unknown, never a seventh status.
              * @example connected
              * @enum {string}
              */
-            status: "connected" | "disconnected" | "error";
+            status: "connected" | "disconnected" | "error" | "unknown-provider" | "signed_in" | "expired";
+            /**
+             * @description Wire protocol this configured row uses (ADR-067 D11/FR-013). Absent → the catalog provider's primary protocol. Always present on custom rows.
+             * @example openai-compatible
+             * @enum {string}
+             */
+            protocol?: "openai-compatible" | "anthropic" | "google" | "ollama" | "cli";
+            /**
+             * @description True iff this row's id is not in the catalog — an operator-named custom endpoint configured with api_base + protocol (ADR-067 FR-035, X-13). Every check keys on this flag, never on a literal id. Absent = false.
+             * @example false
+             */
+            custom?: boolean;
+            /**
+             * @description Catalog grouping key (CatalogProvider.company) for the configured row's provider; absent for custom and unknown rows.
+             * @example Z.ai
+             */
+            company?: string;
+            /**
+             * @description ADR-067 FR-039's single local/cloud predicate, derived by the gateway; the only such classification the UI uses.
+             * @example cloud
+             * @enum {string}
+             */
+            locality?: "local" | "cloud";
+            /**
+             * @description For protocol "cli" rows, the subprocess driver selected by the catalog row (ADR-067 X-14).
+             * @example codex
+             * @enum {string}
+             */
+            cli_kind?: "codex" | "copilot";
+            /**
+             * @description How this row authenticates (ADR-068; closed set — oauth/token no longer exist). Always present; "api_key" until ADR-068's computation lands.
+             * @example api_key
+             * @enum {string}
+             */
+            auth_method: "api_key" | "sign_in";
+            /**
+             * @description Account identifier of the signed-in session (tokens.account_id). Present only when status is signed_in or expired.
+             * @example user@example.com
+             */
+            account_label?: string;
+            /** @description Every reference that would stop resolving if this provider were removed (ADR-068 FR-012) — advisory; the server recomputes it under the config lock on DELETE. Always present (empty array when none). */
+            dependents: components["schemas"]["ProviderDependent"][];
+            /**
+             * @description True iff agents.defaults.default_model names this provider (ADR-068). Always present; such a row cannot be deleted without a new_default.
+             * @example false
+             */
+            backs_default: boolean;
+            /**
+             * Format: date-time
+             * @description RFC 3339 time of the last PUT on this row (ADR-068 MAJ-015) — the picker's Recent ordering key.
+             * @example 2026-08-22T10:15:00Z
+             */
+            updated_at?: string;
             /**
              * @description The provider's model catalogue. For providers WITH a live /models endpoint (has_models_endpoint=true) this is the real-time list fetched from upstream when an API key is present (alphabetically sorted). For providers WITHOUT a live endpoint (has_models_endpoint=false) this is the user-supplied list of model slugs configured for the provider. Empty array when the upstream fetch fails, no key is configured, or no slugs have been set. The model picker should be constrained to this catalogue when it is non-empty.
              * @example [
@@ -5712,24 +6163,440 @@ export interface components {
             validation?: components["schemas"]["ProviderValidation"];
         };
         /**
-         * ModelCapabilities
-         * @description A single model's declared input-modality capabilities, as returned by GET /providers/model-capabilities (D18). Model vision capability is not knowable client-side at all otherwise — the SPA uses this to show a non-blocking warning toast before sending a vision attachment (e.g. a live-browser annotation, or an image attached via the composer) to an agent whose resolved model cannot accept images. This is advisory only: the reactive, server-side capability gate (pkg/agent/media_present.go) remains the authoritative backstop regardless of what the client shows.
+         * ProviderDependent
+         * @description One reference that would stop resolving if a provider were removed (ADR-068 FR-012, MAJ-010): an agent's primary model, a fallback entry, a passthrough-resolved slug, or a default/recap/image/voice setting. Advisory on GET /providers; recomputed under the config lock on DELETE.
          */
-        ModelCapabilities: {
+        ProviderDependent: {
             /**
-             * @description Canonical model identifier as used in the capability catalog — the bare model slug (no provider prefix), matching Agent.model, e.g. "gemini-2.5-flash" or "glm-5.2".
-             * @example gemini-2.5-flash
+             * @description Agent id, or a settings key for non-agent dependents (e.g. "agents.defaults.default_model").
+             * @example jim
              */
             id: string;
             /**
-             * @description Input modalities this model accepts. A model with no "image" entry cannot process image attachments.
+             * @description Display name of the dependent.
+             * @example Jim
+             */
+            name: string;
+            /**
+             * @example primary
+             * @enum {string}
+             */
+            role: "primary" | "fallback" | "passthrough" | "recap" | "image" | "voice";
+        };
+        /**
+         * ProviderDeleteRequest
+         * @description Optional body for DELETE /api/v1/providers/{id} (ADR-068 FR-010/FR-011). new_default is required (409 otherwise) when the provider backs the default model; it must name a different provider that is connected or signed_in (400 otherwise). The server recomputes dependents and backs_default under the config lock — the response is authoritative.
+         */
+        ProviderDeleteRequest: {
+            new_default?: components["schemas"]["DefaultModelUpdateRequest"];
+        };
+        /**
+         * ProviderDeleteResponse
+         * @description Response of DELETE /api/v1/providers/{id} (ADR-068 FR-010). deleted is true on success (HTTP 200); on a failed step the server responds 500 with deleted false and a retryable state. dependents lists every reference that was cleared (agent primaries cleared, fallback entries removed) — nothing is re-pointed silently. There is no Undo: the stored key is gone.
+         */
+        ProviderDeleteResponse: {
+            /** @example true */
+            deleted: boolean;
+            dependents: components["schemas"]["ProviderDependent"][];
+            /**
+             * @description True when new_default was applied before the removal.
+             * @example false
+             */
+            default_changed: boolean;
+            new_default?: components["schemas"]["DefaultModelUpdateRequest"];
+        };
+        /**
+         * DefaultModel
+         * @description The global default model as a (provider, model) pair — the body of GET /api/v1/providers/default-model and the persisted shape of agents.defaults.default_model (ADR-068 CRIT-001; agents.defaults.model_name no longer exists). Window fields are produced by ADR-066's ResolveWindow(provider, model) (rungs without the per-agent override, cross-spec X-07) and are absent until that resolver lands. Exempt subprocess-CLI rows return context_window 0 with window_source absent. A fresh install has no default model: the GET answers 404 `{"error":"no default model"}` until onboarding's explicit pick writes the pair.
+         */
+        DefaultModel: {
+            /**
+             * @description Catalog provider id or operator-named custom row id. Empty when unset.
+             * @example openrouter
+             */
+            provider: string;
+            /**
+             * @description Bare catalog model id. Empty when unset.
+             * @example z-ai/glm-5.2
+             */
+            model: string;
+            /**
+             * @description Effective context window in tokens; 0 for exempt rows.
+             * @example 1048576
+             */
+            context_window?: number;
+            window_source?: components["schemas"]["ContextWindowSource"];
+            /**
+             * @description True iff the row has locality "local" and the live limits query failed or reported no context length (ADR-066 D3, X-08). The SPA renders "No context length" with a pointer to Settings → Models → Model overrides instead of a number.
+             * @example false
+             */
+            window_unknown?: boolean;
+        };
+        /**
+         * DefaultModelUpdateRequest
+         * @description Body for PUT /api/v1/providers/default-model (ADR-068 FR-018): exactly the (provider, model) pair. The provider must be configured and connected or signed_in (400 naming the field otherwise); the model must be in the served catalog for that provider, except rows with custom: true or locality: local, where any non-empty model is accepted with no live call. Persisted as agents.defaults.default_model under the config lock; takes effect on the next turn after a reload.
+         */
+        DefaultModelUpdateRequest: {
+            /** @example anthropic */
+            provider: string;
+            /** @example claude-sonnet-4-6 */
+            model: string;
+        };
+        /**
+         * EntitlementModel
+         * @description One row of an EntitlementResponse: a model the provider's live listing reported, or a catalog model the listing did not, annotated with whether the operator's key can reach it.
+         */
+        EntitlementModel: {
+            /**
+             * @description Bare model id as the provider reports it.
+             * @example z-ai/glm-5.2
+             */
+            id: string;
+            /**
+             * @description True iff the live listing made with this provider's key returned the model.
+             * @example true
+             */
+            entitled: boolean;
+            /**
+             * @description "known" when the model is in the served catalog (window/output/modality limits available); "unknown" when the provider returned a model the catalog lacks.
+             * @example known
+             * @enum {string}
+             */
+            limits: "known" | "unknown";
+        };
+        /**
+         * EntitlementResponse
+         * @description Response of POST /api/v1/providers/{id}/entitlement (ADR-067 FR-021, ADR-068 "Check with my account"): the catalog list for the provider annotated with entitlement (entitled true/false, limits "known") plus any models the provider returned that the catalog lacks (limits "unknown"). Cached for the gateway process keyed by SHA-256(providerID + ":" + credentialRefName) — the ref name, never the secret — and evicted on provider DELETE, on a key-changing PUT and on catalog refresh.
+         */
+        EntitlementResponse: {
+            models: components["schemas"]["EntitlementModel"][];
+            /**
+             * Format: date-time
+             * @description When the live listing call was made (the cached result keeps the original time).
+             * @example 2026-08-22T10:15:00Z
+             */
+            checked_at: string;
+            /**
+             * @description True when served from the process cache without a new upstream call.
+             * @example false
+             */
+            cached: boolean;
+        };
+        /**
+         * ProvidersCatalog
+         * @description The full registry-fed providers catalog (ADR-067 schema 2.0.0) as served by GET /api/v1/providers/catalog — providers with nested models, tier, protocol(s), unsupported reason and resize limits — plus the gateway's serving envelope: served_from (embedded snapshot or pulled release) and stale (updated_at older than 14 days). The same document feeds the media pipeline, the agent loop's window rung and the validation probe; the SPA consumes only this generated type and re-validates with If-None-Match (strong quoted ETag = SHA-256 of the served bytes) on Settings open and every 15 minutes. The handler's catalog is read-only for windows — any per-model override lives in ContextSettings.model_overrides, never here.
+         */
+        ProvidersCatalog: {
+            /**
+             * @description Document schema version. Only "2.0.0" is accepted on load (FR-001).
+             * @example 2.0.0
+             * @enum {string}
+             */
+            schema_version: "2.0.0";
+            /**
+             * @description Monotonic release version, vYYYY.M.D[.N], compared numerically (FR-002).
+             * @example v2026.8.22
+             */
+            version: string;
+            /**
+             * Format: date-time
+             * @description When the assembly job produced the document (RFC 3339).
+             * @example 2026-08-22T03:00:00Z
+             */
+            updated_at: string;
+            /**
+             * @description Free-text provenance written by the assembly job (upstream registry commit ids). Informational.
+             * @example models.dev@a1b2c3d, litellm@e4f5a6b
+             */
+            source: string;
+            default_resize_limits: components["schemas"]["CatalogResizeLimits"];
+            providers: components["schemas"]["CatalogProvider"][];
+            /**
+             * @description Gateway envelope (FR-017): "embedded" when serving the committed build-time snapshot, "pulled" when serving a release fetched at startup or by the 24 h refresh.
+             * @example pulled
+             * @enum {string}
+             */
+            served_from: "embedded" | "pulled";
+            /**
+             * @description Gateway envelope (FR-017) — true when updated_at is older than 14 days.
+             * @example false
+             */
+            stale: boolean;
+        };
+        /**
+         * CatalogProvider
+         * @description One provider of the registry-fed catalog (ADR-067 schema 2.0.0): its identity (models.dev id or local-file id), wire protocol(s), tier, auth methods, picker metadata and nested models. Custom (operator-named) rows are never in the document — they are config rows with Provider.custom: true. locality is derived by the gateway on load (ADR-067 FR-039: local ⇔ protocol ∈ {ollama, vllm} ∨ id = lmstudio ∨ custom row with a loopback/private host), never published by the assembly job.
+         */
+        CatalogProvider: {
+            /**
+             * @description Canonical provider id (models.dev id, e.g. "zai", "moonshotai-cn", or a local-file id such as "ollama").
+             * @example zai
+             */
+            id: string;
+            /**
+             * @description Display name (Unicode preserved).
+             * @example Z.ai
+             */
+            name: string;
+            /**
+             * @description Grouping key for the picker (ADR-067 X-10): one tile/row per company, its plan × region variants being the providers that share it. Comes from overrides/ via the models.dev name family; defaults to name.
+             * @example Z.ai
+             */
+            company: string;
+            /**
+             * @description Primary base URL. Absolute https with a non-empty host, no userinfo / query / fragment, no loopback, link-local, private or metadata IP literal (FR-033) — except rows with locality "local". Empty only when tier is "unsupported".
+             * @example https://api.z.ai/api/paas/v4
+             */
+            api: string;
+            /**
+             * @description Primary wire protocol the factory dispatches on (ADR-067 D11). Absent only when tier is "unsupported" (F-19).
+             * @example openai-compatible
+             * @enum {string}
+             */
+            protocol?: "openai-compatible" | "anthropic" | "google" | "ollama" | "cli";
+            /** @description Optional secondary protocols a provider offers (e.g. Z.ai's Anthropic endpoint). When present MUST include the primary with the same api; entries unique. A config may select one via ProviderUpdateRequest.protocol. */
+            protocols?: components["schemas"]["CatalogProtocol"][];
+            /**
+             * @description Opaque environment-variable hint for picker help text only; never consumed by the factory (F-20).
              * @example [
-             *       "text",
-             *       "image",
-             *       "pdf"
+             *       "ZAI_API_KEY"
              *     ]
              */
-            modalities: ("text" | "image" | "pdf" | "audio" | "video")[];
+            env?: string[];
+            /**
+             * @description Deployment region when the provider has a regional split (e.g. "intl", "china", "us").
+             * @example intl
+             */
+            region?: string;
+            /**
+             * @description Billing plan label when the provider has plan variants (e.g. "coding-plan").
+             * @example coding-plan
+             */
+            plan?: string;
+            /**
+             * @description Picker tier (ADR-067 FR-018, data not code). The popular set is rendered as pinned tiles in catalog order; "unsupported" rows are visible but disabled with unsupported_reason.
+             * @example popular
+             * @enum {string}
+             */
+            tier: "popular" | "standard" | "unsupported";
+            /**
+             * @description Required when tier is "unsupported". "cloud-iam" = needs request signing (Bedrock, Vertex, watsonx, SAP AI Core); "deployment-url" = needs a per-deployment URL (Azure); "withdrawn" = vanished upstream. Never shown raw — the SPA maps it to copy.
+             * @example cloud-iam
+             * @enum {string}
+             */
+            unsupported_reason?: "cloud-iam" | "deployment-url" | "withdrawn";
+            /**
+             * @description Auth methods the provider offers (ADR-068 FR-004); the UI renders a sign-in control only when sign_in is present.
+             * @example [
+             *       "api_key"
+             *     ]
+             */
+            auth_methods: ("api_key" | "sign_in")[];
+            /**
+             * @description Search-only strings for the picker's filter (ADR-067 FR-030). Never consulted by resolution, the factory or config validation — an alias is not an accepted provider id.
+             * @example [
+             *       "z-ai",
+             *       "zhipu"
+             *     ]
+             */
+            aliases: string[];
+            /**
+             * @description Derived on load by the gateway (FR-039); the only local/cloud classification ADR-066/ADR-068 consume.
+             * @example cloud
+             * @enum {string}
+             */
+            locality: "local" | "cloud";
+            /**
+             * @description Required iff protocol is "cli" — selects the subprocess driver (ADR-067 X-14), never chosen by id.
+             * @example codex
+             * @enum {string}
+             */
+            cli_kind?: "codex" | "copilot";
+            /**
+             * @description Optional token source for sign-in HTTP rows (e.g. "codex-auth-json" for openai-chatgpt, X-41).
+             * @example codex-auth-json
+             */
+            token_source?: string;
+            resize_limits?: components["schemas"]["CatalogResizeLimits"];
+            /** @description The provider's models. May be empty (e.g. an unknown-provider row or a local endpoint listed live). */
+            models: components["schemas"]["CatalogModel"][];
+        };
+        /**
+         * CatalogModel
+         * @description One model of a catalog provider (ADR-067 schema 2.0.0). Looked up by the exact (provider id, model id) pair — never by model id alone and never with prefix stripping. Limits are authored upstream; a 0 means unknown and is reported as such to consumers (ADR-066's ladder decides what to do). window_source and window_unknown are ADR-066-owned projection fields added by the gateway when it serves the document (X-08); they are never part of the published asset.
+         */
+        CatalogModel: {
+            /**
+             * @description Bare model id as the provider's API expects it (e.g. "glm-5.2", "z-ai/glm-5.2" on OpenRouter).
+             * @example glm-5.2
+             */
+            id: string;
+            /**
+             * @description Display name (Unicode preserved).
+             * @example GLM-5.2
+             */
+            name: string;
+            /**
+             * @description Release date as YYYY-MM-DD. Optional; undated models sort last in the picker.
+             * @example 2026-07-01
+             */
+            release_date?: string;
+            /**
+             * @description Context window in tokens; 0 = unknown.
+             * @example 1000000
+             */
+            context_window: number;
+            /**
+             * @description Maximum output tokens; 0 = unknown.
+             * @example 131072
+             */
+            max_output_tokens: number;
+            /**
+             * @description Input modalities the model accepts. MUST include "text".
+             * @example [
+             *       "text",
+             *       "image"
+             *     ]
+             */
+            input_modalities: ("text" | "image" | "pdf" | "audio" | "video")[];
+            /**
+             * @description Whether the model supports tool calling.
+             * @example true
+             */
+            tool_call: boolean;
+            /**
+             * @description "retired" rows are carried forward when the model vanishes upstream (ADR-067 §8b); they are not offered for new selection.
+             * @example active
+             * @enum {string}
+             */
+            status: "active" | "retired";
+            /**
+             * @description True when the two upstream registries disagreed on a numeric field beyond the tolerance and the last-known-good value was published (ADR-067 US-2.AC2). Informational.
+             * @example false
+             */
+            disputed?: boolean;
+            window_source?: components["schemas"]["ContextWindowSource"];
+            /**
+             * @description ADR-066 projection (X-08): true iff the provider has locality "local" and the live limits query failed or reported no context length. The SPA renders "No context length" with a link to Settings → Models → Model overrides. Never a Provider.status value.
+             * @example false
+             */
+            window_unknown?: boolean;
+        };
+        /**
+         * CatalogProtocol
+         * @description One wire protocol a catalog provider offers, with the base URL to use for it. When a provider lists protocols[], the list MUST include the primary protocol with the same api URL; entries are unique (ADR-067 FR-002, F-19).
+         */
+        CatalogProtocol: {
+            /**
+             * @example anthropic
+             * @enum {string}
+             */
+            protocol: "openai-compatible" | "anthropic" | "google" | "ollama" | "cli";
+            /**
+             * @description Absolute https base URL for this protocol (FR-033 URL rule; local rows may use http).
+             * @example https://api.z.ai/api/anthropic
+             */
+            api: string;
+        };
+        /**
+         * CatalogResizeLimits
+         * @description Image resize limits applied by the media pipeline before an attachment is sent to a provider (ADR-067 [A-10]). The document carries one default and an optional per-provider value.
+         */
+        CatalogResizeLimits: {
+            /**
+             * @description Longest image edge in pixels after resize.
+             * @example 2000
+             */
+            long_edge_px: number;
+            /**
+             * @description Maximum encoded image size in bytes.
+             * @example 5242880
+             */
+            max_bytes: number;
+        };
+        /**
+         * ContextWindowSource
+         * @description Which rung of the ADR-066 D2 resolution ladder produced an effective context window. Owned by ADR-066; $ref'd by Agent.context_window_source, DefaultModel.window_source and CatalogModel.window_source — never an inline enum anywhere else (cross-spec X-06). "operator" = a per-agent, per-(provider, model) or global operator override (ContextSettings); "live" = the provider's own limits endpoint (cached 24 h); "catalog" = the registry-fed providers catalog (ADR-067); "floor" = the conservative cloud floor applied when nothing else knew the window (WARN logged). There is no "learned" value (ADR-066 D8 was not adopted).
+         * @enum {string}
+         */
+        ContextWindowSource: "operator" | "live" | "catalog" | "floor";
+        /**
+         * ContextModelOverride
+         * @description One per-(provider, model) operator override of the context window (ADR-066 D2 rung 2). Keyed on the exact catalog pair; the override can only lower the effective window (min(override, capability)), never raise it. Rows whose provider no longer exists are ignored by the resolver and pruned on the next settings write; DELETE /providers/{id} removes the provider's rows (ADR-068 FR-010 step 2b).
+         */
+        ContextModelOverride: {
+            /**
+             * @description Catalog provider id or operator-named custom row id.
+             * @example openrouter
+             */
+            provider: string;
+            /**
+             * @description Bare catalog model id (no provider prefix).
+             * @example z-ai/glm-5.2
+             */
+            model: string;
+            /**
+             * @description Context window in tokens. 400 when below 1.
+             * @example 200000
+             */
+            context_window: number;
+        };
+        /**
+         * ContextSettings
+         * @description Global context-budget controls (ADR-066 D9), as returned by GET /api/v1/settings/context and echoed by PUT. User-facing location is Settings → Models. Every successful PUT triggers a registry reload so the next turn uses the new values without a restart. Readable and writable by any authenticated user (withAuth, the /settings/memory precedent — not RequireNotBypass).
+         */
+        ContextSettings: {
+            /**
+             * @description Per-result cap (chars) for a successful MCP tool result entering the window (ADR-066 D4 "mcp" surface). Default 62,500; ceiling 150,000.
+             * @example 62500
+             */
+            mcp_result_cap: number;
+            /**
+             * @description Per-result cap (chars) for a successful builtin tool result, hydrated attachment, recall page or delegate report (D4 "builtin-success" surface). Default 64,000; ceiling 150,000.
+             * @example 64000
+             */
+            builtin_success_cap: number;
+            /**
+             * @description Per-result cap (chars) for a failed, denied or skipped tool result — builtin or MCP (D4 "builtin-failure" surface). Default 10,000; ceiling 150,000.
+             * @example 10000
+             */
+            builtin_failure_cap: number;
+            /**
+             * @description Absolute tool-result share trigger (chars) for the mid-turn window check (D6); the token share is this ÷ 2.5. Default 400,000.
+             * @example 400000
+             */
+            absolute_trigger_chars: number;
+            /**
+             * @description Maximum bytes read from any network or subprocess source at ingest (D10). Must be strictly below 8,388,608 (0.8 × the archive line size). Default 8,000,000.
+             * @example 8000000
+             */
+            ingest_bound_bytes: number;
+            /**
+             * @description Global default context window (tokens), D2 rung 3 — the single home of this setting (agents.defaults.context_window no longer exists). Absent or null when unset. Clamped to the model's capability on resolution.
+             * @example 128000
+             */
+            default_context_window?: number | null;
+            /** @description Per-(provider, model) context-window overrides (D2 rung 2). Empty array when none. */
+            model_overrides: components["schemas"]["ContextModelOverride"][];
+        };
+        /**
+         * ContextSettingsUpdate
+         * @description Partial update body for PUT /api/v1/settings/context (ADR-066 D9). Every field is optional; an omitted field is unchanged. Validation (400 naming the field and the limit): any cap > 150,000 or < 1; absolute_trigger_chars < 1; ingest_bound_bytes ≥ 8,388,608 or < 1; model_overrides[].context_window < 1. Set default_context_window to null to clear it. model_overrides, when present, replaces the whole list.
+         */
+        ContextSettingsUpdate: {
+            /** @example 62500 */
+            mcp_result_cap?: number;
+            /** @example 64000 */
+            builtin_success_cap?: number;
+            /** @example 10000 */
+            builtin_failure_cap?: number;
+            /** @example 400000 */
+            absolute_trigger_chars?: number;
+            /** @example 8000000 */
+            ingest_bound_bytes?: number;
+            /** @example 128000 */
+            default_context_window?: number | null;
+            model_overrides?: components["schemas"]["ContextModelOverride"][];
         };
         /** @description Body for POST /auth/reauth. Re-verifies the single user's one password before a sensitive settings change is permitted (FR-12.2). This is a consent primitive, NOT the dev-mode bypass guard (RequireNotBypass returns 503 in dev mode and is unrelated). A successful re-auth mints a short-lived re-auth token the SPA attaches to the subsequent sensitive request. */
         ReAuthRequest: {
@@ -5975,70 +6842,6 @@ export interface components {
              * @example New session
              */
             summary?: string;
-        };
-        /** @description A single entry in the provider catalog — the curated, build-time-embedded registry of 23 user-facing LLM provider variants. Each entry represents one billable endpoint (company × plan × region), not a raw protocol id. Delivered as a build-time go:embed artifact + a generated TypeScript catalog; never served from a live HTTP endpoint (FR-016, ADR-031 §6 G-2). The type is contract-defined (Constraint #8) so the same generated struct is used in the Go catalog SoT and the generated TS consumer. No secret fields. */
-        ProviderCatalogEntry: {
-            /**
-             * @description Canonical protocol identifier — matches a knownProtocols entry and a member of the ProbeProviderRequest id enum. Used as the primary key for probe, configure, and drift-guard lookups.
-             * @example z-ai-coding
-             */
-            id: string;
-            /**
-             * @description Human-readable company/brand name. Used as the group header in the configured-providers list. Multiple catalog entries share the same company when one vendor exposes multiple endpoints (plan × region).
-             * @example Zhipu / GLM
-             */
-            company: string;
-            /**
-             * @description Billing plan for this variant. "standard-api" = pay-as-you-go per-token API (formerly "api" in the onboarding PLAN_LABELS). "coding-plan" = subscription-based coding plan (unchanged label). The legacy "anthropic" plan value is NOT in this enum — it was a mislabeled wire protocol; the wire field carries that information instead (ADR-031 FR-006).
-             * @example standard-api
-             * @enum {string}
-             */
-            plan: "standard-api" | "coding-plan";
-            /**
-             * @description Deployment region, when the provider has a regional split. Omitted for providers with a single global endpoint (e.g. OpenAI, DeepSeek).
-             * @example intl
-             * @enum {string}
-             */
-            region?: "intl" | "china" | "us";
-            /**
-             * @description Wire protocol used to call this endpoint. Derived, not authored: "anthropic" when id matches /-anthropic$/ or id ∈ {anthropic, anthropic-messages, bedrock}; otherwise "openai-compatible" (ADR-031 FR-005). Internal config detail — surfaced only via the Endpoint-format toggle for dual-wire entries in Settings; never a UI badge or plan option.
-             * @example openai-compatible
-             * @enum {string}
-             */
-            wire: "openai-compatible" | "anthropic";
-            /**
-             * @description Curated display host for this endpoint (e.g. "api.z.ai/api/coding/paas/v4"). Hand-authored, NOT derived from GetDefaultAPIBase (which returns full URLs the display doesn't need). For deployment-configured providers, this is a placeholder template (e.g. "<resource>.openai.azure.com"). Shown in the subtitle and the variant config Sheet (ADR-031 R2-01/R2-03).
-             * @example api.z.ai/api/coding/paas/v4
-             */
-            endpointHint: string;
-            /**
-             * @description Asset key for the <BrandIcon> component. Maps to a vendored SVG in src/assets/brand-logos/p_<logoSlug>.svg. When no SVG exists for the slug, BrandIcon falls back to a lettermark chip (FR-011, FR-013). Companies with no vendored SVG use a short id (e.g. "cerebras", "nvidia") which triggers the lettermark path.
-             * @example zhipu
-             */
-            logoSlug: string;
-            /**
-             * @description Full human-readable label for this variant. Standard-api entries use "<Brand> [(Region)]" (no access-type suffix); coding-plan entries use "<Brand> — Coding Plan [(Region)]". Carried on the wire so onboarding and Settings render identical text from one catalog source (ADR-031 FR-007, G-3=C safety guarantee). Example: "Zhipu / GLM — Coding Plan (International)".
-             * @example Zhipu / GLM — Coding Plan (International)
-             */
-            label: string;
-            /**
-             * @description Short billing-model description and endpoint hint. Shown below the label in the picker and Sheet. Format: "<billing model> · <endpointHint>". Example: "Subscription (Coding Plan) · api.z.ai/api/coding/paas/v4".
-             * @example Subscription (Coding Plan) · api.z.ai/api/coding/paas/v4
-             */
-            subtitle: string;
-            /**
-             * @description Additional protocol ids that map to this catalog entry. Derived from the GetDefaultAPIBase switch: ids grouped in the same case share a base URL and are aliases. The aliases list excludes the canonical id itself. Used by the migration resolver to normalize stored alias ids to the canonical catalog entry (ADR-031 §7 G-4, FR-012, US-8).
-             * @example [
-             *       "glm-coding",
-             *       "zhipu-coding"
-             *     ]
-             */
-            aliases?: string[];
-            /**
-             * @description Sibling protocol id exposing the Anthropic-compatible endpoint for the same account/API key (e.g. z-ai → z-ai-anthropic). Present only for dual-wire providers; the UI offers it as an endpoint-format choice inside config, never as a separate provider row.
-             * @example z-ai-anthropic
-             */
-            anthropic_id?: string;
         };
         /** @description Metadata for a single successfully uploaded file, as returned in the POST /upload response body's "files" array. Callers use the path field to construct the /api/v1/uploads/{session_id}/{filename} download URL. */
         UploadedFile: {
@@ -7967,6 +8770,23 @@ export interface components {
          * @description Request body for PUT /api/v1/providers/{id}. Adds or updates an LLM provider configuration. On new providers, api_key is required. On existing providers, api_key may be omitted to keep the current key.
          */
         ProviderUpdateRequest: {
+            /**
+             * @description Wire protocol to use (ADR-067 FR-013/FR-014). For a catalog provider: optional; absent → the catalog's primary; a protocol the provider does not offer → 400. For a custom row (id not in the catalog): required and restricted to openai-compatible | anthropic (400 otherwise).
+             * @example openai-compatible
+             * @enum {string}
+             */
+            protocol?: "openai-compatible" | "anthropic" | "google" | "ollama" | "cli";
+            /**
+             * @description Auth method for this row (ADR-068). Absent → api_key. sign_in is accepted only for providers whose catalog auth_methods include it (400 otherwise) and must not be combined with api_key.
+             * @example api_key
+             * @enum {string}
+             */
+            auth_method?: "api_key" | "sign_in";
+            /**
+             * @description Explicit base URL. Required for a custom row; optional override for a catalog provider (wins over the catalog row). SSRF-checked.
+             * @example https://my-proxy.example.com/v1
+             */
+            api_base?: string;
             /**
              * @description API key for the provider. Stored encrypted (AES-256-GCM) in credentials.json. Required when adding a new provider; optional when updating an existing one (omit to leave the current key unchanged).
              * @example sk-abc123
@@ -11531,6 +12351,7 @@ export interface operations {
             };
             400: components["responses"]["400BadRequest"];
             409: components["responses"]["409Conflict"];
+            429: components["responses"]["429TooManyRequests"];
         };
     };
     listSessions: {
@@ -12180,6 +13001,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Gateway is degraded; the body names the reason. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HealthResponse"];
                 };
             };
         };
@@ -13132,6 +13962,53 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            401: components["responses"]["401Unauthorized"];
+        };
+    };
+    getContextSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current context settings. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContextSettings"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+        };
+    };
+    updateContextSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ContextSettingsUpdate"];
+            };
+        };
+        responses: {
+            /** @description The stored settings after the update. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContextSettings"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
         };
     };
@@ -14456,6 +15333,112 @@ export interface operations {
             };
         };
     };
+    getProvidersCatalog: {
+        parameters: {
+            query?: never;
+            header?: {
+                /**
+                 * @description The quoted strong ETag from a previous 200. Exact match → 304.
+                 * @example "3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                 */
+                "If-None-Match"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The catalog document with its serving envelope. */
+            200: {
+                headers: {
+                    /** @description Quoted strong ETag — the SHA-256 of the served bytes. */
+                    ETag?: string;
+                    /** @description Always `private, max-age=0, must-revalidate`. */
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProvidersCatalog"];
+                };
+            };
+            /** @description If-None-Match matched the current ETag exactly; no body. */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["401Unauthorized"];
+            /** @description No catalog is available (construction failed at boot). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    getDefaultModel: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The current default model. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DefaultModel"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            /** @description No default model is set (fresh install before onboarding's explicit pick): `{"error":"no default model"}`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            503: components["responses"]["503BypassActive"];
+        };
+    };
+    updateDefaultModel: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DefaultModelUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description The stored default model, with window fields when resolvable. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DefaultModel"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            500: components["responses"]["500InternalServerError"];
+            503: components["responses"]["503BypassActive"];
+        };
+    };
     updateProvider: {
         parameters: {
             query?: never;
@@ -14495,7 +15478,60 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            429: components["responses"]["429TooManyRequests"];
             /** @description Credential store locked. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    deleteProvider: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Configured provider id (catalog id or custom row id).
+                 * @example openrouter
+                 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["ProviderDeleteRequest"];
+            };
+        };
+        responses: {
+            /** @description Provider removed; dependents cleared; key deleted. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProviderDeleteResponse"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+            409: components["responses"]["409Conflict"];
+            /** @description A deletion step failed; state is retryable. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProviderDeleteResponse"];
+                };
+            };
+            /** @description Credential store locked, or dev-mode bypass active. */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -14531,9 +15567,132 @@ export interface operations {
                 };
             };
             401: components["responses"]["401Unauthorized"];
+            429: components["responses"]["429TooManyRequests"];
         };
     };
-    listModelCapabilities: {
+    startProviderSignIn: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Provider id whose catalog row declares sign_in (e.g. "codex-cli", "openai-chatgpt", "github-copilot").
+                 * @example codex-cli
+                 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The sign-in instruction or device-code session for this provider. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SignInStartResponse"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            429: components["responses"]["429TooManyRequests"];
+            503: components["responses"]["503BypassActive"];
+        };
+    };
+    signOutProvider: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Provider id to sign out.
+                 * @example openai-chatgpt
+                 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Sign-out result. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperationResult"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            503: components["responses"]["503BypassActive"];
+        };
+    };
+    getProviderSignInStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Provider id whose catalog row declares sign_in.
+                 * @example codex-cli
+                 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The current sign-in state. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SignInStatus"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            503: components["responses"]["503BypassActive"];
+        };
+    };
+    pollProviderSignIn: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Provider id whose catalog row declares sign_in and uses method device_code.
+                 * @example openai-chatgpt
+                 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SignInPollRequest"];
+            };
+        };
+        responses: {
+            /** @description The current poll state. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SignInPollResponse"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+            429: components["responses"]["429TooManyRequests"];
+            503: components["responses"]["503BypassActive"];
+        };
+    };
+    importCodexSignIn: {
         parameters: {
             query?: never;
             header?: never;
@@ -14542,16 +15701,50 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Array of per-model capability entries. Empty when the catalog is unavailable. */
+            /** @description The resulting sign-in state after import. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ModelCapabilities"][];
+                    "application/json": components["schemas"]["SignInStatus"];
                 };
             };
             401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+            503: components["responses"]["503BypassActive"];
+        };
+    };
+    checkProviderEntitlement: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Configured provider id.
+                 * @example openrouter
+                 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Catalog models annotated with entitlement. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EntitlementResponse"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+            409: components["responses"]["409Conflict"];
+            422: components["responses"]["422UnprocessableEntity"];
+            429: components["responses"]["429TooManyRequests"];
+            502: components["responses"]["502BadGateway"];
         };
     };
     listCommands: {
@@ -17208,6 +18401,14 @@ export type BrowserInspectRequest = components["schemas"]["BrowserInspectRequest
 export type BrowserInspectResponse = components["schemas"]["BrowserInspectResponse"];
 export type ChangePasswordRequest = components["schemas"]["ChangePasswordRequest"];
 export type OnboardingCompleteRequest = components["schemas"]["OnboardingCompleteRequest"];
+export type OnboardingProviderApiKey = components["schemas"]["OnboardingProviderApiKey"];
+export type OnboardingProviderSignIn = components["schemas"]["OnboardingProviderSignIn"];
+export type SignInStartResponse = components["schemas"]["SignInStartResponse"];
+export type SignInStartResponseCliLogin = components["schemas"]["SignInStartResponseCliLogin"];
+export type SignInStartResponseDeviceCode = components["schemas"]["SignInStartResponseDeviceCode"];
+export type SignInStatus = components["schemas"]["SignInStatus"];
+export type SignInPollRequest = components["schemas"]["SignInPollRequest"];
+export type SignInPollResponse = components["schemas"]["SignInPollResponse"];
 export type OnboardingCompleteResponse = components["schemas"]["OnboardingCompleteResponse"];
 export type ProbeProviderRequest = components["schemas"]["ProbeProviderRequest"];
 export type ProbeProviderResponse = components["schemas"]["ProbeProviderResponse"];
@@ -17287,7 +18488,22 @@ export type GatewayStatus = components["schemas"]["GatewayStatus"];
 export type PerformanceSettings = components["schemas"]["PerformanceSettings"];
 export type PerformanceSettingsUpdate = components["schemas"]["PerformanceSettingsUpdate"];
 export type Provider = components["schemas"]["Provider"];
-export type ModelCapabilities = components["schemas"]["ModelCapabilities"];
+export type ProviderDependent = components["schemas"]["ProviderDependent"];
+export type ProviderDeleteRequest = components["schemas"]["ProviderDeleteRequest"];
+export type ProviderDeleteResponse = components["schemas"]["ProviderDeleteResponse"];
+export type DefaultModel = components["schemas"]["DefaultModel"];
+export type DefaultModelUpdateRequest = components["schemas"]["DefaultModelUpdateRequest"];
+export type EntitlementModel = components["schemas"]["EntitlementModel"];
+export type EntitlementResponse = components["schemas"]["EntitlementResponse"];
+export type ProvidersCatalog = components["schemas"]["ProvidersCatalog"];
+export type CatalogProvider = components["schemas"]["CatalogProvider"];
+export type CatalogModel = components["schemas"]["CatalogModel"];
+export type CatalogProtocol = components["schemas"]["CatalogProtocol"];
+export type CatalogResizeLimits = components["schemas"]["CatalogResizeLimits"];
+export type ContextWindowSource = components["schemas"]["ContextWindowSource"];
+export type ContextModelOverride = components["schemas"]["ContextModelOverride"];
+export type ContextSettings = components["schemas"]["ContextSettings"];
+export type ContextSettingsUpdate = components["schemas"]["ContextSettingsUpdate"];
 export type ReAuthRequest = components["schemas"]["ReAuthRequest"];
 export type ReAuthResponse = components["schemas"]["ReAuthResponse"];
 export type IntegrationProvider = components["schemas"]["IntegrationProvider"];
@@ -17297,7 +18513,6 @@ export type TranscribeResponse = components["schemas"]["TranscribeResponse"];
 export type Skill = components["schemas"]["Skill"];
 export type SlashCommand = components["schemas"]["SlashCommand"];
 export type ActivityEvent = components["schemas"]["ActivityEvent"];
-export type ProviderCatalogEntry = components["schemas"]["ProviderCatalogEntry"];
 export type UploadedFile = components["schemas"]["UploadedFile"];
 export type SandboxConfigUpdate = components["schemas"]["SandboxConfigUpdate"];
 export type Task = components["schemas"]["Task"];

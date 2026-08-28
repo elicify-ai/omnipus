@@ -41,15 +41,49 @@ type AgentInstance struct {
 	// at config-load time via config.NormalizeFallbacks, so by the time this
 	// slice reaches the agent every entry carries a populated Provider (or an
 	// empty one if no configured provider matched).
-	FallbackModels        []config.FallbackModel
-	Home                  string
-	MaxIterations         int
-	MaxTokens             int
-	Temperature           float64
-	ThinkingLevel         ThinkingLevel
-	ContextWindow         int
-	SummarizeTokenPercent int
-	Provider              providers.LLMProvider
+	FallbackModels []config.FallbackModel
+	Home           string
+	MaxIterations  int
+	MaxTokens      int
+	// configuredMaxTokens is the CONFIGURED max_tokens, before the FR-005b
+	// window clamp. MaxTokens is the clamped value the turn actually uses.
+	//
+	// The two must stay separate: clampMaxTokensForWindow only ever LOWERS,
+	// so feeding the already-clamped MaxTokens back into it on every model
+	// switch made the value monotonically decreasing for the lifetime of the
+	// process. Switching to an 8k-window model and back to a 200k one left
+	// the agent capped at the small model's window/4 forever — silently, with
+	// no log line and no way back short of a restart. Every re-clamp reads
+	// this field, never MaxTokens.
+	configuredMaxTokens int
+	Temperature         float64
+	ThinkingLevel       ThinkingLevel
+	// ContextWindow is the effective window resolved by the ADR-066 D2
+	// ladder (ResolveWindow) at construction and on every model switch. 0
+	// when the provider is exempt (WindowExempt) or the window is unknown
+	// (WindowUnknown). Written under mu by ApplyAgentModel; read through
+	// windowSnapshot on the turn path so a switch can never tear it.
+	ContextWindow int
+	// WindowSource / WindowClamped / WindowExempt / WindowUnknown are the
+	// rest of the resolution (see WindowResolution); the gateway projects
+	// them as context_window_source / context_window_clamped.
+	WindowSource  WindowSource
+	WindowClamped bool
+	WindowExempt  bool
+	WindowUnknown bool
+	// needsProvider / needsProviderID are ADR-067 FR-016's per-agent degrade:
+	// the PRIMARY candidate pins a provider id that is neither a catalog id
+	// nor a constructible custom row. runTurn refuses such a turn FIRST in
+	// the pre-turn gate with LLMError code needs_provider and makes zero
+	// upstream requests; the gateway projects the same state independently
+	// as Agent.degraded_reason. needsProviderID is the operator's own
+	// spelling of the id, carried so the WARN can name it (and nothing else
+	// — SC-010). Written under mu at construction and on every model switch;
+	// read through needsProviderSnapshot on the turn path so a concurrent
+	// ApplyAgentModel can never be observed torn.
+	needsProvider   bool
+	needsProviderID string
+	Provider        providers.LLMProvider
 	// providerPool is the atomic-pointer form of ProviderPool. The pool is
 	// keyed by provider name and holds one LLMProvider instance per distinct
 	// provider referenced by Candidates (or by the light tier). The fallback
@@ -254,32 +288,16 @@ func NewAgentInstance(
 		maxTokens = 8192
 	}
 
-	contextWindow := defaults.ContextWindow
-	if contextWindow == 0 {
-		// Default heuristic: 4x the output token limit.
-		// Most models have context windows well above their output limits
-		// (e.g., GPT-4o 128k ctx / 16k out, Claude 200k ctx / 8k out).
-		// 4x is a conservative lower bound that avoids premature
-		// summarization while remaining safe — the reactive
-		// windowTrim (context paging) handles any overshoot.
-		contextWindow = maxTokens * 4
-	}
-
 	temperature := 0.7
 	if defaults.Temperature != nil {
 		temperature = *defaults.Temperature
 	}
 
 	var thinkingLevelStr string
-	if mc, err := cfg.GetModelConfig(model); err == nil {
+	if mc, err := cfg.FindModelConfigBySlug(model); err == nil {
 		thinkingLevelStr = mc.ThinkingLevel
 	}
 	thinkingLevel := parseThinkingLevel(thinkingLevelStr)
-
-	summarizeTokenPercent := defaults.SummarizeTokenPercent
-	if summarizeTokenPercent == 0 {
-		summarizeTokenPercent = 75
-	}
 
 	// Resolve fallback candidates. Prefer the provider-aware resolver when
 	// AgentConfig.FallbackModels (or a derived equivalent) is populated so a
@@ -290,9 +308,9 @@ func NewAgentInstance(
 	// O3 two-field model: when the agent pins an explicit primary provider, the
 	// primary candidate routes through it directly (never inferred). Empty
 	// provider preserves the pre-O3 selection exactly.
-	primaryProvider := resolveAgentPrimaryProvider(agentCfg)
+	primaryProvider := resolveAgentPrimaryProvider(agentCfg, defaults)
 	candidates := resolveAgentCandidatesWithPrimaryProvider(
-		cfg, defaults.Provider, model, primaryProvider, fallbackModels, fallbacks)
+		cfg, defaults.DefaultModel.Provider, model, primaryProvider, fallbackModels, fallbacks)
 
 	// Pre-build the provider pool for every distinct provider referenced by
 	// the resolved candidate chain. FR-007 requires each fallback to use its
@@ -300,7 +318,21 @@ func NewAgentInstance(
 	// construction (vs. lazily inside the fallback hot path) keeps the
 	// per-turn hot path allocation-free and surfaces credential / API-base
 	// config errors at startup instead of mid-conversation.
-	providerPool := buildProviderPool(cfg, candidates)
+	poolBuild := buildProviderPool(cfg, candidates, agentID)
+
+	// ADR-066 D2: the context window comes from the ONE resolver, keyed by
+	// the primary candidate's (provider, model) pair and this agent's id so
+	// the per-agent override applies. There is no heuristic fallback: an
+	// exempt provider gets 0 and skips every budget check; a local endpoint
+	// nobody can size gets 0 and is refused at turn start (D3).
+	windowProvider, windowModel := primaryWindowPair(candidates, defaults.DefaultModel.Provider, model)
+	window := ResolveWindow(cfg, windowProvider, windowModel, agentID)
+	contextWindow := window.Window
+	// FR-005b: max_tokens must leave a positive budget B for the window.
+	// Keep the configured value: every later re-clamp (a model switch) must
+	// start from it, never from the already-clamped result.
+	configuredMaxTokens := maxTokens
+	maxTokens = clampMaxTokensForWindow(contextWindow, maxTokens, model)
 
 	// Model routing setup: pre-resolve light model candidates at creation time
 	// to avoid repeated model_list lookups on every incoming message.
@@ -308,7 +340,7 @@ func NewAgentInstance(
 	var lightCandidates []providers.FallbackCandidate
 	var lightProvider providers.LLMProvider
 	if rc := defaults.Routing; rc != nil && rc.Enabled && rc.LightModel != "" {
-		resolved := resolveModelCandidates(cfg, defaults.Provider, rc.LightModel, nil)
+		resolved := resolveModelCandidates(cfg, defaults.DefaultModel.Provider, rc.LightModel, nil)
 		if len(resolved) > 0 {
 			lightModelCfg, err := resolvedModelConfig(cfg, rc.LightModel, workspace)
 			if err != nil {
@@ -367,35 +399,41 @@ func NewAgentInstance(
 	// RouteResolver.resolveDefaultAgentID — see those functions' doc
 	// comments for the current (3-priority) ladder.
 	inst := &AgentInstance{
-		ID:                    agentID,
-		Name:                  agentName,
-		Model:                 model,
-		Fallbacks:             fallbacks,
-		FallbackModels:        fallbackModels,
-		Home:                  workspace,
-		MaxIterations:         maxIter,
-		MaxTokens:             maxTokens,
-		Temperature:           temperature,
-		ThinkingLevel:         thinkingLevel,
-		ContextWindow:         contextWindow,
-		SummarizeTokenPercent: summarizeTokenPercent,
-		Provider:              provider,
-		Sessions:              sessions,
-		ContextBuilder:        contextBuilder,
-		Tools:                 toolsRegistry,
-		Subagents:             subagents,
-		SkillsFilter:          skillsFilter,
-		Candidates:            candidates,
-		Router:                router,
-		LightCandidates:       lightCandidates,
-		LightProvider:         lightProvider,
-		TimeoutSeconds:        timeoutSeconds,
-		AgentType:             resolvedAgentType,
+		ID:                  agentID,
+		Name:                agentName,
+		Model:               model,
+		Fallbacks:           fallbacks,
+		FallbackModels:      fallbackModels,
+		Home:                workspace,
+		MaxIterations:       maxIter,
+		MaxTokens:           maxTokens,
+		configuredMaxTokens: configuredMaxTokens,
+		Temperature:         temperature,
+		ThinkingLevel:       thinkingLevel,
+		ContextWindow:       contextWindow,
+		WindowSource:        window.Source,
+		WindowClamped:       window.Clamped,
+		WindowExempt:        window.Exempt,
+		WindowUnknown:       window.Unknown,
+		needsProvider:       poolBuild.primaryUnknown,
+		needsProviderID:     poolBuild.primaryProvider,
+		Provider:            provider,
+		Sessions:            sessions,
+		ContextBuilder:      contextBuilder,
+		Tools:               toolsRegistry,
+		Subagents:           subagents,
+		SkillsFilter:        skillsFilter,
+		Candidates:          candidates,
+		Router:              router,
+		LightCandidates:     lightCandidates,
+		LightProvider:       lightProvider,
+		TimeoutSeconds:      timeoutSeconds,
+		AgentType:           resolvedAgentType,
 	}
 	// Publish the eagerly-built pool. StoreProviderPool uses the atomic
 	// pointer; calling it here (vs. direct field assignment) keeps the
 	// publish path identical to the model-switch path in ApplyAgentModel.
-	inst.StoreProviderPool(providerPool)
+	inst.StoreProviderPool(poolBuild.pool)
 	// O7: thread the global sandbox tool policies into the runtime policy
 	// snapshot so FilterToolsByPolicy enforces global × agent merge at call
 	// time. Build the policy even when the agent has no per-agent tools
@@ -533,34 +571,46 @@ func (a *AgentInstance) snapshotForExternalDispatch() *AgentInstance {
 	provider := a.Provider
 	candidates := a.Candidates
 	thinkingLevel := a.ThinkingLevel
+	contextWindow := a.ContextWindow
+	windowSource := a.WindowSource
+	windowClamped := a.WindowClamped
+	windowExempt := a.WindowExempt
+	windowUnknown := a.WindowUnknown
+	needsProvider := a.needsProvider
+	needsProviderID := a.needsProviderID
 	pool := a.providerPool.Load()
 	a.mu.RUnlock()
 
 	out := &AgentInstance{
-		ID:                    a.ID,
-		Name:                  a.Name,
-		Model:                 model,
-		Fallbacks:             a.Fallbacks,
-		FallbackModels:        a.FallbackModels,
-		Home:                  a.Home,
-		MaxIterations:         a.MaxIterations,
-		MaxTokens:             a.MaxTokens,
-		Temperature:           a.Temperature,
-		ThinkingLevel:         thinkingLevel,
-		ContextWindow:         a.ContextWindow,
-		SummarizeTokenPercent: a.SummarizeTokenPercent,
-		Provider:              provider,
-		Sessions:              a.Sessions,
-		ContextBuilder:        a.ContextBuilder,
-		Tools:                 a.Tools,
-		Subagents:             a.Subagents,
-		SkillsFilter:          a.SkillsFilter,
-		Candidates:            candidates,
-		TimeoutSeconds:        a.TimeoutSeconds,
-		AgentType:             a.AgentType,
-		Router:                a.Router,
-		LightCandidates:       a.LightCandidates,
-		LightProvider:         a.LightProvider,
+		ID:              a.ID,
+		Name:            a.Name,
+		Model:           model,
+		Fallbacks:       a.Fallbacks,
+		FallbackModels:  a.FallbackModels,
+		Home:            a.Home,
+		MaxIterations:   a.MaxIterations,
+		MaxTokens:       a.MaxTokens,
+		Temperature:     a.Temperature,
+		ThinkingLevel:   thinkingLevel,
+		ContextWindow:   contextWindow,
+		WindowSource:    windowSource,
+		WindowClamped:   windowClamped,
+		WindowExempt:    windowExempt,
+		WindowUnknown:   windowUnknown,
+		needsProvider:   needsProvider,
+		needsProviderID: needsProviderID,
+		Provider:        provider,
+		Sessions:        a.Sessions,
+		ContextBuilder:  a.ContextBuilder,
+		Tools:           a.Tools,
+		Subagents:       a.Subagents,
+		SkillsFilter:    a.SkillsFilter,
+		Candidates:      candidates,
+		TimeoutSeconds:  a.TimeoutSeconds,
+		AgentType:       a.AgentType,
+		Router:          a.Router,
+		LightCandidates: a.LightCandidates,
+		LightProvider:   a.LightProvider,
 	}
 	if pool != nil {
 		out.StoreProviderPool(*pool)
@@ -569,18 +619,54 @@ func (a *AgentInstance) snapshotForExternalDispatch() *AgentInstance {
 	return out
 }
 
+// providerPoolBuild is everything buildProviderPool decided for one agent:
+// the pool itself, plus whether the PRIMARY candidate pins a provider id that
+// is UNKNOWN (ADR-067 FR-016). An unknown primary is the agent's
+// `needs_provider` degrade — it refuses every turn with zero upstream
+// requests and the gateway projects it as Agent.degraded_reason. An unknown
+// FALLBACK is not: it is dropped from the pool and the agent runs on the
+// rest (DS-8 rows 3 and 6).
+type providerPoolBuild struct {
+	pool map[string]providers.LLMProvider
+	// primaryUnknown and primaryProvider name the FR-016 degrade. The id is
+	// carried so the refusal can name the operator's own spelling — and only
+	// that, never a canonical alternative (SC-010).
+	primaryUnknown  bool
+	primaryProvider string
+}
+
 // buildProviderPool pre-builds an LLMProvider for every distinct provider
 // name referenced by the agent's candidate chain (primary + fallbacks).
-// Returns nil when the candidate chain has no explicit providers (every
-// candidate routes through the agent primary — no pool needed).
+// Returns a nil pool when the candidate chain has no explicit providers
+// (every candidate routes through the agent primary — no pool needed).
 //
 // Build failures are non-fatal: a missing entry for a pinned provider name
 // degrades to "use the primary's provider" via GetProviderForCandidate's
 // fallback path. We log at WARN so operators can see the cause of a
 // degraded fallback path at startup.
-func buildProviderPool(cfg *config.Config, candidates []providers.FallbackCandidate) map[string]providers.LLMProvider {
+//
+// ADR-067 FR-016 splits one of those failures out of the generic skip. A
+// candidate whose provider id is UNKNOWN — neither a catalog id nor a
+// constructible custom row (providers.IsUnknownProviderID) — is never
+// constructed and never rescued through the passthrough net: rescuing it
+// would be an alias by another name, and aliases are what the greenfield
+// rule deleted. Instead:
+//
+//   - unknown PRIMARY  → primaryUnknown; the agent is `needs_provider` and
+//     runTurn refuses before any provider call.
+//   - unknown FALLBACK → dropped from the pool with exactly ONE WARN naming
+//     the agent and the provider; the agent runs on the remaining pool.
+//
+// agentID is the agent the pool belongs to; it appears in those WARNs so an
+// operator can tell WHICH agent lost a fallback. It may be empty for a
+// one-off pool that belongs to no single agent (the session-recap chain).
+func buildProviderPool(
+	cfg *config.Config,
+	candidates []providers.FallbackCandidate,
+	agentID string,
+) providerPoolBuild {
 	if cfg == nil || len(candidates) == 0 {
-		return nil
+		return providerPoolBuild{}
 	}
 	// Collect distinct provider names. Empty Provider names share the
 	// primary's provider via the legacy path — no pool entry needed.
@@ -593,10 +679,19 @@ func buildProviderPool(cfg *config.Config, candidates []providers.FallbackCandid
 		seen[name] = struct{}{}
 	}
 	if len(seen) == 0 {
-		return nil
+		return providerPoolBuild{}
 	}
+	// unknown holds the FR-016 classification for every distinct candidate
+	// provider id. It is computed BEFORE any construction so a decision that
+	// belongs to the catalog is never inferred from a client-build failure
+	// (a missing credential is not an unknown provider).
+	unknown := make(map[string]struct{})
 	pool := make(map[string]providers.LLMProvider, len(seen))
 	for name := range seen {
+		if providers.IsUnknownProviderID(cfg, name) {
+			unknown[name] = struct{}{}
+			continue
+		}
 		mc, err := findModelConfigForProvider(cfg, name)
 		if err != nil {
 			logger.WarnCF("agent", "buildProviderPool: no ModelConfig for candidate provider; pool entry skipped",
@@ -629,6 +724,15 @@ func buildProviderPool(cfg *config.Config, candidates []providers.FallbackCandid
 		if _, ok := pool[name]; ok {
 			continue
 		}
+		if _, bad := unknown[name]; bad {
+			// FR-016: an UNKNOWN id is never rescued through a passthrough.
+			// The net exists for a vendor NAMESPACE that leaked out of a
+			// slash-separated model id (the id is a real catalog provider,
+			// just not a configured row); routing an id the catalog has
+			// never heard of through someone else's credentials would be an
+			// alias, which is exactly what the greenfield rule removed.
+			continue
+		}
 		if mc := findPassthroughForModel(cfg, c.Model); mc != nil {
 			p, _, err := providers.CreateProviderFromConfig(mc)
 			if err != nil {
@@ -652,10 +756,40 @@ func buildProviderPool(cfg *config.Config, candidates []providers.FallbackCandid
 		}
 	}
 
-	if len(pool) == 0 {
-		return nil
+	// FR-016 verdict. The primary candidate is candidates[0] — the pinned
+	// (provider, model) pair when the agent (or agents.defaults.default_model)
+	// names one, and the resolver's own first choice otherwise.
+	primary := strings.TrimSpace(candidateProvider(candidates))
+	_, primaryUnknown := unknown[primary]
+	primaryUnknown = primaryUnknown && primary != ""
+
+	// One WARN per unknown FALLBACK-only provider, naming the agent and the
+	// provider — the operator's own spelling, never a canonical alternative.
+	// The unknown PRIMARY gets its own single WARN below; it is a different
+	// event (the agent stops running) and must not be reported as a dropped
+	// fallback.
+	for name := range unknown {
+		if name == primary {
+			continue
+		}
+		logger.WarnCF("agent",
+			"Unknown provider named by a fallback; dropped from the agent's provider pool",
+			map[string]any{"agent_id": agentID, "provider": name})
 	}
-	return pool
+	if primaryUnknown {
+		logger.WarnCF("agent",
+			"Agent's primary provider is unknown; the agent needs a provider and will refuse turns",
+			map[string]any{"agent_id": agentID, "provider": primary})
+	}
+
+	if len(pool) == 0 {
+		pool = nil
+	}
+	return providerPoolBuild{
+		pool:            pool,
+		primaryUnknown:  primaryUnknown,
+		primaryProvider: primary,
+	}
 }
 
 // findPassthroughForModel scans cfg.Providers for a passthrough entry
@@ -679,14 +813,6 @@ func findPassthroughForModel(cfg *config.Config, model string) *config.ModelConf
 			clone := *mc
 			return &clone
 		}
-		// Suffix match — one openrouter entry may have a wildcard Model like
-		// "openrouter/*" or a base model that covers many variants. The
-		// candidate's Model is the full "vendor/model" form, the entry's
-		// Model is the canonical form.
-		if strings.EqualFold(strings.TrimSpace(mc.ModelName), model) {
-			clone := *mc
-			return &clone
-		}
 	}
 	return nil
 }
@@ -707,7 +833,13 @@ func findModelConfigForProvider(cfg *config.Config, providerName string) (*confi
 		if mc == nil {
 			continue
 		}
-		if strings.EqualFold(strings.TrimSpace(mc.Provider), providerName) {
+		// ADR-067 FR-036: EXACT after TrimSpace, never case-folded. The
+		// previous strings.EqualFold made "ZAI" resolve the "zai" row, which
+		// is the one shape a retired spelling could still be resurrected
+		// through after the greenfield rename paths were deleted. An
+		// entity whose provider differs from the config only by case is
+		// UNKNOWN, and the agent bound to it degrades (DS-8 row 4).
+		if strings.TrimSpace(mc.Provider) == providerName {
 			clone := *mc
 			return &clone, nil
 		}
@@ -903,23 +1035,34 @@ func resolveAgentHome(agentCfg *config.AgentConfig, defaults *config.AgentDefaul
 	return resolved
 }
 
-// resolveAgentModel resolves the primary model for an agent.
+// resolveAgentModel resolves the primary model for an agent: its own
+// model.primary, else the model half of agents.defaults.default_model
+// (ADR-068 D14.1). Empty when neither is set.
 func resolveAgentModel(agentCfg *config.AgentConfig, defaults *config.AgentDefaults) string {
 	if agentCfg != nil && agentCfg.Model != nil && strings.TrimSpace(agentCfg.Model.Primary) != "" {
 		return strings.TrimSpace(agentCfg.Model.Primary)
 	}
-	return defaults.GetModelName()
+	if defaults == nil || defaults.DefaultModel.IsZero() {
+		return ""
+	}
+	return strings.TrimSpace(defaults.DefaultModel.Model)
 }
 
-// resolveAgentPrimaryProvider returns the agent's EXPLICIT primary-model provider
-// (O3 two-field model). Empty string means "no explicit provider — resolve via
-// the default/passthrough path". Only honored when the agent actually sets a
-// primary model; a defaults-derived model uses the default provider.
-func resolveAgentPrimaryProvider(agentCfg *config.AgentConfig) string {
+// resolveAgentPrimaryProvider returns the provider the agent's primary model is
+// PINNED to (O3 two-field model). When the agent sets its own primary model,
+// this is its explicit model.provider — empty means "no explicit provider,
+// resolve via the passthrough path". When the agent runs on the default model
+// it is the provider half of agents.defaults.default_model: the default is an
+// exact pair (ADR-068 D14.1), so it is pinned exactly like an explicit
+// per-agent provider and never inferred from a configured passthrough.
+func resolveAgentPrimaryProvider(agentCfg *config.AgentConfig, defaults *config.AgentDefaults) string {
 	if agentCfg != nil && agentCfg.Model != nil && strings.TrimSpace(agentCfg.Model.Primary) != "" {
 		return strings.TrimSpace(agentCfg.Model.Provider)
 	}
-	return ""
+	if defaults == nil || defaults.DefaultModel.IsZero() {
+		return ""
+	}
+	return strings.TrimSpace(defaults.DefaultModel.Provider)
 }
 
 // resolveAgentFallbacks resolves the fallback models for an agent.
@@ -1085,4 +1228,126 @@ func expandHome(path string) string {
 		return home
 	}
 	return path
+}
+
+// primaryWindowPair is the (provider, model) pair ResolveWindow is keyed by:
+// the primary candidate's, which already carries the configured provider
+// that owns the credentials and the bare model id the catalog indexes.
+// With no resolvable candidate it falls back to the defaults' provider and
+// the raw model string so the ladder can still answer.
+func primaryWindowPair(candidates []providers.FallbackCandidate, defaultProvider, model string) (string, string) {
+	if len(candidates) > 0 {
+		return candidates[0].Provider, candidates[0].Model
+	}
+	return strings.TrimSpace(defaultProvider), strings.TrimSpace(model)
+}
+
+// primaryModelPair is the (provider, model) pair the presentation gate and
+// the resize-budget lookup resolve against for this turn — the SAME pair
+// primaryWindowPair hands ResolveWindow, read under the same lock, so the
+// media path and the context-window path can never disagree about which
+// row of the catalog this agent is. A model id alone is not a catalog key
+// (ADR-067 FR-003): "z-ai/glm-5.2" under openrouter and "glm-5.2" under
+// zai are different rows with different modalities.
+//
+// With no resolved candidates the provider is unknown (""), which resolves
+// as a miss — the documented optimistic posture, never a guess.
+func (a *AgentInstance) primaryModelPair() (provider, model string) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if len(a.Candidates) > 0 {
+		return a.Candidates[0].Provider, a.Candidates[0].Model
+	}
+	return "", a.Model
+}
+
+// candidateProvider is primaryModelPair's counterpart for a candidate slice
+// already resolved for this turn (the light-tier switch resolves its own).
+// An empty slice yields "" — a catalog miss, not a guess.
+func candidateProvider(candidates []providers.FallbackCandidate) string {
+	if len(candidates) == 0 {
+		return ""
+	}
+	return candidates[0].Provider
+}
+
+// windowSnapshot reads the resolved window under the instance mutex so a
+// concurrent ApplyAgentModel (which rewrites ContextWindow together with
+// Model / Provider / Candidates) can never be observed torn.
+func (a *AgentInstance) windowSnapshot() (window int, exempt, unknown bool) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.ContextWindow, a.WindowExempt, a.WindowUnknown
+}
+
+// needsProviderSnapshot reads the ADR-067 FR-016 degrade under the instance
+// mutex, for the same reason windowSnapshot does: ApplyAgentModel rewrites it
+// inside the Model / Provider / Candidates / pool flip, and a turn must never
+// pair the new model with the old verdict. Returns the operator's own
+// spelling of the offending id alongside the flag so the refusal can name it.
+func (a *AgentInstance) needsProviderSnapshot() (needs bool, providerID string) {
+	if a == nil {
+		return false, ""
+	}
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.needsProvider, a.needsProviderID
+}
+
+// needsModelSnapshot reports ADR-068 FR-014's derived `needs_model` for this
+// live instance, read under the instance mutex for the same reason its two
+// siblings are: ApplyAgentModel rewrites Model together with Candidates and
+// the needsProvider verdict, and a turn must never pair one half of that flip
+// with the other.
+//
+// The predicate is FR-014's, expressed in the terms the instance actually
+// has:
+//
+//   - Model empty — neither the agent's own `model.primary` nor
+//     `agents.defaults.default_model` named one, so there is nothing to call.
+//   - needsProvider — the model it does name routes through a provider id
+//     that is not configured (ADR-067 FR-016). This half is why the gate
+//     ORDER is load-bearing rather than decorative: such an agent satisfies
+//     BOTH pre-turn predicates, and SC-013 requires the turn to end with
+//     `needs_provider`, never `model_unassigned`.
+//
+// It is deliberately NOT "the model failed to resolve to a configured row".
+// An agent running on an injected provider with an unrecognised slug is a
+// turn-time failure (the provider answers, or it does not), not a
+// configuration state the operator can see and fix in the agent's settings.
+func (a *AgentInstance) needsModelSnapshot() bool {
+	if a == nil {
+		return true
+	}
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return strings.TrimSpace(a.Model) == "" || a.needsProvider
+}
+
+// budgetChecksExempt reports whether every budget check — pre-turn trim,
+// mid-turn, timeout recovery, model switch — is skipped for this agent
+// (ADR-066 FR-005: a subprocess-CLI provider manages its own context).
+func (a *AgentInstance) budgetChecksExempt() bool {
+	_, exempt, _ := a.windowSnapshot()
+	return exempt
+}
+
+// applyWindowResolution writes a fresh resolution onto the instance. The
+// caller holds a.mu (ApplyAgentModel's tuple flip).
+func (a *AgentInstance) applyWindowResolutionLocked(r WindowResolution) {
+	a.ContextWindow = r.Window
+	a.WindowSource = r.Source
+	a.WindowClamped = r.Clamped
+	a.WindowExempt = r.Exempt
+	a.WindowUnknown = r.Unknown
+}
+
+// configuredMaxTokensLocked returns the configured (pre-clamp) max_tokens,
+// falling back to the current field for an instance built by a test that
+// never set it. agent.mu must be held.
+func (a *AgentInstance) configuredMaxTokensLocked() int {
+	if a.configuredMaxTokens > 0 {
+		return a.configuredMaxTokens
+	}
+	return a.MaxTokens
 }

@@ -21,7 +21,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/media"
 	"github.com/elicify-ai/omnipus/pkg/media/library"
-	"github.com/elicify-ai/omnipus/pkg/providers/capabilities"
+	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
 )
 
 // workspaceRefcounter is the manifest-refcount contract the presentation
@@ -84,27 +84,36 @@ func (s *sessionRefcounter) DecrementRefcount(mediaID string) (int, error) {
 	return 0, nil
 }
 
-// modelSupportsImage is the step-1 capability gate (FR-010) for the image
-// branch. A nil catalog means the gate is not wired (the embedded seed has
-// not been loaded or the gateway is running in a degraded mode); the
-// optimistic FR-026 default applies — assume image-capable, so a wrong
-// guess costs one outcome-based step-4 retry, never a dead turn.
-func modelSupportsImage(catalog *capabilities.Catalog, model string) bool {
-	if catalog == nil {
+// modelSupportsImage is the step-1 capability gate (ADR-067 FR-004) for the
+// image branch. Resolution is by the exact (provider, model) pair — there is
+// no prefix arithmetic and no bare-model lookup (FR-003): "z-ai/glm-5.2" is
+// a model id under the openrouter provider, not a stripped alias for zai's
+// "glm-5.2".
+//
+// A nil catalog means the gate is not wired (the gateway has not installed
+// the booted catalog yet); the optimistic default applies — assume
+// image-capable, so a wrong guess costs one outcome-based step-4 retry,
+// never a dead turn. A catalog MISS is optimistic for image too, by
+// Handle.Supports's own FR-004 contract.
+func modelSupportsImage(cat *catalog.Catalog, provider, model string) bool {
+	if cat == nil {
 		return true
 	}
-	return catalog.Resolve(model).Supports(capabilities.ModalityImage)
+	return cat.Resolve(provider, model).Supports(catalog.ModalityImage)
 }
 
-// modelSupportsPDF is the step-1 capability gate (FR-010) for the PDF
-// modality — symmetric to modelSupportsImage. A nil catalog is optimistic
-// (FR-026): assume PDF-capable, so a wrong guess costs one outcome-based
-// step-4 retry rather than a dead turn.
-func modelSupportsPDF(catalog *capabilities.Catalog, model string) bool {
-	if catalog == nil {
+// modelSupportsPDF is the step-1 capability gate for the PDF modality —
+// symmetric to modelSupportsImage in wiring, NOT in miss semantics. A nil
+// catalog is optimistic (assume PDF-capable). A catalog MISS is not: FR-004
+// makes the optimistic modality set text+image only, so an unknown model
+// routes PDFs to step-5 offload rather than sending a document block the
+// provider will reject. That is the same posture the pre-ADR-067 catalog
+// had for an unknown model, whose optimistic default was also text+image.
+func modelSupportsPDF(cat *catalog.Catalog, provider, model string) bool {
+	if cat == nil {
 		return true
 	}
-	return catalog.Resolve(model).Supports(capabilities.ModalityPDF)
+	return cat.Resolve(provider, model).Supports(catalog.ModalityPDF)
 }
 
 // incrementWorkspaceRef parses a media://workspace/<ws>/<id> ref and
@@ -134,34 +143,38 @@ func incrementWorkspaceRef(rc workspaceRefcounter, ref string) {
 	}
 }
 
-// getCapabilityCatalog returns the AgentLoop's capability catalog (nil if
-// not constructed — callers nil-check or use modelSupportsImage which
-// treats nil as optimistic).
-func (al *AgentLoop) getCapabilityCatalog() *capabilities.Catalog {
+// getCapabilityCatalog returns the AgentLoop's provider catalog (nil until
+// the gateway installs one — callers nil-check, or use modelSupportsImage,
+// which treats nil as optimistic).
+func (al *AgentLoop) getCapabilityCatalog() *catalog.Catalog {
 	al.mu.RLock()
 	defer al.mu.RUnlock()
 	return al.capabilityCatalog
 }
 
-// GetCapabilityCatalog is the exported gateway-facing accessor for the
-// AgentLoop's capability catalog (D18: model-capabilities REST endpoint,
-// so the SPA can warn — client-side, non-blocking — before sending a
-// vision attachment to a model that cannot see images; model vision
-// capability is otherwise unknowable client-side). Delegates to
-// getCapabilityCatalog so the RLock-guarded read has exactly one
-// implementation. Returns nil if the catalog was never constructed —
-// callers (e.g. the REST handler) must treat nil as "no capability data
-// available" and degrade gracefully (empty list), never a 500.
-func (al *AgentLoop) GetCapabilityCatalog() *capabilities.Catalog {
+// GetCapabilityCatalog is the exported accessor for the catalog the gateway
+// installed. The gateway itself reads it back here (setupAndStartServices
+// hands the same instance to the REST surface and to the 24 h refresh loop)
+// so exactly one catalog is parsed per process — the 2 MB embedded snapshot
+// is never decoded twice. Returns nil when no catalog was installed;
+// callers must degrade, never 500.
+func (al *AgentLoop) GetCapabilityCatalog() *catalog.Catalog {
 	return al.getCapabilityCatalog()
 }
 
-// SetCapabilityCatalog injects a capability catalog (typically one with a
-// puller + store wired by the gateway boot for FR-025 repo-pull). It
-// replaces any catalog constructed from the embedded seed at NewAgentLoop
-// time. Passing nil restores the optimistic posture (the gate always
-// passes). Safe to call after boot; the catalog is read per-turn.
-func (al *AgentLoop) SetCapabilityCatalog(c *capabilities.Catalog) {
+// SetCapabilityCatalog installs the catalog the presentation gate reads
+// (ADR-067 FR-004). The gateway calls it once at boot with the same
+// instance it hands to ResolveWindow (agent.SetWindowCatalog) and to the
+// REST surface. Passing nil restores the optimistic posture (the gate
+// always passes). Safe to call after boot; the catalog is read per-turn.
+//
+// There is deliberately NO default catalog built at NewAgentLoop time. The
+// pre-ADR-067 code parsed a 12 KB seed there; the ADR-067 snapshot is 2 MB,
+// and parsing it once per AgentLoop — on top of the gateway's own copy —
+// would cost real memory and boot time for a catalog the gateway always
+// overwrites moments later. An AgentLoop with no catalog is the documented
+// optimistic posture, not a degradation.
+func (al *AgentLoop) SetCapabilityCatalog(c *catalog.Catalog) {
 	al.mu.Lock()
 	al.capabilityCatalog = c
 	al.mu.Unlock()

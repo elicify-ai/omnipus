@@ -1,0 +1,61 @@
+type: object
+description: >
+  The `device_code` variant of SignInStartResponse (ADR-068 FR-008/FR-044,
+  added 2026-08-23 §8b). For `openai-chatgpt` (and `xai` once its catalog row
+  carries `sign_in`): Omnipus requests a device code from the vendor itself
+  and the SPA renders the verification link and user code for the operator
+  to approve on any device. `device_auth_id` is an opaque server-side handle
+  for POST /providers/{id}/sign-in/poll — the vendor's own device code and
+  any PKCE verifier are held only by the gateway and never appear on the
+  wire.
+required:
+  - method
+  - verification_url
+  - user_code
+  - device_auth_id
+  - expires_at
+  - interval_seconds
+additionalProperties: false
+properties:
+  method:
+    type: string
+    enum:
+      - device_code
+    description: Discriminator — a device-code session was started; poll for completion.
+    example: device_code
+  verification_url:
+    type: string
+    format: uri
+    description: The vendor page the operator opens (new tab) to approve the sign-in.
+    example: https://auth.openai.com/codex/device
+  user_code:
+    type: string
+    minLength: 1
+    maxLength: 16
+    description: Short code the operator enters (or confirms) on the verification page.
+    example: WDJB-MJHT
+  device_auth_id:
+    type: string
+    minLength: 1
+    maxLength: 64
+    description: >
+      Opaque handle identifying this device-code session for
+      POST /providers/{id}/sign-in/poll. Never the vendor's own device code.
+    example: das_9f3a2b1c
+  expires_at:
+    type: string
+    format: date-time
+    description: >
+      When this device-code session expires server-side (ceiling 15 minutes
+      from start, FR-044). The dialog shows the matching expired end state
+      once past this time.
+    example: "2026-08-23T12:15:00Z"
+  interval_seconds:
+    type: integer
+    minimum: 1
+    maximum: 30
+    description: >
+      Minimum seconds between polls. The SPA must never poll faster than
+      this, and must back off when a later poll response raises it
+      (FR-045, vendor slow_down).
+    example: 5

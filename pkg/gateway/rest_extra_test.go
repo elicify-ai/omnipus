@@ -32,9 +32,9 @@ func newTestRestAPIWithHome(t *testing.T) *restAPI {
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      tmpDir,
-				ModelName: "test-model",
-				MaxTokens: 4096,
+				Home:         tmpDir,
+				DefaultModel: config.DefaultModel{Model: "test-model"},
+				MaxTokens:    4096,
 			},
 		},
 	}
@@ -168,9 +168,11 @@ func TestHandleTasksPOST(t *testing.T) {
 }
 
 // TestHandleProvidersGET verifies GET /api/v1/providers returns 200 with an array.
-// BDD: Given the gateway is running,
+// BDD: Given the gateway is running with no configured provider,
 // When GET /api/v1/providers is called,
-// Then 200 with an array of providerResponse items.
+// Then 200 with an EMPTY array — ADR-068 FR-011a (T068-04) removed the
+// synthetic "default" filler row along with the template rows; the body is
+// `[]`, never `null` (Provider.yaml requires an array).
 // Traces to: wave5b-system-agent-spec.md — E4: providers endpoint
 func TestHandleProvidersGET(t *testing.T) {
 	api, cleanup := newTestRestAPI(t)
@@ -179,16 +181,13 @@ func TestHandleProvidersGET(t *testing.T) {
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/providers", nil)
 	r.URL.Path = "/api/v1/providers"
-	api.HandleProviders(w, r)
+	api.HandleProviders(w, isolateRateLimit(t, r))
 
 	require.Equal(t, http.StatusOK, w.Code)
 	var providers []map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &providers))
-	assert.NotEmpty(t, providers, "providers must include at least one entry (default fallback)")
-	for _, p := range providers {
-		assert.Contains(t, p, "id", "each provider must have an id field")
-		assert.Contains(t, p, "status", "each provider must have a status field")
-	}
+	require.NotNil(t, providers, "body must be a JSON array, not null")
+	assert.Empty(t, providers, "no configured provider → no rows (no synthetic default filler)")
 }
 
 // TestHandleMCPServersGET verifies GET /api/v1/mcp-servers returns 200 with an array.

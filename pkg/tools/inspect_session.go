@@ -89,6 +89,19 @@ func (t *InspectSessionTool) Parameters() map[string]any {
 				"enum":        []string{"user", "assistant", "system"},
 				"description": "Optional filter: only include transcript entries with this role",
 			},
+			"offset": map[string]any{
+				"type": "integer",
+				"description": "Entry index to start from among the entries that pass the filters " +
+					"(0-based, must be >= 0).",
+				"default": 0,
+			},
+			"limit": map[string]any{
+				"type": "integer",
+				"description": fmt.Sprintf(
+					"Maximum number of transcript entries to return (must be >= 1, capped at %d).",
+					maxInspectSessionEntries),
+				"default": maxInspectSessionEntries,
+			},
 		},
 		"required": []string{"session_id"},
 	}
@@ -138,6 +151,27 @@ func (t *InspectSessionTool) Execute(ctx context.Context, args map[string]any) *
 		return ErrorResult("session_id is required")
 	}
 
+	// Bounding parameters (ADR-066 §15 task 1, FR-039): entries, named as
+	// read_file names its byte window. Validated before the store is read so
+	// a malformed call never returns transcript content.
+	offset, err := getInt64Arg(args, "offset", 0)
+	if err != nil {
+		return ErrorResult(err.Error())
+	}
+	if offset < 0 {
+		return ErrorResult("offset must be >= 0")
+	}
+	limit, err := getInt64Arg(args, "limit", maxInspectSessionEntries)
+	if err != nil {
+		return ErrorResult(err.Error())
+	}
+	if limit < 1 {
+		return ErrorResult("limit must be >= 1")
+	}
+	if limit > maxInspectSessionEntries {
+		limit = maxInspectSessionEntries
+	}
+
 	// Target-lock (FR-033) — refuse any session id outside the engine-set
 	// scope, unconditionally. This is NOT a tool-policy-expressible check;
 	// it is enforced purely from the ctx value the engine set before
@@ -161,9 +195,13 @@ func (t *InspectSessionTool) Execute(ctx context.Context, args map[string]any) *
 	toolNameFilter, _ := args["tool_name"].(string)
 	roleFilter, _ := args["role"].(string)
 
-	out := make([]inspectSessionEntry, 0, len(entries))
+	out := make([]inspectSessionEntry, 0, min(int(limit), len(entries)))
 	totalChars := 0
 	truncated := false
+	// matched counts the entries that pass the filters, whether or not they
+	// are on the requested page; offset is applied to that filtered sequence
+	// so paging is stable under a filter (FR-039).
+	matched := 0
 	// ADR-057 D1/W11 (FR-034/FR-038): a delegated child now owns its own real
 	// store-backed session (FR-005), so its narration lives in the CHILD's
 	// OWN transcript.jsonl and never lands in this session's entries at all
@@ -193,8 +231,14 @@ func (t *InspectSessionTool) Execute(ctx context.Context, args map[string]any) *
 			continue
 		}
 
+		matched++
+		if int64(matched) <= offset {
+			// Before the requested page — skipped entries cost no budget.
+			continue
+		}
+
 		totalChars += len(e.Content)
-		if totalChars > maxInspectSessionChars || len(out) >= maxInspectSessionEntries {
+		if totalChars > maxInspectSessionChars || int64(len(out)) >= limit {
 			truncated = true
 			break
 		}
@@ -212,6 +256,7 @@ func (t *InspectSessionTool) Execute(ctx context.Context, args map[string]any) *
 		"agent_id":    meta.AgentID,
 		"entries":     out,
 		"entry_count": len(out),
+		"offset":      offset,
 		"truncated":   truncated,
 	}
 	encoded, mErr2 := json.Marshal(payload)

@@ -74,3 +74,20 @@ properties:
     type: string
     description: Parent tool call ID for nested subagent tool invocations.
     example: "tc_01HABC"
+  content_state:
+    type: string
+    enum:
+      - full
+      - capped
+      - emptied
+    default: full
+    description: >
+      ADR-066 D4/D5 projection state of this call's result in the model's
+      window, as persisted in window meta and returned on transcript read.
+      "full" = the result entered unmodified; "capped" = it entered
+      head-and-tail truncated with a mark (the archive line holds the full
+      content); "emptied" = it was later emptied in place, leaving a recall
+      mark. The transcript `result` is the PROJECTED content the model saw;
+      the full content stays in the gateway tool_results/ store for Verbose
+      chat. Absent = full.
+    example: "full"

@@ -101,14 +101,14 @@ func startPerfGateway(tb testing.TB, _ *testutil.ScenarioProvider) *perfGateway 
 		},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      homeDir,
-				ModelName: "openrouter-glm",
-				MaxTokens: 4096,
+				Home:         homeDir,
+				DefaultModel: config.DefaultModel{Provider: "openrouter", Model: "openrouter/z-ai/glm-5-turbo"},
+				MaxTokens:    4096,
 			},
 		},
 		Providers: []*config.ModelConfig{
 			{
-				ModelName: "openrouter-glm",
+				Name:      "openrouter-glm",
 				Model:     "openrouter/z-ai/glm-5-turbo",
 				Provider:  "openrouter",
 				APIBase:   mock.URL, // mock OpenRouter — see mockOpenRouterServer

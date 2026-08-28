@@ -125,8 +125,8 @@ func TestResolveWorkspaceIDForContinuation_NoSession_ReturnsEmpty(t *testing.T) 
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      t.TempDir(),
-				ModelName: "scripted-model",
+				Home:         t.TempDir(),
+				DefaultModel: config.DefaultModel{Model: "scripted-model"},
 			},
 			List: []config.AgentConfig{{ID: "mia", Home: t.TempDir()}},
 		},
@@ -151,8 +151,8 @@ func TestResolveWorkspaceIDForContinuation_SessionWithWorkspace_ReturnsIt(t *tes
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      t.TempDir(),
-				ModelName: "scripted-model",
+				Home:         t.TempDir(),
+				DefaultModel: config.DefaultModel{Model: "scripted-model"},
 			},
 			List: []config.AgentConfig{{ID: "mia", Home: t.TempDir()}},
 		},
@@ -213,8 +213,8 @@ func TestResolveSessionStore_CorruptMeta_ReturnsStoreNotNil(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      t.TempDir(),
-				ModelName: "scripted-model",
+				Home:         t.TempDir(),
+				DefaultModel: config.DefaultModel{Model: "scripted-model"},
 			},
 			List: []config.AgentConfig{{ID: "mia", Home: t.TempDir()}},
 		},
@@ -291,8 +291,8 @@ func TestResolveSessionStore_MissingSession_StaysSilent(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      t.TempDir(),
-				ModelName: "scripted-model",
+				Home:         t.TempDir(),
+				DefaultModel: config.DefaultModel{Model: "scripted-model"},
 			},
 			List: []config.AgentConfig{{ID: "mia", Home: t.TempDir()}},
 		},
@@ -343,8 +343,8 @@ func TestResolveWorkspaceIDForContinuation_CorruptMeta_WarnsDownstream(t *testin
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      t.TempDir(),
-				ModelName: "scripted-model",
+				Home:         t.TempDir(),
+				DefaultModel: config.DefaultModel{Model: "scripted-model"},
 			},
 			List: []config.AgentConfig{{ID: "mia", Home: t.TempDir()}},
 		},

@@ -10,8 +10,8 @@ func testConfig(agents []config.AgentConfig, bindings []config.AgentBinding) *co
 	return &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home:      "/tmp/omnipus-test",
-				ModelName: "gpt-4",
+				Home:         "/tmp/omnipus-test",
+				DefaultModel: config.DefaultModel{Model: "gpt-4"},
 			},
 			List: agents,
 		},

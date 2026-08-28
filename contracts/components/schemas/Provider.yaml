@@ -8,6 +8,9 @@ required:
   - name
   - status
   - models
+  - auth_method
+  - dependents
+  - backs_default
 additionalProperties: false
 properties:
   id:
@@ -30,11 +33,89 @@ properties:
       - connected
       - disconnected
       - error
+      - unknown-provider
+      - signed_in
+      - expired
     description: >
-      "connected" when at least one API key is configured for this provider.
-      "disconnected" when no key is available or on the fallback default entry.
-      "error" when the provider is configured but the upstream returned a non-retryable error.
+      One enumeration of exactly six values, shared verbatim by the ADR-067 and
+      ADR-068 specs (ADR-068 FR-038). "connected" when an API key is configured
+      and resolvable. "disconnected" when no key is available. "error" when the
+      provider is configured but the upstream returned a non-retryable error.
+      "unknown-provider" (ADR-067 FR-016) when the configured id is neither a
+      catalog id nor a custom row — the row's models are [] and agents bound to
+      it carry degraded_reason "needs_provider". "signed_in" / "expired"
+      (ADR-068 FR-034) for sign-in providers with a live / lapsed session.
+      The per-model "no context length" state is CatalogModel.window_unknown,
+      never a seventh status.
     example: "connected"
+  protocol:
+    type: string
+    enum:
+      - openai-compatible
+      - anthropic
+      - google
+      - ollama
+      - cli
+    description: >
+      Wire protocol this configured row uses (ADR-067 D11/FR-013). Absent →
+      the catalog provider's primary protocol. Always present on custom rows.
+    example: "openai-compatible"
+  custom:
+    type: boolean
+    description: >
+      True iff this row's id is not in the catalog — an operator-named custom
+      endpoint configured with api_base + protocol (ADR-067 FR-035, X-13).
+      Every check keys on this flag, never on a literal id. Absent = false.
+    example: false
+  company:
+    type: string
+    description: Catalog grouping key (CatalogProvider.company) for the configured row's provider; absent for custom and unknown rows.
+    example: "Z.ai"
+  locality:
+    type: string
+    enum:
+      - local
+      - cloud
+    description: ADR-067 FR-039's single local/cloud predicate, derived by the gateway; the only such classification the UI uses.
+    example: "cloud"
+  cli_kind:
+    type: string
+    enum:
+      - codex
+      - copilot
+    description: For protocol "cli" rows, the subprocess driver selected by the catalog row (ADR-067 X-14).
+    example: "codex"
+  auth_method:
+    type: string
+    enum:
+      - api_key
+      - sign_in
+    description: >
+      How this row authenticates (ADR-068; closed set — oauth/token no longer
+      exist). Always present; "api_key" until ADR-068's computation lands.
+    example: "api_key"
+  account_label:
+    type: string
+    maxLength: 128
+    description: Account identifier of the signed-in session (tokens.account_id). Present only when status is signed_in or expired.
+    example: "user@example.com"
+  dependents:
+    type: array
+    items:
+      $ref: './ProviderDependent.yaml'
+    description: >
+      Every reference that would stop resolving if this provider were removed
+      (ADR-068 FR-012) — advisory; the server recomputes it under the config
+      lock on DELETE. Always present (empty array when none).
+  backs_default:
+    type: boolean
+    description: True iff agents.defaults.default_model names this provider (ADR-068). Always present; such a row cannot be deleted without a new_default.
+    example: false
+  updated_at:
+    type: string
+    format: date-time
+    description: RFC 3339 time of the last PUT on this row (ADR-068 MAJ-015) — the picker's Recent ordering key.
+    example: "2026-08-22T10:15:00Z"
   models:
     type: array
     items:

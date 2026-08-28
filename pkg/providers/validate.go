@@ -15,6 +15,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
 )
 
 // URLChecker is the SSRF guard interface. The gateway passes its *security.SSRFChecker;
@@ -78,6 +80,12 @@ type ValidationResult struct {
 	// RawDetail is the raw upstream detail for the server debug log ONLY. Never send
 	// this to the user or on the wire.
 	RawDetail string
+	// ProbedModel is the model the completion was actually fired against —
+	// the last candidate tried, which is the one this Outcome describes.
+	// Empty when no probe ran at all (empty key, or no candidate anywhere).
+	// ADR-068 FR-036 surfaces it as ProbeProviderResponse.probed_model so the
+	// operator can tie a green probe to the exact model they picked.
+	ProbedModel string
 }
 
 // Blocks reports whether this outcome must block the flow. Derived solely from Outcome
@@ -99,6 +107,13 @@ type ValidateInput struct {
 	// Catalog is the already-fetched model list. If empty, ValidateKey will attempt
 	// to fetch it via FetchModels before picking a probe model.
 	Catalog []string
+	// ProbeModels, when non-empty, IS the candidate list — in order, capped
+	// at maxProbeAttempts — and neither the catalog document nor a live
+	// /models call is consulted to build one. The caller has already decided
+	// which models this probe is about (ADR-068 FR-036: the operator's
+	// verbatim pick, or the provider's Recommended-for-chat shortlist), and a
+	// second opinion here would answer a question nobody asked.
+	ProbeModels []string
 }
 
 // ── Credential-marker set (R-A) ──────────────────────────────────────────────
@@ -300,36 +315,64 @@ var nonChatSubstrings = []string{
 	"embed", "whisper", "tts", "dall-e", "image", "rerank", "moderation",
 }
 
-// probeModelDefaults is the per-provider rules table for the default chat probe slug.
-// providerID keys are lowercase. The generic fallback ("") applies to any unknown provider.
-// These slugs are used ONLY when the catalog is empty (offline/CLI path) — when a live
-// catalog is available, pickProbeModel prefers a catalog entry over a slug not present
-// in the catalog, so stale entries here do not cause false Unreachable outcomes.
-var probeModelDefaults = map[string]string{
-	"openai":     "gpt-4o-mini",
-	"gemini":     "gemini-2.0-flash",
-	"google":     "gemini-2.0-flash",
-	"deepseek":   "deepseek-chat",
-	"groq":       "llama-3.1-8b-instant",
-	"openrouter": "meta-llama/llama-3.1-8b-instruct",
-	"anthropic":  "claude-3-haiku-20240307",
-	"zhipu":      "glm-4-flash",
-	"z-ai":       "glm-4-flash",
-	"moonshot":   "moonshot-v1-8k",
+// maxProbeAttempts bounds the fall-through when a probe model turns out not
+// to exist upstream (FR-022, F-25). Three is enough to step past a couple of
+// entitlement gaps in a provider's own catalog and small enough that a badly
+// stale document cannot turn one key check into a burst of requests.
+const maxProbeAttempts = 3
+
+// catalogProbeModels returns the probe candidates for a CATALOG provider, in
+// document order: the first `status: active`, tool-calling, text-modality
+// models of that provider, capped at maxProbeAttempts (FR-022, A-20).
+//
+// The old per-provider slug table (`probeModelDefaults`) is gone. It was a
+// hand-typed list of ten vendor model ids that went stale silently — a
+// retired slug there produced a 404 that classified as *Unreachable*, i.e. a
+// perfectly good key reported as "provider unreachable". The catalog knows
+// which models are live, so the probe now asks it.
+//
+// An id the catalog does not carry returns nil: a custom or local endpoint
+// has no catalog models, and its caller falls back to the live list.
+func catalogProbeModels(providerID string) []string {
+	row, ok := CatalogProvider(providerID)
+	if !ok {
+		return nil
+	}
+	var out []string
+	for _, m := range row.Models {
+		if m.Status != catalog.StatusActive || !m.ToolCall {
+			continue
+		}
+		if !hasTextModality(m.InputModalities) {
+			continue
+		}
+		out = append(out, m.ID)
+		if len(out) == maxProbeAttempts {
+			break
+		}
+	}
+	return out
 }
 
-// pickProbeModel selects a chat-capable model to use for the completion probe.
-// It filters the catalog to exclude obvious non-chat entries, then prefers the
-// provider's rules-table default if present in the filtered catalog.
-// On empty catalog it returns the rules-table default (never a non-chat model).
-// It never returns a value that would cause a false InvalidKey.
-func pickProbeModel(catalog []string, providerID string) string {
-	pid := strings.ToLower(strings.TrimSpace(providerID))
-	def := probeModelDefaults[pid]
+// hasTextModality reports whether a model accepts text input. Every valid
+// catalog model does (FR-002), so this is a belt-and-braces read of the
+// document rather than a filter that routinely fires.
+func hasTextModality(mods []catalog.Modality) bool {
+	for _, m := range mods {
+		if m == catalog.ModalityText {
+			return true
+		}
+	}
+	return false
+}
 
-	// Filter catalog to chat-only entries.
-	var chatEntries []string
-	for _, m := range catalog {
+// chatProbeCandidates filters a LIVE model list down to plausibly chat-capable
+// entries and caps it at maxProbeAttempts. It is the fallback path for rows
+// with no catalog models: operator-typed custom endpoints and local runtimes,
+// whose model list only exists upstream.
+func chatProbeCandidates(models []string) []string {
+	var out []string
+	for _, m := range models {
 		ml := strings.ToLower(m)
 		skip := false
 		for _, sub := range nonChatSubstrings {
@@ -338,39 +381,96 @@ func pickProbeModel(catalog []string, providerID string) string {
 				break
 			}
 		}
-		if !skip {
-			chatEntries = append(chatEntries, m)
+		if skip {
+			continue
+		}
+		out = append(out, m)
+		if len(out) == maxProbeAttempts {
+			break
 		}
 	}
-
-	if len(chatEntries) == 0 {
-		// No chat entries in catalog. Return the rules-table default if known.
-		if def != "" {
-			return def
-		}
-		// No known default and empty filtered catalog — return empty string.
-		// The caller (ValidateKey) falls back to catalog-fetch-only in this case.
-		return ""
-	}
-
-	// Prefer the rules-table default if it exists in the chat-filtered catalog.
-	if def != "" {
-		for _, m := range chatEntries {
-			if m == def {
-				return def
-			}
-		}
-		// Default not present in catalog — do NOT return the stale slug; it would
-		// produce a false Unreachable outcome (a 404 "model not found" instead of a
-		// credential check). Fall through to the first chat-capable catalog entry.
-	}
-
-	// No rules-table default, or the default is absent from the live catalog:
-	// return the first chat entry from the sorted catalog.
-	return chatEntries[0]
+	return out
 }
 
-// ── FetchModels (moved from pkg/gateway/rest.go fetchUpstreamModels) ─────────
+// modelNotFoundMarkers are the upstream phrasings that mean "that model id
+// does not exist here" as opposed to "your key is bad" or "we are down".
+// Only these justify trying the next candidate (F-25).
+var modelNotFoundMarkers = []string{
+	"model_not_found",
+	"model not found",
+	"does not exist",
+	"unknown model",
+	"invalid model",
+	"no such model",
+}
+
+// isModelNotFound reports whether an upstream detail names a missing model.
+func isModelNotFound(rawDetail string) bool {
+	d := strings.ToLower(rawDetail)
+	for _, m := range modelNotFoundMarkers {
+		if strings.Contains(d, m) {
+			return true
+		}
+	}
+	return false
+}
+
+// ── model listing (moved from pkg/gateway/rest.go fetchUpstreamModels) ───────
+
+// modelListTimeout bounds every live listing call in this file.
+const modelListTimeout = 10 * time.Second
+
+// anthropicVersionHeader is the dated Anthropic API version every Anthropic
+// REST call must carry (including GET /v1/models).
+const anthropicVersionHeader = "2023-06-01"
+
+// UpstreamStatusError is returned when a provider's listing endpoint was
+// reached but answered a non-2xx status. It exists so a caller can report
+// the STATUS rather than a generic transport failure — ADR-067 FR-021 (X-12)
+// requires the entitlement endpoint to answer
+// `could not fetch upstream model list: status <n>`, which is only possible
+// if the status survives the return.
+type UpstreamStatusError struct {
+	Status int
+}
+
+func (e *UpstreamStatusError) Error() string {
+	return fmt.Sprintf("upstream models: status %d", e.Status)
+}
+
+// ListModels lists the model ids a provider's live listing endpoint reports,
+// dispatching on the catalog PROTOCOL (ADR-067 FR-021):
+//
+//   - openai-compatible, google (and an empty protocol) → GET {base}/models
+//     with a Bearer key;
+//   - anthropic → GET {base}/v1/models with `x-api-key` + `anthropic-version`;
+//   - ollama → GET {base without /v1}/api/tags, unauthenticated.
+//
+// Any other protocol (notably `cli`, which has no HTTP listing at all) is an
+// error: callers decide the status code — the gateway's entitlement endpoint
+// refuses those rows with 409 BEFORE reaching here.
+//
+// This is the only listing entry point with a protocol argument. Its two
+// callers are the entitlement endpoint and the providers GET's local-endpoint
+// listing; everything else (onboarding, ValidateKey) still calls FetchModels
+// directly because it is already talking to an OpenAI-compatible base.
+func ListModels(
+	ctx context.Context,
+	protocol catalog.Protocol,
+	baseURL, apiKey string,
+	checker URLChecker,
+) ([]string, error) {
+	switch protocol {
+	case catalog.ProtocolOllama:
+		return fetchOllamaTags(ctx, baseURL, checker)
+	case catalog.ProtocolAnthropic:
+		return fetchAnthropicModels(ctx, baseURL, apiKey, checker)
+	case catalog.ProtocolOpenAICompatible, catalog.ProtocolGoogle, "":
+		return FetchModels(ctx, baseURL, apiKey, checker)
+	default:
+		return nil, fmt.Errorf("model listing is not supported for protocol %q", protocol)
+	}
+}
 
 // FetchModels fetches the list of available models from an OpenAI-compatible
 // provider's /models endpoint. Returns model IDs sorted alphabetically, or nil on error.
@@ -379,42 +479,55 @@ func pickProbeModel(catalog []string, providerID string) string {
 // SEC-24: when checker is non-nil the request is made through the SSRF-safe HTTP
 // client. A nil checker uses a plain client (CLI path — operator-run, accepted).
 func FetchModels(ctx context.Context, baseURL, apiKey string, checker URLChecker) ([]string, error) {
-	client := &http.Client{Timeout: 10 * time.Second}
-	if checker != nil {
-		client = checker.SafeClient()
-		client.Timeout = 10 * time.Second
+	headers := map[string]string{
+		"Authorization": "Bearer " + apiKey,
+		"X-Api-Key":     apiKey,
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		strings.TrimSuffix(baseURL, "/")+"/models", nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Authorization", "Bearer "+apiKey)
-	req.Header.Set("X-Api-Key", apiKey)
+	// Legacy host sniff, kept for the callers that reach an Anthropic base
+	// through this OpenAI-compatible entry point (onboarding, ValidateKey).
+	// The protocol-dispatched path never relies on it — see
+	// fetchAnthropicModels.
 	if strings.Contains(baseURL, "anthropic") {
-		req.Header.Set("Anthropic-Version", "2023-06-01")
+		headers["Anthropic-Version"] = anthropicVersionHeader
 	}
-
-	resp, err := client.Do(req)
+	ids, err := fetchModelIDs(ctx, strings.TrimSuffix(baseURL, "/")+"/models", headers, checker)
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	sort.Strings(ids)
+	return ids, nil
+}
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("upstream models: status %d", resp.StatusCode)
-	}
-
-	ct := resp.Header.Get("Content-Type")
-	if ct != "" && !strings.Contains(ct, "application/json") {
-		return nil, fmt.Errorf("upstream models: unexpected Content-Type %q", ct)
-	}
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20)) // 2 MB limit
+// fetchAnthropicModels lists models over the Anthropic protocol: the dated
+// version header is mandatory and the key travels in `x-api-key`, never as a
+// Bearer token. A base that already ends in /v1 is not doubled.
+func fetchAnthropicModels(ctx context.Context, baseURL, apiKey string, checker URLChecker) ([]string, error) {
+	root := strings.TrimSuffix(strings.TrimSuffix(strings.TrimSpace(baseURL), "/"), "/v1")
+	ids, err := fetchModelIDs(ctx, root+"/v1/models", map[string]string{
+		"X-Api-Key":         apiKey,
+		"Anthropic-Version": anthropicVersionHeader,
+	}, checker)
 	if err != nil {
 		return nil, err
 	}
+	sort.Strings(ids)
+	return ids, nil
+}
 
+// fetchModelIDs performs one listing GET and decodes the `{"data":[{"id"}]}`
+// envelope both the OpenAI-compatible and the Anthropic listing return. A
+// non-2xx comes back as *UpstreamStatusError so the caller can report the
+// status verbatim.
+func fetchModelIDs(
+	ctx context.Context,
+	url string,
+	headers map[string]string,
+	checker URLChecker,
+) ([]string, error) {
+	body, err := getUpstreamJSON(ctx, url, headers, checker)
+	if err != nil {
+		return nil, err
+	}
 	var result struct { // not-wire-format: decodes upstream provider /models API response, never emitted to SPA
 		Data []struct {
 			ID string `json:"id"`
@@ -423,15 +536,80 @@ func FetchModels(ctx context.Context, baseURL, apiKey string, checker URLChecker
 	if err := json.Unmarshal(body, &result); err != nil {
 		return nil, err
 	}
-
 	models := make([]string, 0, len(result.Data))
 	for _, m := range result.Data {
-		if m.ID != "" {
-			models = append(models, m.ID)
+		if id := strings.TrimSpace(m.ID); id != "" {
+			models = append(models, id)
 		}
 	}
-	sort.Strings(models)
 	return models, nil
+}
+
+// fetchOllamaTags lists the models an ollama endpoint has actually pulled,
+// from its native /api/tags. The catalog carries ollama's OpenAI-compatible
+// base (…:11434/v1); /api/tags hangs off the root, so the /v1 suffix is
+// trimmed. The endpoint is unauthenticated — no key is sent.
+//
+// Document order is preserved (unlike the /models paths, which sort): the
+// order ollama reports is the order the operator's own machine has them.
+func fetchOllamaTags(ctx context.Context, baseURL string, checker URLChecker) ([]string, error) {
+	root := strings.TrimSuffix(strings.TrimSuffix(strings.TrimSpace(baseURL), "/"), "/v1")
+	body, err := getUpstreamJSON(ctx, root+"/api/tags", nil, checker)
+	if err != nil {
+		return nil, err
+	}
+	var decoded struct { // not-wire-format: decodes ollama's /api/tags response, never emitted to the SPA
+		Models []struct {
+			Name string `json:"name"`
+		} `json:"models"`
+	}
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(decoded.Models))
+	for _, m := range decoded.Models {
+		if name := strings.TrimSpace(m.Name); name != "" {
+			out = append(out, name)
+		}
+	}
+	return out, nil
+}
+
+// getUpstreamJSON issues one bounded GET and returns at most 2 MB of JSON
+// body. SEC-24: a non-nil checker supplies the SSRF-safe client; a nil
+// checker uses a plain one (CLI path — operator-run, accepted).
+func getUpstreamJSON(
+	ctx context.Context,
+	url string,
+	headers map[string]string,
+	checker URLChecker,
+) ([]byte, error) {
+	client := &http.Client{Timeout: modelListTimeout}
+	if checker != nil {
+		client = checker.SafeClient()
+		client.Timeout = modelListTimeout
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, &UpstreamStatusError{Status: resp.StatusCode}
+	}
+	ct := resp.Header.Get("Content-Type")
+	if ct != "" && !strings.Contains(ct, "application/json") {
+		return nil, fmt.Errorf("upstream models: unexpected Content-Type %q", ct)
+	}
+	return io.ReadAll(io.LimitReader(resp.Body, 2<<20)) // 2 MB limit
 }
 
 // ── BuildMessage (FR-7 catalog) ───────────────────────────────────────────────
@@ -492,25 +670,35 @@ func ValidateKey(ctx context.Context, in ValidateInput, checker URLChecker) Vali
 		}
 	}
 
-	catalog := in.Catalog
-
-	// Resolve probe model. Attempt a catalog fetch first if catalog is empty.
-	probeModel := pickProbeModel(catalog, in.ProviderID)
-	if probeModel == "" && len(catalog) == 0 {
-		// Try fetching the catalog.
-		fetched, err := FetchModels(ctx, in.BaseURL, in.APIKey, checker)
-		if err != nil {
-			slog.Debug("providers: FetchModels failed during ValidateKey; proceeding without catalog",
-				"provider", in.ProviderID, "error", err)
-		} else {
-			catalog = fetched
-			probeModel = pickProbeModel(catalog, in.ProviderID)
+	// Resolve the probe candidates. For a CATALOG provider the document is
+	// the source and NO `/models` pre-fetch happens at all (FR-022) — that
+	// round trip used to run on every key check and told us nothing the
+	// catalog does not already know. Only a row the catalog has no models
+	// for (a custom endpoint, a local runtime) falls back to the live list.
+	candidates := in.ProbeModels
+	if len(candidates) > maxProbeAttempts {
+		candidates = candidates[:maxProbeAttempts]
+	}
+	if len(candidates) == 0 {
+		candidates = catalogProbeModels(in.ProviderID)
+	}
+	if len(candidates) == 0 {
+		live := in.Catalog
+		if len(live) == 0 {
+			fetched, err := FetchModels(ctx, in.BaseURL, in.APIKey, checker)
+			if err != nil {
+				slog.Debug("providers: FetchModels failed during ValidateKey; proceeding without model list",
+					"provider", in.ProviderID, "error", err)
+			} else {
+				live = fetched
+			}
 		}
+		candidates = chatProbeCandidates(live)
 	}
 
-	if probeModel == "" {
-		// No chat model found and no catalog — we have no probe model.
-		// Return Unreachable (proceed with warning) rather than a false InvalidKey.
+	if len(candidates) == 0 {
+		// No probe model anywhere. Return Unreachable (proceed with a
+		// warning) rather than a false InvalidKey.
 		slog.Warn("providers: no probe model available; returning Unreachable",
 			"provider", in.ProviderID)
 		return ValidationResult{
@@ -520,13 +708,29 @@ func ValidateKey(ctx context.Context, in ValidateInput, checker URLChecker) Vali
 		}
 	}
 
-	// Perform the completion probe.
-	outcome, rawDetail := probeCompletion(ctx, in.BaseURL, in.APIKey, probeModel, checker)
+	// Probe in document order, falling through to the next candidate only
+	// when the upstream said the MODEL is missing — never on a credential or
+	// transport answer, which is what we came to find out (F-25). Bounded by
+	// maxProbeAttempts, which len(candidates) already respects.
+	var outcome Outcome
+	var rawDetail string
+	var probedModel string
+	for i, model := range candidates {
+		outcome, rawDetail = probeCompletion(ctx, in.BaseURL, in.APIKey, model, checker)
+		probedModel = model
+		if i+1 < len(candidates) && outcome != OutcomeValid && isModelNotFound(rawDetail) {
+			slog.Debug("providers: probe model not found upstream; trying the next candidate",
+				"provider", in.ProviderID, "model", model)
+			continue
+		}
+		break
+	}
 
 	return ValidationResult{
-		Outcome:   outcome,
-		Message:   BuildMessage(outcome, in.ProviderName),
-		RawDetail: rawDetail,
+		Outcome:     outcome,
+		Message:     BuildMessage(outcome, in.ProviderName),
+		RawDetail:   rawDetail,
+		ProbedModel: probedModel,
 	}
 }
 
@@ -584,4 +788,19 @@ func probeCompletion(ctx context.Context, baseURL, apiKey, model string, checker
 	// rawDetail for server debug log only — the caller must NOT send this to the user.
 	raw := fmt.Sprintf("status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(body)))
 	return outcome, raw
+}
+
+// DefaultProbeModel returns the first catalog model a provider offers that is
+// active, tool-calling and text-capable — the same rule the key-validation
+// probe uses (FR-022, A-20), exported for the CLI onboarding wizard, which
+// needs a concrete model id to write into the config it creates (A-21).
+//
+// Empty when the id is not a catalog provider or the row lists no such model;
+// the caller then asks the operator.
+func DefaultProbeModel(providerID string) string {
+	c := catalogProbeModels(providerID)
+	if len(c) == 0 {
+		return ""
+	}
+	return c[0]
 }

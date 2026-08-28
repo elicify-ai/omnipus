@@ -75,7 +75,7 @@ func TestRepro_AsyncDelegateCancel_ArmsBeforeChildRegisters(t *testing.T) {
 	const testAgentID = "mia"
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Provider: "mock"},
+			Defaults: config.AgentDefaults{DefaultModel: config.DefaultModel{Provider: "mock"}},
 			List:     []config.AgentConfig{{ID: testAgentID, Name: "Mia"}},
 		},
 	}

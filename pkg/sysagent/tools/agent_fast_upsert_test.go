@@ -58,7 +58,7 @@ func buildSysagentFastUpsertTestLoop(
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              filepath.Join(home, "workspace"),
-				ModelName:         "test-model",
+				DefaultModel:      config.DefaultModel{Model: "test-model"},
 				MaxTokens:         8192,
 				MaxToolIterations: 10,
 			},

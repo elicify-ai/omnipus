@@ -26,12 +26,16 @@ type SessionManager struct {
 	sessions map[string]*Session
 	mu       sync.RWMutex
 	storage  string
+	// projection holds the in-memory per-session projection state
+	// (ADR-066 FR-019) for this legacy backend; it is not persisted.
+	projection map[string]*memory.ProjectionMeta
 }
 
 func NewSessionManager(storage string) *SessionManager {
 	sm := &SessionManager{
-		sessions: make(map[string]*Session),
-		storage:  storage,
+		sessions:   make(map[string]*Session),
+		storage:    storage,
+		projection: make(map[string]*memory.ProjectionMeta),
 	}
 
 	if storage != "" {
@@ -298,20 +302,31 @@ func (sm *SessionManager) Close() error {
 
 // RollbackAppended implements SessionStore for the in-memory backend.
 // SessionManager has no append-only JSONL archive and no Skip concept, so
-// this truncates to the first targetArchiveLen messages. targetSkip is accepted
-// for interface compatibility but has no effect (no Skip windowing here).
+// this truncates to the first targetArchiveLen messages and restores the
+// in-memory projection state to emptiedSet (entries at index ≥
+// targetArchiveLen dropped). targetSkip is accepted for interface
+// compatibility but has no effect (no Skip windowing here).
 // In practice this is never reached for agent-loop abort paths because those
 // paths require an archive-backed store — but it must satisfy the interface.
-func (sm *SessionManager) RollbackAppended(key string, targetArchiveLen, _ int) {
+func (sm *SessionManager) RollbackAppended(key string, targetArchiveLen, _ int, emptiedSet memory.ProjectionSet) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
+
+	if targetArchiveLen < 0 {
+		targetArchiveLen = 0
+	}
+	restored := make(memory.ProjectionSet, len(emptiedSet))
+	for k, v := range emptiedSet {
+		if k.ArchiveLine < targetArchiveLen {
+			restored[k] = v
+		}
+	}
+	pm := sm.projectionLocked(key)
+	pm.Entries = restored
 
 	session, ok := sm.sessions[key]
 	if !ok {
 		return
-	}
-	if targetArchiveLen < 0 {
-		targetArchiveLen = 0
 	}
 	if targetArchiveLen >= len(session.Messages) {
 		return
@@ -321,6 +336,42 @@ func (sm *SessionManager) RollbackAppended(key string, targetArchiveLen, _ int) 
 	copy(msgs, session.Messages[:targetArchiveLen])
 	session.Messages = msgs
 	session.Updated = time.Now()
+}
+
+// projectionLocked returns the (lazily created) projection record for key.
+// Caller holds sm.mu.
+func (sm *SessionManager) projectionLocked(key string) *memory.ProjectionMeta {
+	pm, ok := sm.projection[key]
+	if !ok {
+		pm = &memory.ProjectionMeta{Entries: memory.ProjectionSet{}}
+		sm.projection[key] = pm
+	}
+	return pm
+}
+
+// Projection implements SessionStore (in-memory, not persisted).
+func (sm *SessionManager) Projection(key string) memory.ProjectionMeta {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	pm, ok := sm.projection[key]
+	if !ok {
+		return memory.ProjectionMeta{Entries: memory.ProjectionSet{}}
+	}
+	return memory.ProjectionMeta{Entries: pm.Entries.Clone(), Hydrated: pm.Hydrated}
+}
+
+// SetProjectionState implements SessionStore (in-memory, not persisted).
+func (sm *SessionManager) SetProjectionState(key string, pk memory.ProjectionKey, state memory.ProjectionState) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	sm.projectionLocked(key).Entries[pk] = state
+}
+
+// MarkHydrated implements SessionStore (in-memory, not persisted).
+func (sm *SessionManager) MarkHydrated(key string) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	sm.projectionLocked(key).Hydrated = true
 }
 
 // SetHistory updates the messages of a session.

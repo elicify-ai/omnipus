@@ -103,6 +103,14 @@ const (
 	// (RD2), so the WS forwarder turns THIS event into a task_run_status
 	// frame the calendar's per-occurrence chip can key off instead.
 	EventKindTaskRunStatus
+	// EventKindToolResultProjection is emitted when the D5 emptying pass
+	// (ADR-066 FR-022, pkg/agent/empty_in_place.go) replaces an already
+	// delivered tool result's content with the recall mark in the model's
+	// window. The WS forwarder turns it into a tool_result_projection frame
+	// (generated.ToolResultProjectionFrame) so the SPA can re-render the
+	// matching tool call; on reload the same state is read from
+	// ToolCall.content_state on the transcript.
+	EventKindToolResultProjection
 
 	eventKindCount
 )
@@ -141,6 +149,7 @@ var eventKindNames = [...]string{
 	"goal_status_changed",
 	"loop_status_changed",
 	"task_run_status",
+	"tool_result_projection",
 }
 
 // String returns the stable string form of an EventKind.
@@ -781,4 +790,25 @@ type TaskRunStatusPayload struct {
 	RunID        string `json:"run_id"`
 	OccurrenceMs *int64 `json:"occurrence_ms,omitempty"`
 	Status       string `json:"status"`
+}
+
+// ToolResultProjectionPayload is EventKindToolResultProjection's payload
+// (ADR-066 D5 / FR-022). SessionID and ProducingSessionID follow the
+// ToolExecEndPayload contract exactly (routing id on the wire's session_id;
+// the child's own session only when it differs — u9ToolExecSessionIDs).
+type ToolResultProjectionPayload struct {
+	ChatID             string
+	SessionID          string
+	ProducingSessionID session.SessionID
+	ToolCallID         session.ToolCallID
+	// ArchiveLine is the zero-based archive line of the projected result;
+	// with ToolCallID it is the projection-state key (FR-019).
+	ArchiveLine int
+	// ContentState is "emptied" (the only state the pass produces today;
+	// the wire enum also admits "capped").
+	ContentState string
+	// Mark is the recall mark now standing in for the content.
+	Mark string
+	// AgentID is the agent whose window was emptied.
+	AgentID string
 }

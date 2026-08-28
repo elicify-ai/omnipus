@@ -130,7 +130,7 @@ func (p *ctxCancelObservingProvider) GetDefaultModel() string {
 func TestDelegateCancelHard_RealSubTurn_ActuallyCancelsTargetContext(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Provider: "mock"},
+			Defaults: config.AgentDefaults{DefaultModel: config.DefaultModel{Provider: "mock", Model: "gpt-4o-mini"}},
 			List:     []config.AgentConfig{{ID: "mia"}},
 		},
 	}
@@ -291,7 +291,7 @@ func TestDelegateCancelHard_RealSubTurn_ActuallyCancelsTargetContext(t *testing.
 func TestDelegateCancelSoft_RealSubTurn_ActuallyCancelsTargetContext(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Provider: "mock"},
+			Defaults: config.AgentDefaults{DefaultModel: config.DefaultModel{Provider: "mock", Model: "gpt-4o-mini"}},
 			List:     []config.AgentConfig{{ID: "mia"}},
 		},
 	}

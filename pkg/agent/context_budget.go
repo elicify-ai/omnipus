@@ -98,22 +98,122 @@ func estimateToolDefsTokens(defs []providers.ToolDefinition) int {
 	return totalChars * 2 / 5
 }
 
-// isOverContextBudget checks whether the assembled messages plus tool definitions
-// and output reserve would exceed the model's context window. This enables
-// proactive compression before calling the LLM, rather than reacting to 400 errors.
-func isOverContextBudget(
-	contextWindow int,
-	messages []providers.Message,
-	toolDefs []providers.ToolDefinition,
-	maxTokens int,
-) bool {
+// contextBudget is the ONE budget B every consumer reads (ADR-066 D6,
+// FR-028):
+//
+//	B = W − max_tokens − ceil(0.05·W) − pinnedCoreOverhead
+//
+// W is the resolved context window, max_tokens the output reserve, the 5 %
+// term the headroom that keeps a just-trimmed window from re-trimming on the
+// very next turn, and pinnedCoreOverhead the estimated cost of the pinned
+// system prompt plus the breadcrumb block. B is what the NON-pinned request
+// (window history, injected notes, tool surface) may occupy; it can be ≤ 0
+// when max_tokens alone exceeds the window — callers treat that as "always
+// over" (FR-005b clamps max_tokens so a real instance never gets there).
+//
+// The formula is the one windowTrim always used for its suffix fit-check;
+// the pre-turn and timeout-recovery checks now derive their threshold from
+// the same helper instead of comparing against the raw window or a
+// percentage-scaled one (the retired summarize_token_percent).
+func contextBudget(contextWindow, maxTokens, pinnedCoreOverhead int) int {
+	headroom := (contextWindow + 19) / 20 // ceil(0.05 * contextWindow)
+	return contextWindow - maxTokens - headroom - pinnedCoreOverhead
+}
+
+// pinnedCoreOverheadTokens estimates the pinned core an assembled request
+// always carries: the agent's system prompt (via the ContextBuilder cache —
+// the static prompt is already cached, so this is cheap) plus the
+// breadcrumb block's hard cap. It uses the same chars*2/5 heuristic as
+// estimateMessageTokens so the two cannot drift (chars/4 would underestimate
+// by ~38 % and cause under-eviction on small-window models).
+func pinnedCoreOverheadTokens(agent *AgentInstance) int {
+	overhead := 0
+	if agent.ContextBuilder != nil {
+		overhead = len(agent.ContextBuilder.BuildSystemPromptWithCache()) * 2 / 5
+	}
+	// breadcrumbTokenCap is the hard cap on the breadcrumb block (~1000
+	// tokens); use it as a conservative estimate of the breadcrumb overhead.
+	return overhead + breadcrumbTokenCap
+}
+
+// agentContextBudget resolves B for one agent instance — the single call
+// every budget site (pre-turn, mid-turn after every admitted result,
+// timeout-recovery, windowTrim, model-switch) makes, so they can never
+// disagree.
+//
+// The window is the one ResolveWindow resolved (ADR-066 D2), read under the
+// instance mutex. There is no fallback: an exempt agent (subprocess-CLI
+// provider, FR-005) has no budget at all — callers check
+// budgetChecksExempt first and skip the check — so it returns 0 here rather
+// than inventing a window. An unknown window never reaches a budget site:
+// runTurn refuses the turn before the first check (FR-008).
+func agentContextBudget(agent *AgentInstance) int {
+	contextWindow, exempt, _ := agent.windowSnapshot()
+	if exempt || contextWindow <= 0 {
+		return 0
+	}
+	return contextBudget(contextWindow, agent.MaxTokens, pinnedCoreOverheadTokens(agent))
+}
+
+// requestTokens is FR-029's `total`: the estimator cost of the assembled
+// request — every message except the pinned system prompt at messages[0]
+// (that cost is already inside B via pinnedCoreOverhead) plus the tool
+// surface. System-role notes the turn injects after the pinned prompt
+// (scratchpad, workspace instructions, manifest) are real request bytes and
+// DO count; so does an injected recall span, which lives in the slice. The
+// output reserve is not added: B already subtracted it.
+func requestTokens(messages []providers.Message, toolDefs []providers.ToolDefinition) int {
 	msgTokens := 0
-	for _, m := range messages {
+	for i, m := range messages {
+		if i == 0 && m.Role == "system" {
+			continue // pinned core: accounted for in B
+		}
 		msgTokens += estimateMessageTokens(m)
 	}
+	return msgTokens + estimateToolDefsTokens(toolDefs)
+}
 
-	toolTokens := estimateToolDefsTokens(toolDefs)
-	total := msgTokens + toolTokens + maxTokens
+// isOverContextBudget reports whether the assembled request would exceed the
+// budget B (see contextBudget): requestTokens > B. Every budget site —
+// pre-turn, mid-turn (midturn_budget.go), timeout-recovery, model-switch —
+// compares through this predicate or requestTokens directly, so the sites
+// cannot disagree (FR-028). This enables proactive trimming before calling
+// the LLM, rather than reacting to 400 errors.
+func isOverContextBudget(
+	budget int,
+	messages []providers.Message,
+	toolDefs []providers.ToolDefinition,
+) bool {
+	return requestTokens(messages, toolDefs) > budget
+}
 
-	return total > contextWindow
+// isOverContextBudgetTokens is isOverContextBudget for a caller that has
+// already MEASURED its tool surface — the pre-turn and timeout-recovery
+// sites, which charge only the tools actually sent
+// (AgentLoop.sentToolSurfaceTokens) rather than the whole registry.
+//
+// The two used to disagree: they passed agent.Tools.ToProviderDefs() — a full
+// JSON schema for EVERY registered tool — while windowTrim, the function they
+// call on a positive result, measured the sent surface. With a compressed
+// manifest and a few MCP servers connected the over-count is tens of
+// thousands of tokens, so the check fired on a conversation that fit
+// comfortably and windowTrim then evicted a turn per turn. FR-028 requires
+// every budget site to compare through ONE predicate; this is that predicate
+// for the token-count form.
+func isOverContextBudgetTokens(budget int, messages []providers.Message, toolDefsTokens int) bool {
+	return sumRequestMessageTokens(messages)+toolDefsTokens > budget
+}
+
+// sumRequestMessageTokens is requestTokens' message half: every message
+// except the pinned system prompt at messages[0], whose cost is already
+// inside B.
+func sumRequestMessageTokens(messages []providers.Message) int {
+	total := 0
+	for i, m := range messages {
+		if i == 0 && m.Role == "system" {
+			continue
+		}
+		total += estimateMessageTokens(m)
+	}
+	return total
 }

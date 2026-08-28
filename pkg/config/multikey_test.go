@@ -13,13 +13,13 @@ func TestModelConfig_APIKey_ResolvesFromRef(t *testing.T) {
 	t.Setenv(keyRef, "single-key")
 
 	model := &ModelConfig{
-		ModelName: "gpt-4",
+		Name:      "gpt-4",
 		Model:     "openai/gpt-4o",
 		APIKeyRef: keyRef,
 	}
 
-	if model.ModelName != "gpt-4" {
-		t.Errorf("expected model_name 'gpt-4', got %q", model.ModelName)
+	if model.Name != "gpt-4" {
+		t.Errorf("expected model_name 'gpt-4', got %q", model.Name)
 	}
 	if model.APIKey() != "single-key" {
 		t.Errorf("expected api_key 'single-key', got %q", model.APIKey())
@@ -38,9 +38,9 @@ func TestModelConfig_APIKey_MultipleModels(t *testing.T) {
 	t.Setenv(key3Ref, "key3")
 
 	models := []*ModelConfig{
-		{ModelName: "glm-4.7-a", Model: "zhipu/glm-4.7", APIBase: "https://api.example.com", APIKeyRef: key1Ref},
-		{ModelName: "glm-4.7-b", Model: "zhipu/glm-4.7", APIBase: "https://api.example.com", APIKeyRef: key2Ref},
-		{ModelName: "glm-4.7-c", Model: "zhipu/glm-4.7", APIBase: "https://api.example.com", APIKeyRef: key3Ref},
+		{Name: "glm-4.7-a", Model: "zhipu/glm-4.7", APIBase: "https://api.example.com", APIKeyRef: key1Ref},
+		{Name: "glm-4.7-b", Model: "zhipu/glm-4.7", APIBase: "https://api.example.com", APIKeyRef: key2Ref},
+		{Name: "glm-4.7-c", Model: "zhipu/glm-4.7", APIBase: "https://api.example.com", APIKeyRef: key3Ref},
 	}
 
 	if models[0].APIKey() != "key1" {
@@ -59,7 +59,7 @@ func TestModelConfig_FieldsSurvivedConstruction(t *testing.T) {
 	t.Setenv(keyRef, "key0")
 
 	model := &ModelConfig{
-		ModelName:      "gpt-4",
+		Name:           "gpt-4",
 		Model:          "openai/gpt-4o",
 		APIBase:        "https://api.example.com",
 		Proxy:          "http://proxy:8080",
@@ -70,8 +70,8 @@ func TestModelConfig_FieldsSurvivedConstruction(t *testing.T) {
 		APIKeyRef:      keyRef,
 	}
 
-	if model.ModelName != "gpt-4" {
-		t.Errorf("expected model_name preserved, got %q", model.ModelName)
+	if model.Name != "gpt-4" {
+		t.Errorf("expected model_name preserved, got %q", model.Name)
 	}
 	if model.Model != "openai/gpt-4o" {
 		t.Errorf("expected model preserved, got %q", model.Model)
@@ -104,7 +104,7 @@ func TestModelConfig_IsVirtualFlag(t *testing.T) {
 	t.Setenv(keyRef, "key1")
 
 	model := &ModelConfig{
-		ModelName: "gpt-4",
+		Name:      "gpt-4",
 		Model:     "openai/gpt-4o",
 		APIKeyRef: keyRef,
 	}

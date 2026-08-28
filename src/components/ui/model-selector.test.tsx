@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeAll } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import * as React from 'react'
-import { ModelSelector, type ModelGroup } from './model-selector'
+import { ModelSelector, type ModelGroup, type ModelCatalogGroup } from './model-selector'
+import type { CatalogModel } from '@/lib/api/generated/openapi-types'
 
 // cmdk (used by Command) uses ResizeObserver and scrollIntoView which are not
 // available in jsdom. Provide stubs so tests can mount the component.
@@ -16,7 +17,32 @@ beforeAll(() => {
   if (!Element.prototype.scrollIntoView) {
     Element.prototype.scrollIntoView = () => {}
   }
+  // jsdom reports every element as 0x0, and a virtualiser with a zero-height
+  // viewport renders zero rows — it would "pass" a row-count assertion for the
+  // wrong reason. Give the cmdk list a real viewport: the popover fixture is
+  // 480 px tall and CommandList caps its own scroll area at max-h-[300px], so
+  // 300 px is the height the virtualiser actually sees in the browser.
+  // @tanstack/react-virtual measures the scroll element with offsetWidth /
+  // offsetHeight, which jsdom hard-codes to 0 — so these are the properties to
+  // give a size, not getBoundingClientRect.
+  Object.defineProperty(HTMLElement.prototype, 'offsetHeight', {
+    configurable: true,
+    get(this: HTMLElement) {
+      return this.hasAttribute('cmdk-list') ? 300 : 0
+    },
+  })
+  Object.defineProperty(HTMLElement.prototype, 'offsetWidth', {
+    configurable: true,
+    get(this: HTMLElement) {
+      return this.hasAttribute('cmdk-list') ? 320 : 0
+    },
+  })
 })
+
+/** The trigger button. cmdk's search input is also a `combobox`, so the role
+ *  alone is ambiguous once the popover content is rendered inline. */
+const triggerButton = () =>
+  screen.getAllByRole('combobox').find((el) => el.tagName === 'BUTTON') as HTMLElement
 
 // ModelSelector test suite
 // Covers: search-by-model-name, flat list (1 provider), grouped headers (≥2 providers), text-input fallback
@@ -743,5 +769,356 @@ describe('ModelSelector — search field focus ring (operator request 2026-08-13
     renderSelector(FLAT_MODELS, '', vi.fn())
     const optedOut = document.querySelectorAll('[data-no-focus-ring]')
     expect(optedOut).toHaveLength(1)
+  })
+})
+
+// =====================================================================
+// ADR-068 T068-22 — catalog mode: vendor/date ordering, Recommended chips,
+// virtualisation above 100 rows, the onboarding label, provider filtering.
+//
+// FR-030 (order + chips + virtualisation), FR-029 (label, empty value,
+// nothing pre-selected), FR-019 (`filterProviders`, connected-only).
+// =====================================================================
+
+function catalogModel(over: Partial<CatalogModel> & { id: string }): CatalogModel {
+  return {
+    ...over,
+    id: over.id,
+    name: over.name ?? over.id,
+    context_window: over.context_window ?? 200000,
+    max_output_tokens: over.max_output_tokens ?? 8192,
+    input_modalities: over.input_modalities ?? ['text'],
+    tool_call: over.tool_call ?? true,
+    status: over.status ?? 'active',
+  }
+}
+
+/** The FR-030 ordering fixture, deliberately in the WRONG order on input. */
+const ORDERING_CATALOG: CatalogModel[] = [
+  catalogModel({ id: 'openai/gpt-5.4', release_date: '2026-03-01' }),
+  catalogModel({ id: 'anthropic/claude-3.5-haiku', release_date: '2024-10-01' }),
+  catalogModel({ id: 'x/nodate' }),
+  catalogModel({ id: 'x/dated', release_date: '2025-01-01' }),
+  catalogModel({ id: 'anthropic/claude-sonnet-4.6', release_date: '2026-02-01' }),
+]
+
+function bulkCatalog(n: number): CatalogModel[] {
+  return Array.from({ length: n }, (_, i) =>
+    // Zero-padded so the id order is the render order inside the one vendor group.
+    catalogModel({ id: `acme/model-${String(i).padStart(3, '0')}`, tool_call: false }),
+  )
+}
+
+function renderCatalog(
+  groups: ModelCatalogGroup[],
+  extra: Partial<React.ComponentProps<typeof ModelSelector>> = {},
+) {
+  return render(
+    <ModelSelector
+      models={[]}
+      value=""
+      onChange={vi.fn()}
+      constrainToCatalog
+      catalogGroups={groups}
+      {...extra}
+    />,
+  )
+}
+
+const optionTexts = () => screen.getAllByRole('option').map((el) => el.textContent ?? '')
+
+describe('ModelSelector — FR-030 vendor/date ordering', () => {
+  it('groups by vendor and orders each group by release date desc, undated last', () => {
+    renderCatalog([{ providerId: 'openrouter', providerName: 'OpenRouter', status: 'connected', models: ORDERING_CATALOG }])
+
+    // Vendor groups are alphabetical, so anthropic then openai then x.
+    const headings = screen
+      .getAllByTestId('model-selector-vendor-heading')
+      .map((el) => el.textContent)
+    expect(headings).toEqual(['anthropic', 'openai', 'x'])
+
+    const texts = optionTexts()
+    // Within Anthropic: 2026-02 before 2024-10.
+    expect(texts[0]).toContain('anthropic/claude-sonnet-4.6')
+    expect(texts[1]).toContain('anthropic/claude-3.5-haiku')
+    expect(texts[2]).toContain('openai/gpt-5.4')
+    // Undated is the LAST row of its own group, below the dated sibling.
+    expect(texts[3]).toContain('x/dated')
+    expect(texts[4]).toContain('x/nodate')
+  })
+
+  it('orders same-date models by id ascending (dataset row 8)', () => {
+    renderCatalog([
+      {
+        providerId: 'openrouter',
+        providerName: 'OpenRouter',
+        models: [
+          catalogModel({ id: 'anthropic/zeta', release_date: '2026-02-01' }),
+          catalogModel({ id: 'anthropic/alpha', release_date: '2026-02-01' }),
+        ],
+      },
+    ])
+    const texts = optionTexts()
+    expect(texts[0]).toContain('anthropic/alpha')
+    expect(texts[1]).toContain('anthropic/zeta')
+  })
+})
+
+describe('ModelSelector — FR-030 Recommended for chat chips', () => {
+  it('marks at most three per provider and never a 127,999-window model', () => {
+    renderCatalog([
+      {
+        providerId: 'openrouter',
+        providerName: 'OpenRouter',
+        models: [
+          catalogModel({ id: 'a/one', context_window: 200000, release_date: '2026-05-01' }),
+          catalogModel({ id: 'a/two', context_window: 200000, release_date: '2026-04-01' }),
+          catalogModel({ id: 'a/three', context_window: 128000, release_date: '2026-03-01' }),
+          catalogModel({ id: 'a/four', context_window: 128000, release_date: '2026-02-01' }),
+          catalogModel({ id: 'a/five', context_window: 127999, release_date: '2026-06-01' }),
+        ],
+      },
+    ])
+
+    expect(screen.getAllByText('Recommended for chat')).toHaveLength(3)
+
+    const chipped = screen
+      .getAllByRole('option')
+      .filter((el) => el.textContent?.includes('Recommended for chat'))
+      .map((el) => el.getAttribute('data-model'))
+    // Newest three eligible; the oldest eligible (a/four) drops off.
+    expect(chipped).toEqual(['a/one', 'a/two', 'a/three'])
+    // The 127,999 window is below the bar even though it is the newest model.
+    expect(chipped).not.toContain('a/five')
+  })
+
+  it('does not chip a model that cannot call tools, whatever its window', () => {
+    renderCatalog([
+      {
+        providerId: 'p',
+        providerName: 'P',
+        models: [catalogModel({ id: 'a/huge', context_window: 1000000, tool_call: false })],
+      },
+    ])
+    expect(screen.queryByText('Recommended for chat')).not.toBeInTheDocument()
+  })
+
+  it('counts the three per PROVIDER, not across the whole list', () => {
+    renderCatalog([
+      { providerId: 'p1', providerName: 'P1', models: bulkEligible('p1') },
+      { providerId: 'p2', providerName: 'P2', models: bulkEligible('p2') },
+    ])
+    expect(screen.getAllByText('Recommended for chat')).toHaveLength(6)
+  })
+})
+
+function bulkEligible(prefix: string): CatalogModel[] {
+  return Array.from({ length: 5 }, (_, i) =>
+    catalogModel({ id: `${prefix}/m${i}`, release_date: `2026-0${i + 1}-01` }),
+  )
+}
+
+describe('ModelSelector — FR-030 virtualisation threshold', () => {
+  it('renders nothing but a "No models" empty state for 0 models', () => {
+    renderCatalog([])
+    expect(screen.queryAllByRole('option')).toHaveLength(0)
+    expect(screen.getByText(/No models/i)).toBeInTheDocument()
+  })
+
+  it('renders the single row for 1 model', () => {
+    renderCatalog([{ providerId: 'p', providerName: 'P', models: bulkCatalog(1) }])
+    expect(screen.getAllByRole('option')).toHaveLength(1)
+  })
+
+  it('renders all 100 rows at the threshold (100 is NOT virtualised)', () => {
+    renderCatalog([{ providerId: 'p', providerName: 'P', models: bulkCatalog(100) }])
+    expect(screen.getAllByRole('option')).toHaveLength(100)
+  })
+
+  it('virtualises at 101 — far fewer rows than models, but never zero', () => {
+    renderCatalog([{ providerId: 'p', providerName: 'P', models: bulkCatalog(101) }])
+    const rows = screen.getAllByRole('option')
+    expect(rows.length).toBeGreaterThanOrEqual(10)
+    expect(rows.length).toBeLessThanOrEqual(22)
+  })
+
+  it('virtualises the full 359-model OpenRouter catalog the same way', () => {
+    renderCatalog([{ providerId: 'p', providerName: 'P', models: bulkCatalog(359) }])
+    const rows = screen.getAllByRole('option')
+    // Lower bound as well as upper: a virtualiser handed a zero-height viewport
+    // renders ONE row and would sail past a "fewer than 359" assertion.
+    expect(rows.length).toBeGreaterThanOrEqual(10)
+    expect(rows.length).toBeLessThanOrEqual(22)
+  })
+
+  it('keeps the virtualised rows in catalog order from the top of the list', () => {
+    renderCatalog([{ providerId: 'p', providerName: 'P', models: bulkCatalog(359) }])
+    expect(optionTexts()[0]).toContain('acme/model-000')
+  })
+})
+
+describe('ModelSelector — aria-setsize / aria-posinset', () => {
+  it('numbers every row against the full list when the list is whole', () => {
+    renderCatalog([{ providerId: 'p', providerName: 'P', models: bulkCatalog(100) }])
+    const rows = screen.getAllByRole('option')
+    expect(rows[0]).toHaveAttribute('aria-posinset', '1')
+    expect(rows[0]).toHaveAttribute('aria-setsize', '100')
+    expect(rows[99]).toHaveAttribute('aria-posinset', '100')
+    expect(rows[99]).toHaveAttribute('aria-setsize', '100')
+  })
+
+  it('still reports the FULL set size on a virtualised list (only a window is in the DOM)', () => {
+    renderCatalog([{ providerId: 'p', providerName: 'P', models: bulkCatalog(359) }])
+    const rows = screen.getAllByRole('option')
+    expect(rows.length).toBeGreaterThanOrEqual(10)
+    expect(rows.length).toBeLessThan(359)
+    for (const row of rows) expect(row).toHaveAttribute('aria-setsize', '359')
+    expect(rows[0]).toHaveAttribute('aria-posinset', '1')
+  })
+})
+
+describe('ModelSelector — FR-029 onboarding label and empty value', () => {
+  it('uses the caller label verbatim as the accessible name when there is no value', () => {
+    renderCatalog([{ providerId: 'p', providerName: 'P', models: bulkCatalog(3) }], {
+      label: 'Model for your first agent',
+    })
+    expect(screen.getByRole('combobox', { name: 'Model for your first agent' })).toBeInTheDocument()
+  })
+
+  it('keeps the label at the front of the accessible name once a model is chosen', () => {
+    renderCatalog([{ providerId: 'p', providerName: 'P', models: bulkCatalog(3) }], {
+      label: 'Model for your first agent',
+      value: 'acme/model-001',
+    })
+    const trigger = triggerButton()
+    expect(trigger.getAttribute('aria-label')).toMatch(/^Model for your first agent/)
+    expect(trigger.getAttribute('aria-label')).toContain('acme/model-001')
+  })
+
+  it('pre-selects nothing: no row is marked chosen and the trigger shows the placeholder', () => {
+    renderCatalog([{ providerId: 'p', providerName: 'P', models: bulkCatalog(3) }], {
+      label: 'Model for your first agent',
+      placeholder: 'Select a model',
+    })
+    expect(screen.getAllByRole('option').filter((el) => el.hasAttribute('data-chosen'))).toHaveLength(0)
+    expect(triggerButton()).toHaveTextContent('Select a model')
+  })
+
+  it('marks exactly the chosen row when a value IS set', () => {
+    renderCatalog([{ providerId: 'p', providerName: 'P', models: bulkCatalog(3) }], {
+      value: 'acme/model-001',
+    })
+    const chosen = screen.getAllByRole('option').filter((el) => el.hasAttribute('data-chosen'))
+    expect(chosen).toHaveLength(1)
+    expect(chosen[0]).toHaveAttribute('data-model', 'acme/model-001')
+  })
+
+  it('falls back to the historical accessible name when no label is given', () => {
+    renderCatalog([{ providerId: 'p', providerName: 'P', models: bulkCatalog(3) }])
+    expect(triggerButton().getAttribute('aria-label')).toMatch(/^Model selector/)
+  })
+
+  it('emits the picked model and its provider id', () => {
+    const onChange = vi.fn()
+    const onPairChange = vi.fn()
+    renderCatalog([{ providerId: 'openrouter', providerName: 'OpenRouter', models: bulkCatalog(3) }], {
+      onChange,
+      onPairChange,
+    })
+    fireEvent.click(screen.getByRole('option', { name: /acme\/model-001/ }))
+    expect(onChange).toHaveBeenCalledWith('acme/model-001')
+    expect(onPairChange).toHaveBeenCalledWith({ model: 'acme/model-001', provider: 'openrouter' })
+  })
+})
+
+describe('ModelSelector — FR-019 filterProviders', () => {
+  const TWO_CATALOG_GROUPS: ModelCatalogGroup[] = [
+    {
+      providerId: 'openrouter',
+      providerName: 'OpenRouter',
+      status: 'connected',
+      models: [catalogModel({ id: 'a/live' })],
+    },
+    {
+      providerId: 'openai',
+      providerName: 'OpenAI',
+      status: 'disconnected',
+      models: [catalogModel({ id: 'b/dead' })],
+    },
+    {
+      providerId: 'openai-chatgpt',
+      providerName: 'ChatGPT',
+      status: 'signed_in',
+      models: [catalogModel({ id: 'c/session' })],
+    },
+  ]
+
+  it('shows every provider when the prop is omitted', () => {
+    renderCatalog(TWO_CATALOG_GROUPS)
+    expect(screen.getAllByRole('option')).toHaveLength(3)
+  })
+
+  it('keeps only connected and signed-in providers when filtered by status', () => {
+    renderCatalog(TWO_CATALOG_GROUPS, { filterProviders: { statuses: ['connected', 'signed_in'] } })
+    const models = screen.getAllByRole('option').map((el) => el.getAttribute('data-model'))
+    expect(models).toEqual(['a/live', 'c/session'])
+  })
+
+  it('narrows to a single provider by id', () => {
+    renderCatalog(TWO_CATALOG_GROUPS, { filterProviders: { providerIds: ['openai'] } })
+    const models = screen.getAllByRole('option').map((el) => el.getAttribute('data-model'))
+    expect(models).toEqual(['b/dead'])
+  })
+
+  it('applies both filters together, and an empty result is the "No models" state', () => {
+    renderCatalog(TWO_CATALOG_GROUPS, {
+      filterProviders: { providerIds: ['openai'], statuses: ['connected'] },
+    })
+    expect(screen.queryAllByRole('option')).toHaveLength(0)
+    expect(screen.getByText(/No models/i)).toBeInTheDocument()
+  })
+
+  it('also narrows the legacy string providerGroups by id', () => {
+    render(
+      <ModelSelector
+        models={[]}
+        value=""
+        onChange={vi.fn()}
+        providerGroups={TWO_PROVIDER_GROUPS}
+        filterProviders={{ providerIds: ['anthropic'] }}
+      />,
+    )
+    expect(screen.getByText('Anthropic')).toBeInTheDocument()
+    expect(screen.queryByText('OpenAI')).not.toBeInTheDocument()
+    expect(screen.queryByText('gpt-4o')).not.toBeInTheDocument()
+  })
+})
+
+describe('ModelSelector — catalog mode search', () => {
+  it('filters the catalog rows by id substring and renumbers the set', () => {
+    renderCatalog([{ providerId: 'p', providerName: 'P', models: ORDERING_CATALOG }])
+    fireEvent.change(screen.getByPlaceholderText('Search models...'), {
+      target: { value: 'claude' },
+    })
+    const rows = screen.getAllByRole('option')
+    expect(rows).toHaveLength(2)
+    expect(rows[0]).toHaveAttribute('aria-setsize', '2')
+    expect(rows[1]).toHaveAttribute('aria-posinset', '2')
+  })
+
+  it('matches the display name as well as the id', () => {
+    renderCatalog([
+      {
+        providerId: 'p',
+        providerName: 'P',
+        models: [catalogModel({ id: 'a/one', name: 'Sonnet Ultra' }), catalogModel({ id: 'a/two', name: 'Other' })],
+      },
+    ])
+    fireEvent.change(screen.getByPlaceholderText('Search models...'), {
+      target: { value: 'sonnet' },
+    })
+    const rows = screen.getAllByRole('option')
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toHaveAttribute('data-model', 'a/one')
   })
 })

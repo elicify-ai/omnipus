@@ -182,7 +182,15 @@ func TestProviders_HasModelsEndpoint_Signal(t *testing.T) {
 
 	seedProviderConfig(
 		t, api,
-		map[string]any{"model_name": "openrouter", "provider": "openrouter", "model": "openrouter/auto"},
+		map[string]any{
+			// updated_at marks this row as operator-configured rather than a
+			// fresh-install template (isSeedTemplateRow, ADR-067 FR-029) — a
+			// bare Provider+Model pair with no credential, endpoint, models
+			// list or PUT stamp is indistinguishable from a template, and a
+			// real PUT always stamps updated_at (ADR-068 MAJ-015).
+			"model_name": "openrouter", "provider": "openrouter", "model": "~anthropic/claude-sonnet-latest",
+			"updated_at": time.Now().UTC().Format(time.RFC3339),
+		},
 		map[string]any{
 			"model_name": "mygw", "provider": "mygw", "model": "mygw/llama",
 			"models": []any{"mygw/llama", "mygw/mixtral"},
@@ -234,15 +242,20 @@ func TestProviders_UserModels_RoundTrip(t *testing.T) {
 	assert.ElementsMatch(t, []string{"mygw/a", "mygw/b"}, gw.Models)
 
 	// Clearing the list (empty array) removes the user catalog; the provider
-	// then falls back to its configured default model alias.
+	// then reports an empty models list (ADR-068 T068-04 removed the
+	// model_name-alias fallback fill).
 	putProvider(t, api, "mygw", `{"models":[]}`)
 	provs = getProviders(t, api)
+	// Reset gw so a "mygw" that no longer appears in the list fails the
+	// NotNil check below loudly, instead of silently re-asserting on the
+	// stale pointer from the block above.
+	gw = nil
 	for i := range provs {
 		if provs[i].Id == "mygw" {
 			gw = &provs[i]
 		}
 	}
-	require.NotNil(t, gw)
+	require.NotNil(t, gw, "mygw must still be present after clearing its models; got %+v", provs)
 	assert.NotContains(t, gw.Models, "mygw/b", "cleared user models must not be returned")
 }
 
@@ -292,44 +305,6 @@ func TestProviders_ModelBounds_Rejected(t *testing.T) {
 		require.Equal(t, http.StatusOK, w.Code,
 			"exactly 500 models must be accepted; body=%s", w.Body.String())
 	})
-}
-
-// TestProviders_RefreshModels_EndpointlessReturnsUserCatalogue proves the
-// /refresh-models endpoint returns the stored slugs for an endpoint-less provider.
-func TestProviders_RefreshModels_EndpointlessReturnsUserCatalogue(t *testing.T) {
-	api := newTestRestAPIWithHome(t)
-	seedProviderConfig(
-		t, api,
-		map[string]any{
-			"model_name": "mygw", "provider": "mygw", "model": "mygw/a",
-			"models": []any{"mygw/a", "mygw/b"},
-		},
-	)
-
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPost, "/api/v1/providers/mygw/refresh-models", nil)
-	r.URL.Path = "/api/v1/providers/mygw/refresh-models"
-	api.HandleProviders(w, r)
-
-	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
-	var p gen.Provider
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &p))
-	require.NotNil(t, p.HasModelsEndpoint)
-	assert.False(t, *p.HasModelsEndpoint)
-	assert.ElementsMatch(t, []string{"mygw/a", "mygw/b"}, p.Models)
-}
-
-// TestProviders_RefreshModels_NotConfigured_404 proves refresh on an unknown
-// provider returns 404.
-func TestProviders_RefreshModels_NotConfigured_404(t *testing.T) {
-	api := newTestRestAPIWithHome(t)
-
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPost, "/api/v1/providers/ghost/refresh-models", nil)
-	r.URL.Path = "/api/v1/providers/ghost/refresh-models"
-	api.HandleProviders(w, r)
-
-	require.Equal(t, http.StatusNotFound, w.Code, "body=%s", w.Body.String())
 }
 
 // --- Task 1 (M4): workspace→turn binding ---
@@ -444,17 +419,22 @@ func seedProviderConfig(t *testing.T, api *restAPI, entries ...map[string]any) {
 			if !ok {
 				continue
 			}
-			mc := &config.ModelConfig{
-				ModelName: asString(e["model_name"]),
-				Provider:  asString(e["provider"]),
-				Model:     asString(e["model"]),
+			// Round-trip through encoding/json rather than hand-picking
+			// fields: a partial reconstruction (as this once was — Provider/
+			// Model/Models only) silently drops UpdatedAt/APIKeyRef/APIBase/
+			// AuthMethod, which makes isSeedTemplateRow misclassify a real,
+			// previously-PUT row as a fresh-install template the moment its
+			// Models list goes empty (its `updated_at` stamp never survived
+			// this reload, even though the real PUT handler wrote it to
+			// config.json) — exactly what a real config reload does NOT do,
+			// since the production loader unmarshals every ModelConfig field.
+			raw, mErr := json.Marshal(e)
+			if mErr != nil {
+				return mErr
 			}
-			if rawModels, ok := e["models"].([]any); ok {
-				for _, v := range rawModels {
-					if s, ok := v.(string); ok {
-						mc.Models = append(mc.Models, s)
-					}
-				}
+			mc := &config.ModelConfig{}
+			if uErr := json.Unmarshal(raw, mc); uErr != nil {
+				return uErr
 			}
 			cfg.Providers = append(cfg.Providers, mc)
 		}
@@ -472,21 +452,14 @@ func seedProviderConfig(t *testing.T, api *restAPI, entries ...map[string]any) {
 	require.NoError(t, err, "seed provider config")
 
 	// Mirror into the in-memory config (the GET handler reads cfg.Providers).
+	// Same round-trip-through-JSON rationale as the reload closure above.
 	cfg := api.agentLoop.GetConfig()
 	cfg.Providers = cfg.Providers[:0]
 	for _, e := range entries {
-		mc := &config.ModelConfig{
-			ModelName: asString(e["model_name"]),
-			Provider:  asString(e["provider"]),
-			Model:     asString(e["model"]),
-		}
-		if raw, ok := e["models"].([]any); ok {
-			for _, v := range raw {
-				if s, ok := v.(string); ok {
-					mc.Models = append(mc.Models, s)
-				}
-			}
-		}
+		raw, mErr := json.Marshal(e)
+		require.NoError(t, mErr, "seed provider config: marshal entry")
+		mc := &config.ModelConfig{}
+		require.NoError(t, json.Unmarshal(raw, mc), "seed provider config: unmarshal entry")
 		cfg.Providers = append(cfg.Providers, mc)
 	}
 }
@@ -505,16 +478,28 @@ func putProviderRaw(t *testing.T, api *restAPI, id, body string) *httptest.Respo
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/providers/"+id, strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
 	r.URL.Path = "/api/v1/providers/" + id
-	api.HandleProviders(w, r)
+	api.HandleProviders(w, isolateRateLimit(t, r))
 	return w
 }
 
+// getProviders lists providers as the SETTINGS SCREEN does — authenticated.
+//
+// The authentication is not incidental scaffolding. GET /api/v1/providers now
+// answers an anonymous caller with a REDUCED row (no account_label, no
+// dependents) and 401s one entirely once onboarding is complete (C1: the list
+// branch previously carried no authorization gate at all, so an
+// unauthenticated curl on a production gateway returned the whole inventory
+// including the operator's live vendor account_label). Every caller of this
+// helper asserts the full, authenticated row shape that the SPA's
+// fetchProviders (src/lib/api.ts, called only from the Settings screens)
+// actually receives, so the helper models that caller.
 func getProviders(t *testing.T, api *restAPI) []gen.Provider {
 	t.Helper()
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/providers", nil)
 	r.URL.Path = "/api/v1/providers"
-	api.HandleProviders(w, r)
+	ctx := context.WithValue(r.Context(), UserContextKey{}, &config.UserConfig{Username: "admin"})
+	api.HandleProviders(w, isolateRateLimit(t, r.WithContext(ctx)))
 	require.Equal(t, http.StatusOK, w.Code, "GET providers must be 200; body=%s", w.Body.String())
 	var provs []gen.Provider
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &provs))

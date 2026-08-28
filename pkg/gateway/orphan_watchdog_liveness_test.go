@@ -188,7 +188,7 @@ func TestOrphanWatchdog_GenuinelyActiveDelegate_NeverSynthesizesInterrupted(t *t
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              tmpDir,
-				ModelName:         "content-routed-orphan-mock",
+				DefaultModel:      config.DefaultModel{Model: "content-routed-orphan-mock"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -207,7 +207,7 @@ func TestOrphanWatchdog_GenuinelyActiveDelegate_NeverSynthesizesInterrupted(t *t
 	gate := &orphanGateTool{unblock: unblock, entered: make(chan struct{})}
 	al.RegisterTool(gate)
 
-	delegateTool := tools.NewDelegateTool(cfg.Agents.Defaults.ModelName, cfg.Agents.Defaults.MaxTokens, 0)
+	delegateTool := tools.NewDelegateTool(cfg.Agents.Defaults.DefaultModel.Model, cfg.Agents.Defaults.MaxTokens, 0)
 	delegateTool.SetSpawner(agent.NewSubTurnSpawner(al))
 	// ADR-057 U14 fixture repair (38ba80eb): DelegateTool now refuses to
 	// start a delegated session without a durable lifecycle store wired
@@ -374,7 +374,7 @@ func TestOrphanWatchdog_PermanentlyStuckDelegate_ForceFiresInterruptedPastCeilin
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              tmpDir,
-				ModelName:         "content-routed-orphan-mock",
+				DefaultModel:      config.DefaultModel{Model: "content-routed-orphan-mock"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -395,7 +395,7 @@ func TestOrphanWatchdog_PermanentlyStuckDelegate_ForceFiresInterruptedPastCeilin
 	gate := &orphanGateTool{unblock: unblock, entered: make(chan struct{})}
 	al.RegisterTool(gate)
 
-	delegateTool := tools.NewDelegateTool(cfg.Agents.Defaults.ModelName, cfg.Agents.Defaults.MaxTokens, 0)
+	delegateTool := tools.NewDelegateTool(cfg.Agents.Defaults.DefaultModel.Model, cfg.Agents.Defaults.MaxTokens, 0)
 	delegateTool.SetSpawner(agent.NewSubTurnSpawner(al))
 	// ADR-057 U14 fixture repair (38ba80eb): DelegateTool now refuses to
 	// start a delegated session without a durable lifecycle store wired

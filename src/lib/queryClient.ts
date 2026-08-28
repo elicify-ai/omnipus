@@ -1,18 +1,54 @@
 import { QueryClient } from '@tanstack/react-query'
-import { ApiSchemaError, ApiError } from './api'
+import { ApiSchemaError, ApiError, validateToken } from './api'
 import { forceLogout } from './authLogout'
+import { checkTokenValidity, resetTokenValidationCache, type TokenVerdict } from '@/routes/authValidation'
 
 // ── Global 401 logout handler ─────────────────────────────────────────────────
 //
-// Debounced: once a 401 is detected, subsequent concurrent 401 failures within
-// the same 2-second window are suppressed so concurrent polling queries don't
-// each trigger a redirect. The redirect fires synchronously on the first call;
-// only the debounce-flag reset uses setTimeout (see authLogout.ts).
+// A 401 on any ONE query/mutation does NOT necessarily mean the session is
+// dead — the same status also covers a resource-scoped authorization
+// decision (session is fine, this caller just isn't allowed THIS resource).
+// Blindly forcing a logout on every 401 fabricates a "your session ended"
+// story that the app's own session-validity check (GET /api/v1/auth/validate,
+// via checkTokenValidity() — the exact same source of truth _app.tsx's route
+// guard uses) can simultaneously be contradicting. Confirm before forcing the
+// user out: only a CONFIRMED-invalid verdict triggers forceLogout(); an 'ok'
+// or 'transient' (inconclusive network/5xx) verdict leaves the failure to the
+// query's own isError UI (e.g. QueryErrorState.tsx / ProvidersSection's
+// "Failed to load providers" state) instead of an incorrect global bounce.
+//
+// resetTokenValidationCache() forces a FRESH check rather than trusting
+// authValidation.ts's 30s "ok" cache: the 401 we just observed is live
+// evidence that may postdate the cached verdict, so re-validating on this
+// signal is strictly more accurate than riding a stale cache window.
+// Concurrent 401s (e.g. several panels failing at once) share ONE in-flight
+// recheck via `_pendingValidityRecheck` so a burst doesn't fire a burst of
+// /auth/validate calls.
+//
+// Debounce of the LOGOUT itself (once confirmed) is delegated entirely to
+// forceLogout()'s own guard — see authLogout.ts.
 
-function _handleAuthError(err: unknown): void {
+let _pendingValidityRecheck: Promise<TokenVerdict> | null = null
+
+function _recheckSessionValidity(): Promise<TokenVerdict> {
+  if (!_pendingValidityRecheck) {
+    resetTokenValidationCache()
+    _pendingValidityRecheck = checkTokenValidity(validateToken).finally(() => {
+      _pendingValidityRecheck = null
+    })
+  }
+  return _pendingValidityRecheck
+}
+
+// Exported (like shouldRetryQuery/shouldRetryMutation above) so tests exercise
+// the REAL handler instead of a hand-copied replica that can silently drift.
+export async function handleAuthError(err: unknown): Promise<void> {
   if (!(err instanceof ApiError)) return
   if (err.status !== 401) return
-  forceLogout()
+  const verdict = await _recheckSessionValidity()
+  if (verdict === 'unauthorized') {
+    forceLogout()
+  }
 }
 
 // ── Retry predicates ─────────────────────────────────────────────────────────
@@ -182,13 +218,13 @@ function _handleApiSchemaError(err: unknown): void {
 queryClient.getQueryCache().subscribe((event) => {
   if (event.type === 'updated' && event.action.type === 'error') {
     _handleApiSchemaError(event.action.error)
-    _handleAuthError(event.action.error)
+    void handleAuthError(event.action.error)
   }
 })
 
 queryClient.getMutationCache().subscribe((event) => {
   if (event.type === 'updated' && event.mutation.state.status === 'error') {
     _handleApiSchemaError(event.mutation.state.error)
-    _handleAuthError(event.mutation.state.error)
+    void handleAuthError(event.mutation.state.error)
   }
 })

@@ -67,3 +67,14 @@ func (p *HTTPProvider) GetDefaultModel() string {
 func (p *HTTPProvider) SupportsNativeSearch() bool {
 	return p.delegate.SupportsNativeSearch()
 }
+
+// APIBase returns the resolved base URL this transport posts to. It exists so
+// the factory's dispatch tests can assert the URL a catalog row produced
+// (ADR-067 DS-3) without reaching into the openai_compat package's
+// unexported state.
+func (p *HTTPProvider) APIBase() string {
+	if p == nil || p.delegate == nil {
+		return ""
+	}
+	return p.delegate.APIBase()
+}

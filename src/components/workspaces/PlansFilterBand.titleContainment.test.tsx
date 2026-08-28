@@ -129,7 +129,7 @@ function makePlan(overrides: Partial<Plan> = {}): Plan {
 
 const agents: Agent[] = [
   // ADR-052 FR-039: memory_enabled is required on the wire Agent type.
-  { id: 'jim', name: 'Jim', type: 'core', locked: true, status: 'active', soul: '', timeout_seconds: 300, max_tool_iterations: 50, memory_enabled: true },
+  { id: 'jim', name: 'Jim', type: 'core', locked: true, status: 'active', soul: '', timeout_seconds: 300, max_tool_iterations: 50, memory_enabled: true, needs_model: false },
 ]
 
 function makeClient() {

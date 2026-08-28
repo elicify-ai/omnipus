@@ -208,9 +208,10 @@ func mapBaiduRecencyFilter(rangeCode string) string {
 }
 
 type BraveSearchProvider struct {
-	keyPool *APIKeyPool
-	proxy   string
-	client  *http.Client
+	keyPool     *APIKeyPool
+	proxy       string
+	client      *http.Client
+	ingestBound int64 // ADR-066 D10: ingest_bound_bytes; ≤ 0 → config default
 }
 
 func (p *BraveSearchProvider) Search(
@@ -248,10 +249,14 @@ func (p *BraveSearchProvider) Search(
 			continue
 		}
 
-		body, err := io.ReadAll(resp.Body)
+		body, err := readIngestBounded(resp.Body, p.ingestBound, "Brave Search")
 		resp.Body.Close()
 
 		if err != nil {
+			var ibe *IngestBoundError
+			if errors.As(err, &ibe) {
+				return "", err // ADR-066 D10: a bound violation is final, not retried per key
+			}
 			lastErr = fmt.Errorf("failed to read response: %w", err)
 			continue
 		}
@@ -306,10 +311,11 @@ func (p *BraveSearchProvider) Search(
 }
 
 type TavilySearchProvider struct {
-	keyPool *APIKeyPool
-	baseURL string
-	proxy   string
-	client  *http.Client
+	keyPool     *APIKeyPool
+	baseURL     string
+	proxy       string
+	client      *http.Client
+	ingestBound int64 // ADR-066 D10: ingest_bound_bytes; ≤ 0 → config default
 }
 
 func (p *TavilySearchProvider) Search(
@@ -364,10 +370,19 @@ func (p *TavilySearchProvider) Search(
 			continue
 		}
 
-		body, err := io.ReadAll(resp.Body)
+		// ADR-066 D10: every network read is bounded at ingest. Tavily is
+		// not named in FR-038's list, but an unbounded io.ReadAll here
+		// buffers the whole response into the gateway process before any
+		// parsing or capping — the D4 window cap protects the window, it
+		// cannot protect the process.
+		body, err := readIngestBounded(resp.Body, p.ingestBound, "Tavily")
 		resp.Body.Close()
 
 		if err != nil {
+			var ibe *IngestBoundError
+			if errors.As(err, &ibe) {
+				return "", err // a bound violation is final, not retried per key
+			}
 			lastErr = fmt.Errorf("failed to read response: %w", err)
 			continue
 		}
@@ -419,8 +434,9 @@ func (p *TavilySearchProvider) Search(
 }
 
 type DuckDuckGoSearchProvider struct {
-	proxy  string
-	client *http.Client
+	proxy       string
+	client      *http.Client
+	ingestBound int64 // ADR-066 D10: ingest_bound_bytes; ≤ 0 → config default
 }
 
 func (p *DuckDuckGoSearchProvider) Search(
@@ -447,7 +463,7 @@ func (p *DuckDuckGoSearchProvider) Search(
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := readIngestBounded(resp.Body, p.ingestBound, "DuckDuckGo")
 	if err != nil {
 		return "", fmt.Errorf("failed to read response: %w", err)
 	}
@@ -522,9 +538,10 @@ func stripTags(content string) string {
 }
 
 type PerplexitySearchProvider struct {
-	keyPool *APIKeyPool
-	proxy   string
-	client  *http.Client
+	keyPool     *APIKeyPool
+	proxy       string
+	client      *http.Client
+	ingestBound int64 // ADR-066 D10: ingest_bound_bytes; ≤ 0 → config default
 }
 
 func (p *PerplexitySearchProvider) Search(
@@ -591,10 +608,14 @@ func (p *PerplexitySearchProvider) Search(
 			continue
 		}
 
-		body, err := io.ReadAll(resp.Body)
+		body, err := readIngestBounded(resp.Body, p.ingestBound, "Perplexity")
 		resp.Body.Close()
 
 		if err != nil {
+			var ibe *IngestBoundError
+			if errors.As(err, &ibe) {
+				return "", err // ADR-066 D10: a bound violation is final, not retried per key
+			}
 			lastErr = fmt.Errorf("failed to read response: %w", err)
 			continue
 		}
@@ -712,6 +733,7 @@ type GLMSearchProvider struct {
 	searchEngine string
 	proxy        string
 	client       *http.Client
+	ingestBound  int64 // ADR-066 D10: ingest_bound_bytes; ≤ 0 → config default
 }
 
 func (p *GLMSearchProvider) Search(
@@ -755,7 +777,8 @@ func (p *GLMSearchProvider) Search(
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	// ADR-066 D10: raised from the former 1 MiB LimitReader to ingest_bound_bytes.
+	body, err := readIngestBounded(resp.Body, p.ingestBound, "GLM Search")
 	if err != nil {
 		return "", fmt.Errorf("failed to read response: %w", err)
 	}
@@ -797,10 +820,11 @@ func (p *GLMSearchProvider) Search(
 }
 
 type BaiduSearchProvider struct {
-	apiKey  string
-	baseURL string
-	proxy   string
-	client  *http.Client
+	apiKey      string
+	baseURL     string
+	proxy       string
+	client      *http.Client
+	ingestBound int64 // ADR-066 D10: ingest_bound_bytes; ≤ 0 → config default
 }
 
 func (p *BaiduSearchProvider) Search(
@@ -847,7 +871,8 @@ func (p *BaiduSearchProvider) Search(
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	// ADR-066 D10: raised from the former 1 MiB LimitReader to ingest_bound_bytes.
+	body, err := readIngestBounded(resp.Body, p.ingestBound, "Baidu Search")
 	if err != nil {
 		return "", fmt.Errorf("failed to read response: %w", err)
 	}
@@ -892,6 +917,9 @@ type WebSearchTool struct {
 }
 
 type WebSearchToolOptions struct {
+	// IngestBoundBytes is ADR-066 D10's ingest_bound_bytes: the maximum
+	// response size any provider reads. ≤ 0 → config.DefaultIngestBoundBytes.
+	IngestBoundBytes      int
 	BraveAPIKeys          []string
 	BraveMaxResults       int
 	BraveEnabled          bool
@@ -944,6 +972,7 @@ func makeSearchClient(ssrf *security.SSRFChecker, proxy string, timeout time.Dur
 func NewWebSearchTool(opts WebSearchToolOptions) (*WebSearchTool, error) {
 	var provider SearchProvider
 	maxResults := 10
+	ingestBound := effectiveIngestBound(int64(opts.IngestBoundBytes))
 	// Priority: Perplexity > Brave > SearXNG > Tavily > DuckDuckGo > Baidu Search > GLM Search
 	if opts.PerplexityEnabled && len(opts.PerplexityAPIKeys) > 0 {
 		client, err := makeSearchClient(opts.SSRFChecker, opts.Proxy, perplexityTimeout)
@@ -951,9 +980,10 @@ func NewWebSearchTool(opts WebSearchToolOptions) (*WebSearchTool, error) {
 			return nil, fmt.Errorf("failed to create HTTP client for Perplexity: %w", err)
 		}
 		provider = &PerplexitySearchProvider{
-			keyPool: NewAPIKeyPool(opts.PerplexityAPIKeys),
-			proxy:   opts.Proxy,
-			client:  client,
+			keyPool:     NewAPIKeyPool(opts.PerplexityAPIKeys),
+			proxy:       opts.Proxy,
+			client:      client,
+			ingestBound: ingestBound,
 		}
 		if opts.PerplexityMaxResults > 0 {
 			maxResults = min(opts.PerplexityMaxResults, 10)
@@ -963,7 +993,12 @@ func NewWebSearchTool(opts WebSearchToolOptions) (*WebSearchTool, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to create HTTP client for Brave: %w", err)
 		}
-		provider = &BraveSearchProvider{keyPool: NewAPIKeyPool(opts.BraveAPIKeys), proxy: opts.Proxy, client: client}
+		provider = &BraveSearchProvider{
+			keyPool:     NewAPIKeyPool(opts.BraveAPIKeys),
+			proxy:       opts.Proxy,
+			client:      client,
+			ingestBound: ingestBound,
+		}
 		if opts.BraveMaxResults > 0 {
 			maxResults = min(opts.BraveMaxResults, 10)
 		}
@@ -989,10 +1024,11 @@ func NewWebSearchTool(opts WebSearchToolOptions) (*WebSearchTool, error) {
 			return nil, fmt.Errorf("failed to create HTTP client for Tavily: %w", err)
 		}
 		provider = &TavilySearchProvider{
-			keyPool: NewAPIKeyPool(opts.TavilyAPIKeys),
-			baseURL: opts.TavilyBaseURL,
-			proxy:   opts.Proxy,
-			client:  client,
+			keyPool:     NewAPIKeyPool(opts.TavilyAPIKeys),
+			baseURL:     opts.TavilyBaseURL,
+			proxy:       opts.Proxy,
+			client:      client,
+			ingestBound: ingestBound,
 		}
 		if opts.TavilyMaxResults > 0 {
 			maxResults = min(opts.TavilyMaxResults, 10)
@@ -1002,7 +1038,7 @@ func NewWebSearchTool(opts WebSearchToolOptions) (*WebSearchTool, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to create HTTP client for DuckDuckGo: %w", err)
 		}
-		provider = &DuckDuckGoSearchProvider{proxy: opts.Proxy, client: client}
+		provider = &DuckDuckGoSearchProvider{proxy: opts.Proxy, client: client, ingestBound: ingestBound}
 		if opts.DuckDuckGoMaxResults > 0 {
 			maxResults = min(opts.DuckDuckGoMaxResults, 10)
 		}
@@ -1012,10 +1048,11 @@ func NewWebSearchTool(opts WebSearchToolOptions) (*WebSearchTool, error) {
 			return nil, fmt.Errorf("failed to create HTTP client for Baidu Search: %w", err)
 		}
 		provider = &BaiduSearchProvider{
-			apiKey:  opts.BaiduSearchAPIKey,
-			baseURL: opts.BaiduSearchBaseURL,
-			proxy:   opts.Proxy,
-			client:  client,
+			apiKey:      opts.BaiduSearchAPIKey,
+			baseURL:     opts.BaiduSearchBaseURL,
+			proxy:       opts.Proxy,
+			client:      client,
+			ingestBound: ingestBound,
 		}
 		if opts.BaiduSearchMaxResults > 0 {
 			maxResults = min(opts.BaiduSearchMaxResults, 10)
@@ -1035,6 +1072,7 @@ func NewWebSearchTool(opts WebSearchToolOptions) (*WebSearchTool, error) {
 			searchEngine: searchEngine,
 			proxy:        opts.Proxy,
 			client:       client,
+			ingestBound:  ingestBound,
 		}
 		if opts.GLMSearchMaxResults > 0 {
 			maxResults = min(opts.GLMSearchMaxResults, 10)
@@ -1071,7 +1109,7 @@ func NewWebSearchTool(opts WebSearchToolOptions) (*WebSearchTool, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to create HTTP client for DuckDuckGo fallback: %w", err)
 		}
-		provider = &DuckDuckGoSearchProvider{proxy: opts.Proxy, client: client}
+		provider = &DuckDuckGoSearchProvider{proxy: opts.Proxy, client: client, ingestBound: ingestBound}
 		if opts.DuckDuckGoMaxResults > 0 {
 			maxResults = min(opts.DuckDuckGoMaxResults, 10)
 		}
@@ -1241,7 +1279,9 @@ func NewWebFetchToolWithConfig(
 		return nil
 	}
 	if fetchLimitBytes <= 0 {
-		fetchLimitBytes = 10 * 1024 * 1024 // Security Fallback
+		// ADR-066 D10 (FR-038): the fetch_url fallback is the ingest bound
+		// default (8,000,000 bytes), down from 10 MiB.
+		fetchLimitBytes = int64(config.DefaultIngestBoundBytes)
 	}
 	return &WebFetchTool{
 		maxChars:        maxChars,

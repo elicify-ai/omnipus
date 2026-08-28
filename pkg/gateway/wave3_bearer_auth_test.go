@@ -210,7 +210,8 @@ func TestWithOptionalAuth_CLIToken_Authenticates(t *testing.T) {
 			CLIToken: &config.TokenEntry{Hash: config.BcryptHash(hash)},
 		},
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+			Defaults: config.AgentDefaults{
+				Home: tmpDir, DefaultModel: config.DefaultModel{Model: "test-model"}, MaxTokens: 4096},
 			// An explicitly registered agent. handleChatMessage refuses a chat
 			// frame it cannot resolve an agent for rather than publishing a
 			// message owned by nobody, and the implicit "main" sentinel that
@@ -353,7 +354,8 @@ func TestAuthenticateWS_SecondAccountAuthenticates(t *testing.T) {
 			},
 		},
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+			Defaults: config.AgentDefaults{
+				Home: tmpDir, DefaultModel: config.DefaultModel{Model: "test-model"}, MaxTokens: 4096},
 			// An explicitly registered agent. handleChatMessage refuses a chat
 			// frame it cannot resolve an agent for rather than publishing a
 			// message owned by nobody, and the implicit "main" sentinel that
@@ -421,7 +423,8 @@ func TestWithOptionalAuth_SecondAccountAuthenticates(t *testing.T) {
 			},
 		},
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+			Defaults: config.AgentDefaults{
+				Home: tmpDir, DefaultModel: config.DefaultModel{Model: "test-model"}, MaxTokens: 4096},
 			// An explicitly registered agent. handleChatMessage refuses a chat
 			// frame it cannot resolve an agent for rather than publishing a
 			// message owned by nobody, and the implicit "main" sentinel that
@@ -490,7 +493,8 @@ func TestWithAuthAcceptsSessionCookie(t *testing.T) {
 			},
 		},
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+			Defaults: config.AgentDefaults{
+				Home: tmpDir, DefaultModel: config.DefaultModel{Model: "test-model"}, MaxTokens: 4096},
 			// An explicitly registered agent. handleChatMessage refuses a chat
 			// frame it cannot resolve an agent for rather than publishing a
 			// message owned by nobody, and the implicit "main" sentinel that
@@ -540,7 +544,8 @@ func TestWithAuthBearerStillWorks(t *testing.T) {
 			},
 		},
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+			Defaults: config.AgentDefaults{
+				Home: tmpDir, DefaultModel: config.DefaultModel{Model: "test-model"}, MaxTokens: 4096},
 			// An explicitly registered agent. handleChatMessage refuses a chat
 			// frame it cannot resolve an agent for rather than publishing a
 			// message owned by nobody, and the implicit "main" sentinel that
@@ -597,7 +602,8 @@ func TestNoCredentialReturns401(t *testing.T) {
 			},
 		},
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+			Defaults: config.AgentDefaults{
+				Home: tmpDir, DefaultModel: config.DefaultModel{Model: "test-model"}, MaxTokens: 4096},
 			// An explicitly registered agent. handleChatMessage refuses a chat
 			// frame it cannot resolve an agent for rather than publishing a
 			// message owned by nobody, and the implicit "main" sentinel that
@@ -670,7 +676,8 @@ func TestWithOptionalAuthAcceptsSessionCookie(t *testing.T) {
 			},
 		},
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+			Defaults: config.AgentDefaults{
+				Home: tmpDir, DefaultModel: config.DefaultModel{Model: "test-model"}, MaxTokens: 4096},
 			// An explicitly registered agent. handleChatMessage refuses a chat
 			// frame it cannot resolve an agent for rather than publishing a
 			// message owned by nobody, and the implicit "main" sentinel that
@@ -761,7 +768,8 @@ func TestWithOptionalAuthInvalidCookie_FallsThroughToAnonymous(t *testing.T) {
 			},
 		},
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+			Defaults: config.AgentDefaults{
+				Home: tmpDir, DefaultModel: config.DefaultModel{Model: "test-model"}, MaxTokens: 4096},
 			// An explicitly registered agent. handleChatMessage refuses a chat
 			// frame it cannot resolve an agent for rather than publishing a
 			// message owned by nobody, and the implicit "main" sentinel that
@@ -845,7 +853,8 @@ func TestWSAuthAcceptsSessionCookie(t *testing.T) {
 			},
 		},
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+			Defaults: config.AgentDefaults{
+				Home: tmpDir, DefaultModel: config.DefaultModel{Model: "test-model"}, MaxTokens: 4096},
 			// An explicitly registered agent. handleChatMessage refuses a chat
 			// frame it cannot resolve an agent for rather than publishing a
 			// message owned by nobody, and the implicit "main" sentinel that

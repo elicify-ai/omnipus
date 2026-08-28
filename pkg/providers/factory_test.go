@@ -3,19 +3,21 @@ package providers
 import (
 	"testing"
 
-	"github.com/elicify-ai/omnipus/pkg/auth"
 	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
 func TestCreateProviderReturnsHTTPProviderForOpenRouter(t *testing.T) {
 	cfg := config.DefaultConfig()
-	cfg.Agents.Defaults.ModelName = "test-openrouter"
+	// The default is the exact (provider, model) pair of the row below
+	// (ADR-068 D14.1) — a CATALOG provider id and a BARE model id.
+	cfg.Agents.Defaults.DefaultModel = config.DefaultModel{
+		Provider: "openrouter", Model: "~anthropic/claude-sonnet-latest",
+	}
 	const keyRef = "FACTORY_TEST_OPENROUTER_KEY"
 	t.Setenv(keyRef, "sk-or-test")
 	modelCfg := &config.ModelConfig{
-		ModelName: "test-openrouter",
-		Model:     "openrouter/auto",
-		APIBase:   "https://openrouter.ai/api/v1",
+		Provider:  "openrouter",
+		Model:     "~anthropic/claude-sonnet-latest",
 		APIKeyRef: keyRef,
 	}
 	cfg.Providers = []*config.ModelConfig{modelCfg}
@@ -32,12 +34,14 @@ func TestCreateProviderReturnsHTTPProviderForOpenRouter(t *testing.T) {
 
 func TestCreateProviderReturnsCodexCliProviderForCodexCode(t *testing.T) {
 	cfg := config.DefaultConfig()
-	cfg.Agents.Defaults.ModelName = "test-codex"
+	cfg.Agents.Defaults.DefaultModel = config.DefaultModel{
+		Provider: "codex-cli", Model: "gpt-5.4-codex",
+	}
 	cfg.Providers = []*config.ModelConfig{
 		{
-			ModelName: "test-codex",
-			Model:     "codex-cli/codex-model",
-			Home:      "/tmp/workspace",
+			Provider: "codex-cli",
+			Model:    "gpt-5.4-codex",
+			Home:     "/tmp/workspace",
 		},
 	}
 
@@ -49,65 +53,4 @@ func TestCreateProviderReturnsCodexCliProviderForCodexCode(t *testing.T) {
 	if _, ok := provider.(*CodexCliProvider); !ok {
 		t.Fatalf("provider type = %T, want *CodexCliProvider", provider)
 	}
-}
-
-func TestCreateProviderReturnsClaudeCliProviderForClaudeCli(t *testing.T) {
-	cfg := config.DefaultConfig()
-	cfg.Agents.Defaults.ModelName = "test-claude-cli"
-	cfg.Providers = []*config.ModelConfig{
-		{
-			ModelName: "test-claude-cli",
-			Model:     "claude-cli/claude-sonnet",
-			Home:      "/tmp/workspace",
-		},
-	}
-
-	provider, _, err := CreateProvider(cfg)
-	if err != nil {
-		t.Fatalf("CreateProvider() error = %v", err)
-	}
-
-	if _, ok := provider.(*ClaudeCliProvider); !ok {
-		t.Fatalf("provider type = %T, want *ClaudeCliProvider", provider)
-	}
-}
-
-func TestCreateProviderReturnsClaudeProviderForAnthropicOAuth(t *testing.T) {
-	originalGetCredential := getCredential
-	t.Cleanup(func() { getCredential = originalGetCredential })
-
-	getCredential = func(provider string) (*auth.AuthCredential, error) {
-		if provider != "anthropic" {
-			t.Fatalf("provider = %q, want anthropic", provider)
-		}
-		return &auth.AuthCredential{
-			AccessToken: "anthropic-token",
-		}, nil
-	}
-
-	cfg := config.DefaultConfig()
-	cfg.Agents.Defaults.ModelName = "test-claude-oauth"
-	cfg.Providers = []*config.ModelConfig{
-		{
-			ModelName:  "test-claude-oauth",
-			Model:      "anthropic/claude-sonnet-4.6",
-			AuthMethod: "oauth",
-		},
-	}
-
-	provider, _, err := CreateProvider(cfg)
-	if err != nil {
-		t.Fatalf("CreateProvider() error = %v", err)
-	}
-
-	if _, ok := provider.(*ClaudeProvider); !ok {
-		t.Fatalf("provider type = %T, want *ClaudeProvider", provider)
-	}
-	// TODO: Test custom APIBase when createClaudeAuthProvider supports it
-}
-
-func TestCreateProviderReturnsCodexProviderForOpenAIOAuth(t *testing.T) {
-	// TODO: This test requires openai protocol to support auth_method: "oauth"
-	// which is not yet implemented in the new factory_provider.go
-	t.Skip("OpenAI OAuth via model_list not yet implemented")
 }

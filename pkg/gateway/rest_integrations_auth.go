@@ -393,7 +393,7 @@ func (a *restAPI) activeSearchProviderID(cfg *config.Config) string {
 // credential refs are set.
 func (a *restAPI) activeVoiceProviderID(cfg *config.Config) string {
 	if mn := strings.TrimSpace(cfg.Voice.ModelName); mn != "" {
-		if mc, err := cfg.GetModelConfig(mn); err == nil && voice.ModelSupportsAudioTranscription(mc.Model) {
+		if mc, err := cfg.FindModelConfigBySlug(mn); err == nil && voice.ProviderSupportsAudioTranscription(mc.Provider, mc.Protocol) {
 			return "audio-model"
 		}
 	}

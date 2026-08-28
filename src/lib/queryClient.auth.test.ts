@@ -1,76 +1,73 @@
 // Regression tests for the queryClient 401 auth-error handler.
 //
-// Guards against:
-//   - 401 response not triggering the shared forced-logout teardown
-//   - 401 response being retried (retry storm — should be suppressed)
-//   - 403 / non-ApiError failures NOT triggering a forced logout
-//   - Debounce is delegated entirely to forceLogout() (no local double-debounce)
+// UAT defect fixed here: a 401 from ANY single query/mutation forced a full
+// logout with a FALSE "your session ended, possibly because you signed in
+// elsewhere" explanation, even while GET /api/v1/auth/validate confirmed the
+// session was fine at that same moment (e.g. GET /providers 401ing for a
+// resource-scoped authorization reason). The PREVIOUS version of this test
+// file hand-replicated the old (incorrect) blanket-forceLogout-on-any-401
+// logic in a local `handleAuthError` copy rather than importing the real
+// handler from queryClient.ts — so it exercised a fork of production logic
+// that could never fail when the real behaviour changed, and it actively
+// pinned the very defect being fixed here. It is replaced below with tests
+// against the REAL exported `handleAuthError`, matching the precedent this
+// file already sets for `shouldRetryQuery`/`shouldRetryMutation` (exported,
+// per their own doc comment, "so tests can exercise the REAL predicate
+// instead of hand-maintaining a parallel copy that can silently drift").
 //
-// Strategy: Create an isolated QueryClient that replicates the _handleAuthError
-// and retry logic from queryClient.ts, so we can drive it without importing the
-// singleton (which has module-level side effects). `forceLogout` itself (the
-// token/store teardown + redirect + debounce) is mocked here and covered by its
-// own dedicated regression suite in authLogout.test.ts — post ADR-044 (US-5 /
-// FR-010) there is no JS-visible auth token for this handler to clear; auth is
-// the omnipus-session HttpOnly cookie, and _handleAuthError's only job is to
-// recognize a 401 ApiError and hand off to the shared forceLogout() teardown.
+// Still-valid coverage preserved from the old file (re-verified against the
+// real handler/predicates rather than copies):
+//   - 401 does NOT trigger a forced logout when the session is confirmed
+//     valid or the confirmation is inconclusive (NEW — this is the fix).
+//   - A CONFIRMED-invalid session (validate itself 401s) still forces a
+//     logout — the genuine expired-session case must keep working, mirroring
+//     the -app-auth.test.ts contract for the sibling beforeLoad guard.
+//   - 403 / non-ApiError failures never trigger a forced logout.
+//   - 401/403 are still not retried (shouldRetryQuery/shouldRetryMutation) —
+//     unaffected by this fix; verified via the REAL exported predicates.
+//
+// `forceLogout` (the real teardown: store clear, sessionStorage reason,
+// redirect, debounce) and `checkTokenValidity`/`resetTokenValidationCache`
+// (the real session-confirmation call, which would otherwise hit the network)
+// are mocked — each has its own dedicated regression suite
+// (authLogout.test.ts, and authValidation's own coverage via
+// -app-auth.test.ts).
+//
+// IMPORTANT: everything under test is imported STATICALLY at module scope
+// (no `vi.resetModules()` + per-test dynamic `import()`). Vitest's module
+// registry gives a fresh `resetModules()` a BRAND NEW copy of every module in
+// the graph, including `./api` — so a dynamically re-imported `queryClient.ts`
+// would run `err instanceof ApiError` against a DIFFERENT `ApiError` class
+// object than the one this file's own `new ApiError(...)` calls construct
+// with. That mismatch silently makes every `instanceof ApiError` check false
+// (caught live while writing this suite — every test failed with mocks never
+// invoked, root-caused to exactly this). Static imports keep one shared
+// module instance for the whole file, matching how the real app only ever
+// loads `./api` once.
 //
 // Traces to: feat/level1-project-task-mgmt — SPA 401 handler regression
+// (original suite); UAT false-logout-explanation defect (this revision).
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { QueryClient } from '@tanstack/react-query'
 import { ApiError } from './api'
 
 // ── Mock the shared forced-logout helper ─────────────────────────────────────
 const mockForceLogout = vi.fn()
 vi.mock('./authLogout', () => ({
-  forceLogout: () => mockForceLogout(),
+  forceLogout: (...args: unknown[]) => mockForceLogout(...args),
 }))
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// ── Mock the session-confirmation call (the seam this fix adds) ──────────────
+const mockCheckTokenValidity = vi.fn()
+const mockResetTokenValidationCache = vi.fn()
+vi.mock('@/routes/authValidation', () => ({
+  checkTokenValidity: (...args: unknown[]) => mockCheckTokenValidity(...args),
+  resetTokenValidationCache: (...args: unknown[]) => mockResetTokenValidationCache(...args),
+}))
 
-/**
- * Create an isolated QueryClient that replicates the _handleAuthError
- * subscription and retry guard from queryClient.ts.
- */
-function makeAuthTestClient() {
-  function handleAuthError(err: unknown): void {
-    if (!(err instanceof ApiError)) return
-    if (err.status !== 401) return
-    mockForceLogout()
-  }
-
-  const client = new QueryClient({
-    defaultOptions: {
-      queries: {
-        // Mirror the retry guard from queryClient.ts: never retry 401/403.
-        retry: (failureCount, err) =>
-          !(err instanceof ApiError && (err.status === 401 || err.status === 403)) &&
-          failureCount < 3,
-        retryDelay: () => 0, // No delay in tests.
-      },
-      mutations: {
-        retry: (failureCount, err) =>
-          !(err instanceof ApiError && (err.status === 401 || err.status === 403)) &&
-          failureCount < 3,
-      },
-    },
-  })
-
-  client.getQueryCache().subscribe((event) => {
-    if (event.type === 'updated' && event.action.type === 'error') {
-      handleAuthError(event.action.error)
-    }
-  })
-
-  client.getMutationCache().subscribe((event) => {
-    if (event.type === 'updated' && event.mutation.state.status === 'error') {
-      handleAuthError(event.mutation.state.error)
-    }
-  })
-
-  return { client }
-}
+// Static import of the REAL implementation under test — see the file header
+// for why this must NOT be a per-test dynamic import alongside resetModules().
+import { handleAuthError, shouldRetryQuery, shouldRetryMutation } from './queryClient'
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
@@ -83,160 +80,117 @@ describe('queryClient 401 auth-error handler', () => {
     vi.restoreAllMocks()
   })
 
-  it('invokes forceLogout on ApiError(401)', async () => {
-    // BDD: Given a QueryClient with the auth-error subscription,
-    // When a queryFn throws ApiError(401),
-    // Then the shared forceLogout() teardown is invoked.
+  it('does NOT force logout on a 401 while the session is confirmed still valid — the UAT defect', async () => {
+    // BDD: Given GET /auth/validate confirms the session is fine ('ok'),
+    // When a query/mutation fails with ApiError(401) (a resource-scoped
+    // authorization decision, NOT session death),
+    // Then forceLogout is NOT called — no redirect to /login, no fabricated
+    // "session ended" explanation.
     //
-    // Traces to: queryClient.ts _handleAuthError — delegates to forceLogout() on 401
-    const { client } = makeAuthTestClient()
+    // Traces to: queryClient.ts handleAuthError — the exact repro from the
+    // UAT report (GET /providers 401s while GET /auth/validate returns 200).
+    mockCheckTokenValidity.mockResolvedValue('ok')
 
-    await expect(
-      client.fetchQuery({
-        queryKey: ['test-401-force-logout'],
-        queryFn: () => Promise.reject(new ApiError(401)),
-      }),
-    ).rejects.toThrow()
+    await handleAuthError(new ApiError(401))
 
-    // Allow the async handler to fire.
-    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(mockResetTokenValidationCache).toHaveBeenCalledOnce()
+    expect(mockCheckTokenValidity).toHaveBeenCalledOnce()
+    expect(mockForceLogout).not.toHaveBeenCalled()
+  })
+
+  it('forces logout on a 401 when the session is CONFIRMED invalid (validate also fails)', async () => {
+    // BDD: Given GET /auth/validate itself returns a confirmed 401
+    // ('unauthorized' verdict),
+    // When a query/mutation fails with ApiError(401),
+    // Then forceLogout IS called — the genuine expired-session case must
+    // keep logging the user out promptly.
+    mockCheckTokenValidity.mockResolvedValue('unauthorized')
+
+    await handleAuthError(new ApiError(401))
 
     expect(mockForceLogout).toHaveBeenCalledOnce()
   })
 
-  it('does NOT retry a query that fails with ApiError(401)', async () => {
-    // BDD: Given a QueryClient with retry suppression for 401,
-    // When a queryFn throws ApiError(401),
-    // Then the queryFn is called exactly once (no retries).
-    //
-    // Traces to: queryClient.ts retry guard: !(err instanceof ApiError && err.status === 401)
-    const { client } = makeAuthTestClient()
+  it('does NOT force logout on a 401 when the validity recheck is inconclusive (transient network/5xx)', async () => {
+    // BDD: Given the /auth/validate recheck itself fails transiently (not a
+    // confirmed 401 — e.g. a network hiccup or 5xx),
+    // Then forceLogout is NOT called — an inconclusive check must not evict
+    // a possibly-still-valid session.
+    mockCheckTokenValidity.mockResolvedValue('transient')
 
-    const queryFn = vi.fn().mockRejectedValue(new ApiError(401))
+    await handleAuthError(new ApiError(401))
 
-    await expect(
-      client.fetchQuery({
-        queryKey: ['test-401-no-retry'],
-        queryFn,
-      }),
-    ).rejects.toThrow()
-
-    // The function must have been called exactly once — no retries.
-    expect(queryFn).toHaveBeenCalledTimes(1)
+    expect(mockForceLogout).not.toHaveBeenCalled()
   })
 
-  it('does NOT retry a query that fails with ApiError(403)', async () => {
-    // BDD: Given a QueryClient with retry suppression for 403,
-    // When a queryFn throws ApiError(403),
-    // Then the queryFn is called exactly once (no retries).
-    //
-    // Traces to: queryClient.ts retry guard: !(err instanceof ApiError && err.status === 403)
-    const { client } = makeAuthTestClient()
+  it('does NOT invoke forceLogout for non-401 ApiError (403), and never even rechecks validity', async () => {
+    // BDD: Given a 403 (forbidden, not unauthenticated),
+    // Then the handler returns before ever consulting session validity —
+    // 403 was never part of the "is the session dead" question.
+    mockCheckTokenValidity.mockResolvedValue('unauthorized')
 
-    const queryFn = vi.fn().mockRejectedValue(new ApiError(403))
+    await handleAuthError(new ApiError(403))
 
-    await expect(
-      client.fetchQuery({
-        queryKey: ['test-403-no-retry'],
-        queryFn,
-      }),
-    ).rejects.toThrow()
-
-    expect(queryFn).toHaveBeenCalledTimes(1)
-  })
-
-  it('DOES retry a query that fails with a non-auth ApiError (500)', async () => {
-    // BDD: Given a QueryClient with retry suppression for 401/403 only,
-    // When a queryFn throws ApiError(500),
-    // Then the queryFn IS retried (proves 401/403 guard is specific, not over-broad).
-    //
-    // Traces to: queryClient.ts retry guard — differentiation: 500 IS retried
-    const { client } = makeAuthTestClient()
-
-    // failureCount < 3 means 3 retries = 4 calls total.
-    const queryFn = vi.fn().mockRejectedValue(new ApiError(500))
-
-    await expect(
-      client.fetchQuery({
-        queryKey: ['test-500-retried'],
-        queryFn,
-        retry: (failureCount, err) =>
-          !(err instanceof ApiError && (err.status === 401 || err.status === 403)) &&
-          failureCount < 2, // 2 retries = 3 total calls
-      }),
-    ).rejects.toThrow()
-
-    // 500 must be retried — call count must be > 1 (differentiation from 401 behavior).
-    expect(queryFn.mock.calls.length).toBeGreaterThan(1)
-  })
-
-  it('invokes forceLogout again on a second, later 401 — debouncing is forceLogout\'s own responsibility, not duplicated here', async () => {
-    // BDD: Given _handleAuthError has no local debounce state of its own,
-    // When two separate ApiError(401) failures occur,
-    // Then forceLogout() is called once per qualifying error — forceLogout's
-    // OWN debounce guard (covered by authLogout.test.ts) is what suppresses a
-    // rapid double-teardown, not this handler.
-    //
-    // Traces to: queryClient.ts _handleAuthError — unconditionally delegates
-    // every 401 to forceLogout(); no duplicate debounce flag here.
-    const { client } = makeAuthTestClient()
-
-    await expect(
-      client.fetchQuery({
-        queryKey: ['test-401-second-a'],
-        queryFn: () => Promise.reject(new ApiError(401)),
-      }),
-    ).rejects.toThrow()
-    await new Promise((resolve) => setTimeout(resolve, 50))
-    expect(mockForceLogout).toHaveBeenCalledTimes(1)
-
-    await expect(
-      client.fetchQuery({
-        queryKey: ['test-401-second-b'],
-        queryFn: () => Promise.reject(new ApiError(401)),
-      }),
-    ).rejects.toThrow()
-    await new Promise((resolve) => setTimeout(resolve, 50))
-    expect(mockForceLogout).toHaveBeenCalledTimes(2)
-  })
-
-  it('does NOT invoke forceLogout for non-401 ApiError (403 is auth-adjacent but different behavior)', async () => {
-    // BDD: Given a QueryClient with the auth-error subscription,
-    // When a queryFn throws ApiError(403) (forbidden, not unauthenticated),
-    // Then forceLogout is NOT invoked.
-    //
-    // Traces to: queryClient.ts _handleAuthError: if (err.status !== 401) return
-    const { client } = makeAuthTestClient()
-
-    await expect(
-      client.fetchQuery({
-        queryKey: ['test-403-no-force-logout'],
-        queryFn: () => Promise.reject(new ApiError(403)),
-      }),
-    ).rejects.toThrow()
-
-    await new Promise((resolve) => setTimeout(resolve, 50))
-
+    expect(mockCheckTokenValidity).not.toHaveBeenCalled()
     expect(mockForceLogout).not.toHaveBeenCalled()
   })
 
   it('does NOT invoke forceLogout for a plain Error (not ApiError)', async () => {
-    // BDD: Given a QueryClient with the auth-error subscription,
-    // When a queryFn throws a plain Error,
-    // Then forceLogout is NOT invoked.
-    //
-    // Traces to: queryClient.ts _handleAuthError: if (!(err instanceof ApiError)) return
-    const { client } = makeAuthTestClient()
+    await handleAuthError(new Error('network error'))
 
-    await expect(
-      client.fetchQuery({
-        queryKey: ['test-plain-no-auth'],
-        queryFn: () => Promise.reject(new Error('network error')),
+    expect(mockCheckTokenValidity).not.toHaveBeenCalled()
+    expect(mockForceLogout).not.toHaveBeenCalled()
+  })
+
+  it('does NOT invoke forceLogout for a 503 (e.g. /gateway/god-mode, /config/pending-restart) — pinned so this cannot silently regress', async () => {
+    // BDD: Given a 503 ApiError (a status this app already relies on NOT
+    // triggering a forced logout — see queryClient.ts's top comment
+    // contrasting 503 with 401), never even consults session validity.
+    mockCheckTokenValidity.mockResolvedValue('unauthorized')
+
+    await handleAuthError(new ApiError(503))
+
+    expect(mockCheckTokenValidity).not.toHaveBeenCalled()
+    expect(mockForceLogout).not.toHaveBeenCalled()
+  })
+
+  it('coalesces concurrent 401s into a SINGLE validity recheck (no stampede of /auth/validate calls)', async () => {
+    // BDD: Given several queries 401 at once (e.g. multiple panels on one
+    // screen all losing authorization together),
+    // When handleAuthError runs for each concurrently,
+    // Then only ONE checkTokenValidity call is in flight — the second caller
+    // rides the first's pending promise instead of firing its own request.
+    let resolveCheck: (v: string) => void = () => {}
+    mockCheckTokenValidity.mockReturnValue(
+      new Promise((resolve) => {
+        resolveCheck = resolve
       }),
-    ).rejects.toThrow('network error')
+    )
 
-    await new Promise((resolve) => setTimeout(resolve, 50))
+    const p1 = handleAuthError(new ApiError(401))
+    const p2 = handleAuthError(new ApiError(401))
+
+    expect(mockCheckTokenValidity).toHaveBeenCalledOnce()
+    resolveCheck('ok')
+    await Promise.all([p1, p2])
 
     expect(mockForceLogout).not.toHaveBeenCalled()
+  })
+})
+
+describe('queryClient retry predicate — 401/403 exclusion unaffected by the auth-confirmation fix', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('shouldRetryQuery still returns false for 401/403, true for 500 (real predicate, not a hand-copy)', () => {
+    expect(shouldRetryQuery(0, new ApiError(401))).toBe(false)
+    expect(shouldRetryQuery(0, new ApiError(403))).toBe(false)
+    expect(shouldRetryQuery(0, new ApiError(500))).toBe(true)
+  })
+
+  it('shouldRetryMutation still returns false for 401/403 (real predicate, not a hand-copy)', () => {
+    expect(shouldRetryMutation(0, new ApiError(401))).toBe(false)
+    expect(shouldRetryMutation(0, new ApiError(403))).toBe(false)
   })
 })

@@ -97,6 +97,8 @@ function baseAgent(overrides: Record<string, unknown> = {}) {
     soul: 'You are a skeptical, evidence-first verifier.',
     timeout_seconds: 120,
     max_tool_iterations: 10,
+    // A-CONTRACT (ADR-068 FR-038): needs_model is required on every Agent.
+    needs_model: false,
     ...overrides,
   }
 }

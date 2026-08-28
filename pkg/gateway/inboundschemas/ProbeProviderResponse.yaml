@@ -18,6 +18,11 @@ properties:
     example:
       - "anthropic/claude-3.5-haiku"
       - "openai/gpt-4o"
+  probed_model:
+    type: string
+    maxLength: 256
+    description: The model actually exercised by the probe (ADR-068 FR-036), so the SPA can tie the result to the pick.
+    example: "z-ai/glm-5.2"
   error:
     type: string
     description: Human-readable error from the upstream provider. Present only when success=false.

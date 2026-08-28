@@ -1,88 +1,68 @@
 type: object
 description: >
-  Body for POST /onboarding/probe-provider. Tests an API key against a provider
-  and returns available models. Non-persistent — nothing is written to disk.
-  CSRF-exempt. Returns 409 once onboarding is complete.
+  Body for POST /onboarding/probe-provider. Validates credentials against a
+  provider and returns the probed model. Non-persistent — nothing is written
+  to disk. CSRF-exempt. Returns 409 once onboarding is complete.
+  ONE shape, owned by ADR-067 (id, api_base, protocol) and ADR-068 (auth,
+  api_key, model) — see ADR-067 FR-023 / ADR-068 FR-036. Runtime rules the
+  schema cannot express: id must be in the served catalog OR be accompanied by
+  both api_base and protocol (a custom row) — otherwise 400 naming the field
+  id with the message 'unknown provider "<id>"' and never a list of accepted
+  ids; the reserved literals "catalog" and "default-model" are never valid ids;
+  api_key is required iff auth is api_key (400 naming api_key) and must be
+  absent with auth sign_in; a tier "unsupported" provider → 400 with its
+  unsupported_reason; any api_base passes the SSRF gate (422 when blocked).
 required:
   - id
-  - api_key
+  - auth
 additionalProperties: false
 properties:
   id:
     type: string
     minLength: 1
-    enum:
-      - anthropic
-      - anthropic-messages
-      - openai
-      - openrouter
-      - gemini
-      - google
-      - ollama
-      - azure
-      - azure-openai
-      - bedrock
-      - litellm
-      - groq
-      - zhipu
-      - z-ai
-      - zai
-      - z-ai-coding
-      - glm-coding
-      - zhipu-coding
-      - z-ai-anthropic
-      - zhipu-anthropic
-      - moonshot-anthropic
-      - moonshot-cn-anthropic
-      - minimax-anthropic
-      - minimax-cn-anthropic
-      - deepseek-anthropic
-      - nvidia
-      - moonshot
-      - moonshot-cn
-      - shengsuanyun
-      - deepseek
-      - cerebras
-      - vivgrid
-      - volcengine
-      - vllm
-      - qwen
-      - qwen-intl
-      - qwen-international
-      - dashscope-intl
-      - qwen-us
-      - dashscope-us
-      - mistral
-      - avian
-      - longcat
-      - modelscope
-      - novita
-      - coding-plan
-      - alibaba-coding
-      - qwen-coding
-      - mimo
-      - minimax
-      - minimax-cn
-      - coding-plan-anthropic
-      - alibaba-coding-anthropic
-      - antigravity
-      - claude-cli
-      - claudecli
-      - codex-cli
-      - codexcli
+    maxLength: 64
     description: >
-      Provider protocol identifier. Must be one of the recognized protocol names
-      that Omnipus can connect to. Validated server-side against the known protocol
-      registry (pkg/providers.IsKnownProtocol).
+      Provider id — a catalog id (ADR-067 registry identity, e.g. "zai",
+      "openrouter") or an operator-named custom row id (then api_base and
+      protocol are required). Free string validated at runtime against the
+      served catalog; there is no enum and no pattern.
     example: "openrouter"
+  auth:
+    type: string
+    enum:
+      - api_key
+      - sign_in
+    description: >
+      Which auth method to probe. "api_key" probes with api_key. "sign_in"
+      probes through the CLI's saved login / Copilot session and returns 400
+      {"error":"not signed in","field":"auth"} when none is present.
+    example: "api_key"
   api_key:
     type: string
     minLength: 1
-    description: API key to test against the provider.
+    description: API key to test. Required iff auth is api_key; forbidden with sign_in.
     example: "sk-or-..."
-  endpoint:
+  model:
     type: string
+    minLength: 1
+    maxLength: 256
     description: >
-      Optional override for the provider's API base URL. When omitted, the server
-      uses the provider's well-known default endpoint.
-    example: "https://openrouter.ai/api/v1"
+      Model to probe, used verbatim when present. Absent → the provider's first
+      Recommended catalog model (active, tool-calling, ≥128k window), falling
+      through on model_not_found at most 3 times. The response carries the
+      model actually exercised in probed_model.
+    example: "z-ai/glm-5.2"
+  api_base:
+    type: string
+    maxLength: 2048
+    description: >
+      Base URL. Required (with protocol) when id is not a catalog id; optional
+      override for a catalog provider. SSRF-checked before any outbound call.
+    example: "https://my-proxy.example.com/v1"
+  protocol:
+    type: string
+    enum:
+      - openai-compatible
+      - anthropic
+    description: Wire protocol for a custom row. Required with api_base when id is not a catalog id.
+    example: "openai-compatible"

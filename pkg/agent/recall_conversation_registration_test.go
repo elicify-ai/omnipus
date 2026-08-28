@@ -49,8 +49,7 @@ func TestRecallConversation_RealRegistration_ReachesEvictedTurns(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              tmpDir,
-				ModelName:         "test-model",
-				ContextWindow:     cw,
+				DefaultModel:      config.DefaultModel{Model: "test-model"},
 				MaxTokens:         mt,
 				MaxToolIterations: 10,
 			},
@@ -59,6 +58,7 @@ func TestRecallConversation_RealRegistration_ReachesEvictedTurns(t *testing.T) {
 			},
 		},
 	}
+	cfg.Context.DefaultContextWindow = intPtr(cw)
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &mockProvider{})
 	t.Cleanup(al.Close)
 
@@ -149,7 +149,7 @@ func TestMemoryTools_RegisteredRegardlessOfAgentID(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              tmpDir,
-				ModelName:         "test-model",
+				DefaultModel:      config.DefaultModel{Model: "test-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},

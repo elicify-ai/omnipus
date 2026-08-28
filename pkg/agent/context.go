@@ -1033,12 +1033,28 @@ func (cb *ContextBuilder) BuildMessages(
 }
 
 func sanitizeHistoryForProvider(history []providers.Message) []providers.Message {
+	out, _ := sanitizeHistoryIndexed(history)
+	return out
+}
+
+// sanitizeHistoryIndexed is sanitizeHistoryForProvider's core: the same
+// drop-only, order-preserving pass, additionally reporting the INPUT index
+// of every retained message (kept[i] is the index in history of out[i]).
+//
+// The index report exists for ADR-066 D5.4: the recall-injection site
+// splices a span ahead of the live window and sanitises the combined slice
+// exactly as BuildMessages does, but it must know how many of the span's
+// own messages survived so a later recall in the same turn can remove that
+// block by position (E20). Reporting indices from the one sanitiser keeps
+// the two sites byte-identical without a second copy of the rules.
+func sanitizeHistoryIndexed(history []providers.Message) ([]providers.Message, []int) {
 	if len(history) == 0 {
-		return history
+		return history, nil
 	}
 
 	sanitized := make([]providers.Message, 0, len(history))
-	for _, msg := range history {
+	sanitizedIdx := make([]int, 0, len(history))
+	for srcIdx, msg := range history {
 		switch msg.Role {
 		case "system":
 			// Drop system messages from history. BuildMessages always
@@ -1070,6 +1086,7 @@ func sanitizeHistoryForProvider(history []providers.Message) []providers.Message
 				continue
 			}
 			sanitized = append(sanitized, msg)
+			sanitizedIdx = append(sanitizedIdx, srcIdx)
 
 		case "assistant":
 			if len(msg.ToolCalls) > 0 {
@@ -1088,9 +1105,11 @@ func sanitizeHistoryForProvider(history []providers.Message) []providers.Message
 				}
 			}
 			sanitized = append(sanitized, msg)
+			sanitizedIdx = append(sanitizedIdx, srcIdx)
 
 		default:
 			sanitized = append(sanitized, msg)
+			sanitizedIdx = append(sanitizedIdx, srcIdx)
 		}
 	}
 
@@ -1099,6 +1118,7 @@ func sanitizeHistoryForProvider(history []providers.Message) []providers.Message
 	// like DeepSeek that enforce: "An assistant message with 'tool_calls' must
 	// be followed by tool messages responding to each 'tool_call_id'."
 	final := make([]providers.Message, 0, len(sanitized))
+	finalIdx := make([]int, 0, len(sanitized))
 	seenToolCallID := make(map[string]bool)
 	for i := 0; i < len(sanitized); i++ {
 		msg := sanitized[i]
@@ -1158,9 +1178,10 @@ func sanitizeHistoryForProvider(history []providers.Message) []providers.Message
 			}
 		}
 		final = append(final, msg)
+		finalIdx = append(finalIdx, sanitizedIdx[i])
 	}
 
-	return final
+	return final, finalIdx
 }
 
 // AddAssistantMessage appends an assistant message to the message slice.

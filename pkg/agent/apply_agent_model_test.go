@@ -21,8 +21,7 @@ func TestApplyAgentModel_SwitchesInPlacePreservingInstance(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              t.TempDir(),
-				Provider:          "openai",
-				ModelName:         "local",
+				DefaultModel:      config.DefaultModel{Provider: "openai", Model: "gpt-4.1"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -32,14 +31,14 @@ func TestApplyAgentModel_SwitchesInPlacePreservingInstance(t *testing.T) {
 		},
 		Providers: []*config.ModelConfig{
 			{
-				ModelName: "local",
-				Model:     "openai/qwen",
+				Provider:  "openai",
+				Model:     "gpt-4.1",
 				APIBase:   "http://127.0.0.1:1",
 				APIKeyRef: "LOOP_APPLY_LOCAL_KEY",
 			},
 			{
-				ModelName: "deepseek",
-				Model:     "openrouter/deepseek",
+				Provider:  "deepseek",
+				Model:     "deepseek-chat",
 				APIBase:   "http://127.0.0.1:1",
 				APIKeyRef: "LOOP_APPLY_REMOTE_KEY",
 			},
@@ -57,17 +56,17 @@ func TestApplyAgentModel_SwitchesInPlacePreservingInstance(t *testing.T) {
 		t.Fatal("no default agent")
 	}
 	id := before.ID
-	if before.Model != "local" {
-		t.Fatalf("initial model = %q, want local", before.Model)
+	if before.Model != "gpt-4.1" {
+		t.Fatalf("initial model = %q, want the default pair's model gpt-4.1", before.Model)
 	}
 	beforeProvider := before.Provider
 
-	old, err := al.ApplyAgentModel(id, "deepseek")
+	old, err := al.ApplyAgentModel(id, "deepseek-chat")
 	if err != nil {
 		t.Fatalf("ApplyAgentModel: %v", err)
 	}
-	if old != "local" {
-		t.Errorf("returned previous model = %q, want local", old)
+	if old != "gpt-4.1" {
+		t.Errorf("returned previous model = %q, want gpt-4.1", old)
 	}
 
 	after, ok := al.GetRegistry().GetAgent(id)
@@ -77,8 +76,8 @@ func TestApplyAgentModel_SwitchesInPlacePreservingInstance(t *testing.T) {
 	if after != before {
 		t.Error("agent instance was replaced — in-memory conversation context would be lost (#73)")
 	}
-	if after.Model != "deepseek" {
-		t.Errorf("model after switch = %q, want deepseek", after.Model)
+	if after.Model != "deepseek-chat" {
+		t.Errorf("model after switch = %q, want deepseek-chat", after.Model)
 	}
 	if after.Provider == beforeProvider {
 		t.Error("provider was not switched to the new model's provider")
@@ -94,8 +93,7 @@ func TestApplyAgentModel_UnknownModelRejectedNoMutation(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              t.TempDir(),
-				Provider:          "openai",
-				ModelName:         "local",
+				DefaultModel:      config.DefaultModel{Provider: "openai", Model: "gpt-4.1"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -104,7 +102,7 @@ func TestApplyAgentModel_UnknownModelRejectedNoMutation(t *testing.T) {
 			List: []config.AgentConfig{{ID: "mia", Home: t.TempDir()}},
 		},
 		Providers: []*config.ModelConfig{
-			{ModelName: "local", Model: "openai/qwen", APIBase: "http://127.0.0.1:1", APIKeyRef: "LOOP_APPLY2_KEY"},
+			{Provider: "openai", Model: "gpt-4.1", APIBase: "http://127.0.0.1:1", APIKeyRef: "LOOP_APPLY2_KEY"},
 		},
 	}
 
@@ -123,54 +121,52 @@ func TestApplyAgentModel_UnknownModelRejectedNoMutation(t *testing.T) {
 		t.Fatal("expected error for unknown model, got nil")
 	}
 	after, _ := al.GetRegistry().GetAgent(id)
-	if after.Model != "local" {
-		t.Errorf("model = %q after failed switch; want unchanged 'local'", after.Model)
+	if after.Model != "gpt-4.1" {
+		t.Errorf("model = %q after failed switch; want it unchanged at gpt-4.1", after.Model)
 	}
 
 	if _, err := al.ApplyAgentModel(id, "   "); err == nil {
 		t.Error("expected error for empty model")
 	}
-	if _, err := al.ApplyAgentModel("no-such-agent", "local"); err == nil {
+	if _, err := al.ApplyAgentModel("no-such-agent", "gpt-4.1"); err == nil {
 		t.Error("expected error for unknown agent id")
 	}
 }
 
-// TestApplyAgentModel_PassthroughModel_UpdatesInMemory covers Dataset 1 row 6
-// / TDD row 6 (BDD-4): the runtime MUST accept a model whose slug is not
-// registered as its own provider entry, when a passthrough provider (e.g.
-// openrouter) is configured. The bug being fixed (per the phase-1 spec §1.1
-// item 2): the UI shows passthrough-only slugs as available, but
-// ApplyAgentModel's old resolvedModelConfig rejected them, leaving the
-// in-memory agent stuck on the previous model.
-func TestApplyAgentModel_PassthroughModel_UpdatesInMemory(t *testing.T) {
-	t.Setenv("LOOP_APPLY_PASSTHROUGH_KEY", "passthrough-key")
+// TestApplyAgentModel_ModelOfferedByAnotherConfiguredProvider — the
+// successor to TestApplyAgentModel_PassthroughModel_UpdatesInMemory.
+//
+// That test covered "a slug that is not its own provider row still applies,
+// because a passthrough aggregator accepts anything". ADR-067 FR-040 deleted
+// the passthrough rung: an unmatched id no longer becomes an OpenRouter
+// request by default. The legitimate half of the behaviour survives and is
+// what this asserts — a model a CONFIGURED provider actually OFFERS applies
+// even when no dedicated row names it, so the composer's picks still work.
+func TestApplyAgentModel_ModelOfferedByAnotherConfiguredProvider(t *testing.T) {
+	t.Setenv("LOOP_APPLY_OFFERED_KEY", "offered-key")
 
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              t.TempDir(),
-				Provider:          "openai",
-				ModelName:         "local",
+				DefaultModel:      config.DefaultModel{Provider: "openai", Model: "gpt-4.1"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
-			// No "main" sentinel to fall back to anymore — this test needs
-			// a REAL registered agent for GetDefaultAgent() to resolve.
 			List: []config.AgentConfig{{ID: "mia", Home: t.TempDir()}},
 		},
 		Providers: []*config.ModelConfig{
 			{
-				ModelName: "local",
-				Model:     "openai/qwen",
+				Provider:  "openai",
+				Model:     "gpt-4.1",
 				APIBase:   "http://127.0.0.1:1",
-				APIKeyRef: "LOOP_APPLY_PASSTHROUGH_KEY",
+				APIKeyRef: "LOOP_APPLY_OFFERED_KEY",
 			},
 			{
-				ModelName: "z-ai/glm-5.2",
-				Model:     "z-ai/glm-5.2",
-				Provider:  "openrouter",
-				APIBase:   "https://openrouter.ai/api/v1",
-				APIKeyRef: "LOOP_APPLY_PASSTHROUGH_KEY",
+				Provider:  "anthropic",
+				Model:     "claude-haiku-4-5",
+				APIBase:   "http://127.0.0.1:1",
+				APIKeyRef: "LOOP_APPLY_OFFERED_KEY",
 			},
 		},
 	}
@@ -186,31 +182,37 @@ func TestApplyAgentModel_PassthroughModel_UpdatesInMemory(t *testing.T) {
 		t.Fatal("no default agent")
 	}
 	id := before.ID
-	if before.Model != "local" {
-		t.Fatalf("initial model = %q, want local", before.Model)
+	if before.Model != "gpt-4.1" {
+		t.Fatalf("initial model = %q, want the default pair's model gpt-4.1", before.Model)
 	}
 
-	// Apply a slug that is NOT registered as its own provider entry; the
-	// resolver must passthrough-route it via openrouter.
-	old, err := al.ApplyAgentModel(id, "z-ai/glm-5-turbo")
+	// `claude-opus-4-5` has no row of its own, but the configured anthropic
+	// provider offers it — FR-040 rule 1b/2.
+	old, err := al.ApplyAgentModel(id, "claude-opus-4-5")
 	if err != nil {
-		t.Fatalf("ApplyAgentModel(passthrough) returned error: %v — FR-004 violated (FIX-2)", err)
+		t.Fatalf("ApplyAgentModel(offered model) returned error: %v", err)
 	}
-	if old != "local" {
-		t.Errorf("returned previous model = %q, want local", old)
+	if old != "gpt-4.1" {
+		t.Errorf("returned previous model = %q, want gpt-4.1", old)
 	}
 
 	after, ok := al.GetRegistry().GetAgent(id)
 	if !ok {
 		t.Fatal("agent vanished after ApplyAgentModel")
 	}
-	if after.Model != "z-ai/glm-5-turbo" {
-		t.Errorf("agent.Model after switch = %q, want z-ai/glm-5-turbo (FR-004 in-memory update)", after.Model)
+	if after.Model != "claude-opus-4-5" {
+		t.Errorf("agent.Model after switch = %q, want claude-opus-4-5", after.Model)
 	}
 	if after.Provider == nil {
-		t.Fatal("agent.Provider is nil after successful switch (FR-004)")
+		t.Fatal("agent.Provider is nil after a successful switch")
 	}
 	if len(after.Candidates) == 0 {
-		t.Error("agent.Candidates is empty after successful switch (FR-004)")
+		t.Error("agent.Candidates is empty after a successful switch")
+	}
+
+	// And a model NOTHING offers must still be refused — the passthrough
+	// fallback that used to accept it is gone.
+	if _, err := al.ApplyAgentModel(id, "z-ai/glm-5-turbo"); err == nil {
+		t.Error("a model no configured provider offers must not apply")
 	}
 }

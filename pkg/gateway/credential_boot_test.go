@@ -62,7 +62,7 @@ func TestInjectFromConfig_InjectsProviderKey(t *testing.T) {
 	// Build a minimal config with one provider using APIKeyRef.
 	cfg := &config.Config{
 		Providers: []*config.ModelConfig{
-			{ModelName: "openai", APIKeyRef: refName},
+			{Name: "openai", APIKeyRef: refName},
 		},
 	}
 
@@ -94,7 +94,7 @@ func TestInjectFromConfig_LockedStoreReturnsError(t *testing.T) {
 
 	cfg := &config.Config{
 		Providers: []*config.ModelConfig{
-			{ModelName: "anthropic", APIKeyRef: "ANTHROPIC_API_KEY"},
+			{Name: "anthropic", APIKeyRef: "ANTHROPIC_API_KEY"},
 		},
 	}
 
@@ -113,7 +113,7 @@ func TestInjectFromConfig_EmptyRefSkipped(t *testing.T) {
 
 	cfg := &config.Config{
 		Providers: []*config.ModelConfig{
-			{ModelName: "local-ollama", APIKeyRef: ""},
+			{Name: "local-ollama", APIKeyRef: ""},
 		},
 	}
 

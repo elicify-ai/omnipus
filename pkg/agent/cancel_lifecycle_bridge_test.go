@@ -32,7 +32,7 @@ func TestRequestCancel_TransitionsLifecycleRecordToCancelled(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              tmpDir,
-				ModelName:         "bridge-test-model",
+				DefaultModel:      config.DefaultModel{Model: "bridge-test-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
@@ -119,7 +119,7 @@ func TestRequestCancel_LifecycleRecordMissing_DoesNotPanic(t *testing.T) {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              tmpDir,
-				ModelName:         "bridge-test-model-2",
+				DefaultModel:      config.DefaultModel{Model: "bridge-test-model-2"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},

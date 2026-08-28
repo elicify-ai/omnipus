@@ -50,7 +50,7 @@ func TestInjectFromConfig_ProviderMissingCredential_IsScopedRefError(t *testing.
 		t.Errorf("Scope = %q, want %q", refErr.Scope, credentials.ScopeProvider)
 	}
 	if refErr.Owner != "broken-provider" {
-		t.Errorf("Owner = %q, want the provider's model_name %q", refErr.Owner, "broken-provider")
+		t.Errorf("Owner = %q, want the provider id %q", refErr.Owner, "broken-provider")
 	}
 	if refErr.Ref != missingRef {
 		t.Errorf("Ref = %q, want %q", refErr.Ref, missingRef)

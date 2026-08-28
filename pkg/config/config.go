@@ -175,6 +175,13 @@ type Config struct {
 	// config.json takes effect without a restart (FR-196, SC-015).
 	SessionMessaging SessionMessagingConfig `json:"session_messaging,omitempty" yaml:"-"`
 
+	// Context holds the ADR-066 context-budget controls (D4 caps, D6 trigger,
+	// D10 ingest bound, D2 window overrides) — the ONE place these values
+	// live (FR-010). Served and edited via GET/PUT /api/v1/settings/context
+	// (FR-036); consumers read it per call through the live config, never
+	// from a boot snapshot. See context_settings.go.
+	Context ContextSettings `json:"context" yaml:"-"`
+
 	// UnknownFields preserves JSON keys not recognized by this version of Omnipus.
 	// They are re-emitted verbatim during SaveConfig for round-trip safety (FR-004).
 	// Never serialized by json.Marshal or yaml.Marshal — only written back by MarshalJSON.
@@ -775,9 +782,12 @@ type AgentModelConfig struct {
 	// Provider is the explicit routing key for the primary model (O3 two-field
 	// model), mirroring FallbackModel.Provider. When set, model resolution uses it
 	// directly and never infers a provider from the slug. Empty means "resolve via
-	// the default/passthrough provider" (legacy single-slug behavior). The
-	// config-load migration (migrateAgentPrimaryProvider) splits a combined slug
-	// such as "openrouter/google/gemini-2.5-flash" into Primary + Provider.
+	// the default/passthrough provider" (legacy single-slug behavior). A `/`
+	// inside Primary is DATA, never a "<protocol>/<model>" prefix — there is no
+	// config-load migration that splits it (C1 fix, ADR-067 FR-034; the former
+	// migrateAgentPrimaryProvider split routed models to the wrong vendor and was
+	// deleted). A bare-string Primary that needs an explicit provider legitimately
+	// trips the pre-turn needs_provider gate (ADR-067 T067-09) instead.
 	Provider string `json:"provider,omitempty"`
 }
 
@@ -965,53 +975,71 @@ func NormalizeFallbacks(cfg *Config, in []FallbackModel) []FallbackModel {
 // here to avoid a config→agent import cycle — pkg/agent already imports
 // pkg/config).
 //
-// Resolution order:
-//  1. Exact match against any configured provider's ModelName → that
-//     provider's Provider field.
-//  2. Exact match against any configured provider's Model (the slug)
+// Resolution order (mirrors FindModelConfigBySlug's rungs):
+//  1. Exact match against any configured provider's Model (the slug)
 //     → that provider's Provider field.
-//  3. Any configured provider is a passthrough (openrouter / vivgrid) →
+//  2. Any configured provider is a passthrough (openrouter / vivgrid) →
 //     that passthrough provider.
-//  4. Otherwise empty string (apply-time resolver will error out).
+//  3. Otherwise empty string (apply-time resolver will error out).
+//
+// The display-alias rung is gone with ModelConfig.ModelName (ADR-067
+// FR-013 / X-25): a row is addressed by its (provider, model) pair.
 //
 // Step 3 cannot call providers.IsPassthroughProvider directly — pkg/providers
 // already imports pkg/config, so the reverse direction would be a cycle. The
-// 3-line check below mirrors that helper byte-for-byte; keep them in sync.
+// check below mirrors that helper's passthrough-name list, but the provider-id
+// comparison itself is exact after TrimSpace with no case folding (ADR-067
+// FR-036: every provider-id comparison in pkg/agent, pkg/gateway, pkg/providers
+// — and this in-package duplicate — MUST be exact). pkg/providers' own copy is
+// deliberately case-insensitive on the name (its own doc comment says so) and
+// is out of scope here; the two are no longer byte-identical by design.
 func resolveFallbackProvider(cfg *Config, slug string) string {
+	provider, _ := ResolveSlugProvider(cfg, slug)
+	return provider
+}
+
+// ResolveSlugProvider resolves the provider a bare model slug would route
+// through today, and reports whether that resolution happened only via the
+// passthrough rung (rule 3: openrouter / vivgrid). It is the exported face
+// of resolveFallbackProvider's rungs, added for ADR-068 FR-012: the
+// dependents computation in pkg/gateway (provider_dependents.go) must apply
+// the exact same rungs — an agent whose slug exact-matches a provider row is
+// a `primary` dependent, one that resolves only through rule 3 is a
+// `passthrough` dependent — so the rule lives here once and is consumed
+// there, never duplicated.
+//
+// Returns ("", false) when nothing configured can serve the slug.
+func ResolveSlugProvider(cfg *Config, slug string) (provider string, viaPassthrough bool) {
 	if cfg == nil {
-		return ""
+		return "", false
 	}
 	slug = strings.TrimSpace(slug)
 	if slug == "" {
-		return ""
+		return "", false
 	}
 
-	// 1 & 2: match against provider entries.
+	// 1: match against what each provider row serves.
 	for _, p := range cfg.Providers {
 		if p == nil {
 			continue
-		}
-		if strings.TrimSpace(p.ModelName) == slug {
-			return strings.TrimSpace(p.Provider)
 		}
 		if strings.TrimSpace(p.Model) == slug {
-			return strings.TrimSpace(p.Provider)
+			return strings.TrimSpace(p.Provider), false
 		}
 	}
-
-	// 3: passthrough fallback (openrouter, vivgrid).
+	// 2: passthrough fallback (openrouter, vivgrid).
 	for _, p := range cfg.Providers {
 		if p == nil {
 			continue
 		}
-		provName := strings.ToLower(strings.TrimSpace(p.Provider))
+		provName := strings.TrimSpace(p.Provider)
 		if provName == "openrouter" || provName == "vivgrid" ||
 			strings.Contains(strings.ToLower(p.APIBase), "openrouter.ai") {
-			return strings.TrimSpace(p.Provider)
+			return provName, true
 		}
 	}
 
-	return ""
+	return "", false
 }
 
 type AgentConfig struct {
@@ -1072,6 +1100,14 @@ type AgentConfig struct {
 	// accumulated episodic memory across adjudications. Every other agent
 	// defaults to true (unchanged behavior). See MemoryEnabledEffective.
 	MemoryEnabled *bool `json:"memory_enabled,omitempty"`
+	// ContextWindowOverride is the per-agent context-window override
+	// (tokens), rung 1 of the ADR-066 D2 resolution ladder. nil = unset.
+	// Like every override it can only LOWER the window: the resolver clamps
+	// it to the model's capability on every resolution (FR-002). Written by
+	// PUT /api/v1/agents/{id} `context_window_override` (nullable to clear);
+	// the derived effective window / source / clamped flag are computed by
+	// the resolver and never persisted here.
+	ContextWindowOverride *int `json:"context_window_override,omitempty"`
 	// Tools, when non-nil, overrides scope-based tool visibility for this agent.
 	// Nil means all tools allowed by the agent's type are available.
 	Tools *AgentToolsCfg `json:"tools,omitempty"`
@@ -1585,26 +1621,44 @@ type AgentDefaults struct {
 	//
 	// The env vars remain, and still WIN over the config key, so an operator
 	// locked out by a bad config value can always recover from the shell.
-	RestrictToWorkspace       bool               `json:"-"                               env:"OMNIPUS_AGENTS_DEFAULTS_RESTRICT_TO_WORKSPACE"`
-	AllowReadOutsideWorkspace bool               `json:"-"                               env:"OMNIPUS_AGENTS_DEFAULTS_ALLOW_READ_OUTSIDE_WORKSPACE"`
-	Provider                  string             `json:"provider"                        env:"OMNIPUS_AGENTS_DEFAULTS_PROVIDER"`
-	ModelName                 string             `json:"model_name"                      env:"OMNIPUS_AGENTS_DEFAULTS_MODEL_NAME"`
-	ModelFallbacks            []string           `json:"model_fallbacks,omitempty"`
-	ImageModel                string             `json:"image_model,omitempty"           env:"OMNIPUS_AGENTS_DEFAULTS_IMAGE_MODEL"`
-	ImageModelFallbacks       []string           `json:"image_model_fallbacks,omitempty"`
-	MaxTokens                 int                `json:"max_tokens"                      env:"OMNIPUS_AGENTS_DEFAULTS_MAX_TOKENS"`
-	ContextWindow             int                `json:"context_window,omitempty"        env:"OMNIPUS_AGENTS_DEFAULTS_CONTEXT_WINDOW"`
-	Temperature               *float64           `json:"temperature,omitempty"           env:"OMNIPUS_AGENTS_DEFAULTS_TEMPERATURE"`
-	MaxToolIterations         int                `json:"max_tool_iterations"             env:"OMNIPUS_AGENTS_DEFAULTS_MAX_TOOL_ITERATIONS"`
-	SummarizeTokenPercent     int                `json:"summarize_token_percent"         env:"OMNIPUS_AGENTS_DEFAULTS_SUMMARIZE_TOKEN_PERCENT"`
-	MaxMediaSize              int                `json:"max_media_size,omitempty"        env:"OMNIPUS_AGENTS_DEFAULTS_MAX_MEDIA_SIZE"`
-	Routing                   *RoutingConfig     `json:"routing,omitempty"`
-	SteeringMode              string             `json:"steering_mode,omitempty"         env:"OMNIPUS_AGENTS_DEFAULTS_STEERING_MODE"` // "one-at-a-time" (default) or "all"
-	SubTurn                   SubTurnConfig      `json:"subturn"`
-	ToolFeedback              ToolFeedbackConfig `json:"tool_feedback,omitempty"`
-	SplitOnMarker             bool               `json:"split_on_marker"                 env:"OMNIPUS_AGENTS_DEFAULTS_SPLIT_ON_MARKER"` // split messages on <|[SPLIT]|> marker
-	TimeoutSeconds            int                `json:"timeout_seconds"                 env:"OMNIPUS_AGENTS_DEFAULTS_TIMEOUT_SECONDS"` // per-turn timeout in seconds; 0 = disabled
-	DefaultAgentID            string             `json:"default_agent_id,omitempty"      env:"OMNIPUS_DEFAULT_AGENT_ID"`
+	RestrictToWorkspace       bool `json:"-"                               env:"OMNIPUS_AGENTS_DEFAULTS_RESTRICT_TO_WORKSPACE"`
+	AllowReadOutsideWorkspace bool `json:"-"                               env:"OMNIPUS_AGENTS_DEFAULTS_ALLOW_READ_OUTSIDE_WORKSPACE"`
+	// DefaultModel is the global default model as an exact (provider, model)
+	// PAIR (ADR-068 D14.1 / FR-018; contract DefaultModel.yaml is both the
+	// persisted shape and the GET body). It replaces the deleted model_name
+	// alias (+ the separate provider field): an alias was resolved by
+	// GetModelConfig → findMatches against each providers[] row's single
+	// model_name, so a (provider, model) selection had nowhere to land.
+	// GetModelConfig(pair) resolves it exactly. A fresh install leaves it at
+	// the zero value (FR-040) — onboarding's explicit pick and the
+	// default-model PUT are its only writers; no boot/reload path may back-fill
+	// it (FR-020).
+	DefaultModel        DefaultModel `json:"default_model"`
+	ModelFallbacks      []string     `json:"model_fallbacks,omitempty"`
+	ImageModel          string       `json:"image_model,omitempty"           env:"OMNIPUS_AGENTS_DEFAULTS_IMAGE_MODEL"`
+	ImageModelFallbacks []string     `json:"image_model_fallbacks,omitempty"`
+	MaxTokens           int          `json:"max_tokens"                      env:"OMNIPUS_AGENTS_DEFAULTS_MAX_TOKENS"`
+	// context_window was deleted by ADR-066 D2 (FR-004, T066-09). The global
+	// default lives in ContextSettings.DefaultContextWindow (the `context`
+	// key, D9) and every agent's window is resolved by the D2 ladder
+	// (pkg/agent ResolveWindow) — there is no agents.defaults.context_window
+	// key and no matching env var. A stale key in an operator's config.json
+	// is ignored (greenfield, no migration).
+	Temperature       *float64 `json:"temperature,omitempty"           env:"OMNIPUS_AGENTS_DEFAULTS_TEMPERATURE"`
+	MaxToolIterations int      `json:"max_tool_iterations"             env:"OMNIPUS_AGENTS_DEFAULTS_MAX_TOOL_ITERATIONS"`
+	// summarize_token_percent was deleted by ADR-066 D6 (FR-004, T066-03).
+	// The legacy summariser's percentage knob had outlived ADR-028 only to
+	// scale the timeout-recovery trim trigger; every consumer now reads the
+	// one budget B (pkg/agent/context_budget.go::contextBudget). A stale key
+	// in config.json is ignored (greenfield rule: no migration, no rejection).
+	MaxMediaSize   int                `json:"max_media_size,omitempty"        env:"OMNIPUS_AGENTS_DEFAULTS_MAX_MEDIA_SIZE"`
+	Routing        *RoutingConfig     `json:"routing,omitempty"`
+	SteeringMode   string             `json:"steering_mode,omitempty"         env:"OMNIPUS_AGENTS_DEFAULTS_STEERING_MODE"` // "one-at-a-time" (default) or "all"
+	SubTurn        SubTurnConfig      `json:"subturn"`
+	ToolFeedback   ToolFeedbackConfig `json:"tool_feedback,omitempty"`
+	SplitOnMarker  bool               `json:"split_on_marker"                 env:"OMNIPUS_AGENTS_DEFAULTS_SPLIT_ON_MARKER"` // split messages on <|[SPLIT]|> marker
+	TimeoutSeconds int                `json:"timeout_seconds"                 env:"OMNIPUS_AGENTS_DEFAULTS_TIMEOUT_SECONDS"` // per-turn timeout in seconds; 0 = disabled
+	DefaultAgentID string             `json:"default_agent_id,omitempty"      env:"OMNIPUS_DEFAULT_AGENT_ID"`
 
 	// AutoRecapEnabled gates the session-end recap pipeline (FR-033).
 	// When false, CloseSession is a no-op and no background LLM calls are made.
@@ -1676,10 +1730,34 @@ func (d *AgentDefaults) IsToolFeedbackEnabled() bool {
 	return d.ToolFeedback.Enabled
 }
 
-// GetModelName returns the effective model name for the agent defaults.
-// It prefers the new "model_name" field but falls back to "model" for backward compatibility.
-func (d *AgentDefaults) GetModelName() string {
-	return d.ModelName
+// DefaultModel is the persisted (provider, model) pair at
+// agents.defaults.default_model — the shape of contract DefaultModel.yaml
+// minus the window fields ADR-066's ResolveWindow projects onto the GET body.
+// Provider is the providers[] row's routing key (catalog id or custom row id);
+// Model is that row's exact model id. An empty Model means "no default model"
+// (IsZero). The default-model PUT (FR-018) requires both halves; GetModelConfig
+// matches both halves exactly, an empty Provider included — it never widens
+// to "any provider serving this model".
+type DefaultModel struct {
+	Provider string `json:"provider"`
+	Model    string `json:"model"`
+}
+
+// IsZero reports whether no default model is set (no model half).
+func (d DefaultModel) IsZero() bool {
+	return strings.TrimSpace(d.Model) == ""
+}
+
+// String renders the pair as "provider/model" ("model" alone when the
+// provider half is empty) for logs and error text.
+func (d DefaultModel) String() string {
+	if d.IsZero() {
+		return ""
+	}
+	if p := strings.TrimSpace(d.Provider); p != "" {
+		return p + "/" + strings.TrimSpace(d.Model)
+	}
+	return strings.TrimSpace(d.Model)
 }
 
 // ChannelIdentityKind enumerates the legal values for ChannelIdentity.Kind.
@@ -2743,27 +2821,56 @@ type VoiceConfig struct {
 	GroqAPIKeyRef string `json:"groq_api_key_ref,omitempty" env:"OMNIPUS_VOICE_GROQ_API_KEY_REF"`
 }
 
-// ModelConfig represents a model-centric provider configuration.
-// It allows adding new providers (especially OpenAI-compatible ones) via configuration only.
-// The model field uses protocol prefix format: [protocol/]model-identifier
-// Supported protocols include openai, anthropic, antigravity, claude-cli,
-// codex-cli, and named OpenAI-compatible protocols such as groq, deepseek,
-// modelscope, and novita.
-// Default protocol is "openai" if no prefix is specified.
+// ModelConfig is one configured provider row.
+//
+// Since ADR-067 it is keyed by the EXACT pair (Provider, Model): a registry
+// provider id and a bare catalog model id. Adding a provider is a catalog
+// row plus a key — never a code change — and there is no protocol-prefix
+// convention on Model, no display alias, and no id normalisation beyond
+// trimming whitespace at the config boundary (FR-034, FR-036, A-19).
 type ModelConfig struct {
-	// Required fields
-	ModelName string `json:"model_name"`         // User-facing alias for the model
-	Model     string `json:"model"`              // Protocol/model-identifier (e.g., "openai/gpt-4o", "anthropic/claude-sonnet-4.6")
-	Provider  string `json:"provider,omitempty"` // Routing key — determines which API endpoint to use (e.g. "openrouter", "anthropic")
+	// Provider is the catalog provider id — the exact registry id
+	// (`zai`, `openrouter`, `moonshotai-cn`, …) or an operator-named custom
+	// row. It is compared exactly after TrimSpace, never case-folded
+	// (ADR-067 FR-036, A-19), and it is half of the catalog key.
+	Provider string `json:"provider,omitempty"`
+	// Model is the BARE catalog model id — the other half of the key
+	// (ADR-067 FR-034). A `/` inside it is data, not a prefix:
+	// `z-ai/glm-5.2` under `openrouter` is one model id, and it is never
+	// split. The retired `<protocol>/<model>` convention and its
+	// `ExtractProtocol` splitter are gone.
+	Model string `json:"model"`
+
+	// Protocol optionally selects one of the SECONDARY wire protocols the
+	// catalog row offers (ADR-067 FR-013, A-8) — e.g. `anthropic` on a
+	// provider whose primary is `openai-compatible`. Empty means the row's
+	// primary. A protocol the row does not offer is an error, never a
+	// silent fallback. On a custom row it is required and closed to
+	// `openai-compatible | anthropic`.
+	Protocol string `json:"protocol,omitempty"`
+	// Custom marks an operator-typed endpoint: an id the catalog does not
+	// carry, defined entirely by this row's APIBase + Protocol (FR-014,
+	// FR-035, X-13). Several custom rows with different ids coexist. Every
+	// check is on this flag — never on a literal id.
+	Custom bool `json:"custom,omitempty"`
 
 	// HTTP-based providers
 	APIBase   string   `json:"api_base,omitempty"`  // API endpoint URL
 	Proxy     string   `json:"proxy,omitempty"`     // HTTP proxy URL
 	Fallbacks []string `json:"fallbacks,omitempty"` // Fallback model names for failover
 
-	// Special providers (CLI-based, OAuth, etc.)
-	AuthMethod string `json:"auth_method,omitempty"` // Authentication method: oauth, token
-	Home       string `json:"workspace,omitempty"`   // Home path (working directory) for CLI-based providers
+	// UpdatedAt is stamped on every PUT of this row (ADR-068 MAJ-015) and is
+	// the picker's *Recent* ordering key (Provider.updated_at on the wire).
+	// Mirrors AgentConfig.UpdatedAt. Nil for rows never written through the
+	// REST PUT (seed templates, onboarding rows).
+	UpdatedAt *time.Time `json:"updated_at,omitempty"`
+
+	// AuthMethod is how this row authenticates — the closed set
+	// AuthMethodAPIKey | AuthMethodSignIn (ADR-068 FR-003, X-25); empty means
+	// api_key. The retired store-OAuth values `oauth` / `token` are rejected by
+	// Validate, never silently accepted.
+	AuthMethod string `json:"auth_method,omitempty"`
+	Home       string `json:"workspace,omitempty"` // Home path (working directory) for CLI-based providers
 
 	// Optional optimizations
 	RPM            int            `json:"rpm,omitempty"`              // Requests per minute limit
@@ -2777,7 +2884,10 @@ type ModelConfig struct {
 	// via the process environment (SEC-22). Raw values must never appear in config files.
 	APIKeyRef string `json:"api_key_ref,omitempty" yaml:"api_key_ref,omitempty"`
 
-	// Name is an alias for ModelName used in some display contexts.
+	// Name is the operator's own label for this row, shown where a row needs
+	// a human-readable handle. It is display data only: nothing resolves,
+	// routes or validates through it (the retired `model_name` alias did,
+	// and that is exactly what ADR-068 CRIT-001 removed).
 	Name string `json:"name,omitempty" yaml:"name,omitempty"`
 
 	// Models is the user-supplied catalog of model slugs for providers that do
@@ -2808,15 +2918,32 @@ func (c *ModelConfig) APIKey() string {
 	return os.Getenv(c.APIKeyRef)
 }
 
-// Validate checks if the ModelConfig has all required fields.
+// ModelConfig.AuthMethod closed set (ADR-068 FR-003, X-25). These mirror the
+// wire enum in contracts/components/schemas/Provider.yaml (`auth_method`).
+const (
+	// AuthMethodAPIKey — the row authenticates with a credential-store API key.
+	AuthMethodAPIKey = "api_key"
+	// AuthMethodSignIn — the row authenticates through a vendor CLI sign-in
+	// whose credential file Omnipus reads but never writes (FR-007).
+	AuthMethodSignIn = "sign_in"
+)
+
+// Validate checks if the ModelConfig has all required fields and that
+// auth_method, when set, is one of the closed set.
 func (c *ModelConfig) Validate() error {
-	if c.ModelName == "" {
-		return fmt.Errorf("model_name is required")
+	if c.Provider == "" {
+		return fmt.Errorf("provider is required")
 	}
 	if c.Model == "" {
 		return fmt.Errorf("model is required")
 	}
-	return nil
+	switch c.AuthMethod {
+	case "", AuthMethodAPIKey, AuthMethodSignIn:
+		return nil
+	default:
+		return fmt.Errorf("auth_method %q is not supported; must be %q or %q",
+			c.AuthMethod, AuthMethodAPIKey, AuthMethodSignIn)
+	}
 }
 
 // TokenEntry is a single bearer-token credential in a user's token set.
@@ -3866,6 +3993,27 @@ type CredentialStore interface {
 	Set(name, value string) error
 }
 
+// normalizeProviderRows trims whitespace off the identity fields of every
+// configured provider row (ADR-067 FR-036). It never changes case, never
+// rewrites an id, and never drops a row: an id that is wrong after trimming
+// stays wrong, and is reported as an unknown provider by whoever asks the
+// catalog about it.
+func normalizeProviderRows(cfg *Config) {
+	if cfg == nil {
+		return
+	}
+	for i := range cfg.Providers {
+		p := cfg.Providers[i]
+		if p == nil {
+			continue
+		}
+		p.Provider = strings.TrimSpace(p.Provider)
+		p.Model = strings.TrimSpace(p.Model)
+		p.Protocol = strings.TrimSpace(p.Protocol)
+		p.APIBase = strings.TrimSpace(p.APIBase)
+	}
+}
+
 // LoadConfigWithStore loads a config, threading store through to callers that
 // need it for credential-store-backed operations during load (per the
 // documented credential boot contract, ADR-004: NewStore → Unlock →
@@ -4007,6 +4155,15 @@ func loadConfigInternal(path string, store CredentialStore, onSelfHeal SelfHealW
 		return nil, err
 	}
 
+	// ADR-067 FR-036 / A-19: the config boundary is the ONE place a provider
+	// id is normalised, and the normalisation is TRIM-ONLY. Case is
+	// preserved and therefore significant: `" ZAI "` becomes `"ZAI"`, which
+	// is an unknown provider — not a quietly-corrected `zai`. Case folding
+	// here would be the last surviving alias mechanism, and an id that
+	// silently changes meaning between the file and the catalog is exactly
+	// the class of defect ADR-067 removed.
+	normalizeProviderRows(cfg)
+
 	// Phase 1B FR-006: normalize legacy `fallback_models: [string]` entries
 	// into the new `[{model, provider}]` form. Provider resolution mirrors
 	// the chat-side passthrough lookup (openrouter / vivgrid).
@@ -4062,12 +4219,20 @@ func loadConfigInternal(path string, store CredentialStore, onSelfHeal SelfHealW
 		cfg.Agents.Defaults.Home = filepath.Join(OmnipusHomeDir(), pkg.WorkspaceName)
 	}
 
-	migrateProviderFields(cfg)
-	// O3 two-field model: split an existing combined primary slug
-	// ("openrouter/google/gemini-2.5-flash") into {primary, provider} so routing
-	// uses the explicit provider. Idempotent; runs after migrateProviderFields so
-	// the provider protocol set is consistent across model_list and agents.
-	migrateAgentPrimaryProvider(cfg)
+	// C1 fix (ADR-067 FR-034): the O3 "provider/model" prefix-splitting
+	// migrations (migrateProviderFields for model_list, migrateAgentPrimaryProvider
+	// for the per-agent primary model) are deleted, greenfield — no migration is
+	// owed. A `/` inside Model/Primary is DATA, never a routing-protocol prefix
+	// (see ModelConfig.Model's doc comment above); splitting on a stale table of
+	// "known" protocol slugs silently rerouted models whose bare id happened to
+	// start with a live provider id (e.g. "google/gemini-2.5-pro") to the WRONG
+	// vendor with no error. A model_list row that still carries the old
+	// "<protocol>/<model>" shape with an empty Provider now fails
+	// ValidateProviders ("provider is required") instead of being silently
+	// resolved — a clean, visible config error. An agent's bare-string Primary
+	// keeps its full id with Provider empty, which legitimately trips the
+	// pre-turn needs_provider gate (ADR-067 T067-09) so the operator picks a
+	// provider explicitly.
 
 	// ADR-054 D1/D2/§11 checklist item 8: agents are no longer entities inside
 	// config.json — drop any legacy agents.list content (loudly, in-memory AND
@@ -4152,72 +4317,32 @@ func loadConfigInternal(path string, store CredentialStore, onSelfHeal SelfHealW
 	return cfg, nil
 }
 
-// knownProviderProtocols is the set of leading slug segments treated as an
-// explicit provider/routing protocol when splitting a combined "provider/model"
-// slug. Shared by migrateProviderFields (model_list) and
-// migrateAgentPrimaryProvider (per-agent primary model, O3).
-var knownProviderProtocols = map[string]bool{
-	"openai": true, "openrouter": true, "anthropic": true, "anthropic-messages": true,
-	"google": true, "gemini": true, "groq": true, "deepseek": true, "mistral": true,
-	"minimax": true, "moonshot": true, "zhipu": true, "nvidia": true, "qwen": true,
-	"qwen-intl": true, "qwen-international": true, "dashscope-intl": true,
-	"qwen-us": true, "dashscope-us": true,
-	"ollama": true, "cerebras": true, "azure": true, "azure-openai": true,
-	"litellm": true, "vllm": true, "bedrock": true,
-	"coding-plan": true, "alibaba-coding": true, "qwen-coding": true, "mimo": true,
-	"novita": true, "vivgrid": true, "volcengine": true, "modelscope": true,
-	"longcat": true, "avian": true, "shengsuanyun": true,
-}
-
-// migrateProviderFields splits old-format Model fields (e.g. "openrouter/anthropic/claude-opus-4")
-// into separate Provider and Model fields for backward compatibility.
-func migrateProviderFields(cfg *Config) {
-	for _, p := range cfg.Providers {
-		if p.Provider != "" {
-			continue
-		}
-		protocol, modelID, found := strings.Cut(p.Model, "/")
-		if found && knownProviderProtocols[protocol] {
-			p.Provider = protocol
-			p.Model = modelID
-		}
-	}
-}
-
-// migrateAgentPrimaryProvider implements the O3 two-field model migration for the
-// PRIMARY agent model. It splits an existing combined primary slug — e.g.
-// "openrouter/google/gemini-2.5-flash" — into Primary="google/gemini-2.5-flash"
-// plus Provider="openrouter", so resolution can key off the explicit provider
-// (never inferred). It is idempotent and conservative:
+// C1 fix (ADR-067 FR-034, confirmed-critical defect): knownProviderProtocols,
+// migrateProviderFields (model_list) and migrateAgentPrimaryProvider (per-agent
+// primary model, O3) are DELETED, greenfield — no migration is owed for this
+// shape. The deleted table still held retired protocol spellings
+// (anthropic-messages, gemini, qwen-intl, dashscope-intl, azure-openai,
+// bedrock, coding-plan, alibaba-coding, mimo, ...) and both functions split
+// ANY bare model id whose leading path segment happened to collide with a
+// live provider id — e.g. a legacy bare-string primary of
+// "google/gemini-2.5-pro" (AgentModelConfig.UnmarshalJSON leaves Provider=""
+// for that form) silently became Primary="gemini-2.5-pro", Provider="google",
+// even though the operator never named a provider at all. Measured against
+// the shipped 202-provider catalog: 196/360 OpenRouter model ids collided
+// with the table, 88 of those split into a VALID pair at a DIFFERENT vendor
+// (the turn then succeeded silently on the wrong provider, wrong credential,
+// wrong bill) and the remaining 16 minted a retired id no longer in the
+// catalog (ErrUnknownProvider naming an id the operator never typed). This
+// directly contradicted ModelConfig.Model's own doc comment (below): "a `/`
+// inside it is data, not a prefix ... it is never split."
 //
-//   - skips agents whose Model is nil or whose Primary is empty;
-//   - skips when Provider is already set (already migrated, or operator-supplied);
-//   - only splits when the FIRST slug segment is a known provider protocol AND
-//     there is a remaining model path after it (so a bare "gpt-4o", or a
-//     vendor-prefixed "meta-llama/llama-3-70b" — where "meta-llama" is a model
-//     vendor that is NOT in knownProviderProtocols — is left untouched, because
-//     its leading segment is not a configured provider protocol).
-//
-// NOTE: a leading segment like "google" or "openai" IS a known protocol, so
-// "google/gemini-2.5-flash" DOES split (Provider="google",
-// Primary="gemini-2.5-flash"). Use a non-protocol vendor prefix as the
-// "untouched" example, not a real provider name.
-//
-// Mirrors migrateProviderFields (model_list) using the same protocol set so the
-// two stay consistent.
-func migrateAgentPrimaryProvider(cfg *Config) {
-	for i := range cfg.Agents.List {
-		mc := cfg.Agents.List[i].Model
-		if mc == nil || mc.Primary == "" || mc.Provider != "" {
-			continue
-		}
-		protocol, rest, found := strings.Cut(mc.Primary, "/")
-		if found && rest != "" && knownProviderProtocols[protocol] {
-			mc.Provider = protocol
-			mc.Primary = rest
-		}
-	}
-}
+// What remains instead: a slash in Model/Primary is always data. A model_list
+// row that still carries the old "<protocol>/<model>" shape with an empty
+// Provider now fails ValidateProviders ("provider is required") — a clean,
+// visible config error instead of a silent wrong-vendor route. An agent's
+// bare-string Primary keeps its full id verbatim with Provider empty, which
+// legitimately trips the pre-turn needs_provider gate (ADR-067 T067-09) so
+// the operator picks a provider explicitly.
 
 func (c *Config) migrateChannelConfigs() {
 	// Discord: mention_only -> group_trigger.mention_only (preserved from the typed singleton era).
@@ -4292,14 +4417,18 @@ func expandHome(path string) string {
 	return path
 }
 
-// GetModelConfig returns the ModelConfig for the given model name.
-// If multiple configs exist with the same model_name, it uses round-robin
-// selection for load balancing — over the USABLE ones only, see findMatches.
-// Returns an error if the model is not found.
-func (c *Config) GetModelConfig(modelName string) (*ModelConfig, error) {
-	matches := c.findMatches(modelName)
+// GetModelConfig returns the ModelConfig for the EXACT (provider, model)
+// pair (ADR-068 D14.1 / ADR-067's exact lookup). Both halves are required —
+// the model id alone is not a key, a row's user-facing model_name alias is
+// not a key (that alias resolution was deleted with agents.defaults.model_name,
+// CRIT-001), and no prefix stripping or cross-provider fallback happens here.
+// If several providers[] rows carry the same pair (load balancing) it
+// round-robins over the USABLE ones only, see findMatches.
+// Returns an error if no row carries the pair.
+func (c *Config) GetModelConfig(provider, model string) (*ModelConfig, error) {
+	matches := c.findMatches(provider, model)
 	if len(matches) == 0 {
-		return nil, fmt.Errorf("model %q not found in model_list or providers", modelName)
+		return nil, fmt.Errorf("model %q not found in providers for provider %q", model, provider)
 	}
 	if len(matches) == 1 {
 		return matches[0], nil
@@ -4327,11 +4456,13 @@ func modelConfigCredentialUsable(m *ModelConfig) bool {
 	return m.APIKey() != ""
 }
 
-// findMatches finds all ModelConfig entries with the given model_name,
-// preferring USABLE ones (see modelConfigCredentialUsable) when at least one
-// exists.
+// findMatches finds all ModelConfig entries carrying the exact
+// (provider, model) pair, preferring USABLE ones (see
+// modelConfigCredentialUsable) when at least one exists. Whitespace-trimmed
+// on both sides; an empty model never matches, and an empty provider matches
+// only rows whose own provider is empty (exact, never "any provider").
 //
-// Why (2026-08-15): several providers[] entries may share one model_name for
+// Why (2026-08-15): several providers[] entries may share one pair for
 // load balancing, round-robinned by GetModelConfig above. Before this
 // change, an entry whose api_key_ref never resolved (missing from the
 // vault, wrong master key while it was still degradable, …) stayed in the
@@ -4354,11 +4485,18 @@ func modelConfigCredentialUsable(m *ModelConfig) bool {
 // unfiltered so the caller still gets a ModelConfig back (and, for the
 // default model, gateway.go's defaultModelCredentialBlocked reports it as
 // blocked rather than silently 401ing).
-func (c *Config) findMatches(modelName string) []*ModelConfig {
+func (c *Config) findMatches(provider, model string) []*ModelConfig {
+	provider = strings.TrimSpace(provider)
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return nil
+	}
 	var all []*ModelConfig
 	var usable []*ModelConfig
 	for i := range c.Providers {
-		if c.Providers[i].ModelName != modelName {
+		if c.Providers[i] == nil ||
+			strings.TrimSpace(c.Providers[i].Provider) != provider ||
+			strings.TrimSpace(c.Providers[i].Model) != model {
 			continue
 		}
 		all = append(all, c.Providers[i])
@@ -4372,9 +4510,56 @@ func (c *Config) findMatches(modelName string) []*ModelConfig {
 	return all
 }
 
+// FindModelConfigBySlug resolves a bare model slug — a per-agent `model`, a
+// `voice.model_name`, a composer pick — to the providers[] row that SERVES
+// it, without a provider half. It is NOT the default-model lookup (that is
+// the exact pair, GetModelConfig) and it applies no passthrough fallback
+// (pkg/agent's ResolveModelCfg layers that on top).
+//
+// Order: a row whose Model equals the slug wins — and that is the ONLY
+// rung. The display-alias rung is gone with ModelConfig.ModelName (ADR-067
+// FR-013 / X-25). Among several hits the USABLE ones are preferred
+// (modelConfigCredentialUsable), round-robinned like GetModelConfig.
+func (c *Config) FindModelConfigBySlug(slug string) (*ModelConfig, error) {
+	slug = strings.TrimSpace(slug)
+	if slug == "" {
+		return nil, fmt.Errorf("model slug is required")
+	}
+	pick := func(match func(*ModelConfig) bool) *ModelConfig {
+		var all, usable []*ModelConfig
+		for i := range c.Providers {
+			m := c.Providers[i]
+			if m == nil || !match(m) {
+				continue
+			}
+			all = append(all, m)
+			if modelConfigCredentialUsable(m) {
+				usable = append(usable, m)
+			}
+		}
+		pool := all
+		if len(usable) > 0 {
+			pool = usable
+		}
+		switch len(pool) {
+		case 0:
+			return nil
+		case 1:
+			return pool[0]
+		default:
+			return pool[(rrCounter.Add(1)-1)%uint64(len(pool))]
+		}
+	}
+	if m := pick(func(m *ModelConfig) bool { return strings.TrimSpace(m.Model) == slug }); m != nil {
+		return m, nil
+	}
+	return nil, fmt.Errorf("model %q not found in model_list or providers", slug)
+}
+
 // ValidateProviders validates all ModelConfig entries in the providers config.
 // It checks that each model config is valid.
-// Note: Multiple entries with the same model_name are allowed for load balancing.
+// Note: Multiple entries with the same (provider, model) pair are allowed —
+// that is how multi-key load balancing is expressed.
 func (c *Config) ValidateProviders() error {
 	for i := range c.Providers {
 		if err := c.Providers[i].Validate(); err != nil {

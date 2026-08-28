@@ -168,7 +168,7 @@ func TestCreateAgent_TypeSubagent3p_ExternalExecutorPersists(t *testing.T) {
 	require.NotNil(t, created.Executor.Kind, "executor.kind must be present")
 	assert.Equal(t, gen.AgentExecutorKindExternalCli, *created.Executor.Kind)
 	require.NotNil(t, created.Executor.Cli, "executor.cli must be present")
-	assert.Equal(t, gen.Codex, *created.Executor.Cli)
+	assert.Equal(t, gen.ExternalCliToolCodex, *created.Executor.Cli)
 
 	entry := findTypeTestAgentInStore(t, api.homePath, "Worker External")
 	require.NotNil(t, entry)

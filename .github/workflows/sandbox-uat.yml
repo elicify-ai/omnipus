@@ -72,10 +72,10 @@ jobs:
             "version": 1,
             "gateway": { "port": ${{ matrix.port }}, "dev_mode_bypass": true },
             "sandbox": { "mode": "${{ matrix.mode }}", "audit_log": true },
-            "agents": { "defaults": { "model_name": "openrouter-glm" } },
+            "agents": { "defaults": { "default_model": { "provider": "openrouter", "model": "z-ai/glm-5.2" } } },
             "providers": [
-              { "model_name": "openrouter-glm",
-                "model": "openrouter/z-ai/glm-5.2",
+              { "provider": "openrouter",
+                "model": "z-ai/glm-5.2",
                 "api_base": "https://openrouter.ai/api/v1",
                 "api_key_ref": "OPENROUTER_API_KEY" }
             ]
@@ -129,7 +129,7 @@ jobs:
         run: |
           set -euo pipefail
           curl -sf -X POST "$BASE/api/v1/onboarding/complete" -H 'Content-Type: application/json' \
-            -d "{\"provider\":{\"id\":\"openrouter\",\"api_key\":\"${LLM_KEY}\",\"model\":\"openrouter/z-ai/glm-5.2\"},\"admin\":{\"username\":\"admin\",\"password\":\"admin12345\"}}" \
+            -d "{\"provider\":{\"id\":\"openrouter\",\"api_key\":\"${LLM_KEY}\",\"model\":\"z-ai/glm-5.2\"},\"admin\":{\"username\":\"admin\",\"password\":\"admin12345\"}}" \
             > /tmp/onboard.json
           TOK=$(python3 -c "import json;print(json.load(open('/tmp/onboard.json'))['token'])")
           echo "TOK=$TOK" >> "$GITHUB_ENV"

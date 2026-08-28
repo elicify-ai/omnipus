@@ -1,0 +1,30 @@
+title: ProviderDependent
+description: >
+  One reference that would stop resolving if a provider were removed
+  (ADR-068 FR-012, MAJ-010): an agent's primary model, a fallback entry, a
+  passthrough-resolved slug, or a default/recap/image/voice setting.
+  Advisory on GET /providers; recomputed under the config lock on DELETE.
+type: object
+required:
+  - id
+  - name
+  - role
+properties:
+  id:
+    type: string
+    description: Agent id, or a settings key for non-agent dependents (e.g. "agents.defaults.default_model").
+    example: "jim"
+  name:
+    type: string
+    description: Display name of the dependent.
+    example: "Jim"
+  role:
+    type: string
+    enum:
+      - primary
+      - fallback
+      - passthrough
+      - recap
+      - image
+      - voice
+    example: "primary"

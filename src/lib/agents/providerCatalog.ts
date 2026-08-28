@@ -6,23 +6,29 @@
 //
 // Each provider is in one of two catalogue modes:
 //
-//   'live'   — the provider exposes a live upstream `/models` endpoint
-//              (openrouter / openai / anthropic / gemini / groq / …). The
-//              catalogue is the real-time list fetched by the backend and
-//              returned in `Provider.models`. The user picks from it; they
-//              cannot type a free-text slug.
+//   'live'   — the gateway fills `Provider.models` for this row: a catalog
+//              provider's models come from the served catalog (ADR-067 FR-020,
+//              no outbound call) and a `locality: local` provider's from its
+//              live endpoint. The user picks from that list; they cannot type a
+//              free-text slug.
 //
-//   'manual' — the provider has no listing endpoint (ollama / vllm / litellm /
-//              azure / bedrock / a custom OpenAI-compatible endpoint). The
-//              catalogue is whatever model slugs the user has added in the
-//              provider config; those slugs become `Provider.models`. The user
-//              curates the list in Settings → Providers and then picks from it.
+//   'manual' — an operator-named custom row (FR-014). Nothing fills its
+//              catalogue, so it is whatever model slugs the user has added in
+//              the provider config; those slugs become `Provider.models`. The
+//              user curates the list in Settings → Providers and then picks
+//              from it.
 //
-// Backend contract (Provider.yaml — owned by the backend agent):
-//   - `has_models_endpoint?: boolean` is the authoritative signal:
-//       true  → 'live', false → 'manual'.
-//   - When the field is absent (older gateway) we fall back to an id-based
-//     heuristic so the FE degrades gracefully against legacy gateways.
+// Backend contract (Provider.yaml): `has_models_endpoint` is the AUTHORITATIVE
+// and only signal — true → 'live', false → 'manual'. The schema documents the
+// absent case as "treat as false (editable slug list)", which is what this does.
+//
+// ADR-067 T067-13 deleted the id-based fallback this module used to carry: a
+// hand-written set of ~20 provider ids (including ids the registry retired,
+// e.g. `z-ai`, `gemini`, `zhipu`) consulted whenever `has_models_endpoint` was
+// absent. It was a second, stale provider catalog compiled into the SPA —
+// exactly what FR-011 / FR-025 remove. Provider identity is the served
+// catalog's, and the mode is the gateway's own signal, never a guess from an id.
+//
 //   - `ProviderUpdateRequest.models?: string[]` replaces the manual slug list
 //     for a 'manual' provider (consumed by `configureProvider`).
 
@@ -31,48 +37,12 @@ import type { Provider } from '@/lib/api/generated/openapi-types'
 export type CatalogMode = 'live' | 'manual'
 
 /**
- * Provider protocol ids that expose a live upstream `/models` listing endpoint.
- * Used ONLY as the fallback when the backend has not (yet) sent
- * `has_models_endpoint` (legacy gateway). Mirrors the set of protocols the
- * gateway can probe for a model list. Keep conservative: an unknown id defaults
- * to 'manual' so we never promise a live list we cannot fetch.
- */
-const LIVE_LISTING_PROVIDER_IDS: ReadonlySet<string> = new Set([
-  'openrouter',
-  'openai',
-  'anthropic',
-  'anthropic-messages',
-  'gemini',
-  'google',
-  'groq',
-  'mistral',
-  'deepseek',
-  'moonshot',
-  'zhipu',
-  // The runtime GLM provider registers as `z-ai` (not `zhipu`); it exposes a
-  // live upstream /models listing, so treat it as 'live' on legacy gateways too.
-  'z-ai',
-  'cerebras',
-  'novita',
-  'nvidia',
-  'qwen',
-  'qwen-intl',
-  'qwen-international',
-  'dashscope-intl',
-  'minimax',
-])
-
-/**
- * Resolve the catalogue mode for a provider.
- *
- * Prefers the backend's `has_models_endpoint` signal; falls back to the
- * id-based heuristic when the field is absent (legacy gateway).
+ * Resolve the catalogue mode for a provider from the backend's
+ * `has_models_endpoint` signal. Absent → 'manual', so the SPA never promises a
+ * live list the gateway has not said it can fill.
  */
 export function providerCatalogMode(provider: Provider): CatalogMode {
-  if (typeof provider.has_models_endpoint === 'boolean') {
-    return provider.has_models_endpoint ? 'live' : 'manual'
-  }
-  return LIVE_LISTING_PROVIDER_IDS.has(provider.id) ? 'live' : 'manual'
+  return provider.has_models_endpoint === true ? 'live' : 'manual'
 }
 
 /** Convenience predicate — true when the provider's catalogue is a live list. */

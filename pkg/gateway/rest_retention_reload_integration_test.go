@@ -43,7 +43,7 @@ func TestRetentionSweepE2E_SessionCookieSurvivesBypassFlipAndReload(t *testing.T
 	gw := testutil.StartTestGateway(t, testutil.WithAllowEmpty())
 
 	// Step 1: onboard admin.
-	onboardBody := `{"provider":{"id":"openai","api_key":"sk-test"},"admin":{"username":"admin","password":"admin123"}}`
+	onboardBody := `{"provider":{"auth_method":"api_key","id":"openai","api_key":"sk-test"},"admin":{"username":"admin","password":"admin123"}}`
 	onboardBody = hermeticOnboardBody(t, onboardBody)
 	onboardReq, err := gw.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(onboardBody))
 	require.NoError(t, err)

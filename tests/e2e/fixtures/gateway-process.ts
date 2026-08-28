@@ -187,7 +187,7 @@ export class GatewayProcess {
     try {
       const res = await onboardCtx.post('/api/v1/onboarding/complete', {
         data: {
-          provider: { id: 'openrouter', api_key: apiKey, model: this.model },
+          provider: { auth_method: 'api_key', id: 'openrouter', api_key: apiKey, model: this.model },
           admin: { username: this.adminUsername, password: this.adminPassword },
         },
       });

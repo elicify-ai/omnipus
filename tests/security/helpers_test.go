@@ -80,10 +80,11 @@ func onboardCSRFAdmin(t *testing.T, gw *testutil.TestGateway, password string) (
 	t.Helper()
 	onboardBody := map[string]any{
 		"provider": map[string]any{
-			"id":       "openai",
-			"api_key":  "sk-test-csrf-" + randSuffix(),
-			"model":    "gpt-4o",
-			"endpoint": startFakeProviderUpstream(t),
+			"auth_method": "api_key",
+			"id":          "openai",
+			"api_key":     "sk-test-csrf-" + randSuffix(),
+			"model":       "gpt-4o",
+			"endpoint":    startFakeProviderUpstream(t),
 		},
 		"admin": map[string]any{
 			"username": "csrfadmin",

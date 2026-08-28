@@ -31,6 +31,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/elicify-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/memory"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
@@ -95,6 +97,66 @@ func buildCleanHistory(toolCallID, toolName string) []providers.Message {
 			ToolCallID: toolCallID,
 		},
 	}
+}
+
+// --- ADR-066 D5: emptying never creates an orphan ---
+
+// TestProjection_NeverOrphans (spec §7 regression table, "Orphan recovery"
+// row): an emptying pass and the reload projection both leave every tool
+// call paired — the slot, role and tool_call_id survive, only the content
+// changes — so findOrphanedToolCalls sees nothing new and the recovery path
+// never fires because of D5. Also pins that a result whose call is NOT in
+// the slice is left alone by the pass (recovery owns it, not D5).
+func TestProjection_NeverOrphans(t *testing.T) {
+	big := strings.Repeat("o", 3000)
+	history := []providers.Message{
+		{Role: "user", Content: "go"},
+		{Role: "assistant", ToolCalls: []providers.ToolCall{
+			{ID: "p1", Name: "exec", Function: &providers.FunctionCall{Name: "exec"}},
+			{ID: "p2", Name: "exec", Function: &providers.FunctionCall{Name: "exec"}},
+		}},
+		{Role: "tool", ToolCallID: "p1", Content: big},
+		{Role: "tool", ToolCallID: "p2", Content: big},
+		{Role: "assistant", ToolCalls: []providers.ToolCall{
+			{ID: "p3", Name: "exec", Function: &providers.FunctionCall{Name: "exec"}},
+		}},
+		{Role: "tool", ToolCallID: "p3", Content: big},
+	}
+	archive := make([]memory.ArchivedMessage, len(history))
+	for i, m := range history {
+		archive[i] = memory.ArchivedMessage{Message: m}
+	}
+	lineOf := func(i int) int { return i }
+	require.Empty(t, findOrphanedToolCalls(history), "precondition: clean history")
+
+	// Live pass: everything eligible goes (p3 is the floor set).
+	live := append([]providers.Message(nil), history...)
+	emptied := emptyOldestFirst(live, eligibleToolResults(live, lineOf, nil), lineOf, archive,
+		func([]providers.Message) bool { return false })
+	require.Len(t, emptied, 2)
+	assert.Empty(t, findOrphanedToolCalls(live), "an emptied result still answers its call")
+	assert.Len(t, live, len(history), "no slot removed")
+
+	// Reload projection of the persisted state: same shape, same verdict.
+	set := memory.ProjectionSet{}
+	for _, e := range emptied {
+		set[memory.ProjectionKey{ToolCallID: e.ToolCallID, ArchiveLine: e.ArchiveLine}] = memory.ProjectionEmptied
+	}
+	projected := projectMessages(history, lineOf, set, projectionContext{
+		policy: capPolicyFor(config.DefaultContextSettings(), 100_000), archive: archive,
+	})
+	assert.Empty(t, findOrphanedToolCalls(projected))
+	for i := range projected {
+		assert.Equal(t, history[i].Role, projected[i].Role)
+		assert.Equal(t, history[i].ToolCallID, projected[i].ToolCallID)
+		assert.Equal(t, history[i].ToolCalls, projected[i].ToolCalls)
+	}
+
+	// A genuine orphan (call missing) is not D5's business: not eligible.
+	orphaned := buildOrphanedHistory("tc-orphan", "exec")
+	orphaned = append(orphaned, providers.Message{Role: "tool", ToolCallID: "stray", Content: big})
+	assert.Empty(t, eligibleToolResults(orphaned, func(i int) int { return i }, nil))
+	assert.Len(t, findOrphanedToolCalls(orphaned), 1, "recovery still sees the orphaned call")
 }
 
 // --- findOrphanedToolCalls unit tests ---

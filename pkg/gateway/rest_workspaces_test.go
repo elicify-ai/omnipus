@@ -1242,7 +1242,8 @@ func newTestRestAPIWithAvaRoster(t *testing.T) *restAPI {
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+			Defaults: config.AgentDefaults{
+				Home: tmpDir, DefaultModel: config.DefaultModel{Model: "test-model"}, MaxTokens: 4096},
 			List: []config.AgentConfig{
 				{ID: "mia", Name: "Mia", Type: config.AgentTypeCore, Default: true},
 				{ID: "jim", Name: "Jim", Type: config.AgentTypeCore},
@@ -1596,7 +1597,8 @@ func newTestRestAPIWithoutAva(t *testing.T) *restAPI {
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Home: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+			Defaults: config.AgentDefaults{
+				Home: tmpDir, DefaultModel: config.DefaultModel{Model: "test-model"}, MaxTokens: 4096},
 			List: []config.AgentConfig{
 				{ID: "mia", Name: "Mia", Type: config.AgentTypeCore, Default: true},
 				{ID: "jim", Name: "Jim", Type: config.AgentTypeCore},

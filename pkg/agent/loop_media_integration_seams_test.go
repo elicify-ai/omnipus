@@ -19,7 +19,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/media"
 	"github.com/elicify-ai/omnipus/pkg/media/library"
 	"github.com/elicify-ai/omnipus/pkg/providers"
-	"github.com/elicify-ai/omnipus/pkg/providers/capabilities"
+	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
 )
 
 // ---- Fix 1: SHA-256-on-read (verifyFileIntegrity) ----
@@ -54,10 +54,10 @@ func TestVerifyFileIntegrity_MissingFile(t *testing.T) {
 
 // ---- Fix 2/3: catalog budget + PDF gate ----
 // Covered end-to-end by loop_media_present_test.go (mustCatalog fixtures).
-// Keep a thin compile/link smoke that the capabilities package is reachable.
+// Keep a thin compile/link smoke that the catalog package is reachable.
 
-func TestCapabilitiesPackage_Linked(t *testing.T) {
-	_ = capabilities.ModalityImage
+func TestCatalogPackage_Linked(t *testing.T) {
+	_ = catalog.ModalityImage
 }
 
 // ---- Fix 4: MediaClass on TryMediaDowngrade ----
@@ -137,13 +137,13 @@ func TestResolveMediaRefs_WorkspaceRef_RequiresCallerWorkspace(t *testing.T) {
 	msgs := []providers.Message{{Role: "user", Content: "what is this", Media: []string{ref}}}
 
 	// Empty caller workspace → fail closed (attachment unavailable).
-	noCtx := resolveMediaRefsWithOffload(msgs, store, 10*1024*1024, "claude-sonnet-4", nil, nil, nil, "")
+	noCtx := resolveMediaRefsWithOffload(msgs, store, 10*1024*1024, "", "claude-sonnet-4", nil, nil, nil, "")
 	require.Len(t, noCtx, 1)
 	assert.Empty(t, noCtx[0].Media, "without caller workspace, workspace ref must not resolve to data URL")
 	assert.Contains(t, noCtx[0].Content, "attachment unavailable")
 
 	// Matching caller workspace → resolves (vision path produces data URL).
-	withCtx := resolveMediaRefsWithOffload(msgs, store, 10*1024*1024, "claude-sonnet-4", nil, nil, nil, wsID)
+	withCtx := resolveMediaRefsWithOffload(msgs, store, 10*1024*1024, "", "claude-sonnet-4", nil, nil, nil, wsID)
 	require.Len(t, withCtx, 1)
 	assert.NotContains(t, withCtx[0].Content, "attachment unavailable",
 		"with matching caller workspace, workspace ref must resolve")

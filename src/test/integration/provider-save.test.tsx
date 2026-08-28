@@ -46,14 +46,22 @@ beforeEach(() => {
   // rows as status:'disconnected' (Provider.yaml: "no key available or
   // fallback default entry") — ProvidersSection now filters those out of its
   // main list entirely, so a disconnected fixture here would never render.
+  //
+  // has_models_endpoint: true on every row — the gateway sets this on EVERY
+  // row it serves for a catalog provider whose `models` it fills (all five
+  // here are catalog providers with a live upstream listing). ADR-067 T067-13
+  // deleted the SPA's id-based 'live' guess (FR-011/FR-025); an omitted field
+  // now means 'manual' (an editable slug list), which flips the Save button
+  // from "Save & Connect" to "Save" and breaks every assertion below that
+  // depends on the live-catalogue copy.
   vi.mocked(fetchProviders).mockResolvedValue([
-    { id: 'openai', name: 'OpenAI', display_name: 'OpenAI', status: 'connected', models: ['gpt-4o'] },
-    { id: 'anthropic', name: 'Anthropic', display_name: 'Anthropic', status: 'connected', models: ['claude-sonnet-4-5'] },
-    { id: 'google', name: 'Google Gemini', display_name: 'Google Gemini', status: 'connected', models: ['gemini-2.5-flash'] },
-    { id: 'groq', name: 'Groq', display_name: 'Groq', status: 'connected', models: ['llama-3.3-70b'] },
-    { id: 'openrouter', name: 'OpenRouter', display_name: 'OpenRouter', status: 'connected', models: ['openrouter/auto'] },
+    { id: 'openai', name: 'OpenAI', display_name: 'OpenAI', status: 'connected', has_models_endpoint: true, models: ['gpt-4o'], auth_method: 'api_key', dependents: [], backs_default: false },
+    { id: 'anthropic', name: 'Anthropic', display_name: 'Anthropic', status: 'connected', has_models_endpoint: true, models: ['claude-sonnet-4-5'], auth_method: 'api_key', dependents: [], backs_default: false },
+    { id: 'google', name: 'Google Gemini', display_name: 'Google Gemini', status: 'connected', has_models_endpoint: true, models: ['gemini-2.5-flash'], auth_method: 'api_key', dependents: [], backs_default: false },
+    { id: 'groq', name: 'Groq', display_name: 'Groq', status: 'connected', has_models_endpoint: true, models: ['llama-3.3-70b'], auth_method: 'api_key', dependents: [], backs_default: false },
+    { id: 'openrouter', name: 'OpenRouter', display_name: 'OpenRouter', status: 'connected', has_models_endpoint: true, models: ['openrouter/auto'], auth_method: 'api_key', dependents: [], backs_default: false },
   ])
-  vi.mocked(configureProvider).mockResolvedValue({ id: 'openai', name: 'OpenAI', status: 'connected', models: [] })
+  vi.mocked(configureProvider).mockResolvedValue({ id: 'openai', name: 'OpenAI', status: 'connected', models: [], auth_method: 'api_key', dependents: [], backs_default: false })
   vi.mocked(testProvider).mockResolvedValue({ success: true })
   // Re-auth succeeds and mints a consent token the save flow replays.
   vi.mocked(reAuth).mockResolvedValue({ verified: true, token: 'consent-token-abc', expires_in: 300 })
@@ -92,13 +100,18 @@ describe('provider save & connect integration (test #27)', () => {
       expect(reAuth).toHaveBeenCalledWith('my-password')
     })
     await waitFor(() => {
-      // configureProvider(id, apiKey, endpoint?, model?, reAuthToken?, models?)
+      // configureProvider(id, apiKey, endpoint?, model?, reAuthToken?, models?, custom?)
+      // 7th arg (ADR-068 FR-037, T068-25): the custom-endpoint pair, absent
+      // here — every non-custom save now threads it through explicitly (see
+      // the same 7-arg pattern in ProvidersSection.test.tsx's re-auth and
+      // manual-provider describes).
       expect(configureProvider).toHaveBeenCalledWith(
         'anthropic',
         'sk-ant-test-1234',
         undefined,
         undefined,
         'consent-token-abc',
+        undefined,
         undefined,
       )
     })
@@ -127,7 +140,7 @@ describe('provider save & connect integration (test #27)', () => {
     // comment on why 'disconnected' fixtures don't render); after save,
     // anthropic's model list updates.
     vi.mocked(fetchProviders).mockResolvedValue([
-      { id: 'anthropic', name: 'Anthropic', display_name: 'Anthropic', status: 'connected', models: ['claude-sonnet-4-6'] },
+      { id: 'anthropic', name: 'Anthropic', display_name: 'Anthropic', status: 'connected', has_models_endpoint: true, models: ['claude-sonnet-4-6'], auth_method: 'api_key', dependents: [], backs_default: false },
     ])
 
     render(<ProvidersSection />, { wrapper })

@@ -137,6 +137,45 @@ func (e ActivityEventsResponseEventsType) Valid() bool {
 	}
 }
 
+// Defines values for AgentContextWindowSource.
+const (
+	AgentContextWindowSourceCatalog  AgentContextWindowSource = "catalog"
+	AgentContextWindowSourceFloor    AgentContextWindowSource = "floor"
+	AgentContextWindowSourceLive     AgentContextWindowSource = "live"
+	AgentContextWindowSourceOperator AgentContextWindowSource = "operator"
+)
+
+// Valid indicates whether the value is a known member of the AgentContextWindowSource enum.
+func (e AgentContextWindowSource) Valid() bool {
+	switch e {
+	case AgentContextWindowSourceCatalog:
+		return true
+	case AgentContextWindowSourceFloor:
+		return true
+	case AgentContextWindowSourceLive:
+		return true
+	case AgentContextWindowSourceOperator:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentDegradedReason.
+const (
+	NeedsProvider AgentDegradedReason = "needs_provider"
+)
+
+// Valid indicates whether the value is a known member of the AgentDegradedReason enum.
+func (e AgentDegradedReason) Valid() bool {
+	switch e {
+	case NeedsProvider:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for AgentExecutorKind.
 const (
 	AgentExecutorKindExternalCli AgentExecutorKind = "external-cli"
@@ -680,6 +719,321 @@ func (e AuditLogResponseEntriesDecision) Valid() bool {
 	}
 }
 
+// Defines values for CatalogModelInputModalities.
+const (
+	CatalogModelInputModalitiesAudio CatalogModelInputModalities = "audio"
+	CatalogModelInputModalitiesImage CatalogModelInputModalities = "image"
+	CatalogModelInputModalitiesPdf   CatalogModelInputModalities = "pdf"
+	CatalogModelInputModalitiesText  CatalogModelInputModalities = "text"
+	CatalogModelInputModalitiesVideo CatalogModelInputModalities = "video"
+)
+
+// Valid indicates whether the value is a known member of the CatalogModelInputModalities enum.
+func (e CatalogModelInputModalities) Valid() bool {
+	switch e {
+	case CatalogModelInputModalitiesAudio:
+		return true
+	case CatalogModelInputModalitiesImage:
+		return true
+	case CatalogModelInputModalitiesPdf:
+		return true
+	case CatalogModelInputModalitiesText:
+		return true
+	case CatalogModelInputModalitiesVideo:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CatalogModelStatus.
+const (
+	CatalogModelStatusActive  CatalogModelStatus = "active"
+	CatalogModelStatusRetired CatalogModelStatus = "retired"
+)
+
+// Valid indicates whether the value is a known member of the CatalogModelStatus enum.
+func (e CatalogModelStatus) Valid() bool {
+	switch e {
+	case CatalogModelStatusActive:
+		return true
+	case CatalogModelStatusRetired:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CatalogModelWindowSource.
+const (
+	CatalogModelWindowSourceCatalog  CatalogModelWindowSource = "catalog"
+	CatalogModelWindowSourceFloor    CatalogModelWindowSource = "floor"
+	CatalogModelWindowSourceLive     CatalogModelWindowSource = "live"
+	CatalogModelWindowSourceOperator CatalogModelWindowSource = "operator"
+)
+
+// Valid indicates whether the value is a known member of the CatalogModelWindowSource enum.
+func (e CatalogModelWindowSource) Valid() bool {
+	switch e {
+	case CatalogModelWindowSourceCatalog:
+		return true
+	case CatalogModelWindowSourceFloor:
+		return true
+	case CatalogModelWindowSourceLive:
+		return true
+	case CatalogModelWindowSourceOperator:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CatalogProtocolProtocol.
+const (
+	CatalogProtocolProtocolAnthropic        CatalogProtocolProtocol = "anthropic"
+	CatalogProtocolProtocolCli              CatalogProtocolProtocol = "cli"
+	CatalogProtocolProtocolGoogle           CatalogProtocolProtocol = "google"
+	CatalogProtocolProtocolOllama           CatalogProtocolProtocol = "ollama"
+	CatalogProtocolProtocolOpenaiCompatible CatalogProtocolProtocol = "openai-compatible"
+)
+
+// Valid indicates whether the value is a known member of the CatalogProtocolProtocol enum.
+func (e CatalogProtocolProtocol) Valid() bool {
+	switch e {
+	case CatalogProtocolProtocolAnthropic:
+		return true
+	case CatalogProtocolProtocolCli:
+		return true
+	case CatalogProtocolProtocolGoogle:
+		return true
+	case CatalogProtocolProtocolOllama:
+		return true
+	case CatalogProtocolProtocolOpenaiCompatible:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CatalogProviderAuthMethods.
+const (
+	CatalogProviderAuthMethodsApiKey CatalogProviderAuthMethods = "api_key"
+	CatalogProviderAuthMethodsSignIn CatalogProviderAuthMethods = "sign_in"
+)
+
+// Valid indicates whether the value is a known member of the CatalogProviderAuthMethods enum.
+func (e CatalogProviderAuthMethods) Valid() bool {
+	switch e {
+	case CatalogProviderAuthMethodsApiKey:
+		return true
+	case CatalogProviderAuthMethodsSignIn:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CatalogProviderCliKind.
+const (
+	CatalogProviderCliKindCodex   CatalogProviderCliKind = "codex"
+	CatalogProviderCliKindCopilot CatalogProviderCliKind = "copilot"
+)
+
+// Valid indicates whether the value is a known member of the CatalogProviderCliKind enum.
+func (e CatalogProviderCliKind) Valid() bool {
+	switch e {
+	case CatalogProviderCliKindCodex:
+		return true
+	case CatalogProviderCliKindCopilot:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CatalogProviderLocality.
+const (
+	CatalogProviderLocalityCloud CatalogProviderLocality = "cloud"
+	CatalogProviderLocalityLocal CatalogProviderLocality = "local"
+)
+
+// Valid indicates whether the value is a known member of the CatalogProviderLocality enum.
+func (e CatalogProviderLocality) Valid() bool {
+	switch e {
+	case CatalogProviderLocalityCloud:
+		return true
+	case CatalogProviderLocalityLocal:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CatalogProviderModelsInputModalities.
+const (
+	CatalogProviderModelsInputModalitiesAudio CatalogProviderModelsInputModalities = "audio"
+	CatalogProviderModelsInputModalitiesImage CatalogProviderModelsInputModalities = "image"
+	CatalogProviderModelsInputModalitiesPdf   CatalogProviderModelsInputModalities = "pdf"
+	CatalogProviderModelsInputModalitiesText  CatalogProviderModelsInputModalities = "text"
+	CatalogProviderModelsInputModalitiesVideo CatalogProviderModelsInputModalities = "video"
+)
+
+// Valid indicates whether the value is a known member of the CatalogProviderModelsInputModalities enum.
+func (e CatalogProviderModelsInputModalities) Valid() bool {
+	switch e {
+	case CatalogProviderModelsInputModalitiesAudio:
+		return true
+	case CatalogProviderModelsInputModalitiesImage:
+		return true
+	case CatalogProviderModelsInputModalitiesPdf:
+		return true
+	case CatalogProviderModelsInputModalitiesText:
+		return true
+	case CatalogProviderModelsInputModalitiesVideo:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CatalogProviderModelsStatus.
+const (
+	CatalogProviderModelsStatusActive  CatalogProviderModelsStatus = "active"
+	CatalogProviderModelsStatusRetired CatalogProviderModelsStatus = "retired"
+)
+
+// Valid indicates whether the value is a known member of the CatalogProviderModelsStatus enum.
+func (e CatalogProviderModelsStatus) Valid() bool {
+	switch e {
+	case CatalogProviderModelsStatusActive:
+		return true
+	case CatalogProviderModelsStatusRetired:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CatalogProviderModelsWindowSource.
+const (
+	CatalogProviderModelsWindowSourceCatalog  CatalogProviderModelsWindowSource = "catalog"
+	CatalogProviderModelsWindowSourceFloor    CatalogProviderModelsWindowSource = "floor"
+	CatalogProviderModelsWindowSourceLive     CatalogProviderModelsWindowSource = "live"
+	CatalogProviderModelsWindowSourceOperator CatalogProviderModelsWindowSource = "operator"
+)
+
+// Valid indicates whether the value is a known member of the CatalogProviderModelsWindowSource enum.
+func (e CatalogProviderModelsWindowSource) Valid() bool {
+	switch e {
+	case CatalogProviderModelsWindowSourceCatalog:
+		return true
+	case CatalogProviderModelsWindowSourceFloor:
+		return true
+	case CatalogProviderModelsWindowSourceLive:
+		return true
+	case CatalogProviderModelsWindowSourceOperator:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CatalogProviderProtocol.
+const (
+	CatalogProviderProtocolAnthropic        CatalogProviderProtocol = "anthropic"
+	CatalogProviderProtocolCli              CatalogProviderProtocol = "cli"
+	CatalogProviderProtocolGoogle           CatalogProviderProtocol = "google"
+	CatalogProviderProtocolOllama           CatalogProviderProtocol = "ollama"
+	CatalogProviderProtocolOpenaiCompatible CatalogProviderProtocol = "openai-compatible"
+)
+
+// Valid indicates whether the value is a known member of the CatalogProviderProtocol enum.
+func (e CatalogProviderProtocol) Valid() bool {
+	switch e {
+	case CatalogProviderProtocolAnthropic:
+		return true
+	case CatalogProviderProtocolCli:
+		return true
+	case CatalogProviderProtocolGoogle:
+		return true
+	case CatalogProviderProtocolOllama:
+		return true
+	case CatalogProviderProtocolOpenaiCompatible:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CatalogProviderProtocolsProtocol.
+const (
+	CatalogProviderProtocolsProtocolAnthropic        CatalogProviderProtocolsProtocol = "anthropic"
+	CatalogProviderProtocolsProtocolCli              CatalogProviderProtocolsProtocol = "cli"
+	CatalogProviderProtocolsProtocolGoogle           CatalogProviderProtocolsProtocol = "google"
+	CatalogProviderProtocolsProtocolOllama           CatalogProviderProtocolsProtocol = "ollama"
+	CatalogProviderProtocolsProtocolOpenaiCompatible CatalogProviderProtocolsProtocol = "openai-compatible"
+)
+
+// Valid indicates whether the value is a known member of the CatalogProviderProtocolsProtocol enum.
+func (e CatalogProviderProtocolsProtocol) Valid() bool {
+	switch e {
+	case CatalogProviderProtocolsProtocolAnthropic:
+		return true
+	case CatalogProviderProtocolsProtocolCli:
+		return true
+	case CatalogProviderProtocolsProtocolGoogle:
+		return true
+	case CatalogProviderProtocolsProtocolOllama:
+		return true
+	case CatalogProviderProtocolsProtocolOpenaiCompatible:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CatalogProviderTier.
+const (
+	CatalogProviderTierPopular     CatalogProviderTier = "popular"
+	CatalogProviderTierStandard    CatalogProviderTier = "standard"
+	CatalogProviderTierUnsupported CatalogProviderTier = "unsupported"
+)
+
+// Valid indicates whether the value is a known member of the CatalogProviderTier enum.
+func (e CatalogProviderTier) Valid() bool {
+	switch e {
+	case CatalogProviderTierPopular:
+		return true
+	case CatalogProviderTierStandard:
+		return true
+	case CatalogProviderTierUnsupported:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CatalogProviderUnsupportedReason.
+const (
+	CatalogProviderUnsupportedReasonCloudIam      CatalogProviderUnsupportedReason = "cloud-iam"
+	CatalogProviderUnsupportedReasonDeploymentUrl CatalogProviderUnsupportedReason = "deployment-url"
+	CatalogProviderUnsupportedReasonWithdrawn     CatalogProviderUnsupportedReason = "withdrawn"
+)
+
+// Valid indicates whether the value is a known member of the CatalogProviderUnsupportedReason enum.
+func (e CatalogProviderUnsupportedReason) Valid() bool {
+	switch e {
+	case CatalogProviderUnsupportedReasonCloudIam:
+		return true
+	case CatalogProviderUnsupportedReasonDeploymentUrl:
+		return true
+	case CatalogProviderUnsupportedReasonWithdrawn:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ChannelConfigureRequestIdentityKind.
 const (
 	ChannelConfigureRequestIdentityKindAgent ChannelConfigureRequestIdentityKind = "agent"
@@ -878,6 +1232,54 @@ func (e CliValidateResponseReason) Valid() bool {
 	case CliValidateResponseReasonUnauthenticated:
 		return true
 	case CliValidateResponseReasonUnknownCli:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ContextWindowSource.
+const (
+	ContextWindowSourceCatalog  ContextWindowSource = "catalog"
+	ContextWindowSourceFloor    ContextWindowSource = "floor"
+	ContextWindowSourceLive     ContextWindowSource = "live"
+	ContextWindowSourceOperator ContextWindowSource = "operator"
+)
+
+// Valid indicates whether the value is a known member of the ContextWindowSource enum.
+func (e ContextWindowSource) Valid() bool {
+	switch e {
+	case ContextWindowSourceCatalog:
+		return true
+	case ContextWindowSourceFloor:
+		return true
+	case ContextWindowSourceLive:
+		return true
+	case ContextWindowSourceOperator:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DefaultModelWindowSource.
+const (
+	DefaultModelWindowSourceCatalog  DefaultModelWindowSource = "catalog"
+	DefaultModelWindowSourceFloor    DefaultModelWindowSource = "floor"
+	DefaultModelWindowSourceLive     DefaultModelWindowSource = "live"
+	DefaultModelWindowSourceOperator DefaultModelWindowSource = "operator"
+)
+
+// Valid indicates whether the value is a known member of the DefaultModelWindowSource enum.
+func (e DefaultModelWindowSource) Valid() bool {
+	switch e {
+	case DefaultModelWindowSourceCatalog:
+		return true
+	case DefaultModelWindowSourceFloor:
+		return true
+	case DefaultModelWindowSourceLive:
+		return true
+	case DefaultModelWindowSourceOperator:
 		return true
 	default:
 		return false
@@ -1298,6 +1700,42 @@ func (e DoctorResultIssuesSeverity) Valid() bool {
 	}
 }
 
+// Defines values for EntitlementModelLimits.
+const (
+	EntitlementModelLimitsKnown   EntitlementModelLimits = "known"
+	EntitlementModelLimitsUnknown EntitlementModelLimits = "unknown"
+)
+
+// Valid indicates whether the value is a known member of the EntitlementModelLimits enum.
+func (e EntitlementModelLimits) Valid() bool {
+	switch e {
+	case EntitlementModelLimitsKnown:
+		return true
+	case EntitlementModelLimitsUnknown:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for EntitlementResponseModelsLimits.
+const (
+	Known   EntitlementResponseModelsLimits = "known"
+	Unknown EntitlementResponseModelsLimits = "unknown"
+)
+
+// Valid indicates whether the value is a known member of the EntitlementResponseModelsLimits enum.
+func (e EntitlementResponseModelsLimits) Valid() bool {
+	switch e {
+	case Known:
+		return true
+	case Unknown:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ExecutorCommandPreviewResponsePromptDelivery.
 const (
 	PositionalArgumentAfter ExecutorCommandPreviewResponsePromptDelivery = "positional argument after --"
@@ -1339,19 +1777,19 @@ func (e ExecutorConfigKind) Valid() bool {
 
 // Defines values for ExternalCliTool.
 const (
-	ClaudeCode ExternalCliTool = "claude-code"
-	Codex      ExternalCliTool = "codex"
-	Opencode   ExternalCliTool = "opencode"
+	ExternalCliToolClaudeCode ExternalCliTool = "claude-code"
+	ExternalCliToolCodex      ExternalCliTool = "codex"
+	ExternalCliToolOpencode   ExternalCliTool = "opencode"
 )
 
 // Valid indicates whether the value is a known member of the ExternalCliTool enum.
 func (e ExternalCliTool) Valid() bool {
 	switch e {
-	case ClaudeCode:
+	case ExternalCliToolClaudeCode:
 		return true
-	case Codex:
+	case ExternalCliToolCodex:
 		return true
-	case Opencode:
+	case ExternalCliToolOpencode:
 		return true
 	default:
 		return false
@@ -1538,14 +1976,38 @@ func (e GoalState) Valid() bool {
 	}
 }
 
+// Defines values for HealthResponseAuditLogger.
+const (
+	HealthResponseAuditLoggerOk          HealthResponseAuditLogger = "ok"
+	HealthResponseAuditLoggerUnavailable HealthResponseAuditLogger = "unavailable"
+	HealthResponseAuditLoggerUnknown     HealthResponseAuditLogger = "unknown"
+)
+
+// Valid indicates whether the value is a known member of the HealthResponseAuditLogger enum.
+func (e HealthResponseAuditLogger) Valid() bool {
+	switch e {
+	case HealthResponseAuditLoggerOk:
+		return true
+	case HealthResponseAuditLoggerUnavailable:
+		return true
+	case HealthResponseAuditLoggerUnknown:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for HealthResponseStatus.
 const (
-	HealthResponseStatusOk HealthResponseStatus = "ok"
+	HealthResponseStatusDegraded HealthResponseStatus = "degraded"
+	HealthResponseStatusOk       HealthResponseStatus = "ok"
 )
 
 // Valid indicates whether the value is a known member of the HealthResponseStatus enum.
 func (e HealthResponseStatus) Valid() bool {
 	switch e {
+	case HealthResponseStatusDegraded:
+		return true
 	case HealthResponseStatusOk:
 		return true
 	default:
@@ -1793,6 +2255,27 @@ func (e MessageStatus) Valid() bool {
 	}
 }
 
+// Defines values for MessageToolCallsContentState.
+const (
+	MessageToolCallsContentStateCapped  MessageToolCallsContentState = "capped"
+	MessageToolCallsContentStateEmptied MessageToolCallsContentState = "emptied"
+	MessageToolCallsContentStateFull    MessageToolCallsContentState = "full"
+)
+
+// Valid indicates whether the value is a known member of the MessageToolCallsContentState enum.
+func (e MessageToolCallsContentState) Valid() bool {
+	switch e {
+	case MessageToolCallsContentStateCapped:
+		return true
+	case MessageToolCallsContentStateEmptied:
+		return true
+	case MessageToolCallsContentStateFull:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for MessageToolCallsStatus.
 const (
 	MessageToolCallsStatusCancelled   MessageToolCallsStatus = "cancelled"
@@ -2027,33 +2510,6 @@ func (e MessageParentQuestionKind) Valid() bool {
 	}
 }
 
-// Defines values for ModelCapabilitiesModalities.
-const (
-	ModelCapabilitiesModalitiesAudio ModelCapabilitiesModalities = "audio"
-	ModelCapabilitiesModalitiesImage ModelCapabilitiesModalities = "image"
-	ModelCapabilitiesModalitiesPdf   ModelCapabilitiesModalities = "pdf"
-	ModelCapabilitiesModalitiesText  ModelCapabilitiesModalities = "text"
-	ModelCapabilitiesModalitiesVideo ModelCapabilitiesModalities = "video"
-)
-
-// Valid indicates whether the value is a known member of the ModelCapabilitiesModalities enum.
-func (e ModelCapabilitiesModalities) Valid() bool {
-	switch e {
-	case ModelCapabilitiesModalitiesAudio:
-		return true
-	case ModelCapabilitiesModalitiesImage:
-		return true
-	case ModelCapabilitiesModalitiesPdf:
-		return true
-	case ModelCapabilitiesModalitiesText:
-		return true
-	case ModelCapabilitiesModalitiesVideo:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for NotificationSeverity.
 const (
 	NotificationSeverityError   NotificationSeverity = "error"
@@ -2120,6 +2576,36 @@ const (
 func (e NotificationListNotificationsType) Valid() bool {
 	switch e {
 	case NotificationListNotificationsTypeScheduleFailed:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for OnboardingProviderApiKeyAuthMethod.
+const (
+	OnboardingProviderApiKeyAuthMethodApiKey OnboardingProviderApiKeyAuthMethod = "api_key"
+)
+
+// Valid indicates whether the value is a known member of the OnboardingProviderApiKeyAuthMethod enum.
+func (e OnboardingProviderApiKeyAuthMethod) Valid() bool {
+	switch e {
+	case OnboardingProviderApiKeyAuthMethodApiKey:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for OnboardingProviderSignInAuthMethod.
+const (
+	OnboardingProviderSignInAuthMethodSignIn OnboardingProviderSignInAuthMethod = "sign_in"
+)
+
+// Valid indicates whether the value is a known member of the OnboardingProviderSignInAuthMethod enum.
+func (e OnboardingProviderSignInAuthMethod) Valid() bool {
+	switch e {
+	case OnboardingProviderSignInAuthMethodSignIn:
 		return true
 	default:
 		return false
@@ -2831,186 +3317,36 @@ func (e PlanUpdateRequestState) Valid() bool {
 	}
 }
 
-// Defines values for ProbeProviderRequestId.
+// Defines values for ProbeProviderRequestAuth.
 const (
-	ProbeProviderRequestIdAlibabaCoding          ProbeProviderRequestId = "alibaba-coding"
-	ProbeProviderRequestIdAlibabaCodingAnthropic ProbeProviderRequestId = "alibaba-coding-anthropic"
-	ProbeProviderRequestIdAnthropic              ProbeProviderRequestId = "anthropic"
-	ProbeProviderRequestIdAnthropicMessages      ProbeProviderRequestId = "anthropic-messages"
-	ProbeProviderRequestIdAntigravity            ProbeProviderRequestId = "antigravity"
-	ProbeProviderRequestIdAvian                  ProbeProviderRequestId = "avian"
-	ProbeProviderRequestIdAzure                  ProbeProviderRequestId = "azure"
-	ProbeProviderRequestIdAzureOpenai            ProbeProviderRequestId = "azure-openai"
-	ProbeProviderRequestIdBedrock                ProbeProviderRequestId = "bedrock"
-	ProbeProviderRequestIdCerebras               ProbeProviderRequestId = "cerebras"
-	ProbeProviderRequestIdClaudeCli              ProbeProviderRequestId = "claude-cli"
-	ProbeProviderRequestIdClaudecli              ProbeProviderRequestId = "claudecli"
-	ProbeProviderRequestIdCodexCli               ProbeProviderRequestId = "codex-cli"
-	ProbeProviderRequestIdCodexcli               ProbeProviderRequestId = "codexcli"
-	ProbeProviderRequestIdCodingPlan             ProbeProviderRequestId = "coding-plan"
-	ProbeProviderRequestIdCodingPlanAnthropic    ProbeProviderRequestId = "coding-plan-anthropic"
-	ProbeProviderRequestIdDashscopeIntl          ProbeProviderRequestId = "dashscope-intl"
-	ProbeProviderRequestIdDashscopeUs            ProbeProviderRequestId = "dashscope-us"
-	ProbeProviderRequestIdDeepseek               ProbeProviderRequestId = "deepseek"
-	ProbeProviderRequestIdDeepseekAnthropic      ProbeProviderRequestId = "deepseek-anthropic"
-	ProbeProviderRequestIdGemini                 ProbeProviderRequestId = "gemini"
-	ProbeProviderRequestIdGlmCoding              ProbeProviderRequestId = "glm-coding"
-	ProbeProviderRequestIdGoogle                 ProbeProviderRequestId = "google"
-	ProbeProviderRequestIdGroq                   ProbeProviderRequestId = "groq"
-	ProbeProviderRequestIdLitellm                ProbeProviderRequestId = "litellm"
-	ProbeProviderRequestIdLongcat                ProbeProviderRequestId = "longcat"
-	ProbeProviderRequestIdMimo                   ProbeProviderRequestId = "mimo"
-	ProbeProviderRequestIdMinimax                ProbeProviderRequestId = "minimax"
-	ProbeProviderRequestIdMinimaxAnthropic       ProbeProviderRequestId = "minimax-anthropic"
-	ProbeProviderRequestIdMinimaxCn              ProbeProviderRequestId = "minimax-cn"
-	ProbeProviderRequestIdMinimaxCnAnthropic     ProbeProviderRequestId = "minimax-cn-anthropic"
-	ProbeProviderRequestIdMistral                ProbeProviderRequestId = "mistral"
-	ProbeProviderRequestIdModelscope             ProbeProviderRequestId = "modelscope"
-	ProbeProviderRequestIdMoonshot               ProbeProviderRequestId = "moonshot"
-	ProbeProviderRequestIdMoonshotAnthropic      ProbeProviderRequestId = "moonshot-anthropic"
-	ProbeProviderRequestIdMoonshotCn             ProbeProviderRequestId = "moonshot-cn"
-	ProbeProviderRequestIdMoonshotCnAnthropic    ProbeProviderRequestId = "moonshot-cn-anthropic"
-	ProbeProviderRequestIdNovita                 ProbeProviderRequestId = "novita"
-	ProbeProviderRequestIdNvidia                 ProbeProviderRequestId = "nvidia"
-	ProbeProviderRequestIdOllama                 ProbeProviderRequestId = "ollama"
-	ProbeProviderRequestIdOpenai                 ProbeProviderRequestId = "openai"
-	ProbeProviderRequestIdOpenrouter             ProbeProviderRequestId = "openrouter"
-	ProbeProviderRequestIdQwen                   ProbeProviderRequestId = "qwen"
-	ProbeProviderRequestIdQwenCoding             ProbeProviderRequestId = "qwen-coding"
-	ProbeProviderRequestIdQwenInternational      ProbeProviderRequestId = "qwen-international"
-	ProbeProviderRequestIdQwenIntl               ProbeProviderRequestId = "qwen-intl"
-	ProbeProviderRequestIdQwenUs                 ProbeProviderRequestId = "qwen-us"
-	ProbeProviderRequestIdShengsuanyun           ProbeProviderRequestId = "shengsuanyun"
-	ProbeProviderRequestIdVivgrid                ProbeProviderRequestId = "vivgrid"
-	ProbeProviderRequestIdVllm                   ProbeProviderRequestId = "vllm"
-	ProbeProviderRequestIdVolcengine             ProbeProviderRequestId = "volcengine"
-	ProbeProviderRequestIdZAi                    ProbeProviderRequestId = "z-ai"
-	ProbeProviderRequestIdZAiAnthropic           ProbeProviderRequestId = "z-ai-anthropic"
-	ProbeProviderRequestIdZAiCoding              ProbeProviderRequestId = "z-ai-coding"
-	ProbeProviderRequestIdZai                    ProbeProviderRequestId = "zai"
-	ProbeProviderRequestIdZhipu                  ProbeProviderRequestId = "zhipu"
-	ProbeProviderRequestIdZhipuAnthropic         ProbeProviderRequestId = "zhipu-anthropic"
-	ProbeProviderRequestIdZhipuCoding            ProbeProviderRequestId = "zhipu-coding"
+	ProbeProviderRequestAuthApiKey ProbeProviderRequestAuth = "api_key"
+	ProbeProviderRequestAuthSignIn ProbeProviderRequestAuth = "sign_in"
 )
 
-// Valid indicates whether the value is a known member of the ProbeProviderRequestId enum.
-func (e ProbeProviderRequestId) Valid() bool {
+// Valid indicates whether the value is a known member of the ProbeProviderRequestAuth enum.
+func (e ProbeProviderRequestAuth) Valid() bool {
 	switch e {
-	case ProbeProviderRequestIdAlibabaCoding:
+	case ProbeProviderRequestAuthApiKey:
 		return true
-	case ProbeProviderRequestIdAlibabaCodingAnthropic:
+	case ProbeProviderRequestAuthSignIn:
 		return true
-	case ProbeProviderRequestIdAnthropic:
+	default:
+		return false
+	}
+}
+
+// Defines values for ProbeProviderRequestProtocol.
+const (
+	ProbeProviderRequestProtocolAnthropic        ProbeProviderRequestProtocol = "anthropic"
+	ProbeProviderRequestProtocolOpenaiCompatible ProbeProviderRequestProtocol = "openai-compatible"
+)
+
+// Valid indicates whether the value is a known member of the ProbeProviderRequestProtocol enum.
+func (e ProbeProviderRequestProtocol) Valid() bool {
+	switch e {
+	case ProbeProviderRequestProtocolAnthropic:
 		return true
-	case ProbeProviderRequestIdAnthropicMessages:
-		return true
-	case ProbeProviderRequestIdAntigravity:
-		return true
-	case ProbeProviderRequestIdAvian:
-		return true
-	case ProbeProviderRequestIdAzure:
-		return true
-	case ProbeProviderRequestIdAzureOpenai:
-		return true
-	case ProbeProviderRequestIdBedrock:
-		return true
-	case ProbeProviderRequestIdCerebras:
-		return true
-	case ProbeProviderRequestIdClaudeCli:
-		return true
-	case ProbeProviderRequestIdClaudecli:
-		return true
-	case ProbeProviderRequestIdCodexCli:
-		return true
-	case ProbeProviderRequestIdCodexcli:
-		return true
-	case ProbeProviderRequestIdCodingPlan:
-		return true
-	case ProbeProviderRequestIdCodingPlanAnthropic:
-		return true
-	case ProbeProviderRequestIdDashscopeIntl:
-		return true
-	case ProbeProviderRequestIdDashscopeUs:
-		return true
-	case ProbeProviderRequestIdDeepseek:
-		return true
-	case ProbeProviderRequestIdDeepseekAnthropic:
-		return true
-	case ProbeProviderRequestIdGemini:
-		return true
-	case ProbeProviderRequestIdGlmCoding:
-		return true
-	case ProbeProviderRequestIdGoogle:
-		return true
-	case ProbeProviderRequestIdGroq:
-		return true
-	case ProbeProviderRequestIdLitellm:
-		return true
-	case ProbeProviderRequestIdLongcat:
-		return true
-	case ProbeProviderRequestIdMimo:
-		return true
-	case ProbeProviderRequestIdMinimax:
-		return true
-	case ProbeProviderRequestIdMinimaxAnthropic:
-		return true
-	case ProbeProviderRequestIdMinimaxCn:
-		return true
-	case ProbeProviderRequestIdMinimaxCnAnthropic:
-		return true
-	case ProbeProviderRequestIdMistral:
-		return true
-	case ProbeProviderRequestIdModelscope:
-		return true
-	case ProbeProviderRequestIdMoonshot:
-		return true
-	case ProbeProviderRequestIdMoonshotAnthropic:
-		return true
-	case ProbeProviderRequestIdMoonshotCn:
-		return true
-	case ProbeProviderRequestIdMoonshotCnAnthropic:
-		return true
-	case ProbeProviderRequestIdNovita:
-		return true
-	case ProbeProviderRequestIdNvidia:
-		return true
-	case ProbeProviderRequestIdOllama:
-		return true
-	case ProbeProviderRequestIdOpenai:
-		return true
-	case ProbeProviderRequestIdOpenrouter:
-		return true
-	case ProbeProviderRequestIdQwen:
-		return true
-	case ProbeProviderRequestIdQwenCoding:
-		return true
-	case ProbeProviderRequestIdQwenInternational:
-		return true
-	case ProbeProviderRequestIdQwenIntl:
-		return true
-	case ProbeProviderRequestIdQwenUs:
-		return true
-	case ProbeProviderRequestIdShengsuanyun:
-		return true
-	case ProbeProviderRequestIdVivgrid:
-		return true
-	case ProbeProviderRequestIdVllm:
-		return true
-	case ProbeProviderRequestIdVolcengine:
-		return true
-	case ProbeProviderRequestIdZAi:
-		return true
-	case ProbeProviderRequestIdZAiAnthropic:
-		return true
-	case ProbeProviderRequestIdZAiCoding:
-		return true
-	case ProbeProviderRequestIdZai:
-		return true
-	case ProbeProviderRequestIdZhipu:
-		return true
-	case ProbeProviderRequestIdZhipuAnthropic:
-		return true
-	case ProbeProviderRequestIdZhipuCoding:
+	case ProbeProviderRequestProtocolOpenaiCompatible:
 		return true
 	default:
 		return false
@@ -3107,11 +3443,125 @@ func (e PromptGuardUpdateResponseAppliedLevel) Valid() bool {
 	}
 }
 
+// Defines values for ProviderAuthMethod.
+const (
+	ProviderAuthMethodApiKey ProviderAuthMethod = "api_key"
+	ProviderAuthMethodSignIn ProviderAuthMethod = "sign_in"
+)
+
+// Valid indicates whether the value is a known member of the ProviderAuthMethod enum.
+func (e ProviderAuthMethod) Valid() bool {
+	switch e {
+	case ProviderAuthMethodApiKey:
+		return true
+	case ProviderAuthMethodSignIn:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ProviderCliKind.
+const (
+	ProviderCliKindCodex   ProviderCliKind = "codex"
+	ProviderCliKindCopilot ProviderCliKind = "copilot"
+)
+
+// Valid indicates whether the value is a known member of the ProviderCliKind enum.
+func (e ProviderCliKind) Valid() bool {
+	switch e {
+	case ProviderCliKindCodex:
+		return true
+	case ProviderCliKindCopilot:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ProviderDependentsRole.
+const (
+	ProviderDependentsRoleFallback    ProviderDependentsRole = "fallback"
+	ProviderDependentsRoleImage       ProviderDependentsRole = "image"
+	ProviderDependentsRolePassthrough ProviderDependentsRole = "passthrough"
+	ProviderDependentsRolePrimary     ProviderDependentsRole = "primary"
+	ProviderDependentsRoleRecap       ProviderDependentsRole = "recap"
+	ProviderDependentsRoleVoice       ProviderDependentsRole = "voice"
+)
+
+// Valid indicates whether the value is a known member of the ProviderDependentsRole enum.
+func (e ProviderDependentsRole) Valid() bool {
+	switch e {
+	case ProviderDependentsRoleFallback:
+		return true
+	case ProviderDependentsRoleImage:
+		return true
+	case ProviderDependentsRolePassthrough:
+		return true
+	case ProviderDependentsRolePrimary:
+		return true
+	case ProviderDependentsRoleRecap:
+		return true
+	case ProviderDependentsRoleVoice:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ProviderLocality.
+const (
+	ProviderLocalityCloud ProviderLocality = "cloud"
+	ProviderLocalityLocal ProviderLocality = "local"
+)
+
+// Valid indicates whether the value is a known member of the ProviderLocality enum.
+func (e ProviderLocality) Valid() bool {
+	switch e {
+	case ProviderLocalityCloud:
+		return true
+	case ProviderLocalityLocal:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ProviderProtocol.
+const (
+	ProviderProtocolAnthropic        ProviderProtocol = "anthropic"
+	ProviderProtocolCli              ProviderProtocol = "cli"
+	ProviderProtocolGoogle           ProviderProtocol = "google"
+	ProviderProtocolOllama           ProviderProtocol = "ollama"
+	ProviderProtocolOpenaiCompatible ProviderProtocol = "openai-compatible"
+)
+
+// Valid indicates whether the value is a known member of the ProviderProtocol enum.
+func (e ProviderProtocol) Valid() bool {
+	switch e {
+	case ProviderProtocolAnthropic:
+		return true
+	case ProviderProtocolCli:
+		return true
+	case ProviderProtocolGoogle:
+		return true
+	case ProviderProtocolOllama:
+		return true
+	case ProviderProtocolOpenaiCompatible:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ProviderStatus.
 const (
-	ProviderStatusConnected    ProviderStatus = "connected"
-	ProviderStatusDisconnected ProviderStatus = "disconnected"
-	ProviderStatusError        ProviderStatus = "error"
+	ProviderStatusConnected       ProviderStatus = "connected"
+	ProviderStatusDisconnected    ProviderStatus = "disconnected"
+	ProviderStatusError           ProviderStatus = "error"
+	ProviderStatusExpired         ProviderStatus = "expired"
+	ProviderStatusSignedIn        ProviderStatus = "signed_in"
+	ProviderStatusUnknownProvider ProviderStatus = "unknown-provider"
 )
 
 // Valid indicates whether the value is a known member of the ProviderStatus enum.
@@ -3123,6 +3573,12 @@ func (e ProviderStatus) Valid() bool {
 		return true
 	case ProviderStatusError:
 		return true
+	case ProviderStatusExpired:
+		return true
+	case ProviderStatusSignedIn:
+		return true
+	case ProviderStatusUnknownProvider:
+		return true
 	default:
 		return false
 	}
@@ -3130,82 +3586,382 @@ func (e ProviderStatus) Valid() bool {
 
 // Defines values for ProviderValidationOutcome.
 const (
-	ProviderValidationOutcomeInvalidKey  ProviderValidationOutcome = "invalid_key"
-	ProviderValidationOutcomeNoCredit    ProviderValidationOutcome = "no_credit"
-	ProviderValidationOutcomeRestricted  ProviderValidationOutcome = "restricted"
-	ProviderValidationOutcomeUnreachable ProviderValidationOutcome = "unreachable"
-	ProviderValidationOutcomeValid       ProviderValidationOutcome = "valid"
+	InvalidKey  ProviderValidationOutcome = "invalid_key"
+	NoCredit    ProviderValidationOutcome = "no_credit"
+	Restricted  ProviderValidationOutcome = "restricted"
+	Unreachable ProviderValidationOutcome = "unreachable"
+	Valid       ProviderValidationOutcome = "valid"
 )
 
 // Valid indicates whether the value is a known member of the ProviderValidationOutcome enum.
 func (e ProviderValidationOutcome) Valid() bool {
 	switch e {
-	case ProviderValidationOutcomeInvalidKey:
+	case InvalidKey:
 		return true
-	case ProviderValidationOutcomeNoCredit:
+	case NoCredit:
 		return true
-	case ProviderValidationOutcomeRestricted:
+	case Restricted:
 		return true
-	case ProviderValidationOutcomeUnreachable:
+	case Unreachable:
 		return true
-	case ProviderValidationOutcomeValid:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for ProviderCatalogEntryPlan.
-const (
-	ProviderCatalogEntryPlanCodingPlan  ProviderCatalogEntryPlan = "coding-plan"
-	ProviderCatalogEntryPlanStandardApi ProviderCatalogEntryPlan = "standard-api"
-)
-
-// Valid indicates whether the value is a known member of the ProviderCatalogEntryPlan enum.
-func (e ProviderCatalogEntryPlan) Valid() bool {
-	switch e {
-	case ProviderCatalogEntryPlanCodingPlan:
-		return true
-	case ProviderCatalogEntryPlanStandardApi:
+	case Valid:
 		return true
 	default:
 		return false
 	}
 }
 
-// Defines values for ProviderCatalogEntryRegion.
+// Defines values for ProviderDeleteResponseDependentsRole.
 const (
-	China ProviderCatalogEntryRegion = "china"
-	Intl  ProviderCatalogEntryRegion = "intl"
-	Us    ProviderCatalogEntryRegion = "us"
+	ProviderDeleteResponseDependentsRoleFallback    ProviderDeleteResponseDependentsRole = "fallback"
+	ProviderDeleteResponseDependentsRoleImage       ProviderDeleteResponseDependentsRole = "image"
+	ProviderDeleteResponseDependentsRolePassthrough ProviderDeleteResponseDependentsRole = "passthrough"
+	ProviderDeleteResponseDependentsRolePrimary     ProviderDeleteResponseDependentsRole = "primary"
+	ProviderDeleteResponseDependentsRoleRecap       ProviderDeleteResponseDependentsRole = "recap"
+	ProviderDeleteResponseDependentsRoleVoice       ProviderDeleteResponseDependentsRole = "voice"
 )
 
-// Valid indicates whether the value is a known member of the ProviderCatalogEntryRegion enum.
-func (e ProviderCatalogEntryRegion) Valid() bool {
+// Valid indicates whether the value is a known member of the ProviderDeleteResponseDependentsRole enum.
+func (e ProviderDeleteResponseDependentsRole) Valid() bool {
 	switch e {
-	case China:
+	case ProviderDeleteResponseDependentsRoleFallback:
 		return true
-	case Intl:
+	case ProviderDeleteResponseDependentsRoleImage:
 		return true
-	case Us:
+	case ProviderDeleteResponseDependentsRolePassthrough:
+		return true
+	case ProviderDeleteResponseDependentsRolePrimary:
+		return true
+	case ProviderDeleteResponseDependentsRoleRecap:
+		return true
+	case ProviderDeleteResponseDependentsRoleVoice:
 		return true
 	default:
 		return false
 	}
 }
 
-// Defines values for ProviderCatalogEntryWire.
+// Defines values for ProviderDependentRole.
 const (
-	Anthropic        ProviderCatalogEntryWire = "anthropic"
-	OpenaiCompatible ProviderCatalogEntryWire = "openai-compatible"
+	ProviderDependentRoleFallback    ProviderDependentRole = "fallback"
+	ProviderDependentRoleImage       ProviderDependentRole = "image"
+	ProviderDependentRolePassthrough ProviderDependentRole = "passthrough"
+	ProviderDependentRolePrimary     ProviderDependentRole = "primary"
+	ProviderDependentRoleRecap       ProviderDependentRole = "recap"
+	ProviderDependentRoleVoice       ProviderDependentRole = "voice"
 )
 
-// Valid indicates whether the value is a known member of the ProviderCatalogEntryWire enum.
-func (e ProviderCatalogEntryWire) Valid() bool {
+// Valid indicates whether the value is a known member of the ProviderDependentRole enum.
+func (e ProviderDependentRole) Valid() bool {
 	switch e {
-	case Anthropic:
+	case ProviderDependentRoleFallback:
 		return true
-	case OpenaiCompatible:
+	case ProviderDependentRoleImage:
+		return true
+	case ProviderDependentRolePassthrough:
+		return true
+	case ProviderDependentRolePrimary:
+		return true
+	case ProviderDependentRoleRecap:
+		return true
+	case ProviderDependentRoleVoice:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ProviderUpdateRequestAuthMethod.
+const (
+	ProviderUpdateRequestAuthMethodApiKey ProviderUpdateRequestAuthMethod = "api_key"
+	ProviderUpdateRequestAuthMethodSignIn ProviderUpdateRequestAuthMethod = "sign_in"
+)
+
+// Valid indicates whether the value is a known member of the ProviderUpdateRequestAuthMethod enum.
+func (e ProviderUpdateRequestAuthMethod) Valid() bool {
+	switch e {
+	case ProviderUpdateRequestAuthMethodApiKey:
+		return true
+	case ProviderUpdateRequestAuthMethodSignIn:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ProviderUpdateRequestProtocol.
+const (
+	ProviderUpdateRequestProtocolAnthropic        ProviderUpdateRequestProtocol = "anthropic"
+	ProviderUpdateRequestProtocolCli              ProviderUpdateRequestProtocol = "cli"
+	ProviderUpdateRequestProtocolGoogle           ProviderUpdateRequestProtocol = "google"
+	ProviderUpdateRequestProtocolOllama           ProviderUpdateRequestProtocol = "ollama"
+	ProviderUpdateRequestProtocolOpenaiCompatible ProviderUpdateRequestProtocol = "openai-compatible"
+)
+
+// Valid indicates whether the value is a known member of the ProviderUpdateRequestProtocol enum.
+func (e ProviderUpdateRequestProtocol) Valid() bool {
+	switch e {
+	case ProviderUpdateRequestProtocolAnthropic:
+		return true
+	case ProviderUpdateRequestProtocolCli:
+		return true
+	case ProviderUpdateRequestProtocolGoogle:
+		return true
+	case ProviderUpdateRequestProtocolOllama:
+		return true
+	case ProviderUpdateRequestProtocolOpenaiCompatible:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ProvidersCatalogProvidersAuthMethods.
+const (
+	ApiKey ProvidersCatalogProvidersAuthMethods = "api_key"
+	SignIn ProvidersCatalogProvidersAuthMethods = "sign_in"
+)
+
+// Valid indicates whether the value is a known member of the ProvidersCatalogProvidersAuthMethods enum.
+func (e ProvidersCatalogProvidersAuthMethods) Valid() bool {
+	switch e {
+	case ApiKey:
+		return true
+	case SignIn:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ProvidersCatalogProvidersCliKind.
+const (
+	ProvidersCatalogProvidersCliKindCodex   ProvidersCatalogProvidersCliKind = "codex"
+	ProvidersCatalogProvidersCliKindCopilot ProvidersCatalogProvidersCliKind = "copilot"
+)
+
+// Valid indicates whether the value is a known member of the ProvidersCatalogProvidersCliKind enum.
+func (e ProvidersCatalogProvidersCliKind) Valid() bool {
+	switch e {
+	case ProvidersCatalogProvidersCliKindCodex:
+		return true
+	case ProvidersCatalogProvidersCliKindCopilot:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ProvidersCatalogProvidersLocality.
+const (
+	Cloud ProvidersCatalogProvidersLocality = "cloud"
+	Local ProvidersCatalogProvidersLocality = "local"
+)
+
+// Valid indicates whether the value is a known member of the ProvidersCatalogProvidersLocality enum.
+func (e ProvidersCatalogProvidersLocality) Valid() bool {
+	switch e {
+	case Cloud:
+		return true
+	case Local:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ProvidersCatalogProvidersModelsInputModalities.
+const (
+	ProvidersCatalogProvidersModelsInputModalitiesAudio ProvidersCatalogProvidersModelsInputModalities = "audio"
+	ProvidersCatalogProvidersModelsInputModalitiesImage ProvidersCatalogProvidersModelsInputModalities = "image"
+	ProvidersCatalogProvidersModelsInputModalitiesPdf   ProvidersCatalogProvidersModelsInputModalities = "pdf"
+	ProvidersCatalogProvidersModelsInputModalitiesText  ProvidersCatalogProvidersModelsInputModalities = "text"
+	ProvidersCatalogProvidersModelsInputModalitiesVideo ProvidersCatalogProvidersModelsInputModalities = "video"
+)
+
+// Valid indicates whether the value is a known member of the ProvidersCatalogProvidersModelsInputModalities enum.
+func (e ProvidersCatalogProvidersModelsInputModalities) Valid() bool {
+	switch e {
+	case ProvidersCatalogProvidersModelsInputModalitiesAudio:
+		return true
+	case ProvidersCatalogProvidersModelsInputModalitiesImage:
+		return true
+	case ProvidersCatalogProvidersModelsInputModalitiesPdf:
+		return true
+	case ProvidersCatalogProvidersModelsInputModalitiesText:
+		return true
+	case ProvidersCatalogProvidersModelsInputModalitiesVideo:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ProvidersCatalogProvidersModelsStatus.
+const (
+	ProvidersCatalogProvidersModelsStatusActive  ProvidersCatalogProvidersModelsStatus = "active"
+	ProvidersCatalogProvidersModelsStatusRetired ProvidersCatalogProvidersModelsStatus = "retired"
+)
+
+// Valid indicates whether the value is a known member of the ProvidersCatalogProvidersModelsStatus enum.
+func (e ProvidersCatalogProvidersModelsStatus) Valid() bool {
+	switch e {
+	case ProvidersCatalogProvidersModelsStatusActive:
+		return true
+	case ProvidersCatalogProvidersModelsStatusRetired:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ProvidersCatalogProvidersModelsWindowSource.
+const (
+	ProvidersCatalogProvidersModelsWindowSourceCatalog  ProvidersCatalogProvidersModelsWindowSource = "catalog"
+	ProvidersCatalogProvidersModelsWindowSourceFloor    ProvidersCatalogProvidersModelsWindowSource = "floor"
+	ProvidersCatalogProvidersModelsWindowSourceLive     ProvidersCatalogProvidersModelsWindowSource = "live"
+	ProvidersCatalogProvidersModelsWindowSourceOperator ProvidersCatalogProvidersModelsWindowSource = "operator"
+)
+
+// Valid indicates whether the value is a known member of the ProvidersCatalogProvidersModelsWindowSource enum.
+func (e ProvidersCatalogProvidersModelsWindowSource) Valid() bool {
+	switch e {
+	case ProvidersCatalogProvidersModelsWindowSourceCatalog:
+		return true
+	case ProvidersCatalogProvidersModelsWindowSourceFloor:
+		return true
+	case ProvidersCatalogProvidersModelsWindowSourceLive:
+		return true
+	case ProvidersCatalogProvidersModelsWindowSourceOperator:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ProvidersCatalogProvidersProtocol.
+const (
+	ProvidersCatalogProvidersProtocolAnthropic        ProvidersCatalogProvidersProtocol = "anthropic"
+	ProvidersCatalogProvidersProtocolCli              ProvidersCatalogProvidersProtocol = "cli"
+	ProvidersCatalogProvidersProtocolGoogle           ProvidersCatalogProvidersProtocol = "google"
+	ProvidersCatalogProvidersProtocolOllama           ProvidersCatalogProvidersProtocol = "ollama"
+	ProvidersCatalogProvidersProtocolOpenaiCompatible ProvidersCatalogProvidersProtocol = "openai-compatible"
+)
+
+// Valid indicates whether the value is a known member of the ProvidersCatalogProvidersProtocol enum.
+func (e ProvidersCatalogProvidersProtocol) Valid() bool {
+	switch e {
+	case ProvidersCatalogProvidersProtocolAnthropic:
+		return true
+	case ProvidersCatalogProvidersProtocolCli:
+		return true
+	case ProvidersCatalogProvidersProtocolGoogle:
+		return true
+	case ProvidersCatalogProvidersProtocolOllama:
+		return true
+	case ProvidersCatalogProvidersProtocolOpenaiCompatible:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ProvidersCatalogProvidersProtocolsProtocol.
+const (
+	ProvidersCatalogProvidersProtocolsProtocolAnthropic        ProvidersCatalogProvidersProtocolsProtocol = "anthropic"
+	ProvidersCatalogProvidersProtocolsProtocolCli              ProvidersCatalogProvidersProtocolsProtocol = "cli"
+	ProvidersCatalogProvidersProtocolsProtocolGoogle           ProvidersCatalogProvidersProtocolsProtocol = "google"
+	ProvidersCatalogProvidersProtocolsProtocolOllama           ProvidersCatalogProvidersProtocolsProtocol = "ollama"
+	ProvidersCatalogProvidersProtocolsProtocolOpenaiCompatible ProvidersCatalogProvidersProtocolsProtocol = "openai-compatible"
+)
+
+// Valid indicates whether the value is a known member of the ProvidersCatalogProvidersProtocolsProtocol enum.
+func (e ProvidersCatalogProvidersProtocolsProtocol) Valid() bool {
+	switch e {
+	case ProvidersCatalogProvidersProtocolsProtocolAnthropic:
+		return true
+	case ProvidersCatalogProvidersProtocolsProtocolCli:
+		return true
+	case ProvidersCatalogProvidersProtocolsProtocolGoogle:
+		return true
+	case ProvidersCatalogProvidersProtocolsProtocolOllama:
+		return true
+	case ProvidersCatalogProvidersProtocolsProtocolOpenaiCompatible:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ProvidersCatalogProvidersTier.
+const (
+	ProvidersCatalogProvidersTierPopular     ProvidersCatalogProvidersTier = "popular"
+	ProvidersCatalogProvidersTierStandard    ProvidersCatalogProvidersTier = "standard"
+	ProvidersCatalogProvidersTierUnsupported ProvidersCatalogProvidersTier = "unsupported"
+)
+
+// Valid indicates whether the value is a known member of the ProvidersCatalogProvidersTier enum.
+func (e ProvidersCatalogProvidersTier) Valid() bool {
+	switch e {
+	case ProvidersCatalogProvidersTierPopular:
+		return true
+	case ProvidersCatalogProvidersTierStandard:
+		return true
+	case ProvidersCatalogProvidersTierUnsupported:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ProvidersCatalogProvidersUnsupportedReason.
+const (
+	ProvidersCatalogProvidersUnsupportedReasonCloudIam      ProvidersCatalogProvidersUnsupportedReason = "cloud-iam"
+	ProvidersCatalogProvidersUnsupportedReasonDeploymentUrl ProvidersCatalogProvidersUnsupportedReason = "deployment-url"
+	ProvidersCatalogProvidersUnsupportedReasonWithdrawn     ProvidersCatalogProvidersUnsupportedReason = "withdrawn"
+)
+
+// Valid indicates whether the value is a known member of the ProvidersCatalogProvidersUnsupportedReason enum.
+func (e ProvidersCatalogProvidersUnsupportedReason) Valid() bool {
+	switch e {
+	case ProvidersCatalogProvidersUnsupportedReasonCloudIam:
+		return true
+	case ProvidersCatalogProvidersUnsupportedReasonDeploymentUrl:
+		return true
+	case ProvidersCatalogProvidersUnsupportedReasonWithdrawn:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ProvidersCatalogSchemaVersion.
+const (
+	N200 ProvidersCatalogSchemaVersion = "2.0.0"
+)
+
+// Valid indicates whether the value is a known member of the ProvidersCatalogSchemaVersion enum.
+func (e ProvidersCatalogSchemaVersion) Valid() bool {
+	switch e {
+	case N200:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ProvidersCatalogServedFrom.
+const (
+	Embedded ProvidersCatalogServedFrom = "embedded"
+	Pulled   ProvidersCatalogServedFrom = "pulled"
+)
+
+// Valid indicates whether the value is a known member of the ProvidersCatalogServedFrom enum.
+func (e ProvidersCatalogServedFrom) Valid() bool {
+	switch e {
+	case Embedded:
+		return true
+	case Pulled:
 		return true
 	default:
 		return false
@@ -3703,22 +4459,22 @@ func (e SessionCreateRequestType) Valid() bool {
 
 // Defines values for SessionDetailMessagesAttachmentsType.
 const (
-	SessionDetailMessagesAttachmentsTypeAudio SessionDetailMessagesAttachmentsType = "audio"
-	SessionDetailMessagesAttachmentsTypeFile  SessionDetailMessagesAttachmentsType = "file"
-	SessionDetailMessagesAttachmentsTypeImage SessionDetailMessagesAttachmentsType = "image"
-	SessionDetailMessagesAttachmentsTypeVideo SessionDetailMessagesAttachmentsType = "video"
+	Audio SessionDetailMessagesAttachmentsType = "audio"
+	File  SessionDetailMessagesAttachmentsType = "file"
+	Image SessionDetailMessagesAttachmentsType = "image"
+	Video SessionDetailMessagesAttachmentsType = "video"
 )
 
 // Valid indicates whether the value is a known member of the SessionDetailMessagesAttachmentsType enum.
 func (e SessionDetailMessagesAttachmentsType) Valid() bool {
 	switch e {
-	case SessionDetailMessagesAttachmentsTypeAudio:
+	case Audio:
 		return true
-	case SessionDetailMessagesAttachmentsTypeFile:
+	case File:
 		return true
-	case SessionDetailMessagesAttachmentsTypeImage:
+	case Image:
 		return true
-	case SessionDetailMessagesAttachmentsTypeVideo:
+	case Video:
 		return true
 	default:
 		return false
@@ -3779,6 +4535,27 @@ func (e SessionDetailMessagesStatus) Valid() bool {
 	case SessionDetailMessagesStatusInterrupted:
 		return true
 	case SessionDetailMessagesStatusOk:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionDetailMessagesToolCallsContentState.
+const (
+	SessionDetailMessagesToolCallsContentStateCapped  SessionDetailMessagesToolCallsContentState = "capped"
+	SessionDetailMessagesToolCallsContentStateEmptied SessionDetailMessagesToolCallsContentState = "emptied"
+	SessionDetailMessagesToolCallsContentStateFull    SessionDetailMessagesToolCallsContentState = "full"
+)
+
+// Valid indicates whether the value is a known member of the SessionDetailMessagesToolCallsContentState enum.
+func (e SessionDetailMessagesToolCallsContentState) Valid() bool {
+	switch e {
+	case SessionDetailMessagesToolCallsContentStateCapped:
+		return true
+	case SessionDetailMessagesToolCallsContentStateEmptied:
+		return true
+	case SessionDetailMessagesToolCallsContentStateFull:
 		return true
 	default:
 		return false
@@ -4520,6 +5297,84 @@ func (e SessionScopeResponseDmScope) Valid() bool {
 	case SessionScopeResponseDmScopePerChannelPeer:
 		return true
 	case SessionScopeResponseDmScopePerPeer:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SignInPollResponseState.
+const (
+	SignInPollResponseStateDenied   SignInPollResponseState = "denied"
+	SignInPollResponseStateExpired  SignInPollResponseState = "expired"
+	SignInPollResponseStatePending  SignInPollResponseState = "pending"
+	SignInPollResponseStateSignedIn SignInPollResponseState = "signed_in"
+)
+
+// Valid indicates whether the value is a known member of the SignInPollResponseState enum.
+func (e SignInPollResponseState) Valid() bool {
+	switch e {
+	case SignInPollResponseStateDenied:
+		return true
+	case SignInPollResponseStateExpired:
+		return true
+	case SignInPollResponseStatePending:
+		return true
+	case SignInPollResponseStateSignedIn:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SignInStartResponseCliLoginMethod.
+const (
+	CliLogin SignInStartResponseCliLoginMethod = "cli_login"
+)
+
+// Valid indicates whether the value is a known member of the SignInStartResponseCliLoginMethod enum.
+func (e SignInStartResponseCliLoginMethod) Valid() bool {
+	switch e {
+	case CliLogin:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SignInStartResponseDeviceCodeMethod.
+const (
+	DeviceCode SignInStartResponseDeviceCodeMethod = "device_code"
+)
+
+// Valid indicates whether the value is a known member of the SignInStartResponseDeviceCodeMethod enum.
+func (e SignInStartResponseDeviceCodeMethod) Valid() bool {
+	switch e {
+	case DeviceCode:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SignInStatusState.
+const (
+	SignInStatusStateExpired     SignInStatusState = "expired"
+	SignInStatusStateNotSignedIn SignInStatusState = "not_signed_in"
+	SignInStatusStatePending     SignInStatusState = "pending"
+	SignInStatusStateSignedIn    SignInStatusState = "signed_in"
+)
+
+// Valid indicates whether the value is a known member of the SignInStatusState enum.
+func (e SignInStatusState) Valid() bool {
+	switch e {
+	case SignInStatusStateExpired:
+		return true
+	case SignInStatusStateNotSignedIn:
+		return true
+	case SignInStatusStatePending:
+		return true
+	case SignInStatusStateSignedIn:
 		return true
 	default:
 		return false
@@ -5360,6 +6215,27 @@ func (e ToolApprovalResponseStatus) Valid() bool {
 	}
 }
 
+// Defines values for ToolCallContentState.
+const (
+	Capped  ToolCallContentState = "capped"
+	Emptied ToolCallContentState = "emptied"
+	Full    ToolCallContentState = "full"
+)
+
+// Valid indicates whether the value is a known member of the ToolCallContentState enum.
+func (e ToolCallContentState) Valid() bool {
+	switch e {
+	case Capped:
+		return true
+	case Emptied:
+		return true
+	case Full:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ToolCallStatus.
 const (
 	ToolCallStatusCancelled   ToolCallStatus = "cancelled"
@@ -5923,8 +6799,23 @@ type Agent struct {
 	// Color Hex color code for agent avatar display (e.g. "#D4AF37").
 	Color *string `json:"color,omitempty"`
 
+	// ContextWindowClamped Read-only (ADR-066 D2): true when an operator override exceeded the model's capability and was clamped down to it (a WARN names the agent). Optional — absent until the resolver lands.
+	ContextWindowClamped *bool `json:"context_window_clamped,omitempty"`
+
+	// ContextWindowEffective Read-only (ADR-066 D9): the context window in tokens the agent's turns actually run with, after the D2 ladder and the lower-only clamp. 0 for exempt subprocess-CLI rows. Optional — absent until the resolver lands.
+	ContextWindowEffective *int `json:"context_window_effective,omitempty"`
+
+	// ContextWindowOverride Per-agent operator override of the context window (ADR-066 D2 rung 1), as persisted. Lower-only: the effective value is min(override, capability). Absent when no override is set.
+	ContextWindowOverride *int `json:"context_window_override,omitempty"`
+
+	// ContextWindowSource Which rung of the ADR-066 D2 resolution ladder produced an effective context window. Owned by ADR-066; $ref'd by Agent.context_window_source, DefaultModel.window_source and CatalogModel.window_source — never an inline enum anywhere else (cross-spec X-06). "operator" = a per-agent, per-(provider, model) or global operator override (ContextSettings); "live" = the provider's own limits endpoint (cached 24 h); "catalog" = the registry-fed providers catalog (ADR-067); "floor" = the conservative cloud floor applied when nothing else knew the window (WARN logged). There is no "learned" value (ADR-066 D8 was not adopted).
+	ContextWindowSource *AgentContextWindowSource `json:"context_window_source,omitempty"`
+
 	// Default Whether this agent is the current global default that handles inbound messages with no more-specific routing rule. This is a COMPUTED value — the backend derives it by comparing the agent's id against the single default-agent setting each time it builds a response; it is never stored per-agent. At most one agent is default at a time. Main only — workers never default.
 	Default *bool `json:"default,omitempty"`
+
+	// DegradedReason Present iff the agent cannot run a turn because of its provider binding (ADR-067 FR-016/FR-031): "needs_provider" = the primary model's provider id is neither a catalog id nor a custom row (or fails exact match). Such an agent refuses turns with LLMError code needs_provider and makes zero upstream requests. When both this and needs_model apply, the "needs a provider" copy wins in the UI. Absent when the agent is healthy.
+	DegradedReason *AgentDegradedReason `json:"degraded_reason,omitempty"`
 
 	// Description Short description of the agent's purpose.
 	Description *string `json:"description,omitempty"`
@@ -5989,6 +6880,9 @@ type Agent struct {
 
 	// Name Human-readable display name.
 	Name string `json:"name"`
+
+	// NeedsModel Always present, derived (ADR-068 FR-014): true when the agent's primary model is empty or its provider is not configured. The agent list renders "needs a model"; a turn to such an agent is refused with LLMError code model_unassigned and no provider call. Precedence: degraded_reason needs_provider wins in copy.
+	NeedsModel bool `json:"needs_model"`
 
 	// Provider Explicit routing key for the agent's primary model (O3 two-field model), mirroring fallback_models[].provider. Distinct from any "provider/" prefix embedded in `model`. When set, model resolution uses this provider directly and never infers one. Empty/absent for agents that predate the migration or whose model resolves via the default provider.
 	Provider *string `json:"provider,omitempty"`
@@ -6077,6 +6971,12 @@ type Agent struct {
 	// Warning Non-fatal advisory (e.g. config reload failed after create/update).
 	Warning *string `json:"warning,omitempty"`
 }
+
+// AgentContextWindowSource Which rung of the ADR-066 D2 resolution ladder produced an effective context window. Owned by ADR-066; $ref'd by Agent.context_window_source, DefaultModel.window_source and CatalogModel.window_source — never an inline enum anywhere else (cross-spec X-06). "operator" = a per-agent, per-(provider, model) or global operator override (ContextSettings); "live" = the provider's own limits endpoint (cached 24 h); "catalog" = the registry-fed providers catalog (ADR-067); "floor" = the conservative cloud floor applied when nothing else knew the window (WARN logged). There is no "learned" value (ADR-066 D8 was not adopted).
+type AgentContextWindowSource string
+
+// AgentDegradedReason Present iff the agent cannot run a turn because of its provider binding (ADR-067 FR-016/FR-031): "needs_provider" = the primary model's provider id is neither a catalog id nor a custom row (or fails exact match). Such an agent refuses turns with LLMError code needs_provider and makes zero upstream requests. When both this and needs_model apply, the "needs a provider" copy wins in the UI. Absent when the agent is healthy.
+type AgentDegradedReason string
 
 // AgentExecutorKind Execution runtime selector. Derived from the agent's type: Main -> native, Subagent -> native, subagent_3p -> external-cli. Clients cannot set this directly on create/update; the server overrides any client-supplied value. "remote-a2a" is reserved for future A2A protocol resolution.
 type AgentExecutorKind string
@@ -6618,6 +7518,9 @@ type AgentUpdateRequest struct {
 	// Color Hex color code for agent avatar display (e.g. "#D4AF37").
 	Color *string `json:"color,omitempty"`
 
+	// ContextWindowOverride Per-agent context-window override in tokens (ADR-066 D2 rung 1, D9). Lower-only — clamped to the model's capability on resolution (a WARN names the agent and the clamp). Send null to clear. Every write triggers a registry reload so the next turn uses the new window.
+	ContextWindowOverride *int `json:"context_window_override,omitempty"`
+
 	// Default Send true to make this agent the global default that handles inbound messages with no more-specific routing rule — replacing whichever agent previously held it. Send false to clear the default, which only has an effect if this agent currently holds it (sending false for an agent that isn't the current default is a no-op). Omitting this field leaves the default unchanged. Main only — workers never default (rejected with 400 if attempted).
 	Default *bool `json:"default,omitempty"`
 
@@ -6999,6 +7902,157 @@ type BrowserInspectResponse struct {
 	Text *string `json:"text,omitempty"`
 }
 
+// CatalogModel One model of a catalog provider (ADR-067 schema 2.0.0). Looked up by the exact (provider id, model id) pair — never by model id alone and never with prefix stripping. Limits are authored upstream; a 0 means unknown and is reported as such to consumers (ADR-066's ladder decides what to do). window_source and window_unknown are ADR-066-owned projection fields added by the gateway when it serves the document (X-08); they are never part of the published asset.
+type CatalogModel struct {
+	// ContextWindow Context window in tokens; 0 = unknown.
+	ContextWindow int `json:"context_window"`
+
+	// Disputed True when the two upstream registries disagreed on a numeric field beyond the tolerance and the last-known-good value was published (ADR-067 US-2.AC2). Informational.
+	Disputed *bool `json:"disputed,omitempty"`
+
+	// Id Bare model id as the provider's API expects it (e.g. "glm-5.2", "z-ai/glm-5.2" on OpenRouter).
+	Id string `json:"id"`
+
+	// InputModalities Input modalities the model accepts. MUST include "text".
+	InputModalities []CatalogModelInputModalities `json:"input_modalities"`
+
+	// MaxOutputTokens Maximum output tokens; 0 = unknown.
+	MaxOutputTokens int `json:"max_output_tokens"`
+
+	// Name Display name (Unicode preserved).
+	Name string `json:"name"`
+
+	// ReleaseDate Release date as YYYY-MM-DD. Optional; undated models sort last in the picker.
+	ReleaseDate *string `json:"release_date,omitempty"`
+
+	// Status "retired" rows are carried forward when the model vanishes upstream (ADR-067 §8b); they are not offered for new selection.
+	Status CatalogModelStatus `json:"status"`
+
+	// ToolCall Whether the model supports tool calling.
+	ToolCall bool `json:"tool_call"`
+
+	// WindowSource Which rung of the ADR-066 D2 resolution ladder produced an effective context window. Owned by ADR-066; $ref'd by Agent.context_window_source, DefaultModel.window_source and CatalogModel.window_source — never an inline enum anywhere else (cross-spec X-06). "operator" = a per-agent, per-(provider, model) or global operator override (ContextSettings); "live" = the provider's own limits endpoint (cached 24 h); "catalog" = the registry-fed providers catalog (ADR-067); "floor" = the conservative cloud floor applied when nothing else knew the window (WARN logged). There is no "learned" value (ADR-066 D8 was not adopted).
+	WindowSource *CatalogModelWindowSource `json:"window_source,omitempty"`
+
+	// WindowUnknown ADR-066 projection (X-08): true iff the provider has locality "local" and the live limits query failed or reported no context length. The SPA renders "No context length" with a link to Settings → Models → Model overrides. Never a Provider.status value.
+	WindowUnknown *bool `json:"window_unknown,omitempty"`
+}
+
+// CatalogModelInputModalities defines model for CatalogModel.InputModalities.
+type CatalogModelInputModalities string
+
+// CatalogModelStatus "retired" rows are carried forward when the model vanishes upstream (ADR-067 §8b); they are not offered for new selection.
+type CatalogModelStatus string
+
+// CatalogModelWindowSource Which rung of the ADR-066 D2 resolution ladder produced an effective context window. Owned by ADR-066; $ref'd by Agent.context_window_source, DefaultModel.window_source and CatalogModel.window_source — never an inline enum anywhere else (cross-spec X-06). "operator" = a per-agent, per-(provider, model) or global operator override (ContextSettings); "live" = the provider's own limits endpoint (cached 24 h); "catalog" = the registry-fed providers catalog (ADR-067); "floor" = the conservative cloud floor applied when nothing else knew the window (WARN logged). There is no "learned" value (ADR-066 D8 was not adopted).
+type CatalogModelWindowSource string
+
+// CatalogProtocol One wire protocol a catalog provider offers, with the base URL to use for it. When a provider lists protocols[], the list MUST include the primary protocol with the same api URL; entries are unique (ADR-067 FR-002, F-19).
+type CatalogProtocol struct {
+	// Api Absolute https base URL for this protocol (FR-033 URL rule; local rows may use http).
+	Api      string                  `json:"api"`
+	Protocol CatalogProtocolProtocol `json:"protocol"`
+}
+
+// CatalogProtocolProtocol defines model for CatalogProtocol.Protocol.
+type CatalogProtocolProtocol string
+
+// CatalogProvider One provider of the registry-fed catalog (ADR-067 schema 2.0.0): its identity (models.dev id or local-file id), wire protocol(s), tier, auth methods, picker metadata and nested models. Custom (operator-named) rows are never in the document — they are config rows with Provider.custom: true. locality is derived by the gateway on load (ADR-067 FR-039: local ⇔ protocol ∈ {ollama, vllm} ∨ id = lmstudio ∨ custom row with a loopback/private host), never published by the assembly job.
+type CatalogProvider struct {
+	// Aliases Search-only strings for the picker's filter (ADR-067 FR-030). Never consulted by resolution, the factory or config validation — an alias is not an accepted provider id.
+	Aliases []string `json:"aliases"`
+
+	// Api Primary base URL. Absolute https with a non-empty host, no userinfo / query / fragment, no loopback, link-local, private or metadata IP literal (FR-033) — except rows with locality "local". Empty only when tier is "unsupported".
+	Api string `json:"api"`
+
+	// AuthMethods Auth methods the provider offers (ADR-068 FR-004); the UI renders a sign-in control only when sign_in is present.
+	AuthMethods []CatalogProviderAuthMethods `json:"auth_methods"`
+
+	// CliKind Required iff protocol is "cli" — selects the subprocess driver (ADR-067 X-14), never chosen by id.
+	CliKind *CatalogProviderCliKind `json:"cli_kind,omitempty"`
+
+	// Company Grouping key for the picker (ADR-067 X-10): one tile/row per company, its plan × region variants being the providers that share it. Comes from overrides/ via the models.dev name family; defaults to name.
+	Company string `json:"company"`
+
+	// Env Opaque environment-variable hint for picker help text only; never consumed by the factory (F-20).
+	Env *[]string `json:"env,omitempty"`
+
+	// Id Canonical provider id (models.dev id, e.g. "zai", "moonshotai-cn", or a local-file id such as "ollama").
+	Id string `json:"id"`
+
+	// Locality Derived on load by the gateway (FR-039); the only local/cloud classification ADR-066/ADR-068 consume.
+	Locality CatalogProviderLocality `json:"locality"`
+
+	// Models The provider's models. May be empty (e.g. an unknown-provider row or a local endpoint listed live).
+	Models []CatalogModel `json:"models"`
+
+	// Name Display name (Unicode preserved).
+	Name string `json:"name"`
+
+	// Plan Billing plan label when the provider has plan variants (e.g. "coding-plan").
+	Plan *string `json:"plan,omitempty"`
+
+	// Protocol Primary wire protocol the factory dispatches on (ADR-067 D11). Absent only when tier is "unsupported" (F-19).
+	Protocol *CatalogProviderProtocol `json:"protocol,omitempty"`
+
+	// Protocols Optional secondary protocols a provider offers (e.g. Z.ai's Anthropic endpoint). When present MUST include the primary with the same api; entries unique. A config may select one via ProviderUpdateRequest.protocol.
+	Protocols *[]CatalogProtocol `json:"protocols,omitempty"`
+
+	// Region Deployment region when the provider has a regional split (e.g. "intl", "china", "us").
+	Region *string `json:"region,omitempty"`
+
+	// ResizeLimits Image resize limits applied by the media pipeline before an attachment is sent to a provider (ADR-067 [A-10]). The document carries one default and an optional per-provider value.
+	ResizeLimits *CatalogResizeLimits `json:"resize_limits,omitempty"`
+
+	// Tier Picker tier (ADR-067 FR-018, data not code). The popular set is rendered as pinned tiles in catalog order; "unsupported" rows are visible but disabled with unsupported_reason.
+	Tier CatalogProviderTier `json:"tier"`
+
+	// TokenSource Optional token source for sign-in HTTP rows (e.g. "codex-auth-json" for openai-chatgpt, X-41).
+	TokenSource *string `json:"token_source,omitempty"`
+
+	// UnsupportedReason Required when tier is "unsupported". "cloud-iam" = needs request signing (Bedrock, Vertex, watsonx, SAP AI Core); "deployment-url" = needs a per-deployment URL (Azure); "withdrawn" = vanished upstream. Never shown raw — the SPA maps it to copy.
+	UnsupportedReason *CatalogProviderUnsupportedReason `json:"unsupported_reason,omitempty"`
+}
+
+// CatalogProviderAuthMethods defines model for CatalogProvider.AuthMethods.
+type CatalogProviderAuthMethods string
+
+// CatalogProviderCliKind Required iff protocol is "cli" — selects the subprocess driver (ADR-067 X-14), never chosen by id.
+type CatalogProviderCliKind string
+
+// CatalogProviderLocality Derived on load by the gateway (FR-039); the only local/cloud classification ADR-066/ADR-068 consume.
+type CatalogProviderLocality string
+
+// CatalogProviderModelsInputModalities defines model for CatalogProvider.Models.InputModalities.
+type CatalogProviderModelsInputModalities string
+
+// CatalogProviderModelsStatus "retired" rows are carried forward when the model vanishes upstream (ADR-067 §8b); they are not offered for new selection.
+type CatalogProviderModelsStatus string
+
+// CatalogProviderModelsWindowSource Which rung of the ADR-066 D2 resolution ladder produced an effective context window. Owned by ADR-066; $ref'd by Agent.context_window_source, DefaultModel.window_source and CatalogModel.window_source — never an inline enum anywhere else (cross-spec X-06). "operator" = a per-agent, per-(provider, model) or global operator override (ContextSettings); "live" = the provider's own limits endpoint (cached 24 h); "catalog" = the registry-fed providers catalog (ADR-067); "floor" = the conservative cloud floor applied when nothing else knew the window (WARN logged). There is no "learned" value (ADR-066 D8 was not adopted).
+type CatalogProviderModelsWindowSource string
+
+// CatalogProviderProtocol Primary wire protocol the factory dispatches on (ADR-067 D11). Absent only when tier is "unsupported" (F-19).
+type CatalogProviderProtocol string
+
+// CatalogProviderProtocolsProtocol defines model for CatalogProvider.Protocols.Protocol.
+type CatalogProviderProtocolsProtocol string
+
+// CatalogProviderTier Picker tier (ADR-067 FR-018, data not code). The popular set is rendered as pinned tiles in catalog order; "unsupported" rows are visible but disabled with unsupported_reason.
+type CatalogProviderTier string
+
+// CatalogProviderUnsupportedReason Required when tier is "unsupported". "cloud-iam" = needs request signing (Bedrock, Vertex, watsonx, SAP AI Core); "deployment-url" = needs a per-deployment URL (Azure); "withdrawn" = vanished upstream. Never shown raw — the SPA maps it to copy.
+type CatalogProviderUnsupportedReason string
+
+// CatalogResizeLimits Image resize limits applied by the media pipeline before an attachment is sent to a provider (ADR-067 [A-10]). The document carries one default and an optional per-provider value.
+type CatalogResizeLimits struct {
+	// LongEdgePx Longest image edge in pixels after resize.
+	LongEdgePx int `json:"long_edge_px"`
+
+	// MaxBytes Maximum encoded image size in bytes.
+	MaxBytes int `json:"max_bytes"`
+}
+
 // ChangePasswordRequest Body for POST /auth/change-password. Changes the authenticated user's own password.
 type ChangePasswordRequest struct {
 	// CurrentPassword The user's current password for verification. Maximum 72 characters (bcrypt limit).
@@ -7273,6 +8327,56 @@ type CliValidateResponse struct {
 // CliValidateResponseReason Classification of the validation result. "ok": binary runs and reports a version, believed authenticated. "missing-binary": cli_path is empty, absent, or not a regular executable file — blocks Create/Save. "handshake-failed": the target ran but did not return a valid version-shaped response within the timeout — blocks Create/Save. "unauthenticated": the binary runs and reports a version but has no usable credentials — non-blocking warning, Create/Save allowed. "unknown-cli": the `cli` value is not one of the supported executors; no subprocess is spawned. Maps runner.ReasonOK (empty string) to "ok".
 type CliValidateResponseReason string
 
+// ContextModelOverride One per-(provider, model) operator override of the context window (ADR-066 D2 rung 2). Keyed on the exact catalog pair; the override can only lower the effective window (min(override, capability)), never raise it. Rows whose provider no longer exists are ignored by the resolver and pruned on the next settings write; DELETE /providers/{id} removes the provider's rows (ADR-068 FR-010 step 2b).
+type ContextModelOverride struct {
+	// ContextWindow Context window in tokens. 400 when below 1.
+	ContextWindow int `json:"context_window"`
+
+	// Model Bare catalog model id (no provider prefix).
+	Model string `json:"model"`
+
+	// Provider Catalog provider id or operator-named custom row id.
+	Provider string `json:"provider"`
+}
+
+// ContextSettings Global context-budget controls (ADR-066 D9), as returned by GET /api/v1/settings/context and echoed by PUT. User-facing location is Settings → Models. Every successful PUT triggers a registry reload so the next turn uses the new values without a restart. Readable and writable by any authenticated user (withAuth, the /settings/memory precedent — not RequireNotBypass).
+type ContextSettings struct {
+	// AbsoluteTriggerChars Absolute tool-result share trigger (chars) for the mid-turn window check (D6); the token share is this ÷ 2.5. Default 400,000.
+	AbsoluteTriggerChars int `json:"absolute_trigger_chars"`
+
+	// BuiltinFailureCap Per-result cap (chars) for a failed, denied or skipped tool result — builtin or MCP (D4 "builtin-failure" surface). Default 10,000; ceiling 150,000.
+	BuiltinFailureCap int `json:"builtin_failure_cap"`
+
+	// BuiltinSuccessCap Per-result cap (chars) for a successful builtin tool result, hydrated attachment, recall page or delegate report (D4 "builtin-success" surface). Default 64,000; ceiling 150,000.
+	BuiltinSuccessCap int `json:"builtin_success_cap"`
+
+	// DefaultContextWindow Global default context window (tokens), D2 rung 3 — the single home of this setting (agents.defaults.context_window no longer exists). Absent or null when unset. Clamped to the model's capability on resolution.
+	DefaultContextWindow *int `json:"default_context_window,omitempty"`
+
+	// IngestBoundBytes Maximum bytes read from any network or subprocess source at ingest (D10). Must be strictly below 8,388,608 (0.8 × the archive line size). Default 8,000,000.
+	IngestBoundBytes int `json:"ingest_bound_bytes"`
+
+	// McpResultCap Per-result cap (chars) for a successful MCP tool result entering the window (ADR-066 D4 "mcp" surface). Default 62,500; ceiling 150,000.
+	McpResultCap int `json:"mcp_result_cap"`
+
+	// ModelOverrides Per-(provider, model) context-window overrides (D2 rung 2). Empty array when none.
+	ModelOverrides []ContextModelOverride `json:"model_overrides"`
+}
+
+// ContextSettingsUpdate Partial update body for PUT /api/v1/settings/context (ADR-066 D9). Every field is optional; an omitted field is unchanged. Validation (400 naming the field and the limit): any cap > 150,000 or < 1; absolute_trigger_chars < 1; ingest_bound_bytes ≥ 8,388,608 or < 1; model_overrides[].context_window < 1. Set default_context_window to null to clear it. model_overrides, when present, replaces the whole list.
+type ContextSettingsUpdate struct {
+	AbsoluteTriggerChars *int                    `json:"absolute_trigger_chars,omitempty"`
+	BuiltinFailureCap    *int                    `json:"builtin_failure_cap,omitempty"`
+	BuiltinSuccessCap    *int                    `json:"builtin_success_cap,omitempty"`
+	DefaultContextWindow *int                    `json:"default_context_window,omitempty"`
+	IngestBoundBytes     *int                    `json:"ingest_bound_bytes,omitempty"`
+	McpResultCap         *int                    `json:"mcp_result_cap,omitempty"`
+	ModelOverrides       *[]ContextModelOverride `json:"model_overrides,omitempty"`
+}
+
+// ContextWindowSource Which rung of the ADR-066 D2 resolution ladder produced an effective context window. Owned by ADR-066; $ref'd by Agent.context_window_source, DefaultModel.window_source and CatalogModel.window_source — never an inline enum anywhere else (cross-spec X-06). "operator" = a per-agent, per-(provider, model) or global operator override (ContextSettings); "live" = the provider's own limits endpoint (cached 24 h); "catalog" = the registry-fed providers catalog (ADR-067); "floor" = the conservative cloud floor applied when nothing else knew the window (WARN logged). There is no "learned" value (ADR-066 D8 was not adopted).
+type ContextWindowSource string
+
 // CredentialRotateRequest Request body for POST /api/v1/credentials/rotate. Re-encrypts the entire credential vault under a new passphrase-derived key (Argon2id). Sensitive change — requires a re-auth consent token in the X-Reauth-Token header (Spec-6 FR-12.2 / ADR-022).
 type CredentialRotateRequest struct {
 	// NewPassphrase New passphrase used to derive the new vault key. Must not be empty.
@@ -7329,6 +8433,33 @@ type DayBucket struct {
 		// Skipped Occurrences on this day whose fire was skipped by the overlap guard (the previous occurrence was still in_progress).
 		Skipped int32 `json:"skipped"`
 	} `json:"run_counts,omitempty"`
+}
+
+// DefaultModel The global default model as a (provider, model) pair — the body of GET /api/v1/providers/default-model and the persisted shape of agents.defaults.default_model (ADR-068 CRIT-001; agents.defaults.model_name no longer exists). Window fields are produced by ADR-066's ResolveWindow(provider, model) (rungs without the per-agent override, cross-spec X-07) and are absent until that resolver lands. Exempt subprocess-CLI rows return context_window 0 with window_source absent. A fresh install has no default model: the GET answers 404 `{"error":"no default model"}` until onboarding's explicit pick writes the pair.
+type DefaultModel struct {
+	// ContextWindow Effective context window in tokens; 0 for exempt rows.
+	ContextWindow *int `json:"context_window,omitempty"`
+
+	// Model Bare catalog model id. Empty when unset.
+	Model string `json:"model"`
+
+	// Provider Catalog provider id or operator-named custom row id. Empty when unset.
+	Provider string `json:"provider"`
+
+	// WindowSource Which rung of the ADR-066 D2 resolution ladder produced an effective context window. Owned by ADR-066; $ref'd by Agent.context_window_source, DefaultModel.window_source and CatalogModel.window_source — never an inline enum anywhere else (cross-spec X-06). "operator" = a per-agent, per-(provider, model) or global operator override (ContextSettings); "live" = the provider's own limits endpoint (cached 24 h); "catalog" = the registry-fed providers catalog (ADR-067); "floor" = the conservative cloud floor applied when nothing else knew the window (WARN logged). There is no "learned" value (ADR-066 D8 was not adopted).
+	WindowSource *DefaultModelWindowSource `json:"window_source,omitempty"`
+
+	// WindowUnknown True iff the row has locality "local" and the live limits query failed or reported no context length (ADR-066 D3, X-08). The SPA renders "No context length" with a pointer to Settings → Models → Model overrides instead of a number.
+	WindowUnknown *bool `json:"window_unknown,omitempty"`
+}
+
+// DefaultModelWindowSource Which rung of the ADR-066 D2 resolution ladder produced an effective context window. Owned by ADR-066; $ref'd by Agent.context_window_source, DefaultModel.window_source and CatalogModel.window_source — never an inline enum anywhere else (cross-spec X-06). "operator" = a per-agent, per-(provider, model) or global operator override (ContextSettings); "live" = the provider's own limits endpoint (cached 24 h); "catalog" = the registry-fed providers catalog (ADR-067); "floor" = the conservative cloud floor applied when nothing else knew the window (WARN logged). There is no "learned" value (ADR-066 D8 was not adopted).
+type DefaultModelWindowSource string
+
+// DefaultModelUpdateRequest Body for PUT /api/v1/providers/default-model (ADR-068 FR-018): exactly the (provider, model) pair. The provider must be configured and connected or signed_in (400 naming the field otherwise); the model must be in the served catalog for that provider, except rows with custom: true or locality: local, where any non-empty model is accepted with no live call. Persisted as agents.defaults.default_model under the config lock; takes effect on the next turn after a reload.
+type DefaultModelUpdateRequest struct {
+	Model    string `json:"model"`
+	Provider string `json:"provider"`
 }
 
 // DelegateActionRequest The `delegate` tool call's argument shape, discriminated by `action` — the corrected 9-action set (ADR-053 §5.1) replacing the legacy `run | status` pair. `run` spawns a new child; `status`/`inbox`/`inbox_ack`/`peek` are read/ack surfaces; `steer`/`respond`/`cancel`/`follow_up` are control surfaces. Two published launch profiles (`utility`/`specialist`, see `DelegateRunAction.launch_profile`) govern visibility/steering/ child_messaging; illegal combinations are rejected at the handler, not by this schema alone.
@@ -7830,6 +8961,34 @@ type DoctorResult struct {
 // DoctorResultIssuesSeverity Issue severity level.
 type DoctorResultIssuesSeverity string
 
+// EntitlementModel One row of an EntitlementResponse: a model the provider's live listing reported, or a catalog model the listing did not, annotated with whether the operator's key can reach it.
+type EntitlementModel struct {
+	// Entitled True iff the live listing made with this provider's key returned the model.
+	Entitled bool `json:"entitled"`
+
+	// Id Bare model id as the provider reports it.
+	Id string `json:"id"`
+
+	// Limits "known" when the model is in the served catalog (window/output/modality limits available); "unknown" when the provider returned a model the catalog lacks.
+	Limits EntitlementModelLimits `json:"limits"`
+}
+
+// EntitlementModelLimits "known" when the model is in the served catalog (window/output/modality limits available); "unknown" when the provider returned a model the catalog lacks.
+type EntitlementModelLimits string
+
+// EntitlementResponse Response of POST /api/v1/providers/{id}/entitlement (ADR-067 FR-021, ADR-068 "Check with my account"): the catalog list for the provider annotated with entitlement (entitled true/false, limits "known") plus any models the provider returned that the catalog lacks (limits "unknown"). Cached for the gateway process keyed by SHA-256(providerID + ":" + credentialRefName) — the ref name, never the secret — and evicted on provider DELETE, on a key-changing PUT and on catalog refresh.
+type EntitlementResponse struct {
+	// Cached True when served from the process cache without a new upstream call.
+	Cached bool `json:"cached"`
+
+	// CheckedAt When the live listing call was made (the cached result keeps the original time).
+	CheckedAt time.Time          `json:"checked_at"`
+	Models    []EntitlementModel `json:"models"`
+}
+
+// EntitlementResponseModelsLimits "known" when the model is in the served catalog (window/output/modality limits available); "unknown" when the provider returned a model the catalog lacks.
+type EntitlementResponseModelsLimits string
+
 // ErrorResponse Standard error envelope returned by all non-2xx responses.
 type ErrorResponse struct {
 	// Code Machine-readable error code for programmatic branching (e.g. "csrf_missing", "rate_limited").
@@ -7840,6 +8999,9 @@ type ErrorResponse struct {
 
 	// Error Human-readable error message.
 	Error string `json:"error"`
+
+	// Field Names the request field the error is about (ADR-068 validation bodies, e.g. "provider", "model", "id", "auth", "api_key"). Present only on field-attributable 4xx validation errors.
+	Field *string `json:"field,omitempty"`
 }
 
 // EvidenceRecord Persisted evidence from a single machine-check execution (ADR-049 D2), one per `(criterion_id, attempt)` pair. Stored under `$OMNIPUS_HOME/tasks_evidence/<task_id>/<criterion_id>-<attempt>.json` (mode 0600, dir 0700). `command` and `output` pass through the registered sensitive-value redaction (ADR-004 `RegisterSensitiveValues` flow) BEFORE the record is marshalled/written — never write raw then scrub. Retention follows the 90-day session default and the record is deleted with its task. Read-only surface — never accepted on create/update.
@@ -8220,13 +9382,45 @@ type GodModeUpdateResponse struct {
 	RestartRequired bool `json:"restart_required"`
 }
 
-// HealthResponse Response from GET /health. Returns HTTP 200 when the gateway is up. No authentication required.
+// HealthResponse Response from GET /health. HTTP 200 with status "ok" when the gateway is serving; HTTP 503 with status "degraded" and a reason when a gateway-fatal condition holds (agent loop dead, config reload failed, default agent unloadable). The audit_* and catalog objects are FIELDS, not status drivers: they describe a subsystem that is degraded while the gateway itself is still serving, so an operator can see the problem without reading logs and without the process being taken out of a load balancer. No authentication required.
 type HealthResponse struct {
-	// Status Always "ok" when the gateway is healthy.
+	// AuditDegraded True when the operator asked for audit logging and it is not working, or when audit writes are being dropped. Does not change the HTTP status.
+	AuditDegraded *bool `json:"audit_degraded,omitempty"`
+
+	// AuditLogger Whether the gateway constructed a working audit logger.
+	AuditLogger *HealthResponseAuditLogger `json:"audit_logger,omitempty"`
+
+	// AuditSkipped Cumulative counts of audit writes that fell through to slog because the logger was unavailable or a write failed with audit_fail_closed=false.
+	AuditSkipped *map[string]interface{} `json:"audit_skipped,omitempty"`
+
+	// Catalog ADR-067 FR-037 — the provider catalog's state. Degraded (with the last refresh error as the reason) when no document is loaded, the last refresh failed, the document arrived over the degraded raw-fallback transport, or the served document is stale (updated_at older than 14 days). Absent when no catalog hook is wired. Does not change the HTTP status: a stale registry snapshot makes the model picker less accurate, it does not stop the gateway serving turns.
+	Catalog *struct {
+		Degraded bool `json:"degraded"`
+
+		// Reason The catalog's own explanation. Present only when degraded.
+		Reason *string `json:"reason,omitempty"`
+	} `json:"catalog,omitempty"`
+
+	// Pid Process id of the running gateway.
+	Pid *int `json:"pid,omitempty"`
+
+	// Reason Why the gateway is degraded. Present only with status "degraded".
+	Reason *string `json:"reason,omitempty"`
+
+	// Sandbox Sandbox state ({applied, mode, backend}) once Apply has completed. Absent when no sandbox hook is wired.
+	Sandbox *map[string]interface{} `json:"sandbox,omitempty"`
+
+	// Status "ok" when the gateway is serving; "degraded" alongside HTTP 503.
 	Status HealthResponseStatus `json:"status"`
+
+	// Uptime Time since the gateway started, as a Go duration string. Absent on the degraded response.
+	Uptime *string `json:"uptime,omitempty"`
 }
 
-// HealthResponseStatus Always "ok" when the gateway is healthy.
+// HealthResponseAuditLogger Whether the gateway constructed a working audit logger.
+type HealthResponseAuditLogger string
+
+// HealthResponseStatus "ok" when the gateway is serving; "degraded" alongside HTTP 503.
 type HealthResponseStatus string
 
 // HostFolderEntry One directory inside a HostFolderListing, with the verdict on whether it may be mounted. The verdict travels WITH the row so the client can disable the choice at the point of selection, rather than letting the operator pick a folder and only then be told no.
@@ -8957,6 +10151,9 @@ type Message struct {
 
 	// ToolCalls Tool invocations made during this message turn.
 	ToolCalls *[]struct {
+		// ContentState ADR-066 D4/D5 projection state of this call's result in the model's window, as persisted in window meta and returned on transcript read. "full" = the result entered unmodified; "capped" = it entered head-and-tail truncated with a mark (the archive line holds the full content); "emptied" = it was later emptied in place, leaving a recall mark. The transcript `result` is the PROJECTED content the model saw; the full content stays in the gateway tool_results/ store for Verbose chat. Absent = full.
+		ContentState *MessageToolCallsContentState `json:"content_state,omitempty"`
+
 		// DurationMs Elapsed time in milliseconds. Absent when still running.
 		DurationMs *int64 `json:"duration_ms,omitempty"`
 
@@ -9046,6 +10243,9 @@ type MessageRole string
 
 // MessageStatus Completion status of this message turn.
 type MessageStatus string
+
+// MessageToolCallsContentState ADR-066 D4/D5 projection state of this call's result in the model's window, as persisted in window meta and returned on transcript read. "full" = the result entered unmodified; "capped" = it entered head-and-tail truncated with a mark (the archive line holds the full content); "emptied" = it was later emptied in place, leaving a recall mark. The transcript `result` is the PROJECTED content the model saw; the full content stays in the gateway tool_results/ store for Verbose chat. Absent = full.
+type MessageToolCallsContentState string
 
 // MessageToolCallsStatus Outcome of the tool call. "interrupted" is written by spawnSubTurn (pkg/agent/subturn.go) onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). "parked" (ADR-057 UAT defect C2 fix) is written the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case. ToolCall carries no structured "reason" enum (that stays WS-frame-only, via SubTurnEndPayload), but it does carry a free-text "error" field describing why a failed call failed — see below.
 type MessageToolCallsStatus string
@@ -9199,18 +10399,6 @@ type MessageParentResponse struct {
 	MessageId *string `json:"message_id,omitempty"`
 }
 
-// ModelCapabilities A single model's declared input-modality capabilities, as returned by GET /providers/model-capabilities (D18). Model vision capability is not knowable client-side at all otherwise — the SPA uses this to show a non-blocking warning toast before sending a vision attachment (e.g. a live-browser annotation, or an image attached via the composer) to an agent whose resolved model cannot accept images. This is advisory only: the reactive, server-side capability gate (pkg/agent/media_present.go) remains the authoritative backstop regardless of what the client shows.
-type ModelCapabilities struct {
-	// Id Canonical model identifier as used in the capability catalog — the bare model slug (no provider prefix), matching Agent.model, e.g. "gemini-2.5-flash" or "glm-5.2".
-	Id string `json:"id"`
-
-	// Modalities Input modalities this model accepts. A model with no "image" entry cannot process image attachments.
-	Modalities []ModelCapabilitiesModalities `json:"modalities"`
-}
-
-// ModelCapabilitiesModalities defines model for ModelCapabilities.Modalities.
-type ModelCapabilitiesModalities string
-
 // ModelTokens Per-model token breakdown within a session or usage summary.
 type ModelTokens struct {
 	// CacheRead Cache-read tokens (served from KV cache) for this model. Additive to total alongside in and out, matching the provider's own usage accounting (total = in + out + cache_read + cache_write) — NOT a subset of total.
@@ -9303,7 +10491,7 @@ type NotificationListNotificationsSeverity string
 // NotificationListNotificationsType The event class. Extensible; consumers must tolerate unknown values.
 type NotificationListNotificationsType string
 
-// OnboardingCompleteRequest Body for POST /onboarding/complete. Atomically sets up the first LLM provider and creates the initial admin account. CSRF-exempt (no cookie exists at this point).
+// OnboardingCompleteRequest Body for POST /onboarding/complete. Atomically sets up the first LLM provider and creates the initial admin account. CSRF-exempt (no cookie exists at this point). `provider` is discriminated by `auth_method`: `api_key` requires `api_key`; `sign_in` forbids it (ADR-068 MAJ-014).
 type OnboardingCompleteRequest struct {
 	// Admin Initial admin account credentials.
 	Admin struct {
@@ -9314,20 +10502,13 @@ type OnboardingCompleteRequest struct {
 		Username string `json:"username"`
 	} `json:"admin"`
 
-	// Provider LLM provider configuration to persist.
-	Provider struct {
-		// ApiKey API key for the provider. Stored encrypted (AES-256-GCM) in credentials.json.
-		ApiKey string `json:"api_key"`
+	// Provider LLM provider configuration to persist, discriminated by `auth_method`.
+	Provider OnboardingCompleteRequest_Provider `json:"provider"`
+}
 
-		// Endpoint Optional custom API base URL, persisted as the provider entry's api_base. Required for providers that have no fixed default endpoint (e.g. azure, azure-openai — a per-resource host); also usable to override the regional default (e.g. a China vs international host). When omitted, the provider's built-in default base is used.
-		Endpoint *string `json:"endpoint,omitempty"`
-
-		// Id Provider protocol identifier (e.g. "anthropic", "openai", "openrouter", "gemini"). Must be a known protocol; unknown values are rejected with 400.
-		Id string `json:"id"`
-
-		// Model Default model to use for this provider. When omitted, a sensible default is chosen per provider (e.g. "claude-sonnet-4-6" for anthropic, "gpt-4o" for openai).
-		Model *string `json:"model,omitempty"`
-	} `json:"provider"`
+// OnboardingCompleteRequest_Provider LLM provider configuration to persist, discriminated by `auth_method`.
+type OnboardingCompleteRequest_Provider struct {
+	union json.RawMessage
 }
 
 // OnboardingCompleteResponse Returned on successful login or onboarding/complete. Contains the bearer token to use in subsequent Authorization headers and the username.
@@ -9341,6 +10522,45 @@ type OnboardingCompleteResponse struct {
 	// Warning Non-fatal advisory message. Present on onboarding/complete for either of two independent reasons, mutually exclusive on a single response: (1) the credential store is locked and the API key was stored in plaintext, or (2) the provider API key was submitted but could not be positively verified — the provider was unreachable, the key has no credit, access is regionally/model restricted, or no endpoint was available to probe against. Absent entirely when the key was actively verified as valid. A key the provider actively confirms is WRONG is never represented via this field — that outcome rejects the request with 400 instead (see POST /onboarding/complete). Never present on POST /auth/login.
 	Warning *string `json:"warning,omitempty"`
 }
+
+// OnboardingProviderApiKey The `api_key` variant of OnboardingCompleteRequest.provider (ADR-068, MAJ-014). Discriminated by `auth_method` following the ADR-034 inline oneOf mechanism; `api_key` is REQUIRED here and is not a property of the sign-in variant.
+type OnboardingProviderApiKey struct {
+	// ApiKey API key for the provider. Stored encrypted (AES-256-GCM) in credentials.json.
+	ApiKey string `json:"api_key"`
+
+	// AuthMethod Discriminator — this variant authenticates with an API key.
+	AuthMethod OnboardingProviderApiKeyAuthMethod `json:"auth_method"`
+
+	// Endpoint Optional custom API base URL, persisted as the provider entry's api_base. Required for providers that have no fixed default endpoint (e.g. azure, azure-openai — a per-resource host); also usable to override the regional default. When omitted, the provider's built-in default base is used.
+	Endpoint *string `json:"endpoint,omitempty"`
+
+	// Id Provider id (e.g. "anthropic", "openai", "openrouter", "gemini"). Must be a known protocol; unknown values are rejected with 400.
+	Id string `json:"id"`
+
+	// Model The model chosen for the first agent — the probe-validated pick from step 3, persisted as agents.defaults.default_model together with the provider id.
+	Model *string `json:"model,omitempty"`
+}
+
+// OnboardingProviderApiKeyAuthMethod Discriminator — this variant authenticates with an API key.
+type OnboardingProviderApiKeyAuthMethod string
+
+// OnboardingProviderSignIn The `sign_in` variant of OnboardingCompleteRequest.provider (ADR-068, MAJ-014). The vendor CLI holds the login; Omnipus stores no credential, so `api_key` is not a property here and a body carrying one is a schema violation (400 "api_key not allowed with sign_in").
+type OnboardingProviderSignIn struct {
+	// AuthMethod Discriminator — this variant uses the vendor CLI's saved login.
+	AuthMethod OnboardingProviderSignInAuthMethod `json:"auth_method"`
+
+	// Endpoint Optional custom API base URL, persisted as the provider entry's api_base.
+	Endpoint *string `json:"endpoint,omitempty"`
+
+	// Id Provider id whose catalog row declares `sign_in` in auth_methods (e.g. "codex-cli", "openai-chatgpt", "github-copilot"); any other id is rejected with 400 "provider does not support sign-in".
+	Id string `json:"id"`
+
+	// Model The model chosen for the first agent — the sign-in-probe-validated pick from step 3, persisted as agents.defaults.default_model together with the provider id.
+	Model *string `json:"model,omitempty"`
+}
+
+// OnboardingProviderSignInAuthMethod Discriminator — this variant uses the vendor CLI's saved login.
+type OnboardingProviderSignInAuthMethod string
 
 // OnboardingStatusResponse Response from PATCH /api/v1/state when marking onboarding complete. Confirms that onboarding has been completed.
 type OnboardingStatusResponse struct {
@@ -10180,20 +11400,32 @@ type PlanUpdateRequestDodStatus string
 // PlanUpdateRequestState Requested state transition. Validated against the canonical plan state machine (Plan.yaml `state` description); illegal transitions are rejected 400.
 type PlanUpdateRequestState string
 
-// ProbeProviderRequest Body for POST /onboarding/probe-provider. Tests an API key against a provider and returns available models. Non-persistent — nothing is written to disk. CSRF-exempt. Returns 409 once onboarding is complete.
+// ProbeProviderRequest Body for POST /onboarding/probe-provider. Validates credentials against a provider and returns the probed model. Non-persistent — nothing is written to disk. CSRF-exempt. Returns 409 once onboarding is complete. ONE shape, owned by ADR-067 (id, api_base, protocol) and ADR-068 (auth, api_key, model) — see ADR-067 FR-023 / ADR-068 FR-036. Runtime rules the schema cannot express: id must be in the served catalog OR be accompanied by both api_base and protocol (a custom row) — otherwise 400 naming the field id with the message 'unknown provider "<id>"' and never a list of accepted ids; the reserved literals "catalog" and "default-model" are never valid ids; api_key is required iff auth is api_key (400 naming api_key) and must be absent with auth sign_in; a tier "unsupported" provider → 400 with its unsupported_reason; any api_base passes the SSRF gate (422 when blocked).
 type ProbeProviderRequest struct {
-	// ApiKey API key to test against the provider.
-	ApiKey string `json:"api_key"`
+	// ApiBase Base URL. Required (with protocol) when id is not a catalog id; optional override for a catalog provider. SSRF-checked before any outbound call.
+	ApiBase *string `json:"api_base,omitempty"`
 
-	// Endpoint Optional override for the provider's API base URL. When omitted, the server uses the provider's well-known default endpoint.
-	Endpoint *string `json:"endpoint,omitempty"`
+	// ApiKey API key to test. Required iff auth is api_key; forbidden with sign_in.
+	ApiKey *string `json:"api_key,omitempty"`
 
-	// Id Provider protocol identifier. Must be one of the recognized protocol names that Omnipus can connect to. Validated server-side against the known protocol registry (pkg/providers.IsKnownProtocol).
-	Id ProbeProviderRequestId `json:"id"`
+	// Auth Which auth method to probe. "api_key" probes with api_key. "sign_in" probes through the CLI's saved login / Copilot session and returns 400 {"error":"not signed in","field":"auth"} when none is present.
+	Auth ProbeProviderRequestAuth `json:"auth"`
+
+	// Id Provider id — a catalog id (ADR-067 registry identity, e.g. "zai", "openrouter") or an operator-named custom row id (then api_base and protocol are required). Free string validated at runtime against the served catalog; there is no enum and no pattern.
+	Id string `json:"id"`
+
+	// Model Model to probe, used verbatim when present. Absent → the provider's first Recommended catalog model (active, tool-calling, ≥128k window), falling through on model_not_found at most 3 times. The response carries the model actually exercised in probed_model.
+	Model *string `json:"model,omitempty"`
+
+	// Protocol Wire protocol for a custom row. Required with api_base when id is not a catalog id.
+	Protocol *ProbeProviderRequestProtocol `json:"protocol,omitempty"`
 }
 
-// ProbeProviderRequestId Provider protocol identifier. Must be one of the recognized protocol names that Omnipus can connect to. Validated server-side against the known protocol registry (pkg/providers.IsKnownProtocol).
-type ProbeProviderRequestId string
+// ProbeProviderRequestAuth Which auth method to probe. "api_key" probes with api_key. "sign_in" probes through the CLI's saved login / Copilot session and returns 400 {"error":"not signed in","field":"auth"} when none is present.
+type ProbeProviderRequestAuth string
+
+// ProbeProviderRequestProtocol Wire protocol for a custom row. Required with api_base when id is not a catalog id.
+type ProbeProviderRequestProtocol string
 
 // ProbeProviderResponse Response from POST /onboarding/probe-provider. Always HTTP 200. success=true means the API key was accepted; success=false means the upstream rejected it (the error field explains why).
 type ProbeProviderResponse struct {
@@ -10202,6 +11434,9 @@ type ProbeProviderResponse struct {
 
 	// Models List of model IDs returned by the provider. Present only when success=true.
 	Models *[]string `json:"models,omitempty"`
+
+	// ProbedModel The model actually exercised by the probe (ADR-068 FR-036), so the SPA can tie the result to the pick.
+	ProbedModel *string `json:"probed_model,omitempty"`
 
 	// Success Whether the provider accepted the API key.
 	Success bool `json:"success"`
@@ -10260,6 +11495,27 @@ type PromptGuardUpdateResponseAppliedLevel string
 
 // Provider A single LLM provider entry as returned by GET /providers and PUT /providers/{id}. Describes the provider's connection status, the resolved model list, and any non-fatal warnings encountered when fetching the upstream model catalogue.
 type Provider struct {
+	// AccountLabel Account identifier of the signed-in session (tokens.account_id). Present only when status is signed_in or expired.
+	AccountLabel *string `json:"account_label,omitempty"`
+
+	// AuthMethod How this row authenticates (ADR-068; closed set — oauth/token no longer exist). Always present; "api_key" until ADR-068's computation lands.
+	AuthMethod ProviderAuthMethod `json:"auth_method"`
+
+	// BacksDefault True iff agents.defaults.default_model names this provider (ADR-068). Always present; such a row cannot be deleted without a new_default.
+	BacksDefault bool `json:"backs_default"`
+
+	// CliKind For protocol "cli" rows, the subprocess driver selected by the catalog row (ADR-067 X-14).
+	CliKind *ProviderCliKind `json:"cli_kind,omitempty"`
+
+	// Company Catalog grouping key (CatalogProvider.company) for the configured row's provider; absent for custom and unknown rows.
+	Company *string `json:"company,omitempty"`
+
+	// Custom True iff this row's id is not in the catalog — an operator-named custom endpoint configured with api_base + protocol (ADR-067 FR-035, X-13). Every check keys on this flag, never on a literal id. Absent = false.
+	Custom *bool `json:"custom,omitempty"`
+
+	// Dependents Every reference that would stop resolving if this provider were removed (ADR-068 FR-012) — advisory; the server recomputes it under the config lock on DELETE. Always present (empty array when none).
+	Dependents []ProviderDependent `json:"dependents"`
+
 	// DisplayName Branded display name for UI presentation (e.g. "OpenRouter", "Anthropic"). Falls back to name when absent.
 	DisplayName *string `json:"display_name,omitempty"`
 
@@ -10275,14 +11531,23 @@ type Provider struct {
 	// Id Provider identifier (e.g. "anthropic", "openai", "openrouter").
 	Id string `json:"id"`
 
+	// Locality ADR-067 FR-039's single local/cloud predicate, derived by the gateway; the only such classification the UI uses.
+	Locality *ProviderLocality `json:"locality,omitempty"`
+
 	// Models The provider's model catalogue. For providers WITH a live /models endpoint (has_models_endpoint=true) this is the real-time list fetched from upstream when an API key is present (alphabetically sorted). For providers WITHOUT a live endpoint (has_models_endpoint=false) this is the user-supplied list of model slugs configured for the provider. Empty array when the upstream fetch fails, no key is configured, or no slugs have been set. The model picker should be constrained to this catalogue when it is non-empty.
 	Models []string `json:"models"`
 
 	// Name Human-readable provider name (may be the same as id for unknown providers).
 	Name string `json:"name"`
 
-	// Status "connected" when at least one API key is configured for this provider. "disconnected" when no key is available or on the fallback default entry. "error" when the provider is configured but the upstream returned a non-retryable error.
+	// Protocol Wire protocol this configured row uses (ADR-067 D11/FR-013). Absent → the catalog provider's primary protocol. Always present on custom rows.
+	Protocol *ProviderProtocol `json:"protocol,omitempty"`
+
+	// Status One enumeration of exactly six values, shared verbatim by the ADR-067 and ADR-068 specs (ADR-068 FR-038). "connected" when an API key is configured and resolvable. "disconnected" when no key is available. "error" when the provider is configured but the upstream returned a non-retryable error. "unknown-provider" (ADR-067 FR-016) when the configured id is neither a catalog id nor a custom row — the row's models are [] and agents bound to it carry degraded_reason "needs_provider". "signed_in" / "expired" (ADR-068 FR-034) for sign-in providers with a live / lapsed session. The per-model "no context length" state is CatalogModel.window_unknown, never a seventh status.
 	Status ProviderStatus `json:"status"`
+
+	// UpdatedAt RFC 3339 time of the last PUT on this row (ADR-068 MAJ-015) — the picker's Recent ordering key.
+	UpdatedAt *time.Time `json:"updated_at,omitempty"`
 
 	// Validation Classified outcome of a provider API-key validation probe. Carried as an optional field on Provider (PUT save 200), ProbeProviderResponse (onboarding probe), and OperationResult (Settings Test) whenever a key probe was performed. Absent on non-probing responses (e.g. model-only edits).
 	Validation *struct {
@@ -10297,68 +11562,86 @@ type Provider struct {
 	Warning *string `json:"warning,omitempty"`
 }
 
-// ProviderStatus "connected" when at least one API key is configured for this provider. "disconnected" when no key is available or on the fallback default entry. "error" when the provider is configured but the upstream returned a non-retryable error.
+// ProviderAuthMethod How this row authenticates (ADR-068; closed set — oauth/token no longer exist). Always present; "api_key" until ADR-068's computation lands.
+type ProviderAuthMethod string
+
+// ProviderCliKind For protocol "cli" rows, the subprocess driver selected by the catalog row (ADR-067 X-14).
+type ProviderCliKind string
+
+// ProviderDependentsRole defines model for Provider.Dependents.Role.
+type ProviderDependentsRole string
+
+// ProviderLocality ADR-067 FR-039's single local/cloud predicate, derived by the gateway; the only such classification the UI uses.
+type ProviderLocality string
+
+// ProviderProtocol Wire protocol this configured row uses (ADR-067 D11/FR-013). Absent → the catalog provider's primary protocol. Always present on custom rows.
+type ProviderProtocol string
+
+// ProviderStatus One enumeration of exactly six values, shared verbatim by the ADR-067 and ADR-068 specs (ADR-068 FR-038). "connected" when an API key is configured and resolvable. "disconnected" when no key is available. "error" when the provider is configured but the upstream returned a non-retryable error. "unknown-provider" (ADR-067 FR-016) when the configured id is neither a catalog id nor a custom row — the row's models are [] and agents bound to it carry degraded_reason "needs_provider". "signed_in" / "expired" (ADR-068 FR-034) for sign-in providers with a live / lapsed session. The per-model "no context length" state is CatalogModel.window_unknown, never a seventh status.
 type ProviderStatus string
 
 // ProviderValidationOutcome Classified result of the key probe. "valid" — the key was accepted by the upstream provider. "invalid_key" — the upstream confirmed the key is wrong or revoked; this is the only outcome that blocks a save. "no_credit" — the key is valid but the account has insufficient credit or quota. "unreachable" — the upstream could not be reached (transport error, timeout, 5xx, 404, pre-auth 429); transient. "restricted" — the key works but the request was blocked by a region or permission policy on the provider side.
 type ProviderValidationOutcome string
 
-// ProviderCatalogEntry A single entry in the provider catalog — the curated, build-time-embedded registry of 23 user-facing LLM provider variants. Each entry represents one billable endpoint (company × plan × region), not a raw protocol id. Delivered as a build-time go:embed artifact + a generated TypeScript catalog; never served from a live HTTP endpoint (FR-016, ADR-031 §6 G-2). The type is contract-defined (Constraint #8) so the same generated struct is used in the Go catalog SoT and the generated TS consumer. No secret fields.
-type ProviderCatalogEntry struct {
-	// Aliases Additional protocol ids that map to this catalog entry. Derived from the GetDefaultAPIBase switch: ids grouped in the same case share a base URL and are aliases. The aliases list excludes the canonical id itself. Used by the migration resolver to normalize stored alias ids to the canonical catalog entry (ADR-031 §7 G-4, FR-012, US-8).
-	Aliases *[]string `json:"aliases,omitempty"`
-
-	// AnthropicId Sibling protocol id exposing the Anthropic-compatible endpoint for the same account/API key (e.g. z-ai → z-ai-anthropic). Present only for dual-wire providers; the UI offers it as an endpoint-format choice inside config, never as a separate provider row.
-	AnthropicId *string `json:"anthropic_id,omitempty"`
-
-	// Company Human-readable company/brand name. Used as the group header in the configured-providers list. Multiple catalog entries share the same company when one vendor exposes multiple endpoints (plan × region).
-	Company string `json:"company"`
-
-	// EndpointHint Curated display host for this endpoint (e.g. "api.z.ai/api/coding/paas/v4"). Hand-authored, NOT derived from GetDefaultAPIBase (which returns full URLs the display doesn't need). For deployment-configured providers, this is a placeholder template (e.g. "<resource>.openai.azure.com"). Shown in the subtitle and the variant config Sheet (ADR-031 R2-01/R2-03).
-	EndpointHint string `json:"endpointHint"`
-
-	// Id Canonical protocol identifier — matches a knownProtocols entry and a member of the ProbeProviderRequest id enum. Used as the primary key for probe, configure, and drift-guard lookups.
-	Id string `json:"id"`
-
-	// Label Full human-readable label for this variant. Standard-api entries use "<Brand> [(Region)]" (no access-type suffix); coding-plan entries use "<Brand> — Coding Plan [(Region)]". Carried on the wire so onboarding and Settings render identical text from one catalog source (ADR-031 FR-007, G-3=C safety guarantee). Example: "Zhipu / GLM — Coding Plan (International)".
-	Label string `json:"label"`
-
-	// LogoSlug Asset key for the <BrandIcon> component. Maps to a vendored SVG in src/assets/brand-logos/p_<logoSlug>.svg. When no SVG exists for the slug, BrandIcon falls back to a lettermark chip (FR-011, FR-013). Companies with no vendored SVG use a short id (e.g. "cerebras", "nvidia") which triggers the lettermark path.
-	LogoSlug string `json:"logoSlug"`
-
-	// Plan Billing plan for this variant. "standard-api" = pay-as-you-go per-token API (formerly "api" in the onboarding PLAN_LABELS). "coding-plan" = subscription-based coding plan (unchanged label). The legacy "anthropic" plan value is NOT in this enum — it was a mislabeled wire protocol; the wire field carries that information instead (ADR-031 FR-006).
-	Plan ProviderCatalogEntryPlan `json:"plan"`
-
-	// Region Deployment region, when the provider has a regional split. Omitted for providers with a single global endpoint (e.g. OpenAI, DeepSeek).
-	Region *ProviderCatalogEntryRegion `json:"region,omitempty"`
-
-	// Subtitle Short billing-model description and endpoint hint. Shown below the label in the picker and Sheet. Format: "<billing model> · <endpointHint>". Example: "Subscription (Coding Plan) · api.z.ai/api/coding/paas/v4".
-	Subtitle string `json:"subtitle"`
-
-	// Wire Wire protocol used to call this endpoint. Derived, not authored: "anthropic" when id matches /-anthropic$/ or id ∈ {anthropic, anthropic-messages, bedrock}; otherwise "openai-compatible" (ADR-031 FR-005). Internal config detail — surfaced only via the Endpoint-format toggle for dual-wire entries in Settings; never a UI badge or plan option.
-	Wire ProviderCatalogEntryWire `json:"wire"`
+// ProviderDeleteRequest Optional body for DELETE /api/v1/providers/{id} (ADR-068 FR-010/FR-011). new_default is required (409 otherwise) when the provider backs the default model; it must name a different provider that is connected or signed_in (400 otherwise). The server recomputes dependents and backs_default under the config lock — the response is authoritative.
+type ProviderDeleteRequest struct {
+	// NewDefault Body for PUT /api/v1/providers/default-model (ADR-068 FR-018): exactly the (provider, model) pair. The provider must be configured and connected or signed_in (400 naming the field otherwise); the model must be in the served catalog for that provider, except rows with custom: true or locality: local, where any non-empty model is accepted with no live call. Persisted as agents.defaults.default_model under the config lock; takes effect on the next turn after a reload.
+	NewDefault *DefaultModelUpdateRequest `json:"new_default,omitempty"`
 }
 
-// ProviderCatalogEntryPlan Billing plan for this variant. "standard-api" = pay-as-you-go per-token API (formerly "api" in the onboarding PLAN_LABELS). "coding-plan" = subscription-based coding plan (unchanged label). The legacy "anthropic" plan value is NOT in this enum — it was a mislabeled wire protocol; the wire field carries that information instead (ADR-031 FR-006).
-type ProviderCatalogEntryPlan string
+// ProviderDeleteResponse Response of DELETE /api/v1/providers/{id} (ADR-068 FR-010). deleted is true on success (HTTP 200); on a failed step the server responds 500 with deleted false and a retryable state. dependents lists every reference that was cleared (agent primaries cleared, fallback entries removed) — nothing is re-pointed silently. There is no Undo: the stored key is gone.
+type ProviderDeleteResponse struct {
+	// DefaultChanged True when new_default was applied before the removal.
+	DefaultChanged bool                `json:"default_changed"`
+	Deleted        bool                `json:"deleted"`
+	Dependents     []ProviderDependent `json:"dependents"`
 
-// ProviderCatalogEntryRegion Deployment region, when the provider has a regional split. Omitted for providers with a single global endpoint (e.g. OpenAI, DeepSeek).
-type ProviderCatalogEntryRegion string
+	// NewDefault Body for PUT /api/v1/providers/default-model (ADR-068 FR-018): exactly the (provider, model) pair. The provider must be configured and connected or signed_in (400 naming the field otherwise); the model must be in the served catalog for that provider, except rows with custom: true or locality: local, where any non-empty model is accepted with no live call. Persisted as agents.defaults.default_model under the config lock; takes effect on the next turn after a reload.
+	NewDefault *DefaultModelUpdateRequest `json:"new_default,omitempty"`
+}
 
-// ProviderCatalogEntryWire Wire protocol used to call this endpoint. Derived, not authored: "anthropic" when id matches /-anthropic$/ or id ∈ {anthropic, anthropic-messages, bedrock}; otherwise "openai-compatible" (ADR-031 FR-005). Internal config detail — surfaced only via the Endpoint-format toggle for dual-wire entries in Settings; never a UI badge or plan option.
-type ProviderCatalogEntryWire string
+// ProviderDeleteResponseDependentsRole defines model for ProviderDeleteResponse.Dependents.Role.
+type ProviderDeleteResponseDependentsRole string
+
+// ProviderDependent One reference that would stop resolving if a provider were removed (ADR-068 FR-012, MAJ-010): an agent's primary model, a fallback entry, a passthrough-resolved slug, or a default/recap/image/voice setting. Advisory on GET /providers; recomputed under the config lock on DELETE.
+type ProviderDependent struct {
+	// Id Agent id, or a settings key for non-agent dependents (e.g. "agents.defaults.default_model").
+	Id string `json:"id"`
+
+	// Name Display name of the dependent.
+	Name string                `json:"name"`
+	Role ProviderDependentRole `json:"role"`
+}
+
+// ProviderDependentRole defines model for ProviderDependent.Role.
+type ProviderDependentRole string
 
 // ProviderUpdateRequest Request body for PUT /api/v1/providers/{id}. Adds or updates an LLM provider configuration. On new providers, api_key is required. On existing providers, api_key may be omitted to keep the current key.
 type ProviderUpdateRequest struct {
+	// ApiBase Explicit base URL. Required for a custom row; optional override for a catalog provider (wins over the catalog row). SSRF-checked.
+	ApiBase *string `json:"api_base,omitempty"`
+
 	// ApiKey API key for the provider. Stored encrypted (AES-256-GCM) in credentials.json. Required when adding a new provider; optional when updating an existing one (omit to leave the current key unchanged).
 	ApiKey *string `json:"api_key,omitempty"`
+
+	// AuthMethod Auth method for this row (ADR-068). Absent → api_key. sign_in is accepted only for providers whose catalog auth_methods include it (400 otherwise) and must not be combined with api_key.
+	AuthMethod *ProviderUpdateRequestAuthMethod `json:"auth_method,omitempty"`
 
 	// Model Default model to use for this provider. Defaults to "default" when not specified on new providers.
 	Model *string `json:"model,omitempty"`
 
 	// Models User-supplied catalogue of model slugs for a provider that does NOT expose a live /models endpoint (custom / unknown OpenAI-compatible gateways). When present, these slugs replace the provider's stored catalogue and constrain the model picker. Ignored for providers WITH a live endpoint (has_models_endpoint=true), whose catalogue is fetched from upstream. Omit to leave the existing list unchanged; send an empty array to clear it.
 	Models *[]string `json:"models,omitempty"`
+
+	// Protocol Wire protocol to use (ADR-067 FR-013/FR-014). For a catalog provider: optional; absent → the catalog's primary; a protocol the provider does not offer → 400. For a custom row (id not in the catalog): required and restricted to openai-compatible | anthropic (400 otherwise).
+	Protocol *ProviderUpdateRequestProtocol `json:"protocol,omitempty"`
 }
+
+// ProviderUpdateRequestAuthMethod Auth method for this row (ADR-068). Absent → api_key. sign_in is accepted only for providers whose catalog auth_methods include it (400 otherwise) and must not be combined with api_key.
+type ProviderUpdateRequestAuthMethod string
+
+// ProviderUpdateRequestProtocol Wire protocol to use (ADR-067 FR-013/FR-014). For a catalog provider: optional; absent → the catalog's primary; a protocol the provider does not offer → 400. For a custom row (id not in the catalog): required and restricted to openai-compatible | anthropic (400 otherwise).
+type ProviderUpdateRequestProtocol string
 
 // ProviderValidation Classified outcome of a provider API-key validation probe. Carried as an optional field on Provider (PUT save 200), ProbeProviderResponse (onboarding probe), and OperationResult (Settings Test) whenever a key probe was performed. Absent on non-probing responses (e.g. model-only edits).
 type ProviderValidation struct {
@@ -10368,6 +11651,67 @@ type ProviderValidation struct {
 	// Outcome Classified result of the key probe. "valid" — the key was accepted by the upstream provider. "invalid_key" — the upstream confirmed the key is wrong or revoked; this is the only outcome that blocks a save. "no_credit" — the key is valid but the account has insufficient credit or quota. "unreachable" — the upstream could not be reached (transport error, timeout, 5xx, 404, pre-auth 429); transient. "restricted" — the key works but the request was blocked by a region or permission policy on the provider side.
 	Outcome ProviderValidationOutcome `json:"outcome"`
 }
+
+// ProvidersCatalog The full registry-fed providers catalog (ADR-067 schema 2.0.0) as served by GET /api/v1/providers/catalog — providers with nested models, tier, protocol(s), unsupported reason and resize limits — plus the gateway's serving envelope: served_from (embedded snapshot or pulled release) and stale (updated_at older than 14 days). The same document feeds the media pipeline, the agent loop's window rung and the validation probe; the SPA consumes only this generated type and re-validates with If-None-Match (strong quoted ETag = SHA-256 of the served bytes) on Settings open and every 15 minutes. The handler's catalog is read-only for windows — any per-model override lives in ContextSettings.model_overrides, never here.
+type ProvidersCatalog struct {
+	// DefaultResizeLimits Image resize limits applied by the media pipeline before an attachment is sent to a provider (ADR-067 [A-10]). The document carries one default and an optional per-provider value.
+	DefaultResizeLimits CatalogResizeLimits `json:"default_resize_limits"`
+	Providers           []CatalogProvider   `json:"providers"`
+
+	// SchemaVersion Document schema version. Only "2.0.0" is accepted on load (FR-001).
+	SchemaVersion ProvidersCatalogSchemaVersion `json:"schema_version"`
+
+	// ServedFrom Gateway envelope (FR-017): "embedded" when serving the committed build-time snapshot, "pulled" when serving a release fetched at startup or by the 24 h refresh.
+	ServedFrom ProvidersCatalogServedFrom `json:"served_from"`
+
+	// Source Free-text provenance written by the assembly job (upstream registry commit ids). Informational.
+	Source string `json:"source"`
+
+	// Stale Gateway envelope (FR-017) — true when updated_at is older than 14 days.
+	Stale bool `json:"stale"`
+
+	// UpdatedAt When the assembly job produced the document (RFC 3339).
+	UpdatedAt time.Time `json:"updated_at"`
+
+	// Version Monotonic release version, vYYYY.M.D[.N], compared numerically (FR-002).
+	Version string `json:"version"`
+}
+
+// ProvidersCatalogProvidersAuthMethods defines model for ProvidersCatalog.Providers.AuthMethods.
+type ProvidersCatalogProvidersAuthMethods string
+
+// ProvidersCatalogProvidersCliKind Required iff protocol is "cli" — selects the subprocess driver (ADR-067 X-14), never chosen by id.
+type ProvidersCatalogProvidersCliKind string
+
+// ProvidersCatalogProvidersLocality Derived on load by the gateway (FR-039); the only local/cloud classification ADR-066/ADR-068 consume.
+type ProvidersCatalogProvidersLocality string
+
+// ProvidersCatalogProvidersModelsInputModalities defines model for ProvidersCatalog.Providers.Models.InputModalities.
+type ProvidersCatalogProvidersModelsInputModalities string
+
+// ProvidersCatalogProvidersModelsStatus "retired" rows are carried forward when the model vanishes upstream (ADR-067 §8b); they are not offered for new selection.
+type ProvidersCatalogProvidersModelsStatus string
+
+// ProvidersCatalogProvidersModelsWindowSource Which rung of the ADR-066 D2 resolution ladder produced an effective context window. Owned by ADR-066; $ref'd by Agent.context_window_source, DefaultModel.window_source and CatalogModel.window_source — never an inline enum anywhere else (cross-spec X-06). "operator" = a per-agent, per-(provider, model) or global operator override (ContextSettings); "live" = the provider's own limits endpoint (cached 24 h); "catalog" = the registry-fed providers catalog (ADR-067); "floor" = the conservative cloud floor applied when nothing else knew the window (WARN logged). There is no "learned" value (ADR-066 D8 was not adopted).
+type ProvidersCatalogProvidersModelsWindowSource string
+
+// ProvidersCatalogProvidersProtocol Primary wire protocol the factory dispatches on (ADR-067 D11). Absent only when tier is "unsupported" (F-19).
+type ProvidersCatalogProvidersProtocol string
+
+// ProvidersCatalogProvidersProtocolsProtocol defines model for ProvidersCatalog.Providers.Protocols.Protocol.
+type ProvidersCatalogProvidersProtocolsProtocol string
+
+// ProvidersCatalogProvidersTier Picker tier (ADR-067 FR-018, data not code). The popular set is rendered as pinned tiles in catalog order; "unsupported" rows are visible but disabled with unsupported_reason.
+type ProvidersCatalogProvidersTier string
+
+// ProvidersCatalogProvidersUnsupportedReason Required when tier is "unsupported". "cloud-iam" = needs request signing (Bedrock, Vertex, watsonx, SAP AI Core); "deployment-url" = needs a per-deployment URL (Azure); "withdrawn" = vanished upstream. Never shown raw — the SPA maps it to copy.
+type ProvidersCatalogProvidersUnsupportedReason string
+
+// ProvidersCatalogSchemaVersion Document schema version. Only "2.0.0" is accepted on load (FR-001).
+type ProvidersCatalogSchemaVersion string
+
+// ProvidersCatalogServedFrom Gateway envelope (FR-017): "embedded" when serving the committed build-time snapshot, "pulled" when serving a release fetched at startup or by the 24 h refresh.
+type ProvidersCatalogServedFrom string
 
 // RateLimitConfig Rate limit configuration returned by GET /api/v1/security/rate-limits and accepted by PUT /api/v1/security/rate-limits. Per-agent sliding-window rate limits only (LLM/hr, tool/min). The app-level spend brake (token budget) is set separately via /api/v1/settings/token-budget; the SEC-26 USD cap was retired per ADR-053 D12.
 type RateLimitConfig struct {
@@ -11235,6 +12579,9 @@ type SessionDetail struct {
 
 		// ToolCalls Tool invocations made during this message turn.
 		ToolCalls *[]struct {
+			// ContentState ADR-066 D4/D5 projection state of this call's result in the model's window, as persisted in window meta and returned on transcript read. "full" = the result entered unmodified; "capped" = it entered head-and-tail truncated with a mark (the archive line holds the full content); "emptied" = it was later emptied in place, leaving a recall mark. The transcript `result` is the PROJECTED content the model saw; the full content stays in the gateway tool_results/ store for Verbose chat. Absent = full.
+			ContentState *SessionDetailMessagesToolCallsContentState `json:"content_state,omitempty"`
+
 			// DurationMs Elapsed time in milliseconds. Absent when still running.
 			DurationMs *int64 `json:"duration_ms,omitempty"`
 
@@ -11433,6 +12780,9 @@ type SessionDetailMessagesRole string
 
 // SessionDetailMessagesStatus Completion status of this message turn.
 type SessionDetailMessagesStatus string
+
+// SessionDetailMessagesToolCallsContentState ADR-066 D4/D5 projection state of this call's result in the model's window, as persisted in window meta and returned on transcript read. "full" = the result entered unmodified; "capped" = it entered head-and-tail truncated with a mark (the archive line holds the full content); "emptied" = it was later emptied in place, leaving a recall mark. The transcript `result` is the PROJECTED content the model saw; the full content stays in the gateway tool_results/ store for Verbose chat. Absent = full.
+type SessionDetailMessagesToolCallsContentState string
 
 // SessionDetailMessagesToolCallsStatus Outcome of the tool call. "interrupted" is written by spawnSubTurn (pkg/agent/subturn.go) onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). "parked" (ADR-057 UAT defect C2 fix) is written the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case. ToolCall carries no structured "reason" enum (that stays WS-frame-only, via SubTurnEndPayload), but it does carry a free-text "error" field describing why a failed call failed — see below.
 type SessionDetailMessagesToolCallsStatus string
@@ -12044,6 +13394,83 @@ type SessionStats struct {
 	// ToolCalls Total number of tool calls made in this session.
 	ToolCalls int `json:"tool_calls"`
 }
+
+// SignInPollRequest Body for POST /providers/{id}/sign-in/poll (ADR-068 FR-044, added 2026-08-23 §8b). Identifies which open device-code session to check.
+type SignInPollRequest struct {
+	// DeviceAuthId The opaque handle returned by POST /providers/{id}/sign-in's device_code response.
+	DeviceAuthId string `json:"device_auth_id"`
+}
+
+// SignInPollResponse Response from POST /providers/{id}/sign-in/poll (ADR-068 FR-044, added 2026-08-23 §8b). The gateway performs at most one vendor poll per call. On `signed_in` the gateway has already stored the `<id>_OAUTH` credential entry before responding. The vendor's device code is never returned here.
+type SignInPollResponse struct {
+	// IntervalSeconds Present only when the vendor asked the client to slow down (OAuth device-flow `slow_down`). The SPA must adopt this as its new poll interval and never poll faster (FR-045).
+	IntervalSeconds *int `json:"interval_seconds,omitempty"`
+
+	// State pending while the operator has not yet approved the session; signed_in once the OAuth tokens are stored; expired when the device-code session's own expires_at has passed; denied when the operator explicitly declined on the vendor's page.
+	State SignInPollResponseState `json:"state"`
+}
+
+// SignInPollResponseState pending while the operator has not yet approved the session; signed_in once the OAuth tokens are stored; expired when the device-code session's own expires_at has passed; denied when the operator explicitly declined on the vendor's page.
+type SignInPollResponseState string
+
+// SignInStartResponse Response from POST /providers/{id}/sign-in (ADR-068 FR-008, amended 2026-08-23 §8b). `cli_login` for codex-cli / github-copilot: the vendor CLI's own login command, run by the operator in a terminal. `device_code` for openai-chatgpt (and xai once its catalog row carries sign_in): Omnipus requests a device code itself and the SPA shows the verification link and user code. Discriminated by `method`.
+type SignInStartResponse struct {
+	union json.RawMessage
+}
+
+// SignInStartResponseCliLogin The `cli_login` variant of SignInStartResponse (ADR-068 FR-008, amended 2026-08-23 §8b). For `codex-cli` and `github-copilot`: Omnipus never performs or stores the vendor login itself — this returns the one instruction the operator needs, the vendor CLI's own login command, so the SPA can show it beside a *Check sign-in* button.
+type SignInStartResponseCliLogin struct {
+	// Command The exact command the operator runs in a terminal (e.g. "codex login", "copilot login").
+	Command string `json:"command"`
+
+	// Instructions Human-readable guidance shown beside the command, ending with the prompt to click Check sign-in.
+	Instructions string `json:"instructions"`
+
+	// Method Discriminator — run the vendor CLI's login command.
+	Method SignInStartResponseCliLoginMethod `json:"method"`
+}
+
+// SignInStartResponseCliLoginMethod Discriminator — run the vendor CLI's login command.
+type SignInStartResponseCliLoginMethod string
+
+// SignInStartResponseDeviceCode The `device_code` variant of SignInStartResponse (ADR-068 FR-008/FR-044, added 2026-08-23 §8b). For `openai-chatgpt` (and `xai` once its catalog row carries `sign_in`): Omnipus requests a device code from the vendor itself and the SPA renders the verification link and user code for the operator to approve on any device. `device_auth_id` is an opaque server-side handle for POST /providers/{id}/sign-in/poll — the vendor's own device code and any PKCE verifier are held only by the gateway and never appear on the wire.
+type SignInStartResponseDeviceCode struct {
+	// DeviceAuthId Opaque handle identifying this device-code session for POST /providers/{id}/sign-in/poll. Never the vendor's own device code.
+	DeviceAuthId string `json:"device_auth_id"`
+
+	// ExpiresAt When this device-code session expires server-side (ceiling 15 minutes from start, FR-044). The dialog shows the matching expired end state once past this time.
+	ExpiresAt time.Time `json:"expires_at"`
+
+	// IntervalSeconds Minimum seconds between polls. The SPA must never poll faster than this, and must back off when a later poll response raises it (FR-045, vendor slow_down).
+	IntervalSeconds int `json:"interval_seconds"`
+
+	// Method Discriminator — a device-code session was started; poll for completion.
+	Method SignInStartResponseDeviceCodeMethod `json:"method"`
+
+	// UserCode Short code the operator enters (or confirms) on the verification page.
+	UserCode string `json:"user_code"`
+
+	// VerificationUrl The vendor page the operator opens (new tab) to approve the sign-in.
+	VerificationUrl string `json:"verification_url"`
+}
+
+// SignInStartResponseDeviceCodeMethod Discriminator — a device-code session was started; poll for completion.
+type SignInStartResponseDeviceCodeMethod string
+
+// SignInStatus Response from GET /providers/{id}/sign-in/status (ADR-068 FR-009, amended 2026-08-23 §8b). For `cli_login` providers (codex-cli, github-copilot): read from the vendor CLI's saved login only — Omnipus never refreshes that file — `expired` follows the access token's JWT `exp` (decoded unverified, display only) when decodable, else the saved login file being older than one hour. For `device_code` providers (openai-chatgpt, and xai once its catalog row carries `sign_in`): the state comes from the stored `<id>_OAUTH` entry in Omnipus's own encrypted credential store — `expired` means the access token is past `exp` AND a refresh attempt failed or no refresh token is available. `pending` is returned only while a device-code session started by POST /sign-in is open and not yet approved.
+type SignInStatus struct {
+	// AccountLabel Opaque account identifier — `tokens.account_id` for codex-cli, the GitHub login for Copilot when the CLI reports one, or the stored OAuth entry's account_id for device_code providers. Present only when known; never an e-mail.
+	AccountLabel *string `json:"account_label,omitempty"`
+
+	// ExpiresAt The access token's expiry when known. Absent otherwise.
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
+
+	// State not_signed_in when no saved login / stored OAuth entry exists (or it is unreadable / malformed — logged as a warning); pending while an open device-code session awaits approval; signed_in when a usable login or OAuth entry exists; expired per the per-method rule above.
+	State SignInStatusState `json:"state"`
+}
+
+// SignInStatusState not_signed_in when no saved login / stored OAuth entry exists (or it is unreadable / malformed — logged as a warning); pending while an open device-code session awaits approval; signed_in when a usable login or OAuth entry exists; expired per the per-method rule above.
+type SignInStatusState string
 
 // Skill A single installed skill as returned by GET /skills. Skills are SKILL.md/package bundles loaded from ~/.omnipus/skills/ that extend agent capabilities. Each skill has an ID, version, and human-readable metadata.
 type Skill struct {
@@ -13162,6 +14589,9 @@ type ToolApprovalResponseStatus string
 
 // ToolCall A single tool invocation recorded in a transcript entry. Maps to session.ToolCall on the Go side and ToolCall interface in src/lib/api.ts.
 type ToolCall struct {
+	// ContentState ADR-066 D4/D5 projection state of this call's result in the model's window, as persisted in window meta and returned on transcript read. "full" = the result entered unmodified; "capped" = it entered head-and-tail truncated with a mark (the archive line holds the full content); "emptied" = it was later emptied in place, leaving a recall mark. The transcript `result` is the PROJECTED content the model saw; the full content stays in the gateway tool_results/ store for Verbose chat. Absent = full.
+	ContentState *ToolCallContentState `json:"content_state,omitempty"`
+
 	// DurationMs Elapsed time in milliseconds. Absent when still running.
 	DurationMs *int64 `json:"duration_ms,omitempty"`
 
@@ -13187,6 +14617,9 @@ type ToolCall struct {
 	// Tool Tool name as registered in the tool registry (e.g. "workspace.shell", "web_search").
 	Tool string `json:"tool"`
 }
+
+// ToolCallContentState ADR-066 D4/D5 projection state of this call's result in the model's window, as persisted in window meta and returned on transcript read. "full" = the result entered unmodified; "capped" = it entered head-and-tail truncated with a mark (the archive line holds the full content); "emptied" = it was later emptied in place, leaving a recall mark. The transcript `result` is the PROJECTED content the model saw; the full content stays in the gateway tool_results/ store for Verbose chat. Absent = full.
+type ToolCallContentState string
 
 // ToolCallStatus Outcome of the tool call. "interrupted" is written by spawnSubTurn (pkg/agent/subturn.go) onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). "parked" (ADR-057 UAT defect C2 fix) is written the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case. ToolCall carries no structured "reason" enum (that stays WS-frame-only, via SubTurnEndPayload), but it does carry a free-text "error" field describing why a failed call failed — see below.
 type ToolCallStatus string
@@ -13588,6 +15021,12 @@ type UploadLibraryFilesParams struct {
 	Path *string `form:"path,omitempty" json:"path,omitempty"`
 }
 
+// GetProvidersCatalogParams defines parameters for GetProvidersCatalog.
+type GetProvidersCatalogParams struct {
+	// IfNoneMatch The quoted strong ETag from a previous 200. Exact match → 304.
+	IfNoneMatch *string `json:"If-None-Match,omitempty"`
+}
+
 // RestoreBackup200JSONResponseBodyStatus defines parameters for RestoreBackup.
 type RestoreBackup200JSONResponseBodyStatus string
 
@@ -13819,8 +15258,17 @@ type UpdatePerformanceSettingsJSONRequestBody = PerformanceSettingsUpdate
 // UpdatePlanJSONRequestBody defines body for UpdatePlan for application/json ContentType.
 type UpdatePlanJSONRequestBody = PlanUpdateRequest
 
+// UpdateDefaultModelJSONRequestBody defines body for UpdateDefaultModel for application/json ContentType.
+type UpdateDefaultModelJSONRequestBody = DefaultModelUpdateRequest
+
+// DeleteProviderJSONRequestBody defines body for DeleteProvider for application/json ContentType.
+type DeleteProviderJSONRequestBody = ProviderDeleteRequest
+
 // UpdateProviderJSONRequestBody defines body for UpdateProvider for application/json ContentType.
 type UpdateProviderJSONRequestBody = ProviderUpdateRequest
+
+// PollProviderSignInJSONRequestBody defines body for PollProviderSignIn for application/json ContentType.
+type PollProviderSignInJSONRequestBody = SignInPollRequest
 
 // RestoreBackupJSONRequestBody defines body for RestoreBackup for application/json ContentType.
 type RestoreBackupJSONRequestBody = RestoreBackupRequest
@@ -13863,6 +15311,9 @@ type CreateSessionJSONRequestBody = SessionCreateRequest
 
 // RenameSessionJSONRequestBody defines body for RenameSession for application/json ContentType.
 type RenameSessionJSONRequestBody = SessionRenameRequest
+
+// UpdateContextSettingsJSONRequestBody defines body for UpdateContextSettings for application/json ContentType.
+type UpdateContextSettingsJSONRequestBody = ContextSettingsUpdate
 
 // UpdateMemorySettingsJSONRequestBody defines body for UpdateMemorySettings for application/json ContentType.
 type UpdateMemorySettingsJSONRequestBody = MemorySettings
@@ -15496,6 +16947,95 @@ func (t *MessageParentRequest) UnmarshalJSON(b []byte) error {
 	return err
 }
 
+// AsOnboardingProviderApiKey returns the union data inside the OnboardingCompleteRequest_Provider as a OnboardingProviderApiKey
+func (t OnboardingCompleteRequest_Provider) AsOnboardingProviderApiKey() (OnboardingProviderApiKey, error) {
+	var body OnboardingProviderApiKey
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromOnboardingProviderApiKey overwrites any union data inside the OnboardingCompleteRequest_Provider as the provided OnboardingProviderApiKey
+func (t *OnboardingCompleteRequest_Provider) FromOnboardingProviderApiKey(v OnboardingProviderApiKey) error {
+	v.AuthMethod = "api_key"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeOnboardingProviderApiKey performs a merge with any union data inside the OnboardingCompleteRequest_Provider, using the provided OnboardingProviderApiKey
+func (t *OnboardingCompleteRequest_Provider) MergeOnboardingProviderApiKey(v OnboardingProviderApiKey) error {
+	v.AuthMethod = "api_key"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsOnboardingProviderSignIn returns the union data inside the OnboardingCompleteRequest_Provider as a OnboardingProviderSignIn
+func (t OnboardingCompleteRequest_Provider) AsOnboardingProviderSignIn() (OnboardingProviderSignIn, error) {
+	var body OnboardingProviderSignIn
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromOnboardingProviderSignIn overwrites any union data inside the OnboardingCompleteRequest_Provider as the provided OnboardingProviderSignIn
+func (t *OnboardingCompleteRequest_Provider) FromOnboardingProviderSignIn(v OnboardingProviderSignIn) error {
+	v.AuthMethod = "sign_in"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeOnboardingProviderSignIn performs a merge with any union data inside the OnboardingCompleteRequest_Provider, using the provided OnboardingProviderSignIn
+func (t *OnboardingCompleteRequest_Provider) MergeOnboardingProviderSignIn(v OnboardingProviderSignIn) error {
+	v.AuthMethod = "sign_in"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t OnboardingCompleteRequest_Provider) Discriminator() (string, error) {
+	var discriminator struct {
+		Discriminator string `json:"auth_method"`
+	}
+	err := json.Unmarshal(t.union, &discriminator)
+	return discriminator.Discriminator, err
+}
+
+func (t OnboardingCompleteRequest_Provider) ValueByDiscriminator() (interface{}, error) {
+	discriminator, err := t.Discriminator()
+	if err != nil {
+		return nil, err
+	}
+	switch discriminator {
+	case "api_key":
+		return t.AsOnboardingProviderApiKey()
+	case "sign_in":
+		return t.AsOnboardingProviderSignIn()
+	default:
+		return nil, errors.New("unknown discriminator value: " + discriminator)
+	}
+}
+
+func (t OnboardingCompleteRequest_Provider) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *OnboardingCompleteRequest_Provider) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	return err
+}
+
 // AsSessionMessageProgress returns the union data inside the SessionMessage as a SessionMessageProgress
 func (t SessionMessage) AsSessionMessageProgress() (SessionMessageProgress, error) {
 	var body SessionMessageProgress
@@ -15881,6 +17421,95 @@ func (t SessionMessage) MarshalJSON() ([]byte, error) {
 }
 
 func (t *SessionMessage) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	return err
+}
+
+// AsSignInStartResponseCliLogin returns the union data inside the SignInStartResponse as a SignInStartResponseCliLogin
+func (t SignInStartResponse) AsSignInStartResponseCliLogin() (SignInStartResponseCliLogin, error) {
+	var body SignInStartResponseCliLogin
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromSignInStartResponseCliLogin overwrites any union data inside the SignInStartResponse as the provided SignInStartResponseCliLogin
+func (t *SignInStartResponse) FromSignInStartResponseCliLogin(v SignInStartResponseCliLogin) error {
+	v.Method = "cli_login"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeSignInStartResponseCliLogin performs a merge with any union data inside the SignInStartResponse, using the provided SignInStartResponseCliLogin
+func (t *SignInStartResponse) MergeSignInStartResponseCliLogin(v SignInStartResponseCliLogin) error {
+	v.Method = "cli_login"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsSignInStartResponseDeviceCode returns the union data inside the SignInStartResponse as a SignInStartResponseDeviceCode
+func (t SignInStartResponse) AsSignInStartResponseDeviceCode() (SignInStartResponseDeviceCode, error) {
+	var body SignInStartResponseDeviceCode
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromSignInStartResponseDeviceCode overwrites any union data inside the SignInStartResponse as the provided SignInStartResponseDeviceCode
+func (t *SignInStartResponse) FromSignInStartResponseDeviceCode(v SignInStartResponseDeviceCode) error {
+	v.Method = "device_code"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeSignInStartResponseDeviceCode performs a merge with any union data inside the SignInStartResponse, using the provided SignInStartResponseDeviceCode
+func (t *SignInStartResponse) MergeSignInStartResponseDeviceCode(v SignInStartResponseDeviceCode) error {
+	v.Method = "device_code"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t SignInStartResponse) Discriminator() (string, error) {
+	var discriminator struct {
+		Discriminator string `json:"method"`
+	}
+	err := json.Unmarshal(t.union, &discriminator)
+	return discriminator.Discriminator, err
+}
+
+func (t SignInStartResponse) ValueByDiscriminator() (interface{}, error) {
+	discriminator, err := t.Discriminator()
+	if err != nil {
+		return nil, err
+	}
+	switch discriminator {
+	case "cli_login":
+		return t.AsSignInStartResponseCliLogin()
+	case "device_code":
+		return t.AsSignInStartResponseDeviceCode()
+	default:
+		return nil, errors.New("unknown discriminator value: " + discriminator)
+	}
+}
+
+func (t SignInStartResponse) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *SignInStartResponse) UnmarshalJSON(b []byte) error {
 	err := t.union.UnmarshalJSON(b)
 	return err
 }

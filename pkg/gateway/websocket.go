@@ -1717,7 +1717,17 @@ func (h *WSHandler) handleChatMessage(
 			h.agentLoop.DisarmOrphanForegroundTurnWatch(sessionID)
 		}
 
-		if sessionID != "" {
+		// ADR-066 D4 / FR-015: this handler persists the user message BEFORE
+		// the bus publish, but processMessage is the enforcement point for
+		// the user-message bound and refuses an over-bound message with NO
+		// transcript entry. So the one thing this intake does for the bound
+		// is skip that early write when processMessage is about to refuse —
+		// the refusal reply itself comes back through the ordinary outbound
+		// path (token + done frames, never an error frame). A kickoff turn
+		// discards the client content entirely, so it is never over-bound.
+		overUserBound := !setupKickoff &&
+			agent.UserMessageChars(content) > h.agentLoop.UserMessageBound()
+		if sessionID != "" && !overUserBound {
 			entry := session.TranscriptEntry{
 				ID:        uuid.New().String(),
 				Role:      "user",
@@ -2788,7 +2798,15 @@ drainDone:
 	// next LLM turn sees the prior conversation. Without this, the SPA
 	// shows replayed messages but the agent answers as if the session just
 	// started — see pkg/agent/attach_hydrate.go for the rationale.
-	if err := h.agentLoop.HydrateAgentHistoryFromTranscript(attachID); err != nil {
+	//
+	// ADR-066 D5.5 (FR-045): only an EMPTY agent archive is hydrated. An
+	// archive with ≥ 1 line is the live record of the session — rebuilding
+	// it from the UI transcript was the verified mechanism that dropped
+	// every tool result and reset Skip on each reopen (US-15).
+	if h.agentLoop.AgentArchiveNonEmpty(attachID) {
+		slog.Debug("ws: attach_session: agent archive non-empty; hydration skipped",
+			"session_id", attachID)
+	} else if err := h.agentLoop.HydrateAgentHistoryFromTranscript(attachID); err != nil {
 		slog.Warn("ws: attach_session: hydrate agent history failed",
 			"session_id", attachID, "error", err)
 		sidCopy := attachID
@@ -4292,6 +4310,37 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 			}
 			sendConnGenFrame(wc, string(generated.WsFrameTypeTaskRunStatus), runF)
 
+		case agent.EventKindToolResultProjection:
+			// ADR-066 D5 / FR-022 (T066-12): a tool result this session already
+			// received was emptied in place in the model's window. Push the
+			// typed tool_result_projection frame so the SPA re-renders the
+			// matching tool call (the mark only under Verbose chat); on reload
+			// the same state arrives as ToolCall.content_state on the
+			// transcript. Session-scoped: same matchesEvent / session-id
+			// contract as tool_call_result (ToolExecEndPayload).
+			p, ok := evt.Payload.(agent.ToolResultProjectionPayload)
+			if !ok || !matchesEvent(p.ChatID, p.SessionID) {
+				continue
+			}
+			projSID := p.SessionID
+			if projSID == "" {
+				projSID = sessionIDForChat(p.ChatID)
+			}
+			projF := generated.ToolResultProjectionFrame{
+				Type:         string(generated.WsFrameTypeToolResultProjection),
+				SessionId:    projSID,
+				ToolCallId:   string(p.ToolCallID),
+				ArchiveLine:  p.ArchiveLine,
+				ContentState: p.ContentState,
+			}
+			if p.Mark != "" {
+				mark := p.Mark
+				projF.Mark = &mark
+			}
+			if producingSID := string(p.ProducingSessionID); producingSID != "" && producingSID != projSID {
+				projF.ProducingSessionId = &producingSID
+			}
+			sendConnGenFrame(wc, string(generated.WsFrameTypeToolResultProjection), projF)
 		case agent.EventKindLLMRequest, agent.EventKindLLMDelta, agent.EventKindLLMResponse,
 			agent.EventKindLLMRetry, agent.EventKindContextCompress,
 			agent.EventKindToolExecSkipped, agent.EventKindSteeringInjected, agent.EventKindFollowUpQueued,

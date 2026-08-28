@@ -16,28 +16,28 @@ func TestGetModelConfig_Found(t *testing.T) {
 	cfg := &Config{
 		Version: CurrentVersion,
 		Providers: []*ModelConfig{
-			{ModelName: "test-model", Model: "openai/gpt-4o", APIKeyRef: "TEST_KEY_1"},
-			{ModelName: "other-model", Model: "anthropic/claude", APIKeyRef: "TEST_KEY_2"},
+			{Provider: "openai", Model: "gpt-4o", APIKeyRef: "TEST_KEY_1"},
+			{Provider: "anthropic", Model: "claude", APIKeyRef: "TEST_KEY_2"},
 		},
 	}
 
-	result, err := cfg.GetModelConfig("test-model")
+	result, err := cfg.GetModelConfig("openai", "gpt-4o")
 	if err != nil {
 		t.Fatalf("GetModelConfig() error = %v", err)
 	}
-	if result.Model != "openai/gpt-4o" {
-		t.Errorf("Model = %q, want %q", result.Model, "openai/gpt-4o")
+	if result.APIKeyRef != "TEST_KEY_1" {
+		t.Errorf("APIKeyRef = %q, want %q", result.APIKeyRef, "TEST_KEY_1")
 	}
 }
 
 func TestGetModelConfig_NotFound(t *testing.T) {
 	cfg := &Config{
 		Providers: []*ModelConfig{
-			{ModelName: "test-model", Model: "openai/gpt-4o", APIKeyRef: "TEST_KEY_1"},
+			{Provider: "openai", Model: "gpt-4o", APIKeyRef: "TEST_KEY_1"},
 		},
 	}
 
-	_, err := cfg.GetModelConfig("nonexistent")
+	_, err := cfg.GetModelConfig("openai", "nonexistent")
 	if err == nil {
 		t.Fatal("GetModelConfig() expected error for nonexistent model")
 	}
@@ -48,7 +48,7 @@ func TestGetModelConfig_EmptyList(t *testing.T) {
 		Providers: []*ModelConfig{},
 	}
 
-	_, err := cfg.GetModelConfig("any-model")
+	_, err := cfg.GetModelConfig("openai", "any-model")
 	if err == nil {
 		t.Fatal("GetModelConfig() expected error for empty model list")
 	}
@@ -57,20 +57,20 @@ func TestGetModelConfig_EmptyList(t *testing.T) {
 func TestGetModelConfig_RoundRobin(t *testing.T) {
 	cfg := &Config{
 		Providers: []*ModelConfig{
-			{ModelName: "lb-model", Model: "openai/gpt-4o-1", APIKeyRef: "TEST_KEY_1"},
-			{ModelName: "lb-model", Model: "openai/gpt-4o-2", APIKeyRef: "TEST_KEY_2"},
-			{ModelName: "lb-model", Model: "openai/gpt-4o-3", APIKeyRef: "TEST_KEY_3"},
+			{Provider: "openai", Model: "gpt-4o", APIBase: "https://lb-1.example", APIKeyRef: "TEST_KEY_1"},
+			{Provider: "openai", Model: "gpt-4o", APIBase: "https://lb-2.example", APIKeyRef: "TEST_KEY_2"},
+			{Provider: "openai", Model: "gpt-4o", APIBase: "https://lb-3.example", APIKeyRef: "TEST_KEY_3"},
 		},
 	}
 
 	// Test round-robin distribution
 	results := make(map[string]int)
 	for range 30 {
-		result, err := cfg.GetModelConfig("lb-model")
+		result, err := cfg.GetModelConfig("openai", "gpt-4o")
 		if err != nil {
 			t.Fatalf("GetModelConfig() error = %v", err)
 		}
-		results[result.Model]++
+		results[result.APIBase]++
 	}
 
 	// Each model should appear roughly 10 times (30 calls / 3 models)
@@ -86,34 +86,34 @@ func TestGetModelConfig_RoundRobinStartsFromFirstMatch(t *testing.T) {
 
 	cfg := &Config{
 		Providers: []*ModelConfig{
-			{ModelName: "lb-model", Model: "openai/gpt-4o-1", APIKeyRef: "TEST_KEY_1"},
-			{ModelName: "lb-model", Model: "openai/gpt-4o-2", APIKeyRef: "TEST_KEY_2"},
-			{ModelName: "lb-model", Model: "openai/gpt-4o-3", APIKeyRef: "TEST_KEY_3"},
+			{Provider: "openai", Model: "gpt-4o", APIBase: "https://lb-1.example", APIKeyRef: "TEST_KEY_1"},
+			{Provider: "openai", Model: "gpt-4o", APIBase: "https://lb-2.example", APIKeyRef: "TEST_KEY_2"},
+			{Provider: "openai", Model: "gpt-4o", APIBase: "https://lb-3.example", APIKeyRef: "TEST_KEY_3"},
 		},
 	}
 
 	wantOrder := []string{
-		"openai/gpt-4o-1",
-		"openai/gpt-4o-2",
-		"openai/gpt-4o-3",
-		"openai/gpt-4o-1",
-		"openai/gpt-4o-2",
+		"https://lb-1.example",
+		"https://lb-2.example",
+		"https://lb-3.example",
+		"https://lb-1.example",
+		"https://lb-2.example",
 	}
 
 	for i, want := range wantOrder {
-		result, err := cfg.GetModelConfig("lb-model")
+		result, err := cfg.GetModelConfig("openai", "gpt-4o")
 		if err != nil {
 			t.Fatalf("GetModelConfig() call %d error = %v", i, err)
 		}
-		if result.Model != want {
-			t.Fatalf("GetModelConfig() call %d model = %q, want %q", i, result.Model, want)
+		if result.APIBase != want {
+			t.Fatalf("GetModelConfig() call %d api_base = %q, want %q", i, result.APIBase, want)
 		}
 	}
 }
 
 // TestGetModelConfig_SkipsUnusableCredentialInFavorOfWorkingSibling is the D3
 // review regression (2026-08-15): several providers[] entries may share one
-// model_name for load balancing, round-robinned by GetModelConfig. Before
+// (provider, model) pair for load balancing, round-robinned by GetModelConfig. Before
 // this fix, an entry whose api_key_ref never resolved stayed in the
 // candidate pool on equal footing with a working sibling — the round-robin
 // counter has no key-awareness, so it could hand the broken entry back to
@@ -134,29 +134,29 @@ func TestGetModelConfig_SkipsUnusableCredentialInFavorOfWorkingSibling(t *testin
 
 	cfg := &Config{
 		Providers: []*ModelConfig{
-			{ModelName: "lb-model", Model: "openai/gpt-4o-bad", APIKeyRef: badRef},
-			{ModelName: "lb-model", Model: "openai/gpt-4o-good", APIKeyRef: goodRef},
+			{Provider: "openai", Model: "gpt-4o", APIBase: "https://lb-bad.example", APIKeyRef: badRef},
+			{Provider: "openai", Model: "gpt-4o", APIBase: "https://lb-good.example", APIKeyRef: goodRef},
 		},
 	}
 
 	for i := range 20 {
-		result, err := cfg.GetModelConfig("lb-model")
+		result, err := cfg.GetModelConfig("openai", "gpt-4o")
 		if err != nil {
 			t.Fatalf("GetModelConfig() call %d error = %v", i, err)
 		}
-		if result.Model != "openai/gpt-4o-good" {
+		if result.APIBase != "https://lb-good.example" {
 			t.Fatalf(
 				"call %d returned %q — round-robin must never select an entry whose credential "+
 					"never resolved when a working sibling exists; a bare upstream 401 naming neither "+
 					"the provider nor the credential would result",
-				i, result.Model,
+				i, result.APIBase,
 			)
 		}
 	}
 }
 
 // TestGetModelConfig_AllUnusableFallsBackToUnfiltered pins the fallback: when
-// NONE of the siblings sharing a model_name are usable, GetModelConfig must
+// NONE of the siblings sharing a (provider, model) pair are usable, GetModelConfig must
 // still return one of them rather than reporting "model not found" — the
 // caller (gateway.go's defaultModelCredentialBlocked) is responsible for
 // reporting the model as blocked, and needs a real ModelConfig (for its
@@ -171,13 +171,13 @@ func TestGetModelConfig_AllUnusableFallsBackToUnfiltered(t *testing.T) {
 
 	cfg := &Config{
 		Providers: []*ModelConfig{
-			{ModelName: "lb-model", Model: "openai/gpt-4o-1", APIKeyRef: ref1},
-			{ModelName: "lb-model", Model: "openai/gpt-4o-2", APIKeyRef: ref2},
+			{Provider: "openai", Model: "gpt-4o", APIBase: "https://lb-1.example", APIKeyRef: ref1},
+			{Provider: "openai", Model: "gpt-4o", APIBase: "https://lb-2.example", APIKeyRef: ref2},
 		},
 	}
 
 	for i := range 10 {
-		result, err := cfg.GetModelConfig("lb-model")
+		result, err := cfg.GetModelConfig("openai", "gpt-4o")
 		if err != nil {
 			t.Fatalf("GetModelConfig() call %d error = %v — must still resolve when all siblings are unusable", i, err)
 		}
@@ -190,8 +190,8 @@ func TestGetModelConfig_AllUnusableFallsBackToUnfiltered(t *testing.T) {
 func TestGetModelConfig_Concurrent(t *testing.T) {
 	cfg := &Config{
 		Providers: []*ModelConfig{
-			{ModelName: "concurrent-model", Model: "openai/gpt-4o-1", APIKeyRef: "TEST_KEY_1"},
-			{ModelName: "concurrent-model", Model: "openai/gpt-4o-2", APIKeyRef: "TEST_KEY_2"},
+			{Provider: "openai", Model: "gpt-4o", APIBase: "https://lb-1.example", APIKeyRef: "TEST_KEY_1"},
+			{Provider: "openai", Model: "gpt-4o", APIBase: "https://lb-2.example", APIKeyRef: "TEST_KEY_2"},
 		},
 	}
 
@@ -204,7 +204,7 @@ func TestGetModelConfig_Concurrent(t *testing.T) {
 	for range goroutines {
 		wg.Go(func() {
 			for range iterations {
-				_, err := cfg.GetModelConfig("concurrent-model")
+				_, err := cfg.GetModelConfig("openai", "gpt-4o")
 				if err != nil {
 					errors <- err
 				}
@@ -229,22 +229,25 @@ func TestModelConfig_Validate(t *testing.T) {
 		{
 			name: "valid config",
 			config: ModelConfig{
-				ModelName: "test",
-				Model:     "openai/gpt-4o",
+				Provider: "openai",
+				Model:    "gpt-4o",
 			},
 			wantErr: false,
 		},
 		{
-			name: "missing model_name",
+			// ADR-067 FR-034: a row is the PAIR, so a row with no provider
+			// half is unroutable — Validate rejects it where `model_name`
+			// used to be the required field.
+			name: "missing provider",
 			config: ModelConfig{
-				Model: "openai/gpt-4o",
+				Model: "gpt-4o",
 			},
 			wantErr: true,
 		},
 		{
 			name: "missing model",
 			config: ModelConfig{
-				ModelName: "test",
+				Provider: "openai",
 			},
 			wantErr: true,
 		},
@@ -276,8 +279,8 @@ func TestConfig_ValidateProviders(t *testing.T) {
 			name: "valid list",
 			config: &Config{
 				Providers: []*ModelConfig{
-					{ModelName: "test1", Model: "openai/gpt-4o"},
-					{ModelName: "test2", Model: "anthropic/claude"},
+					{Provider: "openai", Model: "gpt-4o"},
+					{Provider: "anthropic", Model: "claude-sonnet-4-5"},
 				},
 			},
 			wantErr: false,
@@ -286,12 +289,12 @@ func TestConfig_ValidateProviders(t *testing.T) {
 			name: "invalid entry",
 			config: &Config{
 				Providers: []*ModelConfig{
-					{ModelName: "test1", Model: "openai/gpt-4o"},
-					{ModelName: "", Model: "anthropic/claude"}, // missing model_name
+					{Provider: "openai", Model: "gpt-4o"},
+					{Provider: "", Model: "claude-sonnet-4-5"}, // missing provider half
 				},
 			},
 			wantErr: true,
-			errMsg:  "model_name is required",
+			errMsg:  "provider is required",
 		},
 		{
 			name: "empty list",

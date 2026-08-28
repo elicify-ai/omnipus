@@ -4,10 +4,14 @@
 // Corrected domain model: a provider is a global, single-instance API config.
 // There is exactly ONE config per catalog entry — no "instances", no
 // workspace/agent binding, no "Add another". The only real variant axes are
-// plan (pay-as-you-go vs Coding Plan) and region (intl/china/us). Wire
-// (OpenAI- vs Anthropic-compatible) is NOT a separate provider — one
-// account/key exposes both base URLs; it is an internal config detail
-// surfaced only as an Endpoint-format toggle inside the config Sheet.
+// plan (pay-as-you-go vs Coding Plan) and region (intl/china/us).
+//
+// Catalog source (ADR-068 FR-037 / T068-05): the registry-fed document from
+// GET /api/v1/providers/catalog (src/lib/api.ts::fetchProvidersCatalog), typed
+// as the generated CatalogProvider. There is NO bundled catalog (SC-010).
+// GET /providers returns configured providers only (FR-011a) — no template
+// rows to filter out. The retired refresh-models action is replaced by
+// *Check with my account* (FR-031), wired in T068-27.
 //
 // Implements:
 //   FIX-1  no per-company "Add another…" control
@@ -16,14 +20,13 @@
 //          opens an on-demand picker Sheet (search + catalog grouped by company,
 //          excluding already-configured entries)
 //   FIX-4  real terminology — "Pay-as-you-go API" / "Coding Plan", no "Standard API"
-//   FIX-5  Endpoint-format toggle (OpenAI-compatible / Anthropic-compatible) for
-//          dual-wire catalog entries; muted "Anthropic endpoint" chip on the row
-//   FIX-6  migration: alias / anthropic_id → canonical, self-hosted→group, unknown→generic
+//   FR-011 exact catalog identity — company group when the id is a catalog id,
+//          "Other" otherwise (ADR-067; the alias/self-hosted resolver is deleted)
 //   FR-009 Sheet slide-out for config AND connect (no inline expand)
 //   FR-013 <BrandIcon> + lettermark fallback
 //   FR-014 <BrandDisclaimer> wherever marks appear
 
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Eye,
@@ -48,30 +51,53 @@ import { BrandDisclaimer } from '@/components/ui/brand-disclaimer'
 import {
   fetchProviders,
   configureProvider,
-  refreshProviderModels,
   testProvider,
+  signOutProvider,
+  deleteProvider,
+  getDefaultModel,
+  putDefaultModel,
+  checkEntitlement,
   getErrorMessage,
+  isApiError,
 } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import { PROVIDER_HINTS } from '@/lib/constants'
-import { PLAN_LABELS, REGION_LABELS } from '@/lib/providerLabels'
+import { planLabel, regionLabel } from '@/lib/providerLabels'
+import {
+  catalogEndpointHint,
+  catalogEntryById,
+  catalogGroupName,
+  catalogLabel,
+  catalogLogoSlug,
+  catalogVariantTitle,
+} from '@/lib/catalogDisplay'
 import { providerCatalogMode } from '@/lib/agents/providerCatalog'
+import { providersCatalogQueryOptions } from '@/lib/providersCatalogQuery'
+import { DRAFT_DISCARD_PROMPT, draftCloseDecision, type DraftCloseAction } from '@/hooks/use-draft-guard'
 import { ReAuthDialog } from './ReAuthDialog'
 import { ProviderValidationBanner } from '@/components/providers/ProviderValidationBanner'
-import { PROVIDER_CATALOG } from '@/lib/generated/providerCatalog'
-import { resolveCatalogEntry } from '@/lib/providerMigration'
-import { ProviderRow } from './ProviderRow'
-import { ProviderPickerSheet } from './ProviderPickerSheet'
-import type { CatalogGroup } from './ProviderPickerSheet'
+import { ProviderRow, cliKindOf, isEntitlementEligible } from './ProviderRow'
+import { SignInDialog } from '@/components/providers/SignInDialog'
+import { ManageSignInDialog } from '@/components/providers/ManageSignInDialog'
+import { ReSignInDialog } from '@/components/providers/ReSignInDialog'
+import { DefaultModelCard } from './DefaultModelCard'
+import { RemoveProviderDialog } from './RemoveProviderDialog'
+import { ProviderPicker, type PickerSelection } from '@/components/providers/ProviderPicker'
+import type { ProviderDetailSelection } from '@/components/providers/ProviderDetailPanel'
+import { USABLE_PROVIDER_STATUSES } from '@/lib/providerStatus'
 import type { ProviderValidation, Provider } from '@/lib/api/generated/openapi-types'
-import type { ProviderCatalogEntry } from '@/lib/api/generated/openapi-types'
+import type {
+  CatalogProvider,
+  DefaultModelUpdateRequest,
+  ProviderUpdateRequest,
+  EntitlementResponse,
+} from '@/lib/api/generated/openapi-types'
 
 // A pending provider edit captured before the re-auth prompt; replayed once the
 // consent token is minted. `id` is the id submitted to the PUT (resolveSubmitId).
 // `draftKey` is the canonical per-provider draft-state key (sheetDraftKey) —
 // carried through so the mutation's success/close handlers clear the SAME key
-// the Sheet read from, even when `id` diverges from it (alias / anthropic_id
-// storage, or the connect-mode endpoint-format toggle). `key` carries an
+// the Sheet read from. `key` carries an
 // API-key change (empty string = no key change); `models` carries a manual
 // model-slug catalogue replacement (undefined = leave the catalogue unchanged).
 type PendingProviderChange = {
@@ -79,51 +105,15 @@ type PendingProviderChange = {
   draftKey: string
   key: string
   models?: string[]
+  /** Custom-endpoint pair (FR-037) — set only for a Custom endpoint row. */
+  custom?: Pick<ProviderUpdateRequest, 'api_base' | 'protocol'>
 }
 
 // The item shown in the Sheet — either an existing configured provider (configure
-// mode) or a catalog entry for first-time setup (connect mode). `viaAnthropicId`
-// (configure mode only) is threaded from resolveCatalogEntry at the point the
-// Sheet was opened — the single source of truth for whether the stored
-// provider.id is the entry's primary id or its anthropic_id sibling, so the
-// read-only endpoint-format display doesn't need to re-derive it.
+// mode) or a catalog entry for first-time setup (connect mode).
 type SheetTarget =
-  | { mode: 'configure'; provider: Provider; entry?: ProviderCatalogEntry; viaAnthropicId?: boolean }
-  | { mode: 'connect'; entry: ProviderCatalogEntry }
-
-// Which endpoint protocol a dual-wire catalog entry gets configured under
-// (FIX-5). 'openai' → entry.id (default). 'anthropic' → entry.anthropic_id.
-type EndpointFormat = 'openai' | 'anthropic'
-
-// A catalog entry known to expose an Anthropic-compatible sibling endpoint —
-// narrows `anthropic_id` from optional to required so callers (the toggle,
-// the read-only configure-mode display) don't need to re-check it.
-type DualWireCatalogEntry = ProviderCatalogEntry & { anthropic_id: string }
-
-function isDualWire(entry: ProviderCatalogEntry): entry is DualWireCatalogEntry {
-  return !!entry.anthropic_id
-}
-
-// Derive the variant row title from the catalog entry, used ONLY inside a
-// grouped company block (company name is already in the group header there).
-// Format: "<Plan> · <Region>" (region omitted when absent).
-function variantRowTitle(entry: ProviderCatalogEntry): string {
-  const plan = PLAN_LABELS[entry.plan]
-  const region = entry.region ? REGION_LABELS[entry.region] : ''
-  return region ? `${plan} · ${region}` : plan
-}
-
-// Backend seeds ~25 keyless template ModelConfigs (pkg/config/defaults.go)
-// and GET /providers reports ALL of them forever as status:'disconnected'
-// (Provider.yaml: "disconnected" = "no key available or fallback default
-// entry"). Only providers the user actually attempted to configure (a stored
-// key that connected, or one that errored) count as "configured" for the
-// list/grouping/picker-exclusion purposes below — otherwise the empty state
-// is unreachable and the picker wrongly excludes every never-touched
-// template (e.g. OpenAI) on a fresh install.
-function isConfigured(provider: Provider): boolean {
-  return provider.status !== 'disconnected'
-}
+  | { mode: 'configure'; provider: Provider; entry?: CatalogProvider }
+  | { mode: 'connect'; entry: CatalogProvider }
 
 // Fallback display-name chain shared by the Sheet title and row titles when
 // no catalog entry resolved for a provider (e.g. a manual/self-hosted id).
@@ -132,25 +122,20 @@ function displayName(provider: Provider | null | undefined, fallbackId: string):
 }
 
 // Resolve the id used for the outgoing PUT. Configure mode always submits
-// the STORED provider id verbatim — canonicalizing an alias or anthropic_id
-// sibling to the catalog's primary id here would silently fork the
-// persisted config into two entries (the backend PUT matches by exact id and
-// APPENDS on mismatch; there is no provider DELETE). Connect mode resolves
-// the toggle's chosen endpoint id from the catalog entry.
-function resolveSubmitId(target: SheetTarget, endpointFormat: EndpointFormat): string {
-  if (target.mode === 'configure') return target.provider.id
-  const { entry } = target
-  return isDualWire(entry) && endpointFormat === 'anthropic' ? entry.anthropic_id : entry.id
+// the STORED provider id verbatim — the backend PUT matches by exact id and
+// APPENDS on mismatch, so substituting any other id here would silently fork
+// the persisted config into two entries. Connect mode submits the catalog
+// entry's id.
+function resolveSubmitId(target: SheetTarget): string {
+  return target.mode === 'configure' ? target.provider.id : target.entry.id
 }
 
-// The canonical per-provider draft-state key (apiKeys/showKey/draftModels/
-// newModel/saveValidation/endpointFormats) — the catalog entry id when one
-// resolved, else the raw provider/target id. Stable across the connect-mode
-// endpoint-format toggle and across which literal id (canonical, alias, or
-// anthropic_id sibling) a configured provider happens to be stored under, so
-// a typed-but-unsaved key or validation banner never gets stranded under a
-// stale key (BUG: previously keyed by the raw id, which could diverge from
-// the id the mutation's onSuccess cleanup used).
+// The per-provider draft-state key (apiKeys/showKey/draftModels/newModel/
+// saveValidation) — the catalog entry id when one resolved, else the raw
+// provider/target id. Under ADR-067's exact identity (FR-011) a resolved entry
+// id IS the stored id, so this key and resolveSubmitId always agree and a
+// typed-but-unsaved key or validation banner can never be stranded under a
+// stale key by the mutation's onSuccess cleanup.
 function sheetDraftKey(target: SheetTarget): string {
   if (target.mode === 'configure') return target.entry?.id ?? target.provider.id
   return target.entry.id
@@ -158,8 +143,7 @@ function sheetDraftKey(target: SheetTarget): string {
 
 interface ProviderGroupItem {
   provider: Provider
-  entry?: ProviderCatalogEntry
-  viaAnthropicId?: boolean
+  entry?: CatalogProvider
 }
 
 interface ProviderGroup {
@@ -168,125 +152,28 @@ interface ProviderGroup {
   items: ProviderGroupItem[]
 }
 
-// Group configured providers by company using the migration resolver.
-function groupProviders(providers: Provider[]): ProviderGroup[] {
+// Group configured providers by company over the fetched catalog. Identity is
+// EXACT (ADR-067 FR-011): a row whose id the catalog does not carry — a custom
+// endpoint, or an id the registry no longer knows — groups under "Other".
+function groupProviders(catalog: CatalogProvider[], providers: Provider[]): ProviderGroup[] {
   const order: string[] = []
   const map = new Map<string, ProviderGroup>()
 
   for (const provider of providers) {
-    const { entry, group, viaAnthropicId } = resolveCatalogEntry(provider.id)
+    const entry = catalogEntryById(catalog, provider.id)
+    const group = catalogGroupName(entry)
     if (!map.has(group)) {
       order.push(group)
       map.set(group, {
         group,
-        logoSlug: entry?.logoSlug,
+        logoSlug: entry ? catalogLogoSlug(entry) : undefined,
         items: [],
       })
     }
-    map.get(group)!.items.push({ provider, entry, viaAnthropicId })
+    map.get(group)!.items.push({ provider, entry })
   }
 
   return order.map((g) => map.get(g)!)
-}
-
-// The set of catalog entry ids that are already configured — an id is
-// "configured" if ANY fetched provider.id resolves to that entry (via
-// resolveCatalogEntry, including alias / anthropic_id matches). Used to
-// exclude entries from the picker (FIX-3). Callers MUST pass an
-// already-filtered (isConfigured) list — a raw GET /providers response
-// includes ~25 forever-disconnected template rows that are never
-// "configured" and must not exclude anything from the picker.
-function configuredEntryIds(providers: Provider[]): Set<string> {
-  const ids = new Set<string>()
-  for (const p of providers) {
-    const { entry } = resolveCatalogEntry(p.id)
-    if (entry) ids.add(entry.id)
-  }
-  return ids
-}
-
-// Catalog entries grouped by company, excluding already-configured ids and
-// filtered by a free-text search (company name, label, or alias). Returns
-// ProviderPickerSheet's CatalogGroup shape — owned there (see its doc
-// comment) since this function only builds the data to hand off to the
-// picker's Sheet; nothing in this file reads a group's fields itself.
-function buildCatalogGroups(excludeIds: Set<string>, query: string): CatalogGroup[] {
-  const q = query.trim().toLowerCase()
-  const order: string[] = []
-  const map = new Map<string, CatalogGroup>()
-
-  for (const entry of PROVIDER_CATALOG) {
-    if (excludeIds.has(entry.id)) continue
-    if (q) {
-      const haystack = [entry.company, entry.label, ...(entry.aliases ?? [])]
-        .join(' ')
-        .toLowerCase()
-      if (!haystack.includes(q)) continue
-    }
-    if (!map.has(entry.company)) {
-      order.push(entry.company)
-      map.set(entry.company, {
-        company: entry.company,
-        logoSlug: entry.logoSlug,
-        entries: [],
-      })
-    }
-    map.get(entry.company)!.entries.push(entry)
-  }
-
-  return order.map((c) => map.get(c)!)
-}
-
-// ---------------------------------------------------------------------------
-// Sub-component: Endpoint-format toggle (FIX-5)
-// ---------------------------------------------------------------------------
-
-function EndpointFormatToggle({
-  entry,
-  value,
-  onChange,
-}: {
-  entry: DualWireCatalogEntry
-  value: EndpointFormat
-  onChange: (v: EndpointFormat) => void
-}) {
-  const optionClass = (active: boolean) =>
-    'flex-1 rounded-md border px-2.5 py-1.5 text-xs font-medium transition-colors ' +
-    (active
-      ? 'border-[var(--color-accent)] bg-[var(--color-accent)]/10 text-[var(--color-accent)]'
-      : 'border-[var(--color-border)] text-[var(--color-secondary)] hover:border-[var(--color-muted)]')
-
-  return (
-    <div data-testid={`endpoint-format-toggle-${entry.id}`}>
-      <label className="text-xs font-medium text-[var(--color-muted)] mb-1.5 block">
-        Endpoint format
-      </label>
-      <div className="flex gap-1.5" role="group" aria-label="Endpoint format">
-        <button tabIndex={0}
-          type="button"
-          aria-pressed={value === 'openai'}
-          onClick={() => onChange('openai')}
-          data-testid={`endpoint-format-openai-${entry.id}`}
-          className={optionClass(value === 'openai')}
-        >
-          OpenAI-compatible (default)
-        </button>
-        <button tabIndex={0}
-          type="button"
-          aria-pressed={value === 'anthropic'}
-          onClick={() => onChange('anthropic')}
-          data-testid={`endpoint-format-anthropic-${entry.id}`}
-          className={optionClass(value === 'anthropic')}
-        >
-          Anthropic-compatible
-        </button>
-      </div>
-      <p className="text-xs text-[var(--color-muted)] mt-1.5">
-        Same account and API key; choose the endpoint your tools expect. Anthropic-compatible
-        suits Claude-Code-style clients.
-      </p>
-    </div>
-  )
 }
 
 // ---------------------------------------------------------------------------
@@ -301,20 +188,28 @@ interface ProviderConfigSheetProps {
   setApiKeys: React.Dispatch<React.SetStateAction<Record<string, string>>>
   showKey: Record<string, boolean>
   setShowKey: React.Dispatch<React.SetStateAction<Record<string, boolean>>>
+  /**
+   * Per-draft "what is in the field has already been saved" flag (FR-033,
+   * "saved = clean"). Owned by the parent because the successful-save handler
+   * lives there; reset the moment the operator types again.
+   */
+  keySaved: Record<string, boolean>
+  setKeySaved: React.Dispatch<React.SetStateAction<Record<string, boolean>>>
   draftModels: Record<string, string[]>
   setDraftModels: React.Dispatch<React.SetStateAction<Record<string, string[]>>>
   newModel: Record<string, string>
   setNewModel: React.Dispatch<React.SetStateAction<Record<string, string>>>
   saveValidation: Record<string, ProviderValidation | undefined>
   setSaveValidation: React.Dispatch<React.SetStateAction<Record<string, ProviderValidation | undefined>>>
-  endpointFormats: Record<string, EndpointFormat>
-  setEndpointFormats: React.Dispatch<React.SetStateAction<Record<string, EndpointFormat>>>
   isSaving: boolean
   requestChange: (id: string, draftKey: string, key: string, models?: string[]) => void
-  refreshing: Record<string, boolean>
-  handleRefreshModels: (id: string) => void
   testing: Record<string, boolean>
   handleTest: (id: string) => void
+  /**
+   * ADR-068 US-3: opens the Remove-provider confirmation. Configure mode only —
+   * there is nothing to remove until a provider exists.
+   */
+  onRemove?: (provider: Provider) => void
 }
 
 function ProviderConfigSheet({
@@ -325,21 +220,30 @@ function ProviderConfigSheet({
   setApiKeys,
   showKey,
   setShowKey,
+  keySaved,
+  setKeySaved,
   draftModels,
   setDraftModels,
   newModel,
   setNewModel,
   saveValidation,
   setSaveValidation,
-  endpointFormats,
-  setEndpointFormats,
   isSaving,
   requestChange,
-  refreshing,
-  handleRefreshModels,
   testing,
   handleTest,
+  onRemove,
 }: ProviderConfigSheetProps) {
+  // FR-033: an accidental close (Esc / overlay) with a dirty key does not
+  // close — it asks. This flag is the inline "Discard key?" prompt's state.
+  // Declared before the `!target` guard so the hook order never changes.
+  const [discardPrompt, setDiscardPrompt] = useState(false)
+
+  // A freshly opened sheet never inherits a stale prompt.
+  useEffect(() => {
+    if (!open) setDiscardPrompt(false)
+  }, [open])
+
   if (!target) return null
 
   // Determine the provider id and entry in both modes.
@@ -349,33 +253,28 @@ function ProviderConfigSheet({
   // For the provider object in configure mode.
   const provider = target.mode === 'configure' ? target.provider : null
 
-  // Canonical draft-state key — see sheetDraftKey's doc comment. Stable
-  // across the connect-mode toggle and across alias/anthropic_id storage.
+  // Draft-state key — see sheetDraftKey's doc comment.
   const draftKey = sheetDraftKey(target)
 
   const catalogMode = provider ? providerCatalogMode(provider) : 'live'
   const hint = PROVIDER_HINTS[providerId] ?? 'Enter your API key'
 
-  const sheetTitle = entry ? entry.label : displayName(provider, providerId)
+  const sheetTitle = entry ? catalogLabel(entry) : displayName(provider, providerId)
   const sheetDescription =
     target.mode === 'connect'
       ? 'Enter your API key to connect this provider.'
       : 'Update the API key for this provider.'
 
-  // Endpoint-format toggle (FIX-5, connect mode only — see the read-only
-  // display in the variant-info block for configure mode). Only meaningful
-  // when the entry has a sibling anthropic_id. Default selection: 'openai'
-  // (connect mode always starts from the primary endpoint).
-  const endpointFormat = endpointFormats[draftKey] ?? 'openai'
-  const resolvedSubmitId = resolveSubmitId(target, endpointFormat)
+  const resolvedSubmitId = resolveSubmitId(target)
 
-  // Configure mode: whether the STORED provider is reachable via the
-  // anthropic_id sibling — threaded from resolveCatalogEntry at Sheet-open
-  // time (single source of truth, see SheetTarget's doc comment).
-  const viaAnthropicId = target.mode === 'configure' ? !!target.viaAnthropicId : false
-
-  const handleClose = () => {
+  // The one place the sheet actually goes away. Clears every per-draft scrap,
+  // the typed key included — FR-033 only ever reaches here on a decision that
+  // says the draft may be dropped.
+  const closeAndClear = () => {
+    setDiscardPrompt(false)
     onOpenChange(false)
+    setApiKeys((prev) => ({ ...prev, [draftKey]: '' }))
+    setKeySaved((prev) => ({ ...prev, [draftKey]: false }))
     setSaveValidation((prev) => ({ ...prev, [draftKey]: undefined }))
     setDraftModels((prev) => {
       const rest = { ...prev }
@@ -383,6 +282,28 @@ function ProviderConfigSheet({
       return rest
     })
     setNewModel((prev) => ({ ...prev, [draftKey]: '' }))
+  }
+
+  /**
+   * FR-033's close matrix, applied. `cancel` is the operator saying so out
+   * loud (the Cancel button); `esc` / `overlay` are the accidents that used to
+   * destroy a pasted key silently. The rule itself lives in
+   * `@/hooks/use-draft-guard` so the five spec rows are testable on their own.
+   *
+   * The Sheet's own X button routes through `esc`: it is a close gesture, not
+   * the explicit discard that Cancel is, so it gets the same protection.
+   */
+  const handleClose = (action: DraftCloseAction) => {
+    const decision = draftCloseDecision({
+      value: apiKeys[draftKey],
+      saved: !!keySaved[draftKey],
+      action,
+    })
+    if (decision.prompt) {
+      setDiscardPrompt(true)
+      return
+    }
+    closeAndClear()
   }
 
   const canSave = (() => {
@@ -393,13 +314,37 @@ function ProviderConfigSheet({
   })()
 
   return (
-    <Sheet open={open} onOpenChange={(o) => { if (!o) handleClose() }}>
-      <SheetContent side="right" widthClass="w-[90vw] sm:max-w-lg" className="p-0" data-testid="provider-config-sheet">
+    <Sheet open={open} onOpenChange={(o) => { if (!o) handleClose('esc') }}>
+      <SheetContent
+        side="right"
+        widthClass="w-[90vw] sm:max-w-lg"
+        className="p-0"
+        data-testid="provider-config-sheet"
+        // FR-033: preventDefault keeps Radix from unmounting the sheet, so the
+        // prompt renders inside a sheet that never lost focus (WCAG 3.2.1).
+        onEscapeKeyDown={(e) => {
+          e.preventDefault()
+          if (discardPrompt) {
+            setDiscardPrompt(false)
+            return
+          }
+          handleClose('esc')
+        }}
+        // Deliberately onPointerDownOutside, NOT onInteractOutside: the latter
+        // also fires on focus-outside, which is exactly what happens when the
+        // re-auth dialog opens on top of the sheet — the operator never touched
+        // the overlay, so it must not be read as a dismissal.
+        onPointerDownOutside={(e) => {
+          e.preventDefault()
+          if (discardPrompt) return
+          handleClose('overlay')
+        }}
+      >
         <SheetHeader className="px-6 pr-14">
           <div className="flex items-center gap-2 min-w-0">
             {entry && (
               <BrandIcon
-                slug={entry.logoSlug}
+                slug={catalogLogoSlug(entry)}
                 size={20}
                 decorative
               />
@@ -410,12 +355,8 @@ function ProviderConfigSheet({
         <SheetDescription className="px-6 pt-3">{sheetDescription}</SheetDescription>
 
         <div className="px-6 space-y-5 overflow-y-auto pr-1 pt-4">
-          {/* View-only variant info — Plan/Region/Endpoint(+format). Wire is a
-              config detail, not a display row (FIX-5) — the Endpoint-format
-              toggle below is interactive ONLY in connect mode; configure mode
-              shows it here read-only (the backend PUT matches by exact id and
-              APPENDS a new entry on mismatch — there is no provider DELETE,
-              so the format can never be changed after the first connect). */}
+          {/* View-only variant info — Plan/Region/Endpoint, derived from the
+              fetched CatalogProvider (src/lib/catalogDisplay.ts). */}
           {entry && (
             <div
               className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] px-4 py-3 space-y-2"
@@ -428,7 +369,7 @@ function ProviderConfigSheet({
                     className="text-[var(--color-secondary)] font-medium"
                     data-testid="variant-plan"
                   >
-                    {PLAN_LABELS[entry.plan]}
+                    {planLabel(entry.plan)}
                   </span>
                 </div>
                 {entry.region && (
@@ -438,7 +379,7 @@ function ProviderConfigSheet({
                       className="text-[var(--color-secondary)] font-medium"
                       data-testid="variant-region"
                     >
-                      {REGION_LABELS[entry.region]}
+                      {regionLabel(entry.region)}
                     </span>
                   </div>
                 )}
@@ -448,37 +389,11 @@ function ProviderConfigSheet({
                     className="text-[var(--color-secondary)] font-mono text-[11px]"
                     data-testid="variant-endpoint"
                   >
-                    {entry.endpointHint}
+                    {catalogEndpointHint(entry)}
                   </span>
                 </div>
-                {target.mode === 'configure' && isDualWire(entry) && (
-                  <div className="w-full">
-                    <span className="text-[var(--color-muted)] mr-1.5">Endpoint format</span>
-                    <span
-                      className="text-[var(--color-secondary)] font-medium"
-                      data-testid="variant-endpoint-format"
-                    >
-                      {viaAnthropicId ? 'Anthropic-compatible endpoint' : 'OpenAI-compatible endpoint'}
-                    </span>
-                  </div>
-                )}
               </div>
-              {target.mode === 'configure' && isDualWire(entry) && (
-                <p className="text-xs text-[var(--color-muted)]" data-testid="endpoint-format-readonly-note">
-                  Endpoint format is chosen when connecting a provider.
-                </p>
-              )}
             </div>
-          )}
-
-          {/* Endpoint-format toggle — connect mode only, dual-wire entries
-              only (FIX-5). Configure mode shows the read-only field above. */}
-          {target.mode === 'connect' && entry && isDualWire(entry) && (
-            <EndpointFormatToggle
-              entry={entry}
-              value={endpointFormat}
-              onChange={(v) => setEndpointFormats((prev) => ({ ...prev, [draftKey]: v }))}
-            />
           )}
 
           {/* API Key input */}
@@ -491,9 +406,11 @@ function ProviderConfigSheet({
                 id={`api-key-input-${draftKey}`}
                 type={showKey[draftKey] ? 'text' : 'password'}
                 value={apiKeys[draftKey] ?? ''}
-                onChange={(e) =>
+                onChange={(e) => {
                   setApiKeys((prev) => ({ ...prev, [draftKey]: e.target.value }))
-                }
+                  // Typing makes the field dirty again (FR-033).
+                  setKeySaved((prev) => ({ ...prev, [draftKey]: false }))
+                }}
                 placeholder={hint}
                 className="pr-9 font-mono text-xs"
                 autoComplete="off"
@@ -602,23 +519,50 @@ function ProviderConfigSheet({
             />
           )}
 
+          {/* FR-033 inline discard prompt — rendered inside the sheet so the
+              question never steals focus from it (WCAG 3.2.1). */}
+          {discardPrompt && (
+            <div
+              role="alertdialog"
+              aria-labelledby={`discard-key-title-${draftKey}`}
+              aria-describedby={`discard-key-body-${draftKey}`}
+              data-testid="discard-key-prompt"
+              className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] px-4 py-3 space-y-2"
+            >
+              <p
+                id={`discard-key-title-${draftKey}`}
+                className="text-sm font-medium text-[var(--color-secondary)]"
+              >
+                {DRAFT_DISCARD_PROMPT.title}
+              </p>
+              <p id={`discard-key-body-${draftKey}`} className="text-xs text-[var(--color-muted)]">
+                The key you typed has not been saved yet.
+              </p>
+              <div className="flex justify-end gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  autoFocus
+                  onClick={() => setDiscardPrompt(false)}
+                  data-testid="discard-key-keep"
+                >
+                  {DRAFT_DISCARD_PROMPT.cancel}
+                </Button>
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  onClick={closeAndClear}
+                  data-testid="discard-key-discard"
+                >
+                  {DRAFT_DISCARD_PROMPT.confirm}
+                </Button>
+              </div>
+            </div>
+          )}
+
           {/* Footer actions */}
           <div className="flex justify-between gap-2 pt-2">
             <div className="flex gap-2">
-              {provider && catalogMode === 'live' && (
-                <button tabIndex={0}
-                  type="button"
-                  onClick={() => handleRefreshModels(providerId)}
-                  disabled={refreshing[providerId]}
-                  title="Re-fetch the live model list from the provider"
-                  data-testid={`refresh-models-${providerId}`}
-                  className="text-xs text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors disabled:opacity-50"
-                >
-                  {refreshing[providerId] ? (
-                    <ArrowCounterClockwise size={12} className="animate-spin inline" />
-                  ) : 'Refresh models'}
-                </button>
-              )}
               {provider && provider.status === 'connected' && (
                 <button tabIndex={0}
                   type="button"
@@ -632,12 +576,24 @@ function ProviderConfigSheet({
                   ) : 'Test'}
                 </button>
               )}
+              {/* ADR-068 US-3 — destructive, so text tier and far from Save. */}
+              {provider && onRemove && (
+                <button tabIndex={0}
+                  type="button"
+                  onClick={() => onRemove(provider)}
+                  className="text-xs text-[var(--color-muted)] hover:text-[var(--color-error)] transition-colors"
+                  data-testid={`remove-provider-btn-${providerId}`}
+                >
+                  Remove provider
+                </button>
+              )}
             </div>
             <div className="flex gap-2">
               <Button
                 variant="outline"
                 size="sm"
-                onClick={handleClose}
+                onClick={() => handleClose('cancel')}
+                data-testid={`cancel-provider-${providerId}`}
               >
                 Cancel
               </Button>
@@ -683,38 +639,122 @@ export function ProvidersSection() {
   const [sheetTarget, setSheetTarget] = useState<SheetTarget | null>(null)
   const [sheetOpen, setSheetOpen] = useState(false)
 
-  // Picker Sheet state (FIX-3)
+  // Picker Sheet state (FIX-3) — the SHEET is local; what it contains is the
+  // one shared <ProviderPicker> onboarding step 3 renders (ADR-068 FR-021).
   const [pickerOpen, setPickerOpen] = useState(false)
-  const [pickerQuery, setPickerQuery] = useState('')
+
+  // ADR-068 US-3/US-4 state: the Remove confirmation and the default-model
+  // selector, the latter openable from the card or from a row action.
+  const [removeTarget, setRemoveTarget] = useState<Provider | null>(null)
+  const [changingDefault, setChangingDefault] = useState(false)
+  const [defaultFilterId, setDefaultFilterId] = useState<string | undefined>(undefined)
 
   const [apiKeys, setApiKeys] = useState<Record<string, string>>({})
   const [showKey, setShowKey] = useState<Record<string, boolean>>({})
+  // FR-033 "saved = clean": true once the draft under this key has been saved,
+  // cleared the moment the operator types again. Never holds the key itself.
+  const [keySaved, setKeySaved] = useState<Record<string, boolean>>({})
   const [testing, setTesting] = useState<Record<string, boolean>>({})
-  const [refreshing, setRefreshing] = useState<Record<string, boolean>>({})
   const [saveValidation, setSaveValidation] = useState<Record<string, ProviderValidation | undefined>>({})
   const [testValidation, setTestValidation] = useState<Record<string, ProviderValidation | undefined>>({})
   const [draftModels, setDraftModels] = useState<Record<string, string[]>>({})
   const [newModel, setNewModel] = useState<Record<string, string>>({})
-  const [endpointFormats, setEndpointFormats] = useState<Record<string, EndpointFormat>>({})
+
+  // ADR-068 FR-031/T068-27 — "Check with my account", keyed by provider id.
+  const [entitlements, setEntitlements] = useState<Record<string, EntitlementResponse>>({})
+  const [checkingEntitlement, setCheckingEntitlement] = useState<Record<string, boolean>>({})
+  const [entitlementErrors, setEntitlementErrors] = useState<Record<string, string | undefined>>({})
 
   const [pending, setPending] = useState<PendingProviderChange | null>(null)
   const [reauthOpen, setReauthOpen] = useState(false)
+
+  // Sign-in dialog state (ADR-068 §8b, T068-33) — which provider row's
+  // SignInDialog is open, if any.
+  const [signInTarget, setSignInTarget] = useState<{ id: string; label: string } | null>(null)
+  const [signInOpen, setSignInOpen] = useState(false)
+
+  // Manage / re-sign-in dialog state (ADR-068 FR-034, T068-26) — the two
+  // surfaces a sign-in row's Manage action can open once it has connected at
+  // least once: ManageSignInDialog for `signed_in` (account + Sign out),
+  // ReSignInDialog for `expired` `cli_login` rows (static re-sign-in copy,
+  // status-only Check — see ReSignInDialog.tsx's file header for why this is
+  // not just SignInDialog again). An `expired` `device_code` row (no
+  // cli_kind) falls back to the ordinary SignInDialog via handleManage below,
+  // since it genuinely needs a fresh device-code approval.
+  const [manageTarget, setManageTarget] = useState<{ id: string; label: string; accountLabel?: string } | null>(null)
+  const [reSignInTarget, setReSignInTarget] = useState<{ id: string; label: string; cliKind: 'codex' | 'copilot' } | null>(null)
 
   const { data: providers = [], isLoading, isError: providersError } = useQuery({
     queryKey: ['providers'],
     queryFn: fetchProviders,
   })
 
+  // Registry-fed catalog (ADR-068 FR-037). The ETag re-validation cadence
+  // (Settings open + every 15 min) is the shared policy in
+  // providersCatalogQuery.ts — never re-specified at a call site.
+  const {
+    data: catalogDoc,
+    isLoading: catalogLoading,
+    isError: catalogError,
+    refetch: refetchCatalog,
+  } = useQuery(providersCatalogQueryOptions())
+  const catalog = useMemo(() => catalogDoc?.providers ?? [], [catalogDoc])
+
+  // ADR-068 FR-018: the global default model. A fresh install has none and the
+  // GET answers 404 — that is the "not set yet" state, NOT a failure, so it
+  // resolves to null instead of rejecting into an error toast.
+  //
+  // O11: any OTHER failure (5xx, network) is a real fetch failure, not
+  // evidence there is no default — it must NOT render as the same "not set"
+  // copy as a genuine 404, or an operator could act on that false belief and
+  // clobber a default that was there all along. `isError` distinguishes the
+  // two so DefaultModelCard can render its own distinct error state; the
+  // query keeps the package-wide bounded retry (shouldRetryQuery, queryClient.ts)
+  // rather than retrying forever.
+  const {
+    data: defaultModel = null,
+    isLoading: defaultModelLoading,
+    isError: defaultModelError,
+  } = useQuery({
+    queryKey: ['default-model'],
+    queryFn: async () => {
+      try {
+        return await getDefaultModel()
+      } catch (err) {
+        if (isApiError(err) && err.status === 404) return null
+        throw err
+      }
+    },
+  })
+
   const { mutate: applyChange, isPending: isSaving } = useMutation({
-    mutationFn: ({ id, key, token, models }: { id: string; draftKey: string; key: string; token: string; models?: string[] }) =>
-      configureProvider(id, key === '' ? undefined : key, undefined, undefined, token, models),
-    // Destructure `draftKey` (NOT `id`) — the canonical draft-state key set by
+    mutationFn: ({ id, key, token, models, custom }: {
+      id: string
+      draftKey: string
+      key: string
+      token: string
+      models?: string[]
+      custom?: Pick<ProviderUpdateRequest, 'api_base' | 'protocol'>
+    }) => configureProvider(id, key === '' ? undefined : key, undefined, undefined, token, models, custom),
+    // Destructure `draftKey` (NOT `id`) — the draft-state key set by
     // requestChange, so the typed key / validation banner is cleared under the
     // SAME key the Sheet is reading from, regardless of which literal id the
     // PUT actually submitted (BUG #2: previously cleared by mutation `id`,
-    // which can diverge from the draft key on alias / anthropic_id storage).
-    onSuccess: (provider, { draftKey }) => {
+    // which can diverge from the draft key on alias storage).
+    onSuccess: (provider, { draftKey, key }) => {
       queryClient.invalidateQueries({ queryKey: ['providers'] })
+      // FR-031's eviction rule mirrored client-side: a PUT that actually
+      // changed the key invalidates any entitlement result already shown for
+      // this row — the previous "Check with my account" result was made
+      // against a key that no longer applies.
+      if (key !== '') {
+        setEntitlements((prev) => {
+          if (!(provider.id in prev)) return prev
+          const rest = { ...prev }
+          delete rest[provider.id]
+          return rest
+        })
+      }
       const validation = provider.validation
       if (validation?.outcome === 'invalid_key') {
         // invalid_key is the ONE outcome the contract says blocks a usable
@@ -738,6 +778,9 @@ export function ProvidersSection() {
       }
       setPending(null)
       setApiKeys((prev) => ({ ...prev, [draftKey]: '' }))
+      // The draft is now on the server: closing the sheet loses nothing
+      // (FR-033, "saved = clean").
+      setKeySaved((prev) => ({ ...prev, [draftKey]: true }))
     },
     onError: (err: Error) => {
       addToast({ message: getErrorMessage(err, 'Provider save failed'), variant: 'error' })
@@ -745,32 +788,28 @@ export function ProvidersSection() {
     },
   })
 
-  const requestChange = (id: string, draftKey: string, key: string, models?: string[]) => {
+  const requestChange = (
+    id: string,
+    draftKey: string,
+    key: string,
+    models?: string[],
+    custom?: Pick<ProviderUpdateRequest, 'api_base' | 'protocol'>,
+  ) => {
     setSaveValidation((prev) => ({ ...prev, [draftKey]: undefined }))
-    setPending({ id, draftKey, key, models })
+    setPending({ id, draftKey, key, models, custom })
     setReauthOpen(true)
   }
 
   const onReAuthConfirmed = (token: string) => {
     if (!pending) return
-    applyChange({ id: pending.id, draftKey: pending.draftKey, key: pending.key, token, models: pending.models })
-  }
-
-  const handleRefreshModels = async (id: string) => {
-    setRefreshing((prev) => ({ ...prev, [id]: true }))
-    try {
-      const updated = await refreshProviderModels(id)
-      queryClient.invalidateQueries({ queryKey: ['providers'] })
-      if (updated.warning) {
-        addToast({ message: updated.warning, variant: 'error' })
-      } else {
-        addToast({ message: `Model list refreshed (${updated.models?.length ?? 0})`, variant: 'success' })
-      }
-    } catch (err) {
-      addToast({ message: getErrorMessage(err, 'Model refresh failed'), variant: 'error' })
-    } finally {
-      setRefreshing((prev) => ({ ...prev, [id]: false }))
-    }
+    applyChange({
+      id: pending.id,
+      draftKey: pending.draftKey,
+      key: pending.key,
+      token,
+      models: pending.models,
+      custom: pending.custom,
+    })
   }
 
   const handleTest = async (id: string) => {
@@ -794,35 +833,239 @@ export function ProvidersSection() {
     }
   }
 
+  // ── ADR-068 FR-031/T068-27 — "Check with my account" ────────────────────
+  //
+  // A second click on a provider that already has a result is a no-op: FR-031's
+  // own client-side half of "cached" is never re-asking the server for a
+  // result it is already holding (the backend's own process-cache is what the
+  // Go integration test's "cached: true, no upstream request" covers).
+  //
+  // Edge case (docs/internal/specs/adr-068-providers-ux-spec.md, "Deleting a
+  // provider while Check is in flight"): the in-flight result is discarded on
+  // arrival if the row no longer exists. `providers` here is a closure over
+  // the query's last render, which can be stale by the time this resolves —
+  // reading the LIVE cache at completion time is what makes the discard
+  // correct rather than racy.
+  const { mutate: runEntitlementCheck } = useMutation({
+    mutationFn: (id: string) => checkEntitlement(id),
+    onMutate: (id: string) => {
+      setCheckingEntitlement((prev) => ({ ...prev, [id]: true }))
+      setEntitlementErrors((prev) => ({ ...prev, [id]: undefined }))
+    },
+    onSuccess: (result, id) => {
+      setCheckingEntitlement((prev) => ({ ...prev, [id]: false }))
+      const current = queryClient.getQueryData<Provider[]>(['providers']) ?? []
+      if (!current.some((p) => p.id === id)) return // discarded — row no longer exists
+      setEntitlements((prev) => ({ ...prev, [id]: result }))
+    },
+    onError: (err: Error, id: string) => {
+      setCheckingEntitlement((prev) => ({ ...prev, [id]: false }))
+      setEntitlementErrors((prev) => ({ ...prev, [id]: getErrorMessage(err, 'could not fetch upstream model list') }))
+    },
+  })
+
+  const handleCheckEntitlement = (id: string) => {
+    if (entitlements[id]) return // already have a result — no new request (FR-031's DoD)
+    runEntitlementCheck(id)
+  }
+
   const openConfigureSheet = (provider: Provider) => {
-    const { entry, viaAnthropicId } = resolveCatalogEntry(provider.id)
-    setSheetTarget({ mode: 'configure', provider, entry, viaAnthropicId })
+    const entry = catalogEntryById(catalog, provider.id)
+    setSheetTarget({ mode: 'configure', provider, entry })
     setSheetOpen(true)
   }
 
-  const openConnectSheet = (entry: ProviderCatalogEntry) => {
+  const openConnectSheet = (entry: CatalogProvider) => {
     setSheetTarget({ mode: 'connect', entry })
     setSheetOpen(true)
   }
 
   const openPicker = () => {
-    setPickerQuery('')
     setPickerOpen(true)
   }
 
-  // Only providers the user actually attempted to configure — see
-  // isConfigured's doc comment (backend seeds ~25 forever-disconnected
-  // template rows that must never appear as "configured").
-  const configuredProviders = useMemo(() => providers.filter(isConfigured), [providers])
-  const groups = groupProviders(configuredProviders)
-  const hasConfigured = configuredProviders.length > 0
+  const openSignInDialog = (id: string, label: string) => {
+    setSignInTarget({ id, label })
+    setSignInOpen(true)
+  }
 
-  const excludeIds = useMemo(() => configuredEntryIds(configuredProviders), [configuredProviders])
-  const catalogGroups = useMemo(
-    () => buildCatalogGroups(excludeIds, pickerQuery),
-    [excludeIds, pickerQuery],
-  )
-  const allConfigured = excludeIds.size >= PROVIDER_CATALOG.length
+  const { mutate: doSignOut, isPending: isSigningOut } = useMutation({
+    mutationFn: (id: string) => signOutProvider(id),
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ['providers'] })
+      if (result.success) {
+        addToast({ message: 'Signed out', variant: 'success' })
+        // Close the Manage dialog on a real success — a failure leaves it
+        // open (with the error toast) so the operator can retry.
+        setManageTarget(null)
+      } else {
+        addToast({ message: result.error ?? 'Sign out failed', variant: 'error' })
+      }
+    },
+    onError: (err: Error) => {
+      addToast({ message: getErrorMessage(err, 'Sign out failed'), variant: 'error' })
+    },
+  })
+
+  // ADR-068 FR-034 — the Manage action for a sign-in row that has connected
+  // at least once. `signed_in` opens the account/sign-out view; `expired`
+  // opens the status-only re-sign-in dialog for cli_login rows (codex-cli,
+  // github-copilot) or, for a device_code row (openai-chatgpt/xai — no
+  // cli_kind), falls back to a fresh SignInDialog since an expired
+  // device-code session needs a brand new approval, not a status re-check.
+  const handleManage = (provider: Provider, label: string) => {
+    const entry = catalogEntryById(catalog, provider.id)
+    if (provider.status === 'signed_in') {
+      setManageTarget({ id: provider.id, label, accountLabel: provider.account_label })
+      return
+    }
+    if (provider.status === 'expired') {
+      const cliKind = cliKindOf(provider, entry)
+      if (cliKind) {
+        setReSignInTarget({ id: provider.id, label, cliKind })
+      } else {
+        openSignInDialog(provider.id, label)
+      }
+      return
+    }
+    // Defensive fallback: signInActionLabel() maps `connected`/
+    // `unknown-provider` to "Manage" too for exhaustiveness, but a sign-in
+    // row never actually carries either status. Route to the ordinary
+    // sign-in flow rather than leaving the click inert.
+    openSignInDialog(provider.id, label)
+  }
+
+  // ── ADR-068 US-3 — removal ────────────────────────────────────────────────
+  //
+  // There is no Undo and no client-side retention of the key (FR-017): the
+  // success toast carries a message and NOTHING else, and the only follow-up
+  // request is the refetch of the two queries the removal invalidated. The
+  // DELETE response is authoritative for the post-removal state (FR-012), so
+  // the dialog closes on it rather than on an optimistic guess.
+  const { mutate: removeProvider, isPending: isRemoving } = useMutation({
+    mutationFn: ({ id, newDefault }: { id: string; newDefault?: DefaultModelUpdateRequest }) =>
+      deleteProvider(id, newDefault),
+    onSuccess: (result, { id }) => {
+      setRemoveTarget(null)
+      setSheetOpen(false)
+      queryClient.invalidateQueries({ queryKey: ['providers'] })
+      if (result.default_changed) {
+        queryClient.invalidateQueries({ queryKey: ['default-model'] })
+      }
+      // The row is gone — its stale entitlement bookkeeping goes with it
+      // (the process-side cache eviction is the server's; this is ours).
+      setEntitlements((prev) => {
+        if (!(id in prev)) return prev
+        const rest = { ...prev }
+        delete rest[id]
+        return rest
+      })
+      setEntitlementErrors((prev) => {
+        if (!(id in prev)) return prev
+        const rest = { ...prev }
+        delete rest[id]
+        return rest
+      })
+      addToast({ message: 'Provider removed', variant: 'success' })
+    },
+    onError: (err: Error) => {
+      addToast({ message: getErrorMessage(err, 'Could not remove the provider'), variant: 'error' })
+    },
+  })
+
+  // ── ADR-068 US-4 — the default model ─────────────────────────────────────
+  const { mutate: saveDefaultModel, isPending: isSavingDefault } = useMutation({
+    mutationFn: (pair: DefaultModelUpdateRequest) => putDefaultModel(pair),
+    onSuccess: () => {
+      setChangingDefault(false)
+      setDefaultFilterId(undefined)
+      queryClient.invalidateQueries({ queryKey: ['default-model'] })
+      // backs_default moves with it, so the rows are stale too.
+      queryClient.invalidateQueries({ queryKey: ['providers'] })
+      addToast({ message: 'Default model updated', variant: 'success' })
+    },
+    onError: (err: Error) => {
+      addToast({ message: getErrorMessage(err, 'Could not change the default model'), variant: 'error' })
+    },
+  })
+
+  // FR-019's row action: the same selector as the card, pre-filtered to one row.
+  const openSetAsDefault = (provider: Provider) => {
+    setDefaultFilterId(provider.id)
+    setChangingDefault(true)
+  }
+
+  // ── The shared picker's selections (FR-021) ───────────────────────────────
+  //
+  // A tile or list row opens the second-level panel and comes back through
+  // `handleProviderConfirm`; only Recent and Custom settle anything here.
+  const handlePickerSelect = (picked: PickerSelection) => {
+    if (picked.kind === 'recent') {
+      setPickerOpen(false)
+      // Same FR-005 fork as handleProviderConfirm: a sign_in row has no key,
+      // so Recent must not drop it into the API-key Sheet either.
+      const recentEntry = catalogEntryById(catalog, picked.provider.id)
+      if (recentEntry?.auth_methods.includes('sign_in')) {
+        openSignInDialog(
+          picked.provider.id,
+          catalogVariantTitle(recentEntry),
+        )
+        return
+      }
+      openConfigureSheet(picked.provider)
+      return
+    }
+    if (picked.kind === 'custom') {
+      // The Custom endpoint panel already collected everything the PUT needs —
+      // id, base URL, protocol and key — so this goes straight to the re-auth
+      // gate rather than through a second form that would re-ask for the key.
+      setPickerOpen(false)
+      requestChange(picked.draft.id, picked.draft.id, picked.draft.api_key, undefined, {
+        api_base: picked.draft.api_base,
+        protocol: picked.draft.protocol,
+      })
+    }
+  }
+
+  // ADR-068 FR-005: the detail panel's own *Sign in* button, which resolves a
+  // company + sign-in method to ONE catalog id (openai-chatgpt / codex-cli /
+  // github-copilot). Without this the button renders and does nothing.
+  const handlePickerSignIn = (providerId: string) => {
+    const entry = catalog.find((c) => c.id === providerId)
+    setPickerOpen(false)
+    openSignInDialog(providerId, entry ? catalogLabel(entry) : providerId)
+  }
+
+  // The panel resolved plan x region x auth method to ONE catalog id.
+  //
+  // `sign_in` lands here too and opens the same sheet: the Settings sign-in
+  // panel is T068-26's deliverable and replaces this sheet's body for those
+  // rows. Routing it to the provider's own sheet keeps the seam visible
+  // instead of leaving *Continue* inert.
+  const handleProviderConfirm = (confirmed: ProviderDetailSelection) => {
+    const entry = catalog.find((c) => c.id === confirmed.providerId)
+    setPickerOpen(false)
+    if (!entry) return
+    // ADR-068 FR-005: a catalog row offering sign_in (openai-chatgpt /
+    // codex-cli / github-copilot) opens the SignInDialog directly — there is
+    // no key to type, so routing it to the API-key connect Sheet would leave
+    // the user staring at a field they cannot fill.
+    if (entry.auth_methods.includes('sign_in')) {
+      openSignInDialog(entry.id, catalogLabel(entry))
+      return
+    }
+    if (confirmed.apiKey) {
+      setApiKeys((prev) => ({ ...prev, [entry.id]: confirmed.apiKey as string }))
+    }
+    openConnectSheet(entry)
+  }
+
+  // GET /providers returns configured providers only (ADR-068 FR-011a).
+  const groups = groupProviders(catalog, providers)
+  const hasConfigured = providers.length > 0
+
+  // FR-019: only a provider that can serve a turn is offered the row action.
+  const canBeDefault = (provider: Provider) => USABLE_PROVIDER_STATUSES.includes(provider.status)
 
   return (
     <div className="space-y-4">
@@ -851,6 +1094,23 @@ export function ProvidersSection() {
         )}
       </div>
 
+      {/* ADR-068 FR-019 — the default-model control lives HERE and nowhere
+          else, and it is the first card on the screen. */}
+      <DefaultModelCard
+        defaultModel={defaultModel}
+        providers={providers}
+        catalog={catalogDoc}
+        status={defaultModelLoading ? 'loading' : defaultModelError ? 'error' : 'ready'}
+        isSaving={isSavingDefault}
+        filterToProviderId={defaultFilterId}
+        changing={changingDefault}
+        onChangingChange={(next) => {
+          setChangingDefault(next)
+          if (!next) setDefaultFilterId(undefined)
+        }}
+        onChange={(pair) => saveDefaultModel(pair)}
+      />
+
       {providersError ? (
         <p className="text-sm text-red-400" data-testid="providers-error">
           Failed to load providers. Please try again.
@@ -871,18 +1131,26 @@ export function ProvidersSection() {
         <div className="space-y-4">
           {groups.map((group) => {
             if (group.items.length === 1) {
-              const { provider, entry, viaAnthropicId } = group.items[0]
-              const title = entry ? entry.label : displayName(provider, provider.id)
+              const { provider, entry } = group.items[0]
+              const title = entry ? catalogLabel(entry) : displayName(provider, provider.id)
               return (
                 <ProviderRow
                   key={provider.id}
                   provider={provider}
                   entry={entry}
-                  viaAnthropicId={viaAnthropicId}
                   title={title}
                   showIcon
                   onConfigure={() => openConfigureSheet(provider)}
+                  onSignIn={() => openSignInDialog(provider.id, title)}
+                  onManage={() => handleManage(provider, title)}
+                  signingIn={signInOpen && signInTarget?.id === provider.id}
                   testValidation={testValidation[provider.id]}
+                  isDefault={defaultModel?.provider === provider.id}
+                  onSetAsDefault={canBeDefault(provider) ? () => openSetAsDefault(provider) : undefined}
+                  onCheckEntitlement={isEntitlementEligible(provider) ? () => handleCheckEntitlement(provider.id) : undefined}
+                  checkingEntitlement={checkingEntitlement[provider.id]}
+                  entitlement={entitlements[provider.id]}
+                  entitlementError={entitlementErrors[provider.id]}
                 />
               )
             }
@@ -911,16 +1179,24 @@ export function ProvidersSection() {
                 </div>
 
                 <div className="space-y-1.5">
-                  {group.items.map(({ provider, entry, viaAnthropicId }) => (
+                  {group.items.map(({ provider, entry }) => (
                     <ProviderRow
                       key={provider.id}
                       provider={provider}
                       entry={entry}
-                      viaAnthropicId={viaAnthropicId}
-                      title={entry ? variantRowTitle(entry) : displayName(provider, provider.id)}
+                      title={entry ? catalogVariantTitle(entry) : displayName(provider, provider.id)}
                       showIcon={false}
                       onConfigure={() => openConfigureSheet(provider)}
+                      onSignIn={() => openSignInDialog(provider.id, entry ? catalogVariantTitle(entry) : displayName(provider, provider.id))}
+                      onManage={() => handleManage(provider, entry ? catalogVariantTitle(entry) : displayName(provider, provider.id))}
+                      signingIn={signInOpen && signInTarget?.id === provider.id}
                       testValidation={testValidation[provider.id]}
+                      isDefault={defaultModel?.provider === provider.id}
+                      onSetAsDefault={canBeDefault(provider) ? () => openSetAsDefault(provider) : undefined}
+                      onCheckEntitlement={isEntitlementEligible(provider) ? () => handleCheckEntitlement(provider.id) : undefined}
+                      checkingEntitlement={checkingEntitlement[provider.id]}
+                      entitlement={entitlements[provider.id]}
+                      entitlementError={entitlementErrors[provider.id]}
                     />
                   ))}
                 </div>
@@ -949,19 +1225,39 @@ export function ProvidersSection() {
         </div>
       )}
 
-      {/* Provider picker Sheet (FIX-3) */}
-      <ProviderPickerSheet
-        open={pickerOpen}
-        onOpenChange={setPickerOpen}
-        query={pickerQuery}
-        onQueryChange={setPickerQuery}
-        groups={catalogGroups}
-        allConfigured={allConfigured}
-        onSelect={(entry) => {
-          setPickerOpen(false)
-          openConnectSheet(entry)
-        }}
-      />
+      {/* Provider picker Sheet (FIX-3) — the sheet is Settings' own container;
+          its contents are the ONE shared picker (ADR-068 FR-021). */}
+      <Sheet open={pickerOpen} onOpenChange={setPickerOpen}>
+        <SheetContent
+          side="right"
+          widthClass="w-[90vw] sm:max-w-lg"
+          className="flex h-full flex-col p-0"
+          data-testid="provider-picker-sheet"
+        >
+          <SheetHeader className="px-6 pr-14">
+            <SheetTitle>Connect a provider</SheetTitle>
+          </SheetHeader>
+          <SheetDescription className="px-6 pt-2">
+            Pick the provider whose key or account you want to use.
+          </SheetDescription>
+          <div className="flex-1 overflow-y-auto px-6 py-4">
+            <ProviderPicker
+              data-testid="settings-provider-picker"
+              catalog={catalogDoc}
+              configured={providers}
+              status={catalogLoading ? 'loading' : catalogError ? 'error' : 'ready'}
+              onRetry={() => { void refetchCatalog() }}
+              onSelect={handlePickerSelect}
+              onProviderConfirm={handleProviderConfirm}
+              onSignIn={handlePickerSignIn}
+              autoFocus={false}
+            />
+            {/* FR-014: brand marks are rendered above, so the disclaimer rides
+                with them. */}
+            <BrandDisclaimer className="mt-4" />
+          </div>
+        </SheetContent>
+      </Sheet>
 
       {/* Provider config/connect Sheet */}
       <ProviderConfigSheet
@@ -970,7 +1266,7 @@ export function ProvidersSection() {
         onOpenChange={(o) => {
           setSheetOpen(o)
           if (!o) {
-            // Clean up on close — same canonical draft key the Sheet reads
+            // Clean up on close — same draft key the Sheet reads
             // from (sheetDraftKey), so the banner never survives under a
             // stale key (BUG #2, see PendingProviderChange's doc comment).
             if (sheetTarget) {
@@ -982,21 +1278,36 @@ export function ProvidersSection() {
         setApiKeys={setApiKeys}
         showKey={showKey}
         setShowKey={setShowKey}
+        keySaved={keySaved}
+        setKeySaved={setKeySaved}
         draftModels={draftModels}
         setDraftModels={setDraftModels}
         newModel={newModel}
         setNewModel={setNewModel}
         saveValidation={saveValidation}
         setSaveValidation={setSaveValidation}
-        endpointFormats={endpointFormats}
-        setEndpointFormats={setEndpointFormats}
         isSaving={isSaving}
         requestChange={requestChange}
-        refreshing={refreshing}
-        handleRefreshModels={handleRefreshModels}
         testing={testing}
         handleTest={handleTest}
+        onRemove={(provider) => setRemoveTarget(provider)}
       />
+
+      {removeTarget && (
+        <RemoveProviderDialog
+          open
+          onOpenChange={(open) => { if (!open) setRemoveTarget(null) }}
+          provider={removeTarget}
+          displayName={(() => {
+            const entry = catalogEntryById(catalog, removeTarget.id)
+            return entry ? catalogLabel(entry) : displayName(removeTarget, removeTarget.id)
+          })()}
+          otherProviders={providers.filter((p) => p.id !== removeTarget.id)}
+          catalog={catalogDoc}
+          isRemoving={isRemoving}
+          onConfirm={(newDefault) => removeProvider({ id: removeTarget.id, newDefault })}
+        />
+      )}
 
       <ReAuthDialog
         open={reauthOpen}
@@ -1008,6 +1319,45 @@ export function ProvidersSection() {
         description="Re-type your password to change this provider's API key."
         onConfirmed={onReAuthConfirmed}
       />
+
+      {signInTarget && (
+        <SignInDialog
+          open={signInOpen}
+          onOpenChange={(o) => {
+            setSignInOpen(o)
+            if (!o) setSignInTarget(null)
+          }}
+          providerId={signInTarget.id}
+          providerLabel={signInTarget.label}
+          onSignedIn={() => {
+            queryClient.invalidateQueries({ queryKey: ['providers'] })
+          }}
+        />
+      )}
+
+      {manageTarget && (
+        <ManageSignInDialog
+          open
+          onOpenChange={(o) => { if (!o) setManageTarget(null) }}
+          providerLabel={manageTarget.label}
+          accountLabel={manageTarget.accountLabel}
+          onSignOut={() => doSignOut(manageTarget.id)}
+          signingOut={isSigningOut}
+        />
+      )}
+
+      {reSignInTarget && (
+        <ReSignInDialog
+          open
+          onOpenChange={(o) => { if (!o) setReSignInTarget(null) }}
+          providerId={reSignInTarget.id}
+          providerLabel={reSignInTarget.label}
+          cliKind={reSignInTarget.cliKind}
+          onSignedIn={() => {
+            queryClient.invalidateQueries({ queryKey: ['providers'] })
+          }}
+        />
+      )}
     </div>
   )
 }

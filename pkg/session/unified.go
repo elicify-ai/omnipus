@@ -1440,11 +1440,92 @@ func (us *UnifiedStore) UpdateToolCallStatusAndResult(
 	durationMS int64,
 	result map[string]any,
 ) (found bool, err error) {
-	if validationErr := validateSessionID(sessionID); validationErr != nil {
-		return false, validationErr
-	}
 	if toolCallID == "" {
 		return false, nil
+	}
+	n, err := us.rewriteTranscriptToolCalls(sessionID, map[ToolCallID]func(*ToolCall){
+		toolCallID: func(tc *ToolCall) {
+			tc.Status = status
+			tc.DurationMS = durationMS
+			if result != nil {
+				tc.Result = result
+			}
+		},
+	}, "update tool call status")
+	return n > 0, err
+}
+
+// ToolCallProjectionUpdate is one transcript-side projection change (ADR-066
+// D5, FR-022): the tool call identified by ToolCallID gets ContentState and
+// Result replaced wholesale. Result nil CLEARS the field (unlike
+// UpdateToolCallStatusAndResult's "nil leaves it alone"), because this type
+// is also the shape UpdateToolCallProjections hands back for the PREVIOUS
+// state — and a failed call's previous Result is legitimately nil (its
+// reason lives in Error). Round-tripping the previous values through the
+// same method is how an aborted turn puts the transcript back (turn.go's
+// restoreSession).
+type ToolCallProjectionUpdate struct {
+	ToolCallID   ToolCallID
+	ContentState string
+	Result       map[string]any
+}
+
+// UpdateToolCallProjections applies every update to the LAST transcript entry
+// carrying each update's ToolCallID, in one read-modify-rewrite of
+// transcript.jsonl (the D5 emptying pass empties several results at once;
+// one rewrite per result would be quadratic in the transcript). It returns,
+// for every update that found its record, the record's PREVIOUS
+// ContentState and Result so the caller can revert on abort. Updates whose
+// id matches no record are silently skipped (same found=false semantics as
+// UpdateToolCallStatus — see its doc comment for the race window that makes
+// that a no-op rather than an error). Returns a non-nil error only on I/O
+// failure.
+func (us *UnifiedStore) UpdateToolCallProjections(
+	sessionID string,
+	updates []ToolCallProjectionUpdate,
+) (previous []ToolCallProjectionUpdate, err error) {
+	if len(updates) == 0 {
+		return nil, nil
+	}
+	// The mutators run sequentially under the session lock inside
+	// rewriteTranscriptToolCalls, so appending to previous needs no guard.
+	mutators := make(map[ToolCallID]func(*ToolCall), len(updates))
+	for _, u := range updates {
+		if u.ToolCallID == "" {
+			continue
+		}
+		mutators[u.ToolCallID] = func(tc *ToolCall) {
+			previous = append(previous, ToolCallProjectionUpdate{
+				ToolCallID:   tc.ID,
+				ContentState: tc.ContentState,
+				Result:       tc.Result,
+			})
+			tc.ContentState = u.ContentState
+			tc.Result = u.Result
+		}
+	}
+	if _, err := us.rewriteTranscriptToolCalls(sessionID, mutators, "update tool call projection"); err != nil {
+		return nil, err
+	}
+	return previous, nil
+}
+
+// rewriteTranscriptToolCalls is the shared read-modify-rewrite behind
+// UpdateToolCallStatusAndResult and UpdateToolCallProjections: for every
+// tool_call id in mutators it finds the LAST transcript entry carrying that
+// id, applies the mutator to that ToolCall in place, and rewrites the file
+// once. Returns how many mutators found their record. what names the caller
+// in log/error text.
+func (us *UnifiedStore) rewriteTranscriptToolCalls(
+	sessionID string,
+	mutators map[ToolCallID]func(*ToolCall),
+	what string,
+) (applied int, err error) {
+	if validationErr := validateSessionID(sessionID); validationErr != nil {
+		return 0, validationErr
+	}
+	if len(mutators) == 0 {
+		return 0, nil
 	}
 
 	h := us.lockSession(sessionID)
@@ -1455,9 +1536,9 @@ func (us *UnifiedStore) UpdateToolCallStatusAndResult(
 	if err != nil {
 		if os.IsNotExist(err) {
 			// No transcript at all — nothing to update; treat as no-op.
-			return false, nil
+			return 0, nil
 		}
-		return false, fmt.Errorf("unified_store: update tool call status: read transcript: %w", err)
+		return 0, fmt.Errorf("unified_store: %s: read transcript: %w", what, err)
 	}
 
 	// Split into non-empty lines and parse.
@@ -1472,17 +1553,22 @@ func (us *UnifiedStore) UpdateToolCallStatusAndResult(
 	}
 
 	if len(entries) == 0 {
-		return false, nil
+		return 0, nil
 	}
 
-	// Walk backward to find the last entry carrying a ToolCall with this ID.
-	targetIdx := -1
-	for i := len(entries) - 1; i >= 0; i-- {
+	// Walk backward: the LAST entry carrying an id owns it. Each id is
+	// claimed once; an earlier duplicate of the same id is left alone.
+	targets := make(map[int][]ToolCallID)
+	pending := make(map[ToolCallID]struct{}, len(mutators))
+	for id := range mutators {
+		pending[id] = struct{}{}
+	}
+	for i := len(entries) - 1; i >= 0 && len(pending) > 0; i-- {
 		var e TranscriptEntry
 		if jsonErr := json.Unmarshal(entries[i], &e); jsonErr != nil {
 			// Skip malformed lines.
 			slog.Warn(
-				"unified_store: update tool call status: skipping malformed line",
+				"unified_store: "+what+": skipping malformed line",
 				"session_id",
 				sessionID,
 				"index",
@@ -1492,44 +1578,39 @@ func (us *UnifiedStore) UpdateToolCallStatusAndResult(
 			)
 			continue
 		}
-		matched := false
 		for _, tc := range e.ToolCalls {
-			if tc.ID == toolCallID {
-				matched = true
-				break
+			if _, want := pending[tc.ID]; want {
+				targets[i] = append(targets[i], tc.ID)
+				delete(pending, tc.ID)
 			}
 		}
-		if !matched {
-			continue
-		}
-		targetIdx = i
-		break
 	}
 
-	if targetIdx == -1 {
+	if len(targets) == 0 {
 		// No matching tool-call entry found — no-op, not an error (see doc comment).
-		return false, nil
+		return 0, nil
 	}
 
-	// Unmarshal the target entry, update the matching ToolCall in place, re-marshal.
-	var target TranscriptEntry
-	if jsonErr := json.Unmarshal(entries[targetIdx], &target); jsonErr != nil {
-		return false, fmt.Errorf("unified_store: update tool call status: unmarshal target entry: %w", jsonErr)
-	}
-	for ti := range target.ToolCalls {
-		if target.ToolCalls[ti].ID == toolCallID {
-			target.ToolCalls[ti].Status = status
-			target.ToolCalls[ti].DurationMS = durationMS
-			if result != nil {
-				target.ToolCalls[ti].Result = result
+	// Unmarshal each target entry, update its matching ToolCalls in place, re-marshal.
+	for idx, ids := range targets {
+		var target TranscriptEntry
+		if jsonErr := json.Unmarshal(entries[idx], &target); jsonErr != nil {
+			return 0, fmt.Errorf("unified_store: %s: unmarshal target entry: %w", what, jsonErr)
+		}
+		for _, id := range ids {
+			for ti := range target.ToolCalls {
+				if target.ToolCalls[ti].ID == id {
+					mutators[id](&target.ToolCalls[ti])
+					applied++
+				}
 			}
 		}
+		rewritten, jsonErr := json.Marshal(target)
+		if jsonErr != nil {
+			return 0, fmt.Errorf("unified_store: %s: marshal updated entry: %w", what, jsonErr)
+		}
+		entries[idx] = json.RawMessage(rewritten)
 	}
-	rewritten, jsonErr := json.Marshal(target)
-	if jsonErr != nil {
-		return false, fmt.Errorf("unified_store: update tool call status: marshal updated entry: %w", jsonErr)
-	}
-	entries[targetIdx] = json.RawMessage(rewritten)
 
 	// Rebuild the file contents: one JSON object per line, WITH a trailing
 	// newline after the LAST line too — see MarkLastEntryTruncated's doc
@@ -1546,9 +1627,9 @@ func (us *UnifiedStore) UpdateToolCallStatusAndResult(
 	}
 
 	if writeErr := fileutil.WriteFileAtomic(transcriptPath, buf.Bytes(), 0o600); writeErr != nil {
-		return false, fmt.Errorf("unified_store: update tool call status: write transcript: %w", writeErr)
+		return 0, fmt.Errorf("unified_store: %s: write transcript: %w", what, writeErr)
 	}
-	return true, nil
+	return applied, nil
 }
 
 // ReadTranscript returns all entries from {session-id}/transcript.jsonl.
@@ -1929,15 +2010,40 @@ func (us *UnifiedStore) TruncateHistory(sessionKey string, keepLast int) {
 }
 
 // RollbackAppended implements SessionStore — truncates the on-disk archive to
-// targetArchiveLen physical lines and restores meta.Skip = min(targetSkip,
-// targetArchiveLen). This is the fix for the mid-turn eviction bug: if
-// windowTrim advanced Skip during a live turn and the turn then aborts,
-// restoring Skip to its turn-start value ensures GetHistory returns exactly
-// the pre-turn live window (SC-001, SC-010).
+// targetArchiveLen physical lines, restores meta.Skip = min(targetSkip,
+// targetArchiveLen) and restores the projection state to the turn-start
+// emptiedSet in one meta write (ADR-066 FR-020). This is the fix for the
+// mid-turn eviction bug: if windowTrim advanced Skip during a live turn and
+// the turn then aborts, restoring Skip to its turn-start value ensures
+// GetHistory returns exactly the pre-turn live window (SC-001, SC-010).
 // Callers compute: targetSkip = initialArchiveLen - initialHistoryLength.
-func (us *UnifiedStore) RollbackAppended(sessionKey string, targetArchiveLen, targetSkip int) {
-	if err := us.backend.RollbackAppended(context.Background(), sessionKey, targetArchiveLen, targetSkip); err != nil {
+func (us *UnifiedStore) RollbackAppended(sessionKey string, targetArchiveLen, targetSkip int, emptiedSet memory.ProjectionSet) {
+	if err := us.backend.RollbackAppended(context.Background(), sessionKey, targetArchiveLen, targetSkip, emptiedSet); err != nil {
 		slog.Error("unified_store: rollback appended", "key", sessionKey, "error", err)
+	}
+}
+
+// Projection implements SessionStore.
+func (us *UnifiedStore) Projection(sessionKey string) memory.ProjectionMeta {
+	pm, err := us.backend.GetProjection(context.Background(), sessionKey)
+	if err != nil {
+		slog.Error("unified_store: get projection", "key", sessionKey, "error", err)
+		return memory.ProjectionMeta{Entries: memory.ProjectionSet{}}
+	}
+	return pm
+}
+
+// SetProjectionState implements SessionStore.
+func (us *UnifiedStore) SetProjectionState(sessionKey string, pk memory.ProjectionKey, state memory.ProjectionState) {
+	if err := us.backend.SetProjectionState(context.Background(), sessionKey, pk, state); err != nil {
+		slog.Error("unified_store: set projection state", "key", sessionKey, "error", err)
+	}
+}
+
+// MarkHydrated implements SessionStore.
+func (us *UnifiedStore) MarkHydrated(sessionKey string) {
+	if err := us.backend.MarkHydrated(context.Background(), sessionKey); err != nil {
+		slog.Error("unified_store: mark hydrated", "key", sessionKey, "error", err)
 	}
 }
 
@@ -1952,6 +2058,16 @@ func (us *UnifiedStore) ReadArchive(ctx context.Context, sessionKey string) ([]m
 		return nil, err
 	}
 	return msgs, nil
+}
+
+// ScanArchive streams the archive for sessionKey line by line, stopping when
+// fn returns false — the ADR-066 FR-024 / B-31b path recall by tool_call_id
+// uses so one addressed line never costs a whole-archive load. Indexing is
+// identical to ReadArchive's slice positions (see memory.JSONLStore.ScanArchive).
+func (us *UnifiedStore) ScanArchive(
+	ctx context.Context, sessionKey string, fn func(idx int, msg memory.ArchivedMessage) bool,
+) error {
+	return us.backend.ScanArchive(ctx, sessionKey, fn)
 }
 
 // Save implements SessionStore — ensures all writes are durable.

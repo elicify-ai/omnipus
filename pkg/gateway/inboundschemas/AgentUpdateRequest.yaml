@@ -45,6 +45,16 @@ properties:
       agents. Send an empty string to clear it (fall back to default-provider
       resolution).
     example: "openrouter"
+  context_window_override:
+    type: integer
+    minimum: 1
+    nullable: true
+    description: >
+      Per-agent context-window override in tokens (ADR-066 D2 rung 1, D9).
+      Lower-only — clamped to the model's capability on resolution (a WARN
+      names the agent and the clamp). Send null to clear. Every write
+      triggers a registry reload so the next turn uses the new window.
+    example: 200000
   soul:
     type: string
     minLength: 1

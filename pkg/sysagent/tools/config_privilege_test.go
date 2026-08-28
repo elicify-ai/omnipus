@@ -128,17 +128,17 @@ func TestConfigSet_LegitimateKeysStillWritable(t *testing.T) {
 		}
 	})
 
-	t.Run("agents.defaults.model_name", func(t *testing.T) {
+	t.Run("agents.defaults.default_model.model", func(t *testing.T) {
 		deps, cfg := newTestDeps()
 		result := systools.NewConfigSetTool(deps).Execute(context.Background(), map[string]any{
-			"key":   "agents.defaults.model_name",
+			"key":   "agents.defaults.default_model.model",
 			"value": "glm-4.7",
 		})
 		if result.IsError {
-			t.Fatalf("set_config(agents.defaults.model_name) failed: %s", result.ForLLM)
+			t.Fatalf("set_config(agents.defaults.default_model.model) failed: %s", result.ForLLM)
 		}
-		if cfg.Agents.Defaults.ModelName != "glm-4.7" {
-			t.Errorf("ModelName = %q, want %q", cfg.Agents.Defaults.ModelName, "glm-4.7")
+		if cfg.Agents.Defaults.DefaultModel.Model != "glm-4.7" {
+			t.Errorf("Name = %q, want %q", cfg.Agents.Defaults.DefaultModel.Model, "glm-4.7")
 		}
 	})
 

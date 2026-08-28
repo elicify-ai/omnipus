@@ -63,6 +63,8 @@ channels:
         $ref: '#/components/messages/ToolCallStartFrame'
       ToolCallResultFrame:
         $ref: '#/components/messages/ToolCallResultFrame'
+      ToolResultProjectionFrame:
+        $ref: '#/components/messages/ToolResultProjectionFrame'
       SubagentStartFrame:
         $ref: '#/components/messages/SubagentStartFrame'
       SubagentMessageFrame:
@@ -316,6 +318,17 @@ operations:
       '
     messages:
     - $ref: '#/channels/chat/messages/ToolCallResultFrame'
+  receiveToolResultProjection:
+    action: receive
+    channel:
+      $ref: '#/channels/chat'
+    summary: 'A tool result already delivered to this session was capped or emptied in place in the model''s window (ADR-066 D5).
+      The SPA updates the matching tool call''s rendering (recall mark visible only under Verbose chat); the full content stays
+      in the archive and the gateway tool_results/ store.
+
+      '
+    messages:
+    - $ref: '#/channels/chat/messages/ToolResultProjectionFrame'
   receiveSubagentStart:
     action: receive
     channel:
@@ -826,6 +839,13 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/ToolCallResultFrame'
+    ToolResultProjectionFrame:
+      name: ToolResultProjectionFrame
+      title: tool_result_projection
+      summary: Tool result capped or emptied in place in the model window (server → client, ADR-066 D5).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/ToolResultProjectionFrame'
     SubagentStartFrame:
       name: SubagentStartFrame
       title: subagent_start
@@ -1142,6 +1162,7 @@ components:
       - error
       - tool_call_start
       - tool_call_result
+      - tool_result_projection
       - subagent_start
       - subagent_message
       - subagent_state
@@ -1530,6 +1551,8 @@ components:
       #   config     — an operator-fixable setting (credentials, workspace membership).
       #   ambiguous  — could be either side; the copy must say where to look.
       #   unknown    — genuinely unclassified.
+      #   user       — the user ended the turn themselves (Stop button, shutdown).
+      #                Rendered as a neutral notice, never an error toast (ADR-066 D7).
       x-user-message-attributions:
         - model
         - provider
@@ -1537,6 +1560,7 @@ components:
         - config
         - ambiguous
         - unknown
+        - user
       # ── User-facing copy catalogue (SINGLE SOURCE OF TRUTH) ──────────────────────
       # Every enum value below MUST appear here exactly once, with a non-empty message
       # and an attribution drawn from x-user-message-attributions. Both generators
@@ -1598,6 +1622,26 @@ components:
         model_unavailable:
           message: "The model you picked isn’t available for this turn, so this reply used the previous model. Check the model in Settings."
           attribution: config
+        needs_provider:
+          # ADR-068 FR-046 (2026-08-23 §8b, T068-32) — kept in lockstep with
+          # contracts/components/schemas/LLMError.yaml; see that file's comment.
+          message: "Your sign-in for this provider expired. Sign in again under Settings → Providers."
+          attribution: user
+        model_unassigned:
+          message: "This agent has no model. Pick one in the agent's settings."
+          attribution: config
+        turn_canceled:
+          message: "This turn was stopped before it finished."
+          attribution: user
+        turn_timed_out:
+          message: "The model provider didn’t finish this turn in time, so it was stopped. Retry — if it keeps happening, open Verbose chat for details."
+          attribution: provider
+        context_unrecoverable:
+          message: "We couldn’t fit this turn into the model’s context even after clearing older tool results — that’s a bug on our side, not yours. Start a new session, or open Verbose chat for technical details."
+          attribution: product
+        context_window_unknown:
+          message: "This endpoint did not report a context length for this model. Set it under Settings → Models → Model overrides → Context length."
+          attribution: config
         unknown:
           message: "This turn didn’t finish, and we can’t tell why. Retry — if it keeps happening, open Verbose chat for details, or try a different model."
           attribution: unknown
@@ -1618,6 +1662,12 @@ components:
             - agent_not_configured
             - workspace_unavailable
             - model_unavailable
+            - needs_provider
+            - model_unassigned
+            - turn_canceled
+            - turn_timed_out
+            - context_unrecoverable
+            - context_window_unknown
             - unknown
         message:
           type: string
@@ -1650,6 +1700,8 @@ components:
       #   config     — an operator-fixable setting (credentials, workspace membership).
       #   ambiguous  — could be either side; the copy must say where to look.
       #   unknown    — genuinely unclassified.
+      #   user       — the user ended the turn themselves (Stop button, shutdown).
+      #                Rendered as a neutral notice, never an error toast (ADR-066 D7).
       x-user-message-attributions:
         - model
         - provider
@@ -1657,6 +1709,7 @@ components:
         - config
         - ambiguous
         - unknown
+        - user
       # ── User-facing copy catalogue (SINGLE SOURCE OF TRUTH) ──────────────────────
       # Every enum value below MUST appear here exactly once, with a non-empty message
       # and an attribution drawn from x-user-message-attributions. Both generators
@@ -1718,6 +1771,26 @@ components:
         model_unavailable:
           message: "The model you picked isn’t available for this turn, so this reply used the previous model. Check the model in Settings."
           attribution: config
+        needs_provider:
+          # ADR-068 FR-046 (2026-08-23 §8b, T068-32) — kept in lockstep with
+          # contracts/components/schemas/LLMError.yaml; see that file's comment.
+          message: "Your sign-in for this provider expired. Sign in again under Settings → Providers."
+          attribution: user
+        model_unassigned:
+          message: "This agent has no model. Pick one in the agent's settings."
+          attribution: config
+        turn_canceled:
+          message: "This turn was stopped before it finished."
+          attribution: user
+        turn_timed_out:
+          message: "The model provider didn’t finish this turn in time, so it was stopped. Retry — if it keeps happening, open Verbose chat for details."
+          attribution: provider
+        context_unrecoverable:
+          message: "We couldn’t fit this turn into the model’s context even after clearing older tool results — that’s a bug on our side, not yours. Start a new session, or open Verbose chat for technical details."
+          attribution: product
+        context_window_unknown:
+          message: "This endpoint did not report a context length for this model. Set it under Settings → Models → Model overrides → Context length."
+          attribution: config
         unknown:
           message: "This turn didn’t finish, and we can’t tell why. Retry — if it keeps happening, open Verbose chat for details, or try a different model."
           attribution: unknown
@@ -1738,6 +1811,12 @@ components:
             - agent_not_configured
             - workspace_unavailable
             - model_unavailable
+            - needs_provider
+            - model_unassigned
+            - turn_canceled
+            - turn_timed_out
+            - context_unrecoverable
+            - context_window_unknown
             - unknown
         message:
           type: string
@@ -2060,6 +2139,127 @@ components:
           type: string
           minLength: 1
           description: Human-readable explanation of the duplicate tool-assembly refusal.
+    ToolArgumentRefusal:
+      title: ToolArgumentRefusal
+      description: >
+        ADR-066 D4 / spec FR-016 (T066-01 schema, T066-04 producer): structured tool-result payload returned
+        INSTEAD of executing a tool call whose serialised arguments exceed the builtin success cap
+        (ContextSettings.builtin_success_cap, 64,000 chars by default). The tool does not run, the turn is not
+        fatal, and the model sees the refusal — naming the tool, the size it sent and the cap — so it can retry
+        smaller. ADR-060 family member: inline schema with a const `error` discriminator, one exported *Code
+        constant in pkg/tools/result.go, a single producer routed through marshalWithinBudget, and an entry in
+        scripts/check-no-handwritten-wire-types.sh's KNOWN_STRUCTURED_FAILURE_DISCRIMINATORS register.
+
+
+        toolResult-channel (ADR-060 D2): the refusal IS the tool's result, so it passes the D4 choke point like
+        any other result (US-5.AC3) and flows through ToolCallResultFrame.result live and ToolCall.Error on
+        replay — hence its entry in ToolCallResultFrame.result's oneOf below and in
+        pkg/gateway/tool_result_store.go's allow-list (derived from pkg/tools.AllStructuredFailureCodes()). The
+        SPA detector is stream B5's.
+      type: object
+      required:
+      - error
+      - reason
+      - tool
+      - size_chars
+      - cap_chars
+      additionalProperties: false
+      properties:
+        error:
+          type: string
+          const: tool_arguments_too_large
+          description: Fixed discriminator the SPA and the gateway allow-list match on.
+        reason:
+          type: string
+          minLength: 1
+          description: Human-readable explanation naming the tool, the serialised size and the cap, and telling
+            the model to retry with smaller arguments. The one field marshalWithinBudget may shrink.
+        tool:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: The tool whose call was refused, as the model named it.
+        size_chars:
+          type: integer
+          minimum: 1
+          description: Length in characters of the serialised arguments the model sent.
+        cap_chars:
+          type: integer
+          minimum: 1
+          description: The cap the arguments exceeded — the live builtin success cap at the time of the call
+            (quoted so a retry can target it; the cap is operator-editable without restart).
+    ToolResultRecallMark:
+      title: ToolResultRecallMark
+      description: >
+        ADR-066 D5 (and D4, which shares it) / spec FR-018 (T066-01 schema, T066-04 producer): the short
+        deterministic mark that REPLACES a tool result's content in the model's window when the result is
+        emptied in place (content_state=emptied) or admitted head-and-tail capped (content_state=capped). The
+        archive keeps the full content; recall_conversation(tool_call_id=…, archive_line=…) returns it in pages.
+        One schema, one producer (pkg/agent/recall_mark.go via pkg/tools' marshalWithinBudget), two states —
+        the model gets one vocabulary for "this was bigger than what you see" (ADR-066 §5).
+
+
+        ADR-060 family member: inline schema, const `error` discriminator, *Code constant, register entry. It is
+        NOT a failure — `error` is the family's discriminator key, nothing more; the tool call succeeded and
+        ToolResult.IsError stays false. Channel (ADR-060 D2): the mark lives in the in-memory window (the
+        providers.Message the LLM reads) and reaches the SPA as ToolResultProjectionFrame.mark (string) and, for
+        a D4-capped result, inside the capped tool_call_result text — so its oneOf entry below is defensive
+        over-provisioning on the ToolAssemblyDuplicate precedent (ADR-060 §7 item 3), keeping the union a
+        complete catalogue of the family. Rendered in the chat thread only under Verbose chat (ADR-066 §12).
+      type: object
+      required:
+      - error
+      - tool
+      - tool_call_id
+      - archive_line
+      - size_chars
+      - turn
+      - content_state
+      - hint
+      additionalProperties: false
+      properties:
+        error:
+          type: string
+          const: tool_result_recall_mark
+          description: Fixed discriminator identifying this payload family. Not a failure — see the schema
+            description.
+        tool:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: Tool name, sanitised by the producer to at most 64 printable characters (FR-018).
+        tool_call_id:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: The result's tool_call_id, sanitised the same way. Provider-generated ids are not unique
+            across an archive — pair with archive_line, exactly as ToolResultProjectionFrame does.
+        archive_line:
+          type: integer
+          minimum: 0
+          description: Zero-based index of the tool-result line in the session archive; with tool_call_id it is
+            the key recall_conversation and the meta projection state both use.
+        size_chars:
+          type: integer
+          minimum: 1
+          description: Length in characters of the full result as written to the archive.
+        turn:
+          type: integer
+          minimum: 1
+          description: Turn number = 1 + the count of role:user archive lines preceding the result's line — the
+            same number recall_conversation's turn_range mode addresses.
+        content_state:
+          type: string
+          enum:
+          - capped
+          - emptied
+          description: Which projection the mark stands in for. `full` is never a mark (it is
+            ToolCall.content_state's default and only ever read from the transcript).
+        hint:
+          type: string
+          minLength: 1
+          description: The recall hint — the literal recall_conversation call (tool_call_id + archive_line) that
+            returns the content in pages. The one field marshalWithinBudget may shrink.
     ToolCallResultFrame:
       title: ToolCallResultFrame
       description: >
@@ -2107,7 +2307,7 @@ components:
             Fixed here with a real `oneOf`: the single permissive branch is split into (a) an unconditional
             non-object catch-all (array/string/number/boolean/null — the JSON Schema `required` keyword is
             inapplicable to non-object instances, so no exclusion is needed there) and (b) an object catch-all that
-            excludes every reserved discriminator key the seven $refs below use — `_truncated`, `_marshal_error`,
+            excludes every reserved discriminator key the nine $refs below use (seven at ADR-060 time; ADR-066 T066-01 added ToolArgumentRefusal and ToolResultRecallMark) — `_truncated`, `_marshal_error`,
             `_ref`, `error` — via `not: {anyOf: [{required: [...]}, ...]}`. With that split, exactly one branch
             matches a plain scalar/array/object and exactly one matches a valid named shape; a payload carrying a
             reserved key but failing its own $ref (e.g. PermissionDenied missing `permanent`) matches none and is
@@ -2157,22 +2357,22 @@ components:
                 properties:
                   error:
                     type: string
-            description: 'Catch-all for an ordinary object tool result carrying none of the seven $refs'' reserved
+            description: 'Catch-all for an ordinary object tool result carrying none of the nine $refs'' reserved
               discriminator keys (_truncated, _marshal_error, _ref, error) below.
 
 
               The `error` exclusion is keyed on `error` being a STRING (F13 hardening) — matching the
-              const-string discriminator every one of the four `error`-keyed $refs below actually uses
+              const-string discriminator every one of the six `error`-keyed $refs below actually uses
               (DelegationFailure, FileExistsRefusal, PermissionDenied, ToolAssemblyDuplicate) — not merely on
               `error` being present. `error` is not a reserved key in practice: pkg/agent/approval_transcript.go''s
               settleAskToolCallTranscript and pkg/agent/subturn.go''s spawnSubTurn both persist plain
               map[string]any results carrying a BOOLEAN `"error": true` flag (alongside `text`/`reason`/`permanent`),
-              which is a legitimate ordinary object, not an attempted use of any of the four typed discriminator
+              which is a legitimate ordinary object, not an attempted use of any of the six typed discriminator
               shapes. Excluding on bare presence of `error` made every such object match NO branch of this oneOf
               (excluded from the catch-all, but not shaped like any $ref), so a replayed denied-approval or
               failed-delegation frame was unconditionally schema-invalid. Keying the exclusion on `error` being a
               string lets a boolean-error object fall through to this catch-all (valid, matches only this branch)
-              while a string-`error` object still gets checked against the four typed $refs as before (matches
+              while a string-`error` object still gets checked against the six typed $refs as before (matches
               this branch only if it also fails every $ref, which is correctly rejected as malformed).
 
               '
@@ -2183,6 +2383,8 @@ components:
           - $ref: '#/components/schemas/FileExistsRefusal'
           - $ref: '#/components/schemas/PermissionDenied'
           - $ref: '#/components/schemas/ToolAssemblyDuplicate'
+          - $ref: '#/components/schemas/ToolArgumentRefusal'
+          - $ref: '#/components/schemas/ToolResultRecallMark'
         status:
           type: string
           enum:
@@ -2638,6 +2840,55 @@ components:
           properties:
             llm_error:
               $ref: '#/components/schemas/LLMErrorReplay'
+    ToolResultProjectionFrame:
+      title: ToolResultProjectionFrame
+      description: >
+        Server → client (ADR-066 D5): a tool result already delivered to this
+        session was capped or emptied in place in the model's window. The archive
+        keeps the full content; the SPA updates its rendering of the matching
+        tool call (recall mark shown only under Verbose chat) and, on reload,
+        learns the same state from ToolCall.content_state on the transcript.
+        Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES).
+        Canonical copy — keep in sync by hand with
+        components/schemas/ToolResultProjectionFrame.yaml.
+      type: object
+      required:
+      - type
+      - session_id
+      - tool_call_id
+      - archive_line
+      - content_state
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: tool_result_projection
+        session_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        tool_call_id:
+          type: string
+          minLength: 1
+          description: The projected tool call. Provider-generated ids are not unique across an archive — pair with archive_line.
+        archive_line:
+          type: integer
+          minimum: 0
+          description: Zero-based index of the tool-result line in the session archive; together with tool_call_id it keys the projection state.
+        content_state:
+          type: string
+          enum:
+          - capped
+          - emptied
+          description: The new projection state. "full" is never pushed — it is the default state and is only ever read from the transcript.
+        mark:
+          type: string
+          maxLength: 2048
+          description: The recall mark left in the window (names the tool, the id and the recall_conversation call that restores it). Rendered only under Verbose chat.
+        producing_session_id:
+          type: string
+          minLength: 1
+          description: ADR-057 FR-012/FR-013 — present iff the projection was produced by a delegated child session different from session_id.
     RateLimitFrame:
       title: RateLimitFrame
       description: >

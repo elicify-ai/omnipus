@@ -1,0 +1,39 @@
+type: object
+description: >
+  The `sign_in` variant of OnboardingCompleteRequest.provider (ADR-068,
+  MAJ-014). The vendor CLI holds the login; Omnipus stores no credential, so
+  `api_key` is not a property here and a body carrying one is a schema
+  violation (400 "api_key not allowed with sign_in").
+required:
+  - auth_method
+  - id
+additionalProperties: false
+properties:
+  auth_method:
+    type: string
+    enum:
+      - sign_in
+    description: Discriminator — this variant uses the vendor CLI's saved login.
+    example: sign_in
+  id:
+    type: string
+    minLength: 1
+    maxLength: 64
+    description: >
+      Provider id whose catalog row declares `sign_in` in auth_methods
+      (e.g. "codex-cli", "openai-chatgpt", "github-copilot"); any other id
+      is rejected with 400 "provider does not support sign-in".
+    example: codex-cli
+  model:
+    type: string
+    minLength: 1
+    maxLength: 256
+    description: >
+      The model chosen for the first agent — the sign-in-probe-validated pick
+      from step 3, persisted as agents.defaults.default_model together with
+      the provider id.
+    example: gpt-5.4
+  endpoint:
+    type: string
+    description: Optional custom API base URL, persisted as the provider entry's api_base.
+    example: https://api.example.com/v1

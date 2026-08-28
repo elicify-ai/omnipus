@@ -24,6 +24,13 @@ type StoreReader interface {
 	// Use ReadArchive (not GetHistory) whenever evicted turns must be
 	// reachable — e.g. recall_conversation and the breadcrumb builder (FR-016).
 	ReadArchive(ctx context.Context, sessionKey string) ([]ArchivedMessage, error)
+
+	// GetProjection returns the persisted per-result projection state —
+	// (tool_call_id, archive_line) → capped | emptied — and the D5.5
+	// hydrated flag (ADR-066 FR-019, FR-048). The projection function in
+	// pkg/agent applies this set to a history slice so the live window and a
+	// reload produce byte-identical provider messages.
+	GetProjection(ctx context.Context, sessionKey string) (ProjectionMeta, error)
 }
 
 // StoreWriter defines the mutating persistence operations for session
@@ -40,23 +47,45 @@ type StoreWriter interface {
 	// If keepLast <= 0, all messages are removed.
 	TruncateHistory(ctx context.Context, sessionKey string, keepLast int) error
 
-	// SetHistory replaces all messages in a session with the provided history.
+	// SetHistory fills an EMPTY session with the provided history (ADR-066
+	// D5.5, FR-047). It MUST return an error wrapping ErrArchiveNotEmpty when
+	// the archive already has ≥ 1 line, and MUST NOT touch Skip. It is for
+	// first-time transcript hydration only; it is never a rollback or a
+	// rewrite mechanism (see RollbackAppended).
 	SetHistory(ctx context.Context, sessionKey string, history []providers.Message) error
 
+	// SetProjectionState records capped | emptied for one
+	// (tool_call_id, archive_line) (FR-019). Re-marking a key overwrites it.
+	// TruncateHistory prunes entries whose archive_line < Skip.
+	SetProjectionState(ctx context.Context, sessionKey string, pk ProjectionKey, state ProjectionState) error
+
+	// MarkHydrated sets the one-way hydrated flag (FR-048): the archive was
+	// rebuilt from the UI transcript, so recall by id cannot return the
+	// original result bytes.
+	MarkHydrated(ctx context.Context, sessionKey string) error
+
 	// RollbackAppended truncates the JSONL file to targetLines physical lines,
-	// setting meta.Count = targetLines and restoring meta.Skip = min(targetSkip,
-	// targetLines). The Skip restore is the fix for the mid-turn eviction bug: if
-	// windowTrim advanced Skip during a turn and the turn then aborts,
-	// RollbackAppended MUST restore Skip to its turn-start value so that
-	// GetHistory returns the exact pre-turn live window (SC-001, SC-010).
+	// setting meta.Count = targetLines, restoring meta.Skip = min(targetSkip,
+	// targetLines), and restoring the projection state to emptiedSet — the
+	// turn-start triple (ADR-066 FR-020, US-6.AC5), written atomically. The
+	// Skip restore is the fix for the mid-turn eviction bug: if windowTrim
+	// advanced Skip during a turn and the turn then aborts, RollbackAppended
+	// MUST restore Skip to its turn-start value so that GetHistory returns
+	// the exact pre-turn live window (SC-001, SC-010). The projection restore
+	// is the same fix for mid-turn empties: a retried turn starts from the
+	// un-emptied window.
 	//
 	// Callers compute: targetSkip = initialArchiveLen - initialHistoryLength
-	// (the Skip value at turn start, before any mid-turn evictions).
+	// (the Skip value at turn start, before any mid-turn evictions), and pass
+	// the WHOLE projection set captured at turn start (both states) as
+	// emptiedSet. Entries with archive_line ≥ targetLines are dropped; the
+	// exact merge is documented on JSONLStore.RollbackAppended. A nil set
+	// means "nothing was emptied at turn start".
 	//
-	// If targetLines >= current Count, the method is a no-op. targetSkip is
-	// always clamped: meta.Skip = min(targetSkip, targetLines) so Skip never
-	// exceeds the new Count.
-	RollbackAppended(ctx context.Context, sessionKey string, targetLines, targetSkip int) error
+	// If targetLines >= current Count the file is untouched, but Skip and the
+	// projection state are still restored. targetSkip is always clamped:
+	// meta.Skip = min(targetSkip, targetLines) so Skip never exceeds Count.
+	RollbackAppended(ctx context.Context, sessionKey string, targetLines, targetSkip int, emptiedSet ProjectionSet) error
 
 	// Compact reclaims storage by physically removing logically truncated
 	// data. Backends that do not accumulate dead data may return nil.
