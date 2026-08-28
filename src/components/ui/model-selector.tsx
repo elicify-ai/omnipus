@@ -401,7 +401,7 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
   // fixed the lie and left the swallowed click untouched. Rendering one
   // trigger in every state is what actually fixes it.
 
-  if (catalogStatus === 'error') {
+  if (catalogStatus === 'error' && !manualOverride) {
     const isGhost = variant === 'ghost'
     return (
       <div
@@ -442,6 +442,22 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
             Retry
           </button>
         )}
+        {/* Dead-end fix: Retry alone is not enough when the underlying
+            problem is not transient (e.g. the network path really is down).
+            "Enter manually" hands the operator the same free-text + always-
+            visible "Unresolved" chip every unconstrained picker already
+            uses for an unverified value — an explicit, visibly-flagged
+            escape hatch, not a silent reopening of free text. */}
+        <button
+          type="button"
+          onClick={() => setManualOverride(true)}
+          tabIndex={tabIndex}
+          data-testid={triggerTestId ? `${triggerTestId}-enter-manually` : undefined}
+          className="shrink-0 text-xs font-medium underline underline-offset-2 hover:opacity-80"
+          style={{ color: 'var(--color-muted)' }}
+        >
+          Enter manually
+        </button>
       </div>
     )
   }
@@ -481,7 +497,7 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
   // visible without leaving this screen. This does not reopen the no-free-
   // text rule: retrying can only ever populate the catalogue with real
   // entries, never make an arbitrary slug selectable.
-  if (catalogEmpty && constrainToCatalog && !allowFreeTextWhenEmpty && catalogStatus !== 'loading') {
+  if (catalogEmpty && constrainToCatalog && !allowFreeTextWhenEmpty && !manualOverride && catalogStatus !== 'loading') {
     const isGhost = variant === 'ghost'
     return (
       <div
@@ -521,6 +537,23 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
             Retry
           </button>
         )}
+        {/* Dead-end fix (see the block comment above): the operator decision
+            was "non-catalogue model not selectable", which is sound only
+            while a catalogue CAN be produced. When it genuinely cannot
+            (Retry keeps coming back empty — a down local server does not
+            start itself), "Enter manually" is the deliberate, explicit,
+            visibly-flagged way out — never a silent reopening of free text
+            for a picker whose catalogue is simply working fine. */}
+        <button
+          type="button"
+          onClick={() => setManualOverride(true)}
+          tabIndex={tabIndex}
+          data-testid={triggerTestId ? `${triggerTestId}-enter-manually` : undefined}
+          className="shrink-0 cursor-pointer text-xs font-medium underline underline-offset-2 hover:opacity-80"
+          style={{ color: 'var(--color-muted)' }}
+        >
+          Enter manually
+        </button>
       </div>
     )
   }
@@ -537,7 +570,18 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
     // is always empty here, so EVERY non-empty value is unresolved).
     // A constrained bootstrap picker (onboarding manual provider) never
     // shows the warning — the typed slug becomes the catalogue.
-    const valueUnresolved = showUnresolvedIndicator && !constrainToCatalog && value.trim() !== ''
+    //
+    // `overriding`: constrainToCatalog is still true, but the operator
+    // explicitly clicked "Enter manually" from one of the two dead-end
+    // states above (the catalogue could not be produced at all). Unlike the
+    // bootstrap path (allowFreeTextWhenEmpty, where the typed slug IS the
+    // catalogue by definition), this value is never trusted — it is flagged
+    // "Unresolved" exactly like any other unconstrained free-text pick, and
+    // a "back to catalogue" link lets the operator return once they'd
+    // rather retry instead.
+    const overriding = constrainToCatalog && manualOverride && !allowFreeTextWhenEmpty
+    const valueUnresolved =
+      showUnresolvedIndicator && (!constrainToCatalog || overriding) && value.trim() !== ''
     return (
       <div className="space-y-1">
         <Input
@@ -551,6 +595,18 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
           {...(triggerTestId ? { 'data-testid': triggerTestId } : {})}
           className="font-mono text-sm"
         />
+        {overriding && (
+          <button
+            type="button"
+            onClick={() => setManualOverride(false)}
+            tabIndex={tabIndex}
+            data-testid={triggerTestId ? `${triggerTestId}-use-catalog` : undefined}
+            className="text-[10px] font-medium underline underline-offset-2 hover:opacity-80"
+            style={{ color: 'var(--color-muted)' }}
+          >
+            ← Back to catalogue picker
+          </button>
+        )}
         {valueUnresolved && (
           <p
             id={`${descriptionId}-unresolved`}

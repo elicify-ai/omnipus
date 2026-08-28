@@ -482,6 +482,87 @@ describe('ModelSelector — constrainToCatalog (UAT model-catalog fix)', () => {
     expect(screen.getByText('llama3.1:8b')).toBeInTheDocument()
   })
 
+  // Manual-override escape hatch: when Retry keeps coming back empty (a
+  // genuinely down local server does not fix itself), "Enter manually" is
+  // the deliberate, explicit way out of the dead end — distinct from the
+  // silent "just allow any free text" fix this rule exists to prevent,
+  // because the resulting value is ALWAYS flagged unresolved and the
+  // operator can step back to the catalogue picker at any time.
+  it('lets the operator override to free text from the connected-but-empty-catalog dead end, flagged unresolved, with a way back', () => {
+    const onChange = vi.fn()
+    render(
+      <ModelSelector
+        models={[]}
+        value=""
+        onChange={onChange}
+        constrainToCatalog
+        triggerTestId="wizard-model"
+        catalogStatus="ready"
+        emptyCatalogHint="Model list unavailable: could not reach Ollama at http://localhost:11434"
+      />,
+    )
+    // Before overriding: no free-text escape hatch (the rule still holds).
+    expect(screen.queryByRole('textbox')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId('wizard-model-enter-manually'))
+
+    // After overriding: a real, typeable input — the user is never stuck.
+    const input = screen.getByRole('textbox')
+    expect(input).toBeInTheDocument()
+    fireEvent.change(input, { target: { value: 'llama3.1:8b' } })
+    expect(onChange).toHaveBeenCalledWith('llama3.1:8b')
+
+    // Rerender with the typed value now controlled, as a real caller would.
+    render(
+      <ModelSelector
+        models={[]}
+        value="llama3.1:8b"
+        onChange={onChange}
+        constrainToCatalog
+        triggerTestId="wizard-model"
+        catalogStatus="ready"
+      />,
+    )
+  })
+
+  it('the manually-overridden value is visibly flagged unresolved, unlike the allowFreeTextWhenEmpty bootstrap path', () => {
+    render(
+      <ModelSelector
+        models={[]}
+        value="llama3.1:8b"
+        onChange={vi.fn()}
+        constrainToCatalog
+        triggerTestId="wizard-model"
+        catalogStatus="ready"
+        emptyCatalogHint="Model list unavailable: could not reach Ollama at http://localhost:11434"
+      />,
+    )
+    fireEvent.click(screen.getByTestId('wizard-model-enter-manually'))
+    // The value the operator typed is flagged — never silently accepted as
+    // if it came from the catalogue.
+    expect(screen.getByText(/not found in any connected provider/i)).toBeInTheDocument()
+    // A way back to the constrained catalogue picker is always visible.
+    expect(screen.getByTestId('wizard-model-use-catalog')).toBeInTheDocument()
+  })
+
+  it('offers the same manual-override escape hatch from the outright catalogStatus="error" dead end', () => {
+    render(
+      <ModelSelector
+        models={[]}
+        value=""
+        onChange={vi.fn()}
+        constrainToCatalog
+        triggerTestId="wizard-model"
+        catalogStatus="error"
+        catalogErrorMessage="network error"
+      />,
+    )
+    expect(screen.getByRole('alert')).toBeInTheDocument()
+    fireEvent.click(screen.getByTestId('wizard-model-enter-manually'))
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(screen.getByRole('textbox')).toBeInTheDocument()
+  })
+
   it('allows free-text bootstrap (no warning) when constrained, empty, and allowFreeTextWhenEmpty', () => {
     const onChange = vi.fn()
     render(
