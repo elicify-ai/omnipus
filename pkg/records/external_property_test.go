@@ -7,14 +7,16 @@
 // is invisible here, which is the only way to prove that a consumer with
 // nothing but the exported API can build a working record type.
 //
-// It exists because a consumer could NOT. Property carried an unexported
-// valuePos index with no constructor and no setter, so an externally-built enum
-// property answered EnumPosition with (0, false) for every value: every
-// legitimately declared value was rejected as impermissible, with an error that
-// helpfully listed the permitted values — including the one being rejected.
-// An in-package test could not see it (compare_truthtable_test.go simply
-// assigned p.valuePos, which no consumer can do), which is why the defect
-// survived a full suite.
+// It exists because a consumer could NOT. Property carries an unexported
+// value index with no constructor and no setter, so an externally-built enum
+// property once answered "not in the set" for EVERY value: every legitimately
+// declared value was rejected as impermissible, with an error that helpfully
+// listed the permitted values — including the one being rejected. An in-package
+// test could not see it (an in-package test simply assigned the private index,
+// which no consumer can do), which is why the defect survived a full suite.
+//
+// The index is now keyed by the FOLDED name and the accessor is ResolveEnum,
+// but the hazard is identical and the scan-when-nil fallback is what closes it.
 
 package records_test
 
@@ -87,9 +89,7 @@ func TestExternal_EnumPropertyBuiltOutsideThePackageValidates(t *testing.T) {
 					Type:       records.TypeEnum,
 					RecordType: "widget",
 					Values: []records.EnumValue{
-						{Name: "todo", Position: 0},
-						{Name: "doing", Position: 1},
-						{Name: "done", Position: 2},
+						{Name: "todo"}, {Name: "doing"}, {Name: "done"},
 					},
 				}
 			},
@@ -117,15 +117,22 @@ func TestExternal_EnumPropertyBuiltOutsideThePackageValidates(t *testing.T) {
 			prop := tc.build(t)
 			attach(t, set, prop)
 
-			// The ordering oracle must answer, or nothing downstream can.
-			for i, name := range []string{"todo", "doing", "done"} {
-				pos, ok := prop.EnumPosition(name)
+			// The membership oracle must answer, or nothing downstream can.
+			for _, name := range []string{"todo", "doing", "done"} {
+				v, ok := prop.ResolveEnum(name)
 				if !ok {
-					t.Fatalf("EnumPosition(%q) said the value is not in the set — but the property itself declares it. Permitted values: %v", name, prop.PermittedValues())
+					t.Fatalf("ResolveEnum(%q) said the value is not in the set — but the property itself declares it. Permitted values: %v", name, prop.PermittedValues())
 				}
-				if pos != i {
-					t.Fatalf("FR-010: %q is declared at position %d; EnumPosition said %d", name, i, pos)
+				if v.Name != name {
+					t.Fatalf("ResolveEnum(%q) returned %q; a declared value must resolve to itself", name, v.Name)
 				}
+			}
+
+			// And case-insensitively (FR-011a), through the SAME exported API a
+			// consumer has. The struct-literal property has no built index, so
+			// this is also the scan-when-nil fallback under a folded key.
+			if v, ok := prop.ResolveEnum("DOING"); !ok || v.Name != "doing" {
+				t.Fatalf("FR-011a: `DOING` must resolve to the declared `doing` on an externally-built property; got %+v, %v", v, ok)
 			}
 
 			rec := records.ParseRecord("notes/a.md", []byte("---\ntype: widget\nname: A\nstatus: doing\n---\nbody\n"))
@@ -144,7 +151,7 @@ func TestExternal_EnumPropertyBuiltOutsideThePackageValidates(t *testing.T) {
 			if pv.State != records.StatePresent {
 				t.Fatalf("expected the property to be present, got %s", pv.State)
 			}
-			if len(pv.Values) != 1 || pv.Values[0].Enum.Name != "doing" || pv.Values[0].Enum.Position != 1 {
+			if len(pv.Values) != 1 || pv.Values[0].Enum.Name != "doing" {
 				t.Fatalf("the resolved value must carry the declared enum member; got %+v", pv.Values)
 			}
 		})
@@ -163,11 +170,16 @@ func TestExternal_EnumPropertyStillRejectsUndeclaredValues(t *testing.T) {
 		Values:     []records.EnumValue{{Name: "todo"}, {Name: "done"}},
 	})
 
-	for _, value := range []string{"shipped", "Done", "TODO"} {
+	// `Done` and `TODO` are NOT in this list any more, and that is the ruling
+	// rather than a weakening: FR-011a resolves them to the declared `done` and
+	// `todo`. What FR-011 still refuses is a value that resolves to NOTHING —
+	// including one whose only resemblance is a shared prefix or a stripped
+	// separator, which a sloppier "close enough" match would let through.
+	for _, value := range []string{"shipped", "don", "done!", "to do", "dône"} {
 		rec := records.ParseRecord("notes/a.md", []byte("---\ntype: widget\nname: A\nstatus: "+value+"\n---\n"))
 		rep := records.ValidateRecord(set, rec, records.ValidateOptions{})
 		if rep.Valid() {
-			t.Fatalf("FR-011 / D4: %q is not a declared value (matching is exact-case) and must be rejected", value)
+			t.Fatalf("FR-011 / D4: %q resolves to no declared value and must be rejected — case is the ONLY difference FR-011a forgives", value)
 		}
 		f := rep.Errors()[0]
 		if f.Code != records.FindingEnumNotPermitted {
@@ -181,6 +193,15 @@ func TestExternal_EnumPropertyStillRejectsUndeclaredValues(t *testing.T) {
 		}
 		if len(f.Permitted) != 2 {
 			t.Fatalf("FR-011 requires the permitted set to be named; got %v", f.Permitted)
+		}
+	}
+
+	// The other side of the same rule, so this test cannot pass by rejecting
+	// EVERYTHING: a value differing only by case must be ACCEPTED (FR-011a).
+	for _, value := range []string{"Done", "TODO", "dOnE"} {
+		rec := records.ParseRecord("notes/b.md", []byte("---\ntype: widget\nname: A\nstatus: "+value+"\n---\n"))
+		if rep := records.ValidateRecord(set, rec, records.ValidateOptions{}); !rep.Valid() {
+			t.Fatalf("FR-011a: %q differs from a declared value only by case and must RESOLVE, not be rejected; findings: %v", value, rep.Errors())
 		}
 	}
 }

@@ -45,8 +45,8 @@ properties:
   clients: { type: relation, to: company, many: true }
   owners:  { type: person, many: true }
   seen:    { type: date, many: true }
-  sizes:   { type: number, many: true }
-  fees:    { type: money, many: true }
+  sizes:   { type: decimal, many: true }
+  counts:  { type: integer, many: true }
   tags:    { type: enum, values: [red, green, blue], many: true }
   notes:   { type: text, many: true }
 `
@@ -178,9 +178,11 @@ func TestValidate_DuplicateListValue_RelationIdentityNotSpelling(t *testing.T) {
 //
 //	R-7  a date compares as an instant, so a day and that day's midnight are
 //	     one value.
-//	     a number compares numerically, so trailing zeros are not a difference.
-//	R-6  money compares within one currency, so `10.0 USD` and `10.00 USD` are
-//	     one value — and two currencies are not comparable at all.
+//	R-1  a number compares NUMERICALLY, so trailing zeros are not a difference —
+//	     and `integer` and `decimal` are ONE comparison domain, so `3` and `3.0`
+//	     are one value whichever of the two the property declares.
+//	R-5  an enum resolves case-insensitively (FR-011a), so `green` and `Green`
+//	     are one value rather than two de-facto ones.
 func TestValidate_DuplicateListValue_ValueNotRendering(t *testing.T) {
 	set := loadSet(t, map[string]string{"deal.yaml": dupIdentityFixture})
 
@@ -194,9 +196,11 @@ func TestValidate_DuplicateListValue_ValueNotRendering(t *testing.T) {
 		{"R-7 different instants are different values", "seen", `["2026-01-01", "2026-01-02"]`, 0},
 		{"trailing zeros do not make a second number", "sizes", `["1.0", "1.00"]`, 1},
 		{"different numbers are different values", "sizes", `["1.0", "1.5"]`, 0},
-		{"R-6 one currency, one amount, written two ways", "fees", `["10.0 USD", "USD 10.00"]`, 1},
-		{"R-6 the same amount in two currencies is not a repeat", "fees", `["10.00 USD", "10.00 EUR"]`, 0},
+		{"R-1 an integer written with a fractional zero is the same integer", "counts", `["3", "3.0"]`, 1},
+		{"R-1 different integers are different values", "counts", `["3", "4"]`, 0},
+		{"R-1 an integer written in exponent notation is the same integer", "counts", `["300", "3e2"]`, 1},
 		{"R-5 an enum repeat is still a repeat", "tags", `[green, green]`, 1},
+		{"FR-011a two spellings of one enum value are ONE value, not two", "tags", `[green, Green]`, 1},
 		{"distinct enum values are not a repeat", "tags", `[red, green, blue]`, 0},
 		// THE REGRESSION GUARD FOR THE CHOICE OF ORACLE ENTRY POINT. §8 gives
 		// `text` no scalar `eq` (operatorDefinedForType), so routing this check
@@ -350,30 +354,57 @@ func TestValidate_DuplicateListValue_UnresolvedRelationIsNotADuplicate(t *testin
 	}
 }
 
-// TestValidate_DuplicateListValue_MixedCurrencyIsSilent pins the other refusal
-// the same way, because it is the one a real vault hits: a `many money`
-// property holding two currencies.
+// TestValidate_DuplicateListValue_AnIncomparableElementDoesNotStopTheScan pins
+// the property the retired cross-currency test used to hold, on a subject that
+// still exists.
 //
-// R-6 says money compares only within one currency, so the oracle reports a
-// problem rather than a verdict. Two amounts in two currencies are therefore
-// NOT reported as a repeat — and equally NOT reported as a fault, because
-// nothing about that list is wrong.
-func TestValidate_DuplicateListValue_MixedCurrencyIsSilent(t *testing.T) {
+// It WAS TestValidate_DuplicateListValue_MixedCurrencyIsSilent, and its whole
+// premise — R-6, "money compares only within one currency" — went with the
+// `money` type. The valuable half is not about currency at all: when the oracle
+// REFUSES one element of a list, the scan must carry on and still find the
+// repeat on either side of it. A check that stopped at the first refusal would
+// silently under-report on every list containing one unresolvable link.
+//
+// R-8 supplies the live refusal: a link the resolver cannot place. The middle
+// element here is unplaceable; the first and third name the same company.
+func TestValidate_DuplicateListValue_AnIncomparableElementDoesNotStopTheScan(t *testing.T) {
 	set := loadSet(t, map[string]string{"deal.yaml": dupIdentityFixture})
 
-	body := "---\ntype: deal\nname: A\nfees: [\"10.00 USD\", \"10.00 EUR\", \"10.00 USD\"]\n---\n"
-	got := dupFindings(t, set, body)
+	rec := ParseRecord("notes/deal.md", []byte(
+		"---\ntype: deal\nname: A\nclients: [\"[[Acme]]\", \"[[Ghost]]\", \"[[Acme Inc]]\"]\n---\n"))
 
-	// The two USD amounts ARE one value and must still be found: a refusal
-	// against the EUR element must not stop the scan.
-	if len(got) != 1 {
-		t.Fatalf("the two USD amounts repeat; the EUR one is merely incomparable. want 1 warning, got %d: %v", len(got), got)
+	opts := ValidateOptions{
+		ReportDuplicateListValues: true,
+		ResolveRelation: func(l Wikilink) (string, bool) {
+			// Two spellings of one company; `Ghost` is in no index.
+			switch l.Target {
+			case "Acme", "Acme Inc":
+				return "CO-0001", true
+			}
+			return "", false
+		},
 	}
-	if got[0].ElementIndex != 2 {
-		t.Fatalf("the repeat is at source position 2; the warning said %d", got[0].ElementIndex)
+	rep := ValidateRecord(set, rec, opts)
+
+	var dups []Finding
+	for _, f := range rep.Findings {
+		if f.Code == FindingDuplicateListValue {
+			dups = append(dups, f)
+		}
 	}
-	if !strings.Contains(got[0].Reason, "positions 0 and 2") {
-		t.Fatalf("the repeat is measured against position 0, not against the EUR element at 1; got %q", got[0].Reason)
+	if len(dups) != 1 {
+		t.Fatalf("elements 0 and 2 are one company and must be reported; the refusal at element 1 must not end the scan. want 1 warning, got %d: %v", len(dups), dups)
+	}
+	if dups[0].ElementIndex != 2 {
+		t.Fatalf("the repeat is at source position 2; the warning said %d", dups[0].ElementIndex)
+	}
+	if !strings.Contains(dups[0].Reason, "positions 0 and 2") {
+		t.Fatalf("the repeat is measured against position 0, not against the unplaceable element at 1; got %q", dups[0].Reason)
+	}
+	// And the refusal itself is NOT converted into a conformance fault: an
+	// unresolved link is the index's report to make, not this check's.
+	if !rep.Valid() {
+		t.Fatalf("an unresolved link is not a fault of THIS record; findings: %v", rep.Findings)
 	}
 }
 

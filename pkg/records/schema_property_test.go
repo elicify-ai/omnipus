@@ -94,7 +94,7 @@ func TestSchema_LoaderAndNewPropertyAgree(t *testing.T) {
 			name: "unit is number-only",
 			decl: Property{Name: "when", Type: TypeDate, Unit: "minutes"},
 			body: "type: date, unit: minutes",
-			want: "`unit` is only meaningful on a number",
+			want: "`unit` is only meaningful on an integer or a decimal",
 		},
 		{
 			name: "to is relation/person-only",

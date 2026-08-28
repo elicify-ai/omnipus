@@ -229,7 +229,9 @@ func TestSchema_TypesAreScopedToRecordType(t *testing.T) {
 	t.Run("FR-004 exactly seven property types exist", func(t *testing.T) {
 		// The oracle is ADR-068 D3's table, transcribed here from the ADR and
 		// not from the implementation.
-		want := []string{"text", "enum", "relation", "date", "number", "money", "person"}
+		// REVISION 7 CHANGED THE MEMBERSHIP, NOT THE COUNT: `money` deleted,
+		// `number` split into `integer` and `decimal`. −1 −1 +2 = still seven.
+		want := []string{"text", "enum", "relation", "date", "integer", "decimal", "person"}
 		if len(PropertyTypes) != len(want) {
 			t.Fatalf("FR-004 declares exactly %d property types, package declares %d: %v", len(want), len(PropertyTypes), PropertyTypes)
 		}
@@ -255,7 +257,7 @@ properties:
 			t.Fatalf("expected one rejection, got %v", report.Rejections)
 		}
 		reason := report.Rejections[0].Reason
-		for _, pt := range []string{"text", "enum", "relation", "date", "number", "money", "person"} {
+		for _, pt := range []string{"text", "enum", "relation", "date", "integer", "decimal", "person"} {
 			if !strings.Contains(reason, pt) {
 				t.Fatalf("a type rejection must list the supported types; %q missing from %q", pt, reason)
 			}
