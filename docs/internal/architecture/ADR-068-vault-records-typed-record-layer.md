@@ -1,6 +1,6 @@
 # ADR-068 — Vault records: a typed record layer with relations
 
-- **Status:** Proposed (2026-08-28) — **revision 7**, after grill pass 1 over the implementing specification (BLOCK: 19 critical, 41 major, 17 minor) and **nine operator rulings**. **Revision 7 is mostly a DELETION, and that is the headline.** The largest ruling reverses D16.2b: **the properties index NARROWS CANDIDATES; our own tested comparator DECIDES.** SQLite evaluates no comparison. That makes D16.6's nine violations **not applicable rather than defeated** — a stronger and far simpler position than nine deliberate defeats, **none of which was verified and zero of the seven the spec had specified turned out to be sufficient.** Also deleted: the **`money` type** in full (D3, O-2 — the requirement is a precise decimal and an int64, not a currency-carrying value); **enum ordering by declared position** (D4's second clause, replaced by SQLite's own lexical order with a value prefix for domain order); and our **invented filter-operator vocabulary**, replaced by SQL's (O-3, amended). Added: `number` splits into **`integer` and `decimal`**; **case-insensitive matching is a feature**, and it is a comparator rule because SQLite folds no non-ASCII at all; **no hardcoded domain vocabulary anywhere** (D0, strengthened with the operator's "empty database, all capabilities, nothing predefined"); and the corrections grill pass 1 earned — a re-derived freshness ordering with its residual carried as a **stated open risk**, four wrong code citations, and a tool-cost argument computed against the wrong denominator.
+- **Status:** Proposed (2026-08-28) — **revision 8**, after grill pass 2 over the implementing specification (BLOCK: 11 critical, 42 major, 14 minor — `../specs/vault-records-spec-2026-08-25-review-round6.md`) and one further operator ruling (**Unicode case folding is REQUIRED**). Revision 7 followed grill pass 1 over the implementing specification (BLOCK: 19 critical, 41 major, 17 minor) and **nine operator rulings**. **Revision 7 is mostly a DELETION, and that is the headline.** The largest ruling reverses D16.2b: **the properties index NARROWS CANDIDATES; our own tested comparator DECIDES.** SQLite evaluates no comparison. That makes D16.6's nine violations **not applicable rather than defeated** — a stronger and far simpler position than nine deliberate defeats, **none of which was verified and zero of the seven the spec had specified turned out to be sufficient.** Also deleted: the **`money` type** in full (D3, O-2 — the requirement is a precise decimal and an int64, not a currency-carrying value); **enum ordering by declared position** (D4's second clause, replaced by SQLite's own lexical order with a value prefix for domain order); and our **invented filter-operator vocabulary**, replaced by SQL's (O-3, amended). Added: `number` splits into **`integer` and `decimal`**; **case-insensitive matching is a feature**, and it is a comparator rule because SQLite folds no non-ASCII at all; **no hardcoded domain vocabulary anywhere** (D0, strengthened with the operator's "empty database, all capabilities, nothing predefined"); and the corrections grill pass 1 earned — a re-derived freshness ordering with its residual carried as a **stated open risk**, four wrong code citations, and a tool-cost argument computed against the wrong denominator.
   - *Revision 6:* after a fifth adversarial review (BLOCK: 8 critical, 25 major, 3 minor — `ADR-068-vault-records-typed-record-layer-review-round5.md`). Revision 5's own headline numbers were wrong: the catalog is **98 tools, not 102**, and the two-index staleness mitigation named a **freshness token that does not exist**. Both are repaired below, the second by specifying the mechanism rather than asserting it again. The agent tool surface grows from five `vault_*` tools to **six** — the control plane gets its own policy lever (D15.6). D16's latency argument is **withdrawn as unevidenced**; the capability argument, which is the one that survives, now carries the decision alone. And **D16.6 is new**: SQLite's default semantics contradict **nine of the thirteen** comparison rules the spec's §8 oracle defines, eight of them silently — the strongest single consideration bearing on D16, which revision 5 omitted entirely while the implementing spec carried it.
   - *Revision 5:* three-agent design council; D16 resolved to a two-index design; nine `record_*` tools cut to five `vault_*`; D21, D22, D23 added.
   - *Revision 4 and earlier:* proposed 2026-08-25 after three adversarial reviews (BLOCK each time: 7, 8, then 10 critical). Revision 1 made three false claims about existing code (D14, D16, D18); all three are corrected in place and the corrections are marked. D16 had been wrong three times and was deliberately left unresolved behind a measured spike.
@@ -11,6 +11,29 @@
   - *"`repairAndValidateToolPolicyCoverage` emits **two** WARNs, not one."* It emits **`1 + N`** — one at `pkg/gateway/gateway.go:975`, plus one per repaired agent at `pkg/config/validate.go:576` — and **zero** when nothing needed repair. The **citation** half of the same finding is upheld: the function is at `gateway.go:968`, not in `pkg/config/validate.go`.
 
   A review is evidence, not an oracle, and complying with a wrong finding would be the same failure as ignoring a right one.
+- **What revision 8 changes, and why an ADR needed changing at all.** Grill pass 2 found **one
+  CRITICAL in this document** and it was the worst kind: **§4's Consequences bullet carried revision
+  7's own note saying it was *"kept, RESTATED"* — and the body was never restated.** Every clause
+  under that note was the **reversed** position: it named the reversed D16.2b as live authority,
+  mandated a truth table against *"the real compiled query path"*, asserted *"the product does not
+  use [a Go comparator] for filtering"*, carried a **money orphan** (`SUM` adds USD to JPY) in the
+  revision that swept money, and listed **lexical enum ordering as a violation** when D4 as revised
+  makes it the specification. **This is the authority document: a reader implementing from §4
+  Consequences built a SQL query compiler.** It is restated now (§4). Four further corrections:
+  **(a) D0's occurrence counts** were wrong by roughly an order of magnitude (fourteen/thirty-three
+  stated; **135/313** counted) and **`person` was listed as a vocabulary the product does not ship
+  when it is one of the seven property types** — an implementer following D0 literally would have
+  deleted a shipped type; **(b) D0's "verified clean" claim is WITHDRAWN** and its test respecified
+  — the grep it mandated red-lights `pkg/records/doc.go:12`, which is the D0 statement itself, while
+  the underlying claim is confirmed true by reading all 44 hits; **(c) D16.6's Unicode receipt said
+  *"Go's `strings.ToLower` is Unicode-aware"* and stopped there** — it performs **simple** folding
+  and fails `straße`/`STRASSE`, so this ADR caught the ASCII-only failure in SQLite and then
+  committed the folding-depth failure one layer up in Go; the mechanism is now
+  `golang.org/x/text/cases.Fold()`; **(d) D16.6 gains the R-8 row** that six places pointed at and
+  which did not exist, **D4's title** loses its second reading of "SQLite's" as naming the executor,
+  and **D2's canonical schema example loses `unit: GBP`** — an undefined, currency-shaped key added
+  in the revision that deleted money.
+
 - **What revision 7 deletes, listed once so the shrinkage is auditable.** D16.6's nine defeats (superseded — the violations remain, as reasons); the `money` type, `RecordMoney` and cross-currency refusal (O-2, superseded); D4's declared-position ordering (superseded by ruling R-E); our filter-operator vocabulary (O-3, amended); D16.2b's "the properties index answers every typed predicate" (reversed). **Every deletion is marked at its own decision rather than only here.**
 - **Implements:** founder direction 2026-08-24 ("we need something similar to bases for master data like our CRM"); explicit decision **not** to pursue Obsidian `.base` compatibility
 - **Builds on:** [ADR-067](ADR-067-omnipus-knowledge-base-and-render-first-preview.md) (knowledge base, index, tools, preview), [ADR-063](ADR-063-unified-file-access-engine-and-mounts.md) (mounts), [ADR-037](ADR-037-remove-global-delegation-policy.md) (workspace = trust boundary), [ADR-054](ADR-054-entity-config-separation.md) §5 (flock platform limits)
@@ -343,7 +366,7 @@ value — precisely the days being asked about.
 vaults carry `prm-tier`, `habits-reading`, `health_sleep_total_minutes`. Namespacing to work
 around a tool limitation is not a convention worth inheriting.
 
-### D4 — Enums are closed. Ordering is SQLite's, and a domain order is a value prefix.
+### D4 — Enums are closed. Ordering is lexical, and a domain order is a value prefix.
 
 > **TITLE AND SECOND CLAUSE REVISED IN REVISION 7 BY OPERATOR RULING.** The heading was *"Enums are
 > closed and ordered; ordering is data, not spelling"*. **The "ordered" half is withdrawn**; the
@@ -351,9 +374,36 @@ around a tool limitation is not a convention worth inheriting.
 > to prefix the content."* **"Closed" is unchanged and is the half D4's evidence actually
 > supports.**
 
+> **THE TITLE IS CORRECTED AGAIN IN REVISION 8, and it is a one-word change with a real subject
+> (spec review round 6, M-7 / survivor 6).** Revision 7's *"Ordering is **SQLite's**"* took the
+> ruling's own phrasing — *"the enum ordering is following SQLite standard"* — and read it as naming
+> the **executor**. **It names the ORDER, not who computes it.** D16.6's ruling settles the
+> executor, and the answer is the **Go comparator**: ordering IS comparison, governed by R-1, R-4,
+> R-5, R-7 and R-13 like every other comparison. Revision 7's phrasing propagated into four places
+> in the implementing specification as an assumption that SQLite performed the sort, in the revision
+> that deleted SQLite's role. **The order is byte-lexical — what SQLite's `BINARY` collation would
+> have produced — computed by us.**
+>
+> **AND THE SORT KEY IS THE FOLDED FORM, decided in revision 8 (spec review round 6, M-8), because
+> the combination of case-INSENSITIVE matching and case-SENSITIVE ordering was left unresolved and
+> is visibly wrong.** Byte order over raw values puts every capitalised value before every lowercase
+> one — `"Won" < "lost"` is **true** on raw bytes and **false** folded (executed) — so a corpus this
+> ADR deliberately permits to hold `Won`, `won` and `WON` as **one** value would render them in
+> **three** places in a sorted result while `group_by` collapsed them into **one** group. Sorting on
+> the folded key makes ordering, equality and grouping agree. **Ties on the folded key break on raw
+> bytes**, so the order is total and deterministic across runs, which SC-014's byte-identical
+> assertion needs. What renders is always the file's own spelling.
+>
+> **The lexical-ordering consequence is recorded HERE, revision 8, rather than in §4's violation
+> list (spec review round 6, C-11).** *"Enums order lexically, so `stage >= qualified` drops
+> `proposal`"* was listed among SQLite's **violations** — which was right under revision 6 and is
+> **backwards** under this decision, where lexical ordering **is the specification**. The example is
+> a correct illustration of **why an author who wants a domain order must prefix the values**, and
+> that is the whole of D4's second clause.
+
 An enum declares its permitted values as a **set**. Writing a value outside the set is
-**rejected**, with the permitted values named in the error. **Sorting an enum column sorts
-lexically — SQLite's own ordering.** An author who wants a domain order writes it into the values:
+**rejected**, with the permitted values named in the error. **Sorting an enum sorts
+lexically, in the Go comparator, over the folded value as the key.** An author who wants a domain order writes it into the values:
 `1-lead`, `2-qualified`, `3-proposal`, `4-won`.
 
 **Why closed:** an agent writing an invented value must be corrected, not silently create a second
@@ -1957,7 +2007,7 @@ did not do is act on it.)*
 | Wave | Delivers | Exit criterion |
 |---|---|---|
 | **W1** | Schema files, the seven types, arity/presence/scope, validation. The SQLite properties index (D16.2) with **`source_hash` and the divergence check specified in D16.5**, its rebuild-from-notes path, and the **platform stub and refusal** (D16.2a). `vault_describe` including `check_integrity` and its bounds. **The catalog-count assertion (D15.0).** **Updating `CLAUDE.md` and ADR-067 §A2 (D16.4 item 1).** | **AC-16.5** — a record whose two indexes disagree is reported `complete: false` and named, in **both** divergence directions; deleting the properties index and reopening rebuilds it with identical query results; **both indexes, idle and at the cap, measured inside 64 MB on Linux and macOS**; a query on a SQLite-less build refuses by name and never returns empty; `CLAUDE.md:66` no longer says SQLite is isolated to WhatsApp |
-| **W2** | Fielded indexing (D21.2) **including the freshness stored field (D16.5)**, the **`ScoringModel` correction and the thirteen documentation corrections** (D21.1), BM25F weighting + RRF (D21.3), the tokenizer resolution (D21.5). `vault_find` — plain words, typed filters, grouping, `kind: task`, the problem report, **and the comparator that decides them (D16.2b as reversed)**. | a query over a typed corpus returns records + a populated `problems` array; a type mismatch is never a silent empty result; a field query on a property key is possible at all, which it is not today; **no `.go` file in the tree attributes BM25 to bleve while `ScoringModel` is unset**; **AC-16.6's six-mutation table is produced as an ARTIFACT, not a pass**; **D21.3's fusion clears its nDCG@10 threshold or does not ship**; **A-13 is answered — the stored-field freshness mechanism holds, or it does not and is replaced before W3** |
+| **W2** | Fielded indexing (D21.2) **including the freshness stored field (D16.5) — and W1's stated FALLBACK while it is unverified, revision 8 (spec review round 6, M-28): until this wave lands, W1 reports every record `complete: false` with staleness-unknown as the reason, rather than shipping a freshness comparison whose two open questions are answered a wave later**, the **`ScoringModel` correction and the thirteen documentation corrections** (D21.1), BM25F weighting + RRF (D21.3), the tokenizer resolution (D21.5). `vault_find` — plain words, typed filters, grouping, `kind: task`, the problem report, **and the comparator that decides them (D16.2b as reversed)**. | a query over a typed corpus returns records + a populated `problems` array; a type mismatch is never a silent empty result; a field query on a property key is possible at all, which it is not today; **no `.go` file in the tree attributes BM25 to bleve while `ScoringModel` is unset**; **AC-16.6's six-mutation table is produced as an ARTIFACT, not a pass**; **D21.3's fusion clears its nDCG@10 threshold or does not ship**; **A-13 is answered — the stored-field freshness mechanism holds, or it does not and is replaced before W3** |
 | **W3** | Relations, inverses, relation grouping; `near` + `hops` and its **composition with filters** (D15.3). `vault_read`. | the §1.2 two-hop question is one call with no hand-maintained state; "notes mentioning pricing within 2 hops of `[[Acme]]`" is one call |
 | **W4** | `vault_edit`: byte-preserving writes, the **list-valued splice** (D14), `create`'s `template` argument, and the two **unbuilt primitives** — `replace_body` and the **trash CONVENTION** (where a trashed note goes, what happens to inbound links, whether the index forgets it immediately) — each with its own FR (D14.1). Derived interaction history (D17). | write-read-back is byte-identical outside the patched span; a `replace_body` whose anchor is ambiguous is refused, naming both matches; the trash convention is written down and reviewed before any tool exposes it |
 | **W5** | `vault_restructure`: rename, move, and the trash **operation**. `vault_configure`: record-type and saved-view authoring (D15.6, D23). The D18 policy seeding and its ACs. **The write-path rate limiter (D15.5b).** **Retiring the nine `knowledge_*` names** — from `allStaticToolNames` (`pkg/coreagent/core.go:357-482`), from the global ceiling (`pkg/config/defaults.go`), from all five seed maps that carry them, and from every skill and prompt that names one. | an operator can forbid restructuring while permitting edits **and forbid schema authoring while permitting both**, with a test proving all three policies are independently settable; **after this wave no `knowledge_*` name exists anywhere in the catalog or any seed map, and the catalog assertion reads 95** |
