@@ -1038,27 +1038,63 @@ to prevent. So:
 - **The spike answered the question D16 asked, and on that question bleve passes.** D16 gated on
   **memory**. Streamed evaluation at the 10,000-record cap measures 23.6–24.0 MB peak RSS,
   comfortably inside ADR-067's 64 MB budget. That result is accepted, not disputed.
-- **We reopen it on grounds the spike itself named as outside its scope**, quoting its §6.1:
-  *"~460 ms of CPU for a 10,000-record query is not fast. It fits the memory budget, which is
-  what D16 gated on, but a dedicated aggregation store would be substantially quicker. If
-  interactive latency later becomes the binding constraint rather than memory, §3.6 should be
-  reconsidered on that basis — it is not reopened here because latency is not what D16 asked
-  about."* We are reconsidering it on exactly that basis.
-- **S-3 is the argument for the override, not against it.** Decode is ~99% of the cost because
-  every candidate is retrieved as JSON and unmarshalled into `map[string]any` before Go can
-  filter it. A typed properties index does not pay that cost at all: the filter, the join, the
-  group and the aggregate happen inside the store, over typed columns, and only the surviving
-  rows are materialised. The measurement that vindicates bleve on memory is the same
-  measurement that identifies where the time goes.
-- **Capability, not only speed.** FR-021 and §3.6 want joins, `OR`, `GROUP BY` and aggregates.
-  Over bleve these are all Go-side, which means we own an expression engine — and §4.2 already
-  records that the expression layer's null and type semantics are *the highest-risk component
-  in this ADR*, with a first-attempt comparator overload making `3 > 2` evaluate to **false**.
-  Choosing the option that requires less of that code is a correctness argument, not a
-  convenience one.
-- **The cap stops being load-bearing for memory.** The spike's C-3 notes FR-064's 10,000-record
-  cap is what keeps the design inside ADR-067's budget. With aggregation pushed into the store,
-  the cap becomes a politeness limit again rather than the thing preventing a breach.
+
+> ### The latency argument is WITHDRAWN. Revision 6.
+>
+> Revision 5 justified this override primarily on **speed**, quoting the spike's §6.1 — *"a
+> dedicated aggregation store would be substantially quicker"* — and arguing from S-3 that a
+> typed store *"does not pay that cost at all"*.
+>
+> **That sentence sits inside the spike's section headed "What this does not say", immediately
+> alongside "Not measured: concurrent queries; the record write path; … any non-macOS
+> platform."** Revision 5 quoted the spike's own disclaimer of an unmeasured opinion **as
+> evidence**, and then built the decision on it. The claim that SQLite is faster here is a
+> performance claim about a store nobody has benchmarked, made against a design that *was*
+> benchmarked. **This ADR has been wrong three times by asserting an unmeasured property of a
+> store. Doing it a fourth time, in the decision that catalogues the first three, is not a risk
+> worth taking for an argument the decision does not need.**
+>
+> **So: the override is a CAPABILITY decision. The latency argument carries no weight in it and
+> must not be quoted from it.** If interactive latency later matters, it will be measured then.
+
+- **Capability is the whole argument, and it is sufficient on its own.** FR-021 and §3.6 want
+  joins, `OR`, `GROUP BY` and aggregates. Over bleve these are all Go-side, which means we own an
+  expression evaluator — and §4.2 already records that the expression layer's null and type
+  semantics are *the highest-risk component in this ADR*, with a first-attempt comparator overload
+  making `3 > 2` evaluate to **false**. Choosing the option that requires less of that code is a
+  correctness argument, and correctness is what this ADR gates on everywhere else.
+- **S-3 explains where the time goes; it does not license a claim about where the time would go
+  instead.** Decode is ~99% of the cost because every candidate is retrieved as JSON and
+  unmarshalled into `map[string]any` before Go can filter it. That is a measured fact about the
+  bleve path. What a typed store costs to answer the same query is **unmeasured**, and W1
+  measures it. *(Revision 5 wrote "does not pay that cost at all" — a prediction stated as an
+  observation.)*
+
+**D16.3a — The spike set three conditions. All three are answered by name.**
+
+*New in revision 6. Revision 5 discharged C-1 and left the other two unaddressed, while
+reversing one of them in passing — so the cap was simultaneously load-bearing (D15.5b) and a
+politeness limit (D16.3).*
+
+| Condition | Status |
+|---|---|
+| **C-1** — bump `zapx/v17` to ≥ v17.1.4 **and force a rebuild of existing indexes** | **Half discharged, half scheduled.** The pins are in (`go.mod:12`, `go.mod:107`). The rebuild is not, and revision 6 **splits it out of the wave sequence** — see D20. |
+| **C-2** — *"Evaluate streamed, never materialised"* (3–6× lower peak RSS, no time penalty) | **CARRIED FORWARD, and it still applies.** Revision 5 never mentioned it. Pushing predicates into SQLite changes *where* rows are selected, not whether the surviving rows are streamed to the renderer: a `GROUP BY` over 10,000 rows still returns a result set that must not be materialised whole. **W1 exit criterion:** the query path holds no more than one page of rows in memory at once, asserted by peak RSS at the cap, not by inspection. |
+| **C-3** — *"Enforce FR-064's 10,000-record cap as a hard precondition, and count candidates before retrieving anything"* | **UPHELD. Revision 5's relaxation is withdrawn.** |
+
+**On C-3 specifically.** Revision 5 wrote that *"the cap becomes a politeness limit again rather
+than the thing preventing a breach"* — while **D15.5b continued to specify a hard refusal at
+10,000**, and the spec's FR-064 continued to require one (`spec:531`). Two decisions in one
+revision, contradicting each other, on the same unmeasured premise the latency argument rested
+on.
+
+> **The cap stays a hard precondition, counted before retrieval, exactly as the spike wrote it.**
+> Relaxing a bound is a thing to do *after* a measurement shows it is no longer load-bearing,
+> never *because* a new store is assumed to make it so. If W1's measurements show the two-index
+> path is comfortable at 50,000 records, the cap can be revisited then, in a revision that cites
+> the number.
+
+This also removes a live inconsistency: D15.5b, D16.3 and FR-064 now say the same thing.
 
 **D16.4 — What this costs, named rather than skipped.**
 
@@ -1070,15 +1106,97 @@ to prevent. So:
    said this deserved an explicit decision rather than an implementation note; this is it.
 2. **Two indexes can disagree, and that is a new failure mode of exactly the class this ADR
    exists to prevent.** A text index and a properties index that have seen different generations
-   of the same note produce a confidently wrong answer. **Mitigation is mandatory and structural,
-   not test coverage:** the properties index carries the same freshness token the text index
-   does, `vault_find` compares them, and a mismatch sets `complete: false` (D13) naming staleness
-   as the reason. An answer computed across two indexes at different generations must never be
-   reported as complete.
+   of the same note produce a confidently wrong answer. **The mitigation is specified in D16.5,
+   below** — revision 5 named a mechanism instead of specifying one, and that is corrected there
+   rather than repeated here.
 3. **The spike did not measure the write path, concurrent queries, property counts above 10 per
    record, or any non-macOS platform** (its §6.1). The two-index write path — one note, two index
    updates — is precisely the unmeasured area, and D20 places it where it gets measured rather
    than assumed. **This ADR has been wrong three times by assuming exactly this kind of thing.**
+4. **The 64 MB budget is INHERITED, and it is UNVERIFIED for this design.** *(New in revision 6.)*
+   D20 says the one budget that holds is ADR-067's < 64 MB steady-state RSS, *"and the properties
+   index is inside it too."* That budget was measured for **bleve alone** — idle 12.9–15.1 MB,
+   23.6–24.0 MB streamed at the cap (spike §5.1, §5.3). The two-index design keeps all of that
+   and adds SQLite's page cache, its temp b-trees for `GROUP BY`/`ORDER BY`, and its connection
+   state. **None of that is measured.** Asserting the inherited budget over an unmeasured store
+   is the same move the latency argument made, and it is withdrawn the same way: the budget is
+   the **target**, not a property this ADR claims. **W1 exit criterion:** both indexes, idle and
+   at the 10,000-record cap, inside 64 MB — measured, on Linux as well as macOS.
+
+### D16.5 — The freshness token, SPECIFIED. This is the finding revision 5 got most wrong.
+
+*New in revision 6.*
+
+**What revision 5 said, and why it was the worst sentence in the document.** D16.4 item 2 read:
+*"the properties index carries **the same freshness token the text index does**, `vault_find`
+compares them, and a mismatch sets `complete: false`"* — followed by *"Mitigation is mandatory and
+**structural, not test coverage**."*
+
+**The text index has no freshness token.** Verified at revision time, three ways:
+
+- `manifestVersion` (`pkg/knowledge/manifest.go:48`) is a **struct-schema constant** — `= 1`,
+  bumped by a human when the recorded *shape* changes (`manifest.go:45-47`). It never increments
+  per build, and a mismatch discards the manifest and rebuilds (`manifest.go:113-115`).
+- No query result carries anything of the kind. `IndexHit` is exactly
+  `Path`/`Kind`/`Score`/`Offset`/`Segment` (`pkg/knowledge/index.go:158-174`).
+- `VersionToken` (`pkg/knowledge/author.go:309-323`) is a **per-note compare-and-swap token on
+  the authoring path** — `ComputeVersionToken(src)`, consumed by `checkVersion` at
+  `author.go:667`. It is never attached to a read.
+
+So the mitigation for the new failure mode was **neither structural nor tested** — it was a
+sentence. Written into the revision whose declared subject is not doing that, three paragraphs
+below a table cataloguing three previous instances of doing exactly that. **This is recorded at
+this length because the pattern is the actual risk, not the individual error.**
+
+**The specification. What follows is NEW WORK, and is written as a design, not a description.**
+
+**The token is the per-note content hash the manifest already stores.**
+`ManifestEntry.Hash` (`pkg/knowledge/manifest.go:64`) is *"the hex SHA-256 of the file's
+contents"*, written per note on every index, keyed by collection-relative path in
+`Manifest.Entries` (`manifest.go:83`), and already readable by path via `Manifest.Get`
+(`manifest.go:174`). It exists, it is per-note, and it is exactly the value that changes when a
+note changes.
+
+| Question the review asked | Answer |
+|---|---|
+| **What is the token?** | The note's content SHA-256 — `ManifestEntry.Hash`. Not an integer, not a generation counter. |
+| **Per-index or per-note?** | **Per-note, deliberately.** A whole-index generation would report *every* answer stale while any agent is writing anywhere in the vault, which trains D13's problem channel into noise — the failure D22.2 warns about, arriving from the other side. Per-note flags only the notes actually mid-write. |
+| **Where is it stored on the SQLite side?** | One `source_hash` column per record row, written in the same transaction as the row, holding the hash the indexer computed for that note in that pass. |
+| **What does the comparison do?** | For every hit `vault_find` is about to return, it compares the row's `source_hash` against `Manifest.Get(path).Hash`. **Equal → the two indexes have seen the same bytes.** Unequal, or the manifest entry is missing, or its hash is empty → the record goes into `problems` with staleness as the reason, and `complete: false`. |
+| **What does it cost?** | One map lookup per returned hit, against an in-memory map, bounded by the page size (max 200, D15.5b). Not per candidate — per *hit*. |
+| **When is it written relative to the index commit?** | Notes are the source of truth, so ordering is chosen to make the failure detectable rather than to make it impossible: **bleve document → SQLite row (with hash) → manifest entry**, manifest last. The manifest is already written last today and already re-indexes on a missing entry. |
+| **What happens on partial write failure?** | **Both directions are caught by the one comparison, which is why it is worth having.** SQLite committed, bleve/manifest not: the manifest still holds the *previous* hash, so it differs from the row's — flagged. bleve committed, SQLite not: the row still holds the previous hash while the manifest holds the new one — flagged. A row with no manifest entry at all (note deleted, row orphaned) — flagged, and `check_integrity` reports it as an orphaned row. |
+| **What about attachments?** | `ManifestEntry.Hash` is deliberately **empty for attachments** (`manifest.go:62-65`: FR-039a forbids opening one, and hashing is opening). Records are notes, so this does not arise — but the rule is written for the case anyway: **an empty hash is unknown freshness, which is flagged, never assumed fresh.** |
+
+**What must be BUILT, named so it is not mistaken for something that exists:**
+
+1. A `source_hash` column on every record row, and the write-path change that populates it.
+2. A query-path lookup from `IndexHit.Path` into the live `Manifest`. *(`IndexHit` itself need not
+   gain a field — `Manifest.Get` already takes the relative path the hit carries. That is the
+   cheaper of the two options and it needs no wire change.)*
+3. The `problems` entry, its reason string, and its `complete: false`.
+4. A re-queue of any note whose two hashes disagree, so a flagged record does not stay flagged.
+
+**AC-16.5 — the acceptance criterion tests DIVERGENCE, not rebuild.** W1's exit criterion in
+revision 5 was *"deleting the properties index and reopening rebuilds it with identical query
+results"* — which tests **rebuild**, and **would have passed with the mitigation entirely
+absent**. Replaced by:
+
+> A record row is written, the note is then modified and re-indexed into bleve **only** (the
+> SQLite write suppressed), and a `vault_find` returning that record reports `complete: false`
+> with the record named and staleness given as the reason. The symmetric case — SQLite updated,
+> bleve not — is asserted the same way. *(The rebuild criterion is kept as well; it tests a
+> different property, FR-020a's disposability.)*
+
+**The residual risk, stated because it is not closed.** This detects divergence per returned hit.
+It does **not** detect a record that is stale *and excluded from the result by a stale predicate*
+— if the properties index holds `status: prospect` for a note whose file now says `status:
+churned`, a query for `status = churned` never returns that row and so never compares its hash.
+**That is a real hole and it is accepted for W1**, because closing it means comparing hashes over
+the whole candidate population rather than the returned page, which is the cost the cap exists to
+avoid. It is bounded by the reconcile: the note is re-indexed on the next sync, and
+`check_integrity` sweeps for it explicitly. **An operator should know that a query's completeness
+verdict covers what it returned, not what it did not.**
 
 **Unchanged by this resolution.** The record model (D1–D15), the tool surface, scoping and the
 write path do not depend on the storage outcome and remain valid, as revision 4 predicted.
