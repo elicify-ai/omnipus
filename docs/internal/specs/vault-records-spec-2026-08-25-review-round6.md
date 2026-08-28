@@ -920,3 +920,171 @@ exception"* is false and `TestTools_ConfigureWritesOnlyVaultControlPlane` will m
 (`.omnipus-vault/records/`, `.omnipus-vault/views/`), with `.seq` (written by `vault_edit`) and
 `.omnipus-vault/trash/` (written by `vault_restructure`) as the two named non-control-plane paths
 inside the directory. Then the mechanical test is expressible.
+
+---
+
+## 7. Code and semantics citations — what I checked and what reproduces
+
+Every claim below was executed or read against the tree at `03e71909`, not recalled.
+
+### Verified correct — including the ones the spec uses to reject pass 1
+
+| Claim | Result |
+|---|---|
+| `sqlite3` receipts in §8.1/§8.1b — negation and NULL, affinity, arithmetic, dates-as-TEXT, case and collation, `instr('abc','')`, `CAST` saturation, `SUM`-vs-`total()` over an empty set | **ALL REPRODUCE** against `sqlite3` 3.51.0 |
+| *"`NOT (a=1 OR b=2)` returns **one** row (id 2), not zero; the correct De Morgan answer is four, so **three** rows are dropped"* — the spec's correction of pass 1's C-3 I-1 | **SPEC IS RIGHT.** Returns `2`; NULL-safe form returns `2,3,4,5` |
+| *"`modernc.org/sqlite v1.46.1` (`go.mod:64`) reports `sqlite_version()` = **3.51.2**, not 3.53.3"* — the spec's rejection of pass 1's M-37 | **SPEC IS RIGHT.** Opened through the driver: **3.51.2**. Pass 1's figure does not reproduce |
+| SQLite folds ASCII only — `lower('MÜLLER')` = `mÜller`, `hex('Ä')` = `hex(lower('Ä'))` = `C384`, `'ŁÓDŹ' LIKE '%łódź%'` = 0, `'MÜLLER' = 'müller' COLLATE NOCASE` = 0 | **ALL REPRODUCE.** The diagnosis is sound; only the Go remedy is wrong (C-1) |
+| `allStaticToolNames` at `pkg/coreagent/core.go:357`, literal `:358-482` | **98 quoted identifiers, 98 unique, 9 `knowledge_*`** — counted. 98 − 9 + 6 = **95** correct |
+| `resolveToolPolicyAtExec` at `pkg/agent/loop.go:12418`, taking a tool name and no operation discriminator | **VERIFIED** — notable, given this repo's documented line-number churn in `loop.go` |
+| Property-type arithmetic: −`money` −`number` +`integer` +`decimal` = seven | **VERIFIED** |
+| `Manifest.Get` at `manifest.go:175` (with `:174` its doc comment), `Put` `:181`, `Remove` `:189`, all bare map operations, no mutex on `Manifest` | **VERIFIED** — the correction of revision 4's `:174` is right |
+| `pkg/records/compare_oracle.go` evaluates comparisons in Go today and `pkg/records` emits no SQL at all | **VERIFIED** — R-A restores what exists rather than commissioning it |
+
+### Defects found
+
+**M-43 — `authoring_tools.go:1420` is cited for two different things and is wrong for one of them.**
+FR-076a (`:925`): *"walks the collection with `WalkContained` (`:1398`), **reads each file (`:1420`)**
+… bounds itself at `TasksMaxFiles = 5000` (`:1246`, **clamp reported at `:1420-1425`**)"*. Line 1420
+is `if len(files) > TasksMaxFiles {` — the head of the clamp block, so `:1420-1425` is right and
+*"reads each file"* is not. **Fix:** cite the read site correctly or drop the parenthetical.
+
+**M-44 — `contracts/components/schemas/RecordAggregateResult.yaml:64` should be `:61`,** and the
+file carries a **second** cross-currency reference at `:34` that §10a does not list (C-9).
+
+**M-45 — `pkg/knowledge/version.go:499` `(*Writer).WriteNote` is a whole-note write the FR-047 argument does not account for.**
+FR-047's premise (`:860-867`) is *"there is **no body-replace and no delete primitive anywhere in the
+package**"*, evidenced by enumerating the additive `NoteEdit` constructors. `Writer.WriteNote` takes
+a `WriteRequest` and writes note content wholesale; it has **zero non-test callers**, so the
+practical conclusion survives, but the premise as stated is too strong and the reader who finds
+`WriteNote` will not know whether it was considered. **Fix:** scope the claim to `NoteEdit`
+constructors and name `WriteNote` explicitly as the whole-file writer that exists, is unused, and is
+**not** what FR-047 asks for (it cannot address an anchor or a line range, and it re-serialises,
+which FR-040/FR-041 forbid).
+
+**M-46 — `pkg/records` has zero production importers and neither document says so.**
+Only `external_enum_ordering_test.go` and `external_property_test.go` import it. This is
+load-bearing in three places: it makes §10a's deletions near-zero-risk (M-23), it means the
+`compare_oracle.go` the ruling relies on is **not currently wired into anything**, and it means
+FR-021's *"the comparator that already exists, is already tested"* describes a package that has never
+run in production. The last of those is a real caveat and stating it costs one sentence.
+
+---
+
+## 8. MINOR findings
+
+| ID | Section | Finding |
+|---|---|---|
+| m-1 | `:1519` | §6's FR-020/021 row's tests (`TestPropsIndex_RebuildIsResultIdentical`, `TestIndex_PropsRoundTripsExactDecimal`) assert rebuild-identity and decimal round-tripping. **Neither touches FR-021's Go-evaluation requirement**, the most-changed FR in the revision |
+| m-2 | `:800` FR-022a | The empty-`LIKE` refusal is justified by `instr('abc','')` returning 1 — a SQLite receipt for a rule now enforced in Go. The rule is right; the justification should be *"a pattern of `''` or `'%'` matches every value"*, which is true independent of engine |
+| m-3 | `:558-562` | §3's non-behaviours say *"§8.1 picks `instr()` over a folded column instead … for the **compiled filter path**"*. §8.1 picks nothing and there is no compiled filter path |
+| m-4 | `:1332` | §4.1.6's unknown-property-type refusal lists the seven types correctly, but §4.1.1's response spec (`:1029-1031`) never says the property table renders `integer`/`decimal` distinctly — a `decimal` and an `integer` are different contracts to a caller |
+| m-5 | `:879` FR-049c | Ends with a sentence about ADR-067 D10 rewriting inbound wikilinks on rename, which belongs to FR-049 and has nothing to do with rebuild availability |
+| m-6 | `:1490` SC-013 | Correct and well-argued, but §7 test 49 asserts *"exactly **two** paths change on a **record** `create`"* and *"exactly ONE on a non-record create"*; AC-E1 still says *"exactly one file has a changed mtime and hash"* unqualified, repaired only by AC-E2a two bullets later. Fold the exception into AC-E1's own text |
+| m-7 | `:1606` test 21 | Reclassified to a benchmark correctly, but §6 has no row for it, so the W1 write-back obligation is traced only from §7 |
+| m-8 | `:1139` AC-F3 | *"Only `index_epoch` (FR-020j) may differ between the two calls"* — but `explain` evaluates nothing, so it should not observe an epoch at all unless the epoch is in the header, which FR-020c places there. Say which |
+| m-9 | `:572`, `:896` | The constraint table says the candidate cap is *"10,000 records"*; FR-064 defines candidates as *"rows surviving the filter"*. With `many` arity and the relation child table, rows and records differ — the unit needs naming |
+| m-10 | `:1397-1403` | §4.2's rows render `arr` as `180,000.00` — two fixed decimal places on a `decimal` property with no declared scale. Currency-shaped formatting outlived the currency; state the rendering rule or drop the trailing zeros |
+| m-11 | `:1030` | §4.1.1's response spec lists *"id prefix"* per record type, but no FR defines the identity/prefix block of a schema (it appears only in ADR-068 D2's example). FR-036 requires an identifier and never says where the prefix comes from |
+| m-12 | ADR `:201` | ADR-068 D2's canonical schema example declares **`arr: { type: decimal, unit: GBP }`**. No FR, wire schema or test defines a `unit` key; it is currency-shaped and was added in the revision that deleted money. Either specify `unit` as schema metadata or remove it from the example |
+| m-13 | `:1223-1237` | §4.1.5's `expect_version` removal is correct and well-argued, but §4.1.4's header still says *"Every op on an existing file requires `expect_version`"* while the same section's `create` row takes none and FR-043 exempts it. One qualifier fixes it |
+| m-14 | `:2019` | §9's *"Not for use during development. Not referenced in §6 or §7"* is now false: scenario 14 is explicitly promoted into §7 as test 50, and scenario 11 is referenced by FR-113 and SC-018. Both cross-references are correct and useful; the blanket statement is what is wrong |
+
+---
+
+## 9. Observations
+
+| ID | Note |
+|---|---|
+| O-1 | **The strongest single improvement in the revision is §7 test 42's CI treatment** — naming the job, the tag combination, the make target and the required-checks entry, and ruling out the `make build-all` target as discharging it. That is the correct answer to this project's documented false-green history, and it should be the template for the C-5 test and for test 62's `-race` run |
+| O-2 | **The R-F problem is structural and a marker will not fix it.** At 288 occurrences, an implementer will meet the vocabulary far more often than the disclaimer. Replacing the running example vocabulary with something obviously non-domain would discharge R-F by construction — which is exactly the argument the document makes for preferring a Go comparator over nine SQL defeats, applied to its own prose |
+| O-3 | **The deletion tables are the right instrument and should be used once more.** §8.1's deletion table and §10a make shrinkage auditable, and they work. The one thing missing is the mirror: a table of **what the deletions were supposed to leave behind**, checked. Every finding in §§2–6 of this review is an entry that would have been on it |
+| O-4 | **`vault_describe` at `check_integrity` still looks like the highest-risk operation in the surface.** FR-067a's 3/minute limiter is a good answer and the reasoning for keeping `allow` is sound. But the limiter is per agent, and the sweep is 100,000 notes; three of those a minute is not a bounded cost. Consider a per-collection cooldown alongside the per-agent rate |
+| O-5 | **Consider stating the comparator's stability contract.** R-11 makes comparison total and non-panicking. Nothing says whether it is **deterministic across runs** for the same inputs — which matters because SC-014 asserts byte-identical results across a rebuild, and map iteration order is the classic way that stops being true in Go |
+
+---
+
+## 10. Structural integrity (`plan-spec` checks)
+
+| Check | Result |
+|---|---|
+| Every user story has ≥1 acceptance scenario | **PASS** — US-1..US-13 all do |
+| Every acceptance scenario traces to a test | **PASS** — pass 1's orphans (US-1.1, US-2.1, US-3.5) are closed and named as closed |
+| Every FR appears in the traceability matrix | **FAIL** — FR-080b (M-37); `FR-200..FR-212` are cited and undefined (M-32) |
+| Every test in the matrix appears in the test plan | **FAIL** — 26 do not (M-34); one is named differently with opposite semantics (M-35) |
+| Cross-references resolve | **FAIL** — ten §8.1a references, five §8.1-R-8 references, `R-11a`, `§8.1a §D`, `§8.1a §E`, `FR-039a` (M-6, M-36, M-38) |
+| Test datasets cover boundaries, edges, errors | **PASS, and improved** — DS-4 (`many`), DS-5 (nested absence) and DS-6 (concurrency) close real gaps. DS-1 needs the C-1 folding rows |
+| Regression impact addressed | **PASS** — the `pkg/knowledge` seam is named, FR-110's ranking change is explicitly *not* asserted as score-identical, and the reason is right |
+| Success criteria measurable, no subjective language | **PASS with one exception** — SC-024's "six mutations" is measurable but insufficient (M-11) |
+| Wave plan exists and maps requirements | **PASS** — §11 is new and closes pass 1's M-29. One ordering defect (M-28) |
+
+---
+
+## 11. STRIDE summary
+
+| Component | Threat | Status |
+|---|---|---|
+| `vault_find` / `vault_read` | **Information disclosure** across workspaces | Addressed — FR-060..FR-062a, scope resolved *before* FR-024's valid-names list so the error channel cannot leak schemas (this is a good catch and is correctly placed) |
+| `vault_describe check_integrity` | **DoS** — 100,000-note sweep | Addressed by FR-075a's bound and FR-067a's 3/min limiter; residual noted at O-4 |
+| `vault_find` | **DoS** — unbounded Go evaluation | **PARTIAL** — the cap is unenforceable as specified (C-4), the aggregate path raises it to 50,000 (C-3), and the filter tree is unbounded (M-30) |
+| `vault_configure` | **Tampering** — lost update on the file defining the type system | Addressed — FR-043a's `O_EXCL` + content-hash CAS, with the honest statement that it guards the file and not the cascade |
+| `vault_edit` / `vault_restructure` / `vault_configure` | **Repudiation** | Addressed — FR-044, FR-077, audit on refusal too (AC-C5) |
+| Tool policy seeding | **Elevation of privilege** — a gap backfilled to `deny`, or a global ceiling that grants | Addressed — FR-080..FR-084, FR-081's *zero repaired pairs* (not zero gaps after repair) is the right assertion |
+| Retired `knowledge_*` names | **Availability** — silent breakage of user skills and prompts | Addressed — FR-049a's boot-time scan with an empty report as a W5 exit criterion |
+| Properties index | **Integrity** — silent divergence | **PARTIAL** — the mechanism is designed (A-13) but two contradictory versions are normative (C-2) |
+| `.omnipus-vault/trash/` | **Integrity** — path traversal on restore | **NOT ADDRESSED.** FR-048a's `restore` takes a trashed path and restores it *"to its original relative location"*, which is reconstructed from the trash directory layout. Nothing says the reconstructed destination is validated against scope or against `..` — a note trashed from a mount that has since been unmounted, or a hand-edited trash path, restores wherever the path says |
+
+---
+
+## 12. Unasked questions
+
+1. **What happens to a record's identifier when its note is trashed and a new record is created?**
+   FR-038 forbids lowering the counter and SC-005a asserts the new identifier is above the deleted
+   one. But FR-048a's `restore` puts the old record back — with its old identifier — *after* the
+   counter has moved past it. Is that a duplicate-identifier finding (FR-039) or the intended
+   behaviour? Nothing says.
+2. **What is the comparison rule between a `text` value and an `enum` label?** R-1 separates text
+   from numbers and explicitly unifies `integer` and `decimal`. It does not say whether `text` and
+   `enum` are one declared type for comparison. AC-8.1 generates the cell; no rule supplies its value.
+3. **Does `IN` fold case?** FR-022b says folding applies to `=`, `<>` and `LIKE`. `IN` is set
+   membership over the same values and DS-4 row B exercises it. Silence here is a truth-table cell
+   an implementer fills in by guessing.
+4. **Which side of a `join` is capped?** FR-064 caps candidates; `join` borrows columns through a
+   relation. A 9,000-candidate query joining a relation with 20 targets each materialises 180,000
+   borrowed values, and no bound mentions the join.
+5. **What does `explain: true` do on a SQLite-less build?** FR-020h refuses typed filters by name;
+   `explain` evaluates nothing, so it could legitimately still answer. AC-F6 and AC-D6 do not cover it.
+6. **Is the health view (FR-025a) scoped by workspace?** It lists *"every bad value vault-wide"*, and
+   FR-060's scope rule is stated for the six tools. The health view is a UI surface, not a tool.
+   US-8's guarantee has a hole exactly the width of that distinction.
+7. **What is the freshness answer for a record whose note is in the trash?** The row is orphaned
+   (no manifest entry) and FR-020c flags it; `check_integrity` reports it as an orphaned row. But
+   trash is a normal, expected state, so every trashed record generates a permanent integrity
+   finding until purge — 30 days of noise in the channel FR-121's verdict depends on being read.
+
+---
+
+## Verdict and next action
+
+**BLOCK** — 11 CRITICAL, 31 MAJOR, 14 MINOR, 5 OBSERVATION.
+
+The rulings were right and most of the deletion was executed well. What blocks is that the largest
+ruling is **not finished and not instrumented**: seven SQL-side evaluations survive in normative
+text, two of them CRITICAL, and the revision deleted the only two artifacts that could have caught
+them. Alongside that, one new mechanism does not work as claimed (`strings.ToLower`, verified by
+execution), one new test cannot pass and its supporting claim does not reproduce (FR-004a), and
+pass 1's C-1 is still live in four normative places including a mandatory acceptance criterion.
+
+To address these findings, run:
+
+```
+/plan-spec --revise docs/internal/specs/vault-records-spec-2026-08-25.md docs/internal/specs/vault-records-spec-2026-08-25-review-round6.md
+```
+
+**Three findings should be fixed before anything else, because everything downstream inherits them:**
+**C-5** (add the one test that makes R-A a property rather than an intention), then **C-3 and C-4**
+(the two SQL-side survivors that the test would immediately catch), then **C-1** (the folding
+mechanism, which changes FR-011a, R-10, SC-002d, test 53, DS-1 and holdout 15 together).
+
+ADR-068 needs one edit of its own, independent of the spec: **C-11**, the §4 Consequences bullet that
+still instructs the reader to build a query compiler.
