@@ -1,10 +1,54 @@
 # Vault records — specification
 
-- **Implements:** [ADR-068](../architecture/ADR-068-vault-records-typed-record-layer.md) **revision 7** (2026-08-28)
+- **Implements:** [ADR-068](../architecture/ADR-068-vault-records-typed-record-layer.md) **revision 8** (2026-08-28)
 - **Builds on:** [ADR-067](../architecture/ADR-067-omnipus-knowledge-base-and-render-first-preview.md) — `pkg/knowledge` is **reused, never duplicated**
-- **Date:** 2026-08-25; **revised 2026-08-28** to ADR-068 revision 7
+- **Date:** 2026-08-25; **revised 2026-08-28** to ADR-068 revision 8
 - **Branch:** `feat/library-improvements`
-- **Status:** Draft revision 5. Revision 2 followed round-2 review (BLOCK: 8 critical, 21 major); revision 3 realigned to ADR-068 revision 5; revision 4 realigned to ADR-068 revision 6 — a sixth tool (`vault_configure`), two named blast-radius criteria, a specified freshness token, a platform posture, a W0 wave, and byte budgets. **Revision 5 follows grill pass 1 (BLOCK: 19 critical, 41 major, 17 minor — `vault-records-spec-2026-08-25-review.md`) and three operator rulings that delete work.**
+- **Status:** Draft revision 6. Revision 2 followed round-2 review (BLOCK: 8 critical, 21 major); revision 3 realigned to ADR-068 revision 5; revision 4 realigned to ADR-068 revision 6 — a sixth tool (`vault_configure`), two named blast-radius criteria, a specified freshness token, a platform posture, a W0 wave, and byte budgets. Revision 5 followed grill pass 1 (BLOCK: 19 critical, 41 major, 17 minor) and three operator rulings that delete work. **Revision 6 follows grill pass 2 (BLOCK: 11 critical, 42 major, 14 minor — `vault-records-spec-2026-08-25-review-round6.md`) and one further operator ruling: Unicode case folding is REQUIRED.**
+
+
+**What revision 6 changes, in one paragraph.** Revision 5's rulings were right; **the deletions they
+required were not finished, and two new mechanisms did not work as claimed.** Revision 6 finishes
+both. **(1) The case-folding mechanism is replaced.** Revision 5 asserted that `strings.ToLower`
+gives *"full-Unicode case insensitivity for free"*. It does not — Go's standard library performs
+**simple** folding, and its two candidate functions fail in **opposite** directions, so `straße`
+never matched `STRASSE` under either. The mechanism is now **`golang.org/x/text/cases.Fold()`**,
+full Unicode folding, with six literal language pairs pinned as **AC-8.9** — including the Turkish
+`İstanbul`/`istanbul` pair asserted as **NOT equal**, with the reason recorded so it is not "fixed"
+later (FR-011a). **(2) Seven surviving SQL-side evaluations are removed and the ruling is now
+MECHANICALLY ENFORCED**, which it was not: revision 5 deleted both artifacts that could detect one
+(test 39 and AC-8.8) while depending on the property entirely. **AC-8.10 / §7 test 39a** inspects
+every emitted statement against a named narrowing allow-list, and it is W1's first deliverable.
+**(3) FR-064's bound is respecified**, because as written it was unimplementable — it counted a
+compiled `WHERE` clause ruling R-A deletes — and it becomes **two** bounds, B1 (50,000 narrowed
+candidates, genuinely pre-retrieval) and B2 (10,000 survivors, a streaming abort), with A-14's claim
+**correspondingly weakened and said so**. **(4) FR-064a's SQLite pushdown is deleted**; the
+aggregate path is a Go stream that retrieves up to 50,000 candidates, and the cost is stated rather
+than recorded as free. **(5) Pass 1's C-1 is closed properly** — four normative places, including a
+mandatory acceptance criterion, still compared against `ManifestEntry.Hash`, the mechanism FR-020c
+spends nine bullets disproving. **(6) FR-004a's test is respecified**: revision 5's grep-based test
+**could never pass**, because the first thing it red-lights is `pkg/records/doc.go:12` — the D0
+statement itself — and the "verified clean" claim behind it is **withdrawn**, while the underlying
+claim (no domain vocabulary in declared enums, types, seeded schemas or default config) is
+**confirmed by reading all 44 hits**. Beyond those: `<>`'s absent-side semantics are ruled (they were
+specified in two directions), sorting is assigned to Go (it was assigned to nobody and then assumed
+of SQLite four times), the filter tree gains the bound it never had, twenty-five unscheduled tests
+are scheduled, §4.2's worked total is corrected (it was **arithmetically impossible**), the money
+deletion inventory gains the wire-contract and SPA surfaces it omitted, and all seven of the review's
+"unasked questions" are answered rather than left open.
+
+**Where review round 6 is WRONG or incomplete, said here rather than silently ignored.**
+
+| Round-6 claim | Verdict |
+|---|---|
+| **C-1's proposed FIX** — *"state the mechanism as `strings.EqualFold` … and DELETE `straße`/`STRASSE` from test 53"* | **The DIAGNOSIS is upheld and was verified by execution; the REMEDY is REJECTED with evidence.** `EqualFold` is also **simple** folding: `EqualFold("straße","STRASSE")` is **false**. Adopting it would have kept the flagship test case unsatisfiable and deleted the very row that discriminates. **`cases.Fold()` returns true**, and the German pair **stays** in test 53 as the cell that catches a regression to any stdlib call. Executed, both ways, before writing this |
+| **C-8's proposed new edge-case row** — *"add: enum value differing by a FULL-case-folding pair (`ß`/`ss`) — does NOT resolve"* | **REJECTED, and it follows from the above.** Under `cases.Fold()` it **DOES** resolve. The row is added with the **opposite** expectation and with the reason, so the correct behaviour is pinned rather than the workaround |
+| **M-36** — *"`FR-039a` is referenced and never defined"* | **HALF UPHELD.** It is undefined **in this document**, and the bare citation was unresolvable from here — that is a real defect and it is fixed. But the citation is **not dangling**: FR-039a is `docs/internal/specs/adr-067-knowledge-base-and-preview-spec.md:1918`, and `pkg/knowledge/manifest.go:62-64` cites it the same bare way. The defect is two documents sharing an `FR-nnn` namespace; the fix is to qualify it, not to invent a local FR-039a |
+| **M-26's counts** — *"288 in the specification and 119 in the ADR"* | **The POINT is upheld emphatically; the FIGURES do not reproduce exactly.** Over R-F's own word list this document counts **313** and ADR-068 **135**; over the unambiguous subset, **243** and **90**. The command is published in R-F so a third reviewer does not derive a fourth number. Either way revision 5's *"roughly thirty"* was wrong by an order of magnitude, which is the finding |
+| **M-34** — *"twenty-six tests named in §6 do not appear in §7"* | **UPHELD at TWENTY-FIVE.** The twenty-sixth, `TestFilter_CaseFoldIsUnicodeNotASCII`, is test 53 under its old name; it is repointed rather than scheduled |
+| **M-20** — *"the three files [referencing `maxMoneyScale`] are `decimal_string_bounds_test.go`, `money_test.go` and `schema_declared_keys_test.go`"* | **UPHELD AND EXTENDED.** Those three are right and `schema_declared_keys_test.go` was genuinely missing from §10a. The review **also missed three**: `pkg/records/schema.go:678`, `pkg/records/value.go:324,467,471-472` (an executable bound check, not a comment), and `compare_oracle.go`'s `crossCurrencyProblem` |
+| **C-9's contract inventory** | **UPHELD AND EXTENDED**, and one trap is added: a case-insensitive grep for `currency` matches **con·currency**, so seven hits in `PerformanceSettings*.yaml` and `openapi.yaml` are agent-concurrency settings and are **explicitly out of scope** — named in §10a so the next person does not delete them |
+| The brief's *"promoting `x/text` to direct adds nothing to the binary"* | **The CONCLUSION stands — Hard Constraint #1 is satisfied, no new module and no CGo — and the CLAIM is refined by measurement.** The `cases` subpackage is not currently linked and costs **≈274 KiB** (280,352 bytes, measured). Stated in FR-011a because "adds nothing" would not survive a measurement |
 
 **What revision 5 changes, in one paragraph.** Three operator rulings land first because they remove
 material rather than add it. **(1) There is no `money` type.** The requirement is *"a precise decimal
@@ -1060,7 +1104,7 @@ editor. Its name invites exactly the misreading these two FRs exist to prevent.
 - **FR-062** The scoped-out case MUST be indistinguishable from an empty vault.
 - **FR-062a** When scope resolution is itself incomplete — ADR-067's `Scope.Truncated()` — the query MUST report incompleteness with that reason. A query that could not resolve every mount MUST NOT report success, or a whole mounted folder can go missing while the answer claims to be complete.
 - **FR-063** Page size MUST default to 50 and cap at 200; a clamp MUST be reported.
-- **FR-064** **SCOPED, revision 5.** A **row-returning** query whose candidate set exceeds 10,000 records MUST be refused with a narrowing instruction. **"Candidate" is now defined, because it is the most consequential bound in the document and revision 4 never said what it counted:** the candidate set is **the rows surviving the filter, before paging, joins, grouping and ranking** — i.e. the population the query would page through, not the population of the record type. **RESPECIFIED, revision 6 (review round 6, C-4) — as revision 5 wrote it, this bound was UNIMPLEMENTABLE, and it is the load-bearing bound of the whole design.** Revision 5 said the count was *"a `COUNT(*)` over the compiled `WHERE` clause, taken before any row is materialised"*. **Ruling R-A deletes the compiled `WHERE` clause.** SQLite narrows by type, path prefix and kind; "the rows surviving the filter" is a quantity **only the Go comparator can produce, and it produces it by evaluating candidates — which is materialising them**. So the requirement, its acceptance criterion (FR-066a), its test (47) and its refusal string were all written for a mechanism the ruling removed. If a cap can only be enforced *after* the work it bounds, it bounds nothing.
+- **FR-064** **SCOPED, revision 5.** A **row-returning** query whose candidate set exceeds 10,000 records MUST be refused with a narrowing instruction. **"Candidate" is defined, because it is the most consequential bound in the document and revision 4 never said what it counted — and revision 6 fixes the UNIT, which revision 5 also left ambiguous (review round 6, m-9).** **BOTH bounds count RECORDS, never rows**, and the distinction is not pedantic: with `many` arity and the relation child table, **a single record produces several rows**, so a cap stated in rows silently tightens by the average arity of the query's `many` properties — a 10,000-row cap over a corpus averaging two tags is a 5,000-record cap that nobody chose. The population B1 counts is the **distinct record population the narrowing predicates select**; the population B2 counts is the **distinct records the comparator has accepted**. The constraint table says "records" in both rows and means it. **RESPECIFIED, revision 6 (review round 6, C-4) — as revision 5 wrote it, this bound was UNIMPLEMENTABLE, and it is the load-bearing bound of the whole design.** Revision 5 said the count was *"a `COUNT(*)` over the compiled `WHERE` clause, taken before any row is materialised"*. **Ruling R-A deletes the compiled `WHERE` clause.** SQLite narrows by type, path prefix and kind; "the rows surviving the filter" is a quantity **only the Go comparator can produce, and it produces it by evaluating candidates — which is materialising them**. So the requirement, its acceptance criterion (FR-066a), its test (47) and its refusal string were all written for a mechanism the ruling removed. If a cap can only be enforced *after* the work it bounds, it bounds nothing.
 
   **What replaces it: TWO bounds, because one number was being asked to do two different jobs.** They protect different resources, they fire at different moments, and each names a remedy that actually reduces the number it fired on.
 
@@ -1826,6 +1870,7 @@ broader thing has been given a wrong answer with no error channel.
 | FR-076 | US-3 | — | `TestFind_NearComposesWithFilters` |
 | FR-076a | US-10 | — | `TestFind_TasksAreIndexedRowsNotAWalk` |
 | FR-077 | US-4 | 4.4 | `TestAudit_VaultEditAndRestructureCarryOperation` |
+| FR-064, FR-064a, FR-066b, SC-007 | US-2 | 2.5 | `BenchmarkRecords_AtFiftyThousand` (§7 test 21); `BenchmarkBounds_PeakRSSAtCap` (§7 test 88) — **NEW ROW, revision 6 (review round 6, m-7).** Both are **benchmarks with a W1 write-back obligation**, and neither had a §6 row, so the obligation was traced only from §7 and would have been discharged by whoever read §7 rather than by the requirement's owner |
 | FR-079, 128 | — | — | `TestTools_DescriptionBudgetIsReviewedNotEnforced` *(revision 6, M-35 — §6 named `TestTools_DescriptionTokenBudget`, whose name mandates runtime enforcement of a budget FR-127b says is NEVER enforced at runtime; §7 test 38 wins)* |
 | FR-080, 080a, 081, 082 | — | — | `TestToolPolicy_ZeroRepairedPairsOnFreshInstall` |
 | FR-083, 084 | US-12 | 12.2, 12.4 | `TestToolPolicy_ThreeWriteTiersAreIndependent` |
@@ -2719,10 +2764,10 @@ this specification's requirements onto them.
 
 | Wave | This spec's requirements | Exit criterion additions from revision 5 |
 |---|---|---|
-| **W0** | FR-020e | *(unchanged — the F-0 index rebuild, independent of everything else)* |
-| **W1** | FR-001..FR-011b, FR-012..FR-013, FR-015, FR-015a, FR-020, FR-020a..FR-020c1, FR-020h..FR-020j, FR-021, FR-021a..FR-021d, FR-036..FR-039, FR-060..FR-062a, FR-075, FR-075a | **A-14's measurement**: the Go evaluation path at the 10,000-record cap and at FR-064a's 50,000, peak RSS, Linux **and** macOS. FR-020i's version assertion. **The `go-test-nosqlite` CI job exists and is a required check** |
-| **W2** | FR-004a, FR-022..FR-029, FR-063..FR-067a, FR-073, FR-076, FR-076a, FR-110..FR-117, R-1..R-13 as FR-200..FR-212 | **AC-8.4b's six-mutation table, reported as an artifact.** FR-113's nDCG@10 run with its per-query table and its ship/no-ship verdict. **A-13's answer**: whether the stored-field freshness mechanism holds. FR-049b's counters exist |
+| **W0** | FR-020e; **the R-F vocabulary replacement (revision 6)** | *(unchanged — the F-0 index rebuild, independent of everything else.)* **ADDED, revision 6 (review round 6, M-26 / O-2): the R-F vocabulary replacement is W0's second deliverable, with its own review.** Exit criterion: `grep -oiwE 'company\|companies\|deal\|deals\|meeting\|meetings\|status\|stage\|arr\|open\|won\|lost\|prospect\|Acme\|Northwind\|CO-0142\|DEAL-0117'` over both documents returns **zero** outside one explicitly-marked illustrative appendix. It is W0 because it touches no code, blocks nothing, and gets harder every revision it is deferred |
+| **W1** | FR-001..FR-011c, FR-012..FR-013, FR-015, FR-015a, FR-020, FR-020a..FR-020c1, FR-020h..FR-020j, FR-021, FR-021a..FR-021d, FR-036..FR-039 (incl. **FR-036b**, **FR-038a**), FR-060..FR-062a, FR-075, FR-075a | **A-14's measurement**: the Go evaluation path at the 10,000-record cap and at FR-064a's 50,000, peak RSS, Linux **and** macOS. FR-020i's version assertion. **The `go-test-nosqlite` CI job exists and is a required check** **REVISION 6 ADDITIONS.** **(a) `TestQuery_NoComparisonIsDelegatedToSQL` (test 39a / AC-8.10) MUST EXIST AND PASS BEFORE ANYTHING ELSE IN W1 IS ACCEPTED** — it is the control that makes ruling R-A a property rather than an intention (C-5), and it must exist before there is anything for it to catch. **(b) A-14's measurement is taken at BOTH bounds** — B2's 10,000 and B1/FR-064a's 50,000 — **at FR-023c's 64-leaf cap**, with peak RSS. **(c) W1's freshness FALLBACK is stated and shipped**: until W2 verifies the stored-field mechanism, every record reports `complete: false` with staleness-unknown as the reason (M-28). **(d) The `cases.Fold()` dependency is promoted to DIRECT in `go.mod`** in the same commit as the comparator, with the measured ≈274 KiB binary delta recorded in the commit message (FR-011a). **(e) Every `contracts/` row of §10a lands atomically with both regenerated trees and `make verify-contracts` exiting 0** (C-9, M-22) |
+| **W2** | FR-004a, FR-022..FR-029 (incl. **FR-022d**, **FR-023c**), FR-063..FR-067b (incl. **FR-065a**), FR-073, FR-076, FR-076a, FR-110..FR-117, R-1..R-13 as FR-200..FR-212 | **AC-8.4b's TWELVE-mutation table plus the thirteenth aggregate mutation, reported as an artifact** *(revision 6, M-11: revision 5 said six, for twelve live rules)*. FR-113's nDCG@10 run with its per-query table and its ship/no-ship verdict. **A-13's answer**: whether the stored-field freshness mechanism holds. FR-049b's counters exist |
 | **W3** | FR-030..FR-035, FR-065, FR-074 | *(unchanged)* |
 | **W4** | FR-040..FR-048, FR-050..FR-053 | The trash **convention** including FR-048a's colon-free path, retention and restore semantics — written down and reviewed **before** W5 exposes the operation |
 | **W5** | FR-016..FR-019a, FR-043a, FR-048a's `restore` operation, FR-049a, FR-070..FR-084, FR-090..FR-092, FR-127..FR-128 | **FR-049a's migration scan reports EMPTY.** FR-079's serialised six-tool definition set is **measured in bytes** and written back into FR-128. A-10's description review |
-| **W6** | FR-020f, FR-025a's health view, FR-100..FR-103 | FR-025a's two surfaces agree, asserted by test 58 |
+| **W6** | FR-020f, FR-025a's health view, **FR-025b**, FR-100..FR-103 | FR-025a's two surfaces agree **within one workspace scope** (FR-025b), asserted by test 58 |
