@@ -1,6 +1,6 @@
 # ADR-068 — Vault records: a typed record layer with relations
 
-- **Status:** Proposed (2026-08-28) — **revision 8**, after grill pass 2 over the implementing specification (BLOCK: 11 critical, 42 major, 14 minor — `../specs/vault-records-spec-2026-08-25-review-round6.md`) and one further operator ruling (**Unicode case folding is REQUIRED**). Revision 7 followed grill pass 1 over the implementing specification (BLOCK: 19 critical, 41 major, 17 minor) and **nine operator rulings**. **Revision 7 is mostly a DELETION, and that is the headline.** The largest ruling reverses D16.2b: **the properties index NARROWS CANDIDATES; our own tested comparator DECIDES.** SQLite evaluates no comparison. That makes D16.6's nine violations **not applicable rather than defeated** — a stronger and far simpler position than nine deliberate defeats, **none of which was verified and zero of the seven the spec had specified turned out to be sufficient.** Also deleted: the **`money` type** in full (D3, O-2 — the requirement is a precise decimal and an int64, not a currency-carrying value); **enum ordering by declared position** (D4's second clause, replaced by SQLite's own lexical order with a value prefix for domain order); and our **invented filter-operator vocabulary**, replaced by SQL's (O-3, amended). Added: `number` splits into **`integer` and `decimal`**; **case-insensitive matching is a feature**, and it is a comparator rule because SQLite folds no non-ASCII at all; **no hardcoded domain vocabulary anywhere** (D0, strengthened with the operator's "empty database, all capabilities, nothing predefined"); and the corrections grill pass 1 earned — a re-derived freshness ordering with its residual carried as a **stated open risk**, four wrong code citations, and a tool-cost argument computed against the wrong denominator.
+- **Status:** Proposed (2026-08-28) — **revision 9**, after the UAT author's read of revision 8 / spec Draft 6 (`../specs/uat-vault-records-2026-08-28.md`, 99 cases over sixteen Parts) surfaced ten under-specifications that different implementers would each have guessed at differently. **What revision 9 changes is set out immediately below.** *Revision 8 followed grill pass 2* over the implementing specification (BLOCK: 11 critical, 42 major, 14 minor — `../specs/vault-records-spec-2026-08-25-review-round6.md`) and one further operator ruling (**Unicode case folding is REQUIRED**). Revision 7 followed grill pass 1 over the implementing specification (BLOCK: 19 critical, 41 major, 17 minor) and **nine operator rulings**. **Revision 7 is mostly a DELETION, and that is the headline.** The largest ruling reverses D16.2b: **the properties index NARROWS CANDIDATES; our own tested comparator DECIDES.** SQLite evaluates no comparison. That makes D16.6's nine violations **not applicable rather than defeated** — a stronger and far simpler position than nine deliberate defeats, **none of which was verified and zero of the seven the spec had specified turned out to be sufficient.** Also deleted: the **`money` type** in full (D3, O-2 — the requirement is a precise decimal and an int64, not a currency-carrying value); **enum ordering by declared position** (D4's second clause, replaced by SQLite's own lexical order with a value prefix for domain order); and our **invented filter-operator vocabulary**, replaced by SQL's (O-3, amended). Added: `number` splits into **`integer` and `decimal`**; **case-insensitive matching is a feature**, and it is a comparator rule because SQLite folds no non-ASCII at all; **no hardcoded domain vocabulary anywhere** (D0, strengthened with the operator's "empty database, all capabilities, nothing predefined"); and the corrections grill pass 1 earned — a re-derived freshness ordering with its residual carried as a **stated open risk**, four wrong code citations, and a tool-cost argument computed against the wrong denominator.
   - *Revision 6:* after a fifth adversarial review (BLOCK: 8 critical, 25 major, 3 minor — `ADR-068-vault-records-typed-record-layer-review-round5.md`). Revision 5's own headline numbers were wrong: the catalog is **98 tools, not 102**, and the two-index staleness mitigation named a **freshness token that does not exist**. Both are repaired below, the second by specifying the mechanism rather than asserting it again. The agent tool surface grows from five `vault_*` tools to **six** — the control plane gets its own policy lever (D15.6). D16's latency argument is **withdrawn as unevidenced**; the capability argument, which is the one that survives, now carries the decision alone. And **D16.6 is new**: SQLite's default semantics contradict **nine of the thirteen** comparison rules the spec's §8 oracle defines, eight of them silently — the strongest single consideration bearing on D16, which revision 5 omitted entirely while the implementing spec carried it.
   - *Revision 5:* three-agent design council; D16 resolved to a two-index design; nine `record_*` tools cut to five `vault_*`; D21, D22, D23 added.
   - *Revision 4 and earlier:* proposed 2026-08-25 after three adversarial reviews (BLOCK each time: 7, 8, then 10 critical). Revision 1 made three false claims about existing code (D14, D16, D18); all three are corrected in place and the corrections are marked. D16 had been wrong three times and was deliberately left unresolved behind a measured spike.
@@ -11,6 +11,42 @@
   - *"`repairAndValidateToolPolicyCoverage` emits **two** WARNs, not one."* It emits **`1 + N`** — one at `pkg/gateway/gateway.go:975`, plus one per repaired agent at `pkg/config/validate.go:576` — and **zero** when nothing needed repair. The **citation** half of the same finding is upheld: the function is at `gateway.go:968`, not in `pkg/config/validate.go`.
 
   A review is evidence, not an oracle, and complying with a wrong finding would be the same failure as ignoring a right one.
+- **What revision 9 changes. Three of the four are corrections to this document's own claims, and
+  one is drift between this document and the specification it governs.**
+  - **(a) `person`'s target type is RULED and it is OPTIONAL (D3, new D3.4 — UAT C-7).** Revision 8
+    pointed three ways at once: D3's prose called it *"a relation to a person record"* (a shipped
+    `person` record type, which **D0 forbids**), D0's own table listed `person` among **our** seven
+    property types, and **D2's canonical example writes `owner: { type: person }` with no `to:`**
+    while `relation` refuses without one. The tester was told to mark the case **Blocked** if the
+    product could not say which record type a person resolves to. **It can, and the code already
+    did:** `to:` is *permitted* on `person` and *demanded* only on `relation`
+    (`pkg/records/schema.go:Property.finalize`), and with no `to:` only the link **shape** is
+    validated. **Neither reading offered was taken** — requiring `to:` deletes shipped behaviour,
+    and a vault-declared default target type would be the product knowing a name for the operator's
+    people. D2's example was right; D3's prose was wrong.
+  - **(b) D2's `unit` ruling is WITHDRAWN and replaced (D2 — UAT C-8.4).** Revision 8 ruled
+    *"`unit` is NOT a schema key"* on the ground that *"no FR, no wire schema and no test anywhere
+    defines a `unit` key."* **All three halves are false** — `PropertyDef.yaml` declares it,
+    `propertyDeclKeys` parses it, and `schema_declared_keys_test.go` asserts it is not silently
+    ignored — **and D3's own `decimal` row in this same document names `unit` as the mechanism that
+    closes the `exercise: 60 minutes` failure.** Revision 8 deleted in D2 a key D3 was requiring.
+    `unit` is a real key on `integer` and `decimal`, **opaque text the product never interprets**,
+    declared **per property and never per value** — which is what makes cross-currency arithmetic
+    structurally unreachable rather than merely forbidden. The half revision 8 got right is kept:
+    `unit: GBP` stays out of the canonical example. **`scale` is removed from that example too** —
+    it is a per-value bound, not a property key, and revision 8 put it there while calling it
+    `unit`'s replacement.
+  - **(c) Unknown schema keys are governed, in writing (new D2.1 — UAT C-8.4).** The behaviour is
+    already shipped and correct — `checkDeclaredKeys` refuses an unknown key **by name** and lists
+    the permitted set — and no decision recorded it, so an implementer had nothing to build to and a
+    tester had nothing to assert. It is written down and cited, not invented.
+  - **(d) The candidate-cap row was ADR↔SPEC DRIFT, in the authority document (D15.5b — UAT F-16).**
+    This table showed **one** bound of *"10,000 records, counted before retrieval"*; the
+    specification has carried **two** since its revision 6 — B1 (50,000 evaluated, genuinely
+    pre-retrieval) and B2 (10,000 survivors, a streaming abort) — **with two different refusal
+    strings**. The single row also attached the wrong quantity to the wrong number: 10,000 is the
+    survivor count, which *cannot* be counted before retrieval. Aligned to the spec.
+
 - **What revision 8 changes, and why an ADR needed changing at all.** Grill pass 2 found **one
   CRITICAL in this document** and it was the worst kind: **§4's Consequences bullet carried revision
   7's own note saying it was *"kept, RESTATED"* — and the body was never restated.** Every clause
@@ -263,7 +299,7 @@ properties:
   segment:     { type: enum,   values: [vendor, customer, partner], many: true }
   owner:       { type: person }
   website:     { type: text }
-  arr:         { type: decimal, scale: 2 }    # revision 8: `unit: GBP` REMOVED — see the note below
+  arr:         { type: decimal }              # revision 9: `scale: 2` REMOVED TOO — see the note below
 ```
 
 > **`unit: GBP` IS REMOVED FROM THIS EXAMPLE, revision 8 (spec review round 6, m-12), and the
@@ -274,13 +310,74 @@ properties:
 > exactly where an undefined key becomes a de-facto feature: the next implementer sees it in the
 > ADR's own schema and parses it.
 >
-> **Ruling: `unit` is NOT a schema key.** A vault that wants a unit expresses it the way it
-> expresses everything else — as its own convention, in a property of its own (`arr_unit: { type:
-> enum, values: [GBP, EUR] }`), or in the property's name. **That is D0 working correctly**, and
-> inventing a `unit` key would be the product knowing something about the vault's domain.
-> `scale`, which replaces it above, **is** a real key: it is FR-013's declared decimal scale, it is
-> what makes `180,000.00` render with two places rather than one (the spec's m-10), and it is
-> bounded at 100 by `pkg/records/decimal.go:48`.
+> **REVISION 8's RULING WAS *"`unit` is NOT a schema key"*. IT IS WITHDRAWN AND REPLACED IN
+> REVISION 9, because its supporting claim does not reproduce and the ruling contradicted D3 in
+> this same document (UAT case C-8.4).**
+>
+> **The claim that does not reproduce:** revision 8 wrote *"no FR, no wire schema and no test
+> anywhere defines a `unit` key."* All three halves are false as of revision 9, checked by reading:
+> `contracts/components/schemas/PropertyDef.yaml` declares a `unit` property with its own
+> description; `pkg/records/schema.go`'s `propertyDeclKeys` lists `"unit": {kind: declKeyParsed}`;
+> `Property.Unit` is a real field and `Property.finalize` refuses it on a non-numeric type; and
+> `pkg/records/schema_declared_keys_test.go` asserts, for `unit` along with every other contract
+> key, that it is **not silently ignored**. **And D3's own `decimal` row, in this document, names
+> `unit` as the mechanism that closes the `exercise: 60 minutes` failure** — so revision 8 deleted a
+> key in D2 that D3 was simultaneously requiring.
+>
+> **The ruling as it now stands, and it keeps the half of revision 8 that was right:**
+>
+> 1. **`unit` IS a schema key, valid on `integer` and `decimal` and on nothing else.** It closes
+>    D3's `exercise: 60 minutes` failure and it is already built.
+> 2. **`unit` is OPAQUE TEXT the product never interprets.** It does not affect comparison,
+>    ordering, grouping, aggregation, validation or storage. It is carried and rendered. There is no
+>    currency table, no conversion, no ISO-4217 recognition, and **no code branch anywhere reads its
+>    value** — only whether it is present and whether its property is numeric.
+> 3. **`unit` is declared per PROPERTY, never per VALUE — which is what makes the money hazard
+>    structurally unreachable rather than merely forbidden.** Every value of one property shares one
+>    unit by construction, so a `SUM` cannot add GBP to JPY: there is no per-value currency for it to
+>    mix. That is the same argument this ADR makes for preferring one comparator over nine SQL
+>    defeats — remove the failure's *precondition* rather than police its *symptom*.
+> 4. **`unit: GBP` stays OUT of the canonical example above, and revision 8 was right about that
+>    much.** Not because the key is illegal, but because a currency is the one unit whose meaning a
+>    reader will assume the product understands, and a canonical example is exactly where that
+>    assumption gets made. A vault may still write it; the product still knows nothing about it.
+> 5. **`scale` is NOT a property-level key.** It appears in the example above as FR-013's decimal
+>    scale and is enforced **per value** at parse time, bounded at 100 by `pkg/records/decimal.go`'s
+>    `maxDecimalScale`. It is deliberately absent from `propertyDeclKeys`, and a schema that writes
+>    it falls through to the unknown-key rejection (D2.1). *(Revision 8 wrote that `scale`
+>    "replaces" `unit` in the example. It does not replace it — the two are unrelated, and the
+>    example's `arr: { type: decimal, scale: 2 }` is therefore **wrong**: `scale` is not a key a
+>    property declaration may carry. It is corrected to a bare `{ type: decimal }` above.)*
+>
+> **AC-D2.1** — `{ type: decimal, unit: GBP }` is **accepted**, and no response anywhere in the
+> product contains the words "currency", "ISO-4217", "minor units", or treats `GBP` as anything but
+> the characters `G`, `B`, `P`. This is the UAT's C-8.4 and C-8.5, and it is the criterion that
+> distinguishes *"the product ships a unit field"* from *"the product ships money".*
+
+**D2.1 — An unknown schema key is REFUSED BY NAME, and the permitted set is named with it.
+WRITTEN DOWN IN REVISION 9 (UAT case C-8.4); the behaviour is already shipped and is cited, not
+invented.** A schema file, an `identity` block, a property declaration and an enum value's long form
+each have a **closed key set**. A key outside it is refused, naming the key AND listing what the
+declaration *does* carry — never dropped in silence, because *"an author who writes something
+meaningful must never be told nothing when we throw it away"* is the same rule D3.1 applies to
+arity. A key we publish but do not act on is refused with **its own reason** rather than called
+unknown, on the ground that telling an operator their own documented key is unrecognised is a second
+error on top of the first.
+
+Verified at revision time: `pkg/records/schema.go:checkDeclaredKeys` and the four key sets
+`schemaFileKeys` / `identityDeclKeys` / `propertyDeclKeys` / `enumValueDeclKeys`; the rejection code
+`RejectUnknownKey`; and three guards in `pkg/records/schema_declared_keys_test.go` —
+`TestSchema_EveryContractPropertyKeyIsHandled` (which reads
+`contracts/components/schemas/PropertyDef.yaml` itself rather than a transcription of it), the
+*"no contract key is silently ignored"* subtest, and `TestSchema_RefusedKeysCarryAReason`, whose
+invariant is *"a refused key is refused in words the operator can act on"*.
+
+**One ordering rule is load-bearing and is stated because it is easy to get backwards:** the
+`schema_version` checks run **before** the unknown-key check. A key this release does not know,
+inside a `schema_version` this release does not know, is an **unsupported version** — reporting
+`unknown key "x"` about a version-2 file sends the operator to fix the wrong thing.
+
+Spec **FR-005a** carries it.
 
 
 **Why a file and not a UI:** Notion added schema audit logging in 2026 — Enterprise-only,
@@ -303,7 +400,7 @@ schemas make that failure worse, not better.
 | `date` | a day or an instant, comparable | `last_contacted` stored as text, silently unmatchable |
 | `integer` | a signed 64-bit whole number, bound-checked and refused outside int64 | a count silently widened to a float, or a large identifier silently truncated |
 | `decimal` | an exact, arbitrary-precision number, `unit` declared as metadata rather than glued into the property name | `exercise: 60 minutes` — text to one engine, duration to another, sortable in neither. And every quantity that a binary float rounds without saying so |
-| `person` | a relation to a person record, distinct from a name typed as text | the same concept modelled both ways in one vault |
+| `person` | a relation to whatever record type the VAULT uses for people. **`to:` is OPTIONAL** — see D3.4 — and this is the ONLY difference from `relation`. Distinct from a name typed as text | the same concept modelled both ways in one vault |
 
 > **REVISED IN REVISION 7 BY OPERATOR RULING, and the count did not change even though two types
 > did.** `money` — *"amount + ISO-4217 currency + scale, as **one** value"* — is **DELETED**, and
@@ -365,6 +462,48 @@ value — precisely the days being asked about.
 *Why:* Obsidian binds a property type to a property **name, vault-wide**, which is why real
 vaults carry `prm-tier`, `habits-reading`, `health_sleep_total_minutes`. Namespacing to work
 around a tool limitation is not a convention worth inheriting.
+
+**D3.4 — `person`'s target type is OPTIONAL, and that is the whole of what distinguishes it from
+`relation`. RULED IN REVISION 9 (UAT case C-7).** The UAT's own instruction was to mark C-7
+**Blocked** if the product *"has no way to say **which** record type a person resolves to"*, because
+three places in revision 8 pointed three ways: D3 called `person` *"a relation to a person record"*
+(which reads as a shipped `person` record type — the thing **D0 forbids**), D0's revision-8 table
+listed `person` as one of OUR seven property types, and **D2's canonical schema example writes
+`owner: { type: person }` with no `to:`** while `relation` requires one. A tester could not build a
+fixture guaranteed to pass and an implementer could not know whether to demand `to:`.
+
+**The ruling, and it is the answer the CODE ALREADY IMPLEMENTS rather than a new position:**
+
+| | `relation` | `person` |
+|---|---|---|
+| `to:` | **REQUIRED** | **OPTIONAL** |
+| With `to:` | target type checked (FR-034) | target type checked, identically |
+| Without `to:` | **refused** — *"a relation must declare its target record type with `to:`"* | accepted; **only the link SHAPE is validated** (it must be a wikilink) |
+| Comparison | R-8, by target identity | R-8, by target identity — `person` inherits it |
+
+Verified at revision time: `pkg/records/schema.go:Property.finalize` requires `To` in its
+`case TypeRelation:` arm **and in no other**, and its sibling check reads *"`to`/`inverse` are only
+meaningful on a relation or person"* — i.e. `to:` is *permitted* on `person`, never *demanded*.
+`pkg/records/schema.go:TypePerson`'s own doc comment already states the rule in one line: *"a
+relation to whatever record type the VAULT uses for people. It does NOT imply a built-in person
+type — D0 forbids that. With no `to:` declared, only the link shape is validated."*
+`pkg/records/compare_oracle.go`'s authority table carries *"person — ADR-068 D3 defines person as a
+relation, so it inherits R-8."*
+
+**Neither of the two readings the question offered is taken, and the reason is D0.** Making `to:`
+**required** would delete the shipped, tested behaviour that lets a vault say *"this is a person
+link"* before it has decided what its people are called. Resolving against a **vault-declared
+convention** — a default target type the product looks up when `to:` is absent — would mean the
+product knowing a name for the operator's people, which is precisely the hardcoded-vocabulary
+failure D0.1 exists to prevent. **The third answer costs nothing and was already built: absent
+`to:` means the target type is simply not checked.**
+
+**So D2's canonical example is CORRECT as it stands** (`owner: { type: person }`, no `to:`) and is
+now annotated to say so, rather than being "fixed" into the inconsistency it was accused of. **What
+was wrong was D3's prose**, corrected in the table above: `person` is a relation to a **person
+record of the vault's own declared type**, never to a `person` record type of ours.
+
+Spec **FR-004b** and its acceptance criteria carry it.
 
 ### D4 — Enums are closed. Ordering is lexical, and a domain order is a value prefix.
 
@@ -1195,12 +1334,31 @@ Notion's silent truncation as motivating evidence; shipping our own would be ind
 |---|---|---|
 | Results per page | default 50, max 200 | clamped, and the clamp is **reported** in the response |
 | Pagination | cursor-based | a cursor that cannot be honoured is an error, never a silent restart |
-| Candidate set counted before retrieval | 10,000 records | **refused** with a narrowing instruction naming the filter that would help. Hard, per the spike's C-3 (D16.3a) |
+| **B1 — evaluation bound.** The **narrowed** candidate population, counted **before any candidate is retrieved** | **50,000 records** | **refused**, quoting the **exact** candidate count and naming the remedy that actually reduces it — narrow the **scope** (a collection or path prefix) or the **kind**. It must **not** say "add a filter", because a filter does not change the number that fired |
+| **B2 — materialisation bound.** The **survivors**: records the comparator has accepted | **10,000 records** | **refused** as a streaming abort **during** evaluation, naming the remedy — add or tighten a filter, or use the aggregate-only path. It **must not** quote an exact survivor count it never finished computing |
+| Aggregate-only query (no rows returned) | exempt from B2; bounded at **B1's 50,000** | refused above B1, naming the count and the supported vault size |
 | Relation hops per query | 2 | refused; deeper traversal is a follow-up query, not an implicit walk |
 | Aggregation over a refused set | — | never partial. No total is returned at all |
 | **`check_integrity` findings** *(new)* | 500 per category | reported as clamped, with the count that would have been returned and the scope argument that narrows it |
 | **`check_integrity` notes swept** *(new)* | 100,000 | refused, naming the collection; the scoped form is the remedy |
 | Rate limit | **new work — see below** | 429 with `Retry-After` |
+
+> **THE CANDIDATE-CAP ROWS ARE CORRECTED IN REVISION 9, AND THE DEFECT WAS ADR↔SPEC DRIFT IN THE
+> AUTHORITY DOCUMENT (UAT case F-16).** Through revision 8 this table showed **one** row —
+> *"Candidate set counted before retrieval | 10,000 records"* — while the implementing specification
+> had carried **two** bounds since its revision 6, with **two different refusal strings and two
+> different remedies**. A tester reading the ADR expects one message and sees another; worse, the
+> single row named the **wrong quantity for the wrong number**: 10,000 is the **survivor** count,
+> which cannot be *"counted before retrieval"* at all, because only the Go comparator can produce it
+> and it produces it by evaluating candidates. **A bound that can only be enforced after the work it
+> bounds is not a bound**, and revision 8's row asserted exactly that. The spec is the more recent
+> and more considered document and the ADR is aligned to it, not the other way round; the reasoning
+> lives at spec **FR-064** / **FR-064a** / **FR-066a** and is not duplicated here.
+>
+> **The cost of B1 is carried over deliberately and is not softened:** it can refuse a query whose
+> filter would have selected three records. A vault of 60,000 notes of one type refuses every
+> row-returning query over that type until the caller narrows by scope or kind. That is a real
+> product cost, accepted, because the alternative is a bound enforced after the work.
 
 **The rate-limit row is CORRECTED in revision 6, and the correction is the interesting part.**
 Revision 5 wrote *"shared with ADR-067's `knowledgeRESTLimiter`"*, which reads as inheritance
