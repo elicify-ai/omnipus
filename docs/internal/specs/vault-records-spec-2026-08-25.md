@@ -1412,9 +1412,30 @@ risk rather than an implementation detail.
 | **R-5** | Enums order lexically | The declared ordinal is stored in its own column and `ORDER BY` uses it (FR-010) |
 | **R-11** | Totality holds for comparisons, but a SQL error is a third outcome the rule forbids | Any store error is caught and rendered as a problem row; it never propagates as a third outcome |
 
+**Verified by execution, not read from documentation** (`sqlite3` 3.51.0; ADR-068 D16.6 carries the
+same receipts): `SELECT '3' > 2;` → `1`. Over a row whose `status` is NULL, `WHERE NOT (status =
+'done')` → **0 rows**, and the guarded `WHERE (status IS NULL OR status <> 'done')` → **1 row**.
+`SELECT 'ACME' LIKE '%acme%';` → `1`. `SELECT 'vendors,partner' LIKE '%vendor%';` → `1`.
+`ORDER BY` over TEXT `lead, qualified, proposal, won` yields `lead, proposal, qualified, won`, so
+`stage >= 'qualified'` **silently drops every `proposal` deal**. `SUM` over 100 USD and 100 JPY →
+`200.0`. `SELECT no_such_fn(1);` → an error, exit 1.
+
+**The R-2 case is the sharpest, and it is worth naming as a product failure rather than a SQL
+quirk. FR-008 exists so that "which days did I not meditate?" returns the days with no entry.
+Under SQLite's default negation it returns ZERO rows** — the question answered confidently, and
+empty, with the omitted rows being exactly the rows asked about. That is the silent-failure class
+this whole specification exists to remove, reintroduced by the engine chosen to implement it. The
+defeat is one line — negation compiles to `(x IS NULL OR x <> ?)`, always, with no operator-level
+opt-out — and the whole risk is that the line is easy to forget and nothing reports its absence.
+
 - **AC-8.4** — the truth table runs against the **real query path** — schema → filter object →
   compiled query → store — not against a Go comparator in isolation. A truth table that passes
-  over a comparator the product does not use proves nothing about the product.
+  over a comparator the product does not use proves nothing about the product, and after ADR-068
+  D16.2b (*"the properties index answers every typed predicate"*) the product does not use one for
+  filtering. **This is the criterion that separates the nine defeats being verified from their
+  being believed**, and ADR-068 restates it as AC-16.6 for that reason. **It MUST be mutation-
+  checked**: removing the `IS NULL` arm of a negation, or swapping `instr()` for `LIKE`, must make
+  it fail (SC-024).
 - **AC-8.5** — the table is run twice: once against a freshly built properties index and once
   after a delete-and-rebuild (FR-020a). Identical results both times.
 - **AC-8.6** — **membership is invariant under ranking.** The same filter run with plain BM25 and
@@ -1460,14 +1481,22 @@ risk rather than an implementation detail.
 | ~~A-4~~ | **RESOLVED — deferred.** ADR-068 D11 descoped; no FR needed. The edge-case table's sub-record rows are removed. |
 | ~~A-5~~ | **RESOLVED — deferred.** ADR-068 D12 descoped; likewise. |
 
-| ~~A-6~~ | **RESOLVED 2026-08-28 — the spike reported and D16 is decided.** Two indexes: bleve keeps text, a derived SQLite properties index holds typed properties and relations. FR-020..FR-020g are specified above and W1 is unblocked. Note that ADR-068 **overrides its own spike's recommendation** (its D16.3): the spike said bleve passes, and on the question D16 gated on — memory — it does. The override is taken on latency and capability, grounds the spike itself named as outside its scope. A reader must be able to see that this happened; that is why it is recorded here as well as there. |
+| ~~A-6~~ | **RESOLVED 2026-08-28 — the spike reported and D16 is decided.** Two indexes: bleve keeps text, a derived SQLite properties index holds typed properties and relations. FR-020..FR-020h are specified above and W1 is unblocked. ADR-068 **overrides its own spike's recommendation** (its D16.3): the spike said bleve passes, and on the question D16 gated on — memory — it does. **CORRECTED, revision 4: the override is taken on CAPABILITY ALONE.** Revision 3 wrote "on latency and capability"; ADR-068 revision 6 **withdraws the latency argument outright** as unevidenced — revision 5 had quoted the spike's *"a dedicated aggregation store would be substantially quicker"* as evidence, and that sentence sits inside the spike's own section headed *"What this does not say"*. Nobody has benchmarked SQLite here. The capability argument — joins, `OR`, `GROUP BY`, aggregates, without our writing a general expression evaluator — carries the decision alone, and it is sufficient. **A reader must not quote latency from D16.3.** |
 | **A-7** | **LIVE. The two-index write path is unmeasured.** One note, two index updates: ordering, crash consistency and what a torn write leaves behind are all undefined. FR-020a says a rebuild fixes any divergence, which is true and is not a substitute for knowing how often divergence happens. **This ADR's own history is three revisions of assuming exactly this kind of thing.** W1 must measure it — write throughput, concurrent queries, property counts above 10 per record, and at least one non-macOS platform (the spike measured none of these; its §6.1). |
-| **A-8** | **LIVE. Whose tokenizer counts a "token" in FR-127's budget?** The budgets (~50–80/hit, 1,000 default, 4,000 cap) are meaningless without naming the counter. Likely agent assumption: the serving model's tokenizer, which varies per provider. **Needs:** a decision — a fixed reference tokenizer for budget accounting, or byte/character proxies with a stated conversion. Enforced budgets against an unnamed unit are how a cap becomes decorative. |
-| **A-9** | **LIVE, minor. ADR-068 D20 lists `trash` in both W4 and W5.** W4 says "`vault_edit`: … the two unbuilt primitives — body-replace and trash"; W5 says "`vault_restructure`: rename, move, trash". Read here as: the **primitive and its convention** land in W4, the **`vault_restructure` operation** exposing it lands in W5. FR-048 states that reading. If the ADR meant something else, this spec is wrong and should be corrected rather than reconciled. |
-| **A-10** | **LIVE. `vault_edit`'s operation enum has no policy granularity, and that is accepted — but the seeded defaults must be chosen for the *widest* operation in the tier.** FR-070c makes this explicit: granting `vault_edit` grants `create_record_type` and `replace_body` as well as `set_property`. An operator reading the tool name will not infer that. **Needs:** the tool description (FR-079's 150 tokens) to name the widest operation it grants, not the most common one. |
+| ~~A-8~~ | **RESOLVED 2026-08-28, in this spec's favour — the unit is BYTES.** Revision 3 raised it: budgets of ~50–80/hit, 1,000 default and 4,000 cap are meaningless without naming the counter, and the likely assumption is the serving model's tokenizer, which varies per provider. **ADR-068 revision 6's D22.7 concedes the point in the same words** and changes the unit: *"a token cap needs a tokenizer to enforce it, and D21.5 is a decision about three tokenizers that disagree — none of which is the model's."* FR-127 is now ~200–320 bytes/hit, ~4,000 default, 16,000 cap — the same intent at a conservative ~4 bytes/token. FR-127b names the unit and binds the tests to it. **One carve-out survives:** FR-079/FR-128's ~150-token description budget stays in tokens, because it is authoring guidance for a human, never a runtime check. |
+| ~~A-9~~ | **RESOLVED 2026-08-28, in this spec's favour.** Revision 3 read ADR-068 D20's two listings of `trash` as: the **primitive and its convention** land in W4, the **`vault_restructure` operation** exposing it lands in W5, and said that if the ADR meant otherwise the spec should be corrected rather than reconciled. **ADR-068 revision 6's D20 adopts exactly that split in its own words** — *"the convention is W4 design work, the operation is W5"* — and names the failure it avoids: shipping part of a tier-5 tool before W5 defines the tool or seeds its policy. FR-048 is unchanged and is now the ADR's reading too. |
+| **A-10** | **PARTLY RESOLVED, revision 4, and narrowed.** The half that was a real defect is fixed: `create_record_type` no longer sits inside `vault_edit` at all — it is `vault_configure` (FR-016), so granting `vault_edit` no longer silently grants the type system. **The residual is genuine and stays LIVE:** granting `vault_edit` still grants `replace_body` as well as `set_property`, and an operator reading the tool name will not infer that. FR-070c and FR-079 now require every tool description to name its **widest** operation rather than its most common one — `replace_body` for `vault_edit`, `delete_record_type` for `vault_configure`, `trash` for `vault_restructure`. **Needs:** a review that the six shipped descriptions actually do this, at W5, not an assertion here that they will. |
+| **A-11** | **LIVE, new in revision 4. The nine SQLite-semantics defeats are specified and none is verified.** §8.1 gives the defeat for each of the nine rules SQLite's defaults contradict; ADR-068 D16.6 gives the same list. **Every one of them is a line of a query compiler nobody has written**, and eight of the nine fail in the quiet direction, so the absence of a defeat produces a passing test suite and a wrong product. AC-8.4/SC-024 is the control, and it is only a control if it is **mutation-checked** against the real compiled path. **Needs:** W2 to report the mutation run, not the pass. |
+| **A-12** | **LIVE, new in revision 4. The properties-index write path is now carrying a second obligation nobody has measured.** FR-020c adds a `source_hash` column written in the same transaction as every record row, and FR-076a adds a checkbox row per task line. A-7 already flags the two-index write path as unmeasured; these widen what is unmeasured rather than narrowing it. **Needs:** W1 and W2 to measure the write path **with** `source_hash` and task rows present, not a bare record write. |
 
 **A-4 and A-5 were specification defects and are now resolved by descoping the decisions that
 caused them** (ADR-068 D11, D12). **A-6, revision 2's live blocker, is resolved — W1 is
-unblocked.** Three new live items replace it, and none of them blocks W1: A-7 is measurement W1
-itself performs, A-8 is a decision needed before FR-127 can be enforced rather than asserted, and
-A-9 is a sequencing reading that needs confirming.
+unblocked**, with its rationale corrected in revision 4 to capability alone.
+
+**Revision 4's closing count. A-8 and A-9 are both closed, and both closed the way this spec
+argued** — ADR-068 revision 6 adopted this document's reading in each case rather than the other
+way round. A-10 is halved. Four items stay live and **none of them blocks W1**: A-7 and A-12 are
+measurement W1 and W2 perform, A-10's residual is a description review at W5, and A-11 is a
+verification obligation on W2 that already has its acceptance criterion written (AC-8.4, SC-024).
+The one thing a reader should carry away from this table is A-11: **a specified defeat and a
+verified defeat are different things, and eight of the nine failures look identical to success.**
