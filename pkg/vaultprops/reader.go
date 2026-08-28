@@ -35,9 +35,12 @@ package vaultprops
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
 
 	"github.com/elicify-ai/omnipus/pkg/knowledge"
+	"github.com/elicify-ai/omnipus/pkg/records"
 	"github.com/elicify-ai/omnipus/pkg/records/propindex"
 )
 
@@ -118,9 +121,36 @@ func (r *Reader) Close() error {
 // A refusal here is not a failed call: vault_describe renders it as NOT
 // CHECKED against the categories it blocks, by name.
 func Open(ctx context.Context, home, collectionRoot string) (knowledge.PropertyIndexReader, error) {
+	// THE PLATFORM QUESTION IS ASKED FIRST, and the order is load-bearing.
+	// On a build with no SQLite there is no index file and never will be, so
+	// the existence check below would fire first and answer "this collection
+	// has not been indexed yet" — true of the file and false about the cause,
+	// and it would send an operator on linux/mipsle to run an index that
+	// cannot exist. FR-020h wants the refusal that names the PLATFORM.
+	if err := records.RequirePropertyIndex(records.CapabilityOpenIndex); err != nil {
+		return nil, err
+	}
 	path, err := knowledge.PropertiesIndexPath(home, collectionRoot)
 	if err != nil {
 		return nil, fmt.Errorf("the properties index could not be located: %w", err)
+	}
+	// The file is checked for EXISTENCE before propindex.Open is asked to
+	// open it, and that is deliberate on two counts.
+	//
+	// (a) HONESTY. propindex.Open creates what it cannot find, and its failure
+	//     when the containing directory does not exist is SQLite's
+	//     "unable to open database file: out of memory (14)" — a message that
+	//     describes nothing an operator can act on, in place of the true and
+	//     actionable "this collection has never been indexed".
+	// (b) NO WRITE ON A READ. vault_describe is a read tool. Letting it create
+	//     a database as a side effect of describing a vault would put a file
+	//     in $OMNIPUS_HOME that the caller never asked for and would then have
+	//     to be told is empty.
+	if _, statErr := os.Stat(path); statErr != nil {
+		if os.IsNotExist(statErr) {
+			return nil, errIndexNotBuilt()
+		}
+		return nil, fmt.Errorf("the properties index at %s could not be read: %w", path, statErr)
 	}
 	store, err := propindex.Open(ctx, path, propindex.Options{})
 	if err != nil {
@@ -131,12 +161,18 @@ func Open(ctx context.Context, home, collectionRoot string) (knowledge.PropertyI
 	}
 	if store.NeedsFullIndex() {
 		if cerr := store.Close(); cerr != nil {
-			return nil, fmt.Errorf(
-				"the properties index for this collection has not been built yet, and closing it failed: %w", cerr)
+			return nil, fmt.Errorf("%w (and closing it failed: %v)", errIndexNotBuilt(), cerr)
 		}
-		return nil, fmt.Errorf(
-			"the properties index for this collection has not been built yet, so nothing typed can be checked; " +
-				"index the collection and re-run check_integrity")
+		return nil, errIndexNotBuilt()
 	}
 	return NewReader(store), nil
+}
+
+// errIndexNotBuilt is the one wording for "there is nothing indexed here", so
+// the two paths that reach it cannot drift into two different explanations of
+// the same state.
+func errIndexNotBuilt() error {
+	return errors.New(
+		"the properties index for this collection has not been built yet, so nothing typed can be checked; " +
+			"index the collection and re-run check_integrity")
 }

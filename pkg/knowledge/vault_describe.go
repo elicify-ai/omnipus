@@ -202,7 +202,15 @@ func renderIndexAndCollections(b *strings.Builder, d DescribeData) {
 // unknown or zero, which is why "0 of 0" cannot be produced from here.
 func indexFreshness(d DescribeData) string {
 	p := d.IndexProgress
-	if p.InFlight() {
+	// An UNSET phase is not a phase. IndexProgress.InFlight compares against
+	// IndexPhaseIdle ("idle"), so a zero-valued IndexProgress — one nobody
+	// populated — reports InFlight()==true and would render this vault as
+	// "INDEXING" forever. That is a caveat attached to a correct answer, which
+	// is the harmless direction, but it is still a statement nobody checked:
+	// it would appear on every response from a host that has not wired a
+	// progress tracker, and a warning that is always on is a warning nobody
+	// reads.
+	if p.Phase != "" && p.InFlight() {
 		if done, total, ok := p.Ratio(); ok {
 			return fmt.Sprintf("INDEXING, %s of %s notes — anything below is a fraction of this vault",
 				group(done), group(total))
@@ -586,14 +594,13 @@ func (t *DescribeTool) Name() string { return "vault_describe" }
 // it grants — here the whole-vault integrity sweep, not the common
 // orientation read.
 func (t *DescribeTool) Description() string {
-	return "Read this vault's shape before querying it. Returns compact text: the SAVED VIEWS " +
-		"that already exist (look for one before inventing a filter), the collections in scope, " +
-		"every declared record type with its typed properties and enum values, the note templates " +
-		"available, and how fresh the index is. Call this first — a guessed property, type or " +
-		"template name is refused, and this is where the real ones are. Set check_integrity to " +
-		"also sweep the WHOLE vault for duplicate identifiers, relation targets that resolve to " +
-		"nothing or to the wrong record type, broken wikilinks, orphan notes and index rows whose " +
-		"note is gone; that sweep is bounded and says so when it clamps. Reads only; writes nothing."
+	return "Read this vault before querying it. Compact text: the SAVED VIEWS that already " +
+		"exist (look before inventing a filter), collections in scope, every record type with " +
+		"its typed properties and enum values, the note templates, and index freshness. Call " +
+		"this first — a guessed property, type or template name is refused, and the real ones " +
+		"are here. check_integrity also sweeps the WHOLE vault for duplicate identifiers, " +
+		"relations resolving to nothing or the wrong type, broken wikilinks, orphan notes and " +
+		"index rows with no note; bounded, and says when it clamps. Reads only."
 }
 
 // Scope classifies the tool for per-agent visibility filtering.
