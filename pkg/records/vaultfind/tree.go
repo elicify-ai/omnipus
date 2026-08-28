@@ -332,8 +332,16 @@ func evalLeaf(c records.Comparator, cand candidate, pf records.PreparedFilter) e
 	for _, f := range res.Problems {
 		problems = append(problems, findingProblem(cand.rows.RecordID, cand.rows.Path, f))
 	}
+	got, expected := cand.evidence(prop.Name)
 	for _, cp := range res.ComparisonProblems {
-		problems = append(problems, comparisonProblem(cand.rows.RecordID, cand.rows.Path, cp))
+		p := comparisonProblem(cand.rows.RecordID, cand.rows.Path, cp)
+		// R-4 only. An unresolved relation or an undefined operator is not a
+		// malformed VALUE, and dressing it as one would send the reader to
+		// correct a value that is perfectly well written.
+		if cp.Code == records.CompareNonConforming {
+			p = withEvidence(p, prop.Name, got, expected)
+		}
+		problems = append(problems, p)
 	}
 	return evalResult{
 		matched:  res.Matched,

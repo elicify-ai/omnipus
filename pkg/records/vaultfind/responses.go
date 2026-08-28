@@ -333,7 +333,11 @@ func findTasks(ctx context.Context, d Deps, q *query, echo string) (generated.Va
 		Refused:   false,
 		QueryEcho: echo,
 		Counts: generated.VaultFindCounts{
-			Selected: total, Evaluated: evaluated, Shown: len(rows),
+			// Every indexed checkbox row is readable by construction, so
+			// selected and evaluated are the same number here. `total` is the
+			// NOTE population B1 bounded, which is a different quantity and
+			// would read as "rows we could not evaluate" if it were used.
+			Selected: evaluated, Evaluated: evaluated, Shown: len(rows),
 		},
 		Rows:     rows,
 		Totals:   []generated.VaultFindTotal{},

@@ -35,6 +35,17 @@ type TextSearcher interface {
 	// that matched nothing (FR-114). It is what a zero-hit answer reports
 	// INSTEAD of broadening the query.
 	NearestTerms(ctx context.Context, words string, limit int) ([]generated.VaultTermCount, error)
+	// SourceHash returns the hash the TEXT index holds for one note.
+	//
+	// It exists because FR-020c's freshness comparison is PER RETURNED RECORD
+	// and applies to every answer — not only to answers that used `words`. A
+	// purely typed query returns rows whose two indexes can disagree just as
+	// easily, and checking only the word-search path would leave the commonest
+	// query shape unchecked.
+	//
+	// ok=false means the text index holds no document for that path, which is
+	// UNKNOWN freshness and is flagged — never assumed fresh.
+	SourceHash(ctx context.Context, path string) (hash string, ok bool, err error)
 }
 
 // ViewLoader resolves a saved view by name (FR-025c). Stage 2's schema owner
@@ -60,7 +71,14 @@ type Deps struct {
 	// from the calling agent's workspace. It is never caller text: the model
 	// does not get to choose what it can see.
 	PathPrefix string
-	// Text is the plain-word index. Required when `words` is given.
+	// Text is the text index. REQUIRED, not optional, and the reason is
+	// FR-020c: freshness is compared per returned record against the text
+	// index's own hash, so without it no answer can honour the comparison.
+	//
+	// A nil Text used to mean "skip the check", which is the quiet degradation
+	// this package refuses everywhere else — an answer that silently stopped
+	// verifying freshness looks exactly like one that verified it and found
+	// nothing wrong.
 	Text TextSearcher
 	// Views resolves saved views. Required when `view` is given.
 	Views ViewLoader
@@ -84,6 +102,13 @@ func Find(ctx context.Context, d Deps, req generated.VaultFindRequest) (generate
 	set := d.Schemas
 	if set == nil {
 		set = records.NewSchemaSet()
+	}
+
+	if d.Text == nil {
+		ref := refuse(problem(generated.IndexUnavailable,
+			"no text index is wired into this vault, so no answer can be checked for freshness",
+			"re-open the vault; run vault_describe check_integrity to see the index state"), nil)
+		return refusalResponse(req, "", ref), ref
 	}
 
 	if r := applyView(&req, d.Views); r != nil {
@@ -224,12 +249,6 @@ func findRecords(ctx context.Context, d Deps, q *query, echo string) (generated.
 	// told something false about their vault.
 	var wordPaths map[string]TextHit
 	if q.words != "" {
-		if d.Text == nil {
-			ref := refuse(problem(generated.IndexUnavailable,
-				"plain-word search is not available: no text index is wired into this vault",
-				"drop words and use a typed filter, or re-open the vault"), nil)
-			return refusalResponse(generated.VaultFindRequest{}, echo, ref), ref
-		}
 		hits, err := d.Text.Search(ctx, q.words, textFanout(q.limit))
 		if err != nil {
 			ref := refuse(problem(generated.IndexUnavailable,
@@ -302,7 +321,7 @@ func findRecords(ctx context.Context, d Deps, q *query, echo string) (generated.
 		return refusalResponse(generated.VaultFindRequest{}, echo, ref), ref
 	}
 
-	return ev.assemble(d, echo, total), nil
+	return ev.assemble(ctx, d, echo), nil
 }
 
 // textFanout is how many text hits to ask for. It is deliberately wider than the

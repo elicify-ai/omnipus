@@ -139,6 +139,19 @@ type StoredProp struct {
 	State records.PropertyState
 	Type  records.PropertyType
 	Elems []StoredElem
+
+	// Got and Expected are DIAGNOSTIC TEXT for a non-conforming property: what
+	// the note actually held, and the shape that would have been accepted. Both
+	// are empty for a conforming or absent property.
+	//
+	// THEY ARE NOT VALUES AND MUST NEVER BE COMPARED. A non-conforming value has
+	// no value (R-4) — that is the rule, and these fields do not soften it. They
+	// exist so a problem list can say "arr is '50k' where a decimal is required
+	// — write 50000" instead of "arr does not conform", which names the fault
+	// and withholds every fact needed to fix it. They are deliberately NOT in
+	// Elems, so Typed() cannot decode them into an operand.
+	Got      string
+	Expected string
 }
 
 // Candidate is one record the narrowing predicates selected — and nothing more.

@@ -596,6 +596,14 @@ func addPropRow(
 	}
 	if elem.Int64 == StateRowElem {
 		sp.State = records.PropertyState(state.Int64)
+		// The state row's raw/text columns carry DIAGNOSTIC TEXT for a
+		// non-conforming property — what the note held, and the shape that was
+		// expected (rows.go's nonConformingEvidence). They are read here and
+		// deliberately NOT appended to Elems: a value that failed to parse has
+		// no value (R-4), and putting this text where Typed() could decode it
+		// would hand the comparator an operand the note does not contain.
+		sp.Got = string(vRaw)
+		sp.Expected = string(vText)
 	} else {
 		sp.Elems = append(sp.Elems, StoredElem{
 			SourcePos: int(elem.Int64),

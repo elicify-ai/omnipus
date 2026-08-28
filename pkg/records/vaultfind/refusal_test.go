@@ -250,7 +250,7 @@ func TestRefusal_UnknownRecordType(t *testing.T) {
 
 	// An empty vault must READ DIFFERENTLY from a mistyped name. "declared: "
 	// with nothing after it would make the two identical.
-	empty := Deps{Schemas: records.NewSchemaSet(), Store: f.store}
+	empty := Deps{Schemas: records.NewSchemaSet(), Store: f.store, Text: f.text}
 	resp2 := mustRefuse(t, empty, req(withType("plant")))
 	if !strings.Contains(resp2.Problems[0].Reason, "no record types at all") {
 		t.Errorf("an empty vault refuses with the same wording as a typo: %q", resp2.Problems[0].Reason)

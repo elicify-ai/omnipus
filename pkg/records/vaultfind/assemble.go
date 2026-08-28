@@ -6,6 +6,7 @@
 package vaultfind
 
 import (
+	"context"
 	"encoding/base64"
 	"fmt"
 	"sort"
@@ -189,7 +190,7 @@ func firstValue(s survivor, name string) (records.TypedValue, bool) {
 // The order matters and is the subject of FR-125a. Aggregating after paging
 // would produce a page-scoped number wearing the word "total", which is the
 // exact defect an earlier revision of the worked example shipped.
-func (e *evaluation) assemble(d Deps, echo string, selected int) generated.VaultFindResponse {
+func (e *evaluation) assemble(ctx context.Context, d Deps, echo string) generated.VaultFindResponse {
 	q := e.q
 	sortSurvivors(e.survivors, q)
 
@@ -215,13 +216,18 @@ func (e *evaluation) assemble(d Deps, echo string, selected int) generated.Vault
 	agreeing := 0
 	for _, s := range page {
 		row := renderRow(q, s)
-		fresh := propindex.CompareFreshness(s.cand.SourceHash, s.textHash)
+
+		// The text hash comes from the word-search hit when there was one, and
+		// is LOOKED UP otherwise. A typed query returns rows whose two indexes
+		// can disagree exactly as easily as a word query's, and checking only
+		// the word path would leave the commonest query shape unchecked.
+		textHash := s.textHash
 		if !s.hasText {
-			// No text-index hit for this row means there is nothing to compare
-			// against. That is UNKNOWN freshness, which is flagged — never
-			// assumed fresh.
-			fresh = propindex.FreshnessUnknown
+			if h, ok, err := d.Text.SourceHash(ctx, s.cand.Path); err == nil && ok {
+				textHash = h
+			}
 		}
+		fresh := propindex.CompareFreshness(s.cand.SourceHash, textHash)
 		if fresh == propindex.FreshnessAgree {
 			agreeing++
 		} else {
@@ -241,7 +247,18 @@ func (e *evaluation) assemble(d Deps, echo string, selected int) generated.Vault
 		Refused:   false,
 		QueryEcho: echo,
 		Counts: generated.VaultFindCounts{
-			Selected:  selected,
+			// SELECTED is the records the query SELECTED — the survivors plus
+			// the ones it could not read. It is NOT the narrowed candidate
+			// population.
+			//
+			// It was the population, and that was a verdict that lied: every
+			// record that simply did not MATCH the filter was then counted as
+			// "could not be evaluated", so a clean 3-record corpus with a
+			// 2-record answer rendered "COMPLETE: no — 1 of 3 selected records
+			// could not be evaluated". A false caveat is worse than none: it
+			// trains a reader to stop believing the header, which is the one
+			// line this whole response format depends on.
+			Selected:  evaluated + e.unevaluable,
 			Evaluated: evaluated,
 			Shown:     len(rows),
 		},

@@ -202,12 +202,34 @@ func BuildNoteRows(rec records.Record, schema *records.Schema, src []byte, hash 
 		}
 		pv := records.ResolveProperty(rec, prop)
 
-		rows.Props = append(rows.Props, PropRow{
+		// THE STATE ROW CARRIES THE OFFENDING TEXT WHEN THERE IS ONE.
+		//
+		// A non-conforming SCALAR contributes no value row — projectValue runs
+		// only over pv.Values, and a value that failed to parse is not in them —
+		// so without this the index retained the FACT of the failure and none of
+		// its evidence. A reader then got "height_cm does not conform to
+		// declared type decimal" and could not tell whether the note says `50k`,
+		// `fifty thousand` or `[]`.
+		//
+		// spec 4.2's problem line is "arr is '50k' where a decimal is required —
+		// write 50000", and both halves are already computed here: Finding.Got
+		// is what the file held and Finding.Expected is the shape that would
+		// have been accepted. They were being dropped on the floor.
+		//
+		// IT IS DIAGNOSTIC TEXT, NOT A VALUE. It goes on the STATE row, never
+		// into a typed column and never into StoredProp.Elems, so nothing can
+		// decode it back into something the comparator would compare. R-4 is
+		// unchanged: a non-conforming value has no value.
+		stateRow := PropRow{
 			Prop:  name,
 			Elem:  StateRowElem,
 			State: pv.State,
 			Type:  prop.Type,
-		})
+		}
+		if pv.State == records.StateNonConforming {
+			stateRow.Raw, stateRow.Text = nonConformingEvidence(pv)
+		}
+		rows.Props = append(rows.Props, stateRow)
 
 		// FR-021a is a rule about a VALUE, not about a property: a value that
 		// does not conform is recorded by the state row above and reaches no
@@ -236,6 +258,22 @@ func BuildNoteRows(rec records.Record, schema *records.Schema, src []byte, hash 
 		}
 	}
 	return rows
+}
+
+// nonConformingEvidence extracts what the file held and what was expected, from
+// the findings records.ResolveProperty already produced.
+//
+// It reads the FIRST error-severity finding rather than concatenating them: a
+// problem line names one record, one reason and one fix, and a property with
+// three broken elements is still one property to go and look at.
+func nonConformingEvidence(pv records.PropertyValue) (got, expected string) {
+	for _, f := range pv.Findings {
+		if f.Got == "" && f.Expected == "" {
+			continue
+		}
+		return f.Got, f.Expected
+	}
+	return "", ""
 }
 
 // projectValue puts one typed value into the column its DECLARED type owns.

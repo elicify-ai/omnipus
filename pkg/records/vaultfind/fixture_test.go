@@ -107,18 +107,20 @@ func (f *fixture) write(path, src string) propindex.NoteRows {
 	return rows
 }
 
+// deps always wires the text index, because Deps.Text is REQUIRED: FR-020c's
+// freshness comparison is per returned record and applies to every answer, not
+// only to answers that used `words`.
+//
+// The stub agrees with the properties index by default, so a test that is not
+// about freshness sees none of it. A test that IS about freshness makes them
+// disagree explicitly.
 func (f *fixture) deps() Deps {
-	return Deps{Schemas: f.set, Store: f.store, Epoch: 8814}
+	return Deps{Schemas: f.set, Store: f.store, Text: f.text, Epoch: 8814}
 }
 
-// depsWithText wires the plain-word half. It is separate because most tests are
-// about the TYPED half, and a test that silently searched text as well would be
-// asserting two things while claiming to assert one.
-func (f *fixture) depsWithText() Deps {
-	d := f.deps()
-	d.Text = f.text
-	return d
-}
+// depsWithText is deps. It survives as a name because a reader at a word-search
+// test should see that the word half is deliberately in play.
+func (f *fixture) depsWithText() Deps { return f.deps() }
 
 // plant writes one well-formed record.
 func (f *fixture) plant(n int, condition, height string) {
@@ -169,6 +171,15 @@ func (s *stubText) Search(_ context.Context, _ string, _ int) ([]TextHit, error)
 		}
 	}
 	return out, nil
+}
+
+// SourceHash is what FR-020c compares each returned row against.
+func (s *stubText) SourceHash(_ context.Context, path string) (string, bool, error) {
+	h, ok := s.hits[path]
+	if !ok {
+		return "", false, nil
+	}
+	return h.SourceHash, true, nil
 }
 
 func (s *stubText) NearestTerms(_ context.Context, _ string, _ int) ([]generated.VaultTermCount, error) {
@@ -256,12 +267,29 @@ func mustRefuse(t *testing.T, d Deps, r generated.VaultFindRequest) generated.Va
 func assertResponseInvariants(t *testing.T, resp generated.VaultFindResponse) {
 	t.Helper()
 
-	// AC-P1 — a verdict of `no` with an empty problem list is a defect: either
-	// the reason is named or the verdict is wrong.
-	if !resp.Complete && len(resp.Problems) == 0 {
-		t.Errorf("COMPLETE is no and PROBLEMS is empty. One of the two is wrong: "+
-			"either name what was excluded, or say the answer is complete. reason=%q",
-			deref(resp.CompleteReason))
+	// AC-P1 — an UNEXPLAINED `no` is a defect: either the reason is named or the
+	// verdict is wrong.
+	//
+	// The criterion is written as "COMPLETE reads no and the PROBLEMS block is
+	// empty", and read strictly that would fail two shapes the spec itself
+	// ships: a paged answer (`12 of 14 shown`, nothing excluded and nothing
+	// wrong), and the `detail: minimal` example, which renders `COMPLETE: no`
+	// with no PROBLEMS block at all. So the invariant enforced here is the one
+	// the criterion is FOR — the reason must be NAMED somewhere the reader will
+	// see it — with the per-record teeth kept intact below.
+	if !resp.Complete && len(resp.Problems) == 0 && strings.TrimSpace(deref(resp.CompleteReason)) == "" {
+		t.Errorf("COMPLETE is no, PROBLEMS is empty, and no reason is given. " +
+			"An unexplained caveat is worse than none: a header that cries wolf " +
+			"trains a reader to skip the line, and then the true caveat lands in " +
+			"a reader who has learned to skip it.")
+	}
+	// The teeth: if the verdict says records could not be evaluated, those
+	// records must be NAMED. A count with no names is the failure this whole
+	// surface exists to remove.
+	if unevaluable := resp.Counts.Selected - resp.Counts.Evaluated; unevaluable > 0 && len(resp.Problems) == 0 {
+		t.Errorf("%d record(s) could not be evaluated and NONE is named in PROBLEMS. "+
+			"\"3 records excluded\" tells the reader something is wrong and gives "+
+			"them no way to act on it.", unevaluable)
 	}
 	// Every problem carries a remedy. A problem that states only what went wrong
 	// leaves the caller with nothing to do next, which in an agentic loop means

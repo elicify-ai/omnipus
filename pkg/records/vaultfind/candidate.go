@@ -66,3 +66,17 @@ func (c candidate) value(prop *records.Property) (records.PropertyValue, error) 
 	c.memo[prop.Name] = v
 	return v, nil
 }
+
+// evidence returns what the note actually held for a non-conforming property and
+// the shape that would have been accepted.
+//
+// Both are empty when the property is conforming or absent, and when the note
+// was indexed before the index carried this evidence — so a caller must render
+// the fallback rather than an empty pair of quotes.
+func (c candidate) evidence(name string) (got, expected string) {
+	sp, ok := c.rows.Prop(name)
+	if !ok {
+		return "", ""
+	}
+	return sp.Got, sp.Expected
+}

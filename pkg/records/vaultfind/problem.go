@@ -213,9 +213,23 @@ func comparisonProblem(recordID, path string, cp records.ComparisonProblem) gene
 	if id == "" {
 		id = path
 	}
+	// THE REASON NAMES THE PROPERTY, and the oracle's Detail does not always:
+	// it says "left operand does not conform to declared type \"decimal\"",
+	// which is true and unusable in a problem list of twelve lines.
+	//
+	// What it CANNOT yet do is quote the offending literal — spec 4.2's
+	// "arr is '50k' where a decimal is required". The properties index does not
+	// retain it: BuildNoteRows emits the state row with no Raw, and a scalar
+	// that failed to parse contributes no value row either. Reported upstream
+	// rather than faked here; the line below is everything that is actually
+	// derivable, and it still sends the reader to the exact file and property.
+	reason := cp.Detail
+	if cp.Property != "" && !strings.Contains(reason, cp.Property) {
+		reason = cp.Property + ": " + reason
+	}
 	p := generated.RecordProblem{
 		Code:    codeForComparison(cp.Code),
-		Reason:  cp.Detail,
+		Reason:  reason,
 		Records: []string{id},
 		Paths:   &[]string{path},
 	}
@@ -232,7 +246,7 @@ func comparisonProblem(recordID, path string, cp records.ComparisonProblem) gene
 	case len(cp.Supported) > 0:
 		p.Fix = str("use one of: " + strings.Join(cp.Supported, ", "))
 	default:
-		p.Fix = str("open the note and correct the value, then re-run")
+		p.Fix = str("open " + path + " and write a valid " + string(cp.Type) + " for " + cp.Property)
 	}
 	return p
 }
@@ -291,6 +305,39 @@ func findingProblem(recordID, path string, f records.Finding) generated.RecordPr
 		p.Fix = str("write " + f.Expected)
 	} else {
 		p.Fix = str("open the note and correct the value, then re-run")
+	}
+	return p
+}
+
+// withEvidence rewrites a comparison problem into spec 4.2's own shape once the
+// index can supply the offending literal:
+//
+//	arr is '50k' where a decimal is required — write 50000
+//
+// The oracle's message names the FAULT and withholds every fact needed to fix
+// it. This names the property, quotes what the note holds, states what was
+// expected, and gives the remedy — one record, one reason, one fix.
+//
+// It falls back to the oracle's own wording when the evidence is absent, which
+// happens for a note indexed before the evidence columns were populated. The
+// fallback is a WORSE message, not a missing one: an exclusion is always
+// reported, and it always names the record and the path.
+func withEvidence(p generated.RecordProblem, property, got, expected string) generated.RecordProblem {
+	if got == "" && expected == "" {
+		return p
+	}
+	switch {
+	case got != "" && expected != "":
+		p.Reason = fmt.Sprintf("%s is %q where %s is required", property, got, expected)
+		p.Expected = str(expected)
+		p.Fix = str("open the note and write a valid " + expected + " for " + property)
+	case got != "":
+		p.Reason = fmt.Sprintf("%s is %q, which cannot be read as its declared type", property, got)
+		p.Fix = str("open the note and correct " + property)
+	default:
+		p.Reason = fmt.Sprintf("%s does not hold %s", property, expected)
+		p.Expected = str(expected)
+		p.Fix = str("open the note and write a valid " + expected + " for " + property)
 	}
 	return p
 }
