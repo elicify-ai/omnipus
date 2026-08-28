@@ -568,15 +568,48 @@ The tempting criterion is *additive vs destructive*. It is wrong, and it is wort
 because it is the split a reviewer will reach for: `set_property` **overwrites** a value and is
 still perfectly safe. Destructiveness is not the axis.
 
-The axis is:
+> **REVISED in revision 6. Revision 5 stated one criterion and then applied it under two
+> incompatible readings** — *bytes* to keep `link` in the per-file tier, *meaning* to push a
+> schema change into the cascading tier — and D23.4 conceded both readings without choosing.
+> Revision 5 then presented the result as evidence the criterion generalises "with no
+> special-casing", which was unearned: it required switching readings between two rows of the
+> same table. **A criterion that needs two readings is two criteria, and the honest fix is to
+> name both.**
 
-> **Does this operation touch only the file the agent named, or does it cascade to files the
-> agent never named?**
+There are **two** criteria, applied in order. Either one alone puts an operation in the
+cascading tier.
 
-A `set_property` on `Acme.md` changes `Acme.md`. A rename of `Acme.md` rewrites inbound
-wikilinks in N other notes the agent never mentioned and may never have read. Those are
-different kinds of act, and an operator reasoning about risk cares about exactly that
-difference.
+> **C-A (bytes).** Does this operation write bytes into files the agent did not name?
+>
+> **C-B (meaning).** Does this operation change what already-existing files *mean* — their
+> validity, their type, or how a query renders them — without writing them?
+
+A `set_property` on `Acme.md` changes `Acme.md`: neither. A rename of `Acme.md` rewrites inbound
+wikilinks in N other notes the agent never mentioned and may never have read: **C-A**. Editing
+`company.yaml` writes one file and re-validates every note that declares `type: company`:
+**C-B**. Those are different kinds of act, and an operator reasoning about risk cares about
+exactly that difference.
+
+**Why C-B is a real criterion and not a rescue.** The failure C-B catches is the one this whole
+ADR is about. A note that was fine yesterday is reported as a validation finding today, and
+nothing in its own file changed — so a human diffing the note sees nothing and a human diffing
+the vault sees one small YAML edit. That is precisely §1.3's *silence*, arriving from the
+control plane instead of from the query engine.
+
+**C-A has exactly one accepted exception, and it is named rather than absorbed.** Revision 5
+wrote that every tier-4 operation *"writes only the file named in `path` — that is the tier's
+whole definition and it is checkable at review time."* That is **false as stated**, and it would
+have failed on the first record ever created: D7.1 requires every `create` to allocate an
+identifier, which writes `.omnipus-vault/records/.seq` under a cross-process flock. So:
+
+> **The tier-4 rule is: only the *note* the agent named, plus `.seq`.** `.seq` is accepted
+> because it is a monotonic counter with no readable content, no meaning to any query, and no
+> recoverable state to lose — corrupting it costs skipped identifiers (D7.1 says gaps are fine),
+> never a wrong answer. **It is the only exception, and adding a second one is a decision for
+> another ADR, not for whoever writes the next tool.**
+
+That softening is deliberately kept narrow, because the same softening applied one notch wider
+would let a schema file in — and a schema file is the thing C-B exists to keep out.
 
 **D15.2 — Why the split must exist at all: policy resolves on the NAME only.**
 
@@ -612,15 +645,19 @@ grants is the thing an operator actually means. The constraint made the design b
 worth writing down, because the reflex when a constraint blocks a shape is to record it as a
 cost.
 
-**D15.3 — The five.**
+**D15.3 — The six.**
+
+> **Revision 5 said five. Revision 6 says six**, and the sixth is the answer to the review's
+> sharpest structural finding — see D15.6 for why the control plane earns its own name.
 
 | # | Tool | Tier | Does |
 |---|---|---|---|
 | 1 | `vault_describe` | READ | orientation + integrity |
 | 2 | `vault_find` | READ | the one retrieval path |
 | 3 | `vault_read` | READ | a note, or one section of one |
-| 4 | `vault_edit` | WRITE — one named file | create, set property, append section, link |
-| 5 | `vault_restructure` | WRITE — **cascades** | rename, move, trash |
+| 4 | `vault_edit` | WRITE — one named note (+ `.seq`) | create, set property, append section, replace body, link |
+| 5 | `vault_restructure` | WRITE — **cascades in bytes** (C-A) | rename, move, trash |
+| 6 | `vault_configure` | WRITE — **cascades in meaning** (C-B) | author and change record types and saved views |
 
 **1. `vault_describe` (READ).** Collections in scope, record types with their typed properties
 and enum values, saved views, templates, and index freshness. **Compact text, not JSON** —
@@ -661,16 +698,30 @@ to **send a write it knows will fail** and harvest the token from the `*Conflict
 deliberately-failed write as the supported way to read a value is a design defect, and closing
 it is most of this tool's justification.
 
-**4. `vault_edit` (WRITE — one named file).** `create`, `set_property`, `append_section`,
-`link`. Plus, per D23, `create` / `edit` of a **saved view** and `create` of a **new record
-type**.
+**4. `vault_edit` (WRITE — one named note).** `create`, `set_property`, `append_section`,
+**`replace_body`**, `link`.
 
-Every operation writes **only the file named in `path`**. That is the tier's whole definition
-and it is checkable at review time.
+> **Revision 6 corrections, both from the round-5 review.** (a) **`replace_body` is now listed.**
+> Revision 5's D14.1 warned a reader against misreading D15.3's tables as relabellings and named
+> body-replace as one of two unbuilt primitives — while D15.3's table **did not contain
+> body-replace at all**. A required primitive appearing in no tool's operation set is a worse
+> defect than the misreading D14.1 was guarding against. It writes one named note, so tier 4 is
+> right. (b) **Schema and view authoring have moved out of this tool** to `vault_configure`
+> (D15.6); revision 5 put them here and that was wrong under C-B.
+
+Every operation writes **only the note named in `path`**, plus `.seq` on `create` — the single
+accepted exception D15.1 names and bounds. That is the tier's whole definition and it is
+checkable at review time.
 
 `set_property` takes **scalar and list** values — today's scalar-only limit (`SetProperty(key,
 value string)`, `pkg/knowledge/author.go:766`) is closed here, per D14's list-splice
 requirement.
+
+**`create` takes an optional `template`.** `vault_describe` reports the vault's templates, and a
+tool that lists templates nothing can consume is a dead end. `ListTemplates`
+(`pkg/knowledge/template.go:213`) has **no non-test caller anywhere in the tree** today —
+verified — so this is the first thing that ever uses it. The parameter mirrors
+`knowledge_create`'s (`pkg/knowledge/authoring_tools.go:453`).
 
 **Why `link` belongs in this tier and not the next:** a link is stored **once, on the SOURCE
 note** (D5.1) and the inverse is derived (D5). Linking `Deal.md` to `[[Acme]]` writes
@@ -678,8 +729,9 @@ note** (D5.1) and the inverse is derived (D5). Linking `Deal.md` to `[[Acme]]` w
 operation. Had we stored both sides — Notion's mistake, quoted in D5 — `link` would have
 belonged in tier 5.
 
-**5. `vault_restructure` (WRITE — cascades).** `rename`, `move`, `trash`. Plus, per D23,
-changing an **existing** record type.
+**5. `vault_restructure` (WRITE — cascades in bytes).** `rename`, `move`, `trash`. *(Revision 5
+also put "changing an existing record type" here; revision 6 moves every schema and view
+operation to `vault_configure` — D15.6.)*
 
 **Trash stays in this tier even when it is a soft delete, and the reasoning generalises.** The
 objection is natural: *a recoverable bin makes trash safe, so it belongs with the ordinary
@@ -693,6 +745,72 @@ repair them to**. So trash is, if anything, the worse cascade of the two.
 
 **Recoverability and blast radius are different axes.** Conflating them is how a "safe because
 undoable" argument smuggles a vault-wide operation into a per-file tier.
+
+**D15.6 — The sixth tool: `vault_configure`, the control plane.**
+
+*New in revision 6, and it is a correction rather than an addition.*
+
+**The defect.** Revision 5 placed schema and view authoring inside `vault_edit`, alongside
+`set_property` on one note. The consequence is that the posture
+
+> *"this agent may edit notes freely, but may not author or change the vault's type system"*
+
+was **inexpressible** — because policy resolves on the tool name alone (D15.2), and both live
+under one name. That is word-for-word the complaint D15.2 and D18 level at today's `knowledge_*`
+surface. **Revision 5 reproduced its own criticised defect at a different seam**, and the review
+was right to call it the sharpest structural finding.
+
+Worse, it made D23.3's closing promise false. Revision 5 told an operator that *"an operator who
+wants to protect schemas sets `vault_restructure` restrictively"* — while an agent holding
+`vault_edit: allow` (Jim and Ava, in D18's own seed) could create arbitrary new record types.
+**A document that tells an operator a control works when it does not is the failure this ADR
+exists to prevent**, committed in the decision claiming the criterion generalises.
+
+**The decision.** Schema files and view files get their own tool:
+
+| Operation | Tool | Criterion |
+|---|---|---|
+| Create a **new** record type | `vault_configure` | **C-B** — see below |
+| Change an **existing** record type | `vault_configure` | **C-B** (FR-015) |
+| Delete a record type | `vault_configure` | **C-B**, more of it |
+| Create or change a **saved view / base** | `vault_configure` | **C-B**, weakest form — it changes what queries return, not what notes are |
+
+**Why "create a NEW record type" is C-B, which revision 5 got backwards.** Revision 5's stated
+grounds were: *"A new schema file. Nothing that already exists is reinterpreted — no note changes
+meaning."* **That is false under this ADR's own D1.** A note becomes a record **by declaring
+`type:` in frontmatter**, and D1 says a note with an *unrecognised* type is an ordinary note,
+silently and by design. So writing `.omnipus-vault/records/company.yaml` converts **every
+pre-existing note already carrying `type: company`** from an ordinary note into a validated
+record — indexed, queryable, and, if it lacks a `required: true` property, newly reported as a
+validation finding. Notes nobody named changed meaning. That is C-B exactly.
+
+The failure mode is worth stating concretely because it is not obvious: an operator whose vault
+already uses `type: meeting` as a personal convention, whose agent then authors a `meeting`
+schema, gets a validation report over hundreds of notes they never asked to be validated — and
+nothing in the diff explains it beyond one new twelve-line YAML file.
+
+**Justifying a sixth tool against D15.0's count argument.** D15.0's case is that tool *count*
+costs selection accuracy, so the sixth definition must earn its place. It does:
+
+- **The catalog goes 98 → 95, not 98 → 94.** One definition against a twelve-definition
+  reduction. The evidence D15.0 cites is about catalogs of 50 and 200; nothing in it turns on 94
+  versus 95.
+- **D22.8's ~150-token description budget puts the standing cost at ~150 tokens per agent
+  per turn**, against ~750 for the surface as a whole. It is the cheapest lever this ADR buys.
+- **It is the only lever that expresses a real posture.** D15.2's whole thesis is that a tool
+  boundary is worth having exactly when an operator would want to grant one side and not the
+  other. "Edit the notes, do not redefine what a note *is*" is that, unambiguously — and it is
+  the posture most operators will actually want for a delegated worker.
+- **Selection accuracy is not harmed by a tool that is rarely reached for.** `vault_configure` is
+  selected when an agent is authoring a type or a view, which is a distinct enough intent that
+  it competes with nothing. The tools that hurt selection are near-synonyms; this is not one.
+
+**It does NOT contradict D23.2's operator ruling.** The operator said an agent with write-enabled
+tools *"should be able to manage the vault completely… that includes creating and changing
+bases."* It still can: `vault_configure` is an ordinary tool governed by ordinary policy, with no
+approval flow, no `request_schema_change`, and no UI-ratifies step. **What changed is that the
+operator now has a switch they did not have — which is more control, not less.** D23.5 continues
+to apply: an operator may absolutely set it to `allow`.
 
 **D15.4 — Retired from the agent surface entirely.**
 
@@ -1233,34 +1351,43 @@ includes creating and changing record types and creating and changing saved view
 There is no separate approval mechanism, no `request_schema_change`, and no UI-ratifies step.
 These are writes, and writes are already governed.
 
-**D23.3 — Placement falls out of the blast-radius criterion with no special case.**
+**D23.3 — Placement: the control plane is its own tool. REWRITTEN in revision 6.**
 
-| Operation | Tier | Why |
-|---|---|---|
-| Create or edit a **saved view / base** | `vault_edit` | A view is a query definition in its own file. It **changes no note**, so it cannot cascade. |
-| Create a **NEW record type** | `vault_edit` | A new schema file. **Nothing that already exists is reinterpreted** — no note changes meaning. |
-| Change an **EXISTING record type** | `vault_restructure` | **FR-015: a schema change retroactively reinterprets every existing record of that type.** Notes the agent never named change meaning. That is precisely what tier 5 is for. |
-| Delete a record type | `vault_restructure` | Same cascade, more of it. |
+> **Revision 5's version of this table was wrong in two of its four rows and its closing
+> sentence.** It put new-type creation in `vault_edit` on the false premise that nothing existing
+> is reinterpreted (refuted in D15.6 against this ADR's own D1), and it then told an operator
+> that `vault_restructure` protects schemas — a control that, as revision 5 shipped it, did not
+> exist. Both are corrected here rather than softened.
 
-**This is evidence the criterion is the right one, and worth recording as such.** The
-blast-radius test was derived for notes — edit one file versus cascade to many. It was then
-applied to a *different kind of object entirely*, schema files, and **classified them correctly
-with no special-casing and no new rule.** A criterion that generalises to a case it was not
-designed for is doing real work rather than describing decisions already made.
+**Every schema and view operation lives in `vault_configure` (D15.6).** The placement table is
+there, not duplicated here.
 
-The practical consequence: **an operator who wants to protect schemas sets `vault_restructure`
-restrictively — the same lever that protects renames and trash.** No bespoke approval path, no
-second mechanism to reason about.
+**What revision 5 claimed and revision 6 withdraws.** Revision 5 presented this placement as
+*"evidence the criterion is the right one… classified them correctly with no special-casing and
+no new rule."* **That claim is withdrawn.** It was not one criterion generalising; it was two
+readings of one sentence, chosen per row to reach the desired tier (D15.1). The criterion did
+need a new rule, and D15.1 now states it as **C-B** — a second, named criterion, presented as
+such.
 
-**D23.4 — One honest asymmetry within tier 5.** A schema change cascades in **meaning**; rename
-and trash cascade in **bytes**. A schema change also **writes only one file**, so reverting that
-file undoes it — which is not true of trash. So an existing-record-type change is the *least*
-destructive member of tier 5.
+This is worth recording rather than deleting, because the failure is instructive: a criterion
+that appears to generalise effortlessly is exactly the kind of claim that should attract more
+scrutiny, not less. **The design is not weaker for having two criteria. The document was weaker
+for pretending it had one.**
 
-It still belongs there: **notes the agent never named change status**, which is the criterion,
-and D15.3 already establishes (for trash) that **recoverability and blast radius are different
-axes**. The asymmetry is recorded so nobody later reads the grouping as a claim that these
-operations are equally dangerous.
+The practical consequence, stated correctly this time: **an operator who wants to protect the
+vault's type system sets `vault_configure` restrictively.** It is its own lever, independent of
+both `vault_edit` and `vault_restructure`, which is the point of splitting it out.
+
+**D23.4 — One honest asymmetry between the two cascading tiers.** `vault_configure` cascades in
+**meaning** (C-B); `vault_restructure` cascades in **bytes** (C-A). A schema change also **writes
+only one file**, so reverting that file undoes it — which is not true of trash. So schema
+authoring is the *less* destructive of the two, and it has its own tool partly for that reason:
+grouping it with trash would have implied a severity it does not have.
+
+It is still a cascading tier, not a per-file one: **notes the agent never named change status**,
+which is C-B, and D15.3 already establishes (for trash) that **recoverability and blast radius
+are different axes**. The asymmetry is recorded so nobody later reads `vault_configure` and
+`vault_restructure` as interchangeable.
 
 **D23.5 — Dropped from the earlier draft: "a schema change must never be `allow` for anyone."**
 That was over-reach. **An operator may absolutely grant it.** The *default* is conservative
