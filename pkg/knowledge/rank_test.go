@@ -91,12 +91,12 @@ func TestFuseRRF_TiesBreakOnPathNotMapOrder(t *testing.T) {
 	// Identical lists in both signals means identical scores for both documents.
 	// Map iteration order is randomised in Go, so without an explicit tie-break
 	// this ordering would differ between runs (FR-046).
-	cfg := FusionConfig{K: 60, Weights: FusionWeights{SignalBM25F: 1}}
+	cfg := FusionConfig{K: 60, Weights: FusionWeights{SignalBM25F: 1, SignalName: 1}}
 	for i := 0; i < 50; i++ {
 		got := FuseRRF([]RankedList{
 			{Signal: SignalBM25F, Paths: []string{"b.md"}},
 			{Signal: SignalName, Paths: []string{"a.md"}},
-		}, FusionConfig{K: cfg.K, Weights: FusionWeights{SignalBM25F: 1, SignalName: 1}})
+		}, cfg)
 		if len(got) != 2 || got[0].Path != "a.md" || got[1].Path != "b.md" {
 			t.Fatalf("run %d: tie broke non-deterministically: %+v", i, got)
 		}
@@ -170,13 +170,13 @@ func TestRank_NameSignalFiresOnRealQueries(t *testing.T) {
 			fired++
 		}
 	}
-	min := len(h.fixture.Queries) / 4
-	if fired < min {
+	minFired := len(h.fixture.Queries) / 4
+	if fired < minFired {
 		t.Errorf("the name signal fired on %d of %d committed queries (want at least %d). "+
 			"A signal this quiet contributes nothing to the fusion, and its ablation row "+
 			"would be identical to the row without it — which reads as 'the signal does not "+
 			"help' and actually means 'the signal never ran'.",
-			fired, len(h.fixture.Queries), min)
+			fired, len(h.fixture.Queries), minFired)
 	}
 	t.Logf("name signal fired on %d of %d committed queries", fired, len(h.fixture.Queries))
 }
@@ -326,12 +326,12 @@ func TestFusedSearch_PriorsCannotIntroduceADocument(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() {
-		if err := ix.Close(); err != nil {
-			t.Errorf("close: %v", err)
+		if cerr := ix.Close(); cerr != nil {
+			t.Errorf("close: %v", cerr)
 		}
 	}()
-	if _, err := ix.Sync(context.Background()); err != nil {
-		t.Fatal(err)
+	if _, serr := ix.Sync(context.Background()); serr != nil {
+		t.Fatal(serr)
 	}
 	root, err := NewCollectionRoot(OSLinkFS(), corpus)
 	if err != nil {

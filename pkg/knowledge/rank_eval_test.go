@@ -222,8 +222,8 @@ func newEvalHarness(t *testing.T) *evalHarness {
 		t.Fatalf("open index: %v", err)
 	}
 	t.Cleanup(func() {
-		if err := ix.Close(); err != nil {
-			t.Errorf("close index: %v", err)
+		if cerr := ix.Close(); cerr != nil {
+			t.Errorf("close index: %v", cerr)
 		}
 	})
 	stats, err := ix.Sync(context.Background())

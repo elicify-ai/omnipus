@@ -471,8 +471,8 @@ func loadEvalFixture(t *testing.T) evalFixture {
 			continue
 		}
 		var n evalNote
-		if err := json.Unmarshal([]byte(line), &n); err != nil {
-			t.Fatalf("corpus line: %v", err)
+		if uerr := json.Unmarshal([]byte(line), &n); uerr != nil {
+			t.Fatalf("corpus line: %v", uerr)
 		}
 		f.Notes = append(f.Notes, n)
 	}
@@ -548,20 +548,20 @@ func TestGenerateRankEvalFixture(t *testing.T) {
 
 	queries := buildEvalQueries(notes, degree)
 
-	if err := os.MkdirAll(rankEvalDir, 0o755); err != nil {
-		t.Fatalf("mkdir testdata: %v", err)
+	if mkerr := os.MkdirAll(rankEvalDir, 0o755); mkerr != nil {
+		t.Fatalf("mkdir testdata: %v", mkerr)
 	}
 	var corpus strings.Builder
 	for _, n := range notes {
-		b, err := json.Marshal(n)
-		if err != nil {
-			t.Fatalf("marshal note: %v", err)
+		b, merr := json.Marshal(n)
+		if merr != nil {
+			t.Fatalf("marshal note: %v", merr)
 		}
 		corpus.Write(b)
 		corpus.WriteByte('\n')
 	}
-	if err := os.WriteFile(filepath.Join(rankEvalDir, rankEvalCorpusFile), []byte(corpus.String()), 0o600); err != nil {
-		t.Fatalf("write corpus: %v", err)
+	if werr := os.WriteFile(filepath.Join(rankEvalDir, rankEvalCorpusFile), []byte(corpus.String()), 0o600); werr != nil {
+		t.Fatalf("write corpus: %v", werr)
 	}
 	qb, err := json.MarshalIndent(evalFixture{Queries: queries}, "", "  ")
 	if err != nil {
