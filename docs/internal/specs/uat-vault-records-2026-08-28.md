@@ -1487,3 +1487,206 @@ single refusal in this plan, and it is cheap.
 
 **Fail if:** a misrouted operation is silently performed by the wrong tool. The tool boundary is
 the policy boundary, and a tool that quietly does its neighbour's job destroys the boundary.
+
+---
+
+## Part J — `vault_restructure`
+
+*The only tool permitted to change a file the caller did not name. Every response must state
+its cascade in counts.*
+
+### Case J-1 — Rename repairs inbound links
+
+| Step | Do this | Expect |
+|---|---|---|
+| J-1.1 | Note which files link to `Expeditions/northern-sweep.md` | `SP-0001`, `SP-0002` |
+| J-1.2 | `vault_restructure` `rename` it to `Arctic sweep` | Succeeds |
+| J-1.3 | Read the response | It states the cascade in counts — e.g. `CASCADE: 2 notes rewritten (inbound wikilinks), 1 note moved` |
+| J-1.4 | Open the two specimen files on disk | Their wikilinks now say `[[Arctic sweep]]` |
+| J-1.5 | Query the relation again | It still resolves. The record identifier did not change |
+| J-1.6 | `check_integrity` | No new unresolved relations |
+
+**Fail if:** the cascade count is absent; inbound links are not repaired; or the relation breaks
+after a rename. Identity is the identifier, not the filename — a rename must not be able to
+break a reference.
+
+### Case J-2 — Move
+
+| Step | Do this | Expect |
+|---|---|---|
+| J-2.1 | `move` a specimen to a different folder | Succeeds, cascade stated in counts |
+| J-2.2 | Its relation to its expedition | Still resolves |
+| J-2.3 | Inbound wikilinks | Rewritten |
+
+### Case J-3 — Trash cannot repair what it breaks, and says so
+
+| Step | Do this | Expect |
+|---|---|---|
+| J-3.1 | `trash` `Expeditions/coastal-survey.md`, which two specimens point at | Succeeds |
+| J-3.2 | Read the response | It names the **count of now-unrepairable inbound links** and **lists the linking notes** |
+| J-3.3 | `check_integrity` | Those relations are reported as unresolved |
+| J-3.4 | `trash` the same path again | A message saying it was already trashed, with both timestamps |
+| J-3.5 | `restore` it | Comes back with its **original identifier** |
+| J-3.6 | `check_integrity` after the restore | The restored identifier is **not** reported as a duplicate. It was never reissued |
+| J-3.7 | `restore` a path that is not in the trash | Refused, telling you where the trash contents are reported |
+
+**Fail if:** trash reports success without naming what it broke. Rename can repair its cascade;
+trash has nothing to repair it *to*, which makes it the worse of the two.
+
+### Case J-4 — No version token, and it says so
+
+| Step | Do this | Expect |
+|---|---|---|
+| J-4.1 | Read the tool's own description | It states that it takes **no** `expect_version`, and why: a single-file token cannot guard a change that rewrites notes you did not name |
+| J-4.2 | Send `expect_version` anyway | Refused, with that explanation |
+
+**Fail if:** the tool accepts a version token. A compare-and-swap that guards one of the several
+files an operation writes is worse than none, because it reads as a guarantee.
+
+### Case J-5 — Wrong tool, right advice
+
+| Step | Do this | Expect |
+|---|---|---|
+| J-5.1 | Ask `vault_restructure` to `create_record_type` | Refused, naming `vault_configure` |
+| J-5.2 | Ask it to `set_property` | Refused, naming `vault_edit` |
+
+---
+
+## Part K — `vault_configure`
+
+*The control plane. It writes one file and changes what many notes **mean** — so every response
+has to make that visible, because the file diff shows one small YAML file and nothing else.*
+
+### Case K-1 — Creating a type converts notes nobody named
+
+*This is the case the sixth tool exists for. Get it right and the rest of Part K is detail.*
+
+| Step | Do this | Expect |
+|---|---|---|
+| K-1.1 | In Vault Beta (which has **no** schemas), create three notes carrying `type: sighting` and nothing else | — |
+| K-1.2 | Confirm they behave as ordinary notes: `vault_find` `type` = `sighting` | **Refused** — no such record type is declared. Not an empty result |
+| K-1.3 | Now `vault_configure` `create_record_type` for `sighting`, with one `required: true` property those notes do not have | Succeeds |
+| K-1.4 | Read the response | It states the cascade **in meaning, in counts**: how many notes now match the type, how many validate clean, how many are **newly reported** and why, and how many lost validity |
+| K-1.5 | A response that says only "type created" | **FAIL.** That is the whole defect this case exists for |
+| K-1.6 | `vault_find` `type` = `sighting` now | Returns them, with the newly-failing ones in the problems block |
+
+### Case K-2 — Changing and deleting a type
+
+| Step | Do this | Expect |
+|---|---|---|
+| K-2.1 | `edit_record_type` to add a required property | Response reports how many existing records are revalidated and how many newly fail |
+| K-2.2 | `edit_record_type` to remove an enum value that records are using | Response reports the records that just lost validity, by name |
+| K-2.3 | `delete_record_type` | Response reports how many records **revert to ordinary notes** |
+| K-2.4 | `vault_find` `type` = the deleted type | **Refused**, naming the declared types. Never an empty result |
+| K-2.5 | Open one of those notes | It is intact. Deleting a type does not delete notes |
+
+### Case K-3 — Views
+
+| Step | Do this | Expect |
+|---|---|---|
+| K-3.1 | `write_view` defining a saved query over `specimen` | Succeeds; a file appears under `.omnipus-vault/views/` |
+| K-3.2 | `vault_find` with `view` = that name | Returns the view's results |
+| K-3.3 | `vault_find` with the same view **plus** a `filter` | The filter **refines** the view, it does not replace it |
+| K-3.4 | `delete_view` | Succeeds; the view no longer resolves |
+| K-3.5 | `vault_find` with a view name that does not exist | Refused, naming the views that do |
+| K-3.6 | Check the cascade statement on K-3.1 | It says the view changes what a query returns and changes no note |
+
+### Case K-4 — Schema files are validated
+
+| Step | Do this | Expect |
+|---|---|---|
+| K-4.1 | Create a schema with **no** `schema_version` | Refused, naming the missing key and the fix |
+| K-4.2 | Create a second schema file declaring a type that another file already declares | **Both** are rejected and **both paths are named** |
+| K-4.3 | Create a type that already exists | Refused, naming the existing file and pointing at `edit_record_type` |
+| K-4.4 | Reference a type that does not exist in `edit_record_type` | Refused, listing the declared types |
+| K-4.5 | Declare a relation whose `to` names a type that does not exist | Refused, naming the declared types |
+
+### Case K-5 — No version token, and an audit entry every time
+
+| Step | Do this | Expect |
+|---|---|---|
+| K-5.1 | Look at the tool's parameters | No `expect_version` exists on any operation |
+| K-5.2 | Send one | Refused with the explanation |
+| K-5.3 | After every `vault_configure` call in this part — **including the refused ones** | An audit entry exists carrying the operation, agent, workspace, target and outcome |
+| K-5.4 | Read the tool's description | It names its **widest** operation (`delete_record_type`), not its most common one |
+
+---
+
+## Part L — The tier boundary: three policies, independently settable
+
+*This is the point of having six tools instead of one. An operator must be able to say "edit
+the notes, but do not restructure the vault" and "manage the notes, but do not redefine what a
+note is" — and each of those must be a real switch, not a label on a screen.*
+
+**Where the switches are:** Agents → pick an agent → **Tools & Permissions**. Each tool takes
+`allow`, `ask` or `deny`.
+
+### Case L-1 — Edit yes, restructure no
+
+| Step | Do this | Expect |
+|---|---|---|
+| L-1.1 | Set the agent's `vault_edit` to **allow** and `vault_restructure` to **deny**. Save | Saved confirmation |
+| L-1.2 | In the same chat session, ask it to `set_property` on a note | Works |
+| L-1.3 | Ask it to `rename` a note | **Refused.** The agent reports the refusal — it does not silently do nothing |
+| L-1.4 | Check the file that would have been renamed | Untouched |
+
+### Case L-2 — Edit yes, configure no
+
+| Step | Do this | Expect |
+|---|---|---|
+| L-2.1 | Set `vault_edit` = **allow**, `vault_configure` = **deny**. Save | — |
+| L-2.2 | Ask the agent to create a new record type | **Refused** |
+| L-2.3 | Ask it to create the type "by writing the YAML file directly" through `vault_edit` | Refused — `vault_edit` does not write into `.omnipus-vault/` |
+| L-2.4 | Ask it to do the same through `vault_restructure` | Refused |
+| L-2.5 | Ask it to edit an existing schema file by any route it can think of | Refused |
+| L-2.6 | Check `.omnipus-vault/records/` on disk | No new or changed file |
+
+**Fail if:** any route reaches a schema file while `vault_configure` is denied. "This agent may
+edit notes but may not redefine what a note is" is the posture; if there is a way around it, the
+posture is decoration.
+
+### Case L-3 — Configure yes, edit prompted
+
+| Step | Do this | Expect |
+|---|---|---|
+| L-3.1 | Set `vault_configure` = **allow**, `vault_edit` = **ask** | — |
+| L-3.2 | Ask the agent to author a record type | Works with no prompt |
+| L-3.3 | Ask it to set a property on a note | An **approval prompt** appears first |
+| L-3.4 | Read the prompt | It says which file and which property, before you approve |
+| L-3.5 | Decline it | The write does not happen, and the agent says so |
+
+### Case L-4 — All three are genuinely independent
+
+| Step | Do this | Expect |
+|---|---|---|
+| L-4.1 | Set the three write tools to three **different** values (e.g. edit=allow, restructure=ask, configure=deny) | Saved |
+| L-4.2 | Reload the page and re-open the screen | The three values persisted, as set |
+| L-4.3 | Exercise one operation from each tool in one session | Each behaves according to **its own** setting |
+
+**Fail if:** setting one changes another, or the settings do not survive a reload. A control
+that reports "saved" and changes nothing is a specific, previously-shipped defect in this
+product, and it is worth spending two minutes to rule out.
+
+### Case L-5 — The fresh-install defaults
+
+| Step | Do this | Expect |
+|---|---|---|
+| L-5.1 | On the clean install, read the vault tool policies for **Mia, Jim, Ava and Ray** | Reads (`vault_describe`, `vault_find`, `vault_read`) are **allow** for all four |
+| L-5.2 | `vault_edit` | **ask** for Mia and Ray; **allow** for Jim and Ava |
+| L-5.3 | `vault_restructure` and `vault_configure` | **ask** for all four |
+| L-5.4 | Look at a worker/subagent (`worker`, `planner`, `explorer`, `researcher`, `judge`, `plansupervisor`) | **deny** on all six |
+| L-5.5 | Look for any of the six with no entry at all | There are none. Every agent has an explicit entry for every one of the six |
+
+**Fail if:** any agent × tool pair has no explicit policy entry, or a worker has anything other
+than `deny`. A missing entry gets silently backfilled to `deny` with one log line — the feature
+dies quietly and nothing in the UI says why.
+
+### Case L-6 — A denial is visible
+
+| Step | Do this | Expect |
+|---|---|---|
+| L-6.1 | With a tool set to `deny`, ask the agent to use it | The agent tells you it was refused, and what it could not do |
+| L-6.2 | Check the Activity panel | The attempt is visible somewhere, or the agent's own text is the only record — note which |
+
+**Fail if:** the agent silently produces a plausible-sounding answer as though the operation had
+happened. A denied write reported as done is worse than a denied write.
