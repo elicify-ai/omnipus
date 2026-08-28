@@ -93,7 +93,7 @@ implementation** of any of these.
 | `pkg/knowledge/author.go` | 1,183 | scalar splice only — FR-040. `SetProperty(key, value string)` (`author.go:766`) takes strings and rejects line breaks; **there is no list writer, no body-replace and no delete**, so FR-040a, FR-047 and FR-048 add them |
 | `pkg/knowledge/index.go` | 1,277 | bleve keeps **text** and gains real **fields** — FR-111. `indexDoc` is a closed 5-field struct (`index.go:583-589`) and the mapping is closed (`Dynamic=false`), so per-property *fields* are impossible; per-property **terms** in a `[]string` field are not, and that is how record candidates are selected (ADR-068 D16.1 S-1) |
 | `modernc.org/sqlite v1.46.1` (`go.mod:64`) | — | the **derived properties index** — FR-020. Already a direct dependency, linked into the binary today for WhatsApp and Matrix session storage |
-| `pkg/coreagent/core.go:357-483` | 102 names | the static builtin catalog the five `vault_*` names join and the nine `knowledge_*` names leave — FR-070a, FR-078 |
+| `pkg/coreagent/core.go:357-483` | **98** names | the static builtin catalog the six `vault_*` names join and the nine `knowledge_*` names leave — FR-070a, FR-078. *(Revision 3 said 102. Re-counted over the composite literal at `core.go:358-482`: **98 quoted identifiers, 98 unique, 9 of them `knowledge_*`**. ADR-068 D15.0 corrects the same miscount.)* |
 | `pkg/knowledge/search.go` | 603 | result caps (`SearchDefaultTopN`=20, `SearchMaxTopN`=100) as the precedent for FR-063 |
 | `pkg/knowledge/tools.go` | 1,135 | tool registration shape and rate limiter |
 | `contracts/components/schemas/Knowledge*.yaml` | 13 files | the contract-first pattern FR-090 follows |
@@ -118,7 +118,7 @@ corrected in revision 3:**
    denied, with the feature dead and a log line as the only signal. Seeding is protected by being
    written down and tested (FR-080, FR-081), not by a boot abort.
 
-**The nine `knowledge_*` names retire into the five. This mapping is the migration:**
+**The nine `knowledge_*` names retire into the six. This mapping is the migration:**
 
 | Retired | Replaced by |
 |---|---|
@@ -131,12 +131,22 @@ corrected in revision 3:**
 | `knowledge_append_section` | `vault_edit` (`append_section`) |
 | `knowledge_move` | `vault_restructure` (`move`) |
 | `knowledge_rename` | `vault_restructure` (`rename`) |
-| — *(no equivalent today)* | `vault_read`, `vault_describe` |
+| — *(no equivalent today)* | `vault_read`, `vault_describe`, `vault_configure` |
 
 Two of those rows are the point of the exercise. `knowledge_move` and `knowledge_rename` leave the
 tier their siblings stay in, which is what makes FR-083 expressible. And the last row is the gap:
 **there is no tool that reads a note today**, so an agent must leave the audited `knowledge_*`
 boundary and drop to `read_file` to read a note it just found (FR-074).
+
+**`check_integrity` inherits more than revision 3 said, and it inherits it UNBOUNDED.**
+`knowledge_graph`'s five operations are `links`, `backlinks`, `unresolved`, `orphans`,
+`neighborhood` (`pkg/knowledge/tools.go:643-647`). Only `neighborhood` is clamped —
+`MaxNeighborhoodHops = 3` / `MaxNeighborhoodNodes = 500` (`pkg/knowledge/graph.go:36-38`,
+applied at `graph.go:307-315`, read at `tools.go:812-826`). The **whole-vault** sweeps are
+`resp.Links = toGraphLinks(g.Unresolved())` and `resp.Nodes = g.Orphans()`
+(`tools.go:809-811`) — **no clamp at all**. Those sweeps cover **ordinary wikilinks across the
+whole vault**, and most notes in a vault are not records, so a broken-link report has no home in
+the record-typed half of `check_integrity`. FR-075 and FR-075a therefore widen it and bound it.
 
 ---
 
@@ -149,9 +159,11 @@ fields are added to a mapping that search already depends on.
 | Symbol | Role | Note |
 |---|---|---|
 | `knowledge.Index` | **extended** | gains real fields (FR-111), an index-format version bump (FR-020d G1), a persisted-mapping assertion (G2) and an explicit `ScoringModel` (FR-110). Blast radius: every existing index is rebuilt once, which FR-020e requires anyway for the corrupt-segment fix |
-| *(new)* properties index | **added** | derived, disposable SQLite (FR-020, FR-020a). Its **write path is unmeasured** — the spike measured neither the two-index write path, nor concurrent queries, nor any non-macOS platform (its §6.1). W1 measures it before anything is built on it |
-| `knowledge.Scope` | **called** | unchanged; all five `vault_*` tools resolve through it (`Scope.WorkspaceID`, `.Roots`, `.Contains`, `.Truncated`) |
+| *(new)* properties index | **added** | derived, disposable SQLite (FR-020, FR-020a), carrying a per-row `source_hash` (FR-020c). Its **write path is unmeasured** — the spike measured neither the two-index write path, nor concurrent queries, nor any non-macOS platform (its §6.1). W1 measures it before anything is built on it. **It does not exist on every target**: `modernc.org/sqlite` cannot build on `linux/mipsle`, `netbsd/*` or `freebsd/arm` (`pkg/gateway/channel_matrix.go:20-28`), of which only `linux/mipsle` ships (`Makefile:210`, `:234`) — FR-020h |
+| `knowledge.Scope` | **called** | unchanged; all **six** `vault_*` tools resolve through it (`Scope.WorkspaceID`, `.Roots`, `.Contains`, `.Truncated`) |
 | `knowledge.author` splice | **called and extended** | scalar path reused unchanged; a list-valued splice (FR-040a), a body-replace (FR-047) and a trash convention (FR-048) are new work |
+| `knowledge.Manifest` | **read on the query path** | `ManifestEntry.Hash` (`pkg/knowledge/manifest.go:64`) is the hex SHA-256 of a note's contents, keyed by collection-relative path in `Manifest.Entries` (`manifest.go:82`) and already readable by `Manifest.Get` (`manifest.go:174`). FR-020c makes it the freshness token. **The new work is the lookup and the column, not the value** |
+| `checkRetrievalRate` | **does NOT cover writes** | consulted at three sites only — `pkg/knowledge/tools.go:610`, `:749` and `pkg/knowledge/authoring_tools.go:1330` — all reads. `AuthoringDeps.RateLimiter` (`authoring_tools.go:136`) is documented as bounding `knowledge_tasks`, which is a read (`:133`). No write `Execute` consults it, so FR-067's write-path limiter is **new work**, not inheritance |
 | `AgentLoop.resolveToolPolicyAtExec` | **constrains the design** | `pkg/agent/loop.go:12418` takes a tool **name** and no arguments, which is why the write surface splits by blast radius rather than by noun (FR-070b, FR-070c) |
 | `config.RepairIncompleteToolPolicyCoverage` | **not called, but must be defeated** | FR-081 asserts zero *repaired* pairs, not zero gaps after repair |
 | `KnowledgePanel.tsx` / `useKnowledgeIndexStore` | **extended** | today the panel renders index progress from live WS frames only (`KnowledgePanel.tsx:226`); FR-020f adds the snapshot a late-joining client needs |
@@ -358,13 +370,20 @@ existing type — governed by ordinary tool policy, with no bespoke approval flo
 **Why P1:** the mechanism must be complete enough that a vault's conventions can be expressed
 without asking us to change code (ADR-068 D0).
 
-1. **Given** an agent with `vault_edit`, **When** it creates a new record type, **Then** it
-   succeeds and no existing note changes meaning.
-2. **Given** the same agent **without** `vault_restructure`, **When** it changes an existing
-   record type, **Then** it is refused, naming the tool that would allow it.
-3. **Given** an operator who sets `vault_restructure: allow`, **When** an agent changes a type,
-   **Then** it succeeds — a conservative default is not a prohibition.
-4. **Given** any of these, **When** the agent tries to mount a folder, **Then** the only path is
+1. **Given** an agent with `vault_configure`, **When** it creates a new record type, **Then** it
+   succeeds, **and the response names how many pre-existing notes already declaring that type
+   have just become validated records** — because they have, and nothing else in the change says
+   so (ADR-068 D15.6).
+2. **Given** an agent with `vault_edit` but **without** `vault_configure`, **When** it creates or
+   changes any record type or saved view, **Then** it is refused, naming `vault_configure` as the
+   tool that would allow it. *(Revision 3 put creation in `vault_edit`, so this posture was not
+   expressible at all — the defect ADR-068 D15.6 corrects.)*
+3. **Given** an operator who sets `vault_configure: allow`, **When** an agent changes a type,
+   **Then** it succeeds — a conservative default is not a prohibition (FR-019a).
+4. **Given** an agent with `vault_configure: allow` and `vault_restructure: deny`, **When** it
+   edits a schema and then attempts a rename, **Then** the first succeeds and the second is
+   refused. The three write tiers are independently settable (FR-083).
+5. **Given** any of these, **When** the agent tries to mount a folder, **Then** the only path is
    `request_mount`, unchanged.
 
 ### US-13 — Index state a late arrival can still see (P1)
@@ -410,9 +429,16 @@ as "no progress has arrived" for a fully indexed collection.
 - When a write succeeds, the file is **byte-identical outside the patched span**.
 - When a relation target is missing or mistyped, the system **reports it** at validation.
 - When a record is out of workspace scope, the system returns **empty, not an error**.
-- When an operation would change a file the caller did not name, it is **only** reachable through
-  `vault_restructure`, and the cascade is reported in counts.
-- When the two indexes disagree about generation, the answer is **incomplete**, and says so first.
+- When an operation would write bytes into a file the caller did not name (**C-A**), it is
+  **only** reachable through `vault_restructure`, and the cascade is reported in counts.
+- When an operation would change what already-existing files **mean** — their validity, their
+  type, or how a query renders them — without writing them (**C-B**), it is **only** reachable
+  through `vault_configure`, and the count of records whose validity changes is reported.
+- When a record's two indexes have seen different bytes of the same note, the answer naming that
+  record is **incomplete**, with staleness given as the reason.
+- When the build has no SQLite, every typed-filter, join, grouping or aggregation call **refuses
+  by name**, stating the platform. It never returns an empty result.
+- When the two indexes disagree, the answer is **incomplete**, and says so first.
 - When a result is rendered for the model, it is **compact text projected from the wire object**,
   completeness first and next actions last.
 - When a query finds nothing, the system reports the **vocabulary it holds** and stops.
@@ -433,8 +459,13 @@ as "no progress has arrived" for a fully indexed collection.
   (ADR-068 O-1).
 - The system must **not** treat an absent property as `false`.
 - The system must **not** expand or reformulate a query on the caller's behalf (FR-114).
-- The system must **not** report an answer as complete when it spans two index generations
-  (FR-020c).
+- The system must **not** report an answer as complete when a returned record's two indexes have
+  seen different bytes (FR-020c).
+- The system must **not** return an empty result on a build where the properties index cannot
+  exist; it must refuse by name (FR-020h).
+- The system must **not** enforce a response budget in tokens, because no tokenizer we own is the
+  one that would make the number mean what it says (FR-127, ADR-068 D22.7).
+- The system must **not** run an unbounded whole-vault sweep from `check_integrity` (FR-075a).
 - The system must **not** offer a second mounting path; `request_mount` stays the only one
   (FR-019).
 - The system must **not** register the `.base` importer as an agent tool (FR-103).
@@ -449,14 +480,15 @@ as "no progress has arrived" for a fully indexed collection.
 | Results per page | default 50, max 200; a clamp is reported in the response |
 | Candidate set materialised | 10,000 records; beyond this the query is **refused** |
 | Relation hops | 2; a third is refused |
+| Record layer availability | every SQLite-capable build. `linux/mipsle` is the one shipped binary without it, and it **refuses by name** (FR-020h) |
 | Supported records per vault | 50,000 records. **Note:** the index counts segments, not records, so this is an unknown larger document count; the segment ratio MUST be measured at W2 and recorded here |
-| Peak RSS | inherited unchanged: ADR-067's < 64 MB steady state for this process. **No record-specific latency or memory target is stated** — revision 1's numbers came from a measurement of expression evaluation alone, and D16's spike establishes real ones |
-| Rate limit | shared with ADR-067's knowledge limiter; 429 carries `Retry-After` |
+| Peak RSS | ADR-067's < 64 MB steady state is inherited as a **TARGET, not a property** — it was measured for bleve alone, and SQLite's page cache, `GROUP BY`/`ORDER BY` temp b-trees and connection state are unmeasured (ADR-068 D16.4 item 4). W1 measures both indexes, idle and at the cap, on Linux **and** macOS. **No record-specific latency target is stated** |
+| Rate limit | **new work for the write path** — `checkRetrievalRate` covers reads only (§1); 429 carries `Retry-After` (FR-067) |
 | Money arithmetic | exact decimal, integer minor units; no binary floating point anywhere in the path |
-| Agent tool count | exactly **5** `vault_*` names; **0** `knowledge_*` names; catalog 102 → 98 |
-| Tool description budget | ~150 tokens each (~750 total, permanent per-turn cost) |
-| Response budget | ~50–80 tokens/hit, ~1,000 default, **4,000 hard cap**; `minimal` ~20 tokens/hit |
-| Index freshness | both indexes report a generation; a mismatch forces `complete: false` |
+| Agent tool count | exactly **6** `vault_*` names; **0** `knowledge_*` names; catalog **98 → 95** |
+| Tool description budget | ~150 tokens each (~**900** total across six, permanent per-turn cost) |
+| Response budget | **BYTES, not tokens**: ~200–320 bytes/hit, ~4,000 default, **16,000 hard cap**; `minimal` ~80 bytes/hit |
+| Index freshness | **per note**: the properties row's `source_hash` versus `ManifestEntry.Hash`; a mismatch, a missing entry or an empty hash forces `complete: false` for that record |
 | Scoring model | BM25, set explicitly. TF-IDF is the library default and is a defect (FR-110) |
 | Embeddings | none, permanently (FR-117) |
 
