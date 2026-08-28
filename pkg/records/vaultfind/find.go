@@ -1,0 +1,445 @@
+// Omnipus — ADR-068 D15.3 / spec 4.1.2, FR-064: the retrieval path and its two bounds.
+// License: MIT
+// Copyright (c) 2026 Omnipus contributors
+
+package vaultfind
+
+import (
+	"context"
+	"fmt"
+	"sort"
+	"strings"
+
+	"github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/records"
+	"github.com/elicify-ai/omnipus/pkg/records/propindex"
+)
+
+// TextHit is one result from the text index — the plain-word half of the query.
+type TextHit struct {
+	Path string
+	// SourceHash is the hash the TEXT index holds for this note. FR-020c's
+	// comparison is against THIS, not against a manifest entry.
+	SourceHash string
+	Score      float64
+}
+
+// TextSearcher is the bleve half. It is an interface rather than a concrete
+// index so this package does not import pkg/knowledge, and so a test can drive
+// the whole pipeline without a real index on disk.
+type TextSearcher interface {
+	// Search returns the ranked hits for a plain-word query, within the caller's
+	// already-resolved scope.
+	Search(ctx context.Context, words string, limit int) ([]TextHit, error)
+	// NearestTerms reports the vocabulary the index actually holds near a term
+	// that matched nothing (FR-114). It is what a zero-hit answer reports
+	// INSTEAD of broadening the query.
+	NearestTerms(ctx context.Context, words string, limit int) ([]generated.VaultTermCount, error)
+}
+
+// ViewLoader resolves a saved view by name (FR-025c). Stage 2's schema owner
+// owns the loader; this package consumes it.
+type ViewLoader interface {
+	// View returns the saved view's request fragment. ok=false means the name is
+	// not defined, and the caller refuses listing Names().
+	View(name string) (generated.VaultFindRequest, bool)
+	// Names lists the saved views in scope, for that refusal.
+	Names() []string
+}
+
+// Deps is what vault_find needs from its host. Every field is a real dependency
+// with a real consumer; there is no field here that exists only to be nil.
+type Deps struct {
+	// Schemas is the declared record types in the caller's scope.
+	Schemas *records.SchemaSet
+	// Store is the properties index. It may be nil ONLY on a build where the
+	// index cannot be compiled — and on such a build the platform gate refuses
+	// before anything reads it.
+	Store propindex.Store
+	// PathPrefix is FR-060's workspace scope, ALREADY RESOLVED by the caller
+	// from the calling agent's workspace. It is never caller text: the model
+	// does not get to choose what it can see.
+	PathPrefix string
+	// Text is the plain-word index. Required when `words` is given.
+	Text TextSearcher
+	// Views resolves saved views. Required when `view` is given.
+	Views ViewLoader
+	// Resolve maps a wikilink to a record identity (section 8 R-8). Without it
+	// relation comparisons report "unresolved" rather than silently comparing
+	// link text, which is the honest degradation.
+	Resolve records.RelationResolver
+	// Epoch is the properties index's generation counter, which a cursor is
+	// issued against.
+	Epoch int64
+}
+
+// Find answers one query.
+//
+// IT RETURNS BOTH A RESPONSE AND AN ERROR ON A REFUSAL, and both halves are
+// load-bearing — see the note on Refusal. The response is what the model reads
+// and can act on; the error is what stops a caller mistaking a refusal for an
+// answer. What it never returns is a successful empty result over a question it
+// could not answer.
+func Find(ctx context.Context, d Deps, req generated.VaultFindRequest) (generated.VaultFindResponse, error) {
+	set := d.Schemas
+	if set == nil {
+		set = records.NewSchemaSet()
+	}
+
+	if r := applyView(&req, d.Views); r != nil {
+		return refusalResponse(req, "", r), r
+	}
+
+	q, r := parse(req, set)
+	if r != nil {
+		return refusalResponse(req, "", r), r
+	}
+	echo := q.echo()
+
+	// THE PLATFORM GATE, BEFORE ANY RETRIEVAL.
+	//
+	// records.RequirePropertyIndex's error is returned UNCHANGED (wrapped with
+	// %w so errors.Is still finds it and the platform name survives). Returning
+	// a zero value here instead would re-open the exact hole FR-020h exists to
+	// close: the operator is told there is nothing to find, when the truth is
+	// that the question cannot be answered on this platform.
+	for _, capability := range q.capabilities() {
+		if err := records.RequirePropertyIndex(capability); err != nil {
+			ref := refuse(problem(generated.IndexUnavailable, err.Error(),
+				"plain-word search and vault_read still work on this build"), err)
+			return refusalResponse(req, echo, ref), fmt.Errorf("vault_find: %w", err)
+		}
+	}
+
+	if q.explain {
+		return explainResponse(q, echo), nil
+	}
+
+	if q.cursor != "" {
+		if r := checkCursor(q.cursor, d.Epoch); r != nil {
+			return refusalResponse(req, echo, r), r
+		}
+	}
+
+	if q.kind == KindTask {
+		return findTasks(ctx, d, q, echo)
+	}
+	return findRecords(ctx, d, q, echo)
+}
+
+// applyView expands a saved view UNDER the caller's own arguments, so `filter`
+// refines the view rather than replacing it (spec 4.1.2: "a saved view, applied
+// first; filter refines it").
+func applyView(req *generated.VaultFindRequest, loader ViewLoader) *Refusal {
+	if req.View == nil || *req.View == "" {
+		return nil
+	}
+	name := *req.View
+	if loader == nil {
+		return refuse(problem(generated.UnknownView,
+			fmt.Sprintf("this vault has no saved views, so %q cannot be resolved", name),
+			"drop the view and write the filter directly, or define the view with vault_configure"), nil)
+	}
+	view, ok := loader.View(name)
+	if !ok {
+		names := loader.Names()
+		sort.Strings(names)
+		p := problem(generated.UnknownView,
+			fmt.Sprintf("no saved view named %q", name),
+			"call vault_describe include=views to see the saved views in scope")
+		if len(names) > 0 {
+			p.Reason += "; defined: " + strings.Join(names, ", ")
+			p.Permitted = &names
+		}
+		return refuse(p, nil)
+	}
+
+	// The caller's own arguments WIN over the view's. A view that could
+	// overwrite an explicit argument would silently answer a different question
+	// from the one asked.
+	if req.Type == nil {
+		req.Type = view.Type
+	}
+	if req.Kind == nil {
+		req.Kind = view.Kind
+	}
+	if req.Sort == nil {
+		req.Sort = view.Sort
+	}
+	if req.Select == nil {
+		req.Select = view.Select
+	}
+	if req.GroupBy == nil {
+		req.GroupBy = view.GroupBy
+	}
+	if req.Join == nil {
+		req.Join = view.Join
+	}
+	if req.Aggregate == nil {
+		req.Aggregate = view.Aggregate
+	}
+	switch {
+	case view.Filter == nil:
+		// nothing to compose
+	case req.Filter == nil:
+		req.Filter = view.Filter
+	default:
+		// BOTH are present: the answer is the INTERSECTION. Replacing the view's
+		// filter with the caller's would widen the result set beyond what the
+		// view defines, which is the opposite of "refines".
+		req.Filter = &generated.VaultFilterNode{
+			All: &[]generated.VaultFilterNode{*view.Filter, *req.Filter},
+		}
+	}
+	return nil
+}
+
+// checkCursor refuses a cursor issued against a different index generation.
+// FR-020c: an unhonourable cursor is an ERROR, never a silent restart — a silent
+// restart returns page one while the caller believes it is reading page four.
+func checkCursor(cursor string, epoch int64) *Refusal {
+	off, issued, ok := decodeCursor(cursor)
+	if !ok {
+		return refuse(problem(generated.StaleCursor,
+			fmt.Sprintf("the cursor %q was not issued by this system", cursor),
+			"re-run the query without a cursor"), nil)
+	}
+	if issued != epoch {
+		return refuse(problem(generated.StaleCursor,
+			fmt.Sprintf("that cursor was issued against index_epoch %d; the index is now at %d",
+				issued, epoch),
+			"re-run the query — the corpus changed underneath the page boundary"), nil)
+	}
+	_ = off
+	return nil
+}
+
+// findRecords is the note/record path: narrow, bound, stream, decide in Go.
+func findRecords(ctx context.Context, d Deps, q *query, echo string) (generated.VaultFindResponse, error) {
+	sel := q.selector(d.PathPrefix)
+
+	// The plain-word half runs FIRST when it is asked for, because it produces a
+	// PATH SET the typed half then intersects. The answer is the intersection,
+	// never the union: a caller who asked for both and received either is being
+	// told something false about their vault.
+	var wordPaths map[string]TextHit
+	if q.words != "" {
+		if d.Text == nil {
+			ref := refuse(problem(generated.IndexUnavailable,
+				"plain-word search is not available: no text index is wired into this vault",
+				"drop words and use a typed filter, or re-open the vault"), nil)
+			return refusalResponse(generated.VaultFindRequest{}, echo, ref), ref
+		}
+		hits, err := d.Text.Search(ctx, q.words, textFanout(q.limit))
+		if err != nil {
+			ref := refuse(problem(generated.IndexUnavailable,
+				fmt.Sprintf("the text index could not answer %q: %v", q.words, err),
+				"re-run, or run vault_describe check_integrity to see the index state"), err)
+			return refusalResponse(generated.VaultFindRequest{}, echo, ref), ref
+		}
+		wordPaths = make(map[string]TextHit, len(hits))
+		for _, h := range hits {
+			wordPaths[h.Path] = h
+		}
+		if len(wordPaths) == 0 {
+			return zeroHitResponse(ctx, d, q, echo), nil
+		}
+	}
+
+	if d.Store == nil {
+		ref := refuse(problem(generated.IndexUnavailable,
+			"the properties index is not open, so no record can be read",
+			"re-open the vault; run vault_describe check_integrity to see the index state"), nil)
+		return refusalResponse(generated.VaultFindRequest{}, echo, ref), ref
+	}
+
+	// ── B1: bound WORK, before anything is retrieved ────────────────────────
+	//
+	// It counts the narrowed candidate POPULATION and it is taken BEFORE the
+	// first candidate is read. The count is exact, so the refusal quotes it. Its
+	// remedy is SCOPE or KIND and deliberately NOT "add a filter" — a filter
+	// does not change the number that fired, and naming a remedy that does not
+	// reduce the number is worse than naming none.
+	total, err := d.Store.CountCandidates(ctx, sel)
+	if err != nil {
+		ref := refuse(problem(generated.IndexUnavailable,
+			fmt.Sprintf("the properties index could not count candidates: %v", err),
+			"run vault_describe check_integrity"), err)
+		return refusalResponse(generated.VaultFindRequest{}, echo, ref), ref
+	}
+	if total > propindex.BoundNarrowedCandidates {
+		subject := "records"
+		if q.recordType != "" {
+			subject = "candidate records of type " + q.recordType
+		}
+		ref := refuse(problem(generated.EvaluationBoundExceeded,
+			fmt.Sprintf("this query would evaluate %s %s; the limit is %s",
+				group3(total), subject, group3(propindex.BoundNarrowedCandidates)),
+			"narrow the scope to a collection or path, or narrow the kind"), nil)
+		return refusalResponse(generated.VaultFindRequest{}, echo, ref), ref
+	}
+
+	cmp := records.Comparator{ResolveRelation: d.Resolve}
+	ev := &evaluation{q: q, cmp: cmp, words: wordPaths}
+
+	// ── B2: bound MEMORY, during evaluation ─────────────────────────────────
+	//
+	// It counts SURVIVORS and aborts the stream. It is not a precondition and
+	// cannot be: "the rows surviving the filter" is a quantity only the Go
+	// comparator can produce, and it produces it by evaluating candidates.
+	err = d.Store.Candidates(ctx, sel, ev.visit)
+	if err != nil {
+		if propindex.IsBoundExceeded(err) {
+			ref := refuse(problem(generated.CandidateCapExceeded,
+				fmt.Sprintf("this query matched more than %s records; the limit is %s",
+					group3(propindex.BoundSurvivors), group3(propindex.BoundSurvivors)),
+				"add or tighten a filter, or ask for a total instead"), err)
+			return refusalResponse(generated.VaultFindRequest{}, echo, ref), ref
+		}
+		ref := refuse(problem(generated.IndexUnavailable,
+			fmt.Sprintf("the properties index could not stream candidates: %v", err),
+			"run vault_describe check_integrity"), err)
+		return refusalResponse(generated.VaultFindRequest{}, echo, ref), ref
+	}
+
+	return ev.assemble(d, echo, total), nil
+}
+
+// textFanout is how many text hits to ask for. It is deliberately wider than the
+// page: the typed filter runs AFTER, so asking for exactly `limit` would page
+// the text index and then throw most of it away, reporting fewer rows than exist
+// with nothing saying so.
+func textFanout(limit int) int {
+	n := limit * 20
+	if n < 200 {
+		n = 200
+	}
+	if n > propindex.BoundSurvivors {
+		n = propindex.BoundSurvivors
+	}
+	return n
+}
+
+// evaluation accumulates survivors. It holds ONE candidate at a time from the
+// store's perspective — what it retains per survivor is the rendered row and the
+// sort keys, not the decoded candidate.
+type evaluation struct {
+	q     *query
+	cmp   records.Comparator
+	words map[string]TextHit
+
+	selected    int
+	survivors   []survivor
+	problems    []generated.RecordProblem
+	unevaluable int
+	seenProblem map[string]bool
+}
+
+type survivor struct {
+	cand  propindex.Candidate
+	score float64
+	// textHash is what the TEXT index holds for this note. FR-020c compares the
+	// row's own hash against THIS, per returned record.
+	textHash string
+	hasText  bool
+	values   map[string]records.PropertyValue
+}
+
+// visit is the per-candidate callback. Returning Accepted counts against B2.
+func (e *evaluation) visit(c propindex.Candidate) (propindex.Verdict, error) {
+	// The word half is an INTERSECTION, applied before the comparator so a
+	// record outside it costs no decode.
+	var hit TextHit
+	hasText := false
+	if e.words != nil {
+		h, ok := e.words[c.Path]
+		if !ok {
+			return propindex.Rejected, nil
+		}
+		hit, hasText = h, true
+	}
+
+	e.selected++
+	cand := newCandidate(c)
+
+	matched := true
+	if e.q.filter != nil {
+		res := e.q.filter.eval(e.cmp, cand)
+		e.recordProblems(res.problems)
+		if res.blocked {
+			e.unevaluable++
+			return propindex.Rejected, nil
+		}
+		matched = res.matched
+	}
+	if !matched {
+		return propindex.Rejected, nil
+	}
+
+	// Decode the columns that will actually be RENDERED or SORTED, while the
+	// candidate is still in hand. Doing it later would mean holding every
+	// candidate, which is the memory bound this stream exists to respect.
+	values, err := e.materialise(cand)
+	if err != nil {
+		p := problem(generated.StaleRecord, err.Error(),
+			"re-index this note, or correct the value to one the schema declares", cand.identity())
+		p.Paths = &[]string{c.Path}
+		e.recordProblems([]generated.RecordProblem{p})
+		e.unevaluable++
+		return propindex.Rejected, nil
+	}
+
+	e.survivors = append(e.survivors, survivor{
+		cand: c, score: hit.Score, textHash: hit.SourceHash, hasText: hasText, values: values,
+	})
+	return propindex.Accepted, nil
+}
+
+// materialise decodes the render and sort columns for one survivor.
+func (e *evaluation) materialise(cand candidate) (map[string]records.PropertyValue, error) {
+	out := map[string]records.PropertyValue{}
+	for _, prop := range e.q.renderProperties() {
+		v, err := cand.value(prop)
+		if err != nil {
+			return nil, err
+		}
+		out[prop.Name] = v
+	}
+	return out, nil
+}
+
+// recordProblems appends, deduplicating on record+property+code so a filter tree
+// naming one property in three leaves reports one line rather than three.
+//
+// The deduplication is on the RECORD's identity, not on the message, because the
+// same defect in two different notes is two problems the reader must fix twice.
+func (e *evaluation) recordProblems(ps []generated.RecordProblem) {
+	if e.seenProblem == nil {
+		e.seenProblem = map[string]bool{}
+	}
+	for _, p := range ps {
+		key := strings.Join(p.Records, ",") + "|" + string(p.Code)
+		if p.Property != nil {
+			key += "|" + *p.Property
+		}
+		if e.seenProblem[key] {
+			continue
+		}
+		e.seenProblem[key] = true
+		e.problems = append(e.problems, p)
+	}
+}
+
+// group3 renders a count with thousands separators, for a refusal message.
+func group3(n int) string {
+	s := fmt.Sprintf("%d", n)
+	if len(s) <= 3 {
+		return s
+	}
+	var parts []string
+	for len(s) > 3 {
+		parts = append([]string{s[len(s)-3:]}, parts...)
+		s = s[:len(s)-3]
+	}
+	return strings.Join(append([]string{s}, parts...), ",")
+}
