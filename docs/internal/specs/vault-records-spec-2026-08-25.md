@@ -563,11 +563,15 @@ as "no progress has arrived" for a fully indexed collection.
   for ASCII and would silently change R-10 (AC-8.7).~~ **DELETED, revision 5 (operator ruling 3).**
   Case-insensitive matching is the desired behaviour, so the property `LIKE` was banned for is no
   longer a defect. `LIKE` is permitted. **AC-8.7 and §7 test 39 (`TestFilter_NoLikeInCompiledPath`)
-  are deleted with it, not reworded.** The compiler still does not *use* `LIKE` — §8.1 picks
-  `instr()` over a folded column instead, for a reason that has nothing to do with case (`LIKE`
-  needs `%`/`_` escaping on caller-supplied text, and an unescaped `%` in a needle is a wildcard
-  nobody asked for) — but that is an implementation preference, not a prohibition, and **no test
-  asserts the absence of `LIKE`.**
+  are deleted with it, not reworded.** **CORRECTED, revision 6 (review round 6, m-3): revision 5
+  went on to say *"§8.1 picks `instr()` over a folded column instead … for the compiled filter
+  path"*. **§8.1 picks nothing, and there is no compiled filter path** — ruling R-A deleted both,
+  in the same revision. What survives, restated: **`LIKE` is a comparator operator now** (FR-022b),
+  evaluated in Go with its own escaping rule (FR-011a's metacharacter clause), and **no `LIKE`
+  appears in emitted SQL at all** — which is not a preference any more but a **property, asserted
+  by AC-8.10 and §7 test 39a**. The prohibition on `LIKE` as a *filter vocabulary* is what ruling
+  R-D deleted; the absence of `LIKE` from *emitted SQL* is what C-5 restored, and they are
+  different statements about different layers.
 - The system must **not** claim a folding guarantee stronger than the one it delivers, and
   **"Unicode-aware" is not a guarantee** — revision 5 used it as though it meant full case folding
   and it does not (FR-011b's three-level vocabulary). Anything resting on SQLite (`COLLATE NOCASE`,
@@ -994,7 +998,9 @@ no new runtime dependency, no CGo, and Hard Constraints #1 and #2 hold.
 - **FR-034** A relation whose target is not of the declared type MUST be reported by validation.
 - **FR-035** Relation cardinality MUST be declared and enforced.
 - **FR-036** Every record MUST carry an identifier unique within its type, minted on creation.
+- **FR-036b** **NEW, revision 6 (review round 6, m-11). The identifier PREFIX has a source, and it was named nowhere.** FR-036 requires an identifier and never said where its prefix comes from; the id-prefix block appeared only in ADR-068 D2's example and in §4.1.1's response spec, so a reader could not tell whether the prefix was schema data, derived from the type name, or ours. **It is schema data**: a record-type schema MAY declare `id_prefix`, and the minted identifier is `<id_prefix>-<counter>` (`CO-0142` in this document's illustrations). **If the schema declares none, the identifier is the counter alone** — the system MUST NOT derive a prefix from the type name, because that would be the product inventing vocabulary, which R-F forbids. The prefix is **not** an identity: two types may declare the same prefix and FR-036's uniqueness is still within-type. `vault_configure` writes it; `vault_describe` renders it.
 - **FR-037** Identifier allocation MUST be mutually exclusive within a process and, on POSIX, across processes.
+- **FR-038a** **NEW, revision 6 (review round 6, unasked question 1). A RESTORED record keeps its old identifier, and that is NOT a duplicate.** FR-038 forbids lowering the counter and SC-005a asserts a new identifier lands above a deleted one — so a note trashed at `CO-0142`, followed by allocations past 142, followed by **`restore`** (FR-048a), puts `CO-0142` back **below** the counter. **Nothing in revision 5 said whether that was a FR-039 duplicate-identifier finding or the intended behaviour, and both readings are defensible from the text.** **Ruling: it is intended, and it is not a finding** — the identifier was never reissued (FR-038 guarantees exactly that), so the restored record is the *same* record returning, not a second one wearing its name. **What IS a finding is the case FR-039 already covers**: two *live* records sharing an identifier, which `restore` can produce only if a note was created at the trashed record's own path in the interval. **`restore` MUST therefore check for a live record holding that identifier and REFUSE, naming both paths**, rather than restoring into a collision. The counter is never lowered in either case.
 - **FR-038** On open, the allocator MUST raise its counter to at least the highest existing identifier and MUST NEVER lower it. Reconciling *to* the maximum guarantees reuse after the highest record is deleted, which makes an existing relation resolve to a different record.
 - **FR-039** A duplicate identifier MUST be a hard validation error naming both paths.
 - **FR-036a** **NEW, revision 4 (ADR-068 D15.1).** `vault_edit`'s one-file rule has exactly **one** accepted exception: `create` also writes `.omnipus-vault/records/.seq` under a cross-process flock, because FR-036 requires an identifier. `.seq` is accepted because it is a monotonic counter with no readable content, no meaning to any query and no recoverable state to lose — corrupting it costs skipped identifiers, which FR-038 already permits, never a wrong answer. **It is the only exception**; adding a second is a decision for another ADR, not for whoever writes the next tool. *(Revision 3 stated the tier rule as "writes only the file named in `path`", which was false on the first record ever created.)*
@@ -1210,8 +1216,10 @@ and a guessed property name is the failure FR-024 exists to prevent.
 | `check_integrity` | bool | `false` | Run the integrity sweep (FR-075). Scoped by `collection` / `record_type` when either is given (FR-075a). |
 | `detail` | `minimal \| standard` | `standard` | `minimal` omits property descriptions and enum value lists. |
 
-**Response sections, in order:** index freshness → collections → record types (name, label, id
-prefix, property table: name, type, arity, required, **enum values, as declared — the set is UNORDERED and a reader MUST NOT infer a sort order from the response's own sequence**) → saved
+**Response sections, in order:** index freshness → collections → record types (name, label, **id
+prefix — see FR-036b**, property table: name, **type rendered DISTINCTLY for `integer` and
+`decimal`**, arity, required, **enum values, as declared — the set is UNORDERED and a reader MUST
+NOT infer a sort order from the response's own sequence**) → saved
 views → templates → integrity findings when requested.
 
 **Integrity findings** are grouped by kind and every finding names a path. **Five categories, each
