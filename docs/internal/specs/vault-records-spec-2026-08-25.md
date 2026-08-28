@@ -356,6 +356,187 @@ A one-shot importer translates what it recognises and names what it does not.
 
 ---
 
+## 4.1 Tool specifications — normative
+
+The five tools below are the **whole** agent-facing surface of the vault. Parameters are
+normative: a name not listed here does not exist, and an argument the schema does not declare is
+rejected with the accepted argument names listed (the same posture FR-024 takes for an unknown
+property).
+
+Every response is compact text (FR-072). Every response begins with its completeness verdict
+(FR-121) and ends with next actions (FR-125). Errors are returned as a **refusal the model can
+act on**, never as an empty success.
+
+### 4.1.1 `vault_describe` — READ, orientation and integrity
+
+The mandatory cheap first call. An agent that has not called it is guessing at property names,
+and a guessed property name is the failure FR-024 exists to prevent.
+
+| Parameter | Type | Default | Meaning |
+|---|---|---|---|
+| `collection` | string | all in scope | Narrow to one collection. Unknown name → refusal listing the collections in scope. |
+| `record_type` | string | — | Return the full property table for one type only. |
+| `include` | list of `types \| views \| templates \| index` | all | Trim the response. |
+| `check_integrity` | bool | `false` | Run the whole-vault sweep (FR-075). |
+| `detail` | `minimal \| standard` | `standard` | `minimal` omits property descriptions and enum value lists. |
+
+**Response sections, in order:** index freshness → collections → record types (name, label, id
+prefix, property table: name, type, arity, required, enum values in declared order) → saved
+views → templates → integrity findings when requested.
+
+**Integrity findings** are grouped by kind and every finding names a path:
+
+```
+INTEGRITY: 3 findings
+  duplicate id   CO-0142 — Companies/Acme.md and Companies/Acme (old).md; neither is preferred
+  unresolved     DEAL-0091 company → [[Acme Corp.]] — no note resolves; nearest: Companies/Acme Ltd.md
+  wrong type     DEAL-0104 company → [[Q3 planning]] is a note of type meeting, expected company
+```
+
+- **AC-D1** — `check_integrity` on a vault with a duplicate identifier names **both** paths and
+  states that neither is preferred (FR-039, ADR-068 D7.1).
+- **AC-D2** — `vault_describe` with an unknown `record_type` is refused with the declared type
+  names listed; it does not return an empty description.
+- **AC-D3** — the response never contains a JSON object (FR-072).
+
+### 4.1.2 `vault_find` — READ, the one retrieval path
+
+Absorbs `record_query`, `record_explain`, `knowledge_search`, `knowledge_tasks` and
+link-neighbourhood traversal. There is **no second retrieval tool**.
+
+| Parameter | Type | Default | Meaning |
+|---|---|---|---|
+| `words` | string | — | Free text, ranked per FR-112. |
+| `type` | string | — | Record type. Unknown → refusal listing declared types. |
+| `kind` | `note \| record \| task \| attachment` | `note` | `task` replaces `knowledge_tasks`. |
+| `filter` | object | — | Structured only (FR-022). Shape below. |
+| `view` | string | — | A saved view, applied first; `filter` refines it. |
+| `near` | string | — | A note path or wikilink. |
+| `hops` | int 1..2 | `1` | Only with `near`; 3+ is refused (FR-065). |
+| `join` | list of relation names | — | Borrowed columns (FR-124). |
+| `group_by` | list, max 2 | — | Two levels (FR-027). |
+| `sort` | list of `{property, direction}` | relevance | Enum sorts by declared position (FR-010). |
+| `select` | list of property names | schema order | Columns to render. |
+| `aggregate` | list of `{op, property}`; `op` ∈ `count, sum, min, max` | — | Scoped totals only (FR-123). |
+| `explain` | bool | `false` | Report the plan; evaluate nothing (FR-073). |
+| `limit` | int | `50` | Clamped at 200, clamp reported (FR-063). |
+| `cursor` | opaque string | — | An unhonourable cursor is an error, never a silent restart. |
+| `detail` | `minimal \| standard` | `standard` | `minimal` ≈ 20 tokens/hit (FR-126). |
+
+**Filter shape** — a tree of `{all: [...]}`, `{any: [...]}`, `{not: {...}}` over leaves
+`{property, op, value}`, with `op` ∈ `is, is_not, lt, lte, gt, gte, contains, is_absent,
+is_present`. No text query language exists and none is accepted (FR-022).
+
+**Normative refusal wording.** These strings are contract, not illustration; a test asserts them.
+
+| Condition | Message |
+|---|---|
+| Unknown property | `unknown property 'ownr' on record type 'company'; declared: name, status, segment, owner, website, arr` |
+| Unknown enum value | `'Won' is not a value of deal.status; permitted, in order: open, won, lost` |
+| Equality on a `many` property (R-13) | `segment holds many values; use contains` |
+| Third hop | `hops=3 exceeds the limit of 2; run a second vault_find from one of these results` |
+| Candidate cap | `this query selects 24,180 records; the limit is 10,000 — add a filter on status (7 values) or a narrower type` |
+| Aggregate over a refused set | `no total is returned over a refused candidate set` |
+| Cross-currency total | `2 currencies present (GBP, USD); no combined total is returned` |
+| Stale cursor | `that cursor was issued against index generation 8802; the index is now at 8814 — re-run the query` |
+
+- **AC-F1** — every refusal above names the remedy in the same string. A refusal that states only
+  what went wrong fails this criterion.
+- **AC-F2** — `near` composed with `words` and `filter` returns the intersection. A test asserts a
+  record inside the hop radius but failing the filter is **absent**, and one matching the filter
+  but outside the radius is **absent** (FR-076).
+- **AC-F3** — `explain: true` performs no evaluation: a corpus mutation between two identical
+  `explain` calls changes nothing in the response except index generation.
+- **AC-F4** — an out-of-scope vault yields `COMPLETE: yes — 0 records` and no other signal
+  (FR-062).
+
+### 4.1.3 `vault_read` — READ, a note or one section of one
+
+| Parameter | Type | Default | Meaning |
+|---|---|---|---|
+| `path` | string | required | Note path within scope. |
+| `section` | string | — | One heading. Unknown → refusal listing the headings present. |
+| `include` | list of `frontmatter \| body \| links \| backlinks` | all | |
+| `max_bytes` | int | 40,000 | Truncation is reported in the header, never silent. |
+
+**Response:** version token first, then typed frontmatter (parsed per the record's schema, with
+any non-conforming value flagged in place), then body or section, then links and backlinks
+inline.
+
+Refusals: `no section '## Pricing' in Deals/Acme.md; headings: ## Summary, ## Terms, ## Notes`.
+
+- **AC-R1** — a successful `vault_read` carries a version token that `vault_edit` accepts
+  unchanged (FR-074).
+- **AC-R2** — no path exists by which an agent must send a failing write to obtain a token: a test
+  drives read → edit with zero intervening failed writes.
+- **AC-R3** — a note whose frontmatter violates its schema still **reads**, with the violation
+  named per property. Reading is never blocked by a validation finding.
+
+### 4.1.4 `vault_edit` — WRITE, one named file
+
+Writes **only** `path` (FR-070b). Every op on an existing file requires `expect_version`.
+
+| `op` | Additional parameters | Notes |
+|---|---|---|
+| `create` | `path`, `frontmatter` (map), `body` | Mints the identifier (FR-036) when `type` is a declared record type. |
+| `set_property` | `path`, `property`, `value` (scalar **or list**), `expect_version` | Closes today's scalar-only limit (`SetProperty(key, value string)`, `pkg/knowledge/author.go:766`). |
+| `append_section` | `path`, `heading`, `body`, `level` (default 2), `once` (bool), `expect_version` | Maps to `AppendSectionAt` / `AppendSectionOnce`. |
+| `replace_body` | `path`, `anchor` **or** `line_range`, `body`, `expect_version` | **Unbuilt primitive** — FR-047. |
+| `link` | `path`, `target`, `alias`, `section`, `relation` (property name), `expect_version` | Writes the **source** only; the inverse is derived (FR-032). |
+| `write_view` | `view` (name), `definition`, `expect_version` when replacing | A view file changes no note (FR-018). |
+| `create_record_type` | `type`, `definition` | **New** type only; nothing existing is reinterpreted (FR-016). |
+
+`link` belongs to this tier because a relation is stored once, on the source (FR-030). Linking
+`Deal.md` to `[[Acme]]` writes `Deal.md` and never touches `Acme.md` — it looks like a two-file
+operation and is a one-file operation.
+
+**Normative refusal wording:**
+
+| Condition | Message |
+|---|---|
+| Stale token (FR-043) | `Deals/Acme.md changed since you read it; you have v1:ab12…, current is v1:cd34… — vault_read it again and re-apply` |
+| Multi-line clobber (FR-040b) | `segment currently spans 3 lines; a scalar write would delete them — no change made. Send a list value instead` |
+| Ambiguous anchor (FR-047) | `anchor "## Pricing" appears twice in Deals/Acme.md (lines 14 and 88) — no change made; give a unique anchor or a line_range` |
+| Schema violation (FR-042) | `deal.status holds one value; got a list of 2 — send a single value, or declare many: true in .omnipus-vault/records/deal.yaml` |
+| Cascading op sent here | `rename cascades to notes you did not name; use vault_restructure` |
+
+- **AC-E1** — after any successful `vault_edit`, exactly one file has a changed mtime and hash.
+  This is FR-070b as a test, and it is the tier's definition.
+- **AC-E2** — `create_record_type` on a type that already exists is refused, naming
+  `vault_restructure` as the tool for changing one (FR-017).
+- **AC-E3** — an ambiguous `replace_body` anchor leaves the file byte-identical.
+
+### 4.1.5 `vault_restructure` — WRITE, cascades
+
+The only tool permitted to change a file the caller did not name.
+
+| `op` | Additional parameters | Cascade |
+|---|---|---|
+| `rename` | `path`, `new_name`, `expect_version` | Inbound wikilinks in N notes are rewritten (ADR-067 D10). |
+| `move` | `path`, `dest`, `expect_version` | Same. |
+| `trash` | `path`, `expect_version` | Inbound links **cannot** be repaired — FR-048. |
+| `edit_record_type` | `type`, `definition`, `expect_version` | Every existing record of that type is reinterpreted (FR-015, FR-017). |
+| `delete_record_type` | `type`, `expect_version` | Same cascade, larger. |
+
+**Trash stays in this tier even though it is a soft delete.** A recoverable bin fixes the trashed
+note's own recoverability; it does nothing for the N notes whose links just broke. Recoverability
+and blast radius are different axes, and only the second one decides the tier.
+
+Every response MUST state the cascade in counts before the next-actions block:
+
+```
+CASCADE: 7 notes rewritten (inbound wikilinks), 1 note moved
+```
+
+- **AC-X1** — a `trash` response names the count of now-unrepairable inbound links and lists
+  the linking notes up to the page limit (FR-048).
+- **AC-X2** — `edit_record_type` reports how many existing records change validity as a result,
+  in both directions (newly invalid, newly valid).
+- **AC-X3** — an operator policy of `vault_edit: allow` + `vault_restructure: deny` permits
+  `set_property` and refuses `rename` in the same session (FR-083).
+
+---
+
 ## 5. Success criteria
 
 - **SC-001** The two-hop question from ADR-068 §1.2 is answered by one `record_query` call with no hand-maintained state and no regular expression.
