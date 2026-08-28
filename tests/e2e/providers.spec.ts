@@ -193,10 +193,22 @@ test('the picker reads the catalog from the GET, and serves at most one 200 per 
   // Same-document hash navigation, deliberately NOT page.goto: a full document
   // load would reset the SPA's in-memory ETag cache and this row would then be
   // measuring the harness rather than the re-validation policy.
+  //
+  // The away-target must be a route with NO `/_app` `beforeLoad` guard. This
+  // suite never drives the real `POST /onboarding/complete` (see
+  // onboarding-stubs.ts's file doc comment) — `GET /api/v1/state` stays
+  // stubbed to `onboarding_complete: false` for the test's whole lifetime, on
+  // purpose, so it never mutates the shared gateway's onboarding state. Every
+  // route under `/_app` (e.g. `/agents`) re-fetches `/state` in its OWN
+  // `beforeLoad` on every navigation (`src/routes/_app.tsx` — no client-side
+  // cache) and immediately redirects back to `/onboarding` whenever that
+  // fetch reports incomplete, which it always does here. `/login` is a
+  // sibling route with no such guard (`src/routes/login.tsx`), so it unmounts
+  // the picker the same way `/agents` would without tripping that redirect.
   await page.evaluate(() => {
-    window.location.hash = '#/agents'
+    window.location.hash = '#/login'
   })
-  await expect(page).toHaveURL(/agents/, { timeout: 10_000 })
+  await expect(page).toHaveURL(/login/, { timeout: 10_000 })
   await page.evaluate(() => {
     window.location.hash = '#/onboarding'
   })

@@ -503,12 +503,23 @@ export function ProviderPicker({
           </div>
         )}
 
+        {/*
+         * `id={listId}` on `CommandList` itself would be silently dropped: cmdk's
+         * `CommandList` (`Ie` in node_modules/cmdk/dist/index.js) spreads the
+         * caller's props first and then unconditionally overwrites `id` with its
+         * OWN internally-generated id (`R.listId`, from `useId()` on the Command
+         * root). So `aria-controls={listId}` on the "All providers" toggle below
+         * was pointing at an id no DOM node ever carried — axe's
+         * `aria-valid-attr-value` (critical) correctly flags that as a broken
+         * relationship. This wrapper div is the one place `listId` actually lands
+         * in the DOM, so `aria-controls` resolves to a real, always-present
+         * element (hidden via this same wrapper when collapsed).
+         */}
+        <div id={listId} hidden={!showList}>
         <CommandList
-          id={listId}
           ref={scrollRef}
           data-testid="picker-virtual-viewport"
           style={{ height: showList ? viewportHeight : 0, maxHeight: viewportHeight, overflowY: 'auto' }}
-          hidden={!showList}
         >
           {showList && (
             <div style={{ height: virtualizer.getTotalSize(), position: 'relative', width: '100%' }}>
@@ -567,6 +578,7 @@ export function ProviderPicker({
             </div>
           )}
         </CommandList>
+        </div>
 
         {model.expanded && !model.hasMatches && model.emptyMessage && (
           <div data-testid="picker-empty" className="px-2 py-3 text-sm" style={{ color: 'var(--color-muted)' }}>
