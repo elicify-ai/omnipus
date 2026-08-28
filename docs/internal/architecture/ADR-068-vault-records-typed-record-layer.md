@@ -1,8 +1,10 @@
 # ADR-068 — Vault records: a typed record layer with relations
 
-- **Status:** Proposed (2026-08-28) — **revision 5**, after a three-agent design council (three rounds of argument, grounded in the codebase and in August 2026 retrieval research). **D16 is now RESOLVED** — the spike reported (`../design/adr068-storage-spike-2026-08-25.md`) and D16 records both its answer and the one place this ADR overrides its recommendation, with the grounds. The agent tool surface is **cut from nine `record_*` tools to five `vault_*` tools that also subsume the nine existing `knowledge_*` tools** (D15). Three decisions are added: retrieval and ranking (D21), the response the model actually reads (D22), and schema/view authoring (D23).
+- **Status:** Proposed (2026-08-28) — **revision 6**, after a fifth adversarial review (BLOCK: 8 critical, 25 major, 3 minor — `ADR-068-vault-records-typed-record-layer-review-round5.md`). Revision 5's own headline numbers were wrong: the catalog is **98 tools, not 102**, and the two-index staleness mitigation named a **freshness token that does not exist**. Both are repaired below, the second by specifying the mechanism rather than asserting it again. The agent tool surface grows from five `vault_*` tools to **six** — the control plane gets its own policy lever (D15.6). D16's latency argument is **withdrawn as unevidenced**; the capability argument, which is the one that survives, now carries the decision alone.
+  - *Revision 5:* three-agent design council; D16 resolved to a two-index design; nine `record_*` tools cut to five `vault_*`; D21, D22, D23 added.
   - *Revision 4 and earlier:* proposed 2026-08-25 after three adversarial reviews (BLOCK each time: 7, 8, then 10 critical). Revision 1 made three false claims about existing code (D14, D16, D18); all three are corrected in place and the corrections are marked. D16 had been wrong three times and was deliberately left unresolved behind a measured spike.
-- **Revision 5 verification standard:** every claim about our own code below cites `file:symbol` or `file:line` and was read at revision time. Two claims put to the council did **not** survive that check and are recorded as not-confirmed rather than quietly dropped — see §2.D21.1 (which *did* confirm) and **§2.6, the alleged indexing-progress defect (NOT confirmed)**. This ADR's history is three revisions of asserting properties of code nobody had read; repeating that in the revision that fixes it would be the same failure wearing a better hat.
+- **Verification standard (revision 5's, restated because revision 5 breached it):** every claim about our own code below cites `file:symbol` or `file:line` and was read at revision time. Revision 5 declared this standard and then broke it twice, in its two load-bearing decisions. **The rule for revision 6 is narrower and harder: a mechanism this ADR relies on either exists and is cited, or is specified as NEW WORK with what it costs — never named as though it already worked.** The freshness token (D16.4) is the test case: it is now specified against the per-file hash the manifest already stores, with the part that must be built named as such.
+- **Where this revision disagrees with its review.** Three of the review's claims did not survive checking and are **rejected with evidence**, in place: the spec-is-stale claim (C-4's tail — the spec is at revision 3 and already carries the changes), the "drop `and Matrix`" half of M-24 (Matrix genuinely uses SQLite; the defect was the missing citation), and the BM25 undercount arithmetic (M-23 says twelve; the enumerable count is **thirteen**). Each is marked **REJECTED** where it arises. A review is evidence, not an oracle, and complying with a wrong finding would be the same failure as ignoring a right one.
 - **Implements:** founder direction 2026-08-24 ("we need something similar to bases for master data like our CRM"); explicit decision **not** to pursue Obsidian `.base` compatibility
 - **Builds on:** [ADR-067](ADR-067-omnipus-knowledge-base-and-render-first-preview.md) (knowledge base, index, tools, preview), [ADR-063](ADR-063-unified-file-access-engine-and-mounts.md) (mounts), [ADR-037](ADR-037-remove-global-delegation-policy.md) (workspace = trust boundary), [ADR-054](ADR-054-entity-config-separation.md) §5 (flock platform limits)
 - **Supersedes in intent:** the `.base`-evaluator direction explored on 2026-08-24 and abandoned — see §3.1
@@ -513,14 +515,42 @@ withdrawn. The surface is **five `vault_*` tools**, and they **also replace the 
 
 **D15.0 — Why the count is a design constraint and not bookkeeping.**
 
-The static builtin catalog is **102 tools** — `allStaticToolNames`
-(`pkg/coreagent/core.go:357-483`), counted at revision time, not estimated. Nine of those are
-already `knowledge_*`: `knowledge_search`, `knowledge_graph`, `knowledge_tasks`,
-`knowledge_create`, `knowledge_link`, `knowledge_set_property`, `knowledge_append_section`,
-`knowledge_move`, `knowledge_rename`.
+> **CORRECTED in revision 6. Revision 5 said 102. The catalog is 98.** The error was a grep that
+> swept in policy *values* (`"ask"`, `"allow"`, `"deny"`) alongside tool *names*. It was quoted
+> three times as a counted-not-estimated figure, inside the decision that makes tool count the
+> load-bearing constraint, in the revision whose standard is "read at revision time". Every
+> figure derived from it was therefore also wrong, and they are re-derived below rather than
+> patched.
 
-Shipping nine `record_*` tools **alongside** those nine would have put roughly **20 tool
-definitions on one subsystem** and taken the catalog to 111.
+The static builtin catalog is **98 tools** — `allStaticToolNames`
+(`pkg/coreagent/core.go:357-482`). Counted at revision time by stripping trailing `//` comments
+from the composite literal and taking unique quoted identifiers: **98 entries, 98 unique**. It
+matches `Sandbox.ToolPolicies` in `pkg/config/defaults.go` **entry for entry with no diff** —
+the one-for-one global ceiling that `TestCatalog_MatchesGlobalCeilingEntryForEntry` asserts. Two
+independently-derived counts agreeing is the reason to believe this one and not the last one.
+
+Nine of the 98 are already `knowledge_*`: `knowledge_search`, `knowledge_graph`,
+`knowledge_tasks`, `knowledge_create`, `knowledge_link`, `knowledge_set_property`,
+`knowledge_append_section`, `knowledge_move`, `knowledge_rename`.
+
+**The arithmetic, re-derived honestly:**
+
+| | Count | Working |
+|---|---|---|
+| Catalog today | **98** | counted, cross-checked against the global ceiling |
+| Revision 4's shape — nine `record_*` **alongside** the nine `knowledge_*` | **107** | 98 + 9. Roughly **18 definitions on one subsystem** |
+| Revision 6's shape — six `vault_*` **replacing** the nine `knowledge_*` | **95** | 98 − 9 + 6 |
+
+So the change is **107 → 95**, a difference of twelve definitions, and the subsystem's own
+surface goes **18 → 6**. Revision 5 stated the gain as "98 rather than 111", which quoted
+*today's* catalog size as the achievement — the after-number and the before-number had been
+swapped by the same original error.
+
+**These absolutes go stale on the next tool that ships.** Rather than re-verify prose by hand
+every revision, W1 adds a test asserting `len(coreagent.AllStaticToolNames())` against a named
+constant, so a catalog change that invalidates this decision's premise fails a build instead of
+rotting quietly in a document. *(The constant is the guard; the ratio 18 → 6 is what the
+argument actually rests on, and it does not move.)*
 
 The published evidence on tool-selection accuracy is consistent and unkind: selection accuracy
 holds around 50 tools (84–95%) and collapses by 200 (41%); Block cut one server from 30 tools to
@@ -668,7 +698,7 @@ undoable" argument smuggles a vault-wide operation into a per-file tier.
 
 | Retired | Why |
 |---|---|
-| `record_view_import` | → an **operator/CLI one-shot**. FR-101 requires every untranslatable expression to be reported **verbatim for a human to read and judge**. That is a UI act with a human in it by definition, and it should not cost a permanent slot in a 102-tool catalog that every agent pays for on every turn. O-1's resolution stands; only its delivery surface changes. |
+| `record_view_import` | → an **operator/CLI one-shot**. FR-101 requires every untranslatable expression to be reported **verbatim for a human to read and judge**. That is a UI act with a human in it by definition, and it should not cost a permanent slot in a 98-tool catalog that every agent pays for on every turn. O-1's resolution stands; only its delivery surface changes. |
 | `record_log` | → **deleted, not relocated.** D17 already makes interaction history **derived** from mentions. A dedicated logging tool therefore serves only the residual case of an interaction with no note behind it — at permanent catalog cost, and in tension with D9's rule that derived values are computed rather than written. |
 
 ### D15.5 — Scope, bounds and refusal (closing ADR-067's C-4 for records)
@@ -843,7 +873,7 @@ shape.**
 > **Revision 5 deleted the dedicated `record_log` tool** (D15.4). The reasoning is D17's own: if
 > interaction history is **derived** from mentions, a dedicated logging tool serves only the
 > residual case of an interaction with no note behind it — and that case is served by creating a
-> note, which `vault_edit` already does. A permanent slot in a 102-tool catalog is too high a
+> note, which `vault_edit` already does. A permanent slot in a 98-tool catalog is too high a
 > price for a verb that is a special case of `create`.
 
 What the product *does* fix is how a mention is **interpreted**, because that is a correctness
@@ -1406,8 +1436,11 @@ uneditable in the GUI — a two-representation problem worth avoiding until ther
 
 *Added in revision 5:*
 
-- **The vault subsystem costs 5 tool definitions instead of 18** — a catalog of 98 rather than
-  111 (D15.0), in a regime where selection accuracy is already the binding constraint.
+- **The vault subsystem costs 6 tool definitions instead of 18** — a catalog of **95 rather than
+  107** (D15.0), in a regime where selection accuracy is already the binding constraint.
+  *(Revision 5 printed this as "98 rather than 111", which was doubly wrong: 98 is the count
+  today, and 111 came from the same miscount. Working: 98 today, 98 + 9 = 107 under revision 4's
+  shape, 98 − 9 + 6 = 95 under this one.)*
 - **The tool boundary is the policy boundary** (D15.2). An operator can permit editing while
   forbidding restructuring — a posture that is inexpressible today (D18).
 - **An agent can read a note through an audited tool**, and obtain a version token without
