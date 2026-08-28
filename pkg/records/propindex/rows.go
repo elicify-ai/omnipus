@@ -209,13 +209,17 @@ func BuildNoteRows(rec records.Record, schema *records.Schema, src []byte, hash 
 			Type:  prop.Type,
 		})
 
-		// FR-021a: only CONFORMING values reach a typed column. A
-		// non-conforming value is recorded by the state row above and by
-		// nothing else — it is never coerced into shape so that a comparison
-		// can be attempted on it later.
-		if pv.State != records.StatePresent {
-			continue
-		}
+		// FR-021a is a rule about a VALUE, not about a property: a value that
+		// does not conform is recorded by the state row above and reaches no
+		// typed column, and its CONFORMING SIBLINGS are stored as usual.
+		//
+		// The distinction is load-bearing for a `many` property. `labels:
+		// [indoor, {a: b}]` resolves to StateNonConforming with `indoor` still
+		// in Values (records.ResolveProperty filters, it does not discard the
+		// list), and skipping the whole property here would delete a value the
+		// note demonstrably contains — an index quietly holding less than the
+		// vault does. What the property's non-conformance MEANS for a
+		// comparison is R-4's business, in Go, with the state flag in hand.
 		for i, v := range pv.Values {
 			pos := pv.SourcePosition(i)
 			rows.Props = append(rows.Props, projectValue(name, pos, prop, v))
@@ -281,9 +285,6 @@ func projectValue(name string, pos int, prop *records.Property, v records.TypedV
 // the original frontmatter in TestRoundTrip_DecodeMatchesTheParser.
 func (p StoredProp) Typed(prop *records.Property) (records.PropertyValue, error) {
 	pv := records.PropertyValue{Property: prop, State: p.State}
-	if p.State != records.StatePresent {
-		return pv, nil
-	}
 	for _, e := range p.Elems {
 		v, err := decodeElem(prop, e)
 		if err != nil {
@@ -320,13 +321,33 @@ func decodeElem(prop *records.Property, e StoredElem) (records.TypedValue, error
 		v.Link = link
 		return v, nil
 	}
-	// Every remaining type is decoded by the SAME parser that wrote it, from the
-	// source text, through the schema's own declaration.
+	// Every remaining type is decoded by the SAME parser that wrote it, through
+	// the schema's own declaration — from the TYPED COLUMN, never from the raw
+	// source text where the type has one.
+	//
+	// The fallback to Raw is deliberately NOT silent. A typed column that may
+	// quietly be skipped is a typed column nothing reads, and a decode bug in it
+	// then looks exactly like correct behaviour: the raw text usually parses to
+	// the same value, so the test passes and the column is dead.
 	src := e.Raw
-	if prop.Type == records.TypeDate && e.Time != "" {
+	switch prop.Type {
+	case records.TypeDate:
+		if e.Time == "" {
+			return records.TypedValue{}, &StaleValueError{
+				Prop:   prop.Name,
+				Value:  e.Raw,
+				Reason: "a date element was indexed with no value in its typed column",
+			}
+		}
 		src = e.Time
-	}
-	if (prop.Type == records.TypeInteger || prop.Type == records.TypeDecimal) && e.Num != "" {
+	case records.TypeInteger, records.TypeDecimal:
+		if e.Num == "" {
+			return records.TypedValue{}, &StaleValueError{
+				Prop:   prop.Name,
+				Value:  e.Raw,
+				Reason: "a numeric element was indexed with no value in its typed column",
+			}
+		}
 		src = e.Num
 	}
 	parsed, verr := records.ParseValue(prop, records.Node{
@@ -353,12 +374,16 @@ type StaleValueError struct {
 }
 
 func (e *StaleValueError) Error() string {
-	msg := "property " + e.Prop + ": indexed value " + quote(e.Value) +
-		" is no longer admitted by the schema; re-index this note"
+	// The two causes are named separately because they point the reader at
+	// different files. A schema that moved on is the operator's edit; a column
+	// that came back empty is this index's own defect, and reporting the second
+	// as the first would send someone to read a schema that is perfectly fine.
 	if e.Reason != "" {
-		msg += " (" + e.Reason + ")"
+		return "property " + e.Prop + ": indexed value " + quote(e.Value) +
+			" could not be decoded: " + e.Reason + "; re-index this note"
 	}
-	return msg
+	return "property " + e.Prop + ": indexed value " + quote(e.Value) +
+		" is no longer admitted by the schema; re-index this note"
 }
 
 func quote(s string) string { return `"` + s + `"` }
