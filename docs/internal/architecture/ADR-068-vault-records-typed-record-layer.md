@@ -341,6 +341,15 @@ matters because the ID is the join key: a collision silently merges two records.
 **AC-7.2** — deleting the highest-numbered record and creating a new one yields an identifier
 **above** the deleted one, never equal to it.
 
+**AC-7.3** *(new in revision 6)* — **the accepted Windows risk gets the acceptance criterion its
+mitigation always needed.** D7.1 accepts collisions and says *"what we ship instead is honest
+detection"* — and then AC-7.1 tests POSIX allocation and AC-7.2 tests the high-water mark, so
+**nothing tested the detection path at all**. An accepted risk whose entire mitigation is
+untested is an accepted risk with no mitigation. So: a vault seeded with two records sharing an
+identifier produces a `check_integrity` finding **naming both paths**, and no query silently
+prefers one over the other. This is testable on every platform, including the one where the
+collision cannot be prevented — which is the point.
+
 ### D8 — System fields are namespaced; the operator's fields are not
 
 Fields that are **meaningless without Omnipus** carry an `omni_` prefix — index timestamps,
@@ -1380,7 +1389,7 @@ the only signal.**
 So seeding is not protected by a boot abort. It is protected only by being written down and
 tested. Accordingly:
 
-**AC-18.1** — a test enumerates the **five `vault_*` tools** and asserts an explicit, literal,
+**AC-18.1** — a test enumerates the **six `vault_*` tools** and asserts an explicit, literal,
 wildcard-free policy entry for **every seeded agent**, not only the four base agents. Coverage
 runs over all ten agents `coreagent.SeedConfig` creates (`mia`, `jim`, `ava`, `ray`, `worker`,
 `planner`, `explorer`, `researcher`, `judge`, `plansupervisor`). `worker`'s map is sparse, and
@@ -1390,33 +1399,56 @@ tools it should not have.
 **AC-18.2** — a test asserts the WARN-backfill path is never reached for these tools on a
 fresh install, by asserting zero repaired pairs rather than zero gaps after repair.
 
-**Seed posture, revised 2026-08-28 to the D15.1 blast-radius tiers:**
+**Seed posture, revised 2026-08-28 to D15.1's two criteria:**
 
 | Tool | Tier | Mia | Jim | Ava | Ray | worker / others |
 |---|---|---|---|---|---|---|
 | `vault_describe`, `vault_find`, `vault_read` | READ | allow | allow | allow | allow | `deny` |
-| `vault_edit` | WRITE — one named file | **ask** | allow | allow | **ask** | `deny` |
-| `vault_restructure` | WRITE — **cascades** | **ask** | **ask** | **ask** | **ask** | `deny` |
+| `vault_edit` | WRITE — one named note | **ask** | allow | allow | **ask** | `deny` |
+| `vault_restructure` | WRITE — cascades in **bytes** | **ask** | **ask** | **ask** | **ask** | `deny` |
+| `vault_configure` | WRITE — cascades in **meaning** | **ask** | **ask** | **ask** | **ask** | `deny` |
 
 **Reads are `allow` roster-wide, and the existing reasoning is kept unchanged:** a prompt in
 front of a read that another tool already permits is a prompt that protects nothing. An agent
 denied `vault_read` still has `read_file`. The prompt would train the operator to click through
 without buying a single unit of safety.
 
+**Why `worker` is `deny` on the reads too, when that argument seems to cut the other way.**
+*(New in revision 6; the review's M-22 is a fair challenge and deserves an answer rather than a
+restatement.)* The read argument is *"a prompt buys nothing when another tool already permits
+the read"*. It turns on `allow` versus `ask`, and it is an argument about **prompting**, not
+about **granting**. `deny` is a different act: it removes the capability rather than removing a
+prompt in front of it.
+
+The seed is therefore **deliberate and narrow**: workers are delegation-only executors whose task
+comes from a parent that has already done the vault reading. Granting them the vault surface
+widens what a delegated sub-turn can reach for no gain in what it can accomplish. **The honest
+cost is exactly what the review identifies:** a worker that genuinely needs a note reaches for
+`read_file` and the read leaves the audited boundary. That is a real loss, it is accepted, and
+the remedy is the same one available for every seed in this table — **an operator flips it.**
+*(What we do **not** claim is that a worker has no `read_file`. It does. The boundary is a
+default, not a wall.)*
+
 **`vault_restructure` gets its own line, and that is the point of splitting it out.** It
 defaults more restrictively than `vault_edit` so that **an operator can forbid restructuring
 while permitting edits** — a posture that is simply inexpressible today, and would have stayed
 inexpressible under a consolidated `vault_write` (D15.2).
 
-**This FIXES a live defect, stated as such.** Today `knowledge_rename` and `knowledge_move` sit
-in the **same `ask` bucket** as `knowledge_append_section`, despite the first two rewriting
-inbound wikilinks across the whole vault and the third appending to one file. An operator who
-grants "vault writes" today grants vault-wide restructuring in the same gesture, with nothing in
-the tool surface signalling the difference. The tiering is not new taxonomy for its own sake; it
-is the missing distinction.
+**This FIXES a live defect, and revision 6 states it more strongly because it is worse than
+revision 5 said.** Revision 5 wrote that `knowledge_rename` and `knowledge_move` sit *"in the same
+`ask` bucket as `knowledge_append_section`"*. That is true for **Mia** (`pkg/coreagent/core.go:1056-1058`)
+and **Ray** (`:1149-1151`) only. For **Ava** (`:976-978`), **Jim** (`:1296-1298`) and the **global
+ceiling** (`pkg/config/defaults.go:644-646`), all three are **`allow`** — vault-wide restructuring
+outright permitted, with no prompt at all.
 
-**Workers stay `deny` on all five** — unchanged from revision 4, and now explicitly including
-the read tools.
+So the defect is not "the prompt does not distinguish"; it is **"for two of the four base agents
+there is no prompt."** The new table is therefore a **tightening** for Ava and Jim, not a
+re-labelling — a stronger and more useful thing to say than revision 5 said. An operator who
+grants "vault writes" today grants vault-wide restructuring in the same gesture, and for half the
+roster grants it silently.
+
+**Workers stay `deny` on all six** — unchanged from revision 4, and now explicitly including
+the read tools and the control plane.
 
 ### D19 — Contract-first wire types (Hard Constraint #8)
 
