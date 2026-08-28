@@ -374,33 +374,48 @@ func (ri *RoomIndex) Search(query string, limit int) ([]SearchHit, error) {
 	return hits, nil
 }
 
-// Rebuild wipes and recreates the bleve index from the room's .md files.
-// Call this after corruption or when the index is suspected stale.
-// Safe to call concurrently — serialized by the internal mu lock.
+// Rebuild re-populates the bleve index from the room's .md files, recreating
+// the index DIRECTORY first if — and only if — the mapping it was built with is
+// no longer the mapping buildMapping declares.
 //
-// It recreates the index DIRECTORY, not just its contents. That distinction is
-// the whole point: bleve fixes a mapping at creation and bleve.OpenUsing takes
-// no mapping argument, so re-adding every document to an already-open index —
-// which is what this method used to do — leaves the old mapping, the old
-// analyzers and the old scoring model exactly where they were. A rebuild that
-// cannot pick up a mapping change is a rebuild in name only, and it sat next to
-// the ADR-068 D21.1 scoring defect it would have been asked to repair.
+// That condition is the whole subtlety. bleve fixes a mapping at creation and
+// bleve.OpenUsing takes no mapping argument, so re-adding documents to an
+// already-open index — which is all this method used to do — cannot change the
+// scoring model, the analyzers or the field set. A rebuild asked for precisely
+// because something about the index was wrong would reinstate the wrong thing
+// and report success.
 //
-// If recreation fails the handle is left closed and every later call errors,
-// which is the honest outcome: a RoomIndex whose directory has been removed and
-// not recreated has nothing to search, and reporting success would be the
-// silent-empty-result failure this package keeps having to design against.
+// It is conditional rather than unconditional because of who calls it:
+// syncRoomToDiskLocked (pkg/agent/memory.go) calls Rebuild on every change to
+// the memories directory, which is a hot path reached from recall. Tearing down
+// the bbolt handle and recreating the directory every time would add a file-lock
+// acquisition and a fresh index creation to an operation that is already a full
+// re-index, and — worse — a recreate that failed halfway would leave the handle
+// CLOSED, turning a stale index into a dead one on a path that currently
+// degrades gracefully. Comparing the mapping first costs one in-memory string
+// comparison and keeps the common case exactly as cheap as it was.
+//
+// Safe to call concurrently — serialized by mu.
 func (ri *RoomIndex) Rebuild() error {
 	ri.mu.Lock()
 	defer ri.mu.Unlock()
 
-	if ri.idxPath == "" {
-		// No path to recreate from: repopulate in place and say why the mapping
-		// is not refreshed, rather than pretending a full rebuild happened.
-		slog.Warn("memrooms/index: rebuilding contents only; index path unknown so the mapping is not refreshed",
-			"memories_dir", ri.memoriesDir)
+	drift := mappingScoringDrift(ri.idx.Mapping())
+	if drift == "" {
 		return ri.rebuildLocked()
 	}
+	if ri.idxPath == "" {
+		// Nothing to recreate from. Repopulate and say plainly that the mapping
+		// is NOT refreshed, rather than reporting a full rebuild that did not
+		// happen — the silent no-op this method exists to stop having.
+		slog.Warn("memrooms/index: index mapping is stale but its path is unknown; "+
+			"rebuilding contents only, ranking will not change",
+			"memories_dir", ri.memoriesDir, "reason", drift)
+		return ri.rebuildLocked()
+	}
+
+	slog.Warn("memrooms/index: index mapping is stale; recreating the index rather than repopulating it",
+		"path", ri.idxPath, "reason", drift)
 
 	ri.handleMu.Lock()
 	defer ri.handleMu.Unlock()
