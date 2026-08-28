@@ -6,9 +6,10 @@ Talk to your Omnipus through Telegram, Discord, WhatsApp, Matrix, QQ, DingTalk, 
 
 ## Configure a channel in the app
 
-Open **Channels** in the sidebar. Every channel is a card showing its transport and status, with **Configure** and **Enable / Disable** actions.
+Open **Connectors** in the sidebar — the screen that lists every channel. (It used to be called **Channels**; the sidebar entry is now **Connectors**.) Every channel is a card showing its transport and status, with **Configure** and **Enable / Disable** actions.
 
-![The Channels page — one card per channel with Configure and Enable/Disable](marketing/screenshots/channels-screen.png)
+![The Connectors page — one card per channel with Configure and Enable/Disable](marketing/screenshots/channels-screen.png)
+*Screenshot predates the **Channels → Connectors** rename — the sidebar entry now reads **Connectors**.*
 
 Click **Configure** on the channel you want. The panel has two parts:
 
@@ -162,7 +163,7 @@ omnipus start
 
 Omnipus can connect to WhatsApp in two ways.
 
-**Native (recommended):** In-process using [whatsmeow](https://github.com/tulir/whatsmeow). No separate bridge. Open **Channels → Configure** on the WhatsApp card, turn on **Native Mode** and **Save & Enable** — the pairing QR renders live in the panel; scan it with WhatsApp → **Linked Devices** → **Link a Device** (see [Native docs](channels/whatsapp_native.md#pair-in-the-app-recommended)). Session is stored under your workspace (e.g. `workspace/whatsapp/`). Native WhatsApp is included in the **default build** (and every official release) — no build tag needed. (A smaller `lite` build that omits it is available via `make build-lite`; on a lite build the native channel fails to start.)
+**Native (recommended):** In-process using [whatsmeow](https://github.com/tulir/whatsmeow). No separate bridge. Open **Connectors → Configure** on the WhatsApp card, turn on **Native Mode** and **Save & Enable** — the pairing QR renders live in the panel; scan it with WhatsApp → **Linked Devices** → **Link a Device** (see [Native docs](channels/whatsapp_native.md#pair-in-the-app-recommended)). Session is stored under your workspace (e.g. `workspace/whatsapp/`). Native WhatsApp is included in the **default build** (and every official release) — no build tag needed. (A smaller `lite` build that omits it is available via `make build-lite`; on a lite build the native channel fails to start.)
 
 **Configure (native)**
 
@@ -178,7 +179,7 @@ Omnipus can connect to WhatsApp in two ways.
 }
 ```
 
-If `session_store_path` is empty, the session is stored in `<workspace>/whatsapp/`. After enabling the channel, scan the pairing QR — it renders live in the **Channels → Configure** panel (recommended), and is also printed to the terminal on first run for headless setups. Scan with WhatsApp → **Linked Devices** → **Link a Device**.
+If `session_store_path` is empty, the session is stored in `<workspace>/whatsapp/`. After enabling the channel, scan the pairing QR — it renders live in the **Connectors → Configure** panel (recommended), and is also printed to the terminal on first run for headless setups. Scan with WhatsApp → **Linked Devices** → **Link a Device**.
 
 </details>
 
@@ -190,7 +191,7 @@ Omnipus supports connecting to your personal WeChat account using the official T
 
 **1. Login**
 
-Open **Channels → Weixin → Configure** in the web UI (`omnipus start`, then visit
+Open **Connectors → Weixin → Configure** in the web UI (`omnipus start`, then visit
 `http://localhost:5000`). A QR code appears in the panel — scan it with your WeChat
 mobile app. On success, the token is saved automatically to the encrypted credential
 store.
@@ -382,7 +383,7 @@ See [WeCom Configuration Guide](channels/wecom.md) for the full configuration re
 
 **1. Authenticate**
 
-Open **Channels → WeCom → Configure** in the web UI (`omnipus start`, then visit
+Open **Connectors → WeCom → Configure** in the web UI (`omnipus start`, then visit
 `http://localhost:5000`). A QR code appears in the panel — scan it in the WeCom
 mobile app. On success, `bot_id` and `secret` are written automatically to the
 encrypted credential store.

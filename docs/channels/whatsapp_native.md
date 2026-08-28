@@ -51,7 +51,7 @@ Native mode is included in the default build (see Build requirement above), so n
 
 The pairing QR renders live inside the SPA — no log scraping required.
 
-1. Open **Channels** in the sidebar and click **Configure** on the WhatsApp card.
+1. Open **Connectors** in the sidebar and click **Configure** on the WhatsApp card.
 2. Turn on **Native Mode (whatsmeow)** and click **Save & Enable**. The QR appears in the panel and refreshes automatically as whatsmeow rotates it.
 3. On your phone, open WhatsApp → **Linked Devices** → **Link a Device** and scan the QR.
 

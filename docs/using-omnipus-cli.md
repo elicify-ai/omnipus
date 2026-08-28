@@ -253,7 +253,7 @@ omnipus start -d --no-truncate
 | Review the audit log | ✅ `omnipus audit [verify]` | — |
 | Chat in the browser | — | ✅ |
 | Create / edit custom agents | — | ✅ (a form, or ask Ava) |
-| Connect channels (Telegram, Discord, Slack…) | — | ✅ Channels → Configure |
+| Connect channels (Telegram, Discord, Slack…) | — | ✅ Connectors → Configure |
 | Browse past sessions | — | ✅ history panel |
 | Task board (Command Center) | — | ✅ |
 | Add MCP servers | — | ✅ Settings → MCP |
