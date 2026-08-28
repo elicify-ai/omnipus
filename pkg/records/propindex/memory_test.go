@@ -268,7 +268,7 @@ func TestMemory_BothIndexesTogether(t *testing.T) {
 	if err != nil || n <= 0 {
 		t.Fatalf("PROPINDEX_MEASURE_BLEVE must be a positive record count, got %q", raw)
 	}
-	t.Log("this test is a measurement harness; see measure_both_indexes.go in the package's " +
-		"test corpus builder for what it writes to disk")
+	t.Logf("measurement harness: writes %d notes to a temp dir, syncs a real bleve index over them, "+
+		"then measures a fresh child process holding BOTH indexes (memory_both_test.go)", n)
 	measureBothIndexes(t, n)
 }

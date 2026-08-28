@@ -491,7 +491,6 @@ func (ix *Index) streamCandidates(ctx context.Context, q string, args []any, vis
 	var (
 		cur       *Candidate
 		curID     int64
-		curProp   string
 		finished  = make(map[int64]struct{})
 		survivors int
 	)
@@ -505,7 +504,6 @@ func (ix *Index) streamCandidates(ctx context.Context, q string, args []any, vis
 		}
 		verdict, verr := visit(*cur)
 		cur = nil
-		curProp = ""
 		if verr != nil {
 			return verr
 		}
@@ -562,7 +560,7 @@ func (ix *Index) streamCandidates(ctx context.Context, q string, args []any, vis
 			// still exists and is still a candidate — FR-005 and D6's flat case.
 			continue
 		}
-		addPropRow(cur, &curProp, prop.String, elem, state, vtype, vText, vNum, vTime, vLink, vRaw, quoted)
+		addPropRow(cur, prop.String, elem, state, vtype, vText, vNum, vTime, vLink, vRaw, quoted)
 	}
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("propindex: the candidate stream ended early: %w", err)
@@ -571,7 +569,7 @@ func (ix *Index) streamCandidates(ctx context.Context, q string, args []any, vis
 }
 
 func addPropRow(
-	cur *Candidate, curProp *string, name string,
+	cur *Candidate, name string,
 	elem, state sql.NullInt64, vtype sql.NullString,
 	vText, vNum, vTime, vLink, vRaw []byte, quoted sql.NullInt64,
 ) {
@@ -579,9 +577,6 @@ func addPropRow(
 	if !ok {
 		sp = StoredProp{Name: name, Type: records.PropertyType(vtype.String)}
 		cur.PropOrder = append(cur.PropOrder, name)
-	}
-	if *curProp != name {
-		*curProp = name
 	}
 	if elem.Int64 == StateRowElem {
 		sp.State = records.PropertyState(state.Int64)

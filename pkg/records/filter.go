@@ -311,15 +311,32 @@ func unsupportedRemedy(op Operator) string {
 	if i := strings.IndexRune(fields[0], '('); i > 0 {
 		fields[0] = fields[0][:i]
 	}
+	if remedy, ok := lookupRemedy(fields); ok {
+		return remedy
+	}
+	// A PARAMETER name is the snake_case spelling of the same SQL clause —
+	// `order_by`, `group_by`, `not_in` — so the lookup is retried with
+	// underscores read as spaces. It is retried SECOND, never first, because
+	// `GROUP_CONCAT` is a real SQL function name whose underscore is part of it.
+	spaced := strings.Fields(strings.ReplaceAll(strings.Join(fields, " "), "_", " "))
+	if remedy, ok := lookupRemedy(spaced); ok {
+		return remedy
+	}
+	return ""
+}
+
+// lookupRemedy matches on the construct's leading words, longest first. Four is
+// the longest key in the table (`IS NOT DISTINCT FROM`).
+func lookupRemedy(fields []string) (string, bool) {
 	for n := len(fields); n >= 1; n-- {
 		if n > 4 {
 			continue
 		}
 		if remedy, ok := sqlConstructRemedy[strings.Join(fields[:n], " ")]; ok {
-			return remedy
+			return remedy, true
 		}
 	}
-	return ""
+	return "", false
 }
 
 // Filter is one predicate over one property.
