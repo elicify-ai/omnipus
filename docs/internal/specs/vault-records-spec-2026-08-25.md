@@ -348,6 +348,23 @@ A one-shot importer translates what it recognises and names what it does not.
 - **FR-090** Every wire type MUST be defined in `contracts/` before Go or TS code exists.
 - **FR-091** The completeness verdict and problem list MUST be required fields in the response schema.
 
+### The response the model reads (ADR-068 D22)
+
+The evidence for treating this as mechanism rather than presentation: changing result delivery
+from inline to file-based collapsed accuracy from **93.1% to 55.2%** (arXiv 2605.15184) — as
+large a swing as replacing the retriever. A system that finds the right notes and renders them
+badly is a worse retrieval system.
+
+- **FR-120** A tool result rendered for the model MUST be compact text. It MUST be produced **from** the validated wire object (FR-090) at the tool-result boundary — a projection of the contract, never a parallel hand-written structure, and never a replacement for the wire type (Hard Constraint #8).
+- **FR-121** The completeness verdict MUST be the **first line** of every response. It MUST NOT appear only after the rows: a model that has read 40 rows has already begun composing an answer, and a caveat arriving after them competes with a conclusion rather than preventing it.
+- **FR-122** The **query as executed** MUST be echoed in the header, including any clamp, coercion or default the system applied. A caller MUST be able to see that its `limit: 500` ran as 200.
+- **FR-123** An exclusion MUST be named **with its fix**, inline — `CO-0052: arr is '50k' where a number is required — write 50000`. `3 records excluded` alone fails this requirement.
+- **FR-124** A value pulled through a relation MUST be rendered as **borrowed** — `company [[Acme]]: active` — and MUST NOT be merged into the row's own columns. The row is one real file; blurring that is how an agent comes to believe a property exists on a note that does not have it.
+- **FR-125** Every total MUST state its scope — `sum(arr) = GBP 465,000.00 over 5 of 12 rows — GBP only`. A bare number MUST never be returned.
+- **FR-126** Every response MUST end in **addressable next actions**: at least one concrete call the caller can make next, with its arguments filled in. In an agentic loop each response is a prompt for the next call; a response that terminates in data terminates the loop.
+- **FR-127** Budgets: **~50–80 tokens per hit**, **~1,000 tokens** per response by default, **4,000 tokens hard cap**; `detail: minimal` renders **~20 tokens per hit**. Truncation to meet a budget MUST be stated in the header (FR-121's line), never applied silently.
+- **FR-128** Each tool description MUST fit ~150 tokens (FR-079). Five tools at that budget is ~750 tokens of permanent per-turn context; the nine `record_*` plus nine `knowledge_*` surface this replaces would have been ~2,700.
+
 ### Import
 
 - **FR-100** `record_view_import` MUST translate the filters, order and grouping it recognises from a `.base` file into a native view.
@@ -534,6 +551,106 @@ CASCADE: 7 notes rewritten (inbound wikilinks), 1 note moved
   in both directions (newly invalid, newly valid).
 - **AC-X3** — an operator policy of `vault_edit: allow` + `vault_restructure: deny` permits
   `set_property` and refuses `rename` in the same session (FR-083).
+
+---
+
+## 4.2 The `vault_find` response — a literal worked example, normative
+
+The ADR states the rules; this is the artifact. A test diffs against this shape, not against a
+description of it.
+
+**The call.** *"Open Acme deals over £50k, and anything within two link-hops of Acme that
+mentions pricing."*
+
+```json
+{
+  "words": "pricing",
+  "type": "deal",
+  "filter": { "all": [ { "property": "status", "op": "is", "value": "open" },
+                       { "property": "arr", "op": "gte", "value": 50000 } ] },
+  "near": "Companies/Acme Ltd.md",
+  "hops": 2,
+  "join": ["company"],
+  "sort": [ { "property": "arr", "direction": "desc" } ],
+  "aggregate": [ { "op": "sum", "property": "arr" } ],
+  "limit": 50
+}
+```
+
+**The response the model reads.** Every line below is required by a numbered FR, named in the
+annotation table that follows.
+
+```
+COMPLETE: no — 3 of 17 selected records could not be evaluated; 12 of 14 shown (more: cursor c2FnZTI)
+QUERY: type=deal  words="pricing"  filter=(status is open AND arr >= 50000)  near=[[Acme Ltd]] hops=2  join=company  sort=arr desc  limit=50
+INDEX: text gen 8814, properties gen 8814 — agreed
+
+DEAL-0117  Acme renewal FY27       status open   arr GBP 180,000.00   company [[Acme Ltd]]: status active
+DEAL-0121  Acme expansion EU       status open   arr GBP  95,000.00   company [[Acme Ltd]]: status active
+DEAL-0134  Acme platform add-on    status open   arr GBP  70,000.00   company [[Acme Ltd]]: status active
+DEAL-0140  Acme support uplift     status open   arr GBP  62,000.00   company [[Acme Ltd]]: status active
+DEAL-0102  Northwind pricing pilot status open   arr GBP  58,000.00   company [[Northwind]]: status prospect
+DEAL-0155  Acme data migration     status open   arr USD 120,000.00   company [[Acme Ltd]]: status active
+DEAL-0161  Acme training package   status open   arr USD  88,000.00   company [[Acme Ltd]]: status active
+… 5 more rows
+
+TOTALS: sum(arr) = GBP 465,000.00 over 5 of 12 rows — GBP only; 7 rows are USD and are not included
+
+PROBLEMS (3)
+  DEAL-0052  arr is '50k' where a number is required — write 50000
+  DEAL-0088  company is text "Acme Ltd", not a relation — write company: "[[Acme Ltd]]"
+  DEAL-0093  status is 'Won'; deal.status permits, in order: open, won, lost — write 'won'
+
+NEXT
+  page       vault_find cursor="c2FnZTI"
+  narrow     vault_find type=deal filter=(status is open AND currency is GBP)
+  widen      vault_find near="Companies/Acme Ltd.md" hops=2 words="pricing" type=<any>
+  fix        vault_read path="Deals/DEAL-0052.md"   then vault_edit set_property arr=50000
+```
+
+| Line | Required by | Why it is there and not elsewhere |
+|---|---|---|
+| `COMPLETE:` first | FR-121 | The verdict precedes the evidence, so no conclusion forms before the caveat arrives. |
+| `QUERY:` echo | FR-122 | Shows the query **as executed** — a clamp or default is visible without a second call. |
+| `INDEX:` generations | FR-020c | Two indexes that disagree are named here; `agreed` is an assertion, not decoration. |
+| Rows | FR-127 | ~50–80 tokens each; the row count shown is what the budget allowed, and the shortfall is in the header. |
+| `company [[Acme Ltd]]: status active` | FR-124 | Borrowed, visibly. It is not a `deal` property and must never render as one. |
+| `TOTALS:` | FR-125, FR-014 | Scoped in the same sentence as the number. The USD rows are counted and excluded, not dropped. |
+| `PROBLEMS` | FR-025, FR-026, FR-123 | Each line is one record, one reason, one fix. |
+| `NEXT` | FR-126 | Four addressable calls; the loop continues without the model inventing arguments. |
+
+**`detail: minimal` renders the same query at ~20 tokens per hit** (FR-127) — header and problem
+count survive the trim; columns and joins do not:
+
+```
+COMPLETE: no — 3 excluded (re-run with detail=standard to see them); 12 of 14 shown
+QUERY: type=deal words="pricing" near=[[Acme Ltd]] hops=2 limit=50
+DEAL-0117  Acme renewal FY27
+DEAL-0121  Acme expansion EU
+DEAL-0134  Acme platform add-on
+… 9 more
+NEXT  vault_find cursor="c2FnZTI"  |  vault_find detail=standard
+```
+
+**A zero-hit response never renders as an empty success** (FR-115):
+
+```
+COMPLETE: yes — 0 records matched
+QUERY: type=company words="prospekt"
+NEAREST INDEXED TERMS: prospect (412), prospects (37), prospecting (9)
+NEXT  vault_find type=company words="prospect"  |  vault_describe record_type=company
+```
+
+The system reports the vocabulary it holds and **stops there** — it does not expand the query on
+the caller's behalf (FR-114). A user who searched for one thing and received results for a
+broader thing has been given a wrong answer with no error channel.
+
+- **AC-P1** — a response whose `COMPLETE` line reads `no` and whose `PROBLEMS` block is empty is
+  a defect: the reason is either named or the verdict is wrong.
+- **AC-P2** — the four blocks appear in the order `header → rows → totals → problems → next`, and
+  a test asserts the order rather than the presence.
+- **AC-P3** — rendering is a **projection**: the same wire object rendered twice is
+  byte-identical, and every fact in the text is present in the wire object (FR-120).
 
 ---
 
