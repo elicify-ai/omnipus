@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
@@ -50,8 +51,9 @@ label: Plant
 identity:
   prefix: PL
 properties:
-  species: { type: text, required: true }
-  bed:     { type: relation, to: bed, inverse: plants }
+  species:    { type: text, required: true }
+  bed:        { type: relation, to: bed, inverse: plants }
+  companions: { type: relation, to: plant, many: true }
 `
 
 func groupSchemaSet(t *testing.T) *records.SchemaSet {
@@ -144,6 +146,30 @@ species: %s
 bed: "[[%s]]"
 ---
 `, id, species, bedTarget))
+}
+
+// plantWithCompanions writes a plant record whose `companions` relation
+// (many: true) holds the given target texts, verbatim — deliberately not
+// necessarily the plants' own IDs, so a test can address one target through
+// two different spellings the way it addresses a bed through two names.
+func (f *groupFixture) plantWithCompanions(id, species string, companionTargets ...string) {
+	f.t.Helper()
+	quoted := make([]string, 0, len(companionTargets))
+	for _, c := range companionTargets {
+		quoted = append(quoted, fmt.Sprintf("\"[[%s]]\"", c))
+	}
+	companions := ""
+	if len(quoted) > 0 {
+		companions = fmt.Sprintf("companions: [%s]\n", strings.Join(quoted, ", "))
+	}
+	f.write(fmt.Sprintf("garden/plants/%s.md", id), fmt.Sprintf(`---
+type: plant
+id: %s
+species: %s
+%s---
+`, id, species, companions))
+	// A plant is itself a legal companion target, addressed by its own id.
+	f.targets[id] = id
 }
 
 func (f *groupFixture) resolve(w records.Wikilink) (string, bool) {
@@ -305,5 +331,126 @@ func TestGroupByRelation_NoResolverDegradesRatherThanExcludesEverything(t *testi
 
 	if resp.Groups == nil || len(*resp.Groups) != 1 {
 		t.Fatalf("grouping with no resolver returned %v groups, want exactly 1 (degraded, not empty)", resp.Groups)
+	}
+}
+
+// TestGroupByRelation_ManyValuedRecordJoinsEveryGroup is FR-028 for a
+// RELATION property specifically — the earlier tests in this file each use a
+// record with exactly ONE relation value, which cannot exercise "a record
+// appears in EVERY group it belongs to" at all: with one value there is only
+// ever one group to appear in, and an assertion built over that fixture would
+// pass identically whether or not the fan-out logic is even wired up. This
+// fixture gives PL-0001 TWO companions, so the property this test names is
+// actually observable.
+//
+// It also exercises identity-based dedupe WITHIN a multi-value list: PL-0002
+// names PL-0003 as a companion through an ALIAS ("Cactus Friend") rather than
+// PL-0003's own id, and must still land in PL-0003's group rather than
+// forking a second one — R-8 inside a `many` property, not only across
+// records.
+func TestGroupByRelation_ManyValuedRecordJoinsEveryGroup(t *testing.T) {
+	f := newGroupFixture(t)
+	f.targets["Cactus Friend"] = "PL-0003"
+	// PL-0001 names PL-0003 TWICE, through two different spellings within its
+	// OWN list — "PL-0003" and the alias "Cactus Friend" both resolve to the
+	// SAME identity. This is the within-record twin of the alias fixture
+	// below: it must dedupe to ONE membership of PL-0003's group, not count
+	// PL-0001 twice because the two spellings looked different on the page.
+	f.plantWithCompanions("PL-0001", "Monstera", "PL-0002", "PL-0003", "Cactus Friend")
+	f.plantWithCompanions("PL-0002", "Fern", "Cactus Friend")
+	f.plantWithCompanions("PL-0003", "Cactus")
+
+	groups := []string{"companions"}
+	r := req(withType("plant"))
+	r.GroupBy = &groups
+	resp := mustFind(t, f.deps(), r)
+
+	if resp.Groups == nil {
+		t.Fatalf("no groups were returned")
+	}
+	byKey := map[string]generated.VaultFindGroup{}
+	absent := 0
+	for _, g := range *resp.Groups {
+		if g.Absent != nil && *g.Absent {
+			absent++
+			continue
+		}
+		byKey[g.Key] = g
+	}
+
+	// PL-0001 belongs to BOTH the PL-0002 group and the PL-0003 group — the
+	// core FR-028 fact this fixture exists to make observable.
+	inGroup := func(g generated.VaultFindGroup, path string) bool {
+		for _, p := range g.Paths {
+			if p == path {
+				return true
+			}
+		}
+		return false
+	}
+	if g, ok := byKey["[[PL-0002]]"]; !ok || !inGroup(g, "garden/plants/PL-0001.md") {
+		t.Fatalf("PL-0001 is missing from its OWN companion PL-0002's group: %+v", byKey["[[PL-0002]]"])
+	}
+	if g, ok := byKey["[[PL-0003]]"]; !ok || !inGroup(g, "garden/plants/PL-0001.md") {
+		t.Fatalf("PL-0001 is missing from its OWN companion PL-0003's group: %+v", byKey["[[PL-0003]]"])
+	}
+
+	// PL-0002 names PL-0003 through the alias "Cactus Friend" — it must land
+	// in the SAME PL-0003 group as PL-0001's direct reference, not a second
+	// group keyed on the alias text.
+	if got := len(*resp.Groups) - absent; got != 2 {
+		names := make([]string, 0, got)
+		for k := range byKey {
+			names = append(names, k)
+		}
+		t.Fatalf("got %d non-absent groups, want 2 (PL-0002 and PL-0003): %v", got, names)
+	}
+	if g := byKey["[[PL-0003]]"]; g.Count != 2 || !inGroup(g, "garden/plants/PL-0002.md") {
+		t.Fatalf("PL-0003's group = %+v, want PL-0001 AND PL-0002 (the latter via its alias \"Cactus Friend\")", g)
+	}
+	// PL-0001 itself names PL-0003 TWICE in its own list, via two spellings —
+	// it must still count ONCE in PL-0003's group, not twice. This is the
+	// case a within-record dedupe keyed on DISPLAY TEXT rather than resolved
+	// IDENTITY would get wrong while every other assertion in this test still
+	// passed (found by mutation, not by inspection): "PL-0003" and "Cactus
+	// Friend" render as different strings and would look like two distinct
+	// values to a text-keyed dedupe, even though R-8 says they are one.
+	pl0001Count := 0
+	for _, p := range byKey["[[PL-0003]]"].Paths {
+		if p == "garden/plants/PL-0001.md" {
+			pl0001Count++
+		}
+	}
+	if pl0001Count != 1 {
+		t.Fatalf("PL-0001 appears %d times in PL-0003's group, want 1 — it named PL-0003 "+
+			"twice in its own companions list, via two spellings of ONE identity", pl0001Count)
+	}
+	if g := byKey["[[PL-0002]]"]; g.Count != 1 {
+		t.Fatalf("PL-0002's group count = %d, want 1 (PL-0001 only)", g.Count)
+	}
+
+	// FR-028, stated as an assertion rather than left implicit: group counts
+	// SUM TO MORE than the number of records that matched (2: PL-0001 and
+	// PL-0002 each have companions; PL-0003 has none). This is NOT a double
+	// count. It is Obsidian's rejected alternative — one combined group per
+	// distinct COMBINATION of values — that the spec (ADR-068 D10) names by
+	// example as useless for categorisation: a record naming two companions
+	// belongs in both companions' views, and a system answering "who lists
+	// PL-0003 as a companion" by checking only one group per record would
+	// answer it wrong.
+	matchedRecords := 2 // PL-0001, PL-0002 (PL-0003 is absent, not matched)
+	groupSum := byKey["[[PL-0002]]"].Count + byKey["[[PL-0003]]"].Count
+	if groupSum <= matchedRecords {
+		t.Fatalf("group counts summed to %d, want MORE than %d matched records — "+
+			"FR-028 requires PL-0001 to be counted in BOTH its groups, which is what "+
+			"makes the sum exceed the match count in the first place", groupSum, matchedRecords)
+	}
+	if groupSum != 3 {
+		t.Errorf("group counts summed to %d, want exactly 3 (1 + 2)", groupSum)
+	}
+
+	// The absent group is real too: PL-0003 has no companions of its own.
+	if absent != 1 {
+		t.Errorf("expected exactly one absent group (PL-0003 has no companions), got %d", absent)
 	}
 }
