@@ -172,12 +172,11 @@ func TestSQLGate_ReadPathTouchesNoValueColumn(t *testing.T) {
 
 	valueColumns := []string{"v_text", "v_num", "v_time", "v_link", "v_raw", "state", "target", "record_id", "status", "text"}
 	for _, stmt := range rec.InPhase(PhaseRead) {
-		where := stmt
-		if i := strings.Index(strings.ToUpper(stmt), " WHERE "); i >= 0 {
-			where = stmt[i:]
-		} else {
+		i := strings.Index(strings.ToUpper(stmt), " WHERE ")
+		if i < 0 {
 			continue
 		}
+		where := stmt[i:]
 		for _, col := range valueColumns {
 			if regexp.MustCompile(`\b` + col + `\b`).MatchString(where) {
 				t.Errorf("a value column %q appears in a predicate: %s", col, stmt)

@@ -57,9 +57,9 @@ const (
 // keeps a document about.
 func peakRSSBytes(r *syscall.Rusage) int64 {
 	if runtime.GOOS == "darwin" {
-		return int64(r.Maxrss)
+		return int64(r.Maxrss) //nolint:unconvert // Maxrss is int32 on 32-bit platforms
 	}
-	return int64(r.Maxrss) * 1024
+	return int64(r.Maxrss) * 1024 //nolint:unconvert // same
 }
 
 func mib(b int64) string { return fmt.Sprintf("%.1f MiB", float64(b)/(1<<20)) }

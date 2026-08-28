@@ -24,7 +24,7 @@ import (
 
 func (ix *Index) exec(ctx context.Context, phase Phase, query string, args ...any) (sql.Result, error) {
 	ix.rec.record(phase, query)
-	return ix.db.ExecContext(ctx, query, args...) //nolint:sqlclosecheck // Result carries no rows
+	return ix.db.ExecContext(ctx, query, args...)
 }
 
 func (ix *Index) execTx(ctx context.Context, tx *sql.Tx, phase Phase, query string, args ...any) (sql.Result, error) {

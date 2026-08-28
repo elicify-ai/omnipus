@@ -110,8 +110,8 @@ func TestMemory_BothIndexesChild(t *testing.T) {
 		t.Fatalf("opening the text index: %v", err)
 	}
 	defer func() {
-		if err := text.Close(); err != nil {
-			t.Errorf("closing the text index: %v", err)
+		if cerr := text.Close(); cerr != nil {
+			t.Errorf("closing the text index: %v", cerr)
 		}
 	}()
 
@@ -251,8 +251,8 @@ func syncText(t *testing.T, home, root string) {
 		t.Fatalf("OpenIndex: %v", err)
 	}
 	defer func() {
-		if err := ix.Close(); err != nil {
-			t.Errorf("closing the text index: %v", err)
+		if cerr := ix.Close(); cerr != nil {
+			t.Errorf("closing the text index: %v", cerr)
 		}
 	}()
 	stats, err := ix.SyncWith(context.Background(), knowledge.SyncOptions{})

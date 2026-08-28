@@ -41,7 +41,8 @@ func snapshot(t *testing.T, store Store) []any {
 			// The map is rendered through PropOrder so the snapshot has a
 			// deterministic shape; map iteration order would make two identical
 			// indexes compare unequal at random.
-			row := []any{c.Path, c.RecordType, c.RecordID, c.SourceHash}
+			row := make([]any, 0, 4+2*len(c.PropOrder))
+			row = append(row, c.Path, c.RecordType, c.RecordID, c.SourceHash)
 			for _, name := range c.PropOrder {
 				row = append(row, name, c.Props[name])
 			}
@@ -166,11 +167,11 @@ func TestRebuild_AnIncompatibleSchemaVersionIsDiscardedNotMigrated(t *testing.T)
 	if err != nil {
 		t.Fatalf("reopening: %v", err)
 	}
-	if _, err := stamp.(*Index).exec(ctx, PhaseOpen, "PRAGMA user_version = 999"); err != nil {
-		t.Fatalf("stamping a foreign version: %v", err)
+	if _, serr := stamp.(*Index).exec(ctx, PhaseOpen, "PRAGMA user_version = 999"); serr != nil {
+		t.Fatalf("stamping a foreign version: %v", serr)
 	}
-	if err := stamp.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
+	if cerr := stamp.Close(); cerr != nil {
+		t.Fatalf("Close: %v", cerr)
 	}
 
 	reopened, err := Open(ctx, path, Options{})

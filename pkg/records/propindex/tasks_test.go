@@ -150,8 +150,10 @@ func TestTasks_TheVisitorsErrorStopsTheStream(t *testing.T) {
 	}
 }
 
-var errNoMore = errStr("enough")
+// stopError is the visitor's "stop here" — a distinct type so the assertion
+// cannot pass on some other error that happened to arrive.
+type stopError string
 
-type errStr string
+func (e stopError) Error() string { return string(e) }
 
-func (e errStr) Error() string { return string(e) }
+var errNoMore = stopError("enough")
