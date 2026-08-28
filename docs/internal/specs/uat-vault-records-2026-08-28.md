@@ -1028,3 +1028,219 @@ domain ordering; if it does not work, there is no way to express one.
 |---|---|---|
 | E-4.1 | Re-read `vault_describe`'s enum output (Case B-2) | It says the set is unordered |
 | E-4.2 | Look at any UI that renders an enum — a filter dropdown, a group header, a cell editor | Either lexical order, or an explicit statement of what order it is showing. Never declaration order presented as *the* order |
+
+---
+
+## Part F — `vault_find`: the operators, the refusals, the response
+
+*The operators are SQL's own: `=`, `<>`, `<`, `<=`, `>`, `>=`, `LIKE`, `IN`, `IS NULL`,
+`IS NOT NULL`, each carrying SQL's meaning. Anything else is refused. There is no query
+language and no parser — filters are structured objects.*
+
+### Case F-1 — `=` is exact
+
+| Step | Do this | Expect |
+|---|---|---|
+| F-1.1 | `condition` `=` `dry` | `SP-0001` only |
+| F-1.2 | `condition` `=` `DRY` | The same result (case-insensitive, Part D) |
+| F-1.3 | `label` `=` `Bracken` | **No match** — `=` is exact, not partial. `Bracken frond` does not match `Bracken` |
+| F-1.4 | `tags` `=` `sealed` on the `many` property | `SP-0001` — element-wise |
+
+**Fail if:** `=` behaves as a substring match. That would make F-1.3 return a row, and would
+make `LIKE` redundant.
+
+### Case F-2 — `LIKE` is partial, with `%` and `_`
+
+| Step | Do this | Expect |
+|---|---|---|
+| F-2.1 | `label` `LIKE` `%frond%` | `SP-0001` |
+| F-2.2 | `label` `LIKE` `Bracken%` | `SP-0001` |
+| F-2.3 | `label` `LIKE` `%frond` | `SP-0001` |
+| F-2.4 | `label` `LIKE` `Bracken` (no wildcard) | Whatever the response says it means — record it. Then check the tool's own description says the same thing |
+| F-2.5 | `label` `LIKE` `` (empty) | **Refused**: an empty pattern matches everything; the message names `IS NOT NULL` as what you probably meant |
+| F-2.6 | `label` `LIKE` `%` (bare) | Refused the same way |
+
+**Fail if:** an empty or bare-`%` pattern silently returns every record. A query that matches
+everything by accident is the failure mode this refusal exists for.
+
+### Case F-3 — `IN` is membership
+
+| Step | Do this | Expect |
+|---|---|---|
+| F-3.1 | `condition` `IN` `["dry","damp"]` | `SP-0001` and `SP-0002` |
+| F-3.2 | `condition` `IN` `["dry","soggy"]` | **Refused** — `soggy` is not a declared enum value — naming the permitted set. Not a partial result |
+| F-3.3 | `IN` with a single-element list | Behaves as `=` |
+| F-3.4 | `IN` with an empty list | Refused or returns nothing, with the response saying which. Record the answer |
+
+### Case F-4 — `IS NULL` and `IS NOT NULL`
+
+Covered by Case C-10. Additionally:
+
+| Step | Do this | Expect |
+|---|---|---|
+| F-4.1 | A note with `label: ""` (an empty string) | `IS NOT NULL` **returns it** — an empty string is a value |
+| F-4.2 | A note with `tags: []` (an empty list) | `IS NOT NULL` returns it |
+| F-4.3 | `SP-0003` with `count: 0` | `IS NOT NULL` returns it |
+
+**Fail if:** any of the three is treated as absent. "Empty" and "absent" are different states.
+
+### Case F-5 — Ordering comparisons
+
+| Step | Do this | Expect |
+|---|---|---|
+| F-5.1 | `count` `>` `5`, `>=` `12`, `<` `3`, `<=` `0` | Correct on each |
+| F-5.2 | `mass_g` `>` `1` | `SP-0001`, `SP-0003` |
+| F-5.3 | `collected_on` `>=` `2026-04-01` | `SP-0002` |
+| F-5.4 | `tags` `>` `f` (a `many` property) | **Refused**, naming `=`, `IN` and `LIKE` |
+| F-5.5 | Compare a text value with `>` against a number, e.g. `label` `>` `5` | Whatever happens, it must not silently return everything or nothing. Record the exact response |
+
+### Case F-6 — Unsupported SQL constructs are refused by name
+
+*This is the one that must never return an empty result. A model that asked for something we do
+not support has to be told what we do support, in the same message.*
+
+| Step | Do this | Expect |
+|---|---|---|
+| F-6.1 | `op` = `JOIN` | Refused, naming the **`join` parameter** as what does that job |
+| F-6.2 | `op` = `COALESCE` | Refused, listing the ten supported operators |
+| F-6.3 | `op` = `BETWEEN` | Refused, listing the supported operators **and** telling you to express a range as two leaves, `>=` and `<=` |
+| F-6.4 | `op` = `CASE` | Refused, listing the supported operators |
+| F-6.5 | A nested `SELECT` as a value | Refused, not parsed, not evaluated |
+| F-6.6 | Free text as the whole filter, e.g. `"condition = 'dry' AND count > 5"` | Refused — there is no query language. The message says the filter is a structured object |
+
+**Fail if:** any of these returns an empty success, a partial result, or an error that does not
+name the supported set. **An empty result to an unsupported operator is the single worst
+outcome in this plan** — it is a wrong answer with no error channel, which is the failure the
+whole design exists to remove.
+
+### Case F-7 — Unknown names are refused, with the valid ones
+
+| Step | Do this | Expect |
+|---|---|---|
+| F-7.1 | `filter` on property `conditon` (typo) | Refused: `unknown property 'conditon' on record type 'specimen'`, followed by the declared property names |
+| F-7.2 | `type` = `speciman` (typo) | Refused, listing the declared record types |
+| F-7.3 | `sort` by an unknown property | Refused, listing the declared properties |
+| F-7.4 | `group_by` an unknown property | Refused, listing the declared properties |
+| F-7.5 | `join` on a relation name that does not exist | Refused, listing the declared relations |
+| F-7.6 | An argument name the tool does not declare, e.g. `sort_by` instead of `sort` | Refused, listing the accepted argument names |
+
+**Fail if:** any of these returns zero results. A typo must be a rejection naming the valid
+options, never an empty answer — because an empty answer to a typo looks exactly like an empty
+answer to a correct query.
+
+### Case F-8 — `near` and `hops`
+
+| Step | Do this | Expect |
+|---|---|---|
+| F-8.1 | `near` = `Expeditions/northern-sweep.md`, `hops` = 1 | The notes directly linked to it |
+| F-8.2 | `hops` = 2 | A wider set, still bounded |
+| F-8.3 | `hops` = 3 | **Refused**: the limit is 2, with the instruction to run a second query from one of the results |
+| F-8.4 | `near` + `words` = `pricing` + a filter on `condition` = `dry` | The **intersection**: a note inside the hop radius that fails the filter is absent, and one matching the filter but outside the radius is absent |
+
+**Fail if:** F-8.4 returns a union rather than an intersection. Composing text search with graph
+traversal is the capability this tool is for; a union quietly makes it useless.
+
+### Case F-9 — `join` marks borrowed values as borrowed
+
+| Step | Do this | Expect |
+|---|---|---|
+| F-9.1 | `type` = `specimen`, `join` = `["expedition"]` | Each row carries the expedition's properties, rendered **as borrowed** — e.g. `expedition [[Northern sweep]]: region northern` |
+| F-9.2 | Look at the row | The borrowed value is **not** merged into the specimen's own columns |
+
+**Fail if:** a borrowed value is indistinguishable from a property the note itself holds. That
+is how an agent comes to believe a property exists on a note that does not have it.
+
+### Case F-10 — Grouping
+
+| Step | Do this | Expect |
+|---|---|---|
+| F-10.1 | `group_by` = `["condition"]` | Groups by condition |
+| F-10.2 | `group_by` = `["expedition","condition"]` | **Two levels**, nested |
+| F-10.3 | `group_by` on `tags` (a `many` property) | `SP-0001`, which holds `fragile` and `sealed`, appears under **both** groups |
+| F-10.4 | `group_by` with three properties | Refused, naming the two-level limit |
+| F-10.5 | `group_by` on a **relation** | Supported — grouping by a relation is not a degraded case |
+
+### Case F-11 — Totals state their scope, and count each record once
+
+| Step | Do this | Expect |
+|---|---|---|
+| F-11.1 | `aggregate` = `[{"op":"sum","property":"mass_g"}]` over all specimens | A total that **states the set it covers** — e.g. "over 14 of 14 evaluated rows (12 shown)". Never a bare number |
+| F-11.2 | Run the same query with `limit` = 2 | The total is **unchanged**. It covers the full evaluated set, not the page you can see |
+| F-11.3 | Add a `many` property to the filter so a record matches on **two** of its values (`tags` `IN` `["fragile","sealed"]`) | `SP-0001` is counted **once**, and its mass contributes **once** |
+| F-11.4 | Now add a second matching tag to `SP-0002` and re-run | The count and sum change by exactly one record's worth, not two |
+| F-11.5 | `count`, `min`, `max` | Same rules |
+| F-11.6 | Aggregate over a set that includes the broken records | Every excluded record is **named**, and no combined figure is offered for a set that could not be fully evaluated |
+
+**Fail if:** the total changes when you change `limit` (that means it is page-scoped and is a
+wrong answer to the question being asked); or a record matching twice is counted twice.
+
+### Case F-12 — `explain` evaluates nothing
+
+| Step | Do this | Expect |
+|---|---|---|
+| F-12.1 | Any query with `explain` = true | A **plan**: every property the query touches and which index answers it. No records |
+| F-12.2 | Run the identical call twice | The two responses are **identical, character for character** — including any freshness or epoch line |
+| F-12.3 | Now add three new notes to the vault, let them index, and run it a third time | Still identical to the first two |
+
+**Fail if:** the two explain calls differ in any character, or the response includes result
+rows. A plan that changes with the corpus means evaluation is happening.
+
+### Case F-13 — `kind: task`
+
+| Step | Do this | Expect |
+|---|---|---|
+| F-13.1 | Put a note in Alpha with three checkbox lines, one of them ticked | — |
+| F-13.2 | `vault_find` with `kind` = `task` | Rows carrying the path, the **line number**, the status (open/done) and the text |
+| F-13.3 | Look at a task row beside an ordinary note row | You can tell them apart. The line number is always shown |
+
+**Fail if:** a task row is indistinguishable from a note row, or a task row omits its line
+number — many rows come from one file and a reader must never mistake one for the other.
+
+### Case F-14 — Nothing found is an answer, not a guess
+
+| Step | Do this | Expect |
+|---|---|---|
+| F-14.1 | `words` = a term that appears nowhere, close to one that does (`speciman`, `bracken frnod`) | Zero results, **plus the nearest indexed terms** the vault actually holds |
+| F-14.2 | Compare what you asked with what came back | The system did **not** broaden your query and answer a different question |
+
+**Fail if:** a zero-hit query silently returns results for a broader or corrected term. That is
+answering a question nobody asked, with no error channel.
+
+### Case F-15 — Paging and clamps
+
+| Step | Do this | Expect |
+|---|---|---|
+| F-15.1 | `limit` = 500 | Clamped to 200, and **the clamp is stated in the response** |
+| F-15.2 | Page through with the cursor the response gives you | Consistent, non-overlapping pages |
+| F-15.3 | Take a cursor, add several notes, let them index, then use the old cursor | An **error** naming the stale cursor and telling you to re-run — never a silent restart from page one |
+
+### Case F-16 — The candidate caps
+
+*These need a vault of tens of thousands of records. If you do not have one, mark **Blocked —
+fixture too small** and say so; do not approximate.*
+
+| Step | Do this | Expect |
+|---|---|---|
+| F-16.1 | A row-returning query matching more than 10,000 records | **Refused**, telling you to tighten the filter or ask for a total instead. It does not quote an exact survivor count it never finished computing |
+| F-16.2 | A typed query whose candidate population exceeds 50,000 | Refused, quoting the **exact** candidate count and naming the scope/kind remedy |
+| F-16.3 | An aggregate-only query (no rows requested) over the same large set | Permitted — it is exempt from the row cap |
+| F-16.4 | An aggregate over a refused set | **No total at all**. Never a partial one |
+
+### Case F-17 — The shape of the response
+
+*Every `vault_find` response, in every case above, must have this shape. Check it once
+carefully here, then spot-check it throughout.*
+
+| Step | Do this | Expect |
+|---|---|---|
+| F-17.1 | Look at the **first line** | The completeness verdict. Not the last line, not buried after the rows |
+| F-17.2 | Look for the query echo | The query you sent, rendered readably |
+| F-17.3 | Look for the freshness line | Whether the returned records agree across both indexes |
+| F-17.4 | Look at the rows | Compact text. **No JSON object anywhere in what the model reads** |
+| F-17.5 | Look for the totals line, if you asked for one | Present, with its scope stated |
+| F-17.6 | Look for the problems block | Present whenever anything was excluded, each entry naming the record, the reason **and the fix** |
+| F-17.7 | Look at the **last** block | Addressable next actions — what to narrow by, what to try next |
+| F-17.8 | Ask for a very large result and watch the response length | If it is truncated, the truncation is stated in the header. Never silent |
+
+**Fail if:** completeness arrives after the rows; the response is JSON; a problem row says only
+"3 records excluded" without naming them; or there is no next-actions block.
