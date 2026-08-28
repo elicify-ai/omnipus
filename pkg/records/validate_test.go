@@ -189,12 +189,12 @@ properties:
 `})
 
 	recs := []Record{
-		ParseRecord("a.md", []byte("---\ntype: widget\n---\n")),                                          // required missing
-		ParseRecord("b.md", []byte("---\ntype: widget\nname: B\nstatus: nonesuch\n---\n")),              // enum outside the set
-		ParseRecord("c.md", []byte("---\ntype: widget\nname: C\nsigned: 2026-13-45\n---\n")),            // bad date
-		ParseRecord("d.md", []byte("---\ntype: widget\nname: D\nheadcount: PLACEHOLDER\n---\n")),        // bad number
-		ParseRecord("e.md", []byte("---\ntype: widget\nname: E\nheadcount: 3.5\n---\n")),                // integer, not whole
-		ParseRecord("f.md", []byte("---\ntype: widget\nname: F\nowner: Daniel\n---\n")),                 // not a wikilink
+		ParseRecord("a.md", []byte("---\ntype: widget\n---\n")),                                  // required missing
+		ParseRecord("b.md", []byte("---\ntype: widget\nname: B\nstatus: nonesuch\n---\n")),       // enum outside the set
+		ParseRecord("c.md", []byte("---\ntype: widget\nname: C\nsigned: 2026-13-45\n---\n")),     // bad date
+		ParseRecord("d.md", []byte("---\ntype: widget\nname: D\nheadcount: PLACEHOLDER\n---\n")), // bad number
+		ParseRecord("e.md", []byte("---\ntype: widget\nname: E\nheadcount: 3.5\n---\n")),         // integer, not whole
+		ParseRecord("f.md", []byte("---\ntype: widget\nname: F\nowner: Daniel\n---\n")),          // not a wikilink
 		// `Active` is CLEAN now, not a fault: FR-011a resolves it to the
 		// declared `active`. It was the enum-case fault row before ruling R-D.
 		ParseRecord("g.md", []byte("---\ntype: widget\nname: G\nstatus: Active\namount: 12.00\n---\n")), // clean

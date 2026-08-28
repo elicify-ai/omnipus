@@ -333,12 +333,97 @@ func TestContract_RecordValue_DecimalAcceptsFarMoreThanTwelvePlaces(t *testing.T
 			"12-place money bound was inherited")
 }
 
+func TestContract_RecordValue_DecimalScaleBoundMatchesTheParser(t *testing.T) {
+	// The wire must refuse EXACTLY what the parser refuses. A boundary that
+	// accepts more is a value a caller can PUT and never read back; one that
+	// accepts less silently narrows the type.
+	//
+	// The bound is in the PATTERN, not in maxLength. maxLength cannot express
+	// it: the integer part has no fixed width, so any single length cap either
+	// admits a 110-place value with a short integer part or rejects a 2-place
+	// value with a long one.
+	at100 := []byte(`{"type":"decimal","decimal":"0.` + strings.Repeat("1", 100) + `"}`)
+	assert.NoError(t, validateAgainstComponentSchemaRawJSON(t, "RecordValue", at100),
+		"FR-013's bound is 100 places and 100 is INSIDE it")
+
+	at101 := []byte(`{"type":"decimal","decimal":"0.` + strings.Repeat("1", 101) + `"}`)
+	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "RecordValue", at101),
+		"101 places is past FR-013's bound and the wire must refuse it, or the boundary "+
+			"accepts a value the parser will reject on the way in")
+
+	// A long integer part with a short fraction must still pass: the bound is
+	// on the SCALE, not on the magnitude, which is arbitrary-precision.
+	long := []byte(`{"type":"decimal","decimal":"` + strings.Repeat("9", 25) + `.50"}`)
+	assert.NoError(t, validateAgainstComponentSchemaRawJSON(t, "RecordValue", long),
+		"a decimal's magnitude is unbounded; only its scale is bounded")
+}
+
 func TestContract_RecordValue_DecimalRejectsANumericLiteral(t *testing.T) {
 	raw := []byte(`{"type":"decimal","decimal":349.98}`)
 	err := validateAgainstComponentSchemaRawJSON(t, "RecordValue", raw)
 	assert.Error(t, err,
 		"349.98 is not representable in binary floating point; a JSON number here is the "+
 			"exact defect FR-020b names")
+}
+
+// TestContract_RecordProblem_CodesTrackTheTypeSystem guards what the vault
+// records spec calls the highest-value deletions in its whole inventory.
+//
+// A RecordProblem `code` enum member is NOT prose. Each one generates a Go
+// constant, a TypeScript union member and a RUNTIME ZOD VALIDATOR the SPA edge
+// uses to accept or drop payloads. `cross_currency` and `money_scale_mismatch`
+// were live machine-readable residue of a requirement that had been retired —
+// the SPA would have gone on accepting payloads describing a concept that no
+// longer exists — and their replacements deserve the same protection.
+//
+// This test exists because deleting a member is INVISIBLE otherwise: it was
+// mutation-checked, and removing `integer_out_of_range` from the enum left
+// every other test in this file green.
+func TestContract_RecordProblem_CodesTrackTheTypeSystem(t *testing.T) {
+	codes := recordProblemCodes(t)
+
+	// The retired pair. Both had `money` as their only subject.
+	for _, gone := range []string{"cross_currency", "money_scale_mismatch"} {
+		assert.NotContains(t, codes, gone,
+			"%q is a RETIRED problem code (ADR-068 D3 deleted the money type). Leaving it "+
+				"means the SPA's generated Zod validator still accepts payloads describing a "+
+				"concept that no longer exists", gone)
+	}
+
+	// The pair that replaced them. They are separate codes on purpose: a
+	// fractional value and an out-of-range value are different faults with
+	// different remedies, and collapsing them into one would send an author
+	// who wrote 3.5 looking for a range problem.
+	for _, live := range []string{"integer_not_whole", "integer_out_of_range"} {
+		assert.Contains(t, codes, live,
+			"%q must be a declared RecordProblem code: FR-013's refusals are reported to the "+
+				"caller, and a cause a client cannot branch on is a cause it will parse out of "+
+				"prose instead", live)
+	}
+}
+
+// recordProblemCodes reads RecordProblem.yaml's `code` enum from the contract
+// file itself, rather than from the generated Go, so a stale regeneration
+// cannot make the assertion pass.
+func recordProblemCodes(t *testing.T) []string {
+	t.Helper()
+
+	path := filepath.Join(contractsDir(), "components", "schemas", "RecordProblem.yaml")
+	raw, err := os.ReadFile(path)
+	require.NoError(t, err)
+
+	var doc struct {
+		Properties struct {
+			Code struct {
+				Enum []string `yaml:"enum"`
+			} `yaml:"code"`
+		} `yaml:"properties"`
+	}
+	require.NoError(t, yaml.Unmarshal(raw, &doc))
+	require.NotEmpty(t, doc.Properties.Code.Enum,
+		"RecordProblem.code must declare an enum; an empty read here would make every "+
+			"assertion below vacuously pass")
+	return doc.Properties.Code.Enum
 }
 
 func TestContract_RecordValue_RetiredTypesAreGone(t *testing.T) {

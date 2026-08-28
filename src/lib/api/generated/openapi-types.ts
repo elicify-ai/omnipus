@@ -4825,7 +4825,8 @@ export interface components {
              */
             integer?: string;
             /**
-             * @description Populated when type is "decimal". An exact, arbitrary-precision number carried as a decimal STRING, for the same reason as `integer`: a quantity that cannot survive a round trip unchanged is not a quantity a caller can reconcile. At most 100 decimal places (FR-013) — deliberately generous; a value past the bound is refused naming it, never rounded, because rounding to satisfy a bound is a silent change to a number. `maxLength` admits a 100-place value with a sign, a leading digit and the point. The unit, if any, is declared once on the PropertyDef and is never glued into the value.
+             * @description Populated when type is "decimal". An exact, arbitrary-precision number carried as a decimal STRING, for the same reason as `integer`: a quantity that cannot survive a round trip unchanged is not a quantity a caller can reconcile. At most 100 decimal places (FR-013) — deliberately generous; a value past the bound is refused naming it, never rounded, because rounding to satisfy a bound is a silent change to a number.
+             *     THE 100-PLACE BOUND IS IN THE PATTERN, not only in `maxLength`, so the wire refuses exactly what the parser refuses. A `maxLength` alone cannot express it — the integer part has no fixed width, so any single length cap either admits a 110-place value with a short integer part or rejects a 2-place value with a long one. A boundary that accepts what the engine rejects is a value a caller can PUT and never read back. `maxLength` admits a 100-place value with a sign, a leading digit and the point. The unit, if any, is declared once on the PropertyDef and is never glued into the value.
              * @example 349.98
              */
             decimal?: string;

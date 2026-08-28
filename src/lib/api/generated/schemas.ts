@@ -3929,8 +3929,8 @@ export const RecordValue: z.ZodType<RecordValue> = z.object({
   decimal: z
     .string()
     .min(1)
-    .max(120)
-    .regex(/^-?(0|[1-9][0-9]*)(\.[0-9]+)?$/)
+    .max(128)
+    .regex(/^-?(0|[1-9][0-9]*)(\.[0-9]{1,100})?$/)
     .optional(),
   person: RecordRef.optional(),
 });
