@@ -470,7 +470,32 @@ specifies today, and purge leaves the entry alone and reports it.
 These are raised for review, not fixed here. Severities use the project's convention: a
 **blocker** violates a hard constraint or a stated requirement.
 
-### F1 — `move` can permanently delete a note today, bypassing trash entirely — **blocker**
+### F1 — `move` can permanently delete a note today, bypassing trash entirely — **RESOLVED 2026-08-28**
+
+> **RESOLVED in `883c26d7`, after this note was written.** The finding below is preserved as
+> written because its reasoning is what found the defect. Do not act on it as an open blocker.
+>
+> `(*Renamer).Plan` now calls `authorRefuseReserved` on **both** `from` and `to`, inside the
+> existing per-side validation loop — so a move is refused in either direction, at any depth,
+> for both marker directories, with the source left untouched.
+>
+> **Reproduced before fixing, not assumed:** with the destination directory present the move was
+> ACCEPTED, the source was removed, and the note landed where no walker descends. After the fix
+> it is refused with `ErrReservedLocation`. Guard:
+> `pkg/knowledge/rename_reserved_test.go::TestRename_RefusesToolStateDirectoriesInBothDirections`.
+>
+> **One subtlety this note's reader must keep.** Before the fix the move was *also* refused —
+> by an incidental "destination directory does not exist" check. A test written without creating
+> that directory therefore passes against the **unfixed** code and proves nothing. Trash lives at
+> `.omnipus-vault/trash/`, so building trash removes that accidental refusal and would have opened
+> the hole exactly when the guard stopped being redundant. Any future test here must create the
+> destination directory first and assert on `ErrReservedLocation` specifically — never merely that
+> an error occurred.
+>
+> A UAT agent later read this section as live and wrote two human-executed cases instructing a
+> tester to back up their vault and attempt the destruction. That is the cost of leaving a
+> resolved blocker marked open, and the reason for this banner.
+
 
 The reserved-location guard `pkg/knowledge/author.go::authorRefuseReserved` refuses any path with
 `.omnipus-vault` or `.obsidian` as a segment at any level. **It has exactly one non-test caller:
