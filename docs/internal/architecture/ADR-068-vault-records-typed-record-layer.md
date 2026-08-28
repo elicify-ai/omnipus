@@ -1301,7 +1301,7 @@ compares them, and a mismatch sets `complete: false`"* — followed by *"Mitigat
   bumped by a human when the recorded *shape* changes (`manifest.go:45-47`). It never increments
   per build, and a mismatch discards the manifest and rebuilds (`manifest.go:113-115`).
 - No query result carries anything of the kind. `IndexHit` is exactly
-  `Path`/`Kind`/`Score`/`Offset`/`Segment` (`pkg/knowledge/index.go:158-174`).
+  `Path`/`Kind`/`Score`/`Offset`/`Segment` (`pkg/knowledge/index.go:159-173`).
 - `VersionToken` (`pkg/knowledge/author.go:309-323`) is a **per-note compare-and-swap token on
   the authoring path** — `ComputeVersionToken(src)`, consumed by `checkVersion` at
   `author.go:667`. It is never attached to a read.
@@ -1316,7 +1316,7 @@ this length because the pattern is the actual risk, not the individual error.**
 **The token is the per-note content hash the manifest already stores.**
 `ManifestEntry.Hash` (`pkg/knowledge/manifest.go:64`) is *"the hex SHA-256 of the file's
 contents"*, written per note on every index, keyed by collection-relative path in
-`Manifest.Entries` (`manifest.go:83`), and already readable by path via `Manifest.Get`
+`Manifest.Entries` (`manifest.go:82`), and already readable by path via `Manifest.Get`
 (`manifest.go:174`). It exists, it is per-note, and it is exactly the value that changes when a
 note changes.
 
