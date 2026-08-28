@@ -940,7 +940,8 @@ badly is a worse retrieval system.
 - **FR-122** The **query as executed** MUST be echoed in the header, including any clamp, coercion or default the system applied. A caller MUST be able to see that its `limit: 500` ran as 200.
 - **FR-123** An exclusion MUST be named **with its fix**, inline — `CO-0052: arr is '50k' where a number is required — write 50000`. `3 records excluded` alone fails this requirement.
 - **FR-124** A value pulled through a relation MUST be rendered as **borrowed** — `company [[Acme]]: active` — and MUST NOT be merged into the row's own columns. The row is one real file; blurring that is how an agent comes to believe a property exists on a note that does not have it.
-- **FR-125** Every total MUST state its scope — `sum(arr) = GBP 465,000.00 over 5 of 12 rows — GBP only`. A bare number MUST never be returned.
+- **FR-125** Every total MUST state its scope — `sum(arr) = 673,000.00 over 12 of 12 rows`. A bare number MUST never be returned. *(Revision 5: the example loses its currency clause with `money` — FR-014.)*
+- **FR-125a** **NEW, revision 5.** An aggregate MUST be computed over the **full evaluated set**, never over the rendered page, and the scope line MUST say which set it covers. *Revision 4's §4.2 example reported `over 5 of 12 rows` against a header stating 17 selected and 14 evaluated — a page-scoped number labelled a total, which is a wrong answer to the question ADR-068 §1.2 motivates. Nothing in revision 4 stated which set an aggregate covered.* Where the two differ — a clamp, a cursor, a budget truncation — the scope line names the **evaluated** count and the header names the rendered one, and a test asserts they are computed from different numbers.
 - **FR-126** Every response MUST end in **addressable next actions**: at least one concrete call the caller can make next, with its arguments filled in. In an agentic loop each response is a prompt for the next call; a response that terminates in data terminates the loop.
 - **FR-127** **MEANING CHANGED, revision 4 (ADR-068 D22.7): the unit is BYTES, not tokens.** Budgets: **~200–320 bytes per hit**, **~4,000 bytes** per response by default, **16,000 bytes hard cap**; `detail: minimal` renders **~80 bytes per hit**. Truncation to meet a budget MUST be stated in the header (FR-121's line), never applied silently. *Previously ~50–80 tokens/hit, ~1,000 default, 4,000 hard cap. **The figures are the same intent at a conservative ~4 bytes/token; only the enforceable unit changed.** The reason is FR-116: three notions of a term already coexist in this tree, none of them the serving model's, so a token cap enforced with any tokenizer we own would be wrong by an unknown margin in an unknown direction on every provider, and would silently change meaning whenever a provider changed tokenizer. Bytes are exact, provider-independent, and enforceable at the point of truncation. This is a budget for **rendering**, not an accounting of what the model is billed.*
 - **FR-127a** **The response budget and the page-size cap still conflict, and the budget still wins.** *(Revision 3 raised this against ADR-068 revision 5's token figures; revision 6 changed the unit but not the arithmetic, so the requirement stands, restated in bytes.)* FR-063 permits a page of **200 results** while FR-127 caps a response at **16,000 bytes**; at ~200–320 bytes per hit a 200-row page is **40,000–64,000 bytes**, so the two bounds are not simultaneously satisfiable — and the default page of 50 reaches the cap at the top of the per-hit range. The system MUST therefore degrade in a stated order and **report every step of it in the header**: render at `standard` until the budget is reached, then drop the remaining rows to `minimal`, then stop and page. `limit` is a bound on rows **selected**, never a promise about rows **rendered**. A response that silently returns fewer rows than the budget forced is the truncation failure this specification exists to remove, committed by the renderer instead of the index. **The ladder as revision 4 wrote it did not close, and revision 5 says so:** it is written entirely about **rows** and never mentions problems, totals or the header, every one of which is a MUST (FR-121, FR-122, FR-125, FR-025, FR-026, FR-126); and at `minimal`'s ~80 bytes/hit a 200-row page is **16,000 bytes — the entire cap, with zero bytes left for any of them.** FR-127c fixes it by reserving before it renders.
@@ -1290,15 +1291,20 @@ asserts them.
 The ADR states the rules; this is the artifact. A test diffs against this shape, not against a
 description of it.
 
-**The call.** *"Open Acme deals over £50k, and anything within two link-hops of Acme that
-mentions pricing."*
+> **Everything named in this example — `deal`, `company`, `status`, `arr`, `open`, `Acme`,
+> `DEAL-0117` — is an ILLUSTRATION of what a vault might define (R-F). The product ships none of
+> it.** What the test diffs against is the **rendered shape** over a fixture the test declares, not
+> these names.
+
+**The call.** *"Open deals of this type above 50,000, and anything within two link-hops of one
+record that mentions a given word."*
 
 ```json
 {
   "words": "pricing",
   "type": "deal",
-  "filter": { "all": [ { "property": "status", "op": "is", "value": "open" },
-                       { "property": "arr", "op": "gte", "value": 50000 } ] },
+  "filter": { "all": [ { "property": "status", "op": "=",  "value": "open" },
+                       { "property": "arr",    "op": ">=", "value": "50000" } ] },
   "near": "Companies/Acme Ltd.md",
   "hops": 2,
   "join": ["company"],
@@ -1313,28 +1319,28 @@ annotation table that follows.
 
 ```
 COMPLETE: no — 3 of 17 selected records could not be evaluated; 12 of 14 shown (more: cursor c2FnZTI)
-QUERY: type=deal  words="pricing"  filter=(status is open AND arr >= 50000)  near=[[Acme Ltd]] hops=2  join=company  sort=arr desc  limit=50
-INDEX: 12 of 12 returned records verified fresh (source_hash matched); collection gen 8814
+QUERY: type=deal  words="pricing"  filter=(status = 'open' AND arr >= 50000)  near=[[Acme Ltd]] hops=2  join=company  sort=arr desc  limit=50
+INDEX: 12 of 12 returned records agree across both indexes (source_hash matched); index_epoch 8814
 
-DEAL-0117  Acme renewal FY27       status open   arr GBP 180,000.00   company [[Acme Ltd]]: status active
-DEAL-0121  Acme expansion EU       status open   arr GBP  95,000.00   company [[Acme Ltd]]: status active
-DEAL-0134  Acme platform add-on    status open   arr GBP  70,000.00   company [[Acme Ltd]]: status active
-DEAL-0140  Acme support uplift     status open   arr GBP  62,000.00   company [[Acme Ltd]]: status active
-DEAL-0102  Northwind pricing pilot status open   arr GBP  58,000.00   company [[Northwind]]: status prospect
-DEAL-0155  Acme data migration     status open   arr USD 120,000.00   company [[Acme Ltd]]: status active
-DEAL-0161  Acme training package   status open   arr USD  88,000.00   company [[Acme Ltd]]: status active
+DEAL-0117  Acme renewal FY27       status open   arr 180,000.00   company [[Acme Ltd]]: status active
+DEAL-0155  Acme data migration     status open   arr 120,000.00   company [[Acme Ltd]]: status active
+DEAL-0121  Acme expansion EU       status open   arr  95,000.00   company [[Acme Ltd]]: status active
+DEAL-0161  Acme training package   status open   arr  88,000.00   company [[Acme Ltd]]: status active
+DEAL-0134  Acme platform add-on    status open   arr  70,000.00   company [[Acme Ltd]]: status active
+DEAL-0140  Acme support uplift     status open   arr  62,000.00   company [[Acme Ltd]]: status active
+DEAL-0102  Northwind pricing pilot status open   arr  58,000.00   company [[Northwind]]: status prospect
 … 5 more rows
 
-TOTALS: sum(arr) = GBP 465,000.00 over 5 of 12 rows — GBP only; 7 rows are USD and are not included
+TOTALS: sum(arr) = 673,000.00 over 12 of 12 rows
 
 PROBLEMS (3)
-  DEAL-0052  arr is '50k' where a number is required — write 50000
+  DEAL-0052  arr is '50k' where a decimal is required — write 50000
   DEAL-0088  company is text "Acme Ltd", not a relation — write company: "[[Acme Ltd]]"
-  DEAL-0093  status is 'Won'; deal.status permits, in order: open, won, lost — write 'won'
+  DEAL-0093  status is 'Wonn'; deal.status permits: lost, open, won — write 'won'
 
 NEXT
   page       vault_find cursor="c2FnZTI"
-  narrow     vault_find type=deal filter=(status is open AND currency is GBP)
+  narrow     vault_find type=deal filter=(status = 'open' AND arr >= 100000)
   widen      vault_find near="Companies/Acme Ltd.md" hops=2 words="pricing" type=<any>
   fix        vault_read path="Deals/DEAL-0052.md"   then vault_edit set_property arr=50000
 ```
@@ -1346,7 +1352,7 @@ NEXT
 | `INDEX:` freshness | FR-020c | Freshness is **per returned record**, not per index (ADR-068 D16.5): each row's `source_hash` is compared against `ManifestEntry.Hash`. A record that fails moves to `PROBLEMS` and the verdict becomes `no`. The count is an assertion, not decoration — and per FR-020c1 it covers **what the query returned, not what it did not**. |
 | Rows | FR-127 | ~200–320 **bytes** each; the row count shown is what the budget allowed, and the shortfall is in the header. |
 | `company [[Acme Ltd]]: status active` | FR-124 | Borrowed, visibly. It is not a `deal` property and must never render as one. |
-| `TOTALS:` | FR-125, FR-014 | Scoped in the same sentence as the number. The USD rows are counted and excluded, not dropped. |
+| `TOTALS:` | FR-125 | **REWRITTEN, revision 5.** Scoped in the same sentence as the number — `over 12 of 12 rows` — so a reader can see the total covers every rendered row. *Revision 4's line read `sum(arr) = GBP 465,000.00 over 5 of 12 rows — GBP only; 7 rows are USD and are not included`, which was the grill's C-9: §4.1.2's refusal table said a cross-currency total returns **nothing** while this artifact returned **one**, and both were labelled contract with a test behind them. Under operator ruling 1 the contradiction is **dissolved rather than adjudicated** — there is no currency, so neither artifact has a subject.* **The scope clause survives and is the load-bearing half:** a total that does not say what it covers is a bare number, which FR-125 forbids. **And it MUST be computed over the full evaluated set, never the rendered page** (FR-125a) — revision 4's example scoped its total to 12 shown rows while the header said 14 were evaluated, which is a page-scoped number labelled a total. |
 | `PROBLEMS` | FR-025, FR-026, FR-123 | Each line is one record, one reason, one fix. |
 | `NEXT` | FR-126 | Four addressable calls; the loop continues without the model inventing arguments. |
 
