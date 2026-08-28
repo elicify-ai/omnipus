@@ -1941,55 +1941,19 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 			"source", godModeSource)
 	}
 
-	// ADR-067 T067-07: boot the ONE provider catalog for this process. Boot
-	// performs no network I/O — it parses the embedded snapshot, reads the
-	// persisted last-known-good from $OMNIPUS_HOME/providers_catalog.json,
-	// and serves whichever is valid and newest (E6). It never fails: with
-	// neither usable, the catalog serves nothing, every lookup misses, and
-	// the media path stays optimistic (E7).
-	//
-	// It must happen HERE — before createStartupProvider, not merely before
-	// NewAgentLoop as the comment used to say. createStartupProvider's
-	// providers.CreateProvider resolves agents.defaults.default_model
-	// (ResolveDefaultModelRow, rung 4) against providers.ProviderCatalog(),
-	// which reads back whatever providers.SetCatalog installed. Boot+
-	// SetCatalog previously ran AFTER createStartupProvider: ProviderCatalog()
-	// then always fell back to the lazily-parsed EMBEDDED snapshot, silently
-	// ignoring both the persisted last-known-good and the fact that the
-	// gateway was about to install a richer catalog moments later. A default
-	// model the SPA's picker legitimately offers (from the refreshed
-	// providers_catalog.json, or a live provider probe newer than the
-	// embedded snapshot) would then boot-fail with "default model ... not
-	// found in providers" even though the very next lines of this function
-	// would have resolved it correctly. Moving the boot here makes
-	// createStartupProvider — like NewAgentLoop and its ADR-066
-	// ResolveWindow rung 5 — see the actually-installed catalog instead of
-	// the embedded-only fallback.
-	//
-	// The startup pull and the 24 h ticker are NOT started here; they start
-	// after the listener is bound (see setupAndStartServices).
-	providerCatalog := catalog.Boot(
-		context.Background(),
-		catalog.EmbeddedSnapshot,
-		catalog.NewGHReleasePuller(),
-		catalog.NewFileStore(homePath),
-		catalogLogAdapter{},
+	// ADR-067 T067-07 / boot-order fix (2026-08-28): boot the ONE provider
+	// catalog for this process and install it BEFORE building the startup
+	// LLM provider. See installProviderCatalogAndStartupProvider's own doc
+	// comment for why this order is load-bearing — reversing it reproduces
+	// a real production defect (a default model the SPA's picker legitimately
+	// offered from a refreshed $OMNIPUS_HOME/providers_catalog.json boot-
+	// failed with "default model ... not found in providers", because
+	// providers.ProviderCatalog() had nothing installed yet and fell back to
+	// the embedded-only snapshot). Pinned by
+	// TestCreateStartupProvider_MustSeeCatalogInstalledBeforeCall.
+	provider, _, providerCatalog, err := installProviderCatalogAndStartupProvider(
+		context.Background(), homePath, cfg, allowEmptyStartup,
 	)
-	agent.SetWindowCatalog(providerCatalog)
-	// ADR-067 FR-012: the provider FACTORY dispatches on the protocol this
-	// same document carries, so it must read the same instance — otherwise
-	// the gateway would resolve windows from the pulled document while
-	// constructing transports from the embedded snapshot.
-	providers.SetCatalog(providerCatalog)
-
-	// Build the real LLM provider. The test_harness override hook + scripted-
-	// scenario fallback was removed 2026-05-10; tests now run against real
-	// OpenRouter via the configured provider entry.
-	// ADR-068 FR-020: the startup provider's model id is NEVER written back
-	// into agents.defaults.default_model. The old `ModelName == ""` back-fill
-	// guard that lived here was deleted with the alias — the pair is written
-	// only by onboarding completion and the default-model PUT.
-	provider, _, err := createStartupProvider(cfg, allowEmptyStartup)
 	if err != nil {
 		return fmt.Errorf("error creating provider: %w", err)
 	}
@@ -4036,6 +4000,61 @@ func executeReload(
 	}
 	clearDegraded()
 	return nil
+}
+
+// installProviderCatalogAndStartupProvider boots the process's ONE provider
+// catalog (ADR-067 T067-07) and installs it — catalog.Boot, then
+// agent.SetWindowCatalog + providers.SetCatalog — BEFORE calling
+// createStartupProvider, which resolves cfg.Agents.Defaults.DefaultModel
+// against providers.ProviderCatalog() (ResolveDefaultModelRow, rung 4: the
+// served catalog is authoritative for a known, non-custom, non-local
+// provider). providers.ProviderCatalog() falls back to the lazily-parsed
+// EMBEDDED snapshot whenever nothing has been installed yet
+// (pkg/providers/catalog_source.go) — so this ordering is load-bearing, not
+// cosmetic.
+//
+// Production defect this fixes (found 2026-08-28): RunContextWithOptions
+// used to call createStartupProvider first and boot+install the catalog
+// afterwards. A default model the SPA's picker legitimately offered — read
+// from a refreshed $OMNIPUS_HOME/providers_catalog.json newer/richer than
+// the embedded snapshot compiled into the binary — would then fail to
+// resolve at boot with "default model ... not found in providers" even
+// though the very next lines of RunContextWithOptions would have installed
+// a catalog that DID carry it. Extracted into its own function so the
+// ordering itself is unit-testable (TestCreateStartupProvider_
+// MustSeeCatalogInstalledBeforeCall) rather than only pinned by comment —
+// reverting the call order inside this function is exactly what reproduces
+// the defect.
+//
+// Boot performs no network I/O; the startup pull and the 24 h refresh
+// ticker are NOT started here — they start after the listener is bound
+// (see setupAndStartServices).
+func installProviderCatalogAndStartupProvider(
+	ctx context.Context, homePath string, cfg *config.Config, allowEmptyStartup bool,
+) (providers.LLMProvider, string, *catalog.Catalog, error) {
+	providerCatalog := catalog.Boot(
+		ctx,
+		catalog.EmbeddedSnapshot,
+		catalog.NewGHReleasePuller(),
+		catalog.NewFileStore(homePath),
+		catalogLogAdapter{},
+	)
+	agent.SetWindowCatalog(providerCatalog)
+	// ADR-067 FR-012: the provider FACTORY dispatches on the protocol this
+	// same document carries, so it must read the same instance — otherwise
+	// the gateway would resolve windows from the pulled document while
+	// constructing transports from the embedded snapshot.
+	providers.SetCatalog(providerCatalog)
+
+	// Build the real LLM provider. The test_harness override hook + scripted-
+	// scenario fallback was removed 2026-05-10; tests now run against real
+	// OpenRouter via the configured provider entry.
+	// ADR-068 FR-020: the startup provider's model id is NEVER written back
+	// into agents.defaults.default_model. The old `ModelName == ""` back-fill
+	// guard that lived here was deleted with the alias — the pair is written
+	// only by onboarding completion and the default-model PUT.
+	provider, modelID, err := createStartupProvider(cfg, allowEmptyStartup)
+	return provider, modelID, providerCatalog, err
 }
 
 func createStartupProvider(
