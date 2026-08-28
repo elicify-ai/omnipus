@@ -860,15 +860,27 @@ broader thing has been given a wrong answer with no error channel.
 
 ## 5. Success criteria
 
-- **SC-001** The two-hop question from ADR-068 §1.2 is answered by one `record_query` call with no hand-maintained state and no regular expression.
+- **SC-001** The two-hop question from ADR-068 §1.2 is answered by one `vault_find` call with no hand-maintained state and no regular expression.
 - **SC-002** For a corpus of 63 records where 22 hold non-numeric values in a numeric property, an aggregate names all 22 and returns no combined figure.
 - **SC-003** A query filtering on a mistyped property name is rejected with valid names listed; zero such queries return an empty result set.
 - **SC-004** Writing one property into a 200-line note leaves the file byte-identical outside the patched span, across a 50-file fixture corpus.
-- **SC-005** 1,000 records created concurrently across two POSIX processes yield 1,000 distinct identifiers and zero sequence gaps.
-- **SC-006** An agent in workspace A retrieves zero records from a vault mounted only into workspace B.
-- **SC-007** *(pending D16's spike — no numeric target is stated until it reports.)*
-- **SC-009** Zero tool-policy pairs are repaired on a fresh install.
-- **SC-010** A `.base` file containing one unsupported expression imports with that expression reported verbatim and the rest translated.
+- **SC-005** **CORRECTED, revision 3.** 1,000 records created concurrently across two POSIX processes yield 1,000 **distinct** identifiers. **Gaps are permitted; a repeat is a failure.** *Revision 2 demanded "zero sequence gaps", which directly contradicts FR-038 and ADR-068 D7.1: deleting a record burns its identifier permanently, so a gap is the correct outcome and reconciling to max to close it would make an existing relation resolve to a different record. This was a specification defect, not a wording preference.*
+- **SC-005a** Deleting the highest-numbered record and creating a new one yields an identifier **above** the deleted one, never equal to it.
+- **SC-006** An agent in workspace A retrieves zero records from a vault mounted only into workspace B, and cannot distinguish it from an empty vault.
+- **SC-007** *(No latency or memory target is stated. The spike measured the **bleve-plus-Go design this specification did not take**; quoting its numbers as targets for the two-index design would repeat revision 1's error in a new costume. Targets arrive when W1 has the SQLite path measured. The one budget that holds is inherited: ADR-067's < 64 MB steady-state RSS, which the properties index lives inside.)*
+- **SC-009** Zero tool-policy pairs are repaired on a fresh install, across all ten seeded agents.
+- **SC-010** A `.base` file containing one unsupported expression imports — **via the operator/CLI one-shot** — with that expression reported verbatim and the rest translated.
+- **SC-011** The static builtin catalog contains exactly five `vault_*` names and zero `knowledge_*` names, and `allStaticToolNames` has 98 entries.
+- **SC-012** An operator policy of `vault_edit: allow`, `vault_restructure: deny` permits a property write and refuses a rename, in one session, proven by test.
+- **SC-013** Every successful `vault_edit` changes exactly one file on disk.
+- **SC-014** Deleting the properties index and reopening the vault reproduces byte-identical query results for a 30-query fixture suite.
+- **SC-015** A query run while the two indexes are at different generations reports `COMPLETE: no` with staleness named, and never reports success.
+- **SC-016** `ScoringModel` is asserted to be BM25 by test, and the seven stale doc comments naming BM25 are corrected in the same change.
+- **SC-017** A field query on a frontmatter property key returns the records holding it — a query that is not expressible at all today.
+- **SC-018** The FR-112 fusion is compared against plain BM25 on the fixture corpus and the comparison is recorded; the same filter returns the same **set** under both (AC-8.6).
+- **SC-019** An agent obtains a version token via `vault_read` and completes a write with zero failed writes in between.
+- **SC-020** A client mounting the collection panel after indexing completed renders the completed state, and it matches the freshness `vault_find` reports for the same collection.
+- **SC-021** A `vault_find` response over a partial answer places its completeness verdict on line 1, and a test asserts block order `header → rows → totals → problems → next`.
 
 ---
 
