@@ -797,3 +797,126 @@ in the row) is the obvious implementation and changes the cost by the leaf count
 neither permits nor forbids it. **Fix:** say that the record side MAY be folded once per candidate
 and that the folded form is never rendered (FR-046's sibling rule) — otherwise an implementer either
 pays the cost the spec names or silently reintroduces the derived column FR-011a withdrew.
+
+---
+
+## 6. Traceability after the mass deletion
+
+The document forbids itself silent renumbering (*"Nothing below was renumbered silently"*) and
+restored SC-008 on exactly that ground. Measured against its own standard:
+
+**M-32 — `FR-200..FR-212` are cited as requirements in two places and defined nowhere.**
+§6 (`:1574`): *"the rules are **PROMOTED to numbered requirements as FR-200..FR-212** (M-24), one per
+rule, so that the highest-risk item in the document appears in this matrix rather than being traced
+to 'see §8'."* §11's W2 row lists *"R-1..R-13 as FR-200..FR-212"* as wave content. **No FR-2xx is
+defined anywhere in the document.** The promotion is announced and not performed, so §6 still traces
+the highest-risk item to a table by prose reference, which is the defect the promotion was written to
+close. And the mapping is ambiguous: `FR-200..FR-212` is thirteen numbers for **thirteen declared
+rules of which one (R-6) is retired**, and nothing says whether FR-205 is R-6-retired or whether the
+numbering closes the gap. **Fix:** either define the thirteen FRs in §8's table (one column, `FR-200
+= R-1` … `FR-212 = R-13`, with FR-205 marked retired alongside R-6), or withdraw the promotion and
+trace §6's row to `TestComparisonTruthTable` and the rule IDs directly. The first is better and costs
+one table column.
+
+**M-33 — §8 states the rule count wrongly while correcting a count.**
+`:1780`: *"**The rule count is therefore twelve declared rules of which one is retired**, not
+thirteen."* Thirteen rules are declared (R-1..R-13); one is retired; **twelve are live**. As written
+it implies eleven live. **Fix:** *"thirteen declared rules of which one is retired — twelve live."*
+
+**M-34 — twenty-six tests named in §6 do not appear in §7's test plan.**
+§6 names 86 distinct test identifiers; §7 schedules 67. Twenty-six of §6's are absent from §7,
+including several the revision itself added to close pass-1 findings:
+`TestScope_TruncatedResolutionReportsIncomplete` (FR-062a — the P0 scope guarantee revision 5
+describes as having had *"no test, no AC and no SC"*), `TestValue_NonConformingIsFlaggedNotAbsent`
+(*"FR-021a is the whole of the R-4 defeat and had no test at all"*),
+`TestTools_ConfigureWritesOnlyVaultControlPlane` (FR-070e's mechanical rule — the rule adopted
+*because* the semantic criteria mis-decided three operations),
+`TestStorage_LinkedSQLiteVersionIsAsserted` (FR-020i),
+`TestObservability_CountersAndDegradedRebuildHeader` (FR-049b),
+`TestRender_TextIsAProjectionOfTheWireObject` (AC-P3, the rewritten one),
+`TestReadPath_RateLimited` (FR-067a), `TestIndex_PropsRoundTripsExactDecimal`,
+`TestQuery_AllValidCorpusReportsComplete`, `TestFind_ThirdHopRefused`,
+`TestSchema_UndeclaredTypeIsAnOrdinaryNote`. §7 is the ordered implementation list (*"Order is unit →
+integration → e2e; within a level, dependencies first"*), so a test in §6 and not §7 has a
+requirement and no schedule. **Fix:** add the twenty-six to §7, or state explicitly that §6 is the
+authority and §7 is a subset — but then §7 is not a test plan.
+
+**M-35 — §6 and §7 name different tests for the same requirement, with opposite semantics.**
+§6's FR-079/FR-128 row names **`TestTools_DescriptionTokenBudget`**. §7 test 38 is
+**`TestTools_DescriptionBudgetIsReviewedNotEnforced`**, and its entire point is that the ~150-token
+budget *"becomes a review checklist item at W5"* because FR-127b says it is *"never enforced at
+runtime"* and *"a test MUST NOT conflate"* the two units. A test implemented to §6's name enforces
+the budget at runtime — the exact defect test 38 was rewritten to remove. **Fix:** §6 takes test 38's
+name.
+
+**M-36 — `FR-039a` is referenced and never defined.**
+FR-020c (`:767`): *"`ManifestEntry.Hash` is deliberately empty for attachments … because **FR-039a**
+forbids opening one and hashing is opening"*. There is no FR-039a. FR-039 is the duplicate-identifier
+rule. **Fix:** cite the real source of the don't-open-attachments rule, or define FR-039a.
+
+**M-37 — FR-080b has no traceability row.**
+`FR-080, 080a, 081, 082` are covered; **FR-080b** — workers `deny` on all six, with the
+reads-are-`allow`-is-about-prompting-not-granting reasoning — appears in no §6 row and no §7 test.
+It is a security posture with a stated cost, and it is the only seeded-policy requirement with no
+assertion behind it. **Fix:** add it to the FR-080 row and to test 17.
+
+**M-38 — §8.1a was repurposed and every reference to it now points at the wrong section.**
+§8.1a used to hold the executed receipts; in revision 5 it holds *"Rulings R-B, R-C, R-E"* and the
+receipts moved to **§8.1b**. Ten references were not repointed, and two of them name subsections that
+have never existed in the new §8.1a:
+
+| Reference | Points at | Actually in |
+|---|---|---|
+| `:19` *"a tenth SQLite violation (join fan-out, §8.1a)"* | rulings | §8.1b |
+| `:53` *"the receipt is restated at its true value in §8.1a"* | rulings | §8.1b |
+| `:536` *"saturates silently at int64 max … verified, §8.1a"* | rulings | §8.1b |
+| `:565` *"fourteen non-ASCII pairs in §8.1a"* | rulings | §8.1 |
+| **`:657` FR-012** *"see **§8.1a, R-11a**"* | **no `R-11a` exists anywhere in the document** | §8.1b |
+| **`:792` FR-021c** *"both verified, **§8.1a §E**"* | **§8.1a has no lettered subsections** | §8.1b |
+| **`:1785` R-11** *"enumerated with their defeats in §8.1's R-11 row and **§8.1a §D**"* | **same** | §8.1b |
+| `:1781` R-7 *"SQLite violates it four ways (§8.1a)"* | rulings | §8.1b |
+| `:1796` AC-8.1 *"the fan-out case of §8.1a"* | rulings | §8.1b |
+
+R-11's reference also still says *"enumerated with their **defeats**"* — the defeats are withdrawn.
+**Fix:** repoint all ten to §8.1b (or §8.1 for the Unicode receipt), delete `R-11a`, delete the
+`§D`/`§E` subsection references, and delete "defeats" from R-11's sentence.
+
+**M-39 — §4.2's `TOTALS` is still page-scoped, which is the defect FR-125a was written to remove.**
+The header reads *"3 of 17 selected records could not be evaluated; **12 of 14 shown**"* — 14
+evaluated. The total reads **`sum(arr) = 673,000.00 over 12 of 12 rows`**. FR-125a: *"An aggregate
+MUST be computed over the **full evaluated set**, never over the rendered page, and the scope line
+MUST say which set it covers … the scope line names the **evaluated** count and the header names the
+rendered one, **and a test asserts they are computed from different numbers**." The example's two
+numbers are the same number, and §7 test 25 *"diffs against §4.2's literal example"*. The annotation
+table (`:1427`) even describes the original defect in the correct terms and then leaves it in place.
+**Fix:** `sum(arr) = <total> over 14 of 14 evaluated rows (12 shown)`.
+
+**M-40 — §4.2's total is arithmetically impossible.**
+The seven displayed rows are 180,000 + 120,000 + 95,000 + 88,000 + 70,000 + 62,000 + 58,000 =
+**673,000**, and the example then says *"… 5 more rows"* under a filter of `arr >= 50000`. The five
+hidden rows must contribute **at least 250,000**, so a 12-row total cannot be 673,000. §4.2 is
+labelled *"a literal worked example, normative"* with *"A test diffs against this shape"*, and it is
+the artifact the whole of §4.2's annotation table certifies line by line. **Fix:** recompute against
+the fixture the test will actually use, and — since M-39 requires the total to cover 14 evaluated
+rows, two of which are not shown — publish the fixture's per-row values so the number is checkable.
+
+**M-41 — §4.1.6's normative refusal table has no acceptance criterion or test asserting its strings.**
+It says *"These strings are contract, not illustration; a test asserts them"*. §7 test 37 asserts
+tier placement and AC-C1's conversion count; no test in §7 asserts §4.1.6's ten refusal strings.
+§4.1.2's equivalent table is covered by AC-F1 (*"every refusal above names the remedy in the same
+string"*). **Fix:** give §4.1.6 an AC-F1 sibling (AC-C9) and add it to test 37.
+
+**M-42 — FR-070e's mechanical rule has a second, unstated exception: `trash`.**
+FR-070e (`:712-725`): *"**Writing into `.omnipus-vault/` is `vault_configure`**; writing a note is
+not … **It has exactly one exception**, and it is the one already stated: `.seq` (FR-036a)."*
+§4.1.5 (`:1251`): *"`vault_configure` writes **only** `.omnipus-vault/`."* But FR-048 puts trashed
+notes at **`<vault>/.omnipus-vault/trash/<timestamp>/<path>`**, and `trash` is a `vault_restructure`
+operation; FR-048a's `restore` reads out of the same directory and writes back into the vault. So
+`vault_restructure` writes into `.omnipus-vault/` on every trash, and the rule adopted *because the
+semantic criteria mis-decided three operations* mis-states its own exception count on the fourth.
+The rule is still the right rule — trash genuinely belongs where it is — but *"exactly one
+exception"* is false and `TestTools_ConfigureWritesOnlyVaultControlPlane` will meet it.
+**Fix:** state the exception properly: the rule governs the **control plane**
+(`.omnipus-vault/records/`, `.omnipus-vault/views/`), with `.seq` (written by `vault_edit`) and
+`.omnipus-vault/trash/` (written by `vault_restructure`) as the two named non-control-plane paths
+inside the directory. Then the mechanical test is expressible.
