@@ -267,7 +267,20 @@ A one-shot importer translates what it recognises and names what it does not.
 - **FR-013** Money arithmetic MUST be exact decimal.
 - **FR-014** The system MUST refuse to sum money across currencies and MUST list the currencies present.
 
-- **FR-015** A change to a schema file MUST invalidate affected records and trigger revalidation. Schemas live under a directory the scanner does not walk, so no manifest entry or mtime exists for them; the system MUST track them explicitly rather than inheriting note-scanning behaviour.
+- **FR-015** A change to a schema file MUST invalidate affected records and trigger revalidation. Schemas live under a directory the scanner does not walk, so no manifest entry or mtime exists for them; the system MUST track them explicitly rather than inheriting note-scanning behaviour. *(Unchanged in meaning. **Now cited by ADR-068 D23.3** as the reason an existing-record-type change sits in `vault_restructure`: it retroactively reinterprets every record of that type.)*
+
+### Schema and view authoring (ADR-068 D23)
+
+Schema and view authoring is **ordinary agent work, governed by ordinary tool policy**. An agent
+with write-enabled tools manages the vault completely, and that explicitly includes creating and
+changing record types and saved views. There is no bespoke approval flow, no
+`request_schema_change`, and no UI-ratifies step.
+
+- **FR-016** Creating a **new** record type MUST be an operation of `vault_edit`. A new schema file changes no existing note's meaning, so it cannot cascade.
+- **FR-017** Changing or deleting an **existing** record type MUST be an operation of `vault_restructure`, because FR-015 makes it reinterpret every existing record of that type — notes the agent never named change status.
+- **FR-018** Creating or editing a **saved view** MUST be an operation of `vault_edit`. A view is a query definition in its own file and changes no note.
+- **FR-019** The system MUST NOT add any agent-callable mount operation. Mounting a folder stays `request_mount` (`pkg/coreagent/core.go:367`), seeded `ask` everywhere (ADR-063 FR-7.2). A second mount path would route around a control ADR-063 deliberately placed.
+- **FR-019a** No policy default may be presented as a prohibition. `vault_restructure` is seeded `ask` across the roster, and an operator MAY set it to `allow` — including for schema changes. A conservative default is not a ban.
 
 ### Index and query
 
@@ -322,6 +335,19 @@ no new runtime dependency, no CGo, and Hard Constraints #1 and #2 hold.
 - **FR-045** Relations MUST be modified through distinct add, remove and replace operations; replace MUST be named explicitly.
 - **FR-046** Derived values MUST NOT be written into frontmatter.
 
+**Two primitives in the tool tables do not exist and are not relabellings** (ADR-068 D14.1).
+Every shipped `NoteEdit` constructor is additive — `SetProperty` (`pkg/knowledge/author.go:766`),
+`AppendSection` (`author.go:799`), `AppendSectionAt` (`author.go:813`), `AddWikilink`
+(`pkg/knowledge/authoring_tools.go:1103`), `AppendSectionOnce` (`authoring_tools.go:1129`) —
+and there is **no body-replace and no delete primitive anywhere in the package**. The `NoteEdit`
+type is `func(src []byte) ([]byte, error)` (`author.go:540`), general enough to express anything;
+`EditNote` (`author.go:620`) is a **harness that applies additive edits in order**, not an
+editor. Its name invites exactly the misreading these two FRs exist to prevent.
+
+- **FR-047** **Body-replace** MUST address its target by **anchor text or line range**, and its ambiguity rule is part of this specification rather than the implementer's choice: **an anchor matching more than once is REFUSED, naming every match with its line number, and the file is left unmodified.** A line range outside the file is likewise refused. Body-replace is an operation of `vault_edit` (one named file).
+- **FR-048** **Trash** MUST have a soft-delete convention, and it MUST answer three questions the current code answers for nothing: **where a trashed note goes** — `<vault>/.omnipus-vault/trash/<RFC3339 timestamp>/<original relative path>`, preserving the path so a restore is unambiguous; **what happens to inbound links** — they are **not** repaired, because there is nothing to repair them to, and the response MUST name the count and list the linking notes (FR-124's borrowed-value rule does not apply; these are real inbound links); and **when the index forgets it** — immediately on trash, in both indexes, in the same generation bump. Trash is an operation of `vault_restructure`. *(Sequencing note: ADR-068 D20 lists trash in **both** W4 and W5. Read as: the primitive and its convention are built in W4; the `vault_restructure` operation exposing it ships in W5 with the rest of that tier. Flagged in §10 as A-9.)*
+- **FR-049** Rename and move MUST report their cascade in counts (§4.1.5). ADR-067 D10 already rewrites inbound wikilinks on rename; what is new is that the count is **reported**, so an operator reading an audit entry can see how far a rename reached.
+
 ### Interaction history
 
 - **FR-050** A mention of a record in a dated note MUST be treated as an interaction.
@@ -355,7 +381,10 @@ no new runtime dependency, no CGo, and Hard Constraints #1 and #2 hold.
 - **FR-077** Every mutating call MUST emit an audit entry named for its tool — `vault.edit` or `vault.restructure` — carrying the operation, agent, workspace, path and outcome. The operation appears in the audit record because it is known **after** the call; it MUST NOT be presented anywhere as a policy lever, because FR-070c establishes it is not one.
 - **FR-078** The **catalog size** MUST fall: after W5 the static builtin catalog contains five `vault_*` names and zero `knowledge_*` names, taking `allStaticToolNames` from **102** entries to **98**.
 - **FR-079** Each of the five tool **descriptions** MUST fit a budget of ~150 tokens. Operation detail belongs in **parameter descriptions and error messages**, which are paid only when used; a tool description is paid on every turn by every agent that holds the tool, whether or not it is called.
-- **FR-080** Every record tool MUST have an explicit, literal, wildcard-free policy entry for **every** seeded agent.
+- **FR-080** Every one of the five `vault_*` tools MUST have an explicit, literal, wildcard-free policy entry for **every** seeded agent — all ten `coreagent.SeedConfig` creates (`mia`, `jim`, `ava`, `ray`, `worker`, `planner`, `explorer`, `researcher`, `judge`, `plansupervisor`), not only the four base agents. `worker`'s map is sparse, and in a sparse map **absence grants**.
+- **FR-080a** The seeded posture MUST be: `vault_describe` / `vault_find` / `vault_read` **allow** for Mia, Jim, Ava and Ray and **deny** for workers and the rest; `vault_edit` **ask** for Mia and Ray, **allow** for Jim and Ava, **deny** elsewhere; `vault_restructure` **ask** for all four base agents and **deny** elsewhere. Reads are `allow` roster-wide because a prompt in front of a read that `read_file` already permits protects nothing and trains the operator to click through the prompts that do.
+- **FR-083** `vault_edit` and `vault_restructure` MUST be **independently settable**. A test MUST prove an operator can permit editing while forbidding restructuring. **This fixes a live defect:** today `knowledge_rename` and `knowledge_move` sit in the same `ask` bucket as `knowledge_append_section` (`pkg/coreagent/core.go:800-808`, `pkg/config/defaults.go:637-646`), despite the first two rewriting inbound wikilinks across the whole vault and the third appending to one file. An operator granting "vault writes" today grants vault-wide restructuring in the same gesture, with nothing in the tool surface signalling the difference.
+- **FR-084** Every retired `knowledge_*` name MUST be removed from the catalog (`pkg/coreagent/core.go:475-482`), from the global ceiling (`pkg/config/defaults.go:637-646`) and from every per-agent seed in the same change. A name left behind in a seed map is a policy entry for a tool that no longer exists, which is a coverage gap wearing a valid-looking entry.
 - **FR-081** A test MUST assert **zero repaired pairs** on a fresh install — not zero gaps after repair.
 - **FR-082** The global tool-policy ceiling for every record tool MUST be stated explicitly in the seed. Repair backfills a *missing agent entry* to `deny`; what can silently grant is the **global ceiling**, which the seed sets per tool. Revision 1's rationale ("absence grants in a sparse map") named the wrong mechanism.
 - **FR-090** Every wire type MUST be defined in `contracts/` before Go or TS code exists.
@@ -392,9 +421,10 @@ badly is a worse retrieval system.
 
 ### Import
 
-- **FR-100** `record_view_import` MUST translate the filters, order and grouping it recognises from a `.base` file into a native view.
+- **FR-100** **MEANING CHANGED, revision 3 (ADR-068 D15.4).** The saved-view importer MUST be an **operator/CLI one-shot**, NOT an agent tool. It MUST translate the filters, order and grouping it recognises from a `.base` file into a native view. *Previously an agent tool named `record_view_import`. Cited by §6, §7 test 20 and SC-010; all restated. The resolution of ADR-068 O-1 is unchanged — only the delivery surface moves, because FR-101's verbatim report exists to be read and judged by a human, which is a UI act with a person in it by definition.*
 - **FR-101** An expression it cannot translate MUST be reported verbatim, and MUST NOT be approximated or silently dropped.
 - **FR-102** The importer MUST be one-shot; `.base` files MUST NOT be read on the query path.
+- **FR-103** The importer MUST NOT appear in `allStaticToolNames` and MUST NOT hold a tool-policy entry. A permanent slot in the static catalog is paid by every agent on every turn; a one-shot translation run by a human is not worth that price.
 
 ---
 
