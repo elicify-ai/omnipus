@@ -2613,7 +2613,7 @@ func registerSharedTools(
 							return false, name + " — agent not found"
 						}
 						allAgentTools := callerAgent.Tools.GetAll()
-						policyFiltered, _ := tools.FilterToolsByPolicy(
+						policyFiltered, policyVerdicts := tools.FilterToolsByPolicy(
 							allAgentTools,
 							callerAgent.AgentType,
 							callerAgent.LoadToolPolicy(),
@@ -2638,6 +2638,16 @@ func registerSharedTools(
 						}
 						for _, t := range policyFiltered {
 							if t.Name() == name {
+								// ADR-071 §3.2's ambiguity band needs to know when a
+								// loadable tool's resolved policy is "ask" (requires
+								// user confirmation) so it can exclude such tools from
+								// the speculative cross-category promotion clause.
+								// FilterToolsByPolicy already resolved this per-tool
+								// verdict; surface it via the typed sentinel reason
+								// rather than a second lookup.
+								if policyVerdicts[name] == "ask" {
+									return true, tools.CanLoadAskPolicyPrefix
+								}
 								return true, ""
 							}
 						}
@@ -2650,12 +2660,15 @@ func registerSharedTools(
 						// but load rejects it as "unknown" — the chicken-and-egg the MCP UAT
 						// caught: search uses the hidden corpus, canLoad used only GetAll.)
 						if hiddenTool, hok := callerAgent.Tools.GetIncludingHidden(name); hok {
-							hiddenAllowed, _ := tools.FilterToolsByPolicy(
+							hiddenAllowed, hiddenVerdicts := tools.FilterToolsByPolicy(
 								[]tools.Tool{hiddenTool},
 								callerAgent.AgentType,
 								callerAgent.LoadToolPolicy(),
 							)
 							if len(hiddenAllowed) > 0 {
+								if hiddenVerdicts[name] == "ask" {
+									return true, tools.CanLoadAskPolicyPrefix
+								}
 								return true, ""
 							}
 							// Tool exists (visible or hidden) but policy denies it.

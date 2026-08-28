@@ -39,7 +39,8 @@ func setupWideCorpusRegistry() *ToolRegistry {
 // Before the fix, only hidden tools (RegisterHidden) were in the BM25 corpus.
 func TestBM25_QueryFindsVisibleLazyBuiltin(t *testing.T) {
 	reg := setupWideCorpusRegistry()
-	tt := NewToolsTool(reg, 5, 10) // no resolver needed for search-only test
+	tt := NewToolsTool(reg, 5, 10)
+	tt.SetResolver(permissiveCanLoad, stubMarkLoaded) // §3.2.2: a resolver is required to see any match
 
 	res := tt.Execute(context.Background(), map[string]any{
 		"query": "create agent",
@@ -61,6 +62,7 @@ func TestBM25_QueryFindsVisibleLazyBuiltin(t *testing.T) {
 func TestBM25_QueryFindsHiddenToolStillWorks(t *testing.T) {
 	reg := setupWideCorpusRegistry()
 	tt := NewToolsTool(reg, 5, 10)
+	tt.SetResolver(permissiveCanLoad, stubMarkLoaded) // §3.2.2: a resolver is required to see any match
 
 	res := tt.Execute(context.Background(), map[string]any{
 		"query": "hidden notification",
@@ -79,6 +81,7 @@ func TestBM25_QueryFindsHiddenToolStillWorks(t *testing.T) {
 func TestBM25_QueryFindsUpdateTask(t *testing.T) {
 	reg := setupWideCorpusRegistry()
 	tt := NewToolsTool(reg, 5, 10)
+	tt.SetResolver(permissiveCanLoad, stubMarkLoaded) // §3.2.2: a resolver is required to see any match
 
 	res := tt.Execute(context.Background(), map[string]any{
 		"query": "update task",
@@ -220,6 +223,7 @@ func TestBM25_CacheInvalidationOnVisibleRegistration(t *testing.T) {
 	reg.Register(&mockSearchableTool{name: "tool_alpha_v", desc: "alpha functionality visible"})
 
 	tt := NewToolsTool(reg, 5, 10)
+	tt.SetResolver(permissiveCanLoad, stubMarkLoaded) // §3.2.2: a resolver is required to see any match
 	ctx := context.Background()
 
 	// First search should find tool_alpha_v.

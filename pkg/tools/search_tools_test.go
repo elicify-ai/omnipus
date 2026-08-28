@@ -59,6 +59,24 @@ func newSearchTool(reg *ToolRegistry, ttl, maxN int) *ToolsTool {
 	return NewToolsTool(reg, ttl, maxN)
 }
 
+// permissiveCanLoad allows every tool name. ADR-071 §3.2.2 (CRIT-201) made a
+// resolver-less ToolsTool disclose nothing at all, so tests that only care
+// about BM25 ranking/discovery behavior — not policy filtering — wire this
+// (the most permissive possible resolver) to keep their original,
+// content-based assertions meaningful.
+func permissiveCanLoad(_ context.Context, _ string) (bool, string) { return true, "" }
+
+// stubMarkLoaded returns a placeholder schema for every requested name,
+// pairing with permissiveCanLoad in tests that don't care about schema
+// content, only about which names got promoted.
+func stubMarkLoaded(_ context.Context, names []string) (map[string]any, []string) {
+	sc := make(map[string]any, len(names))
+	for _, n := range names {
+		sc[n] = map[string]any{"name": n}
+	}
+	return sc, nil
+}
+
 // execQueryNoResolver calls tools{query:q} on a ToolsTool with no resolver set.
 // The search runs but no auto-load can happen (returns match list without loaded/schemas).
 func execQueryNoResolver(tt *ToolsTool, ctx context.Context, query string) *ToolResult {
@@ -98,6 +116,7 @@ func TestToolsTool_Query_NoMatch_SilentResult(t *testing.T) {
 func TestToolsTool_Query_BM25_MatchesHiddenTool(t *testing.T) {
 	reg := setupPopulatedRegistry()
 	tt := newSearchTool(reg, 3, 10)
+	tt.SetResolver(permissiveCanLoad, stubMarkLoaded) // §3.2.2: a resolver is required to see any match
 	ctx := context.Background()
 
 	res := execQueryNoResolver(tt, ctx, "read files")
@@ -202,6 +221,10 @@ func TestToolsTool_Query_DeniedTopHitFallsThrough(t *testing.T) {
 	}
 }
 
+// TestToolsTool_Query_DoesNotPromote_WithoutResolver pins ADR-071 §3.2.2
+// point 5 (CRIT-201): a resolver-less ToolsTool must fail closed and
+// disclose NOTHING at all — not merely skip promotion while still naming
+// the match, which was the pre-D2 behavior this test used to assert.
 func TestToolsTool_Query_DoesNotPromote_WithoutResolver(t *testing.T) {
 	reg := NewToolRegistry()
 	reg.RegisterHidden(&mockSearchableTool{name: "mcp_findme", desc: "find me with search"})
@@ -214,8 +237,9 @@ func TestToolsTool_Query_DoesNotPromote_WithoutResolver(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("tools(query) failed: %s", res.ForLLM)
 	}
-	if !strings.Contains(res.ForLLM, "mcp_findme") {
-		t.Errorf("tools(query) must return the matching tool name; got: %s", res.ForLLM)
+	const want = "No tools found matching the query."
+	if res.ForLLM != want {
+		t.Errorf("tools(query) without resolver must disclose nothing; got: %q, want: %q", res.ForLLM, want)
 	}
 
 	// Tool must NOT be promoted (no resolver → no PromoteTools called).
@@ -320,6 +344,7 @@ func TestBM25CacheInvalidation(t *testing.T) {
 	reg.RegisterHidden(&mockSearchableTool{name: "tool_alpha", desc: "alpha functionality"})
 
 	tt := newSearchTool(reg, 5, 10)
+	tt.SetResolver(permissiveCanLoad, stubMarkLoaded) // §3.2.2: a resolver is required to see any match
 	ctx := context.Background()
 
 	// First search should find tool_alpha
@@ -367,20 +392,40 @@ func TestPromoteTools_ConcurrentWithTickTTL(t *testing.T) {
 	<-done
 }
 
-// TestToolsTool_Query_ResponseContainsInstructions verifies that a query result
-// with no resolver set tells the model how to load the tool by name.
+// TestToolsTool_Query_ResponseContainsInstructions verifies that when a
+// query's policy-loadable candidates fail to resolve at markLoaded time
+// (e.g. a schema lookup failure), the response falls back to listing the
+// filtered matches and tells the model how to load one by name. ADR-071
+// §3.2.2 moved the "nothing got auto-loaded" disclosure onto the
+// policy-filtered match list; this exercises that branch with a resolver
+// present. (A resolver-less call now discloses nothing at all — see
+// TestToolsTool_Query_DoesNotPromote_WithoutResolver.)
 func TestToolsTool_Query_ResponseContainsInstructions(t *testing.T) {
 	reg := NewToolRegistry()
 	reg.RegisterHidden(&mockSearchableTool{name: "mcp_foo", desc: "foo tool"})
 	tt := newSearchTool(reg, 5, 10)
+	tt.SetResolver(
+		permissiveCanLoad,
+		func(_ context.Context, names []string) (map[string]any, []string) {
+			// Simulate every promoted candidate failing to resolve.
+			rejected := make([]string, len(names))
+			for i, n := range names {
+				rejected[i] = n + " — schema lookup failed in test"
+			}
+			return map[string]any{}, rejected
+		},
+	)
 	ctx := context.Background()
 
-	res := execQueryNoResolver(tt, ctx, "foo")
+	res := tt.Execute(ctx, map[string]any{"query": "foo"})
 	if res.IsError {
 		t.Fatalf("unexpected error: %s", res.ForLLM)
 	}
 	if strings.Contains(res.ForLLM, "UNLOCKED") {
 		t.Error("search response must not say 'UNLOCKED' (old auto-promote behavior removed)")
+	}
+	if !strings.Contains(res.ForLLM, "mcp_foo") {
+		t.Errorf("query response must still name the policy-loadable match; got: %s", res.ForLLM)
 	}
 	// Must tell model to use 'names' to load.
 	if !strings.Contains(res.ForLLM, "names") {

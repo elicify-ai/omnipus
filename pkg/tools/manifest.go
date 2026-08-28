@@ -151,6 +151,67 @@ var previewedLazyToolNames = map[string]struct{}{
 	"update_task":   {},
 }
 
+// administrativeToolNames is the exact, drift-tested "destructive-and-
+// install-wide" set (ADR-071 §3.2.1): Tier 3 tools whose invocation destroys
+// or overwrites state that no other tool in the catalog can reconstruct, or
+// alters install-wide configuration.
+//
+// This set exists ONLY to narrow D2's speculative cross-category ambiguity
+// clause (searchCrossCategoryRatio, search_ambiguity.go) — it is not a
+// policy mechanism and never denies anything on its own. A name here whose
+// policy is "allow" is still fully loadable by exact name, and still
+// promotable by a query that lands it in the confident (score-band)
+// clause — the narrowing applies to the speculative band alone.
+//
+// Deliberately adjacent to previewedLazyToolNames so a reader adjudicating a
+// new tool sees both drift-tested sets together. Membership is pinned by
+// TestAdministrativeToolNames_Drift — do not hand-edit this map without
+// updating that test's literal list too.
+var administrativeToolNames = map[string]struct{}{
+	"delete_agent":             {},
+	"delete_task":              {},
+	"delete_task_in_workspace": {},
+	"delete_workspace":         {},
+	"remove_mcp_server":        {},
+	"remove_skill":             {},
+	"disable_channel":          {},
+	"enable_channel":           {},
+	"add_mcp_server":           {},
+	"configure_channel":        {},
+	"configure_provider":       {},
+	"set_config":               {},
+	"stop_plan":                {},
+}
+
+// administrativeExemptNames carries a one-line reason for every static tool
+// name that matches TestAdministrativeToolNames_Drift's coverage-tripwire
+// pattern (a delete_*/remove_*/disable_*/purge_*/wipe_*/revoke_*/drop_*/
+// reset_*/destroy_* name, or the literal "set_config") but is deliberately
+// NOT in administrativeToolNames — so a future tool matching the pattern
+// fails the build until a human records why it's exempt, rather than
+// silently passing it through. Empty today: every current catalog name
+// matching the pattern is already in administrativeToolNames.
+var administrativeExemptNames = map[string]string{}
+
+// isAdministrativeToolName reports whether name is in the drift-tested
+// destructive-and-install-wide set (ADR-071 §3.2.1).
+func isAdministrativeToolName(name string) bool {
+	_, ok := administrativeToolNames[name]
+	return ok
+}
+
+// AdministrativeToolNames returns a sorted copy of the administrative
+// (destructive-and-install-wide) tool name set. Exported for tests and
+// tooling that needs to enumerate it.
+func AdministrativeToolNames() []string {
+	names := make([]string, 0, len(administrativeToolNames))
+	for n := range administrativeToolNames {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
+}
+
 // previewAllLazy backs the PreviewAllLazy config revert (ADR-071 §4.3.1b,
 // FR-042): a time-boxed kill switch that restores the pre-D3 behavior where
 // every findable lazy tool renders a preview line. Set via SetPreviewAllLazy,

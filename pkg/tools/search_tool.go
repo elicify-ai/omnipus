@@ -22,9 +22,18 @@ type searchDoc struct {
 // from. Instances are immutable once published via atomic pointer, so they can
 // be read lock-free. A nil engine means "no hidden tools at this version"
 // (cached so an empty registry isn't re-snapshotted every call).
+//
+// docCount (ADR-071 §3.2.2) is the corpus size at build time — the number of
+// documents backing engine. execSearchAndLoad passes it as Search's topK so
+// ranking runs over the WHOLE corpus rather than just the first
+// maxSearchResults, which the policy filter needs to build a truthful
+// policy-loadable list. This costs nothing extra: BM25Engine's own doc
+// comment states all indexing work happens inside Search() on every call
+// regardless of topK — topK only sizes the final min-heap extraction.
 type bm25CachedEngine struct {
-	engine  *utils.BM25Engine[searchDoc]
-	version uint64
+	engine   *utils.BM25Engine[searchDoc]
+	version  uint64
+	docCount int
 }
 
 // snapshotToSearchDocs converts a HiddenToolSnapshot to BM25 searchDoc slice.

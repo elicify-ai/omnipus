@@ -426,14 +426,15 @@ func TestToolsTool_Load_PromotesHiddenTool(t *testing.T) {
 }
 
 // TestToolsTool_Query_DoesNotPromoteWithoutResolver proves that tools{query:...}
-// without a resolver is read-only: it finds tools by keyword but does NOT
-// call PromoteTools.
+// without a resolver fails closed and discloses nothing (ADR-071 §3.2.2
+// point 5, CRIT-201) — not merely "read-only" while still naming the match,
+// which was the pre-D2 behavior this test used to assert.
 func TestToolsTool_Query_DoesNotPromoteWithoutResolver(t *testing.T) {
 	reg := NewToolRegistry()
 	reg.RegisterHidden(&mockSearchableTool{name: "mcp_findme2", desc: "find me with query"})
 
 	tt := NewToolsTool(reg, 5, 10)
-	// No resolver needed for search without auto-load.
+	// No resolver — the fail-closed path under test.
 
 	r := tt.Execute(context.Background(), map[string]any{
 		"query": "find me",
@@ -441,8 +442,9 @@ func TestToolsTool_Query_DoesNotPromoteWithoutResolver(t *testing.T) {
 	if r.IsError {
 		t.Fatalf("tools(query) failed: %s", r.ForLLM)
 	}
-	if !strings.Contains(r.ForLLM, "mcp_findme2") {
-		t.Errorf("tools(query) must return the matching tool name; got: %s", r.ForLLM)
+	const want = "No tools found matching the query."
+	if r.ForLLM != want {
+		t.Errorf("tools(query) without resolver must disclose nothing; got: %q, want: %q", r.ForLLM, want)
 	}
 
 	// Tool must NOT be promoted (TTL must still be 0 after search).
