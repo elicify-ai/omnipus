@@ -42,14 +42,17 @@
  * both appear in the calendar toolbar's Agent filter dropdown.
  */
 
-import { expect, request as apiRequest } from '@playwright/test';
+import { expect } from '@playwright/test';
 import { test } from './fixtures/console-errors';
+import { newAdminApiContext } from './fixtures/admin-api';
+
+// REST setup/teardown authenticates with the SHARED admin session
+// (fixtures/admin-api.ts). Do NOT add a POST /api/v1/auth/login here to get a
+// bearer token: login re-mints the single-slot session_token_hash and silently
+// invalidates the storageState cookie for every spec that runs later.
+// scripts/check-e2e-login-crosstalk.sh enforces this.
 
 // ── Workspace lifecycle helpers ────────────────────────────────────────────────
-
-const OMNIPUS_URL = process.env.OMNIPUS_URL || 'http://localhost:6060';
-const ADMIN_USERNAME = 'admin';
-const ADMIN_PASSWORD = 'admin123';
 
 /** Local IANA zone — used both as the `tz` for REST-seeded rrule tasks and to
  *  reason about placement; the browser context has no explicit `timezoneId`
@@ -69,33 +72,13 @@ interface ApiTask {
   trigger?: ApiTaskTrigger;
 }
 
-async function getAdminToken(): Promise<string> {
-  const ctx = await apiRequest.newContext({ baseURL: OMNIPUS_URL });
-  try {
-    const res = await ctx.post('/api/v1/auth/login', {
-      data: { username: ADMIN_USERNAME, password: ADMIN_PASSWORD },
-    });
-    if (!res.ok()) {
-      const body = await res.text();
-      throw new Error(`calendar-recurrence.spec.ts: login failed ${res.status()}: ${body}`);
-    }
-    const json = (await res.json()) as { token: string };
-    return json.token;
-  } finally {
-    await ctx.dispose();
-  }
-}
-
 /**
  * Create a throwaway workspace and return its ID. Passing `coreTeam`
  * explicitly bypasses the Ava-only default seed (see file header note) so
  * the agent-filter scenario has two assignable agents.
  */
-async function createTestWorkspace(token: string, coreTeam?: string[]): Promise<string> {
-  const ctx = await apiRequest.newContext({
-    baseURL: OMNIPUS_URL,
-    extraHTTPHeaders: { Authorization: `Bearer ${token}` },
-  });
+async function createTestWorkspace(coreTeam?: string[]): Promise<string> {
+  const ctx = await newAdminApiContext();
   try {
     const name = `E2E Calendar Recurrence Workspace ${Date.now()}`;
     const data: Record<string, unknown> = { name };
@@ -112,11 +95,8 @@ async function createTestWorkspace(token: string, coreTeam?: string[]): Promise<
   }
 }
 
-async function deleteTestWorkspace(token: string, workspaceId: string): Promise<void> {
-  const ctx = await apiRequest.newContext({
-    baseURL: OMNIPUS_URL,
-    extraHTTPHeaders: { Authorization: `Bearer ${token}` },
-  });
+async function deleteTestWorkspace(workspaceId: string): Promise<void> {
+  const ctx = await newAdminApiContext();
   try {
     await ctx.delete(`/api/v1/workspaces/${encodeURIComponent(workspaceId)}`);
   } catch {
@@ -128,11 +108,8 @@ async function deleteTestWorkspace(token: string, workspaceId: string): Promise<
 
 // ── Task REST helpers (LLM-independent seeding + persistence checks) ──────────
 
-async function createTaskApi(token: string, body: Record<string, unknown>): Promise<ApiTask> {
-  const ctx = await apiRequest.newContext({
-    baseURL: OMNIPUS_URL,
-    extraHTTPHeaders: { Authorization: `Bearer ${token}` },
-  });
+async function createTaskApi(body: Record<string, unknown>): Promise<ApiTask> {
+  const ctx = await newAdminApiContext();
   try {
     const res = await ctx.post('/api/v1/tasks', { data: body });
     if (!res.ok()) {
@@ -145,11 +122,8 @@ async function createTaskApi(token: string, body: Record<string, unknown>): Prom
   }
 }
 
-async function fetchTasksApi(token: string, wsId: string): Promise<ApiTask[]> {
-  const ctx = await apiRequest.newContext({
-    baseURL: OMNIPUS_URL,
-    extraHTTPHeaders: { Authorization: `Bearer ${token}` },
-  });
+async function fetchTasksApi(wsId: string): Promise<ApiTask[]> {
+  const ctx = await newAdminApiContext();
   try {
     const res = await ctx.get(`/api/v1/tasks?workspace_id=${encodeURIComponent(wsId)}`);
     if (!res.ok()) {
@@ -162,11 +136,8 @@ async function fetchTasksApi(token: string, wsId: string): Promise<ApiTask[]> {
   }
 }
 
-async function deleteTaskApi(token: string, taskId: string): Promise<void> {
-  const ctx = await apiRequest.newContext({
-    baseURL: OMNIPUS_URL,
-    extraHTTPHeaders: { Authorization: `Bearer ${token}` },
-  });
+async function deleteTaskApi(taskId: string): Promise<void> {
+  const ctx = await newAdminApiContext();
   try {
     await ctx.delete(`/api/v1/tasks/${encodeURIComponent(taskId)}`);
   } catch {
@@ -219,17 +190,15 @@ function formatYMD(d: Date): string {
 
 // ── Test state ────────────────────────────────────────────────────────────────
 
-let adminToken: string;
 let workspaceId: string;
 
 test.beforeAll(async () => {
-  adminToken = await getAdminToken();
-  workspaceId = await createTestWorkspace(adminToken, ['mia', 'jim']);
+  workspaceId = await createTestWorkspace(['mia', 'jim']);
 });
 
 test.afterAll(async () => {
-  if (workspaceId && adminToken) {
-    await deleteTestWorkspace(adminToken, workspaceId);
+  if (workspaceId) {
+    await deleteTestWorkspace(workspaceId);
   }
 });
 
@@ -420,7 +389,7 @@ test(
       // Persistence: read the created task back via REST — a hardcoded/no-op
       // save would either produce no task at all, or one whose trigger isn't
       // a real, distinct RRULE (caught by the assertions below).
-      const tasks = await fetchTasksApi(adminToken, workspaceId);
+      const tasks = await fetchTasksApi(workspaceId);
       const created = tasks.find((t) => t.title === title);
       expect(created, `created task with title "${title}" must be found via GET /api/v1/tasks`).toBeTruthy();
       taskId = created!.id;
@@ -445,7 +414,7 @@ test(
       expect(typeof config.tz).toBe('string');
       expect(config.tz).not.toBe('');
     } finally {
-      if (taskId) await deleteTaskApi(adminToken, taskId);
+      if (taskId) await deleteTaskApi(taskId);
     }
   },
 );
@@ -471,7 +440,7 @@ test(
     // regardless of what date the suite runs on.
     const dtstart = priorMonday(new Date(), 60);
 
-    const task = await createTaskApi(adminToken, {
+    const task = await createTaskApi({
       title,
       action: 'llm',
       workspace_id: workspaceId,
@@ -514,7 +483,7 @@ test(
       const weekChips = page.locator('.fc-event', { hasText: title });
       await expect(weekChips).toHaveCount(1, { timeout: 10_000 });
     } finally {
-      await deleteTaskApi(adminToken, task.id);
+      await deleteTaskApi(task.id);
     }
   },
 );
@@ -536,7 +505,7 @@ test(
     const miaTitle = `E2E Mia Fire ${Date.now()}`;
     const jimTitle = `E2E Jim Fire ${Date.now()}`;
 
-    const miaTask = await createTaskApi(adminToken, {
+    const miaTask = await createTaskApi({
       title: miaTitle,
       action: 'llm',
       workspace_id: workspaceId,
@@ -544,7 +513,7 @@ test(
       agent_id: 'mia',
       trigger: { type: 'once', config: { at_ms: todayAt(9, 0).getTime() } },
     });
-    const jimTask = await createTaskApi(adminToken, {
+    const jimTask = await createTaskApi({
       title: jimTitle,
       action: 'llm',
       workspace_id: workspaceId,
@@ -587,8 +556,8 @@ test(
         `agent filter selection must not issue a task/occurrence request; saw: ${apiCallsAfterLoad.slice(countBeforeFilter).join(', ')}`,
       ).toBe(countBeforeFilter);
     } finally {
-      await deleteTaskApi(adminToken, miaTask.id);
-      await deleteTaskApi(adminToken, jimTask.id);
+      await deleteTaskApi(miaTask.id);
+      await deleteTaskApi(jimTask.id);
     }
   },
 );
@@ -624,14 +593,14 @@ test(
     const recurringTitle = `E2E Board Recurring ${Date.now()}`;
     const dtstart = priorMonday(new Date(), 60);
 
-    const manualTask = await createTaskApi(adminToken, {
+    const manualTask = await createTaskApi({
       title: manualTitle,
       action: 'llm',
       workspace_id: workspaceId,
       surface: 'user',
       trigger: { type: 'manual', config: {} },
     });
-    const onceTask = await createTaskApi(adminToken, {
+    const onceTask = await createTaskApi({
       title: onceTitle,
       action: 'llm',
       workspace_id: workspaceId,
@@ -640,7 +609,7 @@ test(
       agent_id: 'mia',
       trigger: { type: 'once', config: { at_ms: todayAt(11, 0).getTime() } },
     });
-    const recurringTask = await createTaskApi(adminToken, {
+    const recurringTask = await createTaskApi({
       title: recurringTitle,
       action: 'llm',
       workspace_id: workspaceId,
@@ -690,9 +659,9 @@ test(
         timeout: 10_000,
       });
     } finally {
-      await deleteTaskApi(adminToken, manualTask.id);
-      await deleteTaskApi(adminToken, onceTask.id);
-      await deleteTaskApi(adminToken, recurringTask.id);
+      await deleteTaskApi(manualTask.id);
+      await deleteTaskApi(onceTask.id);
+      await deleteTaskApi(recurringTask.id);
     }
   },
 );

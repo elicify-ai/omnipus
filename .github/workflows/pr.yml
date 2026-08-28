@@ -752,6 +752,17 @@ jobs:
         # CLAUDE.md's "Retired surfaces — do NOT reintroduce" rule.
         run: bash scripts/check-no-jpeg-screencast.sh
 
+      - name: Run E2E auth cross-talk guard
+        # POST /api/v1/auth/login re-mints the SINGLE-SLOT session_token_hash,
+        # invalidating the shared storageState cookie for every spec that runs
+        # after the caller. dev_mode_bypass masks that on every route except
+        # GET /api/v1/providers, so the failure surfaces far from its cause.
+        # Self-test first — a guard that cannot fail is no guard
+        # (docs/internal/false-green-patterns.md).
+        run: |
+          bash scripts/check-e2e-login-crosstalk.sh --self-test
+          bash scripts/check-e2e-login-crosstalk.sh
+
       - name: Run removed-providers guard self-check
         # Proves the guard below can still go red (ADR-068 spec SC-001) before
         # its verdict is trusted — see docs/internal/false-green-patterns.md.
