@@ -146,7 +146,23 @@ type IndexProgress struct {
 }
 
 // InFlight reports whether an index build is running.
-func (p IndexProgress) InFlight() bool { return p.Phase != IndexPhaseIdle }
+//
+// The UNSET phase counts as not-in-flight. IndexPhase is a string, so its zero
+// value is "", which is not IndexPhaseIdle — a caller that builds an
+// IndexProgress without a tracker (any host with no progress source wired) would
+// otherwise be told a build is running, forever, and no later event can clear it
+// because nothing is running to finish.
+//
+// This is not a defensive nicety: the gateway's own phase switch already maps an
+// unrecognised phase to idle (knowledge_lifecycle.go, the default branch), so
+// without this line the domain predicate and the wire layer disagree about the
+// meaning of the same zero value. The search path cannot reach that state today
+// — NewSearcher refuses a nil tracker with ErrNoProgressSource and the only
+// tracker constructor stamps IndexPhaseIdle — but Presentation, BannerVisible
+// and every future caller are one unpopulated struct away from it.
+func (p IndexProgress) InFlight() bool {
+	return p.Phase != IndexPhaseIdle && p.Phase != ""
+}
 
 // Ratio returns done, total and whether a ratio may be stated at all.
 //
