@@ -1566,19 +1566,38 @@ Verified, and this one *did* survive checking:
 - **`ScoringModel` is set NOWHERE in `pkg/`.** A repository-wide grep returns zero
   assignments. The default therefore stands everywhere.
 
-Meanwhile the code says otherwise, in at least seven doc comments across three packages:
+Meanwhile the code says otherwise in **thirteen places** across three packages. *(Revision 5
+listed seven. The round-5 review said twelve. **Both are undercounts** — the enumerable set is
+thirteen, and it is enumerated here so the number is checkable rather than asserted. Method:
+every non-test `BM25` occurrence under `pkg/` that attributes the scoring to **bleve**; the
+hand-rolled engines in `pkg/utils/bm25.go` and `pkg/agent/retro_bm25.go`'s own arithmetic really
+are BM25 and are excluded, as is `pkg/tools/memory.go:94`, whose `SearchRetros` is satisfied by
+the hand-rolled retro ranker and is therefore **true**.)*
 
-| Location | Claims |
-|---|---|
-| `pkg/knowledge/index.go:164` | *"Score is the BM25 score of the file's BEST segment."* |
-| `pkg/knowledge/index.go:1062` | *"Search runs a BM25 query…"* |
-| `pkg/memrooms/index/index.go:19` | *"Recall: BM25 ranking via **bleve's default BM25 scorer**"* — the default is TF-IDF |
-| `pkg/memrooms/index/index.go:249-250` | *"executes a BM25 full-text query… ordered by descending BM25 score"* |
-| `pkg/agent/memory.go:620` | *"searches the specified room scope for query using bleve BM25 (FR-7.4)"* |
-| `pkg/agent/retro_bm25.go:14` | retro BM25 parameters *"match bleve's defaults"* |
-| `pkg/agent/retro_bm25.go:24` | the retro ranker exists to match *"the BM25 similarity ranking bleve provides for long-term memories"* |
+| # | Location | Claims |
+|---|---|---|
+| 1 | `pkg/knowledge/index.go:164` | *"Score is the BM25 score of the file's BEST segment."* |
+| 2 | `pkg/knowledge/index.go:1062` | *"Search runs a BM25 query…"* |
+| 3 | `pkg/memrooms/index/index.go:19` | *"Recall: BM25 ranking via **bleve's default BM25 scorer**"* — the default is TF-IDF |
+| 4 | `pkg/memrooms/index/index.go:67` | *"Score is the BM25 relevance score"* — on a struct documented as *"a single recall result from the bleve index"* |
+| 5 | `pkg/memrooms/index/index.go:249` | *"executes a BM25 full-text query against the index"* |
+| 6 | `pkg/memrooms/index/index.go:250` | *"ordered by descending BM25 score"* |
+| 7 | `pkg/memrooms/index/index.go:267` | *"BM25 over the text fields explicitly (title, body, tags)"* |
+| **8** | **`pkg/agent/memory.go:301`** | **a runtime WARN: `"roomIndex: failed to open bleve index; BM25 disabled for room"`** |
+| 9 | `pkg/agent/memory.go:620` | *"searches the specified room scope for query using bleve BM25 (FR-7.4)"* |
+| 10 | `pkg/agent/memory.go:674` | *"BM25 path (FR-7.4)"* |
+| 11 | `pkg/agent/memory.go:746` | *"Sort by BM25 score descending"* — of bleve's scores |
+| 12 | `pkg/agent/retro_bm25.go:14` | retro BM25 parameters *"match bleve's defaults"* |
+| 13 | `pkg/agent/retro_bm25.go:24` | the retro ranker exists to match *"the BM25 similarity ranking bleve provides for long-term memories"* |
 
-The last two are the ones that matter beyond documentation hygiene: `retro_bm25.go` builds a
+**Row 8 is a different kind of defect from the other twelve, and revision 6 flags it as such.**
+It is not a comment. It is `logger.WarnCF` output that **reaches an operator reading logs**, and
+it tells them a fallback happened — *"BM25 disabled"* — implying that BM25 was what they had.
+They never did. Fixing a stale doc comment is hygiene; **fixing operator-facing output is a
+user-visible correction**, and it should be described that way in the changelog rather than
+folded into a documentation sweep.
+
+Rows 12 and 13 are the ones that matter beyond hygiene: `retro_bm25.go` builds a
 **cross-subsystem score-comparability argument on a false premise.** It hand-rolls BM25 with
 `k1=1.2, b=0.75` specifically so retrospective ranking is commensurate with bleve's — and
 bleve is not producing BM25 scores at all.
@@ -1652,11 +1671,26 @@ failed.
 which; the table above is from reading both functions. `bm25Tokenize` is the one that keeps the
 contraction whole, because it trims edges only.)*
 
-This is **harmless today** only because the three never rank the same corpus. **FR-021 already
-requires Go-side evaluation over the candidate set** — so bleve selects candidates with one
-notion of a term and Go ranks them with another. The mismatch **will** become live, and its
-symptom is the worst kind: a document that matched during selection scores as though the query
-term were absent. No error, just a ranking that is quietly wrong.
+This is **harmless today** only because the three never rank the same corpus.
+
+> **RE-DERIVED in revision 6, because the requirement this argument rested on changed in the same
+> revision that made it.** Revision 5 grounded the hazard in FR-021 — *"FR-021 already requires
+> Go-side evaluation over the candidate set"* — while D16.2, three decisions earlier in the same
+> revision, pushed filtering, grouping and aggregation into the properties index. Neither
+> referenced the other. **If the Go-side pass had vanished, so had this argument.**
+
+**It did not vanish, and the hazard survives — but the reason is now a different one and is worth
+stating exactly.** What moved into SQLite is **membership**: which records match. What stays in
+Go is **ranking** — D21.3's four-signal RRF fusion, the rendering, and the problem report. So:
+
+> **bleve selects text candidates with one notion of a term, and Go's rank fusion scores them
+> with another.** A document bleve matched on a stemmed form is scored by a Go tokenizer that
+> never produces that form, so it ranks as though the query term were absent.
+
+The symptom is unchanged and is still the worst kind: **no error, just a ranking that is quietly
+wrong.** What changed is the surface — the hazard is now confined to the ranking pass rather than
+spanning the whole filter path, which makes it *narrower* and no less real. *(The implementing
+spec records the same conclusion at FR-021's meaning-change note and carries it as FR-116.)*
 
 **Required before Go-side ranking ships (W2):** either
 
@@ -1679,9 +1713,19 @@ to be, and defending it that way concedes a point that the evidence does not req
   ~10M corpus tokens and BM25 wins above it, with graph-RAG **construction** costing up to
   ~102B tokens.
 
-**A 5,000-note vault is roughly 0.5–3M corpus tokens.** That sits *permanently* in the regime
-where the agentic loop over good lexical ranking wins — not near a boundary we might cross, but
-an order of magnitude inside it.
+**Restated at the design target, which revision 5 did not use.** Revision 5 argued from *"a
+5,000-note vault is roughly 0.5–3M corpus tokens"* and concluded that this sits *"permanently"*
+in the agentic-loop regime, *"an order of magnitude inside it"*. **ADR-067's stated scale is
+100,000 documents** — the spike builds exactly that corpus for exactly that reason — which is
+~10–60M corpus tokens: **across** the ~10M boundary the cited paper draws, not an order of
+magnitude inside it.
+
+**The conclusion survives the correction; two of its words do not.** Both sides of that boundary
+are lexical — below it the agentic file-system loop wins, above it BM25 wins — so *"no
+embeddings"* holds at every size this product targets, and holds for a better reason than
+revision 5 gave: **we cross the boundary and the answer does not change.** What must go is
+"permanently" and "an order of magnitude inside it". Overstating a correct conclusion is how a
+reader stops trusting the correct ones.
 
 > **The constraint is the winning position, not a compromise.** We are not doing lexical
 > retrieval because we cannot afford embeddings. We would choose lexical retrieval at this scale
