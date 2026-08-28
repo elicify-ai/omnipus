@@ -636,6 +636,38 @@ puts an operation in a cascading tier:
 `vault_restructure` is C-A. `vault_configure` is C-B. `vault_edit` is neither, and its one
 accepted exception is `.seq` (FR-036a).
 
+**FR-070d — NEW, revision 5. Both criteria MUST be applied to every operation IN WRITING, and the
+verdict recorded per operation.** ADR-068 D15.1 says revision 5's defect was *"switching readings
+between two rows of the same table"* and that naming both criteria fixes it. **Revision 4 named both
+criteria and then applied only C-A to `link`, to `create` and to `trash`** — the identical fault, one
+layer up. The table below is that record, and it is normative. **Where an operation stays in a tier
+its C-B answer argues against, the exception is STATED — as `.seq` is a stated exception to C-A —
+never left as an omission.**
+
+| Operation | Tool | C-A (bytes)? | C-B (meaning)? | Verdict |
+|---|---|---|---|---|
+| `set_property`, `append_section`, `replace_body` | `vault_edit` | no | no | tier 4, uncontested |
+| `create` | `vault_edit` | **yes, `.seq`** | **YES — and revision 4 never asked** | **tier 4 by STATED EXCEPTION.** C-A is answered by FR-036a. **C-B is answered YES and the exception is new here:** FR-033 reports a relation whose target does not exist as a validation finding, so creating a note at a path an existing record links to **silences that finding on a note the agent never named** — its validity changes. That is C-B by the identical move that reclassified `create_record_type`. **It stays in tier 4 anyway**, and the ground is *bounded, monotone repair*: the only meaning-change a `create` can produce is turning a dangling relation into a resolved one, which is a **strict improvement in exactly one direction**, affects only notes that already named this path, and is undone by trashing the note. `create_record_type` is the opposite on all three counts — it can invalidate hundreds of notes, reaches notes that named nothing, and its cascade is invisible in the diff. **The exception is bounded by that reasoning and does not generalise**: an operation whose meaning-change can make an existing note *worse* is C-B and belongs in `vault_configure`. |
+| `link` | `vault_edit` | no — writes the source only (FR-030) | **YES — and revision 4 answered only C-A** | **tier 4 by STATED EXCEPTION.** Revision 4's defence (*"it looks like a two-file operation and is a one-file operation"*) answers C-A and nothing else. C-B: FR-032 makes the inverse **derived**, so after the link `vault_find near="Acme"` and "the company's related deals" return a different answer for a note nobody named — that is *how a query renders an existing file*. **It stays in tier 4 on the same bounded-monotone-repair ground as `create`**, plus one that is specific to it: the derived inverse is **a view of the source file**, not a state of the target, so the target's meaning is unchanged and only its *rendering under a derived query* moves. **An operator who wants to withhold this withholds `vault_edit`**, and FR-079 requires `vault_edit`'s description to say that linking changes what queries return about the target. |
+| `rename`, `move` | `vault_restructure` | **YES** — inbound wikilinks in N notes are rewritten | yes, consequentially | tier 5, uncontested. These are the genuine C-A cases. |
+| `trash` | `vault_restructure` | **NO** — it moves **one** file and FR-048 explicitly does **not** repair inbound links, so it writes bytes into no file the caller did not name | **YES** — it breaks N existing notes' relations without writing them | **PLACEMENT CONFIRMED IN TIER 5, and revision 4's reasoning REPLACED.** Revision 4 said *"Recoverability and blast radius are different axes"*, which answers a question nobody asked and never applies either criterion. Under the criteria as written, **`trash` is C-B and FR-070b would send it to `vault_configure`.** It stays in `vault_restructure`, and the ground is stated rather than assumed: **`vault_configure` is the CONTROL PLANE — it writes `.omnipus-vault/` and nothing else** (see FR-070e), and `trash` moves a **note**. Putting a note-destroying operation behind the schema tool would mean an operator who grants type authoring also grants deletion, which is a worse posture than the one being fixed. **So the tier is not "C-A only"** — revision 4's framing of `vault_restructure` as *"the C-A tier"* is withdrawn: it is **the tier for operations that reach beyond one named note**, of which C-A is the common but not the only shape. |
+| every `vault_configure` op | `vault_configure` | no — one file, inside `.omnipus-vault/` | **YES** | tier 6, uncontested |
+
+**FR-070e — NEW, revision 5. A mechanical criterion is adopted ALONGSIDE the two semantic ones,
+because the semantic pair has now mis-decided three operations across two revisions.** *(This is
+the grill's O-1, and it is right.)* **Writing into `.omnipus-vault/` is `vault_configure`; writing a
+note is not.** It is one path-shaped rule, testable in CI over the emitted write path, and it decides
+`link`, `create` and `trash` without argument — the three the semantic criteria mis-decided. It has
+exactly one exception, and it is the one already stated: **`.seq` (FR-036a)**, which lives under
+`.omnipus-vault/records/` and is written by `vault_edit`. **The semantic criteria are not replaced**
+— they remain the reviewer's tool for a *new* operation, where the mechanical rule can only classify
+something already designed — but where the two disagree, **the mechanical rule decides, and the
+disagreement is recorded in the table above.** *(m-9 is noted and accepted in the same breath:
+because `.seq` sits inside the control-plane directory, `vault_edit: allow` + `vault_configure: deny`
+still permits a write into `.omnipus-vault/records/`. It is a monotonic counter with no readable
+content — FR-036a's whole argument — and the alternative is a second exception directory, which is
+worse.)*
+
 - **FR-016** **MEANING CHANGED, revision 4 (ADR-068 D15.6).** Creating a **new** record type MUST be an operation of **`vault_configure`**, and the response MUST name the count of pre-existing notes that have just become validated records as a result. *Previously: an operation of `vault_edit`, on the stated ground that a new schema file changes no existing note's meaning.* **That ground was false under ADR-068 D1**: a note becomes a record by declaring `type:` in frontmatter, and a note whose declared type matches no schema is an ordinary note (FR-005). Writing `.omnipus-vault/records/company.yaml` therefore converts **every pre-existing note already carrying `type: company`** into an indexed, queryable, validated record — and any of them missing a `required: true` property becomes a validation finding nobody asked for. That is **C-B**, and it is invisible in the diff: one new twelve-line YAML file, hundreds of notes changed in meaning.
 - **FR-017** **MEANING CHANGED, revision 4.** Changing or deleting an **existing** record type MUST be an operation of **`vault_configure`**, because FR-015 makes it reinterpret every existing record of that type. *Previously: `vault_restructure`.*
 - **FR-018** **MEANING CHANGED, revision 4.** Creating or editing a **saved view** MUST be an operation of **`vault_configure`**. *Previously: `vault_edit`.* A view writes no note, but it changes what a query returns, which is **C-B in its weakest form** — and a view is part of the same control plane as the schema, so an operator granting one grants the other knowingly.
