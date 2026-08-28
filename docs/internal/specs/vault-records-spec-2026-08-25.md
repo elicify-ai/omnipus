@@ -1,10 +1,19 @@
 # Vault records — specification
 
-- **Implements:** [ADR-068](../architecture/ADR-068-vault-records-typed-record-layer.md) revision 3
+- **Implements:** [ADR-068](../architecture/ADR-068-vault-records-typed-record-layer.md) **revision 5** (committed `36597544`, 2026-08-28)
 - **Builds on:** [ADR-067](../architecture/ADR-067-omnipus-knowledge-base-and-render-first-preview.md) — `pkg/knowledge` is **reused, never duplicated**
-- **Date:** 2026-08-25
+- **Date:** 2026-08-25; **revised 2026-08-28** to ADR-068 revision 5
 - **Branch:** `feat/library-improvements`
-- **Status:** Draft revision 2, after round-2 review (BLOCK: 8 critical, 21 major)
+- **Status:** Draft revision 3. Revision 2 followed round-2 review (BLOCK: 8 critical, 21 major); revision 3 realigns to ADR-068 revision 5 — the **five-tool `vault_*` surface**, the **two-index storage resolution**, and the **retrieval and response-format decisions** (D21, D22, D23).
+
+**What revision 3 changes, in one paragraph.** The agent surface is five tools split by **blast
+radius**, not nine `record_*` tools and not the nine `knowledge_*` tools shipping today (§4.1).
+Storage is resolved: bleve keeps text, a derived SQLite properties index holds typed properties
+and relations, and the two indexes must agree or the answer is not complete (FR-020..FR-020g).
+Retrieval is specified for the first time — BM25 rather than the TF-IDF the code actually uses,
+fielded indexing, RRF fusion, retry-only expansion, one tokenizer (FR-110..FR-117). The response
+the model reads is specified as mechanism rather than presentation, with a literal worked example
+(§4.2). Schema and view authoring become ordinary writes (FR-016..FR-019a).
 
 ---
 
@@ -16,20 +25,53 @@ implementation** of any of these.
 | Surface | Lines | Reused for |
 |---|---|---|
 | `pkg/knowledge/scope.go` | 390 | workspace scoping (`Scope.WorkspaceID`, `.Roots`, `.Contains`, `.Truncated`) — FR-060 |
-| `pkg/knowledge/author.go` | 1,183 | scalar splice only — FR-040. `SetProperty(key, value string)` takes strings and rejects line breaks; **there is no list or nested writer**, so FR-040a adds one |
-| `pkg/knowledge/index.go` | 1,277 | the index gains **one** stored field for record properties — FR-020. Its mapping is closed (`Dynamic=false`) and `indexDoc` is a closed 5-field struct, so per-property fields are impossible |
+| `pkg/knowledge/author.go` | 1,183 | scalar splice only — FR-040. `SetProperty(key, value string)` (`author.go:766`) takes strings and rejects line breaks; **there is no list writer, no body-replace and no delete**, so FR-040a, FR-047 and FR-048 add them |
+| `pkg/knowledge/index.go` | 1,277 | bleve keeps **text** and gains real **fields** — FR-111. `indexDoc` is a closed 5-field struct (`index.go:583-589`) and the mapping is closed (`Dynamic=false`), so per-property *fields* are impossible; per-property **terms** in a `[]string` field are not, and that is how record candidates are selected (ADR-068 D16.1 S-1) |
+| `modernc.org/sqlite v1.46.1` (`go.mod:64`) | — | the **derived properties index** — FR-020. Already a direct dependency, linked into the binary today for WhatsApp and Matrix session storage |
+| `pkg/coreagent/core.go:357-483` | 102 names | the static builtin catalog the five `vault_*` names join and the nine `knowledge_*` names leave — FR-070a, FR-078 |
 | `pkg/knowledge/search.go` | 603 | result caps (`SearchDefaultTopN`=20, `SearchMaxTopN`=100) as the precedent for FR-063 |
 | `pkg/knowledge/tools.go` | 1,135 | tool registration shape and rate limiter |
 | `contracts/components/schemas/Knowledge*.yaml` | 13 files | the contract-first pattern FR-090 follows |
 
-**Three corrections carried from ADR-068 revision 2, restated so this spec cannot
-re-introduce them:**
+**Three corrections restated so this spec cannot re-introduce them. The first is itself
+corrected in revision 3:**
 
-1. There is **no SQLite**. ADR-067 uses bleve scorch and explicitly rejected SQLite (its A2).
-2. Tool names contain **no dots** — `record_query`, not `vault.query`. A §7 invariant test
-   asserts zero dots across builtin tool names.
+1. ~~There is **no SQLite**.~~ **Superseded by ADR-068 D16.2.** ADR-067 rejected SQLite for
+   **search** (its A2), and for search that was right — scorch is better at text. For **records**
+   the gain is aggregation, which scorch cannot do at all, so the premise does not transfer. A
+   derived, disposable SQLite properties index is now part of the design, and it **widens the
+   CLAUDE.md house rule that "SQLite is isolated to WhatsApp session storage only"** — deliberately,
+   recorded in ADR-068 D16.4, not discovered in a diff. What remains true and load-bearing: **notes
+   are the sole source of truth**, and nothing may live in SQLite that cannot be rebuilt from
+   Markdown (FR-020a).
+2. Tool names contain **no dots** — `vault_find`, not `vault.find`. A §7 invariant test asserts
+   zero dots across builtin tool names. *(The audit **event** names `vault.edit` and
+   `vault.restructure` carry a dot deliberately and are not tool names — FR-071.)*
 3. **Boot does not abort** on a tool-policy coverage gap. `repairAndValidateToolPolicyCoverage`
-   repairs to `deny` first and validates after, so a forgotten tool ships silently denied.
+   (`pkg/config/validate.go`) calls `RepairIncompleteToolPolicyCoverage` **first**, backfilling
+   every gap to `deny` with one WARN, and validates after — so a forgotten tool ships silently
+   denied, with the feature dead and a log line as the only signal. Seeding is protected by being
+   written down and tested (FR-080, FR-081), not by a boot abort.
+
+**The nine `knowledge_*` names retire into the five. This mapping is the migration:**
+
+| Retired | Replaced by |
+|---|---|
+| `knowledge_search` | `vault_find` (`words`) |
+| `knowledge_graph` | `vault_find` (`near` + `hops`) |
+| `knowledge_tasks` | `vault_find` (`kind: task`) |
+| `knowledge_create` | `vault_edit` (`create`) |
+| `knowledge_link` | `vault_edit` (`link`) |
+| `knowledge_set_property` | `vault_edit` (`set_property`, now scalar **and list**) |
+| `knowledge_append_section` | `vault_edit` (`append_section`) |
+| `knowledge_move` | `vault_restructure` (`move`) |
+| `knowledge_rename` | `vault_restructure` (`rename`) |
+| — *(no equivalent today)* | `vault_read`, `vault_describe` |
+
+Two of those rows are the point of the exercise. `knowledge_move` and `knowledge_rename` leave the
+tier their siblings stay in, which is what makes FR-083 expressible. And the last row is the gap:
+**there is no tool that reads a note today**, so an agent must leave the audited `knowledge_*`
+boundary and drop to `read_file` to read a note it just found (FR-074).
 
 ---
 
