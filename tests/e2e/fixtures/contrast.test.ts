@@ -124,11 +124,24 @@ describe('focusRingContrast', () => {
 })
 
 describe('popularTiles (the e2e rows’ expectation source)', () => {
-  it('yields the 8 Popular companies of FR-022, in catalog order, without repeats', () => {
+  it('yields the 12 Popular companies, in catalog order, without repeats', () => {
     const tiles = popularTiles()
-    expect(tiles).toHaveLength(8)
-    expect(new Set(tiles.map((t) => t.company)).size).toBe(8)
-    expect(new Set(tiles.map((t) => t.id)).size).toBe(8)
+    // Assert the SET, not just the count. A bare toHaveLength() is what let the
+    // 8 -> 12 tier change (groq demoted, ollama promoted) sit undetected here:
+    // any twelve ids would satisfy a count check, including a stale list that
+    // still featured groq.
+    // NOTE: 'moonshot' here is the FIXTURE's id. The shipped catalog
+    // (pkg/providers/catalog/data/providers_catalog.json) calls the same
+    // vendor 'moonshotai' — upstream renamed it and this hand-maintained
+    // fixture was never updated. Harmless for this assertion, but it means
+    // SPA tests exercise a provider id that does not exist in production.
+    expect(tiles.map((t) => t.id).sort()).toEqual([
+      'alibaba', 'anthropic', 'deepseek', 'google', 'minimax', 'mistral',
+      'moonshot', 'ollama', 'openai', 'openrouter', 'xai', 'zai',
+    ])
+    expect(tiles).toHaveLength(12)
+    expect(new Set(tiles.map((t) => t.company)).size).toBe(12)
+    expect(new Set(tiles.map((t) => t.id)).size).toBe(12)
     // Catalog order: each tile's id appears in the document before the next.
     const order = PROVIDERS_CATALOG.providers.map((p) => p.id)
     const indices = tiles.map((t) => order.indexOf(t.id))
