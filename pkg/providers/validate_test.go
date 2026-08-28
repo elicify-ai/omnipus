@@ -276,6 +276,7 @@ func TestBuildMessage_Catalog(t *testing.T) {
 	t.Parallel()
 	const (
 		providerName = "OpenRouter"
+		remoteBase   = "https://openrouter.ai/api/v1"
 		apiKey       = "sk-or-test-SECRETKEY"
 		rawBody      = `{"error":{"status":"INVALID_ARGUMENT","code":401}}`
 	)
@@ -292,7 +293,7 @@ func TestBuildMessage_Catalog(t *testing.T) {
 	}
 
 	for _, c := range cases {
-		msg := BuildMessage(c.outcome, providerName)
+		msg := BuildMessage(c.outcome, providerName, remoteBase)
 		if !strings.Contains(msg, c.mustContain) {
 			t.Errorf("outcome=%s: message %q does not contain %q", c.outcome, msg, c.mustContain)
 		}
@@ -309,9 +310,62 @@ func TestBuildMessage_Catalog(t *testing.T) {
 	}
 
 	// Valid → empty message.
-	if msg := BuildMessage(OutcomeValid, providerName); msg != "" {
+	if msg := BuildMessage(OutcomeValid, providerName, remoteBase); msg != "" {
 		t.Errorf("valid outcome: expected empty message, got %q", msg)
 	}
+}
+
+// ── TestBuildMessage_Unreachable_LoopbackVsRemote ──────────────────────────────
+// Pins the two "unreachable" messages separately: a loopback base URL (Ollama on
+// localhost with no server running) must NOT tell the user to check their
+// internet connection — it must say the local server isn't running and name it.
+// A remote base URL keeps the original network-connectivity advice.
+func TestBuildMessage_Unreachable_LoopbackVsRemote(t *testing.T) {
+	t.Parallel()
+
+	t.Run("loopback base URL names the local server, not the internet", func(t *testing.T) {
+		t.Parallel()
+		for _, base := range []string{
+			"http://localhost:11434/v1",
+			"http://127.0.0.1:11434/v1",
+			"http://[::1]:11434/v1",
+		} {
+			msg := BuildMessage(OutcomeUnreachable, "Ollama", base)
+			const want = "Couldn't reach Ollama — the local server doesn't seem to be running. Start Ollama, then try again. Continuing for now; the key will be used as entered."
+			if msg != want {
+				t.Errorf("base=%q:\n got  %q\n want %q", base, msg, want)
+			}
+			if strings.Contains(msg, "internet connection") {
+				t.Errorf("base=%q: loopback message must not blame the internet connection, got %q", base, msg)
+			}
+			if strings.Contains(msg, "to check the key") {
+				t.Errorf("base=%q: loopback message must not frame this as a key check, got %q", base, msg)
+			}
+		}
+	})
+
+	t.Run("remote base URL keeps the network-connectivity advice", func(t *testing.T) {
+		t.Parallel()
+		msg := BuildMessage(OutcomeUnreachable, "OpenRouter", "https://openrouter.ai/api/v1")
+		const want = "Couldn't reach OpenRouter to check the key — check your internet connection. Continuing for now; the key will be used as entered."
+		if msg != want {
+			t.Errorf("got  %q\nwant %q", msg, want)
+		}
+	})
+
+	t.Run("unparsable base URL falls back to the remote advice", func(t *testing.T) {
+		t.Parallel()
+		// A control character is invalid in a URL and makes url.Parse fail —
+		// isLoopbackBaseURL must fail safe (non-loopback) rather than panic
+		// or misclassify.
+		msg := BuildMessage(OutcomeUnreachable, "CustomProvider", "http://\x7f/v1")
+		if strings.Contains(msg, "the local server doesn't seem to be running") {
+			t.Errorf("unparsable base URL must not be classified as loopback, got %q", msg)
+		}
+		if !strings.Contains(msg, "check your internet connection") {
+			t.Errorf("unparsable base URL must fall back to network-connectivity advice, got %q", msg)
+		}
+	})
 }
 
 // ── T26 TestPickProbeModel_FromCatalog ───────────────────────────────────────

@@ -12,6 +12,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -614,10 +615,35 @@ func getUpstreamJSON(
 
 // ── BuildMessage (FR-7 catalog) ───────────────────────────────────────────────
 
-// BuildMessage returns the curated FR-7 plain-English message for the given outcome
-// and provider name. Valid returns "". The message never contains the API key or raw
-// upstream body (SEC-16).
-func BuildMessage(outcome Outcome, providerName string) string {
+// isLoopbackBaseURL reports whether baseURL's host is a loopback address —
+// "localhost", 127.0.0.0/8, or "::1" — i.e. a provider that must be running
+// on THIS machine (Ollama, LM Studio, LiteLLM, vLLM, …) rather than a remote
+// hosted API. An unparsable baseURL is treated as non-loopback (falls back to
+// the ordinary network-connectivity advice).
+//
+// This intentionally duplicates rather than reuses two existing loopback
+// checks: pkg/sysagent/tools/mcp.go's mcpURLSchemeValid (unexported, and in a
+// higher-level package — pkg/sysagent/tools imports pkg/providers, not the
+// reverse, so importing it here would invert the dependency) and
+// pkg/providers/catalog/locality.go's unexported isLocalHost (also
+// unexported, and answers a broader question — it also treats RFC1918,
+// link-local, and ULA hosts as "local", where a LAN-hosted custom endpoint
+// should still get the ordinary "check your connection" advice). Both were
+// checked before writing this; neither fit without either an import
+// inversion or a semantics change out of scope for this fix.
+func isLoopbackBaseURL(baseURL string) bool {
+	u, err := url.Parse(baseURL)
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	return host == "localhost" || host == "::1" || strings.HasPrefix(host, "127.")
+}
+
+// BuildMessage returns the curated FR-7 plain-English message for the given outcome,
+// provider name, and the base URL that was probed. Valid returns "". The message
+// never contains the API key or raw upstream body (SEC-16).
+func BuildMessage(outcome Outcome, providerName, baseURL string) string {
 	switch outcome {
 	case OutcomeValid:
 		return ""
@@ -633,6 +659,17 @@ func BuildMessage(outcome Outcome, providerName string) string {
 			providerName, providerName,
 		)
 	case OutcomeUnreachable:
+		if isLoopbackBaseURL(baseURL) {
+			// A loopback provider (Ollama, LM Studio, …) that can't be reached
+			// almost certainly means the local server process isn't running —
+			// the user's network is irrelevant, and there may be no "key" to
+			// check at all for a keyless local server. Tell them what to do:
+			// start it.
+			return fmt.Sprintf(
+				"Couldn't reach %s — the local server doesn't seem to be running. Start %s, then try again. Continuing for now; the key will be used as entered.",
+				providerName, providerName,
+			)
+		}
 		return fmt.Sprintf(
 			"Couldn't reach %s to check the key — check your internet connection. Continuing for now; the key will be used as entered.",
 			providerName,
@@ -665,7 +702,7 @@ func ValidateKey(ctx context.Context, in ValidateInput, checker URLChecker) Vali
 	if strings.TrimSpace(in.APIKey) == "" {
 		return ValidationResult{
 			Outcome:   OutcomeInvalidKey,
-			Message:   BuildMessage(OutcomeInvalidKey, in.ProviderName),
+			Message:   BuildMessage(OutcomeInvalidKey, in.ProviderName, in.BaseURL),
 			RawDetail: "empty api key",
 		}
 	}
@@ -703,7 +740,7 @@ func ValidateKey(ctx context.Context, in ValidateInput, checker URLChecker) Vali
 			"provider", in.ProviderID)
 		return ValidationResult{
 			Outcome:   OutcomeUnreachable,
-			Message:   BuildMessage(OutcomeUnreachable, in.ProviderName),
+			Message:   BuildMessage(OutcomeUnreachable, in.ProviderName, in.BaseURL),
 			RawDetail: "no chat model found in catalog",
 		}
 	}
@@ -728,7 +765,7 @@ func ValidateKey(ctx context.Context, in ValidateInput, checker URLChecker) Vali
 
 	return ValidationResult{
 		Outcome:     outcome,
-		Message:     BuildMessage(outcome, in.ProviderName),
+		Message:     BuildMessage(outcome, in.ProviderName, in.BaseURL),
 		RawDetail:   rawDetail,
 		ProbedModel: probedModel,
 	}
