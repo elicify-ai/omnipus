@@ -495,6 +495,15 @@ These are raised for review, not fixed here. Severities use the project's conven
 > A UAT agent later read this section as live and wrote two human-executed cases instructing a
 > tester to back up their vault and attempt the destruction. That is the cost of leaving a
 > resolved blocker marked open, and the reason for this banner.
+>
+> **CONSEQUENCE FOR `restore` — read this before implementing it (Stage 4).** The guard refuses
+> the boundary crossing in BOTH directions, so `restore` **cannot** be implemented by calling
+> `(*Renamer).Plan` with a `from` inside `.omnipus-vault/trash/` — it will be refused, correctly.
+> Restore must be its own narrower operation that reads the trash receipt and writes the note back
+> to its recorded original path, applying FR-048b containment and FR-038a's collision refusal
+> itself. That is not a limitation introduced by the guard; it is the reason F2/F3 flagged
+> `restore` as under-specified. A restore built on the generic move path would be exactly the
+> unchecked reverse operation this fix closed.
 
 
 The reserved-location guard `pkg/knowledge/author.go::authorRefuseReserved` refuses any path with
