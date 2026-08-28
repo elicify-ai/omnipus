@@ -83,10 +83,13 @@ fields are added to a mapping that search already depends on.
 
 | Symbol | Role | Note |
 |---|---|---|
-| `knowledge.Index` | **extended** | gains one stored field + an index-format version bump forcing rebuild. Blast radius: every existing index is rebuilt once |
-| `knowledge.Scope` | **called** | unchanged; record tools resolve through it |
-| `knowledge.author` splice | **called and extended** | scalar path reused unchanged; a list-valued splice is new work (FR-040a) |
+| `knowledge.Index` | **extended** | gains real fields (FR-111), an index-format version bump (FR-020d G1), a persisted-mapping assertion (G2) and an explicit `ScoringModel` (FR-110). Blast radius: every existing index is rebuilt once, which FR-020e requires anyway for the corrupt-segment fix |
+| *(new)* properties index | **added** | derived, disposable SQLite (FR-020, FR-020a). Its **write path is unmeasured** — the spike measured neither the two-index write path, nor concurrent queries, nor any non-macOS platform (its §6.1). W1 measures it before anything is built on it |
+| `knowledge.Scope` | **called** | unchanged; all five `vault_*` tools resolve through it (`Scope.WorkspaceID`, `.Roots`, `.Contains`, `.Truncated`) |
+| `knowledge.author` splice | **called and extended** | scalar path reused unchanged; a list-valued splice (FR-040a), a body-replace (FR-047) and a trash convention (FR-048) are new work |
+| `AgentLoop.resolveToolPolicyAtExec` | **constrains the design** | `pkg/agent/loop.go:12418` takes a tool **name** and no arguments, which is why the write surface splits by blast radius rather than by noun (FR-070b, FR-070c) |
 | `config.RepairIncompleteToolPolicyCoverage` | **not called, but must be defeated** | FR-081 asserts zero *repaired* pairs, not zero gaps after repair |
+| `KnowledgePanel.tsx` / `useKnowledgeIndexStore` | **extended** | today the panel renders index progress from live WS frames only (`KnowledgePanel.tsx:226`); FR-020f adds the snapshot a late-joining client needs |
 
 ---
 
