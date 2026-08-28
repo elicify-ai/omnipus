@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"golang.org/x/text/cases"
 )
 
 // ---------------------------------------------------------------------------
@@ -29,6 +31,143 @@ import (
 //     into Decimal (decimal.go). FR-020b is a promise about the whole path,
 //     and this is the only place in the path that touches numeric text.
 // ---------------------------------------------------------------------------
+
+
+// ---------------------------------------------------------------------------
+// CASE FOLDING — the ONE function (FR-011a)
+//
+// FR-011a  text, enum and the path side of a relation compare
+//          case-INSENSITIVELY, in FULL Unicode.
+//
+// The rule is one line; the reason it needs this much commentary is that the two
+// obvious ways to write it are both WRONG, and they are wrong in OPPOSITE
+// directions, so neither one's failures reveal the other's. Executed against
+// golang.org/x/text v0.41.0:
+//
+//	pair                 strings.ToLower   strings.EqualFold   cases.Fold
+//	straße / STRASSE     false             false               TRUE
+//	σίσυφος / ΣΊΣΥΦΟΣ    false             true                TRUE
+//	istanbul / İSTANBUL  true              false               FALSE
+//
+// Row 1 is German ß, which needs FULL folding (ß → ss). The Go standard
+// library performs only SIMPLE folding — a rune-for-rune map — so neither
+// stdlib function can ever match it, however the call is arranged.
+//
+// Row 2 is Greek final sigma, where the two stdlib functions DISAGREE WITH
+// EACH OTHER. That is the reason neither is a defensible default: a reviewer
+// who checks one and is satisfied has checked the one that happens to be
+// right for their fixture.
+//
+// Row 3 is the Turkish dotted capital İ, and cases.Fold's FALSE is the
+// CORRECT answer, not a gap. Dotted İ and plain i are different letters in
+// Turkish; folding them together is the classic Turkish-I bug. ToLower's
+// `true` there is a WRONG MATCH — the failure direction nobody notices,
+// because a wrong match looks like a feature. AC-8.9e asserts it as a
+// negative, with the reason inside the assertion message so that the next
+// reader does not "fix" it.
+//
+// TWO CONSEQUENCES A CALLER MUST KNOW:
+//
+//  1. cases.Fold() is the documented exception to the general Caser rule that
+//     a Caser is stateful and must not be shared. Its own documentation
+//     (golang.org/x/text/cases/cases.go:86-87): "The returned Caser is
+//     stateless and safe to use concurrently by multiple goroutines." That
+//     sentence is LOAD-BEARING here — it is what permits the package-level
+//     `folder` below, which every comparison in the package shares. Without
+//     it this would need a sync.Pool or a per-call construction.
+//
+//  2. FOLDING CHANGES RUNE COUNT. `straße` is 6 runes and folds to `strasse`,
+//     which is 7; `ﬁle` is 3 and folds to `file`, which is 4. Any rule
+//     counting characters — LIKE's `_`, which matches exactly one character —
+//     is therefore defined against the FOLDED subject and the FOLDED pattern,
+//     never the raw text, or `_` would mean a different number of characters
+//     on each side of the same comparison.
+//
+// COST, STATED RATHER THAN GLOSSED. golang.org/x/text was an INDIRECT
+// dependency before this change and is promoted to direct. No new module and
+// no CGo, so Hard Constraint #1 and #2 hold — but the `cases` subpackage and
+// its transform/language siblings are not free: linking them into a
+// previously-cases-free binary measured +443.8 KiB (Go 1.26, darwin/arm64,
+// CGO_ENABLED=0, minimal program with and without the import).
+// ---------------------------------------------------------------------------
+
+// folder is the single shared Caser. See consequence (1) above for why one
+// package-level value is safe: cases.Fold() is documented stateless and
+// concurrency-safe, unlike every other Caser this package could have built.
+var folder = cases.Fold()
+
+// FoldKey returns the full-Unicode case-folded form of s — the comparison key for
+// every case-insensitive rule in this package (FR-011a), and the SORT KEY for
+// R-5's lexical enum ordering.
+//
+// It is the ONLY permitted way to fold text here. strings.ToLower and
+// strings.EqualFold are forbidden for text comparison; fold_test.go asserts
+// that this function agrees with NEITHER of them across the six AC-8.9 pairs,
+// which is what makes the test unfaked: an implementation that folded nothing,
+// or that delegated to either stdlib function, fails a named cell.
+//
+// The returned string is NOT normalized (cases.Fold does not normalize and may
+// not preserve a normal form) and is never rendered — FR-011c: what a report
+// shows is always the file's own spelling. This is a key, not a display form.
+func FoldKey(s string) string {
+	return folder.String(s)
+}
+
+// FoldEqual reports whether a and b are the same text under full Unicode case
+// folding — R-10's `=` on text, R-5's enum resolution and R-8's relation-PATH
+// comparison.
+//
+// It is deliberately NOT used for a relation IDENTIFIER: R-8 splits those, and
+// identifiers compare byte-exactly, because folding would make `CO-0142` and
+// `co-0142` one key and two legitimately distinct targets could then not
+// coexist.
+func FoldEqual(a, b string) bool {
+	return FoldKey(a) == FoldKey(b)
+}
+
+// FoldLess is R-5's total order over text: byte-lexical over the FOLDED key,
+// with ties broken on the RAW bytes.
+//
+// Both halves are decisions, not defaults:
+//
+//   - The folded key, because byte order over raw values puts every
+//     capitalised value before every lowercase one — executed, `"Won" < "lost"`
+//     is TRUE on raw bytes and FALSE folded. A corpus that FR-011 deliberately
+//     permits to hold `Won`, `won` and `WON` as ONE value would otherwise
+//     render in THREE places in a sorted result while group_by collapsed them
+//     into ONE group. Sorting on the folded key makes ordering, equality and
+//     grouping agree.
+//
+//   - The raw-byte tie-break, because without it the order is only a partial
+//     one and equal-folding values come out in whatever order the sort
+//     happened to leave them. SC-014 asserts a byte-identical result across a
+//     rebuild, and R-11 requires determinism across runs; a total order is how
+//     both are met.
+func FoldLess(a, b string) bool {
+	fa, fb := FoldKey(a), FoldKey(b)
+	if fa != fb {
+		return fa < fb
+	}
+	return a < b
+}
+
+// FoldCompare is FoldLess as a three-way comparison, for callers that need to
+// feed sort.Slice or a comparator returning -1/0/+1. It is the same total
+// order: folded key first, raw bytes as the tie-break.
+func FoldCompare(a, b string) int {
+	fa, fb := FoldKey(a), FoldKey(b)
+	switch {
+	case fa < fb:
+		return -1
+	case fa > fb:
+		return 1
+	case a < b:
+		return -1
+	case a > b:
+		return 1
+	}
+	return 0
+}
 
 // TypedValue is one conforming value of one declared property.
 type TypedValue struct {

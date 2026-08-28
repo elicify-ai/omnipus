@@ -26,7 +26,10 @@ import (
 // FR-004  exactly seven property types exist
 // FR-006  every property declares arity
 // FR-009  property types are scoped to their record type
-// FR-010  an enum declares its values IN ORDER; sorting follows position
+// FR-010  an enum declares a closed SET of values; sorting is LEXICAL over the
+//         folded value (D4 as revised in ADR-068 revision 8). An author who
+//         wants a domain order prefixes the values: `1-lead`, `2-qualified`.
+//         There is no declared-position ordinal — see EnumValue.
 //
 // A loading note that matters: one bad schema file does NOT blind the vault.
 // LoadSchemas returns the schemas that parsed AND a report naming the ones that
@@ -65,17 +68,24 @@ type PropertyType string
 const (
 	// TypeText is prose. Never validated for shape, never compared for ordering.
 	TypeText PropertyType = "text"
-	// TypeEnum is one of a declared, ordered, closed value set (D4).
+	// TypeEnum is one of a declared, closed value SET (D4). The set is closed;
+	// it is NOT ordered — ordering is lexical over the folded value (R-5).
 	TypeEnum PropertyType = "enum"
 	// TypeRelation is a typed edge to another record (D5), stored on disk as a
 	// quoted wikilink (D5.1).
 	TypeRelation PropertyType = "relation"
 	// TypeDate is a day or an instant, comparable.
 	TypeDate PropertyType = "date"
-	// TypeNumber is a quantity, exact (see decimal.go). `unit` is metadata.
-	TypeNumber PropertyType = "number"
-	// TypeMoney is amount + ISO-4217 currency + scale as ONE value (FR-012).
-	TypeMoney PropertyType = "money"
+	// TypeInteger is a signed 64-bit whole number, bound-checked and REFUSED
+	// outside [-9223372036854775808, 9223372036854775807] (FR-013). It closes a
+	// count silently widened to a float and a large identifier silently
+	// truncated.
+	TypeInteger PropertyType = "integer"
+	// TypeDecimal is an exact, arbitrary-precision number (see decimal.go),
+	// bounded at maxDecimalScale fractional places. `unit` is metadata,
+	// declared here rather than glued into the property name. A value beyond
+	// the bound is refused naming the bound, NEVER rounded (FR-013).
+	TypeDecimal PropertyType = "decimal"
 	// TypePerson is a relation to whatever record type the VAULT uses for
 	// people. It does NOT imply a built-in person type — D0 forbids that. With
 	// no `to:` declared, only the link shape is validated.
@@ -84,8 +94,21 @@ const (
 
 // PropertyTypes is the closed set, in declaration order. FR-004's "exactly
 // these" is asserted against this slice.
+//
+// THE COUNT IS SEVEN, and the arithmetic is worth stating because it is easy
+// to get wrong in the other direction (ADR-068 D3, revision 7): `money` was
+// DELETED and `number` was SPLIT into `integer` and `decimal`, so
+// −1 −1 +2 = still seven. The membership changed; the count did not.
 var PropertyTypes = []PropertyType{
-	TypeText, TypeEnum, TypeRelation, TypeDate, TypeNumber, TypeMoney, TypePerson,
+	TypeText, TypeEnum, TypeRelation, TypeDate, TypeInteger, TypeDecimal, TypePerson,
+}
+
+// isNumericType reports whether a declared type holds a number. §8 R-1 treats
+// `integer` and `decimal` as ONE declared type for comparison purposes — an
+// author chooses the STORAGE and its bounds, not a distinct comparison domain —
+// so `3 = 3.0` is true and an integer compares with a decimal numerically.
+func isNumericType(t PropertyType) bool {
+	return t == TypeInteger || t == TypeDecimal
 }
 
 func isKnownPropertyType(t PropertyType) bool {
@@ -109,33 +132,35 @@ func propertyTypeNames() []string {
 // Schema model
 // ---------------------------------------------------------------------------
 
-// EnumValue is one member of an enum's declared, ordered set (D4).
+// EnumValue is one member of an enum's declared, closed set (D4).
+//
+// THERE IS NO Position FIELD, and its absence is the decision rather than an
+// omission. ADR-068 D4's second clause was REVERSED by operator ruling: *"the
+// enum ordering is following SQLite standard; if we need different ordering we
+// need to prefix the content."* Enums therefore order LEXICALLY over the
+// folded value (R-5), and an author who wants a domain order writes it into the
+// values — `1-lead`, `2-qualified`, `3-proposal`, `4-won`.
+//
+// What that deleted: a derived ordinal column, the schema bookkeeping that kept
+// it in step with the file, the NULLS-LAST requirement that came with it, and
+// an unwritten rebuild obligation — an enum REORDER changed the derived ordinal
+// for every record of the type and nothing said the index had to be rebuilt.
+// The trade is visibility: a prefix sits in the operator's own file and does
+// exactly what it looks like it does, where an ordinal was a second source of
+// truth for the order, invisible in the vault, capable of changing every
+// existing report while the cascade block reported "0 records lost validity".
 type EnumValue struct {
-	// Name is the value exactly as declared. Matching is EXACT-CASE: `Active`
-	// is not `active` (DS-1). D4's reason: auto-accepting a near-miss is how
-	// one column comes to hold `Won`, `won` and `Closed Won`.
+	// Name is the value exactly as declared, and it is what a report renders
+	// (FR-011c). Matching a WRITTEN value against it is case-INSENSITIVE in
+	// full Unicode (FR-011a, Fold) — `Won` in a note resolves TO a declared
+	// `won`, collapsing two spellings into one value. That is not the thing D4
+	// forbids: D4 forbids auto-creating a SECOND de-facto value, which is what
+	// Notion's multi-select does on any typo.
 	Name string
 	// Label is the human-readable display name (EnumValueDef.label). Absent
-	// means render Name. Display data only — it carries no rule and no
-	// ordering meaning; Position and EnumPosition remain the sole authorities
-	// on order.
+	// means render Name. Display data only — it carries no rule and takes no
+	// part in matching or ordering.
 	Label string
-	// Position is the declared index, zero-based. FR-010: order is DATA, so it
-	// travels with the value instead of being encoded into the spelling — the
-	// "1-Pending / 7-DoNotContact" prefix hack exists only because a tool sorted
-	// lexically and offered no other way to state sequence.
-	//
-	// It is OUTPUT, never the ordering authority. Only the schema loader and
-	// NewProperty stamp it; a Property built with a plain struct literal — which
-	// EnumPosition explicitly supports — leaves it zero on every value. Ask
-	// Property.EnumPosition for an ordinal. Nothing in this package may read
-	// this field to decide an order, and enum_position_authority_test.go fails
-	// the build if anything starts to.
-	//
-	// It stayed a struct field because it is a required field of the wire type
-	// (contracts/components/schemas/EnumValueDef.yaml) that a caller serialising
-	// a schema must fill in.
-	Position int
 	// Group is D4's optional lifecycle bucket (open / done / cancelled) so
 	// "is this finished?" is answerable across types with different vocabularies.
 	Group string
@@ -166,18 +191,24 @@ type Property struct {
 	// `values`-on-a-non-enum check in parseProperty was written to end.
 	Label string
 
-	// Values is the enum's ordered set. Empty for every other type.
-	Values []EnumValue
-	// valuePos is a CACHE of Values, keyed by exact name, for O(1) membership
-	// and ordering. It is derived state and never the authority: EnumPosition
-	// answers from Values when it is nil, so a Property built with a plain
-	// struct literal outside this package behaves exactly like a parsed one.
+	// Values is the enum's closed set, in declaration order. Declaration order
+	// is preserved for REPORTING only — it is what PermittedValues lists in a
+	// rejection, so the operator sees their own file back. It is NOT a sort
+	// order; R-5 sorts lexically over the folded value.
 	//
-	// It used to be the authority, and that made an externally-built enum
-	// property unusable: EnumPosition returned (0, false) for every value, so
-	// every legitimately declared value was rejected as impermissible — with a
-	// message listing the permitted values, i.e. the very value being rejected.
-	valuePos map[string]int
+	// Empty for every other type.
+	Values []EnumValue
+	// foldIndex is a CACHE of Values, keyed by the FOLDED name, for O(1)
+	// case-insensitive membership (FR-011a). It is derived state and never the
+	// authority: ResolveEnum scans Values when it is nil, so a Property built
+	// with a plain struct literal outside this package behaves exactly like a
+	// parsed one.
+	//
+	// The cache used to be the authority, and that made an externally-built
+	// enum property unusable: every legitimately declared value was rejected as
+	// impermissible, with a message listing the permitted values — i.e. listing
+	// the very value being rejected.
+	foldIndex map[string]int
 
 	// To is the target record type for `relation` and (optionally) `person`.
 	To string
@@ -185,8 +216,9 @@ type Property struct {
 	// NEVER written to any file (FR-032).
 	Inverse string
 
-	// Unit is `number` metadata — declared here rather than glued into the
-	// property name (D3's `exercise: 60 minutes` failure).
+	// Unit is numeric metadata — valid on `integer` and `decimal`, declared
+	// here rather than glued into the property name (D3's `exercise: 60
+	// minutes` failure).
 	Unit string
 
 	// RecordType is the type this property belongs to. FR-009: `status` on one
@@ -195,43 +227,48 @@ type Property struct {
 	RecordType string
 }
 
-// EnumPosition returns a value's declared position and whether it is in the
-// set. This is the ordering oracle for FR-010 and §8 R-5 — the SOLE one. Every
-// caller that needs an enum ordinal asks here: value.go's parse, filter.go's
-// SortByEnumOrder, and compare_oracle.go's R-5 ordering. There is no second way
-// to learn it, and the EnumValue.Position field is not one.
+// ResolveEnum resolves a WRITTEN value to the declared EnumValue it names, and
+// reports whether it named one at all. It is the SOLE membership oracle for an
+// enum: value.go's parse and the comparator both ask here, and there is no
+// second way to learn the answer.
 //
-// It was, briefly, and the two authorities agreed only by accident: this method
-// returns the SLICE INDEX, the field is stamped only by the loader and
-// NewProperty, and the comparator read the field. Against the struct-literal
-// Property the paragraph below blesses, every field was zero, so `todo < done`
-// answered FALSE — silently — while SortByEnumOrder on the same property
-// ordered the same values correctly.
+// Matching is CASE-INSENSITIVE in FULL UNICODE (FR-011a, R-5), performed by
+// Fold — never strings.ToLower and never strings.EqualFold, both of which get
+// German ß wrong and disagree with each other on Greek (see fold.go). A note
+// that writes `Won` against a declared `won` resolves to `won`; the file keeps
+// its own spelling and the report renders the DECLARED name (FR-011c), so two
+// spellings collapse into ONE value rather than creating a second.
 //
-// The position returned is the index into Values, which is the DECLARED order —
-// FR-010's "sorting follows position, not the alphabet". Callers index Values
-// with it (value.go's enum parse does), so it must be the slice index and not
-// an EnumValue.Position a caller may have filled in by hand.
+// It returns the DECLARED value, not the written one, which is what makes
+// grouping agree with equality: three notes spelling one state three ways group
+// once, under the schema's spelling.
 //
-// When the valuePos cache has not been built — a Property assembled outside
-// this package — the answer is scanned out of Values instead of being wrong.
-// An enum's declared set is a handful of values; a linear scan of it costs
-// nothing next to reporting every one of them as impermissible.
-func (p *Property) EnumPosition(value string) (int, bool) {
-	if p.valuePos != nil {
-		i, ok := p.valuePos[value]
-		return i, ok
+// When the foldIndex cache has not been built — a Property assembled outside
+// this package with a plain struct literal — the answer is scanned out of
+// Values instead of being wrong. An enum's declared set is a handful of values;
+// a linear scan costs nothing next to reporting every one of them as
+// impermissible.
+func (p *Property) ResolveEnum(value string) (EnumValue, bool) {
+	key := Fold(value)
+	if p.foldIndex != nil {
+		i, ok := p.foldIndex[key]
+		if !ok {
+			return EnumValue{}, false
+		}
+		return p.Values[i], true
 	}
-	for i, v := range p.Values {
-		if v.Name == value {
-			return i, true
+	for _, v := range p.Values {
+		if Fold(v.Name) == key {
+			return v, true
 		}
 	}
-	return 0, false
+	return EnumValue{}, false
 }
 
-// PermittedValues lists an enum's declared values in order — what FR-011
-// requires a rejection to name.
+// PermittedValues lists an enum's declared values in declaration order — what
+// FR-011 requires a rejection to name. Declaration order is the operator's own
+// file order, so a rejection reads back the way they wrote it; it is NOT the
+// sort order (R-5 sorts lexically over the folded value).
 func (p *Property) PermittedValues() []string {
 	out := make([]string, 0, len(p.Values))
 	for _, v := range p.Values {
