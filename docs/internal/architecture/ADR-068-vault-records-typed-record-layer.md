@@ -2677,8 +2677,35 @@ its own ADR rather than an implementation note.
   is the one shipped binary without SQLite, and records refuse by name there (D16.2a).
 - **It does not claim `pkg/knowledge`'s task extraction has been designed.** D15.3 specifies
   indexed checkbox rows; nobody has built or measured the indexing cost of that (W2).
-- **It does not claim SQLite's defaults implement this ADR's comparison semantics — they
-  contradict nine of the thirteen rules** (D16.6), verified by execution rather than asserted.
-  The defeats are known and specified; **none of them is verified until the truth table runs
-  against the compiled query path** (AC-8.4). Until W1 produces that run, "the nine are defeated"
-  is a plan, not a property, and this ADR does not claim otherwise.
+- ~~**It does not claim SQLite's defaults implement this ADR's comparison semantics — they
+  contradict nine of the thirteen rules** (D16.6). The defeats are known and specified; none is
+  verified until the truth table runs against the compiled query path.~~ **SUPERSEDED, revision 7 —
+  and the way it was superseded is the lesson.** Revision 6 was right that "the nine are defeated"
+  was a plan rather than a property. **Grill pass 1 then checked: zero of the seven the spec had
+  specified were sufficient, and there was a tenth violation nobody had found.** The operator ruling
+  removes the question by removing the delegation — SQLite narrows, the comparator decides — so
+  **the violations are now the REASON for the design rather than a debt inside it** (D16.6).
+
+*Added in revision 7:*
+
+- **It does not claim the Go evaluation path has been measured.** Filtering, grouping and totals
+  return to Go (D16.2b reversed), so cost scales with **candidates** rather than results. The
+  10,000-candidate cap is the bound and it is a refusal, not a hope. **Nobody has measured it over
+  the two-index design.** W1 does; the spec carries it as A-14.
+- **It does not claim the freshness comparison's mechanism exists.** The token *value* does
+  (`ManifestEntry.Hash`). The mechanism around it is now a **stored field on the bleve document**,
+  which is new work on a struct D21.2 already reopens, and **whether bleve returns it cheaply on
+  this hit path is open** (D16.5, spec A-13). **This decision has been wrong about storage four
+  times by assuming; the fifth answer is written down as a design with its unbuilt parts named, and
+  its open questions are carried rather than resolved by confidence.**
+- **It does not claim the six-tool surface has been costed.** The ~900-token figure counts
+  description prose, and the whole parameter schema ships on every request (D22.8, corrected). The
+  real standing cost is a **floor of 900 by an unknown multiple**, unmeasured until W5.
+- **It does not claim case-insensitive matching is Unicode-aware wherever it appears.** It is, in
+  the comparator, because Go's `strings.ToLower` is. It would **not** be if delegated to SQLite,
+  which folds **zero** non-ASCII case — verified over fourteen pairs, with no ICU and no loadable
+  extension (D16.6). Any surface that ends up delegating must say **ASCII-case-insensitive**.
+- **It does not claim the enum prefix convention is costless.** §1.4 cites the
+  `1-Pending…7-DoNotContact` hack as a documented failure of the incumbents, and D4 as revised
+  adopts it. The trade — a visible convention over an invisible derived ordinal — is argued at D4
+  and is a judgement, not a measurement.
