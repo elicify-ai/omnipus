@@ -76,6 +76,20 @@ const (
 	FindingUnsupportedType FindingCode = "unsupported_property_type"
 	// FindingDuplicateListValue — the same value twice in one list property.
 	FindingDuplicateListValue FindingCode = "duplicate_list_value"
+	// FindingStaleIndex — the derived properties index and the schema disagree
+	// about a property: the index holds no state for a declared property, or it
+	// holds a value the current schema no longer admits.
+	//
+	// It is a SEPARATE code from every value fault above because the fault is
+	// not in the note. The note may be perfectly correct; the index is behind
+	// the schema, and the remedy is to re-index rather than to edit anything.
+	// Reporting it as a value fault would send the operator to fix a file that
+	// has nothing wrong with it.
+	//
+	// It is raised by the candidate-stream evaluation path only
+	// (pkg/records/propindex), which is the only place a stored value is read
+	// back instead of parsed from frontmatter.
+	FindingStaleIndex FindingCode = "stale_index"
 )
 
 // Severity separates "this record is wrong" from "you may want to know".
