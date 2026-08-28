@@ -19,19 +19,35 @@ import (
 // scoring TF-IDF (its default) while this comment claimed the two subsystems
 // matched, so the "same scale and semantics" argument these constants exist to
 // support was resting on a premise that was simply false. It now holds, with
-// two divergences that are worth naming rather than rounding away:
+// three divergences that are worth naming rather than rounding away. They are
+// listed worst-first, and the first is large enough that "same scale" remains
+// an overstatement even now:
 //
-//   - bleve's numerator is tf*k1 where bm25Rank's is tf*(k1+1). That is a
+//   - bleve's tf is sqrt(freq), not freq (TermQueryScorer.Score), while
+//     bm25Rank uses the raw count. A retro mentioning a term nine times is
+//     tf=9 here and tf=3 there, so the two rankers saturate at very different
+//     rates over the same text.
+//   - bleve's length normalisation divides by an avgFieldLength computed as
+//     ceil(FieldCardinality/DocCount) — the number of DISTINCT terms in the
+//     field dictionary, not the mean document length (bm25ScoreMetrics).
+//     bm25Rank uses the true mean token count. Same b, different denominator.
+//   - bleve's numerator is tf*k1 where bm25Rank's is tf*(k1+1). That one is a
 //     constant factor, so it never reorders results WITHIN either ranker, but
-//     the absolute scores are not interchangeable across the two.
-//   - the tokenizers still differ (ADR-068 D21.5): bleve applies the "en"
-//     analyzer with Porter stemming and stopword removal, retroTokenize splits
-//     on every non-alphanumeric rune and does neither. Identical formulas over
-//     different term sets are still not the same ranking.
+//     it does mean the absolute scores are not interchangeable.
+//
+// And on top of the arithmetic, the tokenizers differ (ADR-068 D21.5): bleve
+// applies the "en" analyzer with Porter stemming and stopword removal, while
+// retroTokenize splits on every non-alphanumeric rune and does neither.
 //
 // The IDF form is the one thing that matches exactly: both compute
 // log(1 + (N-df+0.5)/(df+0.5)) — bleve in TermQueryScorer.computeIDF, this
 // package in bm25Rank.
+//
+// So: same FAMILY of ranking function, same k1 and b, and — since D21.1 — both
+// genuinely BM25. Scores from the two subsystems still must not be compared
+// numerically or merged into one ordering. If that is ever wanted, it needs
+// rank fusion (D21.3's RRF), which is rank-based precisely because normalising
+// one of these scores against the other has no principled answer.
 const (
 	retroBM25K1 = 1.2
 	retroBM25B  = 0.75
@@ -39,10 +55,11 @@ const (
 
 // rankRetrosBM25 ranks retrospectives by BM25 relevance of their rendered text to
 // query, descending, keeping only retros that match at least one query term,
-// capped at limit (ties broken newest-first). This gives retro recall BM25
-// ranking closely comparable to what bleve now provides for long-term memories
-// — see the parameter block above for the two ways the two rankers still
-// diverge, and note that bleve only produces BM25 at all because ADR-068 D21.1
+// capped at limit (ties broken newest-first). This gives retro recall a BM25
+// ranking of the same family as the one bleve now provides for long-term
+// memories — see the parameter block above for the three ways the two rankers
+// still diverge and why their scores are not interchangeable, and note that
+// bleve only produces BM25 at all because ADR-068 D21.1
 // set the scoring model; it defaults to TF-IDF. Retros are ranked here rather
 // than through bleve so they are never added to the persistent room index,
 // keeping long-term recall unpolluted by retro documents and avoiding a
