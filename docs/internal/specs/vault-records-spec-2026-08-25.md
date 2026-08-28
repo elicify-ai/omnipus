@@ -345,6 +345,12 @@ as "no progress has arrived" for a fully indexed collection.
 - When a write succeeds, the file is **byte-identical outside the patched span**.
 - When a relation target is missing or mistyped, the system **reports it** at validation.
 - When a record is out of workspace scope, the system returns **empty, not an error**.
+- When an operation would change a file the caller did not name, it is **only** reachable through
+  `vault_restructure`, and the cascade is reported in counts.
+- When the two indexes disagree about generation, the answer is **incomplete**, and says so first.
+- When a result is rendered for the model, it is **compact text projected from the wire object**,
+  completeness first and next actions last.
+- When a query finds nothing, the system reports the **vocabulary it holds** and stops.
 
 ### Explicit non-behaviours
 
@@ -361,6 +367,15 @@ as "no progress has arrived" for a fully indexed collection.
 - The system must **not** read `.base` files at query time — the importer is one-shot
   (ADR-068 O-1).
 - The system must **not** treat an absent property as `false`.
+- The system must **not** expand or reformulate a query on the caller's behalf (FR-114).
+- The system must **not** report an answer as complete when it spans two index generations
+  (FR-020c).
+- The system must **not** offer a second mounting path; `request_mount` stays the only one
+  (FR-019).
+- The system must **not** register the `.base` importer as an agent tool (FR-103).
+- The system must **not** let a policy default read as a prohibition (FR-019a).
+- The system must **not** use `LIKE` in the compiled filter path, because it is case-insensitive
+  for ASCII and would silently change R-10 (AC-8.7).
 
 ### Machine-verifiable constraints
 
@@ -372,7 +387,13 @@ as "no progress has arrived" for a fully indexed collection.
 | Supported records per vault | 50,000 records. **Note:** the index counts segments, not records, so this is an unknown larger document count; the segment ratio MUST be measured at W2 and recorded here |
 | Peak RSS | inherited unchanged: ADR-067's < 64 MB steady state for this process. **No record-specific latency or memory target is stated** — revision 1's numbers came from a measurement of expression evaluation alone, and D16's spike establishes real ones |
 | Rate limit | shared with ADR-067's knowledge limiter; 429 carries `Retry-After` |
-| Money arithmetic | exact decimal; no binary floating point anywhere in the path |
+| Money arithmetic | exact decimal, integer minor units; no binary floating point anywhere in the path |
+| Agent tool count | exactly **5** `vault_*` names; **0** `knowledge_*` names; catalog 102 → 98 |
+| Tool description budget | ~150 tokens each (~750 total, permanent per-turn cost) |
+| Response budget | ~50–80 tokens/hit, ~1,000 default, **4,000 hard cap**; `minimal` ~20 tokens/hit |
+| Index freshness | both indexes report a generation; a mismatch forces `complete: false` |
+| Scoring model | BM25, set explicitly. TF-IDF is the library default and is a defect (FR-110) |
+| Embeddings | none, permanently (FR-117) |
 
 ---
 
