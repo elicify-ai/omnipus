@@ -136,6 +136,12 @@ run_lint() {
   bash scripts/check-no-tool-error-from-status.sh || return 1
   # ADR-061 regression guard: the deleted JPEG screencast path must not return.
   bash scripts/check-no-jpeg-screencast.sh || return 1
+  # E2E auth cross-talk guard: no spec may POST /api/v1/auth/login (it rotates the
+  # single-slot session_token_hash and invalidates the shared storageState cookie
+  # for every LATER spec — a failure that lands in an unrelated file). Self-test
+  # first (a guard that cannot fail is no guard).
+  bash scripts/check-e2e-login-crosstalk.sh --self-test || return 1
+  bash scripts/check-e2e-login-crosstalk.sh || return 1
   # ADR-067 SC-008/SC-009/US-11.AC2 regression guard: no alias, migration or
   # deprecation machinery in pkg/providers or pkg/config, no folded-away
   # capabilities package, no bundled SPA catalog. Same reasoning as the guards

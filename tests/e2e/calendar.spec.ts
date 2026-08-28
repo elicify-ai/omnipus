@@ -19,45 +19,24 @@
  *   - Workspace created via REST in beforeAll and deleted in afterAll
  */
 
-import { expect, request as apiRequest } from '@playwright/test';
+import { expect } from '@playwright/test';
 import { test } from './fixtures/console-errors';
+import { newAdminApiContext } from './fixtures/admin-api';
 
 // ── Workspace lifecycle helpers ────────────────────────────────────────────────
 
-const OMNIPUS_URL = process.env.OMNIPUS_URL || 'http://localhost:6060';
-const ADMIN_USERNAME = 'admin';
-const ADMIN_PASSWORD = 'admin123';
-
-/**
- * Obtain a fresh bearer token for REST calls inside the test.
- * Uses the pre-onboarded admin credentials (seeded by global-setup.ts).
- */
-async function getAdminToken(): Promise<string> {
-  const ctx = await apiRequest.newContext({ baseURL: OMNIPUS_URL });
-  try {
-    const res = await ctx.post('/api/v1/auth/login', {
-      data: { username: ADMIN_USERNAME, password: ADMIN_PASSWORD },
-    });
-    if (!res.ok()) {
-      const body = await res.text();
-      throw new Error(`calendar.spec.ts: login failed ${res.status()}: ${body}`);
-    }
-    const json = (await res.json()) as { token: string };
-    return json.token;
-  } finally {
-    await ctx.dispose();
-  }
-}
+// REST setup/teardown authenticates with the SHARED admin session
+// (fixtures/admin-api.ts). Do NOT add a POST /api/v1/auth/login here to get a
+// bearer token: login re-mints the single-slot session_token_hash and silently
+// invalidates the storageState cookie for every spec that runs later.
+// scripts/check-e2e-login-crosstalk.sh enforces this.
 
 /**
  * Create a throwaway workspace and return its ID.
  * The workspace name includes a timestamp to avoid collisions across retries.
  */
-async function createTestWorkspace(token: string): Promise<string> {
-  const ctx = await apiRequest.newContext({
-    baseURL: OMNIPUS_URL,
-    extraHTTPHeaders: { Authorization: `Bearer ${token}` },
-  });
+async function createTestWorkspace(): Promise<string> {
+  const ctx = await newAdminApiContext();
   try {
     const name = `E2E Calendar Workspace ${Date.now()}`;
     const res = await ctx.post('/api/v1/workspaces', {
@@ -77,11 +56,8 @@ async function createTestWorkspace(token: string): Promise<string> {
 /**
  * Delete a workspace by ID (best-effort — ignore failures in cleanup).
  */
-async function deleteTestWorkspace(token: string, workspaceId: string): Promise<void> {
-  const ctx = await apiRequest.newContext({
-    baseURL: OMNIPUS_URL,
-    extraHTTPHeaders: { Authorization: `Bearer ${token}` },
-  });
+async function deleteTestWorkspace(workspaceId: string): Promise<void> {
+  const ctx = await newAdminApiContext();
   try {
     await ctx.delete(`/api/v1/workspaces/${encodeURIComponent(workspaceId)}`);
   } catch {
@@ -93,19 +69,17 @@ async function deleteTestWorkspace(token: string, workspaceId: string): Promise<
 
 // ── Test state ────────────────────────────────────────────────────────────────
 
-let adminToken: string;
 let workspaceId: string;
 
 // ── Setup / teardown ──────────────────────────────────────────────────────────
 
 test.beforeAll(async () => {
-  adminToken = await getAdminToken();
-  workspaceId = await createTestWorkspace(adminToken);
+  workspaceId = await createTestWorkspace();
 });
 
 test.afterAll(async () => {
-  if (workspaceId && adminToken) {
-    await deleteTestWorkspace(adminToken, workspaceId);
+  if (workspaceId) {
+    await deleteTestWorkspace(workspaceId);
   }
 });
 
@@ -342,18 +316,14 @@ test(
 /**
  * Create a task with a due date via the REST API.
  * Returns the created task object `{ id, due, ... }`.
- * Reuses the admin token from module-level state.
+ * Uses the shared admin session (fixtures/admin-api.ts).
  */
 async function createTaskWithDue(
-  token: string,
   wsId: string,
   title: string,
   dueDate: string, // YYYY-MM-DD
 ): Promise<{ id: string; due: string }> {
-  const ctx = await apiRequest.newContext({
-    baseURL: OMNIPUS_URL,
-    extraHTTPHeaders: { Authorization: `Bearer ${token}` },
-  });
+  const ctx = await newAdminApiContext();
   try {
     // `due` is a date-time string (contract: format date-time). Send local midnight UTC.
     const dueIso = new Date(`${dueDate}T00:00:00Z`).toISOString();
@@ -378,11 +348,8 @@ async function createTaskWithDue(
 /**
  * Delete a task by ID (best-effort cleanup).
  */
-async function deleteTask(token: string, taskId: string): Promise<void> {
-  const ctx = await apiRequest.newContext({
-    baseURL: OMNIPUS_URL,
-    extraHTTPHeaders: { Authorization: `Bearer ${token}` },
-  });
+async function deleteTask(taskId: string): Promise<void> {
+  const ctx = await newAdminApiContext();
   try {
     await ctx.delete(`/api/v1/tasks/${encodeURIComponent(taskId)}`);
   } catch {
@@ -395,11 +362,8 @@ async function deleteTask(token: string, taskId: string): Promise<void> {
 /**
  * Fetch a task by ID and return its `due` field.
  */
-async function fetchTaskDue(token: string, taskId: string): Promise<string | null> {
-  const ctx = await apiRequest.newContext({
-    baseURL: OMNIPUS_URL,
-    extraHTTPHeaders: { Authorization: `Bearer ${token}` },
-  });
+async function fetchTaskDue(taskId: string): Promise<string | null> {
+  const ctx = await newAdminApiContext();
   try {
     const res = await ctx.get(`/api/v1/tasks/${encodeURIComponent(taskId)}`);
     if (!res.ok()) return null;
@@ -429,7 +393,7 @@ test(
     const dueDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-10`;
     let taskId: string;
     try {
-      const task = await createTaskWithDue(adminToken, workspaceId, 'E2E drag reschedule', dueDate);
+      const task = await createTaskWithDue(workspaceId, 'E2E drag reschedule', dueDate);
       taskId = task.id;
     } catch (err) {
       // Tasks endpoint not available in this build — annotated skip so the gap is visible.
@@ -490,7 +454,7 @@ test(
 
       // The chip should still be on the new day after reload
       // Verify via the API that the due date was updated
-      const updatedDue = await fetchTaskDue(adminToken, taskId);
+      const updatedDue = await fetchTaskDue(taskId);
       // updatedDue must be non-null — a null read means the endpoint didn't persist the drag
       expect(updatedDue, 'fetchTaskDue must return a non-null due after drag-persist').toBeTruthy();
       if (updatedDue) {
@@ -503,7 +467,7 @@ test(
         page.locator('.fc-event', { hasText: 'E2E drag reschedule' }),
       ).toBeVisible({ timeout: 10_000 });
     } finally {
-      await deleteTask(adminToken, taskId!);
+      await deleteTask(taskId!);
     }
   },
 );
@@ -526,7 +490,7 @@ test(
     const dueDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-15`;
     let taskId: string;
     try {
-      const task = await createTaskWithDue(adminToken, workspaceId, 'E2E revert test', dueDate);
+      const task = await createTaskWithDue(workspaceId, 'E2E revert test', dueDate);
       taskId = task.id;
     } catch (err) {
       // Tasks endpoint not available in this build — annotated skip so the gap is visible.
@@ -604,7 +568,7 @@ test(
       // Remove the route intercept
       await page.unrouteAll();
     } finally {
-      await deleteTask(adminToken, taskId!);
+      await deleteTask(taskId!);
     }
   },
 );
