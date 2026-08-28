@@ -894,7 +894,11 @@ broader thing has been given a wrong answer with no error channel.
 | FR-007, 008 | US-2 | edge | `TestFilter_AbsentIsDistinctAndIncludedByNegation` |
 | FR-010, 011 | US-1 | 1.3 | `TestEnum_OrderedAndClosed` |
 | FR-012..014 | US-2 | 2.3 | `TestMoney_RefusesCrossCurrencySum` |
-| FR-020, 021 | — | — | `TestIndex_PropsFieldRoundTripsExactDecimal` — asserts a money value survives the index unchanged; a float64 path fails it |
+| FR-016..019a | US-12 | 12.1–12.4 | `TestSchemaAuthoring_TierPlacement` |
+| FR-020, 020a, 021 | US-2 | — | `TestPropsIndex_RebuildIsResultIdentical`; `TestIndex_PropsRoundTripsExactDecimal` — a money value survives the index unchanged; a float64 path fails it |
+| FR-020c, 020g | US-13 | 13.2 | `TestIndexes_GenerationMismatchIsIncomplete` |
+| FR-020d, 020e | — | — | `TestIndex_StaleFormatIsRebuiltNotOpened`; `TestIndex_PersistedMappingAsserted` |
+| FR-020f | US-13 | 13.1 | `TestIndexState_SnapshotMatchesLiveFrame` |
 | FR-022..024 | US-2 | 2.4 | `TestQuery_UnknownPropertyIsRejectedNotEmpty` |
 | FR-025, 026 | US-2 | 2.2 | `TestQuery_ProblemsAreNamedNotDropped` |
 | FR-027..029 | US-2 | 2.6 | `TestGroup_MultiValueAppearsInEveryGroup` |
@@ -907,10 +911,27 @@ broader thing has been given a wrong answer with no error channel.
 | FR-050..053 | US-6 | 6.1–6.4 | `TestInteraction_ExclusionRules` |
 | FR-060..062 | US-8 | 8.1, 8.2 | `TestScope_CrossWorkspaceReturnsEmpty` |
 | FR-063..066 | US-2 | 2.5 | `TestBounds_RefusalNotTruncation` |
-| FR-070..073 | — | — | `TestTools_NamesHaveNoDots` |
-| FR-080..082 | — | — | `TestToolPolicy_ZeroRepairedPairsOnFreshInstall` |
+| FR-047 | US-4 | — | `TestReplaceBody_AmbiguousAnchorIsRefused` |
+| FR-048, 049 | US-4 | — | `TestTrash_ConventionAndUnrepairableLinksReported` |
+| FR-070, 070a, 078 | — | — | `TestTools_ExactlyFiveVaultToolsAndNoKnowledgeNames` |
+| FR-070b, 070c, 071 | — | — | `TestTools_EditWritesOnlyNamedFile`; `TestTools_NamesHaveNoDots` |
+| FR-072, 120..128 | US-11 | 11.1–11.4 | `TestRender_CompactTextContract` |
+| FR-073 | US-2 | — | `TestFind_ExplainEvaluatesNothing` |
+| FR-074 | US-9 | 9.1–9.3 | `TestRead_ReturnsUsableVersionToken` |
+| FR-075 | US-5 | 5.3 | `TestDescribe_CheckIntegrityNamesBothPaths` |
+| FR-076 | US-3 | — | `TestFind_NearComposesWithFilters` |
+| FR-077 | US-4 | 4.4 | `TestAudit_VaultEditAndRestructureCarryOperation` |
+| FR-079, 128 | — | — | `TestTools_DescriptionTokenBudget` |
+| FR-080, 080a, 081, 082 | — | — | `TestToolPolicy_ZeroRepairedPairsOnFreshInstall` |
+| FR-083, 084 | US-12 | 12.2 | `TestToolPolicy_EditAndRestructureAreIndependent` |
+| FR-110, 110a | US-10 | 10.1 | `TestSearch_ScoringModelIsBM25` |
+| FR-111 | US-10 | 10.3 | `TestIndex_FieldedAndFrontmatterStripped` |
+| FR-112, 113 | US-10 | 10.4 | `TestRank_FusionComparedAgainstPlainBM25` |
+| FR-114, 115 | US-10 | 10.2 | `TestSearch_ZeroHitsReportsVocabularyNotExpansion` |
+| FR-116 | — | — | `TestTokenizer_OneNotionOfATerm` |
+| FR-117 | — | — | `TestRetrieval_NoEmbeddingDependency` |
 | FR-090, 091 | — | — | `TestContract_CompletenessFieldsAreRequired` |
-| FR-100..102 | US-7 | 7.1–7.3 | `TestImport_UntranslatedExpressionIsReported` |
+| FR-100..103 | US-7 | 7.1–7.3 | `TestImport_UntranslatedExpressionIsReported`; `TestImport_NotRegisteredAsAgentTool` |
 
 ---
 
@@ -937,10 +958,28 @@ Order is unit → integration → e2e; within a level, dependencies first.
 | 15 | `TestScope_CrossWorkspaceReturnsEmpty` | integration | FR-060..062 |
 | 16 | `TestBounds_RefusalNotTruncation` | integration | FR-063..066 |
 | 17 | `TestToolPolicy_ZeroRepairedPairsOnFreshInstall` | integration | FR-081 |
-| 18 | `TestTools_RecordToolsRegisteredAndDotFree` | unit | FR-070, 071 — all **nine** including `record_view_import` — asserts all **nine** names are actually registered, then that none contains a dot. The name-only check duplicates an existing green assertion over 35 tools and passes today with zero record tools |
+| 18 | `TestTools_ExactlyFiveVaultToolsAndNoKnowledgeNames` | unit | FR-070, 070a, 071, 078 — **REPLACES revision 2's nine-tool test.** Asserts the five names are registered, that none contains a dot, that **no `knowledge_*` name survives** in the catalog, the global ceiling or any seed, and that `allStaticToolNames` has 98 entries. A name-only check would duplicate an existing green assertion over 35 tools and pass today with zero vault tools, so registration is asserted first |
 | 19 | `TestContract_CompletenessFieldsAreRequired` | unit | FR-091 |
-| 20 | `TestImport_UntranslatedExpressionIsReported` | integration | FR-100..102 |
-| 21 | `TestRecords_PerfAtFiftyThousand` | e2e | SC-007, SC-008 |
+| 20 | `TestImport_UntranslatedExpressionIsReported` | integration | FR-100..103 |
+| 21 | `TestRecords_PerfAtFiftyThousand` | e2e | *(no threshold until W1 measures the SQLite path — SC-007)* |
+| 22 | `TestTools_EditWritesOnlyNamedFile` | integration | FR-070b — snapshots every file's hash, runs each `vault_edit` op, asserts exactly one changed |
+| 23 | `TestRead_ReturnsUsableVersionToken` | integration | FR-074 — read → edit with zero intervening failed writes |
+| 24 | `TestFind_NearComposesWithFilters` | integration | FR-076 — both negative directions, per AC-F2 |
+| 25 | `TestRender_CompactTextContract` | unit | FR-120..127 — diffs against §4.2's literal example, asserts block order, and asserts no JSON document is emitted |
+| 26 | `TestSearch_ScoringModelIsBM25` | unit | FR-110 — asserts the assignment exists; a doc-comment claim is not evidence |
+| 27 | `TestIndex_FieldedAndFrontmatterStripped` | integration | FR-111 — a field query on a property key returns records; the body field does **not** contain frontmatter tokens |
+| 28 | `TestRank_FusionComparedAgainstPlainBM25` | integration | FR-113, AC-8.6 — records the comparison and asserts set-equality under both rankings |
+| 29 | `TestSearch_ZeroHitsReportsVocabularyNotExpansion` | integration | FR-114, FR-115 |
+| 30 | `TestTokenizer_OneNotionOfATerm` | unit | FR-116 — asserts one shared function, or fails with the recorded decision as the only permitted alternative |
+| 31 | `TestPropsIndex_RebuildIsResultIdentical` | integration | FR-020a, SC-014 |
+| 32 | `TestIndexes_GenerationMismatchIsIncomplete` | integration | FR-020c — forces a generation skew and asserts `complete: false` with staleness named |
+| 33 | `TestIndexState_SnapshotMatchesLiveFrame` | integration | FR-020f, FR-020g — a client that never received a frame renders the same state as one that did |
+| 34 | `TestReplaceBody_AmbiguousAnchorIsRefused` | unit | FR-047 — both line numbers named, file byte-identical |
+| 35 | `TestTrash_ConventionAndUnrepairableLinksReported` | integration | FR-048 |
+| 36 | `TestToolPolicy_EditAndRestructureAreIndependent` | integration | FR-083, SC-012 |
+| 37 | `TestSchemaAuthoring_TierPlacement` | integration | FR-016, FR-017, FR-018 — new type via `vault_edit`, existing type refused there and accepted by `vault_restructure` |
+| 38 | `TestTools_DescriptionTokenBudget` | unit | FR-079, FR-128 |
+| 39 | `TestFilter_NoLikeInCompiledPath` | unit | AC-8.7 |
 
 ### Test datasets
 
