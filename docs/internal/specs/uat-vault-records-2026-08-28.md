@@ -885,3 +885,146 @@ property while C-10.3 kept it.
 
 **Fail if:** changing a property on one record type changes the same-named property on another.
 That is the vault-wide property binding this design exists to avoid.
+
+---
+
+## Part D — Unicode case folding
+
+**Read this whole preamble before running any case in this part.**
+
+Matching text, enum values and relation **paths** is **case-insensitive**, in every alphabet —
+not only in English. This is a live operator requirement, and it is the single easiest thing in
+this design to get subtly wrong: the obvious implementations fold English correctly and fold
+German, Greek and Turkish incorrectly, in three different ways.
+
+**Two of these cases are NEGATIVES.** They are cases where the correct behaviour is *not to
+match*. If you see `istanbul` and `İSTANBUL` treated as different words, **that is correct and
+you must not report it as a folding gap.** The dotted `İ` and the plain `i` are different
+letters in Turkish; collapsing them is a real bug that has broken real software, and this plan
+asserts the correct answer explicitly so nobody "fixes" it.
+
+Use the `token` fixture notes. For each pair, run the query with the **left** spelling and
+check whether the note holding the **right** spelling comes back.
+
+### Case D-1 — The six literal pairs
+
+| # | Query for | Note holds | Expected | Why this pair is here |
+|---|---|---|---|---|
+| D-1.1 | `straße` | `STRASSE` | **MATCH** | German `ß` folds to `ss`. This is the cell that fails if anyone reaches for a standard-library shortcut |
+| D-1.2 | `σίσυφος` | `ΣΊΣΥΦΟΣ` | **MATCH** | Greek final sigma — the pair where the two obvious implementations disagree with *each other* |
+| D-1.3 | `müller` | `MÜLLER` | **MATCH** | German umlaut. The ordinary case; everything gets this right |
+| D-1.4 | `łódź` | `ŁÓDŹ` | **MATCH** | Polish. The control — a test containing only rows like this one proves nothing |
+| D-1.5 | `istanbul` | `İSTANBUL` | **MUST NOT MATCH** | **Turkish dotted `İ`. Different letters. A match here is the bug.** Do not report a non-match as a finding |
+| D-1.6 | `file` | `ﬁle` | **MATCH** | The `fi` ligature. A second, independent witness that simple folding is not enough |
+
+Run each of these **twice**: once against a `text` property (`label`) and once against an
+`enum` property (`word`). Both must give the same six answers.
+
+**Fail if:** any of D-1.1, D-1.2, D-1.3, D-1.4 or D-1.6 fails to match — **or** if D-1.5
+matches.
+
+**A diagnostic worth recording rather than diagnosing:** if D-1.3 and D-1.4 pass while D-1.1
+and D-1.6 fail, say exactly that in your report — "the two full-folding pairs failed, the two
+simple pairs passed". That sentence is worth more to the implementer than any theory, and it
+costs you nothing to write it.
+
+### Case D-2 — Folding applies to enum resolution, not just search
+
+| Step | Do this | Expect |
+|---|---|---|
+| D-2.1 | Ask `vault_edit` to write `word` = `STRASSE` on a token note | **Accepted.** It resolves to the declared value `straße` |
+| D-2.2 | Look at the file on disk | It says `STRASSE` — the file keeps its own spelling |
+| D-2.3 | `vault_describe` afterwards | `word` still declares six values. `STRASSE` did **not** become a seventh |
+| D-2.4 | Ask `vault_edit` to write `word` = `strasse-x` | **Refused**, naming the permitted values |
+
+**Fail if:** a case variant is refused (that is the bug this rule exists to prevent), or is
+accepted *as a new value* (that is the opposite bug, and it is worse).
+
+### Case D-3 — One value, one group, one place in a sort
+
+| Step | Do this | Expect |
+|---|---|---|
+| D-3.1 | `vault_find` on `type` = `token`, `group_by` = `mood` | **One** group, containing all three of `calm`, `Calm` and `CALM` |
+| D-3.2 | Same query, `sort` by `mood` | The three sit **together**, not scattered with capitals first |
+| D-3.3 | Look at how each row renders | Each shows the spelling its own file uses |
+
+**Fail if:** three groups appear where one value was declared; or grouping collapses them into
+one group while sorting scatters them into three places. Those two answers disagreeing is the
+finding, and it is worth reporting even if each half looks reasonable alone.
+
+### Case D-4 — `LIKE` folds the pattern's letters, not its wildcards
+
+*This one is fiddly and it is here because it is exactly the behaviour a tester would otherwise
+read off whatever the implementation happened to do. `straße` is six characters and folds to
+`strasse`, which is seven. `_` matches exactly one character **of the folded form**.*
+
+| Step | Do this | Expect |
+|---|---|---|
+| D-4.1 | `label` `LIKE` `stra_e` against the note holding `straße` | **No match** (the folded form has two characters where the pattern has one) |
+| D-4.2 | `label` `LIKE` `stra__e` against the same note | **Match** |
+| D-4.3 | `label` `LIKE` `%ÄCM%` against a note holding `äcme` | Match — patterns fold too |
+| D-4.4 | `label` `LIKE` `100\%` against a note holding `100%` | Match — the backslash escapes the wildcard |
+
+### Case D-5 — Record identifiers are matched exactly
+
+*Paths fold. Identifiers do not — because two legitimately distinct identifiers that fold
+together would collide into one, which is data loss for a case nobody chose.*
+
+| Step | Do this | Expect |
+|---|---|---|
+| D-5.1 | Create a second specimen with `id: sp-0001` (lower case), alongside the existing `SP-0001` | They are treated as **two different identifiers** |
+| D-5.2 | `check_integrity` | They are **not** reported as a duplicate identifier — they are not duplicates |
+| D-5.3 | A relation written as `[[bracken frond]]` (lower case path) | **Resolves** to `Bracken frond` — paths *do* fold |
+
+**Fail if:** `SP-0001` and `sp-0001` are treated as one identifier, or a lower-case wikilink
+path fails to resolve.
+
+---
+
+## Part E — Enum ordering is lexical
+
+**This changed.** Enums used to sort in the order their values were declared. They now sort
+**lexically** — alphabetically, by the folded form. A vault that wants a domain order writes
+the order into the values as a prefix. Both behaviours are tested here, because one is the
+mechanism and the other is the convention the mechanism forces.
+
+The `token` fixture declares `phase` in the order `ember, azure, cinder, dune`, whose lexical
+order is `azure, cinder, dune, ember`. They are deliberately different.
+
+### Case E-1 — An unprefixed enum sorts lexically
+
+| Step | Do this | Expect |
+|---|---|---|
+| E-1.1 | `vault_find` `type` = `token`, `sort` by `phase` ascending | `azure, cinder, dune, ember` |
+| E-1.2 | Compare that with the declaration order | It is **not** `ember, azure, cinder, dune`. That is correct |
+| E-1.3 | `filter` `phase` `>=` `cinder` | `cinder, dune, ember` — and **not** `azure`, even though `azure` was declared second |
+
+**Fail if:** the sort follows declaration order. **Do not report E-1.2 or E-1.3 as a bug** —
+this is the specified behaviour, and it is the reason Case E-2 exists.
+
+### Case E-2 — A domain order is a prefix
+
+| Step | Do this | Expect |
+|---|---|---|
+| E-2.1 | `vault_find` `type` = `token`, `sort` by `ranked` ascending | `1-ember, 2-azure, 3-cinder, 4-dune` |
+| E-2.2 | `filter` `ranked` `>=` `3-cinder` | `3-cinder` and `4-dune` only |
+
+**Fail if:** prefixing does not produce the intended order. This is the entire escape hatch for
+domain ordering; if it does not work, there is no way to express one.
+
+### Case E-3 — Ordering agrees with grouping and with equality
+
+| Step | Do this | Expect |
+|---|---|---|
+| E-3.1 | Sort by `mood` across the three case variants (Case D-3) | They sit together |
+| E-3.2 | Group by `mood` | One group |
+| E-3.3 | Filter `mood` `=` `CALM` | All three |
+
+**Fail if:** any two of these three disagree about how many distinct values `mood` has.
+
+### Case E-4 — Nothing anywhere implies a declared order
+
+| Step | Do this | Expect |
+|---|---|---|
+| E-4.1 | Re-read `vault_describe`'s enum output (Case B-2) | It says the set is unordered |
+| E-4.2 | Look at any UI that renders an enum — a filter dropdown, a group header, a cell editor | Either lexical order, or an explicit statement of what order it is showing. Never declaration order presented as *the* order |
