@@ -474,7 +474,9 @@ as "no progress has arrived" for a fully indexed collection.
 |---|---|
 | Property absent entirely | distinct from any value; `is absent` matches it; a negative filter includes it unless excluded |
 | Enum value differing only in ASCII case | **REVERSED, revision 5 (operator ruling 3):** it **resolves** to the declared value and is conforming. `Won` is the declared value `won`; it sorts by `won`'s ordinal and renders as the file spells it. It does **not** create a second de-facto value, which is what D4 actually forbids (FR-011) |
-| Enum value differing only in **non-ASCII** case (`Ätä` vs `ätä`) | **does NOT resolve** — stock SQLite folds no non-ASCII case, so this depends on the Go-side fold column being built. Specified in §8.1, R-10/R-5 rows; a build without the fold column reports these as non-conforming rather than matching them (FR-011a) |
+| Enum value differing only in **non-ASCII** case (`Ätä` vs `ätä`) | **CORRECTED, revision 6 — revision 5's row stated the OPPOSITE of the requirement.** It **resolves** to the declared value, **unconditionally**. The fold is in the comparator (`cases.Fold()`, FR-011a), not in SQLite, so there is no build in which it does not resolve and no column it depends on. *(Revision 5 said it "does NOT resolve" and gated it on the Go-side fold column FR-011a itself withdraws; DS-1's `ÄKTIV` row, SC-002d, R-5, R-10 and §7 test 53 all required the opposite. An implementer following the old row built a conditional behaviour on a column that does not exist.)* |
+| Enum or text value differing by a **FULL**-case-folding pair (`straße` vs `STRASSE`, `ﬁle` vs `file`) | **resolves — and only because the mechanism is `cases.Fold()`.** Under `strings.ToLower` or `strings.EqualFold` — revision 5's mechanism and review round 6's proposed remedy respectively — **both of these are `false`** (executed; see FR-011a's table). This row exists so that a later "simplification" back to a stdlib call is caught by a test rather than by a user (§7 test 53) |
+| Enum or text value differing by the **Turkish dotted `İ`** (`İstanbul` vs `istanbul`) | **does NOT resolve, and MUST NOT.** They are different letters; `cases.Fold()` keeps them distinct while `strings.ToLower` collapses them. Asserted as a **negative** case (AC-8.9, §7 test 53, DS-1) so that the correct answer cannot be mistaken for a folding gap |
 | Record type declared in two schema files | both rejected, both paths named |
 | Relation to a record in another workspace's vault | invisible; treated as dangling within scope |
 | `integer` property holding a value above int64 | rejected at write, naming the bound (FR-012). Never `CAST` — a `CAST('9223372036854775808' AS INTEGER)` **saturates silently at int64 max** with no error (§8.1 receipt) |
@@ -560,9 +562,14 @@ as "no progress has arrived" for a fully indexed collection.
   needs `%`/`_` escaping on caller-supplied text, and an unescaped `%` in a needle is a wildcard
   nobody asked for) — but that is an implementation preference, not a prohibition, and **no test
   asserts the absence of `LIKE`.**
-- The system must **not** claim its case-insensitive matching is Unicode-aware. It is **ASCII-only**
-  wherever it rests on SQLite (`COLLATE NOCASE`, `LIKE`, `lower()`), verified over fourteen
-  non-ASCII pairs in §8.1a; Unicode folding requires the Go-side fold column FR-011a specifies.
+- The system must **not** claim a folding guarantee stronger than the one it delivers, and
+  **"Unicode-aware" is not a guarantee** — revision 5 used it as though it meant full case folding
+  and it does not (FR-011b's three-level vocabulary). Anything resting on SQLite (`COLLATE NOCASE`,
+  `LIKE`, `lower()`) is **ASCII-only**, verified over fourteen non-ASCII pairs in §8.1b; anything
+  resting on `strings.ToLower` or `strings.EqualFold` is **simple** folding, which is weaker than
+  what FR-011a requires and, between those two functions, not even self-consistent. Nothing rests on
+  a derived fold column: **there is no fold column** (FR-011a withdrew it), and no requirement,
+  criterion or test may reintroduce a dependency on one.
 
 ### Machine-verifiable constraints
 
@@ -576,7 +583,7 @@ as "no progress has arrived" for a fully indexed collection.
 | Peak RSS | ADR-067's < 64 MB steady state is inherited as a **TARGET, not a property** — it was measured for bleve alone, and SQLite's page cache, `GROUP BY`/`ORDER BY` temp b-trees and connection state are unmeasured (ADR-068 D16.4 item 4). W1 measures both indexes, idle and at the cap, on Linux **and** macOS. **No record-specific latency target is stated** |
 | Rate limit | **new work for the write path** — `checkRetrievalRate` covers reads only (§1); 429 carries `Retry-After` (FR-067) |
 | Numeric arithmetic | **REPLACES "Money arithmetic", revision 5.** `integer` is int64, bound-checked in Go and refused outside it (FR-012). `decimal` is exact and arbitrary-precision over `math/big`, declared scale bounded at **100** (`pkg/records/decimal.go:48`), refused above it and never rounded (FR-013). **No binary floating point anywhere in the parse, storage, comparison, ordering or aggregation path** — asserted by `pkg/records/decimal_no_float_test.go` |
-| Case sensitivity | **matching is case-INSENSITIVE** for text, enum values and relation paths (operator ruling). **ASCII-only where it rests on SQLite**; Unicode requires the Go-side fold column (FR-011a). Record identifiers are matched **exactly**, on a `BINARY` column (§8.1, R-8) |
+| Case sensitivity | **matching is case-INSENSITIVE** for text, enum values, relation **paths**, `LIKE` and `IN` (operator ruling). **The mechanism is `golang.org/x/text/cases.Fold()` — full Unicode case folding, in the Go comparator** (FR-011a). Nothing rests on SQLite and **there is no fold column**; both were withdrawn under ruling R-A. `strings.ToLower` and `strings.EqualFold` are **forbidden** here (§7 test 53a). Record **identifiers** are matched **byte-exactly by the comparator**, with no folding applied — not by a column collation (R-8, restated). *(Revision 5 said "ASCII-only where it rests on SQLite", "Unicode requires the Go-side fold column" and "on a `BINARY` column". All three named mechanisms that this design does not have.)* |
 | SQLite engine | `modernc.org/sqlite v1.46.1` (`go.mod:64`), which reports `sqlite_version()` = **3.51.2** — verified through the driver, not assumed. A test asserts the linked version (FR-020i), because affinity and collation behaviour is version-sensitive |
 | Agent tool count | exactly **6** `vault_*` names; **0** `knowledge_*` names; catalog **98 → 95** |
 | Tool description budget | ~150 tokens each. **This is a budget for the description PROSE only and it is not the tool surface's standing cost** — see FR-079 and FR-128, corrected in revision 5: the whole JSON parameter schema, every parameter description included, is sent on every request (`pkg/tools/registry.go:557-560`), so the ~900-token figure was computed against the wrong denominator |
@@ -639,12 +646,36 @@ as "no progress has arrived" for a fully indexed collection.
   - **ADR-068 D4's title — "Enums are closed and ordered; ordering is data, not spelling" — is now wrong in its second clause** and is corrected in ADR revision 7. **Closed** is unchanged and is the half D4's evidence supports.
   - **The refusal string changes.** `enum property 'status' must declare its values in order` is deleted from §4.1.6; declaring an enum in any order is now valid.
 - **FR-011** **MEANING CHANGED, revision 5 (operator ruling 3).** The system MUST **resolve** an enum value to a declared value **case-insensitively**, and MUST reject a value that resolves to none of them, listing the permitted values. *Previously the resolution was exact-case, which made `Won` a rejection. Under ruling 3 it resolves to `won`.* **Two consequences are normative:** the value it resolves to supplies the **ordinal** (FR-010, R-5), so ordering is unaffected by spelling; and the **file's own spelling is what renders**, because the note is the source of truth and this system does not rewrite a file it was not asked to change (FR-046's sibling rule). *(This does not weaken D4: D4 forbids **auto-creating** a second value, and folding does the opposite — it collapses two spellings into one. §7 test 2 and DS-1's `Active` row are corrected, not merely re-labelled.)*
-- **FR-011a** **NEW, revision 5 (operator rulings R-D and R-A). Case-insensitive matching is a property of the comparator, in Go, over Unicode — not a collation, and not a derived column.** Every `=`, `<>` and `LIKE` comparison on `text`, on an `enum` label and on a relation **path** MUST fold both sides with **one shared Go function** before comparing. **`strings.ToLower` is Unicode-aware**, so this is full-Unicode case insensitivity for free, in the place the ruling asks for it.
-  - **Why this is a comparator rule and not a SQLite one, with the measurement rather than a preference:** `COLLATE NOCASE`, `LIKE` and `lower()` inside SQLite each fold **ASCII only**. Executed over fourteen upper/lower pairs, each folded the two ASCII pairs and **zero** of the twelve non-ASCII ones; `lower()` returned every non-ASCII input byte-for-byte unchanged. The engine carries no `ENABLE_ICU` and `icu_load_collation` does not exist, so **there is no Unicode-aware option inside SQLite at all here** (§8.1). A vault in German, Polish, Greek or Turkish would have got case-insensitive matching for its ASCII words and silent case-sensitivity for the rest. **Doing it in Go is not a workaround for delegating; it is the only place it can be done correctly.** *(An earlier draft of this revision specified a derived `<col>_fold` column in SQLite. **Withdrawn** — under ruling R-A there is nothing to compare it against, and it cost one extra TEXT column per foldable property for a strictly worse fold.)*
-  - **Record IDENTIFIERS are excluded and are matched exactly.** Folding `CO-0142` and `co-0142` into one key would make two legitimately distinct targets indistinguishable. Identifiers are minted by us in one canonical form, so nothing is lost. Relation **paths** fold; relation **ids** do not (R-8).
+- **FR-011a** **NEW, revision 5 (operator rulings R-D and R-A). MECHANISM CORRECTED, revision 6 — revision 5's mechanism did not do what revision 5 said it did, and this was established by execution, not by argument.** **Case-insensitive matching is a property of the comparator, in Go, over Unicode — not a collation, and not a derived column.** Every `=`, `<>`, `LIKE` and `IN` comparison on `text`, on an `enum` label and on a relation **path** MUST fold both sides with **one shared Go function**, and that function MUST be **`golang.org/x/text/cases.Fold()`** — Unicode **FULL** case folding. **`strings.ToLower` and `strings.EqualFold` are both FORBIDDEN for this purpose**, and a test asserts neither appears in the comparator (§7 test 53a).
+  - **What revision 5 claimed, and why it was false.** Revision 5 said *"`strings.ToLower` is Unicode-aware, so this is full-Unicode case insensitivity for free"*. **Unicode-aware is not the same property as full case folding, and the Go standard library implements only SIMPLE folding.** Worse, its two candidate methods fail in **opposite** directions, so there is no safe standard-library default. Executed on this machine, Go 1.26.6, against `golang.org/x/text v0.41.0`:
+
+    | Pair | `strings.ToLower` equal | `strings.EqualFold` | **`cases.Fold()`** | Correct answer |
+    |---|---|---|---|---|
+    | `straße` / `STRASSE` (German) | false | false | **true** | **true** — `ß` full-folds to `ss` |
+    | `σίσυφος` / `ΣΊΣΥΦΟΣ` (Greek final sigma) | false | true | **true** | **true** — `ς` and `σ` fold together |
+    | `müller` / `MÜLLER` (German umlaut) | true | true | **true** | true |
+    | `łódź` / `ŁÓDŹ` (Polish) | true | true | **true** | true |
+    | `istanbul` / `İSTANBUL` (Turkish dotted I) | true | false | **false** | **false** — see below |
+    | `ﬁle` / `file` (ligature) | false | false | **true** | true |
+
+    The two stdlib columns **disagree with each other** on rows 2 and 5. `cases.Fold()` is the only column that is right in every row.
+  - **The Turkish row is a REQUIREMENT, not a defect, and it is stated here so nobody "fixes" it later.** `İ` (U+0130, Latin capital I with dot above) and plain `i` are **different letters**. Unicode full case folding maps `İ` to `i` + U+0307 (combining dot above), which is not equal to plain `i`, so `cases.Fold()` keeps them distinct. `strings.ToLower` collapses them, and that collapse is the classic **Turkish-I bug** — the one where a Turkish user's `İSTANBUL` silently matches an unrelated `istanbul`. **A future contributor who observes that `ToLower` "handles Turkish" and `cases.Fold()` does not has the sign backwards.** `cases.Fold()` is also **locale-free and deterministic**, which is the property a vault with no declared locale needs: the same two strings compare the same way on every machine, in every timezone, under every `LANG`.
+  - **Hard Constraint #1 is satisfied, and the measured cost is given rather than waved at.** `golang.org/x/text v0.41.0` is **already a dependency** — `go.mod:167`, currently marked `// indirect` — and **several of its subpackages already link into the shipped binary today** (`golang.org/x/text/language`, `/transform`, `/runes`, `/unicode/norm`, `/encoding/*`, plus the vendored copies under `vendor/golang.org/x/text/`; enumerated with `go list -deps -tags goolm,stdjson ./cmd/omnipus/`). Promoting it to a **direct** requirement therefore adds **no new module, no new runtime dependency, no CGo and no external C library**. **What it does add, measured:** the `cases` subpackage itself is not currently linked, and adding it costs **≈274 KiB of binary** (280,352 bytes — two otherwise-identical programs built `CGO_ENABLED=0`, one importing `x/text/cases` and one not). That is read-only table data, demand-paged, not heap, so Hard Constraint #3's 10 MB RSS budget is not materially touched. **The number is stated because "adds nothing to the binary" would not survive a measurement, and an unverified size claim is exactly the failure class this document exists to remove.**
+  - **`cases.Fold()` is stateless and concurrency-safe, and this is load-bearing.** A `cases.Caser` in general *"may be stateful and should therefore not be shared between goroutines"* (`golang.org/x/text@v0.41.0/cases/cases.go:35-36`), but `Fold` is documented as the exception: *"The returned Caser is stateless and safe to use concurrently by multiple goroutines"* (`cases.go:86-87`). The comparator MAY therefore hold **one package-level `cases.Fold()` value** and use it from every query goroutine. **An implementer who assumes the general Caser rule applies will construct one per comparison and pay for it; an implementer who assumes a general Caser is shareable will build a data race in some other part of the codebase.** Both mistakes are avoided by citing the exception here.
+  - **Folding changes rune count, and `LIKE`'s `_` must be specified against that.** `straße` is 6 runes and folds to `strasse`, which is **7**; `ﬁle` is 3 runes and folds to 4; `İ` is 1 rune and folds to 2. So `_` — SQL's exactly-one-character wildcard — **cannot mean the same thing before and after folding**. **The rule:** `LIKE` folds the subject and the pattern's **literal segments**, never its metacharacters (`%`, `_`, and the `\` escape), and **`_` then matches exactly one character of the FOLDED subject**. `'straße' LIKE 'stra_e'` is therefore **false** (the folded subject has two characters where the pattern has one) and `'straße' LIKE 'stra__e'` is **true**. This is stated rather than discovered because it is the kind of behaviour a test writer will otherwise read off whatever the implementation happened to do. See FR-022b for `LIKE`'s anchoring, and DS-4 for the cases.
+  - **`IN` folds, and this is now decided rather than left silent.** `IN` is set membership evaluated as a disjunction of `=`, and `=` folds, so **every element of an `IN` list is folded and so is the subject**. Revision 5 left this to inference and the truth table would have been filled in by guessing.
+  - **Enum equality folds by the SAME function**, so FR-011's resolution of a written value to a declared value is `cases.Fold()` on both sides — not a second, weaker rule. Consequence: `STRASSE` resolves to a declared `straße`, and `ÄKTIV` resolves to a declared `äktiv`, **unconditionally and with no SQLite involvement** (DS-1).
+  - **Ordering does NOT use the fold. See M-8's resolution in R-5.** Folding is for *matching*. The sort key is specified separately in FR-010/R-5, because folding is not order-preserving — `"Won" < "lost"` is **true** on raw bytes and **false** on folded bytes (executed), so a comparator that reused the fold as its sort key would silently reorder every result.
+  - **Record IDENTIFIERS are excluded and are matched exactly.** Folding `CO-0142` and `co-0142` into one key would make two legitimately distinct targets indistinguishable. Identifiers are minted by us in one canonical form, so nothing is lost. Relation **paths** fold; relation **ids** do not (R-8). *(R-8 is now a comparator rule, not a column collation — see R-8 as restated in §8.)*
   - **The fold is not a fourth notion of a term** and MUST NOT be confused with FR-116's tokenizer question: it is a character-level transform that splits nothing, stems nothing and removes no stopword.
-  - **The cost is stated:** one `strings.ToLower` per operand per comparison, over a candidate set FR-064 caps at 10,000. Unmeasured; carried by A-14.
-- **FR-011b** **NEW, revision 5.** Where any surface **does** deliver only ASCII folding — a fallback path, a SQLite-side narrowing that happens to compare text, a future optimisation — it MUST be documented and reported as **ASCII-case-insensitive**, never as case-insensitive without qualification. A guarantee that silently holds for one alphabet is the failure class this document exists to remove.
+  - **The derived `<col>_fold` SQLite column is WITHDRAWN**, and nothing in this document may depend on one. *(An earlier draft of revision 5 specified one. Under ruling R-A there is nothing in SQLite to compare it against, and it cost one extra TEXT column per foldable property for a strictly worse — ASCII-only — fold.)*
+  - **The cost is stated:** one `cases.Fold()` call per operand per comparison, over a candidate set FR-064 caps at 10,000. `cases.Fold()` is **idempotent** — `fold(fold(x)) == fold(x)`, executed over all six pairs above — so the record side MAY be folded **once per candidate** and reused across every leaf of the filter tree (FR-011c). Unmeasured; carried by A-14, whose worst case is bounded by FR-023c's leaf-count cap.
+- **FR-011b** **NEW, revision 5; VOCABULARY EXTENDED, revision 6.** There are **three** distinct guarantees here and a surface MUST name the one it delivers, never the stronger one:
+  1. **ASCII case folding** — what `COLLATE NOCASE`, `LIKE` and `lower()` inside SQLite deliver (verified, §8.1). Two of fourteen pairs.
+  2. **Simple Unicode case folding** — what `strings.ToLower` and `strings.EqualFold` deliver. It is **not** full folding and it is **not** self-consistent between those two functions (the table above).
+  3. **Full Unicode case folding** — what `cases.Fold()` delivers, and what this system ships.
+  Where any surface delivers (1) or (2) — a fallback path, a SQLite-side narrowing that happens to compare text, a future optimisation — it MUST be documented and reported as **ASCII-case-insensitive** or **simple-case-insensitive** respectively, never as "case-insensitive" without qualification and never as "Unicode-aware", which revision 5 used as though it meant (3) and it does not. A guarantee that silently holds for one alphabet, or for one folding depth, is the failure class this document exists to remove.
+- **FR-011c** **NEW, revision 6 (closes review round 6 M-31).** An implementation MAY fold the **record side** of a comparison **once per candidate** and reuse the folded form across every leaf of the filter tree; it MUST NOT fold once and then render the folded form. **The folded form is never rendered, never written to a note, and never returned on the wire** — the file's own spelling is what renders (FR-011, FR-046's sibling rule). This permission is stated because without it an implementer either pays FR-011a's per-comparison cost as specified — candidates × leaves folds, which is the multiplication A-14 is exposed to — or reintroduces a persisted derived fold column, which FR-011a withdrew. A per-candidate in-memory fold is neither.
 #### The two numeric types (revision 5, operator ruling)
 
 An author **chooses** `integer` or `decimal` in the schema. **There is no inference from the first
@@ -1474,7 +1505,7 @@ broader thing has been given a wrong answer with no error channel.
 - **SC-002a** **NEW, revision 5.** A record carrying **two** matching values of a `many` property contributes **once** to `count` and once to `sum` (FR-028a). *This is grill pass 1's worst finding as a success criterion: the SQL form returned 2 and 200 where truth was 1 and 100.*
 - **SC-002b** **NEW, revision 5.** `{not: {any: [...]}}` over a corpus with absent values returns the absent records (FR-008, FR-023b) — asserted over a **compound** negation, not only a negated leaf.
 - **SC-002c** **NEW, revision 5 (ruling R-B).** A filter using `=`, `<>`, `LIKE`, `IN`, `IS NULL` and `IS NOT NULL` evaluates correctly; a filter naming `BETWEEN`, `JOIN`, `COALESCE` or `CASE` is **refused naming the supported set and the parameter that does the job**, and never returns an empty result (FR-022b, FR-022c).
-- **SC-002d** **NEW, revision 5 (ruling R-D).** `LIKE 'äcm%'` matches `ÄCME` — full Unicode case folding, in the comparator (FR-011a). *This is the criterion that would have failed silently under any SQLite-side implementation.*
+- **SC-002d** **NEW, revision 5; STRENGTHENED, revision 6.** All four of the following hold, and the fourth is a **negative**: `LIKE 'äcm%'` matches `ÄCME`; `= 'straße'` matches `STRASSE`; `= 'σίσυφος'` matches `ΣΊΣΥΦΟΣ`; and `= 'istanbul'` does **NOT** match `İSTANBUL`. Full Unicode case folding via `cases.Fold()`, in the comparator (FR-011a). *Revision 5's single `äcm%`/`ÄCME` cell passed under `strings.ToLower` and under a hypothetical SQLite implementation alike, so it discriminated nothing beyond ASCII; the four cells above are the smallest set that separates full folding from simple folding, from ASCII folding, and from an over-eager fold.*
 - **SC-002e** **NEW, revision 5 (ruling R-F).** A fresh install has **zero** record types, zero seeded enum values and zero seeded property names, and a denylist test finds no domain vocabulary in any non-test file of the record packages (FR-004a).
 - **SC-003** A query filtering on a mistyped property name is rejected with valid names listed; zero such queries return an empty result set.
 - **SC-004** Writing one property into a 200-line note leaves the file byte-identical outside the patched span, across a 50-file fixture corpus.
@@ -1635,7 +1666,8 @@ Order is unit → integration → e2e; within a level, dependencies first.
 | 50 | `TestFilter_CompoundNegationIncludesAbsent` | unit | FR-008, FR-023b, SC-002b — **NEW, revision 5.** `{not: {all: […]}}` and `{not: {any: […]}}` over a corpus with absent values. Every negation cell in revision 4's table was leaf-shaped, so a tri-state bug in a tree walker would have passed all of them |
 | 51 | `TestAggregate_ManyValuePropertyCountsRecordOnce` | integration | FR-028a, SC-002a — **NEW, revision 5.** A record gains a **second** matching value of a `many` property; `count` and `sum` are unchanged. *Grill pass 1's worst finding, as a test* |
 | 52 | `TestFilter_SQLOperatorVocabularyAndRefusals` | unit | FR-022b, FR-022c, SC-002c — **NEW, revision 5 (ruling R-B).** All ten operators evaluate; `BETWEEN`, `JOIN`, `COALESCE`, `CASE`, a subquery and a function call are each refused **naming the supported set and the parameter that does the job**, never parsed, never silently dropped, never an empty result |
-| 53 | `TestFilter_CaseFoldIsUnicodeNotASCII` | unit | FR-011a, SC-002d — **NEW, revision 5 (ruling R-D).** `LIKE 'äcm%'` matches `ÄCME`; `= 'straße'` matches `STRASSE` per Go's folding. **The fixture MUST include non-ASCII pairs** — an ASCII-only fixture passes over a SQLite-side implementation that folds nothing outside ASCII, which is the whole point |
+| 53 | `TestFilter_CaseFoldIsFullUnicode` | unit | FR-011a, FR-011b, SC-002d, AC-8.9 — **RENAMED AND CORRECTED, revision 6.** Asserts AC-8.9's six literal pairs, including the two **negatives**. `= 'straße'` matches `STRASSE` — which is **true under `cases.Fold()` and FALSE under both `strings.ToLower` and `strings.EqualFold`**, so this cell is what makes the test discriminating rather than decorative. **The fixture MUST include non-ASCII pairs**, and MUST include at least one full-folding pair and the Turkish negative — an ASCII-only fixture passes over any of the three wrong mechanisms, which is the whole point. *(Revision 5 named this `…IsUnicodeNotASCII` and cited "Go's folding" for a cell Go's stdlib folding gets wrong.)* |
+| 53a | `TestFilter_ComparatorDoesNotUseStdlibFolding` | unit | FR-011a, FR-011b — **NEW, revision 6.** A source-level assertion over the comparator package: **no `strings.ToLower`, `strings.ToUpper`, `strings.EqualFold` or `unicode.ToLower` appears in any comparison path**, and the only folding call is `cases.Fold()`. This is a **guard against a plausible future simplification**, not against a present bug: every one of those calls looks like a harmless tidy-up, three of AC-8.9's six pairs change answer when one is substituted, and the change is invisible in any ASCII fixture. Compare §7 test 42's treatment: name the file set the check covers, so that adding a new comparison file cannot silently escape it |
 | 54 | `TestSchema_NoDomainVocabularyInBinary` | unit | FR-004a, SC-002e — **NEW, revision 5 (ruling R-F).** A denylist over every non-test file of the record packages; fixtures excluded by path |
 | 55 | `TestDate_StrictISOAndAmbiguousRefused` | unit | FR-021d, R-7 — **NEW, revision 5 (ruling R-H).** `2026-09-01` and `2026-09-01T14:30Z` parse; `2026-9-1` and `03/04/2026` are reported as bad values **with the fix named**; a day and an instant compare per R-7 |
 | 56 | `TestEnum_OrdersLexicallyAndResolvesCaseInsensitively` | unit | FR-010, FR-011, R-5 — **NEW, revision 5 (rulings R-E and R-D).** Ordering is lexical and no ordinal column exists; `Won` resolves to `won`; a prefixed set (`1-lead`, `2-qualified`) orders in the author's intended order |
@@ -1659,6 +1691,10 @@ Order is unit → integration → e2e; within a level, dependencies first.
 | `active` | enum(prospect,active) | accepted | 1.3 |
 | `Active` | enum(prospect,active) | **ACCEPTED — resolves to `active`** *(REVERSED, revision 5, ruling R-D. Was "rejected — case-exact")* | 1.3 |
 | `ÄKTIV` | enum(äktiv,passiv) | **accepted — resolves to `äktiv`.** **This row is the one that fails over any SQLite-side fold**, and it is in the dataset for that reason (FR-011a) | edge |
+| `STRASSE` | enum(straße,gasse) | **accepted — resolves to `straße`** (FR-011a). **NEW, revision 6.** Fails under `strings.ToLower` *and* under `strings.EqualFold`; passes only under `cases.Fold()`. Verified by execution, not asserted | edge |
+| `ΣΊΣΥΦΟΣ` | enum(σίσυφος,άλλος) | **accepted — resolves to `σίσυφος`** (FR-011a). **NEW, revision 6.** Greek final sigma: fails under `strings.ToLower`, passes under `EqualFold` and under `cases.Fold()`. It is in the dataset because it is the pair on which the two stdlib functions **disagree with each other**, which is why neither is a safe default | edge |
+| `ŁÓDŹ` | enum(łódź,gdańsk) | **accepted — resolves to `łódź`** (FR-011a). **NEW, revision 6.** Polish: the control row — all three mechanisms get it right, so a fixture containing only this pair proves nothing | edge |
+| `İSTANBUL` | enum(istanbul,ankara) | **REJECTED — resolves to NOTHING, and this is CORRECT** (FR-011a, AC-8.9). **NEW, revision 6, and it is a NEGATIVE row.** Turkish dotted `İ` and plain `i` are different letters; `cases.Fold()` keeps them distinct, `strings.ToLower` collapses them. **The refusal names the permitted values, as every enum refusal does** — a reader who reads this as a folding gap has the sign backwards, and the reason is recorded in FR-011a so it is not "fixed" later | edge |
 | `Actve` | enum(prospect,active) | **rejected** — resolves to nothing; permitted values listed | 1.3 |
 | absent | enum | absent, not a value | 1.4 |
 | `[a, b]` | enum scalar | **rejected** — arity | 1.4 |
@@ -1786,6 +1822,26 @@ are what a human reviews.**
 | **R-12** | Every rule above applies **identically** whether the value came from a query literal or from a record. **This rule is itself violated by SQLite and now has its own defeat (§8.1, R-12 row):** comparison affinity converts a TEXT operand only when the other side is a typed column, so `3 = '3'` is **false** between two literals and **true** between a column and a literal — identical values, identical operator, opposite answers depending on provenance. |
 | **R-13** | **NARROWED, revision 5 (operator ruling R-B) — most of what it refused now has a defined answer.** Against a `many` property, **`=`, `<>`, `IN`, `LIKE`, `IS NULL` and `IS NOT NULL` are defined**, and they mean what R-9 says: element-wise, with the record matching if **any** element matches. **Only the ORDERING operators — `<`, `<=`, `>`, `>=` — remain undefined**, and they are reported as a problem naming the remedy: *"`segment` holds many values; ordering comparisons are not defined over a list — use `=`, `IN` or `LIKE`"*. *Originally added 2026-08-25 because `segment != vendor` had no defined answer; **it has one now**, in a vocabulary the caller already knows, which is the better resolution of the same gap. The refusal survives only where the question is genuinely undefined: "is this list greater than `vendor`?" has no answer in any vocabulary.* **The reasoning that survives:** an agent that gets a helpful answer to a malformed query never learns the schema, and the refusal names the fix exactly as FR-024 does for an unknown property. |
 
+**AC-8.9** **NEW, revision 6 (the operator's requirement, and it is written as literal cells so it
+cannot be softened into a description).** The comparator's fold is asserted over these **six literal
+pairs**, each with the stated expectation and each with the reason recorded, so that a later change
+of mechanism fails a test rather than a user:
+
+| Case | Left | Right | Expected | Why this pair is in the set |
+|---|---|---|---|---|
+| **AC-8.9a** | `straße` | `STRASSE` | **MATCH** | German `ß`. **Full** folding. `false` under `strings.ToLower`; `false` under `strings.EqualFold`. This is the cell that fails if anyone substitutes a stdlib call |
+| **AC-8.9b** | `σίσυφος` | `ΣΊΣΥΦΟΣ` | **MATCH** | Greek final sigma. `false` under `ToLower`, `true` under `EqualFold` — **the two stdlib functions disagree**, which is why neither is a permitted default |
+| **AC-8.9c** | `müller` | `MÜLLER` | **MATCH** | German umlaut. All mechanisms agree; included as the ordinary case so the set is not all edge |
+| **AC-8.9d** | `łódź` | `ŁÓDŹ` | **MATCH** | Polish. The control row — a fixture containing only rows like this one discriminates nothing |
+| **AC-8.9e** | `istanbul` | `İSTANBUL` | **MUST NOT MATCH** | **Turkish dotted `İ` and plain `i` are different letters.** `true` under `ToLower` — which is the classic **Turkish-I bug**, not a feature. `cases.Fold()` maps `İ` to `i` + U+0307 and keeps them apart. **This cell is asserted as a NEGATIVE with the reason in the assertion message**, because otherwise the next person to read it will "fix" it |
+| **AC-8.9f** | `ﬁle` | `file` | **MATCH** | Ligature. `false` under both stdlib functions. Not a language case — it is here because it is the second independent witness that simple folding is not enough |
+
+**AC-8.9 fails if the comparator produces the same six answers as `strings.ToLower`, or the same six
+as `strings.EqualFold`** — that is the discriminating property, and stating it this way means the
+criterion cannot be satisfied by an implementation that folds nothing at all in a fixture that
+happens to be ASCII. Every expectation above was **executed** against `golang.org/x/text v0.41.0` on
+Go 1.26.6 before it was written down; none was reasoned to.
+
 **AC-8.1** — the generated table covers every declared type × every declared type × every
 operator, plus absent and non-conforming on both sides, and every expected value traces to a
 numbered rule above. **Revision 5 adds three obligations to the generator, each closing a hole the
@@ -1821,7 +1877,7 @@ must be argued as one. A change that only regenerates cells is an implementation
 > | **FR-023a**, De Morgan normalisation before emission | **WITHDRAWN.** It existed to stop `NOT (subtree)` dropping NULL-bearing rows in SQL. A Go evaluator returning a real `bool` gets this right by construction |
 > | R-5's ordinal column and `NULLS LAST` | **N/A** — and separately deleted by ruling R-E, below |
 > | R-7's integer-epoch storage (**FR-021d**) | **WITHDRAWN as a storage requirement.** Dates are parsed and compared in Go. Ruling R-H replaces it with a parsing rule |
-> | R-9/R-10's `instr()` and the **FR-011a** fold column | **WITHDRAWN.** Go's `strings.ToLower` is Unicode-aware, so folding in the comparator delivers what SQLite cannot deliver at all |
+> | R-9/R-10's `instr()` and the **FR-011a** fold column | **WITHDRAWN.** Folding in the comparator delivers what SQLite cannot deliver at all. *(Revision 6 corrects this row's stated reason: it said "Go's `strings.ToLower` is Unicode-aware", which is true and irrelevant — `ToLower` performs **simple** folding and fails `straße`/`STRASSE`. The mechanism is `golang.org/x/text/cases.Fold()`, FR-011a. The withdrawal itself is unaffected.)* |
 > | R-11's five third outcomes | **N/A for four of five.** No SQL division, no SQL `SUM`, no SQL `unixepoch`, no SQL `CAST`. Only "a store error must not escape as a third outcome" survives |
 > | R-12's literal-vs-column affinity asymmetry | **N/A** — there is one comparison path and one provenance |
 > | **FR-028a**, the `EXISTS` semi-join against join fan-out | **WITHDRAWN.** Counting distinct records is what a Go loop does; it was a defect of aggregating in SQL |
@@ -1859,9 +1915,24 @@ table. FR-020i still asserts the linked version, because a driver bump must be a
 non-ASCII pairs**; `lower()` returned every non-ASCII input byte-for-byte unchanged
 (`hex('Ä')` = `hex(lower('Ä'))` = `C384`). `PRAGMA compile_options` carries no `ENABLE_ICU` and
 `icu_load_collation` does not exist, so **there is no Unicode-aware option inside SQLite here at
-all.** Go's `strings.ToLower` is Unicode-aware. **Case-insensitive matching is therefore something
-our comparator can actually deliver and SQLite cannot** — which is a second, independent argument
-for the ruling, arriving from a direction nobody was looking in.
+all.** **Case-insensitive matching is therefore something our comparator can deliver and SQLite
+cannot** — a second, independent argument for the ruling, arriving from a direction nobody was
+looking in.
+
+**The receipt's second half, added in revision 6, because the first half alone led revision 5 to the
+wrong remedy.** Having established that SQLite folds ASCII only, revision 5 concluded that Go's
+`strings.ToLower` was *"Unicode-aware, so this is full-Unicode case insensitivity for free"* and
+stopped there. **That conclusion was not executed, and it is false.** Executed on Go 1.26.6 over
+the same class of pairs: `strings.ToLower("straße") == strings.ToLower("STRASSE")` is **false**, and
+`strings.EqualFold("straße","STRASSE")` is **false** too; `strings.ToLower("ΣΟΦΟΣ")` is `σοφοσ`, not
+`σοφος`, so the Greek pair is **false** under `ToLower` and **true** under `EqualFold` — the two
+functions disagree; and `strings.ToLower` collapses Turkish `İ` onto `i`, which is a **wrong match**,
+not a missing one. Go's standard library implements **simple** case folding; `ß`→`ss` and `ﬁ`→`fi`
+are **full** case folding, which it does not perform. `golang.org/x/text/cases.Fold()` performs
+full folding and gets all six of AC-8.9's pairs right, verified against `golang.org/x/text v0.41.0`.
+**This is the same failure the receipt above catches in SQLite, committed one layer up in Go** —
+which is why the mechanism is now named as a specific function in FR-011a rather than as a property
+("Unicode-aware") that no API guarantees.
 
 **What the properties index is still for, so the ruling does not read as "delete SQLite".** It
 narrows. `type = 'deal'`, `path` prefix within scope, `kind = 'task'`, the relation child table's
@@ -2016,7 +2087,13 @@ naive join → **300**, truth **200**.
 
 ## 9. Holdout evaluation scenarios
 
-**Not for use during development.** Not referenced in §6 or §7.
+**Not for use during development** — with the two cross-references named below, which are
+deliberate. *(Revision 6, m-14: revision 5's blanket "Not referenced in §6 or §7" was false.
+Scenario 14 is promoted into §7 as test 50, scenario 11 is referenced by FR-113 and SC-018, and
+scenario 15's pairs are the source of AC-8.9. All three cross-references are correct and useful;
+the blanket statement was the defect. The rule that survives is the one that matters: **a holdout
+scenario is never a substitute for the fixture test that shares its subject**, and where one is
+promoted the holdout stays in place alongside it.)*
 
 1. Point the system at a real vault of at least 500 notes with no schema; confirm nothing
    breaks and no errors are raised.
@@ -2055,10 +2132,23 @@ naive join → **300**, truth **200**.
     sitting in the section marked "not for use during development", where it could not catch
     anything before release. The holdout stays as well; a twenty-question human pass over a real
     vault is not the same evidence as a fixture.
-15. **NEW, revision 5.** On a vault whose values are not English — German, Polish, Greek or Turkish
-    — confirm that `=` and `LIKE` match across case for **non-ASCII** letters. **This is the one
-    that fails silently under any SQLite-side case fold**, and no English-language corpus can
-    detect it (FR-011a, §8.1's Unicode receipt).
+15. **NEW, revision 5; CORRECTED, revision 6 — revision 5's wording asserted an outcome that is
+    WRONG for one of the four languages it named.** On a vault whose values are not English,
+    confirm each of the following **specific** outcomes, because "confirm case matches across
+    non-ASCII letters" is not a decidable instruction and three of revision 5's four languages
+    behave differently from each other:
+    - **German** — `straße` and `STRASSE` MUST match. This is **full** case folding (`ß`→`ss`) and it
+      is the pair that fails under `strings.ToLower` and under `strings.EqualFold` alike.
+    - **Polish** — `łódź` and `ŁÓDŹ` MUST match. The control: every candidate mechanism gets this
+      right, so a Polish-only corpus proves nothing.
+    - **Greek** — `σίσυφος` and `ΣΊΣΥΦΟΣ` MUST match. Final sigma; the pair on which the two Go
+      stdlib functions **disagree with each other**.
+    - **Turkish** — `istanbul` and `İSTANBUL` MUST **NOT** match, and a tester who reports this as a
+      bug should be sent to FR-011a. They are different letters. **This is the row revision 5 got
+      backwards**: it promised that all four languages would match across case, which would have
+      made the Turkish-I bug a passing result.
+    **This scenario fails silently under any SQLite-side case fold and under both Go stdlib folds**,
+    and no English-language corpus can detect it (FR-011a, AC-8.9, §8.1's Unicode receipt).
 16. **NEW, revision 5.** Ask for a total over a vault holding more records than the 10,000-record
     candidate cap, and confirm the aggregate-only path answers it rather than refusing (FR-064a).
     **This is ADR-068 §1.2's own motivating question at a scale the spec claims to support**, and
