@@ -51,6 +51,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"hash"
@@ -59,6 +60,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -68,6 +70,8 @@ import (
 	"github.com/blevesearch/bleve/v2/index/scorch"
 	bleveMapping "github.com/blevesearch/bleve/v2/mapping"
 	bleveQuery "github.com/blevesearch/bleve/v2/search/query"
+
+	"github.com/elicify-ai/omnipus/pkg/fileutil"
 )
 
 const (
@@ -129,6 +133,11 @@ const (
 	// beside it, so removing a corrupt index never removes its own record of
 	// what to rebuild from.
 	indexBleveSubdir = "bleve"
+
+	// indexFormatFileName is the format sidecar, written beside the manifest.
+	// It records which on-disk index format wrote the segments under
+	// indexBleveSubdir. See indexFormatVersion.
+	indexFormatFileName = "index_format.json"
 
 	// boltOpenTimeout bounds the wait for scorch's process-exclusive root.bolt
 	// lock. The registry means we open each index once, so this only ever fires
@@ -352,7 +361,15 @@ type Index struct {
 	dir          string // <home>/knowledge/<key>
 	blevePath    string // <dir>/bleve
 	manifestPath string // <dir>/manifest.json
+	formatPath   string // <dir>/index_format.json
 	root         string // collection root, resolved real path
+
+	// rebuildReason is why the index on disk was discarded and recreated when
+	// this handle was opened, or "" if it was opened as it stood. It is set
+	// once, inside OpenIndex, before the handle is published to the registry,
+	// and never written again — so it needs no lock, and a second holder of a
+	// shared handle correctly reads the reason of the open that created it.
+	rebuildReason string
 
 	mu sync.Mutex // serializes writes (Sync); scorch is read-safe concurrently
 
@@ -393,6 +410,9 @@ func indexKeyFor(realRoot string) string {
 // A corrupt index is removed and recreated. Its manifest is removed with it, so
 // the following Sync rebuilds from the collection rather than trusting a record
 // of an index that no longer exists.
+//
+// So is an index that CAN be opened but must not be trusted — see
+// openOrRebuild. RebuildReason reports which of the two happened.
 func OpenIndex(home, collectionRoot string) (*Index, error) {
 	realRoot, err := ResolveCollectionRoot(collectionRoot)
 	if err != nil {
@@ -408,50 +428,362 @@ func OpenIndex(home, collectionRoot string) (*Index, error) {
 			dir:          dir,
 			blevePath:    filepath.Join(dir, indexBleveSubdir),
 			manifestPath: filepath.Join(dir, ManifestFileName),
+			formatPath:   filepath.Join(dir, indexFormatFileName),
 			root:         realRoot,
 		}
 		if mkErr := os.MkdirAll(dir, indexDirMode); mkErr != nil {
 			return nil, fmt.Errorf("knowledge: create index dir %s: %w", dir, mkErr)
 		}
 
-		bidx, openErr := openOrCreateBleve(ix.blevePath)
+		bidx, reason, openErr := ix.openOrRebuild()
 		if openErr != nil {
-			slog.Warn("knowledge: index open failed; removing and rebuilding",
-				"path", ix.blevePath, "error", openErr)
-			if rmErr := os.RemoveAll(ix.blevePath); rmErr != nil {
-				return nil, fmt.Errorf("knowledge: remove corrupt index %s: %w", ix.blevePath, rmErr)
-			}
-			// The manifest describes an index that no longer exists; keeping it
-			// would make the next Sync skip every file as "unchanged" against a
-			// record of documents that are gone.
-			if rmErr := os.Remove(ix.manifestPath); rmErr != nil && !errors.Is(rmErr, fs.ErrNotExist) {
-				return nil, fmt.Errorf("knowledge: remove stale manifest %s: %w", ix.manifestPath, rmErr)
-			}
-			bidx, openErr = openOrCreateBleve(ix.blevePath)
-			if openErr != nil {
-				return nil, fmt.Errorf("knowledge: create fresh index %s: %w", ix.blevePath, openErr)
-			}
+			return nil, openErr
 		}
 		ix.idx = bidx
+		ix.rebuildReason = reason
 
 		if permErr := enforceIndexPermissions(dir); permErr != nil {
-			_ = bidx.Close()
+			closeIndexQuietly(bidx, ix.blevePath)
 			return nil, permErr
 		}
 		return ix, nil
 	})
 }
 
-// openOrCreateBleve opens the scorch index at path, creating it if absent.
-func openOrCreateBleve(path string) (bleve.Index, error) {
-	cfg := map[string]any{"bolt_timeout": boltOpenTimeout}
-	if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
-		if mkErr := os.MkdirAll(filepath.Dir(path), indexDirMode); mkErr != nil {
-			return nil, fmt.Errorf("create index parent dir: %w", mkErr)
+// RebuildReason reports, in one sentence a person can act on, why the index on
+// disk was discarded and recreated when this handle was opened. It is "" when
+// the index was opened as it stood, and "" on a first open that had nothing to
+// discard.
+//
+// It is the seam the index-state surface reads: a caller that shows index state
+// can say WHY a collection is being re-read from zero instead of leaving the
+// operator to guess. Nothing in this package renders it.
+//
+// Between OpenIndex returning a non-empty reason and the next Sync completing,
+// the index holds NO documents. That is not a new state — it is exactly the
+// state a first-ever open leaves behind, and the manifest is removed with the
+// index so callers that gate on the manifest (knowledge_search reports
+// index_state "not_built" and refuses to answer) already treat it correctly
+// rather than reporting a confident zero results.
+func (ix *Index) RebuildReason() string { return ix.rebuildReason }
+
+// openOrRebuild opens the bleve index under ix.blevePath, rebuilding it from
+// scratch when what is on disk cannot be trusted. It returns the open index and
+// the rebuild reason ("" if none).
+//
+// THE POINT OF THIS FUNCTION IS THAT AN UNTRUSTWORTHY INDEX CANNOT BE OPENED
+// QUIETLY. There are three ways an index reaches us in a state that must not be
+// searched, and each fails differently:
+//
+//  1. It will not open at all — corruption bleve itself detects. This was
+//     already handled and still is.
+//  2. It opens fine and its segments are silently wrong. This is ADR-068 F-0:
+//     zapx v17.1.2 miscalculates chunk offsets while WRITING, so a search over
+//     a 100,000-document index panics with a slice bound out of range — a panic
+//     that is not recovered anywhere in bleve's call stack, so in the gateway it
+//     is a process crash. Pinning zapx ≥ v17.1.4 fixes new writes and does
+//     nothing whatever for segments already on disk. Only guard G1, the format
+//     version, can see this: the bytes look valid until they are read.
+//  3. It opens fine and its MAPPING is not the mapping the code now builds.
+//     bleve.OpenUsing takes no mapping argument — the mapping persisted at
+//     creation is authoritative forever after — so a field the code has since
+//     added, or whose analyzer it has since changed, produces zero hits and NO
+//     ERROR. Guard G2 catches this.
+//
+// G1 and G2 are both here because neither subsumes the other. G1 depends on a
+// human remembering to bump indexFormatVersion; G2 depends on nobody
+// remembering anything, and catches exactly the case where the bump was
+// forgotten. G1 catches the case G2 cannot see at all — segments that are wrong
+// while the mapping is right.
+func (ix *Index) openOrRebuild() (bleve.Index, string, error) {
+	if _, statErr := os.Stat(ix.blevePath); statErr != nil {
+		if !errors.Is(statErr, fs.ErrNotExist) {
+			return nil, "", fmt.Errorf("knowledge: stat index %s: %w", ix.blevePath, statErr)
 		}
-		return bleve.NewUsing(path, buildIndexMapping(), scorch.Name, scorch.Name, cfg)
+		// Nothing on disk to distrust. Not a rebuild: there was no index.
+		bidx, err := ix.createFreshIndex()
+		return bidx, "", err
 	}
-	return bleve.OpenUsing(path, cfg)
+
+	reason := ix.formatStaleReason() // G1
+	if reason == "" {
+		bidx, err := bleve.OpenUsing(ix.blevePath, bleveOpenConfig())
+		switch {
+		case err != nil:
+			reason = fmt.Sprintf("the index could not be opened (%v)", err)
+		default:
+			if drift := mappingDrift(bidx.Mapping()); drift != "" { // G2
+				closeIndexQuietly(bidx, ix.blevePath)
+				reason = "the index was written with a different document mapping: " + drift
+			} else {
+				return bidx, "", nil
+			}
+		}
+	}
+
+	slog.Warn("knowledge: index on disk cannot be trusted; discarding it and rebuilding from the collection",
+		"path", ix.blevePath, "root", ix.root, "reason", reason)
+	if rmErr := os.RemoveAll(ix.blevePath); rmErr != nil {
+		return nil, "", fmt.Errorf("knowledge: remove untrusted index %s: %w", ix.blevePath, rmErr)
+	}
+	if rmErr := os.Remove(ix.formatPath); rmErr != nil && !errors.Is(rmErr, fs.ErrNotExist) {
+		return nil, "", fmt.Errorf("knowledge: remove stale index format %s: %w", ix.formatPath, rmErr)
+	}
+	bidx, err := ix.createFreshIndex()
+	if err != nil {
+		return nil, "", err
+	}
+	return bidx, reason, nil
+}
+
+// createFreshIndex creates an empty index with the CURRENT mapping and stamps
+// the current format version beside it.
+//
+// It removes the manifest first, and that removal is load-bearing rather than
+// tidy: the manifest is what makes Sync incremental, so a manifest that
+// outlives its index makes the next Sync skip every file as "unchanged" against
+// documents that no longer exist — an empty index that reports itself complete,
+// which is precisely the silent no-op this whole path exists to make impossible.
+func (ix *Index) createFreshIndex() (bleve.Index, error) {
+	if mkErr := os.MkdirAll(filepath.Dir(ix.blevePath), indexDirMode); mkErr != nil {
+		return nil, fmt.Errorf("knowledge: create index parent dir %s: %w", filepath.Dir(ix.blevePath), mkErr)
+	}
+	if rmErr := os.Remove(ix.manifestPath); rmErr != nil && !errors.Is(rmErr, fs.ErrNotExist) {
+		return nil, fmt.Errorf("knowledge: remove stale manifest %s: %w", ix.manifestPath, rmErr)
+	}
+	bidx, err := bleve.NewUsing(ix.blevePath, buildIndexMapping(), scorch.Name, scorch.Name, bleveOpenConfig())
+	if err != nil {
+		return nil, fmt.Errorf("knowledge: create index %s: %w", ix.blevePath, err)
+	}
+	// The stamp is written AFTER the index exists and its failure is fatal: an
+	// index with no stamp is an index this function would rebuild again on the
+	// next open, forever, and a rebuild loop nobody is told about is worse than
+	// a failed open somebody is.
+	if err := writeIndexFormat(ix.formatPath); err != nil {
+		closeIndexQuietly(bidx, ix.blevePath)
+		return nil, err
+	}
+	return bidx, nil
+}
+
+// bleveOpenConfig is the runtime config every open and create passes to scorch.
+func bleveOpenConfig() map[string]any {
+	return map[string]any{"bolt_timeout": boltOpenTimeout}
+}
+
+// closeIndexQuietly closes an index we are abandoning. The close error cannot be
+// returned — we are already on an error path and the caller's error is the one
+// that explains what happened — but it is not discarded either: a close that
+// fails leaves a bolt lock held, which is the next thing that will go wrong.
+func closeIndexQuietly(bidx bleve.Index, path string) {
+	if bidx == nil {
+		return
+	}
+	if err := bidx.Close(); err != nil {
+		slog.Warn("knowledge: closing abandoned index failed", "path", path, "error", err)
+	}
+}
+
+// indexFormatVersion is the CURRENT on-disk index format — guard G1.
+//
+// BUMP THIS WHENEVER SEGMENTS WRITTEN BY OLDER CODE MUST NOT BE SEARCHED. That
+// covers two different things and both are real:
+//
+//   - the WRITER changed in a way that makes older bytes wrong. Version 1 is
+//     this case. Everything written before it may have been written by
+//     zapx v17.1.2, which miscalculates chunk offsets and produces segments
+//     that panic the process on a search once a collection is large enough to
+//     force a big merge (ADR-068 F-0, ~100,000 documents). The version pin to
+//     zapx ≥ v17.1.4 fixes what is written next and repairs nothing already
+//     written; this constant is the other half of that fix.
+//   - the MAPPING changed such that old documents lack fields, or carry them
+//     under a different analyzer. G2 (mappingDrift) also catches that, and is
+//     the guard that does not depend on this constant being bumped — but a bump
+//     is cheaper to reason about and fires before the index is even opened.
+//
+// A rebuild costs one full re-index of the collection and never costs an answer:
+// the notes on disk are the source of truth and the index is derived data.
+// Getting this wrong in the cautious direction is a slow start-up. Getting it
+// wrong in the other direction is a crash in the gateway.
+const indexFormatVersion = 1
+
+// indexFormat is the sidecar's content. It is deliberately one integer: a
+// record with more in it is a record with more ways to disagree with itself,
+// and everything else worth knowing (the bleve and zapx versions in force) is
+// in go.mod, where it cannot drift from what is actually linked.
+type indexFormat struct {
+	Version int `json:"version"`
+}
+
+// readIndexFormat reports the format version recorded beside the index.
+//
+// A MISSING SIDECAR IS VERSION 0, NOT AN ERROR, AND 0 IS NEVER CURRENT. Every
+// index written before this file existed has no sidecar, and those are exactly
+// the indexes that may hold the corrupt segments. "Absent" must therefore mean
+// "rebuild", never "assume fine".
+//
+// A sidecar that exists but cannot be read or parsed returns its error, and the
+// caller rebuilds on that too: an unreadable record of what wrote the index is
+// no better than no record.
+func readIndexFormat(path string) (int, error) {
+	data, err := os.ReadFile(path) //nolint:gosec // path is Omnipus-owned, under $OMNIPUS_HOME
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("read index format %s: %w", path, err)
+	}
+	var f indexFormat
+	if err := json.Unmarshal(data, &f); err != nil {
+		return 0, fmt.Errorf("parse index format %s: %w", path, err)
+	}
+	return f.Version, nil
+}
+
+// writeIndexFormat stamps the current format version, atomically and 0600
+// (FR-032, same rules as the manifest it sits beside).
+func writeIndexFormat(path string) error {
+	data, err := json.MarshalIndent(indexFormat{Version: indexFormatVersion}, "", "  ")
+	if err != nil {
+		return fmt.Errorf("knowledge: encode index format: %w", err)
+	}
+	if err := fileutil.WriteFileAtomic(path, data, indexFileMode); err != nil {
+		return fmt.Errorf("knowledge: write index format %s: %w", path, err)
+	}
+	if err := os.Chmod(path, indexFileMode); err != nil {
+		return fmt.Errorf("knowledge: set mode on index format %s: %w", path, err)
+	}
+	return nil
+}
+
+// formatStaleReason is guard G1: it reports, in a sentence, why the index on
+// disk is not in the current format — or "" when it is.
+func (ix *Index) formatStaleReason() string {
+	got, err := readIndexFormat(ix.formatPath)
+	if err != nil {
+		return fmt.Sprintf("its format record could not be read (%v)", err)
+	}
+	switch {
+	case got == indexFormatVersion:
+		return ""
+	case got == 0:
+		return fmt.Sprintf(
+			"it carries no format record, so it was written before the index format was tracked and may hold "+
+				"segments from a writer that corrupts them at scale (current format is %d)", indexFormatVersion)
+	default:
+		return fmt.Sprintf("it was written in index format %d and the current format is %d", got, indexFormatVersion)
+	}
+}
+
+// mappingDrift is guard G2: it compares the mapping PERSISTED inside the index
+// against the mapping buildIndexMapping produces now, and returns the first
+// difference as a sentence — or "" when they agree.
+//
+// It exists because bleve.OpenUsing takes no mapping argument. The mapping
+// written at creation is authoritative for the life of the index, so code that
+// declares a new field, or changes an existing field's analyzer, gets an index
+// that quietly ignores the change: queries against the new field return zero
+// hits and no error. There is no failure to notice — which is why this is a
+// comparison and not an error check.
+//
+// It compares the settings that decide whether a query can work at all —
+// type, analyzer, index, store, docvalues, term vectors, _all membership — not
+// just field NAMES. A name-only comparison would pass an index whose `name`
+// field was built with the keyword analyzer while the code now says `en`, and
+// the same query would return a different number of hits depending on which
+// mapping was actually in force, with no way for the caller to tell.
+//
+// It also compares in BOTH directions, and compares the dynamic settings: a
+// field the code has stopped declaring, or an index built when dynamic mapping
+// was on, are equally not the index this code expects.
+func mappingDrift(persisted bleveMapping.IndexMapping) string {
+	want := buildIndexMapping()
+
+	declared := make([]string, 0, len(want.DefaultMapping.Properties))
+	for name := range want.DefaultMapping.Properties {
+		declared = append(declared, name)
+	}
+	sort.Strings(declared)
+
+	for _, name := range declared {
+		got := persisted.FieldMappingForPath(name)
+		if got.Type == "" {
+			return fmt.Sprintf("field %q is absent from the persisted mapping", name)
+		}
+		if d := fieldMappingDrift(name, got, want.FieldMappingForPath(name)); d != "" {
+			return d
+		}
+	}
+
+	impl, ok := persisted.(*bleveMapping.IndexMappingImpl)
+	if !ok {
+		// Every field the code declares has been checked; only the reverse
+		// direction and the dynamic settings are unreachable. Say so out loud
+		// rather than reporting a clean comparison that was not made.
+		slog.Warn("knowledge: persisted mapping is not an IndexMappingImpl; "+
+			"undeclared-field and dynamic-setting drift cannot be checked",
+			"type", fmt.Sprintf("%T", persisted))
+		return ""
+	}
+	if impl.DefaultMapping == nil {
+		return "the persisted mapping has no default document mapping"
+	}
+	if impl.DefaultMapping.Dynamic != want.DefaultMapping.Dynamic {
+		return fmt.Sprintf("the persisted default document mapping has dynamic=%t, the code declares dynamic=%t",
+			impl.DefaultMapping.Dynamic, want.DefaultMapping.Dynamic)
+	}
+	if impl.IndexDynamic != want.IndexDynamic {
+		return fmt.Sprintf("the persisted mapping has index_dynamic=%t, the code declares index_dynamic=%t",
+			impl.IndexDynamic, want.IndexDynamic)
+	}
+	if impl.StoreDynamic != want.StoreDynamic {
+		return fmt.Sprintf("the persisted mapping has store_dynamic=%t, the code declares store_dynamic=%t",
+			impl.StoreDynamic, want.StoreDynamic)
+	}
+
+	extra := make([]string, 0)
+	for name := range impl.DefaultMapping.Properties {
+		if _, still := want.DefaultMapping.Properties[name]; !still {
+			extra = append(extra, name)
+		}
+	}
+	if len(extra) > 0 {
+		sort.Strings(extra)
+		return fmt.Sprintf("field %q is in the persisted mapping and the code no longer declares it", extra[0])
+	}
+	return ""
+}
+
+// fieldMappingDrift compares one field's settings. The order of the checks is
+// the order the differences are reported in, which keeps the message stable for
+// a given pair of mappings.
+func fieldMappingDrift(name string, got, want bleveMapping.FieldMapping) string {
+	switch {
+	case got.Type != want.Type:
+		return fmt.Sprintf("field %q has type %q in the persisted mapping, the code declares %q",
+			name, got.Type, want.Type)
+	case got.Analyzer != want.Analyzer:
+		return fmt.Sprintf("field %q uses analyzer %q in the persisted mapping, the code declares %q",
+			name, got.Analyzer, want.Analyzer)
+	case got.Index != want.Index:
+		return fmt.Sprintf("field %q has index=%t in the persisted mapping, the code declares index=%t",
+			name, got.Index, want.Index)
+	case got.Store != want.Store:
+		return fmt.Sprintf("field %q has store=%t in the persisted mapping, the code declares store=%t",
+			name, got.Store, want.Store)
+	case got.DocValues != want.DocValues:
+		return fmt.Sprintf("field %q has docvalues=%t in the persisted mapping, the code declares docvalues=%t",
+			name, got.DocValues, want.DocValues)
+	case got.IncludeTermVectors != want.IncludeTermVectors:
+		return fmt.Sprintf(
+			"field %q has include_term_vectors=%t in the persisted mapping, the code declares include_term_vectors=%t",
+			name, got.IncludeTermVectors, want.IncludeTermVectors)
+	case got.IncludeInAll != want.IncludeInAll:
+		return fmt.Sprintf(
+			"field %q has include_in_all=%t in the persisted mapping, the code declares include_in_all=%t",
+			name, got.IncludeInAll, want.IncludeInAll)
+	}
+	return ""
 }
 
 // enforceIndexPermissions asserts FR-032 over the whole index directory:
