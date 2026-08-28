@@ -566,3 +566,71 @@ func resultText(r *tools.ToolResult) string {
 	}
 	return r.ContentForLLM()
 }
+
+// TestDescribe_IntegrityRenderedArtifact is the second definition-of-done
+// artifact: the literal text a model sees when check_integrity finds
+// something, over a vault carrying one of every category.
+//
+// It asserts the SHAPE of each line rather than diffing a blob, for the reason
+// given on TestDescribe_RenderedArtifact.
+func TestDescribe_IntegrityRenderedArtifact(t *testing.T) {
+	root := describeFixtureVault(t)
+
+	// A note nothing links to, and one whose link goes nowhere.
+	write := func(rel, body string) {
+		full := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		if err := os.WriteFile(full, []byte(body), 0o644); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+	}
+	write("Notes/2026-08-14.md", "see [[Q2 retro]]\n")
+	write("Notes/scratch.md", "nothing here\n")
+
+	schemas, _, err := records.LoadSchemas(root)
+	if err != nil {
+		t.Fatalf("LoadSchemas: %v", err)
+	}
+	report, err := CheckIntegrity(context.Background(), IntegrityOptions{
+		FS: OSLinkFS(), Root: mustCollectionRoot(t, root),
+		CollectionName: "workbench", Schemas: schemas,
+		Store: &fakePropertyIndex{
+			records: []IndexedRecord{
+				{Path: "Widgets/Gear.md", RecordType: "widget", RecordID: "WI-0142"},
+				{Path: "Widgets/Gear copy.md", RecordType: "widget", RecordID: "WI-0142"},
+				{Path: "Foundries/Acme Ltd.md", RecordType: "foundry", RecordID: "FO-0001"},
+				{Path: "Widgets/deleted.md", RecordType: "widget", RecordID: "WI-0221"},
+			},
+			relations: []IndexedRelation{
+				{Path: "Widgets/Gear.md", RecordID: "WI-0142", Property: "maker", Target: "Acme Corp."},
+				{Path: "Widgets/Gear.md", RecordID: "WI-0142", Property: "maker", Target: "2026-08-14"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CheckIntegrity: %v", err)
+	}
+
+	d := describeFixtureData(t, root, report)
+	d.Sections = map[string]bool{} // integrity only, so the artifact is readable
+	text := RenderDescribe(d)
+	t.Logf("\n----- BEGIN check_integrity RESPONSE -----\n%s----- END check_integrity RESPONSE -----", text)
+
+	must := []struct{ what, want string }{
+		{"the header, its scope and the notes swept", "INTEGRITY: 8 finding(s) (scope: workbench, 4 notes swept)"},
+		{"AC-D1: the category", "duplicate id"},
+		{"AC-D1: both paths, and that neither is preferred", "WI-0142 — Widgets/Gear copy.md and Widgets/Gear.md; neither is preferred"},
+		{"FR-033: a relation resolving to nothing", "WI-0142 maker -> [[Acme Corp.]] — no note resolves"},
+		{"FR-034: a relation resolving to the wrong type", "expected foundry"},
+		{"FR-020c: an index row whose note is gone", "properties index holds WI-0221 at Widgets/deleted.md"},
+		{"AC-D5: an ordinary broken wikilink", "ordinary wikilink, not a relation"},
+		{"a note nothing links to", "Notes/scratch.md — no note links to it"},
+	}
+	for _, c := range must {
+		if !strings.Contains(text, c.want) {
+			t.Errorf("the integrity report must carry %s — %q missing from:\n%s", c.what, c.want, text)
+		}
+	}
+}
