@@ -291,10 +291,13 @@ func decide(
 	}
 
 	var (
-		problems  []records.Finding
-		cproblems []records.ComparisonProblem
-		matched   = true
+		problems []records.Finding
+		matched  = true
 	)
+	// One filter can report several rule-level verdicts, but most report none;
+	// len(filters) is the honest lower bound on a clean run and avoids the
+	// growth reallocation on a dirty one.
+	cproblems := make([]records.ComparisonProblem, 0, len(filters))
 
 	// Decoding is memoised per property because two filters over the same
 	// property must see the SAME operand. Decoding twice would be a second
