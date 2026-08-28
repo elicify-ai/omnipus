@@ -1,19 +1,46 @@
 # Vault records — specification
 
-- **Implements:** [ADR-068](../architecture/ADR-068-vault-records-typed-record-layer.md) **revision 5** (committed `36597544`, 2026-08-28)
+- **Implements:** [ADR-068](../architecture/ADR-068-vault-records-typed-record-layer.md) **revision 6** (2026-08-28; read at `b442a920`, plus **D16.6**, which lands in the same change as this spec revision)
 - **Builds on:** [ADR-067](../architecture/ADR-067-omnipus-knowledge-base-and-render-first-preview.md) — `pkg/knowledge` is **reused, never duplicated**
-- **Date:** 2026-08-25; **revised 2026-08-28** to ADR-068 revision 5
+- **Date:** 2026-08-25; **revised 2026-08-28** to ADR-068 revision 6
 - **Branch:** `feat/library-improvements`
-- **Status:** Draft revision 3. Revision 2 followed round-2 review (BLOCK: 8 critical, 21 major); revision 3 realigns to ADR-068 revision 5 — the **five-tool `vault_*` surface**, the **two-index storage resolution**, and the **retrieval and response-format decisions** (D21, D22, D23).
+- **Status:** Draft revision 4. Revision 2 followed round-2 review (BLOCK: 8 critical, 21 major); revision 3 realigned to ADR-068 revision 5 — the five-tool `vault_*` surface, the two-index storage resolution, and the retrieval and response-format decisions (D21, D22, D23). **Revision 4 realigns to ADR-068 revision 6**: a **sixth tool** (`vault_configure`), **two named blast-radius criteria** (C-A and C-B) instead of one, a **specified** freshness token, a **platform posture**, a **W0 wave**, and response budgets in **bytes**.
 
-**What revision 3 changes, in one paragraph.** The agent surface is five tools split by **blast
-radius**, not nine `record_*` tools and not the nine `knowledge_*` tools shipping today (§4.1).
-Storage is resolved: bleve keeps text, a derived SQLite properties index holds typed properties
-and relations, and the two indexes must agree or the answer is not complete (FR-020..FR-020g).
-Retrieval is specified for the first time — BM25 rather than the TF-IDF the code actually uses,
-fielded indexing, RRF fusion, retry-only expansion, one tokenizer (FR-110..FR-117). The response
-the model reads is specified as mechanism rather than presentation, with a literal worked example
-(§4.2). Schema and view authoring become ordinary writes (FR-016..FR-019a).
+**What revision 3 changed, in one paragraph.** The agent surface is `vault_*` tools split by
+**blast radius**, not nine `record_*` tools and not the nine `knowledge_*` tools shipping today
+(§4.1). Storage is resolved: bleve keeps text, a derived SQLite properties index holds typed
+properties and relations, and the two indexes must agree or the answer is not complete
+(FR-020..FR-020g). Retrieval is specified for the first time — BM25 rather than the TF-IDF the
+code actually uses, fielded indexing, RRF fusion, retry-only expansion, one tokenizer
+(FR-110..FR-117). The response the model reads is specified as mechanism rather than
+presentation, with a literal worked example (§4.2). Schema and view authoring become ordinary
+writes (FR-016..FR-019a).
+
+**What revision 4 changes, in one paragraph.** The surface is **six** tools, not five: schema and
+saved-view authoring leave `vault_edit` for a control plane of its own, **`vault_configure`**
+(ADR-068 D15.6), so that *"edit the notes, but do not redefine what a note is"* becomes an
+expressible policy — it was not, and revision 3 said it was. The split criterion is now **two
+named criteria**, C-A (cascade in bytes) and C-B (cascade in meaning), because one criterion was
+being read two ways; ADR-068 D23.3's claim that it *"generalises with no special-casing"* is
+**withdrawn**. Creating a **new** record type moves from tier 4 to tier 5 under C-B: a new schema
+file retroactively converts every pre-existing note already declaring that type into a validated
+record, which is a cascade the agent never named. The freshness token FR-020c required is now
+**specified** against `ManifestEntry.Hash` rather than assumed to exist, per note rather than per
+index, with a residual hole stated. Records are **unavailable and say so by name** wherever
+SQLite cannot build. Response budgets move from **tokens to bytes**, because a token cap cannot be
+enforced without naming a tokenizer. A **W0 wave** ships the bleve corruption fix ahead of, and
+independently of, everything else. `trash`'s W4/W5 split is resolved by the ADR rather than read
+into it.
+
+**Four places where this spec was RIGHT and ADR-068 revision 5 was wrong, kept and now vindicated
+by revision 6.** They are listed because the temptation on a sync is to assume the ADR is the
+authority in every disagreement, and here it was not. (a) The unsatisfiable token budget versus
+page-size cap — FR-127a; revision 6 changes the unit to bytes and D22.7 now says so. (b) The
+unnamed token unit — FR-127b and A-8; revision 6 concedes the point in the same words. (c) The
+stale FR-021 premise: this spec had already moved FR-021 to the properties index while ADR-068
+D21.5 was still arguing from Go-side evaluation; revision 6 re-derives D21.5 on the corrected
+basis and **cites this spec's note as the thing it got right**. (d) The `trash` W4/W5 ambiguity —
+A-9; revision 6's D20 adopts exactly the reading A-9 proposed.
 
 **FRs whose meaning changed, and what cited them.** Nothing below was renumbered silently; each
 carries the same note in place.
@@ -29,8 +56,29 @@ carries the same note in place.
 | FR-100 | an agent tool `record_view_import` | an **operator/CLI** one-shot | §6, §7 test 20, SC-010 |
 | SC-005 | "1,000 distinct identifiers **and zero sequence gaps**" | 1,000 distinct identifiers; **gaps permitted, repeats fail** | contradicted FR-038 and ADR-068 D7.1 — a defect, not a wording change |
 
-FR-015 keeps its meaning and **gains a citation**: ADR-068 D23.3 now rests on it to place an
-existing-record-type change in the cascading tier.
+**FRs whose meaning changed in revision 4 (ADR-068 revision 6).** Same rule: nothing renumbered
+silently, each carries the note in place.
+
+| FR | Was | Is | Cited by |
+|---|---|---|---|
+| FR-016 | new record type is an op of `vault_edit` — *"changes no existing note's meaning"* | an op of **`vault_configure`**; the premise was **false** under ADR-068 D1 — a new schema file converts every pre-existing note declaring that type | ADR-068 D15.6, D23.3; §4.1.6, US-12, §7 test 37 |
+| FR-017 | change/delete existing type is an op of `vault_restructure` | an op of **`vault_configure`** | ADR-068 D15.6; §4.1.5, §4.1.6 |
+| FR-018 | saved view is an op of `vault_edit` | an op of **`vault_configure`** | ADR-068 D15.6 |
+| FR-020c | the two indexes *"carry the same freshness token"* — a token that **did not exist** | a **per-note** `source_hash` compared against `ManifestEntry.Hash` (`pkg/knowledge/manifest.go:64`), with a named residual hole | ADR-068 D16.5; §7 test 32, SC-015 |
+| FR-070 | **five** tools | **six** tools — `vault_configure` added | §6, §7 test 18, SC-011 |
+| FR-078 | catalog `102 → 98` | catalog **`98 → 95`**; 102 was a miscount, corrected in ADR-068 D15.0 and re-counted here | §3, SC-011 |
+| FR-127 | budgets in **tokens** (~50–80/hit, 1,000 default, 4,000 cap) | budgets in **BYTES** (~200–320/hit, ~4,000 default, 16,000 cap) | ADR-068 D22.7; §3, §4.2, A-8 |
+| FR-128 | five descriptions ≈ 750 tokens | **six** ≈ 900 tokens | ADR-068 D22.8 |
+
+FR-015 keeps its meaning and **gains a citation**: ADR-068 D23.3 rests on it to place an
+existing-record-type change in a cascading tier. *(Revision 4: that tier is now `vault_configure`,
+not `vault_restructure` — the citation stands, the destination moved.)*
+
+**FR-021 does NOT change in revision 4, and the reason is worth stating.** Revision 3 moved it to
+the properties index ahead of the ADR; ADR-068 revision 6 has now caught up (its D16.2c) and
+**re-derives D21.5's tokenizer hazard on this spec's own note** — rank fusion stays in Go, so the
+hazard survives, narrowed to the ranking pass. FR-021 and FR-116 already say exactly that and are
+left byte-identical.
 
 ---
 
