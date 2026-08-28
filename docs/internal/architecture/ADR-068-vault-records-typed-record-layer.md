@@ -1246,10 +1246,27 @@ What it buys that Go-over-bleve does not: **joins, `OR`, `GROUP BY` and aggregat
 writing a general expression evaluator.** It answers §3.6 without a separate aggregation store,
 because it *is* the aggregation store, folded into the design rather than bolted beside it.
 
-**D16.2b — Which store answers a filter. One sentence, because revision 5 never gave it.**
+**D16.2b — Which store answers a filter. REVERSED IN REVISION 7 BY OPERATOR RULING.**
 
-> **The properties index answers every typed predicate — membership, filtering, joining,
-> grouping, aggregation. bleve answers text relevance, and nothing else.**
+> **REVISION 7:** **The properties index NARROWS CANDIDATES. Our own tested comparator DECIDES.**
+> bleve answers text relevance. **No comparison is evaluated by SQL.**
+>
+> *Revision 6 said: "The properties index answers every typed predicate — membership, filtering,
+> joining, grouping, aggregation."* That sentence is withdrawn. **It is the sentence D16.6's nine
+> defeats hung from, and D16.6 records why removing it is a stronger position than defending it.**
+>
+> **What the properties index answers now:** set membership over indexed columns — the record type,
+> the path prefix within scope, the note kind, and the relation child table's join for
+> *reachability*. **None of those is a comparison governed by R-1..R-13.** What it does not answer:
+> any operator in the filter's vocabulary, any grouping, any aggregate.
+>
+> **D16.2's gain is unaffected**, and that is worth stating because it was D16's whole rationale:
+> the general `func(any, any) bool` comparator over an expression engine still does not need to be
+> written — the comparator has **declared types** and a closed rule set, which is a different and
+> much smaller thing — and a query still does not materialise documents that cannot match.
+>
+> **What it costs is stated at D16.6:** evaluation scales with candidates rather than results, and
+> the 10,000-candidate cap (D16.3a, condition C-3) is the bound. Unmeasured; W1 measures it.
 
 D21.2's fielded indexing (*"property keys, property values… as distinct fields"*) exists so that
 **free-text search over frontmatter works** — so that searching the word `prospect` finds a note
@@ -1258,9 +1275,12 @@ prose (D21.2). It is **not** a second typed-filter path, and `vault_find` never 
 one. Revision 5 decided both in the same revision without either referencing the other, which
 left three generations able to disagree instead of two.
 
-**And the store that answers every typed predicate does not answer it the way this ADR's rules
-require.** See **D16.6** — SQLite's defaults contradict nine of the thirteen comparison rules,
-eight of them silently. That is a property of the decision made here, so it is recorded under it.
+**And the reason the store does not answer typed predicates is recorded under this decision, because
+it is a property of it.** See **D16.6** — SQLite's defaults contradict **ten** of the comparison
+rules, nine of them silently, and revision 6's nine defeats were each a line of a query compiler
+nobody had written. **Grill pass 1 then found that zero of the seven the spec specified were
+sufficient, and found a tenth violation — join fan-out — that made every count and total over a
+filtered multi-value list wrong.** That is what the reversal above buys.
 
 **D16.2c — This resolves against FR-021, and the spec has already moved.**
 
@@ -1279,9 +1299,28 @@ D21.5 built its tokenizer-hazard argument on that same requirement.
 > them" table (`spec:20-25`) built for exactly this. The review was reading a stale target, which
 > is a normal hazard of a moving branch and not a fault in the review.
 
-So the resolution is **FR-021 changes, and it already has.** What remains for this ADR is to say
-so, and to record the one thing the spec's own note gets right that revision 5 missed: **the
-tokenizer hazard survives the change.** D21.5 is re-derived on that basis below.
+So the resolution was **FR-021 changes, and it already has.** What remained for this ADR was to say
+so, and to record the one thing the spec's own note got right that revision 5 missed: **the
+tokenizer hazard survives the change.**
+
+> **REVERSED IN REVISION 7 BY OPERATOR RULING, and it is worth being blunt about the shape of this.**
+> **FR-021 changes back.** Evaluation returns to Go, which is what FR-021 said before revision 3
+> moved it to satisfy an ADR decision that revision 7 now withdraws. **The specification was right
+> the first time, and it is restored rather than corrected** — the third time in this document's
+> history that the implementing spec held a position the ADR later adopted (the others being the
+> token-versus-byte budget unit and the `trash` wave split, both recorded at the spec's A-8 and
+> A-9).
+>
+> **The tokenizer hazard widens back to its original scope.** D21.5 below re-derives it narrowly,
+> on the ground that only *rank fusion* stays in Go. With membership in Go too, **bleve selects with
+> one notion of a term while Go both ranks and MATCHES with another.** D21.5's argument is unchanged
+> in text and stronger in consequence, and FR-116's obligation — one shared token function, or an
+> explicit recorded decision that the Go pass is unstemmed — binds harder.
+>
+> **One thing that is NOT a fourth notion of a term, stated because it looks like one:** the
+> Unicode case fold ruling R-D requires (`strings.ToLower`, spec FR-011a) is a character-level
+> transform that splits nothing, stems nothing and removes no stopword. It is the only analysis
+> permitted on the comparison path.
 
 **D16.3 — This overrides the spike's stated recommendation. The grounds, stated plainly.**
 
