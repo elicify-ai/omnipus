@@ -741,26 +741,47 @@ func GraphBacklinks(g *LinkGraph) func(string) int {
 //     whether they do harm, not whether they do good.
 //
 // An eval that cannot prove a property must not be used to authorise it. So the
-// halves ship on different evidence, and the split is deliberate:
+// split below was written to be deliberate — but it describes a state this
+// file has since moved past, and the correction matters because a caller
+// reading only this comment would believe the wrong half is live:
 //
-//   - BM25F FIELD WEIGHTING SHIPS ON. Weighting a title above a body mention is
-//     established IR, decades old and not our invention. It needs the
-//     regression check and nothing more, and it passes it.
-//   - THE FOUR-SIGNAL FUSION SHIPS OFF. The code is built, tested and measured;
-//     the ablation table is committed as an artifact. What waits is the DEFAULT,
-//     because changing every operator's ranking on evidence that cannot speak to
-//     the question is precisely the confident-and-unverified move this ADR has
-//     already made four times.
+//   - BM25F FIELD WEIGHTING DOES NOT SHIP. It is built, unit-tested, and
+//     covered by the regression check the paragraph above describes — but
+//     RankedSearch, FusedSearch and bm25fPool have NO non-test caller
+//     anywhere outside this file. Production retrieval is
+//     Searcher.Search → Index.SearchFiltered → Index.searchRaw, which runs
+//     the UNWEIGHTED disjunction bm25fPool's own doc comment names as "the
+//     plain-BM25 baseline the fusion is measured against" — i.e. the
+//     baseline is what ships, not the treatment.
+//   - THE FOUR-SIGNAL FUSION ALSO DOES NOT SHIP, for the same reason and not
+//     only for the evidence reason below: it is reached exclusively through
+//     RankedSearch/FusedSearch, so it inherits their zero production callers
+//     regardless of this constant's value. The code is built, tested and
+//     measured; the ablation table is committed as an artifact. What is
+//     missing is not just the DEFAULT this constant would flip, but a
+//     PRODUCTION CALLER of RankedSearch at all — changing every operator's
+//     ranking on evidence that cannot speak to the question would in any
+//     case be the confident-and-unverified move this ADR has already made
+//     four times.
 //
-// Flipping this constant is not the way to turn it on. A real graded query set
-// is, and the ablation must be re-run against it.
+// A regression breaking fusionFieldWeights, RankedSearch or FusedSearch
+// outright changes NOTHING a user of this package observes — every test in
+// this file that would catch it (e.g.
+// TestRank_TitleMatchOutranksPassingBodyMention) calls bm25fPool directly,
+// not through the production search path. Flipping this constant is not the
+// way to make either half ship; wiring a production caller to RankedSearch
+// is, and a real graded query set is what the ablation needs re-run against
+// before that wiring is trusted.
 const FusionEnabledByDefault = false
 
 // RankOptions selects a ranking strategy for one query.
 //
-// The zero value is the SHIPPED default — BM25F weighting, no fusion — so a
-// caller that has not thought about ranking gets the configuration the evidence
-// supports rather than the one that is most interesting.
+// The zero value is BM25F weighting, no fusion — the configuration the
+// evidence in FusionEnabledByDefault's doc comment supports. It is NOT what
+// ships: RankedSearch (the only way to reach this struct's effect) has no
+// production caller, so no RankOptions value — zero or otherwise — is
+// currently in the path a real search request takes. See RankedSearch's doc
+// comment.
 type RankOptions struct {
 	// Fusion turns on the D21.3 four-signal RRF fusion. See
 	// FusionEnabledByDefault for why this is opt-in.
@@ -770,13 +791,18 @@ type RankOptions struct {
 	Config FusionConfig
 }
 
-// RankedSearch is the ranking entry point callers should use.
-//
-// With RankOptions{} it is BM25F-weighted retrieval and nothing else, which is
-// what ships enabled. With Fusion set it is the full D21.3 composition. Having
-// ONE entry point whose zero value is the shipped behaviour is the difference
-// between a default and a convention: a convention is what the next caller
-// forgets.
+// RankedSearch is the ranking entry point a caller SHOULD use to reach BM25F
+// weighting or the D21.3 fusion — but as of this writing NO production caller
+// exists. With RankOptions{} it is BM25F-weighted retrieval and nothing else;
+// with Fusion set it is the full D21.3 composition. Neither reaches a real
+// user: grep finds zero non-test references to RankedSearch, FusedSearch or
+// bm25fPool outside this file. Production search goes
+// Searcher.Search → Index.SearchFiltered → Index.searchRaw instead, the
+// unweighted disjunction bm25fPool's own doc comment calls "the plain-BM25
+// baseline". Having ONE entry point whose zero value is the intended shipped
+// behaviour is still the difference between a default and a convention — a
+// convention is what the next caller forgets — but "intended" is doing real
+// work in that sentence until something calls this function outside a test.
 func (ix *Index) RankedSearch(query string, limit int, opts RankOptions, src RankSources, keep func(string) bool) ([]IndexHit, error) {
 	if limit <= 0 {
 		limit = SearchDefaultTopN
