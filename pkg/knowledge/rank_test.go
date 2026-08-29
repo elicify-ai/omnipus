@@ -31,8 +31,10 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+	"unicode"
 )
 
 // ---------------------------------------------------------------------------
@@ -145,6 +147,231 @@ func TestNameMatchTier_GradesTheThreeWaysANameIsNamed(t *testing.T) {
 		if got := nameMatchTier(c.query, p); got != c.want {
 			t.Errorf("nameMatchTier(%q) = %d, want %d — %s", c.query, got, c.want, c.why)
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// F1 (code review A) — nameMatchTier must fold with records.FoldKey, not
+// strings.ToLower or strings.EqualFold.
+// ---------------------------------------------------------------------------
+//
+// TestNameMatchTier_GradesTheThreeWaysANameIsNamed above is seven ASCII cases.
+// Every one of them passes IDENTICALLY whether foldName folds with
+// strings.ToLower, strings.EqualFold-equivalent token comparison, or
+// records.FoldKey — ASCII letters fold the same way under all three, so that
+// test cannot observe which folding rule nameMatchTier actually uses. An
+// implementation that quietly regressed foldName back to strings.ToLower would
+// pass it unchanged.
+//
+// This file's tests below are the replacement instrument: they run the SAME
+// tier decision through three different folding rules over pairs picked
+// because full Unicode folding (records.FoldKey, AC-8.9 in
+// pkg/records/fold_test.go) disagrees with strings.ToLower and/or
+// strings.EqualFold on them, and assert the three answer vectors differ from
+// one another. That is what makes the fixture unfakeable: an implementation
+// that silently used ToLower or EqualFold fails here even if it passed every
+// ASCII case above.
+
+// foldTokensToLowerForTest reproduces the OLD, BUGGY foldName this fix
+// replaces — SIMPLE per-rune strings.ToLower folding — so the test can prove
+// nameMatchTier no longer behaves that way. It is deliberately a copy rather
+// than a call into a shared helper: the point is to pin what the code USED TO
+// DO, which must not silently track what it does now.
+func foldTokensToLowerForTest(s string) []string {
+	var b strings.Builder
+	space := false
+	for _, r := range strings.ToLower(strings.TrimSpace(s)) {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			if space && b.Len() > 0 {
+				b.WriteByte(' ')
+			}
+			space = false
+			b.WriteRune(r)
+			continue
+		}
+		space = true
+	}
+	f := b.String()
+	if f == "" {
+		return nil
+	}
+	return strings.Split(f, " ")
+}
+
+// foldTokensRawForTest tokenizes WITHOUT folding case at all — the raw
+// splitter that, paired with containsAllEqualFoldForTest below, reproduces
+// strings.EqualFold's SIMPLE folding semantics for a token-SET comparison.
+// strings.EqualFold has no string-transform form (it is a comparator, not a
+// fold), so representing "nameMatchTier if it compared tokens with
+// strings.EqualFold" means keeping tokens raw and folding only at the
+// comparison, not the tokenization, step.
+func foldTokensRawForTest(s string) []string {
+	var b strings.Builder
+	space := false
+	for _, r := range strings.TrimSpace(s) {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			if space && b.Len() > 0 {
+				b.WriteByte(' ')
+			}
+			space = false
+			b.WriteRune(r)
+			continue
+		}
+		space = true
+	}
+	f := b.String()
+	if f == "" {
+		return nil
+	}
+	return strings.Split(f, " ")
+}
+
+// containsAllEqualFoldForTest is containsAll (rank.go) with the map-based
+// exact-string membership test replaced by a pairwise strings.EqualFold
+// comparison, so it can be driven off foldTokensRawForTest's unfolded tokens.
+func containsAllEqualFoldForTest(have, want []string) bool {
+	for _, w := range want {
+		found := false
+		for _, h := range have {
+			if strings.EqualFold(h, w) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
+}
+
+// tier3ForTest is nameMatchTier's tier-3 rule ("the query IS the name",
+// order-insensitive) parameterised over which tokenizer and which
+// token-containment rule to use, so the same decision can be replayed under
+// strings.ToLower, strings.EqualFold, and (via the real nameMatchTier)
+// records.FoldKey. Tiers 1 and 2 are deliberately not replayed here — tier 3
+// alone is where AC-8.9's pairs land (each pair IS the whole name), and it is
+// the tier the F1 bug report names: a false tier-3 promotes a note to rank 1
+// with the fusion's full top-tier RRF bonus.
+func tier3ForTest(query, name string, tokenize func(string) []string, containsAll func(have, want []string) bool) int {
+	qt := tokenize(query)
+	nt := tokenize(name)
+	if len(qt) == 0 || len(nt) == 0 {
+		return 0
+	}
+	if len(qt) == len(nt) && containsAll(qt, nt) {
+		return 3
+	}
+	return 0
+}
+
+// foldDiscriminatingPairs are AC-8.9's own witnesses (pkg/records/fold_test.go),
+// carried over because they are exactly the pairs on which records.FoldKey
+// disagrees with strings.ToLower and/or strings.EqualFold — plus the query is
+// spelled as a single-token name so a tier-3 "the query IS the name" match is
+// the exact question each row asks.
+var foldDiscriminatingPairs = []struct {
+	ac    string
+	query string
+	name  string
+	why   string
+}{
+	{
+		ac: "AC-8.9e", query: "istanbul", name: "İSTANBUL",
+		why: "F1's own reported bug. Turkish dotted İ and plain i are DIFFERENT LETTERS; this MUST NOT " +
+			"tier-3-match. strings.ToLower says it DOES match (the Turkish-I bug) — a WRONG MATCH that " +
+			"would promote an unrelated note to rank 1 with the fusion's full top-tier RRF bonus. DO NOT " +
+			"'fix' this row to match; that reintroduces the bug F1 reported.",
+	},
+	{
+		ac: "AC-8.9a", query: "strasse", name: "straße",
+		why: "German ß needs FULL folding (ß → ss) to tier-3-match \"strasse\". strings.ToLower and the " +
+			"strings.EqualFold-style comparison both perform only SIMPLE folding and miss it — a WRONG " +
+			"NON-MATCH: a user who types the name they see does not find their own note.",
+	},
+	{
+		ac: "AC-8.9f", query: "file", name: "ﬁle",
+		why: "The ﬁ ligature (U+FB01). False under both SIMPLE folding mechanisms, for the same reason as " +
+			"the ß row, with an independent character so the conclusion does not rest on German alone.",
+	},
+	{
+		ac: "AC-8.9b", query: "σίσυφος", name: "ΣΊΣΥΦΟΣ",
+		why: "Greek. strings.ToLower says NO MATCH and the strings.EqualFold-style comparison says MATCH — " +
+			"the two SIMPLE-folding mechanisms disagree WITH EACH OTHER here, which is why this fixture " +
+			"needs all three folding rules compared, not just one stdlib function checked against ours.",
+	},
+}
+
+// TestNameMatchTier_FoldsFullUnicodeNotSimple is F1's discriminating test: it
+// proves nameMatchTier's tier-3 decision agrees with records.FoldKey and
+// DISAGREES, as a whole answer vector, with BOTH strings.ToLower and a
+// strings.EqualFold-style comparison — mirroring
+// pkg/records/fold_test.go's TestFold_DisagreesWithBothStdlibFunctions.
+//
+// TestNameMatchTier_GradesTheThreeWaysANameIsNamed cannot make this argument:
+// every one of its cases is ASCII, and ASCII folds identically under all three
+// mechanisms, so it would pass unchanged against a nameMatchTier silently
+// reverted to strings.ToLower. This test fails under that reversion.
+func TestNameMatchTier_FoldsFullUnicodeNotSimple(t *testing.T) {
+	if len(foldDiscriminatingPairs) != 4 {
+		t.Fatalf("fixture has %d pairs, want 4 — a row was added or removed without checking the vectors below still discriminate", len(foldDiscriminatingPairs))
+	}
+
+	ours := make([]int, 0, len(foldDiscriminatingPairs))
+	toLower := make([]int, 0, len(foldDiscriminatingPairs))
+	equalFold := make([]int, 0, len(foldDiscriminatingPairs))
+
+	for _, p := range foldDiscriminatingPairs {
+		t.Run(p.ac, func(t *testing.T) {
+			// relPath wraps name the way a real pool member would arrive —
+			// nameMatchTier reads path.Base and strips the markdown
+			// extension, so the fixture must exercise that, not just the bare
+			// name string.
+			relPath := "Notes/" + p.name + ".md"
+			got := nameMatchTier(p.query, relPath)
+			ours = append(ours, got)
+			toLower = append(toLower, tier3ForTest(p.query, p.name, foldTokensToLowerForTest, containsAll))
+			equalFold = append(equalFold, tier3ForTest(p.query, p.name, foldTokensRawForTest, containsAllEqualFoldForTest))
+
+			t.Logf("%s: query=%q name=%q — nameMatchTier=%d — %s", p.ac, p.query, p.name, got, p.why)
+		})
+	}
+
+	same := func(a, b []int) bool {
+		for i := range a {
+			if a[i] != b[i] {
+				return false
+			}
+		}
+		return true
+	}
+
+	if same(ours, toLower) {
+		t.Fatalf("nameMatchTier produced the SAME answers as a strings.ToLower-folded tokenizer (%v). "+
+			"strings.ToLower performs SIMPLE folding and gets the Turkish İ/i pair WRONG (a false match) — "+
+			"agreeing with it means foldName has regressed to strings.ToLower and F1 is unfixed.", ours)
+	}
+	if same(ours, equalFold) {
+		t.Fatalf("nameMatchTier produced the SAME answers as a strings.EqualFold-style comparison (%v). "+
+			"strings.EqualFold also performs only SIMPLE folding and cannot match German ß against ss or "+
+			"the ﬁ ligature against \"fi\" — agreeing with it means foldName is not using FULL Unicode "+
+			"case folding (records.FoldKey).", ours)
+	}
+	if same(toLower, equalFold) {
+		t.Fatalf("the fixture no longer discriminates: strings.ToLower and the strings.EqualFold-style "+
+			"comparison now agree on every row (%v). AC-8.9b (Greek) exists precisely because the two "+
+			"SIMPLE-folding mechanisms disagree; add a row that separates them again.", toLower)
+	}
+
+	// The Turkish row asserted a second time, on its own, exactly as
+	// pkg/records/fold_test.go's TestFold_TurkishNegativeIsDeliberate does —
+	// so a reader who only skims the table above still meets this sentence.
+	if nameMatchTier("istanbul", "Notes/İSTANBUL.md") != 0 {
+		t.Fatal(`nameMatchTier("istanbul", "Notes/İSTANBUL.md") must be 0 (no match), and this is CORRECT
+BEHAVIOUR, NOT A GAP. Turkish dotted İ and plain i are different letters. If you are reading this
+because you "fixed" nameMatchTier to make them match: you have reintroduced the Turkish-I bug F1
+reported, which promoted an unrelated Turkish note to rank 1 in the RRF fusion for every "istanbul"
+query. Do not change this assertion. Change foldName back to records.FoldKey.`)
 	}
 }
 
