@@ -137,9 +137,9 @@ func TestKnowledgeInfo_DetectsBothMarkersAndPlainFolders_US4(t *testing.T) {
 		wantKB     bool
 		wantMarker gen.KnowledgeBaseInfoMarker
 	}{
-		{"obsidian-vault", true, gen.Obsidian},
-		{"omnipus-vault", true, gen.OmnipusVault},
-		{"plain", false, gen.None},
+		{"obsidian-vault", true, gen.KnowledgeBaseInfoMarkerObsidian},
+		{"omnipus-vault", true, gen.KnowledgeBaseInfoMarkerOmnipusVault},
+		{"plain", false, gen.KnowledgeBaseInfoMarkerNone},
 	}
 	for _, tc := range cases {
 		t.Run(tc.path, func(t *testing.T) {
