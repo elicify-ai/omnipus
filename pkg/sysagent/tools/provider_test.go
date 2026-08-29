@@ -490,3 +490,49 @@ func TestProviderConfigure_APIBaseValidation(t *testing.T) {
 		})
 	}
 }
+
+// ---- test_provider: honest-about-no-network-call regression coverage ----
+
+// TestProviderTest_NoFakeLatencyField is a regression test for the bug where
+// test_provider's success response carried a hardcoded "latency_ms": 0 that
+// read as a real connection-latency measurement despite the tool making zero
+// network calls (it only checks whether the credential store resolves an
+// API key ref). The field must be gone entirely — not zero, absent — so no
+// caller can mistake it for a measurement.
+func TestProviderTest_NoFakeLatencyField(t *testing.T) {
+	cfg := &config.Config{Providers: []*config.ModelConfig{
+		{Provider: "anthropic", Model: "anthropic/claude-3-5-haiku", APIKeyRef: "anthropic_API_KEY"},
+	}}
+	deps, store, _ := newProviderTestDeps(t, cfg)
+	require.NoError(t, store.Set("anthropic_API_KEY", "sk-ant-test"))
+
+	res := NewProviderTestTool(deps).Execute(context.Background(), map[string]any{
+		"name": "anthropic",
+	})
+	require.False(t, res.IsError, "test_provider should succeed: %s", res.ForLLM)
+
+	m := unmarshalProviderResult(t, res.ForLLM)
+	if _, present := m["latency_ms"]; present {
+		t.Errorf("test_provider response still contains latency_ms — this tool makes no network call "+
+			"and never measured anything: %s", res.ForLLM)
+	}
+}
+
+// TestProviderTest_DescriptionDiscloseNoNetworkCall proves the tool's own
+// Description() text — the only signal an LLM caller has before invoking it
+// — explicitly discloses that it performs no live connectivity check, so a
+// revoked/expired/wrong key is not mistaken for "ok" meaning "reachable".
+func TestProviderTest_DescriptionDiscloseNoNetworkCall(t *testing.T) {
+	deps, _, _ := newProviderTestDeps(t, &config.Config{})
+	desc := NewProviderTestTool(deps).Description()
+
+	if strings.Contains(strings.ToLower(desc), "test a provider connection") {
+		t.Errorf("Description() still uses the old misleading phrasing implying a live connection test: %q", desc)
+	}
+	if !strings.Contains(desc, "Does NOT contact the provider") {
+		t.Errorf("Description() must explicitly disclose that no network call is made: %q", desc)
+	}
+	if !strings.Contains(desc, "list_models") {
+		t.Errorf("Description() should point callers wanting a real connectivity check at list_models: %q", desc)
+	}
+}

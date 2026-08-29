@@ -224,8 +224,18 @@ type ProviderTestTool struct{ deps *Deps }
 func NewProviderTestTool(d *Deps) *ProviderTestTool { return &ProviderTestTool{deps: d} }
 func (t *ProviderTestTool) Name() string            { return "test_provider" }
 func (t *ProviderTestTool) Scope() tools.ToolScope  { return tools.ScopeCore }
+
+// Description is deliberately explicit about what this tool does NOT do:
+// it makes zero network calls and never contacts the provider, so a
+// revoked, expired, or wrong API key can still report "ok" here. It was
+// previously described as "Test a provider connection", which reads as a
+// live connectivity check but never made one — a caller had no way to know
+// the check was credential-presence-only short of reading the source.
 func (t *ProviderTestTool) Description() string {
-	return "Test a provider connection. Parameters: name (required)."
+	return "Check that this provider's API key resolves in the credential store.\n" +
+		"Does NOT contact the provider — this makes zero network calls, so a revoked, expired, or " +
+		"wrong API key can still report status=\"ok\" here. Parameters: name (required). Use " +
+		"list_models to actually exercise the connection against the provider's live API."
 }
 
 func (t *ProviderTestTool) Parameters() map[string]any {
@@ -241,10 +251,13 @@ func (t *ProviderTestTool) Execute(_ context.Context, args map[string]any) *tool
 	if name == "" {
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", "name is required", ""))
 	}
-	// Actual connection test requires a live LLM provider instance. Report
-	// ok/not-configured based on whether the key resolves the canonical way:
-	// the provider's config entry APIKeyRef, falling back to the conventional
-	// <provider>_API_KEY ref (used by both onboarding and provider.configure).
+	// This is a credential-presence check only — see Description(). It makes
+	// no network call, so there is no latency to report; the response
+	// previously carried a hardcoded "latency_ms": 0 that read as a real
+	// measurement of a connection that was never made. Report ok/error based
+	// on whether the key resolves the canonical way: the provider's config
+	// entry APIKeyRef, falling back to the conventional <provider>_API_KEY
+	// ref (used by both onboarding and provider.configure).
 	ref := name + "_API_KEY"
 	for _, p := range t.deps.GetCfg().Providers {
 		if p != nil && providerNameOf(p) == name && p.APIKeyRef != "" {
@@ -261,9 +274,9 @@ func (t *ProviderTestTool) Execute(_ context.Context, args map[string]any) *tool
 		}))
 	}
 	return tools.NewToolResult(successJSON(map[string]any{
-		"name":       name,
-		"status":     "ok",
-		"latency_ms": 0,
+		"name":   name,
+		"status": "ok",
+		"note":   "credential presence only — no network call was made to the provider",
 	}))
 }
 
