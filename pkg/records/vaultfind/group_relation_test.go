@@ -10,6 +10,7 @@ package vaultfind
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -452,5 +453,56 @@ func TestGroupByRelation_ManyValuedRecordJoinsEveryGroup(t *testing.T) {
 	// The absent group is real too: PL-0003 has no companions of its own.
 	if absent != 1 {
 		t.Errorf("expected exactly one absent group (PL-0003 has no companions), got %d", absent)
+	}
+}
+
+// TestGroupByInverse_IsRefusedNotAConfidentWrongAnswer is code-review-A F4.
+//
+// plant.bed declares `inverse: plants` — so "plants" names a DERIVED reverse
+// edge on `bed` records, never a property bed's own schema declares. There is
+// no execution path that computes an inverse's group VALUES (groupKeys reads
+// a survivor's decoded properties, and renderProperties only ever decodes
+// properties the QUERIED type's own schema lists) — so group_by=plants on
+// type=bed must be refused with the ordinary "unknown property" message,
+// exactly as any other undeclared group_by name is, rather than accepted and
+// answered wrong.
+//
+// The wrong answer this guards against is a real regression this branch once
+// shipped: accepting the inverse name here, with no corresponding value
+// computation, made every bed land in ONE group marked "absent: true" —
+// "no bed has any plants" — reported as COMPLETE with an empty problem list.
+// That is confidently wrong, not merely incomplete: a caller reading Complete
+// and an empty Problems list has no signal anything was left unanswered.
+func TestGroupByInverse_IsRefusedNotAConfidentWrongAnswer(t *testing.T) {
+	f := newGroupFixture(t)
+	f.bed("BED-GH", "Greenhouse")
+	f.plant("PL-0001", "Monstera", "Greenhouse")
+
+	groups := []string{"plants"}
+	r := req(withType("bed"))
+	r.GroupBy = &groups
+	resp, err := Find(context.Background(), f.deps(), r)
+
+	if err == nil {
+		t.Fatalf("group_by=plants (a derived inverse, never a property `bed` declares) was "+
+			"ACCEPTED and answered instead of refused: %+v", resp)
+	}
+	if !IsRefusal(err) {
+		t.Fatalf("expected a *RefusalError, got a different error: %v", err)
+	}
+	var refusal *RefusalError
+	if !errors.As(err, &refusal) {
+		t.Fatalf("errors.As failed to unwrap a *RefusalError from: %v", err)
+	}
+	if refusal.Problem.Code != generated.UnknownProperty {
+		t.Errorf("refusal code = %q, want %q (the ordinary unknown-property refusal, "+
+			"not a bespoke inverse-specific one)", refusal.Problem.Code, generated.UnknownProperty)
+	}
+	if refusal.Problem.Property == nil || *refusal.Problem.Property != "plants" {
+		t.Errorf("refusal must name the property it refused: %+v", refusal.Problem)
+	}
+	if !strings.Contains(refusal.Problem.Reason, "bed") {
+		t.Errorf("refusal reason must name the record type that does not declare it: %q",
+			refusal.Problem.Reason)
 	}
 }
