@@ -236,6 +236,39 @@ func TestApplyStep_RefusesAStepThroughASymlinkedParentDirectory(t *testing.T) {
 		"FR-044: writing through a symlinked PARENT rewrites the note it points at")
 }
 
+// TestRenameBuildStep_RefusesANoteReachedThroughASymlink tests buildStep
+// DIRECTLY, and the directness is the point.
+//
+// buildStep is fed by graph.Notes() today, and the walk never yields a path
+// that traverses a symlink, so no end-to-end fixture can reach its guard. That
+// is exactly the argument that left the other four sites in this class open:
+// each of them was also "protected by its caller" right up until a caller
+// changed. Mutating the guard back to plain ResolveContained and running the
+// whole package is green — this test is what makes that mutation fail, so the
+// guard is covered rather than merely present.
+func TestRenameBuildStep_RefusesANoteReachedThroughASymlink(t *testing.T) {
+	const body = "See [[Old]] here.\n"
+	dir, root := a2Collection(t, map[string]string{"Archive/Sub/Keep.md": body})
+	require.NoError(t, os.Symlink(filepath.Join(dir, "Archive"), filepath.Join(dir, "Inbox")))
+	g4RequireOnlySymlinkCanRefuse(t, root, "Inbox/Sub/Keep.md")
+
+	r := a2Renamer(t, root)
+	edits := []LinkEdit{{Offset: 4, Old: "[[Old]]", New: "[[New]]"}}
+
+	// The same edits against the note's REAL name must succeed, so the refusal
+	// below cannot be an edit that simply does not apply.
+	ok, okErr := r.buildStep(OSLinkFS(), "Archive/Sub/Keep.md", false, edits)
+	require.NoError(t, okErr)
+	require.NotNil(t, ok)
+
+	step, err := r.buildStep(OSLinkFS(), "Inbox/Sub/Keep.md", false, edits)
+	require.Error(t, err)
+	assert.Nil(t, step)
+	assert.ErrorIs(t, err, ErrOutsideCollection)
+	assert.Equal(t, body, a2Read(t, dir, "Archive/Sub/Keep.md"),
+		"planning must not have read or altered the note the link points at")
+}
+
 // --- FR-111 on the rename path -------------------------------------------
 
 // g4EvictingFS is the OS filesystem, except that opening one named file
