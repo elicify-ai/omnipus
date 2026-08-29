@@ -42,20 +42,54 @@ func encode(t *testing.T, m map[string]any) []byte {
 	return b
 }
 
-func providers(m map[string]any) []any { return m["providers"].([]any) }
+func providers(t *testing.T, m map[string]any) []any {
+	t.Helper()
+	v, ok := m["providers"].([]any)
+	if !ok {
+		t.Fatalf("fixture 'providers' is not a list: %T", m["providers"])
+	}
+	return v
+}
 
-func provider(m map[string]any, i int) map[string]any { return providers(m)[i].(map[string]any) }
+func provider(t *testing.T, m map[string]any, i int) map[string]any {
+	t.Helper()
+	raw := providers(t, m)[i]
+	v, ok := raw.(map[string]any)
+	if !ok {
+		t.Fatalf("providers[%d] is not a map: %T", i, raw)
+	}
+	return v
+}
 
-func models(p map[string]any) []any { return p["models"].([]any) }
+func models(t *testing.T, p map[string]any) []any {
+	t.Helper()
+	v, ok := p["models"].([]any)
+	if !ok {
+		t.Fatalf("provider 'models' is not a list: %T", p["models"])
+	}
+	return v
+}
 
-func model(p map[string]any, i int) map[string]any { return models(p)[i].(map[string]any) }
+func model(t *testing.T, p map[string]any, i int) map[string]any {
+	t.Helper()
+	raw := models(t, p)[i]
+	v, ok := raw.(map[string]any)
+	if !ok {
+		t.Fatalf("models[%d] is not a map: %T", i, raw)
+	}
+	return v
+}
 
 // providerIndex returns the index of provider id in the fixture, failing
 // the test when absent, so DS-1 rows never silently mutate the wrong row.
 func providerIndex(t *testing.T, m map[string]any, id string) int {
 	t.Helper()
-	for i, p := range providers(m) {
-		if p.(map[string]any)["id"] == id {
+	for i, p := range providers(t, m) {
+		pm, ok := p.(map[string]any)
+		if !ok {
+			t.Fatalf("providers[%d] is not a map: %T", i, p)
+		}
+		if pm["id"] == id {
 			return i
 		}
 	}
@@ -168,63 +202,71 @@ func TestParseDocument_Rejects(t *testing.T) {
 		{name: "DS-1.4 empty version", mutate: func(_ *testing.T, m map[string]any) { m["version"] = "" }, wantErr: "version"},
 		{name: "DS-1.26 version without v", mutate: func(_ *testing.T, m map[string]any) { m["version"] = "2026.8.22" }, wantErr: "version"},
 		{name: "DS-1.5 duplicate provider", mutate: func(t *testing.T, m map[string]any) {
-			provider(m, 1)["id"] = "zai"
+			provider(t, m, 1)["id"] = "zai"
 		}, wantErr: "providers[1].id"},
 		{name: "DS-1.6 duplicate model in zai", mutate: func(t *testing.T, m map[string]any) {
-			zai := provider(m, providerIndex(t, m, "zai"))
-			model(zai, 1)["id"] = model(zai, 0)["id"]
+			zai := provider(t, m, providerIndex(t, m, "zai"))
+			model(t, zai, 1)["id"] = model(t, zai, 0)["id"]
 		}, wantErr: "providers[0].models[1].id"},
-		{name: "empty provider id", mutate: func(t *testing.T, m map[string]any) { provider(m, 0)["id"] = "" }, wantErr: "providers[0].id"},
-		{name: "empty model id", mutate: func(t *testing.T, m map[string]any) { model(provider(m, 0), 0)["id"] = "" }, wantErr: "providers[0].models[0].id"},
-		{name: "DS-1.7 protocol grpc", mutate: func(t *testing.T, m map[string]any) { provider(m, 0)["protocol"] = "grpc" }, wantErr: "providers[0].protocol"},
-		{name: "empty protocol on supported tier", mutate: func(t *testing.T, m map[string]any) { provider(m, 0)["protocol"] = "" }, wantErr: "providers[0].protocol"},
+		{name: "empty provider id", mutate: func(t *testing.T, m map[string]any) { provider(t, m, 0)["id"] = "" }, wantErr: "providers[0].id"},
+		{name: "empty model id", mutate: func(t *testing.T, m map[string]any) { model(t, provider(t, m, 0), 0)["id"] = "" }, wantErr: "providers[0].models[0].id"},
+		{name: "DS-1.7 protocol grpc", mutate: func(t *testing.T, m map[string]any) { provider(t, m, 0)["protocol"] = "grpc" }, wantErr: "providers[0].protocol"},
+		{name: "empty protocol on supported tier", mutate: func(t *testing.T, m map[string]any) { provider(t, m, 0)["protocol"] = "" }, wantErr: "providers[0].protocol"},
 		{name: "DS-1.8 modalities lack text", mutate: func(t *testing.T, m map[string]any) {
-			model(provider(m, 0), 0)["input_modalities"] = []any{"image"}
+			model(t, provider(t, m, 0), 0)["input_modalities"] = []any{"image"}
 		}, wantErr: "providers[0].models[0].input_modalities"},
 		{name: "DS-1.11 zero providers", mutate: func(_ *testing.T, m map[string]any) { m["providers"] = []any{} }, wantErr: "providers"},
-		{name: "DS-1.15 default max_bytes 0", mutate: func(_ *testing.T, m map[string]any) {
-			m["default_resize_limits"].(map[string]any)["max_bytes"] = 0
+		{name: "DS-1.15 default max_bytes 0", mutate: func(t *testing.T, m map[string]any) {
+			resizeLimits, ok := m["default_resize_limits"].(map[string]any)
+			if !ok {
+				t.Fatalf("fixture 'default_resize_limits' is not a map: %T", m["default_resize_limits"])
+			}
+			resizeLimits["max_bytes"] = 0
 		}, wantErr: "default_resize_limits"},
 		{name: "provider resize long_edge_px 0", mutate: func(t *testing.T, m map[string]any) {
-			provider(m, 0)["resize_limits"].(map[string]any)["long_edge_px"] = 0
+			resizeLimits, ok := provider(t, m, 0)["resize_limits"].(map[string]any)
+			if !ok {
+				t.Fatalf("providers[0].resize_limits is not a map: %T", provider(t, m, 0)["resize_limits"])
+			}
+			resizeLimits["long_edge_px"] = 0
 		}, wantErr: "providers[0].resize_limits"},
-		{name: "DS-1.16 auth_methods empty", mutate: func(t *testing.T, m map[string]any) { provider(m, 0)["auth_methods"] = []any{} }, wantErr: "providers[0].auth_methods"},
-		{name: "auth_methods unknown value", mutate: func(t *testing.T, m map[string]any) { provider(m, 0)["auth_methods"] = []any{"password"} }, wantErr: "providers[0].auth_methods"},
-		{name: "tier unknown", mutate: func(t *testing.T, m map[string]any) { provider(m, 0)["tier"] = "gold" }, wantErr: "providers[0].tier"},
-		{name: "status unknown", mutate: func(t *testing.T, m map[string]any) { model(provider(m, 0), 0)["status"] = "beta" }, wantErr: "providers[0].models[0].status"},
-		{name: "release_date malformed", mutate: func(t *testing.T, m map[string]any) { model(provider(m, 0), 0)["release_date"] = "2026/05/20" }, wantErr: "providers[0].models[0].release_date"},
+		{name: "DS-1.16 auth_methods empty", mutate: func(t *testing.T, m map[string]any) { provider(t, m, 0)["auth_methods"] = []any{} }, wantErr: "providers[0].auth_methods"},
+		{name: "auth_methods unknown value", mutate: func(t *testing.T, m map[string]any) { provider(t, m, 0)["auth_methods"] = []any{"password"} }, wantErr: "providers[0].auth_methods"},
+		{name: "tier unknown", mutate: func(t *testing.T, m map[string]any) { provider(t, m, 0)["tier"] = "gold" }, wantErr: "providers[0].tier"},
+		{name: "status unknown", mutate: func(t *testing.T, m map[string]any) { model(t, provider(t, m, 0), 0)["status"] = "beta" }, wantErr: "providers[0].models[0].status"},
+		{name: "release_date malformed", mutate: func(t *testing.T, m map[string]any) { model(t, provider(t, m, 0), 0)["release_date"] = "2026/05/20" }, wantErr: "providers[0].models[0].release_date"},
 		{name: "empty updated_at", mutate: func(_ *testing.T, m map[string]any) { m["updated_at"] = "" }, wantErr: "updated_at"},
 		{name: "empty source", mutate: func(_ *testing.T, m map[string]any) { m["source"] = "" }, wantErr: "source"},
 		{name: "DS-1.23 protocols lacks primary", mutate: func(t *testing.T, m map[string]any) {
-			provider(m, 0)["protocols"] = []any{map[string]any{"protocol": "anthropic", "api": "https://api.z.ai/api/anthropic"}}
+			provider(t, m, 0)["protocols"] = []any{map[string]any{"protocol": "anthropic", "api": "https://api.z.ai/api/anthropic"}}
 		}, wantErr: "providers[0].protocols"},
 		{name: "protocols duplicate entry", mutate: func(t *testing.T, m map[string]any) {
-			p := provider(m, 0)
+			p := provider(t, m, 0)
 			p["protocols"] = []any{
 				map[string]any{"protocol": p["protocol"], "api": p["api"]},
 				map[string]any{"protocol": p["protocol"], "api": p["api"]},
 			}
 		}, wantErr: "providers[0].protocols[1]"},
 		{name: "protocols primary with different api", mutate: func(t *testing.T, m map[string]any) {
-			p := provider(m, 0)
+			p := provider(t, m, 0)
 			p["protocols"] = []any{map[string]any{"protocol": p["protocol"], "api": "https://elsewhere.example/v1"}}
 		}, wantErr: "providers[0].protocols"},
 		{name: "not JSON", mutate: func(_ *testing.T, m map[string]any) { m["providers"] = "not-a-list" }, wantErr: "providers"},
 
 		// Accept rows.
-		{name: "DS-1.9 context_window 0 accepted", mutate: func(t *testing.T, m map[string]any) { model(provider(m, 0), 0)["context_window"] = 0 }},
-		{name: "DS-1.10 provider with models [] accepted", mutate: func(t *testing.T, m map[string]any) { provider(m, 0)["models"] = []any{} }},
-		{name: "DS-1.12 unicode name preserved", mutate: func(t *testing.T, m map[string]any) { provider(m, 0)["name"] = "智谱 AI" }},
-		{name: "DS-1.24 protocols omitted", mutate: func(t *testing.T, m map[string]any) { delete(provider(m, 0), "protocols") }},
+		{name: "DS-1.9 context_window 0 accepted", mutate: func(t *testing.T, m map[string]any) { model(t, provider(t, m, 0), 0)["context_window"] = 0 }},
+		{name: "DS-1.10 provider with models [] accepted", mutate: func(t *testing.T, m map[string]any) { provider(t, m, 0)["models"] = []any{} }},
+		{name: "DS-1.12 unicode name preserved", mutate: func(t *testing.T, m map[string]any) { provider(t, m, 0)["name"] = "智谱 AI" }},
+		{name: "DS-1.24 protocols omitted", mutate: func(t *testing.T, m map[string]any) { delete(provider(t, m, 0), "protocols") }},
 		{name: "DS-1.25 bedrock empty protocol, tier unsupported", mutate: func(t *testing.T, m map[string]any) {
-			b := provider(m, providerIndex(t, m, "amazon-bedrock"))
+			b := provider(t, m, providerIndex(t, m, "amazon-bedrock"))
 			b["protocol"] = ""
 			b["tier"] = "unsupported"
 			b["unsupported_reason"] = "cloud-iam"
 		}},
-		{name: "release_date omitted accepted", mutate: func(t *testing.T, m map[string]any) { delete(model(provider(m, 0), 0), "release_date") }},
+		{name: "release_date omitted accepted", mutate: func(t *testing.T, m map[string]any) { delete(model(t, provider(t, m, 0), 0), "release_date") }},
 		{name: "unknown modality carried", mutate: func(t *testing.T, m map[string]any) {
-			model(provider(m, 0), 0)["input_modalities"] = []any{"text", "hologram"}
+			model(t, provider(t, m, 0), 0)["input_modalities"] = []any{"text", "hologram"}
 		}},
 	}
 	for _, tc := range cases {
@@ -270,8 +312,8 @@ func TestParseDocument_Rejects(t *testing.T) {
 // DS-1.12 / E9: unicode survives the round trip byte-for-byte.
 func TestParseDocument_UnicodePreserved(t *testing.T) {
 	m := fixtureMap(t)
-	provider(m, 0)["name"] = "智谱 AI"
-	model(provider(m, 0), 0)["name"] = "GLM‑5.2 旗舰"
+	provider(t, m, 0)["name"] = "智谱 AI"
+	model(t, provider(t, m, 0), 0)["name"] = "GLM‑5.2 旗舰"
 	doc, err := ParseDocument(encode(t, m))
 	if err != nil {
 		t.Fatal(err)
@@ -285,7 +327,7 @@ func TestParseDocument_UnicodePreserved(t *testing.T) {
 // resolution.
 func TestParseDocument_AliasesNeverResolve(t *testing.T) {
 	m := fixtureMap(t)
-	provider(m, providerIndex(t, m, "zai"))["aliases"] = []any{"z-ai", "zhipu"}
+	provider(t, m, providerIndex(t, m, "zai"))["aliases"] = []any{"z-ai", "zhipu"}
 	c := mustCatalog(t, encode(t, m))
 	p, ok := c.Provider("zai")
 	if !ok || len(p.Aliases) != 2 {
@@ -330,7 +372,7 @@ func TestParseDocument_APIURLValidation(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			m := fixtureMap(t)
 			i := providerIndex(t, m, tc.provider)
-			p := provider(m, i)
+			p := provider(t, m, i)
 			p["api"] = tc.api
 			if tc.provider == "zai" {
 				// Keep the protocols[] primary consistent with the new api so the
@@ -356,7 +398,7 @@ func TestParseDocument_APIURLValidation(t *testing.T) {
 	// FR-033 also applies to protocols[].api.
 	t.Run("protocols[].api http on hosted", func(t *testing.T) {
 		m := fixtureMap(t)
-		p := provider(m, providerIndex(t, m, "zai"))
+		p := provider(t, m, providerIndex(t, m, "zai"))
 		p["protocols"] = []any{
 			map[string]any{"protocol": p["protocol"], "api": p["api"]},
 			map[string]any{"protocol": "anthropic", "api": "http://10.0.0.9/anthropic"},
@@ -373,8 +415,8 @@ func TestResolve_SameModelIDTwoProviders(t *testing.T) {
 	m := fixtureMap(t)
 	// Give minimax a model whose id equals zai's "glm-5.2" to prove the pair
 	// keys independently (US-1.AC4).
-	mm := provider(m, providerIndex(t, m, "minimax"))
-	mm["models"] = append(models(mm), map[string]any{
+	mm := provider(t, m, providerIndex(t, m, "minimax"))
+	mm["models"] = append(models(t, mm), map[string]any{
 		"id": "glm-5.2", "name": "GLM via MiniMax", "tool_call": false,
 		"context_window": 4096, "max_output_tokens": 1024,
 		"input_modalities": []any{"text"}, "status": "active",
@@ -486,8 +528,8 @@ func TestResolve_MissSemantics(t *testing.T) {
 // DS-2.8 / E8: a retired model still resolves with its facts and status.
 func TestResolve_RetiredStillResolves(t *testing.T) {
 	m := fixtureMap(t)
-	zai := provider(m, providerIndex(t, m, "zai"))
-	model(zai, 0)["status"] = "retired"
+	zai := provider(t, m, providerIndex(t, m, "zai"))
+	model(t, zai, 0)["status"] = "retired"
 	c := mustCatalog(t, encode(t, m))
 	h := c.Resolve("zai", "glm-5.2")
 	if !h.Found() || h.Window() != 1000000 || h.Status() != StatusRetired {
@@ -567,7 +609,7 @@ func TestCatalog_LocalityPredicate(t *testing.T) {
 	}
 	// A published `locality` field is ignored: it is derived, never read.
 	m := fixtureMap(t)
-	provider(m, providerIndex(t, m, "zai"))["locality"] = "local"
+	provider(t, m, providerIndex(t, m, "zai"))["locality"] = "local"
 	c2 := mustCatalog(t, encode(t, m))
 	if p, _ := c2.Provider("zai"); p.Locality != LocalityCloud {
 		t.Fatal("published locality must be ignored (derived on load)")

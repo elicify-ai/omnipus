@@ -581,7 +581,7 @@ func (m *Manager) ConnectServer(
 		// ADR-066 D10: every POST response body goes through
 		// http.MaxBytesReader at the ingest bound. Custom headers, when
 		// configured, are injected beneath it.
-		var rt http.RoundTripper = http.DefaultTransport
+		var rt = http.DefaultTransport
 		if len(cfg.Headers) > 0 {
 			rt = &headerTransport{base: rt, headers: cfg.Headers}
 			logger.DebugCF("mcp", "Added custom HTTP headers",

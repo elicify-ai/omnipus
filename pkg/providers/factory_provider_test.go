@@ -267,7 +267,14 @@ func TestCreateProviderFromConfig_Custom(t *testing.T) {
 		if err != nil {
 			t.Fatalf("second custom row: %v", err)
 		}
-		ap, bp := a.(*HTTPProvider), b.(*HTTPProvider)
+		ap, ok := a.(*HTTPProvider)
+		if !ok {
+			t.Fatalf("first custom row returned %T, want *HTTPProvider", a)
+		}
+		bp, ok := b.(*HTTPProvider)
+		if !ok {
+			t.Fatalf("second custom row returned %T, want *HTTPProvider", b)
+		}
 		if ap.APIBase() == bp.APIBase() {
 			t.Fatalf("both custom rows resolved to %q; each must keep its own endpoint", ap.APIBase())
 		}
@@ -320,7 +327,11 @@ func TestCatalogKey_ProviderAndBareModel(t *testing.T) {
 		t.Fatalf("modelID = %q, want the full id %q — no prefix may be split off",
 			modelID, "z-ai/glm-5.2")
 	}
-	if got := p.(*HTTPProvider).APIBase(); got != "https://openrouter.ai/api/v1" {
+	hp, ok := p.(*HTTPProvider)
+	if !ok {
+		t.Fatalf("CreateProviderFromConfig() returned %T, want *HTTPProvider", p)
+	}
+	if got := hp.APIBase(); got != "https://openrouter.ai/api/v1" {
 		t.Errorf("base URL = %q, want OpenRouter's — the `z-ai/` segment is part of the model id", got)
 	}
 

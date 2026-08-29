@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -438,7 +439,14 @@ func pollDeviceCode(cfg OAuthProviderConfig, providerID, deviceAuthID, userCode 
 
 	if resp.StatusCode != http.StatusOK {
 		// Distinguish pending / slow_down / denied / expired from the error body.
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		// A read error here just means fewer bytes to classify against; the
+		// switch below still degrades gracefully to the pending default, so
+		// we log and keep whatever partial body was read rather than
+		// aborting the poll over a body-read failure.
+		body, readErr := io.ReadAll(io.LimitReader(resp.Body, 512))
+		if readErr != nil {
+			slog.Warn("oauth: device poll error body read failed", "error", readErr)
+		}
 		bodyStr := strings.ToLower(strings.TrimSpace(string(body)))
 		switch {
 		case strings.Contains(bodyStr, "access_denied"):

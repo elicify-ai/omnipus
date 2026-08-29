@@ -172,10 +172,10 @@ func computeProviderDependents(cfg *config.Config, providerID string) []gen.Prov
 		// status does not exempt it (Dataset row 5).
 		if ac.Model != nil && strings.TrimSpace(ac.Model.Primary) != "" {
 			slug := strings.TrimSpace(ac.Model.Primary)
-			switch prov := strings.TrimSpace(ac.Model.Provider); {
-			case prov == providerID:
+			switch prov := strings.TrimSpace(ac.Model.Provider); prov {
+			case providerID:
 				consider(ac.ID, name, gen.ProviderDependentRolePrimary)
-			case prov == "":
+			case "":
 				if hit, role := resolveSlugRole(slug, gen.ProviderDependentRolePrimary); hit {
 					consider(ac.ID, name, role)
 				}
@@ -187,10 +187,10 @@ func computeProviderDependents(cfg *config.Config, providerID string) []gen.Prov
 			if slug == "" {
 				continue
 			}
-			switch prov := strings.TrimSpace(fb.Provider); {
-			case prov == providerID:
+			switch prov := strings.TrimSpace(fb.Provider); prov {
+			case providerID:
 				consider(ac.ID, name, gen.ProviderDependentRoleFallback)
-			case prov == "":
+			case "":
 				if hit, role := resolveSlugRole(slug, gen.ProviderDependentRoleFallback); hit {
 					consider(ac.ID, name, role)
 				}

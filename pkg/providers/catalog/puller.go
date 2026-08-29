@@ -150,7 +150,7 @@ func (p *GHReleasePuller) Pull(ctx context.Context) ([]byte, error) {
 	rawData, rawErr := p.fetchRaw(ctx)
 	if rawErr != nil {
 		if errors.Is(rawErr, ErrTooLarge) || errors.Is(rawErr, ErrChecksumMismatch) {
-			return nil, fmt.Errorf("catalog: pull raw (release=%v): %w", fetchErr, rawErr)
+			return nil, fmt.Errorf("catalog: pull raw (release=%w): %w", fetchErr, rawErr)
 		}
 		return nil, fmt.Errorf("catalog: pull failed (release=%w, raw=%w)", fetchErr, rawErr)
 	}
@@ -267,7 +267,7 @@ func (p *GHReleasePuller) rawURL(name string) string {
 func (p *GHReleasePuller) verify(ctx context.Context, data []byte, sidecarURL string) error {
 	body, err := p.get(ctx, sidecarURL, "", maxSidecarBytes)
 	if err != nil {
-		return fmt.Errorf("%w: sidecar %v", ErrChecksumMismatch, err)
+		return fmt.Errorf("%w: sidecar %w", ErrChecksumMismatch, err)
 	}
 	expected := strings.TrimSpace(string(body))
 	// sha256sum format: "<hex>  <name>" or just "<hex>". Accept both.

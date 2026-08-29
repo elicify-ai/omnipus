@@ -625,14 +625,38 @@ test.describe('Bug-Hans: per-agent session resume must not produce "session not 
     // 9. Belt-and-suspenders: the transcript on disk now contains the user
     //    message — proving the WS handler accepted the frame and wrote it
     //    through the per-agent store.
-    await page.waitForTimeout(1_000) // let the append flush
-    const transcript = fs.readFileSync(
-      path.join(sessionDir, 'transcript.jsonl'),
-      'utf-8',
-    )
-    expect(
-      transcript.includes('Hello from the regression test.'),
-      `transcript.jsonl must contain the user message; got: ${transcript.slice(0, 300)}`,
-    ).toBe(true)
+    //
+    //    POLL the file; never a fixed sleep. This assertion used to be a
+    //    `page.waitForTimeout(1_000)` followed by a single readFileSync, and
+    //    on 2026-08-28 that lost the race on all three attempts of the
+    //    llm-light shard while the PRODUCT WAS WORKING CORRECTLY — the
+    //    follow-up entry was on disk in every one of the three failed runs,
+    //    just 0.1–1.8s later than the read. The gateway does persist this
+    //    entry synchronously inside handleChatMessage (pkg/gateway/websocket.go,
+    //    `store.AppendTranscript(sessionID, entry)`), but the handler first
+    //    performs the M4 workspace-bind `SetMeta` — a flock + fsync + rename +
+    //    directory-fsync write that measured ~1.2s on the CI worker with
+    //    twelve e2e shards sharing one disk. A one-second sleep can never be
+    //    the right budget for an fsync on a loaded box.
+    //
+    //    Note also that step 7's message bubble is the SPA's optimistic local
+    //    echo, so it is no evidence at all that the server write landed —
+    //    this poll is the only assertion in the test that proves it.
+    const transcriptPath = path.join(sessionDir, 'transcript.jsonl')
+    await expect
+      .poll(
+        () => {
+          try {
+            return fs.readFileSync(transcriptPath, 'utf-8')
+          } catch {
+            return '' // file not created yet — keep polling, don't throw
+          }
+        },
+        {
+          timeout: 15_000,
+          message: 'transcript.jsonl must contain the follow-up user message',
+        },
+      )
+      .toContain('Hello from the regression test.')
   })
 })

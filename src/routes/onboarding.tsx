@@ -750,7 +750,19 @@ function NameStep({
   onContinue: () => void
 }) {
   return (
-    <div className="flex flex-col items-center text-center gap-6">
+    // A real <form> (not just fields) is what password managers key off of to
+    // recognise a credential-creation flow — see PasswordStep below for the
+    // matching password form. onSubmit is handled in JS (preventDefault) so
+    // Enter-to-submit works without a native navigation in this hash-router
+    // SPA; the submit button's own `disabled` gates both click AND the
+    // browser's Enter-key implicit submission, preserving validation.
+    <form
+      className="flex flex-col items-center text-center gap-6"
+      onSubmit={(e) => {
+        e.preventDefault()
+        onContinue()
+      }}
+    >
       <motion.div
         initial={{ scale: 0.8, opacity: 0 }}
         animate={{ scale: 1, opacity: 1 }}
@@ -797,9 +809,6 @@ function NameStep({
             placeholder="admin"
             autoComplete="username"
             autoFocus
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') onContinue()
-            }}
           />
         </div>
 
@@ -826,15 +835,15 @@ function NameStep({
         className="w-full"
       >
         <Button
+          type="submit"
           className="w-full h-11 gap-2 font-headline font-bold text-base"
-          onClick={onContinue}
           disabled={!username.trim()}
         >
           Continue
           <ArrowRight size={16} weight="bold" />
         </Button>
       </motion.div>
-    </div>
+    </form>
   )
 }
 
@@ -864,7 +873,19 @@ function PasswordStep({
   const isValid = password.length >= 8 && password === passwordConfirm
   const strength = evaluatePasswordStrength(password)
   return (
-    <div className="flex flex-col items-center text-center gap-6">
+    // Real <form> + new-password autocomplete is what lets a password manager
+    // recognise "this is the credential being created" and offer to save it —
+    // see NameStep above for the matching username form. onSubmit does its
+    // own preventDefault so this hash-router SPA never gets a native
+    // navigation, and the submit button's `disabled` still gates Enter-to-
+    // submit exactly like it already gated the click handler.
+    <form
+      className="flex flex-col items-center text-center gap-6"
+      onSubmit={(e) => {
+        e.preventDefault()
+        onContinue()
+      }}
+    >
       <motion.div
         initial={{ scale: 0.8, opacity: 0 }}
         animate={{ scale: 1, opacity: 1 }}
@@ -1005,20 +1026,20 @@ function PasswordStep({
         transition={{ delay: 0.35, duration: 0.38 }}
         className="flex items-center gap-3 pt-2 w-full"
       >
-        <Button variant="ghost" className="gap-1.5 min-h-11 sm:min-h-0" onClick={onBack}>
+        <Button type="button" variant="ghost" className="gap-1.5 min-h-11 sm:min-h-0" onClick={onBack}>
           <ArrowLeft size={14} />
           Back
         </Button>
         <Button
+          type="submit"
           className="flex-1 gap-2 font-headline font-bold"
-          onClick={onContinue}
           disabled={!isValid}
         >
           Continue
           <ArrowRight size={14} weight="bold" />
         </Button>
       </motion.div>
-    </div>
+    </form>
   )
 }
 

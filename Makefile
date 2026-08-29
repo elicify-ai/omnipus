@@ -443,6 +443,14 @@ lint-tool-error-status:
 lint-no-jpeg-screencast:
 	bash scripts/check-no-jpeg-screencast.sh
 
+## lint-e2e-login-crosstalk: Fail if any E2E spec calls POST /api/v1/auth/login
+## Regression guard: login re-mints the SINGLE-SLOT session_token_hash, silently invalidating the
+## shared storageState cookie for every spec that runs later. Self-test first (a guard that cannot
+## fail is no guard). See scripts/check-e2e-login-crosstalk.sh's header comment.
+lint-e2e-login-crosstalk:
+	bash scripts/check-e2e-login-crosstalk.sh --self-test
+	bash scripts/check-e2e-login-crosstalk.sh
+
 ## lint-no-removed-providers: Fail if the providers deleted under ADR-068 §2.4 leave any trace
 ## (antigravity, claude-cli, the OpenAI device-code flow). Runs the guard's self-check first so
 ## a guard that can no longer fail is itself a failure. Allow-list: scripts/no-removed-providers.allow.

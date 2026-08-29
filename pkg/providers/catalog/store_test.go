@@ -99,7 +99,7 @@ func TestStore_InvalidPersisted_Ignored_LegacyInvisible(t *testing.T) {
 	t.Run("persisted failing FR-033 → one WARN reason=invalid", func(t *testing.T) {
 		dir := t.TempDir()
 		m := fixtureMap(t)
-		provider(m, providerIndex(t, m, "zai"))["api"] = "http://api.z.ai/api/paas/v4"
+		provider(t, m, providerIndex(t, m, "zai"))["api"] = "http://api.z.ai/api/paas/v4"
 		writePersisted(t, dir, encode(t, m))
 		log := &captureLogger{}
 

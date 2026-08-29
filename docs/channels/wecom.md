@@ -22,7 +22,7 @@ This replaces the legacy `wecom`, `wecom_app`, and `wecom_aibot` split with one 
 
 ### Option 1: Web UI QR Binding (Recommended)
 
-Open the Web UI, navigate to **Channels -> WeCom**, and click the QR binding button. Scan the QR code with WeCom and confirm in the app — credentials are saved automatically.
+Open the Web UI, navigate to **Connectors -> WeCom**, and click the QR binding button. Scan the QR code with WeCom and confirm in the app — credentials are saved automatically.
 
 ### Option 2: Manual credential setup
 
@@ -120,7 +120,7 @@ Fields can be overridden via environment variables. The parent block uses the pr
 
 ### QR code expired
 
-- The QR code has a limited validity. Open **Channels → WeCom → Configure** again to get a fresh QR code.
+- The QR code has a limited validity. Open **Connectors → WeCom → Configure** again to get a fresh QR code.
 
 ### WebSocket connection fails
 

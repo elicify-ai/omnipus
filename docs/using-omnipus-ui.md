@@ -10,12 +10,12 @@ Everything here is "how do I _do X_" — find the section you need and skim. Eac
 
 ## A tour of the screen
 
-The left sidebar is how you move around the app. **Chat** is where you talk to your agents — it's the home screen. **Command Center** is a dashboard of tasks, activity, and daily cost. **Agents** shows the roster of your five teammates (and any custom ones you build). **Channels** is where you connect chat apps (Telegram, Discord, Slack, and more) and choose which agent answers each. **Skills & Tools** is where you install new skills, connect MCP servers, and see what your agents can do. **Settings** (near the bottom) covers providers, security, your profile, and more. **Sign out** sits at the very bottom.
+The left sidebar is how you move around the app. **Chat** is where you talk to your agents — it's the home screen. **Command Center** is a dashboard of tasks, activity, and daily cost. **Agents** shows the roster of your five teammates (and any custom ones you build). **Connectors** is where you connect chat apps (Telegram, Discord, Slack, and more) and choose which agent answers each. **Skills & Tools** is where you install new skills, connect MCP servers, and see what your agents can do. **Settings** (near the bottom) covers providers, security, your profile, and more. **Sign out** sits at the very bottom.
 
 On a wide screen, you can pin the sidebar open so it stays put: press **Cmd+B** (Mac) or **Ctrl+B** (Windows/Linux). Press it again to collapse it back to icons and reclaim space.
 
 ![The Omnipus sidebar showing Chat, Command Center, Agents, Channels, and Skills & Tools](marketing/screenshots/sidebar-with-channels.png)
-*The sidebar is your map. Pin it open with Cmd/Ctrl+B.*
+*The sidebar is your map. Pin it open with Cmd/Ctrl+B. (Screenshot predates the **Channels → Connectors** rename — that entry now reads **Connectors**.)*
 
 ---
 
@@ -170,12 +170,12 @@ For the **five core agents** (Mia, Jim, Ava, Ray, Max), their identity is **lock
 
 ---
 
-## Channels
+## Connectors
 
-The **Channels** page connects Omnipus to chat apps — Telegram, Discord, Slack, WhatsApp, Matrix, and more — as a single scrolling list, one card per channel. **Configure** opens a panel to enter the channel's credentials and pick its **Default agent** (which agent answers messages there); **Enable / Disable** turns it on or off. (Web Chat is always on.)
+The **Connectors** page connects Omnipus to chat apps — Telegram, Discord, Slack, WhatsApp, Matrix, and more — as a single scrolling list, one card per channel. **Configure** opens a panel to enter the channel's credentials and pick its **Default agent** (which agent answers messages there); **Enable / Disable** turns it on or off. (Web Chat is always on.)
 
-![The Channels page listing Telegram, Discord, Slack, WhatsApp and more](marketing/screenshots/channels-screen.png)
-*One card per channel — Configure to connect it and choose which agent answers.*
+![The Connectors page listing Telegram, Discord, Slack, WhatsApp and more](marketing/screenshots/channels-screen.png)
+*One card per channel — Configure to connect it and choose which agent answers. (Screenshot predates the **Channels → Connectors** rename.)*
 
 → Full step-by-step, with per-platform credentials, routing, and screenshots: **[Channels](channels.md)**.
 
@@ -191,7 +191,7 @@ The **Skills & Tools** page is where you expand what your agents can do. It has 
 | **MCP Servers** | Connect external tool servers that add capabilities. |
 | **Built-in Tools** | The tools that ship with Omnipus (files, web search, messaging, and so on), so you can see what's available out of the box. |
 
-> Connecting chat apps moved to its own **[Channels](#channels)** page (see below) — it's no longer a tab here.
+> Connecting chat apps moved to its own **[Connectors](#connectors)** page (see below) — it's no longer a tab here.
 
 ![The Skills & Tools page](marketing/screenshots/09-skills-tools.png)
 *Three tabs: Installed Skills, MCP Servers, and Built-in Tools.*

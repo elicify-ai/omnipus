@@ -124,11 +124,25 @@ describe('focusRingContrast', () => {
 })
 
 describe('popularTiles (the e2e rows’ expectation source)', () => {
-  it('yields the 8 Popular companies of FR-022, in catalog order, without repeats', () => {
+  it('yields the 12 Popular companies, in catalog order, without repeats', () => {
     const tiles = popularTiles()
-    expect(tiles).toHaveLength(8)
-    expect(new Set(tiles.map((t) => t.company)).size).toBe(8)
-    expect(new Set(tiles.map((t) => t.id)).size).toBe(8)
+    // Assert the SET, not just the count. A bare toHaveLength() is what let the
+    // 8 -> 12 tier change (groq demoted, ollama promoted) sit undetected here:
+    // any twelve ids would satisfy a count check, including a stale list that
+    // still featured groq.
+    // NOTE: this id list was previously 'moonshot', not 'moonshotai' — the
+    // shipped catalog (pkg/providers/catalog/data/providers_catalog.json)
+    // renamed the vendor and this hand-maintained fixture had never followed.
+    // Every popular-tier id here must be one the real catalog actually ships;
+    // popularProvidersExistInRealCatalog.test.ts guards that invariant so a
+    // future rename can't drift back in unnoticed.
+    expect(tiles.map((t) => t.id).sort()).toEqual([
+      'alibaba', 'anthropic', 'deepseek', 'google', 'minimax', 'mistral',
+      'moonshotai', 'ollama', 'openai', 'openrouter', 'xai', 'zai',
+    ])
+    expect(tiles).toHaveLength(12)
+    expect(new Set(tiles.map((t) => t.company)).size).toBe(12)
+    expect(new Set(tiles.map((t) => t.id)).size).toBe(12)
     // Catalog order: each tile's id appears in the document before the next.
     const order = PROVIDERS_CATALOG.providers.map((p) => p.id)
     const indices = tiles.map((t) => order.indexOf(t.id))
