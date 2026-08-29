@@ -523,22 +523,42 @@ func RemoveListValue(key, value string) NoteEdit {
 
 // SetPropertyScalarChecked is author.go's SetProperty guarded by FR-040b: the
 // write is REFUSED, and the file left byte-identical, when the property's
-// CURRENT value already spans more than one line — because SetProperty's
-// splice removes every continuation line belonging to the old value, and a
-// scalar write over what turns out to be a list would otherwise silently
-// delete every element but the one word the caller sent.
+// CURRENT value is a list — because SetProperty's splice replaces every
+// byte belonging to the old value, and a scalar write over what turns out
+// to be a list would otherwise silently delete every element but the one
+// word the caller sent.
+//
+// The guard is decided by parseListSpan's STYLE classification, not by
+// counting physical lines in the span. A block sequence ("key:\n  - a\n  -
+// b\n") always spans more than one line and a naive line count catches it,
+// but a flow sequence ("key: [a, b]") is exactly ONE line — a caller
+// carrying two, three, or three hundred values on that single line looked,
+// to a line-count guard, indistinguishable from an ordinary one-line
+// scalar, and the guard let the overwrite through. Whether a property's
+// current value is destroyed by this call must not depend on which YAML
+// style it happens to be written in.
 func SetPropertyScalarChecked(key, value string) NoteEdit {
 	return func(src []byte) ([]byte, error) {
 		span, err := parseListSpan(src, key)
 		if err != nil {
 			return nil, err
 		}
-		if span.found {
-			if lines := lineCountInSpan(src, span.start, span.end); lines > 1 {
-				return nil, fmt.Errorf(
-					"%w: %q currently spans %d lines; a scalar write would delete them — "+
-						"no change made. Send a list value instead", ErrMultiLineValue, key, lines)
-			}
+		switch span.style {
+		case listStyleBlock:
+			lines := lineCountInSpan(src, span.start, span.end)
+			return nil, fmt.Errorf(
+				"%w: %q currently spans %d lines; a scalar write would delete them — "+
+					"no change made. Send a list value instead", ErrMultiLineValue, key, lines)
+		case listStyleFlow:
+			return nil, fmt.Errorf(
+				"%w: %q currently holds a %d-item list ([%s]); a scalar write would delete "+
+					"them — no change made. Send a list value instead",
+				ErrMultiLineValue, key, len(span.items), strings.Join(span.items, ", "))
+		case listStyleUnsupported:
+			return nil, fmt.Errorf(
+				"%w: %q currently holds a value this tool cannot confidently parse as a plain "+
+					"scalar; no change made. Send a list value instead, or edit the file directly",
+				ErrMultiLineValue, key)
 		}
 		return SetProperty(key, value)(src)
 	}

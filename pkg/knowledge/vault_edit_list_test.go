@@ -180,6 +180,59 @@ func TestSetPropertyScalarChecked_RefusesMultiLineClobber(t *testing.T) {
 	}
 }
 
+// TestSetPropertyScalarChecked_RefusesFlowStyleClobber is code review B
+// finding 4: the guard above (TestSetPropertyScalarChecked_
+// RefusesMultiLineClobber) proves the BLOCK-style shape is caught, but the
+// guard used to be implemented by counting physical lines in the span —
+// and a flow sequence ("tags: [alpha, beta, gamma]") is exactly ONE
+// physical line. That made the guard's own defence depend on which YAML
+// style the list happened to be written in: a caller who overwrote a
+// three-item flow list got no error, no refusal, and a reply
+// indistinguishable from an ordinary scalar set — while the identical
+// logical list written as a block sequence was correctly refused. This is
+// the fixture vault_edit_test.go's own TestVaultEdit_ByteIdentical_
+// AwkwardFile already uses for `tags: [alpha, beta]`, proving the flow
+// shape is a real, already-present case, not a hypothetical one.
+func TestSetPropertyScalarChecked_RefusesFlowStyleClobber(t *testing.T) {
+	src := []byte("---\ntags: [alpha, beta, gamma]\n---\nBody.\n")
+	out, err := SetPropertyScalarChecked("tags", "solo")(src)
+	if err == nil {
+		t.Fatalf("expected a refusal, got output: %s", out)
+	}
+	if !errors.Is(err, ErrMultiLineValue) {
+		t.Fatalf("expected ErrMultiLineValue, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "3-item list") {
+		t.Fatalf("refusal should name the item count (3): %v", err)
+	}
+	if !strings.Contains(err.Error(), "list value instead") {
+		t.Fatalf("refusal should name the remedy: %v", err)
+	}
+	if string(src) != "---\ntags: [alpha, beta, gamma]\n---\nBody.\n" {
+		t.Fatalf("a refused write must leave the file byte-identical, got: %s", src)
+	}
+}
+
+// TestSetPropertyScalarChecked_RefusesUnsupportedShapeClobber covers the
+// third span.style outcome parseListSpan can report for an existing value:
+// a shape this file cannot confidently parse (e.g. a nested mapping inside
+// a block sequence). It must refuse for the same reason the block- and
+// flow-style guards do — SetProperty's splice would still delete the whole
+// span — even though this shape is neither.
+func TestSetPropertyScalarChecked_RefusesUnsupportedShapeClobber(t *testing.T) {
+	src := []byte("---\ntags:\n  - a: 1\n  - b: 2\n---\nBody.\n")
+	out, err := SetPropertyScalarChecked("tags", "solo")(src)
+	if err == nil {
+		t.Fatalf("expected a refusal, got output: %s", out)
+	}
+	if !errors.Is(err, ErrMultiLineValue) {
+		t.Fatalf("expected ErrMultiLineValue, got: %v", err)
+	}
+	if string(src) != "---\ntags:\n  - a: 1\n  - b: 2\n---\nBody.\n" {
+		t.Fatalf("a refused write must leave the file byte-identical, got: %s", src)
+	}
+}
+
 func TestSetPropertyScalarChecked_AllowsSingleLineOverwrite(t *testing.T) {
 	src := []byte("---\nstatus: draft\n---\nBody.\n")
 	out, err := SetPropertyScalarChecked("status", "active")(src)

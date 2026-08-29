@@ -775,14 +775,30 @@ func TestKnowledge_NoLanguageModelInTheGraphPath(t *testing.T) {
 	// to present this package to an agent. tools.go is the retrieval half;
 	// authoring_tools.go (ADR-067 stage 3) is the authoring half, added when
 	// the write path landed; scope_turn.go resolves which workspace a tool
-	// call belongs to. All three are adapters and none is on the graph path,
-	// which is what FR-045 is about.
+	// call belongs to; vault_edit.go (ADR-068 D15.3) is the FR-070c
+	// consolidation of the five ADR-067 authoring tools behind one name,
+	// added under the same review this comment describes. All four are
+	// adapters and none is on the graph path, which is what FR-045 is about.
+	//
+	// vault_edit.go specifically: EditTool.Execute parses args, calls
+	// t.deps.begin/refuse (authoring_tools.go's shared preamble), builds a
+	// NoteEdit value, and hands it to EditNote/CreateNote (author.go) to
+	// actually touch bytes. Every op (create, set_property, append_section,
+	// link, replace_body) does the same — decode args, delegate the rewrite,
+	// render the result. None of the four files that DO the byte-level
+	// rewriting (author.go, vault_edit_list.go, vault_edit_schema.go,
+	// replace_body.go) imports pkg/tools at all; only the adapter does. And
+	// every pkg/tools symbol vault_edit.go actually uses — BaseTool,
+	// CategoryMemory, ErrorResult, NewToolResult, ScopeGeneral, ToolCategory,
+	// ToolResult, ToolScope — was already on allowedToolsSelectors below
+	// before this file was added, so part C's pin needed no new entries
+	// either; this addition is purely part B's file allow-list.
 	//
 	// This stays an EXPLICIT literal rather than a "*_tools.go" pattern: the
 	// point of the guard is that adding pkg/tools to a new file is a decision
 	// somebody has to make on purpose, and a pattern would silently admit the
 	// next file that happened to be named to fit.
-	want := []string{"authoring_tools.go", "scope_turn.go", "tools.go"}
+	want := []string{"authoring_tools.go", "scope_turn.go", "tools.go", "vault_edit.go"}
 	if strings.Join(toolsImporters, ",") != strings.Join(want, ",") {
 		t.Fatalf("pkg/tools is imported by %v, want exactly %v. It is the only import here whose own "+
 			"closure reaches a language-model client, so it belongs in the tool-adapter files and "+

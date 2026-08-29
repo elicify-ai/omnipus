@@ -109,33 +109,43 @@ func vaultEditValidateValue(set *records.SchemaSet, src []byte, property string,
 	return nil
 }
 
-// vaultEditPropertyMany reports whether property is declared many-valued on
-// src's own record type — used by the link operation to decide whether
-// linking through a relation property ADDS to a list or OVERWRITES a scalar,
-// without the caller having to say which. false (scalar) is the answer for
-// every case where nothing is declared, which is the conservative direction:
-// overwrite-one is reversible by linking again, while a caller who wanted
-// "add" and silently got "overwrite" would lose a relation with no error at
-// all.
-func vaultEditPropertyMany(set *records.SchemaSet, src []byte, property string) bool {
+// vaultEditPropertyDeclared reports whether property is declared AT ALL on
+// src's own record type, and — only when it is — whether that declaration
+// says many-valued. Used by the link operation to decide whether linking
+// through a relation property ADDS to a list or OVERWRITES a scalar.
+//
+// declared is false whenever nothing constrains this property's cardinality
+// at all: no declared `type:`, a declared type with no matching schema
+// file, or a schema that does not mention this property. FR-005 calls that
+// state "ordinary notes are unconstrained" — and an ordinary note is
+// exactly what most link targets are, since a relation is routinely put on
+// a note whose author never wrote (or needed) a records/*.yaml for it. When
+// declared is false, many is meaningless and always returned false; callers
+// must branch on declared first.
+//
+// Earlier, this reported one bool (vaultEditPropertyMany) collapsing
+// "explicitly declared single-valued" and "nothing declared at all" into
+// the same false — see the correction on vaultEditLinkPropertyEdit below
+// for why that collapse was itself the defect.
+func vaultEditPropertyDeclared(set *records.SchemaSet, src []byte, property string) (declared, many bool) {
 	fm, ferr := records.ParseFrontmatter(src)
 	if ferr != nil {
-		return false
+		return false, false
 	}
 	rec := records.Record{Frontmatter: fm}
 	typeName := rec.TypeName()
 	if typeName == "" {
-		return false
+		return false, false
 	}
 	schema, ok := set.Get(typeName)
 	if !ok {
-		return false
+		return false, false
 	}
 	prop, ok := schema.Property(property)
 	if !ok {
-		return false
+		return false, false
 	}
-	return prop.Many
+	return true, prop.Many
 }
 
 // vaultEditSetPropertyEdit composes schema validation with the low-level
@@ -167,16 +177,45 @@ func vaultEditListOpEdit(set *records.SchemaSet, property, value string, add boo
 	}
 }
 
-// vaultEditLinkPropertyEdit composes schema validation with a relation write:
-// ADD when the property is declared many-valued, SET (overwrite) otherwise —
-// see vaultEditPropertyMany.
+// vaultEditLinkPropertyEdit composes schema validation with a relation
+// write. Its arity decision (ADD vs. SET) is spec-argued in the file
+// header's D5 citation ("Cardinality is declared and enforced (many: true
+// or not)"): cardinality is a property of the SCHEMA's declaration, and the
+// only case where this file has a genuine declaration to enforce is when
+// the record's own type resolves to a schema that declares this property.
+//
+//   - Declared many: true  -> ADD. The schema says this relation holds more
+//     than one edge; the tool named "link" adds an edge, per its own
+//     description ("link to another note").
+//   - Declared many: false -> SET (overwrite, still guarded by
+//     SetPropertyScalarChecked's list-shape refusal). The schema declares a
+//     single-edge slot on purpose; replacing that one edge is what
+//     "enforced" cardinality of one means, and is what op: link's caller
+//     asking to link a NEW target to that slot intends.
+//   - Not declared at all (no type, an undeclared type, or a schema that
+//     never mentions this property) -> ADD, not SET. FR-005's "ordinary
+//     notes are unconstrained" describes what the SCHEMA layer permits, not
+//     what op: link should assume about the caller's intent — an
+//     undeclared property carries no cardinality-of-one guarantee to honour,
+//     so treating it as one is not enforcing a declaration, it is inventing
+//     one, and the direction that invention took here (overwrite) is the
+//     one that can silently destroy a list of existing relations with a
+//     tool whose own name and rendered reply ("LINK x -> y") look additive.
+//     ADD is the failure-safe default for the undeclared case: adding to an
+//     absent key creates a fresh one-item list (AddListValue's own defined
+//     behaviour), and AddListValue itself still refuses — rather than
+//     silently promotes — an existing SCALAR value, so a genuinely
+//     single-valued undeclared property is protected too; only a caller who
+//     explicitly wants that conversion (set_property with a list value)
+//     performs it.
 func vaultEditLinkPropertyEdit(set *records.SchemaSet, property, wikilink string) NoteEdit {
 	return func(src []byte) ([]byte, error) {
-		many := vaultEditPropertyMany(set, src, property)
-		if err := vaultEditValidateValue(set, src, property, []string{wikilink}, many); err != nil {
+		declared, many := vaultEditPropertyDeclared(set, src, property)
+		add := !declared || many
+		if err := vaultEditValidateValue(set, src, property, []string{wikilink}, add); err != nil {
 			return nil, err
 		}
-		if many {
+		if add {
 			return AddListValue(property, wikilink)(src)
 		}
 		return SetPropertyScalarChecked(property, wikilink)(src)
