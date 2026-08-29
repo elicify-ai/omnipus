@@ -151,7 +151,7 @@ func (t *AgentCreateTool) Parameters() map[string]any {
 			},
 			"provider": map[string]any{
 				"type":        "string",
-				"description": "Provider name for the primary model (e.g. 'openrouter')",
+				"description": "Explicit provider routing key for the primary model (e.g. 'openrouter'). Pins model resolution to this provider instead of inferring one from the slug.",
 			},
 			"model_fallbacks": map[string]any{
 				"type":        "array",
@@ -164,15 +164,7 @@ func (t *AgentCreateTool) Parameters() map[string]any {
 			},
 			"max_tool_iterations": map[string]any{
 				"type":        "integer",
-				"description": "Max tool calls per turn (0 = system default)",
-			},
-			"timeout_seconds": map[string]any{
-				"type":        "integer",
-				"description": "Per-turn timeout in seconds (0 = disabled)",
-			},
-			"restrict_to_workspace": map[string]any{
-				"type":        "boolean",
-				"description": "Sandbox file access to agent's workspace only",
+				"description": "Max tool calls per turn (0 = inherit the system default)",
 			},
 		},
 		"required": []string{"name", "description", "soul", "model", "color", "icon"},
@@ -289,6 +281,25 @@ func (t *AgentCreateTool) Execute(ctx context.Context, args map[string]any) *too
 				newAgent.Model.Fallbacks = append(newAgent.Model.Fallbacks, s)
 			}
 		}
+	}
+	// Optional: explicit provider pin for the primary model (O3 two-field
+	// model — config.AgentModelConfig.Provider's doc comment). Mirrors
+	// REST's createAgent handling of the same wire field. Previously declared
+	// in Parameters() but never read here — a caller passing it got a
+	// success response implying it was applied when it silently was not.
+	if v, ok := args["provider"].(string); ok {
+		newAgent.Model.Provider = strings.TrimSpace(v)
+	}
+	// Optional: per-turn tool-call cap (config.AgentConfig.MaxToolIterations's
+	// doc comment: 0/absent inherits agents.defaults.max_tool_iterations).
+	// Same previously-silently-ignored-parameter bug as provider above.
+	if v, ok := args["max_tool_iterations"].(float64); ok {
+		n := int(v)
+		if n < 0 {
+			return tools.ErrorResult(errorJSON("INVALID_INPUT",
+				"max_tool_iterations must be >= 0", "Use 0 to inherit the system default"))
+		}
+		newAgent.MaxToolIterations = n
 	}
 	// ADR-037: can_delegate_to is retired — it was write-only (its last real
 	// reader, config.ResolveDelegationTo, was deleted as part of the
@@ -474,15 +485,16 @@ func (t *AgentUpdateTool) Parameters() map[string]any {
 				"type":        "string",
 				"description": "New personality/instructions (overwrites SOUL.md)",
 			},
-			"model":                 map[string]any{"type": "string", "description": "New primary model slug"},
-			"model_fallbacks":       map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
-			"provider":              map[string]any{"type": "string"},
-			"color":                 map[string]any{"type": "string"},
-			"icon":                  map[string]any{"type": "string"},
-			"heartbeat":             map[string]any{"type": "string", "description": "New HEARTBEAT.md content"},
-			"max_tool_iterations":   map[string]any{"type": "integer"},
-			"timeout_seconds":       map[string]any{"type": "integer"},
-			"restrict_to_workspace": map[string]any{"type": "boolean"},
+			"model":           map[string]any{"type": "string", "description": "New primary model slug"},
+			"model_fallbacks": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+			"provider": map[string]any{
+				"type":        "string",
+				"description": "Explicit provider routing key for the primary model. Empty string clears an existing pin (falls back to default-provider resolution).",
+			},
+			"color":               map[string]any{"type": "string"},
+			"icon":                map[string]any{"type": "string"},
+			"heartbeat":           map[string]any{"type": "string", "description": "New HEARTBEAT.md content"},
+			"max_tool_iterations": map[string]any{"type": "integer", "description": "New max tool calls per turn (0 = inherit the system default)"},
 		},
 		"required": []string{"id"},
 	}
@@ -511,6 +523,15 @@ func (t *AgentUpdateTool) Execute(_ context.Context, args map[string]any) *tools
 			return tools.ErrorResult(errorJSON("INVALID_ICON", err.Error(), "Use alphanumeric + hyphens, e.g. robot"))
 		}
 	}
+	// Validate max_tool_iterations before any mutation (same pattern as
+	// color/icon above) so an invalid value never reaches the store's
+	// read-modify-write closure.
+	maxToolIterations, maxToolIterationsPresent := args["max_tool_iterations"].(float64)
+	if maxToolIterationsPresent && maxToolIterations < 0 {
+		return tools.ErrorResult(errorJSON("INVALID_INPUT",
+			"max_tool_iterations must be >= 0", "Use 0 to inherit the system default"))
+	}
+	provider, providerPresent := args["provider"].(string)
 
 	// ADR-054 D2/§11 checklist item 6: agents are per-entity records under
 	// entities/agents/<id>.json, not config.json's agents.list — persist via
@@ -567,6 +588,27 @@ func (t *AgentUpdateTool) Execute(_ context.Context, args map[string]any) *tools
 				}
 			}
 			updated = append(updated, "model_fallbacks")
+		}
+		// O3 two-field model: persist (or clear) the explicit primary
+		// provider — mirrors REST's updateAgent handling of the same wire
+		// field (req.Provider). A non-empty value pins the provider; an
+		// explicit empty string clears it (falls back to default-provider
+		// resolution). Previously declared in Parameters() but never read
+		// here — a caller passing it got a success response implying it was
+		// applied when it silently was not.
+		if providerPresent {
+			if a.Model == nil {
+				a.Model = &config.AgentModelConfig{}
+			}
+			a.Model.Provider = strings.TrimSpace(provider)
+			updated = append(updated, "provider")
+		}
+		// Per-turn tool-call cap — mirrors REST's updateAgent handling of
+		// the same wire field (req.MaxToolIterations). Same
+		// previously-silently-ignored-parameter bug as provider above.
+		if maxToolIterationsPresent {
+			a.MaxToolIterations = int(maxToolIterations)
+			updated = append(updated, "max_tool_iterations")
 		}
 		// ADR-037: can_delegate_to is retired — see the matching comment in
 		// AgentCreateTool.Execute above. The workspace Team tab is the only
