@@ -933,8 +933,22 @@ func (ms *MemoryStore) ReadLastSession() (string, error) {
 	return string(data), nil
 }
 
+// maxMemoryContextChars caps the total size of the "## Long-term memory"
+// entries injected by GetMemoryContext (finding 9, context-audit 2026-08).
+// Unlike every other block injected into the system prompt (envcontext's
+// preamble at 2000 runes, the skills summary's maxSkillsInSummary, the
+// manifest block's per-line cap), this section previously had NO size limit
+// — up to 20 entries, each independently allowed up to 4096 runes
+// (MemoryStore.AppendLongTerm's own cap), could inject 80K+ characters every
+// single turn. Entries are re-sorted newest-first by their own Timestamp
+// (below) before packing greedily and stopping once the budget is spent —
+// this evicts the OLDEST entries first, so the model always sees its most
+// recent notes, with a footer naming how many older ones were cut.
+const maxMemoryContextChars = 8000
+
 // GetMemoryContext returns a formatted memory context string for the system prompt.
-// Reads last-session.md + the most recent N memories from the default scope.
+// Reads last-session.md + the most recent N memories from the default scope,
+// capped at maxMemoryContextChars with oldest-first eviction (finding 9).
 func (ms *MemoryStore) GetMemoryContext() string {
 	var sb strings.Builder
 
@@ -950,12 +964,54 @@ func (ms *MemoryStore) GetMemoryContext() string {
 			sb.WriteString("\n\n")
 		}
 		sb.WriteString("## Long-term memory\n")
-		for i, e := range entries {
-			if i > 0 {
-				sb.WriteString("\n\n")
-			}
+		// Framing (finding 9): these are past notes, not live ground truth —
+		// they may be stale and some may have been written by a teammate
+		// agent sharing this workspace, not the acting agent itself.
+		sb.WriteString(
+			"Notes you and your workspace teammates saved in earlier sessions. They may be " +
+				"outdated — prefer what the user tells you now, and use recall_memory to search " +
+				"beyond these.\n",
+		)
+
+		// Re-sort newest-first by the entries' own Timestamp. SearchEntries'
+		// empty-query path (bleve MatchAllQuery) assigns every hit the same
+		// constant score, so its own "score descending" sort is a no-op tie
+		// and the result order falls back to whatever the index happened to
+		// return — NOT reliably recency. This budget's whole "oldest-first
+		// eviction" guarantee depends on a real chronological order, so it is
+		// established explicitly here rather than trusted from upstream.
+		sort.SliceStable(entries, func(i, j int) bool {
+			return entries[i].Timestamp.After(entries[j].Timestamp)
+		})
+
+		budget := maxMemoryContextChars
+		shown := 0
+		for _, e := range entries {
 			ts := e.Timestamp.UTC().Format("2006-01-02T15:04:05Z")
-			fmt.Fprintf(&sb, "[%s | %s]\n%s", ts, e.Category, e.Content)
+			entryText := fmt.Sprintf("[%s | %s]\n%s", ts, e.Category, e.Content)
+			sep := ""
+			if shown > 0 {
+				sep = "\n\n"
+			}
+			cost := len(sep) + len(entryText)
+			// Always show at least the first (newest) entry, even if it alone
+			// exceeds the budget — an empty section would be worse than one
+			// over-budget entry. Every subsequent entry must fit.
+			if shown > 0 && cost > budget {
+				break
+			}
+			sb.WriteString(sep)
+			sb.WriteString(entryText)
+			budget -= cost
+			shown++
+		}
+
+		if remaining := len(entries) - shown; remaining > 0 {
+			noun := "memories"
+			if remaining == 1 {
+				noun = "memory"
+			}
+			fmt.Fprintf(&sb, "\n\n_%d older %s not shown — use recall_memory to search them._", remaining, noun)
 		}
 	}
 

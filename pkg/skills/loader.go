@@ -8,7 +8,9 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/gomarkdown/markdown"
 	"github.com/gomarkdown/markdown/ast"
@@ -255,25 +257,60 @@ func (sl *SkillsLoader) BuildSkillsSummary() string {
 	return sl.BuildSkillsSummaryFunc(nil)
 }
 
+// maxSkillsInSummary caps how many skills BuildSkillsSummaryFunc renders in
+// full (finding 8, context-audit 2026-08): the summary used to dump every
+// allowed skill's full XML entry into the system prompt every turn with no
+// limit, so an install with a large or growing skill catalog paid an
+// unbounded, ever-increasing per-turn cost. The cap keeps the block bounded;
+// truncated skills are still discoverable via find_skills (mentioned in the
+// footer appended when truncation occurs).
+const maxSkillsInSummary = 20
+
 // BuildSkillsSummaryFunc renders the skills summary block, optionally filtered
 // by an allow predicate. When allow is non-nil, only skills for which
 // allow(name) is true are listed — this implements per-agent progressive
 // disclosure so an agent's system prompt advertises only its allowlisted skills
-// (FR-9.4). When allow is nil, every loaded skill is listed.
+// (FR-9.4). When allow is nil, every loaded skill is eligible for listing.
+//
+// The eligible set is capped at maxSkillsInSummary (finding 8), keeping the
+// MOST RECENTLY MODIFIED skills (by their SKILL.md mtime) and dropping the
+// rest — a footer names how many were cut and points at find_skills to
+// search the full catalog, including anything not shown here.
 func (sl *SkillsLoader) BuildSkillsSummaryFunc(allow func(name string) bool) string {
 	allSkills := sl.ListSkills()
 	if len(allSkills) == 0 {
 		return ""
 	}
 
-	var lines []string
-	lines = append(lines, "<skills>")
-	emitted := 0
+	// Filter to the allowed set first, then rank by recency so the cap keeps
+	// the freshest skills rather than an arbitrary prefix of ListSkills'
+	// workspace>global>builtin ordering.
+	eligible := make([]SkillInfo, 0, len(allSkills))
 	for _, s := range allSkills {
-		// The allowlist is keyed on the slug (ID), never the display name.
 		if allow != nil && !allow(s.ID) {
 			continue
 		}
+		eligible = append(eligible, s)
+	}
+	if len(eligible) == 0 {
+		return ""
+	}
+
+	sort.SliceStable(eligible, func(i, j int) bool {
+		return skillMTime(eligible[i].Path).After(skillMTime(eligible[j].Path))
+	})
+
+	shown := eligible
+	truncated := 0
+	if len(eligible) > maxSkillsInSummary {
+		shown = eligible[:maxSkillsInSummary]
+		truncated = len(eligible) - maxSkillsInSummary
+	}
+
+	var lines []string
+	lines = append(lines, "<skills>")
+	emitted := 0
+	for _, s := range shown {
 		// The agent invokes a skill by the slug (ID) — that is the identifier
 		// ResolveSkillName/LoadSkill resolve against — so <name> carries the
 		// slug. The human-readable display name is surfaced separately so the
@@ -299,7 +336,27 @@ func (sl *SkillsLoader) BuildSkillsSummaryFunc(allow func(name string) bool) str
 	if emitted == 0 {
 		return ""
 	}
-	return strings.Join(lines, "\n")
+	out := strings.Join(lines, "\n")
+	if truncated > 0 {
+		noun := "skills"
+		if truncated == 1 {
+			noun = "skill"
+		}
+		out += fmt.Sprintf("\n\n%d more installed %s not shown above — call find_skills to search the full catalog.", truncated, noun)
+	}
+	return out
+}
+
+// skillMTime returns the modification time of a skill's SKILL.md file,
+// falling back to the zero time (oldest-ranked) when the file is unreadable
+// — a race where the file vanished between ListSkills' scan and this sort is
+// treated as "unknown recency" rather than failing the whole summary.
+func skillMTime(path string) time.Time {
+	info, err := os.Stat(path)
+	if err != nil {
+		return time.Time{}
+	}
+	return info.ModTime()
 }
 
 func (sl *SkillsLoader) getSkillMetadata(skillPath string) *SkillMetadata {

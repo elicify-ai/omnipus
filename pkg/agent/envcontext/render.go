@@ -73,10 +73,7 @@ func render(p Provider, workspaceOverride string) string {
 	fmt.Fprintf(&sb, "- Workspace (your working directory): %s\n", workspace)
 	fmt.Fprintf(&sb, "- Omnipus home (framework data; read-only unless specified): %s\n\n", omnipusHome)
 
-	sb.WriteString("### Paths you cannot use\n")
-	sb.WriteString("- Everything outside the workspace above is denied unless explicitly allow-listed.\n")
-	sb.WriteString("- `/dev/tty` and other TTY devices are blocked.\n")
-	sb.WriteString("- System paths (`/etc`, `/usr`, `/root`, `$HOME` outside workspace) are denied.\n\n")
+	sb.WriteString(pathsCannotUseSection(sandboxMode))
 
 	sb.WriteString("### Sandbox & network\n")
 	fmt.Fprintf(&sb, "- Sandbox: %s\n", sandboxMode)
@@ -115,4 +112,39 @@ func render(p Provider, workspaceOverride string) string {
 	}
 
 	return result
+}
+
+// pathsCannotUseSection renders the "### Paths you cannot use" block with
+// wording calibrated to the resolved sandbox mode (finding 6, context-audit
+// 2026-08). Previously this stated an absolute denial unconditionally,
+// regardless of whether the sandbox was kernel-enforced, running in
+// application-level fallback, or off entirely (sandbox.mode: off is an
+// explicitly supported operator choice) — telling the agent "denied" is
+// actively misleading when there is no kernel actually stopping the access.
+//
+// mode is the exact string renderSandboxMode/DefaultProvider.SandboxMode
+// produce: "off", "landlock-abi-<n>", "seatbelt" (all kernel-enforced or
+// genuinely absent), "fallback" (application-level only), or "unknown"/
+// "<unknown>" (SandboxMode() errored — treated conservatively, same as
+// fallback).
+func pathsCannotUseSection(mode string) string {
+	var sb strings.Builder
+	sb.WriteString("### Paths you cannot use\n")
+
+	switch {
+	case mode == "off":
+		sb.WriteString("- No sandbox is active (sandbox.mode = off) — nothing below is kernel-enforced. Treat the workspace boundary as a rule the operator expects you to follow, not a guarantee the system will stop you from breaking it.\n")
+		sb.WriteString("- Stay inside the workspace above. Avoid `/dev/tty` and other TTY devices, and avoid system paths (`/etc`, `/usr`, `/root`, `$HOME` outside workspace) unless the operator has explicitly asked you to touch them.\n\n")
+	case mode == "fallback" || mode == "unknown" || mode == "<unknown>":
+		sb.WriteString("- Enforcement here is APPLICATION-level, not kernel-level — the items below are rules to follow, not guarantees the system will stop a violation.\n")
+		sb.WriteString("- Everything outside the workspace above should be treated as denied unless explicitly allow-listed.\n")
+		sb.WriteString("- Treat `/dev/tty` and other TTY devices as off-limits.\n")
+		sb.WriteString("- Treat system paths (`/etc`, `/usr`, `/root`, `$HOME` outside workspace) as denied.\n\n")
+	default: // kernel-enforced: landlock-abi-<n>, seatbelt
+		sb.WriteString("- Everything outside the workspace above is denied unless explicitly allow-listed.\n")
+		sb.WriteString("- `/dev/tty` and other TTY devices are blocked.\n")
+		sb.WriteString("- System paths (`/etc`, `/usr`, `/root`, `$HOME` outside workspace) are denied.\n\n")
+	}
+
+	return sb.String()
 }

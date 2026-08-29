@@ -8767,10 +8767,22 @@ turnLoop:
 				callMessages = injected
 			}
 			// Inject per-turn workspace instructions (AGENT.md) as an ephemeral
-			// system message immediately after the system prompt. Call BEFORE
-			// injectManifestNote so that the manifest note lands at [1] and
-			// workspace instructions land at [2] in the final message array.
-			// Empty/absent instructions are a no-op — zero behavioral change.
+			// system message immediately after the system prompt. Empty/absent
+			// instructions are a no-op — zero behavioral change.
+			//
+			// Ordering note (finding 10c, context-audit 2026-08 — this comment
+			// previously claimed "workspace instructions land at [2]", which
+			// stopped being true once the web-rendering note was added between
+			// this call and injectManifestNote below): all three of these
+			// injectors (this one, injectWebRenderingNote, injectManifestNote)
+			// insert at index 1 of the message array, so call order alone
+			// determines final position — the LAST call ends up CLOSEST to the
+			// system message. With every note present this turn, final order is:
+			// [0] system prompt · [1] manifest note · [2] web-rendering note ·
+			// [3] workspace instructions · [4] scratchpad (spliced above, before
+			// this block) · [5+] history. See injectWorkspaceInstructions' own
+			// doc comment (workspace_instructions.go) for the authoritative,
+			// single-sourced version of this contract.
 			callMessages = injectWorkspaceInstructions(callMessages, buildWorkspaceInstructionsNote(ts.opts.WorkspaceID))
 			// Web-only: encourage Mermaid diagrams when the turn comes from the web
 			// chat (the sole surface that renders them). Per-turn + surface-gated on

@@ -18,18 +18,27 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/skills"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 	"github.com/elicify-ai/omnipus/pkg/utils"
 )
 
 type ContextBuilder struct {
-	workspace          string
-	agentID            string // agent ID for multi-agent context
-	agentName          string // agent display name for multi-agent context
-	skillsLoader       *skills.SkillsLoader
-	memory             *MemoryStore
-	toolDiscoveryBM25  bool
-	toolDiscoveryRegex bool
-	splitOnMarker      bool
+	workspace     string
+	agentID       string // agent ID for multi-agent context
+	agentName     string // agent display name for multi-agent context
+	skillsLoader  *skills.SkillsLoader
+	memory        *MemoryStore
+	splitOnMarker bool
+
+	// manifestDiscoveryActive gates the "Tool Discovery" prompt section
+	// (finding 1 / GH #657): true when cfg.Tools.Manifest.Compressed is
+	// active, i.e. the 3-tier tool-manifest system is in effect and some
+	// tools are hidden from the callable-defs list until searched for. This
+	// used to be (wrongly) gated on the unrelated MCP-discovery config
+	// (cfg.Tools.MCP.Discovery.UseBM25/UseRegex, default OFF) while the
+	// manifest system defaults ON — so a default install rendered no
+	// discovery guidance at all. Set via WithToolDiscovery.
+	manifestDiscoveryActive bool
 
 	// skillAllowlist enforces the per-agent skill allowlist at skill resolution
 	// time (FR-9.4, default-DENY). When non-nil, only skills whose name appears
@@ -58,14 +67,9 @@ type ContextBuilder struct {
 	// that may not update the top-level skill root directory mtime.
 	skillFilesAtCache map[string]time.Time
 
-	// resourcesInjector is an optional callback that returns additional context
-	// to inject into the system prompt. Used by Ava (Agent Builder) to inject
-	// available tools, skills, providers, and system defaults.
-	resourcesInjector func() string
-
 	// delegationInjector is an optional per-turn callback that renders the
-	// "## Delegation" block for this agent. Unlike resourcesInjector it is
-	// called in buildDynamicContext (the UN-CACHED path) so that a runtime
+	// "## Delegation" block for this agent. It is called in
+	// buildDynamicContext (the UN-CACHED path) so that a runtime
 	// change to the workspace delegation graph is reflected on the very next
 	// turn without waiting for the cached system-prompt to expire.
 	//
@@ -125,13 +129,6 @@ type ContextBuilder struct {
 	memoryEnabled bool
 }
 
-// WithResourcesInjector sets a callback that provides additional context sections
-// to inject into the system prompt (e.g., available tools catalog for Ava).
-func (cb *ContextBuilder) WithResourcesInjector(fn func() string) *ContextBuilder {
-	cb.resourcesInjector = fn
-	return cb
-}
-
 // WithDelegationInjector installs the per-turn delegation context callback. fn
 // receives the turn's effective workspaceID (ts.opts.WorkspaceID, may be "") and
 // is called on every turn from buildDynamicContext (the UN-CACHED path). The
@@ -153,9 +150,15 @@ func (cb *ContextBuilder) WithWorkingDirInjector(fn func(workspaceID string) str
 	return cb
 }
 
-func (cb *ContextBuilder) WithToolDiscovery(useBM25, useRegex bool) *ContextBuilder {
-	cb.toolDiscoveryBM25 = useBM25
-	cb.toolDiscoveryRegex = useRegex
+// WithToolDiscovery gates the "Tool Discovery" prompt section on whether the
+// 3-tier tool-manifest system is active for this agent (finding 1 / GH #657):
+// pass cfg.Tools.Manifest.Compressed. When active, some tools are hidden from
+// the callable-defs list every turn and must be found via ToolSearch first —
+// the rendered rule explains this. When inactive (legacy full-manifest mode,
+// every tool sent every turn), there is nothing to discover, so the rule is
+// omitted.
+func (cb *ContextBuilder) WithToolDiscovery(active bool) *ContextBuilder {
+	cb.manifestDiscoveryActive = active
 	return cb
 }
 
@@ -357,7 +360,7 @@ func (cb *ContextBuilder) getWorkspaceAndRules() string {
 		`Omnipus %s
 %s
 ## Workspace
-Your workspace is at: %s
+Your working directory — where file tools (read_file, write_file, edit_file, list_directory, bash, etc.) actually operate — is stated in the Environment section above, or, when this turn's context includes a "## Working Directory" note (shared-workspace agents only), in that note instead. This section covers only the fixed per-agent paths below, which never move regardless of that resolution:
 - Shared memory room: workspace .omnipus/memories/ (shared with your whole workspace team — the DEFAULT for remember)
 - Private memory room: %s/.omnipus/memories/ (only you can see it)
 - Skills: %s/skills/{skill-name}/SKILL.md
@@ -381,26 +384,41 @@ Your workspace is at: %s
 
 %s`,
 		version, agentContext,
-		workspacePath, workspacePath, workspacePath,
+		workspacePath, workspacePath,
 		toolDiscovery)
 }
 
+// getDiscoveryRule renders the "Tool Discovery" section describing the
+// 3-tier tool-manifest model (ADR-071), when active for this agent
+// (manifestDiscoveryActive — see WithToolDiscovery). Rendered as an
+// unnumbered subsection rather than a numbered rule (finding 7): it used to
+// be hardcoded as "5. **Tool Discovery**" and interpolated after the 6
+// numbered rules above, producing a list numbered 1,2,3,4,5,6,5 — invisible
+// only because this rule almost always rendered empty (finding 1 / GH #657),
+// which fixing surfaces.
+//
+// The tool name is derived from tools.InfraManifestToolNames() rather than a
+// hardcoded string so it cannot drift again the way the retired
+// tool_search_tool_bm25/tool_search_tool_regex names did.
 func (cb *ContextBuilder) getDiscoveryRule() string {
-	if !cb.toolDiscoveryBM25 && !cb.toolDiscoveryRegex {
+	if !cb.manifestDiscoveryActive {
 		return ""
 	}
 
-	var toolNames []string
-	if cb.toolDiscoveryBM25 {
-		toolNames = append(toolNames, `"tool_search_tool_bm25"`)
+	infraTools := tools.InfraManifestToolNames()
+	if len(infraTools) == 0 {
+		return ""
 	}
-	if cb.toolDiscoveryRegex {
-		toolNames = append(toolNames, `"tool_search_tool_regex"`)
+	quoted := make([]string, len(infraTools))
+	for i, n := range infraTools {
+		quoted[i] = fmt.Sprintf("%q", n)
 	}
 
 	return fmt.Sprintf(
-		`5. **Tool Discovery** - Your visible tools are limited to save memory, but a vast hidden library exists. If you lack the right tool for a task, BEFORE giving up, you MUST search using the %s tool. Do not refuse a request unless the search returns nothing. Found tools will temporarily unlock for your next turn.`,
-		strings.Join(toolNames, " or "),
+		`### Tool Discovery
+
+Only a subset of your allowed tools are sent as callable definitions every turn — the rest are hidden to save context, in three tiers: some are always sent (callable right now), some appear as one-line previews in a "More tools" block below (load before calling), and many more are fully hidden and reachable only by search. If you lack the right tool for a task, BEFORE giving up, call %s with the exact name (if you know it) or a `+"`query`"+` describing what you need — this searches the full catalog, including tools not previewed anywhere. Do not refuse a request unless the search returns nothing. Found tools unlock immediately for this session.`,
+		strings.Join(quoted, " or "),
 	)
 }
 
@@ -441,13 +459,6 @@ func (cb *ContextBuilder) BuildSystemPrompt() string {
 		parts = append(parts, bootstrapContent)
 	}
 
-	// Agent-specific resource injection (e.g., available tools catalog for Ava).
-	if cb.resourcesInjector != nil {
-		if resources := cb.resourcesInjector(); resources != "" {
-			parts = append(parts, resources)
-		}
-	}
-
 	// Skills - show summary, AI can read full content with read_file tool.
 	// Filtered by the per-agent allowlist for progressive disclosure (FR-9.4):
 	// the prompt advertises only the skills this agent is permitted to use.
@@ -455,7 +466,7 @@ func (cb *ContextBuilder) BuildSystemPrompt() string {
 	if skillsSummary != "" {
 		parts = append(parts, fmt.Sprintf(`# Skills
 
-The following skills extend your capabilities. To use a skill, read its SKILL.md file using the read_file tool.
+The following skills extend your capabilities. To use a skill, read its SKILL.md file using the read_file tool. This list is capped — call find_skills to search the full installed catalog, including any not shown below.
 
 %s`, skillsSummary))
 	}
@@ -832,11 +843,18 @@ func formatCurrentSenderLine(senderID, senderDisplayName string) string {
 }
 
 func (cb *ContextBuilder) buildDynamicContext(workspaceID, channel, chatID, senderID, senderDisplayName string) string {
-	now := time.Now().Format("2006-01-02 15:04 (Monday)")
+	localNow := time.Now()
+	// Finding 10(b): the local time carried no timezone, so the model could not
+	// tell how it related to any timestamp it reads elsewhere in context (e.g.
+	// memory entries, which are persisted and displayed in UTC — see
+	// MemoryStore.GetMemoryContext). Both a local time WITH its zone/offset and
+	// an explicit UTC line are rendered so the two are unambiguously reconcilable.
+	now := localNow.Format("2006-01-02 15:04 MST (-07:00) Monday")
+	utcNow := localNow.UTC().Format("2006-01-02 15:04:05Z")
 	rt := fmt.Sprintf("%s %s, Go %s", runtime.GOOS, runtime.GOARCH, runtime.Version())
 
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "## Current Time\n%s\n\n## Runtime\n%s", now, rt)
+	fmt.Fprintf(&sb, "## Current Time\n%s\nUTC: %s\n\n## Runtime\n%s", now, utcNow, rt)
 
 	if channel != "" && chatID != "" {
 		fmt.Fprintf(&sb, "\n\n## Current Session\nChannel: %s\nChat ID: %s", channel, chatID)
