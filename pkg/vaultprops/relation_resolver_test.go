@@ -210,22 +210,22 @@ func TestRelationResolver_MemoisesWithinOneResolver(t *testing.T) {
 		t.Skip("no properties index on this build")
 	}
 	ctx := context.Background()
-	real, err := propindex.Open(ctx, filepath.Join(t.TempDir(), "properties.db"), propindex.Options{})
+	store, err := propindex.Open(ctx, filepath.Join(t.TempDir(), "properties.db"), propindex.Options{})
 	if err != nil {
 		t.Fatalf("propindex.Open: %v", err)
 	}
 	t.Cleanup(func() {
-		if cerr := real.Close(); cerr != nil {
+		if cerr := store.Close(); cerr != nil {
 			t.Errorf("closing the store: %v", cerr)
 		}
 	})
-	if err := real.UpsertNote(ctx, propindex.NoteRows{
+	if err := store.UpsertNote(ctx, propindex.NoteRows{
 		Path: "Companies/Acme Ltd.md", Kind: propindex.KindNote,
 		RecordType: "company", RecordID: "CO-0001", SourceHash: "bbbb",
 	}); err != nil {
 		t.Fatalf("UpsertNote: %v", err)
 	}
-	counting := &countingStore{Store: real}
+	counting := &countingStore{Store: store}
 	notes := knowledge.NewNoteIndex([]string{"Companies/Acme Ltd.md"})
 	r := NewRelationResolver(ctx, notes, counting)
 
