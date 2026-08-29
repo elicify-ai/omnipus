@@ -872,9 +872,9 @@ func (t *TaskUpdateTool) Scope() ToolScope       { return ScopeGeneral }
 func (t *TaskUpdateTool) Category() ToolCategory { return CategoryTasks }
 
 func (t *TaskUpdateTool) Description() string {
-	return "Update a task assigned to you or that you created. Mark status (done/failed — in_progress " +
-		"is reached only through real dispatch via run_task, never written directly here) and optionally " +
-		"edit title, priority, due date, agent_id, or blocked_by. Only provided fields are updated."
+	return "Update a task assigned to you or that you created: status, title, priority, due date, agent_id, or blocked_by.\n" +
+		"Mark status (done/failed — in_progress is reached only through real dispatch via run_task, " +
+		"never written directly here). Only provided fields are updated."
 }
 
 func (t *TaskUpdateTool) Parameters() map[string]any {

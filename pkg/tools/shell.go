@@ -579,7 +579,14 @@ func (t *ExecTool) Scope() ToolScope       { return ScopeCore }
 func (t *ExecTool) Category() ToolCategory { return CategoryShell }
 
 func (t *ExecTool) Description() string {
-	return `Execute a shell command (sh -c on Linux/macOS, powershell on Windows). Set run_in_background=true for long-running commands (returns a session_id immediately); use action=poll/read/kill with that session_id to check on it, read incremental output, or terminate it. cwd is relative to the workspace only (no absolute paths, no '..' escapes). timeout_seconds defaults to 300 and must be between 1 and 3600; enforced identically in the foreground and in the background — a background session times out on its own after timeout_seconds elapses, and is otherwise stopped only by an explicit kill action or an explicit session cancel.`
+	return "Execute a shell command (foreground or backgrounded) in the workspace and get its output.\n" +
+		"sh -c on Linux/macOS, powershell on Windows. Set run_in_background=true for long-running commands " +
+		"(returns a session_id immediately); use action=poll/read/kill with that session_id to check on it, " +
+		"read incremental output, or terminate it. cwd is relative to the workspace only (no absolute paths, " +
+		"no '..' escapes). timeout_seconds defaults to 300 and must be between 1 and 3600; enforced identically " +
+		"in the foreground and in the background — a background session times out on its own after " +
+		"timeout_seconds elapses, and is otherwise stopped only by an explicit kill action or an explicit " +
+		"session cancel."
 }
 
 func (t *ExecTool) Parameters() map[string]any {

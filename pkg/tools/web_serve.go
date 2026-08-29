@@ -269,10 +269,10 @@ func (t *WebServeTool) Scope() ToolScope       { return ScopeGeneral }
 func (t *WebServeTool) Category() ToolCategory { return CategoryWeb }
 
 func (t *WebServeTool) Description() string {
-	return "Serve a directory or run a dev server from the agent workspace. " +
+	return "Serve a directory or run a dev server from the agent workspace and get back a /preview/<agent>/<token>/ URL.\n" +
 		"Static mode (no command): registers the directory as a static website. " +
 		"Dev mode (with command): starts a dev server (vite/next/astro/sveltekit dev) and proxies it. " +
-		"Returns a /preview/<agent>/<token>/ URL. Dev mode is Linux only."
+		"Dev mode is Linux only."
 }
 
 func (t *WebServeTool) Parameters() map[string]any {

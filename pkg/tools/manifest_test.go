@@ -8,6 +8,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // --- ToolManifestTier classification ---
@@ -374,15 +375,100 @@ func TestBuildCompressedManifest_TruncatesLongDescription(t *testing.T) {
 	// Find the entry line.
 	for _, line := range strings.Split(got, "\n") {
 		if strings.Contains(line, "long_tool") {
-			// The description portion (after " — ") should be at most maxManifestLineLen chars.
+			// The description portion (after " — ") should be at most
+			// maxManifestLineLen RUNES (not bytes — the truncation marker is a
+			// multi-byte "…", so a byte-length check would spuriously fail).
 			parts := strings.SplitN(line, " — ", 2)
-			if len(parts) == 2 && len(parts[1]) > maxManifestLineLen {
-				t.Errorf("description not truncated: len=%d > maxManifestLineLen=%d", len(parts[1]), maxManifestLineLen)
+			if len(parts) != 2 {
+				t.Fatalf("could not split entry line on \" — \": %q", line)
+			}
+			if runeLen := utf8.RuneCountInString(parts[1]); runeLen > maxManifestLineLen {
+				t.Errorf("description not truncated: rune len=%d > maxManifestLineLen=%d", runeLen, maxManifestLineLen)
+			}
+			if !strings.HasSuffix(parts[1], "...") {
+				t.Errorf("truncated description missing truncation marker \"...\": %q", parts[1])
+			}
+			// The original 200 'x' characters must not appear unbroken — proves
+			// the text was actually cut, not just marker-appended.
+			if strings.Contains(parts[1], long) {
+				t.Error("description was not truncated at all (full 200-char string present)")
 			}
 			return
 		}
 	}
 	t.Error("long_tool not found in manifest")
+}
+
+// TestBuildCompressedManifest_TruncationDoesNotSplitMultiByteRune proves the
+// UTF-8 safety half of the manifest-preview truncation fix: a description
+// whose maxManifestLineLen-th rune boundary falls inside a multi-byte
+// character (an em-dash, common in this codebase's descriptions) must not be
+// cut mid-codepoint. A raw byte slice (the pre-fix behavior) would produce
+// invalid UTF-8 here.
+func TestBuildCompressedManifest_TruncationDoesNotSplitMultiByteRune(t *testing.T) {
+	withPreviewAllLazy(t)
+	// 139 ASCII runes + an em-dash at rune index 139 (0-based), then more
+	// ASCII text — the em-dash straddles byte offset 139 (a 3-byte UTF-8
+	// sequence), which is exactly where a byte-slice[:140] would cut it.
+	desc := strings.Repeat("x", 139) + "—" + strings.Repeat("y", 50)
+	toolList := []Tool{
+		&fakeManifestTool{name: "utf8_tool", desc: desc, cat: CategoryAgents},
+	}
+	got := BuildCompressedManifest(toolList, nil)
+
+	if !utf8.ValidString(got) {
+		t.Fatal("BuildCompressedManifest produced invalid UTF-8")
+	}
+	for _, line := range strings.Split(got, "\n") {
+		if strings.Contains(line, "utf8_tool") {
+			parts := strings.SplitN(line, " — ", 2)
+			if len(parts) != 2 {
+				t.Fatalf("could not split entry line on \" — \": %q", line)
+			}
+			if !utf8.ValidString(parts[1]) {
+				t.Errorf("truncated description is invalid UTF-8: %q", parts[1])
+			}
+			return
+		}
+	}
+	t.Error("utf8_tool not found in manifest")
+}
+
+// TestVisibility_PreviewedDescriptionsFitWithoutTruncation is the contract
+// this fix places on description authors (per the manifest-preview
+// truncation fix): every Tier-2 (previewed) tool's Description() first line
+// (the text up to the first '\n', or the whole string if there is none) must
+// fit within maxManifestLineLen runes WITHOUT truncation. A tool that fails
+// this must be given a short, self-contained opening line (with the fuller
+// detail moved after a '\n') rather than relying on the manifest builder to
+// silently cut it.
+func TestVisibility_PreviewedDescriptionsFitWithoutTruncation(t *testing.T) {
+	byName := make(map[string]Tool, len(GeneralBuiltinMetadata()))
+	for _, tool := range GeneralBuiltinMetadata() {
+		byName[tool.Name()] = tool
+	}
+	for _, name := range PreviewedLazyToolNames() {
+		tool, ok := byName[name]
+		if !ok {
+			// ScopeCore tools (navigate, get_workspace) aren't in the general
+			// builtin catalog — covered separately by
+			// TestManifestNamesResolveInCatalog's scopeCoreFullTierTools
+			// exemption. Skip here; nothing to check without an instance.
+			continue
+		}
+		raw := tool.Description()
+		line := raw
+		if idx := strings.IndexByte(raw, '\n'); idx >= 0 {
+			line = raw[:idx]
+		}
+		line = strings.TrimSpace(line)
+		if n := utf8.RuneCountInString(line); n > maxManifestLineLen {
+			t.Errorf(
+				"previewed tool %q Description() first line is %d runes (> %d) and will be silently truncated in the manifest preview; give it a short, self-contained opening line: %q",
+				name, n, maxManifestLineLen, line,
+			)
+		}
+	}
 }
 
 func TestBuildCompressedManifest_Deterministic(t *testing.T) {

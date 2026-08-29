@@ -18,6 +18,8 @@ import (
 	"sort"
 	"strings"
 	"sync/atomic"
+
+	"github.com/elicify-ai/omnipus/pkg/utils"
 )
 
 // ManifestTier classifies how a tool is presented to the LLM when the manifest
@@ -331,9 +333,12 @@ func BuildCompressedManifest(lazyTools []Tool, loaded map[string]bool) string {
 			line = raw[:idx]
 		}
 		line = strings.TrimSpace(line)
-		if len(line) > maxManifestLineLen {
-			line = line[:maxManifestLineLen]
-		}
+		// utils.Truncate is rune-safe (never splits a multi-byte UTF-8
+		// character mid-codepoint) and appends a truncation marker so a cut
+		// description reads as cut, not as a complete sentence. A raw byte
+		// slice here previously did neither — see ADR-071 manifest-preview
+		// truncation bug fix.
+		line = utils.Truncate(line, maxManifestLineLen)
 		cat := t.Category()
 		grouped[cat] = append(grouped[cat], entry{name: n, desc: line})
 	}
