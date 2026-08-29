@@ -669,6 +669,58 @@ func TestIntegrity_RecordTypeScopeNarrowsTheWikilinkHalfToo(t *testing.T) {
 	}
 }
 
+// TestIntegrity_ScopedSweepDoesNotReportACleanCrossTypeRelationAsWrongType is
+// code review A's F3: a SCOPED sweep (record_type=widget) over a perfectly
+// clean vault where widget.maker correctly points at a foundry record must
+// report ZERO wrong-type findings.
+//
+// declaredTypesToSweep returns only the scoped type when RecordType is set,
+// so TypedIntegrity's per-type ScanRecords loop never visits foundry at all
+// — before the fix, res.RecordTypeByPath held no entry for the foundry
+// note's path, checkRelationEdge's `typeByPath[res.To]` came back "", and
+// EVERY correctly-typed cross-type relation was reported as
+// "wrong type · maker -> [[Acme Ltd]] is an ordinary note, not a record,
+// expected foundry" — a false positive on a clean vault, for every relation,
+// up to the 500 clamp. TestIntegrity_RelationFindings (above) cannot catch
+// this: it never scopes the sweep. TestIntegrity_RecordTypeScopeNarrowsTheWikilinkHalfToo
+// (immediately above) cannot either: its fixture declares zero relations.
+// This test scopes AND declares a correct cross-type relation, which is the
+// one combination that reaches the defective line.
+func TestIntegrity_ScopedSweepDoesNotReportACleanCrossTypeRelationAsWrongType(t *testing.T) {
+	root := writeNote(t, "", "Widgets/Gear.md", "g\n")
+	root = writeNote(t, root, "Foundries/Acme Ltd.md", "f\n")
+	schemas := integrityFixtureSchemas(t, root)
+
+	store := &fakePropertyIndex{
+		records: []IndexedRecord{
+			{Path: "Widgets/Gear.md", RecordType: "widget", RecordID: "WI-0091"},
+			{Path: "Foundries/Acme Ltd.md", RecordType: "foundry", RecordID: "FO-0001"},
+		},
+		relations: []IndexedRelation{
+			// Correctly typed: maker declares `to: foundry`, and this target
+			// resolves to an actual foundry record. A clean vault.
+			{Path: "Widgets/Gear.md", RecordID: "WI-0091", Property: "maker", Target: "Acme Ltd"},
+		},
+	}
+	report, err := CheckIntegrity(context.Background(), IntegrityOptions{
+		FS: OSLinkFS(), Root: mustCollectionRoot(t, root), Schemas: schemas, Store: store,
+		RecordType: "widget",
+	})
+	if err != nil {
+		t.Fatalf("CheckIntegrity: %v", err)
+	}
+
+	wrong := findingDetails(report, CategoryWrongType)
+	if len(wrong) != 0 {
+		t.Fatalf("a scoped sweep over a CLEAN cross-type relation reported %d wrong-type "+
+			"finding(s), want 0: %v", len(wrong), wrong)
+	}
+	unresolved := findingDetails(report, CategoryUnresolvedRelation)
+	if len(unresolved) != 0 {
+		t.Fatalf("the correctly-typed, resolvable relation was reported as unresolved: %v", unresolved)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // FR-020h — the platform refusal, at the entry point that owes it
 // ---------------------------------------------------------------------------

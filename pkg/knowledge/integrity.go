@@ -415,6 +415,46 @@ func TypedIntegrity(ctx context.Context, in TypedIntegrityInput, sink *findingSi
 		}
 	}
 
+	// F3 (code review A) — a SCOPED sweep (in.RecordType set) only walked
+	// `types` above, so res.RecordTypeByPath held identity for the SWEPT
+	// type alone. checkRelationEdge's wrong-type check below reads that map
+	// to learn what type a relation's TARGET actually is — and a target of a
+	// perfectly clean, correctly-typed cross-type relation (widget.maker ->
+	// foundry, scoped to record_type=widget) is never scanned, so
+	// typeByPath[target] came back "" and every such target was reported as
+	// "an ordinary note, not a record, expected foundry". Unscoped sweeps
+	// never showed this: types == schemas.Types() there, so every target's
+	// type was already known.
+	//
+	// The fix keeps the scoped ScanRecords calls above (they are what stays
+	// inside the store's B1 bound and what drives duplicate-id/orphan-row
+	// findings) and adds one MORE scan, per OTHER declared type, whose only
+	// job is filling in RecordTypeByPath so a target's real type is known —
+	// it records no findings of its own, because a record of an out-of-scope
+	// type is not itself in scope. Each such scan is still ONE declared type
+	// at a time, so it stays inside B1 the same way the scoped loop does; it
+	// costs nothing at all on an unscoped sweep, where every declared type is
+	// already in `types`.
+	if in.Schemas != nil && strings.TrimSpace(in.RecordType) != "" {
+		scoped := make(map[string]bool, len(types))
+		for _, t := range types {
+			scoped[t] = true
+		}
+		for _, t := range in.Schemas.Types() {
+			if scoped[t] {
+				continue
+			}
+			err := in.Store.ScanRecords(ctx, t, func(c IndexedRecord) error {
+				res.RecordTypeByPath[c.Path] = c.RecordType
+				return nil
+			})
+			if err != nil {
+				return nil, fmt.Errorf(
+					"knowledge: resolving relation-target types for record type %q: %w", t, err)
+			}
+		}
+	}
+
 	// FR-039 — a duplicate identifier names EVERY path and states that
 	// neither is preferred. "Neither is preferred" is the substance: the
 	// system will not pick one, so the operator must.
