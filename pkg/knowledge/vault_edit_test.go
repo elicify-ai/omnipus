@@ -482,23 +482,49 @@ func TestVaultEdit_CrossTierRedirect_FiresRegardlessOfArgumentShape(t *testing.T
 	}
 
 	// The converse: op: "set_property" carrying rename/move's own argument
-	// names (new_name, dest) must NOT be derailed into a cascade — it is
-	// still an ordinary property write on the ONE named path, and those
-	// extra fields are simply ignored.
+	// names (new_name, dest) must NOT be derailed into a cascade — no
+	// Renamed.md, no elsewhere/Note.md, ever. Code review B finding 7
+	// changed WHAT proves that: this file used to let "new_name"/"dest"
+	// through as "simply ignored", which is a silently-narrowed argument in
+	// exactly the shape tools.go's own unknownArgs principle warns about —
+	// a caller sending "new_name" reasonably believes it renamed something.
+	// vault_edit now refuses any argument outside editArgNames before the
+	// op switch runs at all, so the proof that set_property is not derailed
+	// is stronger than before: the whole call is refused, INCLUDING the
+	// property write, rather than silently applying the write while mutely
+	// dropping the rename/move-shaped fields riding along with it.
 	res2 := tool.Execute(a4Ctx("mia", ws), map[string]any{
 		"collection": "kb", "op": "set_property", "path": "Note.md",
 		"property": "status", "value": "active", "expect_version": v,
 		"new_name": "Renamed.md", "dest": "elsewhere/Note.md",
 	})
-	require.False(t, res2.IsError, "set_property must not be derailed by rename-shaped extra args: %s", res2.ForLLM)
+	if !res2.IsError {
+		t.Fatalf("set_property carrying unknown rename/move-shaped fields must be refused, got success: %s", res2.ForLLM)
+	}
+	for _, want := range []string{"new_name", "dest"} {
+		if !strings.Contains(res2.ForLLM, want) {
+			t.Fatalf("the refusal must name the unknown argument %q, got: %s", want, res2.ForLLM)
+		}
+	}
 	if _, err := os.Stat(filepath.Join(root, "Renamed.md")); err == nil {
 		t.Fatalf("a 'new_name' argument on set_property must never cause a rename")
 	}
 	if _, err := os.Stat(filepath.Join(root, "elsewhere", "Note.md")); err == nil {
 		t.Fatalf("a 'dest' argument on set_property must never cause a move")
 	}
+	if got := a4Read(t, root, "Note.md"); got != "---\nstatus: draft\n---\nBody.\n" {
+		t.Fatalf("a refused call must not have applied the property write either, got: %s", got)
+	}
+
+	// The legitimate case still works unchanged: set_property with ONLY its
+	// own accepted arguments applies normally.
+	res3 := tool.Execute(a4Ctx("mia", ws), map[string]any{
+		"collection": "kb", "op": "set_property", "path": "Note.md",
+		"property": "status", "value": "active", "expect_version": v,
+	})
+	require.False(t, res3.IsError, "set_property with only its own accepted arguments must succeed: %s", res3.ForLLM)
 	if !strings.Contains(a4Read(t, root, "Note.md"), "status: active") {
-		t.Fatalf("the ordinary property write must still have applied to Note.md")
+		t.Fatalf("the ordinary property write must have applied to Note.md")
 	}
 }
 

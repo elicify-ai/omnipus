@@ -109,6 +109,24 @@ var vaultEditRedirect = map[string]string{
 	"delete_view":        "delete_view changes what existing notes mean; use vault_configure",
 }
 
+// editArgNames is every argument vault_edit's Parameters() declares, across
+// all five ops (each field's own description above says which op(s) read
+// it). tools.go's own doc comment on unknownArgs states the principle this
+// applies here too: "a silently ignored argument is a caller that believes
+// it narrowed something." vault_describe and vault_read already enforce it
+// (tools.go); this tool did not, which let a misspelled field (e.g.
+// "bodyy" for "body") pass through Execute's dispatch as if it had never
+// been sent — the op still ran, using none of the caller's actual value,
+// and reported success.
+var editArgNames = []string{
+	"op", "collection", "path", "expect_version",
+	"template", "title", "body", "frontmatter",
+	"property", "value", "list_op",
+	"heading", "level", "once",
+	"anchor", "line_range",
+	"target", "alias", "section", "relation",
+}
+
 // EditTool is vault_edit.
 type EditTool struct {
 	tools.BaseTool
@@ -271,6 +289,16 @@ func (t *EditTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 	target, refusal := t.deps.begin(ctx, authorOp, args)
 	if refusal != nil {
 		return refusal
+	}
+	// Checked before the op switch, and against the FULL cross-op name set
+	// (not the subset the resolved op happens to read): a misspelled or
+	// stale field must never be silently dropped regardless of which op
+	// carried it, matching vault_describe/vault_read's own posture
+	// (tools.go's unknownArgs).
+	if unknown := unknownArgs(args, editArgNames); len(unknown) > 0 {
+		return t.deps.refuse(authorOp, target, nil, fmt.Sprintf(
+			"unknown argument(s) %s; accepted: %s",
+			strings.Join(unknown, ", "), strings.Join(editArgNames, ", ")))
 	}
 	switch op {
 	case opCreate:
@@ -603,7 +631,24 @@ func (t *EditTool) execReplaceBody(target mutationTarget, args map[string]any) *
 	// unverified redundancy.
 	expect := strings.TrimSpace(stringArg(args["expect_version"]))
 	anchor := stringArg(args["anchor"])
-	body := stringArg(args["body"])
+	// 'body' must be PRESENT, not merely non-empty: an explicit "" is a
+	// caller who deliberately wants the matched anchor/range deleted, and
+	// that is a legitimate replace_body use. What is never legitimate is a
+	// caller who meant to send replacement text and, through a typo'd key
+	// or a forgotten field, sent none at all — stringArg(nil) and
+	// stringArg("") are the identical "" this tool cannot tell apart from
+	// bytes alone, so the presence check is the only place that distinction
+	// can still be made. Before this check, replace_body with an anchor and
+	// no 'body' argument matched the anchor text and spliced in "" —
+	// silently deleting the matched span — and reported
+	// "REPLACE_BODY (changed)", indistinguishable from an intentional
+	// replacement.
+	rawBody, bodyPresent := args["body"]
+	if !bodyPresent || rawBody == nil {
+		return t.deps.refuse(AuthorOpEdit, target, []string{rel},
+			"'body' is required (send \"\" explicitly to delete the matched text)")
+	}
+	body := stringArg(rawBody)
 
 	var lr *LineRange
 	if raw, ok := args["line_range"]; ok && raw != nil {
