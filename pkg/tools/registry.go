@@ -694,7 +694,31 @@ func SanitizeToolName(name string) string {
 // UnsanitizeToolName reverses SanitizeToolName — maps LLM tool names back
 // to internal names (e.g., "browser_navigate" → "browser.navigate").
 // Only applies to known prefixes to avoid false positives.
+//
+// Takes r.mu for reading. It is called on the hot dispatch path for every
+// tool call (pkg/agent/loop.go), concurrently with registration writes from
+// the MCP reconcile path — without the read lock this is an unsynchronised
+// map read against a map write, which the Go runtime turns into
+// `fatal error: concurrent map read and map write`. That is a runtime fatal,
+// not a panic: recover() does not catch it and the whole process dies.
+// See issue #660.
+//
+// DO NOT call this from anywhere that already holds r.mu — including
+// indirectly. sync.RWMutex is not reentrant, so a second acquisition
+// self-deadlocks. The indirect route is real: SetMediaStore (line 256),
+// SetAuditLogger (line 272) and SetMemoryRateLimiter (line 294) each iterate
+// r.tools and invoke arbitrary Tool methods while holding r.mu.Lock(). A tool
+// whose setter called back into UnsanitizeToolName would deadlock the
+// registry. Call unsanitizeToolNameLocked instead from any such context.
 func (r *ToolRegistry) UnsanitizeToolName(name string) string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.unsanitizeToolNameLocked(name)
+}
+
+// unsanitizeToolNameLocked is the body of UnsanitizeToolName. It reads
+// r.tools directly and MUST be called with r.mu held (read or write).
+func (r *ToolRegistry) unsanitizeToolNameLocked(name string) string {
 	// Try the name as-is first (most tools have no dots).
 	if _, ok := r.tools[name]; ok {
 		return name
