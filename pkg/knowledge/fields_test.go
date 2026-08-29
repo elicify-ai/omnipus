@@ -24,12 +24,14 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/blevesearch/bleve/v2"
 	bleveMapping "github.com/blevesearch/bleve/v2/mapping"
 	bleveQuery "github.com/blevesearch/bleve/v2/search/query"
+	"github.com/elicify-ai/omnipus/pkg/records"
 )
 
 // d21Note is a note in the shape D21.2 is about: frontmatter carrying property
@@ -703,5 +705,95 @@ func TestEmptyPropertyValueIsNotTheTextNull(t *testing.T) {
 	// key with no value is present and empty, not absent.
 	if got := d21FieldPaths(t, ix, fieldPropKey, "status"); len(got) != 1 {
 		t.Errorf("an empty property's key was not indexed (matched %v)", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// F13 (code review A) — appendNode's ELEMENT and DEPTH bounds are enforced but
+// never reported. applyFrontmatter sets nf.Truncated for the key cap and the
+// value-byte cap, but the element cap (maxIndexedPropertyValues, 256) and the
+// depth cap (maxDepth, 8) are enforced INSIDE appendNode, which had no way to
+// signal back to nf.Truncated — so a note that loses data to either bound
+// looked identical to one that lost nothing.
+// ---------------------------------------------------------------------------
+
+// f13Names returns n distinct short strings, cheap to build and cheap to
+// serialise as a YAML sequence.
+func f13Names(n int) []string {
+	out := make([]string, n)
+	for i := range out {
+		out[i] = "Name" + strconv.Itoa(i)
+	}
+	return out
+}
+
+// TestElementCapTruncationIsReportedNotSilent is BDD for F13's element-count
+// half: a sequence property with more than maxIndexedPropertyValues (256)
+// elements must set nf.Truncated, exactly as the key cap and the byte cap
+// already do. Before the fix, appendNode enforced the cap by simply stopping
+// (silently) and nf.Truncated stayed "".
+func TestElementCapTruncationIsReportedNotSilent(t *testing.T) {
+	names := f13Names(400)
+	note := "---\nattendees:\n"
+	for _, n := range names {
+		note += "  - " + n + "\n"
+	}
+	note += "---\n\nMeeting notes body text, unrelated to attendees.\n"
+
+	nf, _ := extractNoteFields([]byte(note), "meeting.md")
+
+	if nf.Truncated == "" {
+		t.Fatal("nf.Truncated is empty after indexing a 400-element sequence " +
+			"property against a 256-element cap — the truncation is silent")
+	}
+	// The FIRST 256 elements are still indexed — this is a bound, not a
+	// refusal — but the 257th onward must be absent, proving the cap actually
+	// fired rather than the test fixture being wrong.
+	found := false
+	for _, p := range nf.Props {
+		if strings.Contains(p, records.FoldKey(names[399])) {
+			found = true
+		}
+	}
+	if found {
+		t.Errorf("the 400th attendee name was indexed even though the cap is 256 " +
+			"— the fixture does not exercise the bound")
+	}
+}
+
+// TestDepthCapTruncationIsReportedNotSilent is BDD for F13's depth half: a
+// frontmatter value nested more than maxDepth (8) mappings deep must set
+// nf.Truncated. Before the fix, appendNode's depth guard returned silently and
+// the buried scalar simply never appeared — indistinguishable from a note that
+// never declared it.
+func TestDepthCapTruncationIsReportedNotSilent(t *testing.T) {
+	// 9 levels of nesting under the top-level property "meta": l1 is depth 1,
+	// ..., l9's scalar value is evaluated at depth 9, past maxDepth(8).
+	note := `---
+meta:
+  l1:
+    l2:
+      l3:
+        l4:
+          l5:
+            l6:
+              l7:
+                l8:
+                  l9: buried-value
+---
+
+Body text unrelated to the buried value.
+`
+	nf, _ := extractNoteFields([]byte(note), "deep.md")
+
+	if nf.Truncated == "" {
+		t.Fatal("nf.Truncated is empty after indexing a 9-level-deep frontmatter " +
+			"value against an 8-level depth cap — the truncation is silent")
+	}
+	for _, p := range nf.Props {
+		if strings.Contains(p, "buried-value") {
+			t.Errorf("the buried value was indexed even though it sits past the depth cap " +
+				"— the fixture does not exercise the bound")
+		}
 	}
 }

@@ -259,7 +259,20 @@ func (nf *noteFields) applyFrontmatter(fm records.Frontmatter) {
 		if !ok {
 			continue
 		}
-		for _, raw := range flattenNodeValues(node) {
+		elements, elementsTruncated := flattenNodeValues(node)
+		if elementsTruncated {
+			// FIX F13: the element cap (maxIndexedPropertyValues) and the depth
+			// cap (appendNode's maxDepth) used to be enforced inside appendNode
+			// with no way to report back here — a sequence with 400 elements
+			// against a 256 cap, or a value nested past 8 mappings deep, lost
+			// data with nf.Truncated staying empty. Reported exactly like the
+			// key cap and the byte cap immediately below, so indexNote's
+			// "incomplete fields" warning fires for every one of the four
+			// bounds, not two of them.
+			nf.Truncated = "a frontmatter property held more elements, or nested deeper, " +
+				"than the indexable bound; some of its value was not indexed"
+		}
+		for _, raw := range elements {
 			if len(raw) > maxIndexedPropertyValueBytes {
 				raw = raw[:maxIndexedPropertyValueBytes]
 				nf.Truncated = "a frontmatter value was longer than the indexable length and was truncated"
@@ -277,7 +290,9 @@ func (nf *noteFields) applyFrontmatter(fm records.Frontmatter) {
 	}
 }
 
-// flattenNodeValues returns the scalar texts a frontmatter value contributes.
+// flattenNodeValues returns the scalar texts a frontmatter value contributes,
+// and whether the element cap or the depth cap (both enforced by appendNode)
+// discarded any of them (FIX F13).
 //
 // A scalar contributes itself; a sequence contributes each element; a nested
 // mapping contributes its scalar leaves. A nested mapping's KEYS are not
@@ -288,18 +303,27 @@ func (nf *noteFields) applyFrontmatter(fm records.Frontmatter) {
 // An explicit null contributes nothing: `status:` with no value is not the
 // value "null", and indexing it as one would make a query for the text "null"
 // match every note with an empty property.
-func flattenNodeValues(n records.Node) []string {
+func flattenNodeValues(n records.Node) (values []string, truncated bool) {
 	out := make([]string, 0, 1)
-	appendNode(&out, n, 0)
-	return out
+	appendNode(&out, n, 0, &truncated)
+	return out, truncated
 }
 
 // appendNode is flattenNodeValues' recursion. depth bounds it against a deeply
 // nested mapping; pkg/records already bounds the node COUNT, but a bound on
 // count is not a bound on stack.
-func appendNode(out *[]string, n records.Node, depth int) {
+//
+// truncated is set (never cleared) whenever the element cap or the depth cap
+// stops this call before it can contribute — the same discipline
+// applyFrontmatter already applies to the key cap and the value-byte cap two
+// lines above this function's only caller. Before this fix these two bounds
+// had no way to report at all: the recursion simply stopped, and a caller
+// reading nf.Truncated could not tell the difference between "nothing more to
+// index" and "more existed and was dropped".
+func appendNode(out *[]string, n records.Node, depth int, truncated *bool) {
 	const maxDepth = 8
 	if depth > maxDepth || len(*out) >= maxIndexedPropertyValues {
+		*truncated = true
 		return
 	}
 	switch n.Kind {
@@ -309,11 +333,11 @@ func appendNode(out *[]string, n records.Node, depth int) {
 		}
 	case records.KindSequence:
 		for _, item := range n.Items {
-			appendNode(out, item, depth+1)
+			appendNode(out, item, depth+1, truncated)
 		}
 	case records.KindMapping:
 		for _, key := range n.Keys {
-			appendNode(out, n.Fields[key], depth+1)
+			appendNode(out, n.Fields[key], depth+1, truncated)
 		}
 	case records.KindNull:
 		// Deliberately nothing. See the doc comment.
