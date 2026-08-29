@@ -24,7 +24,12 @@ func NewConfigGetTool(d *Deps) *ConfigGetTool   { return &ConfigGetTool{deps: d}
 func (t *ConfigGetTool) Name() string           { return "get_config" }
 func (t *ConfigGetTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *ConfigGetTool) Description() string {
-	return "Read a configuration value by dot-notation key.\nParameters: key (required, e.g. 'gateway.port')."
+	return "Read a setting (port, timeout, host, feature flag, or similar) from config.json by dot-notation " +
+		"key, e.g. 'gateway.port', 'sandbox.mode'. Pair with set_config to change a value. Credential-shaped " +
+		"fields (API keys, secrets, tokens, passwords) and a handful of security-critical keys (gateway " +
+		"account/token data, the whole sandbox namespace's writable form, etc.) are refused or returned " +
+		"redacted — use list_providers to check configured providers without exposing keys." +
+		"\nParameters: key (required, e.g. 'gateway.port')."
 }
 
 func (t *ConfigGetTool) Parameters() map[string]any {
@@ -84,7 +89,7 @@ func NewConfigSetTool(d *Deps) *ConfigSetTool   { return &ConfigSetTool{deps: d}
 func (t *ConfigSetTool) Name() string           { return "set_config" }
 func (t *ConfigSetTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *ConfigSetTool) Description() string {
-	return "Update a configuration value.\nParameters: key (required), value (required)."
+	return "Update a setting (port, timeout, host, feature flag, or similar) in config.json by dot-notation key, e.g. 'gateway.port', 'sandbox.tool_policies'. Only updates settings that already exist — it never creates a new one, and a key naming nothing that exists is refused rather than silently dropped. Writable sections are limited to: gateway., agents., sandbox., channels., tools., devices., providers, workspace_path — everything else is refused. Within those, several security-critical subtrees are refused too, even though their prefix is writable: the whole sandbox.* namespace, gateway.dev_mode_bypass/users/token/cli_token/public_url/trust_xff, tools.exec/mcp/browser/allow_read_paths/allow_write_paths, and the channel ownership fields channels.*.identity/workspace_id — each refusal names where the setting actually belongs. Credential/API-key-shaped values (api_key, secret, token, password in the name) are always refused here — use configure_provider or configure_channel instead, which route secrets into the encrypted credential store. The result includes a requires_restart field: when true, the change was saved but has no effect until the operator restarts the gateway — check it and relay that to the user rather than assuming the change is already live.\nParameters: key (required), value (required)."
 }
 
 func (t *ConfigSetTool) Parameters() map[string]any {

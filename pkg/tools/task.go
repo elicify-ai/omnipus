@@ -1258,7 +1258,9 @@ func (t *TaskDeleteTool) Name() string           { return "delete_task" }
 func (t *TaskDeleteTool) Scope() ToolScope       { return ScopeGeneral }
 func (t *TaskDeleteTool) Category() ToolCategory { return CategoryTasks }
 func (t *TaskDeleteTool) Description() string {
-	return "Delete a task by ID. Only use when explicitly asked to remove a task."
+	return "Permanently delete a to-do/task item by task_id. Only use when explicitly asked to remove a " +
+		"task. You may only delete a task you own — one you created or are assigned to; a task created " +
+		"or assigned to someone else is refused, with no delegation override on this path."
 }
 
 func (t *TaskDeleteTool) Parameters() map[string]any {

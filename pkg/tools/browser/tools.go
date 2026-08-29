@@ -79,7 +79,10 @@ func (t *NavigateTool) Name() string                 { return "browser_navigate"
 func (t *NavigateTool) Scope() tools.ToolScope       { return tools.ScopeCore }
 func (t *NavigateTool) Category() tools.ToolCategory { return tools.CategoryBrowser }
 func (t *NavigateTool) Description() string {
-	return "Navigate to a URL and return page metadata. Subject to SSRF protection."
+	return "Open a URL in the browser tab (visit a webpage/website) and return page metadata — final URL " +
+		"after redirects, page title, and HTTP status. Use this to load a page before browser_get_text, " +
+		"browser_screenshot, browser_click, or browser_evaluate act on it. Subject to SSRF protection: " +
+		"requests to private/internal network addresses are blocked unless explicitly allow-listed."
 }
 
 func (t *NavigateTool) Parameters() map[string]any {
@@ -763,7 +766,10 @@ func (t *EvaluateTool) Name() string                 { return "browser_evaluate"
 func (t *EvaluateTool) Scope() tools.ToolScope       { return tools.ScopeCore }
 func (t *EvaluateTool) Category() tools.ToolCategory { return tools.CategoryBrowser }
 func (t *EvaluateTool) Description() string {
-	return "Execute JavaScript in the page context. Denied by default — must be explicitly allowed by policy."
+	return "Execute JavaScript in the active tab's page context (run scripts, read/manipulate the DOM). " +
+		"Off by default at RUNTIME regardless of your tool policy — the operator must set " +
+		"sandbox.browser_evaluate_enabled=true in config for this to work even when your policy allows it. " +
+		"A policy of allow does not mean this tool is usable; check the tool result for the runtime-disabled error."
 }
 
 func (t *EvaluateTool) Parameters() map[string]any {

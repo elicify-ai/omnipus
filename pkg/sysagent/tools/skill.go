@@ -94,7 +94,9 @@ func NewSkillListTool(d *Deps) *SkillListTool   { return &SkillListTool{deps: d}
 func (t *SkillListTool) Name() string           { return "list_skills" }
 func (t *SkillListTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *SkillListTool) Description() string {
-	return "List all installed skills. No parameters required."
+	return "List all installed skills (procedures, playbooks, and capabilities loaded from SKILL.md files) " +
+		"available to you right now, with each skill's id, name, and description. Use find_skills instead " +
+		"to search the marketplace for skills that are NOT yet installed. No parameters required."
 }
 
 func (t *SkillListTool) Parameters() map[string]any {

@@ -777,7 +777,10 @@ func NewTaskDeleteTool(d *Deps) *TaskDeleteTool  { return &TaskDeleteTool{deps: 
 func (t *TaskDeleteTool) Name() string           { return "delete_task_in_workspace" }
 func (t *TaskDeleteTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *TaskDeleteTool) Description() string {
-	return "Delete a task. Parameters: id (required), confirm (bool, must be true)."
+	return "Permanently delete a to-do/task item from a workspace by id. Irreversible. You may only delete " +
+		"a task you own (creator or assignee) — deleting another agent's task requires delegation trust to " +
+		"that agent within the workspace, or the call is refused. Use list_tasks_in_workspace first to find " +
+		"the task id.\nParameters: id (required), confirm (bool, must be true)."
 }
 
 func (t *TaskDeleteTool) Parameters() map[string]any {

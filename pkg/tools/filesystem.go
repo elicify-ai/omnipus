@@ -738,7 +738,11 @@ func (t *WriteFileTool) Name() string {
 }
 
 func (t *WriteFileTool) Description() string {
-	return "Write content to a file. If the file already exists, you must set overwrite=true to replace it."
+	return "Write content to a file, replacing it entirely. If the file already exists, you must set " +
+		"overwrite=true to replace it — without it, the call is refused. If you hit that refusal and only " +
+		"want to change PART of an existing file, use edit_file (replace one exact snippet) or append_file " +
+		"(add to the end) instead of retrying write_file with overwrite=true, which discards everything " +
+		"already in the file."
 }
 
 func (t *WriteFileTool) Scope() ToolScope       { return ScopeCore }
