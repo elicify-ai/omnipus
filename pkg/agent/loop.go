@@ -2727,8 +2727,14 @@ func registerSharedTools(
 							}
 						}
 						// Genuinely unknown: suggest the closest registered name so the model
-						// can correct a hallucinated or transposed name (C4 fix).
-						if suggestion := tools.FindClosestToolName(allAgentTools, name); suggestion != "" {
+						// can correct a hallucinated or transposed name (C4 fix). Match
+						// against policyFiltered (the POLICY-ALLOWED set), not allAgentTools
+						// (the pre-policy set) — a typo suggestion must never point at a tool
+						// this agent's policy denies. Cost: hidden MCP tools aren't in
+						// policyFiltered, so a near-miss typo of a hidden MCP tool's name
+						// gets a bare "unknown tool" with no "did you mean" hint. That's the
+						// correct tradeoff (never suggest a name the agent can't call).
+						if suggestion := tools.FindClosestToolName(policyFiltered, name); suggestion != "" {
 							return false, name + " — unknown tool (did you mean '" + suggestion + "'?)"
 						}
 						return false, name + " — unknown tool name"

@@ -257,54 +257,6 @@ func TestToolsTool_Query_DoesNotPromote_WithoutResolver(t *testing.T) {
 	}
 }
 
-func TestSearchBM25_ZeroMaxResults(t *testing.T) {
-	reg := setupPopulatedRegistry()
-
-	res := reg.SearchBM25("read file", 0)
-	if len(res) != 0 {
-		t.Errorf("Expected 0 results with maxSearchResults=0, got %d", len(res))
-	}
-}
-
-func TestToolRegistry_SearchBM25LimitsAndCoreFiltering(t *testing.T) {
-	reg := NewToolRegistry()
-
-	// Add 1 visible lazy tool (ManifestLazy tier — SHOULD appear in BM25),
-	// 1 visible full-tier tool (ManifestFull — MUST NOT appear in BM25),
-	// and 10 hidden tools.
-	// "core_match_lazy" is not a real tool name so ToolManifestTier returns ManifestLazy.
-	reg.Register(&mockSearchableTool{"core_match_lazy", "I am visible lazy with match"})
-	// "read_file" is ManifestFull — must be excluded from BM25 corpus.
-	reg.Register(&mockSearchableTool{"read_file", "Read file with match"})
-	for i := 0; i < 10; i++ {
-		reg.RegisterHidden(&mockSearchableTool{
-			name: fmt.Sprintf("hidden_match_%d", i),
-			desc: "this has a match",
-		})
-	}
-
-	t.Run("BM25 limits and full-tier filtering", func(t *testing.T) {
-		// Search with BM25 and a limit of maxSearchResults = 3.
-		// The corpus now includes hidden tools AND visible lazy-tier tools.
-		res := reg.SearchBM25("match", 3)
-
-		if len(res) != 3 {
-			t.Errorf("Expected exactly 3 results due to limit, got %d", len(res))
-		}
-
-		for _, r := range res {
-			// Full-tier tools (ManifestFull) must NEVER appear in BM25 results
-			// (they're always callable, no need to discover them via search).
-			if r.Name == "read_file" {
-				t.Errorf("SearchBM25 must not return full-tier tool %q (ManifestFull excluded from corpus)", r.Name)
-			}
-		}
-		// core_match_lazy (visible, ManifestLazy) MAY appear — that's the new
-		// widened behavior. We don't assert it must appear since BM25 ranking
-		// may not surface it in the top-3 with 10 hidden competitors.
-	})
-}
-
 func TestGet_HiddenToolTTLLifecycle(t *testing.T) {
 	reg := NewToolRegistry()
 	reg.RegisterHidden(&mockSearchableTool{name: "hidden_tool", desc: "test"})

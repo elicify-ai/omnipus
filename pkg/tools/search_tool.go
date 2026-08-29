@@ -64,30 +64,3 @@ func cachedEngineOrNil(c *bm25CachedEngine) *bm25CachedEngine {
 	}
 	return c
 }
-
-// SearchBM25 ranks searchable tools against query using BM25 via utils.BM25Engine.
-// The corpus includes hidden/MCP tools AND visible lazy-tier built-in tools,
-// matching the widened corpus used by ToolsTool.getOrBuildEngine.
-// This non-cached variant rebuilds the engine on every call. Used by tests
-// and any code that doesn't hold a ToolsTool instance.
-func (r *ToolRegistry) SearchBM25(query string, maxSearchResults int) []ToolSearchResult {
-	snap := r.SnapshotSearchableTools()
-	docs := snapshotToSearchDocs(snap)
-	if len(docs) == 0 {
-		return nil
-	}
-
-	ranked := buildBM25Engine(docs).Search(query, maxSearchResults)
-	if len(ranked) == 0 {
-		return nil
-	}
-
-	out := make([]ToolSearchResult, len(ranked))
-	for i, r := range ranked {
-		out[i] = ToolSearchResult{
-			Name:        r.Document.Name,
-			Description: r.Document.Description,
-		}
-	}
-	return out
-}
