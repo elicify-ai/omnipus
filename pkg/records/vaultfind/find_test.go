@@ -212,6 +212,70 @@ func TestFind_WordsIntersectWithTheTypedFilter(t *testing.T) {
 	}
 }
 
+// TestFind_WordSearchFanoutTruncationIsReportedNotSilent is F6 (code review
+// A). textFanout is max(200, limit*20): for a small requested page (limit=5
+// here, fanout=200), a corpus with MORE than 200 documents matching `words`
+// cannot be answered from a single fanout, and the typed filter below only
+// ever sees the ones that fit. Before the fix this was invisible: the same
+// shape as a genuine zero-hit answer.
+//
+// None of the 201 word-matched paths here need to correspond to real plant
+// records — F6 is entirely about findRecords' OWN detection of the fanout
+// being exhausted, which happens before the typed filter or the properties
+// store ever runs, so this is a fast, pure-Go fixture despite exercising a
+// 200-document-wide bound.
+func TestFind_WordSearchFanoutTruncationIsReportedNotSilent(t *testing.T) {
+	f := newFixture(t)
+
+	const n = 201 // one past textFanout's 200-match floor
+	only := make([]string, 0, n)
+	for i := 0; i < n; i++ {
+		p := fmt.Sprintf("garden/word-match-%04d.md", i)
+		only = append(only, p)
+		f.text.hits[p] = TextHit{Path: p, SourceHash: "h", Score: float64(n - i)}
+	}
+	f.text.only = only
+
+	words := "meeting"
+	r := req(withType("plant"))
+	r.Words = &words
+	// textFanout floors at 200 only for limit <= 10 (limit*20 < 200); the
+	// default limit (50) would ask for a fanout of 1000, which 201 hits does
+	// not cross. A small explicit limit keeps the fixture at the 200-hit
+	// floor instead of needing 1001 synthetic hits.
+	small := 5
+	r.Limit = &small
+	resp := mustFind(t, f.depsWithText(), r)
+
+	if resp.Complete {
+		t.Fatal("Complete = true after the word-search fanout was exhausted " +
+			"(201 matches against a 200-match fanout) — indistinguishable from " +
+			"a genuine zero-hit answer, which is the F6 defect")
+	}
+	if deref(resp.CompleteReason) == "" {
+		t.Error("CompleteReason is empty despite Complete=false")
+	}
+	found := false
+	for _, p := range resp.Problems {
+		if p.Code == generated.TextSearchTruncated {
+			found = true
+			if p.Fix == nil || strings.TrimSpace(*p.Fix) == "" {
+				t.Error("the text_search_truncated problem names no fix")
+			}
+		}
+	}
+	if !found {
+		t.Errorf("no text_search_truncated problem in the response; problems = %+v", resp.Problems)
+	}
+	// This must NOT be the zero-hit path: NearestTerms is for a query that
+	// genuinely found nothing in a corpus this layer finished searching, and
+	// stating it here would claim a completeness this answer does not have.
+	if resp.NearestTerms != nil {
+		t.Error("NearestTerms is set on a truncated answer — that path is for a genuine, " +
+			"fully-searched zero-hit answer, not one that gave up partway through")
+	}
+}
+
 // TestFind_ZeroHitsReportsTheVocabularyAndStops is FR-114/FR-115 and AC-F4.
 func TestFind_ZeroHitsReportsTheVocabularyAndStops(t *testing.T) {
 	f := newFixture(t)

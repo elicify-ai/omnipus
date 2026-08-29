@@ -256,19 +256,50 @@ func findRecords(ctx context.Context, d Deps, q *query, echo string) (generated.
 	// never the union: a caller who asked for both and received either is being
 	// told something false about their vault.
 	var wordPaths map[string]TextHit
+	var wordsTruncated bool
 	if q.words != "" {
-		hits, err := d.Text.Search(ctx, q.words, textFanout(q.limit))
+		// FIX F6 (code review A): ask for ONE MORE than the fanout. A real
+		// text index has no way to say "there were more" other than by
+		// actually handing back more than was asked for — Search's own
+		// contract (see TextSearcher) returns at most `limit` hits and is
+		// silent about whether the corpus held any past it. Asking for
+		// fanout+1 turns that silence into a fact this layer can observe:
+		// getting back the (fanout+1)-th hit proves the corpus held more
+		// matches than the fanout could carry, and the typed filter below
+		// never got a chance to see them.
+		fanout := textFanout(q.limit)
+		hits, err := d.Text.Search(ctx, q.words, fanout+1)
 		if err != nil {
 			ref := refuse(problem(generated.IndexUnavailable,
 				fmt.Sprintf("the text index could not answer %q: %v", q.words, err),
 				"re-run, or run vault_describe check_integrity to see the index state"), err)
 			return refusalResponse(generated.VaultFindRequest{}, echo, ref), ref
 		}
+		if len(hits) > fanout {
+			// The corpus held more than the fanout. wordPaths — the set the
+			// typed filter intersects against — is being built from a PREFIX
+			// of the real match set, never the whole of it, so this answer
+			// can no longer claim to be complete no matter what the typed
+			// filter and the evaluation below find. Reported below (see
+			// ev.recordProblems), never assumed away.
+			wordsTruncated = true
+			hits = hits[:fanout]
+		}
 		wordPaths = make(map[string]TextHit, len(hits))
 		for _, h := range hits {
 			wordPaths[h.Path] = h
 		}
-		if len(wordPaths) == 0 {
+		// A genuine zero-hit answer — the vocabulary check, NearestTerms,
+		// "did you mean" — is refused to a TRUNCATED query: those exist to
+		// tell the caller their spelling found nothing in a corpus this layer
+		// actually finished searching, and offering vocabulary suggestions
+		// over a corpus it gave up on partway through would imply a
+		// completeness this answer does not have. A truncated-but-zero-in-
+		// the-fanout query instead falls through to the ordinary evaluation
+		// path below (0 candidates ever match wordPaths, exactly as an
+		// ordinary zero-survivor query does), which is where the truncation
+		// problem is actually recorded.
+		if len(wordPaths) == 0 && !wordsTruncated {
 			return zeroHitResponse(ctx, d, q, echo), nil
 		}
 	}
@@ -328,6 +359,24 @@ func findRecords(ctx context.Context, d Deps, q *query, echo string) (generated.
 
 	cmp := records.Comparator{ResolveRelation: d.Resolve}
 	ev := &evaluation{q: q, cmp: cmp, words: wordPaths, near: nearSet}
+
+	// FIX F6: the fanout truncation detected above is a property of the
+	// QUERY, not of any one record — Records is deliberately empty, matching
+	// scope_truncated and page_size_clamped's own shape (RecordProblem.yaml).
+	// It is recorded on ev HERE, as early as ev exists, so that assemble()
+	// below — the one path that reads e.problems into the response — always
+	// carries it. (A B1/B2 bound refusal further down returns its OWN
+	// single-problem response built directly from `ref`, bypassing e.problems
+	// entirely — but a refusal already carries Complete:false and its own
+	// named cause, so it is not the silent-success shape F6 is about.)
+	if wordsTruncated {
+		ev.recordProblems([]generated.RecordProblem{problem(generated.TextSearchTruncated,
+			fmt.Sprintf("the text index holds more than %s matches for %q; "+
+				"only the top-ranked %s were considered before the typed filter ran",
+				group3(textFanout(q.limit)), q.words, group3(textFanout(q.limit))),
+			"add or tighten a typed `filter` — unlike `words`, it is evaluated over "+
+				"the full narrowed candidate population, not this fanout")})
+	}
 
 	// ── B2: bound MEMORY, during evaluation ─────────────────────────────────
 	//

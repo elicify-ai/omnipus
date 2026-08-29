@@ -160,7 +160,13 @@ type stubText struct {
 	err   error
 }
 
-func (s *stubText) Search(_ context.Context, _ string, _ int) ([]TextHit, error) {
+// Search returns s.only, filtered through s.hits, IN ORDER — and, since F6's
+// fix, capped at limit exactly the way a real text index caps at the fanout it
+// was asked for. Every existing caller in this package hands `only` a list far
+// shorter than any real limit (textFanout's floor is 200), so the cap changes
+// nothing for them; a test that wants to exercise F6's truncation detection
+// sets `only` longer than the limit it expects findRecords to ask for.
+func (s *stubText) Search(_ context.Context, _ string, limit int) ([]TextHit, error) {
 	if s.err != nil {
 		return nil, s.err
 	}
@@ -169,6 +175,9 @@ func (s *stubText) Search(_ context.Context, _ string, _ int) ([]TextHit, error)
 		if h, ok := s.hits[p]; ok {
 			out = append(out, h)
 		}
+	}
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
 	}
 	return out, nil
 }
