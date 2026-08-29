@@ -86,6 +86,14 @@ type query struct {
 	// link text, which is worse but not silent (see project.go's groupKeys).
 	resolve records.RelationResolver
 
+	// inverses is every group_by name that resolved to a DERIVED inverse
+	// (D5) rather than a property this type declares — "deals" asked of a
+	// "company" query, resolved to deal.company's inverse edge. project.go's
+	// grouping code uses it to compute the group's values from the
+	// properties index instead of decoding a stored property that does not
+	// exist (FR-032: an inverse is NEVER stored).
+	inverses map[string]records.InverseEdge
+
 	// touched is every property the query names, in first-mention order. It is
 	// what `explain` reports and what the schema check ranges over.
 	touched []string
@@ -155,7 +163,7 @@ func parse(req generated.VaultFindRequest, set *records.SchemaSet) (*query, *Ref
 	if r := q.applyFilter(req); r != nil {
 		return nil, r
 	}
-	if r := q.applyColumns(req); r != nil {
+	if r := q.applyColumns(req, set); r != nil {
 		return nil, r
 	}
 	return q, nil
@@ -270,9 +278,48 @@ func (q *query) applyFilter(req generated.VaultFindRequest) *RefusalError {
 	return nil
 }
 
+// resolveInverseGroupBy is D5's inverse lookup for group_by. original is the
+// refusal lookup("group_by", name) already produced — the ordinary "unknown
+// property" refusal — and it is returned UNCHANGED when name names no
+// declared inverse either, so an operator who simply mistyped a property
+// name sees the SAME message they always saw (FR-024): this function only
+// ever REPLACES that refusal with a more specific one, never invents a new
+// silent success.
+func resolveInverseGroupBy(q *query, set *records.SchemaSet, name string, original *RefusalError) (records.InverseEdge, *RefusalError) {
+	if q.schema == nil || set == nil {
+		return records.InverseEdge{}, original
+	}
+	edges := set.FindInverses(q.schema.Type, name)
+	switch len(edges) {
+	case 0:
+		return records.InverseEdge{}, original
+	case 1:
+		return edges[0], nil
+	default:
+		sources := make([]string, 0, len(edges))
+		for _, e := range edges {
+			sources = append(sources, e.SourceType)
+		}
+		sort.Strings(sources)
+		p := problem(generated.UnsupportedParameter,
+			fmt.Sprintf("group_by %q is ambiguous on record type %q: %s all declare an inverse named %q here",
+				name, q.schema.Type, strings.Join(sources, ", "), name),
+			"there is nothing to disambiguate an inverse-name collision from here; "+
+				"rename one of the colliding schemas' `inverse:` declarations with vault_configure")
+		p.Property = str(name)
+		return records.InverseEdge{}, refuse(p, nil)
+	}
+}
+
 // applyColumns validates select / sort / group_by / join / aggregate against the
 // schema. Each is FR-024's posture: named, listed, never silently dropped.
-func (q *query) applyColumns(req generated.VaultFindRequest) *RefusalError {
+//
+// set is the WHOLE schema set, not just q.schema — group_by needs it for D5's
+// inverse: an inverse is declared on the RELATION's side (deal.company) and
+// exposed on the TARGET type (company) without company's own schema ever
+// mentioning it, so recognising "deals" as valid on a company query means
+// searching every OTHER declared type for the relation that names it.
+func (q *query) applyColumns(req generated.VaultFindRequest, set *records.SchemaSet) *RefusalError {
 	lookup := func(kind, name string) (*records.Property, *RefusalError) {
 		if q.schema == nil {
 			return nil, refuse(problem(generated.UnsupportedParameter,
@@ -310,7 +357,22 @@ func (q *query) applyColumns(req generated.VaultFindRequest) *RefusalError {
 		}
 		for _, name := range *req.GroupBy {
 			if _, r := lookup("group_by", name); r != nil {
-				return r
+				// Not a property THIS type declares — try an inverse (D5):
+				// the reverse edge of a relation some OTHER type declared
+				// onto this one, exposed here without this schema ever
+				// mentioning it. This is deliberately checked ONLY for
+				// group_by, not select/sort/join/aggregate: an inverse is
+				// many-valued and derived, never a scalar column, and the
+				// only execution path that materialises one lives in
+				// project.go's grouping code.
+				edge, r2 := resolveInverseGroupBy(q, set, name, r)
+				if r2 != nil {
+					return r2
+				}
+				if q.inverses == nil {
+					q.inverses = map[string]records.InverseEdge{}
+				}
+				q.inverses[name] = edge
 			}
 			q.groupBy = append(q.groupBy, name)
 			q.touched = append(q.touched, name)
@@ -412,7 +474,10 @@ func (q *query) capabilities() []records.PropertyIndexCapability {
 	if q.filter != nil || q.recordType != "" {
 		caps = append(caps, records.CapabilityTypedFilter)
 	}
-	if len(q.join) > 0 || q.near != "" {
+	if len(q.join) > 0 || q.near != "" || len(q.inverses) > 0 {
+		// Computing an inverse (D5) scans the properties index's relation
+		// child table (propindex.Store.Relations) exactly the way `join`
+		// and `near` do — it is the same capability, not a fourth one.
 		caps = append(caps, records.CapabilityRelationJoin)
 	}
 	if len(q.groupBy) > 0 {
