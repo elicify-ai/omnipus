@@ -304,7 +304,7 @@ func (h *evalHarness) rankers() []struct {
 		// landed this really is plain BM25; the harness records the scoring
 		// model actually in effect so the label cannot outlive the fact.
 		{"bm25 (baseline)", func(q string, limit int) ([]string, error) {
-			hits, err := h.ix.SearchFiltered(q, limit, nil)
+			hits, _, err := h.ix.SearchFiltered(q, limit, nil)
 			return pathsOf(hits), err
 		}},
 		// BM25F weighting alone, no fusion at all.
@@ -480,7 +480,7 @@ func TestRank_FusionMeetsNDCGThreshold(t *testing.T) {
 func TestRank_EvalHasHeadroom(t *testing.T) {
 	h := newEvalHarness(t)
 	baseline := evalRung(t, "bm25 (baseline)", func(q string, limit int) ([]string, error) {
-		hits, err := h.ix.SearchFiltered(q, limit, nil)
+		hits, _, err := h.ix.SearchFiltered(q, limit, nil)
 		return pathsOf(hits), err
 	}, h.fixture.Queries, "uniform")
 

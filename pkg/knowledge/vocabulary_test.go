@@ -49,7 +49,7 @@ func TestSearch_ZeroHitsReportsVocabularyNotExpansion(t *testing.T) {
 	// A term the corpus does not hold, but whose neighbours it does.
 	const q = "prospectus"
 
-	hits, err := ix.SearchFiltered(q, 10, nil)
+	hits, _, err := ix.SearchFiltered(q, 10, nil)
 	if err != nil {
 		t.Fatalf("search: %v", err)
 	}

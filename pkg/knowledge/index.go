@@ -196,6 +196,20 @@ var queryableFields = map[string]struct{}{
 // test can do. Production always uses os.Open.
 var openFileForRead = func(path string) (*os.File, error) { return os.Open(path) } //nolint:gosec // collection paths are operator-owned and contained by the caller
 
+// readNoteChunk performs one read of indexNote's segmenting pass. It exists
+// for the SAME reason openFileForRead does — a seam a test can substitute —
+// but for a fault openFileForRead cannot reach: a read that fails PARTWAY
+// through a multi-segment note, after earlier segments already succeeded.
+//
+// openFileForRead can only vary the OUTCOME of opening the file, or (via a
+// substitute *os.File) the content it reads from byte zero — it cannot make
+// one read call on an already-open handle fail while an earlier one on the
+// SAME handle succeeded, because indexNote's f.Seek(0, io.SeekStart) between
+// the hashing pass and this one requires f to be an actual seekable regular
+// file, which rules out a pipe or socket standing in for it. Production
+// always calls io.ReadFull; only a test replaces this.
+var readNoteChunk = func(f *os.File, buf []byte) (int, error) { return io.ReadFull(f, buf) }
+
 // IndexHit is one search result: exactly one per NOTE (or attachment), never
 // one per segment.
 type IndexHit struct {
@@ -251,6 +265,14 @@ type SyncStats struct {
 	BatchCommits int
 	// Problems carries the walk's skipped symlinks and unreadable paths.
 	Problems []ScanProblem
+	// ManifestRebuilt is true when this run found its manifest unreadable,
+	// version-mismatched, or recorded against a different root, and — rather
+	// than reconciling an empty in-memory manifest against the existing,
+	// possibly stale, live index (F5: previously-deleted files would stay
+	// searchable forever) — purged every document already in the index and
+	// rebuilt it whole from the collection on disk. See SyncWith's "F5 / G3"
+	// comment for the full reasoning.
+	ManifestRebuilt bool
 }
 
 // SyncOptions tunes one reconcile.
@@ -1249,6 +1271,23 @@ func (b *batchState) commit() error {
 	return nil
 }
 
+// rollbackPartialSegments deletes the segments of ONE note that already
+// committed before a later segment of the SAME note failed (F10). wrote is
+// the segment ordinal reached before the failure, i.e. exactly the segments
+// numbered [0, wrote) that indexNote's loop had already passed to batch.add.
+//
+// It is a no-op, correctly, when wrote is 0: a failure before any segment
+// committed (opening the file, hashing it, the first read) has nothing to
+// undo.
+func rollbackPartialSegments(batch *batchState, relPath string, wrote int) error {
+	for ord := 0; ord < wrote; ord++ {
+		if err := batch.delete(segmentDocID(relPath, ord)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // Sync reconciles the index with the collection on disk using the default
 // (stat-based) freshness check.
 func (ix *Index) Sync(ctx context.Context) (SyncStats, error) {
@@ -1306,14 +1345,51 @@ func (ix *Index) SyncWith(ctx context.Context, opts SyncOptions) (SyncStats, err
 	stats.Problems = scan.Problems
 
 	manifest, loadErr := LoadManifest(ix.manifestPath, ix.root)
-	if loadErr != nil {
-		// Not fatal: an unusable manifest costs a full rebuild, never a wrong
-		// answer. It is logged rather than swallowed.
-		slog.Warn("knowledge: manifest unusable; indexing from scratch",
-			"path", ix.manifestPath, "error", loadErr)
-	}
-
 	batch := newBatchState(ix)
+	if loadErr != nil {
+		// F5 / "G3": the mirror image of createFreshIndex's own hazard.
+		// createFreshIndex removes the manifest when it discards the index,
+		// because a manifest that outlives its index makes the next Sync skip
+		// every file as "unchanged" against documents that no longer exist —
+		// an empty index that reports itself complete. This is that failure
+		// with the two swapped: an index that outlives its (unreadable,
+		// version-mismatched, or wrong-root) manifest. Reconciling against an
+		// EMPTY in-memory manifest here, as this code used to, would compute
+		// every present file as "new" (correct, if slower) but every absent
+		// one as nothing at all — the deletion loop below only removes what
+		// manifest.Entries names, and a fresh manifest names nothing. A note
+		// deleted from disk before this run would keep answering search
+		// queries with its full body text forever: not a staleness bug, a
+		// confidentiality one.
+		//
+		// "Refuse to sync and surface the condition" was the other candidate
+		// and is deliberately not taken: refusing leaves the on-disk index
+		// exactly as populated as it was, so any previously-deleted file's
+		// documents already committed from an earlier run stay searchable
+		// indefinitely, unfixed, until an operator manually intervenes. It
+		// stops the bleeding from getting worse without stopping the
+		// bleeding. Only a rebuild actually purges the exposure. This also
+		// matches openOrRebuild's own established idiom for an index that
+		// cannot be trusted (G1 format staleness, G2 mapping drift): discard
+		// what cannot be verified and rebuild from the collection, loudly
+		// logged, rather than opening it — or here, reconciling it — quietly.
+		//
+		// The rebuild happens through the SAME open index handle rather than
+		// discarding and recreating ix.idx: a search never takes ix.mu (only
+		// Sync does; scorch itself is what makes read/write concurrency
+		// safe), so reassigning ix.idx here — the openOrRebuild-at-Open-time
+		// approach — would race that field against any search already in
+		// flight. purgeAllDocuments deletes every document currently in the
+		// index through this same batch, live handle unchanged, reaching the
+		// identical end state a swap would.
+		slog.Error("knowledge: manifest unusable; index untrusted, purging and rebuilding from the collection",
+			"path", ix.manifestPath, "root", ix.root, "error", loadErr)
+		if _, purgeErr := ix.purgeAllDocuments(batch); purgeErr != nil {
+			return stats, fmt.Errorf("knowledge: rebuild after unusable manifest %s: %w", ix.manifestPath, purgeErr)
+		}
+		manifest = NewManifest(ix.root)
+		stats.ManifestRebuilt = true
+	}
 	seen := make(map[string]struct{}, len(scan.Entries))
 	progress := newProgressCoalescer(opts.OnProgress, len(scan.Entries), opts.ProgressInterval, time.Now)
 
@@ -1532,8 +1608,27 @@ func (ix *Index) indexNote(batch *batchState, entry ScanEntry) (ManifestEntry, e
 	var totalRead int // bytes actually read off disk, for the FR-111 check
 
 	for !eof {
-		n, readErr := io.ReadFull(f, buf[carry:])
+		n, readErr := readNoteChunk(f, buf[carry:])
 		if readErr != nil && !errors.Is(readErr, io.EOF) && !errors.Is(readErr, io.ErrUnexpectedEOF) {
+			// F10: batchState.add can (and, for a full-size segment, always
+			// does — indexBatchMaxBytes equals IndexSegmentSize) commit a
+			// segment to the LIVE index immediately. A read failure on a
+			// LATER segment of this same note must not leave those earlier,
+			// already-committed segments behind: SyncWith's caller only
+			// removes what a manifest ENTRY names, and this note is about to
+			// get none — manifest.Remove is a no-op on a path that was never
+			// Put. Roll the partial write back here, in the same batch,
+			// before the manifest ever has a chance to disagree with the
+			// index about it. Without this, hadRec is false on every future
+			// Sync (no manifest record was ever written to be false about),
+			// so no delete is ever issued again — and if the file is later
+			// deleted from disk, the removal loop, which walks manifest
+			// entries, never sees a path it never held.
+			if rbErr := rollbackPartialSegments(batch, entry.RelPath, ordinal); rbErr != nil {
+				return ManifestEntry{}, fmt.Errorf(
+					"read note %s: %w (additionally failed to roll back %d already-committed segment(s): %v)",
+					entry.RelPath, readErr, ordinal, rbErr)
+			}
 			return ManifestEntry{}, fmt.Errorf("read note %s: %w", entry.RelPath, readErr)
 		}
 		if readErr != nil {
@@ -1594,6 +1689,13 @@ func (ix *Index) indexNote(batch *batchState, entry ScanEntry) (ManifestEntry, e
 			SourceHash: sourceHash,
 			Body:       string(buf[skip:cut]),
 		}); err != nil {
+			// Same F10 hazard as the read-error branch above: ordinal already
+			// counts every segment that committed in an EARLIER iteration of
+			// this loop, and this one failed before joining them.
+			if rbErr := rollbackPartialSegments(batch, entry.RelPath, ordinal); rbErr != nil {
+				return ManifestEntry{}, fmt.Errorf(
+					"%w (additionally failed to roll back %d already-committed segment(s): %v)", err, ordinal, rbErr)
+			}
 			return ManifestEntry{}, err
 		}
 		wroteAny = true
@@ -1676,6 +1778,72 @@ func (ix *Index) hashFile(relPath string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
+// purgeAllDocuments deletes every document currently held by the live index,
+// through batch — the same open handle SyncWith is already writing through,
+// never by discarding and recreating ix.idx.
+//
+// It exists for exactly one caller: SyncWith's F5/"G3" recovery when the
+// manifest cannot be trusted. At that point the manifest holds no record of
+// what the index contains, so there is no per-path list of segment counts to
+// delete by (the ordinary deletion loop's `for ord := 0; ord < rec.Segments`
+// has nothing to range over). The index itself is asked instead: bleve's own
+// document-ID reader enumerates every id actually on disk, regardless of what
+// any manifest ever said, which is what makes this correct even when the
+// manifest and the index have been apart for a while.
+//
+// Uses the low-level Advanced()/Reader() reader — the same seam
+// NearMissVocabulary already uses to read the term dictionary — rather than a
+// bleve.NewMatchAllQuery() search, so this reads doc IDs directly instead of
+// scoring and decoding stored fields for documents that are about to be
+// deleted anyway.
+func (ix *Index) purgeAllDocuments(batch *batchState) (int, error) {
+	internal, err := ix.idx.Advanced()
+	if err != nil {
+		return 0, fmt.Errorf("knowledge: advanced index handle: %w", err)
+	}
+	reader, err := internal.Reader()
+	if err != nil {
+		return 0, fmt.Errorf("knowledge: index reader: %w", err)
+	}
+	defer func() {
+		// See NearMissVocabulary's identical comment: scorch pins the
+		// snapshot a reader holds, so a leaked reader keeps segments alive on
+		// disk for as long as the process runs.
+		if cerr := reader.Close(); cerr != nil {
+			slog.Warn("knowledge: closing index reader after purge failed", "path", ix.blevePath, "error", cerr)
+		}
+	}()
+
+	docIDs, err := reader.DocIDReaderAll()
+	if err != nil {
+		return 0, fmt.Errorf("knowledge: doc id reader: %w", err)
+	}
+	defer func() {
+		if cerr := docIDs.Close(); cerr != nil {
+			slog.Warn("knowledge: closing doc id reader after purge failed", "path", ix.blevePath, "error", cerr)
+		}
+	}()
+
+	purged := 0
+	for {
+		id, nextErr := docIDs.Next()
+		if nextErr != nil {
+			return purged, fmt.Errorf("knowledge: enumerate index documents: %w", nextErr)
+		}
+		if id == nil {
+			return purged, nil
+		}
+		extID, extErr := reader.ExternalID(id)
+		if extErr != nil {
+			return purged, fmt.Errorf("knowledge: resolve index document id: %w", extErr)
+		}
+		if delErr := batch.delete(extID); delErr != nil {
+			return purged, delErr
+		}
+		purged++
+	}
+}
+
 // lastIndexByte returns the index of the last occurrence of c, or -1.
 func lastIndexByte(b []byte, c byte) int {
 	for i := len(b) - 1; i >= 0; i-- {
@@ -1704,7 +1872,13 @@ func nameTokensFor(relPath string) string {
 // indexSearchMaxFetch bounds how many raw segment hits one Search may pull while
 // collapsing segments back into files. Without a bound, a query matching every
 // segment of a very large note could pull the whole index into memory.
-const indexSearchMaxFetch = 2048
+//
+// It is a var, not a const, ONLY so a test can lower it (save, override,
+// restore) to exercise the boundary against a fixture of a few dozen documents
+// instead of the 2000+ real ones it would otherwise take to cross it (FIX F7's
+// TestSearchFilteredReportsTruncationAtTheFetchCap). Production code never
+// assigns to it; the default below is what ships.
+var indexSearchMaxFetch = 2048
 
 // Search runs a query and returns at most limit results, ONE PER FILE. Hits are
 // scored with BM25, which is in force because buildIndexMapping asks for it by
@@ -1721,8 +1895,17 @@ const indexSearchMaxFetch = 2048
 //
 // limit is honoured as given — this layer does not silently clamp. FR-037's cap
 // belongs to the tool/API layer, which must clamp AND report the clamping.
+//
+// It discards the truncation signal SearchFiltered now reports (FIX F7). That
+// is deliberate, not an oversight: every production caller of this method
+// reaches it through Searcher.Search / SearchFiltered instead (see search.go),
+// which is where the truncation is folded into SearchReport.Complete. Search
+// itself has no report to carry it in, and it has no production caller of its
+// own — see index_test.go for its (many) direct callers, which do not read a
+// completeness signal today.
 func (ix *Index) Search(query string, limit int) ([]IndexHit, error) {
-	return ix.SearchFiltered(query, limit, nil)
+	hits, _, err := ix.SearchFiltered(query, limit, nil)
+	return hits, err
 }
 
 // SearchFiltered is Search restricted to the paths keep returns true for. A nil
@@ -1737,7 +1920,25 @@ func (ix *Index) Search(query string, limit int) ([]IndexHit, error) {
 // surviving files or bleve reports there are no more matching segments to see,
 // so a narrow folder in a large collection is answered fully rather than
 // emptily.
-func (ix *Index) SearchFiltered(query string, limit int, keep func(relPath string) bool) ([]IndexHit, error) {
+//
+// truncated (FIX F7) reports the one case the loop cannot resolve either way:
+// it hit indexSearchMaxFetch — the safety ceiling on how many raw segments one
+// call may examine — WITHOUT having exhausted the corpus (more raw hits exist
+// past the fetched prefix) and WITHOUT having already collected `limit`
+// surviving files. Before this fix the loop's THIRD exit condition
+// (`fetch >= indexSearchMaxFetch`) was folded into the same branch as the two
+// honest exits ("found enough", "saw everything") with no way to tell them
+// apart, so a caller filtering a folder whose matches rank below the fetch
+// ceiling got back a confident, silently partial answer — as few as one row
+// out of thirty real matches, indistinguishable from "there is only one".
+//
+// It is FALSE whenever `keep` is nil or matches broadly, because in that case
+// the raw hits are already in global score order and reaching `limit`
+// surviving files (or exhausting the corpus) within the fetched prefix proves
+// there is nothing higher-ranked left unseen — see the two conditions ORed in
+// the loop's first check below, which return before truncated is ever
+// considered.
+func (ix *Index) SearchFiltered(query string, limit int, keep func(relPath string) bool) ([]IndexHit, bool, error) {
 	if limit <= 0 {
 		limit = 20
 	}
@@ -1753,7 +1954,7 @@ func (ix *Index) SearchFiltered(query string, limit int, keep func(relPath strin
 		}
 		hits, total, err := ix.searchRaw(query, fetch)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		if keep != nil {
 			kept := hits[:0]
@@ -1765,13 +1966,26 @@ func (ix *Index) SearchFiltered(query string, limit int, keep func(relPath strin
 			hits = kept
 		}
 		collapsed := collapseSegmentHits(hits)
-		// Stop when we have enough distinct files, when we have already seen
-		// every matching segment, or when the fetch bound is reached.
-		if len(collapsed) >= limit || uint64(fetch) >= total || fetch >= indexSearchMaxFetch {
+		// Stop HONESTLY when we have enough distinct files, or when we have
+		// already seen every matching segment (uint64(fetch) >= total): both
+		// prove nothing higher-ranked is left unseen, per the doc comment
+		// above.
+		if len(collapsed) >= limit || uint64(fetch) >= total {
 			if len(collapsed) > limit {
 				collapsed = collapsed[:limit]
 			}
-			return collapsed, nil
+			return collapsed, false, nil
+		}
+		// Stop at the fetch ceiling WITHOUT either of the above being true
+		// (FIX F7): more raw hits exist beyond what was examined, and fewer
+		// than `limit` surviving files were found. This is the exit that used
+		// to share the branch above and report exactly like it — a silent
+		// truncation. Reported now, never silent.
+		if fetch >= indexSearchMaxFetch {
+			if len(collapsed) > limit {
+				collapsed = collapsed[:limit]
+			}
+			return collapsed, true, nil
 		}
 		fetch *= 4
 	}

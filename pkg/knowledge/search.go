@@ -327,12 +327,15 @@ func (t *ProgressTracker) Progress() IndexProgress {
 // SearchReport is the honesty half of a search response: everything about the
 // answer that is not one of the results.
 //
-// It carries BOTH kinds of "this is not all of it" — an index that is still
-// being built (FR-035, FR-036) and a result count that was clamped (FR-037) —
-// because a caller that has to remember to check two separate places will
-// eventually check one.
+// It carries THREE kinds of "this is not all of it" — an index that is still
+// being built (FR-035, FR-036), a result count that was clamped (FR-037), and
+// (FIX F7) a search that stopped at the raw-fetch safety ceiling before it
+// could tell whether more matches existed — because a caller that has to
+// remember to check three separate places will eventually check one.
 type SearchReport struct {
-	// Complete reports that the index held every indexable file at query time.
+	// Complete reports that the index held every indexable file at query time
+	// AND that the search itself examined every raw match, never stopping at
+	// indexSearchMaxFetch with unexamined hits still on the table (FIX F7).
 	// When it is false the answer is a fraction of the truth.
 	Complete bool `json:"complete"`
 	// Indeterminate reports FR-036's state: the tree is still being walked, so
@@ -352,6 +355,15 @@ type SearchReport struct {
 	RequestedTopN int `json:"requested_top_n"`
 	AppliedTopN   int `json:"applied_top_n"`
 	MaxTopN       int `json:"max_top_n"`
+	// FetchTruncated is FIX F7: Index.SearchFiltered's escalating fetch loop
+	// hit its raw-hit safety ceiling with more matches unexamined and fewer
+	// than the requested count found. It is INDEPENDENT of the index-build
+	// ratio above — a fully-built, idle index can still set this, when a
+	// narrow `keep` filter (a folder scope, in production) is thin enough
+	// that the matches it accepts rank below the ceiling. When this is true
+	// there is no "N of M" ratio to state, because the total that WOULD have
+	// matched was never counted — only that more existed than were looked at.
+	FetchTruncated bool `json:"fetch_truncated"`
 	// Statement is the human-readable sentence(s) describing everything above.
 	// It is EMPTY only when the answer is complete and nothing was clamped —
 	// which is US-6 AS-4: a finished index shows no incompleteness notice.
@@ -510,12 +522,12 @@ func (s *Searcher) Search(query string, opts SearchOptions) (SearchResponse, err
 		clamped = true
 	}
 
-	hits, err := s.ix.SearchFiltered(query, applied, folderFilter(opts.Folder))
+	hits, truncated, err := s.ix.SearchFiltered(query, applied, folderFilter(opts.Folder))
 	if err != nil {
 		return SearchResponse{}, err
 	}
 
-	report := buildSearchReport(s.progress.Progress(), requested, applied, clamped)
+	report := buildSearchReport(s.progress.Progress(), requested, applied, clamped, truncated)
 	return SearchResponse{hits: hits, report: report}, nil
 }
 
@@ -568,17 +580,29 @@ func SyncTracked(ctx context.Context, ix *Index, tracker *ProgressTracker, opts 
 	return stats, err
 }
 
-// buildSearchReport turns a progress snapshot and a clamp decision into the
-// report that must accompany the results.
-func buildSearchReport(p IndexProgress, requested, applied int, clamped bool) SearchReport {
+// buildSearchReport turns a progress snapshot, a clamp decision and (FIX F7) a
+// fetch-truncation decision into the report that must accompany the results.
+//
+// The two "why is this incomplete" causes are independent and both fold into
+// Complete: an idle, fully-built index can still be truncated (a thin `keep`
+// filter whose matches rank below indexSearchMaxFetch), and an in-flight index
+// build can happen alongside a search that ALSO truncated. Neither is allowed
+// to hide the other.
+func buildSearchReport(p IndexProgress, requested, applied int, clamped, truncated bool) SearchReport {
 	r := SearchReport{
-		Complete:      !p.InFlight(),
-		RequestedTopN: requested,
-		AppliedTopN:   applied,
-		MaxTopN:       SearchMaxTopN,
-		Clamped:       clamped,
+		Complete:       !p.InFlight() && !truncated,
+		RequestedTopN:  requested,
+		AppliedTopN:    applied,
+		MaxTopN:        SearchMaxTopN,
+		Clamped:        clamped,
+		FetchTruncated: truncated,
 	}
-	if !r.Complete {
+	// The index-build ratio/indeterminate state is a property of p alone, not
+	// of r.Complete — r.Complete can now be false purely because the search
+	// truncated, and that must NOT make this branch invent an index-build
+	// ratio (or an indeterminate "still scanning" line) for a build that
+	// isn't running.
+	if p.InFlight() {
 		if indexed, total, ok := p.Ratio(); ok {
 			r.Indexed, r.Total = indexed, total
 		} else {
@@ -595,20 +619,31 @@ func buildSearchReport(p IndexProgress, requested, applied int, clamped bool) Se
 // composeStatement writes the sentence a reader cannot misinterpret.
 //
 // The indeterminate form never contains a ratio, because there is no
-// denominator to put in one (FR-036).
+// denominator to put in one (FR-036). FIX F7's fetch-truncation sentence is a
+// separate clause from the index-build one, because the two causes can be
+// true independently (see buildSearchReport) and a reader needs to know WHICH
+// applies: "the index isn't finished yet" has a different remedy (wait) from
+// "the search itself gave up before finishing" (narrow the query or scope).
 func composeStatement(r SearchReport) string {
-	parts := make([]string, 0, 2)
+	parts := make([]string, 0, 3)
 	switch {
-	case r.Complete:
-		// US-6 AS-4: a finished index says nothing about incompleteness.
 	case r.Indeterminate:
 		parts = append(parts, fmt.Sprintf(
 			"These results are incomplete: this collection is still being scanned, %d files found so far.",
 			r.Found))
-	default:
+	case r.Total > 0:
+		// r.Total is only ever populated from the p.InFlight() branch above,
+		// so reaching this case (rather than falling through to nothing, the
+		// way a fully-built, non-truncated search does) means an index build
+		// really is in progress with a measured ratio.
 		parts = append(parts, fmt.Sprintf(
 			"These results are incomplete: %d of %d notes indexed so far.",
 			r.Indexed, r.Total))
+	}
+	if r.FetchTruncated {
+		parts = append(parts, fmt.Sprintf(
+			"This search stopped after examining the top %d matches by relevance; more may exist beyond that scope and were never considered. Narrow the query or the folder scope to bring them into range.",
+			indexSearchMaxFetch))
 	}
 	if r.Clamped {
 		parts = append(parts, fmt.Sprintf(

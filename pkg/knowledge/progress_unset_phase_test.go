@@ -48,7 +48,7 @@ func TestIndexProgress_UnsetPhaseIsIndistinguishableFromIdle(t *testing.T) {
 
 	// The wire-facing consequence, asserted directly: a report built from an
 	// unpopulated progress must not tell the caller its results are partial.
-	if got := buildSearchReport(unset, 10, 10, false).Complete; !got {
+	if got := buildSearchReport(unset, 10, 10, false, false).Complete; !got {
 		t.Errorf("buildSearchReport(unset).Complete = false; an unpopulated progress " +
 			"must not report results as incomplete — nothing is running to complete")
 	}

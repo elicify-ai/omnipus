@@ -263,7 +263,7 @@ func TestProgress_ZeroTotalCannotBecomeAZeroOfZeroRatio(t *testing.T) {
 		t.Error("BannerVisible() = true with nothing to index; US-6 AS-6 requires a fast unchanged reconcile to show nothing")
 	}
 
-	report := buildSearchReport(p, 0, SearchDefaultTopN, false)
+	report := buildSearchReport(p, 0, SearchDefaultTopN, false, false)
 	if !report.Complete {
 		t.Error("a run with nothing to index left the report incomplete")
 	}
@@ -577,7 +577,7 @@ func TestProgress_FastReconcileShowsNoBannerButStillTellsTheTruth(t *testing.T) 
 			p.Elapsed, ReconcileBannerDelay)
 	}
 	// ... but the response still tells the truth.
-	report := buildSearchReport(p, 0, SearchDefaultTopN, false)
+	report := buildSearchReport(p, 0, SearchDefaultTopN, false, false)
 	if report.Complete {
 		t.Error("report.Complete = true during a reconcile; the banner threshold must not reach the response")
 	}
