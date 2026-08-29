@@ -503,6 +503,15 @@ func TestRename_SymlinkSourceIsRefused(t *testing.T) {
 	_, err := r.Rename(RenameRequest{From: "alias.md", To: "moved.md"})
 	require.Error(t, err, "FR-044: a symlink is skipped and reported, never followed")
 	assert.ErrorIs(t, err, ErrRenameSourceNotAddressable)
+	// This assertion is the correction of a test that passed for the wrong
+	// reason. Until the symlink guard was wired into Plan, the refusal above
+	// came from the walk-membership backstop — a symlink is never in
+	// graph.Files() — and the lstat guard the test was written for could not
+	// fire at all. Only ResolveContainedNoSymlink wraps ErrOutsideCollection,
+	// so this is what tells the two refusals apart. The destination side, which
+	// has no membership backstop and was therefore not refused at all, is
+	// covered in rename_symlink_guard_test.go.
+	assert.ErrorIs(t, err, ErrOutsideCollection)
 	assert.NoFileExists(t, filepath.Join(dir, "moved.md"))
 }
 
