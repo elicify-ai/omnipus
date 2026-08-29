@@ -294,6 +294,116 @@ func TestFind_TasksAreCheckboxRowsWithLineNumbers(t *testing.T) {
 	}
 }
 
+// TestFind_TaskKindRefusesArgumentsItCannotHonour is code-review-A F2.
+//
+// Before the fix, `Find` routed on `q.kind == KindTask` BEFORE `filter` and
+// `words` (among others) were consumed, and `findTasks` read only the
+// selector, limit and cursor. `filter` was validated against the schema and
+// then dropped on the floor — this exact request used to return EVERY
+// checkbox row in scope for type=plant, with `complete: true` and
+// `query_echo` claiming the filter and the words had run. The only prior
+// `kind=task` test (`TestFind_TasksAreCheckboxRowsWithLineNumbers`) passes
+// `Kind` alone, so it could not and did not catch this — this test supplies
+// the ignored arguments.
+func TestFind_TaskKindRefusesArgumentsItCannotHonour(t *testing.T) {
+	f := newFixture(t)
+	f.plant(1, "growing", "41.25")
+	f.plant(2, "dormant", "12.00")
+
+	kind := generated.VaultFindRequestKind(KindTask)
+	words := "budget"
+	r := req(withType("plant"), withFilter(leaf("condition", "=", "growing")))
+	r.Kind = &kind
+	r.Words = &words
+
+	resp := mustRefuse(t, f.deps(), r)
+
+	if len(resp.Problems) == 0 {
+		t.Fatalf("a refusal carries no problem: %+v", resp)
+	}
+	reason := resp.Problems[0].Reason
+	if !strings.Contains(reason, "filter") {
+		t.Errorf("the refusal does not name filter, the argument it cannot honour: %q", reason)
+	}
+	if !strings.Contains(reason, "words") {
+		t.Errorf("the refusal does not name words, the argument it cannot honour: %q", reason)
+	}
+	if resp.Problems[0].Fix == nil || *resp.Problems[0].Fix == "" {
+		t.Errorf("the refusal names no remedy")
+	}
+}
+
+// TestFind_TaskKindHonoursTypeAlone is the companion to the refusal test: a
+// `kind=task` request scoped only by `type` (which reaches the checkbox
+// stream through the same Selector every other kind uses) is NOT refused.
+func TestFind_TaskKindHonoursTypeAlone(t *testing.T) {
+	f := newFixture(t)
+	f.plant(1, "growing", "41.25")
+
+	kind := generated.VaultFindRequestKind(KindTask)
+	r := req(withType("plant"))
+	r.Kind = &kind
+
+	resp := mustFind(t, f.deps(), r)
+	if len(resp.Rows) != 2 {
+		t.Fatalf("rows = %d, want 2 — a type-scoped task query must still run", len(resp.Rows))
+	}
+}
+
+// TestFind_TaskKindReportsStalenessAgainstTheTextIndex is code-review-A F11.
+//
+// Before the fix, the task path hard-coded `Index.Agreeing: len(rows)` and
+// never called `d.Text.SourceHash`, despite `TaskHit` carrying a
+// `SourceHash` exactly the way `Candidate` does. FR-020c's freshness
+// comparison is per RETURNED record and is not scoped to the record path
+// (FR-020c1 scopes it to what a query returned, not to which kind returned
+// it) — so a stale task row rendered as agreeing, with no `stale` flag and
+// no problem entry: reported fresh while genuinely stale.
+//
+// This test makes the index GENUINELY disagree with disk — the text index's
+// stored hash for the note is deliberately wrong — and asserts the response
+// still claims agreement only if the defect is present.
+func TestFind_TaskKindReportsStalenessAgainstTheTextIndex(t *testing.T) {
+	f := newFixture(t)
+	f.plant(1, "growing", "41.25")
+
+	// The properties index (and the note on disk) hold whatever f.write
+	// computed as the real source hash. The text index is made to disagree —
+	// simulating a note that changed since the text index last saw it.
+	f.text.hits["garden/plant-0001.md"] = TextHit{
+		Path: "garden/plant-0001.md", SourceHash: "deliberately-stale-hash", Score: 1,
+	}
+
+	kind := generated.VaultFindRequestKind(KindTask)
+	resp := mustFind(t, f.deps(), generated.VaultFindRequest{Kind: &kind})
+
+	if len(resp.Rows) != 2 {
+		t.Fatalf("rows = %d, want 2 — both checkboxes of the one note", len(resp.Rows))
+	}
+	for _, row := range resp.Rows {
+		if row.Stale == nil || !*row.Stale {
+			t.Errorf("row for %s is not flagged stale despite the two indexes disagreeing: %+v",
+				row.Path, row)
+		}
+	}
+	if resp.Index == nil || resp.Index.Agreeing != 0 {
+		t.Errorf("index.agreeing = %v, want 0 — the properties index and the text index "+
+			"disagree about every row returned here", resp.Index)
+	}
+	if resp.Complete {
+		t.Errorf("a response whose rows are all stale reported complete=true: %q", deref(resp.CompleteReason))
+	}
+	found := false
+	for _, p := range resp.Problems {
+		if p.Code == generated.StaleRecord && contains(p.Records, "garden/plant-0001.md") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("no stale_record problem names the note: %+v", resp.Problems)
+	}
+}
+
 // TestFind_LimitIsClampedAndTheClampIsReported is FR-063.
 func TestFind_LimitIsClampedAndTheClampIsReported(t *testing.T) {
 	f := newFixture(t)
