@@ -456,9 +456,13 @@ func (r *ToolRegistry) ExecuteWithContext(
 			"args": args,
 		})
 
-	// Capture auditLogger under lock to avoid a data race with SetAuditLogger.
+	// Capture the registry's injected dependencies once, under a single read
+	// lock, so this execution sees a consistent snapshot and neither field
+	// races with its setter (SetAuditLogger / SetMediaStore, which both take
+	// the write lock). Deliberately one RLock for both, not one each.
 	r.mu.RLock()
 	auditLog := r.auditLogger
+	mediaStore := r.mediaStore
 	r.mu.RUnlock()
 
 	tool, ok := r.Get(name)
@@ -528,7 +532,9 @@ func (r *ToolRegistry) ExecuteWithContext(
 		}
 	}
 
-	result = normalizeToolResult(ctx, result, name, r.mediaStore, channel, chatID)
+	// mediaStore is the snapshot taken at entry, not a fresh r.mediaStore
+	// read — see the capture block above.
+	result = normalizeToolResult(ctx, result, name, mediaStore, channel, chatID)
 
 	duration := time.Since(start)
 
