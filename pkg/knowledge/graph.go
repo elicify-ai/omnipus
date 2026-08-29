@@ -119,13 +119,40 @@ func BuildLinkGraph(fsys LinkFS, root CollectionRoot) (*LinkGraph, error) {
 			})
 			continue
 		}
-		scan, scanErr := ScanNote(f)
-		_ = f.Close()
-		if scanErr != nil {
+		// Stat the file we actually opened, not a separately-lstat'ed path:
+		// what matters is the size disagreement against THIS read, and an fd
+		// stat cannot be raced by something else replacing the entry between
+		// two syscalls the way two path-based calls could be.
+		fi, statErr := f.Stat()
+		if statErr != nil {
+			_ = f.Close()
 			g.skipped = append(g.skipped, SkippedEntry{
 				RelPath: rel,
 				Reason:  SkipUnreadable,
-				Detail:  scanErr.Error(),
+				Detail:  statErr.Error(),
+			})
+			continue
+		}
+		scan, scanErr := ScanNote(f)
+		_ = f.Close()
+		// FR-111, asked of the graph's own read: a cloud-dematerialised file
+		// (OneDrive/iCloud/rclone) stats with its real size and reads as a
+		// clean, errorless EOF. ScanNote sees that as a note with no links —
+		// scanErr == nil, zero bytes read — and without this check it joins
+		// g.notes as an ordinary, link-free note instead of g.skipped. That is
+		// not a cosmetic miss: BuildLinkGraph is the sole authority Rename
+		// trusts for "what points at this note". A note silently scanned as
+		// empty here means every real citation TO or FROM it goes undetected,
+		// and a rename that should rewrite those citations reports
+		// links_rewritten=0 and succeeds while leaving them dangling.
+		// ClassifyContentFailure is the one classifier for this (lifecycle.go);
+		// duplicating its size-disagreement test here would let the two
+		// definitions of "evicted" drift apart.
+		if cErr := ClassifyContentFailure(resolved, fi.Size(), int(scan.Stats.BytesRead), scanErr); cErr != nil {
+			g.skipped = append(g.skipped, SkippedEntry{
+				RelPath: rel,
+				Reason:  SkipUnreadable,
+				Detail:  cErr.Error(),
 			})
 			continue
 		}

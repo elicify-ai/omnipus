@@ -11,6 +11,7 @@ package knowledge
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -294,5 +295,71 @@ func TestGraph_SkippedEntriesSurviveIntoTheGraph(t *testing.T) {
 	}
 	if len(g.Notes()) != 1 || g.Notes()[0] != "Real.md" {
 		t.Errorf("notes = %v, want [Real.md]", g.Notes())
+	}
+}
+
+// TestGraph_EvictedNoteIsSkippedNotSilentlyEmpty — FR-111 asked of the
+// graph's own read path, not just the write path.
+//
+// A cloud-dematerialised file (OneDrive/iCloud/rclone) stats with a real size
+// and reads as a clean, errorless EOF. Before this fix, BuildLinkGraph took
+// that as "a note with no links" and added it to Notes() without ever
+// touching Skipped() — the exact silent-omission NB-9 forbids. This asserts
+// the corrected shape: the note is ABSENT from Notes() and PRESENT in
+// Skipped() with a reason, using the same a4DatalessFS eviction fake
+// lifecycle_test.go already built for FR-111's write-path guard.
+func TestGraph_EvictedNoteIsSkippedNotSilentlyEmpty(t *testing.T) {
+	root := t.TempDir()
+	realPath := b3WriteNote(t, root, "Evicted.md", "# Evicted\n\nReal content that a cloud provider later dematerialised.\n")
+	b3WriteNote(t, root, "Real.md", "[[Evicted]]\n")
+
+	fi, err := os.Stat(realPath)
+	if err != nil {
+		t.Fatalf("stat fixture: %v", err)
+	}
+
+	dfs := a4NewDatalessFS()
+	cr := b3Root(t, dfs, root)
+	// Key the fake on the RESOLVED path BuildLinkGraph will actually open —
+	// the same path ResolveContained produces, which can differ from the
+	// literal join above once symlinks (e.g. macOS's /tmp -> /private/tmp)
+	// are evaluated.
+	resolvedEvicted, err := cr.ResolveContained(dfs, "Evicted.md")
+	if err != nil {
+		t.Fatalf("ResolveContained(Evicted.md): %v", err)
+	}
+	dfs.dataless[resolvedEvicted] = fi.Size()
+	g, err := BuildLinkGraph(dfs, cr)
+	if err != nil {
+		t.Fatalf("BuildLinkGraph: %v", err)
+	}
+
+	for _, n := range g.Notes() {
+		if n == "Evicted.md" {
+			t.Fatalf("Evicted.md must not appear in Notes() — it was never actually read: %v", g.Notes())
+		}
+	}
+
+	skipped := g.Skipped()
+	if len(skipped) != 1 || skipped[0].RelPath != "Evicted.md" {
+		t.Fatalf("Evicted.md did not reach Skipped(): %+v", skipped)
+	}
+	if skipped[0].Reason != SkipUnreadable {
+		t.Errorf("Skipped()[0].Reason = %q, want %q", skipped[0].Reason, SkipUnreadable)
+	}
+	if !strings.Contains(skipped[0].Detail, "evicted") {
+		t.Errorf("Skipped()[0].Detail = %q, want it to name eviction so an operator can act on it", skipped[0].Detail)
+	}
+
+	// The file it points at existing is not in doubt — Files() lists the
+	// walk's own view, independent of whether the content was readable.
+	foundInFiles := false
+	for _, f := range g.Files() {
+		if f == "Evicted.md" {
+			foundInFiles = true
+		}
+	}
+	if !foundInFiles {
+		t.Errorf("Evicted.md must still appear in Files() — the walk saw the directory entry fine")
 	}
 }

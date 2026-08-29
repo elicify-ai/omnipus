@@ -1018,6 +1018,18 @@ func renameEngine(ctx context.Context, deps AuthoringDeps, args map[string]any, 
 		out["ambiguity"] = fmt.Sprintf(
 			"the name %q is now shared with another note in this collection", path.Base(res.To))
 	}
+	// FR-112, same convention knowledge_graph uses for the same fact: a note
+	// this collection could not read might have held a citation this rename
+	// could never see, so files_rewritten/links_rewritten must not be read as
+	// proof the rename was complete when Skipped is non-empty.
+	if len(res.Skipped) > 0 {
+		out["incomplete"] = true
+		skipped := make([]string, 0, len(res.Skipped))
+		for _, s := range res.Skipped {
+			skipped = append(skipped, fmt.Sprintf("%s (%s)", s.RelPath, s.Reason))
+		}
+		out["skipped"] = skipped
+	}
 	return jsonResult(out)
 }
 

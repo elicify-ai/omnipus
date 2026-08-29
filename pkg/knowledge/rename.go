@@ -153,6 +153,19 @@ type RenamePlan struct {
 	Ambiguity *AmbiguityReport
 	// LinksRewritten is the total number of links the plan changes.
 	LinksRewritten int
+	// Skipped carries every entry BuildLinkGraph could not read or address
+	// while discovering this plan (FR-112, mirroring GraphTool's own
+	// Incomplete/Skipped pair). It is the load-bearing reason Incomplete
+	// exists: a note this collection could not read might hold a citation
+	// TO or FROM the subject that this plan can never see and therefore can
+	// never rewrite. Reporting it here is what keeps a rename over a
+	// partly-unreadable collection from reading as complete when it is not.
+	Skipped []SkippedEntry
+	// Incomplete is true when Skipped is non-empty. A caller MUST NOT treat
+	// a nil error as proof every citation was found and rewritten when this
+	// is true — the honest reading is "rewrote everything this plan could
+	// see", not "rewrote everything".
+	Incomplete bool
 }
 
 // RenameAuditEvent is one auditable knowledge-base mutation or refusal
@@ -218,6 +231,11 @@ type RenameResult struct {
 	Ambiguity *AmbiguityReport
 	// Recovery is the full per-step account, nil for a no-op.
 	Recovery *RecoverResult
+	// Skipped and Incomplete carry RenamePlan's own fields of the same name
+	// through to the outcome — see RenamePlan.Incomplete. A nil error here
+	// is not, by itself, proof the rename saw every citation.
+	Skipped    []SkippedEntry
+	Incomplete bool
 }
 
 // Renamer renames notes inside one collection.
@@ -344,6 +362,8 @@ func (r *Renamer) Rename(req RenameRequest) (*RenameResult, error) {
 		LinksRewritten: plan.LinksRewritten,
 		Ambiguity:      plan.Ambiguity,
 		Recovery:       rec,
+		Skipped:        plan.Skipped,
+		Incomplete:     plan.Incomplete,
 	}
 	if rec != nil {
 		res.Touched = rec.Touched
@@ -542,6 +562,15 @@ func (r *Renamer) Plan(req RenameRequest) (*RenamePlan, error) {
 	qualify := ambiguity != nil
 
 	plan := &RenamePlan{CaseOnly: caseOnly, Ambiguity: ambiguity}
+	// FR-112, applied to a write rather than a read: a note this graph could
+	// not scan might hold the very citation this rename needs to rewrite (or
+	// might itself be cited by the subject), and there is no way to tell from
+	// here. Reporting it is what stands between "found nothing to rewrite in
+	// it" and "could not tell whether there was anything to rewrite in it" —
+	// the two read identically in LinksRewritten and must not read identically
+	// in the plan.
+	plan.Skipped = graph.Skipped()
+	plan.Incomplete = len(plan.Skipped) > 0
 
 	j := &Journal{
 		Version:   journalVersion,

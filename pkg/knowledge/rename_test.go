@@ -740,3 +740,47 @@ func TestRename_CompletesAnInterruptedRenameBeforeStartingANewOne(t *testing.T) 
 	require.NoError(t, err)
 	assert.Empty(t, left, "no journal may be left behind once both operations are complete")
 }
+
+// TestRename_EvictedCitingNoteReportsIncompleteNotSilentSuccess covers the
+// downstream half of the FR-111/FR-112 fix in graph.go: when the note that
+// CITES the rename subject is itself unreadable (a cloud-evicted file), the
+// citation is invisible to the plan — there are no bytes to find [[Old]] in —
+// so it can never be rewritten. Before this fix that state was reported
+// identically to "nothing points at Old.md": err == nil, LinksRewritten == 0,
+// and the citing note stayed dangling forever with nothing anywhere saying
+// so. This asserts the plan/result now carry Incomplete/Skipped, so a caller
+// cannot mistake "found nothing" for "could not tell".
+func TestRename_EvictedCitingNoteReportsIncompleteNotSilentSuccess(t *testing.T) {
+	files := map[string]string{
+		"Old.md":   "# Old\n\nReal content a cloud provider later evicted.\n",
+		"Cites.md": "See [[Old]] for the details.\n",
+	}
+	dir, root := a2Collection(t, files)
+
+	citesReal, err := root.ResolveContained(OSLinkFS(), "Cites.md")
+	require.NoError(t, err)
+	fi, err := os.Stat(filepath.Join(dir, "Cites.md"))
+	require.NoError(t, err)
+
+	dfs := a4NewDatalessFS()
+	dfs.dataless[citesReal] = fi.Size()
+
+	r := &Renamer{FS: dfs, Root: root, Store: NewJournalStore(filepath.Join(t.TempDir(), "journal"))}
+
+	res, err := r.Rename(RenameRequest{From: "Old.md", To: "New.md"})
+	require.NoError(t, err, "the mechanics that COULD run must still complete — refusing outright would be its own overreaction")
+	require.NotNil(t, res)
+
+	assert.Equal(t, 0, res.LinksRewritten, "the citation in Cites.md is invisible to a plan that could not read it")
+	assert.True(t, res.Incomplete, "Incomplete must be true: a note this plan could not read might have cited the subject")
+	require.Len(t, res.Skipped, 1)
+	assert.Equal(t, "Cites.md", res.Skipped[0].RelPath)
+	assert.Equal(t, SkipUnreadable, res.Skipped[0].Reason)
+
+	// The file genuinely could not be rewritten — its real bytes on disk are
+	// untouched by the fake, so this proves nothing was silently corrupted,
+	// only that nothing was (or could safely be) fixed either.
+	assert.Equal(t, "See [[Old]] for the details.\n", a2Read(t, dir, "Cites.md"),
+		"an unreadable note is left exactly as it was, not guessed at")
+	assert.FileExists(t, filepath.Join(dir, "New.md"))
+}
