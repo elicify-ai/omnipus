@@ -329,6 +329,7 @@ type RecordProblem = {
     | "hop_traversal_bound_exceeded"
     | "page_size_clamped"
     | "scope_truncated"
+    | "text_search_truncated"
     | "aggregate_refused"
     | "index_unavailable"
     | "evaluation_bound_exceeded"
@@ -4044,6 +4045,7 @@ export const RecordProblem: z.ZodType<RecordProblem> = z.object({
     "hop_traversal_bound_exceeded",
     "page_size_clamped",
     "scope_truncated",
+    "text_search_truncated",
     "aggregate_refused",
     "index_unavailable",
     "evaluation_bound_exceeded",

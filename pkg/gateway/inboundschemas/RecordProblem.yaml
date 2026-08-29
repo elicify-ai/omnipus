@@ -42,6 +42,7 @@ properties:
       - hop_traversal_bound_exceeded
       - page_size_clamped
       - scope_truncated
+      - text_search_truncated
       - aggregate_refused
       - index_unavailable
       - evaluation_bound_exceeded
@@ -110,6 +111,24 @@ properties:
       "scope_truncated" — workspace scope resolution was itself incomplete
       (ADR-067 Scope.Truncated), so a whole mounted folder may be missing. The
       answer MUST NOT claim success (FR-062a).
+      "text_search_truncated" — code review A, F6. `words` is answered by the
+      text index FIRST and intersected with the typed filter SECOND (the typed
+      half cannot run until it knows which paths the text half kept), so the
+      text index is asked for more candidates than the page size — a fanout —
+      to leave room for the typed filter to narrow afterward. When the corpus
+      holds more matching documents than the fanout, the text half is cut off
+      before the typed filter ever sees the rest, and a record that would have
+      matched everything, ranked outside the fanout, is silently absent —
+      indistinguishable from "nothing in the vault matches". Reported, with
+      Complete: false, whenever the fanout was exhausted; the zero-hit path
+      (NearestTerms, "did you mean") is refused to a truncated query for the
+      same reason — it would suggest vocabulary as though the search had
+      actually seen the whole corpus. The remedy is real: a typed `filter`
+      (unlike `words`) is evaluated by the properties index over the FULL
+      narrowed candidate population (bounded by candidate_cap_exceeded /
+      evaluation_bound_exceeded, not by this fanout), so replacing or
+      narrowing `words` with an equivalent typed condition on a declared
+      property is not answered by this same bound.
       "aggregate_refused" — no aggregate is returned over a refused candidate
       set; it is never partial (FR-066).
       "index_unavailable" — the index predates record support and cannot hold
