@@ -564,7 +564,15 @@ func ApplyStep(fsys LinkFS, root CollectionRoot, relPath string, st JournalStep)
 		res.Detail = "path is a symbolic link"
 		return res
 	}
-	realPath, err := root.ResolveContained(fsys, relPath)
+	// The lexical lstat above answers only for the LEAF. A symlinked PARENT
+	// directory passes it — "Inbox/Note.md" with Inbox a link to Archive/ is
+	// not itself a link — and ResolveContained would then hand back
+	// Archive/Note.md, which lstats as a perfectly ordinary regular file. So
+	// the whole-chain question is asked here, by the one implementation of it,
+	// and the leaf check is kept ahead of it only because "path is a symbolic
+	// link" is the more specific thing to tell an operator than "outside the
+	// collection".
+	realPath, err := root.ResolveContainedNoSymlink(fsys, relPath)
 	if err != nil {
 		res.Outcome = StepConflict
 		res.Detail = err.Error()
@@ -577,12 +585,14 @@ func ApplyStep(fsys LinkFS, root CollectionRoot, relPath string, st JournalStep)
 		return res
 	}
 	if !info.Mode().IsRegular() {
+		// Live, and only live because realPath is now the path the step named
+		// rather than whatever it dereferenced to.
 		res.Outcome = StepConflict
 		res.Detail = "path is not a regular file"
 		return res
 	}
 
-	src, err := readWholeFile(fsys, realPath)
+	src, err := ReadNoteContent(fsys, realPath)
 	if err != nil {
 		res.Outcome = StepConflict
 		res.Detail = err.Error()
@@ -622,19 +632,20 @@ func ApplyStep(fsys LinkFS, root CollectionRoot, relPath string, st JournalStep)
 	return res
 }
 
-// readWholeFile reads a file through the LinkFS surface.
-func readWholeFile(fsys LinkFS, realPath string) ([]byte, error) {
-	f, err := fsys.Open(realPath)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = f.Close() }()
-	var buf bytes.Buffer
-	if _, err := buf.ReadFrom(f); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
-}
+// NOTE: there used to be a readWholeFile here — a bare Open plus ReadFrom,
+// used by ApplyStep above and by rename.go's buildStep. It is DELETED rather
+// than kept beside ReadNoteContent, for the same reason author.go's
+// authorReadAll was: two readers in one package drift, and the direction they
+// drift in is "one of them starts calling a dematerialised file empty".
+//
+// Deleting it was not cosmetic. A journal step is a compare-and-swap against
+// BeforeHash, so an evicted note read as zero bytes hashed as the empty file
+// and was refused as a StepConflict — safe, but reported as "contents match
+// neither the recorded before-state nor the after-state", which sends an
+// operator looking for a concurrent edit that never happened. At PLAN time it
+// was worse-worded still: applyEdits blamed the plan ("edit 0 spans [4,11) of
+// a 0-byte file") for a file the filesystem had not materialised.
+// ReadNoteContent classifies it as FR-111 eviction and says so.
 
 // MoveState is whether the journal's file move has happened yet.
 type MoveState string

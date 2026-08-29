@@ -74,6 +74,13 @@ var (
 	// not be made link-safe, so it is refused rather than half-done.
 	ErrRenameSourceNotAddressable = errors.New("knowledge: rename source is not an addressable note")
 
+	// ErrRenameDestinationNotAddressable means To names a place the graph
+	// could never see: a path that reaches its parent only through a symbolic
+	// link. Declared separately from the source sentinel because the two sides
+	// are protected by different things and only one of them was protected at
+	// all — see the FR-044 block in Plan.
+	ErrRenameDestinationNotAddressable = errors.New("knowledge: rename destination is not an addressable note path")
+
 	// ErrRenameDestinationExists means To already names a different file.
 	ErrRenameDestinationExists = errors.New("knowledge: rename destination already exists")
 
@@ -445,12 +452,47 @@ func (r *Renamer) Plan(req RenameRequest) (*RenamePlan, error) {
 	}
 
 	// FR-043 on both ends, on the real path, before anything else is decided.
-	fromReal, err := r.Root.ResolveContained(fsys, from)
-	if err != nil {
-		return nil, fmt.Errorf("%w: from: %v", ErrRenameInvalidPath, err)
+	if _, fromErr := r.Root.ResolveContained(fsys, from); fromErr != nil {
+		return nil, fmt.Errorf("%w: from: %v", ErrRenameInvalidPath, fromErr)
 	}
 	if _, toErr := r.Root.ResolveContained(fsys, to); toErr != nil {
 		return nil, fmt.Errorf("%w: to: %v", ErrRenameInvalidPath, toErr)
+	}
+
+	// FR-044 on both ends, asked as a SEPARATE question from FR-043 above and
+	// answered by the one implementation of it (contain.go).
+	//
+	// It cannot be folded into the containment call, and it cannot be deferred
+	// to the lstat below. ResolveContained hands back the path with every
+	// symlink already dereferenced, so an lstat of THAT can never observe that
+	// a link was traversed: a link with a real note at the far end reports
+	// "regular file" every time. Comparing the resolved path against the
+	// lexical one is the only thing that detects it, and that comparison lives
+	// in ResolveContainedNoSymlink.
+	//
+	// BOTH ENDS, because the two sides were protected by different amounts of
+	// nothing:
+	//
+	//   - Source. The lstat/IsRegular check below used to carry a comment
+	//     claiming it refused symlinks. It could not, for the reason above.
+	//     A leaf symlink was in fact refused — but by the walk-membership
+	//     backstop further down (a symlink is never in graph.Files()), which
+	//     is an accident of ordering, not a guard. The test written for it
+	//     passed on that backstop.
+	//
+	//   - Destination. There is no membership backstop on this side: a
+	//     destination does not exist yet, so nothing can look for it in the
+	//     walk. `move new_folder="Inbox/Sub"` with Inbox a symlink to Archive/
+	//     was ACCEPTED, moved the note to Archive/Sub/, audited it as
+	//     Inbox/Sub/ — and vault_read then refused to open the path the agent
+	//     had just been told the note now had. That is the c06bb051 class of
+	//     defect, on a path that also DELETES the note's old name.
+	fromReal, err := r.Root.ResolveContainedNoSymlink(fsys, from)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %q: %w", ErrRenameSourceNotAddressable, from, err)
+	}
+	if _, toErr := r.Root.ResolveContainedNoSymlink(fsys, to); toErr != nil {
+		return nil, fmt.Errorf("%w: %q: %w", ErrRenameDestinationNotAddressable, to, toErr)
 	}
 
 	if from == to {
@@ -466,8 +508,16 @@ func (r *Renamer) Plan(req RenameRequest) (*RenamePlan, error) {
 		return nil, fmt.Errorf("%w: %q: %v", ErrRenameSourceMissing, from, err)
 	}
 	if !fromInfo.Mode().IsRegular() {
-		// A symlink or an irregular file. FR-044 says a symlink is skipped and
-		// reported, never followed; renaming one would follow it.
+		// A directory, device, fifo or socket. NOT a symlink — FR-044 is
+		// enforced above, by ResolveContainedNoSymlink, and it has to be:
+		// this comment used to say "a symlink or an irregular file", which was
+		// false for the symlink half. fromReal came from ResolveContained,
+		// with every link already followed, so this lstat was of the LINK'S
+		// TARGET and reported a regular file for every symlink that pointed at
+		// one. The check could only ever fire for a DANGLING link.
+		//
+		// It is a live check now — fromReal is the path the caller named —
+		// which is why it is kept rather than deleted.
 		return nil, fmt.Errorf("%w: %q is %s", ErrRenameSourceNotAddressable, from, fromInfo.Mode().String())
 	}
 
@@ -609,11 +659,21 @@ func (r *Renamer) checkDestination(fsys LinkFS, to string, caseOnly bool, fromIn
 // The verification happens HERE, at plan time, so a plan that could not be
 // applied is never written to disk in the first place.
 func (r *Renamer) buildStep(fsys LinkFS, note string, subject bool, edits []LinkEdit) (*JournalStep, error) {
-	abs, err := r.Root.ResolveContained(fsys, note)
+	// The same two guards the rest of the write path uses, on a path that
+	// happens to arrive from the walk today. Relying on the CALLER's guarantee
+	// is what left every other site in this class open: the walk never yields
+	// a symlinked path, so ResolveContained looked adequate here right up
+	// until someone plans a step for a path that came from somewhere else.
+	abs, err := r.Root.ResolveContainedNoSymlink(fsys, note)
 	if err != nil {
 		return nil, fmt.Errorf("knowledge: rewrite %q: %w", note, err)
 	}
-	src, err := readWholeFile(fsys, abs)
+	// ReadNoteContent, not a bare Open plus read: a dematerialised note (iCloud
+	// Drive, OneDrive Files-On-Demand, an rclone VFS) stats at its real size
+	// and reads back nothing on a clean EOF, and a plan computed from those
+	// zero bytes reports "edit does not match a 0-byte file" — blaming the
+	// plan for the filesystem. FR-111's classification names the real cause.
+	src, err := ReadNoteContent(fsys, abs)
 	if err != nil {
 		return nil, fmt.Errorf("knowledge: read %q: %w", note, err)
 	}
