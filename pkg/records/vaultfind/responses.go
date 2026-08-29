@@ -463,12 +463,19 @@ func findTasks(ctx context.Context, d Deps, q *query, echo string) (generated.Va
 		asked := q.limitAsked
 		resp.LimitRequested = &asked
 	}
-	if consumed := offset + len(rows); consumed < evaluated {
+	trimToBudget(&resp)
+	finishVerdict(&resp, q)
+
+	// See assemble.go's identical fix (F8): the cursor has to be derived from
+	// resp.Counts.Shown, trimToBudget's own count of what it left in
+	// resp.Rows, computed AFTER trimming — not from len(rows), the pre-trim
+	// page. A cursor built from the pre-trim count starts the next page past
+	// every row the byte budget dropped, and those rows are never returned by
+	// any page.
+	if consumed := offset + resp.Counts.Shown; consumed < evaluated {
 		c := encodeCursor(consumed, d.Epoch)
 		resp.NextCursor = &c
 	}
-	trimToBudget(&resp)
-	finishVerdict(&resp, q)
 	resp.Next = nextActions(q, &resp)
 	return resp, nil
 }

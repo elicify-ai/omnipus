@@ -86,14 +86,6 @@ type query struct {
 	// link text, which is worse but not silent (see project.go's groupKeys).
 	resolve records.RelationResolver
 
-	// inverses is every group_by name that resolved to a DERIVED inverse
-	// (D5) rather than a property this type declares — "deals" asked of a
-	// "company" query, resolved to deal.company's inverse edge. project.go's
-	// grouping code uses it to compute the group's values from the
-	// properties index instead of decoding a stored property that does not
-	// exist (FR-032: an inverse is NEVER stored).
-	inverses map[string]records.InverseEdge
-
 	// touched is every property the query names, in first-mention order. It is
 	// what `explain` reports and what the schema check ranges over.
 	touched []string
@@ -163,7 +155,7 @@ func parse(req generated.VaultFindRequest, set *records.SchemaSet) (*query, *Ref
 	if r := q.applyFilter(req); r != nil {
 		return nil, r
 	}
-	if r := q.applyColumns(req, set); r != nil {
+	if r := q.applyColumns(req); r != nil {
 		return nil, r
 	}
 	return q, nil
@@ -278,48 +270,22 @@ func (q *query) applyFilter(req generated.VaultFindRequest) *RefusalError {
 	return nil
 }
 
-// resolveInverseGroupBy is D5's inverse lookup for group_by. original is the
-// refusal lookup("group_by", name) already produced — the ordinary "unknown
-// property" refusal — and it is returned UNCHANGED when name names no
-// declared inverse either, so an operator who simply mistyped a property
-// name sees the SAME message they always saw (FR-024): this function only
-// ever REPLACES that refusal with a more specific one, never invents a new
-// silent success.
-func resolveInverseGroupBy(q *query, set *records.SchemaSet, name string, original *RefusalError) (records.InverseEdge, *RefusalError) {
-	if q.schema == nil || set == nil {
-		return records.InverseEdge{}, original
-	}
-	edges := set.FindInverses(q.schema.Type, name)
-	switch len(edges) {
-	case 0:
-		return records.InverseEdge{}, original
-	case 1:
-		return edges[0], nil
-	default:
-		sources := make([]string, 0, len(edges))
-		for _, e := range edges {
-			sources = append(sources, e.SourceType)
-		}
-		sort.Strings(sources)
-		p := problem(generated.UnsupportedParameter,
-			fmt.Sprintf("group_by %q is ambiguous on record type %q: %s all declare an inverse named %q here",
-				name, q.schema.Type, strings.Join(sources, ", "), name),
-			"there is nothing to disambiguate an inverse-name collision from here; "+
-				"rename one of the colliding schemas' `inverse:` declarations with vault_configure")
-		p.Property = str(name)
-		return records.InverseEdge{}, refuse(p, nil)
-	}
-}
-
 // applyColumns validates select / sort / group_by / join / aggregate against the
 // schema. Each is FR-024's posture: named, listed, never silently dropped.
 //
-// set is the WHOLE schema set, not just q.schema — group_by needs it for D5's
-// inverse: an inverse is declared on the RELATION's side (deal.company) and
-// exposed on the TARGET type (company) without company's own schema ever
-// mentioning it, so recognising "deals" as valid on a company query means
-// searching every OTHER declared type for the relation that names it.
-func (q *query) applyColumns(req generated.VaultFindRequest, set *records.SchemaSet) *RefusalError {
+// group_by does NOT resolve a derived inverse (D5's "company.deals", declared
+// only as deal.company's `inverse:`): an inverse is many-valued and computed
+// from the properties index, never a stored column, and there is no execution
+// path here that materialises one — groupKeys (project.go) reads a survivor's
+// decoded VALUES, and renderProperties only ever decodes properties this
+// type's OWN schema declares. An earlier attempt to accept an inverse name
+// wired the refusal-bypass in applyColumns without ever wiring the value
+// computation project.go needs, which meant `group_by=deals` stopped
+// refusing and instead returned exactly one group — "absent: true" —
+// covering every row, presented as a complete, confident answer. group_by is
+// refused on an inverse name (FR-024's ordinary "unknown property" message)
+// until inverse computation is implemented end to end.
+func (q *query) applyColumns(req generated.VaultFindRequest) *RefusalError {
 	lookup := func(kind, name string) (*records.Property, *RefusalError) {
 		if q.schema == nil {
 			return nil, refuse(problem(generated.UnsupportedParameter,
@@ -357,22 +323,7 @@ func (q *query) applyColumns(req generated.VaultFindRequest, set *records.Schema
 		}
 		for _, name := range *req.GroupBy {
 			if _, r := lookup("group_by", name); r != nil {
-				// Not a property THIS type declares — try an inverse (D5):
-				// the reverse edge of a relation some OTHER type declared
-				// onto this one, exposed here without this schema ever
-				// mentioning it. This is deliberately checked ONLY for
-				// group_by, not select/sort/join/aggregate: an inverse is
-				// many-valued and derived, never a scalar column, and the
-				// only execution path that materialises one lives in
-				// project.go's grouping code.
-				edge, r2 := resolveInverseGroupBy(q, set, name, r)
-				if r2 != nil {
-					return r2
-				}
-				if q.inverses == nil {
-					q.inverses = map[string]records.InverseEdge{}
-				}
-				q.inverses[name] = edge
+				return r
 			}
 			q.groupBy = append(q.groupBy, name)
 			q.touched = append(q.touched, name)
@@ -383,6 +334,45 @@ func (q *query) applyColumns(req generated.VaultFindRequest, set *records.Schema
 			prop, r := lookup("sort", s.Property)
 			if r != nil {
 				return r
+			}
+			// F14 — ordering IS comparison (spec FR-021's revision-6 list),
+			// governed by the SAME rules as every other comparison: R-1 and
+			// R-13 like R-4/R-5/R-7. records.Compare's zero Comparator has no
+			// RelationResolver, so a relation/person operand always failed to
+			// resolve and fell through to CompareRelationUnresolved — but
+			// that was never the real defect. The comparator's own
+			// operatorDefinedForType table (compare_oracle.go) declares
+			// OpLess/OpGreater FALSE for TypeRelation and TypePerson
+			// UNCONDITIONALLY: even a query that wired a real resolver would
+			// still have no ordering defined for a relation, because R-1
+			// gives it no ordering family at all — `join` already type-checks
+			// its property for exactly this reason (below), and sort must
+			// too, or it silently ignores the constraint it echoes back as
+			// executed.
+			if prop.Type == records.TypeRelation || prop.Type == records.TypePerson {
+				p := problem(generated.UnsupportedOperator,
+					fmt.Sprintf("sort names %q, which is a %s property; ordering is not defined for a relation "+
+						"(R-1 defines no ordering operator for it, resolved or not)",
+						s.Property, prop.Type),
+					"join "+s.Property+" and sort a column of the joined record instead, or sort a property ordering is defined for")
+				p.Property = str(s.Property)
+				return refuse(p, nil)
+			}
+			// F15 — R-13's arity rule: ordering is not defined against a
+			// `many` property, in a filter or in a sort. The comparator
+			// refuses `arr < 5` against a many `arr`; sortSurvivors reaching
+			// around that refusal by comparing only element [0]
+			// (assemble.go's firstValue) is the arity rule applied to filter
+			// and bypassed for sort, which is the "quietly half-applied"
+			// failure FR-021's revision 6 names sorting for.
+			if prop.Many {
+				p := problem(generated.OrderingOnManyProperty,
+					fmt.Sprintf("sort names %q, a many-valued %s property; a list has no single order (R-13) — "+
+						"comparing only its first stored value would be a silent, arbitrary answer",
+						s.Property, prop.Type),
+					"group_by "+s.Property+" to see the distribution, or filter on its contents instead of sorting by them")
+				p.Property = str(s.Property)
+				return refuse(p, nil)
 			}
 			desc := s.Direction != nil && string(*s.Direction) == "desc"
 			q.sort = append(q.sort, sortKey{property: s.Property, desc: desc, prop: prop})
@@ -474,10 +464,7 @@ func (q *query) capabilities() []records.PropertyIndexCapability {
 	if q.filter != nil || q.recordType != "" {
 		caps = append(caps, records.CapabilityTypedFilter)
 	}
-	if len(q.join) > 0 || q.near != "" || len(q.inverses) > 0 {
-		// Computing an inverse (D5) scans the properties index's relation
-		// child table (propindex.Store.Relations) exactly the way `join`
-		// and `near` do — it is the same capability, not a fourth one.
+	if len(q.join) > 0 || q.near != "" {
 		caps = append(caps, records.CapabilityRelationJoin)
 	}
 	if len(q.groupBy) > 0 {

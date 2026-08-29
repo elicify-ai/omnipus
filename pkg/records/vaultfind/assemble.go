@@ -303,17 +303,27 @@ func (e *evaluation) assemble(ctx context.Context, d Deps, echo string) generate
 	applied := q.limit
 	resp.LimitApplied = &applied
 
-	if consumed := offset + len(rows); consumed < evaluated {
-		c := encodeCursor(consumed, d.Epoch)
-		resp.NextCursor = &c
-	}
-
 	// THE BUDGET IS APPLIED BEFORE THE VERDICT, and the order is the point: a
 	// row dropped by the byte budget is a row the answer does not show, so the
 	// header has to count it. Trimming afterwards would leave the verdict
 	// describing a response that no longer exists.
 	trimToBudget(&resp)
 	finishVerdict(&resp, q)
+
+	// THE CURSOR MUST BE DERIVED FROM WHAT WAS ACTUALLY RETURNED (F8), which
+	// means it is computed AFTER trimToBudget, not before. Deriving it from
+	// len(rows) — the page assemble() built before the byte budget dropped
+	// rows off the end of it — encoded a NextCursor that started past every
+	// row the budget trimmed: with 200 survivors and limit=50, a page of 50
+	// trimmed to 20 by the budget still stamped `consumed = 0 + 50`, so the
+	// next page picked up at row 50 and rows 20-49 were never returned by any
+	// page at all. resp.Counts.Shown is trimToBudget's own count of what it
+	// left in resp.Rows, so it is the one number guaranteed to match what this
+	// response actually sent.
+	if consumed := offset + resp.Counts.Shown; consumed < evaluated {
+		c := encodeCursor(consumed, d.Epoch)
+		resp.NextCursor = &c
+	}
 	resp.Next = nextActions(q, &resp)
 	return resp
 }
