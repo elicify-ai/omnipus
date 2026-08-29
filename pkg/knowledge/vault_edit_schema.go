@@ -49,31 +49,57 @@ var (
 	ErrPropertyValue = errors.New("knowledge: value does not conform to the declared property")
 )
 
+// vaultEditResolveSchema resolves src's own declared record type against
+// set, when it has one. ok is false whenever there is nothing to validate
+// against — src's frontmatter does not parse, declares no `type:`, or
+// declares a type set has no schema for — and both callers below (schema
+// validation and the link operation's arity lookup) treat that identically:
+// FR-005's "ordinary notes are unconstrained".
+//
+// It is deliberately not an error return, even though a records.ParseFrontmatter
+// failure is a real parse error: the shared reason is documented once here
+// rather than twice at the two call sites.
+//
+// An unparsable frontmatter block specifically is not THIS function's
+// failure to report. Every splice this package's callers run immediately
+// after a successful resolution here (SetPropertyList, SetPropertyScalarChecked,
+// AddListValue, RemoveListValue) calls parseListSpan -> fmParse on the very
+// same src, independently and unconditionally, and refuses with
+// ErrFrontmatterUnterminated when it cannot parse. A caller of this
+// function never ends up believing an unparsable note was accepted: the very
+// next call in the same NoteEdit closure re-parses it and refuses. Two
+// parses of the same bytes for two different questions ("does a schema
+// apply" vs. "where do I splice") is the cost of keeping those two
+// questions separate rather than threading a parsed block through both.
+func vaultEditResolveSchema(set *records.SchemaSet, src []byte, property string) (schema *records.Schema, typeName string, ok bool) {
+	fm, ferr := records.ParseFrontmatter(src)
+	if ferr != nil {
+		return nil, "", false
+	}
+	rec := records.Record{Frontmatter: fm}
+	typeName = rec.TypeName()
+	if typeName == "" {
+		return nil, "", false
+	}
+	schema, ok = set.Get(typeName)
+	if !ok {
+		return nil, "", false
+	}
+	return schema, typeName, true
+}
+
 // vaultEditValidateValue validates an INCOMING write (values, isList) against
 // property's declaration in src's own record type, if src declares one that
 // resolves in set. It returns nil when there is nothing to violate — no
-// declared type, an undeclared type, or (by construction of the caller) a
-// property the schema does not mention gets its own named refusal below.
+// declared type, an undeclared type (vaultEditResolveSchema), or (by
+// construction of the caller) a property the schema does not mention gets
+// its own named refusal below.
 //
 // values holds exactly one element for a scalar write, N for a list write —
 // the SHAPE THE CALLER SENT, which is what an arity mismatch is measured
 // against (FR-006/FR-042: "the interesting fact is the shape").
 func vaultEditValidateValue(set *records.SchemaSet, src []byte, property string, values []string, isList bool) error {
-	fm, ferr := records.ParseFrontmatter(src)
-	if ferr != nil {
-		// An unparsable frontmatter block is refused by EditNote's own lower
-		// layer (fmParse -> ErrFrontmatterUnterminated) before a write ever
-		// reaches this validation in practice. Treated as "no schema
-		// applies" here rather than compounding an unrelated failure with a
-		// second, different-shaped one.
-		return nil
-	}
-	rec := records.Record{Frontmatter: fm}
-	typeName := rec.TypeName()
-	if typeName == "" {
-		return nil
-	}
-	schema, ok := set.Get(typeName)
+	schema, typeName, ok := vaultEditResolveSchema(set, src, property)
 	if !ok {
 		return nil
 	}
@@ -128,16 +154,7 @@ func vaultEditValidateValue(set *records.SchemaSet, src []byte, property string,
 // the same false — see the correction on vaultEditLinkPropertyEdit below
 // for why that collapse was itself the defect.
 func vaultEditPropertyDeclared(set *records.SchemaSet, src []byte, property string) (declared, many bool) {
-	fm, ferr := records.ParseFrontmatter(src)
-	if ferr != nil {
-		return false, false
-	}
-	rec := records.Record{Frontmatter: fm}
-	typeName := rec.TypeName()
-	if typeName == "" {
-		return false, false
-	}
-	schema, ok := set.Get(typeName)
+	schema, _, ok := vaultEditResolveSchema(set, src, property)
 	if !ok {
 		return false, false
 	}

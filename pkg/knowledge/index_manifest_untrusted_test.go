@@ -166,8 +166,8 @@ func bumpManifestVersion(t *testing.T, path string) {
 		t.Fatalf("read manifest %s: %v", path, err)
 	}
 	var m map[string]any
-	if err := json.Unmarshal(raw, &m); err != nil {
-		t.Fatalf("parse manifest %s: %v", path, err)
+	if unmarshalErr := json.Unmarshal(raw, &m); unmarshalErr != nil {
+		t.Fatalf("parse manifest %s: %v", path, unmarshalErr)
 	}
 	v, _ := m["version"].(float64)
 	m["version"] = v + 1
@@ -175,7 +175,7 @@ func bumpManifestVersion(t *testing.T, path string) {
 	if err != nil {
 		t.Fatalf("re-encode manifest %s: %v", path, err)
 	}
-	if err := os.WriteFile(path, bumped, 0o600); err != nil {
-		t.Fatalf("write manifest %s: %v", path, err)
+	if writeErr := os.WriteFile(path, bumped, 0o600); writeErr != nil {
+		t.Fatalf("write manifest %s: %v", path, writeErr)
 	}
 }
