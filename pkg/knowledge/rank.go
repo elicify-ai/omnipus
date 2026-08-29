@@ -96,6 +96,8 @@ import (
 
 	"github.com/blevesearch/bleve/v2"
 	bleveQuery "github.com/blevesearch/bleve/v2/search/query"
+
+	"github.com/elicify-ai/omnipus/pkg/records"
 )
 
 // RankSignal names one input list to the fusion. The set is closed: adding a
@@ -530,8 +532,9 @@ func foldTokens(s string) []string {
 	return strings.Split(f, " ")
 }
 
-// foldName normalises a name or query for comparison: lowercase, and every run
-// of non-alphanumeric runes collapsed to a single space, trimmed.
+// foldName normalises a name or query for comparison: full Unicode case
+// folding (records.FoldKey), and every run of non-alphanumeric runes
+// collapsed to a single space, trimmed.
 //
 // This is the one Go-side tokenizer in the ranking path (FR-116). It splits on
 // non-alphanumerics like retroTokenize rather than trimming edges like
@@ -539,11 +542,26 @@ func foldTokens(s string) []string {
 // Pricing" and "2026 Q3 Pricing" name the same thing and an operator will type
 // either. It does NOT stem and does NOT drop stopwords; the decision and its
 // cost are recorded in this file's header.
+//
+// The fold is records.FoldKey, NOT strings.ToLower — this package's rule for
+// text comparison everywhere (pkg/records/value.go's FoldKey doc, AC-8.9).
+// strings.ToLower performs SIMPLE per-rune folding, which gets two things
+// wrong in opposite directions: it collapses Turkish dotted İ onto plain i (a
+// WRONG MATCH — "Notes/İSTANBUL.md" would tier-3-match the query "istanbul",
+// promoting an unrelated Turkish note to rank 1 with the full RRF top-tier
+// bonus — AC-8.9e is a required NEGATIVE for exactly this reason, and DO NOT
+// "fix" it by making İSTANBUL match istanbul again), and it fails to fold
+// "straße"/"STRASSE", "ﬁle" (U+FB01 ligature)/"file", and other pairs full
+// Unicode folding gets right (a WRONG NON-MATCH, missing a name a user
+// legitimately typed). cases.Fold can change a string's rune count (ß → ss,
+// ﬁ → fi), which is fine here because the output only ever feeds a token-set
+// comparison, never a byte-offset back into the original string.
 func foldName(s string) string {
+	folded := records.FoldKey(strings.TrimSpace(s))
 	var b strings.Builder
-	b.Grow(len(s))
+	b.Grow(len(folded))
 	space := false
-	for _, r := range strings.ToLower(strings.TrimSpace(s)) {
+	for _, r := range folded {
 		if unicode.IsLetter(r) || unicode.IsDigit(r) {
 			if space && b.Len() > 0 {
 				b.WriteByte(' ')
