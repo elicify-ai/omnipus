@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/elicify-ai/omnipus/pkg/records"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
@@ -171,17 +172,23 @@ func (s Scope) Select(ref string) (ScopedCollection, bool) {
 		return ScopedCollection{}, false
 	}
 
-	lower := strings.ToLower(ref)
+	// records.FoldKey, not strings.ToLower — this package's rule for text
+	// comparison (pkg/records/value.go's FoldKey doc, AC-8.9). A collection
+	// name is operator-chosen text and may be non-ASCII; strings.ToLower gets
+	// Unicode wrong in both directions (a false match on the Turkish İ/i
+	// pair, a false non-match on "straße"/"STRASSE") that records.FoldKey
+	// exists to fix.
+	lower := records.FoldKey(ref)
 	// Names first, then origins, then paths. Collections are already sorted,
 	// so "the first match" is deterministic when two collections share a name
 	// (FR-046 — a query must not depend on directory-read order).
 	for _, c := range s.collections {
-		if strings.ToLower(c.Name) == lower {
+		if records.FoldKey(c.Name) == lower {
 			return c, true
 		}
 	}
 	for _, c := range s.collections {
-		if strings.ToLower(c.Origin) == lower {
+		if records.FoldKey(c.Origin) == lower {
 			return c, true
 		}
 	}

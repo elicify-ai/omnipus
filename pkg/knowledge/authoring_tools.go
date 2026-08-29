@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/records"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -1143,10 +1144,15 @@ func AppendSectionOnce(level int, heading, body string) NoteEdit {
 // Comparison ignores the markdown extension and letter case, matching how a
 // wikilink actually resolves. A stricter comparison would let "[[Notes/Foo]]"
 // and "[[Notes/Foo.md]]" both be written, producing two links to one note.
+//
+// The case fold is records.FoldKey, not strings.ToLower — a link target is a
+// note path, derived from a note NAME, which may be non-ASCII. strings.ToLower
+// would let "[[Notes/straße]]" and "[[Notes/STRASSE]]" be written as two
+// distinct links to what is, once folded correctly, one note.
 func linkAlreadyPresent(src []byte, target string) bool {
-	want := strings.ToLower(trimMarkdownExt(normalizeRel(target)))
+	want := records.FoldKey(trimMarkdownExt(normalizeRel(target)))
 	for _, l := range ExtractLinks(src) {
-		if strings.ToLower(trimMarkdownExt(normalizeRel(l.Target))) == want {
+		if records.FoldKey(trimMarkdownExt(normalizeRel(l.Target))) == want {
 			return true
 		}
 	}
@@ -1201,8 +1207,13 @@ func sectionBounds(src []byte, heading string) (start, end int, found bool) {
 		return 0, 0, false
 	}
 	headings := ExtractHeadings(src)
+	// records.FoldKey, not strings.EqualFold: a heading is note text and may
+	// be non-ASCII (this package's rule for text comparison — see
+	// normalizeHeading in graph.go, which folds the identical way for the
+	// identical reason).
+	wantFold := records.FoldKey(want)
 	for i, h := range headings {
-		if !strings.EqualFold(strings.TrimSpace(h.Text), want) {
+		if records.FoldKey(strings.TrimSpace(h.Text)) != wantFold {
 			continue
 		}
 		lineEnd := int(h.Offset)

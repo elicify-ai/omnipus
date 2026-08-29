@@ -24,6 +24,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/elicify-ai/omnipus/pkg/records"
 )
 
 // Bounds on neighbourhood queries (ADR-067 D7, FR-054). An unbounded
@@ -209,8 +211,14 @@ func findHeading(headings []Heading, anchor string) (Heading, bool) {
 	return Heading{}, false
 }
 
+// normalizeHeading folds with records.FoldKey, not strings.ToLower — this
+// package's rule for text comparison (pkg/records/value.go's FoldKey doc,
+// AC-8.9): a heading is a note's own text, written by whoever authored it,
+// and may be non-ASCII. strings.ToLower gets Unicode wrong in both
+// directions (the Turkish İ/i pair collapses onto a false match; "straße" and
+// "Straße" fail to match at all) that records.FoldKey exists to fix.
 func normalizeHeading(s string) string {
-	return strings.ToLower(strings.Join(strings.Fields(s), " "))
+	return records.FoldKey(strings.Join(strings.Fields(s), " "))
 }
 
 // Root returns the collection root the graph was built over.
