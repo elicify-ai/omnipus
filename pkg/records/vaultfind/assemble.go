@@ -303,6 +303,34 @@ func (e *evaluation) assemble(ctx context.Context, d Deps, echo string) generate
 	applied := q.limit
 	resp.LimitApplied = &applied
 
+	// RESERVE THE CURSOR LINE'S AND THE NEXT BLOCK'S BYTES before
+	// trimToBudget measures anything. The final cursor's PRESENCE can only be
+	// known for certain after trimming — trimming a page that was otherwise
+	// complete (limit never bound it) makes it incomplete, and an incomplete
+	// page needs a cursor (see below), which also makes nextActions add a
+	// "page" line, and a "narrow" line as soon as Shown drops below
+	// Evaluated — but trimToBudget's own budget measurement has to include
+	// all of those bytes on every pass, or the trim decision it makes is
+	// measured against a response that grows again the moment the real
+	// cursor and NEXT block are added afterward. Reserving whenever trimming
+	// is even POSSIBLE (len(rows) is still above the floor trimToBudget will
+	// not cut past) or the page was already limit-capped short of the full
+	// evaluated set is a safe overestimate: worst case it trims one row it
+	// did not strictly need to, never that it exceeds the budget or drops a
+	// row with no cursor to reach it. The exact offset encoded here, and the
+	// exact Shown this pessimistically forces nextActions to see, do not
+	// matter yet — both are corrected below, once trimming has actually run.
+	if len(rows) > minRenderedRows || offset+len(rows) < evaluated {
+		c := encodeCursor(offset+len(rows), d.Epoch)
+		resp.NextCursor = &c
+		realShown := resp.Counts.Shown
+		resp.Counts.Shown = 0
+		resp.Next = nextActions(q, &resp)
+		resp.Counts.Shown = realShown
+	} else {
+		resp.Next = nextActions(q, &resp)
+	}
+
 	// THE BUDGET IS APPLIED BEFORE THE VERDICT, and the order is the point: a
 	// row dropped by the byte budget is a row the answer does not show, so the
 	// header has to count it. Trimming afterwards would leave the verdict
@@ -323,6 +351,8 @@ func (e *evaluation) assemble(ctx context.Context, d Deps, echo string) generate
 	if consumed := offset + resp.Counts.Shown; consumed < evaluated {
 		c := encodeCursor(consumed, d.Epoch)
 		resp.NextCursor = &c
+	} else {
+		resp.NextCursor = nil
 	}
 	resp.Next = nextActions(q, &resp)
 	return resp

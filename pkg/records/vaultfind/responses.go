@@ -463,18 +463,37 @@ func findTasks(ctx context.Context, d Deps, q *query, echo string) (generated.Va
 		asked := q.limitAsked
 		resp.LimitRequested = &asked
 	}
+	// See assemble.go's identical fix (F8): reserve the cursor line's AND
+	// the NEXT block's bytes BEFORE trimToBudget measures anything, since
+	// trimming an otherwise complete page makes it incomplete — which needs
+	// a cursor, and makes nextActions add a "page" line and (once Shown
+	// drops below Evaluated) a "narrow" line. trimToBudget has to see all of
+	// those bytes on every pass or the final response can grow past budget
+	// again once the real cursor and NEXT block are added below.
+	if len(rows) > minRenderedRows || offset+len(rows) < evaluated {
+		c := encodeCursor(offset+len(rows), d.Epoch)
+		resp.NextCursor = &c
+		realShown := resp.Counts.Shown
+		resp.Counts.Shown = 0
+		resp.Next = nextActions(q, &resp)
+		resp.Counts.Shown = realShown
+	} else {
+		resp.Next = nextActions(q, &resp)
+	}
+
 	trimToBudget(&resp)
 	finishVerdict(&resp, q)
 
-	// See assemble.go's identical fix (F8): the cursor has to be derived from
-	// resp.Counts.Shown, trimToBudget's own count of what it left in
-	// resp.Rows, computed AFTER trimming — not from len(rows), the pre-trim
-	// page. A cursor built from the pre-trim count starts the next page past
-	// every row the byte budget dropped, and those rows are never returned by
-	// any page.
+	// The cursor has to be derived from resp.Counts.Shown, trimToBudget's own
+	// count of what it left in resp.Rows, computed AFTER trimming — not from
+	// len(rows), the pre-trim page. A cursor built from the pre-trim count
+	// starts the next page past every row the byte budget dropped, and those
+	// rows are never returned by any page.
 	if consumed := offset + resp.Counts.Shown; consumed < evaluated {
 		c := encodeCursor(consumed, d.Epoch)
 		resp.NextCursor = &c
+	} else {
+		resp.NextCursor = nil
 	}
 	resp.Next = nextActions(q, &resp)
 	return resp, nil
