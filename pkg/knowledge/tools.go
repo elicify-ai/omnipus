@@ -585,17 +585,16 @@ func (t *SearchTool) excerptBudget() time.Duration {
 // A path that does not exist at all passes both (realPathAllowingMissing falls
 // back to the lexical form), which is correct — "missing" is the opener's
 // answer to give, and it gives it as ExcerptFileMissing.
+//
+// The rule itself lives on CollectionRoot, not here, and this function is the
+// retrieval side's name for it. The authoring side reaches the SAME method
+// through author.go's authorWriteTarget. When the rule lived only in this
+// file, the write path resolved destinations with bare ResolveContained and
+// the two tools disagreed about which paths were addressable — with the WRITE
+// tool the more permissive of the two, so a create through a symlinked folder
+// landed somewhere vault_read then refused to open.
 func retrievalPath(fsys LinkFS, root CollectionRoot, rel string) (string, error) {
-	resolved, err := root.ResolveContained(fsys, rel)
-	if err != nil {
-		return "", err
-	}
-	lexical := filepath.Join(root.Path(), filepath.FromSlash(strings.TrimSpace(rel)))
-	if resolved != lexical {
-		return "", fmt.Errorf("%w: %q reaches %q only through a symbolic link",
-			ErrOutsideCollection, rel, resolved)
-	}
-	return resolved, nil
+	return root.ResolveContainedNoSymlink(fsys, rel)
 }
 
 // progressFor resolves the progress tracker for one collection root.

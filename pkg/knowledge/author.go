@@ -60,7 +60,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"os"
 	"path"
@@ -400,15 +399,12 @@ type CreateNoteResult struct {
 //
 //  1. Addressing (library.CleanRelPath): traversal, absolute paths, control
 //     characters and backslashes are refused before anything touches disk.
-//  2. Reserved location: .omnipus-vault/ and .obsidian/ are tool state, not
-//     places notes go.
-//  3. Name shape (FR-0001a): applied AFTER the path is known and only to what
+//  2. Name shape (FR-0001a): applied AFTER the path is known and only to what
 //     we are creating.
-//  4. Containment (CollectionRoot.ResolveContained): resolves every symlink on
-//     the way and refuses a destination that lands outside the collection —
-//     the check a lexical-only implementation omits and a symlinked
-//     subdirectory defeats.
-//  5. O_EXCL create: the kernel, not a Stat-then-write race, decides whether
+//  3. Destination (authorWriteTarget): the tool-state refusal and the
+//     containment-with-no-symlink refusal, in the one place the whole write
+//     path shares with the read path.
+//  4. O_EXCL create: the kernel, not a Stat-then-write race, decides whether
 //     the file was already there.
 func CreateNote(fsys LinkFS, c *Collection, req CreateNoteRequest) (CreateNoteResult, error) {
 	if c == nil {
@@ -419,9 +415,6 @@ func CreateNote(fsys LinkFS, c *Collection, req CreateNoteRequest) (CreateNoteRe
 	rel, err := authorCleanNotePath(req.RelPath)
 	if err != nil {
 		return CreateNoteResult{}, audit.refuse([]string{req.RelPath}, err)
-	}
-	if rerr := authorRefuseReserved(rel); rerr != nil {
-		return CreateNoteResult{}, audit.refuse([]string{rel}, rerr)
 	}
 	shape := req.NameShape
 	if shape == nil {
@@ -434,7 +427,7 @@ func CreateNote(fsys LinkFS, c *Collection, req CreateNoteRequest) (CreateNoteRe
 	if err != nil {
 		return CreateNoteResult{}, audit.refuse([]string{rel}, err)
 	}
-	abs, err := root.ResolveContained(fsys, rel)
+	abs, err := authorWriteTarget(fsys, root, rel)
 	if err != nil {
 		return CreateNoteResult{}, audit.refuse([]string{rel}, err)
 	}
@@ -543,6 +536,41 @@ func authorRefuseReserved(rel string) error {
 	return nil
 }
 
+// authorWriteTarget turns a caller-supplied collection-relative path into the
+// absolute path a write may touch, or refuses.
+//
+// IT IS THE ONLY WAY THE AUTHORING PATH IS ALLOWED TO PRODUCE AN ABSOLUTE
+// PATH. Both refusals it makes existed in this package already and both were
+// wired into the side that can only mislead while being omitted from the side
+// that destroys:
+//
+//   - authorRefuseReserved had exactly two call sites — CreateNote and
+//     Renamer.Plan — and none on the edit path. Measured through the
+//     vault_edit tool, set_property / append_section / link / replace_body
+//     each wrote into .obsidian/app.json, a real .git/config, .trash/ and
+//     Omnipus's own .omnipus-vault/ state, and the audit record said
+//     "applied". replace_body could rewrite an arbitrary span of any of them.
+//
+//   - ResolveContainedNoSymlink's lexical comparison was in tools.go, used by
+//     retrieval only. The write path resolved with bare ResolveContained,
+//     which dereferences every symlink, and then lstat'ed the ALREADY
+//     dereferenced path — so its IsRegular check could never observe that a
+//     link had been followed. That is the same defect c06bb051 fixed for the
+//     read path, still live on the write path: `create path="Inbox/New.md"`
+//     with Inbox a symlink to Archive/ landed the file at Archive/New.md,
+//     audited it as Inbox/New.md, and vault_read then refused to open the
+//     path the agent had just been told it wrote.
+//
+// Ordering: reserved first, because "this destination is not a place notes go"
+// is a decision about the NAME and does not need the filesystem, and because a
+// tool-state path inside the collection passes containment perfectly well.
+func authorWriteTarget(fsys LinkFS, root CollectionRoot, rel string) (string, error) {
+	if rerr := authorRefuseReserved(rel); rerr != nil {
+		return "", rerr
+	}
+	return root.ResolveContainedNoSymlink(fsys, rel)
+}
+
 // ---------------------------------------------------------------------------
 // Edit (US-14, FR-105..FR-107)
 // ---------------------------------------------------------------------------
@@ -617,8 +645,12 @@ type EditNoteResult struct {
 //     moments and twelve concurrent callers can all pass the comparison and
 //     all write; measured, that is eleven silently lost operator edits and
 //     twelve callers told they succeeded.
-//  2. The file is read and hashed INSIDE the lock, and ExpectVersion must
-//     equal that hash. An absent or mismatched token is a *ConflictError
+//  2. The file is read THROUGH ReadNoteContent and hashed INSIDE the lock, and
+//     ExpectVersion must equal that hash. Reading through the guarded reader
+//     is load-bearing rather than tidy: a cloud-evicted note reads as empty
+//     with no error at all, and hashing that produces a token the caller can
+//     be handed by a conflict and then use to destroy the file (FR-111).
+//     An absent or mismatched token is a *ConflictError
 //     naming the path and carrying the note's current token, the file is
 //     untouched, and the refusal is audited (US-14 AS-1, AS-5; FR-106).
 //  3. Immediately before writing, the file is read again and re-hashed. That
@@ -645,7 +677,11 @@ func EditNote(fsys LinkFS, c *Collection, req EditNoteRequest) (EditNoteResult, 
 	if err != nil {
 		return EditNoteResult{}, audit.refuse([]string{rel}, err)
 	}
-	abs, err := root.ResolveContained(fsys, rel)
+	// The same destination guard a create passes, and for the same two
+	// reasons — see authorWriteTarget. An edit is the operation with the
+	// larger blast radius of the two: a create refuses to overwrite anything,
+	// an edit rewrites whatever it lands on.
+	abs, err := authorWriteTarget(fsys, root, rel)
 	if err != nil {
 		return EditNoteResult{}, audit.refuse([]string{rel}, err)
 	}
@@ -661,14 +697,32 @@ func EditNote(fsys LinkFS, c *Collection, req EditNoteRequest) (EditNoteResult, 
 			}
 			return fmt.Errorf("knowledge: stat %q: %w", rel, serr)
 		}
-		// lstat, and a regular-file requirement: an edit must never follow a
-		// symlink out of the collection, and must never truncate a directory
+		// A regular-file requirement, so an edit never truncates a directory
 		// or a device node into a "note".
+		//
+		// This is NOT where the symlink refusal happens, and an earlier
+		// revision of this comment claimed it was ("an edit must never follow
+		// a symlink out of the collection"). It cannot: abs arrives with
+		// every link already dereferenced, so a symlink to a real file lstats
+		// as a regular file here every time. The refusal is authorWriteTarget's,
+		// above, and it is made by comparing the resolved path against the
+		// lexical one — the only test that can see a link at all.
 		if !fi.Mode().IsRegular() {
 			return fmt.Errorf("%w: %q is not a regular file", ErrNoteNotFound, rel)
 		}
 
-		before, rerr := authorReadAll(fsys, abs)
+		// ReadNoteContent, not a bare Open + ReadAll, and this is the whole
+		// reason that function exists (FR-111). A note evicted by OneDrive,
+		// rclone or Google Drive FS stats with its real size and opens to a
+		// clean EOF: read it bare and `before` is empty, the edits splice
+		// themselves onto nothing, and the atomic write replaces eight hundred
+		// words with a twenty-two byte stub. The version token does not save
+		// anyone — it is the hash of the EMPTY content, so the conflict the
+		// caller gets back hands them the very token that makes the second
+		// attempt succeed, and the retry protocol the tool description teaches
+		// walks a model straight into the clobber. There is still no size cap
+		// (FR-034a): ReadNoteContent reads the note in full, whatever its size.
+		before, rerr := ReadNoteContent(fsys, abs)
 		if rerr != nil {
 			return fmt.Errorf("knowledge: read %q: %w", rel, rerr)
 		}
@@ -706,7 +760,7 @@ func EditNote(fsys LinkFS, c *Collection, req EditNoteRequest) (EditNoteResult, 
 
 		// The tier-3 detector. Inside the lock this can only fire for a writer
 		// the lock does not reach, which is exactly the population it is for.
-		current, cerr := authorReadAll(fsys, abs)
+		current, cerr := ReadNoteContent(fsys, abs)
 		if cerr != nil {
 			return fmt.Errorf("knowledge: re-read %q: %w", rel, cerr)
 		}
@@ -742,21 +796,14 @@ func EditNote(fsys LinkFS, c *Collection, req EditNoteRequest) (EditNoteResult, 
 	return result, nil
 }
 
-// authorReadAll reads a whole note through the LinkFS seam.
+// NOTE: there used to be an authorReadAll here — a bare Open plus io.ReadAll
+// through the LinkFS seam — and it was the edit path's reader. It is gone
+// rather than kept alongside ReadNoteContent, deliberately: two readers in one
+// package is how the guarded one ends up on the side that only displays bytes
+// and the unguarded one on the side that replaces them, which is exactly what
+// had happened. Its one genuine contribution, "no size cap on the edit path"
+// (FR-034a), holds unchanged in ReadNoteContent, which also has none.
 //
-// There is no size cap here and there must not be one: FR-034a says a note of
-// any size is handled in full, and a cap on the EDIT path would mean the one
-// operation that rewrites the file silently refuses to touch the operator's
-// largest notes.
-func authorReadAll(fsys LinkFS, abs string) ([]byte, error) {
-	f, err := fsys.Open(abs)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = f.Close() }()
-	return io.ReadAll(f)
-}
-
 // ---------------------------------------------------------------------------
 // The two edits (FR-105)
 // ---------------------------------------------------------------------------

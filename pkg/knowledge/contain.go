@@ -219,6 +219,50 @@ func (r CollectionRoot) ResolveContained(fsys LinkFS, relPath string) (string, e
 	return resolved, nil
 }
 
+// ResolveContainedNoSymlink is ResolveContained plus FR-044: it additionally
+// refuses a path that reaches its target only THROUGH a symbolic link, even
+// one that lands back inside the collection.
+//
+// It is a separate method rather than a stricter ResolveContained because the
+// two answers are both wanted. Link resolution (graph.go) asks "does this
+// target exist inside the collection", and a symlinked directory that stays
+// inside is a legitimate answer there. Addressing a note to READ or to WRITE
+// asks a narrower question — "is this the file the caller named" — and the
+// answer must be no whenever a link was traversed, because the walkers that
+// produced the index never traverse one (FR-044). A path only reachable
+// through a link is therefore not addressable content: it cannot be searched,
+// linked or read back.
+//
+// WHY THE CHECK IS THE LEXICAL COMPARISON, and why an IsRegular check on the
+// resolved path is not a substitute: ResolveContained hands back the path with
+// every link already dereferenced, so a caller that lstats THAT can never
+// observe that a link was involved — a link with a real file at the far end
+// resolves to a regular file every time. Comparing the resolved path against
+// the un-resolved lexical join is what actually detects the link, because any
+// link anywhere in the chain makes the two differ.
+//
+// A path that does not exist at all passes: realPathAllowingMissing falls back
+// to the lexical form for the missing part, so a create names the file the
+// caller named. What it cannot do is create it through a symlinked PARENT,
+// which is the c06bb051 class of defect on the write side.
+//
+// This is the ONE implementation of that rule. Retrieval reaches it through
+// tools.go's retrievalPath and the authoring path through author.go's
+// authorWriteTarget; when the two were separate, the write side was the more
+// permissive one and an agent could not read back what it had just written.
+func (r CollectionRoot) ResolveContainedNoSymlink(fsys LinkFS, relPath string) (string, error) {
+	resolved, err := r.ResolveContained(fsys, relPath)
+	if err != nil {
+		return "", err
+	}
+	lexical := filepath.Join(r.real, filepath.FromSlash(strings.TrimSpace(relPath)))
+	if resolved != lexical {
+		return "", fmt.Errorf("%w: %q reaches %q only through a symbolic link",
+			ErrOutsideCollection, relPath, resolved)
+	}
+	return resolved, nil
+}
+
 // IsAbsoluteTarget reports whether a link target names an absolute filesystem
 // location on ANY platform, independent of the platform this binary runs on.
 // A POSIX build must still refuse "C:\Users\x\.ssh\id_rsa", because the note
