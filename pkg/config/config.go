@@ -20,6 +20,7 @@ import (
 	mathrand "math/rand"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -1996,6 +1997,20 @@ var knownChannelTypes = map[string]struct{}{
 	// M11: "email" is intentionally NOT a known channel type — email is a TOOL
 	// surface (pkg/email transport + per-agent email tools), not a conversational
 	// channel. A legacy channels.email config entry is dropped on load with a WARN.
+}
+
+// KnownChannelTypes returns a sorted copy of the canonical supported-channel
+// type identifier set (knownChannelTypes above). Exported so other packages
+// — notably pkg/sysagent/tools's channel-management tools — can derive their
+// own channel allow-lists from this single source of truth instead of
+// hand-maintaining a second, driftable copy of the same ID set.
+func KnownChannelTypes() []string {
+	names := make([]string, 0, len(knownChannelTypes))
+	for n := range knownChannelTypes {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // normalizeChannelMap fills in the Type field from the map key when absent
