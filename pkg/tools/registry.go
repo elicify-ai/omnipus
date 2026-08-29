@@ -592,6 +592,10 @@ func (r *ToolRegistry) ExecuteWithContext(
 // This is critical for KV cache stability: non-deterministic map iteration would
 // produce different system prompts and tool definitions on each call, invalidating
 // the LLM's prefix cache even when no tools have changed.
+//
+// Reads r.tools without locking: MUST be called with r.mu held. All four
+// callers today already hold RLock — GetDefinitions, ToProviderDefs, List,
+// GetAll.
 func (r *ToolRegistry) sortedToolNames() []string {
 	names := make([]string, 0, len(r.tools))
 	for name := range r.tools {
