@@ -310,3 +310,91 @@ func TestRelationResolver_ExactPathNotJustPrefix(t *testing.T) {
 			"a same-prefixed sibling must never be substituted for it", id)
 	}
 }
+
+// TestRelationResolver_AmbiguousResolutionIsReportedNotSwallowed is code
+// review A's F9: ResolveIdentity checked only rl.State != ResolveResolved
+// and dropped rl.Ambiguous / rl.Candidates entirely — an ambiguous wikilink
+// resolved to the FR-040 tie-break winner exactly like an unambiguous one,
+// with no way for a caller to learn a second note shared the same name.
+// FR-041's own words: "the link still resolves; the ambiguity is reported
+// IN ADDITION, so determinism never hides it" — this pins the "reported"
+// half, which was the half missing.
+//
+// Two records share the basename "Acme": Companies/Acme.md (CO-0001) and
+// Archive/Acme.md (CO-0002) — the exact shape code review A's scenario
+// names. A relation wikilink "[[Acme]]" must resolve to ONE of them
+// (FR-040's determinism), but ResolveIdentity must say so was AMBIGUOUS and
+// name BOTH candidates, not silently present the winner as the only note by
+// that name.
+func TestRelationResolver_AmbiguousResolutionIsReportedNotSwallowed(t *testing.T) {
+	if !records.PropertyIndexAvailable {
+		t.Skip("no properties index on this build")
+	}
+	ctx := context.Background()
+	store, err := propindex.Open(ctx, filepath.Join(t.TempDir(), "properties.db"), propindex.Options{})
+	if err != nil {
+		t.Fatalf("propindex.Open: %v", err)
+	}
+	t.Cleanup(func() {
+		if cerr := store.Close(); cerr != nil {
+			t.Errorf("closing the store: %v", cerr)
+		}
+	})
+	rows := []propindex.NoteRows{
+		{Path: "Companies/Acme.md", Kind: propindex.KindNote, RecordType: "company", RecordID: "CO-0001", SourceHash: "aaaa"},
+		{Path: "Archive/Acme.md", Kind: propindex.KindNote, RecordType: "company", RecordID: "CO-0002", SourceHash: "bbbb"},
+	}
+	for _, r := range rows {
+		if err := store.UpsertNote(ctx, r); err != nil {
+			t.Fatalf("UpsertNote(%s): %v", r.Path, err)
+		}
+	}
+	notes := knowledge.NewNoteIndex([]string{"Companies/Acme.md", "Archive/Acme.md"})
+	r := NewRelationResolver(ctx, notes, store)
+	link := records.Wikilink{Target: "Acme", Raw: "[[Acme]]"}
+
+	identity, ok := r.ResolveIdentity(link)
+	if !ok {
+		t.Fatalf("ResolveIdentity([[Acme]]) did not resolve at all, want the FR-040 tie-break winner")
+	}
+	if !identity.Ambiguous {
+		t.Fatalf("ResolveIdentity([[Acme]]) resolved to %+v without reporting Ambiguous — "+
+			"two notes share this name and the caller has no way to learn that", identity)
+	}
+	if len(identity.Candidates) != 2 {
+		t.Fatalf("Candidates = %v, want both Companies/Acme.md and Archive/Acme.md", identity.Candidates)
+	}
+	wantPaths := map[string]bool{"Companies/Acme.md": true, "Archive/Acme.md": true}
+	for _, c := range identity.Candidates {
+		if !wantPaths[c] {
+			t.Errorf("Candidates named %q, which is neither of the two ambiguous notes", c)
+		}
+		delete(wantPaths, c)
+	}
+	if len(wantPaths) != 0 {
+		t.Errorf("Candidates is missing: %v", wantPaths)
+	}
+	// The winner IS one of the two candidates' identities — resolution is
+	// still deterministic (FR-040); only the SILENCE about the ambiguity is
+	// what this fix removes.
+	winnerIsKnownCandidate := identity.Path == "Companies/Acme.md" || identity.Path == "Archive/Acme.md"
+	if !winnerIsKnownCandidate {
+		t.Errorf("resolved Path %q is not one of the ambiguous candidates", identity.Path)
+	}
+	if identity.RecordID == "" {
+		t.Errorf("the tie-break winner must still resolve to a real record identity: %+v", identity)
+	}
+
+	// The narrow records.RelationResolver shape (Resolve/AsFunc) cannot carry
+	// Ambiguous/Candidates in a plain (string, bool) — it must still resolve
+	// deterministically to the SAME winner ResolveIdentity named, matching
+	// FR-041's "the link still resolves".
+	id, ok := r.Resolve(link)
+	if !ok {
+		t.Fatalf("Resolve([[Acme]]) did not resolve")
+	}
+	if id != identity.RecordID {
+		t.Errorf("Resolve([[Acme]]) = %q, want the same tie-break winner ResolveIdentity named (%q)",
+			id, identity.RecordID)
+	}
+}

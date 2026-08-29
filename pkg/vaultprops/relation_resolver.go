@@ -50,6 +50,18 @@ type RelatedIdentity struct {
 	// no declared record type. R-8 compares by THIS, never by the wikilink's
 	// own text.
 	RecordID string
+	// Ambiguous reports that the wikilink's target NAME matched more than one
+	// note and Path is the FR-040 tie-break winner among them — the exact
+	// fact pkg/knowledge.ResolvedLink.Ambiguous carries, preserved rather
+	// than discarded here (FR-041: "the link still resolves; the ambiguity
+	// is reported IN ADDITION, so determinism never hides it"). A caller
+	// with schema context (vault_find's comparator, check_integrity) can
+	// then report the ambiguity itself instead of presenting the tie-break
+	// winner as the only possible reading.
+	Ambiguous bool
+	// Candidates lists every note the target name matched, in tie-break
+	// order, when Ambiguous. Nil otherwise.
+	Candidates []string
 }
 
 // HasIdentity reports whether the resolved note is actually a record — a
@@ -79,6 +91,15 @@ type RelationResolver struct {
 	mu    sync.Mutex
 	cache map[string]RelatedIdentity
 	miss  map[string]bool
+	// ambiguousWarned is every wikilink TARGET TEXT this resolver has already
+	// logged an ambiguity warning for. Ambiguity (like the resolved path
+	// itself) is a function of the target text alone — NoteIndex.Resolve
+	// computes basenameMatches from l.Target only, never from the source
+	// note — so a `many: true` relation with thousands of source records all
+	// naming the same ambiguous target logs ONCE per call, not once per
+	// edge, the same economy this file's path cache already applies to
+	// identity lookups.
+	ambiguousWarned map[string]bool
 }
 
 // NewRelationResolver builds a resolver over an already-built NoteIndex and
@@ -141,7 +162,45 @@ func (r *RelationResolver) ResolveIdentity(link records.Wikilink) (RelatedIdenti
 	if rl.State != knowledge.ResolveResolved {
 		return RelatedIdentity{}, false
 	}
-	return r.identityAt(rl.To)
+	id, ok := r.identityAt(rl.To)
+	if !ok {
+		return id, false
+	}
+	// F9 (code review A) — rl.Ambiguous/.Candidates were being discarded
+	// here: the link still resolves to the FR-040 tie-break winner, but
+	// R-8's guarantee is that determinism never HIDES the ambiguity, only
+	// resolves it deterministically. Carry both onto the identity a caller
+	// with schema context can report, and warn once per distinct target text
+	// so the ambiguity is visible even to a caller still going through the
+	// narrow records.RelationResolver shape (Resolve/AsFunc below), which
+	// cannot carry it in its own return value.
+	if rl.Ambiguous {
+		id.Ambiguous = true
+		id.Candidates = rl.Candidates
+		r.warnAmbiguousOnce(link.Target, rl.To, rl.Candidates)
+	}
+	return id, true
+}
+
+// warnAmbiguousOnce logs one warning per distinct wikilink target text this
+// resolver has resolved ambiguously, the same "reported, not swallowed"
+// posture identityAt already applies to a store failure — a caller using the
+// narrow records.RelationResolver shape (a plain (string, bool)) has no field
+// to carry Ambiguous/Candidates through, so the operator's log is the only
+// surface left for it in that path.
+func (r *RelationResolver) warnAmbiguousOnce(target, resolvedTo string, candidates []string) {
+	r.mu.Lock()
+	if r.ambiguousWarned == nil {
+		r.ambiguousWarned = map[string]bool{}
+	}
+	if r.ambiguousWarned[target] {
+		r.mu.Unlock()
+		return
+	}
+	r.ambiguousWarned[target] = true
+	r.mu.Unlock()
+	slog.Warn("vaultprops: relation target name is ambiguous; resolved to the FR-040 tie-break winner",
+		"target", target, "resolved_to", resolvedTo, "candidates", candidates)
 }
 
 // identityAt is the second step, memoised. A path that resolved once in this
