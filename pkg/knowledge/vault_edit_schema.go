@@ -71,6 +71,19 @@ var (
 // parses of the same bytes for two different questions ("does a schema
 // apply" vs. "where do I splice") is the cost of keeping those two
 // questions separate rather than threading a parsed block through both.
+//
+// The `ferr != nil` branch below is, under records.ParseFrontmatter's
+// CURRENT implementation, provably unreachable as a distinguishing case: read
+// against its source, every one of its error returns hands back a
+// Frontmatter with an empty Values map, which makes rec.TypeName() return ""
+// unconditionally — the exact same answer the `typeName == ""` check two
+// lines down already gives. A mutation that deletes this branch cannot be
+// killed by any test built on the real parser, and one was tried. The branch
+// stays anyway: "every current error path happens to also leave Values
+// empty" is an implementation detail of another package, not a promise in
+// ParseFrontmatter's documented contract, and collapsing this check into
+// that assumption would make vault_edit_schema.go's correctness depend on
+// something it has no way to notice changing.
 func vaultEditResolveSchema(set *records.SchemaSet, src []byte, property string) (schema *records.Schema, typeName string, ok bool) {
 	fm, ferr := records.ParseFrontmatter(src)
 	if ferr != nil {

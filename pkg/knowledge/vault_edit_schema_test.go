@@ -24,10 +24,19 @@ import (
 )
 
 // TestVaultEditResolveSchema_UnparsableFrontmatterIsNotApplicable is the
-// direct white-box case: no end-to-end fixture distinguishes "frontmatter
-// failed to parse" from "note declares no type" at this function's own
-// boundary — both must return ok == false, and only a call directly on the
-// function proves which branch was actually taken.
+// direct white-box case for the function's overall contract: unparsable
+// frontmatter resolves to ok == false, schema == nil, typeName == "".
+//
+// Mutation note: deleting the `ferr != nil` branch inside
+// vaultEditResolveSchema does NOT fail this test (or any other in this
+// file) — it was tried, in a detached worktree, and survived. Under
+// records.ParseFrontmatter's current implementation every error return
+// already carries an empty Values map, so rec.TypeName() == "" regardless
+// of whether the ferr branch runs, and the very next check catches it
+// either way. See that function's own doc comment for why the branch is
+// kept anyway. This test asserts the OBSERVABLE contract, which is real and
+// worth pinning, even though it cannot by itself distinguish which of the
+// two checks inside the function produced ok == false.
 func TestVaultEditResolveSchema_UnparsableFrontmatterIsNotApplicable(t *testing.T) {
 	set := records.NewSchemaSet()
 	unparsable := []byte("---\ntitle: Old\n\nbody with no closing fence\n")
