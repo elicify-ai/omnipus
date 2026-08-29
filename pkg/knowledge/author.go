@@ -523,7 +523,20 @@ func authorCleanNotePath(raw string) (string, error) {
 // surely as one at the root.
 func authorRefuseReserved(rel string) error {
 	for _, seg := range strings.Split(rel, "/") {
-		if seg == MarkerDirName || seg == ObsidianMarkerDirName {
+		// scanSkippedDirNames is the AUTHORITY, not a hand-copied subset of it.
+		//
+		// This function previously tested MarkerDirName and ObsidianMarkerDirName
+		// only — two of that set's four names — so a write into .git/ or .trash/
+		// was accepted. Those directories are skipped by every walker, so a note
+		// moved there vanishes from search, backlinks and the orphan check at
+		// once: an untracked hard delete reachable through an operation named
+		// "move". .trash matters most in practice, because Obsidian's own
+		// soft-delete writes there, so it exists in most real vaults and is the
+		// folder an agent asked to "archive" a note would reach for.
+		//
+		// Deriving the check from scanSkippedDirNames means adding a name to the
+		// walker's skip set cannot silently open a new hole here.
+		if _, reserved := scanSkippedDirNames[seg]; reserved {
 			return fmt.Errorf("%w: %q is inside %s/", ErrReservedLocation, rel, seg)
 		}
 	}
