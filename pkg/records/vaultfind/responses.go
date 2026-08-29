@@ -255,6 +255,56 @@ func zeroHitResponse(ctx context.Context, d Deps, q *query, echo string) generat
 // kind: task — FR-076a, AC-F7
 // ---------------------------------------------------------------------------
 
+// taskUnsupportedArgs is FR-076a's own list of what "applies unchanged" to
+// kind=task, read for what it excludes as much as what it includes: freshness,
+// bounds, pagination and rendering. `filter`, `words`, `near`, `join`,
+// `group_by`, `sort`, `select` and `aggregate` are conspicuously absent — and
+// for a reason that is structural, not an oversight. A checkbox row's shape is
+// fixed (`propindex.TaskHit`: path, line, status, text) with no decoded
+// schema-property values behind it, and `propindex.Store.Tasks` takes only a
+// `Selector` (record type, path prefix, kind) with no comparator hook at all —
+// there is no mechanism by which a typed filter, a word-search intersection, a
+// graph walk, a grouping key or a sort key could reach the checkbox stream.
+// `type` and the workspace scope DO reach it, through that same Selector, so
+// they are not refused here.
+//
+// Before this check, these arguments were silently accepted, validated against
+// the schema, and then dropped on the floor — `findTasks` never read them — so
+// `query_echo` reported a query that ran in full while most of it never touched
+// a row. That is worse than an error: FR-122 makes the echo a claim about what
+// executed, and a claim that a filter ran when it did not is a confident wrong
+// answer with no error channel. Refusing by name, listing exactly what will not
+// be honoured, is what FR-122's contract requires when the answer is "not
+// this".
+func taskUnsupportedArgs(q *query) []string {
+	var bad []string
+	if q.words != "" {
+		bad = append(bad, "words")
+	}
+	if q.filter != nil {
+		bad = append(bad, "filter")
+	}
+	if q.near != "" {
+		bad = append(bad, "near")
+	}
+	if len(q.join) > 0 {
+		bad = append(bad, "join")
+	}
+	if len(q.groupBy) > 0 {
+		bad = append(bad, "group_by")
+	}
+	if len(q.sort) > 0 {
+		bad = append(bad, "sort")
+	}
+	if len(q.selectCols) > 0 {
+		bad = append(bad, "select")
+	}
+	if len(q.aggregates) > 0 {
+		bad = append(bad, "aggregate")
+	}
+	return bad
+}
+
 // findTasks returns checkbox ROWS, not notes.
 //
 // NO COLLECTION WALK OCCURS. `knowledge_tasks` walked the collection, read every
@@ -263,6 +313,20 @@ func zeroHitResponse(ctx context.Context, d Deps, q *query, echo string) generat
 // child table every other row streams — and the freshness comparison, the
 // bounds, the paging and the rendering all apply unchanged.
 func findTasks(ctx context.Context, d Deps, q *query, echo string) (generated.VaultFindResponse, error) {
+	// VALIDATED BEFORE ANYTHING IS RETRIEVED (FR-023), same as every other
+	// refusal in this package — and this one needs no store call at all to
+	// decide.
+	if bad := taskUnsupportedArgs(q); len(bad) > 0 {
+		ref := refuse(problem(generated.UnsupportedParameter,
+			fmt.Sprintf("kind=task returns checkbox rows, which carry no schema-property values to "+
+				"evaluate against — %s cannot be honoured here and would otherwise be silently ignored",
+				strings.Join(bad, ", ")),
+			"drop "+strings.Join(bad, ", ")+
+				", or run kind=record (or the default kind=note) first to find the matching notes, "+
+				"then re-run kind=task scoped by type"), nil)
+		return refusalResponse(generated.VaultFindRequest{}, echo, ref), ref
+	}
+
 	if d.Store == nil {
 		ref := refuse(problem(generated.IndexUnavailable,
 			"the properties index is not open, so checkbox rows cannot be read",
@@ -326,10 +390,12 @@ func findTasks(ctx context.Context, d Deps, q *query, echo string) (generated.Va
 	}
 
 	rows := make([]generated.VaultFindRow, 0, len(page))
+	var problems []generated.RecordProblem
+	agreeing := 0
 	for _, h := range page {
 		line := h.Task.Line
 		status := generated.VaultFindRowStatus(h.Task.Status)
-		rows = append(rows, generated.VaultFindRow{
+		row := generated.VaultFindRow{
 			Path: h.Path,
 			// The TITLE is the note; the TEXT is the checkbox. Keeping them in
 			// separate fields is what stops a task row reading as a note — the
@@ -340,7 +406,38 @@ func findTasks(ctx context.Context, d Deps, q *query, echo string) (generated.Va
 			Text:   str(h.Task.Text),
 			Cells:  []generated.VaultFindCell{},
 			Joins:  []generated.VaultFindJoin{},
-		})
+		}
+
+		// FR-020c's freshness comparison is PER RETURNED RECORD, and FR-020c1
+		// scopes it to what the query RETURNED — nothing in either requirement
+		// confines it to the record path. A `TaskHit` carries a `SourceHash`
+		// exactly the way `Candidate` does (`propindex.TaskHit`, `store.go`),
+		// so a task row that never checks it against the text index's own hash
+		// renders "agreeing" for a row that was never actually compared —
+		// precisely the "reported fresh while stale" case IndexNote's
+		// write-ordering table exists to make detectable.
+		textHash, ok, err := d.Text.SourceHash(ctx, h.Path)
+		if err != nil || !ok {
+			// An error or a miss degrades to UNKNOWN freshness (empty hash),
+			// never to "assume fresh" — CompareFreshness flags an empty hash
+			// the same way it flags a real disagreement.
+			textHash = ""
+		}
+		fresh := propindex.CompareFreshness(h.SourceHash, textHash)
+		if fresh == propindex.FreshnessAgree {
+			agreeing++
+		} else {
+			t := true
+			row.Stale = &t
+			p := problem(generated.StaleRecord, h.Path+": "+fresh.Reason(),
+				"re-run to confirm; run vault_describe check_integrity if it persists", h.Path)
+			p.Paths = &[]string{h.Path}
+			problems = append(problems, p)
+		}
+		rows = append(rows, row)
+	}
+	if problems == nil {
+		problems = []generated.RecordProblem{}
 	}
 
 	resp := generated.VaultFindResponse{
@@ -356,8 +453,8 @@ func findTasks(ctx context.Context, d Deps, q *query, echo string) (generated.Va
 		},
 		Rows:     rows,
 		Totals:   []generated.VaultFindTotal{},
-		Problems: []generated.RecordProblem{},
-		Index:    &generated.VaultIndexState{Returned: len(rows), Agreeing: len(rows), Epoch: &d.Epoch},
+		Problems: problems,
+		Index:    &generated.VaultIndexState{Returned: len(rows), Agreeing: agreeing, Epoch: &d.Epoch},
 	}
 	applied := q.limit
 	resp.LimitApplied = &applied
