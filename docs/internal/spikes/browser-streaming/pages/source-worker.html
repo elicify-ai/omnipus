@@ -1,0 +1,17 @@
+<!doctype html><meta charset="utf-8"><title>MSE-in-Worker source (adversarial)</title>
+<body style="margin:0;background:#111;color:#eee;font:13px monospace">
+<video id="v" autoplay muted playsinline style="width:960px;height:540px;background:#000"></video>
+<pre id="log"></pre>
+<script>
+const log = m => { document.getElementById('log').textContent += m + '\n'; console.log(m); };
+const run = new URLSearchParams(location.search).get('run') || 'dash720';
+const v = document.getElementById('v');
+if (!('handle' in MediaSource.prototype)) { log('MediaSourceHandle NOT supported here'); }
+const w = new Worker('mse-worker.js');
+w.onmessage = (e) => {
+  if (e.data.handle) { v.srcObject = e.data.handle; log('main: attached MediaSourceHandle via srcObject'); v.play().catch(x=>log('play: '+x.message)); }
+  if (e.data.log) log(e.data.log);
+};
+w.postMessage({ run });
+</script>
+</body>
