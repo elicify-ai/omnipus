@@ -343,6 +343,56 @@ func TestSync_TrashedNoteIsRemoved(t *testing.T) {
 	assertPathsIndexed(t, home, root, map[string]bool{"Plants/Fern.md": false})
 }
 
+// TestSync_UnreadableNoteIsRemovedNotLeftStale — failure modes 2 and 3 from
+// the task brief, exercised together: a note that WAS indexed and then
+// becomes unreadable (permission revoked, mid-vault) must not silently keep
+// answering queries with its last-known content. Sync must report it AND
+// remove its rows — the same rule knowledge.Index.SyncWith already applies to
+// the text index, matched here rather than reinvented.
+func TestSync_UnreadableNoteIsRemovedNotLeftStale(t *testing.T) {
+	skipWithoutSQLite(t)
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX permission bits do not apply on windows")
+	}
+	home := syncHome(t)
+	root := syncVault(t, map[string]string{
+		".omnipus-vault/records/plant.yaml": plantSchema,
+		"Plants/Fern.md":                    fernNote,
+	})
+	first, err := Sync(context.Background(), home, root, SyncOptions{})
+	if err != nil {
+		t.Fatalf("first Sync: %v", err)
+	}
+	if first.Indexed != 1 {
+		t.Fatalf("the note was not indexed on the first pass: %+v", first)
+	}
+	assertPathsIndexed(t, home, root, map[string]bool{"Plants/Fern.md": true})
+
+	notePath := filepath.Join(root, "Plants", "Fern.md")
+	if err := os.Chmod(notePath, 0o000); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(notePath, 0o600) }) // let TempDir cleanup remove it
+
+	stats, err := Sync(context.Background(), home, root, SyncOptions{})
+	if err != nil {
+		t.Fatalf("second Sync: %v", err)
+	}
+	if stats.Removed != 1 {
+		t.Errorf("the now-unreadable note's stale rows were not removed: %+v", stats)
+	}
+	found := false
+	for _, p := range stats.Problems {
+		if p.RelPath == "Plants/Fern.md" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("the read failure was not reported: %+v", stats.Problems)
+	}
+	assertPathsIndexed(t, home, root, map[string]bool{"Plants/Fern.md": false})
+}
+
 // --- non-conforming values keep their evidence -----------------------------
 
 func TestSync_NonConformingPropertyKeepsItsProblemEvidence(t *testing.T) {
