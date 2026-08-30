@@ -25,6 +25,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -934,8 +935,8 @@ func (ms *MemoryStore) ReadLastSession() (string, error) {
 }
 
 // maxMemoryContextChars caps the total size of the "## Long-term memory"
-// entries injected by GetMemoryContext (finding 9, context-audit 2026-08).
-// Unlike every other block injected into the system prompt (envcontext's
+// entries injected by GetMemoryContext. Unlike every other block injected
+// into the system prompt (envcontext's
 // preamble at 2000 runes, the skills summary's maxSkillsInSummary, the
 // manifest block's per-line cap), this section previously had NO size limit
 // — up to 20 entries, each independently allowed up to 4096 runes
@@ -948,7 +949,7 @@ const maxMemoryContextChars = 8000
 
 // GetMemoryContext returns a formatted memory context string for the system prompt.
 // Reads last-session.md + the most recent N memories from the default scope,
-// capped at maxMemoryContextChars with oldest-first eviction (finding 9).
+// capped at maxMemoryContextChars with oldest-first eviction.
 func (ms *MemoryStore) GetMemoryContext() string {
 	var sb strings.Builder
 
@@ -964,7 +965,7 @@ func (ms *MemoryStore) GetMemoryContext() string {
 			sb.WriteString("\n\n")
 		}
 		sb.WriteString("## Long-term memory\n")
-		// Framing (finding 9): these are past notes, not live ground truth —
+		// Framing: these are past notes, not live ground truth —
 		// they may be stale and some may have been written by a teammate
 		// agent sharing this workspace, not the acting agent itself.
 		sb.WriteString(
@@ -993,7 +994,13 @@ func (ms *MemoryStore) GetMemoryContext() string {
 			if shown > 0 {
 				sep = "\n\n"
 			}
-			cost := len(sep) + len(entryText)
+			// Rune-safe cost: maxMemoryContextChars is documented (and named)
+			// in terms of characters/runes, not bytes. A raw len() here
+			// undercounts the budget by up to 4x for non-ASCII content (e.g.
+			// non-English memory text), silently collapsing the effective
+			// cap to ~2000 runes — the same bug class the manifest-preview
+			// truncation fix (commit f4f9b3f8) closed for maxManifestLineLen.
+			cost := utf8.RuneCountInString(sep) + utf8.RuneCountInString(entryText)
 			// Always show at least the first (newest) entry, even if it alone
 			// exceeds the budget — an empty section would be worse than one
 			// over-budget entry. Every subsequent entry must fit.

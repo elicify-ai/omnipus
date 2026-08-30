@@ -1043,7 +1043,18 @@ func NewWorkspaceGetTool(d *Deps) *WorkspaceGetTool { return &WorkspaceGetTool{d
 func (t *WorkspaceGetTool) Name() string            { return "get_workspace" }
 func (t *WorkspaceGetTool) Scope() tools.ToolScope  { return tools.ScopeCore }
 func (t *WorkspaceGetTool) Description() string {
-	return "Get a single workspace by ID including its live task count. Use this to refresh workspace data after creating tasks. Returns id, name, description, status, pinned, pin_order, is_default, core_team, task_count, created_at and updated_at. It does NOT return the delegation graph (which agents on this team may delegate to which) — that lives in a separate store; see the workspace's Team tab for it.\nParameters: id (required, from list_workspaces)."
+	// The opening line MUST stay under maxManifestLineLen (140 runes,
+	// pkg/tools/manifest.go) — get_workspace is a Tier-2 (previewed) tool,
+	// so this first line (up to the first '\n') is what actually renders in
+	// the compressed manifest block on EVERY turn. manifest.go splits on the
+	// first newline and shows only the opening sentence there; the fuller
+	// detail below is still available via ToolSearch/the tool's own
+	// Parameters(), just not in the always-visible preview line. See
+	// TestVisibility_PreviewedDescriptionsFitWithoutTruncation (internal,
+	// pkg/tools) and TestVisibility_ScopeCoreGetWorkspaceDescriptionFitsWithoutTruncation
+	// (external, pkg/tools/manifest_scopecore_test.go) which both guard this.
+	return "Get a single workspace by ID, including its live task count.\n" +
+		"Use this to refresh workspace data after creating tasks. Returns id, name, description, status, pinned, pin_order, is_default, core_team, task_count, created_at and updated_at. It does NOT return the delegation graph (which agents on this team may delegate to which) — that lives in a separate store; see the workspace's Team tab for it.\nParameters: id (required, from list_workspaces)."
 }
 
 func (t *WorkspaceGetTool) Parameters() map[string]any {

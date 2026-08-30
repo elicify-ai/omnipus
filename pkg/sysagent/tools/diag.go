@@ -147,7 +147,7 @@ func NewUsageQueryTool(d *Deps) *UsageQueryTool  { return &UsageQueryTool{deps: 
 func (t *UsageQueryTool) Name() string           { return "get_usage" }
 func (t *UsageQueryTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *UsageQueryTool) Description() string {
-	return "Query token usage, cost, and spend by period, agent, model, or session.\n" +
+	return "Query token usage by period, agent, model, or session.\n" +
 		"Parameters:\n" +
 		"  period   — time window: day, week, month (default), or all\n" +
 		"  by       — grouping dimension: agent (default), model, or session\n" +
