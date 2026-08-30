@@ -11,6 +11,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/knowledge"
 	"github.com/elicify-ai/omnipus/pkg/tools"
+	"github.com/elicify-ai/omnipus/pkg/vaultprops"
 )
 
 // ---------------------------------------------------------------------------
@@ -20,14 +21,15 @@ import (
 // present in one and absent from the other is a real, silent defect this
 // codebase has already shipped once (see request_mount's note in
 // pkg/agent/instance.go — catalogued but unregistered, so it appeared in
-// Settings while no agent could ever call it).
+// Settings while no agent could ever call it, and the ADR-067 nine's own
+// authoring half repeated it in the other direction: a seeded policy posture
+// with no registry offering the tool at all).
 //
 //  1. EXECUTION. Each agent's own *tools.ToolRegistry, built in
-//     pkg/agent/instance.go's NewAgentInstance. That is the registry a turn
-//     dispatches through and the one GET /agents/{id}/tools reads, so it is
-//     the only one that makes a tool CALLABLE. knowledge_search and
-//     knowledge_graph are registered there, per agent, with the agent's real
-//     $OMNIPUS_HOME so the workspace scope (FR-052/FR-053) resolves.
+//     pkg/agent/instance.go's NewAgentInstance (registerKnowledgeTools,
+//     pkg/agent/knowledge_tools.go). That is the registry a turn dispatches
+//     through and the one GET /agents/{id}/tools reads, so it is the only
+//     one that makes a tool CALLABLE.
 //
 //  2. METADATA. The process-wide *tools.BuiltinRegistry this file contributes
 //     to, which backs GET /api/v1/tools — the "everything the platform can
@@ -43,44 +45,48 @@ import (
 // registered from gateway.go rather than from pkg/tools.
 //
 // NOT registered here: policy COVERAGE. buildKnownBuiltinToolNames
-// (gateway.go) unions all nine knowledge tool names in explicitly and is the
+// (gateway.go) unions all six knowledge tool names in explicitly and is the
 // authority for Constraint #6's (agent × tool) universe. It deliberately does
 // not derive that list from this file, so that a tool dropped from the
 // catalog still carries an explicit seeded posture rather than silently
 // vanishing from the coverage universe as well.
+//
+// ADR-067's nine (knowledge_search, knowledge_graph, knowledge_create,
+// knowledge_link, knowledge_set_property, knowledge_append_section,
+// knowledge_tasks, knowledge_move, knowledge_rename) are RETIRED from both
+// registries below — ADR-068's six supersede them by blast radius rather
+// than by read/write. Their Go implementations (pkg/knowledge/tools.go,
+// authoring_tools.go) are NOT deleted: pkg/gateway/rest_knowledge.go still
+// calls knowledge.RetrievalTools directly for the Library UI's own search/
+// graph REST endpoints, which are independent of the agent tool-calling
+// surface this file wires. Deleting them would break that surface for no
+// reason connected to this retirement.
 // ---------------------------------------------------------------------------
 
-// knowledgeBuiltinMetadata returns metadata-only instances of every knowledge
-// tool that has a real implementation today: ADR-067 stage 2's retrieval pair
-// (knowledge_search, knowledge_graph) AND stage 3's seven authoring tools
-// (knowledge_create, knowledge_link, knowledge_set_property,
-// knowledge_append_section, knowledge_tasks, knowledge_move,
-// knowledge_rename).
+// knowledgeBuiltinMetadata returns metadata-only instances of ADR-068's six
+// knowledge tools: the three READ-tier tools (knowledge_describe,
+// knowledge_find, knowledge_read), knowledge_edit (one named file),
+// knowledge_restructure (cascading rename/move/trash) and
+// knowledge_configure (the schema/view control plane).
 //
-// All nine, because the D17 seed enumerates all nine. The authoring seven were
-// omitted here while they were also absent from every agent's execution
-// registry, which made a granted seeded posture govern tools that no registry
-// offered and no catalog described — invisible from both directions at once.
-//
-// The instances are constructed with a ZERO ToolDeps, which is safe for the
-// same reason the general-builtin catalog's dummy-workspace instances are:
-// only Name(), Description(), Category() and Scope() are ever called on them.
-// It is also safe if that invariant is ever broken by accident — an empty
-// ToolDeps.Home resolves to an EMPTY knowledge scope (see
+// The instances are constructed with ZERO deps — an empty ToolDeps.Home /
+// AuthoringDeps.Home resolves to an EMPTY knowledge scope (see
 // knowledge.ResolveScope), so a metadata instance that somehow reached
-// Execute() would read nothing at all rather than reading across a workspace
-// boundary.
-//
-// The list is taken from knowledge.RetrievalTools rather than restated as a
-// name literal, so a tool renamed or added in pkg/knowledge cannot go missing
-// from the capability reference without anyone noticing.
+// Execute() would address nothing at all rather than reach across a
+// workspace boundary — safe for the same reason the general-builtin
+// catalog's dummy-workspace instances are: only Name(), Description(),
+// Category() and Scope() are ever called on them here (ADR-018 D-A1).
+// knowledge_describe's openIndex is nil for the same reason: metadata never
+// executes, so there is nothing for it to open.
 func knowledgeBuiltinMetadata() []tools.Tool {
-	out := knowledge.RetrievalTools(knowledge.ToolDeps{})
-	// AuthoringDeps' zero value is safe for metadata for the same reason
-	// ToolDeps' is: an empty Home resolves to an EMPTY scope, so a metadata
-	// instance that somehow reached Execute() would address nothing at all
-	// rather than reach across a workspace boundary.
-	return append(out, knowledge.AuthoringTools(knowledge.AuthoringDeps{})...)
+	return []tools.Tool{
+		knowledge.NewDescribeTool(knowledge.ToolDeps{}, nil),
+		vaultprops.NewFindTool(""),
+		knowledge.NewReadTool(knowledge.ToolDeps{}),
+		knowledge.NewEditTool(knowledge.AuthoringDeps{}),
+		knowledge.NewRestructureTool(knowledge.AuthoringDeps{}),
+		knowledge.NewConfigureTool(knowledge.AuthoringDeps{}),
+	}
 }
 
 // registerKnowledgeBuiltinMetadata adds the knowledge tools to a builtin

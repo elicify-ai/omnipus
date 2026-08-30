@@ -330,13 +330,17 @@ func GetPrompt(id string) string {
 //   - 2 ADR-055 (PlanSupervisor) supervision/containment tools — plan_correct
 //     and stop_plan, registered here for the same reason and under the same
 //     rule as the ADR-052 four.
-//   - 9 ADR-067 (knowledge base) tools — 3 retrieval (knowledge_search,
-//     knowledge_graph, knowledge_tasks) and 6 authoring (knowledge_create,
+//   - 6 ADR-068 (vault-records knowledge base) tools, split by BLAST RADIUS
+//     rather than read/write — 3 read (knowledge_describe, knowledge_find,
+//     knowledge_read), knowledge_edit (one named file), knowledge_restructure
+//     (cascading rename/move/trash) and knowledge_configure (the schema/view
+//     control plane) — registered here for the same reason and under the
+//     same rule as the ADR-052 four. See D15.3/FR-070. Supersedes ADR-067's
+//     nine (knowledge_search, knowledge_graph, knowledge_create,
 //     knowledge_link, knowledge_set_property, knowledge_append_section,
-//     knowledge_move, knowledge_rename), registered here for the same reason
-//     and under the same rule as the ADR-052 four. See D17/FR-070.
-//     knowledge_tasks reads; the split below says why it is counted with the
-//     retrieval pair rather than under ADR-067 D7's "Authoring" heading.
+//     knowledge_tasks, knowledge_move, knowledge_rename), now retired from
+//     this literal; the split below says why the last two carry their own
+//     policy line rather than sharing knowledge_edit's.
 //   - ADR-056's list_jobs is counted in the 34 general tools above (it is a
 //     ScopeGeneral tool in pkg/tools, not a separate tier); it is called out
 //     here only because its seeded posture is a rule of its own — see
@@ -414,10 +418,17 @@ var allStaticToolNames = []string{
 	// that is not in this literal.
 	"plan_correct", "stop_plan",
 
-	// ADR-067 D17 (FR-070) — the knowledge-base tool family. Listed here
-	// ahead of / independent of the pkg/knowledge implementation landing,
-	// under exactly the same rule as the ADR-052 four and the ADR-055 pair
-	// above, and for two distinct reasons:
+	// ADR-068 D15.3 (FR-070) — the knowledge-base tool family, SIX names
+	// split by BLAST RADIUS rather than by read/write, superseding ADR-067's
+	// nine (knowledge_search, knowledge_graph, knowledge_create,
+	// knowledge_link, knowledge_set_property, knowledge_append_section,
+	// knowledge_tasks, knowledge_move, knowledge_rename — all RETIRED from
+	// this literal; their Go implementations survive only because
+	// pkg/gateway/rest_knowledge.go's own REST endpoints, independent of the
+	// agent tool-calling surface, still call them). Listed here ahead of /
+	// independent of the pkg/knowledge / pkg/vaultprops implementation
+	// landing, under exactly the same rule as the ADR-052 four and the
+	// ADR-055 pair above, and for two distinct reasons:
 	//
 	//  1. validateOverrideKeys PANICS on a seed override naming a tool that
 	//     is not in this literal, so these names must exist here before
@@ -438,48 +449,38 @@ var allStaticToolNames = []string{
 	// with an explicit "deny" plus one WARN line. Boot does NOT abort. A
 	// forgotten knowledge tool ships silently denied with the feature dead.
 	//
-	// Retrieval — read-only, and scoped at the tool layer to the calling
-	// agent's workspace mounts (ADR-067 D7 isolation).
+	// THE SPLIT, AND WHY IT REPLACES read/write AS THE SEEDING AXIS:
 	//
-	// SEED RULE — knowledge_tasks IS RETRIEVAL, not authoring, even though
-	// ADR-067 D7 prints the name under a heading called "Authoring". That
-	// heading is a bucket, not a definition, and nothing else in the ADR or
-	// the spec defines the tool: round-1 review finding M-14 recorded that
-	// knowledge_link, knowledge_set_property, knowledge_append_section and
-	// knowledge_tasks "appear nowhere in the document — no user story, no
-	// scenario, no requirement, no test", and review rounds 2, 3 and 4 never
-	// answered it. So the classification was inherited from a layout choice,
-	// never decided.
-	//
-	// What the tool actually does settles it. pkg/knowledge's TasksTool walks
-	// the collection, reads notes and regex-matches "- [ ]" / "- [x]" lines,
-	// returning the note and line of each. It opens no writer, calls none of
-	// author.go's or rename.go's primitives, and emits no mutation audit
-	// record — because it performs no mutation. It is rate-limited through
-	// checkRetrievalRate, the retrieval limiter, and it answers an
-	// out-of-scope collection with FR-053's EMPTY RESULT SET, which is the
-	// read contract; every authoring tool refuses instead. The only other
-	// available semantics agree: the operator's `ev` CLI files `tasks` with
-	// `read`, `links`, `backlinks` and `unresolved`, apart from `create`,
-	// `set`, `append`, `move` and `rename`.
-	//
-	// This grouping is load-bearing, not cosmetic — the per-agent seeds below
-	// follow it. Filed as authoring, knowledge_tasks was seeded "ask" for Mia
-	// (the DEFAULT agent) and Ray while knowledge_search — which reads the
-	// same notes and returns their text — was seeded "allow". That put an
-	// approval prompt in front of a read whose every byte was already
-	// reachable, unprompted, through a different tool on the same agent. A
-	// prompt that protects nothing is not a harmless extra confirmation: it
-	// is training to click through the prompts that do protect something.
-	// Keep this name with the reads.
-	"knowledge_search", "knowledge_graph", "knowledge_tasks",
-	// Authoring — these write to the operator's REAL disk, outside the
-	// Library's audit path, which is why ADR-067 D19 requires an audit event
-	// per mutation and why the seeded postures below are split by role
-	// rather than granted roster-wide.
-	"knowledge_create", "knowledge_link", "knowledge_set_property",
-	"knowledge_append_section",
-	"knowledge_move", "knowledge_rename",
+	//   - READ tier — touch nothing outside what the caller asked for.
+	//     knowledge_describe (orientation: schema, saved views, index
+	//     state), knowledge_find (the one retrieval surface: words, typed
+	//     filter, saved views, relations, tasks — the FR-076a replacement
+	//     for the retired knowledge_tasks), knowledge_read (one note or one
+	//     section).
+	//   - knowledge_edit — mutates exactly the ONE file the caller named
+	//     (create / set_property / append_section / link / replace_body,
+	//     unified — ADR-068 folds knowledge_create, knowledge_link,
+	//     knowledge_set_property and knowledge_append_section into this one
+	//     name because all four have the identical blast radius: one
+	//     caller-named file).
+	//   - knowledge_restructure — rename / move / trash / restore. CASCADES:
+	//     a rename/move rewrites inbound links in every note that referenced
+	//     the target, none of which the caller named — the ADR-067
+	//     knowledge_move/knowledge_rename pair's own justification for being
+	//     one operation ("the same act — a note's path changes and every
+	//     inbound link must follow") extended to trash/restore, which
+	//     touches the SAME journal/link-rewrite machinery.
+	//   - knowledge_configure — the control plane: a record-type schema
+	//     edit reclassifies every record of that type already on disk, and a
+	//     saved view changes what a name resolves to for every future
+	//     caller. Neither touches a note's bytes, but both change what
+	//     EXISTING notes MEAN — a strictly wider blast radius than
+	//     knowledge_edit's one file, which is why it carries its own policy
+	//     line rather than sharing knowledge_edit's.
+	"knowledge_describe", "knowledge_find", "knowledge_read",
+	"knowledge_edit",
+	"knowledge_restructure",
+	"knowledge_configure",
 }
 
 // AllStaticToolNames returns a copy of the full static builtin tool-name
@@ -779,33 +780,28 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			// unrelated parent turns rather than its own work. See
 			// coreAgentSeed's ROSTER VISIBILITY rule.
 			"list_jobs": deny,
-			// --- ADR-067 D17 knowledge-base tools ---
-			// EXPLICIT deny, all nine — the "ceiling is allow, so absence
+			// --- ADR-068 D15.3 knowledge-base tools ---
+			// EXPLICIT deny, all six — the "ceiling is allow, so absence
 			// GRANTS" trap once more (see inspect_session / stop_plan /
-			// list_jobs above). D17 seeds a posture for the FOUR BASE AGENTS
-			// and nobody else, and every other seeded agent reaches deny via
-			// denyAllThenOverride's fully-enumerated default. This sparse map
-			// is the one seed that would not, so the deny is written out.
+			// list_jobs above). D15.3 seeds a posture for the FOUR BASE
+			// AGENTS and nobody else, and every other seeded agent reaches
+			// deny via denyAllThenOverride's fully-enumerated default. This
+			// sparse map is the one seed that would not, so the deny is
+			// written out.
 			//
-			// Read-only knowledge_search is denied here for the same reason
-			// list_jobs is: the Worker id is occupied by every generic
-			// delegated session in the installation at once, so a grant to
-			// "the Worker" is a grant to all of them. An operator who wants a
-			// delegated worker reading a knowledge base changes this on their
-			// own install (Constraint #6 — this is seeded data, not a branch).
-			//
-			// knowledge_tasks rides with the reads (see allStaticToolNames'
-			// SEED RULE), which for the Worker means the same deny the other
-			// two reads carry, for the same reason.
-			"knowledge_search":         deny,
-			"knowledge_graph":          deny,
-			"knowledge_tasks":          deny,
-			"knowledge_create":         deny,
-			"knowledge_link":           deny,
-			"knowledge_set_property":   deny,
-			"knowledge_append_section": deny,
-			"knowledge_move":           deny,
-			"knowledge_rename":         deny,
+			// Read-only knowledge_describe/knowledge_find/knowledge_read are
+			// denied here for the same reason list_jobs is: the Worker id is
+			// occupied by every generic delegated session in the
+			// installation at once, so a grant to "the Worker" is a grant to
+			// all of them. An operator who wants a delegated worker reading
+			// a knowledge base changes this on their own install
+			// (Constraint #6 — this is seeded data, not a branch).
+			"knowledge_describe":    deny,
+			"knowledge_find":        deny,
+			"knowledge_read":        deny,
+			"knowledge_edit":        deny,
+			"knowledge_restructure": deny,
+			"knowledge_configure":   deny,
 		})
 	}
 	// The delegation-only specialist tier (Planner/Explorer/Researcher) is a
@@ -958,24 +954,42 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			// must be able to find the plan she owns in order to stop it. See
 			// coreAgentSeed's ROSTER VISIBILITY rule.
 			"list_jobs": allow,
-			// ADR-067 D17 — knowledge base. Ava is a BUILDER: authoring is
-			// her role, so she holds the write half unprompted, the same way
-			// she holds create_agent/update_agent. Retrieval is allow for all
-			// four base agents (read-only, and scoped by the tool itself to
-			// this agent's workspace mounts — ADR-067 D7), and that includes
-			// knowledge_tasks (see allStaticToolNames' SEED RULE). Ava's two
-			// halves happen to resolve to the same value, so the regrouping
-			// changes nothing she can do — it keeps her map readable as the
-			// same matrix as everyone else's.
-			"knowledge_search":         allow,
-			"knowledge_graph":          allow,
-			"knowledge_tasks":          allow,
-			"knowledge_create":         allow,
-			"knowledge_link":           allow,
-			"knowledge_set_property":   allow,
-			"knowledge_append_section": allow,
-			"knowledge_move":           allow,
-			"knowledge_rename":         allow,
+			// ADR-068 D15.3 — knowledge base, split by BLAST RADIUS rather
+			// than by read/write (superseding ADR-067 D17's file). Retrieval
+			// (knowledge_describe/knowledge_find/knowledge_read) is allow
+			// for all four base agents: read-only, and scoped by the tool
+			// itself to this agent's workspace mounts (ADR-068's own
+			// isolation carries forward D7's). Ava was previously full-allow
+			// on every ADR-067 write too, because under that model EVERY
+			// write touched exactly one file she named — "she is a BUILDER,
+			// so she holds the write half unprompted, the same way she
+			// holds create_agent/update_agent" no longer holds unmodified,
+			// because ADR-068's split changes what the writes DO:
+			// knowledge_edit is still that one-file case (kept unprompted-
+			// adjacent by staying "ask" rather than "allow" only because
+			// this is the family's FIRST release under the new engine —
+			// see coreAgentSeed's doc note on this being a conservative
+			// default, not a permanent verdict on her role); but
+			// knowledge_restructure CASCADES to files she never named
+			// (every inbound-linking note gets rewritten on a rename/move/
+			// trash) and knowledge_configure changes what EXISTING records
+			// MEAN (a schema edit reclassifies every record of that type
+			// already on disk — see its own execEditRecordType/
+			// execCreateRecordType cascade report). Neither blast radius is
+			// bounded by what Ava's own arguments named, which is precisely
+			// the property that made every other ADR-067 write safe to grant
+			// her unprompted. So all three writes are "ask" here, not
+			// "allow" — a role-based exception for a specific agent is a
+			// decision for a human operator to make on their own install
+			// (Constraint #6), not a default this seed grants on Ava's
+			// behalf for an operation whose full effect she cannot bound
+			// from her own call.
+			"knowledge_describe":    allow,
+			"knowledge_find":        allow,
+			"knowledge_read":        allow,
+			"knowledge_edit":        ask,
+			"knowledge_restructure": ask,
+			"knowledge_configure":   ask,
 		})
 	case IDMia:
 		// Mia — the Assistant (default agent). LEAST-PRIVILEGE: deny-by-default,
@@ -1028,34 +1042,34 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			// once an operator approves the "ask" above — and would then need
 			// this to find it. See coreAgentSeed's ROSTER VISIBILITY rule.
 			"list_jobs": allow,
-			// ADR-067 D17 — knowledge base. Retrieval is allow (read-only,
-			// workspace-scoped by the tool itself); authoring is "ask".
-			// Mia ROUTES heavy work rather than doing it, and a knowledge
-			// write lands on the operator's REAL disk outside the Library's
-			// audit path — so the everyday assistant asks before writing
-			// there, exactly as she asks before delete_task.
+			// ADR-068 D15.3 — knowledge base, split by BLAST RADIUS
+			// (superseding ADR-067 D17's file). Retrieval
+			// (knowledge_describe/knowledge_find/knowledge_read) is allow —
+			// read-only, workspace-scoped by the tool itself, and this
+			// supersedes the ADR-067-era distinction between knowledge_tasks
+			// and knowledge_search: knowledge_find is now the ONE retrieval
+			// surface (it answers task queries too, via `kind: task` —
+			// FR-076a), so there is no longer a second, narrower read name
+			// for a stricter posture to attach to.
 			//
-			// knowledge_tasks is ALLOW here, with the reads. It was "ask"
-			// until this change, and Mia is the install's default agent, so
-			// hers was the prompt an operator actually met: "may I list the
-			// checkboxes in your notes?" — raised by an agent already holding
-			// unprompted knowledge_search over the very same notes, which
-			// returns their TEXT rather than just their checkbox lines. The
-			// prompt withheld nothing, so it protected nothing, and the
-			// operator's only available lesson was that these prompts are
-			// noise. That lesson is then carried to knowledge_create and
-			// knowledge_move directly below, where the "ask" is the whole
-			// control. See allStaticToolNames' SEED RULE for why the tool is
-			// a read.
-			"knowledge_search":         allow,
-			"knowledge_graph":          allow,
-			"knowledge_tasks":          allow,
-			"knowledge_create":         ask,
-			"knowledge_link":           ask,
-			"knowledge_set_property":   ask,
-			"knowledge_append_section": ask,
-			"knowledge_move":           ask,
-			"knowledge_rename":         ask,
+			// knowledge_edit, knowledge_restructure and knowledge_configure
+			// are all "ask". Mia ROUTES heavy work rather than doing it, and
+			// every one of these lands on the operator's REAL disk outside
+			// the Library's audit path — so the everyday assistant asks
+			// before writing there, exactly as she asks before delete_task.
+			// This is the SAME "ask" ADR-067's knowledge_create/
+			// knowledge_move carried for her; ADR-068 does not loosen it —
+			// knowledge_restructure and knowledge_configure are, if
+			// anything, a WIDER blast radius than the single-file writes
+			// that already warranted asking (see coreAgentSeed's IDAva case
+			// for the cascade/control-plane argument, which applies
+			// identically here).
+			"knowledge_describe":    allow,
+			"knowledge_find":        allow,
+			"knowledge_read":        allow,
+			"knowledge_edit":        ask,
+			"knowledge_restructure": ask,
+			"knowledge_configure":   ask,
 		})
 	case IDRay:
 		// Ray — the Scout / research analyst. LEAST-PRIVILEGE: deny-by-default,
@@ -1129,26 +1143,32 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			// directly on his critical path. See coreAgentSeed's ROSTER
 			// VISIBILITY rule.
 			"list_jobs": allow,
-			// ADR-067 D17 — knowledge base. Ray is the Scout: retrieval is
-			// squarely his job and is allow. Authoring is "ask" — he
-			// researches and reports rather than editing the operator's
-			// knowledge base, and his file writes go to the workspace
-			// (write_file/append_file above), not to a mounted vault.
+			// ADR-068 D15.3 — knowledge base, split by BLAST RADIUS
+			// (superseding ADR-067 D17's file). Ray is the Scout: retrieval
+			// (knowledge_describe/knowledge_find/knowledge_read) is squarely
+			// his job and is allow — "what is still open in this vault?" is
+			// a survey question, and knowledge_find now answers it directly
+			// via `kind: task` (FR-076a), superseding the old
+			// knowledge_tasks/knowledge_search split this comment used to
+			// reason about separately.
 			//
-			// knowledge_tasks is ALLOW here, with the reads (it was "ask"
-			// until this change). "What is still open in this vault?" is a
-			// survey question, which is the Scout's entire job, and the tool
-			// reads strictly less than the knowledge_search he already holds
-			// unprompted. See allStaticToolNames' SEED RULE.
-			"knowledge_search":         allow,
-			"knowledge_graph":          allow,
-			"knowledge_tasks":          allow,
-			"knowledge_create":         ask,
-			"knowledge_link":           ask,
-			"knowledge_set_property":   ask,
-			"knowledge_append_section": ask,
-			"knowledge_move":           ask,
-			"knowledge_rename":         ask,
+			// knowledge_edit, knowledge_restructure and knowledge_configure
+			// are all "ask" — unchanged posture from ADR-067's knowledge_
+			// create/knowledge_move: he researches and reports rather than
+			// editing the operator's knowledge base, and his file writes go
+			// to the workspace (write_file/append_file above), not to a
+			// mounted vault. knowledge_restructure/knowledge_configure are a
+			// WIDER blast radius than the single-file writes that already
+			// warranted asking (see coreAgentSeed's IDAva case for the
+			// cascade/control-plane argument), so there is no case for
+			// loosening either past "ask" for a role whose job was never to
+			// write there at all.
+			"knowledge_describe":    allow,
+			"knowledge_find":        allow,
+			"knowledge_read":        allow,
+			"knowledge_edit":        ask,
+			"knowledge_restructure": ask,
+			"knowledge_configure":   ask,
 		})
 	case IDJim:
 		// Jim — the Planner & Orchestrator. LEAST-PRIVILEGE: deny-by-default,
@@ -1279,23 +1299,41 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			// necessarily mint this turn. He is also the heaviest delegator.
 			// See coreAgentSeed's ROSTER VISIBILITY rule.
 			"list_jobs": allow,
-			// ADR-067 D17 — knowledge base. Jim already holds the unprompted
-			// write surface for the workspace (write_file/edit_file/bash), so
-			// gating the knowledge equivalents behind a prompt would buy
-			// nothing while making the orchestrator depend on a human for
-			// routine work. Retrieval is allow for all four base agents, and
-			// that includes knowledge_tasks (see allStaticToolNames' SEED
-			// RULE). Like Ava's, Jim's two halves resolve to the same value,
-			// so the regrouping changes nothing he can do.
-			"knowledge_search":         allow,
-			"knowledge_graph":          allow,
-			"knowledge_tasks":          allow,
-			"knowledge_create":         allow,
-			"knowledge_link":           allow,
-			"knowledge_set_property":   allow,
-			"knowledge_append_section": allow,
-			"knowledge_move":           allow,
-			"knowledge_rename":         allow,
+			// ADR-068 D15.3 — knowledge base, split by BLAST RADIUS
+			// (superseding ADR-067 D17's file). Retrieval
+			// (knowledge_describe/knowledge_find/knowledge_read) is allow
+			// for all four base agents.
+			//
+			// UNLIKE Ava/Mia/Ray above, Jim's writes (knowledge_edit,
+			// knowledge_restructure, knowledge_configure) stay "allow" too,
+			// and this is a DELIBERATE exception argued from Jim's own
+			// already-seeded posture a few lines above ("bash": allow), not
+			// an oversight that forgot to tighten him along with the other
+			// three. An "ask" gate on knowledge_restructure/
+			// knowledge_configure has real teeth for an agent who cannot
+			// otherwise touch the operator's files — that is exactly why
+			// Ava/Mia/Ray hold it. Jim already holds unprompted bash, and
+			// bash can rewrite, rename or delete anything in a mounted
+			// collection — including reproducing knowledge_restructure's
+			// cascade or knowledge_configure's schema rewrite by hand, with
+			// no prompt at all. Gating the knowledge-tool EQUIVALENTS behind
+			// "ask" for him specifically would not reduce what he can do; it
+			// would only make the orchestrator depend on a human to do
+			// through the audited, journal-backed tool what he could
+			// already do unaudited through bash. That is exactly the
+			// "protects nothing" prompt this codebase's own seeding
+			// philosophy warns against — training an operator to click
+			// through confirmations that gate nothing real, which erodes
+			// trust in the ones that do (see the analogous
+			// knowledge_tasks-vs-knowledge_search reasoning this file
+			// carried before ADR-068, now superseded but the same warning
+			// still holds for Jim's case here).
+			"knowledge_describe":    allow,
+			"knowledge_find":        allow,
+			"knowledge_read":        allow,
+			"knowledge_edit":        allow,
+			"knowledge_restructure": allow,
+			"knowledge_configure":   allow,
 		})
 	}
 	// Defensive fallback for an ID outside the known roster (All() only ever

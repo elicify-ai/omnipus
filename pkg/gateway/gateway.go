@@ -901,11 +901,11 @@ func buildKnownBuiltinToolNames() map[string]struct{} {
 		for _, name := range []string{"create_plan", "execute_plan", "run_task", "inspect_session"} {
 			out[name] = struct{}{}
 		}
-		// ADR-067 D17 (FR-070/FR-071) — the nine knowledge-base tool names are
+		// ADR-068 D15.3 (FR-070/FR-071) — the six knowledge-base tool names are
 		// unioned in explicitly here for the same reason, and under the same
 		// rule, as the ADR-052 four directly above: independent of their
-		// pkg/knowledge implementation landing, so the tool-policy coverage
-		// universe (config.ValidateToolPolicyCoverage /
+		// pkg/knowledge/pkg/vaultprops implementation landing, so the
+		// tool-policy coverage universe (config.ValidateToolPolicyCoverage /
 		// RepairIncompleteToolPolicyCoverage) recognizes them from the
 		// config-seeding side immediately. Mirrors pkg/coreagent/core.go's
 		// allStaticToolNames literal-for-literal
@@ -925,13 +925,22 @@ func buildKnownBuiltinToolNames() map[string]struct{} {
 		// mode, and it is silent: repairAndValidateToolPolicyCoverage below
 		// repairs BEFORE it validates, so a genuine gap ships as an explicit
 		// deny plus one WARN line rather than aborting boot.
+		//
+		// ADR-067's nine (knowledge_search, knowledge_graph, knowledge_create,
+		// knowledge_link, knowledge_set_property, knowledge_append_section,
+		// knowledge_tasks, knowledge_move, knowledge_rename) are RETIRED and
+		// deliberately absent below — see knowledge_tools_wire.go's header for
+		// why their Go implementations are not deleted even though they are no
+		// longer part of the agent-callable catalog.
 		for _, name := range []string{
-			// Retrieval.
-			"knowledge_search", "knowledge_graph",
-			// Authoring.
-			"knowledge_create", "knowledge_link", "knowledge_set_property",
-			"knowledge_append_section", "knowledge_tasks",
-			"knowledge_move", "knowledge_rename",
+			// READ tier — touch nothing outside what the caller asked for.
+			"knowledge_describe", "knowledge_find", "knowledge_read",
+			// EDIT — one named file.
+			"knowledge_edit",
+			// RESTRUCTURE — cascades: rewrites files the caller never named.
+			"knowledge_restructure",
+			// CONFIGURE — control plane: changes what existing notes MEAN.
+			"knowledge_configure",
 		} {
 			out[name] = struct{}{}
 		}
