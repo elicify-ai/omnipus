@@ -504,7 +504,7 @@ func (r *Renamer) Plan(req RenameRequest) (*RenamePlan, error) {
 	//     destination does not exist yet, so nothing can look for it in the
 	//     walk. `move new_folder="Inbox/Sub"` with Inbox a symlink to Archive/
 	//     was ACCEPTED, moved the note to Archive/Sub/, audited it as
-	//     Inbox/Sub/ — and vault_read then refused to open the path the agent
+	//     Inbox/Sub/ — and knowledge_read then refused to open the path the agent
 	//     had just been told the note now had. That is the c06bb051 class of
 	//     defect, on a path that also DELETES the note's old name.
 	fromReal, err := r.Root.ResolveContainedNoSymlink(fsys, from)

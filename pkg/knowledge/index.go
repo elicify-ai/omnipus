@@ -1548,7 +1548,7 @@ func (ix *Index) indexAttachment(batch *batchState, entry ScanEntry) (ManifestEn
 // The content hash was computed DURING the segmenting pass, because the only
 // thing that needed it was the manifest entry returned at the end. ADR-068
 // D16.5 changes that: the hash is now a STORED FIELD ON EVERY SEGMENT
-// DOCUMENT, so that `vault_find` can compare it against the properties index's
+// DOCUMENT, so that `knowledge_find` can compare it against the properties index's
 // `source_hash` column on the hit itself, with no manifest parse and no shared
 // mutable state on the query path.
 //

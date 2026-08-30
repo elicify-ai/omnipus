@@ -115,7 +115,7 @@ func TestReplaceBody_AnchorNotFound_IsDistinctFromAmbiguous(t *testing.T) {
 	msg := err.Error()
 	assert.Contains(t, msg, `"## Discount"`)
 	assert.Contains(t, msg, "Deals/Acme.md")
-	assert.Contains(t, msg, "vault_read", "the remedy must tell the caller how to get a correct anchor")
+	assert.Contains(t, msg, "knowledge_read", "the remedy must tell the caller how to get a correct anchor")
 }
 
 // ---------------------------------------------------------------------------
@@ -384,7 +384,7 @@ func TestFindAnchorMatches_NonOverlappingConvention(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestReplaceBody_EditNote_AmbiguousAnchorLeavesFileByteIdentical is AC-E3,
-// through the actual write path a vault_edit tool would call.
+// through the actual write path a knowledge_edit tool would call.
 func TestReplaceBody_EditNote_AmbiguousAnchorLeavesFileByteIdentical(t *testing.T) {
 	root := a1Vault(t, "Research", nil)
 	c := a1Collection(t, root)
@@ -458,12 +458,12 @@ func TestReplaceBody_EditNote_SingleMatchAppliesAndVersionRoundTrips(t *testing.
 	require.NoError(t, rerr)
 	assert.Equal(t, want, string(onDisk))
 	assert.Equal(t, NoteContentVersion([]byte(want)), res.Version,
-		"the returned token must describe what is on disk, matching the vault_read -> vault_edit "+
+		"the returned token must describe what is on disk, matching the knowledge_read -> knowledge_edit "+
 			"round trip AC-R1/AC-R2 promise")
 }
 
 // TestReplaceBody_EditNote_StaleVersionRefused proves replace_body composes
-// with the SAME version-token concurrency control every other vault_edit
+// with the SAME version-token concurrency control every other knowledge_edit
 // operation uses (FR-043) — not a second, invented mechanism.
 func TestReplaceBody_EditNote_StaleVersionRefused(t *testing.T) {
 	root := a1Vault(t, "Research", nil)

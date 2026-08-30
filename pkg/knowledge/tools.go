@@ -592,7 +592,7 @@ func (t *SearchTool) excerptBudget() time.Duration {
 // file, the write path resolved destinations with bare ResolveContained and
 // the two tools disagreed about which paths were addressable — with the WRITE
 // tool the more permissive of the two, so a create through a symlinked folder
-// landed somewhere vault_read then refused to open.
+// landed somewhere knowledge_read then refused to open.
 func retrievalPath(fsys LinkFS, root CollectionRoot, rel string) (string, error) {
 	return root.ResolveContainedNoSymlink(fsys, rel)
 }
@@ -1122,9 +1122,9 @@ func jsonResult(v any) *tools.ToolResult {
 }
 
 // ---------------------------------------------------------------------------
-// vault_describe — the TOOL ADAPTER half (ADR-068 D15.3, spec 4.1.1)
+// knowledge_describe — the TOOL ADAPTER half (ADR-068 D15.3, spec 4.1.1)
 //
-// It lives in this file, and not beside its own logic in vault_describe.go,
+// It lives in this file, and not beside its own logic in knowledge_describe.go,
 // because of the guard in links_test.go: `pkg/tools` is the only import in
 // pkg/knowledge whose transitive closure reaches a language-model client, and
 // TestKnowledge_NoLanguageModelInTheGraphPath confines it to the tool-adapter
@@ -1132,7 +1132,7 @@ func jsonResult(v any) *tools.ToolResult {
 // indexing, link-resolution and note-rewriting path; FR-045 is that nothing on
 // that path can reach a model.
 //
-// vault_describe.go therefore holds the describe and render logic with no
+// knowledge_describe.go therefore holds the describe and render logic with no
 // pkg/tools import at all, and everything that presents it to an agent is
 // here. Moving any of it back fails the guard with the reason attached.
 // ---------------------------------------------------------------------------
@@ -1149,7 +1149,7 @@ func jsonResult(v any) *tools.ToolResult {
 // never as zero findings.
 type OpenPropertyIndexFunc func(ctx context.Context, home, collectionRoot string) (PropertyIndexReader, error)
 
-// DescribeTool is vault_describe.
+// DescribeTool is knowledge_describe.
 type DescribeTool struct {
 	tools.BaseTool
 	deps      ToolDeps
@@ -1170,7 +1170,7 @@ func NewDescribeTool(deps ToolDeps, openIndex OpenPropertyIndexFunc) *DescribeTo
 }
 
 // Name is the registered tool name.
-func (t *DescribeTool) Name() string { return "vault_describe" }
+func (t *DescribeTool) Name() string { return "knowledge_describe" }
 
 // Description is what the model reads, and it is the ONLY thing it reads
 // before deciding whether to call.
@@ -1240,7 +1240,7 @@ func (t *DescribeTool) Execute(ctx context.Context, args map[string]any) *tools.
 	// something false about what it asked.
 	if unknown := unknownArgs(args, describeArgNames); len(unknown) > 0 {
 		return tools.ErrorResult(fmt.Sprintf(
-			"vault_describe: unknown argument(s) %s; accepted: %s",
+			"knowledge_describe: unknown argument(s) %s; accepted: %s",
 			strings.Join(unknown, ", "), strings.Join(describeArgNames, ", ")))
 	}
 	if res := checkRetrievalRate(t.deps.RateLimiter, t.Name(), tools.ToolAgentID(ctx)); res != nil {
@@ -1249,7 +1249,7 @@ func (t *DescribeTool) Execute(ctx context.Context, args map[string]any) *tools.
 
 	sections, err := parseIncludeSections(args["include"])
 	if err != nil {
-		return tools.ErrorResult("vault_describe: " + err.Error())
+		return tools.ErrorResult("knowledge_describe: " + err.Error())
 	}
 	detail := strings.ToLower(strings.TrimSpace(stringArg(args["detail"])))
 	switch detail {
@@ -1258,7 +1258,7 @@ func (t *DescribeTool) Execute(ctx context.Context, args map[string]any) *tools.
 	case DetailMinimal:
 	default:
 		return tools.ErrorResult(fmt.Sprintf(
-			"vault_describe: unknown detail %q; accepted: %s, %s", detail, DetailStandard, DetailMinimal))
+			"knowledge_describe: unknown detail %q; accepted: %s, %s", detail, DetailStandard, DetailMinimal))
 	}
 
 	scope, _ := ResolveTurnScope(ctx, t.deps.Home)
@@ -1268,7 +1268,7 @@ func (t *DescribeTool) Execute(ctx context.Context, args map[string]any) *tools.
 		// FR-024's posture, and the reason this tool exists: the valid names
 		// are LISTED, so learning them never costs a failed call.
 		return tools.ErrorResult(fmt.Sprintf(
-			"vault_describe: no knowledge base %q is mounted into this workspace; in scope: %s",
+			"knowledge_describe: no knowledge base %q is mounted into this workspace; in scope: %s",
 			collectionRef, joinOrNone(scope.Names())))
 	}
 
@@ -1279,7 +1279,7 @@ func (t *DescribeTool) Execute(ctx context.Context, args map[string]any) *tools.
 		CheckIntegrity: boolArg(args["check_integrity"]),
 	})
 	if execErr != nil {
-		return tools.ErrorResult("vault_describe: " + execErr.Error())
+		return tools.ErrorResult("knowledge_describe: " + execErr.Error())
 	}
 	return tools.NewToolResult(RenderDescribe(*data))
 }
@@ -1367,7 +1367,7 @@ func (t *DescribeTool) gather(
 				if cerr := closer.Close(); cerr != nil {
 					// A close failure cannot change an answer already
 					// computed, but it must not vanish either.
-					slog.Warn("vault_describe: closing the properties index failed",
+					slog.Warn("knowledge_describe: closing the properties index failed",
 						"collection_root", root.Path(), "error", cerr)
 				}
 			}()
@@ -1473,15 +1473,15 @@ func parseIncludeSections(raw any) (map[string]bool, error) {
 }
 
 // ---------------------------------------------------------------------------
-// vault_read — the TOOL ADAPTER half (ADR-068 D15.3, spec §4.1.3)
+// knowledge_read — the TOOL ADAPTER half (ADR-068 D15.3, spec §4.1.3)
 //
-// Same split as vault_describe above: the response shape, the renderer and
-// the pure section/byte logic live in vault_read.go with no `pkg/tools`
+// Same split as knowledge_describe above: the response shape, the renderer and
+// the pure section/byte logic live in knowledge_read.go with no `pkg/tools`
 // import; this is the adapter that resolves scope, touches the filesystem
 // and the link graph, and hands the assembled ReadData to RenderRead.
 // ---------------------------------------------------------------------------
 
-// ReadTool is vault_read.
+// ReadTool is knowledge_read.
 type ReadTool struct {
 	tools.BaseTool
 	deps ToolDeps
@@ -1496,7 +1496,7 @@ func NewReadTool(deps ToolDeps) *ReadTool {
 }
 
 // Name is the registered tool name.
-func (t *ReadTool) Name() string { return "vault_read" }
+func (t *ReadTool) Name() string { return "knowledge_read" }
 
 // Description is what the model reads before deciding whether to call.
 func (t *ReadTool) Description() string {
@@ -1504,7 +1504,7 @@ func (t *ReadTool) Description() string {
 		"frontmatter — any value that violates the note's own schema is flagged in place, " +
 		"never silently dropped, and the note still reads — the body (or the one section " +
 		"asked for), and every link the note makes and every link that points back to it. " +
-		"Also returns the note's version token: send it back unchanged to vault_edit; this " +
+		"Also returns the note's version token: send it back unchanged to knowledge_edit; this " +
 		"is the only supported way to obtain one, no failing write required. Reads only."
 }
 
@@ -1556,7 +1556,7 @@ func (t *ReadTool) Parameters() map[string]any {
 func (t *ReadTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
 	if unknown := unknownArgs(args, readArgNames); len(unknown) > 0 {
 		return tools.ErrorResult(fmt.Sprintf(
-			"vault_read: unknown argument(s) %s; accepted: %s",
+			"knowledge_read: unknown argument(s) %s; accepted: %s",
 			strings.Join(unknown, ", "), strings.Join(readArgNames, ", ")))
 	}
 	if res := checkRetrievalRate(t.deps.RateLimiter, t.Name(), tools.ToolAgentID(ctx)); res != nil {
@@ -1565,12 +1565,12 @@ func (t *ReadTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 
 	notePath := normalizeRel(strings.TrimSpace(stringArg(args["path"])))
 	if notePath == "" {
-		return tools.ErrorResult("vault_read: 'path' is required")
+		return tools.ErrorResult("knowledge_read: 'path' is required")
 	}
 
 	included, err := parseReadInclude(args["include"])
 	if err != nil {
-		return tools.ErrorResult("vault_read: " + err.Error())
+		return tools.ErrorResult("knowledge_read: " + err.Error())
 	}
 
 	maxBytes := intArg(args["max_bytes"], ReadDefaultMaxBytes)
@@ -1587,13 +1587,13 @@ func (t *ReadTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 	col, ok := scope.Select(collectionRef)
 	if !ok {
 		return tools.ErrorResult(fmt.Sprintf(
-			"vault_read: no knowledge base %q is mounted into this workspace; in scope: %s",
+			"knowledge_read: no knowledge base %q is mounted into this workspace; in scope: %s",
 			collectionRef, joinOrNone(scope.Names())))
 	}
 
 	data, rerr := t.gather(col, notePath, section, included, maxBytes)
 	if rerr != nil {
-		return tools.ErrorResult("vault_read: " + rerr.Error())
+		return tools.ErrorResult("knowledge_read: " + rerr.Error())
 	}
 	return tools.NewToolResult(RenderRead(*data))
 }
@@ -1649,7 +1649,7 @@ func (t *ReadTool) gather(
 
 	// FR-074 — the version token is computed from THESE bytes, the exact
 	// bytes this response renders from, so token and content can never
-	// disagree by construction (see vault_read.go's file header).
+	// disagree by construction (see knowledge_read.go's file header).
 	data := &ReadData{
 		Path:     notePath,
 		Version:  string(ComputeVersionToken(content)),
@@ -1712,8 +1712,8 @@ func (t *ReadTool) gather(
 
 // splitFrontmatter locates the byte offset where a note's body starts and
 // parses its frontmatter, both from the SAME block-detection rule fmParse
-// uses for the authoring path — so vault_read's body/frontmatter split can
-// never disagree with what vault_edit later splices into.
+// uses for the authoring path — so knowledge_read's body/frontmatter split can
+// never disagree with what knowledge_edit later splices into.
 //
 // fmParse and records.ParseFrontmatter agree on every TERMINATED block (both
 // require the first line to be exactly "---" and then scan for a closing
@@ -1723,7 +1723,7 @@ func (t *ReadTool) gather(
 // we have as the block"). fields.go's indexer already resolves that
 // divergence by falling back to "ordinary note, whole file is body" on the
 // fmParse error rather than trusting the records-package reading — this
-// mirrors that choice exactly, so a note vault_read shows as unparsed
+// mirrors that choice exactly, so a note knowledge_read shows as unparsed
 // frontmatter is the same note the index already treats that way.
 func (t *ReadTool) splitFrontmatter(content []byte) (bodyStart int, fm records.Frontmatter, parseErr string) {
 	blk, ferr := fmParse(content)
@@ -1745,7 +1745,7 @@ func (t *ReadTool) splitFrontmatter(content []byte) (bodyStart int, fm records.F
 	}
 }
 
-// toReadLinks projects graph.go's ResolvedLink into vault_read's own render
+// toReadLinks projects graph.go's ResolvedLink into knowledge_read's own render
 // shape.
 func toReadLinks(in []ResolvedLink, backlinks bool) []ReadLink {
 	_ = backlinks // both directions render through the same projection
@@ -1769,7 +1769,7 @@ func toReadLinks(in []ResolvedLink, backlinks bool) []ReadLink {
 
 // parseReadInclude reads `include`, refusing a member outside ReadIncludeOrder
 // with the valid members listed — the same posture parseIncludeSections takes
-// for vault_describe.
+// for knowledge_describe.
 func parseReadInclude(raw any) (map[string]bool, error) {
 	if raw == nil {
 		return allReadIncludes(), nil

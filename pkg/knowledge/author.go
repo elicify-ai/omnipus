@@ -546,7 +546,7 @@ func authorRefuseReserved(rel string) error {
 //
 //   - authorRefuseReserved had exactly two call sites — CreateNote and
 //     Renamer.Plan — and none on the edit path. Measured through the
-//     vault_edit tool, set_property / append_section / link / replace_body
+//     knowledge_edit tool, set_property / append_section / link / replace_body
 //     each wrote into .obsidian/app.json, a real .git/config, .trash/ and
 //     Omnipus's own .omnipus-vault/ state, and the audit record said
 //     "applied". replace_body could rewrite an arbitrary span of any of them.
@@ -558,7 +558,7 @@ func authorRefuseReserved(rel string) error {
 //     link had been followed. That is the same defect c06bb051 fixed for the
 //     read path, still live on the write path: `create path="Inbox/New.md"`
 //     with Inbox a symlink to Archive/ landed the file at Archive/New.md,
-//     audited it as Inbox/New.md, and vault_read then refused to open the
+//     audited it as Inbox/New.md, and knowledge_read then refused to open the
 //     path the agent had just been told it wrote.
 //
 // Ordering: reserved first, because "this destination is not a place notes go"

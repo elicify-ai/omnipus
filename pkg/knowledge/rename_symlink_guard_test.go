@@ -185,7 +185,7 @@ func TestRename_RefusesEveryPathOnlyReachableThroughASymlink(t *testing.T) {
 // Before the fix this rename SUCCEEDED: Real.md was deleted from its own name,
 // the bytes appeared at Archive/Sub/Moved.md, and the audit record and the
 // tool's own reply both said the note was now at "Inbox/Sub/Moved.md" — a path
-// vault_read refuses to open, because the read path has enforced FR-044 since
+// knowledge_read refuses to open, because the read path has enforced FR-044 since
 // c06bb051. The operator is told where the note went and cannot go there.
 func TestRename_MoveIntoASymlinkedFolderDoesNotRelocateTheNote(t *testing.T) {
 	dir, root := g4Fixture(t)

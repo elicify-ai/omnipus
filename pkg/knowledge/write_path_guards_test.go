@@ -5,7 +5,7 @@
 // coverage is not evidence for the write side, and two tests that looked like
 // evidence were not:
 //
-//   - vault_edit_test.go's TestVaultEdit_NeverTouchesAFileTheAgentDidNotName
+//   - vault_edit_test.go's TestKnowledgeEdit_NeverTouchesAFileTheAgentDidNotName
 //     states a blast-radius property in its NAME and then exercises `op:
 //     create` only — the one op that had the reserved-location guard. It
 //     passed with all four edit ops writing freely into .obsidian/, .git/,
@@ -64,7 +64,7 @@ import (
 //	on disk after: 22 bytes, "---\nstatus: final\n---\n"
 //
 // af5570f5… is the hash of EMPTY content. The refusal handed the caller the
-// key to the clobber, and the retry protocol vault_edit's description teaches
+// key to the clobber, and the retry protocol knowledge_edit's description teaches
 // walks a model straight through it. That is why this test does not stop at
 // "the first attempt is refused": it walks the retry too.
 func TestEditNote_RefusesAnEvictedNoteInsteadOfWritingBackAStub(t *testing.T) {
@@ -149,7 +149,7 @@ func TestEditNote_RefusesAnEvictedNoteInsteadOfWritingBackAStub(t *testing.T) {
 // FINDING 3 — the reserved-location guard, on EVERY write op.
 // ---------------------------------------------------------------------------
 
-// veWriteOp is one vault_edit op plus the arguments that make it do real work.
+// veWriteOp is one knowledge_edit op plus the arguments that make it do real work.
 // `create` is the only one that must NOT find a file already there, so the
 // table carries that difference rather than a second table.
 type veWriteOp struct {
@@ -158,9 +158,9 @@ type veWriteOp struct {
 	extraFor func(version string) map[string]any
 }
 
-// veWriteOps enumerates every op vault_edit can mutate a collection with.
+// veWriteOps enumerates every op knowledge_edit can mutate a collection with.
 //
-// It is derived from vaultEditOps — the tool's own list — rather than
+// It is derived from knowledgeEditOps — the tool's own list — rather than
 // hand-written, so an op added to the tool and not to this table fails here
 // instead of shipping untested. That is the same reasoning reserved_setwide_test.go
 // applies to scanSkippedDirNames, and the failure it prevents is exactly the
@@ -190,10 +190,10 @@ func veWriteOps(t *testing.T) []veWriteOp {
 		covered = append(covered, o.op)
 	}
 	sort.Strings(covered)
-	declared := append([]string(nil), vaultEditOps...)
+	declared := append([]string(nil), knowledgeEditOps...)
 	sort.Strings(declared)
 	require.Equal(t, declared, covered,
-		"every op vault_edit can write with must be in this table; an op the tool "+
+		"every op knowledge_edit can write with must be in this table; an op the tool "+
 			"accepts and this table omits is an op no blast-radius test covers")
 	return all
 }
@@ -213,7 +213,7 @@ func veReservedNames(t *testing.T) []string {
 	return names
 }
 
-// TestVaultEdit_EveryWriteOpRefusesAReservedLocation is the end-to-end form of
+// TestKnowledgeEdit_EveryWriteOpRefusesAReservedLocation is the end-to-end form of
 // finding 3, through the tool an agent actually calls.
 //
 // Measured before the fix, with the audit saying outcome=applied each time:
@@ -225,7 +225,7 @@ func veReservedNames(t *testing.T) []string {
 //
 // Those are the operator's Obsidian configuration, a real git repository's
 // config, Obsidian's soft-delete folder and Omnipus's own tool state.
-func TestVaultEdit_EveryWriteOpRefusesAReservedLocation(t *testing.T) {
+func TestKnowledgeEdit_EveryWriteOpRefusesAReservedLocation(t *testing.T) {
 	for _, dir := range veReservedNames(t) {
 		for _, w := range veWriteOps(t) {
 			t.Run(dir+"/"+w.op, func(t *testing.T) {
@@ -290,19 +290,19 @@ func veSymlinkFixture(t *testing.T) (home, ws, root string) {
 	return home, ws, root
 }
 
-// TestVaultEdit_EveryWriteOpRefusesAPathReachedThroughAnInCollectionSymlink is
+// TestKnowledgeEdit_EveryWriteOpRefusesAPathReachedThroughAnInCollectionSymlink is
 // finding 6 through the tool, for every op.
 //
 // Measured before the fix:
 //
-//	vault_edit create path="Inbox/New.md"   (Inbox -> Archive/)
+//	knowledge_edit create path="Inbox/New.md"   (Inbox -> Archive/)
 //	AUDIT: outcome=applied paths=[Inbox/New.md]   landed at Archive/New.md
-//	vault_read "Inbox/New.md": REFUSED — reaches ".../Archive/New.md" only
+//	knowledge_read "Inbox/New.md": REFUSED — reaches ".../Archive/New.md" only
 //	                                     through a symbolic link
 //
 // So the FR-090 audit record named a path where no file existed, and the agent
 // could not read back what it had just been told it wrote.
-func TestVaultEdit_EveryWriteOpRefusesAPathReachedThroughAnInCollectionSymlink(t *testing.T) {
+func TestKnowledgeEdit_EveryWriteOpRefusesAPathReachedThroughAnInCollectionSymlink(t *testing.T) {
 	for _, w := range veWriteOps(t) {
 		t.Run(w.op, func(t *testing.T) {
 			home, ws, root := veSymlinkFixture(t)
@@ -457,7 +457,7 @@ func TestWritePathAndReadPathAgreeOnWhatIsAddressable(t *testing.T) {
 			readAbs, readErr := retrievalPath(OSLinkFS(), cr, rel)
 			writeAbs, writeErr := authorWriteTarget(OSLinkFS(), cr, rel)
 			assert.Equal(t, readErr == nil, writeErr == nil,
-				"vault_read and vault_edit must agree about whether %q is addressable; "+
+				"knowledge_read and knowledge_edit must agree about whether %q is addressable; "+
 					"read=%v write=%v", rel, readErr, writeErr)
 			if readErr == nil && writeErr == nil {
 				assert.Equal(t, readAbs, writeAbs,

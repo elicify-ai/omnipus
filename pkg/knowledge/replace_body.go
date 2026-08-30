@@ -17,9 +17,9 @@
 // An anchor is an EXACT, LITERAL byte sequence — no trimming, no whitespace
 // collapsing, no case folding, no line-ending normalisation. That is a
 // deliberate, narrow choice, made from the position of the caller that will
-// actually construct one: a language model that has just called vault_read.
+// actually construct one: a language model that has just called knowledge_read.
 // The model did not derive the anchor from a mental model of the file — it
-// COPIED it from text vault_read just handed back. The one thing it can do
+// COPIED it from text knowledge_read just handed back. The one thing it can do
 // reliably is reproduce that copy exactly; the one thing it cannot do
 // reliably is guess which of several plausible normalisations (trim trailing
 // space? fold "smart quotes"? treat CRLF and LF as the same?) the server
@@ -39,7 +39,7 @@
 //
 // The anchor is matched only within the note's BODY — the bytes after any
 // YAML frontmatter block, never inside it. replace_body is a body operation
-// (FR-047's own framing: "an operation of vault_edit"); set_property already
+// (FR-047's own framing: "an operation of knowledge_edit"); set_property already
 // owns frontmatter (FR-040..FR-040b), and letting an anchor match text that
 // happens to appear inside a frontmatter value would let a body edit silently
 // corrupt metadata it was never meant to touch.
@@ -47,7 +47,7 @@
 // # Addressing by line range
 //
 // The alternative FR-047 names is a 1-based, inclusive line range, counted
-// over the WHOLE FILE — the same numbering a text editor or vault_read's
+// over the WHOLE FILE — the same numbering a text editor or knowledge_read's
 // rendered output shows, and the same numbering AmbiguousAnchorError reports
 // its matches in, so a caller reading one refusal can use the other
 // addressing mode without converting line numbers by hand. A range that
@@ -169,12 +169,12 @@ type AnchorNotFoundError struct {
 
 // Error names the remedy: re-read the note and copy the anchor exactly,
 // because the leading cause of a spurious not-found is a caller who typed the
-// anchor from memory rather than copying it out of a vault_read response
+// anchor from memory rather than copying it out of a knowledge_read response
 // (whitespace and line endings are matched exactly — see the anchor-addressing
 // note above).
 func (e *AnchorNotFoundError) Error() string {
 	return fmt.Sprintf(
-		"anchor %q not found in %s — no change made; vault_read the note again and copy the anchor "+
+		"anchor %q not found in %s — no change made; knowledge_read the note again and copy the anchor "+
 			"text exactly (matching is byte-exact: whitespace, case and line endings all matter), "+
 			"or address the span with a line_range instead",
 		e.Anchor, e.Path,
@@ -202,7 +202,7 @@ func (e *LineRangeError) Error() string {
 	case "frontmatter":
 		return fmt.Sprintf(
 			"line_range %d-%d overlaps %s's frontmatter block (lines 1-%d) — no change made; "+
-				"replace_body only addresses the body, use vault_edit set_property for frontmatter",
+				"replace_body only addresses the body, use knowledge_edit set_property for frontmatter",
 			e.Start, e.End, e.Path, e.FrontmatterLines,
 		)
 	default:
@@ -221,7 +221,7 @@ type LineRange struct {
 	Start, End int
 }
 
-// ReplaceBody returns a NoteEdit for vault_edit's "replace_body" operation
+// ReplaceBody returns a NoteEdit for knowledge_edit's "replace_body" operation
 // (FR-047). Exactly one of anchor (non-empty) or lineRange (non-nil) must be
 // given; path is used only to render refusal messages that name the file, as
 // FR-047's normative wording does.

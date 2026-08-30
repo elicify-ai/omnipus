@@ -16,7 +16,7 @@ import (
 // ---------------------------------------------------------------------------
 // WHAT THIS IS, AND THE INHERITED DEFECT IT REFUSES TO CARRY FORWARD
 //
-// check_integrity is vault_describe's whole-vault health sweep: duplicate
+// check_integrity is knowledge_describe's whole-vault health sweep: duplicate
 // identifiers, relation targets that resolve to nothing or to the wrong record
 // type, broken ORDINARY wikilinks, orphan notes, and rows in the properties
 // index with no note behind them.
