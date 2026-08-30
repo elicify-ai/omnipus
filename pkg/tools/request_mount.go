@@ -65,11 +65,13 @@ func NewRequestMountTool(homePath string) *RequestMountTool {
 func (t *RequestMountTool) Name() string { return "request_mount" }
 
 func (t *RequestMountTool) Description() string {
-	return "Ask the operator for read/write access to a folder on their computer, " +
+	return "Ask the operator for write access to a folder on their computer, " +
 		"mounted into this workspace. Requires their explicit approval. Use it when a task " +
 		"genuinely needs to work in a specific existing folder — name the exact path and say " +
 		"why in your message, because that reason is what they are judging. Everything outside " +
-		"your workspace is already readable; ask only when you need to WRITE."
+		"your workspace is already readable; ask only when you need to WRITE. The mount name is " +
+		"derived automatically from the folder's basename (you do not choose it) and appears at " +
+		"work/<name>."
 }
 
 func (t *RequestMountTool) Parameters() map[string]any {
@@ -91,7 +93,7 @@ func (t *RequestMountTool) Parameters() map[string]any {
 					"operator with the request — it is the main thing they weigh.",
 			},
 		},
-		"required": []string{"reason"},
+		"required": []string{"host_path", "reason"},
 	}
 }
 

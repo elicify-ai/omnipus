@@ -53,7 +53,9 @@ func (t *InstallSkillTool) Name() string {
 }
 
 func (t *InstallSkillTool) Description() string {
-	return "Install a skill from a registry by slug. Downloads and extracts the skill into the global skills directory, where it becomes available to every agent. Use find_skills first to discover available skills."
+	return "Install a skill from a registry by slug. Downloads and extracts the skill into the global skills directory, where it becomes available to every agent. Use find_skills first to discover available skills. " +
+		"force=true replaces an already-installed skill of the same slug: the replacement is downloaded to a staging area and swapped in only once it fully succeeds, so an ordinary failure (unknown registry, slug, or version; " +
+		"network error; a skill flagged malicious and refused) leaves the existing install untouched. A skill flagged as malicious is refused and removed rather than installed."
 }
 
 func (t *InstallSkillTool) Scope() ToolScope       { return ScopeGeneral }
@@ -112,18 +114,20 @@ func (t *InstallSkillTool) Execute(ctx context.Context, args map[string]any) *To
 	skillsDir := t.globalSkillsDir
 	targetDir := filepath.Join(skillsDir, slug)
 
-	if !force {
-		if _, err := os.Stat(targetDir); err == nil {
-			return ErrorResult(
-				fmt.Sprintf("skill %q already installed at %s. Use force=true to reinstall.", slug, targetDir),
-			)
-		}
-	} else {
-		// Force: remove existing if present.
-		os.RemoveAll(targetDir)
+	alreadyInstalled := false
+	if _, err := os.Stat(targetDir); err == nil {
+		alreadyInstalled = true
+	}
+	if alreadyInstalled && !force {
+		return ErrorResult(
+			fmt.Sprintf("skill %q already installed at %s. Use force=true to reinstall.", slug, targetDir),
+		)
 	}
 
-	// Resolve which registry to use.
+	// Resolve which registry to use BEFORE touching anything on disk: a
+	// typo'd registry name (or any other resolution failure) must fail
+	// closed with an existing install left exactly as it was, not after
+	// that install has already been deleted.
 	registry := t.registryMgr.GetRegistry(registryName)
 	if registry == nil {
 		return ErrorResult(fmt.Sprintf("registry %q not found", registryName))
@@ -134,48 +138,61 @@ func (t *InstallSkillTool) Execute(ctx context.Context, args map[string]any) *To
 		return ErrorResult(fmt.Sprintf("failed to create skills directory: %v", err))
 	}
 
-	// Download and install (handles metadata, version resolution, extraction).
-	result, err := registry.DownloadAndInstall(ctx, slug, version, targetDir)
+	// Download to a staging directory and only swap it into place once
+	// everything below has succeeded. This is what makes force=true safe:
+	// an ordinary failure (bad version, network error, moderation block)
+	// never touches the existing install, because the existing install is
+	// only ever removed immediately before the verified replacement is
+	// renamed into its place.
+	stageDir, err := os.MkdirTemp(skillsDir, "."+slug+".install-")
 	if err != nil {
-		// Clean up partial install.
-		rmErr := os.RemoveAll(targetDir)
-		if rmErr != nil {
-			logger.ErrorCF("tool", "Failed to remove partial install",
-				map[string]any{
-					"tool":       "install_skill",
-					"target_dir": targetDir,
-					"error":      rmErr.Error(),
-				})
-		}
+		return ErrorResult(fmt.Sprintf("failed to create a staging directory for %q: %v", slug, err))
+	}
+	// If we return before the rename below, stageDir was never moved and
+	// this cleans it up; if the rename succeeded, stageDir no longer
+	// exists and this is a harmless no-op.
+	defer os.RemoveAll(stageDir)
+
+	// Download and install (handles metadata, version resolution, extraction).
+	result, err := registry.DownloadAndInstall(ctx, slug, version, stageDir)
+	if err != nil {
 		return ErrorResult(fmt.Sprintf("failed to install %q: %v", slug, err))
 	}
 
-	// Moderation: block malware.
+	// Moderation: block malware. The existing install (if any) is untouched.
 	if result.IsMalwareBlocked {
-		rmErr := os.RemoveAll(targetDir)
-		if rmErr != nil {
-			logger.ErrorCF("tool", "Failed to remove partial install",
-				map[string]any{
-					"tool":       "install_skill",
-					"target_dir": targetDir,
-					"error":      rmErr.Error(),
-				})
-		}
 		return ErrorResult(fmt.Sprintf("skill %q is flagged as malicious and cannot be installed", slug))
 	}
 
-	// Write origin metadata.
-	if err := writeOriginMeta(targetDir, registry.Name(), slug, result.Version); err != nil {
+	// Write origin metadata into the staged copy before it becomes the real one.
+	if err := writeOriginMeta(stageDir, registry.Name(), slug, result.Version); err != nil {
 		logger.ErrorCF("tool", "Failed to write origin metadata",
 			map[string]any{
 				"tool":     "install_skill",
 				"error":    err.Error(),
-				"target":   targetDir,
+				"target":   stageDir,
 				"registry": registry.Name(),
 				"slug":     slug,
 				"version":  result.Version,
 			})
 		// Non-fatal: skill is installed, metadata just won't appear in audits.
+	}
+
+	// Everything above succeeded: only now do we touch the previous install
+	// (if any), and only to swap in the verified replacement.
+	if alreadyInstalled {
+		if err := os.RemoveAll(targetDir); err != nil {
+			return ErrorResult(fmt.Sprintf(
+				"downloaded %q successfully but failed to remove the previous install at %s: %v",
+				slug, targetDir, err,
+			))
+		}
+	}
+	if err := os.Rename(stageDir, targetDir); err != nil {
+		return ErrorResult(fmt.Sprintf(
+			"downloaded %q successfully but failed to move it into place at %s: %v",
+			slug, targetDir, err,
+		))
 	}
 
 	// Build result with moderation warning if suspicious.
