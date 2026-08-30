@@ -32,9 +32,13 @@ ADR-068 is **mostly unbuilt**. At the moment this plan was written:
 
 - `pkg/records` exists as a **library with no consumer** — the same finding the previous
   round recorded. Nothing in the gateway, the agent tool surface or the SPA reaches it.
-- **None of the six `vault_*` tools exists** anywhere in the backend, the contracts or the
+- **None of the six new tools exists** anywhere in the backend, the contracts or the
   SPA. Searching the tree for `vault_describe`, `vault_find` or `vault_configure` outside
-  the design documents returns nothing.
+  the design documents returns nothing. *(Historical note: at this point the six were still
+  named `vault_*` in these documents; they later shipped under the `knowledge_` prefix
+  instead — `knowledge_describe`, `knowledge_find`, `knowledge_read`, `knowledge_edit`,
+  `knowledge_restructure`, `knowledge_configure` — once the nine retiring `knowledge_*`
+  tools freed that namespace. The rest of this document uses the shipped names.)*
 - There is **no record table, no vault health view and no problems screen** in the SPA.
 - `pkg/records/money.go` is still present. ADR-068 revision 7 **deleted the `money` type**;
   the code has not caught up yet. That is expected mid-flight and is *not* a finding — but
@@ -93,7 +97,7 @@ need to see every call and every argument.
 
 **The template.** Be literal. Do not ask in English and hope; tell the agent the call:
 
-> Call `vault_find` with `type` = `specimen` and `filter` =
+> Call `knowledge_find` with `type` = `specimen` and `filter` =
 > `{"all":[{"property":"condition","op":"=","value":"dry"}]}`.
 > Show me the tool result exactly as you received it, with nothing summarised or omitted.
 
@@ -245,23 +249,23 @@ you mark the rest **Blocked — feature absent** instead of failing them.*
 
 | Step | Do this | Record |
 |---|---|---|
-| 0.1 | Go to **Agents** → pick **Mia** → **Tools & Permissions** | Which of `vault_describe`, `vault_find`, `vault_read`, `vault_edit`, `vault_restructure`, `vault_configure` are listed |
+| 0.1 | Go to **Agents** → pick **Mia** → **Tools & Permissions** | Which of `knowledge_describe`, `knowledge_find`, `knowledge_read`, `knowledge_edit`, `knowledge_restructure`, `knowledge_configure` are listed |
 | 0.2 | On the same screen | Whether the nine `knowledge_*` tools are still listed (`knowledge_search`, `knowledge_graph`, `knowledge_tasks`, `knowledge_create`, `knowledge_link`, `knowledge_set_property`, `knowledge_append_section`, `knowledge_move`, `knowledge_rename`) |
-| 0.3 | In chat, ask any agent: *"List every tool whose name begins with `vault_`. Do not guess — name only tools you actually have."* | The list it reports |
+| 0.3 | In chat, ask any agent: *"Of knowledge_describe, knowledge_find, knowledge_read, knowledge_edit, knowledge_restructure and knowledge_configure, which do you actually have? Do not guess — name only tools you actually have."* | The list it reports, cross-checked against 0.1 |
 | 0.4 | Go to **Library** | Whether there is anything resembling a record table, a record-type list, or a vault health / problems view |
 
 **Write the answers at the top of your report.** Then use this map:
 
 | If Part 0 shows | Then these parts can run |
 |---|---|
-| No `vault_*` tools at all | **Part A only.** Everything else is Blocked — feature absent |
-| `vault_describe` present | Part A, Part B, Part M |
-| `vault_find` present | + Parts C, D, E, F, G (except the health-view halves) |
-| `vault_read` present | + the read halves of Part I |
-| `vault_edit` present | + Part I |
-| `vault_restructure` present | + Part J, and P-1/P-2/P-7/P-8/P-9 of Part P (the `trash` half — P-8 and P-9 are runnable as soon as `move` and `trash` exist, even before `restore` does) |
-| `vault_restructure` present, and its `restore` op specifically | + the rest of Part P (P-3 through P-6, P-11) |
-| `vault_configure` present | + Part K, Part L |
+| No new tools at all | **Part A only.** Everything else is Blocked — feature absent |
+| `knowledge_describe` present | Part A, Part B, Part M |
+| `knowledge_find` present | + Parts C, D, E, F, G (except the health-view halves) |
+| `knowledge_read` present | + the read halves of Part I |
+| `knowledge_edit` present | + Part I |
+| `knowledge_restructure` present | + Part J, and P-1/P-2/P-7/P-8/P-9 of Part P (the `trash` half — P-8 and P-9 are runnable as soon as `move` and `trash` exist, even before `restore` does) |
+| `knowledge_restructure` present, and its `restore` op specifically | + the rest of Part P (P-3 through P-6, P-11) |
+| `knowledge_configure` present | + Part K, Part L |
 | A record table or health view in Library | + Part N |
 
 **Part P-10 (the retention purge) has no routing row above and is not unlocked by any tool
@@ -269,8 +273,8 @@ existing.** It is design intent with no built mechanism yet — see its own prea
 it Blocked; mark it **NOT-YET-TESTABLE**, which is a different, deliberate label used nowhere
 else in this plan.
 
-**Both lists in 0.1 and 0.2 matter.** The end state is **six `vault_*` names and zero
-`knowledge_*` names**. Seeing all fifteen at once is a normal mid-flight state today and is
+**Both lists in 0.1 and 0.2 matter.** The end state is **six new `knowledge_*` names and zero
+of the nine retiring `knowledge_*` names**. Seeing all fifteen at once is a normal mid-flight state today and is
 **not** a finding *yet* — but record the counts, because "the old nine were never removed" is
 a shipped defect and someone has to be the one who noticed.
 
@@ -669,7 +673,7 @@ Create three with `mood` set to `calm`, `Calm` and `CALM` respectively.
 
 ---
 
-## Part B — `vault_describe`
+## Part B — `knowledge_describe`
 
 *The mandatory cheap first call. An agent that has not called it is guessing at property names.*
 
@@ -677,7 +681,7 @@ Create three with `mood` set to `calm`, `Calm` and `CALM` respectively.
 
 | Step | Do this | Expect |
 |---|---|---|
-| B-1.1 | Ask an agent to call `vault_describe` on Vault Alpha | A response listing: index freshness, the collections in scope, the four record types, saved views, templates |
+| B-1.1 | Ask an agent to call `knowledge_describe` on Vault Alpha | A response listing: index freshness, the collections in scope, the four record types, saved views, templates |
 | B-1.2 | Read the property table for `specimen` | Each property with its **type**, its arity (`many` or not), and whether it is required |
 | B-1.3 | Look at how `count` and `mass_g` are rendered | `integer` and `decimal` appear as **two distinct types**. Not "number" for both, not "numeric" |
 | B-1.4 | Look at the id prefix | `SP` is shown for `specimen`, `EX` for `expedition` |
@@ -691,7 +695,7 @@ not declare appears in it.
 ### Case B-2 — The response must not imply an enum order
 
 *Why this matters: enum ordering is **lexical**, not the order values are declared in
-(Part E). A reader who infers a sort order from the sequence `vault_describe` prints will be
+(Part E). A reader who infers a sort order from the sequence `knowledge_describe` prints will be
 wrong, so the response has to say so.*
 
 | Step | Do this | Expect |
@@ -704,8 +708,8 @@ wrong, so the response has to say so.*
 
 | Step | Do this | Expect |
 |---|---|---|
-| B-3.1 | Call `vault_describe` with `record_type` = `specimne` (a typo) | A **refusal** listing the declared types: `expedition, keeper, specimen, token` |
-| B-3.2 | Call `vault_describe` with `collection` = a name that is not mounted | A refusal listing the collections in scope |
+| B-3.1 | Call `knowledge_describe` with `record_type` = `specimne` (a typo) | A **refusal** listing the declared types: `expedition, keeper, specimen, token` |
+| B-3.2 | Call `knowledge_describe` with `collection` = a name that is not mounted | A refusal listing the collections in scope |
 
 **Fail if:** either returns an empty description, an empty success, or an error that does not
 name the valid options.
@@ -714,7 +718,7 @@ name the valid options.
 
 | Step | Do this | Expect |
 |---|---|---|
-| B-4.1 | Call `vault_describe` with `check_integrity` = true | A findings block, grouped by kind, every finding naming a path |
+| B-4.1 | Call `knowledge_describe` with `check_integrity` = true | A findings block, grouped by kind, every finding naming a path |
 | B-4.2 | Look for the **duplicate identifier** | `SP-0900` is reported naming **both** `broken/dup-a.md` and `broken/dup-b.md`, and stating that neither is preferred |
 | B-4.3 | Look for the **unresolved relation** | `SP-0106`'s `[[Southern traverse]]` is named as resolving to nothing |
 | B-4.4 | Look for the **wrong-type relation** | `SP-0105`'s expedition points at a note of type `specimen`, where `expedition` was declared |
@@ -819,7 +823,7 @@ record type is a defect, and a product that fails to ship a property type is a d
 
 | Step | Do this | Expect |
 |---|---|---|
-| C-1.1 | `vault_find` with `filter` = `{"property":"label","op":"LIKE","value":"%frond%"}` | `SP-0001` |
+| C-1.1 | `knowledge_find` with `filter` = `{"property":"label","op":"LIKE","value":"%frond%"}` | `SP-0001` |
 | C-1.2 | Same with `op` = `=` and `value` = `Bracken frond` | `SP-0001` |
 | C-1.3 | Same with `value` = `bracken FROND` | `SP-0001` — text matching is case-insensitive |
 
@@ -827,11 +831,11 @@ record type is a defect, and a product that fails to ship a property type is a d
 
 | Step | Do this | Expect |
 |---|---|---|
-| C-2.1 | Ask `vault_edit` to set `condition` = `soggy` on `Specimens/fern.md` | **Refused**, naming the permitted values: `ambient, damp, dry, frozen` |
+| C-2.1 | Ask `knowledge_edit` to set `condition` = `soggy` on `Specimens/fern.md` | **Refused**, naming the permitted values: `ambient, damp, dry, frozen` |
 | C-2.2 | Check the file afterwards | Unchanged |
-| C-2.3 | `vault_find` on `condition` = `soggy` | **Refused**, naming the permitted values — not an empty result |
+| C-2.3 | `knowledge_find` on `condition` = `soggy` | **Refused**, naming the permitted values — not an empty result |
 | C-2.4 | Look at `SP-0103` (fixture `b3`, which already holds `soggy` on disk) | It is **reported as a bad value**, named, with the permitted set and the fix — it is not silently dropped, and it does not silently become a fifth permitted value |
-| C-2.5 | Now run `vault_describe` again | `condition` still has exactly four values. `soggy` did **not** join them |
+| C-2.5 | Now run `knowledge_describe` again | `condition` still has exactly four values. `soggy` did **not** join them |
 
 **Fail if:** an invented value is accepted, is auto-created as a new option, or causes the
 record to vanish from results with no problem row.
@@ -840,8 +844,8 @@ record to vanish from results with no problem row.
 
 | Step | Do this | Expect |
 |---|---|---|
-| C-3.1 | `vault_read` `Specimens/fern.md` | `expedition` shows as a resolved link to `Northern sweep` |
-| C-3.2 | `vault_read` `Expeditions/northern-sweep.md` | Its `specimens` inverse lists `SP-0001` and `SP-0002` |
+| C-3.1 | `knowledge_read` `Specimens/fern.md` | `expedition` shows as a resolved link to `Northern sweep` |
+| C-3.2 | `knowledge_read` `Expeditions/northern-sweep.md` | Its `specimens` inverse lists `SP-0001` and `SP-0002` |
 | C-3.3 | Open `Expeditions/northern-sweep.md` in a text editor | The inverse is **not written into the file**. The file has no `specimens:` key |
 | C-3.4 | `SP-0104` (relation stored as plain text) | Reported: text where a relation was declared, with the fix naming the wikilink form |
 | C-3.5 | `SP-0105` (relation to a note of the wrong type) | Reported as wrong-type, not silently accepted |
@@ -855,8 +859,8 @@ silently.
 | Step | Do this | Expect |
 |---|---|---|
 | C-4.1 | `SP-0103` holds `collected_on: 03/04/2026` | **Reported** as ambiguous, with both readings named and the instruction to write `2026-04-03` or `2026-03-04`. Never guessed |
-| C-4.2 | Ask `vault_edit` to write `collected_on` = `2026-9-1` | **Refused**, naming zero-padding and the corrected form `2026-09-01` |
-| C-4.3 | `vault_find` with `collected_on` `>=` `2026-04-01` | `SP-0002` (2026-04-02) is in; `SP-0001` (2026-03-14) is out |
+| C-4.2 | Ask `knowledge_edit` to write `collected_on` = `2026-9-1` | **Refused**, naming zero-padding and the corrected form `2026-09-01` |
+| C-4.3 | `knowledge_find` with `collected_on` `>=` `2026-04-01` | `SP-0002` (2026-04-02) is in; `SP-0001` (2026-03-14) is out |
 | C-4.4 | Ask for the same range written as `01/04/2026` | Refused the same way as C-4.1 |
 
 **Fail if:** any date format outside `YYYY-MM-DD` is accepted, or an ambiguous one is silently
@@ -868,9 +872,9 @@ interpreted either way.
 
 | Step | Do this | Expect |
 |---|---|---|
-| C-5.1 | `vault_find` with `count` `>` `5` | `SP-0001` (12). `SP-0002` (3) and `SP-0003` (0) are out |
+| C-5.1 | `knowledge_find` with `count` `>` `5` | `SP-0001` (12). `SP-0002` (3) and `SP-0003` (0) are out |
 | C-5.2 | Confirm `SP-0003` with `count: 0` is out of C-5.1 but **in** a query for `count` `IS NOT NULL` | Zero is a value, not an absence |
-| C-5.3 | Ask `vault_edit` to set `count` = `9223372036854775808` | **Refused**, naming the bound `9223372036854775807` and suggesting `decimal` if the value is genuinely larger |
+| C-5.3 | Ask `knowledge_edit` to set `count` = `9223372036854775808` | **Refused**, naming the bound `9223372036854775807` and suggesting `decimal` if the value is genuinely larger |
 | C-5.4 | Read `SP-0107` (which already holds that value on disk) | Reported as a bad value naming the bound. **Not** silently saturated to `9223372036854775807`, and not widened to a decimal |
 | C-5.5 | Query `count` `=` `9223372036854775807` | Does **not** match `SP-0107` |
 | C-5.6 | Try declaring an `integer` property with `scale: 2` in a schema | Refused: an integer has no scale, and the message says to declare it `decimal` |
@@ -882,11 +886,11 @@ or silently promoted to a decimal. Any of the three is a change to a number nobo
 
 | Step | Do this | Expect |
 |---|---|---|
-| C-6.1 | `vault_read` `Specimens/lichen.md` | `mass_g` reads back **exactly** `12.345678901234567890123456789012` — every digit, no rounding, no `1.2345678901234568e+01` |
-| C-6.2 | `vault_find` with `mass_g` `>` `1` | `SP-0001` (4.500) and `SP-0003` are in; `SP-0002` (0.125) is out |
+| C-6.1 | `knowledge_read` `Specimens/lichen.md` | `mass_g` reads back **exactly** `12.345678901234567890123456789012` — every digit, no rounding, no `1.2345678901234568e+01` |
+| C-6.2 | `knowledge_find` with `mass_g` `>` `1` | `SP-0001` (4.500) and `SP-0003` are in; `SP-0002` (0.125) is out |
 | C-6.3 | Compare `mass_g` `=` `4.5` against the stored `4.500` | They match — trailing zeros do not change the number |
 | C-6.4 | Look at how `4.500` renders in a result row | Rendered at the declared scale (3 places) |
-| C-6.5 | Ask `vault_edit` to write a `mass_g` with **140 decimal places** | **Refused**, naming the 100-place bound **and the value's own scale**. Never rounded to fit |
+| C-6.5 | Ask `knowledge_edit` to write a `mass_g` with **140 decimal places** | **Refused**, naming the 100-place bound **and the value's own scale**. Never rounded to fit |
 | C-6.6 | `SP-0102` (`mass_g: "2.5kg"`) | Reported as a bad value: a unit glued to a number, with the fix naming what to write |
 | C-6.7 | Compare an `integer` against a `decimal`: query `count` `=` `12.0` | Matches `SP-0001` (`count: 12`). The split decides storage, not a comparison domain |
 
@@ -898,7 +902,7 @@ bound instead of refused; or any rendered number shows floating-point artefacts.
 | Step | Do this | Expect |
 |---|---|---|
 | C-7.1 | Create a `keeper` note and set `curator` on a specimen to point at it | Accepted |
-| C-7.2 | `vault_read` the specimen | `curator` resolves to the keeper note, distinctly from a name typed as text |
+| C-7.2 | `knowledge_read` the specimen | `curator` resolves to the keeper note, distinctly from a name typed as text |
 | C-7.3 | Set `curator` to a bare name (`curator: Alex`) instead of a link | Reported: a person property is a link to a record, not a typed name |
 
 *If the tool refuses `type: person` outright, or has no way to say **which** record type a
@@ -912,12 +916,12 @@ tree. A type that is half-removed is exactly the sort of thing that survives int
 
 | Step | Do this | Expect |
 |---|---|---|
-| C-8.1 | Ask `vault_configure` to create a record type with a property declared `{ type: money }` | **Refused**, and the message lists the permitted types: `text, enum, relation, date, integer, decimal, person` |
+| C-8.1 | Ask `knowledge_configure` to create a record type with a property declared `{ type: money }` | **Refused**, and the message lists the permitted types: `text, enum, relation, date, integer, decimal, person` |
 | C-8.2 | Look at that list carefully | `money` is **not** in it. Neither is `number` |
 | C-8.3 | Try `{ type: number }` | Refused the same way |
 | C-8.4 | Try `{ type: decimal, unit: GBP }` | `unit` is not a schema key. Either the whole declaration is refused naming the permitted keys, **or** `unit` is ignored — but it must not behave as a currency |
 | C-8.5 | Search the entire UI and every tool response you have collected for the words "currency", "ISO-4217", "GBP" or "minor units" | Nothing |
-| C-8.6 | Run `vault_describe` and read the property-type list | Exactly seven types |
+| C-8.6 | Run `knowledge_describe` and read the property-type list | Exactly seven types |
 
 **Fail if:** `money` or `number` is accepted anywhere; a currency concept appears in any
 response; or the type list has any count other than seven.
@@ -927,8 +931,8 @@ response; or the type list has any count other than seven.
 | Step | Do this | Expect |
 |---|---|---|
 | C-9.1 | `SP-0108` holds `condition: [dry, damp]` on a scalar property | Reported: the property holds one value, got a list of 2, with the fix naming both options (send one value, or declare `many: true`) |
-| C-9.2 | Ask `vault_edit` to write a list into `condition` | Refused the same way; the file is unchanged |
-| C-9.3 | Ask `vault_edit` to write a list into `tags` (declared `many: true`) | Accepted |
+| C-9.2 | Ask `knowledge_edit` to write a list into `condition` | Refused the same way; the file is unchanged |
+| C-9.3 | Ask `knowledge_edit` to write a list into `tags` (declared `many: true`) | Accepted |
 | C-9.4 | Query `tags` `=` `fragile` | `SP-0001` — `=` matches an **element** of a list |
 | C-9.5 | Query `tags` `IN` `["loaned","sealed"]` | `SP-0001` and `SP-0002` |
 | C-9.6 | Query `tags` `>` `f` | **Refused**: ordering comparisons are not defined over a list, naming `=`, `IN` and `LIKE` as what to use instead |
@@ -960,8 +964,8 @@ property while C-10.3 kept it.
 | Step | Do this | Expect |
 |---|---|---|
 | C-11.1 | Note that `specimen.label` and `expedition.label` are separate declarations | — |
-| C-11.2 | Ask `vault_configure` to change `expedition.label` to an `enum` | Accepted (it is that type's own declaration) |
-| C-11.3 | `vault_describe` afterwards | `specimen.label` is **still `text`**. It did not follow |
+| C-11.2 | Ask `knowledge_configure` to change `expedition.label` to an `enum` | Accepted (it is that type's own declaration) |
+| C-11.3 | `knowledge_describe` afterwards | `specimen.label` is **still `text`**. It did not follow |
 
 **Fail if:** changing a property on one record type changes the same-named property on another.
 That is the vault-wide property binding this design exists to avoid.
@@ -1012,10 +1016,10 @@ costs you nothing to write it.
 
 | Step | Do this | Expect |
 |---|---|---|
-| D-2.1 | Ask `vault_edit` to write `word` = `STRASSE` on a token note | **Accepted.** It resolves to the declared value `straße` |
+| D-2.1 | Ask `knowledge_edit` to write `word` = `STRASSE` on a token note | **Accepted.** It resolves to the declared value `straße` |
 | D-2.2 | Look at the file on disk | It says `STRASSE` — the file keeps its own spelling |
-| D-2.3 | `vault_describe` afterwards | `word` still declares six values. `STRASSE` did **not** become a seventh |
-| D-2.4 | Ask `vault_edit` to write `word` = `strasse-x` | **Refused**, naming the permitted values |
+| D-2.3 | `knowledge_describe` afterwards | `word` still declares six values. `STRASSE` did **not** become a seventh |
+| D-2.4 | Ask `knowledge_edit` to write `word` = `strasse-x` | **Refused**, naming the permitted values |
 
 **Fail if:** a case variant is refused (that is the bug this rule exists to prevent), or is
 accepted *as a new value* (that is the opposite bug, and it is worse).
@@ -1024,7 +1028,7 @@ accepted *as a new value* (that is the opposite bug, and it is worse).
 
 | Step | Do this | Expect |
 |---|---|---|
-| D-3.1 | `vault_find` on `type` = `token`, `group_by` = `mood` | **One** group, containing all three of `calm`, `Calm` and `CALM` |
+| D-3.1 | `knowledge_find` on `type` = `token`, `group_by` = `mood` | **One** group, containing all three of `calm`, `Calm` and `CALM` |
 | D-3.2 | Same query, `sort` by `mood` | The three sit **together**, not scattered with capitals first |
 | D-3.3 | Look at how each row renders | Each shows the spelling its own file uses |
 
@@ -1075,7 +1079,7 @@ order is `azure, cinder, dune, ember`. They are deliberately different.
 
 | Step | Do this | Expect |
 |---|---|---|
-| E-1.1 | `vault_find` `type` = `token`, `sort` by `phase` ascending | `azure, cinder, dune, ember` |
+| E-1.1 | `knowledge_find` `type` = `token`, `sort` by `phase` ascending | `azure, cinder, dune, ember` |
 | E-1.2 | Compare that with the declaration order | It is **not** `ember, azure, cinder, dune`. That is correct |
 | E-1.3 | `filter` `phase` `>=` `cinder` | `cinder, dune, ember` — and **not** `azure`, even though `azure` was declared second |
 
@@ -1086,7 +1090,7 @@ this is the specified behaviour, and it is the reason Case E-2 exists.
 
 | Step | Do this | Expect |
 |---|---|---|
-| E-2.1 | `vault_find` `type` = `token`, `sort` by `ranked` ascending | `1-ember, 2-azure, 3-cinder, 4-dune` |
+| E-2.1 | `knowledge_find` `type` = `token`, `sort` by `ranked` ascending | `1-ember, 2-azure, 3-cinder, 4-dune` |
 | E-2.2 | `filter` `ranked` `>=` `3-cinder` | `3-cinder` and `4-dune` only |
 
 **Fail if:** prefixing does not produce the intended order. This is the entire escape hatch for
@@ -1106,12 +1110,12 @@ domain ordering; if it does not work, there is no way to express one.
 
 | Step | Do this | Expect |
 |---|---|---|
-| E-4.1 | Re-read `vault_describe`'s enum output (Case B-2) | It says the set is unordered |
+| E-4.1 | Re-read `knowledge_describe`'s enum output (Case B-2) | It says the set is unordered |
 | E-4.2 | Look at any UI that renders an enum — a filter dropdown, a group header, a cell editor | Either lexical order, or an explicit statement of what order it is showing. Never declaration order presented as *the* order |
 
 ---
 
-## Part F — `vault_find`: the operators, the refusals, the response
+## Part F — `knowledge_find`: the operators, the refusals, the response
 
 *The operators are SQL's own: `=`, `<>`, `<`, `<=`, `>`, `>=`, `LIKE`, `IN`, `IS NULL`,
 `IS NOT NULL`, each carrying SQL's meaning. Anything else is refused. There is no query
@@ -1271,7 +1275,7 @@ rows. A plan that changes with the corpus means evaluation is happening.
 | Step | Do this | Expect |
 |---|---|---|
 | F-13.1 | Put a note in Alpha with three checkbox lines, one of them ticked | — |
-| F-13.2 | `vault_find` with `kind` = `task` | Rows carrying the path, the **line number**, the status (open/done) and the text |
+| F-13.2 | `knowledge_find` with `kind` = `task` | Rows carrying the path, the **line number**, the status (open/done) and the text |
 | F-13.3 | Look at a task row beside an ordinary note row | You can tell them apart. The line number is always shown |
 
 **Fail if:** a task row is indistinguishable from a note row, or a task row omits its line
@@ -1309,7 +1313,7 @@ fixture too small** and say so; do not approximate.*
 
 ### Case F-17 — The shape of the response
 
-*Every `vault_find` response, in every case above, must have this shape. Check it once
+*Every `knowledge_find` response, in every case above, must have this shape. Check it once
 carefully here, then spot-check it throughout.*
 
 | Step | Do this | Expect |
@@ -1338,9 +1342,9 @@ groups, not within one.*
 
 | Step | Do this | Expect |
 |---|---|---|
-| F-18.1 | `vault_find` `type` = `specimen`, **no filter** | The three clean records: `SP-0001`, `SP-0002`, `SP-0003` |
+| F-18.1 | `knowledge_find` `type` = `specimen`, **no filter** | The three clean records: `SP-0001`, `SP-0002`, `SP-0003` |
 | F-18.2 | Count how many of them have a `tags` value at all | Two — `SP-0001` (`fragile`, `sealed`) and `SP-0002` (`loaned`). `SP-0003` has none |
-| F-18.3 | `vault_find` `type` = `specimen`, `group_by` = `["tags"]` | Three groups: `fragile` (1), `sealed` (1), `loaned` (1) |
+| F-18.3 | `knowledge_find` `type` = `specimen`, `group_by` = `["tags"]` | Three groups: `fragile` (1), `sealed` (1), `loaned` (1) |
 | F-18.4 | Add the three group counts together | **3** |
 | F-18.5 | Compare that to F-18.2's count of **2** records that actually hold a `tags` value | They do **not** match, and that is correct — `SP-0001` was counted once in `fragile` and once again in `sealed`. It is the same record, counted in two places, not two records |
 
@@ -1379,7 +1383,7 @@ checked in passing.*
 
 | Step | Do this | Expect |
 |---|---|---|
-| G-1.1 | `vault_find` `type` = `specimen` with **no filter** | The clean records come back, **and** every broken fixture record appears in the problems block |
+| G-1.1 | `knowledge_find` `type` = `specimen` with **no filter** | The clean records come back, **and** every broken fixture record appears in the problems block |
 | G-1.2 | Read each problem entry | It names the record, the property, **the offending value**, and **the fix** — e.g. `SP-0102: mass_g is '2.5kg' where a decimal is required — write 2.5` |
 | G-1.3 | Read the completeness line | It says the answer is **not** complete, and says so **first** |
 | G-1.4 | Count | The number of records shown plus the number reported as problems accounts for every record you know is in the vault |
@@ -1494,7 +1498,7 @@ such build available**.*
 
 | Step | Do this | Expect |
 |---|---|---|
-| H-2.1 | Run a typed filter on such a build | **Refused by name**, stating the platform and saying that plain-word search and `vault_read` still work |
+| H-2.1 | Run a typed filter on such a build | **Refused by name**, stating the platform and saying that plain-word search and `knowledge_read` still work |
 | H-2.2 | Run a plain-word search on the same build | It works |
 | H-2.3 | Try to create a record type there | Refused, stating that the schema file would be written and never enforced |
 
@@ -1506,7 +1510,7 @@ is indistinguishable from "there is nothing here".
 | Step | Do this | Expect |
 |---|---|---|
 | H-3.1 | Create a note with the heading `## Notes` appearing **twice** | — |
-| H-3.2 | Ask `vault_edit` to `replace_body` using `## Notes` as the anchor | **Refused**, naming **both** line numbers and saying no change was made |
+| H-3.2 | Ask `knowledge_edit` to `replace_body` using `## Notes` as the anchor | **Refused**, naming **both** line numbers and saying no change was made |
 | H-3.3 | Check the file | **Byte-identical** to before |
 | H-3.4 | Retry with a `line_range` instead | Succeeds |
 
@@ -1514,26 +1518,26 @@ is indistinguishable from "there is nothing here".
 
 ---
 
-## Part I — `vault_read` and `vault_edit`
+## Part I — `knowledge_read` and `knowledge_edit`
 
 ### Case I-1 — Reading gives you what writing needs
 
 | Step | Do this | Expect |
 |---|---|---|
-| I-1.1 | `vault_read` `Specimens/fern.md` | A version token, then typed frontmatter parsed against the schema, then the body, then links and backlinks inline |
-| I-1.2 | Immediately `vault_edit` `set_property` using that token | Accepted |
+| I-1.1 | `knowledge_read` `Specimens/fern.md` | A version token, then typed frontmatter parsed against the schema, then the body, then links and backlinks inline |
+| I-1.2 | Immediately `knowledge_edit` `set_property` using that token | Accepted |
 | I-1.3 | Count the failed writes in between | **Zero.** There must be no path where an agent has to send a write it knows will fail in order to obtain a token |
-| I-1.4 | `vault_read` with `section` = a heading that exists | Just that section |
-| I-1.5 | `vault_read` with `section` = a heading that does not | Refused, **listing the headings that are present** |
-| I-1.6 | `vault_read` one of the broken fixture notes | It **still reads**. The bad value is flagged in place, per property. Reading is never blocked by a validation finding |
-| I-1.7 | `vault_read` a very long note | Truncation is stated in the header, never silent |
+| I-1.4 | `knowledge_read` with `section` = a heading that exists | Just that section |
+| I-1.5 | `knowledge_read` with `section` = a heading that does not | Refused, **listing the headings that are present** |
+| I-1.6 | `knowledge_read` one of the broken fixture notes | It **still reads**. The bad value is flagged in place, per property. Reading is never blocked by a validation finding |
+| I-1.7 | `knowledge_read` a very long note | Truncation is stated in the header, never silent |
 
 ### Case I-2 — `create` mints an identifier and touches nothing else
 
 | Step | Do this | Expect |
 |---|---|---|
 | I-2.1 | Note the modification times of the vault's files | — |
-| I-2.2 | `vault_edit` `create` a new specimen | The note is created with an `id` of the form `SP-<number>` |
+| I-2.2 | `knowledge_edit` `create` a new specimen | The note is created with an `id` of the form `SP-<number>` |
 | I-2.3 | Check what changed on disk | **Exactly two files**: the new note, and `.omnipus-vault/records/.seq`. Nothing else |
 | I-2.4 | Create an ordinary note with no record type | **Exactly one** file changed |
 | I-2.5 | Create three records in a row | Three distinct identifiers, ascending |
@@ -1550,7 +1554,7 @@ would then silently resolve to a different record), or a third file changes on a
 |---|---|---|
 | I-3.1 | Take a note whose frontmatter has a comment, an unusual key order, a blank line, one single-quoted value and one unquoted one | — |
 | I-3.2 | Copy the file somewhere so you can compare | — |
-| I-3.3 | `vault_edit` `set_property` on one key | Succeeds |
+| I-3.3 | `knowledge_edit` `set_property` on one key | Succeeds |
 | I-3.4 | Compare the file with your copy | **Every byte outside the changed value is identical**: the comment survives, key order survives, blank lines survive, quoting style of untouched values survives |
 | I-3.5 | Repeat on the body: `append_section` | Same — nothing outside the appended span moved |
 
@@ -1563,7 +1567,7 @@ trusting it.
 | Step | Do this | Expect |
 |---|---|---|
 | I-4.1 | Take a note whose `tags` spans three lines as a block list | — |
-| I-4.2 | Ask `vault_edit` to write a **single scalar value** into `tags` | **Refused**, saying the value currently spans three lines and that a scalar write would delete them, and naming "send a list value" as the fix |
+| I-4.2 | Ask `knowledge_edit` to write a **single scalar value** into `tags` | **Refused**, saying the value currently spans three lines and that a scalar write would delete them, and naming "send a list value" as the fix |
 | I-4.3 | Check the file | Unchanged |
 | I-4.4 | Now send a list value | Accepted, and the existing list style (block or inline) is preserved |
 
@@ -1577,17 +1581,17 @@ trusting it.
 | I-5.4 | `append_section` twice with `once` = true | The second call does not duplicate the section |
 | I-5.5 | `link` `Specimens/moss.md` to `[[Coastal survey]]` through the `expedition` relation | `moss.md` changes |
 | I-5.6 | Check `Expeditions/coastal-survey.md` on disk | **Unchanged.** A relation is stored once, on the source; the inverse is derived |
-| I-5.7 | `vault_read` the coastal survey note | Its `specimens` inverse now includes the moss — derived, not stored |
+| I-5.7 | `knowledge_read` the coastal survey note | Its `specimens` inverse now includes the moss — derived, not stored |
 
 ### Case I-6 — Stale tokens are refused and audited
 
 | Step | Do this | Expect |
 |---|---|---|
-| I-6.1 | `vault_read` a note and keep its token | — |
+| I-6.1 | `knowledge_read` a note and keep its token | — |
 | I-6.2 | Change the note in a text editor | — |
-| I-6.3 | `vault_edit` using the old token | **Refused**, naming both the token you hold and the current one, and telling you to re-read and re-apply |
+| I-6.3 | `knowledge_edit` using the old token | **Refused**, naming both the token you hold and the current one, and telling you to re-read and re-apply |
 | I-6.4 | Check the audit log surface in the UI (Settings → Security, or wherever audit entries surface) | The refusal is recorded |
-| I-6.5 | `vault_read` again and retry with the fresh token | Accepted |
+| I-6.5 | `knowledge_read` again and retry with the fresh token | Accepted |
 
 ### Case I-7 — Schema violations leave the file alone
 
@@ -1603,9 +1607,9 @@ single refusal in this plan, and it is cheap.
 
 | Step | Do this | Expect |
 |---|---|---|
-| I-8.1 | Ask `vault_edit` to `rename` a note | Refused: renaming cascades to notes you did not name; **use `vault_restructure`** |
-| I-8.2 | Ask `vault_edit` to `create_record_type` | Refused: it changes what existing notes mean; **use `vault_configure`** |
-| I-8.3 | Ask `vault_edit` to `create` with a `template` the vault defines | Accepted, and the template's content is used |
+| I-8.1 | Ask `knowledge_edit` to `rename` a note | Refused: renaming cascades to notes you did not name; **use `knowledge_restructure`** |
+| I-8.2 | Ask `knowledge_edit` to `create_record_type` | Refused: it changes what existing notes mean; **use `knowledge_configure`** |
+| I-8.3 | Ask `knowledge_edit` to `create` with a `template` the vault defines | Accepted, and the template's content is used |
 
 **Fail if:** a misrouted operation is silently performed by the wrong tool. The tool boundary is
 the policy boundary, and a tool that quietly does its neighbour's job destroys the boundary.
@@ -1619,11 +1623,11 @@ which H-3.4 uses in passing without checking either one's own behaviour.*
 | Step | Do this | Expect |
 |---|---|---|
 | I-9.1 | Take a note with two headings, `## Notes` and `## Summary`, each with a paragraph under it. Copy the file so you can compare | — |
-| I-9.2 | `vault_edit` `replace_body` with anchor `## Summary`, replacing its content with new text | Succeeds |
+| I-9.2 | `knowledge_edit` `replace_body` with anchor `## Summary`, replacing its content with new text | Succeeds |
 | I-9.3 | Compare the file with your copy | Only the span under `## Summary` changed. The `## Notes` heading, its paragraph, and the `## Summary` heading line itself are **byte-identical** to before |
 | I-9.4 | Read the response | It states what was replaced — the anchor and the span it covered — not just "done" |
 | I-9.5 | Now address the same note by `line_range` instead of an anchor, replacing a specific span of lines | Succeeds, and again only those lines change |
-| I-9.6 | `replace_body` with an anchor that does not exist in the note (`## Nonexistent`) | Refused, **listing the headings that are actually present** — the same shape of refusal as `vault_read`'s I-1.5 |
+| I-9.6 | `replace_body` with an anchor that does not exist in the note (`## Nonexistent`) | Refused, **listing the headings that are actually present** — the same shape of refusal as `knowledge_read`'s I-1.5 |
 | I-9.7 | Check the file after I-9.6's refusal | Unchanged |
 
 **Fail if:** any byte outside the replaced span moved (a heading reordered, a blank line added or
@@ -1632,7 +1636,7 @@ headings; or the file changed after a refused call.
 
 ---
 
-## Part J — `vault_restructure`
+## Part J — `knowledge_restructure`
 
 *The only tool permitted to change a file the caller did not name. Every response must state
 its cascade in counts.*
@@ -1642,7 +1646,7 @@ its cascade in counts.*
 | Step | Do this | Expect |
 |---|---|---|
 | J-1.1 | Note which files link to `Expeditions/northern-sweep.md` | `SP-0001`, `SP-0002` |
-| J-1.2 | `vault_restructure` `rename` it to `Arctic sweep` | Succeeds |
+| J-1.2 | `knowledge_restructure` `rename` it to `Arctic sweep` | Succeeds |
 | J-1.3 | Read the response | It states the cascade in counts — e.g. `CASCADE: 2 notes rewritten (inbound wikilinks), 1 note moved` |
 | J-1.4 | Open the two specimen files on disk | Their wikilinks now say `[[Arctic sweep]]` |
 | J-1.5 | Query the relation again | It still resolves. The record identifier did not change |
@@ -1689,12 +1693,12 @@ files an operation writes is worse than none, because it reads as a guarantee.
 
 | Step | Do this | Expect |
 |---|---|---|
-| J-5.1 | Ask `vault_restructure` to `create_record_type` | Refused, naming `vault_configure` |
-| J-5.2 | Ask it to `set_property` | Refused, naming `vault_edit` |
+| J-5.1 | Ask `knowledge_restructure` to `create_record_type` | Refused, naming `knowledge_configure` |
+| J-5.2 | Ask it to `set_property` | Refused, naming `knowledge_edit` |
 
 ---
 
-## Part K — `vault_configure`
+## Part K — `knowledge_configure`
 
 *The control plane. It writes one file and changes what many notes **mean** — so every response
 has to make that visible, because the file diff shows one small YAML file and nothing else.*
@@ -1706,11 +1710,11 @@ has to make that visible, because the file diff shows one small YAML file and no
 | Step | Do this | Expect |
 |---|---|---|
 | K-1.1 | In Vault Beta (which has **no** schemas), create three notes carrying `type: sighting` and nothing else | — |
-| K-1.2 | Confirm they behave as ordinary notes: `vault_find` `type` = `sighting` | **Refused** — no such record type is declared. Not an empty result |
-| K-1.3 | Now `vault_configure` `create_record_type` for `sighting`, with one `required: true` property those notes do not have | Succeeds |
+| K-1.2 | Confirm they behave as ordinary notes: `knowledge_find` `type` = `sighting` | **Refused** — no such record type is declared. Not an empty result |
+| K-1.3 | Now `knowledge_configure` `create_record_type` for `sighting`, with one `required: true` property those notes do not have | Succeeds |
 | K-1.4 | Read the response | It states the cascade **in meaning, in counts**: how many notes now match the type, how many validate clean, how many are **newly reported** and why, and how many lost validity |
 | K-1.5 | A response that says only "type created" | **FAIL.** That is the whole defect this case exists for |
-| K-1.6 | `vault_find` `type` = `sighting` now | Returns them, with the newly-failing ones in the problems block |
+| K-1.6 | `knowledge_find` `type` = `sighting` now | Returns them, with the newly-failing ones in the problems block |
 
 ### Case K-2 — Changing and deleting a type
 
@@ -1719,7 +1723,7 @@ has to make that visible, because the file diff shows one small YAML file and no
 | K-2.1 | `edit_record_type` to add a required property | Response reports how many existing records are revalidated and how many newly fail |
 | K-2.2 | `edit_record_type` to remove an enum value that records are using | Response reports the records that just lost validity, by name |
 | K-2.3 | `delete_record_type` | Response reports how many records **revert to ordinary notes** |
-| K-2.4 | `vault_find` `type` = the deleted type | **Refused**, naming the declared types. Never an empty result |
+| K-2.4 | `knowledge_find` `type` = the deleted type | **Refused**, naming the declared types. Never an empty result |
 | K-2.5 | Open one of those notes | It is intact. Deleting a type does not delete notes |
 
 ### Case K-3 — Views
@@ -1727,10 +1731,10 @@ has to make that visible, because the file diff shows one small YAML file and no
 | Step | Do this | Expect |
 |---|---|---|
 | K-3.1 | `write_view` defining a saved query over `specimen` | Succeeds; a file appears under `.omnipus-vault/views/` |
-| K-3.2 | `vault_find` with `view` = that name | Returns the view's results |
-| K-3.3 | `vault_find` with the same view **plus** a `filter` | The filter **refines** the view, it does not replace it |
+| K-3.2 | `knowledge_find` with `view` = that name | Returns the view's results |
+| K-3.3 | `knowledge_find` with the same view **plus** a `filter` | The filter **refines** the view, it does not replace it |
 | K-3.4 | `delete_view` | Succeeds; the view no longer resolves |
-| K-3.5 | `vault_find` with a view name that does not exist | Refused, naming the views that do |
+| K-3.5 | `knowledge_find` with a view name that does not exist | Refused, naming the views that do |
 | K-3.6 | Check the cascade statement on K-3.1 | It says the view changes what a query returns and changes no note |
 
 ### Case K-4 — Schema files are validated
@@ -1749,7 +1753,7 @@ has to make that visible, because the file diff shows one small YAML file and no
 |---|---|---|
 | K-5.1 | Look at the tool's parameters | No `expect_version` exists on any operation |
 | K-5.2 | Send one | Refused with the explanation |
-| K-5.3 | After every `vault_configure` call in this part — **including the refused ones** | An audit entry exists carrying the operation, agent, workspace, target and outcome |
+| K-5.3 | After every `knowledge_configure` call in this part — **including the refused ones** | An audit entry exists carrying the operation, agent, workspace, target and outcome |
 | K-5.4 | Read the tool's description | It names its **widest** operation (`delete_record_type`), not its most common one |
 
 ---
@@ -1767,7 +1771,7 @@ note is" — and each of those must be a real switch, not a label on a screen.*
 
 | Step | Do this | Expect |
 |---|---|---|
-| L-1.1 | Set the agent's `vault_edit` to **allow** and `vault_restructure` to **deny**. Save | Saved confirmation |
+| L-1.1 | Set the agent's `knowledge_edit` to **allow** and `knowledge_restructure` to **deny**. Save | Saved confirmation |
 | L-1.2 | In the same chat session, ask it to `set_property` on a note | Works |
 | L-1.3 | Ask it to `rename` a note | **Refused.** The agent reports the refusal — it does not silently do nothing |
 | L-1.4 | Check the file that would have been renamed | Untouched |
@@ -1776,14 +1780,14 @@ note is" — and each of those must be a real switch, not a label on a screen.*
 
 | Step | Do this | Expect |
 |---|---|---|
-| L-2.1 | Set `vault_edit` = **allow**, `vault_configure` = **deny**. Save | — |
+| L-2.1 | Set `knowledge_edit` = **allow**, `knowledge_configure` = **deny**. Save | — |
 | L-2.2 | Ask the agent to create a new record type | **Refused** |
-| L-2.3 | Ask it to create the type "by writing the YAML file directly" through `vault_edit` | Refused — `vault_edit` does not write into `.omnipus-vault/` |
-| L-2.4 | Ask it to do the same through `vault_restructure` | Refused |
+| L-2.3 | Ask it to create the type "by writing the YAML file directly" through `knowledge_edit` | Refused — `knowledge_edit` does not write into `.omnipus-vault/` |
+| L-2.4 | Ask it to do the same through `knowledge_restructure` | Refused |
 | L-2.5 | Ask it to edit an existing schema file by any route it can think of | Refused |
 | L-2.6 | Check `.omnipus-vault/records/` on disk | No new or changed file |
 
-**Fail if:** any route reaches a schema file while `vault_configure` is denied. "This agent may
+**Fail if:** any route reaches a schema file while `knowledge_configure` is denied. "This agent may
 edit notes but may not redefine what a note is" is the posture; if there is a way around it, the
 posture is decoration.
 
@@ -1791,7 +1795,7 @@ posture is decoration.
 
 | Step | Do this | Expect |
 |---|---|---|
-| L-3.1 | Set `vault_configure` = **allow**, `vault_edit` = **ask** | — |
+| L-3.1 | Set `knowledge_configure` = **allow**, `knowledge_edit` = **ask** | — |
 | L-3.2 | Ask the agent to author a record type | Works with no prompt |
 | L-3.3 | Ask it to set a property on a note | An **approval prompt** appears first |
 | L-3.4 | Read the prompt | It says which file and which property, before you approve |
@@ -1813,9 +1817,9 @@ product, and it is worth spending two minutes to rule out.
 
 | Step | Do this | Expect |
 |---|---|---|
-| L-5.1 | On the clean install, read the vault tool policies for **Mia, Jim, Ava and Ray** | Reads (`vault_describe`, `vault_find`, `vault_read`) are **allow** for all four |
-| L-5.2 | `vault_edit` | **ask** for Mia and Ray; **allow** for Jim and Ava |
-| L-5.3 | `vault_restructure` and `vault_configure` | **ask** for all four |
+| L-5.1 | On the clean install, read the vault tool policies for **Mia, Jim, Ava and Ray** | Reads (`knowledge_describe`, `knowledge_find`, `knowledge_read`) are **allow** for all four |
+| L-5.2 | `knowledge_edit` | **ask** for Mia and Ray; **allow** for Jim and Ava |
+| L-5.3 | `knowledge_restructure` and `knowledge_configure` | **ask** for all four |
 | L-5.4 | Look at a worker/subagent (`worker`, `planner`, `explorer`, `researcher`, `judge`, `plansupervisor`) | **deny** on all six |
 | L-5.5 | Look for any of the six with no entry at all | There are none. Every agent has an explicit entry for every one of the six |
 
@@ -1848,8 +1852,8 @@ what a "company" is.*
 | Step | Do this | Expect |
 |---|---|---|
 | M-1.1 | On the clean install, mount **Vault Beta** (no `.omnipus-vault` folder at all) | Mounts and indexes as an ordinary set of notes |
-| M-1.2 | `vault_describe` on it | **Zero record types. Zero enum values. Zero saved views. Zero identifier prefixes.** Not an error — a working vault of ordinary notes |
-| M-1.3 | `vault_find` `type` = `company` | Refused — no such record type is declared |
+| M-1.2 | `knowledge_describe` on it | **Zero record types. Zero enum values. Zero saved views. Zero identifier prefixes.** Not an error — a working vault of ordinary notes |
+| M-1.3 | `knowledge_find` `type` = `company` | Refused — no such record type is declared |
 | M-1.4 | Repeat with `contact`, `deal`, `lead`, `task`, `project`, `person`, `note` | **Every one refused.** None of them is quietly known |
 | M-1.5 | Ask an agent: *"What record types does this vault have?"* | It says none, and does not invent a plausible set |
 | M-1.6 | Look at every filter dropdown, template list and empty state in the Library UI | No pre-populated record types, no suggested property names, no example enum values that came from us |
@@ -1915,7 +1919,7 @@ Covered by G-2 and G-3. Additionally:
 | Step | Do this | Expect |
 |---|---|---|
 | N-3.1 | Open Library in a fresh browser long after an index completed | The real state — phase, counts, completion — not "no progress has arrived" |
-| N-3.2 | Compare against what a `vault_find` response says about freshness | The two agree. They are supposed to come from one source |
+| N-3.2 | Compare against what a `knowledge_find` response says about freshness | The two agree. They are supposed to come from one source |
 
 ### Case N-4 — The `.base` importer is not an agent tool
 
@@ -1964,7 +1968,7 @@ the console.
 
 | Step | Do this | Expect |
 |---|---|---|
-| O-4.1 | At the end, run `vault_describe` on Alpha one more time | The schemas are as you left them — no type, property, enum value or view appeared that you did not create |
+| O-4.1 | At the end, run `knowledge_describe` on Alpha one more time | The schemas are as you left them — no type, property, enum value or view appeared that you did not create |
 | O-4.2 | Run `check_integrity` one more time | The findings are the ones you know about. Nothing new appeared from the run itself |
 
 ---
@@ -1988,14 +1992,14 @@ else in this part carries that history; run it in the ordinary way.*
 | Step | Do this | Expect |
 |---|---|---|
 | P-1.1 | Note the exact byte content of `Expeditions/coastal-survey.md` | — |
-| P-1.2 | `vault_restructure` `trash` it | Succeeds |
+| P-1.2 | `knowledge_restructure` `trash` it | Succeeds |
 | P-1.3 | Look in `/tmp/uat-vault-alpha/.omnipus-vault/trash/` | A folder named with a **colon-free** timestamp (`20260828T...Z` — no `:` characters), containing the note at its **original relative path** inside that folder, e.g. `.../trash/20260828T.../Expeditions/coastal-survey.md` |
 | P-1.4 | Open that file in a text editor | **Byte-identical** to what you noted in P-1.1. Nothing was added, rewritten, or stamped into it |
-| P-1.5 | `vault_describe` afterwards | The trash location does not appear as a mounted collection, a record type, or anything else queryable — it is bookkeeping, not vault content |
+| P-1.5 | `knowledge_describe` afterwards | The trash location does not appear as a mounted collection, a record type, or anything else queryable — it is bookkeeping, not vault content |
 
 **Fail if:** the file's bytes changed in any way; the timestamp folder contains a colon (`:`) —
 this specifically breaks on Windows, so it is worth checking carefully even if you are not on
-one; or the trashed note is reachable through any of the ordinary `vault_find`/`vault_read` paths.
+one; or the trashed note is reachable through any of the ordinary `knowledge_find`/`knowledge_read` paths.
 
 ### Case P-2 — Inbound links are not repaired, and the response says exactly what broke
 
@@ -2005,7 +2009,7 @@ one; or the trashed note is reachable through any of the ordinary `vault_find`/`
 | Step | Do this | Expect |
 |---|---|---|
 | P-2.1 | Before trashing, confirm which notes link to `Expeditions/coastal-survey.md` | `Specimens/lichen.md` |
-| P-2.2 | `vault_restructure` `trash` it | Succeeds |
+| P-2.2 | `knowledge_restructure` `trash` it | Succeeds |
 | P-2.3 | Read the response | It names the **count** of now-unrepairable inbound links (1) and **lists** `Specimens/lichen.md` by path |
 | P-2.4 | Open `Specimens/lichen.md` on disk | **Unchanged.** Trash does not rewrite the notes that pointed at what it removed — there is nothing to repair them *to* |
 
@@ -2041,9 +2045,9 @@ activity happen between the trash call and the check.*
 
 | Step | Do this | Expect |
 |---|---|---|
-| P-4.1 | Pick a specimen you have not touched yet and confirm `vault_find` returns it by a word unique to its body | It is found |
-| P-4.2 | `vault_restructure` `trash` it | Succeeds |
-| P-4.3 | **Without pausing, without triggering any other indexing action, and without waiting** — immediately repeat the exact same `vault_find` query | The trashed note is **not** returned |
+| P-4.1 | Pick a specimen you have not touched yet and confirm `knowledge_find` returns it by a word unique to its body | It is found |
+| P-4.2 | `knowledge_restructure` `trash` it | Succeeds |
+| P-4.3 | **Without pausing, without triggering any other indexing action, and without waiting** — immediately repeat the exact same `knowledge_find` query | The trashed note is **not** returned |
 | P-4.4 | Immediately search for it by its identifier too | Also not returned |
 | P-4.5 | `check_integrity` immediately afterward | The trashed note does **not** appear as an orphan row (B-7) — trashing removed its properties row along with removing it from the text index, in the same operation |
 
@@ -2057,9 +2061,9 @@ you find one, note how many attempts it took to observe and how many did not sho
 | Step | Do this | Expect |
 |---|---|---|
 | P-5.1 | With `Expeditions/coastal-survey.md` trashed | — |
-| P-5.2 | `vault_restructure` `restore` it, addressed by its **original** path — `Expeditions/coastal-survey.md`, not any path under `.omnipus-vault/trash/` | Succeeds |
+| P-5.2 | `knowledge_restructure` `restore` it, addressed by its **original** path — `Expeditions/coastal-survey.md`, not any path under `.omnipus-vault/trash/` | Succeeds |
 | P-5.3 | Look at the note's `id` | `EX-0002` — the **same** identifier it had before, not a new one |
-| P-5.4 | `vault_find` for it | Found again, resolvable |
+| P-5.4 | `knowledge_find` for it | Found again, resolvable |
 | P-5.5 | `SP-0003`'s `expedition` relation | Resolves again, and P-3's trashed-target annotation is gone from `check_integrity` |
 | P-5.6 | Trash the same note **twice in a row** (trash it, then trash it again after a moment) | The second call succeeds and reports it was **already trashed once**, naming **both** timestamps — the earlier one and the new one |
 | P-5.7 | `restore` it with **no** `trashed_at` argument | Restores the **most recent** of the two trashed copies, and the response says which timestamp it took and names the older one it left behind |
@@ -2073,7 +2077,7 @@ copy; or P-5.7 restores the wrong one, or does not say which one it restored.
 
 | Step | Do this | Expect |
 |---|---|---|
-| P-6.1 | `restore` a path that was never trashed, e.g. `Specimens/fern.md` | Refused: `no trashed note at Specimens/fern.md`, and it tells you where to look — `vault_describe` reports the trash contents |
+| P-6.1 | `restore` a path that was never trashed, e.g. `Specimens/fern.md` | Refused: `no trashed note at Specimens/fern.md`, and it tells you where to look — `knowledge_describe` reports the trash contents |
 | P-6.2 | Trash a note, then **create a new note at that same original path** before restoring, then attempt the restore | Refused, naming **both** paths — the live note occupying the spot and the trashed one that cannot land there |
 | P-6.3 | After a genuine restore (P-5), run `check_integrity` | The restored identifier is **not** reported as a duplicate. It was never reissued — it is the same record coming back, not a second one wearing its old name |
 | P-6.4 | If you can construct it: hand-edit a path inside the trash folder so it no longer matches its own record (rename the timestamp folder, or move the note within it) | The subsequent `restore` is refused rather than writing to whatever the edited path implies. Mark this **Blocked — could not construct the condition** if you cannot arrange it by hand |
@@ -2091,7 +2095,7 @@ negative case: you are checking that something does **not** exist.*
 | Step | Do this | Expect |
 |---|---|---|
 | P-7.1 | Ask an agent: *"Is there any way to permanently delete a note right now, skipping the trash? List every tool and operation you have that could do it."* | It reports none exists |
-| P-7.2 | Ask `vault_restructure` to `trash` with any argument resembling `permanent`, `force`, `skip_trash` or `purge` | Either the argument is refused as unrecognised, or it is silently ignored and the note is trashed normally (recoverable) — **never** actually permanently deleted |
+| P-7.2 | Ask `knowledge_restructure` to `trash` with any argument resembling `permanent`, `force`, `skip_trash` or `purge` | Either the argument is refused as unrecognised, or it is silently ignored and the note is trashed normally (recoverable) — **never** actually permanently deleted |
 | P-7.3 | Look at every tool's own parameter list across everything you have exercised in this plan | No tool declares a permanent-delete parameter of any name |
 
 **Fail if:** any argument, on any tool, causes a note to be unrecoverably gone with no trash entry
@@ -2122,10 +2126,10 @@ happening yet.)
 | Step | Do this | Expect |
 |---|---|---|
 | P-8.1 | Using your file manager, create the folder `/tmp/uat-vault-alpha/.omnipus-vault/trash/` if it does not already exist | The folder exists, empty |
-| P-8.2 | Ask `vault_restructure` to `move` `Specimens/moss.md` to `.omnipus-vault/trash/moss.md` | **Refused** |
+| P-8.2 | Ask `knowledge_restructure` to `move` `Specimens/moss.md` to `.omnipus-vault/trash/moss.md` | **Refused** |
 | P-8.3 | Read the refusal | It names the **reserved location** specifically — `.omnipus-vault/` (or your build's equivalent wording) — not a generic error, and not "destination directory does not exist" |
 | P-8.4 | Check `Specimens/moss.md` on disk | Still at its original path, byte-identical to before the call |
-| P-8.5 | `vault_find` for it | Still found, normally |
+| P-8.5 | `knowledge_find` for it | Still found, normally |
 | P-8.6 | If you want the fuller picture: repeat P-8.2 with a destination inside `.obsidian/` instead, and again with a **nested** reserved path such as `Notes/.obsidian/plugins/moss.md` | Both refused the same way. The guard applies at any depth, not only at the top level |
 
 **Fail if:** the move at P-8.2 is **accepted** — this is the live-data-loss defect returning.
@@ -2149,13 +2153,13 @@ checks (FR-048b), rather than a thin wrapper over the tool this case is testing.
 | Step | Do this | Expect |
 |---|---|---|
 | P-9.1 | Note that `.omnipus-vault/records/keeper.yaml` exists as a real schema file | — |
-| P-9.2 | Ask `vault_restructure` to `move` `.omnipus-vault/records/keeper.yaml` to `Keepers/keeper-schema-moved.yaml` | **Refused** |
+| P-9.2 | Ask `knowledge_restructure` to `move` `.omnipus-vault/records/keeper.yaml` to `Keepers/keeper-schema-moved.yaml` | **Refused** |
 | P-9.3 | Read the refusal | It names the reserved location (`.omnipus-vault/`) specifically, this time as the **source** side, not the destination |
 | P-9.4 | Check `.omnipus-vault/records/keeper.yaml` on disk | Unchanged, and no new file exists at `Keepers/keeper-schema-moved.yaml` |
-| P-9.5 | `vault_describe` afterward | The `keeper` record type is exactly as it was — nothing about it changed |
+| P-9.5 | `knowledge_describe` afterward | The `keeper` record type is exactly as it was — nothing about it changed |
 
 **Fail if:** the move is accepted — report as **CRITICAL**, since it would mean an agent holding
-only `vault_restructure: allow` could relocate or exfiltrate the vault's own schema files, saved
+only `knowledge_restructure: allow` could relocate or exfiltrate the vault's own schema files, saved
 views, or another note's trash entry, with none of the tier-boundary protections Part L exists to
 provide; or the refusal fires but does not name the reserved location.
 
@@ -2190,10 +2194,10 @@ directly.*
 |---|---|---|
 | P-11.1 | Trash a note, then look inside its timestamped folder under `.omnipus-vault/trash/` with a file manager | An `entry.json` file sits beside the note |
 | P-11.2 | Open it in a text editor | Readable JSON naming the original path, the timestamp, and (if the note was a record) its identifier |
-| P-11.3 | Look through every agent tool's parameter list for anything that reads or writes `entry.json` directly | Nothing does. The receipt is consumed internally by `restore`, `check_integrity`'s annotation (P-3), and `vault_describe`'s trash report — never exposed as its own read or write target |
-| P-11.4 | `vault_describe` on a vault with something in its trash | Reports the trash contents (count, and total size) without you having to open any receipt yourself |
+| P-11.3 | Look through every agent tool's parameter list for anything that reads or writes `entry.json` directly | Nothing does. The receipt is consumed internally by `restore`, `check_integrity`'s annotation (P-3), and `knowledge_describe`'s trash report — never exposed as its own read or write target |
+| P-11.4 | `knowledge_describe` on a vault with something in its trash | Reports the trash contents (count, and total size) without you having to open any receipt yourself |
 
-**Fail if:** any tool exposes a direct read or write of `entry.json`, or `vault_describe` cannot
+**Fail if:** any tool exposes a direct read or write of `entry.json`, or `knowledge_describe` cannot
 report the trash contents without a receipt being manually inspected first.
 
 ---
@@ -2254,7 +2258,7 @@ fixture, say what you observed *and* that you suspect it, and let someone else d
 | A-9 | Gateway stays up | prior F1 | shipped |
 | A-10 | Awkward content | prior Case 6 | shipped |
 | A-11 | Readable errors | prior F8 | shipped |
-| B-1..B-6 | `vault_describe`, `check_integrity` | D15.3, D15.5b, §4.1.1, FR-075/075a | W1 |
+| B-1..B-6 | `knowledge_describe`, `check_integrity` | D15.3, D15.5b, §4.1.1, FR-075/075a | W1 |
 | B-7 | The sixth `check_integrity` kind: orphan rows | D15.3 revision 6, D16.5 (orphaned row ruling) | W1 |
 | B-8 | Clamp vs refusal on `check_integrity`'s two bounds | D15.5b (`check_integrity findings`, `check_integrity notes swept` rows) | W1 |
 | C-1..C-3 | text, enum, relation | D3, D4, D5, D5.1 | W1/W3 |
@@ -2293,7 +2297,7 @@ fixture, say what you observed *and* that you suspect it, and let someone else d
 | H-1 | Unknown property | FR-024 | W2 |
 | H-2 | SQLite-less build | D16.2a, FR-020h, AC-F6 | W1 |
 | H-3 | Ambiguous anchor | D14.1, FR-047, AC-E3 | W4 |
-| I-1 | `vault_read` and the version token | D15.3, AC-R1/R2/R3 | W3 |
+| I-1 | `knowledge_read` and the version token | D15.3, AC-R1/R2/R3 | W3 |
 | I-2 | Identifier allocation | D7, D7.1, AC-7.1/7.2, FR-036b/038 | W1/W4 |
 | I-3 | Byte-preserving writes | D14, AC-14.1 | W4 |
 | I-4 | Multi-line clobber refused | D14, AC-14.2, FR-040b | W4 |

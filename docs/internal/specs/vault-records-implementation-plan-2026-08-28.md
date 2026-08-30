@@ -11,8 +11,8 @@
 | | |
 |---|---|
 | `pkg/records` | 13,760 lines, 11 non-test files, **0 consumers** |
-| `vault_*` tools | 0 |
-| `knowledge_*` tools | 9 (to retire in S5) |
+| New tools (`knowledge_describe`/`find`/`read`/`edit`/`restructure`/`configure`) | 0 |
+| `knowledge_*` tools (the nine retiring ones) | 9 (to retire in S5) |
 | SQLite properties index | does not exist |
 | `money` (to delete) | 1,557 lines |
 | Invented operators (to replace) | 7 |
@@ -47,9 +47,9 @@ Every agent owns a disjoint file set. No agent waits on another.
 | **1** | `ScoringModel = bm25` + the thirteen false BM25 doc/log corrections | no `.go` file attributes BM25 to bleve while `ScoringModel` is unset |
 | **2** | Fielded indexing (title, name, headings, property keys, property values, body) + the freshness stored field | a field query on a property key is possible at all — it is not today |
 | **3** | BM25F weighting + RRF fusion (BM25 + exact-name + recency + backlink degree) | clears its nDCG@10 threshold against plain BM25 **or does not ship** |
-| **4** | `vault_find` — words, typed filters, grouping, `kind: task`, problem report | a type mismatch is never a silent empty result |
+| **4** | `knowledge_find` — words, typed filters, grouping, `kind: task`, problem report | a type mismatch is never a silent empty result |
 | **5** | **The Go comparator that decides every comparison** + AC-8.10's emitted-SQL guard | the guard fails on any comparison operator, `LIKE`, `IN`, `GROUP BY`, `ORDER BY`, aggregate or `COLLATE` outside the narrowing allow-list |
-| **6** | `vault_describe` incl. `check_integrity` and its bounds | unknown property refused naming the valid ones |
+| **6** | `knowledge_describe` incl. `check_integrity` and its bounds | unknown property refused naming the valid ones |
 
 **Gate:** as Stage 1, plus the six-mutation table produced **as an artifact**, not a pass.
 
@@ -61,8 +61,8 @@ Every agent owns a disjoint file set. No agent waits on another.
 |---|---|
 | **1** | Relations, inverses, relation grouping |
 | **2** | `near` + `hops`, and its composition with filters |
-| **3** | `vault_read` — full note, sections, version token, links+backlinks inline |
-| **4** | `vault_edit` — byte-preserving writes, list-valued splice, `create`'s template argument |
+| **3** | `knowledge_read` — full note, sections, version token, links+backlinks inline |
+| **4** | `knowledge_edit` — byte-preserving writes, list-valued splice, `create`'s template argument |
 | **5** | `replace_body` — anchor-addressed, ambiguity refused naming both matches |
 | **6** | The **trash convention** — where a trashed note goes, what happens to inbound links, whether the index forgets it. Written and reviewed **before** any tool exposes it |
 
@@ -72,14 +72,18 @@ Every agent owns a disjoint file set. No agent waits on another.
 
 | # | Delivers |
 |---|---|
-| **1** | `vault_restructure` — rename, move, trash operation |
-| **2** | `vault_configure` — record-type and saved-view authoring |
+| **1** | `knowledge_restructure` — rename, move, trash operation |
+| **2** | `knowledge_configure` — record-type and saved-view authoring |
 | **3** | D18 policy seeding + ACs — all three policies independently settable |
-| **4** | **Retire the nine `knowledge_*` names** — catalog, global ceiling, all five seed maps, every skill and prompt |
+| **4** | **Retire the nine RETIRING `knowledge_*` names** (`knowledge_search`, `knowledge_graph`, `knowledge_tasks`, `knowledge_create`, `knowledge_link`, `knowledge_set_property`, `knowledge_append_section`, `knowledge_move`, `knowledge_rename`) — catalog, global ceiling, all five seed maps, every skill and prompt |
 | **5** | Record table UI — grouping, related-records panel, problem banner, drill-down, cell edit |
 | **6** | Index-state snapshot (the live-only defect) + operator/CLI saved-view importer |
 
-**Exit:** no `knowledge_*` name anywhere; the catalog assertion reads 95.
+**Exit:** none of the nine retired `knowledge_*` names remain anywhere; the six
+replacement tools (`knowledge_describe`, `knowledge_find`, `knowledge_read`,
+`knowledge_edit`, `knowledge_restructure`, `knowledge_configure`) carry the
+`knowledge_` prefix too, so "no `knowledge_*` name anywhere" is no longer the
+right test — the catalog assertion reads 95.
 
 ---
 

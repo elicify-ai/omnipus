@@ -38,8 +38,8 @@ all.**
 | What happens to inbound links? | Not repaired. Counted and listed at trash time; annotated, not re-classified, in every later health check | half normative (FR-048), **half new here** |
 | Does the index forget it? | Yes, immediately, both indexes, driven by the trash operation itself | normative (FR-048); **its mechanism is new here** |
 | Does it become an "orphan row"? | No. The derived properties row is deleted with it | already normative (the `index_epoch` ruling) |
-| How do I get it back? | `vault_restructure` with `op: restore` and the note's original path | normative (FR-048a); **its addressing rule is new here** |
-| Which tool? | `vault_restructure`. Never `vault_edit` | already normative (FR-070d, FR-070e) |
+| How do I get it back? | `knowledge_restructure` with `op: restore` and the note's original path | normative (FR-048a); **its addressing rule is new here** |
+| Which tool? | `knowledge_restructure`. Never `knowledge_edit` | already normative (FR-070d, FR-070e) |
 | Can an agent delete permanently? | No. Never. Not by any operation of any tool | **new here** |
 | Who deletes permanently? | The retention sweep, after 30 days, and only files it can prove it wrote | **new here** |
 
@@ -273,7 +273,7 @@ to the user, and it is invisible to any test that scans first.
 
 **The one sentence, which is the test this section had to pass:**
 
-> **`vault_restructure` with `op: restore` and the note's original path puts the most recently
+> **`knowledge_restructure` with `op: restore` and the note's original path puts the most recently
 > trashed copy of that note back where it came from.**
 
 That is the whole model an agent needs. `restore` with `path: "Deals/Acme Corp.md"` restores the
@@ -295,7 +295,7 @@ precisely what §6 forbids.
 
 **Four refusals, all already ruled, restated so they sit in one place:**
 
-- **Nothing there.** `no trashed note at Deals/Acme.md; vault_describe reports the trash contents`
+- **Nothing there.** `no trashed note at Deals/Acme.md; knowledge_describe reports the trash contents`
   (§4.1.5).
 - **The identifier is taken.** If a *live* record already holds the trashed record's identifier,
   restore is refused naming both paths (FR-038a). This can only happen if a note was created at
@@ -321,8 +321,8 @@ argument, one default, and four refusals that each name what to do next. That is
 
 ## 5. What an agent may do unsupervised
 
-**Decision: `trash` and `restore` are both operations of `vault_restructure`. Neither ever
-appears in `vault_edit`. This is confirmation of an existing ruling, not a new one, and the
+**Decision: `trash` and `restore` are both operations of `knowledge_restructure`. Neither ever
+appears in `knowledge_edit`. This is confirmation of an existing ruling, not a new one, and the
 existing reasoning is sound.**
 
 The tool split turns on whether an operation touches only the file the agent named or reaches
@@ -333,17 +333,17 @@ relations without writing them"* — and it notes the uncomfortable consequence 
 at least *repairs* inbound links, is the gentler of the two. **Trash is the worse cascade, and it
 is the one with nothing to repair to.**
 
-The mechanical rule that settles it: `vault_configure` is the control plane and writes
+The mechanical rule that settles it: `knowledge_configure` is the control plane and writes
 `.omnipus-vault/` and nothing else; trash moves a *note*. Putting a note-destroying operation
 behind the schema-authoring tool would mean an operator who grants type authoring also grants
 deletion.
 
 **Hard Constraint #6 makes this final at the tool boundary, and that cuts in our favour twice.**
 Policy resolves on tool name alone — there is no per-argument escape, so no operator can write
-"allow `vault_restructure` except trash". Two consequences follow, and both are good:
+"allow `knowledge_restructure` except trash". Two consequences follow, and both are good:
 
-*An operator can grant editing without granting deletion.* `vault_edit: allow` plus
-`vault_restructure: deny` is a coherent, useful posture: the agent can fill in properties and
+*An operator can grant editing without granting deletion.* `knowledge_edit: allow` plus
+`knowledge_restructure: deny` is a coherent, useful posture: the agent can fill in properties and
 rewrite sections all day and cannot delete anything (AC-X2).
 
 *Trash and restore cannot be split.* Because they share a tool name, there is no configuration in
@@ -353,15 +353,15 @@ and unable to undo. The tool boundary makes that state unreachable, which is a s
 than a policy note asking operators not to do it.
 
 **One thing this section must say plainly.** Trash is an `ask`-worthy operation, but *what* the
-policy defaults to for `vault_restructure` is D18's seeding decision, not this convention's. This
+policy defaults to for `knowledge_restructure` is D18's seeding decision, not this convention's. This
 document asserts only the placement.
 
 ---
 
 ## 6. Permanent deletion
 
-**Decision: no agent-facing tool may ever permanently delete a note. Not `vault_edit`, not
-`vault_restructure`, not `vault_configure`. There is no `purge` operation, no `force` flag, and
+**Decision: no agent-facing tool may ever permanently delete a note. Not `knowledge_edit`, not
+`knowledge_restructure`, not `knowledge_configure`. There is no `purge` operation, no `force` flag, and
 no argument to `trash` that skips the trash.**
 
 **Recommendation and reasoning.** Every argument for an agent-facing permanent delete is an
@@ -406,8 +406,8 @@ not be an unstated constant discovered by someone whose note vanished.
 
 ### Options rejected
 
-**A `purge` operation on `vault_restructure`, gated by policy.** Killed by Hard Constraint #6 and
-by blast radius. Policy resolves on tool name alone, so a `purge` op inside `vault_restructure`
+**A `purge` operation on `knowledge_restructure`, gated by policy.** Killed by Hard Constraint #6 and
+by blast radius. Policy resolves on tool name alone, so a `purge` op inside `knowledge_restructure`
 is granted by any operator who granted rename — an operator enabling routine reorganisation would
 be silently enabling irreversible deletion. Moving it to its own tool to fix that costs a
 permanent catalog slot for an operation whose best case is saving disk that retention frees
@@ -453,7 +453,7 @@ to work, and each of them would otherwise re-derive it differently:**
   by retention rather than by tree size.
 - **Purge safety (§6).** The proof that we wrote this entry, which is what limits the sweep's
   authority to what it actually created.
-- **`vault_describe`'s trash report** (FR-048a). Contents and size without reading notes.
+- **`knowledge_describe`'s trash report** (FR-048a). Contents and size without reading notes.
 
 **It does not compromise D8.** The receipt lives inside `.omnipus-vault/`, which is unambiguously
 our bookkeeping under D8's *"would this survive us?"* test, and it never touches the note's own
@@ -549,7 +549,7 @@ the same shared map). The gap is which operations consult the guard, not how it 
 ### F2 — `restore` is missing from the normative operation table — **blocker**
 
 §4.1.5's `op` table declares exactly three rows: `rename`, `move`, `trash`. FR-048a says
-*"`restore` is an operation of `vault_restructure`"*, and §4.1.5's own refusal table carries a
+*"`restore` is an operation of `knowledge_restructure`"*, and §4.1.5's own refusal table carries a
 `restore` row. So `restore` is required by two places and declared by none: it has no parameter
 list, and no entry in the cascade column that every other row must fill.
 
@@ -632,7 +632,7 @@ reasons. ADR-068 and the spec are the shared authority that five other agents in
 reading right now, and editing them mid-stage — while their revision numbers are cited in every
 other agent's brief — is the shared-worktree hazard rather than the fix for it. And F1 is a code
 defect, not a specification defect: the specification is right and the code does not implement it,
-so it belongs to whoever owns `vault_restructure` in Stage 4, with an acceptance criterion, not to
+so it belongs to whoever owns `knowledge_restructure` in Stage 4, with an acceptance criterion, not to
 a document edit.
 
 **I modified no file I do not own.** This document is new. Nothing else in the worktree was
