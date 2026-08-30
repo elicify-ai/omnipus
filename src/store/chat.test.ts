@@ -190,6 +190,72 @@ describe('chat store — streaming via handleFrame', () => {
     expect(state.sessionCost).toBeCloseTo(0.02)
   })
 
+  // Live UAT (2026-08-26): the provider returned a response the engine judged
+  // empty. pkg/agent/loop.go substitutes its `defaultResponse` fallback text
+  // ("The model returned an empty response...") for the SUCCESS-path
+  // finalContent, but pkg/gateway/websocket.go's wsStreamer.Finalize only
+  // marks the chat "streamed" (suppressing webchatChannel.Send's own
+  // token+done fallback) when `accumulated.Len() > 0` — i.e. when at least
+  // one real token was actually streamed live. An empty-response turn never
+  // streams anything, so Finalize's own `done` frame lands FIRST (finalizing
+  // the optimistic placeholder with content:'' still empty), and THEN
+  // webchatChannel.Send fires its own token+done pair carrying the real
+  // fallback text — landing on an assistant bubble that is already closed
+  // (isStreaming:false). Per the 'closed bubble = new segment' boundary
+  // rule a few lines above the guard this test exercises, that would abandon
+  // the empty placeholder and open a brand-new bubble for the fallback text
+  // — leaving TWO assistant bubbles on screen: an empty one with a Copy
+  // button that copies nothing, and a second one holding the real text.
+  // The `lastMsgIsEmptyTerminal` guard reuses a closed bubble instead of
+  // abandoning it when — and only when — that bubble finalized holding
+  // nothing at all, collapsing this exact two-frame delivery into ONE
+  // bubble with the real content.
+  it('handleFrame: a trailing token+done pair after an EMPTY terminal placeholder merges into the same bubble, not a second one', () => {
+    const FALLBACK_TEXT = 'The model returned an empty response. This may indicate a provider error or token limit.'
+    act(() => {
+      // The optimistic placeholder sendMessage() creates.
+      useChatStore.getState().appendMessage({
+        id: 'asst_empty_final',
+        session_id: 'sess_1',
+        role: 'assistant',
+        content: '',
+        timestamp: '2026-03-29T10:00:01Z',
+        status: 'streaming',
+        isStreaming: true,
+      })
+      useChatStore.setState({ isStreaming: true })
+      // wsStreamer.Finalize's `done` — no token frame preceded it, since the
+      // LLM call itself produced nothing.
+      useChatStore.getState().handleFrame({ type: 'done', stats: { tokens: 0, cost: 0, duration_ms: 5 }, session_id: TEST_SESSION_ID })
+    })
+
+    // Placeholder is now terminal and still empty — exactly the state a
+    // user would see rendered as a bare Copy-button bubble without the
+    // ChatScreen.tsx render-layer fix.
+    const midState = useChatStore.getState()
+    const midAsst = midState.messages.find((m) => m.id === 'asst_empty_final')
+    expect(midAsst?.content).toBe('')
+    expect(midAsst?.isStreaming).toBe(false)
+    expect(midAsst?.status).toBe('done')
+
+    act(() => {
+      // webchatChannel.Send's own fallback delivery — a second, independent
+      // token+done pair for the SAME chat.
+      useChatStore.getState().handleFrame({ type: 'token', content: FALLBACK_TEXT, session_id: TEST_SESSION_ID })
+      useChatStore.getState().handleFrame({ type: 'done', stats: { tokens: 0, cost: 0, duration_ms: 0 }, session_id: TEST_SESSION_ID })
+    })
+
+    const state = useChatStore.getState()
+    const assistantMsgs = state.messages.filter((m) => m.role === 'assistant')
+    // Exactly one assistant bubble — the fallback text landed on the SAME
+    // message as the empty placeholder, not a second, newly-minted one.
+    expect(assistantMsgs).toHaveLength(1)
+    expect(assistantMsgs[0].id).toBe('asst_empty_final')
+    expect(assistantMsgs[0].content).toBe(FALLBACK_TEXT)
+    expect(assistantMsgs[0].isStreaming).toBe(false)
+    expect(assistantMsgs[0].status).toBe('done')
+  })
+
   it('handleFrame(error) sets message to error status — message-level error does NOT set connectionError', () => {
     // Traces to: wave5a-wire-ui-spec.md — Scenario: WebSocket connection error during streaming
     // When an assistant message already exists, the error is message-level (e.g. LLM rejected

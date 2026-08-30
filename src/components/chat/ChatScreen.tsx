@@ -939,8 +939,22 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
   // Fix 2 (user-approved 2026-07-16): the actual render list, filtered
   // through the thread gate (shouldRenderSubagentSpan).
   const visibleSpans = (message.spans ?? []).filter((span) => shouldRenderSubagentSpan(span, verboseChatEnabled))
-  const showEmptyPlaceholder =
-    !!message.isStreaming && !hasContent && !hasVisibleToolCalls && !hasMedia && !visibleSpans.length
+  const isEmptyContent = !hasContent && !hasVisibleToolCalls && !hasMedia && !visibleSpans.length
+  const showEmptyPlaceholder = !!message.isStreaming && isEmptyContent
+  // D-fix, terminal-empty variant: a message that finished normally
+  // (isStreaming:false, status 'done' — not interrupted, not a typed
+  // error, both of which already carry their own distinct treatment
+  // below) yet still holds nothing to show has nothing to copy either.
+  // Without this, a message left behind in this state — e.g. the
+  // optimistic placeholder from a turn whose engine-level empty-response
+  // fallback text was delivered on a SEPARATE bubble rather than merged
+  // into this one (see the 'token' handler's lastMsgIsEmptyTerminal guard
+  // in store/chat.ts for the delivery mechanism this compensates for) —
+  // renders as just an avatar, a name, and a Copy button that copies
+  // nothing once it scrolls off the live AssistantMessage() render and
+  // into this historical row.
+  const isTerminalEmpty =
+    !message.isStreaming && isEmptyContent && message.status !== 'interrupted' && message.status !== 'error'
 
   return (
     <div
@@ -1119,8 +1133,10 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
 
         {/* Action bar — always visible at reduced opacity, fully opaque on hover.
             Suppressed while showEmptyPlaceholder (D-fix): nothing has streamed
-            in yet, so there is nothing to copy. */}
-        {!showEmptyPlaceholder && (
+            in yet, so there is nothing to copy. Also suppressed for the
+            terminal-empty variant (isTerminalEmpty): the turn finished with
+            nothing to show, so there is still nothing to copy. */}
+        {!showEmptyPlaceholder && !isTerminalEmpty && (
           <div className="flex items-center gap-1 opacity-70 hover:opacity-100 transition-opacity duration-150">
             <StaticCopyButton text={message.content ?? ''} />
           </div>
@@ -1478,8 +1494,21 @@ function AssistantMessage() {
   )
   const hasMedia = !!storeMsg?.media?.length
   const visibleSpans = (storeMsg?.spans ?? []).filter((span) => shouldRenderSubagentSpan(span, verboseChatEnabled))
-  const showEmptyPlaceholder =
-    isRunning && !hasVisibleText && !hasVisibleToolCall && !hasMedia && !visibleSpans.length
+  const isEmptyContent = !hasVisibleText && !hasVisibleToolCall && !hasMedia && !visibleSpans.length
+  const showEmptyPlaceholder = isRunning && isEmptyContent
+  // D-fix, terminal-empty variant: the turn ended (not running) — normally
+  // (not interrupted, not a typed error, both of which already have their
+  // own distinct treatment: the '(interrupted)' label and the error
+  // action-bar/detail-disclosure below) — yet still holds nothing to show.
+  // This is reachable when the engine's own empty-response fallback text
+  // (pkg/agent/loop.go's `defaultResponse` sentinel: "The model returned an
+  // empty response...") fails to land on THIS message — see the 'token'
+  // handler's lastMsgIsEmptyTerminal guard in store/chat.ts, which merges
+  // that fallback delivery back into this exact placeholder in the normal
+  // case. Whatever left this message here empty and terminal, an empty
+  // bubble has nothing to copy — do not show the Copy affordance for it,
+  // matching the streaming-case guard immediately above.
+  const isTerminalEmpty = !isRunning && isEmptyContent && !isInterrupted && storeMsg?.status !== 'error'
 
   return (
     <MessagePrimitive.Root
@@ -1498,6 +1527,11 @@ function AssistantMessage() {
             // Nothing has streamed in yet — show only the thinking indicator,
             // not an empty text bubble + Copy affordance (D-fix).
             <InlineThinkingIndicator />
+          ) : isTerminalEmpty ? (
+            // Terminal-empty variant (D-fix): the turn is over and there is
+            // still nothing to show. Render nothing rather than an empty
+            // Copy-only bubble — see isTerminalEmpty's doc comment above.
+            null
           ) : (
             <>
               {/* Media (screenshots, files) renders BEFORE the parts so the image
@@ -1532,8 +1566,10 @@ function AssistantMessage() {
 
         {/* Action bar — Copy + Retry buttons, always visible at reduced opacity.
             Suppressed while showEmptyPlaceholder (D-fix): nothing has streamed
-            in yet, so there is nothing to copy or retry. */}
-        {!showEmptyPlaceholder && (
+            in yet, so there is nothing to copy or retry. Also suppressed for
+            the terminal-empty variant (isTerminalEmpty): the turn is over
+            and there is still nothing to copy or retry. */}
+        {!showEmptyPlaceholder && !isTerminalEmpty && (
           <ActionBarPrimitive.Root className="flex items-center gap-1 opacity-70 hover:opacity-100 transition-opacity duration-150">
             <ActionBarPrimitive.Copy asChild>
               <button tabIndex={0}

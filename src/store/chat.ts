@@ -3303,13 +3303,49 @@ export const useChatStore = create<ChatStore>((set, get) => {
                 // different producer's bubble than the one the tool call
                 // actually started on.
                 let abandonedMsgId: string | null = null
+                // Empty-response variant of the "delivered twice" defect
+                // documented on the status==='error' guard above: when the
+                // LLM call itself produced no tokens at all (not a
+                // classified error — the engine's success-path empty-content
+                // fallback, pkg/agent/loop.go's `defaultResponse` sentinel),
+                // NO `error` frame is ever sent, so the guard above never
+                // fires. The turn still finalizes the optimistic placeholder
+                // via `done` with content:'' (nothing was ever streamed to
+                // abandon it against), and THEN webchatChannel.Send()'s
+                // markStreamed fallback (pkg/gateway/webchat_channel.go —
+                // markStreamed is only called when `accumulated.Len() > 0`)
+                // delivers the actual fallback text as a second token+done
+                // pair so the turn doesn't strand the user on a stuck
+                // "thinking" spinner. Without this check, the boundary rule
+                // right below (closed bubble = new segment) abandons the
+                // now-closed EMPTY placeholder and mints a brand-new bubble
+                // for that fallback text — leaving the original placeholder
+                // stranded on screen as a permanent empty bubble with a Copy
+                // button that copies nothing (D-fix's terminal-empty
+                // variant). A closed bubble that finalized holding
+                // absolutely nothing — no text, no tool call, no media, no
+                // subagent span — was never actually shown as content, so
+                // reusing it here (rather than abandoning it) collapses the
+                // two deliveries back into the single bubble the user
+                // actually needs to see.
+                const lastMsg = lastMsgId ? draft.messagesById[lastMsgId] : null
+                const lastMsgIsEmptyTerminal =
+                  !!lastMsg &&
+                  !lastMsg.isStreaming &&
+                  !lastMsg.content?.trim().length &&
+                  !lastMsg.tool_calls?.length &&
+                  !lastMsg.media?.length &&
+                  !lastMsg.spans?.length
                 // Only reuse the last assistant bubble if it is still
-                // streaming. A closed bubble (status=done) means the prior
-                // LLM call has finalized and any new tokens are part of a
-                // *new* turn-segment — typically a follow-up call after a
-                // tool returned. Stuffing them back into the closed bubble
-                // is what produced the "text-then-image-at-bottom" ordering.
-                if (lastMsgId && !draft.messagesById[lastMsgId].isStreaming) {
+                // streaming (or, per the empty-terminal case just above, if
+                // it finalized holding nothing at all). A closed bubble
+                // that DID hold something (status=done, real content/tool
+                // calls/media/spans already shown) means the prior LLM call
+                // has finalized and any new tokens are part of a *new*
+                // turn-segment — typically a follow-up call after a tool
+                // returned. Stuffing them back into that closed bubble is
+                // what produced the "text-then-image-at-bottom" ordering.
+                if (lastMsgId && !draft.messagesById[lastMsgId].isStreaming && !lastMsgIsEmptyTerminal) {
                   abandonedMsgId = lastMsgId
                   lastMsgId = null
                 }
