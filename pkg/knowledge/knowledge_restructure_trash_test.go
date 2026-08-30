@@ -246,13 +246,33 @@ func TestRestore_RefusesIdentifierCollisionWithLiveRecord(t *testing.T) {
 
 // --- Restore: FR-048b — the reconstructed destination is contained ---------
 
+// A weak version of this test (no matching trash entry on disk) passes even
+// with the guard deleted, because findTrashCopies then reports "not found"
+// for an unrelated reason and the test never actually exercises
+// authorRefuseReserved. To give it real power, the fixture plants a
+// hand-edited trash entry — exactly FR-048b's own threat model
+// ("a hand-edited trash path ... would otherwise restore wherever the path
+// says") — so that WITHOUT the guard, findTrashCopies WOULD find a copy,
+// ResolveContainedNoSymlink WOULD accept the destination (.omnipus-vault/ is
+// inside the collection root; only authorRefuseReserved objects to it — see
+// contain.go/rename.go's own split between the two checks), and the restore
+// would actually attempt to write into .omnipus-vault/. Mutation-verified:
+// deleting the guard call turns this test red (see the report).
 func TestRestore_RefusesReservedDestination(t *testing.T) {
-	_, root := a2Collection(t, map[string]string{"Keep.md": "x"})
+	dir, root := a2Collection(t, map[string]string{"Keep.md": "x"})
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".omnipus-vault/trash/20260101T000000Z/.omnipus-vault"), 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dir, ".omnipus-vault/trash/20260101T000000Z/.omnipus-vault/sneaky.md"),
+		[]byte("planted"), 0o644))
 	tr := rtTrasher(t, root)
 
 	_, err := tr.Restore(RestoreRequest{Path: ".omnipus-vault/sneaky.md"})
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrReservedLocation)
+
+	// The refusal must not have written anything into the vault's own
+	// bookkeeping directory.
+	assert.NoFileExists(t, filepath.Join(dir, ".omnipus-vault/sneaky.md"))
 }
 
 // --- Restore: trashed_at selects an explicit older copy ---------------
