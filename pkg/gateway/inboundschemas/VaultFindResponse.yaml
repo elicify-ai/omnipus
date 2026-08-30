@@ -1,6 +1,6 @@
 title: VaultFindResponse
 description: >
-  The answer to `vault_find` — rows AND the account of everything the query
+  The answer to `knowledge_find` — rows AND the account of everything the query
   could not include, in the SAME response (ADR-068 D13, D22; spec FR-025,
   FR-121).
 

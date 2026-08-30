@@ -24,4 +24,4 @@ properties:
     type: string
     minLength: 1
     description: The call, ready to issue.
-    example: "vault_find type=deal filter=(status = 'open' AND arr >= 100000)"
+    example: "knowledge_find type=deal filter=(status = 'open' AND arr >= 100000)"

@@ -15219,7 +15219,7 @@ type ValidationReport struct {
 	TypesChecked int64 `json:"types_checked"`
 }
 
-// VaultFilterNode One node of a `vault_find` filter tree (ADR-068 D15.3, spec FR-022, ruling R-B). A node is EITHER a boolean combinator — `all`, `any`, `not` — OR a leaf carrying `property`, `op` and `value`. Exactly one form per node; a node that sets both a combinator and a leaf field is REFUSED, never silently resolved to one of them.
+// VaultFilterNode One node of a `knowledge_find` filter tree (ADR-068 D15.3, spec FR-022, ruling R-B). A node is EITHER a boolean combinator — `all`, `any`, `not` — OR a leaf carrying `property`, `op` and `value`. Exactly one form per node; a node that sets both a combinator and a leaf field is REFUSED, never silently resolved to one of them.
 // HOSTED INLINE HERE, NOT IN ITS OWN FILE, and the reason is mechanical: this schema is RECURSIVE — `all`, `any` and `not` take VaultFilterNode children — and oapi-codegen v2.7.0 INLINES a cross-file $ref at its use site, so a cross-file SELF-reference expands until the generator dies with a stack overflow. An internal `#/components/schemas/` reference resolves to the named type instead. This is the same exception, for the same reason, that ADR-034 records for the discriminated unions.
 // THE OPERATORS ARE SQL'S, AND THAT IS THE WHOLE POINT (ruling R-B, revision 5). They replaced seven we invented — `eq`, `lt`, `lte`, `gt`, `gte`, `contains`, `is_absent` — and the argument is retrieval accuracy rather than style: our vocabulary has appeared in a model's training data zero times and SQL's an enormous number of times, so a model reaching for `LIKE` is recalling where a model reaching for `contains` was guessing.
 // BOTH HALVES OF ADR-068 O-3 STILL HOLD, AMENDED NOT OVERTURNED. This is a STRUCTURED OBJECT and there is NO PARSER. Nothing recognises SQL text. A model fluent in SQL that puts `JOIN`, `BETWEEN`, `COALESCE`, a `CASE` or a subquery in the operator position is REFUSED BY NAME, listing the ten supported operators and naming the parameter that does the job instead (FR-022c) — never parsed, never silently dropped, and never answered with an empty result set.
@@ -15364,7 +15364,7 @@ type VaultFindPlanStepSource string
 // VaultFindPlanStepStage Which phase of the pipeline this step describes.
 type VaultFindPlanStepStage string
 
-// VaultFindRequest A call to `vault_find` — the ONE retrieval path (ADR-068 D15.3, spec 4.1.2). It absorbs `record_query`, `record_explain`, `knowledge_search`, `knowledge_tasks` and link-neighbourhood traversal. There is no second retrieval tool, and there is no call shape that returns rows without the verdict on them.
+// VaultFindRequest A call to `knowledge_find` — the ONE retrieval path (ADR-068 D15.3, spec 4.1.2). It absorbs `record_query`, `record_explain`, `knowledge_search`, `knowledge_tasks` and link-neighbourhood traversal. There is no second retrieval tool, and there is no call shape that returns rows without the verdict on them.
 // HOSTED INLINE rather than in its own file because it references the recursive VaultFilterNode by internal `#/components/schemas/` reference — see that schema's note for why a cross-file reference cannot be used there.
 // A parameter name this schema does not declare is REFUSED listing the accepted names (FR-022c), never ignored. Silently dropping an argument is how a caller comes to believe a constraint was applied that never was.
 // Scope is not negotiable by the caller. Every vault tool resolves through the CALLING AGENT'S workspace (FR-060); notes in a vault mounted only into another workspace are invisible, and that case is deliberately indistinguishable from an empty vault (FR-062) so the error channel cannot be used to probe for what the caller may not see. Scope is resolved BEFORE any refusal is built, so the valid-names list in an error can never disclose a schema outside it.
@@ -15434,7 +15434,7 @@ type VaultFindRequestDetail string
 // `task` is the replacement for `knowledge_tasks` and it returns CHECKBOX LINES, not notes: each row carries `path`, `line`, `status` and `text`, and renders with its line number so a reader can never mistake it for the note that contains it (FR-076a). This narrowly amends the rule that a row is one note: a row is one real THING AT A PATH — a note, or a checkbox line within one. The whole-collection regex walk that `knowledge_tasks` performed does not survive; checkboxes are indexed, so the ordinary bounds apply and the old 5,000-file read cap is gone.
 type VaultFindRequestKind string
 
-// VaultFindResponse The answer to `vault_find` — rows AND the account of everything the query could not include, in the SAME response (ADR-068 D13, D22; spec FR-025, FR-121).
+// VaultFindResponse The answer to `knowledge_find` — rows AND the account of everything the query could not include, in the SAME response (ADR-068 D13, D22; spec FR-025, FR-121).
 // THERE IS NO CALL SHAPE THAT RETURNS ROWS ALONE. `complete`, `counts`, `problems`, `rows`, `totals` and `next` are REQUIRED, and that is the load-bearing decision of this contract. If any were optional a caller could hold a total without the caveats attached to it, a producer could omit them and still be conformant, and the generated types would carry them as nullable — at which point the guarantee is a convention, and conventions are exactly what fail silently.
 // THE RENDERING IS PART OF THE CONTRACT, not a presentation detail. This object is projected to COMPACT TEXT for the model, never to JSON: measurement puts the reduction from a JSON schema object to compact text at roughly 91% of the context tokens, and moving results from inline text to a file collapsed agent accuracy from 93.1% to 55.2% — as large a swing as changing the retriever. The projection is fixed:
 //
@@ -15518,7 +15518,7 @@ type VaultFindResponse struct {
 	Totals []VaultFindTotal `json:"totals"`
 }
 
-// VaultFindRow One row of a `vault_find` answer (spec 4.2, D22.4 as amended by ADR-068 D15.3).
+// VaultFindRow One row of a `knowledge_find` answer (spec 4.2, D22.4 as amended by ADR-068 D15.3).
 // A row is ONE REAL THING AT A PATH — a note, or a checkbox line within one. The checkbox case is a deliberate, narrow amendment rather than a silent absorption: `kind: task` returns many rows per file, so a task row carries `line` and `status` and renders with its line number, and a reader is therefore never able to mistake it for the note that contains it.
 type VaultFindRow struct {
 	// Cells The row's OWN columns, in `select` order or the schema's declaration order. Always present — an empty array, never null.
@@ -15533,7 +15533,7 @@ type VaultFindRow struct {
 	// Line TASK ROWS ONLY. The 1-based line of the checkbox, counted from the first byte of the file including any frontmatter block, because that is the line the operator's editor shows.
 	Line *int `json:"line,omitempty"`
 
-	// Path The vault-relative path. Always present, because it is what the caller passes to `vault_read` next, and a row a caller cannot address is a row that ends the loop.
+	// Path The vault-relative path. Always present, because it is what the caller passes to `knowledge_read` next, and a row a caller cannot address is a row that ends the loop.
 	Path string `json:"path"`
 
 	// Stale True when this row's `source_hash` does not agree with the text index's, or when either side holds no hash at all. Omitted means the two indexes agree.

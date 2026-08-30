@@ -302,7 +302,7 @@ components:
       $ref: ./components/schemas/RelationWriteRequest.yaml
     ViewDef:
       $ref: ./components/schemas/ViewDef.yaml
-    # ── vault_find — ADR-068 D15.3, spec 4.1.2 and 4.2 ──────────────────────
+    # ── knowledge_find — ADR-068 D15.3, spec 4.1.2 and 4.2 ──────────────────────
     # The ONE retrieval path. These types supersede the RecordQuery* family
     # above for the agent-facing surface: that family predates ruling R-B (the
     # SQL operator vocabulary) and ruling R-E (lexical enum order), and spec
@@ -326,7 +326,7 @@ components:
     VaultFindRequest:
       title: VaultFindRequest
       description: >
-        A call to `vault_find` — the ONE retrieval path (ADR-068 D15.3, spec 4.1.2).
+        A call to `knowledge_find` — the ONE retrieval path (ADR-068 D15.3, spec 4.1.2).
         It absorbs `record_query`, `record_explain`, `knowledge_search`,
         `knowledge_tasks` and link-neighbourhood traversal. There is no second
         retrieval tool, and there is no call shape that returns rows without the
@@ -520,7 +520,7 @@ components:
     VaultFilterNode:
       title: VaultFilterNode
       description: >
-        One node of a `vault_find` filter tree (ADR-068 D15.3, spec FR-022, ruling
+        One node of a `knowledge_find` filter tree (ADR-068 D15.3, spec FR-022, ruling
         R-B). A node is EITHER a boolean combinator — `all`, `any`, `not` — OR a leaf
         carrying `property`, `op` and `value`. Exactly one form per node; a node that
         sets both a combinator and a leaf field is REFUSED, never silently resolved to

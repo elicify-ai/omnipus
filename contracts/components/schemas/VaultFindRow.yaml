@@ -1,6 +1,6 @@
 title: VaultFindRow
 description: >
-  One row of a `vault_find` answer (spec 4.2, D22.4 as amended by ADR-068 D15.3).
+  One row of a `knowledge_find` answer (spec 4.2, D22.4 as amended by ADR-068 D15.3).
 
   A row is ONE REAL THING AT A PATH — a note, or a checkbox line within one.
   The checkbox case is a deliberate, narrow amendment rather than a silent
@@ -29,7 +29,7 @@ properties:
     minLength: 1
     description: >
       The vault-relative path. Always present, because it is what the caller
-      passes to `vault_read` next, and a row a caller cannot address is a row
+      passes to `knowledge_read` next, and a row a caller cannot address is a row
       that ends the loop.
     example: "Deals/DEAL-0117.md"
   title:
