@@ -1,5 +1,6 @@
-// Omnipus — ADR-067 D17 (FR-070/FR-071, AC-17.1/AC-17.2): the boot-side
-// tool-policy tests for the knowledge-base tool family.
+// Omnipus — ADR-068 D15.3 (FR-070/FR-071, AC-17.1/AC-17.2): the boot-side
+// tool-policy tests for the knowledge-base tool family, superseding
+// ADR-067 D17.
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
@@ -17,14 +18,12 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
-// knowledgeToolNames is ADR-067 D7's enumeration, stated here independently
-// of both catalogs so this file can assert the REGISTRY contains them rather
-// than asking the registry what it contains.
+// knowledgeToolNames is ADR-068 D15.3's six-tool enumeration, stated here
+// independently of both catalogs so this file can assert the REGISTRY
+// contains them rather than asking the registry what it contains.
 var knowledgeToolNames = []string{
-	"knowledge_search", "knowledge_graph",
-	"knowledge_create", "knowledge_link", "knowledge_set_property",
-	"knowledge_append_section", "knowledge_tasks",
-	"knowledge_move", "knowledge_rename",
+	"knowledge_describe", "knowledge_find", "knowledge_read",
+	"knowledge_edit", "knowledge_restructure", "knowledge_configure",
 }
 
 // seededBootConfig reproduces the boot composition pkg/gateway's
@@ -155,7 +154,7 @@ func TestBoot_NoKnowledgeToolDenyBackfill(t *testing.T) {
 	t.Run("positive control: one deleted entry comes back as exactly one gap", func(t *testing.T) {
 		const (
 			victimAgent = string(coreagent.IDMia)
-			victimTool  = "knowledge_search"
+			victimTool  = "knowledge_find"
 		)
 		cfg := seededBootConfig(t)
 
@@ -206,14 +205,14 @@ func TestBoot_NoKnowledgeToolDenyBackfill(t *testing.T) {
 // (deny > ask > allow, pkg/tools/compositor.go:resolveEffectivePolicyWith).
 // Each time, the grant was dead on every install while the seed data still
 // read exactly as its ADR required, and each time the cost was paid in
-// production before anyone noticed. An "ask" ceiling on the knowledge
-// authoring tools would make it five: Jim's and Ava's seeded "allow" would
-// resolve "ask", and D17's whole point — that authoring is unprompted for
-// the two builder roles and gated for the other two — would quietly not
-// exist.
+// production before anyone noticed. An "ask" ceiling on the knowledge write
+// tools would make it five: Jim's seeded "allow" would resolve "ask", and
+// his one deliberate exception (he already holds unprompted bash, so an
+// ask-gate on these three would gate nothing real for him — see
+// pkg/coreagent/core.go's IDJim case) would quietly not exist.
 //
-// The expected matrix below is D17's, written out as data rather than
-// derived from the code it checks.
+// The expected matrix below is ADR-068 D15.3's, written out as data rather
+// than derived from the code it checks.
 func TestKnowledgeTools_SeededPostureMatchesD17(t *testing.T) {
 	cfg := seededBootConfig(t)
 
@@ -222,37 +221,25 @@ func TestKnowledgeTools_SeededPostureMatchesD17(t *testing.T) {
 		globalPolicies[name] = config.ToolPolicy(policy)
 	}
 
-	// D17: retrieval "allow" for all four base agents; authoring "allow" for
-	// Jim and Ava, "ask" for Mia and Ray.
-	//
-	// knowledge_tasks is RETRIEVAL, per ADR-067 D7's 2026-08-24 amendment. It
-	// sat in the authoring list here until then, matching D7's original filing;
-	// both were wrong about the same thing. TasksTool.Execute opens no writer
-	// and emits no mutation audit record — it parses checklist items out of the
-	// notes knowledge_search already returns verbatim at "allow". Read the ADR
-	// amendment before moving it back: the classification is the decision, and
-	// this list is a transcription of it, not an independent judgement.
-	retrieval := []string{"knowledge_search", "knowledge_graph", "knowledge_tasks"}
-	authoring := []string{
-		"knowledge_create", "knowledge_link", "knowledge_set_property",
-		"knowledge_append_section",
-		"knowledge_move", "knowledge_rename",
-	}
-	authoringPosture := map[string]string{
+	// D15.3: read tier "allow" for all four base agents; the three write
+	// tools "allow" for Jim, "ask" for Ava/Mia/Ray.
+	read := []string{"knowledge_describe", "knowledge_find", "knowledge_read"}
+	write := []string{"knowledge_edit", "knowledge_restructure", "knowledge_configure"}
+	writePosture := map[string]string{
 		string(coreagent.IDJim): "allow",
-		string(coreagent.IDAva): "allow",
+		string(coreagent.IDAva): "ask",
 		string(coreagent.IDMia): "ask",
 		string(coreagent.IDRay): "ask",
 	}
 
-	want := make(map[string]map[string]string, len(authoringPosture))
-	for agentID, authoringWant := range authoringPosture {
-		want[agentID] = make(map[string]string, len(retrieval)+len(authoring))
-		for _, name := range retrieval {
+	want := make(map[string]map[string]string, len(writePosture))
+	for agentID, writeWant := range writePosture {
+		want[agentID] = make(map[string]string, len(read)+len(write))
+		for _, name := range read {
 			want[agentID][name] = "allow"
 		}
-		for _, name := range authoring {
-			want[agentID][name] = authoringWant
+		for _, name := range write {
+			want[agentID][name] = writeWant
 		}
 	}
 

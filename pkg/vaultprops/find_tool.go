@@ -177,15 +177,28 @@ func (t *FindTool) buildDeps(ctx context.Context, col knowledge.ScopedCollection
 	}
 	closers = append(closers, ix.Close)
 
-	// The properties index (Store) is BEST-EFFORT, exactly like
-	// knowledge_describe's injected OpenPropertyIndexFunc: nil is a
-	// documented, supported wiring, because Find() itself already refuses
-	// honestly — by name — whenever a query actually needs a Store it does
-	// not have (find.go: "the properties index is not open, so no record
-	// can be read"), and the platform gate (records.RequirePropertyIndex)
-	// inside Find() covers the "no SQLite in this build" case on its own. A
-	// plain-word `words`-only query needs neither and must not be refused
-	// for a dependency it never touches.
+	// The properties index (Store) is BEST-EFFORT TO OPEN — nil is a
+	// documented, supported wiring, exactly like knowledge_describe's
+	// injected OpenPropertyIndexFunc — but it is NOT optional for what
+	// Find() can actually answer. findRecords requires a non-nil Store
+	// UNCONDITIONALLY, even for a bare `words` query with no typed filter:
+	// the store is what enumerates the candidate population to text-search
+	// within, not only typed metadata, so a `words`-only query still refuses
+	// with "the properties index is not open, so no record can be read"
+	// when Store is nil. This function does not paper over that by forcing
+	// the open to succeed — Find() already reports the honest refusal by
+	// name — it only means "no dependency this call never touches" is the
+	// WRONG mental model here; every non-explain, non-cursor-error query
+	// reaches the store.
+	//
+	// PRODUCTION GAP, recorded rather than silently worked around: nothing
+	// in this tree currently WRITES to the properties index outside a test
+	// harness — propindex.IndexNote / Store.UpsertNote have no caller in
+	// pkg/gateway's KnowledgeLifecycle or anywhere else that runs on a real
+	// mount/sync. Until an indexer wires that write path, every
+	// knowledge_find call on a real install reaches this refusal, not only
+	// the typed-filter ones. That gap is orthogonal to this wave
+	// (registration + policy seeding) and is not fixed here.
 	store, closeStore := openFindStore(ctx, t.home, col.Root)
 	if closeStore != nil {
 		closers = append(closers, closeStore)
