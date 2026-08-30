@@ -51,6 +51,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/config"
@@ -58,6 +59,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/policy"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
+	"github.com/elicify-ai/omnipus/pkg/utils"
 )
 
 // ExecPolicyAuditor evaluates a bash command against the policy engine and
@@ -586,7 +588,13 @@ func (t *ExecTool) Description() string {
 		"no '..' escapes). timeout_seconds defaults to 300 and must be between 1 and 3600; enforced identically " +
 		"in the foreground and in the background — a background session times out on its own after " +
 		"timeout_seconds elapses, and is otherwise stopped only by an explicit kill action or an explicit " +
-		"session cancel."
+		"session cancel. Output is truncated beyond a size cap — a SUCCEEDING command keeps up to 64,000 " +
+		"characters, a FAILING one only 10,000 (the failure cap is smaller, so a large error command's output " +
+		"is cut harder than a successful one's); redirect to a file and read it with read_file/offset when you " +
+		"need all of it. Commands are screened by a safety guard (deny patterns, a binary allowlist, and a " +
+		"path-use check) before they run — writing outside your workspace requires a mount first (see " +
+		"list_mounts / request_mount); a \"blocked by safety guard\" or \"blocked by exec allowlist\" error means " +
+		"the guard refused the command, not that it failed to run."
 }
 
 func (t *ExecTool) Parameters() map[string]any {
@@ -1858,11 +1866,15 @@ func truncateOutput(output string, exitCode int) string {
 	if exitCode == 0 {
 		limit = maxForegroundSuccessOutputLen
 	}
-	if len(output) > limit {
-		totalLen := len(output)
-		return output[:limit] + fmt.Sprintf(
+	// utils.Truncate is rune-safe (never splits a multi-byte UTF-8 codepoint
+	// mid-character, unlike a raw output[:limit] byte slice) — see G-1 in the
+	// tool-catalog review; same bug class already fixed in
+	// BuildCompressedManifest (manifest.go).
+	runeCount := utf8.RuneCountInString(output)
+	if runeCount > limit {
+		return utils.Truncate(output, limit) + fmt.Sprintf(
 			"\n... (truncated, %d more chars)",
-			totalLen-limit,
+			runeCount-limit,
 		)
 	}
 	return output

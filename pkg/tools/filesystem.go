@@ -348,7 +348,11 @@ func (t *ReadFileTool) Description() string {
 	return "Read the contents of a file. Supports pagination via `offset` and `length`. " +
 		"Word (.docx), PowerPoint (.pptx), Excel (.xlsx), and PDF (.pdf) documents are " +
 		"automatically decoded to plain text; for these, `offset` and `length` count " +
-		"characters of extracted text rather than raw bytes."
+		"characters of extracted text rather than raw bytes. Other binary files (containing " +
+		"null bytes and not one of those document formats) are rejected outright — this tool " +
+		"is for text and the document formats above only. `length` above the server-side max " +
+		"is silently capped, not rejected — check the returned header's total size if you need " +
+		"to know how much was actually read."
 }
 
 func (t *ReadFileTool) Scope() ToolScope       { return ScopeGeneral }
@@ -742,7 +746,8 @@ func (t *WriteFileTool) Description() string {
 		"overwrite=true to replace it — without it, the call is refused. If you hit that refusal and only " +
 		"want to change PART of an existing file, use edit_file (replace one exact snippet) or append_file " +
 		"(add to the end) instead of retrying write_file with overwrite=true, which discards everything " +
-		"already in the file."
+		"already in the file. This tool refuses agent metadata files (SOUL.md, HEARTBEAT.md, AGENT.md, " +
+		"MEMORY.md under agents/<id>/) — use write_metadata for those instead."
 }
 
 func (t *WriteFileTool) Scope() ToolScope       { return ScopeCore }
@@ -882,7 +887,8 @@ func (t *ListDirTool) Name() string {
 
 func (t *ListDirTool) Description() string {
 	return "List files and directories in a path. Large directories page with offset/limit " +
-		"(entries), the same way read_file pages a file with offset/length (bytes)."
+		"(entries), the same way read_file pages a file with offset/length (bytes). `path` " +
+		"defaults to \".\" (the workspace root) when omitted."
 }
 
 func (t *ListDirTool) Scope() ToolScope       { return ScopeGeneral }
@@ -894,7 +900,7 @@ func (t *ListDirTool) Parameters() map[string]any {
 		"properties": map[string]any{
 			"path": map[string]any{
 				"type":        "string",
-				"description": "Path to list",
+				"description": "Path to list. Defaults to \".\" (the workspace root) if omitted.",
 			},
 			"offset": map[string]any{
 				"type":        "integer",
@@ -908,7 +914,6 @@ func (t *ListDirTool) Parameters() map[string]any {
 				"default": maxListDirEntries,
 			},
 		},
-		"required": []string{"path"},
 	}
 }
 
