@@ -65,8 +65,14 @@ export const KNOWLEDGE_SEARCH_DEBOUNCE_MS = 250
  * The honesty state of one search response (US-6).
  *
  *  - `complete`      — the index covered the whole collection at query time.
- *                      These results are the whole answer and nothing further
- *                      needs saying (US-6 AS-4).
+ *                      These results are the whole answer, so no incomplete-
+ *                      /indeterminate BANNER is shown (US-6 AS-4 — "no
+ *                      incompleteness statement is present" means no partial-
+ *                      results claim, not that the server's own `statement`
+ *                      is withheld: KnowledgeSearch still renders it beside a
+ *                      complete has-hits answer and beside every empty one,
+ *                      same as the honesty banner would have for a partial
+ *                      one — see that component's has-hits rendering).
  *  - `incomplete`    — a partial answer WITH a usable denominator. A ratio of
  *                      indexed to total may be shown (US-6 AS-2).
  *  - `indeterminate` — a partial answer with NO usable denominator, either

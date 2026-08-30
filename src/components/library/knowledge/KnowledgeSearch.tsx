@@ -245,6 +245,25 @@ export function KnowledgeSearch({
           </p>
         )}
 
+        {/* A complete answer carries a server-authored `statement` too (see the
+            "Emptiness, told apart" comment below — the same principle, not a
+            different one). When honesty is 'incomplete' or 'indeterminate' the
+            statement is already shown, in the reading flow, by the honesty
+            banner above (lines ~156-204) — repeating it here would be the same
+            sentence twice on one screen. Only the 'complete' case has nowhere
+            else the statement is said, and it is exactly the case a bare count
+            used to stand in for alone (the reported defect: "6 results" over a
+            complete answer, with the statement that made it trustworthy
+            nowhere on screen). */}
+        {response && emptiness === 'has-hits' && honesty === 'complete' && inc && (
+          <p
+            data-testid="knowledge-search-complete-statement"
+            className="text-xs leading-snug text-[var(--color-muted)]"
+          >
+            {inc.statement}
+          </p>
+        )}
+
         {/* The count above is a count of what was RETURNED, and the server stops
             appending the moment it has `limit_applied` hits without sending a
             total-match count. When the list is exactly that long it may have

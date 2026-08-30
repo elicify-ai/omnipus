@@ -92,7 +92,7 @@ function precedes(a: Element, b: Element): boolean {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('KnowledgeSearch — complete results', () => {
-  it('shows the results and says nothing about incompleteness', async () => {
+  it('shows the results and says nothing about PARTIAL-ness', async () => {
     renderSearch(
       response({
         hits: [
@@ -107,10 +107,68 @@ describe('KnowledgeSearch — complete results', () => {
     expect(within(screen.getByTestId('knowledge-search-results')).getAllByRole('listitem')).toHaveLength(2)
     expect(screen.getByTestId('knowledge-search-count')).toHaveTextContent('2 results')
 
-    // US-6 AS-4: a finished index shows NO incompleteness statement at all.
+    // US-6 AS-4: a finished index shows no INCOMPLETENESS banner — never a
+    // "Partial results" claim over a complete answer.
     expect(screen.queryByTestId('knowledge-search-incomplete')).toBeNull()
     expect(screen.queryByTestId('knowledge-search-indeterminate')).toBeNull()
     expect(screen.queryByTestId('knowledge-search-clamped')).toBeNull()
+  })
+
+  it('states the server\'s own completeness sentence beside a non-empty answer, not only a bare count', async () => {
+    // THE DEFECT THIS PINS DOWN. Observed directly: query "ridge" (6 hits)
+    // rendered ONLY "6 results" — no statement anywhere — while the same
+    // panel's banner explicitly promises "Each set of search results below
+    // states its own completeness, which is the answer to trust"
+    // (KnowledgeEmptyState's index_status_unknown copy). The empty branches
+    // (collection-empty, no-matches) already honoured that promise via
+    // `knowledge-search-complete-statement`; has-hits did not.
+    //
+    // DIES ON: removing the knowledge-search-complete-statement line from the
+    // has-hits branch, or gating it on anything other than a complete answer.
+    const statement = 'Searched the whole of this knowledge base; its index was complete at query time.'
+    renderSearch(
+      response({
+        hits: [
+          hit({ path: 'notes/ridge-1.md', title: 'Ridge one' }),
+          hit({ path: 'notes/ridge-2.md', title: 'Ridge two' }),
+        ],
+        incompleteness: {
+          complete: true,
+          total_known: true,
+          total_files: 900,
+          indexed_files: 900,
+          statement,
+        },
+      }),
+    )
+    type('ridge')
+
+    await waitFor(() => expect(screen.getByTestId('knowledge-search-count')).toHaveTextContent('2 results'))
+    expect(screen.getByTestId('knowledge-search-complete-statement')).toHaveTextContent(statement)
+  })
+
+  it('does not repeat the statement when it was already said by the incomplete banner', async () => {
+    // The incomplete/indeterminate banners already render `inc.statement` in
+    // the reading flow, above the results (see the "incomplete results" and
+    // "indeterminate" describe blocks below). Has-hits must not print the
+    // exact same sentence a second time immediately underneath — that is
+    // noise, not honesty.
+    renderSearch(
+      response({
+        hits: [hit({ path: 'notes/landlock.md', title: 'Landlock' })],
+        incompleteness: {
+          complete: false,
+          total_known: true,
+          indexed_files: 4120,
+          total_files: 12880,
+          statement: 'Searched 4,120 of 12,880 notes — indexing is still running.',
+        },
+      }),
+    )
+    type('landlock')
+
+    await screen.findByTestId('knowledge-search-incomplete')
+    expect(screen.queryByTestId('knowledge-search-complete-statement')).toBeNull()
   })
 
   it('opens the note a reader clicks, by its path', async () => {
