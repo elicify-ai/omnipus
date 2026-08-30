@@ -287,20 +287,18 @@ func DefaultConfig() *Config {
 				"browser_open_tab":   "allow",
 
 				// --- Sysagent management tools ---
-				"navigate":             "allow",
-				"create_workspace":     "allow",
-				"update_workspace":     "allow",
-				"delete_workspace":     "ask", // irreversible delete
-				"list_workspaces":      "allow",
-				"get_workspace":        "allow",
-				"read_agent_metadata":  "allow",
-				"write_agent_metadata": "allow",
-				"configure_provider":   "allow",
-				"list_providers":       "allow",
-				"test_provider":        "allow",
-				"list_models":          "allow",
-				"run_doctor":           "allow",
-				"get_usage":            "allow",
+				"create_workspace":    "allow",
+				"update_workspace":    "allow",
+				"delete_workspace":    "ask", // irreversible delete
+				"list_workspaces":     "allow",
+				"get_workspace":       "allow",
+				"read_agent_metadata": "allow",
+				"configure_provider":  "allow",
+				"list_providers":      "allow",
+				"test_provider":       "allow",
+				"list_models":         "allow",
+				"run_doctor":          "allow",
+				"get_usage":           "allow",
 				// add_mcp_server is DENIED in the seeded default because an MCP
 				// server definition is a program the gateway launches, and the
 				// launched process is not confined by the sandbox. An agent that

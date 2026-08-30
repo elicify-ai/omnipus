@@ -1708,7 +1708,7 @@ func TestCanLoad_HiddenMCPTool_AllowDefaultAgent(t *testing.T) {
 	})
 }
 
-// ─── GAP 1 regression: navigate is Full-tier and directly callable for Mia ───
+// ─── GAP 1 regression: a ScopeCore Tier-2 previewed tool is lazy-loaded for a real core agent ───
 
 // TestMiaNavigate_FullTierDirectlyCallable closes the coverage gap where C4
 // (TestReachabilityInvariant_AllCoreAgents) trivially passed for Mia because
@@ -1720,71 +1720,83 @@ func TestCanLoad_HiddenMCPTool_AllowDefaultAgent(t *testing.T) {
 // of feat/0.1.0-uat-fixes). ADR-071 D3 §4.1 REVERSED that promotion: navigate
 // moved back down to the lazy tier, specifically the new previewed (Tier 2)
 // subdivision, to remove its permanent visibility advantage now that the
-// full-tier set is being kept small deliberately. This test is rewritten
-// (not deleted, per this codebase's regression-history convention) to pin the
-// NEW behavior:
-//  1. ToolManifestTier("navigate") == ManifestLazy (not Full).
-//  2. ToolManifestVisibility("navigate") == ManifestPreviewed (Tier 2, not
-//     search-only) — it still gets a preview line, just not a callable def
-//     every turn.
-//  3. On turn 1, with no prior markToolsLoaded call, navigate is NOT in
+// full-tier set is being kept small deliberately. The test was then rewritten
+// (not deleted, per this codebase's regression-history convention) to pin
+// that demotion.
+//
+// The tool-manifest-tier-redesign review's F1 finding then retired `navigate`
+// outright: its UI-navigation callback was nil in every production path (no
+// wire frame existed for a navigation event to travel over), so the tool was
+// a total no-op occupying one of only 8 Tier-2 slots. With navigate gone, the
+// mechanism this test exists to protect — a ScopeCore Tier-2 previewed tool's
+// lazy-load discovery path for a real core agent with a real seeded policy —
+// is retargeted at `get_workspace`, the one other ScopeCore tool in the
+// previewed set. Mia does not have get_workspace allowed, so the agent under
+// test moves to Ava (pkg/coreagent/core.go IDAva, which does seed
+// get_workspace: allow). Rewritten again (still not deleted) to pin:
+//  1. ToolManifestTier("get_workspace") == ManifestLazy (not Full).
+//  2. ToolManifestVisibility("get_workspace") == ManifestPreviewed (Tier 2,
+//     not search-only) — it still gets a preview line, just not a callable
+//     def every turn.
+//  3. On turn 1, with no prior markToolsLoaded call, get_workspace is NOT in
 //     buildCompressedToolDefs's output (it must be found/loaded first).
-//  4. navigate DOES appear in the manifest note as a preview entry.
-//  5. After a markToolsLoaded call for navigate, it appears in
-//     buildCompressedToolDefs — proving it is still fully reachable, just one
-//     tier down from where round-2 of feat/0.1.0-uat-fixes left it.
+//  4. get_workspace DOES appear in the manifest note as a preview entry.
+//  5. After a markToolsLoaded call for get_workspace, it appears in
+//     buildCompressedToolDefs — proving it is fully reachable, just one
+//     discovery round trip away.
 //
 // Traces to: ADR-071 D3 §4.1 (bash/navigate/create_task/update_task leave the
-// always-listed set); pkg/tools/manifest.go fullManifestToolNames/previewedLazyToolNames.
+// always-listed set); pkg/tools/manifest.go fullManifestToolNames/previewedLazyToolNames;
+// tool-manifest-tier-redesign review F1 (navigate retirement).
 func TestMiaNavigate_DemotedToPreviewedTier(t *testing.T) {
 	// Precondition: ToolManifestTier/Visibility classification is the single
-	// source of truth. If either assertion fails, ADR-071 D3's reclassification
-	// of navigate was reverted — everything else here is moot.
-	require.Equal(t, tools.ManifestLazy, tools.ToolManifestTier("navigate"),
-		"ADR-071 D3 REGRESSION: ToolManifestTier(\"navigate\") must be ManifestLazy "+
-			"(demoted from Full in D3 §4.1). If this assertion breaks, navigate was "+
-			"re-added to fullManifestToolNames in pkg/tools/manifest.go.")
-	require.Equal(t, tools.ManifestPreviewed, tools.ToolManifestVisibility("navigate"),
-		"ADR-071 D3 REGRESSION: ToolManifestVisibility(\"navigate\") must be ManifestPreviewed "+
-			"(it is one of the 8 Tier 2 names in previewedLazyToolNames).")
+	// source of truth. If either assertion fails, get_workspace's Tier-2
+	// classification was reverted — everything else here is moot.
+	require.Equal(t, tools.ManifestLazy, tools.ToolManifestTier("get_workspace"),
+		"ToolManifestTier(\"get_workspace\") must be ManifestLazy. If this assertion "+
+			"breaks, get_workspace was added to fullManifestToolNames in pkg/tools/manifest.go.")
+	require.Equal(t, tools.ManifestPreviewed, tools.ToolManifestVisibility("get_workspace"),
+		"ToolManifestVisibility(\"get_workspace\") must be ManifestPreviewed "+
+			"(it is one of the 7 Tier 2 names in previewedLazyToolNames).")
 
 	cfg := newCompressedCfg(t)
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &mockProvider{})
 	defer al.Close()
 
-	miaAgent, ok := al.registry.GetAgent("mia")
-	require.True(t, ok, "mia must be in registry")
+	avaAgent, ok := al.registry.GetAgent("ava")
+	require.True(t, ok, "ava must be in registry")
 
-	// navigate is NOT registered in the test harness (it is a sysagent tool wired
-	// via WireSysagentDeps, which is not called in unit tests — that would create
-	// a circular import: pkg/agent → pkg/sysagent/tools → pkg/agent).
+	// get_workspace is NOT registered in the test harness (it is a sysagent tool
+	// wired via WireSysagentDeps, which is not called in unit tests — that would
+	// create a circular import: pkg/agent → pkg/sysagent/tools → pkg/agent).
 	// Inject a minimal stub so we can verify the previewed-tier path without the
 	// circular dep.
-	navigateStub := &fakeNavigateTool{}
-	miaAgent.Tools.Register(navigateStub)
+	getWorkspaceStub := &fakeGetWorkspaceTool{}
+	avaAgent.Tools.Register(getWorkspaceStub)
 
-	// Build Mia's policy-filtered set. The allow-policy for Mia includes "navigate"
-	// (pkg/coreagent/core.go IDMia block), so the stub must survive the policy filter.
-	allTools := miaAgent.Tools.GetAll()
-	policyFiltered, _ := tools.FilterToolsByPolicy(allTools, miaAgent.AgentType, miaAgent.LoadToolPolicy())
+	// Build Ava's policy-filtered set. The allow-policy for Ava includes
+	// "get_workspace" (pkg/coreagent/core.go IDAva block), so the stub must
+	// survive the policy filter.
+	allTools := avaAgent.Tools.GetAll()
+	policyFiltered, _ := tools.FilterToolsByPolicy(allTools, avaAgent.AgentType, avaAgent.LoadToolPolicy())
 
-	// Non-vacuous: navigate must be in policyFiltered after the stub injection.
-	// If this fails, Mia's policy no longer allows navigate — check core.go.
-	var navigateInPF bool
+	// Non-vacuous: get_workspace must be in policyFiltered after the stub injection.
+	// If this fails, Ava's policy no longer allows get_workspace — check core.go.
+	var getWorkspaceInPF bool
 	for _, t2 := range policyFiltered {
-		if t2.Name() == "navigate" {
-			navigateInPF = true
+		if t2.Name() == "get_workspace" {
+			getWorkspaceInPF = true
 			break
 		}
 	}
-	require.True(t, navigateInPF,
-		"POLICY REGRESSION: `navigate` must be in Mia's policy-filtered set. "+
-			"Check IDMia policy in pkg/coreagent/core.go — navigate must be explicitly allowed.")
+	require.True(t, getWorkspaceInPF,
+		"POLICY REGRESSION: `get_workspace` must be in Ava's policy-filtered set. "+
+			"Check IDAva policy in pkg/coreagent/core.go — get_workspace must be explicitly allowed.")
 
-	sessionID := "sess-mia-navigate-d3"
+	sessionID := "sess-ava-get-workspace-d3"
 
-	// Turn 1: no markToolsLoaded call — navigate must NOT be directly callable.
-	ts := fakeTurnState(miaAgent, sessionID)
+	// Turn 1: no markToolsLoaded call — get_workspace must NOT be directly callable.
+	ts := fakeTurnState(avaAgent, sessionID)
 	defs := al.buildCompressedToolDefs(ts, policyFiltered)
 
 	defNames := make(map[string]bool, len(defs))
@@ -1795,49 +1807,50 @@ func TestMiaNavigate_DemotedToPreviewedTier(t *testing.T) {
 	// DIFFERENTIATION CONTROL: send_message (Full-tier, always registered) must be
 	// in defs — proves the Full-tier path itself still works (not a vacuous assertion).
 	assert.True(t, defNames["send_message"],
-		"send_message (Full-tier, always registered) must be in Mia's compressed defs as a control")
+		"send_message (Full-tier, always registered) must be in Ava's compressed defs as a control")
 
-	// PRIMARY ASSERTION: navigate must NOT appear without a prior load — it now
+	// PRIMARY ASSERTION: get_workspace must NOT appear without a prior load — it
 	// pays the same one-time discovery cost as bash/create_task/update_task.
-	assert.False(t, defNames["navigate"],
-		"ADR-071 D3: `navigate` (now ManifestLazy/ManifestPreviewed) must NOT appear in "+
-			"Mia's compressed defs on turn 1 without a prior markToolsLoaded call.")
+	assert.False(t, defNames["get_workspace"],
+		"ADR-071 D3: `get_workspace` (ManifestLazy/ManifestPreviewed) must NOT appear in "+
+			"Ava's compressed defs on turn 1 without a prior markToolsLoaded call.")
 
-	// navigate DOES appear in the manifest note as a preview entry (Tier 2).
+	// get_workspace DOES appear in the manifest note as a preview entry (Tier 2).
 	note := al.buildToolManifestNote(ts, policyFiltered)
-	assert.Contains(t, note, "  - navigate",
-		"navigate (previewed lazy) must appear in the manifest note as a preview entry")
+	assert.Contains(t, note, "  - get_workspace",
+		"get_workspace (previewed lazy) must appear in the manifest note as a preview entry")
 
-	// After a load, navigate becomes callable — it remains fully reachable,
+	// After a load, get_workspace becomes callable — it remains fully reachable,
 	// just one deliberate discovery round trip away.
-	al.markToolsLoaded(bucketFor(miaAgent, sessionID), []string{"navigate"})
-	tsAfter := fakeTurnState(miaAgent, sessionID)
+	al.markToolsLoaded(bucketFor(avaAgent, sessionID), []string{"get_workspace"})
+	tsAfter := fakeTurnState(avaAgent, sessionID)
 	defsAfter := al.buildCompressedToolDefs(tsAfter, policyFiltered)
 	defNamesAfter := make(map[string]bool, len(defsAfter))
 	for _, d := range defsAfter {
 		defNamesAfter[d.Function.Name] = true
 	}
-	assert.True(t, defNamesAfter["navigate"],
-		"navigate must become callable after markToolsLoaded — it is demoted, not unreachable")
+	assert.True(t, defNamesAfter["get_workspace"],
+		"get_workspace must become callable after markToolsLoaded — it is demoted, not unreachable")
 }
 
-// fakeNavigateTool is a minimal stub that satisfies the tools.Tool interface
-// for the purpose of testing the manifest tier path without importing
-// pkg/sysagent/tools (which would create a circular dependency from pkg/agent).
-// It mirrors the real NavigateTool's Name(), Scope(), and Category() values.
-type fakeNavigateTool struct{}
+// fakeGetWorkspaceTool is a minimal stub that satisfies the tools.Tool
+// interface for the purpose of testing the manifest tier path without
+// importing pkg/sysagent/tools (which would create a circular dependency
+// from pkg/agent). It mirrors the real WorkspaceGetTool's Name(), Scope(),
+// and Category() values.
+type fakeGetWorkspaceTool struct{}
 
-func (f *fakeNavigateTool) Name() string { return "navigate" }
-func (f *fakeNavigateTool) Description() string {
-	return "Navigate the UI to a named view (stub for manifest tier test)."
+func (f *fakeGetWorkspaceTool) Name() string { return "get_workspace" }
+func (f *fakeGetWorkspaceTool) Description() string {
+	return "Get a single workspace's details (stub for manifest tier test)."
 }
 
-func (f *fakeNavigateTool) Parameters() map[string]any {
+func (f *fakeGetWorkspaceTool) Parameters() map[string]any {
 	return map[string]any{"type": "object", "properties": map[string]any{}}
 }
-func (f *fakeNavigateTool) Scope() tools.ToolScope       { return tools.ScopeCore }
-func (f *fakeNavigateTool) Category() tools.ToolCategory { return tools.CategoryPlatform }
-func (f *fakeNavigateTool) Execute(_ context.Context, _ map[string]any) *tools.ToolResult {
+func (f *fakeGetWorkspaceTool) Scope() tools.ToolScope       { return tools.ScopeCore }
+func (f *fakeGetWorkspaceTool) Category() tools.ToolCategory { return tools.CategoryWorkspaces }
+func (f *fakeGetWorkspaceTool) Execute(_ context.Context, _ map[string]any) *tools.ToolResult {
 	return &tools.ToolResult{ForLLM: "stub"}
 }
 

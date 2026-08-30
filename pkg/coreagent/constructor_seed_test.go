@@ -24,7 +24,7 @@ import (
 //	And none carry the dead "system.*" deny rail;
 //	And Jim's explicit allow-list includes spawn, create_task, workspace_shell, browser_navigate;
 //	And Jim's consent-gated tools (delete_task, delete_workspace, etc.) resolve ask;
-//	And a sample of tools Jim must NOT have (create_agent, navigate) are absent.
+//	And a sample of tools Jim must NOT have (create_agent, list_channels) are absent.
 //
 // Traces to: pkg/coreagent/core.go — coreAgentSeed (FR-008, FR-010, FR-022).
 func TestBoot_ConstructorSeedDispositionMap(t *testing.T) {
@@ -54,7 +54,7 @@ func TestBoot_ConstructorSeedDispositionMap(t *testing.T) {
 			id: IDMia,
 			expectExtraAllows: []string{
 				"send_message", "switch_agent", "list_agents",
-				"send_file", "navigate",
+				"send_file",
 				"remember", "recall_memory", "run_retrospective",
 				"create_task", "update_task", "list_tasks", "set_todos",
 				"read_inbox", "read_message", "reply", "send_email", "search_email",
@@ -336,15 +336,15 @@ func TestJimSeed_ConsentGatedDeleteTools(t *testing.T) {
 // BDD: Given coreAgentSeed(IDJim) is called,
 //
 //	When the policies map is inspected for out-of-scope tools,
-//	Then create_agent, navigate, configure_provider are all present with an
-//	explicit "deny" value (no DefaultPolicy field exists to fall through to).
+//	Then create_agent, list_channels, configure_provider are all present with
+//	an explicit "deny" value (no DefaultPolicy field exists to fall through to).
 //
 // Traces to: Jim least-privilege redesign; CLAUDE.md hard constraint 6
 // (no default-policy fallback — every tool-policy decision is explicit).
 func TestJimSeed_OutOfScopeToolsExplicitlyDenied(t *testing.T) {
 	policies := coreAgentSeed(IDJim)
 
-	for _, toolName := range []string{"create_agent", "navigate", "configure_provider"} {
+	for _, toolName := range []string{"create_agent", "list_channels", "configure_provider"} {
 		p, present := policies[toolName]
 		require.True(t, present, "Jim must have an explicit policy entry for %q (no fallback exists)", toolName)
 		assert.Equal(t, config.ToolPolicyDeny, p, "Jim's policy for %q must be explicit 'deny'", toolName)

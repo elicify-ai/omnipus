@@ -168,7 +168,7 @@ func TestAmbiguity_ZeroOrNegativeScoreNeverPromoted(t *testing.T) {
 
 // TestAdministrativeToolNames_Drift pins ADR-071 §3.2.1's 13-name
 // "destructive-and-install-wide" seed and the coverage tripwire regex,
-// mirroring the established TestVisibility_PreviewedSetIsExactlyEight /
+// mirroring the established TestVisibility_PreviewedSetIsExactlySeven /
 // TestCatalog_MatchesGlobalCeilingEntryForEntry pattern.
 func TestAdministrativeToolNames_Drift(t *testing.T) {
 	want := []string{

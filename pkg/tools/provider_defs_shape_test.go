@@ -34,7 +34,7 @@ var updateGolden = flag.Bool("update", false, "update golden files")
 // builtins, matching the production boot path.
 func buildTestBuiltinRegistry() *tools.BuiltinRegistry {
 	reg := tools.NewBuiltinRegistry()
-	for _, t := range systools.AllTools(nil, nil) {
+	for _, t := range systools.AllTools(nil) {
 		// Ignore duplicate-registration errors — some tools may share a name if
 		// AllTools is called twice; we only care about the final shape.
 		_ = reg.RegisterBuiltin(t)

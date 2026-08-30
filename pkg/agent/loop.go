@@ -6505,7 +6505,7 @@ func (al *AgentLoop) wireSysagentDepsLocked(registry *AgentRegistry, deps *systo
 	if registry == nil || deps == nil {
 		return
 	}
-	sysToolList := systools.AllTools(deps, nil)
+	sysToolList := systools.AllTools(deps)
 	for _, agentID := range registry.ListAgentIDs() {
 		ag, ok := registry.GetAgent(agentID)
 		if !ok || ag == nil || ag.Tools == nil {

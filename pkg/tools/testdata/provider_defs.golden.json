@@ -161,15 +161,8 @@
     "source": "builtin"
   },
   {
-    "name": "navigate",
-    "description": "Navigate the UI to a specific screen.\nParameters: screen (chat/command-center/agents/skills/settings), agent_id (optional), section (optional).",
-    "scope": "core",
-    "category": "platform",
-    "source": "builtin"
-  },
-  {
     "name": "read_agent_metadata",
-    "description": "Read one of the calling agent's metadata files (SOUL.md, HEARTBEAT.md, MEMORY.md, or AGENT.md). Pass agent_id to read another agent's metadata (subject to per-agent policy).",
+    "description": "Read one of an agent's metadata files: SOUL.md (personality, persona, system prompt and behavioural instructions), HEARTBEAT.md (proactive schedule), MEMORY.md (procedural/episodic memory), or AGENT.md (frontmatter config). Defaults to the calling agent's own files; pass agent_id to read another agent's. There is no per-target permission check — any agent granted this tool can read any agent's metadata, including MEMORY.md.",
     "scope": "core",
     "category": "agents",
     "source": "builtin"
@@ -235,13 +228,6 @@
     "description": "Update an existing workspace's name, description, status, pin state, or core team. Call this when the user wants to rename, archive, pin, or reconfigure a workspace. Use list_workspaces first to find the workspace id.\nParameters: id (required, from list_workspaces), name, description, status (active/archived), pinned (bool), pin_order (int), core_team (list of agent IDs). Only provided fields are updated.",
     "scope": "core",
     "category": "workspaces",
-    "source": "builtin"
-  },
-  {
-    "name": "write_agent_metadata",
-    "description": "Write one of the calling agent's metadata files (SOUL.md, HEARTBEAT.md, MEMORY.md, or AGENT.md) atomically. AGENT.md content is validated for well-formed frontmatter before writing. Pass agent_id to write another agent's metadata (subject to per-agent policy).",
-    "scope": "core",
-    "category": "agents",
     "source": "builtin"
   }
 ]

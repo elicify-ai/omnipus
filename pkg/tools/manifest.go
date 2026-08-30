@@ -136,17 +136,20 @@ const (
 	ManifestSearchOnly
 )
 
-// previewedLazyToolNames is the exact 8-name Tier 2 set (ADR-071 D3 §4.1):
-// lazy tools that still render a preview line in the compressed manifest
-// block. Everything else lazy resolves to ManifestSearchOnly. Membership is
-// pinned by TestVisibility_PreviewedSetIsExactlyEight — adding a tool here
-// (or removing one) without updating that test's literal list is a build
-// failure by design (FR-034).
+// previewedLazyToolNames is the exact 7-name Tier 2 set (ADR-071 D3 §4.1,
+// minus the tool-manifest-tier-redesign review's F1 retirement of navigate,
+// which held one of the original 8 slots as a total no-op — its callback was
+// nil in every production path and nothing anywhere could receive a
+// navigation event; see pkg/sysagent/tools/registry.go's AllTools doc
+// comment): lazy tools that still render a preview line in the compressed
+// manifest block. Everything else lazy resolves to ManifestSearchOnly.
+// Membership is pinned by TestVisibility_PreviewedSetIsExactlySeven — adding
+// a tool here (or removing one) without updating that test's literal list is
+// a build failure by design (FR-034).
 var previewedLazyToolNames = map[string]struct{}{
 	"list_agents":   {},
 	"list_jobs":     {},
 	"serve_web":     {},
-	"navigate":      {},
 	"get_workspace": {},
 	"bash":          {}, // ADR-071 D3: demoted from Full — see fullManifestToolNames doc.
 	"create_task":   {},

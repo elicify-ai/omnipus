@@ -389,9 +389,8 @@ var allStaticToolNames = []string{
 	"browser_list_tabs", "browser_switch_tab", "browser_close_tab", "browser_open_tab",
 
 	// Sysagent management tools.
-	"navigate",
 	"create_workspace", "update_workspace", "delete_workspace", "list_workspaces", "get_workspace",
-	"read_agent_metadata", "write_agent_metadata",
+	"read_agent_metadata",
 	"configure_provider", "list_providers", "test_provider", "list_models",
 	"run_doctor", "get_usage",
 	"add_mcp_server", "remove_mcp_server", "list_mcp_servers",
@@ -621,13 +620,11 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			"set_config": deny,
 			"run_doctor": deny,
 			"get_usage":  deny,
-			"navigate":   deny,
 			// --- Agents (list_agents stays at the global default) ---
-			"create_agent":         deny,
-			"update_agent":         deny,
-			"delete_agent":         deny,
-			"read_agent_metadata":  deny,
-			"write_agent_metadata": deny,
+			"create_agent":        deny,
+			"update_agent":        deny,
+			"delete_agent":        deny,
+			"read_agent_metadata": deny,
 			// --- Tasks (update_task/set_todos/list_tasks stay at the global default) ---
 			"create_task":              deny,
 			"delete_task":              deny,
@@ -851,7 +848,7 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 	case IDMia:
 		// Mia — the Assistant (default agent). LEAST-PRIVILEGE: deny-by-default,
 		// allow only the everyday-assistant surface (chat, memory, your tasks,
-		// email, light lookups, UI navigation). She ROUTES heavy work
+		// email, light lookups). She ROUTES heavy work
 		// (build/shell/browser/research/admin) to Ava/Jim/Ray rather than doing
 		// it — matching her persona, which already refuses shell/browser.
 		ask := config.ToolPolicyAsk
@@ -861,7 +858,6 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			"switch_agent": allow,
 			"list_agents":  allow, // knows who to route to
 			"send_file":    allow, // share an artifact in chat
-			"navigate":     allow, // drive the UI ("show me my agents")
 			// Memory — her signature (memory-rich, cross-workspace recall).
 			"remember":            allow,
 			"recall_memory":       allow,
@@ -2323,7 +2319,7 @@ var prompts = map[string]string{
 
 You are the planning and coordination hub. When a goal is complex you decompose it into a clear task DAG, delegate each task to the right specialist, and track progress through blocked_by dependencies until the work is done. You also handle everyday requests yourself when no delegation is needed — you're a capable generalist who knows when to plan, when to delegate, and when to just act.
 
-You operate on a least-privilege basis: you have exactly the tools your coordination role needs and nothing more. You do NOT manage agents, channels, or providers (that's Ava and admin); you do NOT author skills (that's Ava); you do NOT navigate the UI (that's Mia). When something is outside your scope, hand off immediately to the right agent.
+You operate on a least-privilege basis: you have exactly the tools your coordination role needs and nothing more. You do NOT manage agents, channels, or providers (that's Ava and admin); you do NOT author skills (that's Ava). When something is outside your scope, hand off immediately to the right agent.
 
 ## How you work
 
@@ -2397,7 +2393,6 @@ command — npm, pip, go, cargo — without further restrictions inside that bou
 - NEVER create, update, or delete agents — hand off to Ava for that
 - NEVER manage channels or providers — those are admin operations
 - NEVER author or edit skills — Ava owns skill authoring (you can install and discover skills)
-- NEVER navigate the UI (navigate tool) — hand off to Mia for that
 - NEVER add unnecessary caveats, disclaimers, or "as an AI" hedges
 - NEVER refuse a reasonable request by suggesting another agent when you can handle it yourself
 - NEVER produce walls of text when a few sentences suffice
