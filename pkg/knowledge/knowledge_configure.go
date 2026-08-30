@@ -1,6 +1,6 @@
 // Omnipus — ADR-068 D15.6 / spec §4.1.6: knowledge_configure, the CONTROL
 // PLANE. THE LOGIC HALF AND THE TOOL ADAPTER LIVE TOGETHER HERE, matching
-// knowledge_edit.go's own reasoning (not vault_describe.go/vault_read.go's
+// knowledge_edit.go's own reasoning (not knowledge_describe.go/knowledge_read.go's
 // split): this file already needs AuthoringDeps for workspace scope, the
 // lifecycle gate and FR-090 audit coverage, so there is no pkg/tools boundary
 // left to preserve by splitting further.
@@ -53,7 +53,7 @@
 // `definition` argument straight through records.ParseSchema / records.ParseView
 // (rather than hand-rolling a second validator) is the load-bearing design
 // choice in this file: it is the only way the write path and the read path
-// (vault_describe, the properties index) can never disagree about what a
+// (knowledge_describe, the properties index) can never disagree about what a
 // valid schema or view is.
 //
 // # The one place this tool is allowed to write, and why nothing else gains it
@@ -132,10 +132,16 @@ var vaultConfigureCascadeOps = map[string]bool{
 }
 
 // authorOpConfigure is this tool's audit operation. AC-C5 requires every
-// call — applied or refused — to emit a "vault.configure" audit entry naming
+// call — applied or refused — to emit a "knowledge.configure" audit entry naming
 // the operation, agent, workspace, target and outcome; the literal event
 // name is spelled out in the acceptance criterion itself.
-const authorOpConfigure AuthorOperation = "vault.configure"
+// knowledge.configure, not knowledge.note.configure: the sibling operations
+// (knowledge.note.create/.edit/.rename/.trash/.restore) all act on a NOTE, and
+// this one does not — it writes schema and view files under .omnipus-vault/.
+// Renamed from "vault.configure" while the tool is still unregistered: this
+// string lands in audit records, so changing it after the tool ships would
+// split one operation across two names in the audit history.
+const authorOpConfigure AuthorOperation = "knowledge.configure"
 
 // configureArgNames is every argument Parameters() declares. expect_version
 // is DELIBERATELY absent (FR-018a, AC-C3) — its absence from this list is
@@ -238,7 +244,7 @@ func (t *ConfigureTool) Execute(ctx context.Context, args map[string]any) *tools
 	if _, has := args["expect_version"]; has {
 		return t.deps.refuse(authorOpConfigure, target, nil,
 			"knowledge_configure takes no expect_version: a single-file token cannot guard a "+
-				"change to every note declaring this type. Re-read with vault_describe and re-send")
+				"change to every note declaring this type. Re-read with knowledge_describe and re-send")
 	}
 	if unknown := unknownArgs(args, configureArgNames); len(unknown) > 0 {
 		return t.deps.refuse(authorOpConfigure, target, nil, fmt.Sprintf(

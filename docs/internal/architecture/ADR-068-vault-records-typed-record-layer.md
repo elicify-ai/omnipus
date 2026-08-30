@@ -1451,8 +1451,8 @@ caller that ignores `problems` still cannot mistake a bounded answer for a whole
 **D15.5c — Writes carry ADR-067's version token and are audited.** Revision 1's write path
 bypassed both. A record write takes the same opaque content-hash version token ADR-067 D14
 defines; a stale token is **refused and the refusal is audited** (ADR-067 AC-14.2). Every
-mutating tool emits an audit entry per ADR-067 D19 — **`vault.edit`, `vault.restructure` and
-`vault.configure`, each carrying its operation** — with agent, workspace, record ID and
+mutating tool emits an audit entry per ADR-067 D19 — **`knowledge.note.edit`, `knowledge.note.rename` and
+`knowledge.configure`, each carrying its operation** — with agent, workspace, record ID and
 outcome. *(Revision 5: the audit event carries the operation even though the tool policy cannot
 read it (D15.2). Policy resolves before the call on the name; the audit record is written after
 it, where the operation is known. Naming them apart keeps the audit log readable without

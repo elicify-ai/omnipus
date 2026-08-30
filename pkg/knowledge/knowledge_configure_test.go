@@ -55,7 +55,7 @@ func TestKnowledgeConfigure_CreateRecordType_Success(t *testing.T) {
 	// operation, agent, workspace and target.
 	applied := audit.applied()
 	require.Len(t, applied, 1)
-	require.EqualValues(t, "vault.configure", applied[0].Operation)
+	require.EqualValues(t, "knowledge.configure", applied[0].Operation)
 	require.Equal(t, "mia", applied[0].AgentID)
 	require.Equal(t, ws, applied[0].WorkspaceID)
 	require.Contains(t, applied[0].Paths, ".omnipus-vault/records/widget.yaml")
@@ -117,7 +117,7 @@ func TestKnowledgeConfigure_CreateRecordType_AlreadyExists_Refused(t *testing.T)
 
 	refusals := audit.refusals()
 	require.Len(t, refusals, 1)
-	require.EqualValues(t, "vault.configure", refusals[0].Operation)
+	require.EqualValues(t, "knowledge.configure", refusals[0].Operation)
 }
 
 func TestKnowledgeConfigure_CreateRecordType_UnknownPropertyType_Refused(t *testing.T) {
