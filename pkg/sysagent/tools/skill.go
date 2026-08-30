@@ -21,7 +21,14 @@ func NewSkillRemoveTool(d *Deps) *SkillRemoveTool { return &SkillRemoveTool{deps
 func (t *SkillRemoveTool) Name() string           { return "remove_skill" }
 func (t *SkillRemoveTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *SkillRemoveTool) Description() string {
-	return "Remove an installed skill. Parameters: name (required, the skill id as " +
+	return "Remove an installed skill. IRREVERSIBLE — the skill's whole directory, including " +
+		"any version history it holds, is permanently deleted; there is no undo. This only " +
+		"reaches a skill in the operator's installed-skills directory (populated by installing " +
+		"from the marketplace) — it does NOT reach a skill authored with create_skill or a user " +
+		"override created with edit_skill, which live in a separate directory: naming one here " +
+		"returns NOT_FOUND even though list_skills reports it as available. If the removed skill " +
+		"was shadowing a lower-priority skill of the same id (an override or a built-in), that " +
+		"one becomes visible again. Parameters: name (required, the skill id as " +
 		"reported by list_skills — no path separators), confirm (bool, must be true)."
 }
 

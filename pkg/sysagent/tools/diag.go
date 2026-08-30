@@ -147,7 +147,7 @@ func NewUsageQueryTool(d *Deps) *UsageQueryTool  { return &UsageQueryTool{deps: 
 func (t *UsageQueryTool) Name() string           { return "get_usage" }
 func (t *UsageQueryTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *UsageQueryTool) Description() string {
-	return "Query token usage by period, agent, model, or session.\n" +
+	return "Query token usage, cost, and spend by period, agent, model, or session.\n" +
 		"Parameters:\n" +
 		"  period   — time window: day, week, month (default), or all\n" +
 		"  by       — grouping dimension: agent (default), model, or session\n" +
@@ -155,7 +155,9 @@ func (t *UsageQueryTool) Description() string {
 		"  session_id — optional: restrict to a single session\n" +
 		"Returns input, output, cache-read, cache-write, and total token counts.\n" +
 		"No dollar amounts — token counts only.\n" +
-		"External CLI subagents (subagent_3p) run on a separate engine and are excluded."
+		"External CLI subagents (subagent_3p) run on a separate engine and are excluded.\n" +
+		"If some sessions could not be read the response sets partial=true with " +
+		"partial_error_count — treat the totals as a lower bound in that case."
 }
 
 func (t *UsageQueryTool) Parameters() map[string]any {
