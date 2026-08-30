@@ -3899,24 +3899,28 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 			// branches (p.Tool == "hand_off" and p.Tool == "return_to_default"),
 			// one per retired tool. D4 merged both into one tool name with no
 			// arguments in ToolExecEndPayload to distinguish which branch ran
-			// (agent.ToolExecEndPayload carries no tool-arguments field), so
-			// the semantic is re-derived (§5.2.2 decision A) by comparing the
+			// (agent.ToolExecEndPayload carries no tool-arguments field).
+			//
+			// The semantic is NOT re-derived from the resulting agent id
+			// (§5.2.2 decision A's original approach: comparing the
 			// session's post-switch active agent against the registry's
-			// default agent id — GetSessionActiveAgent never clears to empty
-			// on a return-to-default switch (onHandoffFrontend only deletes
-			// the override on an empty AgentID, a branch switch_agent's
-			// target:"default" path never takes; it stores the resolved
-			// default agent's own id instead), so it reliably distinguishes
-			// the two outcomes.
+			// default agent id) — that comparison misreports an explicit
+			// switch_agent(target:"<id>") that happens to name the CURRENT
+			// default agent as a return-to-default, since the resulting
+			// AgentID is identical in both cases. Instead this reads the
+			// tool's own toDefault intent back via GetLastSwitchToDefault,
+			// populated synchronously by onHandoffFrontend (pkg/agent/loop.go)
+			// from tools.HandoffEvent.ToDefault before this ToolExecEnd event
+			// is even emitted, keyed the same way GetSessionActiveAgent is.
 			if p.Tool == "switch_agent" && status == "success" {
 				defaultAgent := h.agentLoop.GetRegistry().GetDefaultAgent()
-				var defaultAgentID, defaultName string
+				var defaultName string
 				if defaultAgent != nil {
-					defaultAgentID = defaultAgent.ID
 					defaultName = defaultAgent.Name
 				}
-				activeAgent, ok := h.agentLoop.GetSessionActiveAgent(evtSID)
-				if !ok {
+				activeAgent, activeOk := h.agentLoop.GetSessionActiveAgent(evtSID)
+				toDefault, sawToDefault := h.agentLoop.GetLastSwitchToDefault(evtSID)
+				if !activeOk {
 					// After a SUCCESSFUL switch this is an invariant
 					// violation, not a normal path (§5.2.2) — WARN rather
 					// than silently emitting nothing, so this is
@@ -3929,11 +3933,21 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 					slog.Warn("websocket: switch_agent succeeded but no active agent found for session",
 						"session_id", evtSID)
 				}
+				if !sawToDefault {
+					// Should not happen on the success path — onHandoffFrontend
+					// stores this before Execute returns, strictly before this
+					// event fires. Fall back to the old id-comparison so a
+					// frame still emits (best-effort) rather than silently
+					// dropping, and make the anomaly visible.
+					slog.Warn("websocket: switch_agent succeeded but no toDefault record found for session; falling back to id comparison",
+						"session_id", evtSID)
+					toDefault = !activeOk || activeAgent == "" || (defaultAgent != nil && activeAgent == defaultAgent.ID)
+				}
 				switchF := generated.AgentSwitchedFrame{
 					Type:      string(generated.WsFrameTypeAgentSwitched),
 					SessionId: evtSID,
 				}
-				if ok && activeAgent != "" && activeAgent != defaultAgentID {
+				if activeOk && activeAgent != "" && !toDefault {
 					// Named-target switch.
 					agentName, _ := h.agentLoop.GetRegistry().GetAgentName(activeAgent)
 					switchF.AgentId = &activeAgent

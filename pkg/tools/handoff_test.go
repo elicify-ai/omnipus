@@ -364,8 +364,9 @@ func TestSwitchAgentTool_Default_SkipsTokenBudgetTransfer(t *testing.T) {
 
 func TestSwitchAgentTool_DefaultSentinel_WinsOverRealAgentNamedDefault(t *testing.T) {
 	// A real agent literally id'd "default" must never shadow the sentinel —
-	// target:"default" always resolves via getDefaultAgent, exact-match,
-	// case-sensitive, no fallback to a registry lookup.
+	// target:"default" always resolves via getDefaultAgent, matched
+	// case-insensitively (strings.EqualFold), no fallback to a registry
+	// lookup.
 	var notifiedAgentID string
 	store := &stubSessionStore{}
 	reg := &stubRegistry{agents: map[string]string{"default": "A Real Agent Named default"}}
@@ -382,6 +383,108 @@ func TestSwitchAgentTool_DefaultSentinel_WinsOverRealAgentNamedDefault(t *testin
 	}
 	if notifiedAgentID != "mia" {
 		t.Errorf("expected the sentinel to resolve to the configured default agent %q, got %q", "mia", notifiedAgentID)
+	}
+}
+
+// TestSwitchAgentTool_Default_CaseInsensitiveTarget pins the FIX 1 bug:
+// target:"Default" (capital D) must be treated as a return-to-default, not
+// fall through to a named-agent lookup and return a confusing
+// "agent not found" error — matching the case-insensitive collision rule
+// pkg/gateway/rest.go already enforces (strings.EqualFold) at the agent
+// create/update boundary.
+func TestSwitchAgentTool_Default_CaseInsensitiveTarget(t *testing.T) {
+	for _, target := range []string{"Default", "DEFAULT", "dEfAuLt"} {
+		t.Run(target, func(t *testing.T) {
+			var notifiedAgentID string
+			var notifiedToDefault bool
+			store := &stubSessionStore{}
+			tool := newTestSwitchAgentTool(
+				&stubRegistry{},
+				store,
+				func() string { return "mia" },
+				func(evt HandoffEvent) {
+					notifiedAgentID = evt.AgentID
+					notifiedToDefault = evt.ToDefault
+				},
+			)
+			ctx := makeCtx("session_abc", "chat_1", "ray")
+			result := tool.Execute(ctx, map[string]any{"target": target})
+			if result.IsError {
+				t.Fatalf("expected target:%q to resolve to the return-to-default branch, got error: %s", target, result.ForLLM)
+			}
+			if !strings.Contains(result.ForUser, "default") {
+				t.Errorf("expected a return-to-default ForUser message, got %q", result.ForUser)
+			}
+			if notifiedAgentID != "mia" {
+				t.Errorf("expected onHandoff called with the configured default agent mia, got %q", notifiedAgentID)
+			}
+			if !notifiedToDefault {
+				t.Errorf("expected HandoffEvent.ToDefault=true for target:%q", target)
+			}
+		})
+	}
+}
+
+// TestSwitchAgentTool_ToDefaultFlag_NamedSwitchToConfiguredDefaultAgent pins
+// the source-of-truth half of FIX 2: an explicit named switch to an agent
+// that happens to BE the configured default agent must report
+// HandoffEvent.ToDefault=false — the tool's own intent, not something a
+// caller should re-derive by comparing the resulting agent id against the
+// configured default agent id (that comparison is exactly the bug FIX 2
+// fixes downstream in the WS agent_switched frame builder).
+func TestSwitchAgentTool_ToDefaultFlag_NamedSwitchToConfiguredDefaultAgent(t *testing.T) {
+	var notifiedToDefault bool
+	sawEvent := false
+	store := &stubSessionStore{}
+	reg := &stubRegistry{agents: map[string]string{"mia": "Mia"}}
+	tool := newTestSwitchAgentTool(
+		reg,
+		store,
+		func() string { return "mia" }, // mia is ALSO the configured default agent
+		func(evt HandoffEvent) {
+			sawEvent = true
+			notifiedToDefault = evt.ToDefault
+		},
+	)
+	ctx := makeCtx("session_abc", "chat_1", "ray")
+	result := tool.Execute(ctx, map[string]any{"target": "mia", "note": "explicit named switch"})
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", result.ForLLM)
+	}
+	if !sawEvent {
+		t.Fatal("expected onHandoff to be called")
+	}
+	if notifiedToDefault {
+		t.Error("expected HandoffEvent.ToDefault=false for an explicit named switch, even though the target is the configured default agent")
+	}
+}
+
+// TestSwitchAgentTool_ToDefaultFlag_ReturnToDefault is the positive control
+// for the above: the actual return-to-default branch must report
+// HandoffEvent.ToDefault=true.
+func TestSwitchAgentTool_ToDefaultFlag_ReturnToDefault(t *testing.T) {
+	var notifiedToDefault bool
+	sawEvent := false
+	store := &stubSessionStore{}
+	tool := newTestSwitchAgentTool(
+		&stubRegistry{},
+		store,
+		func() string { return "mia" },
+		func(evt HandoffEvent) {
+			sawEvent = true
+			notifiedToDefault = evt.ToDefault
+		},
+	)
+	ctx := makeCtx("session_abc", "chat_1", "ray")
+	result := tool.Execute(ctx, map[string]any{"target": "default"})
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", result.ForLLM)
+	}
+	if !sawEvent {
+		t.Fatal("expected onHandoff to be called")
+	}
+	if !notifiedToDefault {
+		t.Error("expected HandoffEvent.ToDefault=true for target:\"default\"")
 	}
 }
 

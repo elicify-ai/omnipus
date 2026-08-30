@@ -67,6 +67,17 @@ type HandoffEvent struct {
 	SessionID string
 	AgentID   string
 	AgentName string
+	// ToDefault is true when this event came from switch_agent's
+	// return-to-default branch (target case-insensitively equal to
+	// SwitchAgentDefaultTarget), false for a named-agent hand-off. Callers
+	// that need to report "was this an explicit named switch or a return to
+	// default" — e.g. the WS agent_switched frame builder — MUST use this
+	// field rather than re-deriving the answer after the fact by comparing
+	// AgentID against the configured default agent id: an explicit
+	// switch_agent(target:"<id>") that happens to name the current default
+	// agent is a named switch, not a return-to-default, even though the
+	// resulting AgentID is identical in both cases.
+	ToDefault bool
 }
 
 // HandoffFunc is the callback signature for handoff notifications.
@@ -98,11 +109,17 @@ type HandoffSessionStore interface {
 }
 
 // SwitchAgentDefaultTarget is the reserved switch_agent `target` value that
-// always means "the configured default agent" (ADR-071 §5.1.3) — exact
-// match, case-sensitive, and it always wins over any real agent whose id
-// happens to be the literal string "default"; there is no fallback to an
-// id-matched agent and no lookup-order subtlety. Exported so callers outside
-// this package that must reason about the same reservation — agent
+// always means "the configured default agent" (ADR-071 §5.1.3) — matched
+// case-insensitively (strings.EqualFold), and it always wins over any real
+// agent whose id happens to be the literal string "default" (in any casing);
+// there is no fallback to an id-matched agent and no lookup-order subtlety.
+// Case-insensitive matching here mirrors the collision rule enforced at the
+// agent create/update boundary (pkg/gateway/rest.go's strings.EqualFold
+// checks) — without it, target:"Default" (capital D) would fall through to
+// "look for a named agent called Default", find none, and return a
+// confusing "agent not found" error instead of routing to the default
+// agent as the caller clearly intended. Exported so callers outside this
+// package that must reason about the same reservation — agent
 // create/update boundary rejection, the upgrade-time boot WARN for a
 // pre-existing agent literally named "default" — check against the same
 // literal rather than re-declaring it.
@@ -114,12 +131,12 @@ const SwitchAgentDefaultTarget = "default"
 // ADR-071 D4 merges the retired HandoffTool and ReturnToDefaultTool into
 // this one tool identity (the same "one capability, one tool, variation
 // becomes a parameter" precedent ADR-036 set for bash and delegate).
-// target == SwitchAgentDefaultTarget selects the return-to-default branch;
-// any other value is a named-agent hand-off. The two branches share every
-// step below except the token-budget transcript transfer (named-target
-// only — the default agent isn't cold, it's already in this transcript)
-// and the audit entry's content/AgentID stamping (asymmetric by design —
-// see Execute's own comment on that step).
+// strings.EqualFold(target, SwitchAgentDefaultTarget) selects the
+// return-to-default branch; any other value is a named-agent hand-off. The
+// two branches share every step below except the token-budget transcript
+// transfer (named-target only — the default agent isn't cold, it's already
+// in this transcript) and the audit entry's content/AgentID stamping
+// (asymmetric by design — see Execute's own comment on that step).
 //
 // On a successful switch it:
 //  1. Resolves the target agent — the default sentinel, or a registry lookup.
@@ -216,7 +233,14 @@ func (t *SwitchAgentTool) Execute(ctx context.Context, args map[string]any) *Too
 	}
 	note, _ := args["note"].(string)
 
-	toDefault := target == SwitchAgentDefaultTarget
+	// Case-insensitive: see SwitchAgentDefaultTarget's doc comment — this
+	// mirrors the collision rule pkg/gateway/rest.go enforces with
+	// strings.EqualFold at the agent create/update boundary. Without this,
+	// target:"Default" (capital D) would fall through to a named-agent
+	// lookup, find nothing (correctly, since it's reserved), and return a
+	// confusing "agent not found" error instead of routing to the default
+	// agent.
+	toDefault := strings.EqualFold(target, SwitchAgentDefaultTarget)
 
 	// Step 1: Resolve the target agent. The sentinel always wins
 	// (ADR-071 §5.1.3 part 1) — no fallback to a real agent literally
@@ -362,6 +386,7 @@ func (t *SwitchAgentTool) Execute(ctx context.Context, args map[string]any) *Too
 			SessionID: sessionID,
 			AgentID:   agentID,
 			AgentName: agentName,
+			ToDefault: toDefault,
 		})
 	}
 
