@@ -112,7 +112,7 @@ func NewChannelEnableTool(d *Deps) *ChannelEnableTool { return &ChannelEnableToo
 func (t *ChannelEnableTool) Name() string             { return "enable_channel" }
 func (t *ChannelEnableTool) Scope() tools.ToolScope   { return tools.ScopeCore }
 func (t *ChannelEnableTool) Description() string {
-	return "Enable a channel connection. The channel will start on the next config reload.\nParameters: id (required, the channel type e.g. 'telegram', 'discord')."
+	return "Enable a channel connection. The channel will start on the next config reload. Call list_channels for valid ids. Enabling a channel with no credentials configured is allowed but the channel will fail to connect — configure it with configure_channel first.\nParameters: id (required, the channel type e.g. 'telegram', 'discord')."
 }
 
 func (t *ChannelEnableTool) Parameters() map[string]any {
@@ -157,20 +157,19 @@ func NewChannelConfigureTool(d *Deps) *ChannelConfigureTool { return &ChannelCon
 func (t *ChannelConfigureTool) Name() string                { return "configure_channel" }
 func (t *ChannelConfigureTool) Scope() tools.ToolScope      { return tools.ScopeCore }
 func (t *ChannelConfigureTool) Description() string {
-	return "Configure an enabled channel with its credentials (token, phone_number, etc).\nParameters: id (required), plus channel-specific credentials."
+	return "Store a channel's credentials and settings. Secrets (token, app_secret) go into the encrypted credential store and are referenced from config.json by a *_ref — they are never written to config.json in plaintext. Non-secret fields (bot_id, app_id, mode) are written to config.json directly. This does NOT enable the channel and does NOT check whether it is enabled: call enable_channel separately, and note the channel only connects on the next config reload. WhatsApp does not take credentials here — it pairs by QR code in the Channels screen.\nParameters: id (required, from list_channels), token, app_secret, bot_id, app_id, mode."
 }
 
 func (t *ChannelConfigureTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"id":           map[string]any{"type": "string"},
-			"token":        map[string]any{"type": "string"},
-			"phone_number": map[string]any{"type": "string"},
-			"bot_id":       map[string]any{"type": "string"},
-			"app_id":       map[string]any{"type": "string"},
-			"app_secret":   map[string]any{"type": "string"},
-			"mode":         map[string]any{"type": "string"},
+			"id":         map[string]any{"type": "string"},
+			"token":      map[string]any{"type": "string"},
+			"bot_id":     map[string]any{"type": "string"},
+			"app_id":     map[string]any{"type": "string"},
+			"app_secret": map[string]any{"type": "string"},
+			"mode":       map[string]any{"type": "string"},
 		},
 		"required": []string{"id"},
 	}
@@ -262,11 +261,6 @@ func (t *ChannelConfigureTool) Execute(_ context.Context, args map[string]any) *
 			applyChannelRef(&ch, field, credKey)
 		}
 		// Apply non-sensitive plain fields supported by this tool.
-		if v, ok := args["phone_number"].(string); ok && v != "" {
-			// phone_number is not currently a typed field on ChannelInstanceConfig;
-			// it is accepted for forward-compatibility but has no storage path yet.
-			_ = v
-		}
 		if v, ok := args["bot_id"].(string); ok && v != "" {
 			ch.BotID = v
 		}
@@ -299,7 +293,7 @@ func NewChannelDisableTool(d *Deps) *ChannelDisableTool { return &ChannelDisable
 func (t *ChannelDisableTool) Name() string              { return "disable_channel" }
 func (t *ChannelDisableTool) Scope() tools.ToolScope    { return tools.ScopeCore }
 func (t *ChannelDisableTool) Description() string {
-	return "Disable a channel connection. The channel will stop on the next config reload.\nParameters: id (required, the channel type e.g. 'telegram', 'discord')."
+	return "Disable a channel connection. The channel will stop on the next config reload. A channel that has never been configured cannot be disabled — it is already inactive.\nParameters: id (required, the channel type e.g. 'telegram', 'discord')."
 }
 
 func (t *ChannelDisableTool) Parameters() map[string]any {
@@ -344,7 +338,7 @@ func NewChannelListTool(d *Deps) *ChannelListTool { return &ChannelListTool{deps
 func (t *ChannelListTool) Name() string           { return "list_channels" }
 func (t *ChannelListTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *ChannelListTool) Description() string {
-	return "List all channels with status and implementation tier. No parameters required."
+	return "List every messaging channel Omnipus supports — Telegram, Discord, WhatsApp, Slack, Matrix, Google Chat, IRC, LINE, Feishu, QQ, DingTalk, WeCom, Weixin — with each one's live state: not_configured, needs_credentials, or configured, plus whether it is currently enabled. Use the returned id with enable_channel, configure_channel, or test_channel. No parameters required."
 }
 
 func (t *ChannelListTool) Parameters() map[string]any {
@@ -352,7 +346,25 @@ func (t *ChannelListTool) Parameters() map[string]any {
 }
 
 func (t *ChannelListTool) Execute(_ context.Context, _ map[string]any) *tools.ToolResult {
-	return tools.NewToolResult(successJSON(map[string]any{"channels": knownChannels}))
+	cfg := t.deps.GetCfg()
+	out := make([]channelEntry, 0, len(knownChannels))
+	for _, c := range knownChannels {
+		e := c // copy the static display meta
+		if cfg != nil {
+			if ch, ok := cfg.Channels[c.ID]; ok {
+				e.Enabled = ch.Enabled
+				e.Status = "configured"
+				if ch.TokenRef == "" && ch.AppSecretRef == "" &&
+					(ch.Identity == nil || ch.Identity.ID == "") {
+					e.Status = "needs_credentials"
+				}
+			} else {
+				e.Status = "not_configured"
+			}
+		}
+		out = append(out, e)
+	}
+	return tools.NewToolResult(successJSON(map[string]any{"channels": out}))
 }
 
 // ---- system.channel.test ----
@@ -363,7 +375,7 @@ func NewChannelTestTool(d *Deps) *ChannelTestTool { return &ChannelTestTool{deps
 func (t *ChannelTestTool) Name() string           { return "test_channel" }
 func (t *ChannelTestTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *ChannelTestTool) Description() string {
-	return "Test a channel's configuration \u2014 checks the channel exists, is enabled, and has credentials configured.\nParameters: id (required, the channel type e.g. 'telegram', 'discord')."
+	return "Check a channel's stored configuration: that the channel type is known, that a config entry exists, whether it is enabled, and whether credentials are present. Does NOT contact the platform \u2014 this makes zero network calls, so a revoked or wrong token still reports success=true, and a channel that is configured but disabled also reports success=true (read the `enabled` field). Enable it with enable_channel and watch the gateway log for the real connection result.\nParameters: id (required, from list_channels)."
 }
 
 func (t *ChannelTestTool) Parameters() map[string]any {
@@ -394,7 +406,8 @@ func (t *ChannelTestTool) Execute(_ context.Context, args map[string]any) *tools
 			"message": fmt.Sprintf("Channel %q is not configured. Use configure_channel to set it up.", id),
 		}))
 	}
-	hasCreds := ch.TokenRef != "" || (ch.Identity != nil && ch.Identity.ID != "")
+	hasCreds := ch.TokenRef != "" || ch.AppSecretRef != "" ||
+		(ch.Identity != nil && ch.Identity.ID != "")
 	if !hasCreds {
 		return tools.NewToolResult(successJSON(map[string]any{
 			"id":      id,

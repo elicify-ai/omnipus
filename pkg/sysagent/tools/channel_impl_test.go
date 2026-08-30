@@ -323,6 +323,102 @@ func TestConfigure_PlainFields(t *testing.T) {
 	}
 }
 
+// TestChannelTest_AppSecretRefCountsAsCredentials is the regression test for
+// F9: hasCreds in ChannelTestTool.Execute used to check only TokenRef and
+// Identity, missing AppSecretRef entirely. Feishu, WeCom, DingTalk and Weixin
+// authenticate via app_id + app_secret (AppSecretRef), not a token, so a
+// channel configured that way was reported as "has no credentials" even
+// though configure_channel had successfully stored and referenced the
+// app_secret. This test configures a channel with only AppSecretRef set (no
+// TokenRef, no Identity) and asserts test_channel now reports success=true.
+func TestChannelTest_AppSecretRefCountsAsCredentials(t *testing.T) {
+	deps, cfg := newTestDeps()
+	cfg.Channels = map[string]config.ChannelInstanceConfig{
+		"feishu": {Type: "feishu", Enabled: true, AppSecretRef: "channel_feishu_app_secret"},
+	}
+	tool := systools.NewChannelTestTool(deps)
+
+	res := tool.Execute(context.Background(), map[string]any{"id": "feishu"})
+	if res.IsError {
+		t.Fatalf("test_channel returned a hard error: %s", res.ForLLM)
+	}
+	out := parseToolJSON(t, res.ForLLM)
+	if out["success"] != true {
+		t.Errorf("test_channel with only AppSecretRef set: success = %v; want true (msg: %v)",
+			out["success"], out["message"])
+	}
+}
+
+// TestChannelList_ReportsLiveState is the regression test for F2:
+// ChannelListTool.Execute used to return the package-level knownChannels
+// slice verbatim, so every channel always reported enabled=false and
+// status="" regardless of what was actually in config.json — including a
+// channel the caller had just enabled and configured. This test enables and
+// configures one channel, leaves another with credentials but disabled, and
+// leaves a third entirely untouched, then asserts list_channels reports the
+// live state for each.
+func TestChannelList_ReportsLiveState(t *testing.T) {
+	deps, cfg := newTestDeps()
+	cfg.Channels = map[string]config.ChannelInstanceConfig{
+		"telegram": {Type: "telegram", Enabled: true, TokenRef: "channel_telegram_token"},
+		"discord":  {Type: "discord", Enabled: false},
+		// "slack" intentionally absent from cfg.Channels entirely.
+	}
+	tool := systools.NewChannelListTool(deps)
+
+	res := tool.Execute(context.Background(), nil)
+	if res.IsError {
+		t.Fatalf("list_channels returned an error: %s", res.ForLLM)
+	}
+	out := parseToolJSON(t, res.ForLLM)
+	rawChannels, ok := out["channels"].([]any)
+	if !ok {
+		t.Fatalf("list_channels response missing \"channels\" array: %s", res.ForLLM)
+	}
+	byID := make(map[string]map[string]any, len(rawChannels))
+	for _, rc := range rawChannels {
+		ch, ok := rc.(map[string]any)
+		if !ok {
+			t.Fatalf("list_channels entry has unexpected shape: %#v", rc)
+		}
+		id, _ := ch["id"].(string)
+		byID[id] = ch
+	}
+
+	telegram, ok := byID["telegram"]
+	if !ok {
+		t.Fatalf("telegram missing from list_channels output")
+	}
+	if telegram["enabled"] != true {
+		t.Errorf("telegram enabled = %v; want true (configured and enabled in cfg.Channels)", telegram["enabled"])
+	}
+	if telegram["status"] != "configured" {
+		t.Errorf("telegram status = %v; want \"configured\"", telegram["status"])
+	}
+
+	discord, ok := byID["discord"]
+	if !ok {
+		t.Fatalf("discord missing from list_channels output")
+	}
+	if discord["enabled"] != false {
+		t.Errorf("discord enabled = %v; want false", discord["enabled"])
+	}
+	if discord["status"] != "needs_credentials" {
+		t.Errorf("discord status = %v; want \"needs_credentials\" (no TokenRef/AppSecretRef/Identity)", discord["status"])
+	}
+
+	slack, ok := byID["slack"]
+	if !ok {
+		t.Fatalf("slack missing from list_channels output")
+	}
+	if slack["enabled"] != false {
+		t.Errorf("slack enabled = %v; want false (never configured)", slack["enabled"])
+	}
+	if slack["status"] != "not_configured" {
+		t.Errorf("slack status = %v; want \"not_configured\"", slack["status"])
+	}
+}
+
 // TestChannelEnableDisableRoundTrip verifies enable→disable→enable cycles persist correctly.
 func TestChannelEnableDisableRoundTrip(t *testing.T) {
 	deps, cfg := newTestDeps()
