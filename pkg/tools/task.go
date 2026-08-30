@@ -393,14 +393,14 @@ func (t *TaskCreateTool) Scope() ToolScope       { return ScopeGeneral }
 func (t *TaskCreateTool) Category() ToolCategory { return CategoryTasks }
 
 func (t *TaskCreateTool) Description() string {
-	return "Create a task and assign it to an agent for execution — this is a DELEGATION: it passes the " +
-		"same delegation-policy gate (trust set + modes + depth) as any other delegation, and is refused " +
-		"if you are not authorized to delegate to the assignee. criteria is REQUIRED: at least one " +
-		"acceptance criterion (Definition of Done) — a task created with none is rejected. If every " +
-		"criterion is kind=check, the assignee's effective bash policy must be allow, or the create is " +
-		"rejected as structurally unsatisfiable (a machine check that can never run can never adjudicate " +
-		"MET). The task lands as a visible card on the workspace board in status `next` (triaged and " +
-		"dispatchable) — never `inbox`."
+	return "Create a task and assign it to an agent for execution.\n" +
+		"This is a DELEGATION: it passes the same delegation-policy gate (trust set + modes + depth) as " +
+		"any other delegation, and is refused if you are not authorized to delegate to the assignee. " +
+		"criteria is REQUIRED: at least one acceptance criterion (Definition of Done) — a task created " +
+		"with none is rejected. If every criterion is kind=check, the assignee's effective bash policy " +
+		"must be allow, or the create is rejected as structurally unsatisfiable (a machine check that can " +
+		"never run can never adjudicate MET). The task lands as a visible card on the workspace board in " +
+		"status `next` (triaged and dispatchable) — never `inbox`."
 }
 
 func (t *TaskCreateTool) Parameters() map[string]any {
@@ -1395,10 +1395,11 @@ func (t *AgentListTool) Name() string           { return "list_agents" }
 func (t *AgentListTool) Scope() ToolScope       { return ScopeGeneral }
 func (t *AgentListTool) Category() ToolCategory { return CategoryAgents }
 func (t *AgentListTool) Description() string {
-	return "List all available agents with their IDs, names, and type (core/Main/Subagent/subagent_3p — " +
-		"you cannot chat-delegate to a Subagent or subagent_3p worker). Use this to resolve agent names " +
-		"to IDs before delegating tasks. Being listed here does not mean you may delegate to that agent " +
-		"— delegation trust is scoped per workspace and is checked when you actually call."
+	return "List all available agents with their IDs, names, and type.\n" +
+		"type is one of core/Main/Subagent/subagent_3p — you cannot chat-delegate to a Subagent or " +
+		"subagent_3p worker. Use this to resolve agent names to IDs before delegating tasks. Being " +
+		"listed here does not mean you may delegate to that agent — delegation trust is scoped per " +
+		"workspace and is checked when you actually call."
 }
 
 func (t *AgentListTool) Parameters() map[string]any {
