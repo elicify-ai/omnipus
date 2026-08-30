@@ -124,6 +124,14 @@ func TestDelegate_RefusedWithoutLifecycleStore(t *testing.T) {
 // u14SeedChild persists a minimal, non-terminal LifecycleRecord for
 // sessionID whose ParentDurableKey is parentDurableKey (its DIRECT parent,
 // one hop — see pkg/session/lifecycle.go's own doc comment on the field).
+//
+// LaunchProfile is "specialist" (not the "utility" default) so this helper
+// remains usable by every gated action this file exercises via the shared
+// ownership-walk tests, including steer/respond (G-8: a "utility" launch
+// refuses both — see requireSteerableLaunchProfile in delegate.go). The
+// ownership-walk assertions here are about WHO may act, not about the
+// launch_profile contract, so a uniformly steerable profile keeps that
+// axis out of the way.
 func u14SeedChild(t *testing.T, lc *session.LifecycleStore, sessionID, parentDurableKey string) {
 	t.Helper()
 	if err := lc.Persist(&session.LifecycleRecord{
@@ -133,7 +141,7 @@ func u14SeedChild(t *testing.T, lc *session.LifecycleStore, sessionID, parentDur
 		ParentDurableKey: parentDurableKey,
 		WorkspaceID:      "ws-1",
 		AgentID:          "worker",
-		LaunchProfile:    session.LaunchProfileUtility,
+		LaunchProfile:    session.LaunchProfileSpecialist,
 	}); err != nil {
 		t.Fatalf("u14SeedChild(%s, parent=%s): seed failed: %v", sessionID, parentDurableKey, err)
 	}
@@ -326,7 +334,7 @@ func TestOwnershipWalk_AllSixGatedActions(t *testing.T) {
 		if err := lc.Persist(&session.LifecycleRecord{
 			SessionID: d, State: session.LifecycleNeedsInput, OwnerScopeKind: session.OwnerScopeHuman,
 			ParentDurableKey: childB, WorkspaceID: "ws-1", AgentID: "worker",
-			LaunchProfile: session.LaunchProfileUtility,
+			LaunchProfile: session.LaunchProfileSpecialist,
 			NeedsInput:    &session.NeedsInput{CorrelationID: "u14-corr-1"},
 		}); err != nil {
 			t.Fatalf("seed failed: %v", err)

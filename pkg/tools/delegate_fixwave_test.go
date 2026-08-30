@@ -338,7 +338,7 @@ func TestDelegateTool_Steer_TerminalCheck_RoutesThroughMutate(t *testing.T) {
 	if err := backing.Persist(&session.LifecycleRecord{
 		SessionID: "child-mutate-check", State: session.LifecycleRunning,
 		OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: "parent-1",
-		WorkspaceID: "ws-1", AgentID: "worker", LaunchProfile: session.LaunchProfileUtility,
+		WorkspaceID: "ws-1", AgentID: "worker", LaunchProfile: session.LaunchProfileSpecialist,
 	}); err != nil {
 		t.Fatalf("seed failed: %v", err)
 	}
@@ -389,7 +389,7 @@ func TestDelegateTool_Steer_TerminalSession_Rejected(t *testing.T) {
 	if err := lc.Persist(&session.LifecycleRecord{
 		SessionID: "child-terminal-steer", State: session.LifecycleCompleted,
 		OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: "parent-1",
-		WorkspaceID: "ws-1", AgentID: "worker", LaunchProfile: session.LaunchProfileUtility,
+		WorkspaceID: "ws-1", AgentID: "worker", LaunchProfile: session.LaunchProfileSpecialist,
 	}); err != nil {
 		t.Fatalf("seed failed: %v", err)
 	}

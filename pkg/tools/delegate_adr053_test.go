@@ -180,7 +180,7 @@ func TestDelegateTool_Steer_DeliversViaSteeringSink(t *testing.T) {
 	if err := lc.Persist(&session.LifecycleRecord{
 		SessionID: "child-x", State: session.LifecycleRunning,
 		OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: "parent-1",
-		WorkspaceID: "ws-1", AgentID: "worker", LaunchProfile: session.LaunchProfileUtility,
+		WorkspaceID: "ws-1", AgentID: "worker", LaunchProfile: session.LaunchProfileSpecialist,
 	}); err != nil {
 		t.Fatalf("seed lifecycle record failed: %v", err)
 	}
@@ -206,7 +206,7 @@ func TestDelegateTool_Steer_RateAndBodyCaps(t *testing.T) {
 	if err := lc.Persist(&session.LifecycleRecord{
 		SessionID: "child-caps", State: session.LifecycleRunning,
 		OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: "parent-1",
-		WorkspaceID: "ws-1", AgentID: "worker", LaunchProfile: session.LaunchProfileUtility,
+		WorkspaceID: "ws-1", AgentID: "worker", LaunchProfile: session.LaunchProfileSpecialist,
 	}); err != nil {
 		t.Fatalf("seed failed: %v", err)
 	}
@@ -227,7 +227,7 @@ func TestDelegateTool_Steer_RateAndBodyCaps(t *testing.T) {
 	if err := lc2.Persist(&session.LifecycleRecord{
 		SessionID: "child-body", State: session.LifecycleRunning,
 		OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: "parent-1",
-		WorkspaceID: "ws-1", AgentID: "worker", LaunchProfile: session.LaunchProfileUtility,
+		WorkspaceID: "ws-1", AgentID: "worker", LaunchProfile: session.LaunchProfileSpecialist,
 	}); err != nil {
 		t.Fatalf("seed failed: %v", err)
 	}
@@ -255,6 +255,103 @@ func TestDelegateTool_Steer_RejectsCrossOwnerAccess(t *testing.T) {
 	})
 	if !result.IsError {
 		t.Fatal("expected cross-owner steer to be rejected, got success")
+	}
+}
+
+// TestDelegateTool_Steer_UtilityProfileRefused is G-8's primary regression:
+// launch_profile is documented as a real behavioral contract ("utility" =
+// fire-and-collect, no steering; "specialist" = collaborating worker with
+// steering) but nothing ever enforced it — a "utility" child could be
+// steered exactly like a "specialist" one. This proves executeSteer now
+// refuses the attempt, names the profile the child was actually launched
+// with, and never reaches the steering sink.
+func TestDelegateTool_Steer_UtilityProfileRefused(t *testing.T) {
+	tool, lc, _, steer := newADR053TestTool(t)
+	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
+
+	if err := lc.Persist(&session.LifecycleRecord{
+		SessionID: "child-utility-steer", State: session.LifecycleRunning,
+		OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: "parent-1",
+		WorkspaceID: "ws-1", AgentID: "worker", LaunchProfile: session.LaunchProfileUtility,
+	}); err != nil {
+		t.Fatalf("seed lifecycle record failed: %v", err)
+	}
+
+	result := tool.Execute(ctx, map[string]any{
+		"action": "steer", "session_id": "child-utility-steer", "text": "focus on the tests",
+	})
+	if !result.IsError {
+		t.Fatal("G-8: expected steer on a \"utility\"-launched delegation to be refused, got success")
+	}
+	if !strings.Contains(result.ForLLM, "utility") || !strings.Contains(result.ForLLM, "fire-and-collect") {
+		t.Errorf("expected the refusal to name the launch profile it was launched with (\"utility\"/"+
+			"\"fire-and-collect\"), got: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "specialist") {
+		t.Errorf("expected the refusal to name the profile that WOULD permit steering (\"specialist\"), "+
+			"got: %s", result.ForLLM)
+	}
+	if len(steer.delivered) != 0 {
+		t.Errorf("expected NO steering message to reach the sink for a refused utility-profile steer, got %d",
+			len(steer.delivered))
+	}
+}
+
+// TestDelegateTool_Steer_SpecialistProfileSucceeds is the regression half of
+// G-8: a "specialist"-launched delegation must continue to allow steering
+// exactly as it did before the gate was added.
+func TestDelegateTool_Steer_SpecialistProfileSucceeds(t *testing.T) {
+	tool, lc, _, steer := newADR053TestTool(t)
+	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
+
+	if err := lc.Persist(&session.LifecycleRecord{
+		SessionID: "child-specialist-steer", State: session.LifecycleRunning,
+		OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: "parent-1",
+		WorkspaceID: "ws-1", AgentID: "worker", LaunchProfile: session.LaunchProfileSpecialist,
+	}); err != nil {
+		t.Fatalf("seed lifecycle record failed: %v", err)
+	}
+
+	result := tool.Execute(ctx, map[string]any{
+		"action": "steer", "session_id": "child-specialist-steer", "text": "focus on the tests",
+	})
+	if result.IsError {
+		t.Fatalf("expected steer on a \"specialist\"-launched delegation to succeed, got: %s", result.ForLLM)
+	}
+	msg, scope := steer.last()
+	if msg.Content != "focus on the tests" {
+		t.Errorf("delivered content = %q, want %q", msg.Content, "focus on the tests")
+	}
+	if scope != "child-specialist-steer" {
+		t.Errorf("delivered scope = %q, want %q", scope, "child-specialist-steer")
+	}
+}
+
+// TestDelegateTool_Steer_UnsetLaunchProfileTreatedAsUtility proves a legacy/
+// pre-ADR-053 record with an empty LaunchProfile (never minted with the
+// field, or minted outside delegate.run) is treated as "utility" — the same
+// default executeRun itself applies when the argument is omitted — never as
+// an implicit steering grant.
+func TestDelegateTool_Steer_UnsetLaunchProfileTreatedAsUtility(t *testing.T) {
+	tool, lc, _, steer := newADR053TestTool(t)
+	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
+
+	if err := lc.Persist(&session.LifecycleRecord{
+		SessionID: "child-unset-profile", State: session.LifecycleRunning,
+		OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: "parent-1",
+		WorkspaceID: "ws-1", AgentID: "worker", // LaunchProfile deliberately left unset.
+	}); err != nil {
+		t.Fatalf("seed lifecycle record failed: %v", err)
+	}
+
+	result := tool.Execute(ctx, map[string]any{
+		"action": "steer", "session_id": "child-unset-profile", "text": "hi",
+	})
+	if !result.IsError {
+		t.Fatal("expected steer on a record with an unset launch_profile to be refused (treated as utility)")
+	}
+	if len(steer.delivered) != 0 {
+		t.Errorf("expected NO steering message delivered, got %d", len(steer.delivered))
 	}
 }
 
@@ -362,6 +459,64 @@ func TestDelegateTool_Respond_RejectsCrossOwnerAccess(t *testing.T) {
 	}
 	if !strings.Contains(result.ForLLM, "not owned") {
 		t.Errorf("expected the rejection to cite ownership, got: %s", result.ForLLM)
+	}
+}
+
+// TestDelegateTool_Respond_UtilityProfileRefused is G-8's respond-side
+// regression: respond is the same class of mid-task parent intervention as
+// steer (it resumes a parked child with parent-supplied content), so it is
+// gated by the identical launch_profile contract. The session must be left
+// exactly as parked as it was — never resumed — by a refused respond.
+func TestDelegateTool_Respond_UtilityProfileRefused(t *testing.T) {
+	tool, lc, inbox, steer := newADR053TestTool(t)
+	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
+
+	if err := lc.Persist(&session.LifecycleRecord{
+		SessionID: "child-utility-respond", State: session.LifecycleNeedsInput,
+		OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: "parent-1",
+		WorkspaceID: "ws-1", AgentID: "worker", LaunchProfile: session.LaunchProfileUtility,
+		NeedsInput: &session.NeedsInput{CorrelationID: "corr-utility", TTLDeadline: time.Now().Add(time.Hour)},
+	}); err != nil {
+		t.Fatalf("seed lifecycle record failed: %v", err)
+	}
+	// Seed a positively-verifiable self_ok question so a failure here can
+	// ONLY be the launch_profile gate, not the separate R§8.2 authority check.
+	if _, err := inbox.Append("parent-1", questionMsgForDelegateTest(t, "child-utility-respond", "q-utility",
+		"corr-utility", generated.SelfOk)); err != nil {
+		t.Fatalf("seed question message failed: %v", err)
+	}
+
+	result := tool.Execute(ctx, map[string]any{
+		"action": "respond", "session_id": "child-utility-respond", "correlation_id": "corr-utility", "text": "go ahead",
+	})
+	if !result.IsError {
+		t.Fatal("G-8: expected respond on a \"utility\"-launched delegation to be refused, got success")
+	}
+	if !strings.Contains(result.ForLLM, "utility") || !strings.Contains(result.ForLLM, "fire-and-collect") {
+		t.Errorf("expected the refusal to name the launch profile it was launched with (\"utility\"/"+
+			"\"fire-and-collect\"), got: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "specialist") {
+		t.Errorf("expected the refusal to name the profile that WOULD permit responding (\"specialist\"), "+
+			"got: %s", result.ForLLM)
+	}
+	if len(steer.delivered) != 0 {
+		t.Errorf("expected NO answer to reach the steering sink for a refused utility-profile respond, got %d",
+			len(steer.delivered))
+	}
+
+	// The session must still be parked, exactly as it was — a refused
+	// respond must never resume/consume the child's turn.
+	rec, err := lc.Load("child-utility-respond")
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if rec.State != session.LifecycleNeedsInput {
+		t.Errorf("state after refused respond = %q, want still %q (must not resume)", rec.State, session.LifecycleNeedsInput)
+	}
+	if rec.NeedsInput == nil || rec.NeedsInput.CorrelationID != "corr-utility" {
+		t.Error("NeedsInput/correlation_id must survive a launch_profile-refused respond unchanged, " +
+			"so the caller can relaunch as specialist and retry")
 	}
 }
 

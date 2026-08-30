@@ -1076,17 +1076,24 @@ func (t *DelegateTool) Description() string {
 	return "Delegate a task to a subagent, and control/monitor it afterward. " +
 		"action=\"run\" (default) delegates a new task — by default in the background " +
 		"(async=true), returning immediately with a task_id/session_id; set async=false to " +
-		"block and receive the result inline. action=\"status\" checks on a previously-" +
-		"delegated task/session. action=\"inbox\" drains messages the child has pushed " +
-		"back to you (progress/checkpoint/artifact/blocker/question/handback); " +
-		"action=\"inbox_ack\" acknowledges them. action=\"steer\" injects an instruction " +
-		"at the child's next tool boundary; action=\"respond\" answers a child's open " +
-		"question by correlation_id. action=\"cancel\" stops a child (cooperatively by " +
-		"default; hard=true bypasses the grace window). action=\"follow_up\" warm-resumes " +
-		"a finished child with additional instructions. action=\"peek\" reads a child's " +
-		"latest checkpoint/progress without side effects. Optionally provide agent_id to " +
-		"target a specific agent from your delegation allowlist; omit it to run a generic " +
-		"subagent under your own agent."
+		"block and receive the result inline. A delegation is force-cancelled after " +
+		"timeout_seconds (default 300s / 5 min) if it has not finished by then. " +
+		"action=\"status\" checks on a previously-delegated task/session; with no " +
+		"task_id/session_id given, it lists all tasks currently visible to you instead — " +
+		"this is the tool's discovery affordance for what you have outstanding. " +
+		"action=\"inbox\" drains messages the child has pushed back to you (progress/" +
+		"checkpoint/artifact/blocker/question/handback); action=\"inbox_ack\" acknowledges " +
+		"them. action=\"steer\" injects an instruction at the child's next tool boundary; " +
+		"action=\"respond\" answers a child's open question by correlation_id. Both " +
+		"steer and respond require the delegation to have been launched with " +
+		"launch_profile=\"specialist\" — a \"utility\" (fire-and-collect, the default) " +
+		"delegation refuses both and can only be cancelled or awaited to completion. " +
+		"action=\"cancel\" stops a child (cooperatively by default; hard=true bypasses " +
+		"the grace window) and is available regardless of launch_profile. " +
+		"action=\"follow_up\" warm-resumes a finished child with additional instructions. " +
+		"action=\"peek\" reads a child's latest checkpoint/progress without side effects. " +
+		"Optionally provide agent_id to target a specific agent from your delegation " +
+		"allowlist; omit it to run a generic subagent under your own agent."
 }
 
 func (t *DelegateTool) Scope() ToolScope       { return ScopeCore }
@@ -2787,6 +2794,36 @@ func (t *DelegateTool) checkSteerCaps(sessionID, text string) error {
 	return nil
 }
 
+// requireSteerableLaunchProfile enforces the ADR-053 §5.1 launch_profile
+// contract (G-8): "utility" is documented as fire-and-collect — visibility=
+// outcome, steering=none, child_messaging=progress_only, matching today's
+// one-shot spawn — while "specialist" is a collaborating worker with
+// checkpoints, steering, and full child messaging. Before this fix nothing
+// ever read rec.LaunchProfile, so BOTH profiles behaved identically: a
+// "utility" child could be steered or resumed via respond exactly like a
+// "specialist" one, silently voiding the documented contract.
+//
+// action names the mid-task intervention being attempted ("steering" /
+// "responding to a child's blocking question") and is folded into the error
+// text so a denied caller is told exactly what it tried and how to unlock
+// it. An empty rec.LaunchProfile (a legacy/pre-ADR-053 record, or one minted
+// outside `delegate.run`) is treated as "utility" — executeRun's own default
+// when the argument is omitted (line ~1442) — never as an implicit grant.
+func requireSteerableLaunchProfile(rec *session.LifecycleRecord, action string) error {
+	profile := rec.LaunchProfile
+	if profile == "" {
+		profile = session.LaunchProfileUtility
+	}
+	if profile == session.LaunchProfileSpecialist {
+		return nil
+	}
+	return fmt.Errorf(
+		"this delegation was launched as %q (fire-and-collect) — %s requires launch_profile=%q; "+
+			"relaunch with launch_profile=specialist if you need to steer it mid-task",
+		string(profile), action, string(session.LaunchProfileSpecialist),
+	)
+}
+
 // requiredStringArg extracts a required, non-blank string argument, or a
 // descriptive error naming the missing/invalid field.
 func requiredStringArg(args map[string]any, key string) (string, error) {
@@ -3073,6 +3110,16 @@ func (t *DelegateTool) executeSteer(ctx context.Context, args map[string]any) *T
 		return ErrorResult(fmt.Sprintf("delegate: steer: %v", verr))
 	}
 
+	// G-8: a "utility" launch is documented as steering=none (fire-and-
+	// collect) — only "specialist" permits this mid-task intervention. See
+	// requireSteerableLaunchProfile's doc comment. Checked against the
+	// already-loaded rec (LaunchProfile is stamped once at mint time and
+	// never mutated thereafter — same immutability argument the ownership
+	// check above relies on), so this adds no extra Load/Mutate call.
+	if gerr := requireSteerableLaunchProfile(rec, "steering"); gerr != nil {
+		return ErrorResult(fmt.Sprintf("delegate: steer: %v", gerr))
+	}
+
 	// TOCTOU race guard: a plain Load() followed by a branch on
 	// rec.Terminal() was a check-then-act race against the concurrent
 	// atomic terminal transition in pkg/agent/task_executor.go
@@ -3164,6 +3211,15 @@ func (t *DelegateTool) executeRespond(ctx context.Context, args map[string]any, 
 	}
 	if verr := t.verifyCallerOwnsSession(ctx, rec); verr != nil {
 		return ErrorResult(fmt.Sprintf("delegate: respond: %v", verr))
+	}
+
+	// G-8: respond is the same class of mid-task parent intervention as
+	// steer — it resumes a parked child with parent-supplied content — so it
+	// is gated by the identical launch_profile contract. See
+	// requireSteerableLaunchProfile's doc comment on executeSteer's call
+	// site.
+	if gerr := requireSteerableLaunchProfile(rec, "responding to a child's blocking question"); gerr != nil {
+		return ErrorResult(fmt.Sprintf("delegate: respond: %v", gerr))
 	}
 	if rec.State != session.LifecycleNeedsInput || rec.NeedsInput == nil || rec.NeedsInput.CorrelationID != correlationID {
 		return ErrorResult(fmt.Sprintf(
