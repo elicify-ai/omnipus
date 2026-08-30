@@ -15,26 +15,43 @@ import (
 // ADR-068 makes tool COUNT a load-bearing design constraint: every tool
 // definition is serialised into the system prompt of every agent on every
 // request, and selection accuracy degrades as the catalog grows. The whole
-// argument for six vault_* tools replacing nine knowledge_* ones is arithmetic
-// over this number.
+// argument for six knowledge_* tools replacing nine knowledge_* ones is
+// arithmetic over this number.
 //
-// That number has already been wrong twice in prose. ADR-068 revision 5 stated
-// 102, from a grep that swept in tool-policy VALUES ("ask", "allow", "deny")
-// alongside tool NAMES; every figure derived from it was wrong too. It was
-// quoted three times as counted-not-estimated, inside the decision that makes
-// count load-bearing. Prose cannot defend a number; a test can.
+// That number has already been wrong twice in prose. ADR-068 revision 5
+// stated 102, from a grep that swept in tool-policy VALUES ("ask", "allow",
+// "deny") alongside tool NAMES; every figure derived from it was wrong too.
+// It was quoted three times as counted-not-estimated, inside the decision
+// that makes count load-bearing. Prose cannot defend a number; a test can.
 //
 // HOW THE NUMBER WAS DERIVED, twice, independently:
 //
 //  1. Strip trailing // comments from the allStaticToolNames composite literal
-//     (pkg/coreagent/core.go) and take the unique quoted identifiers -> 98.
+//     (pkg/coreagent/core.go) and take the unique quoted identifiers -> 95.
 //  2. Do the same over Sandbox.ToolPolicies in pkg/config/defaults.go, the
-//     global ceiling, which is maintained separately -> 98, entry for entry,
+//     global ceiling, which is maintained separately -> 95, entry for entry,
 //     with no diff.
 //
 // Two independently maintained sources agreeing is the reason to believe this
-// count and not the previous one. TestCatalog_MatchesGlobalCeilingEntryForEntry
+// count. TestCatalog_MatchesGlobalCeilingEntryForEntry
 // (plan_supervisor_seed_test.go) keeps (2) honest; this file pins (1).
+//
+// STAGE 4 HAS LANDED (Wave 2): the nine ADR-067 knowledge_* names
+// (knowledge_search, knowledge_graph, knowledge_create, knowledge_link,
+// knowledge_set_property, knowledge_append_section, knowledge_tasks,
+// knowledge_move, knowledge_rename) are retired from this catalog and
+// replaced by ADR-068's six (knowledge_describe, knowledge_find,
+// knowledge_read, knowledge_edit, knowledge_restructure,
+// knowledge_configure) — 98 - 9 + 6 = 95, matching
+// docs/internal/specs/vault-records-implementation-plan-2026-08-28.md's
+// Stage 4 exit ("the catalog assertion reads 95"). An earlier draft of this
+// file (and that plan doc, before its own docs-rename cleanup) referred to
+// the replacement six as "vault_*" tools; the names that actually shipped in
+// pkg/knowledge/tools.go, knowledge_edit.go, knowledge_restructure.go,
+// knowledge_configure.go and pkg/records/knowledgefind/tool.go all keep the
+// "knowledge_" prefix — only the WIRE contract types (VaultFindRequest,
+// VaultFilterNode, …) carry "Vault". This file is corrected to match the
+// code that actually ships, not the earlier naming draft.
 // ---------------------------------------------------------------------------
 
 // catalogSizeToday is the current size of the static builtin tool catalog.
@@ -49,24 +66,33 @@ import (
 //     catalog is already at the size where selection accuracy is the binding
 //     constraint, so a new entry needs a reason, not just a slot. Update this
 //     number in the same commit, and say in the message which tool and why.
-//
-//   - Stage 4 of the vault-records plan is the one change already decided and
-//     scheduled: it retires the nine knowledge_* tools and adds six vault_*
-//     ones, so this constant becomes 95 (98 - 9 + 6) and
-//     knowledgeToolCountToday becomes 0. That expected value is recorded here
-//     deliberately, so whoever lands Stage 4 can confirm they got the arithmetic
-//     they intended rather than discovering a number that merely differs.
-//     See docs/internal/specs/vault-records-implementation-plan-2026-08-28.md,
-//     Stage 4 exit: "the catalog assertion reads 95".
-const catalogSizeToday = 98
+const catalogSizeToday = 95
 
-// knowledgeToolCountToday is how many of the catalog are knowledge_* tools —
-// the nine ADR-068 D15 retires. Becomes 0 after Stage 4.
-const knowledgeToolCountToday = 9
+// currentKnowledgeToolNames is the exact six ADR-068 D15.3 seeds — the
+// replacement for ADR-067's nine, superseded (Stage 4, Wave 2). Split by
+// blast radius: three read (describe/find/read), knowledge_edit (one named
+// file), knowledge_restructure (cascading rename/move/trash/restore),
+// knowledge_configure (the schema/view control plane).
+var currentKnowledgeToolNames = map[string]bool{
+	"knowledge_describe":    true,
+	"knowledge_find":        true,
+	"knowledge_read":        true,
+	"knowledge_edit":        true,
+	"knowledge_restructure": true,
+	"knowledge_configure":   true,
+}
 
-// vaultToolCountAfterStage4 is the replacement surface: six vault_* tools
-// (ADR-068 D15, five in revision 5 plus D15.6's sixth).
-const vaultToolCountAfterStage4 = 6
+// retiredKnowledgeToolNames is ADR-067's nine, which ADR-068 supersedes.
+// None of these may appear in allStaticToolNames any more — the retirement
+// is a removal from the agent-callable catalog, not an addition alongside
+// the six (which would put the catalog at 104, the shape ADR-068 D15.0
+// explicitly rejects — revision 4's 107 was nine new tools alongside nine
+// old ones).
+var retiredKnowledgeToolNames = []string{
+	"knowledge_search", "knowledge_graph", "knowledge_create",
+	"knowledge_link", "knowledge_set_property", "knowledge_append_section",
+	"knowledge_tasks", "knowledge_move", "knowledge_rename",
+}
 
 // TestCatalog_SizeIsPinned asserts the count ADR-068 D15.0 reasons from, so the
 // ADR's prose cannot rot away from the code again.
@@ -98,24 +124,14 @@ func TestCatalog_HasNoDuplicates(t *testing.T) {
 	}
 }
 
-// TestCatalog_KnowledgeToolCount pins the nine names ADR-068 D15 retires. It is
-// the other half of the arithmetic: without it, Stage 4 could delete eight and
-// still satisfy a count that had been adjusted to match.
+// TestCatalog_KnowledgeToolCount pins the exact six ADR-068 names present in
+// the catalog — the other half of the arithmetic: without it, a change could
+// retire eight of the nine and add seven of the six and still satisfy a bare
+// count that had been adjusted to match.
 func TestCatalog_KnowledgeToolCount(t *testing.T) {
-	want := map[string]bool{
-		"knowledge_search":         true,
-		"knowledge_graph":          true,
-		"knowledge_tasks":          true,
-		"knowledge_create":         true,
-		"knowledge_link":           true,
-		"knowledge_set_property":   true,
-		"knowledge_append_section": true,
-		"knowledge_move":           true,
-		"knowledge_rename":         true,
-	}
-	if len(want) != knowledgeToolCountToday {
-		t.Fatalf("this test's own expected set holds %d names, but "+
-			"knowledgeToolCountToday says %d", len(want), knowledgeToolCountToday)
+	want := make(map[string]bool, len(currentKnowledgeToolNames))
+	for n := range currentKnowledgeToolNames {
+		want[n] = true
 	}
 
 	found := 0
@@ -125,58 +141,62 @@ func TestCatalog_KnowledgeToolCount(t *testing.T) {
 		}
 		found++
 		if !want[n] {
-			t.Errorf("unexpected knowledge_* tool %q in the catalog — ADR-068 D15 "+
-				"enumerates exactly nine, and Stage 4 retires that set by name", n)
+			t.Errorf("unexpected knowledge_* tool %q in the catalog — ADR-068 D15.3 "+
+				"names exactly six, and this is not one of them", n)
+			continue
 		}
 		delete(want, n)
 	}
 	for n := range want {
-		t.Errorf("ADR-068 D15 names %q as one of the nine tools to retire, but it is "+
-			"not in the catalog", n)
+		t.Errorf("ADR-068 D15.3 names %q as one of the six current knowledge tools, "+
+			"but it is not in the catalog", n)
 	}
-	if found != knowledgeToolCountToday {
+	if found != len(currentKnowledgeToolNames) {
 		t.Errorf("catalog holds %d knowledge_* tools, expected %d",
-			found, knowledgeToolCountToday)
+			found, len(currentKnowledgeToolNames))
 	}
 }
 
-// TestCatalog_Stage4Arithmetic states the target rather than leaving it in prose.
-// It cannot fail today; it exists so that the number Stage 4 must produce is
-// written down next to the number it replaces, in the file whoever lands Stage 4
-// will be editing.
-func TestCatalog_Stage4Arithmetic(t *testing.T) {
-	const wantAfterStage4 = 95
-	got := catalogSizeToday - knowledgeToolCountToday + vaultToolCountAfterStage4
-	if got != wantAfterStage4 {
-		t.Fatalf("ADR-068 D15.0's arithmetic is %d - %d + %d = %d, but the ADR and the "+
-			"implementation plan both say the catalog reads %d after Stage 4. One of "+
-			"the four numbers in this file is wrong.",
-			catalogSizeToday, knowledgeToolCountToday, vaultToolCountAfterStage4,
-			got, wantAfterStage4)
-	}
-
-	// Guard against this test quietly outliving its purpose: once no
-	// knowledge_* tool remains, catalogSizeToday must already have been moved
-	// to the post-Stage-4 value.
-	if knowledgeToolCountToday == 0 && catalogSizeToday != wantAfterStage4 {
-		t.Errorf("the knowledge_* tools are retired but catalogSizeToday is still %d, "+
-			"not %d", catalogSizeToday, wantAfterStage4)
-	}
-}
-
-// TestCatalog_NoVaultToolsYet is the counterpart: it asserts Stage 4 has not
-// half-landed. A vault_* name appearing while the knowledge_* nine are still
-// present would put the catalog at 104, the shape D15.0 explicitly rejects
-// (nine new tools ALONGSIDE nine old ones was revision 4's 107).
-func TestCatalog_NoVaultToolsYet(t *testing.T) {
-	if knowledgeToolCountToday == 0 {
-		t.Skip("Stage 4 has landed; the co-existence this guards against is over")
-	}
+// TestCatalog_RetiredKnowledgeToolsAreGone proves the nine ADR-067 names are
+// actually ABSENT, not merely uncounted — a name could vanish from
+// TestCatalog_KnowledgeToolCount's tally through a typo (e.g. a stray
+// underscore) rather than a genuine retirement, and that typo'd name would
+// still be silently present in the catalog, occupying a policy-coverage slot
+// nobody intended to keep.
+func TestCatalog_RetiredKnowledgeToolsAreGone(t *testing.T) {
+	present := make(map[string]bool, len(allStaticToolNames))
 	for _, n := range allStaticToolNames {
-		if strings.HasPrefix(n, "vault_") {
-			t.Errorf("vault_* tool %q is in the catalog while all nine knowledge_* "+
-				"tools are still present — ADR-068 D15 replaces them, it does not add "+
-				"to them. Retire the nine in the same change.", n)
+		present[n] = true
+	}
+	for _, n := range retiredKnowledgeToolNames {
+		if present[n] {
+			t.Errorf("retired ADR-067 tool %q is still in the catalog — ADR-068 D15 "+
+				"replaces the nine, it does not keep any of them alongside the six", n)
 		}
+	}
+}
+
+// TestCatalog_Stage4Arithmetic states the arithmetic Stage 4 was built to
+// satisfy, so the number this catalog holds today stays traceable to the
+// decision that set it rather than becoming a bare literal nobody can check.
+func TestCatalog_Stage4Arithmetic(t *testing.T) {
+	const (
+		preStage4Size         = 98
+		retiredCount          = 9
+		newKnowledgeToolCount = 6
+	)
+	if retiredCount != len(retiredKnowledgeToolNames) {
+		t.Fatalf("retiredCount const says %d but retiredKnowledgeToolNames holds %d names",
+			retiredCount, len(retiredKnowledgeToolNames))
+	}
+	if newKnowledgeToolCount != len(currentKnowledgeToolNames) {
+		t.Fatalf("newKnowledgeToolCount const says %d but currentKnowledgeToolNames holds %d names",
+			newKnowledgeToolCount, len(currentKnowledgeToolNames))
+	}
+	got := preStage4Size - retiredCount + newKnowledgeToolCount
+	if got != catalogSizeToday {
+		t.Fatalf("ADR-068 D15.0's arithmetic is %d - %d + %d = %d, but catalogSizeToday "+
+			"says %d. One of the numbers in this file is wrong.",
+			preStage4Size, retiredCount, newKnowledgeToolCount, got, catalogSizeToday)
 	}
 }
