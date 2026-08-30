@@ -134,7 +134,7 @@ func TestReader_SatisfiesThePropertyIndexReaderInterface(t *testing.T) {
 
 // TestOpen_RefusesOnSQLiteLessBuild — FR-020h at the wiring seam.
 //
-// Open is what vault_describe calls, and on a build with no SQLite it must
+// Open is what knowledge_describe calls, and on a build with no SQLite it must
 // return records.RequirePropertyIndex's error UNCHANGED so the message still
 // names the platform. Wrapping it would replace the one sentence that says
 // which capabilities are gone and which still work.

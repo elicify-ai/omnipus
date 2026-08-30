@@ -86,7 +86,7 @@ func refusalDeps(t *testing.T) Deps {
 // "no records matched". That answer is indistinguishable from an empty vault,
 // and it is the confidently-wrong answer this whole ADR was written to remove.
 
-func TestVaultFind_TypedFilter_RefusesOnSQLiteLessBuild(t *testing.T) {
+func TestKnowledgeFind_TypedFilter_RefusesOnSQLiteLessBuild(t *testing.T) {
 	d := refusalDeps(t)
 	records.AssertRefusesWhenIndexUnavailable(t, records.CapabilityTypedFilter,
 		func() (generated.VaultFindResponse, error) {
@@ -97,7 +97,7 @@ func TestVaultFind_TypedFilter_RefusesOnSQLiteLessBuild(t *testing.T) {
 		})
 }
 
-func TestVaultFind_RelationJoin_RefusesOnSQLiteLessBuild(t *testing.T) {
+func TestKnowledgeFind_RelationJoin_RefusesOnSQLiteLessBuild(t *testing.T) {
 	d := refusalDeps(t)
 	records.AssertRefusesWhenIndexUnavailable(t, records.CapabilityRelationJoin,
 		func() (generated.VaultFindResponse, error) {
@@ -108,7 +108,7 @@ func TestVaultFind_RelationJoin_RefusesOnSQLiteLessBuild(t *testing.T) {
 		})
 }
 
-func TestVaultFind_Grouping_RefusesOnSQLiteLessBuild(t *testing.T) {
+func TestKnowledgeFind_Grouping_RefusesOnSQLiteLessBuild(t *testing.T) {
 	d := refusalDeps(t)
 	records.AssertRefusesWhenIndexUnavailable(t, records.CapabilityGrouping,
 		func() (generated.VaultFindResponse, error) {
@@ -119,7 +119,7 @@ func TestVaultFind_Grouping_RefusesOnSQLiteLessBuild(t *testing.T) {
 		})
 }
 
-func TestVaultFind_Aggregation_RefusesOnSQLiteLessBuild(t *testing.T) {
+func TestKnowledgeFind_Aggregation_RefusesOnSQLiteLessBuild(t *testing.T) {
 	d := refusalDeps(t)
 	records.AssertRefusesWhenIndexUnavailable(t, records.CapabilityAggregation,
 		func() (generated.VaultFindResponse, error) {
@@ -130,13 +130,13 @@ func TestVaultFind_Aggregation_RefusesOnSQLiteLessBuild(t *testing.T) {
 		})
 }
 
-// TestVaultFind_RefusalIsRenderedForTheModel checks the OTHER half of the
+// TestKnowledgeFind_RefusalIsRenderedForTheModel checks the OTHER half of the
 // contract, which the shared assertion cannot see: the refusal has to arrive as
 // text the model can act on, not only as a Go error a caller logs.
 //
 // It runs on every build. On a SQLite-capable one there is no platform refusal
 // to render, so it exercises the shape through a refusal that always exists.
-func TestVaultFind_RefusalIsRenderedForTheModel(t *testing.T) {
+func TestKnowledgeFind_RefusalIsRenderedForTheModel(t *testing.T) {
 	d := refusalDeps(t)
 	out, err := Call(context.Background(), d, []byte(`{"type":"plant","nonesuch":1}`))
 	if err == nil {

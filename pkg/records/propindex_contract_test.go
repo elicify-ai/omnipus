@@ -67,7 +67,7 @@ func TestRefusalContract_CatchesTheThreeWaysAnEntryPointCanBreakIt(t *testing.T)
 			name: "correct: the refusal wrapped with %w, message preserved",
 			call: func() ([]int, error) {
 				err := RequirePropertyIndex(CapabilityTypedFilter)
-				return nil, fmt.Errorf("vault_find: %w", err)
+				return nil, fmt.Errorf("knowledge_find: %w", err)
 			},
 			wantErrs: 0,
 		},

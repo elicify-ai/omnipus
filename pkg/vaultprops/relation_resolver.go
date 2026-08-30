@@ -55,7 +55,7 @@ type RelatedIdentity struct {
 	// fact pkg/knowledge.ResolvedLink.Ambiguous carries, preserved rather
 	// than discarded here (FR-041: "the link still resolves; the ambiguity
 	// is reported IN ADDITION, so determinism never hides it"). A caller
-	// with schema context (vault_find's comparator, check_integrity) can
+	// with schema context (knowledge_find's comparator, check_integrity) can
 	// then report the ambiguity itself instead of presenting the tie-break
 	// winner as the only possible reading.
 	Ambiguous bool
@@ -76,7 +76,7 @@ func (r RelatedIdentity) HasIdentity() bool { return r.RecordID != "" }
 // -> file (pkg/knowledge.NoteIndex), then file -> record id
 // (pkg/records/propindex.Store).
 //
-// It is built fresh per call — per vault_find/vault_describe request — and
+// It is built fresh per call — per knowledge_find/knowledge_describe request — and
 // memoises what it resolves for the lifetime of that one call. A relation
 // property is commonly `many: true` and a corpus commonly repeats the same
 // target across many source records (every deal pointing at one company),
@@ -107,7 +107,7 @@ type RelationResolver struct {
 // answers "not resolved" rather than panicking, because a resolver with
 // nothing to resolve against is a legitimate degraded state (ADR-068 O-5's
 // posture applied to the resolver's own dependencies, not only to its
-// targets) and vault_find already has its own refusal for a missing store.
+// targets) and knowledge_find already has its own refusal for a missing store.
 func NewRelationResolver(ctx context.Context, notes *knowledge.NoteIndex, store propindex.Store) *RelationResolver {
 	if ctx == nil {
 		ctx = context.Background()

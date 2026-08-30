@@ -118,7 +118,7 @@ func (r *Reader) Close() error {
 //     vault nobody has indexed — a confidently wrong all-clear.
 //   - The path could not be resolved at all.
 //
-// A refusal here is not a failed call: vault_describe renders it as NOT
+// A refusal here is not a failed call: knowledge_describe renders it as NOT
 // CHECKED against the categories it blocks, by name.
 func Open(ctx context.Context, home, collectionRoot string) (knowledge.PropertyIndexReader, error) {
 	// THE PLATFORM QUESTION IS ASKED FIRST, and the order is load-bearing.
@@ -142,7 +142,7 @@ func Open(ctx context.Context, home, collectionRoot string) (knowledge.PropertyI
 	//     "unable to open database file: out of memory (14)" — a message that
 	//     describes nothing an operator can act on, in place of the true and
 	//     actionable "this collection has never been indexed".
-	// (b) NO WRITE ON A READ. vault_describe is a read tool. Letting it create
+	// (b) NO WRITE ON A READ. knowledge_describe is a read tool. Letting it create
 	//     a database as a side effect of describing a vault would put a file
 	//     in $OMNIPUS_HOME that the caller never asked for and would then have
 	//     to be told is empty.

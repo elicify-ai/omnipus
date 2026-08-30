@@ -16,7 +16,7 @@ import (
 //
 // FR-076a replaces the WALK, not the definition. `knowledge_tasks` walks the
 // collection, reads each file and matches one regex per line; a checkbox it
-// returned and `vault_find` did not would be a silent behaviour change dressed
+// returned and `knowledge_find` did not would be a silent behaviour change dressed
 // as an optimisation. The cases below are the ones that regex actually decides,
 // including the ones a "tidier" implementation would get wrong.
 func TestExtractTasks_MatchesTheShippingDefinitionOfATask(t *testing.T) {

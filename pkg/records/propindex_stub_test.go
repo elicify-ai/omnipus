@@ -58,7 +58,7 @@ func TestPropertyIndexRefusal_NamesThePlatformAndWhatStillWorks(t *testing.T) {
 			t.Errorf("%s: refusal does not name the missing component: %s", c, msg)
 		}
 		// Every refusal must tell the reader what survives — either the
-		// bleve-backed half (vault_read / plain-word search), or, for the two
+		// bleve-backed half (knowledge_read / plain-word search), or, for the two
 		// capabilities where that would be misleading, the specific narrower
 		// consequence the spec spells out.
 		switch c {
@@ -72,7 +72,7 @@ func TestPropertyIndexRefusal_NamesThePlatformAndWhatStillWorks(t *testing.T) {
 					"refusing: %s", c, msg)
 			}
 		default:
-			if !strings.Contains(msg, "vault_read still work") {
+			if !strings.Contains(msg, "knowledge_read still work") {
 				t.Errorf("%s: refusal must name what still works: %s", c, msg)
 			}
 		}
@@ -92,7 +92,7 @@ func TestPropertyIndexRefusal_ExactSpecWording(t *testing.T) {
 		{
 			capability: CapabilityTypedFilter,
 			want: "typed filters are unavailable on linux/mipsle: this build has no properties index. " +
-				"Plain-word search and vault_read still work",
+				"Plain-word search and knowledge_read still work",
 			specLine: "vault-records-spec-2026-08-25.md:1377",
 		},
 		{

@@ -149,7 +149,7 @@ func SourceHash(src []byte) string {
 
 // taskLine is pkg/knowledge/authoring_tools.go:1251's regex, character for
 // character. FR-076a replaces the WALK, not the definition of a task: a checkbox
-// that `knowledge_tasks` returned and `vault_find` did not would be a silent
+// that `knowledge_tasks` returned and `knowledge_find` did not would be a silent
 // behaviour change dressed as an optimisation.
 var taskLine = regexp.MustCompile(`^[ \t]*[-*+][ \t]+\[([ xX])\][ \t]*(.*)$`)
 

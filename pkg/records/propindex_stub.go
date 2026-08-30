@@ -46,8 +46,8 @@ import (
 // the query would explain it. Hard Constraint #4 (graceful degradation) is
 // satisfied by degradation that is VISIBLE, not by degradation that is quiet.
 //
-// What keeps working on such a build: vault_read, and the plain-word half of
-// vault_find, because both resolve through bleve. What refuses: typed filters,
+// What keeps working on such a build: knowledge_read, and the plain-word half of
+// knowledge_find, because both resolve through bleve. What refuses: typed filters,
 // relation joins, grouping, aggregation, typed integrity checks and record-type
 // declaration — every capability enumerated below.
 //
@@ -78,7 +78,7 @@ const (
 	// CapabilityAggregation is count/sum/min/max over a grouped result.
 	CapabilityAggregation PropertyIndexCapability = "aggregation"
 
-	// CapabilityIntegrityCheck is vault_describe's check_integrity sweep over
+	// CapabilityIntegrityCheck is knowledge_describe's check_integrity sweep over
 	// duplicate identifiers, relation targets and orphan index rows.
 	CapabilityIntegrityCheck PropertyIndexCapability = "typed_integrity_checks"
 
@@ -113,13 +113,13 @@ var PropertyIndexCapabilities = []PropertyIndexCapability{
 // changing the spec.
 var propertyIndexRefusals = map[PropertyIndexCapability]string{
 	CapabilityTypedFilter: "typed filters are unavailable on %s: this build has no properties index. " +
-		"Plain-word search and vault_read still work",
+		"Plain-word search and knowledge_read still work",
 	CapabilityRelationJoin: "relation joins are unavailable on %s: this build has no properties index. " +
-		"Plain-word search and vault_read still work",
+		"Plain-word search and knowledge_read still work",
 	CapabilityGrouping: "grouping is unavailable on %s: this build has no properties index. " +
-		"Plain-word search and vault_read still work",
+		"Plain-word search and knowledge_read still work",
 	CapabilityAggregation: "aggregation is unavailable on %s: this build has no properties index. " +
-		"Plain-word search and vault_read still work",
+		"Plain-word search and knowledge_read still work",
 	CapabilityIntegrityCheck: "typed integrity checks are unavailable on %s: this build has no properties index. " +
 		"Duplicate identifiers, relation targets and orphan rows cannot be checked here; " +
 		"wikilink and orphan checks still run",
@@ -127,7 +127,7 @@ var propertyIndexRefusals = map[PropertyIndexCapability]string{
 		"The schema file would be written and never enforced",
 	CapabilityOpenIndex: "the vault properties index cannot be opened on %s: modernc.org/sqlite has no working " +
 		"build for this target. Records are a feature of the SQLite-capable builds; " +
-		"plain-word search and vault_read still work",
+		"plain-word search and knowledge_read still work",
 }
 
 // ErrPropertyIndexUnavailable is the sentinel every platform refusal unwraps to,
@@ -163,7 +163,7 @@ func (e *PropertyIndexUnavailableError) Error() string {
 		name = "this record-layer operation"
 	}
 	return fmt.Sprintf("%s is unavailable on %s: this build has no properties index. "+
-		"Plain-word search and vault_read still work", name, platform)
+		"Plain-word search and knowledge_read still work", name, platform)
 }
 
 // Unwrap ties every refusal to the sentinel.
@@ -198,7 +198,7 @@ func RequirePropertyIndex(capability PropertyIndexCapability) error {
 		"capability", string(capability),
 		"platform", err.Platform,
 		"reason", "modernc.org/sqlite has no working build for this target",
-		"still_available", "plain-word search (bleve) and vault_read",
+		"still_available", "plain-word search (bleve) and knowledge_read",
 		"adr", "ADR-068 D16.2a",
 	)
 	return err

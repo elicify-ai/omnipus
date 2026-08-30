@@ -645,7 +645,7 @@ func unresolvedRelationProblem(op Operator, side string, link Wikilink, pv Prope
 //     one cell in the table that no rule states in so many words. It is
 //     recorded here as a derived consequence rather than a judgement call: the
 //     alternative — `enum < enum` defined while `text < text` is not — makes
-//     `text < enum` unanswerable, and `sort` is a first-class `vault_find`
+//     `text < enum` unanswerable, and `sort` is a first-class `knowledge_find`
 //     parameter over any property.)*
 //   - enum — R-5 as reversed by ruling R-E: a closed set that orders LEXICALLY,
 //     equality resolving case-insensitively to a declared value. Domain order is

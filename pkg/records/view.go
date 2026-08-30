@@ -28,10 +28,10 @@ import (
 //
 // THREE CALLERS NEED TO READ ONE, and they arrived at three different times:
 //
-//	vault_describe   renders the views that already exist, so an agent's
+//	knowledge_describe   renders the views that already exist, so an agent's
 //	                 opening move is "is there a view for this?" rather than
 //	                 "let me invent a filter" (spec §4.1.1)
-//	vault_find       applies one, then refines it with `filter` (spec §4.1.2)
+//	knowledge_find       applies one, then refines it with `filter` (spec §4.1.2)
 //	vault_configure  writes one, and must validate what it is about to write
 //	                 (spec §4.1.6, FR-018)
 //
@@ -208,7 +208,7 @@ func NewViewSet() *ViewSet {
 // Get returns one view by its exact declared name.
 //
 // Lookup is EXACT, not folded. A view name is an identifier an agent supplies
-// verbatim from a vault_describe response, and folding here would make
+// verbatim from a knowledge_describe response, and folding here would make
 // "Open-Deals" and "open-deals" the same view while the two files sit side by
 // side on disk being two different views.
 func (s *ViewSet) Get(name string) (*SavedView, bool) {

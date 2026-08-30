@@ -14,7 +14,7 @@ import (
 //
 // The static guard in propindex_caller_guard_test.go catches a caller that
 // SWALLOWS the refusal. Nothing static can catch a caller that never asks for
-// it — a vault_find that queries bleve, finds no typed candidates because there
+// it — a knowledge_find that queries bleve, finds no typed candidates because there
 // is no properties index, and reports "no records matched".
 //
 // That one has to be caught by running the real entry point on a build where
@@ -22,9 +22,9 @@ import (
 // so that each of the six entry points costs one line instead of a re-derivation
 // of what "refuses by name" means:
 //
-//	func TestVaultFind_RefusesOnSQLiteLessBuild(t *testing.T) {
+//	func TestKnowledgeFind_RefusesOnSQLiteLessBuild(t *testing.T) {
 //	        records.AssertRefusesWhenIndexUnavailable(t, records.CapabilityTypedFilter,
-//	                func() (any, error) { return vaultFind(ctx, typedFilterRequest) })
+//	                func() (any, error) { return knowledgeFind(ctx, typedFilterRequest) })
 //	}
 //
 // It is a no-op on SQLite-capable builds, because there is nothing to refuse
@@ -33,8 +33,8 @@ import (
 //	go test -tags goolm,stdjson,records_no_sqlite ./...
 //
 // The six entry points that owe this assertion are ADR-068 D15's: typed filters
-// and relation joins and grouping and aggregation in vault_find, check_integrity
-// in vault_describe, and record-type declaration in vault_configure.
+// and relation joins and grouping and aggregation in knowledge_find, check_integrity
+// in knowledge_describe, and record-type declaration in vault_configure.
 // ---------------------------------------------------------------------------
 
 // RefusalTB is the slice of *testing.T this contract needs. Declared as an

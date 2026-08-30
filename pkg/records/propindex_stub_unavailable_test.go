@@ -71,7 +71,7 @@ func TestStubBuild_TypedFilterQueryRefusesByName(t *testing.T) {
 	}
 	got := err.Error()
 	want := "typed filters are unavailable on " + PropertyIndexPlatform() +
-		": this build has no properties index. Plain-word search and vault_read still work"
+		": this build has no properties index. Plain-word search and knowledge_read still work"
 	if got != want {
 		t.Errorf("typed-filter refusal drifted\n got: %s\nwant: %s", got, want)
 	}

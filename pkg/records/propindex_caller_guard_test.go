@@ -665,7 +665,7 @@ func Find(c int) ([]int, error) {
 			src: `package p
 func Find(c int) ([]int, error) {
 	if err := RequirePropertyIndex(c); err != nil {
-		return nil, fmt.Errorf("vault_find: %w", err)
+		return nil, fmt.Errorf("knowledge_find: %w", err)
 	}
 	return nil, nil
 }`,
