@@ -611,12 +611,19 @@ func TestAgentLoop_EmitsContextCompressEventOnRetry(t *testing.T) {
 	}
 	// Pin the window (ADR-066 D2 rung 3, the global default) so the
 	// proactive pre-call check (docs/internal/agent-refactor/context.md
-	// §"Compression paths") does NOT pre-empt the first LLM call: 32768
-	// leaves the assembled request comfortably under budget on paper, so
-	// the mockProvider's context-limit error drives the REACTIVE
+	// §"Compression paths") does NOT pre-empt the first LLM call and the
+	// mockProvider's context-limit error instead drives the REACTIVE
 	// retry-compress path — the documented fallback for when the estimate
-	// undershoots reality.
-	cfg.Context.DefaultContextWindow = intPtr(32768)
+	// undershoots reality. 131072, not 32768: a since-fixed bug in
+	// sentToolSurfaceTokens (ADR-071 D3's manifest-bucket-key readers)
+	// used to silently undercount a ToolSearch-loaded tool's cost as its
+	// preview-line size rather than its full schema — once that was
+	// corrected the tool surface counts for genuinely more, and 32768 no
+	// longer left this test's small seeded history comfortably under
+	// budget (the proactive check started firing first, defeating the
+	// point of this test). A wider window restores the original margin
+	// against the now-accurate estimate.
+	cfg.Context.DefaultContextWindow = intPtr(131072)
 
 	contextErr := stringError("InvalidParameter: Total tokens of image and text exceed max message tokens")
 	provider := &failFirstMockProvider{
