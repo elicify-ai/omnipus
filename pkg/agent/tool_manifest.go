@@ -177,11 +177,7 @@ func stripInfraToolDefs(in []tools.Tool) []tools.Tool {
 // tools.ToolsToProviderDefs directly — this helper is only called on the
 // compressed code-path.
 func (al *AgentLoop) buildCompressedToolDefs(ts *turnState, policyFiltered []tools.Tool) []providers.ToolDefinition {
-	var agentID string
-	if ts.agent != nil {
-		agentID = ts.agent.ID
-	}
-	bucket := manifestBucketKey(agentID, ts.opts.TranscriptSessionID, ts.sessionKey)
+	bucket := ts.manifestBucket()
 	loaded := al.sessionLoadedTools(bucket)
 
 	// Track which infra tools are already present in policyFiltered so we don't
@@ -225,11 +221,7 @@ func (al *AgentLoop) buildCompressedToolDefs(ts *turnState, policyFiltered []too
 //
 // The returned string is ephemeral — rebuilt every turn, never persisted.
 func (al *AgentLoop) buildToolManifestNote(ts *turnState, policyFiltered []tools.Tool) string {
-	var agentID string
-	if ts.agent != nil {
-		agentID = ts.agent.ID
-	}
-	bucket := manifestBucketKey(agentID, ts.opts.TranscriptSessionID, ts.sessionKey)
+	bucket := ts.manifestBucket()
 	loaded := al.sessionLoadedTools(bucket)
 
 	// ADR-071 §4.3.1(b)/FR-042: read the live PreviewAllLazy revert flag from

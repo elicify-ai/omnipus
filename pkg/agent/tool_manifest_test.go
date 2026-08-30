@@ -471,6 +471,88 @@ func TestBuildToolManifestNote_LoadedToolsExcluded(t *testing.T) {
 		"loaded tool %q must be excluded from manifest note", lazyName)
 }
 
+// TestBudgetEstimatesAgreeWithLoadedState_ADR071D3BugFix is the BUG 1
+// regression test (tool-manifest-tier-redesign review-fix pass): after a
+// lazy tool is ToolSearch-loaded mid-turn, midturn_budget.go's
+// manifestNoteTokens and loop.go's sentToolSurfaceTokens (the "def-cost"
+// estimate the actual sent tool defs are charged at) must both agree it is
+// loaded — the "cannot drift apart" invariant manifestNoteTokens' own doc
+// comment claims but, pre-fix, did not hold.
+//
+// transcriptID and sessionKey are deliberately DIFFERENT strings — the
+// realistic shape of a live web-chat turn's processOptions
+// (agentSessionKey wraps the transcript/session id as
+// "agent:<id>:session:<sid>", never textually equal to the bare transcript
+// id) — exactly the shape that exposed the bug: pre-fix,
+// sentToolSurfaceTokens looked up the bare sessionKey with no bucket
+// construction at all, and manifestNoteTokens looked up
+// manifestSessionID(transcriptID, sessionKey) (transcript-id-preferring,
+// but missing the agent-id component ADR-071 D3 added to the writer's
+// key) — neither matched what the writer (markToolsLoaded, via
+// manifestBucketKey) actually wrote.
+func TestBudgetEstimatesAgreeWithLoadedState_ADR071D3BugFix(t *testing.T) {
+	cfg := newCompressedCfg(t)
+	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &mockProvider{})
+	defer al.Close()
+
+	jimAgent, ok := al.registry.GetAgent("jim")
+	require.True(t, ok)
+
+	allTools := jimAgent.Tools.GetAll()
+	policyFiltered, _ := tools.FilterToolsByPolicy(allTools, jimAgent.AgentType, jimAgent.LoadToolPolicy())
+
+	var lazyName string
+	for _, tl := range policyFiltered {
+		if tools.ToolManifestTier(tl.Name()) == tools.ManifestLazy &&
+			tools.ToolManifestVisibility(tl.Name()) == tools.ManifestPreviewed {
+			lazyName = tl.Name()
+			break
+		}
+	}
+	require.NotEmpty(t, lazyName, "Jim must have at least one previewed lazy tool")
+
+	const (
+		transcriptID = "transcript-99"
+		sessionKey   = "agent:jim:session:transcript-99-wrapped"
+	)
+	require.NotEqual(t, transcriptID, sessionKey,
+		"test precondition: transcriptID and sessionKey must genuinely differ")
+
+	ts := &turnState{
+		agent:      jimAgent,
+		sessionKey: sessionKey,
+		opts:       processOptions{TranscriptSessionID: transcriptID},
+	}
+
+	// Before the mid-turn load: the lazy tool is unloaded everywhere.
+	beforeNote := al.buildToolManifestNote(ts, policyFiltered)
+	require.Contains(t, beforeNote, "  - "+lazyName,
+		"fixture: %q must start out unloaded (listed in the manifest note)", lazyName)
+	beforeNoteTokens := al.manifestNoteTokens(ts, cfg)
+	beforeSurface := al.sentToolSurfaceTokens(jimAgent, transcriptID, sessionKey)
+
+	// Simulate the ToolSearch mid-turn load exactly as the real writer does
+	// (loop.go's markLoaded closure derives the same composite bucket from
+	// ctx-carried agent/transcript/session ids that ts.manifestBucket()
+	// derives from turnState fields).
+	al.markToolsLoaded(ts.manifestBucket(), []string{lazyName})
+
+	afterNote := al.buildToolManifestNote(ts, policyFiltered)
+	afterNoteTokens := al.manifestNoteTokens(ts, cfg)
+	afterSurface := al.sentToolSurfaceTokens(jimAgent, transcriptID, sessionKey)
+
+	assert.NotContains(t, afterNote, "  - "+lazyName,
+		"buildToolManifestNote must see %q as loaded and drop it from the note", lazyName)
+	assert.Less(t, afterNoteTokens, beforeNoteTokens,
+		"manifestNoteTokens must also see %q as loaded and charge a smaller note once it "+
+			"disappears from the still-needs-loading list; before=%d after=%d",
+		lazyName, beforeNoteTokens, afterNoteTokens)
+	assert.Greater(t, afterSurface, beforeSurface,
+		"sentToolSurfaceTokens must charge the loaded lazy tool its full schema, not its "+
+			"one-line manifest-preview cost, once ToolSearch has loaded it; before=%d after=%d",
+		beforeSurface, afterSurface)
+}
+
 // TestBuildToolManifestNote_EmptyWhenAllLoaded proves an empty note is returned
 // when all lazy tools for a simple agent have been loaded.
 func TestBuildToolManifestNote_EmptyWhenAllLoaded(t *testing.T) {

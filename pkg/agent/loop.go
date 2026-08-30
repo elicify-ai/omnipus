@@ -118,6 +118,20 @@ type AgentLoop struct {
 	activeTurnStates   sync.Map     // key: sessionKey (string), value: *turnState
 	subTurnCounter     atomic.Int64 // Counter for generating unique SubTurn IDs
 	sessionActiveAgent sync.Map     // key: "session:"+sessionID (string), value: agentID (string); set by handoff, cleared on agent deletion
+	// lastSwitchToDefault records, per session, whether the most recent
+	// switch_agent call was a return-to-default (tools.HandoffEvent.ToDefault)
+	// rather than a named-agent hand-off. It exists so the WS agent_switched
+	// frame builder (pkg/gateway/websocket.go) can report the tool's own
+	// intent instead of re-deriving "was this a return to default" after the
+	// fact by comparing the resulting active agent id against the configured
+	// default agent id — a comparison that misreports an explicit
+	// switch_agent(target:"<id>") that happens to name the current default
+	// agent as a return-to-default. Populated by onHandoffFrontend
+	// synchronously, before the matching ToolExecEnd event is emitted, so the
+	// WS handler always observes the value it needs; read once via
+	// GetLastSwitchToDefault (LoadAndDelete — one-shot per switch).
+	// key: "session:"+sessionID (string), value: bool.
+	lastSwitchToDefault sync.Map
 
 	// orphanWatches holds the orphan-foreground-turn watchdog's pending grace
 	// timer per session (ADR-045): key sessionID (string), value *orphanWatch.
@@ -516,8 +530,10 @@ type AgentLoop struct {
 	// §4.3.1a): bucket key → tool name → the turn index (bucketTurnCounter
 	// value) at which ToolSearch's query (by-description) path promoted it.
 	// Written only on the query path (never on an exact-name `names` load —
-	// FR-038a); cleared when the tool is invoked; swept for staleness at the
-	// same per-turn point that already calls TickTTL(). Purely observational
+	// FR-038a); cleared when the tool is invoked; swept for staleness once
+	// per real conversational turn, after the turnLoop for-loop's per-round
+	// TickTTL() calls are all done for that turn (see tickSearchPromotionHorizon's
+	// call site). Purely observational
 	// — nothing here evicts anything from loadedTools or changes what is
 	// callable. Protected by loadedToolsMu (shares the mutex with loadedTools
 	// since both are written/read together at the same call sites; the mutex
@@ -1845,6 +1861,13 @@ func registerSharedTools(
 					al.sessionActiveAgent.Store(k, evt.AgentID)
 				}
 			}
+			// Record the tool's own toDefault intent, keyed the same way
+			// GetSessionActiveAgent is (evt.SessionID, "session:" prefix) so
+			// the WS agent_switched frame builder can read it back via the
+			// exact evtSID it already uses to look up the active agent.
+			if evt.SessionID != "" {
+				al.lastSwitchToDefault.Store("session:"+evt.SessionID, evt.ToDefault)
+			}
 		}
 		// The handoff target's window is the one its own instance resolved
 		// through the ADR-066 D2 ladder (its provider, its model, its
@@ -1993,8 +2016,8 @@ func registerSharedTools(
 				return al.GetConfig().Tools.Delegate.EffectiveRequireParentAgentID()
 			})
 			// W2: action:"status" live-progress snapshot for a running native
-			// task. sharedStore mirrors the exact store wiring
-			// NewSwitchAgentTool already uses just above (line ~1469) — the same
+			// task. sharedStore mirrors the exact store wiring the
+			// tools.NewSwitchAgentTool(...) call above already uses — the same
 			// *session.UnifiedStore delegated children's transcript entries
 			// are actually written to. It is a plain value captured once at
 			// registration time (NOT a live func()), so it does not itself
@@ -4957,6 +4980,37 @@ func (al *AgentLoop) GetSessionActiveAgent(sessionID string) (string, bool) {
 		return s, true
 	}
 	return "", false
+}
+
+// GetLastSwitchToDefault returns whether the most recent switch_agent call
+// on the given session was a return-to-default (true) or a named-agent
+// hand-off (false), as reported by the tool itself
+// (tools.HandoffEvent.ToDefault) rather than re-derived from the resulting
+// agent id. Returns (false, false) if no such record is pending — e.g. no
+// switch_agent has run yet for this session, or it has already been
+// consumed.
+//
+// One-shot: this LoadAndDeletes the entry, since it exists only to answer
+// "was the switch that just completed a return-to-default" once, at the WS
+// agent_switched frame builder that reads it right after the matching
+// ToolExecEnd event fires. Leaving stale entries around risks a later,
+// unrelated switch_agent call on the same session silently reusing a value
+// it never itself observed.
+func (al *AgentLoop) GetLastSwitchToDefault(sessionID string) (bool, bool) {
+	if sessionID == "" {
+		return false, false
+	}
+	v, ok := al.lastSwitchToDefault.LoadAndDelete("session:" + sessionID)
+	if !ok {
+		return false, false
+	}
+	b, ok := v.(bool)
+	if !ok {
+		logger.ErrorCF("agent", "lastSwitchToDefault: invariant violated — unexpected value type",
+			map[string]any{"session_id": sessionID, "got_type": fmt.Sprintf("%T", v)})
+		return false, false
+	}
+	return b, true
 }
 
 // SwapConfig atomically replaces the in-memory config with the supplied,
@@ -8213,6 +8267,7 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 			switchedAgent, switchErr := al.handleModelSwitch(
 				ctx,
 				ts.agent,
+				ts.opts.TranscriptSessionID,
 				ts.sessionKey,
 				requested,
 				bus.InboundMessage{Metadata: ts.opts.Metadata},
@@ -8412,7 +8467,7 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 		// the turn actually sends). Charging the whole registry here, as this
 		// site used to, fired the check on a conversation that fit and had
 		// windowTrim evict one turn per turn.
-		toolDefsTokens := al.sentToolSurfaceTokens(ts.agent, ts.sessionKey)
+		toolDefsTokens := al.sentToolSurfaceTokens(ts.agent, ts.opts.TranscriptSessionID, ts.sessionKey)
 		// C1: `messages` never carries the ephemeral system notes runTurn
 		// injects into callMessages before the request that is actually
 		// sent (scratchpad, workspace instructions — AGENT.md, up to
@@ -8427,7 +8482,7 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 		if isOverContextBudgetTokens(agentContextBudget(ts.agent), messages, nonMessageTokens) {
 			logger.WarnCF("agent", "Proactive window trim: context budget exceeded before LLM call",
 				map[string]any{"session_key": ts.sessionKey})
-			if compression, ok := al.windowTrim(ts.agent, ts.sessionKey); ok {
+			if compression, ok := al.windowTrim(ts.agent, ts.opts.TranscriptSessionID, ts.sessionKey); ok {
 				al.emitEvent(
 					EventKindContextCompress,
 					ts.eventMeta("runTurn", "turn.context.compress"),
@@ -9406,7 +9461,7 @@ turnLoop:
 				if !compactionAttemptedOnTimeout && !ts.opts.NoHistory && !ts.agent.budgetChecksExempt() {
 					// The sent surface, not the whole registry — same helper
 					// windowTrim measures with (FR-028; see the pre-turn site).
-					toolDefsTokens := al.sentToolSurfaceTokens(ts.agent, ts.sessionKey)
+					toolDefsTokens := al.sentToolSurfaceTokens(ts.agent, ts.opts.TranscriptSessionID, ts.sessionKey)
 					retryMessages := callMessages
 					if span := al.activeRecallSpan(ts.sessionKey); span != nil {
 						retryMessages = append(append([]providers.Message(nil), callMessages...), span.Messages()...)
@@ -9423,7 +9478,7 @@ turnLoop:
 						//     failure; fall through to backoff+retry unchanged.
 						//  3. ok=false, NothingToTrim=false — TruncateHistory was attempted
 						//     but the window genuinely did not shrink — abandon the retry.
-						compression, ok := al.windowTrim(ts.agent, ts.sessionKey)
+						compression, ok := al.windowTrim(ts.agent, ts.opts.TranscriptSessionID, ts.sessionKey)
 						if ok {
 							al.emitEvent(
 								EventKindContextCompress,
@@ -9577,7 +9632,7 @@ turnLoop:
 				// error, so our own estimate said it fit and was wrong.
 				// Honouring the "already fits" guard here would make the
 				// retry byte-identical to the call that just failed.
-				if compression, ok := al.windowTrimForce(ts.agent, ts.sessionKey, true); ok {
+				if compression, ok := al.windowTrimForce(ts.agent, ts.opts.TranscriptSessionID, ts.sessionKey, true); ok {
 					al.emitEvent(
 						EventKindContextCompress,
 						ts.eventMeta("runTurn", "turn.context.compress"),
@@ -10707,7 +10762,7 @@ turnLoop:
 			// pending search-follow-up entry for it under this agent's
 			// bucket. Runs unconditionally (harmless no-op when there is no
 			// pending entry, e.g. a full-tier tool or a by-name load).
-			al.clearPendingSearchPromotion(manifestBucketKey(ts.agent.ID, ts.opts.TranscriptSessionID, ts.sessionKey), toolName)
+			al.clearPendingSearchPromotion(ts.manifestBucket(), toolName)
 
 			toolStart := time.Now()
 			// Inject the current tool call's ID into the context so that tools like
@@ -11268,11 +11323,35 @@ turnLoop:
 		logger.DebugCF("agent", "TTL tick after tool execution", map[string]any{
 			"agent_id": ts.agent.ID, "iteration": iteration,
 		})
-		// ADR-071 §4.3.1(a): advance and sweep this bucket's search-promotion
-		// horizon at the same per-turn point that just ticked the (unrelated)
-		// MCP discovery TTL above.
-		al.tickSearchPromotionHorizon(manifestBucketKey(ts.agent.ID, ts.opts.TranscriptSessionID, ts.sessionKey))
 	}
+
+	// ADR-071 §4.3.1(a): advance and sweep this bucket's search-promotion
+	// horizon exactly once per REAL conversational turn, not once per
+	// turnLoop round-trip. This deliberately sits OUTSIDE (after) the
+	// turnLoop for-loop above, unlike the (unrelated) MCP discovery TTL tick
+	// it used to sit next to: `iteration`, incremented once per pass through
+	// that loop, counts LLM-call rounds within a single turn — a turn that
+	// makes several sequential tool calls before its final response can pass
+	// through the loop body, and therefore the old in-loop call site, many
+	// times before the user ever sees a reply. With
+	// searchPromotionHorizonTurns = 5 that could silently expire a
+	// ToolSearch promotion mid-turn, even though the field's own doc comment
+	// says it counts "across the whole conversation" (turns, not rounds).
+	//
+	// This site fires once per natural exit of the turnLoop for-loop, which
+	// is once per real conversational turn in the overwhelmingly common
+	// case. The one nuance: late-arriving steering messages `goto turnLoop`
+	// below to continue THIS SAME turn rather than starting a new one — each
+	// such continuation is itself a further round of natural back-to-back
+	// tool-calling activity on the same turn, so ticking again when it in
+	// turn naturally exits is consistent with "count real conversational
+	// turns" rather than "count LLM-call rounds," not a double-count of one
+	// turn. A turn that instead exits via an early return above (hard abort,
+	// delegate park) never reaches this line, so it does not tick at all —
+	// deliberate: neither is a completed conversational round from the
+	// user's perspective, and a parked turn is expected to resume later
+	// rather than count as elapsed time against the horizon.
+	al.tickSearchPromotionHorizon(ts.manifestBucket())
 
 	if steerMsgs := al.dequeueSteeringMessagesForScope(ts.sessionKey); len(steerMsgs) > 0 {
 		logger.InfoCF("agent", "Steering arrived after turn completion; continuing turn before finalizing",
@@ -11846,7 +11925,15 @@ func (al *AgentLoop) assembleMessages(
 //
 // When the compressed manifest is off every tool really is sent, so the whole
 // registry is the correct answer and we fall back to it.
-func (al *AgentLoop) sentToolSurfaceTokens(agent *AgentInstance, sessionKey string) int {
+//
+// transcriptID/sessionKey are the same two inputs manifestBucketKey takes
+// everywhere else (ADR-071 D3 §4.6) — callers that have a *turnState in
+// scope MUST pass ts.opts.TranscriptSessionID and ts.sessionKey (or, more
+// directly, thread ts.manifestBucket() down to whichever caller owns this
+// call). Passing a bare sessionKey with no agentID/transcriptID component
+// (the pre-fix bug here) can never match a bucket written by markToolsLoaded,
+// so the lookup below always saw an empty loaded set.
+func (al *AgentLoop) sentToolSurfaceTokens(agent *AgentInstance, transcriptID, sessionKey string) int {
 	if agent == nil || agent.Tools == nil {
 		return 0
 	}
@@ -11858,7 +11945,8 @@ func (al *AgentLoop) sentToolSurfaceTokens(agent *AgentInstance, sessionKey stri
 		return estimateToolDefsTokens(agent.Tools.ToProviderDefs())
 	}
 
-	loaded := al.sessionLoadedTools(sessionKey)
+	bucket := manifestBucketKey(agent.ID, transcriptID, sessionKey)
+	loaded := al.sessionLoadedTools(bucket)
 
 	sent := make([]tools.Tool, 0, len(all))
 	for _, t := range all {
@@ -11923,8 +12011,13 @@ var skipAdvanceTotal atomic.Int64
 //
 // The tool-surface term is what the turn ACTUALLY SENDS, not the whole
 // registry — see sentToolSurfaceTokens.
-func (al *AgentLoop) windowTrim(agent *AgentInstance, sessionKey string) (compressionResult, bool) {
-	return al.windowTrimForce(agent, sessionKey, false)
+//
+// transcriptID is forwarded to sentToolSurfaceTokens unchanged — pass
+// ts.opts.TranscriptSessionID when a *turnState is in scope, "" otherwise
+// (manifestBucketKey then falls back to sessionKey alone for the loaded-tool
+// bucket, same as an agent with no transcript session).
+func (al *AgentLoop) windowTrim(agent *AgentInstance, transcriptID, sessionKey string) (compressionResult, bool) {
+	return al.windowTrimForce(agent, transcriptID, sessionKey, false)
 }
 
 // windowTrimForce is windowTrim with the "the window already fits, do
@@ -11942,7 +12035,7 @@ func (al *AgentLoop) windowTrim(agent *AgentInstance, sessionKey string) (compre
 // the call that just failed. This is the documented reactive fallback for
 // "the estimate undershoots reality".
 func (al *AgentLoop) windowTrimForce(
-	agent *AgentInstance, sessionKey string, force bool,
+	agent *AgentInstance, transcriptID, sessionKey string, force bool,
 ) (compressionResult, bool) {
 	if agent.budgetChecksExempt() {
 		// FR-005: an exempt provider manages its own context; there is no
@@ -11955,7 +12048,7 @@ func (al *AgentLoop) windowTrimForce(
 		return compressionResult{NothingToTrim: true}, false
 	}
 
-	toolDefsTokens := al.sentToolSurfaceTokens(agent, sessionKey)
+	toolDefsTokens := al.sentToolSurfaceTokens(agent, transcriptID, sessionKey)
 
 	// ADR-066 FR-019: measure the window AS THE PROVIDER SEES IT. GetHistory
 	// returns the archive's raw tail; results the choke point capped or an
@@ -12280,6 +12373,7 @@ func estimateHistoryTokens(history []providers.Message) int {
 func (al *AgentLoop) handleModelSwitch(
 	ctx context.Context,
 	agent *AgentInstance,
+	transcriptID string,
 	sessionKey string,
 	newModel string,
 	_ bus.InboundMessage,
@@ -12349,7 +12443,7 @@ func (al *AgentLoop) handleModelSwitch(
 		agent.ContextWindow = newContextWindow
 		agent.mu.Unlock()
 
-		if _, trimOK := al.windowTrim(agent, sessionKey); !trimOK {
+		if _, trimOK := al.windowTrim(agent, transcriptID, sessionKey); !trimOK {
 			logger.DebugCF("agent", "handleModelSwitch: windowTrim returned false (history too small to trim)",
 				map[string]any{"session_key": sessionKey})
 		} else {
@@ -13612,8 +13706,10 @@ func (al *AgentLoop) clearPendingSearchPromotion(bucket, name string) {
 
 // tickSearchPromotionHorizon advances bucket's turn counter by one and
 // sweeps its pendingSearchPromotions entries for staleness (ADR-071
-// §4.3.1a). Called at the same per-turn point that already calls
-// ts.agent.Tools.TickTTL() — one existing call site. Any entry whose
+// §4.3.1a). Called exactly once per real conversational turn — after
+// runTurn's turnLoop for-loop naturally exits, deliberately NOT inside that
+// loop (unlike the unrelated per-round ts.agent.Tools.TickTTL() call it used
+// to sit next to) — one existing call site. Any entry whose
 // recorded turn index is more than searchPromotionHorizonTurns turns old
 // increments omnipus_toolsearch_no_followup_total exactly once and is
 // deleted (deleting on fire is what makes it fire exactly once per wasted

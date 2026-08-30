@@ -594,6 +594,30 @@ func (ts *turnState) auditUser() string {
 	return ts.userID
 }
 
+// manifestBucket derives this turn's ADR-071 D3 loaded-tool bucket key —
+// manifestBucketKey(agentID, transcriptID, sessionKey) — from the turn's own
+// fields, exactly as the writer (the markLoaded closure in loop.go, via
+// tools.ToolAgentID/ToolTranscriptSessionID/ToolSessionKey(ctx)) and
+// tool_manifest.go's two readers (buildCompressedToolDefs,
+// buildToolManifestNote) already do. Every reader of al.loadedTools that has
+// a *turnState in scope MUST derive its bucket through this one helper
+// instead of re-deriving the three inputs inline — a prior one-off inline
+// construction at two of the four reader sites (manifestNoteTokens,
+// sentToolSurfaceTokens) silently drifted from this format, which made
+// al.sessionLoadedTools always return an empty map at those sites. Nil-safe:
+// a nil ts (or nil ts.agent) yields "" agentID, matching the nil-guard the
+// two tool_manifest.go readers already had.
+func (ts *turnState) manifestBucket() string {
+	if ts == nil {
+		return ""
+	}
+	var agentID string
+	if ts.agent != nil {
+		agentID = ts.agent.ID
+	}
+	return manifestBucketKey(agentID, ts.opts.TranscriptSessionID, ts.sessionKey)
+}
+
 // setOutcomeRelabel stamps the FR-017a outcome-labeller verdict for this
 // turn. Called by the loop call site after a successful outcome-based
 // strip-retry (the classifier's inconclusive-4xx fallback fired and

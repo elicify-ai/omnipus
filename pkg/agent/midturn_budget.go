@@ -153,8 +153,8 @@ func (al *AgentLoop) manifestNoteTokens(ts *turnState, cfg *config.Config) int {
 	if ts == nil || ts.agent == nil || ts.agent.Tools == nil || cfg == nil || !cfg.Tools.Manifest.Compressed {
 		return 0
 	}
-	sessionID := manifestSessionID(ts.opts.TranscriptSessionID, ts.sessionKey)
-	loaded := al.sessionLoadedTools(sessionID)
+	bucket := ts.manifestBucket()
+	loaded := al.sessionLoadedTools(bucket)
 	note := tools.BuildCompressedManifest(ts.agent.Tools.GetAll(), loaded)
 	if note == "" {
 		return 0
