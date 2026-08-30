@@ -19,7 +19,7 @@ import "strings"
 // "company" record, back into the forward declaration a caller can actually
 // walk. Everything past that — scanning deal's relation edges, resolving
 // each one to a record identity, keeping only the ones that land on the
-// company in hand — is pkg/records/vaultfind's, because it needs the
+// company in hand — is pkg/records/knowledgefind's, because it needs the
 // properties index and the relation resolver, neither of which this package
 // may import (pkg/records is the type core; it depends on nothing else in
 // Omnipus, and that is deliberate — see doc.go).
