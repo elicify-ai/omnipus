@@ -37,32 +37,63 @@ func refusalResponse(_ generated.VaultFindRequest, echo string, r *RefusalError)
 	return resp
 }
 
+// knowledgeToolCallPrefixes is the closed set of ADR-068 D15 tool names a
+// call-shaped Fix string may legitimately start with.
+//
+// A bare `strings.HasPrefix(fix, "knowledge_")` would ALSO match the nine
+// RETIRING knowledge_* tools (knowledge_search, knowledge_tasks, ...), which
+// share that exact prefix until wave 2 removes them from the catalog — and
+// prose can reasonably NAME one of those nine ("knowledge_search no longer
+// walks the collection") without meaning to hand back an issuable call.
+// Membership against this closed set is what tells "an issuable next call"
+// apart from a sentence that merely mentions a tool. See
+// TestCatalog_KnowledgeToolCount (pkg/coreagent) for the nine being retired.
+var knowledgeToolCallPrefixes = []string{
+	"knowledge_describe",
+	"knowledge_find",
+	"knowledge_read",
+	"knowledge_edit",
+	"knowledge_restructure",
+	"knowledge_configure",
+}
+
+// looksLikeToolCall reports whether fix opens with one of the six real
+// vault-records tool names — see knowledgeToolCallPrefixes.
+func looksLikeToolCall(fix string) bool {
+	for _, p := range knowledgeToolCallPrefixes {
+		if strings.HasPrefix(fix, p) {
+			return true
+		}
+	}
+	return false
+}
+
 // refusalActions turns a refusal's remedy into a call the caller can issue.
 //
 // A remedy that is only prose ends the loop: the model has to compose the next
 // call from a sentence, and composing it is where it invents a property name.
-// So every refusal offers vault_describe — the orientation call that answers
+// So every refusal offers knowledge_describe — the orientation call that answers
 // "what is actually declared here" — alongside the specific remedy.
 func refusalActions(r *RefusalError) []generated.VaultFindAction {
 	out := []generated.VaultFindAction{}
 	// ONLY A REAL CALL BELONGS HERE. The fix prose is already rendered inline
 	// with the problem; repeating it under NEXT filled the block with sentences
-	// like "call vault_describe to see the declared properties", which is advice
+	// like "call knowledge_describe to see the declared properties", which is advice
 	// wearing the shape of a command and leaves the model to compose the call
 	// itself — the exact step FR-126 exists to remove.
-	if fix := deref(r.Problem.Fix); strings.HasPrefix(fix, "vault_") {
+	if fix := deref(r.Problem.Fix); looksLikeToolCall(fix) {
 		out = append(out, generated.VaultFindAction{Label: "fix", Call: fix})
 	}
 	switch r.Problem.Code {
 	case generated.UnknownProperty, generated.UnknownEnumValue, generated.UnknownRecordType:
-		out = append(out, generated.VaultFindAction{Label: "describe", Call: "vault_describe"})
+		out = append(out, generated.VaultFindAction{Label: "describe", Call: "knowledge_describe"})
 	case generated.EvaluationBoundExceeded, generated.CandidateCapExceeded:
 		out = append(out, generated.VaultFindAction{
 			Label: "total", Call: "knowledge_find aggregate=[{op:count}] (an aggregate-only query returns no rows)"})
 	case generated.StaleCursor:
 		out = append(out, generated.VaultFindAction{Label: "restart", Call: "knowledge_find (without cursor)"})
 	default:
-		out = append(out, generated.VaultFindAction{Label: "describe", Call: "vault_describe"})
+		out = append(out, generated.VaultFindAction{Label: "describe", Call: "knowledge_describe"})
 	}
 	return out
 }
@@ -241,11 +272,11 @@ func zeroHitResponse(ctx context.Context, d Deps, q *query, echo string) generat
 	}
 	if q.schema != nil {
 		resp.Next = append(resp.Next, generated.VaultFindAction{
-			Label: "describe", Call: "vault_describe record_type=" + q.schema.Type,
+			Label: "describe", Call: "knowledge_describe record_type=" + q.schema.Type,
 		})
 	} else {
 		resp.Next = append(resp.Next, generated.VaultFindAction{
-			Label: "describe", Call: "vault_describe",
+			Label: "describe", Call: "knowledge_describe",
 		})
 	}
 	return resp
@@ -330,7 +361,7 @@ func findTasks(ctx context.Context, d Deps, q *query, echo string) (generated.Va
 	if d.Store == nil {
 		ref := refuse(problem(generated.IndexUnavailable,
 			"the properties index is not open, so checkbox rows cannot be read",
-			"re-open the vault; run vault_describe check_integrity to see the index state"), nil)
+			"re-open the vault; run knowledge_describe check_integrity to see the index state"), nil)
 		return refusalResponse(generated.VaultFindRequest{}, echo, ref), ref
 	}
 
@@ -339,7 +370,7 @@ func findTasks(ctx context.Context, d Deps, q *query, echo string) (generated.Va
 	if err != nil {
 		ref := refuse(problem(generated.IndexUnavailable,
 			fmt.Sprintf("the properties index could not count candidates: %v", err),
-			"run vault_describe check_integrity"), err)
+			"run knowledge_describe check_integrity"), err)
 		return refusalResponse(generated.VaultFindRequest{}, echo, ref), ref
 	}
 	if total > propindex.BoundNarrowedCandidates {
@@ -373,7 +404,7 @@ func findTasks(ctx context.Context, d Deps, q *query, echo string) (generated.Va
 		}
 		ref := refuse(problem(generated.IndexUnavailable,
 			fmt.Sprintf("the properties index could not stream checkbox rows: %v", err),
-			"run vault_describe check_integrity"), err)
+			"run knowledge_describe check_integrity"), err)
 		return refusalResponse(generated.VaultFindRequest{}, echo, ref), ref
 	}
 
@@ -430,7 +461,7 @@ func findTasks(ctx context.Context, d Deps, q *query, echo string) (generated.Va
 			t := true
 			row.Stale = &t
 			p := problem(generated.StaleRecord, h.Path+": "+fresh.Reason(),
-				"re-run to confirm; run vault_describe check_integrity if it persists", h.Path)
+				"re-run to confirm; run knowledge_describe check_integrity if it persists", h.Path)
 			p.Paths = &[]string{h.Path}
 			problems = append(problems, p)
 		}

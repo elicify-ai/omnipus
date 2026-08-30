@@ -119,7 +119,7 @@ func TestRender_TheWorkedExample(t *testing.T) {
 			t.Fatalf("no NEXT block:\n%s", out)
 		}
 		tail := out[i:]
-		if !strings.Contains(tail, "vault_") {
+		if !strings.Contains(tail, "knowledge_") {
 			t.Errorf("the NEXT block contains no issuable call: %q", tail)
 		}
 	})
@@ -151,7 +151,7 @@ func TestRender_BorrowedValuesAreMarkedAsBorrowed(t *testing.T) {
 			}},
 		}},
 		Totals: []generated.VaultFindTotal{}, Problems: []generated.RecordProblem{},
-		Next: []generated.VaultFindAction{{Label: "read", Call: "vault_read path=\"garden/a.md\""}},
+		Next: []generated.VaultFindAction{{Label: "read", Call: "knowledge_read path=\"garden/a.md\""}},
 	}
 	out := Render(resp)
 	if !strings.Contains(out, "bed [[Bed 1]]: aspect south") {
@@ -316,7 +316,7 @@ func TestRender_RefusalArtifact(t *testing.T) {
 	if !strings.Contains(out, "condition") {
 		t.Errorf("the refusal does not offer the name that would have worked:\n%s", out)
 	}
-	if !strings.Contains(out, "vault_describe") {
+	if !strings.Contains(out, "knowledge_describe") {
 		t.Errorf("the refusal does not give the caller a call to make next:\n%s", out)
 	}
 }

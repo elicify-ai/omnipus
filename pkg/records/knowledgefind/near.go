@@ -164,7 +164,7 @@ func buildRelationGraph(ctx context.Context, d Deps) (*relationGraph, *RefusalEr
 	if d.Store == nil {
 		return nil, refuse(problem(generated.IndexUnavailable,
 			"the properties index is not open, so the relation graph cannot be walked",
-			"re-open the vault; run vault_describe check_integrity to see the index state"), nil)
+			"re-open the vault; run knowledge_describe check_integrity to see the index state"), nil)
 	}
 
 	g := &relationGraph{}
@@ -191,7 +191,7 @@ func buildRelationGraph(ctx context.Context, d Deps) (*relationGraph, *RefusalEr
 		})
 		if !ok {
 			// Unresolved or mistyped — D5.1's finding, reported by
-			// vault_describe check_integrity. It leads nowhere for THIS
+			// knowledge_describe check_integrity. It leads nowhere for THIS
 			// query: skipping it is not silence, because whatever record it
 			// would have connected is still reachable by every OTHER edge
 			// it has, and this response is not the one that reports broken
@@ -209,12 +209,12 @@ func buildRelationGraph(ctx context.Context, d Deps) (*relationGraph, *RefusalEr
 					"safely, and cannot do that here as one call", group3(MaxHopTraversalEdges)),
 				"there is no filter that narrows this scan — near/hops walks the whole "+
 					"workspace's relation graph regardless of near or hops; mount a narrower "+
-					"folder into this workspace, or read the neighbourhood a few vault_read "+
+					"folder into this workspace, or read the neighbourhood a few knowledge_read "+
 					"calls at a time instead"), err)
 		}
 		return nil, refuse(problem(generated.IndexUnavailable,
 			fmt.Sprintf("the properties index could not stream relations: %v", err),
-			"run vault_describe check_integrity"), err)
+			"run knowledge_describe check_integrity"), err)
 	}
 	return g, nil
 }
@@ -227,7 +227,7 @@ func buildRelationGraph(ctx context.Context, d Deps) (*relationGraph, *RefusalEr
 // exactly the way a `words` search matching nothing is zero hits and not an
 // error. It is NOT a refusal: "you spelled the note wrong" and "that note has
 // no neighbours" are indistinguishable from here, and the caller finds out
-// which by reading NEAREST INDEXED TERMS / vault_describe the same way a
+// which by reading NEAREST INDEXED TERMS / knowledge_describe the same way a
 // zero-hit word search already tells them.
 func nearReachable(ctx context.Context, d Deps, q *query) (map[string]bool, *RefusalError) {
 	if q.near == "" {
@@ -240,7 +240,7 @@ func nearReachable(ctx context.Context, d Deps, q *query) (map[string]bool, *Ref
 		// is required, not optional, to prevent for the SAME reason.
 		return nil, refuse(problem(generated.IndexUnavailable,
 			"near/hops needs relation resolution, and this vault has none wired in",
-			"re-open the vault; run vault_describe check_integrity to see the index state"), nil)
+			"re-open the vault; run knowledge_describe check_integrity to see the index state"), nil)
 	}
 	seed, ok := d.Resolve(nearWikilink(q.near))
 	if !ok {

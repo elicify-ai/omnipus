@@ -107,7 +107,7 @@ func Find(ctx context.Context, d Deps, req generated.VaultFindRequest) (generate
 	if d.Text == nil {
 		ref := refuse(problem(generated.IndexUnavailable,
 			"no text index is wired into this vault, so no answer can be checked for freshness",
-			"re-open the vault; run vault_describe check_integrity to see the index state"), nil)
+			"re-open the vault; run knowledge_describe check_integrity to see the index state"), nil)
 		return refusalResponse(req, rawEcho(req), ref), ref
 	}
 
@@ -139,7 +139,7 @@ func Find(ctx context.Context, d Deps, req generated.VaultFindRequest) (generate
 	for _, capability := range q.capabilities() {
 		if err := records.RequirePropertyIndex(capability); err != nil {
 			ref := refuse(problem(generated.IndexUnavailable, err.Error(),
-				"plain-word search and vault_read still work on this build"), err)
+				"plain-word search and knowledge_read still work on this build"), err)
 			return refusalResponse(req, echo, ref), fmt.Errorf("knowledge_find: %w", err)
 		}
 	}
@@ -171,7 +171,7 @@ func applyView(req *generated.VaultFindRequest, loader ViewLoader) *RefusalError
 	if loader == nil {
 		return refuse(problem(generated.UnknownView,
 			fmt.Sprintf("this vault has no saved views, so %q cannot be resolved", name),
-			"drop the view and write the filter directly, or define the view with vault_configure"), nil)
+			"drop the view and write the filter directly, or define the view with knowledge_configure"), nil)
 	}
 	view, ok := loader.View(name)
 	if !ok {
@@ -179,7 +179,7 @@ func applyView(req *generated.VaultFindRequest, loader ViewLoader) *RefusalError
 		sort.Strings(names)
 		p := problem(generated.UnknownView,
 			fmt.Sprintf("no saved view named %q", name),
-			"call vault_describe include=views to see the saved views in scope")
+			"call knowledge_describe include=views to see the saved views in scope")
 		if len(names) > 0 {
 			p.Reason += "; defined: " + strings.Join(names, ", ")
 			p.Permitted = &names
@@ -272,7 +272,7 @@ func findRecords(ctx context.Context, d Deps, q *query, echo string) (generated.
 		if err != nil {
 			ref := refuse(problem(generated.IndexUnavailable,
 				fmt.Sprintf("the text index could not answer %q: %v", q.words, err),
-				"re-run, or run vault_describe check_integrity to see the index state"), err)
+				"re-run, or run knowledge_describe check_integrity to see the index state"), err)
 			return refusalResponse(generated.VaultFindRequest{}, echo, ref), ref
 		}
 		if len(hits) > fanout {
@@ -327,7 +327,7 @@ func findRecords(ctx context.Context, d Deps, q *query, echo string) (generated.
 	if d.Store == nil {
 		ref := refuse(problem(generated.IndexUnavailable,
 			"the properties index is not open, so no record can be read",
-			"re-open the vault; run vault_describe check_integrity to see the index state"), nil)
+			"re-open the vault; run knowledge_describe check_integrity to see the index state"), nil)
 		return refusalResponse(generated.VaultFindRequest{}, echo, ref), ref
 	}
 
@@ -342,7 +342,7 @@ func findRecords(ctx context.Context, d Deps, q *query, echo string) (generated.
 	if err != nil {
 		ref := refuse(problem(generated.IndexUnavailable,
 			fmt.Sprintf("the properties index could not count candidates: %v", err),
-			"run vault_describe check_integrity"), err)
+			"run knowledge_describe check_integrity"), err)
 		return refusalResponse(generated.VaultFindRequest{}, echo, ref), ref
 	}
 	if total > propindex.BoundNarrowedCandidates {
@@ -394,7 +394,7 @@ func findRecords(ctx context.Context, d Deps, q *query, echo string) (generated.
 		}
 		ref := refuse(problem(generated.IndexUnavailable,
 			fmt.Sprintf("the properties index could not stream candidates: %v", err),
-			"run vault_describe check_integrity"), err)
+			"run knowledge_describe check_integrity"), err)
 		return refusalResponse(generated.VaultFindRequest{}, echo, ref), ref
 	}
 

@@ -504,7 +504,7 @@ func checkRelationEdge(
 	prop, declared := sc.Property(hit.Property)
 	if !declared {
 		// The schema no longer declares this property. That is a schema
-		// change, not a broken link, and vault_configure's cascade report is
+		// change, not a broken link, and knowledge_configure's cascade report is
 		// where it belongs — reporting it here as an unresolved relation
 		// would name the wrong fault.
 		return

@@ -44,7 +44,7 @@ const ToolName = "knowledge_find"
 // Description is the tool description, verbatim.
 const Description = `Search the vault — one call for plain words, typed filters, saved views, relations, and tasks.
 
-The loop: call vault_describe first (property names are declared per record type, and a guessed one is refused rather than silently empty). Use a saved view when one fits. Start with words; when more than a screenful matches, narrow with filter instead of paging. Then vault_read the winners.
+The loop: call knowledge_describe first (property names are declared per record type, and a guessed one is refused rather than silently empty). Use a saved view when one fits. Start with words; when more than a screenful matches, narrow with filter instead of paging. Then knowledge_read the winners.
 
 Every answer opens with its completeness verdict, names each record it could not evaluate and the fix for it, and ends with the calls to make next. An unknown property, operator or value is refused with the valid ones listed — never as zero results, so an empty answer means the vault is empty.`
 
@@ -227,7 +227,7 @@ func decodeRequest(raw []byte) (generated.VaultFindRequest, *RefusalError) {
 	if err := json.Unmarshal(raw, &req); err != nil {
 		return req, refuse(problem(generated.UnsupportedParameter,
 			fmt.Sprintf("the arguments did not match the expected shape: %v", err),
-			"check the argument types; call vault_describe if you are unsure what a property holds"), err)
+			"check the argument types; call knowledge_describe if you are unsure what a property holds"), err)
 	}
 	return req, nil
 }
@@ -249,7 +249,7 @@ func unknownParameterRemedy(unknown []string) string {
 			return "use select"
 		}
 	}
-	return "drop the argument, or call vault_describe to see what this vault supports"
+	return "drop the argument, or call knowledge_describe to see what this vault supports"
 }
 
 func quoteAll(in []string) []string {

@@ -32,13 +32,13 @@ import (
 //	                 opening move is "is there a view for this?" rather than
 //	                 "let me invent a filter" (spec §4.1.1)
 //	knowledge_find       applies one, then refines it with `filter` (spec §4.1.2)
-//	vault_configure  writes one, and must validate what it is about to write
+//	knowledge_configure  writes one, and must validate what it is about to write
 //	                 (spec §4.1.6, FR-018)
 //
 // Three readers would have become three parsers, three notions of what a
 // malformed view is, and three answers to "does this view name a property the
 // schema no longer declares". This file is the one loader; it has NO WRITER,
-// on purpose. Writing is vault_configure's, and a writer living beside the
+// on purpose. Writing is knowledge_configure's, and a writer living beside the
 // reader is how a read path acquires the ability to repair what it reads.
 //
 // THE MODEL IS THE GENERATED TYPE. generated.ViewDef comes from
@@ -61,7 +61,7 @@ const (
 	// ViewsDirName is the subdirectory of the marker directory that holds
 	// saved views. It sits beside RecordsDirName; both are the control plane
 	// (spec FR-015's restated rule), and both are written only by
-	// vault_configure.
+	// knowledge_configure.
 	ViewsDirName = "views"
 
 	// SupportedViewVersion is the only view schema_version this release
@@ -492,7 +492,7 @@ func cleanJSONFieldError(err error) error {
 // declared, and returns a rejection naming the valid alternatives when one is
 // not — FR-024's pattern, applied to a view instead of a query.
 //
-// It is exported because vault_configure needs exactly this check BEFORE it
+// It is exported because knowledge_configure needs exactly this check BEFORE it
 // writes (ViewDef.yaml: "A view naming a property or enum value that does not
 // exist is REJECTED at write time, not stored and discovered broken later"),
 // and a second implementation of the same rule would eventually disagree with

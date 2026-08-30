@@ -54,7 +54,7 @@
 // hand it to CreateNote/EditNote, which write exactly that path. An op whose
 // nature is "touches files the caller did not name" — rename, move, trash,
 // or anything in the schema/view control plane — is refused BY NAME, naming
-// the tool that owns it (vault_restructure / vault_configure), never
+// the tool that owns it (knowledge_restructure / knowledge_configure), never
 // attempted here under any argument spelling.
 //
 // License: MIT
@@ -98,15 +98,15 @@ var knowledgeEditOps = []string{opCreate, opSetProperty, opAppendSection, opLink
 // of these names here is refused, never attempted under a different
 // argument shape — see FR-070b, AC-E2, and this file's header.
 var knowledgeEditRedirect = map[string]string{
-	"rename":             "rename cascades to notes you did not name; use vault_restructure",
-	"move":               "move cascades to notes you did not name; use vault_restructure",
-	"trash":              "trash cascades to notes you did not name; use vault_restructure",
-	"restore":            "restore cascades to notes you did not name; use vault_restructure",
-	"create_record_type": "create_record_type changes what existing notes mean; use vault_configure",
-	"edit_record_type":   "edit_record_type changes what existing notes mean; use vault_configure",
-	"delete_record_type": "delete_record_type changes what existing notes mean; use vault_configure",
-	"write_view":         "write_view changes what existing notes mean; use vault_configure",
-	"delete_view":        "delete_view changes what existing notes mean; use vault_configure",
+	"rename":             "rename cascades to notes you did not name; use knowledge_restructure",
+	"move":               "move cascades to notes you did not name; use knowledge_restructure",
+	"trash":              "trash cascades to notes you did not name; use knowledge_restructure",
+	"restore":            "restore cascades to notes you did not name; use knowledge_restructure",
+	"create_record_type": "create_record_type changes what existing notes mean; use knowledge_configure",
+	"edit_record_type":   "edit_record_type changes what existing notes mean; use knowledge_configure",
+	"delete_record_type": "delete_record_type changes what existing notes mean; use knowledge_configure",
+	"write_view":         "write_view changes what existing notes mean; use knowledge_configure",
+	"delete_view":        "delete_view changes what existing notes mean; use knowledge_configure",
 }
 
 // editArgNames is every argument knowledge_edit's Parameters() declares, across
@@ -150,7 +150,7 @@ func (t *EditTool) Description() string {
 		"remove one list item, append a section, link to another note, or replace part of " +
 		"a note's body by anchor text or line range. Never touches a second file, never " +
 		"renames or deletes anything, and never changes what OTHER notes mean — use " +
-		"vault_restructure or vault_configure for those. Every write after the first on a " +
+		"knowledge_restructure or knowledge_configure for those. Every write after the first on a " +
 		"note requires the version token knowledge_read returned."
 }
 

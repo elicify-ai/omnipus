@@ -433,11 +433,11 @@ func TestKnowledgeEdit_CrossTierOps_RedirectByName(t *testing.T) {
 	a4Note(t, root, "Note.md", "---\nstatus: draft\n---\nBody.\n")
 
 	cases := []struct{ op, want string }{
-		{"rename", "vault_restructure"},
-		{"move", "vault_restructure"},
-		{"trash", "vault_restructure"},
-		{"create_record_type", "vault_configure"},
-		{"write_view", "vault_configure"},
+		{"rename", "knowledge_restructure"},
+		{"move", "knowledge_restructure"},
+		{"trash", "knowledge_restructure"},
+		{"create_record_type", "knowledge_configure"},
+		{"write_view", "knowledge_configure"},
 	}
 	for _, c := range cases {
 		res := tool.Execute(a4Ctx("mia", ws), map[string]any{
@@ -473,8 +473,8 @@ func TestKnowledgeEdit_CrossTierRedirect_FiresRegardlessOfArgumentShape(t *testi
 		"collection": "kb", "op": "rename", "path": "Note.md",
 		"property": "status", "value": "active", "expect_version": v,
 	})
-	if !res.IsError || !strings.Contains(res.ForLLM, "vault_restructure") {
-		t.Fatalf("op %q with set_property-shaped arguments must still redirect to vault_restructure, got: %s (IsError=%v)",
+	if !res.IsError || !strings.Contains(res.ForLLM, "knowledge_restructure") {
+		t.Fatalf("op %q with set_property-shaped arguments must still redirect to knowledge_restructure, got: %s (IsError=%v)",
 			"rename", res.ForLLM, res.IsError)
 	}
 	if got := a4Read(t, root, "Note.md"); got != "---\nstatus: draft\n---\nBody.\n" {

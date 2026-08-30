@@ -140,7 +140,7 @@ func buildLeaf(n generated.VaultFilterNode, schema *records.Schema) (*node, *Ref
 	if n.Property == nil || *n.Property == "" {
 		return nil, refuse(problem(generated.UnknownProperty,
 			"a filter leaf names no property",
-			"write {property, op, value}; call vault_describe to see the declared properties"), nil)
+			"write {property, op, value}; call knowledge_describe to see the declared properties"), nil)
 	}
 	if n.Op == nil || *n.Op == "" {
 		return nil, refuse(problem(generated.UnsupportedOperator,

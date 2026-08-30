@@ -189,7 +189,7 @@ func queryErrorFix(qe *records.QueryError, code generated.RecordProblemCode) str
 	}
 	switch code {
 	case generated.UnknownProperty:
-		return "call vault_describe to see the declared properties of this record type"
+		return "call knowledge_describe to see the declared properties of this record type"
 	case generated.UnknownEnumValue:
 		return "use one of the permitted values, or IS NULL to select records with no value"
 	case generated.LiteralTypeMismatch:

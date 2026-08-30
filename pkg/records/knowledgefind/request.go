@@ -231,7 +231,7 @@ func (q *query) resolveType(req generated.VaultFindRequest, set *records.SchemaS
 		sort.Strings(declared)
 		p := problem(generated.UnknownRecordType,
 			fmt.Sprintf("no record type %q is declared in this vault", q.recordType),
-			"call vault_describe to see the declared record types")
+			"call knowledge_describe to see the declared record types")
 		if len(declared) > 0 {
 			p.Permitted = &declared
 			p.Reason += "; declared: " + strings.Join(declared, ", ")
@@ -239,7 +239,7 @@ func (q *query) resolveType(req generated.VaultFindRequest, set *records.SchemaS
 			// An empty vault and a mistyped name must not read the same. Saying
 			// "declared: " with nothing after it would do exactly that.
 			p.Reason += "; this vault declares no record types at all"
-			p.Fix = str("declare one with vault_configure, or search without a type")
+			p.Fix = str("declare one with knowledge_configure, or search without a type")
 		}
 		return refuse(p, nil)
 	}
@@ -298,7 +298,7 @@ func (q *query) applyColumns(req generated.VaultFindRequest) *RefusalError {
 			p := problem(generated.UnknownProperty,
 				fmt.Sprintf("unknown property %q on record type %q; declared: %s",
 					name, q.schema.Type, strings.Join(names, ", ")),
-				"call vault_describe record_type="+q.schema.Type+" to see the declared properties")
+				"call knowledge_describe record_type="+q.schema.Type+" to see the declared properties")
 			p.Property = str(name)
 			p.Permitted = &names
 			return nil, refuse(p, nil)

@@ -34,7 +34,7 @@ import (
 //
 // The six entry points that owe this assertion are ADR-068 D15's: typed filters
 // and relation joins and grouping and aggregation in knowledge_find, check_integrity
-// in knowledge_describe, and record-type declaration in vault_configure.
+// in knowledge_describe, and record-type declaration in knowledge_configure.
 // ---------------------------------------------------------------------------
 
 // RefusalTB is the slice of *testing.T this contract needs. Declared as an

@@ -253,7 +253,7 @@ func (e *evaluation) assemble(ctx context.Context, d Deps, echo string) generate
 			t := true
 			row.Stale = &t
 			p := problem(generated.StaleRecord, s.cand.Path+": "+fresh.Reason(),
-				"re-run to confirm; run vault_describe check_integrity if it persists",
+				"re-run to confirm; run knowledge_describe check_integrity if it persists",
 				identityOf(s.cand))
 			p.Paths = &[]string{s.cand.Path}
 			e.problems = append(e.problems, p)
@@ -423,19 +423,19 @@ func nextActions(q *query, resp *generated.VaultFindResponse) []generated.VaultF
 	for _, p := range resp.Problems {
 		if p.Paths != nil && len(*p.Paths) > 0 {
 			out = append(out, generated.VaultFindAction{
-				Label: "fix", Call: `vault_read path="` + (*p.Paths)[0] + `"`,
+				Label: "fix", Call: `knowledge_read path="` + (*p.Paths)[0] + `"`,
 			})
 			break
 		}
 	}
 	if len(resp.Rows) > 0 {
 		out = append(out, generated.VaultFindAction{
-			Label: "read", Call: `vault_read path="` + resp.Rows[0].Path + `"`,
+			Label: "read", Call: `knowledge_read path="` + resp.Rows[0].Path + `"`,
 		})
 	}
 	if len(out) == 0 {
 		out = append(out, generated.VaultFindAction{
-			Label: "describe", Call: "vault_describe",
+			Label: "describe", Call: "knowledge_describe",
 		})
 	}
 	return out

@@ -488,7 +488,7 @@ func reportUnresolvedRelation(e *evaluation, s survivor, property string, unreso
 		Paths:   &[]string{s.cand.Path},
 	}
 	p.Property = str(property)
-	p.Fix = str("run vault_describe check_integrity to see why " + strings.Join(targets, ", ") + " does not resolve")
+	p.Fix = str("run knowledge_describe check_integrity to see why " + strings.Join(targets, ", ") + " does not resolve")
 	e.recordProblems([]generated.RecordProblem{p})
 }
 
