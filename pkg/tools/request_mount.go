@@ -93,7 +93,15 @@ func (t *RequestMountTool) Parameters() map[string]any {
 					"operator with the request — it is the main thing they weigh.",
 			},
 		},
-		"required": []string{"host_path", "reason"},
+		// host_path is NOT listed here even though it (or its alias, path) is
+		// always required in practice: this schema validator's "required" is
+		// a flat AND with no way to express "host_path OR path", and path is
+		// a genuine, accepted alias (see TestRequestMount_AcceptsPathAlias) —
+		// listing host_path alone would reject a path-only call before
+		// Execute's own alias-aware presence check ever runs. Execute
+		// enforces "one of host_path/path must be present" at runtime
+		// instead.
+		"required": []string{"reason"},
 	}
 }
 

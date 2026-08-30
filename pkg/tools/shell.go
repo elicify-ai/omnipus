@@ -51,7 +51,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
 
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/config"
@@ -59,7 +58,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/policy"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
-	"github.com/elicify-ai/omnipus/pkg/utils"
 )
 
 // ExecPolicyAuditor evaluates a bash command against the policy engine and
@@ -1866,13 +1864,18 @@ func truncateOutput(output string, exitCode int) string {
 	if exitCode == 0 {
 		limit = maxForegroundSuccessOutputLen
 	}
-	// utils.Truncate is rune-safe (never splits a multi-byte UTF-8 codepoint
-	// mid-character, unlike a raw output[:limit] byte slice) — see G-1 in the
-	// tool-catalog review; same bug class already fixed in
-	// BuildCompressedManifest (manifest.go).
-	runeCount := utf8.RuneCountInString(output)
+	// Rune-sliced (never splits a multi-byte UTF-8 codepoint mid-character,
+	// unlike a raw output[:limit] byte slice) — see G-1 in the tool-catalog
+	// review; same bug class already fixed in BuildCompressedManifest
+	// (manifest.go). Deliberately NOT utils.Truncate here: that helper
+	// reserves 3 of the caller's own limit chars for its own "..." marker,
+	// which would cut the body short of the exact limit AND double up with
+	// this function's own, more informative "(truncated, N more chars)"
+	// suffix below.
+	runes := []rune(output)
+	runeCount := len(runes)
 	if runeCount > limit {
-		return utils.Truncate(output, limit) + fmt.Sprintf(
+		return string(runes[:limit]) + fmt.Sprintf(
 			"\n... (truncated, %d more chars)",
 			runeCount-limit,
 		)
