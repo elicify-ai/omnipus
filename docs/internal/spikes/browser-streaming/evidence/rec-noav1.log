@@ -1,0 +1,52 @@
+[rec] codec gate ON: /av01|av1/i hard=false
+[rec] launching chrome (headless=true) profile=/var/folders/rw/h_fqz_990kj3pnxsl9qf1v9w0000gn/T/msespike-YmedKl
+[rec] CHROME_PID=17800
+[rec] connected: Chrome/151.0.7922.77
+[rec] attached page about:blank
+[ev] shim {"ev":"shim","t":0,"scope":"window","url":"about:blank","hasMS":true,"hasMMS":false,"wall":1900,"session":"8F2C5FF937EB1E80CEC11B01E924CFDC"}
+[rec] navigating -> https://www.youtube.com/watch?v=aqz-KE-bpKQ
+[ev] shim {"ev":"shim","t":0,"scope":"window","url":"https://www.youtube.com/watch?v=aqz-KE-bpKQ","hasMS":true,"hasMMS":false,"wall":2551,"session":"8F2C5FF937EB1E80CEC11B01E924CFDC"}
+[ev] duration {"ev":"duration","t":2209,"value":635,"wall":4753,"session":"8F2C5FF937EB1E80CEC11B01E924CFDC"}
+[ev] addSourceBuffer {"ev":"addSourceBuffer","t":2210,"sb":1,"ms":1,"mime":"audio/webm; codecs=\"opus\"","impl":"MediaSource","wall":4768,"session":"8F2C5FF937EB1E80CEC11B01E924CFDC"}
+[ev] addSourceBuffer {"ev":"addSourceBuffer","t":2210,"sb":2,"ms":1,"mime":"video/mp4; codecs=\"av01.0.01M.08\"","impl":"MediaSource","wall":4788,"session":"8F2C5FF937EB1E80CEC11B01E924CFDC"}
+[ev] duration {"ev":"duration","t":2480,"ms":1,"value":634.601,"wall":5009,"session":"8F2C5FF937EB1E80CEC11B01E924CFDC"}
+[rec] attached iframe 
+[src] t=0.703s rs=4 640x360 buf=[[0,12.38]] aBytes=14114 appends=46 MB=0.48
+[ev] shim {"ev":"shim","t":0,"scope":"window","url":"about:blank","hasMS":true,"hasMMS":false,"wall":6345,"session":"8F2C5FF937EB1E80CEC11B01E924CFDC"}
+[rec] attached service_worker https://www.youtube.com/sw.js
+[ev] shim {"ev":"shim","t":0,"scope":"window","url":"about:blank","hasMS":true,"hasMMS":false,"wall":7241,"session":"8F2C5FF937EB1E80CEC11B01E924CFDC"}
+[src] t=1.77s rs=4 640x360 buf=[[0,20]] aBytes=29130 appends=47 MB=0.68
+[src] t=2.773s rs=4 640x360 buf=[[0,20]] aBytes=43204 appends=47 MB=0.68
+[src] t=3.776s rs=4 640x360 buf=[[0,20]] aBytes=57030 appends=47 MB=0.68
+[src] t=4.778s rs=4 640x360 buf=[[0,27.43]] aBytes=71349 appends=154 MB=1.25
+[src] t=5.781s rs=4 640x360 buf=[[0,27.43]] aBytes=86621 appends=154 MB=1.25
+[src] t=6.782s rs=4 640x360 buf=[[0,27.43]] aBytes=102715 appends=154 MB=1.25
+[src] t=7.785s rs=4 640x360 buf=[[0,27.43]] aBytes=121159 appends=154 MB=1.25
+[src] t=8.787s rs=4 640x360 buf=[[0,40]] aBytes=140370 appends=229 MB=1.94
+[src] t=9.79s rs=4 640x360 buf=[[0,40]] aBytes=158870 appends=229 MB=1.94
+[src] t=10.791s rs=4 640x360 buf=[[0,40]] aBytes=175221 appends=229 MB=1.94
+[src] t=11.794s rs=4 640x360 buf=[[0,40]] aBytes=192696 appends=229 MB=1.94
+[src] t=12.796s rs=4 640x360 buf=[[0,40]] aBytes=210796 appends=229 MB=1.94
+[src] t=13.798s rs=4 640x360 buf=[[0,40]] aBytes=229279 appends=229 MB=1.94
+[src] t=14.8s rs=4 640x360 buf=[[0,40]] aBytes=245735 appends=229 MB=1.94
+[src] t=15.802s rs=4 640x360 buf=[[0,40]] aBytes=261364 appends=229 MB=1.94
+[src] t=16.805s rs=4 640x360 buf=[[0,52.1]] aBytes=277568 appends=263 MB=2.57
+[src] t=17.807s rs=4 640x360 buf=[[0,52.1]] aBytes=293029 appends=263 MB=2.57
+[src] t=18.809s rs=4 640x360 buf=[[0,52.1]] aBytes=308915 appends=263 MB=2.57
+[src] t=19.811s rs=4 640x360 buf=[[0,52.1]] aBytes=323510 appends=263 MB=2.57
+[src] t=20.816s rs=4 854x480 buf=[[0,52.1]] aBytes=339399 appends=263 MB=2.57
+[src] t=21.819s rs=4 854x480 buf=[[0,60]] aBytes=356576 appends=303 MB=3.01
+[src] t=22.823s rs=4 854x480 buf=[[0,60]] aBytes=372608 appends=303 MB=3.01
+[src] t=23.825s rs=4 854x480 buf=[[0,60]] aBytes=389694 appends=303 MB=3.01
+[src] t=24.827s rs=4 854x480 buf=[[0,60]] aBytes=404070 appends=303 MB=3.01
+[src] t=25.829s rs=4 854x480 buf=[[0,60]] aBytes=418222 appends=303 MB=3.01
+[src] t=26.83s rs=4 854x480 buf=[[0,60]] aBytes=433672 appends=303 MB=3.01
+[src] t=27.832s rs=4 854x480 buf=[[0,60]] aBytes=449206 appends=303 MB=3.01
+[src] t=28.834s rs=4 854x480 buf=[[0,60]] aBytes=465860 appends=303 MB=3.01
+[src] t=29.836s rs=4 854x480 buf=[[0,60]] aBytes=484089 appends=303 MB=3.01
+[src] t=30.838s rs=4 854x480 buf=[[0,60]] aBytes=501080 appends=303 MB=3.01
+[src] t=31.848s rs=4 854x480 buf=[[0,60]] aBytes=518034 appends=303 MB=3.01
+[src] t=32.85s rs=4 854x480 buf=[[0,60]] aBytes=535944 appends=303 MB=3.01
+
+[rec] DONE appends=303 bytes=3156941 (3.01 MB) missing=0
+[rec] manifest -> /private/tmp/claude-501/-Users-danielpiatkowski-AI-Agent-Workspace-omnipus-repo/8831d598-bc7d-4ea5-ba95-012aa131be37/scratchpad/spike-mse/out/yt-noav1/manifest.json

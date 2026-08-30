@@ -1,0 +1,1838 @@
+{
+ "url": "http://127.0.0.1:19732/source-dash.html?cap=2500",
+ "secs": 30,
+ "recordedAt": "2026-08-30T08:59:05.185Z",
+ "loadavg": [
+  4.58056640625,
+  4.53515625,
+  8.27001953125
+ ],
+ "cpus": 8,
+ "navToEnd_ms": 31661,
+ "totalAppends": 49,
+ "totalBytes": 17288805,
+ "missingChunkData": 0,
+ "events": [
+  {
+   "ev": "shim",
+   "t": 0,
+   "url": "about:blank",
+   "hasMS": true,
+   "hasMMS": false,
+   "wall": 1506,
+   "session": "61F87CBE03D348F96CCB3F6BB51D987D"
+  },
+  {
+   "ev": "shim",
+   "t": 0,
+   "url": "http://127.0.0.1:19732/source-dash.html?cap=2500",
+   "hasMS": true,
+   "hasMMS": false,
+   "wall": 1645,
+   "session": "61F87CBE03D348F96CCB3F6BB51D987D"
+  },
+  {
+   "ev": "duration",
+   "t": 571,
+   "value": 634.566,
+   "wall": 2172,
+   "session": "61F87CBE03D348F96CCB3F6BB51D987D"
+  },
+  {
+   "ev": "addSourceBuffer",
+   "t": 578,
+   "sb": 1,
+   "ms": 1,
+   "mime": "video/mp4;codecs=\"avc1.640015\"",
+   "impl": "MediaSource",
+   "wall": 2178,
+   "session": "61F87CBE03D348F96CCB3F6BB51D987D"
+  },
+  {
+   "ev": "prop",
+   "t": 578,
+   "sb": 1,
+   "prop": "appendWindowStart",
+   "value": 0,
+   "wall": 2179,
+   "session": "61F87CBE03D348F96CCB3F6BB51D987D"
+  },
+  {
+   "ev": "prop",
+   "t": 578,
+   "sb": 1,
+   "prop": "appendWindowEnd",
+   "value": 634.576,
+   "wall": 2179,
+   "session": "61F87CBE03D348F96CCB3F6BB51D987D"
+  },
+  {
+   "ev": "prop",
+   "t": 578,
+   "sb": 1,
+   "prop": "appendWindowStart",
+   "value": 0,
+   "wall": 2179,
+   "session": "61F87CBE03D348F96CCB3F6BB51D987D"
+  },
+  {
+   "ev": "addSourceBuffer",
+   "t": 578,
+   "sb": 2,
+   "ms": 1,
+   "mime": "audio/mp4;codecs=\"mp4a.40.5\"",
+   "impl": "MediaSource",
+   "wall": 2179,
+   "session": "61F87CBE03D348F96CCB3F6BB51D987D"
+  },
+  {
+   "ev": "prop",
+   "t": 578,
+   "sb": 2,
+   "prop": "appendWindowStart",
+   "value": 0,
+   "wall": 2179,
+   "session": "61F87CBE03D348F96CCB3F6BB51D987D"
+  },
+  {
+   "ev": "prop",
+   "t": 578,
+   "sb": 2,
+   "prop": "appendWindowEnd",
+   "value": 634.576,
+   "wall": 2180,
+   "session": "61F87CBE03D348F96CCB3F6BB51D987D"
+  },
+  {
+   "ev": "prop",
+   "t": 578,
+   "sb": 2,
+   "prop": "appendWindowStart",
+   "value": 0,
+   "wall": 2180,
+   "session": "61F87CBE03D348F96CCB3F6BB51D987D"
+  },
+  {
+   "ev": "append",
+   "id": 1,
+   "t": 706,
+   "sb": 1,
+   "bytes": 705,
+   "mime": "video/mp4;codecs=\"avc1.640015\"",
+   "mode": "segments",
+   "tsOffset": 0,
+   "awStart": 0,
+   "awEnd": 634.576,
+   "msDuration": 634.566,
+   "buffered": [],
+   "wall": 2307,
+   "session": "61F87CBE03D348F96CCB3F6BB51D987D",
+   "file": "chunks/00001.bin",
+   "kind": "INIT"
+  },
+  {
+   "ev": "append",
+   "id": 2,
+   "t": 827,
+   "sb": 2,
+   "bytes": 633,
+   "mime": "audio/mp4;codecs=\"mp4a.40.5\"",
+   "mode": "segments",
+   "tsOffset": 0,
+   "awStart": 0,
+   "awEnd": 634.576,
+   "msDuration": 634.566,
+   "buffered": [],
+   "wall": 2428,
+   "session": "61F87CBE03D348F96CCB3F6BB51D987D",
+   "file": "chunks/00002.bin",
+   "kind": "INIT"
+  },
+  {
+   "ev": "append",
+   "id": 3,
+   "t": 977,
+   "sb": 2,
+   "bytes": 33632,
+   "mime": "audio/mp4;codecs=\"mp4a.40.5\"",
+   "mode": "segments",
+   "tsOffset": 0,
+   "awStart": 0,
+   "awEnd": 634.576,
+   "msDuration": 634.566,
+   "buffered": [],
+   "wall": 2578,
+   "session": "61F87CBE03D348F96CCB3F6BB51D987D",
+   "file": "chunks/00003.bin",
+   "kind": "BOUNDARY"
+  },
+  {
+   "ev": "append",
+   "id": 4,
+   "t": 1224,
+   "sb": 1,
+   "bytes": 252871,
+   "mime": "video/mp4;codecs=\"avc1.640015\"",
+   "mode": "segments",
+   "tsOffset": 0,
+   "awStart": 0,
+   "awEnd": 634.576,
+   "msDuration": 634.566,
+   "buffered": [],
+   "wall": 2824,
+   "session": "61F87CBE03D348F96CCB3F6BB51D987D",
+   "file": "chunks/00004.bin",
+   "kind": "BOUNDARY"
+  },
+  {
+   "ev": "append",
+   "id": 5,
+   "t": 1374,
+   "sb": 1,
+   "bytes": 705,
+   "mime": "video/mp4;codecs=\"avc1.640015\"",
+   "mode": "segments",
+   "tsOffset": 0,
+   "awStart": 0,
+   "awEnd": null,
+   "msDuration": 634.566,
+   "buffered": [
+    [
+     0,
+     3.999999
+    ]
+   ],
+   "wall": 2975,
+   "session": "61F87CBE03D348F96CCB3F6BB51D987D",
+   "file": "chunks/00005.bin",
+   "kind": "INIT"
+  },
+  {
+   "ev": "append",
+   "id": 6,
+   "t": 1654,
+   "sb": 2,
+   "bytes": 33409,
+   "mime": "audio/mp4;codecs=\"mp4a.40.5\"",
+   "mode": "segments",
+   "tsOffset": 0,
+   "awStart": 0,
+   "awEnd": 634.576,
+   "msDuration": 634.566,
+   "buffered": [
+    [
+     0,
+     4.010666
+    ]
+   ],
+   "wall": 3260,
+   "session": "61F87CBE03D348F96CCB3F6BB51D987D",
+   "file": "chunks/00006.bin",
+   "kind": "BOUNDARY"
+  },
+  {
+   "ev": "append",
+   "id": 7,
+   "t": 1717,
+   "sb": 1,
+   "bytes": 528009,
+   "mime": "video/mp4;codecs=\"avc1.640015\"",
+   "mode": "segments",
+   "tsOffset": 0,
+   "awStart": 0,
+   "awEnd": null,
+   "msDuration": 634.566,
+   "buffered": [
+    [
+     0,
+     3.999999
+    ]
+   ],
+   "wall": 3323,
+   "session": "61F87CBE03D348F96CCB3F6BB51D987D",
+   "file": "chunks/00007.bin",
+   "kind": "BOUNDARY"
+  },
+  {
+   "ev": "append",
+   "id": 8,
+   "t": 2028,
+   "sb": 1,
+   "bytes": 869475,
+   "mime": "video/mp4;codecs=\"avc1.640015\"",
+   "mode": "segments",
+   "tsOffset": 0,
+   "awStart": 0,
+   "awEnd": null,
+   "msDuration": 634.566,
+   "buffered": [
+    [
+     0,
+     3.999999
+    ]
+   ],
+   "wall": 3630,
+   "session": "61F87CBE03D348F96CCB3F6BB51D987D",
+   "file": "chunks/00008.bin",
+   "kind": "BOUNDARY"
+  },
+  {
+   "ev": "append",
+   "id": 9,
+   "t": 2265,
+   "sb": 1,
+   "bytes": 721563,
+   "mime": "video/mp4;codecs=\"avc1.640015\"",
+   "mode": "segments",
+   "tsOffset": 0,
+   "awStart": 0,
+   "awEnd": null,
+   "msDuration": 634.566,
+   "buffered": [
+    [
+     0,
+     7.999999
+    ]
+   ],
+   "wall": 3866,
+   "session": "61F87CBE03D348F96CCB3F6BB51D987D",
+   "file": "chunks/00009.bin",
+   "kind": "BOUNDARY"
+  },
+  {
+   "ev": "append",
+   "id": 10,
+   "t": 2318,
+   "sb": 2,
+   "bytes": 33405,
+   "mime": "audio/mp4;codecs=\"mp4a.40.5\"",
+   "mode": "segments",
+   "tsOffset": 0,
+   "awStart": 0,
+   "awEnd": 634.576,
+   "msDuration": 634.566,
+   "buffered": [
+    [
+     0,
+     8.021332
+    ]
+   ],
+   "wall": 3931,
+   "session": "61F87CBE03D348F96CCB3F6BB51D987D",
+   "file": "chunks/00010.bin",
+   "kind": "BOUNDARY"
+  },
+  {
+   "ev": "append",
+   "id": 11,
+   "t": 2463,
+   "sb": 1,
+   "bytes": 738226,
+   "mime": "video/mp4;codecs=\"avc1.640015\"",
+   "mode": "segments",
+   "tsOffset": 0,
+   "awStart": 0,
+   "awEnd": null,
+   "msDuration": 634.566,
+   "buffered": [
+    [
+     0,
+     11.999999
+    ]
+   ],
+   "wall": 4064,
+   "session": "61F87CBE03D348F96CCB3F6BB51D987D",
+   "file": "chunks/00011.bin",
+   "kind": "BOUNDARY"
+  },
+  {
+   "ev": "append",
+   "id": 12,
+   "t": 2489,
+   "sb": 2,
+   "bytes": 33379,
+   "mime": "audio/mp4;codecs=\"mp4a.40.5\"",
+   "mode": "segments",
+   "tsOffset": 0,
+   "awStart": 0,
+   "awEnd": 634.576,
+   "msDuration": 634.566,
+   "buffered": [
+    [
+     0,
+     12.031999
+    ]
+   ],
+   "wall": 4123,
+   "session": "61F87CBE03D348F96CCB3F6BB51D987D",
+   "file": "chunks/00012.bin",
+   "kind": "BOUNDARY"
+  },
+  {
+   "ev": "append",
+   "id": 13,
+   "t": 3046,
+   "sb": 1,
+   "bytes": 764975,
+   "mime": "video/mp4;codecs=\"avc1.640015\"",
+   "mode": "segments",
+   "tsOffset": 0,
+   "awStart": 0,
+   "awEnd": null,
+   "msDuration": 634.566,
+   "buffered": [
+    [
+     0,
+     15.999999
+    ]
+   ],
+   "wall": 4646,
+   "session": "61F87CBE03D348F96CCB3F6BB51D987D",
+   "file": "chunks/00013.bin",
+   "kind": "BOUNDARY"
+  },
+  {
+   "ev": "append",
+   "id": 14,
+   "t": 3132,
+   "sb": 2,
+   "bytes": 33335,
+   "mime": "audio/mp4;codecs=\"mp4a.40.5\"",
+   "mode": "segments",
+   "tsOffset": 0,
+   "awStart": 0,
+   "awEnd": 634.576,
+   "msDuration": 634.566,
+   "buffered": [
+    [
+     0,
+     16.042666
+    ]
+   ],
+   "wall": 4733,
+   "session": "61F87CBE03D348F96CCB3F6BB51D987D",
+   "file": "chunks/00014.bin",
+   "kind": "BOUNDARY"
+  },
+  {
+   "ev": "append",
+   "id": 15,
+   "t": 3252,
+   "sb": 1,
+   "bytes": 588907,
+   "mime": "video/mp4;codecs=\"avc1.640015\"",
+   "mode": "segments",
+   "tsOffset": 0,
+   "awStart": 0,
+   "awEnd": null,
+   "msDuration": 634.566,
+   "buffered": [
+    [
+     0,
+     19.999999
+    ]
+   ],
+   "wall": 4853,
+   "session": "61F87CBE03D348F96CCB3F6BB51D987D",
+   "file": "chunks/00015.bin",
+   "kind": "BOUNDARY"
+  },
+  {
+   "ev": "append",
+   "id": 16,
+   "t": 3265,
+   "sb": 2,
+   "bytes": 33508,
+   "mime": "audio/mp4;codecs=\"mp4a.40.5\"",
+   "mode": "segments",
+   "tsOffset": 0,
+   "awStart": 0,
+   "awEnd": 634.576,
+   "msDuration": 634.566,
+   "buffered": [
+    [
+     0,
+     20.053332
+    ]
+   ],
+   "wall": 4894,
+   "session": "61F87CBE03D348F96CCB3F6BB51D987D",
+   "file": "chunks/00016.bin",
+   "kind": "BOUNDARY"
+  },
+  {
+   "ev": "append",
+   "id": 17,
+   "t": 3465,
+   "sb": 1,
+   "bytes": 821979,
+   "mime": "video/mp4;codecs=\"avc1.640015\"",
+   "mode": "segments",
+   "tsOffset": 0,
+   "awStart": 0,
+   "awEnd": null,
+   "msDuration": 634.566,
+   "buffered": [
+    [
+     0,
+     23.999999
+    ]
+   ],
+   "wall": 5066,
+   "session": "61F87CBE03D348F96CCB3F6BB51D987D",
+   "file": "chunks/00017.bin",
+   "kind": "BOUNDARY"
+  },
+  {
+   "ev": "append",
+   "id": 18,
+   "t": 3698,
+   "sb": 1,
+   "bytes": 800143,
+   "mime": "video/mp4;codecs=\"avc1.640015\"",
+   "mode": "segments",
+   "tsOffset": 0,
+   "awStart": 0,
+   "awEnd": null,
+   "msDuration": 634.566,
+   "buffered": [
+    [
+     0,
+     27.999999
+    ]
+   ],
+   "wall": 5299,
+   "session": "61F87CBE03D348F96CCB3F6BB51D987D",
+   "file": "chunks/00018.bin",
+   "kind": "BOUNDARY"
+  },
+  {
+   "ev": "append",
+   "id": 19,
+   "t": 3905,
+   "sb": 1,
+   "bytes": 755377,
+   "mime": "video/mp4;codecs=\"avc1.640015\"",
+   "mode": "segments",
+   "tsOffset": 0,
+   "awStart": 0,
+   "awEnd": null,
+   "msDuration": 634.566,
+   "buffered": [
+    [
+     0,
+     31.999999
+    ]
+   ],
+   "wall": 5506,
+   "session": "61F87CBE03D348F96CCB3F6BB51D987D",
+   "file": "chunks/00019.bin",
+   "kind": "BOUNDARY"
+  },
+  {
+   "ev": "append",
+   "id": 20,
+   "t": 3931,
+   "sb": 2,
+   "bytes": 33307,
+   "mime": "audio/mp4;codecs=\"mp4a.40.5\"",
+   "mode": "segments",
+   "tsOffset": 0,
+   "awStart": 0,
+   "awEnd": 634.576,
+   "msDuration": 634.566,
+   "buffered": [
+    [
+     0,
+     24.063999
+    ]
+   ],
+   "wall": 5566,
+   "session": "61F87CBE03D348F96CCB3F6BB51D987D",
+   "file": "chunks/00020.bin",
+   "kind": "BOUNDARY"
+  },
+  {
+   "ev": "append",
+   "id": 21,
+   "t": 4092,
+   "sb": 2,
+   "bytes": 33327,
+   "mime": "audio/mp4;codecs=\"mp4a.40.5\"",
+   "mode": "segments",
+   "tsOffset": 0,
+   "awStart": 0,
+   "awEnd": 634.576,
+   "msDuration": 634.566,
+   "buffered": [
+    [
+     0,
+     28.074666
+    ]
+   ],
+   "wall": 5693,
+   "session": "61F87CBE03D348F96CCB3F6BB51D987D",
+   "file": "chunks/00021.bin",
+   "kind": "BOUNDARY"
+  },
+  {
+   "ev": "append",
+   "id": 22,
+   "t": 4153,
+   "sb": 1,
+   "bytes": 755174,
+   "mime": "video/mp4;codecs=\"avc1.640015\"",
+   "mode": "segments",
+   "tsOffset": 0,
+   "awStart": 0,
+   "awEnd": null,
+   "msDuration": 634.566,
+   "buffered": [
+    [
+     0,
+     35.999999
+    ]
+   ],
+   "wall": 5754,
+   "session": "61F87CBE03D348F96CCB3F6BB51D987D",
+   "file": "chunks/00022.bin",
+   "kind": "BOUNDARY"
+  },
+  {
+   "ev": "append",
+   "id": 23,
+   "t": 4224,
+   "sb": 2,
+   "bytes": 33358,
+   "mime": "audio/mp4;codecs=\"mp4a.40.5\"",
+   "mode": "segments",
+   "tsOffset": 0,
+   "awStart": 0,
+   "awEnd": 634.576,
+   "msDuration": 634.566,
+   "buffered": [
+    [
+     0,
+     32.085332
+    ]
+   ],
+   "wall": 5825,
+   "session": "61F87CBE03D348F96CCB3F6BB51D987D",
+   "file": "chunks/00023.bin",
+   "kind": "BOUNDARY"
+  },
+  {
+   "ev": "append",
+   "id": 24,
+   "t": 4359,
+   "sb": 1,
+   "bytes": 646516,
+   "mime": "video/mp4;codecs=\"avc1.640015\"",
+   "mode": "segments",
+   "tsOffset": 0,
+   "awStart": 0,
+   "awEnd": null,
+   "msDuration": 634.566,
+   "buffered": [
+    [
+     0,
+     39.999999
+    ]
+   ],
+   "wall": 5959,
+   "session": "61F87CBE03D348F96CCB3F6BB51D987D",
+   "file": "chunks/00024.bin",
+   "kind": "BOUNDARY"
+  },
+  {
+   "ev": "append",
+   "id": 25,
+   "t": 4374,
+   "sb": 2,
+   "bytes": 33463,
+   "mime": "audio/mp4;codecs=\"mp4a.40.5\"",
+   "mode": "segments",
+   "tsOffset": 0,
+   "awStart": 0,
+   "awEnd": 634.576,
+   "msDuration": 634.566,
+   "buffered": [
+    [
+     0,
+     36.095999
+    ]
+   ],
+   "wall": 6001,
+   "session": "61F87CBE03D348F96CCB3F6BB51D987D",
+   "file": "chunks/00025.bin",
+   "kind": "BOUNDARY"
+  },
+  {
+   "ev": "append",
+   "id": 26,
+   "t": 4502,
+   "sb": 2,
+   "bytes": 33302,
+   "mime": "audio/mp4;codecs=\"mp4a.40.5\"",
+   "mode": "segments",
+   "tsOffset": 0,
+   "awStart": 0,
+   "awEnd": 634.576,
+   "msDuration": 634.566,
+   "buffered": [
+    [
+     0,
+     40.106666
+    ]
+   ],
+   "wall": 6103,
+   "session": "61F87CBE03D348F96CCB3F6BB51D987D",
+   "file": "chunks/00026.bin",
+   "kind": "BOUNDARY"
+  },
+  {
+   "ev": "append",
+   "id": 27,
+   "t": 4568,
+   "sb": 1,
+   "bytes": 731817,
+   "mime": "video/mp4;codecs=\"avc1.640015\"",
+   "mode": "segments",
+   "tsOffset": 0,
+   "awStart": 0,
+   "awEnd": null,
+   "msDuration": 634.566,
+   "buffered": [
+    [
+     0,
+     43.999999
+    ]
+   ],
+   "wall": 6169,
+   "session": "61F87CBE03D348F96CCB3F6BB51D987D",
+   "file": "chunks/00027.bin",
+   "kind": "BOUNDARY"
+  },
+  {
+   "ev": "append",
+   "id": 28,
+   "t": 4642,
+   "sb": 2,
+   "bytes": 33497,
+   "mime": "audio/mp4;codecs=\"mp4a.40.5\"",
+   "mode": "segments",
+   "tsOffset": 0,
+   "awStart": 0,
+   "awEnd": 634.576,
+   "msDuration": 634.566,
+   "buffered": [
+    [
+     0,
+     44.117332
+    ]
+   ],
+   "wall": 6242,
+   "session": "61F87CBE03D348F96CCB3F6BB51D987D",
+   "file": "chunks/00028.bin",
+   "kind": "BOUNDARY"
+  },
+  {
+   "ev": "append",
+   "id": 29,
+   "t": 4791,
+   "sb": 2,
+   "bytes": 33305,
+   "mime": "audio/mp4;codecs=\"mp4a.40.5\"",
+   "mode": "segments",
+   "tsOffset": 0,
+   "awStart": 0,
+   "awEnd": 634.576,
+   "msDuration": 634.566,
+   "buffered": [
+    [
+     0,
+     48.127999
+    ]
+   ],
+   "wall": 6392,
+   "session": "61F87CBE03D348F96CCB3F6BB51D987D",
+   "file": "chunks/00029.bin",
+   "kind": "BOUNDARY"
+  },
+  {
+   "ev": "append",
+   "id": 30,
+   "t": 4793,
+   "sb": 1,
+   "bytes": 739285,
+   "mime": "video/mp4;codecs=\"avc1.640015\"",
+   "mode": "segments",
+   "tsOffset": 0,
+   "awStart": 0,
+   "awEnd": null,
+   "msDuration": 634.566,
+   "buffered": [
+    [
+     0,
+     47.999999
+    ]
+   ],
+   "wall": 6395,
+   "session": "61F87CBE03D348F96CCB3F6BB51D987D",
+   "file": "chunks/00030.bin",
+   "kind": "BOUNDARY"
+  },
+  {
+   "ev": "append",
+   "id": 31,
+   "t": 5038,
+   "sb": 1,
+   "bytes": 861911,
+   "mime": "video/mp4;codecs=\"avc1.640015\"",
+   "mode": "segments",
+   "tsOffset": 0,
+   "awStart": 0,
+   "awEnd": null,
+   "msDuration": 634.566,
+   "buffered": [
+    [
+     0,
+     51.999999
+    ]
+   ],
+   "wall": 6639,
+   "session": "61F87CBE03D348F96CCB3F6BB51D987D",
+   "file": "chunks/00031.bin",
+   "kind": "BOUNDARY"
+  },
+  {
+   "ev": "append",
+   "id": 32,
+   "t": 5388,
+   "sb": 1,
+   "bytes": 719819,
+   "mime": "video/mp4;codecs=\"avc1.640015\"",
+   "mode": "segments",
+   "tsOffset": 0,
+   "awStart": 0,
+   "awEnd": null,
+   "msDuration": 634.566,
+   "buffered": [
+    [
+     0,
+     55.999999
+    ]
+   ],
+   "wall": 6989,
+   "session": "61F87CBE03D348F96CCB3F6BB51D987D",
+   "file": "chunks/00032.bin",
+   "kind": "BOUNDARY"
+  },
+  {
+   "ev": "append",
+   "id": 33,
+   "t": 5506,
+   "sb": 2,
+   "bytes": 33524,
+   "mime": "audio/mp4;codecs=\"mp4a.40.5\"",
+   "mode": "segments",
+   "tsOffset": 0,
+   "awStart": 0,
+   "awEnd": 634.576,
+   "msDuration": 634.566,
+   "buffered": [
+    [
+     0,
+     52.138666
+    ]
+   ],
+   "wall": 7107,
+   "session": "61F87CBE03D348F96CCB3F6BB51D987D",
+   "file": "chunks/00033.bin",
+   "kind": "BOUNDARY"
+  },
+  {
+   "ev": "append",
+   "id": 34,
+   "t": 5602,
+   "sb": 1,
+   "bytes": 647487,
+   "mime": "video/mp4;codecs=\"avc1.640015\"",
+   "mode": "segments",
+   "tsOffset": 0,
+   "awStart": 0,
+   "awEnd": null,
+   "msDuration": 634.566,
+   "buffered": [
+    [
+     0,
+     59.999999
+    ]
+   ],
+   "wall": 7203,
+   "session": "61F87CBE03D348F96CCB3F6BB51D987D",
+   "file": "chunks/00034.bin",
+   "kind": "BOUNDARY"
+  },
+  {
+   "ev": "append",
+   "id": 35,
+   "t": 5634,
+   "sb": 2,
+   "bytes": 33229,
+   "mime": "audio/mp4;codecs=\"mp4a.40.5\"",
+   "mode": "segments",
+   "tsOffset": 0,
+   "awStart": 0,
+   "awEnd": 634.576,
+   "msDuration": 634.566,
+   "buffered": [
+    [
+     0,
+     56.149332
+    ]
+   ],
+   "wall": 7250,
+   "session": "61F87CBE03D348F96CCB3F6BB51D987D",
+   "file": "chunks/00035.bin",
+   "kind": "BOUNDARY"
+  },
+  {
+   "ev": "append",
+   "id": 36,
+   "t": 5783,
+   "sb": 2,
+   "bytes": 33289,
+   "mime": "audio/mp4;codecs=\"mp4a.40.5\"",
+   "mode": "segments",
+   "tsOffset": 0,
+   "awStart": 0,
+   "awEnd": 634.576,
+   "msDuration": 634.566,
+   "buffered": [
+    [
+     0,
+     60.159999
+    ]
+   ],
+   "wall": 7384,
+   "session": "61F87CBE03D348F96CCB3F6BB51D987D",
+   "file": "chunks/00036.bin",
+   "kind": "BOUNDARY"
+  },
+  {
+   "ev": "append",
+   "id": 37,
+   "t": 5913,
+   "sb": 2,
+   "bytes": 33319,
+   "mime": "audio/mp4;codecs=\"mp4a.40.5\"",
+   "mode": "segments",
+   "tsOffset": 0,
+   "awStart": 0,
+   "awEnd": 634.576,
+   "msDuration": 634.566,
+   "buffered": [
+    [
+     0,
+     64.170666
+    ]
+   ],
+   "wall": 7514,
+   "session": "61F87CBE03D348F96CCB3F6BB51D987D",
+   "file": "chunks/00037.bin",
+   "kind": "BOUNDARY"
+  },
+  {
+   "ev": "append",
+   "id": 38,
+   "t": 9876,
+   "sb": 1,
+   "bytes": 749932,
+   "mime": "video/mp4;codecs=\"avc1.640015\"",
+   "mode": "segments",
+   "tsOffset": 0,
+   "awStart": 0,
+   "awEnd": null,
+   "msDuration": 634.566,
+   "buffered": [
+    [
+     0,
+     63.999999
+    ]
+   ],
+   "wall": 11477,
+   "session": "61F87CBE03D348F96CCB3F6BB51D987D",
+   "file": "chunks/00038.bin",
+   "kind": "BOUNDARY"
+  },
+  {
+   "ev": "append",
+   "id": 39,
+   "t": 10048,
+   "sb": 2,
+   "bytes": 33461,
+   "mime": "audio/mp4;codecs=\"mp4a.40.5\"",
+   "mode": "segments",
+   "tsOffset": 0,
+   "awStart": 0,
+   "awEnd": 634.576,
+   "msDuration": 634.566,
+   "buffered": [
+    [
+     0,
+     68.181332
+    ]
+   ],
+   "wall": 11649,
+   "session": "61F87CBE03D348F96CCB3F6BB51D987D",
+   "file": "chunks/00039.bin",
+   "kind": "BOUNDARY"
+  },
+  {
+   "ev": "append",
+   "id": 40,
+   "t": 14242,
+   "sb": 1,
+   "bytes": 909114,
+   "mime": "video/mp4;codecs=\"avc1.640015\"",
+   "mode": "segments",
+   "tsOffset": 0,
+   "awStart": 0,
+   "awEnd": null,
+   "msDuration": 634.566,
+   "buffered": [
+    [
+     0,
+     67.999999
+    ]
+   ],
+   "wall": 15843,
+   "session": "61F87CBE03D348F96CCB3F6BB51D987D",
+   "file": "chunks/00040.bin",
+   "kind": "BOUNDARY"
+  },
+  {
+   "ev": "append",
+   "id": 41,
+   "t": 14684,
+   "sb": 2,
+   "bytes": 33304,
+   "mime": "audio/mp4;codecs=\"mp4a.40.5\"",
+   "mode": "segments",
+   "tsOffset": 0,
+   "awStart": 0,
+   "awEnd": 634.576,
+   "msDuration": 634.566,
+   "buffered": [
+    [
+     0,
+     72.191999
+    ]
+   ],
+   "wall": 16285,
+   "session": "61F87CBE03D348F96CCB3F6BB51D987D",
+   "file": "chunks/00041.bin",
+   "kind": "BOUNDARY"
+  },
+  {
+   "ev": "append",
+   "id": 42,
+   "t": 17986,
+   "sb": 1,
+   "bytes": 655349,
+   "mime": "video/mp4;codecs=\"avc1.640015\"",
+   "mode": "segments",
+   "tsOffset": 0,
+   "awStart": 0,
+   "awEnd": null,
+   "msDuration": 634.566,
+   "buffered": [
+    [
+     0,
+     71.999999
+    ]
+   ],
+   "wall": 19587,
+   "session": "61F87CBE03D348F96CCB3F6BB51D987D",
+   "file": "chunks/00042.bin",
+   "kind": "BOUNDARY"
+  },
+  {
+   "ev": "append",
+   "id": 43,
+   "t": 18353,
+   "sb": 2,
+   "bytes": 33452,
+   "mime": "audio/mp4;codecs=\"mp4a.40.5\"",
+   "mode": "segments",
+   "tsOffset": 0,
+   "awStart": 0,
+   "awEnd": 634.576,
+   "msDuration": 634.566,
+   "buffered": [
+    [
+     0,
+     76.202666
+    ]
+   ],
+   "wall": 19954,
+   "session": "61F87CBE03D348F96CCB3F6BB51D987D",
+   "file": "chunks/00043.bin",
+   "kind": "BOUNDARY"
+  },
+  {
+   "ev": "append",
+   "id": 44,
+   "t": 22243,
+   "sb": 1,
+   "bytes": 850775,
+   "mime": "video/mp4;codecs=\"avc1.640015\"",
+   "mode": "segments",
+   "tsOffset": 0,
+   "awStart": 0,
+   "awEnd": null,
+   "msDuration": 634.566,
+   "buffered": [
+    [
+     0,
+     75.999999
+    ]
+   ],
+   "wall": 23844,
+   "session": "61F87CBE03D348F96CCB3F6BB51D987D",
+   "file": "chunks/00044.bin",
+   "kind": "BOUNDARY"
+  },
+  {
+   "ev": "append",
+   "id": 45,
+   "t": 22498,
+   "sb": 2,
+   "bytes": 33300,
+   "mime": "audio/mp4;codecs=\"mp4a.40.5\"",
+   "mode": "segments",
+   "tsOffset": 0,
+   "awStart": 0,
+   "awEnd": 634.576,
+   "msDuration": 634.566,
+   "buffered": [
+    [
+     0,
+     80.213332
+    ]
+   ],
+   "wall": 24098,
+   "session": "61F87CBE03D348F96CCB3F6BB51D987D",
+   "file": "chunks/00045.bin",
+   "kind": "BOUNDARY"
+  },
+  {
+   "ev": "append",
+   "id": 46,
+   "t": 26084,
+   "sb": 1,
+   "bytes": 765252,
+   "mime": "video/mp4;codecs=\"avc1.640015\"",
+   "mode": "segments",
+   "tsOffset": 0,
+   "awStart": 0,
+   "awEnd": null,
+   "msDuration": 634.566,
+   "buffered": [
+    [
+     0,
+     79.999999
+    ]
+   ],
+   "wall": 27684,
+   "session": "61F87CBE03D348F96CCB3F6BB51D987D",
+   "file": "chunks/00046.bin",
+   "kind": "BOUNDARY"
+  },
+  {
+   "ev": "append",
+   "id": 47,
+   "t": 26646,
+   "sb": 2,
+   "bytes": 33474,
+   "mime": "audio/mp4;codecs=\"mp4a.40.5\"",
+   "mode": "segments",
+   "tsOffset": 0,
+   "awStart": 0,
+   "awEnd": 634.576,
+   "msDuration": 634.566,
+   "buffered": [
+    [
+     0,
+     84.223999
+    ]
+   ],
+   "wall": 28247,
+   "session": "61F87CBE03D348F96CCB3F6BB51D987D",
+   "file": "chunks/00047.bin",
+   "kind": "BOUNDARY"
+  },
+  {
+   "ev": "append",
+   "id": 48,
+   "t": 29841,
+   "sb": 1,
+   "bytes": 644926,
+   "mime": "video/mp4;codecs=\"avc1.640015\"",
+   "mode": "segments",
+   "tsOffset": 0,
+   "awStart": 0,
+   "awEnd": null,
+   "msDuration": 634.566,
+   "buffered": [
+    [
+     0,
+     83.999999
+    ]
+   ],
+   "wall": 31442,
+   "session": "61F87CBE03D348F96CCB3F6BB51D987D",
+   "file": "chunks/00048.bin",
+   "kind": "BOUNDARY"
+  },
+  {
+   "ev": "append",
+   "id": 49,
+   "t": 30289,
+   "sb": 2,
+   "bytes": 33301,
+   "mime": "audio/mp4;codecs=\"mp4a.40.5\"",
+   "mode": "segments",
+   "tsOffset": 0,
+   "awStart": 0,
+   "awEnd": 634.576,
+   "msDuration": 634.566,
+   "buffered": [
+    [
+     0,
+     88.234666
+    ]
+   ],
+   "wall": 31890,
+   "session": "61F87CBE03D348F96CCB3F6BB51D987D",
+   "file": "chunks/00049.bin",
+   "kind": "BOUNDARY"
+  },
+  {
+   "ev": "remove",
+   "t": 30709,
+   "sb": 1,
+   "start": 0,
+   "end": 9.337039,
+   "wall": 32310,
+   "session": "61F87CBE03D348F96CCB3F6BB51D987D"
+  },
+  {
+   "ev": "remove",
+   "t": 30709,
+   "sb": 2,
+   "start": 0,
+   "end": 9.337039,
+   "wall": 32310,
+   "session": "61F87CBE03D348F96CCB3F6BB51D987D"
+  }
+ ],
+ "samples": [
+  {
+   "ct": 0,
+   "rs": 1,
+   "ns": 2,
+   "pa": false,
+   "w": 480,
+   "h": 270,
+   "dur": 634.566,
+   "buf": [],
+   "dropped": 0,
+   "totalFrames": 0,
+   "abytes": 2501,
+   "vbytes": 0,
+   "wall": 2608
+  },
+  {
+   "ct": 0.636,
+   "rs": 4,
+   "ns": 2,
+   "pa": false,
+   "w": 480,
+   "h": 270,
+   "dur": 634.566,
+   "buf": [
+    [
+     0,
+     4
+    ]
+   ],
+   "dropped": 0,
+   "totalFrames": 24,
+   "abytes": 8427,
+   "vbytes": 60916,
+   "wall": 3611
+  },
+  {
+   "ct": 1.639,
+   "rs": 4,
+   "ns": 2,
+   "pa": false,
+   "w": 480,
+   "h": 270,
+   "dur": 634.566,
+   "buf": [
+    [
+     0,
+     16
+    ]
+   ],
+   "dropped": 0,
+   "totalFrames": 54,
+   "abytes": 16521,
+   "vbytes": 112083,
+   "wall": 4613
+  },
+  {
+   "ct": 2.64,
+   "rs": 4,
+   "ns": 2,
+   "pa": false,
+   "w": 768,
+   "h": 432,
+   "dur": 634.566,
+   "buf": [
+    [
+     0,
+     28.07
+    ]
+   ],
+   "dropped": 0,
+   "totalFrames": 84,
+   "abytes": 24336,
+   "vbytes": 224224,
+   "wall": 5615
+  },
+  {
+   "ct": 3.642,
+   "rs": 4,
+   "ns": 2,
+   "pa": false,
+   "w": 768,
+   "h": 432,
+   "dur": 634.566,
+   "buf": [
+    [
+     0,
+     52
+    ]
+   ],
+   "dropped": 0,
+   "totalFrames": 114,
+   "abytes": 32657,
+   "vbytes": 419803,
+   "wall": 6616
+  },
+  {
+   "ct": 4.645,
+   "rs": 4,
+   "ns": 2,
+   "pa": false,
+   "w": 768,
+   "h": 432,
+   "dur": 634.566,
+   "buf": [
+    [
+     0,
+     64
+    ]
+   ],
+   "dropped": 0,
+   "totalFrames": 144,
+   "abytes": 40762,
+   "vbytes": 747672,
+   "wall": 7620
+  },
+  {
+   "ct": 5.649,
+   "rs": 4,
+   "ns": 2,
+   "pa": false,
+   "w": 768,
+   "h": 432,
+   "dur": 634.566,
+   "buf": [
+    [
+     0,
+     64
+    ]
+   ],
+   "dropped": 0,
+   "totalFrames": 175,
+   "abytes": 49111,
+   "vbytes": 900871,
+   "wall": 8622
+  },
+  {
+   "ct": 6.651,
+   "rs": 4,
+   "ns": 2,
+   "pa": false,
+   "w": 768,
+   "h": 432,
+   "dur": 634.566,
+   "buf": [
+    [
+     0,
+     64
+    ]
+   ],
+   "dropped": 0,
+   "totalFrames": 205,
+   "abytes": 57060,
+   "vbytes": 1105809,
+   "wall": 9624
+  },
+  {
+   "ct": 7.653,
+   "rs": 4,
+   "ns": 2,
+   "pa": false,
+   "w": 768,
+   "h": 432,
+   "dur": 634.566,
+   "buf": [
+    [
+     0,
+     64
+    ]
+   ],
+   "dropped": 0,
+   "totalFrames": 235,
+   "abytes": 65446,
+   "vbytes": 1287750,
+   "wall": 10627
+  },
+  {
+   "ct": 8.656,
+   "rs": 4,
+   "ns": 2,
+   "pa": false,
+   "w": 768,
+   "h": 432,
+   "dur": 634.566,
+   "buf": [
+    [
+     0,
+     68
+    ]
+   ],
+   "dropped": 0,
+   "totalFrames": 265,
+   "abytes": 73491,
+   "vbytes": 1496451,
+   "wall": 11631
+  },
+  {
+   "ct": 9.66,
+   "rs": 4,
+   "ns": 2,
+   "pa": false,
+   "w": 768,
+   "h": 432,
+   "dur": 634.566,
+   "buf": [
+    [
+     0,
+     68
+    ]
+   ],
+   "dropped": 0,
+   "totalFrames": 295,
+   "abytes": 81884,
+   "vbytes": 1648725,
+   "wall": 12633
+  },
+  {
+   "ct": 10.662,
+   "rs": 4,
+   "ns": 2,
+   "pa": false,
+   "w": 768,
+   "h": 432,
+   "dur": 634.566,
+   "buf": [
+    [
+     0,
+     68
+    ]
+   ],
+   "dropped": 0,
+   "totalFrames": 325,
+   "abytes": 89815,
+   "vbytes": 1867334,
+   "wall": 13636
+  },
+  {
+   "ct": 11.666,
+   "rs": 4,
+   "ns": 2,
+   "pa": false,
+   "w": 768,
+   "h": 432,
+   "dur": 634.566,
+   "buf": [
+    [
+     0,
+     68
+    ]
+   ],
+   "dropped": 0,
+   "totalFrames": 355,
+   "abytes": 98202,
+   "vbytes": 2007785,
+   "wall": 14639
+  },
+  {
+   "ct": 12.67,
+   "rs": 4,
+   "ns": 2,
+   "pa": false,
+   "w": 768,
+   "h": 432,
+   "dur": 634.566,
+   "buf": [
+    [
+     0,
+     68
+    ]
+   ],
+   "dropped": 0,
+   "totalFrames": 385,
+   "abytes": 106225,
+   "vbytes": 2237418,
+   "wall": 15643
+  },
+  {
+   "ct": 13.672,
+   "rs": 4,
+   "ns": 2,
+   "pa": false,
+   "w": 768,
+   "h": 432,
+   "dur": 634.566,
+   "buf": [
+    [
+     0,
+     72
+    ]
+   ],
+   "dropped": 0,
+   "totalFrames": 415,
+   "abytes": 114576,
+   "vbytes": 2383632,
+   "wall": 16645
+  },
+  {
+   "ct": 14.674,
+   "rs": 4,
+   "ns": 2,
+   "pa": false,
+   "w": 768,
+   "h": 432,
+   "dur": 634.566,
+   "buf": [
+    [
+     0,
+     72
+    ]
+   ],
+   "dropped": 0,
+   "totalFrames": 445,
+   "abytes": 122422,
+   "vbytes": 2617178,
+   "wall": 17648
+  },
+  {
+   "ct": 15.678,
+   "rs": 4,
+   "ns": 2,
+   "pa": false,
+   "w": 768,
+   "h": 432,
+   "dur": 634.566,
+   "buf": [
+    [
+     0,
+     72
+    ]
+   ],
+   "dropped": 0,
+   "totalFrames": 475,
+   "abytes": 130952,
+   "vbytes": 2744483,
+   "wall": 18651
+  },
+  {
+   "ct": 16.679,
+   "rs": 4,
+   "ns": 2,
+   "pa": false,
+   "w": 768,
+   "h": 432,
+   "dur": 634.566,
+   "buf": [
+    [
+     0,
+     76
+    ]
+   ],
+   "dropped": 0,
+   "totalFrames": 506,
+   "abytes": 138959,
+   "vbytes": 2993671,
+   "wall": 19654
+  },
+  {
+   "ct": 17.682,
+   "rs": 4,
+   "ns": 2,
+   "pa": false,
+   "w": 768,
+   "h": 432,
+   "dur": 634.566,
+   "buf": [
+    [
+     0,
+     76
+    ]
+   ],
+   "dropped": 0,
+   "totalFrames": 536,
+   "abytes": 147293,
+   "vbytes": 3115444,
+   "wall": 20655
+  },
+  {
+   "ct": 18.683,
+   "rs": 4,
+   "ns": 2,
+   "pa": false,
+   "w": 768,
+   "h": 432,
+   "dur": 634.566,
+   "buf": [
+    [
+     0,
+     76
+    ]
+   ],
+   "dropped": 0,
+   "totalFrames": 566,
+   "abytes": 155326,
+   "vbytes": 3369026,
+   "wall": 21658
+  },
+  {
+   "ct": 19.687,
+   "rs": 4,
+   "ns": 2,
+   "pa": false,
+   "w": 768,
+   "h": 432,
+   "dur": 634.566,
+   "buf": [
+    [
+     0,
+     76
+    ]
+   ],
+   "dropped": 0,
+   "totalFrames": 596,
+   "abytes": 163665,
+   "vbytes": 3507930,
+   "wall": 22662
+  },
+  {
+   "ct": 20.69,
+   "rs": 4,
+   "ns": 2,
+   "pa": false,
+   "w": 768,
+   "h": 432,
+   "dur": 634.566,
+   "buf": [
+    [
+     0,
+     76
+    ]
+   ],
+   "dropped": 0,
+   "totalFrames": 626,
+   "abytes": 171662,
+   "vbytes": 3681155,
+   "wall": 23664
+  },
+  {
+   "ct": 21.693,
+   "rs": 4,
+   "ns": 2,
+   "pa": false,
+   "w": 768,
+   "h": 432,
+   "dur": 634.566,
+   "buf": [
+    [
+     0,
+     80
+    ]
+   ],
+   "dropped": 0,
+   "totalFrames": 656,
+   "abytes": 180198,
+   "vbytes": 3753023,
+   "wall": 24667
+  },
+  {
+   "ct": 22.695,
+   "rs": 4,
+   "ns": 2,
+   "pa": false,
+   "w": 768,
+   "h": 432,
+   "dur": 634.566,
+   "buf": [
+    [
+     0,
+     80
+    ]
+   ],
+   "dropped": 0,
+   "totalFrames": 686,
+   "abytes": 188057,
+   "vbytes": 3997181,
+   "wall": 25670
+  },
+  {
+   "ct": 23.699,
+   "rs": 4,
+   "ns": 2,
+   "pa": false,
+   "w": 768,
+   "h": 432,
+   "dur": 634.566,
+   "buf": [
+    [
+     0,
+     80
+    ]
+   ],
+   "dropped": 0,
+   "totalFrames": 716,
+   "abytes": 196434,
+   "vbytes": 4095309,
+   "wall": 26672
+  },
+  {
+   "ct": 24.7,
+   "rs": 4,
+   "ns": 2,
+   "pa": false,
+   "w": 768,
+   "h": 432,
+   "dur": 634.566,
+   "buf": [
+    [
+     0,
+     80
+    ]
+   ],
+   "dropped": 0,
+   "totalFrames": 746,
+   "abytes": 204537,
+   "vbytes": 4346787,
+   "wall": 27673
+  },
+  {
+   "ct": 25.703,
+   "rs": 4,
+   "ns": 2,
+   "pa": false,
+   "w": 768,
+   "h": 432,
+   "dur": 634.566,
+   "buf": [
+    [
+     0,
+     84
+    ]
+   ],
+   "dropped": 0,
+   "totalFrames": 776,
+   "abytes": 213015,
+   "vbytes": 4476877,
+   "wall": 28675
+  },
+  {
+   "ct": 26.704,
+   "rs": 4,
+   "ns": 2,
+   "pa": false,
+   "w": 768,
+   "h": 432,
+   "dur": 634.566,
+   "buf": [
+    [
+     0,
+     84
+    ]
+   ],
+   "dropped": 0,
+   "totalFrames": 806,
+   "abytes": 220841,
+   "vbytes": 4685830,
+   "wall": 29679
+  },
+  {
+   "ct": 27.706,
+   "rs": 4,
+   "ns": 2,
+   "pa": false,
+   "w": 768,
+   "h": 432,
+   "dur": 634.566,
+   "buf": [
+    [
+     0,
+     84
+    ]
+   ],
+   "dropped": 0,
+   "totalFrames": 836,
+   "abytes": 229220,
+   "vbytes": 4915760,
+   "wall": 30680
+  },
+  {
+   "ct": 28.71,
+   "rs": 4,
+   "ns": 2,
+   "pa": false,
+   "w": 768,
+   "h": 432,
+   "dur": 634.566,
+   "buf": [
+    [
+     0,
+     88
+    ]
+   ],
+   "dropped": 0,
+   "totalFrames": 866,
+   "abytes": 237214,
+   "vbytes": 5200738,
+   "wall": 31683
+  }
+ ]
+}

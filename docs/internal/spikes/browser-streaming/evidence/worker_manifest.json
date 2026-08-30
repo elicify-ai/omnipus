@@ -1,0 +1,451 @@
+{
+ "url": "http://127.0.0.1:19732/source-worker.html?run=dash720",
+ "secs": 20,
+ "recordedAt": "2026-08-30T09:44:41.276Z",
+ "loadavg": [
+  12.7978515625,
+  14.1806640625,
+  13.58203125
+ ],
+ "cpus": 8,
+ "navToEnd_ms": 22167,
+ "totalAppends": 0,
+ "totalBytes": 0,
+ "missingChunkData": 0,
+ "events": [
+  {
+   "ev": "shim",
+   "t": 0,
+   "url": "about:blank",
+   "hasMS": true,
+   "hasMMS": false,
+   "wall": 2165,
+   "session": "D90B688B391245B0016FF86BE3FC697C"
+  },
+  {
+   "ev": "shim",
+   "t": 0,
+   "url": "http://127.0.0.1:19732/source-worker.html?run=dash720",
+   "hasMS": true,
+   "hasMMS": false,
+   "wall": 2363,
+   "session": "D90B688B391245B0016FF86BE3FC697C"
+  },
+  {
+   "ev": "worker",
+   "t": 8,
+   "url": "mse-worker.js",
+   "wall": 2367,
+   "session": "D90B688B391245B0016FF86BE3FC697C"
+  },
+  {
+   "ev": "srcObject",
+   "t": 76,
+   "kind": "MediaSourceHandle",
+   "wall": 2405,
+   "session": "D90B688B391245B0016FF86BE3FC697C"
+  }
+ ],
+ "samples": [
+  {
+   "ct": 0,
+   "rs": 1,
+   "ns": 2,
+   "pa": false,
+   "w": 480,
+   "h": 270,
+   "dur": 634.566,
+   "buf": [
+    [
+     0,
+     88
+    ]
+   ],
+   "dropped": 0,
+   "totalFrames": 4,
+   "abytes": 2916,
+   "vbytes": 46122,
+   "wall": 3826
+  },
+  {
+   "ct": 0.976,
+   "rs": 4,
+   "ns": 2,
+   "pa": false,
+   "w": 768,
+   "h": 432,
+   "dur": 634.566,
+   "buf": [
+    [
+     0,
+     88
+    ]
+   ],
+   "dropped": 0,
+   "totalFrames": 34,
+   "abytes": 11194,
+   "vbytes": 174361,
+   "wall": 4828
+  },
+  {
+   "ct": 1.979,
+   "rs": 4,
+   "ns": 2,
+   "pa": false,
+   "w": 768,
+   "h": 432,
+   "dur": 634.566,
+   "buf": [
+    [
+     0,
+     88
+    ]
+   ],
+   "dropped": 0,
+   "totalFrames": 64,
+   "abytes": 19185,
+   "vbytes": 276860,
+   "wall": 5830
+  },
+  {
+   "ct": 2.982,
+   "rs": 4,
+   "ns": 2,
+   "pa": false,
+   "w": 768,
+   "h": 432,
+   "dur": 634.566,
+   "buf": [
+    [
+     0,
+     88
+    ]
+   ],
+   "dropped": 0,
+   "totalFrames": 95,
+   "abytes": 27107,
+   "vbytes": 361739,
+   "wall": 6833
+  },
+  {
+   "ct": 3.987,
+   "rs": 4,
+   "ns": 2,
+   "pa": false,
+   "w": 768,
+   "h": 432,
+   "dur": 634.566,
+   "buf": [
+    [
+     0,
+     88
+    ]
+   ],
+   "dropped": 0,
+   "totalFrames": 125,
+   "abytes": 35468,
+   "vbytes": 594000,
+   "wall": 7844
+  },
+  {
+   "ct": 4.995,
+   "rs": 4,
+   "ns": 2,
+   "pa": false,
+   "w": 768,
+   "h": 432,
+   "dur": 634.566,
+   "buf": [
+    [
+     0,
+     88
+    ]
+   ],
+   "dropped": 0,
+   "totalFrames": 155,
+   "abytes": 43838,
+   "vbytes": 905237,
+   "wall": 8845
+  },
+  {
+   "ct": 5.996,
+   "rs": 4,
+   "ns": 2,
+   "pa": false,
+   "w": 768,
+   "h": 432,
+   "dur": 634.566,
+   "buf": [
+    [
+     0,
+     88
+    ]
+   ],
+   "dropped": 0,
+   "totalFrames": 185,
+   "abytes": 51856,
+   "vbytes": 1091188,
+   "wall": 9847
+  },
+  {
+   "ct": 6.999,
+   "rs": 4,
+   "ns": 2,
+   "pa": false,
+   "w": 768,
+   "h": 432,
+   "dur": 634.566,
+   "buf": [
+    [
+     0,
+     88
+    ]
+   ],
+   "dropped": 0,
+   "totalFrames": 215,
+   "abytes": 60195,
+   "vbytes": 1279622,
+   "wall": 10850
+  },
+  {
+   "ct": 8,
+   "rs": 4,
+   "ns": 2,
+   "pa": false,
+   "w": 768,
+   "h": 432,
+   "dur": 634.566,
+   "buf": [
+    [
+     0,
+     88
+    ]
+   ],
+   "dropped": 1,
+   "totalFrames": 244,
+   "abytes": 68224,
+   "vbytes": 1480592,
+   "wall": 11852
+  },
+  {
+   "ct": 9.003,
+   "rs": 4,
+   "ns": 2,
+   "pa": false,
+   "w": 768,
+   "h": 432,
+   "dur": 634.566,
+   "buf": [
+    [
+     0,
+     88
+    ]
+   ],
+   "dropped": 1,
+   "totalFrames": 274,
+   "abytes": 76289,
+   "vbytes": 1648295,
+   "wall": 12869
+  },
+  {
+   "ct": 10.019,
+   "rs": 4,
+   "ns": 2,
+   "pa": false,
+   "w": 768,
+   "h": 432,
+   "dur": 634.566,
+   "buf": [
+    [
+     0,
+     88
+    ]
+   ],
+   "dropped": 1,
+   "totalFrames": 305,
+   "abytes": 84670,
+   "vbytes": 1833704,
+   "wall": 13871
+  },
+  {
+   "ct": 11.021,
+   "rs": 4,
+   "ns": 2,
+   "pa": false,
+   "w": 768,
+   "h": 432,
+   "dur": 634.566,
+   "buf": [
+    [
+     0,
+     88
+    ]
+   ],
+   "dropped": 1,
+   "totalFrames": 335,
+   "abytes": 92960,
+   "vbytes": 2015616,
+   "wall": 14873
+  },
+  {
+   "ct": 12.024,
+   "rs": 4,
+   "ns": 2,
+   "pa": false,
+   "w": 768,
+   "h": 432,
+   "dur": 634.566,
+   "buf": [
+    [
+     0,
+     88
+    ]
+   ],
+   "dropped": 1,
+   "totalFrames": 365,
+   "abytes": 100975,
+   "vbytes": 2235727,
+   "wall": 15875
+  },
+  {
+   "ct": 13.027,
+   "rs": 4,
+   "ns": 2,
+   "pa": false,
+   "w": 768,
+   "h": 432,
+   "dur": 634.566,
+   "buf": [
+    [
+     0,
+     88
+    ]
+   ],
+   "dropped": 1,
+   "totalFrames": 395,
+   "abytes": 109325,
+   "vbytes": 2395556,
+   "wall": 16878
+  },
+  {
+   "ct": 14.029,
+   "rs": 4,
+   "ns": 2,
+   "pa": false,
+   "w": 768,
+   "h": 432,
+   "dur": 634.566,
+   "buf": [
+    [
+     0,
+     88
+    ]
+   ],
+   "dropped": 1,
+   "totalFrames": 425,
+   "abytes": 117261,
+   "vbytes": 2601773,
+   "wall": 17880
+  },
+  {
+   "ct": 15.031,
+   "rs": 4,
+   "ns": 2,
+   "pa": false,
+   "w": 768,
+   "h": 432,
+   "dur": 634.566,
+   "buf": [
+    [
+     0,
+     88
+    ]
+   ],
+   "dropped": 1,
+   "totalFrames": 455,
+   "abytes": 125611,
+   "vbytes": 2779061,
+   "wall": 18883
+  },
+  {
+   "ct": 16.033,
+   "rs": 4,
+   "ns": 2,
+   "pa": false,
+   "w": 768,
+   "h": 432,
+   "dur": 634.566,
+   "buf": [
+    [
+     0,
+     88
+    ]
+   ],
+   "dropped": 1,
+   "totalFrames": 485,
+   "abytes": 133721,
+   "vbytes": 2993229,
+   "wall": 19884
+  },
+  {
+   "ct": 17.035,
+   "rs": 4,
+   "ns": 2,
+   "pa": false,
+   "w": 768,
+   "h": 432,
+   "dur": 634.566,
+   "buf": [
+    [
+     0,
+     88
+    ]
+   ],
+   "dropped": 1,
+   "totalFrames": 515,
+   "abytes": 142091,
+   "vbytes": 3143318,
+   "wall": 20887
+  },
+  {
+   "ct": 18.037,
+   "rs": 4,
+   "ns": 2,
+   "pa": false,
+   "w": 768,
+   "h": 432,
+   "dur": 634.566,
+   "buf": [
+    [
+     0,
+     88
+    ]
+   ],
+   "dropped": 1,
+   "totalFrames": 545,
+   "abytes": 150091,
+   "vbytes": 3352062,
+   "wall": 21888
+  },
+  {
+   "ct": 19.04,
+   "rs": 4,
+   "ns": 2,
+   "pa": false,
+   "w": 768,
+   "h": 432,
+   "dur": 634.566,
+   "buf": [
+    [
+     0,
+     88
+    ]
+   ],
+   "dropped": 1,
+   "totalFrames": 575,
+   "abytes": 158535,
+   "vbytes": 3521629,
+   "wall": 22891
+  }
+ ]
+}

@@ -336,8 +336,21 @@ ADR should be reconsidered — possibly narrowed to the media path alone.
 
 ## 9. Reproducing the evidence
 
-Spike code and captures:
-`scratchpad/spike-mse/` — `run-all.sh` reproduces everything. `shim.js` is the
+Spike code and evidence: `docs/internal/spikes/browser-streaming/` (committed
+alongside this ADR). See its `README.md` for what is and is not automated.
+
+**`run-all.sh` does not reproduce everything, and this ADR previously claimed it
+did.** It drives the Chrome-side capture and the Chrome/Firefox replay. It needs
+one external file fetched first (`dash.all.min.js`, see the README), and the
+real-Safari arm of §3.2 is **manual by design** — `safaridriver` needs "Allow
+Remote Automation" enabled, which the spike deliberately did not do. That arm was
+run by opening the harness page in Safari by hand; its self-reported payloads are
+in `evidence/safari-reports/`. `crossengine.js` covers Playwright's WebKit, which
+is not real Safari.
+
+Captured media chunks (~170 MB) are excluded; the committed manifests carry the
+per-append offsets, sizes, codecs, container classification and load averages the
+§3 numbers are computed from. `shim.js` is the
 scope-agnostic MSE interceptor; `record.js` the CDP recorder including worker
 injection; `codecgate.js` the AV1 denial; `pages/viewer.html` the replay and
 measurement harness.
