@@ -21,6 +21,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/datamodel"
 	"github.com/elicify-ai/omnipus/pkg/entity"
+	"github.com/elicify-ai/omnipus/pkg/plan"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/tools"
@@ -725,9 +726,10 @@ func (t *AgentDeleteTool) Description() string {
 		"in the response. Every GTD task assigned to this agent is unassigned (not deleted — the task itself " +
 		"survives); tasks it merely created keep that historical attribution. This agent is also removed from " +
 		"every workspace's core_team, and every delegation-trust edge naming it (as either side) is dropped from " +
-		"each affected workspace's delegation graph. Locked core agents (Mia, Jim, Ava, Ray) and the currently " +
-		"configured default agent cannot be deleted — set another agent as default first (Agents screen ★) " +
-		"before deleting this one. A step that fails partway through is reported in the response rather than " +
+		"each affected workspace's delegation graph. Locked core agents (Mia, Jim, Ava, Ray), the currently " +
+		"configured default agent, and an agent that owns at least one active (running) Plan cannot be deleted " +
+		"— set another agent as default first (Agents screen ★), or stop/reassign the Plan(s), before retrying. " +
+		"A step that fails partway through is reported in the response rather than " +
 		"silently swallowed — check for a warning field before assuming the cascade fully completed." +
 		"\nParameters: id (required), confirm (bool, must be true)."
 }
@@ -741,6 +743,34 @@ func (t *AgentDeleteTool) Parameters() map[string]any {
 		},
 		"required": []string{"id", "confirm"},
 	}
+}
+
+// agentOwnsActivePlan reports whether agentID owns at least one active
+// (State=running, paused or not) Plan, by querying store directly. This
+// mirrors pkg/agent's PlanEngine.HasActivePlansOwnedBy exactly — same
+// semantics, same field/state check — but cannot call that method or import
+// its type: pkg/agent imports this package (systools), so importing
+// pkg/agent back from here would be an import cycle. store is the same
+// *plan.Store instance the wired PlanEngine holds (see t.deps.PlanStore's
+// doc comment), so this reads identical on-disk data through the identical
+// query.
+//
+// Fails CLOSED (mirrors PlanEngine.HasActivePlansOwnedBy's fix-wave
+// finding-1 contract): a plan-store List() error is returned to the caller
+// rather than silently folded into a bare `false`. Callers MUST check err
+// before trusting the bool — on error the correct behavior is to refuse the
+// delete, never to fall back to this return value.
+func agentOwnsActivePlan(store *plan.Store, agentID string) (bool, error) {
+	plans, err := store.List(plan.Filter{})
+	if err != nil {
+		return false, fmt.Errorf("list plans: %w", err)
+	}
+	for i := range plans {
+		if plans[i].OwnerAgentID == agentID && plans[i].State == plan.StateRunning {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (t *AgentDeleteTool) Execute(_ context.Context, args map[string]any) *tools.ToolResult {
@@ -806,36 +836,66 @@ func (t *AgentDeleteTool) Execute(_ context.Context, args map[string]any) *tools
 		return tools.ErrorResult(errorJSON("SAVE_FAILED",
 			fmt.Sprintf("agent %q is a locked core agent and cannot be deleted", id), ""))
 	}
+	// Guard (ADR-049 D4/FR-065), ported from the REST deleteAgent handler
+	// (pkg/gateway/rest.go, search "agent_owns_active_plans"): an agent
+	// owning >=1 active (State=running) Plan cannot be deleted outright — the
+	// plan engine would have no owner left to wake at its next decision
+	// point, which would silently stall that plan. Checked BEFORE any
+	// destructive action, alongside the locked-core-agent and default-agent
+	// guards above.
+	//
+	// t.deps.PlanStore is nil in tests/degraded boot paths that never wired
+	// the Plan feature (Wave 2-C1) — matches this file's configAgentPresenceSet
+	// precedent (guard 0 above) for "no store visible" defaulting to skip the
+	// check, never to fail-open on real data it can't see. When PlanStore IS
+	// wired, agentOwnsActivePlan fails CLOSED on a store-read error (mirrors
+	// PlanEngine.HasActivePlansOwnedBy's fix-wave finding-1 contract) — this
+	// refuses the delete rather than treating "could not verify" as "no
+	// active plans", the same posture REST's own 503 takes for that case.
+	//
+	// Cannot call agent.GetPlanEngine/PlanEngine.HasActivePlansOwnedBy
+	// directly here: pkg/agent imports pkg/sysagent/tools (systools), so
+	// importing pkg/agent back from this package would be a cycle.
+	// t.deps.PlanStore is the same *plan.Store instance the wired PlanEngine
+	// holds, so agentOwnsActivePlan below reads identical data via the
+	// identical query the engine method uses.
+	if t.deps.PlanStore != nil {
+		hasActive, planErr := agentOwnsActivePlan(t.deps.PlanStore, id)
+		if planErr != nil {
+			return tools.ErrorResult(errorJSON("SAVE_FAILED",
+				fmt.Sprintf("could not verify plan ownership for agent %q: %s", id, planErr.Error()),
+				"Try again"))
+		}
+		if hasActive {
+			return tools.ErrorResult(errorJSON("AGENT_OWNS_ACTIVE_PLANS",
+				fmt.Sprintf("agent %q owns active plans and cannot be deleted", id),
+				"Stop or reassign its plan(s) first, then retry delete_agent"))
+		}
+	}
 
 	// cascadeWarnings collects every best-effort cascade-step failure so the
 	// response can report a real partial-failure instead of silently
 	// claiming full success (F8, half_b_report.md — mirrors this file's
 	// existing publish_warning pattern for create/update, generalized to the
 	// several independent stores this cascade touches). None of these steps
-	// abort the delete: the agent entity record is still removed below even
-	// if a cascade step fails, matching delete_workspace's own
+	// abort the delete — the agent entity record is already durably removed
+	// by the time any of them run (see store.Delete below) — so a failure
+	// here is best-effort/non-fatal, matching delete_workspace's own
 	// best-effort-cascade shape (a failed mount/delegation-store cleanup
 	// there does not stop the workspace from being deleted either).
 	var cascadeWarnings []string
 
-	// Step 1a (F8): delete every session in the SHARED session store
-	// ($OMNIPUS_HOME/sessions/) that belongs SOLELY to this agent, together
-	// with its uploads — BEFORE the authoritative entity-record delete
-	// below, mirroring delete_workspace's own "cascade dependents first"
-	// ordering for its task cascade. See cascadeDeleteAgentSessions's doc
-	// comment for why a session shared with another agent is deliberately
-	// left untouched rather than deleted or partially edited.
-	sessionsDeleted, sessionsPreservedShared, sessionWarnings := cascadeDeleteAgentSessions(omnipusHome, id)
-	cascadeWarnings = append(cascadeWarnings, sessionWarnings...)
-
-	// Step 1b (F8): unassign (never delete) every GTD task currently
-	// assigned to this agent, using the same task.Store.Update primitive
-	// (and per-task locking) the ordinary task-update tools use — never a
-	// hand-rolled read-modify-write. See cascadeUnassignAgentTasks's doc
-	// comment for why CreatedByAgentID is deliberately left untouched.
-	tasksUnassigned, taskWarnings := cascadeUnassignAgentTasks(omnipusHome, id)
-	cascadeWarnings = append(cascadeWarnings, taskWarnings...)
-
+	// store.Delete(id) — the authoritative entity-record delete — runs
+	// FIRST, before any of the irreversible cascade steps below (bug-fix,
+	// this session: sessions/tasks cascade used to run BEFORE this call,
+	// which meant a store.Delete failure was reported to the caller as a
+	// bare SAVE_FAILED with the sessions already gone and tasks already
+	// unassigned — directly contradicting this tool's own Description(),
+	// which promises "a step that fails partway through is reported in the
+	// response rather than silently swallowed". With store.Delete FIRST: if
+	// it fails, nothing destructive has happened yet — the fail-safe order.
+	// This also matches the wsPath home-directory removal immediately below,
+	// which was already correctly sequenced after store.Delete.
 	if err := store.Delete(id); err != nil {
 		return tools.ErrorResult(errorJSON("SAVE_FAILED", err.Error(), ""))
 	}
@@ -845,6 +905,28 @@ func (t *AgentDeleteTool) Execute(_ context.Context, args map[string]any) *tools
 		slog.Warn("sysagent: workspace cleanup incomplete",
 			"agent_id", id, "path", wsPath, "error", err)
 	}
+
+	// Step 1a (F8): delete every session in the SHARED session store
+	// ($OMNIPUS_HOME/sessions/) that belongs SOLELY to this agent, together
+	// with its uploads. Runs AFTER the authoritative entity-record delete
+	// above (see that call's comment for why) — this is best-effort cascade
+	// cleanup of things that reference the now-deleted agent, mirroring
+	// cascadeCleanAgentWorkspaceReferences below. See
+	// cascadeDeleteAgentSessions's doc comment for why a session shared with
+	// another agent is deliberately left untouched rather than deleted or
+	// partially edited.
+	sessionsDeleted, sessionsPreservedShared, sessionWarnings := cascadeDeleteAgentSessions(omnipusHome, id)
+	cascadeWarnings = append(cascadeWarnings, sessionWarnings...)
+
+	// Step 1b (F8): unassign (never delete) every GTD task currently
+	// assigned to this agent, using the same task.Store.Update primitive
+	// (and per-task locking) the ordinary task-update tools use — never a
+	// hand-rolled read-modify-write. Runs AFTER the authoritative
+	// entity-record delete above, same reasoning as Step 1a. See
+	// cascadeUnassignAgentTasks's doc comment for why CreatedByAgentID is
+	// deliberately left untouched.
+	tasksUnassigned, taskWarnings := cascadeUnassignAgentTasks(omnipusHome, id)
+	cascadeWarnings = append(cascadeWarnings, taskWarnings...)
 
 	// Step 2 (F8): best-effort cleanup of DANGLING REFERENCES to the
 	// now-deleted agent across every workspace — core_team membership and
@@ -1008,8 +1090,18 @@ func cascadeDeleteAgentSessions(omnipusHome, agentID string) (deleted, sharedSki
 // reference — like a commit's author, it stays accurate even after the
 // author is gone, and rewriting it would falsify the task's own history.
 //
-// Only tasks with a currently-valid GTD status are considered (mirrors
-// computeWorkspaceTaskCount/delete_workspace's own cascade filter). Returns
+// Every task naming agentID as its AgentID is unassigned, REGARDLESS of its
+// current status string. This deliberately does NOT filter on
+// isValidTaskStatus, unlike delete_workspace's computeWorkspaceTaskCount
+// cascade filter (which this function's status filter was originally copied
+// from): there, the filter decides what to DELETE, so restricting it to
+// valid-GTD-status tasks makes sense — a workspace being deleted only takes
+// its live GTD tasks down with it. Here the goal is different: removing a
+// DANGLING REFERENCE to a vanished agent from any task record, so a task
+// sitting in a non-GTD/workflow status (e.g. a plan-linked or otherwise
+// out-of-band status) still gets its stale agent_id cleared — leaving it
+// there would be exactly the dangling-reference bug this cascade exists to
+// prevent, just scoped to one status value instead of all of them. Returns
 // the count of tasks unassigned and any non-fatal per-task failures;
 // best-effort, one failure does not abort the sweep.
 func cascadeUnassignAgentTasks(omnipusHome, agentID string) (unassigned int, warnings []string) {
@@ -1020,9 +1112,6 @@ func cascadeUnassignAgentTasks(omnipusHome, agentID string) (unassigned int, war
 	store := taskStoreFor(omnipusHome)
 	empty := ""
 	for i := range tasks {
-		if !isValidTaskStatus(string(tasks[i].Status)) {
-			continue
-		}
 		if tasks[i].AgentID != agentID {
 			continue
 		}

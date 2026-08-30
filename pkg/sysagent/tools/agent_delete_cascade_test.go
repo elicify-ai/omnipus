@@ -13,6 +13,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/plan"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
 )
@@ -316,5 +317,209 @@ func TestAgentDelete_CleansWorkspaceCoreTeamAndDelegationEdges(t *testing.T) {
 	}
 	if edges[0]["from_agent"] != "keeper" || edges[0]["to_agent"] != "keeper2" {
 		t.Errorf("unexpected surviving edge: %v", edges[0])
+	}
+}
+
+// TestAgentDelete_StoreDeleteFailure_NoDestructiveCascade proves the bug-1
+// reorder fix: store.Delete(id) — the authoritative entity-record delete —
+// must run BEFORE the irreversible sessions/tasks cascade. This forces
+// store.Delete to fail (by replacing the agent's entity JSON file with a
+// non-empty directory, so the underlying os.Remove fails with ENOTEMPTY —
+// uid-independent, unlike a permission-bit trick, which root ignores; see
+// pkg/agent/plan_engine_test.go's TestPlanEngine_HasActivePlansOwnedBy_
+// FailsClosedOnStoreError for the same technique's rationale) and asserts
+// that a sole-owned session and an assigned task BOTH survive the rejected
+// delete untouched. Before the fix, the cascade ran first: a subsequent
+// store.Delete failure was reported as a bare SAVE_FAILED while the session
+// and task were already destroyed/unassigned — directly contradicting this
+// tool's own Description() promise that "a step that fails partway through
+// is reported in the response rather than silently swallowed".
+func TestAgentDelete_StoreDeleteFailure_NoDestructiveCascade(t *testing.T) {
+	deps, home := newTestDepsWithHome(t)
+	store := agentstore.New(home)
+	if err := store.Create("victim", &config.AgentConfig{ID: "victim", Name: "Victim"}); err != nil {
+		t.Fatalf("test setup: create agent entity record: %v", err)
+	}
+
+	sessStore, err := session.NewUnifiedStore(filepath.Join(home, "sessions"))
+	if err != nil {
+		t.Fatalf("test setup: open session store: %v", err)
+	}
+	meta, err := sessStore.NewSession(session.SessionTypeChat, "webchat", "victim")
+	if err != nil {
+		t.Fatalf("test setup: create session: %v", err)
+	}
+	sessionID := meta.ID
+	if err := sessStore.Close(); err != nil {
+		t.Fatalf("test setup: close session store: %v", err)
+	}
+
+	tasksDir := filepath.Join(home, "tasks")
+	if err := os.MkdirAll(tasksDir, 0o700); err != nil {
+		t.Fatalf("test setup: mkdir tasks: %v", err)
+	}
+	taskID := "01JZ00000000000000000RD01"
+	taskJSON := `{
+		"id": "` + taskID + `",
+		"title": "Reorder Task",
+		"status": "inbox",
+		"workspace_id": "some-ws",
+		"agent_id": "victim",
+		"created_at": "2026-01-01T00:00:00Z",
+		"updated_at": "2026-01-01T00:00:00Z"
+	}`
+	if err := os.WriteFile(filepath.Join(tasksDir, taskID+".json"), []byte(taskJSON), 0o600); err != nil {
+		t.Fatalf("test setup: write task: %v", err)
+	}
+
+	// Force store.Delete("victim") to fail: replace the entity's data file
+	// with a non-empty directory so the underlying os.Remove fails with
+	// ENOTEMPTY regardless of the running user's uid.
+	entityPath := filepath.Join(home, "entities", "agents", "victim.json")
+	if err := os.Remove(entityPath); err != nil {
+		t.Fatalf("test setup: remove entity file: %v", err)
+	}
+	if err := os.MkdirAll(entityPath, 0o700); err != nil {
+		t.Fatalf("test setup: mkdir in place of entity file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(entityPath, "blocker.txt"), []byte("x"), 0o600); err != nil {
+		t.Fatalf("test setup: seed blocker file: %v", err)
+	}
+
+	result := systools.NewAgentDeleteTool(deps).Execute(context.Background(), map[string]any{
+		"id":      "victim",
+		"confirm": true,
+	})
+	if !result.IsError {
+		t.Fatalf("expected error when store.Delete fails, got success: %s", result.ForLLM)
+	}
+	m := parseError(t, result.ForLLM)
+	errBlock, _ := m["error"].(map[string]any)
+	if errBlock["code"] != "SAVE_FAILED" {
+		t.Errorf("expected error code SAVE_FAILED, got %v", errBlock["code"])
+	}
+
+	// The sole-owned session must survive: it must not have been deleted
+	// before the (failed) authoritative entity delete.
+	sessionDir := filepath.Join(home, "sessions", sessionID)
+	if _, err := os.Stat(sessionDir); err != nil {
+		t.Errorf("session directory %s must survive a rejected delete, stat error = %v", sessionDir, err)
+	}
+
+	// The task's agent_id must still be "victim": it must not have been
+	// unassigned before the (failed) authoritative entity delete.
+	data, err := os.ReadFile(filepath.Join(tasksDir, taskID+".json"))
+	if err != nil {
+		t.Fatalf("read task after rejected delete: %v", err)
+	}
+	var taskData map[string]any
+	if err := json.Unmarshal(data, &taskData); err != nil {
+		t.Fatalf("unmarshal task: %v", err)
+	}
+	if taskData["agent_id"] != "victim" {
+		t.Errorf("task agent_id = %v, want unchanged %q (must survive a rejected delete)",
+			taskData["agent_id"], "victim")
+	}
+}
+
+// TestAgentDelete_RefusesAgentOwningActivePlan proves the bug-2 guard,
+// ported from the REST deleteAgent handler (pkg/gateway/rest.go,
+// "agent_owns_active_plans"): an agent that owns at least one State=running
+// Plan cannot be deleted, and the guard runs BEFORE any destructive action —
+// the entity record must survive the rejected delete.
+func TestAgentDelete_RefusesAgentOwningActivePlan(t *testing.T) {
+	deps, home := newTestDepsWithHome(t)
+	store := agentstore.New(home)
+	if err := store.Create("plan-owner", &config.AgentConfig{ID: "plan-owner", Name: "Plan Owner"}); err != nil {
+		t.Fatalf("test setup: create agent entity record: %v", err)
+	}
+
+	planStore := plan.New(filepath.Join(home, "plans"))
+	if err := planStore.Create(&plan.Plan{
+		ID:           "01JZ00000000000000000PL01",
+		Title:        "Active Plan",
+		WorkspaceID:  "some-ws",
+		OwnerAgentID: "plan-owner",
+		State:        plan.StateRunning,
+	}); err != nil {
+		t.Fatalf("test setup: create running plan: %v", err)
+	}
+	deps.PlanStore = planStore
+
+	result := systools.NewAgentDeleteTool(deps).Execute(context.Background(), map[string]any{
+		"id":      "plan-owner",
+		"confirm": true,
+	})
+	if !result.IsError {
+		t.Fatalf("expected error when deleting an agent that owns an active plan, got success: %s", result.ForLLM)
+	}
+	m := parseError(t, result.ForLLM)
+	errBlock, _ := m["error"].(map[string]any)
+	if errBlock["code"] != "AGENT_OWNS_ACTIVE_PLANS" {
+		t.Errorf("expected error code AGENT_OWNS_ACTIVE_PLANS, got %v", errBlock["code"])
+	}
+	if _, err := store.Get("plan-owner"); err != nil {
+		t.Errorf("plan-owning agent's entity record must survive a rejected delete, Get error = %v", err)
+	}
+}
+
+// TestAgentDelete_UnassignsWorkflowStatusTaskReference proves the
+// isValidTaskStatus-filter removal: cascadeUnassignAgentTasks must clear a
+// dangling agent_id reference from a task regardless of its status string,
+// not just the six canonical GTD statuses. A task record sitting in some
+// other ("workflow") status is exactly the case the filter used to skip,
+// silently leaving a reference to the just-deleted agent on disk.
+func TestAgentDelete_UnassignsWorkflowStatusTaskReference(t *testing.T) {
+	deps, home := newTestDepsWithHome(t)
+	store := agentstore.New(home)
+	if err := store.Create("victim", &config.AgentConfig{ID: "victim", Name: "Victim"}); err != nil {
+		t.Fatalf("test setup: create agent entity record: %v", err)
+	}
+
+	tasksDir := filepath.Join(home, "tasks")
+	if err := os.MkdirAll(tasksDir, 0o700); err != nil {
+		t.Fatalf("test setup: mkdir tasks: %v", err)
+	}
+	taskID := "01JZ00000000000000000WF01"
+	taskJSON := `{
+		"id": "` + taskID + `",
+		"title": "Workflow Status Task",
+		"status": "workflow_review",
+		"workspace_id": "some-ws",
+		"agent_id": "victim",
+		"created_at": "2026-01-01T00:00:00Z",
+		"updated_at": "2026-01-01T00:00:00Z"
+	}`
+	if err := os.WriteFile(filepath.Join(tasksDir, taskID+".json"), []byte(taskJSON), 0o600); err != nil {
+		t.Fatalf("test setup: write task: %v", err)
+	}
+
+	result := systools.NewAgentDeleteTool(deps).Execute(context.Background(), map[string]any{
+		"id":      "victim",
+		"confirm": true,
+	})
+	if result.IsError {
+		t.Fatalf("delete failed: %s", result.ForLLM)
+	}
+	body := parseSuccess(t, result.ForLLM)
+	if n, _ := body["tasks_unassigned"].(float64); n != 1 {
+		t.Errorf("tasks_unassigned = %v, want 1 (workflow-status task must still be unassigned)", body["tasks_unassigned"])
+	}
+
+	data, err := os.ReadFile(filepath.Join(tasksDir, taskID+".json"))
+	if err != nil {
+		t.Fatalf("read task after delete: %v", err)
+	}
+	var taskData map[string]any
+	if err := json.Unmarshal(data, &taskData); err != nil {
+		t.Fatalf("unmarshal task: %v", err)
+	}
+	if v, ok := taskData["agent_id"]; ok && v != "" {
+		t.Errorf("workflow-status task's agent_id = %v, want cleared (empty/absent)", v)
+	}
+	// The task's non-canonical status is untouched — only the dangling
+	// agent reference was cleared.
+	if taskData["status"] != "workflow_review" {
+		t.Errorf("task status = %v, want unchanged %q", taskData["status"], "workflow_review")
 	}
 }
