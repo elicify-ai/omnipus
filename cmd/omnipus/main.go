@@ -36,6 +36,7 @@ import (
 	"github.com/elicify-ai/omnipus/cmd/omnipus/internal/doctor"
 	"github.com/elicify-ai/omnipus/cmd/omnipus/internal/gateway"
 	"github.com/elicify-ai/omnipus/cmd/omnipus/internal/onboard"
+	recordscmd "github.com/elicify-ai/omnipus/cmd/omnipus/internal/records"
 	"github.com/elicify-ai/omnipus/cmd/omnipus/internal/run"
 	stopcmd "github.com/elicify-ai/omnipus/cmd/omnipus/internal/stop"
 	"github.com/elicify-ai/omnipus/cmd/omnipus/internal/version"
@@ -606,6 +607,7 @@ If an agent shares a name with a subcommand, use the agent's ID directly via the
 		onboard.NewOnboardCommand(),
 		auditcmd.NewAuditCommand(),
 		credcmd.NewCredentialsCommand(),
+		recordscmd.NewRecordsCommand(),
 		doctor.NewDoctorCommand(),
 		gateway.NewGatewayCommand(),
 		stopcmd.NewStopCommand(),
