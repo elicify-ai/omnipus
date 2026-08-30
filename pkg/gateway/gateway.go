@@ -449,7 +449,89 @@ func buildEnabledRefMap(cfg *config.Config) map[string]bool {
 			}
 		}
 	}
+	// MCP server env-var credential refs (BUG 4 / architect finding, closed
+	// alongside the SEC-23-style migration in pkg/sysagent/tools/mcp.go and
+	// pkg/gateway/rest.go's mcp-servers handlers): mirror the Enabled-gate
+	// pattern above, at both the per-server level (srv.Enabled) and the
+	// global kill-switch level (cfg.Tools.MCP.Enabled) — an MCP server whose
+	// config is Enabled but sits under a globally-disabled tools.mcp.enabled
+	// never actually connects, so its ref is not "in use" any more than a
+	// disabled channel's is.
+	//
+	// NOTE: unlike every other category in this function, MCP refs are NOT
+	// resolved by credentials.ResolveBundle — they are resolved by a wholly
+	// separate pipeline (pkg/mcp.ResolveServerEnvRefs, invoked from
+	// pkg/agent/loop_mcp.go's reconcileLocked at connect time, not at boot
+	// credential-bundle time). That means marking a ref "in use" here has NO
+	// effect on the ResolveBundle-error fatal/degraded classification this
+	// map exists to drive (bootCredentials/executeReload, below) — recorded
+	// here anyway for completeness/documentation. The actual sensitive-value
+	// registration for MCP secrets (so they get scrubbed by
+	// SensitiveDataReplacer) is done separately by
+	// mcpEnabledEnvSensitiveValues, called from bootCredentials/executeReload
+	// alongside cfg.RegisterSensitiveValues.
+	//
+	// Boot-time asymmetry (documented, not fixed — see mcpEnabledEnvSensitiveValues
+	// and pkg/agent/loop_mcp.go's reconcileLocked): a dangling ref on an
+	// ENABLED channel aborts boot fatally (the "fatal: enabled credential ...
+	// not found" branch below); a dangling ref on an enabled+globally-enabled
+	// MCP server does not — reconcileLocked logs a WARN and skips connecting
+	// just that server, leaving the rest of boot to proceed normally. This
+	// asymmetry predates this fix and is left in place deliberately (making
+	// it fatal would be new boot-time behavior with its own blast radius —
+	// out of scope for this pass).
+	if cfg.Tools.MCP.Enabled {
+		for _, srv := range cfg.Tools.MCP.Servers {
+			if !srv.Enabled {
+				continue
+			}
+			for _, ref := range srv.EnvRefs {
+				if ref != "" {
+					m[ref] = true
+				}
+			}
+		}
+	}
 	return m
+}
+
+// mcpEnabledEnvSensitiveValues resolves the real (plaintext) value behind
+// every EnvRefs credential reference belonging to a live MCP server —
+// Enabled on the server AND the global tools.mcp.enabled kill-switch on,
+// the same Enabled-gate buildEnabledRefMap's MCP loop uses above — and
+// returns them for registration with cfg.RegisterSensitiveValues (BUG 4 /
+// architect finding).
+//
+// Unlike the channel/voice/web-search/marketplace/mailbox categories, MCP
+// env refs are not part of credentials.ResolveBundle's output (see the note
+// in buildEnabledRefMap above), so there is no existing bundle this function
+// can read from — it resolves each ref directly against the credential
+// store. A resolution failure (locked store, deleted ref) is swallowed here:
+// registering sensitive VALUES is this function's only job, and a dangling
+// or unreadable ref simply contributes nothing to scrub — the connect-time
+// failure itself is already surfaced (WARN + skip) by
+// pkg/agent/loop_mcp.go's reconcileLocked.
+func mcpEnabledEnvSensitiveValues(cfg *config.Config, store *credentials.Store) []string {
+	if store == nil || cfg == nil || !cfg.Tools.MCP.Enabled {
+		return nil
+	}
+	var values []string
+	for _, srv := range cfg.Tools.MCP.Servers {
+		if !srv.Enabled || len(srv.EnvRefs) == 0 {
+			continue
+		}
+		for _, ref := range srv.EnvRefs {
+			if ref == "" {
+				continue
+			}
+			value, err := store.Get(ref)
+			if err != nil || value == "" {
+				continue
+			}
+			values = append(values, value)
+		}
+	}
+	return values
 }
 
 // resolveAllRefPattern extracts the credential ref name that
@@ -698,6 +780,11 @@ func bootCredentials(
 	// session's tokens unscrubbed until the next explicit sign-in. Fold them
 	// in here too.
 	values = append(values, providers.CollectOAuthSensitiveValues(credStore)...)
+	// BUG 4 / architect finding: MCP server env-var secrets (resolved via
+	// EnvRefs) were never registered for scrubbing at all — see
+	// mcpEnabledEnvSensitiveValues's doc comment for why they cannot simply
+	// ride along in `bundle` above.
+	values = append(values, mcpEnabledEnvSensitiveValues(cfg, credStore)...)
 	cfg.RegisterSensitiveValues(values)
 
 	// Wire the shared credential store for CreateProviderFromConfig's
@@ -4033,6 +4120,10 @@ func executeReload(
 				reloadValues = append(reloadValues, v)
 			}
 		}
+		// BUG 4 / architect finding: MCP server env-var secrets — see
+		// mcpEnabledEnvSensitiveValues's doc comment (bootCredentials has the
+		// matching call for the boot path).
+		reloadValues = append(reloadValues, mcpEnabledEnvSensitiveValues(newCfg, cs)...)
 		if len(reloadValues) > 0 {
 			newCfg.RegisterSensitiveValues(reloadValues)
 		}

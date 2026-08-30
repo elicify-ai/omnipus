@@ -134,7 +134,26 @@ func (t *MCPAddTool) Execute(ctx context.Context, args map[string]any) *tools.To
 	argList := stringSliceArg(args["args"])
 	envMap := stringMapArg(args["env"])
 
-	// F16 fix: route every env value through the encrypted credential store
+	// Duplicate-name pre-check: reject an existing server name
+	// BEFORE any credential-store write. Without this, a name collision was
+	// only discovered inside the WithConfig closure below — AFTER Phase 1 had
+	// already written every env value to the credential store under
+	// mcp_<name>_<key>, silently overwriting the ALREADY-CONFIGURED server's
+	// live credentials with whatever the (rejected) request supplied, even
+	// though the call as a whole reports ALREADY_EXISTS and appears to have
+	// changed nothing. This read is a snapshot, not a lock — the in-closure
+	// check further down is kept as the authoritative concurrency guard for
+	// the (now much rarer) race where a same-named server is created between
+	// this check and the WithConfig call.
+	if cfg := t.deps.GetCfg(); cfg != nil {
+		if _, exists := cfg.Tools.MCP.Servers[name]; exists {
+			return tools.ErrorResult(errorJSON("ALREADY_EXISTS",
+				fmt.Sprintf("mcp server %q already exists", name),
+				"Use list_mcp_servers to see existing servers, or remove it first with remove_mcp_server"))
+		}
+	}
+
+	// Route every env value through the encrypted credential store
 	// instead of writing it into config.json in plaintext, mirroring
 	// configure_channel's channelCredKey pattern (pkg/sysagent/tools/channel.go).
 	// The whole `env` map is treated as secret-shaped rather than trying to
@@ -223,6 +242,21 @@ func (t *MCPAddTool) Execute(ctx context.Context, args map[string]any) *tools.To
 		return nil
 	}); err != nil {
 		if strings.Contains(err.Error(), "already exists") {
+			// Race-guard fired: a same-named server was created concurrently,
+			// between the pre-check above and this WithConfig call. Any env
+			// credentials written in Phase 1 above were written under THIS
+			// call's name/key combination and must be rolled back now — they
+			// belong to a request that is being rejected, and leaving them in
+			// place would hijack the credentials of the server that won the
+			// race, exactly like the bug this whole fix closes. Best-effort:
+			// a delete failure here is logged, not fatal — the request still
+			// fails with ALREADY_EXISTS either way.
+			for envKey, credKey := range envRefs {
+				if delErr := t.deps.CredStore.Delete(credKey); delErr != nil {
+					slog.Warn("add_mcp_server: name-collision race — failed to roll back env credential",
+						"server", name, "env_key", envKey, "cred_key", credKey, "error", delErr)
+				}
+			}
 			return tools.ErrorResult(errorJSON("ALREADY_EXISTS", err.Error(),
 				"Use list_mcp_servers to see existing servers, or remove it first with remove_mcp_server"))
 		}
@@ -361,7 +395,7 @@ func (t *MCPRemoveTool) Execute(ctx context.Context, args map[string]any) *tools
 	}
 
 	// Clean up any credential-store entries add_mcp_server created for this
-	// server's env values (M5 fix) — best-effort: a failure here does not
+	// server's env values — best-effort: a failure here does not
 	// undo the config removal (the server is already gone either way), it
 	// only means an orphaned credential-store entry survives under a name
 	// nothing references any more.
@@ -441,8 +475,8 @@ func (t *MCPListTool) Execute(_ context.Context, _ map[string]any) *tools.ToolRe
 		Enabled   bool   `json:"enabled"`
 		Command   string `json:"command,omitempty"`
 		URL       string `json:"url,omitempty"`
-		// Status is live connection state (connected/error/disconnected), M6
-		// fix — sourced the same way add_mcp_server's readback is, so a
+		// Status is live connection state (connected/error/disconnected),
+		// sourced the same way add_mcp_server's readback is, so a
 		// caller can tell "configured" apart from "actually connected".
 		// Omitted (empty) when deps.MCPStatus is not wired (tests, or a
 		// gateway that hasn't wired live MCP status).
