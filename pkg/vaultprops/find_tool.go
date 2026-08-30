@@ -5,7 +5,7 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-package gateway
+package vaultprops
 
 import (
 	"context"
@@ -21,29 +21,38 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/records/knowledgefind"
 	"github.com/elicify-ai/omnipus/pkg/records/propindex"
 	"github.com/elicify-ai/omnipus/pkg/tools"
-	"github.com/elicify-ai/omnipus/pkg/vaultprops"
 )
 
 // ---------------------------------------------------------------------------
-// WHY THIS FILE LIVES IN pkg/gateway, AND NOT BESIDE THE OTHER FIVE
+// WHY THIS FILE LIVES IN pkg/vaultprops
 //
 // knowledge_describe/read/edit/restructure/configure are all tools.Tool
 // implementations already, built directly in pkg/knowledge with a
 // ToolDeps/AuthoringDeps constructor — pkg/agent/knowledge_tools.go (the
 // execution registry) and pkg/gateway/knowledge_tools_wire.go (the metadata
-// catalog) construct them and are done.
+// catalog) construct them directly and are done.
 //
 // knowledge_find is different in kind, not degree: pkg/records/knowledgefind
 // exposes a package function (Call(ctx, Deps, raw)), and building its Deps
 // needs BOTH pkg/knowledge (the bleve index, NoteIndex) AND
 // pkg/records/propindex (the Store) joined together — which is exactly what
-// pkg/vaultprops exists to do, and pkg/knowledge cannot import pkg/vaultprops
-// (vaultprops imports pkg/knowledge; the reverse edge is the cycle
-// pkg/vaultprops/reader.go's own header explains). pkg/gateway already
-// depends on all four packages, which is the same reason
-// knowledge_tools_wire.go's metadata registration lives here rather than in
-// pkg/knowledge — see that file's header for the identical shape of this
-// argument.
+// pkg/vaultprops already exists to do (reader.go's own header: "it imports
+// BOTH sides, and nothing imports it except the wiring layer that constructs
+// the tools — so it can never be part of a cycle").
+//
+// It does NOT live in pkg/gateway, where an earlier revision of this file
+// put it: pkg/agent/knowledge_tools.go is the execution-registry call site
+// (the registry a turn actually dispatches through), and pkg/agent does not
+// import pkg/gateway — pkg/gateway imports pkg/agent, so the reverse edge
+// would be a cycle. pkg/vaultprops is the one package already reachable from
+// BOTH call sites (pkg/agent's execution registry and
+// pkg/gateway/knowledge_tools_wire.go's metadata catalog) without creating
+// one in either direction.
+//
+// It also does NOT live in pkg/knowledge, for the same reason
+// find_text.go's header there gives: pkg/knowledge cannot import
+// pkg/records/knowledgefind without a test-build cycle through
+// pkg/records/propindex's own test file.
 // ---------------------------------------------------------------------------
 
 // FindTool is knowledge_find: the tools.Tool adapter around
@@ -99,7 +108,7 @@ func (t *FindTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 	if !ok {
 		return tools.ErrorResult(fmt.Sprintf(
 			"knowledge_find: no single knowledge base is unambiguously in scope for this workspace "+
-				"(none mounted, or more than one); in scope: %s", joinScopeNames(scope.Names())))
+				"(none mounted, or more than one); in scope: %s", joinFindScopeNames(scope.Names())))
 	}
 
 	raw, err := json.Marshal(args)
@@ -132,7 +141,7 @@ func (t *FindTool) buildDeps(ctx context.Context, col knowledge.ScopedCollection
 	closeAll := func() {
 		for i := len(closers) - 1; i >= 0; i-- {
 			if cerr := closers[i](); cerr != nil {
-				slog.Warn("gateway: knowledge_find: closing a dependency failed", "error", cerr)
+				slog.Warn("vaultprops: knowledge_find: closing a dependency failed", "error", cerr)
 			}
 		}
 	}
@@ -186,11 +195,11 @@ func (t *FindTool) buildDeps(ctx context.Context, col knowledge.ScopedCollection
 	if store != nil {
 		walk, werr := knowledge.WalkContained(knowledge.OSLinkFS(), root)
 		if werr != nil {
-			slog.Warn("gateway: knowledge_find: could not walk collection for relation resolution; "+
+			slog.Warn("vaultprops: knowledge_find: could not walk collection for relation resolution; "+
 				"relation comparisons will report unresolved", "root", col.Root, "error", werr)
 		} else {
 			notes := knowledge.NewNoteIndex(walk.Files)
-			resolve = vaultprops.NewRelationResolver(ctx, notes, store).AsFunc()
+			resolve = NewRelationResolver(ctx, notes, store).AsFunc()
 		}
 	}
 
@@ -208,11 +217,11 @@ func (t *FindTool) buildDeps(ctx context.Context, col knowledge.ScopedCollection
 // findTextSearcher adapts an already-open *knowledge.Index to
 // knowledgefind.TextSearcher. It lives here, not in pkg/knowledge, because
 // its method signatures must literally name knowledgefind's own return
-// types (TextHit, generated.VaultTermCount) — see this file's header for
-// the import cycle that forbids doing so from pkg/knowledge itself. Every
-// piece of actual logic is pkg/knowledge's own exported operation
-// (Search, SourceHashForPath, NearMissVocabularyWithCounts); this type only
-// converts between knowledge-native and wire-facing shapes.
+// types (TextHit, generated.VaultTermCount) — see pkg/knowledge/find_text.go's
+// header for the import cycle that forbids doing so from pkg/knowledge
+// itself. Every piece of actual logic is pkg/knowledge's own exported
+// operation (Search, SourceHashForPath, NearMissVocabularyWithCounts); this
+// type only converts between knowledge-native and wire-facing shapes.
 type findTextSearcher struct {
 	ix *knowledge.Index
 }
@@ -255,7 +264,7 @@ func (s *findTextSearcher) SourceHash(_ context.Context, path string) (string, b
 func openFindStore(ctx context.Context, home, collectionRoot string) (propindex.Store, func() error) {
 	path, err := knowledge.PropertiesIndexPath(home, collectionRoot)
 	if err != nil {
-		slog.Debug("gateway: knowledge_find: properties index path unavailable", "error", err)
+		slog.Debug("vaultprops: knowledge_find: properties index path unavailable", "error", err)
 		return nil, nil
 	}
 	if _, statErr := os.Stat(path); statErr != nil {
@@ -266,22 +275,22 @@ func openFindStore(ctx context.Context, home, collectionRoot string) (propindex.
 	}
 	store, err := propindex.Open(ctx, path, propindex.Options{})
 	if err != nil {
-		slog.Debug("gateway: knowledge_find: properties index could not be opened", "path", path, "error", err)
+		slog.Debug("vaultprops: knowledge_find: properties index could not be opened", "path", path, "error", err)
 		return nil, nil
 	}
 	if store.NeedsFullIndex() {
 		if cerr := store.Close(); cerr != nil {
-			slog.Warn("gateway: knowledge_find: closing an unusable properties index failed", "path", path, "error", cerr)
+			slog.Warn("vaultprops: knowledge_find: closing an unusable properties index failed", "path", path, "error", cerr)
 		}
 		return nil, nil
 	}
 	return store, store.Close
 }
 
-// joinScopeNames renders a workspace's addressable collection names for a
-// refusal message, matching every other knowledge_* tool's "in scope: …"
+// joinFindScopeNames renders a workspace's addressable collection names for
+// a refusal message, matching every other knowledge_* tool's "in scope: …"
 // wording.
-func joinScopeNames(names []string) string {
+func joinFindScopeNames(names []string) string {
 	if len(names) == 0 {
 		return "none"
 	}
