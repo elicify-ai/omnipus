@@ -41,10 +41,77 @@ type InstallSkillTool struct {
 // ($OMNIPUS_HOME/skills, see pkg/agent.globalSkillsDir); skills install to
 // {globalSkillsDir}/{slug}/.
 func NewInstallSkillTool(registryMgr *skills.RegistryManager, globalSkillsDir string) *InstallSkillTool {
+	// Boot-time sweep: remove any staging leftovers from a previous install
+	// that never completed (crash, OOM-kill, forced restart) so they don't
+	// accumulate forever. This constructor runs once per agent at process
+	// startup (registerSharedTools, pkg/agent/loop.go) and again only on a
+	// full config/registry reload — never on the per-turn hot path — so the
+	// extra ReadDir here (typically of an empty or nonexistent directory) is
+	// negligible. Best-effort: a sweep failure must never block tool
+	// construction or gateway boot.
+	if globalSkillsDir != "" {
+		sweepStaleStaging(globalSkillsDir)
+	}
 	return &InstallSkillTool{
 		registryMgr:     registryMgr,
 		globalSkillsDir: globalSkillsDir,
 		mu:              sync.Mutex{},
+	}
+}
+
+// stagingDirName is the dedicated, non-scanned subdirectory of the global
+// skills directory that install_skill stages downloads into. It lives one
+// level below skillsDir (not skillsDir itself) for two reasons: (1)
+// pkg/skills/loader.go's ListSkills scans skillsDir's direct children for a
+// SKILL.md and, prior to this fix, had no dot-prefix filter — a staging
+// directory created directly inside skillsDir (even dot-prefixed) was one
+// missing check away from becoming a phantom entry in every agent's skill
+// list; keeping all staging under one always-dot-prefixed, SKILL.md-less
+// directory removes that surface entirely, and pkg/skills/loader.go now also
+// skips any dot-prefixed entry defensively. (2) it stays on the SAME
+// filesystem as skillsDir, so the final os.Rename into targetDir remains an
+// atomic, cheap rename rather than a cross-filesystem copy.
+const stagingDirName = ".staging"
+
+// sweepStaleStaging removes any leftover contents of skillsDir/.staging left
+// behind by an install_skill run that was interrupted before it could clean
+// up after itself (process crash, OOM-kill, forced restart — the defer in
+// Execute only runs on a normal return). It is best-effort: skillsDir may not
+// exist yet on a fresh install, and any error here is logged, never
+// propagated, since a failed sweep must not block tool construction or
+// gateway boot. A future install_skill run will retry the sweep on its own
+// next construction, and stale entries are otherwise harmless (never
+// surfaced by ListSkills, per the dot-prefix skip in pkg/skills/loader.go).
+func sweepStaleStaging(skillsDir string) {
+	stagingRoot := filepath.Join(skillsDir, stagingDirName)
+	entries, err := os.ReadDir(stagingRoot)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			logger.WarnCF("tool", "install_skill: failed to read staging directory during startup sweep",
+				map[string]any{
+					"tool":  "install_skill",
+					"dir":   stagingRoot,
+					"error": err.Error(),
+				})
+		}
+		return
+	}
+	for _, entry := range entries {
+		stalePath := filepath.Join(stagingRoot, entry.Name())
+		if err := os.RemoveAll(stalePath); err != nil {
+			logger.WarnCF("tool", "install_skill: failed to remove stale staging entry during startup sweep",
+				map[string]any{
+					"tool":  "install_skill",
+					"path":  stalePath,
+					"error": err.Error(),
+				})
+			continue
+		}
+		logger.InfoCF("tool", "install_skill: removed stale staging entry left by an interrupted install",
+			map[string]any{
+				"tool": "install_skill",
+				"path": stalePath,
+			})
 	}
 }
 
@@ -144,7 +211,24 @@ func (t *InstallSkillTool) Execute(ctx context.Context, args map[string]any) *To
 	// never touches the existing install, because the existing install is
 	// only ever removed immediately before the verified replacement is
 	// renamed into its place.
-	stageDir, err := os.MkdirTemp(skillsDir, "."+slug+".install-")
+	//
+	// The staging directory lives under skillsDir/.staging — a dedicated,
+	// non-scanned subdirectory — rather than directly inside the live global
+	// skills directory. pkg/skills/loader.go's ListSkills iterates every
+	// direct subdirectory of skillsDir and accepts any containing a
+	// SKILL.md; a staging directory created directly inside skillsDir was
+	// visible to a concurrent list_skills call or a system-prompt build
+	// between extraction and the rename below, and — if the process died in
+	// that window — was never cleaned up, leaving a permanent phantom skill
+	// in every agent's skill list. .staging itself has no SKILL.md at
+	// skillsDir's top level, so the scan never descends into it; it stays on
+	// the same filesystem as skillsDir, so the final os.Rename below remains
+	// an atomic, cheap rename.
+	stagingRoot := filepath.Join(skillsDir, stagingDirName)
+	if err := os.MkdirAll(stagingRoot, 0o755); err != nil {
+		return ErrorResult(fmt.Sprintf("failed to create the staging directory for %q: %v", slug, err))
+	}
+	stageDir, err := os.MkdirTemp(stagingRoot, slug+".install-")
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("failed to create a staging directory for %q: %v", slug, err))
 	}
