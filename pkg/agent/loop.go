@@ -2688,8 +2688,8 @@ func registerSharedTools(
 						)
 						// Tier gate: full/infra tools are already callable — they never
 						// need to be loaded. Check policy FIRST so a denied full-tier tool
-						// gets a clear "denied" signal rather than a false "already available"
-						// (F4 fix). If policy allows a full-tier tool, return the sentinel
+						// gets a clear "denied" signal rather than a false "already available".
+						// If policy allows a full-tier tool, return the sentinel
 						// "already available — just call it directly" reason so execLoad can
 						// treat it as a no-op success rather than a load.
 						if tools.ToolManifestTier(name) != tools.ManifestLazy {

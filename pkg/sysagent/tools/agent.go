@@ -379,7 +379,7 @@ func (t *AgentCreateTool) Execute(ctx context.Context, args map[string]any) *too
 	// yet joined anywhere.
 	// joinedWorkspace tracks whether this call actually enrolled the new agent
 	// on a workspace's core_team — it drives the response's status field
-	// below (M1 fix, half_b_report.md): the caller must be able to tell
+	// below: the caller must be able to tell
 	// "joined_workspace" (immediately runnable there) from "metadata_only"
 	// (a member of no team, cannot run in chat or be delegated to) without
 	// re-deriving it from whether a workspace context happened to be
@@ -428,7 +428,7 @@ func (t *AgentCreateTool) Execute(ctx context.Context, args map[string]any) *too
 		}
 	}
 
-	// M1 fix (half_b_report.md): status must reflect actual runnability, not
+	// status must reflect actual runnability, not
 	// a fixed "active" — a metadata-only agent (no workspace context at
 	// creation) cannot run in chat or be delegated to at all
 	// (runTurn's ErrAgentNotWorkspaceMember) despite the entity record and
@@ -785,7 +785,7 @@ func (t *AgentDeleteTool) Execute(_ context.Context, args map[string]any) *tools
 			"Set confirm=true to proceed with deletion",
 		))
 	}
-	// Guard 0 (F8, half_b_report.md): refuse outright — BEFORE any
+	// Guard 0: refuse outright — BEFORE any
 	// destructive action — if id is the configured default agent. Deleting
 	// it would leave cfg.Agents.Defaults.DefaultAgentID pointing at a
 	// nonexistent id, silently demoting default-agent resolution to its
@@ -794,7 +794,7 @@ func (t *AgentDeleteTool) Execute(_ context.Context, args map[string]any) *tools
 	// of truth)" section, itself a former release blocker for exactly this
 	// kind of silent divergence). A nil GetCfg/Config (test scaffolding
 	// without a wired config) skips the check rather than trusting an
-	// unknown default — matches this file's configAgentPresenceSet
+	// unknown default — matches configAgentPresenceSet's
 	// precedent for "no config visible" defaulting to exclude, never allow.
 	if t.deps.GetCfg != nil {
 		if cfg := t.deps.GetCfg(); cfg != nil && cfg.Agents.Defaults.DefaultAgentID == id {
@@ -875,7 +875,7 @@ func (t *AgentDeleteTool) Execute(_ context.Context, args map[string]any) *tools
 
 	// cascadeWarnings collects every best-effort cascade-step failure so the
 	// response can report a real partial-failure instead of silently
-	// claiming full success (F8, half_b_report.md — mirrors this file's
+	// claiming full success (mirrors this file's
 	// existing publish_warning pattern for create/update, generalized to the
 	// several independent stores this cascade touches). None of these steps
 	// abort the delete — the agent entity record is already durably removed
@@ -906,7 +906,7 @@ func (t *AgentDeleteTool) Execute(_ context.Context, args map[string]any) *tools
 			"agent_id", id, "path", wsPath, "error", err)
 	}
 
-	// Step 1a (F8): delete every session in the SHARED session store
+	// Step 1a: delete every session in the SHARED session store
 	// ($OMNIPUS_HOME/sessions/) that belongs SOLELY to this agent, together
 	// with its uploads. Runs AFTER the authoritative entity-record delete
 	// above (see that call's comment for why) — this is best-effort cascade
@@ -918,7 +918,7 @@ func (t *AgentDeleteTool) Execute(_ context.Context, args map[string]any) *tools
 	sessionsDeleted, sessionsPreservedShared, sessionWarnings := cascadeDeleteAgentSessions(omnipusHome, id)
 	cascadeWarnings = append(cascadeWarnings, sessionWarnings...)
 
-	// Step 1b (F8): unassign (never delete) every GTD task currently
+	// Step 1b: unassign (never delete) every GTD task currently
 	// assigned to this agent, using the same task.Store.Update primitive
 	// (and per-task locking) the ordinary task-update tools use — never a
 	// hand-rolled read-modify-write. Runs AFTER the authoritative
@@ -928,7 +928,7 @@ func (t *AgentDeleteTool) Execute(_ context.Context, args map[string]any) *tools
 	tasksUnassigned, taskWarnings := cascadeUnassignAgentTasks(omnipusHome, id)
 	cascadeWarnings = append(cascadeWarnings, taskWarnings...)
 
-	// Step 2 (F8): best-effort cleanup of DANGLING REFERENCES to the
+	// Step 2: best-effort cleanup of DANGLING REFERENCES to the
 	// now-deleted agent across every workspace — core_team membership and
 	// delegation-trust edges naming it as either side. Runs AFTER the
 	// authoritative entity-record delete above, mirroring delete_workspace's
@@ -992,7 +992,7 @@ func (t *AgentDeleteTool) Execute(_ context.Context, args map[string]any) *tools
 	if publishWarning != "" {
 		result["publish_warning"] = publishWarning
 	}
-	// F8 (half_b_report.md): a per-step cascade failure is best-effort and
+	// A per-step cascade failure is best-effort and
 	// non-fatal (the agent record above is already durably deleted either
 	// way), but must not be silently swallowed — an unqualified
 	// {"deleted":true} response with no hint of a stuck session/task/

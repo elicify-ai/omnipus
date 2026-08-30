@@ -3495,7 +3495,7 @@ type ToolsConfig struct {
 
 	// Manifest controls the tool-manifest optimization (v0.1.0). When
 	// Compressed is true (the default), only the high-frequency "full" tools
-	// plus ToolSearch/search are sent as callable defs each turn; all other
+	// plus ToolSearch are sent as callable defs each turn; all other
 	// allowed tools appear in a compact manifest block in the system context
 	// and are made callable on demand via ToolSearch. When false, every tool is
 	// sent as a full callable def every turn (legacy behavior; backward-compat

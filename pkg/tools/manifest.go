@@ -72,7 +72,7 @@ var fullManifestToolNames = map[string]struct{}{
 	"recall_conversation": {}, // ADR-071 D3: promoted — recall must not cost a discovery round trip.
 	"set_todos":           {},
 	"list_tasks":          {},
-	"delegate":            {}, // ADR-053: must be as visible as create_task/list_tasks/update_task,
+	"delegate":            {}, // ADR-053: must be at least as visible as the task tools,
 	// otherwise the model reaches for the task route because it is the only
 	// one it can see as a callable def (measured 304s vs 20-80s for delegate).
 }
@@ -137,12 +137,12 @@ const (
 )
 
 // previewedLazyToolNames is the exact 7-name Tier 2 set (ADR-071 D3 §4.1,
-// minus the tool-manifest-tier-redesign review's F1 retirement of navigate,
-// which held one of the original 8 slots as a total no-op — its callback was
-// nil in every production path and nothing anywhere could receive a
-// navigation event; see pkg/sysagent/tools/registry.go's AllTools doc
-// comment): lazy tools that still render a preview line in the compressed
-// manifest block. Everything else lazy resolves to ManifestSearchOnly.
+// minus navigate's retirement, which held one of the original 8 slots as a
+// total no-op — its callback was nil in every production path and nothing
+// anywhere could receive a navigation event; see
+// TestVisibility_PreviewedSetIsExactlySeven's doc comment in
+// manifest_test.go): lazy tools that still render a preview line in the
+// compressed manifest block. Everything else lazy resolves to ManifestSearchOnly.
 // Membership is pinned by TestVisibility_PreviewedSetIsExactlySeven — adding
 // a tool here (or removing one) without updating that test's literal list is
 // a build failure by design (FR-034).

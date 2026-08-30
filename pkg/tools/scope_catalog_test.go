@@ -169,8 +169,7 @@ func TestGeneralBuiltinMetadata_AllToolsHaveKnownScope(t *testing.T) {
 // system tools"), not from counting AllTools' literal entries — an
 // independent textual source, so a silent catalog-membership drift (a tool
 // added/removed without updating that comment) is itself a finding. (Was 35
-// until the tool-manifest-tier-redesign review retired navigate (F1) and
-// write_agent_metadata (F6).)
+// until navigate and write_agent_metadata were retired.)
 //
 // Traces to: pkg/tools/base.go ToolScope doc comment;
 // pkg/sysagent/tools/registry.go BuildRegistry doc comment.

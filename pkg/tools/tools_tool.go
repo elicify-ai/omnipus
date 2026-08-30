@@ -330,7 +330,7 @@ func (t *ToolsTool) execLoad(ctx context.Context, names []string) *ToolResult {
 	// Full-tier and infra tools are already in the model's callable set — loading
 	// them is a no-op success (C2 fix: avoid confusing the model with an error).
 	// BUT we must first verify policy: a policy-denied full-tier tool must return
-	// an error (F4 fix). We call canLoad to check policy; the real agent-loop
+	// an error. We call canLoad to check policy; the real agent-loop
 	// canLoad returns (false, "already available…") for allowed full-tier tools
 	// and (false, "denied…") for policy-denied ones. We interpret the reason to
 	// distinguish the two cases. (canLoad always returns false for full-tier since

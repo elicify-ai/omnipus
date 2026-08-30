@@ -447,7 +447,7 @@ func (t *TypeTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 		return tools.ErrorResult(rerr.Error())
 	}
 
-	// B-3 fix: `clear` lets the caller choose between the historical
+	// `clear` lets the caller choose between the historical
 	// append-only behavior (default, preserves callers written before this
 	// parameter existed — and lets a human and this agent share a browser
 	// session without clobbering each other's typing) and clearing the
@@ -756,7 +756,7 @@ func (t *WaitTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 		return tools.ErrorResult("browser_wait: 'selector' parameter is required")
 	}
 
-	// B-6 fix: `timeout_ms` lets the caller extend the wait beyond the
+	// `timeout_ms` lets the caller extend the wait beyond the
 	// previously-hardcoded 8s budget, which used to make "wait longer than
 	// 8s" impossible — the whole reason this tool exists for slow-rendering
 	// content. Defaults to getTextWaitTimeout (8s) when omitted, matching
@@ -802,7 +802,7 @@ func (t *WaitTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 	// so a missing selector fails fast.
 	//
 	// NOTE: resolveActionSelector above already POLLS for up to waitTimeout
-	// for a text-resolved target to appear (7-reviewer finding #1) — this
+	// for a text-resolved target to appear — this
 	// WaitVisible call is a second, short wait for the now-marked element to
 	// additionally become visible, which is normally instantaneous since
 	// resolveTextTarget only ever marks a visible element in the first place.
@@ -950,7 +950,7 @@ func classifyEvalResult(raw []byte) *tools.ToolResult {
 // preemptive. A tool call already in flight when a human takes control
 // finishes normally — there is no mid-tool preemption in v1.
 //
-// X-1 fix: the deferral is a NON-ERROR result (IsError stays false — the
+// The deferral is a NON-ERROR result (IsError stays false — the
 // deferral is not a tool failure, it's cooperative turn-coordination), but it
 // must be structurally distinguishable from a normal success payload rather
 // than prose-only. Every one of these seven callers (navigate/click/type/

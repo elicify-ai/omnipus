@@ -391,7 +391,7 @@ Your working directory — where file tools (read_file, write_file, edit_file, l
 // getDiscoveryRule renders the "Tool Discovery" section describing the
 // 3-tier tool-manifest model (ADR-071), when active for this agent
 // (manifestDiscoveryActive — see WithToolDiscovery). Rendered as an
-// unnumbered subsection rather than a numbered rule (finding 7): it used to
+// unnumbered subsection rather than a numbered rule: it used to
 // be hardcoded as "5. **Tool Discovery**" and interpolated after the 6
 // numbered rules above, producing a list numbered 1,2,3,4,5,6,5 — invisible
 // only because this rule almost always rendered empty (finding 1 / GH #657),

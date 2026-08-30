@@ -323,8 +323,8 @@ func TestConfigure_PlainFields(t *testing.T) {
 	}
 }
 
-// TestChannelTest_AppSecretRefCountsAsCredentials is the regression test for
-// F9: hasCreds in ChannelTestTool.Execute used to check only TokenRef and
+// TestChannelTest_AppSecretRefCountsAsCredentials is the regression test:
+// hasCreds in ChannelTestTool.Execute used to check only TokenRef and
 // Identity, missing AppSecretRef entirely. Feishu, WeCom, DingTalk and Weixin
 // authenticate via app_id + app_secret (AppSecretRef), not a token, so a
 // channel configured that way was reported as "has no credentials" even
@@ -349,7 +349,7 @@ func TestChannelTest_AppSecretRefCountsAsCredentials(t *testing.T) {
 	}
 }
 
-// TestChannelList_ReportsLiveState is the regression test for F2:
+// TestChannelList_ReportsLiveState is the regression test:
 // ChannelListTool.Execute used to return the package-level knownChannels
 // slice verbatim, so every channel always reported enabled=false and
 // status="" regardless of what was actually in config.json — including a

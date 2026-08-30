@@ -271,7 +271,7 @@ func TestReplyTool_ThreadsToOriginalSender(t *testing.T) {
 	}
 }
 
-// TestReplyTool_PrefersReplyToOverFrom verifies F7: when the original message
+// TestReplyTool_PrefersReplyToOverFrom verifies: when the original message
 // carries a Reply-To header, the reply is addressed there instead of From —
 // the address the sender (list mail, ticketing system, no-reply@ sender)
 // explicitly asked replies to go to.
@@ -298,7 +298,7 @@ func TestReplyTool_PrefersReplyToOverFrom(t *testing.T) {
 }
 
 // TestReplyTool_FallsBackToFromWhenNoReplyTo verifies that with no Reply-To
-// header, the reply still goes to From as before (F7 regression guard).
+// header, the reply still goes to From as before (regression guard).
 func TestReplyTool_FallsBackToFromWhenNoReplyTo(t *testing.T) {
 	ft := newFakeTransport(email.Message{
 		UID: 8, From: "alice@x.com", Subject: "Hi", MessageID: "<h@x.com>",

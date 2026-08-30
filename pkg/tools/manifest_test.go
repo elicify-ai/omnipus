@@ -34,8 +34,8 @@ func TestToolManifestTier_FullSet(t *testing.T) {
 // set for the new previewed tier (Tier 2); list_mounts/send_file/
 // message_parent/recall_conversation joined; switch_agent is the D4 merge
 // target. hand_off/return_to_default no longer exist; navigate was later
-// retired outright (tool-manifest-tier-redesign review F1 — total no-op,
-// callback always nil in production) rather than merely demoted.
+// retired outright (total no-op, callback always nil in production) rather
+// than merely demoted.
 func TestToolManifestTier_FullSetExact(t *testing.T) {
 	specFull := []string{
 		"read_file", "write_file", "edit_file", "list_directory",
@@ -138,8 +138,8 @@ func TestToolManifestTier_LazySet(t *testing.T) {
 	// D3 — they are now ManifestLazy (previewed tier) and ARE included below,
 	// deliberately, as regression coverage for the demotion. navigate was a
 	// fourth member of that same demotion but was later retired outright
-	// (tool-manifest-tier-redesign review F1) rather than merely demoted, so
-	// it is no longer a real tool name and is not sampled here.
+	// rather than merely demoted, so it is no longer a real tool name and is
+	// not sampled here.
 	lazySample := []string{
 		"create_agent",
 		"browser_navigate",
@@ -572,9 +572,9 @@ func TestManifestNamesResolveInCatalog(t *testing.T) {
 // so `delegate` keeps a wider Full-tier visibility margin over the
 // task-mutation verbs per ADR-053's measured ordering, and bash's permanent
 // visibility advantage is removed. Rewritten (not deleted) to pin the SPLIT.
-// navigate was later retired outright (tool-manifest-tier-redesign review
-// F1) rather than merely demoted, so it is no longer sampled below — it is
-// not a real tool name any more and ToolManifestVisibility("navigate") would
+// navigate was later retired outright rather than merely demoted, so it is
+// no longer sampled below — it is not a real tool name any more and
+// ToolManifestVisibility("navigate") would
 // now resolve to ManifestSearchOnly (the default for any unrecognized lazy
 // name), not ManifestPreviewed.
 func TestManifestTier_PromotedTools_C2(t *testing.T) {
@@ -656,8 +656,8 @@ func TestInfraManifestToolNames_Set(t *testing.T) {
 // re-derived from a count.
 
 // tier3SearchOnlyToolNames is ADR-071 §4.1's literal Tier 3 list, transcribed
-// verbatim, now 62 names after the tool-manifest-tier-redesign review's F6
-// retirement of write_agent_metadata (a redundant, unguarded second door onto
+// verbatim, now 62 names after write_agent_metadata's retirement (a
+// redundant, unguarded second door onto
 // the same files update_agent already writes through a properly-guarded
 // path — see pkg/sysagent/tools/metadata.go). It exists ONLY as the third leg
 // of the arithmetic check below — pkg/tools has no other reason to enumerate
@@ -680,10 +680,10 @@ var tier3SearchOnlyToolNames = []string{
 	"delete_task",
 }
 
-// TestVisibility_TierArithmetic pins the full 17+7+62+1=87 partition (FR-032
-// as amended by the tool-manifest-tier-redesign review: navigate's F1
-// retirement dropped the previewed set from 8 to 7, and write_agent_metadata's
-// F6 retirement dropped the search-only set from 63 to 62 — "The always-
+// TestVisibility_TierArithmetic pins the full 17+7+62+1=87 partition (FR-032:
+// navigate's retirement dropped the previewed set from 8 to 7, and
+// write_agent_metadata's retirement dropped the search-only set from 63 to
+// 62 — "The always-
 // listed set MUST contain exactly 17 names, the previewed set exactly 7, the
 // search-only set exactly 62, and the infrastructure set exactly 1"). Counts
 // alone are NOT verification (two different 6-out/5-in vs 3-out/2-in diffs
@@ -746,10 +746,9 @@ func TestVisibility_TierArithmetic(t *testing.T) {
 // TestVisibility_PreviewedSetIsExactlySeven pins ADR-071 §4.1's literal Tier 2
 // list — the 7 names that still render a preview line, transcribed verbatim,
 // not re-derived from a count (FR-034, matching "Tier membership: one source
-// of truth"). Originally 8; navigate was retired outright (tool-manifest-
-// tier-redesign review F1 — total no-op, its callback was nil in every
-// production path, so nothing anywhere could ever receive a navigation
-// event), dropping the set to 7.
+// of truth"). Originally 8; navigate was retired outright (total no-op, its
+// callback was nil in every production path, so nothing anywhere could ever
+// receive a navigation event), dropping the set to 7.
 func TestVisibility_PreviewedSetIsExactlySeven(t *testing.T) {
 	want := []string{
 		"list_agents", "list_jobs", "serve_web",
@@ -880,8 +879,7 @@ func TestVisibility_EveryCatalogNameHasRecordedLevel(t *testing.T) {
 // list_agents→agents, list_jobs→tasks, serve_web→web, get_workspace→workspaces,
 // bash→shell, create_task/update_task→tasks — 5 distinct categories).
 // Originally 8 tools / 6 categories / 22 lines; navigate (→platform) was the
-// dropped tool and platform was the dropped category, retired outright by
-// the tool-manifest-tier-redesign review's F1 finding.
+// dropped tool and platform was the dropped category, retired outright.
 func TestManifest_RenderedBlockIsNineteenLines(t *testing.T) {
 	toolList := []Tool{
 		&fakeManifestTool{name: "list_agents", desc: "List agents.", cat: CategoryAgents},

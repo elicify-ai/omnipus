@@ -406,7 +406,7 @@ func TestWorkspaceCreate_LargeCoreTeamAccepted(t *testing.T) {
 	}
 }
 
-// TestWorkspaceCreate_SeedsDelegationEdgesForNewMembers verifies the F10 fix:
+// TestWorkspaceCreate_SeedsDelegationEdgesForNewMembers verifies:
 // create_workspace with a non-empty core_team must seed the same default
 // delegation edges update_workspace's seedDelegationEdgesForNewMembers seeds
 // for newly added members — otherwise, per ADR-037's fail-closed rule (no

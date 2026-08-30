@@ -22,8 +22,6 @@ package systools_test
 //     succeeds, so a call that fails validation (e.g. an out-of-range
 //     priority) is all-or-nothing: the task must NOT end up moved to a
 //     different workspace while the caller is told INVALID_INPUT.
-//
-// Traces to: half_b_report.md F13/F14/F15 (tool-manifest-tier-redesign review).
 
 import (
 	"testing"

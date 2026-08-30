@@ -14,8 +14,7 @@ import (
 // provide the deterministic, self-validating accessor for agent metadata
 // files. Its write counterpart (agent.write_metadata) was retired: it was a
 // redundant, unguarded second door onto the same files update_agent already
-// writes through a properly-guarded path (refusing locked core agents) — see
-// the tool-manifest-tier-redesign review F6.
+// writes through a properly-guarded path (refusing locked core agents).
 func AllTools(d *Deps) []tools.Tool {
 	return []tools.Tool{
 		// Agent management (4: 3 original + 1 metadata accessor from issue #240; list, activate, deactivate retired)

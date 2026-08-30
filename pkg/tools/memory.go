@@ -216,7 +216,7 @@ func (t *RememberTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		}
 
 		t.logAudit(agentID, sessionID, "ok", category, content)
-		// G-9: echo the room the note ACTUALLY landed in — a resolved scope of
+		// Echo the room the note ACTUALLY landed in — a resolved scope of
 		// "shared" with no workspace on this turn silently falls back to a
 		// private write inside the store (see resolveWriteRoom in
 		// pkg/agent/memory.go), and a bare "ok" would leave the caller
@@ -236,8 +236,8 @@ func (t *RememberTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 }
 
 // rememberOutcomeMessage builds the LLM-facing confirmation for a
-// RoomMemoryWriter write, stating the room the note actually landed in
-// (G-9). scope is the resolved room passed to AppendLongTermToRoom
+// RoomMemoryWriter write, stating the room the note actually landed in.
+// scope is the resolved room passed to AppendLongTermToRoom
 // ("private" or "shared"); workspaceID is the turn's workspace, empty when
 // this turn has no workspace. A resolved scope of "shared" with an empty
 // workspaceID is exactly the case RoomMemoryWriter's own implementation
@@ -410,7 +410,7 @@ func (t *RecallMemoryTool) Execute(ctx context.Context, args map[string]any) *To
 			limit = v
 		}
 	}
-	// G-10: the schema documents "max 50" but nothing previously enforced it —
+	// The schema documents "max 50" but nothing previously enforced it —
 	// reject rather than silently pass an out-of-range limit through to the
 	// store (matching the house style used elsewhere, e.g. search_web's count).
 	if limit > 50 {
@@ -466,7 +466,7 @@ func (t *RecallMemoryTool) Execute(ctx context.Context, args map[string]any) *To
 
 	result := formatRecallResult(entries)
 	if retroSearchFailed {
-		// G-10: a swallowed retro-search failure must be visible to the caller,
+		// A swallowed retro-search failure must be visible to the caller,
 		// not just the server log — otherwise the LLM reads a normal-looking
 		// result and has no way to know retrospectives were silently missing.
 		result.ForLLM = "[note: retrospective search failed; results below include long-term memories only]\n\n" +
