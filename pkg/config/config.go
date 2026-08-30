@@ -3980,8 +3980,21 @@ type MCPServerConfig struct {
 	Command string `json:"command"`
 	// Args are the arguments to pass to the command
 	Args []string `json:"args,omitempty"`
-	// Env are environment variables to set for the server process (stdio only)
+	// Env are environment variables to set for the server process (stdio only).
+	// Written directly here means the value is stored in config.json IN
+	// PLAINTEXT — legacy/back-compat path only (e.g. a server added via the
+	// gateway REST API). Prefer EnvRefs.
 	Env map[string]string `json:"env,omitempty"`
+	// EnvRefs are credential-store references for stdio env vars: key = env
+	// var name, value = the credential-store key holding the real secret.
+	// add_mcp_server (pkg/sysagent/tools/mcp.go) routes every value passed in
+	// its `env` parameter through the encrypted credential store rather than
+	// writing it to config.json in plaintext — this is where the resulting
+	// refs land. At connect time, pkg/mcp.ResolveServerEnvRefs resolves each
+	// ref to its real value and merges it into Env IN MEMORY ONLY (never
+	// written back to config.json); an EnvRefs entry overrides a same-named
+	// literal Env entry. See pkg/agent/loop_mcp.go's reconcileLocked.
+	EnvRefs map[string]string `json:"env_refs,omitempty"`
 	// EnvFile is the path to a file containing environment variables (stdio only)
 	EnvFile string `json:"env_file,omitempty"`
 	// Type is "stdio", "sse", or "http" (default: stdio if command is set, sse if url is set)

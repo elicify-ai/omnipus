@@ -60,6 +60,17 @@ type mcpRuntime struct {
 	// during ReconcileMCP. A server absent from this map (or present with "")
 	// has no recorded failure. Initialized lazily on first write.
 	connectErrs map[string]string
+
+	// credentialResolver resolves an MCP server's env-ref credential-store key
+	// to its real secret value (add_mcp_server, pkg/sysagent/tools/mcp.go,
+	// routes every `env` value through the credential store instead of
+	// writing it to config.json in plaintext — see config.MCPServerConfig.
+	// EnvRefs and mcp.ResolveServerEnvRefs). Nil until SetCredentialResolver
+	// is called (tests, or a gateway that hasn't wired one); a server
+	// carrying EnvRefs against a nil resolver fails resolution for that pass
+	// and is skipped, exactly like an unresolvable relative env_file path —
+	// see reconcileLocked.
+	credentialResolver func(refKey string) (string, error)
 }
 
 func (r *mcpRuntime) setManager(manager *mcp.Manager) {
@@ -149,6 +160,24 @@ func (r *mcpRuntime) setCentralRegistries(mcpReg *tools.MCPRegistry, builtinReg 
 	r.mu.Unlock()
 }
 
+// setCredentialResolver wires the credential-store lookup used to resolve
+// MCP server EnvRefs at connect time. resolver may be nil (the initial
+// state) — a server with EnvRefs then fails resolution until a non-nil
+// resolver is set.
+func (r *mcpRuntime) setCredentialResolver(resolver func(refKey string) (string, error)) {
+	r.mu.Lock()
+	r.credentialResolver = resolver
+	r.mu.Unlock()
+}
+
+// getCredentialResolver returns the current credential-store resolver, or
+// nil if none has been wired yet.
+func (r *mcpRuntime) getCredentialResolver() func(refKey string) (string, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.credentialResolver
+}
+
 // centralRegistries returns the current central MCP and builtin registries.
 // Either may be nil (before SetCentralMCPRegistries has been called).
 func (r *mcpRuntime) centralRegistries() (*tools.MCPRegistry, *tools.BuiltinRegistry) {
@@ -215,6 +244,19 @@ func (r *mcpRuntime) pruneConnectErrs(desired map[string]config.MCPServerConfig,
 // until a non-nil value is set.
 func (al *AgentLoop) SetCentralMCPRegistries(mcpReg *tools.MCPRegistry, builtinReg *tools.BuiltinRegistry) {
 	al.mcp.setCentralRegistries(mcpReg, builtinReg)
+}
+
+// SetCredentialResolver wires the credential-store lookup ReconcileMCP uses
+// to resolve MCP server EnvRefs (see config.MCPServerConfig.EnvRefs and
+// mcp.ResolveServerEnvRefs) into real secret values before connecting a
+// stdio server. Typically wired to (*credentials.Store).Get, which has this
+// exact signature — passed as a func rather than the concrete type so this
+// package does not need to import pkg/credentials. Called once by the
+// gateway before services start, alongside SetCentralMCPRegistries. Passing
+// nil disarms resolution: any server with EnvRefs then fails to connect
+// until a resolver is set again.
+func (al *AgentLoop) SetCredentialResolver(resolver func(refKey string) (string, error)) {
+	al.mcp.setCredentialResolver(resolver)
 }
 
 // MCPServersSnapshot returns a clone of the configured MCP servers map,
@@ -399,6 +441,21 @@ func (al *AgentLoop) reconcileLocked(ctx context.Context) error {
 			if err != nil {
 				logger.WarnCF("agent", "Skipping MCP server: cannot resolve relative env_file without a workspace path",
 					map[string]any{"server": name, "env_file": serverCfg.EnvFile})
+				al.mcp.setConnectErr(name, fmt.Errorf("server %s: %w", name, err))
+				skipped[name] = true
+				continue
+			}
+			// Resolve any credential-store env refs (add_mcp_server routes
+			// secrets through the credential store rather than config.json
+			// plaintext — see config.MCPServerConfig.EnvRefs) into real
+			// values, in memory only. A server with EnvRefs the resolver
+			// cannot satisfy (store locked, resolver not wired, ref deleted
+			// out from under it) is skipped rather than connected with a
+			// missing secret.
+			resolvedCfg, err = mcp.ResolveServerEnvRefs(resolvedCfg, al.mcp.getCredentialResolver())
+			if err != nil {
+				logger.WarnCF("agent", "Skipping MCP server: cannot resolve env credential reference(s)",
+					map[string]any{"server": name, "error": err.Error()})
 				al.mcp.setConnectErr(name, fmt.Errorf("server %s: %w", name, err))
 				skipped[name] = true
 				continue
@@ -728,6 +785,9 @@ func serverConfigEqual(a, b config.MCPServerConfig) bool {
 		return false
 	}
 	if !stringMapsEqualIgnoringNilVsEmpty(a.Env, b.Env) {
+		return false
+	}
+	if !stringMapsEqualIgnoringNilVsEmpty(a.EnvRefs, b.EnvRefs) {
 		return false
 	}
 	if !stringMapsEqualIgnoringNilVsEmpty(a.Headers, b.Headers) {

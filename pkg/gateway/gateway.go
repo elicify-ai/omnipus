@@ -1158,14 +1158,14 @@ func RunContext(ctx context.Context, debug bool, homePath, configPath string, al
 //     TestBuildKnownBuiltinToolNames_MatchesCoreagentStaticToolCatalog for
 //     the drift-detection regression test this package carries instead.
 //
-//   - systools.AllTools(nil, nil) has no equivalent metadata-only catalog
+//   - systools.AllTools(nil) has no equivalent metadata-only catalog
 //     function, but is safe to call for name-harvesting alone: every
 //     constructor in pkg/sysagent/tools does nothing but store the *Deps
 //     pointer it is given (never dereferenced at construction time), and
 //     every tool's Name() method is a static string literal that never reads
-//     deps. Passing nil deps and a nil NavigateCallback is therefore safe
-//     PROVIDED the returned tools are never Execute()d here — and they never
-//     are; only .Name() is called below.
+//     deps. Passing nil deps is therefore safe PROVIDED the returned tools
+//     are never Execute()d here — and they never are; only .Name() is called
+//     below.
 //
 // The three static catalogs never change at runtime, so the result is
 // computed once (guarded by knownBuiltinToolNamesOnce) and the same shared
@@ -1180,7 +1180,7 @@ func buildKnownBuiltinToolNames() map[string]struct{} {
 		for _, t := range browser.BrowserBuiltinMetadata() {
 			out[t.Name()] = struct{}{}
 		}
-		for _, t := range systools.AllTools(nil, nil) {
+		for _, t := range systools.AllTools(nil) {
 			out[t.Name()] = struct{}{}
 		}
 		// ADR-052 (autonomous agent plan execution, FR-027) — the four
@@ -2526,7 +2526,7 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// After sysAgentDeps is wired (below), the registry is re-populated with live deps.
 	// MCPRegistry starts empty; MCP servers populate it at connection time.
 	centralBuiltinReg := tools.NewBuiltinRegistry()
-	for _, t := range systools.AllTools(nil, nil) {
+	for _, t := range systools.AllTools(nil) {
 		if regErr := centralBuiltinReg.RegisterBuiltin(t); regErr != nil {
 			slog.Warn("gateway: central builtin registry pre-population skipped duplicate",
 				"tool", t.Name(), "error", regErr)
@@ -2558,6 +2558,18 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// otherwise connected MCP tools would never surface outside the per-agent
 	// registries. Nil-safe on the AgentLoop side.
 	agentLoop.SetCentralMCPRegistries(centralMCPReg, centralBuiltinReg)
+	// Wire the credential-store resolver so ReconcileMCP can resolve
+	// add_mcp_server's EnvRefs (pkg/sysagent/tools/mcp.go routes MCP server
+	// `env` secrets through the encrypted credential store instead of
+	// config.json plaintext) back into real values at connect time. Store.Get
+	// has exactly the func(string) (string, error) signature
+	// AgentLoop.SetCredentialResolver expects. Guarded on credStore != nil
+	// defensively — bootCredentials aborts boot on failure, so this should
+	// always be non-nil in practice, but a nil receiver would panic inside
+	// Store.Get's mutex lock.
+	if credStore != nil {
+		agentLoop.SetCredentialResolver(credStore.Get)
+	}
 
 	runningServices, err := setupAndStartServices(
 		cfg,
@@ -2772,7 +2784,7 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// registry. The restAPIRef field was stored by setupAndStartServices exactly
 	// for this late-wire step.
 	centralBuiltinReg = tools.NewBuiltinRegistry()
-	for _, t := range systools.AllTools(sysAgentDeps, nil) {
+	for _, t := range systools.AllTools(sysAgentDeps) {
 		if err := centralBuiltinReg.RegisterBuiltin(t); err != nil {
 			slog.Warn("gateway: central builtin registry re-population skipped duplicate",
 				"tool", t.Name(), "error", err)

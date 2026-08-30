@@ -7533,6 +7533,23 @@ func (a *restAPI) testMCPServer(w http.ResponseWriter, r *http.Request, id strin
 		})
 		return
 	}
+	// Resolve any credential-store env refs the same way production
+	// reconciliation does (pkg/agent/loop_mcp.go's reconcileLocked) — a
+	// server added via add_mcp_server carries EnvRefs, not literal Env, so
+	// without this the throwaway test connection would spawn the process
+	// with its secrets missing and report a misleading failure.
+	if a.credStore != nil {
+		resolvedSrv, err = mcp.ResolveServerEnvRefs(resolvedSrv, a.credStore.Get)
+	} else {
+		resolvedSrv, err = mcp.ResolveServerEnvRefs(resolvedSrv, nil)
+	}
+	if err != nil {
+		jsonOK(w, gen.McpServerTestResponse{
+			Success: false,
+			Message: fmt.Sprintf("env credential reference: %s", err.Error()),
+		})
+		return
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
