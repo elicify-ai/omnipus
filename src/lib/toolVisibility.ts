@@ -102,12 +102,18 @@ export function shouldRenderToolCall(
     // --- Hidden by default: noisy infra with no standalone chat meaning ---
 
     case 'ToolSearch':
+    case 'load_tool':
       // Every call is infrastructure (loading a tool's full definition into
       // context) — never a meaningful standalone action to a chat reader.
       // Exception: an error/failure outcome still forces visibility (see
       // this function's doc comment) — unlike delegate/background-bash
       // below, there is no calling-agent turn that narrates a ToolSearch
       // failure on its behalf.
+      // `load_tool` is the pre-ADR-071-D1 name for this same tool — kept
+      // here (mirroring humanizeToolName.ts's EXPLICIT_LABELS entry, FR-015)
+      // solely so a conversation transcript recorded before the rename still
+      // gets the same hide-by-default/error-forces-visible treatment instead
+      // of falling through to `default: return true`.
       return isError
 
     case 'delegate': {
@@ -171,7 +177,6 @@ export function shouldRenderToolCall(
       // fail open into the same `true`) per ADR-071 §5.2.2c.
       return true
     case 'remember':
-    case 'write_agent_metadata':
     case 'get_usage':
     case 'run_doctor':
       return true
@@ -238,15 +243,19 @@ export function shouldRenderSubagentSpan(
  * to showing everything EXCEPT `ToolSearch` (renamed from `load_tool`,
  * ADR-071 D1 — pure internal tool-definition-loading infra — "Find & load
  * tools" humanized — with no standalone meaning even in a detail view).
- * Verbose chat reveals `ToolSearch` there too. Deliberately name-based
- * only, no params: unlike shouldRenderToolCall this isn't classifying
- * dispatch shape/outcome, only excluding one always-noisy tool name.
+ * `load_tool` (the pre-rename name) is excluded alongside it for the same
+ * FR-015 back-compat reason as the thread-side case above — an old
+ * transcript's pre-rename calls get the same panel treatment as new ones.
+ * Verbose chat reveals both there too. Deliberately name-based only, no
+ * params: unlike shouldRenderToolCall this isn't classifying dispatch
+ * shape/outcome, only excluding two always-noisy tool names (one current,
+ * one legacy alias for the same tool).
  */
 export function shouldRenderToolCallInPanel(
   tool: string,
   verboseChatEnabled: boolean,
 ): boolean {
-  return verboseChatEnabled || tool !== 'ToolSearch'
+  return verboseChatEnabled || (tool !== 'ToolSearch' && tool !== 'load_tool')
 }
 
 /**

@@ -19,6 +19,28 @@ describe('shouldRenderToolCall — ToolSearch', () => {
   })
 })
 
+// FR-015 back-compat: `load_tool` is the pre-ADR-071-D1 name for the same
+// tool. A pre-rename session transcript still contains the literal string
+// "load_tool" (pkg/gateway/replay.go emits the recorded name verbatim, and
+// old transcripts are never migrated) — it must be classified identically to
+// `ToolSearch`, not fall through to `default: return true`.
+describe('shouldRenderToolCall — load_tool (legacy pre-rename name, same treatment as ToolSearch)', () => {
+  it.each([
+    [undefined, false, false],
+    [{}, false, false],
+    [undefined, true, true],
+    [{}, true, true],
+  ])('params=%o verbose=%s → %s', (params, verbose, expected) => {
+    expect(shouldRenderToolCall('load_tool', params as Record<string, unknown> | undefined, verbose)).toBe(
+      expected,
+    )
+  })
+
+  it('an error/failure outcome still forces visibility, same as ToolSearch', () => {
+    expect(shouldRenderToolCall('load_tool', undefined, false, true)).toBe(true)
+  })
+})
+
 describe('shouldRenderToolCall — delegate', () => {
   // Fix 2 (user-approved 2026-07-16, revised same day): a 'run' delegation
   // is hidden regardless of async — this INVERTS the pre-fix behavior for
@@ -59,7 +81,6 @@ describe('shouldRenderToolCall — always-visible tools', () => {
   it.each([
     'switch_agent',
     'remember',
-    'write_agent_metadata',
     'get_usage',
     'run_doctor',
   ])('%s is visible, non-verbose', (tool) => {
@@ -248,6 +269,17 @@ describe('shouldRenderToolCallInPanel', () => {
 
   it('shows ToolSearch when verbose chat is enabled', () => {
     expect(shouldRenderToolCallInPanel('ToolSearch', true)).toBe(true)
+  })
+
+  // FR-015 back-compat: load_tool is the pre-ADR-071-D1 name for ToolSearch;
+  // a pre-rename transcript's recorded calls must get the same panel
+  // treatment as new ones, not fall through to the always-visible default.
+  it('hides load_tool by default, same as ToolSearch', () => {
+    expect(shouldRenderToolCallInPanel('load_tool', false)).toBe(false)
+  })
+
+  it('shows load_tool when verbose chat is enabled', () => {
+    expect(shouldRenderToolCallInPanel('load_tool', true)).toBe(true)
   })
 
   it.each(['delegate', 'bash', 'read_file', 'mcp_some_tool'])(
