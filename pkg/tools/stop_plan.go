@@ -83,7 +83,9 @@ func (t *PlanStopTool) Description() string {
 		"stop it. IMPORTANT: a plan shown as blocked or awaiting supervision is NOT stuck — an " +
 		"adjudicator may be actively working out how to correct it, and stopping it aborts that " +
 		"in-flight adjudication and discards the correction it was about to make. Use this for work " +
-		"that must not continue, not for work that is merely slow."
+		"that must not continue, not for work that is merely slow. Only a running or approved plan " +
+		"can be stopped; a draft has nothing in flight and a finished or failed plan is terminal. " +
+		"Denials are deliberately identical whether the plan is not yours or does not exist."
 }
 
 func (t *PlanStopTool) Parameters() map[string]any {

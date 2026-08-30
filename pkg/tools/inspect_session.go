@@ -66,10 +66,11 @@ func (t *InspectSessionTool) Category() ToolCategory { return CategoryTasks }
 
 func (t *InspectSessionTool) Description() string {
 	return "READ-ONLY escalation tool for verification: inspect a session's transcript and tool-call " +
-		"log beyond what was already fed to you. Only usable during adjudication, and only for the " +
-		"specific session(s) under review for THIS verification — any other session id is refused. " +
-		"Returns transcript entries and a tool-call summary (tool name, argument summary, success), " +
-		"token-bounded. Use this only when a criterion cannot be confirmed from what you were already given."
+		"history for evidence beyond what you were already given. Usable only during adjudication and " +
+		"only for the session(s) under review — any other session id is refused. Narrow the read with " +
+		"`role` (user/assistant/system) and `tool_name` filters, and page long sessions with `offset` " +
+		"and `limit` (max 200 entries per call, applied to the filtered sequence). Output is " +
+		"token-bounded: if the response has truncated=true, re-call with `offset` advanced to read the rest."
 }
 
 func (t *InspectSessionTool) Parameters() map[string]any {
