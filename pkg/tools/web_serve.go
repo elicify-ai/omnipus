@@ -269,10 +269,20 @@ func (t *WebServeTool) Scope() ToolScope       { return ScopeGeneral }
 func (t *WebServeTool) Category() ToolCategory { return CategoryWeb }
 
 func (t *WebServeTool) Description() string {
-	return "Serve a directory or run a dev server from the agent workspace and get back a /preview/<agent>/<token>/ URL.\n" +
-		"Static mode (no command): registers the directory as a static website. " +
-		"Dev mode (with command): starts a dev server (vite/next/astro/sveltekit dev) and proxies it. " +
-		"Dev mode is Linux only."
+	return "Serve a directory or run a dev server from the agent workspace and get back a " +
+		"/preview/<agent>/<token>/ URL.\n" +
+		"Static mode (no command): registers the directory as a static website. Re-serving the SAME " +
+		"directory renews the same URL; re-serving a DIFFERENT directory REPLACES the previous " +
+		"registration and invalidates any URL you already gave the user — tell the user the new URL " +
+		"if you change directories.\n" +
+		"Dev mode (with command): starts a dev server and proxies it. Dev mode is Linux only. The " +
+		"command is checked against an EXHAUSTIVE allow-list, not just examples — anything else is " +
+		"refused: 'next dev', 'vite dev', 'astro dev', 'sveltekit dev', 'npm run dev', 'pnpm dev', " +
+		"'yarn dev' (plus any operator-configured extensions). The command must start with exactly " +
+		"one of these; a path-prefixed binary (e.g. '/usr/bin/next dev') is always rejected.\n" +
+		"Both modes are refused (with an error, not a broken link) when gateway.preview_enabled is " +
+		"off, or when the gateway cannot resolve its own public URL (bound to a wildcard address " +
+		"with no gateway.public_url configured)."
 }
 
 func (t *WebServeTool) Parameters() map[string]any {
@@ -292,8 +302,11 @@ func (t *WebServeTool) Parameters() map[string]any {
 				"description": "Optional bind port for dev mode. Auto-picked from the configured range when omitted.",
 			},
 			"duration_seconds": map[string]any{
-				"type":        "integer",
-				"description": "Optional registration lifetime in seconds. Static mode default = 1h, max 24h. Dev mode is governed by the dev-server registry idle/hard timeouts.",
+				"type": "integer",
+				"description": "Optional registration lifetime in seconds, static mode only. Default is " +
+					"24h (86400s), not 1h. Values outside [60s, 24h] are silently clamped to the nearest " +
+					"bound rather than rejected. Dev mode ignores this field — it is governed by the " +
+					"dev-server registry's own idle/hard timeouts instead.",
 			},
 		},
 		"required": []string{"path"},
