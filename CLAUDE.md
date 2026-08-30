@@ -46,6 +46,63 @@ Three-phase plan locked 2026-05-03.
   - `git config user.email "<their GitHub no-reply email>"` — derive via `gh api user -q '"\(.id)+\(.login)@users.noreply.github.com"'`. The `…@users.noreply.github.com` form is required.
 - **Verify before every push:** `git log -1 --format='%an <%ae>'` is a real GitHub user, and `git log origin/main..HEAD --format='%(trailers:key=Co-authored-by)' | grep -i anthropic` is empty.
 
+## Definition of Done (MANDATORY)
+
+**A feature is not done until a real user or a real agent can invoke it.** Green
+tests, green CI and closed review findings show the code is *correct*. They do not
+show it is *reachable*. Those are two separate claims and both must be true before
+anything is reported complete.
+
+Before reporting any feature goal met, run the reachability check FIRST:
+
+- Is the tool registered in the builtin catalog with an explicit policy entry for
+  every agent (Hard Constraint #6)? `grep -rl '"<tool_name>"' pkg/coreagent/ pkg/config/ pkg/tools/`
+  returning **0** means nobody can call it, whatever the tests say.
+- Is there a screen or component that renders it? A backend with no UI and no tool
+  registration is a library, not a feature.
+- Was the test plan **executed**, or only written? "Written, not executed" is not testing.
+
+State delivery in two lines that are never merged: *code correct and tested*, and
+*reachable by a user/agent*.
+
+**Why this rule exists:** the vault-records work was reported as six-of-six points
+complete with CI at 34/34 green, while all six `vault_*` tools were registered in
+zero config files, the superseded `knowledge_*` tools were still the only ones
+wired, and no record UI existed. The fact was noted twice — as an explanation for
+why a test was skipped — and never read as "the goal is not delivered."
+
+## Reporting Results (MANDATORY)
+
+**Never report success that was not verified, and check the instrument before
+trusting a green.** Ask: *could this check have detected the failure at all?*
+
+- If a search returns nothing, first search for something you know is present. A
+  grep over 1 of 523 asset files "proved" a field was absent when it appears in 3.
+- Capture exit codes directly, never through a pipe: `cmd > log 2>&1; echo "exit=$?"`.
+  Read the step's exit code, not the wrapper's — a wrapper reporting 0 has masked a
+  hard compile error here.
+- A pass under one flag set is not a pass. Race bugs need `-race`; cross-platform
+  breaks need `GOOS=<target> go vet` (a native-only gate missed a Windows break).
+- **A test that fails twice under an isolated re-run is not a flake.** Calling one a
+  flake is how a real defect survives.
+- Correct a wrong claim plainly and immediately; never bury it inside an otherwise
+  positive summary.
+
+## Language and formatting for the founder (MANDATORY)
+
+Write for a technically literate non-engineer. He understands business and
+technology well and does not read code for a living.
+
+- **Plain words over jargon.** Use a technical term only when it is the precise
+  word, and define it in half a sentence on first use. No unexplained acronyms.
+- **Lead with what it means**, then the mechanism only if it changes a decision.
+- **Structure every reply**: a short lead, then headed sections, tables for status
+  or comparisons, bullets for lists, code blocks for commands and output. Keep
+  paragraphs to a few lines. **Never a wall of unbroken text.**
+- Prefer a concrete example over an abstract explanation.
+- This governs register only — never drop a caveat, an unverified finding or a
+  number to make a sentence read more smoothly.
+
 ## Hard Constraints (non-negotiable)
 
 1. **Single Go binary** — all backend features compile into one binary. No new runtime deps. SPA embedded via `go:embed`.
