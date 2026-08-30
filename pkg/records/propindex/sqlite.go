@@ -411,6 +411,38 @@ func boolInt(b bool) int {
 	return 0
 }
 
+// AllPaths visits every path this store holds, with its kind and source hash.
+//
+// Unlike every statement below this comment, this query carries NO narrowing
+// WHERE clause and is not measured against B1 — it is the sync pipeline's own
+// maintenance walk (store.go's doc comment on the interface method explains
+// why), not a caller-shaped query.
+func (ix *Index) AllPaths(ctx context.Context, visit func(path, kind, sourceHash string) error) (err error) {
+	rows, err := ix.query(ctx, PhaseRead, `SELECT path, kind, source_hash FROM notes`)
+	if err != nil {
+		return fmt.Errorf("propindex: listing indexed paths: %w", err)
+	}
+	defer func() {
+		if cerr := rows.Close(); cerr != nil && err == nil {
+			err = fmt.Errorf("propindex: closing the path listing: %w", cerr)
+		}
+	}()
+
+	for rows.Next() {
+		var path, kind, hash string
+		if err := rows.Scan(&path, &kind, &hash); err != nil {
+			return fmt.Errorf("propindex: reading an indexed path: %w", err)
+		}
+		if err := visit(path, kind, hash); err != nil {
+			return err
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("propindex: the path listing ended early: %w", err)
+	}
+	return nil
+}
+
 // ---------------------------------------------------------------------------
 // READ PATH — every statement below is narrowing, and only narrowing.
 // ---------------------------------------------------------------------------

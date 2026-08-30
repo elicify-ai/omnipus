@@ -245,6 +245,19 @@ type Store interface {
 	// ask for this (FR-020a).
 	NeedsFullIndex() bool
 
+	// AllPaths visits every path the store currently holds, with its kind and
+	// source hash, in no particular order.
+	//
+	// This is the sync pipeline's OWN maintenance walk — the exact analog of a
+	// text-index manifest's Entries loop — and it is deliberately NOT subject
+	// to B1/B2 (FR-064's bounds protect a QUERY's narrowed population; this
+	// walk exists to let the indexer detect a note that left the vault, which
+	// requires seeing every row the store holds, however many there are).
+	// Nothing about it is exposed to a caller outside the indexing pipeline: it
+	// carries no properties, no relations, no tasks, and it must never be
+	// reached from a knowledge_find-shaped query.
+	AllPaths(ctx context.Context, visit func(path, kind, sourceHash string) error) error
+
 	// Close releases the database.
 	Close() error
 }

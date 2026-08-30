@@ -75,6 +75,8 @@ import (
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/knowledge"
+	"github.com/elicify-ai/omnipus/pkg/records"
+	"github.com/elicify-ai/omnipus/pkg/vaultprops"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
@@ -216,6 +218,9 @@ type KnowledgeLifecycleOptions struct {
 	Scan func(root string) (*knowledge.ScanResult, error)
 	// SyncWith overrides (*knowledge.Index).SyncWith.
 	SyncWith func(ctx context.Context, ix *knowledge.Index, opts knowledge.SyncOptions) (knowledge.SyncStats, error)
+	// PropsSync overrides vaultprops.Sync — the properties-index build/update
+	// pass ADR-068 D16.2/D16.5 needs, run alongside the text-index reconcile.
+	PropsSync func(ctx context.Context, home, collectionRoot string) (vaultprops.SyncStats, error)
 	// DriftCheck overrides knowledge.CheckDrift.
 	DriftCheck func(context.Context, *knowledge.Index) (knowledge.DriftReport, error)
 	// NewTicker overrides the drift schedule's clock, so FR-038a's cadence is
@@ -234,6 +239,7 @@ type KnowledgeLifecycle struct {
 	openIndex   func(home, root string) (*knowledge.Index, error)
 	scan        func(root string) (*knowledge.ScanResult, error)
 	syncWith    func(context.Context, *knowledge.Index, knowledge.SyncOptions) (knowledge.SyncStats, error)
+	propsSync   func(ctx context.Context, home, collectionRoot string) (vaultprops.SyncStats, error)
 	health      *knowledge.HealthChecker
 	driftPeriod time.Duration
 
@@ -274,6 +280,7 @@ func NewKnowledgeLifecycle(opts KnowledgeLifecycleOptions) (*KnowledgeLifecycle,
 		openIndex:   opts.OpenIndex,
 		scan:        opts.Scan,
 		syncWith:    opts.SyncWith,
+		propsSync:   opts.PropsSync,
 		driftPeriod: opts.DriftInterval,
 		byRoot:      make(map[string]*knowledgeCollection),
 		byKey:       make(map[knowledgeMountKey]string),
@@ -293,6 +300,11 @@ func NewKnowledgeLifecycle(opts KnowledgeLifecycleOptions) (*KnowledgeLifecycle,
 	if kl.syncWith == nil {
 		kl.syncWith = func(ctx context.Context, ix *knowledge.Index, o knowledge.SyncOptions) (knowledge.SyncStats, error) {
 			return ix.SyncWith(ctx, o)
+		}
+	}
+	if kl.propsSync == nil {
+		kl.propsSync = func(ctx context.Context, home, collectionRoot string) (vaultprops.SyncStats, error) {
+			return vaultprops.Sync(ctx, home, collectionRoot, vaultprops.SyncOptions{})
 		}
 	}
 	if kl.driftPeriod <= 0 {
@@ -786,6 +798,30 @@ func (kl *KnowledgeLifecycle) reconcile(ctx context.Context, c *knowledgeCollect
 		Err:        err,
 	}
 	kl.emit(c, update)
+
+	// ADR-068 D16.2/D16.5 — keep the derived PROPERTIES index in step with the
+	// same reconcile that just moved the text index. It runs after the text
+	// sync (never before, and never in place of it): typed record retrieval
+	// is additive on top of plain-word search, and a properties-index failure
+	// here must not make the mount attach fail or the collection stop being
+	// text-searchable — RequirePropertyIndex's own posture ("plain-word
+	// search and knowledge_read still work") applies here too, so this is
+	// logged and swallowed rather than folded into reconcile's own error.
+	//
+	// It runs UNCONDITIONALLY, not gated on `incremental`: vaultprops.Sync
+	// does its own diff against what the store already holds (there is no
+	// separate "first build" branch to choose between — see sync.go's
+	// header), so the same call is correct on a brand-new mount and on the
+	// ten-thousandth reconcile of an old one.
+	if _, perr := kl.propsSync(ctx, kl.home, c.root); perr != nil && !errors.Is(perr, records.ErrPropertyIndexUnavailable) {
+		// The platform-unavailable case (errors.Is match above) is not logged
+		// again here: records.RequirePropertyIndex already logged its own WARN,
+		// by name, at the point Sync asked the question. Logging it a second
+		// time here would say the same thing twice under a different message,
+		// which is the kind of noise that makes a real failure easy to miss.
+		slog.Warn("knowledge: properties index sync failed; typed record queries may be stale or refuse",
+			"collection", c.root, "error", perr)
+	}
 
 	// Stamp the completion instant so a drift report produced from the state
 	// this run has just replaced cannot trigger a redundant repair. Stamped on

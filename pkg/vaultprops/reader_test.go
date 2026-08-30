@@ -199,6 +199,9 @@ func (s *verdictSpy) Relations(context.Context, propindex.Selector, func(propind
 }
 func (s *verdictSpy) NeedsFullIndex() bool { return false }
 func (s *verdictSpy) Close() error         { return nil }
+func (s *verdictSpy) AllPaths(context.Context, func(path, kind, sourceHash string) error) error {
+	return nil
+}
 
 // TestReader_EveryCandidateIsRejectedSoTheSweepCannotHitTheSurvivorBound.
 //

@@ -31,6 +31,9 @@ import (
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/knowledge"
+	"github.com/elicify-ai/omnipus/pkg/records"
+	"github.com/elicify-ai/omnipus/pkg/records/propindex"
+	"github.com/elicify-ai/omnipus/pkg/vaultprops"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
@@ -1032,4 +1035,113 @@ func TestKnowledgeLifecycle_ProgressFramesAreBoundedNotOnePerFile(t *testing.T) 
 	assert.Equal(t, "idle", terminal.Phase)
 	assert.Equal(t, int64(wantTotal), terminal.IndexedFiles,
 		"coalescing may drop intermediate frames, never the final count")
+}
+
+// --- ADR-068 D16.2/D16.5: AttachMount also builds the PROPERTIES index ------
+//
+// Wave 2.5's gap: nothing in the running system ever wrote to the derived
+// properties index, so on a fresh install it stayed empty forever and
+// knowledge_find refused every typed query with "the properties index is not
+// open, so no record can be read". reconcile now runs vaultprops.Sync
+// alongside the text-index sync it already ran; these tests prove that call is
+// actually wired, not merely present in the source.
+
+const kltPlantSchema = "schema_version: 1\n" +
+	"type: plant\n" +
+	"properties:\n" +
+	"  condition: { type: text }\n"
+
+const kltFernNote = "---\n" +
+	"type: plant\n" +
+	"id: PL-0001\n" +
+	"condition: growing\n" +
+	"---\n" +
+	"# Fern\n"
+
+func TestKnowledgeLifecycle_AttachMountBuildsThePropertiesIndex(t *testing.T) {
+	if !records.PropertyIndexAvailable {
+		t.Skip("no properties index on this build; vaultprops.Sync is a documented no-op there")
+	}
+	root := kltVault(t, map[string]string{
+		".omnipus-vault/records/plant.yaml": kltPlantSchema,
+		"Plants/Fern.md":                    kltFernNote,
+	})
+	home := kltHome(t)
+	kl := kltLifecycle(t, KnowledgeLifecycleOptions{Home: home})
+
+	require.NoError(t, kl.AttachMount(context.Background(), "ws-a", "vault", root))
+
+	idxPath, err := knowledge.PropertiesIndexPath(home, root)
+	require.NoError(t, err)
+	store, err := propindex.Open(context.Background(), idxPath, propindex.Options{})
+	require.NoError(t, err)
+	defer func() { _ = store.Close() }()
+
+	require.False(t, store.NeedsFullIndex(),
+		"AttachMount must have populated the properties index, not left it empty")
+
+	var got []propindex.Candidate
+	require.NoError(t, store.Candidates(context.Background(), propindex.Selector{RecordType: "plant"},
+		func(c propindex.Candidate) (propindex.Verdict, error) {
+			got = append(got, c)
+			return propindex.Rejected, nil
+		}))
+	require.Len(t, got, 1)
+	assert.Equal(t, "PL-0001", got[0].RecordID)
+	assert.Equal(t, "Plants/Fern.md", got[0].Path)
+}
+
+// TestKnowledgeLifecycle_PropsSyncSeamIsCalledWithHomeAndRoot proves the hook
+// point itself, independent of vaultprops.Sync's own behaviour: the seam a
+// test can already override for OpenIndex/Scan/SyncWith now exists for the
+// properties pass too, and reconcile actually calls it — not just on the
+// first attach, but again on a reconcile the mock can distinguish.
+func TestKnowledgeLifecycle_PropsSyncSeamIsCalledWithHomeAndRoot(t *testing.T) {
+	root := kltVault(t, map[string]string{"one.md": "# One\nalpha"})
+	home := kltHome(t)
+
+	var calls []string
+	var mu sync.Mutex
+	kl := kltLifecycle(t, KnowledgeLifecycleOptions{
+		Home: home,
+		PropsSync: func(_ context.Context, gotHome, gotRoot string) (vaultprops.SyncStats, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			calls = append(calls, gotHome+"|"+gotRoot)
+			return vaultprops.SyncStats{}, nil
+		},
+	})
+
+	require.NoError(t, kl.AttachMount(context.Background(), "ws-a", "vault", root))
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, calls, 1, "the properties sync seam must be called exactly once per reconcile")
+	assert.Equal(t, home+"|"+root, calls[0])
+}
+
+// TestKnowledgeLifecycle_PropsSyncFailureDoesNotFailTheMount — the same
+// graceful-degradation posture records.RequirePropertyIndex documents
+// everywhere else ("plain-word search and knowledge_read still work") applies
+// to the sync hook too: a properties-index failure must not make the mount
+// itself fail, because typed records are additive on top of text search.
+func TestKnowledgeLifecycle_PropsSyncFailureDoesNotFailTheMount(t *testing.T) {
+	root := kltVault(t, map[string]string{"one.md": "# One\nalpha"})
+	home := kltHome(t)
+
+	kl := kltLifecycle(t, KnowledgeLifecycleOptions{
+		Home: home,
+		PropsSync: func(context.Context, string, string) (vaultprops.SyncStats, error) {
+			return vaultprops.SyncStats{}, errors.New("boom: disk full")
+		},
+	})
+
+	err := kl.AttachMount(context.Background(), "ws-a", "vault", root)
+	assert.NoError(t, err, "a properties-index failure must not fail the whole mount")
+
+	ix, ok := kl.IndexForRoot(root)
+	require.True(t, ok)
+	hits, err := ix.Search("alpha", 10)
+	require.NoError(t, err)
+	assert.Len(t, hits, 1, "text search must still work even when the properties sync failed")
 }
