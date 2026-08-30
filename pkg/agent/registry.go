@@ -94,8 +94,10 @@ func NewAgentRegistry(
 		// route (routing bindings, the UI agent picker, delegate, direct
 		// agent_id addressing) — only switch_agent's literal target:"default"
 		// path is shadowed, since that sentinel always wins over an
-		// id-matched lookup. id is already lowercased by NormalizeAgentID,
-		// matching switch_agent's case-insensitive collision rule.
+		// id-matched lookup, matched case-insensitively (strings.EqualFold,
+		// same as this check). id is already lowercased by
+		// NormalizeAgentID, matching switch_agent's case-insensitive
+		// collision rule.
 		if id == tools.SwitchAgentDefaultTarget {
 			logger.WarnCF("agent",
 				"agent id is literally \"default\" — unreachable via switch_agent's target:\"default\" literal path (that sentinel always resolves to the CONFIGURED default agent instead); rename this agent",
