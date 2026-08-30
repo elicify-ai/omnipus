@@ -1,4 +1,4 @@
-# ADR-071 — Region-aware transport for the live browser
+# ADR-072 — Region-aware transport for the live browser
 
 **Status:** Proposed
 **Date:** 2026-08-30
@@ -166,7 +166,11 @@ not a fault.
 It is capturable — `Debugger.enable` plus
 `setInstrumentationBreakpoint('beforeScriptExecution')`, then injecting via
 `Debugger.evaluateOnCallFrame` inside the resulting pause, produced a capture
-**byte-identical** to the main-thread case (matching sha256). `Runtime.evaluate`
+a capture the spike reported as byte-identical to the main-thread case.
+**Caveat: no hash comparison is committed** — nothing in the spike computes a
+digest, so "byte-identical" rests on the spike agent's report, not on a
+reproducible check. Treat it as unverified until a comparison is added.
+`Runtime.evaluate`
 on a worker halted by `waitForDebuggerOnStart` deadlocks.
 
 YouTube did not use worker MSE in these runs. If it adopts it, a naive shim goes
@@ -301,7 +305,7 @@ which is why §3.2's codec gate exists.
 | R6 | WebAudio-generated audio has no path | Medium | **Open** — not covered, not tested |
 | R7 | Subresource proxy egress surface | Medium | Must inherit sandbox egress policy |
 | R8 | Region misclassification renders nothing | Medium | Default to encoding when unclassifiable |
-| R9 | Viewer-side bitrate adaptation is lost for media | Medium | ADR-069 measured a 27.6 %-loss viewer link; forwarded segments cannot adapt down |
+| R9 | Viewer-side bitrate adaptation is lost for media | **High** | ADR-069's 27.6 %-loss link was **RESOLVED 2026-08-19** by an AIMD loop (`bitrate.go`). Citing that number as live was wrong. The real point stands and is worse: forwarded byte-exact segments **cannot** adapt down, so this design *removes* a mitigation the shipped system has, with no replacement proposed |
 | R10 | Canvas cost is highest on macOS (§4.4) | Low | Accepted |
 
 ---
