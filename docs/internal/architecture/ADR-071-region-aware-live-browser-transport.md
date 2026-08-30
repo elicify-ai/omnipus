@@ -113,7 +113,8 @@ strongest:
 ## 3. What the spikes proved
 
 Two throwaway spikes were built to test the load-bearing claims before
-committing to this design. Both are reproducible; see §9.
+committing to this design. The code and evidence are committed alongside this
+ADR; §9 states exactly which arms are automated and which are not.
 
 ### 3.1 Media replication works, on YouTube, with audio, in sync
 
