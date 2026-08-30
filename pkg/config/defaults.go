@@ -597,53 +597,47 @@ func DefaultConfig() *Config {
 				// would inherit this "allow").
 				"list_jobs": "allow",
 
-				// --- ADR-067 D17 (FR-070) knowledge-base tools ---
-				// All nine seeded "allow" at the ceiling, retrieval and
-				// authoring alike. As everywhere else in this map, that grants
-				// the tools to NOBODY by itself — it only raises the level an
-				// agent's own policy may be granted up to, and every seeded
-				// agent carries an explicit per-agent entry
-				// (pkg/coreagent/core.go's coreAgentSeed: allow/allow for Jim
-				// and Ava, allow-retrieval + ask-authoring for Mia and Ray,
-				// explicit deny everywhere else including the Worker's sparse
-				// map, where an absent key would silently INHERIT this allow).
+				// --- ADR-068 D15.3 (FR-070) knowledge-base tools ---
+				// All six seeded "allow" at the ceiling, read tier and the
+				// three writes alike — superseding ADR-067 D17's nine (see
+				// pkg/coreagent/core.go's allStaticToolNames for the
+				// retirement). As everywhere else in this map, "allow" here
+				// grants the tools to NOBODY by itself — it only raises the
+				// level an agent's own policy may be granted up to, and
+				// every seeded agent carries an explicit per-agent entry
+				// (pkg/coreagent/core.go's coreAgentSeed: allow on all six
+				// for Jim, allow-read + ask-write for Ava/Mia/Ray, explicit
+				// deny on all six everywhere else including the Worker's
+				// sparse map, where an absent key would silently INHERIT
+				// this allow).
 				//
-				// "Retrieval" is THREE names, not two: knowledge_tasks reads.
-				// It walks the collection and regex-matches checkbox lines,
-				// mutating nothing and writing no mutation audit record, and
-				// it is rate-limited through the retrieval limiter. ADR-067 D7
-				// prints the name under an "Authoring" heading, but that
-				// heading is a bucket rather than a definition — nothing in
-				// the ADR or the spec states a single requirement, scenario or
-				// test for the tool (round-1 review finding M-14, unanswered
-				// through rounds 2-4). The full reasoning, and why the grouping
-				// is load-bearing rather than cosmetic, is the SEED RULE in
-				// pkg/coreagent/core.go's allStaticToolNames.
+				// An "ask" ceiling on the write three (knowledge_edit,
+				// knowledge_restructure, knowledge_configure) would be the
+				// same landed defect recorded four times above
+				// (inspect_session, the ADR-052 three, plan_correct/
+				// stop_plan, list_jobs): the runtime global x agent merge is
+				// strictest-wins (pkg/tools/compositor.go:
+				// resolveEffectivePolicyWith), so a stricter ceiling here
+				// would drag Jim's deliberately-seeded "allow" back down to
+				// "ask" and make his one intentional exception (argued in
+				// his own coreAgentSeed case: he already holds unprompted
+				// bash, so an ask-gate on these three would gate nothing
+				// real for him) dead on every install while the seed data
+				// still read exactly as intended.
 				//
-				// An "ask" ceiling on the authoring tools would be the same
-				// landed defect recorded four times above (inspect_session,
-				// the ADR-052 three, plan_correct/stop_plan, list_jobs): the
-				// runtime global x agent merge is strictest-wins
-				// (pkg/tools/compositor.go:resolveEffectivePolicyWith), so it
-				// would drag Jim's and Ava's seeded "allow" back down to "ask"
-				// and make D17's role split dead on every install while the
-				// seed data still read exactly as the ADR requires.
-				//
-				// The real containment for these tools is not the ceiling: it
-				// is the per-agent seed, the workspace-mount scoping the
-				// retrieval tools enforce themselves (ADR-067 D7), and the
-				// per-mutation audit event (ADR-067 D19).
-				// Retrieval.
-				"knowledge_search": "allow",
-				"knowledge_graph":  "allow",
-				"knowledge_tasks":  "allow",
-				// Authoring.
-				"knowledge_create":         "allow",
-				"knowledge_link":           "allow",
-				"knowledge_set_property":   "allow",
-				"knowledge_append_section": "allow",
-				"knowledge_move":           "allow",
-				"knowledge_rename":         "allow",
+				// The real containment for these tools is not the ceiling:
+				// it is the per-agent seed, the workspace-mount scoping the
+				// read tier enforces itself, and the per-mutation audit
+				// event (ADR-068's FR-090, carried forward from ADR-067
+				// D19).
+				// Read tier.
+				"knowledge_describe": "allow",
+				"knowledge_find":     "allow",
+				"knowledge_read":     "allow",
+				// Writes.
+				"knowledge_edit":        "allow",
+				"knowledge_restructure": "allow",
+				"knowledge_configure":   "allow",
 			},
 		},
 		// Planning holds the Planning & Goals epic's global loop bounds
