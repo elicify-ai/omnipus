@@ -127,7 +127,7 @@ func NewWorkspaceCreateTool(d *Deps) *WorkspaceCreateTool { return &WorkspaceCre
 func (t *WorkspaceCreateTool) Name() string               { return "create_workspace" }
 func (t *WorkspaceCreateTool) Scope() tools.ToolScope     { return tools.ScopeCore }
 func (t *WorkspaceCreateTool) Description() string {
-	return "Create a new workspace to group related tasks. Call this when the user mentions starting a new workspace, initiative, or area of work. Returns the created workspace's id — pass this id to create_task_in_workspace when creating tasks for the workspace.\nParameters: name (required, workspace title), description (optional, free text), core_team (optional, list of agent IDs associated with this workspace)."
+	return "Create a new workspace to group related tasks. Call this when the user mentions starting a new workspace, initiative, or area of work. Returns the created workspace's id — pass this id to create_task_in_workspace when creating tasks for the workspace. Members named in core_team also get the default delegation trust edges between them, so they can delegate to each other immediately. name is capped at 200 characters and description at 2000; exceeding either is rejected.\nParameters: name (required, workspace title), description (optional, free text), core_team (optional, list of agent IDs associated with this workspace)."
 }
 
 func (t *WorkspaceCreateTool) Parameters() map[string]any {
@@ -176,15 +176,60 @@ func (t *WorkspaceCreateTool) Execute(ctx context.Context, args map[string]any) 
 	if raw, ok := args["core_team"].([]any); ok {
 		w.CoreTeam = sanitizeCoreTeam(raw)
 	}
+
+	// Serialize this create against the freshly-minted workspace ID
+	// (workspace.LockID), mirroring update_workspace/delete_workspace.
+	// workspace.LockID's own doc comment names the create path as a required
+	// caller — this tool previously never took the lock at all, which meant a
+	// racing gateway PUT/DELETE/delegation-PUT against the same ID (however
+	// unlikely with a fresh ULID) was not excluded, and — more importantly —
+	// the delegation-store write below (SaveDelegation) requires the lock to
+	// be held per its own caller contract.
+	unlock := workspacepkg.LockID(w.ID)
+	defer unlock()
+
+	// Compute (but do not yet persist) the default delegation edges for the
+	// initial core_team, closing the same ADR-037 gap
+	// update_workspace's seedDelegationEdgesForNewMembers fixes for the update
+	// path (see that function's doc comment for the full rationale). Without
+	// this, a workspace created here with a core_team gets ZERO delegation
+	// edges — under ADR-037's fail-closed rule (no edge ⇒ deny) no member
+	// could delegate to any other. The REST create path (pkg/gateway's
+	// defaultWorkspaceDelegationEdges) already seeds at creation; this tool
+	// did not. Every member of a fresh core_team is "newly added" relative to
+	// the empty prior team, so `added` is the whole team.
+	var seeded []workspacepkg.DelegationEdge
+	if len(w.CoreTeam) > 0 {
+		ceiling := workspaceDelegationDepthCeiling(t.deps)
+		configPresent := configAgentPresenceSet(t.deps)
+		seeded = seedDelegationEdgesForNewMembers(w.CoreTeam, w.CoreTeam, nil, ceiling, configPresent)
+	}
+
 	if err := writeEntity(workspacesDir(t.deps.Home), w.ID, w); err != nil {
 		return tools.ErrorResult(errorJSON("SAVE_FAILED", err.Error(), ""))
 	}
-	return tools.NewToolResult(successJSON(map[string]any{
+	// Persist seeded edges AFTER the record, so a failed record write can
+	// never leave the store authorizing agents the record does not list on
+	// the team — same ordering rationale as update_workspace.
+	var delegationSeedNote string
+	if len(seeded) > 0 {
+		if err := workspacepkg.SaveDelegation(t.deps.Home, w.ID, seeded); err != nil {
+			slog.Warn("sysagent: create_workspace: failed to seed delegation edges",
+				"workspace_id", w.ID, "error", err)
+		} else {
+			delegationSeedNote = seededEdgesSummary(seeded, w.CoreTeam)
+		}
+	}
+	resp := map[string]any{
 		"id": w.ID, "name": w.Name, "description": w.Description,
 		"status": w.Status, "pinned": w.Pinned, "pin_order": w.PinOrder,
 		"core_team":  w.CoreTeam,
 		"task_count": 0, "created_at": w.CreatedAt, "updated_at": w.UpdatedAt,
-	}))
+	}
+	if delegationSeedNote != "" {
+		resp["delegation_seeded"] = delegationSeedNote
+	}
+	return tools.NewToolResult(successJSON(resp))
 }
 
 // ---- system.workspace.update ----
@@ -195,7 +240,7 @@ func NewWorkspaceUpdateTool(d *Deps) *WorkspaceUpdateTool { return &WorkspaceUpd
 func (t *WorkspaceUpdateTool) Name() string               { return "update_workspace" }
 func (t *WorkspaceUpdateTool) Scope() tools.ToolScope     { return tools.ScopeCore }
 func (t *WorkspaceUpdateTool) Description() string {
-	return "Update an existing workspace's name, description, status, pin state, or core team. Call this when the user wants to rename, archive, pin, or reconfigure a workspace. Use list_workspaces first to find the workspace id.\nParameters: id (required, from list_workspaces), name, description, status (active/archived), pinned (bool), pin_order (int), core_team (list of agent IDs). Only provided fields are updated — EXCEPT core_team: sending it REPLACES the entire team list, it does not merge or add to it. WARNING: to add one member without dropping the rest, first call get_workspace, append the new agent id to the existing core_team array, then send that complete array back here."
+	return "Update an existing workspace's name, description, status, pin state, or core team. Call this when the user wants to rename, archive, pin, or reconfigure a workspace. Use list_workspaces first to find the workspace id.\nParameters: id (required, from list_workspaces), name, description, status (active/archived), pinned (bool), pin_order (int), core_team (list of agent IDs). Only provided fields are updated — EXCEPT core_team: sending it REPLACES the entire team list, it does not merge or add to it. WARNING: to add one member without dropping the rest, first call get_workspace, append the new agent id to the existing core_team array, then send that complete array back here. Adding an agent to core_team also grants the default delegation trust edges between it and the existing team — this tool writes real authorization records, bounded to the built-in seed matrix (it can never invent an arbitrary edge or name an off-team agent). Edges among members that were already on the team are never re-added, so a trust edge you previously removed stays removed. The response reports any edges seeded in `delegation_seeded`. If the workspace's delegation record is unreadable the whole update is refused rather than overwriting it with defaults (DELEGATION_STORE_UNREADABLE). Updating core_team on a workspace whose setup was pending also marks setup_completed in the response. name is capped at 200 characters, description at 2000."
 }
 
 func (t *WorkspaceUpdateTool) Parameters() map[string]any {
@@ -748,7 +793,7 @@ func NewWorkspaceDeleteTool(d *Deps) *WorkspaceDeleteTool { return &WorkspaceDel
 func (t *WorkspaceDeleteTool) Name() string               { return "delete_workspace" }
 func (t *WorkspaceDeleteTool) Scope() tools.ToolScope     { return tools.ScopeCore }
 func (t *WorkspaceDeleteTool) Description() string {
-	return "Delete a workspace. This is IRREVERSIBLE and destroys more than the workspace record: all GTD tasks belonging to the workspace, the mount/folder-grant store (records of which host folders were shared with it), the delegation trust graph (which agents may delegate to which within it), and the workspace's own directory (AGENT.md and its shared memory room) are all permanently removed. Call list_workspaces first to find the workspace id. Requires confirm:true.\nParameters: id (required), confirm (bool, must be true to prevent accidental deletion)."
+	return "Delete a workspace. This is IRREVERSIBLE and destroys more than the workspace record: all GTD tasks belonging to the workspace, the mount/folder-grant store (records of which host folders were shared with it), the delegation trust graph (which agents may delegate to which within it), and the workspace's own directory (AGENT.md and its shared memory room) are all permanently removed. Only GTD-status tasks (inbox/next/in_progress/blocked/done/failed) are cascade-deleted — workflow-status tasks that still reference this workspace_id are left in place and become orphans. Call list_workspaces first to find the workspace id. Requires confirm:true.\nParameters: id (required), confirm (bool, must be true to prevent accidental deletion)."
 }
 
 func (t *WorkspaceDeleteTool) Parameters() map[string]any {
@@ -876,7 +921,7 @@ func NewWorkspaceListTool(d *Deps) *WorkspaceListTool { return &WorkspaceListToo
 func (t *WorkspaceListTool) Name() string             { return "list_workspaces" }
 func (t *WorkspaceListTool) Scope() tools.ToolScope   { return tools.ScopeCore }
 func (t *WorkspaceListTool) Description() string {
-	return "List all active workspaces with their task counts. Call this to find workspace ids before calling create_task_in_workspace, list_tasks_in_workspace, or update_workspace. Returns newest workspaces first.\nParameters: status (optional: active/archived/all, defaults to active)."
+	return "List workspaces with their live task counts. Call this to find workspace ids for create_task_in_workspace, list_tasks_in_workspace, get_workspace, or update_workspace. Ordering is: the default workspace first, then pinned workspaces by pin_order, then the rest newest-first — so the first result is not necessarily the most recently created one. Returns id, name, description, status, pinned, pin_order, is_default, core_team and task_count. Any workspace file that cannot be read is skipped and counted in `skipped`.\nParameters: status (optional: active/archived/all, defaults to active)."
 }
 
 func (t *WorkspaceListTool) Parameters() map[string]any {
@@ -909,6 +954,7 @@ func (t *WorkspaceListTool) Execute(_ context.Context, args map[string]any) *too
 	}
 
 	var workspaces []workspace
+	skipped := 0
 	for _, e := range entries {
 		if e.IsDir() || len(e.Name()) < 6 || e.Name()[len(e.Name())-5:] != ".json" {
 			continue
@@ -917,11 +963,13 @@ func (t *WorkspaceListTool) Execute(_ context.Context, args map[string]any) *too
 		data, err := os.ReadFile(entityPath(dir, wid))
 		if err != nil {
 			slog.Warn("sysagent: skipping unreadable workspace file", "file", e.Name(), "error", err)
+			skipped++
 			continue
 		}
 		w, err := workspaceFromFile(data)
 		if err != nil {
 			slog.Warn("sysagent: skipping corrupt workspace file", "file", e.Name(), "error", err)
+			skipped++
 			continue
 		}
 		// Apply status filter.
@@ -980,7 +1028,11 @@ func (t *WorkspaceListTool) Execute(_ context.Context, args map[string]any) *too
 			UpdatedAt:   w.UpdatedAt,
 		})
 	}
-	return tools.NewToolResult(successJSON(map[string]any{"workspaces": resp}))
+	out := map[string]any{"workspaces": resp}
+	if skipped > 0 {
+		out["skipped"] = skipped
+	}
+	return tools.NewToolResult(successJSON(out))
 }
 
 // ---- system.workspace.get ----
@@ -991,7 +1043,7 @@ func NewWorkspaceGetTool(d *Deps) *WorkspaceGetTool { return &WorkspaceGetTool{d
 func (t *WorkspaceGetTool) Name() string            { return "get_workspace" }
 func (t *WorkspaceGetTool) Scope() tools.ToolScope  { return tools.ScopeCore }
 func (t *WorkspaceGetTool) Description() string {
-	return "Get a single workspace by ID including its live task count. Use this to refresh workspace data after creating tasks.\nParameters: id (required, from list_workspaces)."
+	return "Get a single workspace by ID including its live task count. Use this to refresh workspace data after creating tasks. Returns id, name, description, status, pinned, pin_order, is_default, core_team, task_count, created_at and updated_at. It does NOT return the delegation graph (which agents on this team may delegate to which) — that lives in a separate store; see the workspace's Team tab for it.\nParameters: id (required, from list_workspaces)."
 }
 
 func (t *WorkspaceGetTool) Parameters() map[string]any {
