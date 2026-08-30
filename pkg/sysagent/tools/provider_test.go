@@ -538,8 +538,8 @@ func TestProviderTest_DescriptionDiscloseNoNetworkCall(t *testing.T) {
 	}
 }
 
-// TestProviderTest_DescriptionDisclosesLocalAlwaysOK is a regression test for
-// M3: the description must state that local providers always report ok
+// TestProviderTest_DescriptionDisclosesLocalAlwaysOK is a regression test:
+// the description must state that local providers always report ok
 // without a key, and that a failed check is a normal result (status=error),
 // not a tool-level error.
 func TestProviderTest_DescriptionDisclosesLocalAlwaysOK(t *testing.T) {
@@ -555,10 +555,10 @@ func TestProviderTest_DescriptionDisclosesLocalAlwaysOK(t *testing.T) {
 	}
 }
 
-// ---- F3(c)/M3: catalog membership replaces the hardcoded cloud/local allow-lists ----
+// ---- catalog membership replaces the hardcoded cloud/local allow-lists ----
 
-// TestProviderConfigure_WideCatalogProviderConfigures is a regression test for
-// F3(c): the ~10-name hardcoded cloudProviders allow-list rejected ~200 real
+// TestProviderConfigure_WideCatalogProviderConfigures is a regression test:
+// the ~10-name hardcoded cloudProviders allow-list rejected ~200 real
 // catalog providers by omission (the api_key-required gate simply never
 // fired for them, which was itself a bug — but before this fix, a caller
 // following the OLD map's vocabulary had no way to know these ids were even
@@ -587,8 +587,8 @@ func TestProviderConfigure_WideCatalogProviderConfigures(t *testing.T) {
 	}
 }
 
-// TestProviderConfigure_LegacyAliasIdsRejected is a regression test for
-// F3(c): "bedrock" and "gemini" were accepted by the old hardcoded
+// TestProviderConfigure_LegacyAliasIdsRejected is a regression test:
+// "bedrock" and "gemini" were accepted by the old hardcoded
 // cloudProviders map even though neither is a real catalog id (the real ids
 // are "amazon-bedrock" and "google") — so a caller using the tool's own
 // implied vocabulary got a fabricated "connected" status for a provider
@@ -642,10 +642,10 @@ func TestProviderConfigure_UnknownProviderRejected(t *testing.T) {
 	require.Equal(t, "UNKNOWN_PROVIDER", errBlock["code"])
 }
 
-// ---- F3(a)/(d): configure_provider no longer fabricates status/models, and
+// ---- configure_provider no longer fabricates status/models, and
 // surfaces a reload failure instead of swallowing it ----
 
-// TestProviderConfigure_NoFakeStatusFields is a regression test for F3(a):
+// TestProviderConfigure_NoFakeStatusFields is a regression test:
 // the response previously carried a hardcoded status:"connected" and
 // models_available:[] despite Execute making zero network calls. Neither
 // field must appear any more.
@@ -669,8 +669,8 @@ func TestProviderConfigure_NoFakeStatusFields(t *testing.T) {
 	require.Equal(t, "anthropic", m["name"])
 }
 
-// TestProviderConfigure_PublishWarningOnReloadFailure is a regression test
-// for F3(d): a ReloadFunc error was previously discarded with `_ =
+// TestProviderConfigure_PublishWarningOnReloadFailure is a regression test:
+// a ReloadFunc error was previously discarded with `_ =
 // t.deps.ReloadFunc()`, so a caller had no way to know the provider was not
 // actually live yet. It must now surface as publish_warning, mirroring
 // create_agent/update_agent/delete_agent, while the call still reports
@@ -705,10 +705,10 @@ func TestProviderConfigure_DescriptionDisclosesNoNetworkCall(t *testing.T) {
 	}
 }
 
-// ---- F4: list_providers reports a real status and sees Provider-field-only entries ----
+// ---- list_providers reports a real status and sees Provider-field-only entries ----
 
-// TestProviderList_StatusReflectsCredentialPresence is a regression test for
-// F4: Status was a hardcoded literal "configured" for every entry
+// TestProviderList_StatusReflectsCredentialPresence is a regression test:
+// Status was a hardcoded literal "configured" for every entry
 // regardless of whether a key was actually stored. It must now be
 // key_present when the credential resolves and no_credentials otherwise.
 func TestProviderList_StatusReflectsCredentialPresence(t *testing.T) {
@@ -740,8 +740,8 @@ func TestProviderList_StatusReflectsCredentialPresence(t *testing.T) {
 	require.Equal(t, "no_credentials", status["openrouter"], "openrouter has no ref at all")
 }
 
-// TestProviderList_SeesProviderFieldOnlyEntry is a regression test for
-// F3(b)/F4: an entry written by configure_provider for a brand-new provider
+// TestProviderList_SeesProviderFieldOnlyEntry is a regression test:
+// an entry written by configure_provider for a brand-new provider
 // carries an explicit Provider field but a bare (non-slash) Model field —
 // providerFromModelRef(m.Model) alone can't see it and used to skip it
 // entirely. list_providers must use providerNameOf (Provider-field-first)
@@ -763,7 +763,7 @@ func TestProviderList_SeesProviderFieldOnlyEntry(t *testing.T) {
 	require.Equal(t, "cohere", pm["name"])
 }
 
-// TestProviderConfigureThenList_EndToEnd is a regression test for F3(b): a
+// TestProviderConfigureThenList_EndToEnd is a regression test: a
 // provider configured via configure_provider (which appends a
 // Provider-field-only entry for a brand-new provider) must be visible
 // afterwards via list_providers — this was the original defect: success,
@@ -790,9 +790,9 @@ func TestProviderConfigureThenList_EndToEnd(t *testing.T) {
 	require.True(t, names["xai"], "xai configured via configure_provider must appear in list_providers")
 }
 
-// ---- F17: list_models description discloses the live network call ----
+// ---- list_models description discloses the live network call ----
 
-// TestListModels_DescriptionDisclosesLiveCall is a regression test for F17:
+// TestListModels_DescriptionDisclosesLiveCall is a regression test:
 // the description previously read like a config read even though Execute
 // issues a real HTTP GET per configured provider. It must now disclose the
 // live call, the warnings field, and that it doubles as the connectivity
@@ -813,4 +813,104 @@ func TestListModels_DescriptionDisclosesLiveCall(t *testing.T) {
 	if !strings.Contains(desc, "test_provider") {
 		t.Errorf("Description() should cross-reference test_provider, which points callers here: %q", desc)
 	}
+}
+
+// ---- nil-CredStore safety + test_provider UNKNOWN_PROVIDER parity ----
+//
+// configure_provider and test_provider both called t.deps.CredStore.Get(ref)
+// unguarded, unlike list_providers (which already guarded it). Deps.CredStore
+// is nil in some test/scaffolding contexts, and configure_provider{name:
+// "ollama"} with no api_key (legal for a local provider) still reaches the
+// unguarded Get — a real, reachable nil-deref, not just a theoretical one.
+
+// TestProviderConfigure_NilCredStoreLocalProviderNoPanic is the exact
+// reachable scenario: a local provider configured with no api_key skips the
+// CredStore.Set call entirely but still falls into the api_key_stored
+// resolution branch, which used to deref a nil CredStore unconditionally.
+func TestProviderConfigure_NilCredStoreLocalProviderNoPanic(t *testing.T) {
+	cfg := &config.Config{}
+	deps, _, _ := newProviderTestDeps(t, cfg)
+	deps.CredStore = nil // simulate an unwired test/scaffolding Deps
+
+	require.NotPanics(t, func() {
+		res := NewProviderConfigureTool(deps).Execute(context.Background(), map[string]any{
+			"name": "ollama",
+		})
+		require.False(t, res.IsError, "configure_provider for a local provider should not fail: %s", res.ForLLM)
+		m := unmarshalProviderResult(t, res.ForLLM)
+		require.Equal(t, false, m["api_key_stored"], "no key was provided and CredStore is nil, so nothing resolves")
+	})
+}
+
+// TestProviderConfigure_NilCredStoreWithAPIKeyNoPanic covers the same nil
+// CredStore with an api_key supplied — the Set call is guarded separately
+// from the Get-based api_key_stored resolution this fix targets, but the
+// whole call path must still not panic.
+func TestProviderConfigure_NilCredStoreWithAPIKeyNoPanic(t *testing.T) {
+	cfg := &config.Config{}
+	deps, _, _ := newProviderTestDeps(t, cfg)
+	deps.CredStore = nil
+
+	require.NotPanics(t, func() {
+		NewProviderConfigureTool(deps).Execute(context.Background(), map[string]any{
+			"name": "ollama", "api_key": "does-not-matter-locally",
+		})
+	})
+}
+
+// TestProviderTest_NilCredStoreNoPanic verifies test_provider does not panic
+// when CredStore is nil, for both a local provider (no key needed, must
+// report ok) and a cloud provider (no key resolves, must report error, not
+// an IsError tool failure).
+func TestProviderTest_NilCredStoreNoPanic(t *testing.T) {
+	cfg := &config.Config{}
+	deps, _, _ := newProviderTestDeps(t, cfg)
+	deps.CredStore = nil
+
+	require.NotPanics(t, func() {
+		res := NewProviderTestTool(deps).Execute(context.Background(), map[string]any{"name": "ollama"})
+		require.False(t, res.IsError, "%s", res.ForLLM)
+		m := unmarshalProviderResult(t, res.ForLLM)
+		require.Equal(t, "ok", m["status"], "local provider should still be ok with a nil CredStore")
+	})
+
+	require.NotPanics(t, func() {
+		res := NewProviderTestTool(deps).Execute(context.Background(), map[string]any{"name": "openai"})
+		require.False(t, res.IsError, "%s", res.ForLLM)
+		m := unmarshalProviderResult(t, res.ForLLM)
+		require.Equal(t, "error", m["status"], "cloud provider with nil CredStore must report error, not panic")
+	})
+}
+
+// TestProviderTest_UnknownProviderRejected is a regression test: test_provider
+// used to discard catalogProviderLocality's `known` return value, so a
+// typo'd/unknown provider name fell through to a generic "credentials not
+// found" message instead of the clear UNKNOWN_PROVIDER error
+// configure_provider already gives for the identical case.
+func TestProviderTest_UnknownProviderRejected(t *testing.T) {
+	cfg := &config.Config{}
+	deps, _, _ := newProviderTestDeps(t, cfg)
+
+	res := NewProviderTestTool(deps).Execute(context.Background(), map[string]any{
+		"name": "totally-not-a-real-provider",
+	})
+	require.True(t, res.IsError, "expected an UNKNOWN_PROVIDER tool error, got success: %s", res.ForLLM)
+	m := unmarshalProviderResult(t, res.ForLLM)
+	errBlock, _ := m["error"].(map[string]any)
+	require.Equal(t, "UNKNOWN_PROVIDER", errBlock["code"])
+}
+
+// TestProviderTest_LegacyAliasRejected proves test_provider now agrees with
+// configure_provider on the "bedrock"/"gemini" legacy-alias case (the real
+// catalog ids are "amazon-bedrock"/"google") instead of silently reporting a
+// generic credentials-not-found error for an id that was never real.
+func TestProviderTest_LegacyAliasRejected(t *testing.T) {
+	cfg := &config.Config{}
+	deps, _, _ := newProviderTestDeps(t, cfg)
+
+	res := NewProviderTestTool(deps).Execute(context.Background(), map[string]any{"name": "bedrock"})
+	require.True(t, res.IsError, "expected UNKNOWN_PROVIDER for legacy alias 'bedrock': %s", res.ForLLM)
+	m := unmarshalProviderResult(t, res.ForLLM)
+	errBlock, _ := m["error"].(map[string]any)
+	require.Equal(t, "UNKNOWN_PROVIDER", errBlock["code"])
 }

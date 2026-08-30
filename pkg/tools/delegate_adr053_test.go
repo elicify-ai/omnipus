@@ -275,6 +275,40 @@ func TestDelegateTool_Steer_Succeeds(t *testing.T) {
 	}
 }
 
+// TestDelegateTool_Steer_RejectsExternalCLI is a regression test for the 3P
+// steer gap: every steering-queue drain site lives in the native turn engine
+// (pkg/agent/loop.go, pkg/agent/steering.go) and runExternalCLISubTurn
+// (pkg/agent/external_dispatch.go) never drains it, so a steer queued
+// against an Is3P (external-CLI) child was previously accepted with a
+// misleading "queued" success and then silently orphaned forever — no live
+// consumer ever reads it. executeSteer must now reject it outright, before
+// ever reaching the steering sink.
+func TestDelegateTool_Steer_RejectsExternalCLI(t *testing.T) {
+	tool, lc, _, steer := newADR053TestTool(t)
+	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
+
+	if err := lc.Persist(&session.LifecycleRecord{
+		SessionID: "child-3p", State: session.LifecycleRunning,
+		OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: "parent-1",
+		WorkspaceID: "ws-1", AgentID: "worker", Is3P: true,
+	}); err != nil {
+		t.Fatalf("seed lifecycle record failed: %v", err)
+	}
+
+	result := tool.Execute(ctx, map[string]any{
+		"action": "steer", "session_id": "child-3p", "text": "focus on the tests",
+	})
+	if !result.IsError {
+		t.Fatalf("expected steer on an external-CLI (3P) session to be rejected, got success: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "external-CLI") && !strings.Contains(result.ForLLM, "external CLI") {
+		t.Errorf("expected the rejection to name external-CLI/3P as the reason, got: %s", result.ForLLM)
+	}
+	if msg, _ := steer.last(); msg.Content != "" {
+		t.Errorf("steer must never reach the steering sink for a 3P session, got delivered content %q", msg.Content)
+	}
+}
+
 func TestDelegateTool_Respond_ParksThenResumes(t *testing.T) {
 	tool, lc, inbox, steer := newADR053TestTool(t)
 	ctx := WithTranscriptSessionID(context.Background(), "parent-1")

@@ -1083,8 +1083,10 @@ func (t *DelegateTool) Description() string {
 		"this is the tool's discovery affordance for what you have outstanding. " +
 		"action=\"inbox\" drains messages the child has pushed back to you (progress/" +
 		"checkpoint/artifact/blocker/question/handback); action=\"inbox_ack\" acknowledges " +
-		"them. action=\"steer\" injects an instruction at the child's next tool boundary; " +
-		"action=\"respond\" answers a child's open question by correlation_id — both are " +
+		"them. action=\"steer\" injects an instruction at the child's next tool boundary " +
+		"(NOT available for a delegation running on an external CLI, subagent_3p: " +
+		"claude-code/codex/opencode — use respond or follow_up instead); " +
+		"action=\"respond\" answers a child's open question by correlation_id — " +
 		"always available for a delegation you started. " +
 		"action=\"cancel\" stops a child (cooperatively by default; hard=true bypasses " +
 		"the grace window). " +
@@ -3045,6 +3047,24 @@ func (t *DelegateTool) executeSteer(ctx context.Context, args map[string]any) *T
 	}
 	if verr := t.verifyCallerOwnsSession(ctx, rec); verr != nil {
 		return ErrorResult(fmt.Sprintf("delegate: steer: %v", verr))
+	}
+	// Not available to external-CLI (3P) sessions: every steering-queue drain
+	// site lives in the native turn engine (pkg/agent/loop.go,
+	// pkg/agent/steering.go) — runExternalCLISubTurn
+	// (pkg/agent/external_dispatch.go) never drains it, so a message queued
+	// here for a 3P child is silently orphaned forever (no live consumer ever
+	// reads it, and there is no "next tool boundary" concept for an external
+	// CLI's own turn loop). Unlike respond/follow_up, steer has no corrective-
+	// redispatch fallback to degrade to — injecting an instruction mid-turn is
+	// meaningless for a session that isn't running on this engine's turn loop
+	// at all. Mirrors message_parent's identical Is3P posture (D5).
+	if rec.Is3P {
+		return ErrorResult(fmt.Sprintf(
+			"delegate: steer: not available to external-CLI (3P) sessions — session %s runs on an external CLI "+
+				"(claude-code/codex/opencode) with no steering-queue drain in its dispatch path; use "+
+				"action=\"respond\" (which redispatches a corrective session) or action=\"follow_up\" instead",
+			sessionID,
+		))
 	}
 
 	// TOCTOU race guard: a plain Load() followed by a branch on

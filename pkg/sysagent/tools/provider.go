@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/credentials"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
 	"github.com/elicify-ai/omnipus/pkg/tools"
@@ -54,6 +55,21 @@ func catalogProviderLocality(name string) (row catalog.Provider, known, isLocal 
 		return row, false, false
 	}
 	return row, true, row.Locality == catalog.LocalityLocal
+}
+
+// credentialPresent reports whether ref names a credential that currently
+// resolves in store. Nil-safe: store is nil in some test/scaffolding
+// contexts (a Deps built without a CredStore), and a naked store.Get(ref)
+// on a nil *credentials.Store nil-derefs. configure_provider, list_providers,
+// and test_provider all need the identical "does this ref resolve" check —
+// this is the one place that answers it so each of the three doesn't
+// re-derive its own nil-guard.
+func credentialPresent(store *credentials.Store, ref string) bool {
+	if store == nil || ref == "" {
+		return false
+	}
+	_, err := store.Get(ref)
+	return err == nil
 }
 
 // ---- configure_provider ----
@@ -134,6 +150,12 @@ func (t *ProviderConfigureTool) Execute(_ context.Context, args map[string]any) 
 	}
 
 	if apiKey != "" {
+		if t.deps.CredStore == nil {
+			return tools.ErrorResult(errorJSON("CREDENTIAL_SAVE_FAILED",
+				"Failed to store API key: no credential store is configured",
+				"Check that the credential store is unlocked",
+			))
+		}
 		if err := t.deps.CredStore.Set(ref, apiKey); err != nil {
 			return tools.ErrorResult(errorJSON("CREDENTIAL_SAVE_FAILED",
 				"Failed to store API key: "+err.Error(),
@@ -198,12 +220,7 @@ func (t *ProviderConfigureTool) Execute(_ context.Context, args map[string]any) 
 	// api_key_stored reflects whether a key now resolves under ref, not merely
 	// whether this call was passed one — a repeat call with only api_base set
 	// still has a previously-stored key.
-	apiKeyStored := apiKey != ""
-	if !apiKeyStored {
-		if _, err := t.deps.CredStore.Get(ref); err == nil {
-			apiKeyStored = true
-		}
-	}
+	apiKeyStored := apiKey != "" || credentialPresent(t.deps.CredStore, ref)
 	resolvedAPIBase := apiBase
 	if resolvedAPIBase == "" {
 		resolvedAPIBase = row.API
@@ -257,7 +274,7 @@ func (t *ProviderListTool) Execute(_ context.Context, _ map[string]any) *tools.T
 	// providerNameOf (not the bare providerFromModelRef fallback) is used so
 	// an entry configured via configure_provider — which sets the explicit
 	// Provider field rather than a "provider/model" Model slug — is not
-	// silently skipped here (F4/F3(b)).
+	// silently skipped here.
 	var list []providerSummary
 	seen := map[string]bool{}
 	for _, m := range t.deps.GetCfg().Providers {
@@ -270,10 +287,8 @@ func (t *ProviderListTool) Execute(_ context.Context, _ map[string]any) *tools.T
 		}
 		seen[p] = true
 		status := "no_credentials"
-		if m.APIKeyRef != "" && t.deps.CredStore != nil {
-			if _, err := t.deps.CredStore.Get(m.APIKeyRef); err == nil {
-				status = "key_present"
-			}
+		if credentialPresent(t.deps.CredStore, m.APIKeyRef) {
+			status = "key_present"
 		}
 		list = append(list, providerSummary{Name: p, Status: status})
 	}
@@ -330,9 +345,14 @@ func (t *ProviderTestTool) Execute(_ context.Context, args map[string]any) *tool
 			break
 		}
 	}
-	_, _, isLocal := catalogProviderLocality(name)
-	_, err := t.deps.CredStore.Get(ref)
-	if err != nil && !isLocal {
+	_, known, isLocal := catalogProviderLocality(name)
+	if !known {
+		return tools.ErrorResult(errorJSON("UNKNOWN_PROVIDER",
+			fmt.Sprintf("%q is not a known provider id", name),
+			"Use the catalog id (e.g. 'amazon-bedrock', not 'bedrock'; 'google', not 'gemini')",
+		))
+	}
+	if !isLocal && !credentialPresent(t.deps.CredStore, ref) {
 		return tools.NewToolResult(successJSON(map[string]any{
 			"name":          name,
 			"status":        "error",
