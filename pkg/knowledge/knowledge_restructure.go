@@ -415,6 +415,9 @@ func (t *RestructureTool) execTrash(target mutationTarget, args map[string]any) 
 		// identical rule for Renamer.
 		return restructureFailure(restructureTrashOp, err)
 	}
+	// A note LEAVING the index (epoch.go's second bump site) — never on
+	// execRestore, which re-enters a note rather than removing one.
+	bumpIndexEpochOrWarn("trash", t.deps.Home, target.col.Root)
 	return tools.NewToolResult(RenderRestructureTrash(*res))
 }
 

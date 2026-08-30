@@ -331,6 +331,7 @@ func (t *ConfigureTool) execCreateRecordType(target mutationTarget, args map[str
 		}
 		return t.deps.refuse(authorOpConfigure, target, []string{relControlPlanePath(root, schemaPath)}, "create_record_type: "+werr.Error())
 	}
+	bumpIndexEpochOrWarn("create_record_type", t.deps.Home, root)
 
 	newSet, _, rerr := records.LoadSchemas(root)
 	if rerr != nil {
@@ -406,6 +407,7 @@ func (t *ConfigureTool) execEditRecordType(target mutationTarget, args map[strin
 	if werr := overwriteControlPlaneFile(target, schemaPath, yamlBytes); werr != nil {
 		return t.deps.refuse(authorOpConfigure, target, []string{relControlPlanePath(root, schemaPath)}, "edit_record_type: "+werr.Error())
 	}
+	bumpIndexEpochOrWarn("edit_record_type", t.deps.Home, root)
 
 	newSet, _, rerr := records.LoadSchemas(root)
 	if rerr != nil {
@@ -460,6 +462,7 @@ func (t *ConfigureTool) execDeleteRecordType(target mutationTarget, args map[str
 	if werr := removeControlPlaneFile(target, sc.SourcePath); werr != nil {
 		return t.deps.refuse(authorOpConfigure, target, []string{relControlPlanePath(root, sc.SourcePath)}, "delete_record_type: "+werr.Error())
 	}
+	bumpIndexEpochOrWarn("delete_record_type", t.deps.Home, root)
 
 	t.deps.record(AuthorAuditRecord{
 		Operation: authorOpConfigure, Outcome: AuthorOutcomeApplied,

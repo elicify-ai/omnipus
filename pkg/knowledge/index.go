@@ -514,6 +514,13 @@ func OpenIndex(home, collectionRoot string) (*Index, error) {
 		}
 		ix.idx = bidx
 		ix.rebuildReason = reason
+		if reason != "" {
+			// A genuine discard-and-recreate of a PRE-EXISTING index — never
+			// a first-ever build, which openOrRebuild reports with reason ""
+			// on purpose (nothing was there to invalidate). See epoch.go's
+			// BumpIndexEpoch for the full three-site contract.
+			bumpIndexEpochOrWarn("OpenIndex rebuild", home, realRoot)
+		}
 
 		if permErr := enforceIndexPermissions(dir); permErr != nil {
 			closeIndexQuietly(bidx, ix.blevePath)
