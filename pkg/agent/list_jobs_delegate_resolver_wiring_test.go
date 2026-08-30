@@ -177,7 +177,6 @@ func TestWireJobRoster_SubagentActionable_FalseForUnknownSession(t *testing.T) {
 		SessionID: "orphaned-after-restart", State: session.LifecycleRunning,
 		OwnerScopeKind: session.OwnerScopeHuman, ParentAgentID: "mia",
 		ParentDurableKey: "some-parent-transcript", AgentID: "worker",
-		LaunchProfile: session.LaunchProfileUtility,
 	}); err != nil {
 		t.Fatalf("seed failed: %v", err)
 	}

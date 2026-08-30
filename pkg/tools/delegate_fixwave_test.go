@@ -187,7 +187,7 @@ func TestDelegateTool_FollowUp_UsesTextField(t *testing.T) {
 	if err := lc.Persist(&session.LifecycleRecord{
 		SessionID: "child-followup-text", State: session.LifecycleCompleted,
 		OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: "parent-1",
-		WorkspaceID: "ws-1", AgentID: "worker", LaunchProfile: session.LaunchProfileUtility,
+		WorkspaceID: "ws-1", AgentID: "worker",
 	}); err != nil {
 		t.Fatalf("seed failed: %v", err)
 	}
@@ -218,7 +218,7 @@ func TestDelegateTool_FollowUp_TaskAliasStillWorks(t *testing.T) {
 	if err := lc.Persist(&session.LifecycleRecord{
 		SessionID: "child-followup-task-alias", State: session.LifecycleCompleted,
 		OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: "parent-1",
-		WorkspaceID: "ws-1", AgentID: "worker", LaunchProfile: session.LaunchProfileUtility,
+		WorkspaceID: "ws-1", AgentID: "worker",
 	}); err != nil {
 		t.Fatalf("seed failed: %v", err)
 	}
@@ -243,7 +243,7 @@ func TestDelegateTool_FollowUp_TextWinsOverTask(t *testing.T) {
 	if err := lc.Persist(&session.LifecycleRecord{
 		SessionID: "child-followup-both", State: session.LifecycleCompleted,
 		OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: "parent-1",
-		WorkspaceID: "ws-1", AgentID: "worker", LaunchProfile: session.LaunchProfileUtility,
+		WorkspaceID: "ws-1", AgentID: "worker",
 	}); err != nil {
 		t.Fatalf("seed failed: %v", err)
 	}
@@ -271,7 +271,7 @@ func TestDelegateTool_FollowUp_EmptyInstruction_Rejected(t *testing.T) {
 	if err := lc.Persist(&session.LifecycleRecord{
 		SessionID: "child-followup-empty", State: session.LifecycleCompleted,
 		OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: "parent-1",
-		WorkspaceID: "ws-1", AgentID: "worker", LaunchProfile: session.LaunchProfileUtility,
+		WorkspaceID: "ws-1", AgentID: "worker",
 	}); err != nil {
 		t.Fatalf("seed failed: %v", err)
 	}
@@ -338,7 +338,7 @@ func TestDelegateTool_Steer_TerminalCheck_RoutesThroughMutate(t *testing.T) {
 	if err := backing.Persist(&session.LifecycleRecord{
 		SessionID: "child-mutate-check", State: session.LifecycleRunning,
 		OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: "parent-1",
-		WorkspaceID: "ws-1", AgentID: "worker", LaunchProfile: session.LaunchProfileSpecialist,
+		WorkspaceID: "ws-1", AgentID: "worker",
 	}); err != nil {
 		t.Fatalf("seed failed: %v", err)
 	}
@@ -389,7 +389,7 @@ func TestDelegateTool_Steer_TerminalSession_Rejected(t *testing.T) {
 	if err := lc.Persist(&session.LifecycleRecord{
 		SessionID: "child-terminal-steer", State: session.LifecycleCompleted,
 		OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: "parent-1",
-		WorkspaceID: "ws-1", AgentID: "worker", LaunchProfile: session.LaunchProfileSpecialist,
+		WorkspaceID: "ws-1", AgentID: "worker",
 	}); err != nil {
 		t.Fatalf("seed failed: %v", err)
 	}
@@ -498,7 +498,7 @@ func TestDelegateTool_Cancel_AlreadyTerminal_IsIdempotentNoOp(t *testing.T) {
 			if err := lc.Persist(&session.LifecycleRecord{
 				SessionID: sessionID, State: tc.state, FailedReason: tc.failedReason,
 				OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: "parent-1",
-				WorkspaceID: "ws-1", AgentID: "worker", LaunchProfile: session.LaunchProfileUtility,
+				WorkspaceID: "ws-1", AgentID: "worker",
 			}); err != nil {
 				t.Fatalf("seed failed: %v", err)
 			}
@@ -558,7 +558,7 @@ func TestDelegateTool_Cancel_NonTerminal_StillSucceeds(t *testing.T) {
 	if err := lc.Persist(&session.LifecycleRecord{
 		SessionID: "child-still-running", State: session.LifecycleRunning,
 		OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: "parent-1",
-		WorkspaceID: "ws-1", AgentID: "worker", LaunchProfile: session.LaunchProfileUtility,
+		WorkspaceID: "ws-1", AgentID: "worker",
 	}); err != nil {
 		t.Fatalf("seed failed: %v", err)
 	}
@@ -618,7 +618,7 @@ func TestDelegateTool_Cancel_DescendantsMiss_ReturnsTerminalMessage(t *testing.T
 		if err := lc.Persist(&session.LifecycleRecord{
 			SessionID: "child-racing", State: session.LifecycleRunning,
 			OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: "parent-1",
-			WorkspaceID: "ws-1", AgentID: "worker", LaunchProfile: session.LaunchProfileUtility,
+			WorkspaceID: "ws-1", AgentID: "worker",
 		}); err != nil {
 			t.Fatalf("seed failed: %v", err)
 		}
@@ -669,7 +669,7 @@ func TestDelegateTool_Cancel_DescendantsMiss_ReturnsTerminalMessage(t *testing.T
 		if err := lc.Persist(&session.LifecycleRecord{
 			SessionID: "child-racing-soft", State: session.LifecycleRunning,
 			OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: "parent-1",
-			WorkspaceID: "ws-1", AgentID: "worker", LaunchProfile: session.LaunchProfileUtility,
+			WorkspaceID: "ws-1", AgentID: "worker",
 		}); err != nil {
 			t.Fatalf("seed failed: %v", err)
 		}

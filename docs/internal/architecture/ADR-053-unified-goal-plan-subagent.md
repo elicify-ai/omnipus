@@ -1,6 +1,6 @@
 # ADR-053: Unified goal / plan / subagent system — one goal core, three bindings
 
-- **Status:** **Accepted** (2026-07-22), **superseded in part by [ADR-057](ADR-057-session-parent-child-parity.md)** (see banner below). This ADR ratifies an interview-locked, twice-grilled design; it does not re-open it. The `/grill-spec` gate returned **PASS** (0 CRITICAL / 0 MAJOR / 0 MINOR after one REVISE cycle addressing F-1..F-6; review file adjacent), satisfying delivery-brief DoD-1.
+- **Status:** **Accepted** (2026-07-22), **superseded in part by [ADR-057](ADR-057-session-parent-child-parity.md)** (see banner below) — **amended 2026-08-30: `launch_profile` removed (see Amendment below)**. This ADR ratifies an interview-locked, twice-grilled design; it does not re-open it. The `/grill-spec` gate returned **PASS** (0 CRITICAL / 0 MAJOR / 0 MINOR after one REVISE cycle addressing F-1..F-6; review file adjacent), satisfying delivery-brief DoD-1.
 - **Superseded in part by:** [ADR-057](ADR-057-session-parent-child-parity.md) §8 — **D1** (superseded outright), **D5**, **D15**, **D16** (each changed). Details in the banner immediately below.
 - **Date:** 2026-07-22
 - **Deciders:** Operator (Daniel Piatkowski); architect (ratification)
@@ -26,6 +26,8 @@
 > **The four interrupt entry points D1 names no longer exist.** `InterruptSession`, `InterruptBySessionKey` and `InterruptBySessionKeyHard` are **retired** (`func InterruptSession` returns zero hits); ADR-057 FR-041 collapses them into **`Interrupt(id, scope, hint)`** (`pkg/agent/steering.go:667`, graceful) and **`InterruptSessionHard(id, scope, hint)`** (`:729`, hard) — both taking a **mandatory `InterruptScope`** (`ScopeSubtree` / `ScopeSelfOnly`). The per-delegation `delegate cancel` path D1 describes is now `ScopeSelfOnly`, not a separate function. (Not to be confused with the unrelated, still-live process-wide `InterruptGraceful(hint)` / `InterruptHard()`.)
 >
 > Everything else in this ADR — the S1–S6 spine, the evidence-ladder Judge, the goal core, the git evidence layer, the budget model — **stands unchanged**.
+
+> **Amendment (2026-08-30, operator decision) — `launch_profile` removed; steering is always available.** §5.1's `launch_profile` field (`utility` vs. `specialist`, on both `DelegateRunAction` and `SessionLifecycleRecord`) is **deleted outright**, not just superseded. There is no longer a launch-time choice between a fire-and-collect delegation and a steerable one: every direct delegation now behaves the way `specialist` used to — `action="steer"`/`action="respond"` are always available on a non-terminal child session, gated only by ownership and state, never by a launch profile. The `utility` mode was never actually needed in practice, and having it unenforced by default (mint-time only, no real gate) was a footgun rather than a feature — a caller could believe steering was blocked when it never was. Keeping exactly one behavior removes that footgun instead of enforcing it. `launch_profile` is removed from both wire schemas (no back-compat, no deprecated-but-accepted field) and from `session.LifecycleRecord`; the `delegate` tool no longer accepts or documents the parameter.
 
 ---
 

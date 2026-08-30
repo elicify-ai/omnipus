@@ -11110,12 +11110,6 @@ export interface components {
              */
             is_3p: boolean;
             /**
-             * @description `utility` — visibility=outcome, steering=none, child_messaging= progress_only (fire-and-collect). `specialist` — visibility= checkpoints, steering=parent_and_human, child_messaging=full (a 3P child on this profile still degrades to fire-and-collect). Illegal combinations are rejected at `delegate.run`, not schema-enforced here (see `DelegateRunAction`).
-             * @example specialist
-             * @enum {string}
-             */
-            launch_profile: "utility" | "specialist";
-            /**
              * @description The `message_id` of the most recent `SessionMessageCheckpoint` this session emitted, or the go-git `commit_ref` it carried. Used for boot-sweep recover-to-checkpoint (§5).
              * @example sm_01J3ZQK8N2H8VXNRP5T7C9M4WF
              */
@@ -11306,11 +11300,11 @@ export interface components {
              */
             resumed_from?: string | null;
         };
-        /** @description The `delegate` tool call's argument shape, discriminated by `action` — the corrected 9-action set (ADR-053 §5.1) replacing the legacy `run | status` pair. `run` spawns a new child; `status`/`inbox`/`inbox_ack`/`peek` are read/ack surfaces; `steer`/`respond`/`cancel`/`follow_up` are control surfaces. Two published launch profiles (`utility`/`specialist`, see `DelegateRunAction.launch_profile`) govern visibility/steering/ child_messaging; illegal combinations are rejected at the handler, not by this schema alone. */
+        /** @description The `delegate` tool call's argument shape, discriminated by `action` — the corrected 9-action set (ADR-053 §5.1) replacing the legacy `run | status` pair. `run` spawns a new child; `status`/`inbox`/`inbox_ack`/`peek` are read/ack surfaces; `steer`/`respond`/`cancel`/`follow_up` are control surfaces. Steering is always available for a direct delegation (see ADR-053 Amendment). */
         DelegateActionRequest: components["schemas"]["DelegateRunAction"] | components["schemas"]["DelegateStatusAction"] | components["schemas"]["DelegateInboxAction"] | components["schemas"]["DelegateInboxAckAction"] | components["schemas"]["DelegateSteerAction"] | components["schemas"]["DelegateRespondAction"] | components["schemas"]["DelegateCancelAction"] | components["schemas"]["DelegateFollowUpAction"] | components["schemas"]["DelegatePeekAction"];
         /**
          * DelegateRunAction
-         * @description `delegate` tool call, `action: run` (ADR-053 §5.1/§Contract Surface). Spawns a new child session. `snapshot` carries ONLY the DISCRETIONARY portion of the curated context snapshot (R§8.5) — parent-named artifact references + optional notes. The MANDATORY core (task prompt + compiled criteria + engine-injected child identity from the target agent, ADR-032) is assembled server-side and is EXEMPT from `snapshot_max_bytes` (m4); only `snapshot` here is subject to `snapshot_max_bytes`/ `snapshot_max_refs`. Illegal `launch_profile`/`child_messaging`/ `steering` combinations are rejected at the handler (not schema- expressible beyond the enum itself) — see `launch_profile`'s description for the two published legal profiles.
+         * @description `delegate` tool call, `action: run` (ADR-053 §5.1/§Contract Surface). Spawns a new child session. `snapshot` carries ONLY the DISCRETIONARY portion of the curated context snapshot (R§8.5) — parent-named artifact references + optional notes. The MANDATORY core (task prompt + compiled criteria + engine-injected child identity from the target agent, ADR-032) is assembled server-side and is EXEMPT from `snapshot_max_bytes` (m4); only `snapshot` here is subject to `snapshot_max_bytes`/ `snapshot_max_refs`. Steering is always available for a direct delegation — there is no longer a launch-profile choice gating it (see ADR-053 Amendment).
          */
         DelegateRunAction: {
             /**
@@ -11333,12 +11327,6 @@ export interface components {
              * @example Log anomaly scan
              */
             label?: string;
-            /**
-             * @description `utility` — visibility=outcome, steering=none, child_messaging= progress_only (fire-and-collect; maps today's one-shot spawn). `specialist` — visibility=checkpoints, steering=parent_and_human, child_messaging=full (collaborating native worker; a 3P child on this profile degrades to fire-and-collect, D5). The full illegal-combo legality table (e.g. visibility=outcome with child_messaging=full) is enforced at the handler, not by this enum alone.
-             * @example specialist
-             * @enum {string}
-             */
-            launch_profile: "utility" | "specialist";
             /**
              * @description True for a synchronous (blocking) delegation. A synchronous delegation whose child raises a `question` is rejected by default with a clear tool error (never a silent deadlock, MIN-3) unless the caller also sets `allow_blocking_question`.
              * @example false

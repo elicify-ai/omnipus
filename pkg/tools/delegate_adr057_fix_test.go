@@ -57,7 +57,6 @@ func fix6NewLifecycleRecord(sessionID, parentDurableKey string) *session.Lifecyc
 		ParentDurableKey: parentDurableKey,
 		WorkspaceID:      "ws-1",
 		AgentID:          "worker",
-		LaunchProfile:    session.LaunchProfileUtility,
 	}
 }
 

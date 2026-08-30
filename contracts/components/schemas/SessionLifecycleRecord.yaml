@@ -21,7 +21,6 @@ required:
   - workspace_id
   - agent_id
   - is_3p
-  - launch_profile
   - undelivered_message_ids
   - created_at
   - updated_at
@@ -125,19 +124,6 @@ properties:
       (subagent_3p: claude-code/codex/opencode) rather than natively. 3P
       sessions never advertise `question`/`needs_input`/warm-resume (D5).
     example: false
-  launch_profile:
-    type: string
-    enum:
-      - utility
-      - specialist
-    description: >
-      `utility` — visibility=outcome, steering=none, child_messaging=
-      progress_only (fire-and-collect). `specialist` — visibility=
-      checkpoints, steering=parent_and_human, child_messaging=full (a 3P
-      child on this profile still degrades to fire-and-collect). Illegal
-      combinations are rejected at `delegate.run`, not schema-enforced
-      here (see `DelegateRunAction`).
-    example: "specialist"
   last_checkpoint_ref:
     type: string
     description: >

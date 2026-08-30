@@ -1463,24 +1463,6 @@ func (e DelegateRunActionAction) Valid() bool {
 	}
 }
 
-// Defines values for DelegateRunActionLaunchProfile.
-const (
-	DelegateRunActionLaunchProfileSpecialist DelegateRunActionLaunchProfile = "specialist"
-	DelegateRunActionLaunchProfileUtility    DelegateRunActionLaunchProfile = "utility"
-)
-
-// Valid indicates whether the value is a known member of the DelegateRunActionLaunchProfile enum.
-func (e DelegateRunActionLaunchProfile) Valid() bool {
-	switch e {
-	case DelegateRunActionLaunchProfileSpecialist:
-		return true
-	case DelegateRunActionLaunchProfileUtility:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for DelegateSessionResponseState.
 const (
 	DelegateSessionResponseStateCancelled  DelegateSessionResponseState = "cancelled"
@@ -1526,24 +1508,6 @@ const (
 func (e DelegateStatusActionAction) Valid() bool {
 	switch e {
 	case Status:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for DelegateStatusResponseSessionLaunchProfile.
-const (
-	DelegateStatusResponseSessionLaunchProfileSpecialist DelegateStatusResponseSessionLaunchProfile = "specialist"
-	DelegateStatusResponseSessionLaunchProfileUtility    DelegateStatusResponseSessionLaunchProfile = "utility"
-)
-
-// Valid indicates whether the value is a known member of the DelegateStatusResponseSessionLaunchProfile enum.
-func (e DelegateStatusResponseSessionLaunchProfile) Valid() bool {
-	switch e {
-	case DelegateStatusResponseSessionLaunchProfileSpecialist:
-		return true
-	case DelegateStatusResponseSessionLaunchProfileUtility:
 		return true
 	default:
 		return false
@@ -4697,24 +4661,6 @@ func (e SessionDetailSessionType) Valid() bool {
 	case SessionDetailSessionTypeTask:
 		return true
 	case SessionDetailSessionTypeVerifier:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for SessionLifecycleRecordLaunchProfile.
-const (
-	Specialist SessionLifecycleRecordLaunchProfile = "specialist"
-	Utility    SessionLifecycleRecordLaunchProfile = "utility"
-)
-
-// Valid indicates whether the value is a known member of the SessionLifecycleRecordLaunchProfile enum.
-func (e SessionLifecycleRecordLaunchProfile) Valid() bool {
-	switch e {
-	case Specialist:
-		return true
-	case Utility:
 		return true
 	default:
 		return false
@@ -8462,7 +8408,7 @@ type DefaultModelUpdateRequest struct {
 	Provider string `json:"provider"`
 }
 
-// DelegateActionRequest The `delegate` tool call's argument shape, discriminated by `action` — the corrected 9-action set (ADR-053 §5.1) replacing the legacy `run | status` pair. `run` spawns a new child; `status`/`inbox`/`inbox_ack`/`peek` are read/ack surfaces; `steer`/`respond`/`cancel`/`follow_up` are control surfaces. Two published launch profiles (`utility`/`specialist`, see `DelegateRunAction.launch_profile`) govern visibility/steering/ child_messaging; illegal combinations are rejected at the handler, not by this schema alone.
+// DelegateActionRequest The `delegate` tool call's argument shape, discriminated by `action` — the corrected 9-action set (ADR-053 §5.1) replacing the legacy `run | status` pair. `run` spawns a new child; `status`/`inbox`/`inbox_ack`/`peek` are read/ack surfaces; `steer`/`respond`/`cancel`/`follow_up` are control surfaces. Steering is always available for a direct delegation (see ADR-053 Amendment).
 type DelegateActionRequest struct {
 	union json.RawMessage
 }
@@ -8610,7 +8556,7 @@ type DelegateRespondResponse struct {
 // DelegateRespondResponseCorrectiveSessionState The newly-spawned/resumed session's initial lifecycle state.
 type DelegateRespondResponseCorrectiveSessionState string
 
-// DelegateRunAction `delegate` tool call, `action: run` (ADR-053 §5.1/§Contract Surface). Spawns a new child session. `snapshot` carries ONLY the DISCRETIONARY portion of the curated context snapshot (R§8.5) — parent-named artifact references + optional notes. The MANDATORY core (task prompt + compiled criteria + engine-injected child identity from the target agent, ADR-032) is assembled server-side and is EXEMPT from `snapshot_max_bytes` (m4); only `snapshot` here is subject to `snapshot_max_bytes`/ `snapshot_max_refs`. Illegal `launch_profile`/`child_messaging`/ `steering` combinations are rejected at the handler (not schema- expressible beyond the enum itself) — see `launch_profile`'s description for the two published legal profiles.
+// DelegateRunAction `delegate` tool call, `action: run` (ADR-053 §5.1/§Contract Surface). Spawns a new child session. `snapshot` carries ONLY the DISCRETIONARY portion of the curated context snapshot (R§8.5) — parent-named artifact references + optional notes. The MANDATORY core (task prompt + compiled criteria + engine-injected child identity from the target agent, ADR-032) is assembled server-side and is EXEMPT from `snapshot_max_bytes` (m4); only `snapshot` here is subject to `snapshot_max_bytes`/ `snapshot_max_refs`. Steering is always available for a direct delegation — there is no longer a launch-profile choice gating it (see ADR-053 Amendment).
 type DelegateRunAction struct {
 	Action DelegateRunActionAction `json:"action"`
 
@@ -8622,9 +8568,6 @@ type DelegateRunAction struct {
 
 	// Label Human-readable label for the spawned span (subagent_start.task_label).
 	Label *string `json:"label,omitempty"`
-
-	// LaunchProfile `utility` — visibility=outcome, steering=none, child_messaging= progress_only (fire-and-collect; maps today's one-shot spawn). `specialist` — visibility=checkpoints, steering=parent_and_human, child_messaging=full (collaborating native worker; a 3P child on this profile degrades to fire-and-collect, D5). The full illegal-combo legality table (e.g. visibility=outcome with child_messaging=full) is enforced at the handler, not by this enum alone.
-	LaunchProfile DelegateRunActionLaunchProfile `json:"launch_profile"`
 
 	// Snapshot The DISCRETIONARY portion of the curated context snapshot (R§8.5). Deny-by-default — nothing beyond this + the mandatory core reaches the child. Over-cap is rejected with a narrow-the-snapshot tool error, never silently truncated.
 	Snapshot *struct {
@@ -8650,9 +8593,6 @@ type DelegateRunAction struct {
 
 // DelegateRunActionAction defines model for DelegateRunAction.Action.
 type DelegateRunActionAction string
-
-// DelegateRunActionLaunchProfile `utility` — visibility=outcome, steering=none, child_messaging= progress_only (fire-and-collect; maps today's one-shot spawn). `specialist` — visibility=checkpoints, steering=parent_and_human, child_messaging=full (collaborating native worker; a 3P child on this profile degrades to fire-and-collect, D5). The full illegal-combo legality table (e.g. visibility=outcome with child_messaging=full) is enforced at the handler, not by this enum alone.
-type DelegateRunActionLaunchProfile string
 
 // DelegateSessionResponse Response shape shared by `delegate` actions that spawn or resume a child session — `run`, `follow_up` (native warm resume or 3P cold respawn), and a 3P `respond` (which spawns a new corrective session, D5). Reused rather than duplicated across those three actions (DoD-11).
 type DelegateSessionResponse struct {
@@ -8729,9 +8669,6 @@ type DelegateStatusResponse struct {
 		// LastCheckpointRef The `message_id` of the most recent `SessionMessageCheckpoint` this session emitted, or the go-git `commit_ref` it carried. Used for boot-sweep recover-to-checkpoint (§5).
 		LastCheckpointRef *string `json:"last_checkpoint_ref,omitempty"`
 
-		// LaunchProfile `utility` — visibility=outcome, steering=none, child_messaging= progress_only (fire-and-collect). `specialist` — visibility= checkpoints, steering=parent_and_human, child_messaging=full (a 3P child on this profile still degrades to fire-and-collect). Illegal combinations are rejected at `delegate.run`, not schema-enforced here (see `DelegateRunAction`).
-		LaunchProfile DelegateStatusResponseSessionLaunchProfile `json:"launch_profile"`
-
 		// NeedsInput Present iff `state == needs_input`; absent otherwise (no schema `nullable: true` — an optional-object field paired with `nullable` generates a `T | null | undefined` Zod type against an openapi-typescript TS type that only ever emits `T | undefined` for a nullable, non-required, non-scalar property, a real codegen mismatch between the two generators for this shape; plain optional-only is unambiguous and matches how every other optional nested object in this contract set is expressed). `reconstructable` is a PARK-TIME HINT ONLY (m5) — the authoritative determination is `isNeedsInputReconstructable(rec)` re-evaluated AT BOOT (R§8.6), never this stored value.
 		NeedsInput *struct {
 			// CorrelationId The open question/decision_request this session is parked on.
@@ -8778,9 +8715,6 @@ type DelegateStatusResponse struct {
 	// UnackedCount Open question+blocker count against this child's per-child ceiling (D15, max 20).
 	UnackedCount int `json:"unacked_count"`
 }
-
-// DelegateStatusResponseSessionLaunchProfile `utility` — visibility=outcome, steering=none, child_messaging= progress_only (fire-and-collect). `specialist` — visibility= checkpoints, steering=parent_and_human, child_messaging=full (a 3P child on this profile still degrades to fire-and-collect). Illegal combinations are rejected at `delegate.run`, not schema-enforced here (see `DelegateRunAction`).
-type DelegateStatusResponseSessionLaunchProfile string
 
 // DelegateStatusResponseSessionOwnerScopeKind SHAPE DECISION (flagged for review): the spec's field table describes `owner_scope` as a union of `parent_session_id | plan_id | human`. A bare `oneOf` of untagged strings has no discriminator and is not meaningfully validatable/codegen-friendly, so it is split into this enum tag plus `owner_scope_id` below (empty for `human`, which has no single owning id — N-9 top-level chat-goal sessions are owned by the human/chat-principal).
 type DelegateStatusResponseSessionOwnerScopeKind string
@@ -12822,9 +12756,6 @@ type SessionLifecycleRecord struct {
 	// LastCheckpointRef The `message_id` of the most recent `SessionMessageCheckpoint` this session emitted, or the go-git `commit_ref` it carried. Used for boot-sweep recover-to-checkpoint (§5).
 	LastCheckpointRef *string `json:"last_checkpoint_ref,omitempty"`
 
-	// LaunchProfile `utility` — visibility=outcome, steering=none, child_messaging= progress_only (fire-and-collect). `specialist` — visibility= checkpoints, steering=parent_and_human, child_messaging=full (a 3P child on this profile still degrades to fire-and-collect). Illegal combinations are rejected at `delegate.run`, not schema-enforced here (see `DelegateRunAction`).
-	LaunchProfile SessionLifecycleRecordLaunchProfile `json:"launch_profile"`
-
 	// NeedsInput Present iff `state == needs_input`; absent otherwise (no schema `nullable: true` — an optional-object field paired with `nullable` generates a `T | null | undefined` Zod type against an openapi-typescript TS type that only ever emits `T | undefined` for a nullable, non-required, non-scalar property, a real codegen mismatch between the two generators for this shape; plain optional-only is unambiguous and matches how every other optional nested object in this contract set is expressed). `reconstructable` is a PARK-TIME HINT ONLY (m5) — the authoritative determination is `isNeedsInputReconstructable(rec)` re-evaluated AT BOOT (R§8.6), never this stored value.
 	NeedsInput *struct {
 		// CorrelationId The open question/decision_request this session is parked on.
@@ -12867,9 +12798,6 @@ type SessionLifecycleRecord struct {
 	// WorkspaceId Workspace this session belongs to.
 	WorkspaceId string `json:"workspace_id"`
 }
-
-// SessionLifecycleRecordLaunchProfile `utility` — visibility=outcome, steering=none, child_messaging= progress_only (fire-and-collect). `specialist` — visibility= checkpoints, steering=parent_and_human, child_messaging=full (a 3P child on this profile still degrades to fire-and-collect). Illegal combinations are rejected at `delegate.run`, not schema-enforced here (see `DelegateRunAction`).
-type SessionLifecycleRecordLaunchProfile string
 
 // SessionLifecycleRecordOwnerScopeKind SHAPE DECISION (flagged for review): the spec's field table describes `owner_scope` as a union of `parent_session_id | plan_id | human`. A bare `oneOf` of untagged strings has no discriminator and is not meaningfully validatable/codegen-friendly, so it is split into this enum tag plus `owner_scope_id` below (empty for `human`, which has no single owning id — N-9 top-level chat-goal sessions are owned by the human/chat-principal).
 type SessionLifecycleRecordOwnerScopeKind string
