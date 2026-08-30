@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"math/rand"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"unicode"
@@ -20,7 +21,10 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/datamodel"
 	"github.com/elicify-ai/omnipus/pkg/entity"
+	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/tools"
+	workspacepkg "github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
 // slugRegexp matches characters that should be replaced in agent name → ID conversion.
@@ -108,7 +112,7 @@ func NewAgentCreateTool(d *Deps) *AgentCreateTool { return &AgentCreateTool{deps
 func (t *AgentCreateTool) Name() string           { return "create_agent" }
 func (t *AgentCreateTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *AgentCreateTool) Description() string {
-	return "Create a new agent with personality, model, tools, and configuration. Use agent_type to choose the runtime: 'Main' (default, native chat colleague), 'Subagent' (native delegation-only worker), or 'subagent_3p' (delegation-only worker on an external CLI — set cli and cli_path)."
+	return "Create a new agent with personality, model, tools, and configuration. Use agent_type to choose the runtime: 'Main' (default, native chat colleague), 'Subagent' (native delegation-only worker), or 'subagent_3p' (delegation-only worker on an external CLI — set cli and cli_path). name, description, soul, model, color (6-digit hex, e.g. #22C55E) and icon (a Phosphor icon name, e.g. 'robot') are all required — color/icon are rejected if missing or malformed. A new agent created inside a workspace's turn context joins that workspace's core_team and is immediately runnable there; created with no workspace context it is metadata-only (a member of no team) and cannot run in chat or be delegated to until an operator adds it to a workspace's Team tab — check the response's status field (joined_workspace vs metadata_only) to tell which happened."
 }
 
 func (t *AgentCreateTool) Parameters() map[string]any {
@@ -372,10 +376,20 @@ func (t *AgentCreateTool) Execute(ctx context.Context, args map[string]any) *too
 	// until an operator adds it to a workspace's Team tab. Best-effort: a
 	// join failure is logged, not fatal — the agent still exists, just not
 	// yet joined anywhere.
+	// joinedWorkspace tracks whether this call actually enrolled the new agent
+	// on a workspace's core_team — it drives the response's status field
+	// below (M1 fix, half_b_report.md): the caller must be able to tell
+	// "joined_workspace" (immediately runnable there) from "metadata_only"
+	// (a member of no team, cannot run in chat or be delegated to) without
+	// re-deriving it from whether a workspace context happened to be
+	// present, since a join attempt can also fail (logged, non-fatal).
+	joinedWorkspace := false
 	if wsID := tools.ToolWorkspaceID(ctx); wsID != "" {
 		if err := t.joinWorkspaceTeam(wsID, finalID); err != nil {
 			slog.Warn("sysagent: create_agent: could not add new agent to workspace core_team",
 				"agent_id", finalID, "workspace_id", wsID, "error", err)
+		} else {
+			joinedWorkspace = true
 		}
 	}
 
@@ -413,12 +427,21 @@ func (t *AgentCreateTool) Execute(ctx context.Context, args map[string]any) *too
 		}
 	}
 
+	// M1 fix (half_b_report.md): status must reflect actual runnability, not
+	// a fixed "active" — a metadata-only agent (no workspace context at
+	// creation) cannot run in chat or be delegated to at all
+	// (runTurn's ErrAgentNotWorkspaceMember) despite the entity record and
+	// workspace files above having been written successfully.
+	status := "metadata_only"
+	if joinedWorkspace {
+		status = "joined_workspace"
+	}
 	result := map[string]any{
 		"id":     finalID,
 		"name":   name,
 		"model":  model,
 		"type":   agentType,
-		"status": "active",
+		"status": status,
 	}
 	if agentType == "subagent_3p" {
 		result["cli"] = execCLI
@@ -471,7 +494,7 @@ func NewAgentUpdateTool(d *Deps) *AgentUpdateTool { return &AgentUpdateTool{deps
 func (t *AgentUpdateTool) Name() string           { return "update_agent" }
 func (t *AgentUpdateTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *AgentUpdateTool) Description() string {
-	return "Update an existing agent's configuration. Only provided fields are changed; omitted fields are left as-is."
+	return "Update an existing agent's configuration. Only provided fields are changed; omitted fields are left as-is. Locked core agents (Mia, Jim, Ava, Ray) cannot be modified at all — the call is refused. An empty string is silently IGNORED for name/description/color/icon (they cannot be cleared this way — omit the field instead), but an empty string for provider CLEARS an existing provider pin (falls back to default-provider resolution) — this is a deliberate asymmetry, not a bug. The agent's type (Main/Subagent/subagent_3p) and, for subagent_3p, its external CLI runtime (cli/cli_path) cannot be changed after creation — delete and recreate the agent to change these."
 }
 
 func (t *AgentUpdateTool) Parameters() map[string]any {
@@ -694,7 +717,19 @@ func NewAgentDeleteTool(d *Deps) *AgentDeleteTool { return &AgentDeleteTool{deps
 func (t *AgentDeleteTool) Name() string           { return "delete_agent" }
 func (t *AgentDeleteTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *AgentDeleteTool) Description() string {
-	return "Delete an agent and all its data (sessions, memory, workspace).\nParameters: id (required), confirm (bool, must be true)."
+	return "Delete an agent. IRREVERSIBLE. Removes the agent's entity record and its home directory " +
+		"($OMNIPUS_HOME/agents/<id>/ — SOUL.md, HEARTBEAT.md, MEMORY.md, its skills folder). Also cascades: " +
+		"every chat session in the shared session store that belongs SOLELY to this agent is deleted, together " +
+		"with its uploaded files — a session another agent also participated in (e.g. via a mid-conversation " +
+		"agent switch) is left untouched to avoid destroying that agent's history, and is reported separately " +
+		"in the response. Every GTD task assigned to this agent is unassigned (not deleted — the task itself " +
+		"survives); tasks it merely created keep that historical attribution. This agent is also removed from " +
+		"every workspace's core_team, and every delegation-trust edge naming it (as either side) is dropped from " +
+		"each affected workspace's delegation graph. Locked core agents (Mia, Jim, Ava, Ray) and the currently " +
+		"configured default agent cannot be deleted — set another agent as default first (Agents screen ★) " +
+		"before deleting this one. A step that fails partway through is reported in the response rather than " +
+		"silently swallowed — check for a warning field before assuming the cascade fully completed." +
+		"\nParameters: id (required), confirm (bool, must be true)."
 }
 
 func (t *AgentDeleteTool) Parameters() map[string]any {
@@ -719,6 +754,24 @@ func (t *AgentDeleteTool) Execute(_ context.Context, args map[string]any) *tools
 			"confirm must be true to delete an agent",
 			"Set confirm=true to proceed with deletion",
 		))
+	}
+	// Guard 0 (F8, half_b_report.md): refuse outright — BEFORE any
+	// destructive action — if id is the configured default agent. Deleting
+	// it would leave cfg.Agents.Defaults.DefaultAgentID pointing at a
+	// nonexistent id, silently demoting default-agent resolution to its
+	// Priority-2 fallback (Registry.GetDefaultAgent / route.go's
+	// resolveDefaultAgentID — see CLAUDE.md's "Default agent (single source
+	// of truth)" section, itself a former release blocker for exactly this
+	// kind of silent divergence). A nil GetCfg/Config (test scaffolding
+	// without a wired config) skips the check rather than trusting an
+	// unknown default — matches this file's configAgentPresenceSet
+	// precedent for "no config visible" defaulting to exclude, never allow.
+	if t.deps.GetCfg != nil {
+		if cfg := t.deps.GetCfg(); cfg != nil && cfg.Agents.Defaults.DefaultAgentID == id {
+			return tools.ErrorResult(errorJSON("AGENT_IS_DEFAULT",
+				fmt.Sprintf("agent %q is the configured default agent and cannot be deleted", id),
+				"Set another agent as default first (Agents screen ★), then retry delete_agent"))
+		}
 	}
 	// ADR-054 D2/D6 rule 5/§11 checklist item 6: agents are per-entity
 	// records under entities/agents/<id>.json, not config.json's
@@ -753,6 +806,36 @@ func (t *AgentDeleteTool) Execute(_ context.Context, args map[string]any) *tools
 		return tools.ErrorResult(errorJSON("SAVE_FAILED",
 			fmt.Sprintf("agent %q is a locked core agent and cannot be deleted", id), ""))
 	}
+
+	// cascadeWarnings collects every best-effort cascade-step failure so the
+	// response can report a real partial-failure instead of silently
+	// claiming full success (F8, half_b_report.md — mirrors this file's
+	// existing publish_warning pattern for create/update, generalized to the
+	// several independent stores this cascade touches). None of these steps
+	// abort the delete: the agent entity record is still removed below even
+	// if a cascade step fails, matching delete_workspace's own
+	// best-effort-cascade shape (a failed mount/delegation-store cleanup
+	// there does not stop the workspace from being deleted either).
+	var cascadeWarnings []string
+
+	// Step 1a (F8): delete every session in the SHARED session store
+	// ($OMNIPUS_HOME/sessions/) that belongs SOLELY to this agent, together
+	// with its uploads — BEFORE the authoritative entity-record delete
+	// below, mirroring delete_workspace's own "cascade dependents first"
+	// ordering for its task cascade. See cascadeDeleteAgentSessions's doc
+	// comment for why a session shared with another agent is deliberately
+	// left untouched rather than deleted or partially edited.
+	sessionsDeleted, sessionsPreservedShared, sessionWarnings := cascadeDeleteAgentSessions(omnipusHome, id)
+	cascadeWarnings = append(cascadeWarnings, sessionWarnings...)
+
+	// Step 1b (F8): unassign (never delete) every GTD task currently
+	// assigned to this agent, using the same task.Store.Update primitive
+	// (and per-task locking) the ordinary task-update tools use — never a
+	// hand-rolled read-modify-write. See cascadeUnassignAgentTasks's doc
+	// comment for why CreatedByAgentID is deliberately left untouched.
+	tasksUnassigned, taskWarnings := cascadeUnassignAgentTasks(omnipusHome, id)
+	cascadeWarnings = append(cascadeWarnings, taskWarnings...)
+
 	if err := store.Delete(id); err != nil {
 		return tools.ErrorResult(errorJSON("SAVE_FAILED", err.Error(), ""))
 	}
@@ -762,6 +845,16 @@ func (t *AgentDeleteTool) Execute(_ context.Context, args map[string]any) *tools
 		slog.Warn("sysagent: workspace cleanup incomplete",
 			"agent_id", id, "path", wsPath, "error", err)
 	}
+
+	// Step 2 (F8): best-effort cleanup of DANGLING REFERENCES to the
+	// now-deleted agent across every workspace — core_team membership and
+	// delegation-trust edges naming it as either side. Runs AFTER the
+	// authoritative entity-record delete above, mirroring delete_workspace's
+	// own post-record-delete cleanup of its mount/delegation stores: this is
+	// "clean up what still points at the thing that's gone", not data that
+	// belongs to the agent itself.
+	workspacesUpdated, edgesRemoved, wsWarnings := cascadeCleanAgentWorkspaceReferences(omnipusHome, id)
+	cascadeWarnings = append(cascadeWarnings, wsWarnings...)
 
 	// Trigger hot-reload so the deleted agent is immediately unroutable and
 	// unlisted (RouteResolver, list_agents, GET /api/v1/agents) without a
@@ -806,11 +899,250 @@ func (t *AgentDeleteTool) Execute(_ context.Context, args map[string]any) *tools
 	}
 
 	result := map[string]any{
-		"id":      id,
-		"deleted": true,
+		"id":                        id,
+		"deleted":                   true,
+		"sessions_deleted":          sessionsDeleted,
+		"sessions_preserved_shared": sessionsPreservedShared,
+		"tasks_unassigned":          tasksUnassigned,
+		"workspaces_updated":        workspacesUpdated,
+		"delegation_edges_removed":  edgesRemoved,
 	}
 	if publishWarning != "" {
 		result["publish_warning"] = publishWarning
 	}
+	// F8 (half_b_report.md): a per-step cascade failure is best-effort and
+	// non-fatal (the agent record above is already durably deleted either
+	// way), but must not be silently swallowed — an unqualified
+	// {"deleted":true} response with no hint of a stuck session/task/
+	// delegation-edge reference would tell the caller the cascade fully
+	// completed when it did not.
+	if len(cascadeWarnings) > 0 {
+		result["cascade_warnings"] = cascadeWarnings
+	}
 	return tools.NewToolResult(successJSON(result))
+}
+
+// cascadeDeleteAgentSessions removes every session in the shared session
+// store ($OMNIPUS_HOME/sessions/) that belongs SOLELY to agentID, together
+// with its uploads ($OMNIPUS_HOME/uploads/<sessionID>/) — UnifiedStore's
+// DeleteSession already cascades the uploads directory itself, so no
+// separate upload-cleanup call is needed here.
+//
+// "Belongs solely" means agentID is the ONLY entry in the session's
+// AgentIDs (the v2 multi-agent / "joined session model" field — see
+// pkg/session's SessionMeta doc comment — PostLoad-backfilled from the
+// legacy AgentID on every disk read, so this check is safe even against
+// pre-v2 sessions). A session with MORE than one agent in AgentIDs (a
+// conversation another agent also participated in, e.g. via SwitchAgent) is
+// deliberately left COMPLETELY untouched rather than partially edited:
+// there is no supported primitive to remove a single id from AgentIDs
+// (session.MetaPatch has no AgentIDs field), and hand-rolling a direct
+// identity-file rewrite here would risk corrupting the record for an agent
+// that still exists. Deleting the WHOLE session because one of several
+// participants is being deleted would also destroy conversation history
+// that legitimately still belongs to another, live agent. Given this
+// operation is irreversible, leaving shared sessions alone — and reporting
+// how many were preserved — is the safer of the two interpretations.
+//
+// Returns the count of sessions deleted, the count of shared sessions left
+// untouched, and any non-fatal per-session failures. Best-effort throughout:
+// one failure does not abort the sweep, matching every other cascade step in
+// AgentDeleteTool.Execute.
+func cascadeDeleteAgentSessions(omnipusHome, agentID string) (deleted, sharedSkipped int, warnings []string) {
+	sessionsDir := filepath.Join(omnipusHome, "sessions")
+	store, err := session.NewUnifiedStore(sessionsDir)
+	if err != nil {
+		return 0, 0, []string{fmt.Sprintf("could not open session store for cascade delete: %v", err)}
+	}
+	// Close stops the store's periodic stats-flusher goroutine. This
+	// function constructs a short-lived store instance for the duration of
+	// one delete_agent call (same "fresh store per call" convention this
+	// file already uses for agentstore.New in every Execute), so it must
+	// also tear it down — otherwise every delete_agent call leaks one
+	// ticker goroutine for the life of the process.
+	defer func() {
+		if closeErr := store.Close(); closeErr != nil {
+			slog.Warn("sysagent: cascade session delete: session store close failed",
+				"agent_id", agentID, "error", closeErr)
+		}
+	}()
+
+	metas, err := store.ListSessionsFiltered(func(m *session.UnifiedMeta) bool {
+		for _, a := range m.AgentIDs {
+			if a == agentID {
+				return true
+			}
+		}
+		return false
+	})
+	if err != nil {
+		return 0, 0, []string{fmt.Sprintf("could not list sessions for cascade delete: %v", err)}
+	}
+
+	for _, m := range metas {
+		if len(m.AgentIDs) != 1 {
+			sharedSkipped++
+			continue
+		}
+		if delErr := store.DeleteSession(m.ID); delErr != nil {
+			warnings = append(warnings, fmt.Sprintf("could not delete session %s: %v", m.ID, delErr))
+			continue
+		}
+		deleted++
+	}
+	return deleted, sharedSkipped, warnings
+}
+
+// cascadeUnassignAgentTasks clears AgentID on every GTD task currently
+// assigned to agentID, using task.Store.Update (the same primitive — and
+// per-task locking — the ordinary update_task/update_task_in_workspace tools
+// use) rather than a hand-rolled read-modify-write. The task itself is
+// preserved, not deleted: a task's value is independent of which agent
+// currently owns it, unlike a workspace's tasks (delete_workspace deletes
+// those outright because they cannot exist without their parent workspace —
+// a different relationship). Unassigning returns the task to "no current
+// assignee" so a human or another agent can pick it up.
+//
+// Tasks the agent merely CREATED (CreatedByAgentID) are deliberately left
+// untouched: that field is historical attribution, not a live routing
+// reference — like a commit's author, it stays accurate even after the
+// author is gone, and rewriting it would falsify the task's own history.
+//
+// Only tasks with a currently-valid GTD status are considered (mirrors
+// computeWorkspaceTaskCount/delete_workspace's own cascade filter). Returns
+// the count of tasks unassigned and any non-fatal per-task failures;
+// best-effort, one failure does not abort the sweep.
+func cascadeUnassignAgentTasks(omnipusHome, agentID string) (unassigned int, warnings []string) {
+	tasks, err := listEntities[unifiedTask](tasksDir(omnipusHome))
+	if err != nil {
+		return 0, []string{fmt.Sprintf("could not list tasks for cascade unassign: %v", err)}
+	}
+	store := taskStoreFor(omnipusHome)
+	empty := ""
+	for i := range tasks {
+		if !isValidTaskStatus(string(tasks[i].Status)) {
+			continue
+		}
+		if tasks[i].AgentID != agentID {
+			continue
+		}
+		if _, updErr := store.Update(tasks[i].ID, task.Patch{AgentID: &empty}); updErr != nil {
+			warnings = append(warnings, fmt.Sprintf("could not unassign task %s: %v", tasks[i].ID, updErr))
+			continue
+		}
+		unassigned++
+	}
+	return unassigned, warnings
+}
+
+// cascadeCleanAgentWorkspaceReferences removes agentID from every
+// workspace's core_team it appears on, and drops every delegation edge (in
+// that workspace's own delegation store) naming it as from_agent or
+// to_agent. Best-effort per workspace: a failure reading/writing one
+// workspace's record is reported and does not block cleanup of the others.
+//
+// This mirrors delete_workspace's own post-record-delete cascade of its
+// mount/delegation stores — "clean up what still points at the thing that's
+// gone" — applied here to every workspace that referenced the deleted agent,
+// rather than to the single workspace being deleted.
+//
+// Each workspace's load-modify-write is serialized under workspacepkg.LockID
+// (the required guard for any load-modify-write of an existing
+// workspaces/{id}.json — see that function's doc comment), matching
+// update_workspace/delete_workspace's own locking discipline. SaveDelegation
+// requires that same lock to already be held, which is why the delegation
+// cleanup for a workspace happens inside the same locked span as its
+// core_team edit rather than as a separate pass.
+//
+// Returns the number of workspaces actually modified (core_team and/or
+// delegation edges), the number of delegation edges removed in total, and
+// any non-fatal per-workspace failures.
+func cascadeCleanAgentWorkspaceReferences(home, agentID string) (workspacesUpdated, edgesRemoved int, warnings []string) {
+	dir := workspacesDir(home)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, 0, nil
+		}
+		return 0, 0, []string{fmt.Sprintf("could not list workspaces for cascade reference cleanup: %v", err)}
+	}
+
+	for _, e := range entries {
+		if e.IsDir() || len(e.Name()) < 6 || e.Name()[len(e.Name())-5:] != ".json" {
+			continue
+		}
+		wsID := e.Name()[:len(e.Name())-5]
+
+		unlock := workspacepkg.LockID(wsID)
+		wsUpdated, wsEdgesRemoved, wsWarn := cascadeCleanOneWorkspaceLocked(home, dir, wsID, agentID)
+		unlock()
+
+		if wsWarn != "" {
+			warnings = append(warnings, wsWarn)
+		}
+		if wsUpdated {
+			workspacesUpdated++
+		}
+		edgesRemoved += wsEdgesRemoved
+	}
+	return workspacesUpdated, edgesRemoved, warnings
+}
+
+// cascadeCleanOneWorkspaceLocked performs the actual core_team + delegation
+// cleanup for a single workspace. Caller MUST already hold
+// workspacepkg.LockID(wsID) for the duration of this call — split out of
+// cascadeCleanAgentWorkspaceReferences only for readability, not as an
+// independently-lockable entry point.
+func cascadeCleanOneWorkspaceLocked(home, workspaceDir, wsID, agentID string) (updated bool, edgesRemoved int, warning string) {
+	w, err := readWorkspaceFromDisk(home, wsID)
+	if err != nil {
+		return false, 0, fmt.Sprintf("could not read workspace %s for cascade reference cleanup: %v", wsID, err)
+	}
+
+	newTeam := make([]string, 0, len(w.CoreTeam))
+	teamChanged := false
+	for _, member := range w.CoreTeam {
+		if member == agentID {
+			teamChanged = true
+			continue
+		}
+		newTeam = append(newTeam, member)
+	}
+	if teamChanged {
+		w.CoreTeam = newTeam
+		w.UpdatedAt = nowISO()
+		if err := writeEntity(workspaceDir, wsID, w); err != nil {
+			return false, 0, fmt.Sprintf("could not remove agent %s from workspace %s core_team: %v", agentID, wsID, err)
+		}
+		updated = true
+	}
+
+	edges, ok := workspacepkg.LoadDelegation(home, wsID)
+	if !ok {
+		// FAIL SAFE, not fail closed: the delegation store being unreadable
+		// here must not block the rest of this best-effort cascade (the
+		// core_team edit above, if any, already succeeded and stays). It is
+		// reported so the operator knows a dangling edge for the deleted
+		// agent may remain in that one workspace's graph.
+		return updated, 0, fmt.Sprintf(
+			"workspace %s delegation store unreadable — any edges naming the deleted agent were left in place",
+			wsID)
+	}
+	var kept []workspacepkg.DelegationEdge
+	removedHere := 0
+	for _, edge := range edges {
+		if edge.FromAgent == agentID || edge.ToAgent == agentID {
+			removedHere++
+			continue
+		}
+		kept = append(kept, edge)
+	}
+	if removedHere > 0 {
+		if err := workspacepkg.SaveDelegation(home, wsID, kept); err != nil {
+			return updated, 0, fmt.Sprintf("could not save workspace %s delegation edges: %v", wsID, err)
+		}
+		updated = true
+		edgesRemoved = removedHere
+	}
+	return updated, edgesRemoved, ""
 }
