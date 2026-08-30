@@ -1076,17 +1076,24 @@ func (t *DelegateTool) Description() string {
 	return "Delegate a task to a subagent, and control/monitor it afterward. " +
 		"action=\"run\" (default) delegates a new task — by default in the background " +
 		"(async=true), returning immediately with a task_id/session_id; set async=false to " +
-		"block and receive the result inline. action=\"status\" checks on a previously-" +
-		"delegated task/session. action=\"inbox\" drains messages the child has pushed " +
-		"back to you (progress/checkpoint/artifact/blocker/question/handback); " +
-		"action=\"inbox_ack\" acknowledges them. action=\"steer\" injects an instruction " +
-		"at the child's next tool boundary; action=\"respond\" answers a child's open " +
-		"question by correlation_id. action=\"cancel\" stops a child (cooperatively by " +
-		"default; hard=true bypasses the grace window). action=\"follow_up\" warm-resumes " +
-		"a finished child with additional instructions. action=\"peek\" reads a child's " +
-		"latest checkpoint/progress without side effects. Optionally provide agent_id to " +
-		"target a specific agent from your delegation allowlist; omit it to run a generic " +
-		"subagent under your own agent."
+		"block and receive the result inline. A delegation is force-cancelled after " +
+		"timeout_seconds (default 300s / 5 min) if it has not finished by then. " +
+		"action=\"status\" checks on a previously-delegated task/session; with no " +
+		"task_id/session_id given, it lists all tasks currently visible to you instead — " +
+		"this is the tool's discovery affordance for what you have outstanding. " +
+		"action=\"inbox\" drains messages the child has pushed back to you (progress/" +
+		"checkpoint/artifact/blocker/question/handback); action=\"inbox_ack\" acknowledges " +
+		"them. action=\"steer\" injects an instruction at the child's next tool boundary " +
+		"(NOT available for a delegation running on an external CLI, subagent_3p: " +
+		"claude-code/codex/opencode — use respond or follow_up instead); " +
+		"action=\"respond\" answers a child's open question by correlation_id — " +
+		"always available for a delegation you started. " +
+		"action=\"cancel\" stops a child (cooperatively by default; hard=true bypasses " +
+		"the grace window). " +
+		"action=\"follow_up\" warm-resumes a finished child with additional instructions. " +
+		"action=\"peek\" reads a child's latest checkpoint/progress without side effects. " +
+		"Optionally provide agent_id to target a specific agent from your delegation " +
+		"allowlist; omit it to run a generic subagent under your own agent."
 }
 
 func (t *DelegateTool) Scope() ToolScope       { return ScopeCore }
@@ -1135,15 +1142,6 @@ func (t *DelegateTool) Parameters() map[string]any {
 				"type": "string",
 				"description": "The durable child session to target. Required for status/inbox/inbox_ack/" +
 					"steer/respond/cancel/follow_up/peek.",
-			},
-			"launch_profile": map[string]any{
-				"type": "string",
-				"enum": []string{"utility", "specialist"},
-				"description": "Optional (action=\"run\" only, default \"utility\"): \"utility\" is fire-and-" +
-					"collect (visibility=outcome, no steering, progress-only child messaging — matches today's " +
-					"one-shot spawn). \"specialist\" is a collaborating native worker (checkpoints, steering, " +
-					"full child messaging); a 3P (external-CLI) child on this profile still degrades to fire-" +
-					"and-collect.",
 			},
 			"snapshot": map[string]any{
 				"type": "object",
@@ -1318,23 +1316,6 @@ func (t *DelegateTool) executeRun(ctx context.Context, args map[string]any, cb A
 		return ErrorResult(timeoutErr.Error())
 	}
 
-	// ADR-053 §5.1 launch profile — two published legal profiles; anything
-	// else is rejected AT delegate.run (MAJ-7 illegal-combo scenario), not
-	// silently accepted or defaulted past.
-	launchProfile := "utility"
-	if raw, present := args["launch_profile"]; present && raw != nil {
-		s, ok := raw.(string)
-		if !ok {
-			return ErrorResult("launch_profile must be a string")
-		}
-		launchProfile = s
-	}
-	if launchProfile != "utility" && launchProfile != "specialist" {
-		return ErrorResult(fmt.Sprintf(
-			`invalid launch_profile %q: must be "utility" or "specialist"`, launchProfile,
-		))
-	}
-
 	// R§8.5 curated context snapshot — deny-by-default, hard-capped
 	// discretionary portion. Rejected here (never silently truncated) if
 	// over cap.
@@ -1439,10 +1420,6 @@ func (t *DelegateTool) executeRun(ctx context.Context, args map[string]any, cb A
 			is3P = reg.IsExternalCLI(agentID)
 		}
 	}
-	launchProfileVal := session.LaunchProfileUtility
-	if launchProfile == "specialist" {
-		launchProfileVal = session.LaunchProfileSpecialist
-	}
 	ownerScopeKind := session.OwnerScopeHuman
 	ownerScopeID := ""
 	if parentDelegateID := strings.TrimSpace(ToolDelegateSessionID(ctx)); parentDelegateID != "" {
@@ -1509,7 +1486,6 @@ func (t *DelegateTool) executeRun(ctx context.Context, args map[string]any, cb A
 			WorkspaceID:      ToolWorkspaceID(ctx),
 			AgentID:          agentID,
 			Is3P:             is3P,
-			LaunchProfile:    launchProfileVal,
 		}
 		if err := t.lifecycle.Persist(rec); err != nil {
 			return ErrorResult(fmt.Sprintf("delegate: failed to persist durable session record: %v", err)).WithError(err)
@@ -3072,6 +3048,24 @@ func (t *DelegateTool) executeSteer(ctx context.Context, args map[string]any) *T
 	if verr := t.verifyCallerOwnsSession(ctx, rec); verr != nil {
 		return ErrorResult(fmt.Sprintf("delegate: steer: %v", verr))
 	}
+	// Not available to external-CLI (3P) sessions: every steering-queue drain
+	// site lives in the native turn engine (pkg/agent/loop.go,
+	// pkg/agent/steering.go) — runExternalCLISubTurn
+	// (pkg/agent/external_dispatch.go) never drains it, so a message queued
+	// here for a 3P child is silently orphaned forever (no live consumer ever
+	// reads it, and there is no "next tool boundary" concept for an external
+	// CLI's own turn loop). Unlike respond/follow_up, steer has no corrective-
+	// redispatch fallback to degrade to — injecting an instruction mid-turn is
+	// meaningless for a session that isn't running on this engine's turn loop
+	// at all. Mirrors message_parent's identical Is3P posture (D5).
+	if rec.Is3P {
+		return ErrorResult(fmt.Sprintf(
+			"delegate: steer: not available to external-CLI (3P) sessions — session %s runs on an external CLI "+
+				"(claude-code/codex/opencode) with no steering-queue drain in its dispatch path; use "+
+				"action=\"respond\" (which redispatches a corrective session) or action=\"follow_up\" instead",
+			sessionID,
+		))
+	}
 
 	// TOCTOU race guard: a plain Load() followed by a branch on
 	// rec.Terminal() was a check-then-act race against the concurrent
@@ -3165,6 +3159,7 @@ func (t *DelegateTool) executeRespond(ctx context.Context, args map[string]any, 
 	if verr := t.verifyCallerOwnsSession(ctx, rec); verr != nil {
 		return ErrorResult(fmt.Sprintf("delegate: respond: %v", verr))
 	}
+
 	if rec.State != session.LifecycleNeedsInput || rec.NeedsInput == nil || rec.NeedsInput.CorrelationID != correlationID {
 		return ErrorResult(fmt.Sprintf(
 			"delegate: respond: session %s is not parked on correlation_id %q", sessionID, correlationID,

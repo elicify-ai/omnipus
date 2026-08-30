@@ -52,17 +52,14 @@ type delegationTarget struct {
 // Advertisement == enforcement by construction: both read the graph, so the
 // modes and targets shown to the agent are exactly what the gate allows.
 //
-// Tool ground-truth (verified against pkg/tools/delegate.go — ADR-036 merge of
-// the former spawn / run_subagent / check_spawn_status trio into one tool):
-//   - delegate (delegate.go): params task (required), agent_id (optional),
-//     async (optional bool, default true), action (enum run|status, default
-//     run), task_id (required for action=status).
-//     async=true (the default, background mode): runs in the background —
-//     poll delegate(action="status", task_id=...) for the result.
-//     async=false (await mode): runs SYNCHRONOUSLY (blocks this turn) and
-//     returns the result inline.
-//   - create_task (task.go):  params agent_id + title + prompt (all required).
-//     Task mode. Creates a durable tracked task.
+// This function renders only the two calls a target advertisement needs
+// (delegate's run action, and create_task). For the delegate tool's full,
+// current parameter set (all nine actions, deprecated aliases, etc.) see
+// DelegateTool.Description()/Parameters() in pkg/tools/delegate.go directly —
+// deliberately NOT hand-copied here a second time (finding 4, context-audit
+// 2026-08): an earlier version of this comment carried its own copy of the
+// schema, and it drifted (task_id/action=run|status only) once the tool grew
+// session_id and seven more actions. A single source of truth cannot drift.
 func buildDelegationContext(targets []delegationTarget, globalDepthCap int) string {
 	// No targets → cannot delegate.
 	if len(targets) == 0 {
@@ -112,18 +109,23 @@ func buildDelegationContext(targets []delegationTarget, globalDepthCap int) stri
 		if activeBackground {
 			// delegate: agent_id is optional but we supply the concrete id so
 			// the agent can copy-paste the call. Background mode — async is
-			// the default, so no async=... suffix is needed here.
+			// the default, so no async=... suffix is needed here. Poll via
+			// session_id, not the deprecated task_id alias (finding 4).
 			fmt.Fprintf(
 				&sb,
-				"\n- `delegate(agent_id=%q, task=\"…\")` — runs async by default; poll `delegate(action=\"status\", task_id=\"…\")` for the result.",
+				"\n- `delegate(agent_id=%q, task=\"…\")` — runs async by default; poll `delegate(action=\"status\", session_id=\"…\")` for the result.",
 				tgt.ID,
 			)
 		}
 		if activeTask {
-			// create_task: all three params are required. NOT task_create (retired).
+			// create_task: title/prompt/agent_id/criteria are all required —
+			// an agent-created task with zero criteria is rejected (finding 4,
+			// pkg/tools/task.go). NOT task_create (retired). This tool is
+			// previewed, not always in the callable set — call ToolSearch
+			// with its exact name first if it isn't callable yet.
 			fmt.Fprintf(
 				&sb,
-				"\n- `create_task(agent_id=%q, title=\"…\", prompt=\"…\")` — files a durable, tracked task in the task DAG.",
+				"\n- `create_task(agent_id=%q, title=\"…\", prompt=\"…\", criteria=[{kind:\"prose\", text:\"…\"}])` — files a durable, tracked task in the task DAG (load via ToolSearch first if not already callable).",
 				tgt.ID,
 			)
 		}

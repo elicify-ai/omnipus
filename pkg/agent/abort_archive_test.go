@@ -123,7 +123,7 @@ func TestAbortPath_HardAbort_PreservesEvictedArchive(t *testing.T) {
 	// --- Phase 2: evict turns via windowTrim so meta.Skip > 0.
 	agent := al.GetRegistry().GetDefaultAgent()
 	require.NotNil(t, agent)
-	_, ok := al.windowTrim(agent, sk)
+	_, ok := al.windowTrim(agent, "", sk)
 	require.True(t, ok, "windowTrim must evict turns from the over-budget session")
 
 	// Archive must still have all 16 lines (eviction = Skip advance, not byte delete).
@@ -270,7 +270,7 @@ func TestAbortPath_RestoreSession_PreservesEvictedArchive(t *testing.T) {
 		"precondition: archive must contain all seeded messages before trim")
 
 	// --- Phase 2: evict turns via windowTrim.
-	_, ok := al.windowTrim(agent, sk)
+	_, ok := al.windowTrim(agent, "", sk)
 	require.True(t, ok, "windowTrim must evict turns from the over-budget session")
 
 	postTrimArchiveLen := archiveLineCountFromAgent(t, al, sk)

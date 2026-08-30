@@ -513,7 +513,7 @@ function replayPartStatus(status: 'running' | 'success' | 'error' | 'cancelled')
  * own `isError` field is the closest available proxy. Every tool this
  * project's registered live tool UIs render OTHER than through
  * GenericToolCall (Fallback)/BashOutputUI never self-hides regardless of
- * tool name (only load_tool/delegate/bash are ever hidden — see
+ * tool name (only ToolSearch/delegate/bash are ever hidden — see
  * shouldRenderToolCall's switch), so calling shouldRenderToolCall uniformly
  * for every tool name here is accurate for those surfaces too, without
  * needing to special-case them.
@@ -927,7 +927,7 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
   // path below passes `!!part.isError`, and the actual render for this same
   // `tc` uses `tc.status === 'error'` — but this one was left on it, so a
   // failed tool call with status:'error' and no `error` string (e.g. a
-  // failed load_tool) computed isError:false here while the row itself
+  // failed ToolSearch) computed isError:false here while the row itself
   // (whose own visibility gate reads `tc.status === 'error'` directly)
   // still rendered — producing a ghost ThinkingIndicator ABOVE the visible
   // failed row (see hasVisibleToolCalls/showEmptyPlaceholder below).

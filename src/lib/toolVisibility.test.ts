@@ -6,7 +6,25 @@
 import { describe, it, expect } from 'vitest'
 import { shouldRenderToolCall, shouldRenderSubagentSpan, shouldRenderToolCallInPanel } from './toolVisibility'
 
-describe('shouldRenderToolCall — load_tool', () => {
+describe('shouldRenderToolCall — ToolSearch', () => {
+  it.each([
+    [undefined, false, false],
+    [{}, false, false],
+    [undefined, true, true],
+    [{}, true, true],
+  ])('params=%o verbose=%s → %s', (params, verbose, expected) => {
+    expect(shouldRenderToolCall('ToolSearch', params as Record<string, unknown> | undefined, verbose)).toBe(
+      expected,
+    )
+  })
+})
+
+// FR-015 back-compat: `load_tool` is the pre-ADR-071-D1 name for the same
+// tool. A pre-rename session transcript still contains the literal string
+// "load_tool" (pkg/gateway/replay.go emits the recorded name verbatim, and
+// old transcripts are never migrated) — it must be classified identically to
+// `ToolSearch`, not fall through to `default: return true`.
+describe('shouldRenderToolCall — load_tool (legacy pre-rename name, same treatment as ToolSearch)', () => {
   it.each([
     [undefined, false, false],
     [{}, false, false],
@@ -16,6 +34,10 @@ describe('shouldRenderToolCall — load_tool', () => {
     expect(shouldRenderToolCall('load_tool', params as Record<string, unknown> | undefined, verbose)).toBe(
       expected,
     )
+  })
+
+  it('an error/failure outcome still forces visibility, same as ToolSearch', () => {
+    expect(shouldRenderToolCall('load_tool', undefined, false, true)).toBe(true)
   })
 })
 
@@ -57,14 +79,32 @@ describe('shouldRenderToolCall — bash', () => {
 
 describe('shouldRenderToolCall — always-visible tools', () => {
   it.each([
-    'hand_off',
-    'return_to_default',
+    'switch_agent',
     'remember',
-    'write_agent_metadata',
     'get_usage',
     'run_doctor',
   ])('%s is visible, non-verbose', (tool) => {
     expect(shouldRenderToolCall(tool, undefined, false)).toBe(true)
+  })
+})
+
+// ADR-071 D4: `hand_off` and `return_to_default` are merged into
+// `switch_agent`. Asserted explicitly (not left to the `default:`
+// fallthrough, which happens to fail open into the same `true`) per
+// ADR-071 §5.2.2c.
+describe('shouldRenderToolCall — switch_agent (ADR-071 D4 merge of hand_off + return_to_default)', () => {
+  it('is visible, non-verbose, regardless of target', () => {
+    expect(shouldRenderToolCall('switch_agent', { target: 'jim', note: 'handing off' }, false)).toBe(true)
+    expect(shouldRenderToolCall('switch_agent', { target: 'default' }, false)).toBe(true)
+    expect(shouldRenderToolCall('switch_agent', undefined, false)).toBe(true)
+  })
+
+  it('is visible when verbose', () => {
+    expect(shouldRenderToolCall('switch_agent', { target: 'jim' }, true)).toBe(true)
+  })
+
+  it('is visible on error too — no isError exception needed (neither predecessor had one)', () => {
+    expect(shouldRenderToolCall('switch_agent', { target: 'jim' }, false, true)).toBe(true)
   })
 })
 
@@ -84,8 +124,8 @@ describe('shouldRenderToolCall — mcp_* and unknown tools (default fallthrough,
 })
 
 describe('shouldRenderToolCall — verbose override', () => {
-  it('load_tool becomes visible when verbose', () => {
-    expect(shouldRenderToolCall('load_tool', undefined, true)).toBe(true)
+  it('ToolSearch becomes visible when verbose', () => {
+    expect(shouldRenderToolCall('ToolSearch', undefined, true)).toBe(true)
   })
 
   it('a hidden background bash call becomes visible when verbose', () => {
@@ -103,19 +143,19 @@ describe('shouldRenderToolCall — verbose override', () => {
 })
 
 // ── isError override — now a PER-TOOL-CLASS decision (revised 2026-07-16),
-// not a blanket short-circuit. `load_tool` keeps the override (nothing else
+// not a blanket short-circuit. `ToolSearch` keeps the override (nothing else
 // narrates its failure). `delegate` and the background-dispatch/poll/read
 // sub-cases of `bash` deliberately do NOT: a subagent/background-shell
 // failure is returned to the CALLING agent's own turn as the tool result —
 // that agent explains it in its own response text — and the raw failure
 // stays fully transparent in the ActivityPanel slide-out
-// (shouldRenderToolCallInPanel shows everything but load_tool). Only verbose
+// (shouldRenderToolCallInPanel shows everything but ToolSearch). Only verbose
 // chat brings these specific rows back into the thread. ──────────────────
 
-describe('shouldRenderToolCall — isError override still forces load_tool visibility', () => {
+describe('shouldRenderToolCall — isError override still forces ToolSearch visibility', () => {
   it.each<[string, Record<string, unknown> | undefined]>([
-    ['load_tool', undefined],
-    ['load_tool', {}],
+    ['ToolSearch', undefined],
+    ['ToolSearch', {}],
   ])('tool=%s params=%o is visible when isError=true', (tool, params) => {
     expect(shouldRenderToolCall(tool, params, false, true)).toBe(true)
   })
@@ -173,7 +213,7 @@ describe('shouldRenderToolCall — isError=false explicit is a no-op (regression
   // Confirms passing isError=false explicitly reproduces the exact same
   // classifications as omitting the parameter entirely.
   it.each<[string, Record<string, unknown> | undefined, boolean]>([
-    ['load_tool', undefined, false],
+    ['ToolSearch', undefined, false],
     ['delegate', undefined, false],
     ['delegate', { async: false }, false], // no longer forced visible (see describe block above)
     ['bash', { run_in_background: true }, false],
@@ -218,12 +258,23 @@ describe('shouldRenderSubagentSpan — verbose-only, no failed-state exception',
 
 // ── shouldRenderToolCallInPanel — ActivityPanel-only policy (Fix 2,
 // user-approved 2026-07-16): INVERTED from the thread — show everything
-// except load_tool by default; verbose reveals load_tool too. This is the
+// except ToolSearch by default; verbose reveals ToolSearch too. This is the
 // transparency valve for exactly what the thread hides (including failed
 // delegate/background-bash rows, by design). ──────────────────────────────
 
 describe('shouldRenderToolCallInPanel', () => {
-  it('hides load_tool by default', () => {
+  it('hides ToolSearch by default', () => {
+    expect(shouldRenderToolCallInPanel('ToolSearch', false)).toBe(false)
+  })
+
+  it('shows ToolSearch when verbose chat is enabled', () => {
+    expect(shouldRenderToolCallInPanel('ToolSearch', true)).toBe(true)
+  })
+
+  // FR-015 back-compat: load_tool is the pre-ADR-071-D1 name for ToolSearch;
+  // a pre-rename transcript's recorded calls must get the same panel
+  // treatment as new ones, not fall through to the always-visible default.
+  it('hides load_tool by default, same as ToolSearch', () => {
     expect(shouldRenderToolCallInPanel('load_tool', false)).toBe(false)
   })
 

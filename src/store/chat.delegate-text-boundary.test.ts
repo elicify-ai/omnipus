@@ -12,7 +12,7 @@
 // agent_id doesn't disagree with the bubble's own agentId (see the sibling
 // regression file chat.delegate-attribution.test.ts for that agent_id-change
 // guard, which already opens a NEW bubble in that case). Neither guard fires
-// when a tool call (e.g. `load_tool`, or a synchronous/"await" `delegate`
+// when a tool call (e.g. `ToolSearch`, or a synchronous/"await" `delegate`
 // call whose own reply rides back on the SAME agent_id / an omitted one)
 // starts and completes WITHOUT the bubble ever closing or changing producer
 // — `startToolCall`/the tool_call_start handler never touches isStreaming,
@@ -80,8 +80,8 @@ describe('chat store — delegator-narration/delegate-content text join (regress
     act(() => {
       useChatStore.getState().handleFrame({
         type: 'tool_call_start',
-        call_id: 'load_tool_1',
-        tool: 'load_tool',
+        call_id: 'ToolSearch_1',
+        tool: 'ToolSearch',
         params: { tool: 'delegate' },
         agent_id: 'jim',
         session_id: SESSION_ID,
@@ -90,8 +90,8 @@ describe('chat store — delegator-narration/delegate-content text join (regress
     act(() => {
       useChatStore.getState().handleFrame({
         type: 'tool_call_result',
-        call_id: 'load_tool_1',
-        tool: 'load_tool',
+        call_id: 'ToolSearch_1',
+        tool: 'ToolSearch',
         result: {},
         status: 'success',
         session_id: SESSION_ID,

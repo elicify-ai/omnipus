@@ -2,7 +2,7 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-// Package systools implements the 35 exclusive system.* tools for the
+// Package systools implements the 33 exclusive system.* tools for the
 // Omnipus system agent per BRD Appendix D §D.4.
 package systools
 
@@ -35,7 +35,7 @@ import (
 // via the "rebuild" pattern rather than the "atomic swap" pattern:
 //
 //  1. ReloadProviderAndConfig calls wireSysagentDepsLocked(newRegistry, deps).
-//  2. wireSysagentDepsLocked calls AllTools(deps, nil) which constructs fresh tool
+//  2. wireSysagentDepsLocked calls AllTools(deps) which constructs fresh tool
 //     instances that capture the new *Deps pointer directly.
 //  3. The new instances are registered on the new registry, which is then swapped
 //     in atomically under al.mu (write lock).

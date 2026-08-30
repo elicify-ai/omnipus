@@ -10,7 +10,7 @@
 // filter — computes the identical per-tool verdict, so the two cannot drift. The
 // gateway WS approval hook resolves through the SAME primitive (see
 // pkg/gateway/ws_approval_parity_test.go), closing the loop on the two-resolver
-// split that previously blocked deny-default agents from executing load_tool.
+// split that previously blocked deny-default agents from executing ToolSearch.
 //
 // Scope note: routing FilterToolsByPolicy through EffectiveToolPolicy is a no-op
 // for the AGENT-LOOP side (the loop already resolved through the same merge, so
@@ -74,10 +74,10 @@ func effectiveToolPolicyMatrix() []effectiveToolPolicyMatrixCase {
 	return []effectiveToolPolicyMatrixCase{
 		// --- deny-default agent (custom) ---
 		{
-			name:      "deny-default/load_tool(infra)→allow",
+			name:      "deny-default/ToolSearch(infra)→allow",
 			cfg:       denyDefaultCfg(),
 			agentType: "custom",
-			tool:      makeScopedTool("load_tool", ScopeGeneral), // real load_tool is ScopeGeneral
+			tool:      makeScopedTool("ToolSearch", ScopeGeneral), // real ToolSearch is ScopeGeneral
 			want:      "allow",
 		},
 		{
@@ -120,10 +120,10 @@ func effectiveToolPolicyMatrix() []effectiveToolPolicyMatrixCase {
 
 		// --- allow-default agent (custom) ---
 		{
-			name:      "allow-default/load_tool(infra)→allow",
+			name:      "allow-default/ToolSearch(infra)→allow",
 			cfg:       allowDefaultCfg(),
 			agentType: "custom",
-			tool:      makeScopedTool("load_tool", ScopeGeneral),
+			tool:      makeScopedTool("ToolSearch", ScopeGeneral),
 			want:      "allow",
 		},
 		{
@@ -366,7 +366,7 @@ func TestEffectiveToolPolicy_GodModeFloorsAllow(t *testing.T) {
 // from now fails closed to "deny" — CLAUDE.md hard constraint 6 forbids the
 // historical hardcoded "allow" fallback.
 func TestEffectiveToolPolicy_NilCfg(t *testing.T) {
-	assert.Equal(t, "allow", EffectiveToolPolicy(nil, ScopeGeneral, "custom", "load_tool"))
+	assert.Equal(t, "allow", EffectiveToolPolicy(nil, ScopeGeneral, "custom", "ToolSearch"))
 	assert.Equal(t, "deny", EffectiveToolPolicy(nil, ScopeGeneral, "custom", "search_web"))
 	// Unknown scope is still fail-closed even with a nil cfg.
 	assert.Equal(t, "deny", EffectiveToolPolicy(nil, ToolScope("bogus"), "custom", "x"))

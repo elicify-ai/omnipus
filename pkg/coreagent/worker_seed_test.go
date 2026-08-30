@@ -205,8 +205,8 @@ func TestWorkerToolPolicyTightensGlobalCeiling(t *testing.T) {
 	for _, tool := range []string{
 		"enable_channel", "configure_channel", "disable_channel", "list_channels", "test_channel",
 		"configure_provider", "list_providers", "test_provider", "list_models",
-		"get_config", "set_config", "run_doctor", "get_usage", "navigate",
-		"create_agent", "update_agent", "delete_agent", "read_agent_metadata", "write_agent_metadata",
+		"get_config", "set_config", "run_doctor", "get_usage",
+		"create_agent", "update_agent", "delete_agent", "read_agent_metadata",
 		"create_task", "delete_task", "create_task_in_workspace", "update_task_in_workspace",
 		"delete_task_in_workspace", "list_tasks_in_workspace",
 		"create_workspace", "update_workspace", "delete_workspace", "list_workspaces", "get_workspace",

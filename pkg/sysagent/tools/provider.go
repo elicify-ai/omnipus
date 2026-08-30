@@ -17,7 +17,9 @@ import (
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/credentials"
 	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -32,16 +34,42 @@ func providerFromModelRef(ref string) string {
 	return ""
 }
 
-// cloudProviders is the known set of cloud provider names.
-var cloudProviders = map[string]bool{
-	"anthropic": true, "openai": true, "deepseek": true, "groq": true,
-	"openrouter": true, "azure": true, "bedrock": true, "cohere": true,
-	"mistral": true, "gemini": true,
+// catalogProviderLocality looks name up in the canonical provider catalog
+// (pkg/providers/catalog/data/providers_catalog.json, 211 providers) and
+// reports whether it is a known id and, if so, whether it is local.
+//
+// This replaces two hand-maintained ~10-name allow-lists (cloudProviders,
+// localProviders) that both omitted ~200 real cloud providers — xai,
+// togetherai, cerebras, fireworks-ai, perplexity, deepinfra, nvidia,
+// google-vertex, moonshotai, zhipuai, minimax, baseten, databricks,
+// huggingface, and many more — and accepted two ids that are not real
+// catalog ids at all: "bedrock" and "gemini" (the real ids are
+// "amazon-bedrock" and "google"; "llamacpp" is likewise not a catalog id).
+// providers.IsCatalogProvider's own doc comment names itself "the ONE
+// membership test every gate uses" — this mirrors that, and reads the
+// row's Locality field, which the catalog parser derives at load time via
+// catalog.DeriveLocality (FR-039) rather than re-deriving it here.
+func catalogProviderLocality(name string) (row catalog.Provider, known, isLocal bool) {
+	row, known = providers.CatalogProvider(name)
+	if !known {
+		return row, false, false
+	}
+	return row, true, row.Locality == catalog.LocalityLocal
 }
 
-// localProviders is the known set of local provider names.
-var localProviders = map[string]bool{
-	"ollama": true, "llamacpp": true, "lmstudio": true,
+// credentialPresent reports whether ref names a credential that currently
+// resolves in store. Nil-safe: store is nil in some test/scaffolding
+// contexts (a Deps built without a CredStore), and a naked store.Get(ref)
+// on a nil *credentials.Store nil-derefs. configure_provider, list_providers,
+// and test_provider all need the identical "does this ref resolve" check —
+// this is the one place that answers it so each of the three doesn't
+// re-derive its own nil-guard.
+func credentialPresent(store *credentials.Store, ref string) bool {
+	if store == nil || ref == "" {
+		return false
+	}
+	_, err := store.Get(ref)
+	return err == nil
 }
 
 // ---- configure_provider ----
@@ -54,7 +82,15 @@ func NewProviderConfigureTool(d *Deps) *ProviderConfigureTool {
 func (t *ProviderConfigureTool) Name() string           { return "configure_provider" }
 func (t *ProviderConfigureTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *ProviderConfigureTool) Description() string {
-	return "Add or update an LLM provider with its API key.\nParameters: name (required), api_key (for cloud), api_base (optional)."
+	return "Store an LLM provider's API key in the encrypted credential store and wire it into config.json " +
+		"so the provider becomes usable. Does NOT contact the provider — the key is stored and referenced, " +
+		"never validated against the live API, so a wrong or revoked key is accepted here without complaint; " +
+		"call list_models afterwards to confirm the key actually works. name must be a catalog provider id " +
+		"(list_models or the Settings → Providers screen show the valid ids; note the ids are " +
+		"'amazon-bedrock' and 'google', not 'bedrock' or 'gemini'). api_key is required for every cloud " +
+		"provider and optional only for local ones (ollama, lmstudio, vllm). api_base is optional and " +
+		"overrides the catalog's default endpoint; it must be a full http:// or https:// URL with a host.\n" +
+		"Parameters: name (required), api_key, api_base."
 }
 
 func (t *ProviderConfigureTool) Parameters() map[string]any {
@@ -74,6 +110,13 @@ func (t *ProviderConfigureTool) Execute(_ context.Context, args map[string]any) 
 	if name == "" {
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", "name is required", ""))
 	}
+	row, known, isLocal := catalogProviderLocality(name)
+	if !known {
+		return tools.ErrorResult(errorJSON("UNKNOWN_PROVIDER",
+			fmt.Sprintf("%q is not a known provider id", name),
+			"Use the catalog id (e.g. 'amazon-bedrock', not 'bedrock'; 'google', not 'gemini')",
+		))
+	}
 	apiKey, _ := args["api_key"].(string)
 	apiBase, _ := args["api_base"].(string)
 	if apiBase != "" {
@@ -82,7 +125,7 @@ func (t *ProviderConfigureTool) Execute(_ context.Context, args map[string]any) 
 				`Provide a full URL with scheme, e.g. "https://api.openai.com/v1"`))
 		}
 	}
-	if cloudProviders[name] && apiKey == "" {
+	if !isLocal && apiKey == "" {
 		return tools.ErrorResult(errorJSON("INVALID_INPUT",
 			fmt.Sprintf("api_key is required for cloud provider %q", name),
 			"Provide your API key for this provider",
@@ -107,6 +150,12 @@ func (t *ProviderConfigureTool) Execute(_ context.Context, args map[string]any) 
 	}
 
 	if apiKey != "" {
+		if t.deps.CredStore == nil {
+			return tools.ErrorResult(errorJSON("CREDENTIAL_SAVE_FAILED",
+				"Failed to store API key: no credential store is configured",
+				"Check that the credential store is unlocked",
+			))
+		}
 		if err := t.deps.CredStore.Set(ref, apiKey); err != nil {
 			return tools.ErrorResult(errorJSON("CREDENTIAL_SAVE_FAILED",
 				"Failed to store API key: "+err.Error(),
@@ -151,16 +200,41 @@ func (t *ProviderConfigureTool) Execute(_ context.Context, args map[string]any) 
 	}
 
 	// Apply immediately: re-injects provider credentials into the environment and
-	// rebuilds the agent loop so the provider is usable without a restart.
+	// rebuilds the agent loop so the provider is usable without a restart. A
+	// reload failure does NOT undo the store/config writes above (the key really
+	// is saved), so this is still reported as a success — but with a
+	// publish_warning naming the failure, mirroring the pattern adopted for
+	// create_agent/update_agent/delete_agent: an unqualified success response
+	// would tell the caller the provider is live when it is not yet usable.
+	var publishWarning string
 	if t.deps.ReloadFunc != nil {
-		_ = t.deps.ReloadFunc()
+		if err := t.deps.ReloadFunc(); err != nil {
+			slog.Warn("sysagent: configure_provider: reload after provider configure failed — provider available after restart",
+				"provider", name, "error", err)
+			publishWarning = fmt.Sprintf(
+				"provider %q was configured but is not yet live: reload failed (%s); it will become usable "+
+					"after the next config reload or gateway restart", name, err.Error())
+		}
 	}
 
-	return tools.NewToolResult(successJSON(map[string]any{
-		"name":             name,
-		"status":           "connected",
-		"models_available": []string{},
-	}))
+	// api_key_stored reflects whether a key now resolves under ref, not merely
+	// whether this call was passed one — a repeat call with only api_base set
+	// still has a previously-stored key.
+	apiKeyStored := apiKey != "" || credentialPresent(t.deps.CredStore, ref)
+	resolvedAPIBase := apiBase
+	if resolvedAPIBase == "" {
+		resolvedAPIBase = row.API
+	}
+
+	result := map[string]any{
+		"name":           name,
+		"api_key_stored": apiKeyStored,
+		"api_base":       resolvedAPIBase,
+	}
+	if publishWarning != "" {
+		result["publish_warning"] = publishWarning
+	}
+	return tools.NewToolResult(successJSON(result))
 }
 
 // providerNameOf returns a provider entry's canonical name — the explicit
@@ -181,7 +255,10 @@ func NewProviderListTool(d *Deps) *ProviderListTool { return &ProviderListTool{d
 func (t *ProviderListTool) Name() string            { return "list_providers" }
 func (t *ProviderListTool) Scope() tools.ToolScope  { return tools.ScopeCore }
 func (t *ProviderListTool) Description() string {
-	return "List configured providers with connection status. API keys are never returned. No parameters required."
+	return "List the providers configured in config.json and whether each one has an API key present in " +
+		"the credential store (key_present / no_credentials). API keys are never returned, and no network " +
+		"call is made — key_present means a key is stored, not that it works. Use list_models to exercise " +
+		"a provider's live API. No parameters required."
 }
 
 func (t *ProviderListTool) Parameters() map[string]any {
@@ -190,31 +267,32 @@ func (t *ProviderListTool) Parameters() map[string]any {
 
 func (t *ProviderListTool) Execute(_ context.Context, _ map[string]any) *tools.ToolResult {
 	type providerSummary struct {
-		Name            string   `json:"name"`
-		Status          string   `json:"status"`
-		ModelsAvailable []string `json:"models_available"`
+		Name   string `json:"name"`
+		Status string `json:"status"`
 	}
 	// Enumerate providers from config's model_list, redacting credentials.
-	var providers []providerSummary
+	// providerNameOf (not the bare providerFromModelRef fallback) is used so
+	// an entry configured via configure_provider — which sets the explicit
+	// Provider field rather than a "provider/model" Model slug — is not
+	// silently skipped here.
+	var list []providerSummary
 	seen := map[string]bool{}
 	for _, m := range t.deps.GetCfg().Providers {
 		if m == nil {
 			continue
 		}
-		// ModelConfig.Model is "provider/model-name" (e.g. "anthropic/claude-sonnet-4-6").
-		// Extract the provider prefix.
-		p := providerFromModelRef(m.Model)
+		p := providerNameOf(m)
 		if p == "" || seen[p] {
 			continue
 		}
 		seen[p] = true
-		providers = append(providers, providerSummary{
-			Name:            p,
-			Status:          "configured",
-			ModelsAvailable: []string{},
-		})
+		status := "no_credentials"
+		if credentialPresent(t.deps.CredStore, m.APIKeyRef) {
+			status = "key_present"
+		}
+		list = append(list, providerSummary{Name: p, Status: status})
 	}
-	return tools.NewToolResult(successJSON(map[string]any{"providers": providers}))
+	return tools.NewToolResult(successJSON(map[string]any{"providers": list}))
 }
 
 // ---- test_provider ----
@@ -224,8 +302,20 @@ type ProviderTestTool struct{ deps *Deps }
 func NewProviderTestTool(d *Deps) *ProviderTestTool { return &ProviderTestTool{deps: d} }
 func (t *ProviderTestTool) Name() string            { return "test_provider" }
 func (t *ProviderTestTool) Scope() tools.ToolScope  { return tools.ScopeCore }
+
+// Description is deliberately explicit about what this tool does NOT do:
+// it makes zero network calls and never contacts the provider, so a
+// revoked, expired, or wrong API key can still report "ok" here. It was
+// previously described as "Test a provider connection", which reads as a
+// live connectivity check but never made one — a caller had no way to know
+// the check was credential-presence-only short of reading the source.
 func (t *ProviderTestTool) Description() string {
-	return "Test a provider connection. Parameters: name (required)."
+	return "Check that this provider's API key resolves in the credential store.\n" +
+		"Does NOT contact the provider — this makes zero network calls, so a revoked, expired, or " +
+		"wrong API key can still report status=\"ok\" here. Local providers (ollama, lmstudio, vllm) " +
+		"always report ok — they need no key. A failed check comes back as a normal result with " +
+		"status=\"error\", not as a tool error. Parameters: name (required). Use " +
+		"list_models to actually exercise the connection against the provider's live API."
 }
 
 func (t *ProviderTestTool) Parameters() map[string]any {
@@ -241,10 +331,13 @@ func (t *ProviderTestTool) Execute(_ context.Context, args map[string]any) *tool
 	if name == "" {
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", "name is required", ""))
 	}
-	// Actual connection test requires a live LLM provider instance. Report
-	// ok/not-configured based on whether the key resolves the canonical way:
-	// the provider's config entry APIKeyRef, falling back to the conventional
-	// <provider>_API_KEY ref (used by both onboarding and provider.configure).
+	// This is a credential-presence check only — see Description(). It makes
+	// no network call, so there is no latency to report; the response
+	// previously carried a hardcoded "latency_ms": 0 that read as a real
+	// measurement of a connection that was never made. Report ok/error based
+	// on whether the key resolves the canonical way: the provider's config
+	// entry APIKeyRef, falling back to the conventional <provider>_API_KEY
+	// ref (used by both onboarding and provider.configure).
 	ref := name + "_API_KEY"
 	for _, p := range t.deps.GetCfg().Providers {
 		if p != nil && providerNameOf(p) == name && p.APIKeyRef != "" {
@@ -252,8 +345,14 @@ func (t *ProviderTestTool) Execute(_ context.Context, args map[string]any) *tool
 			break
 		}
 	}
-	_, err := t.deps.CredStore.Get(ref)
-	if err != nil && !localProviders[name] {
+	_, known, isLocal := catalogProviderLocality(name)
+	if !known {
+		return tools.ErrorResult(errorJSON("UNKNOWN_PROVIDER",
+			fmt.Sprintf("%q is not a known provider id", name),
+			"Use the catalog id (e.g. 'amazon-bedrock', not 'bedrock'; 'google', not 'gemini')",
+		))
+	}
+	if !isLocal && !credentialPresent(t.deps.CredStore, ref) {
 		return tools.NewToolResult(successJSON(map[string]any{
 			"name":          name,
 			"status":        "error",
@@ -261,9 +360,9 @@ func (t *ProviderTestTool) Execute(_ context.Context, args map[string]any) *tool
 		}))
 	}
 	return tools.NewToolResult(successJSON(map[string]any{
-		"name":       name,
-		"status":     "ok",
-		"latency_ms": 0,
+		"name":   name,
+		"status": "ok",
+		"note":   "credential presence only — no network call was made to the provider",
 	}))
 }
 
@@ -277,8 +376,13 @@ func NewModelsListTool(d *Deps) *ModelsListTool  { return &ModelsListTool{deps: 
 func (t *ModelsListTool) Name() string           { return "list_models" }
 func (t *ModelsListTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *ModelsListTool) Description() string {
-	return "List available models from configured providers. " +
-		"Optional: filter by provider name. Returns model slugs, provider, and whether it's the system default."
+	return "List models actually available from your configured providers. This queries each provider's " +
+		"live /models API (up to 15s per provider), so it doubles as a real connectivity and credential " +
+		"check — it is what test_provider points you to. Returns each model's slug, its provider, and " +
+		"whether it is the system default, plus the configured default_model. Providers that have no API " +
+		"key, no known base URL, or that fail to respond are omitted from the list and reported in " +
+		"`warnings` — check that field before treating the list as complete.\n" +
+		"Parameters: provider (optional, filter to one provider)."
 }
 
 func (t *ModelsListTool) Parameters() map[string]any {

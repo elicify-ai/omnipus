@@ -41,10 +41,77 @@ type InstallSkillTool struct {
 // ($OMNIPUS_HOME/skills, see pkg/agent.globalSkillsDir); skills install to
 // {globalSkillsDir}/{slug}/.
 func NewInstallSkillTool(registryMgr *skills.RegistryManager, globalSkillsDir string) *InstallSkillTool {
+	// Boot-time sweep: remove any staging leftovers from a previous install
+	// that never completed (crash, OOM-kill, forced restart) so they don't
+	// accumulate forever. This constructor runs once per agent at process
+	// startup (registerSharedTools, pkg/agent/loop.go) and again only on a
+	// full config/registry reload — never on the per-turn hot path — so the
+	// extra ReadDir here (typically of an empty or nonexistent directory) is
+	// negligible. Best-effort: a sweep failure must never block tool
+	// construction or gateway boot.
+	if globalSkillsDir != "" {
+		sweepStaleStaging(globalSkillsDir)
+	}
 	return &InstallSkillTool{
 		registryMgr:     registryMgr,
 		globalSkillsDir: globalSkillsDir,
 		mu:              sync.Mutex{},
+	}
+}
+
+// stagingDirName is the dedicated, non-scanned subdirectory of the global
+// skills directory that install_skill stages downloads into. It lives one
+// level below skillsDir (not skillsDir itself) for two reasons: (1)
+// pkg/skills/loader.go's ListSkills scans skillsDir's direct children for a
+// SKILL.md and, prior to this fix, had no dot-prefix filter — a staging
+// directory created directly inside skillsDir (even dot-prefixed) was one
+// missing check away from becoming a phantom entry in every agent's skill
+// list; keeping all staging under one always-dot-prefixed, SKILL.md-less
+// directory removes that surface entirely, and pkg/skills/loader.go now also
+// skips any dot-prefixed entry defensively. (2) it stays on the SAME
+// filesystem as skillsDir, so the final os.Rename into targetDir remains an
+// atomic, cheap rename rather than a cross-filesystem copy.
+const stagingDirName = ".staging"
+
+// sweepStaleStaging removes any leftover contents of skillsDir/.staging left
+// behind by an install_skill run that was interrupted before it could clean
+// up after itself (process crash, OOM-kill, forced restart — the defer in
+// Execute only runs on a normal return). It is best-effort: skillsDir may not
+// exist yet on a fresh install, and any error here is logged, never
+// propagated, since a failed sweep must not block tool construction or
+// gateway boot. A future install_skill run will retry the sweep on its own
+// next construction, and stale entries are otherwise harmless (never
+// surfaced by ListSkills, per the dot-prefix skip in pkg/skills/loader.go).
+func sweepStaleStaging(skillsDir string) {
+	stagingRoot := filepath.Join(skillsDir, stagingDirName)
+	entries, err := os.ReadDir(stagingRoot)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			logger.WarnCF("tool", "install_skill: failed to read staging directory during startup sweep",
+				map[string]any{
+					"tool":  "install_skill",
+					"dir":   stagingRoot,
+					"error": err.Error(),
+				})
+		}
+		return
+	}
+	for _, entry := range entries {
+		stalePath := filepath.Join(stagingRoot, entry.Name())
+		if err := os.RemoveAll(stalePath); err != nil {
+			logger.WarnCF("tool", "install_skill: failed to remove stale staging entry during startup sweep",
+				map[string]any{
+					"tool":  "install_skill",
+					"path":  stalePath,
+					"error": err.Error(),
+				})
+			continue
+		}
+		logger.InfoCF("tool", "install_skill: removed stale staging entry left by an interrupted install",
+			map[string]any{
+				"tool": "install_skill",
+				"path": stalePath,
+			})
 	}
 }
 
@@ -53,7 +120,9 @@ func (t *InstallSkillTool) Name() string {
 }
 
 func (t *InstallSkillTool) Description() string {
-	return "Install a skill from a registry by slug. Downloads and extracts the skill into the global skills directory, where it becomes available to every agent. Use find_skills first to discover available skills."
+	return "Install a skill from a registry by slug. Downloads and extracts the skill into the global skills directory, where it becomes available to every agent. Use find_skills first to discover available skills. " +
+		"force=true replaces an already-installed skill of the same slug: the replacement is downloaded to a staging area and swapped in only once it fully succeeds, so an ordinary failure (unknown registry, slug, or version; " +
+		"network error; a skill flagged malicious and refused) leaves the existing install untouched. A skill flagged as malicious is refused and removed rather than installed."
 }
 
 func (t *InstallSkillTool) Scope() ToolScope       { return ScopeGeneral }
@@ -112,18 +181,20 @@ func (t *InstallSkillTool) Execute(ctx context.Context, args map[string]any) *To
 	skillsDir := t.globalSkillsDir
 	targetDir := filepath.Join(skillsDir, slug)
 
-	if !force {
-		if _, err := os.Stat(targetDir); err == nil {
-			return ErrorResult(
-				fmt.Sprintf("skill %q already installed at %s. Use force=true to reinstall.", slug, targetDir),
-			)
-		}
-	} else {
-		// Force: remove existing if present.
-		os.RemoveAll(targetDir)
+	alreadyInstalled := false
+	if _, err := os.Stat(targetDir); err == nil {
+		alreadyInstalled = true
+	}
+	if alreadyInstalled && !force {
+		return ErrorResult(
+			fmt.Sprintf("skill %q already installed at %s. Use force=true to reinstall.", slug, targetDir),
+		)
 	}
 
-	// Resolve which registry to use.
+	// Resolve which registry to use BEFORE touching anything on disk: a
+	// typo'd registry name (or any other resolution failure) must fail
+	// closed with an existing install left exactly as it was, not after
+	// that install has already been deleted.
 	registry := t.registryMgr.GetRegistry(registryName)
 	if registry == nil {
 		return ErrorResult(fmt.Sprintf("registry %q not found", registryName))
@@ -134,48 +205,78 @@ func (t *InstallSkillTool) Execute(ctx context.Context, args map[string]any) *To
 		return ErrorResult(fmt.Sprintf("failed to create skills directory: %v", err))
 	}
 
-	// Download and install (handles metadata, version resolution, extraction).
-	result, err := registry.DownloadAndInstall(ctx, slug, version, targetDir)
+	// Download to a staging directory and only swap it into place once
+	// everything below has succeeded. This is what makes force=true safe:
+	// an ordinary failure (bad version, network error, moderation block)
+	// never touches the existing install, because the existing install is
+	// only ever removed immediately before the verified replacement is
+	// renamed into its place.
+	//
+	// The staging directory lives under skillsDir/.staging — a dedicated,
+	// non-scanned subdirectory — rather than directly inside the live global
+	// skills directory. pkg/skills/loader.go's ListSkills iterates every
+	// direct subdirectory of skillsDir and accepts any containing a
+	// SKILL.md; a staging directory created directly inside skillsDir was
+	// visible to a concurrent list_skills call or a system-prompt build
+	// between extraction and the rename below, and — if the process died in
+	// that window — was never cleaned up, leaving a permanent phantom skill
+	// in every agent's skill list. .staging itself has no SKILL.md at
+	// skillsDir's top level, so the scan never descends into it; it stays on
+	// the same filesystem as skillsDir, so the final os.Rename below remains
+	// an atomic, cheap rename.
+	stagingRoot := filepath.Join(skillsDir, stagingDirName)
+	if err := os.MkdirAll(stagingRoot, 0o755); err != nil {
+		return ErrorResult(fmt.Sprintf("failed to create the staging directory for %q: %v", slug, err))
+	}
+	stageDir, err := os.MkdirTemp(stagingRoot, slug+".install-")
 	if err != nil {
-		// Clean up partial install.
-		rmErr := os.RemoveAll(targetDir)
-		if rmErr != nil {
-			logger.ErrorCF("tool", "Failed to remove partial install",
-				map[string]any{
-					"tool":       "install_skill",
-					"target_dir": targetDir,
-					"error":      rmErr.Error(),
-				})
-		}
+		return ErrorResult(fmt.Sprintf("failed to create a staging directory for %q: %v", slug, err))
+	}
+	// If we return before the rename below, stageDir was never moved and
+	// this cleans it up; if the rename succeeded, stageDir no longer
+	// exists and this is a harmless no-op.
+	defer os.RemoveAll(stageDir)
+
+	// Download and install (handles metadata, version resolution, extraction).
+	result, err := registry.DownloadAndInstall(ctx, slug, version, stageDir)
+	if err != nil {
 		return ErrorResult(fmt.Sprintf("failed to install %q: %v", slug, err))
 	}
 
-	// Moderation: block malware.
+	// Moderation: block malware. The existing install (if any) is untouched.
 	if result.IsMalwareBlocked {
-		rmErr := os.RemoveAll(targetDir)
-		if rmErr != nil {
-			logger.ErrorCF("tool", "Failed to remove partial install",
-				map[string]any{
-					"tool":       "install_skill",
-					"target_dir": targetDir,
-					"error":      rmErr.Error(),
-				})
-		}
 		return ErrorResult(fmt.Sprintf("skill %q is flagged as malicious and cannot be installed", slug))
 	}
 
-	// Write origin metadata.
-	if err := writeOriginMeta(targetDir, registry.Name(), slug, result.Version); err != nil {
+	// Write origin metadata into the staged copy before it becomes the real one.
+	if err := writeOriginMeta(stageDir, registry.Name(), slug, result.Version); err != nil {
 		logger.ErrorCF("tool", "Failed to write origin metadata",
 			map[string]any{
 				"tool":     "install_skill",
 				"error":    err.Error(),
-				"target":   targetDir,
+				"target":   stageDir,
 				"registry": registry.Name(),
 				"slug":     slug,
 				"version":  result.Version,
 			})
 		// Non-fatal: skill is installed, metadata just won't appear in audits.
+	}
+
+	// Everything above succeeded: only now do we touch the previous install
+	// (if any), and only to swap in the verified replacement.
+	if alreadyInstalled {
+		if err := os.RemoveAll(targetDir); err != nil {
+			return ErrorResult(fmt.Sprintf(
+				"downloaded %q successfully but failed to remove the previous install at %s: %v",
+				slug, targetDir, err,
+			))
+		}
+	}
+	if err := os.Rename(stageDir, targetDir); err != nil {
+		return ErrorResult(fmt.Sprintf(
+			"downloaded %q successfully but failed to move it into place at %s: %v",
+			slug, targetDir, err,
+		))
 	}
 
 	// Build result with moderation warning if suspicious.

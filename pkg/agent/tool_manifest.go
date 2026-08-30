@@ -14,7 +14,7 @@ import (
 // resolveSessionID: prefer the transcript session ID when available (it is a
 // stable, unique session directory name); fall back to the session key when the
 // transcript is disabled (TranscriptSessionID == ""). Both the writer
-// (markToolsLoaded, driven from the `load_tool` closure in the agent loop) and
+// (markToolsLoaded, driven from the `ToolSearch` closure in the agent loop) and
 // the readers (buildCompressedToolDefs, buildToolManifestNote) must call this
 // helper with the same two inputs so they always resolve to the same bucket —
 // a mismatch causes loaded tools to become invisible to the model.
@@ -50,13 +50,51 @@ func manifestSessionID(transcriptID, sessionKey string) string {
 	return sessionKey
 }
 
+// manifestBucketKeySep separates the agent-id component from the session
+// component in a manifestBucketKey. \x1f (ASCII unit separator) is used
+// because it cannot appear in either an agent id or a session id, so the
+// composite key never collides with a differently-split pair of inputs.
+const manifestBucketKeySep = "\x1f"
+
+// manifestBucketKey derives the loaded-tool bucket key for (agentID, session)
+// (ADR-071 D3 §4.6). It NARROWS manifestSessionID's session-only key by
+// prepending the acting agent's id, so a `switch_agent` within one session no
+// longer lets the incoming agent inherit the outgoing agent's loaded Tier 3
+// tools — closing the D3 x D4 interaction §4.6 documents in detail.
+//
+// This is a strict narrowing of manifestSessionID's key, never a widening:
+// ADR-057's invariant for manifestSessionID ("derives a bucket from the ids
+// it is GIVEN and never widens the scope of either") is preserved, because
+// adding an agent component can only split a bucket that was previously
+// shared, never merge two that were previously distinct.
+//
+// Both the writer (the markLoaded closure in loop.go, via
+// tools.ToolAgentID(ctx)) and the readers (buildCompressedToolDefs,
+// buildToolManifestNote, via ts.agent.ID) MUST derive agentID from the same
+// value — verified identical on every path including delegation, since
+// spawnSubTurn sets the child's agent.ID from execSource.ID and the child's
+// own runTurn stamps that same id via tools.WithAgentID (ADR-032/ADR-057).
+//
+// Returns "" when the session component is "" (manifestSessionID's own
+// deliberate no-op key), preserving the existing behavior where
+// markToolsLoaded/sessionLoadedTools reject "" rather than creating a shared
+// unkeyed bucket — an agent id alone, with no session, must not become a
+// bucket either.
+func manifestBucketKey(agentID, transcriptID, sessionKey string) string {
+	sessionPart := manifestSessionID(transcriptID, sessionKey)
+	if sessionPart == "" {
+		return ""
+	}
+	return agentID + manifestBucketKeySep + sessionPart
+}
+
 // infraToolGetter is the minimal surface ensureInfraToolsExecutable needs from
 // an agent's tool registry (decoupled for testability).
 type infraToolGetter interface {
 	Get(name string) (tools.Tool, bool)
 }
 
-// ensureInfraToolsExecutable guarantees the manifest infra tools (`load_tool`)
+// ensureInfraToolsExecutable guarantees the manifest infra tools (`ToolSearch`)
 // are present in the policy-filtered slice and marked "allow" in policyMap so
 // the execution gate authorizes them for EVERY agent — including deny-by-default
 // agents (Ava/Mia/Ray).
@@ -69,7 +107,7 @@ type infraToolGetter interface {
 // infra tool only if the resolver somehow omitted it (e.g. a test that builds a
 // policy map by hand and passes a registry whose Get returns the tool).
 // Reachability does not depend on the manifest being compressed (when
-// compressed is off, load_tool is stripped from the SENT defs on the
+// compressed is off, ToolSearch is stripped from the SENT defs on the
 // non-compressed path in runTurn, so its allow verdict is moot and surfacing
 // nothing to the model). agentTools==nil is still a no-op (nothing to look the
 // tool up from).
@@ -94,19 +132,19 @@ func ensureInfraToolsExecutable(
 }
 
 // stripInfraToolDefs returns the subset of tools with manifest infra tools
-// (load_tool) removed. Used on the NON-compressed defs path: load_tool is the
+// (ToolSearch) removed. Used on the NON-compressed defs path: ToolSearch is the
 // driver of the compressed manifest mechanism and has no function when
 // compression is off, so the model never sees it there — regardless of what
 // the agent's own tool-policy map resolves for it.
 //
 // Unification note (#438): the single resolver now force-allows infra
-// UNCONDITIONALLY, so FilterToolsByPolicy keeps load_tool in the filtered slice
+// UNCONDITIONALLY, so FilterToolsByPolicy keeps ToolSearch in the filtered slice
 // for EVERY agent. This path strips it so it is not surfaced uncompressed. For
 // an agent whose tools mostly resolve to deny, this matches the old behavior
-// (the old filter dropped load_tool, so it was never sent uncompressed). For
+// (the old filter dropped ToolSearch, so it was never sent uncompressed). For
 // an agent whose tools mostly resolve to allow it is a deliberate, narrow
-// change: the old path DID send load_tool uncompressed, the new path does not
-// — correct, because an uncompressed turn has no load_tool affordance (no
+// change: the old path DID send ToolSearch uncompressed, the new path does not
+// — correct, because an uncompressed turn has no ToolSearch affordance (no
 // manifest block telling the model to use it). The strip touches ONLY infra
 // tools; every other tool's surfaced verdict is unchanged.
 func stripInfraToolDefs(in []tools.Tool) []tools.Tool {
@@ -139,8 +177,8 @@ func stripInfraToolDefs(in []tools.Tool) []tools.Tool {
 // tools.ToolsToProviderDefs directly — this helper is only called on the
 // compressed code-path.
 func (al *AgentLoop) buildCompressedToolDefs(ts *turnState, policyFiltered []tools.Tool) []providers.ToolDefinition {
-	sessionID := manifestSessionID(ts.opts.TranscriptSessionID, ts.sessionKey)
-	loaded := al.sessionLoadedTools(sessionID)
+	bucket := ts.manifestBucket()
+	loaded := al.sessionLoadedTools(bucket)
 
 	// Track which infra tools are already present in policyFiltered so we don't
 	// double-add them. Build the sent list in one pass.
@@ -183,8 +221,16 @@ func (al *AgentLoop) buildCompressedToolDefs(ts *turnState, policyFiltered []too
 //
 // The returned string is ephemeral — rebuilt every turn, never persisted.
 func (al *AgentLoop) buildToolManifestNote(ts *turnState, policyFiltered []tools.Tool) string {
-	sessionID := manifestSessionID(ts.opts.TranscriptSessionID, ts.sessionKey)
-	loaded := al.sessionLoadedTools(sessionID)
+	bucket := ts.manifestBucket()
+	loaded := al.sessionLoadedTools(bucket)
+
+	// ADR-071 §4.3.1(b)/FR-042: read the live PreviewAllLazy revert flag from
+	// the current config and push it into tools.ToolManifestVisibility's
+	// single chokepoint before rendering. A single atomic store per turn; no
+	// restart required to flip the revert.
+	if cfg := al.GetConfig(); cfg != nil {
+		tools.SetPreviewAllLazy(cfg.Tools.Manifest.PreviewAllLazy)
+	}
 
 	// Collect only the lazy tier tools; BuildCompressedManifest filters further
 	// (infra/full are excluded inside it, but we pass all policyFiltered to keep

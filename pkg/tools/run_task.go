@@ -64,10 +64,15 @@ func (t *TaskRunTool) Scope() ToolScope       { return ScopeCore }
 func (t *TaskRunTool) Category() ToolCategory { return CategoryTasks }
 
 func (t *TaskRunTool) Description() string {
-	return "Run a STANDALONE task immediately: dispatches it to its assigned agent and drives the " +
-		"full attempt loop (run, judge, retry with steering up to the attempt limit) exactly like a " +
-		"plan member's own execution. Rejected for a task that belongs to a plan — the plan drives " +
-		"its own members' start order in dependency sequence; call execute_plan on the plan instead."
+	return "Start a STANDALONE task now: marks it in_progress and launches its attempt loop (run, " +
+		"judge, retry with steering up to the attempt limit). Returns immediately with the run's " +
+		"session_id — it does not wait for the task to finish; poll the task or inspect the session " +
+		"for the outcome. The task must already have an assigned agent (assign one first). A done " +
+		"task cannot be re-run; a failed one can. A blocked task is rejected — it becomes runnable on " +
+		"its own once its blockers complete. Calling this on an already-running task is a safe no-op " +
+		"returning the existing session. May fail if the global dispatch cap is exhausted — retry " +
+		"shortly. A task belonging to a plan is rejected: call execute_plan on the plan, which drives " +
+		"its members in dependency order."
 }
 
 func (t *TaskRunTool) Parameters() map[string]any {

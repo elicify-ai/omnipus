@@ -1,16 +1,17 @@
-// handoff_adr057_test.go — ADR-057 U22 (W3c): handoff.go's two AppendTranscript
-// writers (HandoffTool.Execute:205, ReturnToDefaultTool.Execute:386) convert
-// to the strict AppendTranscriptStrict entry point (FR-001/FR-002), and the
+// handoff_adr057_test.go — ADR-057 U22 (W3c): handoff.go's two branches of
+// SwitchAgentTool.Execute's AppendTranscript write (named-target and
+// target:"default" — pre-ADR-071-D4 these were two separate tools,
+// HandoffTool.Execute and ReturnToDefaultTool.Execute) convert to the strict
+// AppendTranscriptStrict entry point (FR-001/FR-002), and the
 // HandoffSessionStore interface declaration (:70) is renamed to match.
 //
 // FR-002's conversion-boundary table requires every AppendTranscript
 // invocation site to surface the now-possible strict-write error as a
 // counter increment plus a WARN naming the session id — this file covers
 // that NEW behavior for handoff.go's two sites. Both writes remain
-// best-effort by design (Execute step 7's doc comment: a failed audit-trail
-// entry must never fail the handoff/return-to-default operation itself),
-// so the counter is the only durable, operator-visible signal a write
-// failed.
+// best-effort by design (Execute step 6's doc comment: a failed audit-trail
+// entry must never fail the switch operation itself), so the counter is the
+// only durable, operator-visible signal a write failed.
 //
 // The pre-existing handoff_test.go's stubSessionStore.AppendTranscript was
 // mechanically renamed to AppendTranscriptStrict (same behavior, always
@@ -52,29 +53,24 @@ func (s *u22FailingAppendStore) AppendTranscriptStrict(sessionID string, entry s
 	return s.appendErr
 }
 
-// TestHandoffTool_AuditWriteFailure_CountedNotFatal covers FR-002 for
-// handoff.go:205: a failed AppendTranscriptStrict on the audit-trail write
-// must be surfaced as a counter increment (HandoffTranscriptWriteFailures)
-// and must NOT fail the handoff itself.
-func TestHandoffTool_AuditWriteFailure_CountedNotFatal(t *testing.T) {
+// TestSwitchAgentTool_NamedTarget_AuditWriteFailure_CountedNotFatal covers
+// FR-002 for the named-target branch: a failed AppendTranscriptStrict on the
+// audit-trail write must be surfaced as a counter increment
+// (HandoffTranscriptWriteFailures) and must NOT fail the switch itself.
+func TestSwitchAgentTool_NamedTarget_AuditWriteFailure_CountedNotFatal(t *testing.T) {
 	before := HandoffTranscriptWriteFailures()
 
 	store := &u22FailingAppendStore{appendErr: errors.New("session unminted: no meta.json")}
 	reg := &stubRegistry{agents: map[string]string{"ray": "Ray"}}
-	tool := NewHandoffTool(
-		func() AgentRegistryReader { return reg },
-		store,
-		func(string) int { return 8192 },
-		nil,
-	)
+	tool := newTestSwitchAgentTool(reg, store, nil, nil)
 	ctx := makeCtx("session_abc", "chat_1", "mia")
 	result := tool.Execute(ctx, map[string]any{
-		"agent_id": "ray",
-		"context":  "user needs billing help",
+		"target": "ray",
+		"note":   "user needs billing help",
 	})
 
 	if result.IsError {
-		t.Fatalf("a failed audit-trail write must not fail the handoff (best-effort by design); got error: %s", result.ForLLM)
+		t.Fatalf("a failed audit-trail write must not fail the switch (best-effort by design); got error: %s", result.ForLLM)
 	}
 
 	after := HandoffTranscriptWriteFailures()
@@ -83,25 +79,20 @@ func TestHandoffTool_AuditWriteFailure_CountedNotFatal(t *testing.T) {
 	}
 }
 
-// TestHandoffTool_AuditWriteSuccess_DoesNotIncrementFailureCounter is the
-// positive lower bound (binding rule 4): a SUCCESSFUL write must leave the
-// counter unchanged, so the +1 delta asserted above is a meaningful signal
-// rather than an artifact of the counter free-running.
-func TestHandoffTool_AuditWriteSuccess_DoesNotIncrementFailureCounter(t *testing.T) {
+// TestSwitchAgentTool_NamedTarget_AuditWriteSuccess_DoesNotIncrementFailureCounter
+// is the positive lower bound (binding rule 4): a SUCCESSFUL write must
+// leave the counter unchanged, so the +1 delta asserted above is a
+// meaningful signal rather than an artifact of the counter free-running.
+func TestSwitchAgentTool_NamedTarget_AuditWriteSuccess_DoesNotIncrementFailureCounter(t *testing.T) {
 	before := HandoffTranscriptWriteFailures()
 
 	store := &stubSessionStore{}
 	reg := &stubRegistry{agents: map[string]string{"ray": "Ray"}}
-	tool := NewHandoffTool(
-		func() AgentRegistryReader { return reg },
-		store,
-		func(string) int { return 8192 },
-		nil,
-	)
+	tool := newTestSwitchAgentTool(reg, store, nil, nil)
 	ctx := makeCtx("session_abc", "chat_1", "mia")
 	result := tool.Execute(ctx, map[string]any{
-		"agent_id": "ray",
-		"context":  "test",
+		"target": "ray",
+		"note":   "test",
 	})
 	if result.IsError {
 		t.Fatalf("unexpected error: %s", result.ForLLM)
@@ -113,18 +104,18 @@ func TestHandoffTool_AuditWriteSuccess_DoesNotIncrementFailureCounter(t *testing
 	}
 }
 
-// TestReturnToDefaultTool_AuditWriteFailure_CountedNotFatal mirrors the
-// above for handoff.go:386 (ReturnToDefaultTool.Execute's writer).
-func TestReturnToDefaultTool_AuditWriteFailure_CountedNotFatal(t *testing.T) {
+// TestSwitchAgentTool_Default_AuditWriteFailure_CountedNotFatal mirrors the
+// above for the target:"default" branch's writer.
+func TestSwitchAgentTool_Default_AuditWriteFailure_CountedNotFatal(t *testing.T) {
 	before := HandoffTranscriptWriteFailures()
 
 	store := &u22FailingAppendStore{appendErr: errors.New("session unminted: no meta.json")}
-	tool := NewReturnToDefaultTool(store, func() string { return "mia" }, nil)
+	tool := newTestSwitchAgentTool(&stubRegistry{}, store, func() string { return "mia" }, nil)
 	ctx := makeCtx("session_abc", "chat_1", "ray")
-	result := tool.Execute(ctx, map[string]any{})
+	result := tool.Execute(ctx, map[string]any{"target": "default"})
 
 	if result.IsError {
-		t.Fatalf("a failed audit-trail write must not fail return_to_default (best-effort by design); got error: %s", result.ForLLM)
+		t.Fatalf("a failed audit-trail write must not fail target:\"default\" (best-effort by design); got error: %s", result.ForLLM)
 	}
 
 	after := HandoffTranscriptWriteFailures()

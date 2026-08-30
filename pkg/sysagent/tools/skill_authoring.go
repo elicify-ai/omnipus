@@ -41,10 +41,16 @@ func NewSkillCreateTool(d *Deps) *SkillCreateTool { return &SkillCreateTool{deps
 func (t *SkillCreateTool) Name() string           { return "create_skill" }
 func (t *SkillCreateTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *SkillCreateTool) Description() string {
-	return "Author a NEW skill (procedural memory). Writes a SKILL.md to the user skills " +
-		"directory; the write is consent-gated and versioned. " +
-		"Parameters: name (required, alphanumeric+hyphens), content (required, full SKILL.md " +
-		"including YAML frontmatter with name and description)."
+	return fmt.Sprintf(
+		"Author a NEW skill (procedural memory). Writes a SKILL.md to the user skills "+
+			"directory; prior versions are snapshotted for rollback, but whether the write "+
+			"additionally prompts for operator approval depends on your operator's tool-approval "+
+			"policy for this tool. content must not exceed %d bytes. A name that already exists "+
+			"is refused — use edit_skill to modify it instead. "+
+			"Parameters: name (required, alphanumeric+hyphens), content (required, full SKILL.md "+
+			"including YAML frontmatter with name and description).",
+		skills.MaxSkillMarkdownBytes,
+	)
 }
 
 func (t *SkillCreateTool) Parameters() map[string]any {
@@ -104,10 +110,15 @@ func NewSkillEditTool(d *Deps) *SkillEditTool   { return &SkillEditTool{deps: d}
 func (t *SkillEditTool) Name() string           { return "edit_skill" }
 func (t *SkillEditTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *SkillEditTool) Description() string {
-	return "Edit / refine an EXISTING skill (self-improvement). Snapshots the prior version " +
-		"for rollback, then writes the new SKILL.md. Editing a built-in creates a user override; " +
-		"the built-in is never mutated in place. The write is consent-gated and versioned. " +
-		"Parameters: name (required), content (required, full new SKILL.md)."
+	return fmt.Sprintf(
+		"Edit / refine an EXISTING skill (self-improvement). Snapshots the prior version "+
+			"for rollback, then writes the new SKILL.md; whether the write additionally prompts "+
+			"for operator approval depends on your operator's tool-approval policy for this tool. "+
+			"Editing a built-in creates a user override; the built-in is never mutated in place. "+
+			"content must not exceed %d bytes. "+
+			"Parameters: name (required), content (required, full new SKILL.md).",
+		skills.MaxSkillMarkdownBytes,
+	)
 }
 
 func (t *SkillEditTool) Parameters() map[string]any {

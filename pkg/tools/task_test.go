@@ -2029,3 +2029,81 @@ func TestTaskUpdate_AllowsSubagent3pWorkerReassignment_WhenDelegationAllows(t *t
 		t.Errorf("expected agent_id %q after reassignment, got %q", "external-worker", got.AgentID)
 	}
 }
+
+// TestAgentListTool_NilLister_FailsClosedInsteadOfPanicking is a regression
+// test for the F3 finding (exhaustive tool-catalog review): the catalog
+// constructs list_agents via NewAgentListTool(nil) for metadata-only purposes
+// (GeneralBuiltinMetadata), and before this fix a stray Execute() on that
+// instance dereferenced the nil listAgents func directly, panicking — the
+// registry's recover() then reported it to the caller as "Tool 'list_agents'
+// crashed with panic" rather than a clean, ordinary tool error. Every other
+// tool in this file's package that takes an injected dependency (store,
+// checker, hook) guards it explicitly; list_agents was the one exception.
+func TestAgentListTool_NilLister_FailsClosedInsteadOfPanicking(t *testing.T) {
+	t.Parallel()
+	tool := NewAgentListTool(nil)
+
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("Execute panicked with a nil lister instead of failing closed: %v", r)
+		}
+	}()
+
+	res := tool.Execute(context.Background(), map[string]any{})
+	if res == nil || !res.IsError {
+		t.Fatalf("expected an ErrorResult for a nil agent lister, got %+v", res)
+	}
+}
+
+// TestTaskListTool_NilStore_FailsClosedInsteadOfPanicking, along with the three
+// sibling tests below, are regression tests for the X1 cross-cutting finding:
+// task.go's five general-scope tools (list_tasks, create_task, update_task,
+// delete_task, list_agents) were the only ones in the package with no
+// nil-store guard, unlike every plan/run_task/stop_plan/plan_correct/
+// inspect_session tool. Defense-in-depth: nothing in production wiring
+// constructs these with a nil store, but a metadata-only catalog instance
+// (GeneralBuiltinMetadata) legitimately does, and a stray Execute() on one
+// must fail cleanly, not panic.
+func TestTaskListTool_NilStore_FailsClosedInsteadOfPanicking(t *testing.T) {
+	t.Parallel()
+	tool := NewTaskListTool(nil)
+	res := tool.Execute(WithAgentID(context.Background(), "agent-a"), map[string]any{"role": "assignee"})
+	if res == nil || !res.IsError {
+		t.Fatalf("expected an ErrorResult for a nil task store, got %+v", res)
+	}
+}
+
+func TestTaskCreateTool_NilStore_FailsClosedInsteadOfPanicking(t *testing.T) {
+	t.Parallel()
+	tool := NewTaskCreateTool(nil)
+	res := tool.Execute(WithAgentID(context.Background(), "agent-a"), map[string]any{
+		"title":    "x",
+		"prompt":   "x",
+		"agent_id": "agent-b",
+		"criteria": validCriteriaArg(),
+	})
+	if res == nil || !res.IsError {
+		t.Fatalf("expected an ErrorResult for a nil task store, got %+v", res)
+	}
+}
+
+func TestTaskUpdateTool_NilStore_FailsClosedInsteadOfPanicking(t *testing.T) {
+	t.Parallel()
+	tool := NewTaskUpdateTool(nil)
+	res := tool.Execute(WithAgentID(context.Background(), "agent-a"), map[string]any{
+		"task_id": "some-task",
+		"status":  "failed",
+	})
+	if res == nil || !res.IsError {
+		t.Fatalf("expected an ErrorResult for a nil task store, got %+v", res)
+	}
+}
+
+func TestTaskDeleteTool_NilStore_FailsClosedInsteadOfPanicking(t *testing.T) {
+	t.Parallel()
+	tool := NewTaskDeleteTool(nil)
+	res := tool.Execute(WithAgentID(context.Background(), "agent-a"), map[string]any{"task_id": "some-task"})
+	if res == nil || !res.IsError {
+		t.Fatalf("expected an ErrorResult for a nil task store, got %+v", res)
+	}
+}

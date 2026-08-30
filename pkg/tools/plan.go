@@ -116,15 +116,19 @@ func (t *PlanCreateTool) Scope() ToolScope       { return ScopeCore }
 func (t *PlanCreateTool) Category() ToolCategory { return CategoryTasks }
 
 func (t *PlanCreateTool) Description() string {
-	return "Create a draft Plan — a Definition-of-Done-driven grouping of tasks for a complex, " +
-		"multi-step goal. Attach member tasks afterward with create_task(plan_id=..., write_set=..., " +
-		"stream=..., is_join=...). Requires at least one Definition-of-Done criterion (dod) — an " +
-		"agent-authored plan with none is rejected. Also requires rationale: the planning discipline " +
-		"behind the decomposition (e.g. which write-set/stream split was chosen and which member is " +
-		"the join). Call execute_plan once the plan's member tasks are attached to start autonomous " +
-		"execution with no further human approval — execute_plan runs plan-lint, which rejects " +
-		"overlapping parallel write_sets and convergence points with no authored join member " +
-		"(is_join=true + its own acceptance criteria)."
+	return "Create a draft Plan to decompose / break down a complex, multi-step goal — a " +
+		"Definition-of-Done-driven grouping of tasks. Attach member tasks afterward with " +
+		"create_task(plan_id=..., write_set=..., stream=..., is_join=...). Requires at least one " +
+		"Definition-of-Done criterion (dod) — an agent-authored plan with none is rejected. Also " +
+		"requires rationale: the planning discipline behind the decomposition (e.g. which " +
+		"write-set/stream split was chosen and which member is the join). Names an owner_agent_id — " +
+		"the real, addressable agent woken at the plan's decision points; a System Agent or worker is " +
+		"rejected. Optionally takes goal (plain-prose objective the plan judge weighs alongside the " +
+		"Definition of Done) and workspace_id (accepts workspace as an alias) which defaults to the " +
+		"current turn's bound workspace, then the default workspace. Call execute_plan once the " +
+		"plan's member tasks are attached to start autonomous execution with no further human " +
+		"approval — execute_plan runs plan-lint, which rejects overlapping parallel write_sets and " +
+		"convergence points with no authored join member (is_join=true + its own acceptance criteria)."
 }
 
 func (t *PlanCreateTool) Parameters() map[string]any {
@@ -145,7 +149,11 @@ func (t *PlanCreateTool) Parameters() map[string]any {
 			},
 			"workspace": map[string]any{
 				"type":        "string",
-				"description": "Workspace this plan belongs to (optional — defaults to the current turn's bound workspace, or the default workspace)",
+				"description": "Workspace this plan belongs to (optional — defaults to the current turn's bound workspace, or the default workspace). Alias: workspace_id.",
+			},
+			"workspace_id": map[string]any{
+				"type":        "string",
+				"description": "Alias for workspace (optional — defaults to the current turn's bound workspace, or the default workspace). If both are supplied, workspace wins.",
 			},
 			"dod": map[string]any{
 				"type": "array",
@@ -194,7 +202,18 @@ func (t *PlanCreateTool) Parameters() map[string]any {
 // workspace — mirroring TaskCreateTool.resolveWorkspaceID but adding the
 // explicit-arg override create_plan's tool contract exposes.
 func (t *PlanCreateTool) resolvePlanWorkspaceID(ctx context.Context, args map[string]any) (string, error) {
-	if explicit, ok := args["workspace"].(string); ok && explicit != "" {
+	// M14: "workspace" is the canonical arg name here, but the rest of the
+	// codebase (ToolWorkspaceID, the wire types, and this function's own slog
+	// key) spells it "workspace_id". Without this alias, a caller that
+	// (reasonably) sends workspace_id has it silently dropped — the schema
+	// does not reject unknown keys, so the call succeeds and the plan lands
+	// in the turn-bound or default workspace instead. Accept either; an
+	// explicit "workspace" wins if somehow both are supplied.
+	explicit, ok := args["workspace"].(string)
+	if !ok || explicit == "" {
+		explicit, ok = args["workspace_id"].(string)
+	}
+	if ok && explicit != "" {
 		if t.home == "" || workspace.Exists(t.home, explicit) {
 			return explicit, nil
 		}
@@ -398,11 +417,14 @@ func (t *PlanExecuteTool) Category() ToolCategory { return CategoryTasks }
 
 func (t *PlanExecuteTool) Description() string {
 	return "Start autonomous execution of a draft plan — no human approval required. Runs the same " +
-		"criteria gate the human approve path enforces: every member task must carry at least one " +
-		"acceptance criterion, and the plan must have at least one member task. On success the plan " +
-		"is approved and the tool returns immediately; the engine promotes it to running under the " +
-		"global concurrency cap — if the cap is full the plan waits at 'approved' and is promoted " +
-		"automatically as soon as a slot frees, with no further action needed."
+		"gates the human approve path enforces: the plan must have at least one member task, every " +
+		"member must carry at least one acceptance criterion, and plan-lint must pass — lint rejects " +
+		"overlapping parallel write_sets and convergence points with no authored join member " +
+		"(is_join=true plus its own criteria), returning the offenders in `lint_violations`. On " +
+		"success the plan is approved and the tool returns immediately; the engine promotes it to " +
+		"running under the global concurrency cap, waiting at 'approved' if the cap is full and " +
+		"promoting automatically when a slot frees. Calling this on an already-approved or running " +
+		"plan is a harmless no-op; a done or failed plan is terminal and is rejected."
 }
 
 func (t *PlanExecuteTool) Parameters() map[string]any {

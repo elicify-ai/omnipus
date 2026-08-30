@@ -45,7 +45,11 @@ func (t *MessageTool) Name() string {
 }
 
 func (t *MessageTool) Description() string {
-	return "Send a message to user on a chat channel. Use this when you want to communicate something."
+	return "Send a message on a chat channel. You do NOT need this to answer normally — your reply is " +
+		"delivered automatically at the end of your turn. Calling this REPLACES your automatic reply for " +
+		"this round (it will not be sent in addition to whatever you say afterward); use it only for " +
+		"proactive or out-of-band messages — e.g. sending an update mid-turn, or messaging a different " +
+		"channel/chat than the one you're responding in — not as your primary way to respond."
 }
 
 func (t *MessageTool) Scope() ToolScope       { return ScopeGeneral }

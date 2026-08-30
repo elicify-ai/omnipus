@@ -61,7 +61,7 @@ func TestLifecycleRecord_ParentAgentIDRoundTrip(t *testing.T) {
 			SessionID: "sess-parented", State: LifecycleQueued,
 			OwnerScopeKind: OwnerScopeHuman,
 			ParentAgentID:  "mia", ParentDurableKey: "transcript-1",
-			WorkspaceID: "ws-1", AgentID: "ray", LaunchProfile: LaunchProfileUtility,
+			WorkspaceID: "ws-1", AgentID: "ray",
 		}); err != nil {
 			t.Fatalf("persist: %v", err)
 		}
@@ -101,7 +101,7 @@ func TestLifecycleRecord_ParentAgentIDRoundTrip(t *testing.T) {
 			SessionID: "sess-orphan", State: LifecycleQueued,
 			OwnerScopeKind: OwnerScopeHuman,
 			ParentAgentID:  "", ParentDurableKey: "transcript-1",
-			WorkspaceID: "ws-1", AgentID: "ray", LaunchProfile: LaunchProfileUtility,
+			WorkspaceID: "ws-1", AgentID: "ray",
 		}); err != nil {
 			t.Fatalf("persist: %v", err)
 		}
@@ -132,7 +132,7 @@ func seedParentTestRecords(t *testing.T, s *LifecycleStore) {
 			SessionID: "mine", State: LifecycleRunning,
 			OwnerScopeKind: OwnerScopeHuman,
 			ParentAgentID:  "mia", ParentDurableKey: "shared-transcript",
-			WorkspaceID: "ws-1", AgentID: "ray", LaunchProfile: LaunchProfileUtility,
+			WorkspaceID: "ws-1", AgentID: "ray",
 		},
 		// A SIBLING: started by jim, but sharing mia's ParentDurableKey and
 		// carrying the same empty OwnerScopeID a top-level delegation has.
@@ -141,7 +141,7 @@ func seedParentTestRecords(t *testing.T, s *LifecycleStore) {
 			SessionID: "sibling", State: LifecycleRunning,
 			OwnerScopeKind: OwnerScopeHuman,
 			ParentAgentID:  "jim", ParentDurableKey: "shared-transcript",
-			WorkspaceID: "ws-1", AgentID: "ava", LaunchProfile: LaunchProfileUtility,
+			WorkspaceID: "ws-1", AgentID: "ava",
 		},
 		// A session mia RUNS (she is the child/target) but did not start.
 		// Inferring parentage from AgentID would wrongly return this.
@@ -149,7 +149,7 @@ func seedParentTestRecords(t *testing.T, s *LifecycleStore) {
 			SessionID: "mia-is-the-child", State: LifecycleRunning,
 			OwnerScopeKind: OwnerScopeHuman,
 			ParentAgentID:  "jim", ParentDurableKey: "shared-transcript",
-			WorkspaceID: "ws-1", AgentID: "mia", LaunchProfile: LaunchProfileUtility,
+			WorkspaceID: "ws-1", AgentID: "mia",
 		},
 	}
 	for _, r := range recs {
@@ -225,7 +225,7 @@ func TestLifecycleFilter_UnsetParentAgentIDUnchangedBehaviour(t *testing.T) {
 		SessionID: "no-parent", State: LifecycleRunning,
 		OwnerScopeKind: OwnerScopeHuman,
 		ParentAgentID:  "", ParentDurableKey: "shared-transcript",
-		WorkspaceID: "ws-1", AgentID: "ray", LaunchProfile: LaunchProfileUtility,
+		WorkspaceID: "ws-1", AgentID: "ray",
 	}); err != nil {
 		t.Fatalf("seed no-parent: %v", err)
 	}

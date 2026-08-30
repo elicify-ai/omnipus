@@ -1141,10 +1141,13 @@ func (t *WebSearchTool) Parameters() map[string]any {
 				"description": "Search query",
 			},
 			"count": map[string]any{
-				"type":        "integer",
-				"description": "Number of results (default: 10, max: 10)",
-				"minimum":     1.0,
-				"maximum":     10.0,
+				"type": "integer",
+				"description": fmt.Sprintf(
+					"Number of results (default: %d, max: 10). Out-of-range values are rejected, not clamped.",
+					t.maxResults,
+				),
+				"minimum": 1.0,
+				"maximum": 10.0,
 			},
 			"range": map[string]any{
 				"type":        "string",
@@ -1167,10 +1170,12 @@ func (t *WebSearchTool) Execute(ctx context.Context, args map[string]any) *ToolR
 	if err != nil {
 		return ErrorResult(err.Error())
 	}
-	count := t.maxResults
-	if count64 > 0 && count64 <= 10 {
-		count = int(count64)
+	// House style (see shell.go's resolveTimeoutSeconds): an out-of-range
+	// value is REJECTED, never silently clamped or dropped to the default.
+	if count64 < 1 || count64 > 10 {
+		return ErrorResult(fmt.Sprintf("count must be between 1 and 10 (got %d)", count64))
 	}
+	count := int(count64)
 
 	rangeCode, err := normalizeSearchRange("")
 	if err != nil {
@@ -1298,7 +1303,9 @@ func (t *WebFetchTool) Name() string {
 }
 
 func (t *WebFetchTool) Description() string {
-	return "Fetch a URL and extract readable content (HTML to text). Use this to get weather info, news, articles, or any web content."
+	return "Fetch a URL and extract readable content (HTML to text). Use this to get weather info, news, articles, or any web content. " +
+		"Only http/https. Private, loopback and link-local addresses are refused — you cannot fetch a local dev server or preview URL " +
+		"with this tool; use the browser tools instead. Content is truncated to maxChars."
 }
 
 func (t *WebFetchTool) Scope() ToolScope       { return ScopeGeneral }
@@ -1356,7 +1363,7 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 
 	maxChars := t.maxChars
 	if mc, ok := args["maxChars"].(float64); ok {
-		if int(mc) > 100 {
+		if int(mc) >= 100 {
 			maxChars = int(mc)
 		}
 	}

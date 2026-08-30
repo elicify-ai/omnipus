@@ -1,4 +1,4 @@
-// Omnipus — fuzzy tool-name matching for load_tool error hints (v0.1.0)
+// Omnipus — fuzzy tool-name matching for ToolSearch error hints (v0.1.0)
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 

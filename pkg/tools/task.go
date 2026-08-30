@@ -57,6 +57,9 @@ func (t *TaskListTool) Parameters() map[string]any {
 }
 
 func (t *TaskListTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
+	if t.store == nil {
+		return ErrorResult("list_tasks failed: task store is not available")
+	}
 	role, _ := args["role"].(string)
 	if role != "assignee" && role != "delegator" {
 		return ErrorResult("role must be 'assignee' or 'delegator'")
@@ -390,7 +393,14 @@ func (t *TaskCreateTool) Scope() ToolScope       { return ScopeGeneral }
 func (t *TaskCreateTool) Category() ToolCategory { return CategoryTasks }
 
 func (t *TaskCreateTool) Description() string {
-	return "Create a task and assign it to an agent for execution. The task lands as a visible card on the workspace board."
+	return "Create a task and assign it to an agent for execution.\n" +
+		"This is a DELEGATION: it passes the same delegation-policy gate (trust set + modes + depth) as " +
+		"any other delegation, and is refused if you are not authorized to delegate to the assignee. " +
+		"criteria is REQUIRED: at least one acceptance criterion (Definition of Done) — a task created " +
+		"with none is rejected. If every criterion is kind=check, the assignee's effective bash policy " +
+		"must be allow, or the create is rejected as structurally unsatisfiable (a machine check that can " +
+		"never run can never adjudicate MET). The task lands as a visible card on the workspace board in " +
+		"status `next` (triaged and dispatchable) — never `inbox`."
 }
 
 func (t *TaskCreateTool) Parameters() map[string]any {
@@ -560,6 +570,9 @@ func (t *TaskCreateTool) resolveWorkspaceID(ctx context.Context) (string, error)
 }
 
 func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
+	if t.store == nil {
+		return ErrorResult("create_task failed: task store is not available")
+	}
 	title, _ := args["title"].(string)
 	prompt, _ := args["prompt"].(string)
 	agentID, _ := args["agent_id"].(string)
@@ -872,9 +885,12 @@ func (t *TaskUpdateTool) Scope() ToolScope       { return ScopeGeneral }
 func (t *TaskUpdateTool) Category() ToolCategory { return CategoryTasks }
 
 func (t *TaskUpdateTool) Description() string {
-	return "Update a task assigned to you or that you created. Mark status (done/failed — in_progress " +
-		"is reached only through real dispatch via run_task, never written directly here) and optionally " +
-		"edit title, priority, due date, agent_id, or blocked_by. Only provided fields are updated."
+	return "Update a task assigned to you or that you created: status, title, priority, due date, agent_id, or blocked_by.\n" +
+		"Mark status (done/failed — in_progress is reached only through real dispatch via run_task, " +
+		"never written directly here). If the task has acceptance criteria, a done claim is NOT applied " +
+		"directly: during that task's own run it is recorded as a claim for the evidence-ladder judge " +
+		"(the task stays non-terminal and the response says so), and outside that run it is refused. " +
+		"Tasks with no criteria are marked done immediately. Only provided fields are updated."
 }
 
 func (t *TaskUpdateTool) Parameters() map[string]any {
@@ -942,6 +958,9 @@ func (t *TaskUpdateTool) Parameters() map[string]any {
 }
 
 func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
+	if t.store == nil {
+		return ErrorResult("update_task failed: task store is not available")
+	}
 	taskID, _ := args["task_id"].(string)
 	callerID := ToolAgentID(ctx)
 	if callerID == "" {
@@ -1258,7 +1277,9 @@ func (t *TaskDeleteTool) Name() string           { return "delete_task" }
 func (t *TaskDeleteTool) Scope() ToolScope       { return ScopeGeneral }
 func (t *TaskDeleteTool) Category() ToolCategory { return CategoryTasks }
 func (t *TaskDeleteTool) Description() string {
-	return "Delete a task by ID. Only use when explicitly asked to remove a task."
+	return "Permanently delete a to-do/task item by task_id. Only use when explicitly asked to remove a " +
+		"task. You may only delete a task you own — one you created or are assigned to; a task created " +
+		"or assigned to someone else is refused, with no delegation override on this path."
 }
 
 func (t *TaskDeleteTool) Parameters() map[string]any {
@@ -1272,6 +1293,9 @@ func (t *TaskDeleteTool) Parameters() map[string]any {
 }
 
 func (t *TaskDeleteTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
+	if t.store == nil {
+		return ErrorResult("delete_task failed: task store is not available")
+	}
 	taskID, _ := args["task_id"].(string)
 	if taskID == "" {
 		return ErrorResult("task_id is required")
@@ -1371,7 +1395,11 @@ func (t *AgentListTool) Name() string           { return "list_agents" }
 func (t *AgentListTool) Scope() ToolScope       { return ScopeGeneral }
 func (t *AgentListTool) Category() ToolCategory { return CategoryAgents }
 func (t *AgentListTool) Description() string {
-	return "List all available agents with their IDs and names. Use this to resolve agent names to IDs before delegating tasks."
+	return "List all available agents with their IDs, names, and type.\n" +
+		"type is one of core/Main/Subagent/subagent_3p — you cannot chat-delegate to a Subagent or " +
+		"subagent_3p worker. Use this to resolve agent names to IDs before delegating tasks. Being " +
+		"listed here does not mean you may delegate to that agent — delegation trust is scoped per " +
+		"workspace and is checked when you actually call."
 }
 
 func (t *AgentListTool) Parameters() map[string]any {
@@ -1382,6 +1410,9 @@ func (t *AgentListTool) Parameters() map[string]any {
 }
 
 func (t *AgentListTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
+	if t.listAgents == nil {
+		return ErrorResult("list_agents failed: agent lister is not configured")
+	}
 	agents := t.listAgents()
 	data, err := json.Marshal(agents)
 	if err != nil {

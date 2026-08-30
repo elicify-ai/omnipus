@@ -6,7 +6,7 @@ import { useConnectionStore } from '@/store/connection'
 import { useSessionStore, registerChatSetReplaying, registerChatResetForReplay } from '@/store/session'
 import { queryClient } from '@/lib/queryClient'
 import { tasksQueryKeys } from '@/lib/api'
-import type { Message, ToolCall, AgentKind } from '@/lib/api'
+import type { Message, ToolCall, AgentKind, Agent } from '@/lib/api'
 import type { WsReceiveFrame, WsReplayMessageFrame, WsRateLimitFrame, WsSubagentStartFrame, WsSubagentEndFrame } from '@/lib/ws'
 import type {
   ToolResultRef,
@@ -4595,16 +4595,42 @@ export const useChatStore = create<ChatStore>((set, get) => {
 
         case 'agent_switched': {
           const newAgentId = frame.agent_id
+          const sessionStore = useSessionStore.getState()
+          // Use the frame's session_id if present; fall back to active.
+          const switchSid = frameSessionId ?? sessionStore.activeSessionId
           if (newAgentId) {
-            const sessionStore = useSessionStore.getState()
-            // Use the frame's session_id if present; fall back to active.
-            const switchSid = frameSessionId ?? sessionStore.activeSessionId
             // Precedence rule 1 (src/store/session.ts's AGENT PRECEDENCE
             // RULE): this frame reports a handover the BACKEND already
             // performed, so it outranks an explicit user pick rather than
             // being filtered out as a session-derived hint — the picker has
             // to name whoever is actually answering.
             sessionStore.applyServerAgentSwitch(switchSid, newAgentId)
+          } else {
+            // agent_id ABSENT/nil is the backend's deliberate wire shape for
+            // a return-to-default switch (pkg/gateway/websocket.go's
+            // agent_switched frame builder omits AgentId specifically for
+            // that case). Without this branch the picker silently keeps
+            // showing whoever the conversation was handed off to, since
+            // `if (newAgentId)` above never fires.
+            //
+            // There is no dedicated "clear the server-side override" action,
+            // so resolve the configured default agent the same way the rest
+            // of the app already does — the cached `['agents']` list
+            // (useChatAgents/AgentCard/WorkspaceTeamTab all key off
+            // `Agent.default === true`, itself derived server-side from
+            // `cfg.Agents.Defaults.DefaultAgentID`) — and apply it via the
+            // same server-authoritative path as a named switch.
+            const agents = queryClient.getQueryData<Agent[]>(['agents'])
+            const defaultAgent = agents?.find((a) => a.default)
+            if (defaultAgent) {
+              sessionStore.applyServerAgentSwitch(switchSid, defaultAgent.id, defaultAgent.type)
+            } else {
+              // No cached agent list yet (e.g. first frame before the
+              // AgentPicker/mention menu has mounted) — refetch it so a
+              // subsequent read finds the default agent. Never silently do
+              // nothing here: that is exactly the bug this branch fixes.
+              queryClient.invalidateQueries({ queryKey: ['agents'] })
+            }
           }
           queryClient.invalidateQueries({ queryKey: ['sessions'] })
           break

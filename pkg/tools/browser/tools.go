@@ -79,7 +79,15 @@ func (t *NavigateTool) Name() string                 { return "browser_navigate"
 func (t *NavigateTool) Scope() tools.ToolScope       { return tools.ScopeCore }
 func (t *NavigateTool) Category() tools.ToolCategory { return tools.CategoryBrowser }
 func (t *NavigateTool) Description() string {
-	return "Navigate to a URL and return page metadata. Subject to SSRF protection."
+	return "Open a URL in the browser tab (visit a webpage/website) and return page metadata — final URL " +
+		"after redirects and page title. It does NOT report an HTTP status code — a 404 or 500 error page " +
+		"loads and returns success just like any other page, so check the returned title/text (e.g. via " +
+		"browser_get_text) to tell an error page from a real one. Use this to load a page before " +
+		"browser_get_text, browser_screenshot, browser_click, or browser_evaluate act on it. Subject to SSRF " +
+		"protection: requests to private/internal network addresses are blocked unless explicitly " +
+		"allow-listed. If a human is currently controlling the browser via the live view, this call defers " +
+		"instead of navigating — the result is {\"deferred\": true, \"reason\": ...} instead of page " +
+		"metadata; wait for them to release control and retry."
 }
 
 func (t *NavigateTool) Parameters() map[string]any {
@@ -188,7 +196,15 @@ func (t *ClickTool) Description() string {
 		"substring) or a:text-is(\"Book now\") (exact match) — to match by visible text instead of CSS. " +
 		"Alternatively (or additionally), pass `text` to target an element by its visible label directly " +
 		"(case-insensitive substring match); when both selector and text are given, text is matched only " +
-		"among elements inside selector. Provide selector OR text (or both)."
+		"among elements inside selector. Provide selector OR text (or both). Text matching only considers " +
+		"VISIBLE elements (rendered, non-zero size); if two non-containing candidates tie on the same text, " +
+		"this errors as an ambiguous match rather than silently picking the first one. A click on a " +
+		"target=\"_blank\" link or one that calls window.open may open a NEW tab and switch to it — " +
+		"subsequent browser_* calls then act on that new tab, not the page you clicked from; check this " +
+		"result's opened_new_tab/new_tab_index/note fields, or call browser_list_tabs, to confirm what's " +
+		"active. If a human is currently controlling the browser via the live view, this call defers " +
+		"instead of clicking — the result is {\"deferred\": true, \"reason\": ...} instead of a click " +
+		"outcome; wait for them to release control and retry."
 }
 
 func (t *ClickTool) Parameters() map[string]any {
@@ -365,7 +381,18 @@ func (t *TypeTool) Description() string {
 		"directly — it can only match an element whose own rendered text contains the needle (e.g. a " +
 		"label or button), which is not the input you want to type into. To target a form field, use a " +
 		"CSS/attribute selector instead: input[name=...], input[placeholder*=...], input[type=...], or a " +
-		"stable id/class."
+		"stable id/class. By default (clear=false) the typed text is APPENDED to whatever the field " +
+		"already contains — this tool does NOT clear the field first, so re-typing into a field that " +
+		"already holds a value doubles it up (e.g. typing \"alice@example.com\" into a field already " +
+		"holding \"bob@example.com\" yields \"bob@example.comalice@example.com\"). Pass clear=true to " +
+		"clear the field's existing value before typing — use this when correcting a mistake or " +
+		"overwriting stale input. Keep the default clear=false when a human and this agent may share the " +
+		"same browser session and you want to continue typing where they left off rather than erase it. " +
+		"This tool does NOT press Enter or submit the form — click the submit button separately. The " +
+		"result does not echo the field's resulting value; use browser_get_text to verify it when it " +
+		"matters. If a human is currently controlling the browser via the live view, this call defers " +
+		"instead of typing — the result is {\"deferred\": true, \"reason\": ...} instead of a type " +
+		"outcome; wait for them to release control and retry."
 }
 
 func (t *TypeTool) Parameters() map[string]any {
@@ -380,6 +407,13 @@ func (t *TypeTool) Parameters() map[string]any {
 				"type":        "string",
 				"description": "Text to type into the element (this is the value typed, not a locator)",
 			},
+			"clear": map[string]any{
+				"type": "boolean",
+				"description": "If true, clear the field's existing value before typing (replace mode). If " +
+					"false (the default), the text is APPENDED to whatever the field already contains — this " +
+					"preserves existing behavior and anything a human or another turn already typed into a " +
+					"shared browser session. Default: false.",
+			},
 		},
 		"required": []string{"selector", "text"},
 	}
@@ -388,6 +422,7 @@ func (t *TypeTool) Parameters() map[string]any {
 func (t *TypeTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
 	selector, _ := args["selector"].(string)
 	text, _ := args["text"].(string)
+	clear, _ := args["clear"].(bool)
 	if selector == "" {
 		return tools.ErrorResult("browser_type: 'selector' parameter is required")
 	}
@@ -412,11 +447,24 @@ func (t *TypeTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 		return tools.ErrorResult(rerr.Error())
 	}
 
-	err = chromedp.Run(
-		tabCtx,
-		chromedp.WaitVisible(target, chromedp.ByQuery),
-		chromedp.SendKeys(target, text, chromedp.ByQuery),
-	)
+	// `clear` lets the caller choose between the historical
+	// append-only behavior (default, preserves callers written before this
+	// parameter existed — and lets a human and this agent share a browser
+	// session without clobbering each other's typing) and clearing the
+	// field's existing value first (opt-in). SetValue writes the DOM
+	// `value` property directly to "" — it fires no input/change event on
+	// its own, but the SendKeys call right after dispatches REAL key events
+	// starting from that empty value, so frameworks that listen for native
+	// input events (including React's synthetic-event system) observe the
+	// same incremental typing they would from a human clearing the field
+	// and retyping.
+	actions := []chromedp.Action{chromedp.WaitVisible(target, chromedp.ByQuery)}
+	if clear {
+		actions = append(actions, chromedp.SetValue(target, "", chromedp.ByQuery))
+	}
+	actions = append(actions, chromedp.SendKeys(target, text, chromedp.ByQuery))
+
+	err = chromedp.Run(tabCtx, actions...)
 	if err != nil {
 		// browser_type's only locator is `selector` (its `text` arg is the
 		// VALUE typed, never a locator). Explicitly NAME it in the outer
@@ -429,7 +477,7 @@ func (t *TypeTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 		)
 	}
 
-	return jsonResult(map[string]any{"success": true})
+	return jsonResult(map[string]any{"success": true, "cleared": clear})
 }
 
 // --- browser_screenshot (US-5) ---
@@ -455,7 +503,7 @@ func (t *ScreenshotTool) Name() string                 { return "browser_screens
 func (t *ScreenshotTool) Scope() tools.ToolScope       { return tools.ScopeCore }
 func (t *ScreenshotTool) Category() tools.ToolCategory { return tools.CategoryBrowser }
 func (t *ScreenshotTool) Description() string {
-	return "Capture a screenshot of the CURRENT page as a JPEG image, and report its current URL and title. Use this to see what page is open — including a page the user navigated to themselves via the live browser panel (the tab is shared). Do not guess the URL from the visual content; read it from this tool's output."
+	return "Capture a screenshot of the CURRENT page as a JPEG image, and report its current URL and title. Use this to see what page is open — including a page the user navigated to themselves via the live browser panel (the tab is shared). Do not guess the URL from the visual content; read it from this tool's output. Captures the ENTIRE scrollable page (full page height), not just the visible viewport. The JPEG is also written to a file in your current working directory in addition to being returned inline."
 }
 
 func (t *ScreenshotTool) Parameters() map[string]any {
@@ -574,11 +622,15 @@ func (t *GetTextTool) Name() string                 { return "browser_get_text" 
 func (t *GetTextTool) Scope() tools.ToolScope       { return tools.ScopeCore }
 func (t *GetTextTool) Category() tools.ToolCategory { return tools.CategoryBrowser }
 func (t *GetTextTool) Description() string {
-	return "Get the inner text of an element. Provide `selector` as a standard CSS selector, OR a trailing " +
-		"Playwright-style text pseudo — :has-text(\"...\") (substring) / :text-is(\"...\") (exact) — to " +
+	return "Read, extract, or scrape the visible inner text content of an element (or the whole page) — " +
+		"this is how you read what's actually displayed on a page, not just its structure. Get the inner " +
+		"text of an element. Provide `selector` as a standard CSS selector, OR a trailing Playwright-style " +
+		"text pseudo — :has-text(\"...\") (substring) / :text-is(\"...\") (exact) — to " +
 		"match by visible text. Alternatively (or additionally), pass `text` to target an element by its " +
 		"visible label directly (case-insensitive substring match); when both are given, text is matched " +
-		"only among elements inside selector. Provide selector OR text (or both)."
+		"only among elements inside selector. Provide selector OR text (or both). To read the entire " +
+		"page's text, use a selector like \"body\" or \"html\". Output is capped at 64,000 characters " +
+		"(truncated with a marker beyond that)."
 }
 
 func (t *GetTextTool) Parameters() map[string]any {
@@ -665,11 +717,16 @@ func (t *WaitTool) Name() string                 { return "browser_wait" }
 func (t *WaitTool) Scope() tools.ToolScope       { return tools.ScopeCore }
 func (t *WaitTool) Category() tools.ToolCategory { return tools.CategoryBrowser }
 func (t *WaitTool) Description() string {
-	return "Wait for an element to appear in the DOM. Provide `selector` as a standard CSS selector, OR a " +
+	return "Wait for an element to become VISIBLE on the page (rendered, non-zero size, and not " +
+		"display:none / visibility:hidden / opacity:0) — this is NOT a DOM-presence check. An element " +
+		"that exists in the DOM but is never rendered visible (e.g. <title>, <meta>, <script>, or a " +
+		"display:none field) can never satisfy this wait; use browser_get_text (which waits for DOM " +
+		"presence, not visibility) for those instead. Provide `selector` as a standard CSS selector, OR a " +
 		"trailing Playwright-style text pseudo — :has-text(\"...\") (substring) / :text-is(\"...\") " +
 		"(exact) — to match by visible text. Alternatively (or additionally), pass `text` to wait for an " +
 		"element with the given visible text directly (case-insensitive substring match); when both are " +
-		"given, text is matched only among elements inside selector. Provide selector OR text (or both)."
+		"given, text is matched only among elements inside selector. Provide selector OR text (or both). " +
+		"Waits up to 8 seconds by default; pass `timeout_ms` (100-60000) to use a different budget."
 }
 
 func (t *WaitTool) Parameters() map[string]any {
@@ -684,6 +741,10 @@ func (t *WaitTool) Parameters() map[string]any {
 				"type":        "string",
 				"description": "Wait for an element with this visible text (case-insensitive substring) instead of — or scoped within — selector",
 			},
+			"timeout_ms": map[string]any{
+				"type":        "integer",
+				"description": "How long to wait for the element to become visible, in milliseconds (100-60000). Default: 8000 (8 seconds).",
+			},
 		},
 	}
 }
@@ -693,6 +754,23 @@ func (t *WaitTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 	text, _ := args["text"].(string)
 	if selector == "" && text == "" {
 		return tools.ErrorResult("browser_wait: 'selector' parameter is required")
+	}
+
+	// `timeout_ms` lets the caller extend the wait beyond the
+	// previously-hardcoded 8s budget, which used to make "wait longer than
+	// 8s" impossible — the whole reason this tool exists for slow-rendering
+	// content. Defaults to getTextWaitTimeout (8s) when omitted, matching
+	// prior behavior exactly for existing callers.
+	waitTimeout := getTextWaitTimeout
+	if raw, ok := args["timeout_ms"]; ok {
+		ms, ok := raw.(float64)
+		if !ok {
+			return tools.ErrorResult("browser_wait: 'timeout_ms' must be a number")
+		}
+		if ms < 100 || ms > 60000 {
+			return tools.ErrorResult("browser_wait: 'timeout_ms' must be between 100 and 60000")
+		}
+		waitTimeout = time.Duration(ms) * time.Millisecond
 	}
 
 	tabCtx, err := t.mgr.Session(defaultSessionID)
@@ -711,7 +789,7 @@ func (t *WaitTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 	// click/type/get_text/wait, since this is where that pattern started).
 	displayTarget := displayLocator(selector, text)
 
-	target, cleanup, rerr := resolveActionSelector(tabCtx, "browser_wait", selector, text, getTextWaitTimeout)
+	target, cleanup, rerr := resolveActionSelector(tabCtx, "browser_wait", selector, text, waitTimeout)
 	defer cleanup()
 	if rerr != nil {
 		return tools.ErrorResult(rerr.Error())
@@ -720,15 +798,15 @@ func (t *WaitTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 	// Same fail-fast rationale as browser_get_text (see getTextWaitTimeout's
 	// doc comment): a selector that never appears would otherwise block for
 	// the full PageTimeout (commonly 30s) before failing. Bound the wait with
-	// the same short, dedicated timeout so a missing selector fails fast.
+	// the same short, dedicated timeout (or the caller's timeout_ms override)
+	// so a missing selector fails fast.
 	//
-	// NOTE: resolveActionSelector above already POLLS for up to
-	// getTextWaitTimeout for a text-resolved target to appear (7-reviewer
-	// finding #1) — this WaitVisible call is a second, short wait for the
-	// now-marked element to additionally become visible, which is normally
-	// instantaneous since resolveTextTarget only ever marks a visible
-	// element in the first place.
-	waitCtx, waitCancel := context.WithTimeout(tabCtx, getTextWaitTimeout)
+	// NOTE: resolveActionSelector above already POLLS for up to waitTimeout
+	// for a text-resolved target to appear — this
+	// WaitVisible call is a second, short wait for the now-marked element to
+	// additionally become visible, which is normally instantaneous since
+	// resolveTextTarget only ever marks a visible element in the first place.
+	waitCtx, waitCancel := context.WithTimeout(tabCtx, waitTimeout)
 	err = chromedp.Run(waitCtx, chromedp.WaitVisible(target, chromedp.ByQuery))
 	waitCancel()
 	if err != nil {
@@ -763,7 +841,16 @@ func (t *EvaluateTool) Name() string                 { return "browser_evaluate"
 func (t *EvaluateTool) Scope() tools.ToolScope       { return tools.ScopeCore }
 func (t *EvaluateTool) Category() tools.ToolCategory { return tools.CategoryBrowser }
 func (t *EvaluateTool) Description() string {
-	return "Execute JavaScript in the page context. Denied by default — must be explicitly allowed by policy."
+	return "Execute JavaScript in the active tab's page context (run scripts, read/manipulate the DOM). " +
+		"Off by default at RUNTIME regardless of your tool policy — the operator must set " +
+		"sandbox.browser_evaluate_enabled=true in config for this to work even when your policy allows it. " +
+		"A policy of allow does not mean this tool is usable; check the tool result for the runtime-disabled error. " +
+		"The result's `result` field holds your expression's JSON-serialized value; a genuine JavaScript " +
+		"null and a non-serializable value (a DOM node, function, or circular reference) BOTH come back as " +
+		"result: null — the only way to tell them apart is a `note` field present ONLY on the " +
+		"non-serializable case explaining why. If a human is currently controlling the browser via the " +
+		"live view, this call defers instead of executing — the result is {\"deferred\": true, \"reason\": " +
+		"...} instead of an evaluation outcome; wait for them to release control and retry."
 }
 
 func (t *EvaluateTool) Parameters() map[string]any {
@@ -862,15 +949,32 @@ func classifyEvalResult(raw []byte) *tools.ToolResult {
 // LIMITATION (documented per ADR-038 D6): this is cooperative, not
 // preemptive. A tool call already in flight when a human takes control
 // finishes normally — there is no mid-tool preemption in v1.
+//
+// The deferral is a NON-ERROR result (IsError stays false — the
+// deferral is not a tool failure, it's cooperative turn-coordination), but it
+// must be structurally distinguishable from a normal success payload rather
+// than prose-only. Every one of these seven callers (navigate/click/type/
+// evaluate/switch_tab/close_tab/open_tab) previously returned this as a bare
+// sentence with no signal beyond text a model might not parse — a
+// success-shaped no-op. The body is now JSON: {"deferred": true, "reason":
+// "..."}, so a caller can check for the "deferred" key the same way it would
+// check any other tool's result shape.
 func controlledResult(mgr *BrowserManager, toolName string) *tools.ToolResult {
 	if !mgr.Live().IsControlled(defaultSessionID) {
 		return nil
 	}
-	return tools.NewToolResult(fmt.Sprintf(
-		"%s: deferred — a human is currently controlling this browser via the live view. "+
-			"Wait for them to release control before driving the browser further.",
-		toolName,
-	))
+	reason := "a human is currently controlling this browser via the live view — " +
+		"wait for them to release control before driving the browser further"
+	body, err := json.Marshal(map[string]any{
+		"deferred": true,
+		"reason":   reason,
+	})
+	if err != nil {
+		// Should be unreachable for a static map of strings/bools, but never
+		// silently drop the deferral signal if it somehow happens.
+		body = []byte(fmt.Sprintf(`{"deferred":true,"reason":%q}`, reason))
+	}
+	return tools.NewToolResult(fmt.Sprintf("%s: %s", toolName, string(body)))
 }
 
 // jsonResult marshals v to JSON and returns a SilentResult.

@@ -49,7 +49,6 @@ func TestLifecycleStore_PersistAndReload(t *testing.T) {
 		OwnerScopeKind: OwnerScopeHuman,
 		WorkspaceID:    "ws-1",
 		AgentID:        "agent-1",
-		LaunchProfile:  LaunchProfileUtility,
 	}
 	if err := s.Persist(rec); err != nil {
 		t.Fatalf("Persist(queued) failed: %v", err)
@@ -110,7 +109,6 @@ func TestLifecycleStore_TerminalImmutability(t *testing.T) {
 		OwnerScopeKind: OwnerScopeHuman,
 		WorkspaceID:    "ws-1",
 		AgentID:        "agent-1",
-		LaunchProfile:  LaunchProfileUtility,
 	}
 	if err := s.Persist(rec); err != nil {
 		t.Fatalf("Persist(completed) failed: %v", err)
@@ -176,7 +174,6 @@ func TestLifecycleStore_ListNonTerminalOnly(t *testing.T) {
 			OwnerScopeKind: OwnerScopeHuman,
 			WorkspaceID:    "ws-1",
 			AgentID:        "agent-1",
-			LaunchProfile:  LaunchProfileUtility,
 		}
 		if sp.state == LifecycleNeedsInput {
 			rec.NeedsInput = &NeedsInput{CorrelationID: "corr-1", TTLDeadline: time.Now().Add(time.Hour)}
@@ -284,7 +281,6 @@ func TestLifecycleStore_Mutate_AppliesAndPersists(t *testing.T) {
 	if err := s.Persist(&LifecycleRecord{
 		SessionID: "sess-m1", State: LifecycleRunning,
 		OwnerScopeKind: OwnerScopeHuman, WorkspaceID: "ws", AgentID: "a",
-		LaunchProfile: LaunchProfileUtility,
 	}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -319,7 +315,6 @@ func TestLifecycleStore_Mutate_TerminalImmutableGuard(t *testing.T) {
 	if err := s.Persist(&LifecycleRecord{
 		SessionID: "sess-term2", State: LifecycleCompleted,
 		OwnerScopeKind: OwnerScopeHuman, WorkspaceID: "ws", AgentID: "a",
-		LaunchProfile: LaunchProfileUtility,
 	}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -370,7 +365,6 @@ func TestLifecycleStore_Mutate_ConcurrentTerminalGuardHolds(t *testing.T) {
 	if err := s.Persist(&LifecycleRecord{
 		SessionID: "sess-race", State: LifecycleRunning,
 		OwnerScopeKind: OwnerScopeHuman, WorkspaceID: "ws", AgentID: "a",
-		LaunchProfile: LaunchProfileUtility,
 	}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -441,7 +435,6 @@ func TestLifecycleStore_Mutate_ConcurrentNoLostAppend(t *testing.T) {
 	if err := s.Persist(&LifecycleRecord{
 		SessionID: "sess-append", State: LifecycleRunning,
 		OwnerScopeKind: OwnerScopeHuman, WorkspaceID: "ws", AgentID: "a",
-		LaunchProfile: LaunchProfileUtility,
 	}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -482,7 +475,6 @@ func TestLifecycleStore_Persist_RequiresOwnerScopeKind(t *testing.T) {
 	err := s.Persist(&LifecycleRecord{
 		SessionID: "sess-nokind", State: LifecycleRunning,
 		OwnerScopeKind: "", WorkspaceID: "ws", AgentID: "a",
-		LaunchProfile: LaunchProfileUtility,
 	})
 	if err == nil {
 		t.Fatal("expected an error for an empty owner_scope_kind, got nil")

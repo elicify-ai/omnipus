@@ -278,6 +278,56 @@ func ResolveServerEnvFile(
 	return resolved, nil
 }
 
+// ResolveServerEnvRefs resolves cfg.EnvRefs (credential-store references
+// written by add_mcp_server, pkg/sysagent/tools/mcp.go) into real values and
+// merges them into a COPY of cfg.Env, which is what buildStdioServerEnv and
+// ConnectServer's sse/http path actually read. The merge is in-memory only —
+// it never mutates cfg or writes anything back to config.json, so the
+// resolved plaintext value exists only for the duration of this connect
+// attempt. An EnvRefs entry overrides a same-named literal Env entry (a ref
+// is the authoritative, current-generation source; a literal survives only
+// for back-compat with servers added before this mechanism existed, or via
+// the gateway REST API which does not yet route through the credential
+// store).
+//
+// resolve is the credential-store lookup (credentials.Store.Get has this
+// exact signature); passed as a func rather than a *credentials.Store to
+// avoid pkg/mcp depending on pkg/credentials. When cfg.EnvRefs is empty this
+// is a no-op that returns cfg unchanged, even if resolve is nil — mirroring
+// ResolveServerEnvFile's fast path for an unset EnvFile. A non-empty EnvRefs
+// with a nil resolve is an error: silently dropping the ref instead would
+// spawn the server with a missing secret, which is worse than refusing to
+// connect.
+func ResolveServerEnvRefs(
+	cfg config.MCPServerConfig,
+	resolve func(refKey string) (string, error),
+) (config.MCPServerConfig, error) {
+	if len(cfg.EnvRefs) == 0 {
+		return cfg, nil
+	}
+	if resolve == nil {
+		return cfg, fmt.Errorf(
+			"server has %d env credential reference(s) but no credential resolver is configured",
+			len(cfg.EnvRefs),
+		)
+	}
+
+	resolved := cfg
+	mergedEnv := make(map[string]string, len(cfg.Env)+len(cfg.EnvRefs))
+	for k, v := range cfg.Env {
+		mergedEnv[k] = v
+	}
+	for key, credKey := range cfg.EnvRefs {
+		value, err := resolve(credKey)
+		if err != nil {
+			return cfg, fmt.Errorf("resolving env credential %q (ref %q): %w", key, credKey, err)
+		}
+		mergedEnv[key] = value
+	}
+	resolved.Env = mergedEnv
+	return resolved, nil
+}
+
 // buildStdioServerEnv computes the environment slice for a spawned stdio MCP
 // server subprocess, applying the C7 secret-scrub and the documented override
 // semantics. It is extracted from ConnectServer so the scrub is unit-testable

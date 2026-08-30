@@ -24,7 +24,7 @@ import (
 //   - browser_navigate  — navigate to a URL (SSRF-checked)
 //   - browser_click     — click an element by CSS selector
 //   - browser_type      — type text into an input
-//   - browser_screenshot — capture a full-page PNG screenshot
+//   - browser_screenshot — capture a full-page JPEG screenshot
 //   - browser_get_text  — extract inner text from an element
 //   - browser_wait      — wait for an element to appear
 //   - browser_evaluate  — execute JS (policy-gated deny-by-default, SEC-04)

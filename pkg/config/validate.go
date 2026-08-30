@@ -585,3 +585,129 @@ func RepairIncompleteToolPolicyCoverage(cfg *Config, knownTools map[string]struc
 
 	return gaps
 }
+
+// legacyToolPolicyKeyMigrations maps a retired tool-policy key to the key it
+// folds into. Both ADR-071 renames are handled by the same pass, at the same
+// insertion point, on the same boot: D1 (load_tool -> ToolSearch) and D4
+// (hand_off / return_to_default -> switch_agent, ADR-071 §5.3 item 5).
+var legacyToolPolicyKeyMigrations = map[string]string{
+	"load_tool":         "ToolSearch",
+	"hand_off":          "switch_agent",
+	"return_to_default": "switch_agent",
+}
+
+// toolPolicyStrictness ranks a policy value from loosest to strictest so a
+// migration fold can pick the strictest of several disagreeing values
+// (deny > ask > allow). An unrecognized value ranks below every recognized
+// one, so it never wins a fold against a real policy value.
+func toolPolicyStrictness(v string) int {
+	switch v {
+	case string(ToolPolicyDeny):
+		return 2
+	case string(ToolPolicyAsk):
+		return 1
+	case string(ToolPolicyAllow):
+		return 0
+	default:
+		return -1
+	}
+}
+
+// stricterToolPolicyValue returns whichever of a, b is stricter
+// (deny > ask > allow). Ties (including two unrecognized values) keep a, so
+// the fold is deterministic regardless of iteration order.
+func stricterToolPolicyValue(a, b string) string {
+	if toolPolicyStrictness(b) > toolPolicyStrictness(a) {
+		return b
+	}
+	return a
+}
+
+// migrateLegacyToolPolicyMap rewrites, in place, every legacy key in m that
+// legacyToolPolicyKeyMigrations names, folding it into its destination key
+// with the strictest-wins rule (stricterToolPolicyValue) and deleting the
+// legacy key. The destination key's own pre-existing value (if any)
+// participates in the fold too — ADR-071 §5.3.5b's non-obvious rule that
+// keeps the fold monotone-strict and therefore safe to re-run against its
+// own output (an explicit switch_agent: deny must never be weakened back to
+// allow by a stale hand_off: allow key). T is constrained to ~string so the
+// same function serves both the global map[string]string ceiling
+// (cfg.Sandbox.ToolPolicies) and the per-agent map[string]ToolPolicy
+// (AgentBuiltinToolsCfg.Policies) without duplicating the fold logic.
+//
+// Returns true if m was modified. A nil or legacy-key-free map is a no-op —
+// this is what makes the migration idempotent by construction (ADR-071
+// §5.3.5b): re-running it against an already-migrated config finds no legacy
+// keys and changes nothing.
+func migrateLegacyToolPolicyMap[T ~string](m map[string]T) bool {
+	if len(m) == 0 {
+		return false
+	}
+	// Group the legacy keys actually present by destination, so multiple
+	// legacy keys for the same destination (hand_off + return_to_default ->
+	// switch_agent) fold together in one pass.
+	byDest := make(map[string][]string)
+	for legacy, dest := range legacyToolPolicyKeyMigrations {
+		if _, ok := m[legacy]; ok {
+			byDest[dest] = append(byDest[dest], legacy)
+		}
+	}
+	if len(byDest) == 0 {
+		return false
+	}
+	for dest, legacyKeys := range byDest {
+		merged := string(m[dest]) // "" (unrecognized, never wins) if dest absent.
+		for _, legacy := range legacyKeys {
+			merged = stricterToolPolicyValue(merged, string(m[legacy]))
+			delete(m, legacy)
+		}
+		m[dest] = T(merged)
+	}
+	return true
+}
+
+// MigrateLegacyToolPolicyKeys rewrites every persisted tool-policy key naming
+// a tool retired by ADR-071 — load_tool (D1), hand_off, or return_to_default
+// (D4) — to the tool's replacement name, across the global ceiling
+// (cfg.Sandbox.ToolPolicies) and every agent's own override map
+// (AgentConfig.Tools.Builtin.Policies), taking the strictest value where
+// legacy keys (or the destination key itself) disagree, and deleting the
+// legacy keys. See migrateLegacyToolPolicyMap's doc comment for the fold
+// rule and idempotency argument.
+//
+// MUST run before RepairIncompleteToolPolicyCoverage, not merely before
+// ValidateToolPolicyCoverage (ADR-071 §5.3.5a). That repair backfills any
+// (agent, tool) pair with no policy entry to an explicit "deny" — the
+// fail-closed direction, correct for its own purpose but catastrophic here:
+// ToolSearch and switch_agent are new names with no policy entry anywhere
+// until this migration folds the legacy keys forward. Sequenced any later,
+// the FIRST post-upgrade boot silently writes "deny" for both on every
+// agent, boot succeeds with no visible error, and every agent loses hand-off
+// (and, once D3 ships, all lazy-tool loading — ToolSearch is how 71% of the
+// catalog becomes reachable). The intended call site is gateway.go's shared
+// repairAndValidateToolPolicyCoverage helper, as the FIRST statement inside
+// it, before config.RepairIncompleteToolPolicyCoverage — that helper already
+// runs identically at boot (RunContextWithOptions) and hot-reload
+// (executeReload), so a migration placed there cannot diverge between the
+// two call sites.
+//
+// Mutates cfg in place. Returns true if anything changed — informational
+// only; callers are not required to act on it (RepairIncompleteToolPolicyCoverage
+// and ValidateToolPolicyCoverage below both re-derive their own view of
+// coverage from the mutated cfg regardless).
+func MigrateLegacyToolPolicyKeys(cfg *Config) bool {
+	if cfg == nil {
+		return false
+	}
+	changed := migrateLegacyToolPolicyMap(cfg.Sandbox.ToolPolicies)
+	for i := range cfg.Agents.List {
+		agentCfg := &cfg.Agents.List[i]
+		if agentCfg.Tools == nil {
+			continue
+		}
+		if migrateLegacyToolPolicyMap(agentCfg.Tools.Builtin.Policies) {
+			changed = true
+		}
+	}
+	return changed
+}

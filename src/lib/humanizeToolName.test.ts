@@ -42,6 +42,49 @@ describe('humanizeToolName — ADR-036 bash/delegate consolidation', () => {
   })
 })
 
+// ADR-071 D1 / spec FR-015 (W-D1 test 6): the discovery capability's display
+// label must be reachable under BOTH the new canonical name ("ToolSearch")
+// and the retired pre-rename name ("load_tool"), so a conversation
+// transcript recorded before the rename still renders a readable label
+// instead of falling through to the raw identifier.
+describe('humanizeToolName — ADR-071 D1 discovery-tool rename', () => {
+  it('maps the new canonical name ToolSearch → Find & load tools', () => {
+    expect(humanizeToolName('ToolSearch')).toBe('Find & load tools')
+  })
+
+  it('retains the legacy load_tool alias so pre-rename transcripts still render readably', () => {
+    expect(humanizeToolName('load_tool')).toBe('Find & load tools')
+  })
+})
+
+// ADR-071 D4: `hand_off` and `return_to_default` are merged into one tool,
+// `switch_agent(target, note?)`. The new canonical name gets its own label.
+// Of the two retired predecessors, only `hand_off` needs an explicit alias
+// entry — `handoff` is that same predecessor's other historical spelling
+// (no underscore), not a second distinct tool. Both spellings stay mapped so
+// old, already-persisted session transcripts (never migrated) still render a
+// readable label instead of falling through to the raw id. `return_to_default`
+// (the actual second retired tool) is deliberately left unmapped — it relies
+// on the generic humanization fallback instead (a legitimate design choice,
+// pinned by its own assertion below).
+describe('humanizeToolName — ADR-071 D4 switch_agent merge', () => {
+  it('maps the new canonical name switch_agent → Switch agent', () => {
+    expect(humanizeToolName('switch_agent')).toBe('Switch agent')
+  })
+
+  it('retains the legacy hand_off alias so pre-merge transcripts still render readably', () => {
+    expect(humanizeToolName('hand_off')).toBe('Hand off')
+  })
+
+  it('retains the legacy handoff alias (hand_off\'s other historical spelling) so pre-merge transcripts still render readably', () => {
+    expect(humanizeToolName('handoff')).toBe('Hand off')
+  })
+
+  it('return_to_default has no explicit alias and relies on the generic fallback', () => {
+    expect(humanizeToolName('return_to_default')).toBe('Return to default')
+  })
+})
+
 describe('humanizeToolName — generic fallback', () => {
   it('strips a leading namespace and title-cases the remainder', () => {
     // system.task.update → "Task update"

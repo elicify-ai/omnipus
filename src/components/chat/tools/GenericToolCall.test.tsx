@@ -570,7 +570,7 @@ describe('GenericToolCall — caret lives inside the toggle button (clickable ex
 
 // ── activity-bar tool visibility: verbose-chat gate ─────────────────────────
 // Traces to: src/lib/toolVisibility.ts shouldRenderToolCall — GenericToolCall
-// is the live/streaming fallback renderer for load_tool and delegate (neither
+// is the live/streaming fallback renderer for ToolSearch and delegate (neither
 // has a dedicated makeAssistantToolUI registration).
 
 describe('GenericToolCall — verbose chat gate', () => {
@@ -580,10 +580,10 @@ describe('GenericToolCall — verbose chat gate', () => {
     })
   })
 
-  it('a load_tool call renders nothing when verboseChatEnabled is false', () => {
+  it('a ToolSearch call renders nothing when verboseChatEnabled is false', () => {
     render(
       <GenericToolCall
-        toolName="load_tool"
+        toolName="ToolSearch"
         args={{ name: 'web_search' }}
         status={COMPLETE_STATUS}
       />
@@ -591,13 +591,13 @@ describe('GenericToolCall — verbose chat gate', () => {
     expect(screen.queryByTestId('tool-call-badge')).toBeNull()
   })
 
-  it('a load_tool call renders normally when verboseChatEnabled is true', () => {
+  it('a ToolSearch call renders normally when verboseChatEnabled is true', () => {
     act(() => {
       useChatPreferencesStore.setState({ verboseChatEnabled: true })
     })
     render(
       <GenericToolCall
-        toolName="load_tool"
+        toolName="ToolSearch"
         args={{ name: 'web_search' }}
         status={COMPLETE_STATUS}
       />
@@ -605,14 +605,14 @@ describe('GenericToolCall — verbose chat gate', () => {
     expect(screen.getByTestId('tool-call-badge')).toBeInTheDocument()
   })
 
-  // (item 8a, 2026-07-16 fix wave): pins the load_tool isError override at
+  // (item 8a, 2026-07-16 fix wave): pins the ToolSearch isError override at
   // the COMPONENT level (not just toolVisibility.test.ts's unit-level
   // shouldRenderToolCall coverage) — mutation-proofs the `isError` argument
   // GenericToolCall actually threads through at render.tsx line ~309.
-  it('a load_tool call with an error status is VISIBLE even when verboseChatEnabled is false', () => {
+  it('a ToolSearch call with an error status is VISIBLE even when verboseChatEnabled is false', () => {
     render(
       <GenericToolCall
-        toolName="load_tool"
+        toolName="ToolSearch"
         args={{ name: 'web_search' }}
         status={{ type: 'incomplete', reason: 'error' } as MessagePartStatus}
       />
@@ -620,10 +620,10 @@ describe('GenericToolCall — verbose chat gate', () => {
     expect(screen.getByTestId('tool-call-badge')).toBeInTheDocument()
   })
 
-  it('a load_tool call that succeeded but whose result is a _marshal_error sentinel is VISIBLE even when verboseChatEnabled is false', () => {
+  it('a ToolSearch call that succeeded but whose result is a _marshal_error sentinel is VISIBLE even when verboseChatEnabled is false', () => {
     render(
       <GenericToolCall
-        toolName="load_tool"
+        toolName="ToolSearch"
         args={{ name: 'web_search' }}
         result={{ _marshal_error: 'json: unsupported type: chan int' }}
         status={COMPLETE_STATUS}
@@ -707,7 +707,7 @@ describe('GenericToolCall — verbose chat gate', () => {
   // sub-cases of `bash` deliberately do NOT honor isError/marshalErr
   // anymore: the calling agent's own turn explains the failure, and the raw
   // result stays inspectable in the ActivityPanel (surface="panel"). Only
-  // load_tool keeps the override (covered above). Only verboseChatEnabled
+  // ToolSearch keeps the override (covered above). Only verboseChatEnabled
   // brings these two rows back now.
   it('a background delegate call with a _marshal_error result and non-error status stays HIDDEN — no outcome exception for delegate', () => {
     render(

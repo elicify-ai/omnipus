@@ -874,11 +874,9 @@ components:
         `action` — the corrected 9-action set (ADR-053 §5.1) replacing
         the legacy `run | status` pair. `run` spawns a new child;
         `status`/`inbox`/`inbox_ack`/`peek` are read/ack surfaces;
-        `steer`/`respond`/`cancel`/`follow_up` are control surfaces. Two
-        published launch profiles (`utility`/`specialist`, see
-        `DelegateRunAction.launch_profile`) govern visibility/steering/
-        child_messaging; illegal combinations are rejected at the
-        handler, not by this schema alone.
+        `steer`/`respond`/`cancel`/`follow_up` are control surfaces.
+        Steering is always available for a direct delegation (see
+        ADR-053 Amendment).
       oneOf:
         - $ref: '#/components/schemas/DelegateRunAction'
         - $ref: '#/components/schemas/DelegateStatusAction'

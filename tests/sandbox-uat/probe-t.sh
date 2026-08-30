@@ -2,7 +2,7 @@
 #
 # T.14 / T.15 — live sandbox UAT probes for per-agent tool policy enforcement.
 #
-# T.14: a tool denied by policy is refused at LOAD (via the load_tool infra
+# T.14: a tool denied by policy is refused at LOAD (via the ToolSearch infra
 #       tool), the refusal names the policy, AND an allowed tool (read_file)
 #       still works in the same run (positive lower bound — otherwise a
 #       gateway that refuses everything would pass this check).
@@ -246,7 +246,7 @@ AGENT_DENY_ID="${DENY_RESULT#OK:}"
 MARKER="qa_probe_t14_$(date +%s)_$$"
 PROMPT_T14="Do the following two steps in order and label each result clearly with STEP1: and STEP2: on their own lines. ${NEVER_RETRY_CLAUSE}
 
-STEP1: Use the load_tool tool to load the tool named '${SUBJECT_TOOL}' by exact name. Report exactly what happened. If it is refused or denied, quote the refusal message verbatim after STEP1: and do not retry.
+STEP1: Use the ToolSearch tool to load the tool named '${SUBJECT_TOOL}' by exact name. Report exactly what happened. If it is refused or denied, quote the refusal message verbatim after STEP1: and do not retry.
 
 STEP2: Regardless of what happened in STEP1, use read_file to read the file named 'qa_probe_t14_marker.txt' in your workspace and report its exact content after STEP2:."
 
@@ -264,9 +264,9 @@ DENIAL_MATCH=$(printf '%s' "$T14_OUT" | grep -iE "$DENIAL_PATTERN" || true)
 MARKER_MATCH=$(printf '%s' "$T14_OUT" | grep -F "$MARKER" || true)
 
 if [ -n "$DENIAL_MATCH" ] && [ -n "$MARKER_MATCH" ]; then
-  report "T.14" "PASS" "load_tool('${SUBJECT_TOOL}') refused for AGENT_DENY (${AGENT_DENY_ID}), evidence: $(trunc "$DENIAL_MATCH" 200); positive lower bound confirmed marker '${MARKER}' read back via read_file: $(trunc "$MARKER_MATCH" 150)"
+  report "T.14" "PASS" "ToolSearch('${SUBJECT_TOOL}') refused for AGENT_DENY (${AGENT_DENY_ID}), evidence: $(trunc "$DENIAL_MATCH" 200); positive lower bound confirmed marker '${MARKER}' read back via read_file: $(trunc "$MARKER_MATCH" 150)"
 elif [ -z "$DENIAL_MATCH" ]; then
-  report "T.14" "FAIL" "expected a policy/denial refusal for load_tool('${SUBJECT_TOOL}') on AGENT_DENY (${AGENT_DENY_ID}, policy explicitly set to deny) but none was observed. Full output: $(trunc "$T14_OUT" 500)"
+  report "T.14" "FAIL" "expected a policy/denial refusal for ToolSearch('${SUBJECT_TOOL}') on AGENT_DENY (${AGENT_DENY_ID}, policy explicitly set to deny) but none was observed. Full output: $(trunc "$T14_OUT" 500)"
 else
   report "T.14" "FAIL" "denial for '${SUBJECT_TOOL}' was observed on AGENT_DENY (${AGENT_DENY_ID}), but the allowed read_file positive-lower-bound check did not return marker '${MARKER}' (gateway may be refusing everything). Full output: $(trunc "$T14_OUT" 500)"
 fi
@@ -282,7 +282,7 @@ if [[ "$ALLOW_RESULT" == FAIL:* ]]; then
 else
   AGENT_ALLOW_ID="${ALLOW_RESULT#OK:}"
 
-  PROMPT_T15="Use the load_tool tool to load the tool named '${SUBJECT_TOOL}' by exact name. Report exactly what happened. ${NEVER_RETRY_CLAUSE}"
+  PROMPT_T15="Use the ToolSearch tool to load the tool named '${SUBJECT_TOOL}' by exact name. Report exactly what happened. ${NEVER_RETRY_CLAUSE}"
 
   A1_OUT_FILE=$(mk_tmp)
   "$OMNIPUS_BIN" "$AGENT_DENY_ID" "$PROMPT_T15" >"$A1_OUT_FILE" 2>&1 || true

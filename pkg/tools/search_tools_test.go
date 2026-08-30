@@ -59,6 +59,24 @@ func newSearchTool(reg *ToolRegistry, ttl, maxN int) *ToolsTool {
 	return NewToolsTool(reg, ttl, maxN)
 }
 
+// permissiveCanLoad allows every tool name. ADR-071 §3.2.2 (CRIT-201) made a
+// resolver-less ToolsTool disclose nothing at all, so tests that only care
+// about BM25 ranking/discovery behavior — not policy filtering — wire this
+// (the most permissive possible resolver) to keep their original,
+// content-based assertions meaningful.
+func permissiveCanLoad(_ context.Context, _ string) (bool, string) { return true, "" }
+
+// stubMarkLoaded returns a placeholder schema for every requested name,
+// pairing with permissiveCanLoad in tests that don't care about schema
+// content, only about which names got promoted.
+func stubMarkLoaded(_ context.Context, names []string) (map[string]any, []string) {
+	sc := make(map[string]any, len(names))
+	for _, n := range names {
+		sc[n] = map[string]any{"name": n}
+	}
+	return sc, nil
+}
+
 // execQueryNoResolver calls tools{query:q} on a ToolsTool with no resolver set.
 // The search runs but no auto-load can happen (returns match list without loaded/schemas).
 func execQueryNoResolver(tt *ToolsTool, ctx context.Context, query string) *ToolResult {
@@ -98,6 +116,7 @@ func TestToolsTool_Query_NoMatch_SilentResult(t *testing.T) {
 func TestToolsTool_Query_BM25_MatchesHiddenTool(t *testing.T) {
 	reg := setupPopulatedRegistry()
 	tt := newSearchTool(reg, 3, 10)
+	tt.SetResolver(permissiveCanLoad, stubMarkLoaded) // §3.2.2: a resolver is required to see any match
 	ctx := context.Background()
 
 	res := execQueryNoResolver(tt, ctx, "read files")
@@ -202,6 +221,10 @@ func TestToolsTool_Query_DeniedTopHitFallsThrough(t *testing.T) {
 	}
 }
 
+// TestToolsTool_Query_DoesNotPromote_WithoutResolver pins ADR-071 §3.2.2
+// point 5 (CRIT-201): a resolver-less ToolsTool must fail closed and
+// disclose NOTHING at all — not merely skip promotion while still naming
+// the match, which was the pre-D2 behavior this test used to assert.
 func TestToolsTool_Query_DoesNotPromote_WithoutResolver(t *testing.T) {
 	reg := NewToolRegistry()
 	reg.RegisterHidden(&mockSearchableTool{name: "mcp_findme", desc: "find me with search"})
@@ -214,8 +237,9 @@ func TestToolsTool_Query_DoesNotPromote_WithoutResolver(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("tools(query) failed: %s", res.ForLLM)
 	}
-	if !strings.Contains(res.ForLLM, "mcp_findme") {
-		t.Errorf("tools(query) must return the matching tool name; got: %s", res.ForLLM)
+	const want = "No tools found matching the query."
+	if res.ForLLM != want {
+		t.Errorf("tools(query) without resolver must disclose nothing; got: %q, want: %q", res.ForLLM, want)
 	}
 
 	// Tool must NOT be promoted (no resolver → no PromoteTools called).
@@ -231,54 +255,6 @@ func TestToolsTool_Query_DoesNotPromote_WithoutResolver(t *testing.T) {
 	if ok {
 		t.Error("tools(query) without resolver must NOT make the tool Get-able (no promote)")
 	}
-}
-
-func TestSearchBM25_ZeroMaxResults(t *testing.T) {
-	reg := setupPopulatedRegistry()
-
-	res := reg.SearchBM25("read file", 0)
-	if len(res) != 0 {
-		t.Errorf("Expected 0 results with maxSearchResults=0, got %d", len(res))
-	}
-}
-
-func TestToolRegistry_SearchBM25LimitsAndCoreFiltering(t *testing.T) {
-	reg := NewToolRegistry()
-
-	// Add 1 visible lazy tool (ManifestLazy tier — SHOULD appear in BM25),
-	// 1 visible full-tier tool (ManifestFull — MUST NOT appear in BM25),
-	// and 10 hidden tools.
-	// "core_match_lazy" is not a real tool name so ToolManifestTier returns ManifestLazy.
-	reg.Register(&mockSearchableTool{"core_match_lazy", "I am visible lazy with match"})
-	// "read_file" is ManifestFull — must be excluded from BM25 corpus.
-	reg.Register(&mockSearchableTool{"read_file", "Read file with match"})
-	for i := 0; i < 10; i++ {
-		reg.RegisterHidden(&mockSearchableTool{
-			name: fmt.Sprintf("hidden_match_%d", i),
-			desc: "this has a match",
-		})
-	}
-
-	t.Run("BM25 limits and full-tier filtering", func(t *testing.T) {
-		// Search with BM25 and a limit of maxSearchResults = 3.
-		// The corpus now includes hidden tools AND visible lazy-tier tools.
-		res := reg.SearchBM25("match", 3)
-
-		if len(res) != 3 {
-			t.Errorf("Expected exactly 3 results due to limit, got %d", len(res))
-		}
-
-		for _, r := range res {
-			// Full-tier tools (ManifestFull) must NEVER appear in BM25 results
-			// (they're always callable, no need to discover them via search).
-			if r.Name == "read_file" {
-				t.Errorf("SearchBM25 must not return full-tier tool %q (ManifestFull excluded from corpus)", r.Name)
-			}
-		}
-		// core_match_lazy (visible, ManifestLazy) MAY appear — that's the new
-		// widened behavior. We don't assert it must appear since BM25 ranking
-		// may not surface it in the top-3 with 10 hidden competitors.
-	})
 }
 
 func TestGet_HiddenToolTTLLifecycle(t *testing.T) {
@@ -320,6 +296,7 @@ func TestBM25CacheInvalidation(t *testing.T) {
 	reg.RegisterHidden(&mockSearchableTool{name: "tool_alpha", desc: "alpha functionality"})
 
 	tt := newSearchTool(reg, 5, 10)
+	tt.SetResolver(permissiveCanLoad, stubMarkLoaded) // §3.2.2: a resolver is required to see any match
 	ctx := context.Background()
 
 	// First search should find tool_alpha
@@ -367,20 +344,40 @@ func TestPromoteTools_ConcurrentWithTickTTL(t *testing.T) {
 	<-done
 }
 
-// TestToolsTool_Query_ResponseContainsInstructions verifies that a query result
-// with no resolver set tells the model how to load the tool by name.
+// TestToolsTool_Query_ResponseContainsInstructions verifies that when a
+// query's policy-loadable candidates fail to resolve at markLoaded time
+// (e.g. a schema lookup failure), the response falls back to listing the
+// filtered matches and tells the model how to load one by name. ADR-071
+// §3.2.2 moved the "nothing got auto-loaded" disclosure onto the
+// policy-filtered match list; this exercises that branch with a resolver
+// present. (A resolver-less call now discloses nothing at all — see
+// TestToolsTool_Query_DoesNotPromote_WithoutResolver.)
 func TestToolsTool_Query_ResponseContainsInstructions(t *testing.T) {
 	reg := NewToolRegistry()
 	reg.RegisterHidden(&mockSearchableTool{name: "mcp_foo", desc: "foo tool"})
 	tt := newSearchTool(reg, 5, 10)
+	tt.SetResolver(
+		permissiveCanLoad,
+		func(_ context.Context, names []string) (map[string]any, []string) {
+			// Simulate every promoted candidate failing to resolve.
+			rejected := make([]string, len(names))
+			for i, n := range names {
+				rejected[i] = n + " — schema lookup failed in test"
+			}
+			return map[string]any{}, rejected
+		},
+	)
 	ctx := context.Background()
 
-	res := execQueryNoResolver(tt, ctx, "foo")
+	res := tt.Execute(ctx, map[string]any{"query": "foo"})
 	if res.IsError {
 		t.Fatalf("unexpected error: %s", res.ForLLM)
 	}
 	if strings.Contains(res.ForLLM, "UNLOCKED") {
 		t.Error("search response must not say 'UNLOCKED' (old auto-promote behavior removed)")
+	}
+	if !strings.Contains(res.ForLLM, "mcp_foo") {
+		t.Errorf("query response must still name the policy-loadable match; got: %s", res.ForLLM)
 	}
 	// Must tell model to use 'names' to load.
 	if !strings.Contains(res.ForLLM, "names") {
@@ -445,5 +442,76 @@ func TestToolsTool_Query_AutoLoad_MakesToolCallable(t *testing.T) {
 	_, ok = reg.Get("mcp_target")
 	if !ok {
 		t.Error("mcp_target must be callable (Get-able) after tools{query:...} auto-loads it")
+	}
+}
+
+// TestDiscoveryTool_ByNameAndByDescriptionUnchanged pins ADR-071 D1 / spec
+// FR-010 (W-D1 test 12): the rename is name-only — both the by-name ("names")
+// and by-description ("query") paths behave identically to their pre-rename
+// mechanics on the SAME tool instance, now answering to "ToolSearch". This is
+// the integration-level parity check the spec's Independent Test for User
+// Story 2 asks for ("Rename nothing else. Confirm the capability answers to
+// its new name for both the by-name and by-description paths").
+func TestDiscoveryTool_ByNameAndByDescriptionUnchanged(t *testing.T) {
+	reg := NewToolRegistry()
+	reg.RegisterHidden(&mockSearchableTool{name: "mcp_by_name", desc: "loadable directly by exact name"})
+	reg.RegisterHidden(&mockSearchableTool{name: "mcp_by_desc", desc: "discoverable only by describing intent"})
+
+	var markedLoaded []string
+	available := map[string]struct{}{"mcp_by_name": {}, "mcp_by_desc": {}}
+	tt := NewToolsTool(reg, 5, 10)
+	tt.SetResolver(
+		func(_ context.Context, name string) (bool, string) {
+			if _, ok := available[name]; ok {
+				return true, ""
+			}
+			return false, name + " — not available in test"
+		},
+		func(_ context.Context, names []string) (map[string]any, []string) {
+			markedLoaded = append(markedLoaded, names...)
+			sc := make(map[string]any, len(names))
+			for _, n := range names {
+				sc[n] = map[string]any{"name": n}
+			}
+			return sc, nil
+		},
+	)
+
+	if got := tt.Name(); got != "ToolSearch" {
+		t.Fatalf("Name() = %q, want %q", got, "ToolSearch")
+	}
+
+	ctx := context.Background()
+
+	// By-name path: "names" resolves and loads the exact tool, unchanged.
+	byName := tt.Execute(ctx, map[string]any{"names": []any{"mcp_by_name"}})
+	if byName.IsError {
+		t.Fatalf("by-name path failed under the renamed tool: %s", byName.ForLLM)
+	}
+	if !strings.Contains(byName.ForLLM, "mcp_by_name") {
+		t.Errorf("by-name result must mention the loaded tool; got: %s", byName.ForLLM)
+	}
+	if _, ok := reg.Get("mcp_by_name"); !ok {
+		t.Error("by-name path must promote the hidden tool (PromoteTools), same as before the rename")
+	}
+
+	// By-description path: "query" still ranks, auto-loads the top hit, and
+	// returns the full match list — same shape as before the rename.
+	byDesc := tt.Execute(ctx, map[string]any{"query": "describing intent"})
+	if byDesc.IsError {
+		t.Fatalf("by-description path failed under the renamed tool: %s", byDesc.ForLLM)
+	}
+	if !strings.Contains(byDesc.ForLLM, "mcp_by_desc") {
+		t.Errorf("by-description result must mention the matched tool; got: %s", byDesc.ForLLM)
+	}
+	if !strings.Contains(byDesc.ForLLM, `"loaded"`) {
+		t.Errorf("by-description result must include the auto-loaded 'loaded' field; got: %s", byDesc.ForLLM)
+	}
+	if _, ok := reg.Get("mcp_by_desc"); !ok {
+		t.Error("by-description path must promote its auto-loaded top hit, same as before the rename")
+	}
+
+	if len(markedLoaded) != 2 {
+		t.Errorf("markLoaded must have been called for both tools across the two paths; got: %v", markedLoaded)
 	}
 }

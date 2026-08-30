@@ -267,6 +267,7 @@ func TestBufferToMessage_EnvelopeFields(t *testing.T) {
 			MessageID: "<msg123@example.com>",
 			Subject:   "  Test Subject  ",
 			From:      []imap.Address{{Name: "Alice Smith", Mailbox: "alice", Host: "x.com"}},
+			ReplyTo:   []imap.Address{{Mailbox: "discuss", Host: "list.example.com"}},
 			To:        []imap.Address{{Mailbox: "bob", Host: "y.com"}},
 			Date:      ts,
 		},
@@ -287,6 +288,9 @@ func TestBufferToMessage_EnvelopeFields(t *testing.T) {
 	}
 	if got.FromName != "Alice Smith" {
 		t.Errorf("FromName: got %q, want 'Alice Smith'", got.FromName)
+	}
+	if got.ReplyTo != "discuss@list.example.com" {
+		t.Errorf("ReplyTo: got %q, want discuss@list.example.com", got.ReplyTo)
 	}
 	if got.To != "bob@y.com" {
 		t.Errorf("To: got %q, want bob@y.com", got.To)
@@ -364,6 +368,9 @@ func TestBufferToMessage_NoFromNoTo(t *testing.T) {
 	}
 	if got.FromName != "" {
 		t.Errorf("expected empty FromName, got %q", got.FromName)
+	}
+	if got.ReplyTo != "" {
+		t.Errorf("expected empty ReplyTo, got %q", got.ReplyTo)
 	}
 }
 
@@ -493,6 +500,33 @@ func TestClient_Search_Differentiation(t *testing.T) {
 	}
 	if emptyErr.Error() == dialErr.Error() {
 		t.Fatalf("empty-query and dial errors must differ, both: %v", emptyErr)
+	}
+}
+
+// TestClient_Search_BeforeUID1TerminatesPagination verifies M8: before_uid=1
+// must return an empty, non-truncated result WITHOUT dialing — mirroring
+// ReadInbox's identical terminal-page guard — rather than falling through to
+// buildSearchCriteria (whose "beforeUID > 1" condition would silently ignore
+// beforeUID=1 and re-run the query with no UID restriction, returning page 1
+// again and never letting a pagination loop terminate).
+// Traces to: transport.go Client.Search (BeforeUID==1 guard)
+func TestClient_Search_BeforeUID1TerminatesPagination(t *testing.T) {
+	cl := newTestClient(t)
+	res, err := cl.Search(t.Context(), "invoice", SearchOptions{Limit: 10, BeforeUID: 1})
+	if err != nil {
+		t.Fatalf("Search with before_uid=1 must not dial or error, got: %v", err)
+	}
+	if len(res.Messages) != 0 {
+		t.Fatalf("expected empty Messages for before_uid=1, got %d", len(res.Messages))
+	}
+	if res.Truncated {
+		t.Fatal("expected Truncated=false for the terminal empty page")
+	}
+	if res.TotalMatches != 0 {
+		t.Fatalf("expected TotalMatches=0 for before_uid=1, got %d", res.TotalMatches)
+	}
+	if res.NextBeforeUID != 0 {
+		t.Fatalf("expected no further pagination cursor, got %d", res.NextBeforeUID)
 	}
 }
 

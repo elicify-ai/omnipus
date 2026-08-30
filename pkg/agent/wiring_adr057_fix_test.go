@@ -86,7 +86,6 @@ func TestWiring_DelegateToolSessionManager_KillsRealBackgroundProcess(t *testing
 	require.NoError(t, lc.Persist(&session.LifecycleRecord{
 		SessionID: childID, State: session.LifecycleRunning, OwnerScopeKind: session.OwnerScopeHuman,
 		ParentDurableKey: parentKey, WorkspaceID: "ws-1", AgentID: "worker",
-		LaunchProfile: session.LaunchProfileUtility,
 	}))
 	dt.SetCancelHooks(
 		func(sessionID, hint string) ([]string, error) { return []string{sessionID}, nil },

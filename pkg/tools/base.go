@@ -119,7 +119,27 @@ var (
 	ctxKeyToolCallID           = &toolCtxKey{"toolCallID"}
 	ctxKeyRunningTaskID        = &toolCtxKey{"runningTaskID"}
 	ctxKeyVerifierSessionScope = &toolCtxKey{"verifierSessionScope"}
+	ctxKeySearchPromotion      = &toolCtxKey{"searchPromotion"}
 )
+
+// WithSearchPromotion returns a child context marking the enclosing
+// markLoaded call as originating from ToolSearch's query (by-description)
+// path, as opposed to its exact-name `names` path. ToolsTool.execSearchAndLoad
+// sets this immediately before invoking its markLoaded resolver so the agent
+// loop (which has no other way to distinguish the two ToolSearch call shapes
+// once they reach the shared markLoaded closure) can record a pending
+// search-follow-up entry only for genuine discoveries (ADR-071 §4.3.1a,
+// FR-038a) — an exact-name load is a deliberate choice, not a search result,
+// and must never be counted toward the no-followup metric.
+func WithSearchPromotion(ctx context.Context) context.Context {
+	return context.WithValue(ctx, ctxKeySearchPromotion, true)
+}
+
+// IsSearchPromotion reports whether ctx was marked by WithSearchPromotion.
+func IsSearchPromotion(ctx context.Context) bool {
+	v, _ := ctx.Value(ctxKeySearchPromotion).(bool)
+	return v
+}
 
 // ProcessTrackerFunc records a child PID spawned by a tool so a caller (e.g. the
 // scheduled-run lane, FR-011) can terminate it when the run finishes. It is

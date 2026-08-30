@@ -25,7 +25,13 @@ func NewDoctorRunTool(d *Deps) *DoctorRunTool   { return &DoctorRunTool{deps: d}
 func (t *DoctorRunTool) Name() string           { return "run_doctor" }
 func (t *DoctorRunTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *DoctorRunTool) Description() string {
-	return "Run security diagnostics and return a risk score (0-100) with actionable recommendations. No parameters required."
+	return "Run a narrow set of security diagnostic checks (exec egress config, credentials.json/config.json " +
+		"file permissions, audit log directory presence) and return checks_failed_pct — the percentage of " +
+		"THESE FEW checks that failed — plus actionable recommendations. This is NOT a comprehensive security " +
+		"audit: it never looks at sandbox.mode, god-mode, dev_mode_bypass, or Landlock/seccomp availability, " +
+		"so an install with every real protection disabled can still score 0% (\"no risk\"). A low " +
+		"checks_failed_pct means only these specific checks passed, not that the install is secure. No " +
+		"parameters required."
 }
 
 func (t *DoctorRunTool) Parameters() map[string]any {
@@ -110,14 +116,14 @@ func (t *DoctorRunTool) Execute(_ context.Context, _ map[string]any) *tools.Tool
 	if total == 0 {
 		total = 1
 	}
-	riskScore := checksFailed * 100 / total
+	checksFailedPct := checksFailed * 100 / total
 
 	return tools.NewToolResult(successJSON(map[string]any{
-		"risk_score":    riskScore,
-		"issues":        issues,
-		"checks_passed": checksPassed,
-		"checks_failed": checksFailed,
-		"run_at":        time.Now().UTC().Format(time.RFC3339),
+		"checks_failed_pct": checksFailedPct,
+		"issues":            issues,
+		"checks_passed":     checksPassed,
+		"checks_failed":     checksFailed,
+		"run_at":            time.Now().UTC().Format(time.RFC3339),
 	}))
 }
 
@@ -149,7 +155,9 @@ func (t *UsageQueryTool) Description() string {
 		"  session_id — optional: restrict to a single session\n" +
 		"Returns input, output, cache-read, cache-write, and total token counts.\n" +
 		"No dollar amounts — token counts only.\n" +
-		"External CLI subagents (subagent_3p) run on a separate engine and are excluded."
+		"External CLI subagents (subagent_3p) run on a separate engine and are excluded.\n" +
+		"If some sessions could not be read the response sets partial=true with " +
+		"partial_error_count — treat the totals as a lower bound in that case."
 }
 
 func (t *UsageQueryTool) Parameters() map[string]any {

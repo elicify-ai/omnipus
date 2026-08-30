@@ -31,7 +31,8 @@ func (t *FindSkillsTool) Name() string {
 }
 
 func (t *FindSkillsTool) Description() string {
-	return "Search for installable skills from skill registries. Returns skill slugs, descriptions, versions, and relevance scores. Use this to discover skills before installing them with install_skill."
+	return "Search for installable skills from skill registries. Returns skill slugs, descriptions, versions, and relevance scores. Use this to discover skills before installing them with install_skill. " +
+		"Results are cached per query (re-sliced to the current call's limit on a cache hit); if a registry is unreachable, results may be partial and the response notes it."
 }
 
 func (t *FindSkillsTool) Scope() ToolScope       { return ScopeGeneral }
@@ -64,17 +65,31 @@ func (t *FindSkillsTool) Execute(ctx context.Context, args map[string]any) *Tool
 	}
 
 	limit := 5
-	if l, ok := args["limit"].(float64); ok {
-		li := int(l)
-		if li >= 1 && li <= 20 {
-			limit = li
+	if raw, exists := args["limit"]; exists {
+		l, ok := raw.(float64)
+		if !ok {
+			return ErrorResult("limit must be a number")
 		}
+		li := int(l)
+		// House style (see shell.go's resolveTimeoutSeconds): an out-of-range
+		// value is REJECTED, never silently dropped to the default.
+		if li < 1 || li > 20 {
+			return ErrorResult(fmt.Sprintf("limit must be between 1 and 20 (got %d)", li))
+		}
+		limit = li
 	}
 
-	// Check cache first.
+	// Check cache first. The cached slice was captured under whatever limit
+	// was in effect when it was populated, so it must still be re-sliced to
+	// THIS call's limit — otherwise a cache hit silently ignores a larger
+	// limit requested on a later call.
 	if t.cache != nil {
 		if cached, hit := t.cache.Get(query); hit {
-			return SilentResult(formatSearchResults(query, cached, true, nil))
+			sliced := cached
+			if len(sliced) > limit {
+				sliced = sliced[:limit]
+			}
+			return SilentResult(formatSearchResults(query, sliced, true, nil))
 		}
 	}
 

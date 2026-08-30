@@ -47,7 +47,7 @@ func TestDelegateTool_FollowUp_NativeSetsIsResume(t *testing.T) {
 	if err := lc.Persist(&session.LifecycleRecord{
 		SessionID: "child-followup-resume-native", State: session.LifecycleCompleted,
 		OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: "parent-1",
-		WorkspaceID: "ws-1", AgentID: "worker", LaunchProfile: session.LaunchProfileUtility,
+		WorkspaceID: "ws-1", AgentID: "worker",
 		Is3P: false,
 	}); err != nil {
 		t.Fatalf("seed failed: %v", err)
@@ -80,7 +80,7 @@ func TestDelegateTool_FollowUp_3PDoesNotSetIsResume(t *testing.T) {
 	if err := lc.Persist(&session.LifecycleRecord{
 		SessionID: "child-followup-resume-3p", State: session.LifecycleCompleted,
 		OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: "parent-1",
-		WorkspaceID: "ws-1", AgentID: "claude-code", LaunchProfile: session.LaunchProfileUtility,
+		WorkspaceID: "ws-1", AgentID: "claude-code",
 		Is3P: true,
 	}); err != nil {
 		t.Fatalf("seed failed: %v", err)
@@ -130,7 +130,7 @@ func TestDelegateTool_FollowUp_SpawnFailure_LoggedUnconditionally(t *testing.T) 
 	if err := lc.Persist(&session.LifecycleRecord{
 		SessionID: sessionID, State: session.LifecycleCompleted,
 		OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: "parent-1",
-		WorkspaceID: "ws-1", AgentID: "worker", LaunchProfile: session.LaunchProfileUtility,
+		WorkspaceID: "ws-1", AgentID: "worker",
 	}); err != nil {
 		t.Fatalf("seed failed: %v", err)
 	}

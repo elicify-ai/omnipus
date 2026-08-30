@@ -351,7 +351,7 @@ export function GenericToolCall({
   // without expanding. The full detail stays in each sentinel's own expanded
   // Display component below. Computed here (rather than after the gate
   // below) because the gate below also consults `sentinels.any` — though
-  // (revised 2026-07-16) it is only actually HONORED there for load_tool;
+  // (revised 2026-07-16) it is only actually HONORED there for ToolSearch;
   // see the gate comment below and toolVisibility.ts's doc comment for the
   // per-tool-class rule. detectToolResultSentinels (./toolResultSentinels)
   // is the ONE place that detects all three; it does NOT decide precedence
@@ -368,8 +368,8 @@ export function GenericToolCall({
   // this can happen even when the tool call itself succeeded, so neither
   // `status` nor `error` reflects it. Computed here (before the gate below,
   // alongside delegationFailure) because the gate needs it too — but only
-  // for load_tool: shouldRenderToolCall's outcome override is per-tool-class
-  // (see that function's doc comment, toolVisibility.ts), so a load_tool
+  // for ToolSearch: shouldRenderToolCall's outcome override is per-tool-class
+  // (see that function's doc comment, toolVisibility.ts), so a ToolSearch
   // call whose args match the "hide by default" shape still surfaces on a
   // marshal failure, while a delegate/background-bash call does NOT get
   // that exception (the failure is left to the calling agent's own response
@@ -377,11 +377,11 @@ export function GenericToolCall({
   const marshalErr = isMarshalErrorResult(result) ? result : null
 
   // Client-side render gate (verbose-chat off by default): hides noisy
-  // background infra calls (load_tool, background delegate/bash dispatch,
+  // background infra calls (ToolSearch, background delegate/bash dispatch,
   // status polls) unless the user has opted into verbose chat. The
   // isError/sentinels.any/marshalErr outcome signal passed below is only
-  // honored by shouldRenderToolCall's load_tool case (toolVisibility.ts doc
-  // comment) — a load_tool call still forces visible on error/denial/
+  // honored by shouldRenderToolCall's ToolSearch case (toolVisibility.ts doc
+  // comment) — a ToolSearch call still forces visible on error/denial/
   // marshal-failure, but delegate and background-bash do NOT get that
   // exception: that failure is left to the calling agent's own response
   // text, with the raw result staying inspectable in the ActivityPanel
