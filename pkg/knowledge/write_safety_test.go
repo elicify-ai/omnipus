@@ -428,7 +428,21 @@ func TestRenameLinkRewrite_TakesTheNotesWriteLock(t *testing.T) {
 			FS:    OSLinkFS(),
 			Root:  cr,
 			Store: NewJournalStore(DefaultJournalDir(f.root)),
-			Lock:  NoteLockConfig{LockDir: f.lockDir, Bound: 150 * time.Millisecond},
+			// The bound must separate two different waits, and 150ms did not.
+			// The rename takes UNCONTENDED locks of its own (the source note
+			// among them) before it ever reaches the link rewrite whose lock
+			// this test deliberately holds. Under -race the uncontended work
+			// alone can exceed 150ms, so the rename failed with a bare
+			// LockTimeoutError naming "Old Note.md" instead of the blocked
+			// inbound step — the assertion below then read as a product defect
+			// when it was the instrument being too tight to tell the two waits
+			// apart. CI caught it (twice, through its flake filter) where a
+			// local run without -race never did.
+			//
+			// A generous bound costs this test that much wall-clock ONLY on the
+			// contended path, which is the path under test and always exhausts
+			// it; the uncontended acquisitions still return immediately.
+			Lock: NoteLockConfig{LockDir: f.lockDir, Bound: 3 * time.Second},
 		}
 		res, renameErr = r.Rename(RenameRequest{From: "Old Note.md", To: "Renamed.md"})
 	}()
