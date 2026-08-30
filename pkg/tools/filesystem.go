@@ -397,7 +397,7 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 	}
 
 	// Metadata guard: reject reads of agents/<id>/(SOUL|HEARTBEAT|MEMORY|AGENT).md
-	// via generic file tools — callers must use agent.read_metadata instead.
+	// via generic file tools — callers must use read_agent_metadata instead.
 	// A re-rooted workspace turn has no AGENT metadata files, so the guard
 	// is a safe no-op there (it only ever matches the four canonical
 	// agents/<id>/ files).
@@ -746,8 +746,7 @@ func (t *WriteFileTool) Description() string {
 		"overwrite=true to replace it — without it, the call is refused. If you hit that refusal and only " +
 		"want to change PART of an existing file, use edit_file (replace one exact snippet) or append_file " +
 		"(add to the end) instead of retrying write_file with overwrite=true, which discards everything " +
-		"already in the file. This tool refuses agent metadata files (SOUL.md, HEARTBEAT.md, AGENT.md, " +
-		"MEMORY.md under agents/<id>/) — use write_metadata for those instead."
+		"already in the file. " + MetadataGuardNotice
 }
 
 func (t *WriteFileTool) Scope() ToolScope       { return ScopeCore }
@@ -787,7 +786,7 @@ func (t *WriteFileTool) Execute(ctx context.Context, args map[string]any) *ToolR
 	}
 
 	// Metadata guard: reject writes to agents/<id>/(SOUL|HEARTBEAT|MEMORY|AGENT).md
-	// via generic file tools — callers must use agent.write_metadata instead.
+	// via generic file tools — callers must use update_agent instead.
 	if policy.WorkDir != "" {
 		if denied := guardMetadataPath(policy.WorkDir, path, "write"); denied != nil {
 			return denied
