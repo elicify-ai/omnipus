@@ -786,7 +786,7 @@ func TestKnowledge_NoLanguageModelInTheGraphPath(t *testing.T) {
 	// actually touch bytes. Every op (create, set_property, append_section,
 	// link, replace_body) does the same — decode args, delegate the rewrite,
 	// render the result. None of the four files that DO the byte-level
-	// rewriting (author.go, vault_edit_list.go, vault_edit_schema.go,
+	// rewriting (author.go, knowledge_edit_list.go, knowledge_edit_schema.go,
 	// replace_body.go) imports pkg/tools at all; only the adapter does. And
 	// every pkg/tools symbol knowledge_edit.go actually uses — BaseTool,
 	// CategoryMemory, ErrorResult, NewToolResult, ScopeGeneral, ToolCategory,
@@ -794,11 +794,54 @@ func TestKnowledge_NoLanguageModelInTheGraphPath(t *testing.T) {
 	// before this file was added, so part C's pin needed no new entries
 	// either; this addition is purely part B's file allow-list.
 	//
+	// knowledge_configure.go (ADR-068 D15.6) is the fifth adapter, added
+	// under the same wave. It is the ONE exception to "the adapter delegates
+	// byte-level rewriting to author.go" above: it cannot delegate there,
+	// because author.go refuses ErrReservedLocation on anything under
+	// .omnipus-vault/ by construction, and schema/view definition files live
+	// exactly there — no existing primitive owns writing them. So this file
+	// writes those bytes itself, through three small helpers over
+	// os.OpenFile / fileutil.WriteFileAtomic / os.Remove, reusing the same
+	// WithNoteWriteLock tier-1 lock every note write takes (keyed on a
+	// synthetic path under .omnipus-vault/). That still keeps it off the
+	// GRAPH path, which is what FR-045 actually guards: .omnipus-vault/ is
+	// in scanSkippedDirNames, so no indexing/resolution/rewriting walker
+	// ever descends into it, and recordsOfType()'s read of note bytes (to
+	// count and validate matching records for a cascade report) is
+	// read-only — no rewrite, no model call. Every pkg/tools symbol it uses
+	// — BaseTool, CategoryMemory, NewToolResult, ScopeGeneral, ToolCategory,
+	// ToolResult, ToolScope — was already on allowedToolsSelectors below, so
+	// part C's pin needed no new entries for this file either.
+	//
+	// knowledge_restructure.go (ADR-068 D15.6) is the sixth adapter, the
+	// cascading tier (rename/move/trash/restore) — the hard case to admit,
+	// because if IT did its own byte-level rewriting it would genuinely sit
+	// on the path FR-045 protects. It does not: the adapter itself makes
+	// zero direct os.*/fileutil.* calls, and every op delegates — rename and
+	// move to rename.go's Renamer (planning, journalled multi-file link
+	// rewrite, crash recovery, all already outside this file's closure),
+	// trash and restore to the Trasher engine in
+	// knowledge_restructure_trash.go, which is NOT on this list and imports
+	// nothing from pkg/tools — the same adapter/engine split knowledge_read.go
+	// and knowledge_describe.go already use. (Trasher's own file mentions
+	// `Renamer`/`.Plan(` five times, but every one is prose explaining why
+	// restore is deliberately NOT built on Renamer.Plan — Plan refuses any
+	// crossing of the .omnipus-vault boundary in either direction, so restore
+	// discovers trash copies by direct existence check and applies FR-048b
+	// containment and FR-038a collision refusal itself; do not mistake that
+	// comment traffic for a real call when re-verifying this file.) Every
+	// pkg/tools symbol it uses — the same seven knowledge_configure.go uses,
+	// plus ErrorResult — was already on allowedToolsSelectors below, so part
+	// C's pin needed no new entries for this file either.
+	//
 	// This stays an EXPLICIT literal rather than a "*_tools.go" pattern: the
 	// point of the guard is that adding pkg/tools to a new file is a decision
 	// somebody has to make on purpose, and a pattern would silently admit the
 	// next file that happened to be named to fit.
-	want := []string{"authoring_tools.go", "knowledge_edit.go", "scope_turn.go", "tools.go"}
+	want := []string{
+		"authoring_tools.go", "knowledge_configure.go", "knowledge_edit.go",
+		"knowledge_restructure.go", "scope_turn.go", "tools.go",
+	}
 	if strings.Join(toolsImporters, ",") != strings.Join(want, ",") {
 		t.Fatalf("pkg/tools is imported by %v, want exactly %v. It is the only import here whose own "+
 			"closure reaches a language-model client, so it belongs in the tool-adapter files and "+
