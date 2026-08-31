@@ -297,6 +297,27 @@ type InferredProperty struct {
 	EnumValues []string
 	Kind       ClassifyKind
 
+	// ObservedCount is how many notes of this type carried a genuine
+	// (non-null, non-empty) value for this property — PropertyObservation's
+	// PresentNonEmptyCount, carried forward rather than recomputed.
+	//
+	// It is NOT part of the declaration and never reaches the written
+	// schema file (schema_write.go's renderPropertyDecl names the fields it
+	// emits, and this is not one of them). It is EVIDENCE, and it exists
+	// for exactly one consumer: FR-104b's best-fit tie-break, which needs
+	// to know how TYPICAL a property is for its type. `required` cannot
+	// answer that — it is a single bit, and the difference between a
+	// property 94% of a type's notes fill in and one 1% of them fill in is
+	// the whole signal that separates two types a note's key set alone
+	// cannot.
+	//
+	// A caller that builds InferredProperty values by hand leaves this
+	// zero, and the tie-break then scores every candidate 0 and declines to
+	// break the tie. That is the safe direction — an unweighted schema set
+	// produces the old "left as is, it is a coin toss" outcome, never a
+	// guess made on absent evidence.
+	ObservedCount int
+
 	// Ambiguity is set when this property's type was NOT a unanimous match
 	// and had to be defaulted to text — the honesty-contract payload.
 	Ambiguity *AmbiguousInference
@@ -432,6 +453,10 @@ func classifyProperty(recordType string, po *PropertyObservation, noteCount int,
 		Name:     po.Name,
 		Many:     po.Many,
 		Required: po.PresentNonEmptyCount == noteCount && noteCount > 0,
+		// The same numerator `required` is decided from, kept rather than
+		// reduced to the bit. See the field's own doc comment for why the
+		// bit is not enough for FR-104b's tie-break.
+		ObservedCount: po.PresentNonEmptyCount,
 	}
 	total := len(po.Values)
 	if total == 0 {

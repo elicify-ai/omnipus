@@ -40,7 +40,11 @@ import (
 //	      on the note, AND
 //	  (4) EVERY value the note carries is one T would ACCEPT — right arity,
 //	      right type, and for an enum, one of T's declared values.
-//	The type is WRITTEN only when EXACTLY ONE inferred type matches.
+//	When EXACTLY ONE inferred type matches, it is WRITTEN.
+//	When SEVERAL match, the BEST-FIT rule below picks between them, and
+//	the type is written with the ranking that chose it recorded.
+//	When several match and best fit cannot separate them, nothing is
+//	written and the report says which types tied and by what numbers.
 //
 // (2) is what stops a note being adopted by a type that never heard of half
 // its keys. (3) is what stops the loosest schema in the vault swallowing
@@ -53,10 +57,58 @@ import (
 // that failed the very schema the same run generated. Its rule and its
 // evidence live in typeinfer_conformance.go.
 //
-// And "exactly one" is the honest reading of a founder ruling about common
-// sense: two candidates is not a match, it is a coin toss, and a coin toss
-// written into the operator's own files is worse than a line in a report
-// saying which two.
+// THE BEST-FIT RULE, AND WHY "EXACTLY ONE" WAS NOT ENOUGH ON ITS OWN.
+//
+// The first version of this file stopped at "exactly one candidate or
+// nothing". Measured against the founder's own 757-note vault it typed ZERO
+// notes: of the 27 that arrived untyped, 14 matched SEVERAL types and 13
+// matched none. An importer that helps nobody is not safe, it is useless,
+// and the founder's ruling was explicit in both directions — "can you not
+// just fix them, use common sense" and "Importer guesses, you can correct".
+// A REPORTED guess is wanted. A SILENT WRONG guess is not.
+//
+// So when several types accept everything the note carries, they are
+// ranked, in one sentence a human can check:
+//
+//	BEST FIT = the share of the frontmatter that a type's notes ACTUALLY
+//	FILL IN which this note carries.
+//
+// Concretely: for each candidate type T, add up — across every note of
+// type T in the vault — how many times each of T's declared properties was
+// filled in with a real value. That total is T's evidence mass. The note's
+// score against T is the part of that mass belonging to the properties the
+// note itself carries, over the whole of it.
+//
+// Two properties of that rule are the point of it:
+//
+//   - It rewards carrying a type's COMMON properties, not merely being
+//     compatible with its rare ones. A generic org note carrying
+//     {created, updated, up, related} scores 75% against `note` (whose
+//     notes fill in little else) and 8% against `reference` (whose 48
+//     declared properties are mostly one-offs from a handful of notes),
+//     even though `reference` accepts it just as happily.
+//   - The vault's own note count CANCELS OUT of the ratio, so the score is
+//     an exact ratio of two integers. No floating point decides anything,
+//     the comparison is a cross-multiplication, and two identical runs
+//     produce byte-identical rankings.
+//
+// A WINNER MUST WIN CLEARLY. The top-ranked type is only written when it
+// beats the runner-up by at least bestFitMargin (5 percentage points). This
+// is not decoration: on the founder's vault, `note` scores 67.2% and `moc`
+// 66.7% on the same note, and a rule that let half a point decide would be
+// a coin toss dressed up with a number. Inside the margin the outcome is
+// AMBIGUOUS and the report prints the whole ranking, so the founder sees
+// the two contenders and the half-point between them and settles it in one
+// edit.
+//
+// A guess made this way is auditable in a single line: the report names the
+// type that won, every runner-up, and each one's score.
+//
+// WHAT THIS RULE DOES NOT DO. It never overrides conditions (1)-(4). Only
+// types that already accept every value the note carries are ranked at all,
+// so a best-fit winner is still, always, a type the note conforms to — the
+// acceptance bar (a typed note is never reported invalid by the same run)
+// is untouched by it, because ranking a set cannot add a member to it.
 //
 // A CONSEQUENCE OF (4) WORTH KNOWING. A record type evidenced by only a
 // handful of notes infers tight enums on fields that are really free text —
@@ -87,11 +139,197 @@ type TypeInferenceOutcome struct {
 	Written bool
 	// Candidates is every inferred type whose shape the note matched,
 	// sorted. Length 1 with Inferred set is the confident case; length > 1
-	// is the ambiguity that refuses to guess; length 0 is no match.
+	// means the best-fit rule was asked to choose; length 0 is no match.
 	Candidates []string
+	// Fit is every candidate scored by the best-fit rule, best first. It is
+	// populated only when there was more than one candidate — a sole
+	// candidate needs no ranking and gets none, so an empty Fit on a
+	// written note means "there was nothing to choose between".
+	Fit []TypeFit
+	// TieBroken reports that Inferred was CHOSEN from several candidates by
+	// the best-fit rule rather than being the only type that fit. It is the
+	// field that separates a certainty from a reported guess, and the
+	// report says so in those words.
+	TieBroken bool
 	// Reason states the outcome in words. NEVER empty — a recorded outcome
 	// with no reason is a silent skip wearing a report entry's clothes.
 	Reason string
+}
+
+// bestFitMarginNum/Den express the margin the top-ranked type must beat the
+// runner-up by, as an exact fraction rather than a float: 5 percentage
+// points. Stated as a ratio so the whole comparison stays in integers.
+//
+// WHY THERE IS A MARGIN AT ALL, with the case that forced it. On the
+// founder's vault, `02-Projects/content-production/content-production
+// MOC.md` scores 67.2% against `note` and 66.7% against `moc`. Both print
+// as "67%". A rule that wrote `note` there would be making a coin toss look
+// like a measurement — the exact dishonesty this package exists to avoid —
+// and the founder would have no way to see it was one. Under the margin it
+// is reported AMBIGUOUS with both numbers, which is the truth: the shape of
+// that note does not tell the two types apart.
+//
+// Five points is a judgement, and it is stated here rather than buried in a
+// condition so it can be argued with. It was chosen against the measured
+// vault: it lets through the 11 notes whose winner leads by 6 to 19 points,
+// and stops the 3 whose lead is half a point or less.
+const (
+	bestFitMarginNum = 5
+	bestFitMarginDen = 100
+)
+
+// TypeFit is one candidate type's best-fit score for one note.
+//
+// The score is Carried/Total and it is deliberately kept as the two
+// integers rather than a computed float: the comparison between two fits is
+// an exact cross-multiplication, and the report shows the working.
+type TypeFit struct {
+	// Type is the candidate.
+	Type string
+	// Carried is the summed evidence weight of the properties THIS NOTE
+	// carries — for each such property, how many notes of Type filled it
+	// in with a real value.
+	Carried int
+	// Total is the same sum over EVERY property Type declares.
+	Total int
+}
+
+// Percent renders the score for the report, to one decimal place.
+//
+// One decimal, not zero, and the reason is the `note` 67.2% / `moc` 66.7%
+// case above: rounded to whole percent both read "67%", and a report that
+// prints two identical numbers and then picks one of them teaches the
+// reader that the numbers are decoration.
+func (f TypeFit) Percent() float64 {
+	if f.Total <= 0 {
+		return 0
+	}
+	return 100 * float64(f.Carried) / float64(f.Total)
+}
+
+// String renders one ranked candidate, e.g. `note 67.2%`.
+func (f TypeFit) String() string {
+	return fmt.Sprintf("%s %.1f%%", f.Type, f.Percent())
+}
+
+// leads reports whether f's score exceeds other's by at least the best-fit
+// margin, in exact integer arithmetic:
+//
+//	f.Carried/f.Total - o.Carried/o.Total >= num/den
+//
+// multiplied out by the (positive) product of the denominators. int64 is
+// far more headroom than needed — the largest possible operand is bounded
+// by (notes x properties)^2, and the founder's vault gives ~10^10 against
+// int64's ~9.2x10^18 — but a silent overflow here would corrupt a decision
+// rather than fail one, so the widening is not left to chance.
+func (f TypeFit) leads(o TypeFit, num, den int) bool {
+	ft, ot := int64(f.Total), int64(o.Total)
+	if ft <= 0 || ot <= 0 {
+		// An unscorable candidate (no property of it was ever filled in by
+		// any note) cannot be shown to lead anything.
+		return false
+	}
+	lhs := (int64(f.Carried)*ot - int64(o.Carried)*ft) * int64(den)
+	return lhs >= int64(num)*ft*ot
+}
+
+// scoreFit computes one candidate's best-fit score against a note's keys.
+//
+// Only integers are added, so the result does not depend on the order the
+// declared properties are visited — which is what lets this walk a map
+// without sorting it first and still be bit-identical between runs.
+func scoreFit(keys []string, sh typeShape) TypeFit {
+	f := TypeFit{Type: sh.name}
+	for _, decl := range sh.declared {
+		f.Total += decl.ObservedCount
+	}
+	for _, k := range keys {
+		if decl, ok := sh.declared[k]; ok {
+			f.Carried += decl.ObservedCount
+		}
+	}
+	return f
+}
+
+// rankFit scores every candidate and sorts them best first, breaking equal
+// scores by name so a report never reshuffles between two identical runs.
+func rankFit(keys []string, candidates []string, shapes map[string]typeShape) []TypeFit {
+	fits := make([]TypeFit, 0, len(candidates))
+	for _, c := range candidates {
+		fits = append(fits, scoreFit(keys, shapes[c]))
+	}
+	sort.Slice(fits, func(i, j int) bool {
+		a, b := fits[i], fits[j]
+		// a > b  <=>  a.Carried/a.Total > b.Carried/b.Total, cross-multiplied.
+		l := int64(a.Carried) * int64(b.Total)
+		r := int64(b.Carried) * int64(a.Total)
+		if l != r {
+			return l > r
+		}
+		return a.Type < b.Type
+	})
+	return fits
+}
+
+// bestFitWinner returns the top-ranked type when it leads the runner-up by
+// at least the margin, and false when it does not.
+//
+// It is deliberately blind to everything except the ranking it is handed:
+// no preference for a type with more notes, no preference for a shorter
+// name, no fallback to "the first one alphabetically". A rule that reaches
+// for a second criterion the moment the first one is inconclusive is a rule
+// that always produces an answer, and always producing an answer is exactly
+// how an importer ends up writing coin tosses into somebody's files.
+func bestFitWinner(fits []TypeFit) (string, bool) {
+	if len(fits) < 2 {
+		return "", false
+	}
+	if !fits[0].leads(fits[1], bestFitMarginNum, bestFitMarginDen) {
+		return "", false
+	}
+	return fits[0].Type, true
+}
+
+// joinFits renders a whole ranking for the report.
+func joinFits(fits []TypeFit) string {
+	parts := make([]string, 0, len(fits))
+	for _, f := range fits {
+		parts = append(parts, f.String())
+	}
+	return strings.Join(parts, ", ")
+}
+
+// chooseType picks the type to write from a non-empty candidate list, and
+// returns the clause the report uses to justify it.
+//
+// It returns "" when the best-fit rule declines, and in that case it is
+// chooseType that writes out.Reason — the refusal has to carry the whole
+// ranking, which the caller does not have, and a refusal is a recorded
+// outcome exactly like a write.
+//
+// It MUTATES out (Fit, TieBroken, and Reason on a refusal). That is
+// deliberate and it is why it takes a pointer: the ranking is evidence for
+// the decision, and evidence that is computed and thrown away leaves a
+// report the founder cannot check.
+func chooseType(keys []string, out *TypeInferenceOutcome, shapes map[string]typeShape) (string, string) {
+	if len(out.Candidates) == 1 {
+		return out.Candidates[0], "its frontmatter shape matches that type and no other"
+	}
+
+	out.Fit = rankFit(keys, out.Candidates, shapes)
+	winner, ok := bestFitWinner(out.Fit)
+	if !ok {
+		out.Reason = fmt.Sprintf(
+			"left as is: it carries [%s] — %d inferred types accept every one of those values (%s), and BEST FIT cannot separate the top of the field: %s. A type is only written when it leads the runner-up by at least %d percentage points, and these are inside that margin, so picking one would be a coin toss written into your own file. One edit settles it: add `type: <one of those>` to the note, or narrow the schemas with knowledge_configure.",
+			strings.Join(keys, ", "), len(out.Candidates), strings.Join(out.Candidates, ", "),
+			joinFits(out.Fit), bestFitMarginNum)
+		return "", ""
+	}
+
+	out.TieBroken = true
+	return winner, fmt.Sprintf(
+		"BEST FIT, a reported guess rather than a certainty: %d inferred types accept everything this note carries, and it fills %.1f%% of the frontmatter that `%s` notes actually fill in, against %s. If that is wrong, one edit to `type:` corrects it",
+		len(out.Candidates), out.Fit[0].Percent(), winner, joinFits(out.Fit[1:]))
 }
 
 // TypeInferenceReport is FR-104b's whole account.
@@ -161,17 +399,26 @@ func InferTypesForUntypedNotes(notes []NoteRecord, inferred map[string][]Inferre
 				out.Reason = fmt.Sprintf(
 					"left as is: it carries [%s], and no inferred type declares all of those AND has every one of its own required properties present on this note. It is still fully indexed (FR-021e) and reachable through an untyped view.",
 					strings.Join(keys, ", "))
-			case 1:
-				out.Inferred = out.Candidates[0]
+			default:
+				// One candidate is a certainty; several is a job for the
+				// best-fit rule, which either names a clear winner or
+				// declines and leaves `chosen` empty.
+				chosen, why := chooseType(keys, &out, shapes)
+				if chosen == "" {
+					rep.Ambiguous++
+					break
+				}
+				out.Inferred = chosen
 				if !write {
 					rep.Written++
-					out.Reason = fmt.Sprintf("would write `type: %s` — its frontmatter shape matches that type and no other (dry run: nothing was written).", out.Inferred)
+					out.Reason = fmt.Sprintf("would write `type: %s` — %s (dry run: nothing was written).", out.Inferred, why)
 					break
 				}
 				if err := writeTypeKey(n.AbsPath, out.Inferred); err != nil {
 					rep.WriteErrors++
 					out.Inferred = ""
-					out.Reason = fmt.Sprintf("matched type %q but the file could NOT be edited: %v", out.Candidates[0], err)
+					out.TieBroken = false
+					out.Reason = fmt.Sprintf("matched type %q but the file could NOT be edited: %v", chosen, err)
 					break
 				}
 				out.Written = true
@@ -183,12 +430,7 @@ func InferTypesForUntypedNotes(notes []NoteRecord, inferred map[string][]Inferre
 				// run just wrote, which is the exact class of stale-read
 				// dishonesty this package exists to avoid.
 				adoptTypeInMemory(&n.Rec, out.Inferred)
-				out.Reason = fmt.Sprintf("wrote `type: %s` — its frontmatter shape matches that type and no other.", out.Inferred)
-			default:
-				rep.Ambiguous++
-				out.Reason = fmt.Sprintf(
-					"left as is: it carries [%s] — every one of which %d inferred types declare (%s), so nothing in this note's frontmatter tells them apart and picking one would be a coin toss written into your own file. One edit settles it: add `type: <one of those>` to the note, or narrow the schemas with knowledge_configure.",
-					strings.Join(keys, ", "), len(out.Candidates), strings.Join(out.Candidates, ", "))
+				out.Reason = fmt.Sprintf("wrote `type: %s` — %s.", out.Inferred, why)
 			}
 		}
 		rep.Notes = append(rep.Notes, out)

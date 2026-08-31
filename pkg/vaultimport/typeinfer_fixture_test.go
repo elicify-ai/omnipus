@@ -39,6 +39,13 @@ type note struct {
 	// want is the outcome this note is here to produce. Empty means the note
 	// carries a `type:` and is scaffolding, not a subject.
 	want wantOutcome
+	// wantTieBroken says the WRITTEN outcome must have been reached by the
+	// best-fit rule choosing between several candidates, not by there being
+	// only one. It is a separate field from `want` on purpose: "a type was
+	// written" and "a type was GUESSED and the guess was reported as one"
+	// are different promises, and a test that conflated them would pass
+	// while the reported-guess half quietly disappeared.
+	wantTieBroken bool
 	// why states, in one line, what the note is testing. It is printed in
 	// the failure message so a broken expectation names its own intent.
 	why string
@@ -102,7 +109,30 @@ func fixtureNotes() []note {
 		{rel: "milestones/M2.md", body: "---\ntype: milestone\nstatus: done\ndue: 2026-05-02\n---\n"},
 		{rel: "milestones/M3.md", body: "---\ntype: milestone\nstatus: open\ndue: 2026-05-03\n---\n"},
 
-		// --- the subjects: nine untyped notes, nine different shapes ------
+		// ticket and incident BOTH declare {severity, reporter} and both
+		// require both. A note carrying exactly those two keys therefore
+		// fits both on shape and on values — conditions (1)-(4) cannot
+		// separate them, which is the situation the best-fit rule exists
+		// for.
+		//
+		// What separates them is what their own notes actually fill in.
+		// Every ticket note fills in the whole of ticket (2 properties x 3
+		// notes = 6 filled values, all of them properties the subject note
+		// carries). Incident declares three more — resolved_at, postmortem,
+		// oncall — which only ONE of its three notes ever fills in, so a
+		// note carrying only {severity, reporter} covers 6 of incident's 9
+		// filled values. 100% against 66.7%: ticket wins by 33 points, far
+		// outside the 5-point margin, and gets WRITTEN with the ranking
+		// recorded.
+		{rel: "tickets/K1.md", body: "---\ntype: ticket\nseverity: high\nreporter: \"[[Alice]]\"\n---\n"},
+		{rel: "tickets/K2.md", body: "---\ntype: ticket\nseverity: low\nreporter: \"[[Bob]]\"\n---\n"},
+		{rel: "tickets/K3.md", body: "---\ntype: ticket\nseverity: high\nreporter: \"[[Dan]]\"\n---\n"},
+
+		{rel: "incidents/I1.md", body: "---\ntype: incident\nseverity: high\nreporter: \"[[Alice]]\"\nresolved_at: 2026-02-01\npostmortem: \"[[Bob]]\"\noncall: eng\n---\n"},
+		{rel: "incidents/I2.md", body: "---\ntype: incident\nseverity: low\nreporter: \"[[Bob]]\"\n---\n"},
+		{rel: "incidents/I3.md", body: "---\ntype: incident\nseverity: high\nreporter: \"[[Dan]]\"\n---\n"},
+
+		// --- the subjects: ten untyped notes, ten different shapes -------
 		{
 			rel:  "inbox/Quarterly plan.md",
 			body: "---\nstatus: active\nowner: \"[[Alice]]\"\ndue: 2026-04-01\n---\n\nThe plan.\n",
@@ -119,7 +149,14 @@ func fixtureNotes() []note {
 			rel:  "inbox/Loose item.md",
 			body: "---\nstatus: open\ndue: 2026-04-02\n---\n",
 			want: wantAmbiguous,
-			why:  "task and milestone declare the identical shape and both accept these values; picking one would be a coin toss.",
+			why:  "task and milestone declare the identical shape, accept the same values, and their notes fill both properties in equally often — so best fit scores them 100% each and, tied, declines to choose.",
+		},
+		{
+			rel:           "inbox/Sev report.md",
+			body:          "---\nseverity: high\nreporter: \"[[Alice]]\"\n---\n",
+			want:          wantWritten,
+			wantTieBroken: true,
+			why:           "ticket and incident both fit on shape AND on values; best fit separates them because this note fills 100% of what ticket notes fill in against 66.7% for incident.",
 		},
 		{
 			rel:  "inbox/Random thought.md",
@@ -157,6 +194,58 @@ func fixtureNotes() []note {
 			want: wantNoMatch,
 			why:  "project's `owner` was observed as a single link on every project note, so it is declared single-valued; a two-element list is the wrong arity for it.",
 		},
+	}
+}
+
+// TestFixture_EmailIsInferredAsTextNotEnum guards the seven-people count
+// above, which is load-bearing and looks like padding.
+//
+// THE TRAP IT CLOSES, because it cost a session to diagnose: with only TWO
+// person notes, `email` has two distinct values, enumSmallEnough (6) treats
+// any property with six or fewer distinct values as a closed vocabulary,
+// and `email` is declared enum(alice@…, bob@…). Condition (4) then refuses
+// to type ANY newcomer as a person, because their address is not one of the
+// two "permitted values" — and the fixture's "New colleague" note comes out
+// NO-MATCH. Nothing in the failure points at the fixture. It reads exactly
+// like a broken feature, and the obvious "fix" is to weaken condition (4),
+// which is the one condition that must never be weakened.
+//
+// A comment cannot stop that: the seven people are seven separate lines and
+// deleting four of them is an unremarkable-looking tidy-up. This asserts the
+// property the count exists to produce, so the tidy-up fails loudly here
+// instead of quietly reappearing as a bogus condition-(4) bug report.
+func TestFixture_EmailIsInferredAsTextNotEnum(t *testing.T) {
+	root := writeFixtureVault(t, fixtureNotes())
+
+	inv, err := ScanVault(root)
+	if err != nil {
+		t.Fatalf("scanning the fixture: %v", err)
+	}
+	notes, _, err := LoadNotes(inv)
+	if err != nil {
+		t.Fatalf("loading the fixture: %v", err)
+	}
+	groups := CollectTypeGroups(notes)
+	g, ok := groups["person"]
+	if !ok {
+		t.Fatal("the fixture has no `person` notes at all — this guard is measuring nothing")
+	}
+
+	var email InferredProperty
+	for _, p := range InferSchema(g, BuildNameIndex(notes)) {
+		if p.Name == "email" {
+			email = p
+		}
+	}
+	if email.Name == "" {
+		t.Fatal("`person` declares no `email` property — the fixture no longer exercises the trap")
+	}
+	if email.Type == records.TypeEnum {
+		t.Fatalf("`person.email` inferred as enum%v from %d person notes. An address is free text; the enum is an artefact of too few notes, and it makes every new person a NO-MATCH under condition (4). Add distinct addresses until there are more than enumSmallEnough (%d) of them — do NOT weaken condition (4).",
+			email.EnumValues, g.NoteCount, enumSmallEnough)
+	}
+	if email.Type != records.TypeText {
+		t.Errorf("`person.email` inferred as %s, want text", email.Type)
 	}
 }
 
@@ -247,6 +336,32 @@ func TestImporter_UntypedNotes_ExitProof(t *testing.T) {
 		}
 		if strings.TrimSpace(o.Reason) == "" {
 			t.Errorf("%s: outcome with no stated reason — an inference that cannot be explained is not an inference", n.rel)
+		}
+		if o.TieBroken != n.wantTieBroken {
+			t.Errorf("%s: TieBroken=%v, want %v — %s\n      reason given: %s", n.rel, o.TieBroken, n.wantTieBroken, n.why, o.Reason)
+		}
+		if !n.wantTieBroken {
+			continue
+		}
+		// A guess the founder cannot audit is not the guess he asked for.
+		// The reason has to name the winner, EVERY runner-up, and say in
+		// words that this was a guess — a bare "wrote type: ticket" reads
+		// exactly like the certain case and hides that a choice was made.
+		if len(o.Fit) != len(o.Candidates) {
+			t.Errorf("%s: %d candidates but %d were scored — a runner-up missing from the ranking is a runner-up the founder cannot see",
+				n.rel, len(o.Candidates), len(o.Fit))
+		}
+		if o.Fit[0].Type != o.Inferred {
+			t.Errorf("%s: wrote %q but the ranking is led by %q — the report would justify a different type than the one on disk",
+				n.rel, o.Inferred, o.Fit[0].Type)
+		}
+		for _, c := range o.Candidates {
+			if !strings.Contains(o.Reason, c) {
+				t.Errorf("%s: the reason never names candidate %q, so the founder cannot check the guess: %s", n.rel, c, o.Reason)
+			}
+		}
+		if !strings.Contains(o.Reason, "BEST FIT") {
+			t.Errorf("%s: a tie-broken write does not announce itself as a guess: %s", n.rel, o.Reason)
 		}
 	}
 
