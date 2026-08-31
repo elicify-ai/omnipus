@@ -260,50 +260,37 @@ independently.
    (`pkg/tools/base.go:241-251`), so this needs no new plumbing — the same
    situation as the session keys in D1.3.
 
-### D1.2 Unattended delegated work gets its own context
+### D1.2 One browser per workspace — everyone on it shares it
 
-**Workspace-keyed is the default for every operator-facing turn. A delegated
-sub-turn with no human attached is keyed by its transcript session id
-(`tools.ToolTranscriptSessionID`) instead, and therefore starts signed out.**
+**Superseding operator ruling, 2026-08-31 (Daniel Piatkowski): every agent on a
+workspace shares that workspace's browser and its logins, including unattended
+delegated work.**
 
-"Unattended" is defined by the mechanism that already distinguishes them:
-ADR-057 gives a delegated sub-turn its own `transcriptSessionID` while it
-inherits the parent's `routingSessionID`. A sub-turn is unattended when it is
-running under `spawnSubTurn` and no viewer is attached to the workspace's live
-panel.
+This reverses an earlier ruling the same day (unattended work gets its own
+signed-out context) and the reversal is informed, not a contradiction: when the
+isolation boundary was a CDP browser context inside one Chrome, a second jar
+was nearly free. Under D1.1a it is **another whole Chrome process per
+background job**. Weighed against that cost, the operator chose sharing.
 
-Trade-off, accepted: a background agent asked to check something behind a
-login will fail rather than silently act as the operator. That failure must
-name the reason ("this ran unattended and has no signed-in session"), or it
-becomes the class of invisible failure this ADR exists to remove.
+**The accepted risk, stated once:** an unattended agent can act as the operator
+on any site the workspace is signed into — a purchase, a post, a message sent
+by a process nobody is watching. `browser_upload_file`'s global `ask` seed
+(D2.9) is the one place this is still gated, and issue #659 is its prerequisite.
 
-#### D1.2a — two structural changes this requires, which an earlier revision missed
+**What this deletes, and it is the hardest part of the design:**
 
-Spec drafting (2026-08-31) found that "keyed by transcript session id,
-therefore signed out" **does not follow from the code as it stands**. Recorded
-here because the failure mode is silent: without both changes below, the
-unattended sub-turn is fully signed in and every obvious test still passes.
+- The attended/unattended discriminator. It does not need to exist. `spawnSubTurn`
+  inheriting the parent's `WorkspaceID` (`pkg/agent/subturn.go:1323`) is now
+  **correct behaviour**, not a gap.
+- The per-key browser-context map. `BrowserManager.browserCtxID` staying a
+  single field (`manager.go:381`) is now **correct**, because there is exactly
+  one context per manager and one manager per workspace.
+- `tools.ToolTranscriptSessionID` as a browsing key. Unused.
+- Acceptance criterion 4 ("a delegated sub-agent does not hijack the operator's
+  tab"). Deleted — it describes behaviour the operator has ruled desirable.
 
-1. **`BrowserManager.browserCtxID` is a single field** (`manager.go:381`),
-   applied to every session the manager bootstraps via
-   `chromedp.WithExistingBrowserContext(m.browserCtxID)` (`manager.go:1369`).
-   A second entry in `m.sessions` under a transcript key therefore reuses the
-   **same CDP browser context** — same cookies. **Required:** the single field
-   becomes a per-key map, and the unattended key gets its own
-   coordinator-owned browser context. This is a structural change, not
-   configuration.
-
-2. **There is no discriminator for "unattended".** `spawnSubTurn` *inherits*
-   the parent's workspace (`pkg/agent/subturn.go:1323`,
-   `WorkspaceID: parentTS.opts.WorkspaceID`), so a delegated child lands in the
-   parent's jar by default. `ToolDelegationDepth` is not the signal — it is set
-   only by `task_executor.go`, and is 0 for a `delegate`-spawned sub-turn. There
-   is also no viewer-count accessor for the "no viewer attached" half of the
-   definition. **Required:** both are new seams.
-
-This corrects D1.3's claim that "no new identity concept is introduced". The
-two *keys* exist and already reach every tool; the *discriminator* between
-attended and unattended does not, and must be built.
+The previous D1.2a, which specified those structural changes, is removed
+rather than amended. It solved a problem that no longer exists.
 
 ### D1.3 The keys already exist and already mean the right thing
 
@@ -699,13 +686,14 @@ The operator's three cases, which are the test plan:
 | 2 | Operator switches the chat from Mia to Jim mid-session | Jim sees and drives the same tabs. No handover step, no command |
 | 3 | Operator browses first, **then** asks an agent to take over | The tab was never owned by "whoever happened to be on screen"; any agent on that workspace **whose tool policy allows the browser surface** sees it |
 | 3b | The operator asks a **policy-denied** agent (e.g. Mia) what is open | It says it is **not permitted** to see the browser — never "there are no tabs". Without this, §1.1's exact symptom recurs with a new cause and identical output |
-| 4 | An agent delegates unattended background browsing | The sub-agent does not hijack the tab the operator is reading |
 | 5 | `browser_list_tabs` with no browsing context | Says so. Must not be indistinguishable from an empty tab set |
 | 5b | **Isolation survives the re-key (ADR-043 D2).** Log in to a site in workspace X; open the same site in workspace Y | Y is **logged out**. The amended ADR-043 guarantee, and the test that proves isolation moved rather than vanished |
 | 5c | **No surprise logout.** Log in during one chat; start a **new chat in the same workspace** and visit the same site | Still **logged in**. This is what the workspace axis buys over the conversation axis |
 
-Case 2 and case 3 are the ones broken today; 1 works; 4 and 5 are the
-regressions this design must not introduce.
+Case 2 and case 3 are the ones broken today; 1 works; 5 is the regression this
+design must not introduce. (Case 4 — "a delegated sub-agent does not hijack the
+operator's tab" — was deleted by the D1.2 superseding ruling: sharing is now
+the intended behaviour.)
 
 ### D2 — capability
 
@@ -722,7 +710,7 @@ regressions this design must not introduce.
 | 14 | `browser_navigate` on a `file://` URL returns an error **naming `serve_web` as the supported route** |
 | 15 | **Boot survives the new tools (Hard Constraint #6).** A fresh install boots with all six D2 tools registered and **no policy-coverage abort** |
 | 16 | **Two writers, one context (D2.10).** Two agents on one workspace issue `browser_navigate` concurrently — neither observes the other's mid-navigation state, and neither errors; the loser gets `{"deferred": true, …}` |
-| 17 | **Unattended work is signed out (D1.2).** A delegated sub-turn with no viewer attached opens a site the operator is signed into on that workspace — it is **logged out**, and the failure names the reason |
+| 17 | **Unattended work shares the workspace browser (D1.2).** A delegated sub-turn on a workspace the operator is signed into on **is signed in**, and reaches the same tab set. Asserted deliberately: this is the ruled behaviour, and a future change that silently isolates delegated work must fail here |
 | 18 | **A workspace-less turn resolves, never merges (D1.4).** A scheduled/heartbeat turn reaches the same browsing context as its re-rooted work dir — never a shared constant, never another agent's |
 
 Criteria 7 and 12 are the two whose failure mode is silent or wedging rather
