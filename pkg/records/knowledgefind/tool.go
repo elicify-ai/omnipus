@@ -246,10 +246,19 @@ func Parameters() map[string]any {
 				"description": "Relation properties whose columns to borrow onto each row. Borrowed values render as borrowed.",
 			},
 			"group_by": map[string]any{
-				"type":        "array",
-				"items":       map[string]any{"type": "string"},
-				"maxItems":    MaxGroupLevels,
-				"description": "Up to two levels. A record holding several values appears in every group it belongs to.",
+				"type": "array",
+				"items": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"property":  map[string]any{"type": "string"},
+						"direction": map[string]any{"type": "string", "enum": []string{"asc", "desc"}},
+					},
+					"required": []string{"property"},
+				},
+				"maxItems": MaxGroupLevels,
+				"description": "Up to two levels, outermost first. A record holding several values appears in every " +
+					"group it belongs to. Each key takes its own direction for the GROUP order (default asc); " +
+					"a number or date orders naturally, an enum lexically, and the absent group is last either way.",
 			},
 			"sort": map[string]any{
 				"type": "array",

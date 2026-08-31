@@ -53,8 +53,8 @@ func TestViewFindLoader_MechanicalFieldsCarryOver(t *testing.T) {
 	if req.Type == nil || *req.Type != "deal" {
 		t.Fatalf("Type = %v, want deal", req.Type)
 	}
-	if req.GroupBy == nil || (*req.GroupBy)[0] != "stage" {
-		t.Fatalf("GroupBy = %v, want [stage]", req.GroupBy)
+	if req.GroupBy == nil || (*req.GroupBy)[0].Property != "stage" {
+		t.Fatalf("GroupBy = %+v, want [stage]", req.GroupBy)
 	}
 	if req.Select == nil || len(*req.Select) != 2 || (*req.Select)[0] != "name" {
 		t.Fatalf("Select = %v, want [name amount]", req.Select)

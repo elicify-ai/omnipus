@@ -186,11 +186,16 @@ func explainResponse(q *query, echo string) generated.VaultFindResponse {
 		})
 	}
 	for _, g := range q.groupBy {
+		dir := "ascending"
+		if g.desc {
+			dir = "descending"
+		}
 		plan = append(plan, generated.VaultFindPlanStep{
 			Stage:    generated.Group,
-			Property: str(g),
+			Property: str(g.property),
 			Source:   sourcePtr(generated.VaultFindPlanStepSourceGoComparator),
-			Detail:   "grouped on " + g + " by folded key; a record with several values joins several groups",
+			Detail: "grouped on " + g.property + " by folded key, groups " + dir +
+				" (absent last either way); a record with several values joins several groups",
 		})
 	}
 	for _, s := range q.sort {

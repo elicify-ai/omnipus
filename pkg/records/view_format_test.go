@@ -217,8 +217,16 @@ property_config:
 	if req.Filter == v.Def.Filter {
 		t.Error("the request aliases the saved view's own tree; a request the engine normalises in place would then rewrite the view on disk's in-memory copy")
 	}
-	if req.GroupBy == nil || !reflect.DeepEqual(*req.GroupBy, []string{"state", "maker"}) {
-		t.Errorf("request group_by = %v, want [state maker]", req.GroupBy)
+	// THE DIRECTION CROSSES WITH THE KEY, and an OMITTED one stays omitted.
+	// `state` declares no direction and `maker` declares `asc`; a bridge that
+	// filled the first one in would be inventing a declaration the file never
+	// made, and one that dropped the second would be the flattening this seam
+	// used to refuse rather than perform.
+	if req.GroupBy == nil || !reflect.DeepEqual(*req.GroupBy, []generated.VaultFindGroupBy{
+		{Property: "state"},
+		{Property: "maker", Direction: ptr(generated.VaultFindGroupByDirectionAsc)},
+	}) {
+		t.Errorf("request group_by = %+v, want [state(no direction) maker/asc]", req.GroupBy)
 	}
 	if req.Select == nil || !reflect.DeepEqual(*req.Select, []string{"name", "state"}) {
 		t.Errorf("request select = %v, want [name state]", req.Select)

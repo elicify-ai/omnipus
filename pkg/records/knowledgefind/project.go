@@ -193,14 +193,16 @@ func buildGroups(q *query, e *evaluation) []generated.VaultFindGroup {
 	type bucket struct {
 		key    string
 		absent bool
+		order  records.TypedValue
+		hasVal bool
 		rows   []survivor
 	}
 	order := []string{}
 	buckets := map[string]*bucket{}
 
 	for _, s := range e.survivors {
-		keys, unresolved := groupKeys(q, s, outer)
-		reportUnresolvedRelation(e, s, outer, unresolved)
+		keys, unresolved := groupKeys(q, s, outer.property)
+		reportUnresolvedRelation(e, s, outer.property, unresolved)
 		for _, key := range keys {
 			id := key.bucket
 			if key.absent {
@@ -208,7 +210,7 @@ func buildGroups(q *query, e *evaluation) []generated.VaultFindGroup {
 			}
 			b, ok := buckets[id]
 			if !ok {
-				b = &bucket{key: key.key, absent: key.absent}
+				b = &bucket{key: key.key, absent: key.absent, order: key.order, hasVal: !key.absent}
 				buckets[id] = b
 				order = append(order, id)
 			}
@@ -218,14 +220,17 @@ func buildGroups(q *query, e *evaluation) []generated.VaultFindGroup {
 
 	sort.SliceStable(order, func(i, j int) bool {
 		bi, bj := buckets[order[i]], buckets[order[j]]
-		return groupOrderLess(bi.key, bi.absent, order[i], bj.key, bj.absent, order[j])
+		return groupOrderLess(
+			groupOrder{key: bi.key, id: order[i], absent: bi.absent, value: bi.order, hasValue: bi.hasVal},
+			groupOrder{key: bj.key, id: order[j], absent: bj.absent, value: bj.order, hasValue: bj.hasVal},
+			outer.desc)
 	})
 
 	out := make([]generated.VaultFindGroup, 0, len(order))
 	for _, id := range order {
 		b := buckets[id]
 		g := generated.VaultFindGroup{
-			Property: outer,
+			Property: outer.property,
 			Key:      b.key,
 			Count:    len(b.rows),
 			Paths:    pathsOf(b.rows),
@@ -242,25 +247,32 @@ func buildGroups(q *query, e *evaluation) []generated.VaultFindGroup {
 	return out
 }
 
-func buildSubgroups(q *query, e *evaluation, property string, rows []survivor) []generated.VaultFindSubgroup {
+// buildSubgroups is the inner level, and it reads its OWN direction from its
+// OWN key. The two levels are independent: `group_by=[{owner}, {stage, desc}]`
+// runs owners ascending and stages descending inside each one, because that is
+// what was asked for. Applying the outer key's direction to both would answer a
+// question nobody put.
+func buildSubgroups(q *query, e *evaluation, key groupSpec, rows []survivor) []generated.VaultFindSubgroup {
 	type bucket struct {
 		key    string
 		absent bool
+		order  records.TypedValue
+		hasVal bool
 		rows   []survivor
 	}
 	order := []string{}
 	buckets := map[string]*bucket{}
 	for _, s := range rows {
-		keys, unresolved := groupKeys(q, s, property)
-		reportUnresolvedRelation(e, s, property, unresolved)
-		for _, key := range keys {
-			id := key.bucket
-			if key.absent {
+		keys, unresolved := groupKeys(q, s, key.property)
+		reportUnresolvedRelation(e, s, key.property, unresolved)
+		for _, k := range keys {
+			id := k.bucket
+			if k.absent {
 				id = "\x00absent"
 			}
 			b, ok := buckets[id]
 			if !ok {
-				b = &bucket{key: key.key, absent: key.absent}
+				b = &bucket{key: k.key, absent: k.absent, order: k.order, hasVal: !k.absent}
 				buckets[id] = b
 				order = append(order, id)
 			}
@@ -269,13 +281,16 @@ func buildSubgroups(q *query, e *evaluation, property string, rows []survivor) [
 	}
 	sort.SliceStable(order, func(i, j int) bool {
 		bi, bj := buckets[order[i]], buckets[order[j]]
-		return groupOrderLess(bi.key, bi.absent, order[i], bj.key, bj.absent, order[j])
+		return groupOrderLess(
+			groupOrder{key: bi.key, id: order[i], absent: bi.absent, value: bi.order, hasValue: bi.hasVal},
+			groupOrder{key: bj.key, id: order[j], absent: bj.absent, value: bj.order, hasValue: bj.hasVal},
+			key.desc)
 	})
 	out := make([]generated.VaultFindSubgroup, 0, len(order))
 	for _, id := range order {
 		b := buckets[id]
 		g := generated.VaultFindSubgroup{
-			Property: property,
+			Property: key.property,
 			Key:      b.key,
 			Count:    len(b.rows),
 			Paths:    pathsOf(b.rows),
@@ -288,29 +303,79 @@ func buildSubgroups(q *query, e *evaluation, property string, rows []survivor) [
 	return out
 }
 
-// groupOrderLess is the sort predicate shared by buildGroups and
-// buildSubgroups: absent last, then by the FOLDED display key (R-5c: `Won`,
-// `won` and `WON` sort as one, the same order equality groups them by), with
-// ties broken on the bucket identity itself so the order is total and
-// deterministic (R-5d's rule, generalised from a value's raw bytes to a
-// group's dedupe key — for a relation that key IS the record identity, which
-// is exactly the tiebreaker two same-titled-but-distinct targets need).
+// groupOrder is one bucket, reduced to what deciding its position needs.
 //
-// It is a plain function over the four scalars rather than a generic over
+// It carries both a display key and a VALUE because the two answer different
+// questions. `key` is what the reader sees and what a relation group is
+// identified by; `value` is the typed thing the comparator can order — and for
+// a number or a date those two disagree in a way that matters: as text, "9"
+// sorts after "12".
+type groupOrder struct {
+	key      string
+	id       string
+	absent   bool
+	value    records.TypedValue
+	hasValue bool
+}
+
+// groupOrderLess is the sort predicate shared by buildGroups and
+// buildSubgroups.
+//
+// THE ORDER, IN FULL:
+//
+//  1. ABSENT LAST, IN BOTH DIRECTIONS. This is a decision, and it is the same
+//     one row sorting already makes (assemble.go's compareByProperty). A record
+//     with no value has not got a small value and has not got a large one
+//     either: absence is OUTSIDE the order, not at one end of it. Letting
+//     `desc` reverse it would put "nobody recorded this" first, precisely where
+//     a reader asking for the biggest group is looking.
+//  2. BY VALUE, THROUGH THE COMPARATOR (records.Compare), so grouping orders a
+//     number numerically and a date chronologically. This is the clause that
+//     makes `desc` mean something: descending a backlink count must put 12
+//     before 9, and the folded-text order below puts "12" before "9" because
+//     `1` < `9`. The comparator is asked rather than a switch written here, so
+//     grouping inherits R-1's domains rather than growing a second opinion
+//     about what orders — including R-5/R-E's ruling that an enum orders
+//     LEXICALLY over its value with no declared-position ordinal
+//     (records.comparisonDomain maps enum onto text).
+//  3. BY THE FOLDED DISPLAY KEY, when the comparator declines to order the two
+//     (a relation, a person, a checkbox — R-1 defines no ordering for them) or
+//     when it calls them equal. R-5c: `Won`, `won` and `WON` order as one, the
+//     same order equality groups them by.
+//  4. BY THE BUCKET IDENTITY, so the order is total and deterministic (R-5d's
+//     rule, generalised from a value's raw bytes to a group's dedupe key — for
+//     a relation that key IS the record identity, which is exactly the
+//     tiebreaker two same-titled-but-distinct targets need).
+//
+// THE IDENTITY TIEBREAK IS NOT REVERSED BY `desc`, and that is deliberate. It
+// is not part of the order the caller asked for; it exists so two runs of one
+// query cannot return the same groups in different arrangements. Reversing it
+// would make `desc` a claim about something the caller never expressed.
+//
+// It is a plain function over two small structs rather than a generic over
 // the two local bucket types: a type declared INSIDE a function cannot carry
 // a method in Go, and lifting it to package scope purely to satisfy a type
-// constraint would cost more clarity than the six lines of duplication it
+// constraint would cost more clarity than the few lines of duplication it
 // removes.
-func groupOrderLess(keyI string, absentI bool, idI, keyJ string, absentJ bool, idJ string) bool {
-	if absentI != absentJ {
-		// Absence sorts last: "nobody recorded this" is not a value, and
-		// leading with it puts the least informative group first.
-		return !absentI
+func groupOrderLess(a, b groupOrder, desc bool) bool {
+	if a.absent != b.absent {
+		return !a.absent
 	}
-	if fi, fj := records.FoldKey(keyI), records.FoldKey(keyJ); fi != fj {
-		return records.FoldLess(keyI, keyJ)
+	if a.hasValue && b.hasValue {
+		if c, ok := records.Compare(a.value, b.value); ok && c != 0 {
+			if desc {
+				return c > 0
+			}
+			return c < 0
+		}
 	}
-	return idI < idJ
+	if fa, fb := records.FoldKey(a.key), records.FoldKey(b.key); fa != fb {
+		if desc {
+			return records.FoldLess(b.key, a.key)
+		}
+		return records.FoldLess(a.key, b.key)
+	}
+	return a.id < b.id
 }
 
 type groupKey struct {
@@ -326,6 +391,14 @@ type groupKey struct {
 	// rewritten wikilink cannot fork a group the way a raw-text bucket would.
 	bucket string
 	absent bool
+	// order is the TYPED value this group orders by — the same value the
+	// comparator would be handed in a filter. It is carried beside the display
+	// text because the two order differently the moment the property is a
+	// number or a date: `12` sorts before `9` as text and after it as a
+	// number, and a descending group of backlink counts is unreadable if the
+	// first is used. Zero for an absent group, which never reaches a value
+	// comparison (groupOrderLess puts absence outside the order).
+	order records.TypedValue
 }
 
 // groupKeys is FR-028: a record with several values belongs to several
@@ -378,7 +451,7 @@ func groupKeys(q *query, s survivor, property string) (keys []groupKey, unresolv
 			continue
 		}
 		seen[bucket] = true
-		keys = append(keys, groupKey{key: display, bucket: bucket})
+		keys = append(keys, groupKey{key: display, bucket: bucket, order: v})
 	}
 	if len(keys) == 0 {
 		if len(unresolved) > 0 {

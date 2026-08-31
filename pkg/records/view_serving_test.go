@@ -72,22 +72,27 @@ func loadBridgeView(t *testing.T, root string, schemas *SchemaSet, body string) 
 }
 
 // ---------------------------------------------------------------------------
-// Seam 1 — the grouping direction find's request cannot carry
+// Seam 1 — the grouping direction, CLOSED
 // ---------------------------------------------------------------------------
 
-// TestViewFindLoader_DescendingGroupIsRefusedNotFlattened.
+// TestViewFindLoader_GroupDirectionCrossesRatherThanRefuses.
 //
-// VaultFindRequest.group_by is a bare []string with NO direction field.
-// Serving a descending grouping through it would reorder the groups
-// ascending in silence — which is precisely the failure ViewGroupBy was added
-// to end: 24 real `groupBy` directions in the founder's vault were flattened
-// to the default and nothing anywhere said so.
+// THIS TEST ASSERTED THE OPPOSITE UNTIL THE SEAM CLOSED. It was called
+// TestViewFindLoader_DescendingGroupIsRefusedNotFlattened, and it required
+// ServeRefusalGroupDirection on any view grouping DESCENDING — because
+// VaultFindRequest.group_by was a bare []string with no direction field, so
+// serving such a view would have reordered its groups ascending in silence.
+// That was the correct behaviour while it stood: 24 real `groupBy` directions
+// in the founder's vault were flattened by the retired flat view format and
+// nothing anywhere said so, and refusing is the honest answer to "I cannot
+// carry what you recorded".
 //
-// An ASCENDING key, and one with no direction at all, still cross — because
-// ascending IS the documented default, so for those nothing is lost. That
-// asymmetry is the test's real content: a blanket refusal would pass the
-// first assertion while making the feature unusable.
-func TestViewFindLoader_DescendingGroupIsRefusedNotFlattened(t *testing.T) {
+// `group_by` now carries a direction per key (VaultFindGroupBy), so there is
+// nothing left to refuse. What this test guards is that the direction is
+// CARRIED — not that the refusal is gone. A bridge that dropped the direction
+// and served the view anyway would pass a test asserting only `ok == true`,
+// while doing the exact thing the refusal existed to prevent.
+func TestViewFindLoader_GroupDirectionCrossesRatherThanRefuses(t *testing.T) {
 	mk := func(dir *generated.ViewGroupByDirection) *SavedView {
 		return &SavedView{Def: generated.ViewDef{
 			Name: "g", Type: ptr("lot"),
@@ -95,37 +100,72 @@ func TestViewFindLoader_DescendingGroupIsRefusedNotFlattened(t *testing.T) {
 		}}
 	}
 
-	desc := NewViewFindLoader(newSet(mk(ptr(generated.ViewGroupByDirectionDesc))))
-	if req, ok := desc.View("g"); ok {
-		t.Fatalf("a descending grouping was served as group_by=%v, through a request that cannot carry a direction; the groups would come back ascending with nothing to say so", req.GroupBy)
-	}
-	refusal, has := desc.ServeRefusal("g")
-	if !has {
-		t.Fatal("the view is unservable and no reason was reported")
-	}
-	if refusal.Code != ServeRefusalGroupDirection {
-		t.Fatalf("refusal code = %q, want %q (%s)", refusal.Code, ServeRefusalGroupDirection, refusal.Reason)
-	}
-	if !strings.Contains(refusal.Reason, "state") {
-		t.Errorf("the reason does not name the grouping key it refused: %s", refusal.Reason)
-	}
-
 	for _, tc := range []struct {
 		name string
 		dir  *generated.ViewGroupByDirection
+		want *generated.VaultFindGroupByDirection
 	}{
-		{"ascending", ptr(generated.ViewGroupByDirectionAsc)},
-		{"unspecified", nil},
+		{"descending", ptr(generated.ViewGroupByDirectionDesc), ptr(generated.VaultFindGroupByDirectionDesc)},
+		{"ascending", ptr(generated.ViewGroupByDirectionAsc), ptr(generated.VaultFindGroupByDirectionAsc)},
+		{"unspecified", nil, nil},
 	} {
-		t.Run(tc.name+" crosses losslessly", func(t *testing.T) {
-			req, ok := NewViewFindLoader(newSet(mk(tc.dir))).View("g")
-			if !ok {
-				t.Fatal("ascending is the documented default, so nothing is lost and this view must still be servable")
+		t.Run(tc.name, func(t *testing.T) {
+			loader := NewViewFindLoader(newSet(mk(tc.dir)))
+
+			if r, has := loader.ServeRefusal("g"); has {
+				t.Fatalf("the view is refused as %s: %s\nA direction the request can carry is not a reason to refuse the view.", r.Code, r.Reason)
 			}
-			if req.GroupBy == nil || len(*req.GroupBy) != 1 || (*req.GroupBy)[0] != "state" {
-				t.Fatalf("GroupBy = %v, want [state]", req.GroupBy)
+			req, ok := loader.View("g")
+			if !ok {
+				t.Fatal("View(\"g\") = false; the request carries a group direction now, so this view is servable")
+			}
+			if req.GroupBy == nil || len(*req.GroupBy) != 1 {
+				t.Fatalf("GroupBy = %+v, want one key on state", req.GroupBy)
+			}
+			got := (*req.GroupBy)[0]
+			if got.Property != "state" {
+				t.Fatalf("GroupBy[0].Property = %q, want state", got.Property)
+			}
+			switch {
+			case tc.want == nil && got.Direction != nil:
+				t.Fatalf("the view declares NO direction and the request came back with %q; "+
+					"asc is the documented default, stated rather than declared, so filling it in here "+
+					"invents a declaration the view file never made", string(*got.Direction))
+			case tc.want != nil && got.Direction == nil:
+				t.Fatalf("the view groups %q and the request came back with no direction at all — "+
+					"the groups would be ordered ascending with nothing anywhere to say so, "+
+					"which is the exact silence ServeRefusalGroupDirection used to refuse rather than perform",
+					string(*tc.dir))
+			case tc.want != nil && *got.Direction != *tc.want:
+				t.Fatalf("GroupBy[0].Direction = %q, want %q", string(*got.Direction), string(*tc.want))
 			}
 		})
+	}
+}
+
+// TestServeRefusalGroupDirection_IsNeverEmitted pins the retired refusal code.
+//
+// The constant is kept for readers (see its doc comment on ViewServeRefusalCode
+// — it is wire-visible, it has appeared in operator-facing refusal text and in
+// the importer's own loss report, and a reader searching for why a view was
+// once unservable should land on the explanation rather than on nothing). What
+// must not come back is a code path that PRODUCES it.
+//
+// It walks a DESCENDING view — the only shape that ever produced this code —
+// through the same Unservable() report an operator reads, so a reintroduced
+// refusal fails here rather than being discovered as a missing view.
+func TestServeRefusalGroupDirection_IsNeverEmitted(t *testing.T) {
+	loader := NewViewFindLoader(newSet(&SavedView{Def: generated.ViewDef{
+		Name: "descending", Type: ptr("lot"),
+		Grouping: ptr([]generated.ViewGroupBy{
+			{Property: "state", Direction: ptr(generated.ViewGroupByDirectionDesc)},
+			{Property: "maker", Direction: ptr(generated.ViewGroupByDirectionDesc)},
+		}),
+	}}))
+	for _, r := range loader.Unservable() {
+		if r.Code == ServeRefusalGroupDirection {
+			t.Fatalf("a view was refused as %s: %s\nThe request carries a group direction per key now; refusing the view makes every descending grouping in the vault unservable again.", r.Code, r.Reason)
+		}
 	}
 }
 

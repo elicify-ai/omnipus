@@ -35,7 +35,7 @@ func TestExplain_NamesEveryPropertyAndItsIndex(t *testing.T) {
 	yes := true
 	sorts := []generated.VaultFindSort{{Property: "planted"}}
 	aggs := []generated.VaultFindAggregate{{Op: "sum", Property: strPtr("height_cm")}}
-	groups := []string{"condition"}
+	groups := []generated.VaultFindGroupBy{{Property: "condition"}}
 
 	r := req(withType("plant"), withFilter(generated.VaultFilterNode{
 		All: &[]generated.VaultFilterNode{
@@ -239,7 +239,7 @@ func TestGroup_ARecordWithSeveralValuesJoinsEveryGroup(t *testing.T) {
 	f.write("garden/b.md", "---\ntype: plant\nid: PL-0002\nspecies: Fern\nlabels: [indoor]\n---\n")
 	f.write("garden/c.md", "---\ntype: plant\nid: PL-0003\nspecies: Fern\n---\n")
 
-	groups := []string{"labels"}
+	groups := []generated.VaultFindGroupBy{{Property: "labels"}}
 	r := req(withType("plant"))
 	r.GroupBy = &groups
 	resp := mustFind(t, f.deps(), r)

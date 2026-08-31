@@ -125,12 +125,26 @@ const (
 	// applied, because something in a row-set-affecting position could not be
 	// translated when it was imported.
 	ServeRefusalDisabled ViewServeRefusalCode = "view_disabled"
-	// ServeRefusalGroupDirection — a `grouping` key asking for
-	// descending group order. VaultFindRequest.group_by is a bare []string
-	// with no direction field, so serving this view would flatten the
-	// direction to ascending IN SILENCE — which is the precise failure
-	// ViewGroupBy was added to end (24 of them in the founder's own vault).
-	// Refused instead, until find's request carries a direction.
+	// ServeRefusalGroupDirection is RETIRED and nothing emits it.
+	//
+	// It named the refusal of every view whose `grouping` asked for DESCENDING
+	// group order. VaultFindRequest.group_by was a bare []string with no
+	// direction field, so serving such a view would have flattened the
+	// direction to ascending IN SILENCE — the precise failure ViewGroupBy was
+	// added to end (24 of them in the founder's own vault). Refusing was the
+	// right call for as long as the request could not carry the answer.
+	//
+	// The request carries it now: `group_by` is a list of VaultFindGroupBy,
+	// each with its own direction, and translateViewQuery copies the view's
+	// direction across unchanged. There is nothing left to refuse.
+	//
+	// The CONSTANT is kept, and deliberately, on the precedent
+	// ServeRefusalFormula set below: it is a wire-visible code that has
+	// appeared in operator-facing refusal text and in the importer's own loss
+	// report, and a reader searching for why a view was once unservable should
+	// land on this explanation rather than on nothing.
+	// TestServeRefusalGroupDirection_IsNeverEmitted pins that no code path
+	// produces it.
 	ServeRefusalGroupDirection ViewServeRefusalCode = "group_direction_not_representable"
 	// ServeRefusalFormula is RETIRED and nothing emits it.
 	//
@@ -364,16 +378,23 @@ func translateViewMechanical(def generated.ViewDef) generated.VaultFindRequest {
 // tree. The filter is a DEEP COPY rather than a translation: a view's `filter`
 // already IS find's tree.
 //
-// ONE THING STILL DOES NOT FIT THROUGH THIS SEAM, and it is refused with a
-// reason rather than dropped: a `grouping` key asking for DESCENDING group
-// order. VaultFindRequest.group_by is a bare []string, so the direction would
-// be flattened to ascending in silence, which is exactly the loss ViewGroupBy
-// exists to end. Ascending IS the documented default, so an ascending key (or
-// one with no direction) crosses losslessly. That is a seam in
-// VaultFindRequest, not a defect in the view; it closes by giving find's
-// request a directional group key.
+// NOTHING IS REFUSED HERE ANY MORE, and the last thing that was is worth
+// naming. A `grouping` key asking for DESCENDING group order used to be
+// refused (ServeRefusalGroupDirection), because VaultFindRequest.group_by was
+// a bare []string and the direction would have been flattened to ascending in
+// silence — exactly the loss ViewGroupBy exists to end. The refusal was
+// correct while it stood: a view is never served as a question other than the
+// one it records.
 //
-// `formulas` USED TO BE THE SECOND ONE, AND IT IS NOT ANY MORE. This function
+// The seam is closed rather than widened. `group_by` is now a list of
+// VaultFindGroupBy, each carrying its own direction, so the view's direction
+// is COPIED here instead of being tested for. It is a copy and not a
+// translation: both enums are the same two spellings, and the query path
+// validates the value it receives rather than trusting this seam
+// (request.go's applyColumns, which refuses any direction that is not one of
+// the two).
+//
+// `formulas` USED TO BE ANOTHER ONE, AND IT IS NOT ANY MORE. This function
 // refused every view declaring a formula, on the grounds that
 // VaultFindRequest has no formulas key. The premise was true and the
 // conclusion did not follow: the request never needed one, because the
@@ -390,21 +411,25 @@ func translateViewMechanical(def generated.ViewDef) generated.VaultFindRequest {
 // refusal.
 func translateViewQuery(def generated.ViewDef, req generated.VaultFindRequest) (generated.VaultFindRequest, *ViewServeRefusal) {
 	if def.Grouping != nil {
-		names := make([]string, 0, len(*def.Grouping))
+		keys := make([]generated.VaultFindGroupBy, 0, len(*def.Grouping))
 		for _, g := range *def.Grouping {
-			if g.Direction != nil && *g.Direction == generated.ViewGroupByDirectionDesc {
-				return generated.VaultFindRequest{}, &ViewServeRefusal{
-					Name: def.Name,
-					Code: ServeRefusalGroupDirection,
-					Reason: fmt.Sprintf("view %q groups by %q in descending order, and a knowledge_find request's `group_by` carries no direction: serving it would silently reorder the groups ascending",
-						def.Name, g.Property),
-					Remedy: "group ascending, or write the query directly and order the groups yourself",
-				}
+			key := generated.VaultFindGroupBy{Property: g.Property}
+			// THE DIRECTION CROSSES, AND AN UNKNOWN SPELLING CROSSES TOO.
+			// Mapping only `desc` and letting anything else fall through as
+			// ascending would reinstate the silent flattening this seam was
+			// refusing, one layer lower and harder to see. A value that is
+			// neither `asc` nor `desc` cannot be written by ParseView, so
+			// reaching here means the file was edited past validation — and
+			// the query path refuses it BY NAME (applyColumns) rather than
+			// quietly picking a direction for it.
+			if g.Direction != nil {
+				dir := generated.VaultFindGroupByDirection(string(*g.Direction))
+				key.Direction = &dir
 			}
-			names = append(names, g.Property)
+			keys = append(keys, key)
 		}
-		if len(names) > 0 {
-			req.GroupBy = &names
+		if len(keys) > 0 {
+			req.GroupBy = &keys
 		}
 	}
 	if def.Filter != nil {

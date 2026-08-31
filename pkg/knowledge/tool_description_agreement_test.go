@@ -236,11 +236,22 @@ func TestKnowledgeConfigure_WriteView_FormulaBearingViewIsServable(t *testing.T)
 	// that a real refusal carries one, so the remedy contract stays guarded.
 }
 
-// TestKnowledgeConfigure_WriteView_DescendingGroupingIsReportedUnservable —
-// the second half of the same seam. VaultFindRequest.group_by is a bare
-// []string, so serving this view would flatten the direction to ascending in
-// silence.
-func TestKnowledgeConfigure_WriteView_DescendingGroupingIsReportedUnservable(t *testing.T) {
+// TestKnowledgeConfigure_WriteView_DisabledViewIsReportedUnservable —
+// the second half of the same seam, and the LAST live one.
+//
+// IT USED A DESCENDING GROUPING UNTIL THAT SEAM CLOSED. `group_by` was a bare
+// []string, so serving such a view would have flattened the direction to
+// ascending in silence, and the write said so. `group_by` carries a direction
+// per key now (VaultFindGroupBy) and a descending grouping is served as
+// written, so keeping it here would assert the opposite of the truth — the
+// same inversion the formula sibling above went through.
+//
+// FR-105's `disabled` is what remains, and it is the case that matters most:
+// an imported view whose filter could not be fully translated MUST NOT be
+// applied, because applying it would return MORE rows than the Obsidian
+// original while looking entirely correct. This test keeps the "NOT SERVABLE"
+// machinery under test on a refusal that is really emitted.
+func TestKnowledgeConfigure_WriteView_DisabledViewIsReportedUnservable(t *testing.T) {
 	home, ws, _ := a4Fixture(t, "kb")
 	deps, _ := a4Deps(home)
 	tool := NewConfigureTool(deps)
@@ -253,15 +264,16 @@ func TestKnowledgeConfigure_WriteView_DescendingGroupingIsReportedUnservable(t *
 	}).IsError)
 
 	res := tool.Execute(a4Ctx("mia", ws), map[string]any{
-		"collection": "kb", "op": "write_view", "view": "by-stage-desc",
+		"collection": "kb", "op": "write_view", "view": "half-translated",
 		"definition": map[string]any{
-			"type":     "deal",
-			"grouping": []any{map[string]any{"property": "stage", "direction": "desc"}},
+			"type":         "deal",
+			"disabled":     true,
+			"untranslated": []any{`file.inFolder("99-Temp")`},
 		},
 	})
 	require.Falsef(t, res.IsError, "%s", res.ForLLM)
 	require.Contains(t, res.ForLLM, "NOT SERVABLE by knowledge_find")
-	require.Contains(t, res.ForLLM, string(records.ServeRefusalGroupDirection))
+	require.Contains(t, res.ForLLM, string(records.ServeRefusalDisabled))
 }
 
 // TestKnowledgeConfigure_WriteView_ServableViewIsNotLabelledUnservable is the
@@ -315,22 +327,31 @@ func TestKnowledgeConfigure_WriteView_UntypedViewIsNamedAsUntyped(t *testing.T) 
 // knowledge_describe — the same fact, on the surface that says "look here first"
 // ---------------------------------------------------------------------------
 
-// TestDescribeViews_UnservableViewIsMarkedInTheListing — knowledge_describe's
+// TestDescribeViews_UnusableViewIsMarkedInTheListing — knowledge_describe's
 // own head line says "ask for one by name before inventing a filter". For a
-// formula-bearing view that instruction fails at the next call. The listing
-// now says so, in the same words the write and the query path use.
-func TestDescribeViews_UnservableViewIsMarkedInTheListing(t *testing.T) {
+// view knowledge_find will not run, that instruction fails at the next call.
+// The listing says so, under the view it describes.
+//
+// IT USED A FORMULA-BEARING VIEW, THEN A DESCENDING GROUPING, AND BOTH BECAME
+// SERVABLE. Formulas travel beside the request through the loader;
+// `group_by` carries a direction per key (VaultFindGroupBy). So the generic
+// "NOT SERVABLE by knowledge_find" line (renderViewServeRefusal) has NO LIVE
+// EMITTER any more, and this test does not pretend otherwise — asserting it
+// would be asserting a string no vault can produce.
+//
+// FR-105's `disabled` is the refusal that remains, it has its own line
+// (renderViewDisabled), and it is the one that matters most: applying such a
+// view would return MORE rows than the Obsidian original while looking
+// entirely correct. What is under test is unchanged in substance — a view an
+// agent must not reuse is marked, in the listing, under itself, and a usable
+// view beside it is not.
+func TestDescribeViews_UnusableViewIsMarkedInTheListing(t *testing.T) {
 	root := t.TempDir()
 	writeUnderMarker(t, root, "records", "widget.yaml", describeViewWidgetSchema)
 	schemas, _, err := records.LoadSchemas(root)
 	require.NoError(t, err)
-	// A DESCENDING GROUPING, not a formula: formula-bearing views became
-	// SERVABLE when that seam closed, so using one here would assert the
-	// opposite of the truth. VaultFindRequest.group_by is a bare []string, so
-	// serving this one would flatten the direction to ascending in silence —
-	// which is what the mark exists to warn an agent about.
 	writeUnderMarker(t, root, "views", "twice.yaml",
-		"name: twice\ntype: widget\ngrouping:\n  - property: batch\n    direction: desc\n")
+		"name: twice\ntype: widget\ndisabled: true\nuntranslated:\n  - 'file.inFolder(\"99-Temp\")'\n")
 	writeUnderMarker(t, root, "views", "plain.yaml", "name: plain\ntype: widget\n")
 	views, report, err := records.LoadViews(root, schemas)
 	require.NoError(t, err)
@@ -340,19 +361,30 @@ func TestDescribeViews_UnservableViewIsMarkedInTheListing(t *testing.T) {
 	renderViews(&b, DescribeData{Views: views})
 	out := b.String()
 
-	require.Contains(t, out, "NOT SERVABLE by knowledge_find",
+	require.Contains(t, out, "DISABLED",
 		"a view knowledge_find refuses must be marked in the listing an agent reads first")
-	require.Contains(t, out, string(records.ServeRefusalGroupDirection))
+	require.Contains(t, out, "returns nothing",
+		"the mark must say what happens if the agent asks for it anyway, not just name a state")
 
-	// The servable view must NOT carry the mark — otherwise the mark means
-	// nothing and both assertions above would pass against a renderer that
+	// The usable view must NOT carry the mark — otherwise the mark means
+	// nothing and the assertions above would pass against a renderer that
 	// stamped every view.
-	require.Equal(t, 1, strings.Count(out, "NOT SERVABLE"),
-		"exactly one of the two views is unservable; got:\n%s", out)
-	require.NotContains(t, viewSegment(t, out, "plain"), "NOT SERVABLE",
-		"a servable view was labelled unservable")
-	require.Contains(t, viewSegment(t, out, "twice"), "NOT SERVABLE",
+	require.Equal(t, 1, strings.Count(out, "DISABLED"),
+		"exactly one of the two views is unusable; got:\n%s", out)
+	require.NotContains(t, viewSegment(t, out, "plain"), "DISABLED",
+		"a usable view was labelled disabled")
+	require.Contains(t, viewSegment(t, out, "twice"), "DISABLED",
 		"the mark must sit under the view it describes, not somewhere else in the listing")
+
+	// AND THE GENERIC MARK HAS NO EMITTER. This is the ServeRefusalFormula
+	// pattern applied to a renderer rather than a constant: the line is kept
+	// because it reads the refusal generically off the loader, so a future
+	// refusal code reaches the listing on its own — but nothing produces one
+	// today, and a reader must not take its presence in the code for a guard
+	// that is currently catching something.
+	require.NotContains(t, out, "NOT SERVABLE by knowledge_find",
+		"no refusal code is emitted for a loadable view any more; if one is, this listing's "+
+			"expectations (and renderViewServeRefusal's doc comment) need revisiting rather than this line deleting")
 }
 
 // viewSegment returns the lines renderViews emitted for ONE view: its head

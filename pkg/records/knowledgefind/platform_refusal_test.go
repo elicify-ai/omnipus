@@ -112,7 +112,7 @@ func TestKnowledgeFind_Grouping_RefusesOnSQLiteLessBuild(t *testing.T) {
 	d := refusalDeps(t)
 	records.AssertRefusesWhenIndexUnavailable(t, records.CapabilityGrouping,
 		func() (generated.VaultFindResponse, error) {
-			group := []string{"condition"}
+			group := []generated.VaultFindGroupBy{{Property: "condition"}}
 			r := req(withType("plant"))
 			r.GroupBy = &group
 			return Find(context.Background(), d, r)

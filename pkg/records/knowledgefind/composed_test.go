@@ -279,7 +279,7 @@ func composedRequest() (generated.VaultFindRequest, composedViews) {
 			},
 		},
 		Sort:    &[]generated.VaultFindSort{{Property: payload, Direction: &desc}},
-		GroupBy: &[]string{tags},
+		GroupBy: &[]generated.VaultFindGroupBy{{Property: tags}},
 		Aggregate: &[]generated.VaultFindAggregate{
 			{Op: generated.VaultFindAggregateOp(opCount)},
 			{Op: generated.VaultFindAggregateOp(opSum), Property: &payload},

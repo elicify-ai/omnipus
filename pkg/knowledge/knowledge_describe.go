@@ -362,14 +362,25 @@ func renderViews(b *strings.Builder, d DescribeData) {
 // actually run it.
 //
 // THE HEAD LINE ABOVE SAYS "ask for one by name before inventing a filter",
-// AND FOR SOME VIEWS THAT INSTRUCTION FAILS. A view declaring `formulas`, or
-// a grouping key in DESCENDING order, is written faithfully, listed here in
-// full, and then refused by knowledge_find with "no saved view named X" — a
-// statement that is false about a view this very listing just showed. The
-// refusal itself is right (VaultFindRequest has no field for either, and
-// serving the view anyway would answer a broader question than it asks); what
-// was missing is that the agent following this listing had no way to know
-// before it called.
+// AND FOR SOME VIEWS THAT INSTRUCTION USED TO FAIL. A view declaring
+// `formulas`, or a grouping key in DESCENDING order, was written faithfully,
+// listed here in full, and then refused by knowledge_find with "no saved view
+// named X" — a statement that is false about a view this very listing just
+// showed. Each refusal was right while it stood (VaultFindRequest had a field
+// for neither, and serving the view anyway would have answered a broader or a
+// differently-ordered question than it asks); what was missing is that the
+// agent following this listing had no way to know before it called.
+//
+// BOTH OF THOSE SEAMS ARE NOW CLOSED, so as of today this function has NO LIVE
+// EMITTER and renders nothing: formulas travel beside the request through the
+// loader, `group_by` carries a direction per key, and the only refusal left —
+// ServeRefusalDisabled — is skipped here on purpose (see the last paragraph).
+// It is kept rather than deleted because it reads the refusal GENERICALLY off
+// the loader, so the day a new refusal code is added the listing states it
+// without anyone remembering to come back here. That is the whole of its
+// value, and it is stated plainly so no reader mistakes it for a guard that is
+// currently catching something. The mark an operator actually sees today comes
+// from renderViewDisabled.
 //
 // The reason comes from records.ViewFindLoader — the SAME object knowledge_find
 // resolves views through — rather than from a second copy of its rules here.

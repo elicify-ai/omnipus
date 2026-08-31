@@ -86,7 +86,7 @@ type query struct {
 	near       string
 	hops       int
 	join       []string
-	groupBy    []string
+	groupBy    []groupSpec
 	sort       []sortKey
 	selectCols []string
 	aggregates []aggregate
@@ -126,6 +126,25 @@ type query struct {
 }
 
 type sortKey struct {
+	property string
+	desc     bool
+	prop     *records.Property
+}
+
+// groupSpec is ONE validated grouping key — the property, the direction the
+// GROUPS run in, and the declared property the direction is interpreted
+// against.
+//
+// It carries the same three fields as sortKey and for the same reason: the
+// direction is meaningless without the declared type. `desc` over an `enum`
+// reverses a LEXICAL order (R-5/R-E: an enum has no declared-position ordinal,
+// and records.comparisonDomain maps it onto text), while `desc` over an
+// `integer` or a `date` reverses a NATURAL one. Grouping used to be a bare
+// []string, which is exactly why a view that recorded `direction: desc` could
+// not be served at all (records.ServeRefusalGroupDirection): there was nowhere
+// in the executed query to put the answer, so refusing was the only honest
+// option left.
+type groupSpec struct {
 	property string
 	desc     bool
 	prop     *records.Property
@@ -364,12 +383,37 @@ func (q *query) applyColumns(req generated.VaultFindRequest) *RefusalError {
 				fmt.Sprintf("group_by names %d levels; the limit is %d", len(*req.GroupBy), MaxGroupLevels),
 				"group by the outer property, then run a second knowledge_find inside the group you want"), nil)
 		}
-		for _, name := range *req.GroupBy {
-			if _, r := lookup("group_by", name); r != nil {
+		for _, g := range *req.GroupBy {
+			prop, r := lookup("group_by", g.Property)
+			if r != nil {
 				return r
 			}
-			q.groupBy = append(q.groupBy, name)
-			q.touched = append(q.touched, name)
+			// THE DIRECTION IS VALIDATED, not pattern-matched against "desc" —
+			// the same rule `sort` applies immediately below, for the same
+			// reason. `desc := *g.Direction == "desc"` alone would make
+			// `descending`, `DESC` and `down` all group ASCENDING with nothing
+			// said, which is the precise silence a directional group key was
+			// added to end. Unlike sort, grouping refuses NEITHER a `many`
+			// property (FR-028 puts one record in several groups on purpose)
+			// NOR a relation (FR-029 groups by target identity); a relation's
+			// GROUPS still order by their rendered label, because that is what
+			// a group is identified by on the page.
+			if g.Direction != nil && !g.Direction.Valid() {
+				p := problem(generated.UnsupportedParameter,
+					fmt.Sprintf("group_by names direction %q on %q, which is not a group direction",
+						string(*g.Direction), g.Property),
+					`use "asc" or "desc", or omit direction — omitted means asc`)
+				p.Property = str(g.Property)
+				permitted := []string{
+					string(generated.VaultFindGroupByDirectionAsc),
+					string(generated.VaultFindGroupByDirectionDesc),
+				}
+				p.Permitted = &permitted
+				return refuse(p, nil)
+			}
+			desc := g.Direction != nil && *g.Direction == generated.VaultFindGroupByDirectionDesc
+			q.groupBy = append(q.groupBy, groupSpec{property: g.Property, desc: desc, prop: prop})
+			q.touched = append(q.touched, g.Property)
 		}
 	}
 	if req.Sort != nil {

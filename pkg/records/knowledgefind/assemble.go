@@ -61,7 +61,7 @@ func (q *query) renderProperties() []*records.Property {
 		add(s.property)
 	}
 	for _, g := range q.groupBy {
-		add(g)
+		add(g.property)
 	}
 	for _, a := range q.aggregates {
 		if a.property != "" {
@@ -104,8 +104,16 @@ func (q *query) echo() string {
 	if len(q.join) > 0 {
 		parts = append(parts, "join="+strings.Join(q.join, ","))
 	}
-	if len(q.groupBy) > 0 {
-		parts = append(parts, "group_by="+strings.Join(q.groupBy, ","))
+	// THE EXECUTED ECHO NAMES THE DIRECTION, exactly as it does for `sort`.
+	// FR-122 makes this echo a claim about what RAN; a descending grouping
+	// echoed as a bare property name is the same silence the direction was
+	// added to end, moved one surface along.
+	for _, g := range q.groupBy {
+		dir := "asc"
+		if g.desc {
+			dir = "desc"
+		}
+		parts = append(parts, "group_by="+g.property+" "+dir)
 	}
 	for _, s := range q.sort {
 		dir := "asc"
@@ -563,7 +571,13 @@ func rawEcho(req generated.VaultFindRequest) string {
 		parts = append(parts, "join="+strings.Join(*req.Join, ","))
 	}
 	if req.GroupBy != nil {
-		parts = append(parts, "group_by="+strings.Join(*req.GroupBy, ","))
+		for _, g := range *req.GroupBy {
+			dir := "asc"
+			if g.Direction != nil {
+				dir = string(*g.Direction)
+			}
+			parts = append(parts, "group_by="+g.Property+" "+dir)
+		}
 	}
 	if req.Select != nil {
 		parts = append(parts, "select="+strings.Join(*req.Select, ","))

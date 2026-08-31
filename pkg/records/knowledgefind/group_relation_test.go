@@ -195,7 +195,7 @@ func TestGroupByRelation_IdentityNotDisplayText(t *testing.T) {
 	f.plant("PL-0001", "Monstera", "Greenhouse")
 	f.plant("PL-0002", "Fern", "The Big Greenhouse")
 
-	groups := []string{"bed"}
+	groups := []generated.VaultFindGroupBy{{Property: "bed"}}
 	r := req(withType("plant"))
 	r.GroupBy = &groups
 	resp := mustFind(t, f.deps(), r)
@@ -224,7 +224,7 @@ func TestGroupByRelation_UnresolvedIsExcludedAndReported(t *testing.T) {
 	f.plant("PL-0001", "Monstera", "Greenhouse")
 	f.plant("PL-0002", "Fern", "Nonexistent Bed")
 
-	groups := []string{"bed"}
+	groups := []generated.VaultFindGroupBy{{Property: "bed"}}
 	r := req(withType("plant"))
 	r.GroupBy = &groups
 	resp, err := Find(context.Background(), f.deps(), r)
@@ -289,7 +289,7 @@ func TestGroupByText_FoldsAcrossRecords(t *testing.T) {
 	f.plant("PL-0002", "monstera", "Greenhouse")
 	f.plant("PL-0003", "MONSTERA", "Greenhouse")
 
-	groups := []string{"species"}
+	groups := []generated.VaultFindGroupBy{{Property: "species"}}
 	r := req(withType("plant"))
 	r.GroupBy = &groups
 	resp := mustFind(t, f.deps(), r)
@@ -325,7 +325,7 @@ func TestGroupByRelation_NoResolverDegradesRatherThanExcludesEverything(t *testi
 	d := f.deps()
 	d.Resolve = nil
 
-	groups := []string{"bed"}
+	groups := []generated.VaultFindGroupBy{{Property: "bed"}}
 	r := req(withType("plant"))
 	r.GroupBy = &groups
 	resp := mustFind(t, d, r)
@@ -361,7 +361,7 @@ func TestGroupByRelation_ManyValuedRecordJoinsEveryGroup(t *testing.T) {
 	f.plantWithCompanions("PL-0002", "Fern", "Cactus Friend")
 	f.plantWithCompanions("PL-0003", "Cactus")
 
-	groups := []string{"companions"}
+	groups := []generated.VaultFindGroupBy{{Property: "companions"}}
 	r := req(withType("plant"))
 	r.GroupBy = &groups
 	resp := mustFind(t, f.deps(), r)
@@ -478,7 +478,7 @@ func TestGroupByInverse_IsRefusedNotAConfidentWrongAnswer(t *testing.T) {
 	f.bed("BED-GH", "Greenhouse")
 	f.plant("PL-0001", "Monstera", "Greenhouse")
 
-	groups := []string{"plants"}
+	groups := []generated.VaultFindGroupBy{{Property: "plants"}}
 	r := req(withType("bed"))
 	r.GroupBy = &groups
 	resp, err := Find(context.Background(), f.deps(), r)
