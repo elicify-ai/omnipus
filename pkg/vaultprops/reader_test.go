@@ -203,6 +203,22 @@ func (s *verdictSpy) AllPaths(context.Context, func(path, kind, sourceHash strin
 	return nil
 }
 
+// The three methods below exist ONLY so this spy still satisfies
+// propindex.Store after FR-131's two child tables and FR-136's stat refresh
+// were added to it. This spy's whole subject is the verdict the integrity
+// sweep returns per candidate (see the test below), and none of the three
+// participates in that; each is a mechanical interface-satisfaction stub and
+// nothing here should grow behaviour.
+func (s *verdictSpy) Tags(context.Context, propindex.Selector, func(propindex.TagHit) error) error {
+	return nil
+}
+func (s *verdictSpy) Links(context.Context, propindex.Selector, func(propindex.LinkHit) error) error {
+	return nil
+}
+func (s *verdictSpy) RefreshNoteStat(context.Context, string, int64, int64) (bool, error) {
+	return false, nil
+}
+
 // TestReader_EveryCandidateIsRejectedSoTheSweepCannotHitTheSurvivorBound.
 //
 // propindex aborts a stream once ACCEPTED candidates exceed BoundSurvivors

@@ -89,6 +89,16 @@ type SyncStats struct {
 	// directory, so a trashed note's old path simply stops appearing in the
 	// walk and is removed the same way a deletion is) or unreadable this run.
 	Removed int
+	// StatRefreshed is FR-136's count: paths this run did NOT re-index —
+	// their content was unchanged — whose stat had nevertheless drifted and
+	// was corrected by a metadata-only UPDATE.
+	//
+	// It counts only the skip path. A path that was fully re-indexed this run
+	// gets its stat stamped as part of that write and is reported under
+	// Indexed, not here: "how many rows did we correct without re-reading
+	// them" is the number FR-136 is about, and folding the re-indexed ones in
+	// would make it unfalsifiable.
+	StatRefreshed int
 	// Problems is every path Sync could not fully account for, and every
 	// schema file LoadSchemas rejected.
 	Problems []SyncProblem
@@ -113,6 +123,83 @@ type SyncOptions struct {
 type storedNoteState struct {
 	kind string
 	hash string
+}
+
+// ---------------------------------------------------------------------------
+// FR-136 — THE STAT SEAM, AND WHY IT IS SHAPED LIKE THIS
+//
+// Until Draft 11 the properties index held only {path, kind, record_type,
+// record_id, source_hash}. Nothing in that row could go stale without the
+// note's BYTES changing, so "same hash, skip it" was a complete freshness
+// test. FR-130/FR-131 put mtime, ctime and size on the row, and that stopped
+// being true in the same change: `git checkout`, `rsync`, `touch`, an iCloud
+// resync and a `mv` back and forth all move a file's stat without moving one
+// byte of its content.
+//
+// The consequence is the specific kind of defect this project's own
+// false-green doc is about — there is no error, no refusal and no gap. `sort
+// by file.mtime desc` (the commonest Bases view there is) simply returns a
+// plausible, stable, WRONG order, frozen at whenever each note last changed
+// content. Nobody looking at the result can tell.
+//
+// ATTACHMENTS ARE THE WORSE HALF. ADR-067's FR-039a forbids opening an
+// attachment, so it carries no hash, so the skip above was unconditional: an
+// attachment's row never changed once written. That was exactly right while
+// the row held {Path, Kind} and nothing else — there was nothing about it that
+// COULD change without its path changing. With size and mtime on the row it is
+// false, and a picture replaced in place would report its FIRST-EVER size
+// forever. Stat is not open, so the fix costs nothing FR-039a objects to: the
+// walk already stat'd the file, and the refresh uses the walk's own numbers.
+//
+// THE COMPARISON LIVES INSIDE THE UPDATE, AND THAT IS WHY THIS SEAM IS ONE
+// METHOD. Store.RefreshNoteStat sets the stat columns only where they differ
+// and reports whether anything changed, so Sync needs no prior-stat read to
+// make the decision with — which in turn is why Store.AllPaths keeps exactly
+// the shape it has always had. The alternative (widen the maintenance walk to
+// carry the stored stat, compare in Go) costs a signature change at every
+// implementation and every caller for a comparison that is free where the row
+// already is. FR-136's stated cost is met either way: one comparison per
+// walked file, one UPDATE per drifted file.
+//
+// THE BOOL IS LOAD-BEARING. SyncStats.StatRefreshed counts the trues, and it
+// is what makes this requirement falsifiable at all: "the mtime ends up
+// correct" is equally satisfied by a full re-index, which is the bug rather
+// than the fix. The count separates the two.
+//
+// CTIME IS DELIBERATELY NOT REFRESHED HERE, AND THAT IS A NAMED GAP RATHER
+// THAN AN OVERSIGHT. FR-133 says `file.ctime` is the file's BIRTH time where
+// the platform records one, and ABSENT where it does not — explicitly NOT the
+// misnamed POSIX inode-change time, which moves on a permission change and is
+// routinely later than the modification time. knowledge.ScanEntry carries
+// Size and ModTimeNanos from Lstat and no birth time at all
+// (pkg/knowledge/scan.go), so THE WALK HAS NO CTIME TO REFRESH FROM. Writing a
+// zero, or substituting st_ctime, would be a wrong answer with no error
+// channel — the precise failure this requirement exists to remove — so the
+// value stays absent, which FR-133 declares legal. Birth time becomes
+// refreshable when the WALK carries it; that is a pkg/knowledge seam, named
+// here so nobody has to discover it by wondering why ctime never moves.
+// ---------------------------------------------------------------------------
+
+// refreshStatIfDrifted is FR-136's decision for one entry this run did NOT
+// re-index: hand the store the stat the walk observed and let it correct the
+// row if — and only if — that differs from what it holds.
+//
+// The numbers are the WALK's own. Nothing is re-stat'd, and for an attachment
+// nothing is opened, so ADR-067's FR-039a is untouched: stat is not open.
+func refreshStatIfDrifted(
+	ctx context.Context,
+	store propindex.Store,
+	entry knowledge.ScanEntry,
+	stats *SyncStats,
+) error {
+	changed, err := store.RefreshNoteStat(ctx, entry.RelPath, entry.Size, entry.ModTimeNanos)
+	if err != nil {
+		return fmt.Errorf("vaultprops: refreshing the stat of %q: %w", entry.RelPath, err)
+	}
+	if changed {
+		stats.StatRefreshed++
+	}
+	return nil
 }
 
 // Sync builds or incrementally updates the properties index for one
@@ -249,16 +336,27 @@ func Sync(ctx context.Context, home, collectionRoot string, opts SyncOptions) (S
 		}
 
 		if entry.Kind == knowledge.ScanKindAttachment {
-			// FR-039a mirrored exactly: an attachment's bytes are never
-			// opened, so it carries no hash and its row never changes once
-			// written — there is nothing about it that COULD change without
-			// its path changing, and a path change is a different row.
+			// FR-039a still holds exactly: an attachment's bytes are never
+			// opened, so it carries no hash and its CONTENT-derived rows never
+			// change once written.
+			//
+			// FR-136 is what changed here. "Its row never changes once
+			// written" was true of a row holding {Path, Kind} and is FALSE of
+			// one holding size and mtime: an attachment replaced in place —
+			// same name, new picture — would otherwise report its first-ever
+			// size forever. The refresh reads the WALK's stat, which
+			// knowledge.Scan already took; the file itself is never opened, so
+			// nothing about FR-039a is relaxed.
 			if prev, had := previous[entry.RelPath]; had && prev.kind == propindex.KindAttachment {
 				stats.Unchanged++
+				if err := refreshStatIfDrifted(ctx, store, entry, &stats); err != nil {
+					return stats, err
+				}
 				continue
 			}
 			if err := store.UpsertNote(ctx, propindex.NoteRows{
 				Path: entry.RelPath, Kind: propindex.KindAttachment,
+				Size: entry.Size, MtimeNanos: entry.ModTimeNanos,
 			}); err != nil {
 				return stats, fmt.Errorf("vaultprops: indexing attachment %q: %w", entry.RelPath, err)
 			}
@@ -291,7 +389,16 @@ func Sync(ctx context.Context, home, collectionRoot string, opts SyncOptions) (S
 
 		hash := propindex.SourceHash(src)
 		if prev, had := previous[entry.RelPath]; had && prev.kind == propindex.KindNote && prev.hash == hash {
+			// CONTENT is unchanged — the note is not re-parsed and its
+			// property, relation and task rows are left exactly as they are.
+			// STAT is a separate question (FR-136): this is the branch a `git
+			// checkout`, an rsync, a `touch` or an iCloud resync lands in, and
+			// before this refresh existed it was where file.mtime and
+			// file.size went to freeze.
 			stats.Unchanged++
+			if err := refreshStatIfDrifted(ctx, store, entry, &stats); err != nil {
+				return stats, err
+			}
 			continue
 		}
 
@@ -321,6 +428,11 @@ func Sync(ctx context.Context, home, collectionRoot string, opts SyncOptions) (S
 		}
 
 		rows := propindex.BuildNoteRows(rec, schema, src, hash)
+		// Stat is set ON THE INSERT, not by a follow-up UPDATE. A row that is
+		// briefly wrong is a row a concurrent reader can observe, and a note
+		// that reports size 0 for the width of one extra statement is exactly
+		// the kind of transient wrong answer this index is built to not have.
+		rows.Size, rows.MtimeNanos = entry.Size, entry.ModTimeNanos
 		if err := store.UpsertNote(ctx, rows); err != nil {
 			return stats, fmt.Errorf("vaultprops: indexing %q: %w", entry.RelPath, err)
 		}
