@@ -380,7 +380,8 @@ type RecordValue = {
     | "date"
     | "integer"
     | "decimal"
-    | "person";
+    | "person"
+    | "checkbox";
   text?: string | undefined;
   enum?: string | undefined;
   relation?: RecordRef | undefined;
@@ -388,6 +389,7 @@ type RecordValue = {
   integer?: string | undefined;
   decimal?: string | undefined;
   person?: RecordRef | undefined;
+  checkbox?: boolean | undefined;
 };
 type RecordRef = {
   link: string;
@@ -4168,6 +4170,7 @@ export const RecordValue: z.ZodType<RecordValue> = z.object({
     "integer",
     "decimal",
     "person",
+    "checkbox",
   ]),
   text: z.string().optional(),
   enum: z.string().min(1).optional(),
@@ -4186,6 +4189,7 @@ export const RecordValue: z.ZodType<RecordValue> = z.object({
     .regex(/^-?(0|[1-9][0-9]*)(\.[0-9]{1,100})?$/)
     .optional(),
   person: RecordRef.optional(),
+  checkbox: z.boolean().optional(),
 });
 export const RecordPropertyValue: z.ZodType<RecordPropertyValue> = z.object({
   property: z.string().min(1),

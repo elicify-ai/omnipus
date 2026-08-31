@@ -126,11 +126,10 @@ const FormulaDefaultScale int32 = 10
 //   - ABSENT has no comparator type because absence is a STATE, not a type; the
 //     comparator already expresses it as PropertyValue.State (R-3).
 //
-// `checkbox` is written as a string literal rather than a constant because
-// FR-004c's `TypeCheckbox` is landing in schema.go in a separate change. When
-// it lands this line becomes `TypeCheckbox` with no behaviour change —
-// formula_type_test.go asserts the string and the constant agree, so the day the
-// constant exists and disagrees, a test says so.
+// FR-004c's `TypeCheckbox` has landed in schema.go, so the boolean case names
+// the constant. It was a string literal while the constant was still in flight;
+// formula_type_test.go asserts the two agree, which is what made the swap a
+// non-event rather than a thing to remember.
 func FormulaPropertyType(t FormulaType) (PropertyType, bool) {
 	switch t {
 	case FormulaNumber:
@@ -142,7 +141,7 @@ func FormulaPropertyType(t FormulaType) (PropertyType, bool) {
 	case FormulaLink:
 		return TypeRelation, true
 	case FormulaBoolean:
-		return PropertyType("checkbox"), true
+		return TypeCheckbox, true
 	}
 	return "", false
 }
@@ -159,8 +158,7 @@ func formulaTypeOfProperty(t PropertyType) (FormulaType, bool) {
 		return FormulaDate, true
 	case TypeInteger, TypeDecimal:
 		return FormulaNumber, true
-	}
-	if string(t) == "checkbox" {
+	case TypeCheckbox:
 		return FormulaBoolean, true
 	}
 	return "", false

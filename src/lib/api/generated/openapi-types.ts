@@ -4812,17 +4812,18 @@ export interface components {
         };
         /**
          * RecordValue
-         * @description ONE value of one property, tagged with the property type that governs it (ADR-068 D3). Exactly one of the seven value fields is populated, and which one is named by `type`.
+         * @description ONE value of one property, tagged with the property type that governs it (ADR-068 D3). Exactly one of the eight value fields is populated, and which one is named by `type`.
+         *     THE COUNT IS EIGHT, AND IT MATCHES PropertyDef. `checkbox` (FR-004c, ADR-068 D24.5) joined the property types in spec Draft 11; this schema was left at seven, so `PropertyDef.type` accepted a type that had no wire representation at all — a property an operator could declare and the wire could never carry one value of. Do not "correct" the count back to seven.
          *     NUMBERS ARE CARRIED AS DECIMAL STRINGS, never as JSON numbers — both `integer` and `decimal`. A JSON `type: number` in this contract generates a Go float32 (float64 only with `format: double`) and a JavaScript number; binary floating point cannot represent 0.1 exactly, and it cannot represent 2^53+1 at all, so a value would drift on a round trip nobody performed deliberately. FR-020b forbids a binary float anywhere in the storage or retrieval path, and the wire is part of that path.
          *     ABSENCE IS NOT A VALUE. A property with no value carries no RecordValue at all — its RecordPropertyValue.values array is empty (D3.2, FR-007). This matters: "days I did not meditate" must be answerable, and it is not answerable in a model where absent and false are the same state.
          */
         RecordValue: {
             /**
-             * @description Which of the seven property types governs this value, and therefore which field below is populated.
+             * @description Which of the eight property types governs this value, and therefore which field below is populated.
              * @example decimal
              * @enum {string}
              */
-            type: "text" | "enum" | "relation" | "date" | "integer" | "decimal" | "person";
+            type: "text" | "enum" | "relation" | "date" | "integer" | "decimal" | "person" | "checkbox";
             /**
              * @description Populated when type is "text". Prose; never compared for equality (D3).
              * @example Introduced by a mutual contact at a conference.
@@ -4851,6 +4852,12 @@ export interface components {
              */
             decimal?: string;
             person?: components["schemas"]["RecordRef"];
+            /**
+             * @description Populated when type is "checkbox" (FR-004c, ADR-068 D24.5). A real JSON boolean, and that is deliberate rather than inconsistent with `integer` and `decimal` above: those are strings because a JSON number becomes a binary float and loses exactness, and a boolean has no such hazard — `true` round-trips as `true` in both generated languages.
+             *     ABSENT IS THE THIRD STATE and it is NOT `false`. A property with no value carries no RecordValue at all (D3.2, FR-007), so a `checkbox: false` on the wire means the note WROTE `false`, never that it said nothing. "Days I did not meditate" is the days with no value; "days I recorded not meditating" is this field set to false. They are different questions and this schema keeps them different.
+             * @example true
+             */
+            checkbox?: boolean;
         };
         /**
          * RecordRef

@@ -4015,6 +4015,7 @@ func (e RecordSortDirection) Valid() bool {
 
 // Defines values for RecordValueType.
 const (
+	Checkbox RecordValueType = "checkbox"
 	Date     RecordValueType = "date"
 	Decimal  RecordValueType = "decimal"
 	Enum     RecordValueType = "enum"
@@ -4027,6 +4028,8 @@ const (
 // Valid indicates whether the value is a known member of the RecordValueType enum.
 func (e RecordValueType) Valid() bool {
 	switch e {
+	case Checkbox:
+		return true
 	case Date:
 		return true
 	case Decimal:
@@ -12223,7 +12226,8 @@ type RecordAggregateResult struct {
 	// Refused True when NO figure is returned. Set for an aggregate over a refused candidate set (FR-066), and whenever a figure could not be computed exactly — an exactness this contract can promise because every numeric value on the wire is a decimal string, never a binary float. When true, `value` and `count` are absent and the reason is in the response's `problems`.
 	Refused bool `json:"refused"`
 
-	// Value ONE value of one property, tagged with the property type that governs it (ADR-068 D3). Exactly one of the seven value fields is populated, and which one is named by `type`.
+	// Value ONE value of one property, tagged with the property type that governs it (ADR-068 D3). Exactly one of the eight value fields is populated, and which one is named by `type`.
+	// THE COUNT IS EIGHT, AND IT MATCHES PropertyDef. `checkbox` (FR-004c, ADR-068 D24.5) joined the property types in spec Draft 11; this schema was left at seven, so `PropertyDef.type` accepted a type that had no wire representation at all — a property an operator could declare and the wire could never carry one value of. Do not "correct" the count back to seven.
 	// NUMBERS ARE CARRIED AS DECIMAL STRINGS, never as JSON numbers — both `integer` and `decimal`. A JSON `type: number` in this contract generates a Go float32 (float64 only with `format: double`) and a JavaScript number; binary floating point cannot represent 0.1 exactly, and it cannot represent 2^53+1 at all, so a value would drift on a round trip nobody performed deliberately. FR-020b forbids a binary float anywhere in the storage or retrieval path, and the wire is part of that path.
 	// ABSENCE IS NOT A VALUE. A property with no value carries no RecordValue at all — its RecordPropertyValue.values array is empty (D3.2, FR-007). This matters: "days I did not meditate" must be answerable, and it is not answerable in a model where absent and false are the same state.
 	Value *RecordValue `json:"value,omitempty"`
@@ -12319,7 +12323,8 @@ type RecordGroupKey struct {
 	// Property The property this level grouped by.
 	Property string `json:"property"`
 
-	// Value ONE value of one property, tagged with the property type that governs it (ADR-068 D3). Exactly one of the seven value fields is populated, and which one is named by `type`.
+	// Value ONE value of one property, tagged with the property type that governs it (ADR-068 D3). Exactly one of the eight value fields is populated, and which one is named by `type`.
+	// THE COUNT IS EIGHT, AND IT MATCHES PropertyDef. `checkbox` (FR-004c, ADR-068 D24.5) joined the property types in spec Draft 11; this schema was left at seven, so `PropertyDef.type` accepted a type that had no wire representation at all — a property an operator could declare and the wire could never carry one value of. Do not "correct" the count back to seven.
 	// NUMBERS ARE CARRIED AS DECIMAL STRINGS, never as JSON numbers — both `integer` and `decimal`. A JSON `type: number` in this contract generates a Go float32 (float64 only with `format: double`) and a JavaScript number; binary floating point cannot represent 0.1 exactly, and it cannot represent 2^53+1 at all, so a value would drift on a round trip nobody performed deliberately. FR-020b forbids a binary float anywhere in the storage or retrieval path, and the wire is part of that path.
 	// ABSENCE IS NOT A VALUE. A property with no value carries no RecordValue at all — its RecordPropertyValue.values array is empty (D3.2, FR-007). This matters: "days I did not meditate" must be answerable, and it is not answerable in a model where absent and false are the same state.
 	Value *RecordValue `json:"value,omitempty"`
@@ -12521,10 +12526,15 @@ type RecordType struct {
 	Type string `json:"type"`
 }
 
-// RecordValue ONE value of one property, tagged with the property type that governs it (ADR-068 D3). Exactly one of the seven value fields is populated, and which one is named by `type`.
+// RecordValue ONE value of one property, tagged with the property type that governs it (ADR-068 D3). Exactly one of the eight value fields is populated, and which one is named by `type`.
+// THE COUNT IS EIGHT, AND IT MATCHES PropertyDef. `checkbox` (FR-004c, ADR-068 D24.5) joined the property types in spec Draft 11; this schema was left at seven, so `PropertyDef.type` accepted a type that had no wire representation at all — a property an operator could declare and the wire could never carry one value of. Do not "correct" the count back to seven.
 // NUMBERS ARE CARRIED AS DECIMAL STRINGS, never as JSON numbers — both `integer` and `decimal`. A JSON `type: number` in this contract generates a Go float32 (float64 only with `format: double`) and a JavaScript number; binary floating point cannot represent 0.1 exactly, and it cannot represent 2^53+1 at all, so a value would drift on a round trip nobody performed deliberately. FR-020b forbids a binary float anywhere in the storage or retrieval path, and the wire is part of that path.
 // ABSENCE IS NOT A VALUE. A property with no value carries no RecordValue at all — its RecordPropertyValue.values array is empty (D3.2, FR-007). This matters: "days I did not meditate" must be answerable, and it is not answerable in a model where absent and false are the same state.
 type RecordValue struct {
+	// Checkbox Populated when type is "checkbox" (FR-004c, ADR-068 D24.5). A real JSON boolean, and that is deliberate rather than inconsistent with `integer` and `decimal` above: those are strings because a JSON number becomes a binary float and loses exactness, and a boolean has no such hazard — `true` round-trips as `true` in both generated languages.
+	// ABSENT IS THE THIRD STATE and it is NOT `false`. A property with no value carries no RecordValue at all (D3.2, FR-007), so a `checkbox: false` on the wire means the note WROTE `false`, never that it said nothing. "Days I did not meditate" is the days with no value; "days I recorded not meditating" is this field set to false. They are different questions and this schema keeps them different.
+	Checkbox *bool `json:"checkbox,omitempty"`
+
 	// Date Populated when type is "date". Either a calendar day as YYYY-MM-DD or an instant as RFC 3339. Comparable in both forms — the failure this closes is a date stored as free text, which sorts and filters as nothing.
 	Date *string `json:"date,omitempty"`
 
@@ -12551,11 +12561,11 @@ type RecordValue struct {
 	// Text Populated when type is "text". Prose; never compared for equality (D3).
 	Text *string `json:"text,omitempty"`
 
-	// Type Which of the seven property types governs this value, and therefore which field below is populated.
+	// Type Which of the eight property types governs this value, and therefore which field below is populated.
 	Type RecordValueType `json:"type"`
 }
 
-// RecordValueType Which of the seven property types governs this value, and therefore which field below is populated.
+// RecordValueType Which of the eight property types governs this value, and therefore which field below is populated.
 type RecordValueType string
 
 // RecordWriteRequest A typed, validated write to one record (ADR-068 D14, FR-040 to FR-044).

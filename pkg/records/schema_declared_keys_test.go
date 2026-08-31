@@ -272,7 +272,7 @@ func TestSchema_PropertyLabelIsParsed(t *testing.T) {
 		}
 	})
 
-	t.Run("a label is legal on every one of the seven property types", func(t *testing.T) {
+	t.Run("a label is legal on every one of the eight property types", func(t *testing.T) {
 		// The contract puts no type restriction on `label`, so neither may we.
 		for _, pt := range PropertyTypes {
 			decl := "type: " + string(pt) + ", label: Shown"

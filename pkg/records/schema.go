@@ -23,7 +23,9 @@ import (
 // FR-002  a schema without schema_version is REJECTED
 // FR-003  two files declaring the same record type are BOTH rejected, both
 //         paths named
-// FR-004  exactly seven property types exist
+// FR-004  the property types are a CLOSED set; FR-004c amends the count to
+//         EIGHT (`checkbox`, ADR-068 D24.5). PropertyTypes is the list, and it
+//         is the only place the count is stated as a fact rather than prose.
 // FR-006  every property declares arity
 // FR-009  property types are scoped to their record type
 // FR-010  an enum declares a closed SET of values; sorting is LEXICAL over the
@@ -61,8 +63,11 @@ func SchemaDir(vaultRoot string) string {
 // Property types — FR-004, closed
 // ---------------------------------------------------------------------------
 
-// PropertyType is one of the seven types ADR-068 D3 declares. The set is
-// CLOSED: adding an eighth is an ADR change, not an implementation detail.
+// PropertyType is one of the EIGHT types ADR-068 D3 declares, as amended by
+// D24.5 / FR-004c. The set is CLOSED: adding a ninth is an ADR change, not an
+// implementation detail. The count moved from seven to eight when `checkbox`
+// landed; every "seven" this package still says about property types is a
+// stale comment, and recordvalue_contract_test.go checks the wire agrees.
 type PropertyType string
 
 const (
@@ -823,9 +828,17 @@ func ParseSchema(path string, data []byte) (*Schema, *SchemaRejection) {
 //
 // FR-140's parse, FR-146's caps, FR-148's cycle walk and FR-143a's static
 // typing are NOT deleted and are not orphaned: ValidateFormulaSet is still the
-// single implementation, still called on the view load path
-// (view.go::validateViewFormulas) and on the query path
-// (knowledgefind/namespace.go), which is where a formula legitimately lives.
+// single implementation, called on the view load path
+// (view.go::validateViewFormulas) and again on the query path
+// (knowledgefind/namespace.go::buildNamespace).
+//
+// BE PRECISE ABOUT THE SECOND CALL. buildNamespace returns early when the
+// source map is EMPTY, and it is empty for every view that carries no
+// `formulas:`. So the query-path re-validation is real code on a real path,
+// but it is exercised only by a saved view that actually holds formula
+// sources. An earlier version of this note read as though every query
+// re-validated formulas, which sent a reader looking for a caller that does
+// not exist for the ordinary view.
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------

@@ -18,9 +18,11 @@
 // every vault that never got round to editing it. Vaults differ enormously;
 // that is the normal case, not the edge case.
 //
-// A consequence worth stating for anyone adding to this package: the SEVEN
-// PROPERTY TYPES (text, enum, relation, date, integer, decimal, person) are
-// mechanism and are closed (FR-004). The `person` type in particular does NOT
+// A consequence worth stating for anyone adding to this package: the EIGHT
+// PROPERTY TYPES (text, enum, relation, date, integer, decimal, person,
+// checkbox) are mechanism and are closed (FR-004, as amended by FR-004c /
+// ADR-068 D24.5 — the count was seven through spec Draft 9 and `checkbox`
+// joined in Draft 11; do not "correct" it back). The `person` type in particular does NOT
 // imply a built-in person record type — it is a relation whose target type is
 // whatever the vault's own schema names in `to:`, and with no `to:` only the
 // link SHAPE is validated. If you find yourself wanting to hardcode a type

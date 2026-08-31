@@ -1,8 +1,14 @@
 title: RecordValue
 description: >
   ONE value of one property, tagged with the property type that governs it
-  (ADR-068 D3). Exactly one of the seven value fields is populated, and which
+  (ADR-068 D3). Exactly one of the eight value fields is populated, and which
   one is named by `type`.
+
+  THE COUNT IS EIGHT, AND IT MATCHES PropertyDef. `checkbox` (FR-004c,
+  ADR-068 D24.5) joined the property types in spec Draft 11; this schema was
+  left at seven, so `PropertyDef.type` accepted a type that had no wire
+  representation at all — a property an operator could declare and the wire
+  could never carry one value of. Do not "correct" the count back to seven.
 
   NUMBERS ARE CARRIED AS DECIMAL STRINGS, never as JSON numbers — both
   `integer` and `decimal`. A JSON `type: number` in this contract generates a
@@ -31,6 +37,7 @@ properties:
       - integer
       - decimal
       - person
+      - checkbox
     # x-enum-varnames PINS these constant names. oapi-codegen derives an enum
     # constant's Go name from a GLOBAL collision scan across every enum in the
     # spec, so adding a value to an UNRELATED enum silently renames these —
@@ -48,8 +55,9 @@ properties:
       - Integer
       - Decimal
       - Person
+      - Checkbox
     description: >
-      Which of the seven property types governs this value, and therefore
+      Which of the eight property types governs this value, and therefore
       which field below is populated.
     example: "decimal"
   text:
@@ -115,3 +123,19 @@ properties:
   person:
     $ref: "./RecordRef.yaml"
     x-go-type: RecordRef
+  checkbox:
+    type: boolean
+    description: >
+      Populated when type is "checkbox" (FR-004c, ADR-068 D24.5). A real JSON
+      boolean, and that is deliberate rather than inconsistent with `integer`
+      and `decimal` above: those are strings because a JSON number becomes a
+      binary float and loses exactness, and a boolean has no such hazard —
+      `true` round-trips as `true` in both generated languages.
+
+      ABSENT IS THE THIRD STATE and it is NOT `false`. A property with no value
+      carries no RecordValue at all (D3.2, FR-007), so a `checkbox: false` on
+      the wire means the note WROTE `false`, never that it said nothing. "Days
+      I did not meditate" is the days with no value; "days I recorded not
+      meditating" is this field set to false. They are different questions and
+      this schema keeps them different.
+    example: true

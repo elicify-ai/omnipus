@@ -318,11 +318,20 @@ func (v fval) materialize(scale int32, alreadyRounded bool) ([]TypedValue, []str
 		case FormulaLink:
 			values = append(values, TypedValue{Type: TypeRelation, Link: it.link, Raw: it.link.Raw})
 		case FormulaBoolean:
+			// Bool, NOT Text. TypedValue is a tagged union and `checkbox`'s
+			// field is Bool — value.go::parseCheckboxValue writes it,
+			// compare_oracle.go's TypeCheckbox branch reads it, and the
+			// `checked`/`unchecked` aggregates read it. Writing Text here left
+			// Bool at its zero value, so every boolean a formula produced
+			// compared as `false` whatever it evaluated to: a filter on a
+			// boolean formula selected the exact complement of what it said,
+			// with no problem entry and no refusal. Raw carries the canonical
+			// spelling for a report, which is what Raw is for everywhere else.
 			raw := "false"
 			if it.flag {
 				raw = "true"
 			}
-			values = append(values, TypedValue{Type: PropertyType("checkbox"), Text: raw, Raw: raw})
+			values = append(values, TypedValue{Type: TypeCheckbox, Bool: it.flag, Raw: raw})
 		}
 	}
 	return values, nil, rounded
@@ -451,7 +460,13 @@ func fvalFromPropertyValue(typ FormulaType, pv PropertyValue) (fval, []Compariso
 		case FormulaLink:
 			out.items = append(out.items, fitem{link: v.Link})
 		case FormulaBoolean:
-			out.items = append(out.items, fitem{flag: FoldEqual(strings.TrimSpace(v.Text), "true")})
+			// v.Bool, NOT v.Text: a checkbox property populates Bool and
+			// leaves Text empty, so reading Text made every checkbox a formula
+			// read `false`. The spelling was already decided by
+			// value.go::parseCheckboxValue's fold — re-deriving it from a
+			// string here would be a second membership oracle for a two-value
+			// type, and it was one that always answered false.
+			out.items = append(out.items, fitem{flag: v.Bool})
 		}
 	}
 	return out, nil

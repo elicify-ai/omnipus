@@ -147,6 +147,12 @@ const (
 	// RejectViewUnknownFormula is a `formula.<name>` reference in a property
 	// position naming a formula the view does not declare.
 	RejectViewUnknownFormula ViewRejectionCode = "view_unknown_formula"
+	// RejectViewUnknownEnumValue is a filter literal that is not a member of
+	// the enum the compared property declares — the ViewDef contract's "or
+	// enum value" half. Reported rather than served, because an undeclared
+	// literal cannot match any conforming record: `=` selects nothing and
+	// `<>` selects everything, and both look exactly like a correct answer.
+	RejectViewUnknownEnumValue ViewRejectionCode = "view_unknown_enum_value"
 )
 
 // ViewRejection is one refused view file.
@@ -774,8 +780,77 @@ func ValidateViewAgainstSchemas(v *SavedView, schemas *SchemaSet) *ViewRejection
 		}
 	}
 
+	// checkViewEnumLiteral is the ViewDef contract's SECOND half — "a view
+	// naming a property OR ENUM VALUE that does not exist is REJECTED at write
+	// time". Only the first half survived the flat format's deletion; the
+	// literal check went with it, because it had only ever been wired to the
+	// retired flat list.
+	//
+	// AN UNDECLARED ENUM LITERAL CANNOT MATCH ANY CONFORMING RECORD, and that
+	// is why it is a rejection rather than a warning: `state = "Closed Won"`
+	// against a declared [draft, shipped, withdrawn] selects nothing, `<>`
+	// selects everything, and neither is distinguishable from a correct
+	// answer by anyone reading the response.
+	//
+	// Property.ResolveEnum is the membership oracle, and it must be: it is the
+	// SAME one value.go::parseEnumValueNode asks at query time. A second
+	// implementation would agree on the easy cases and disagree on FR-011a's
+	// full-Unicode fold, at which point a view refused here would be served
+	// there, or the reverse.
+	//
+	// WHAT IS DELIBERATELY LEFT ALONE:
+	//
+	//   - `LIKE` carries a PATTERN, not a value. filter.go passes it through as
+	//     text for exactly this reason — `ship%` is not a declared value and
+	//     never will be, and refusing it would refuse a legitimate query.
+	//   - `IS NULL`/`IS NOT NULL` carry no literal at all, so there is nothing
+	//     to check.
+	//   - Every NON-enum literal. A date, an integer or a decimal is checked by
+	//     value.go's parser at query time against bound and format rules that
+	//     live there; re-deriving them here would be a second implementation of
+	//     the one thing this package already has exactly one of. An enum is
+	//     different in kind: its permitted set is CLOSED and declared, so the
+	//     answer is knowable from the schema alone.
+	//   - An untyped view (base == nil). FR-018b resolves its property names by
+	//     name at query time, so there is no declared set to compare against.
+	checkViewEnumLiteral := func(n generated.VaultFilterNode, where string) *ViewRejection {
+		if base == nil || n.Property == nil {
+			return nil
+		}
+		name := *n.Property
+		if isViewFormulaRef(name) || IsFileNamespace(name) {
+			return nil
+		}
+		prop, found := base.Property(name)
+		// A missing property has already been refused by checkViewProp on the
+		// same node; a property declaring no values has no set to check
+		// against, which mirrors the comparator's own asymmetry (R-1).
+		if !found || prop.Type != TypeEnum || len(prop.Values) == 0 {
+			return nil
+		}
+		if n.Op != nil && Operator(*n.Op) == OpLike {
+			return nil
+		}
+		literals := make([]string, 0, 1)
+		if n.Value != nil {
+			literals = append(literals, *n.Value)
+		}
+		if n.Values != nil {
+			literals = append(literals, *n.Values...)
+		}
+		for _, lit := range literals {
+			if _, declared := prop.ResolveEnum(lit); declared {
+				continue
+			}
+			return reject(RejectViewUnknownEnumValue,
+				"view %q compares %s.%s against %q in %s, which is not one of its declared values (matching ignores case); permitted: %s",
+				v.Def.Name, base.Type, name, lit, where, joinOrNone(prop.PermittedValues()))
+		}
+		return nil
+	}
+
 	if v.Def.Filter != nil {
-		if rej := checkViewFilterTreeProperties(*v.Def.Filter, "filter", checkViewProp); rej != nil {
+		if rej := checkViewFilterTree(*v.Def.Filter, "filter", checkViewProp, checkViewEnumLiteral); rej != nil {
 			return rej
 		}
 	}
@@ -895,25 +970,34 @@ func validateViewFormulas(
 		v.Def.Name, len(errs), strings.Join(msgs, "; "))
 }
 
-// checkViewFilterTreeProperties walks a version-2 filter tree and checks every
-// LEAF's property name.
+// checkViewFilterTree walks a filter tree and checks every LEAF: first its
+// property NAME, then — once the name is known good — its enum LITERALS.
+//
+// The order is not incidental. A literal can only be judged against a property
+// that exists, so the name check has to answer first; running them the other
+// way round would report "not one of its declared values" for a property that
+// has no declared values because it has no declaration at all.
 //
 // It walks the tree rather than the leaves-in-isolation because the position
 // reported to the operator has to name where in the tree the fault is; a bare
 // "unknown property" over a 12-leaf disjunction sends them reading the whole
 // file. The path is built as `filter.any[2].all[0]`, which is the shape they
 // are looking at.
-func checkViewFilterTreeProperties(
+func checkViewFilterTree(
 	n generated.VaultFilterNode,
 	path string,
-	check func(name, where string, comparison bool) *ViewRejection,
+	checkName func(name, where string, comparison bool) *ViewRejection,
+	checkLiteral func(n generated.VaultFilterNode, where string) *ViewRejection,
 ) *ViewRejection {
 	if n.Property != nil {
-		return check(*n.Property, path, true)
+		if rej := checkName(*n.Property, path, true); rej != nil {
+			return rej
+		}
+		return checkLiteral(n, path)
 	}
 	descend := func(kind string, children []generated.VaultFilterNode) *ViewRejection {
 		for i, c := range children {
-			if rej := checkViewFilterTreeProperties(c, fmt.Sprintf("%s.%s[%d]", path, kind, i), check); rej != nil {
+			if rej := checkViewFilterTree(c, fmt.Sprintf("%s.%s[%d]", path, kind, i), checkName, checkLiteral); rej != nil {
 				return rej
 			}
 		}
@@ -925,7 +1009,7 @@ func checkViewFilterTreeProperties(
 	case n.Any != nil:
 		return descend("any", *n.Any)
 	case n.Not != nil:
-		return checkViewFilterTreeProperties(*n.Not, path+".not", check)
+		return checkViewFilterTree(*n.Not, path+".not", checkName, checkLiteral)
 	}
 	return nil
 }
