@@ -10,9 +10,9 @@
   CDP browser context by **agent**. This ADR **re-keys it to the workspace**.
   The isolation primitive, its strength and its implementation are unchanged;
   only the key changes. D1.0 states exactly what is preserved and what is not.
-- **Related:** ADR-038 (live browser panel, human takeover), ADR-041 (tabs),
-  ADR-044 (single listener), ADR-057 (routing vs transcript session split),
-  ADR-062 (WebRTC connectivity tiers)
+- **Related:** ADR-038 (live browser panel + take-the-wheel, D6), ADR-041 (tabs),
+  ADR-057 (routing vs transcript session split),
+  ADR-069 (universal live-browser connectivity)
 
 ---
 
@@ -115,7 +115,10 @@ because that precondition looks like the fix and isn't.
 
 Two decision areas. **D1** fixes who owns the browser; **D2** fixes what an
 agent can do with it. They ship independently and are separated here so each
-can be reviewed on its own — D1 is an ownership change with real concurrency
+can be reviewed on its own. (Review round 1 recommended splitting them into two
+ADRs, on the grounds that D2 is uncontested and D1 is not. **Operator ruling
+2026-08-31: keep as one document.** The split-shipping property is preserved by
+the D1/D2 separation itself.) — D1 is an ownership change with real concurrency
 consequences, D2 is additive surface.
 
 ---
@@ -125,9 +128,9 @@ consequences, D2 is additive surface.
 **Signed-in state belongs to the workspace. Isolation is preserved in full — it
 moves from the agent axis to the workspace axis.**
 
-### D1.0 Reconciling with ADR-043 — read this before §1.2
+### D1.0 Reconciling with ADR-043 — read this alongside §1.2 (above)
 
-§1.2 below describes the per-agent split as the mechanism behind the reported
+§1.2 above describes the per-agent split as the mechanism behind the reported
 defect. That is accurate but incomplete, and on its own it reads as though the
 split were an accident. **It is not.** ADR-043 D2 chose it deliberately, called
 it "the load-bearing decision", and recorded operator confirmation that
@@ -150,8 +153,17 @@ Under workspace-keying, a login obtained in workspace X is invisible in
 workspace Y. That is the same protection drawn at the boundary that actually
 separates unrelated work: different clients, different projects.
 
+**This ADR overrides a named ADR-043 limitation, deliberately.** ADR-043's
+"Accepted limitations" says: *"If an operator specifically wants agents to
+share a login (e.g. Jim logs in, Ray reuses it), that becomes a deliberate
+per-context opt-in (future), not the default."* D1 makes exactly that the
+default within a workspace. The authority is the operator ruling of
+2026-08-31. Stated explicitly because an amendment that silently reverses a
+named limitation of the ADR it amends is how the next reader concludes the
+reversal was accidental.
+
 **Why the agent is the wrong unit.** The human logs in first and *then* decides
-who to talk to. Case 3 is not an edge case; it is the ordinary way a person
+who to talk to. Case 3 (§3, case 3) is not an edge case; it is the ordinary way a person
 uses a shared browser. Keying on the agent makes the browser's contents depend
 on which colleague happened to be on screen at the moment a tab was opened —
 an implementation detail the operator has no reason to model, and, per §1.1,
@@ -179,13 +191,17 @@ correct behaviour rather than leakage. Operator ruling, 2026-08-31.
    an agent to a team grants it those logins. That follows from the team being
    the trust boundary, and it is the same judgement an operator already makes
    when choosing a roster — but it is a grant, and should read as one.
-2. **Unattended delegated work shares the jar by default.** A background agent
-   scraping on its own will act as the signed-in user. Sometimes correct (it is
-   the operator's own work), sometimes not (acting as the operator on a live
-   site without a human present). D1.2 keeps the escape hatch rather than
-   deciding it here.
+2. **Unattended delegated work does NOT share the jar.** Operator ruling
+   (2026-08-31): a background agent starts signed out, so it cannot act as the
+   operator on a live site with no human present — no purchase, post or message
+   sent as them by a process nobody is watching. The cost is accepted: a
+   background agent cannot reach a site behind a login, and the operator asks it
+   in a normal chat instead. D1.2 is therefore a **default**, not an escape
+   hatch.
 
-**What does not change:** ADR-040's take-the-wheel model within a context;
+**What does not change:** ADR-038 D6's take-the-wheel model within a context (**not** ADR-040 — that
+citation is wrong in ADR-043's header too and is corrected here so it stops
+propagating);
 ADR-041's tab-set model; ADR-043 D1/D3/D4 (single Chrome, coordinator
 ownership, hot-reload survival) and its whole deferred escape hatch.
 
@@ -199,29 +215,41 @@ ownership, hot-reload survival) and its whole deferred escape hatch.
    (`pkg/tools/base.go:241-251`), so this needs no new plumbing — the same
    situation as the session keys in §2.1.
 
-### D1.2 The escape hatch for unattended work
+### D1.2 Unattended delegated work gets its own context
 
-Workspace-keyed is the default and covers every operator-facing case. The
-transcript session id (`tools.ToolTranscriptSessionID`) remains available as a
-*narrower* key for delegated background work that must not act as the
-signed-in user. **Not enabled by default** — recorded so the mechanism is not
-rebuilt later, and so the decision to use it is explicit at the point some
-workflow needs it.
+**Workspace-keyed is the default for every operator-facing turn. A delegated
+sub-turn with no human attached is keyed by its transcript session id
+(`tools.ToolTranscriptSessionID`) instead, and therefore starts signed out.**
 
-### 2.1 The keys already exist and already mean the right thing
+"Unattended" is defined by the mechanism that already distinguishes them:
+ADR-057 gives a delegated sub-turn its own `transcriptSessionID` while it
+inherits the parent's `routingSessionID`. A sub-turn is unattended when it is
+running under `spawnSubTurn` and no viewer is attached to the workspace's live
+panel.
+
+Trade-off, accepted: a background agent asked to check something behind a
+login will fail rather than silently act as the operator. That failure must
+name the reason ("this ran unattended and has no signed-in session"), or it
+becomes the class of invisible failure this ADR exists to remove.
+
+### D1.3 The keys already exist and already mean the right thing
 
 Tool context already carries both, and ADR-057 already gave them exactly the
 semantics this needs — a delegated sub-turn **inherits** `routingSessionID`
 and gets its **own** `transcriptSessionID`:
 
-| Key | Helper | Scope it produces |
-|---|---|---|
-| Routing session | `tools.ToolSessionKey(ctx)` | The conversation. Survives switching which agent answers, and is inherited by delegated sub-turns. |
-| Transcript session | `tools.ToolTranscriptSessionID(ctx)` | One turn/delegation. Distinct per delegated child. |
+| Key | Helper | Scope it produces | Used for |
+|---|---|---|---|
+| **Workspace** | `tools.ToolWorkspaceID(ctx)` | The team space. Survives switching agent AND switching chat. | **The browsing context. This is the decision.** |
+| Transcript session | `tools.ToolTranscriptSessionID(ctx)` | One turn/delegation. Distinct per delegated child. | Unattended delegated work — D1.2 |
 
-So the **operator-facing browser is keyed by the routing session**, and
-unattended delegated work that must not touch the operator's tab can be keyed
-by the transcript session instead. No new identity concept is introduced.
+The routing session id (`tools.ToolSessionKey`) is **not** used as a browsing
+key. An earlier revision of this ADR chose it; D1.0 records why that was
+replaced. It is listed here only so a reader who finds it in the git history
+knows it was considered and rejected, not overlooked.
+
+No new identity concept is introduced: both keys already exist and already
+reach every tool.
 
 Every browser tool already takes a session id on every call: `defaultSessionID`
 is passed at **9 call sites in `tools.go`** and **14 across
@@ -231,18 +259,45 @@ The parameter is threaded, wired and currently wasted on a constant.
 Six tool descriptions also contain the literal phrase "the shared browser
 session" and must change with the behaviour, not after it.
 
-### 2.2 Fallback when there is no workspace
+### D1.4 There is no "no workspace" case — resolve it, never fall back
 
-A browser call outside any chat (a scheduled trigger, a heartbeat, a CLI
-invocation) has no routing session. Those keep a context keyed by the constant,
-as today. That path must be explicit, not an accidental empty string —
-an empty key silently colliding every unattended run into one shared browsing
-context is the same class of defect this ADR exists to remove.
+An earlier revision proposed falling back to the `"default"` constant when
+`ToolWorkspaceID(ctx)` is empty. **That is rejected.** It would merge every
+workspace-less agent into one shared cookie jar — an isolation regression
+against today's per-agent keying, and against the very ADR-043 guarantee
+criterion 5b exists to prove.
 
-### 2.3 The silent zero is removed, independently
+**Operator ruling (2026-08-31): every turn runs in a workspace context; a
+scheduled run outside one is not a state the product supports.**
 
-`ListTabs` must distinguish "this workspace has no browsing context yet"
-from "the browsing context has no tabs". Both are legitimate states; reporting
+The code agrees, and the emptiness is narrower than it looks.
+`pkg/tools/resolvepath.go:695-709` records that a scheduled/heartbeat turn
+**is** rooted in a CoreTeam workspace — its work dir is re-rooted — and that
+`ToolWorkspaceID(ctx)` is nevertheless empty because `workspace_reroot.go`
+deliberately does not set it (an FR-030 memory-room-routing decision, unrelated
+to the browser). So the workspace exists; only the label on the turn is
+missing.
+
+**Decision: resolve it the same way the work dir already is.**
+`resolvepath.go` hit this exact gap for filesystem mounts and solved it with
+`FindForAgentPreferring` rather than a fallback constant, explicitly so "the
+two never disagree about which workspace this turn is rooted in". The browser
+uses the same resolution, for the same reason.
+
+If resolution genuinely yields nothing, the browser tool **fails with a named
+error** — it does not silently join a shared context. A wrong-jar failure is
+invisible; a refusal is not.
+
+### D1.5 The silent zero is removed, independently
+
+`ListTabs` must distinguish **three** states, not two: "this workspace has no
+browsing context yet", "the browsing context has no tabs", and "you are not
+permitted to see the browser". The third matters because the seeded policy
+grants the browser surface to **Jim and Ray only** (`pkg/coreagent/core.go` —
+Mia and Ava are deny-by-default least-privilege, and the operator confirmed on
+2026-08-31 that this stays). Mia is the default agent and the agent in §1.1's
+own repro, so without the third state that exact conversation happens again
+with a different cause and the same output. Both are legitimate states; reporting
 them identically is what made §1.1 unobservable. The tool's description must
 also stop claiming "shared" unless and until it is true.
 
@@ -375,12 +430,21 @@ the Linux and macOS release archives bundle it (`scripts/install.sh` verifies
 managed download in `exec_resolver.go` is step 4 of the resolver ladder — the
 fallback for bare-binary and hand-built installs, not the normal path.
 
-ADR-071 independently removed most of the cost the issue cited: all twelve
+ADR-071 independently removed most of the cost the issue cited: all eleven
 `browser_*` tools are now Tier 3 / search-only, so they occupy no line in the
 compressed manifest.
 
-**Decision: close #456.** A gate for a state that shipping installs do not
-enter is machinery without a payer. Closed 2026-08-31.
+**Decision: close #456 for x86-64 Linux, macOS and the Docker heavy image** —
+on those, Chromium is always present and a gate has no payer. Recommended for closure on acceptance; closed 2026-08-31
+ahead of it, on the operator's instruction.
+
+**Stated rather than glossed:** linux/arm64 *is* a shipping install that enters
+exactly the state #456 described, permanently — no bundled payload, no upstream
+build to download, and the `$PATH` escape gated behind `TrustPathChrome`, seeded
+`false`. On those hosts every `browser_*` tool is registered and guaranteed to
+fail. #665 addresses the distribution gap; until it lands, the tools remain
+visible-but-failing on ARM Linux. That is the accepted trade-off, not an
+absence of the problem.
 
 **The one real exception, recorded so it is not rediscovered as a surprise:**
 linux/arm64 archives carry no `chromium/` payload, because Chrome-for-Testing
@@ -393,6 +457,79 @@ not a manifest gate, and is filed separately as **#665**.
 
 ---
 
+### D2.8 Tier assignment (ADR-071)
+
+ADR-071 fixes Tier 3 as an enumerated, closed 63-name list whose stated
+property is that promoting a name out "must force a re-decision rather than
+leave a stale entry". The six new tools must be added to it explicitly; the
+ADR-071 list edit is a required change, not an implication.
+
+| Tool | Tier | Why |
+|---|---|---|
+| `browser_select_option`, `browser_press_key`, `browser_hover`, `browser_upload_file`, `browser_handle_dialog` | 3 — search-only | Same posture as the eleven existing browser tools |
+| `browser_snapshot` (D2.4) | **open question** | D2.4 calls it "the default way an agent reads a page". A tool that must be reached through search is a poor default. Either it earns Tier 2 (previewed) or D2.4's wording overclaims. Flagged rather than assumed. |
+
+### D2.9 Tool policy seeding (Hard Constraint #6)
+
+**Boot aborts on any `agent × tool` policy gap.** Six new static builtin tools
+therefore need an explicit, literal, wildcard-free entry for **every** agent in
+`pkg/config/defaults.go` and in each per-agent block of
+`pkg/coreagent/core.go`. Without this D2 does not boot — it is not a follow-up.
+
+| Tool | Jim | Ray | Mia | Ava |
+|---|---|---|---|---|
+| `browser_select_option`, `browser_press_key`, `browser_hover`, `browser_handle_dialog`, `browser_snapshot` | allow | allow | deny | deny |
+| `browser_upload_file` | **ask** | **ask** | deny | deny |
+
+Mirrors today's seed exactly (browser surface to Jim and Ray; Mia and Ava
+deny-by-default least-privilege), confirmed by the operator on 2026-08-31.
+
+`browser_upload_file` is seeded **ask**, not allow: it is the only browser tool
+that carries a local file across the boundary into a remote site. Every other
+browser tool moves data inward. That asymmetry is worth one confirmation.
+
+### D2.10 Concurrency — one writer per browsing context
+
+§4 calls this the largest open risk in D1, and it is decided here rather than
+after, because the failure mode is nondeterministic and §5 already records that
+intermittent failure is the most expensive kind for an agent.
+
+**What exists:** `controlledResult` (`pkg/tools/browser/tools.go:962`) checks
+only `mgr.Live().IsControlled(...)` — a *human viewer* holding the live view.
+Its own doc comment records two further limits: read-only tools
+(`browser_screenshot`, `browser_get_text`, `browser_wait`) are deliberately not
+gated, and the mechanism is "cooperative, not preemptive… no mid-tool
+preemption in v1". Workspace-keying makes interleaved writes from two agents,
+or two chats, the normal case rather than an exception.
+
+**Decision:** a **write lease per browsing context**, held for the duration of
+one action tool call. A second writer does not error — it returns the same
+non-error `{"deferred": true, "reason": …}` shape `controlledResult` already
+produces, so the model-facing contract is unchanged and no prompt needs
+rewriting. Read-only tools stay ungated, as today.
+
+Deliberately not solved here: mid-tool preemption, and fairness between two
+agents contending steadily. Both are ADR-043-era limitations this ADR does not
+widen.
+
+### D2.11 Security
+
+D1 changes who can act as a signed-in user, so the change needs this section
+rather than a line under Consequences.
+
+- **Elevation of privilege.** Adding an agent to a workspace grants it every
+  live session on that workspace. **Decision:** the team-editing UI must state
+  this at the point of adding, not only in release notes. D1.0 previously said
+  "arguably"; this is the decision.
+- **Repudiation.** With a shared context, "which agent acted as the signed-in
+  user" must remain answerable. **Decision:** an audit event on browsing-context
+  creation, and on an agent's first use of a context it did not establish.
+- **Information disclosure.** D2.4's accessibility snapshot returns full page
+  structure — on a signed-in page that includes account identifiers and form
+  values. **Decision:** it inherits `browser_get_text`'s redaction posture and
+  passes through the same `RegisterSensitiveValues` path. A snapshot tool that
+  bypasses redaction would be a quieter leak than the text tool it replaces.
+
 ## 3. Acceptance criteria
 
 The operator's three cases, which are the test plan:
@@ -401,7 +538,8 @@ The operator's three cases, which are the test plan:
 |---|---|---|
 | 1 | Mia browses; operator watches and takes over | Works as today — unchanged |
 | 2 | Operator switches the chat from Mia to Jim mid-session | Jim sees and drives the same tabs. No handover step, no command |
-| 3 | Operator browses first, **then** asks an agent to take over | The tab was never owned by "whoever happened to be on screen"; any agent on that workspace sees it |
+| 3 | Operator browses first, **then** asks an agent to take over | The tab was never owned by "whoever happened to be on screen"; any agent on that workspace **whose tool policy allows the browser surface** sees it |
+| 3b | The operator asks a **policy-denied** agent (e.g. Mia) what is open | It says it is **not permitted** to see the browser — never "there are no tabs". Without this, §1.1's exact symptom recurs with a new cause and identical output |
 | 4 | An agent delegates unattended background browsing | The sub-agent does not hijack the tab the operator is reading |
 | 5 | `browser_list_tabs` with no browsing context | Says so. Must not be indistinguishable from an empty tab set |
 | 5b | **Isolation survives the re-key (ADR-043 D2).** Log in to a site in workspace X; open the same site in workspace Y | Y is **logged out**. The amended ADR-043 guarantee, and the test that proves isolation moved rather than vanished |
@@ -423,6 +561,10 @@ regressions this design must not introduce.
 | 12 | A page calling `alert()`/`confirm()` does not wedge the session. **The tab must still answer CDP afterwards** — this is the acceptance test, not that the dialog was dismissed |
 | 13 | An agent can read a page as structure (roles + names + actionable handles) without vision and without already knowing a CSS selector |
 | 14 | `browser_navigate` on a `file://` URL returns an error **naming `web_serve` as the supported route** |
+| 15 | **Boot survives the new tools (Hard Constraint #6).** A fresh install boots with all six D2 tools registered and **no policy-coverage abort** |
+| 16 | **Two writers, one context (D2.10).** Two agents on one workspace issue `browser_navigate` concurrently — neither observes the other's mid-navigation state, and neither errors; the loser gets `{"deferred": true, …}` |
+| 17 | **Unattended work is signed out (D1.2).** A delegated sub-turn with no viewer attached opens a site the operator is signed into on that workspace — it is **logged out**, and the failure names the reason |
+| 18 | **A workspace-less turn resolves, never merges (D1.4).** A scheduled/heartbeat turn reaches the same browsing context as its re-rooted work dir — never a shared constant, never another agent's |
 
 Criteria 7 and 12 are the two whose failure mode is silent or wedging rather
 than a wrong answer, and are the ones worth writing tests for first.
@@ -449,10 +591,17 @@ than a wrong answer, and are the ones worth writing tests for first.
   more parties now share one tab set.
 - **Blast radius.** Collapsing per-agent managers touches every browser tool
   call site and the live panel's session resolution.
-- **Idle reaping.** Browsing-context lifetime becomes workspace lifetime, not
-  agent lifetime. A workspace is effectively permanent, so "reap when idle"
-  must be defined on activity rather than existence, or a Chrome tab is pinned
-  forever.
+- **Idle reaping — the mechanism exists; two interactions change.**
+  `BrowserManager.ReapIdleSessions` (`manager.go:2986`, `DefaultIdleTTL` 5 min,
+  `:134`) already reaps **per tab, gated on real activity** (`:82-96`), which is
+  what an earlier draft of this ADR wrongly said "must be defined". Per-tab
+  reaping is kept unchanged. Two consequences of the re-key are genuinely new:
+  (a) the viewer-attach counter (`:248` — "a context with a viewer attached is
+  NEVER idle") now pins an entire **workspace's** context whenever any one chat
+  has the panel open; (b) the zero-tab branch keyed on session `lastActivity`
+  (`:242-244`) now governs a context that outlives every agent that touched it.
+  Both are accepted: per-tab reaping still frees the memory that matters
+  (renderers), and a context with no tabs costs almost nothing.
 - **Adding an agent to a workspace now grants it that workspace's logins**
   (D1.0). No operator sees this today, so it belongs in the release notes and
   arguably in the team-editing UI, not only in this ADR.
@@ -475,10 +624,14 @@ than a wrong answer, and are the ones worth writing tests for first.
   tab still responds, not that the dialog was dismissed.
 - **Per-action cost.** Full actionability (stability needs two consecutive
   bounding-box reads) plus AX-tree resolution adds round trips to every click.
-  It must not turn a fast click into a slow one on pages that were fine.
-- **Surface growth.** Eleven tools become sixteen-ish. ADR-071 puts them all in
-  Tier 3 / search-only, so the manifest cost is bounded — but discoverability
-  now depends entirely on tool search returning the right verb.
+  Budget: the actionability pre-check must add **≤150 ms p95** to a click on an
+  already-actionable element, measured on the `performance-2x` profile §7 uses.
+  Unbudgeted, this lands on a box §7 itself measures at 85-99% utilisation.
+- **Surface growth: 11 → 17.** The six added are `browser_select_option`,
+  `browser_press_key`, `browser_hover`, `browser_upload_file`,
+  `browser_handle_dialog` and `browser_snapshot`. Enumerated because both the
+  tier assignment (D2.8) and the policy seeding (D2.9) depend on the exact set.
+  Discoverability then rests entirely on tool search returning the right verb.
 
 ---
 
@@ -515,13 +668,26 @@ kind for an agent — it retries, succeeds sometimes, and learns nothing.
 
 ## 6. Open questions
 
-- Does `controlledResult` need an agent-vs-agent arm, and a chat-vs-chat arm?
-  "One workspace, one driver at a time" is the simplest rule; is it too strict
-  when two chats on a workspace are doing unrelated browsing?
-- Should the live panel's WebRTC session (`browser-webrtc[<agent>]`) also
-  re-key to the workspace, or is the agent label harmless once tabs are
-  workspace-scoped?
-- Reaping: a workspace never ends. What idles its browsing context out?
+Answered since the first draft, recorded so they are not reopened: the
+concurrency rule (D2.10), reaping (§4 — the mechanism already exists), the
+live-panel re-key (D1.0 — server-side resolution, label stays), the
+workspace-less case (D1.4), unattended delegated work (D1.2), and tool policy
+(D2.9).
+
+Genuinely open:
+
+- **Is `browser_snapshot` Tier 3?** D2.4 calls it the default way an agent reads
+  a page; a search-only default is a contradiction. D2.8 flags it rather than
+  guessing.
+- **Fairness under sustained contention.** D2.10's lease is per-action and
+  first-come. Two agents browsing steadily on one workspace will interleave;
+  nothing guarantees either makes progress. Acceptable for the human-takeover
+  workload this panel exists for (ADR-038), unexamined for anything else.
+- **Does the preview URL need re-keying?** `web_serve` mints
+  `/preview/<agent>/<token>/` per **agent** while the browsing context is per
+  **workspace**. Whether a preview minted by one agent should be reachable from
+  a tab another agent drives is not decided; the token is the credential
+  (ADR-044 FR-023), so this is a security question, not a routing one.
 
 ---
 
@@ -547,8 +713,24 @@ The machine was full. Video looked fine (one-way media tolerates a busy box)
 while input — which is round-trip — was starved: scrolling arrived in bursts,
 clicks were dropped, and ICE consent checks missed their deadline. A single
 change, capping the capture pixel budget (commit `08d21393`), halved the
-warm-capture cost (57% → 29% of a core in the identical condition) and the
-operator's verdict on the next run was "scrolling video audio is great".
+warm-capture cost and the operator's verdict on the next run was "scrolling
+video audio is great".
+
+The before/after, from the on-box `/proc` sampler in the **identical**
+condition (boot warm capture, no viewer attached, same machine):
+
+```
+04:21:25  pre-fix    chrome=57.0% of a core   machine=29.1%
+04:54:24  post-fix   chrome=29.2% of a core   machine=15.2%
+```
+
+The deploy landed between them (`08d21393`, 04:52). Cited in full because
+commit `08d21393`'s own message predates the post-fix sample and carries only
+the pre-fix row — a reviewer checking the commit alone finds 57.0 and 29.1 side
+by side in one row and reasonably concludes the figures were misread. They are
+two chrome-column readings 33 minutes apart. Per
+`docs/internal/false-green-patterns.md`, a number nobody can reproduce is worse
+than no number.
 
 **The expensive rebuild was for a problem a bound solved.** The research
 behind it is not lost — `docs/internal/spikes/browser-streaming/` keeps the
