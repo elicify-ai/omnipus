@@ -260,6 +260,70 @@ independently.
    (`pkg/tools/base.go:241-251`), so this needs no new plumbing — the same
    situation as the session keys in D1.3.
 
+### D1.1a One Chrome per workspace, not one browser context per workspace
+
+**This replaces the mechanism, not the goal.** D1.0a establishes that isolation
+via CDP browser contexts is unusable: `chrome.tabCapture` hard-fails with
+*"Invalid tab specified."* for any tab in a CDP-created context
+(`pkg/tools/browser/coordinator.go:330-348`, verified against real Chrome 150),
+so an isolated tab cannot be streamed to the live panel at all. That is a
+property of the extension-based capture path, **not of isolation itself**.
+
+**Decision: isolate by Chrome process and profile directory, one per
+workspace** — a separate `--user-data-dir`, not a CDP browser context. Then:
+
+| | CDP browser context (today) | Chrome per workspace |
+|---|---|---|
+| Cookies/storage isolated | yes | **yes** |
+| Live panel can capture it | **no** | **yes** — each Chrome carries its own extension |
+| Survives reload | no (D1.0a) | yes — a profile is on disk |
+
+**Cost, honestly.** Every tab is already its own renderer process regardless of
+how tabs are grouped, so the dominant cost does not change; what multiplies is
+the per-Chrome *browser* process. ADR-043 rejected "one Chrome per agent" on
+≈4–5 GB at ten agents — but that estimate is per **agent** and is labelled in
+its own text as "rough order-of-magnitude estimates, not measured". Workspaces
+are far fewer than agents, and only a workspace actively being browsed needs a
+live Chrome. **The real figure is unmeasured and must be measured before this
+is built**; it is the input to the cap below, not a footnote.
+
+**This reopens a deliberately deferred decision.** ADR-043 lists the
+"browser-process pool (1→M Chromes)" as an escape hatch it chose not to build.
+This ADR builds it. Naming that explicitly, because ADR-043's coordinator owns
+exactly one Chrome for its whole lifetime and this is the change with the
+largest blast radius in D1.
+
+**The pool must decide, and none of these are implied:**
+
+1. **Cap.** How many Chromes may exist at once. Twenty workspaces cannot mean
+   twenty Chromes.
+2. **Eviction.** What happens at the cap — least-recently-used wins, or the
+   request fails. A silent eviction that logs a user out mid-task is worse than
+   a refusal.
+3. **Idle close.** `ReapIdleSessions` reaps tabs, not Chromes. Closing a whole
+   Chrome is a new operation.
+4. **Crash containment.** ADR-043 accepted "one Chrome crash takes down all
+   browsing" when there was one Chrome. With N, a crash must take down one
+   workspace, and the others must survive.
+5. **Sandbox allow-lists — CHECKED, and this is no longer a constraint.**
+   ADR-043 rejected multiple Chromes partly because the debug port was pinned
+   at 9223: the Landlock/seccomp allow-lists are a fixed compiled set and "a
+   dynamic per-manager port cannot be followed". **That reason has since
+   evaporated.** Chrome is now driven over `--remote-debugging-pipe` on
+   inherited fds 3/4 — `pkg/tools/browser/exec_resolver.go:60` states it
+   plainly: *"There is NO `--remote-debugging-port` — CDP flows over the
+   inherited fd 3/4"* — and `pkg/gateway/sandbox_apply.go:414` records the
+   allow-list entry was **removed along with that port**. N Chromes therefore
+   mean N pipes and nothing to allow-list.
+
+   (`pkg/tools/browser/manager.go:1338` still describes a pinned port, but that
+   comment governs the legacy no-coordinator fallback, not the coordinator path
+   this ADR changes.)
+
+**No open blocker remains on the mechanism.** The open item is cost: the
+per-Chrome memory figure is unmeasured, and it sizes the cap in item 1. Measure
+before building, not after.
+
 ### D1.2 One browser per workspace — everyone on it shares it
 
 **Superseding operator ruling, 2026-08-31 (Daniel Piatkowski): every agent on a
@@ -309,11 +373,10 @@ replaced. It is listed here only so a reader who finds it in the git history
 knows it was considered and rejected, not overlooked.
 
 Both keys already exist and already reach every tool
-(`pkg/tools/base.go:243-252`). **But see D1.2a:** the *discriminator* between
-an attended and an unattended turn does not exist and must be built, and the
-manager's single browser-context field must become per-key. An earlier
-revision of this section claimed "no new identity concept is introduced",
-which was wrong.
+(`pkg/tools/base.go:243-252`), and under the D1.2 ruling no discriminator
+between attended and unattended turns is needed — the workspace id alone is
+the key. An earlier revision of this section required both a discriminator and
+a per-key context map; the D1.2 ruling removed the need for either.
 
 Every browser tool already takes a session id on every call: `defaultSessionID`
 is passed at **9 call sites in `tools.go`** and **14 across
