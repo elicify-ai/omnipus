@@ -595,6 +595,69 @@ func renderVerbatim(node any) string {
 //	answers true only for the node kinds whose absence behaviour is written
 //	down in the evaluator, and false for everything else.
 //
+// W3 — `if(P, X, <nothing>)` becomes `if(P != "", X)`, when P is a bare
+// single-valued TEXT property.
+//
+//	W2 could not reach this and said so: on text `""` is a PRESENT falsy value
+//	(FR-007a), so "truthy" and "present" are different questions and DROPPING
+//	the guard would change the value of records whose P is the empty string.
+//	That reasoning was right about DROPPING the guard, which was the only move
+//	anyone had asked about. Keeping the guard and merely SPELLING it in our own
+//	grammar is a different question with a better answer, and the operator it
+//	needs — a comparison against the EMPTY LITERAL on a text property — is the
+//	one commit 9d2b16c4 established exists (`VaultFilterNode.value` carries no
+//	`minLength`; `records.Filter.LiteralGiven` exists in as many words because
+//	"the empty string is a legitimate value for `=`"; and inside a FORMULA the
+//	comparison does not even go through a filter — evalComparison hands the two
+//	operands straight to the ONE comparator).
+//
+//	THE THREE STATES, WHICH IS THE WHOLE PROOF. FR-007a keeps `""` PRESENT on a
+//	text property, so absent and empty are DIFFERENT states here and a rewrite
+//	has to match Obsidian on both, not on one of them:
+//
+//	  state of a text P    Obsidian: bare `P`        ours: `P != ""`
+//	  absent               `undefined` -> FALSY      FALSE — §8 R-2, either
+//	                                                 side absent is false for
+//	                                                 every operator but
+//	                                                 IS NULL / IS NOT NULL
+//	                                                 (compare_oracle.go); a
+//	                                                 formula calls the
+//	                                                 comparator DIRECTLY, so
+//	                                                 FR-008's absent-rescue —
+//	                                                 which lives a layer up in
+//	                                                 Filter.Match — never
+//	                                                 applies
+//	  present, `""`        `""` -> FALSY             FALSE — `"" <> ""`
+//	  present, a value     non-empty string ->       TRUE — FoldKey case-folds
+//	                       TRUTHY                    and does NOT trim, so `" "`
+//	                                                 is a value on both sides
+//
+//	The two columns coincide on every state, so the CONDITION is exact — not a
+//	subset, which matters more than it sounds: a subset would be safe only in
+//	positive position and would have to be refused under a `not:` the way the
+//	`!= ""` LEAF is (view_write.go's shapeIsSet). There is nothing to invert
+//	here. The rewritten formula takes the same branch on the same records, and
+//	a filter over it therefore selects the same rows at any depth of negation.
+//
+//	WHY IT IMPOSES NO CONDITION ON THE GUARDED EXPRESSION, where W2 does. W2
+//	DELETES the guard, so the guarded expression has to answer absence on its
+//	own; W3 KEEPS it. X is evaluated on exactly the records Obsidian evaluates
+//	it on, so whether X propagates absence is not this rewrite's question.
+//
+//	`many` IS EXCLUDED, like W2's. JavaScript reads an empty ARRAY as truthy
+//	while `<> ""` on a many property is element-wise (R-9) and answers false
+//	for it. That is a narrowing rather than a broadening, but it is not an
+//	equivalence, and this rewrite only makes equivalences.
+//
+//	THE ONE STATE THAT IS NOT ONE OF THE THREE, named rather than discovered
+//	later: a record whose single-valued text P holds a LIST is NON-CONFORMING
+//	(§8 R-4, validate.go's arity check), and R-4 answers false for every
+//	operator. JavaScript reads the array as truthy. Ours takes the else-branch
+//	where Obsidian takes the then-branch — FEWER rows, the direction FR-105
+//	permits. It is also not a divergence this rewrite introduces: R-4 is
+//	product-wide, and W2's guard-DROPPING has the identical behaviour there,
+//	because the guarded expression over a non-conforming operand is absent too.
+//
 // WHAT IS DELIBERATELY NOT REWRITTEN. `if(P, <boolean over P>, false)` reduces
 // too — a comparison over an absent operand is FALSE under R-2, not absent, so
 // the then-branch already yields the else-branch's value. It is left as a
@@ -791,7 +854,7 @@ func TranslateFormulas(pb *ParsedBase, schema *records.Schema) FormulaTranslatio
 	return out
 }
 
-// rewriteFormulaSource applies W1 and W2 until neither fires, returning the
+// rewriteFormulaSource applies W1, W2 and W3 until none fires, returning the
 // translated source and a human-readable note naming what changed (empty when
 // the source was carried verbatim).
 //
@@ -817,6 +880,11 @@ func rewriteFormulaSource(src string, schema *records.Schema) (out string, note 
 			if guard, guarded, reduced := reduceRedundantDateGuard(args[0], args[1], schema); reduced {
 				out = guarded
 				notes = append(notes, "its `if("+guard+", …)` presence guard was dropped as REDUNDANT — the guarded expression already answers absence wherever `"+guard+"` is absent, so no record's value changes")
+				continue
+			}
+			if guard, rewritten, ok := spellTextTruthinessGuard(args[0], args[1], schema); ok {
+				out = rewritten
+				notes = append(notes, "its bare `if("+guard+", …)` truthiness guard was spelled as `"+guard+` != ""`+"` — on a text property Obsidian's truthiness is exactly \"present and not the empty string\", which is what this comparison selects on all three states (absent, `\"\"`, a value), so the same records take the same branch")
 				continue
 			}
 		}
@@ -860,6 +928,46 @@ func reduceRedundantDateGuard(guard, guarded string, schema *records.Schema) (st
 		return "", "", false
 	}
 	return ref.Name, strings.TrimSpace(guarded), true
+}
+
+// spellTextTruthinessGuard decides W3. It returns the guard's own source text
+// and the whole rewritten `if(...)` when the guard is a bare single-valued TEXT
+// property, and reports false otherwise — including for every case it cannot
+// prove, which is the safe answer.
+//
+// IT REWRITES THE CONDITION AND KEEPS THE `if`, which is why it needs nothing
+// from the guarded expression. See W3's proof in this section's header for the
+// three-state table that makes `P != ""` the exact spelling of Obsidian's
+// truthiness on text — and for the single non-conforming state where the two
+// differ, in the narrowing direction, for a reason (§8 R-4) that predates this
+// rewrite and applies to W2's guard-dropping identically.
+func spellTextTruthinessGuard(guard, guarded string, schema *records.Schema) (string, string, bool) {
+	if schema == nil {
+		return "", "", false
+	}
+	guardNode, err := records.ParseFormula(guard)
+	if err != nil {
+		return "", "", false
+	}
+	ref, ok := guardNode.(*records.Ref)
+	if !ok || ref.Kind != records.RefProperty {
+		return "", "", false
+	}
+	prop, found := schema.Property(ref.Name)
+	if !found || prop.Type != records.TypeText || prop.Many {
+		// TEXT and single-valued is the whole permitted set. Every other type
+		// either has no empty-string VALUE to compare against at all (FR-007a
+		// makes `""` the absent state there, so `P != ""` is `IS NOT NULL`
+		// spelled awkwardly and W2 already rules the one case it fits), or —
+		// `many` — reads an empty list as truthy in JavaScript while `<>` is
+		// element-wise here.
+		return "", "", false
+	}
+	// The guard's OWN source text is reused rather than re-printed from the
+	// parsed Ref: this package has no formula printer, and a name that needed
+	// quoting would come back out unquoted from one written to serve this line.
+	g := strings.TrimSpace(guard)
+	return g, `if(` + g + ` != "", ` + strings.TrimSpace(guarded) + `)`, true
 }
 
 // absentWhenAbsent reports whether an expression is ABSENT on every record

@@ -76,10 +76,17 @@ func TestRewriteW2_DropsATruthyDateGuardOnlyWhenItIsProvablyRedundant(t *testing
 			why:  "same rule, and Finance-AR.base writes it this way round",
 		},
 		{
-			name: "a TEXT guard is never dropped",
+			// W3 CHANGED THIS ROW'S ANSWER, AND NOT ITS POINT. The guard is
+			// still never DROPPED on text, for the reason this row always
+			// gave; what changed is that keeping it no longer costs a refusal.
+			// `P != ""` spells Obsidian's truthiness exactly on a text property
+			// — see W3's three-state proof in translate.go's header and
+			// formula_text_truthiness_test.go, which grades it at the VIEW,
+			// under a negation, against the independent oracle.
+			name: "a TEXT guard is never dropped — it is SPELLED (W3)",
 			in:   `if(note, (date(due) - today()).days, "")`,
-			want: `if(note, (date(due) - today()).days)`,
-			why:  "FR-007a keeps \"\" a PRESENT value on text, so a text property can be present and FALSY — `truthy` and `present` are different questions and only the guard knows which was meant",
+			want: `if(note != "", (date(due) - today()).days)`,
+			why:  "FR-007a keeps \"\" a PRESENT value on text, so a text property can be present and FALSY — `truthy` and `present` are different questions, W2's guard-DROPPING stays refused here, and the guard is re-expressed rather than removed",
 		},
 		{
 			name: "a NUMBER guard is never dropped",
