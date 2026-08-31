@@ -734,8 +734,8 @@ func removeEmptyDirsRecursively(dir string) error {
 	}
 	for _, e := range entries {
 		if e.IsDir() {
-			if err := removeEmptyDirsRecursively(filepath.Join(dir, e.Name())); err != nil {
-				return err
+			if rErr := removeEmptyDirsRecursively(filepath.Join(dir, e.Name())); rErr != nil {
+				return rErr
 			}
 		}
 	}

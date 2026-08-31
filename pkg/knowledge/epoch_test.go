@@ -43,12 +43,12 @@ func TestIndexEpoch_CorruptFileIsLoudNotZero(t *testing.T) {
 	if err != nil {
 		t.Fatalf("IndexDirFor: %v", err)
 	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
+	if mkErr := os.MkdirAll(dir, 0o700); mkErr != nil {
+		t.Fatalf("MkdirAll: %v", mkErr)
 	}
 	path := filepath.Join(dir, indexEpochFileName)
-	if err := os.WriteFile(path, []byte("{not valid json"), 0o600); err != nil {
-		t.Fatalf("WriteFile: %v", err)
+	if wErr := os.WriteFile(path, []byte("{not valid json"), 0o600); wErr != nil {
+		t.Fatalf("WriteFile: %v", wErr)
 	}
 
 	got, err := IndexEpoch(home, root)

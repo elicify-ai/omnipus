@@ -173,8 +173,8 @@ func BumpIndexEpoch(home, collectionRoot string) (int64, error) {
 		return 0, err
 	}
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return 0, fmt.Errorf("knowledge: create index dir %s: %w", dir, err)
+	if mkErr := os.MkdirAll(dir, 0o700); mkErr != nil {
+		return 0, fmt.Errorf("knowledge: create index dir %s: %w", dir, mkErr)
 	}
 	lockPath := path + ".lock"
 
