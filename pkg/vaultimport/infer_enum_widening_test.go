@@ -17,6 +17,8 @@
 package vaultimport
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -421,4 +423,187 @@ func containsString(hay []string, needle string) bool {
 		}
 	}
 	return false
+}
+
+// ---------------------------------------------------------------------------
+// THE WIRING GUARD
+//
+// Every test above calls WidenEnumsFromBases directly, which proves the RULE
+// and proves nothing at all about whether an import runs it. When this guard
+// was written the whole package was green with the call deleted from run.go:
+// the rule was correct, tested, and completely unreachable — the exact shape
+// of "done" that is not delivered.
+//
+// It also pins the POSITION, which is the part a refactor is most likely to
+// get wrong. Widening the SchemaIndex alone would admit the clause at
+// translation time and leave the written schema refusing the same value at
+// query time, so the view would translate cleanly, load cleanly, and match
+// nothing. That failure is invisible to every assertion about losses, so this
+// test reads the schema FILE off disk rather than the in-memory report.
+// ---------------------------------------------------------------------------
+
+func TestEnumWidening_RunAppliesItAndTheWrittenSchemaCarriesTheValue(t *testing.T) {
+	root, rep := provisionVault(t, map[string]string{
+		"Notes/a.md": "---\ntype: task\nstatus: todo\n---\n\nbody\n",
+		"Notes/b.md": "---\ntype: task\nstatus: done\n---\n\nbody\n",
+		"Notes/c.md": "---\ntype: task\nstatus: done\n---\n\nbody\n",
+		"Bases/Tasks.base": `filters:
+  and:
+    - type == "task"
+views:
+  - type: table
+    name: Doing
+    filters:
+      and:
+        - status == "doing"
+`,
+	})
+
+	// 1. THE WRITTEN FILE. This is the assertion that catches a widening
+	// applied only to the SchemaIndex: records.LoadSchemas reads this file
+	// back, and a `values:` list without `doing` refuses the clause at query
+	// time however cleanly the view translated.
+	raw, err := os.ReadFile(filepath.Join(records.SchemaDir(root), "task.yaml"))
+	if err != nil {
+		t.Fatalf("reading the schema this run wrote: %v", err)
+	}
+	if !strings.Contains(string(raw), "doing") {
+		t.Errorf("the written task.yaml does not declare `doing`, so the import did not run the widening (or ran it somewhere the file cannot see):\n%s", raw)
+	}
+
+	// 1b. AND THE ROUND TRIP, IN BOTH DIRECTIONS. Asserting only that the
+	// widened value is ACCEPTED would pass just as happily against a schema
+	// that accepts everything — including one where `status` had silently
+	// stopped being an enum at all, which is a real way this rule could go
+	// wrong (widen past the ceiling, or clobber the type). So the same
+	// reloaded schema must also still REFUSE a value nobody declared. One
+	// direction proves the widening happened; the other proves the set is
+	// still closed around it.
+	schemaSet, _, loadErr := records.LoadSchemas(root)
+	if loadErr != nil {
+		t.Fatalf("reloading the schemas through the real loader: %v", loadErr)
+	}
+	validate := func(status string) bool {
+		body := "---\ntype: task\nstatus: " + status + "\n---\n\nbody\n"
+		abs := filepath.Join(root, "Notes", "probe.md")
+		rec := records.ParseRecord(abs, []byte(body))
+		if rec.ParseError != "" {
+			t.Fatalf("probe note does not parse: %s", rec.ParseError)
+		}
+		rr := records.ValidateRecord(schemaSet, rec, records.ValidateOptions{})
+		if !rr.Recognised {
+			t.Fatalf("the reloaded schema set does not recognise `type: task` at all")
+		}
+		return rr.Valid()
+	}
+	if !validate("doing") {
+		t.Error("the reloaded schema REFUSES `status: doing` — the value reached the file but not the closed set the loader reads, so the view would translate cleanly and then match nothing at query time")
+	}
+	if validate("a-value-no-note-and-no-base-ever-named") {
+		t.Error("the reloaded schema ACCEPTS a value nothing declared — `status` is no longer a closed set, so the assertion above proves nothing and the widening has destroyed the enum rather than extended it")
+	}
+
+	// 2. THE VIEW. The point of the widening is that this view survives.
+	v := findView(t, rep, "Doing")
+	if v.Disabled {
+		t.Errorf("the view is DISABLED — the literal was still refused: %v", v.Losses)
+	}
+	if len(v.Losses) != 0 {
+		t.Errorf("the view carries losses: %v", v.Losses)
+	}
+
+	// 3. THE ACCOUNT IS REACHABLE. A widening the report cannot see is a
+	// silent widening, which is the one thing this rule promised never to be.
+	// The account is stored ON the widened property, so the collector the
+	// report calls must find it there — asserted here against the same rule
+	// running over the same base, because Run does not hand the schema set
+	// back out.
+	inferred := taskLikeSchema()
+	pb, parseErr := ParseBaseFile([]byte(`
+filters:
+  and:
+    - type == "task"
+views:
+  - type: table
+    name: Doing
+    filters:
+      and:
+        - status == "doing"
+`))
+	if parseErr != nil {
+		t.Fatalf("ParseBaseFile: %v", parseErr)
+	}
+	WidenEnumsFromBases(inferred, []string{"Tasks.base"}, map[string]*ParsedBase{"Tasks.base": pb})
+	collected := CollectEnumWidenings(inferred)
+	if len(collected) != 1 {
+		t.Fatalf("CollectEnumWidenings found %d account(s), want 1 — the report asks this package for its own decisions through this function, so a widening it cannot see is one the operator is never told about", len(collected))
+	}
+	if !strings.Contains(strings.Join(collected[0].ReportLines(), "\n"), "doing") {
+		t.Errorf("the collected account does not name the value: %v", collected[0].ReportLines())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// FR-009 SCOPING — a literal belongs to ONE record type's vocabulary
+//
+// Property names are not unique across record types: `status` is an enum on
+// `task` and an enum on `content`, with different vocabularies. The literal
+// in `Tasks.base` is scoped to the type THAT VIEW resolved to, and to nothing
+// else.
+//
+// Getting this wrong is the worst failure this rule could have, and the
+// quietest: a rule that widened every type carrying a property of that name
+// would silently rewrite `content.status` from a base that never mentions
+// content, and nothing downstream would complain — the schema would just be
+// wrong, permanently, in a file the operator rarely opens. It is the same
+// scoping records.ValidateViewAgainstSchemas enforces, applied one step
+// earlier.
+// ---------------------------------------------------------------------------
+
+func TestEnumWidening_ALiteralIsScopedToTheViewsOwnRecordType(t *testing.T) {
+	inferred := map[string][]InferredProperty{
+		"task": {
+			{Name: "status", Type: records.TypeEnum, EnumValues: []string{"done", "todo"}},
+		},
+		"content": {
+			// A DIFFERENT vocabulary under the SAME property name.
+			{Name: "status", Type: records.TypeEnum, EnumValues: []string{"draft", "scheduled"}},
+		},
+	}
+	pb, err := ParseBaseFile([]byte(`
+filters:
+  and:
+    - type == "task"
+views:
+  - type: table
+    name: Doing
+    filters:
+      and:
+        - status == "doing"
+`))
+	if err != nil {
+		t.Fatalf("fixture base does not parse: %v", err)
+	}
+	WidenEnumsFromBases(inferred, []string{"Tasks.base"}, map[string]*ParsedBase{"Tasks.base": pb})
+
+	var taskVals, contentVals []string
+	for _, p := range inferred["task"] {
+		if p.Name == "status" {
+			taskVals = p.EnumValues
+		}
+	}
+	for _, p := range inferred["content"] {
+		if p.Name == "status" {
+			contentVals = p.EnumValues
+		}
+	}
+	if !containsString(taskVals, "doing") {
+		t.Errorf("task.status is %v — the view resolved to `task`, so its literal belongs there", taskVals)
+	}
+	if containsString(contentVals, "doing") {
+		t.Errorf("content.status is %v — `doing` came from a view that resolved to `task`, and no base in this fixture mentions content at all. A rule that widens every type sharing a property NAME rewrites schemas from bases that never referred to them, and nothing downstream ever complains.", contentVals)
+	}
+	if len(contentVals) != 2 {
+		t.Errorf("content.status is %v, want its original two values untouched", contentVals)
+	}
 }
