@@ -190,6 +190,16 @@ func TestQuery_NoComparisonIsDelegatedToSQL(t *testing.T) {
 	if err := store.Relations(ctx, sel, func(RelationHit) error { return nil }); err != nil {
 		t.Fatalf("Relations: %v", err)
 	}
+	// FR-131's two new per-child streams. They are in the corpus for the same
+	// reason every other read path is: a statement that is never emitted is
+	// never inspected, and the control would then be watching a schema two
+	// tables smaller than the one production queries.
+	if err := store.Tags(ctx, sel, func(TagHit) error { return nil }); err != nil {
+		t.Fatalf("Tags: %v", err)
+	}
+	if err := store.Links(ctx, sel, func(LinkHit) error { return nil }); err != nil {
+		t.Fatalf("Links: %v", err)
+	}
 
 	// The EVALUATION path, not only the store's own methods. This is the entry
 	// point a query actually arrives through, and it is the one a future
@@ -365,6 +375,14 @@ var mustAccept = []struct {
 		stmt: `SELECT n.path, n.record_type, n.record_id, n.source_hash, r.prop, r.elem, r.target, r.heading, r.display, r.raw FROM notes AS n JOIN note_relations AS r ON r.note_id = n.note_id WHERE n.record_type = ?`,
 	},
 	{
+		why:  "FR-131's tag stream: the SAME admitted parent/child join shape over a new child table, and the same narrowing predicates",
+		stmt: `SELECT n.path, n.source_hash, g.elem, g.tag FROM notes AS n JOIN note_tags AS g ON g.note_id = n.note_id WHERE n.kind = ?`,
+	},
+	{
+		why:  "FR-131's link stream: one statement for links AND embeds, because partitioning on `embed` in SQL would be a predicate over a value column",
+		stmt: `SELECT n.path, n.source_hash, l.elem, l.target, l.heading, l.display, l.raw, l.embed FROM notes AS n JOIN note_links AS l ON l.note_id = n.note_id WHERE n.path LIKE ? ESCAPE '\'`,
+	},
+	{
 		why:  "a scope-only query narrows on the path prefix alone",
 		stmt: `SELECT COUNT(*) FROM notes WHERE notes.path LIKE ? ESCAPE '\'`,
 	},
@@ -402,13 +420,167 @@ func TestSQLGate_TheGuardFiresAndDoesNotCryWolf(t *testing.T) {
 	})
 }
 
-// TestSQLGate_ReadPathTouchesNoValueColumn is the second half of the same
-// control, from the other direction.
+// ---------------------------------------------------------------------------
+// THE COLUMN HALF — AC-8.10 part (b), extended by FR-135
 //
-// AC-8.10 lists constructs. This lists COLUMNS: no predicate may mention a
-// column that holds a property value. A query that compared `v_text` with an
-// operator the list above happens not to spell would pass that check and fail
-// this one.
+// AC-8.10's construct list catches an operator. This half catches a COLUMN: no
+// predicate in any read-path statement may mention a column that holds a value
+// or a piece of file metadata, whatever operator it is written with. A
+// comparison spelled with something the construct list happens not to enumerate
+// passes that check and fails this one.
+//
+// IT IS A PARTITION, NOT A DENYLIST, and that is the whole point of the rewrite.
+// A flat list of forbidden column names is VACUOUS in the direction that
+// matters: delete "mtime" from it and nothing fails, because no statement
+// mentions mtime in a predicate today and the check simply stops looking for a
+// thing that was never there. That is a guard reporting green about a rule it no
+// longer enforces — the exact shape §1.3 exists to remove, and the exact reason
+// the previous revision's "extension" of this control on the construct half only
+// was called a two-thirds omission.
+//
+// So every column of every table is classified into exactly one of two maps,
+// checked against the DDL itself. Removing a column from valueColumns does not
+// relax the guard; it makes the column UNCLASSIFIED, and
+// TestSQLGate_EveryColumnIsClassified fails naming it. Adding a column to the
+// schema without classifying it fails the same way — which is what FR-135 is,
+// stated as a mechanism rather than as an instruction to remember.
+// ---------------------------------------------------------------------------
+
+// predicateColumns is the CLOSED set of columns a read-path predicate may
+// mention, each with the reason it narrows rather than decides.
+//
+// Adding a row here is a specification change with the same two obligations
+// narrowingDimensions carries, and for the same reason: a predicate the
+// CountCandidates statement cannot apply makes B1 bound a different population
+// from the one the stream visits.
+var predicateColumns = map[string]string{
+	"record_type": "set membership over an indexed column; the Selector's own dimension (D16.2b)",
+	"kind":        "note-kind narrowing; same argument as record_type",
+	"path":        "workspace/collection scope (FR-060), as a caller-INDEPENDENT prefix built here from a resolved root",
+	"note_id":     "the child-table join anchor — an equality between a parent and its child, admitted by D16.6a Ruling 2 as assembly, not comparison",
+}
+
+// valueColumns is every other column in the schema: columns NO predicate may
+// mention, each with the reason.
+//
+// The three stat columns are here because FR-135 puts them here in as many
+// words: "stat metadata is a comparison target and therefore the Go
+// comparator's, never a SQL predicate's". `file.mtime > 2026-01-01` is a
+// comparison over a date, governed by R-7, and SQLite's own date handling
+// violates R-7 four ways — `unixepoch('not-a-date')` returns NULL with NO error,
+// which would write a parse failure into the cell reserved for absence.
+var valueColumns = map[string]string{
+	// note_props — property values and the state that distinguishes a
+	// non-conforming one from an absent one.
+	"prop":   "a property NAME; a predicate over it is the pushdown ruling R-A forbids",
+	"elem":   "an element position; only the assembler orders these, and never SQLite",
+	"state":  "FR-021b's three-state flag is not SQLite's to interpret; set membership over it is still a decision",
+	"vtype":  "the declared type; typing is the schema's and the comparator's",
+	"v_text": "R-1: SQLite ranks any text above any number ('3' > 2 is 1)",
+	"v_num":  "FR-020b: stored as exact decimal DIGITS in a BLOB; a SQL comparison would coerce or fail silently",
+	"v_time": "R-7: SQLite's date handling violates it four ways, one of them returning NULL with no error",
+	"v_link": "a wikilink resolves through FR-031, in Go, against the vault",
+	"v_raw":  "the source text, including a non-conforming value's diagnostic evidence — R-4 says it has no value",
+	"quoted": "lexical form, for the decode path; nothing compares it",
+
+	// notes — identity, freshness and FR-131's stat metadata.
+	"record_id":   "R-8: CO-0142 and co-0142 are two distinct records; no collation, and no SQL comparison",
+	"source_hash": "the freshness token is COMPARED BETWEEN TWO INDEXES in Go (FR-020c), never inside one of them",
+	"indexed_at":  "bookkeeping; no query narrows on when a row was written",
+	"mtime":       "FR-135: stat metadata is a comparison target, and `file.mtime` is a date under R-7 — the Go comparator's",
+	"ctime":       "FR-135, and FR-133 on top of it: absence here is a PLATFORM fact, and SQL's NULL semantics get absence wrong (R-2/R-3)",
+	"size":        "FR-135: `file.size` is an integer comparison under R-1, decided in Go over exact decimal digits",
+
+	// note_tasks.
+	"line":   "a source line number; a renderer's coordinate, not a filter target",
+	"status": "FR-076a's checkbox state; the comparator decides what open and done mean",
+	"text":   "the checkbox's text — a value, with every R-1/R-9 problem any other text has",
+
+	// note_relations and note_links share these shapes.
+	"target":  "FR-135: a link target, resolved through FR-031 in Go against the vault",
+	"heading": "part of a link value",
+	"display": "part of a link value",
+	"raw":     "a link's source text, quoted by reports and decoded in Go",
+	"embed":   "FR-135: the `file.links` / `file.embeds` partition is made in Go (records.SplitLinkRows); a predicate on it is a comparison",
+
+	// note_tags.
+	"tag": "FR-135: `file.tags` is a text comparison under R-9's fold rules, which SQLite does not implement for non-ASCII at all",
+}
+
+// createTable pulls one table's name and body out of the DDL.
+var createTable = regexp.MustCompile(`(?s)CREATE TABLE IF NOT EXISTS (\w+) \((.*?)\n\)`)
+
+// schemaColumns reads the column names out of the store's OWN ddl constant.
+//
+// Reading the DDL rather than a hand-kept list is what makes the classification
+// test detect a column that was ADDED without being classified. A list copied by
+// hand describes a memory of the schema, and the schema is what the predicates
+// are written against.
+func schemaColumns(t *testing.T) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	tables := createTable.FindAllStringSubmatch(ddl, -1)
+	if len(tables) == 0 {
+		t.Fatal("no CREATE TABLE statements were found in ddl; this guard reads the schema and just read nothing")
+	}
+	for _, tbl := range tables {
+		for _, line := range strings.Split(tbl[2], "\n") {
+			fields := strings.Fields(strings.TrimSpace(line))
+			if len(fields) == 0 || strings.EqualFold(fields[0], "PRIMARY") {
+				continue
+			}
+			out[strings.TrimSuffix(fields[0], ",")] = tbl[1]
+		}
+	}
+	return out
+}
+
+// TestSQLGate_EveryColumnIsClassified is the CAUSE half of AC-8.10's column
+// control, and the thing that makes the effect half non-vacuous.
+func TestSQLGate_EveryColumnIsClassified(t *testing.T) {
+	columns := schemaColumns(t)
+	if len(columns) < 10 {
+		t.Fatalf("schemaColumns found only %d columns; the DDL parser is not reading the schema", len(columns))
+	}
+
+	for col, table := range columns {
+		_, narrows := predicateColumns[col]
+		_, isValue := valueColumns[col]
+		switch {
+		case narrows && isValue:
+			t.Errorf("column %s.%s is in BOTH classifications; it must be in exactly one", table, col)
+		case !narrows && !isValue:
+			t.Errorf(
+				"column %s.%s is in NEITHER classification.\n\n"+
+					"Every column of this schema is one of two things and the guard needs to be told which:\n"+
+					"  * a NARROWING column — set membership over an indexed column, or a parent/child join\n"+
+					"    anchor. Add it to predicateColumns WITH the reason, and make sure narrowing()\n"+
+					"    applies it to BOTH the CountCandidates statement and the candidate stream, or B1\n"+
+					"    bounds a different population from the one that is visited.\n"+
+					"  * a VALUE or METADATA column — anything a comparison could be made against. Add it to\n"+
+					"    valueColumns WITH the reason, and it becomes a column no predicate may mention.\n\n"+
+					"IF YOU ARRIVED HERE BY DELETING A ROW FROM valueColumns: that is the mutation this test\n"+
+					"exists to catch. Deleting the row does not relax the rule, it removes the classification,\n"+
+					"and TestSQLGate_ReadPathTouchesNoValueColumn would then have silently stopped checking\n"+
+					"that column — which is a guard reporting green about something it no longer enforces\n"+
+					"(FR-135; the same two-thirds omission D16.6a blocked on one revision ago).",
+				table, col)
+		}
+	}
+
+	for col := range predicateColumns {
+		if _, ok := columns[col]; !ok {
+			t.Errorf("predicateColumns names %q, which is not a column of this schema; the classification must describe the DDL, not a memory of it", col)
+		}
+	}
+	for col := range valueColumns {
+		if _, ok := columns[col]; !ok {
+			t.Errorf("valueColumns names %q, which is not a column of this schema; the classification must describe the DDL, not a memory of it", col)
+		}
+	}
+}
+
+// TestSQLGate_ReadPathTouchesNoValueColumn is the EFFECT half.
 func TestSQLGate_ReadPathTouchesNoValueColumn(t *testing.T) {
 	rec := NewRecorder()
 	store, _ := openIndex(t, Options{Recorder: rec})
@@ -421,19 +593,106 @@ func TestSQLGate_ReadPathTouchesNoValueColumn(t *testing.T) {
 	if err := store.Tasks(ctx, sel, func(TaskHit) error { return nil }); err != nil {
 		t.Fatalf("Tasks: %v", err)
 	}
+	if err := store.Relations(ctx, sel, func(RelationHit) error { return nil }); err != nil {
+		t.Fatalf("Relations: %v", err)
+	}
+	// FR-131's two new streams. A statement that is never emitted is never
+	// inspected, so the corpus must reach them or this half of the guard
+	// watches two fewer tables than the schema has.
+	if err := store.Tags(ctx, sel, func(TagHit) error { return nil }); err != nil {
+		t.Fatalf("Tags: %v", err)
+	}
+	if err := store.Links(ctx, sel, func(LinkHit) error { return nil }); err != nil {
+		t.Fatalf("Links: %v", err)
+	}
 
-	valueColumns := []string{"v_text", "v_num", "v_time", "v_link", "v_raw", "state", "target", "record_id", "status", "text"}
-	for _, stmt := range rec.InPhase(PhaseRead) {
+	stmts := rec.InPhase(PhaseRead)
+	if len(stmts) == 0 {
+		t.Fatal("the recorder captured no read-path statements; this half of the control is watching nothing")
+	}
+	for _, stmt := range stmts {
 		i := strings.Index(strings.ToUpper(stmt), " WHERE ")
 		if i < 0 {
 			continue
 		}
 		where := stmt[i:]
-		for _, col := range valueColumns {
+		for col, why := range valueColumns {
 			if regexp.MustCompile(`\b` + col + `\b`).MatchString(where) {
-				t.Errorf("a value column %q appears in a predicate: %s", col, stmt)
+				t.Errorf("a value column %q appears in a predicate: %s\n  why it may not: %s", col, stmt, why)
 			}
 		}
+	}
+}
+
+// TestSQLGate_NoStatementJoinsTwoChildTables is FR-131's assembly rule, enforced.
+//
+// `note_props`, `note_tags`, `note_links`, `note_tasks` and `note_relations` are
+// five children of one parent. Joining any two of them in one statement returns
+// their CARTESIAN PRODUCT — a note with 30 properties, 10 tags and 40 links
+// yields 12,000 rows where it yields 30 today — and every aggregate computed
+// over that product is wrong by the same factor. D16.6 fixed this exact fan-out
+// once already, when COUNT(*) returned 2 and SUM returned 200 where the truth
+// was 1 and 100. At B1's 50,000-candidate ceiling the second occurrence is a
+// hang rather than a wrong number.
+//
+// The rule is checked mechanically because it is a CONVENIENT mistake: assembling
+// a whole note from one statement is the obvious thing to write, it looks
+// tidier than four streams, and on a three-note test fixture it produces the
+// right answer.
+func TestSQLGate_NoStatementJoinsTwoChildTables(t *testing.T) {
+	rec := NewRecorder()
+	store, _ := openIndex(t, Options{Recorder: rec})
+	ctx := context.Background()
+	mustUpsert(t, store, plantNote(t, 1, "growing"))
+	rec.Reset()
+
+	sel := Selector{RecordType: "plant", PathPrefix: "garden/"}
+	if _, err := store.CountCandidates(ctx, sel); err != nil {
+		t.Fatalf("CountCandidates: %v", err)
+	}
+	collect(t, store, sel)
+	if err := store.Tasks(ctx, sel, func(TaskHit) error { return nil }); err != nil {
+		t.Fatalf("Tasks: %v", err)
+	}
+	if err := store.Relations(ctx, sel, func(RelationHit) error { return nil }); err != nil {
+		t.Fatalf("Relations: %v", err)
+	}
+	if err := store.Tags(ctx, sel, func(TagHit) error { return nil }); err != nil {
+		t.Fatalf("Tags: %v", err)
+	}
+	if err := store.Links(ctx, sel, func(LinkHit) error { return nil }); err != nil {
+		t.Fatalf("Links: %v", err)
+	}
+
+	children := []string{"note_props", "note_tags", "note_links", "note_tasks", "note_relations"}
+	stmts := rec.InPhase(PhaseRead)
+	if len(stmts) == 0 {
+		t.Fatal("the recorder captured no read-path statements; this guard is watching nothing")
+	}
+	sawChild := false
+	for _, stmt := range stmts {
+		var mentioned []string
+		for _, child := range children {
+			if regexp.MustCompile(`\b` + child + `\b`).MatchString(stmt) {
+				mentioned = append(mentioned, child)
+			}
+		}
+		if len(mentioned) > 0 {
+			sawChild = true
+		}
+		if len(mentioned) > 1 {
+			t.Errorf(
+				"one statement joins %v — %d child tables of the same parent.\n"+
+					"  statement: %s\n"+
+					"That is their CARTESIAN PRODUCT: 30 properties x 10 tags x 40 links is 12,000 rows for "+
+					"a note that yields 30, and every aggregate over it is wrong by the same factor. FR-131 "+
+					"requires each child table to be streamed by its OWN statement under the shared "+
+					"narrowing, assembled per note in Go — the Tasks/Relations/Tags/Links pattern.",
+				mentioned, len(mentioned), stmt)
+		}
+	}
+	if !sawChild {
+		t.Fatal("no captured statement mentioned any child table; this guard would pass over an empty corpus")
 	}
 }
 
