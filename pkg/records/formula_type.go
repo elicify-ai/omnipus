@@ -469,11 +469,13 @@ func requireIntegralLiteral(n FormulaNode, side string) *FormulaError {
 	if !ok {
 		return nil
 	}
-	d, err := ParseDecimal(lit.Text)
-	if err != nil {
-		return nil // already reported by inferNode
-	}
-	if d.IsFractional() {
+	// A literal that does not parse is NOT reported here. inferNode already
+	// refused this exact literal with a message about the number itself;
+	// raising a second refusal about `%` would send the author to the operator
+	// when the fault is the operand. One fault, one refusal — which is why the
+	// parse result is a CONDITION on the fractional check rather than an early
+	// return.
+	if d, derr := ParseDecimal(lit.Text); derr == nil && d.IsFractional() {
 		return newFormulaError(FormulaErrType, lit.Offset, "a whole number",
 			"FR-144: `%%` is defined over integers only, and the %s operand `%s` is not one — wrap it in round()", side, lit.Text)
 	}
@@ -684,14 +686,16 @@ func widerArity(a, b FormulaArity) FormulaArity {
 	return ArityOne
 }
 
-func argumentCountPhrase(min, max int) string {
+func argumentCountPhrase(lo, hi int) string {
 	switch {
-	case min == max:
-		return fmt.Sprintf("exactly %d argument(s)", min)
-	case max >= maxFormulaNodes:
-		return fmt.Sprintf("at least %d argument(s)", min)
+	case lo == hi:
+		return fmt.Sprintf("exactly %d argument(s)", lo)
+	case hi >= maxFormulaNodes:
+		// An open-ended maximum: `list()` is the only function with one, and
+		// its real bound is the node cap, not an argument count.
+		return fmt.Sprintf("at least %d argument(s)", lo)
 	}
-	return fmt.Sprintf("between %d and %d arguments", min, max)
+	return fmt.Sprintf("between %d and %d arguments", lo, hi)
 }
 
 func callDisplayName(node *Call) string {
