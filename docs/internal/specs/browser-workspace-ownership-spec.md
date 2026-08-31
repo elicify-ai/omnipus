@@ -512,8 +512,8 @@ Owns the audit events (FR-027) and their provenance assertion (FR-035); disposal
 - **AC1:** two agents issuing `browser_navigate` concurrently — neither observes the other's mid-navigation state, neither returns `IsError=true`, exactly one gets `{"deferred": true, …}`.
 - **AC2:** a human holding the live-view control lock outranks the lease; the deferral reason is ADR-038 D6's text and the lease was never acquired.
 - **AC3:** an action tool that panics or is cancelled while holding the lease does not prevent the next acquire within `leaseWaitTimeout`.
-- **AC4:** read-only tools (`browser_screenshot`, `browser_get_text`, `browser_wait`) are never deferred.
-- **AC5:** **every** tool in `pkg/tools/browser` that mutates page or tab state acquires the lease; the exemption list is exactly the three in AC4. A twelfth tool that is neither leased nor exempt fails the gate (FR-019a).
+- **AC4:** exempt tools are never deferred. The exempt set is **five**: three read-only (`browser_screenshot`, `browser_get_text`, `browser_wait`), plus `browser_snapshot` (read-only, D2 FR-018) and `browser_handle_dialog` (**recovery** — D2 FR-035; it must be able to clear a wedge held by a blocked `browser_click`, so leasing it would make it defer behind the very thing it exists to unwedge).
+- **AC5:** **every** tool in `pkg/tools/browser` that mutates page or tab state acquires the lease; the exemption list is exactly the five in AC4. A tool that is neither leased nor exempt fails the gate (FR-019a).
 
 **US-10 (P1) The wire contract holds, and its one semantic change is visible.** As a maintainer, no field changes — and the meaning change that *does* happen is not smuggled through as prose.
 - **AC1:** `make verify-contracts` exits 0 with no `properties:`/`required:`/`enum:`/`type:` change.
@@ -667,7 +667,7 @@ Owns the audit events (FR-027) and their provenance assertion (FR-035); disposal
 - **Given** the tool registry after `RegisterTools`
 - **When** each registered `browser_*` tool is classified
 - **Then** every tool that mutates page or tab state acquires the lease
-- **And** the unleased set is exactly `{browser_screenshot, browser_get_text, browser_wait}`
+- **And** the unleased set is exactly `{browser_screenshot, browser_get_text, browser_wait, browser_snapshot, browser_handle_dialog}`
 
 **Scenario: the pool refuses at the cap rather than evicting — US-15, FR-038, FR-039**
 - **Given** `max_browsers = 2` and live browsers for workspaces W1 and W2, W1 holding a login
@@ -764,7 +764,7 @@ Owns the audit events (FR-027) and their provenance assertion (FR-035); disposal
 | FR-017 | Gateway prefers the attaching session's `workspace_id` | US-2, US-11 | human-browses-first | `TestGateway_PrefersSessionWorkspaceID` | round-1 C4 |
 | FR-018 | Multi-workspace agent: turn and panel agree, including agreeing to refuse | US-11 | ambiguous-refused | `TestMultiWorkspaceAgent_TurnAndPanelAgree` | §6 Q2 |
 | FR-019 | Per-browser write lease held for one action-tool call (**§14**) | US-9 | two-writers | `TestWriteLease_OneWriterPerBrowser` | D2.10 |
-| **FR-019a** | **Every** mutating `browser_*` tool acquires the lease; the exempt set is a closed list of three; the check is registry-driven | US-9/AC5 | every-mutating-tool-leased | `TestWriteLease_EveryActionToolIsLeased` | MAJ-008 |
+| **FR-019a** | **Every** mutating `browser_*` tool acquires the lease; the exempt set is a closed list of **five** (3 read-only + `browser_snapshot` + `browser_handle_dialog`); the check is registry-driven | US-9/AC5 | every-mutating-tool-leased | `TestWriteLease_EveryActionToolIsLeased` | MAJ-008, D2 §15.2 |
 | FR-020 | Loser gets non-error `{"deferred":true,"reason":…}` | US-9 | two-writers | `TestWriteLease_LoserGetsDeferredNotError` | D2.10 |
 | FR-021 | Read-only tools ungated | US-9/AC4 | read-only-never-deferred | `TestWriteLease_ReadOnlyToolsUngated` | D2.10 |
 | FR-022 | `controlledResult` evaluated before the lease | US-9/AC2 | human-outranks-lease | `TestWriteLease_HumanControlTakesPrecedence` | ADR-038 D6 |
@@ -1055,7 +1055,17 @@ func leaseWrite(
 
 1. **Composition order is fixed:** `controlledResult` first (a human holding the wheel outranks an agent queue — ADR-038 D6), then `leaseWrite`. Both produce the same `{"deferred": true, "reason": …}` non-error shape with different reason text. When a human holds control, the lease is **never acquired** (FR-022).
 2. **`controlledResult` must ask about the resolved key** (FR-002c). It currently asks `IsControlled(defaultSessionID)` (`tools.go:963`); left unchanged, it returns `false` forever once the live registry is re-keyed, and the human control lock silently stops working — a regression of a shipped safety property.
-3. **Membership is a rule, not a list** (FR-019a): every tool in `pkg/tools/browser` that mutates page or tab state takes the lease. The exemption is a **closed, named set of three**: `browser_screenshot`, `browser_get_text`, `browser_wait`. A tool that is neither leased nor exempt fails `TestWriteLease_EveryActionToolIsLeased`, which enumerates the **registry**, not a hand-written list. This is what makes D2's five new action tools automatically in scope.
+3. **Membership is a rule, not a list** (FR-019a): every tool in `pkg/tools/browser` that mutates page or tab state takes the lease. The exemption is a **closed, named set of five**:
+
+   | Exempt tool | Why |
+   |---|---|
+   | `browser_screenshot`, `browser_get_text`, `browser_wait` | Read-only; ungated today |
+   | `browser_snapshot` (D2 FR-018) | Read-only |
+   | `browser_handle_dialog` (D2 FR-035) | **Recovery.** A modal blocks every CDP command on its tab, so the blocked `browser_click` still holds the lease. Leasing the recovery tool makes it defer behind the wedge it exists to clear — the tab stays stuck for agent and human alike |
+
+   A tool that is neither leased nor exempt fails `TestWriteLease_EveryActionToolIsLeased`, which enumerates the **registry**, not a hand-written list. This is what makes D2's four remaining new action tools automatically in scope.
+
+   **Amended 2026-08-31** after the D2 spec found the conflict: this set was three, and `TestWriteLease_EveryActionToolIsLeased` would have gone red the moment `browser_snapshot` or `browser_handle_dialog` registered — blocking D2's Streams C and D from ever landing green.
 4. **`release()` is idempotent and MUST run via `defer`** in every leased tool, so a panic, a CDP timeout or a cancelled context cannot wedge the browser (FR-024).
 5. **Lock order** is `writeLease → pool.mu → m.mu`, never reversed; `m.mu` is never held across `acquireWrite` or any CDP call.
 6. **In-process only** (FR-030). The lease deliberately does not use `fileutil.WithFlock`, which is a documented no-op on Windows (`pkg/fileutil/flock_windows.go`) and would give a false cross-process guarantee. Two gateways on one home are out of scope — §12 A11.
