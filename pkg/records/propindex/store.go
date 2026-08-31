@@ -295,6 +295,39 @@ type Store interface {
 	Tags(ctx context.Context, sel Selector, visit func(TagHit) error) error
 	Links(ctx context.Context, sel Selector, visit func(LinkHit) error) error
 
+	// RefreshNoteStat updates ONLY the stat columns of one note, only where they
+	// differ, and reports whether anything actually changed.
+	//
+	// It is FR-136's half of FR-131. `git checkout`, rsync, `touch` and an
+	// iCloud resync all move a file's mtime while leaving its bytes identical,
+	// so a sync that skips on hash equality alone freezes `file.mtime` at the
+	// last CONTENT change — and `sort by file.mtime desc`, the commonest Bases
+	// view there is, then returns a plausible, stable, WRONG ordering with no
+	// error anywhere. An attachment, whose bytes are never re-read at all, would
+	// freeze at first index forever.
+	//
+	// IT DOES NOT re-parse the note, write a child row, touch source_hash or
+	// touch indexed_at. Those omissions are the point rather than an
+	// optimisation: this is the correction a content-unchanged skip can afford,
+	// and moving source_hash would forge agreement with the text index that
+	// D16.5's whole write ordering exists to detect the ABSENCE of.
+	//
+	// A path the store does not hold updates nothing and returns (false, nil) —
+	// the vault is the source of truth and the index is allowed to be behind it,
+	// the same posture DeleteNote takes.
+	//
+	// THE BOOL IS LOAD-BEARING, and it is why this is not a void method. It is
+	// what lets a caller COUNT metadata-only refreshes, and therefore what makes
+	// "the mtime is right" distinguishable from "the mtime is right because we
+	// re-indexed the whole note" — which is the bug FR-136 exists to prevent and
+	// which a void return would leave unobservable.
+	//
+	// ctime is deliberately NOT refreshed. A refresh is driven by the walk, the
+	// walk carries size and mtime only, and there is nothing here to refresh a
+	// birth time FROM; a birth time also does not change, so the value written
+	// at index time stays correct. Three columns are written, two are refreshed.
+	RefreshNoteStat(ctx context.Context, path string, size, mtimeNanos int64) (bool, error)
+
 	// NeedsFullIndex reports that the store holds nothing usable and the caller
 	// must re-derive it from the notes — a fresh file, or one written by an
 	// incompatible schema version. Deleting the file is always a legal way to

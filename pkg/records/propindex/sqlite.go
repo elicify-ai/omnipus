@@ -429,6 +429,101 @@ func (ix *Index) DeleteNote(ctx context.Context, path string) (err error) {
 	return nil
 }
 
+// RefreshNoteStat is FR-136: the metadata-only correction a content-unchanged
+// sync skip can afford.
+//
+// WHAT IT DELIBERATELY DOES NOT DO is the whole design. It does not re-parse the
+// note, does not touch a single child row, and does not move source_hash or
+// indexed_at. Moving source_hash would forge agreement with the text index that
+// D16.5's write ordering exists precisely to detect the ABSENCE of — an index
+// reporting "these two agree" because this method said so, rather than because
+// the same bytes were seen twice.
+//
+// ONLY WHERE THEY DIFFER, and the difference is decided on the RENDERED column
+// bytes rather than on the caller's integers. That is not fussiness: the columns
+// hold ISO-8601 text at nanosecond precision and exact decimal digits, so two
+// inputs that render identically ARE identical as far as this index is
+// concerned, and an UPDATE for them would report `changed` for a change that
+// does not exist. The bool is what a caller counts, so a false positive in it is
+// a wrong number in someone's sync report.
+//
+// ctime is untouched. The walk that drives a refresh carries size and mtime
+// only, so there is nothing here to refresh a birth time from — and a birth time
+// does not change, so the value written at index time remains correct. Three
+// columns are written at index time; two are refreshed.
+func (ix *Index) RefreshNoteStat(ctx context.Context, path string, size, mtimeNanos int64) (changed bool, err error) {
+	if path == "" {
+		return false, errors.New("propindex: RefreshNoteStat called with an empty path")
+	}
+	tx, err := ix.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, fmt.Errorf("propindex: beginning a stat refresh: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			if rbErr := tx.Rollback(); rbErr != nil && !errors.Is(rbErr, sql.ErrTxDone) {
+				err = fmt.Errorf("%w (and rolling back failed: %v)", err, rbErr)
+			}
+		}
+	}()
+
+	var (
+		id                 int64
+		haveMtime, haveSze []byte
+	)
+	scanErr := ix.queryRowTx(ctx, tx, PhaseWrite,
+		`SELECT note_id, mtime, size FROM notes WHERE path = ?`, path).Scan(&id, &haveMtime, &haveSze)
+	switch {
+	case errors.Is(scanErr, sql.ErrNoRows):
+		// A path this store does not hold. Refreshing the metadata of a note the
+		// index has never seen is not an error and not a silent success either:
+		// nothing changed, and the caller is told exactly that. The vault is the
+		// source of truth and the index is allowed to be behind it — the same
+		// posture DeleteNote takes for the same reason.
+		if err = tx.Commit(); err != nil {
+			return false, fmt.Errorf("propindex: closing the stat refresh of %q: %w", path, err)
+		}
+		return false, nil
+	case scanErr != nil:
+		err = fmt.Errorf("propindex: reading the stored stat of %q: %w", path, scanErr)
+		return false, err
+	}
+
+	wantMtime := nanoTimeColumn(mtimeNanos)
+	wantSize := sizeColumn(size, mtimeNanos != 0)
+	if sameColumn(haveMtime, wantMtime) && sameColumn(haveSze, wantSize) {
+		if err = tx.Commit(); err != nil {
+			return false, fmt.Errorf("propindex: closing the stat refresh of %q: %w", path, err)
+		}
+		return false, nil
+	}
+
+	if _, err = ix.execTx(ctx, tx, PhaseWrite,
+		`UPDATE notes SET mtime = ?, size = ? WHERE note_id = ?`, wantMtime, wantSize, id); err != nil {
+		err = fmt.Errorf("propindex: refreshing the stat of %q: %w", path, err)
+		return false, err
+	}
+	if err = tx.Commit(); err != nil {
+		return false, fmt.Errorf("propindex: committing the stat refresh of %q: %w", path, err)
+	}
+	return true, nil
+}
+
+// sameColumn reports whether a stored column already holds what would be
+// written.
+//
+// NULL and an empty blob are the same thing here, because both mean "this index
+// has no value for it" — and a store that reported a change for the difference
+// between the two would count a refresh every single pass over a note whose stat
+// is unknown.
+func sameColumn(have []byte, want any) bool {
+	w, ok := want.([]byte)
+	if !ok {
+		return len(have) == 0
+	}
+	return string(have) == string(w)
+}
+
 func (ix *Index) deleteChildren(ctx context.Context, tx *sql.Tx, id int64) error {
 	for _, q := range []string{
 		`DELETE FROM note_props WHERE note_id = ?`,
