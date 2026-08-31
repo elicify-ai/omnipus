@@ -24,7 +24,7 @@ import (
 // a struct nobody parsed.
 func loadedSchemaSet(t *testing.T, inferred map[string][]InferredProperty) *records.SchemaSet {
 	t.Helper()
-	set, report, err := schemaSetFromRendered(inferred)
+	set, report, err := schemaSetFromRendered(inferred, nil)
 	if err != nil {
 		t.Fatalf("rendering and reloading the inferred schemas: %v", err)
 	}
