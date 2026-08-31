@@ -1,0 +1,21 @@
+title: ViewPropertyConfig
+description: >
+  Per-property presentation for one column of a schema_version-2 view
+  (ADR-068 D24.1, spec FR-018b — the `properties` key of an Obsidian base,
+  which is display configuration rather than a projection list).
+
+  PURE PRESENTATION. THE ENGINE NEVER READS THIS. Obsidian's own rule is kept
+  verbatim and it is the rule that matters: a display name is NEVER usable in
+  a filter, a sort, a grouping or a formula. Those positions name the
+  PROPERTY, always — so renaming a column in the UI can never quietly change
+  which records a view returns.
+type: object
+additionalProperties: false
+properties:
+  display_name:
+    type: string
+    minLength: 1
+    description: >
+      Column heading to render instead of the property name. Absent means
+      render the property name itself.
+    example: "Annual value"

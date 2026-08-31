@@ -293,7 +293,8 @@ type PropertyDef = {
     | "date"
     | "integer"
     | "decimal"
-    | "person";
+    | "person"
+    | "checkbox";
   many: boolean;
   required: boolean;
   label?: string | undefined;
@@ -418,7 +419,22 @@ type RecordSort = {
   direction: "asc" | "desc";
 };
 type RecordAggregate = {
-  op: "count" | "sum" | "min" | "max";
+  op:
+    | "count"
+    | "sum"
+    | "min"
+    | "max"
+    | "avg"
+    | "median"
+    | "stddev"
+    | "range"
+    | "earliest"
+    | "latest"
+    | "checked"
+    | "unchecked"
+    | "empty"
+    | "filled"
+    | "unique";
   property?: string | undefined;
 };
 type RecordQueryResponse = {
@@ -447,7 +463,22 @@ type RecordGroupKey = {
   label?: string | undefined;
 };
 type RecordAggregateResult = {
-  op: "count" | "sum" | "min" | "max";
+  op:
+    | "count"
+    | "sum"
+    | "min"
+    | "max"
+    | "avg"
+    | "median"
+    | "stddev"
+    | "range"
+    | "earliest"
+    | "latest"
+    | "checked"
+    | "unchecked"
+    | "empty"
+    | "filled"
+    | "unique";
   property?: string | undefined;
   refused: boolean;
   count?: number | undefined;
@@ -464,17 +495,32 @@ type RecordWriteRequest = {
 type ViewDef = {
   schema_version: number;
   name: string;
-  type: string;
+  type?: string | undefined;
   label?: string | undefined;
   filters?: Array<RecordFilter> | undefined;
+  filter?: VaultFilterNode | undefined;
   group_by?: Array<string> | undefined;
+  grouping?: Array<ViewGroupBy> | undefined;
   sort?: Array<RecordSort> | undefined;
   properties?: Array<string> | undefined;
+  property_config?: {} | undefined;
+  layout?:
+    | ("table" | "cards" | "board" | "calendar" | "gallery" | "map")
+    | undefined;
+  formulas?: {} | undefined;
   aggregates?: Array<RecordAggregate> | undefined;
   limit?: number | undefined;
+  disabled?: boolean | undefined;
   source?: string | undefined;
   untranslated?: Array<string> | undefined;
 };
+type ViewGroupBy = {
+  property: string;
+  direction?: ("asc" | "desc") | undefined;
+};
+type ViewPropertyConfig = Partial<{
+  display_name: string;
+}>;
 type VaultFindRequest = Partial<{
   words: string;
   type: string;
@@ -498,7 +544,22 @@ type VaultFindSort = {
   direction?: ("asc" | "desc") | undefined;
 };
 type VaultFindAggregate = {
-  op: "count" | "sum" | "min" | "max";
+  op:
+    | "count"
+    | "sum"
+    | "min"
+    | "max"
+    | "avg"
+    | "median"
+    | "stddev"
+    | "range"
+    | "earliest"
+    | "latest"
+    | "checked"
+    | "unchecked"
+    | "empty"
+    | "filled"
+    | "unique";
   property?: string | undefined;
 };
 type VaultFilterNode = Partial<{
@@ -587,7 +648,22 @@ type VaultFindSubgroup = {
   paths: Array<string>;
 };
 type VaultFindTotal = {
-  op: "count" | "sum" | "min" | "max";
+  op:
+    | "count"
+    | "sum"
+    | "min"
+    | "max"
+    | "avg"
+    | "median"
+    | "stddev"
+    | "range"
+    | "earliest"
+    | "latest"
+    | "checked"
+    | "unchecked"
+    | "empty"
+    | "filled"
+    | "unique";
   label: string;
   value: string;
   scope: string;
@@ -4007,6 +4083,7 @@ export const PropertyDef: z.ZodType<PropertyDef> = z.object({
     "integer",
     "decimal",
     "person",
+    "checkbox",
   ]),
   many: z.boolean(),
   required: z.boolean(),
@@ -4139,7 +4216,23 @@ export const RecordSort: z.ZodType<RecordSort> = z.object({
   direction: z.enum(["asc", "desc"]),
 });
 export const RecordAggregate: z.ZodType<RecordAggregate> = z.object({
-  op: z.enum(["count", "sum", "min", "max"]),
+  op: z.enum([
+    "count",
+    "sum",
+    "min",
+    "max",
+    "avg",
+    "median",
+    "stddev",
+    "range",
+    "earliest",
+    "latest",
+    "checked",
+    "unchecked",
+    "empty",
+    "filled",
+    "unique",
+  ]),
   property: z.string().min(1).optional(),
 });
 export const RecordQueryRequest: z.ZodType<RecordQueryRequest> = z.object({
@@ -4161,7 +4254,23 @@ export const RecordGroupKey: z.ZodType<RecordGroupKey> = z.object({
 });
 export const RecordAggregateResult: z.ZodType<RecordAggregateResult> = z.object(
   {
-    op: z.enum(["count", "sum", "min", "max"]),
+    op: z.enum([
+      "count",
+      "sum",
+      "min",
+      "max",
+      "avg",
+      "median",
+      "stddev",
+      "range",
+      "earliest",
+      "latest",
+      "checked",
+      "unchecked",
+      "empty",
+      "filled",
+      "unique",
+    ]),
     property: z.string().min(1).optional(),
     refused: z.boolean(),
     count: z.number().int().gte(0).optional(),
@@ -4202,20 +4311,13 @@ export const RelationWriteRequest = z.object({
   op: z.enum(["add", "remove", "replace"]),
   targets: z.array(z.string().min(1)),
 });
-export const ViewDef: z.ZodType<ViewDef> = z.object({
-  schema_version: z.number().int().gte(1),
-  name: z.string().min(1),
-  type: z.string().min(1),
-  label: z.string().optional(),
-  filters: z.array(RecordFilter).optional(),
-  group_by: z.array(z.string().min(1)).max(2).optional(),
-  sort: z.array(RecordSort).optional(),
-  properties: z.array(z.string().min(1)).optional(),
-  aggregates: z.array(RecordAggregate).optional(),
-  limit: z.number().int().gte(1).optional(),
-  source: z.string().optional(),
-  untranslated: z.array(z.string().min(1)).optional(),
+export const ViewGroupBy: z.ZodType<ViewGroupBy> = z.object({
+  property: z.string().min(1),
+  direction: z.enum(["asc", "desc"]).optional(),
 });
+export const ViewPropertyConfig: z.ZodType<ViewPropertyConfig> = z
+  .object({ display_name: z.string().min(1) })
+  .partial();
 export const VaultFilterNode: z.ZodType<VaultFilterNode> = z.lazy(() =>
   z
     .object({
@@ -4240,12 +4342,50 @@ export const VaultFilterNode: z.ZodType<VaultFilterNode> = z.lazy(() =>
     })
     .partial()
 );
+export const ViewDef: z.ZodType<ViewDef> = z.object({
+  schema_version: z.number().int().gte(1).lte(2),
+  name: z.string().min(1),
+  type: z.string().min(1).optional(),
+  label: z.string().optional(),
+  filters: z.array(RecordFilter).optional(),
+  filter: VaultFilterNode.optional(),
+  group_by: z.array(z.string().min(1)).max(2).optional(),
+  grouping: z.array(ViewGroupBy).max(2).optional(),
+  sort: z.array(RecordSort).optional(),
+  properties: z.array(z.string().min(1)).optional(),
+  property_config: z.record(ViewPropertyConfig).optional(),
+  layout: z
+    .enum(["table", "cards", "board", "calendar", "gallery", "map"])
+    .optional(),
+  formulas: z.record(z.string().min(1)).optional(),
+  aggregates: z.array(RecordAggregate).optional(),
+  limit: z.number().int().gte(1).optional(),
+  disabled: z.boolean().optional(),
+  source: z.string().optional(),
+  untranslated: z.array(z.string().min(1)).optional(),
+});
 export const VaultFindSort: z.ZodType<VaultFindSort> = z.object({
   property: z.string().min(1),
   direction: z.enum(["asc", "desc"]).optional(),
 });
 export const VaultFindAggregate: z.ZodType<VaultFindAggregate> = z.object({
-  op: z.enum(["count", "sum", "min", "max"]),
+  op: z.enum([
+    "count",
+    "sum",
+    "min",
+    "max",
+    "avg",
+    "median",
+    "stddev",
+    "range",
+    "earliest",
+    "latest",
+    "checked",
+    "unchecked",
+    "empty",
+    "filled",
+    "unique",
+  ]),
   property: z.string().min(1).optional(),
 });
 export const VaultFindRequest: z.ZodType<VaultFindRequest> = z
@@ -4314,7 +4454,23 @@ export const VaultFindGroup: z.ZodType<VaultFindGroup> = z.object({
   subgroups: z.array(VaultFindSubgroup).optional(),
 });
 export const VaultFindTotal: z.ZodType<VaultFindTotal> = z.object({
-  op: z.enum(["count", "sum", "min", "max"]),
+  op: z.enum([
+    "count",
+    "sum",
+    "min",
+    "max",
+    "avg",
+    "median",
+    "stddev",
+    "range",
+    "earliest",
+    "latest",
+    "checked",
+    "unchecked",
+    "empty",
+    "filled",
+    "unique",
+  ]),
   label: z.string().min(1),
   value: z.string(),
   scope: z.string().min(1),

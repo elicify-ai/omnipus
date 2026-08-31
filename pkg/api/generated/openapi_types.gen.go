@@ -3553,6 +3553,7 @@ func (e PromptGuardUpdateResponseAppliedLevel) Valid() bool {
 
 // Defines values for PropertyDefType.
 const (
+	PropertyDefTypeCheckbox PropertyDefType = "checkbox"
 	PropertyDefTypeDate     PropertyDefType = "date"
 	PropertyDefTypeDecimal  PropertyDefType = "decimal"
 	PropertyDefTypeEnum     PropertyDefType = "enum"
@@ -3565,6 +3566,8 @@ const (
 // Valid indicates whether the value is a known member of the PropertyDefType enum.
 func (e PropertyDefType) Valid() bool {
 	switch e {
+	case PropertyDefTypeCheckbox:
+		return true
 	case PropertyDefTypeDate:
 		return true
 	case PropertyDefTypeDecimal:
@@ -3691,22 +3694,55 @@ func (e ProviderCatalogEntryWire) Valid() bool {
 
 // Defines values for RecordAggregateOp.
 const (
-	RecordAggregateOpCount RecordAggregateOp = "count"
-	RecordAggregateOpMax   RecordAggregateOp = "max"
-	RecordAggregateOpMin   RecordAggregateOp = "min"
-	RecordAggregateOpSum   RecordAggregateOp = "sum"
+	RecordAggregateOpAvg       RecordAggregateOp = "avg"
+	RecordAggregateOpChecked   RecordAggregateOp = "checked"
+	RecordAggregateOpCount     RecordAggregateOp = "count"
+	RecordAggregateOpEarliest  RecordAggregateOp = "earliest"
+	RecordAggregateOpEmpty     RecordAggregateOp = "empty"
+	RecordAggregateOpFilled    RecordAggregateOp = "filled"
+	RecordAggregateOpLatest    RecordAggregateOp = "latest"
+	RecordAggregateOpMax       RecordAggregateOp = "max"
+	RecordAggregateOpMedian    RecordAggregateOp = "median"
+	RecordAggregateOpMin       RecordAggregateOp = "min"
+	RecordAggregateOpRange     RecordAggregateOp = "range"
+	RecordAggregateOpStddev    RecordAggregateOp = "stddev"
+	RecordAggregateOpSum       RecordAggregateOp = "sum"
+	RecordAggregateOpUnchecked RecordAggregateOp = "unchecked"
+	RecordAggregateOpUnique    RecordAggregateOp = "unique"
 )
 
 // Valid indicates whether the value is a known member of the RecordAggregateOp enum.
 func (e RecordAggregateOp) Valid() bool {
 	switch e {
+	case RecordAggregateOpAvg:
+		return true
+	case RecordAggregateOpChecked:
+		return true
 	case RecordAggregateOpCount:
+		return true
+	case RecordAggregateOpEarliest:
+		return true
+	case RecordAggregateOpEmpty:
+		return true
+	case RecordAggregateOpFilled:
+		return true
+	case RecordAggregateOpLatest:
 		return true
 	case RecordAggregateOpMax:
 		return true
+	case RecordAggregateOpMedian:
+		return true
 	case RecordAggregateOpMin:
 		return true
+	case RecordAggregateOpRange:
+		return true
+	case RecordAggregateOpStddev:
+		return true
 	case RecordAggregateOpSum:
+		return true
+	case RecordAggregateOpUnchecked:
+		return true
+	case RecordAggregateOpUnique:
 		return true
 	default:
 		return false
@@ -3715,22 +3751,55 @@ func (e RecordAggregateOp) Valid() bool {
 
 // Defines values for RecordAggregateResultOp.
 const (
-	RecordAggregateResultOpCount RecordAggregateResultOp = "count"
-	RecordAggregateResultOpMax   RecordAggregateResultOp = "max"
-	RecordAggregateResultOpMin   RecordAggregateResultOp = "min"
-	RecordAggregateResultOpSum   RecordAggregateResultOp = "sum"
+	RecordAggregateResultOpAvg       RecordAggregateResultOp = "avg"
+	RecordAggregateResultOpChecked   RecordAggregateResultOp = "checked"
+	RecordAggregateResultOpCount     RecordAggregateResultOp = "count"
+	RecordAggregateResultOpEarliest  RecordAggregateResultOp = "earliest"
+	RecordAggregateResultOpEmpty     RecordAggregateResultOp = "empty"
+	RecordAggregateResultOpFilled    RecordAggregateResultOp = "filled"
+	RecordAggregateResultOpLatest    RecordAggregateResultOp = "latest"
+	RecordAggregateResultOpMax       RecordAggregateResultOp = "max"
+	RecordAggregateResultOpMedian    RecordAggregateResultOp = "median"
+	RecordAggregateResultOpMin       RecordAggregateResultOp = "min"
+	RecordAggregateResultOpRange     RecordAggregateResultOp = "range"
+	RecordAggregateResultOpStddev    RecordAggregateResultOp = "stddev"
+	RecordAggregateResultOpSum       RecordAggregateResultOp = "sum"
+	RecordAggregateResultOpUnchecked RecordAggregateResultOp = "unchecked"
+	RecordAggregateResultOpUnique    RecordAggregateResultOp = "unique"
 )
 
 // Valid indicates whether the value is a known member of the RecordAggregateResultOp enum.
 func (e RecordAggregateResultOp) Valid() bool {
 	switch e {
+	case RecordAggregateResultOpAvg:
+		return true
+	case RecordAggregateResultOpChecked:
+		return true
 	case RecordAggregateResultOpCount:
+		return true
+	case RecordAggregateResultOpEarliest:
+		return true
+	case RecordAggregateResultOpEmpty:
+		return true
+	case RecordAggregateResultOpFilled:
+		return true
+	case RecordAggregateResultOpLatest:
 		return true
 	case RecordAggregateResultOpMax:
 		return true
+	case RecordAggregateResultOpMedian:
+		return true
 	case RecordAggregateResultOpMin:
 		return true
+	case RecordAggregateResultOpRange:
+		return true
+	case RecordAggregateResultOpStddev:
+		return true
 	case RecordAggregateResultOpSum:
+		return true
+	case RecordAggregateResultOpUnchecked:
+		return true
+	case RecordAggregateResultOpUnique:
 		return true
 	default:
 		return false
@@ -6283,22 +6352,55 @@ func (e VaultFilterNodeOp) Valid() bool {
 
 // Defines values for VaultFindAggregateOp.
 const (
-	VaultFindAggregateOpCount VaultFindAggregateOp = "count"
-	VaultFindAggregateOpMax   VaultFindAggregateOp = "max"
-	VaultFindAggregateOpMin   VaultFindAggregateOp = "min"
-	VaultFindAggregateOpSum   VaultFindAggregateOp = "sum"
+	VaultFindAggregateOpAvg       VaultFindAggregateOp = "avg"
+	VaultFindAggregateOpChecked   VaultFindAggregateOp = "checked"
+	VaultFindAggregateOpCount     VaultFindAggregateOp = "count"
+	VaultFindAggregateOpEarliest  VaultFindAggregateOp = "earliest"
+	VaultFindAggregateOpEmpty     VaultFindAggregateOp = "empty"
+	VaultFindAggregateOpFilled    VaultFindAggregateOp = "filled"
+	VaultFindAggregateOpLatest    VaultFindAggregateOp = "latest"
+	VaultFindAggregateOpMax       VaultFindAggregateOp = "max"
+	VaultFindAggregateOpMedian    VaultFindAggregateOp = "median"
+	VaultFindAggregateOpMin       VaultFindAggregateOp = "min"
+	VaultFindAggregateOpRange     VaultFindAggregateOp = "range"
+	VaultFindAggregateOpStddev    VaultFindAggregateOp = "stddev"
+	VaultFindAggregateOpSum       VaultFindAggregateOp = "sum"
+	VaultFindAggregateOpUnchecked VaultFindAggregateOp = "unchecked"
+	VaultFindAggregateOpUnique    VaultFindAggregateOp = "unique"
 )
 
 // Valid indicates whether the value is a known member of the VaultFindAggregateOp enum.
 func (e VaultFindAggregateOp) Valid() bool {
 	switch e {
+	case VaultFindAggregateOpAvg:
+		return true
+	case VaultFindAggregateOpChecked:
+		return true
 	case VaultFindAggregateOpCount:
+		return true
+	case VaultFindAggregateOpEarliest:
+		return true
+	case VaultFindAggregateOpEmpty:
+		return true
+	case VaultFindAggregateOpFilled:
+		return true
+	case VaultFindAggregateOpLatest:
 		return true
 	case VaultFindAggregateOpMax:
 		return true
+	case VaultFindAggregateOpMedian:
+		return true
 	case VaultFindAggregateOpMin:
 		return true
+	case VaultFindAggregateOpRange:
+		return true
+	case VaultFindAggregateOpStddev:
+		return true
 	case VaultFindAggregateOpSum:
+		return true
+	case VaultFindAggregateOpUnchecked:
+		return true
+	case VaultFindAggregateOpUnique:
 		return true
 	default:
 		return false
@@ -6451,22 +6553,103 @@ func (e VaultFindSortDirection) Valid() bool {
 
 // Defines values for VaultFindTotalOp.
 const (
-	VaultFindTotalOpCount VaultFindTotalOp = "count"
-	VaultFindTotalOpMax   VaultFindTotalOp = "max"
-	VaultFindTotalOpMin   VaultFindTotalOp = "min"
-	VaultFindTotalOpSum   VaultFindTotalOp = "sum"
+	VaultFindTotalOpAvg       VaultFindTotalOp = "avg"
+	VaultFindTotalOpChecked   VaultFindTotalOp = "checked"
+	VaultFindTotalOpCount     VaultFindTotalOp = "count"
+	VaultFindTotalOpEarliest  VaultFindTotalOp = "earliest"
+	VaultFindTotalOpEmpty     VaultFindTotalOp = "empty"
+	VaultFindTotalOpFilled    VaultFindTotalOp = "filled"
+	VaultFindTotalOpLatest    VaultFindTotalOp = "latest"
+	VaultFindTotalOpMax       VaultFindTotalOp = "max"
+	VaultFindTotalOpMedian    VaultFindTotalOp = "median"
+	VaultFindTotalOpMin       VaultFindTotalOp = "min"
+	VaultFindTotalOpRange     VaultFindTotalOp = "range"
+	VaultFindTotalOpStddev    VaultFindTotalOp = "stddev"
+	VaultFindTotalOpSum       VaultFindTotalOp = "sum"
+	VaultFindTotalOpUnchecked VaultFindTotalOp = "unchecked"
+	VaultFindTotalOpUnique    VaultFindTotalOp = "unique"
 )
 
 // Valid indicates whether the value is a known member of the VaultFindTotalOp enum.
 func (e VaultFindTotalOp) Valid() bool {
 	switch e {
+	case VaultFindTotalOpAvg:
+		return true
+	case VaultFindTotalOpChecked:
+		return true
 	case VaultFindTotalOpCount:
+		return true
+	case VaultFindTotalOpEarliest:
+		return true
+	case VaultFindTotalOpEmpty:
+		return true
+	case VaultFindTotalOpFilled:
+		return true
+	case VaultFindTotalOpLatest:
 		return true
 	case VaultFindTotalOpMax:
 		return true
+	case VaultFindTotalOpMedian:
+		return true
 	case VaultFindTotalOpMin:
 		return true
+	case VaultFindTotalOpRange:
+		return true
+	case VaultFindTotalOpStddev:
+		return true
 	case VaultFindTotalOpSum:
+		return true
+	case VaultFindTotalOpUnchecked:
+		return true
+	case VaultFindTotalOpUnique:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ViewDefLayout.
+const (
+	ViewDefLayoutBoard    ViewDefLayout = "board"
+	ViewDefLayoutCalendar ViewDefLayout = "calendar"
+	ViewDefLayoutCards    ViewDefLayout = "cards"
+	ViewDefLayoutGallery  ViewDefLayout = "gallery"
+	ViewDefLayoutMap      ViewDefLayout = "map"
+	ViewDefLayoutTable    ViewDefLayout = "table"
+)
+
+// Valid indicates whether the value is a known member of the ViewDefLayout enum.
+func (e ViewDefLayout) Valid() bool {
+	switch e {
+	case ViewDefLayoutBoard:
+		return true
+	case ViewDefLayoutCalendar:
+		return true
+	case ViewDefLayoutCards:
+		return true
+	case ViewDefLayoutGallery:
+		return true
+	case ViewDefLayoutMap:
+		return true
+	case ViewDefLayoutTable:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ViewGroupByDirection.
+const (
+	ViewGroupByDirectionAsc  ViewGroupByDirection = "asc"
+	ViewGroupByDirectionDesc ViewGroupByDirection = "desc"
+)
+
+// Valid indicates whether the value is a known member of the ViewGroupByDirection enum.
+func (e ViewGroupByDirection) Valid() bool {
+	switch e {
+	case ViewGroupByDirectionAsc:
+		return true
+	case ViewGroupByDirectionDesc:
 		return true
 	default:
 		return false
@@ -11742,7 +11925,8 @@ type PromptGuardUpdateResponse struct {
 // PromptGuardUpdateResponseAppliedLevel The prompt guard level now active.
 type PromptGuardUpdateResponseAppliedLevel string
 
-// PropertyDef One declared property of a record type (ADR-068 D2, D3). Seven property types exist and no more: text, enum, relation, date, integer, decimal, person. The membership changed in ADR-068 revision 7 and the COUNT did not: `money` was deleted and `number` was split into `integer` and `decimal`.
+// PropertyDef One declared property of a record type (ADR-068 D2, D3). EIGHT property types exist and no more: text, enum, relation, date, integer, decimal, person, checkbox.
+// The count was seven through Draft 9. `checkbox` joined in spec Draft 11 (FR-004c, ADR-068 D24.5) and this line is the record of when it changed — a rewrite of this sentence back to "seven" re-creates the staleness UAT case C-8 was written to catch. Before that, in ADR-068 revision 7, the membership changed while the count did not: `money` was deleted and `number` was split into `integer` and `decimal`.
 // ARITY AND PRESENCE ARE BOTH REQUIRED FIELDS, deliberately. `many` and `required` carry no default and are never inferred, because the single most-reported failure in the research corpus is a scalar property silently becoming a list the moment a second value is added — after which every query written against it returns nothing, with no error (D3.1). A property whose arity is merely "absent" reproduces exactly that ambiguity on the wire.
 // Property types are scoped to their record type (D3.3, FR-009): `status` on one type and `status` on another are unrelated declarations. This contract therefore never carries a vault-wide property table.
 // ADR-068 D0: the product ships NO record types and NO properties of its own. Every PropertyDef on the wire came from a schema file the operator's vault declared. The names used in the examples here are illustrative of the mechanism only.
@@ -11765,17 +11949,23 @@ type PropertyDef struct {
 	// To Target record type name. Present only when type is "relation" or "person". A relation pointing at a note that exists but is not of this type is a validation finding, not a silent accept (FR-034).
 	To *string `json:"to,omitempty"`
 
-	// Type "text" — prose. Never validated and never queried for equality or order (D3), so a filter on a text property supports exactly two operators: `contains` (case-sensitive substring matching, §8 R-10) and `is_absent`. "Is it present?" is {op: is_absent, negate: true}; there is no `is_present` operator. Full-text retrieval is ADR-067's search surface, not this one. "enum" — one of a closed SET (`values`). The set is closed; it is not ordered — sorting is lexical over the folded value (D4, R-5), and an author who wants a domain order prefixes the values: `1-lead`, `2-qualified`. "relation" — a typed edge to another record (D5); `to` names the target record type and `inverse` names the derived reverse direction. "date" — a day or an instant, comparable. "integer" — a signed 64-bit whole number, bound-checked and REFUSED outside int64 rather than saturated or widened to a float. `unit` is declared metadata, never glued into the property name. "decimal" — an exact, arbitrary-precision number, at most 100 decimal places; a value past the bound is refused naming it, never rounded. `unit` applies here too. "person" — a relation to a person record, kept distinct from a name typed as text so one vault cannot model the same concept both ways.
+	// Type "text" — prose, never validated. On the CURRENT query grammar (ruling R-B, the ten SQL operators of VaultFilterNode) a text property answers `=`, `<>`, `<`, `<=`, `>`, `>=`, `LIKE`, `IN`, `IS NULL` and `IS NOT NULL`. Comparison is case-INSENSITIVE over the folded value (ruling R-D) and `LIKE` is anchored as written — `%` and `_` are the only wildcards and they must be spelled. Full-text relevance retrieval is ADR-067's search surface, not this one.
+	//
+	// *The legacy seven-op vocabulary (`contains`, `is_absent`) survives ONLY in RecordFilter.yaml, which is the schema_version-1 view surface and is read verbatim under its own semantics (spec FR-018b). It is not the grammar of this property type; a v2 view or a knowledge_find request never speaks it.* "enum" — one of a closed SET (`values`). The set is closed; it is not ordered — sorting is lexical over the folded value (D4, R-5), and an author who wants a domain order prefixes the values: `1-lead`, `2-qualified`. "relation" — a typed edge to another record (D5); `to` names the target record type and `inverse` names the derived reverse direction. "date" — a day or an instant, comparable. "integer" — a signed 64-bit whole number, bound-checked and REFUSED outside int64 rather than saturated or widened to a float. `unit` is declared metadata, never glued into the property name. "decimal" — an exact, arbitrary-precision number, at most 100 decimal places; a value past the bound is refused naming it, never rounded. `unit` applies here too. "person" — a relation to a person record, kept distinct from a name typed as text so one vault cannot model the same concept both ways. "checkbox" — a YAML boolean (FR-004c, ADR-068 D24.5). The strings `true` and `false`, case-folded, parse; anything else is NON-CONFORMING and reported, never coerced. ABSENT IS THE THIRD STATE — "days I did not meditate" is a native question here rather than a trick with text. Defined operators: `=`, `<>`, `IN`, `IS NULL`, `IS NOT NULL`; the ordering operators are REFUSED naming the remedy (R-13's pattern), because a boolean has no order to compare on. It is the domain of the `checked` and `unchecked` aggregates (RecordAggregate.yaml, FR-150).
 	Type PropertyDefType `json:"type"`
 
 	// Unit Unit of measure for an "integer" or "decimal" property, declared as metadata rather than glued into the property name (D3). Absent means unitless.
 	Unit *string `json:"unit,omitempty"`
 
-	// Values The closed value set. Present only when type is "enum", and then non-empty. THIS ORDER IS NOT THE SORT ORDER — it is the order a REJECTION lists the permitted values in, so the operator reads their own file back. Sorting is lexical over the folded value (R-5); a domain order is expressed by prefixing the values.
+	// Values The closed value set. Present only when type is "enum", and then non-empty. THIS ORDER IS NOT THE SORT ORDER — it is the order a REJECTION lists the permitted values in, so the operator reads their own file back.
+	//
+	// Sorting and the `min`/`max` aggregates are LEXICAL OVER THE CASE-FOLDED VALUE (ruling R-5/R-E, FR-010): there is no declared-position ordinal, and `Won`, `won` and `WON` sort together exactly as they group together. A domain order is expressed by PREFIXING the values (`1-lead`, `2-qualified`) — visible in the operator's own file, doing exactly what it appears to do.
 	Values *[]EnumValueDef `json:"values,omitempty"`
 }
 
-// PropertyDefType "text" — prose. Never validated and never queried for equality or order (D3), so a filter on a text property supports exactly two operators: `contains` (case-sensitive substring matching, §8 R-10) and `is_absent`. "Is it present?" is {op: is_absent, negate: true}; there is no `is_present` operator. Full-text retrieval is ADR-067's search surface, not this one. "enum" — one of a closed SET (`values`). The set is closed; it is not ordered — sorting is lexical over the folded value (D4, R-5), and an author who wants a domain order prefixes the values: `1-lead`, `2-qualified`. "relation" — a typed edge to another record (D5); `to` names the target record type and `inverse` names the derived reverse direction. "date" — a day or an instant, comparable. "integer" — a signed 64-bit whole number, bound-checked and REFUSED outside int64 rather than saturated or widened to a float. `unit` is declared metadata, never glued into the property name. "decimal" — an exact, arbitrary-precision number, at most 100 decimal places; a value past the bound is refused naming it, never rounded. `unit` applies here too. "person" — a relation to a person record, kept distinct from a name typed as text so one vault cannot model the same concept both ways.
+// PropertyDefType "text" — prose, never validated. On the CURRENT query grammar (ruling R-B, the ten SQL operators of VaultFilterNode) a text property answers `=`, `<>`, `<`, `<=`, `>`, `>=`, `LIKE`, `IN`, `IS NULL` and `IS NOT NULL`. Comparison is case-INSENSITIVE over the folded value (ruling R-D) and `LIKE` is anchored as written — `%` and `_` are the only wildcards and they must be spelled. Full-text relevance retrieval is ADR-067's search surface, not this one.
+//
+// *The legacy seven-op vocabulary (`contains`, `is_absent`) survives ONLY in RecordFilter.yaml, which is the schema_version-1 view surface and is read verbatim under its own semantics (spec FR-018b). It is not the grammar of this property type; a v2 view or a knowledge_find request never speaks it.* "enum" — one of a closed SET (`values`). The set is closed; it is not ordered — sorting is lexical over the folded value (D4, R-5), and an author who wants a domain order prefixes the values: `1-lead`, `2-qualified`. "relation" — a typed edge to another record (D5); `to` names the target record type and `inverse` names the derived reverse direction. "date" — a day or an instant, comparable. "integer" — a signed 64-bit whole number, bound-checked and REFUSED outside int64 rather than saturated or widened to a float. `unit` is declared metadata, never glued into the property name. "decimal" — an exact, arbitrary-precision number, at most 100 decimal places; a value past the bound is refused naming it, never rounded. `unit` applies here too. "person" — a relation to a person record, kept distinct from a name typed as text so one vault cannot model the same concept both ways. "checkbox" — a YAML boolean (FR-004c, ADR-068 D24.5). The strings `true` and `false`, case-folded, parse; anything else is NON-CONFORMING and reported, never coerced. ABSENT IS THE THIRD STATE — "days I did not meditate" is a native question here rather than a trick with text. Defined operators: `=`, `<>`, `IN`, `IS NULL`, `IS NOT NULL`; the ordering operators are REFUSED naming the remedy (R-13's pattern), because a boolean has no order to compare on. It is the domain of the `checked` and `unchecked` aggregates (RecordAggregate.yaml, FR-150).
 type PropertyDefType string
 
 // Provider A single LLM provider entry as returned by GET /providers and PUT /providers/{id}. Describes the provider's connection status, the resolved model list, and any non-fatal warnings encountered when fetching the upstream model catalogue.
@@ -11961,18 +12151,47 @@ type ReAuthResponse struct {
 	Verified bool `json:"verified"`
 }
 
-// RecordAggregate One aggregate to compute over the matched records (ADR-068 D9, D13).
-// There is deliberately NO "avg". A mean over exact decimals is not itself exact — it reintroduces a rounding decision at the one point where this design promises there is none (FR-013) — and a caller that wants one can compute it from `count` and `sum` with a rounding rule it chose. Offering avg here would be offering a number whose precision nobody declared.
-// No aggregate is returned at all over a refused candidate set (FR-066); it is never partial.
+// RecordAggregate One summary to compute over the matched records (ADR-068 D9, D13, D24.4; spec FR-150 to FR-155).
+// ONE NAME, FIFTEEN FUNCTIONS (founder ruling, spec Draft 11). Obsidian Bases calls these "summaries" and carries them under a `summaries` key. There is NO `summaries` key here and there never will be: parity is CAPABILITY, not key names, so the nine functions Bases had and we did not simply became new ops of this existing surface. The importer TRANSLATES Obsidian's top-level `summaries` block and its per-view summary map into entries of this shape.
+// THE "THERE IS DELIBERATELY NO AVG" PARAGRAPH THAT STOOD HERE IS SUPERSEDED (FR-152), and the way it is superseded matters more than the fact. It refused `avg` as "a number whose precision nobody declared" — a correct objection, answered rather than argued with. Average, Median (at an even count) and Stddev are computed EXACTLY, in rationals, and RENDERED at a DECLARED scale: the property's declared scale + 2, round-half-even. The response labels such a value as ROUNDED, so no caller mistakes a rendered figure for an exact one, and FR-013's no-binary-float rule is untouched — nothing here ever enters a float64.
+// TWO COMPUTATIONAL CLASSES, AND ONLY ONE OF THEM BUFFERS (FR-151). Thirteen of the fifteen stream through an O(1) accumulator — including `stddev`, which streams exactly via count, sum and sum-of-squares in rational arithmetic and rounds only at the final square root. `median` and `unique` are the two population-class ops: they buffer ONE COLUMN of the summarised property's values (never rows), and they are bounded by their own named refusal, B3 — a population-class op ABORTS MID-SCAN above 100,000 buffered values or 8 MB of buffered bytes, whichever comes first, reporting the count reached and the remedy (narrow the filter, or summarise a scalar property).
+// NO SUMMARY IS EVER COMPUTED OVER A TRUNCATED SET (FR-154, FR-066). A bound that refuses returns NO summary at all; it is never partial. A median quietly taken over whatever fit is the precise failure this whole surface exists to remove, and Median is the first op for which that shortcut is tempting.
+// A SUMMARY THE PROPERTY'S TYPE DOES NOT DEFINE IS REFUSED BY NAME (FR-155) — `stddev` over text, `checked` over a date — listing the summaries the type does define. FR-024's posture, applied to summaries: never a zero, never a blank cell.
 type RecordAggregate struct {
-	// Op "count" — number of matched records; the only op valid with no property. "sum" — exact decimal total, computed in arbitrary precision and never through a binary float (FR-020b). "min" / "max" — extreme value; for an enum that is the lexical extreme over the folded value (R-5), not a declared position.
+	// Op The reduction. Fifteen, and the list is closed (FR-150).
+	//
+	// NEEDS NO PROPERTY: "count" — number of matched records; the only op valid with `property` omitted.
+	//
+	// NUMBER DOMAIN (integer and decimal are ONE comparison domain, R-1): "sum" — exact decimal total, computed in arbitrary precision and never through a binary float (FR-020b). "avg" — exact mean, rendered at the declared scale and labelled rounded (FR-152). "median" — the middle value; at an even count the exact mean of the two middle values, same rendering rule. "stddev" — POPULATION standard deviation, and the response label SAYS population (FR-153). Obsidian's documentation does not state which theirs is, so ours declares its own definition rather than guessing at a match, and the importer records the divergence risk by name rather than in silence.
+	//
+	// NUMBER OR DATE DOMAIN: "min" / "max" — the extreme value; for an enum that is the LEXICAL extreme over the folded value (R-5), not a declared position. "range" — max minus min, defined in the number domain AND the date domain; a date range renders as a DURATION, not as a date.
+	//
+	// DATE DOMAIN: "earliest" / "latest" — the date domain's extremes. They are spelled separately from min/max because a reader scanning a view should not have to know that a date sorts.
+	//
+	// CHECKBOX DOMAIN (PropertyDef type `checkbox`, FR-004c): "checked" / "unchecked" — how many records hold `true` and how many hold `false`. Absent is the third state and is counted by NEITHER; "checked + unchecked" is not the record count and must not be read as one.
+	//
+	// ANY TYPE: "empty" / "filled" — how many records are ABSENT and how many PRESENT on the property. Defined for every type, which is what makes them the honest answer to "how much of this column is actually filled in". "unique" — the number of DISTINCT values, compared under the same folding the comparator uses everywhere else (R-5/R-D), so `Won` and `won` are one value here exactly as they are one group in a grouping.
 	Op RecordAggregateOp `json:"op"`
 
-	// Property The property to aggregate. Required for sum, min and max; omitted for count. Validated against the schema before evaluation (FR-023).
+	// Property The property to summarise. Required for every op except "count", which counts records rather than values and forbids it. Validated against the schema before evaluation (FR-023); a name the schema does not declare REJECTS the query with the declared names listed (FR-024), never returning a zero that reads like a real total.
+	//
+	// The reserved namespaces are valid here: `file.*` (FR-130) and `formula.*` (FR-140s) are summarised exactly like a declared property.
 	Property *string `json:"property,omitempty"`
 }
 
-// RecordAggregateOp "count" — number of matched records; the only op valid with no property. "sum" — exact decimal total, computed in arbitrary precision and never through a binary float (FR-020b). "min" / "max" — extreme value; for an enum that is the lexical extreme over the folded value (R-5), not a declared position.
+// RecordAggregateOp The reduction. Fifteen, and the list is closed (FR-150).
+//
+// NEEDS NO PROPERTY: "count" — number of matched records; the only op valid with `property` omitted.
+//
+// NUMBER DOMAIN (integer and decimal are ONE comparison domain, R-1): "sum" — exact decimal total, computed in arbitrary precision and never through a binary float (FR-020b). "avg" — exact mean, rendered at the declared scale and labelled rounded (FR-152). "median" — the middle value; at an even count the exact mean of the two middle values, same rendering rule. "stddev" — POPULATION standard deviation, and the response label SAYS population (FR-153). Obsidian's documentation does not state which theirs is, so ours declares its own definition rather than guessing at a match, and the importer records the divergence risk by name rather than in silence.
+//
+// NUMBER OR DATE DOMAIN: "min" / "max" — the extreme value; for an enum that is the LEXICAL extreme over the folded value (R-5), not a declared position. "range" — max minus min, defined in the number domain AND the date domain; a date range renders as a DURATION, not as a date.
+//
+// DATE DOMAIN: "earliest" / "latest" — the date domain's extremes. They are spelled separately from min/max because a reader scanning a view should not have to know that a date sorts.
+//
+// CHECKBOX DOMAIN (PropertyDef type `checkbox`, FR-004c): "checked" / "unchecked" — how many records hold `true` and how many hold `false`. Absent is the third state and is counted by NEITHER; "checked + unchecked" is not the record count and must not be read as one.
+//
+// ANY TYPE: "empty" / "filled" — how many records are ABSENT and how many PRESENT on the property. Defined for every type, which is what makes them the honest answer to "how much of this column is actually filled in". "unique" — the number of DISTINCT values, compared under the same folding the comparator uses everywhere else (R-5/R-D), so `Won` and `won` are one value here exactly as they are one group in a grouping.
 type RecordAggregateOp string
 
 // RecordAggregateResult The outcome of one requested aggregate — WHICH MAY BE A REFUSAL, stated as such (ADR-068 D13, FR-014, FR-066).
@@ -11984,7 +12203,7 @@ type RecordAggregateResult struct {
 	// ExcludedRecords How many matched records were excluded from this aggregate because their value could not be read as the declared type. Every one of them is named in the response's `problems` (FR-026) — this field is the headline, not a substitute for the list.
 	ExcludedRecords *int64 `json:"excluded_records,omitempty"`
 
-	// Op The aggregate requested, echoed back.
+	// Op The summary requested, echoed back. This list MUST stay identical to RecordAggregate's (FR-150's fifteen). A response op the request grammar can express but this echo cannot is not a cosmetic gap: the SPA edge validates every incoming payload against the generated Zod schema and DROPS what does not validate, so a `median` computed correctly by the engine would vanish between the wire and the screen with no error anywhere.
 	Op RecordAggregateResultOp `json:"op"`
 
 	// Property The property aggregated. Absent for count.
@@ -11999,7 +12218,7 @@ type RecordAggregateResult struct {
 	Value *RecordValue `json:"value,omitempty"`
 }
 
-// RecordAggregateResultOp The aggregate requested, echoed back.
+// RecordAggregateResultOp The summary requested, echoed back. This list MUST stay identical to RecordAggregate's (FR-150's fifteen). A response op the request grammar can express but this echo cannot is not a cosmetic gap: the SPA edge validates every incoming payload against the generated Zod schema and DROPS what does not validate, so a `median` computed correctly by the engine would vanish between the wire and the screen with no error anywhere.
 type RecordAggregateResultOp string
 
 // RecordFilter One structured filter clause (ADR-068 D13, FR-022). The query surface takes a STRUCTURED filter object and deliberately accepts no text query language: a query language would have to be parsed, and a parse failure that degrades to "returns nothing" is the silent-empty-result failure this ADR exists to end.
@@ -15270,16 +15489,27 @@ type VaultFindAction struct {
 	Label string `json:"label"`
 }
 
-// VaultFindAggregate One total to compute over the matched set (spec FR-123, FR-125, FR-125a).
+// VaultFindAggregate One total to compute over the matched set (spec FR-123, FR-125, FR-125a, and FR-150 to FR-155 for the fifteen ops).
+// ONE NAME, FIFTEEN FUNCTIONS (founder ruling, spec Draft 11). Obsidian's "summaries" are these ops; there is no separate `summaries` key on this surface or on a view. The op set here is byte-identical in spelling to RecordAggregate's, deliberately — pkg/records/view_find_bridge.go maps a saved view's summaries onto this request by copying the op string, and two spellings for one function is how that mapping starts lying.
+// Precision is DECLARED, not avoided (FR-152): `avg`, `median` and `stddev` are computed exactly in rationals and rendered at the property's declared scale + 2, round-half-even, with the response labelling the value ROUNDED. `stddev` is POPULATION standard deviation and the label says so (FR-153).
+// `median` and `unique` are the two population-class ops (FR-151): they buffer ONE COLUMN of values, never rows, and abort mid-scan at B3's bound — 100,000 buffered values or 8 MB, whichever first — naming the count reached and the remedy. No total is ever computed over a truncated set (FR-154); a refused bound returns no total at all, never a partial one.
 type VaultFindAggregate struct {
-	// Op The reduction. `count` needs no property and counts evaluated rows; the other three require one and are defined only over `integer` and `decimal` properties, which are ONE comparison domain (R-1).
+	// Op The reduction; fifteen, and the list is closed (FR-150). `count` needs no property and counts evaluated rows; every other op requires one.
+	//
+	// Number domain (`integer` and `decimal` are ONE comparison domain, R-1): `sum`, `avg`, `median`, `stddev`, `min`, `max`, `range`. Date domain: `earliest`, `latest`, `min`, `max`, and `range`, which renders as a DURATION. Checkbox domain (FR-004c): `checked`, `unchecked` — absent is counted by neither, so their sum is not the row count. Any type: `empty`, `filled`, `unique`; `unique` counts DISTINCT values under the comparator's own case folding (R-5/R-D), so `Won` and `won` are one.
+	//
+	// An op the property's declared type does not define is REFUSED naming the ops that type does define (FR-155) — never answered with a zero.
 	Op VaultFindAggregateOp `json:"op"`
 
-	// Property The property to reduce. Required for `sum`, `min` and `max`; forbidden for `count`, which counts rows rather than values.
+	// Property The property to reduce. Required for every op except `count`, which counts rows rather than values and forbids it. The reserved namespaces `file.*` (FR-130) and `formula.*` (FR-140s) are valid here.
 	Property *string `json:"property,omitempty"`
 }
 
-// VaultFindAggregateOp The reduction. `count` needs no property and counts evaluated rows; the other three require one and are defined only over `integer` and `decimal` properties, which are ONE comparison domain (R-1).
+// VaultFindAggregateOp The reduction; fifteen, and the list is closed (FR-150). `count` needs no property and counts evaluated rows; every other op requires one.
+//
+// Number domain (`integer` and `decimal` are ONE comparison domain, R-1): `sum`, `avg`, `median`, `stddev`, `min`, `max`, `range`. Date domain: `earliest`, `latest`, `min`, `max`, and `range`, which renders as a DURATION. Checkbox domain (FR-004c): `checked`, `unchecked` — absent is counted by neither, so their sum is not the row count. Any type: `empty`, `filled`, `unique`; `unique` counts DISTINCT values under the comparator's own case folding (R-5/R-D), so `Won` and `won` are one.
+//
+// An op the property's declared type does not define is REFUSED naming the ops that type does define (FR-155) — never answered with a zero.
 type VaultFindAggregateOp string
 
 // VaultFindCell One rendered column of one row (spec 4.2). The value is TEXT, exactly as it will be shown, and never a JSON number — a decimal that round-tripped through a binary float would render digits the note does not contain, and the whole type system exists to stop that.
@@ -15590,8 +15820,10 @@ type VaultFindSubgroup struct {
 // The value is computed over the FULL EVALUATED SET, never over the rendered page. Those two counts genuinely differ whenever the byte budget elides rows, and a design where they cannot differ is a design whose test for this cannot fail.
 type VaultFindTotal struct {
 	// Label The total as named in the request, e.g. `sum(arr)`.
-	Label string           `json:"label"`
-	Op    VaultFindTotalOp `json:"op"`
+	Label string `json:"label"`
+
+	// Op The reduction this total came from, echoed back. Identical to VaultFindAggregate's list (FR-150's fifteen) and required to stay so: the SPA validates responses against the generated Zod schema and drops what fails, so an op the request can ask for but the response cannot name is a correct answer that disappears silently on its way to a reader.
+	Op VaultFindTotalOp `json:"op"`
 
 	// Refused True when no total could be returned — over a refused candidate set, or over a property whose values could not all be read. A refused total is PRESENT and marked, never omitted: an absent total reads as "there was nothing to add up".
 	Refused *bool `json:"refused,omitempty"`
@@ -15603,7 +15835,7 @@ type VaultFindTotal struct {
 	Value string `json:"value"`
 }
 
-// VaultFindTotalOp defines model for VaultFindTotal.Op.
+// VaultFindTotalOp The reduction this total came from, echoed back. Identical to VaultFindAggregate's list (FR-150's fifteen) and required to stay so: the SPA validates responses against the generated Zod schema and drops what fails, so an op the request can ask for but the response cannot name is a correct answer that disappears silently on its way to a reader.
 type VaultFindTotalOp string
 
 // VaultIndexState What the two indexes say about the rows THIS response returned (spec FR-020c, FR-020c1, ADR-068 D16.5).
@@ -15662,21 +15894,65 @@ type VersionResponse struct {
 	Version string `json:"version"`
 }
 
-// ViewDef A saved query, stored as data (ADR-068 D10). A view names a record type, filters, grouping, sort and the properties to show; it lives in `<vault>/.omnipus-vault/views/<name>.yaml`, so an agent can author one and a human can diff it.
+// ViewDef A saved query, stored as data (ADR-068 D10). A view names filters, grouping, sort and the properties to show; it lives in `<vault>/.omnipus-vault/views/<name>.yaml`, so an agent can author one and a human can diff it.
 // A view naming a property or enum value that does not exist is REJECTED at write time (D15), not stored and discovered broken later.
-// `untranslated` exists for record_view_import (FR-100 to FR-102). An imported `.base` file may contain an expression this system cannot translate; that expression is preserved VERBATIM here and reported, never approximated and never silently dropped (FR-101). An approximation that looks like a translation is worse than an honest gap, because nobody reviews a filter that appears to have imported cleanly. Import is one-shot: `.base` files are never read on the query path (FR-102).
+// TWO VERSIONS LIVE IN THIS ONE SCHEMA, AND THE REASON IS THE ONE RULE THIS SURFACE WILL NOT BREAK (spec FR-018b, review finding F5). `SupportedViewVersion` is the SET {1, 2}. A version-1 view evaluates under VERSION-1 SEMANTICS, VERBATIM — nothing is auto-translated, because the obvious translation (`contains` becoming `LIKE %…%`) turns whole-element membership into substring matching: `labels contains "in"` would newly match `indoor`, `printing` and `min`. That is BROADENING, applied automatically, and broadening is the one thing an imported or migrated view may never do (FR-105). A v1 view using `contains` or `via` therefore stays exactly as it is — listed by knowledge_describe, not servable through knowledge_find, the reason named — until an operator EXPLICITLY migrates it through knowledge_configure, which refuses any rewrite that would change the row set.
+// WHICH KEYS BELONG TO WHICH VERSION, because a reader will otherwise assume the wrong one. Version 1 only: `filters` (the flat, AND-only RecordFilter list) and `group_by` (a bare name list). Version 2 only: `filter` (ONE VaultFilterNode tree), `grouping` (keys that carry a direction), `layout`, `formulas`, `property_config`. Shared: everything else. A view MUST NOT set a key belonging to the other version — that is a write-time and load-time refusal, not a silent preference.
+// WHY THE V2 KEYS ARE SPELLED DIFFERENTLY RATHER THAN REDEFINED IN PLACE. Spec FR-018b describes v2's tree as `filters` and v2's directional keys as `group_by`. Those two keys ALREADY EXIST ON DISK holding a v1 array and a v1 string list, and this schema declares `additionalProperties: false` — which pkg/records/view.go enforces with json DisallowUnknownFields. Redefining either key's TYPE in place would make every existing v1 file fail to decode, i.e. it would delete v1 readability in the same change that promises to preserve it. The alternative — one key holding a oneOf of both shapes — buys the spelling back at the cost of a union type on both generated sides. So v2 takes new names: `filter`, matching VaultFindRequest's own key for the same tree (which is FR-018b's actual point — ONE filter grammar, one spelling of it), and `grouping`.
+// `untranslated` and `disabled` exist for the one-shot .base importer (FR-100 to FR-102, FR-105, FR-106). An expression this system cannot translate is preserved VERBATIM in `untranslated` and reported, never approximated and never silently dropped — an approximation that looks like a translation is worse than an honest gap, because nobody reviews a filter that appears to have imported cleanly. Import is one-shot: `.base` files are never read on the query path (FR-102).
 type ViewDef struct {
-	// Aggregates Aggregates to compute for this view, and per group when grouped.
+	// Aggregates Summaries to compute for this view, and per group when grouped.
+	//
+	// ONE NAME, FIFTEEN FUNCTIONS (founder ruling, FR-150). Obsidian's top-level `summaries` key and its per-view summary map TRANSLATE at import into entries of this list. There is deliberately NO `summaries` key on a view: parity is capability, not key names, and a second spelling for one concept is how two surfaces start disagreeing about which is authoritative.
 	Aggregates *[]RecordAggregate `json:"aggregates,omitempty"`
 
-	// Filters Filter clauses, combined with AND.
+	// Disabled The view is stored but MUST NOT be applied; applying it is REFUSED naming the expression in `untranslated` that disabled it (FR-105).
+	//
+	// THIS IS THE BROADENING PROHIBITION MADE STRUCTURAL, and it is the one import rule that admits no exception: an imported view must never return MORE rows than its original while looking correct. An untranslatable expression in any ROW-SET-AFFECTING position — a filter, anywhere in its tree — disables the view rather than importing it with the clause quietly dropped. The standing example: a base filtering `type == "decision"` AND NOT `inFolder("99-Temp")` AND NOT `inFolder("00-Inbox")`. Drop the two folder clauses and the view still runs, still looks right, and now silently includes every scratch note in the vault.
+	//
+	// An untranslatable expression in an ANNOTATION position — display config, a summary, an unrenderable `layout` — cannot change which rows appear, so the view imports ENABLED with the loss declared in `untranslated` (FR-106).
+	//
+	// Omitted is identical to false. Carries no JSON Schema `default:` for the reason RecordFilter.yaml gives on `negate`: a `default:` makes openapi-typescript promote the field to REQUIRED while oapi-codegen still emits an optional pointer, and the two generated languages then disagree about one field.
+	Disabled *bool `json:"disabled,omitempty"`
+
+	// Filter VERSION 2 ONLY. The view's filter, as ONE VaultFilterNode tree — the same `all`/`any`/`not` combinators and ten SQL operators knowledge_find already evaluates (ADR-068 D24.1, FR-018b).
+	//
+	// This is the whole point of version 2: the product spoke TWO filter languages, and the bridge between them refused two of the older one's leaves outright. Now there is one. Obsidian's `and`/`or`/ `not` map 1:1 onto `all`/`any`/`not`; its `contains` translates as an escaped `LIKE '%…%'`; its relation traversal is the request's own join shape rather than a per-leaf `via`.
+	//
+	// FR-023c's bound applies to a view's tree identically to a request's: at most 64 leaves and depth 8, refused above either naming which.
+	Filter *VaultFilterNode `json:"filter,omitempty"`
+
+	// Filters VERSION 1 ONLY. Filter clauses, combined with AND.
+	//
+	// This is the flat, AND-only, seven-operator list that version-2 views replace with `filter`. It cannot express disjunction at all — seven filter groups in the founder's vault needed it and not one was expressible — and its `contains` and `via` leaves have no faithful equivalent in the find grammar. It is KEPT, unchanged and un-translated, so that every v1 view already on disk keeps meaning exactly what it meant (FR-018b). A version-2 view setting this key is REFUSED.
 	Filters *[]RecordFilter `json:"filters,omitempty"`
 
-	// GroupBy Grouping properties, outermost first. Two levels (FR-027); a relation is a valid grouping property (FR-029).
+	// Formulas VERSION 2 ONLY. Computed properties, keyed by name, each value the expression's SOURCE TEXT (FR-141) — human-diffable and directly comparable against the Obsidian original it was translated from. A formula is referenced from any property position as `formula.<name>`.
+	//
+	// THE PARSER LIVES IN THE WRITE PATH AND ONLY THERE (FR-140). knowledge_configure and the importer parse an expression when it is written and REFUSE one that does not parse, naming the position and the reason; it is never stored. The view loader re-validates on load, so a hand-edited file is re-checked. knowledge_find accepts NO text expression anywhere — a query reaches a formula only as a reference to something already validated — which is what keeps both halves of ADR-068 O-3 true on the query path: no text language, no parser, and therefore no parse failure that could degrade into an empty result.
+	//
+	// Bounded, and refused above each bound naming which (FR-146): one formula at most 64 nodes and depth 8; a view at most 16 formulas; a view's formulas at most 256 nodes in total. A reference CYCLE (`a: formula.b + 1`, `b: formula.a + 1`) parses clean and would recurse forever, so the reference graph is validated at write AND at load and a cycle is REFUSED naming its path (FR-148).
+	Formulas *map[string]string `json:"formulas,omitempty"`
+
+	// GroupBy VERSION 1 ONLY. Grouping properties, outermost first. Two levels (FR-027); a relation is a valid grouping property (FR-029).
+	//
+	// A bare name list with NO direction field — which is why every `groupBy` direction in an imported base was unrepresentable rather than merely untranslated. Version 2 uses `grouping`, whose entries carry one. A version-2 view setting this key is REFUSED.
 	GroupBy *[]string `json:"group_by,omitempty"`
+
+	// Grouping VERSION 2 ONLY. Grouping keys, outermost first, each carrying its own direction (FR-018b). Two levels (FR-027); grouping by a relation is supported (FR-029) and a record holding several values appears in every group it belongs to (FR-028).
+	//
+	// A version-1 view setting this key is REFUSED.
+	Grouping *[]ViewGroupBy `json:"grouping,omitempty"`
 
 	// Label Human-readable title. Absent means render `name`.
 	Label *string `json:"label,omitempty"`
+
+	// Layout VERSION 2 ONLY. Which rendering this view asks for (FR-109). THE ENGINE NEVER READS THIS; the SPA does. Omitted means `table`.
+	//
+	// ONLY `table` AND `cards` ARE RENDERED. `board`, `calendar`, `gallery` and `map` are declared here precisely BECAUSE they are not rendered: the importer must be able to record what an Obsidian view actually asked for, so a layout this product cannot draw imports with the loss NAMED as an annotation loss (FR-106) instead of arriving as a table that nobody knows was ever anything else.
+	//
+	// This field exists because of a measured failure, not a hypothesis. An Obsidian CARDS view imported as a table, recorded no loss at all, and scored CLEAN under the parity exit criterion — a green number over an undetected loss, which is the exact failure this whole surface is written against. An unrenderable layout is a visible gap; a silently flattened one is a wrong answer.
+	Layout *ViewDefLayout `json:"layout,omitempty"`
 
 	// Limit Page size for this view. Clamped at the server cap of 200, with the clamp reported on the response (FR-063).
 	Limit *int `json:"limit,omitempty"`
@@ -15684,10 +15960,17 @@ type ViewDef struct {
 	// Name View identifier, unique within the vault.
 	Name string `json:"name"`
 
-	// Properties Properties to display, in this order. Omitted shows every declared property.
+	// Properties Properties to display, in this order. Omitted shows every declared property. Narrowing this changes what is RENDERED, never what is matched.
 	Properties *[]string `json:"properties,omitempty"`
 
+	// PropertyConfig VERSION 2 ONLY. Per-property presentation, keyed by PROPERTY name (FR-018b) — Obsidian's top-level `properties` block, which is display configuration rather than a projection list.
+	//
+	// PURE PRESENTATION; THE ENGINE NEVER READS IT. Obsidian's own rule is kept verbatim: a display name is never usable in a filter, a sort, a grouping or a formula, so renaming a column can never quietly change which records a view returns.
+	PropertyConfig *map[string]ViewPropertyConfig `json:"property_config,omitempty"`
+
 	// SchemaVersion Declared version of the view format, mandatory for the same reason a record schema's is (D2): a format that breaks unannounced is worse when the files are machine-generated.
+	//
+	// The supported set is {1, 2}. 1 is the flat, AND-only RecordFilter format, read verbatim under its own semantics and never rewritten on read. 2 is the find grammar (D24.1). WRITES EMIT 2; a file on disk is never upgraded as a side effect of being read.
 	SchemaVersion int `json:"schema_version"`
 
 	// Sort Sort keys, applied in order.
@@ -15697,10 +15980,53 @@ type ViewDef struct {
 	Source *string `json:"source,omitempty"`
 
 	// Type The record type this view queries.
-	Type string `json:"type"`
+	//
+	// OPTIONAL SINCE VERSION 2 (FR-018b). An UNTYPED view queries every note in scope — which is what four of the founder's eighteen bases do, scoping purely by folder and spanning record types. In an untyped view a property resolves BY NAME over the rows the index holds for every note (FR-021e): a note that CARRIES the key holds its value, parsed in the domain the name resolves to; a value that does not parse there is NON-CONFORMING and reported; and ONLY a note not carrying the key at all is ABSENT. A note whose file says `status: open` must never answer TRUE to `status IS NULL`. Two in-scope types declaring one name with DIFFERENT types REFUSE the query naming both declarations — loud, never a silent domain split. A name no in-scope type declares resolves in the TEXT domain over the raw values.
+	//
+	// A declared type holding ZERO records is a VALID, EMPTY view (FR-018d) carrying the ordinary completeness verdict — "0 records, complete" — which is distinguishable from the silent empty this design exists to prevent. Six of the founder's eighteen bases reference types provisioned ahead of their data. A type NO schema declares is still rejected: that is drift, not provisioning.
+	//
+	// On a VERSION-1 view this field remains effectively required — a v1 view with no type has no record type to query and is rejected, as it always was.
+	Type *string `json:"type,omitempty"`
 
 	// Untranslated Expressions from the imported source that could NOT be translated, preserved verbatim (FR-101). Present only on an imported view, and non-empty only when something was genuinely left behind. Never an approximation of the original.
+	//
+	// UNDER PARITY, EVERY RESIDUAL ENTRY HERE IS A DEFECT TO FILE, NOT AN ACCEPTED LOSS, and the import report must say so in those words (FR-107). The neutral "reported and moved on" posture survives only for genuinely UNDOCUMENTED upstream behaviour, which the report labels as such — the standing example being that Obsidian's documentation never says whether its standard deviation is population or sample, so ours declares its own definition (FR-153) and records the divergence risk by name.
 	Untranslated *[]string `json:"untranslated,omitempty"`
+}
+
+// ViewDefLayout VERSION 2 ONLY. Which rendering this view asks for (FR-109). THE ENGINE NEVER READS THIS; the SPA does. Omitted means `table`.
+//
+// ONLY `table` AND `cards` ARE RENDERED. `board`, `calendar`, `gallery` and `map` are declared here precisely BECAUSE they are not rendered: the importer must be able to record what an Obsidian view actually asked for, so a layout this product cannot draw imports with the loss NAMED as an annotation loss (FR-106) instead of arriving as a table that nobody knows was ever anything else.
+//
+// This field exists because of a measured failure, not a hypothesis. An Obsidian CARDS view imported as a table, recorded no loss at all, and scored CLEAN under the parity exit criterion — a green number over an undetected loss, which is the exact failure this whole surface is written against. An unrenderable layout is a visible gap; a silently flattened one is a wrong answer.
+type ViewDefLayout string
+
+// ViewGroupBy One grouping key of a schema_version-2 view (ADR-068 D24.1, spec FR-018b).
+// IT CARRIES A DIRECTION, AND THAT IS THE WHOLE REASON THIS TYPE EXISTS. A version-1 view's `group_by` is a bare list of property names with no direction field at all, so every `groupBy` direction in an imported Obsidian base was UNREPRESENTABLE ON THE WIRE — not merely untranslated. The founder's own vault carried 24 of them and every one was flattened to the default order in silence, which is the shape of failure this whole surface is written against: a view that imports without an error and then sorts its groups the wrong way, with nothing anywhere to say so.
+type ViewGroupBy struct {
+	// Direction Order of the GROUPS themselves — not of the records inside them, which is `sort`'s job.
+	//
+	// Omitted means `asc`. That default is stated here rather than declared as a JSON Schema `default:` for the reason RecordFilter.yaml gives on `negate`: openapi-typescript promotes a defaulted property to REQUIRED while oapi-codegen still emits an optional pointer, so a `default:` here would make the two generated languages disagree about one field.
+	//
+	// Group order is LEXICAL over the case-folded key (ruling R-5/R-E) — an enum has no declared-position ordinal, and a domain order is expressed by prefixing the values (`1-lead`, `2-qualified`).
+	Direction *ViewGroupByDirection `json:"direction,omitempty"`
+
+	// Property The property to group on. Grouping by a relation is supported (FR-029), and a record holding several values appears in EVERY group it belongs to (FR-028) rather than being assigned to one arbitrarily. The reserved namespaces `file.*` (FR-130) and `formula.*` (FR-140s) are valid here.
+	Property string `json:"property"`
+}
+
+// ViewGroupByDirection Order of the GROUPS themselves — not of the records inside them, which is `sort`'s job.
+//
+// Omitted means `asc`. That default is stated here rather than declared as a JSON Schema `default:` for the reason RecordFilter.yaml gives on `negate`: openapi-typescript promotes a defaulted property to REQUIRED while oapi-codegen still emits an optional pointer, so a `default:` here would make the two generated languages disagree about one field.
+//
+// Group order is LEXICAL over the case-folded key (ruling R-5/R-E) — an enum has no declared-position ordinal, and a domain order is expressed by prefixing the values (`1-lead`, `2-qualified`).
+type ViewGroupByDirection string
+
+// ViewPropertyConfig Per-property presentation for one column of a schema_version-2 view (ADR-068 D24.1, spec FR-018b — the `properties` key of an Obsidian base, which is display configuration rather than a projection list).
+// PURE PRESENTATION. THE ENGINE NEVER READS THIS. Obsidian's own rule is kept verbatim and it is the rule that matters: a display name is NEVER usable in a filter, a sort, a grouping or a formula. Those positions name the PROPERTY, always — so renaming a column in the UI can never quietly change which records a view returns.
+type ViewPropertyConfig struct {
+	// DisplayName Column heading to render instead of the property name. Absent means render the property name itself.
+	DisplayName *string `json:"display_name,omitempty"`
 }
 
 // VoiceProvider Response body for GET /api/v1/voice/provider. Describes the active voice provider configuration so the SPA can decide which widget variant (dropdown / free-text / disabled) to render in the agent edit slide-over.

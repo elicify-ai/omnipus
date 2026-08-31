@@ -1,6 +1,25 @@
 title: VaultFindAggregate
 description: >
-  One total to compute over the matched set (spec FR-123, FR-125, FR-125a).
+  One total to compute over the matched set (spec FR-123, FR-125, FR-125a,
+  and FR-150 to FR-155 for the fifteen ops).
+
+  ONE NAME, FIFTEEN FUNCTIONS (founder ruling, spec Draft 11). Obsidian's
+  "summaries" are these ops; there is no separate `summaries` key on this
+  surface or on a view. The op set here is byte-identical in spelling to
+  RecordAggregate's, deliberately — pkg/records/view_find_bridge.go maps a
+  saved view's summaries onto this request by copying the op string, and two
+  spellings for one function is how that mapping starts lying.
+
+  Precision is DECLARED, not avoided (FR-152): `avg`, `median` and `stddev`
+  are computed exactly in rationals and rendered at the property's declared
+  scale + 2, round-half-even, with the response labelling the value ROUNDED.
+  `stddev` is POPULATION standard deviation and the label says so (FR-153).
+
+  `median` and `unique` are the two population-class ops (FR-151): they
+  buffer ONE COLUMN of values, never rows, and abort mid-scan at B3's bound —
+  100,000 buffered values or 8 MB, whichever first — naming the count reached
+  and the remedy. No total is ever computed over a truncated set (FR-154);
+  a refused bound returns no total at all, never a partial one.
 type: object
 additionalProperties: false
 required:
@@ -8,16 +27,60 @@ required:
 properties:
   op:
     type: string
-    enum: [count, sum, min, max]
+    enum:
+      - count
+      - sum
+      - min
+      - max
+      - avg
+      - median
+      - stddev
+      - range
+      - earliest
+      - latest
+      - checked
+      - unchecked
+      - empty
+      - filled
+      - unique
+    x-enum-varnames:
+      - VaultFindAggregateOpCount
+      - VaultFindAggregateOpSum
+      - VaultFindAggregateOpMin
+      - VaultFindAggregateOpMax
+      - VaultFindAggregateOpAvg
+      - VaultFindAggregateOpMedian
+      - VaultFindAggregateOpStddev
+      - VaultFindAggregateOpRange
+      - VaultFindAggregateOpEarliest
+      - VaultFindAggregateOpLatest
+      - VaultFindAggregateOpChecked
+      - VaultFindAggregateOpUnchecked
+      - VaultFindAggregateOpEmpty
+      - VaultFindAggregateOpFilled
+      - VaultFindAggregateOpUnique
     description: >
-      The reduction. `count` needs no property and counts evaluated rows; the
-      other three require one and are defined only over `integer` and `decimal`
-      properties, which are ONE comparison domain (R-1).
+      The reduction; fifteen, and the list is closed (FR-150). `count` needs
+      no property and counts evaluated rows; every other op requires one.
+
+
+      Number domain (`integer` and `decimal` are ONE comparison domain, R-1):
+      `sum`, `avg`, `median`, `stddev`, `min`, `max`, `range`. Date domain:
+      `earliest`, `latest`, `min`, `max`, and `range`, which renders as a
+      DURATION. Checkbox domain (FR-004c): `checked`, `unchecked` — absent is
+      counted by neither, so their sum is not the row count. Any type:
+      `empty`, `filled`, `unique`; `unique` counts DISTINCT values under the
+      comparator's own case folding (R-5/R-D), so `Won` and `won` are one.
+
+
+      An op the property's declared type does not define is REFUSED naming
+      the ops that type does define (FR-155) — never answered with a zero.
     example: "sum"
   property:
     type: string
     minLength: 1
     description: >
-      The property to reduce. Required for `sum`, `min` and `max`; forbidden
-      for `count`, which counts rows rather than values.
+      The property to reduce. Required for every op except `count`, which
+      counts rows rather than values and forbids it. The reserved namespaces
+      `file.*` (FR-130) and `formula.*` (FR-140s) are valid here.
     example: "arr"

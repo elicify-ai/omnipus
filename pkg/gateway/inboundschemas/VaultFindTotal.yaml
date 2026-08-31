@@ -22,7 +22,45 @@ required:
 properties:
   op:
     type: string
-    enum: [count, sum, min, max]
+    enum:
+      - count
+      - sum
+      - min
+      - max
+      - avg
+      - median
+      - stddev
+      - range
+      - earliest
+      - latest
+      - checked
+      - unchecked
+      - empty
+      - filled
+      - unique
+    x-enum-varnames:
+      - VaultFindTotalOpCount
+      - VaultFindTotalOpSum
+      - VaultFindTotalOpMin
+      - VaultFindTotalOpMax
+      - VaultFindTotalOpAvg
+      - VaultFindTotalOpMedian
+      - VaultFindTotalOpStddev
+      - VaultFindTotalOpRange
+      - VaultFindTotalOpEarliest
+      - VaultFindTotalOpLatest
+      - VaultFindTotalOpChecked
+      - VaultFindTotalOpUnchecked
+      - VaultFindTotalOpEmpty
+      - VaultFindTotalOpFilled
+      - VaultFindTotalOpUnique
+    description: >
+      The reduction this total came from, echoed back. Identical to
+      VaultFindAggregate's list (FR-150's fifteen) and required to stay so:
+      the SPA validates responses against the generated Zod schema and drops
+      what fails, so an op the request can ask for but the response cannot
+      name is a correct answer that disappears silently on its way to a
+      reader.
     example: "sum"
   label:
     type: string

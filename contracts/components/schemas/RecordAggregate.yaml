@@ -1,15 +1,45 @@
 title: RecordAggregate
 description: >
-  One aggregate to compute over the matched records (ADR-068 D9, D13).
+  One summary to compute over the matched records (ADR-068 D9, D13, D24.4;
+  spec FR-150 to FR-155).
 
-  There is deliberately NO "avg". A mean over exact decimals is not itself
-  exact — it reintroduces a rounding decision at the one point where this
-  design promises there is none (FR-013) — and a caller that wants one can
-  compute it from `count` and `sum` with a rounding rule it chose. Offering
-  avg here would be offering a number whose precision nobody declared.
+  ONE NAME, FIFTEEN FUNCTIONS (founder ruling, spec Draft 11). Obsidian Bases
+  calls these "summaries" and carries them under a `summaries` key. There is
+  NO `summaries` key here and there never will be: parity is CAPABILITY, not
+  key names, so the nine functions Bases had and we did not simply became new
+  ops of this existing surface. The importer TRANSLATES Obsidian's top-level
+  `summaries` block and its per-view summary map into entries of this shape.
 
-  No aggregate is returned at all over a refused candidate set (FR-066); it is
-  never partial.
+  THE "THERE IS DELIBERATELY NO AVG" PARAGRAPH THAT STOOD HERE IS SUPERSEDED
+  (FR-152), and the way it is superseded matters more than the fact. It
+  refused `avg` as "a number whose precision nobody declared" — a correct
+  objection, answered rather than argued with. Average, Median (at an even
+  count) and Stddev are computed EXACTLY, in rationals, and RENDERED at a
+  DECLARED scale: the property's declared scale + 2, round-half-even. The
+  response labels such a value as ROUNDED, so no caller mistakes a rendered
+  figure for an exact one, and FR-013's no-binary-float rule is untouched —
+  nothing here ever enters a float64.
+
+  TWO COMPUTATIONAL CLASSES, AND ONLY ONE OF THEM BUFFERS (FR-151). Thirteen
+  of the fifteen stream through an O(1) accumulator — including `stddev`,
+  which streams exactly via count, sum and sum-of-squares in rational
+  arithmetic and rounds only at the final square root. `median` and `unique`
+  are the two population-class ops: they buffer ONE COLUMN of the summarised
+  property's values (never rows), and they are bounded by their own named
+  refusal, B3 — a population-class op ABORTS MID-SCAN above 100,000 buffered
+  values or 8 MB of buffered bytes, whichever comes first, reporting the count
+  reached and the remedy (narrow the filter, or summarise a scalar property).
+
+  NO SUMMARY IS EVER COMPUTED OVER A TRUNCATED SET (FR-154, FR-066). A bound
+  that refuses returns NO summary at all; it is never partial. A median
+  quietly taken over whatever fit is the precise failure this whole surface
+  exists to remove, and Median is the first op for which that shortcut is
+  tempting.
+
+  A SUMMARY THE PROPERTY'S TYPE DOES NOT DEFINE IS REFUSED BY NAME (FR-155) —
+  `stddev` over text, `checked` over a date — listing the summaries the type
+  does define. FR-024's posture, applied to summaries: never a zero, never a
+  blank cell.
 type: object
 additionalProperties: false
 required:
@@ -22,17 +52,88 @@ properties:
       - sum
       - min
       - max
+      - avg
+      - median
+      - stddev
+      - range
+      - earliest
+      - latest
+      - checked
+      - unchecked
+      - empty
+      - filled
+      - unique
+    x-enum-varnames:
+      - RecordAggregateOpCount
+      - RecordAggregateOpSum
+      - RecordAggregateOpMin
+      - RecordAggregateOpMax
+      - RecordAggregateOpAvg
+      - RecordAggregateOpMedian
+      - RecordAggregateOpStddev
+      - RecordAggregateOpRange
+      - RecordAggregateOpEarliest
+      - RecordAggregateOpLatest
+      - RecordAggregateOpChecked
+      - RecordAggregateOpUnchecked
+      - RecordAggregateOpEmpty
+      - RecordAggregateOpFilled
+      - RecordAggregateOpUnique
     description: >
-      "count" — number of matched records; the only op valid with no property.
+      The reduction. Fifteen, and the list is closed (FR-150).
+
+
+      NEEDS NO PROPERTY: "count" — number of matched records; the only op
+      valid with `property` omitted.
+
+
+      NUMBER DOMAIN (integer and decimal are ONE comparison domain, R-1):
       "sum" — exact decimal total, computed in arbitrary precision and never
-      through a binary float (FR-020b).
-      "min" / "max" — extreme value; for an enum that is the lexical extreme
-      over the folded value (R-5), not a declared position.
+      through a binary float (FR-020b). "avg" — exact mean, rendered at the
+      declared scale and labelled rounded (FR-152). "median" — the middle
+      value; at an even count the exact mean of the two middle values, same
+      rendering rule. "stddev" — POPULATION standard deviation, and the
+      response label SAYS population (FR-153). Obsidian's documentation does
+      not state which theirs is, so ours declares its own definition rather
+      than guessing at a match, and the importer records the divergence risk
+      by name rather than in silence.
+
+
+      NUMBER OR DATE DOMAIN: "min" / "max" — the extreme value; for an enum
+      that is the LEXICAL extreme over the folded value (R-5), not a declared
+      position. "range" — max minus min, defined in the number domain AND the
+      date domain; a date range renders as a DURATION, not as a date.
+
+
+      DATE DOMAIN: "earliest" / "latest" — the date domain's extremes. They
+      are spelled separately from min/max because a reader scanning a view
+      should not have to know that a date sorts.
+
+
+      CHECKBOX DOMAIN (PropertyDef type `checkbox`, FR-004c): "checked" /
+      "unchecked" — how many records hold `true` and how many hold `false`.
+      Absent is the third state and is counted by NEITHER; "checked +
+      unchecked" is not the record count and must not be read as one.
+
+
+      ANY TYPE: "empty" / "filled" — how many records are ABSENT and how many
+      PRESENT on the property. Defined for every type, which is what makes
+      them the honest answer to "how much of this column is actually filled
+      in". "unique" — the number of DISTINCT values, compared under the same
+      folding the comparator uses everywhere else (R-5/R-D), so `Won` and
+      `won` are one value here exactly as they are one group in a grouping.
     example: "sum"
   property:
     type: string
     minLength: 1
     description: >
-      The property to aggregate. Required for sum, min and max; omitted for
-      count. Validated against the schema before evaluation (FR-023).
+      The property to summarise. Required for every op except "count", which
+      counts records rather than values and forbids it. Validated against the
+      schema before evaluation (FR-023); a name the schema does not declare
+      REJECTS the query with the declared names listed (FR-024), never
+      returning a zero that reads like a real total.
+
+
+      The reserved namespaces are valid here: `file.*` (FR-130) and
+      `formula.*` (FR-140s) are summarised exactly like a declared property.
     example: "arr"

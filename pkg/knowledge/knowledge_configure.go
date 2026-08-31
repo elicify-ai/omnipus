@@ -528,9 +528,17 @@ func (t *ConfigureTool) execWriteView(target mutationTarget, args map[string]any
 		Collection: target.col.Name, Root: root,
 		Paths: []string{relControlPlanePath(root, viewPath)}, At: t.deps.now(),
 	})
+	// ViewDef.Type is a *string since FR-018b made `type` optional (an untyped
+	// view spans record types). ParseView still refuses a typeless view, so
+	// this is non-nil in practice; the guard renders an untyped view as the
+	// empty type rather than panicking if that ever stops being true.
+	viewType := ""
+	if parsed.Def.Type != nil {
+		viewType = *parsed.Def.Type
+	}
 	return tools.NewToolResult(RenderConfigure(ConfigureData{
 		Op: opWriteView, Name: viewName, Path: relControlPlanePath(root, viewPath),
-		ViewType: parsed.Def.Type,
+		ViewType: viewType,
 	}))
 }
 

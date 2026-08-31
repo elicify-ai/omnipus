@@ -300,8 +300,389 @@ components:
       $ref: ./components/schemas/RecordWriteRequest.yaml
     RelationWriteRequest:
       $ref: ./components/schemas/RelationWriteRequest.yaml
+    ViewGroupBy:
+      $ref: ./components/schemas/ViewGroupBy.yaml
+    ViewPropertyConfig:
+      $ref: ./components/schemas/ViewPropertyConfig.yaml
+    # ── ViewDef — ADR-068 D10 and D24.1, spec FR-018b/FR-018d, FR-105, FR-109 ───
+    # HOSTED INLINE, NOT IN ITS OWN FILE, for the same mechanical reason
+    # VaultFindRequest is (see its note below): a schema_version-2 view's
+    # `filter` IS the recursive VaultFilterNode, and oapi-codegen v2.7.0
+    # INLINES a cross-file $ref at its use site — so a cross-file reference to
+    # a recursive schema expands until the generator dies with a stack
+    # overflow. An internal '#/components/schemas/' reference resolves to the
+    # named type instead, and only a schema living HERE can write one. This is
+    # the ADR-034 exception, applied for the third time and for the same cause.
+    # ViewDef.yaml was deleted in the same commit; there is no second copy.
     ViewDef:
-      $ref: ./components/schemas/ViewDef.yaml
+      title: ViewDef
+      description: >
+        A saved query, stored as data (ADR-068 D10). A view names filters,
+        grouping, sort and the properties to show; it lives in
+        `<vault>/.omnipus-vault/views/<name>.yaml`, so an agent can author one
+        and a human can diff it.
+
+        A view naming a property or enum value that does not exist is REJECTED
+        at write time (D15), not stored and discovered broken later.
+
+        TWO VERSIONS LIVE IN THIS ONE SCHEMA, AND THE REASON IS THE ONE RULE
+        THIS SURFACE WILL NOT BREAK (spec FR-018b, review finding F5).
+        `SupportedViewVersion` is the SET {1, 2}. A version-1 view evaluates
+        under VERSION-1 SEMANTICS, VERBATIM — nothing is auto-translated,
+        because the obvious translation (`contains` becoming `LIKE %…%`) turns
+        whole-element membership into substring matching: `labels contains
+        "in"` would newly match `indoor`, `printing` and `min`. That is
+        BROADENING, applied automatically, and broadening is the one thing an
+        imported or migrated view may never do (FR-105). A v1 view using
+        `contains` or `via` therefore stays exactly as it is — listed by
+        knowledge_describe, not servable through knowledge_find, the reason
+        named — until an operator EXPLICITLY migrates it through
+        knowledge_configure, which refuses any rewrite that would change the
+        row set.
+
+        WHICH KEYS BELONG TO WHICH VERSION, because a reader will otherwise
+        assume the wrong one. Version 1 only: `filters` (the flat, AND-only
+        RecordFilter list) and `group_by` (a bare name list). Version 2 only:
+        `filter` (ONE VaultFilterNode tree), `grouping` (keys that carry a
+        direction), `layout`, `formulas`, `property_config`. Shared: everything
+        else. A view MUST NOT set a key belonging to the other version — that
+        is a write-time and load-time refusal, not a silent preference.
+
+        WHY THE V2 KEYS ARE SPELLED DIFFERENTLY RATHER THAN REDEFINED IN PLACE.
+        Spec FR-018b describes v2's tree as `filters` and v2's directional keys
+        as `group_by`. Those two keys ALREADY EXIST ON DISK holding a v1 array
+        and a v1 string list, and this schema declares
+        `additionalProperties: false` — which pkg/records/view.go enforces with
+        json DisallowUnknownFields. Redefining either key's TYPE in place would
+        make every existing v1 file fail to decode, i.e. it would delete v1
+        readability in the same change that promises to preserve it. The
+        alternative — one key holding a oneOf of both shapes — buys the
+        spelling back at the cost of a union type on both generated sides. So
+        v2 takes new names: `filter`, matching VaultFindRequest's own key for
+        the same tree (which is FR-018b's actual point — ONE filter grammar,
+        one spelling of it), and `grouping`.
+
+        `untranslated` and `disabled` exist for the one-shot .base importer
+        (FR-100 to FR-102, FR-105, FR-106). An expression this system cannot
+        translate is preserved VERBATIM in `untranslated` and reported, never
+        approximated and never silently dropped — an approximation that looks
+        like a translation is worse than an honest gap, because nobody reviews
+        a filter that appears to have imported cleanly. Import is one-shot:
+        `.base` files are never read on the query path (FR-102).
+      type: object
+      additionalProperties: false
+      required:
+        - schema_version
+        - name
+      properties:
+        schema_version:
+          type: integer
+          minimum: 1
+          maximum: 2
+          description: >
+            Declared version of the view format, mandatory for the same reason
+            a record schema's is (D2): a format that breaks unannounced is
+            worse when the files are machine-generated.
+
+
+            The supported set is {1, 2}. 1 is the flat, AND-only
+            RecordFilter format, read verbatim under its own semantics and
+            never rewritten on read. 2 is the find grammar (D24.1). WRITES
+            EMIT 2; a file on disk is never upgraded as a side effect of being
+            read.
+          example: 2
+        name:
+          type: string
+          minLength: 1
+          description: View identifier, unique within the vault.
+          example: "open-by-owner"
+        type:
+          type: string
+          minLength: 1
+          description: >
+            The record type this view queries.
+
+
+            OPTIONAL SINCE VERSION 2 (FR-018b). An UNTYPED view queries every
+            note in scope — which is what four of the founder's eighteen bases
+            do, scoping purely by folder and spanning record types. In an
+            untyped view a property resolves BY NAME over the rows the index
+            holds for every note (FR-021e): a note that CARRIES the key holds
+            its value, parsed in the domain the name resolves to; a value that
+            does not parse there is NON-CONFORMING and reported; and ONLY a
+            note not carrying the key at all is ABSENT. A note whose file says
+            `status: open` must never answer TRUE to `status IS NULL`. Two
+            in-scope types declaring one name with DIFFERENT types REFUSE the
+            query naming both declarations — loud, never a silent domain
+            split. A name no in-scope type declares resolves in the TEXT
+            domain over the raw values.
+
+
+            A declared type holding ZERO records is a VALID, EMPTY view
+            (FR-018d) carrying the ordinary completeness verdict — "0 records,
+            complete" — which is distinguishable from the silent empty this
+            design exists to prevent. Six of the founder's eighteen bases
+            reference types provisioned ahead of their data. A type NO schema
+            declares is still rejected: that is drift, not provisioning.
+
+
+            On a VERSION-1 view this field remains effectively required — a v1
+            view with no type has no record type to query and is rejected, as
+            it always was.
+          example: "deal"
+        label:
+          type: string
+          description: Human-readable title. Absent means render `name`.
+          example: "Open deals by owner"
+        filters:
+          type: array
+          description: >
+            VERSION 1 ONLY. Filter clauses, combined with AND.
+
+
+            This is the flat, AND-only, seven-operator list that version-2
+            views replace with `filter`. It cannot express disjunction at all —
+            seven filter groups in the founder's vault needed it and not one
+            was expressible — and its `contains` and `via` leaves have no
+            faithful equivalent in the find grammar. It is KEPT, unchanged and
+            un-translated, so that every v1 view already on disk keeps meaning
+            exactly what it meant (FR-018b). A version-2 view setting this key
+            is REFUSED.
+          items:
+            $ref: "./components/schemas/RecordFilter.yaml"
+            x-go-type: RecordFilter
+        filter:
+          description: >
+            VERSION 2 ONLY. The view's filter, as ONE VaultFilterNode tree —
+            the same `all`/`any`/`not` combinators and ten SQL operators
+            knowledge_find already evaluates (ADR-068 D24.1, FR-018b).
+
+
+            This is the whole point of version 2: the product spoke TWO filter
+            languages, and the bridge between them refused two of the older
+            one's leaves outright. Now there is one. Obsidian's `and`/`or`/
+            `not` map 1:1 onto `all`/`any`/`not`; its `contains` translates as
+            an escaped `LIKE '%…%'`; its relation traversal is the request's
+            own join shape rather than a per-leaf `via`.
+
+
+            FR-023c's bound applies to a view's tree identically to a
+            request's: at most 64 leaves and depth 8, refused above either
+            naming which.
+          allOf:
+            - $ref: "#/components/schemas/VaultFilterNode"
+        group_by:
+          type: array
+          maxItems: 2
+          description: >
+            VERSION 1 ONLY. Grouping properties, outermost first. Two levels
+            (FR-027); a relation is a valid grouping property (FR-029).
+
+
+            A bare name list with NO direction field — which is why every
+            `groupBy` direction in an imported base was unrepresentable rather
+            than merely untranslated. Version 2 uses `grouping`, whose entries
+            carry one. A version-2 view setting this key is REFUSED.
+          items:
+            type: string
+            minLength: 1
+          example: ["owner"]
+        grouping:
+          type: array
+          maxItems: 2
+          description: >
+            VERSION 2 ONLY. Grouping keys, outermost first, each carrying its
+            own direction (FR-018b). Two levels (FR-027); grouping by a
+            relation is supported (FR-029) and a record holding several values
+            appears in every group it belongs to (FR-028).
+
+
+            A version-1 view setting this key is REFUSED.
+          items:
+            $ref: "./components/schemas/ViewGroupBy.yaml"
+            x-go-type: ViewGroupBy
+        sort:
+          type: array
+          description: Sort keys, applied in order.
+          items:
+            $ref: "./components/schemas/RecordSort.yaml"
+            x-go-type: RecordSort
+        properties:
+          type: array
+          description: >
+            Properties to display, in this order. Omitted shows every declared
+            property. Narrowing this changes what is RENDERED, never what is
+            matched.
+          items:
+            type: string
+            minLength: 1
+          example: ["name", "status", "value"]
+        property_config:
+          type: object
+          description: >
+            VERSION 2 ONLY. Per-property presentation, keyed by PROPERTY name
+            (FR-018b) — Obsidian's top-level `properties` block, which is
+            display configuration rather than a projection list.
+
+
+            PURE PRESENTATION; THE ENGINE NEVER READS IT. Obsidian's own rule
+            is kept verbatim: a display name is never usable in a filter, a
+            sort, a grouping or a formula, so renaming a column can never
+            quietly change which records a view returns.
+          additionalProperties:
+            $ref: "./components/schemas/ViewPropertyConfig.yaml"
+            x-go-type: ViewPropertyConfig
+        layout:
+          type: string
+          enum:
+            - table
+            - cards
+            - board
+            - calendar
+            - gallery
+            - map
+          x-enum-varnames:
+            - ViewDefLayoutTable
+            - ViewDefLayoutCards
+            - ViewDefLayoutBoard
+            - ViewDefLayoutCalendar
+            - ViewDefLayoutGallery
+            - ViewDefLayoutMap
+          description: >
+            VERSION 2 ONLY. Which rendering this view asks for (FR-109). THE
+            ENGINE NEVER READS THIS; the SPA does. Omitted means `table`.
+
+
+            ONLY `table` AND `cards` ARE RENDERED. `board`, `calendar`,
+            `gallery` and `map` are declared here precisely BECAUSE they are
+            not rendered: the importer must be able to record what an Obsidian
+            view actually asked for, so a layout this product cannot draw
+            imports with the loss NAMED as an annotation loss (FR-106) instead
+            of arriving as a table that nobody knows was ever anything else.
+
+
+            This field exists because of a measured failure, not a hypothesis.
+            An Obsidian CARDS view imported as a table, recorded no loss at
+            all, and scored CLEAN under the parity exit criterion — a green
+            number over an undetected loss, which is the exact failure this
+            whole surface is written against. An unrenderable layout is a
+            visible gap; a silently flattened one is a wrong answer.
+          example: "cards"
+        formulas:
+          type: object
+          description: >
+            VERSION 2 ONLY. Computed properties, keyed by name, each value the
+            expression's SOURCE TEXT (FR-141) — human-diffable and directly
+            comparable against the Obsidian original it was translated from.
+            A formula is referenced from any property position as
+            `formula.<name>`.
+
+
+            THE PARSER LIVES IN THE WRITE PATH AND ONLY THERE (FR-140).
+            knowledge_configure and the importer parse an expression when it is
+            written and REFUSE one that does not parse, naming the position and
+            the reason; it is never stored. The view loader re-validates on
+            load, so a hand-edited file is re-checked. knowledge_find accepts
+            NO text expression anywhere — a query reaches a formula only as a
+            reference to something already validated — which is what keeps
+            both halves of ADR-068 O-3 true on the query path: no text
+            language, no parser, and therefore no parse failure that could
+            degrade into an empty result.
+
+
+            Bounded, and refused above each bound naming which (FR-146): one
+            formula at most 64 nodes and depth 8; a view at most 16 formulas;
+            a view's formulas at most 256 nodes in total. A reference CYCLE
+            (`a: formula.b + 1`, `b: formula.a + 1`) parses clean and would
+            recurse forever, so the reference graph is validated at write AND
+            at load and a cycle is REFUSED naming its path (FR-148).
+          additionalProperties:
+            type: string
+            minLength: 1
+          example:
+            days_to_expiry: "(expires - today()).days"
+        aggregates:
+          type: array
+          description: >
+            Summaries to compute for this view, and per group when grouped.
+
+
+            ONE NAME, FIFTEEN FUNCTIONS (founder ruling, FR-150). Obsidian's
+            top-level `summaries` key and its per-view summary map TRANSLATE
+            at import into entries of this list. There is deliberately NO
+            `summaries` key on a view: parity is capability, not key names,
+            and a second spelling for one concept is how two surfaces start
+            disagreeing about which is authoritative.
+          items:
+            $ref: "./components/schemas/RecordAggregate.yaml"
+            x-go-type: RecordAggregate
+        limit:
+          type: integer
+          minimum: 1
+          description: >
+            Page size for this view. Clamped at the server cap of 200, with the
+            clamp reported on the response (FR-063).
+          example: 50
+        disabled:
+          type: boolean
+          description: >
+            The view is stored but MUST NOT be applied; applying it is REFUSED
+            naming the expression in `untranslated` that disabled it (FR-105).
+
+
+            THIS IS THE BROADENING PROHIBITION MADE STRUCTURAL, and it is the
+            one import rule that admits no exception: an imported view must
+            never return MORE rows than its original while looking correct. An
+            untranslatable expression in any ROW-SET-AFFECTING position — a
+            filter, anywhere in its tree — disables the view rather than
+            importing it with the clause quietly dropped. The standing
+            example: a base filtering `type == "decision"` AND NOT
+            `inFolder("99-Temp")` AND NOT `inFolder("00-Inbox")`. Drop the two
+            folder clauses and the view still runs, still looks right, and now
+            silently includes every scratch note in the vault.
+
+
+            An untranslatable expression in an ANNOTATION position — display
+            config, a summary, an unrenderable `layout` — cannot change which
+            rows appear, so the view imports ENABLED with the loss declared in
+            `untranslated` (FR-106).
+
+
+            Omitted is identical to false. Carries no JSON Schema `default:`
+            for the reason RecordFilter.yaml gives on `negate`: a `default:`
+            makes openapi-typescript promote the field to REQUIRED while
+            oapi-codegen still emits an optional pointer, and the two generated
+            languages then disagree about one field.
+          example: true
+        source:
+          type: string
+          description: >
+            Vault-relative path of the file this view was IMPORTED from, when
+            it was imported rather than authored. Recorded so the provenance of
+            a partially translated view is visible; the source is never re-read
+            afterwards (FR-102).
+          example: "CRM/Deals.base"
+        untranslated:
+          type: array
+          description: >
+            Expressions from the imported source that could NOT be translated,
+            preserved verbatim (FR-101). Present only on an imported view, and
+            non-empty only when something was genuinely left behind. Never an
+            approximation of the original.
+
+
+            UNDER PARITY, EVERY RESIDUAL ENTRY HERE IS A DEFECT TO FILE, NOT AN
+            ACCEPTED LOSS, and the import report must say so in those words
+            (FR-107). The neutral "reported and moved on" posture survives only
+            for genuinely UNDOCUMENTED upstream behaviour, which the report
+            labels as such — the standing example being that Obsidian's
+            documentation never says whether its standard deviation is
+            population or sample, so ours declares its own definition (FR-153)
+            and records the divergence risk by name.
+          items:
+            type: string
+            minLength: 1
+          example: ['status != "done" && (due < now() || priority > 3)']
     # ── knowledge_find — ADR-068 D15.3, spec 4.1.2 and 4.2 ──────────────────────
     # The ONE retrieval path. These types supersede the RecordQuery* family
     # above for the agent-facing surface: that family predates ruling R-B (the

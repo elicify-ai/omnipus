@@ -16,7 +16,7 @@ import (
 // ParsedBase is one `.base` file's generic structure. Obsidian's Base format
 // is read here as plain `any` (map[string]any / []any / scalars) rather than
 // into a typed struct: it is not this product's format, it is not versioned
-// the way our own schema/view files are (ViewDef.yaml's own description
+// the way our own schema/view files are (the ViewDef schema's own description
 // notes it "broke in five consecutive releases across eight weeks"), and a
 // typed struct would have to guess at every field this importer does not
 // care about. Reading generically means an unrecognised Base field is

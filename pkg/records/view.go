@@ -23,7 +23,9 @@ import (
 //
 // A saved view is a saved query, stored as data in
 // <vault>/.omnipus-vault/views/<name>.yaml — the location is stated in the
-// contract (contracts/components/schemas/ViewDef.yaml), which is the single
+// contract (the ViewDef schema, hosted INLINE in contracts/openapi.yaml
+// under components.schemas since it references the recursive VaultFilterNode
+// — see that file's own note), which is the single
 // source of truth for the format under Hard Constraint #8.
 //
 // THREE CALLERS NEED TO READ ONE, and they arrived at three different times:
@@ -42,7 +44,7 @@ import (
 // reader is how a read path acquires the ability to repair what it reads.
 //
 // THE MODEL IS THE GENERATED TYPE. generated.ViewDef comes from
-// ViewDef.yaml via oapi-codegen and is the only legal cross-boundary type for
+// contracts/openapi.yaml via oapi-codegen and is the only legal cross-boundary type for
 // a view (Hard Constraint #8). There is deliberately no parallel
 // hand-written struct here: the persisted YAML is a wire format the SPA reads,
 // so a second shape would be exactly the drift the constraint exists to stop.
@@ -464,12 +466,25 @@ func ParseView(path string, data []byte) (*SavedView, *ViewRejection) {
 		return nil, reject(RejectViewMissingName, "",
 			"the view declares no `name`, so nothing can ask for it by name")
 	}
-	if strings.TrimSpace(def.Type) == "" {
+	// `type` became OPTIONAL ON THE WIRE in ViewDef schema_version 2 (spec
+	// FR-018b): an untyped view queries every note in scope, which is what
+	// four of the founder's eighteen bases do. Nothing has relaxed HERE yet,
+	// deliberately — SupportedViewVersion is still {1}, and a version-1 view
+	// with no `type` has no record type to query and was always rejected. The
+	// only change is that the generated field is now a *string, so the
+	// rejection reads through the pointer instead of past it.
+	//
+	// WHOEVER IMPLEMENTS FR-018b: this is the branch to relax, and it must be
+	// relaxed BY VERSION — never unconditionally. Dropping the check outright
+	// would let a v1 view load with no type and then fail somewhere further in,
+	// which is the shape of failure this loader exists to prevent.
+	if def.Type == nil || strings.TrimSpace(*def.Type) == "" {
 		return nil, reject(RejectViewMissingType, def.Name,
 			"view %q declares no `type`, so there is no record type for it to query", def.Name)
 	}
 	def.Name = strings.TrimSpace(def.Name)
-	def.Type = strings.TrimSpace(def.Type)
+	trimmedType := strings.TrimSpace(*def.Type)
+	def.Type = &trimmedType
 
 	return &SavedView{Def: def, SourcePath: path}, nil
 }
@@ -493,7 +508,7 @@ func cleanJSONFieldError(err error) error {
 // not — FR-024's pattern, applied to a view instead of a query.
 //
 // It is exported because knowledge_configure needs exactly this check BEFORE it
-// writes (ViewDef.yaml: "A view naming a property or enum value that does not
+// writes (the ViewDef schema: "A view naming a property or enum value that does not
 // exist is REJECTED at write time, not stored and discovered broken later"),
 // and a second implementation of the same rule would eventually disagree with
 // this one about some edge.
@@ -514,11 +529,20 @@ func ValidateViewAgainstSchemas(v *SavedView, schemas *SchemaSet) *ViewRejection
 		}
 	}
 
-	base, ok := schemas.Get(v.Def.Type)
+	// v.Def.Type is a *string since ViewDef schema_version 2 made `type`
+	// optional (FR-018b). ParseView refuses a typeless view before it ever
+	// reaches here, so a nil at this point means a SavedView was constructed
+	// by something other than the loader; it is reported as the unknown type
+	// it effectively is rather than dereferenced into a panic.
+	declaredType := ""
+	if v.Def.Type != nil {
+		declaredType = *v.Def.Type
+	}
+	base, ok := schemas.Get(declaredType)
 	if !ok {
 		return reject(RejectViewUnknownType,
 			"view %q queries record type %q, which this vault does not declare; declared types: %s",
-			v.Def.Name, v.Def.Type, joinOrNone(schemas.Types()))
+			v.Def.Name, declaredType, joinOrNone(schemas.Types()))
 	}
 
 	// Every place a property name can appear, checked against the type it

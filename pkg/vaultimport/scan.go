@@ -28,7 +28,7 @@ type Inventory struct {
 	// Bases is every `.base` file, absolute path.
 	Bases []string
 	// BaseRel is Bases' vault-relative paths, for the `source:` field a
-	// translated view records (ViewDef.yaml's `source`) and for the report.
+	// translated view records (the ViewDef schema's `source`) and for the report.
 	BaseRel map[string]string
 }
 

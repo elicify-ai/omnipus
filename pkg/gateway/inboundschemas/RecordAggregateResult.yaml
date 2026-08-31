@@ -21,7 +21,41 @@ properties:
       - sum
       - min
       - max
-    description: The aggregate requested, echoed back.
+      - avg
+      - median
+      - stddev
+      - range
+      - earliest
+      - latest
+      - checked
+      - unchecked
+      - empty
+      - filled
+      - unique
+    x-enum-varnames:
+      - RecordAggregateResultOpCount
+      - RecordAggregateResultOpSum
+      - RecordAggregateResultOpMin
+      - RecordAggregateResultOpMax
+      - RecordAggregateResultOpAvg
+      - RecordAggregateResultOpMedian
+      - RecordAggregateResultOpStddev
+      - RecordAggregateResultOpRange
+      - RecordAggregateResultOpEarliest
+      - RecordAggregateResultOpLatest
+      - RecordAggregateResultOpChecked
+      - RecordAggregateResultOpUnchecked
+      - RecordAggregateResultOpEmpty
+      - RecordAggregateResultOpFilled
+      - RecordAggregateResultOpUnique
+    description: >
+      The summary requested, echoed back. This list MUST stay identical to
+      RecordAggregate's (FR-150's fifteen). A response op the request grammar
+      can express but this echo cannot is not a cosmetic gap: the SPA edge
+      validates every incoming payload against the generated Zod schema and
+      DROPS what does not validate, so a `median` computed correctly by the
+      engine would vanish between the wire and the screen with no error
+      anywhere.
     example: "sum"
   property:
     type: string

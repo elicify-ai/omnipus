@@ -124,8 +124,14 @@ func translateView(v *SavedView) (generated.VaultFindRequest, bool) {
 	}
 	def := v.Def
 
-	req := generated.VaultFindRequest{
-		Type: &def.Type,
+	// def.Type is a *string since FR-018b made `type` optional on ViewDef, and
+	// VaultFindRequest.Type is a *string too — but they must NOT be aliased:
+	// handing the request a pointer into the view's own struct lets a later
+	// mutation of the request rewrite the saved view. Copy the value.
+	req := generated.VaultFindRequest{}
+	if def.Type != nil {
+		viewType := *def.Type
+		req.Type = &viewType
 	}
 	if def.GroupBy != nil {
 		gb := append([]string(nil), (*def.GroupBy)...)

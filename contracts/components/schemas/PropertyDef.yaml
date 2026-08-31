@@ -1,9 +1,15 @@
 title: PropertyDef
 description: >
-  One declared property of a record type (ADR-068 D2, D3). Seven property
+  One declared property of a record type (ADR-068 D2, D3). EIGHT property
   types exist and no more: text, enum, relation, date, integer, decimal,
-  person. The membership changed in ADR-068 revision 7 and the COUNT did not:
-  `money` was deleted and `number` was split into `integer` and `decimal`.
+  person, checkbox.
+
+  The count was seven through Draft 9. `checkbox` joined in spec Draft 11
+  (FR-004c, ADR-068 D24.5) and this line is the record of when it changed —
+  a rewrite of this sentence back to "seven" re-creates the staleness UAT
+  case C-8 was written to catch. Before that, in ADR-068 revision 7, the
+  membership changed while the count did not: `money` was deleted and
+  `number` was split into `integer` and `decimal`.
 
   ARITY AND PRESENCE ARE BOTH REQUIRED FIELDS, deliberately. `many` and
   `required` carry no default and are never inferred, because the single
@@ -46,13 +52,31 @@ properties:
       - integer
       - decimal
       - person
+      - checkbox
+    x-enum-varnames:
+      - PropertyDefTypeText
+      - PropertyDefTypeEnum
+      - PropertyDefTypeRelation
+      - PropertyDefTypeDate
+      - PropertyDefTypeInteger
+      - PropertyDefTypeDecimal
+      - PropertyDefTypePerson
+      - PropertyDefTypeCheckbox
     description: >
-      "text" — prose. Never validated and never queried for equality or order
-      (D3), so a filter on a text property supports exactly two operators:
-      `contains` (case-sensitive substring matching, §8 R-10) and `is_absent`.
-      "Is it present?" is {op: is_absent, negate: true}; there is no
-      `is_present` operator. Full-text retrieval is ADR-067's search surface,
-      not this one.
+      "text" — prose, never validated. On the CURRENT query grammar (ruling
+      R-B, the ten SQL operators of VaultFilterNode) a text property answers
+      `=`, `<>`, `<`, `<=`, `>`, `>=`, `LIKE`, `IN`, `IS NULL` and
+      `IS NOT NULL`. Comparison is case-INSENSITIVE over the folded value
+      (ruling R-D) and `LIKE` is anchored as written — `%` and `_` are the
+      only wildcards and they must be spelled. Full-text relevance retrieval
+      is ADR-067's search surface, not this one.
+
+
+      *The legacy seven-op vocabulary (`contains`, `is_absent`) survives ONLY
+      in RecordFilter.yaml, which is the schema_version-1 view surface and is
+      read verbatim under its own semantics (spec FR-018b). It is not the
+      grammar of this property type; a v2 view or a knowledge_find request
+      never speaks it.*
       "enum" — one of a closed SET (`values`). The set is closed; it is not
       ordered — sorting is lexical over the folded value (D4, R-5), and an
       author who wants a domain order prefixes the values: `1-lead`,
@@ -68,6 +92,15 @@ properties:
       `unit` applies here too.
       "person" — a relation to a person record, kept distinct from a name
       typed as text so one vault cannot model the same concept both ways.
+      "checkbox" — a YAML boolean (FR-004c, ADR-068 D24.5). The strings
+      `true` and `false`, case-folded, parse; anything else is
+      NON-CONFORMING and reported, never coerced. ABSENT IS THE THIRD STATE
+      — "days I did not meditate" is a native question here rather than a
+      trick with text. Defined operators: `=`, `<>`, `IN`, `IS NULL`,
+      `IS NOT NULL`; the ordering operators are REFUSED naming the remedy
+      (R-13's pattern), because a boolean has no order to compare on. It is
+      the domain of the `checked` and `unchecked` aggregates
+      (RecordAggregate.yaml, FR-150).
     example: "enum"
   many:
     type: boolean
@@ -93,8 +126,14 @@ properties:
       The closed value set. Present only when type is "enum", and then
       non-empty. THIS ORDER IS NOT THE SORT ORDER — it is the order a REJECTION
       lists the permitted values in, so the operator reads their own file back.
-      Sorting is lexical over the folded value (R-5); a domain order is
-      expressed by prefixing the values.
+
+
+      Sorting and the `min`/`max` aggregates are LEXICAL OVER THE CASE-FOLDED
+      VALUE (ruling R-5/R-E, FR-010): there is no declared-position ordinal,
+      and `Won`, `won` and `WON` sort together exactly as they group together.
+      A domain order is expressed by PREFIXING the values (`1-lead`,
+      `2-qualified`) — visible in the operator's own file, doing exactly what
+      it appears to do.
     items:
       $ref: "./EnumValueDef.yaml"
       x-go-type: EnumValueDef

@@ -62,13 +62,14 @@ properties:
 }
 
 // TestView_LoadPathIsTheContractsPath pins the literal directory the contract
-// names (ViewDef.yaml: "it lives in `<vault>/.omnipus-vault/views/<name>.yaml`"),
+// names (the ViewDef schema in contracts/openapi.yaml: "it lives in
+// `<vault>/.omnipus-vault/views/<name>.yaml`"),
 // so a refactor cannot relocate saved views out from under an operator.
 func TestView_LoadPathIsTheContractsPath(t *testing.T) {
 	got := ViewsDir(filepath.Join("some", "vault"))
 	want := filepath.Join("some", "vault", ".omnipus-vault", "views")
 	if got != want {
-		t.Fatalf("ViewDef.yaml puts saved views at <vault>/.omnipus-vault/views/; ViewsDir gave %q, want %q", got, want)
+		t.Fatalf("the ViewDef schema puts saved views at <vault>/.omnipus-vault/views/; ViewsDir gave %q, want %q", got, want)
 	}
 }
 

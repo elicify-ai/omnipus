@@ -43,6 +43,23 @@ properties:
       - integer
       - decimal
       - person
+    # x-enum-varnames PINS these constant names. oapi-codegen derives an enum
+    # constant's Go name from a GLOBAL collision scan across every enum in the
+    # spec, so adding a value to an UNRELATED enum silently renames these —
+    # observed: growing RecordAggregate.op to fifteen (FR-150) flipped this
+    # enum from bare `Date`/`Text`/… to `RecordValueTypeDate`/… and flipped
+    # RunnerTestResponseReason the other way, breaking pkg/gateway/rest.go on
+    # a change that touched neither. The names below are what this enum has
+    # always generated; pinning them makes that a decision rather than an
+    # emergent property of what else happens to be in the file.
+    x-enum-varnames:
+      - RecordPropertyValueTypeText
+      - RecordPropertyValueTypeEnum
+      - RecordPropertyValueTypeRelation
+      - RecordPropertyValueTypeDate
+      - RecordPropertyValueTypeInteger
+      - RecordPropertyValueTypeDecimal
+      - RecordPropertyValueTypePerson
     description: >
       The declared property type, echoed by the server on reads. Optional on a
       write request, where the schema is the authority.
