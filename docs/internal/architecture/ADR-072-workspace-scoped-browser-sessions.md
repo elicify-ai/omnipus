@@ -475,6 +475,31 @@ Two guards:
 - **Never evict an instance with a viewer attached** — someone is watching it.
 - **Never evict an instance with a tool call in flight** — an agent is mid-action.
 
+#### Ten workspaces on a three-browser machine
+
+The cap counts **concurrently browsing** workspaces, not existing ones. Ten
+workspaces with one or two active at a time never reach a cap of three; the
+rest hold no process at all. Switching to a workspace whose browser was evicted
+reopens it, **still signed in**, at the cost of start-up latency only.
+
+**The failure mode is thrash, and it must be visible.** If more workspaces
+browse concurrently than the cap allows, each new request evicts one that is
+about to be needed again — every workspace paying a cold start, continuously,
+with no error and nothing on screen to explain it. That is precisely the
+"slow for no visible reason" shape this ADR exists to eliminate elsewhere.
+
+**Decision:** the pool tracks evict-then-reopen cycles per workspace. If a
+workspace is reopened within a short window of being evicted, more than a small
+number of times in a rolling period, the pool logs a WARN naming the cap, the
+workspaces contending, and the remedy (raise the cap, or use fewer workspaces
+at once). Thrash is a **capacity mis-sizing that the operator can fix**, and it
+must be reported as one rather than experienced as unexplained latency.
+
+Not specified here, deliberately: the exact window and threshold. Both depend
+on cold-start latency with a warm profile on disk, which is **unmeasured** —
+ADR-042's ~30–60 s figure covers a fresh install including download and is not
+the relevant number. Measure it alongside D1.1b's other three unknowns.
+
 **When nothing is evictable** (every instance watched *and* busy): **exceed the
 cap by one and log a WARN naming the cap and the workspace.** The cap is a
 memory guard, not a correctness rule — a brief overshoot is recoverable, a
