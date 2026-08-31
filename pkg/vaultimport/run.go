@@ -330,7 +330,7 @@ func Run(vaultRoot string, write bool) (*Report, error) {
 	baseRelPaths, baseByRel := sortedBaseRelPaths(inv)
 	parsedBases, baseReadOutcomes := parseAllBases(baseRelPaths, baseByRel)
 
-	provisioned := provisionTypesFromBases(baseRelPaths, parsedBases, inferred)
+	provisioned := provisionTypesFromBases(baseRelPaths, parsedBases, inferred, notes)
 	provisionedByType := map[string]ProvisionedType{}
 	for _, p := range provisioned {
 		provisionedByType[p.Type] = p
@@ -586,6 +586,11 @@ type ProvisionedType struct {
 	// NOT declared, with the reason. Each of these becomes a named loss in
 	// the translated view.
 	Omitted []ProvisionedOmission
+	// Templates are the `type: template` notes that named this record type,
+	// vault-relative and sorted. They are the reason some of Properties is
+	// declared at all, so the report can credit the operator's own template
+	// rather than letting a `.base` file take the credit for it.
+	Templates []string
 }
 
 // ProvisionedOmission is one property a base referenced that provisioning
@@ -608,6 +613,11 @@ func (p ProvisionedType) ReportLines() []string {
 	lines = append(lines, "assumed `text`: "+strings.Join(p.Properties, ", "))
 	lines = append(lines,
 		fmt.Sprintf("correct any one of them in a single edit: knowledge_configure set schema %s property <name> type=<date|integer|decimal|enum|checkbox|relation|person> [many=true] [required=true]", p.Type))
+	if len(p.Templates) > 0 {
+		lines = append(lines, fmt.Sprintf(
+			"some of those names come from the operator's own template, not from a base file: %s declare%s properties of `%s` directly, and a template is a statement that the property EXISTS — which is a different claim from anything a base file's use of it can make.",
+			strings.Join(p.Templates, ", "), plural(len(p.Templates), "s", ""), p.Type))
+	}
 	for _, o := range p.Omitted {
 		lines = append(lines, fmt.Sprintf("NOT declared — %s: %s", o.Property, o.Reason))
 	}
@@ -707,14 +717,30 @@ func provisionUsesFromDisplay(vraw map[string]any) []provisionUse {
 				// A NUMERIC summary is the one display position that is
 				// evidence about a property's TYPE rather than just its name:
 				// the operator asking for a sum is the operator saying this is
-				// not prose. Declaring it `text` anyway would carry a summary
-				// that computes a number meaning nothing, so it is left
-				// undeclared and the dropped summary is named instead. (This
-				// costs the view no rows — loss.go classifies `aggregates` as
-				// an annotation, so the view still imports ENABLED.)
+				// not prose.
+				//
+				// THE STATED REASON HERE USED TO BE WRONG ABOUT THIS ENGINE,
+				// and the wrong version was the more frightening one, which is
+				// why it went unchallenged. It said a `text` declaration
+				// "would carry a summary that silently computes nonsense".
+				// Nothing in this system computes silently: knowledgefind
+				// refuses an op its property's type does not define, loudly and
+				// by name (FR-155). The real consequence is worse in a
+				// different direction — that refusal aborts the WHOLE find
+				// request rather than just the total, so one undefined summary
+				// makes every row of the view unreachable.
+				//
+				// That is now handled where it belongs. view_write.go's
+				// summaryDefinedForType asks knowledgefind's own table before
+				// writing a summary and drops the ones it would refuse, so this
+				// omission no longer has to protect against it. What remains
+				// here is the narrower, honest claim: a numeric summary is
+				// TYPE evidence, and this package will not declare a type on
+				// the strength of it. (Either way the view keeps every row —
+				// loss.go classifies `aggregates` as an annotation.)
 				uses = append(uses, provisionUse{property: k, unsafeReason: fmt.Sprintf(
-					"the base asks for %s(%s), which cannot be computed over prose — the request is itself the operator's statement that this property is not text, so declaring it `text` would carry a summary that silently computes nonsense",
-					string(op), k)})
+					"the base asks for %s(%s), which %s — the request is itself the operator's statement that this property is not text, and this package will not pick a numeric type on the strength of a base file alone",
+					string(op), k, aggregateOmissionSentinel)})
 				continue
 			}
 			add(k)
@@ -739,6 +765,67 @@ type provisionAccumulator struct {
 	declare  map[string]struct{}
 	omit     map[string]string
 	viewSeen bool
+	// templates are the `type: template` notes that named this record type.
+	// Their evidence is about EXISTENCE and it is filed by its own door —
+	// see recordTemplate.
+	templates map[string]struct{}
+}
+
+// templateEvidence is what the operator's own `type: template` notes say about
+// one record type: which properties a note of that type carries, and which
+// template files said so.
+type templateEvidence struct {
+	// Properties are the donated property names, sorted.
+	Properties []string
+	// Notes are the vault-relative template files, sorted. Reported, never
+	// inferred from.
+	Notes []string
+}
+
+// templateEvidenceByType indexes the founder's `type: template` notes by the
+// record type each one templates.
+//
+// It is the same reading applyTemplateDeclarations (infer.go) already does, and
+// it deliberately calls that file's own helpers rather than re-deriving the
+// rules — `templateTargetType` for the target and `templateDonatesKey` for the
+// scaffolding-key exclusion. Two spellings of "what a template donates" is how
+// the schema pass and the provisioning pass would come to disagree about the
+// same note.
+//
+// WHY THIS INDEX HAS TO EXIST SEPARATELY AT ALL. infer.go's pass runs over
+// `groups`, which holds only record types some note carries, and it declines —
+// correctly, and by explicit design — to invent a type. So a template for a
+// type that only a `.base` file declares is skipped there, and until now was
+// read by nobody: `Template — invoice.md` listed `amount:` in the founder's own
+// hand and the importer dropped the `amount` column anyway.
+func templateEvidenceByType(notes []NoteRecord) map[string]templateEvidence {
+	props := map[string]map[string]struct{}{}
+	files := map[string]map[string]struct{}{}
+	for i := range notes {
+		n := &notes[i]
+		if n.Rec.TypeName() != templateRecordType {
+			continue
+		}
+		target := templateTargetType(n.Rec)
+		if target == "" || target == templateRecordType {
+			continue
+		}
+		if props[target] == nil {
+			props[target] = map[string]struct{}{}
+			files[target] = map[string]struct{}{}
+		}
+		files[target][n.RelPath] = struct{}{}
+		for _, key := range n.Rec.Frontmatter.Keys {
+			if templateDonatesKey(key) {
+				props[target][key] = struct{}{}
+			}
+		}
+	}
+	out := make(map[string]templateEvidence, len(props))
+	for t := range props {
+		out[t] = templateEvidence{Properties: sortedSetKeys(props[t]), Notes: sortedSetKeys(files[t])}
+	}
+	return out
 }
 
 // provisionTypesFromBases is the whole decision: which record types named by a
@@ -748,7 +835,7 @@ type provisionAccumulator struct {
 // uses a few lines later (TranslateFilterTree + resolveViewType) rather than a
 // second reading of the base's shape — a divergence between the two would
 // declare a type nothing queries, or leave one declared nowhere.
-func provisionTypesFromBases(relPaths []string, parsed map[string]*ParsedBase, inferred map[string][]InferredProperty) []ProvisionedType {
+func provisionTypesFromBases(relPaths []string, parsed map[string]*ParsedBase, inferred map[string][]InferredProperty, notes []NoteRecord) []ProvisionedType {
 	acc := map[string]*provisionAccumulator{}
 
 	for _, rel := range relPaths {
@@ -779,7 +866,12 @@ func provisionTypesFromBases(relPaths []string, parsed map[string]*ParsedBase, i
 			}
 			a := acc[rt]
 			if a == nil {
-				a = &provisionAccumulator{bases: map[string]struct{}{}, declare: map[string]struct{}{}, omit: map[string]string{}}
+				a = &provisionAccumulator{
+					bases:     map[string]struct{}{},
+					declare:   map[string]struct{}{},
+					omit:      map[string]string{},
+					templates: map[string]struct{}{},
+				}
 				acc[rt] = a
 			}
 			a.viewSeen = true
@@ -791,6 +883,30 @@ func provisionTypesFromBases(relPaths []string, parsed map[string]*ParsedBase, i
 			for _, u := range uses {
 				a.record(u)
 			}
+		}
+	}
+
+	// TEMPLATE EVIDENCE GOES IN LAST, AND ONCE — after every base and every
+	// view has been read.
+	//
+	// The ordering is load-bearing, not tidiness. A template can LIFT an
+	// omission (recordTemplate), and `record` files an omission the first time
+	// it sees one. Applying the lift inside the loop would let a template
+	// donation land between two views and rescue a property that a LATER
+	// view's ordering comparison would have refused — the exact FR-105
+	// broadening this package exists to prevent, arriving through the door
+	// meant to restore a column. Applied here, no use can arrive afterwards.
+	templates := templateEvidenceByType(notes)
+	for rt, a := range acc {
+		ev, ok := templates[rt]
+		if !ok {
+			continue
+		}
+		for _, name := range ev.Properties {
+			a.recordTemplate(name)
+		}
+		for _, rel := range ev.Notes {
+			a.templates[rel] = struct{}{}
 		}
 	}
 
@@ -808,7 +924,7 @@ func provisionTypesFromBases(relPaths []string, parsed map[string]*ParsedBase, i
 			// property references would be a loss against an empty schema.
 			continue
 		}
-		pt := ProvisionedType{Type: rt, Bases: sortedSetKeys(a.bases), Properties: props}
+		pt := ProvisionedType{Type: rt, Bases: sortedSetKeys(a.bases), Properties: props, Templates: sortedSetKeys(a.templates)}
 		for _, name := range sortedMapKeys(a.omit) {
 			pt.Omitted = append(pt.Omitted, ProvisionedOmission{Property: name, Reason: a.omit[name]})
 		}
@@ -833,7 +949,24 @@ func (a *provisionAccumulator) record(u provisionUse) {
 		return
 	}
 	if u.unsafeReason != "" {
-		if _, already := a.omit[name]; !already {
+		// PRECEDENCE AMONG OMISSIONS, and it is not first-writer-wins any
+		// more. Since template evidence can LIFT one kind of omission (the
+		// numeric-summary kind) and must never lift the other two, "which
+		// reason got recorded" decides whether a filter clause that would
+		// broaden the view stays refused. First-writer-wins made that turn on
+		// the order the base files happen to sort in: a `summaries: {amount:
+		// Sum}` in one view would claim the slot, and a later view's `amount >
+		// 100` — the clause that actually returns MORE rows on a text
+		// declaration — would find the property already omitted and say
+		// nothing. The template would then lift the summary's reason and
+		// declare the property, and the ordering comparison would translate.
+		//
+		// So an omission a template CANNOT lift outranks one it can, whichever
+		// arrives first. Between two of the same rank the first still wins;
+		// they are equally binding and the message is the operator's, not a
+		// decision.
+		if existing, already := a.omit[name]; !already ||
+			(omissionLiftedByTemplateEvidence(existing) && !omissionLiftedByTemplateEvidence(u.unsafeReason)) {
 			a.omit[name] = u.unsafeReason
 		}
 		delete(a.declare, name)
@@ -843,6 +976,95 @@ func (a *provisionAccumulator) record(u provisionUse) {
 		return
 	}
 	a.declare[name] = struct{}{}
+}
+
+// recordTemplate files one property name donated by a `type: template` note.
+//
+// WHY THIS IS NOT JUST `record(provisionUse{property: name})`, AND WHY THAT
+// DIFFERENCE IS THE WHOLE OF THE `invoice.amount` DECISION
+//
+// A base file's uses answer "how is this property USED". A template answers a
+// different question — "does this property EXIST on this record type" — and it
+// is the operator answering the schema question directly, in his own hand.
+// Those are separate claims, and conflating them is what cost the column.
+//
+// The base says `summaries: {amount: Sum}`. That is real evidence, and it is
+// evidence about the property's TYPE: nobody asks for the sum of prose. The
+// provisioner read it correctly and then drew one conclusion too many — it
+// treated "I cannot tell you this property's type" as "I cannot tell you this
+// property exists", and withheld the DECLARATION. Withholding the declaration
+// costs the COLUMN too, and the column was never in doubt: `order:` names
+// `amount`, and the founder's `Template — invoice.md` lists `amount:` among the
+// properties an invoice note carries.
+//
+// So a template's donation LIFTS an omission whose only source was a numeric
+// summary. It lifts neither of the other two, and that asymmetry is the safety
+// argument rather than a detail of it:
+//
+//   - AN ORDERING COMPARISON (`amount > 100`) and `.contains(...)` stay
+//     omitted even when a template names the property, because those omissions
+//     were never about existence either — they are about a clause that, under
+//     a `text` declaration, matches MORE rows than Obsidian (FR-105). The
+//     template settles existence and says nothing about that, so the clause
+//     stays a named loss and the view stays disabled. Restoring a column must
+//     never buy a row.
+//   - A numeric summary decides no rows at all, so lifting it cannot broaden
+//     anything. The summary itself is then dropped downstream by
+//     view_write.go's summaryDefinedForType, which asks the query engine's own
+//     op/type table — so the restored column does not smuggle in a view the
+//     engine would refuse.
+//
+// WHY `text` AND NOT `decimal`, WHICH WOULD ALSO RESTORE THE COLUMN AND WOULD
+// MAKE THE SUM WORK. Because a declaration made with no note behind it must not
+// be able to REJECT the first note the operator writes, and only one of the two
+// candidates has that property. `TypeText` is prose and is never validated for
+// shape (pkg/records/schema.go), so no value can fail against it. `decimal`
+// rejects anything that does not parse as a number — and THIS vault already
+// shows what the founder writes in a money field: `subscription.cost` holds 42
+// parseable values out of 63 and was defaulted to text over counter-examples
+// like `PLACEHOLDER — amount unknown`. An `invoice.amount` declared `decimal`
+// on the strength of a `.base` summary would reject his first invoice note
+// written in his own demonstrated house style, and it would do it on the
+// authority of a guess this package made. Text cannot reject; decimal can.
+// That asymmetry decides it, and it decides it AGAINST the reading that would
+// have closed more losses.
+//
+// The cost of choosing text is stated rather than hidden: `sum(amount)` is not
+// defined over text (FR-155), so the summary is dropped as a named loss. It is
+// the operator's one-line edit — `knowledge_configure set schema invoice
+// property amount type=decimal`, which ReportLines already prints — that turns
+// the column into a number and the sum back on, and by then a real note exists
+// to justify the type.
+func (a *provisionAccumulator) recordTemplate(name string) {
+	if name == "" || name == "type" {
+		return
+	}
+	if strings.HasPrefix(name, "formula.") || records.IsFileNamespace(name) {
+		return
+	}
+	if !reProvisionablePropertyName.MatchString(name) {
+		return
+	}
+	if reason, refused := a.omit[name]; refused {
+		if !omissionLiftedByTemplateEvidence(reason) {
+			return
+		}
+		delete(a.omit, name)
+	}
+	a.declare[name] = struct{}{}
+}
+
+// aggregateOmissionSentinel marks an omission whose only cause is a numeric
+// summary — the one kind template evidence overrides. It is embedded IN the
+// reason text the operator reads, rather than kept as a separate flag, so that
+// the sentence and the classification cannot drift apart silently; a test pins
+// that the aggregate branch still writes it.
+const aggregateOmissionSentinel = "cannot be computed over prose"
+
+// omissionLiftedByTemplateEvidence reports whether a recorded omission is one
+// that a template's existence claim answers.
+func omissionLiftedByTemplateEvidence(reason string) bool {
+	return strings.Contains(reason, aggregateOmissionSentinel)
 }
 
 func sortedAccKeys(m map[string]*provisionAccumulator) []string {
